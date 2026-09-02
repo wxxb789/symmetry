@@ -419,6 +419,42 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
              |> json_response(400)
   end
 
+  test "event payload containing NUL is rejected as invalid_request", %{conn: conn} do
+    {_machine_id, machine_token} = enroll(conn)
+    runtime_id = register(conn, machine_token)
+    _task_id = submit_and_assign(conn)
+
+    [%{"run_id" => run_id, "generation" => generation}] =
+      bearer(conn, machine_token)
+      |> get("/api/v1/runtimes/#{runtime_id}/work?runtime_epoch=1")
+      |> json_response(200)
+      |> Map.fetch!("assignments")
+
+    claim_id = "00000000-0000-0000-0000-000000000115"
+
+    %{"lease_token" => lease_token} =
+      bearer(conn, machine_token)
+      |> post("/api/v1/runs/#{run_id}/claim", %{
+        "runtime_id" => runtime_id,
+        "runtime_epoch" => 1,
+        "generation" => generation,
+        "claim_id" => claim_id
+      })
+      |> json_response(200)
+
+    assert %{"error" => %{"code" => "invalid_request"}} =
+             bearer(conn, machine_token)
+             |> post(
+               "/api/v1/runs/#{run_id}/events",
+               Map.merge(fence(runtime_id, generation, claim_id, lease_token), %{
+                 "events" => [
+                   Map.put(event_payload(), "payload", %{"nested" => ["bad\0value"]})
+                 ]
+               })
+             )
+             |> json_response(400)
+  end
+
   defp enroll(conn, name \\ "builder") do
     response =
       bearer(conn, @enrollment_token)

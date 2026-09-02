@@ -181,6 +181,34 @@ defmodule SymmetryControl.OrchestrationTest do
              )
   end
 
+  test "events reject NUL in nested JSONB map keys and string values before persistence" do
+    %{machine: machine} = enroll_machine()
+    runtime = register_runtime(machine)
+    {:ok, _task, :created} = Orchestration.submit_task(task_attrs(), "nul-event", now: @now)
+    {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+
+    for event <- [
+          %{
+            event_id: "00000000-0000-0000-0000-000000000051",
+            sequence: 1,
+            kind: "progress",
+            payload: %{"nested" => [%{"message" => "bad\0value"}]},
+            occurred_at: @now
+          },
+          %{
+            event_id: "00000000-0000-0000-0000-000000000052",
+            sequence: 2,
+            kind: "progress",
+            payload: %{"bad\0key" => true},
+            occurred_at: @now
+          }
+        ] do
+      assert {:error, :invalid_request} =
+               Orchestration.append_events(run.id, fence, [event], now: @now)
+    end
+  end
+
   test "unknown targets and illegal lifecycle edges are invalid transitions" do
     %{machine: machine} = enroll_machine()
     runtime = register_runtime(machine)

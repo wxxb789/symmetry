@@ -547,7 +547,8 @@ defmodule SymmetryControl.Orchestration do
   def append_events(run_id, fence, events, opts \\ [])
 
   def append_events(run_id, fence, events, opts) when is_map(fence) and is_list(events) do
-    if not (valid_uuid?(run_id) and valid_fence?(fence) and Enum.all?(events, &valid_event?/1)) do
+    if not (valid_uuid?(run_id) and valid_fence?(fence) and
+              Enum.all?(events, &valid_event?/1)) do
       {:error, :invalid_request}
     else
       current = now(opts)
@@ -1349,10 +1350,35 @@ defmodule SymmetryControl.Orchestration do
     valid_uuid?(value(event, :event_id)) and
       is_integer(value(event, :sequence)) and value(event, :sequence) >= 0 and
       is_binary(value(event, :kind)) and is_map(value(event, :payload, %{})) and
-      match?(%DateTime{}, value(event, :occurred_at))
+      match?(%DateTime{}, value(event, :occurred_at)) and
+      jsonb_compatible?(value(event, :payload, %{}))
   end
 
   defp valid_event?(_), do: false
+
+  # PostgreSQL jsonb rejects U+0000. Validate untrusted event payloads before opening a transaction.
+  defp jsonb_compatible?(value) when is_binary(value), do: not String.contains?(value, <<0>>)
+
+  defp jsonb_compatible?(value) when is_list(value),
+    do: Enum.all?(value, &jsonb_compatible?/1)
+
+  defp jsonb_compatible?(value) when is_map(value) do
+    Enum.all?(value, fn {key, nested_value} ->
+      jsonb_key_compatible?(key) and jsonb_compatible?(nested_value)
+    end)
+  end
+
+  defp jsonb_compatible?(value) when is_number(value) or is_boolean(value) or is_nil(value),
+    do: true
+
+  defp jsonb_compatible?(_), do: true
+
+  defp jsonb_key_compatible?(key) when is_binary(key), do: jsonb_compatible?(key)
+
+  defp jsonb_key_compatible?(key) when is_atom(key),
+    do: key |> Atom.to_string() |> jsonb_compatible?()
+
+  defp jsonb_key_compatible?(_), do: true
 
   defp valid_active_run?(run) when is_map(run) do
     valid_uuid?(value(run, :run_id)) and
