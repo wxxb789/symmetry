@@ -1,0 +1,138 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  control:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18.6-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: symmetry_control_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d symmetry_control_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    defaults:
+      run:
+        working-directory: control
+    env:
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: symmetry_control_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: 1.20.4
+          otp-version: 29.0.6
+      - run: mix deps.get
+      - run: mix format --check-formatted
+      - run: mix compile --warnings-as-errors
+      - run: mix test
+      - run: MIX_ENV=prod mix release --overwrite
+
+  daemon:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: daemon
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.27.0
+          cache-dependency-path: daemon/go.sum
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go test -count=3 -timeout 180s ./...
+      - run: go build ./cmd/symmetry-daemon ./cmd/symmetry-fake-agent
+
+  daemon-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: daemon
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.27.0
+          cache-dependency-path: daemon/go.sum
+      - run: go test -count=1 -timeout 180s ./...
+      - run: go build ./cmd/symmetry-daemon ./cmd/symmetry-fake-agent
+
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18.6-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: symmetry_control_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d symmetry_control_e2e"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/symmetry_control_e2e
+      SECRET_KEY_BASE: ci-only-secret-key-base-0123456789012345678901234567890123456789
+      PHX_HOST: localhost
+      PHX_SERVER: "true"
+      PORT: "4000"
+      SYMMETRY_ENROLLMENT_TOKEN: development-enrollment-token
+      SYMMETRY_OPERATOR_TOKEN: development-operator-token
+      SYMMETRY_HEARTBEAT_INTERVAL_MS: "1000"
+      SYMMETRY_POLL_INTERVAL_MS: "1000"
+      SYMMETRY_LEASE_DURATION_MS: "5000"
+      SYMMETRY_ASSIGNMENT_DURATION_MS: "5000"
+      SYMMETRY_REAPER_INTERVAL_MS: "500"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: 1.20.4
+          otp-version: 29.0.6
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.27.0
+          cache-dependency-path: daemon/go.sum
+      - name: Build control release
+        working-directory: control
+        run: |
+          MIX_ENV=prod mix deps.get
+          MIX_ENV=prod mix release --overwrite
+          _build/prod/rel/symmetry_control/bin/symmetry_control eval 'SymmetryControl.Release.migrate()'
+          _build/prod/rel/symmetry_control/bin/symmetry_control start > /tmp/symmetry-control.log 2>&1 &
+          curl --fail --retry 30 --retry-delay 1 --retry-connrefused http://127.0.0.1:4000/healthz
+      - name: Run live daemon scenarios
+        working-directory: daemon
+        env:
+          SYMMETRY_E2E: "1"
+          SYMMETRY_E2E_URL: http://127.0.0.1:4000
+          SYMMETRY_E2E_AGENT: /tmp/symmetry-fake-agent
+        run: |
+          go build -o /tmp/symmetry-fake-agent ./cmd/symmetry-fake-agent
+          go test -count=1 -timeout 120s -v ./e2e -run '^(TestCoreDaemonWorkflows|TestPollingFallbackDispatchesWithoutNotifications|TestStaleRuntimeEpochCannotOverwriteNewGeneration|TestDaemonReregistersAfterRestart)$'
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose config --quiet
