@@ -51,15 +51,7 @@ func validateRuntimeSnapshot(response protocol.RuntimeSnapshot) error {
 	if response.Assignments == nil || response.Commands == nil || response.ServerTime.IsZero() {
 		return invalidResponse("runtime snapshot", "assignments, commands, and server_time are required")
 	}
-	for _, assignment := range response.Assignments {
-		if assignment.RunID == "" || assignment.TaskID == "" || assignment.Generation <= 0 || assignment.AssignmentExpiresAt.IsZero() {
-			return invalidResponse("runtime snapshot", "each assignment requires identifiers, generation, and expiry")
-		}
-		if err := validateWork(assignment.Work); err != nil {
-			return invalidResponse("runtime snapshot", err.Error())
-		}
-	}
-	return validateCommands("runtime snapshot", response.Commands)
+	return validateSnapshotParts("runtime snapshot", response.Assignments, response.Commands)
 }
 
 func validateClaimResponse(runID string, request protocol.ClaimRequest, response protocol.ClaimResponse) error {
@@ -162,9 +154,13 @@ func invalidResponse(operation, reason string) error {
 	return fmt.Errorf("invalid %s response: %s", operation, reason)
 }
 
-func isReconcileDecision(value string) bool {
+func isReconcileDecision(value protocol.ReconcileDecisionKind) bool {
 	switch value {
-	case "continue", "cancel", "stale_stop", "terminal", "unknown_stop":
+	case protocol.ReconcileContinue,
+		protocol.ReconcileCancel,
+		protocol.ReconcileStaleStop,
+		protocol.ReconcileTerminal,
+		protocol.ReconcileUnknownStop:
 		return true
 	default:
 		return false

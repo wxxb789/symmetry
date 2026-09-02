@@ -183,12 +183,23 @@ type ReconcileRequest struct {
 	Runs         []ReconcileRun `json:"runs"`
 }
 
+// ReconcileDecisionKind is a control-plane decision for one local execution.
+type ReconcileDecisionKind string
+
+const (
+	ReconcileContinue    ReconcileDecisionKind = "continue"
+	ReconcileCancel      ReconcileDecisionKind = "cancel"
+	ReconcileStaleStop   ReconcileDecisionKind = "stale_stop"
+	ReconcileTerminal    ReconcileDecisionKind = "terminal"
+	ReconcileUnknownStop ReconcileDecisionKind = "unknown_stop"
+)
+
 // ReconcileDecision tells the daemon whether it may retain a local execution.
 type ReconcileDecision struct {
-	RunID          string     `json:"run_id"`
-	Generation     int64      `json:"generation"`
-	Decision       string     `json:"decision"`
-	LeaseExpiresAt *time.Time `json:"lease_expires_at"`
+	RunID          string                `json:"run_id"`
+	Generation     int64                 `json:"generation"`
+	Decision       ReconcileDecisionKind `json:"decision"`
+	LeaseExpiresAt *time.Time            `json:"lease_expires_at"`
 }
 
 // ReconcileResponse combines recovery decisions with the current snapshot.

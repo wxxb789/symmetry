@@ -20,7 +20,6 @@ defmodule SymmetryControl.Orchestration do
     Task
   }
 
-  @capacity_states ["assigned", "claimed", "running", "waiting_for_input", "cancelling"]
   @terminal_states ["completed", "failed", "cancelled", "expired"]
 
   @spec enroll_machine(map(), keyword()) ::
@@ -298,27 +297,31 @@ defmodule SymmetryControl.Orchestration do
   end
 
   defp next_assignable_task_and_runtime(current) do
-    Task
-    |> where([task], task.state == "queued")
-    |> order_by([task], asc: task.inserted_at)
-    |> select([task], task.id)
-    |> Repo.all()
-    |> Enum.reduce_while(nil, fn task_id, _ ->
-      case Repo.one(
-             from task in Task,
-               where: task.id == ^task_id and task.state == "queued",
-               lock: "FOR UPDATE SKIP LOCKED"
-           ) do
-        nil ->
-          {:cont, nil}
-
-        task ->
-          case select_runtime_for(task, current) do
-            nil -> {:cont, nil}
-            runtime -> {:halt, {task, runtime}}
-          end
-      end
-    end)
+    Repo.one(
+      from task in Task,
+        join: runtime in Runtime,
+        on:
+          runtime.status == "online" and runtime.agent_profile == task.agent_profile and
+            runtime.workspace == task.workspace,
+        where: task.state == "queued",
+        where:
+          fragment(
+            "? > CAST(? AS timestamp) - (? * INTERVAL '3 milliseconds')",
+            runtime.last_heartbeat_at,
+            ^current,
+            runtime.heartbeat_interval_ms
+          ),
+        where:
+          fragment(
+            "(SELECT count(*) FROM runs AS active_run WHERE active_run.runtime_id = ? AND active_run.state IN ('assigned', 'claimed', 'running', 'waiting_for_input', 'cancelling')) < ?",
+            runtime.id,
+            runtime.capacity
+          ),
+        order_by: [asc: task.inserted_at, asc: runtime.inserted_at],
+        limit: 1,
+        lock: "FOR UPDATE SKIP LOCKED",
+        select: {task, runtime}
+    )
   end
 
   @spec assign_all(keyword()) :: {:ok, [Run.t()]}
@@ -440,32 +443,47 @@ defmodule SymmetryControl.Orchestration do
         {task, run, runtime} = lock_chain(run_id)
         ensure_fence!(task, run, runtime, fence, current)
 
-        Enum.map(events, fn event ->
-          event_id = value(event, :event_id)
-          event_hash = request_hash(event_body(event))
+        event_ids = Enum.map(events, &value(&1, :event_id))
 
-          case Repo.get_by(RunEvent, run_id: run.id, event_id: event_id) do
-            nil ->
-              %RunEvent{}
-              |> RunEvent.changeset(%{
-                run_id: run.id,
-                event_id: event_id,
-                request_hash: event_hash,
-                sequence: value(event, :sequence),
-                kind: value(event, :kind),
-                payload: value(event, :payload, %{}),
-                occurred_at: value(event, :occurred_at, current)
-              })
-              |> stamp_insert(current)
-              |> Repo.insert!()
+        existing_events =
+          Repo.all(
+            from event in RunEvent,
+              where: event.run_id == ^run.id and event.event_id in ^event_ids
+          )
+          |> Map.new(&{&1.event_id, &1})
 
-            %RunEvent{request_hash: ^event_hash} = existing ->
-              existing
+        {stored, _events_by_id} =
+          Enum.map_reduce(events, existing_events, fn event, events_by_id ->
+            event_id = value(event, :event_id)
+            event_hash = request_hash(event_body(event))
 
-            _existing ->
-              rollback(:idempotency_conflict)
-          end
-        end)
+            case Map.get(events_by_id, event_id) do
+              nil ->
+                stored_event =
+                  %RunEvent{}
+                  |> RunEvent.changeset(%{
+                    run_id: run.id,
+                    event_id: event_id,
+                    request_hash: event_hash,
+                    sequence: value(event, :sequence),
+                    kind: value(event, :kind),
+                    payload: value(event, :payload, %{}),
+                    occurred_at: value(event, :occurred_at, current)
+                  })
+                  |> stamp_insert(current)
+                  |> Repo.insert!()
+
+                {stored_event, Map.put(events_by_id, event_id, stored_event)}
+
+              %RunEvent{request_hash: ^event_hash} = existing ->
+                {existing, events_by_id}
+
+              %RunEvent{} ->
+                rollback(:idempotency_conflict)
+            end
+          end)
+
+        stored
       end)
     end
   end
@@ -708,8 +726,13 @@ defmodule SymmetryControl.Orchestration do
       current = now(opts)
 
       transaction(fn ->
-        command = Repo.get(Command, command_id) || rollback(:not_found)
-        {task, run, runtime} = lock_chain(command.run_id)
+        run_id =
+          Repo.one(
+            from command in Command, where: command.id == ^command_id, select: command.run_id
+          ) ||
+            rollback(:not_found)
+
+        {task, run, runtime} = lock_chain(run_id)
 
         command =
           Repo.one!(from command in Command, where: command.id == ^command_id, lock: "FOR UPDATE")
@@ -765,7 +788,7 @@ defmodule SymmetryControl.Orchestration do
     current = now(opts)
 
     transaction(fn ->
-      runtime = lock_runtime(runtime_id)
+      runtime = share_runtime(runtime_id)
       if runtime.connection_epoch != runtime_epoch, do: rollback(:ownership_lost)
       snapshot_for(runtime, current)
     end)
@@ -787,12 +810,18 @@ defmodule SymmetryControl.Orchestration do
     current = now(opts)
 
     transaction(fn ->
-      runtime = lock_runtime(runtime_id)
+      runtime = share_runtime(runtime_id)
       if runtime.connection_epoch != runtime_epoch, do: rollback(:ownership_lost)
+
+      run_ids = Enum.map(journals, &value(&1, :run_id))
+
+      runs_by_id =
+        Repo.all(from run in Run, where: run.id in ^run_ids)
+        |> Map.new(&{&1.id, &1})
 
       decisions =
         Enum.map(journals, fn journal ->
-          run = Repo.get(Run, value(journal, :run_id))
+          run = Map.get(runs_by_id, value(journal, :run_id))
 
           decision =
             cond do
@@ -1027,40 +1056,6 @@ defmodule SymmetryControl.Orchestration do
     end
   end
 
-  defp select_runtime_for(task, current) do
-    Runtime
-    |> where(
-      [runtime],
-      runtime.status == "online" and runtime.agent_profile == ^task.agent_profile and
-        runtime.workspace == ^task.workspace
-    )
-    |> order_by([runtime], asc: runtime.inserted_at)
-    |> select([runtime], runtime.id)
-    |> Repo.all()
-    |> Enum.reduce_while(nil, fn runtime_id, _ ->
-      runtime =
-        Repo.one(
-          from runtime in Runtime,
-            where: runtime.id == ^runtime_id,
-            lock: "FOR UPDATE SKIP LOCKED"
-        )
-
-      cond do
-        is_nil(runtime) -> {:cont, nil}
-        not runtime_online?(runtime, current) -> {:cont, nil}
-        active_run_count(runtime.id) >= runtime.capacity -> {:cont, nil}
-        true -> {:halt, runtime}
-      end
-    end)
-  end
-
-  defp active_run_count(runtime_id) do
-    Repo.aggregate(
-      from(run in Run, where: run.runtime_id == ^runtime_id and run.state in ^@capacity_states),
-      :count
-    )
-  end
-
   defp snapshot_for(runtime, current) do
     assignments =
       Repo.all(
@@ -1118,8 +1113,11 @@ defmodule SymmetryControl.Orchestration do
   end
 
   defp lock_chain(run_id) do
-    run = Repo.get(Run, run_id) || rollback(:not_found)
-    task = lock_task(run.task_id)
+    task_id =
+      Repo.one(from run in Run, where: run.id == ^run_id, select: run.task_id) ||
+        rollback(:not_found)
+
+    task = lock_task(task_id)
     run = Repo.one!(from run in Run, where: run.id == ^run_id, lock: "FOR UPDATE")
     runtime = lock_runtime(run.runtime_id)
     {task, run, runtime}
@@ -1148,14 +1146,10 @@ defmodule SymmetryControl.Orchestration do
       Repo.one(from runtime in Runtime, where: runtime.id == ^runtime_id, lock: "FOR UPDATE") ||
         rollback(:not_found)
 
-  defp runtime_online?(runtime, current) do
-    runtime.status == "online" and
-      not is_nil(runtime.last_heartbeat_at) and
-      DateTime.compare(
-        runtime.last_heartbeat_at,
-        DateTime.add(current, -3 * runtime.heartbeat_interval_ms, :millisecond)
-      ) == :gt
-  end
+  defp share_runtime(runtime_id),
+    do:
+      Repo.one(from runtime in Runtime, where: runtime.id == ^runtime_id, lock: "FOR SHARE") ||
+        rollback(:not_found)
 
   defp transaction(function) do
     case Repo.transaction(function) do

@@ -281,6 +281,9 @@ defmodule SymmetryControl.OrchestrationReviewTest do
 
       assert Enum.map(inputs, fn {:ok, command, _} -> command.id end) |> Enum.uniq() |> length() ==
                1
+
+      Repo.delete!(task)
+      Repo.delete!(machine)
     end)
   end
 
