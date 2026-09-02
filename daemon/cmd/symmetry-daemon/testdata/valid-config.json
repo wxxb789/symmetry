@@ -2,11 +2,26 @@
   "control_plane_url": "https://control.example.test/api",
   "state_dir": ".symmetry/state",
   "machine_name": "builder-01",
+  "agent_profiles": {
+    "default": {
+      "command": "codex",
+      "args": [],
+      "input_mode": "goal",
+      "env_allowlist": []
+    }
+  },
+  "workspaces": {
+    "primary": {
+      "policy": "existing_checkout",
+      "path": "Q:/workspaces",
+      "cleanup": "never"
+    }
+  },
   "runtime": {
     "runtime_key": "default",
     "name": "docker",
     "capacity": 4,
     "agent_profile": "default",
-    "workspace": "Q:/workspaces"
+    "workspace": "primary"
   }
 }

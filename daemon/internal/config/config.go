@@ -7,15 +7,19 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 )
 
 // Config is the daemon's local configuration.
 type Config struct {
-	ControlPlaneURL string  `json:"control_plane_url"`
-	StateDir        string  `json:"state_dir"`
-	MachineName     string  `json:"machine_name"`
-	Runtime         Runtime `json:"runtime"`
+	ControlPlaneURL string                  `json:"control_plane_url"`
+	StateDir        string                  `json:"state_dir"`
+	MachineName     string                  `json:"machine_name"`
+	AgentProfiles   map[string]AgentProfile `json:"agent_profiles"`
+	Workspaces      map[string]Workspace    `json:"workspaces"`
+	Runtime         Runtime                 `json:"runtime"`
 }
 
 // Runtime declares the execution environment available on this machine.
@@ -25,6 +29,56 @@ type Runtime struct {
 	Capacity     int    `json:"capacity"`
 	AgentProfile string `json:"agent_profile"`
 	Workspace    string `json:"workspace"`
+}
+
+// InputMode specifies the local CLI input representation.
+type InputMode string
+
+const (
+	// InputModeGoal writes only the task goal to the configured agent process.
+	InputModeGoal InputMode = "goal"
+	// InputModeJSON writes structured JSON to the configured agent process.
+	InputModeJSON InputMode = "json"
+)
+
+// AgentProfile is a machine-local coding agent command binding.
+type AgentProfile struct {
+	Command      string    `json:"command"`
+	Args         []string  `json:"args"`
+	InputMode    InputMode `json:"input_mode"`
+	EnvAllowlist []string  `json:"env_allowlist"`
+}
+
+// WorkspacePolicy selects how a run obtains its local working directory.
+type WorkspacePolicy string
+
+const (
+	// WorkspacePolicyExistingCheckout uses an existing, machine-local checkout.
+	WorkspacePolicyExistingCheckout WorkspacePolicy = "existing_checkout"
+	// WorkspacePolicyGitWorktree creates a detached git worktree for each run.
+	WorkspacePolicyGitWorktree WorkspacePolicy = "git_worktree"
+)
+
+// CleanupPolicy selects when a daemon-owned worktree is removed.
+type CleanupPolicy string
+
+const (
+	// CleanupAlways removes a daemon-owned worktree after every completed run.
+	CleanupAlways CleanupPolicy = "always"
+	// CleanupOnSuccess removes a daemon-owned worktree only after success.
+	CleanupOnSuccess CleanupPolicy = "on_success"
+	// CleanupNever preserves a daemon-owned worktree.
+	CleanupNever CleanupPolicy = "never"
+)
+
+// Workspace is a machine-local workspace binding. Fields are conditional on Policy.
+type Workspace struct {
+	Policy     WorkspacePolicy `json:"policy"`
+	Path       string          `json:"path"`
+	Repository string          `json:"repository"`
+	Root       string          `json:"root"`
+	Ref        string          `json:"ref"`
+	Cleanup    CleanupPolicy   `json:"cleanup"`
 }
 
 // Load decodes a single, strictly-specified JSON configuration file and
@@ -88,12 +142,112 @@ func (value Config) Validate() error {
 	if value.Runtime.Capacity <= 0 {
 		return fmt.Errorf("runtime.capacity must be greater than zero")
 	}
+
+	if err := validateAgentProfiles(value.AgentProfiles); err != nil {
+		return err
+	}
+	if err := validateWorkspaces(value.Workspaces); err != nil {
+		return err
+	}
+	if _, ok := value.AgentProfiles[value.Runtime.AgentProfile]; !ok {
+		return fmt.Errorf("runtime.agent_profile %q is not configured", value.Runtime.AgentProfile)
+	}
+	if _, ok := value.Workspaces[value.Runtime.Workspace]; !ok {
+		return fmt.Errorf("runtime.workspace %q is not configured", value.Runtime.Workspace)
+	}
+	return nil
+}
+
+var bindingKeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+
+func validateAgentProfiles(profiles map[string]AgentProfile) error {
+	for key, profile := range profiles {
+		field := "agent_profiles." + key
+		if err := requireBindingKey(field, key); err != nil {
+			return err
+		}
+		if err := requireNotEmpty(field+".command", profile.Command); err != nil {
+			return err
+		}
+		switch profile.InputMode {
+		case InputModeGoal, InputModeJSON:
+		default:
+			return fmt.Errorf("%s.input_mode must be goal or json", field)
+		}
+		seen := make(map[string]struct{}, len(profile.EnvAllowlist))
+		for _, name := range profile.EnvAllowlist {
+			if strings.TrimSpace(name) == "" || strings.ContainsAny(name, "=\x00\r\n") {
+				return fmt.Errorf("%s.env_allowlist contains an invalid environment variable name", field)
+			}
+			if _, duplicate := seen[name]; duplicate {
+				return fmt.Errorf("%s.env_allowlist contains duplicate environment variable %q", field, name)
+			}
+			seen[name] = struct{}{}
+		}
+	}
+	return nil
+}
+
+func validateWorkspaces(workspaces map[string]Workspace) error {
+	for key, workspace := range workspaces {
+		field := "workspaces." + key
+		if err := requireBindingKey(field, key); err != nil {
+			return err
+		}
+		switch workspace.Cleanup {
+		case CleanupAlways, CleanupOnSuccess, CleanupNever:
+		default:
+			return fmt.Errorf("%s.cleanup must be always, on_success, or never", field)
+		}
+
+		switch workspace.Policy {
+		case WorkspacePolicyExistingCheckout:
+			if err := requireAbsolutePath(field+".path", workspace.Path); err != nil {
+				return err
+			}
+		case WorkspacePolicyGitWorktree:
+			if err := requireAbsolutePath(field+".repository", workspace.Repository); err != nil {
+				return err
+			}
+			if err := requireAbsolutePath(field+".root", workspace.Root); err != nil {
+				return err
+			}
+			if err := requireNotEmpty(field+".ref", workspace.Ref); err != nil {
+				return err
+			}
+			if strings.HasPrefix(strings.TrimSpace(workspace.Ref), "-") || strings.ContainsAny(workspace.Ref, "\x00\r\n") {
+				return fmt.Errorf("%s.ref is invalid", field)
+			}
+		default:
+			return fmt.Errorf("%s.policy must be existing_checkout or git_worktree", field)
+		}
+	}
 	return nil
 }
 
 func requireNotEmpty(field, value string) error {
 	if strings.TrimSpace(value) == "" {
 		return fmt.Errorf("%s must not be empty", field)
+	}
+	return nil
+}
+
+func requireBindingKey(field, value string) error {
+	if !bindingKeyPattern.MatchString(value) {
+		return fmt.Errorf("%s must be a non-path binding key", field)
+	}
+	return nil
+}
+
+func requireAbsolutePath(field, value string) error {
+	if err := requireNotEmpty(field, value); err != nil {
+		return err
+	}
+	if !filepath.IsAbs(value) {
+		return fmt.Errorf("%s must be an absolute path", field)
+	}
+	if filepath.Clean(value) == "." {
+		return fmt.Errorf("%s must be an absolute path", field)
 	}
 	return nil
 }

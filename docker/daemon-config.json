@@ -2,11 +2,26 @@
   "control_plane_url": "http://control:4000",
   "state_dir": "/var/lib/symmetry",
   "machine_name": "compose-daemon",
+  "agent_profiles": {
+    "default": {
+      "command": "/usr/local/bin/codex",
+      "args": [],
+      "input_mode": "goal",
+      "env_allowlist": []
+    }
+  },
+  "workspaces": {
+    "primary": {
+      "policy": "existing_checkout",
+      "path": "/workspaces",
+      "cleanup": "never"
+    }
+  },
   "runtime": {
     "runtime_key": "default",
     "name": "default",
     "capacity": 1,
     "agent_profile": "default",
-    "workspace": "/workspaces"
+    "workspace": "primary"
   }
 }

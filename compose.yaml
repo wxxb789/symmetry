@@ -25,6 +25,8 @@ services:
       PHX_HOST: localhost
       PORT: "4000"
       SECRET_KEY_BASE: development-only-secret-key-base-change-before-production-0123456789
+      SYMMETRY_ENROLLMENT_TOKEN: ${SYMMETRY_ENROLLMENT_TOKEN:-development-enrollment-token}
+      SYMMETRY_OPERATOR_TOKEN: ${SYMMETRY_OPERATOR_TOKEN:-development-operator-token}
     ports:
       - "127.0.0.1:4000:4000"
 
@@ -35,7 +37,14 @@ services:
     depends_on:
       control:
         condition: service_started
+    environment:
+      SYMMETRY_ENROLLMENT_TOKEN: ${SYMMETRY_ENROLLMENT_TOKEN:-development-enrollment-token}
+    volumes:
+      - daemon_state:/var/lib/symmetry
+      - daemon_workspaces:/workspaces
     restart: unless-stopped
 
 volumes:
   postgres_data:
+  daemon_state:
+  daemon_workspaces:
