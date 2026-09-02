@@ -16,8 +16,8 @@ The repository is a small monorepo with two independently deployable services:
   durable business truth.
 
 The control plane does not execute coding agents directly, and the daemon does
-not own shared orchestration truth. The protocol and execution semantics belong
-to Goal 1 implementation, not this bootstrap.
+not own shared orchestration truth. The cross-language contract is documented
+in [`docs/protocol-v1.md`](docs/protocol-v1.md).
 
 ## Local Development
 
