@@ -1,0 +1,17 @@
+* text=auto
+
+*.sh text eol=lf
+Dockerfile text eol=lf
+Dockerfile.* text eol=lf
+*.Dockerfile text eol=lf
+*.go text eol=lf
+*.ex text eol=lf
+*.exs text eol=lf
+*.eex text eol=lf
+*.heex text eol=lf
+*.leex text eol=lf
+
+*.yaml text eol=lf
+*.yml text eol=lf
+*.json text eol=lf
+*.md text eol=lf

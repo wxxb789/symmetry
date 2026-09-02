@@ -1,0 +1,11 @@
+.git
+.gitignore
+.env
+.env.*
+.symmetry
+control/_build
+control/deps
+control/cover
+daemon/bin
+daemon/coverage.out
+

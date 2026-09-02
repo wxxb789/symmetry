@@ -1,0 +1,11 @@
+{
+  "control_plane_url": "https://control.example.test/api",
+  "state_dir": ".symmetry/state",
+  "machine_name": "builder-01",
+  "runtime": {
+    "name": "docker",
+    "capacity": 4,
+    "agent_profile": "default",
+    "workspace": "Q:/workspaces"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "control_plane_url": "http://control:4000",
+  "state_dir": "/var/lib/symmetry",
+  "machine_name": "compose-daemon",
+  "runtime": {
+    "name": "default",
+    "capacity": 1,
+    "agent_profile": "default",
+    "workspace": "/workspaces"
+  }
+}

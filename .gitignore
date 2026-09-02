@@ -1,0 +1,41 @@
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.local
+*.local.*
+
+# Local service state
+.symmetry/
+/data/
+/state/
+/tmp/
+/var/
+*.db
+*.sqlite
+*.sqlite3
+
+# Elixir/Phoenix
+/control/_build/
+/control/deps/
+/control/.elixir_ls/
+/control/cover/
+/control/doc/
+/control/assets/node_modules/
+/control/priv/static/assets/
+/control/priv/static/cache_manifest.json
+
+# Go
+/daemon/bin/
+/daemon/coverage.out
+/daemon/*.test
+
+# Docker overrides
+compose.override.yaml
+compose.override.yml
