@@ -80,6 +80,13 @@ func TestLoadRejectsInvalidLocalBindings(t *testing.T) {
 			wantField: "agent_profiles.default.input_mode",
 		},
 		{
+			name: "unknown event format",
+			mutate: func(value map[string]any) {
+				value["agent_profiles"].(map[string]any)["default"].(map[string]any)["event_format"] = "shell"
+			},
+			wantField: "agent_profiles.default.event_format",
+		},
+		{
 			name: "relative existing checkout path",
 			mutate: func(value map[string]any) {
 				value["workspaces"].(map[string]any)["primary"].(map[string]any)["path"] = "relative/path"
@@ -139,6 +146,26 @@ func TestLoadRejectsInvalidControlPlaneURL(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "control_plane_url") {
 			t.Fatalf("Load(%s) error = %v, want control_plane_url validation error", controlPlaneURL, err)
 		}
+	}
+}
+
+func TestLoadRequiresExplicitOptInForPlainHTTP(t *testing.T) {
+	contents := validConfig(t, `"http://control.example.test"`)
+	if _, err := Load(writeConfig(t, contents)); err == nil || !strings.Contains(err.Error(), "allow_insecure_http") {
+		t.Fatalf("Load() error = %v, want explicit insecure HTTP opt-in", err)
+	}
+
+	var value map[string]any
+	if err := json.Unmarshal([]byte(contents), &value); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	value["allow_insecure_http"] = true
+	allowed, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if _, err := Load(writeConfig(t, string(allowed))); err != nil {
+		t.Fatalf("Load() with explicit opt-in error = %v", err)
 	}
 }
 

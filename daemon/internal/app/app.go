@@ -1,0 +1,1045 @@
+// Package app owns the daemon control loop.
+package app
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"os"
+	"sync"
+	"time"
+
+	"github.com/wxxb789/symmetry/daemon/internal/config"
+	"github.com/wxxb789/symmetry/daemon/internal/control"
+	"github.com/wxxb789/symmetry/daemon/internal/execution"
+	"github.com/wxxb789/symmetry/daemon/internal/notification"
+	"github.com/wxxb789/symmetry/daemon/internal/protocol"
+	"github.com/wxxb789/symmetry/daemon/internal/state"
+	"github.com/wxxb789/symmetry/daemon/internal/workspace"
+)
+
+const (
+	minimumInterval   = time.Second
+	maximumInterval   = time.Minute
+	leaseSafetyMargin = 5 * time.Second
+	retryMaximum      = 30 * time.Second
+)
+
+// ControlAPI is the authenticated protocol boundary used by the loop.
+type ControlAPI interface {
+	RegisterSession(context.Context, protocol.SessionRegistrationRequest) (protocol.SessionRegistrationResponse, error)
+	Heartbeat(context.Context, string, protocol.RuntimeHeartbeatRequest) (protocol.RuntimeSnapshot, error)
+	Work(context.Context, string, int64) (protocol.RuntimeSnapshot, error)
+	Claim(context.Context, string, protocol.ClaimRequest) (protocol.ClaimResponse, error)
+	RenewLease(context.Context, string, protocol.LeaseHeartbeatRequest) (protocol.LeaseHeartbeatResponse, error)
+	AppendEvents(context.Context, string, protocol.AppendEventsRequest) error
+	Transition(context.Context, string, protocol.StateTransitionRequest) error
+	Reconcile(context.Context, string, protocol.ReconcileRequest) (protocol.ReconcileResponse, error)
+	AcknowledgeCommand(context.Context, string, protocol.CommandAcknowledgement) error
+}
+
+// EnrollmentAPI is deliberately separate because it is authorized by the
+// one-time enrollment token rather than a persisted machine credential.
+type EnrollmentAPI interface {
+	Enroll(context.Context, string, protocol.EnrollRequest) (protocol.EnrollResponse, error)
+}
+
+// Process is the part of a running agent the control loop needs.
+type Process interface {
+	WriteInput([]byte) error
+	Terminate(context.Context, time.Duration) error
+	Wait() execution.Result
+}
+
+// StartProcess permits deterministic runner tests without exposing os/exec to
+// the control loop's callers.
+type StartProcess func(context.Context, execution.Invocation, execution.Sink) (Process, error)
+
+// NotificationClient is the durable-notification wakeup boundary.
+type NotificationClient interface {
+	Run(context.Context, chan<- notification.Hint) error
+}
+
+// Options changes dependencies owned by Run. It is primarily intended for
+// tests and embedded use; production callers need no options.
+type Options func(*options)
+
+type options struct {
+	httpClient       *http.Client
+	store            *state.Store
+	control          ControlAPI
+	enrollment       EnrollmentAPI
+	workspace        workspace.Service
+	start            StartProcess
+	notifications    NotificationClient
+	logWriter        io.Writer
+	clock            func() time.Time
+	newID            func() (string, error)
+	terminatePersist func(int) error
+}
+
+// WithHTTPClient replaces the HTTP transport used for production clients.
+func WithHTTPClient(client *http.Client) Options {
+	return func(value *options) { value.httpClient = client }
+}
+
+// WithStore supplies an already-open state store. Run does not close it.
+func WithStore(store *state.Store) Options { return func(value *options) { value.store = store } }
+
+// WithControl supplies the authenticated control-plane client.
+func WithControl(client ControlAPI) Options { return func(value *options) { value.control = client } }
+
+// WithEnrollment supplies the enrollment client.
+func WithEnrollment(client EnrollmentAPI) Options {
+	return func(value *options) { value.enrollment = client }
+}
+
+// WithWorkspace supplies the local workspace service.
+func WithWorkspace(service workspace.Service) Options {
+	return func(value *options) { value.workspace = service }
+}
+
+// WithStartProcess supplies the local process launcher.
+func WithStartProcess(start StartProcess) Options {
+	return func(value *options) { value.start = start }
+}
+
+// WithNotificationClient supplies a notification source, normally for tests.
+func WithNotificationClient(client NotificationClient) Options {
+	return func(value *options) { value.notifications = client }
+}
+
+// WithLogWriter sends structured JSON logs to writer. The default is stderr.
+func WithLogWriter(writer io.Writer) Options {
+	return func(value *options) { value.logWriter = writer }
+}
+
+// Run enrolls or restores this machine identity, registers its one configured
+// runtime, and keeps polling until ctx is cancelled. A failed request affects
+// only that request: the daemon remains alive and retries on its next wakeup.
+func Run(ctx context.Context, value config.Config, changes ...Options) error {
+	if ctx == nil {
+		return errors.New("daemon context must not be nil")
+	}
+	if err := value.Validate(); err != nil {
+		return fmt.Errorf("validate config: %w", err)
+	}
+	settings := options{
+		httpClient:       &http.Client{Timeout: 30 * time.Second},
+		logWriter:        os.Stderr,
+		clock:            func() time.Time { return time.Now().UTC() },
+		newID:            state.NewDaemonInstanceID,
+		terminatePersist: terminatePersistedProcess,
+	}
+	for _, change := range changes {
+		if change != nil {
+			change(&settings)
+		}
+	}
+	if settings.logWriter == nil {
+		settings.logWriter = io.Discard
+	}
+	loop := &daemon{
+		config: value, options: settings,
+		log:     slog.New(slog.NewJSONHandler(settings.logWriter, &slog.HandlerOptions{Level: slog.LevelInfo})),
+		running: make(map[state.RunKey]*runningRun),
+	}
+	return loop.run(ctx)
+}
+
+type daemon struct {
+	config  config.Config
+	options options
+	log     *slog.Logger
+
+	store          *state.Store
+	control        ControlAPI
+	workspace      workspace.Service
+	start          StartProcess
+	runtimeID      string
+	runtimeEpoch   int64
+	leaseDuration  time.Duration
+	pollEvery      time.Duration
+	heartbeatEvery time.Duration
+	running        map[state.RunKey]*runningRun
+	slots          chan struct{}
+	mu             sync.Mutex
+	workers        sync.WaitGroup
+}
+
+type runningRun struct {
+	process   Process
+	prepared  workspace.Prepared
+	parser    *jsonlParser
+	starting  bool
+	cancel    context.CancelFunc
+	cancelled bool
+	finished  bool
+	succeeded bool
+}
+
+func (daemon *daemon) run(ctx context.Context) error {
+	if err := daemon.initialize(ctx); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil
+		}
+		return err
+	}
+	defer daemon.close()
+
+	triggers := make(chan struct{}, 1)
+	trigger := func() {
+		select {
+		case triggers <- struct{}{}:
+		default:
+		}
+	}
+	trigger()
+	hints := make(chan notification.Hint, 16)
+	if daemon.options.notifications != nil {
+		go func() {
+			if err := daemon.options.notifications.Run(ctx, hints); err != nil && !errors.Is(err, context.Canceled) {
+				daemon.log.Warn("notification_client_stopped", "error", err)
+			}
+		}()
+	}
+
+	poll := time.NewTicker(daemon.interval(daemon.pollEvery))
+	heartbeat := time.NewTicker(daemon.interval(daemon.heartbeatEvery))
+	leases := time.NewTicker(minimumInterval)
+	defer poll.Stop()
+	defer heartbeat.Stop()
+	defer leases.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			daemon.stopAll()
+			daemon.workers.Wait()
+			return nil
+		case hint := <-hints:
+			if hint.Type == "connected" {
+				daemon.reconcile(ctx)
+			}
+			trigger()
+		case <-triggers:
+			daemon.sync(ctx)
+		case <-poll.C:
+			daemon.sync(ctx)
+		case <-heartbeat.C:
+			daemon.heartbeat(ctx)
+		case <-leases.C:
+			daemon.renewLeases(ctx)
+			daemon.flushAll(ctx)
+		}
+	}
+}
+
+func (daemon *daemon) initialize(ctx context.Context) error {
+	if daemon.options.store != nil {
+		daemon.store = daemon.options.store
+	} else {
+		store, err := state.New(daemon.config.StateDir)
+		if err != nil {
+			return err
+		}
+		daemon.store = store
+	}
+	identity, err := daemon.store.LoadIdentity()
+	if err != nil {
+		if !state.IsNotFound(err) {
+			return fmt.Errorf("load machine identity: %w", err)
+		}
+		token := os.Getenv("SYMMETRY_ENROLLMENT_TOKEN")
+		if token == "" {
+			return errors.New("SYMMETRY_ENROLLMENT_TOKEN is required for first enrollment")
+		}
+		enrollment := daemon.options.enrollment
+		if enrollment == nil {
+			client, buildErr := control.NewEnrollmentClient(daemon.config.ControlPlaneURL, daemon.options.httpClient)
+			if buildErr != nil {
+				return buildErr
+			}
+			enrollment = client
+		}
+		var response protocol.EnrollResponse
+		enrollErr := retry(ctx, func() error {
+			var requestErr error
+			response, requestErr = enrollment.Enroll(ctx, token, protocol.EnrollRequest{Machine: protocol.MachineEnrollment{Name: daemon.config.MachineName}})
+			return requestErr
+		})
+		if enrollErr != nil {
+			return fmt.Errorf("enroll machine: %w", enrollErr)
+		}
+		identity = state.MachineIdentity{MachineID: response.MachineID, MachineToken: response.MachineToken}
+		if saveErr := daemon.store.SaveIdentity(identity); saveErr != nil {
+			return fmt.Errorf("save machine identity: %w", saveErr)
+		}
+		daemon.log.Info("machine_enrolled", "machine_id", identity.MachineID)
+	}
+	client := daemon.options.control
+	if client == nil {
+		built, buildErr := control.NewClient(daemon.config.ControlPlaneURL, identity.MachineToken, daemon.options.httpClient)
+		if buildErr != nil {
+			return buildErr
+		}
+		client = built
+	}
+	daemon.control = client
+	if daemon.options.workspace != nil {
+		daemon.workspace = daemon.options.workspace
+	} else {
+		daemon.workspace = workspace.New(daemon.config.Workspaces)
+	}
+	if daemon.options.start != nil {
+		daemon.start = daemon.options.start
+	} else {
+		runner := execution.NewRunner()
+		daemon.start = func(ctx context.Context, invocation execution.Invocation, sink execution.Sink) (Process, error) {
+			return runner.Start(ctx, invocation, sink)
+		}
+	}
+	daemon.slots = make(chan struct{}, daemon.config.Runtime.Capacity)
+	instanceID, idErr := daemon.options.newID()
+	if idErr != nil {
+		return fmt.Errorf("generate daemon instance ID: %w", idErr)
+	}
+	registrationRequest := protocol.SessionRegistrationRequest{
+		DaemonInstanceID: instanceID,
+		Runtimes:         []protocol.RuntimeRegistration{{RuntimeKey: daemon.config.Runtime.RuntimeKey, Name: daemon.config.Runtime.Name, Capacity: daemon.config.Runtime.Capacity, AgentProfile: daemon.config.Runtime.AgentProfile, Workspace: daemon.config.Runtime.Workspace, Capabilities: json.RawMessage(`{}`)}},
+	}
+	var registration protocol.SessionRegistrationResponse
+	registerErr := retry(ctx, func() error {
+		var requestErr error
+		registration, requestErr = daemon.control.RegisterSession(ctx, registrationRequest)
+		return requestErr
+	})
+	if registerErr != nil {
+		return fmt.Errorf("register daemon session: %w", registerErr)
+	}
+	for _, runtime := range registration.Runtimes {
+		if runtime.RuntimeKey == daemon.config.Runtime.RuntimeKey {
+			daemon.runtimeID, daemon.runtimeEpoch = runtime.RuntimeID, runtime.RuntimeEpoch
+			break
+		}
+	}
+	if daemon.runtimeID == "" || daemon.runtimeEpoch <= 0 {
+		return errors.New("registration did not return configured runtime")
+	}
+	daemon.leaseDuration = time.Duration(registration.LeaseDurationMS) * time.Millisecond
+	daemon.pollEvery = time.Duration(registration.PollIntervalMS) * time.Millisecond
+	daemon.heartbeatEvery = time.Duration(registration.HeartbeatIntervalMS) * time.Millisecond
+	if daemon.options.notifications == nil && registration.WebSocketPath != "" {
+		notifier, notifyErr := notification.New(daemon.config.ControlPlaneURL, registration.WebSocketPath, identity.MachineID, identity.MachineToken, daemon.options.httpClient)
+		if notifyErr != nil {
+			return fmt.Errorf("create notification client: %w", notifyErr)
+		}
+		daemon.options.notifications = notifier
+	}
+	daemon.log.Info("runtime_registered", "runtime_id", daemon.runtimeID, "runtime_epoch", daemon.runtimeEpoch)
+	daemon.reconcile(ctx)
+	return nil
+}
+
+func (daemon *daemon) close() {
+	if daemon.options.store == nil && daemon.store != nil {
+		_ = daemon.store.Close()
+	}
+}
+
+func (daemon *daemon) interval(value time.Duration) time.Duration {
+	if value < minimumInterval {
+		return minimumInterval
+	}
+	if value > maximumInterval {
+		return maximumInterval
+	}
+	return value
+}
+
+func (daemon *daemon) heartbeat(ctx context.Context) {
+	snapshot, err := daemon.control.Heartbeat(ctx, daemon.runtimeID, protocol.RuntimeHeartbeatRequest{RuntimeEpoch: daemon.runtimeEpoch, ActiveRuns: daemon.activeRuns()})
+	if err != nil {
+		daemon.log.Warn("runtime_heartbeat_failed", "error", err)
+		return
+	}
+	daemon.handleSnapshot(ctx, snapshot)
+	daemon.flushAll(ctx)
+}
+
+func (daemon *daemon) sync(ctx context.Context) {
+	snapshot, err := daemon.control.Work(ctx, daemon.runtimeID, daemon.runtimeEpoch)
+	if err != nil {
+		daemon.log.Warn("runtime_poll_failed", "error", err)
+		daemon.flushAll(ctx)
+		return
+	}
+	daemon.handleSnapshot(ctx, snapshot)
+	daemon.flushAll(ctx)
+}
+
+func (daemon *daemon) reconcile(ctx context.Context) {
+	journals, err := daemon.store.ListJournals()
+	if err != nil {
+		daemon.log.Error("list_journals_failed", "error", err)
+		return
+	}
+	runs := make([]protocol.ReconcileRun, 0, len(journals))
+	for _, journal := range journals {
+		runs = append(runs, protocol.ReconcileRun{RunID: journal.RunID, Generation: journal.Generation, ClaimedRuntimeEpoch: journal.ClaimedRuntimeEpoch, ClaimID: journal.ClaimID, LeaseToken: journal.LeaseToken, LocalState: journal.LocalState, LastEventSequence: journal.LastEventSequence})
+		if journal.ClaimedRuntimeEpoch != daemon.runtimeEpoch {
+			daemon.stopRecoveredJournal(journal, "stale daemon epoch")
+		}
+	}
+	response, err := daemon.control.Reconcile(ctx, daemon.runtimeID, protocol.ReconcileRequest{RuntimeEpoch: daemon.runtimeEpoch, Runs: runs})
+	if err != nil {
+		daemon.log.Warn("runtime_reconcile_failed", "error", err)
+		return
+	}
+	for _, decision := range response.Decisions {
+		key := state.RunKey{RunID: decision.RunID, Generation: decision.Generation}
+		if decision.Decision != protocol.ReconcileContinue {
+			if journal, loadErr := daemon.store.LoadJournal(key); loadErr == nil {
+				daemon.stopRecoveredJournal(journal, string(decision.Decision))
+			}
+			continue
+		}
+		if decision.LeaseExpiresAt != nil {
+			_, _ = daemon.store.UpdateLeaseExpiry(key, *decision.LeaseExpiresAt)
+		}
+	}
+	daemon.handleSnapshot(ctx, protocol.RuntimeSnapshot{Assignments: response.Assignments, Commands: response.Commands})
+	daemon.flushAll(ctx)
+}
+
+func (daemon *daemon) stopRecoveredJournal(journal state.RunJournal, reason string) {
+	if journal.PID > 0 && daemon.options.terminatePersist != nil {
+		if err := daemon.options.terminatePersist(journal.PID); err != nil {
+			daemon.log.Warn("stop_recovered_process_failed", "run_id", journal.RunID, "error", err)
+		}
+	}
+	_, _ = daemon.store.SetLocalState(journal.Key(), "stale")
+	daemon.log.Warn("recovered_journal_stopped", "run_id", journal.RunID, "generation", journal.Generation, "reason", reason)
+}
+
+func (daemon *daemon) handleSnapshot(ctx context.Context, snapshot protocol.RuntimeSnapshot) {
+	for _, command := range snapshot.Commands {
+		daemon.handleCommand(ctx, command)
+	}
+	for _, assignment := range snapshot.Assignments {
+		daemon.startAssignment(ctx, assignment)
+	}
+}
+
+func (daemon *daemon) startAssignment(ctx context.Context, assignment protocol.Assignment) {
+	key := state.RunKey{RunID: assignment.RunID, Generation: assignment.Generation}
+	if assignment.RunID == "" || assignment.Generation <= 0 {
+		return
+	}
+	select {
+	case daemon.slots <- struct{}{}:
+	default:
+		return
+	}
+	daemon.mu.Lock()
+	if _, exists := daemon.running[key]; exists {
+		daemon.mu.Unlock()
+		<-daemon.slots
+		return
+	}
+	runContext, cancel := context.WithCancel(ctx)
+	daemon.running[key] = &runningRun{starting: true, cancel: cancel}
+	daemon.mu.Unlock()
+	daemon.workers.Add(1)
+	go func() {
+		defer daemon.workers.Done()
+		daemon.startAssigned(runContext, key, assignment)
+	}()
+}
+
+func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assignment protocol.Assignment) {
+	prepared := workspace.Prepared{}
+	preparedOK := false
+	handoff := false
+	defer func() {
+		if handoff {
+			return
+		}
+		if preparedOK {
+			daemon.cleanupWorkspace(prepared, false)
+		}
+		daemon.releaseRun(key)
+	}()
+
+	journal, err := daemon.store.LoadJournal(key)
+	if err == nil {
+		if journal.RuntimeID != daemon.runtimeID || journal.ClaimedRuntimeEpoch != daemon.runtimeEpoch || journal.LocalState != "claiming" {
+			return
+		}
+	} else if state.IsNotFound(err) {
+		claimID, idErr := daemon.options.newID()
+		if idErr != nil {
+			daemon.log.Error("generate_claim_id_failed", "error", idErr)
+			return
+		}
+		intent := state.ClaimIntent{Key: key, RuntimeKey: daemon.config.Runtime.RuntimeKey, RuntimeID: daemon.runtimeID, RuntimeEpoch: daemon.runtimeEpoch, ClaimID: claimID, LocalState: "claiming", Work: assignment.Work}
+		journal, err = daemon.store.SaveClaimIntent(intent)
+		if err != nil {
+			daemon.log.Warn("save_claim_intent_failed", "run_id", assignment.RunID, "error", err)
+			return
+		}
+	} else {
+		daemon.log.Warn("load_claim_intent_failed", "run_id", assignment.RunID, "error", err)
+		return
+	}
+	claim, err := daemon.control.Claim(ctx, assignment.RunID, protocol.ClaimRequest{RuntimeID: daemon.runtimeID, RuntimeEpoch: daemon.runtimeEpoch, Generation: assignment.Generation, ClaimID: journal.ClaimID})
+	if err != nil {
+		daemon.log.Warn("claim_failed", "run_id", assignment.RunID, "error", err)
+		return
+	}
+	journal, err = daemon.store.SaveClaimGrant(key, claim)
+	if err != nil {
+		daemon.log.Error("save_claim_grant_failed", "run_id", assignment.RunID, "error", err)
+		return
+	}
+	if err := daemon.markRunning(key); err != nil {
+		daemon.log.Error("queue_running_failed", "run_id", assignment.RunID, "error", err)
+		daemon.queueFailure(key, "queue_running", err)
+		return
+	}
+	prepared, err = daemon.workspace.Prepare(ctx, daemon.config.Runtime.Workspace, workspace.RunRef{RunID: key.RunID, Generation: key.Generation})
+	if err != nil {
+		if !daemon.isCancelled(key) {
+			daemon.queueFailure(key, "prepare_workspace", err)
+		}
+		return
+	}
+	preparedOK = true
+	if daemon.isCancelled(key) {
+		return
+	}
+	journal, err = daemon.store.LoadJournal(key)
+	if err != nil {
+		if !daemon.isCancelled(key) {
+			daemon.queueFailure(key, "load_running_journal", err)
+		}
+		return
+	}
+	journal.WorkspacePath = prepared.Path
+	if err := daemon.store.SaveJournal(journal); err != nil {
+		if !daemon.isCancelled(key) {
+			daemon.queueFailure(key, "record_workspace", err)
+		}
+		return
+	}
+	profile := daemon.config.AgentProfiles[daemon.config.Runtime.AgentProfile]
+	environment, err := execution.BuildEnvironment(profile.EnvAllowlist...)
+	if err != nil {
+		if !daemon.isCancelled(key) {
+			daemon.queueFailure(key, "build_environment", err)
+		}
+		return
+	}
+	input, err := initialInput(profile, claim.Work)
+	if err != nil {
+		if !daemon.isCancelled(key) {
+			daemon.queueFailure(key, "encode_input", err)
+		}
+		return
+	}
+	parser := &jsonlParser{}
+	sink := execution.SinkFunc(func(_ context.Context, event execution.Event) error {
+		return daemon.queueOutput(key, profile.EventFormat, parser, event)
+	})
+	process, err := daemon.start(ctx, execution.Invocation{Program: profile.Command, Args: profile.Args, Dir: prepared.Path, Env: environment, InitialInput: input, CloseInputAfterInitial: !profile.Interactive}, sink)
+	if err != nil {
+		if !daemon.isCancelled(key) {
+			daemon.queueFailure(key, "start_agent", err)
+		}
+		return
+	}
+	if _, err := daemon.store.SetProcess(key, processPID(process), daemon.options.clock()); err != nil {
+		_ = process.Terminate(context.Background(), 0)
+		if !daemon.isCancelled(key) {
+			daemon.queueFailure(key, "record_process", err)
+		}
+		return
+	}
+	daemon.mu.Lock()
+	active := daemon.running[key]
+	if active == nil {
+		daemon.mu.Unlock()
+		_ = process.Terminate(context.Background(), 0)
+		return
+	}
+	active.process = process
+	active.prepared = prepared
+	active.parser = parser
+	active.starting = false
+	daemon.mu.Unlock()
+	handoff = true
+	daemon.waitForRun(key)
+}
+
+func (daemon *daemon) markRunning(key state.RunKey) error {
+	if err := daemon.queueTransition(key, "running", map[string]any{}); err != nil {
+		return err
+	}
+	_, err := daemon.store.SetLocalState(key, "running")
+	return err
+}
+
+func (daemon *daemon) releaseRun(key state.RunKey) {
+	daemon.mu.Lock()
+	active := daemon.running[key]
+	delete(daemon.running, key)
+	daemon.mu.Unlock()
+	if active != nil && active.cancel != nil {
+		active.cancel()
+	}
+	<-daemon.slots
+}
+
+func (daemon *daemon) isCancelled(key state.RunKey) bool {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	active := daemon.running[key]
+	return active != nil && active.cancelled
+}
+
+func (daemon *daemon) cleanupWorkspace(prepared workspace.Prepared, succeeded bool) {
+	if err := daemon.workspace.Cleanup(context.Background(), prepared, succeeded); err != nil {
+		daemon.log.Warn("cleanup_workspace_failed", "path", prepared.Path, "error", err)
+	}
+}
+
+func processPID(process Process) int {
+	if concrete, ok := process.(*execution.Process); ok {
+		return concrete.PID
+	}
+	return 1 // Injected tests may not model PIDs; state still requires a positive durable value.
+}
+
+func initialInput(profile config.AgentProfile, work protocol.Work) ([]byte, error) {
+	if profile.InputMode == config.InputModeGoal {
+		return append([]byte(work.Goal), '\n'), nil
+	}
+	if len(work.Input) > 0 && json.Valid(work.Input) {
+		return append(append([]byte(nil), work.Input...), '\n'), nil
+	}
+	encoded, err := json.Marshal(struct {
+		Goal string `json:"goal"`
+	}{Goal: work.Goal})
+	if err != nil {
+		return nil, err
+	}
+	return append(encoded, '\n'), nil
+}
+
+func (daemon *daemon) queueOutput(key state.RunKey, format config.EventFormat, parser *jsonlParser, event execution.Event) error {
+	if event.Stream == execution.Stderr || format != config.EventFormatJSONL {
+		return daemon.queueRawEvent(key, event)
+	}
+	for _, line := range parser.push(event.Data) {
+		if !json.Valid(line) {
+			if err := daemon.queueRawEvent(key, execution.Event{Stream: event.Stream, At: event.At, Data: line}); err != nil {
+				return err
+			}
+			continue
+		}
+		var payload map[string]json.RawMessage
+		if err := json.Unmarshal(line, &payload); err != nil {
+			return daemon.queueRawEvent(key, execution.Event{Stream: event.Stream, At: event.At, Data: line})
+		}
+		kind := "agent_event"
+		var declaredType string
+		if raw, ok := payload["type"]; ok {
+			_ = json.Unmarshal(raw, &declaredType)
+		}
+		switch declaredType {
+		case "progress", "waiting_for_input":
+			kind = declaredType
+		}
+		if err := daemon.queueEvent(key, kind, json.RawMessage(line), event.At); err != nil {
+			return err
+		}
+		if kind == "waiting_for_input" {
+			_ = daemon.queueTransition(key, "waiting_for_input", json.RawMessage(line))
+			_, _ = daemon.store.SetLocalState(key, "waiting_for_input")
+		}
+	}
+	return nil
+}
+
+func (daemon *daemon) queueRawEvent(key state.RunKey, event execution.Event) error {
+	payload, err := json.Marshal(map[string]string{"stream": string(event.Stream), "encoding": "base64", "data": base64.StdEncoding.EncodeToString(event.Data)})
+	if err != nil {
+		return err
+	}
+	return daemon.queueEvent(key, "output", payload, event.At)
+}
+
+func (daemon *daemon) queueEvent(key state.RunKey, kind string, payload json.RawMessage, at time.Time) error {
+	id, err := daemon.options.newID()
+	if err != nil {
+		return err
+	}
+	journal, err := daemon.store.LoadJournal(key)
+	if err != nil {
+		return err
+	}
+	_, err = daemon.store.QueueEvent(key, protocol.RunEvent{EventID: id, Sequence: journal.LastEventSequence + 1, Kind: kind, OccurredAt: at, Payload: payload})
+	return err
+}
+
+func (daemon *daemon) queueTransition(key state.RunKey, stateName string, payload any) error {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	id, err := daemon.options.newID()
+	if err != nil {
+		return err
+	}
+	_, err = daemon.store.QueueTransition(key, protocol.StateTransitionRequest{TransitionID: id, State: stateName, Payload: encoded})
+	return err
+}
+
+func (daemon *daemon) queueFailure(key state.RunKey, stage string, cause error) {
+	_ = daemon.queueTransition(key, "failed", map[string]string{"stage": stage, "error": cause.Error()})
+	_, _ = daemon.store.SetLocalState(key, "terminal_pending")
+}
+
+func (daemon *daemon) waitForRun(key state.RunKey) {
+	daemon.mu.Lock()
+	active := daemon.running[key]
+	daemon.mu.Unlock()
+	if active == nil {
+		return
+	}
+	result := active.process.Wait()
+	daemon.mu.Lock()
+	active.finished = true
+	active.succeeded = result.Success()
+	cancelled := active.cancelled
+	daemon.mu.Unlock()
+	if !cancelled {
+		if result.Success() {
+			_ = daemon.queueTransition(key, "completed", map[string]any{"exit_code": result.ExitCode})
+		} else {
+			_ = daemon.queueTransition(key, "failed", map[string]any{"exit_code": result.ExitCode, "error": errorText(result.WaitError)})
+		}
+		_, _ = daemon.store.SetLocalState(key, "terminal_pending")
+	}
+}
+
+func errorText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Command) {
+	key := state.RunKey{RunID: command.RunID, Generation: command.Generation}
+	journal, err := daemon.store.LoadJournal(key)
+	if err != nil {
+		return
+	}
+	for _, acknowledgement := range journal.PendingCommandAcknowledgements {
+		if acknowledgement.CommandID == command.CommandID {
+			return
+		}
+	}
+	daemon.mu.Lock()
+	active := daemon.running[key]
+	daemon.mu.Unlock()
+	outcome := "rejected"
+	if active == nil {
+		daemon.queueCommandAcknowledgement(key, command.CommandID, outcome)
+		return
+	}
+	if active.starting || active.process == nil {
+		if command.Kind == "cancel" {
+			daemon.mu.Lock()
+			active.cancelled = true
+			if active.cancel != nil {
+				active.cancel()
+			}
+			daemon.mu.Unlock()
+			_ = daemon.queueTransition(key, "cancelled", map[string]any{})
+			_, _ = daemon.store.SetLocalState(key, "terminal_pending")
+			daemon.queueCommandAcknowledgement(key, command.CommandID, "applied")
+			return
+		}
+		daemon.queueCommandAcknowledgement(key, command.CommandID, outcome)
+		return
+	}
+	switch command.Kind {
+	case "cancel":
+		daemon.mu.Lock()
+		active.cancelled = true
+		daemon.mu.Unlock()
+		if err := active.process.Terminate(ctx, 2*time.Second); err != nil {
+			outcome = "failed"
+		} else {
+			_ = daemon.queueTransition(key, "cancelled", map[string]any{})
+			_, _ = daemon.store.SetLocalState(key, "terminal_pending")
+			outcome = "applied"
+		}
+	case "provide_input":
+		if !json.Valid(command.Payload) {
+			break
+		}
+		input := append(append([]byte(nil), command.Payload...), '\n')
+		if err := active.process.WriteInput(input); err != nil {
+			outcome = "failed"
+		} else {
+			_ = daemon.queueTransition(key, "running", map[string]any{})
+			_, _ = daemon.store.SetLocalState(key, "running")
+			outcome = "applied"
+		}
+	}
+	daemon.queueCommandAcknowledgement(key, command.CommandID, outcome)
+}
+
+func (daemon *daemon) queueCommandAcknowledgement(key state.RunKey, commandID, outcome string) {
+	id, err := daemon.options.newID()
+	if err != nil {
+		return
+	}
+	_, _ = daemon.store.QueueCommandAcknowledgement(key, protocol.CommandAcknowledgement{RunID: key.RunID, CommandID: commandID, Outcome: outcome, AckID: id})
+}
+
+func (daemon *daemon) renewLeases(ctx context.Context) {
+	journals, err := daemon.store.ListJournals()
+	if err != nil {
+		return
+	}
+	now := daemon.options.clock()
+	for _, journal := range journals {
+		if journal.LeaseToken == "" || journal.LocalState == "terminal_pending" || journal.LocalState == "stale" {
+			continue
+		}
+		remaining := journal.LeaseExpiresAt.Sub(now)
+		margin := leaseSafetyMargin
+		if daemon.leaseDuration > 0 && daemon.leaseDuration/3 < margin {
+			margin = daemon.leaseDuration / 3
+		}
+		if remaining <= 0 {
+			daemon.terminateForLease(journal, "lease expired")
+			continue
+		}
+		if remaining > margin*2 {
+			continue
+		}
+		response, renewErr := daemon.control.RenewLease(ctx, journal.RunID, protocol.LeaseHeartbeatRequest{Fence: journal.Fence()})
+		if renewErr != nil {
+			if control.IsOwnershipLost(renewErr) || remaining <= margin {
+				daemon.terminateForLease(journal, "lease renewal failed")
+			}
+			continue
+		}
+		_, _ = daemon.store.UpdateLeaseExpiry(journal.Key(), response.LeaseExpiresAt)
+		for _, command := range response.Commands {
+			daemon.handleCommand(ctx, command)
+		}
+	}
+}
+
+func (daemon *daemon) terminateForLease(journal state.RunJournal, reason string) {
+	daemon.mu.Lock()
+	active := daemon.running[journal.Key()]
+	if active != nil {
+		active.cancelled = true
+		if active.cancel != nil {
+			active.cancel()
+		}
+	}
+	daemon.mu.Unlock()
+	if active != nil && active.process != nil {
+		_ = active.process.Terminate(context.Background(), 0)
+	} else {
+		if active == nil {
+			daemon.stopRecoveredJournal(journal, reason)
+		}
+	}
+	_, _ = daemon.store.SetLocalState(journal.Key(), "stale")
+}
+
+func (daemon *daemon) flushAll(ctx context.Context) {
+	journals, err := daemon.store.ListJournals()
+	if err != nil {
+		return
+	}
+	for _, journal := range journals {
+		daemon.flushRun(ctx, journal)
+	}
+}
+
+func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) {
+	key := journal.Key()
+	if len(journal.PendingEvents) > 0 {
+		if err := daemon.control.AppendEvents(ctx, journal.RunID, protocol.AppendEventsRequest{Fence: journal.Fence(), Events: journal.PendingEvents}); err != nil {
+			if control.IsOwnershipLost(err) {
+				daemon.terminateForLease(journal, "event ownership lost")
+			}
+			return
+		}
+		ids := make([]string, len(journal.PendingEvents))
+		for index, event := range journal.PendingEvents {
+			ids[index] = event.EventID
+		}
+		journal, _ = daemon.store.MarkEventsDelivered(key, ids)
+	}
+	cancelledPending := hasTransition(journal.PendingTransitions, "cancelled")
+	sentAcknowledgements := make([]string, 0, len(journal.PendingCommandAcknowledgements))
+	if cancelledPending {
+		for _, acknowledgement := range journal.PendingCommandAcknowledgements {
+			if err := daemon.control.AcknowledgeCommand(ctx, acknowledgement.CommandID, acknowledgement); err != nil {
+				if control.IsOwnershipLost(err) {
+					daemon.terminateForLease(journal, "ack ownership lost")
+				}
+				return
+			}
+			sentAcknowledgements = append(sentAcknowledgements, acknowledgement.AckID)
+		}
+	}
+	for len(journal.PendingTransitions) > 0 {
+		transition := journal.PendingTransitions[0]
+		if err := daemon.control.Transition(ctx, journal.RunID, transition); err != nil {
+			if control.IsOwnershipLost(err) {
+				daemon.terminateForLease(journal, "transition ownership lost")
+			}
+			return
+		}
+		journal, _ = daemon.store.MarkTransitionsDelivered(key, []string{transition.TransitionID})
+	}
+	if cancelledPending {
+		if len(sentAcknowledgements) > 0 {
+			journal, _ = daemon.store.MarkCommandAcknowledgementsDelivered(key, sentAcknowledgements)
+		}
+	} else {
+		for _, acknowledgement := range journal.PendingCommandAcknowledgements {
+			if err := daemon.control.AcknowledgeCommand(ctx, acknowledgement.CommandID, acknowledgement); err != nil {
+				if control.IsOwnershipLost(err) {
+					daemon.terminateForLease(journal, "ack ownership lost")
+				}
+				return
+			}
+			journal, _ = daemon.store.MarkCommandAcknowledgementsDelivered(key, []string{acknowledgement.AckID})
+		}
+	}
+	if journal.LocalState == "terminal_pending" && len(journal.PendingTransitions) == 0 {
+		daemon.mu.Lock()
+		active := daemon.running[key]
+		daemon.mu.Unlock()
+		if active != nil {
+			if err := daemon.workspace.Cleanup(context.Background(), active.prepared, active.succeeded); err != nil {
+				daemon.log.Warn("cleanup_terminal_workspace_failed", "run_id", journal.RunID, "error", err)
+				return
+			}
+			daemon.mu.Lock()
+			delete(daemon.running, key)
+			daemon.mu.Unlock()
+			<-daemon.slots
+		}
+		if err := daemon.store.DeleteJournal(key); err != nil {
+			daemon.log.Warn("delete_terminal_journal_failed", "run_id", journal.RunID, "error", err)
+		}
+	}
+}
+
+func hasTransition(transitions []protocol.StateTransitionRequest, stateName string) bool {
+	for _, transition := range transitions {
+		if transition.State == stateName {
+			return true
+		}
+	}
+	return false
+}
+
+func (daemon *daemon) activeRuns() []protocol.ActiveRun {
+	journals, err := daemon.store.ListJournals()
+	if err != nil {
+		return nil
+	}
+	runs := make([]protocol.ActiveRun, 0, len(journals))
+	for _, journal := range journals {
+		if journal.LeaseToken != "" && journal.LocalState != "terminal_pending" && journal.LocalState != "stale" {
+			runs = append(runs, protocol.ActiveRun{RunID: journal.RunID, Generation: journal.Generation, ClaimedRuntimeEpoch: journal.ClaimedRuntimeEpoch, ClaimID: journal.ClaimID, LeaseToken: journal.LeaseToken, State: journal.LocalState})
+		}
+	}
+	return runs
+}
+
+func (daemon *daemon) hasRun(key state.RunKey) bool {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	_, exists := daemon.running[key]
+	return exists
+}
+func (daemon *daemon) stopAll() {
+	daemon.mu.Lock()
+	active := make([]*runningRun, 0, len(daemon.running))
+	for _, run := range daemon.running {
+		run.cancelled = true
+		if run.cancel != nil {
+			run.cancel()
+		}
+		active = append(active, run)
+	}
+	daemon.mu.Unlock()
+	for _, run := range active {
+		if run.process != nil {
+			_ = run.process.Terminate(context.Background(), 0)
+		}
+	}
+}
+
+type jsonlParser struct{ buffer bytes.Buffer }
+
+func (parser *jsonlParser) push(value []byte) [][]byte {
+	parser.buffer.Write(value)
+	var lines [][]byte
+	for {
+		line, err := parser.buffer.ReadBytes('\n')
+		if err != nil {
+			if len(line) > 0 {
+				parser.buffer.Write(line)
+			}
+			break
+		}
+		lines = append(lines, bytes.TrimSpace(line))
+	}
+	return lines
+}
+
+func retry(ctx context.Context, operation func() error) error {
+	delay := minimumInterval
+	for {
+		if err := operation(); err == nil {
+			return nil
+		} else if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+		if delay < retryMaximum/2 {
+			delay *= 2
+		} else {
+			delay = retryMaximum
+		}
+	}
+}

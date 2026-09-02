@@ -14,12 +14,13 @@ import (
 
 // Config is the daemon's local configuration.
 type Config struct {
-	ControlPlaneURL string                  `json:"control_plane_url"`
-	StateDir        string                  `json:"state_dir"`
-	MachineName     string                  `json:"machine_name"`
-	AgentProfiles   map[string]AgentProfile `json:"agent_profiles"`
-	Workspaces      map[string]Workspace    `json:"workspaces"`
-	Runtime         Runtime                 `json:"runtime"`
+	ControlPlaneURL   string                  `json:"control_plane_url"`
+	AllowInsecureHTTP bool                    `json:"allow_insecure_http"`
+	StateDir          string                  `json:"state_dir"`
+	MachineName       string                  `json:"machine_name"`
+	AgentProfiles     map[string]AgentProfile `json:"agent_profiles"`
+	Workspaces        map[string]Workspace    `json:"workspaces"`
+	Runtime           Runtime                 `json:"runtime"`
 }
 
 // Runtime declares the execution environment available on this machine.
@@ -43,11 +44,23 @@ const (
 
 // AgentProfile is a machine-local coding agent command binding.
 type AgentProfile struct {
-	Command      string    `json:"command"`
-	Args         []string  `json:"args"`
-	InputMode    InputMode `json:"input_mode"`
-	EnvAllowlist []string  `json:"env_allowlist"`
+	Command      string      `json:"command"`
+	Args         []string    `json:"args"`
+	InputMode    InputMode   `json:"input_mode"`
+	Interactive  bool        `json:"interactive"`
+	EventFormat  EventFormat `json:"event_format"`
+	EnvAllowlist []string    `json:"env_allowlist"`
 }
+
+// EventFormat specifies how the local agent represents events on stdout.
+type EventFormat string
+
+const (
+	// EventFormatRaw forwards stdout chunks as opaque base64 data.
+	EventFormatRaw EventFormat = "raw"
+	// EventFormatJSONL decodes one JSON object per stdout line when possible.
+	EventFormatJSONL EventFormat = "jsonl"
+)
 
 // WorkspacePolicy selects how a run obtains its local working directory.
 type WorkspacePolicy string
@@ -119,6 +132,9 @@ func (value Config) Validate() error {
 		(parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.RawQuery != "" || parsedURL.ForceQuery || parsedURL.Fragment != "" || strings.Contains(value.ControlPlaneURL, "#") {
 		return fmt.Errorf("control_plane_url must be an absolute http or https URL without user credentials, query, or fragment")
 	}
+	if parsedURL.Scheme == "http" && !value.AllowInsecureHTTP {
+		return fmt.Errorf("allow_insecure_http must be true for a plain HTTP control_plane_url")
+	}
 
 	if err := requireNotEmpty("state_dir", value.StateDir); err != nil {
 		return err
@@ -173,6 +189,13 @@ func validateAgentProfiles(profiles map[string]AgentProfile) error {
 		case InputModeGoal, InputModeJSON:
 		default:
 			return fmt.Errorf("%s.input_mode must be goal or json", field)
+		}
+		switch profile.EventFormat {
+		case "", EventFormatRaw:
+			profile.EventFormat = EventFormatRaw
+		case EventFormatJSONL:
+		default:
+			return fmt.Errorf("%s.event_format must be raw or jsonl", field)
 		}
 		seen := make(map[string]struct{}, len(profile.EnvAllowlist))
 		for _, name := range profile.EnvAllowlist {

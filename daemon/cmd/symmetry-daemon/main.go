@@ -1,23 +1,17 @@
-// symmetry-daemon loads local daemon configuration and prepares it for startup.
+// symmetry-daemon runs one configured Symmetry execution daemon.
 package main
 
 import (
-	"encoding/json"
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
+	"github.com/wxxb789/symmetry/daemon/internal/app"
 	"github.com/wxxb789/symmetry/daemon/internal/config"
 )
-
-type startupLog struct {
-	Event            string `json:"event"`
-	ControlPlaneURL  string `json:"control_plane_url"`
-	MachineName      string `json:"machine_name"`
-	RuntimeName      string `json:"runtime_name"`
-	RuntimeCapacity  int    `json:"runtime_capacity"`
-	ConnectionStatus string `json:"connection_status"`
-}
 
 func main() {
 	configPath := flag.String("config", "", "path to the daemon JSON configuration")
@@ -34,16 +28,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	entry := startupLog{
-		Event:            "daemon_configured",
-		ControlPlaneURL:  value.ControlPlaneURL,
-		MachineName:      value.MachineName,
-		RuntimeName:      value.Runtime.Name,
-		RuntimeCapacity:  value.Runtime.Capacity,
-		ConnectionStatus: "not_connected",
-	}
-	if err := json.NewEncoder(os.Stdout).Encode(entry); err != nil {
-		fmt.Fprintf(os.Stderr, "write startup log: %v\n", err)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := app.Run(ctx, value, app.WithLogWriter(os.Stdout)); err != nil {
+		fmt.Fprintf(os.Stderr, "run daemon: %v\n", err)
 		os.Exit(1)
 	}
 }
