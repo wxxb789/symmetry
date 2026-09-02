@@ -266,6 +266,119 @@ defmodule SymmetryControl.Orchestration do
 
   def fetch_run(_), do: {:error, :invalid_request}
 
+  @spec fetch_runtime(Ecto.UUID.t()) ::
+          {:ok, Runtime.t()} | {:error, :not_found | :invalid_request}
+  def fetch_runtime(id) when is_binary(id) do
+    if valid_uuid?(id) do
+      case Repo.get(Runtime, id) do
+        nil -> {:error, :not_found}
+        runtime -> {:ok, runtime}
+      end
+    else
+      {:error, :invalid_request}
+    end
+  end
+
+  def fetch_runtime(_), do: {:error, :invalid_request}
+
+  @spec fetch_command(Ecto.UUID.t()) ::
+          {:ok, Command.t()} | {:error, :not_found | :invalid_request}
+  def fetch_command(id) when is_binary(id) do
+    if valid_uuid?(id) do
+      case Repo.get(Command, id) do
+        nil -> {:error, :not_found}
+        command -> {:ok, command}
+      end
+    else
+      {:error, :invalid_request}
+    end
+  end
+
+  def fetch_command(_), do: {:error, :invalid_request}
+
+  @spec machine_owns_runtime?(Ecto.UUID.t(), Ecto.UUID.t()) :: boolean()
+  def machine_owns_runtime?(machine_id, runtime_id),
+    do: owned?(Runtime, machine_id, runtime_id, :machine_id)
+
+  @spec machine_owns_run?(Ecto.UUID.t(), Ecto.UUID.t()) :: boolean()
+  def machine_owns_run?(machine_id, run_id) when is_binary(machine_id) and is_binary(run_id) do
+    if valid_uuid?(machine_id) and valid_uuid?(run_id) do
+      Repo.exists?(
+        from run in Run,
+          join: runtime in Runtime,
+          on: runtime.id == run.runtime_id,
+          where: run.id == ^run_id and runtime.machine_id == ^machine_id
+      )
+    else
+      false
+    end
+  end
+
+  def machine_owns_run?(_, _), do: false
+
+  @spec machine_owns_command?(Ecto.UUID.t(), Ecto.UUID.t()) :: boolean()
+  def machine_owns_command?(machine_id, command_id)
+      when is_binary(machine_id) and is_binary(command_id) do
+    if valid_uuid?(machine_id) and valid_uuid?(command_id) do
+      Repo.exists?(
+        from command in Command,
+          join: run in Run,
+          on: run.id == command.run_id,
+          join: runtime in Runtime,
+          on: runtime.id == run.runtime_id,
+          where: command.id == ^command_id and runtime.machine_id == ^machine_id
+      )
+    else
+      false
+    end
+  end
+
+  def machine_owns_command?(_, _), do: false
+
+  @spec task_snapshot(Ecto.UUID.t()) ::
+          {:ok, %{task: Task.t(), run: Run.t() | nil}} | {:error, atom()}
+  def task_snapshot(task_id) when is_binary(task_id) do
+    if valid_uuid?(task_id) do
+      case Repo.one(
+             from task in Task,
+               left_join: run in Run,
+               on: run.task_id == task.id and run.generation == task.current_generation,
+               where: task.id == ^task_id,
+               select: %{task: task, run: run}
+           ) do
+        nil -> {:error, :not_found}
+        snapshot -> {:ok, snapshot}
+      end
+    else
+      {:error, :invalid_request}
+    end
+  end
+
+  def task_snapshot(_), do: {:error, :invalid_request}
+
+  @spec assignment_target(Run.t()) ::
+          {:ok, %{machine_id: Ecto.UUID.t(), runtime_id: Ecto.UUID.t()}} | {:error, :not_found}
+  def assignment_target(%Run{id: run_id}), do: assignment_target(run_id)
+
+  def assignment_target(run_id) when is_binary(run_id) do
+    if valid_uuid?(run_id) do
+      case Repo.one(
+             from run in Run,
+               join: runtime in Runtime,
+               on: runtime.id == run.runtime_id,
+               where: run.id == ^run_id,
+               select: %{machine_id: runtime.machine_id, runtime_id: run.runtime_id}
+           ) do
+        nil -> {:error, :not_found}
+        target -> {:ok, target}
+      end
+    else
+      {:error, :not_found}
+    end
+  end
+
+  def assignment_target(_), do: {:error, :not_found}
+
   @spec assign_one(keyword()) :: {:ok, Run.t()} | {:error, :no_assignment}
   def assign_one(opts \\ []) do
     current = now(opts)
@@ -965,9 +1078,7 @@ defmodule SymmetryControl.Orchestration do
        ) do
     ensure_fence!(task, run, runtime, fence, current)
 
-    unless valid_transition?(run.state, target_state) do
-      rollback(:state_conflict)
-    end
+    validate_transition!(run.state, target_state)
 
     run_attrs =
       case target_state do
@@ -1006,6 +1117,22 @@ defmodule SymmetryControl.Orchestration do
   defp valid_transition?("waiting_for_input", "running"), do: true
   defp valid_transition?("cancelling", "cancelled"), do: true
   defp valid_transition?(_, _), do: false
+
+  defp validate_transition!(current_state, target_state) do
+    cond do
+      target_state not in ["running", "waiting_for_input", "completed", "failed", "cancelled"] ->
+        rollback(:invalid_transition)
+
+      valid_transition?(current_state, target_state) ->
+        :ok
+
+      current_state == target_state or current_state in @terminal_states ->
+        rollback(:state_conflict)
+
+      true ->
+        rollback(:invalid_transition)
+    end
+  end
 
   defp transition_response(run, transition) do
     attrs =
@@ -1264,6 +1391,20 @@ defmodule SymmetryControl.Orchestration do
   defp value(_, _key, default), do: default
 
   defp digest(value), do: :crypto.hash(:sha256, value)
+
+  defp owned?(schema, machine_id, id, machine_field)
+       when is_binary(machine_id) and is_binary(id) do
+    if valid_uuid?(machine_id) and valid_uuid?(id) do
+      Repo.exists?(
+        from record in schema,
+          where: field(record, ^machine_field) == ^machine_id and record.id == ^id
+      )
+    else
+      false
+    end
+  end
+
+  defp owned?(_, _, _, _), do: false
   defp request_hash(value), do: value |> :erlang.term_to_binary() |> digest()
   defp random_token, do: :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
 

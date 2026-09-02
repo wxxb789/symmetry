@@ -12,8 +12,8 @@ defmodule SymmetryControl.Application do
       SymmetryControl.Repo,
       {DNSCluster, query: Application.get_env(:symmetry_control, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: SymmetryControl.PubSub},
-      # Start a worker by calling: SymmetryControl.Worker.start_link(arg)
-      # {SymmetryControl.Worker, arg},
+      SymmetryControl.Orchestration.Scheduler,
+      SymmetryControl.Orchestration.Reconciler,
       # Start to serve requests, typically the last entry
       SymmetryControlWeb.Endpoint
     ]

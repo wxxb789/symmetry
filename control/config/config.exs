@@ -9,7 +9,18 @@ import Config
 
 config :symmetry_control,
   ecto_repos: [SymmetryControl.Repo],
-  generators: [timestamp_type: :utc_datetime, binary_id: true]
+  generators: [timestamp_type: :utc_datetime, binary_id: true],
+  orchestration: [
+    enrollment_token: "development-enrollment-token",
+    operator_token: "development-operator-token",
+    heartbeat_interval_ms: 5_000,
+    poll_interval_ms: 5_000,
+    lease_duration_ms: 30_000,
+    assignment_duration_ms: 30_000,
+    reaper_interval_ms: 5_000,
+    reaper_enabled: true,
+    scheduler_enabled: true
+  ]
 
 # Configure the endpoint
 config :symmetry_control, SymmetryControlWeb.Endpoint,

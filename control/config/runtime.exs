@@ -23,6 +23,29 @@ end
 config :symmetry_control, SymmetryControlWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+if config_env() != :test do
+  token = fn variable, development_default ->
+    if config_env() == :prod do
+      System.fetch_env!(variable)
+    else
+      System.get_env(variable, development_default)
+    end
+  end
+
+  config :symmetry_control, :orchestration,
+    enrollment_token: token.("SYMMETRY_ENROLLMENT_TOKEN", "development-enrollment-token"),
+    operator_token: token.("SYMMETRY_OPERATOR_TOKEN", "development-operator-token"),
+    heartbeat_interval_ms:
+      String.to_integer(System.get_env("SYMMETRY_HEARTBEAT_INTERVAL_MS", "5000")),
+    poll_interval_ms: String.to_integer(System.get_env("SYMMETRY_POLL_INTERVAL_MS", "5000")),
+    lease_duration_ms: String.to_integer(System.get_env("SYMMETRY_LEASE_DURATION_MS", "30000")),
+    assignment_duration_ms:
+      String.to_integer(System.get_env("SYMMETRY_ASSIGNMENT_DURATION_MS", "30000")),
+    reaper_interval_ms: String.to_integer(System.get_env("SYMMETRY_REAPER_INTERVAL_MS", "5000")),
+    reaper_enabled: true,
+    scheduler_enabled: true
+end
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||

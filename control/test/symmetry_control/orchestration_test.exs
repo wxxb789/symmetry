@@ -181,6 +181,57 @@ defmodule SymmetryControl.OrchestrationTest do
              )
   end
 
+  test "unknown targets and illegal lifecycle edges are invalid transitions" do
+    %{machine: machine} = enroll_machine()
+    runtime = register_runtime(machine)
+
+    {:ok, _task, :created} =
+      Orchestration.submit_task(task_attrs(), "transition-errors", now: @now)
+
+    {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+
+    assert {:error, :invalid_transition} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "unknown",
+               %{},
+               "00000000-0000-0000-0000-000000000047",
+               now: @now
+             )
+
+    assert {:error, :invalid_transition} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "completed",
+               %{},
+               "00000000-0000-0000-0000-000000000048",
+               now: @now
+             )
+
+    assert {:ok, _} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "running",
+               %{},
+               "00000000-0000-0000-0000-000000000049",
+               now: @now
+             )
+
+    assert {:error, :state_conflict} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "running",
+               %{},
+               "00000000-0000-0000-0000-000000000050",
+               now: @now
+             )
+  end
+
   test "cancellation handles queued work and serializes with terminal completion" do
     {:ok, queued, :created} = Orchestration.submit_task(task_attrs(), "task-1", now: @now)
     assert {:ok, cancelled, nil} = Orchestration.request_cancel(queued.id, now: @now)
@@ -231,7 +282,7 @@ defmodule SymmetryControl.OrchestrationTest do
 
     assert replayed_acknowledgement.id == command.id
 
-    assert {:error, :state_conflict} =
+    assert {:error, :invalid_transition} =
              Orchestration.transition(
                run.id,
                fence,
@@ -268,7 +319,9 @@ defmodule SymmetryControl.OrchestrationTest do
     {:ok, task, :created} = Orchestration.submit_task(task_attrs(), "task-1", now: @now)
 
     {:ok, unaffected, :created} =
-      Orchestration.submit_task(task_attrs(goal: "unrelated"), "task-2", now: @now)
+      Orchestration.submit_task(task_attrs(goal: "unrelated"), "task-2",
+        now: DateTime.add(@now, 1, :microsecond)
+      )
 
     {:ok, run} = Orchestration.assign_one(now: @now)
     fence = claim(run, runtime)

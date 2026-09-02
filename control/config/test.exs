@@ -26,6 +26,17 @@ config :symmetry_control, SymmetryControlWeb.Endpoint,
 # Print only warnings and errors during test
 config :logger, level: :warning
 
+config :symmetry_control, :orchestration,
+  enrollment_token: "test-enrollment-token",
+  operator_token: "test-operator-token",
+  heartbeat_interval_ms: 5_000,
+  poll_interval_ms: 5_000,
+  lease_duration_ms: 30_000,
+  assignment_duration_ms: 30_000,
+  reaper_interval_ms: 60_000,
+  reaper_enabled: false,
+  scheduler_enabled: false
+
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime
 
