@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -180,6 +181,7 @@ type runningRun struct {
 	starting  bool
 	cancel    context.CancelFunc
 	cancelled bool
+	stale     bool
 	finished  bool
 	succeeded bool
 }
@@ -653,14 +655,18 @@ func (daemon *daemon) queueOutput(key state.RunKey, format config.EventFormat, p
 			}
 			continue
 		}
-		var payload map[string]json.RawMessage
-		if err := json.Unmarshal(line, &payload); err != nil {
+		var decoded any
+		if err := json.Unmarshal(line, &decoded); err != nil || containsNUL(decoded) {
 			return daemon.queueRawEvent(key, execution.Event{Stream: event.Stream, At: event.At, Data: line})
+		}
+		payload, ok := decoded.(map[string]any)
+		if !ok {
+			return daemon.queueEvent(key, "agent_event", json.RawMessage(line), event.At)
 		}
 		kind := "agent_event"
 		var declaredType string
-		if raw, ok := payload["type"]; ok {
-			_ = json.Unmarshal(raw, &declaredType)
+		if raw, ok := payload["type"].(string); ok {
+			declaredType = raw
 		}
 		switch declaredType {
 		case "progress", "waiting_for_input":
@@ -675,6 +681,26 @@ func (daemon *daemon) queueOutput(key state.RunKey, format config.EventFormat, p
 		}
 	}
 	return nil
+}
+
+func containsNUL(value any) bool {
+	switch value := value.(type) {
+	case string:
+		return strings.IndexByte(value, 0) >= 0
+	case []any:
+		for _, item := range value {
+			if containsNUL(item) {
+				return true
+			}
+		}
+	case map[string]any:
+		for key, item := range value {
+			if strings.IndexByte(key, 0) >= 0 || containsNUL(item) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (daemon *daemon) queueRawEvent(key state.RunKey, event execution.Event) error {
@@ -728,7 +754,13 @@ func (daemon *daemon) waitForRun(key state.RunKey) {
 	active.finished = true
 	active.succeeded = result.Success()
 	cancelled := active.cancelled
+	stale := active.stale
 	daemon.mu.Unlock()
+	if stale {
+		daemon.cleanupWorkspace(active.prepared, false)
+		daemon.releaseRun(key)
+		return
+	}
 	if !cancelled {
 		if result.Success() {
 			_ = daemon.queueTransition(key, "completed", map[string]any{"exit_code": result.ExitCode})
@@ -824,7 +856,7 @@ func (daemon *daemon) renewLeases(ctx context.Context) {
 	}
 	now := daemon.options.clock()
 	for _, journal := range journals {
-		if journal.LeaseToken == "" || journal.LocalState == "terminal_pending" || journal.LocalState == "stale" {
+		if journal.LeaseToken == "" || journal.LocalState == "stale" {
 			continue
 		}
 		remaining := journal.LeaseExpiresAt.Sub(now)
@@ -858,6 +890,7 @@ func (daemon *daemon) terminateForLease(journal state.RunJournal, reason string)
 	active := daemon.running[journal.Key()]
 	if active != nil {
 		active.cancelled = true
+		active.stale = true
 		if active.cancel != nil {
 			active.cancel()
 		}
@@ -885,6 +918,9 @@ func (daemon *daemon) flushAll(ctx context.Context) {
 
 func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) {
 	key := journal.Key()
+	if journal.LocalState == "stale" {
+		return
+	}
 	if len(journal.PendingEvents) > 0 {
 		if err := daemon.control.AppendEvents(ctx, journal.RunID, protocol.AppendEventsRequest{Fence: journal.Fence(), Events: journal.PendingEvents}); err != nil {
 			if control.IsOwnershipLost(err) {
@@ -972,7 +1008,7 @@ func (daemon *daemon) activeRuns() []protocol.ActiveRun {
 	}
 	runs := make([]protocol.ActiveRun, 0, len(journals))
 	for _, journal := range journals {
-		if journal.LeaseToken != "" && journal.LocalState != "terminal_pending" && journal.LocalState != "stale" {
+		if journal.LeaseToken != "" && journal.LocalState != "stale" {
 			runs = append(runs, protocol.ActiveRun{RunID: journal.RunID, Generation: journal.Generation, ClaimedRuntimeEpoch: journal.ClaimedRuntimeEpoch, ClaimID: journal.ClaimID, LeaseToken: journal.LeaseToken, State: journal.LocalState})
 		}
 	}
@@ -1016,7 +1052,11 @@ func (parser *jsonlParser) push(value []byte) [][]byte {
 			}
 			break
 		}
-		lines = append(lines, bytes.TrimSpace(line))
+		line = line[:len(line)-1]
+		if len(line) > 0 && line[len(line)-1] == '\r' {
+			line = line[:len(line)-1]
+		}
+		lines = append(lines, append([]byte(nil), line...))
 	}
 	return lines
 }

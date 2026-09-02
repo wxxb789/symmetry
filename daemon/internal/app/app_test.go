@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -481,6 +483,107 @@ func TestFlushInputTransitionStillPrecedesAcknowledgement(t *testing.T) {
 	}
 }
 
+func TestJSONLNULFallsBackToRawOutputWithoutMisclassifyingLiteralEscape(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	daemon := &daemon{store: store, options: options{newID: ids()}}
+	actualNUL := []byte("{\"message\":\"\\u0000\"}\n")
+	if err := daemon.queueOutput(key, config.EventFormatJSONL, &jsonlParser{}, execution.Event{Stream: execution.Stdout, At: time.Now().UTC(), Data: actualNUL}); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.PendingEvents) != 1 || journal.PendingEvents[0].Kind != "output" {
+		t.Fatalf("NUL event = %#v", journal.PendingEvents)
+	}
+	var raw map[string]string
+	if err := json.Unmarshal(journal.PendingEvents[0].Payload, &raw); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(raw["data"])
+	if err != nil || string(decoded) != string(actualNUL[:len(actualNUL)-1]) {
+		t.Fatalf("raw event bytes = %q, %v", decoded, err)
+	}
+	if err := daemon.queueOutput(key, config.EventFormatJSONL, &jsonlParser{}, execution.Event{Stream: execution.Stdout, At: time.Now().UTC(), Data: []byte("{\"message\":\"\\\\u0000\"}\n")}); err != nil {
+		t.Fatal(err)
+	}
+	journal, err = store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.PendingEvents) != 2 || journal.PendingEvents[1].Kind != "agent_event" {
+		t.Fatalf("literal escape event = %#v", journal.PendingEvents)
+	}
+}
+
+func TestTerminalPendingLeaseIsRenewed(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	now := time.Now().UTC()
+	if _, err := store.UpdateLeaseExpiry(key, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetLocalState(key, "terminal_pending"); err != nil {
+		t.Fatal(err)
+	}
+	api := &fakeControl{}
+	daemon := &daemon{store: store, control: api, options: options{clock: func() time.Time { return now }}, leaseDuration: 10 * time.Second}
+	daemon.renewLeases(context.Background())
+	if api.renewCalls != 1 {
+		t.Fatalf("RenewLease calls = %d, want 1", api.renewCalls)
+	}
+}
+
+func TestOwnershipLossReleasesActiveSlotAfterProcessStops(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	if _, err := store.QueueEvent(key, protocol.RunEvent{EventID: "event-1", Sequence: 1, Kind: "output", OccurredAt: time.Now().UTC(), Payload: []byte(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	process := newBlockingProcess()
+	cleaned := make(chan bool, 1)
+	slots := make(chan struct{}, 1)
+	slots <- struct{}{}
+	daemon := &daemon{
+		store:     store,
+		control:   &ownershipLossControl{},
+		log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		workspace: &trackingWorkspace{cleaned: cleaned},
+		running:   map[state.RunKey]*runningRun{key: {process: process, prepared: workspace.Prepared{Path: "C:\\workspace", Run: workspace.RunRef{RunID: key.RunID, Generation: key.Generation}}}},
+		slots:     slots,
+	}
+	daemon.workers.Add(1)
+	go func() {
+		defer daemon.workers.Done()
+		daemon.waitForRun(key)
+	}()
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemon.flushRun(context.Background(), journal)
+	daemon.workers.Wait()
+	if process.terminations != 1 {
+		t.Fatalf("Terminate calls = %d, want 1", process.terminations)
+	}
+	if len(slots) != 0 {
+		t.Fatal("slot was not released after ownership loss")
+	}
+	if _, exists := daemon.running[key]; exists {
+		t.Fatal("run remained active after ownership loss")
+	}
+	select {
+	case succeeded := <-cleaned:
+		if succeeded {
+			t.Fatal("ownership cleanup used success policy")
+		}
+	default:
+		t.Fatal("workspace was not cleaned after ownership loss")
+	}
+}
+
 func startupTestDaemon(t *testing.T, store *state.Store, service workspace.Service) *daemon {
 	t.Helper()
 	return &daemon{
@@ -554,6 +657,7 @@ type fakeControl struct {
 	workEnabled   <-chan struct{}
 	claimBlock    <-chan struct{}
 	claimEntered  chan<- struct{}
+	renewCalls    int
 }
 
 type orderingControl struct {
@@ -561,6 +665,12 @@ type orderingControl struct {
 	calls             []string
 	terminal          bool
 	failCancelledOnce bool
+}
+
+type ownershipLossControl struct{ fakeControl }
+
+func (*ownershipLossControl) AppendEvents(context.Context, string, protocol.AppendEventsRequest) error {
+	return &control.APIError{Code: control.OwnershipLost}
 }
 
 func (client *orderingControl) Transition(_ context.Context, _ string, request protocol.StateTransitionRequest) error {
@@ -638,6 +748,7 @@ func (client *fakeControl) Claim(_ context.Context, runID string, request protoc
 	return protocol.ClaimResponse{RunID: runID, Generation: request.Generation, ClaimID: request.ClaimID, LeaseToken: "lease", LeaseExpiresAt: time.Now().Add(time.Minute), Work: protocol.Work{Goal: "work"}}, nil
 }
 func (client *fakeControl) RenewLease(context.Context, string, protocol.LeaseHeartbeatRequest) (protocol.LeaseHeartbeatResponse, error) {
+	client.renewCalls++
 	return protocol.LeaseHeartbeatResponse{LeaseExpiresAt: time.Now().Add(time.Minute)}, nil
 }
 func (client *fakeControl) AppendEvents(context.Context, string, protocol.AppendEventsRequest) error {
@@ -727,3 +838,20 @@ func (process *recordingProcess) WriteInput(input []byte) error {
 }
 func (*recordingProcess) Terminate(context.Context, time.Duration) error { return nil }
 func (*recordingProcess) Wait() execution.Result                         { return execution.Result{} }
+
+type blockingProcess struct {
+	done         chan struct{}
+	terminations int
+}
+
+func newBlockingProcess() *blockingProcess       { return &blockingProcess{done: make(chan struct{})} }
+func (*blockingProcess) WriteInput([]byte) error { return nil }
+func (process *blockingProcess) Terminate(context.Context, time.Duration) error {
+	process.terminations++
+	close(process.done)
+	return nil
+}
+func (process *blockingProcess) Wait() execution.Result {
+	<-process.done
+	return execution.Result{Terminated: true}
+}
