@@ -13,13 +13,29 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
-  control:
+  control-migrate:
     build:
       context: .
       dockerfile: docker/control.Dockerfile
     depends_on:
       postgres:
         condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-symmetry}:${POSTGRES_PASSWORD:-symmetry}@postgres:5432/${POSTGRES_DB:-symmetry_dev}
+      PHX_HOST: localhost
+      PORT: "4000"
+      SECRET_KEY_BASE: development-only-secret-key-base-change-before-production-0123456789
+      SYMMETRY_ENROLLMENT_TOKEN: ${SYMMETRY_ENROLLMENT_TOKEN:-development-enrollment-token}
+      SYMMETRY_OPERATOR_TOKEN: ${SYMMETRY_OPERATOR_TOKEN:-development-operator-token}
+    command: ["eval", "SymmetryControl.Release.migrate()"]
+
+  control:
+    build:
+      context: .
+      dockerfile: docker/control.Dockerfile
+    depends_on:
+      control-migrate:
+        condition: service_completed_successfully
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-symmetry}:${POSTGRES_PASSWORD:-symmetry}@postgres:5432/${POSTGRES_DB:-symmetry_dev}
       PHX_HOST: localhost

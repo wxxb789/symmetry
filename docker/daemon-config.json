@@ -1,12 +1,15 @@
 {
   "control_plane_url": "http://control:4000",
+  "allow_insecure_http": true,
   "state_dir": "/var/lib/symmetry",
   "machine_name": "compose-daemon",
   "agent_profiles": {
     "default": {
-      "command": "/usr/local/bin/codex",
+      "command": "/symmetry-fake-agent",
       "args": [],
-      "input_mode": "goal",
+      "input_mode": "json",
+      "interactive": true,
+      "event_format": "jsonl",
       "env_allowlist": []
     }
   },

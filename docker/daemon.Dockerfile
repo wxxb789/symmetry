@@ -11,11 +11,17 @@ RUN go mod download
 
 COPY daemon/ ./
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w -buildid=' \
-    -o /out/symmetry-daemon ./cmd/symmetry-daemon
+    -o /out/symmetry-daemon ./cmd/symmetry-daemon \
+    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w -buildid=' \
+    -o /out/symmetry-fake-agent ./cmd/symmetry-fake-agent \
+    && mkdir -p /out/state /out/workspaces
 
 FROM scratch
 
 COPY --from=build /out/symmetry-daemon /symmetry-daemon
+COPY --from=build /out/symmetry-fake-agent /symmetry-fake-agent
+COPY --from=build --chown=65532:65532 /out/state /var/lib/symmetry
+COPY --from=build --chown=65532:65532 /out/workspaces /workspaces
 COPY --chown=65532:65532 docker/daemon-config.json /etc/symmetry/daemon.json
 
 USER 65532:65532
