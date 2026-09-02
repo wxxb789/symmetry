@@ -877,15 +877,33 @@ func TestRetryableClaimUsesHTTPStatus(t *testing.T) {
 func TestCancelWinsCompletionAndFlushesAcknowledgement(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
-	process := newBlockingProcess()
+	process := fakeProcess{result: execution.Result{ExitCode: 0}}
+	cleaned := make(chan bool, 1)
 	slots := make(chan struct{}, 1)
 	slots <- struct{}{}
-	daemon := &daemon{store: store, control: &orderingControl{}, workspace: &fakeWorkspace{}, log: slog.New(slog.NewJSONHandler(io.Discard, nil)), options: options{newID: ids()}, running: map[state.RunKey]*runningRun{key: {process: process, claimed: true}}, slots: slots}
-	daemon.workers.Add(1)
-	go func() { defer daemon.workers.Done(); daemon.waitForRun(key) }()
-	daemon.handleCommand(context.Background(), protocol.Command{CommandID: "cancel-1", RunID: key.RunID, Generation: key.Generation, Kind: "cancel"})
-	daemon.workers.Wait()
+	daemon := &daemon{
+		store:     store,
+		control:   &orderingControl{},
+		workspace: &trackingWorkspace{cleaned: cleaned},
+		log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		options:   options{newID: ids()},
+		running: map[state.RunKey]*runningRun{key: {
+			process:  process,
+			prepared: workspace.Prepared{Path: "C:\\workspace", Run: workspace.RunRef{RunID: key.RunID, Generation: key.Generation}},
+			claimed:  true,
+		}},
+		slots: slots,
+	}
+	daemon.waitForRun(key)
 	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].State != "completed" {
+		t.Fatalf("completed journal = %#v", journal)
+	}
+	daemon.handleCommand(context.Background(), protocol.Command{CommandID: "cancel-1", RunID: key.RunID, Generation: key.Generation, Kind: "cancel"})
+	journal, err = store.LoadJournal(key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -898,6 +916,14 @@ func TestCancelWinsCompletionAndFlushesAcknowledgement(t *testing.T) {
 	}
 	if len(slots) != 0 {
 		t.Fatal("slot was not released after cancelled terminal flush")
+	}
+	select {
+	case succeeded := <-cleaned:
+		if succeeded {
+			t.Fatal("cancelled cleanup used successful process exit instead of terminal state")
+		}
+	default:
+		t.Fatal("cancelled workspace was not cleaned")
 	}
 }
 

@@ -187,7 +187,6 @@ type runningRun struct {
 	cancelled       bool
 	cancelCommandID string
 	stale           bool
-	succeeded       bool
 }
 
 func (daemon *daemon) run(ctx context.Context) error {
@@ -900,7 +899,6 @@ func (daemon *daemon) waitForRun(key state.RunKey) {
 	}
 	result := process.Wait()
 	daemon.mu.Lock()
-	active.succeeded = result.Success()
 	cancelled := active.cancelled
 	stale := active.stale
 	daemon.mu.Unlock()
@@ -1191,14 +1189,12 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) {
 		daemon.mu.Lock()
 		active := daemon.running[key]
 		prepared := workspace.Prepared{}
-		succeeded := false
 		if active != nil {
 			prepared = active.prepared
-			succeeded = active.succeeded
 		}
 		daemon.mu.Unlock()
 		if active != nil {
-			if err := daemon.workspace.Cleanup(context.Background(), prepared, succeeded); err != nil {
+			if err := daemon.workspace.Cleanup(context.Background(), prepared, terminalSucceeded); err != nil {
 				daemon.log.Warn("cleanup_terminal_workspace_failed", "run_id", journal.RunID, "error", err)
 				return
 			}
