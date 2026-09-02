@@ -1,0 +1,1280 @@
+defmodule SymmetryControl.Orchestration do
+  @moduledoc """
+  Durable task orchestration backed exclusively by PostgreSQL.
+
+  This context owns lifecycle transitions and the fencing fields used by the
+  daemon protocol. Callers may use PubSub as a wake-up hint, never as state.
+  """
+
+  import Ecto.Query
+
+  alias SymmetryControl.Repo
+
+  alias SymmetryControl.Orchestration.{
+    Command,
+    Machine,
+    Run,
+    RunEvent,
+    RunTransition,
+    Runtime,
+    Task
+  }
+
+  @capacity_states ["assigned", "claimed", "running", "waiting_for_input", "cancelling"]
+  @terminal_states ["completed", "failed", "cancelled", "expired"]
+
+  @spec enroll_machine(map(), keyword()) ::
+          {:ok, %{machine: Machine.t(), token: String.t()}}
+          | {:error, atom() | Ecto.Changeset.t()}
+  def enroll_machine(attrs, opts) when is_map(attrs) and is_list(opts) do
+    submitted = Keyword.get(opts, :enrollment_token)
+    expected = Keyword.get(opts, :expected_enrollment_token)
+    current = now(opts)
+
+    if is_binary(submitted) and is_binary(expected) and secure_compare(submitted, expected) do
+      token = random_token()
+
+      transaction(fn ->
+        %Machine{}
+        |> Machine.changeset(%{name: value(attrs, :name), token_digest: digest(token)})
+        |> stamp_insert(current)
+        |> persist_insert()
+      end)
+      |> case do
+        {:ok, machine} -> {:ok, %{machine: machine, token: token}}
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      {:error, :unauthenticated}
+    end
+  end
+
+  def enroll_machine(_, _), do: {:error, :invalid_request}
+
+  @spec authenticate_machine(String.t()) :: {:ok, Machine.t()} | {:error, :unauthenticated}
+  def authenticate_machine(token) when is_binary(token) do
+    case Repo.get_by(Machine, token_digest: digest(token)) do
+      nil -> {:error, :unauthenticated}
+      machine -> {:ok, machine}
+    end
+  end
+
+  def authenticate_machine(_), do: {:error, :unauthenticated}
+
+  @spec register_runtimes(Ecto.UUID.t(), Ecto.UUID.t(), [map()], keyword()) ::
+          {:ok, [Runtime.t()]} | {:error, term()}
+  def register_runtimes(machine_id, daemon_instance_id, specifications, opts \\ [])
+
+  def register_runtimes(machine_id, daemon_instance_id, specifications, opts)
+      when is_list(specifications) and is_list(opts) do
+    if not (valid_uuid?(machine_id) and valid_uuid?(daemon_instance_id) and
+              Enum.all?(specifications, &is_map/1)) do
+      {:error, :invalid_request}
+    else
+      now = now(opts)
+
+      transaction(fn ->
+        _machine = lock_machine(machine_id)
+
+        Enum.map(specifications, fn specification ->
+          runtime_key = value(specification, :runtime_key)
+
+          existing =
+            Repo.one(
+              from runtime in Runtime,
+                where: runtime.machine_id == ^machine_id and runtime.runtime_key == ^runtime_key,
+                lock: "FOR UPDATE"
+            )
+
+          attrs = %{
+            name: value(specification, :name),
+            capacity: value(specification, :capacity),
+            agent_profile: value(specification, :agent_profile),
+            workspace: value(specification, :workspace),
+            capabilities: value(specification, :capabilities, %{}),
+            status: "online",
+            last_heartbeat_at: now,
+            heartbeat_interval_ms: value(specification, :heartbeat_interval_ms, 5_000)
+          }
+
+          case existing do
+            nil ->
+              %Runtime{}
+              |> Runtime.changeset(
+                Map.merge(attrs, %{
+                  machine_id: machine_id,
+                  runtime_key: runtime_key,
+                  daemon_instance_id: daemon_instance_id,
+                  connection_epoch: 1
+                })
+              )
+              |> stamp_insert(now)
+              |> persist_insert()
+
+            runtime when runtime.daemon_instance_id == daemon_instance_id ->
+              runtime |> Runtime.changeset(attrs) |> stamp_update(now) |> persist_update()
+
+            runtime ->
+              runtime
+              |> Runtime.changeset(
+                Map.merge(attrs, %{
+                  daemon_instance_id: daemon_instance_id,
+                  connection_epoch: runtime.connection_epoch + 1
+                })
+              )
+              |> stamp_update(now)
+              |> persist_update()
+          end
+        end)
+      end)
+    end
+  end
+
+  def register_runtimes(_, _, _, _), do: {:error, :invalid_request}
+
+  @spec heartbeat(Ecto.UUID.t(), integer(), [map()], keyword()) :: {:ok, map()} | {:error, atom()}
+  def heartbeat(runtime_id, runtime_epoch, active_runs, opts \\ [])
+
+  def heartbeat(runtime_id, runtime_epoch, active_runs, opts)
+      when is_integer(runtime_epoch) and runtime_epoch > 0 and is_list(active_runs) do
+    if not (valid_uuid?(runtime_id) and Enum.all?(active_runs, &valid_active_run?/1)),
+      do: {:error, :invalid_request},
+      else: heartbeat_runtime(runtime_id, runtime_epoch, opts)
+  end
+
+  def heartbeat(_, _, _, _), do: {:error, :invalid_request}
+
+  defp heartbeat_runtime(runtime_id, runtime_epoch, opts) do
+    current = now(opts)
+
+    transaction(fn ->
+      runtime = lock_runtime(runtime_id)
+
+      if runtime.connection_epoch != runtime_epoch do
+        rollback(:ownership_lost)
+      end
+
+      runtime =
+        runtime
+        |> Runtime.changeset(%{status: "online", last_heartbeat_at: current})
+        |> stamp_update(current)
+        |> Repo.update!()
+
+      snapshot_for(runtime, current)
+    end)
+  end
+
+  @spec submit_task(map(), String.t(), keyword()) ::
+          {:ok, Task.t(), :created | :replayed} | {:error, term()}
+  def submit_task(attrs, idempotency_key, opts \\ [])
+
+  def submit_task(attrs, idempotency_key, opts)
+      when is_map(attrs) and is_binary(idempotency_key) and byte_size(idempotency_key) > 0 do
+    task_attrs = %{
+      goal: value(attrs, :goal),
+      agent_profile: value(attrs, :agent_profile),
+      workspace: value(attrs, :workspace),
+      input: value(attrs, :input, %{})
+    }
+
+    request_hash = request_hash(task_attrs)
+    current = now(opts)
+
+    transaction(fn ->
+      case Repo.one(
+             from task in Task,
+               where: task.idempotency_key == ^idempotency_key,
+               lock: "FOR UPDATE"
+           ) do
+        nil ->
+          changeset =
+            Task.changeset(
+              %Task{},
+              Map.merge(task_attrs, %{
+                idempotency_key: idempotency_key,
+                request_hash: request_hash,
+                state: "queued",
+                current_generation: 0
+              })
+            )
+
+          case insert_ignoring_conflict(Task, stamp_insert(changeset, current), :idempotency_key) do
+            :inserted ->
+              task =
+                Repo.one!(
+                  from task in Task,
+                    where: task.idempotency_key == ^idempotency_key,
+                    lock: "FOR UPDATE"
+                )
+
+              {task, :created}
+
+            :conflict ->
+              case Repo.one(
+                     from task in Task,
+                       where: task.idempotency_key == ^idempotency_key,
+                       lock: "FOR UPDATE"
+                   ) do
+                %Task{request_hash: ^request_hash} = task -> {task, :replayed}
+                %Task{} -> rollback(:idempotency_conflict)
+                nil -> rollback(:invalid_request)
+              end
+
+            :invalid ->
+              rollback(:invalid_request)
+          end
+
+        task when task.request_hash == request_hash ->
+          {task, :replayed}
+
+        _task ->
+          rollback(:idempotency_conflict)
+      end
+    end)
+    |> case do
+      {:ok, {task, disposition}} -> {:ok, task, disposition}
+      error -> error
+    end
+  end
+
+  def submit_task(_, _, _), do: {:error, :invalid_request}
+
+  @spec fetch_task(Ecto.UUID.t()) :: {:ok, Task.t()} | {:error, :not_found}
+  def fetch_task(id) when is_binary(id) do
+    if valid_uuid?(id) do
+      case Repo.get(Task, id) do
+        nil -> {:error, :not_found}
+        task -> {:ok, task}
+      end
+    else
+      {:error, :invalid_request}
+    end
+  end
+
+  def fetch_task(_), do: {:error, :invalid_request}
+
+  @spec fetch_run(Ecto.UUID.t()) :: {:ok, Run.t()} | {:error, :not_found}
+  def fetch_run(id) when is_binary(id) do
+    if valid_uuid?(id) do
+      case Repo.get(Run, id) do
+        nil -> {:error, :not_found}
+        run -> {:ok, run}
+      end
+    else
+      {:error, :invalid_request}
+    end
+  end
+
+  def fetch_run(_), do: {:error, :invalid_request}
+
+  @spec assign_one(keyword()) :: {:ok, Run.t()} | {:error, :no_assignment}
+  def assign_one(opts \\ []) do
+    current = now(opts)
+    assignment_duration_ms = Keyword.get(opts, :assignment_duration_ms, 30_000)
+
+    transaction(fn ->
+      {task, runtime} = next_assignable_task_and_runtime(current) || rollback(:no_assignment)
+
+      generation = task.current_generation + 1
+
+      task =
+        task
+        |> Task.changeset(%{state: "assigned", current_generation: generation})
+        |> stamp_update(current)
+        |> Repo.update!()
+
+      %Run{}
+      |> Run.changeset(%{
+        task_id: task.id,
+        runtime_id: runtime.id,
+        generation: generation,
+        state: "assigned",
+        assigned_at: current,
+        assignment_expires_at: DateTime.add(current, assignment_duration_ms, :millisecond)
+      })
+      |> stamp_insert(current)
+      |> Repo.insert!()
+    end)
+  end
+
+  defp next_assignable_task_and_runtime(current) do
+    Task
+    |> where([task], task.state == "queued")
+    |> order_by([task], asc: task.inserted_at)
+    |> select([task], task.id)
+    |> Repo.all()
+    |> Enum.reduce_while(nil, fn task_id, _ ->
+      case Repo.one(
+             from task in Task,
+               where: task.id == ^task_id and task.state == "queued",
+               lock: "FOR UPDATE SKIP LOCKED"
+           ) do
+        nil ->
+          {:cont, nil}
+
+        task ->
+          case select_runtime_for(task, current) do
+            nil -> {:cont, nil}
+            runtime -> {:halt, {task, runtime}}
+          end
+      end
+    end)
+  end
+
+  @spec assign_all(keyword()) :: {:ok, [Run.t()]}
+  def assign_all(opts \\ []) do
+    assign_all([], opts)
+  end
+
+  defp assign_all(runs, opts) do
+    case assign_one(opts) do
+      {:ok, run} -> assign_all([run | runs], opts)
+      {:error, :no_assignment} -> {:ok, Enum.reverse(runs)}
+    end
+  end
+
+  @spec claim(Ecto.UUID.t(), map(), keyword()) :: {:ok, Run.t()} | {:error, atom()}
+  def claim(run_id, request, opts \\ [])
+
+  def claim(run_id, request, opts) when is_map(request) do
+    if not (valid_uuid?(run_id) and valid_claim_request?(request)) do
+      {:error, :invalid_request}
+    else
+      current = now(opts)
+      lease_duration_ms = Keyword.get(opts, :lease_duration_ms, 30_000)
+
+      transaction(fn ->
+        {task, run, runtime} = lock_chain(run_id)
+        request_runtime_id = value(request, :runtime_id)
+        request_epoch = value(request, :runtime_epoch)
+        request_generation = value(request, :generation)
+        request_claim_id = value(request, :claim_id)
+
+        cond do
+          run.runtime_id != request_runtime_id or runtime.id != request_runtime_id ->
+            rollback(:ownership_lost)
+
+          runtime.connection_epoch != request_epoch or
+            task.current_generation != request_generation or
+              run.generation != request_generation ->
+            rollback(:ownership_lost)
+
+          run.state == "claimed" and run.claim_id == request_claim_id and
+            run.claimed_runtime_epoch == request_epoch and
+            not is_nil(run.lease_expires_at) and
+              DateTime.compare(run.lease_expires_at, current) == :gt ->
+            run
+
+          run.state != "assigned" ->
+            rollback(:ownership_lost)
+
+          DateTime.compare(run.assignment_expires_at, current) != :gt ->
+            rollback(:assignment_expired)
+
+          task.state != "assigned" ->
+            rollback(:ownership_lost)
+
+          true ->
+            lease_expires_at = DateTime.add(current, lease_duration_ms, :millisecond)
+
+            run =
+              run
+              |> Run.changeset(%{
+                state: "claimed",
+                claimed_runtime_epoch: request_epoch,
+                claim_id: request_claim_id,
+                lease_token: Ecto.UUID.generate(),
+                claimed_at: current,
+                lease_expires_at: lease_expires_at
+              })
+              |> stamp_update(current)
+              |> Repo.update!()
+
+            task |> Task.changeset(%{state: "claimed"}) |> stamp_update(current) |> Repo.update!()
+            run
+        end
+      end)
+    end
+  end
+
+  def claim(_, _, _), do: {:error, :invalid_request}
+
+  @spec renew_lease(Ecto.UUID.t(), map(), keyword()) :: {:ok, Run.t()} | {:error, atom()}
+  def renew_lease(run_id, fence, opts \\ [])
+
+  def renew_lease(run_id, fence, opts) when is_map(fence) do
+    if not (valid_uuid?(run_id) and valid_fence?(fence)) do
+      {:error, :invalid_request}
+    else
+      current = now(opts)
+      lease_duration_ms = Keyword.get(opts, :lease_duration_ms, 30_000)
+
+      transaction(fn ->
+        {task, run, runtime} = lock_chain(run_id)
+        if run.state == "cancelling", do: rollback(:ownership_lost)
+        ensure_fence!(task, run, runtime, fence, current)
+
+        run
+        |> Run.changeset(%{
+          lease_expires_at: DateTime.add(current, lease_duration_ms, :millisecond)
+        })
+        |> stamp_update(current)
+        |> Repo.update!()
+      end)
+    end
+  end
+
+  def renew_lease(_, _, _), do: {:error, :invalid_request}
+
+  @spec append_events(Ecto.UUID.t(), map(), [map()], keyword()) ::
+          {:ok, [RunEvent.t()]} | {:error, atom()}
+  def append_events(run_id, fence, events, opts \\ [])
+
+  def append_events(run_id, fence, events, opts) when is_map(fence) and is_list(events) do
+    if not (valid_uuid?(run_id) and valid_fence?(fence) and Enum.all?(events, &valid_event?/1)) do
+      {:error, :invalid_request}
+    else
+      current = now(opts)
+
+      transaction(fn ->
+        {task, run, runtime} = lock_chain(run_id)
+        ensure_fence!(task, run, runtime, fence, current)
+
+        Enum.map(events, fn event ->
+          event_id = value(event, :event_id)
+          event_hash = request_hash(event_body(event))
+
+          case Repo.get_by(RunEvent, run_id: run.id, event_id: event_id) do
+            nil ->
+              %RunEvent{}
+              |> RunEvent.changeset(%{
+                run_id: run.id,
+                event_id: event_id,
+                request_hash: event_hash,
+                sequence: value(event, :sequence),
+                kind: value(event, :kind),
+                payload: value(event, :payload, %{}),
+                occurred_at: value(event, :occurred_at, current)
+              })
+              |> stamp_insert(current)
+              |> Repo.insert!()
+
+            %RunEvent{request_hash: ^event_hash} = existing ->
+              existing
+
+            _existing ->
+              rollback(:idempotency_conflict)
+          end
+        end)
+      end)
+    end
+  end
+
+  def append_events(_, _, _, _), do: {:error, :invalid_request}
+
+  @spec transition(Ecto.UUID.t(), map(), String.t(), map(), String.t(), keyword()) ::
+          {:ok, Run.t()} | {:error, atom()}
+  def transition(run_id, fence, target_state, payload, transition_id, opts \\ [])
+
+  def transition(run_id, fence, target_state, payload, transition_id, opts)
+      when is_map(fence) and is_binary(target_state) and is_map(payload) and
+             is_binary(transition_id) do
+    if not (valid_uuid?(run_id) and valid_fence?(fence) and valid_uuid?(transition_id)) do
+      {:error, :invalid_request}
+    else
+      current = now(opts)
+      body_hash = request_hash(%{state: target_state, payload: payload})
+
+      transaction(fn ->
+        {task, run, runtime} = lock_chain(run_id)
+        ensure_static_fence!(task, run, runtime, fence)
+
+        case Repo.get_by(RunTransition, run_id: run.id, transition_id: transition_id) do
+          %RunTransition{request_hash: ^body_hash} = transition ->
+            transition_response(run, transition)
+
+          %RunTransition{} ->
+            rollback(:idempotency_conflict)
+
+          nil ->
+            transition_once!(
+              task,
+              run,
+              runtime,
+              fence,
+              target_state,
+              payload,
+              transition_id,
+              body_hash,
+              current
+            )
+        end
+      end)
+    end
+  end
+
+  def transition(_, _, _, _, _, _), do: {:error, :invalid_request}
+
+  @spec request_cancel(Ecto.UUID.t(), keyword()) ::
+          {:ok, Task.t(), Command.t() | nil} | {:error, atom()}
+  def request_cancel(task_id, opts \\ [])
+
+  def request_cancel(task_id, opts) when is_binary(task_id) do
+    if not valid_uuid?(task_id),
+      do: {:error, :invalid_request},
+      else: request_task_cancel(task_id, opts)
+  end
+
+  def request_cancel(_, _), do: {:error, :invalid_request}
+
+  defp request_task_cancel(task_id, opts) do
+    current = now(opts)
+
+    transaction(fn ->
+      task = lock_task(task_id)
+
+      cond do
+        task.state == "queued" ->
+          task =
+            task
+            |> Task.changeset(%{state: "cancelled"})
+            |> stamp_update(current)
+            |> Repo.update!()
+
+          {task, nil}
+
+        task.state in ["completed", "failed"] ->
+          {task, nil}
+
+        task.state == "cancelled" ->
+          {task, cancelled_command(task)}
+
+        true ->
+          run = lock_current_run(task)
+          _runtime = lock_runtime(run.runtime_id)
+
+          case run.state do
+            "assigned" ->
+              run
+              |> Run.changeset(%{state: "cancelled"})
+              |> stamp_update(current)
+              |> Repo.update!()
+
+              task =
+                task
+                |> Task.changeset(%{state: "cancelled"})
+                |> stamp_update(current)
+                |> Repo.update!()
+
+              {task, nil}
+
+            state when state in ["claimed", "running", "waiting_for_input", "cancelling"] ->
+              command = cancel_command(run, current)
+
+              if run.state != "cancelling" do
+                run
+                |> Run.changeset(%{state: "cancelling"})
+                |> stamp_update(current)
+                |> Repo.update!()
+              end
+
+              task =
+                if task.state == "cancelling" do
+                  task
+                else
+                  task
+                  |> Task.changeset(%{state: "cancelling"})
+                  |> stamp_update(current)
+                  |> Repo.update!()
+                end
+
+              {task, command}
+
+            _ ->
+              {task, nil}
+          end
+      end
+    end)
+    |> case do
+      {:ok, {task, command}} -> {:ok, task, command}
+      error -> error
+    end
+  end
+
+  @spec provide_input(Ecto.UUID.t(), map(), String.t(), keyword()) ::
+          {:ok, Command.t(), :created | :replayed} | {:error, atom()}
+  def provide_input(task_id, payload, idempotency_key, opts \\ [])
+
+  def provide_input(task_id, payload, idempotency_key, opts)
+      when is_binary(task_id) and is_map(payload) and is_binary(idempotency_key) and
+             byte_size(idempotency_key) > 0 do
+    if not valid_uuid?(task_id) do
+      {:error, :invalid_request}
+    else
+      request_hash = request_hash(%{task_id: task_id, payload: payload})
+      current = now(opts)
+
+      transaction(fn ->
+        case Repo.one(
+               from command in Command,
+                 where: command.idempotency_key == ^idempotency_key,
+                 lock: "FOR UPDATE"
+             ) do
+          %Command{request_hash: ^request_hash} = command ->
+            {command, :replayed}
+
+          %Command{} ->
+            rollback(:idempotency_conflict)
+
+          nil ->
+            task = lock_task(task_id)
+            run = lock_current_run(task)
+            _runtime = lock_runtime(run.runtime_id)
+
+            case Repo.one(
+                   from command in Command,
+                     where: command.idempotency_key == ^idempotency_key,
+                     lock: "FOR UPDATE"
+                 ) do
+              %Command{request_hash: ^request_hash} = command ->
+                {command, :replayed}
+
+              %Command{} ->
+                rollback(:idempotency_conflict)
+
+              nil ->
+                if task.state != "waiting_for_input" or run.state != "waiting_for_input" do
+                  rollback(:state_conflict)
+                end
+
+                changeset =
+                  %Command{}
+                  |> Command.changeset(%{
+                    run_id: run.id,
+                    generation: run.generation,
+                    kind: "provide_input",
+                    payload: payload,
+                    idempotency_key: idempotency_key,
+                    request_hash: request_hash
+                  })
+                  |> stamp_insert(current)
+
+                case insert_ignoring_conflict(Command, changeset, :idempotency_key) do
+                  :inserted ->
+                    command =
+                      Repo.one!(
+                        from command in Command,
+                          where: command.idempotency_key == ^idempotency_key,
+                          lock: "FOR UPDATE"
+                      )
+
+                    {command, :created}
+
+                  :conflict ->
+                    case Repo.one(
+                           from command in Command,
+                             where: command.idempotency_key == ^idempotency_key,
+                             lock: "FOR UPDATE"
+                         ) do
+                      %Command{request_hash: ^request_hash} = command -> {command, :replayed}
+                      %Command{} -> rollback(:idempotency_conflict)
+                      nil -> rollback(:invalid_request)
+                    end
+
+                  :invalid ->
+                    rollback(:invalid_request)
+                end
+            end
+        end
+      end)
+      |> case do
+        {:ok, {command, disposition}} -> {:ok, command, disposition}
+        error -> error
+      end
+    end
+  end
+
+  def provide_input(_, _, _, _), do: {:error, :invalid_request}
+
+  @spec acknowledge_command(Ecto.UUID.t(), map(), String.t(), Ecto.UUID.t(), keyword()) ::
+          {:ok, Command.t()} | {:error, atom()}
+  def acknowledge_command(command_id, fence, outcome, acknowledgement_id, opts \\ [])
+
+  def acknowledge_command(command_id, fence, outcome, acknowledgement_id, opts)
+      when is_map(fence) and is_binary(outcome) do
+    if not (valid_uuid?(command_id) and valid_fence?(fence) and valid_uuid?(acknowledgement_id)) do
+      {:error, :invalid_request}
+    else
+      current = now(opts)
+
+      transaction(fn ->
+        command = Repo.get(Command, command_id) || rollback(:not_found)
+        {task, run, runtime} = lock_chain(command.run_id)
+
+        command =
+          Repo.one!(from command in Command, where: command.id == ^command_id, lock: "FOR UPDATE")
+
+        ensure_fence!(task, run, runtime, fence, current)
+
+        cond do
+          command.generation != run.generation ->
+            rollback(:ownership_lost)
+
+          command.acknowledgement_id == acknowledgement_id and
+              command.acknowledgement_outcome == outcome ->
+            command
+
+          command.acknowledgement_id == acknowledgement_id ->
+            rollback(:idempotency_conflict)
+
+          not is_nil(command.acknowledgement_id) ->
+            rollback(:idempotency_conflict)
+
+          outcome not in ["applied", "rejected", "failed"] ->
+            rollback(:invalid_request)
+
+          true ->
+            command
+            |> Command.changeset(%{
+              acknowledgement_id: acknowledgement_id,
+              acknowledgement_outcome: outcome,
+              acknowledged_at: current
+            })
+            |> stamp_update(current)
+            |> Repo.update!()
+        end
+      end)
+    end
+  end
+
+  def acknowledge_command(_, _, _, _, _), do: {:error, :invalid_request}
+
+  @spec work_snapshot(Ecto.UUID.t(), integer(), keyword()) :: {:ok, map()} | {:error, atom()}
+  def work_snapshot(runtime_id, runtime_epoch, opts \\ [])
+
+  def work_snapshot(runtime_id, runtime_epoch, opts)
+      when is_integer(runtime_epoch) and runtime_epoch > 0 do
+    if not valid_uuid?(runtime_id),
+      do: {:error, :invalid_request},
+      else: runtime_snapshot(runtime_id, runtime_epoch, opts)
+  end
+
+  def work_snapshot(_, _, _), do: {:error, :invalid_request}
+
+  defp runtime_snapshot(runtime_id, runtime_epoch, opts) do
+    current = now(opts)
+
+    transaction(fn ->
+      runtime = lock_runtime(runtime_id)
+      if runtime.connection_epoch != runtime_epoch, do: rollback(:ownership_lost)
+      snapshot_for(runtime, current)
+    end)
+  end
+
+  @spec reconcile(Ecto.UUID.t(), integer(), [map()], keyword()) :: {:ok, map()} | {:error, atom()}
+  def reconcile(runtime_id, runtime_epoch, journals, opts \\ [])
+
+  def reconcile(runtime_id, runtime_epoch, journals, opts)
+      when is_integer(runtime_epoch) and runtime_epoch > 0 and is_list(journals) do
+    if not (valid_uuid?(runtime_id) and Enum.all?(journals, &valid_journal?/1)),
+      do: {:error, :invalid_request},
+      else: reconcile_runtime(runtime_id, runtime_epoch, journals, opts)
+  end
+
+  def reconcile(_, _, _, _), do: {:error, :invalid_request}
+
+  defp reconcile_runtime(runtime_id, runtime_epoch, journals, opts) do
+    current = now(opts)
+
+    transaction(fn ->
+      runtime = lock_runtime(runtime_id)
+      if runtime.connection_epoch != runtime_epoch, do: rollback(:ownership_lost)
+
+      decisions =
+        Enum.map(journals, fn journal ->
+          run = Repo.get(Run, value(journal, :run_id))
+
+          decision =
+            cond do
+              is_nil(run) ->
+                "unknown_stop"
+
+              run.runtime_id != runtime.id or run.generation != value(journal, :generation) ->
+                "stale_stop"
+
+              run.claimed_runtime_epoch != runtime_epoch or
+                run.claim_id != value(journal, :claim_id) or
+                  run.lease_token != value(journal, :lease_token) ->
+                "stale_stop"
+
+              run.state == "cancelling" ->
+                "cancel"
+
+              run.state in @terminal_states ->
+                "terminal"
+
+              is_nil(run.lease_expires_at) or
+                  DateTime.compare(run.lease_expires_at, current) != :gt ->
+                "stale_stop"
+
+              true ->
+                "continue"
+            end
+
+          %{
+            run_id: value(journal, :run_id),
+            generation: value(journal, :generation),
+            decision: decision,
+            lease_expires_at: run && run.lease_expires_at
+          }
+        end)
+
+      Map.put(snapshot_for(runtime, current), :decisions, decisions)
+    end)
+  end
+
+  @spec expire(keyword()) :: %{
+          expired_runs: non_neg_integer(),
+          offline_runtimes: non_neg_integer()
+        }
+  def expire(opts \\ []) do
+    current = now(opts)
+
+    run_ids =
+      Repo.all(
+        from run in Run,
+          where:
+            (run.state == "assigned" and run.assignment_expires_at <= ^current) or
+              (run.state in ["claimed", "running", "waiting_for_input", "cancelling"] and
+                 run.lease_expires_at <= ^current),
+          select: run.id
+      )
+
+    expired_runs = Enum.count(run_ids, &expire_run(&1, current))
+    offline_runtimes = expire_offline_runtimes(current)
+    %{expired_runs: expired_runs, offline_runtimes: offline_runtimes}
+  end
+
+  defp expire_run(run_id, current) do
+    case transaction(fn ->
+           {task, run, _runtime} = lock_chain(run_id)
+
+           expired? =
+             (run.state == "assigned" and
+                DateTime.compare(run.assignment_expires_at, current) != :gt) or
+               (run.state in ["claimed", "running", "waiting_for_input", "cancelling"] and
+                  not is_nil(run.lease_expires_at) and
+                  DateTime.compare(run.lease_expires_at, current) != :gt)
+
+           if not expired?, do: rollback(:not_expired)
+
+           terminal_state = if run.state == "cancelling", do: "cancelled", else: "expired"
+
+           run
+           |> Run.changeset(%{state: terminal_state})
+           |> stamp_update(current)
+           |> Repo.update!()
+
+           if task.current_generation == run.generation do
+             task_state = if terminal_state == "cancelled", do: "cancelled", else: "queued"
+
+             task
+             |> Task.changeset(%{state: task_state})
+             |> stamp_update(current)
+             |> Repo.update!()
+           end
+
+           :expired
+         end) do
+      {:ok, :expired} -> true
+      _ -> false
+    end
+  end
+
+  defp expire_offline_runtimes(current) do
+    runtime_ids =
+      Repo.all(
+        from runtime in Runtime,
+          where: runtime.status == "online",
+          select: runtime.id
+      )
+
+    Enum.count(runtime_ids, fn runtime_id ->
+      case transaction(fn ->
+             runtime = lock_runtime(runtime_id)
+             cutoff = DateTime.add(current, -3 * runtime.heartbeat_interval_ms, :millisecond)
+
+             if runtime.status == "online" and
+                  (is_nil(runtime.last_heartbeat_at) or
+                     DateTime.compare(runtime.last_heartbeat_at, cutoff) != :gt) do
+               runtime
+               |> Runtime.changeset(%{status: "offline"})
+               |> stamp_update(current)
+               |> Repo.update!()
+
+               :offline
+             else
+               :online
+             end
+           end) do
+        {:ok, :offline} -> true
+        _ -> false
+      end
+    end)
+  end
+
+  defp transition_once!(
+         task,
+         run,
+         runtime,
+         fence,
+         target_state,
+         payload,
+         transition_id,
+         body_hash,
+         current
+       ) do
+    ensure_fence!(task, run, runtime, fence, current)
+
+    unless valid_transition?(run.state, target_state) do
+      rollback(:state_conflict)
+    end
+
+    run_attrs =
+      case target_state do
+        "completed" -> %{state: target_state, result: payload}
+        "failed" -> %{state: target_state, failure: payload}
+        _ -> %{state: target_state}
+      end
+
+    run = run |> Run.changeset(run_attrs) |> stamp_update(current) |> Repo.update!()
+    task_attrs = task_attrs_for_transition(target_state, payload)
+    task |> Task.changeset(task_attrs) |> stamp_update(current) |> Repo.update!()
+
+    %RunTransition{}
+    |> RunTransition.changeset(%{
+      run_id: run.id,
+      transition_id: transition_id,
+      request_hash: body_hash,
+      state: target_state,
+      payload: payload
+    })
+    |> stamp_insert(current)
+    |> Repo.insert!()
+
+    run
+  end
+
+  defp task_attrs_for_transition("completed", payload), do: %{state: "completed", result: payload}
+  defp task_attrs_for_transition("failed", payload), do: %{state: "failed", failure: payload}
+  defp task_attrs_for_transition(target_state, _payload), do: %{state: target_state}
+
+  defp valid_transition?("claimed", "running"), do: true
+
+  defp valid_transition?("running", state)
+       when state in ["waiting_for_input", "completed", "failed"], do: true
+
+  defp valid_transition?("waiting_for_input", "running"), do: true
+  defp valid_transition?("cancelling", "cancelled"), do: true
+  defp valid_transition?(_, _), do: false
+
+  defp transition_response(run, transition) do
+    attrs =
+      case transition.state do
+        "completed" -> %{state: transition.state, result: transition.payload, failure: nil}
+        "failed" -> %{state: transition.state, result: nil, failure: transition.payload}
+        _ -> %{state: transition.state, result: nil, failure: nil}
+      end
+
+    struct(run, attrs)
+  end
+
+  defp cancelled_command(%Task{current_generation: 0}), do: nil
+
+  defp cancelled_command(task) do
+    run = lock_current_run(task)
+    _runtime = lock_runtime(run.runtime_id)
+
+    Repo.one(
+      from command in Command,
+        where: command.run_id == ^run.id and command.kind == "cancel",
+        lock: "FOR UPDATE"
+    )
+  end
+
+  defp cancel_command(run, current) do
+    case Repo.one(
+           from command in Command,
+             where: command.run_id == ^run.id and command.kind == "cancel",
+             lock: "FOR UPDATE"
+         ) do
+      nil ->
+        %Command{}
+        |> Command.changeset(%{
+          run_id: run.id,
+          generation: run.generation,
+          kind: "cancel",
+          payload: %{},
+          idempotency_key: "cancel:" <> run.id,
+          request_hash:
+            request_hash(%{kind: "cancel", run_id: run.id, generation: run.generation})
+        })
+        |> stamp_insert(current)
+        |> Repo.insert!()
+
+      command ->
+        command
+    end
+  end
+
+  defp select_runtime_for(task, current) do
+    Runtime
+    |> where(
+      [runtime],
+      runtime.status == "online" and runtime.agent_profile == ^task.agent_profile and
+        runtime.workspace == ^task.workspace
+    )
+    |> order_by([runtime], asc: runtime.inserted_at)
+    |> select([runtime], runtime.id)
+    |> Repo.all()
+    |> Enum.reduce_while(nil, fn runtime_id, _ ->
+      runtime =
+        Repo.one(
+          from runtime in Runtime,
+            where: runtime.id == ^runtime_id,
+            lock: "FOR UPDATE SKIP LOCKED"
+        )
+
+      cond do
+        is_nil(runtime) -> {:cont, nil}
+        not runtime_online?(runtime, current) -> {:cont, nil}
+        active_run_count(runtime.id) >= runtime.capacity -> {:cont, nil}
+        true -> {:halt, runtime}
+      end
+    end)
+  end
+
+  defp active_run_count(runtime_id) do
+    Repo.aggregate(
+      from(run in Run, where: run.runtime_id == ^runtime_id and run.state in ^@capacity_states),
+      :count
+    )
+  end
+
+  defp snapshot_for(runtime, current) do
+    assignments =
+      Repo.all(
+        from run in Run,
+          join: task in Task,
+          on: task.id == run.task_id,
+          where:
+            run.runtime_id == ^runtime.id and run.state == "assigned" and
+              run.assignment_expires_at > ^current and task.current_generation == run.generation,
+          order_by: [asc: run.inserted_at],
+          select: %{run: run, task: task}
+      )
+
+    commands =
+      Repo.all(
+        from command in Command,
+          join: run in Run,
+          on: run.id == command.run_id,
+          join: task in Task,
+          on: task.id == run.task_id,
+          where:
+            run.runtime_id == ^runtime.id and
+              task.current_generation == run.generation and
+              ((command.kind == "cancel" and run.state == "cancelling") or
+                 (command.kind == "provide_input" and
+                    (is_nil(command.acknowledged_at) or run.state == "waiting_for_input"))),
+          order_by: [asc: command.inserted_at]
+      )
+
+    %{assignments: assignments, commands: commands, server_time: current}
+  end
+
+  defp ensure_fence!(task, run, runtime, fence, current) do
+    ensure_static_fence!(task, run, runtime, fence)
+
+    valid? =
+      run.state in ["claimed", "running", "waiting_for_input", "cancelling"] and
+        not is_nil(run.lease_expires_at) and
+        DateTime.compare(run.lease_expires_at, current) == :gt
+
+    unless valid?, do: rollback(:ownership_lost)
+  end
+
+  defp ensure_static_fence!(task, run, runtime, fence) do
+    valid? =
+      run.runtime_id == value(fence, :runtime_id) and
+        runtime.connection_epoch == value(fence, :runtime_epoch) and
+        run.claimed_runtime_epoch == value(fence, :runtime_epoch) and
+        run.generation == value(fence, :generation) and
+        task.current_generation == value(fence, :generation) and
+        run.claim_id == value(fence, :claim_id) and
+        run.lease_token == value(fence, :lease_token)
+
+    unless valid?, do: rollback(:ownership_lost)
+  end
+
+  defp lock_chain(run_id) do
+    run = Repo.get(Run, run_id) || rollback(:not_found)
+    task = lock_task(run.task_id)
+    run = Repo.one!(from run in Run, where: run.id == ^run_id, lock: "FOR UPDATE")
+    runtime = lock_runtime(run.runtime_id)
+    {task, run, runtime}
+  end
+
+  defp lock_machine(machine_id),
+    do:
+      Repo.one(from machine in Machine, where: machine.id == ^machine_id, lock: "FOR UPDATE") ||
+        rollback(:not_found)
+
+  defp lock_task(task_id),
+    do:
+      Repo.one(from task in Task, where: task.id == ^task_id, lock: "FOR UPDATE") ||
+        rollback(:not_found)
+
+  defp lock_current_run(task),
+    do:
+      Repo.one(
+        from run in Run,
+          where: run.task_id == ^task.id and run.generation == ^task.current_generation,
+          lock: "FOR UPDATE"
+      ) || rollback(:not_found)
+
+  defp lock_runtime(runtime_id),
+    do:
+      Repo.one(from runtime in Runtime, where: runtime.id == ^runtime_id, lock: "FOR UPDATE") ||
+        rollback(:not_found)
+
+  defp runtime_online?(runtime, current) do
+    runtime.status == "online" and
+      not is_nil(runtime.last_heartbeat_at) and
+      DateTime.compare(
+        runtime.last_heartbeat_at,
+        DateTime.add(current, -3 * runtime.heartbeat_interval_ms, :millisecond)
+      ) == :gt
+  end
+
+  defp transaction(function) do
+    case Repo.transaction(function) do
+      {:ok, value} -> {:ok, value}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp persist_insert(changeset) do
+    case Repo.insert(changeset) do
+      {:ok, record} -> record
+      {:error, _changeset} -> rollback(:invalid_request)
+    end
+  end
+
+  defp persist_update(changeset) do
+    case Repo.update(changeset) do
+      {:ok, record} -> record
+      {:error, _changeset} -> rollback(:invalid_request)
+    end
+  end
+
+  defp insert_ignoring_conflict(schema, changeset, conflict_target) do
+    if changeset.valid? do
+      row = Map.put(changeset.changes, :id, Ecto.UUID.generate())
+
+      case Repo.insert_all(schema, [row], on_conflict: :nothing, conflict_target: conflict_target) do
+        {1, _} -> :inserted
+        {0, _} -> :conflict
+      end
+    else
+      :invalid
+    end
+  end
+
+  defp rollback(reason), do: Repo.rollback(reason)
+
+  defp now(opts),
+    do: opts |> Keyword.get(:now, DateTime.utc_now()) |> DateTime.truncate(:microsecond)
+
+  defp stamp_insert(changeset, current),
+    do: Ecto.Changeset.change(changeset, inserted_at: current, updated_at: current)
+
+  defp stamp_update(changeset, current), do: Ecto.Changeset.change(changeset, updated_at: current)
+
+  defp valid_claim_request?(request) do
+    valid_uuid?(value(request, :runtime_id)) and
+      is_integer(value(request, :runtime_epoch)) and value(request, :runtime_epoch) > 0 and
+      is_integer(value(request, :generation)) and value(request, :generation) > 0 and
+      valid_uuid?(value(request, :claim_id))
+  end
+
+  defp valid_fence?(fence) do
+    valid_uuid?(value(fence, :runtime_id)) and
+      is_integer(value(fence, :runtime_epoch)) and value(fence, :runtime_epoch) > 0 and
+      is_integer(value(fence, :generation)) and value(fence, :generation) > 0 and
+      valid_uuid?(value(fence, :claim_id)) and valid_uuid?(value(fence, :lease_token))
+  end
+
+  defp valid_event?(event) when is_map(event) do
+    valid_uuid?(value(event, :event_id)) and
+      is_integer(value(event, :sequence)) and value(event, :sequence) >= 0 and
+      is_binary(value(event, :kind)) and is_map(value(event, :payload, %{})) and
+      match?(%DateTime{}, value(event, :occurred_at))
+  end
+
+  defp valid_event?(_), do: false
+
+  defp valid_active_run?(run) when is_map(run) do
+    valid_uuid?(value(run, :run_id)) and
+      is_integer(value(run, :generation)) and value(run, :generation) > 0 and
+      is_integer(value(run, :claimed_runtime_epoch)) and
+      value(run, :claimed_runtime_epoch) > 0 and
+      valid_uuid?(value(run, :claim_id)) and valid_uuid?(value(run, :lease_token)) and
+      value(run, :state) in ["claimed", "running", "waiting_for_input", "cancelling"]
+  end
+
+  defp valid_active_run?(_), do: false
+
+  defp valid_journal?(journal) when is_map(journal) do
+    valid_active_run?(%{
+      run_id: value(journal, :run_id),
+      generation: value(journal, :generation),
+      claimed_runtime_epoch: value(journal, :claimed_runtime_epoch),
+      claim_id: value(journal, :claim_id),
+      lease_token: value(journal, :lease_token),
+      state: value(journal, :local_state)
+    }) and
+      is_integer(value(journal, :last_event_sequence)) and
+      value(journal, :last_event_sequence) >= 0
+  end
+
+  defp valid_journal?(_), do: false
+
+  defp event_body(event) do
+    %{
+      sequence: value(event, :sequence),
+      kind: value(event, :kind),
+      payload: value(event, :payload, %{}),
+      occurred_at: value(event, :occurred_at)
+    }
+  end
+
+  defp valid_uuid?(value) when is_binary(value), do: match?({:ok, _}, Ecto.UUID.cast(value))
+  defp valid_uuid?(_), do: false
+
+  defp value(map, key, default \\ nil)
+
+  defp value(map, key, default) when is_map(map),
+    do: Map.get(map, key, Map.get(map, Atom.to_string(key), default))
+
+  defp value(_, _key, default), do: default
+
+  defp digest(value), do: :crypto.hash(:sha256, value)
+  defp request_hash(value), do: value |> :erlang.term_to_binary() |> digest()
+  defp random_token, do: :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
+
+  defp secure_compare(left, right) when byte_size(left) == byte_size(right),
+    do: Plug.Crypto.secure_compare(left, right)
+
+  defp secure_compare(_, _), do: false
+end
