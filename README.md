@@ -36,17 +36,23 @@ mix phx.server
 ```sh
 cd daemon
 go test ./...
-go run ./cmd/symmetry-daemon -config cmd/symmetry-daemon/testdata/valid-config.json
+go run ./cmd/symmetry-daemon -config /absolute/path/to/daemon.json
 ```
 
-The local control plane uses port `4000`. Configure the services with their
-documented environment variables; Docker Compose supplies development defaults
-for its isolated network.
+The local control plane uses port `4000`. A daemon using a plain HTTP URL must
+set `allow_insecure_http: true`; use that only for an explicitly trusted local
+or container network. Agent commands, workspace paths, and allowed environment
+variables remain machine-local configuration. Start from the daemon
+configuration example in [`docs/goal-01-runbook.md`](docs/goal-01-runbook.md)
+and replace its paths with local absolute paths. The
+`cmd/symmetry-daemon/testdata` configuration is validation test data, not a
+runnable local profile.
 
 ## Docker Compose
 
-The default Compose stack starts PostgreSQL, `control`, and `daemon`. PostgreSQL
-data is kept in the `postgres_data` named volume and the control plane is only
+The default Compose stack migrates PostgreSQL, starts `control`, and runs a
+deterministic fake agent through the real daemon execution path. PostgreSQL data
+is kept in the `postgres_data` named volume and the control plane is only
 published to `127.0.0.1:4000`.
 
 ```sh
@@ -61,7 +67,11 @@ machine-local coding-agent or repository credentials.
 
 ## Goal 1 Status
 
-This repository is in bootstrap stage for Goal 1. The current work establishes
-the monorepo layout and reproducible development/build entry points only. It
-does not yet implement registration, dispatch, leases, reconciliation, agent
-execution, or the control-daemon protocol.
+Goal 1 is implemented. The control plane persists machines, runtimes, tasks,
+runs, leases, transitions, commands, and events in PostgreSQL. The daemon owns
+local identity, fenced claims, workspace isolation, process-tree supervision,
+Phoenix wake notifications, polling fallback, reconciliation, cancellation,
+human input, and durable local outboxes.
+
+See [`docs/goal-01-runbook.md`](docs/goal-01-runbook.md) for configuration,
+operator examples, release migration, and end-to-end verification commands.
