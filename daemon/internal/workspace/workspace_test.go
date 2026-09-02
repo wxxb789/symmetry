@@ -201,6 +201,144 @@ func TestPrepareAdoptsReservedWorktreeAfterJournalLoss(t *testing.T) {
 	}
 }
 
+func TestRecoverAdoptsRegisteredWorktreeAfterJournalLoss(t *testing.T) {
+	repository := newRepository(t)
+	bindings := map[string]config.Workspace{
+		"primary": {
+			Policy: config.WorkspacePolicyGitWorktree, Repository: repository, Root: filepath.Join(t.TempDir(), "worktrees"), Ref: "HEAD", Cleanup: config.CleanupAlways,
+		},
+	}
+	run := RunRef{RunID: "run-recover-api", Generation: 1}
+	first, err := New(bindings).Prepare(context.Background(), "primary", run)
+	if err != nil {
+		t.Fatalf("initial Prepare() error = %v", err)
+	}
+	if err := os.Remove(first.journal); err != nil {
+		t.Fatalf("Remove(journal) error = %v", err)
+	}
+
+	recovered, err := New(bindings).Recover(context.Background(), "primary", run, first.Path)
+	if err != nil {
+		t.Fatalf("Recover() error = %v", err)
+	}
+	if recovered.Path != first.Path {
+		t.Errorf("Recover().Path = %q, want %q", recovered.Path, first.Path)
+	}
+	if _, err := os.Stat(recovered.journal); err != nil {
+		t.Fatalf("Recover() did not restore journal: %v", err)
+	}
+	if err := New(bindings).Cleanup(context.Background(), recovered, true); err != nil {
+		t.Fatalf("Cleanup() error = %v", err)
+	}
+}
+
+func TestRecoverDoesNotCreateMissingWorktree(t *testing.T) {
+	repository := newRepository(t)
+	root := filepath.Join(t.TempDir(), "worktrees")
+	run := RunRef{RunID: "run-missing", Generation: 1}
+	bindings := map[string]config.Workspace{
+		"primary": {
+			Policy: config.WorkspacePolicyGitWorktree, Repository: repository, Root: root, Ref: "HEAD", Cleanup: config.CleanupAlways,
+		},
+	}
+	persistedPath := filepath.Join(root, "binding-primary", "run-run-missing", "generation-1")
+
+	_, err := New(bindings).Recover(context.Background(), "primary", run, persistedPath)
+	if err == nil {
+		t.Fatal("Recover() error = nil, want missing workspace error")
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("Recover() created root %q, stat error = %v", root, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, reservationDirectory)); !os.IsNotExist(err) {
+		t.Fatalf("Recover() created reservation directory, stat error = %v", err)
+	}
+}
+
+func TestRecoverRefusesForeignWorktreeWithoutDeletion(t *testing.T) {
+	repository := newRepository(t)
+	root := filepath.Join(t.TempDir(), "worktrees")
+	run := RunRef{RunID: "run-foreign-recover", Generation: 1}
+	bindings := map[string]config.Workspace{
+		"primary": {
+			Policy: config.WorkspacePolicyGitWorktree, Repository: repository, Root: root, Ref: "HEAD", Cleanup: config.CleanupAlways,
+		},
+	}
+	persistedPath := filepath.Join(root, "binding-primary", "run-run-foreign-recover", "generation-1")
+	if err := os.MkdirAll(persistedPath, 0o700); err != nil {
+		t.Fatalf("MkdirAll(foreign target) error = %v", err)
+	}
+
+	_, err := New(bindings).Recover(context.Background(), "primary", run, persistedPath)
+	if err == nil || !strings.Contains(err.Error(), "reservation") {
+		t.Fatalf("Recover() error = %v, want missing reservation error", err)
+	}
+	if _, err := os.Stat(persistedPath); err != nil {
+		t.Fatalf("Recover() removed foreign target: %v", err)
+	}
+}
+
+func TestRecoverRejectsMismatchedWorktreePathWithoutMutation(t *testing.T) {
+	repository := newRepository(t)
+	root := filepath.Join(t.TempDir(), "worktrees")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatalf("MkdirAll(root) error = %v", err)
+	}
+	manager := New(map[string]config.Workspace{
+		"primary": {
+			Policy: config.WorkspacePolicyGitWorktree, Repository: repository, Root: root, Ref: "HEAD", Cleanup: config.CleanupAlways,
+		},
+	})
+	persistedPath := t.TempDir()
+	_, err := manager.Recover(context.Background(), "primary", RunRef{RunID: "run-mismatch", Generation: 1}, persistedPath)
+	if err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("Recover() error = %v, want path mismatch", err)
+	}
+	if _, err := os.Stat(persistedPath); err != nil {
+		t.Fatalf("Recover() removed mismatched persisted path: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, reservationDirectory)); !os.IsNotExist(err) {
+		t.Fatalf("Recover() created reservation directory, stat error = %v", err)
+	}
+}
+
+func TestRecoverRejectsUnknownBindingWithoutMutation(t *testing.T) {
+	path := t.TempDir()
+	manager := New(map[string]config.Workspace{
+		"primary": {Policy: config.WorkspacePolicyExistingCheckout, Path: path, Cleanup: config.CleanupNever},
+	})
+	_, err := manager.Recover(context.Background(), "missing", RunRef{RunID: "run-missing-binding", Generation: 1}, path)
+	if err == nil || !strings.Contains(err.Error(), "not configured") {
+		t.Fatalf("Recover() error = %v, want unknown binding error", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("Recover() removed path for unknown binding: %v", err)
+	}
+}
+
+func TestRecoverExistingCheckoutRequiresConfiguredDirectory(t *testing.T) {
+	checkout := t.TempDir()
+	other := t.TempDir()
+	manager := New(map[string]config.Workspace{
+		"primary": {Policy: config.WorkspacePolicyExistingCheckout, Path: checkout, Cleanup: config.CleanupNever},
+	})
+	run := RunRef{RunID: "run-existing-recover", Generation: 1}
+
+	prepared, err := manager.Recover(context.Background(), "primary", run, checkout)
+	if err != nil {
+		t.Fatalf("Recover(configured checkout) error = %v", err)
+	}
+	if err := manager.Cleanup(context.Background(), prepared, true); err != nil {
+		t.Fatalf("Cleanup() error = %v", err)
+	}
+	if _, err := manager.Recover(context.Background(), "primary", run, other); err == nil {
+		t.Fatal("Recover(other checkout) error = nil, want mismatch")
+	}
+	if _, err := os.Stat(other); err != nil {
+		t.Fatalf("Recover() removed other checkout: %v", err)
+	}
+}
+
 func TestConcurrentRecoveryAdoptsOneWorktree(t *testing.T) {
 	repository := newRepository(t)
 	bindings := map[string]config.Workspace{

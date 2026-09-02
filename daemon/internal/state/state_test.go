@@ -210,7 +210,7 @@ func TestClaimIntentGrantAndPendingOutboxSurviveRestart(t *testing.T) {
 	intent := ClaimIntent{
 		Key: key, RuntimeKey: "local", RuntimeID: "runtime-1", RuntimeEpoch: 3,
 		ClaimID: "claim-1", LocalState: "claiming", Work: protocol.Work{Goal: "implement", AgentProfile: "codex", Workspace: "isolated", Input: json.RawMessage(`{"branch":"main"}`)},
-		WorkspacePath: `C:\work\run-1`,
+		WorkspacePath: `C:\work\run-1`, WorkspaceBindingKey: "binding-1",
 	}
 	if _, err := store.SaveClaimIntent(intent); err != nil {
 		t.Fatalf("SaveClaimIntent() error = %v", err)
@@ -249,20 +249,234 @@ func TestClaimIntentGrantAndPendingOutboxSurviveRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadJournal() error = %v", err)
 	}
-	if got.LeaseToken != "lease-1" || got.ClaimedRuntimeEpoch != 3 || got.ClaimID != "claim-1" || len(got.PendingEvents) != 1 || len(got.PendingTransitions) != 1 || len(got.PendingCommandAcknowledgements) != 1 {
+	if got.LeaseToken != "lease-1" || got.ClaimedRuntimeEpoch != 3 || got.ClaimID != "claim-1" || got.WorkspaceBindingKey != "binding-1" || len(got.PendingEvents) != 1 || len(got.PendingTransitions) != 1 || len(got.PendingCommandAcknowledgements) != 1 {
 		t.Fatalf("journal after restart = %#v", got)
+	}
+}
+
+func TestSaveClaimIntentRequiresBoundedWorkspaceBindingKey(t *testing.T) {
+	store := mustStore(t)
+	base := ClaimIntent{
+		Key: RunKey{RunID: "run-1", Generation: 1}, RuntimeKey: "local", RuntimeID: "runtime-1", RuntimeEpoch: 3,
+		ClaimID: "claim-1", Work: protocol.Work{Input: json.RawMessage(`{}`)}, WorkspacePath: `C:\work\run-1`,
+	}
+	for _, bindingKey := range []string{"", " ", strings.Repeat("x", 4097)} {
+		intent := base
+		intent.WorkspaceBindingKey = bindingKey
+		if _, err := store.SaveClaimIntent(intent); err == nil {
+			t.Fatalf("SaveClaimIntent(%q) succeeded", bindingKey)
+		}
+	}
+	if _, err := store.LoadJournal(base.Key); !IsNotFound(err) {
+		t.Fatalf("LoadJournal() error = %v, want no journal after rejected intent", err)
+	}
+}
+
+func TestLoadJournalWithoutWorkspaceBindingKeyRemainsCompatible(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-1", 1)
+	encoded, err := json.Marshal(journal)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &object); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	delete(object, "workspace_binding_key")
+	encoded, err = json.Marshal(object)
+	if err != nil {
+		t.Fatalf("Marshal(old journal) error = %v", err)
+	}
+	if err := os.WriteFile(store.journalPath(journal.Key()), encoded, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	loaded, err := store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatalf("LoadJournal() error = %v", err)
+	}
+	if loaded.WorkspaceBindingKey != "" {
+		t.Fatalf("WorkspaceBindingKey = %q, want empty for old journal", loaded.WorkspaceBindingKey)
 	}
 }
 
 func TestPendingOutboxRequiresPersistedClaimGrant(t *testing.T) {
 	store := mustStore(t)
 	key := RunKey{RunID: "run-1", Generation: 2}
-	if _, err := store.SaveClaimIntent(ClaimIntent{Key: key, RuntimeKey: "local", RuntimeID: "runtime-1", RuntimeEpoch: 3, ClaimID: "claim-1", Work: protocol.Work{Input: json.RawMessage(`{}`)}}); err != nil {
+	if _, err := store.SaveClaimIntent(ClaimIntent{Key: key, RuntimeKey: "local", RuntimeID: "runtime-1", RuntimeEpoch: 3, ClaimID: "claim-1", Work: protocol.Work{Input: json.RawMessage(`{}`)}, WorkspaceBindingKey: "binding-1"}); err != nil {
 		t.Fatalf("SaveClaimIntent() error = %v", err)
 	}
 	_, err := store.QueueEvent(key, protocol.RunEvent{EventID: "event-1", Sequence: 1, Kind: "started", OccurredAt: time.Date(2026, 9, 3, 1, 2, 4, 0, time.UTC), Payload: json.RawMessage(`{}`)})
 	if err == nil {
 		t.Fatal("QueueEvent() succeeded before claim grant")
+	}
+}
+
+func TestSetProcessDetailsPersistsNonEmptyIdentityAndPreservesLegacySetProcess(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-1", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatalf("SaveJournal() error = %v", err)
+	}
+	key := journal.Key()
+	startedAt := time.Date(2026, 9, 2, 1, 2, 5, 0, time.UTC)
+	updated, err := store.SetProcessDetails(key, 99, "windows:99:created-at", startedAt)
+	if err != nil {
+		t.Fatalf("SetProcessDetails() error = %v", err)
+	}
+	if updated.PID != 99 || updated.ProcessIdentity != "windows:99:created-at" || !updated.StartedAt.Equal(startedAt) {
+		t.Fatalf("SetProcessDetails() = %#v", updated)
+	}
+	restarted, err := New(store.dir)
+	if !errors.Is(err, ErrStoreInUse) {
+		if err == nil {
+			_ = restarted.Close()
+		}
+		t.Fatalf("New() before Close() error = %v, want ErrStoreInUse", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	restarted, err = New(store.dir)
+	if err != nil {
+		t.Fatalf("New() after Close() error = %v", err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	loaded, err := restarted.LoadJournal(key)
+	if err != nil {
+		t.Fatalf("LoadJournal() error = %v", err)
+	}
+	if loaded.ProcessIdentity != "windows:99:created-at" {
+		t.Fatalf("ProcessIdentity after restart = %q", loaded.ProcessIdentity)
+	}
+	if _, err := restarted.SetProcess(key, 100, startedAt); err != nil {
+		t.Fatalf("legacy SetProcess() error = %v", err)
+	}
+	legacy, err := restarted.LoadJournal(key)
+	if err != nil {
+		t.Fatalf("LoadJournal() after legacy SetProcess error = %v", err)
+	}
+	if legacy.ProcessIdentity != "" {
+		t.Fatalf("legacy SetProcess() ProcessIdentity = %q, want empty", legacy.ProcessIdentity)
+	}
+}
+
+func TestSetProcessDetailsRejectsInvalidIdentityWithoutMutation(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-1", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatalf("SaveJournal() error = %v", err)
+	}
+	key := journal.Key()
+	cases := []string{"", " ", strings.Repeat("x", 4097)}
+	for _, identity := range cases {
+		if _, err := store.SetProcessDetails(key, 99, identity, time.Now().UTC()); err == nil {
+			t.Fatalf("SetProcessDetails(%q) succeeded", identity)
+		}
+	}
+	got, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatalf("LoadJournal() error = %v", err)
+	}
+	if got.PID != journal.PID || got.ProcessIdentity != "" || !got.StartedAt.Equal(journal.StartedAt) {
+		t.Fatalf("journal mutated by invalid process details: %#v", got)
+	}
+}
+
+func TestQueueTerminalTransitionIsAtomic(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-1", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatalf("SaveJournal() error = %v", err)
+	}
+	key := journal.Key()
+	queued, err := store.QueueTerminalTransition(key, protocol.StateTransitionRequest{TransitionID: "terminal-1", State: "completed", Payload: json.RawMessage(`{"result":"ok"}`)})
+	if err != nil {
+		t.Fatalf("QueueTerminalTransition() error = %v", err)
+	}
+	if queued.LocalState != "terminal_pending" || len(queued.PendingTransitions) != 1 || !sameFence(queued.PendingTransitions[0].Fence, queued.Fence()) {
+		t.Fatalf("QueueTerminalTransition() = %#v", queued)
+	}
+
+	if _, err := store.QueueTerminalTransition(key, protocol.StateTransitionRequest{State: "failed", Payload: json.RawMessage(`{}`)}); err == nil {
+		t.Fatal("QueueTerminalTransition() accepted an invalid transition")
+	}
+	loaded, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatalf("LoadJournal() error = %v", err)
+	}
+	if loaded.LocalState != "terminal_pending" || len(loaded.PendingTransitions) != 1 || loaded.PendingTransitions[0].TransitionID != "terminal-1" {
+		t.Fatalf("invalid terminal transition partially updated journal: %#v", loaded)
+	}
+}
+
+func TestQueueTerminalTransitionRejectsNonterminalStatesWithoutMutation(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-1", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatalf("SaveJournal() error = %v", err)
+	}
+	key := journal.Key()
+	for _, state := range []string{"running", "waiting_for_input"} {
+		if _, err := store.QueueTerminalTransition(key, protocol.StateTransitionRequest{TransitionID: "transition-" + state, State: state, Payload: json.RawMessage(`{}`)}); err == nil {
+			t.Fatalf("QueueTerminalTransition(%q) succeeded", state)
+		}
+	}
+	loaded, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatalf("LoadJournal() error = %v", err)
+	}
+	if loaded.LocalState != journal.LocalState || len(loaded.PendingTransitions) != 0 {
+		t.Fatalf("nonterminal transition mutated journal: %#v", loaded)
+	}
+}
+
+func TestValidateJournalRequiresConsistentProcessTuple(t *testing.T) {
+	store := mustStore(t)
+	base := testJournal("run-1", 1)
+	cases := []struct {
+		name   string
+		mutate func(*RunJournal)
+	}{
+		{
+			name: "zero PID with start time",
+			mutate: func(journal *RunJournal) {
+				journal.PID = 0
+			},
+		},
+		{
+			name: "zero PID with identity",
+			mutate: func(journal *RunJournal) {
+				journal.PID = 0
+				journal.StartedAt = time.Time{}
+				journal.ProcessIdentity = "identity"
+			},
+		},
+		{
+			name: "PID without start time",
+			mutate: func(journal *RunJournal) {
+				journal.StartedAt = time.Time{}
+			},
+		},
+		{
+			name: "whitespace identity",
+			mutate: func(journal *RunJournal) {
+				journal.ProcessIdentity = " "
+			},
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			journal := base
+			test.mutate(&journal)
+			if err := store.SaveJournal(journal); err == nil {
+				t.Fatal("SaveJournal() succeeded")
+			}
+		})
+	}
+	if err := store.SaveJournal(base); err != nil {
+		t.Fatalf("SaveJournal() rejected legacy process tuple: %v", err)
 	}
 }
 
@@ -353,7 +567,7 @@ func TestConcurrentSavesLeaveWholeJSON(t *testing.T) {
 			defer group.Done()
 			copy := journal
 			copy.LocalState = "state"
-			copy.PID = index
+			copy.PID = 100 + index
 			if err := store.SaveJournal(copy); err != nil {
 				t.Errorf("SaveJournal() error = %v", err)
 			}

@@ -50,6 +50,7 @@ type Prepared struct {
 // Service is the workspace boundary used by run execution.
 type Service interface {
 	Prepare(context.Context, string, RunRef) (Prepared, error)
+	Recover(context.Context, string, RunRef, string) (Prepared, error)
 	Cleanup(context.Context, Prepared, bool) error
 }
 
@@ -91,6 +92,78 @@ func (manager *Manager) Prepare(ctx context.Context, bindingKey string, run RunR
 		return prepareExisting(bindingKey, binding, run)
 	case config.WorkspacePolicyGitWorktree:
 		return manager.prepareWorktree(ctx, bindingKey, binding, run)
+	default:
+		return Prepared{}, fmt.Errorf("workspace binding %q has unsupported policy %q", bindingKey, binding.Policy)
+	}
+}
+
+// Recover reconstructs an already prepared workspace without creating one.
+func (manager *Manager) Recover(ctx context.Context, bindingKey string, run RunRef, persistedPath string) (Prepared, error) {
+	if manager == nil {
+		return Prepared{}, errors.New("workspace manager is nil")
+	}
+	binding, ok := manager.bindings[bindingKey]
+	if !ok {
+		return Prepared{}, fmt.Errorf("workspace binding %q is not configured", bindingKey)
+	}
+	if err := validateRun(run); err != nil {
+		return Prepared{}, err
+	}
+	if !filepath.IsAbs(persistedPath) {
+		return Prepared{}, errors.New("persisted workspace path must be absolute")
+	}
+
+	switch binding.Policy {
+	case config.WorkspacePolicyExistingCheckout:
+		prepared, err := prepareExisting(bindingKey, binding, run)
+		if err != nil {
+			return Prepared{}, err
+		}
+		same, err := sameDirectory(prepared.Path, persistedPath)
+		if err != nil {
+			return Prepared{}, fmt.Errorf("compare persisted existing checkout: %w", err)
+		}
+		if !same {
+			return Prepared{}, fmt.Errorf("persisted workspace path %q does not match configured existing checkout", persistedPath)
+		}
+		return prepared, nil
+	case config.WorkspacePolicyGitWorktree:
+		prepared, err := recoverableWorktree(bindingKey, binding, run)
+		if err != nil {
+			return Prepared{}, err
+		}
+		if filepath.Clean(persistedPath) != prepared.Path {
+			return Prepared{}, fmt.Errorf("persisted workspace path %q does not match configured worktree target", persistedPath)
+		}
+		if err := verifyOwnedFile(prepared.reservation, prepared); err != nil {
+			return Prepared{}, fmt.Errorf("verify workspace reservation: %w", err)
+		}
+
+		journalExists, err := pathExists(prepared.journal)
+		if err != nil {
+			return Prepared{}, fmt.Errorf("inspect workspace journal: %w", err)
+		}
+		if journalExists {
+			if err := manager.verifyPrepared(ctx, prepared); err != nil {
+				return Prepared{}, err
+			}
+			return prepared, nil
+		}
+
+		contains, err := worktreeContains(ctx, prepared.repository, prepared.Path)
+		if err != nil {
+			return Prepared{}, err
+		}
+		if !contains {
+			return Prepared{}, fmt.Errorf("workspace target %q is not a registered worktree", prepared.Path)
+		}
+		if err := manager.verifyManagedTarget(ctx, prepared); err != nil {
+			return Prepared{}, err
+		}
+		if err := manager.writeJournal(prepared); err != nil {
+			return Prepared{}, err
+		}
+		return prepared, nil
 	default:
 		return Prepared{}, fmt.Errorf("workspace binding %q has unsupported policy %q", bindingKey, binding.Policy)
 	}
@@ -200,6 +273,35 @@ func (manager *Manager) prepareWorktree(ctx context.Context, bindingKey string, 
 		return Prepared{}, err
 	}
 	return prepared, nil
+}
+
+func recoverableWorktree(bindingKey string, binding config.Workspace, run RunRef) (Prepared, error) {
+	repository, err := resolveDirectory(binding.Repository)
+	if err != nil {
+		return Prepared{}, fmt.Errorf("resolve workspace repository %q: %w", binding.Repository, err)
+	}
+	root, err := resolveDirectory(binding.Root)
+	if err != nil {
+		return Prepared{}, fmt.Errorf("resolve workspace root %q: %w", binding.Root, err)
+	}
+	target := filepath.Join(root, "binding-"+bindingKey, "run-"+run.RunID, fmt.Sprintf("generation-%d", run.Generation))
+	return Prepared{
+		Path:       target,
+		BindingKey: bindingKey,
+		Run:        run,
+		managed:    true,
+		policy:     binding.Cleanup,
+		repository: repository,
+		root:       root,
+		journal:    filepath.Join(target, journalName),
+		reservation: filepath.Join(
+			root,
+			reservationDirectory,
+			"binding-"+bindingKey,
+			"run-"+run.RunID,
+			fmt.Sprintf("generation-%d.json", run.Generation),
+		),
+	}, nil
 }
 
 func (manager *Manager) handleFailedAdd(ctx context.Context, addErr error, output []byte, prepared Prepared) (Prepared, error) {

@@ -108,7 +108,7 @@ func TestJSONLWaitingInputTransitionsAndAcknowledges(t *testing.T) {
 	}
 	defer store.Close()
 	key := state.RunKey{RunID: "run-1", Generation: 1}
-	_, err = store.SaveClaimIntent(state.ClaimIntent{Key: key, RuntimeKey: "default", RuntimeID: "runtime-1", RuntimeEpoch: 1, ClaimID: "claim-1", Work: protocol.Work{Goal: "g"}})
+	_, err = store.SaveClaimIntent(state.ClaimIntent{Key: key, RuntimeKey: "default", RuntimeID: "runtime-1", RuntimeEpoch: 1, ClaimID: "claim-1", Work: protocol.Work{Goal: "g"}, WorkspaceBindingKey: "local"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestJSONLUnknownTypeIsStoredAsAgentEvent(t *testing.T) {
 	}
 	defer store.Close()
 	key := state.RunKey{RunID: "run-1", Generation: 1}
-	_, err = store.SaveClaimIntent(state.ClaimIntent{Key: key, RuntimeKey: "default", RuntimeID: "runtime-1", RuntimeEpoch: 1, ClaimID: "claim-1", Work: protocol.Work{Goal: "g"}})
+	_, err = store.SaveClaimIntent(state.ClaimIntent{Key: key, RuntimeKey: "default", RuntimeID: "runtime-1", RuntimeEpoch: 1, ClaimID: "claim-1", Work: protocol.Work{Goal: "g"}, WorkspaceBindingKey: "local"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -425,7 +425,7 @@ func TestFlushCancelledAcknowledgesBeforeTerminalTransitionAndRetries(t *testing
 	store, key := claimedStore(t)
 	defer store.Close()
 	api := &orderingControl{failCancelledOnce: true}
-	daemon := &daemon{store: store, control: api, log: slog.New(slog.NewJSONHandler(io.Discard, nil)), options: options{newID: ids()}}
+	daemon := &daemon{store: store, control: api, workspace: &fakeWorkspace{}, log: slog.New(slog.NewJSONHandler(io.Discard, nil)), options: options{newID: ids()}}
 	if err := daemon.queueTransition(key, "running", map[string]any{}); err != nil {
 		t.Fatal(err)
 	}
@@ -584,6 +584,220 @@ func TestOwnershipLossReleasesActiveSlotAfterProcessStops(t *testing.T) {
 	}
 }
 
+func TestTerminalJournalFlushesBeforeNewSessionRegistration(t *testing.T) {
+	store, key := terminalStore(t)
+	defer store.Close()
+	if err := store.SaveIdentity(state.MachineIdentity{MachineID: "machine-1", MachineToken: "machine-token"}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	control := &terminalRecoveryControl{cancel: cancel}
+	err := Run(ctx, testConfig(t), WithStore(store), WithControl(control), WithWorkspace(&fakeWorkspace{}), WithStartProcess(failStart))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !control.registeredAfterFlush {
+		t.Fatal("session registered before prior terminal transition was flushed")
+	}
+	if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
+		t.Fatalf("terminal journal = %v, want deleted", err)
+	}
+}
+
+func TestTerminalFlushFailurePreventsNewSessionRegistration(t *testing.T) {
+	store, _ := terminalStore(t)
+	defer store.Close()
+	if err := store.SaveIdentity(state.MachineIdentity{MachineID: "machine-1", MachineToken: "machine-token"}); err != nil {
+		t.Fatal(err)
+	}
+	control := &terminalRecoveryControl{transitionErr: errors.New("temporary failure")}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err := Run(ctx, testConfig(t), WithStore(store), WithControl(control), WithWorkspace(&fakeWorkspace{}), WithStartProcess(failStart))
+	if err == nil {
+		t.Fatal("Run() succeeded despite unflushed terminal journal")
+	}
+	if control.registerCalls != 0 {
+		t.Fatalf("RegisterSession calls = %d, want 0", control.registerCalls)
+	}
+}
+
+func TestReconcileCancelPreservesActiveExecution(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	if _, err := store.SetLocalState(key, "running"); err != nil {
+		t.Fatal(err)
+	}
+	process := newBlockingProcess()
+	control := &reconcileControl{response: protocol.ReconcileResponse{Decisions: []protocol.ReconcileDecision{{RunID: key.RunID, Generation: key.Generation, Decision: protocol.ReconcileCancel}}}}
+	daemon := &daemon{store: store, control: control, log: slog.New(slog.NewJSONHandler(io.Discard, nil)), running: map[state.RunKey]*runningRun{key: {process: process}}, slots: make(chan struct{}, 1)}
+	daemon.reconcile(context.Background())
+	if process.terminations != 0 {
+		t.Fatal("ReconcileCancel terminated active execution")
+	}
+	if _, err := store.LoadJournal(key); err != nil {
+		t.Fatalf("active journal was removed: %v", err)
+	}
+	close(process.done)
+}
+
+func TestRecoveredJournalCleanupDeletesOnlyAfterRecover(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal.WorkspacePath = "C:\\workspace"
+	journal.WorkspaceBindingKey = "local"
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	cleaned := make(chan bool, 1)
+	daemon := &daemon{store: store, workspace: &trackingWorkspace{cleaned: cleaned}, log: slog.New(slog.NewJSONHandler(io.Discard, nil))}
+	daemon.stopRecoveredJournal(journal, "stale")
+	if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
+		t.Fatalf("recovered journal = %v, want deleted", err)
+	}
+	select {
+	case <-cleaned:
+	default:
+		t.Fatal("recovered workspace was not cleaned")
+	}
+}
+
+func TestReconcileFiltersIneligibleJournalStates(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal.LocalState = "unexpected_local_state"
+	journal.WorkspacePath = "C:\\workspace"
+	journal.WorkspaceBindingKey = "local"
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	control := &reconcileCaptureControl{}
+	daemon := &daemon{store: store, control: control, workspace: &fakeWorkspace{}, log: slog.New(slog.NewJSONHandler(io.Discard, nil)), running: make(map[state.RunKey]*runningRun)}
+	daemon.reconcile(context.Background())
+	if len(control.request.Runs) != 0 {
+		t.Fatalf("ReconcileRequest.Runs = %#v, want no ineligible journals", control.request.Runs)
+	}
+	if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
+		t.Fatalf("ineligible journal = %v, want safely removed", err)
+	}
+}
+
+func TestHeartbeatMapsTerminalPendingToServerAcceptableState(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	if _, err := store.QueueTerminalTransition(key, protocol.StateTransitionRequest{TransitionID: "cancelled-1", State: "cancelled", Payload: []byte(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	control := &fakeControl{}
+	daemon := &daemon{store: store, control: control, runtimeID: "runtime-1", runtimeEpoch: 1}
+	daemon.heartbeat(context.Background())
+	if len(control.heartbeat.ActiveRuns) != 1 || control.heartbeat.ActiveRuns[0].State != "cancelling" {
+		t.Fatalf("heartbeat active runs = %#v", control.heartbeat.ActiveRuns)
+	}
+}
+
+func TestTerminalTransitionEnqueueFailureRetainsJournalAndSlot(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	slots := make(chan struct{}, 1)
+	slots <- struct{}{}
+	daemon := &daemon{
+		store:   store,
+		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		options: options{newID: func() (string, error) { return "", errors.New("disk failure") }},
+		running: map[state.RunKey]*runningRun{key: {process: fakeProcess{result: execution.Result{}}}},
+		slots:   slots,
+	}
+	daemon.waitForRun(key)
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.LocalState == "terminal_pending" || len(journal.PendingTransitions) != 0 {
+		t.Fatalf("journal = %#v", journal)
+	}
+	if len(slots) != 1 {
+		t.Fatal("slot was released after failed terminal enqueue")
+	}
+	if _, exists := daemon.running[key]; !exists {
+		t.Fatal("run was removed after failed terminal enqueue")
+	}
+}
+
+func TestRecoveredCleanupRulesPreserveOrRemoveJournalSafely(t *testing.T) {
+	t.Run("empty path is no-op", func(t *testing.T) {
+		store, key := claimedStore(t)
+		defer store.Close()
+		journal, err := store.LoadJournal(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		daemon := &daemon{store: store, log: slog.New(slog.NewJSONHandler(io.Discard, nil))}
+		daemon.stopRecoveredJournal(journal, "stale")
+		if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
+			t.Fatalf("journal = %v, want deleted", err)
+		}
+	})
+	t.Run("missing binding is retained", func(t *testing.T) {
+		store, key := claimedStore(t)
+		defer store.Close()
+		journal, err := store.LoadJournal(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		journal.WorkspacePath = "C:\\workspace"
+		journal.WorkspaceBindingKey = ""
+		if err := store.SaveJournal(journal); err != nil {
+			t.Fatal(err)
+		}
+		daemon := &daemon{store: store, log: slog.New(slog.NewJSONHandler(io.Discard, nil))}
+		daemon.stopRecoveredJournal(journal, "stale")
+		if _, err := store.LoadJournal(key); err != nil {
+			t.Fatalf("journal was removed: %v", err)
+		}
+	})
+}
+
+func TestTerminalRecoveredCleanupFailureRetainsJournal(t *testing.T) {
+	store, key := terminalStore(t)
+	defer store.Close()
+	daemon := &daemon{store: store, control: &orderingControl{}, workspace: failingRecoverWorkspace{}, log: slog.New(slog.NewJSONHandler(io.Discard, nil))}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemon.flushRun(context.Background(), journal)
+	if _, err := store.LoadJournal(key); err != nil {
+		t.Fatalf("journal was deleted after cleanup failure: %v", err)
+	}
+}
+
+func terminalStore(t *testing.T) (*state.Store, state.RunKey) {
+	t.Helper()
+	store, key := claimedStore(t)
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal.WorkspacePath = "C:\\workspace"
+	journal.WorkspaceBindingKey = "local"
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.QueueTerminalTransition(key, protocol.StateTransitionRequest{TransitionID: "completed-1", State: "completed", Payload: []byte(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	return store, key
+}
+
 func startupTestDaemon(t *testing.T, store *state.Store, service workspace.Service) *daemon {
 	t.Helper()
 	return &daemon{
@@ -608,7 +822,7 @@ func claimedStore(t *testing.T) (*state.Store, state.RunKey) {
 		t.Fatal(err)
 	}
 	key := state.RunKey{RunID: "run-1", Generation: 1}
-	_, err = store.SaveClaimIntent(state.ClaimIntent{Key: key, RuntimeKey: "default", RuntimeID: "runtime-1", RuntimeEpoch: 1, ClaimID: "claim-1", Work: protocol.Work{Goal: "g"}})
+	_, err = store.SaveClaimIntent(state.ClaimIntent{Key: key, RuntimeKey: "default", RuntimeID: "runtime-1", RuntimeEpoch: 1, ClaimID: "claim-1", Work: protocol.Work{Goal: "g"}, WorkspaceBindingKey: "local"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -658,6 +872,7 @@ type fakeControl struct {
 	claimBlock    <-chan struct{}
 	claimEntered  chan<- struct{}
 	renewCalls    int
+	heartbeat     protocol.RuntimeHeartbeatRequest
 }
 
 type orderingControl struct {
@@ -671,6 +886,49 @@ type ownershipLossControl struct{ fakeControl }
 
 func (*ownershipLossControl) AppendEvents(context.Context, string, protocol.AppendEventsRequest) error {
 	return &control.APIError{Code: control.OwnershipLost}
+}
+
+type terminalRecoveryControl struct {
+	fakeControl
+	cancel               context.CancelFunc
+	transitionErr        error
+	flushed              bool
+	registeredAfterFlush bool
+}
+
+func (client *terminalRecoveryControl) Transition(_ context.Context, _ string, request protocol.StateTransitionRequest) error {
+	if request.State == "completed" {
+		client.flushed = true
+	}
+	return client.transitionErr
+}
+
+func (client *terminalRecoveryControl) RegisterSession(_ context.Context, _ protocol.SessionRegistrationRequest) (protocol.SessionRegistrationResponse, error) {
+	client.registerCalls++
+	client.registeredAfterFlush = client.flushed
+	if client.cancel != nil {
+		client.cancel()
+	}
+	return protocol.SessionRegistrationResponse{Runtimes: []protocol.RegisteredRuntime{{RuntimeKey: "default", RuntimeID: "runtime-1", RuntimeEpoch: 1}}}, nil
+}
+
+type reconcileControl struct {
+	fakeControl
+	response protocol.ReconcileResponse
+}
+
+func (client *reconcileControl) Reconcile(context.Context, string, protocol.ReconcileRequest) (protocol.ReconcileResponse, error) {
+	return client.response, nil
+}
+
+type reconcileCaptureControl struct {
+	fakeControl
+	request protocol.ReconcileRequest
+}
+
+func (client *reconcileCaptureControl) Reconcile(_ context.Context, _ string, request protocol.ReconcileRequest) (protocol.ReconcileResponse, error) {
+	client.request = request
+	return protocol.ReconcileResponse{}, nil
 }
 
 func (client *orderingControl) Transition(_ context.Context, _ string, request protocol.StateTransitionRequest) error {
@@ -712,7 +970,8 @@ func (client *fakeControl) RegisterSession(_ context.Context, _ protocol.Session
 	}
 	return protocol.SessionRegistrationResponse{Runtimes: []protocol.RegisteredRuntime{{RuntimeKey: "default", RuntimeID: "runtime-1", RuntimeEpoch: 1}}}, nil
 }
-func (client *fakeControl) Heartbeat(context.Context, string, protocol.RuntimeHeartbeatRequest) (protocol.RuntimeSnapshot, error) {
+func (client *fakeControl) Heartbeat(_ context.Context, _ string, request protocol.RuntimeHeartbeatRequest) (protocol.RuntimeSnapshot, error) {
+	client.heartbeat = request
 	return protocol.RuntimeSnapshot{}, nil
 }
 func (client *fakeControl) Work(context.Context, string, int64) (protocol.RuntimeSnapshot, error) {
@@ -773,12 +1032,18 @@ type fakeWorkspace struct{}
 func (*fakeWorkspace) Prepare(_ context.Context, key string, run workspace.RunRef) (workspace.Prepared, error) {
 	return workspace.Prepared{Path: "C:\\workspace", BindingKey: key, Run: run}, nil
 }
+func (*fakeWorkspace) Recover(_ context.Context, key string, run workspace.RunRef, path string) (workspace.Prepared, error) {
+	return workspace.Prepared{Path: path, BindingKey: key, Run: run}, nil
+}
 func (*fakeWorkspace) Cleanup(context.Context, workspace.Prepared, bool) error { return nil }
 
 type trackingWorkspace struct{ cleaned chan<- bool }
 
 func (*trackingWorkspace) Prepare(_ context.Context, key string, run workspace.RunRef) (workspace.Prepared, error) {
 	return workspace.Prepared{Path: "C:\\workspace", BindingKey: key, Run: run}, nil
+}
+func (*trackingWorkspace) Recover(_ context.Context, key string, run workspace.RunRef, path string) (workspace.Prepared, error) {
+	return workspace.Prepared{Path: path, BindingKey: key, Run: run}, nil
 }
 
 func (workspace *trackingWorkspace) Cleanup(_ context.Context, _ workspace.Prepared, succeeded bool) error {
@@ -792,6 +1057,16 @@ type blockingWorkspace struct {
 	cleaned   chan bool
 }
 
+type failingRecoverWorkspace struct{}
+
+func (failingRecoverWorkspace) Prepare(context.Context, string, workspace.RunRef) (workspace.Prepared, error) {
+	return workspace.Prepared{}, errors.New("unexpected prepare")
+}
+func (failingRecoverWorkspace) Recover(context.Context, string, workspace.RunRef, string) (workspace.Prepared, error) {
+	return workspace.Prepared{}, errors.New("recovery failed")
+}
+func (failingRecoverWorkspace) Cleanup(context.Context, workspace.Prepared, bool) error { return nil }
+
 func newBlockingWorkspace() *blockingWorkspace {
 	return &blockingWorkspace{entered: make(chan struct{}, 1), cancelled: make(chan struct{}, 1), cleaned: make(chan bool, 1)}
 }
@@ -801,6 +1076,9 @@ func (service *blockingWorkspace) Prepare(ctx context.Context, key string, run w
 	<-ctx.Done()
 	service.cancelled <- struct{}{}
 	return workspace.Prepared{Path: "C:\\workspace", BindingKey: key, Run: run}, nil
+}
+func (*blockingWorkspace) Recover(_ context.Context, key string, run workspace.RunRef, path string) (workspace.Prepared, error) {
+	return workspace.Prepared{Path: path, BindingKey: key, Run: run}, nil
 }
 
 func (service *blockingWorkspace) Cleanup(_ context.Context, _ workspace.Prepared, succeeded bool) error {
@@ -829,6 +1107,7 @@ type fakeProcess struct{ result execution.Result }
 func (process fakeProcess) WriteInput([]byte) error                        { return nil }
 func (process fakeProcess) Terminate(context.Context, time.Duration) error { return nil }
 func (process fakeProcess) Wait() execution.Result                         { return process.result }
+func (fakeProcess) ProcessDetails() (int, string)                          { return 42, "test:42" }
 
 type recordingProcess struct{ input []byte }
 
@@ -838,6 +1117,7 @@ func (process *recordingProcess) WriteInput(input []byte) error {
 }
 func (*recordingProcess) Terminate(context.Context, time.Duration) error { return nil }
 func (*recordingProcess) Wait() execution.Result                         { return execution.Result{} }
+func (*recordingProcess) ProcessDetails() (int, string)                  { return 43, "test:43" }
 
 type blockingProcess struct {
 	done         chan struct{}
@@ -855,3 +1135,4 @@ func (process *blockingProcess) Wait() execution.Result {
 	<-process.done
 	return execution.Result{Terminated: true}
 }
+func (*blockingProcess) ProcessDetails() (int, string) { return 44, "test:44" }

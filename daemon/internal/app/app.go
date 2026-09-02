@@ -82,7 +82,7 @@ type options struct {
 	logWriter        io.Writer
 	clock            func() time.Time
 	newID            func() (string, error)
-	terminatePersist func(int) error
+	terminatePersist func(pid int, identity string) error
 }
 
 // WithHTTPClient replaces the HTTP transport used for production clients.
@@ -308,6 +308,9 @@ func (daemon *daemon) initialize(ctx context.Context) error {
 		}
 	}
 	daemon.slots = make(chan struct{}, daemon.config.Runtime.Capacity)
+	if err := daemon.flushTerminalJournals(ctx); err != nil {
+		return fmt.Errorf("flush terminal journals before registration: %w", err)
+	}
 	instanceID, idErr := daemon.options.newID()
 	if idErr != nil {
 		return fmt.Errorf("generate daemon instance ID: %w", idErr)
@@ -394,9 +397,12 @@ func (daemon *daemon) reconcile(ctx context.Context) {
 	}
 	runs := make([]protocol.ReconcileRun, 0, len(journals))
 	for _, journal := range journals {
-		runs = append(runs, protocol.ReconcileRun{RunID: journal.RunID, Generation: journal.Generation, ClaimedRuntimeEpoch: journal.ClaimedRuntimeEpoch, ClaimID: journal.ClaimID, LeaseToken: journal.LeaseToken, LocalState: journal.LocalState, LastEventSequence: journal.LastEventSequence})
-		if journal.ClaimedRuntimeEpoch != daemon.runtimeEpoch {
-			daemon.stopRecoveredJournal(journal, "stale daemon epoch")
+		if isReconcileState(journal.LocalState) && hasFullFence(journal) {
+			runs = append(runs, protocol.ReconcileRun{RunID: journal.RunID, Generation: journal.Generation, ClaimedRuntimeEpoch: journal.ClaimedRuntimeEpoch, ClaimID: journal.ClaimID, LeaseToken: journal.LeaseToken, LocalState: journal.LocalState, LastEventSequence: journal.LastEventSequence})
+			continue
+		}
+		if !daemon.hasRun(journal.Key()) {
+			daemon.stopRecoveredJournal(journal, "not eligible for reconcile")
 		}
 	}
 	response, err := daemon.control.Reconcile(ctx, daemon.runtimeID, protocol.ReconcileRequest{RuntimeEpoch: daemon.runtimeEpoch, Runs: runs})
@@ -406,9 +412,16 @@ func (daemon *daemon) reconcile(ctx context.Context) {
 	}
 	for _, decision := range response.Decisions {
 		key := state.RunKey{RunID: decision.RunID, Generation: decision.Generation}
+		if decision.Decision == protocol.ReconcileCancel {
+			continue
+		}
 		if decision.Decision != protocol.ReconcileContinue {
 			if journal, loadErr := daemon.store.LoadJournal(key); loadErr == nil {
-				daemon.stopRecoveredJournal(journal, string(decision.Decision))
+				if daemon.hasRun(key) {
+					daemon.terminateForLease(journal, string(decision.Decision))
+				} else {
+					daemon.stopRecoveredJournal(journal, string(decision.Decision))
+				}
 			}
 			continue
 		}
@@ -420,14 +433,69 @@ func (daemon *daemon) reconcile(ctx context.Context) {
 	daemon.flushAll(ctx)
 }
 
+func isReconcileState(localState string) bool {
+	switch localState {
+	case "claimed", "running", "waiting_for_input", "cancelling":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasFullFence(journal state.RunJournal) bool {
+	fence := journal.Fence()
+	return fence.RuntimeID != "" && fence.RuntimeEpoch > 0 && fence.Generation > 0 && fence.ClaimID != "" && fence.LeaseToken != ""
+}
+
 func (daemon *daemon) stopRecoveredJournal(journal state.RunJournal, reason string) {
 	if journal.PID > 0 && daemon.options.terminatePersist != nil {
-		if err := daemon.options.terminatePersist(journal.PID); err != nil {
+		if err := daemon.options.terminatePersist(journal.PID, journal.ProcessIdentity); err != nil {
 			daemon.log.Warn("stop_recovered_process_failed", "run_id", journal.RunID, "error", err)
+			return
 		}
 	}
-	_, _ = daemon.store.SetLocalState(journal.Key(), "stale")
+	if err := daemon.cleanupRecoveredWorkspace(journal, false); err != nil {
+		daemon.log.Warn("cleanup_recovered_workspace_failed", "run_id", journal.RunID, "error", err)
+		return
+	}
+	if err := daemon.store.DeleteJournal(journal.Key()); err != nil && !state.IsNotFound(err) {
+		daemon.log.Warn("delete_recovered_journal_failed", "run_id", journal.RunID, "error", err)
+		return
+	}
 	daemon.log.Warn("recovered_journal_stopped", "run_id", journal.RunID, "generation", journal.Generation, "reason", reason)
+}
+
+func (daemon *daemon) cleanupRecoveredWorkspace(journal state.RunJournal, succeeded bool) error {
+	if journal.WorkspacePath == "" {
+		return nil
+	}
+	if journal.WorkspaceBindingKey == "" {
+		return errors.New("recovered workspace binding key is missing")
+	}
+	prepared, err := daemon.workspace.Recover(context.Background(), journal.WorkspaceBindingKey, workspace.RunRef{RunID: journal.RunID, Generation: journal.Generation}, journal.WorkspacePath)
+	if err != nil {
+		return err
+	}
+	return daemon.workspace.Cleanup(context.Background(), prepared, succeeded)
+}
+
+func (daemon *daemon) flushTerminalJournals(ctx context.Context) error {
+	journals, err := daemon.store.ListJournals()
+	if err != nil {
+		return err
+	}
+	for _, journal := range journals {
+		if journal.LocalState != "terminal_pending" {
+			continue
+		}
+		daemon.flushRun(ctx, journal)
+		if _, err := daemon.store.LoadJournal(journal.Key()); err == nil {
+			return fmt.Errorf("terminal journal %s/%d remains pending", journal.RunID, journal.Generation)
+		} else if !state.IsNotFound(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 func (daemon *daemon) handleSnapshot(ctx context.Context, snapshot protocol.RuntimeSnapshot) {
@@ -473,10 +541,15 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		if handoff {
 			return
 		}
+		cleanupSucceeded := true
 		if preparedOK {
-			daemon.cleanupWorkspace(prepared, false)
+			cleanupSucceeded = daemon.cleanupWorkspace(prepared, false) == nil
 		}
+		stale := daemon.isStale(key)
 		daemon.releaseRun(key)
+		if stale && cleanupSucceeded {
+			_ = daemon.store.DeleteJournal(key)
+		}
 	}()
 
 	journal, err := daemon.store.LoadJournal(key)
@@ -490,7 +563,7 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 			daemon.log.Error("generate_claim_id_failed", "error", idErr)
 			return
 		}
-		intent := state.ClaimIntent{Key: key, RuntimeKey: daemon.config.Runtime.RuntimeKey, RuntimeID: daemon.runtimeID, RuntimeEpoch: daemon.runtimeEpoch, ClaimID: claimID, LocalState: "claiming", Work: assignment.Work}
+		intent := state.ClaimIntent{Key: key, RuntimeKey: daemon.config.Runtime.RuntimeKey, RuntimeID: daemon.runtimeID, RuntimeEpoch: daemon.runtimeEpoch, ClaimID: claimID, LocalState: "claiming", Work: assignment.Work, WorkspaceBindingKey: daemon.config.Runtime.Workspace}
 		journal, err = daemon.store.SaveClaimIntent(intent)
 		if err != nil {
 			daemon.log.Warn("save_claim_intent_failed", "run_id", assignment.RunID, "error", err)
@@ -566,7 +639,15 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		}
 		return
 	}
-	if _, err := daemon.store.SetProcess(key, processPID(process), daemon.options.clock()); err != nil {
+	pid, identity, detailsErr := processDetails(process)
+	if detailsErr != nil {
+		_ = process.Terminate(context.Background(), 0)
+		if !daemon.isCancelled(key) {
+			daemon.queueFailure(key, "read_process_identity", detailsErr)
+		}
+		return
+	}
+	if _, err := daemon.store.SetProcessDetails(key, pid, identity, daemon.options.clock()); err != nil {
 		_ = process.Terminate(context.Background(), 0)
 		if !daemon.isCancelled(key) {
 			daemon.queueFailure(key, "record_process", err)
@@ -615,17 +696,32 @@ func (daemon *daemon) isCancelled(key state.RunKey) bool {
 	return active != nil && active.cancelled
 }
 
-func (daemon *daemon) cleanupWorkspace(prepared workspace.Prepared, succeeded bool) {
-	if err := daemon.workspace.Cleanup(context.Background(), prepared, succeeded); err != nil {
-		daemon.log.Warn("cleanup_workspace_failed", "path", prepared.Path, "error", err)
-	}
+func (daemon *daemon) isStale(key state.RunKey) bool {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	active := daemon.running[key]
+	return active != nil && active.stale
 }
 
-func processPID(process Process) int {
-	if concrete, ok := process.(*execution.Process); ok {
-		return concrete.PID
+func (daemon *daemon) cleanupWorkspace(prepared workspace.Prepared, succeeded bool) error {
+	if err := daemon.workspace.Cleanup(context.Background(), prepared, succeeded); err != nil {
+		daemon.log.Warn("cleanup_workspace_failed", "path", prepared.Path, "error", err)
+		return err
 	}
-	return 1 // Injected tests may not model PIDs; state still requires a positive durable value.
+	return nil
+}
+
+func processDetails(process Process) (int, string, error) {
+	if concrete, ok := process.(*execution.Process); ok {
+		return concrete.PID, concrete.Identity, nil
+	}
+	if detailed, ok := process.(interface{ ProcessDetails() (int, string) }); ok {
+		pid, identity := detailed.ProcessDetails()
+		if pid > 0 && identity != "" {
+			return pid, identity, nil
+		}
+	}
+	return 0, "", errors.New("process does not expose a persistent identity")
 }
 
 func initialInput(profile config.AgentProfile, work protocol.Work) ([]byte, error) {
@@ -738,8 +834,22 @@ func (daemon *daemon) queueTransition(key state.RunKey, stateName string, payloa
 }
 
 func (daemon *daemon) queueFailure(key state.RunKey, stage string, cause error) {
-	_ = daemon.queueTransition(key, "failed", map[string]string{"stage": stage, "error": cause.Error()})
-	_, _ = daemon.store.SetLocalState(key, "terminal_pending")
+	if err := daemon.queueTerminalTransition(key, "failed", map[string]string{"stage": stage, "error": cause.Error()}); err != nil {
+		daemon.log.Error("queue_failed_transition_failed", "run_id", key.RunID, "generation", key.Generation, "stage", stage, "error", err)
+	}
+}
+
+func (daemon *daemon) queueTerminalTransition(key state.RunKey, stateName string, payload any) error {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	id, err := daemon.options.newID()
+	if err != nil {
+		return err
+	}
+	_, err = daemon.store.QueueTerminalTransition(key, protocol.StateTransitionRequest{TransitionID: id, State: stateName, Payload: encoded})
+	return err
 }
 
 func (daemon *daemon) waitForRun(key state.RunKey) {
@@ -757,17 +867,23 @@ func (daemon *daemon) waitForRun(key state.RunKey) {
 	stale := active.stale
 	daemon.mu.Unlock()
 	if stale {
-		daemon.cleanupWorkspace(active.prepared, false)
+		cleanupSucceeded := daemon.cleanupWorkspace(active.prepared, false) == nil
 		daemon.releaseRun(key)
+		if cleanupSucceeded {
+			_ = daemon.store.DeleteJournal(key)
+		}
 		return
 	}
 	if !cancelled {
 		if result.Success() {
-			_ = daemon.queueTransition(key, "completed", map[string]any{"exit_code": result.ExitCode})
+			if err := daemon.queueTerminalTransition(key, "completed", map[string]any{"exit_code": result.ExitCode}); err != nil {
+				daemon.log.Error("queue_completed_transition_failed", "run_id", key.RunID, "generation", key.Generation, "error", err)
+			}
 		} else {
-			_ = daemon.queueTransition(key, "failed", map[string]any{"exit_code": result.ExitCode, "error": errorText(result.WaitError)})
+			if err := daemon.queueTerminalTransition(key, "failed", map[string]any{"exit_code": result.ExitCode, "error": errorText(result.WaitError)}); err != nil {
+				daemon.log.Error("queue_failed_transition_failed", "run_id", key.RunID, "generation", key.Generation, "stage", "process_exit", "error", err)
+			}
 		}
-		_, _ = daemon.store.SetLocalState(key, "terminal_pending")
 	}
 }
 
@@ -805,9 +921,12 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 				active.cancel()
 			}
 			daemon.mu.Unlock()
-			_ = daemon.queueTransition(key, "cancelled", map[string]any{})
-			_, _ = daemon.store.SetLocalState(key, "terminal_pending")
-			daemon.queueCommandAcknowledgement(key, command.CommandID, "applied")
+			outcome := "applied"
+			if err := daemon.queueTerminalTransition(key, "cancelled", map[string]any{}); err != nil {
+				daemon.log.Error("queue_cancelled_transition_failed", "run_id", key.RunID, "generation", key.Generation, "error", err)
+				outcome = "failed"
+			}
+			daemon.queueCommandAcknowledgement(key, command.CommandID, outcome)
 			return
 		}
 		daemon.queueCommandAcknowledgement(key, command.CommandID, outcome)
@@ -821,9 +940,12 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 		if err := active.process.Terminate(ctx, 2*time.Second); err != nil {
 			outcome = "failed"
 		} else {
-			_ = daemon.queueTransition(key, "cancelled", map[string]any{})
-			_, _ = daemon.store.SetLocalState(key, "terminal_pending")
-			outcome = "applied"
+			if err := daemon.queueTerminalTransition(key, "cancelled", map[string]any{}); err != nil {
+				daemon.log.Error("queue_cancelled_transition_failed", "run_id", key.RunID, "generation", key.Generation, "error", err)
+				outcome = "failed"
+			} else {
+				outcome = "applied"
+			}
 		}
 	case "provide_input":
 		if !json.Valid(command.Payload) {
@@ -921,6 +1043,7 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) {
 	if journal.LocalState == "stale" {
 		return
 	}
+	terminalSucceeded := hasTransition(journal.PendingTransitions, "completed")
 	if len(journal.PendingEvents) > 0 {
 		if err := daemon.control.AppendEvents(ctx, journal.RunID, protocol.AppendEventsRequest{Fence: journal.Fence(), Events: journal.PendingEvents}); err != nil {
 			if control.IsOwnershipLost(err) {
@@ -985,6 +1108,9 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) {
 			delete(daemon.running, key)
 			daemon.mu.Unlock()
 			<-daemon.slots
+		} else if err := daemon.cleanupRecoveredWorkspace(journal, terminalSucceeded); err != nil {
+			daemon.log.Warn("cleanup_terminal_workspace_failed", "run_id", journal.RunID, "error", err)
+			return
 		}
 		if err := daemon.store.DeleteJournal(key); err != nil {
 			daemon.log.Warn("delete_terminal_journal_failed", "run_id", journal.RunID, "error", err)
@@ -1008,11 +1134,29 @@ func (daemon *daemon) activeRuns() []protocol.ActiveRun {
 	}
 	runs := make([]protocol.ActiveRun, 0, len(journals))
 	for _, journal := range journals {
-		if journal.LeaseToken != "" && journal.LocalState != "stale" {
-			runs = append(runs, protocol.ActiveRun{RunID: journal.RunID, Generation: journal.Generation, ClaimedRuntimeEpoch: journal.ClaimedRuntimeEpoch, ClaimID: journal.ClaimID, LeaseToken: journal.LeaseToken, State: journal.LocalState})
+		stateName, include := activeRunState(journal)
+		if include {
+			runs = append(runs, protocol.ActiveRun{RunID: journal.RunID, Generation: journal.Generation, ClaimedRuntimeEpoch: journal.ClaimedRuntimeEpoch, ClaimID: journal.ClaimID, LeaseToken: journal.LeaseToken, State: stateName})
 		}
 	}
 	return runs
+}
+
+func activeRunState(journal state.RunJournal) (string, bool) {
+	if journal.LeaseToken == "" || journal.LocalState == "stale" || journal.LocalState == "claiming" {
+		return "", false
+	}
+	switch journal.LocalState {
+	case "claimed", "running", "waiting_for_input", "cancelling":
+		return journal.LocalState, true
+	case "terminal_pending":
+		if hasTransition(journal.PendingTransitions, "cancelled") {
+			return "cancelling", true
+		}
+		return "running", true
+	default:
+		return "", false
+	}
 }
 
 func (daemon *daemon) hasRun(key state.RunKey) bool {

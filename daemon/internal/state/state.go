@@ -66,14 +66,15 @@ type RunKey struct {
 // claim request can be sent. ClaimID is deliberately caller supplied so an
 // uncertain HTTP result can be retried idempotently after a restart.
 type ClaimIntent struct {
-	Key           RunKey
-	RuntimeKey    string
-	RuntimeID     string
-	RuntimeEpoch  int64
-	ClaimID       string
-	LocalState    string
-	Work          protocol.Work
-	WorkspacePath string
+	Key                 RunKey
+	RuntimeKey          string
+	RuntimeID           string
+	RuntimeEpoch        int64
+	ClaimID             string
+	LocalState          string
+	Work                protocol.Work
+	WorkspacePath       string
+	WorkspaceBindingKey string
 }
 
 // RunJournal is the complete durable local recovery record for one run
@@ -91,7 +92,9 @@ type RunJournal struct {
 	LocalState                     string                            `json:"local_state"`
 	Work                           protocol.Work                     `json:"work"`
 	WorkspacePath                  string                            `json:"workspace_path"`
+	WorkspaceBindingKey            string                            `json:"workspace_binding_key"`
 	PID                            int                               `json:"pid"`
+	ProcessIdentity                string                            `json:"process_identity"`
 	StartedAt                      time.Time                         `json:"started_at"`
 	LastEventSequence              int64                             `json:"last_event_sequence"`
 	PendingEvents                  []protocol.RunEvent               `json:"pending_events"`
@@ -226,6 +229,9 @@ func (store *Store) SaveClaimIntent(intent ClaimIntent) (RunJournal, error) {
 	if err := validateKey(intent.Key); err != nil {
 		return RunJournal{}, err
 	}
+	if !validRequiredString(intent.WorkspaceBindingKey, 4096) {
+		return RunJournal{}, errors.New("workspace binding key is invalid")
+	}
 	journal := RunJournal{
 		RunID:               intent.Key.RunID,
 		Generation:          intent.Key.Generation,
@@ -236,6 +242,7 @@ func (store *Store) SaveClaimIntent(intent ClaimIntent) (RunJournal, error) {
 		LocalState:          intent.LocalState,
 		Work:                intent.Work,
 		WorkspacePath:       intent.WorkspacePath,
+		WorkspaceBindingKey: intent.WorkspaceBindingKey,
 	}
 	if journal.LocalState == "" {
 		journal.LocalState = "claiming"
@@ -403,6 +410,24 @@ func (store *Store) SetProcess(key RunKey, pid int, startedAt time.Time) (RunJou
 			return errors.New("journal has no claim grant")
 		}
 		journal.PID = pid
+		journal.ProcessIdentity = ""
+		journal.StartedAt = startedAt
+		return nil
+	})
+}
+
+// SetProcessDetails persists an execution process identity that recovery code
+// can verify before acting on a retained PID.
+func (store *Store) SetProcessDetails(key RunKey, pid int, identity string, startedAt time.Time) (RunJournal, error) {
+	if pid <= 0 || !validRequiredString(identity, 4096) || startedAt.IsZero() {
+		return RunJournal{}, errors.New("process details are invalid")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if !journal.hasClaimGrant() {
+			return errors.New("journal has no claim grant")
+		}
+		journal.PID = pid
+		journal.ProcessIdentity = identity
 		journal.StartedAt = startedAt
 		return nil
 	})
@@ -448,19 +473,21 @@ func (store *Store) MarkEventsDelivered(key RunKey, eventIDs []string) (RunJourn
 // QueueTransition durably enqueues a fenced transition before its HTTP request.
 func (store *Store) QueueTransition(key RunKey, transition protocol.StateTransitionRequest) (RunJournal, error) {
 	return store.mutateJournal(key, func(journal *RunJournal) error {
-		if !journal.hasClaimGrant() {
-			return errors.New("journal has no claim grant")
+		return queueTransition(journal, transition)
+	})
+}
+
+// QueueTerminalTransition atomically makes a terminal transition durable and
+// marks the local process terminal-pending before any HTTP request is sent.
+func (store *Store) QueueTerminalTransition(key RunKey, transition protocol.StateTransitionRequest) (RunJournal, error) {
+	if !isTerminalTransitionState(transition.State) {
+		return RunJournal{}, errors.New("terminal transition state is invalid")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if err := queueTransition(journal, transition); err != nil {
+			return err
 		}
-		if strings.TrimSpace(transition.TransitionID) == "" || strings.TrimSpace(transition.State) == "" || !validRawMessage(transition.Payload) {
-			return errors.New("state transition is invalid")
-		}
-		if isZeroFence(transition.Fence) {
-			transition.Fence = journal.Fence()
-		}
-		if !sameFence(transition.Fence, journal.Fence()) {
-			return errors.New("state transition fence does not match journal")
-		}
-		journal.PendingTransitions = append(journal.PendingTransitions, transition)
+		journal.LocalState = "terminal_pending"
 		return nil
 	})
 }
@@ -526,6 +553,32 @@ func (store *Store) mutateJournal(key RunKey, mutate func(*RunJournal) error) (R
 		return RunJournal{}, err
 	}
 	return journal, nil
+}
+
+func queueTransition(journal *RunJournal, transition protocol.StateTransitionRequest) error {
+	if !journal.hasClaimGrant() {
+		return errors.New("journal has no claim grant")
+	}
+	if strings.TrimSpace(transition.TransitionID) == "" || strings.TrimSpace(transition.State) == "" || !validRawMessage(transition.Payload) {
+		return errors.New("state transition is invalid")
+	}
+	if isZeroFence(transition.Fence) {
+		transition.Fence = journal.Fence()
+	}
+	if !sameFence(transition.Fence, journal.Fence()) {
+		return errors.New("state transition fence does not match journal")
+	}
+	journal.PendingTransitions = append(journal.PendingTransitions, transition)
+	return nil
+}
+
+func isTerminalTransitionState(state string) bool {
+	switch state {
+	case "completed", "failed", "cancelled":
+		return true
+	default:
+		return false
+	}
 }
 
 func (store *Store) loadJournalLocked(key RunKey) (RunJournal, error) {
@@ -744,8 +797,17 @@ func validateJournal(journal RunJournal) error {
 	if err := validateKey(journal.Key()); err != nil {
 		return err
 	}
-	if !validRequiredString(journal.RuntimeKey, 4096) || !validRequiredString(journal.RuntimeID, 4096) || journal.ClaimedRuntimeEpoch <= 0 || !validRequiredString(journal.ClaimID, 4096) || !validRequiredString(journal.LocalState, 256) || len(journal.WorkspacePath) > 32768 || journal.PID < 0 || journal.LastEventSequence < 0 {
+	if !validRequiredString(journal.RuntimeKey, 4096) || !validRequiredString(journal.RuntimeID, 4096) || journal.ClaimedRuntimeEpoch <= 0 || !validRequiredString(journal.ClaimID, 4096) || !validRequiredString(journal.LocalState, 256) || len(journal.WorkspacePath) > 32768 || len(journal.WorkspaceBindingKey) > 4096 || journal.PID < 0 || len(journal.ProcessIdentity) > 4096 || journal.LastEventSequence < 0 {
 		return errors.New("run journal is invalid")
+	}
+	if journal.PID == 0 && (!journal.StartedAt.IsZero() || journal.ProcessIdentity != "") {
+		return errors.New("run journal process details are invalid")
+	}
+	if journal.PID > 0 && journal.StartedAt.IsZero() {
+		return errors.New("run journal process details are invalid")
+	}
+	if journal.ProcessIdentity != "" && !validRequiredString(journal.ProcessIdentity, 4096) {
+		return errors.New("run journal process details are invalid")
 	}
 	if (strings.TrimSpace(journal.LeaseToken) == "") != journal.LeaseExpiresAt.IsZero() || len(journal.LeaseToken) > 65536 || !validWork(journal.Work) {
 		return errors.New("run journal is invalid")
