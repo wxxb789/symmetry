@@ -331,12 +331,14 @@ func TestClientUsesProtocolAPIPrefixForOriginBaseURL(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewOperatorClient(server.URL, "operator-token", server.Client())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := client.GetTask(context.Background(), "task-1"); err != nil {
-		t.Fatal(err)
+	for _, baseURL := range []string{server.URL, server.URL + "/"} {
+		client, err := NewOperatorClient(baseURL, "operator-token", server.Client())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.GetTask(context.Background(), "task-1"); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

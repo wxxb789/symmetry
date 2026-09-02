@@ -747,21 +747,9 @@ func TestRecoveredCleanupRulesPreserveOrRemoveJournalSafely(t *testing.T) {
 		}
 	})
 	t.Run("missing binding is retained", func(t *testing.T) {
-		store, key := claimedStore(t)
-		defer store.Close()
-		journal, err := store.LoadJournal(key)
-		if err != nil {
-			t.Fatal(err)
-		}
-		journal.WorkspacePath = "C:\\workspace"
-		journal.WorkspaceBindingKey = ""
-		if err := store.SaveJournal(journal); err != nil {
-			t.Fatal(err)
-		}
-		daemon := &daemon{store: store, log: slog.New(slog.NewJSONHandler(io.Discard, nil))}
-		daemon.stopRecoveredJournal(journal, "stale")
-		if _, err := store.LoadJournal(key); err != nil {
-			t.Fatalf("journal was removed: %v", err)
+		daemon := &daemon{log: slog.New(slog.NewJSONHandler(io.Discard, nil))}
+		if err := daemon.cleanupRecoveredWorkspace(state.RunJournal{WorkspacePath: "C:\\workspace"}, false); err == nil {
+			t.Fatal("cleanupRecoveredWorkspace accepted a missing binding key")
 		}
 	})
 }
@@ -777,6 +765,80 @@ func TestTerminalRecoveredCleanupFailureRetainsJournal(t *testing.T) {
 	daemon.flushRun(context.Background(), journal)
 	if _, err := store.LoadJournal(key); err != nil {
 		t.Fatalf("journal was deleted after cleanup failure: %v", err)
+	}
+}
+
+func TestJSONLParserBoundsUnterminatedRecordsAndPreservesNormalJSONL(t *testing.T) {
+	parser := &jsonlParser{}
+	input := make([]byte, maxJSONLRecordBytes+rawOutputChunkBytes+1)
+	for index := range input {
+		input[index] = 'x'
+	}
+	records := parser.push(input)
+	if len(records) < 2 || !parser.overflow || len(parser.pending) != 0 {
+		t.Fatalf("overflow records = %d, overflow = %v, pending = %d", len(records), parser.overflow, len(parser.pending))
+	}
+	total := 0
+	for _, record := range records {
+		if !record.raw || len(record.data) > rawOutputChunkBytes {
+			t.Fatalf("record = %#v", record)
+		}
+		total += len(record.data)
+	}
+	if total != len(input) {
+		t.Fatalf("raw bytes = %d, want %d", total, len(input))
+	}
+	followUp := parser.push([]byte("tail\n"))
+	if len(followUp) != 1 || !followUp[0].raw || string(followUp[0].data) != "tail" {
+		t.Fatalf("overflow tail = %#v", followUp)
+	}
+
+	normal := (&jsonlParser{}).push([]byte(`{"type":"progress"}` + "\n"))
+	if len(normal) != 1 || normal[0].raw || string(normal[0].data) != `{"type":"progress"}` {
+		t.Fatalf("normal JSONL = %#v", normal)
+	}
+}
+
+func TestRenewLeasesDoesNotSeriallyBlockOtherRuns(t *testing.T) {
+	store, first := claimedStore(t)
+	defer store.Close()
+	second := state.RunKey{RunID: "run-2", Generation: 1}
+	_, err := store.SaveClaimIntent(state.ClaimIntent{Key: second, RuntimeKey: "default", RuntimeID: "runtime-1", RuntimeEpoch: 1, ClaimID: "claim-2", Work: protocol.Work{Goal: "g"}, WorkspaceBindingKey: "local"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.SaveClaimGrant(second, protocol.ClaimResponse{RunID: second.RunID, Generation: second.Generation, ClaimID: "claim-2", LeaseToken: "lease-2", LeaseExpiresAt: time.Now().Add(time.Minute), Work: protocol.Work{Goal: "g"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	for _, key := range []state.RunKey{first, second} {
+		if _, err := store.UpdateLeaseExpiry(key, now.Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	release := make(chan struct{})
+	api := &parallelRenewControl{started: make(chan string, 2), release: release}
+	daemon := &daemon{store: store, control: api, options: options{clock: func() time.Time { return now }}, leaseDuration: 10 * time.Second, slots: make(chan struct{}, 2)}
+	done := make(chan struct{})
+	go func() { daemon.renewLeases(context.Background()); close(done) }()
+	seen := make(map[string]bool)
+	for range 2 {
+		select {
+		case runID := <-api.started:
+			seen[runID] = true
+		case <-time.After(time.Second):
+			t.Fatal("a hung renewal blocked another run")
+		}
+	}
+	if !seen[first.RunID] || !seen[second.RunID] {
+		t.Fatalf("renewals started = %#v", seen)
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("renewal loop did not complete")
 	}
 }
 
@@ -924,6 +986,20 @@ func (client *reconcileControl) Reconcile(context.Context, string, protocol.Reco
 type reconcileCaptureControl struct {
 	fakeControl
 	request protocol.ReconcileRequest
+}
+
+type parallelRenewControl struct {
+	fakeControl
+	started chan string
+	release <-chan struct{}
+}
+
+func (client *parallelRenewControl) RenewLease(_ context.Context, runID string, _ protocol.LeaseHeartbeatRequest) (protocol.LeaseHeartbeatResponse, error) {
+	client.started <- runID
+	if runID == "run-1" {
+		<-client.release
+	}
+	return protocol.LeaseHeartbeatResponse{LeaseExpiresAt: time.Now().Add(time.Minute)}, nil
 }
 
 func (client *reconcileCaptureControl) Reconcile(_ context.Context, _ string, request protocol.ReconcileRequest) (protocol.ReconcileResponse, error) {

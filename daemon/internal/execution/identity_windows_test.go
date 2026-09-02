@@ -19,14 +19,18 @@ func TestStartExposesWindowsProcessCreationIdentity(t *testing.T) {
 		_ = process.Terminate(ctx, 0)
 	})
 
-	if !strings.HasPrefix(process.Identity, "windows:") {
-		t.Fatalf("Identity = %q, want windows identity", process.Identity)
+	pid, identity := process.ProcessDetails()
+	if pid != process.PID {
+		t.Fatalf("PID = %d, want %d", pid, process.PID)
 	}
-	current, err := platform.ProcessIdentity(process.PID)
+	if !strings.HasPrefix(identity, "windows:") {
+		t.Fatalf("Identity = %q, want windows identity", identity)
+	}
+	current, err := platform.ProcessIdentity(pid)
 	if err != nil {
 		t.Fatalf("ProcessIdentity() error = %v", err)
 	}
-	if process.Identity != current {
-		t.Fatalf("Identity = %q, current identity = %q", process.Identity, current)
+	if identity != current {
+		t.Fatalf("Identity = %q, current identity = %q", identity, current)
 	}
 }

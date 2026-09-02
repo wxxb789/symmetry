@@ -26,10 +26,12 @@ import (
 )
 
 const (
-	minimumInterval   = time.Second
-	maximumInterval   = time.Minute
-	leaseSafetyMargin = 5 * time.Second
-	retryMaximum      = 30 * time.Second
+	minimumInterval     = time.Second
+	maximumInterval     = time.Minute
+	leaseSafetyMargin   = 5 * time.Second
+	retryMaximum        = 30 * time.Second
+	maxJSONLRecordBytes = 256 * 1024
+	rawOutputChunkBytes = 32 * 1024
 )
 
 // ControlAPI is the authenticated protocol boundary used by the loop.
@@ -56,6 +58,7 @@ type Process interface {
 	WriteInput([]byte) error
 	Terminate(context.Context, time.Duration) error
 	Wait() execution.Result
+	ProcessDetails() (int, string)
 }
 
 // StartProcess permits deterministic runner tests without exposing os/exec to
@@ -182,7 +185,6 @@ type runningRun struct {
 	cancel    context.CancelFunc
 	cancelled bool
 	stale     bool
-	finished  bool
 	succeeded bool
 }
 
@@ -712,14 +714,9 @@ func (daemon *daemon) cleanupWorkspace(prepared workspace.Prepared, succeeded bo
 }
 
 func processDetails(process Process) (int, string, error) {
-	if concrete, ok := process.(*execution.Process); ok {
-		return concrete.PID, concrete.Identity, nil
-	}
-	if detailed, ok := process.(interface{ ProcessDetails() (int, string) }); ok {
-		pid, identity := detailed.ProcessDetails()
-		if pid > 0 && identity != "" {
-			return pid, identity, nil
-		}
+	pid, identity := process.ProcessDetails()
+	if pid > 0 && identity != "" {
+		return pid, identity, nil
 	}
 	return 0, "", errors.New("process does not expose a persistent identity")
 }
@@ -744,20 +741,20 @@ func (daemon *daemon) queueOutput(key state.RunKey, format config.EventFormat, p
 	if event.Stream == execution.Stderr || format != config.EventFormatJSONL {
 		return daemon.queueRawEvent(key, event)
 	}
-	for _, line := range parser.push(event.Data) {
-		if !json.Valid(line) {
-			if err := daemon.queueRawEvent(key, execution.Event{Stream: event.Stream, At: event.At, Data: line}); err != nil {
+	for _, record := range parser.push(event.Data) {
+		if record.raw || !json.Valid(record.data) {
+			if err := daemon.queueRawEvent(key, execution.Event{Stream: event.Stream, At: event.At, Data: record.data}); err != nil {
 				return err
 			}
 			continue
 		}
 		var decoded any
-		if err := json.Unmarshal(line, &decoded); err != nil || containsNUL(decoded) {
-			return daemon.queueRawEvent(key, execution.Event{Stream: event.Stream, At: event.At, Data: line})
+		if err := json.Unmarshal(record.data, &decoded); err != nil || containsNUL(decoded) {
+			return daemon.queueRawEvent(key, execution.Event{Stream: event.Stream, At: event.At, Data: record.data})
 		}
 		payload, ok := decoded.(map[string]any)
 		if !ok {
-			return daemon.queueEvent(key, "agent_event", json.RawMessage(line), event.At)
+			return daemon.queueEvent(key, "agent_event", json.RawMessage(record.data), event.At)
 		}
 		kind := "agent_event"
 		var declaredType string
@@ -768,11 +765,11 @@ func (daemon *daemon) queueOutput(key state.RunKey, format config.EventFormat, p
 		case "progress", "waiting_for_input":
 			kind = declaredType
 		}
-		if err := daemon.queueEvent(key, kind, json.RawMessage(line), event.At); err != nil {
+		if err := daemon.queueEvent(key, kind, json.RawMessage(record.data), event.At); err != nil {
 			return err
 		}
 		if kind == "waiting_for_input" {
-			_ = daemon.queueTransition(key, "waiting_for_input", json.RawMessage(line))
+			_ = daemon.queueTransition(key, "waiting_for_input", json.RawMessage(record.data))
 			_, _ = daemon.store.SetLocalState(key, "waiting_for_input")
 		}
 	}
@@ -861,7 +858,6 @@ func (daemon *daemon) waitForRun(key state.RunKey) {
 	}
 	result := active.process.Wait()
 	daemon.mu.Lock()
-	active.finished = true
 	active.succeeded = result.Success()
 	cancelled := active.cancelled
 	stale := active.stale
@@ -977,6 +973,13 @@ func (daemon *daemon) renewLeases(ctx context.Context) {
 		return
 	}
 	now := daemon.options.clock()
+	type renewal struct {
+		index    int
+		journal  state.RunJournal
+		response protocol.LeaseHeartbeatResponse
+		err      error
+	}
+	candidates := make([]state.RunJournal, 0, len(journals))
 	for _, journal := range journals {
 		if journal.LeaseToken == "" || journal.LocalState == "stale" {
 			continue
@@ -993,15 +996,53 @@ func (daemon *daemon) renewLeases(ctx context.Context) {
 		if remaining > margin*2 {
 			continue
 		}
-		response, renewErr := daemon.control.RenewLease(ctx, journal.RunID, protocol.LeaseHeartbeatRequest{Fence: journal.Fence()})
-		if renewErr != nil {
-			if control.IsOwnershipLost(renewErr) || remaining <= margin {
-				daemon.terminateForLease(journal, "lease renewal failed")
+		candidates = append(candidates, journal)
+	}
+	if len(candidates) == 0 {
+		return
+	}
+	results := make([]renewal, len(candidates))
+	jobs := make(chan int)
+	completed := make(chan renewal, len(candidates))
+	workers := cap(daemon.slots)
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > len(candidates) {
+		workers = len(candidates)
+	}
+	var group sync.WaitGroup
+	for range workers {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			for index := range jobs {
+				journal := candidates[index]
+				response, renewErr := daemon.control.RenewLease(ctx, journal.RunID, protocol.LeaseHeartbeatRequest{Fence: journal.Fence()})
+				completed <- renewal{index: index, journal: journal, response: response, err: renewErr}
+			}
+		}()
+	}
+	go func() {
+		for index := range candidates {
+			jobs <- index
+		}
+		close(jobs)
+		group.Wait()
+		close(completed)
+	}()
+	for result := range completed {
+		results[result.index] = result
+	}
+	for _, result := range results {
+		if result.err != nil {
+			if control.IsOwnershipLost(result.err) || result.journal.LeaseExpiresAt.Sub(now) <= leaseSafetyMargin {
+				daemon.terminateForLease(result.journal, "lease renewal failed")
 			}
 			continue
 		}
-		_, _ = daemon.store.UpdateLeaseExpiry(journal.Key(), response.LeaseExpiresAt)
-		for _, command := range response.Commands {
+		_, _ = daemon.store.UpdateLeaseExpiry(result.journal.Key(), result.response.LeaseExpiresAt)
+		for _, command := range result.response.Commands {
 			daemon.handleCommand(ctx, command)
 		}
 	}
@@ -1183,26 +1224,55 @@ func (daemon *daemon) stopAll() {
 	}
 }
 
-type jsonlParser struct{ buffer bytes.Buffer }
+type jsonlRecord struct {
+	data []byte
+	raw  bool
+}
 
-func (parser *jsonlParser) push(value []byte) [][]byte {
-	parser.buffer.Write(value)
-	var lines [][]byte
-	for {
-		line, err := parser.buffer.ReadBytes('\n')
-		if err != nil {
-			if len(line) > 0 {
-				parser.buffer.Write(line)
+type jsonlParser struct {
+	pending  []byte
+	overflow bool
+}
+
+func (parser *jsonlParser) push(value []byte) []jsonlRecord {
+	parser.pending = append(parser.pending, value...)
+	records := make([]jsonlRecord, 0, 1)
+	for len(parser.pending) > 0 {
+		newline := bytes.IndexByte(parser.pending, '\n')
+		if newline >= 0 {
+			line := parser.pending[:newline]
+			parser.pending = parser.pending[newline+1:]
+			if len(line) > 0 && line[len(line)-1] == '\r' {
+				line = line[:len(line)-1]
 			}
-			break
+			if parser.overflow || len(line) > maxJSONLRecordBytes {
+				records = appendRawRecords(records, line)
+				parser.overflow = false
+				continue
+			}
+			records = append(records, jsonlRecord{data: append([]byte(nil), line...)})
+			continue
 		}
-		line = line[:len(line)-1]
-		if len(line) > 0 && line[len(line)-1] == '\r' {
-			line = line[:len(line)-1]
+		if parser.overflow || len(parser.pending) > maxJSONLRecordBytes {
+			parser.overflow = true
+			records = appendRawRecords(records, parser.pending)
+			parser.pending = nil
 		}
-		lines = append(lines, append([]byte(nil), line...))
+		break
 	}
-	return lines
+	return records
+}
+
+func appendRawRecords(records []jsonlRecord, value []byte) []jsonlRecord {
+	for len(value) > 0 {
+		length := len(value)
+		if length > rawOutputChunkBytes {
+			length = rawOutputChunkBytes
+		}
+		records = append(records, jsonlRecord{data: append([]byte(nil), value[:length]...), raw: true})
+		value = value[length:]
+	}
+	return records
 }
 
 func retry(ctx context.Context, operation func() error) error {

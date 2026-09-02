@@ -400,22 +400,6 @@ func (store *Store) SetLocalState(key RunKey, localState string) (RunJournal, er
 	})
 }
 
-// SetProcess records an execution process after it has started.
-func (store *Store) SetProcess(key RunKey, pid int, startedAt time.Time) (RunJournal, error) {
-	if pid <= 0 || startedAt.IsZero() {
-		return RunJournal{}, errors.New("process details are invalid")
-	}
-	return store.mutateJournal(key, func(journal *RunJournal) error {
-		if !journal.hasClaimGrant() {
-			return errors.New("journal has no claim grant")
-		}
-		journal.PID = pid
-		journal.ProcessIdentity = ""
-		journal.StartedAt = startedAt
-		return nil
-	})
-}
-
 // SetProcessDetails persists an execution process identity that recovery code
 // can verify before acting on a retained PID.
 func (store *Store) SetProcessDetails(key RunKey, pid int, identity string, startedAt time.Time) (RunJournal, error) {
@@ -797,16 +781,13 @@ func validateJournal(journal RunJournal) error {
 	if err := validateKey(journal.Key()); err != nil {
 		return err
 	}
-	if !validRequiredString(journal.RuntimeKey, 4096) || !validRequiredString(journal.RuntimeID, 4096) || journal.ClaimedRuntimeEpoch <= 0 || !validRequiredString(journal.ClaimID, 4096) || !validRequiredString(journal.LocalState, 256) || len(journal.WorkspacePath) > 32768 || len(journal.WorkspaceBindingKey) > 4096 || journal.PID < 0 || len(journal.ProcessIdentity) > 4096 || journal.LastEventSequence < 0 {
+	if !validRequiredString(journal.RuntimeKey, 4096) || !validRequiredString(journal.RuntimeID, 4096) || journal.ClaimedRuntimeEpoch <= 0 || !validRequiredString(journal.ClaimID, 4096) || !validRequiredString(journal.LocalState, 256) || len(journal.WorkspacePath) > 32768 || !validRequiredString(journal.WorkspaceBindingKey, 4096) || journal.PID < 0 || len(journal.ProcessIdentity) > 4096 || journal.LastEventSequence < 0 {
 		return errors.New("run journal is invalid")
 	}
 	if journal.PID == 0 && (!journal.StartedAt.IsZero() || journal.ProcessIdentity != "") {
 		return errors.New("run journal process details are invalid")
 	}
-	if journal.PID > 0 && journal.StartedAt.IsZero() {
-		return errors.New("run journal process details are invalid")
-	}
-	if journal.ProcessIdentity != "" && !validRequiredString(journal.ProcessIdentity, 4096) {
+	if journal.PID > 0 && (journal.StartedAt.IsZero() || !validRequiredString(journal.ProcessIdentity, 4096)) {
 		return errors.New("run journal process details are invalid")
 	}
 	if (strings.TrimSpace(journal.LeaseToken) == "") != journal.LeaseExpiresAt.IsZero() || len(journal.LeaseToken) > 65536 || !validWork(journal.Work) {
@@ -860,11 +841,11 @@ func validRawMessage(message json.RawMessage) bool {
 }
 
 func isZeroFence(fence protocol.Fence) bool {
-	return fence.RuntimeID == "" && fence.RuntimeEpoch == 0 && fence.Generation == 0 && fence.ClaimID == "" && fence.LeaseToken == ""
+	return fence == (protocol.Fence{})
 }
 
 func sameFence(left, right protocol.Fence) bool {
-	return left.RuntimeID == right.RuntimeID && left.RuntimeEpoch == right.RuntimeEpoch && left.Generation == right.Generation && left.ClaimID == right.ClaimID && left.LeaseToken == right.LeaseToken
+	return left == right
 }
 
 func removeEvents(events []protocol.RunEvent, ids []string) []protocol.RunEvent {

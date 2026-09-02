@@ -210,7 +210,7 @@ func (client *Client) runConnection(ctx context.Context, connection *websocket.C
 	heartbeats := time.NewTicker(client.options.heartbeatInterval)
 	defer heartbeats.Stop()
 	heartbeatReply := time.NewTimer(time.Hour)
-	stopTimer(heartbeatReply)
+	heartbeatReply.Stop()
 	defer heartbeatReply.Stop()
 	var heartbeatReplyC <-chan time.Time
 	var heartbeatRef string
@@ -243,7 +243,7 @@ func (client *Client) runConnection(ctx context.Context, connection *websocket.C
 						return connected, errors.New("Phoenix heartbeat was rejected")
 					}
 					heartbeatRef = ""
-					stopTimer(heartbeatReply)
+					heartbeatReply.Stop()
 					heartbeatReplyC = nil
 				}
 			case "phx_error", "phx_close":
@@ -325,15 +325,6 @@ func writeFrameWithTimeout(ctx context.Context, connection *websocket.Conn, time
 	writeContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	return writeFrame(writeContext, connection, frame)
-}
-
-func stopTimer(timer *time.Timer) {
-	if !timer.Stop() {
-		select {
-		case <-timer.C:
-		default:
-		}
-	}
 }
 
 func decodeFrame(value []byte) (phoenixFrame, error) {

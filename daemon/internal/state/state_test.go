@@ -272,35 +272,6 @@ func TestSaveClaimIntentRequiresBoundedWorkspaceBindingKey(t *testing.T) {
 	}
 }
 
-func TestLoadJournalWithoutWorkspaceBindingKeyRemainsCompatible(t *testing.T) {
-	store := mustStore(t)
-	journal := testJournal("run-1", 1)
-	encoded, err := json.Marshal(journal)
-	if err != nil {
-		t.Fatalf("Marshal() error = %v", err)
-	}
-	var object map[string]json.RawMessage
-	if err := json.Unmarshal(encoded, &object); err != nil {
-		t.Fatalf("Unmarshal() error = %v", err)
-	}
-	delete(object, "workspace_binding_key")
-	encoded, err = json.Marshal(object)
-	if err != nil {
-		t.Fatalf("Marshal(old journal) error = %v", err)
-	}
-	if err := os.WriteFile(store.journalPath(journal.Key()), encoded, 0o600); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	loaded, err := store.LoadJournal(journal.Key())
-	if err != nil {
-		t.Fatalf("LoadJournal() error = %v", err)
-	}
-	if loaded.WorkspaceBindingKey != "" {
-		t.Fatalf("WorkspaceBindingKey = %q, want empty for old journal", loaded.WorkspaceBindingKey)
-	}
-}
-
 func TestPendingOutboxRequiresPersistedClaimGrant(t *testing.T) {
 	store := mustStore(t)
 	key := RunKey{RunID: "run-1", Generation: 2}
@@ -313,7 +284,7 @@ func TestPendingOutboxRequiresPersistedClaimGrant(t *testing.T) {
 	}
 }
 
-func TestSetProcessDetailsPersistsNonEmptyIdentityAndPreservesLegacySetProcess(t *testing.T) {
+func TestSetProcessDetailsPersistsNonEmptyIdentity(t *testing.T) {
 	store := mustStore(t)
 	journal := testJournal("run-1", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -350,16 +321,6 @@ func TestSetProcessDetailsPersistsNonEmptyIdentityAndPreservesLegacySetProcess(t
 	if loaded.ProcessIdentity != "windows:99:created-at" {
 		t.Fatalf("ProcessIdentity after restart = %q", loaded.ProcessIdentity)
 	}
-	if _, err := restarted.SetProcess(key, 100, startedAt); err != nil {
-		t.Fatalf("legacy SetProcess() error = %v", err)
-	}
-	legacy, err := restarted.LoadJournal(key)
-	if err != nil {
-		t.Fatalf("LoadJournal() after legacy SetProcess error = %v", err)
-	}
-	if legacy.ProcessIdentity != "" {
-		t.Fatalf("legacy SetProcess() ProcessIdentity = %q, want empty", legacy.ProcessIdentity)
-	}
 }
 
 func TestSetProcessDetailsRejectsInvalidIdentityWithoutMutation(t *testing.T) {
@@ -379,7 +340,7 @@ func TestSetProcessDetailsRejectsInvalidIdentityWithoutMutation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadJournal() error = %v", err)
 	}
-	if got.PID != journal.PID || got.ProcessIdentity != "" || !got.StartedAt.Equal(journal.StartedAt) {
+	if got.PID != journal.PID || got.ProcessIdentity != journal.ProcessIdentity || !got.StartedAt.Equal(journal.StartedAt) {
 		t.Fatalf("journal mutated by invalid process details: %#v", got)
 	}
 }
@@ -460,9 +421,21 @@ func TestValidateJournalRequiresConsistentProcessTuple(t *testing.T) {
 			},
 		},
 		{
+			name: "PID without identity",
+			mutate: func(journal *RunJournal) {
+				journal.ProcessIdentity = ""
+			},
+		},
+		{
 			name: "whitespace identity",
 			mutate: func(journal *RunJournal) {
 				journal.ProcessIdentity = " "
+			},
+		},
+		{
+			name: "missing workspace binding key",
+			mutate: func(journal *RunJournal) {
+				journal.WorkspaceBindingKey = ""
 			},
 		},
 	}
@@ -476,7 +449,7 @@ func TestValidateJournalRequiresConsistentProcessTuple(t *testing.T) {
 		})
 	}
 	if err := store.SaveJournal(base); err != nil {
-		t.Fatalf("SaveJournal() rejected legacy process tuple: %v", err)
+		t.Fatalf("SaveJournal() rejected valid process tuple: %v", err)
 	}
 }
 
@@ -604,6 +577,6 @@ func testJournal(runID string, generation int64) RunJournal {
 		RunID: runID, Generation: generation, RuntimeKey: "local", RuntimeID: "runtime-1", ClaimedRuntimeEpoch: 3,
 		ClaimID: "claim-1", LeaseToken: "lease-1", LeaseExpiresAt: time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC),
 		LocalState: "running", Work: protocol.Work{Goal: "implement", AgentProfile: "codex", Workspace: "isolated", Input: json.RawMessage(`{}`)},
-		WorkspacePath: `C:\work\run-1`, PID: 42, StartedAt: time.Date(2026, 9, 3, 1, 2, 4, 0, time.UTC), LastEventSequence: 1,
+		WorkspacePath: `C:\work\run-1`, WorkspaceBindingKey: "binding-1", PID: 42, ProcessIdentity: "windows:42:created-at", StartedAt: time.Date(2026, 9, 3, 1, 2, 4, 0, time.UTC), LastEventSequence: 1,
 	}
 }

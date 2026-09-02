@@ -157,6 +157,9 @@ func parseBaseURL(value string) (*url.URL, error) {
 		return nil, errors.New("base URL must be an absolute http or https URL without credentials, query, or fragment")
 	}
 	parsed.Path = strings.TrimRight(parsed.Path, "/")
+	if parsed.Path == "" {
+		parsed.Path = "/api"
+	}
 	return parsed, nil
 }
 
@@ -367,11 +370,7 @@ func (client *transport) request(ctx context.Context, method, endpoint string, q
 	}
 
 	endpointURL := *client.baseURL
-	basePath := strings.TrimRight(endpointURL.Path, "/")
-	if basePath == "" {
-		basePath = "/api"
-	}
-	endpointURL.Path = basePath + "/" + endpoint
+	endpointURL.Path += "/" + endpoint
 	endpointURL.RawPath = ""
 	endpointURL.RawQuery = query.Encode()
 	httpRequest, err := http.NewRequestWithContext(ctx, method, endpointURL.String(), body)

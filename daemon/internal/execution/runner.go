@@ -318,6 +318,12 @@ func (process *Process) Wait() Result {
 	return process.result
 }
 
+// ProcessDetails returns the restart-safe identity recorded when this process
+// was started. Both values remain stable for the Process lifetime.
+func (process *Process) ProcessDetails() (int, string) {
+	return process.PID, process.Identity
+}
+
 // Terminate requests graceful process-tree termination, waits grace, then
 // forcefully stops the remaining tree. Multiple callers share one operation;
 // the first grace duration wins and all calls are otherwise idempotent.

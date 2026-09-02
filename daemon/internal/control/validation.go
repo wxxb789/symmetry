@@ -82,7 +82,7 @@ func validateReconcileResponse(response protocol.ReconcileResponse) error {
 		if decision.RunID == "" || decision.Generation <= 0 || !isReconcileDecision(decision.Decision) {
 			return invalidResponse("reconcile", "each decision requires run_id, generation, and a known decision")
 		}
-		if decision.Decision == "continue" && (decision.LeaseExpiresAt == nil || decision.LeaseExpiresAt.IsZero()) {
+		if decision.Decision == protocol.ReconcileContinue && (decision.LeaseExpiresAt == nil || decision.LeaseExpiresAt.IsZero()) {
 			return invalidResponse("reconcile", "continue decisions require lease_expires_at")
 		}
 	}
