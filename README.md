@@ -48,6 +48,13 @@ and replace its paths with local absolute paths. The
 `cmd/symmetry-daemon/testdata` configuration is validation test data, not a
 runnable local profile.
 
+For the agent's first stdin record, `input_mode: "goal"` sends the plain-text
+task goal followed by a newline. `input_mode: "json"` sends one JSON envelope
+containing both `goal` and structured `input`, followed by a newline. The
+protocol details, including interactive input behavior and command
+acknowledgement authentication, are in
+[`docs/protocol-v1.md`](docs/protocol-v1.md).
+
 ## Docker Compose
 
 The default Compose stack migrates PostgreSQL, starts `control`, and runs a

@@ -5,17 +5,12 @@ defmodule SymmetryControlWeb.ErrorJSON do
   See config/config.exs.
   """
 
-  # If you want to customize a particular status code,
-  # you may add your own clauses, such as:
-  #
-  # def render("500.json", _assigns) do
-  #   %{errors: %{detail: "Internal Server Error"}}
-  # end
+  def render("404.json", _assigns), do: error("not_found", "resource was not found")
 
-  # By default, Phoenix returns the status message from
-  # the template name. For example, "404.json" becomes
-  # "Not Found".
-  def render(template, _assigns) do
-    %{errors: %{detail: Phoenix.Controller.status_message_from_template(template)}}
-  end
+  def render(<<"5", _status::binary-size(2), ".json">>, _assigns),
+    do: error("internal_error", "internal server error")
+
+  def render(_template, _assigns), do: error("invalid_request", "request is invalid")
+
+  defp error(code, message), do: %{error: %{code: code, message: message}}
 end

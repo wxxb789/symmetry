@@ -168,7 +168,7 @@ func TestClaimRetryReusesPersistedClaimID(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	control := &fakeControl{claimErr: errors.New("temporary network failure")}
+	control := &fakeControl{claimErr: &control.APIError{Code: control.StateConflict}}
 	daemon := &daemon{
 		config:    testConfig(t),
 		store:     store,
@@ -622,6 +622,25 @@ func TestTerminalFlushFailurePreventsNewSessionRegistration(t *testing.T) {
 	}
 }
 
+func TestTransientTerminalFlushRetriesBeforeSessionRegistration(t *testing.T) {
+	store, key := terminalStore(t)
+	defer store.Close()
+	if err := store.SaveIdentity(state.MachineIdentity{MachineID: "machine-1", MachineToken: "machine-token"}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	control := &terminalRecoveryControl{cancel: cancel, failOnce: true}
+	if err := Run(ctx, testConfig(t), WithStore(store), WithControl(control), WithWorkspace(&fakeWorkspace{}), WithStartProcess(failStart)); err != nil {
+		t.Fatal(err)
+	}
+	if !control.registeredAfterFlush || control.transitionCalls != 2 {
+		t.Fatalf("registeredAfterFlush = %v, transition calls = %d", control.registeredAfterFlush, control.transitionCalls)
+	}
+	if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
+		t.Fatalf("terminal journal = %v, want deleted", err)
+	}
+}
+
 func TestReconcileCancelPreservesActiveExecution(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
@@ -799,6 +818,133 @@ func TestJSONLParserBoundsUnterminatedRecordsAndPreservesNormalJSONL(t *testing.
 	}
 }
 
+func TestJSONLPrimitiveAndArrayUseRawOutputAndFlushWithTerminal(t *testing.T) {
+	store, key := terminalStore(t)
+	defer store.Close()
+	daemon := &daemon{store: store, control: &orderingControl{}, workspace: &fakeWorkspace{}, log: slog.New(slog.NewJSONHandler(io.Discard, nil)), options: options{newID: ids()}}
+	parser := &jsonlParser{}
+	for _, value := range [][]byte{[]byte("42\n"), []byte("[\"progress\"]\n")} {
+		if err := daemon.queueOutput(key, config.EventFormatJSONL, parser, execution.Event{Stream: execution.Stdout, At: time.Now().UTC(), Data: value}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.PendingEvents) != 2 || journal.PendingEvents[0].Kind != "output" || journal.PendingEvents[1].Kind != "output" {
+		t.Fatalf("events = %#v", journal.PendingEvents)
+	}
+	daemon.flushRun(context.Background(), journal)
+	if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
+		t.Fatalf("terminal journal = %v, want deleted", err)
+	}
+}
+
+func TestInitialInputUsesLocalModeAndPreservesGoalAndStructuredInput(t *testing.T) {
+	jsonInput, err := initialInput(config.AgentProfile{InputMode: config.InputModeJSON}, protocol.Work{Goal: "implement feature", Input: []byte(`{"mode":"review"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Goal  string          `json:"goal"`
+		Input json.RawMessage `json:"input"`
+	}
+	if err := json.Unmarshal(jsonInput, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Goal != "implement feature" || string(payload.Input) != `{"mode":"review"}` {
+		t.Fatalf("JSON input = %s", jsonInput)
+	}
+	goalInput, err := initialInput(config.AgentProfile{InputMode: config.InputModeGoal}, protocol.Work{Goal: "implement feature", Input: []byte(`{"ignored":true}`)})
+	if err != nil || string(goalInput) != "implement feature\n" {
+		t.Fatalf("goal input = %q, %v", goalInput, err)
+	}
+}
+
+func TestCancelDuringClaimDefersUntilGrantAndNeverLaunchesAgent(t *testing.T) {
+	store, err := state.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	gate := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	control := &fakeControl{claimBlock: gate, claimEntered: entered}
+	started := make(chan struct{}, 1)
+	daemon := &daemon{config: testConfig(t), store: store, control: control, log: slog.New(slog.NewJSONHandler(io.Discard, nil)), workspace: &fakeWorkspace{}, start: func(context.Context, execution.Invocation, execution.Sink) (Process, error) {
+		started <- struct{}{}
+		return fakeProcess{}, nil
+	}, options: options{newID: ids(), clock: time.Now}, runtimeID: "runtime-1", runtimeEpoch: 1, running: make(map[state.RunKey]*runningRun), slots: make(chan struct{}, 1)}
+	key := state.RunKey{RunID: "run-1", Generation: 1}
+	daemon.startAssignment(context.Background(), protocol.Assignment{RunID: key.RunID, Generation: key.Generation, Work: protocol.Work{Goal: "g"}})
+	<-entered
+	daemon.handleCommand(context.Background(), protocol.Command{CommandID: "cancel-1", RunID: key.RunID, Generation: key.Generation, Kind: "cancel"})
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.PendingCommandAcknowledgements) != 0 {
+		t.Fatalf("pre-grant acknowledgements = %#v", journal.PendingCommandAcknowledgements)
+	}
+	close(gate)
+	daemon.workers.Wait()
+	journal, err = store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].State != "cancelled" || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].Outcome != "applied" {
+		t.Fatalf("post-grant journal = %#v", journal)
+	}
+	select {
+	case <-started:
+		t.Fatal("agent launched after pending cancel")
+	default:
+	}
+}
+
+func TestTransientClaimRetryUsesPersistedClaimID(t *testing.T) {
+	store, err := state.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	control := &fakeControl{claimErrors: []error{errors.New("network interrupted")}}
+	daemon := &daemon{config: testConfig(t), store: store, control: control, log: slog.New(slog.NewJSONHandler(io.Discard, nil)), workspace: &fakeWorkspace{}, start: func(context.Context, execution.Invocation, execution.Sink) (Process, error) {
+		return fakeProcess{}, nil
+	}, options: options{newID: ids(), clock: time.Now}, runtimeID: "runtime-1", runtimeEpoch: 1, running: make(map[state.RunKey]*runningRun), slots: make(chan struct{}, 1)}
+	daemon.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: protocol.Work{Goal: "g"}})
+	daemon.workers.Wait()
+	if len(control.claimIDs) != 2 || control.claimIDs[0] != control.claimIDs[1] {
+		t.Fatalf("claim IDs = %#v", control.claimIDs)
+	}
+}
+
+func TestShutdownDuringClaimDoesNotQueueCancelledTransitionOrEmptyAck(t *testing.T) {
+	store, err := state.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	gate := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	control := &fakeControl{claimBlock: gate, claimEntered: entered}
+	daemon := &daemon{config: testConfig(t), store: store, control: control, log: slog.New(slog.NewJSONHandler(io.Discard, nil)), workspace: &fakeWorkspace{}, start: failStart, options: options{newID: ids(), clock: time.Now}, runtimeID: "runtime-1", runtimeEpoch: 1, running: make(map[state.RunKey]*runningRun), slots: make(chan struct{}, 1)}
+	key := state.RunKey{RunID: "run-1", Generation: 1}
+	daemon.startAssignment(context.Background(), protocol.Assignment{RunID: key.RunID, Generation: key.Generation, Work: protocol.Work{Goal: "g"}})
+	<-entered
+	daemon.stopAll()
+	close(gate)
+	daemon.workers.Wait()
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.PendingTransitions) != 0 || len(journal.PendingCommandAcknowledgements) != 0 || journal.LocalState == "terminal_pending" {
+		t.Fatalf("shutdown journal = %#v", journal)
+	}
+}
+
 func TestRenewLeasesDoesNotSeriallyBlockOtherRuns(t *testing.T) {
 	store, first := claimedStore(t)
 	defer store.Close()
@@ -929,6 +1075,7 @@ type fakeControl struct {
 	beforeClaim   func()
 	cancel        context.CancelFunc
 	claimErr      error
+	claimErrors   []error
 	claimIDs      []string
 	workEnabled   <-chan struct{}
 	claimBlock    <-chan struct{}
@@ -954,13 +1101,20 @@ type terminalRecoveryControl struct {
 	fakeControl
 	cancel               context.CancelFunc
 	transitionErr        error
+	failOnce             bool
+	transitionCalls      int
 	flushed              bool
 	registeredAfterFlush bool
 }
 
 func (client *terminalRecoveryControl) Transition(_ context.Context, _ string, request protocol.StateTransitionRequest) error {
+	client.transitionCalls++
 	if request.State == "completed" {
 		client.flushed = true
+	}
+	if client.failOnce {
+		client.failOnce = false
+		return errors.New("temporary failure")
 	}
 	return client.transitionErr
 }
@@ -1079,6 +1233,11 @@ func (client *fakeControl) Claim(_ context.Context, runID string, request protoc
 	}
 	if client.claimErr != nil {
 		return protocol.ClaimResponse{}, client.claimErr
+	}
+	if len(client.claimErrors) > 0 {
+		err := client.claimErrors[0]
+		client.claimErrors = client.claimErrors[1:]
+		return protocol.ClaimResponse{}, err
 	}
 	return protocol.ClaimResponse{RunID: runID, Generation: request.Generation, ClaimID: request.ClaimID, LeaseToken: "lease", LeaseExpiresAt: time.Now().Add(time.Minute), Work: protocol.Work{Goal: "work"}}, nil
 }

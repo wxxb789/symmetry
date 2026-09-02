@@ -475,7 +475,7 @@ defmodule SymmetryControl.Orchestration do
               run.generation != request_generation ->
             rollback(:ownership_lost)
 
-          run.state == "claimed" and run.claim_id == request_claim_id and
+          run.state in ["claimed", "cancelling"] and run.claim_id == request_claim_id and
             run.claimed_runtime_epoch == request_epoch and
             not is_nil(run.lease_expires_at) and
               DateTime.compare(run.lease_expires_at, current) == :gt ->
@@ -779,42 +779,54 @@ defmodule SymmetryControl.Orchestration do
                   rollback(:state_conflict)
                 end
 
-                changeset =
-                  %Command{}
-                  |> Command.changeset(%{
-                    run_id: run.id,
-                    generation: run.generation,
-                    kind: "provide_input",
-                    payload: payload,
-                    idempotency_key: idempotency_key,
-                    request_hash: request_hash
-                  })
-                  |> stamp_insert(current)
+                case Repo.one(
+                       from command in Command,
+                         where:
+                           command.run_id == ^run.id and command.generation == ^run.generation and
+                             command.kind == "provide_input" and is_nil(command.acknowledged_at),
+                         lock: "FOR UPDATE"
+                     ) do
+                  nil ->
+                    changeset =
+                      %Command{}
+                      |> Command.changeset(%{
+                        run_id: run.id,
+                        generation: run.generation,
+                        kind: "provide_input",
+                        payload: payload,
+                        idempotency_key: idempotency_key,
+                        request_hash: request_hash
+                      })
+                      |> stamp_insert(current)
 
-                case insert_ignoring_conflict(Command, changeset, :idempotency_key) do
-                  :inserted ->
-                    command =
-                      Repo.one!(
-                        from command in Command,
-                          where: command.idempotency_key == ^idempotency_key,
-                          lock: "FOR UPDATE"
-                      )
+                    case insert_ignoring_conflict(Command, changeset, :idempotency_key) do
+                      :inserted ->
+                        command =
+                          Repo.one!(
+                            from command in Command,
+                              where: command.idempotency_key == ^idempotency_key,
+                              lock: "FOR UPDATE"
+                          )
 
-                    {command, :created}
+                        {command, :created}
 
-                  :conflict ->
-                    case Repo.one(
-                           from command in Command,
-                             where: command.idempotency_key == ^idempotency_key,
-                             lock: "FOR UPDATE"
-                         ) do
-                      %Command{request_hash: ^request_hash} = command -> {command, :replayed}
-                      %Command{} -> rollback(:idempotency_conflict)
-                      nil -> rollback(:invalid_request)
+                      :conflict ->
+                        case Repo.one(
+                               from command in Command,
+                                 where: command.idempotency_key == ^idempotency_key,
+                                 lock: "FOR UPDATE"
+                             ) do
+                          %Command{request_hash: ^request_hash} = command -> {command, :replayed}
+                          %Command{} -> rollback(:idempotency_conflict)
+                          nil -> rollback(:invalid_request)
+                        end
+
+                      :invalid ->
+                        rollback(:invalid_request)
                     end
 
-                  :invalid ->
-                    rollback(:invalid_request)
+                  _command ->
+                    rollback(:state_conflict)
                 end
             end
         end
@@ -878,6 +890,10 @@ defmodule SymmetryControl.Orchestration do
 
           outcome not in ["applied", "rejected", "failed"] ->
             rollback(:invalid_request)
+
+          outcome == "applied" and command.kind == "provide_input" and
+              run.state == "waiting_for_input" ->
+            rollback(:state_conflict)
 
           true ->
             command

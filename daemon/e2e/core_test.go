@@ -217,6 +217,88 @@ func TestDaemonReregistersAfterRestart(t *testing.T) {
 	}
 }
 
+func TestDaemonReconnectReclaimsExpiredRunWithNewGeneration(t *testing.T) {
+	environment := loadEnvironment(t)
+	t.Setenv("SYMMETRY_ENROLLMENT_TOKEN", environment.enrollmentToken)
+	operator := newOperator(t, environment)
+	stateDir := t.TempDir()
+	workspacePath := t.TempDir()
+	profile := unique("reconnect-profile")
+	workspace := unique("reconnect-workspace")
+	value := daemonConfig(environment, "reconnect", stateDir, workspacePath, profile, workspace)
+
+	start := func(ctx context.Context) chan error {
+		done := make(chan error, 1)
+		go func() {
+			done <- app.Run(ctx, value, app.WithHTTPClient(localHTTPClient(30*time.Second)), app.WithLogWriter(io.Discard))
+		}()
+		return done
+	}
+
+	firstContext, stopFirst := context.WithCancel(context.Background())
+	firstDone := start(firstContext)
+	firstStopped := false
+	t.Cleanup(func() {
+		if !firstStopped {
+			stopFirst()
+			waitForDaemon(t, firstDone)
+		}
+	})
+
+	firstDaemon := daemonRun{done: firstDone, profile: profile, workspace: workspace}
+	task := submit(t, operator, firstDaemon, "reconnect-slow", "slow")
+	firstRun := waitForTask(t, operator, task.TaskID, 20*time.Second, func(task protocol.Task) bool {
+		return task.State == "running"
+	})
+
+	stopFirst()
+	waitForDaemon(t, firstDone)
+	firstStopped = true
+	identityBefore := loadIdentity(t, stateDir)
+	journalBefore := loadJournal(t, stateDir, state.RunKey{RunID: firstRun.RunID, Generation: firstRun.Generation})
+	if journalBefore.LocalState != "running" {
+		t.Fatalf("recovered journal state = %q, want running", journalBefore.LocalState)
+	}
+	if journalBefore.PID <= 0 {
+		t.Fatalf("recovered journal PID = %d, want active process identity", journalBefore.PID)
+	}
+
+	// A persisted identity must let B start without an enrollment credential.
+	t.Setenv("SYMMETRY_ENROLLMENT_TOKEN", "")
+	secondContext, stopSecond := context.WithCancel(context.Background())
+	secondDone := start(secondContext)
+	secondStopped := false
+	t.Cleanup(func() {
+		if !secondStopped {
+			stopSecond()
+			waitForDaemon(t, secondDone)
+		}
+	})
+
+	secondRun := waitForTask(t, operator, task.TaskID, 60*time.Second, func(task protocol.Task) bool {
+		return task.State == "running" && task.Generation > firstRun.Generation
+	})
+	if secondRun.Generation <= firstRun.Generation {
+		t.Fatalf("reclaimed generation = %d, want greater than %d", secondRun.Generation, firstRun.Generation)
+	}
+
+	if _, err := operator.CancelTask(context.Background(), task.TaskID); err != nil {
+		t.Fatalf("cancel reclaimed task: %v", err)
+	}
+	waitForTask(t, operator, task.TaskID, 20*time.Second, func(task protocol.Task) bool {
+		return task.State == "cancelled" && task.Generation == secondRun.Generation
+	})
+
+	stopSecond()
+	waitForDaemon(t, secondDone)
+	secondStopped = true
+	assertJournalMissing(t, stateDir, state.RunKey{RunID: firstRun.RunID, Generation: firstRun.Generation})
+	identityAfter := loadIdentity(t, stateDir)
+	if identityAfter != identityBefore {
+		t.Fatalf("machine identity changed across reconnect")
+	}
+}
+
 func TestDaemonSurvivesControlRestart(t *testing.T) {
 	marker := os.Getenv("SYMMETRY_E2E_RESTART_MARKER")
 	if marker == "" {
@@ -587,6 +669,32 @@ func loadIdentity(t *testing.T, stateDir string) state.MachineIdentity {
 		t.Fatalf("load machine identity: %v", err)
 	}
 	return identity
+}
+
+func loadJournal(t *testing.T, stateDir string, key state.RunKey) state.RunJournal {
+	t.Helper()
+	store, err := state.New(stateDir)
+	if err != nil {
+		t.Fatalf("open state store: %v", err)
+	}
+	defer store.Close()
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatalf("load journal %s/%d: %v", key.RunID, key.Generation, err)
+	}
+	return journal
+}
+
+func assertJournalMissing(t *testing.T, stateDir string, key state.RunKey) {
+	t.Helper()
+	store, err := state.New(stateDir)
+	if err != nil {
+		t.Fatalf("open state store: %v", err)
+	}
+	defer store.Close()
+	if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
+		t.Fatalf("old journal %s/%d still exists or could not be read: %v", key.RunID, key.Generation, err)
+	}
 }
 
 func waitForDaemon(t *testing.T, done <-chan error) {

@@ -32,6 +32,12 @@ defmodule SymmetryControl.Repo.Migrations.CreateOrchestrationTables do
     end
 
     create unique_index(:runtimes, [:machine_id, :runtime_key])
+
+    create index(:runtimes, [:agent_profile, :workspace, :inserted_at],
+             where: "status = 'online'",
+             name: :runtimes_online_profile_workspace_inserted_at
+           )
+
     create constraint(:runtimes, :runtimes_capacity_positive, check: "capacity > 0")
     create constraint(:runtimes, :runtimes_epoch_positive, check: "connection_epoch > 0")
 
@@ -57,6 +63,11 @@ defmodule SymmetryControl.Repo.Migrations.CreateOrchestrationTables do
     end
 
     create unique_index(:tasks, [:idempotency_key])
+
+    create index(:tasks, [:agent_profile, :workspace, :inserted_at],
+             where: "state = 'queued'",
+             name: :tasks_queued_profile_workspace_inserted_at
+           )
 
     create constraint(:tasks, :tasks_state_check,
              check:

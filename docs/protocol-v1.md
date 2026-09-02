@@ -83,9 +83,10 @@ upgrade sends the same token in `X-Symmetry-Token`, because Phoenix exposes
 `x-` request headers to socket connect callbacks without putting credentials in
 the URL. A runtime must belong to the authenticated machine. The Task Control
 API uses a separate operator bearer token; an execution machine credential
-cannot submit, cancel, or provide input to tasks. Coding-agent, Git, SSH, and
-repository-provider credentials remain on the execution machine and must not
-appear in protocol payloads.
+cannot submit, cancel, or provide input to tasks. Command acknowledgement is
+not a Task Control API operation: it is a machine-authenticated, fenced daemon
+mutation. Coding-agent, Git, SSH, and repository-provider credentials remain
+on the execution machine and must not appear in protocol payloads.
 
 Production traffic must use TLS. Plain HTTP is permitted only on an explicitly
 trusted local or container network.
@@ -413,7 +414,6 @@ POST /api/v1/tasks
 GET  /api/v1/tasks/{task_id}
 POST /api/v1/tasks/{task_id}/cancel
 POST /api/v1/tasks/{task_id}/input
-POST /api/v1/commands/{command_id}/ack
 ```
 
 Task submission accepts an `Idempotency-Key` header and a work object containing
@@ -464,13 +464,41 @@ command, and makes a fenced transition back to `running`. The command remains
 visible until both acknowledgement and the target lifecycle transition exist,
 so either request may be retried after an unknown outcome.
 
-Command acknowledgement carries the complete execution fence, `run_id`,
-`command_id`, outcome (`applied`, `rejected`, or `failed`), and an `ack_id`
-UUID.
+### Acknowledge A Command
+
+```http
+POST /api/v1/commands/{command_id}/ack
+Authorization: Bearer <machine-token>
+Content-Type: application/json
+```
+
+This is a machine-authenticated, fenced daemon mutation, not an operator Task
+Control endpoint. The acknowledgement body carries the complete execution fence
+(`runtime_id`, `runtime_epoch`, `run_id`, `generation`, `claim_id`, and
+`lease_token`), plus `command_id`, outcome (`applied`, `rejected`, or
+`failed`), and an `ack_id` UUID. The authenticated machine must own the
+runtime named by the fence.
 Repeating the same acknowledgement UUID and body is idempotent; reusing it with
 a different body returns `409 idempotency_conflict`. Acknowledgement records
 delivery outcome but never changes run state or removes a lifecycle command by
 itself.
+
+## Agent Standard Input
+
+The daemon writes exactly one initial stdin record when it launches an agent.
+With `input_mode: "goal"`, the record is the plain-text task goal followed by a
+newline; structured task input is not written. With `input_mode: "json"`, the
+record is one JSON object followed by a newline and always includes both task
+fields:
+
+```json
+{"goal":"Run the configured agent","input":{"branch":"main"}}
+```
+
+The `input` member preserves the task's structured input, using `null` when no
+input was supplied. Interactive profiles keep stdin open for later
+`provide_input` commands; non-interactive profiles receive EOF after the first
+record.
 
 ## Phoenix Channel Notifications
 
@@ -496,6 +524,15 @@ Errors use one JSON envelope:
 {"error":{"code":"ownership_lost","message":"execution lease is no longer authoritative"}}
 ```
 
+Phoenix-generated fallback errors use this same envelope and do not expose
+exception details:
+
+- `404 not_found`: `resource was not found`.
+- Fallback `4xx` errors, including `400` and `405`, use `invalid_request` with
+  `request is invalid`.
+- Phoenix fallback `5xx` errors use `internal_error` with `internal server error`.
+  They follow the idempotent and unknown-outcome retry rules below.
+
 - `400 invalid_request`: malformed or unsupported input; do not retry unchanged.
 - `401 unauthenticated`: missing or invalid credential.
 - `403 forbidden`: authenticated machine does not own the resource.
@@ -506,7 +543,8 @@ Errors use one JSON envelope:
 - `409 state_conflict`: state already advanced or a terminal payload conflicts.
 - `410 assignment_expired`: discard the assignment and fetch a new snapshot.
 - `422 invalid_transition`: daemon or client state-machine error.
-- `429` or `503`: retry with backoff and `Retry-After` when present.
+- `429 rate_limited`: retry with backoff and `Retry-After` when present.
+- `503 service_unavailable`: retry with backoff and `Retry-After` when present.
 
 An HTTP timeout has an unknown outcome. The daemon retries only idempotent reads
 or a write carrying the same claim, transition, command acknowledgement,

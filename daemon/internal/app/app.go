@@ -178,14 +178,16 @@ type daemon struct {
 }
 
 type runningRun struct {
-	process   Process
-	prepared  workspace.Prepared
-	parser    *jsonlParser
-	starting  bool
-	cancel    context.CancelFunc
-	cancelled bool
-	stale     bool
-	succeeded bool
+	process         Process
+	prepared        workspace.Prepared
+	parser          *jsonlParser
+	starting        bool
+	claimed         bool
+	cancel          context.CancelFunc
+	cancelled       bool
+	cancelCommandID string
+	stale           bool
+	succeeded       bool
 }
 
 func (daemon *daemon) run(ctx context.Context) error {
@@ -310,7 +312,7 @@ func (daemon *daemon) initialize(ctx context.Context) error {
 		}
 	}
 	daemon.slots = make(chan struct{}, daemon.config.Runtime.Capacity)
-	if err := daemon.flushTerminalJournals(ctx); err != nil {
+	if err := retry(ctx, func() error { return daemon.flushTerminalJournals(ctx) }); err != nil {
 		return fmt.Errorf("flush terminal journals before registration: %w", err)
 	}
 	instanceID, idErr := daemon.options.newID()
@@ -575,8 +577,11 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		daemon.log.Warn("load_claim_intent_failed", "run_id", assignment.RunID, "error", err)
 		return
 	}
-	claim, err := daemon.control.Claim(ctx, assignment.RunID, protocol.ClaimRequest{RuntimeID: daemon.runtimeID, RuntimeEpoch: daemon.runtimeEpoch, Generation: assignment.Generation, ClaimID: journal.ClaimID})
+	claim, err := daemon.claimWithRetry(ctx, assignment.RunID, protocol.ClaimRequest{RuntimeID: daemon.runtimeID, RuntimeEpoch: daemon.runtimeEpoch, Generation: assignment.Generation, ClaimID: journal.ClaimID})
 	if err != nil {
+		if control.IsOwnershipLost(err) {
+			daemon.stopRecoveredJournal(journal, "claim ownership lost")
+		}
 		daemon.log.Warn("claim_failed", "run_id", assignment.RunID, "error", err)
 		return
 	}
@@ -585,7 +590,36 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		daemon.log.Error("save_claim_grant_failed", "run_id", assignment.RunID, "error", err)
 		return
 	}
-	if err := daemon.markRunning(key); err != nil {
+	daemon.mu.Lock()
+	active := daemon.running[key]
+	cancelCommandID := ""
+	operatorCancelled := active != nil && active.cancelCommandID != ""
+	stale := active == nil
+	contextCancelled := ctx.Err() != nil
+	if active != nil {
+		active.claimed = true
+		cancelCommandID = active.cancelCommandID
+		stale = active.stale
+	}
+	if operatorCancelled {
+		err = daemon.queueTerminalTransition(key, "cancelled", map[string]any{})
+	} else if !stale && !contextCancelled {
+		err = daemon.markRunning(key)
+	}
+	daemon.mu.Unlock()
+	if operatorCancelled {
+		if err != nil {
+			daemon.log.Error("queue_cancelled_transition_failed", "run_id", key.RunID, "generation", key.Generation, "error", err)
+			daemon.queueCommandAcknowledgement(key, cancelCommandID, "failed")
+		} else {
+			daemon.queueCommandAcknowledgement(key, cancelCommandID, "applied")
+		}
+		return
+	}
+	if stale || contextCancelled {
+		return
+	}
+	if err != nil {
 		daemon.log.Error("queue_running_failed", "run_id", assignment.RunID, "error", err)
 		daemon.queueFailure(key, "queue_running", err)
 		return
@@ -657,7 +691,7 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		return
 	}
 	daemon.mu.Lock()
-	active := daemon.running[key]
+	active = daemon.running[key]
 	if active == nil {
 		daemon.mu.Unlock()
 		_ = process.Terminate(context.Background(), 0)
@@ -725,12 +759,10 @@ func initialInput(profile config.AgentProfile, work protocol.Work) ([]byte, erro
 	if profile.InputMode == config.InputModeGoal {
 		return append([]byte(work.Goal), '\n'), nil
 	}
-	if len(work.Input) > 0 && json.Valid(work.Input) {
-		return append(append([]byte(nil), work.Input...), '\n'), nil
-	}
 	encoded, err := json.Marshal(struct {
-		Goal string `json:"goal"`
-	}{Goal: work.Goal})
+		Goal  string          `json:"goal"`
+		Input json.RawMessage `json:"input"`
+	}{Goal: work.Goal, Input: work.Input})
 	if err != nil {
 		return nil, err
 	}
@@ -754,7 +786,7 @@ func (daemon *daemon) queueOutput(key state.RunKey, format config.EventFormat, p
 		}
 		payload, ok := decoded.(map[string]any)
 		if !ok {
-			return daemon.queueEvent(key, "agent_event", json.RawMessage(record.data), event.At)
+			return daemon.queueRawEvent(key, execution.Event{Stream: event.Stream, At: event.At, Data: record.data})
 		}
 		kind := "agent_event"
 		var declaredType string
@@ -852,11 +884,15 @@ func (daemon *daemon) queueTerminalTransition(key state.RunKey, stateName string
 func (daemon *daemon) waitForRun(key state.RunKey) {
 	daemon.mu.Lock()
 	active := daemon.running[key]
+	process := Process(nil)
+	if active != nil {
+		process = active.process
+	}
 	daemon.mu.Unlock()
-	if active == nil {
+	if active == nil || process == nil {
 		return
 	}
-	result := active.process.Wait()
+	result := process.Wait()
 	daemon.mu.Lock()
 	active.succeeded = result.Success()
 	cancelled := active.cancelled
@@ -901,54 +937,61 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 			return
 		}
 	}
-	daemon.mu.Lock()
-	active := daemon.running[key]
-	daemon.mu.Unlock()
-	outcome := "rejected"
-	if active == nil {
-		daemon.queueCommandAcknowledgement(key, command.CommandID, outcome)
-		return
-	}
-	if active.starting || active.process == nil {
-		if command.Kind == "cancel" {
-			daemon.mu.Lock()
-			active.cancelled = true
-			if active.cancel != nil {
-				active.cancel()
-			}
+	if command.Kind == "cancel" {
+		daemon.mu.Lock()
+		active := daemon.running[key]
+		if active == nil {
 			daemon.mu.Unlock()
-			outcome := "applied"
-			if err := daemon.queueTerminalTransition(key, "cancelled", map[string]any{}); err != nil {
-				daemon.log.Error("queue_cancelled_transition_failed", "run_id", key.RunID, "generation", key.Generation, "error", err)
-				outcome = "failed"
-			}
-			daemon.queueCommandAcknowledgement(key, command.CommandID, outcome)
+			daemon.queueCommandAcknowledgement(key, command.CommandID, "rejected")
 			return
 		}
+		if !active.claimed {
+			active.cancelled = true
+			active.cancelCommandID = command.CommandID
+			daemon.mu.Unlock()
+			return
+		}
+		active.cancelled = true
+		process := active.process
+		cancel := active.cancel
+		daemon.mu.Unlock()
+		var terminateErr error
+		if process != nil {
+			terminateErr = process.Terminate(ctx, 2*time.Second)
+		} else if cancel != nil {
+			cancel()
+		}
+		outcome := "applied"
+		if terminateErr != nil {
+			outcome = "failed"
+		} else if err := daemon.queueTerminalTransition(key, "cancelled", map[string]any{}); err != nil {
+			daemon.log.Error("queue_cancelled_transition_failed", "run_id", key.RunID, "generation", key.Generation, "error", err)
+			outcome = "failed"
+		}
 		daemon.queueCommandAcknowledgement(key, command.CommandID, outcome)
 		return
 	}
+
+	daemon.mu.Lock()
+	active := daemon.running[key]
+	starting := active != nil && active.starting
+	process := Process(nil)
+	if active != nil {
+		process = active.process
+	}
+	daemon.mu.Unlock()
+	if active == nil || starting || process == nil {
+		daemon.queueCommandAcknowledgement(key, command.CommandID, "rejected")
+		return
+	}
+	outcome := "rejected"
 	switch command.Kind {
-	case "cancel":
-		daemon.mu.Lock()
-		active.cancelled = true
-		daemon.mu.Unlock()
-		if err := active.process.Terminate(ctx, 2*time.Second); err != nil {
-			outcome = "failed"
-		} else {
-			if err := daemon.queueTerminalTransition(key, "cancelled", map[string]any{}); err != nil {
-				daemon.log.Error("queue_cancelled_transition_failed", "run_id", key.RunID, "generation", key.Generation, "error", err)
-				outcome = "failed"
-			} else {
-				outcome = "applied"
-			}
-		}
 	case "provide_input":
 		if !json.Valid(command.Payload) {
 			break
 		}
 		input := append(append([]byte(nil), command.Payload...), '\n')
-		if err := active.process.WriteInput(input); err != nil {
+		if err := process.WriteInput(input); err != nil {
 			outcome = "failed"
 		} else {
 			_ = daemon.queueTransition(key, "running", map[string]any{})
@@ -1051,16 +1094,18 @@ func (daemon *daemon) renewLeases(ctx context.Context) {
 func (daemon *daemon) terminateForLease(journal state.RunJournal, reason string) {
 	daemon.mu.Lock()
 	active := daemon.running[journal.Key()]
+	process := Process(nil)
 	if active != nil {
 		active.cancelled = true
 		active.stale = true
+		process = active.process
 		if active.cancel != nil {
 			active.cancel()
 		}
 	}
 	daemon.mu.Unlock()
-	if active != nil && active.process != nil {
-		_ = active.process.Terminate(context.Background(), 0)
+	if process != nil {
+		_ = process.Terminate(context.Background(), 0)
 	} else {
 		if active == nil {
 			daemon.stopRecoveredJournal(journal, reason)
@@ -1139,9 +1184,15 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) {
 	if journal.LocalState == "terminal_pending" && len(journal.PendingTransitions) == 0 {
 		daemon.mu.Lock()
 		active := daemon.running[key]
+		prepared := workspace.Prepared{}
+		succeeded := false
+		if active != nil {
+			prepared = active.prepared
+			succeeded = active.succeeded
+		}
 		daemon.mu.Unlock()
 		if active != nil {
-			if err := daemon.workspace.Cleanup(context.Background(), active.prepared, active.succeeded); err != nil {
+			if err := daemon.workspace.Cleanup(context.Background(), prepared, succeeded); err != nil {
 				daemon.log.Warn("cleanup_terminal_workspace_failed", "run_id", journal.RunID, "error", err)
 				return
 			}
@@ -1208,19 +1259,19 @@ func (daemon *daemon) hasRun(key state.RunKey) bool {
 }
 func (daemon *daemon) stopAll() {
 	daemon.mu.Lock()
-	active := make([]*runningRun, 0, len(daemon.running))
+	processes := make([]Process, 0, len(daemon.running))
 	for _, run := range daemon.running {
 		run.cancelled = true
 		if run.cancel != nil {
 			run.cancel()
 		}
-		active = append(active, run)
+		if run.process != nil {
+			processes = append(processes, run.process)
+		}
 	}
 	daemon.mu.Unlock()
-	for _, run := range active {
-		if run.process != nil {
-			_ = run.process.Terminate(context.Background(), 0)
-		}
+	for _, process := range processes {
+		_ = process.Terminate(context.Background(), 0)
 	}
 }
 
@@ -1273,6 +1324,41 @@ func appendRawRecords(records []jsonlRecord, value []byte) []jsonlRecord {
 		value = value[length:]
 	}
 	return records
+}
+
+func (daemon *daemon) claimWithRetry(ctx context.Context, runID string, request protocol.ClaimRequest) (protocol.ClaimResponse, error) {
+	delay := minimumInterval
+	for {
+		response, err := daemon.control.Claim(ctx, runID, request)
+		if err == nil || control.IsOwnershipLost(err) || !retryableClaim(err) {
+			return response, err
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return protocol.ClaimResponse{}, ctx.Err()
+		case <-timer.C:
+		}
+		if delay < retryMaximum/2 {
+			delay *= 2
+		} else {
+			delay = retryMaximum
+		}
+	}
+}
+
+func retryableClaim(err error) bool {
+	var apiError *control.APIError
+	if !errors.As(err, &apiError) {
+		return true
+	}
+	switch apiError.Code {
+	case control.RateLimited, control.ServiceUnavailable, control.UnexpectedHTTPStatus:
+		return true
+	default:
+		return false
+	}
 }
 
 func retry(ctx context.Context, operation func() error) error {

@@ -168,8 +168,12 @@ func (value Config) Validate() error {
 	if _, ok := value.AgentProfiles[value.Runtime.AgentProfile]; !ok {
 		return fmt.Errorf("runtime.agent_profile %q is not configured", value.Runtime.AgentProfile)
 	}
-	if _, ok := value.Workspaces[value.Runtime.Workspace]; !ok {
+	workspace, ok := value.Workspaces[value.Runtime.Workspace]
+	if !ok {
 		return fmt.Errorf("runtime.workspace %q is not configured", value.Runtime.Workspace)
+	}
+	if workspace.Policy == WorkspacePolicyExistingCheckout && value.Runtime.Capacity > 1 {
+		return fmt.Errorf("runtime.capacity must be 1 when runtime.workspace uses existing_checkout")
 	}
 	return nil
 }

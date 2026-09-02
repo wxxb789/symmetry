@@ -12,9 +12,11 @@
   },
   "workspaces": {
     "primary": {
-      "policy": "existing_checkout",
-      "path": "Q:/workspaces",
-      "cleanup": "never"
+      "policy": "git_worktree",
+      "repository": "Q:/workspaces",
+      "root": "Q:/workspaces/.symmetry/worktrees",
+      "ref": "HEAD",
+      "cleanup": "always"
     }
   },
   "runtime": {

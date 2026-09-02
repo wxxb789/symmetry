@@ -20,7 +20,7 @@ func TestLoadAcceptsValidConfiguration(t *testing.T) {
 	if actual.ControlPlaneURL != "https://control.example.test/api" {
 		t.Errorf("ControlPlaneURL = %q", actual.ControlPlaneURL)
 	}
-	if actual.Runtime.Capacity != 4 {
+	if actual.Runtime.Capacity != 1 {
 		t.Errorf("Runtime.Capacity = %d", actual.Runtime.Capacity)
 	}
 	if actual.AgentProfiles["default"].InputMode != InputModeGoal {
@@ -178,6 +178,32 @@ func TestLoadRejectsZeroRuntimeCapacity(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsConcurrentExistingCheckout(t *testing.T) {
+	_, err := Load(writeConfig(t, validConfigWithCapacity(t, 2)))
+	if err == nil || !strings.Contains(err.Error(), "runtime.capacity") {
+		t.Fatalf("Load() error = %v, want existing_checkout capacity validation error", err)
+	}
+}
+
+func TestLoadAllowsConcurrentGitWorktree(t *testing.T) {
+	value := validConfigObject(t)
+	value["runtime"].(map[string]any)["capacity"] = 4
+	value["workspaces"].(map[string]any)["primary"] = map[string]any{
+		"policy":     "git_worktree",
+		"repository": t.TempDir(),
+		"root":       t.TempDir(),
+		"ref":        "HEAD",
+		"cleanup":    "always",
+	}
+	contents, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(writeConfig(t, string(contents))); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+}
+
 func TestLoadRejectsEmptyRequiredValues(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -280,7 +306,7 @@ func validConfig(t *testing.T, controlPlaneURL string) string {
   "runtime": {
     "runtime_key": "default",
     "name": "docker",
-    "capacity": 4,
+    "capacity": 1,
     "agent_profile": "default",
     "workspace": "primary"
   }
@@ -288,7 +314,7 @@ func validConfig(t *testing.T, controlPlaneURL string) string {
 }
 
 func validConfigWithCapacity(t *testing.T, capacity int) string {
-	return strings.Replace(validConfig(t, `"https://control.example.test"`), `"capacity": 4`, `"capacity": `+strconv.Itoa(capacity), 1)
+	return strings.Replace(validConfig(t, `"https://control.example.test"`), `"capacity": 1`, `"capacity": `+strconv.Itoa(capacity), 1)
 }
 
 func validConfigObject(t *testing.T) map[string]any {

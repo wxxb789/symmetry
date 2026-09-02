@@ -98,6 +98,13 @@ Use HTTPS outside a trusted local or container network and omit
 its protected state directory. Do not share one state directory between daemon
 processes.
 
+The daemon writes one initial stdin record for every launch. `input_mode: "goal"`
+writes the task goal as plain text followed by a newline. `input_mode: "json"`
+writes one newline-terminated JSON envelope containing both task fields, for
+example `{"goal":"Update the project","input":{"branch":"main"}}`.
+Interactive profiles keep stdin open for later `provide_input` commands;
+non-interactive profiles receive EOF after that first record.
+
 For Codex non-interactive execution, a profile can use:
 
 ```json

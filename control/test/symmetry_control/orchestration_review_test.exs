@@ -314,6 +314,93 @@ defmodule SymmetryControl.OrchestrationReviewTest do
              )
   end
 
+  test "a cancelling run replays its original unexpired claim without reopening lifecycle" do
+    %{machine: machine} = enroll_machine()
+    runtime = register_runtime(machine)
+
+    {:ok, task, :created} =
+      Orchestration.submit_task(task_attrs(), "cancelling-claim-replay", now: @now)
+
+    {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+
+    assert {:ok, cancelling, _command} = Orchestration.request_cancel(task.id, now: @now)
+    assert cancelling.state == "cancelling"
+
+    assert {:ok, replayed} =
+             Orchestration.claim(
+               run.id,
+               %{
+                 runtime_id: fence.runtime_id,
+                 runtime_epoch: fence.runtime_epoch,
+                 generation: fence.generation,
+                 claim_id: fence.claim_id
+               },
+               now: @now
+             )
+
+    assert replayed.lease_token == fence.lease_token
+    assert replayed.state == "cancelling"
+
+    assert {:error, :ownership_lost} =
+             Orchestration.claim(
+               run.id,
+               %{
+                 runtime_id: fence.runtime_id,
+                 runtime_epoch: fence.runtime_epoch,
+                 generation: fence.generation,
+                 claim_id: uuid(131)
+               },
+               now: @now
+             )
+  end
+
+  test "a waiting episode permits one unacknowledged input command" do
+    %{machine: machine} = enroll_machine()
+    runtime = register_runtime(machine)
+
+    {:ok, task, :created} =
+      Orchestration.submit_task(task_attrs(), "single-input-episode", now: @now)
+
+    {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+    transition(run.id, fence, "running", 141)
+    transition(run.id, fence, "waiting_for_input", 142)
+
+    assert {:ok, first, :created} =
+             Orchestration.provide_input(task.id, %{"choice" => "main"}, "input-first", now: @now)
+
+    assert {:ok, replayed, :replayed} =
+             Orchestration.provide_input(task.id, %{"choice" => "main"}, "input-first", now: @now)
+
+    assert replayed.id == first.id
+
+    assert {:error, :state_conflict} =
+             Orchestration.provide_input(task.id, %{"choice" => "release"}, "input-second",
+               now: @now
+             )
+
+    assert {:error, :state_conflict} =
+             Orchestration.acknowledge_command(first.id, fence, "applied", uuid(143), now: @now)
+
+    assert {:error, :state_conflict} =
+             Orchestration.provide_input(task.id, %{"choice" => "release"}, "input-second",
+               now: @now
+             )
+
+    transition(run.id, fence, "running", 144)
+
+    assert {:ok, _} =
+             Orchestration.acknowledge_command(first.id, fence, "applied", uuid(143), now: @now)
+
+    transition(run.id, fence, "waiting_for_input", 145)
+
+    assert {:ok, _second, :created} =
+             Orchestration.provide_input(task.id, %{"choice" => "release"}, "input-second",
+               now: @now
+             )
+  end
+
   test "concurrent first task submission and runtime registration are idempotent" do
     Sandbox.unboxed_run(Repo, fn ->
       %{machine: machine} = enroll_machine()
