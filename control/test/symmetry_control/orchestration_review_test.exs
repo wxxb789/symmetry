@@ -222,6 +222,98 @@ defmodule SymmetryControl.OrchestrationReviewTest do
              )
   end
 
+  test "completed run accepts a late fenced input acknowledgement without changing lifecycle" do
+    %{machine: machine} = enroll_machine()
+    runtime = register_runtime(machine)
+    {:ok, task, :created} = Orchestration.submit_task(task_attrs(), "late-input-ack", now: @now)
+    {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+    transition(run.id, fence, "running", 101)
+    transition(run.id, fence, "waiting_for_input", 102)
+
+    {:ok, command, :created} =
+      Orchestration.provide_input(task.id, %{"answer" => "yes"}, "late-input-command", now: @now)
+
+    transition(run.id, fence, "running", 103)
+
+    assert {:ok, _} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "completed",
+               %{"summary" => "done"},
+               uuid(104),
+               now: @now
+             )
+
+    assert {:ok, acknowledged} =
+             Orchestration.acknowledge_command(command.id, fence, "applied", uuid(105), now: @now)
+
+    assert acknowledged.acknowledgement_outcome == "applied"
+    assert {:ok, completed} = Orchestration.fetch_run(run.id)
+    assert completed.state == "completed"
+    assert {:ok, completed_task} = Orchestration.fetch_task(task.id)
+    assert completed_task.state == "completed"
+  end
+
+  test "cancelled run accepts a late fenced cancel acknowledgement without changing lifecycle" do
+    %{machine: machine} = enroll_machine()
+    runtime = register_runtime(machine)
+    {:ok, task, :created} = Orchestration.submit_task(task_attrs(), "late-cancel-ack", now: @now)
+    {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+    {:ok, _cancelling, command} = Orchestration.request_cancel(task.id, now: @now)
+    transition(run.id, fence, "cancelled", 111)
+
+    assert {:ok, acknowledged} =
+             Orchestration.acknowledge_command(command.id, fence, "applied", uuid(112), now: @now)
+
+    assert acknowledged.acknowledgement_outcome == "applied"
+    assert {:ok, cancelled} = Orchestration.fetch_run(run.id)
+    assert cancelled.state == "cancelled"
+    assert {:ok, cancelled_task} = Orchestration.fetch_task(task.id)
+    assert cancelled_task.state == "cancelled"
+  end
+
+  test "terminal acknowledgement rejects stale epoch and generation" do
+    %{machine: machine} = enroll_machine()
+    runtime = register_runtime(machine)
+
+    {:ok, task, :created} =
+      Orchestration.submit_task(task_attrs(), "terminal-stale-ack", now: @now)
+
+    {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+    transition(run.id, fence, "running", 121)
+    transition(run.id, fence, "waiting_for_input", 122)
+
+    {:ok, command, :created} =
+      Orchestration.provide_input(task.id, %{"answer" => "yes"}, "terminal-stale-command",
+        now: @now
+      )
+
+    transition(run.id, fence, "running", 123)
+    transition(run.id, fence, "completed", 124)
+
+    assert {:error, :ownership_lost} =
+             Orchestration.acknowledge_command(
+               command.id,
+               %{fence | runtime_epoch: fence.runtime_epoch + 1},
+               "applied",
+               uuid(125),
+               now: @now
+             )
+
+    assert {:error, :ownership_lost} =
+             Orchestration.acknowledge_command(
+               command.id,
+               %{fence | generation: fence.generation + 1},
+               "applied",
+               uuid(126),
+               now: @now
+             )
+  end
+
   test "concurrent first task submission and runtime registration are idempotent" do
     Sandbox.unboxed_run(Repo, fn ->
       %{machine: machine} = enroll_machine()

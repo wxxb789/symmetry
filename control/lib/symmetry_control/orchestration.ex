@@ -850,7 +850,16 @@ defmodule SymmetryControl.Orchestration do
         command =
           Repo.one!(from command in Command, where: command.id == ^command_id, lock: "FOR UPDATE")
 
-        ensure_fence!(task, run, runtime, fence, current)
+        case run.state do
+          state when state in ["completed", "failed", "cancelled"] ->
+            ensure_static_fence!(task, run, runtime, fence)
+
+          "expired" ->
+            rollback(:ownership_lost)
+
+          _ ->
+            ensure_fence!(task, run, runtime, fence, current)
+        end
 
         cond do
           command.generation != run.generation ->
