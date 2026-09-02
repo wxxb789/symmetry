@@ -33,7 +33,7 @@ defmodule SymmetryControl.Orchestration do
     if is_binary(submitted) and is_binary(expected) and secure_compare(submitted, expected) do
       token = random_token()
 
-      transaction(fn ->
+      Repo.transaction(fn ->
         %Machine{}
         |> Machine.changeset(%{name: value(attrs, :name), token_digest: digest(token)})
         |> stamp_insert(current)
@@ -72,7 +72,7 @@ defmodule SymmetryControl.Orchestration do
     else
       now = now(opts)
 
-      transaction(fn ->
+      Repo.transaction(fn ->
         _machine = lock_machine(machine_id)
 
         Enum.map(specifications, fn specification ->
@@ -146,7 +146,7 @@ defmodule SymmetryControl.Orchestration do
   defp heartbeat_runtime(runtime_id, runtime_epoch, opts) do
     current = now(opts)
 
-    transaction(fn ->
+    Repo.transaction(fn ->
       runtime = lock_runtime(runtime_id)
 
       if runtime.connection_epoch != runtime_epoch do
@@ -179,7 +179,7 @@ defmodule SymmetryControl.Orchestration do
     request_hash = request_hash(task_attrs)
     current = now(opts)
 
-    transaction(fn ->
+    Repo.transaction(fn ->
       case Repo.one(
              from task in Task,
                where: task.idempotency_key == ^idempotency_key,
@@ -384,7 +384,7 @@ defmodule SymmetryControl.Orchestration do
     current = now(opts)
     assignment_duration_ms = Keyword.get(opts, :assignment_duration_ms, 30_000)
 
-    transaction(fn ->
+    Repo.transaction(fn ->
       {task, runtime} = next_assignable_task_and_runtime(current) || rollback(:no_assignment)
 
       generation = task.current_generation + 1
@@ -459,7 +459,7 @@ defmodule SymmetryControl.Orchestration do
       current = now(opts)
       lease_duration_ms = Keyword.get(opts, :lease_duration_ms, 30_000)
 
-      transaction(fn ->
+      Repo.transaction(fn ->
         {task, run, runtime} = lock_chain(run_id)
         request_runtime_id = value(request, :runtime_id)
         request_epoch = value(request, :runtime_epoch)
@@ -525,7 +525,7 @@ defmodule SymmetryControl.Orchestration do
       current = now(opts)
       lease_duration_ms = Keyword.get(opts, :lease_duration_ms, 30_000)
 
-      transaction(fn ->
+      Repo.transaction(fn ->
         {task, run, runtime} = lock_chain(run_id)
         if run.state == "cancelling", do: rollback(:ownership_lost)
         ensure_fence!(task, run, runtime, fence, current)
@@ -553,7 +553,7 @@ defmodule SymmetryControl.Orchestration do
     else
       current = now(opts)
 
-      transaction(fn ->
+      Repo.transaction(fn ->
         {task, run, runtime} = lock_chain(run_id)
         ensure_fence!(task, run, runtime, fence, current)
 
@@ -617,7 +617,7 @@ defmodule SymmetryControl.Orchestration do
       current = now(opts)
       body_hash = request_hash(%{state: target_state, payload: payload})
 
-      transaction(fn ->
+      Repo.transaction(fn ->
         {task, run, runtime} = lock_chain(run_id)
         ensure_static_fence!(task, run, runtime, fence)
 
@@ -662,7 +662,7 @@ defmodule SymmetryControl.Orchestration do
   defp request_task_cancel(task_id, opts) do
     current = now(opts)
 
-    transaction(fn ->
+    Repo.transaction(fn ->
       task = lock_task(task_id)
 
       cond do
@@ -746,7 +746,7 @@ defmodule SymmetryControl.Orchestration do
       request_hash = request_hash(%{task_id: task_id, payload: payload})
       current = now(opts)
 
-      transaction(fn ->
+      Repo.transaction(fn ->
         case Repo.one(
                from command in Command,
                  where: command.idempotency_key == ^idempotency_key,
@@ -839,7 +839,7 @@ defmodule SymmetryControl.Orchestration do
     else
       current = now(opts)
 
-      transaction(fn ->
+      Repo.transaction(fn ->
         run_id =
           Repo.one(
             from command in Command, where: command.id == ^command_id, select: command.run_id
@@ -910,7 +910,7 @@ defmodule SymmetryControl.Orchestration do
   defp runtime_snapshot(runtime_id, runtime_epoch, opts) do
     current = now(opts)
 
-    transaction(fn ->
+    Repo.transaction(fn ->
       runtime = share_runtime(runtime_id)
       if runtime.connection_epoch != runtime_epoch, do: rollback(:ownership_lost)
       snapshot_for(runtime, current)
@@ -932,7 +932,7 @@ defmodule SymmetryControl.Orchestration do
   defp reconcile_runtime(runtime_id, runtime_epoch, journals, opts) do
     current = now(opts)
 
-    transaction(fn ->
+    Repo.transaction(fn ->
       runtime = share_runtime(runtime_id)
       if runtime.connection_epoch != runtime_epoch, do: rollback(:ownership_lost)
 
@@ -1008,7 +1008,7 @@ defmodule SymmetryControl.Orchestration do
   end
 
   defp expire_run(run_id, current) do
-    case transaction(fn ->
+    case Repo.transaction(fn ->
            {task, run, _runtime} = lock_chain(run_id)
 
            expired? =
@@ -1052,7 +1052,7 @@ defmodule SymmetryControl.Orchestration do
       )
 
     Enum.count(runtime_ids, fn runtime_id ->
-      case transaction(fn ->
+      case Repo.transaction(fn ->
              runtime = lock_runtime(runtime_id)
              cutoff = DateTime.add(current, -3 * runtime.heartbeat_interval_ms, :millisecond)
 
@@ -1287,13 +1287,6 @@ defmodule SymmetryControl.Orchestration do
     do:
       Repo.one(from runtime in Runtime, where: runtime.id == ^runtime_id, lock: "FOR SHARE") ||
         rollback(:not_found)
-
-  defp transaction(function) do
-    case Repo.transaction(function) do
-      {:ok, value} -> {:ok, value}
-      {:error, reason} -> {:error, reason}
-    end
-  end
 
   defp persist_insert(changeset) do
     case Repo.insert(changeset) do
