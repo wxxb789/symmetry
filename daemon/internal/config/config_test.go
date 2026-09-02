@@ -14,6 +14,7 @@ func TestLoadAcceptsValidConfiguration(t *testing.T) {
   "state_dir": ".symmetry/state",
   "machine_name": "builder-01",
   "runtime": {
+    "runtime_key": "default",
     "name": "docker",
     "capacity": 4,
     "agent_profile": "default",
@@ -35,11 +36,11 @@ func TestLoadAcceptsValidConfiguration(t *testing.T) {
 }
 
 func TestLoadRejectsInvalidControlPlaneURL(t *testing.T) {
-	path := writeConfig(t, validConfig(`"not a url"`))
-
-	_, err := Load(path)
-	if err == nil || !strings.Contains(err.Error(), "control_plane_url") {
-		t.Fatalf("Load() error = %v, want control_plane_url validation error", err)
+	for _, controlPlaneURL := range []string{`"not a url"`, `"https://control.example.test/api?debug=1"`, `"https://control.example.test/api#fragment"`} {
+		_, err := Load(writeConfig(t, validConfig(controlPlaneURL)))
+		if err == nil || !strings.Contains(err.Error(), "control_plane_url") {
+			t.Fatalf("Load(%s) error = %v, want control_plane_url validation error", controlPlaneURL, err)
+		}
 	}
 }
 
@@ -64,7 +65,7 @@ func TestLoadRejectsEmptyRequiredValues(t *testing.T) {
   "control_plane_url": "https://control.example.test",
   "state_dir": " ",
   "machine_name": "builder-01",
-  "runtime": { "name": "docker", "capacity": 4, "agent_profile": "default", "workspace": "Q:/workspaces" }
+  "runtime": { "runtime_key": "default", "name": "docker", "capacity": 4, "agent_profile": "default", "workspace": "Q:/workspaces" }
 }`,
 			field: "state_dir",
 		},
@@ -74,9 +75,19 @@ func TestLoadRejectsEmptyRequiredValues(t *testing.T) {
   "control_plane_url": "https://control.example.test",
   "state_dir": ".symmetry/state",
   "machine_name": "",
-  "runtime": { "name": "docker", "capacity": 4, "agent_profile": "default", "workspace": "Q:/workspaces" }
+  "runtime": { "runtime_key": "default", "name": "docker", "capacity": 4, "agent_profile": "default", "workspace": "Q:/workspaces" }
 }`,
 			field: "machine_name",
+		},
+		{
+			name: "runtime key",
+			contents: `{
+  "control_plane_url": "https://control.example.test",
+  "state_dir": ".symmetry/state",
+  "machine_name": "builder-01",
+  "runtime": { "runtime_key": "", "name": "docker", "capacity": 4, "agent_profile": "default", "workspace": "Q:/workspaces" }
+}`,
+			field: "runtime.runtime_key",
 		},
 		{
 			name: "runtime name",
@@ -84,7 +95,7 @@ func TestLoadRejectsEmptyRequiredValues(t *testing.T) {
   "control_plane_url": "https://control.example.test",
   "state_dir": ".symmetry/state",
   "machine_name": "builder-01",
-  "runtime": { "name": "", "capacity": 4, "agent_profile": "default", "workspace": "Q:/workspaces" }
+  "runtime": { "runtime_key": "default", "name": "", "capacity": 4, "agent_profile": "default", "workspace": "Q:/workspaces" }
 }`,
 			field: "runtime.name",
 		},
@@ -94,7 +105,7 @@ func TestLoadRejectsEmptyRequiredValues(t *testing.T) {
   "control_plane_url": "https://control.example.test",
   "state_dir": ".symmetry/state",
   "machine_name": "builder-01",
-  "runtime": { "name": "docker", "capacity": 4, "agent_profile": "", "workspace": "Q:/workspaces" }
+  "runtime": { "runtime_key": "default", "name": "docker", "capacity": 4, "agent_profile": "", "workspace": "Q:/workspaces" }
 }`,
 			field: "runtime.agent_profile",
 		},
@@ -104,7 +115,7 @@ func TestLoadRejectsEmptyRequiredValues(t *testing.T) {
   "control_plane_url": "https://control.example.test",
   "state_dir": ".symmetry/state",
   "machine_name": "builder-01",
-  "runtime": { "name": "docker", "capacity": 4, "agent_profile": "default", "workspace": "" }
+  "runtime": { "runtime_key": "default", "name": "docker", "capacity": 4, "agent_profile": "default", "workspace": "" }
 }`,
 			field: "runtime.workspace",
 		},
@@ -126,6 +137,7 @@ func TestLoadRejectsUnknownJSONFields(t *testing.T) {
   "state_dir": ".symmetry/state",
   "machine_name": "builder-01",
   "runtime": {
+    "runtime_key": "default",
     "name": "docker",
     "capacity": 4,
     "agent_profile": "default",
@@ -155,6 +167,7 @@ func validConfig(controlPlaneURL string) string {
   "state_dir": ".symmetry/state",
   "machine_name": "builder-01",
   "runtime": {
+    "runtime_key": "default",
     "name": "docker",
     "capacity": 4,
     "agent_profile": "default",
@@ -169,6 +182,7 @@ func validConfigWithCapacity(capacity int) string {
   "state_dir": ".symmetry/state",
   "machine_name": "builder-01",
   "runtime": {
+    "runtime_key": "default",
     "name": "docker",
     "capacity": ` + strconv.Itoa(capacity) + `,
     "agent_profile": "default",

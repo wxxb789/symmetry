@@ -3,6 +3,7 @@
   "state_dir": ".symmetry/state",
   "machine_name": "builder-01",
   "runtime": {
+    "runtime_key": "default",
     "name": "docker",
     "capacity": 4,
     "agent_profile": "default",

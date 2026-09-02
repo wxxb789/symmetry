@@ -20,6 +20,7 @@ type Config struct {
 
 // Runtime declares the execution environment available on this machine.
 type Runtime struct {
+	RuntimeKey   string `json:"runtime_key"`
 	Name         string `json:"name"`
 	Capacity     int    `json:"capacity"`
 	AgentProfile string `json:"agent_profile"`
@@ -61,14 +62,17 @@ func Load(path string) (Config, error) {
 func (value Config) Validate() error {
 	parsedURL, err := url.ParseRequestURI(value.ControlPlaneURL)
 	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" || parsedURL.User != nil ||
-		(parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
-		return fmt.Errorf("control_plane_url must be an absolute http or https URL without user credentials")
+		(parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.RawQuery != "" || parsedURL.ForceQuery || parsedURL.Fragment != "" || strings.Contains(value.ControlPlaneURL, "#") {
+		return fmt.Errorf("control_plane_url must be an absolute http or https URL without user credentials, query, or fragment")
 	}
 
 	if err := requireNotEmpty("state_dir", value.StateDir); err != nil {
 		return err
 	}
 	if err := requireNotEmpty("machine_name", value.MachineName); err != nil {
+		return err
+	}
+	if err := requireNotEmpty("runtime.runtime_key", value.Runtime.RuntimeKey); err != nil {
 		return err
 	}
 	if err := requireNotEmpty("runtime.name", value.Runtime.Name); err != nil {

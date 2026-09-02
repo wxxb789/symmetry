@@ -79,9 +79,11 @@ token and returns a stable `machine_id` plus a machine bearer token. The control
 plane stores only the SHA-256 digest of the machine token.
 
 All other daemon endpoints and the WebSocket connection use the machine bearer
-token. A runtime must belong to the authenticated machine. Coding-agent, Git,
-SSH, and repository-provider credentials remain on the execution machine and
-must not appear in protocol payloads.
+token. A runtime must belong to the authenticated machine. The Task Control API
+uses a separate operator bearer token; an execution machine credential cannot
+submit, cancel, or provide input to tasks. Coding-agent, Git, SSH, and
+repository-provider credentials remain on the execution machine and must not
+appear in protocol payloads.
 
 Production traffic must use TLS. Plain HTTP is permitted only on an explicitly
 trusted local or container network.
@@ -417,6 +419,8 @@ Task submission accepts an `Idempotency-Key` header and a work object containing
 matches the requested agent profile and workspace against a runtime before
 assignment. Repeating the same key and payload returns the existing task;
 reusing the key with different payload returns `409 idempotency_conflict`.
+All Task Control API requests authenticate with the configured operator bearer
+token rather than a daemon machine token.
 
 Cancellation locks the task and its current run when one exists. A queued task
 with no capacity-bearing run moves directly to `cancelled` and creates no
@@ -439,11 +443,12 @@ command, and makes a fenced transition back to `running`. The command remains
 visible until both acknowledgement and the target lifecycle transition exist,
 so either request may be retried after an unknown outcome.
 
-Command acknowledgement carries the authenticated runtime, runtime epoch, run
-generation, `command_id`, outcome (`applied`, `rejected`, or `failed`),
-and an acknowledgement UUID. Repeating the same acknowledgement UUID is
-idempotent. Acknowledgement records delivery outcome but never changes run state
-or removes a lifecycle command by itself.
+Command acknowledgement carries the complete execution fence, `command_id`,
+outcome (`applied`, `rejected`, or `failed`), and an acknowledgement UUID.
+Repeating the same acknowledgement UUID and body is idempotent; reusing it with
+a different body returns `409 idempotency_conflict`. Acknowledgement records
+delivery outcome but never changes run state or removes a lifecycle command by
+itself.
 
 ## Phoenix Channel Notifications
 
