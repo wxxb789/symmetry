@@ -1233,8 +1233,8 @@ defmodule SymmetryControl.Orchestration do
             run.runtime_id == ^runtime.id and
               task.current_generation == run.generation and
               ((command.kind == "cancel" and run.state == "cancelling") or
-                 (command.kind == "provide_input" and
-                    (is_nil(command.acknowledged_at) or run.state == "waiting_for_input"))),
+                 (command.kind == "provide_input" and is_nil(command.acknowledged_at) and
+                    run.state in ["waiting_for_input", "running"])),
           order_by: [asc: command.inserted_at]
       )
 

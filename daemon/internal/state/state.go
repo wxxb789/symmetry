@@ -464,13 +464,23 @@ func (store *Store) QueueTransition(key RunKey, transition protocol.StateTransit
 // QueueTerminalTransition atomically makes a terminal transition durable and
 // marks the local process terminal-pending before any HTTP request is sent.
 func (store *Store) QueueTerminalTransition(key RunKey, transition protocol.StateTransitionRequest) (RunJournal, error) {
-	if !isTerminalTransitionState(transition.State) {
-		return RunJournal{}, errors.New("terminal transition state is invalid")
-	}
 	return store.mutateJournal(key, func(journal *RunJournal) error {
-		if err := queueTransition(journal, transition); err != nil {
+		prepared, err := prepareTransition(journal, transition)
+		if err != nil {
 			return err
 		}
+		if !isTerminalTransitionState(prepared.State) {
+			return errors.New("terminal transition state is invalid")
+		}
+		if prepared.State == "cancelled" {
+			journal.PendingTransitions = []protocol.StateTransitionRequest{prepared}
+			journal.LocalState = "terminal_pending"
+			return nil
+		}
+		if hasPendingTerminalTransition(journal.PendingTransitions) {
+			return nil
+		}
+		journal.PendingTransitions = append(journal.PendingTransitions, prepared)
 		journal.LocalState = "terminal_pending"
 		return nil
 	})
@@ -540,20 +550,28 @@ func (store *Store) mutateJournal(key RunKey, mutate func(*RunJournal) error) (R
 }
 
 func queueTransition(journal *RunJournal, transition protocol.StateTransitionRequest) error {
+	prepared, err := prepareTransition(journal, transition)
+	if err != nil {
+		return err
+	}
+	journal.PendingTransitions = append(journal.PendingTransitions, prepared)
+	return nil
+}
+
+func prepareTransition(journal *RunJournal, transition protocol.StateTransitionRequest) (protocol.StateTransitionRequest, error) {
 	if !journal.hasClaimGrant() {
-		return errors.New("journal has no claim grant")
+		return protocol.StateTransitionRequest{}, errors.New("journal has no claim grant")
 	}
 	if strings.TrimSpace(transition.TransitionID) == "" || strings.TrimSpace(transition.State) == "" || !validRawMessage(transition.Payload) {
-		return errors.New("state transition is invalid")
+		return protocol.StateTransitionRequest{}, errors.New("state transition is invalid")
 	}
 	if isZeroFence(transition.Fence) {
 		transition.Fence = journal.Fence()
 	}
 	if !sameFence(transition.Fence, journal.Fence()) {
-		return errors.New("state transition fence does not match journal")
+		return protocol.StateTransitionRequest{}, errors.New("state transition fence does not match journal")
 	}
-	journal.PendingTransitions = append(journal.PendingTransitions, transition)
-	return nil
+	return transition, nil
 }
 
 func isTerminalTransitionState(state string) bool {
@@ -563,6 +581,15 @@ func isTerminalTransitionState(state string) bool {
 	default:
 		return false
 	}
+}
+
+func hasPendingTerminalTransition(transitions []protocol.StateTransitionRequest) bool {
+	for _, transition := range transitions {
+		if isTerminalTransitionState(transition.State) {
+			return true
+		}
+	}
+	return false
 }
 
 func (store *Store) loadJournalLocked(key RunKey) (RunJournal, error) {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -405,7 +406,7 @@ func TestCancelDuringBlockedPrepareAcknowledgesAndCleansUp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(journal.PendingTransitions) != 2 || journal.PendingTransitions[0].State != "running" || journal.PendingTransitions[1].State != "cancelled" {
+	if len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].State != "cancelled" {
 		t.Fatalf("transitions = %#v", journal.PendingTransitions)
 	}
 	if len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].Outcome != "applied" {
@@ -838,6 +839,65 @@ func TestJSONLPrimitiveAndArrayUseRawOutputAndFlushWithTerminal(t *testing.T) {
 	daemon.flushRun(context.Background(), journal)
 	if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
 		t.Fatalf("terminal journal = %v, want deleted", err)
+	}
+}
+
+func TestJSONLRawFallbackDoesNotDropLaterRecords(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	daemon := &daemon{store: store, options: options{newID: ids()}}
+	data := []byte("42\n[\"raw\"]\n{\"type\":\"waiting_for_input\"}\n{\"type\":\"progress\"}\n")
+	if err := daemon.queueOutput(key, config.EventFormatJSONL, &jsonlParser{}, execution.Event{Stream: execution.Stdout, At: time.Now().UTC(), Data: data}); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.PendingEvents) != 4 || journal.PendingEvents[0].Kind != "output" || journal.PendingEvents[1].Kind != "output" || journal.PendingEvents[2].Kind != "waiting_for_input" || journal.PendingEvents[3].Kind != "progress" {
+		t.Fatalf("events = %#v", journal.PendingEvents)
+	}
+	if len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].State != "waiting_for_input" {
+		t.Fatalf("transitions = %#v", journal.PendingTransitions)
+	}
+}
+
+func TestRetryableClaimUsesHTTPStatus(t *testing.T) {
+	if !retryableClaim(&control.APIError{StatusCode: http.StatusInternalServerError, Code: "internal_error"}) {
+		t.Fatal("500 internal_error was not retryable")
+	}
+	if !retryableClaim(&control.APIError{StatusCode: http.StatusTooManyRequests, Code: "rate_limited"}) {
+		t.Fatal("429 was not retryable")
+	}
+	if retryableClaim(&control.APIError{StatusCode: http.StatusBadRequest, Code: "internal_error"}) {
+		t.Fatal("4xx was retryable")
+	}
+}
+
+func TestCancelWinsCompletionAndFlushesAcknowledgement(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	process := newBlockingProcess()
+	slots := make(chan struct{}, 1)
+	slots <- struct{}{}
+	daemon := &daemon{store: store, control: &orderingControl{}, workspace: &fakeWorkspace{}, log: slog.New(slog.NewJSONHandler(io.Discard, nil)), options: options{newID: ids()}, running: map[state.RunKey]*runningRun{key: {process: process, claimed: true}}, slots: slots}
+	daemon.workers.Add(1)
+	go func() { defer daemon.workers.Done(); daemon.waitForRun(key) }()
+	daemon.handleCommand(context.Background(), protocol.Command{CommandID: "cancel-1", RunID: key.RunID, Generation: key.Generation, Kind: "cancel"})
+	daemon.workers.Wait()
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].State != "cancelled" || len(journal.PendingCommandAcknowledgements) != 1 {
+		t.Fatalf("terminal journal = %#v", journal)
+	}
+	daemon.flushRun(context.Background(), journal)
+	if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
+		t.Fatalf("journal = %v, want deleted", err)
+	}
+	if len(slots) != 0 {
+		t.Fatal("slot was not released after cancelled terminal flush")
 	}
 }
 

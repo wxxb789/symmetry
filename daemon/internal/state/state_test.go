@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -393,6 +394,89 @@ func TestQueueTerminalTransitionRejectsNonterminalStatesWithoutMutation(t *testi
 	}
 }
 
+func TestQueueTerminalTransitionSelectsOneAuthoritativeTerminal(t *testing.T) {
+	tests := []struct {
+		name          string
+		pendingStates []string
+		incomingState string
+		wantStates    []string
+	}{
+		{
+			name:          "completed is replaced by cancelled",
+			pendingStates: []string{"completed"},
+			incomingState: "cancelled",
+			wantStates:    []string{"cancelled"},
+		},
+		{
+			name:          "cancelled keeps first terminal over completed",
+			pendingStates: []string{"cancelled"},
+			incomingState: "completed",
+			wantStates:    []string{"cancelled"},
+		},
+		{
+			name:          "completed keeps first terminal over failed",
+			pendingStates: []string{"completed"},
+			incomingState: "failed",
+			wantStates:    []string{"completed"},
+		},
+		{
+			name:          "cancelled replaces running and completed",
+			pendingStates: []string{"running", "completed"},
+			incomingState: "cancelled",
+			wantStates:    []string{"cancelled"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := mustStore(t)
+			journal := testJournal("run-1", 1)
+			journal.PendingTransitions = transitionsForStates(journal, test.pendingStates)
+			if hasTerminalState(journal.PendingTransitions) {
+				journal.LocalState = "terminal_pending"
+			}
+			if err := store.SaveJournal(journal); err != nil {
+				t.Fatalf("SaveJournal() error = %v", err)
+			}
+
+			queued, err := store.QueueTerminalTransition(journal.Key(), protocol.StateTransitionRequest{TransitionID: "incoming", State: test.incomingState, Payload: json.RawMessage(`{}`)})
+			if err != nil {
+				t.Fatalf("QueueTerminalTransition() error = %v", err)
+			}
+			if queued.LocalState != "terminal_pending" {
+				t.Fatalf("LocalState = %q, want terminal_pending", queued.LocalState)
+			}
+			if got := transitionStates(queued.PendingTransitions); !equalStrings(got, test.wantStates) {
+				t.Fatalf("pending states = %#v, want %#v", got, test.wantStates)
+			}
+		})
+	}
+}
+
+func TestQueueTerminalTransitionValidatesFenceBeforeCancelledReplacement(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-1", 1)
+	journal.PendingTransitions = transitionsForStates(journal, []string{"completed"})
+	journal.LocalState = "terminal_pending"
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatalf("SaveJournal() error = %v", err)
+	}
+
+	badFence := journal.Fence()
+	badFence.ClaimID = "other-claim"
+	_, err := store.QueueTerminalTransition(journal.Key(), protocol.StateTransitionRequest{Fence: badFence, TransitionID: "cancel", State: "cancelled", Payload: json.RawMessage(`{}`)})
+	if err == nil {
+		t.Fatal("QueueTerminalTransition() accepted a mismatched fence")
+	}
+	loaded, err := store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatalf("LoadJournal() error = %v", err)
+	}
+	if got := transitionStates(loaded.PendingTransitions); !equalStrings(got, []string{"completed"}) {
+		t.Fatalf("mismatched fence mutated transitions: %#v", got)
+	}
+}
+
 func TestValidateJournalRequiresConsistentProcessTuple(t *testing.T) {
 	store := mustStore(t)
 	base := testJournal("run-1", 1)
@@ -579,4 +663,47 @@ func testJournal(runID string, generation int64) RunJournal {
 		LocalState: "running", Work: protocol.Work{Goal: "implement", AgentProfile: "codex", Workspace: "isolated", Input: json.RawMessage(`{}`)},
 		WorkspacePath: `C:\work\run-1`, WorkspaceBindingKey: "binding-1", PID: 42, ProcessIdentity: "windows:42:created-at", StartedAt: time.Date(2026, 9, 3, 1, 2, 4, 0, time.UTC), LastEventSequence: 1,
 	}
+}
+
+func transitionsForStates(journal RunJournal, states []string) []protocol.StateTransitionRequest {
+	transitions := make([]protocol.StateTransitionRequest, 0, len(states))
+	for index, state := range states {
+		transitions = append(transitions, protocol.StateTransitionRequest{
+			Fence:        journal.Fence(),
+			TransitionID: "pending-" + strconv.Itoa(index),
+			State:        state,
+			Payload:      json.RawMessage(`{}`),
+		})
+	}
+	return transitions
+}
+
+func transitionStates(transitions []protocol.StateTransitionRequest) []string {
+	states := make([]string, 0, len(transitions))
+	for _, transition := range transitions {
+		states = append(states, transition.State)
+	}
+	return states
+}
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func hasTerminalState(transitions []protocol.StateTransitionRequest) bool {
+	for _, transition := range transitions {
+		switch transition.State {
+		case "completed", "failed", "cancelled":
+			return true
+		}
+	}
+	return false
 }

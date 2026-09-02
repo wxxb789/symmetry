@@ -782,11 +782,17 @@ func (daemon *daemon) queueOutput(key state.RunKey, format config.EventFormat, p
 		}
 		var decoded any
 		if err := json.Unmarshal(record.data, &decoded); err != nil || containsNUL(decoded) {
-			return daemon.queueRawEvent(key, execution.Event{Stream: event.Stream, At: event.At, Data: record.data})
+			if err := daemon.queueRawEvent(key, execution.Event{Stream: event.Stream, At: event.At, Data: record.data}); err != nil {
+				return err
+			}
+			continue
 		}
 		payload, ok := decoded.(map[string]any)
 		if !ok {
-			return daemon.queueRawEvent(key, execution.Event{Stream: event.Stream, At: event.At, Data: record.data})
+			if err := daemon.queueRawEvent(key, execution.Event{Stream: event.Stream, At: event.At, Data: record.data}); err != nil {
+				return err
+			}
+			continue
 		}
 		kind := "agent_event"
 		var declaredType string
@@ -1353,12 +1359,7 @@ func retryableClaim(err error) bool {
 	if !errors.As(err, &apiError) {
 		return true
 	}
-	switch apiError.Code {
-	case control.RateLimited, control.ServiceUnavailable, control.UnexpectedHTTPStatus:
-		return true
-	default:
-		return false
-	}
+	return apiError.StatusCode == http.StatusTooManyRequests || apiError.StatusCode >= http.StatusInternalServerError
 }
 
 func retry(ctx context.Context, operation func() error) error {

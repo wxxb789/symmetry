@@ -94,6 +94,43 @@ defmodule SymmetryControl.OrchestrationReviewTest do
              Orchestration.work_snapshot(runtime.id, runtime.connection_epoch, now: @now)
   end
 
+  test "failed input acknowledgement stops redelivery and permits a replacement input" do
+    %{machine: machine} = enroll_machine()
+    runtime = register_runtime(machine)
+    {:ok, task, :created} = Orchestration.submit_task(task_attrs(), "input-failed-ack", now: @now)
+    {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+    transition(run.id, fence, "running", 65)
+    transition(run.id, fence, "waiting_for_input", 66)
+
+    {:ok, first, :created} =
+      Orchestration.provide_input(task.id, %{"answer" => "first"}, "input-failed-first",
+        now: @now
+      )
+
+    assert {:ok, _} =
+             Orchestration.acknowledge_command(first.id, fence, "failed", uuid(67), now: @now)
+
+    assert {:ok, %{commands: []}} =
+             Orchestration.work_snapshot(runtime.id, runtime.connection_epoch, now: @now)
+
+    assert {:error, :idempotency_conflict} =
+             Orchestration.acknowledge_command(first.id, fence, "failed", uuid(68), now: @now)
+
+    assert {:ok, %{commands: []}} =
+             Orchestration.work_snapshot(runtime.id, runtime.connection_epoch, now: @now)
+
+    assert {:ok, replacement, :created} =
+             Orchestration.provide_input(
+               task.id,
+               %{"answer" => "replacement"},
+               "input-failed-replacement",
+               now: @now
+             )
+
+    assert replacement.id != first.id
+  end
+
   test "transition replay returns its original state and event replay rejects body changes" do
     %{machine: machine} = enroll_machine()
     runtime = register_runtime(machine)
