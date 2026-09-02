@@ -88,6 +88,9 @@ func NewRunner() Runner {
 type Process struct {
 	// PID is the operating-system process identifier of the launched agent.
 	PID int
+	// Identity combines the PID with platform process-creation data so a later
+	// daemon instance can reject a recycled PID after restart.
+	Identity string
 
 	command     *exec.Cmd
 	sink        Sink
@@ -208,6 +211,13 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 		_ = command.Wait()
 		return nil, fmt.Errorf("contain process tree for %q: %w", program, err)
 	}
+	identity, err := platform.ProcessIdentity(command.Process.Pid)
+	if err != nil {
+		_ = containment.Close()
+		closeFiles(stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite)
+		_ = command.Wait()
+		return nil, fmt.Errorf("capture process creation identity: %w", err)
+	}
 
 	// These ends belong only to the child after Start. Closing them here is
 	// essential: otherwise the readers would never observe EOF.
@@ -216,6 +226,7 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 	sinkContext, cancelSink := context.WithCancel(context.Background())
 	process := &Process{
 		PID:             command.Process.Pid,
+		Identity:        identity,
 		command:         command,
 		sink:            sink,
 		containment:     containment,
