@@ -3008,6 +3008,69 @@ func TestOrdinaryOutboxFailuresRemainCadenceDriven(t *testing.T) {
 	}
 }
 
+func TestLargePersistedEventBacklogDrainsAfterNoContentAcknowledgement(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+
+	payload := append([]byte{'"'}, bytes.Repeat([]byte("x"), (1<<20)+1)...)
+	payload = append(payload, '"')
+	journal, err := store.QueueEvent(key, protocol.RunEvent{
+		EventID:    "event-1",
+		Sequence:   1,
+		Kind:       "output",
+		OccurredAt: time.Date(2026, time.September, 3, 1, 2, 3, 0, time.UTC),
+		Payload:    json.RawMessage(payload),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	serializedEvents, err := json.Marshal(journal.PendingEvents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(serializedEvents) <= 1<<20 {
+		t.Fatalf("serialized event backlog = %d bytes, want more than %d", len(serializedEvents), 1<<20)
+	}
+
+	var calls int
+	var requestBytes int64
+	var method string
+	var path string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		calls++
+		method = request.Method
+		path = request.URL.Path
+		requestBytes, _ = io.Copy(io.Discard, request.Body)
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	client, err := control.NewClient(server.URL+"/api", "machine-token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	daemon := &daemon{store: store, control: client}
+	if err := daemon.flushRun(context.Background(), journal); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("append calls = %d, want 1", calls)
+	}
+	if method != http.MethodPost || path != "/api/v1/runs/run-1/events" {
+		t.Fatalf("append request = %s %s, want POST /api/v1/runs/run-1/events", method, path)
+	}
+	if requestBytes <= 1<<20 {
+		t.Fatalf("append request = %d bytes, want more than %d", requestBytes, 1<<20)
+	}
+	journal, err = store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.PendingEvents) != 0 {
+		t.Fatalf("pending events = %#v, want none after 204 acknowledgement", journal.PendingEvents)
+	}
+}
+
 func TestAllDaemonControlRPCsUseBoundedCancelledContexts(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()

@@ -305,6 +305,58 @@ func TestClaimIntentGrantAndPendingOutboxSurviveRestart(t *testing.T) {
 	}
 }
 
+func TestJournalFileLimitSupportsLargeBacklogAndRejectsOversizeFiles(t *testing.T) {
+	t.Run("round trips a backlog larger than the control response limit", func(t *testing.T) {
+		store := mustStore(t)
+		journal := testJournal("run-1", 1)
+		journal.PendingEvents = []protocol.RunEvent{{
+			EventID:    "event-1",
+			Sequence:   1,
+			Kind:       "output",
+			OccurredAt: time.Date(2026, time.September, 3, 1, 2, 5, 0, time.UTC),
+			Payload:    json.RawMessage(`"` + strings.Repeat("x", (1<<20)+1) + `"`),
+		}}
+		encoded, err := json.Marshal(journal)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(encoded) <= maxStateFileBytes || len(encoded) > maxJournalFileBytes {
+			t.Fatalf("serialized journal = %d bytes, want more than %d and no more than %d", len(encoded), maxStateFileBytes, maxJournalFileBytes)
+		}
+		if err := store.SaveJournal(journal); err != nil {
+			t.Fatalf("SaveJournal() error = %v", err)
+		}
+		loaded, err := store.LoadJournal(journal.Key())
+		if err != nil {
+			t.Fatalf("LoadJournal() error = %v", err)
+		}
+		if len(loaded.PendingEvents) != 1 || string(loaded.PendingEvents[0].Payload) != string(journal.PendingEvents[0].Payload) {
+			t.Fatalf("loaded large backlog = %#v", loaded.PendingEvents)
+		}
+	})
+
+	t.Run("rejects writes and reads beyond the journal ceiling", func(t *testing.T) {
+		store := mustStore(t)
+		journal := testJournal("run-1", 1)
+		journal.PendingEvents = []protocol.RunEvent{{
+			EventID:    "event-1",
+			Sequence:   1,
+			Kind:       "output",
+			OccurredAt: time.Date(2026, time.September, 3, 1, 2, 5, 0, time.UTC),
+			Payload:    json.RawMessage(`"` + strings.Repeat("x", maxJournalFileBytes) + `"`),
+		}}
+		if err := store.SaveJournal(journal); err == nil {
+			t.Fatal("SaveJournal() succeeded beyond the journal size limit")
+		}
+		if err := os.WriteFile(store.journalPath(journal.Key()), []byte(strings.Repeat("x", maxJournalFileBytes+1)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.LoadJournal(journal.Key()); err == nil {
+			t.Fatal("LoadJournal() succeeded beyond the journal size limit")
+		}
+	})
+}
+
 func TestSaveClaimIntentRequiresBoundedWorkspaceBindingKey(t *testing.T) {
 	store := mustStore(t)
 	base := ClaimIntent{

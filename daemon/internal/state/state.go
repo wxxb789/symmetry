@@ -23,14 +23,15 @@ import (
 )
 
 const (
-	maxStateFileBytes  = 1 << 20
-	identityFileName   = "identity.json"
-	enrollmentFileName = "enrollment.json"
-	runsDirectoryName  = "runs"
-	lockFileName       = ".symmetry-daemon.lock"
-	journalFilePrefix  = "journal-"
-	journalFileSuffix  = ".json"
-	atomicTempPrefix   = ".symmetry-state-"
+	maxStateFileBytes   = 1 << 20
+	maxJournalFileBytes = 4 << 20
+	identityFileName    = "identity.json"
+	enrollmentFileName  = "enrollment.json"
+	runsDirectoryName   = "runs"
+	lockFileName        = ".symmetry-daemon.lock"
+	journalFilePrefix   = "journal-"
+	journalFileSuffix   = ".json"
+	atomicTempPrefix    = ".symmetry-state-"
 )
 
 const (
@@ -466,7 +467,7 @@ func (store *Store) ListJournals() ([]RunJournal, error) {
 			continue
 		}
 		var journal RunJournal
-		if err := store.readJSON(filepath.Join(store.runsDir(), entry.Name()), "run journal", &journal); err != nil {
+		if err := store.readJSONWithLimit(filepath.Join(store.runsDir(), entry.Name()), "run journal", &journal, maxJournalFileBytes); err != nil {
 			return nil, err
 		}
 		if err := validateJournal(journal); err != nil {
@@ -939,7 +940,7 @@ func pendingTerminalState(transitions []protocol.StateTransitionRequest) string 
 
 func (store *Store) loadJournalLocked(key RunKey) (RunJournal, error) {
 	var journal RunJournal
-	if err := store.readJSON(store.journalPath(key), "run journal", &journal); err != nil {
+	if err := store.readJSONWithLimit(store.journalPath(key), "run journal", &journal, maxJournalFileBytes); err != nil {
 		return RunJournal{}, err
 	}
 	if err := validateJournal(journal); err != nil {
@@ -966,11 +967,15 @@ func (store *Store) saveJournalLocked(journal RunJournal) error {
 	if err := validateJournal(journal); err != nil {
 		return err
 	}
-	return store.writeJSON(store.journalPath(journal.Key()), journal, "run journal")
+	return store.writeJSONWithLimit(store.journalPath(journal.Key()), journal, "run journal", maxJournalFileBytes)
 }
 
 func (store *Store) readJSON(path string, resource string, destination any) error {
-	data, err := readLimited(path)
+	return store.readJSONWithLimit(path, resource, destination, maxStateFileBytes)
+}
+
+func (store *Store) readJSONWithLimit(path string, resource string, destination any, limit int) error {
+	data, err := readLimited(path, limit)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return &NotFoundError{Resource: resource}
@@ -990,8 +995,12 @@ func (store *Store) readJSON(path string, resource string, destination any) erro
 }
 
 func (store *Store) writeJSON(path string, value any, resource string) error {
+	return store.writeJSONWithLimit(path, value, resource, maxStateFileBytes)
+}
+
+func (store *Store) writeJSONWithLimit(path string, value any, resource string, limit int) error {
 	data, err := json.Marshal(value)
-	if err != nil || len(data) > maxStateFileBytes {
+	if err != nil || len(data) > limit {
 		return errors.New("encode " + resource)
 	}
 	if err := writeAtomic(path, data); err != nil {
@@ -1037,17 +1046,17 @@ func ensurePrivateDirectory(path string) error {
 	return applyDirectorySecurity(path)
 }
 
-func readLimited(path string) ([]byte, error) {
+func readLimited(path string, limit int) ([]byte, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, maxStateFileBytes+1))
+	data, err := io.ReadAll(io.LimitReader(file, int64(limit)+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(data) > maxStateFileBytes {
+	if len(data) > limit {
 		return nil, errors.New("state file exceeds size limit")
 	}
 	return data, nil
