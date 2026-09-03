@@ -107,6 +107,8 @@ type options struct {
 	newID            func() (string, error)
 	newMachineToken  func() (string, error)
 	terminatePersist func(pid int, identity string) error
+	recordWorkspace  func(state.RunKey, string) (state.RunJournal, error)
+	recordProcess    func(state.RunKey, int, string, time.Time) (state.RunJournal, error)
 }
 
 // WithHTTPClient replaces the HTTP transport used for production clients.
@@ -206,6 +208,9 @@ type daemon struct {
 	snapshotWG        sync.WaitGroup
 	outboxWake        chan struct{}
 	outboxRetry       map[state.RunKey]outboxRetry
+	cleanupWake       chan struct{}
+	cleanupQueued     map[state.RunKey]struct{}
+	cleanupRetry      map[state.RunKey]time.Time
 	commandWake       chan struct{}
 	commandQueue      []*queuedCommand
 	queuedCommands    map[commandKey]*queuedCommand
@@ -262,6 +267,7 @@ type runningRun struct {
 	terminal        bool
 	terminalizing   int
 	slotHeld        bool
+	cleanupBlocked  bool
 	renewCancel     context.CancelFunc
 	renewCancelID   uint64
 	terminalCancel  context.CancelFunc
@@ -337,12 +343,16 @@ func (daemon *daemon) startBackground(ctx context.Context) func() {
 	daemon.backgroundStop = false
 	daemon.outboxWake = make(chan struct{}, 1)
 	daemon.outboxRetry = make(map[state.RunKey]outboxRetry)
+	daemon.cleanupWake = make(chan struct{}, 1)
+	daemon.cleanupQueued = make(map[state.RunKey]struct{})
+	daemon.cleanupRetry = make(map[state.RunKey]time.Time)
 	daemon.commandWake = make(chan struct{}, 1)
 	daemon.queuedCommands = make(map[commandKey]*queuedCommand)
 	daemon.mu.Unlock()
 
 	livenessStarted := make(chan struct{})
-	daemon.backgroundWG.Add(3)
+	daemon.enqueueRecoveredCleanups()
+	daemon.backgroundWG.Add(4)
 	go func() {
 		defer daemon.backgroundWG.Done()
 		close(livenessStarted)
@@ -351,6 +361,10 @@ func (daemon *daemon) startBackground(ctx context.Context) func() {
 	go func() {
 		defer daemon.backgroundWG.Done()
 		daemon.runOutbox(background)
+	}()
+	go func() {
+		defer daemon.backgroundWG.Done()
+		daemon.runCleanup(background)
 	}()
 	go func() {
 		defer daemon.backgroundWG.Done()
@@ -842,7 +856,7 @@ func (daemon *daemon) reconcile(ctx context.Context) {
 	}
 	runs := make([]protocol.ReconcileRun, 0, len(journals))
 	for _, journal := range journals {
-		if journal.LocalState == "terminal_pending" {
+		if journal.LocalState == "terminal_pending" || journal.LocalState == "cleanup_pending" {
 			continue
 		}
 		if isReconcileState(journal.LocalState) && hasFullFence(journal) {
@@ -900,36 +914,26 @@ func (daemon *daemon) stopRecoveredJournal(journal state.RunJournal, reason stri
 	if journal.LocalState == "terminal_pending" {
 		return
 	}
+	if journal.LocalState == "cleanup_pending" {
+		daemon.enqueueCleanup(journal.Key())
+		return
+	}
 	if journal.PID > 0 && daemon.options.terminatePersist != nil {
 		if err := daemon.options.terminatePersist(journal.PID, journal.ProcessIdentity); err != nil {
 			daemon.log.Warn("stop_recovered_process_failed", "run_id", journal.RunID, "error", err)
 			return
 		}
 	}
-	if err := daemon.cleanupRecoveredWorkspace(journal, false); err != nil {
+	updated, err := daemon.store.SetLocalState(journal.Key(), "stale")
+	if err != nil {
+		daemon.log.Warn("mark_recovered_journal_stale_failed", "run_id", journal.RunID, "error", err)
+		return
+	}
+	if err := daemon.scheduleCleanup(context.Background(), updated); err != nil {
 		daemon.log.Warn("cleanup_recovered_workspace_failed", "run_id", journal.RunID, "error", err)
 		return
 	}
-	if err := daemon.store.DeleteJournal(journal.Key()); err != nil && !state.IsNotFound(err) {
-		daemon.log.Warn("delete_recovered_journal_failed", "run_id", journal.RunID, "error", err)
-		return
-	}
-	daemon.clearCompletedCommandReceipts(journal.Key())
 	daemon.log.Warn("recovered_journal_stopped", "run_id", journal.RunID, "generation", journal.Generation, "reason", reason)
-}
-
-func (daemon *daemon) cleanupRecoveredWorkspace(journal state.RunJournal, succeeded bool) error {
-	if journal.WorkspacePath == "" {
-		return nil
-	}
-	if journal.WorkspaceBindingKey == "" {
-		return errors.New("recovered workspace binding key is missing")
-	}
-	prepared, err := daemon.workspace.Recover(context.Background(), journal.WorkspaceBindingKey, workspace.RunRef{RunID: journal.RunID, Generation: journal.Generation}, journal.WorkspacePath)
-	if err != nil {
-		return err
-	}
-	return daemon.workspace.Cleanup(context.Background(), prepared, succeeded)
 }
 
 func (daemon *daemon) handleSnapshot(ctx context.Context, snapshot protocol.RuntimeSnapshot) {
@@ -1024,6 +1028,9 @@ func (daemon *daemon) startAssignment(ctx context.Context, assignment protocol.A
 	if assignment.RunID == "" || assignment.Generation <= 0 {
 		return
 	}
+	if journal, err := daemon.store.LoadJournal(key); err == nil && journal.LocalState == "cleanup_pending" {
+		return
+	}
 	select {
 	case daemon.slots <- struct{}{}:
 	default:
@@ -1036,7 +1043,7 @@ func (daemon *daemon) startAssignment(ctx context.Context, assignment protocol.A
 		return
 	}
 	runContext, cancel := context.WithCancel(ctx)
-	daemon.running[key] = &runningRun{starting: true, cancel: cancel, slotHeld: true}
+	daemon.running[key] = &runningRun{starting: true, cancel: cancel, slotHeld: true, cleanupBlocked: true}
 	daemon.mu.Unlock()
 	daemon.workers.Add(1)
 	go func() {
@@ -1048,23 +1055,39 @@ func (daemon *daemon) startAssignment(ctx context.Context, assignment protocol.A
 func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assignment protocol.Assignment) {
 	prepared := workspace.Prepared{}
 	preparedOK := false
+	workspacePersisted := false
 	handoff := false
 	defer func() {
 		if handoff {
 			return
 		}
-		cleanupSucceeded := true
-		if preparedOK {
-			cleanupSucceeded = daemon.cleanupWorkspace(prepared, false) == nil
+		if preparedOK && !workspacePersisted {
+			return
+		}
+		if daemon.finishStarting(key, true) {
+			daemon.signalOutbox()
+			return
 		}
 		stale := daemon.isStale(key)
 		if daemon.isTerminal(key) {
 			return
 		}
-		daemon.releaseRun(key)
-		if stale && cleanupSucceeded {
-			_ = daemon.store.DeleteJournal(key)
+		if stale {
+			journal, err := daemon.store.SetLocalState(key, "stale")
+			daemon.releaseRun(key)
+			if err == nil {
+				_ = daemon.scheduleCleanup(context.Background(), journal)
+			}
+			return
 		}
+		if preparedOK {
+			if journal, err := daemon.store.SetLocalState(key, "stale"); err == nil {
+				daemon.releaseRun(key)
+				_ = daemon.scheduleCleanup(context.Background(), journal)
+				return
+			}
+		}
+		daemon.releaseRun(key)
 	}()
 
 	journal, err := daemon.store.LoadJournal(key)
@@ -1130,6 +1153,11 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		return
 	}
 	daemon.signalOutboxFor(key)
+	if _, err := daemon.store.MarkWorkspaceRecoveryRequired(key); err != nil {
+		daemon.log.Error("mark_workspace_recovery_required_failed", "run_id", assignment.RunID, "error", err)
+		daemon.queueFailure(key, "mark_workspace_recovery_required", err)
+		return
+	}
 	prepared, err = daemon.workspace.Prepare(ctx, daemon.config.Runtime.Workspace, workspace.RunRef{RunID: key.RunID, Generation: key.Generation})
 	if err != nil {
 		if !daemon.isCancelled(key) {
@@ -1138,21 +1166,11 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		return
 	}
 	preparedOK = true
+	if !daemon.persistWorkspacePath(ctx, key, prepared.Path) {
+		return
+	}
+	workspacePersisted = true
 	if daemon.isCancelled(key) {
-		return
-	}
-	journal, err = daemon.store.LoadJournal(key)
-	if err != nil {
-		if !daemon.isCancelled(key) {
-			daemon.queueFailure(key, "load_running_journal", err)
-		}
-		return
-	}
-	journal.WorkspacePath = prepared.Path
-	if err := daemon.store.SaveJournal(journal); err != nil {
-		if !daemon.isCancelled(key) {
-			daemon.queueFailure(key, "record_workspace", err)
-		}
 		return
 	}
 	profile := daemon.config.AgentProfiles[daemon.config.Runtime.AgentProfile]
@@ -1181,33 +1199,55 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		}
 		return
 	}
-	pid, identity, detailsErr := processDetails(process)
-	if detailsErr != nil {
-		_ = process.Terminate(context.Background(), 0)
-		if !daemon.isCancelled(key) {
-			daemon.queueFailure(key, "read_process_identity", detailsErr)
-		}
-		return
-	}
-	if _, err := daemon.store.SetProcessDetails(key, pid, identity, daemon.options.clock()); err != nil {
-		_ = process.Terminate(context.Background(), 0)
-		if !daemon.isCancelled(key) {
-			daemon.queueFailure(key, "record_process", err)
-		}
-		return
-	}
 	daemon.mu.Lock()
 	active = daemon.running[key]
 	if active == nil {
 		daemon.mu.Unlock()
 		_ = process.Terminate(context.Background(), 0)
+		_ = process.Wait()
 		return
 	}
 	active.process = process
 	active.prepared = prepared
 	active.parser = parser
-	active.starting = false
 	daemon.mu.Unlock()
+
+	pid, identity, detailsErr := processDetails(process)
+	if detailsErr != nil {
+		if !daemon.isCancelled(key) {
+			daemon.queueFailure(key, "read_process_identity", detailsErr)
+		}
+		_ = process.Terminate(context.Background(), 0)
+		if daemon.finishAttachedStart(key) {
+			daemon.signalOutbox()
+		}
+		handoff = true
+		daemon.waitForRun(key)
+		return
+	}
+	if daemon.options.recordProcess != nil {
+		_, err = daemon.options.recordProcess(key, pid, identity, daemon.options.clock())
+	} else {
+		_, err = daemon.store.SetProcessDetails(key, pid, identity, daemon.options.clock())
+	}
+	if err != nil {
+		if !daemon.isCancelled(key) {
+			daemon.queueFailure(key, "record_process", err)
+		}
+		_ = process.Terminate(context.Background(), 0)
+		if daemon.finishAttachedStart(key) {
+			daemon.signalOutbox()
+		}
+		handoff = true
+		daemon.waitForRun(key)
+		return
+	}
+	if daemon.isCancelled(key) || ctx.Err() != nil {
+		_ = process.Terminate(context.Background(), 0)
+	}
+	if daemon.finishAttachedStart(key) {
+		daemon.signalOutbox()
+	}
 	handoff = true
 	daemon.waitForRun(key)
 }
@@ -1390,14 +1430,6 @@ func (daemon *daemon) isTerminal(key state.RunKey) bool {
 	defer daemon.mu.Unlock()
 	active := daemon.running[key]
 	return active != nil && active.terminal
-}
-
-func (daemon *daemon) cleanupWorkspace(prepared workspace.Prepared, succeeded bool) error {
-	if err := daemon.workspace.Cleanup(context.Background(), prepared, succeeded); err != nil {
-		daemon.log.Warn("cleanup_workspace_failed", "path", prepared.Path, "error", err)
-		return err
-	}
-	return nil
 }
 
 func processDetails(process Process) (int, string, error) {
@@ -1616,12 +1648,13 @@ func (daemon *daemon) waitForRun(key state.RunKey) {
 	daemon.mu.Lock()
 	cancelled := active.cancelled
 	stale := active.stale
+	active.cleanupBlocked = false
 	daemon.mu.Unlock()
 	if stale {
-		cleanupSucceeded := daemon.cleanupWorkspace(active.prepared, false) == nil
+		journal, err := daemon.store.SetLocalState(key, "stale")
 		daemon.releaseRun(key)
-		if cleanupSucceeded {
-			_ = daemon.store.DeleteJournal(key)
+		if err == nil {
+			_ = daemon.scheduleCleanup(context.Background(), journal)
 		}
 		return
 	}
@@ -1636,6 +1669,7 @@ func (daemon *daemon) waitForRun(key state.RunKey) {
 			}
 		}
 	}
+	daemon.releaseCleanupAfterProcessExit(key)
 }
 
 func errorText(err error) string {
@@ -1963,6 +1997,10 @@ func (daemon *daemon) flushAll(ctx context.Context) {
 				return
 			}
 			terminal := journal.LocalState == "terminal_pending"
+			if journal.LocalState == "cleanup_pending" {
+				_ = daemon.scheduleCleanup(ctx, journal)
+				break
+			}
 			if terminal {
 				seen[key] = struct{}{}
 				if !daemon.outboxDue(journal) {
@@ -2148,6 +2186,62 @@ func (daemon *daemon) isStarting(key state.RunKey) bool {
 	return active != nil && active.starting
 }
 
+func (daemon *daemon) finishStarting(key state.RunKey, cleanupReady bool) bool {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	active := daemon.running[key]
+	if active == nil {
+		return false
+	}
+	active.starting = false
+	if cleanupReady && active.process == nil {
+		active.cleanupBlocked = false
+	}
+	return active.terminal
+}
+
+func (daemon *daemon) finishAttachedStart(key state.RunKey) bool {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	active := daemon.running[key]
+	if active == nil {
+		return false
+	}
+	active.starting = false
+	return active.terminal
+}
+
+func (daemon *daemon) persistWorkspacePath(runContext context.Context, key state.RunKey, path string) bool {
+	rootContext := runContext
+	daemon.mu.Lock()
+	if daemon.background != nil {
+		rootContext = daemon.background
+	}
+	daemon.mu.Unlock()
+	if rootContext == nil {
+		rootContext = context.Background()
+	}
+	for {
+		var err error
+		if daemon.options.recordWorkspace != nil {
+			_, err = daemon.options.recordWorkspace(key, path)
+		} else {
+			_, err = daemon.store.SetWorkspacePath(key, path)
+		}
+		if err == nil {
+			return true
+		}
+		daemon.log.Warn("record_workspace_failed", "run_id", key.RunID, "generation", key.Generation, "error", err)
+		timer := daemon.timer(minimumInterval)
+		select {
+		case <-rootContext.Done():
+			timer.Stop()
+			return false
+		case <-timer.Chan():
+		}
+	}
+}
+
 func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) (err error) {
 	defer func() {
 		if err == nil {
@@ -2163,11 +2257,18 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) (e
 	if journal.LocalState == "stale" {
 		return nil
 	}
-	if journal.LocalState != "terminal_pending" && daemon.isStarting(key) {
+	if journal.LocalState == "cleanup_pending" {
+		return daemon.scheduleCleanup(ctx, journal)
+	}
+	if daemon.isStarting(key) {
 		return nil
 	}
 	if journal.LocalState == "terminal_pending" && journal.TerminalVerdict != "" && journal.TerminalVerdict != state.TerminalVerdictAccepted {
-		return nil
+		updated, err := daemon.store.ResolveTerminalForCleanup(key, journal.TerminalVerdict, daemon.now())
+		if err != nil {
+			return err
+		}
+		return daemon.scheduleCleanup(ctx, updated)
 	}
 	if journal.LocalState == "terminal_pending" {
 		updated, err := daemon.retireOrdinaryTerminalOutbox(journal)
@@ -2176,7 +2277,6 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) (e
 		}
 		journal = updated
 	}
-	terminalSucceeded := journal.TerminalState == "completed"
 	if len(journal.PendingEvents) > 0 {
 		wasTerminal := journal.LocalState == "terminal_pending"
 		requestContext, cancel := daemon.controlContext(ctx)
@@ -2279,29 +2379,12 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) (e
 		}
 		journal = updated
 	}
-	if journal.LocalState == "terminal_pending" && journal.TerminalVerdict == state.TerminalVerdictAccepted && len(journal.PendingTransitions) == 0 {
-		daemon.mu.Lock()
-		active := daemon.running[key]
-		prepared := workspace.Prepared{}
-		if active != nil {
-			prepared = active.prepared
-		}
-		daemon.mu.Unlock()
-		if active != nil {
-			if err := daemon.workspace.Cleanup(context.Background(), prepared, terminalSucceeded); err != nil {
-				daemon.log.Warn("cleanup_terminal_workspace_failed", "run_id", journal.RunID, "error", err)
-				return err
-			}
-			daemon.releaseRun(key)
-		} else if err := daemon.cleanupRecoveredWorkspace(journal, terminalSucceeded); err != nil {
-			daemon.log.Warn("cleanup_terminal_workspace_failed", "run_id", journal.RunID, "error", err)
+	if journal.LocalState == "terminal_pending" && journal.TerminalVerdict == state.TerminalVerdictAccepted && len(journal.PendingTransitions) == 0 && len(journal.PendingCommandAcknowledgements) == 0 {
+		updated, err := daemon.enterCleanupPending(journal)
+		if err != nil {
 			return err
 		}
-		if err := daemon.store.DeleteJournal(key); err != nil {
-			daemon.log.Warn("delete_terminal_journal_failed", "run_id", journal.RunID, "error", err)
-			return err
-		}
-		daemon.clearCompletedCommandReceipts(key)
+		return daemon.scheduleCleanup(ctx, updated)
 	}
 	return nil
 }
@@ -2367,8 +2450,12 @@ func (daemon *daemon) handleTerminalDeliveryError(journal state.RunJournal, err 
 			verdict = state.TerminalVerdictGraceExpired
 		}
 		if verdict != "" {
-			if _, resolveErr := daemon.resolveTerminal(journal, verdict); resolveErr != nil {
+			updated, resolveErr := daemon.store.ResolveTerminalForCleanup(journal.Key(), verdict, daemon.now())
+			if resolveErr != nil {
 				return resolveErr
+			}
+			if cleanupErr := daemon.scheduleCleanup(context.Background(), updated); cleanupErr != nil {
+				return cleanupErr
 			}
 			return err
 		}

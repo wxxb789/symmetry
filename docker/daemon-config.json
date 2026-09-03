@@ -3,6 +3,7 @@
   "allow_insecure_http": true,
   "state_dir": "/var/lib/symmetry",
   "machine_name": "compose-daemon",
+  "cleanup_timeout_ms": 120000,
   "agent_profiles": {
     "default": {
       "command": "/symmetry-fake-agent",

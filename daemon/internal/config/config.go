@@ -10,6 +10,13 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
+)
+
+const (
+	defaultCleanupTimeoutMS int64 = 120000
+	minimumCleanupTimeoutMS int64 = 10000
+	maximumCleanupTimeoutMS int64 = 600000
 )
 
 // Config is the daemon's local configuration.
@@ -21,6 +28,7 @@ type Config struct {
 	AgentProfiles     map[string]AgentProfile `json:"agent_profiles"`
 	Workspaces        map[string]Workspace    `json:"workspaces"`
 	Runtime           Runtime                 `json:"runtime"`
+	CleanupTimeoutMS  int64                   `json:"cleanup_timeout_ms"`
 }
 
 // Runtime declares the execution environment available on this machine.
@@ -126,7 +134,13 @@ func Load(path string) (Config, error) {
 }
 
 // Validate verifies that the daemon has enough information for a local start.
-func (value Config) Validate() error {
+func (value *Config) Validate() error {
+	if value.CleanupTimeoutMS == 0 {
+		value.CleanupTimeoutMS = defaultCleanupTimeoutMS
+	}
+	if value.CleanupTimeoutMS < minimumCleanupTimeoutMS || value.CleanupTimeoutMS > maximumCleanupTimeoutMS {
+		return fmt.Errorf("cleanup_timeout_ms must be between %d and %d", minimumCleanupTimeoutMS, maximumCleanupTimeoutMS)
+	}
 	parsedURL, err := url.ParseRequestURI(value.ControlPlaneURL)
 	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" || parsedURL.User != nil ||
 		(parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.RawQuery != "" || parsedURL.ForceQuery || parsedURL.Fragment != "" || strings.Contains(value.ControlPlaneURL, "#") {
@@ -176,6 +190,15 @@ func (value Config) Validate() error {
 		return fmt.Errorf("runtime.capacity must be 1 when runtime.workspace uses existing_checkout")
 	}
 	return nil
+}
+
+// CleanupTimeout returns the bounded deadline used for one workspace cleanup.
+func (value Config) CleanupTimeout() time.Duration {
+	timeout := value.CleanupTimeoutMS
+	if timeout == 0 {
+		timeout = defaultCleanupTimeoutMS
+	}
+	return time.Duration(timeout) * time.Millisecond
 }
 
 var bindingKeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)

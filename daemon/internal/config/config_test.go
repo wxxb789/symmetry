@@ -29,6 +29,50 @@ func TestLoadAcceptsValidConfiguration(t *testing.T) {
 	if actual.Workspaces["primary"].Policy != WorkspacePolicyExistingCheckout {
 		t.Errorf("Workspaces[primary].Policy = %q", actual.Workspaces["primary"].Policy)
 	}
+	if actual.CleanupTimeoutMS != defaultCleanupTimeoutMS {
+		t.Errorf("CleanupTimeoutMS = %d, want %d", actual.CleanupTimeoutMS, defaultCleanupTimeoutMS)
+	}
+}
+
+func TestLoadNormalizesAndBoundsCleanupTimeout(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   any
+		want    int64
+		wantErr bool
+	}{
+		{name: "omitted", want: defaultCleanupTimeoutMS},
+		{name: "zero", value: 0, want: defaultCleanupTimeoutMS},
+		{name: "minimum", value: minimumCleanupTimeoutMS, want: minimumCleanupTimeoutMS},
+		{name: "maximum", value: maximumCleanupTimeoutMS, want: maximumCleanupTimeoutMS},
+		{name: "below minimum", value: minimumCleanupTimeoutMS - 1, wantErr: true},
+		{name: "above maximum", value: maximumCleanupTimeoutMS + 1, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			value := validConfigObject(t)
+			if test.value != nil {
+				value["cleanup_timeout_ms"] = test.value
+			}
+			contents, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			actual, err := Load(writeConfig(t, string(contents)))
+			if test.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "cleanup_timeout_ms") {
+					t.Fatalf("Load() error = %v, want cleanup_timeout_ms validation error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if actual.CleanupTimeoutMS != test.want {
+				t.Fatalf("CleanupTimeoutMS = %d, want %d", actual.CleanupTimeoutMS, test.want)
+			}
+		})
+	}
 }
 
 func TestLoadRejectsUnknownRuntimeBindings(t *testing.T) {

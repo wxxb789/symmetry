@@ -59,6 +59,7 @@ type Manager struct {
 	bindings      map[string]config.Workspace
 	syncFile      func(*os.File) error
 	syncDirectory func(string) error
+	removeFile    func(string) error
 }
 
 // New creates a workspace manager from local workspace bindings.
@@ -71,6 +72,7 @@ func New(bindings map[string]config.Workspace) *Manager {
 		bindings:      copyOfBindings,
 		syncFile:      func(file *os.File) error { return file.Sync() },
 		syncDirectory: syncDirectory,
+		removeFile:    os.Remove,
 	}
 }
 
@@ -109,7 +111,7 @@ func (manager *Manager) Recover(ctx context.Context, bindingKey string, run RunR
 	if err := validateRun(run); err != nil {
 		return Prepared{}, err
 	}
-	if !filepath.IsAbs(persistedPath) {
+	if persistedPath != "" && !filepath.IsAbs(persistedPath) {
 		return Prepared{}, errors.New("persisted workspace path must be absolute")
 	}
 
@@ -118,6 +120,9 @@ func (manager *Manager) Recover(ctx context.Context, bindingKey string, run RunR
 		prepared, err := prepareExisting(bindingKey, binding, run)
 		if err != nil {
 			return Prepared{}, err
+		}
+		if persistedPath == "" {
+			return prepared, nil
 		}
 		same, err := sameDirectory(prepared.Path, persistedPath)
 		if err != nil {
@@ -128,34 +133,48 @@ func (manager *Manager) Recover(ctx context.Context, bindingKey string, run RunR
 		}
 		return prepared, nil
 	case config.WorkspacePolicyGitWorktree:
-		prepared, err := recoverableWorktree(bindingKey, binding, run)
+		prepared, err := recoverableWorktree(bindingKey, binding, run, persistedPath == "")
 		if err != nil {
 			return Prepared{}, err
 		}
-		if filepath.Clean(persistedPath) != prepared.Path {
+		if persistedPath != "" && filepath.Clean(persistedPath) != prepared.Path {
 			return Prepared{}, fmt.Errorf("persisted workspace path %q does not match configured worktree target", persistedPath)
 		}
-		if err := verifyOwnedFile(prepared.reservation, prepared); err != nil {
-			return Prepared{}, fmt.Errorf("verify workspace reservation: %w", err)
+		reservationExists, err := pathExists(prepared.reservation)
+		if err != nil {
+			return Prepared{}, fmt.Errorf("inspect workspace reservation: %w", err)
 		}
-
+		if reservationExists {
+			if err := verifyOwnedFile(prepared.reservation, prepared); err != nil {
+				return Prepared{}, fmt.Errorf("verify workspace reservation: %w", err)
+			}
+		}
 		journalExists, err := pathExists(prepared.journal)
 		if err != nil {
 			return Prepared{}, fmt.Errorf("inspect workspace journal: %w", err)
+		}
+		contains, err := worktreeContains(ctx, prepared.repository, prepared.Path)
+		if err != nil {
+			return Prepared{}, err
+		}
+		targetExists, err := pathExists(prepared.Path)
+		if err != nil {
+			return Prepared{}, fmt.Errorf("inspect workspace target %q: %w", prepared.Path, err)
+		}
+		if !contains {
+			if targetExists {
+				return Prepared{}, fmt.Errorf("workspace target %q is not a registered worktree", prepared.Path)
+			}
+			return prepared, nil
+		}
+		if !reservationExists {
+			return Prepared{}, fmt.Errorf("verify workspace reservation: ownership file is missing")
 		}
 		if journalExists {
 			if err := manager.verifyPrepared(ctx, prepared); err != nil {
 				return Prepared{}, err
 			}
 			return prepared, nil
-		}
-
-		contains, err := worktreeContains(ctx, prepared.repository, prepared.Path)
-		if err != nil {
-			return Prepared{}, err
-		}
-		if !contains {
-			return Prepared{}, fmt.Errorf("workspace target %q is not a registered worktree", prepared.Path)
 		}
 		if err := manager.verifyManagedTarget(ctx, prepared); err != nil {
 			return Prepared{}, err
@@ -183,6 +202,30 @@ func (manager *Manager) Cleanup(ctx context.Context, prepared Prepared, succeede
 	if !remove {
 		return nil
 	}
+	contains, err := worktreeContains(ctx, prepared.repository, prepared.Path)
+	if err != nil {
+		return err
+	}
+	targetExists, err := pathExists(prepared.Path)
+	if err != nil {
+		return fmt.Errorf("inspect workspace target %q: %w", prepared.Path, err)
+	}
+	if !contains {
+		if targetExists {
+			return fmt.Errorf("workspace target %q is not a worktree of configured repository", prepared.Path)
+		}
+		reservationExists, err := pathExists(prepared.reservation)
+		if err != nil {
+			return fmt.Errorf("inspect workspace reservation: %w", err)
+		}
+		if !reservationExists {
+			return nil
+		}
+		return manager.removeReservation(prepared)
+	}
+	if !targetExists {
+		return fmt.Errorf("workspace target %q is still registered but is missing", prepared.Path)
+	}
 	if err := manager.verifyPrepared(ctx, prepared); err != nil {
 		return err
 	}
@@ -194,10 +237,7 @@ func (manager *Manager) Cleanup(ctx context.Context, prepared Prepared, succeede
 		}
 		return fmt.Errorf("remove git worktree %q: %w: %s", prepared.Path, err, strings.TrimSpace(string(output)))
 	}
-	if err := manager.removeReservation(prepared); err != nil {
-		return err
-	}
-	return nil
+	return manager.removeReservation(prepared)
 }
 
 func prepareExisting(bindingKey string, binding config.Workspace, run RunRef) (Prepared, error) {
@@ -275,12 +315,12 @@ func (manager *Manager) prepareWorktree(ctx context.Context, bindingKey string, 
 	return prepared, nil
 }
 
-func recoverableWorktree(bindingKey string, binding config.Workspace, run RunRef) (Prepared, error) {
+func recoverableWorktree(bindingKey string, binding config.Workspace, run RunRef, allowMissingRoot bool) (Prepared, error) {
 	repository, err := resolveDirectory(binding.Repository)
 	if err != nil {
 		return Prepared{}, fmt.Errorf("resolve workspace repository %q: %w", binding.Repository, err)
 	}
-	root, err := resolveDirectory(binding.Root)
+	root, err := resolveRecoveryRoot(binding.Root, allowMissingRoot)
 	if err != nil {
 		return Prepared{}, fmt.Errorf("resolve workspace root %q: %w", binding.Root, err)
 	}
@@ -302,6 +342,23 @@ func recoverableWorktree(bindingKey string, binding config.Workspace, run RunRef
 			fmt.Sprintf("generation-%d.json", run.Generation),
 		),
 	}, nil
+}
+
+// resolveRecoveryRoot avoids creating a configured root while reconstructing a
+// workspace after a crash. A missing root is safe only for empty-path recovery,
+// where the deterministic target is needed to inspect any leftover artifacts.
+func resolveRecoveryRoot(path string, allowMissing bool) (string, error) {
+	root, err := resolveDirectory(path)
+	if err == nil || !allowMissing {
+		return root, err
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	if !filepath.IsAbs(path) {
+		return "", errors.New("path must be absolute")
+	}
+	return filepath.Clean(path), nil
 }
 
 func (manager *Manager) handleFailedAdd(ctx context.Context, addErr error, output []byte, prepared Prepared) (Prepared, error) {
@@ -514,7 +571,11 @@ func (manager *Manager) removeReservation(prepared Prepared) error {
 	if err := verifyOwnedFile(prepared.reservation, prepared); err != nil {
 		return fmt.Errorf("verify workspace reservation before removal: %w", err)
 	}
-	if err := os.Remove(prepared.reservation); err != nil {
+	removeFile := manager.removeFile
+	if removeFile == nil {
+		removeFile = os.Remove
+	}
+	if err := removeFile(prepared.reservation); err != nil {
 		return fmt.Errorf("remove workspace reservation: %w", err)
 	}
 	if err := manager.syncDirectory(filepath.Dir(prepared.reservation)); err != nil {

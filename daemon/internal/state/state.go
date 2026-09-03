@@ -111,6 +111,7 @@ type RunJournal struct {
 	TerminalResolvedAt             time.Time                         `json:"terminal_resolved_at,omitempty"`
 	Work                           protocol.Work                     `json:"work"`
 	WorkspacePath                  string                            `json:"workspace_path"`
+	WorkspaceRecoveryRequired      bool                              `json:"workspace_recovery_required,omitempty"`
 	WorkspaceBindingKey            string                            `json:"workspace_binding_key"`
 	PID                            int                               `json:"pid"`
 	ProcessIdentity                string                            `json:"process_identity"`
@@ -404,6 +405,27 @@ func (store *Store) SaveJournal(journal RunJournal) error {
 	return store.saveJournalLocked(journal)
 }
 
+// MarkWorkspaceRecoveryRequired records that workspace preparation may have
+// begun, even when its resolved path has not yet been persisted.
+func (store *Store) MarkWorkspaceRecoveryRequired(key RunKey) (RunJournal, error) {
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		journal.WorkspaceRecoveryRequired = true
+		return nil
+	})
+}
+
+// SetWorkspacePath atomically records a prepared workspace path without
+// overwriting concurrently queued terminal delivery state.
+func (store *Store) SetWorkspacePath(key RunKey, path string) (RunJournal, error) {
+	if path == "" || len(path) > 32768 {
+		return RunJournal{}, errors.New("workspace path is invalid")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		journal.WorkspacePath = path
+		return nil
+	})
+}
+
 // DeleteJournal removes only the requested run generation journal.
 func (store *Store) DeleteJournal(key RunKey) error {
 	if err := validateKey(key); err != nil {
@@ -676,6 +698,69 @@ func (store *Store) ResolveTerminal(key RunKey, verdict string, resolvedAt time.
 		}
 		journal.TerminalVerdict = verdict
 		journal.TerminalResolvedAt = resolvedAt
+		return nil
+	})
+}
+
+// ResolveTerminalForCleanup atomically records a conclusive terminal rejection,
+// retires unreachable delivery state, and makes local cleanup eligible.
+func (store *Store) ResolveTerminalForCleanup(key RunKey, verdict string, resolvedAt time.Time) (RunJournal, error) {
+	if !validConclusiveTerminalVerdict(verdict) || resolvedAt.IsZero() {
+		return RunJournal{}, errors.New("terminal cleanup verdict is invalid")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.LocalState == "cleanup_pending" {
+			if journal.TerminalVerdict != verdict {
+				return errors.New("terminal verdict conflicts with journal")
+			}
+			return nil
+		}
+		if journal.LocalState != "terminal_pending" {
+			return errors.New("journal is not terminal pending")
+		}
+		if journal.TerminalVerdict != "" && journal.TerminalVerdict != verdict {
+			return errors.New("terminal verdict conflicts with journal")
+		}
+		if journal.TerminalPendingAt.IsZero() || !isTerminalTransitionState(journal.TerminalState) {
+			return errors.New("journal terminal state is invalid")
+		}
+		if journal.TerminalVerdict == "" {
+			journal.TerminalVerdict = verdict
+			journal.TerminalResolvedAt = resolvedAt
+		}
+		journal.PendingEvents = nil
+		journal.PendingTransitions = nil
+		journal.AttemptedTransitionIDs = nil
+		journal.PendingCommandAcknowledgements = nil
+		journal.LocalState = "cleanup_pending"
+		return nil
+	})
+}
+
+// EnterCleanupPending records that terminal delivery has reached a conclusive
+// outcome and local workspace cleanup is the only remaining daemon action.
+// The accepted path requires every transition and command acknowledgement to
+// be delivered first, while conclusive rejections retire unreachable delivery
+// work.
+func (store *Store) EnterCleanupPending(key RunKey) (RunJournal, error) {
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.LocalState == "cleanup_pending" {
+			return nil
+		}
+		if journal.LocalState != "terminal_pending" || !validTerminalVerdict(journal.TerminalVerdict) {
+			return errors.New("journal is not cleanup eligible")
+		}
+		if journal.TerminalVerdict == TerminalVerdictAccepted {
+			if len(journal.PendingTransitions) != 0 || len(journal.PendingCommandAcknowledgements) != 0 {
+				return errors.New("accepted terminal delivery is incomplete")
+			}
+		} else {
+			journal.PendingTransitions = nil
+			journal.PendingCommandAcknowledgements = nil
+		}
+		journal.PendingEvents = nil
+		journal.AttemptedTransitionIDs = nil
+		journal.LocalState = "cleanup_pending"
 		return nil
 	})
 }
@@ -1133,11 +1218,17 @@ func validTransition(transition protocol.StateTransitionRequest) bool {
 }
 
 func validTerminalState(journal RunJournal) bool {
-	if journal.LocalState != "terminal_pending" {
+	if journal.LocalState != "terminal_pending" && journal.LocalState != "cleanup_pending" {
 		return !hasPendingTerminalTransition(journal.PendingTransitions) && journal.TerminalPendingAt.IsZero() && journal.TerminalState == "" && journal.TerminalVerdict == "" && journal.TerminalResolvedAt.IsZero()
 	}
 	if journal.TerminalPendingAt.IsZero() || !isTerminalTransitionState(journal.TerminalState) {
 		return false
+	}
+	if journal.LocalState == "cleanup_pending" {
+		if !validTerminalVerdict(journal.TerminalVerdict) || journal.TerminalResolvedAt.IsZero() {
+			return false
+		}
+		return len(journal.PendingEvents) == 0 && len(journal.PendingTransitions) == 0 && len(journal.PendingCommandAcknowledgements) == 0 && len(journal.AttemptedTransitionIDs) == 0
 	}
 	if journal.TerminalVerdict == "" {
 		return journal.TerminalResolvedAt.IsZero()
@@ -1152,6 +1243,10 @@ func validTerminalVerdict(verdict string) bool {
 	default:
 		return false
 	}
+}
+
+func validConclusiveTerminalVerdict(verdict string) bool {
+	return verdict == TerminalVerdictOwnershipLost || verdict == TerminalVerdictGraceExpired
 }
 
 func validAttemptedTransitions(attempted []string, pending []protocol.StateTransitionRequest) bool {

@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -270,8 +271,8 @@ func TestRecoverRefusesForeignWorktreeWithoutDeletion(t *testing.T) {
 	}
 
 	_, err := New(bindings).Recover(context.Background(), "primary", run, persistedPath)
-	if err == nil || !strings.Contains(err.Error(), "reservation") {
-		t.Fatalf("Recover() error = %v, want missing reservation error", err)
+	if err == nil || !strings.Contains(err.Error(), "not a registered worktree") {
+		t.Fatalf("Recover() error = %v, want foreign target rejection", err)
 	}
 	if _, err := os.Stat(persistedPath); err != nil {
 		t.Fatalf("Recover() removed foreign target: %v", err)
@@ -535,6 +536,191 @@ func TestCleanupRefusesWorktreeWithoutOwnershipJournal(t *testing.T) {
 		t.Fatalf("Cleanup() removed unowned worktree: %v", err)
 	}
 	runGit(t, repository, "worktree", "remove", "--force", prepared.Path)
+}
+
+func TestCleanupRecoversAfterWorktreeRemovalBeforeReservationDeletion(t *testing.T) {
+	repository := newRepository(t)
+	bindings := map[string]config.Workspace{
+		"primary": {Policy: config.WorkspacePolicyGitWorktree, Repository: repository, Root: filepath.Join(t.TempDir(), "worktrees"), Ref: "HEAD", Cleanup: config.CleanupAlways},
+	}
+	run := RunRef{RunID: "run-post-remove", Generation: 1}
+
+	t.Run("same manager retry", func(t *testing.T) {
+		manager := New(bindings)
+		prepared, err := manager.Prepare(context.Background(), "primary", run)
+		if err != nil {
+			t.Fatal(err)
+		}
+		failures := 1
+		manager.removeFile = func(path string) error {
+			if failures > 0 {
+				failures--
+				return errors.New("injected reservation removal failure")
+			}
+			return os.Remove(path)
+		}
+		if err := manager.Cleanup(context.Background(), prepared, true); err == nil {
+			t.Fatal("Cleanup() succeeded despite injected reservation removal failure")
+		}
+		if _, err := os.Stat(prepared.Path); !os.IsNotExist(err) {
+			t.Fatalf("worktree path = %v, want removed before reservation failure", err)
+		}
+		recovered, err := manager.Recover(context.Background(), "primary", run, prepared.Path)
+		if err != nil {
+			t.Fatalf("Recover() after remove error = %v", err)
+		}
+		if err := manager.Cleanup(context.Background(), recovered, true); err != nil {
+			t.Fatalf("retry Cleanup() error = %v", err)
+		}
+		if _, err := os.Stat(prepared.reservation); !os.IsNotExist(err) {
+			t.Fatalf("reservation = %v, want removed after retry", err)
+		}
+	})
+
+	t.Run("new manager retry", func(t *testing.T) {
+		manager := New(bindings)
+		prepared, err := manager.Prepare(context.Background(), "primary", RunRef{RunID: "run-post-remove-restart", Generation: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		manager.removeFile = func(string) error { return errors.New("injected reservation removal failure") }
+		if err := manager.Cleanup(context.Background(), prepared, true); err == nil {
+			t.Fatal("Cleanup() succeeded despite injected reservation removal failure")
+		}
+		restarted := New(bindings)
+		recovered, err := restarted.Recover(context.Background(), "primary", prepared.Run, prepared.Path)
+		if err != nil {
+			t.Fatalf("Recover() after restart error = %v", err)
+		}
+		if err := restarted.Cleanup(context.Background(), recovered, true); err != nil {
+			t.Fatalf("restart Cleanup() error = %v", err)
+		}
+		if _, err := os.Stat(prepared.reservation); !os.IsNotExist(err) {
+			t.Fatalf("reservation = %v, want removed after restart", err)
+		}
+	})
+}
+
+func TestRecoverAlreadyRemovedWorktreeWithoutReservationIsCleanupNoop(t *testing.T) {
+	repository := newRepository(t)
+	bindings := map[string]config.Workspace{
+		"primary": {Policy: config.WorkspacePolicyGitWorktree, Repository: repository, Root: filepath.Join(t.TempDir(), "worktrees"), Ref: "HEAD", Cleanup: config.CleanupAlways},
+	}
+	manager := New(bindings)
+	prepared, err := manager.Prepare(context.Background(), "primary", RunRef{RunID: "run-noop", Generation: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Cleanup(context.Background(), prepared, true); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := New(bindings).Recover(context.Background(), "primary", prepared.Run, prepared.Path)
+	if err != nil {
+		t.Fatalf("Recover() after complete cleanup error = %v", err)
+	}
+	if err := New(bindings).Cleanup(context.Background(), recovered, true); err != nil {
+		t.Fatalf("Cleanup() after complete cleanup error = %v", err)
+	}
+}
+
+func TestRecoverEmptyPathDerivesWorktreeRecoverySafely(t *testing.T) {
+	t.Run("owned worktree", func(t *testing.T) {
+		repository := newRepository(t)
+		bindings := map[string]config.Workspace{
+			"primary": {Policy: config.WorkspacePolicyGitWorktree, Repository: repository, Root: filepath.Join(t.TempDir(), "worktrees"), Ref: "HEAD", Cleanup: config.CleanupAlways},
+		}
+		prepared, err := New(bindings).Prepare(context.Background(), "primary", RunRef{RunID: "run-empty-owned", Generation: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		recovered, err := New(bindings).Recover(context.Background(), "primary", prepared.Run, "")
+		if err != nil {
+			t.Fatalf("Recover(empty) error = %v", err)
+		}
+		if recovered.Path != prepared.Path {
+			t.Fatalf("Recover(empty).Path = %q, want %q", recovered.Path, prepared.Path)
+		}
+		if err := New(bindings).Cleanup(context.Background(), recovered, true); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("before create is no-op", func(t *testing.T) {
+		repository := newRepository(t)
+		root := filepath.Join(t.TempDir(), "worktrees")
+		bindings := map[string]config.Workspace{
+			"primary": {Policy: config.WorkspacePolicyGitWorktree, Repository: repository, Root: root, Ref: "HEAD", Cleanup: config.CleanupAlways},
+		}
+		recovered, err := New(bindings).Recover(context.Background(), "primary", RunRef{RunID: "run-empty-missing", Generation: 1}, "")
+		if err != nil {
+			t.Fatalf("Recover(empty) before Prepare error = %v", err)
+		}
+		if err := New(bindings).Cleanup(context.Background(), recovered, true); err != nil {
+			t.Fatalf("Cleanup() before Prepare error = %v", err)
+		}
+		if _, err := os.Stat(root); !os.IsNotExist(err) {
+			t.Fatalf("empty recovery created worktree root: %v", err)
+		}
+	})
+
+	t.Run("foreign target", func(t *testing.T) {
+		repository := newRepository(t)
+		root := filepath.Join(t.TempDir(), "worktrees")
+		run := RunRef{RunID: "run-empty-foreign", Generation: 1}
+		bindings := map[string]config.Workspace{
+			"primary": {Policy: config.WorkspacePolicyGitWorktree, Repository: repository, Root: root, Ref: "HEAD", Cleanup: config.CleanupAlways},
+		}
+		target := filepath.Join(root, "binding-primary", "run-"+run.RunID, "generation-1")
+		if err := os.MkdirAll(target, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := New(bindings).Recover(context.Background(), "primary", run, ""); err == nil || !strings.Contains(err.Error(), "not a registered worktree") {
+			t.Fatalf("Recover(empty) error = %v, want foreign target rejection", err)
+		}
+	})
+
+	t.Run("registered target without reservation", func(t *testing.T) {
+		repository := newRepository(t)
+		bindings := map[string]config.Workspace{
+			"primary": {Policy: config.WorkspacePolicyGitWorktree, Repository: repository, Root: filepath.Join(t.TempDir(), "worktrees"), Ref: "HEAD", Cleanup: config.CleanupAlways},
+		}
+		prepared, err := New(bindings).Prepare(context.Background(), "primary", RunRef{RunID: "run-empty-unowned", Generation: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(prepared.reservation); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := New(bindings).Recover(context.Background(), "primary", prepared.Run, ""); err == nil || !strings.Contains(err.Error(), "reservation") {
+			t.Fatalf("Recover(empty) error = %v, want missing reservation rejection", err)
+		}
+		runGit(t, repository, "worktree", "remove", "--force", prepared.Path)
+	})
+}
+
+func TestRecoverRefusesForeignTargetAfterManagedWorktreeWasRemoved(t *testing.T) {
+	repository := newRepository(t)
+	bindings := map[string]config.Workspace{
+		"primary": {Policy: config.WorkspacePolicyGitWorktree, Repository: repository, Root: filepath.Join(t.TempDir(), "worktrees"), Ref: "HEAD", Cleanup: config.CleanupAlways},
+	}
+	manager := New(bindings)
+	prepared, err := manager.Prepare(context.Background(), "primary", RunRef{RunID: "run-foreign-after-remove", Generation: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repository, "worktree", "remove", "--force", prepared.Path)
+	if err := os.MkdirAll(prepared.Path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(bindings).Recover(context.Background(), "primary", prepared.Run, prepared.Path); err == nil || !strings.Contains(err.Error(), "not a registered worktree") {
+		t.Fatalf("Recover() error = %v, want foreign target rejection", err)
+	}
+	if err := New(bindings).Cleanup(context.Background(), prepared, true); err == nil || !strings.Contains(err.Error(), "not a worktree") {
+		t.Fatalf("Cleanup() error = %v, want foreign target rejection", err)
+	}
+	if _, err := os.Stat(prepared.Path); err != nil {
+		t.Fatalf("Cleanup() removed foreign target: %v", err)
+	}
 }
 
 func TestPrepareRejectsSymlinkRootEscape(t *testing.T) {

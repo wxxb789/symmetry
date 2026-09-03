@@ -423,6 +423,166 @@ func TestQueueTerminalTransitionIsAtomic(t *testing.T) {
 	}
 }
 
+func TestEnterCleanupPendingPreservesTerminalAuditAndControlsDelivery(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-1", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	key := journal.Key()
+	pendingAt := time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC)
+	if _, err := store.QueueTerminalTransitionAt(key, protocol.StateTransitionRequest{TransitionID: "completed-1", State: "completed", Payload: json.RawMessage(`{}`)}, pendingAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ResolveTerminal(key, TerminalVerdictAccepted, pendingAt.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.EnterCleanupPending(key); err == nil {
+		t.Fatal("EnterCleanupPending() accepted an undelivered terminal transition")
+	}
+	if _, err := store.MarkTransitionsDelivered(key, []string{"completed-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.QueueCommandAcknowledgement(key, protocol.CommandAcknowledgement{CommandID: "command-pending", Outcome: "applied", AckID: "ack-pending"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.EnterCleanupPending(key); err == nil {
+		t.Fatal("EnterCleanupPending() accepted a pending command acknowledgement")
+	}
+	if _, err := store.MarkCommandAcknowledgementsDelivered(key, []string{"ack-pending"}); err != nil {
+		t.Fatal(err)
+	}
+	entered, err := store.EnterCleanupPending(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entered.LocalState != "cleanup_pending" || entered.TerminalVerdict != TerminalVerdictAccepted || !entered.TerminalPendingAt.Equal(pendingAt) {
+		t.Fatalf("cleanup-pending journal = %#v", entered)
+	}
+	if _, err := store.EnterCleanupPending(key); err != nil {
+		t.Fatalf("EnterCleanupPending() was not idempotent: %v", err)
+	}
+
+	journal = testJournal("run-2", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	key = journal.Key()
+	if _, err := store.QueueTerminalTransitionAt(key, protocol.StateTransitionRequest{TransitionID: "failed-1", State: "failed", Payload: json.RawMessage(`{}`)}, pendingAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.QueueCommandAcknowledgement(key, protocol.CommandAcknowledgement{CommandID: "command-1", Outcome: "applied", AckID: "ack-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ResolveTerminal(key, TerminalVerdictOwnershipLost, pendingAt.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	entered, err = store.EnterCleanupPending(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entered.PendingTransitions) != 0 || len(entered.PendingCommandAcknowledgements) != 0 || entered.TerminalVerdict != TerminalVerdictOwnershipLost {
+		t.Fatalf("conclusive rejection retained delivery state: %#v", entered)
+	}
+}
+
+func TestCleanupPendingRoundTripsAcrossRestart(t *testing.T) {
+	directory := t.TempDir()
+	store, err := New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal := testJournal("run-1", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	pendingAt := time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC)
+	if _, err := store.QueueTerminalTransitionAt(journal.Key(), protocol.StateTransitionRequest{TransitionID: "completed-1", State: "completed", Payload: json.RawMessage(`{}`)}, pendingAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ResolveTerminal(journal.Key(), TerminalVerdictAccepted, pendingAt.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkTransitionsDelivered(journal.Key(), []string{"completed-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.EnterCleanupPending(journal.Key()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	loaded, err := restarted.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.LocalState != "cleanup_pending" || loaded.TerminalVerdict != TerminalVerdictAccepted || !loaded.TerminalPendingAt.Equal(pendingAt) {
+		t.Fatalf("cleanup-pending journal after restart = %#v", loaded)
+	}
+}
+
+func TestResolveTerminalForCleanupIsAtomicAndIdempotent(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-atomic-cleanup", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	key := journal.Key()
+	pendingAt := time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC)
+	if _, err := store.QueueTerminalTransitionAt(key, protocol.StateTransitionRequest{TransitionID: "failed-1", State: "failed", Payload: json.RawMessage(`{}`)}, pendingAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.QueueCommandAcknowledgement(key, protocol.CommandAcknowledgement{CommandID: "command-1", Outcome: "applied", AckID: "ack-1"}); err != nil {
+		t.Fatal(err)
+	}
+	resolvedAt := pendingAt.Add(time.Second)
+	updated, err := store.ResolveTerminalForCleanup(key, TerminalVerdictOwnershipLost, resolvedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.LocalState != "cleanup_pending" || updated.TerminalVerdict != TerminalVerdictOwnershipLost || !updated.TerminalResolvedAt.Equal(resolvedAt) || len(updated.PendingTransitions) != 0 || len(updated.PendingCommandAcknowledgements) != 0 {
+		t.Fatalf("atomic cleanup resolution = %#v", updated)
+	}
+	if _, err := store.ResolveTerminalForCleanup(key, TerminalVerdictOwnershipLost, resolvedAt.Add(time.Minute)); err != nil {
+		t.Fatalf("same verdict was not idempotent: %v", err)
+	}
+	if _, err := store.ResolveTerminalForCleanup(key, TerminalVerdictGraceExpired, resolvedAt); err == nil {
+		t.Fatal("conflicting verdict was accepted")
+	}
+}
+
+func TestWorkspacePathMutationPreservesTerminalOutboxAndRecoveryIntent(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-workspace-path", 1)
+	journal.WorkspacePath = ""
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	key := journal.Key()
+	if _, err := store.MarkWorkspaceRecoveryRequired(key); err != nil {
+		t.Fatal(err)
+	}
+	pendingAt := time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC)
+	if _, err := store.QueueTerminalTransitionAt(key, protocol.StateTransitionRequest{TransitionID: "cancelled-1", State: "cancelled", Payload: json.RawMessage(`{}`)}, pendingAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.QueueCommandAcknowledgement(key, protocol.CommandAcknowledgement{CommandID: "command-1", Outcome: "applied", AckID: "ack-1"}); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := store.SetWorkspacePath(key, `C:\work\run-workspace-path`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updated.WorkspaceRecoveryRequired || updated.WorkspacePath != `C:\work\run-workspace-path` || updated.LocalState != "terminal_pending" || len(updated.PendingTransitions) != 1 || updated.PendingTransitions[0].State != "cancelled" || len(updated.PendingCommandAcknowledgements) != 1 {
+		t.Fatalf("workspace path mutation lost terminal state: %#v", updated)
+	}
+}
+
 func TestAdvanceLeaseExpiryIsMonotonic(t *testing.T) {
 	store := mustStore(t)
 	journal := testJournal("run-1", 1)

@@ -633,6 +633,13 @@ func TestPreparedWorkspaceIsCleanedAfterStartFailure(t *testing.T) {
 	key := state.RunKey{RunID: "run-1", Generation: 1}
 	daemon.startAssignment(context.Background(), protocol.Assignment{RunID: key.RunID, Generation: key.Generation, Work: protocol.Work{Goal: "g"}})
 	daemon.workers.Wait()
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := daemon.flushRun(context.Background(), journal); err != nil {
+		t.Fatal(err)
+	}
 	select {
 	case succeeded := <-cleaned:
 		if succeeded {
@@ -641,12 +648,8 @@ func TestPreparedWorkspaceIsCleanedAfterStartFailure(t *testing.T) {
 	default:
 		t.Fatal("prepared workspace was not cleaned")
 	}
-	journal, err := store.LoadJournal(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(journal.PendingTransitions) != 2 || journal.PendingTransitions[0].State != "running" || journal.PendingTransitions[1].State != "failed" {
-		t.Fatalf("transitions = %#v", journal.PendingTransitions)
+	if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
+		t.Fatalf("journal = %v, want deleted after terminal cleanup", err)
 	}
 }
 
@@ -741,6 +744,9 @@ func TestCancelDuringBlockedPrepareAcknowledgesAndCleansUp(t *testing.T) {
 	}
 	if len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].Outcome != "applied" {
 		t.Fatalf("acknowledgements = %#v", journal.PendingCommandAcknowledgements)
+	}
+	if err := daemon.flushRun(context.Background(), journal); err != nil {
+		t.Fatal(err)
 	}
 	select {
 	case succeeded := <-workspace.cleaned:
@@ -1230,7 +1236,16 @@ func TestRenewalRequiresLiveNonterminalProcess(t *testing.T) {
 			name: "cleanup journal",
 			prepare: func(t *testing.T, store *state.Store, key state.RunKey) {
 				t.Helper()
-				if _, err := store.SetLocalState(key, "cleanup_pending"); err != nil {
+				if _, err := store.QueueTerminalTransition(key, protocol.StateTransitionRequest{TransitionID: "completed-1", State: "completed", Payload: json.RawMessage(`{}`)}); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := store.ResolveTerminal(key, state.TerminalVerdictAccepted, time.Date(2026, 9, 3, 1, 2, 4, 0, time.UTC)); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := store.MarkTransitionsDelivered(key, []string{"completed-1"}); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := store.EnterCleanupPending(key); err != nil {
 					t.Fatal(err)
 				}
 			},
@@ -1434,6 +1449,7 @@ func TestTerminalAcceptanceReleasesSlotBeforeCleanup(t *testing.T) {
 	if err := daemon.queueTerminalTransition(key, "completed", map[string]any{}); err != nil {
 		t.Fatal(err)
 	}
+	persistWorkspacePath(t, store, key, "C:\\workspace")
 	journal, err := store.LoadJournal(key)
 	if err != nil {
 		t.Fatal(err)
@@ -1445,7 +1461,7 @@ func TestTerminalAcceptanceReleasesSlotBeforeCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if journal.TerminalVerdict != state.TerminalVerdictAccepted || !journal.TerminalResolvedAt.Equal(now) || len(slots) != 0 {
+	if journal.LocalState != "cleanup_pending" || journal.TerminalVerdict != state.TerminalVerdictAccepted || !journal.TerminalResolvedAt.Equal(now) || len(slots) != 0 {
 		t.Fatalf("accepted terminal journal = %#v, slots = %d", journal, len(slots))
 	}
 }
@@ -1466,15 +1482,18 @@ func TestTerminalAcknowledgementDoesNotMaskTransitionRejection(t *testing.T) {
 			slots := make(chan struct{}, 1)
 			slots <- struct{}{}
 			daemon := &daemon{
-				store:   store,
-				control: &terminalAcknowledgementControl{transitionErr: test.err},
-				options: options{clock: func() time.Time { return now }, newID: ids()},
-				running: map[state.RunKey]*runningRun{key: {slotHeld: true}},
-				slots:   slots,
+				store:     store,
+				control:   &terminalAcknowledgementControl{transitionErr: test.err},
+				workspace: failingCleanupWorkspace{},
+				log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
+				options:   options{clock: func() time.Time { return now }, newID: ids()},
+				running:   map[state.RunKey]*runningRun{key: {slotHeld: true}},
+				slots:     slots,
 			}
 			if err := daemon.queueTerminalTransition(key, "cancelled", map[string]any{}); err != nil {
 				t.Fatal(err)
 			}
+			persistWorkspacePath(t, store, key, "C:\\workspace")
 			daemon.queueCommandAcknowledgement(key, "cancel-1", "applied")
 			journal, err := store.LoadJournal(key)
 			if err != nil {
@@ -1487,8 +1506,13 @@ func TestTerminalAcknowledgementDoesNotMaskTransitionRejection(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if journal.TerminalVerdict != test.verdict || !journal.TerminalResolvedAt.Equal(now) || len(slots) != 0 || len(journal.PendingTransitions) != 1 {
+			if journal.LocalState != "cleanup_pending" || journal.TerminalVerdict != test.verdict || !journal.TerminalResolvedAt.Equal(now) || len(slots) != 0 || len(journal.PendingTransitions) != 0 || len(journal.PendingCommandAcknowledgements) != 0 {
 				t.Fatalf("acknowledged terminal journal = %#v, slots = %d", journal, len(slots))
+			}
+			daemon.workspace = &fakeWorkspace{}
+			daemon.flushAll(context.Background())
+			if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
+				t.Fatalf("conclusively rejected journal = %v, want deleted after cleanup", err)
 			}
 		})
 	}
@@ -1521,6 +1545,7 @@ func TestTerminalOutboxOwnershipLossDropsOrdinaryItemsAndDeliversTerminal(t *tes
 	if err := daemon.queueTerminalTransition(key, "completed", map[string]any{}); err != nil {
 		t.Fatal(err)
 	}
+	persistWorkspacePath(t, store, key, "C:\\workspace")
 	journal, err := store.LoadJournal(key)
 	if err != nil {
 		t.Fatal(err)
@@ -1599,6 +1624,7 @@ func TestTerminalCleanupRetryPreservesSucceededOutcome(t *testing.T) {
 	if err := daemon.queueTerminalTransition(key, "completed", map[string]any{}); err != nil {
 		t.Fatal(err)
 	}
+	persistWorkspacePath(t, store, key, "C:\\workspace")
 	journal, err := store.LoadJournal(key)
 	if err != nil {
 		t.Fatal(err)
@@ -1709,6 +1735,7 @@ func TestAcceptedTerminalRetiresFenceRejectedAcknowledgement(t *testing.T) {
 			if err := daemon.queueTerminalTransition(key, "completed", map[string]any{}); err != nil {
 				t.Fatal(err)
 			}
+			persistWorkspacePath(t, store, key, "C:\\workspace")
 			daemon.queueCommandAcknowledgement(key, "input-1", "applied")
 			journal, err := store.LoadJournal(key)
 			if err != nil {
@@ -1744,6 +1771,7 @@ func TestTerminalVerdictPersistsAndReleasesSlotBeforeCleanup(t *testing.T) {
 		store:     store,
 		control:   &terminalVerdictControl{transitionErr: &control.APIError{StatusCode: http.StatusConflict, Code: control.TerminalGraceExpired}},
 		workspace: failingCleanupWorkspace{},
+		log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		options:   options{clock: func() time.Time { return now }, newID: ids()},
 		running: map[state.RunKey]*runningRun{key: {
 			slotHeld: true,
@@ -1754,6 +1782,7 @@ func TestTerminalVerdictPersistsAndReleasesSlotBeforeCleanup(t *testing.T) {
 	if err := daemon.queueTerminalTransition(key, "completed", map[string]any{}); err != nil {
 		t.Fatal(err)
 	}
+	persistWorkspacePath(t, store, key, "C:\\workspace")
 	journal, err := store.LoadJournal(key)
 	if err != nil {
 		t.Fatal(err)
@@ -1776,10 +1805,11 @@ func TestCancelledTerminalOwnershipLossPersistsVerdictAndReleasesSlot(t *testing
 	slots := make(chan struct{}, 1)
 	slots <- struct{}{}
 	daemon := &daemon{
-		store:   store,
-		control: &terminalVerdictControl{transitionErr: &control.APIError{StatusCode: http.StatusConflict, Code: control.OwnershipLost}},
-		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		options: options{newID: ids()},
+		store:     store,
+		control:   &terminalVerdictControl{transitionErr: &control.APIError{StatusCode: http.StatusConflict, Code: control.OwnershipLost}},
+		workspace: failingCleanupWorkspace{},
+		log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		options:   options{newID: ids()},
 		running: map[state.RunKey]*runningRun{key: {
 			slotHeld: true,
 		}},
@@ -1788,6 +1818,7 @@ func TestCancelledTerminalOwnershipLossPersistsVerdictAndReleasesSlot(t *testing
 	if err := daemon.queueTerminalTransition(key, "cancelled", map[string]any{}); err != nil {
 		t.Fatal(err)
 	}
+	persistWorkspacePath(t, store, key, "C:\\workspace")
 	daemon.queueCommandAcknowledgement(key, "cancel-1", "applied")
 	journal, err := store.LoadJournal(key)
 	if err != nil {
@@ -1831,7 +1862,8 @@ func TestOwnershipLossReleasesActiveSlotAfterProcessStops(t *testing.T) {
 	if _, err := store.QueueEvent(key, protocol.RunEvent{EventID: "event-1", Sequence: 1, Kind: "output", OccurredAt: time.Now().UTC(), Payload: []byte(`{}`)}); err != nil {
 		t.Fatal(err)
 	}
-	process := newBlockingProcess()
+	persistWorkspacePath(t, store, key, "C:\\workspace")
+	process := newDeferredExitProcess()
 	cleaned := make(chan bool, 1)
 	slots := make(chan struct{}, 1)
 	slots <- struct{}{}
@@ -1853,6 +1885,20 @@ func TestOwnershipLossReleasesActiveSlotAfterProcessStops(t *testing.T) {
 		t.Fatal(err)
 	}
 	daemon.flushRun(context.Background(), journal)
+	select {
+	case <-process.terminated:
+	case <-time.After(time.Second):
+		t.Fatal("ownership loss did not terminate the process")
+	}
+	select {
+	case <-cleaned:
+		t.Fatal("workspace cleanup started before the process exited")
+	default:
+	}
+	if len(slots) != 1 {
+		t.Fatal("slot was released before the process exited")
+	}
+	close(process.exit)
 	daemon.workers.Wait()
 	if process.terminations != 1 {
 		t.Fatalf("Terminate calls = %d, want 1", process.terminations)
@@ -2073,7 +2119,7 @@ func TestRecoveredCleanupRulesPreserveOrRemoveJournalSafely(t *testing.T) {
 	})
 	t.Run("missing binding is retained", func(t *testing.T) {
 		daemon := &daemon{log: slog.New(slog.NewJSONHandler(io.Discard, nil))}
-		if err := daemon.cleanupRecoveredWorkspace(state.RunJournal{WorkspacePath: "C:\\workspace"}, false); err == nil {
+		if err := daemon.cleanupRecoveredWorkspace(context.Background(), state.RunJournal{WorkspacePath: "C:\\workspace"}, false); err == nil {
 			t.Fatal("cleanupRecoveredWorkspace accepted a missing binding key")
 		}
 	})
@@ -3151,6 +3197,11 @@ func TestCancelWinsCompletionAndFlushesAcknowledgement(t *testing.T) {
 	if len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].State != "cancelled" || len(journal.PendingCommandAcknowledgements) != 1 {
 		t.Fatalf("terminal journal = %#v", journal)
 	}
+	persistWorkspacePath(t, store, key, "C:\\workspace")
+	journal, err = store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
 	daemon.flushRun(context.Background(), journal)
 	if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
 		t.Fatalf("journal = %v, want deleted", err)
@@ -3615,6 +3666,18 @@ func claimedStore(t *testing.T) (*state.Store, state.RunKey) {
 		t.Fatal(err)
 	}
 	return store, key
+}
+
+func persistWorkspacePath(t *testing.T, store *state.Store, key state.RunKey, path string) {
+	t.Helper()
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal.WorkspacePath = path
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func testConfig(t *testing.T) config.Config {
@@ -4464,8 +4527,8 @@ type retryCleanupWorkspace struct {
 func (*retryCleanupWorkspace) Prepare(context.Context, string, workspace.RunRef) (workspace.Prepared, error) {
 	return workspace.Prepared{}, errors.New("unexpected prepare")
 }
-func (*retryCleanupWorkspace) Recover(context.Context, string, workspace.RunRef, string) (workspace.Prepared, error) {
-	return workspace.Prepared{}, errors.New("unexpected recover")
+func (*retryCleanupWorkspace) Recover(_ context.Context, key string, run workspace.RunRef, path string) (workspace.Prepared, error) {
+	return workspace.Prepared{Path: path, BindingKey: key, Run: run}, nil
 }
 func (workspace *retryCleanupWorkspace) Cleanup(_ context.Context, _ workspace.Prepared, succeeded bool) error {
 	workspace.outcomes = append(workspace.outcomes, succeeded)
@@ -4549,3 +4612,28 @@ func (process *blockingProcess) Wait() execution.Result {
 	return execution.Result{Terminated: true}
 }
 func (*blockingProcess) ProcessDetails() (int, string) { return 44, "test:44" }
+
+type deferredExitProcess struct {
+	terminated   chan struct{}
+	exit         chan struct{}
+	once         sync.Once
+	terminations int
+}
+
+func newDeferredExitProcess() *deferredExitProcess {
+	return &deferredExitProcess{terminated: make(chan struct{}), exit: make(chan struct{})}
+}
+
+func (*deferredExitProcess) WriteInput([]byte) error { return nil }
+func (process *deferredExitProcess) Terminate(context.Context, time.Duration) error {
+	process.once.Do(func() {
+		process.terminations++
+		close(process.terminated)
+	})
+	return nil
+}
+func (process *deferredExitProcess) Wait() execution.Result {
+	<-process.exit
+	return execution.Result{Terminated: true}
+}
+func (*deferredExitProcess) ProcessDetails() (int, string) { return 45, "test:45" }

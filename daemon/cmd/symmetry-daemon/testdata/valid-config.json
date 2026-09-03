@@ -2,6 +2,7 @@
   "control_plane_url": "https://control.example.test/api",
   "state_dir": ".symmetry/state",
   "machine_name": "builder-01",
+  "cleanup_timeout_ms": 120000,
   "agent_profiles": {
     "default": {
       "command": "codex",
