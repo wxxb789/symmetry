@@ -484,6 +484,25 @@ func TestPrepareSyncsReservationAndJournal(t *testing.T) {
 	}
 }
 
+func TestDurableJournalPublishDoesNotReplaceExistingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), journalName)
+	if err := os.WriteFile(path, []byte("first"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := writeDurableFile(path, []byte("second"), func(file *os.File) error { return file.Sync() }, syncDirectory)
+	if err == nil {
+		t.Fatal("writeDurableFile() replaced an existing ownership journal")
+	}
+	contents, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(contents) != "first" {
+		t.Fatalf("journal contents = %q, want original ownership", contents)
+	}
+}
+
 type prepareResult struct {
 	prepared Prepared
 	err      error

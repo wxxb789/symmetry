@@ -666,8 +666,8 @@ func writeDurableFile(path string, contents []byte, syncFile func(*os.File) erro
 	if err := temporary.Close(); err != nil {
 		return fmt.Errorf("close temporary file: %w", err)
 	}
-	if err := os.Rename(temporaryPath, path); err != nil {
-		return fmt.Errorf("rename temporary file: %w", err)
+	if err := os.Link(temporaryPath, path); err != nil {
+		return fmt.Errorf("publish temporary file: %w", err)
 	}
 	if err := syncParent(parent); err != nil {
 		return fmt.Errorf("sync parent directory: %w", err)
