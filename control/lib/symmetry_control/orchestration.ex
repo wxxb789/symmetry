@@ -21,6 +21,10 @@ defmodule SymmetryControl.Orchestration do
   }
 
   @terminal_states ["completed", "failed", "cancelled", "expired"]
+  @capacity_bearing_states ["assigned", "claimed", "running", "waiting_for_input", "cancelling"]
+  @default_history_limit 100
+  @max_history_limit 500
+  @timeline_source_ranks %{"event" => 0, "transition" => 1, "command" => 2}
 
   @spec enroll_machine(map(), keyword()) ::
           {:ok, %{machine: Machine.t(), token: String.t()}}
@@ -289,6 +293,55 @@ defmodule SymmetryControl.Orchestration do
 
   def fetch_runtime(_), do: {:error, :invalid_request}
 
+  @spec runtime_snapshots() :: {:ok, [map()]}
+  def runtime_snapshots do
+    Repo.all(
+      from runtime in Runtime,
+        join: machine in Machine,
+        on: machine.id == runtime.machine_id,
+        left_join: run in Run,
+        on:
+          run.runtime_id == runtime.id and
+            run.state in ^@capacity_bearing_states,
+        order_by: [
+          asc: machine.inserted_at,
+          asc: machine.id,
+          asc: runtime.inserted_at,
+          asc: runtime.id,
+          asc: run.inserted_at,
+          asc: run.id
+        ],
+        select: %{machine: machine, runtime: runtime, run: run}
+    )
+    |> runtime_read_models()
+    |> then(&{:ok, &1})
+  end
+
+  @spec runtime_snapshot(Ecto.UUID.t()) :: {:ok, map()} | {:error, :not_found | :invalid_request}
+  def runtime_snapshot(id) when is_binary(id) do
+    if valid_uuid?(id) do
+      case Repo.all(
+             from runtime in Runtime,
+               join: machine in Machine,
+               on: machine.id == runtime.machine_id,
+               left_join: run in Run,
+               on:
+                 run.runtime_id == runtime.id and
+                   run.state in ^@capacity_bearing_states,
+               where: runtime.id == ^id,
+               order_by: [asc: run.inserted_at, asc: run.id],
+               select: %{machine: machine, runtime: runtime, run: run}
+           ) do
+        [] -> {:error, :not_found}
+        rows -> {:ok, rows |> runtime_read_models() |> List.first()}
+      end
+    else
+      {:error, :invalid_request}
+    end
+  end
+
+  def runtime_snapshot(_), do: {:error, :invalid_request}
+
   @spec fetch_command(Ecto.UUID.t()) ::
           {:ok, Command.t()} | {:error, :not_found | :invalid_request}
   def fetch_command(id) when is_binary(id) do
@@ -344,18 +397,35 @@ defmodule SymmetryControl.Orchestration do
   def machine_owns_command?(_, _), do: false
 
   @spec task_snapshot(Ecto.UUID.t()) ::
-          {:ok, %{task: Task.t(), run: Run.t() | nil}} | {:error, atom()}
+          {:ok,
+           %{
+             task: Task.t(),
+             run: Run.t() | nil,
+             waiting: map() | nil,
+             latest_command: Command.t() | nil
+           }}
+          | {:error, atom()}
   def task_snapshot(task_id) when is_binary(task_id) do
     if valid_uuid?(task_id) do
-      case Repo.one(
-             from task in Task,
-               left_join: run in Run,
-               on: run.task_id == task.id and run.generation == task.current_generation,
-               where: task.id == ^task_id,
-               select: %{task: task, run: run}
-           ) do
-        nil -> {:error, :not_found}
-        snapshot -> {:ok, snapshot}
+      Repo.transaction(fn ->
+        task = share_task(task_id)
+
+        run =
+          Repo.one(
+            from run in Run,
+              where: run.task_id == ^task.id and run.generation == ^task.current_generation
+          )
+
+        %{
+          task: task,
+          run: run,
+          waiting: current_waiting_context(task, run),
+          latest_command: latest_task_command(task.id)
+        }
+      end)
+      |> case do
+        {:ok, snapshot} -> {:ok, snapshot}
+        {:error, reason} -> {:error, reason}
       end
     else
       {:error, :invalid_request}
@@ -363,6 +433,417 @@ defmodule SymmetryControl.Orchestration do
   end
 
   def task_snapshot(_), do: {:error, :invalid_request}
+
+  @spec list_task_events(Ecto.UUID.t(), keyword()) :: {:ok, map()} | {:error, atom()}
+  def list_task_events(task_id, opts \\ []) do
+    with_history_task(task_id, opts, :after, fn limit, after_position ->
+      query =
+        from event in RunEvent,
+          join: run in Run,
+          on: run.id == event.run_id,
+          where: run.task_id == ^task_id,
+          order_by: [asc: event.inserted_at, asc: event.id],
+          select: %{
+            id: event.id,
+            run_id: run.id,
+            generation: run.generation,
+            event_id: event.event_id,
+            sequence: event.sequence,
+            kind: event.kind,
+            payload: event.payload,
+            occurred_at: event.occurred_at,
+            inserted_at: event.inserted_at
+          }
+
+      query
+      |> after_position(after_position)
+      |> page_query(limit)
+      |> Repo.all()
+      |> page_with_next(limit, :next_after)
+    end)
+  end
+
+  @spec list_task_transitions(Ecto.UUID.t(), keyword()) :: {:ok, map()} | {:error, atom()}
+  def list_task_transitions(task_id, opts \\ []) do
+    with_history_task(task_id, opts, :after, fn limit, after_position ->
+      query =
+        from transition in RunTransition,
+          join: run in Run,
+          on: run.id == transition.run_id,
+          where: run.task_id == ^task_id,
+          order_by: [asc: transition.inserted_at, asc: transition.id],
+          select: %{
+            id: transition.id,
+            run_id: run.id,
+            generation: run.generation,
+            transition_id: transition.transition_id,
+            state: transition.state,
+            payload: transition.payload,
+            inserted_at: transition.inserted_at
+          }
+
+      query
+      |> after_position(after_position)
+      |> page_query(limit)
+      |> Repo.all()
+      |> page_with_next(limit, :next_after)
+    end)
+  end
+
+  @spec list_task_commands(Ecto.UUID.t(), keyword()) :: {:ok, map()} | {:error, atom()}
+  def list_task_commands(task_id, opts \\ []) do
+    with_history_task(task_id, opts, :after, fn limit, after_position ->
+      query =
+        from command in Command,
+          where: command.task_id == ^task_id,
+          order_by: [asc: command.inserted_at, asc: command.id],
+          select: %{
+            id: command.id,
+            task_id: command.task_id,
+            run_id: command.run_id,
+            generation: command.generation,
+            kind: command.kind,
+            payload: command.payload,
+            state: command.state,
+            applied_at: command.applied_at,
+            acknowledgement_id: command.acknowledgement_id,
+            acknowledgement_outcome: command.acknowledgement_outcome,
+            acknowledged_at: command.acknowledged_at,
+            inserted_at: command.inserted_at
+          }
+
+      query
+      |> after_position(after_position)
+      |> page_query(limit)
+      |> Repo.all()
+      |> page_with_next(limit, :next_after)
+    end)
+  end
+
+  @spec task_timeline(Ecto.UUID.t(), keyword()) :: {:ok, map()} | {:error, atom()}
+  def task_timeline(task_id, opts \\ []) do
+    with_history_task(task_id, opts, :before, fn limit, before_position ->
+      fetch_limit = limit + 1
+
+      entries =
+        task_timeline_events(task_id, before_position, fetch_limit) ++
+          task_timeline_transitions(task_id, before_position, fetch_limit) ++
+          task_timeline_commands(task_id, before_position, fetch_limit)
+
+      entries
+      |> Enum.sort(&timeline_precedes?/2)
+      |> Enum.take(fetch_limit)
+      |> page_with_next(limit, :next_before)
+    end)
+  end
+
+  defp runtime_read_models(rows) do
+    {completed, current} =
+      Enum.reduce(rows, {[], nil}, fn row, {completed, current} ->
+        case current do
+          nil ->
+            {completed, runtime_read_model(row)}
+
+          %{runtime_id: runtime_id} when runtime_id == row.runtime.id ->
+            {completed, add_active_run(current, row.run)}
+
+          snapshot ->
+            {[finish_runtime_read_model(snapshot) | completed], runtime_read_model(row)}
+        end
+      end)
+
+    completed =
+      if is_nil(current), do: completed, else: [finish_runtime_read_model(current) | completed]
+
+    Enum.reverse(completed)
+  end
+
+  defp runtime_read_model(%{machine: machine, runtime: runtime, run: run}) do
+    %{
+      machine_id: machine.id,
+      machine_name: machine.name,
+      runtime_id: runtime.id,
+      runtime_key: runtime.runtime_key,
+      runtime_name: runtime.name,
+      status: runtime.status,
+      last_heartbeat_at: runtime.last_heartbeat_at,
+      connection_epoch: runtime.connection_epoch,
+      capacity: runtime.capacity,
+      reserved_capacity: 0,
+      active_runs: []
+    }
+    |> add_active_run(run)
+  end
+
+  defp add_active_run(snapshot, nil), do: snapshot
+
+  defp add_active_run(snapshot, run) do
+    active_run = %{
+      run_id: run.id,
+      task_id: run.task_id,
+      generation: run.generation,
+      state: run.state,
+      inserted_at: run.inserted_at
+    }
+
+    %{
+      snapshot
+      | reserved_capacity: snapshot.reserved_capacity + 1,
+        active_runs: [active_run | snapshot.active_runs]
+    }
+  end
+
+  defp finish_runtime_read_model(snapshot),
+    do: %{snapshot | active_runs: Enum.reverse(snapshot.active_runs)}
+
+  defp current_waiting_context(
+         %Task{state: "waiting_for_input", current_generation: generation},
+         %Run{state: "waiting_for_input", generation: generation} = run
+       ) do
+    case Repo.one(
+           from transition in RunTransition,
+             where: transition.run_id == ^run.id and transition.state == "waiting_for_input",
+             order_by: [desc: transition.inserted_at, desc: transition.id],
+             limit: 1,
+             select: transition
+         ) do
+      nil ->
+        nil
+
+      transition ->
+        %{
+          run_id: run.id,
+          generation: run.generation,
+          transition_id: transition.transition_id,
+          question: value(transition.payload, :question),
+          payload: transition.payload,
+          inserted_at: transition.inserted_at
+        }
+    end
+  end
+
+  defp current_waiting_context(_, _), do: nil
+
+  defp latest_task_command(task_id) do
+    Repo.one(
+      from command in Command,
+        where: command.task_id == ^task_id,
+        order_by: [desc: command.inserted_at, desc: command.id],
+        limit: 1
+    )
+  end
+
+  defp with_history_task(task_id, opts, direction, callback) do
+    with true <- valid_uuid?(task_id),
+         {:ok, limit} <- history_limit(opts),
+         {:ok, position} <- history_position(opts, direction) do
+      if Repo.exists?(from task in Task, where: task.id == ^task_id) do
+        {:ok, callback.(limit, position)}
+      else
+        {:error, :not_found}
+      end
+    else
+      _ -> {:error, :invalid_request}
+    end
+  end
+
+  defp history_limit(opts) when is_list(opts) do
+    case Keyword.get(opts, :limit, @default_history_limit) do
+      limit when is_integer(limit) and limit > 0 and limit <= @max_history_limit -> {:ok, limit}
+      _ -> {:error, :invalid_request}
+    end
+  end
+
+  defp history_limit(_), do: {:error, :invalid_request}
+
+  defp history_position(opts, :after) when is_list(opts),
+    do: validate_history_position(Keyword.get(opts, :after))
+
+  defp history_position(opts, :before) when is_list(opts),
+    do: validate_timeline_position(Keyword.get(opts, :before))
+
+  defp history_position(_, _), do: {:error, :invalid_request}
+
+  defp validate_history_position(nil), do: {:ok, nil}
+
+  defp validate_history_position(%{inserted_at: %DateTime{} = inserted_at, id: id})
+       when is_binary(id) do
+    if valid_uuid?(id),
+      do: {:ok, %{inserted_at: inserted_at, id: id}},
+      else: {:error, :invalid_request}
+  end
+
+  defp validate_history_position(_), do: {:error, :invalid_request}
+
+  defp validate_timeline_position(nil), do: {:ok, nil}
+
+  defp validate_timeline_position(%{
+         inserted_at: %DateTime{} = inserted_at,
+         source: source,
+         id: id
+       })
+       when is_binary(source) and is_binary(id) do
+    if Map.has_key?(@timeline_source_ranks, source) and valid_uuid?(id) do
+      {:ok, %{inserted_at: inserted_at, source: source, id: id}}
+    else
+      {:error, :invalid_request}
+    end
+  end
+
+  defp validate_timeline_position(_), do: {:error, :invalid_request}
+
+  defp after_position(query, nil), do: query
+
+  defp after_position(query, %{inserted_at: inserted_at, id: id}) do
+    where(
+      query,
+      [entry, ...],
+      entry.inserted_at > ^inserted_at or
+        (entry.inserted_at == ^inserted_at and entry.id > ^id)
+    )
+  end
+
+  defp page_query(query, page_limit), do: limit(query, ^(page_limit + 1))
+
+  defp page_with_next(entries, page_limit, cursor_key) do
+    {page, remainder} = Enum.split(entries, page_limit)
+
+    next_position =
+      if remainder == [] do
+        nil
+      else
+        page |> List.last() |> entry_position()
+      end
+
+    %{cursor_key => next_position, entries: page}
+  end
+
+  defp entry_position(%{source: source, inserted_at: inserted_at, id: id}),
+    do: %{inserted_at: inserted_at, source: source, id: id}
+
+  defp entry_position(%{inserted_at: inserted_at, id: id}),
+    do: %{inserted_at: inserted_at, id: id}
+
+  defp task_timeline_events(task_id, before_position, fetch_limit) do
+    from(event in RunEvent,
+      join: run in Run,
+      on: run.id == event.run_id,
+      where: run.task_id == ^task_id,
+      order_by: [desc: event.inserted_at, desc: event.id],
+      select: %{
+        source: "event",
+        id: event.id,
+        run_id: run.id,
+        generation: run.generation,
+        event_id: event.event_id,
+        sequence: event.sequence,
+        kind: event.kind,
+        payload: event.payload,
+        occurred_at: event.occurred_at,
+        inserted_at: event.inserted_at
+      }
+    )
+    |> timeline_before_position(before_position, "event")
+    |> limit(^fetch_limit)
+    |> Repo.all()
+  end
+
+  defp task_timeline_transitions(task_id, before_position, fetch_limit) do
+    from(transition in RunTransition,
+      join: run in Run,
+      on: run.id == transition.run_id,
+      where: run.task_id == ^task_id,
+      order_by: [desc: transition.inserted_at, desc: transition.id],
+      select: %{
+        source: "transition",
+        id: transition.id,
+        run_id: run.id,
+        generation: run.generation,
+        transition_id: transition.transition_id,
+        state: transition.state,
+        payload: transition.payload,
+        inserted_at: transition.inserted_at
+      }
+    )
+    |> timeline_before_position(before_position, "transition")
+    |> limit(^fetch_limit)
+    |> Repo.all()
+  end
+
+  defp task_timeline_commands(task_id, before_position, fetch_limit) do
+    from(command in Command,
+      where: command.task_id == ^task_id,
+      order_by: [desc: command.inserted_at, desc: command.id],
+      select: %{
+        source: "command",
+        id: command.id,
+        run_id: command.run_id,
+        generation: command.generation,
+        kind: command.kind,
+        payload: command.payload,
+        state: command.state,
+        applied_at: command.applied_at,
+        acknowledgement_id: command.acknowledgement_id,
+        acknowledgement_outcome: command.acknowledgement_outcome,
+        acknowledged_at: command.acknowledged_at,
+        inserted_at: command.inserted_at
+      }
+    )
+    |> timeline_before_position(before_position, "command")
+    |> limit(^fetch_limit)
+    |> Repo.all()
+  end
+
+  defp timeline_before_position(query, nil, _source), do: query
+
+  defp timeline_before_position(
+         query,
+         %{inserted_at: inserted_at, source: source, id: id},
+         entry_source
+       ) do
+    source_rank = Map.fetch!(@timeline_source_ranks, entry_source)
+    cursor_rank = Map.fetch!(@timeline_source_ranks, source)
+
+    case source_rank - cursor_rank do
+      difference when difference > 0 ->
+        where(
+          query,
+          [entry, ...],
+          entry.inserted_at < ^inserted_at or entry.inserted_at == ^inserted_at
+        )
+
+      0 ->
+        where(
+          query,
+          [entry, ...],
+          entry.inserted_at < ^inserted_at or
+            (entry.inserted_at == ^inserted_at and entry.id < ^id)
+        )
+
+      _ ->
+        where(query, [entry, ...], entry.inserted_at < ^inserted_at)
+    end
+  end
+
+  defp timeline_precedes?(left, right) do
+    case DateTime.compare(left.inserted_at, right.inserted_at) do
+      :gt ->
+        true
+
+      :lt ->
+        false
+
+      :eq ->
+        left_rank = Map.fetch!(@timeline_source_ranks, left.source)
+        right_rank = Map.fetch!(@timeline_source_ranks, right.source)
+
+        cond do
+          left_rank < right_rank -> true
+          left_rank > right_rank -> false
+          true -> left.id > right.id
+        end
+    end
+  end
 
   @spec assignment_target(Run.t()) ::
           {:ok, %{machine_id: Ecto.UUID.t(), runtime_id: Ecto.UUID.t()}} | {:error, :not_found}
@@ -434,8 +915,9 @@ defmodule SymmetryControl.Orchestration do
           ),
         where:
           fragment(
-            "(SELECT count(*) FROM runs AS active_run WHERE active_run.runtime_id = ? AND active_run.state IN ('assigned', 'claimed', 'running', 'waiting_for_input', 'cancelling')) < ?",
+            "(SELECT count(*) FROM runs AS active_run WHERE active_run.runtime_id = ? AND active_run.state = ANY(CAST(? AS text[]))) < ?",
             runtime.id,
+            ^@capacity_bearing_states,
             runtime.capacity
           ),
         order_by: [asc: task.inserted_at, asc: runtime.inserted_at],
@@ -988,12 +1470,12 @@ defmodule SymmetryControl.Orchestration do
       when is_integer(runtime_epoch) and runtime_epoch > 0 do
     if not valid_uuid?(runtime_id),
       do: {:error, :invalid_request},
-      else: runtime_snapshot(runtime_id, runtime_epoch, opts)
+      else: daemon_runtime_snapshot(runtime_id, runtime_epoch, opts)
   end
 
   def work_snapshot(_, _, _), do: {:error, :invalid_request}
 
-  defp runtime_snapshot(runtime_id, runtime_epoch, opts) do
+  defp daemon_runtime_snapshot(runtime_id, runtime_epoch, opts) do
     current = now(opts)
 
     Repo.transaction(fn ->
@@ -1336,6 +1818,11 @@ defmodule SymmetryControl.Orchestration do
   defp share_runtime(runtime_id),
     do:
       Repo.one(from runtime in Runtime, where: runtime.id == ^runtime_id, lock: "FOR SHARE") ||
+        rollback(:not_found)
+
+  defp share_task(task_id),
+    do:
+      Repo.one(from task in Task, where: task.id == ^task_id, lock: "FOR SHARE") ||
         rollback(:not_found)
 
   defp persist_insert(changeset) do

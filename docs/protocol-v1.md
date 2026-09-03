@@ -441,9 +441,30 @@ Task creation and reads return the same stable shape:
     "input": {}
   },
   "result": null,
-  "failure": null
+  "failure": null,
+  "waiting": null,
+  "latest_command": null
 }
 ```
+
+`waiting` is `null` unless the current run is in `waiting_for_input`. When it
+is present, it identifies the current run and generation and preserves the
+latest waiting transition exactly as recorded:
+
+```json
+{
+  "run_id": "uuid",
+  "generation": 2,
+  "transition_id": "uuid",
+  "question": "Choose the target branch",
+  "payload": {"question": "Choose the target branch"},
+  "recorded_at": "2026-09-03T00:00:20Z"
+}
+```
+
+`latest_command` is `null` when the task has no commands; otherwise it uses
+the command resource shape documented below. It may be `pending`, `applied`,
+or `acknowledged` independently of whether `waiting` is currently present.
 
 Task commands require an `Idempotency-Key` header and accept exactly one of the
 following request bodies:
@@ -506,6 +527,98 @@ accepted only while the current run is `waiting_for_input`; its command is
 atomically bound to the current run and generation, never a later generation.
 The daemon acknowledges and transitions the run back to `running`; both writes
 are independently retryable.
+
+### Operator Runtime And History Reads
+
+All of the following resources require the operator bearer token. They expose
+durable PostgreSQL state for inspection and do not affect scheduling, leases,
+or daemon delivery:
+
+```http
+GET /api/v1/runtimes
+GET /api/v1/runtimes/{runtime_id}
+GET /api/v1/tasks/{task_id}/timeline?before={cursor}&limit={limit}
+GET /api/v1/tasks/{task_id}/events?after={cursor}&limit={limit}
+GET /api/v1/tasks/{task_id}/transitions?after={cursor}&limit={limit}
+GET /api/v1/tasks/{task_id}/commands?after={cursor}&limit={limit}
+```
+
+The runtime collection returns `{"runtimes":[...]}`; the detail resource
+returns one item with the same shape. Each runtime item identifies the machine
+and runtime, and reports its durable liveness and reservations:
+
+```json
+{
+  "machine_id": "uuid",
+  "machine_name": "builder-01",
+  "runtime_id": "uuid",
+  "runtime_key": "default",
+  "runtime_name": "Local Codex",
+  "status": "online",
+  "last_heartbeat_at": "2026-09-03T00:00:20Z",
+  "connection_epoch": 3,
+  "capacity": 2,
+  "reserved_capacity": 1,
+  "active_runs": [
+    {
+      "run_id": "uuid",
+      "task_id": "uuid",
+      "generation": 2,
+      "state": "running",
+      "recorded_at": "2026-09-03T00:00:10Z"
+    }
+  ]
+}
+```
+
+`reserved_capacity` and `active_runs` include every capacity-bearing run:
+`assigned`, `claimed`, `running`, `waiting_for_input`, and `cancelling`.
+Unknown task and runtime IDs return `404 not_found`.
+
+Separate task history collections are oldest-first. Their response collection
+keys are respectively `events`, `transitions`, and `commands`; each response
+also includes nullable `next_after`. An event item contains `run_id`,
+`generation`, `event_id`, `sequence`, `kind`, `payload`, `occurred_at`, and
+`recorded_at`. A transition item contains `run_id`, `generation`,
+`transition_id`, `state`, `payload`, and `recorded_at`. A command item uses the
+full command resource shape above.
+
+The unified timeline is newest-first, including entries from every generation:
+
+```json
+{
+  "items": [
+    {
+      "source": "transition",
+      "run_id": "uuid",
+      "generation": 2,
+      "recorded_at": "2026-09-03T00:00:20Z",
+      "data": {
+        "transition_id": "uuid",
+        "state": "waiting_for_input",
+        "payload": {"question": "Choose the target branch"}
+      }
+    }
+  ],
+  "next_before": "opaque-cursor-or-null"
+}
+```
+
+Timeline `source` is one of `event`, `transition`, or `command`. Its `data`
+contains the source-specific fields from the corresponding history item, except
+for the entry's repeated `run_id`, `generation`, and `recorded_at` fields.
+
+History cursors are opaque `Phoenix.Token` values. A cursor is bound to version
+1, the task ID, endpoint surface, direction, durable insertion timestamp, and
+record ID; timeline cursors are also bound to their source. Clients must only
+reuse a returned cursor. A cursor expires 24 hours after issuance. Collections
+accept only `after`; timeline accepts only `before`. A cursor that is tampered
+with, belongs to another task or surface, uses the wrong direction, has
+expired, or has an unsupported version returns `400 invalid_request`.
+
+`limit` defaults to `100` and accepts integers from `1` through `500`.
+`0`, `501`, invalid values, and a cursor under the wrong direction parameter
+return `400 invalid_request`. Unknown additive query parameters are ignored.
 
 ### Acknowledge A Command
 

@@ -7,6 +7,12 @@ defmodule SymmetryControlWeb.Protocol do
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.{Command, Run, Runtime, Task}
 
+  @history_cursor_salt "task-history-v1"
+  @history_cursor_max_age_seconds 86_400
+  @default_history_limit 100
+  @max_history_limit 500
+  @timeline_sources ["event", "transition", "command"]
+
   @error_statuses %{
     invalid_request: {400, "invalid_request", "request payload is invalid"},
     unauthenticated: {401, "unauthenticated", "credential is missing or invalid"},
@@ -131,7 +137,24 @@ defmodule SymmetryControlWeb.Protocol do
     }
   end
 
-  def task(%{task: %Task{} = task, run: run}) do
+  def command(command) when is_map(command) do
+    %{
+      command_id: Map.fetch!(command, :id),
+      task_id: Map.fetch!(command, :task_id),
+      run_id: Map.fetch!(command, :run_id),
+      generation: Map.fetch!(command, :generation),
+      kind: Map.fetch!(command, :kind),
+      payload: Map.fetch!(command, :payload),
+      state: Map.fetch!(command, :state),
+      issued_at: iso8601(Map.fetch!(command, :inserted_at)),
+      applied_at: iso8601(Map.fetch!(command, :applied_at)),
+      acknowledgement_id: Map.fetch!(command, :acknowledgement_id),
+      acknowledgement_outcome: Map.fetch!(command, :acknowledgement_outcome),
+      acknowledged_at: iso8601(Map.fetch!(command, :acknowledged_at))
+    }
+  end
+
+  def task(%{task: %Task{} = task, run: run} = snapshot) do
     %{
       task_id: task.id,
       state: task.state,
@@ -139,11 +162,72 @@ defmodule SymmetryControlWeb.Protocol do
       generation: task.current_generation,
       work: work(task),
       result: task.result,
-      failure: task.failure
+      failure: task.failure,
+      waiting: waiting(Map.get(snapshot, :waiting)),
+      latest_command: latest_command(Map.get(snapshot, :latest_command))
     }
   end
 
   def task(%Task{} = task), do: task(%{task: task, run: nil})
+
+  def runtime(snapshot) when is_map(snapshot) do
+    %{
+      machine_id: Map.fetch!(snapshot, :machine_id),
+      machine_name: Map.fetch!(snapshot, :machine_name),
+      runtime_id: Map.fetch!(snapshot, :runtime_id),
+      runtime_key: Map.fetch!(snapshot, :runtime_key),
+      runtime_name: Map.fetch!(snapshot, :runtime_name),
+      status: Map.fetch!(snapshot, :status),
+      last_heartbeat_at: iso8601(Map.fetch!(snapshot, :last_heartbeat_at)),
+      connection_epoch: Map.fetch!(snapshot, :connection_epoch),
+      capacity: Map.fetch!(snapshot, :capacity),
+      reserved_capacity: Map.fetch!(snapshot, :reserved_capacity),
+      active_runs: Enum.map(Map.fetch!(snapshot, :active_runs), &active_run/1)
+    }
+  end
+
+  def history_options(params, task_id, surface, direction)
+      when is_map(params) and is_binary(task_id) and is_binary(surface) and
+             direction in ["after", "before"] do
+    cursor_key = direction
+    opposite_key = if direction == "after", do: "before", else: "after"
+
+    with false <- Map.has_key?(params, opposite_key),
+         {:ok, limit} <- history_limit(Map.get(params, "limit")),
+         {:ok, cursor} <-
+           decode_history_cursor(Map.get(params, cursor_key), task_id, surface, direction) do
+      {:ok, history_options(direction, limit, cursor)}
+    else
+      _ -> {:error, :invalid_request}
+    end
+  end
+
+  def history_options(_, _, _, _), do: {:error, :invalid_request}
+
+  def history_page(task_id, "events", %{entries: entries, next_after: next_after}),
+    do: %{
+      events: Enum.map(entries, &event/1),
+      next_after: encode_history_cursor(task_id, "events", "after", next_after)
+    }
+
+  def history_page(task_id, "transitions", %{entries: entries, next_after: next_after}),
+    do: %{
+      transitions: Enum.map(entries, &transition/1),
+      next_after: encode_history_cursor(task_id, "transitions", "after", next_after)
+    }
+
+  def history_page(task_id, "commands", %{entries: entries, next_after: next_after}),
+    do: %{
+      commands: Enum.map(entries, &command/1),
+      next_after: encode_history_cursor(task_id, "commands", "after", next_after)
+    }
+
+  def timeline_page(task_id, %{entries: entries, next_before: next_before}) do
+    %{
+      items: Enum.map(entries, &timeline_item(task_id, &1)),
+      next_before: encode_history_cursor(task_id, "timeline", "before", next_before)
+    }
+  end
 
   def normalize_map(value) when is_map(value) do
     Map.new(value, fn {key, item} -> {to_string(key), normalize_map(item)} end)
@@ -216,4 +300,161 @@ defmodule SymmetryControlWeb.Protocol do
 
   defp iso8601(nil), do: nil
   defp iso8601(%DateTime{} = value), do: DateTime.to_iso8601(value)
+
+  defp waiting(nil), do: nil
+
+  defp waiting(waiting) do
+    %{
+      run_id: Map.fetch!(waiting, :run_id),
+      generation: Map.fetch!(waiting, :generation),
+      transition_id: Map.fetch!(waiting, :transition_id),
+      question: Map.fetch!(waiting, :question),
+      payload: Map.fetch!(waiting, :payload),
+      recorded_at: iso8601(Map.fetch!(waiting, :inserted_at))
+    }
+  end
+
+  defp latest_command(nil), do: nil
+  defp latest_command(%Command{} = command), do: command(command)
+  defp latest_command(command) when is_map(command), do: command(command)
+
+  defp active_run(run) do
+    %{
+      run_id: Map.fetch!(run, :run_id),
+      task_id: Map.fetch!(run, :task_id),
+      generation: Map.fetch!(run, :generation),
+      state: Map.fetch!(run, :state),
+      recorded_at: iso8601(Map.fetch!(run, :inserted_at))
+    }
+  end
+
+  defp history_options("after", limit, nil), do: [limit: limit]
+  defp history_options("after", limit, cursor), do: [limit: limit, after: cursor]
+  defp history_options("before", limit, nil), do: [limit: limit]
+  defp history_options("before", limit, cursor), do: [limit: limit, before: cursor]
+
+  defp event(entry) do
+    %{
+      run_id: Map.fetch!(entry, :run_id),
+      generation: Map.fetch!(entry, :generation),
+      event_id: Map.fetch!(entry, :event_id),
+      sequence: Map.fetch!(entry, :sequence),
+      kind: Map.fetch!(entry, :kind),
+      payload: Map.fetch!(entry, :payload),
+      occurred_at: iso8601(Map.fetch!(entry, :occurred_at)),
+      recorded_at: iso8601(Map.fetch!(entry, :inserted_at))
+    }
+  end
+
+  defp transition(entry) do
+    %{
+      run_id: Map.fetch!(entry, :run_id),
+      generation: Map.fetch!(entry, :generation),
+      transition_id: Map.fetch!(entry, :transition_id),
+      state: Map.fetch!(entry, :state),
+      payload: Map.fetch!(entry, :payload),
+      recorded_at: iso8601(Map.fetch!(entry, :inserted_at))
+    }
+  end
+
+  defp timeline_item(task_id, entry) do
+    %{
+      source: Map.fetch!(entry, :source),
+      run_id: Map.fetch!(entry, :run_id),
+      generation: Map.fetch!(entry, :generation),
+      recorded_at: iso8601(Map.fetch!(entry, :inserted_at)),
+      data: timeline_data(task_id, entry)
+    }
+  end
+
+  defp timeline_data(_task_id, %{source: "event"} = entry),
+    do: Map.drop(event(entry), [:run_id, :generation, :recorded_at])
+
+  defp timeline_data(_task_id, %{source: "transition"} = entry),
+    do: Map.drop(transition(entry), [:run_id, :generation, :recorded_at])
+
+  defp timeline_data(task_id, %{source: "command"} = entry),
+    do: entry |> Map.put(:task_id, task_id) |> command() |> Map.drop([:run_id, :generation])
+
+  defp history_limit(nil), do: {:ok, @default_history_limit}
+
+  defp history_limit(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {limit, ""} when limit > 0 and limit <= @max_history_limit -> {:ok, limit}
+      _ -> {:error, :invalid_request}
+    end
+  end
+
+  defp history_limit(_), do: {:error, :invalid_request}
+
+  defp encode_history_cursor(_task_id, _surface, _direction, nil), do: nil
+
+  defp encode_history_cursor(task_id, surface, direction, position) do
+    payload = %{
+      "v" => 1,
+      "task_id" => task_id,
+      "surface" => surface,
+      "direction" => direction,
+      "inserted_at" => iso8601(Map.fetch!(position, :inserted_at)),
+      "id" => Map.fetch!(position, :id)
+    }
+
+    payload =
+      case Map.fetch(position, :source) do
+        {:ok, source} -> Map.put(payload, "source", source)
+        :error -> payload
+      end
+
+    Phoenix.Token.sign(SymmetryControlWeb.Endpoint, @history_cursor_salt, payload)
+  end
+
+  defp decode_history_cursor(nil, _task_id, _surface, _direction), do: {:ok, nil}
+
+  defp decode_history_cursor(token, task_id, surface, direction) when is_binary(token) do
+    with {:ok, payload} <-
+           Phoenix.Token.verify(SymmetryControlWeb.Endpoint, @history_cursor_salt, token,
+             max_age: @history_cursor_max_age_seconds
+           ),
+         {:ok, position} <- cursor_position(payload, task_id, surface, direction) do
+      {:ok, position}
+    else
+      _ -> {:error, :invalid_request}
+    end
+  end
+
+  defp decode_history_cursor(_, _, _, _), do: {:error, :invalid_request}
+
+  defp cursor_position(payload, task_id, surface, direction) when is_map(payload) do
+    expected_keys =
+      ["v", "task_id", "surface", "direction", "inserted_at", "id"] ++
+        if(surface == "timeline", do: ["source"], else: [])
+
+    with true <- MapSet.new(Map.keys(payload)) == MapSet.new(expected_keys),
+         %{
+           "v" => 1,
+           "task_id" => ^task_id,
+           "surface" => ^surface,
+           "direction" => ^direction,
+           "inserted_at" => inserted_at,
+           "id" => id
+         } <- payload,
+         true <- is_binary(inserted_at) and is_binary(id),
+         {:ok, datetime, _offset} <- DateTime.from_iso8601(inserted_at),
+         {:ok, _} <- Ecto.UUID.cast(id) do
+      cursor_source(payload, surface, datetime, id)
+    else
+      _ -> {:error, :invalid_request}
+    end
+  end
+
+  defp cursor_position(_, _, _, _), do: {:error, :invalid_request}
+
+  defp cursor_source(_payload, surface, inserted_at, id) when surface != "timeline",
+    do: {:ok, %{inserted_at: inserted_at, id: id}}
+
+  defp cursor_source(%{"source" => source}, "timeline", inserted_at, id)
+       when source in @timeline_sources,
+       do: {:ok, %{inserted_at: inserted_at, source: source, id: id}}
+
+  defp cursor_source(_, _, _, _), do: {:error, :invalid_request}
 end

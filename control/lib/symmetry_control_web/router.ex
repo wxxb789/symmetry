@@ -49,5 +49,11 @@ defmodule SymmetryControlWeb.Router do
     post "/tasks", TaskController, :create
     get "/tasks/:task_id", TaskController, :show
     post "/tasks/:task_id/commands", TaskController, :command
+    get "/tasks/:task_id/timeline", TaskHistoryController, :timeline
+    get "/tasks/:task_id/events", TaskHistoryController, :events
+    get "/tasks/:task_id/transitions", TaskHistoryController, :transitions
+    get "/tasks/:task_id/commands", TaskHistoryController, :commands
+    get "/runtimes", RuntimeController, :index
+    get "/runtimes/:runtime_id", RuntimeController, :show
   end
 end
