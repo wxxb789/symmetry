@@ -18,6 +18,10 @@ defmodule SymmetryControl.OrchestrationReviewTest do
     assert {:ok, cancelling, command} = Orchestration.request_cancel(task.id, now: claimed_at)
     assert cancelling.state == "cancelling"
     assert command.kind == "cancel"
+    assert command.task_id == task.id
+    assert command.run_id == run.id
+    assert command.generation == run.generation
+    assert command.state == "pending"
     assert {:error, :ownership_lost} = Orchestration.renew_lease(run.id, fence, now: claimed_at)
 
     assert %{expired_runs: 0} = Orchestration.expire(now: DateTime.add(@now, 31, :second))
@@ -36,16 +40,27 @@ defmodule SymmetryControl.OrchestrationReviewTest do
              )
   end
 
-  test "assigned cancellation is terminal without a command and rejects late claim" do
+  test "assigned cancellation is applied by control and rejects late claim" do
     %{machine: machine} = enroll_machine()
     runtime = register_runtime(machine)
     {:ok, task, :created} = Orchestration.submit_task(task_attrs(), "assigned-cancel", now: @now)
     {:ok, run} = Orchestration.assign_one(now: @now)
 
-    assert {:ok, cancelled_task, nil} = Orchestration.request_cancel(task.id, now: @now)
+    assert {:ok, cancelled_task, command} = Orchestration.request_cancel(task.id, now: @now)
+
     assert cancelled_task.state == "cancelled"
+    assert command.task_id == task.id
+    assert command.run_id == run.id
+    assert command.generation == run.generation
+    assert command.state == "applied"
+    assert command.applied_at == @now
     assert {:ok, cancelled_run} = Orchestration.fetch_run(run.id)
     assert cancelled_run.state == "cancelled"
+
+    assert {:ok, ^cancelled_task, replayed_command} =
+             Orchestration.request_cancel(task.id, now: @now)
+
+    assert replayed_command.id == command.id
 
     assert {:error, :ownership_lost} =
              Orchestration.claim(
@@ -194,7 +209,7 @@ defmodule SymmetryControl.OrchestrationReviewTest do
     assert still_queued.state == "queued"
   end
 
-  test "an input idempotency key cannot replay a command from another task" do
+  test "an input idempotency key is scoped to its task" do
     %{machine: machine} = enroll_machine()
 
     assert {:ok, [runtime]} =
@@ -221,18 +236,22 @@ defmodule SymmetryControl.OrchestrationReviewTest do
       transition(run.id, fence, "waiting_for_input", System.unique_integer([:positive]))
     end
 
-    assert {:ok, _command, :created} =
+    assert {:ok, first_command, :created} =
              Orchestration.provide_input(first_task.id, %{"answer" => "same"}, "shared-input-key",
                now: @now
              )
 
-    assert {:error, :idempotency_conflict} =
+    assert {:ok, second_command, :created} =
              Orchestration.provide_input(
                second_task.id,
                %{"answer" => "same"},
                "shared-input-key",
                now: @now
              )
+
+    assert first_command.id != second_command.id
+    assert first_command.task_id == first_task.id
+    assert second_command.task_id == second_task.id
   end
 
   test "invalid IDs return protocol errors instead of database exceptions" do
@@ -495,8 +514,80 @@ defmodule SymmetryControl.OrchestrationReviewTest do
 
       assert Enum.count(inputs, &match?({:ok, _, _}, &1)) == 2
 
+      assert Enum.map(inputs, fn {:ok, _command, disposition} -> disposition end) |> Enum.sort() ==
+               [:created, :replayed]
+
       assert Enum.map(inputs, fn {:ok, command, _} -> command.id end) |> Enum.uniq() |> length() ==
                1
+
+      Repo.delete!(task)
+      Repo.delete!(machine)
+    end)
+  end
+
+  test "provide_input cannot bind to a replacement generation after lease expiry" do
+    Sandbox.unboxed_run(Repo, fn ->
+      %{machine: machine} = enroll_machine()
+      runtime = register_runtime(machine)
+
+      {:ok, task, :created} =
+        Orchestration.submit_task(task_attrs(), "input-generation-race", now: @now)
+
+      {:ok, run} = Orchestration.assign_one(now: @now)
+      fence = claim(run, runtime)
+      transition(run.id, fence, "running", 151)
+      transition(run.id, fence, "waiting_for_input", 152)
+      expired_at = DateTime.add(@now, 31, :second)
+      parent = self()
+
+      assert {:ok, {input_task, replacement_run}} =
+               Repo.transaction(fn ->
+                 Repo.one!(
+                   from task_row in SymmetryControl.Orchestration.Task,
+                     where: task_row.id == ^task.id,
+                     lock: "FOR UPDATE"
+                 )
+
+                 input_task =
+                   Task.async(fn ->
+                     Sandbox.unboxed_run(Repo, fn ->
+                       send(parent, :provide_input_started)
+
+                       Orchestration.provide_input(
+                         task.id,
+                         %{"answer" => "stale"},
+                         "input-generation-race",
+                         now: expired_at
+                       )
+                     end)
+                   end)
+
+                 assert_receive :provide_input_started, 1_000
+                 assert %{expired_runs: 1} = Orchestration.expire(now: expired_at)
+
+                 assert {:ok, _snapshot} =
+                          Orchestration.heartbeat(
+                            runtime.id,
+                            runtime.connection_epoch,
+                            [],
+                            now: expired_at
+                          )
+
+                 assert {:ok, replacement_run} = Orchestration.assign_one(now: expired_at)
+                 {input_task, replacement_run}
+               end)
+
+      assert {:error, :state_conflict} = Task.await(input_task, 5_000)
+
+      refute Repo.exists?(
+               from command in SymmetryControl.Orchestration.Command,
+                 where: command.task_id == ^task.id and command.kind == "provide_input"
+             )
+
+      refute Repo.exists?(
+               from command in SymmetryControl.Orchestration.Command,
+                 where: command.run_id == ^replacement_run.id and command.kind == "provide_input"
+             )
 
       Repo.delete!(task)
       Repo.delete!(machine)

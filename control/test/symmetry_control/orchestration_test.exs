@@ -50,6 +50,27 @@ defmodule SymmetryControl.OrchestrationTest do
              )
   end
 
+  test "submission preserves omitted input separately from explicit empty input" do
+    omitted = %{goal: "Omitted input", agent_profile: "codex", workspace: "primary"}
+
+    assert {:ok, omitted_task, :created} =
+             Orchestration.submit_task(omitted, "omitted-input", now: @now)
+
+    assert omitted_task.input == nil
+    assert {:ok, fetched_omitted} = Orchestration.fetch_task(omitted_task.id)
+    assert fetched_omitted.input == nil
+
+    assert {:error, :idempotency_conflict} =
+             Orchestration.submit_task(Map.put(omitted, :input, %{}), "omitted-input", now: @now)
+
+    assert {:ok, explicit_empty_task, :created} =
+             Orchestration.submit_task(task_attrs(), "explicit-empty-input", now: @now)
+
+    assert explicit_empty_task.input == %{}
+    assert {:ok, fetched_explicit_empty} = Orchestration.fetch_task(explicit_empty_task.id)
+    assert fetched_explicit_empty.input == %{}
+  end
+
   test "same daemon instance replays epoch and a replacement increments it" do
     %{machine: machine} = enroll_machine()
     first = register_runtime(machine, daemon_instance_id: "00000000-0000-0000-0000-000000000001")
@@ -209,6 +230,91 @@ defmodule SymmetryControl.OrchestrationTest do
     end
   end
 
+  test "JSONB-bound runtime, task, command, and transition maps reject NUL before persistence" do
+    %{machine: machine} = enroll_machine()
+
+    assert {:error, :invalid_request} =
+             Orchestration.register_runtimes(
+               machine.id,
+               "00000000-0000-0000-0000-000000000061",
+               [
+                 %{
+                   runtime_key: "nul-runtime",
+                   name: "NUL runtime",
+                   capacity: 1,
+                   agent_profile: "codex",
+                   workspace: "primary",
+                   capabilities: %{"bad" => "value\0"}
+                 }
+               ],
+               now: @now
+             )
+
+    assert Repo.aggregate(SymmetryControl.Orchestration.Runtime, :count) == 0
+
+    assert {:error, :invalid_request} =
+             Orchestration.submit_task(
+               task_attrs(input: %{"bad" => "value\0"}),
+               "nul-task-input",
+               now: @now
+             )
+
+    assert Repo.aggregate(SymmetryControl.Orchestration.Task, :count) == 0
+
+    runtime = register_runtime(machine)
+
+    assert {:ok, task, :created} =
+             Orchestration.submit_task(task_attrs(), "nul-command", now: @now)
+
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+
+    assert {:ok, _} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "running",
+               %{},
+               "00000000-0000-0000-0000-000000000062",
+               now: @now
+             )
+
+    assert {:ok, _} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "waiting_for_input",
+               %{},
+               "00000000-0000-0000-0000-000000000063",
+               now: @now
+             )
+
+    assert {:error, :invalid_request} =
+             Orchestration.create_command(
+               task.id,
+               "provide_input",
+               %{"bad" => "value\0"},
+               "nul-command-payload",
+               now: @now
+             )
+
+    assert Repo.aggregate(SymmetryControl.Orchestration.Command, :count) == 0
+
+    assert {:error, :invalid_request} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "completed",
+               %{"bad" => "value\0"},
+               "00000000-0000-0000-0000-000000000064",
+               now: @now
+             )
+
+    assert {:ok, current_run} = Orchestration.fetch_run(run.id)
+    assert current_run.state == "waiting_for_input"
+    assert Repo.aggregate(SymmetryControl.Orchestration.RunTransition, :count) == 2
+  end
+
   test "unknown targets and illegal lifecycle edges are invalid transitions" do
     %{machine: machine} = enroll_machine()
     runtime = register_runtime(machine)
@@ -262,8 +368,20 @@ defmodule SymmetryControl.OrchestrationTest do
 
   test "cancellation handles queued work and serializes with terminal completion" do
     {:ok, queued, :created} = Orchestration.submit_task(task_attrs(), "task-1", now: @now)
-    assert {:ok, cancelled, nil} = Orchestration.request_cancel(queued.id, now: @now)
+
+    assert {:ok, cancelled, queued_command} = Orchestration.request_cancel(queued.id, now: @now)
+
     assert cancelled.state == "cancelled"
+    assert queued_command.task_id == queued.id
+    assert queued_command.run_id == nil
+    assert queued_command.generation == nil
+    assert queued_command.state == "applied"
+    assert queued_command.applied_at == @now
+
+    assert {:ok, ^cancelled, replayed_queued_command} =
+             Orchestration.request_cancel(queued.id, now: @now)
+
+    assert replayed_queued_command.id == queued_command.id
 
     %{machine: machine} = enroll_machine()
     runtime = register_runtime(machine)
@@ -339,6 +457,95 @@ defmodule SymmetryControl.OrchestrationTest do
 
     assert terminal_cancelled.state == "cancelled"
     assert retained_command.id == command.id
+  end
+
+  test "task commands scope idempotency to task and replay before later state validation" do
+    %{machine: machine} = enroll_machine()
+    runtime = register_runtime(machine)
+
+    {:ok, task, :created} =
+      Orchestration.submit_task(task_attrs(), "command-idempotency", now: @now)
+
+    {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+
+    assert {:ok, _} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "running",
+               %{},
+               "00000000-0000-0000-0000-000000000065",
+               now: @now
+             )
+
+    assert {:ok, _} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "waiting_for_input",
+               %{},
+               "00000000-0000-0000-0000-000000000066",
+               now: @now
+             )
+
+    assert {:ok, command, :created} =
+             Orchestration.create_command(
+               task.id,
+               "provide_input",
+               %{"answer" => "first"},
+               "same-command-key",
+               now: @now
+             )
+
+    assert command.task_id == task.id
+    assert command.run_id == run.id
+    assert command.generation == run.generation
+    assert command.state == "pending"
+
+    assert {:error, :idempotency_conflict} =
+             Orchestration.create_command(
+               task.id,
+               "provide_input",
+               %{"answer" => "second"},
+               "same-command-key",
+               now: @now
+             )
+
+    assert {:ok, _} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "running",
+               %{},
+               "00000000-0000-0000-0000-000000000067",
+               now: @now
+             )
+
+    assert {:ok, replayed, :replayed} =
+             Orchestration.create_command(
+               task.id,
+               "provide_input",
+               %{"answer" => "first"},
+               "same-command-key",
+               now: @now
+             )
+
+    assert replayed.id == command.id
+  end
+
+  test "provide_input requires a current waiting generation" do
+    {:ok, queued_task, :created} =
+      Orchestration.submit_task(task_attrs(), "input-without-waiting-run", now: @now)
+
+    assert {:error, :state_conflict} =
+             Orchestration.create_command(
+               queued_task.id,
+               "provide_input",
+               %{"answer" => "no run"},
+               "input-without-waiting-run",
+               now: @now
+             )
   end
 
   test "input is bound to a waiting generation and expiry requeues without harming unrelated work" do

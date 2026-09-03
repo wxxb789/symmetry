@@ -67,7 +67,7 @@ defmodule SymmetryControl.Orchestration do
   def register_runtimes(machine_id, daemon_instance_id, specifications, opts)
       when is_list(specifications) and is_list(opts) do
     if not (valid_uuid?(machine_id) and valid_uuid?(daemon_instance_id) and
-              Enum.all?(specifications, &is_map/1)) do
+              Enum.all?(specifications, &valid_runtime_specification?/1)) do
       {:error, :invalid_request}
     else
       now = now(opts)
@@ -173,66 +173,74 @@ defmodule SymmetryControl.Orchestration do
       goal: value(attrs, :goal),
       agent_profile: value(attrs, :agent_profile),
       workspace: value(attrs, :workspace),
-      input: value(attrs, :input, %{})
+      input: value(attrs, :input)
     }
 
-    request_hash = request_hash(task_attrs)
-    current = now(opts)
+    if not valid_task_attrs?(task_attrs) do
+      {:error, :invalid_request}
+    else
+      request_hash = request_hash(task_attrs)
+      current = now(opts)
 
-    Repo.transaction(fn ->
-      case Repo.one(
-             from task in Task,
-               where: task.idempotency_key == ^idempotency_key,
-               lock: "FOR UPDATE"
-           ) do
-        nil ->
-          changeset =
-            Task.changeset(
-              %Task{},
-              Map.merge(task_attrs, %{
-                idempotency_key: idempotency_key,
-                request_hash: request_hash,
-                state: "queued",
-                current_generation: 0
-              })
-            )
+      Repo.transaction(fn ->
+        case Repo.one(
+               from task in Task,
+                 where: task.idempotency_key == ^idempotency_key,
+                 lock: "FOR UPDATE"
+             ) do
+          nil ->
+            changeset =
+              Task.changeset(
+                %Task{},
+                Map.merge(task_attrs, %{
+                  idempotency_key: idempotency_key,
+                  request_hash: request_hash,
+                  state: "queued",
+                  current_generation: 0
+                })
+              )
 
-          case insert_ignoring_conflict(Task, stamp_insert(changeset, current), :idempotency_key) do
-            :inserted ->
-              task =
-                Repo.one!(
-                  from task in Task,
-                    where: task.idempotency_key == ^idempotency_key,
-                    lock: "FOR UPDATE"
-                )
+            case insert_ignoring_conflict(
+                   Task,
+                   stamp_insert(changeset, current),
+                   :idempotency_key
+                 ) do
+              :inserted ->
+                task =
+                  Repo.one!(
+                    from task in Task,
+                      where: task.idempotency_key == ^idempotency_key,
+                      lock: "FOR UPDATE"
+                  )
 
-              {task, :created}
+                {task, :created}
 
-            :conflict ->
-              case Repo.one(
-                     from task in Task,
-                       where: task.idempotency_key == ^idempotency_key,
-                       lock: "FOR UPDATE"
-                   ) do
-                %Task{request_hash: ^request_hash} = task -> {task, :replayed}
-                %Task{} -> rollback(:idempotency_conflict)
-                nil -> rollback(:invalid_request)
-              end
+              :conflict ->
+                case Repo.one(
+                       from task in Task,
+                         where: task.idempotency_key == ^idempotency_key,
+                         lock: "FOR UPDATE"
+                     ) do
+                  %Task{request_hash: ^request_hash} = task -> {task, :replayed}
+                  %Task{} -> rollback(:idempotency_conflict)
+                  nil -> rollback(:invalid_request)
+                end
 
-            :invalid ->
-              rollback(:invalid_request)
-          end
+              :invalid ->
+                rollback(:invalid_request)
+            end
 
-        task when task.request_hash == request_hash ->
-          {task, :replayed}
+          task when task.request_hash == request_hash ->
+            {task, :replayed}
 
-        _task ->
-          rollback(:idempotency_conflict)
+          _task ->
+            rollback(:idempotency_conflict)
+        end
+      end)
+      |> case do
+        {:ok, {task, disposition}} -> {:ok, task, disposition}
+        error -> error
       end
-    end)
-    |> case do
-      {:ok, {task, disposition}} -> {:ok, task, disposition}
-      error -> error
     end
   end
 
@@ -611,7 +619,8 @@ defmodule SymmetryControl.Orchestration do
   def transition(run_id, fence, target_state, payload, transition_id, opts)
       when is_map(fence) and is_binary(target_state) and is_map(payload) and
              is_binary(transition_id) do
-    if not (valid_uuid?(run_id) and valid_fence?(fence) and valid_uuid?(transition_id)) do
+    if not (valid_uuid?(run_id) and valid_fence?(fence) and valid_uuid?(transition_id) and
+              jsonb_compatible?(payload)) do
       {:error, :invalid_request}
     else
       current = now(opts)
@@ -647,6 +656,41 @@ defmodule SymmetryControl.Orchestration do
 
   def transition(_, _, _, _, _, _), do: {:error, :invalid_request}
 
+  @spec create_command(Ecto.UUID.t(), String.t(), map(), String.t(), keyword()) ::
+          {:ok, Command.t(), :created | :replayed} | {:error, atom()}
+  def create_command(task_id, kind, payload, idempotency_key, opts \\ [])
+
+  def create_command(task_id, kind, payload, idempotency_key, opts)
+      when is_binary(task_id) and is_binary(kind) and is_map(payload) and
+             is_binary(idempotency_key) and byte_size(idempotency_key) > 0 do
+    if not (valid_uuid?(task_id) and valid_command_request?(kind, payload)) do
+      {:error, :invalid_request}
+    else
+      normalized_payload = normalize_command_payload(kind, payload)
+      command_hash = request_hash(%{kind: kind, payload: normalized_payload})
+      current = now(opts)
+
+      Repo.transaction(fn ->
+        task = lock_task(task_id)
+
+        create_or_replay_locked_command!(
+          task,
+          kind,
+          normalized_payload,
+          idempotency_key,
+          command_hash,
+          current
+        )
+      end)
+      |> case do
+        {:ok, {command, disposition}} -> {:ok, command, disposition}
+        error -> error
+      end
+    end
+  end
+
+  def create_command(_, _, _, _, _), do: {:error, :invalid_request}
+
   @spec request_cancel(Ecto.UUID.t(), keyword()) ::
           {:ok, Task.t(), Command.t() | nil} | {:error, atom()}
   def request_cancel(task_id, opts \\ [])
@@ -665,66 +709,24 @@ defmodule SymmetryControl.Orchestration do
     Repo.transaction(fn ->
       task = lock_task(task_id)
 
-      cond do
-        task.state == "queued" ->
-          task =
-            task
-            |> Task.changeset(%{state: "cancelled"})
-            |> stamp_update(current)
-            |> Repo.update!()
+      if task.state in ["completed", "failed"] do
+        {task, nil}
+      else
+        idempotency_key = legacy_cancel_idempotency_key(task)
+        command_hash = request_hash(%{kind: "cancel", payload: %{}})
 
-          {task, nil}
+        {command, _disposition} =
+          create_or_replay_locked_command!(
+            task,
+            "cancel",
+            %{},
+            idempotency_key,
+            command_hash,
+            current
+          )
 
-        task.state in ["completed", "failed"] ->
-          {task, nil}
-
-        task.state == "cancelled" ->
-          {task, cancelled_command(task)}
-
-        true ->
-          run = lock_current_run(task)
-          _runtime = lock_runtime(run.runtime_id)
-
-          case run.state do
-            "assigned" ->
-              run
-              |> Run.changeset(%{state: "cancelled"})
-              |> stamp_update(current)
-              |> Repo.update!()
-
-              task =
-                task
-                |> Task.changeset(%{state: "cancelled"})
-                |> stamp_update(current)
-                |> Repo.update!()
-
-              {task, nil}
-
-            state when state in ["claimed", "running", "waiting_for_input", "cancelling"] ->
-              command = cancel_command(run, current)
-
-              if run.state != "cancelling" do
-                run
-                |> Run.changeset(%{state: "cancelling"})
-                |> stamp_update(current)
-                |> Repo.update!()
-              end
-
-              task =
-                if task.state == "cancelling" do
-                  task
-                else
-                  task
-                  |> Task.changeset(%{state: "cancelling"})
-                  |> stamp_update(current)
-                  |> Repo.update!()
-                end
-
-              {task, command}
-
-            _ ->
-              {task, nil}
-          end
+        task = lock_task(task.id)
+        {task, command}
       end
     end)
     |> case do
@@ -740,105 +742,172 @@ defmodule SymmetryControl.Orchestration do
   def provide_input(task_id, payload, idempotency_key, opts)
       when is_binary(task_id) and is_map(payload) and is_binary(idempotency_key) and
              byte_size(idempotency_key) > 0 do
-    if not valid_uuid?(task_id) do
-      {:error, :invalid_request}
-    else
-      request_hash = request_hash(%{task_id: task_id, payload: payload})
-      current = now(opts)
-
-      Repo.transaction(fn ->
-        case Repo.one(
-               from command in Command,
-                 where: command.idempotency_key == ^idempotency_key,
-                 lock: "FOR UPDATE"
-             ) do
-          %Command{request_hash: ^request_hash} = command ->
-            {command, :replayed}
-
-          %Command{} ->
-            rollback(:idempotency_conflict)
-
-          nil ->
-            task = lock_task(task_id)
-            run = lock_current_run(task)
-            _runtime = lock_runtime(run.runtime_id)
-
-            case Repo.one(
-                   from command in Command,
-                     where: command.idempotency_key == ^idempotency_key,
-                     lock: "FOR UPDATE"
-                 ) do
-              %Command{request_hash: ^request_hash} = command ->
-                {command, :replayed}
-
-              %Command{} ->
-                rollback(:idempotency_conflict)
-
-              nil ->
-                if task.state != "waiting_for_input" or run.state != "waiting_for_input" do
-                  rollback(:state_conflict)
-                end
-
-                case Repo.one(
-                       from command in Command,
-                         where:
-                           command.run_id == ^run.id and command.generation == ^run.generation and
-                             command.kind == "provide_input" and is_nil(command.acknowledged_at),
-                         lock: "FOR UPDATE"
-                     ) do
-                  nil ->
-                    changeset =
-                      %Command{}
-                      |> Command.changeset(%{
-                        run_id: run.id,
-                        generation: run.generation,
-                        kind: "provide_input",
-                        payload: payload,
-                        idempotency_key: idempotency_key,
-                        request_hash: request_hash
-                      })
-                      |> stamp_insert(current)
-
-                    case insert_ignoring_conflict(Command, changeset, :idempotency_key) do
-                      :inserted ->
-                        command =
-                          Repo.one!(
-                            from command in Command,
-                              where: command.idempotency_key == ^idempotency_key,
-                              lock: "FOR UPDATE"
-                          )
-
-                        {command, :created}
-
-                      :conflict ->
-                        case Repo.one(
-                               from command in Command,
-                                 where: command.idempotency_key == ^idempotency_key,
-                                 lock: "FOR UPDATE"
-                             ) do
-                          %Command{request_hash: ^request_hash} = command -> {command, :replayed}
-                          %Command{} -> rollback(:idempotency_conflict)
-                          nil -> rollback(:invalid_request)
-                        end
-
-                      :invalid ->
-                        rollback(:invalid_request)
-                    end
-
-                  _command ->
-                    rollback(:state_conflict)
-                end
-            end
-        end
-      end)
-      |> case do
-        {:ok, {command, disposition}} -> {:ok, command, disposition}
-        error -> error
-      end
-    end
+    create_command(task_id, "provide_input", payload, idempotency_key, opts)
   end
 
   def provide_input(_, _, _, _), do: {:error, :invalid_request}
+
+  defp create_or_replay_locked_command!(
+         task,
+         kind,
+         payload,
+         idempotency_key,
+         command_hash,
+         current
+       ) do
+    case lock_task_command(task.id, idempotency_key) do
+      %Command{request_hash: ^command_hash} = command ->
+        {command, :replayed}
+
+      %Command{} ->
+        rollback(:idempotency_conflict)
+
+      nil ->
+        create_new_command!(task, kind, payload, idempotency_key, command_hash, current)
+    end
+  end
+
+  defp create_new_command!(task, "cancel", payload, idempotency_key, command_hash, current) do
+    case task.state do
+      "queued" ->
+        command =
+          insert_command!(task.id, nil, nil, "cancel", payload, idempotency_key, command_hash,
+            state: "applied",
+            applied_at: current,
+            now: current
+          )
+
+        task
+        |> Task.changeset(%{state: "cancelled"})
+        |> stamp_update(current)
+        |> Repo.update!()
+
+        {command, :created}
+
+      "assigned" ->
+        run = lock_current_run(task)
+
+        command =
+          insert_command!(
+            task.id,
+            run.id,
+            run.generation,
+            "cancel",
+            payload,
+            idempotency_key,
+            command_hash,
+            state: "applied",
+            applied_at: current,
+            now: current
+          )
+
+        run
+        |> Run.changeset(%{state: "cancelled"})
+        |> stamp_update(current)
+        |> Repo.update!()
+
+        task
+        |> Task.changeset(%{state: "cancelled"})
+        |> stamp_update(current)
+        |> Repo.update!()
+
+        {command, :created}
+
+      state when state in ["claimed", "running", "waiting_for_input"] ->
+        run = lock_current_run(task)
+
+        command =
+          insert_command!(
+            task.id,
+            run.id,
+            run.generation,
+            "cancel",
+            payload,
+            idempotency_key,
+            command_hash,
+            state: "pending",
+            now: current
+          )
+
+        run
+        |> Run.changeset(%{state: "cancelling"})
+        |> stamp_update(current)
+        |> Repo.update!()
+
+        task
+        |> Task.changeset(%{state: "cancelling"})
+        |> stamp_update(current)
+        |> Repo.update!()
+
+        {command, :created}
+
+      _ ->
+        rollback(:state_conflict)
+    end
+  end
+
+  defp create_new_command!(task, "provide_input", payload, idempotency_key, command_hash, current) do
+    if task.state != "waiting_for_input" do
+      rollback(:state_conflict)
+    end
+
+    run = lock_current_run(task)
+
+    if run.state != "waiting_for_input", do: rollback(:state_conflict)
+
+    case Repo.one(
+           from command in Command,
+             where:
+               command.run_id == ^run.id and command.generation == ^run.generation and
+                 command.kind == "provide_input" and is_nil(command.acknowledged_at),
+             lock: "FOR UPDATE"
+         ) do
+      nil ->
+        command =
+          insert_command!(
+            task.id,
+            run.id,
+            run.generation,
+            "provide_input",
+            payload,
+            idempotency_key,
+            command_hash,
+            state: "pending",
+            now: current
+          )
+
+        {command, :created}
+
+      _command ->
+        rollback(:state_conflict)
+    end
+  end
+
+  defp insert_command!(
+         task_id,
+         run_id,
+         generation,
+         kind,
+         payload,
+         idempotency_key,
+         command_hash,
+         opts
+       ) do
+    %Command{}
+    |> Command.changeset(%{
+      task_id: task_id,
+      run_id: run_id,
+      generation: generation,
+      kind: kind,
+      payload: payload,
+      idempotency_key: idempotency_key,
+      request_hash: command_hash,
+      state: Keyword.fetch!(opts, :state),
+      applied_at: Keyword.get(opts, :applied_at)
+    })
+    |> stamp_insert(Keyword.fetch!(opts, :now))
+    |> persist_insert()
+  end
 
   @spec acknowledge_command(Ecto.UUID.t(), map(), String.t(), Ecto.UUID.t(), keyword()) ::
           {:ok, Command.t()} | {:error, atom()}
@@ -898,6 +967,7 @@ defmodule SymmetryControl.Orchestration do
           true ->
             command
             |> Command.changeset(%{
+              state: "acknowledged",
               acknowledgement_id: acknowledgement_id,
               acknowledgement_outcome: outcome,
               acknowledged_at: current
@@ -1171,44 +1241,6 @@ defmodule SymmetryControl.Orchestration do
     struct(run, attrs)
   end
 
-  defp cancelled_command(%Task{current_generation: 0}), do: nil
-
-  defp cancelled_command(task) do
-    run = lock_current_run(task)
-    _runtime = lock_runtime(run.runtime_id)
-
-    Repo.one(
-      from command in Command,
-        where: command.run_id == ^run.id and command.kind == "cancel",
-        lock: "FOR UPDATE"
-    )
-  end
-
-  defp cancel_command(run, current) do
-    case Repo.one(
-           from command in Command,
-             where: command.run_id == ^run.id and command.kind == "cancel",
-             lock: "FOR UPDATE"
-         ) do
-      nil ->
-        %Command{}
-        |> Command.changeset(%{
-          run_id: run.id,
-          generation: run.generation,
-          kind: "cancel",
-          payload: %{},
-          idempotency_key: "cancel:" <> run.id,
-          request_hash:
-            request_hash(%{kind: "cancel", run_id: run.id, generation: run.generation})
-        })
-        |> stamp_insert(current)
-        |> Repo.insert!()
-
-      command ->
-        command
-    end
-  end
-
   defp snapshot_for(runtime, current) do
     assignments =
       Repo.all(
@@ -1232,8 +1264,10 @@ defmodule SymmetryControl.Orchestration do
           where:
             run.runtime_id == ^runtime.id and
               task.current_generation == run.generation and
-              ((command.kind == "cancel" and run.state == "cancelling") or
-                 (command.kind == "provide_input" and is_nil(command.acknowledged_at) and
+              ((command.state == "pending" and command.kind == "cancel" and
+                  run.state == "cancelling") or
+                 (command.state == "pending" and command.kind == "provide_input" and
+                    is_nil(command.acknowledged_at) and
                     run.state in ["waiting_for_input", "running"])),
           order_by: [asc: command.inserted_at]
       )
@@ -1355,6 +1389,42 @@ defmodule SymmetryControl.Orchestration do
       valid_uuid?(value(fence, :claim_id)) and valid_uuid?(value(fence, :lease_token))
   end
 
+  defp valid_runtime_specification?(specification) when is_map(specification) do
+    capabilities = value(specification, :capabilities, %{})
+    is_map(capabilities) and jsonb_compatible?(capabilities)
+  end
+
+  defp valid_runtime_specification?(_), do: false
+
+  defp valid_task_attrs?(task_attrs) do
+    input = value(task_attrs, :input)
+    (is_nil(input) or is_map(input)) and jsonb_compatible?(input)
+  end
+
+  defp valid_command_request?(kind, payload) do
+    kind in ["cancel", "provide_input"] and jsonb_compatible?(payload) and
+      (kind != "cancel" or payload == %{})
+  end
+
+  defp normalize_command_payload("cancel", _payload), do: %{}
+  defp normalize_command_payload("provide_input", payload), do: payload
+
+  defp lock_task_command(task_id, idempotency_key) do
+    Repo.one(
+      from command in Command,
+        where: command.task_id == ^task_id and command.idempotency_key == ^idempotency_key,
+        lock: "FOR UPDATE"
+    )
+  end
+
+  defp legacy_cancel_idempotency_key(%Task{current_generation: 0, id: task_id}),
+    do: "legacy-cancel:task:" <> task_id
+
+  defp legacy_cancel_idempotency_key(task) do
+    run = lock_current_run(task)
+    "legacy-cancel:run:" <> run.id
+  end
+
   defp valid_event?(event) when is_map(event) do
     valid_uuid?(value(event, :event_id)) and
       is_integer(value(event, :sequence)) and value(event, :sequence) >= 0 and
@@ -1365,7 +1435,7 @@ defmodule SymmetryControl.Orchestration do
 
   defp valid_event?(_), do: false
 
-  # PostgreSQL jsonb rejects U+0000. Validate untrusted event payloads before opening a transaction.
+  # PostgreSQL jsonb rejects U+0000. Validate every untrusted JSONB value before a transaction.
   defp jsonb_compatible?(value) when is_binary(value), do: not String.contains?(value, <<0>>)
 
   defp jsonb_compatible?(value) when is_list(value),

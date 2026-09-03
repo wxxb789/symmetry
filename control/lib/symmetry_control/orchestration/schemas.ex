@@ -89,7 +89,7 @@ defmodule SymmetryControl.Orchestration.Task do
     field :goal, :string
     field :agent_profile, :string
     field :workspace, :string
-    field :input, :map, default: %{}
+    field :input, :map
     field :state, :string
     field :current_generation, :integer
     field :result, :map
@@ -117,7 +117,6 @@ defmodule SymmetryControl.Orchestration.Task do
       :goal,
       :agent_profile,
       :workspace,
-      :input,
       :state,
       :current_generation
     ])
@@ -276,12 +275,15 @@ defmodule SymmetryControl.Orchestration.Command do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
   schema "commands" do
+    belongs_to :task, SymmetryControl.Orchestration.Task
     belongs_to :run, SymmetryControl.Orchestration.Run
     field :generation, :integer
     field :kind, :string
     field :payload, :map, default: %{}
     field :idempotency_key, :string
     field :request_hash, :binary
+    field :state, :string
+    field :applied_at, :utc_datetime_usec
     field :acknowledgement_id, Ecto.UUID
     field :acknowledgement_outcome, :string
     field :acknowledged_at, :utc_datetime_usec
@@ -291,23 +293,28 @@ defmodule SymmetryControl.Orchestration.Command do
   def changeset(command, attrs) do
     command
     |> cast(attrs, [
+      :task_id,
       :run_id,
       :generation,
       :kind,
       :payload,
       :idempotency_key,
       :request_hash,
+      :state,
+      :applied_at,
       :acknowledgement_id,
       :acknowledgement_outcome,
       :acknowledged_at
     ])
-    |> validate_required([:run_id, :generation, :kind, :payload, :idempotency_key, :request_hash])
+    |> validate_required([:task_id, :kind, :payload, :idempotency_key, :request_hash, :state])
     |> validate_number(:generation, greater_than: 0)
     |> validate_inclusion(:kind, ["cancel", "provide_input"])
+    |> validate_inclusion(:state, ["pending", "applied", "acknowledged"])
     |> validate_inclusion(:acknowledgement_outcome, ["applied", "rejected", "failed"])
-    |> unique_constraint(:idempotency_key)
+    |> unique_constraint([:task_id, :idempotency_key])
     |> check_constraint(:kind, name: :commands_kind_check)
-    |> check_constraint(:generation, name: :commands_generation_positive)
+    |> check_constraint(:run_id, name: :commands_run_generation_pair)
+    |> check_constraint(:state, name: :commands_state_check)
     |> check_constraint(:acknowledgement_outcome, name: :commands_acknowledgement_outcome_check)
   end
 end
