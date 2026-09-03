@@ -35,10 +35,10 @@ func TestClientProtocolRequests(t *testing.T) {
 		response   string
 	}{
 		{
-			name: "enroll", method: http.MethodPost, path: "/api/v1/machines", wantAuth: "Bearer enrollment-token",
-			wantBody: `{"machine":{"name":"builder-01"}}`, response: `{"machine_id":"machine-1","machine_token":"issued-token"}`,
+			name: "enroll", method: http.MethodPost, path: "/api/v1/machines", wantAuth: "Bearer enrollment-token", wantHeader: "enrollment-1",
+			wantBody: `{"machine":{"name":"builder-01"},"machine_token":"issued-token"}`, response: `{"machine_id":"machine-1","machine_token":"issued-token"}`,
 			invoke: func(ctx context.Context, client *Client) error {
-				response, err := enrollmentClient.Enroll(ctx, "enrollment-token", protocol.EnrollRequest{Machine: protocol.MachineEnrollment{Name: "builder-01"}})
+				response, err := enrollmentClient.Enroll(ctx, "enrollment-token", "enrollment-1", protocol.EnrollRequest{Machine: protocol.MachineEnrollment{Name: "builder-01"}, MachineToken: "issued-token"})
 				if err == nil && (response.MachineID != "machine-1" || response.MachineToken != "issued-token") {
 					return fmt.Errorf("unexpected enrollment response: %#v", response)
 				}

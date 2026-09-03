@@ -357,9 +357,16 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
   end
 
   defp enroll_machine do
-    assert {:ok, enrolled} =
+    key = Ecto.UUID.generate()
+    token = "machine-token-#{key}"
+
+    assert {:ok, enrolled, :created} =
              Orchestration.enroll_machine(
-               %{name: "operator-read-machine-#{System.unique_integer([:positive])}"},
+               %{
+                 name: "operator-read-machine-#{System.unique_integer([:positive])}",
+                 machine_token: token
+               },
+               key,
                enrollment_token: "enrollment-secret",
                expected_enrollment_token: "enrollment-secret"
              )

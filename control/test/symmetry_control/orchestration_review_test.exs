@@ -541,6 +541,32 @@ defmodule SymmetryControl.OrchestrationReviewTest do
     end)
   end
 
+  test "concurrent first machine enrollment creates one replayable identity" do
+    Sandbox.unboxed_run(Repo, fn ->
+      suffix = System.unique_integer([:positive])
+      key = "concurrent-enrollment-#{suffix}"
+      attrs = %{name: "builder-#{suffix}", machine_token: "machine-token-#{suffix}"}
+
+      opts = [
+        enrollment_token: "enrollment-secret",
+        expected_enrollment_token: "enrollment-secret",
+        now: @now
+      ]
+
+      results = concurrently(2, fn _ -> Orchestration.enroll_machine(attrs, key, opts) end)
+
+      assert Enum.map(results, fn {:ok, _enrolled, disposition} -> disposition end) |> Enum.sort() ==
+               [:created, :replayed]
+
+      assert Enum.map(results, fn {:ok, enrolled, _disposition} -> enrolled.machine.id end)
+             |> Enum.uniq()
+             |> length() == 1
+
+      {:ok, enrolled, _disposition} = hd(results)
+      Repo.delete!(enrolled.machine)
+    end)
+  end
+
   test "provide_input cannot bind to a replacement generation after lease expiry" do
     Sandbox.unboxed_run(Repo, fn ->
       %{machine: machine} = enroll_machine()
@@ -677,8 +703,11 @@ defmodule SymmetryControl.OrchestrationReviewTest do
   end
 
   defp enroll_machine do
-    assert {:ok, enrolled} =
-             Orchestration.enroll_machine(%{name: "builder"},
+    key = Ecto.UUID.generate()
+    token = "machine-token-#{key}"
+
+    assert {:ok, enrolled, :created} =
+             Orchestration.enroll_machine(%{name: "builder", machine_token: token}, key,
                enrollment_token: "enrollment-secret",
                expected_enrollment_token: "enrollment-secret",
                now: @now

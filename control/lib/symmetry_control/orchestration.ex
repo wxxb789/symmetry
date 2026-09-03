@@ -23,38 +23,101 @@ defmodule SymmetryControl.Orchestration do
   @terminal_states ["completed", "failed", "cancelled", "expired"]
   @terminal_targets ["completed", "failed", "cancelled"]
   @terminal_grace_ms 8 * 60 * 1_000
+  @minimum_lease_duration_ms 30_000
   @capacity_bearing_states ["assigned", "claimed", "running", "waiting_for_input", "cancelling"]
   @default_history_limit 100
   @max_history_limit 500
   @timeline_source_ranks %{"event" => 0, "transition" => 1, "command" => 2}
 
-  @spec enroll_machine(map(), keyword()) ::
-          {:ok, %{machine: Machine.t(), token: String.t()}}
+  @spec enroll_machine(map(), String.t(), keyword()) ::
+          {:ok, %{machine: Machine.t(), token: String.t()}, :created | :replayed}
           | {:error, atom() | Ecto.Changeset.t()}
-  def enroll_machine(attrs, opts) when is_map(attrs) and is_list(opts) do
+  def enroll_machine(attrs, idempotency_key, opts)
+      when is_map(attrs) and is_binary(idempotency_key) and byte_size(idempotency_key) > 0 and
+             is_list(opts) do
     submitted = Keyword.get(opts, :enrollment_token)
     expected = Keyword.get(opts, :expected_enrollment_token)
+    token = value(attrs, :machine_token)
     current = now(opts)
 
-    if is_binary(submitted) and is_binary(expected) and secure_compare(submitted, expected) do
-      token = random_token()
+    cond do
+      not (is_binary(submitted) and is_binary(expected) and secure_compare(submitted, expected)) ->
+        {:error, :unauthenticated}
 
-      Repo.transaction(fn ->
-        %Machine{}
-        |> Machine.changeset(%{name: value(attrs, :name), token_digest: digest(token)})
-        |> stamp_insert(current)
-        |> persist_insert()
-      end)
-      |> case do
-        {:ok, machine} -> {:ok, %{machine: machine, token: token}}
-        {:error, reason} -> {:error, reason}
-      end
-    else
-      {:error, :unauthenticated}
+      not (is_binary(token) and String.trim(token) != "") ->
+        {:error, :invalid_request}
+
+      true ->
+        request_hash = request_hash(%{name: value(attrs, :name), machine_token: token})
+
+        Repo.transaction(fn ->
+          case Repo.one(
+                 from machine in Machine,
+                   where: machine.enrollment_idempotency_key == ^idempotency_key,
+                   lock: "FOR UPDATE"
+               ) do
+            nil ->
+              changeset =
+                Machine.changeset(%Machine{}, %{
+                  name: value(attrs, :name),
+                  token_digest: digest(token),
+                  enrollment_idempotency_key: idempotency_key,
+                  enrollment_request_hash: request_hash
+                })
+
+              case insert_ignoring_conflict(
+                     Machine,
+                     stamp_insert(changeset, current),
+                     nil
+                   ) do
+                :inserted ->
+                  machine =
+                    Repo.one!(
+                      from machine in Machine,
+                        where: machine.enrollment_idempotency_key == ^idempotency_key,
+                        lock: "FOR UPDATE"
+                    )
+
+                  {machine, :created}
+
+                :conflict ->
+                  case Repo.one(
+                         from machine in Machine,
+                           where: machine.enrollment_idempotency_key == ^idempotency_key,
+                           lock: "FOR UPDATE"
+                       ) do
+                    %Machine{enrollment_request_hash: ^request_hash} = machine ->
+                      {machine, :replayed}
+
+                    %Machine{} ->
+                      rollback(:idempotency_conflict)
+
+                    nil ->
+                      rollback(:invalid_request)
+                  end
+
+                :invalid ->
+                  rollback(:invalid_request)
+              end
+
+            %Machine{enrollment_request_hash: ^request_hash} = machine ->
+              {machine, :replayed}
+
+            %Machine{} ->
+              rollback(:idempotency_conflict)
+          end
+        end)
+        |> case do
+          {:ok, {machine, disposition}} ->
+            {:ok, %{machine: machine, token: token}, disposition}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
     end
   end
 
-  def enroll_machine(_, _), do: {:error, :invalid_request}
+  def enroll_machine(_, _, _), do: {:error, :invalid_request}
 
   @spec authenticate_machine(String.t()) :: {:ok, Machine.t()} | {:error, :unauthenticated}
   def authenticate_machine(token) when is_binary(token) do
@@ -958,11 +1021,9 @@ defmodule SymmetryControl.Orchestration do
   def claim(run_id, request, opts \\ [])
 
   def claim(run_id, request, opts) when is_map(request) do
-    if not (valid_uuid?(run_id) and valid_claim_request?(request)) do
-      {:error, :invalid_request}
-    else
+    with true <- valid_uuid?(run_id) and valid_claim_request?(request),
+         {:ok, lease_duration_ms} <- lease_duration_ms(opts) do
       current = now(opts)
-      lease_duration_ms = Keyword.get(opts, :lease_duration_ms, 30_000)
 
       Repo.transaction(fn ->
         {task, run, runtime} = lock_chain(run_id)
@@ -1015,6 +1076,8 @@ defmodule SymmetryControl.Orchestration do
             run
         end
       end)
+    else
+      _ -> {:error, :invalid_request}
     end
   end
 
@@ -1024,11 +1087,9 @@ defmodule SymmetryControl.Orchestration do
   def renew_lease(run_id, fence, opts \\ [])
 
   def renew_lease(run_id, fence, opts) when is_map(fence) do
-    if not (valid_uuid?(run_id) and valid_fence?(fence)) do
-      {:error, :invalid_request}
-    else
+    with true <- valid_uuid?(run_id) and valid_fence?(fence),
+         {:ok, lease_duration_ms} <- lease_duration_ms(opts) do
       current = now(opts)
-      lease_duration_ms = Keyword.get(opts, :lease_duration_ms, 30_000)
 
       Repo.transaction(fn ->
         {task, run, runtime} = lock_chain(run_id)
@@ -1042,6 +1103,8 @@ defmodule SymmetryControl.Orchestration do
         |> stamp_update(current)
         |> Repo.update!()
       end)
+    else
+      _ -> {:error, :invalid_request}
     end
   end
 
@@ -1926,7 +1989,12 @@ defmodule SymmetryControl.Orchestration do
     if changeset.valid? do
       row = Map.put(changeset.changes, :id, Ecto.UUID.generate())
 
-      case Repo.insert_all(schema, [row], on_conflict: :nothing, conflict_target: conflict_target) do
+      opts =
+        if conflict_target == nil,
+          do: [on_conflict: :nothing],
+          else: [on_conflict: :nothing, conflict_target: conflict_target]
+
+      case Repo.insert_all(schema, [row], opts) do
         {1, _} -> :inserted
         {0, _} -> :conflict
       end
@@ -1939,6 +2007,18 @@ defmodule SymmetryControl.Orchestration do
 
   defp now(opts),
     do: opts |> Keyword.get(:now, DateTime.utc_now()) |> DateTime.truncate(:microsecond)
+
+  defp lease_duration_ms(opts) do
+    duration =
+      Keyword.get_lazy(opts, :lease_duration_ms, fn ->
+        Application.fetch_env!(:symmetry_control, :orchestration)
+        |> Keyword.fetch!(:lease_duration_ms)
+      end)
+
+    if is_integer(duration) and duration >= @minimum_lease_duration_ms,
+      do: {:ok, duration},
+      else: :error
+  end
 
   defp stamp_insert(changeset, current),
     do: Ecto.Changeset.change(changeset, inserted_at: current, updated_at: current)
@@ -2090,7 +2170,6 @@ defmodule SymmetryControl.Orchestration do
 
   defp owned?(_, _, _, _), do: false
   defp request_hash(value), do: value |> :erlang.term_to_binary() |> digest()
-  defp random_token, do: :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
 
   defp secure_compare(left, right) when byte_size(left) == byte_size(right),
     do: Plug.Crypto.secure_compare(left, right)

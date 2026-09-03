@@ -4,6 +4,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -31,8 +32,15 @@ const (
 	leaseSafetyMargin   = 5 * time.Second
 	retryMaximum        = 30 * time.Second
 	terminalGrace       = 8 * time.Minute
+	controlRequestLimit = 15 * time.Second
 	maxJSONLRecordBytes = 256 * 1024
 	rawOutputChunkBytes = 32 * 1024
+)
+
+var (
+	errAssignmentExpired    = errors.New("assignment expired")
+	errLeaseDeadlineReached = errors.New("lease renewal deadline reached")
+	errOutboxChanged        = errors.New("outbox changed during delivery")
 )
 
 // ControlAPI is the authenticated protocol boundary used by the loop.
@@ -51,7 +59,7 @@ type ControlAPI interface {
 // EnrollmentAPI is deliberately separate because it is authorized by the
 // one-time enrollment token rather than a persisted machine credential.
 type EnrollmentAPI interface {
-	Enroll(context.Context, string, protocol.EnrollRequest) (protocol.EnrollResponse, error)
+	Enroll(context.Context, string, string, protocol.EnrollRequest) (protocol.EnrollResponse, error)
 }
 
 // Process is the part of a running agent the control loop needs.
@@ -75,6 +83,16 @@ type NotificationClient interface {
 // tests and embedded use; production callers need no options.
 type Options func(*options)
 
+type deadlineTimer interface {
+	Chan() <-chan time.Time
+	Stop()
+}
+
+type systemTimer struct{ timer *time.Timer }
+
+func (timer systemTimer) Chan() <-chan time.Time { return timer.timer.C }
+func (timer systemTimer) Stop()                  { timer.timer.Stop() }
+
 type options struct {
 	httpClient       *http.Client
 	store            *state.Store
@@ -85,7 +103,9 @@ type options struct {
 	notifications    NotificationClient
 	logWriter        io.Writer
 	clock            func() time.Time
+	newTimer         func(time.Duration) deadlineTimer
 	newID            func() (string, error)
+	newMachineToken  func() (string, error)
 	terminatePersist func(pid int, identity string) error
 }
 
@@ -139,7 +159,9 @@ func Run(ctx context.Context, value config.Config, changes ...Options) error {
 		httpClient:       &http.Client{Timeout: 30 * time.Second},
 		logWriter:        os.Stderr,
 		clock:            func() time.Time { return time.Now().UTC() },
+		newTimer:         func(delay time.Duration) deadlineTimer { return systemTimer{timer: time.NewTimer(delay)} },
 		newID:            state.NewDaemonInstanceID,
+		newMachineToken:  state.NewMachineToken,
 		terminatePersist: terminatePersistedProcess,
 	}
 	for _, change := range changes {
@@ -163,19 +185,68 @@ type daemon struct {
 	options options
 	log     *slog.Logger
 
-	store          *state.Store
-	control        ControlAPI
-	workspace      workspace.Service
-	start          StartProcess
-	runtimeID      string
-	runtimeEpoch   int64
-	leaseDuration  time.Duration
-	pollEvery      time.Duration
-	heartbeatEvery time.Duration
-	running        map[state.RunKey]*runningRun
-	slots          chan struct{}
-	mu             sync.Mutex
-	workers        sync.WaitGroup
+	store             *state.Store
+	control           ControlAPI
+	workspace         workspace.Service
+	start             StartProcess
+	runtimeID         string
+	runtimeEpoch      int64
+	leaseDuration     time.Duration
+	pollEvery         time.Duration
+	heartbeatEvery    time.Duration
+	running           map[state.RunKey]*runningRun
+	slots             chan struct{}
+	mu                sync.Mutex
+	workers           sync.WaitGroup
+	background        context.Context
+	backgroundStop    bool
+	backgroundWG      sync.WaitGroup
+	terminalReleaseWG sync.WaitGroup
+	commandWG         sync.WaitGroup
+	snapshotWG        sync.WaitGroup
+	outboxWake        chan struct{}
+	outboxRetry       map[state.RunKey]outboxRetry
+	commandWake       chan struct{}
+	commandQueue      []*queuedCommand
+	queuedCommands    map[commandKey]*queuedCommand
+	commandLanes      map[state.RunKey]*commandLane
+}
+
+type outboxRetry struct {
+	fingerprint string
+	retryAt     time.Time
+	delay       time.Duration
+	permanent   bool
+}
+
+type outboxFailure struct {
+	journal state.RunJournal
+	err     error
+}
+
+func (failure *outboxFailure) Error() string { return failure.err.Error() }
+func (failure *outboxFailure) Unwrap() error { return failure.err }
+
+type queuedCommand struct {
+	command   protocol.Command
+	key       commandKey
+	done      chan struct{}
+	completed bool
+}
+
+type commandKey struct {
+	run state.RunKey
+	id  string
+}
+
+type commandCompletion struct {
+	run  state.RunKey
+	done <-chan struct{}
+}
+
+type commandLane struct {
+	pending []*queuedCommand
+	running bool
 }
 
 type runningRun struct {
@@ -193,6 +264,7 @@ type runningRun struct {
 	slotHeld        bool
 	renewCancel     context.CancelFunc
 	renewCancelID   uint64
+	terminalCancel  context.CancelFunc
 }
 
 func (daemon *daemon) run(ctx context.Context) error {
@@ -203,6 +275,14 @@ func (daemon *daemon) run(ctx context.Context) error {
 		return err
 	}
 	defer daemon.close()
+	done := daemon.startBackground(ctx)
+	defer func() {
+		done()
+	}()
+
+	// Registration is complete before liveness starts, but reconciliation can
+	// block on the control plane. Keep lease maintenance alive while it does.
+	daemon.reconcile(ctx)
 
 	triggers := make(chan struct{}, 1)
 	trigger := func() {
@@ -223,15 +303,14 @@ func (daemon *daemon) run(ctx context.Context) error {
 
 	poll := time.NewTicker(daemon.interval(daemon.pollEvery))
 	heartbeat := time.NewTicker(daemon.interval(daemon.heartbeatEvery))
-	leases := time.NewTicker(minimumInterval)
 	defer poll.Stop()
 	defer heartbeat.Stop()
-	defer leases.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			daemon.stopAll()
+			done()
 			daemon.workers.Wait()
 			return nil
 		case hint := <-hints:
@@ -245,11 +324,298 @@ func (daemon *daemon) run(ctx context.Context) error {
 			daemon.sync(ctx)
 		case <-heartbeat.C:
 			daemon.heartbeat(ctx)
-		case <-leases.C:
-			daemon.renewLeases(ctx)
-			daemon.flushAll(ctx)
 		}
 	}
+}
+
+// startBackground separates deadline-sensitive lease work from the reactor.
+// Its returned function is safe to call more than once and joins all workers.
+func (daemon *daemon) startBackground(ctx context.Context) func() {
+	background, cancel := context.WithCancel(ctx)
+	daemon.mu.Lock()
+	daemon.background = background
+	daemon.backgroundStop = false
+	daemon.outboxWake = make(chan struct{}, 1)
+	daemon.outboxRetry = make(map[state.RunKey]outboxRetry)
+	daemon.commandWake = make(chan struct{}, 1)
+	daemon.queuedCommands = make(map[commandKey]*queuedCommand)
+	daemon.mu.Unlock()
+
+	livenessStarted := make(chan struct{})
+	daemon.backgroundWG.Add(3)
+	go func() {
+		defer daemon.backgroundWG.Done()
+		close(livenessStarted)
+		daemon.runLiveness(background)
+	}()
+	go func() {
+		defer daemon.backgroundWG.Done()
+		daemon.runOutbox(background)
+	}()
+	go func() {
+		defer daemon.backgroundWG.Done()
+		daemon.runCommandExecutor(background)
+	}()
+	<-livenessStarted
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			daemon.mu.Lock()
+			daemon.backgroundStop = true
+			daemon.mu.Unlock()
+			cancel()
+			daemon.backgroundWG.Wait()
+			daemon.commandWG.Wait()
+			daemon.snapshotWG.Wait()
+			daemon.terminalReleaseWG.Wait()
+		})
+	}
+}
+
+func (daemon *daemon) runLiveness(ctx context.Context) {
+	for {
+		daemon.renewLeases(ctx)
+		timer := daemon.timer(minimumInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.Chan():
+		}
+	}
+}
+
+func (daemon *daemon) runOutbox(ctx context.Context) {
+	for {
+		daemon.flushAll(ctx)
+		timer := daemon.timer(minimumInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-daemon.outboxSignal():
+			timer.Stop()
+		case <-timer.Chan():
+		}
+	}
+}
+
+func (daemon *daemon) outboxSignal() <-chan struct{} {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	if daemon.outboxWake == nil {
+		return nil
+	}
+	return daemon.outboxWake
+}
+
+func (daemon *daemon) signalOutbox() {
+	daemon.mu.Lock()
+	wake := daemon.outboxWake
+	daemon.mu.Unlock()
+	if wake == nil {
+		return
+	}
+	select {
+	case wake <- struct{}{}:
+	default:
+	}
+}
+
+func (daemon *daemon) signalOutboxFor(key state.RunKey) {
+	daemon.mu.Lock()
+	active := daemon.running[key]
+	starting := active != nil && active.starting
+	daemon.mu.Unlock()
+	if !starting {
+		daemon.signalOutbox()
+	}
+}
+
+func (daemon *daemon) enqueueCommands(commands []protocol.Command) {
+	for _, command := range commands {
+		daemon.enqueueCommand(command)
+	}
+}
+
+func (daemon *daemon) enqueueCommand(command protocol.Command) <-chan struct{} {
+	if command.CommandID == "" {
+		return nil
+	}
+	key := commandKey{run: state.RunKey{RunID: command.RunID, Generation: command.Generation}, id: command.CommandID}
+	daemon.mu.Lock()
+	if daemon.commandWake == nil || daemon.backgroundStop {
+		daemon.mu.Unlock()
+		return nil
+	}
+	if daemon.queuedCommands == nil {
+		daemon.queuedCommands = make(map[commandKey]*queuedCommand)
+	}
+	if queued, exists := daemon.queuedCommands[key]; exists {
+		daemon.mu.Unlock()
+		return queued.done
+	}
+	queued := &queuedCommand{command: command, key: key, done: make(chan struct{})}
+	daemon.queuedCommands[key] = queued
+	daemon.commandQueue = append(daemon.commandQueue, queued)
+	wake := daemon.commandWake
+	daemon.mu.Unlock()
+	select {
+	case wake <- struct{}{}:
+	default:
+	}
+	return queued.done
+}
+
+func (daemon *daemon) runCommandExecutor(ctx context.Context) {
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		queued, ok := daemon.nextQueuedCommand()
+		if ok {
+			daemon.dispatchQueuedCommand(ctx, queued)
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-daemon.commandSignal():
+		}
+	}
+}
+
+func (daemon *daemon) dispatchQueuedCommand(ctx context.Context, queued *queuedCommand) {
+	key := state.RunKey{RunID: queued.command.RunID, Generation: queued.command.Generation}
+	daemon.mu.Lock()
+	if daemon.queuedCommands[queued.key] != queued {
+		daemon.mu.Unlock()
+		return
+	}
+	if daemon.backgroundStop || ctx.Err() != nil {
+		daemon.mu.Unlock()
+		daemon.finishQueuedCommand(queued, false)
+		return
+	}
+	if queued.command.Kind == "cancel" {
+		if active := daemon.running[key]; active != nil {
+			active.cancelled = true
+			if !active.claimed {
+				active.cancelCommandID = queued.command.CommandID
+				daemon.mu.Unlock()
+				return
+			}
+		}
+		daemon.commandWG.Add(1)
+		daemon.mu.Unlock()
+		go func() {
+			defer daemon.commandWG.Done()
+			daemon.executeQueuedCommand(ctx, queued)
+		}()
+		return
+	}
+	if daemon.commandLanes == nil {
+		daemon.commandLanes = make(map[state.RunKey]*commandLane)
+	}
+	lane := daemon.commandLanes[key]
+	if lane == nil {
+		lane = &commandLane{}
+		daemon.commandLanes[key] = lane
+	}
+	lane.pending = append(lane.pending, queued)
+	if lane.running {
+		daemon.mu.Unlock()
+		return
+	}
+	lane.running = true
+	daemon.commandWG.Add(1)
+	daemon.mu.Unlock()
+	go daemon.runCommandLane(ctx, key)
+}
+
+func (daemon *daemon) runCommandLane(ctx context.Context, key state.RunKey) {
+	defer daemon.commandWG.Done()
+	for {
+		queued, ok := daemon.nextLaneCommand(key)
+		if !ok {
+			return
+		}
+		daemon.executeQueuedCommand(ctx, queued)
+	}
+}
+
+func (daemon *daemon) nextLaneCommand(key state.RunKey) (*queuedCommand, bool) {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	lane := daemon.commandLanes[key]
+	if lane == nil || len(lane.pending) == 0 {
+		delete(daemon.commandLanes, key)
+		return nil, false
+	}
+	queued := lane.pending[0]
+	lane.pending[0] = nil
+	lane.pending = lane.pending[1:]
+	return queued, true
+}
+
+func (daemon *daemon) executeQueuedCommand(ctx context.Context, queued *queuedCommand) {
+	daemon.mu.Lock()
+	current := daemon.queuedCommands[queued.key] == queued
+	daemon.mu.Unlock()
+	if !current {
+		return
+	}
+	if ctx.Err() != nil {
+		daemon.finishQueuedCommand(queued, false)
+		return
+	}
+	receipt := daemon.handleCommand(ctx, queued.command)
+	daemon.finishQueuedCommand(queued, receipt)
+}
+
+func (daemon *daemon) nextQueuedCommand() (*queuedCommand, bool) {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	if len(daemon.commandQueue) == 0 {
+		return nil, false
+	}
+	command := daemon.commandQueue[0]
+	daemon.commandQueue[0] = nil
+	daemon.commandQueue = daemon.commandQueue[1:]
+	return command, true
+}
+
+func (daemon *daemon) finishQueuedCommand(queued *queuedCommand, receipt bool) {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	daemon.finishQueuedCommandLocked(queued, receipt)
+}
+
+func (daemon *daemon) finishDeferredCommand(key commandKey, receipt bool) {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	if queued := daemon.queuedCommands[key]; queued != nil {
+		daemon.finishQueuedCommandLocked(queued, receipt)
+	}
+}
+
+func (daemon *daemon) finishQueuedCommandLocked(queued *queuedCommand, receipt bool) {
+	if daemon.queuedCommands[queued.key] == queued {
+		if !queued.completed {
+			close(queued.done)
+		}
+		queued.completed = true
+		if !receipt {
+			delete(daemon.queuedCommands, queued.key)
+		}
+	}
+}
+
+func (daemon *daemon) commandSignal() <-chan struct{} {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	return daemon.commandWake
 }
 
 func (daemon *daemon) initialize(ctx context.Context) error {
@@ -267,6 +633,10 @@ func (daemon *daemon) initialize(ctx context.Context) error {
 		if !state.IsNotFound(err) {
 			return fmt.Errorf("load machine identity: %w", err)
 		}
+		intent, intentErr := daemon.loadOrCreateEnrollmentIntent()
+		if intentErr != nil {
+			return intentErr
+		}
 		token := os.Getenv("SYMMETRY_ENROLLMENT_TOKEN")
 		if token == "" {
 			return errors.New("SYMMETRY_ENROLLMENT_TOKEN is required for first enrollment")
@@ -281,18 +651,31 @@ func (daemon *daemon) initialize(ctx context.Context) error {
 		}
 		var response protocol.EnrollResponse
 		enrollErr := retry(ctx, func() error {
+			requestContext, cancel := daemon.controlContext(ctx)
+			defer cancel()
 			var requestErr error
-			response, requestErr = enrollment.Enroll(ctx, token, protocol.EnrollRequest{Machine: protocol.MachineEnrollment{Name: daemon.config.MachineName}})
+			response, requestErr = enrollment.Enroll(requestContext, token, intent.IdempotencyKey, protocol.EnrollRequest{
+				Machine:      protocol.MachineEnrollment{Name: intent.MachineName},
+				MachineToken: intent.MachineToken,
+			})
 			return requestErr
 		})
 		if enrollErr != nil {
 			return fmt.Errorf("enroll machine: %w", enrollErr)
 		}
-		identity = state.MachineIdentity{MachineID: response.MachineID, MachineToken: response.MachineToken}
+		if response.MachineToken != intent.MachineToken {
+			return errors.New("enrollment response machine token does not match request")
+		}
+		identity = state.MachineIdentity{MachineID: response.MachineID, MachineToken: intent.MachineToken}
 		if saveErr := daemon.store.SaveIdentity(identity); saveErr != nil {
 			return fmt.Errorf("save machine identity: %w", saveErr)
 		}
+		if deleteErr := daemon.store.DeleteEnrollmentIntent(); deleteErr != nil {
+			daemon.log.Warn("delete_enrollment_intent_failed", "error", deleteErr)
+		}
 		daemon.log.Info("machine_enrolled", "machine_id", identity.MachineID)
+	} else if err := daemon.store.DeleteEnrollmentIntent(); err != nil {
+		daemon.log.Warn("delete_stale_enrollment_intent_failed", "error", err)
 	}
 	client := daemon.options.control
 	if client == nil {
@@ -326,8 +709,10 @@ func (daemon *daemon) initialize(ctx context.Context) error {
 	}
 	var registration protocol.SessionRegistrationResponse
 	registerErr := retry(ctx, func() error {
+		requestContext, cancel := daemon.controlContext(ctx)
+		defer cancel()
 		var requestErr error
-		registration, requestErr = daemon.control.RegisterSession(ctx, identity.MachineID, instanceID, registrationRequest)
+		registration, requestErr = daemon.control.RegisterSession(requestContext, identity.MachineID, instanceID, registrationRequest)
 		return requestErr
 	})
 	if registerErr != nil {
@@ -342,6 +727,9 @@ func (daemon *daemon) initialize(ctx context.Context) error {
 	if daemon.runtimeID == "" || daemon.runtimeEpoch <= 0 {
 		return errors.New("registration did not return configured runtime")
 	}
+	if registration.LeaseDurationMS < protocol.MinimumLeaseDurationMS {
+		return fmt.Errorf("registration lease duration must be at least %dms", protocol.MinimumLeaseDurationMS)
+	}
 	daemon.leaseDuration = time.Duration(registration.LeaseDurationMS) * time.Millisecond
 	daemon.pollEvery = time.Duration(registration.PollIntervalMS) * time.Millisecond
 	daemon.heartbeatEvery = time.Duration(registration.HeartbeatIntervalMS) * time.Millisecond
@@ -353,8 +741,38 @@ func (daemon *daemon) initialize(ctx context.Context) error {
 		daemon.options.notifications = notifier
 	}
 	daemon.log.Info("runtime_registered", "runtime_id", daemon.runtimeID, "runtime_epoch", daemon.runtimeEpoch)
-	daemon.reconcile(ctx)
 	return nil
+}
+
+func (daemon *daemon) loadOrCreateEnrollmentIntent() (state.EnrollmentIntent, error) {
+	intent, err := daemon.store.LoadEnrollmentIntent()
+	if err == nil {
+		return intent, nil
+	}
+	if !state.IsNotFound(err) {
+		return state.EnrollmentIntent{}, fmt.Errorf("load enrollment intent: %w", err)
+	}
+	idempotencyKey, err := daemon.options.newID()
+	if err != nil {
+		return state.EnrollmentIntent{}, fmt.Errorf("generate enrollment idempotency key: %w", err)
+	}
+	newMachineToken := daemon.options.newMachineToken
+	if newMachineToken == nil {
+		newMachineToken = state.NewMachineToken
+	}
+	machineToken, err := newMachineToken()
+	if err != nil {
+		return state.EnrollmentIntent{}, err
+	}
+	intent = state.EnrollmentIntent{
+		MachineName:    daemon.config.MachineName,
+		MachineToken:   machineToken,
+		IdempotencyKey: idempotencyKey,
+	}
+	if err := daemon.store.SaveEnrollmentIntent(intent); err != nil {
+		return state.EnrollmentIntent{}, fmt.Errorf("save enrollment intent: %w", err)
+	}
+	return intent, nil
 }
 
 func (daemon *daemon) close() {
@@ -380,25 +798,40 @@ func (daemon *daemon) now() time.Time {
 	return time.Now().UTC()
 }
 
+func (daemon *daemon) timer(delay time.Duration) deadlineTimer {
+	if delay < 0 {
+		delay = 0
+	}
+	if daemon.options.newTimer != nil {
+		return daemon.options.newTimer(delay)
+	}
+	return systemTimer{timer: time.NewTimer(delay)}
+}
+
+func (daemon *daemon) controlContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, controlRequestLimit)
+}
+
 func (daemon *daemon) heartbeat(ctx context.Context) {
-	snapshot, err := daemon.control.Heartbeat(ctx, daemon.runtimeID, protocol.RuntimeHeartbeatRequest{RuntimeEpoch: daemon.runtimeEpoch, ActiveRuns: daemon.activeRuns()})
+	requestContext, cancel := daemon.controlContext(ctx)
+	snapshot, err := daemon.control.Heartbeat(requestContext, daemon.runtimeID, protocol.RuntimeHeartbeatRequest{RuntimeEpoch: daemon.runtimeEpoch, ActiveRuns: daemon.activeRuns()})
+	cancel()
 	if err != nil {
 		daemon.log.Warn("runtime_heartbeat_failed", "error", err)
 		return
 	}
-	daemon.handleSnapshot(ctx, snapshot)
-	daemon.flushAll(ctx)
+	daemon.scheduleSnapshot(snapshot)
 }
 
 func (daemon *daemon) sync(ctx context.Context) {
-	snapshot, err := daemon.control.Dispatch(ctx, daemon.runtimeID, daemon.runtimeEpoch)
+	requestContext, cancel := daemon.controlContext(ctx)
+	snapshot, err := daemon.control.Dispatch(requestContext, daemon.runtimeID, daemon.runtimeEpoch)
+	cancel()
 	if err != nil {
 		daemon.log.Warn("runtime_poll_failed", "error", err)
-		daemon.flushAll(ctx)
 		return
 	}
-	daemon.handleSnapshot(ctx, snapshot)
-	daemon.flushAll(ctx)
+	daemon.scheduleSnapshot(snapshot)
 }
 
 func (daemon *daemon) reconcile(ctx context.Context) {
@@ -420,7 +853,9 @@ func (daemon *daemon) reconcile(ctx context.Context) {
 			daemon.stopRecoveredJournal(journal, "not eligible for reconcile")
 		}
 	}
-	response, err := daemon.control.Reconcile(ctx, daemon.runtimeID, protocol.ReconcileRequest{RuntimeEpoch: daemon.runtimeEpoch, Runs: runs})
+	requestContext, cancel := daemon.controlContext(ctx)
+	response, err := daemon.control.Reconcile(requestContext, daemon.runtimeID, protocol.ReconcileRequest{RuntimeEpoch: daemon.runtimeEpoch, Runs: runs})
+	cancel()
 	if err != nil {
 		daemon.log.Warn("runtime_reconcile_failed", "error", err)
 		return
@@ -441,11 +876,10 @@ func (daemon *daemon) reconcile(ctx context.Context) {
 			continue
 		}
 		if decision.LeaseExpiresAt != nil {
-			_, _ = daemon.store.UpdateLeaseExpiry(key, *decision.LeaseExpiresAt)
+			_, _ = daemon.store.AdvanceLeaseExpiry(key, *decision.LeaseExpiresAt)
 		}
 	}
-	daemon.handleSnapshot(ctx, protocol.RuntimeSnapshot{Assignments: response.Assignments, Commands: response.Commands})
-	daemon.flushAll(ctx)
+	daemon.scheduleSnapshot(protocol.RuntimeSnapshot{Assignments: response.Assignments, Commands: response.Commands})
 }
 
 func isReconcileState(localState string) bool {
@@ -480,6 +914,7 @@ func (daemon *daemon) stopRecoveredJournal(journal state.RunJournal, reason stri
 		daemon.log.Warn("delete_recovered_journal_failed", "run_id", journal.RunID, "error", err)
 		return
 	}
+	daemon.clearCompletedCommandReceipts(journal.Key())
 	daemon.log.Warn("recovered_journal_stopped", "run_id", journal.RunID, "generation", journal.Generation, "reason", reason)
 }
 
@@ -498,15 +933,93 @@ func (daemon *daemon) cleanupRecoveredWorkspace(journal state.RunJournal, succee
 }
 
 func (daemon *daemon) handleSnapshot(ctx context.Context, snapshot protocol.RuntimeSnapshot) {
-	for _, command := range snapshot.Commands {
-		daemon.handleCommand(ctx, command)
+	completions, ok := daemon.enqueueSnapshotCommands(snapshot.Commands)
+	if !ok || !waitCommandCompletions(ctx, completions) {
+		return
 	}
 	for _, assignment := range snapshot.Assignments {
+		if ctx.Err() != nil {
+			return
+		}
 		daemon.startAssignment(ctx, assignment)
 	}
 }
 
+func (daemon *daemon) scheduleSnapshot(snapshot protocol.RuntimeSnapshot) {
+	completions, ok := daemon.enqueueSnapshotCommands(snapshot.Commands)
+	if !ok {
+		return
+	}
+	delayed := make(map[state.RunKey][]commandCompletion)
+	for _, completion := range completions {
+		delayed[completion.run] = append(delayed[completion.run], completion)
+	}
+	daemon.mu.Lock()
+	ctx := daemon.background
+	if ctx == nil || daemon.backgroundStop {
+		daemon.mu.Unlock()
+		return
+	}
+	delayedCount := 0
+	for _, assignment := range snapshot.Assignments {
+		if len(delayed[state.RunKey{RunID: assignment.RunID, Generation: assignment.Generation}]) > 0 {
+			delayedCount++
+		}
+	}
+	daemon.snapshotWG.Add(delayedCount)
+	daemon.mu.Unlock()
+	for _, assignment := range snapshot.Assignments {
+		assignment := assignment
+		relevant := delayed[state.RunKey{RunID: assignment.RunID, Generation: assignment.Generation}]
+		if len(relevant) == 0 {
+			if ctx.Err() == nil {
+				daemon.startAssignment(ctx, assignment)
+			}
+			continue
+		}
+		go func() {
+			defer daemon.snapshotWG.Done()
+			if !waitCommandCompletions(ctx, relevant) || ctx.Err() != nil {
+				return
+			}
+			daemon.startAssignment(ctx, assignment)
+		}()
+	}
+}
+
+func (daemon *daemon) enqueueSnapshotCommands(commands []protocol.Command) ([]commandCompletion, bool) {
+	completions := make([]commandCompletion, 0, len(commands))
+	for _, command := range commands {
+		completion := daemon.enqueueCommand(command)
+		if completion == nil {
+			return nil, false
+		}
+		completions = append(completions, commandCompletion{
+			run:  state.RunKey{RunID: command.RunID, Generation: command.Generation},
+			done: completion,
+		})
+	}
+	return completions, true
+}
+
+func waitCommandCompletions(ctx context.Context, completions []commandCompletion) bool {
+	for _, completion := range completions {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-completion.done:
+			if ctx.Err() != nil {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func (daemon *daemon) startAssignment(ctx context.Context, assignment protocol.Assignment) {
+	if ctx.Err() != nil {
+		return
+	}
 	key := state.RunKey{RunID: assignment.RunID, Generation: assignment.Generation}
 	if assignment.RunID == "" || assignment.Generation <= 0 {
 		return
@@ -575,7 +1088,7 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		daemon.log.Warn("load_claim_intent_failed", "run_id", assignment.RunID, "error", err)
 		return
 	}
-	claim, err := daemon.claimWithRetry(ctx, assignment.RunID, protocol.ClaimRequest{RuntimeID: daemon.runtimeID, RuntimeEpoch: daemon.runtimeEpoch, Generation: assignment.Generation, ClaimID: journal.ClaimID})
+	claim, err := daemon.claimWithRetryUntil(ctx, assignment.RunID, protocol.ClaimRequest{RuntimeID: daemon.runtimeID, RuntimeEpoch: daemon.runtimeEpoch, Generation: assignment.Generation, ClaimID: journal.ClaimID}, assignment.AssignmentExpiresAt, waitForRetry)
 	if err != nil {
 		if control.IsOwnershipLost(err) {
 			daemon.stopRecoveredJournal(journal, "claim ownership lost")
@@ -604,13 +1117,8 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 	}
 	daemon.mu.Unlock()
 	if operatorCancelled {
-		err = daemon.queueTerminalTransition(key, "cancelled", map[string]any{})
-		if err != nil {
-			daemon.log.Error("queue_cancelled_transition_failed", "run_id", key.RunID, "generation", key.Generation, "error", err)
-			daemon.queueCommandAcknowledgement(key, cancelCommandID, "failed")
-		} else {
-			daemon.queueCommandAcknowledgement(key, cancelCommandID, "applied")
-		}
+		receipt := daemon.queueCancellationReceipt(key, cancelCommandID)
+		daemon.finishDeferredCommand(commandKey{run: key, id: cancelCommandID}, receipt)
 		return
 	}
 	if stale || contextCancelled {
@@ -621,6 +1129,7 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		daemon.queueFailure(key, "queue_running", err)
 		return
 	}
+	daemon.signalOutboxFor(key)
 	prepared, err = daemon.workspace.Prepare(ctx, daemon.config.Runtime.Workspace, workspace.RunRef{RunID: key.RunID, Generation: key.Generation})
 	if err != nil {
 		if !daemon.isCancelled(key) {
@@ -720,13 +1229,17 @@ func (daemon *daemon) releaseRun(key state.RunKey) {
 	daemon.mu.Lock()
 	active := daemon.running[key]
 	delete(daemon.running, key)
+	daemon.releaseCommandReceiptsLocked(key)
 	releaseSlot := active != nil && active.slotHeld
 	renewCancel := context.CancelFunc(nil)
+	terminalCancel := context.CancelFunc(nil)
 	if active != nil {
 		active.slotHeld = false
 		renewCancel = active.renewCancel
 		active.renewCancel = nil
 		active.renewCancelID++
+		terminalCancel = active.terminalCancel
+		active.terminalCancel = nil
 	}
 	daemon.mu.Unlock()
 	if active != nil && active.cancel != nil {
@@ -735,8 +1248,29 @@ func (daemon *daemon) releaseRun(key state.RunKey) {
 	if renewCancel != nil {
 		renewCancel()
 	}
+	if terminalCancel != nil {
+		terminalCancel()
+	}
 	if releaseSlot {
 		<-daemon.slots
+	}
+}
+
+func (daemon *daemon) clearCompletedCommandReceipts(key state.RunKey) {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	daemon.releaseCommandReceiptsLocked(key)
+}
+
+func (daemon *daemon) releaseCommandReceiptsLocked(key state.RunKey) {
+	for commandKey, queued := range daemon.queuedCommands {
+		if commandKey.run == key {
+			if !queued.completed {
+				queued.completed = true
+				close(queued.done)
+			}
+			delete(daemon.queuedCommands, commandKey)
+		}
 	}
 }
 
@@ -744,13 +1278,66 @@ func (daemon *daemon) releaseSlotOnce(key state.RunKey) {
 	daemon.mu.Lock()
 	active := daemon.running[key]
 	releaseSlot := active != nil && active.slotHeld
+	terminalCancel := context.CancelFunc(nil)
 	if active != nil {
 		active.slotHeld = false
+		terminalCancel = active.terminalCancel
+		active.terminalCancel = nil
 	}
 	daemon.mu.Unlock()
+	if terminalCancel != nil {
+		terminalCancel()
+	}
 	if releaseSlot {
 		<-daemon.slots
 	}
+}
+
+func (daemon *daemon) scheduleTerminalSlotRelease(key state.RunKey, pendingAt time.Time) {
+	daemon.mu.Lock()
+	active := daemon.running[key]
+	background := daemon.background
+	if active == nil || !active.slotHeld || background == nil || daemon.backgroundStop {
+		daemon.mu.Unlock()
+		return
+	}
+	previousCancel := active.terminalCancel
+	timerContext, cancel := context.WithCancel(background)
+	active.terminalCancel = cancel
+	daemon.terminalReleaseWG.Add(1)
+	daemon.mu.Unlock()
+	if previousCancel != nil {
+		previousCancel()
+	}
+	go func() {
+		defer daemon.terminalReleaseWG.Done()
+		deadline := pendingAt.Add(terminalGrace)
+		delay := deadline.Sub(daemon.now())
+		if delay > 0 {
+			timer := daemon.timer(delay)
+			select {
+			case <-timerContext.Done():
+				timer.Stop()
+				return
+			case <-timer.Chan():
+			}
+		}
+		if timerContext.Err() != nil {
+			return
+		}
+		daemon.releaseTerminalSlotAt(key, pendingAt)
+	}()
+}
+
+func (daemon *daemon) releaseTerminalSlotAt(key state.RunKey, pendingAt time.Time) {
+	journal, err := daemon.store.LoadJournal(key)
+	if err != nil || journal.LocalState != "terminal_pending" || journal.TerminalVerdict != "" || !journal.TerminalPendingAt.Equal(pendingAt) {
+		return
+	}
+	if daemon.now().Before(pendingAt.Add(terminalGrace)) {
+		return
+	}
+	daemon.releaseSlotOnce(key)
 }
 
 func (daemon *daemon) beginTerminal(key state.RunKey) func(bool) {
@@ -921,6 +1508,9 @@ func (daemon *daemon) queueEvent(key state.RunKey, kind string, payload json.Raw
 		return err
 	}
 	_, err = daemon.store.QueueEvent(key, protocol.RunEvent{EventID: id, Sequence: journal.LastEventSequence + 1, Kind: kind, OccurredAt: at, Payload: payload})
+	if err == nil {
+		daemon.signalOutboxFor(key)
+	}
 	return err
 }
 
@@ -933,6 +1523,9 @@ func (daemon *daemon) queueWaitingForInput(key state.RunKey, payload json.RawMes
 		protocol.RunEvent{EventID: id, Kind: "waiting_for_input", OccurredAt: at, Payload: payload},
 		protocol.StateTransitionRequest{TransitionID: id, State: "waiting_for_input", Payload: payload},
 	)
+	if err == nil {
+		daemon.signalOutboxFor(key)
+	}
 	return err
 }
 
@@ -946,6 +1539,9 @@ func (daemon *daemon) queueTransition(key state.RunKey, stateName string, payloa
 		return err
 	}
 	_, err = daemon.store.QueueTransition(key, protocol.StateTransitionRequest{TransitionID: id, State: stateName, Payload: encoded})
+	if err == nil {
+		daemon.signalOutboxFor(key)
+	}
 	return err
 }
 
@@ -964,12 +1560,44 @@ func (daemon *daemon) queueTerminalTransition(key state.RunKey, stateName string
 	if err != nil {
 		return err
 	}
+	enteredAt := daemon.now()
 	finishTerminal := daemon.beginTerminal(key)
-	_, err = daemon.store.QueueTerminalTransitionAt(key, protocol.StateTransitionRequest{TransitionID: id, State: stateName, Payload: encoded}, daemon.now())
+	journal, err := daemon.store.QueueTerminalTransitionAt(key, protocol.StateTransitionRequest{TransitionID: id, State: stateName, Payload: encoded}, enteredAt)
 	finishTerminal(err == nil)
 	if err != nil {
 		return err
 	}
+	daemon.scheduleTerminalSlotRelease(key, journal.TerminalPendingAt)
+	daemon.signalOutbox()
+	return nil
+}
+
+func (daemon *daemon) queueCancelledTerminalAndAcknowledgement(key state.RunKey, commandID string) error {
+	transitionID, err := daemon.options.newID()
+	if err != nil {
+		return err
+	}
+	acknowledgementID, err := daemon.options.newID()
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(map[string]any{})
+	if err != nil {
+		return err
+	}
+	enteredAt := daemon.now()
+	finishTerminal := daemon.beginTerminal(key)
+	journal, err := daemon.store.QueueCancelledTransitionAndAcknowledgementAt(key,
+		protocol.StateTransitionRequest{TransitionID: transitionID, State: "cancelled", Payload: payload},
+		protocol.CommandAcknowledgement{RunID: key.RunID, CommandID: commandID, Outcome: "applied", AckID: acknowledgementID},
+		enteredAt,
+	)
+	finishTerminal(err == nil)
+	if err != nil {
+		return err
+	}
+	daemon.scheduleTerminalSlotRelease(key, journal.TerminalPendingAt)
+	daemon.signalOutbox()
 	return nil
 }
 
@@ -1017,15 +1645,15 @@ func errorText(err error) string {
 	return err.Error()
 }
 
-func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Command) {
+func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Command) bool {
 	key := state.RunKey{RunID: command.RunID, Generation: command.Generation}
 	journal, err := daemon.store.LoadJournal(key)
 	if err != nil {
-		return
+		return false
 	}
 	for _, acknowledgement := range journal.PendingCommandAcknowledgements {
 		if acknowledgement.CommandID == command.CommandID {
-			return
+			return true
 		}
 	}
 	if command.Kind == "cancel" {
@@ -1034,22 +1662,15 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 		if active == nil {
 			daemon.mu.Unlock()
 			if journal.LocalState == "terminal_pending" {
-				outcome := "applied"
-				if err := daemon.queueTerminalTransition(key, "cancelled", map[string]any{}); err != nil {
-					daemon.log.Error("queue_cancelled_transition_failed", "run_id", key.RunID, "generation", key.Generation, "error", err)
-					outcome = "failed"
-				}
-				daemon.queueCommandAcknowledgement(key, command.CommandID, outcome)
-				return
+				return daemon.queueCancellationReceipt(key, command.CommandID)
 			}
-			daemon.queueCommandAcknowledgement(key, command.CommandID, "rejected")
-			return
+			return daemon.queueCommandAcknowledgement(key, command.CommandID, "rejected")
 		}
 		if !active.claimed {
 			active.cancelled = true
 			active.cancelCommandID = command.CommandID
 			daemon.mu.Unlock()
-			return
+			return false
 		}
 		active.cancelled = true
 		process := active.process
@@ -1061,28 +1682,21 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 		} else if cancel != nil {
 			cancel()
 		}
-		outcome := "applied"
 		if terminateErr != nil {
-			outcome = "failed"
-		} else if err := daemon.queueTerminalTransition(key, "cancelled", map[string]any{}); err != nil {
-			daemon.log.Error("queue_cancelled_transition_failed", "run_id", key.RunID, "generation", key.Generation, "error", err)
-			outcome = "failed"
+			return daemon.queueCommandAcknowledgement(key, command.CommandID, "failed")
 		}
-		daemon.queueCommandAcknowledgement(key, command.CommandID, outcome)
-		return
+		return daemon.queueCancellationReceipt(key, command.CommandID)
 	}
 
 	daemon.mu.Lock()
 	active := daemon.running[key]
-	starting := active != nil && active.starting
 	process := Process(nil)
-	if active != nil {
+	if activeRunAcceptsCommand(active) {
 		process = active.process
 	}
 	daemon.mu.Unlock()
-	if active == nil || starting || process == nil {
-		daemon.queueCommandAcknowledgement(key, command.CommandID, "rejected")
-		return
+	if process == nil {
+		return daemon.queueCommandAcknowledgement(key, command.CommandID, "rejected")
 	}
 	outcome := "rejected"
 	switch command.Kind {
@@ -1096,25 +1710,57 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 			outcome = "failed"
 			break
 		}
+		daemon.mu.Lock()
+		accepted := daemon.running[key] == active && activeRunAcceptsCommand(active)
+		daemon.mu.Unlock()
+		if !accepted {
+			break
+		}
 		if err := process.WriteInput(input); err != nil {
 			outcome = "failed"
 			break
 		}
-		if err := daemon.markRunning(key); err != nil {
+		outcome = "applied"
+		daemon.mu.Lock()
+		accepted = daemon.running[key] == active && activeRunAcceptsCommand(active)
+		if accepted {
+			err = daemon.markRunning(key)
+		}
+		daemon.mu.Unlock()
+		if !accepted {
+			break
+		}
+		if err != nil {
 			outcome = "failed"
 			break
 		}
-		outcome = "applied"
+		daemon.signalOutboxFor(key)
 	}
-	daemon.queueCommandAcknowledgement(key, command.CommandID, outcome)
+	return daemon.queueCommandAcknowledgement(key, command.CommandID, outcome)
 }
 
-func (daemon *daemon) queueCommandAcknowledgement(key state.RunKey, commandID, outcome string) {
+func activeRunAcceptsCommand(active *runningRun) bool {
+	return active != nil && active.process != nil && !active.starting && !active.cancelled && !active.stale && !active.terminal && active.terminalizing == 0
+}
+
+func (daemon *daemon) queueCancellationReceipt(key state.RunKey, commandID string) bool {
+	if err := daemon.queueCancelledTerminalAndAcknowledgement(key, commandID); err != nil {
+		daemon.log.Error("queue_cancelled_transition_failed", "run_id", key.RunID, "generation", key.Generation, "error", err)
+		return daemon.queueCommandAcknowledgement(key, commandID, "failed")
+	}
+	return true
+}
+
+func (daemon *daemon) queueCommandAcknowledgement(key state.RunKey, commandID, outcome string) bool {
 	id, err := daemon.options.newID()
 	if err != nil {
-		return
+		return false
 	}
-	_, _ = daemon.store.QueueCommandAcknowledgement(key, protocol.CommandAcknowledgement{RunID: key.RunID, CommandID: commandID, Outcome: outcome, AckID: id})
+	if _, err := daemon.store.QueueCommandAcknowledgement(key, protocol.CommandAcknowledgement{RunID: key.RunID, CommandID: commandID, Outcome: outcome, AckID: id}); err == nil {
+		daemon.signalOutbox()
+		return true
+	}
+	return false
 }
 
 func (daemon *daemon) renewLeases(ctx context.Context) {
@@ -1124,32 +1770,31 @@ func (daemon *daemon) renewLeases(ctx context.Context) {
 	}
 	now := daemon.now()
 	type renewal struct {
-		index    int
 		journal  state.RunJournal
 		response protocol.LeaseHeartbeatResponse
 		err      error
 	}
 	candidates := make([]state.RunJournal, 0, len(journals))
 	for _, journal := range journals {
-		if journal.LocalState == "terminal_pending" {
-			if journal.TerminalVerdict == "" && !journal.TerminalPendingAt.IsZero() && !now.Before(journal.TerminalPendingAt.Add(terminalGrace)) {
-				daemon.releaseSlotOnce(journal.Key())
-			}
+		if journal.LocalState == "terminal_pending" || journal.LeaseToken == "" {
 			continue
 		}
-		if journal.LeaseToken == "" || journal.LocalState == "stale" {
+		if !hasFullFence(journal) {
+			daemon.terminateForLease(journal, "lease fence is incomplete")
 			continue
 		}
 		remaining := journal.LeaseExpiresAt.Sub(now)
-		margin := leaseSafetyMargin
-		if daemon.leaseDuration > 0 && daemon.leaseDuration/3 < margin {
-			margin = daemon.leaseDuration / 3
-		}
 		if remaining <= 0 {
 			daemon.terminateForLease(journal, "lease expired")
 			continue
 		}
-		if remaining > margin*2 {
+		if remaining <= leaseSafetyMargin {
+			continue
+		}
+		if !daemon.renewalEligible(journal) {
+			continue
+		}
+		if remaining > daemon.renewalThreshold() {
 			continue
 		}
 		candidates = append(candidates, journal)
@@ -1157,7 +1802,6 @@ func (daemon *daemon) renewLeases(ctx context.Context) {
 	if len(candidates) == 0 {
 		return
 	}
-	results := make([]renewal, len(candidates))
 	jobs := make(chan int)
 	completed := make(chan renewal, len(candidates))
 	workers := cap(daemon.slots)
@@ -1175,7 +1819,7 @@ func (daemon *daemon) renewLeases(ctx context.Context) {
 			for index := range jobs {
 				journal := candidates[index]
 				response, renewErr := daemon.renewLease(ctx, journal)
-				completed <- renewal{index: index, journal: journal, response: response, err: renewErr}
+				completed <- renewal{journal: journal, response: response, err: renewErr}
 			}
 		}()
 	}
@@ -1188,45 +1832,69 @@ func (daemon *daemon) renewLeases(ctx context.Context) {
 		close(completed)
 	}()
 	for result := range completed {
-		results[result.index] = result
-	}
-	for _, result := range results {
+		if ctx.Err() != nil {
+			continue
+		}
 		if !daemon.renewalStillEligible(result.journal) {
+			continue
+		}
+		current := daemon.now()
+		if !current.Before(result.journal.LeaseExpiresAt) {
+			daemon.terminateForLease(result.journal, "lease expired during renewal")
 			continue
 		}
 		if result.err != nil {
 			if errors.Is(result.err, context.Canceled) {
 				continue
 			}
-			if control.IsOwnershipLost(result.err) || result.journal.LeaseExpiresAt.Sub(now) <= leaseSafetyMargin {
+			if control.IsOwnershipLost(result.err) || result.journal.LeaseExpiresAt.Sub(current) <= leaseSafetyMargin {
 				daemon.terminateForLease(result.journal, "lease renewal failed")
 			}
 			continue
 		}
-		_, _ = daemon.store.UpdateLeaseExpiry(result.journal.Key(), result.response.LeaseExpiresAt)
-		for _, command := range result.response.Commands {
-			daemon.handleCommand(ctx, command)
+		if !result.response.LeaseExpiresAt.After(current.Add(leaseSafetyMargin)) {
+			daemon.terminateForLease(result.journal, "renewed lease is already unsafe")
+			continue
 		}
+		_, _ = daemon.store.AdvanceLeaseExpiry(result.journal.Key(), result.response.LeaseExpiresAt)
+		daemon.enqueueCommands(result.response.Commands)
 	}
 }
 
+func (daemon *daemon) renewalThreshold() time.Duration {
+	if daemon.leaseDuration <= 0 {
+		return leaseSafetyMargin
+	}
+	threshold := daemon.leaseDuration * 3 / 4
+	if threshold > 90*time.Second {
+		return 90 * time.Second
+	}
+	return threshold
+}
+
 func (daemon *daemon) renewLease(ctx context.Context, journal state.RunJournal) (protocol.LeaseHeartbeatResponse, error) {
-	renewalContext, cancel := context.WithCancel(ctx)
-	defer cancel()
 	var renewalID uint64
 	daemon.mu.Lock()
 	active := daemon.running[journal.Key()]
-	if active != nil {
-		if active.terminal || active.terminalizing > 0 {
-			daemon.mu.Unlock()
-			return protocol.LeaseHeartbeatResponse{}, context.Canceled
-		}
-		active.renewCancelID++
-		renewalID = active.renewCancelID
-		active.renewCancel = cancel
+	if !activeRunCanRenew(active) {
+		daemon.mu.Unlock()
+		return protocol.LeaseHeartbeatResponse{}, context.Canceled
 	}
+	requestLimit := journal.LeaseExpiresAt.Sub(daemon.now()) - leaseSafetyMargin
+	if requestLimit <= 0 {
+		daemon.mu.Unlock()
+		return protocol.LeaseHeartbeatResponse{}, errLeaseDeadlineReached
+	}
+	if requestLimit > controlRequestLimit {
+		requestLimit = controlRequestLimit
+	}
+	renewalContext, cancel := context.WithTimeout(ctx, requestLimit)
+	active.renewCancelID++
+	renewalID = active.renewCancelID
+	active.renewCancel = cancel
 	daemon.mu.Unlock()
 	response, err := daemon.control.RenewLease(renewalContext, journal.RunID, protocol.LeaseHeartbeatRequest{Fence: journal.Fence()})
+	cancel()
 	daemon.mu.Lock()
 	if active := daemon.running[journal.Key()]; active != nil && active.renewCancelID == renewalID {
 		active.renewCancel = nil
@@ -1235,18 +1903,25 @@ func (daemon *daemon) renewLease(ctx context.Context, journal state.RunJournal) 
 	return response, err
 }
 
+func (daemon *daemon) renewalEligible(snapshot state.RunJournal) bool {
+	if snapshot.LeaseToken == "" || snapshot.LocalState == "terminal_pending" || snapshot.LocalState == "cleanup_pending" || snapshot.LocalState == "stale" {
+		return false
+	}
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	return activeRunCanRenew(daemon.running[snapshot.Key()])
+}
+
+func activeRunCanRenew(active *runningRun) bool {
+	return active != nil && active.process != nil && !active.starting && !active.stale && !active.terminal && active.terminalizing == 0
+}
+
 func (daemon *daemon) renewalStillEligible(snapshot state.RunJournal) bool {
 	journal, err := daemon.store.LoadJournal(snapshot.Key())
 	if err != nil || journal.Fence() != snapshot.Fence() {
 		return false
 	}
-	if journal.LocalState == "terminal_pending" || journal.LocalState == "cleanup_pending" || journal.LocalState == "stale" {
-		return false
-	}
-	daemon.mu.Lock()
-	defer daemon.mu.Unlock()
-	active := daemon.running[snapshot.Key()]
-	return active == nil || (!active.terminal && active.terminalizing == 0)
+	return daemon.renewalEligible(journal)
 }
 
 func (daemon *daemon) terminateForLease(journal state.RunJournal, reason string) {
@@ -1280,14 +1955,215 @@ func (daemon *daemon) flushAll(ctx context.Context) {
 	if err != nil {
 		return
 	}
+	seen := make(map[state.RunKey]struct{}, len(journals))
 	for _, journal := range journals {
-		daemon.flushRun(ctx, journal)
+		key := journal.Key()
+		for {
+			if ctx.Err() != nil {
+				return
+			}
+			terminal := journal.LocalState == "terminal_pending"
+			if terminal {
+				seen[key] = struct{}{}
+				if !daemon.outboxDue(journal) {
+					break
+				}
+			}
+			err := daemon.flushRun(ctx, journal)
+			current, loadErr := daemon.store.LoadJournal(key)
+			if state.IsNotFound(loadErr) {
+				daemon.clearOutboxRetry(key)
+				break
+			}
+			if loadErr != nil {
+				if err != nil && terminal {
+					daemon.recordOutboxFailure(ctx, journal, err)
+				}
+				break
+			}
+			if current.LocalState == "terminal_pending" {
+				seen[key] = struct{}{}
+			}
+			if err == nil {
+				daemon.clearOutboxRetry(key)
+				break
+			}
+
+			failedJournal := journal
+			var failure *outboxFailure
+			if errors.As(err, &failure) {
+				failedJournal = failure.journal
+			}
+			if errors.Is(err, errOutboxChanged) || journalFingerprint(current) != journalFingerprint(failedJournal) {
+				daemon.clearOutboxRetry(key)
+				journal = current
+				continue
+			}
+			if current.LocalState == "terminal_pending" {
+				daemon.recordOutboxFailure(ctx, current, err)
+			}
+			break
+		}
+	}
+	daemon.pruneOutboxRetries(seen)
+}
+
+func (daemon *daemon) outboxDue(journal state.RunJournal) bool {
+	key := journal.Key()
+	fingerprint := journalFingerprint(journal)
+	now := daemon.now()
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	if daemon.outboxRetry == nil {
+		daemon.outboxRetry = make(map[state.RunKey]outboxRetry)
+	}
+	entry, exists := daemon.outboxRetry[key]
+	if !exists || entry.fingerprint != fingerprint {
+		daemon.outboxRetry[key] = outboxRetry{fingerprint: fingerprint, delay: minimumInterval}
+		return true
+	}
+	return !entry.permanent && !now.Before(entry.retryAt)
+}
+
+func (daemon *daemon) recordOutboxFailure(ctx context.Context, journal state.RunJournal, err error) {
+	if ctx.Err() != nil {
+		return
+	}
+	key := journal.Key()
+	fingerprint := journalFingerprint(journal)
+	daemon.mu.Lock()
+	entry, exists := daemon.outboxRetry[key]
+	if daemon.outboxRetry == nil {
+		daemon.outboxRetry = make(map[state.RunKey]outboxRetry)
+	}
+	if !exists || entry.fingerprint != fingerprint {
+		entry = outboxRetry{fingerprint: fingerprint, delay: minimumInterval}
+		daemon.outboxRetry[key] = entry
+	}
+	fallback := entry.delay
+	if fallback <= 0 {
+		fallback = minimumInterval
+	}
+	daemon.mu.Unlock()
+
+	delay, retryable := control.RetryDelay(ctx, err, fallback)
+	if !retryable && isOutboxMaintenanceFailure(journal, err) {
+		delay, retryable = fallback, true
+	}
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	current, exists := daemon.outboxRetry[key]
+	if exists && current.fingerprint != fingerprint {
+		return
+	}
+	if !retryable {
+		daemon.outboxRetry[key] = outboxRetry{fingerprint: fingerprint, delay: fallback, permanent: true}
+		return
+	}
+	now := daemon.now()
+	retryAt := now.Add(delay)
+	if journal.TerminalVerdict == "" && !journal.LeaseExpiresAt.IsZero() {
+		deliveryDeadline := journal.LeaseExpiresAt.Add(terminalGrace)
+		if now.Before(deliveryDeadline) && retryAt.After(deliveryDeadline) {
+			retryAt = deliveryDeadline
+		}
+	}
+	daemon.outboxRetry[key] = outboxRetry{fingerprint: fingerprint, retryAt: retryAt, delay: nextRetryDelay(fallback)}
+}
+
+func isOutboxMaintenanceFailure(journal state.RunJournal, err error) bool {
+	var apiError *control.APIError
+	var responseError *control.ResponseError
+	if errors.As(err, &apiError) || errors.As(err, &responseError) {
+		return false
+	}
+	return journal.LocalState == "terminal_pending" && journal.TerminalVerdict == state.TerminalVerdictAccepted && len(journal.PendingTransitions) == 0
+}
+
+func (daemon *daemon) clearOutboxRetry(key state.RunKey) {
+	daemon.mu.Lock()
+	delete(daemon.outboxRetry, key)
+	daemon.mu.Unlock()
+}
+
+func (daemon *daemon) pruneOutboxRetries(seen map[state.RunKey]struct{}) {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	for key := range daemon.outboxRetry {
+		if _, exists := seen[key]; !exists {
+			delete(daemon.outboxRetry, key)
+		}
 	}
 }
 
-func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) error {
+func journalFingerprint(journal state.RunJournal) string {
+	eventIDs := make([]string, len(journal.PendingEvents))
+	for index, event := range journal.PendingEvents {
+		eventIDs[index] = event.EventID
+	}
+	transitionIDs := make([]string, len(journal.PendingTransitions))
+	for index, transition := range journal.PendingTransitions {
+		transitionIDs[index] = transition.TransitionID
+	}
+	acknowledgementIDs := make([]string, len(journal.PendingCommandAcknowledgements))
+	for index, acknowledgement := range journal.PendingCommandAcknowledgements {
+		acknowledgementIDs[index] = acknowledgement.AckID
+	}
+	value := struct {
+		Key                       state.RunKey
+		Fence                     protocol.Fence
+		LocalState                string
+		LeaseExpiresAt            time.Time
+		TerminalState             string
+		TerminalPendingAt         time.Time
+		TerminalVerdict           string
+		PendingEventIDs           []string
+		PendingTransitionIDs      []string
+		AttemptedTransitionIDs    []string
+		PendingAcknowledgementIDs []string
+	}{
+		Key:                       journal.Key(),
+		Fence:                     journal.Fence(),
+		LocalState:                journal.LocalState,
+		LeaseExpiresAt:            journal.LeaseExpiresAt,
+		TerminalState:             journal.TerminalState,
+		TerminalPendingAt:         journal.TerminalPendingAt,
+		TerminalVerdict:           journal.TerminalVerdict,
+		PendingEventIDs:           eventIDs,
+		PendingTransitionIDs:      transitionIDs,
+		AttemptedTransitionIDs:    journal.AttemptedTransitionIDs,
+		PendingAcknowledgementIDs: acknowledgementIDs,
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Sprintf("%#v", value)
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(encoded))
+}
+
+func (daemon *daemon) isStarting(key state.RunKey) bool {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	active := daemon.running[key]
+	return active != nil && active.starting
+}
+
+func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) (err error) {
+	defer func() {
+		if err == nil {
+			return
+		}
+		var failure *outboxFailure
+		if !errors.As(err, &failure) {
+			err = &outboxFailure{journal: journal, err: err}
+		}
+	}()
+
 	key := journal.Key()
 	if journal.LocalState == "stale" {
+		return nil
+	}
+	if journal.LocalState != "terminal_pending" && daemon.isStarting(key) {
 		return nil
 	}
 	if journal.LocalState == "terminal_pending" && journal.TerminalVerdict != "" && journal.TerminalVerdict != state.TerminalVerdictAccepted {
@@ -1302,7 +2178,19 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) er
 	}
 	terminalSucceeded := journal.TerminalState == "completed"
 	if len(journal.PendingEvents) > 0 {
-		if err := daemon.control.AppendEvents(ctx, journal.RunID, protocol.AppendEventsRequest{Fence: journal.Fence(), Events: journal.PendingEvents}); err != nil {
+		wasTerminal := journal.LocalState == "terminal_pending"
+		requestContext, cancel := daemon.controlContext(ctx)
+		err := daemon.control.AppendEvents(requestContext, journal.RunID, protocol.AppendEventsRequest{Fence: journal.Fence(), Events: journal.PendingEvents})
+		cancel()
+		if err != nil {
+			current, loadErr := daemon.store.LoadJournal(key)
+			if loadErr != nil {
+				return loadErr
+			}
+			journal = current
+			if !wasTerminal && journal.LocalState == "terminal_pending" {
+				return errOutboxChanged
+			}
 			return daemon.handleOrdinaryDeliveryError(journal, err, "event ownership lost")
 		}
 		ids := make([]string, len(journal.PendingEvents))
@@ -1315,26 +2203,6 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) er
 		}
 		journal = updated
 	}
-	cancelledPending := hasTransition(journal.PendingTransitions, "cancelled")
-	sentAcknowledgements := make([]string, 0, len(journal.PendingCommandAcknowledgements))
-	if cancelledPending {
-		for _, acknowledgement := range journal.PendingCommandAcknowledgements {
-			if err := daemon.control.AcknowledgeCommand(ctx, acknowledgement.CommandID, acknowledgement); err != nil {
-				if updated, retired, retireErr := daemon.retireAcceptedTerminalAcknowledgement(journal, acknowledgement, err); retired || retireErr != nil {
-					if retireErr != nil {
-						return retireErr
-					}
-					journal = updated
-					continue
-				}
-				return daemon.handleAcknowledgementDeliveryError(journal, err)
-			}
-			if journal.LocalState == "terminal_pending" {
-				daemon.releaseSlotOnce(key)
-			}
-			sentAcknowledgements = append(sentAcknowledgements, acknowledgement.AckID)
-		}
-	}
 	for len(journal.PendingTransitions) > 0 {
 		updated, err := daemon.store.MarkTransitionAttempted(key, journal.PendingTransitions[0].TransitionID)
 		if err != nil {
@@ -1342,7 +2210,22 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) er
 		}
 		journal = updated
 		transition := journal.PendingTransitions[0]
-		if err := daemon.control.Transition(ctx, journal.RunID, transition); err != nil {
+		wasTerminal := journal.LocalState == "terminal_pending"
+		requestContext, cancel := daemon.controlContext(ctx)
+		err = daemon.control.Transition(requestContext, journal.RunID, transition)
+		cancel()
+		current, loadErr := daemon.store.LoadJournal(key)
+		if loadErr != nil {
+			return loadErr
+		}
+		journal = current
+		if !current.HasPendingTransition(transition.TransitionID) {
+			return errOutboxChanged
+		}
+		if err != nil {
+			if !wasTerminal && journal.LocalState == "terminal_pending" && !isTerminalTransition(transition.State) {
+				return errOutboxChanged
+			}
 			if isTerminalTransition(transition.State) {
 				return daemon.handleTerminalDeliveryError(journal, err)
 			}
@@ -1361,35 +2244,40 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) er
 		}
 		journal = updated
 	}
-	if cancelledPending {
-		if len(sentAcknowledgements) > 0 {
-			updated, err := daemon.store.MarkCommandAcknowledgementsDelivered(key, sentAcknowledgements)
-			if err != nil {
-				return err
-			}
-			journal = updated
+	for _, acknowledgement := range journal.PendingCommandAcknowledgements {
+		wasTerminal := journal.LocalState == "terminal_pending"
+		requestContext, cancel := daemon.controlContext(ctx)
+		err := daemon.control.AcknowledgeCommand(requestContext, acknowledgement.CommandID, acknowledgement)
+		cancel()
+		current, loadErr := daemon.store.LoadJournal(key)
+		if loadErr != nil {
+			return loadErr
 		}
-	} else {
-		for _, acknowledgement := range journal.PendingCommandAcknowledgements {
-			if err := daemon.control.AcknowledgeCommand(ctx, acknowledgement.CommandID, acknowledgement); err != nil {
-				if updated, retired, retireErr := daemon.retireAcceptedTerminalAcknowledgement(journal, acknowledgement, err); retired || retireErr != nil {
-					if retireErr != nil {
-						return retireErr
-					}
-					journal = updated
-					continue
+		journal = current
+		if !hasPendingAcknowledgement(journal, acknowledgement.AckID) {
+			return errOutboxChanged
+		}
+		if err != nil {
+			if !wasTerminal && journal.LocalState == "terminal_pending" {
+				return errOutboxChanged
+			}
+			if updated, retired, retireErr := daemon.retireAcceptedTerminalAcknowledgement(journal, acknowledgement, err); retired || retireErr != nil {
+				if retireErr != nil {
+					return retireErr
 				}
-				return daemon.handleAcknowledgementDeliveryError(journal, err)
+				journal = updated
+				continue
 			}
-			if journal.LocalState == "terminal_pending" {
-				daemon.releaseSlotOnce(key)
-			}
-			updated, err := daemon.store.MarkCommandAcknowledgementsDelivered(key, []string{acknowledgement.AckID})
-			if err != nil {
-				return err
-			}
-			journal = updated
+			return daemon.handleAcknowledgementDeliveryError(journal, err)
 		}
+		if journal.LocalState == "terminal_pending" {
+			daemon.releaseSlotOnce(key)
+		}
+		updated, err := daemon.store.MarkCommandAcknowledgementsDelivered(key, []string{acknowledgement.AckID})
+		if err != nil {
+			return err
+		}
+		journal = updated
 	}
 	if journal.LocalState == "terminal_pending" && journal.TerminalVerdict == state.TerminalVerdictAccepted && len(journal.PendingTransitions) == 0 {
 		daemon.mu.Lock()
@@ -1413,8 +2301,18 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) er
 			daemon.log.Warn("delete_terminal_journal_failed", "run_id", journal.RunID, "error", err)
 			return err
 		}
+		daemon.clearCompletedCommandReceipts(key)
 	}
 	return nil
+}
+
+func hasPendingAcknowledgement(journal state.RunJournal, acknowledgementID string) bool {
+	for _, acknowledgement := range journal.PendingCommandAcknowledgements {
+		if acknowledgement.AckID == acknowledgementID {
+			return true
+		}
+	}
+	return false
 }
 
 func isTerminalTransition(stateName string) bool {
@@ -1501,15 +2399,6 @@ func (daemon *daemon) handleOrdinaryDeliveryError(journal state.RunJournal, err 
 		daemon.terminateForLease(journal, ownershipReason)
 	}
 	return err
-}
-
-func hasTransition(transitions []protocol.StateTransitionRequest, stateName string) bool {
-	for _, transition := range transitions {
-		if transition.State == stateName {
-			return true
-		}
-	}
-	return false
 }
 
 func (daemon *daemon) activeRuns() []protocol.ActiveRun {
@@ -1615,27 +2504,57 @@ func appendRawRecords(records []jsonlRecord, value []byte) []jsonlRecord {
 }
 
 func (daemon *daemon) claimWithRetry(ctx context.Context, runID string, request protocol.ClaimRequest) (protocol.ClaimResponse, error) {
+	return daemon.claimWithRetryUntil(ctx, runID, request, time.Time{}, waitForRetry)
+}
+
+func (daemon *daemon) claimWithRetryWait(ctx context.Context, runID string, request protocol.ClaimRequest, waitFor func(context.Context, time.Duration) error) (protocol.ClaimResponse, error) {
+	return daemon.claimWithRetryUntil(ctx, runID, request, time.Time{}, waitFor)
+}
+
+func (daemon *daemon) claimWithRetryUntil(ctx context.Context, runID string, request protocol.ClaimRequest, expiresAt time.Time, waitFor func(context.Context, time.Duration) error) (protocol.ClaimResponse, error) {
 	delay := minimumInterval
 	for {
-		response, err := daemon.control.Claim(ctx, runID, request)
+		if !expiresAt.IsZero() && !daemon.now().Before(expiresAt) {
+			return protocol.ClaimResponse{}, errAssignmentExpired
+		}
+		requestLimit := controlRequestLimit
+		if !expiresAt.IsZero() {
+			requestLimit = min(requestLimit, expiresAt.Sub(daemon.now()))
+		}
+		requestContext, cancel := context.WithTimeout(ctx, requestLimit)
+		response, err := daemon.control.Claim(requestContext, runID, request)
+		cancel()
 		if err == nil {
 			return response, err
 		}
 		if ctx.Err() != nil {
 			return protocol.ClaimResponse{}, ctx.Err()
 		}
+		if !expiresAt.IsZero() && !daemon.now().Before(expiresAt) {
+			return protocol.ClaimResponse{}, errAssignmentExpired
+		}
 		wait, shouldRetry := control.RetryDelay(ctx, err, delay)
 		if !shouldRetry {
 			return response, err
 		}
-		if err := waitForRetry(ctx, wait); err != nil {
-			return protocol.ClaimResponse{}, err
+		if wait < minimumInterval {
+			wait = minimumInterval
+		}
+		if !expiresAt.IsZero() {
+			wait = min(wait, expiresAt.Sub(daemon.now()))
+		}
+		if waitErr := waitFor(ctx, wait); waitErr != nil {
+			return protocol.ClaimResponse{}, waitErr
 		}
 		delay = nextRetryDelay(delay)
 	}
 }
 
 func retry(ctx context.Context, operation func() error) error {
+	return retryWithWait(ctx, operation, waitForRetry)
+}
+
+func retryWithWait(ctx context.Context, operation func() error, waitFor func(context.Context, time.Duration) error) error {
 	delay := minimumInterval
 	for {
 		if err := operation(); err == nil {
@@ -1648,8 +2567,11 @@ func retry(ctx context.Context, operation func() error) error {
 			if !shouldRetry {
 				return err
 			}
-			if err := waitForRetry(ctx, wait); err != nil {
-				return err
+			if wait < minimumInterval {
+				wait = minimumInterval
+			}
+			if waitErr := waitFor(ctx, wait); waitErr != nil {
+				return waitErr
 			}
 			delay = nextRetryDelay(delay)
 		}

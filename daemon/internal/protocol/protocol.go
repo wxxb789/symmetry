@@ -6,6 +6,10 @@ import (
 	"time"
 )
 
+// MinimumLeaseDurationMS leaves enough time for the renewal cadence, request
+// deadline, and expiry safety margin used by the daemon.
+const MinimumLeaseDurationMS int64 = 30_000
+
 // AgentInputRecordType identifies a newline-delimited message sent to an agent.
 type AgentInputRecordType string
 
@@ -30,7 +34,8 @@ type MachineEnrollment struct {
 
 // EnrollRequest creates a durable machine identity.
 type EnrollRequest struct {
-	Machine MachineEnrollment `json:"machine"`
+	Machine      MachineEnrollment `json:"machine"`
+	MachineToken string            `json:"machine_token"`
 }
 
 // EnrollResponse returns credentials for subsequent daemon requests.

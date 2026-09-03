@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -22,13 +23,14 @@ import (
 )
 
 const (
-	maxStateFileBytes = 1 << 20
-	identityFileName  = "identity.json"
-	runsDirectoryName = "runs"
-	lockFileName      = ".symmetry-daemon.lock"
-	journalFilePrefix = "journal-"
-	journalFileSuffix = ".json"
-	atomicTempPrefix  = ".symmetry-state-"
+	maxStateFileBytes  = 1 << 20
+	identityFileName   = "identity.json"
+	enrollmentFileName = "enrollment.json"
+	runsDirectoryName  = "runs"
+	lockFileName       = ".symmetry-daemon.lock"
+	journalFilePrefix  = "journal-"
+	journalFileSuffix  = ".json"
+	atomicTempPrefix   = ".symmetry-state-"
 )
 
 const (
@@ -60,6 +62,13 @@ type Store struct {
 type MachineIdentity struct {
 	MachineID    string `json:"machine_id"`
 	MachineToken string `json:"machine_token"`
+}
+
+// EnrollmentIntent is the durable replay identity for first enrollment.
+type EnrollmentIntent struct {
+	MachineName    string `json:"machine_name"`
+	MachineToken   string `json:"machine_token"`
+	IdempotencyKey string `json:"idempotency_key"`
 }
 
 // RunKey uniquely identifies one fenced execution generation.
@@ -200,6 +209,61 @@ func NewDaemonInstanceID() (string, error) {
 	value[8] = (value[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
 		value[0:4], value[4:6], value[6:8], value[8:10], value[10:16]), nil
+}
+
+// NewMachineToken returns a 256-bit URL-safe opaque credential.
+func NewMachineToken() (string, error) {
+	value := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, value); err != nil {
+		return "", errors.New("generate machine token")
+	}
+	return base64.RawURLEncoding.EncodeToString(value), nil
+}
+
+// LoadEnrollmentIntent returns the durable first-enrollment replay request.
+func (store *Store) LoadEnrollmentIntent() (EnrollmentIntent, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.ensureOpenLocked(); err != nil {
+		return EnrollmentIntent{}, err
+	}
+	var intent EnrollmentIntent
+	if err := store.readJSON(store.enrollmentPath(), "enrollment intent", &intent); err != nil {
+		return EnrollmentIntent{}, err
+	}
+	if err := validateEnrollmentIntent(intent); err != nil {
+		return EnrollmentIntent{}, errors.New("invalid enrollment intent")
+	}
+	return intent, nil
+}
+
+// SaveEnrollmentIntent atomically persists the exact request used for retries.
+func (store *Store) SaveEnrollmentIntent(intent EnrollmentIntent) error {
+	if err := validateEnrollmentIntent(intent); err != nil {
+		return err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.ensureOpenLocked(); err != nil {
+		return err
+	}
+	return store.writeJSON(store.enrollmentPath(), intent, "enrollment intent")
+}
+
+// DeleteEnrollmentIntent removes a completed or superseded enrollment request.
+func (store *Store) DeleteEnrollmentIntent() error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.ensureOpenLocked(); err != nil {
+		return err
+	}
+	if err := os.Remove(store.enrollmentPath()); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return errors.New("remove enrollment intent")
+	}
+	return syncDirectory(store.dir)
 }
 
 // LoadIdentity returns the enrolled machine credentials. An absent enrollment
@@ -367,12 +431,12 @@ func (store *Store) ListJournals() ([]RunJournal, error) {
 	if err := store.ensureOpenLocked(); err != nil {
 		return nil, err
 	}
-	if err := store.removeOwnedTempsLocked(); err != nil {
-		return nil, err
-	}
 	entries, err := os.ReadDir(store.runsDir())
 	if err != nil {
-		return nil, errors.New("list run journals")
+		return nil, errors.New("list run journal directory")
+	}
+	if err := store.removeOwnedTempsLocked(entries); err != nil {
+		return nil, err
 	}
 	result := make([]RunJournal, 0, len(entries))
 	for _, entry := range entries {
@@ -438,6 +502,25 @@ func (store *Store) UpdateLeaseExpiry(key RunKey, expiry time.Time) (RunJournal,
 			return errors.New("journal has no claim grant")
 		}
 		journal.LeaseExpiresAt = expiry
+		return nil
+	})
+}
+
+// AdvanceLeaseExpiry persists expiry only when it extends the current lease.
+func (store *Store) AdvanceLeaseExpiry(key RunKey, expiry time.Time) (RunJournal, error) {
+	if expiry.IsZero() {
+		return RunJournal{}, errors.New("lease expiry is invalid")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.LeaseToken == "" {
+			return errors.New("journal has no claim grant")
+		}
+		if journal.LocalState == "terminal_pending" || journal.LocalState == "cleanup_pending" {
+			return nil
+		}
+		if expiry.After(journal.LeaseExpiresAt) {
+			journal.LeaseExpiresAt = expiry
+		}
 		return nil
 	})
 }
@@ -551,29 +634,24 @@ func (store *Store) QueueTerminalTransitionAt(key RunKey, transition protocol.St
 		return RunJournal{}, errors.New("terminal pending time is invalid")
 	}
 	return store.mutateJournal(key, func(journal *RunJournal) error {
-		if journal.TerminalVerdict != "" {
-			return errors.New("terminal verdict is already recorded")
-		}
-		prepared, err := prepareTransition(journal, transition)
-		if err != nil {
+		return queueTerminalTransition(journal, transition, pendingAt)
+	})
+}
+
+// QueueCancelledTransitionAndAcknowledgementAt atomically records the
+// authoritative cancellation terminal transition and its command receipt.
+func (store *Store) QueueCancelledTransitionAndAcknowledgementAt(key RunKey, transition protocol.StateTransitionRequest, acknowledgement protocol.CommandAcknowledgement, pendingAt time.Time) (RunJournal, error) {
+	if pendingAt.IsZero() {
+		return RunJournal{}, errors.New("terminal pending time is invalid")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if err := queueTerminalTransition(journal, transition, pendingAt); err != nil {
 			return err
 		}
-		if !isTerminalTransitionState(prepared.State) {
-			return errors.New("terminal transition state is invalid")
+		if journal.TerminalState != "cancelled" {
+			return errors.New("cancelled terminal transition state is invalid")
 		}
-		if prepared.State == "cancelled" {
-			journal.PendingTransitions = []protocol.StateTransitionRequest{prepared}
-			journal.AttemptedTransitionIDs = retainAttemptedTransitions(journal.AttemptedTransitionIDs, journal.PendingTransitions)
-			setTerminalPending(journal, pendingAt, prepared.State)
-			return nil
-		}
-		if hasPendingTerminalTransition(journal.PendingTransitions) {
-			setTerminalPending(journal, pendingAt, pendingTerminalState(journal.PendingTransitions))
-			return nil
-		}
-		journal.PendingTransitions = append(journal.PendingTransitions, prepared)
-		setTerminalPending(journal, pendingAt, prepared.State)
-		return nil
+		return queueCommandAcknowledgement(journal, acknowledgement)
 	})
 }
 
@@ -627,7 +705,7 @@ func (store *Store) MarkTransitionAttempted(key RunKey, transitionID string) (Ru
 		return RunJournal{}, errors.New("transition ID is invalid")
 	}
 	return store.mutateJournal(key, func(journal *RunJournal) error {
-		if !hasPendingTransition(journal.PendingTransitions, transitionID) {
+		if !journal.HasPendingTransition(transitionID) {
 			return errors.New("transition is not pending")
 		}
 		if !hasAttemptedTransition(journal.AttemptedTransitionIDs, transitionID) {
@@ -641,23 +719,7 @@ func (store *Store) MarkTransitionAttempted(key RunKey, transitionID string) (Ru
 // request. A zero fence is populated from the current journal.
 func (store *Store) QueueCommandAcknowledgement(key RunKey, acknowledgement protocol.CommandAcknowledgement) (RunJournal, error) {
 	return store.mutateJournal(key, func(journal *RunJournal) error {
-		if !journal.hasClaimGrant() {
-			return errors.New("journal has no claim grant")
-		}
-		if acknowledgement.RunID == "" {
-			acknowledgement.RunID = journal.RunID
-		}
-		if acknowledgement.RunID != journal.RunID || strings.TrimSpace(acknowledgement.CommandID) == "" || strings.TrimSpace(acknowledgement.Outcome) == "" || strings.TrimSpace(acknowledgement.AckID) == "" {
-			return errors.New("command acknowledgement is invalid")
-		}
-		if isZeroFence(acknowledgement.Fence) {
-			acknowledgement.Fence = journal.Fence()
-		}
-		if !sameFence(acknowledgement.Fence, journal.Fence()) {
-			return errors.New("command acknowledgement fence does not match journal")
-		}
-		journal.PendingCommandAcknowledgements = append(journal.PendingCommandAcknowledgements, acknowledgement)
-		return nil
+		return queueCommandAcknowledgement(journal, acknowledgement)
 	})
 }
 
@@ -715,6 +777,52 @@ func prepareTransition(journal *RunJournal, transition protocol.StateTransitionR
 		return protocol.StateTransitionRequest{}, errors.New("state transition fence does not match journal")
 	}
 	return transition, nil
+}
+
+func queueTerminalTransition(journal *RunJournal, transition protocol.StateTransitionRequest, pendingAt time.Time) error {
+	if journal.TerminalVerdict != "" {
+		return errors.New("terminal verdict is already recorded")
+	}
+	prepared, err := prepareTransition(journal, transition)
+	if err != nil {
+		return err
+	}
+	if !isTerminalTransitionState(prepared.State) {
+		return errors.New("terminal transition state is invalid")
+	}
+	if prepared.State == "cancelled" {
+		journal.PendingTransitions = []protocol.StateTransitionRequest{prepared}
+		journal.AttemptedTransitionIDs = retainAttemptedTransitions(journal.AttemptedTransitionIDs, journal.PendingTransitions)
+		setTerminalPending(journal, pendingAt, prepared.State)
+		return nil
+	}
+	if hasPendingTerminalTransition(journal.PendingTransitions) {
+		setTerminalPending(journal, pendingAt, pendingTerminalState(journal.PendingTransitions))
+		return nil
+	}
+	journal.PendingTransitions = append(journal.PendingTransitions, prepared)
+	setTerminalPending(journal, pendingAt, prepared.State)
+	return nil
+}
+
+func queueCommandAcknowledgement(journal *RunJournal, acknowledgement protocol.CommandAcknowledgement) error {
+	if !journal.hasClaimGrant() {
+		return errors.New("journal has no claim grant")
+	}
+	if acknowledgement.RunID == "" {
+		acknowledgement.RunID = journal.RunID
+	}
+	if acknowledgement.RunID != journal.RunID || strings.TrimSpace(acknowledgement.CommandID) == "" || strings.TrimSpace(acknowledgement.Outcome) == "" || strings.TrimSpace(acknowledgement.AckID) == "" {
+		return errors.New("command acknowledgement is invalid")
+	}
+	if isZeroFence(acknowledgement.Fence) {
+		acknowledgement.Fence = journal.Fence()
+	}
+	if !sameFence(acknowledgement.Fence, journal.Fence()) {
+		return errors.New("command acknowledgement fence does not match journal")
+	}
+	journal.PendingCommandAcknowledgements = append(journal.PendingCommandAcknowledgements, acknowledgement)
+	return nil
 }
 
 func isTerminalTransitionState(state string) bool {
@@ -807,11 +915,7 @@ func (store *Store) writeJSON(path string, value any, resource string) error {
 	return nil
 }
 
-func (store *Store) removeOwnedTempsLocked() error {
-	entries, err := os.ReadDir(store.runsDir())
-	if err != nil {
-		return errors.New("list run journal directory")
-	}
+func (store *Store) removeOwnedTempsLocked(entries []os.DirEntry) error {
 	for _, entry := range entries {
 		if entry.IsDir() || !isOwnedTemp(entry.Name()) {
 			continue
@@ -825,6 +929,10 @@ func (store *Store) removeOwnedTempsLocked() error {
 
 func (store *Store) identityPath() string {
 	return filepath.Join(store.dir, identityFileName)
+}
+
+func (store *Store) enrollmentPath() string {
+	return filepath.Join(store.dir, enrollmentFileName)
 }
 
 func (store *Store) runsDir() string {
@@ -945,6 +1053,13 @@ func isOwnedTemp(name string) bool {
 func validateIdentity(identity MachineIdentity) error {
 	if strings.TrimSpace(identity.MachineID) == "" || strings.TrimSpace(identity.MachineToken) == "" || len(identity.MachineID) > 4096 || len(identity.MachineToken) > 65536 {
 		return errors.New("machine identity is invalid")
+	}
+	return nil
+}
+
+func validateEnrollmentIntent(intent EnrollmentIntent) error {
+	if !validRequiredString(intent.MachineName, 4096) || !validRequiredString(intent.MachineToken, 65536) || !validRequiredString(intent.IdempotencyKey, 4096) {
+		return errors.New("enrollment intent is invalid")
 	}
 	return nil
 }
@@ -1102,6 +1217,11 @@ func removeTransitions(transitions []protocol.StateTransitionRequest, ids []stri
 		}
 	}
 	return result
+}
+
+// HasPendingTransition reports whether transitionID is still queued.
+func (journal RunJournal) HasPendingTransition(transitionID string) bool {
+	return hasPendingTransition(journal.PendingTransitions, transitionID)
 }
 
 func hasPendingTransition(transitions []protocol.StateTransitionRequest, transitionID string) bool {

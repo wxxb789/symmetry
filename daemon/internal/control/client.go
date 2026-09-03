@@ -189,12 +189,22 @@ func parseBaseURL(value string) (*url.URL, error) {
 }
 
 // Enroll registers a machine using a one-time enrollment bearer token.
-func (client *EnrollmentClient) Enroll(ctx context.Context, enrollmentToken string, request protocol.EnrollRequest) (protocol.EnrollResponse, error) {
+func (client *EnrollmentClient) Enroll(ctx context.Context, enrollmentToken, idempotencyKey string, request protocol.EnrollRequest) (protocol.EnrollResponse, error) {
+	if strings.TrimSpace(idempotencyKey) == "" {
+		return protocol.EnrollResponse{}, errors.New("idempotency key must not be empty")
+	}
+	if strings.TrimSpace(request.MachineToken) == "" {
+		return protocol.EnrollResponse{}, errors.New("machine token must not be empty")
+	}
 	var response protocol.EnrollResponse
-	if err := client.request(ctx, http.MethodPost, "v1/machines", nil, enrollmentToken, "", request, &response); err != nil {
+	statusCode, err := client.requestWithStatus(ctx, http.MethodPost, "v1/machines", nil, enrollmentToken, idempotencyKey, request, &response)
+	if err != nil {
 		return protocol.EnrollResponse{}, err
 	}
-	if err := validateEnrollResponse(response); err != nil {
+	if statusCode != http.StatusOK && statusCode != http.StatusCreated {
+		return protocol.EnrollResponse{}, responseErrorf("invalid enroll response: expected HTTP 200 or 201, got HTTP %d", statusCode)
+	}
+	if err := validateEnrollResponse(request, response); err != nil {
 		return protocol.EnrollResponse{}, err
 	}
 	return response, nil

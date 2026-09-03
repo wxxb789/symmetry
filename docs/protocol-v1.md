@@ -85,9 +85,10 @@ before lease expiry, the reaper finalizes the run and task as `cancelled`.
 
 ## Authentication
 
-`POST /api/v1/machines` accepts the configured one-time enrollment bearer token
-and returns a stable `machine_id` plus a machine bearer token. The control plane
-stores only the SHA-256 digest of the machine token.
+`POST /api/v1/machines` accepts the configured one-time enrollment bearer token,
+a daemon-generated machine token, and a durable idempotency key. It returns a
+stable `machine_id` plus that same machine bearer token. The control plane stores
+only the SHA-256 digest of the machine token.
 
 All other daemon HTTP endpoints use the machine bearer token. The WebSocket
 upgrade sends the same token in `X-Symmetry-Token`, because Phoenix exposes
@@ -112,6 +113,7 @@ trusted local or container network.
 ```http
 POST /api/v1/machines
 Authorization: Bearer <enrollment-token>
+Idempotency-Key: <daemon-generated-key>
 Content-Type: application/json
 ```
 
@@ -119,7 +121,8 @@ Content-Type: application/json
 {
   "machine": {
     "name": "builder-01"
-  }
+  },
+  "machine_token": "daemon-generated-opaque-token"
 }
 ```
 
@@ -129,6 +132,13 @@ Content-Type: application/json
   "machine_token": "opaque-token"
 }
 ```
+
+The daemon persists the exact idempotency key, machine name, and machine token
+before the first request. A new enrollment returns `201`; an exact replay returns
+the original `machine_id` and request token with `200`; reusing the key with a
+different name or token returns `409 idempotency_conflict`. The daemon rejects a
+response whose token differs from its request and removes the enrollment intent
+only after the machine identity is durable locally.
 
 ### Register A Daemon Session And Runtime
 
@@ -163,7 +173,7 @@ Authorization: Bearer <machine-token>
   ],
   "heartbeat_interval_ms": 5000,
   "poll_interval_ms": 5000,
-  "lease_duration_ms": 30000,
+  "lease_duration_ms": 120000,
   "websocket_path": "/socket/websocket?vsn=2.0.0"
 }
 ```
@@ -174,6 +184,13 @@ runtime's `runtime_epoch` and fences the previous process. Repeating the same
 instance registration is idempotent and returns the existing epochs. Lowering
 capacity prevents new assignment while current reservations meet or exceed the
 new value; it does not cancel existing work.
+
+The default execution lease is two minutes, and registration rejects lease
+durations below 30 seconds. The daemon maintains leases in an
+independent liveness lifecycle, so a blocked dispatch, reconciliation, outbox,
+or workspace operation cannot starve renewal. Renewal begins when the remaining
+lease reaches `min(90 seconds, 3/4 of the granted duration)`. Only a locally
+live, non-terminal agent process is eligible.
 
 A runtime is online when its last valid heartbeat is no older than three
 heartbeat intervals. The control plane marks it offline after that threshold,
@@ -294,7 +311,8 @@ launches a claim journaled under an older epoch. Reconciliation returns
 process and the control plane waits for the old lease to expire before requeue.
 
 The run heartbeat carries the complete fence and extends an unexpired lease.
-It never revives an expired or terminal run:
+Each renewal uses its own request context with a maximum 15-second deadline. It
+never revives an expired or terminal run:
 
 ```json
 {
@@ -387,9 +405,12 @@ returns `ownership_lost`.
 
 The daemon releases its local execution slot once when the terminal transition
 or related command acknowledgement is accepted, or when eight minutes have
-elapsed since it entered `terminal_pending`. Local expiry releases capacity only:
-the durable journal remains until the control plane accepts or conclusively
-rejects terminal delivery and workspace cleanup succeeds.
+elapsed since it entered `terminal_pending`. This local capacity deadline is
+separate from Control's acceptance deadline at `lease_expires_at + 8 minutes`;
+terminal retries are paced to reach the earlier remote deadline when necessary.
+Local expiry releases capacity only: the durable journal remains until the
+control plane accepts or conclusively rejects terminal delivery and workspace
+cleanup succeeds.
 
 ### Reconcile After Start Or Reconnect
 
@@ -444,8 +465,8 @@ when `claimed_runtime_epoch` equals the runtime's current epoch and every other
 fence field matches; its response returns the current lease expiry without
 changing the fence.
 
-For `cancel`, the daemon terminates the complete execution process tree,
-acknowledges the command, and makes a fenced `cancelled` transition. For
+For `cancel`, the daemon terminates the complete execution process tree, makes
+a fenced `cancelled` transition, and independently acknowledges the command. For
 `terminal`, it stops any still-running local child and records the server's
 terminal result in its journal without sending another terminal transition.
 
@@ -767,9 +788,18 @@ exception details:
 - `429 rate_limited`: retry with backoff and `Retry-After` when present.
 - `503 service_unavailable`: retry with backoff and `Retry-After` when present.
 
-An HTTP timeout has an unknown outcome. The daemon retries only idempotent reads
-or a write carrying the same claim, transition, command acknowledgement,
-idempotency, or event identifier.
+An HTTP timeout has an unknown outcome. Each control request has a 15-second
+maximum. Enrollment, session registration, claim, and terminal-journal recovery
+retry transport failures, `429`, and `5xx` under the daemon lifecycle, honoring
+`Retry-After` when present; other `4xx` responses and malformed successful
+responses stop that recovery attempt. Heartbeat, dispatch, reconciliation, and
+ordinary non-terminal outbox delivery make one attempt per cadence or wakeup.
+Writes are retried only when they carry the same claim, transition, command
+acknowledgement, idempotency, or event identifier.
+Enrollment retries, including retries after daemon restart, reuse the exact
+persisted idempotency key, machine name, and machine token.
+Claim retries never continue beyond `assignment_expires_at`; local expiry
+releases the reserved slot and lets a later snapshot provide fresh work.
 
 ## Recovery Invariants
 

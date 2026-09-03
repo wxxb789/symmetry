@@ -165,6 +165,57 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
              |> json_response(200)
   end
 
+  test "machine enrollment requires a replay key and reuses the exact request", %{conn: conn} do
+    key = uuid()
+    token = "machine-token-#{uuid()}"
+    request = %{"machine" => %{"name" => "builder"}, "machine_token" => token}
+
+    first =
+      bearer(conn, @enrollment_token)
+      |> put_req_header("idempotency-key", key)
+      |> post("/api/v1/machines", request)
+      |> json_response(201)
+
+    replayed =
+      bearer(conn, @enrollment_token)
+      |> put_req_header("idempotency-key", key)
+      |> post("/api/v1/machines", request)
+      |> json_response(200)
+
+    assert replayed == first
+    assert first["machine_token"] == token
+
+    assert_error(
+      bearer(conn, @enrollment_token)
+      |> put_req_header("idempotency-key", key)
+      |> post("/api/v1/machines", put_in(request, ["machine", "name"], "other")),
+      409,
+      "idempotency_conflict"
+    )
+
+    assert_error(
+      bearer(conn, @enrollment_token) |> post("/api/v1/machines", request),
+      400,
+      "invalid_request"
+    )
+
+    assert_error(
+      bearer(conn, @enrollment_token)
+      |> put_req_header("idempotency-key", uuid())
+      |> post("/api/v1/machines", %{request | "machine_token" => ""}),
+      400,
+      "invalid_request"
+    )
+
+    assert_error(
+      bearer(conn, @enrollment_token)
+      |> put_req_header("idempotency-key", key)
+      |> post("/api/v1/machines", %{request | "machine_token" => "different-token"}),
+      409,
+      "idempotency_conflict"
+    )
+  end
+
   test "session rejects a non-map runtime specification", %{conn: conn} do
     {machine_id, machine_token} = enroll(conn)
 
@@ -176,6 +227,29 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
       400,
       "invalid_request"
     )
+  end
+
+  test "session response advertises the configured lease duration", %{conn: conn} do
+    {machine_id, machine_token} = enroll(conn)
+
+    response =
+      bearer(conn, machine_token)
+      |> put("/api/v1/machines/#{machine_id}/sessions/#{uuid()}", %{
+        "runtimes" => [
+          %{
+            "runtime_key" => "default",
+            "name" => "Local Codex",
+            "capacity" => 1,
+            "agent_profile" => "codex",
+            "workspace" => "primary",
+            "capabilities" => %{}
+          }
+        ]
+      })
+      |> json_response(200)
+
+    configured = Application.fetch_env!(:symmetry_control, :orchestration)
+    assert response["lease_duration_ms"] == configured[:lease_duration_ms]
   end
 
   test "runtime mutations do not source required business fields from query params", %{conn: conn} do
@@ -655,30 +729,39 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
   end
 
   defp enroll(conn, name \\ "builder") do
+    key = uuid()
+    token = "machine-token-#{uuid()}"
+
     response =
       bearer(conn, @enrollment_token)
-      |> post("/api/v1/machines", %{"machine" => %{"name" => name}})
+      |> put_req_header("idempotency-key", key)
+      |> post("/api/v1/machines", %{
+        "machine" => %{"name" => name},
+        "machine_token" => token
+      })
       |> json_response(201)
 
     {response["machine_id"], response["machine_token"]}
   end
 
   defp register(conn, machine_id, machine_token) do
-    bearer(conn, machine_token)
-    |> put("/api/v1/machines/#{machine_id}/sessions/#{uuid()}", %{
-      "runtimes" => [
-        %{
-          "runtime_key" => "default",
-          "name" => "Local Codex",
-          "capacity" => 1,
-          "agent_profile" => "codex",
-          "workspace" => "primary",
-          "capabilities" => %{}
-        }
-      ]
-    })
-    |> json_response(200)
-    |> get_in(["runtimes", Access.at(0), "runtime_id"])
+    response =
+      bearer(conn, machine_token)
+      |> put("/api/v1/machines/#{machine_id}/sessions/#{uuid()}", %{
+        "runtimes" => [
+          %{
+            "runtime_key" => "default",
+            "name" => "Local Codex",
+            "capacity" => 1,
+            "agent_profile" => "codex",
+            "workspace" => "primary",
+            "capabilities" => %{}
+          }
+        ]
+      })
+      |> json_response(200)
+
+    get_in(response, ["runtimes", Access.at(0), "runtime_id"])
   end
 
   defp submit_task(conn) do

@@ -38,8 +38,11 @@ defmodule SymmetryControlWeb.DaemonChannelTest do
   end
 
   defp assert_enrolled(name) do
-    assert {:ok, enrolled} =
-             Orchestration.enroll_machine(%{name: name},
+    key = Ecto.UUID.generate()
+    token = "machine-token-#{key}"
+
+    assert {:ok, enrolled, :created} =
+             Orchestration.enroll_machine(%{name: name, machine_token: token}, key,
                enrollment_token: "test-enrollment-token",
                expected_enrollment_token: "test-enrollment-token"
              )

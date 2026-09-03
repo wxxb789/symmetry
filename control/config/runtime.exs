@@ -35,6 +35,12 @@ if config_env() != :test do
   enrollment_token = token.("SYMMETRY_ENROLLMENT_TOKEN", "development-enrollment-token")
   operator_token = token.("SYMMETRY_OPERATOR_TOKEN", "development-operator-token")
 
+  lease_duration_ms =
+    case Integer.parse(System.get_env("SYMMETRY_LEASE_DURATION_MS", "120000")) do
+      {value, ""} when value >= 30_000 -> value
+      _ -> raise "SYMMETRY_LEASE_DURATION_MS must be at least 30000"
+    end
+
   if enrollment_token == operator_token do
     raise "SYMMETRY_ENROLLMENT_TOKEN and SYMMETRY_OPERATOR_TOKEN must differ"
   end
@@ -45,7 +51,7 @@ if config_env() != :test do
     heartbeat_interval_ms:
       String.to_integer(System.get_env("SYMMETRY_HEARTBEAT_INTERVAL_MS", "5000")),
     poll_interval_ms: String.to_integer(System.get_env("SYMMETRY_POLL_INTERVAL_MS", "5000")),
-    lease_duration_ms: String.to_integer(System.get_env("SYMMETRY_LEASE_DURATION_MS", "30000")),
+    lease_duration_ms: lease_duration_ms,
     assignment_duration_ms:
       String.to_integer(System.get_env("SYMMETRY_ASSIGNMENT_DURATION_MS", "30000")),
     reaper_interval_ms: String.to_integer(System.get_env("SYMMETRY_REAPER_INTERVAL_MS", "5000")),

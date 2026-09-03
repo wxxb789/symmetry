@@ -1,6 +1,7 @@
 package state
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"os"
@@ -55,6 +56,54 @@ func TestIdentityRoundTripAndPermissions(t *testing.T) {
 		if got := info.Mode().Perm(); got != 0o700 {
 			t.Errorf("state directory permissions = %o, want 700", got)
 		}
+	}
+}
+
+func TestEnrollmentIntentRoundTripAndDelete(t *testing.T) {
+	store := mustStore(t)
+	want := EnrollmentIntent{MachineName: "builder", MachineToken: "machine-token", IdempotencyKey: "enrollment-key"}
+	if err := store.SaveEnrollmentIntent(want); err != nil {
+		t.Fatalf("SaveEnrollmentIntent() error = %v", err)
+	}
+	got, err := store.LoadEnrollmentIntent()
+	if err != nil {
+		t.Fatalf("LoadEnrollmentIntent() error = %v", err)
+	}
+	if got != want {
+		t.Fatalf("LoadEnrollmentIntent() = %#v, want %#v", got, want)
+	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(store.enrollmentPath())
+		if err != nil {
+			t.Fatalf("Stat(enrollment intent) error = %v", err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Errorf("enrollment intent permissions = %o, want 600", got)
+		}
+	}
+	if err := store.DeleteEnrollmentIntent(); err != nil {
+		t.Fatalf("DeleteEnrollmentIntent() error = %v", err)
+	}
+	if _, err := store.LoadEnrollmentIntent(); !IsNotFound(err) {
+		t.Fatalf("LoadEnrollmentIntent() error = %v, want not found", err)
+	}
+}
+
+func TestNewMachineTokenIsOpaqueAndUnique(t *testing.T) {
+	seen := make(map[string]struct{})
+	for range 100 {
+		token, err := NewMachineToken()
+		if err != nil {
+			t.Fatalf("NewMachineToken() error = %v", err)
+		}
+		decoded, err := base64.RawURLEncoding.DecodeString(token)
+		if err != nil || len(decoded) != 32 {
+			t.Fatalf("NewMachineToken() = %q, decoded bytes = %d, error = %v", token, len(decoded), err)
+		}
+		if _, duplicate := seen[token]; duplicate {
+			t.Fatalf("NewMachineToken() repeated %q", token)
+		}
+		seen[token] = struct{}{}
 	}
 }
 
@@ -374,6 +423,45 @@ func TestQueueTerminalTransitionIsAtomic(t *testing.T) {
 	}
 }
 
+func TestAdvanceLeaseExpiryIsMonotonic(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-1", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	later := time.Date(2026, 9, 3, 2, 0, 0, 0, time.UTC)
+	earlier := later.Add(-time.Minute)
+
+	advanced, err := store.AdvanceLeaseExpiry(journal.Key(), later)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !advanced.LeaseExpiresAt.Equal(later) {
+		t.Fatalf("advanced expiry = %s, want %s", advanced.LeaseExpiresAt, later)
+	}
+
+	unchanged, err := store.AdvanceLeaseExpiry(journal.Key(), earlier)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !unchanged.LeaseExpiresAt.Equal(later) {
+		t.Fatalf("regressed expiry = %s, want %s", unchanged.LeaseExpiresAt, later)
+	}
+
+	terminalAt := later.Add(-30 * time.Second)
+	terminal, err := store.QueueTerminalTransitionAt(journal.Key(), protocol.StateTransitionRequest{TransitionID: "terminal-1", State: "completed", Payload: json.RawMessage(`{}`)}, terminalAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterTerminal, err := store.AdvanceLeaseExpiry(journal.Key(), later.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !afterTerminal.LeaseExpiresAt.Equal(terminal.LeaseExpiresAt) || !afterTerminal.TerminalPendingAt.Equal(terminalAt) {
+		t.Fatalf("terminal lease advanced: before=%#v after=%#v", terminal, afterTerminal)
+	}
+}
+
 func TestQueueTerminalTransitionRejectsNonterminalStatesWithoutMutation(t *testing.T) {
 	store := mustStore(t)
 	journal := testJournal("run-1", 1)
@@ -479,6 +567,34 @@ func TestQueueTerminalTransitionValidatesFenceBeforeCancelledReplacement(t *test
 	}
 	if got := transitionStates(loaded.PendingTransitions); !equalStrings(got, []string{"completed"}) {
 		t.Fatalf("mismatched fence mutated transitions: %#v", got)
+	}
+}
+
+func TestQueueCancelledTransitionAndAcknowledgementIsAtomic(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-1", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	pendingAt := time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC)
+	transition := protocol.StateTransitionRequest{TransitionID: "cancel-1", State: "cancelled", Payload: json.RawMessage(`{}`)}
+	if _, err := store.QueueCancelledTransitionAndAcknowledgementAt(journal.Key(), transition, protocol.CommandAcknowledgement{RunID: journal.RunID, CommandID: "command-1", Outcome: "applied"}, pendingAt); err == nil {
+		t.Fatal("atomic cancel queue accepted an invalid acknowledgement")
+	}
+	loaded, err := store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.LocalState == "terminal_pending" || len(loaded.PendingTransitions) != 0 || len(loaded.PendingCommandAcknowledgements) != 0 {
+		t.Fatalf("failed atomic cancel mutated journal: %#v", loaded)
+	}
+
+	queued, err := store.QueueCancelledTransitionAndAcknowledgementAt(journal.Key(), transition, protocol.CommandAcknowledgement{RunID: journal.RunID, CommandID: "command-1", Outcome: "applied", AckID: "ack-1"}, pendingAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued.LocalState != "terminal_pending" || queued.TerminalState != "cancelled" || len(queued.PendingTransitions) != 1 || len(queued.PendingCommandAcknowledgements) != 1 {
+		t.Fatalf("atomic cancel queue = %#v", queued)
 	}
 }
 

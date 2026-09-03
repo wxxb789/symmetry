@@ -103,8 +103,10 @@ func TestStaleRuntimeEpochCannotOverwriteNewGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new enrollment client: %v", err)
 	}
-	machine, err := enrollment.Enroll(context.Background(), environment.enrollmentToken, protocol.EnrollRequest{
-		Machine: protocol.MachineEnrollment{Name: unique("fence-machine")},
+	machineToken := unique("fence-machine-token")
+	machine, err := enrollment.Enroll(context.Background(), environment.enrollmentToken, unique("fence-enrollment"), protocol.EnrollRequest{
+		Machine:      protocol.MachineEnrollment{Name: unique("fence-machine")},
+		MachineToken: machineToken,
 	})
 	if err != nil {
 		t.Fatalf("enroll machine: %v", err)
@@ -151,7 +153,7 @@ func TestStaleRuntimeEpochCannotOverwriteNewGeneration(t *testing.T) {
 		t.Fatalf("stale transition error = %v, want ownership_lost", err)
 	}
 
-	newAssignment := waitForAssignment(t, machineClient, second, task.TaskID, 30*time.Second)
+	newAssignment := waitForAssignment(t, machineClient, second, task.TaskID, 60*time.Second)
 	if newAssignment.Generation <= assignment.Generation {
 		t.Fatalf("new generation = %d, want greater than %d", newAssignment.Generation, assignment.Generation)
 	}

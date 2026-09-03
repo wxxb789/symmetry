@@ -1,11 +1,18 @@
 defmodule SymmetryControl.Config.RuntimeTest do
   use ExUnit.Case, async: false
 
+  @base_config Path.expand("../../../config/config.exs", __DIR__)
   @runtime_config Path.expand("../../../config/runtime.exs", __DIR__)
-  @token_variables ["SYMMETRY_ENROLLMENT_TOKEN", "SYMMETRY_OPERATOR_TOKEN"]
+  @test_config Path.expand("../../../config/test.exs", __DIR__)
+
+  @variables [
+    "SYMMETRY_ENROLLMENT_TOKEN",
+    "SYMMETRY_OPERATOR_TOKEN",
+    "SYMMETRY_LEASE_DURATION_MS"
+  ]
 
   setup do
-    previous = Map.new(@token_variables, &{&1, System.get_env(&1)})
+    previous = Map.new(@variables, &{&1, System.get_env(&1)})
 
     on_exit(fn ->
       Enum.each(previous, fn
@@ -24,5 +31,49 @@ defmodule SymmetryControl.Config.RuntimeTest do
                  fn ->
                    Config.Reader.read!(@runtime_config, env: :dev)
                  end
+  end
+
+  test "base configuration defaults leases to two minutes" do
+    config = Config.Reader.read!(@base_config, env: :dev)
+
+    assert 120_000 == config[:symmetry_control][:orchestration][:lease_duration_ms]
+  end
+
+  test "development runtime configuration defaults and overrides lease duration" do
+    System.delete_env("SYMMETRY_LEASE_DURATION_MS")
+
+    default_config = Config.Reader.read!(@runtime_config, env: :dev)
+
+    assert 120_000 == default_config[:symmetry_control][:orchestration][:lease_duration_ms]
+
+    System.put_env("SYMMETRY_LEASE_DURATION_MS", "45000")
+
+    override_config = Config.Reader.read!(@runtime_config, env: :dev)
+
+    assert 45_000 == override_config[:symmetry_control][:orchestration][:lease_duration_ms]
+  end
+
+  test "runtime configuration rejects lease durations below thirty seconds" do
+    for value <- ["0", "-1", "29999"] do
+      System.put_env("SYMMETRY_LEASE_DURATION_MS", value)
+
+      assert_raise RuntimeError, ~r/SYMMETRY_LEASE_DURATION_MS must be at least 30000/, fn ->
+        Config.Reader.read!(@runtime_config, env: :dev)
+      end
+    end
+  end
+
+  test "runtime configuration rejects malformed lease durations" do
+    System.put_env("SYMMETRY_LEASE_DURATION_MS", "abc")
+
+    assert_raise RuntimeError, ~r/SYMMETRY_LEASE_DURATION_MS must be at least 30000/, fn ->
+      Config.Reader.read!(@runtime_config, env: :dev)
+    end
+  end
+
+  test "test configuration preserves its explicit short lease override" do
+    config = Config.Reader.read!(@test_config, env: :test)
+
+    assert 30_000 == config[:symmetry_control][:orchestration][:lease_duration_ms]
   end
 end

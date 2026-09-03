@@ -7,12 +7,22 @@ defmodule SymmetryControl.Orchestration.Machine do
   schema "machines" do
     field :name, :string
     field :token_digest, :binary
+    field :enrollment_idempotency_key, :string
+    field :enrollment_request_hash, :binary
     timestamps(type: :utc_datetime_usec)
   end
 
   def changeset(machine, attrs),
     do:
-      machine |> cast(attrs, [:name, :token_digest]) |> validate_required([:name, :token_digest])
+      machine
+      |> cast(attrs, [
+        :name,
+        :token_digest,
+        :enrollment_idempotency_key,
+        :enrollment_request_hash
+      ])
+      |> validate_required([:name, :token_digest])
+      |> unique_constraint(:enrollment_idempotency_key)
 end
 
 defmodule SymmetryControl.Orchestration.Runtime do

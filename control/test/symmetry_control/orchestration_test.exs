@@ -2,6 +2,7 @@ defmodule SymmetryControl.OrchestrationTest do
   use SymmetryControl.DataCase, async: true
 
   alias SymmetryControl.Orchestration
+  alias SymmetryControl.Orchestration.Machine
   alias SymmetryControl.Orchestration.{Command, RunEvent, RunTransition}
 
   @now ~U[2026-09-02 00:00:00.000000Z]
@@ -47,6 +48,58 @@ defmodule SymmetryControl.OrchestrationTest do
 
     assert {:error, :idempotency_conflict} =
              Orchestration.submit_task(Map.put(task_attrs(), :goal, "another"), "task-1",
+               now: @now
+             )
+  end
+
+  test "machine enrollment replays the exact request and rejects key reuse" do
+    key = "machine-enrollment-#{System.unique_integer([:positive])}"
+    attrs = %{name: "builder", machine_token: "machine-token-#{key}"}
+
+    opts = [
+      enrollment_token: "enrollment-secret",
+      expected_enrollment_token: "enrollment-secret",
+      now: @now
+    ]
+
+    assert {:ok, first, :created} = Orchestration.enroll_machine(attrs, key, opts)
+    assert {:ok, replayed, :replayed} = Orchestration.enroll_machine(attrs, key, opts)
+    assert replayed.machine.id == first.machine.id
+    assert replayed.token == first.token
+
+    assert {:error, :idempotency_conflict} =
+             Orchestration.enroll_machine(%{attrs | name: "other"}, key, opts)
+
+    assert {:error, :idempotency_conflict} =
+             Orchestration.enroll_machine(%{attrs | machine_token: "other-token"}, key, opts)
+  end
+
+  test "historical machine rows without replay metadata still authenticate and register" do
+    token = "historical-machine-token"
+
+    machine =
+      %Machine{}
+      |> Machine.changeset(%{name: "historical", token_digest: :crypto.hash(:sha256, token)})
+      |> Repo.insert!()
+
+    assert machine.enrollment_idempotency_key == nil
+    assert machine.enrollment_request_hash == nil
+    assert {:ok, ^machine} = Orchestration.authenticate_machine(token)
+
+    assert {:ok, [_runtime]} =
+             Orchestration.register_runtimes(
+               machine.id,
+               Ecto.UUID.generate(),
+               [
+                 %{
+                   runtime_key: "historical",
+                   name: "Historical Runtime",
+                   capacity: 1,
+                   agent_profile: "codex",
+                   workspace: "primary",
+                   capabilities: %{}
+                 }
+               ],
                now: @now
              )
   end
@@ -127,6 +180,86 @@ defmodule SymmetryControl.OrchestrationTest do
                %{request | claim_id: "00000000-0000-0000-0000-000000000012"},
                now: @now
              )
+  end
+
+  test "claim and renewal use configured lease duration unless explicitly overridden" do
+    %{machine: machine} = enroll_machine()
+    runtime = register_runtime(machine, capacity: 2)
+
+    {:ok, _task, :created} =
+      Orchestration.submit_task(task_attrs(), "configured-lease", now: @now)
+
+    {:ok, run} = Orchestration.assign_one(now: @now)
+
+    request = %{
+      runtime_id: runtime.id,
+      runtime_epoch: runtime.connection_epoch,
+      generation: run.generation,
+      claim_id: "00000000-0000-0000-0000-000000000013"
+    }
+
+    assert {:ok, claimed} = Orchestration.claim(run.id, request, now: @now)
+    assert claimed.lease_expires_at == DateTime.add(@now, 30, :second)
+
+    fence = %{
+      runtime_id: runtime.id,
+      runtime_epoch: runtime.connection_epoch,
+      generation: run.generation,
+      claim_id: claimed.claim_id,
+      lease_token: claimed.lease_token
+    }
+
+    renewed_at = DateTime.add(@now, 1, :second)
+    assert {:ok, renewed} = Orchestration.renew_lease(run.id, fence, now: renewed_at)
+    assert renewed.lease_expires_at == DateTime.add(renewed_at, 30, :second)
+
+    assert {:ok, overridden} =
+             Orchestration.renew_lease(run.id, fence,
+               now: DateTime.add(@now, 2, :second),
+               lease_duration_ms: 45_000
+             )
+
+    assert overridden.lease_expires_at == DateTime.add(@now, 47, :second)
+
+    {:ok, _task, :created} =
+      Orchestration.submit_task(task_attrs(goal: "explicit-claim-lease"), "explicit-claim-lease",
+        now: @now
+      )
+
+    {:ok, override_run} = Orchestration.assign_one(now: @now)
+
+    override_request = %{
+      runtime_id: runtime.id,
+      runtime_epoch: runtime.connection_epoch,
+      generation: override_run.generation,
+      claim_id: "00000000-0000-0000-0000-000000000014"
+    }
+
+    for invalid_duration <- [0, -1, 29_999] do
+      assert {:error, :invalid_request} =
+               Orchestration.claim(override_run.id, override_request,
+                 now: @now,
+                 lease_duration_ms: invalid_duration
+               )
+    end
+
+    assert {:ok, explicitly_claimed} =
+             Orchestration.claim(override_run.id, override_request,
+               now: @now,
+               lease_duration_ms: 30_000
+             )
+
+    assert explicitly_claimed.lease_expires_at == DateTime.add(@now, 30, :second)
+
+    override_fence = Map.put(override_request, :lease_token, explicitly_claimed.lease_token)
+
+    for invalid_duration <- [0, -1, 29_999] do
+      assert {:error, :invalid_request} =
+               Orchestration.renew_lease(override_run.id, override_fence,
+                 now: @now,
+                 lease_duration_ms: invalid_duration
+               )
+    end
   end
 
   test "fences reject stale epoch, generation, and lease" do
@@ -1762,8 +1895,11 @@ defmodule SymmetryControl.OrchestrationTest do
   end
 
   defp enroll_machine do
-    assert {:ok, enrolled} =
-             Orchestration.enroll_machine(%{name: "builder"},
+    key = Ecto.UUID.generate()
+    token = "machine-token-#{key}"
+
+    assert {:ok, enrolled, :created} =
+             Orchestration.enroll_machine(%{name: "builder", machine_token: token}, key,
                enrollment_token: "enrollment-secret",
                expected_enrollment_token: "enrollment-secret"
              )

@@ -55,7 +55,7 @@ func TestClientRejectsIncompleteSuccessResponses(t *testing.T) {
 		{
 			name: "enroll", body: `{}`, wantError: "invalid enroll response",
 			invoke: func(machine *Client, enrollment *EnrollmentClient, operator *OperatorClient) error {
-				_, err := enrollment.Enroll(context.Background(), "enrollment-token", protocol.EnrollRequest{})
+				_, err := enrollment.Enroll(context.Background(), "enrollment-token", "enrollment-1", protocol.EnrollRequest{MachineToken: "machine-token"})
 				return err
 			},
 		},
@@ -129,6 +129,95 @@ func TestRegisterSessionAcceptsRuntimesInAnyOrder(t *testing.T) {
 	}
 	if len(response.Runtimes) != 2 {
 		t.Fatalf("runtime count = %d, want 2", len(response.Runtimes))
+	}
+}
+
+func TestRegisterSessionRejectsLeaseBelowSafetyMinimum(t *testing.T) {
+	server := jsonServer(t, http.StatusOK, `{
+		"runtimes":[{"runtime_key":"default","runtime_id":"runtime-1","runtime_epoch":1}],
+		"heartbeat_interval_ms":5000,
+		"poll_interval_ms":5000,
+		"lease_duration_ms":29999,
+		"websocket_path":"/socket"
+	}`, nil)
+	defer server.Close()
+	client := mustMachineClient(t, server)
+
+	_, err := client.RegisterSession(context.Background(), "machine-1", "daemon-1", protocol.SessionRegistrationRequest{
+		Runtimes: []protocol.RuntimeRegistration{{RuntimeKey: "default"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "lease_duration_ms must be at least 30000") {
+		t.Fatalf("error = %v, want minimum lease rejection", err)
+	}
+}
+
+func TestRegisterSessionAcceptsLeaseAtSafetyMinimum(t *testing.T) {
+	server := jsonServer(t, http.StatusOK, `{
+		"runtimes":[{"runtime_key":"default","runtime_id":"runtime-1","runtime_epoch":1}],
+		"heartbeat_interval_ms":5000,
+		"poll_interval_ms":5000,
+		"lease_duration_ms":30000,
+		"websocket_path":"/socket"
+	}`, nil)
+	defer server.Close()
+	client := mustMachineClient(t, server)
+
+	_, err := client.RegisterSession(context.Background(), "machine-1", "daemon-1", protocol.SessionRegistrationRequest{
+		Runtimes: []protocol.RuntimeRegistration{{RuntimeKey: "default"}},
+	})
+	if err != nil {
+		t.Fatalf("RegisterSession error = %v, want exact minimum accepted", err)
+	}
+}
+
+func TestEnrollRejectsUnexpectedSuccessStatus(t *testing.T) {
+	server := jsonServer(t, http.StatusAccepted, `{"machine_id":"machine-1","machine_token":"machine-token"}`, nil)
+	defer server.Close()
+	client, err := NewEnrollmentClient(server.URL+"/api", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = client.Enroll(context.Background(), "enrollment-token", "enrollment-1", protocol.EnrollRequest{
+		Machine:      protocol.MachineEnrollment{Name: "builder"},
+		MachineToken: "machine-token",
+	})
+	if err == nil || !strings.Contains(err.Error(), "expected HTTP 200 or 201") {
+		t.Fatalf("Enroll error = %v, want unexpected success status rejection", err)
+	}
+}
+
+func TestEnrollRejectsMismatchedResponseToken(t *testing.T) {
+	server := jsonServer(t, http.StatusOK, `{"machine_id":"machine-1","machine_token":"different-token"}`, nil)
+	defer server.Close()
+	client, err := NewEnrollmentClient(server.URL+"/api", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = client.Enroll(context.Background(), "enrollment-token", "enrollment-1", protocol.EnrollRequest{
+		Machine:      protocol.MachineEnrollment{Name: "builder"},
+		MachineToken: "machine-token",
+	})
+	if err == nil || !strings.Contains(err.Error(), "machine_token does not match the request") {
+		t.Fatalf("Enroll error = %v, want token mismatch rejection", err)
+	}
+}
+
+func TestEnrollRejectsUnsafeMachineID(t *testing.T) {
+	server := jsonServer(t, http.StatusCreated, `{"machine_id":"..","machine_token":"machine-token"}`, nil)
+	defer server.Close()
+	client, err := NewEnrollmentClient(server.URL+"/api", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = client.Enroll(context.Background(), "enrollment-token", "enrollment-1", protocol.EnrollRequest{
+		Machine:      protocol.MachineEnrollment{Name: "builder"},
+		MachineToken: "machine-token",
+	})
+	if err == nil || !strings.Contains(err.Error(), "machine ID must be a non-empty safe path segment") {
+		t.Fatalf("Enroll error = %v, want unsafe machine ID rejection", err)
 	}
 }
 

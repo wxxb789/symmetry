@@ -10,9 +10,15 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
-func validateEnrollResponse(response protocol.EnrollResponse) error {
+func validateEnrollResponse(request protocol.EnrollRequest, response protocol.EnrollResponse) error {
 	if response.MachineID == "" || response.MachineToken == "" {
 		return invalidResponse("enroll", "machine_id and machine_token are required")
+	}
+	if err := validatePathID("machine ID", response.MachineID); err != nil {
+		return invalidResponse("enroll", err.Error())
+	}
+	if response.MachineToken != request.MachineToken {
+		return invalidResponse("enroll", "machine_token does not match the request")
 	}
 	return nil
 }
@@ -43,8 +49,11 @@ func validateSessionResponse(request protocol.SessionRegistrationRequest, respon
 	if len(expected) != 0 {
 		return invalidResponse("session registration", "runtime_key does not match the request")
 	}
-	if response.HeartbeatIntervalMS <= 0 || response.PollIntervalMS <= 0 || response.LeaseDurationMS <= 0 || response.WebSocketPath == "" {
+	if response.HeartbeatIntervalMS <= 0 || response.PollIntervalMS <= 0 || response.WebSocketPath == "" {
 		return invalidResponse("session registration", "intervals and websocket_path are required")
+	}
+	if response.LeaseDurationMS < protocol.MinimumLeaseDurationMS {
+		return invalidResponse("session registration", "lease_duration_ms must be at least 30000")
 	}
 	return nil
 }

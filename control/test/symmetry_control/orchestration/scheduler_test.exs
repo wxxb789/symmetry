@@ -29,8 +29,11 @@ defmodule SymmetryControl.Orchestration.SchedulerTest do
   end
 
   defp enroll_machine do
-    assert {:ok, enrolled} =
-             Orchestration.enroll_machine(%{name: "scheduler-builder"},
+    key = Ecto.UUID.generate()
+    token = "machine-token-#{key}"
+
+    assert {:ok, enrolled, :created} =
+             Orchestration.enroll_machine(%{name: "scheduler-builder", machine_token: token}, key,
                enrollment_token: "test-enrollment-token",
                expected_enrollment_token: "test-enrollment-token"
              )

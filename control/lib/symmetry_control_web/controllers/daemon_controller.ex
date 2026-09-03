@@ -6,23 +6,33 @@ defmodule SymmetryControlWeb.DaemonController do
   alias SymmetryControlWeb.Protocol
 
   def enroll(conn, _params) do
-    case body_params(conn) do
-      %{"machine" => machine} when is_map(machine) ->
-        case Orchestration.enroll_machine(Protocol.normalize_map(machine),
-               enrollment_token: conn.assigns.enrollment_token,
-               expected_enrollment_token: Protocol.configured_token(:enrollment_token)
-             ) do
-          {:ok, %{machine: enrolled, token: token}} ->
-            conn
-            |> put_status(:created)
-            |> json(%{machine_id: enrolled.id, machine_token: token})
+    with {:ok, idempotency_key} <- idempotency_key(conn),
+         %{"machine" => machine, "machine_token" => machine_token}
+         when is_map(machine) and is_binary(machine_token) <- body_params(conn) do
+      attrs = machine |> Protocol.normalize_map() |> Map.put("machine_token", machine_token)
 
-          {:error, reason} ->
-            Protocol.error(conn, reason)
-        end
+      case Orchestration.enroll_machine(attrs, idempotency_key,
+             enrollment_token: conn.assigns.enrollment_token,
+             expected_enrollment_token: Protocol.configured_token(:enrollment_token)
+           ) do
+        {:ok, %{machine: enrolled, token: token}, disposition} ->
+          conn
+          |> put_status(if(disposition == :created, do: :created, else: :ok))
+          |> json(%{machine_id: enrolled.id, machine_token: token})
 
+        {:error, reason} ->
+          Protocol.error(conn, reason)
+      end
+    else
       _ ->
         Protocol.error(conn, :invalid_request)
+    end
+  end
+
+  defp idempotency_key(conn) do
+    case get_req_header(conn, "idempotency-key") do
+      [key] when byte_size(key) > 0 -> {:ok, key}
+      _ -> {:error, :invalid_request}
     end
   end
 

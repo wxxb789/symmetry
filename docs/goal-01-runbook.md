@@ -38,6 +38,19 @@ SYMMETRY_ASSIGNMENT_DURATION_MS
 SYMMETRY_REAPER_INTERVAL_MS
 ```
 
+`SYMMETRY_LEASE_DURATION_MS` defaults to `120000` and rejects values below
+`30000`. The daemon starts renewal
+when 90 seconds remain, or at three quarters of a shorter granted lease. Lease
+maintenance and terminal slot deadlines run independently from polling,
+reconciliation, outbox delivery, and cleanup. Each control-plane request is
+bounded to 15 seconds. Enrollment, session registration, claim, and terminal
+journal recovery retry transport, `429`, and `5xx` failures under the daemon
+lifecycle and honor `Retry-After`; permanent client errors fail fast. Periodic
+runtime calls remain one attempt per cadence. Ordinary outbox delivery makes one
+attempt per cadence or local wakeup when new durable work is queued.
+Claim retries stop at `assignment_expires_at`, release their local slot, and
+wait for a later snapshot instead of pinning expired work during an outage.
+
 Build, migrate, and start a release:
 
 ```sh
@@ -116,8 +129,11 @@ Minimal trusted-local configuration using the deterministic fixture:
 
 Use HTTPS outside a trusted local or container network and omit
 `allow_insecure_http`. The daemon persists the enrolled machine credential in
-its protected state directory. Do not share one state directory between daemon
-processes.
+its protected state directory. Before the first enrollment request it also
+persists `enrollment.json` with the exact machine name, daemon-generated machine
+token, and idempotency key. Unknown outcomes and restarts replay that request;
+after `identity.json` is durable, the daemon removes the enrollment intent. Do
+not share one state directory between daemon processes.
 
 The daemon writes one initial stdin record for every launch. `input_mode: "goal"`
 writes the task goal as plain text followed by a newline and is valid only when
