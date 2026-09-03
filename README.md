@@ -63,10 +63,10 @@ the protocol document for response and status semantics.
 
 ## Docker Compose
 
-The default Compose stack migrates PostgreSQL, starts `control`, and runs a
-deterministic fake agent through the real daemon execution path. PostgreSQL data
-is kept in the `postgres_data` named volume and the control plane is only
-published to `127.0.0.1:4000`.
+The default `compose.yaml` is a trusted-local development stack. It migrates
+PostgreSQL, starts `control`, and runs a deterministic fake agent through the
+real daemon execution path. PostgreSQL data is kept in the `postgres_data` named
+volume and the control plane is only published to `127.0.0.1:4000` over HTTP.
 
 ```sh
 docker compose config
@@ -77,6 +77,12 @@ docker compose down
 Use `docker compose down -v` only when intentionally deleting local database
 data. The daemon image is a static Go binary and deliberately does not contain
 machine-local coding-agent or repository credentials.
+
+`compose.production.yaml` is an independent production topology: Nginx is the
+only public service, terminating TLS on ports `80` and `443`, while the control
+plane remains on a private Docker network. It requires deployment-provided
+database, application, enrollment, operator, and TLS credentials. See the
+production deployment section in [`docs/goal-01-runbook.md`](docs/goal-01-runbook.md).
 
 ## Goal 1 Status
 

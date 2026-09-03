@@ -23,6 +23,7 @@ Required production environment variables:
 
 ```text
 DATABASE_URL
+PHX_HOST
 SECRET_KEY_BASE
 SYMMETRY_ENROLLMENT_TOKEN
 SYMMETRY_OPERATOR_TOKEN
@@ -53,18 +54,60 @@ wait for a later snapshot instead of pinning expired work during an outage.
 
 Build, migrate, and start a release:
 
+These commands start the control service as a private HTTP backend. Run it only
+behind a trusted TLS-terminating proxy or load balancer, and prevent port `4000`
+from being reachable outside that private network. Directly exposing this
+listener is not a supported production deployment.
+
 ```sh
 cd control
 MIX_ENV=prod mix deps.get
 MIX_ENV=prod mix release --overwrite
-DATABASE_URL=... SECRET_KEY_BASE=... \
+DATABASE_URL=... SECRET_KEY_BASE=... PHX_HOST=control.example.com \
   SYMMETRY_ENROLLMENT_TOKEN=... SYMMETRY_OPERATOR_TOKEN=... \
   _build/prod/rel/symmetry_control/bin/symmetry_control eval \
   'SymmetryControl.Release.migrate()'
 PHX_SERVER=true DATABASE_URL=... SECRET_KEY_BASE=... \
-  SYMMETRY_ENROLLMENT_TOKEN=... SYMMETRY_OPERATOR_TOKEN=... \
+  PHX_HOST=control.example.com SYMMETRY_ENROLLMENT_TOKEN=... \
+  SYMMETRY_OPERATOR_TOKEN=... \
   _build/prod/rel/symmetry_control/bin/symmetry_control start
 ```
+
+### Production Compose Edge
+
+`compose.production.yaml` is independent from the trusted-local
+`compose.yaml`; do not combine the two files. The production topology exposes
+only the Nginx edge on ports `80` and `443`. Its HTTP listener returns an exact
+`308` redirect to HTTPS. Nginx terminates TLS, sends HSTS responses, forwards
+WebSocket upgrades, and overwrites client-supplied forwarding headers before
+proxying to the private HTTP control service. The control port is not published.
+
+Provide these values through the deployment environment or an untracked env
+file. The certificate and key files must be externally provisioned and must not
+be committed.
+
+```text
+DATABASE_URL
+PHX_HOST
+SECRET_KEY_BASE
+SYMMETRY_ENROLLMENT_TOKEN
+SYMMETRY_OPERATOR_TOKEN
+SYMMETRY_TLS_CERT_FILE
+SYMMETRY_TLS_KEY_FILE
+```
+
+Start the production control plane and edge:
+
+```sh
+docker compose -f compose.production.yaml config --quiet
+docker compose -f compose.production.yaml up --build --detach
+```
+
+The daemon is not part of the production control-plane Compose topology. Run it
+on each execution machine with `control_plane_url` set to the public
+`https://` address and without `allow_insecure_http`. Plain HTTP is allowed only
+for an explicitly trusted local or container network, including the default
+development Compose stack.
 
 Codex normally reads its authentication from its machine-local credential store.
 When the configured CLI instead requires an environment credential, allowlist

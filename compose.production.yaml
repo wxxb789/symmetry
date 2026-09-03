@@ -1,0 +1,69 @@
+name: symmetry-production
+
+services:
+  control-migrate:
+    build:
+      context: .
+      dockerfile: docker/control.Dockerfile
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      PHX_HOST: ${PHX_HOST:?PHX_HOST is required}
+      PORT: "4000"
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE:?SECRET_KEY_BASE is required}
+      SYMMETRY_ENROLLMENT_TOKEN: ${SYMMETRY_ENROLLMENT_TOKEN:?SYMMETRY_ENROLLMENT_TOKEN is required}
+      SYMMETRY_OPERATOR_TOKEN: ${SYMMETRY_OPERATOR_TOKEN:?SYMMETRY_OPERATOR_TOKEN is required}
+    command: ["eval", "SymmetryControl.Release.migrate()"]
+    networks:
+      - backend
+      - database
+    restart: "no"
+
+  control:
+    build:
+      context: .
+      dockerfile: docker/control.Dockerfile
+    depends_on:
+      control-migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      PHX_HOST: ${PHX_HOST:?PHX_HOST is required}
+      PHX_SERVER: "true"
+      PORT: "4000"
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE:?SECRET_KEY_BASE is required}
+      SYMMETRY_ENROLLMENT_TOKEN: ${SYMMETRY_ENROLLMENT_TOKEN:?SYMMETRY_ENROLLMENT_TOKEN is required}
+      SYMMETRY_OPERATOR_TOKEN: ${SYMMETRY_OPERATOR_TOKEN:?SYMMETRY_OPERATOR_TOKEN is required}
+    networks:
+      - backend
+      - database
+    restart: unless-stopped
+
+  edge:
+    image: nginx:1.27.5-alpine
+    depends_on:
+      control:
+        condition: service_started
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - type: bind
+        source: ${SYMMETRY_TLS_CERT_FILE:?SYMMETRY_TLS_CERT_FILE is required}
+        target: /run/symmetry/tls.crt
+        read_only: true
+      - type: bind
+        source: ${SYMMETRY_TLS_KEY_FILE:?SYMMETRY_TLS_KEY_FILE is required}
+        target: /run/symmetry/tls.key
+        read_only: true
+      - type: bind
+        source: ./docker/edge-nginx.conf
+        target: /etc/nginx/conf.d/default.conf
+        read_only: true
+    networks:
+      - backend
+    restart: unless-stopped
+
+networks:
+  backend:
+    internal: true
+  database:
