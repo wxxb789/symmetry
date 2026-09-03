@@ -122,6 +122,18 @@ type RunJournal struct {
 	PendingTransitions             []protocol.StateTransitionRequest `json:"pending_transitions"`
 	AttemptedTransitionIDs         []string                          `json:"attempted_transition_ids,omitempty"`
 	PendingCommandAcknowledgements []protocol.CommandAcknowledgement `json:"pending_command_acknowledgements"`
+	InputCommandIntent             *InputCommandIntent               `json:"input_command_intent,omitempty"`
+}
+
+// InputCommandIntent is the durable at-most-once record for one provide_input
+// command in a waiting-for-input episode.
+type InputCommandIntent struct {
+	CommandID                string `json:"command_id"`
+	PayloadDigest            string `json:"payload_digest"`
+	RunningTransitionID      string `json:"running_transition_id"`
+	AckID                    string `json:"ack_id"`
+	Outcome                  string `json:"outcome,omitempty"`
+	AcknowledgementDelivered bool   `json:"acknowledgement_delivered,omitempty"`
 }
 
 // Key returns the journal's durable identity.
@@ -643,6 +655,84 @@ func (store *Store) QueueRunningTransition(key RunKey, transition protocol.State
 	})
 }
 
+// PrepareProvideInput durably records a provide_input command before the
+// process receives stdin. It reports whether this call created a new intent.
+func (store *Store) PrepareProvideInput(key RunKey, intent InputCommandIntent) (RunJournal, bool, error) {
+	if !validInputCommandIntent(intent) || intent.Outcome != "" || intent.AcknowledgementDelivered {
+		return RunJournal{}, false, errors.New("input command intent is invalid")
+	}
+	created := false
+	journal, err := store.mutateJournal(key, func(journal *RunJournal) error {
+		if current := journal.InputCommandIntent; current != nil {
+			if current.CommandID == intent.CommandID && current.PayloadDigest == intent.PayloadDigest {
+				return nil
+			}
+			if !current.AcknowledgementDelivered || journal.LocalState != "waiting_for_input" {
+				return errors.New("input command conflicts with journal")
+			}
+		}
+		if journal.LocalState != "waiting_for_input" {
+			return errors.New("journal is not waiting for input")
+		}
+		copy := intent
+		journal.InputCommandIntent = &copy
+		created = true
+		return nil
+	})
+	return journal, created, err
+}
+
+// CompleteProvideInput records a previously prepared input outcome and queues
+// the required control-plane receipt in the same durable mutation.
+func (store *Store) CompleteProvideInput(key RunKey, commandID, payloadDigest, outcome string) (RunJournal, error) {
+	if !validInputCommandOutcome(outcome) {
+		return RunJournal{}, errors.New("input command outcome is invalid")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		intent := journal.InputCommandIntent
+		if intent == nil || intent.CommandID != commandID || intent.PayloadDigest != payloadDigest {
+			return errors.New("input command intent does not match journal")
+		}
+		if intent.Outcome != "" && intent.Outcome != outcome {
+			return nil
+		}
+		if intent.Outcome == "" {
+			intent.Outcome = outcome
+		}
+		if intent.AcknowledgementDelivered {
+			return nil
+		}
+		if outcome == "applied" && journal.LocalState == "waiting_for_input" {
+			prepared, err := prepareTransition(journal, protocol.StateTransitionRequest{TransitionID: intent.RunningTransitionID, State: "running", Payload: json.RawMessage(`{}`)})
+			if err != nil {
+				return err
+			}
+			if !hasTransition(journal.PendingTransitions, prepared.TransitionID) {
+				journal.PendingTransitions = append(journal.PendingTransitions, prepared)
+			}
+			journal.LocalState = "running"
+		}
+		return queueCommandAcknowledgement(journal, protocol.CommandAcknowledgement{RunID: journal.RunID, CommandID: intent.CommandID, Outcome: intent.Outcome, AckID: intent.AckID})
+	})
+}
+
+// FailUnresolvedProvideInput records conservative recovery for an input that
+// may have reached stdin before the daemon stopped.
+func (store *Store) FailUnresolvedProvideInput(key RunKey, transition protocol.StateTransitionRequest, pendingAt time.Time) (RunJournal, error) {
+	if pendingAt.IsZero() {
+		return RunJournal{}, errors.New("terminal pending time is invalid")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.InputCommandIntent == nil || journal.InputCommandIntent.Outcome != "" {
+			return nil
+		}
+		if journal.LocalState == "terminal_pending" || journal.LocalState == "cleanup_pending" {
+			return settleUnresolvedInputCommand(journal)
+		}
+		return queueTerminalTransition(journal, transition, pendingAt)
+	})
+}
+
 // QueueTerminalTransition atomically makes a terminal transition durable and
 // marks the local process terminal-pending before any HTTP request is sent.
 func (store *Store) QueueTerminalTransition(key RunKey, transition protocol.StateTransitionRequest) (RunJournal, error) {
@@ -751,6 +841,9 @@ func (store *Store) EnterCleanupPending(key RunKey) (RunJournal, error) {
 		if journal.LocalState != "terminal_pending" || !validTerminalVerdict(journal.TerminalVerdict) {
 			return errors.New("journal is not cleanup eligible")
 		}
+		if journal.InputCommandIntent != nil && (journal.InputCommandIntent.Outcome == "" || !journal.InputCommandIntent.AcknowledgementDelivered) {
+			return errors.New("input command receipt is not delivered")
+		}
 		if journal.TerminalVerdict == TerminalVerdictAccepted {
 			if len(journal.PendingTransitions) != 0 || len(journal.PendingCommandAcknowledgements) != 0 {
 				return errors.New("accepted terminal delivery is incomplete")
@@ -814,6 +907,12 @@ func (store *Store) QueueCommandAcknowledgement(key RunKey, acknowledgement prot
 func (store *Store) MarkCommandAcknowledgementsDelivered(key RunKey, acknowledgementIDs []string) (RunJournal, error) {
 	return store.mutateJournal(key, func(journal *RunJournal) error {
 		journal.PendingCommandAcknowledgements = removeAcknowledgements(journal.PendingCommandAcknowledgements, acknowledgementIDs)
+		if journal.InputCommandIntent != nil && containsString(acknowledgementIDs, journal.InputCommandIntent.AckID) {
+			if journal.InputCommandIntent.Outcome == "" {
+				return errors.New("input command acknowledgement is unresolved")
+			}
+			journal.InputCommandIntent.AcknowledgementDelivered = true
+		}
 		return nil
 	})
 }
@@ -866,6 +965,9 @@ func prepareTransition(journal *RunJournal, transition protocol.StateTransitionR
 }
 
 func queueTerminalTransition(journal *RunJournal, transition protocol.StateTransitionRequest, pendingAt time.Time) error {
+	if err := settleUnresolvedInputCommand(journal); err != nil {
+		return err
+	}
 	if journal.TerminalVerdict != "" {
 		return errors.New("terminal verdict is already recorded")
 	}
@@ -891,6 +993,15 @@ func queueTerminalTransition(journal *RunJournal, transition protocol.StateTrans
 	return nil
 }
 
+func settleUnresolvedInputCommand(journal *RunJournal) error {
+	intent := journal.InputCommandIntent
+	if intent == nil || intent.Outcome != "" {
+		return nil
+	}
+	intent.Outcome = "failed"
+	return queueCommandAcknowledgement(journal, protocol.CommandAcknowledgement{RunID: journal.RunID, CommandID: intent.CommandID, Outcome: intent.Outcome, AckID: intent.AckID})
+}
+
 func queueCommandAcknowledgement(journal *RunJournal, acknowledgement protocol.CommandAcknowledgement) error {
 	if !journal.hasClaimGrant() {
 		return errors.New("journal has no claim grant")
@@ -907,8 +1018,53 @@ func queueCommandAcknowledgement(journal *RunJournal, acknowledgement protocol.C
 	if !sameFence(acknowledgement.Fence, journal.Fence()) {
 		return errors.New("command acknowledgement fence does not match journal")
 	}
+	for _, pending := range journal.PendingCommandAcknowledgements {
+		if pending.CommandID != acknowledgement.CommandID {
+			continue
+		}
+		if pending.Outcome == acknowledgement.Outcome {
+			return nil
+		}
+		return errors.New("command acknowledgement outcome conflicts with pending acknowledgement")
+	}
 	journal.PendingCommandAcknowledgements = append(journal.PendingCommandAcknowledgements, acknowledgement)
 	return nil
+}
+
+func hasTransition(transitions []protocol.StateTransitionRequest, transitionID string) bool {
+	for _, transition := range transitions {
+		if transition.TransitionID == transitionID {
+			return true
+		}
+	}
+	return false
+}
+
+func validInputCommandIntent(intent InputCommandIntent) bool {
+	return validRequiredString(intent.CommandID, 4096) && len(intent.PayloadDigest) == sha256.Size*2 && validHex(intent.PayloadDigest) && validRequiredString(intent.RunningTransitionID, 4096) && validRequiredString(intent.AckID, 4096) && validInputCommandOutcome(intent.Outcome) && (!intent.AcknowledgementDelivered || intent.Outcome != "")
+}
+
+func validInputCommandOutcome(outcome string) bool {
+	switch outcome {
+	case "", "applied", "failed":
+		return true
+	default:
+		return false
+	}
+}
+
+func validHex(value string) bool {
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func isTerminalTransitionState(state string) bool {
@@ -1202,9 +1358,32 @@ func validateJournal(journal RunJournal) error {
 	if !validAttemptedTransitions(journal.AttemptedTransitionIDs, journal.PendingTransitions) {
 		return errors.New("run journal is invalid")
 	}
+	commandIDs := make(map[string]struct{}, len(journal.PendingCommandAcknowledgements))
 	for _, acknowledgement := range journal.PendingCommandAcknowledgements {
 		if !validAcknowledgement(acknowledgement, journal) {
 			return errors.New("run journal is invalid")
+		}
+		if _, exists := commandIDs[acknowledgement.CommandID]; exists {
+			return errors.New("run journal is invalid")
+		}
+		commandIDs[acknowledgement.CommandID] = struct{}{}
+	}
+	if intent := journal.InputCommandIntent; intent != nil {
+		if !validInputCommandIntent(*intent) {
+			return errors.New("run journal input command intent is invalid")
+		}
+		pending := false
+		for _, acknowledgement := range journal.PendingCommandAcknowledgements {
+			if acknowledgement.AckID == intent.AckID {
+				pending = acknowledgement.CommandID == intent.CommandID && acknowledgement.Outcome == intent.Outcome
+				break
+			}
+		}
+		if intent.Outcome == "" && pending {
+			return errors.New("unresolved input command has an acknowledgement")
+		}
+		if intent.Outcome != "" && intent.AcknowledgementDelivered == pending {
+			return errors.New("input command acknowledgement delivery is invalid")
 		}
 	}
 	return nil

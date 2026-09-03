@@ -94,21 +94,23 @@ func (timer systemTimer) Chan() <-chan time.Time { return timer.timer.C }
 func (timer systemTimer) Stop()                  { timer.timer.Stop() }
 
 type options struct {
-	httpClient       *http.Client
-	store            *state.Store
-	control          ControlAPI
-	enrollment       EnrollmentAPI
-	workspace        workspace.Service
-	start            StartProcess
-	notifications    NotificationClient
-	logWriter        io.Writer
-	clock            func() time.Time
-	newTimer         func(time.Duration) deadlineTimer
-	newID            func() (string, error)
-	newMachineToken  func() (string, error)
-	terminatePersist func(pid int, identity string) error
-	recordWorkspace  func(state.RunKey, string) (state.RunJournal, error)
-	recordProcess    func(state.RunKey, int, string, time.Time) (state.RunJournal, error)
+	httpClient                                 *http.Client
+	store                                      *state.Store
+	control                                    ControlAPI
+	enrollment                                 EnrollmentAPI
+	workspace                                  workspace.Service
+	start                                      StartProcess
+	notifications                              NotificationClient
+	logWriter                                  io.Writer
+	clock                                      func() time.Time
+	newTimer                                   func(time.Duration) deadlineTimer
+	newID                                      func() (string, error)
+	newMachineToken                            func() (string, error)
+	terminatePersist                           func(pid int, identity string) error
+	recordWorkspace                            func(state.RunKey, string) (state.RunJournal, error)
+	recordProcess                              func(state.RunKey, int, string, time.Time) (state.RunJournal, error)
+	markCommandAcknowledgementsDelivered       func(state.RunKey, []string) (state.RunJournal, error)
+	queueCancelledTransitionAndAcknowledgement func(state.RunKey, protocol.StateTransitionRequest, protocol.CommandAcknowledgement, time.Time) (state.RunJournal, error)
 }
 
 // WithHTTPClient replaces the HTTP transport used for production clients.
@@ -187,34 +189,37 @@ type daemon struct {
 	options options
 	log     *slog.Logger
 
-	store             *state.Store
-	control           ControlAPI
-	workspace         workspace.Service
-	start             StartProcess
-	runtimeID         string
-	runtimeEpoch      int64
-	leaseDuration     time.Duration
-	pollEvery         time.Duration
-	heartbeatEvery    time.Duration
-	running           map[state.RunKey]*runningRun
-	slots             chan struct{}
-	mu                sync.Mutex
-	workers           sync.WaitGroup
-	background        context.Context
-	backgroundStop    bool
-	backgroundWG      sync.WaitGroup
-	terminalReleaseWG sync.WaitGroup
-	commandWG         sync.WaitGroup
-	snapshotWG        sync.WaitGroup
-	outboxWake        chan struct{}
-	outboxRetry       map[state.RunKey]outboxRetry
-	cleanupWake       chan struct{}
-	cleanupQueued     map[state.RunKey]struct{}
-	cleanupRetry      map[state.RunKey]time.Time
-	commandWake       chan struct{}
-	commandQueue      []*queuedCommand
-	queuedCommands    map[commandKey]*queuedCommand
-	commandLanes      map[state.RunKey]*commandLane
+	store              *state.Store
+	control            ControlAPI
+	workspace          workspace.Service
+	start              StartProcess
+	runtimeID          string
+	runtimeEpoch       int64
+	leaseDuration      time.Duration
+	pollEvery          time.Duration
+	heartbeatEvery     time.Duration
+	running            map[state.RunKey]*runningRun
+	slots              chan struct{}
+	mu                 sync.Mutex
+	commandReceiptMu   sync.Mutex
+	workers            sync.WaitGroup
+	background         context.Context
+	backgroundStop     bool
+	backgroundWG       sync.WaitGroup
+	terminalReleaseWG  sync.WaitGroup
+	commandWG          sync.WaitGroup
+	snapshotWG         sync.WaitGroup
+	outboxWake         chan struct{}
+	outboxRetry        map[state.RunKey]outboxRetry
+	cleanupWake        chan struct{}
+	cleanupQueued      map[state.RunKey]struct{}
+	cleanupRetry       map[state.RunKey]time.Time
+	commandWake        chan struct{}
+	commandQueue       []*queuedCommand
+	queuedCommands     map[commandKey]*queuedCommand
+	commandLanes       map[state.RunKey]*commandLane
+	commandRequests    map[uint64]map[commandKey]struct{}
+	nextCommandRequest uint64
 }
 
 type outboxRetry struct {
@@ -237,6 +242,7 @@ type queuedCommand struct {
 	key       commandKey
 	done      chan struct{}
 	completed bool
+	delivered bool
 }
 
 type commandKey struct {
@@ -348,6 +354,7 @@ func (daemon *daemon) startBackground(ctx context.Context) func() {
 	daemon.cleanupRetry = make(map[state.RunKey]time.Time)
 	daemon.commandWake = make(chan struct{}, 1)
 	daemon.queuedCommands = make(map[commandKey]*queuedCommand)
+	daemon.commandRequests = make(map[uint64]map[commandKey]struct{})
 	daemon.mu.Unlock()
 
 	livenessStarted := make(chan struct{})
@@ -454,32 +461,37 @@ func (daemon *daemon) enqueueCommands(commands []protocol.Command) {
 }
 
 func (daemon *daemon) enqueueCommand(command protocol.Command) <-chan struct{} {
+	daemon.mu.Lock()
+	done, wake := daemon.enqueueCommandLocked(command)
+	daemon.mu.Unlock()
+	if wake != nil {
+		select {
+		case wake <- struct{}{}:
+		default:
+		}
+	}
+	return done
+}
+
+// enqueueCommandLocked must be called with daemon.mu held.
+func (daemon *daemon) enqueueCommandLocked(command protocol.Command) (<-chan struct{}, chan<- struct{}) {
 	if command.CommandID == "" {
-		return nil
+		return nil, nil
 	}
 	key := commandKey{run: state.RunKey{RunID: command.RunID, Generation: command.Generation}, id: command.CommandID}
-	daemon.mu.Lock()
 	if daemon.commandWake == nil || daemon.backgroundStop {
-		daemon.mu.Unlock()
-		return nil
+		return nil, nil
 	}
 	if daemon.queuedCommands == nil {
 		daemon.queuedCommands = make(map[commandKey]*queuedCommand)
 	}
 	if queued, exists := daemon.queuedCommands[key]; exists {
-		daemon.mu.Unlock()
-		return queued.done
+		return queued.done, nil
 	}
 	queued := &queuedCommand{command: command, key: key, done: make(chan struct{})}
 	daemon.queuedCommands[key] = queued
 	daemon.commandQueue = append(daemon.commandQueue, queued)
-	wake := daemon.commandWake
-	daemon.mu.Unlock()
-	select {
-	case wake <- struct{}{}:
-	default:
-	}
-	return queued.done
+	return queued.done, daemon.commandWake
 }
 
 func (daemon *daemon) runCommandExecutor(ctx context.Context) {
@@ -620,7 +632,7 @@ func (daemon *daemon) finishQueuedCommandLocked(queued *queuedCommand, receipt b
 			close(queued.done)
 		}
 		queued.completed = true
-		if !receipt {
+		if !receipt || queued.delivered {
 			delete(daemon.queuedCommands, queued.key)
 		}
 	}
@@ -641,6 +653,9 @@ func (daemon *daemon) initialize(ctx context.Context) error {
 			return err
 		}
 		daemon.store = store
+	}
+	if err := daemon.recoverUnresolvedInputIntents(ctx); err != nil {
+		return fmt.Errorf("recover input command intents: %w", err)
 	}
 	identity, err := daemon.store.LoadIdentity()
 	if err != nil {
@@ -826,29 +841,90 @@ func (daemon *daemon) controlContext(ctx context.Context) (context.Context, cont
 	return context.WithTimeout(ctx, controlRequestLimit)
 }
 
+func (daemon *daemon) rootContext(ctx context.Context) context.Context {
+	root := ctx
+	daemon.mu.Lock()
+	if daemon.background != nil {
+		root = daemon.background
+	}
+	daemon.mu.Unlock()
+	if root == nil {
+		return context.Background()
+	}
+	return root
+}
+
+func (daemon *daemon) recoverUnresolvedInputIntents(ctx context.Context) error {
+	journals, err := daemon.store.ListJournals()
+	if err != nil {
+		return err
+	}
+	rootContext := daemon.rootContext(ctx)
+	for _, journal := range journals {
+		intent := journal.InputCommandIntent
+		if intent == nil || intent.Outcome != "" {
+			continue
+		}
+		if journal.PID > 0 && !daemon.terminatePersistedProcessWithRetry(rootContext, journal.Key()) {
+			return rootContext.Err()
+		}
+		transitionID, err := daemon.newIDWithRetry(rootContext, journal.Key(), intent.CommandID, "recovery terminal transition")
+		if err != nil {
+			return err
+		}
+		for {
+			updated, recoveryErr := daemon.store.FailUnresolvedProvideInput(journal.Key(), protocol.StateTransitionRequest{TransitionID: transitionID, State: "failed", Payload: json.RawMessage(`{}`)}, daemon.now())
+			if recoveryErr == nil {
+				daemon.signalOutbox()
+				_ = updated
+				break
+			}
+			if daemon.log != nil {
+				daemon.log.Warn("recover_input_command_intent_failed", "run_id", journal.RunID, "generation", journal.Generation, "command_id", intent.CommandID, "error", recoveryErr)
+			}
+			timer := daemon.timer(minimumInterval)
+			select {
+			case <-rootContext.Done():
+				timer.Stop()
+				return rootContext.Err()
+			case <-timer.Chan():
+			}
+		}
+	}
+	return nil
+}
+
 func (daemon *daemon) heartbeat(ctx context.Context) {
 	requestContext, cancel := daemon.controlContext(ctx)
+	requestID := daemon.beginCommandRequest()
 	snapshot, err := daemon.control.Heartbeat(requestContext, daemon.runtimeID, protocol.RuntimeHeartbeatRequest{RuntimeEpoch: daemon.runtimeEpoch, ActiveRuns: daemon.activeRuns()})
 	cancel()
 	if err != nil {
+		daemon.finishCommandRequest(requestID)
 		daemon.log.Warn("runtime_heartbeat_failed", "error", err)
 		return
 	}
-	daemon.scheduleSnapshot(snapshot)
+	daemon.scheduleSnapshotForRequest(requestID, snapshot)
 }
 
 func (daemon *daemon) sync(ctx context.Context) {
 	requestContext, cancel := daemon.controlContext(ctx)
+	requestID := daemon.beginCommandRequest()
 	snapshot, err := daemon.control.Dispatch(requestContext, daemon.runtimeID, daemon.runtimeEpoch)
 	cancel()
 	if err != nil {
+		daemon.finishCommandRequest(requestID)
 		daemon.log.Warn("runtime_poll_failed", "error", err)
 		return
 	}
-	daemon.scheduleSnapshot(snapshot)
+	daemon.scheduleSnapshotForRequest(requestID, snapshot)
 }
 
 func (daemon *daemon) reconcile(ctx context.Context) {
+	if err := daemon.recoverUnresolvedInputIntents(ctx); err != nil {
+		daemon.log.Warn("recover_input_command_intents_failed", "error", err)
+		return
+	}
 	journals, err := daemon.store.ListJournals()
 	if err != nil {
 		daemon.log.Error("list_journals_failed", "error", err)
@@ -868,9 +944,11 @@ func (daemon *daemon) reconcile(ctx context.Context) {
 		}
 	}
 	requestContext, cancel := daemon.controlContext(ctx)
+	requestID := daemon.beginCommandRequest()
 	response, err := daemon.control.Reconcile(requestContext, daemon.runtimeID, protocol.ReconcileRequest{RuntimeEpoch: daemon.runtimeEpoch, Runs: runs})
 	cancel()
 	if err != nil {
+		daemon.finishCommandRequest(requestID)
 		daemon.log.Warn("runtime_reconcile_failed", "error", err)
 		return
 	}
@@ -893,7 +971,7 @@ func (daemon *daemon) reconcile(ctx context.Context) {
 			_, _ = daemon.store.AdvanceLeaseExpiry(key, *decision.LeaseExpiresAt)
 		}
 	}
-	daemon.scheduleSnapshot(protocol.RuntimeSnapshot{Assignments: response.Assignments, Commands: response.Commands})
+	daemon.scheduleSnapshotForRequest(requestID, protocol.RuntimeSnapshot{Assignments: response.Assignments, Commands: response.Commands})
 }
 
 func isReconcileState(localState string) bool {
@@ -937,7 +1015,7 @@ func (daemon *daemon) stopRecoveredJournal(journal state.RunJournal, reason stri
 }
 
 func (daemon *daemon) handleSnapshot(ctx context.Context, snapshot protocol.RuntimeSnapshot) {
-	completions, ok := daemon.enqueueSnapshotCommands(snapshot.Commands)
+	completions, ok := daemon.enqueueSnapshotCommandsForRequest(0, snapshot.Commands)
 	if !ok || !waitCommandCompletions(ctx, completions) {
 		return
 	}
@@ -950,7 +1028,11 @@ func (daemon *daemon) handleSnapshot(ctx context.Context, snapshot protocol.Runt
 }
 
 func (daemon *daemon) scheduleSnapshot(snapshot protocol.RuntimeSnapshot) {
-	completions, ok := daemon.enqueueSnapshotCommands(snapshot.Commands)
+	daemon.scheduleSnapshotForRequest(0, snapshot)
+}
+
+func (daemon *daemon) scheduleSnapshotForRequest(requestID uint64, snapshot protocol.RuntimeSnapshot) {
+	completions, ok := daemon.enqueueSnapshotCommandsForRequest(requestID, snapshot.Commands)
 	if !ok {
 		return
 	}
@@ -992,18 +1074,75 @@ func (daemon *daemon) scheduleSnapshot(snapshot protocol.RuntimeSnapshot) {
 }
 
 func (daemon *daemon) enqueueSnapshotCommands(commands []protocol.Command) ([]commandCompletion, bool) {
+	return daemon.enqueueSnapshotCommandsForRequest(0, commands)
+}
+
+func (daemon *daemon) enqueueSnapshotCommandsForRequest(requestID uint64, commands []protocol.Command) ([]commandCompletion, bool) {
+	daemon.commandReceiptMu.Lock()
+	defer daemon.commandReceiptMu.Unlock()
 	completions := make([]commandCompletion, 0, len(commands))
+	var wake chan<- struct{}
+	daemon.mu.Lock()
+	tombstones := daemon.commandRequests[requestID]
 	for _, command := range commands {
-		completion := daemon.enqueueCommand(command)
+		key := commandKey{run: state.RunKey{RunID: command.RunID, Generation: command.Generation}, id: command.CommandID}
+		if requestID != 0 {
+			if _, suppressed := tombstones[key]; suppressed {
+				continue
+			}
+		}
+		completion, commandWake := daemon.enqueueCommandLocked(command)
 		if completion == nil {
+			if requestID != 0 {
+				delete(daemon.commandRequests, requestID)
+			}
+			daemon.mu.Unlock()
 			return nil, false
+		}
+		if commandWake != nil {
+			wake = commandWake
 		}
 		completions = append(completions, commandCompletion{
 			run:  state.RunKey{RunID: command.RunID, Generation: command.Generation},
 			done: completion,
 		})
 	}
+	if requestID != 0 {
+		delete(daemon.commandRequests, requestID)
+	}
+	daemon.mu.Unlock()
+	if wake != nil {
+		select {
+		case wake <- struct{}{}:
+		default:
+		}
+	}
 	return completions, true
+}
+
+func (daemon *daemon) beginCommandRequest() uint64 {
+	daemon.commandReceiptMu.Lock()
+	defer daemon.commandReceiptMu.Unlock()
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	if daemon.commandRequests == nil {
+		daemon.commandRequests = make(map[uint64]map[commandKey]struct{})
+	}
+	daemon.nextCommandRequest++
+	requestID := daemon.nextCommandRequest
+	daemon.commandRequests[requestID] = make(map[commandKey]struct{})
+	return requestID
+}
+
+func (daemon *daemon) finishCommandRequest(requestID uint64) {
+	if requestID == 0 {
+		return
+	}
+	daemon.commandReceiptMu.Lock()
+	defer daemon.commandReceiptMu.Unlock()
+	daemon.mu.Lock()
+	delete(daemon.commandRequests, requestID)
+	daemon.mu.Unlock()
 }
 
 func waitCommandCompletions(ctx context.Context, completions []commandCompletion) bool {
@@ -1140,7 +1279,7 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 	}
 	daemon.mu.Unlock()
 	if operatorCancelled {
-		receipt := daemon.queueCancellationReceipt(key, cancelCommandID)
+		receipt := daemon.queueCancellationReceipt(ctx, key, cancelCommandID)
 		daemon.finishDeferredCommand(commandKey{run: key, id: cancelCommandID}, receipt)
 		return
 	}
@@ -1222,7 +1361,7 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 			daemon.signalOutbox()
 		}
 		handoff = true
-		daemon.waitForRun(key)
+		daemon.waitForRunWithContext(ctx, key)
 		return
 	}
 	if daemon.options.recordProcess != nil {
@@ -1239,7 +1378,7 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 			daemon.signalOutbox()
 		}
 		handoff = true
-		daemon.waitForRun(key)
+		daemon.waitForRunWithContext(ctx, key)
 		return
 	}
 	if daemon.isCancelled(key) || ctx.Err() != nil {
@@ -1249,7 +1388,7 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		daemon.signalOutbox()
 	}
 	handoff = true
-	daemon.waitForRun(key)
+	daemon.waitForRunWithContext(ctx, key)
 }
 
 func (daemon *daemon) markRunning(key state.RunKey) error {
@@ -1261,11 +1400,14 @@ func (daemon *daemon) markRunning(key state.RunKey) error {
 	if err != nil {
 		return err
 	}
-	_, err = daemon.store.QueueRunningTransition(key, protocol.StateTransitionRequest{TransitionID: id, State: "running", Payload: encoded})
+	transition := protocol.StateTransitionRequest{TransitionID: id, State: "running", Payload: encoded}
+	_, err = daemon.store.QueueRunningTransition(key, transition)
 	return err
 }
 
 func (daemon *daemon) releaseRun(key state.RunKey) {
+	daemon.commandReceiptMu.Lock()
+	defer daemon.commandReceiptMu.Unlock()
 	daemon.mu.Lock()
 	active := daemon.running[key]
 	delete(daemon.running, key)
@@ -1297,6 +1439,8 @@ func (daemon *daemon) releaseRun(key state.RunKey) {
 }
 
 func (daemon *daemon) clearCompletedCommandReceipts(key state.RunKey) {
+	daemon.commandReceiptMu.Lock()
+	defer daemon.commandReceiptMu.Unlock()
 	daemon.mu.Lock()
 	defer daemon.mu.Unlock()
 	daemon.releaseCommandReceiptsLocked(key)
@@ -1429,7 +1573,7 @@ func (daemon *daemon) isTerminal(key state.RunKey) bool {
 	daemon.mu.Lock()
 	defer daemon.mu.Unlock()
 	active := daemon.running[key]
-	return active != nil && active.terminal
+	return active != nil && (active.terminal || active.terminalizing > 0)
 }
 
 func processDetails(process Process) (int, string, error) {
@@ -1453,6 +1597,21 @@ func inputRecord(recordType protocol.AgentInputRecordType, goal string, input js
 		return nil, err
 	}
 	return append(encoded, '\n'), nil
+}
+
+func canonicalInputDigest(payload json.RawMessage) (string, error) {
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return "", err
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(encoded)
+	return fmt.Sprintf("%x", digest), nil
 }
 
 func (daemon *daemon) queueOutput(key state.RunKey, format config.EventFormat, parser *jsonlParser, event execution.Event) error {
@@ -1604,12 +1763,55 @@ func (daemon *daemon) queueTerminalTransition(key state.RunKey, stateName string
 	return nil
 }
 
-func (daemon *daemon) queueCancelledTerminalAndAcknowledgement(key state.RunKey, commandID string) error {
-	transitionID, err := daemon.options.newID()
+func (daemon *daemon) queueTerminalTransitionWithRetry(ctx context.Context, key state.RunKey, stateName string, payload any) error {
+	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
-	acknowledgementID, err := daemon.options.newID()
+	rootContext := daemon.rootContext(ctx)
+	id, err := daemon.newIDWithRetry(rootContext, key, "", "terminal transition")
+	if err != nil {
+		return err
+	}
+	enteredAt := daemon.now()
+	finishTerminal := daemon.beginTerminal(key)
+	persisted := false
+	defer func() { finishTerminal(persisted) }()
+	for {
+		journal, queueErr := daemon.store.QueueTerminalTransitionAt(key, protocol.StateTransitionRequest{TransitionID: id, State: stateName, Payload: encoded}, enteredAt)
+		if queueErr == nil {
+			persisted = true
+			daemon.scheduleTerminalSlotRelease(key, journal.TerminalPendingAt)
+			daemon.signalOutbox()
+			return nil
+		}
+		if existing, loadErr := daemon.store.LoadJournal(key); loadErr == nil && (existing.LocalState == "cleanup_pending" || (existing.LocalState == "terminal_pending" && existing.TerminalVerdict != "")) {
+			return nil
+		}
+		if daemon.log != nil {
+			daemon.log.Warn("queue_terminal_transition_failed", "run_id", key.RunID, "generation", key.Generation, "state", stateName, "error", queueErr)
+		}
+		timer := daemon.timer(minimumInterval)
+		select {
+		case <-rootContext.Done():
+			timer.Stop()
+			return rootContext.Err()
+		case <-timer.Chan():
+		}
+	}
+}
+
+func (daemon *daemon) queueCancelledTerminalAndAcknowledgement(key state.RunKey, commandID string) error {
+	return daemon.queueCancelledTerminalAndAcknowledgementWithContext(context.Background(), key, commandID)
+}
+
+func (daemon *daemon) queueCancelledTerminalAndAcknowledgementWithContext(ctx context.Context, key state.RunKey, commandID string) error {
+	rootContext := daemon.rootContext(ctx)
+	transitionID, err := daemon.newIDWithRetry(rootContext, key, commandID, "transition")
+	if err != nil {
+		return err
+	}
+	acknowledgementID, err := daemon.newIDWithRetry(rootContext, key, commandID, "acknowledgement")
 	if err != nil {
 		return err
 	}
@@ -1619,21 +1821,41 @@ func (daemon *daemon) queueCancelledTerminalAndAcknowledgement(key state.RunKey,
 	}
 	enteredAt := daemon.now()
 	finishTerminal := daemon.beginTerminal(key)
-	journal, err := daemon.store.QueueCancelledTransitionAndAcknowledgementAt(key,
-		protocol.StateTransitionRequest{TransitionID: transitionID, State: "cancelled", Payload: payload},
-		protocol.CommandAcknowledgement{RunID: key.RunID, CommandID: commandID, Outcome: "applied", AckID: acknowledgementID},
-		enteredAt,
-	)
-	finishTerminal(err == nil)
-	if err != nil {
-		return err
+	persisted := false
+	defer func() { finishTerminal(persisted) }()
+	transition := protocol.StateTransitionRequest{TransitionID: transitionID, State: "cancelled", Payload: payload}
+	acknowledgement := protocol.CommandAcknowledgement{RunID: key.RunID, CommandID: commandID, Outcome: "applied", AckID: acknowledgementID}
+	for {
+		var journal state.RunJournal
+		if daemon.options.queueCancelledTransitionAndAcknowledgement != nil {
+			journal, err = daemon.options.queueCancelledTransitionAndAcknowledgement(key, transition, acknowledgement, enteredAt)
+		} else {
+			journal, err = daemon.store.QueueCancelledTransitionAndAcknowledgementAt(key, transition, acknowledgement, enteredAt)
+		}
+		if err == nil {
+			persisted = true
+			daemon.scheduleTerminalSlotRelease(key, journal.TerminalPendingAt)
+			daemon.signalOutbox()
+			return nil
+		}
+		if daemon.log != nil {
+			daemon.log.Warn("queue_cancelled_transition_and_acknowledgement_failed", "run_id", key.RunID, "generation", key.Generation, "command_id", commandID, "error", err)
+		}
+		timer := daemon.timer(minimumInterval)
+		select {
+		case <-rootContext.Done():
+			timer.Stop()
+			return rootContext.Err()
+		case <-timer.Chan():
+		}
 	}
-	daemon.scheduleTerminalSlotRelease(key, journal.TerminalPendingAt)
-	daemon.signalOutbox()
-	return nil
 }
 
 func (daemon *daemon) waitForRun(key state.RunKey) {
+	daemon.waitForRunWithContext(context.Background(), key)
+}
+
+func (daemon *daemon) waitForRunWithContext(ctx context.Context, key state.RunKey) {
 	daemon.mu.Lock()
 	active := daemon.running[key]
 	process := Process(nil)
@@ -1660,11 +1882,11 @@ func (daemon *daemon) waitForRun(key state.RunKey) {
 	}
 	if !cancelled {
 		if result.Success() {
-			if err := daemon.queueTerminalTransition(key, "completed", map[string]any{"exit_code": result.ExitCode}); err != nil {
+			if err := daemon.queueTerminalTransitionWithRetry(ctx, key, "completed", map[string]any{"exit_code": result.ExitCode}); err != nil {
 				daemon.log.Error("queue_completed_transition_failed", "run_id", key.RunID, "generation", key.Generation, "error", err)
 			}
 		} else {
-			if err := daemon.queueTerminalTransition(key, "failed", map[string]any{"exit_code": result.ExitCode, "error": errorText(result.WaitError)}); err != nil {
+			if err := daemon.queueTerminalTransitionWithRetry(ctx, key, "failed", map[string]any{"exit_code": result.ExitCode, "error": errorText(result.WaitError)}); err != nil {
 				daemon.log.Error("queue_failed_transition_failed", "run_id", key.RunID, "generation", key.Generation, "stage", "process_exit", "error", err)
 			}
 		}
@@ -1696,9 +1918,9 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 		if active == nil {
 			daemon.mu.Unlock()
 			if journal.LocalState == "terminal_pending" {
-				return daemon.queueCancellationReceipt(key, command.CommandID)
+				return daemon.queueCancellationReceipt(ctx, key, command.CommandID)
 			}
-			return daemon.queueCommandAcknowledgement(key, command.CommandID, "rejected")
+			return daemon.queueCommandAcknowledgementWithContext(ctx, key, command.CommandID, "rejected")
 		}
 		if !active.claimed {
 			active.cancelled = true
@@ -1717,9 +1939,9 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 			cancel()
 		}
 		if terminateErr != nil {
-			return daemon.queueCommandAcknowledgement(key, command.CommandID, "failed")
+			return daemon.queueCommandAcknowledgementWithContext(ctx, key, command.CommandID, "failed")
 		}
-		return daemon.queueCancellationReceipt(key, command.CommandID)
+		return daemon.queueCancellationReceipt(ctx, key, command.CommandID)
 	}
 
 	daemon.mu.Lock()
@@ -1730,7 +1952,7 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 	}
 	daemon.mu.Unlock()
 	if process == nil {
-		return daemon.queueCommandAcknowledgement(key, command.CommandID, "rejected")
+		return daemon.queueCommandAcknowledgementWithContext(ctx, key, command.CommandID, "rejected")
 	}
 	outcome := "rejected"
 	switch command.Kind {
@@ -1739,62 +1961,173 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 		if err := json.Unmarshal(command.Payload, &object); err != nil || object == nil {
 			break
 		}
+		payloadDigest, err := canonicalInputDigest(command.Payload)
+		if err != nil {
+			break
+		}
 		input, err := inputRecord(protocol.AgentInputRecordProvideInput, journal.Work.Goal, command.Payload)
 		if err != nil {
 			outcome = "failed"
 			break
 		}
+		runningTransitionID, err := daemon.options.newID()
+		if err != nil {
+			return daemon.queueCommandAcknowledgementWithContext(ctx, key, command.CommandID, "failed")
+		}
+		acknowledgementID, err := daemon.options.newID()
+		if err != nil {
+			return daemon.queueCommandAcknowledgementWithContext(ctx, key, command.CommandID, "failed")
+		}
+		prepared, created, err := daemon.store.PrepareProvideInput(key, state.InputCommandIntent{
+			CommandID:           command.CommandID,
+			PayloadDigest:       payloadDigest,
+			RunningTransitionID: runningTransitionID,
+			AckID:               acknowledgementID,
+		})
+		if err != nil {
+			return daemon.queueCommandAcknowledgementWithContext(ctx, key, command.CommandID, "rejected")
+		}
+		intent := prepared.InputCommandIntent
+		if intent == nil {
+			return false
+		}
+		if !created {
+			if intent.Outcome == "" {
+				return daemon.completeProvideInputWithRetry(ctx, key, command.CommandID, payloadDigest, "failed")
+			}
+			daemon.signalOutboxFor(key)
+			return true
+		}
 		daemon.mu.Lock()
 		accepted := daemon.running[key] == active && activeRunAcceptsCommand(active)
 		daemon.mu.Unlock()
-		if !accepted {
-			break
+		if !accepted || process.WriteInput(input) != nil {
+			return daemon.completeProvideInputWithRetry(ctx, key, command.CommandID, payloadDigest, "failed")
 		}
-		if err := process.WriteInput(input); err != nil {
-			outcome = "failed"
-			break
-		}
-		outcome = "applied"
-		daemon.mu.Lock()
-		accepted = daemon.running[key] == active && activeRunAcceptsCommand(active)
-		if accepted {
-			err = daemon.markRunning(key)
-		}
-		daemon.mu.Unlock()
-		if !accepted {
-			break
-		}
-		if err != nil {
-			outcome = "failed"
-			break
-		}
-		daemon.signalOutboxFor(key)
+		return daemon.completeProvideInputWithRetry(ctx, key, command.CommandID, payloadDigest, "applied")
 	}
-	return daemon.queueCommandAcknowledgement(key, command.CommandID, outcome)
+	return daemon.queueCommandAcknowledgementWithContext(ctx, key, command.CommandID, outcome)
 }
 
 func activeRunAcceptsCommand(active *runningRun) bool {
 	return active != nil && active.process != nil && !active.starting && !active.cancelled && !active.stale && !active.terminal && active.terminalizing == 0
 }
 
-func (daemon *daemon) queueCancellationReceipt(key state.RunKey, commandID string) bool {
-	if err := daemon.queueCancelledTerminalAndAcknowledgement(key, commandID); err != nil {
-		daemon.log.Error("queue_cancelled_transition_failed", "run_id", key.RunID, "generation", key.Generation, "error", err)
-		return daemon.queueCommandAcknowledgement(key, commandID, "failed")
+func (daemon *daemon) terminatePersistedProcessWithRetry(ctx context.Context, key state.RunKey) bool {
+	for {
+		journal, err := daemon.store.LoadJournal(key)
+		if err == nil {
+			if daemon.options.terminatePersist == nil {
+				err = errors.New("persisted process termination is unavailable")
+			} else {
+				err = daemon.options.terminatePersist(journal.PID, journal.ProcessIdentity)
+			}
+		}
+		if err == nil {
+			return true
+		}
+		if daemon.log != nil {
+			daemon.log.Warn("terminate_persisted_process_failed", "run_id", key.RunID, "generation", key.Generation, "error", err)
+		}
+		timer := daemon.timer(minimumInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false
+		case <-timer.Chan():
+		}
+	}
+}
+
+func (daemon *daemon) queueCancellationReceipt(ctx context.Context, key state.RunKey, commandID string) bool {
+	if err := daemon.queueCancelledTerminalAndAcknowledgementWithContext(ctx, key, commandID); err != nil {
+		if daemon.log != nil {
+			daemon.log.Error("queue_cancelled_transition_failed", "run_id", key.RunID, "generation", key.Generation, "error", err)
+		}
+		return false
 	}
 	return true
 }
 
+func (daemon *daemon) newIDWithRetry(ctx context.Context, key state.RunKey, commandID, kind string) (string, error) {
+	for {
+		id, err := daemon.options.newID()
+		if err == nil {
+			return id, nil
+		}
+		if daemon.log != nil {
+			daemon.log.Warn("generate_cancelled_receipt_id_failed", "run_id", key.RunID, "generation", key.Generation, "command_id", commandID, "kind", kind, "error", err)
+		}
+		timer := daemon.timer(minimumInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return "", ctx.Err()
+		case <-timer.Chan():
+		}
+	}
+}
+
 func (daemon *daemon) queueCommandAcknowledgement(key state.RunKey, commandID, outcome string) bool {
-	id, err := daemon.options.newID()
-	if err != nil {
-		return false
+	return daemon.queueCommandAcknowledgementWithContext(context.Background(), key, commandID, outcome)
+}
+
+func (daemon *daemon) queueCommandAcknowledgementWithContext(ctx context.Context, key state.RunKey, commandID, outcome string) bool {
+	rootContext := daemon.rootContext(ctx)
+	acknowledgement := protocol.CommandAcknowledgement{RunID: key.RunID, CommandID: commandID, Outcome: outcome}
+	for {
+		if acknowledgement.AckID == "" {
+			id, err := daemon.options.newID()
+			if err != nil {
+				if daemon.log != nil {
+					daemon.log.Warn("generate_command_acknowledgement_id_failed", "run_id", key.RunID, "generation", key.Generation, "command_id", commandID, "error", err)
+				}
+				timer := daemon.timer(minimumInterval)
+				select {
+				case <-rootContext.Done():
+					timer.Stop()
+					return false
+				case <-timer.Chan():
+				}
+				continue
+			}
+			acknowledgement.AckID = id
+		}
+		_, err := daemon.store.QueueCommandAcknowledgement(key, acknowledgement)
+		if err == nil {
+			daemon.signalOutbox()
+			return true
+		}
+		if daemon.log != nil {
+			daemon.log.Warn("queue_command_acknowledgement_failed", "run_id", key.RunID, "generation", key.Generation, "command_id", commandID, "error", err)
+		}
+		timer := daemon.timer(minimumInterval)
+		select {
+		case <-rootContext.Done():
+			timer.Stop()
+			return false
+		case <-timer.Chan():
+		}
 	}
-	if _, err := daemon.store.QueueCommandAcknowledgement(key, protocol.CommandAcknowledgement{RunID: key.RunID, CommandID: commandID, Outcome: outcome, AckID: id}); err == nil {
-		daemon.signalOutbox()
-		return true
+}
+
+func (daemon *daemon) completeProvideInputWithRetry(ctx context.Context, key state.RunKey, commandID, payloadDigest, outcome string) bool {
+	rootContext := daemon.rootContext(ctx)
+	for {
+		if _, err := daemon.store.CompleteProvideInput(key, commandID, payloadDigest, outcome); err == nil {
+			daemon.signalOutbox()
+			return true
+		} else if daemon.log != nil {
+			daemon.log.Warn("complete_provide_input_failed", "run_id", key.RunID, "generation", key.Generation, "command_id", commandID, "error", err)
+		}
+		timer := daemon.timer(minimumInterval)
+		select {
+		case <-rootContext.Done():
+			timer.Stop()
+			return false
+		case <-timer.Chan():
+		}
 	}
-	return false
 }
 
 func (daemon *daemon) renewLeases(ctx context.Context) {
@@ -1804,9 +2137,10 @@ func (daemon *daemon) renewLeases(ctx context.Context) {
 	}
 	now := daemon.now()
 	type renewal struct {
-		journal  state.RunJournal
-		response protocol.LeaseHeartbeatResponse
-		err      error
+		journal   state.RunJournal
+		response  protocol.LeaseHeartbeatResponse
+		requestID uint64
+		err       error
 	}
 	candidates := make([]state.RunJournal, 0, len(journals))
 	for _, journal := range journals {
@@ -1852,8 +2186,8 @@ func (daemon *daemon) renewLeases(ctx context.Context) {
 			defer group.Done()
 			for index := range jobs {
 				journal := candidates[index]
-				response, renewErr := daemon.renewLease(ctx, journal)
-				completed <- renewal{journal: journal, response: response, err: renewErr}
+				response, requestID, renewErr := daemon.renewLease(ctx, journal)
+				completed <- renewal{journal: journal, response: response, requestID: requestID, err: renewErr}
 			}
 		}()
 	}
@@ -1867,17 +2201,21 @@ func (daemon *daemon) renewLeases(ctx context.Context) {
 	}()
 	for result := range completed {
 		if ctx.Err() != nil {
+			daemon.finishCommandRequest(result.requestID)
 			continue
 		}
 		if !daemon.renewalStillEligible(result.journal) {
+			daemon.finishCommandRequest(result.requestID)
 			continue
 		}
 		current := daemon.now()
 		if !current.Before(result.journal.LeaseExpiresAt) {
+			daemon.finishCommandRequest(result.requestID)
 			daemon.terminateForLease(result.journal, "lease expired during renewal")
 			continue
 		}
 		if result.err != nil {
+			daemon.finishCommandRequest(result.requestID)
 			if errors.Is(result.err, context.Canceled) {
 				continue
 			}
@@ -1887,11 +2225,12 @@ func (daemon *daemon) renewLeases(ctx context.Context) {
 			continue
 		}
 		if !result.response.LeaseExpiresAt.After(current.Add(leaseSafetyMargin)) {
+			daemon.finishCommandRequest(result.requestID)
 			daemon.terminateForLease(result.journal, "renewed lease is already unsafe")
 			continue
 		}
 		_, _ = daemon.store.AdvanceLeaseExpiry(result.journal.Key(), result.response.LeaseExpiresAt)
-		daemon.enqueueCommands(result.response.Commands)
+		_, _ = daemon.enqueueSnapshotCommandsForRequest(result.requestID, result.response.Commands)
 	}
 }
 
@@ -1906,18 +2245,18 @@ func (daemon *daemon) renewalThreshold() time.Duration {
 	return threshold
 }
 
-func (daemon *daemon) renewLease(ctx context.Context, journal state.RunJournal) (protocol.LeaseHeartbeatResponse, error) {
+func (daemon *daemon) renewLease(ctx context.Context, journal state.RunJournal) (protocol.LeaseHeartbeatResponse, uint64, error) {
 	var renewalID uint64
 	daemon.mu.Lock()
 	active := daemon.running[journal.Key()]
 	if !activeRunCanRenew(active) {
 		daemon.mu.Unlock()
-		return protocol.LeaseHeartbeatResponse{}, context.Canceled
+		return protocol.LeaseHeartbeatResponse{}, 0, context.Canceled
 	}
 	requestLimit := journal.LeaseExpiresAt.Sub(daemon.now()) - leaseSafetyMargin
 	if requestLimit <= 0 {
 		daemon.mu.Unlock()
-		return protocol.LeaseHeartbeatResponse{}, errLeaseDeadlineReached
+		return protocol.LeaseHeartbeatResponse{}, 0, errLeaseDeadlineReached
 	}
 	if requestLimit > controlRequestLimit {
 		requestLimit = controlRequestLimit
@@ -1927,14 +2266,19 @@ func (daemon *daemon) renewLease(ctx context.Context, journal state.RunJournal) 
 	renewalID = active.renewCancelID
 	active.renewCancel = cancel
 	daemon.mu.Unlock()
+	requestID := daemon.beginCommandRequest()
 	response, err := daemon.control.RenewLease(renewalContext, journal.RunID, protocol.LeaseHeartbeatRequest{Fence: journal.Fence()})
 	cancel()
+	if err != nil {
+		daemon.finishCommandRequest(requestID)
+		requestID = 0
+	}
 	daemon.mu.Lock()
 	if active := daemon.running[journal.Key()]; active != nil && active.renewCancelID == renewalID {
 		active.renewCancel = nil
 	}
 	daemon.mu.Unlock()
-	return response, err
+	return response, requestID, err
 }
 
 func (daemon *daemon) renewalEligible(snapshot state.RunJournal) bool {
@@ -2373,7 +2717,7 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) (e
 		if journal.LocalState == "terminal_pending" {
 			daemon.releaseSlotOnce(key)
 		}
-		updated, err := daemon.store.MarkCommandAcknowledgementsDelivered(key, []string{acknowledgement.AckID})
+		updated, err := daemon.markCommandAcknowledgementDelivered(key, acknowledgement)
 		if err != nil {
 			return err
 		}
@@ -2474,11 +2818,49 @@ func (daemon *daemon) retireAcceptedTerminalAcknowledgement(journal state.RunJou
 	if journal.LocalState != "terminal_pending" || journal.TerminalVerdict != state.TerminalVerdictAccepted || (!control.IsOwnershipLost(err) && !control.IsTerminalGraceExpired(err)) {
 		return journal, false, nil
 	}
-	updated, markErr := daemon.store.MarkCommandAcknowledgementsDelivered(journal.Key(), []string{acknowledgement.AckID})
+	updated, markErr := daemon.markCommandAcknowledgementDelivered(journal.Key(), acknowledgement)
 	if markErr != nil {
 		return state.RunJournal{}, false, markErr
 	}
 	return updated, true, nil
+}
+
+func (daemon *daemon) markCommandAcknowledgementDelivered(key state.RunKey, acknowledgement protocol.CommandAcknowledgement) (state.RunJournal, error) {
+	keyForCommand := commandKey{run: key, id: acknowledgement.CommandID}
+	daemon.commandReceiptMu.Lock()
+	daemon.mu.Lock()
+	for requestID, tombstones := range daemon.commandRequests {
+		if tombstones == nil {
+			tombstones = make(map[commandKey]struct{})
+		}
+		tombstones[keyForCommand] = struct{}{}
+		daemon.commandRequests[requestID] = tombstones
+	}
+	daemon.mu.Unlock()
+	daemon.commandReceiptMu.Unlock()
+	var (
+		updated state.RunJournal
+		err     error
+	)
+	if daemon.options.markCommandAcknowledgementsDelivered != nil {
+		updated, err = daemon.options.markCommandAcknowledgementsDelivered(key, []string{acknowledgement.AckID})
+	} else {
+		updated, err = daemon.store.MarkCommandAcknowledgementsDelivered(key, []string{acknowledgement.AckID})
+	}
+	if err != nil {
+		return state.RunJournal{}, err
+	}
+	daemon.commandReceiptMu.Lock()
+	defer daemon.commandReceiptMu.Unlock()
+	daemon.mu.Lock()
+	if queued := daemon.queuedCommands[keyForCommand]; queued != nil {
+		queued.delivered = true
+		if queued.completed {
+			delete(daemon.queuedCommands, keyForCommand)
+		}
+	}
+	daemon.mu.Unlock()
+	return updated, nil
 }
 
 func (daemon *daemon) handleOrdinaryDeliveryError(journal state.RunJournal, err error, ownershipReason string) error {

@@ -352,7 +352,13 @@ func TestQueueWaitingForInputUsesOneIDAcrossLifecycleStates(t *testing.T) {
 		wantQueueID bool
 	}{
 		{
-			name:        "running queues shared event and transition ID",
+			name: "running queues shared event and transition ID",
+			prepare: func(t *testing.T, store *state.Store, key state.RunKey) {
+				t.Helper()
+				if _, err := store.SetLocalState(key, "running"); err != nil {
+					t.Fatal(err)
+				}
+			},
 			transitions: 1,
 			localState:  "waiting_for_input",
 			wantEventID: "waiting-id",
@@ -496,6 +502,9 @@ func TestClaimRetryReusesPersistedClaimID(t *testing.T) {
 
 func TestCommandAcknowledgementIsIdempotentAndUsesAllowedOutcomes(t *testing.T) {
 	store, key := claimedStore(t)
+	if _, err := store.SetLocalState(key, "waiting_for_input"); err != nil {
+		t.Fatal(err)
+	}
 	process := &recordingProcess{}
 	daemon := &daemon{
 		store:   store,
@@ -524,6 +533,132 @@ func TestCommandAcknowledgementIsIdempotentAndUsesAllowedOutcomes(t *testing.T) 
 	}
 	if got := journal.PendingCommandAcknowledgements[1].Outcome; got != "rejected" {
 		t.Fatalf("unknown command outcome = %q, want rejected", got)
+	}
+}
+
+func TestProvideInputPersistsIntentBeforeStdinWrite(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	command := protocol.Command{CommandID: "input-1", RunID: key.RunID, Generation: key.Generation, Kind: "provide_input", Payload: json.RawMessage(`{"answer":"yes"}`)}
+	digest, err := canonicalInputDigest(command.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	process := &recordingProcess{beforeWrite: func() {
+		journal, loadErr := store.LoadJournal(key)
+		if loadErr != nil {
+			t.Fatal(loadErr)
+		}
+		intent := journal.InputCommandIntent
+		if journal.LocalState != "waiting_for_input" || intent == nil || intent.CommandID != command.CommandID || intent.PayloadDigest != digest || intent.RunningTransitionID == "" || intent.AckID == "" || intent.Outcome != "" || intent.AcknowledgementDelivered || len(journal.PendingCommandAcknowledgements) != 0 {
+			t.Fatalf("journal before stdin write = %#v", journal)
+		}
+	}}
+	daemon := &daemon{
+		store:   store,
+		options: options{newID: ids()},
+		running: map[state.RunKey]*runningRun{key: {process: process}},
+	}
+	if !daemon.handleCommand(context.Background(), command) {
+		t.Fatal("provide_input was not completed")
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if process.writes != 1 || journal.LocalState != "running" || journal.InputCommandIntent == nil || journal.InputCommandIntent.Outcome != "applied" || len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].TransitionID != journal.InputCommandIntent.RunningTransitionID || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].AckID != journal.InputCommandIntent.AckID {
+		t.Fatalf("journal after stdin write = %#v, writes = %d", journal, process.writes)
+	}
+}
+
+func TestProvideInputDoesNotReplayUnresolvedIntent(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	command := protocol.Command{CommandID: "input-1", RunID: key.RunID, Generation: key.Generation, Kind: "provide_input", Payload: json.RawMessage(`{"answer":"yes"}`)}
+	digest, err := canonicalInputDigest(command.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := state.InputCommandIntent{CommandID: command.CommandID, PayloadDigest: digest, RunningTransitionID: "running-1", AckID: "ack-1"}
+	if _, created, err := store.PrepareProvideInput(key, intent); err != nil || !created {
+		t.Fatalf("PrepareProvideInput() created=%t error=%v", created, err)
+	}
+	process := &recordingProcess{}
+	daemon := &daemon{
+		store:   store,
+		options: options{newID: ids()},
+		running: map[state.RunKey]*runningRun{key: {process: process}},
+	}
+	if !daemon.handleCommand(context.Background(), command) {
+		t.Fatal("unresolved command did not converge")
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if process.writes != 0 || journal.InputCommandIntent == nil || journal.InputCommandIntent.Outcome != "failed" || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].AckID != intent.AckID || journal.PendingCommandAcknowledgements[0].Outcome != "failed" {
+		t.Fatalf("unresolved command replay = %#v, writes = %d", journal, process.writes)
+	}
+}
+
+func TestRecoverUnresolvedInputAfterWriteTerminatesAndDoesNotReplay(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	command := protocol.Command{CommandID: "input-1", RunID: key.RunID, Generation: key.Generation, Kind: "provide_input", Payload: json.RawMessage(`{"answer":"yes"}`)}
+	digest, err := canonicalInputDigest(command.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := state.InputCommandIntent{CommandID: command.CommandID, PayloadDigest: digest, RunningTransitionID: "running-1", AckID: "ack-1"}
+	if _, created, err := store.PrepareProvideInput(key, intent); err != nil || !created {
+		t.Fatalf("PrepareProvideInput() created=%t error=%v", created, err)
+	}
+	if _, err := store.SetProcessDetails(key, 71, "agent:71", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	process := &recordingProcess{}
+	if err := process.WriteInput([]byte(`already written`)); err != nil {
+		t.Fatal(err)
+	}
+	terminated := false
+	daemon := &daemon{
+		store: store,
+		options: options{
+			newID: ids(),
+			terminatePersist: func(pid int, identity string) error {
+				if pid != 71 || identity != "agent:71" {
+					t.Fatalf("persisted process = (%d, %q)", pid, identity)
+				}
+				terminated = true
+				return nil
+			},
+		},
+		running: map[state.RunKey]*runningRun{key: {process: process}},
+	}
+	if err := daemon.recoverUnresolvedInputIntents(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !terminated || process.writes != 1 || journal.LocalState != "terminal_pending" || journal.TerminalState != "failed" || journal.InputCommandIntent == nil || journal.InputCommandIntent.Outcome != "failed" || len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].State != "failed" || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].AckID != intent.AckID || journal.PendingCommandAcknowledgements[0].Outcome != "failed" {
+		t.Fatalf("recovered journal = %#v, terminated = %t, writes = %d", journal, terminated, process.writes)
+	}
+	if _, err := store.ResolveTerminal(key, state.TerminalVerdictAccepted, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkTransitionsDelivered(key, []string{journal.PendingTransitions[0].TransitionID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.EnterCleanupPending(key); err == nil {
+		t.Fatal("cleanup bypassed the failed input acknowledgement")
+	}
+	if _, err := store.MarkCommandAcknowledgementsDelivered(key, []string{intent.AckID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.EnterCleanupPending(key); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -726,9 +861,25 @@ func TestCancelDuringBlockedPrepareAcknowledgesAndCleansUp(t *testing.T) {
 	workspace := newBlockingWorkspace()
 	daemon := startupTestDaemon(t, store, workspace)
 	key := state.RunKey{RunID: "run-1", Generation: 1}
+	retryTimer := &manualDeadlineTimer{channel: make(chan time.Time, 1)}
+	firstPersistenceFailure := make(chan struct{}, 1)
+	attempts := 0
+	daemon.options.newTimer = func(time.Duration) deadlineTimer { return retryTimer }
+	daemon.options.queueCancelledTransitionAndAcknowledgement = func(key state.RunKey, transition protocol.StateTransitionRequest, acknowledgement protocol.CommandAcknowledgement, enteredAt time.Time) (state.RunJournal, error) {
+		attempts++
+		if attempts == 1 {
+			firstPersistenceFailure <- struct{}{}
+			return state.RunJournal{}, errors.New("injected atomic persistence failure before write")
+		}
+		return store.QueueCancelledTransitionAndAcknowledgementAt(key, transition, acknowledgement, enteredAt)
+	}
 	daemon.startAssignment(context.Background(), protocol.Assignment{RunID: key.RunID, Generation: key.Generation, Work: protocol.Work{Goal: "g"}})
 	<-workspace.entered
-	daemon.handleCommand(context.Background(), protocol.Command{CommandID: "cancel-1", RunID: key.RunID, Generation: key.Generation, Kind: "cancel"})
+	commandDone := make(chan bool, 1)
+	go func() {
+		commandDone <- daemon.handleCommand(context.Background(), protocol.Command{CommandID: "cancel-1", RunID: key.RunID, Generation: key.Generation, Kind: "cancel"})
+	}()
+	<-firstPersistenceFailure
 	select {
 	case <-workspace.cancelled:
 	case <-time.After(time.Second):
@@ -739,11 +890,32 @@ func TestCancelDuringBlockedPrepareAcknowledgesAndCleansUp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].State != "cancelled" {
-		t.Fatalf("transitions = %#v", journal.PendingTransitions)
+	if journal.LocalState != "running" || len(journal.PendingCommandAcknowledgements) != 0 {
+		t.Fatalf("journal changed before cancellation receipt persisted: %#v", journal)
 	}
-	if len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].Outcome != "applied" {
-		t.Fatalf("acknowledgements = %#v", journal.PendingCommandAcknowledgements)
+	select {
+	case <-workspace.cleaned:
+		t.Fatal("workspace cleanup started before terminal receipt delivery")
+	default:
+	}
+	retryTimer.channel <- time.Now()
+	select {
+	case acknowledged := <-commandDone:
+		if !acknowledged {
+			t.Fatal("cancel command did not persist an atomic terminal receipt")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancel command did not retry atomic receipt persistence")
+	}
+	if attempts != 2 {
+		t.Fatalf("atomic receipt persistence attempts = %d, want 2", attempts)
+	}
+	journal, err = store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.LocalState != "terminal_pending" || len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].State != "cancelled" || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].Outcome != "applied" {
+		t.Fatalf("atomic cancellation journal = %#v", journal)
 	}
 	if err := daemon.flushRun(context.Background(), journal); err != nil {
 		t.Fatal(err)
@@ -844,6 +1016,69 @@ func TestCancelledCommandSignalsOutboxAfterAtomicReceipt(t *testing.T) {
 	}
 	if journal.LocalState != "terminal_pending" || journal.TerminalState != "cancelled" || len(journal.PendingTransitions) != 1 || len(journal.PendingCommandAcknowledgements) != 1 {
 		t.Fatalf("outbox wake observed partial cancellation journal: %#v", journal)
+	}
+}
+
+func TestCancelledReceiptRetriesAtomicPersistenceWithStableIDs(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	background, cancelBackground := context.WithCancel(context.Background())
+	defer cancelBackground()
+	cancelledContext, cancelRequest := context.WithCancel(context.Background())
+	cancelRequest()
+	retryTimer := &manualDeadlineTimer{channel: make(chan time.Time, 1)}
+	firstFailure := make(chan struct{}, 1)
+	type receiptIDs struct{ transition, acknowledgement string }
+	attempted := make([]receiptIDs, 0, 2)
+	daemon := &daemon{
+		store: store,
+		log:   slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		options: options{
+			newID: ids(),
+			newTimer: func(time.Duration) deadlineTimer {
+				return retryTimer
+			},
+			queueCancelledTransitionAndAcknowledgement: func(key state.RunKey, transition protocol.StateTransitionRequest, acknowledgement protocol.CommandAcknowledgement, enteredAt time.Time) (state.RunJournal, error) {
+				attempted = append(attempted, receiptIDs{transition: transition.TransitionID, acknowledgement: acknowledgement.AckID})
+				journal, err := store.QueueCancelledTransitionAndAcknowledgementAt(key, transition, acknowledgement, enteredAt)
+				if err != nil {
+					return state.RunJournal{}, err
+				}
+				if len(attempted) == 1 {
+					firstFailure <- struct{}{}
+					return journal, errors.New("injected uncertain atomic persistence result")
+				}
+				return journal, nil
+			},
+		},
+		background: background,
+		running:    map[state.RunKey]*runningRun{key: {}},
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- daemon.queueCancelledTerminalAndAcknowledgementWithContext(cancelledContext, key, "cancel-1")
+	}()
+	<-firstFailure
+	select {
+	case err := <-done:
+		t.Fatalf("atomic receipt stopped on cancelled request context: %v", err)
+	default:
+	}
+	retryTimer.channel <- time.Now()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("atomic receipt did not retry after a transient persistence failure")
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(attempted) != 2 || attempted[0] != attempted[1] || len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].State != "cancelled" || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].CommandID != "cancel-1" || journal.PendingCommandAcknowledgements[0].Outcome != "applied" {
+		t.Fatalf("attempts = %#v, journal = %#v", attempted, journal)
 	}
 }
 
@@ -1015,6 +1250,9 @@ func TestFlushInputTransitionStillPrecedesAcknowledgement(t *testing.T) {
 func TestFlushTransitionRetriesUnknownResultWithFrozenBody(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
+	if _, err := store.SetLocalState(key, "running"); err != nil {
+		t.Fatal(err)
+	}
 	api := &retryTransitionControl{failFirst: true}
 	daemon := &daemon{store: store, control: api, options: options{newID: ids()}}
 	if err := daemon.queueWaitingForInput(key, json.RawMessage(`{"type":"waiting_for_input","question":"first"}`), time.Now().UTC()); err != nil {
@@ -1426,6 +1664,9 @@ func TestCancelCancelsRenewalAndIgnoresLateResponse(t *testing.T) {
 	if journal.LocalState != "terminal_pending" || !journal.LeaseExpiresAt.Equal(originalExpiry) {
 		t.Fatalf("late renewal mutated terminal journal: %#v", journal)
 	}
+	if requests, _ := commandRequestCounts(daemon); requests != 0 {
+		t.Fatalf("command request barriers after discarded renewal = %d, want 0", requests)
+	}
 }
 
 func TestTerminalAcceptanceReleasesSlotBeforeCleanup(t *testing.T) {
@@ -1583,7 +1824,7 @@ func TestRecoveredTerminalCancelReplacesUnconfirmedTerminal(t *testing.T) {
 	}
 }
 
-func TestRecoveredTerminalCancelAcknowledgesFailureWhenReplacementCannotQueue(t *testing.T) {
+func TestRecoveredTerminalCancelKeepsRetryingUntilRootStops(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
 	if _, err := store.QueueTerminalTransition(key, protocol.StateTransitionRequest{TransitionID: "completed-1", State: "completed", Payload: json.RawMessage(`{}`)}); err != nil {
@@ -1592,14 +1833,33 @@ func TestRecoveredTerminalCancelAcknowledgesFailureWhenReplacementCannotQueue(t 
 	if _, err := store.ResolveTerminal(key, state.TerminalVerdictAccepted, time.Date(2026, 9, 3, 1, 2, 4, 0, time.UTC)); err != nil {
 		t.Fatal(err)
 	}
-	daemon := &daemon{store: store, options: options{newID: ids()}, log: slog.New(slog.NewJSONHandler(io.Discard, nil))}
-	daemon.handleCommand(context.Background(), protocol.Command{CommandID: "cancel-1", RunID: key.RunID, Generation: key.Generation, Kind: "cancel"})
+	timers := make(chan *manualDeadlineTimer, 1)
+	daemon := &daemon{store: store, options: options{newID: ids(), newTimer: func(time.Duration) deadlineTimer {
+		timer := &manualDeadlineTimer{channel: make(chan time.Time)}
+		timers <- timer
+		return timer
+	}}, log: slog.New(slog.NewJSONHandler(io.Discard, nil))}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan bool, 1)
+	go func() {
+		done <- daemon.handleCommand(ctx, protocol.Command{CommandID: "cancel-1", RunID: key.RunID, Generation: key.Generation, Kind: "cancel"})
+	}()
+	<-timers
+	cancel()
+	select {
+	case acknowledged := <-done:
+		if acknowledged {
+			t.Fatal("cancel command acknowledged despite an unpersisted terminal intent")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancel receipt retry did not stop with its root context")
+	}
 	journal, err := store.LoadJournal(key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if journal.TerminalState != "completed" || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].Outcome != "failed" {
-		t.Fatalf("recovered cancellation did not retain terminal result and failure acknowledgement: %#v", journal)
+	if journal.TerminalState != "completed" || len(journal.PendingCommandAcknowledgements) != 0 {
+		t.Fatalf("recovered cancellation changed a resolved terminal journal: %#v", journal)
 	}
 }
 
@@ -1685,7 +1945,7 @@ func TestEarlierRenewalCompletionKeepsLaterCancellationHandle(t *testing.T) {
 	}
 	firstDone := make(chan struct{})
 	go func() {
-		_, _ = daemon.renewLease(context.Background(), journal)
+		_, _, _ = daemon.renewLease(context.Background(), journal)
 		close(firstDone)
 	}()
 	<-control.firstStarted
@@ -1694,7 +1954,7 @@ func TestEarlierRenewalCompletionKeepsLaterCancellationHandle(t *testing.T) {
 	}
 	secondDone := make(chan struct{})
 	go func() {
-		_, _ = daemon.renewLease(context.Background(), journal)
+		_, _, _ = daemon.renewLease(context.Background(), journal)
 		close(secondDone)
 	}()
 	<-control.secondStarted
@@ -2080,14 +2340,31 @@ func TestTerminalTransitionEnqueueFailureRetainsJournalAndSlot(t *testing.T) {
 	defer store.Close()
 	slots := make(chan struct{}, 1)
 	slots <- struct{}{}
+	background, cancel := context.WithCancel(context.Background())
+	attempted := make(chan struct{}, 1)
 	daemon := &daemon{
-		store:   store,
-		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		options: options{newID: func() (string, error) { return "", errors.New("disk failure") }},
-		running: map[state.RunKey]*runningRun{key: {process: fakeProcess{result: execution.Result{}}, slotHeld: true}},
-		slots:   slots,
+		store: store,
+		log:   slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		options: options{newID: func() (string, error) {
+			attempted <- struct{}{}
+			return "", errors.New("disk failure")
+		}},
+		background: background,
+		running:    map[state.RunKey]*runningRun{key: {process: fakeProcess{result: execution.Result{}}, slotHeld: true}},
+		slots:      slots,
 	}
-	daemon.waitForRun(key)
+	done := make(chan struct{})
+	go func() {
+		daemon.waitForRun(key)
+		close(done)
+	}()
+	<-attempted
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("terminal persistence retry did not stop after root cancellation")
+	}
 	journal, err := store.LoadJournal(key)
 	if err != nil {
 		t.Fatal(err)
@@ -2196,6 +2473,9 @@ func TestJSONLPrimitiveAndArrayUseRawOutputAndFlushWithTerminal(t *testing.T) {
 func TestJSONLRawFallbackDoesNotDropLaterRecords(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
+	if _, err := store.SetLocalState(key, "running"); err != nil {
+		t.Fatal(err)
+	}
 	daemon := &daemon{store: store, options: options{newID: ids()}}
 	data := []byte("42\n[\"raw\"]\n{\"type\":\"waiting_for_input\"}\n{\"type\":\"progress\"}\n")
 	if err := daemon.queueOutput(key, config.EventFormatJSONL, &jsonlParser{}, execution.Event{Stream: execution.Stdout, At: time.Now().UTC(), Data: data}); err != nil {
@@ -2447,6 +2727,9 @@ func TestBlockedInputDoesNotBlockAnotherRunCommand(t *testing.T) {
 	if _, err := store.SaveClaimGrant(second, protocol.ClaimResponse{RunID: second.RunID, Generation: second.Generation, ClaimID: "claim-2", LeaseToken: "lease-2", LeaseExpiresAt: time.Now().Add(time.Minute), Work: protocol.Work{Goal: "g"}}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.SetLocalState(second, "waiting_for_input"); err != nil {
+		t.Fatal(err)
+	}
 	blocked := &blockingInputProcess{entered: make(chan struct{}, 1), release: make(chan struct{})}
 	other := &recordingProcess{}
 	daemon := &daemon{
@@ -2503,8 +2786,18 @@ func TestSameRunCommandsPreserveFIFO(t *testing.T) {
 	go func() { daemon.runCommandExecutor(ctx); close(executorDone) }()
 
 	firstDone := daemon.enqueueCommand(protocol.Command{CommandID: "input-1", RunID: key.RunID, Generation: key.Generation, Kind: "provide_input", Payload: json.RawMessage(`{"sequence":1}`)})
-	secondDone := daemon.enqueueCommand(protocol.Command{CommandID: "input-2", RunID: key.RunID, Generation: key.Generation, Kind: "provide_input", Payload: json.RawMessage(`{"sequence":2}`)})
 	<-firstDone
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkCommandAcknowledgementsDelivered(key, []string{journal.InputCommandIntent.AckID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetLocalState(key, "waiting_for_input"); err != nil {
+		t.Fatal(err)
+	}
+	secondDone := daemon.enqueueCommand(protocol.Command{CommandID: "input-2", RunID: key.RunID, Generation: key.Generation, Kind: "provide_input", Payload: json.RawMessage(`{"sequence":2}`)})
 	<-secondDone
 	cancel()
 	<-executorDone
@@ -2524,6 +2817,9 @@ func TestSameCommandIDIsScopedToRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := store.SaveClaimGrant(second, protocol.ClaimResponse{RunID: second.RunID, Generation: second.Generation, ClaimID: "claim-2", LeaseToken: "lease-2", LeaseExpiresAt: time.Now().Add(time.Minute), Work: protocol.Work{Goal: "g"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetLocalState(second, "waiting_for_input"); err != nil {
 		t.Fatal(err)
 	}
 	firstProcess := &recordingProcess{}
@@ -2653,8 +2949,8 @@ func TestCancelRejectsQueuedInputAfterPreemption(t *testing.T) {
 	if outcomes["input-2"] != "rejected" {
 		t.Fatalf("queued input outcome = %q, want rejected", outcomes["input-2"])
 	}
-	if outcomes["input-1"] != "applied" {
-		t.Fatalf("in-flight input outcome = %q, want applied after successful write", outcomes["input-1"])
+	if outcomes["input-1"] != "failed" {
+		t.Fatalf("in-flight input outcome = %q, want failed after cancellation races its completion", outcomes["input-1"])
 	}
 }
 
@@ -2691,8 +2987,15 @@ func TestScheduledSnapshotCancelPreemptsBlockedInputAndJoins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if journal.LocalState != "terminal_pending" || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].CommandID != "cancel-1" {
+	if journal.LocalState != "terminal_pending" || len(journal.PendingCommandAcknowledgements) != 2 {
 		t.Fatalf("scheduled cancellation journal = %#v", journal)
+	}
+	outcomes := make(map[string]string, len(journal.PendingCommandAcknowledgements))
+	for _, acknowledgement := range journal.PendingCommandAcknowledgements {
+		outcomes[acknowledgement.CommandID] = acknowledgement.Outcome
+	}
+	if outcomes["input-1"] != "failed" || outcomes["cancel-1"] != "applied" {
+		t.Fatalf("scheduled cancellation outcomes = %#v", outcomes)
 	}
 
 	close(input.release)
@@ -2790,7 +3093,7 @@ func TestReleaseRunUnblocksCommandWaiters(t *testing.T) {
 	<-executorDone
 }
 
-func TestDeliveredCommandReceiptSuppressesStaleSnapshotUntilRunEnds(t *testing.T) {
+func TestDeliveredCommandReceiptEvictsCompletedDedupeEntry(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
 	process := &recordingProcess{}
@@ -2815,9 +3118,8 @@ func TestDeliveredCommandReceiptSuppressesStaleSnapshotUntilRunEnds(t *testing.T
 	if err := daemon.flushRun(ctx, journal); err != nil {
 		t.Fatal(err)
 	}
-	daemon.handleSnapshot(ctx, protocol.RuntimeSnapshot{Commands: []protocol.Command{command}})
-	if process.writes != 1 {
-		t.Fatalf("WriteInput calls after delivered acknowledgement = %d, want 1", process.writes)
+	if len(daemon.queuedCommands) != 0 {
+		t.Fatalf("completed command receipt survived delivery: %#v", daemon.queuedCommands)
 	}
 	daemon.releaseRun(key)
 	if len(daemon.queuedCommands) != 0 {
@@ -2828,6 +3130,319 @@ func TestDeliveredCommandReceiptSuppressesStaleSnapshotUntilRunEnds(t *testing.T
 	case <-executorDone:
 	case <-time.After(time.Second):
 		t.Fatal("command executor did not exit")
+	}
+}
+
+func TestAcknowledgementDeliverySuppressesLateCommandsFromEverySnapshotResponse(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+		start  func(*daemon, context.Context)
+	}{
+		{name: "heartbeat", method: "heartbeat", start: func(daemon *daemon, ctx context.Context) { daemon.heartbeat(ctx) }},
+		{name: "dispatch", method: "dispatch", start: func(daemon *daemon, ctx context.Context) { daemon.sync(ctx) }},
+		{name: "reconcile", method: "reconcile", start: func(daemon *daemon, ctx context.Context) { daemon.reconcile(ctx) }},
+		{name: "renew lease", method: "renew", start: func(daemon *daemon, ctx context.Context) { daemon.renewLeases(ctx) }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store, key := claimedStore(t)
+			defer store.Close()
+			now := time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC)
+			if test.method == "renew" {
+				if _, err := store.UpdateLeaseExpiry(key, now.Add(leaseSafetyMargin+time.Second)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			process := &recordingProcess{}
+			command := protocol.Command{CommandID: "input-1", RunID: key.RunID, Generation: key.Generation, Kind: "provide_input", Payload: json.RawMessage(`{}`)}
+			control := &lateCommandControl{method: test.method, entered: make(chan struct{}, 1), release: make(chan struct{}), command: command, leaseExpiresAt: now.Add(time.Minute)}
+			daemon := &daemon{
+				store:          store,
+				control:        control,
+				options:        options{clock: func() time.Time { return now }, newID: ids()},
+				leaseDuration:  10 * time.Second,
+				running:        map[state.RunKey]*runningRun{key: {process: process}},
+				slots:          make(chan struct{}, 1),
+				commandWake:    make(chan struct{}, 1),
+				queuedCommands: make(map[commandKey]*queuedCommand),
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			executorDone := make(chan struct{})
+			go func() { daemon.runCommandExecutor(ctx); close(executorDone) }()
+			daemon.handleSnapshot(ctx, protocol.RuntimeSnapshot{Commands: []protocol.Command{command}})
+			journal, err := store.LoadJournal(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			responseDone := make(chan struct{})
+			go func() {
+				test.start(daemon, ctx)
+				close(responseDone)
+			}()
+			<-control.entered
+			if err := daemon.flushRun(ctx, journal); err != nil {
+				t.Fatal(err)
+			}
+			if !hasCommandRequestTombstone(daemon, commandKey{run: key, id: command.CommandID}) {
+				t.Fatal("acknowledgement delivery did not retain a tombstone for the in-flight response")
+			}
+			close(control.release)
+			select {
+			case <-responseDone:
+			case <-time.After(time.Second):
+				t.Fatal("late response did not complete")
+			}
+			if process.writes != 1 {
+				t.Fatalf("WriteInput calls after late response = %d, want 1", process.writes)
+			}
+			if requests, queued := commandRequestCounts(daemon); requests != 0 || queued != 0 {
+				t.Fatalf("request tombstones = %d, queued commands = %d, want none", requests, queued)
+			}
+			cancel()
+			select {
+			case <-executorDone:
+			case <-time.After(time.Second):
+				t.Fatal("command executor did not exit")
+			}
+		})
+	}
+}
+
+func TestAcknowledgementDeliveryTombstonesEveryPreAckRequest(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	process := &recordingProcess{}
+	command := protocol.Command{CommandID: "input-1", RunID: key.RunID, Generation: key.Generation, Kind: "provide_input", Payload: json.RawMessage(`{}`)}
+	firstGate := make(chan struct{})
+	secondGate := make(chan struct{})
+	control := &lateCommandControl{method: "dispatch", entered: make(chan struct{}, 2), releases: []<-chan struct{}{firstGate, secondGate}, command: command}
+	daemon := &daemon{store: store, control: control, options: options{newID: ids()}, running: map[state.RunKey]*runningRun{key: {process: process}}, commandWake: make(chan struct{}, 1), queuedCommands: make(map[commandKey]*queuedCommand)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	executorDone := make(chan struct{})
+	go func() { daemon.runCommandExecutor(ctx); close(executorDone) }()
+	daemon.handleSnapshot(ctx, protocol.RuntimeSnapshot{Commands: []protocol.Command{command}})
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := make(chan struct{}, 2)
+	go func() { daemon.sync(ctx); completed <- struct{}{} }()
+	go func() { daemon.sync(ctx); completed <- struct{}{} }()
+	<-control.entered
+	<-control.entered
+	if err := daemon.flushRun(ctx, journal); err != nil {
+		t.Fatal(err)
+	}
+	if requests, _ := commandRequestCounts(daemon); requests != 2 {
+		t.Fatalf("pre-ack request count = %d, want 2", requests)
+	}
+	if !hasCommandRequestTombstone(daemon, commandKey{run: key, id: command.CommandID}) {
+		t.Fatal("pre-ack requests were not tombstoned")
+	}
+	close(firstGate)
+	select {
+	case <-completed:
+	case <-time.After(time.Second):
+		t.Fatal("first late dispatch did not complete")
+	}
+	if requests, _ := commandRequestCounts(daemon); requests != 1 {
+		t.Fatalf("request count after first stale response = %d, want 1", requests)
+	}
+	if !hasCommandRequestTombstone(daemon, commandKey{run: key, id: command.CommandID}) {
+		t.Fatal("second pre-ack request lost its tombstone")
+	}
+	close(secondGate)
+	select {
+	case <-completed:
+	case <-time.After(time.Second):
+		t.Fatal("second late dispatch did not complete")
+	}
+	if process.writes != 1 {
+		t.Fatalf("WriteInput calls after two stale responses = %d, want 1", process.writes)
+	}
+	if requests, queued := commandRequestCounts(daemon); requests != 0 || queued != 0 {
+		t.Fatalf("request tombstones = %d, queued commands = %d, want none", requests, queued)
+	}
+	cancel()
+	<-executorDone
+}
+
+func TestAcknowledgementPersistenceDoesNotBlockNewCommandRequests(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	process := &recordingProcess{}
+	command := protocol.Command{CommandID: "input-1", RunID: key.RunID, Generation: key.Generation, Kind: "provide_input", Payload: json.RawMessage(`{}`)}
+	control := &lateCommandControl{method: "dispatch", entered: make(chan struct{}, 1), release: make(chan struct{}), command: command}
+	persistEntered := make(chan struct{}, 1)
+	persistRelease := make(chan struct{})
+	daemon := &daemon{
+		store:   store,
+		control: control,
+		options: options{
+			newID: ids(),
+			markCommandAcknowledgementsDelivered: func(key state.RunKey, acknowledgementIDs []string) (state.RunJournal, error) {
+				persistEntered <- struct{}{}
+				<-persistRelease
+				return store.MarkCommandAcknowledgementsDelivered(key, acknowledgementIDs)
+			},
+		},
+		running:        map[state.RunKey]*runningRun{key: {process: process}},
+		commandWake:    make(chan struct{}, 1),
+		queuedCommands: make(map[commandKey]*queuedCommand),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	executorDone := make(chan struct{})
+	go func() { daemon.runCommandExecutor(ctx); close(executorDone) }()
+	daemon.handleSnapshot(ctx, protocol.RuntimeSnapshot{Commands: []protocol.Command{command}})
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	responseDone := make(chan struct{})
+	go func() { daemon.sync(ctx); close(responseDone) }()
+	<-control.entered
+	flushDone := make(chan error, 1)
+	go func() { flushDone <- daemon.flushRun(ctx, journal) }()
+	<-persistEntered
+	if !hasCommandRequestTombstone(daemon, commandKey{run: key, id: command.CommandID}) {
+		t.Fatal("acknowledgement persistence did not preinstall the stale response tombstone")
+	}
+	requestStarted := make(chan uint64, 1)
+	go func() { requestStarted <- daemon.beginCommandRequest() }()
+	var duringPersistenceRequestID uint64
+	select {
+	case duringPersistenceRequestID = <-requestStarted:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("beginCommandRequest blocked on acknowledgement persistence")
+	}
+	if requests, queued := commandRequestCounts(daemon); requests != 2 || queued != 1 {
+		t.Fatalf("during persistence requests = %d, queued commands = %d, want 2 and 1", requests, queued)
+	}
+	if commandRequestHasTombstone(daemon, duringPersistenceRequestID, commandKey{run: key, id: command.CommandID}) {
+		t.Fatal("request started after the pre-ack cutoff inherited a tombstone")
+	}
+	close(control.release)
+	select {
+	case <-responseDone:
+	case <-time.After(time.Second):
+		t.Fatal("stale dispatch did not complete during acknowledgement persistence")
+	}
+	if process.writes != 1 {
+		t.Fatalf("WriteInput calls while acknowledgement persistence was blocked = %d, want 1", process.writes)
+	}
+	daemon.finishCommandRequest(duringPersistenceRequestID)
+	close(persistRelease)
+	if err := <-flushDone; err != nil {
+		t.Fatal(err)
+	}
+	postAckRequestID := daemon.beginCommandRequest()
+	if commandRequestHasTombstone(daemon, postAckRequestID, commandKey{run: key, id: command.CommandID}) {
+		t.Fatal("request started after acknowledgement persistence inherited a tombstone")
+	}
+	if requests, queued := commandRequestCounts(daemon); requests != 1 || queued != 0 {
+		t.Fatalf("post-ack request count = %d, queued commands = %d, want 1 and 0", requests, queued)
+	}
+	daemon.finishCommandRequest(postAckRequestID)
+	if process.writes != 1 {
+		t.Fatalf("WriteInput calls after stale response = %d, want 1", process.writes)
+	}
+	if requests, queued := commandRequestCounts(daemon); requests != 0 || queued != 0 {
+		t.Fatalf("request tombstones = %d, queued commands = %d, want none", requests, queued)
+	}
+	cancel()
+	<-executorDone
+}
+
+func TestFailedAcknowledgementPersistenceKeepsProvisionalTombstoneUntilResponseEnds(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	process := &recordingProcess{}
+	command := protocol.Command{CommandID: "input-1", RunID: key.RunID, Generation: key.Generation, Kind: "provide_input", Payload: json.RawMessage(`{}`)}
+	control := &lateCommandControl{method: "dispatch", entered: make(chan struct{}, 1), release: make(chan struct{}), command: command}
+	daemon := &daemon{
+		store:   store,
+		control: control,
+		options: options{
+			newID: ids(),
+			markCommandAcknowledgementsDelivered: func(state.RunKey, []string) (state.RunJournal, error) {
+				return state.RunJournal{}, errors.New("injected acknowledgement persistence failure")
+			},
+		},
+		running:        map[state.RunKey]*runningRun{key: {process: process}},
+		commandWake:    make(chan struct{}, 1),
+		queuedCommands: make(map[commandKey]*queuedCommand),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	executorDone := make(chan struct{})
+	go func() { daemon.runCommandExecutor(ctx); close(executorDone) }()
+	daemon.handleSnapshot(ctx, protocol.RuntimeSnapshot{Commands: []protocol.Command{command}})
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	responseDone := make(chan struct{})
+	go func() { daemon.sync(ctx); close(responseDone) }()
+	<-control.entered
+	if err := daemon.flushRun(ctx, journal); err == nil {
+		t.Fatal("flushRun() succeeded despite acknowledgement persistence failure")
+	}
+	if !hasCommandRequestTombstone(daemon, commandKey{run: key, id: command.CommandID}) {
+		t.Fatal("failed acknowledgement persistence rolled back the provisional tombstone")
+	}
+	close(control.release)
+	select {
+	case <-responseDone:
+	case <-time.After(time.Second):
+		t.Fatal("stale dispatch did not complete")
+	}
+	if process.writes != 1 {
+		t.Fatalf("WriteInput calls after failed acknowledgement persistence = %d, want 1", process.writes)
+	}
+	if requests, queued := commandRequestCounts(daemon); requests != 0 || queued != 1 {
+		t.Fatalf("request tombstones = %d, queued commands = %d, want 0 and 1", requests, queued)
+	}
+	cancel()
+	<-executorDone
+}
+
+func TestCommandRequestClearsAfterErroredSnapshotResponses(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		method string
+		start  func(*daemon, context.Context)
+	}{
+		{name: "heartbeat", method: "heartbeat", start: func(daemon *daemon, ctx context.Context) { daemon.heartbeat(ctx) }},
+		{name: "dispatch", method: "dispatch", start: func(daemon *daemon, ctx context.Context) { daemon.sync(ctx) }},
+		{name: "reconcile", method: "reconcile", start: func(daemon *daemon, ctx context.Context) { daemon.reconcile(ctx) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, err := state.New(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			control := &lateCommandControl{method: test.method, entered: make(chan struct{}, 1), release: make(chan struct{}), err: errors.New("injected response failure")}
+			daemon := &daemon{store: store, control: control, log: slog.New(slog.NewJSONHandler(io.Discard, nil))}
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan struct{})
+			go func() { test.start(daemon, ctx); close(done) }()
+			<-control.entered
+			close(control.release)
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("response handling did not finish")
+			}
+			if requests, _ := commandRequestCounts(daemon); requests != 0 {
+				t.Fatalf("command request barriers = %d, want 0", requests)
+			}
+			cancel()
+		})
 	}
 }
 
@@ -3582,6 +4197,9 @@ func TestRenewLeasesJoinsWorkersAfterShutdown(t *testing.T) {
 	if returnedEarly {
 		t.Fatal("renewal loop returned before cancelled workers joined")
 	}
+	if requests, _ := commandRequestCounts(daemon); requests != 0 {
+		t.Fatalf("command request barriers after shutdown = %d, want 0", requests)
+	}
 }
 
 func TestDelayedReconcileCannotRegressRenewedLease(t *testing.T) {
@@ -3726,6 +4344,9 @@ func claimedStore(t *testing.T) (*state.Store, state.RunKey) {
 	}
 	_, err = store.SaveClaimGrant(key, protocol.ClaimResponse{RunID: key.RunID, Generation: key.Generation, ClaimID: "claim-1", LeaseToken: "lease", LeaseExpiresAt: time.Now().Add(time.Minute), Work: protocol.Work{Goal: "g"}})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetLocalState(key, "waiting_for_input"); err != nil {
 		t.Fatal(err)
 	}
 	return store, key
@@ -4375,6 +4996,99 @@ type blockingReactorControl struct {
 	renewEntered     chan struct{}
 }
 
+type lateCommandControl struct {
+	fakeControl
+	method         string
+	entered        chan struct{}
+	release        chan struct{}
+	releases       []<-chan struct{}
+	command        protocol.Command
+	leaseExpiresAt time.Time
+	err            error
+	mu             sync.Mutex
+	calls          int
+}
+
+func (control *lateCommandControl) wait(method string) error {
+	if control.method != method {
+		return nil
+	}
+	var release <-chan struct{} = control.release
+	control.mu.Lock()
+	if control.calls < len(control.releases) {
+		release = control.releases[control.calls]
+	}
+	control.calls++
+	control.mu.Unlock()
+	control.entered <- struct{}{}
+	<-release
+	return control.err
+}
+
+func (control *lateCommandControl) Heartbeat(context.Context, string, protocol.RuntimeHeartbeatRequest) (protocol.RuntimeSnapshot, error) {
+	if err := control.wait("heartbeat"); err != nil {
+		return protocol.RuntimeSnapshot{}, err
+	}
+	if control.method == "heartbeat" {
+		return protocol.RuntimeSnapshot{Commands: []protocol.Command{control.command}}, nil
+	}
+	return protocol.RuntimeSnapshot{}, nil
+}
+
+func (control *lateCommandControl) Dispatch(context.Context, string, int64) (protocol.RuntimeSnapshot, error) {
+	if err := control.wait("dispatch"); err != nil {
+		return protocol.RuntimeSnapshot{}, err
+	}
+	if control.method == "dispatch" {
+		return protocol.RuntimeSnapshot{Commands: []protocol.Command{control.command}}, nil
+	}
+	return protocol.RuntimeSnapshot{}, nil
+}
+
+func (control *lateCommandControl) Reconcile(context.Context, string, protocol.ReconcileRequest) (protocol.ReconcileResponse, error) {
+	if err := control.wait("reconcile"); err != nil {
+		return protocol.ReconcileResponse{}, err
+	}
+	if control.method == "reconcile" {
+		return protocol.ReconcileResponse{Commands: []protocol.Command{control.command}}, nil
+	}
+	return protocol.ReconcileResponse{}, nil
+}
+
+func (control *lateCommandControl) RenewLease(context.Context, string, protocol.LeaseHeartbeatRequest) (protocol.LeaseHeartbeatResponse, error) {
+	if err := control.wait("renew"); err != nil {
+		return protocol.LeaseHeartbeatResponse{}, err
+	}
+	if control.method == "renew" {
+		return protocol.LeaseHeartbeatResponse{LeaseExpiresAt: control.leaseExpiresAt, Commands: []protocol.Command{control.command}}, nil
+	}
+	return protocol.LeaseHeartbeatResponse{LeaseExpiresAt: time.Now().Add(time.Minute)}, nil
+}
+
+func hasCommandRequestTombstone(daemon *daemon, key commandKey) bool {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	for _, tombstones := range daemon.commandRequests {
+		if _, exists := tombstones[key]; exists {
+			return true
+		}
+	}
+	return false
+}
+
+func commandRequestHasTombstone(daemon *daemon, requestID uint64, key commandKey) bool {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	_, exists := daemon.commandRequests[requestID][key]
+	return exists
+}
+
+func commandRequestCounts(daemon *daemon) (int, int) {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	return len(daemon.commandRequests), len(daemon.queuedCommands)
+}
+
 func (client *blockingReactorControl) Dispatch(context.Context, string, int64) (protocol.RuntimeSnapshot, error) {
 	if client.dispatchEntered != nil {
 		client.dispatchEntered <- struct{}{}
@@ -4645,18 +5359,85 @@ func (process fakeProcess) Wait() execution.Result                         { ret
 func (fakeProcess) ProcessDetails() (int, string)                          { return 42, "test:42" }
 
 type recordingProcess struct {
-	input  []byte
-	writes int
+	input        []byte
+	writes       int
+	beforeWrite  func()
+	terminations int
 }
 
 func (process *recordingProcess) WriteInput(input []byte) error {
+	if process.beforeWrite != nil {
+		process.beforeWrite()
+	}
 	process.writes++
 	process.input = append(process.input, input...)
 	return nil
 }
-func (*recordingProcess) Terminate(context.Context, time.Duration) error { return nil }
-func (*recordingProcess) Wait() execution.Result                         { return execution.Result{} }
-func (*recordingProcess) ProcessDetails() (int, string)                  { return 43, "test:43" }
+func (process *recordingProcess) Terminate(context.Context, time.Duration) error {
+	process.terminations++
+	return nil
+}
+func (*recordingProcess) Wait() execution.Result        { return execution.Result{} }
+func (*recordingProcess) ProcessDetails() (int, string) { return 43, "test:43" }
+
+type blockingTerminateProcess struct {
+	entered chan context.Context
+	writes  int
+}
+
+func (process *blockingTerminateProcess) WriteInput([]byte) error {
+	process.writes++
+	return nil
+}
+func (process *blockingTerminateProcess) Terminate(ctx context.Context, _ time.Duration) error {
+	process.entered <- ctx
+	<-ctx.Done()
+	return ctx.Err()
+}
+func (*blockingTerminateProcess) Wait() execution.Result        { return execution.Result{} }
+func (*blockingTerminateProcess) ProcessDetails() (int, string) { return 45, "test:45" }
+
+type failingTerminateProcess struct {
+	writes       int
+	terminations int
+}
+
+func (process *failingTerminateProcess) WriteInput([]byte) error {
+	process.writes++
+	return nil
+}
+func (process *failingTerminateProcess) Terminate(context.Context, time.Duration) error {
+	process.terminations++
+	return errors.New("injected process termination failure")
+}
+func (*failingTerminateProcess) Wait() execution.Result        { return execution.Result{} }
+func (*failingTerminateProcess) ProcessDetails() (int, string) { return 99, "test:99" }
+
+type terminatingInputProcess struct {
+	done         chan struct{}
+	writes       int
+	terminations int
+	once         sync.Once
+}
+
+func newTerminatingInputProcess() *terminatingInputProcess {
+	return &terminatingInputProcess{done: make(chan struct{})}
+}
+
+func (process *terminatingInputProcess) WriteInput([]byte) error {
+	process.writes++
+	return nil
+}
+func (process *terminatingInputProcess) Terminate(context.Context, time.Duration) error {
+	process.terminations++
+	process.once.Do(func() { close(process.done) })
+	return nil
+}
+func (process *terminatingInputProcess) Wait() execution.Result {
+	<-process.done
+	return execution.Result{Terminated: true}
+}
+func (*terminatingInputProcess) ProcessDetails() (int, string) { return 77, "test:77" }
 
 type blockingProcess struct {
 	done         chan struct{}

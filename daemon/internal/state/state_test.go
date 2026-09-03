@@ -1,6 +1,7 @@
 package state
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -302,6 +303,140 @@ func TestClaimIntentGrantAndPendingOutboxSurviveRestart(t *testing.T) {
 	}
 	if got.LeaseToken != "lease-1" || got.ClaimedRuntimeEpoch != 3 || got.ClaimID != "claim-1" || got.WorkspaceBindingKey != "binding-1" || len(got.PendingEvents) != 1 || len(got.PendingTransitions) != 1 || len(got.PendingCommandAcknowledgements) != 1 {
 		t.Fatalf("journal after restart = %#v", got)
+	}
+}
+
+func TestQueueCommandAcknowledgementIsIdempotentByCommandAndOutcome(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-1", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	key := journal.Key()
+	first := protocol.CommandAcknowledgement{CommandID: "command-1", Outcome: "applied", AckID: "ack-1"}
+	if _, err := store.QueueCommandAcknowledgement(key, first); err != nil {
+		t.Fatalf("QueueCommandAcknowledgement(first) error = %v", err)
+	}
+	if _, err := store.QueueCommandAcknowledgement(key, protocol.CommandAcknowledgement{CommandID: "command-1", Outcome: "applied", AckID: "ack-2"}); err != nil {
+		t.Fatalf("QueueCommandAcknowledgement(retry) error = %v", err)
+	}
+	if _, err := store.QueueCommandAcknowledgement(key, protocol.CommandAcknowledgement{CommandID: "command-1", Outcome: "rejected", AckID: "ack-3"}); err == nil {
+		t.Fatal("QueueCommandAcknowledgement() accepted a conflicting outcome")
+	}
+	loaded, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.PendingCommandAcknowledgements) != 1 || loaded.PendingCommandAcknowledgements[0].AckID != "ack-1" || loaded.PendingCommandAcknowledgements[0].Outcome != "applied" {
+		t.Fatalf("pending acknowledgements = %#v", loaded.PendingCommandAcknowledgements)
+	}
+}
+
+func TestProvideInputIntentIsAtomicAcrossCompletionDeliveryAndEpisodes(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-input", 1)
+	journal.LocalState = "waiting_for_input"
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	first := InputCommandIntent{CommandID: "command-1", PayloadDigest: strings.Repeat("a", sha256.Size*2), RunningTransitionID: "running-1", AckID: "ack-1"}
+	prepared, created, err := store.PrepareProvideInput(journal.Key(), first)
+	if err != nil || !created || prepared.InputCommandIntent == nil || prepared.InputCommandIntent.CommandID != first.CommandID {
+		t.Fatalf("PrepareProvideInput(first) = %#v, %t, %v", prepared, created, err)
+	}
+	_, created, err = store.PrepareProvideInput(journal.Key(), first)
+	if err != nil || created {
+		t.Fatalf("PrepareProvideInput(retry) created=%t error=%v", created, err)
+	}
+	completed, err := store.CompleteProvideInput(journal.Key(), first.CommandID, first.PayloadDigest, "applied")
+	if err != nil || completed.LocalState != "running" || len(completed.PendingTransitions) != 1 || completed.PendingTransitions[0].TransitionID != first.RunningTransitionID || len(completed.PendingCommandAcknowledgements) != 1 || completed.PendingCommandAcknowledgements[0].AckID != first.AckID {
+		t.Fatalf("CompleteProvideInput() = %#v, %v", completed, err)
+	}
+	completed, err = store.CompleteProvideInput(journal.Key(), first.CommandID, first.PayloadDigest, "applied")
+	if err != nil || len(completed.PendingTransitions) != 1 || len(completed.PendingCommandAcknowledgements) != 1 {
+		t.Fatalf("CompleteProvideInput(retry) = %#v, %v", completed, err)
+	}
+	if _, err := store.MarkCommandAcknowledgementsDelivered(journal.Key(), []string{first.AckID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetLocalState(journal.Key(), "waiting_for_input"); err != nil {
+		t.Fatal(err)
+	}
+	second := InputCommandIntent{CommandID: "command-2", PayloadDigest: strings.Repeat("b", sha256.Size*2), RunningTransitionID: "running-2", AckID: "ack-2"}
+	replaced, created, err := store.PrepareProvideInput(journal.Key(), second)
+	if err != nil || !created || replaced.InputCommandIntent == nil || replaced.InputCommandIntent.CommandID != second.CommandID {
+		t.Fatalf("PrepareProvideInput(next episode) = %#v, %t, %v", replaced, created, err)
+	}
+}
+
+func TestTerminalTransitionSettlesUnresolvedInputBeforeCleanup(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-input-terminal", 1)
+	journal.LocalState = "waiting_for_input"
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	intent := InputCommandIntent{CommandID: "command-1", PayloadDigest: strings.Repeat("c", sha256.Size*2), RunningTransitionID: "running-1", AckID: "ack-1"}
+	if _, _, err := store.PrepareProvideInput(journal.Key(), intent); err != nil {
+		t.Fatal(err)
+	}
+	pendingAt := time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC)
+	terminal, err := store.QueueTerminalTransitionAt(journal.Key(), protocol.StateTransitionRequest{TransitionID: "failed-1", State: "failed", Payload: json.RawMessage(`{}`)}, pendingAt)
+	if err != nil || terminal.InputCommandIntent == nil || terminal.InputCommandIntent.Outcome != "failed" || len(terminal.PendingCommandAcknowledgements) != 1 || terminal.PendingCommandAcknowledgements[0].AckID != intent.AckID {
+		t.Fatalf("QueueTerminalTransitionAt() = %#v, %v", terminal, err)
+	}
+	if _, err := store.ResolveTerminal(journal.Key(), TerminalVerdictAccepted, pendingAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkTransitionsDelivered(journal.Key(), []string{"failed-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.EnterCleanupPending(journal.Key()); err == nil {
+		t.Fatal("EnterCleanupPending() accepted an undelivered input acknowledgement")
+	}
+	if _, err := store.MarkCommandAcknowledgementsDelivered(journal.Key(), []string{intent.AckID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.EnterCleanupPending(journal.Key()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestJournalRejectsDuplicatePendingCommandAcknowledgementCommandIDs(t *testing.T) {
+	directory := t.TempDir()
+	store, err := New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal := testJournal("run-1", 1)
+	duplicate := journal
+	duplicate.PendingCommandAcknowledgements = []protocol.CommandAcknowledgement{
+		{Fence: journal.Fence(), RunID: journal.RunID, CommandID: "command-1", Outcome: "applied", AckID: "ack-1"},
+		{Fence: journal.Fence(), RunID: journal.RunID, CommandID: "command-1", Outcome: "rejected", AckID: "ack-2"},
+	}
+	if err := store.SaveJournal(duplicate); err == nil {
+		t.Fatal("SaveJournal() accepted duplicate command acknowledgement IDs")
+	}
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(duplicate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.journalPath(journal.Key()), encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	if _, err := restarted.LoadJournal(journal.Key()); err == nil {
+		t.Fatal("LoadJournal() accepted duplicate command acknowledgement IDs after restart")
 	}
 }
 
