@@ -358,7 +358,7 @@ func TestQueueTerminalTransitionIsAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueueTerminalTransition() error = %v", err)
 	}
-	if queued.LocalState != "terminal_pending" || len(queued.PendingTransitions) != 1 || !sameFence(queued.PendingTransitions[0].Fence, queued.Fence()) {
+	if queued.LocalState != "terminal_pending" || queued.TerminalPendingAt.IsZero() || queued.TerminalState != "completed" || len(queued.PendingTransitions) != 1 || !sameFence(queued.PendingTransitions[0].Fence, queued.Fence()) {
 		t.Fatalf("QueueTerminalTransition() = %#v", queued)
 	}
 
@@ -382,7 +382,7 @@ func TestQueueTerminalTransitionRejectsNonterminalStatesWithoutMutation(t *testi
 	}
 	key := journal.Key()
 	for _, state := range []string{"running", "waiting_for_input"} {
-		if _, err := store.QueueTerminalTransition(key, protocol.StateTransitionRequest{TransitionID: "transition-" + state, State: state, Payload: json.RawMessage(`{}`)}); err == nil {
+		if _, err := store.QueueTerminalTransitionAt(key, protocol.StateTransitionRequest{TransitionID: "transition-" + state, State: state, Payload: json.RawMessage(`{}`)}, time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC)); err == nil {
 			t.Fatalf("QueueTerminalTransition(%q) succeeded", state)
 		}
 	}
@@ -435,6 +435,8 @@ func TestQueueTerminalTransitionSelectsOneAuthoritativeTerminal(t *testing.T) {
 			journal.PendingTransitions = transitionsForStates(journal, test.pendingStates)
 			if hasTerminalState(journal.PendingTransitions) {
 				journal.LocalState = "terminal_pending"
+				journal.TerminalPendingAt = time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC)
+				journal.TerminalState = pendingTerminalState(journal.PendingTransitions)
 			}
 			if err := store.SaveJournal(journal); err != nil {
 				t.Fatalf("SaveJournal() error = %v", err)
@@ -459,6 +461,8 @@ func TestQueueTerminalTransitionValidatesFenceBeforeCancelledReplacement(t *test
 	journal := testJournal("run-1", 1)
 	journal.PendingTransitions = transitionsForStates(journal, []string{"completed"})
 	journal.LocalState = "terminal_pending"
+	journal.TerminalPendingAt = time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC)
+	journal.TerminalState = "completed"
 	if err := store.SaveJournal(journal); err != nil {
 		t.Fatalf("SaveJournal() error = %v", err)
 	}
@@ -616,6 +620,9 @@ func TestQueueWaitingForInputPreservesPendingTerminalTransition(t *testing.T) {
 	journal := testJournal("run-1", 1)
 	journal.LastEventSequence = 0
 	journal.PendingTransitions = transitionsForStates(journal, []string{"running", "failed"})
+	journal.LocalState = "terminal_pending"
+	journal.TerminalPendingAt = time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC)
+	journal.TerminalState = "failed"
 	if err := store.SaveJournal(journal); err != nil {
 		t.Fatalf("SaveJournal() error = %v", err)
 	}
@@ -625,7 +632,7 @@ func TestQueueWaitingForInputPreservesPendingTerminalTransition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueueWaitingForInput() error = %v", err)
 	}
-	if queued.LocalState != "running" || queued.LastEventSequence != 1 || len(queued.PendingEvents) != 1 || !reflect.DeepEqual(queued.PendingTransitions, before) {
+	if queued.LocalState != "terminal_pending" || queued.LastEventSequence != 1 || len(queued.PendingEvents) != 1 || !reflect.DeepEqual(queued.PendingTransitions, before) {
 		t.Fatalf("pending terminal waiting race = %#v", queued)
 	}
 }
@@ -776,6 +783,104 @@ func TestTerminalReplacementRemovesAttemptMarkers(t *testing.T) {
 	}
 	if got, want := transitionStates(queued.PendingTransitions), []string{"cancelled"}; !equalStrings(got, want) || len(queued.AttemptedTransitionIDs) != 0 {
 		t.Fatalf("cancel replacement = %#v", queued)
+	}
+}
+
+func TestTerminalPendingTimestampSurvivesRestartAndCancelReplacement(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-1", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatalf("SaveJournal() error = %v", err)
+	}
+	enteredAt := time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC)
+	queued, err := store.QueueTerminalTransitionAt(journal.Key(), protocol.StateTransitionRequest{TransitionID: "completed-1", State: "completed", Payload: json.RawMessage(`{}`)}, enteredAt)
+	if err != nil {
+		t.Fatalf("QueueTerminalTransitionAt(completed) error = %v", err)
+	}
+	cancelledAt := enteredAt.Add(time.Minute)
+	queued, err = store.QueueTerminalTransitionAt(journal.Key(), protocol.StateTransitionRequest{TransitionID: "cancelled-1", State: "cancelled", Payload: json.RawMessage(`{}`)}, cancelledAt)
+	if err != nil {
+		t.Fatalf("QueueTerminalTransitionAt(cancelled) error = %v", err)
+	}
+	if queued.LocalState != "terminal_pending" || !queued.TerminalPendingAt.Equal(enteredAt) || queued.TerminalState != "cancelled" || queued.TerminalVerdict != "" || !queued.TerminalResolvedAt.IsZero() || !equalStrings(transitionStates(queued.PendingTransitions), []string{"cancelled"}) {
+		t.Fatalf("cancelled terminal journal = %#v", queued)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	restarted, err := New(store.dir)
+	if err != nil {
+		t.Fatalf("New() after restart error = %v", err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	loaded, err := restarted.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatalf("LoadJournal() after restart error = %v", err)
+	}
+	if !loaded.TerminalPendingAt.Equal(enteredAt) || loaded.TerminalState != "cancelled" || loaded.TerminalVerdict != "" {
+		t.Fatalf("terminal journal after restart = %#v", loaded)
+	}
+	resolvedAt := enteredAt.Add(2 * time.Minute)
+	resolved, err := restarted.ResolveTerminal(journal.Key(), TerminalVerdictOwnershipLost, resolvedAt)
+	if err != nil {
+		t.Fatalf("ResolveTerminal() error = %v", err)
+	}
+	if resolved.TerminalVerdict != TerminalVerdictOwnershipLost || !resolved.TerminalResolvedAt.Equal(resolvedAt) || !resolved.TerminalPendingAt.Equal(enteredAt) {
+		t.Fatalf("resolved terminal journal = %#v", resolved)
+	}
+}
+
+func TestLegacyJournalWithoutTerminalFieldsLoads(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("legacy-run", 1)
+	encoded, err := json.Marshal(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &document); err != nil {
+		t.Fatal(err)
+	}
+	delete(document, "terminal_pending_at")
+	delete(document, "terminal_state")
+	delete(document, "terminal_verdict")
+	delete(document, "terminal_resolved_at")
+	encoded, err = json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.journalPath(journal.Key()), encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatalf("LoadJournal() error = %v", err)
+	}
+	if !loaded.TerminalPendingAt.IsZero() || loaded.TerminalState != "" || loaded.TerminalVerdict != "" || !loaded.TerminalResolvedAt.IsZero() {
+		t.Fatalf("legacy terminal fields = %#v", loaded)
+	}
+}
+
+func TestTerminalMetadataMatchesTerminalPendingLifecycle(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-1", 1)
+	enteredAt := time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC)
+
+	journal.TerminalPendingAt = enteredAt
+	if err := store.SaveJournal(journal); err == nil {
+		t.Fatal("SaveJournal() accepted terminal metadata on a nonterminal journal")
+	}
+
+	journal = testJournal("run-2", 1)
+	journal.LocalState = "terminal_pending"
+	if err := store.SaveJournal(journal); err == nil {
+		t.Fatal("SaveJournal() accepted terminal_pending without metadata")
+	}
+
+	journal.TerminalPendingAt = enteredAt
+	journal.TerminalState = "running"
+	if err := store.SaveJournal(journal); err == nil {
+		t.Fatal("SaveJournal() accepted a nonterminal target state")
 	}
 }
 

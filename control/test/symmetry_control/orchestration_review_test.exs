@@ -34,6 +34,22 @@ defmodule SymmetryControl.OrchestrationReviewTest do
     assert {:ok, cancelled_task} = Orchestration.fetch_task(task.id)
     assert cancelled_task.state == "cancelled"
 
+    for {target_state, transition_id} <- [
+          {"completed", uuid(200)},
+          {"failed", uuid(201)},
+          {"cancelled", uuid(202)}
+        ] do
+      assert {:error, :ownership_lost} =
+               Orchestration.transition(
+                 run.id,
+                 fence,
+                 target_state,
+                 %{},
+                 transition_id,
+                 now: DateTime.add(@now, 51, :second)
+               )
+    end
+
     assert {:ok, %{commands: []}} =
              Orchestration.work_snapshot(runtime.id, runtime.connection_epoch,
                now: DateTime.add(@now, 51, :second)
@@ -588,6 +604,72 @@ defmodule SymmetryControl.OrchestrationReviewTest do
                from command in SymmetryControl.Orchestration.Command,
                  where: command.run_id == ^replacement_run.id and command.kind == "provide_input"
              )
+
+      Repo.delete!(task)
+      Repo.delete!(machine)
+    end)
+  end
+
+  test "terminal grace delivery and replacement assignment serialize on the current generation" do
+    Sandbox.unboxed_run(Repo, fn ->
+      %{machine: machine} = enroll_machine()
+      suffix = System.unique_integer([:positive])
+      agent_profile = "terminal-race-#{suffix}"
+
+      assert {:ok, [runtime]} =
+               Orchestration.register_runtimes(
+                 machine.id,
+                 Ecto.UUID.generate(),
+                 [runtime_attrs(agent_profile: agent_profile)],
+                 now: @now
+               )
+
+      assert {:ok, task, :created} =
+               Orchestration.submit_task(
+                 task_attrs(agent_profile: agent_profile),
+                 "terminal-race-#{suffix}",
+                 now: @now
+               )
+
+      assert {:ok, run} = Orchestration.assign_one(now: @now)
+      fence = claim(run, runtime)
+      transition(run.id, fence, "running", 251)
+      expired_at = DateTime.add(@now, 30, :second)
+      terminal_at = DateTime.add(expired_at, 1, :second)
+
+      assert %{expired_runs: 1} = Orchestration.expire(now: expired_at)
+
+      assert {:ok, _snapshot} =
+               Orchestration.heartbeat(runtime.id, runtime.connection_epoch, [], now: expired_at)
+
+      [terminal_result, assignment_result] =
+        concurrently(2, fn
+          1 ->
+            Orchestration.transition(
+              run.id,
+              fence,
+              "completed",
+              %{"summary" => "race winner"},
+              Ecto.UUID.generate(),
+              now: terminal_at
+            )
+
+          2 ->
+            Orchestration.assign_one(now: terminal_at)
+        end)
+
+      case {terminal_result, assignment_result} do
+        {{:ok, %{state: "completed"}}, {:error, :no_assignment}} ->
+          assert {:ok, %{state: "completed", current_generation: 1}} =
+                   Orchestration.fetch_task(task.id)
+
+        {{:error, :ownership_lost}, {:ok, %{generation: 2}}} ->
+          assert {:ok, %{state: "assigned", current_generation: 2}} =
+                   Orchestration.fetch_task(task.id)
+
+        other ->
+          flunk("unexpected terminal/replacement race result: #{inspect(other)}")
+      end
 
       Repo.delete!(task)
       Repo.delete!(machine)

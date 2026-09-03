@@ -31,6 +31,7 @@ const (
 	CapacityExhausted    ErrorCode = "capacity_exhausted"
 	IdempotencyConflict  ErrorCode = "idempotency_conflict"
 	OwnershipLost        ErrorCode = "ownership_lost"
+	TerminalGraceExpired ErrorCode = "terminal_grace_expired"
 	StateConflict        ErrorCode = "state_conflict"
 	AssignmentExpired    ErrorCode = "assignment_expired"
 	InvalidTransition    ErrorCode = "invalid_transition"
@@ -74,6 +75,13 @@ func (err *APIError) Error() string {
 func IsOwnershipLost(err error) bool {
 	var apiError *APIError
 	return errors.As(err, &apiError) && apiError.Code == OwnershipLost
+}
+
+// IsTerminalGraceExpired reports that terminal-only delivery exceeded its
+// generation-scoped grace window.
+func IsTerminalGraceExpired(err error) bool {
+	var apiError *APIError
+	return errors.As(err, &apiError) && apiError.Code == TerminalGraceExpired
 }
 
 // Option changes construction-time HTTP transport behavior.

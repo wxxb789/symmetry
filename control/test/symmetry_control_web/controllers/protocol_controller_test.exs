@@ -7,6 +7,15 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
   @enrollment_token "test-enrollment-token"
   @operator_token "test-operator-token"
 
+  test "renders terminal grace expiry with the protocol error envelope" do
+    response = SymmetryControlWeb.Protocol.error(build_conn(), :terminal_grace_expired)
+
+    assert response.status == 409
+
+    assert %{"error" => %{"code" => "terminal_grace_expired"}} =
+             Jason.decode!(response.resp_body)
+  end
+
   test "uses the resource-oriented machine, runtime, run, and acknowledgement routes", %{
     conn: conn
   } do

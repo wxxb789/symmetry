@@ -31,6 +31,12 @@ const (
 	atomicTempPrefix  = ".symmetry-state-"
 )
 
+const (
+	TerminalVerdictAccepted      = "accepted"
+	TerminalVerdictOwnershipLost = "ownership_lost"
+	TerminalVerdictGraceExpired  = "terminal_grace_expired"
+)
+
 // ErrStoreInUse indicates that another daemon process currently owns this
 // state directory.
 var ErrStoreInUse = errors.New("state directory is already in use")
@@ -90,6 +96,10 @@ type RunJournal struct {
 	LeaseToken                     string                            `json:"lease_token"`
 	LeaseExpiresAt                 time.Time                         `json:"lease_expires_at"`
 	LocalState                     string                            `json:"local_state"`
+	TerminalPendingAt              time.Time                         `json:"terminal_pending_at,omitempty"`
+	TerminalState                  string                            `json:"terminal_state,omitempty"`
+	TerminalVerdict                string                            `json:"terminal_verdict,omitempty"`
+	TerminalResolvedAt             time.Time                         `json:"terminal_resolved_at,omitempty"`
 	Work                           protocol.Work                     `json:"work"`
 	WorkspacePath                  string                            `json:"workspace_path"`
 	WorkspaceBindingKey            string                            `json:"workspace_binding_key"`
@@ -500,6 +510,9 @@ func (store *Store) MarkEventsDelivered(key RunKey, eventIDs []string) (RunJourn
 // QueueTransition durably enqueues a fenced transition before its HTTP request.
 func (store *Store) QueueTransition(key RunKey, transition protocol.StateTransitionRequest) (RunJournal, error) {
 	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if isTerminalTransitionState(transition.State) {
+			return errors.New("terminal transition requires terminal queue")
+		}
 		return queueTransition(journal, transition)
 	})
 }
@@ -527,7 +540,20 @@ func (store *Store) QueueRunningTransition(key RunKey, transition protocol.State
 // QueueTerminalTransition atomically makes a terminal transition durable and
 // marks the local process terminal-pending before any HTTP request is sent.
 func (store *Store) QueueTerminalTransition(key RunKey, transition protocol.StateTransitionRequest) (RunJournal, error) {
+	return store.QueueTerminalTransitionAt(key, transition, time.Now().UTC())
+}
+
+// QueueTerminalTransitionAt atomically makes a terminal transition durable,
+// records the first terminal-pending time, and marks the local process
+// terminal-pending before any HTTP request is sent.
+func (store *Store) QueueTerminalTransitionAt(key RunKey, transition protocol.StateTransitionRequest, pendingAt time.Time) (RunJournal, error) {
+	if pendingAt.IsZero() {
+		return RunJournal{}, errors.New("terminal pending time is invalid")
+	}
 	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.TerminalVerdict != "" {
+			return errors.New("terminal verdict is already recorded")
+		}
 		prepared, err := prepareTransition(journal, transition)
 		if err != nil {
 			return err
@@ -538,16 +564,50 @@ func (store *Store) QueueTerminalTransition(key RunKey, transition protocol.Stat
 		if prepared.State == "cancelled" {
 			journal.PendingTransitions = []protocol.StateTransitionRequest{prepared}
 			journal.AttemptedTransitionIDs = retainAttemptedTransitions(journal.AttemptedTransitionIDs, journal.PendingTransitions)
-			journal.LocalState = "terminal_pending"
+			setTerminalPending(journal, pendingAt, prepared.State)
 			return nil
 		}
 		if hasPendingTerminalTransition(journal.PendingTransitions) {
+			setTerminalPending(journal, pendingAt, pendingTerminalState(journal.PendingTransitions))
 			return nil
 		}
 		journal.PendingTransitions = append(journal.PendingTransitions, prepared)
-		journal.LocalState = "terminal_pending"
+		setTerminalPending(journal, pendingAt, prepared.State)
 		return nil
 	})
+}
+
+// ResolveTerminal durably records a terminal control-plane verdict. Repeating
+// the same verdict is idempotent; conflicting terminal outcomes are rejected.
+func (store *Store) ResolveTerminal(key RunKey, verdict string, resolvedAt time.Time) (RunJournal, error) {
+	if !validTerminalVerdict(verdict) || resolvedAt.IsZero() {
+		return RunJournal{}, errors.New("terminal verdict is invalid")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.LocalState != "terminal_pending" {
+			return errors.New("journal is not terminal pending")
+		}
+		if journal.TerminalVerdict != "" {
+			if journal.TerminalVerdict != verdict {
+				return errors.New("terminal verdict conflicts with journal")
+			}
+			return nil
+		}
+		if journal.TerminalPendingAt.IsZero() || !isTerminalTransitionState(journal.TerminalState) {
+			return errors.New("journal terminal state is invalid")
+		}
+		journal.TerminalVerdict = verdict
+		journal.TerminalResolvedAt = resolvedAt
+		return nil
+	})
+}
+
+func setTerminalPending(journal *RunJournal, pendingAt time.Time, terminalState string) {
+	journal.LocalState = "terminal_pending"
+	if journal.TerminalPendingAt.IsZero() {
+		journal.TerminalPendingAt = pendingAt
+	}
+	journal.TerminalState = terminalState
 }
 
 // MarkTransitionsDelivered removes successfully applied transitions by ID.
@@ -673,6 +733,15 @@ func hasPendingTerminalTransition(transitions []protocol.StateTransitionRequest)
 		}
 	}
 	return false
+}
+
+func pendingTerminalState(transitions []protocol.StateTransitionRequest) string {
+	for _, transition := range transitions {
+		if isTerminalTransitionState(transition.State) {
+			return transition.State
+		}
+	}
+	return ""
 }
 
 func (store *Store) loadJournalLocked(key RunKey) (RunJournal, error) {
@@ -903,6 +972,9 @@ func validateJournal(journal RunJournal) error {
 	if (strings.TrimSpace(journal.LeaseToken) == "") != journal.LeaseExpiresAt.IsZero() || len(journal.LeaseToken) > 65536 || !validWork(journal.Work) {
 		return errors.New("run journal is invalid")
 	}
+	if !validTerminalState(journal) {
+		return errors.New("run journal is invalid")
+	}
 	if !journal.hasClaimGrant() && (journal.PID != 0 || !journal.StartedAt.IsZero() || len(journal.PendingEvents) != 0 || len(journal.PendingTransitions) != 0 || len(journal.PendingCommandAcknowledgements) != 0) {
 		return errors.New("run journal is invalid")
 	}
@@ -943,6 +1015,28 @@ func validEvent(event protocol.RunEvent) bool {
 
 func validTransition(transition protocol.StateTransitionRequest) bool {
 	return validRequiredString(transition.TransitionID, 4096) && validRequiredString(transition.State, 256) && validRawMessage(transition.Payload)
+}
+
+func validTerminalState(journal RunJournal) bool {
+	if journal.LocalState != "terminal_pending" {
+		return !hasPendingTerminalTransition(journal.PendingTransitions) && journal.TerminalPendingAt.IsZero() && journal.TerminalState == "" && journal.TerminalVerdict == "" && journal.TerminalResolvedAt.IsZero()
+	}
+	if journal.TerminalPendingAt.IsZero() || !isTerminalTransitionState(journal.TerminalState) {
+		return false
+	}
+	if journal.TerminalVerdict == "" {
+		return journal.TerminalResolvedAt.IsZero()
+	}
+	return validTerminalVerdict(journal.TerminalVerdict) && !journal.TerminalResolvedAt.IsZero()
+}
+
+func validTerminalVerdict(verdict string) bool {
+	switch verdict {
+	case TerminalVerdictAccepted, TerminalVerdictOwnershipLost, TerminalVerdictGraceExpired:
+		return true
+	default:
+		return false
+	}
 }
 
 func validAttemptedTransitions(attempted []string, pending []protocol.StateTransitionRequest) bool {

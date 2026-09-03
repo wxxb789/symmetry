@@ -34,9 +34,16 @@ Every execution-side mutation after claim must match this fence:
 runtime_id + runtime_epoch + run_id + generation + claim_id + lease_token
 ```
 
-The control plane rejects a mutation when the runtime epoch is stale, the
-lease is expired, the run is terminal, or the task has advanced to a newer
-generation. A stale execution can never overwrite the result of a newer one.
+The control plane rejects an ordinary mutation when the runtime epoch is stale,
+the lease is expired, the run is terminal, or the task has advanced to a newer
+generation. Terminal transitions and command acknowledgements have one bounded
+exception: the original claimed fence may be used for up to eight minutes after
+lease expiry while that run remains the task's current generation. This
+terminal-only path still requires the original runtime, claimed runtime epoch,
+claim ID, lease token, run ID, and generation. It does not require the runtime's
+current connection epoch to remain unchanged, so a restarted daemon can drain a
+durable terminal journal. A stale execution can never overwrite the result of
+a newer generation.
 
 ## Durable Lifecycles
 
@@ -46,7 +53,7 @@ Task states:
 queued -> assigned -> claimed -> running -> waiting_for_input -> running
 assigned | claimed | running | waiting_for_input -> cancelling -> cancelled
 queued -> cancelled
-running -> completed | failed
+claimed | running | waiting_for_input -> completed | failed
 assigned | claimed | running | waiting_for_input -> queued (new generation only)
 ```
 
@@ -55,14 +62,18 @@ Run states:
 ```text
 assigned -> claimed -> running -> waiting_for_input -> running
 assigned | claimed | running | waiting_for_input -> cancelling -> cancelled
-running -> completed | failed
+claimed | running | waiting_for_input -> completed | failed
 assigned | claimed | running | waiting_for_input | cancelling -> expired
+expired -> completed | failed | cancelled (current-generation terminal grace only)
 ```
 
 A retry or reclaim creates a new `run_id` and increments `generation`. A run
-never changes generation and a lease token is never reused. Terminal states are
-immutable. `waiting_for_input` remains capacity-bearing until resumed,
-cancelled, or expired. `assigned`, `claimed`, `running`,
+never changes generation and a lease token is never reused. `completed`,
+`failed`, and `cancelled` are immutable. An `expired` run may accept one terminal
+result during its bounded grace only while its task is still queued at the same
+generation; an operator-applied queued cancellation cannot be overwritten.
+`waiting_for_input` remains capacity-bearing until resumed, cancelled, or
+expired. `assigned`, `claimed`, `running`,
 `waiting_for_input`, and `cancelling` all reserve one runtime slot.
 
 Cancellation and completion serialize on the task and current run rows. If
@@ -354,7 +365,31 @@ and `cancelled`. Completion and failure include a structured result or failure
 payload. `(run_id, transition_id)` is the retry identity: repeating the same ID
 and canonical JSON body returns the stored response; reusing the ID with a
 different body returns `409 idempotency_conflict`. A transition whose state has
-already advanced under a different ID returns `409 state_conflict`.
+already advanced under a different ID returns `409 state_conflict`. If the
+reaper has already finalized `cancelling` as `cancelled`, any new late terminal
+transition returns `409 ownership_lost`; an exact stored transition replay still
+returns its original response.
+
+When the agent process exits, the daemon durably enters `terminal_pending`,
+records the intended terminal state and first terminal-pending time, stops lease
+renewal, and removes the run from active heartbeat and reconciliation input.
+Any in-flight renewal is cancelled and its late response cannot update the
+journal. Ordinary events and non-terminal transitions are not authorized by
+terminal grace; the daemon retires them locally instead of sending them, so
+they cannot block or determine the terminal verdict. Control accepts direct
+`claimed` or `waiting_for_input` completion/failure when an undelivered local
+transition was retired this way. Only a successful terminal transition records
+`accepted`; a terminal transition or
+command acknowledgement may conclusively record `ownership_lost` or
+`terminal_grace_expired`. Exact transition replay remains valid after the grace
+deadline, but a new transition ID is rejected. A newer task generation always
+returns `ownership_lost`.
+
+The daemon releases its local execution slot once when the terminal transition
+or related command acknowledgement is accepted, or when eight minutes have
+elapsed since it entered `terminal_pending`. Local expiry releases capacity only:
+the durable journal remains until the control plane accepts or conclusively
+rejects terminal delivery and workspace cleanup succeeds.
 
 ### Reconcile After Start Or Reconnect
 
@@ -380,6 +415,11 @@ The daemon sends its current local run journal:
   ]
 }
 ```
+
+`terminal_pending` journals are intentionally omitted from ordinary heartbeat,
+lease renewal, and reconciliation. After daemon restart they retain the original
+claimed fence and continue only terminal transition and command acknowledgement
+delivery. A newer task generation still fences the retained journal.
 
 ```json
 {
@@ -642,7 +682,10 @@ fence.
 Repeating the same acknowledgement UUID and body is idempotent; reusing it with
 a different body returns `409 idempotency_conflict`. Acknowledgement records
 delivery outcome but never changes run state or removes a lifecycle command by
-itself.
+itself. A new acknowledgement follows the same eight-minute terminal grace and
+current-generation fence as terminal delivery. Exact replay remains valid after
+the deadline. Acceptance may release the daemon's local slot, but only a
+terminal transition response records the terminal delivery verdict.
 
 ## Agent Standard Input
 
@@ -710,7 +753,14 @@ exception details:
 - `404 not_found`: resource is absent; reconcile local state.
 - `409 capacity_exhausted`: retry after the next snapshot.
 - `409 idempotency_conflict`: the same key was reused with different input.
-- `409 ownership_lost`: stop the local execution and reconcile immediately.
+- `409 ownership_lost`: the run no longer owns the requested mutation because
+  its static claim/generation fence is stale or a later task-level decision,
+  such as queued cancellation, has settled authority. Stop ordinary execution;
+  for a terminal journal, persist the conclusive verdict and proceed to cleanup.
+- `409 terminal_grace_expired`: the static fence still matches, but a new
+  terminal transition or command acknowledgement arrived more than eight
+  minutes after lease expiry. Persist the conclusive verdict and proceed to
+  cleanup; exact replay of an already stored request remains valid.
 - `409 state_conflict`: state already advanced or a terminal payload conflicts.
 - `410 assignment_expired`: discard the assignment and fetch a new snapshot.
 - `422 invalid_transition`: daemon or client state-machine error.
@@ -741,3 +791,7 @@ idempotency, or event identifier.
    reconciliation; no in-memory mailbox is required for recovery.
 8. Failures in one runtime or run are persisted locally to that execution and
    do not crash unrelated schedulers, runtime connections, or runs.
+9. Terminal delivery never renews or revives ordinary lease authority. Its
+   local slot is released at most once, no later than eight minutes after the
+   process enters `terminal_pending`, while unresolved delivery state remains
+   durable across daemon and control restarts.

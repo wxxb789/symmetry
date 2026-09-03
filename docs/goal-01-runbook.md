@@ -10,6 +10,9 @@ contract and lifecycle rules are defined in [`protocol-v1.md`](protocol-v1.md).
   state transition.
 - A run mutation is authorized by `runtime_id`, `runtime_epoch`, `run_id`,
   `generation`, `claim_id`, and `lease_token` together.
+- Ordinary authority ends at lease expiry. Terminal transitions and command
+  acknowledgements retain a separate eight-minute, current-generation-only
+  grace; a newer generation always wins.
 - A daemon executes only machine-local allowlisted agent and workspace bindings.
 - The operator token creates, reads, cancels, and supplies input to tasks. A
   machine token cannot use operator endpoints.
@@ -55,6 +58,24 @@ When the configured CLI instead requires an environment credential, allowlist
 only that specific variable, for example `"env_allowlist": ["OPENAI_API_KEY"]`.
 Never allowlist a `SYMMETRY_CONTROL_*`, `SYMMETRY_AUTH_*`, or other Symmetry
 control credential for an agent process.
+
+### Terminal Delivery Recovery
+
+When an agent exits, the daemon persists `terminal_pending` before sending the
+terminal transition. That run no longer renews its lease and is omitted from
+active heartbeat and reconciliation. If the control plane is unavailable, the
+daemon keeps retrying only terminal delivery and command acknowledgement.
+
+An accepted terminal transition records `accepted`. A newer generation records
+`ownership_lost`; a matching generation beyond the terminal grace records
+`terminal_grace_expired`. Exact request replay remains valid after the deadline.
+A daemon restart may drain the journal with its original claimed epoch as long
+as no newer task generation exists.
+
+The local execution slot is released once on terminal or acknowledgement
+acceptance, or after at most eight minutes in `terminal_pending`. A local timeout
+does not discard the journal or workspace reservation. They remain available
+for later delivery and cleanup recovery.
 
 ## Daemon Configuration
 

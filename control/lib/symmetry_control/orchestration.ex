@@ -21,6 +21,8 @@ defmodule SymmetryControl.Orchestration do
   }
 
   @terminal_states ["completed", "failed", "cancelled", "expired"]
+  @terminal_targets ["completed", "failed", "cancelled"]
+  @terminal_grace_ms 8 * 60 * 1_000
   @capacity_bearing_states ["assigned", "claimed", "running", "waiting_for_input", "cancelling"]
   @default_history_limit 100
   @max_history_limit 500
@@ -1123,7 +1125,7 @@ defmodule SymmetryControl.Orchestration do
 
       Repo.transaction(fn ->
         {task, run, runtime} = lock_chain(run_id)
-        ensure_static_fence!(task, run, runtime, fence)
+        ensure_transition_static_fence!(task, run, runtime, fence, target_state)
 
         case Repo.get_by(RunTransition, run_id: run.id, transition_id: transition_id) do
           %RunTransition{request_hash: ^body_hash} = transition ->
@@ -1133,11 +1135,12 @@ defmodule SymmetryControl.Orchestration do
             rollback(:idempotency_conflict)
 
           nil ->
+            ensure_cancelled_transition_authority!(run, target_state)
+            ensure_transition_fence!(task, run, runtime, fence, target_state, current)
+
             transition_once!(
               task,
               run,
-              runtime,
-              fence,
               target_state,
               payload,
               transition_id,
@@ -1427,16 +1430,7 @@ defmodule SymmetryControl.Orchestration do
         command =
           Repo.one!(from command in Command, where: command.id == ^command_id, lock: "FOR UPDATE")
 
-        case run.state do
-          state when state in ["completed", "failed", "cancelled"] ->
-            ensure_static_fence!(task, run, runtime, fence)
-
-          "expired" ->
-            rollback(:ownership_lost)
-
-          _ ->
-            ensure_fence!(task, run, runtime, fence, current)
-        end
+        ensure_terminal_static_fence!(task, run, fence)
 
         cond do
           command.generation != run.generation ->
@@ -1452,23 +1446,28 @@ defmodule SymmetryControl.Orchestration do
           not is_nil(command.acknowledgement_id) ->
             rollback(:idempotency_conflict)
 
-          outcome not in ["applied", "rejected", "failed"] ->
-            rollback(:invalid_request)
-
-          outcome == "applied" and command.kind == "provide_input" and
-              run.state == "waiting_for_input" ->
-            rollback(:state_conflict)
-
           true ->
-            command
-            |> Command.changeset(%{
-              state: "acknowledged",
-              acknowledgement_id: acknowledgement_id,
-              acknowledgement_outcome: outcome,
-              acknowledged_at: current
-            })
-            |> stamp_update(current)
-            |> Repo.update!()
+            ensure_terminal_fence!(task, run, runtime, fence, current)
+
+            cond do
+              outcome not in ["applied", "rejected", "failed"] ->
+                rollback(:invalid_request)
+
+              outcome == "applied" and command.kind == "provide_input" and
+                  run.state == "waiting_for_input" ->
+                rollback(:state_conflict)
+
+              true ->
+                command
+                |> Command.changeset(%{
+                  state: "acknowledged",
+                  acknowledgement_id: acknowledgement_id,
+                  acknowledgement_outcome: outcome,
+                  acknowledged_at: current
+                })
+                |> stamp_update(current)
+                |> Repo.update!()
+            end
         end
       end)
     end
@@ -1659,17 +1658,14 @@ defmodule SymmetryControl.Orchestration do
   defp transition_once!(
          task,
          run,
-         runtime,
-         fence,
          target_state,
          payload,
          transition_id,
          body_hash,
          current
        ) do
-    ensure_fence!(task, run, runtime, fence, current)
-
     validate_transition!(run.state, target_state)
+    ensure_expired_run_can_settle_task!(task, run)
 
     run_attrs =
       case target_state do
@@ -1700,19 +1696,46 @@ defmodule SymmetryControl.Orchestration do
   defp task_attrs_for_transition("failed", payload), do: %{state: "failed", failure: payload}
   defp task_attrs_for_transition(target_state, _payload), do: %{state: target_state}
 
-  defp valid_transition?("claimed", "running"), do: true
+  defp ensure_expired_run_can_settle_task!(%Task{state: "queued"}, %Run{state: "expired"}),
+    do: :ok
+
+  defp ensure_expired_run_can_settle_task!(_task, %Run{state: "expired"}),
+    do: rollback(:ownership_lost)
+
+  defp ensure_expired_run_can_settle_task!(_task, _run), do: :ok
+
+  defp ensure_cancelled_transition_authority!(%Run{state: "cancelled"} = run, target_state) do
+    if target_state in @terminal_targets and
+         not Repo.exists?(
+           from transition in RunTransition,
+             where: transition.run_id == ^run.id and transition.state == "cancelled"
+         ) do
+      rollback(:ownership_lost)
+    end
+  end
+
+  defp ensure_cancelled_transition_authority!(_run, _target_state), do: :ok
+
+  defp valid_transition?("claimed", state) when state in ["running", "completed", "failed"],
+    do: true
 
   defp valid_transition?("running", state)
        when state in ["waiting_for_input", "completed", "failed"], do: true
 
-  defp valid_transition?("waiting_for_input", "running"), do: true
+  defp valid_transition?("waiting_for_input", state)
+       when state in ["running", "completed", "failed"],
+       do: true
+
   defp valid_transition?("cancelling", "cancelled"), do: true
   defp valid_transition?(_, _), do: false
 
   defp validate_transition!(current_state, target_state) do
     cond do
-      target_state not in ["running", "waiting_for_input", "completed", "failed", "cancelled"] ->
+      target_state not in ["running", "waiting_for_input" | @terminal_targets] ->
         rollback(:invalid_transition)
+
+      current_state == "expired" and target_state in @terminal_targets ->
+        :ok
 
       valid_transition?(current_state, target_state) ->
         :ok
@@ -1777,6 +1800,53 @@ defmodule SymmetryControl.Orchestration do
       run.state in ["claimed", "running", "waiting_for_input", "cancelling"] and
         not is_nil(run.lease_expires_at) and
         DateTime.compare(run.lease_expires_at, current) == :gt
+
+    unless valid?, do: rollback(:ownership_lost)
+  end
+
+  defp ensure_transition_fence!(task, run, runtime, fence, target_state, current) do
+    if target_state in @terminal_targets do
+      ensure_terminal_fence!(task, run, runtime, fence, current)
+    else
+      ensure_fence!(task, run, runtime, fence, current)
+    end
+  end
+
+  defp ensure_transition_static_fence!(task, run, runtime, fence, target_state) do
+    if target_state in @terminal_targets do
+      ensure_terminal_static_fence!(task, run, fence)
+    else
+      ensure_static_fence!(task, run, runtime, fence)
+    end
+  end
+
+  defp ensure_terminal_fence!(task, run, _runtime, fence, current) do
+    ensure_terminal_static_fence!(task, run, fence)
+
+    valid? =
+      (run.state in ["claimed", "running", "waiting_for_input", "cancelling"] and
+         not is_nil(run.lease_expires_at) and
+         DateTime.compare(run.lease_expires_at, current) == :gt) or
+        within_terminal_grace?(run, current)
+
+    unless valid?, do: rollback(:terminal_grace_expired)
+  end
+
+  defp within_terminal_grace?(%Run{lease_expires_at: %DateTime{} = lease_expires_at}, current) do
+    DateTime.compare(DateTime.add(lease_expires_at, @terminal_grace_ms, :millisecond), current) !=
+      :lt
+  end
+
+  defp within_terminal_grace?(_run, _current), do: false
+
+  defp ensure_terminal_static_fence!(task, run, fence) do
+    valid? =
+      run.runtime_id == value(fence, :runtime_id) and
+        run.claimed_runtime_epoch == value(fence, :runtime_epoch) and
+        run.generation == value(fence, :generation) and
+        task.current_generation == value(fence, :generation) and
+        run.claim_id == value(fence, :claim_id) and
+        run.lease_token == value(fence, :lease_token)
 
     unless valid?, do: rollback(:ownership_lost)
   end

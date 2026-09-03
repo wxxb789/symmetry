@@ -154,6 +154,546 @@ defmodule SymmetryControl.OrchestrationTest do
              )
   end
 
+  test "terminal transitions accept the fixed eight minute grace boundary after lease expiry" do
+    for {label, current, expected} <- [
+          {:before_expiry, DateTime.add(@now, 29, :second), :ok},
+          {:inside_grace, DateTime.add(@now, 509, :second), :ok},
+          {:grace_boundary, DateTime.add(@now, 510, :second), :ok},
+          {:outside_grace, DateTime.add(@now, 511, :second), :terminal_grace_expired}
+        ] do
+      %{machine: machine} = enroll_machine()
+      agent_profile = "terminal-grace-#{label}"
+      runtime = register_runtime(machine, agent_profile: agent_profile)
+
+      assert {:ok, _task, :created} =
+               Orchestration.submit_task(
+                 task_attrs(agent_profile: agent_profile),
+                 "terminal-grace-#{label}",
+                 now: @now
+               )
+
+      assert {:ok, run} = Orchestration.assign_one(now: @now)
+      fence = claim(run, runtime)
+
+      assert {:ok, %{state: "running"}} =
+               Orchestration.transition(
+                 run.id,
+                 fence,
+                 "running",
+                 %{},
+                 Ecto.UUID.generate(),
+                 now: @now
+               )
+
+      case expected do
+        :ok ->
+          assert {:ok, %{state: "completed"}} =
+                   Orchestration.transition(
+                     run.id,
+                     fence,
+                     "completed",
+                     %{"label" => Atom.to_string(label)},
+                     Ecto.UUID.generate(),
+                     now: current
+                   )
+
+        :terminal_grace_expired ->
+          assert {:error, :terminal_grace_expired} =
+                   Orchestration.transition(
+                     run.id,
+                     fence,
+                     "completed",
+                     %{},
+                     Ecto.UUID.generate(),
+                     now: current
+                   )
+      end
+    end
+  end
+
+  test "claimed and waiting runs can deliver terminal results during grace before reaping" do
+    for {local_state, target_state} <- [
+          {"claimed", "completed"},
+          {"claimed", "failed"},
+          {"waiting_for_input", "completed"},
+          {"waiting_for_input", "failed"}
+        ] do
+      {task, run, _runtime, fence} =
+        terminal_grace_fixture("#{local_state}-#{target_state}", local_state)
+
+      assert {:ok, %{state: ^target_state}} =
+               Orchestration.transition(
+                 run.id,
+                 fence,
+                 target_state,
+                 %{"source_state" => local_state},
+                 Ecto.UUID.generate(),
+                 now: DateTime.add(@now, 31, :second)
+               )
+
+      assert {:ok, %{state: ^target_state}} = Orchestration.fetch_run(run.id)
+      assert {:ok, %{state: ^target_state}} = Orchestration.fetch_task(task.id)
+    end
+  end
+
+  test "an expired current generation can complete within terminal grace" do
+    {task, run, _runtime, fence} = terminal_grace_fixture("expired-current")
+    expired_at = DateTime.add(@now, 30, :second)
+
+    assert %{expired_runs: 1} = Orchestration.expire(now: expired_at)
+    assert {:ok, %{state: "expired"}} = Orchestration.fetch_run(run.id)
+    assert {:ok, %{state: "queued", current_generation: 1}} = Orchestration.fetch_task(task.id)
+
+    assert {:ok, %{state: "completed"}} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "completed",
+               %{"summary" => "late terminal delivery"},
+               Ecto.UUID.generate(),
+               now: DateTime.add(expired_at, 1, :second)
+             )
+
+    assert {:ok, %{state: "completed"}} = Orchestration.fetch_run(run.id)
+
+    assert {:ok, %{state: "completed", result: %{"summary" => "late terminal delivery"}}} =
+             Orchestration.fetch_task(task.id)
+  end
+
+  test "terminal grace cannot overwrite an operator cancellation after expiry" do
+    for target_state <- ["completed", "failed", "cancelled"] do
+      {task, run, _runtime, fence} = terminal_grace_fixture("cancel-wins-#{target_state}")
+      expired_at = DateTime.add(@now, 30, :second)
+
+      assert %{expired_runs: 1} = Orchestration.expire(now: expired_at)
+
+      assert {:ok, %{state: "applied"}, :created} =
+               Orchestration.create_command(
+                 task.id,
+                 "cancel",
+                 %{},
+                 "cancel-wins-#{target_state}",
+                 now: expired_at
+               )
+
+      assert {:ok, %{state: "cancelled", current_generation: 1}} =
+               Orchestration.fetch_task(task.id)
+
+      assert {:error, :ownership_lost} =
+               Orchestration.transition(
+                 run.id,
+                 fence,
+                 target_state,
+                 %{"summary" => "stale terminal delivery"},
+                 Ecto.UUID.generate(),
+                 now: DateTime.add(expired_at, 1, :second)
+               )
+
+      assert {:ok, %{state: "expired"}} = Orchestration.fetch_run(run.id)
+      assert {:ok, %{state: "cancelled"}} = Orchestration.fetch_task(task.id)
+    end
+  end
+
+  test "acknowledgements honor terminal grace after reaper expiry" do
+    {expired_task, expired_run, _runtime, expired_fence} = terminal_grace_fixture("expired-ack")
+
+    assert {:ok, %{state: "waiting_for_input"}} =
+             Orchestration.transition(
+               expired_run.id,
+               expired_fence,
+               "waiting_for_input",
+               %{},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    assert {:ok, expired_command, :created} =
+             Orchestration.create_command(
+               expired_task.id,
+               "provide_input",
+               %{"answer" => "yes"},
+               "expired-ack-command",
+               now: @now
+             )
+
+    expired_at = DateTime.add(@now, 30, :second)
+    grace_boundary = DateTime.add(@now, 510, :second)
+    after_grace = DateTime.add(grace_boundary, 1, :second)
+
+    assert %{expired_runs: 1} = Orchestration.expire(now: expired_at)
+    assert {:ok, %{state: "expired"}} = Orchestration.fetch_run(expired_run.id)
+
+    expired_acknowledgement_id = Ecto.UUID.generate()
+
+    assert {:ok, %{state: "acknowledged"}} =
+             Orchestration.acknowledge_command(
+               expired_command.id,
+               expired_fence,
+               "applied",
+               expired_acknowledgement_id,
+               now: grace_boundary
+             )
+
+    assert {:error, :idempotency_conflict} =
+             Orchestration.acknowledge_command(
+               expired_command.id,
+               expired_fence,
+               "failed",
+               expired_acknowledgement_id,
+               now: after_grace
+             )
+
+    {cancel_task, cancel_run, _runtime, cancel_fence} = terminal_grace_fixture("cancelled-ack")
+
+    assert {:ok, cancel_command, :created} =
+             Orchestration.create_command(
+               cancel_task.id,
+               "cancel",
+               %{},
+               "cancelled-ack-command",
+               now: @now
+             )
+
+    assert %{expired_runs: 1} = Orchestration.expire(now: expired_at)
+    assert {:ok, %{state: "cancelled"}} = Orchestration.fetch_run(cancel_run.id)
+
+    cancel_acknowledgement_id = Ecto.UUID.generate()
+
+    assert {:ok, %{state: "acknowledged"}} =
+             Orchestration.acknowledge_command(
+               cancel_command.id,
+               cancel_fence,
+               "applied",
+               cancel_acknowledgement_id,
+               now: grace_boundary
+             )
+
+    assert {:error, :idempotency_conflict} =
+             Orchestration.acknowledge_command(
+               cancel_command.id,
+               cancel_fence,
+               "applied",
+               Ecto.UUID.generate(),
+               now: after_grace
+             )
+  end
+
+  test "a new acknowledgement after terminal grace expires" do
+    {task, _run, _runtime, fence} =
+      terminal_grace_fixture("unacknowledged-grace", "waiting_for_input")
+
+    assert {:ok, command, :created} =
+             Orchestration.create_command(
+               task.id,
+               "provide_input",
+               %{"answer" => "yes"},
+               "unacknowledged-grace-command",
+               now: @now
+             )
+
+    assert %{expired_runs: 1} = Orchestration.expire(now: DateTime.add(@now, 30, :second))
+
+    assert {:error, :terminal_grace_expired} =
+             Orchestration.acknowledge_command(
+               command.id,
+               fence,
+               "applied",
+               Ecto.UUID.generate(),
+               now: DateTime.add(@now, 511, :second)
+             )
+  end
+
+  test "terminal operations retain the claimed epoch across runtime re-registration" do
+    {task, run, runtime, fence} = terminal_grace_fixture("re-registration")
+
+    assert {:ok, %{state: "waiting_for_input"}} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "waiting_for_input",
+               %{},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    assert {:ok, command, :created} =
+             Orchestration.create_command(
+               task.id,
+               "provide_input",
+               %{"answer" => "yes"},
+               "re-registration-command",
+               now: @now
+             )
+
+    assert {:ok, %{state: "running"}} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "running",
+               %{},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    assert {:ok, reconnected_runtime} =
+             re_register_runtime(runtime, Ecto.UUID.generate(), DateTime.add(@now, 1, :second))
+
+    assert reconnected_runtime.id == runtime.id
+    assert reconnected_runtime.connection_epoch == runtime.connection_epoch + 1
+
+    assert {:error, :ownership_lost} =
+             Orchestration.renew_lease(run.id, fence, now: DateTime.add(@now, 1, :second))
+
+    assert {:error, :ownership_lost} =
+             Orchestration.append_events(
+               run.id,
+               fence,
+               [
+                 %{
+                   event_id: Ecto.UUID.generate(),
+                   sequence: 1,
+                   kind: "progress",
+                   payload: %{},
+                   occurred_at: @now
+                 }
+               ],
+               now: DateTime.add(@now, 1, :second)
+             )
+
+    assert {:error, :ownership_lost} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "waiting_for_input",
+               %{},
+               Ecto.UUID.generate(),
+               now: DateTime.add(@now, 1, :second)
+             )
+
+    expired_at = DateTime.add(@now, 30, :second)
+    terminal_at = DateTime.add(expired_at, 1, :second)
+    transition_id = Ecto.UUID.generate()
+
+    assert %{expired_runs: 1} = Orchestration.expire(now: expired_at)
+
+    assert {:ok, %{state: "completed"}} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "completed",
+               %{"summary" => "terminal after re-registration"},
+               transition_id,
+               now: terminal_at
+             )
+
+    assert {:ok, %{state: "completed"}} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "completed",
+               %{"summary" => "terminal after re-registration"},
+               transition_id,
+               now: DateTime.add(terminal_at, 1, :second)
+             )
+
+    acknowledgement_id = Ecto.UUID.generate()
+
+    assert {:ok, %{state: "acknowledged"}} =
+             Orchestration.acknowledge_command(
+               command.id,
+               fence,
+               "applied",
+               acknowledgement_id,
+               now: terminal_at
+             )
+
+    assert {:ok, %{state: "acknowledged", acknowledgement_id: ^acknowledgement_id}} =
+             Orchestration.acknowledge_command(
+               command.id,
+               fence,
+               "applied",
+               acknowledgement_id,
+               now: DateTime.add(terminal_at, 1, :second)
+             )
+
+    assert {:ok, %{state: "completed", current_generation: 1}} =
+             Orchestration.fetch_task(task.id)
+  end
+
+  test "a replacement generation fences terminal operations after runtime re-registration" do
+    {task, run, runtime, fence} = terminal_grace_fixture("re-registration-replacement")
+
+    assert {:ok, %{state: "waiting_for_input"}} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "waiting_for_input",
+               %{},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    assert {:ok, command, :created} =
+             Orchestration.create_command(
+               task.id,
+               "provide_input",
+               %{"answer" => "yes"},
+               "re-registration-replacement-command",
+               now: @now
+             )
+
+    assert {:ok, %{state: "running"}} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "running",
+               %{},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    assert {:ok, reconnected_runtime} =
+             re_register_runtime(runtime, Ecto.UUID.generate(), DateTime.add(@now, 1, :second))
+
+    expired_at = DateTime.add(@now, 30, :second)
+
+    assert %{expired_runs: 1} = Orchestration.expire(now: expired_at)
+
+    assert {:ok, _snapshot} =
+             Orchestration.heartbeat(
+               reconnected_runtime.id,
+               reconnected_runtime.connection_epoch,
+               [],
+               now: expired_at
+             )
+
+    assert {:ok, %{generation: 2}} = Orchestration.assign_one(now: expired_at)
+
+    assert {:error, :ownership_lost} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "completed",
+               %{},
+               Ecto.UUID.generate(),
+               now: DateTime.add(expired_at, 1, :second)
+             )
+
+    assert {:error, :ownership_lost} =
+             Orchestration.acknowledge_command(
+               command.id,
+               fence,
+               "applied",
+               Ecto.UUID.generate(),
+               now: DateTime.add(expired_at, 1, :second)
+             )
+
+    assert {:ok, %{state: "assigned", current_generation: 2}} =
+             Orchestration.fetch_task(task.id)
+  end
+
+  test "a replacement generation fences an expired generation's terminal delivery" do
+    {task, run, runtime, fence} = terminal_grace_fixture("replacement-generation")
+    expired_at = DateTime.add(@now, 30, :second)
+
+    assert %{expired_runs: 1} = Orchestration.expire(now: expired_at)
+
+    assert {:ok, _snapshot} =
+             Orchestration.heartbeat(runtime.id, runtime.connection_epoch, [], now: expired_at)
+
+    assert {:ok, replacement} = Orchestration.assign_one(now: expired_at)
+    assert replacement.generation == run.generation + 1
+
+    assert {:error, :ownership_lost} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "completed",
+               %{},
+               Ecto.UUID.generate(),
+               now: DateTime.add(expired_at, 1, :second)
+             )
+
+    assert {:ok, %{current_generation: generation}} = Orchestration.fetch_task(task.id)
+    assert generation == replacement.generation
+  end
+
+  test "terminal transition replays and acknowledgement conflicts survive grace" do
+    {_task, run, _runtime, fence} = terminal_grace_fixture("terminal-replay")
+    inside_grace = DateTime.add(@now, 509, :second)
+    outside_grace = DateTime.add(@now, 511, :second)
+    transition_id = Ecto.UUID.generate()
+    transition_payload = %{"summary" => "completed after expiry"}
+
+    assert {:ok, %{state: "completed"}} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "completed",
+               transition_payload,
+               transition_id,
+               now: inside_grace
+             )
+
+    assert {:ok, %{state: "completed", result: ^transition_payload}} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "completed",
+               transition_payload,
+               transition_id,
+               now: outside_grace
+             )
+
+    assert {:error, :terminal_grace_expired} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "completed",
+               transition_payload,
+               Ecto.UUID.generate(),
+               now: outside_grace
+             )
+
+    {ack_task, ack_run, _runtime, ack_fence} = terminal_grace_fixture("ack-replay")
+
+    assert {:ok, command, :created} =
+             Orchestration.create_command(ack_task.id, "cancel", %{}, "ack-replay-command",
+               now: @now
+             )
+
+    acknowledgement_id = Ecto.UUID.generate()
+
+    assert {:ok, %{state: "acknowledged"}} =
+             Orchestration.acknowledge_command(
+               command.id,
+               ack_fence,
+               "applied",
+               acknowledgement_id,
+               now: inside_grace
+             )
+
+    assert {:ok, %{state: "acknowledged", acknowledgement_id: ^acknowledgement_id}} =
+             Orchestration.acknowledge_command(
+               command.id,
+               ack_fence,
+               "applied",
+               acknowledgement_id,
+               now: outside_grace
+             )
+
+    assert {:error, :idempotency_conflict} =
+             Orchestration.acknowledge_command(
+               command.id,
+               ack_fence,
+               "applied",
+               Ecto.UUID.generate(),
+               now: outside_grace
+             )
+
+    assert {:ok, %{state: "cancelling"}} = Orchestration.fetch_run(ack_run.id)
+  end
+
   test "events and transitions are replay-safe and detect changed bodies" do
     %{machine: machine} = enroll_machine()
     runtime = register_runtime(machine)
@@ -340,7 +880,7 @@ defmodule SymmetryControl.OrchestrationTest do
              Orchestration.transition(
                run.id,
                fence,
-               "completed",
+               "waiting_for_input",
                %{},
                "00000000-0000-0000-0000-000000000048",
                now: @now
@@ -549,7 +1089,7 @@ defmodule SymmetryControl.OrchestrationTest do
              )
   end
 
-  test "input is bound to a waiting generation and expiry requeues without harming unrelated work" do
+  test "input is bound to a waiting generation and late terminal delivery preserves unrelated work" do
     %{machine: machine} = enroll_machine()
     runtime = register_runtime(machine)
     {:ok, task, :created} = Orchestration.submit_task(task_attrs(), "task-1", now: @now)
@@ -590,7 +1130,7 @@ defmodule SymmetryControl.OrchestrationTest do
     later = DateTime.add(@now, 31, :second)
     assert %{expired_runs: 1} = Orchestration.expire(now: later)
 
-    assert {:error, :ownership_lost} =
+    assert {:ok, %{state: "completed"}} =
              Orchestration.transition(
                run.id,
                fence,
@@ -603,8 +1143,8 @@ defmodule SymmetryControl.OrchestrationTest do
     assert {:error, :state_conflict} =
              Orchestration.provide_input(task.id, %{}, "input-2", now: later)
 
-    assert {:ok, requeued} = Orchestration.fetch_task(task.id)
-    assert requeued.state == "queued"
+    assert {:ok, completed} = Orchestration.fetch_task(task.id)
+    assert completed.state == "completed"
     assert {:ok, still_unaffected} = Orchestration.fetch_task(unaffected.id)
     assert still_unaffected.state == "queued"
   end
@@ -1244,7 +1784,7 @@ defmodule SymmetryControl.OrchestrationTest do
                    runtime_key: "default",
                    name: "Local Codex",
                    capacity: Keyword.get(overrides, :capacity, 1),
-                   agent_profile: "codex",
+                   agent_profile: Keyword.get(overrides, :agent_profile, "codex"),
                    workspace: "primary",
                    capabilities: %{}
                  }
@@ -1253,6 +1793,29 @@ defmodule SymmetryControl.OrchestrationTest do
              )
 
     runtime
+  end
+
+  defp re_register_runtime(runtime, daemon_instance_id, current) do
+    Orchestration.register_runtimes(
+      runtime.machine_id,
+      daemon_instance_id,
+      [
+        %{
+          runtime_key: runtime.runtime_key,
+          name: runtime.name,
+          capacity: runtime.capacity,
+          agent_profile: runtime.agent_profile,
+          workspace: runtime.workspace,
+          capabilities: runtime.capabilities,
+          heartbeat_interval_ms: runtime.heartbeat_interval_ms
+        }
+      ],
+      now: current
+    )
+    |> case do
+      {:ok, [reconnected]} -> {:ok, reconnected}
+      error -> error
+    end
   end
 
   defp task_attrs(overrides \\ []) do
@@ -1282,6 +1845,61 @@ defmodule SymmetryControl.OrchestrationTest do
       claim_id: claimed.claim_id,
       lease_token: claimed.lease_token
     }
+  end
+
+  defp terminal_grace_fixture(label, local_state \\ "running") do
+    %{machine: machine} = enroll_machine()
+    agent_profile = "terminal-grace-#{label}-#{System.unique_integer([:positive])}"
+    runtime = register_runtime(machine, agent_profile: agent_profile)
+
+    assert {:ok, task, :created} =
+             Orchestration.submit_task(
+               task_attrs(agent_profile: agent_profile),
+               "terminal-grace-#{label}-#{System.unique_integer([:positive])}",
+               now: @now
+             )
+
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+
+    case local_state do
+      "claimed" ->
+        :ok
+
+      "running" ->
+        assert {:ok, %{state: "running"}} =
+                 Orchestration.transition(
+                   run.id,
+                   fence,
+                   "running",
+                   %{},
+                   Ecto.UUID.generate(),
+                   now: @now
+                 )
+
+      "waiting_for_input" ->
+        assert {:ok, %{state: "running"}} =
+                 Orchestration.transition(
+                   run.id,
+                   fence,
+                   "running",
+                   %{},
+                   Ecto.UUID.generate(),
+                   now: @now
+                 )
+
+        assert {:ok, %{state: "waiting_for_input"}} =
+                 Orchestration.transition(
+                   run.id,
+                   fence,
+                   "waiting_for_input",
+                   %{},
+                   Ecto.UUID.generate(),
+                   now: @now
+                 )
+    end
+
+    {task, run, runtime, fence}
   end
 
   defp history_fixture do

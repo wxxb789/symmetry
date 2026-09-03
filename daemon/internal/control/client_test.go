@@ -225,6 +225,7 @@ func TestClientTypedErrorsAndResponseValidation(t *testing.T) {
 		wantError string
 	}{
 		{name: "ownership lost", status: http.StatusConflict, body: `{"error":{"code":"ownership_lost","message":"lease lost"}}`, wantCode: OwnershipLost, wantError: "ownership_lost"},
+		{name: "terminal grace expired", status: http.StatusConflict, body: `{"error":{"code":"terminal_grace_expired","message":"terminal delivery expired"}}`, wantCode: TerminalGraceExpired, wantError: "terminal_grace_expired"},
 		{name: "standard error", status: http.StatusTooManyRequests, body: `{"error":{"code":"rate_limited","message":"slow down"}}`, wantCode: RateLimited, wantError: "rate_limited"},
 		{name: "malformed success", status: http.StatusOK, body: `{`, wantError: "decode response"},
 		{name: "trailing success", status: http.StatusOK, body: `{} {}`, wantError: "one JSON value"},
@@ -253,6 +254,9 @@ func TestClientTypedErrorsAndResponseValidation(t *testing.T) {
 				}
 				if test.wantCode == OwnershipLost && !IsOwnershipLost(err) {
 					t.Error("IsOwnershipLost() = false")
+				}
+				if test.wantCode == TerminalGraceExpired && !IsTerminalGraceExpired(err) {
+					t.Error("IsTerminalGraceExpired() = false")
 				}
 			}
 			if err == nil || !strings.Contains(err.Error(), test.wantError) {

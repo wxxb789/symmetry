@@ -22,6 +22,8 @@ defmodule SymmetryControlWeb.Protocol do
     idempotency_conflict:
       {409, "idempotency_conflict", "idempotency key was reused with different input"},
     ownership_lost: {409, "ownership_lost", "execution lease is no longer authoritative"},
+    terminal_grace_expired:
+      {409, "terminal_grace_expired", "terminal delivery grace period has expired"},
     state_conflict: {409, "state_conflict", "state has already advanced"},
     assignment_expired: {410, "assignment_expired", "assignment has expired"},
     invalid_transition: {422, "invalid_transition", "state transition is invalid"}
