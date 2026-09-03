@@ -3,7 +3,9 @@ package control
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math/big"
 
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
@@ -90,18 +92,210 @@ func validateReconcileResponse(response protocol.ReconcileResponse) error {
 }
 
 func validateTaskResponse(operation, expectedTaskID string, response protocol.Task) error {
-	if response.TaskID == "" || response.State == "" {
-		return invalidResponse(operation, "task_id and state are required")
+	for _, field := range []string{"task_id", "state", "run_id", "generation", "work", "result", "failure"} {
+		if !response.HasField(field) {
+			return invalidResponse(operation, field+" is required")
+		}
+	}
+	if response.TaskID == "" || response.State == "" || response.Generation == nil || response.Work == nil {
+		return invalidResponse(operation, "task_id, state, generation, and work must be non-null")
 	}
 	if expectedTaskID != "" && response.TaskID != expectedTaskID {
 		return invalidResponse(operation, "task_id does not match the request")
 	}
-	if response.Work != nil {
-		if err := validateWork(*response.Work); err != nil {
-			return invalidResponse(operation, err.Error())
+	if err := validateWork(*response.Work); err != nil {
+		return invalidResponse(operation, err.Error())
+	}
+	if err := validateNullableJSONObject(response.Result); err != nil {
+		return invalidResponse(operation, "result "+err.Error())
+	}
+	if err := validateNullableJSONObject(response.Failure); err != nil {
+		return invalidResponse(operation, "failure "+err.Error())
+	}
+	if !isTaskState(response.State) {
+		return invalidResponse(operation, "state is not recognized")
+	}
+	if response.RunID == nil {
+		if *response.Generation != 0 {
+			return invalidResponse(operation, "runless task must have generation zero")
+		}
+	} else if *response.RunID == "" || *response.Generation <= 0 {
+		return invalidResponse(operation, "run_id requires a positive generation")
+	}
+	if requiresTaskRun(response.State) && response.RunID == nil {
+		return invalidResponse(operation, "state requires a run_id")
+	}
+	if response.State == "completed" && isJSONNull(response.Result) {
+		return invalidResponse(operation, "completed state requires result")
+	}
+	if response.State == "failed" && isJSONNull(response.Failure) {
+		return invalidResponse(operation, "failed state requires failure")
+	}
+	if response.State != "completed" && !isJSONNull(response.Result) {
+		return invalidResponse(operation, "only completed state may include result")
+	}
+	if response.State != "failed" && !isJSONNull(response.Failure) {
+		return invalidResponse(operation, "only failed state may include failure")
+	}
+	return nil
+}
+
+func validateTaskCommandRequest(request protocol.TaskCommandRequest) error {
+	switch request.Kind {
+	case "cancel":
+		if len(bytes.TrimSpace(request.Payload)) != 0 {
+			return errors.New("cancel command must omit payload")
+		}
+	case "provide_input":
+		if err := validateJSONObject(request.Payload); err != nil {
+			return fmt.Errorf("provide_input payload %w", err)
+		}
+	default:
+		return errors.New("task command kind is not recognized")
+	}
+	return nil
+}
+
+func validateTaskCommandResponse(operation, expectedTaskID string, request protocol.TaskCommandRequest, response protocol.TaskCommand) error {
+	for _, field := range []string{
+		"command_id", "task_id", "run_id", "generation", "kind", "payload", "state", "issued_at", "applied_at",
+		"acknowledgement_id", "acknowledgement_outcome", "acknowledged_at",
+	} {
+		if !response.HasField(field) {
+			return invalidResponse(operation, field+" is required")
+		}
+	}
+	if response.CommandID == "" || response.TaskID == "" || response.IssuedAt.IsZero() {
+		return invalidResponse(operation, "command_id, task_id, and issued_at must be non-null")
+	}
+	if expectedTaskID != "" && response.TaskID != expectedTaskID {
+		return invalidResponse(operation, "task_id does not match the request")
+	}
+	if (response.RunID == nil && response.Generation != nil) || (response.RunID != nil && response.Generation == nil) {
+		return invalidResponse(operation, "run_id and generation must be null together")
+	}
+	runBound := response.RunID != nil
+	if runBound && (*response.RunID == "" || *response.Generation <= 0) {
+		return invalidResponse(operation, "run_id requires a positive generation")
+	}
+	if response.Kind != "cancel" && response.Kind != "provide_input" {
+		return invalidResponse(operation, "kind is not recognized")
+	}
+	if err := validateJSONObject(response.Payload); err != nil {
+		return invalidResponse(operation, "payload "+err.Error())
+	}
+	if response.Kind != request.Kind || !sameCommandPayload(request, response.Payload) {
+		return invalidResponse(operation, "kind or payload does not match the request")
+	}
+	if response.State != "pending" && response.State != "applied" && response.State != "acknowledged" {
+		return invalidResponse(operation, "state is not recognized")
+	}
+	acknowledgementCount := 0
+	if response.AcknowledgementID != nil {
+		acknowledgementCount++
+	}
+	if response.AcknowledgementOutcome != nil {
+		acknowledgementCount++
+	}
+	if response.AcknowledgedAt != nil {
+		acknowledgementCount++
+	}
+	if acknowledgementCount != 0 && acknowledgementCount != 3 {
+		return invalidResponse(operation, "acknowledgement fields must be null together")
+	}
+	if response.AcknowledgementID != nil && (*response.AcknowledgementID == "" || *response.AcknowledgementOutcome == "" || response.AcknowledgedAt.IsZero()) {
+		return invalidResponse(operation, "acknowledgement fields are invalid")
+	}
+	if response.AcknowledgementOutcome != nil && *response.AcknowledgementOutcome != "applied" && *response.AcknowledgementOutcome != "rejected" && *response.AcknowledgementOutcome != "failed" {
+		return invalidResponse(operation, "acknowledgement outcome is not recognized")
+	}
+	if !runBound && (response.Kind != "cancel" || response.State != "applied") {
+		return invalidResponse(operation, "runless command must be an applied cancel")
+	}
+	if response.Kind == "provide_input" && !runBound {
+		return invalidResponse(operation, "provide_input command requires a run_id")
+	}
+	switch response.State {
+	case "pending":
+		if !runBound || response.AppliedAt != nil || acknowledgementCount != 0 {
+			return invalidResponse(operation, "pending command must be run-bound without applied_at or acknowledgement")
+		}
+	case "applied":
+		if response.Kind != "cancel" || response.AppliedAt == nil || response.AppliedAt.IsZero() || acknowledgementCount != 0 {
+			return invalidResponse(operation, "applied command must be a cancel with applied_at and no acknowledgement")
+		}
+	case "acknowledged":
+		if !runBound || response.AppliedAt != nil || acknowledgementCount != 3 {
+			return invalidResponse(operation, "acknowledged command must be run-bound with acknowledgement and no applied_at")
 		}
 	}
 	return nil
+}
+
+func sameCommandPayload(request protocol.TaskCommandRequest, response json.RawMessage) bool {
+	if request.Kind == "cancel" {
+		return sameJSONObject(json.RawMessage(`{}`), response)
+	}
+	return sameJSONObject(request.Payload, response)
+}
+
+func sameJSONObject(left, right json.RawMessage) bool {
+	var leftValue, rightValue map[string]any
+	leftDecoder := json.NewDecoder(bytes.NewReader(left))
+	leftDecoder.UseNumber()
+	rightDecoder := json.NewDecoder(bytes.NewReader(right))
+	rightDecoder.UseNumber()
+	if leftDecoder.Decode(&leftValue) != nil || rightDecoder.Decode(&rightValue) != nil {
+		return false
+	}
+	return sameJSONValue(leftValue, rightValue)
+}
+
+func sameJSONValue(left, right any) bool {
+	switch leftValue := left.(type) {
+	case nil:
+		return right == nil
+	case bool:
+		rightValue, ok := right.(bool)
+		return ok && leftValue == rightValue
+	case string:
+		rightValue, ok := right.(string)
+		return ok && leftValue == rightValue
+	case json.Number:
+		rightValue, ok := right.(json.Number)
+		return ok && sameJSONNumber(leftValue, rightValue)
+	case []any:
+		rightValue, ok := right.([]any)
+		if !ok || len(leftValue) != len(rightValue) {
+			return false
+		}
+		for index := range leftValue {
+			if !sameJSONValue(leftValue[index], rightValue[index]) {
+				return false
+			}
+		}
+		return true
+	case map[string]any:
+		rightValue, ok := right.(map[string]any)
+		if !ok || len(leftValue) != len(rightValue) {
+			return false
+		}
+		for key, leftItem := range leftValue {
+			rightItem, ok := rightValue[key]
+			if !ok || !sameJSONValue(leftItem, rightItem) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func sameJSONNumber(left, right json.Number) bool {
+	leftValue, leftOK := new(big.Rat).SetString(left.String())
+	rightValue, rightOK := new(big.Rat).SetString(right.String())
+	return leftOK && rightOK && leftValue.Cmp(rightValue) == 0
 }
 
 func validateSnapshotParts(operation string, assignments []protocol.Assignment, commands []protocol.Command) error {
@@ -121,8 +315,17 @@ func validateCommands(operation string, commands []protocol.Command) error {
 		if command.CommandID == "" || command.RunID == "" || command.Generation <= 0 || command.Kind == "" || command.IssuedAt.IsZero() {
 			return invalidResponse(operation, "each command requires identifiers, generation, kind, and issued_at")
 		}
-		if err := validateJSONValue(command.Payload); err != nil {
-			return invalidResponse(operation, "command payload "+err.Error())
+		switch command.Kind {
+		case "cancel":
+			if !sameJSONObject(command.Payload, json.RawMessage(`{}`)) {
+				return invalidResponse(operation, "cancel command payload must be an empty JSON object")
+			}
+		case "provide_input":
+			if err := validateJSONObject(command.Payload); err != nil {
+				return invalidResponse(operation, "provide_input command payload "+err.Error())
+			}
+		default:
+			return invalidResponse(operation, "command kind is not recognized")
 		}
 	}
 	return nil
@@ -132,7 +335,10 @@ func validateWork(work protocol.Work) error {
 	if work.Goal == "" || work.AgentProfile == "" || work.Workspace == "" {
 		return fmt.Errorf("work goal, agent_profile, and workspace are required")
 	}
-	if err := validateJSONValue(work.Input); err != nil {
+	if !work.HasField("input") {
+		return errors.New("work input is required")
+	}
+	if err := validateNullableJSONObject(work.Input); err != nil {
 		return fmt.Errorf("work input %w", err)
 	}
 	return nil
@@ -148,6 +354,51 @@ func validateJSONValue(value json.RawMessage) error {
 		return fmt.Errorf("must be valid JSON: %w", err)
 	}
 	return nil
+}
+
+func validateNullableJSONObject(value json.RawMessage) error {
+	trimmed := bytes.TrimSpace(value)
+	if len(trimmed) == 0 {
+		return errors.New("must be present")
+	}
+	if bytes.Equal(trimmed, []byte("null")) {
+		return nil
+	}
+	return validateJSONObject(trimmed)
+}
+
+func validateJSONObject(value json.RawMessage) error {
+	trimmed := bytes.TrimSpace(value)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return errors.New("must be a non-null JSON object")
+	}
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &decoded); err != nil || decoded == nil {
+		return errors.New("must be a JSON object")
+	}
+	return nil
+}
+
+func isJSONNull(value json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(value), []byte("null"))
+}
+
+func isTaskState(value string) bool {
+	switch value {
+	case "queued", "assigned", "claimed", "running", "waiting_for_input", "cancelling", "completed", "failed", "cancelled":
+		return true
+	default:
+		return false
+	}
+}
+
+func requiresTaskRun(state string) bool {
+	switch state {
+	case "assigned", "claimed", "running", "waiting_for_input", "cancelling", "completed", "failed":
+		return true
+	default:
+		return false
+	}
 }
 
 func invalidResponse(operation, reason string) error {

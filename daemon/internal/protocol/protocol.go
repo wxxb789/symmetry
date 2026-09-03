@@ -34,8 +34,7 @@ type RuntimeRegistration struct {
 
 // SessionRegistrationRequest registers a daemon process and its runtimes.
 type SessionRegistrationRequest struct {
-	DaemonInstanceID string                `json:"daemon_instance_id"`
-	Runtimes         []RuntimeRegistration `json:"runtimes"`
+	Runtimes []RuntimeRegistration `json:"runtimes"`
 }
 
 // RegisteredRuntime identifies the current epoch for a registered runtime.
@@ -75,7 +74,31 @@ type Work struct {
 	Goal         string          `json:"goal"`
 	AgentProfile string          `json:"agent_profile"`
 	Workspace    string          `json:"workspace"`
-	Input        json.RawMessage `json:"input"`
+	Input        json.RawMessage `json:"input,omitempty"`
+	present      map[string]struct{}
+}
+
+// UnmarshalJSON retains whether optional-looking protocol fields were sent.
+// Control-plane response validation distinguishes an omitted field from JSON null.
+func (work *Work) UnmarshalJSON(value []byte) error {
+	type wire Work
+	var decoded wire
+	if err := json.Unmarshal(value, &decoded); err != nil {
+		return err
+	}
+	present, err := presentFields(value)
+	if err != nil {
+		return err
+	}
+	*work = Work(decoded)
+	work.present = present
+	return nil
+}
+
+// HasField reports whether a field was present when this value was decoded.
+func (work Work) HasField(name string) bool {
+	_, ok := work.present[name]
+	return ok
 }
 
 // Assignment is a non-destructive runtime work assignment.
@@ -223,20 +246,97 @@ type TaskSubmitRequest struct {
 	Work Work `json:"work"`
 }
 
-// TaskInputRequest supplies structured human input using an idempotency key.
-type TaskInputRequest struct {
-	Input json.RawMessage `json:"input"`
+// TaskCommandRequest creates an operator command under an HTTP idempotency key.
+// Cancel requests omit Payload; provide_input requests require an object Payload.
+type TaskCommandRequest struct {
+	Kind    string          `json:"kind"`
+	Payload json.RawMessage `json:"payload,omitempty"`
+}
+
+// TaskCommand is an operator-facing command resource. Unlike daemon dispatch
+// commands, historical commands may not be associated with a run.
+type TaskCommand struct {
+	CommandID              string          `json:"command_id"`
+	TaskID                 string          `json:"task_id"`
+	RunID                  *string         `json:"run_id"`
+	Generation             *int64          `json:"generation"`
+	Kind                   string          `json:"kind"`
+	Payload                json.RawMessage `json:"payload"`
+	State                  string          `json:"state"`
+	IssuedAt               time.Time       `json:"issued_at"`
+	AppliedAt              *time.Time      `json:"applied_at"`
+	AcknowledgementID      *string         `json:"acknowledgement_id"`
+	AcknowledgementOutcome *string         `json:"acknowledgement_outcome"`
+	AcknowledgedAt         *time.Time      `json:"acknowledged_at"`
+	present                map[string]struct{}
+}
+
+// UnmarshalJSON retains response-field presence for strict protocol validation.
+func (command *TaskCommand) UnmarshalJSON(value []byte) error {
+	type wire TaskCommand
+	var decoded wire
+	if err := json.Unmarshal(value, &decoded); err != nil {
+		return err
+	}
+	present, err := presentFields(value)
+	if err != nil {
+		return err
+	}
+	*command = TaskCommand(decoded)
+	command.present = present
+	return nil
+}
+
+// HasField reports whether a field was present when this value was decoded.
+func (command TaskCommand) HasField(name string) bool {
+	_, ok := command.present[name]
+	return ok
 }
 
 // Task is the stable portion of a task-control response. Result fields are extensible.
 type Task struct {
 	TaskID     string          `json:"task_id"`
 	State      string          `json:"state"`
-	RunID      string          `json:"run_id"`
-	Generation int64           `json:"generation"`
+	RunID      *string         `json:"run_id"`
+	Generation *int64          `json:"generation"`
 	Work       *Work           `json:"work"`
 	Result     json.RawMessage `json:"result"`
 	Failure    json.RawMessage `json:"failure"`
+	present    map[string]struct{}
+}
+
+// UnmarshalJSON retains response-field presence for strict protocol validation.
+func (task *Task) UnmarshalJSON(value []byte) error {
+	type wire Task
+	var decoded wire
+	if err := json.Unmarshal(value, &decoded); err != nil {
+		return err
+	}
+	present, err := presentFields(value)
+	if err != nil {
+		return err
+	}
+	*task = Task(decoded)
+	task.present = present
+	return nil
+}
+
+// HasField reports whether a field was present when this value was decoded.
+func (task Task) HasField(name string) bool {
+	_, ok := task.present[name]
+	return ok
+}
+
+func presentFields(value []byte) (map[string]struct{}, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(value, &fields); err != nil {
+		return nil, err
+	}
+	present := make(map[string]struct{}, len(fields))
+	for name := range fields {
+		present[name] = struct{}{}
+	}
+	return present, nil
 }
 
 // ErrorEnvelope is the standard non-success response body.

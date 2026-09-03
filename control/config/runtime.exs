@@ -32,9 +32,16 @@ if config_env() != :test do
     end
   end
 
+  enrollment_token = token.("SYMMETRY_ENROLLMENT_TOKEN", "development-enrollment-token")
+  operator_token = token.("SYMMETRY_OPERATOR_TOKEN", "development-operator-token")
+
+  if enrollment_token == operator_token do
+    raise "SYMMETRY_ENROLLMENT_TOKEN and SYMMETRY_OPERATOR_TOKEN must differ"
+  end
+
   config :symmetry_control, :orchestration,
-    enrollment_token: token.("SYMMETRY_ENROLLMENT_TOKEN", "development-enrollment-token"),
-    operator_token: token.("SYMMETRY_OPERATOR_TOKEN", "development-operator-token"),
+    enrollment_token: enrollment_token,
+    operator_token: operator_token,
     heartbeat_interval_ms:
       String.to_integer(System.get_env("SYMMETRY_HEARTBEAT_INTERVAL_MS", "5000")),
     poll_interval_ms: String.to_integer(System.get_env("SYMMETRY_POLL_INTERVAL_MS", "5000")),

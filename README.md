@@ -55,6 +55,12 @@ protocol details, including interactive input behavior and command
 acknowledgement authentication, are in
 [`docs/protocol-v1.md`](docs/protocol-v1.md).
 
+The operator API creates tasks at `POST /api/v1/tasks` and creates durable
+cancel or input instructions at `POST /api/v1/tasks/{task_id}/commands`. Both
+write operations require `Idempotency-Key`; task commands return command
+resources rather than task snapshots. See the runbook for curl examples and
+the protocol document for response and status semantics.
+
 ## Docker Compose
 
 The default Compose stack migrates PostgreSQL, starts `control`, and runs a

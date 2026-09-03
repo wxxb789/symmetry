@@ -48,9 +48,7 @@ func TestCoreDaemonWorkflows(t *testing.T) {
 	})
 	queued := submit(t, operator, daemon, "capacity-queued", "success")
 	assertTaskRemainsQueued(t, operator, queued.TaskID, 1500*time.Millisecond)
-	if _, err := operator.CancelTask(context.Background(), slow.TaskID); err != nil {
-		t.Fatalf("cancel slow task: %v", err)
-	}
+	cancelTask(t, operator, slow.TaskID)
 	waitForTask(t, operator, slow.TaskID, 20*time.Second, func(task protocol.Task) bool {
 		return task.State == "cancelled"
 	})
@@ -62,8 +60,9 @@ func TestCoreDaemonWorkflows(t *testing.T) {
 	waitForTask(t, operator, waiting.TaskID, 20*time.Second, func(task protocol.Task) bool {
 		return task.State == "waiting_for_input"
 	})
-	input := protocol.TaskInputRequest{Input: json.RawMessage(`{"answer":"continue"}`)}
-	if _, err := operator.SubmitInput(context.Background(), waiting.TaskID, unique("input"), input); err != nil {
+	if _, err := operator.CreateTaskCommand(context.Background(), waiting.TaskID, unique("input"), protocol.TaskCommandRequest{
+		Kind: "provide_input", Payload: json.RawMessage(`{"answer":"continue"}`),
+	}); err != nil {
 		t.Fatalf("submit input: %v", err)
 	}
 	waitForTask(t, operator, waiting.TaskID, 20*time.Second, func(task protocol.Task) bool {
@@ -118,7 +117,7 @@ func TestStaleRuntimeEpochCannotOverwriteNewGeneration(t *testing.T) {
 	runtimeKey := unique("fence-runtime")
 	profile := unique("fence-profile")
 	workspace := unique("fence-workspace")
-	first := registerRuntime(t, machineClient, runtimeKey, profile, workspace)
+	first := registerRuntime(t, machineClient, machine.MachineID, runtimeKey, profile, workspace)
 	task, err := operator.SubmitTask(context.Background(), unique("fence-task"), protocol.TaskSubmitRequest{Work: protocol.Work{
 		Goal:         "prove stale fencing",
 		AgentProfile: profile,
@@ -137,7 +136,7 @@ func TestStaleRuntimeEpochCannotOverwriteNewGeneration(t *testing.T) {
 		t.Fatalf("claim first generation: %v", err)
 	}
 
-	second := registerRuntime(t, machineClient, runtimeKey, profile, workspace)
+	second := registerRuntime(t, machineClient, machine.MachineID, runtimeKey, profile, workspace)
 	if second.RuntimeEpoch <= first.RuntimeEpoch {
 		t.Fatalf("runtime epoch = %d, want greater than %d", second.RuntimeEpoch, first.RuntimeEpoch)
 	}
@@ -175,7 +174,7 @@ func TestStaleRuntimeEpochCannotOverwriteNewGeneration(t *testing.T) {
 		}
 	}
 	waitForTask(t, operator, task.TaskID, 10*time.Second, func(task protocol.Task) bool {
-		return task.State == "completed" && task.Generation == newAssignment.Generation
+		return task.State == "completed" && taskGeneration(t, task) == newAssignment.Generation
 	})
 }
 
@@ -250,12 +249,14 @@ func TestDaemonReconnectReclaimsExpiredRunWithNewGeneration(t *testing.T) {
 	firstRun := waitForTask(t, operator, task.TaskID, 20*time.Second, func(task protocol.Task) bool {
 		return task.State == "running"
 	})
+	firstRunID := taskRunID(t, firstRun)
+	firstGeneration := taskGeneration(t, firstRun)
 
 	stopFirst()
 	waitForDaemon(t, firstDone)
 	firstStopped = true
 	identityBefore := loadIdentity(t, stateDir)
-	journalBefore := loadJournal(t, stateDir, state.RunKey{RunID: firstRun.RunID, Generation: firstRun.Generation})
+	journalBefore := loadJournal(t, stateDir, state.RunKey{RunID: firstRunID, Generation: firstGeneration})
 	if journalBefore.LocalState != "running" {
 		t.Fatalf("recovered journal state = %q, want running", journalBefore.LocalState)
 	}
@@ -276,23 +277,22 @@ func TestDaemonReconnectReclaimsExpiredRunWithNewGeneration(t *testing.T) {
 	})
 
 	secondRun := waitForTask(t, operator, task.TaskID, 60*time.Second, func(task protocol.Task) bool {
-		return task.State == "running" && task.Generation > firstRun.Generation
+		return task.State == "running" && taskGeneration(t, task) > firstGeneration
 	})
-	if secondRun.Generation <= firstRun.Generation {
-		t.Fatalf("reclaimed generation = %d, want greater than %d", secondRun.Generation, firstRun.Generation)
+	secondGeneration := taskGeneration(t, secondRun)
+	if secondGeneration <= firstGeneration {
+		t.Fatalf("reclaimed generation = %d, want greater than %d", secondGeneration, firstGeneration)
 	}
 
-	if _, err := operator.CancelTask(context.Background(), task.TaskID); err != nil {
-		t.Fatalf("cancel reclaimed task: %v", err)
-	}
+	cancelTask(t, operator, task.TaskID)
 	waitForTask(t, operator, task.TaskID, 20*time.Second, func(task protocol.Task) bool {
-		return task.State == "cancelled" && task.Generation == secondRun.Generation
+		return task.State == "cancelled" && taskGeneration(t, task) == secondGeneration
 	})
 
 	stopSecond()
 	waitForDaemon(t, secondDone)
 	secondStopped = true
-	assertJournalMissing(t, stateDir, state.RunKey{RunID: firstRun.RunID, Generation: firstRun.Generation})
+	assertJournalMissing(t, stateDir, state.RunKey{RunID: firstRunID, Generation: firstGeneration})
 	identityAfter := loadIdentity(t, stateDir)
 	if identityAfter != identityBefore {
 		t.Fatalf("machine identity changed across reconnect")
@@ -321,6 +321,7 @@ func TestDaemonSurvivesControlRestart(t *testing.T) {
 	running := waitForTask(t, operator, task.TaskID, 20*time.Second, func(task protocol.Task) bool {
 		return task.State == "running"
 	})
+	runningGeneration := taskGeneration(t, running)
 	if err := os.WriteFile(marker, []byte(task.TaskID+"\n"), 0o600); err != nil {
 		t.Fatalf("write restart marker: %v", err)
 	}
@@ -328,12 +329,11 @@ func TestDaemonSurvivesControlRestart(t *testing.T) {
 	restored := waitForTask(t, operator, task.TaskID, 20*time.Second, func(task protocol.Task) bool {
 		return task.State == "running"
 	})
-	if restored.Generation != running.Generation {
-		t.Fatalf("task generation changed across control restart: %d -> %d", running.Generation, restored.Generation)
+	restoredGeneration := taskGeneration(t, restored)
+	if restoredGeneration != runningGeneration {
+		t.Fatalf("task generation changed across control restart: %d -> %d", runningGeneration, restoredGeneration)
 	}
-	if _, err := operator.CancelTask(context.Background(), task.TaskID); err != nil {
-		t.Fatalf("cancel task after control restart: %v", err)
-	}
+	cancelTask(t, operator, task.TaskID)
 	waitForTask(t, operator, task.TaskID, 20*time.Second, func(task protocol.Task) bool {
 		return task.State == "cancelled"
 	})
@@ -526,6 +526,13 @@ func submit(t *testing.T, operator *control.OperatorClient, daemon daemonRun, na
 	return task
 }
 
+func cancelTask(t *testing.T, operator *control.OperatorClient, taskID string) {
+	t.Helper()
+	if _, err := operator.CreateTaskCommand(context.Background(), taskID, unique("cancel"), protocol.TaskCommandRequest{Kind: "cancel"}); err != nil {
+		t.Fatalf("cancel task: %v", err)
+	}
+}
+
 func waitForTask(t *testing.T, operator *control.OperatorClient, taskID string, timeout time.Duration, ready func(protocol.Task) bool) protocol.Task {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -538,8 +545,38 @@ func waitForTask(t *testing.T, operator *control.OperatorClient, taskID string, 
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	t.Fatalf("task %s did not reach expected state; last state=%q generation=%d error=%v", taskID, last.State, last.Generation, lastErr)
+	t.Fatalf("task %s did not reach expected state; last state=%q run_id=%s generation=%s error=%v", taskID, last.State, optionalTaskRunID(last), optionalTaskGeneration(last), lastErr)
 	return protocol.Task{}
+}
+
+func taskRunID(t *testing.T, task protocol.Task) string {
+	t.Helper()
+	if task.RunID == nil || *task.RunID == "" {
+		t.Fatalf("task %s has no run_id", task.TaskID)
+	}
+	return *task.RunID
+}
+
+func taskGeneration(t *testing.T, task protocol.Task) int64 {
+	t.Helper()
+	if task.Generation == nil {
+		t.Fatalf("task %s has no generation", task.TaskID)
+	}
+	return *task.Generation
+}
+
+func optionalTaskRunID(task protocol.Task) string {
+	if task.RunID == nil {
+		return "<nil>"
+	}
+	return *task.RunID
+}
+
+func optionalTaskGeneration(task protocol.Task) string {
+	if task.Generation == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("%d", *task.Generation)
 }
 
 func getTask(t *testing.T, operator *control.OperatorClient, taskID string) protocol.Task {
@@ -566,10 +603,9 @@ func assertTaskRemainsQueued(t *testing.T, operator *control.OperatorClient, tas
 	}
 }
 
-func registerRuntime(t *testing.T, client *control.Client, runtimeKey, profile, workspace string) protocol.RegisteredRuntime {
+func registerRuntime(t *testing.T, client *control.Client, machineID, runtimeKey, profile, workspace string) protocol.RegisteredRuntime {
 	t.Helper()
-	response, err := client.RegisterSession(context.Background(), protocol.SessionRegistrationRequest{
-		DaemonInstanceID: mustID(t),
+	response, err := client.RegisterSession(context.Background(), machineID, mustID(t), protocol.SessionRegistrationRequest{
 		Runtimes: []protocol.RuntimeRegistration{{
 			RuntimeKey: runtimeKey, Name: runtimeKey, Capacity: 1,
 			AgentProfile: profile, Workspace: workspace, Capabilities: json.RawMessage(`{}`),

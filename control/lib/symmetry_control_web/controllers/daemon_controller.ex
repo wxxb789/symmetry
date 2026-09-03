@@ -5,56 +5,68 @@ defmodule SymmetryControlWeb.DaemonController do
   alias SymmetryControl.Orchestration.Scheduler
   alias SymmetryControlWeb.Protocol
 
-  def enroll(conn, %{"machine" => machine}) when is_map(machine) do
-    case Orchestration.enroll_machine(Protocol.normalize_map(machine),
-           enrollment_token: conn.assigns.enrollment_token,
-           expected_enrollment_token: Protocol.configured_token(:enrollment_token)
-         ) do
-      {:ok, %{machine: enrolled, token: token}} ->
-        conn |> put_status(:created) |> json(%{machine_id: enrolled.id, machine_token: token})
+  def enroll(conn, _params) do
+    case body_params(conn) do
+      %{"machine" => machine} when is_map(machine) ->
+        case Orchestration.enroll_machine(Protocol.normalize_map(machine),
+               enrollment_token: conn.assigns.enrollment_token,
+               expected_enrollment_token: Protocol.configured_token(:enrollment_token)
+             ) do
+          {:ok, %{machine: enrolled, token: token}} ->
+            conn
+            |> put_status(:created)
+            |> json(%{machine_id: enrolled.id, machine_token: token})
 
-      {:error, reason} ->
-        Protocol.error(conn, reason)
+          {:error, reason} ->
+            Protocol.error(conn, reason)
+        end
+
+      _ ->
+        Protocol.error(conn, :invalid_request)
     end
   end
 
-  def enroll(conn, _params), do: Protocol.error(conn, :invalid_request)
+  def register_session(conn, _params) do
+    machine_id = path_param(conn, "machine_id")
+    daemon_instance_id = path_param(conn, "daemon_instance_id")
+    body = body_params(conn)
 
-  def register_session(conn, %{"daemon_instance_id" => daemon_instance_id, "runtimes" => runtimes})
-      when is_list(runtimes) do
-    if Enum.all?(runtimes, &is_map/1) do
+    with %{"runtimes" => runtimes} when is_list(runtimes) <- body,
+         true <- Enum.all?(runtimes, &is_map/1) do
       configured_heartbeat = config(:heartbeat_interval_ms)
 
       specifications =
-        Enum.map(runtimes, fn runtime ->
+        body
+        |> mutation_params(["machine_id", "daemon_instance_id"])
+        |> Map.fetch!("runtimes")
+        |> Enum.map(fn runtime ->
           runtime
           |> Protocol.normalize_map()
           |> Map.put_new("heartbeat_interval_ms", configured_heartbeat)
         end)
 
-      case Orchestration.register_runtimes(
-             conn.assigns.machine.id,
-             daemon_instance_id,
-             specifications
-           ) do
-        {:ok, registered} ->
-          Scheduler.wake()
-          conn |> put_status(:created) |> json(Protocol.session(registered))
-
-        {:error, reason} ->
-          Protocol.error(conn, reason)
+      with :ok <- owns_machine(conn, machine_id),
+           {:ok, registered} <-
+             Orchestration.register_runtimes(machine_id, daemon_instance_id, specifications) do
+        Scheduler.wake()
+        json(conn, Protocol.session(registered))
+      else
+        {:error, reason} -> Protocol.error(conn, reason)
       end
     else
-      Protocol.error(conn, :invalid_request)
+      _ -> Protocol.error(conn, :invalid_request)
     end
   end
 
-  def register_session(conn, _params), do: Protocol.error(conn, :invalid_request)
+  def heartbeat(conn, _params) do
+    runtime_id = path_param(conn, "runtime_id")
+    body = body_params(conn)
+    request = mutation_params(body, ["runtime_id"])
 
-  def heartbeat(conn, %{"runtime_id" => runtime_id, "runtime_epoch" => runtime_epoch} = params) do
-    with :ok <- owns_runtime(conn, runtime_id),
+    with {:ok, runtime_epoch} <- body_value(body, "runtime_epoch"),
+         :ok <- owns_runtime(conn, runtime_id),
          {:ok, snapshot} <-
-           Orchestration.heartbeat(runtime_id, runtime_epoch, Map.get(params, "active_runs", [])) do
+           Orchestration.heartbeat(runtime_id, runtime_epoch, Map.get(request, "active_runs", [])) do
       Scheduler.wake()
       json(conn, Protocol.snapshot(snapshot))
     else
@@ -62,10 +74,11 @@ defmodule SymmetryControlWeb.DaemonController do
     end
   end
 
-  def heartbeat(conn, _params), do: Protocol.error(conn, :invalid_request)
+  def work(conn, _params) do
+    runtime_id = path_param(conn, "runtime_id")
 
-  def work(conn, %{"runtime_id" => runtime_id, "runtime_epoch" => runtime_epoch}) do
-    with :ok <- owns_runtime(conn, runtime_id),
+    with {:ok, runtime_epoch} <- query_value(conn, "runtime_epoch"),
+         :ok <- owns_runtime(conn, runtime_id),
          {:ok, epoch} <- integer(runtime_epoch),
          {:ok, snapshot} <- Orchestration.work_snapshot(runtime_id, epoch) do
       json(conn, Protocol.snapshot(snapshot))
@@ -74,14 +87,18 @@ defmodule SymmetryControlWeb.DaemonController do
     end
   end
 
-  def work(conn, _params), do: Protocol.error(conn, :invalid_request)
+  def claim(conn, _params) do
+    run_id = path_param(conn, "run_id")
+    claim_id = path_param(conn, "claim_id")
 
-  def claim(conn, %{"run_id" => run_id} = params) do
+    request =
+      conn
+      |> mutation_params(["run_id", "claim_id"])
+      |> Map.put("claim_id", claim_id)
+
     with :ok <- owns_run(conn, run_id),
          {:ok, run} <-
-           Orchestration.claim(run_id, Protocol.normalize_map(params),
-             lease_duration_ms: config(:lease_duration_ms)
-           ),
+           Orchestration.claim(run_id, request, lease_duration_ms: config(:lease_duration_ms)),
          {:ok, %{task: task}} <- Orchestration.task_snapshot(run.task_id) do
       json(conn, Protocol.claimed_run(run, task))
     else
@@ -89,8 +106,9 @@ defmodule SymmetryControlWeb.DaemonController do
     end
   end
 
-  def heartbeat_run(conn, %{"run_id" => run_id} = params) do
-    fence = Protocol.normalize_map(params)
+  def heartbeat_run(conn, _params) do
+    run_id = path_param(conn, "run_id")
+    fence = conn |> mutation_params(["run_id"]) |> Protocol.normalize_map()
 
     with :ok <- owns_run(conn, run_id),
          {:ok, run} <-
@@ -106,28 +124,35 @@ defmodule SymmetryControlWeb.DaemonController do
     end
   end
 
-  def append_events(conn, %{"run_id" => run_id, "events" => events} = params) do
-    with :ok <- owns_run(conn, run_id),
+  def append_events(conn, _params) do
+    run_id = path_param(conn, "run_id")
+    body = body_params(conn)
+    request = mutation_params(body, ["run_id"]) |> Protocol.normalize_map()
+    fence = Map.delete(request, "events")
+
+    with {:ok, events} <- body_value(body, "events"),
+         :ok <- owns_run(conn, run_id),
          {:ok, events} <- Protocol.parse_event_times(Protocol.normalize_map(events)),
-         {:ok, stored} <-
-           Orchestration.append_events(run_id, Protocol.normalize_map(params), events) do
-      conn |> put_status(:created) |> json(%{events: Enum.map(stored, &event/1)})
+         {:ok, _stored} <- Orchestration.append_events(run_id, fence, events) do
+      send_resp(conn, :no_content, "")
     else
       {:error, reason} -> Protocol.error(conn, reason)
     end
   end
 
-  def append_events(conn, _params), do: Protocol.error(conn, :invalid_request)
+  def transition(conn, _params) do
+    run_id = path_param(conn, "run_id")
+    transition_id = path_param(conn, "transition_id")
+    body = body_params(conn)
 
-  def transition(
-        conn,
-        %{"run_id" => run_id, "state" => target, "transition_id" => transition_id} = params
-      ) do
-    payload = params |> Map.get("payload", %{}) |> Protocol.normalize_map()
-    fence = Protocol.normalize_map(params)
+    request =
+      mutation_params(body, ["run_id", "transition_id"]) |> Protocol.normalize_map()
 
-    with :ok <- owns_run(conn, run_id),
-         {:ok, run} <- Orchestration.transition(run_id, fence, target, payload, transition_id) do
+    payload = Map.get(request, "payload", %{})
+
+    with {:ok, target} <- body_value(body, "state"),
+         :ok <- owns_run(conn, run_id),
+         {:ok, run} <- Orchestration.transition(run_id, request, target, payload, transition_id) do
       if target in ["completed", "failed", "cancelled"], do: Scheduler.wake()
       json(conn, Protocol.run(run))
     else
@@ -135,36 +160,40 @@ defmodule SymmetryControlWeb.DaemonController do
     end
   end
 
-  def transition(conn, _params), do: Protocol.error(conn, :invalid_request)
+  def reconcile(conn, _params) do
+    runtime_id = path_param(conn, "runtime_id")
+    body = body_params(conn)
+    request = mutation_params(body, ["runtime_id"])
 
-  def reconcile(conn, %{"runtime_id" => runtime_id, "runtime_epoch" => runtime_epoch} = params) do
-    with :ok <- owns_runtime(conn, runtime_id),
+    with {:ok, runtime_epoch} <- body_value(body, "runtime_epoch"),
+         :ok <- owns_runtime(conn, runtime_id),
          {:ok, snapshot} <-
-           Orchestration.reconcile(runtime_id, runtime_epoch, Map.get(params, "runs", [])) do
+           Orchestration.reconcile(runtime_id, runtime_epoch, Map.get(request, "runs", [])) do
       json(conn, Protocol.reconcile(snapshot))
     else
       {:error, reason} -> Protocol.error(conn, reason)
     end
   end
 
-  def reconcile(conn, _params), do: Protocol.error(conn, :invalid_request)
+  def acknowledge_command(conn, _params) do
+    command_id = path_param(conn, "command_id")
+    acknowledgement_id = path_param(conn, "ack_id")
+    body = body_params(conn)
 
-  def acknowledge_command(
-        conn,
-        %{"command_id" => command_id, "outcome" => outcome, "ack_id" => acknowledgement_id} =
-          params
-      ) do
-    if Map.has_key?(params, "acknowledgement_id") do
+    if Map.has_key?(body, "acknowledgement_id") do
       Protocol.error(conn, :invalid_request)
     else
-      with :ok <- owns_command(conn, command_id),
+      fence =
+        body
+        |> Map.drop(["command_id", "ack_id", "run_id"])
+        |> Protocol.normalize_map()
+
+      with {:ok, run_id, outcome} <- acknowledgement_body(body),
+           :ok <- owns_command(conn, command_id),
+           {:ok, command} <- Orchestration.fetch_command(command_id),
+           :ok <- command_run_matches?(command, run_id),
            {:ok, command} <-
-             Orchestration.acknowledge_command(
-               command_id,
-               Protocol.normalize_map(params),
-               outcome,
-               acknowledgement_id
-             ) do
+             Orchestration.acknowledge_command(command_id, fence, outcome, acknowledgement_id) do
         json(conn, Protocol.command(command))
       else
         {:error, reason} -> Protocol.error(conn, reason)
@@ -172,16 +201,9 @@ defmodule SymmetryControlWeb.DaemonController do
     end
   end
 
-  def acknowledge_command(conn, _params), do: Protocol.error(conn, :invalid_request)
-
-  defp event(event),
-    do: %{
-      event_id: event.event_id,
-      sequence: event.sequence,
-      kind: event.kind,
-      payload: event.payload,
-      occurred_at: DateTime.to_iso8601(event.occurred_at)
-    }
+  defp owns_machine(conn, machine_id) do
+    if machine_id == conn.assigns.machine.id, do: :ok, else: {:error, :forbidden}
+  end
 
   defp owns_runtime(conn, runtime_id) do
     with {:ok, runtime} <- Orchestration.fetch_runtime(runtime_id) do
@@ -204,6 +226,39 @@ defmodule SymmetryControlWeb.DaemonController do
         else: {:error, :forbidden}
     end
   end
+
+  defp command_run_matches?(%{run_id: run_id}, run_id) when is_binary(run_id), do: :ok
+  defp command_run_matches?(_command, _run_id), do: {:error, :invalid_request}
+
+  defp acknowledgement_body(%{"run_id" => run_id, "outcome" => outcome})
+       when is_binary(run_id) and is_binary(outcome),
+       do: {:ok, run_id, outcome}
+
+  defp acknowledgement_body(_body), do: {:error, :invalid_request}
+
+  defp mutation_params(conn, path_keys) when is_struct(conn, Plug.Conn),
+    do: conn |> body_params() |> Map.drop(path_keys)
+
+  defp mutation_params(params, path_keys) when is_map(params), do: Map.drop(params, path_keys)
+
+  defp body_params(conn) when is_map(conn.body_params), do: conn.body_params
+  defp body_params(_conn), do: %{}
+
+  defp body_value(body, key) do
+    case Map.fetch(body, key) do
+      {:ok, value} -> {:ok, value}
+      :error -> {:error, :invalid_request}
+    end
+  end
+
+  defp query_value(conn, key) do
+    case Map.fetch(fetch_query_params(conn).query_params, key) do
+      {:ok, value} -> {:ok, value}
+      :error -> {:error, :invalid_request}
+    end
+  end
+
+  defp path_param(conn, key), do: Map.fetch!(conn.path_params, key)
 
   defp integer(value) when is_integer(value) and value > 0, do: {:ok, value}
 

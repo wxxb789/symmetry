@@ -31,10 +31,11 @@ func TestClientProtocolRequests(t *testing.T) {
 		wantAuth   string
 		wantHeader string
 		wantBody   string
+		status     int
 		response   string
 	}{
 		{
-			name: "enroll", method: http.MethodPost, path: "/api/v1/daemon/enroll", wantAuth: "Bearer enrollment-token",
+			name: "enroll", method: http.MethodPost, path: "/api/v1/machines", wantAuth: "Bearer enrollment-token",
 			wantBody: `{"machine":{"name":"builder-01"}}`, response: `{"machine_id":"machine-1","machine_token":"issued-token"}`,
 			invoke: func(ctx context.Context, client *Client) error {
 				response, err := enrollmentClient.Enroll(ctx, "enrollment-token", protocol.EnrollRequest{Machine: protocol.MachineEnrollment{Name: "builder-01"}})
@@ -45,11 +46,11 @@ func TestClientProtocolRequests(t *testing.T) {
 			},
 		},
 		{
-			name: "register session", method: http.MethodPost, path: "/api/v1/daemon/sessions", wantAuth: "Bearer " + machineToken,
-			wantBody: `{"daemon_instance_id":"daemon-1","runtimes":[{"runtime_key":"default","name":"Local Codex","capacity":1,"agent_profile":"codex","workspace":"primary","capabilities":{}}]}`,
+			name: "register session", method: http.MethodPut, path: "/api/v1/machines/machine-1/sessions/daemon-1", wantAuth: "Bearer " + machineToken,
+			wantBody: `{"runtimes":[{"runtime_key":"default","name":"Local Codex","capacity":1,"agent_profile":"codex","workspace":"primary","capabilities":{}}]}`,
 			response: `{"runtimes":[{"runtime_key":"default","runtime_id":"runtime-1","runtime_epoch":3}],"heartbeat_interval_ms":5000,"poll_interval_ms":5000,"lease_duration_ms":30000,"websocket_path":"/socket/websocket?vsn=2.0.0"}`,
 			invoke: func(ctx context.Context, client *Client) error {
-				response, err := client.RegisterSession(ctx, protocol.SessionRegistrationRequest{DaemonInstanceID: "daemon-1", Runtimes: []protocol.RuntimeRegistration{{RuntimeKey: "default", Name: "Local Codex", Capacity: 1, AgentProfile: "codex", Workspace: "primary", Capabilities: json.RawMessage(`{}`)}}})
+				response, err := client.RegisterSession(ctx, "machine-1", "daemon-1", protocol.SessionRegistrationRequest{Runtimes: []protocol.RuntimeRegistration{{RuntimeKey: "default", Name: "Local Codex", Capacity: 1, AgentProfile: "codex", Workspace: "primary", Capabilities: json.RawMessage(`{}`)}}})
 				if err == nil && (len(response.Runtimes) != 1 || response.Runtimes[0].RuntimeEpoch != 3) {
 					return fmt.Errorf("unexpected session response: %#v", response)
 				}
@@ -57,7 +58,7 @@ func TestClientProtocolRequests(t *testing.T) {
 			},
 		},
 		{
-			name: "runtime heartbeat", method: http.MethodPost, path: "/api/v1/runtimes/runtime-1/heartbeat", wantAuth: "Bearer " + machineToken,
+			name: "runtime heartbeat", method: http.MethodPatch, path: "/api/v1/runtimes/runtime-1", wantAuth: "Bearer " + machineToken,
 			wantBody: `{"runtime_epoch":3,"active_runs":[]}`, response: snapshotJSON(now),
 			invoke: func(ctx context.Context, client *Client) error {
 				_, err := client.Heartbeat(ctx, "runtime-1", protocol.RuntimeHeartbeatRequest{RuntimeEpoch: 3, ActiveRuns: []protocol.ActiveRun{}})
@@ -65,10 +66,10 @@ func TestClientProtocolRequests(t *testing.T) {
 			},
 		},
 		{
-			name: "work", method: http.MethodGet, path: "/api/v1/runtimes/runtime-1/work?runtime_epoch=3", wantAuth: "Bearer " + machineToken,
+			name: "dispatch", method: http.MethodGet, path: "/api/v1/runtimes/runtime-1/dispatch?runtime_epoch=3", wantAuth: "Bearer " + machineToken,
 			response: snapshotJSON(now),
 			invoke: func(ctx context.Context, client *Client) error {
-				response, err := client.Work(ctx, "runtime-1", 3)
+				response, err := client.Dispatch(ctx, "runtime-1", 3)
 				if err == nil && len(response.Assignments) != 1 {
 					return fmt.Errorf("assignments = %d", len(response.Assignments))
 				}
@@ -76,8 +77,8 @@ func TestClientProtocolRequests(t *testing.T) {
 			},
 		},
 		{
-			name: "claim", method: http.MethodPost, path: "/api/v1/runs/run-1/claim", wantAuth: "Bearer " + machineToken,
-			wantBody: `{"runtime_id":"runtime-1","runtime_epoch":3,"generation":2,"claim_id":"claim-1"}`,
+			name: "claim", method: http.MethodPut, path: "/api/v1/runs/run-1/claims/claim-1", wantAuth: "Bearer " + machineToken,
+			wantBody: `{"runtime_id":"runtime-1","runtime_epoch":3,"generation":2}`,
 			response: `{"run_id":"run-1","task_id":"task-1","generation":2,"claim_id":"claim-1","lease_token":"lease-1","lease_expires_at":"2026-09-02T00:00:30Z","work":{"goal":"work","agent_profile":"codex","workspace":"primary","input":{}}}`,
 			invoke: func(ctx context.Context, client *Client) error {
 				_, err := client.Claim(ctx, "run-1", protocol.ClaimRequest{RuntimeID: "runtime-1", RuntimeEpoch: 3, Generation: 2, ClaimID: "claim-1"})
@@ -85,7 +86,7 @@ func TestClientProtocolRequests(t *testing.T) {
 			},
 		},
 		{
-			name: "renew lease", method: http.MethodPost, path: "/api/v1/runs/run-1/heartbeat", wantAuth: "Bearer " + machineToken,
+			name: "renew lease", method: http.MethodPatch, path: "/api/v1/runs/run-1/lease", wantAuth: "Bearer " + machineToken,
 			wantBody: `{"runtime_id":"runtime-1","runtime_epoch":3,"generation":2,"claim_id":"claim-1","lease_token":"lease-1"}`,
 			response: `{"lease_expires_at":"2026-09-02T00:00:45Z","commands":[]}`,
 			invoke: func(ctx context.Context, client *Client) error {
@@ -96,21 +97,21 @@ func TestClientProtocolRequests(t *testing.T) {
 		{
 			name: "append events", method: http.MethodPost, path: "/api/v1/runs/run-1/events", wantAuth: "Bearer " + machineToken,
 			wantBody: `{"runtime_id":"runtime-1","runtime_epoch":3,"generation":2,"claim_id":"claim-1","lease_token":"lease-1","events":[{"event_id":"event-1","sequence":4,"kind":"progress","occurred_at":"2026-09-02T00:00:10Z","payload":{"message":"running"}}]}`,
-			response: `{}`,
+			status:   http.StatusNoContent,
 			invoke: func(ctx context.Context, client *Client) error {
 				return client.AppendEvents(ctx, "run-1", protocol.AppendEventsRequest{Fence: fence(), Events: []protocol.RunEvent{{EventID: "event-1", Sequence: 4, Kind: "progress", OccurredAt: time.Date(2026, time.September, 2, 0, 0, 10, 0, time.UTC), Payload: json.RawMessage(`{"message":"running"}`)}}})
 			},
 		},
 		{
-			name: "transition", method: http.MethodPost, path: "/api/v1/runs/run-1/state", wantAuth: "Bearer " + machineToken,
-			wantBody: `{"runtime_id":"runtime-1","runtime_epoch":3,"generation":2,"claim_id":"claim-1","lease_token":"lease-1","transition_id":"transition-1","state":"waiting_for_input","payload":{"question":"branch"}}`,
+			name: "transition", method: http.MethodPut, path: "/api/v1/runs/run-1/transitions/transition-1", wantAuth: "Bearer " + machineToken,
+			wantBody: `{"runtime_id":"runtime-1","runtime_epoch":3,"generation":2,"claim_id":"claim-1","lease_token":"lease-1","state":"waiting_for_input","payload":{"question":"branch"}}`,
 			response: `{}`,
 			invoke: func(ctx context.Context, client *Client) error {
 				return client.Transition(ctx, "run-1", protocol.StateTransitionRequest{Fence: fence(), TransitionID: "transition-1", State: "waiting_for_input", Payload: json.RawMessage(`{"question":"branch"}`)})
 			},
 		},
 		{
-			name: "reconcile", method: http.MethodPost, path: "/api/v1/runtimes/runtime-1/reconcile", wantAuth: "Bearer " + machineToken,
+			name: "reconcile", method: http.MethodPut, path: "/api/v1/runtimes/runtime-1/reconciliation", wantAuth: "Bearer " + machineToken,
 			wantBody: `{"runtime_epoch":3,"runs":[]}`, response: `{"decisions":[],"assignments":[],"commands":[]}`,
 			invoke: func(ctx context.Context, client *Client) error {
 				_, err := client.Reconcile(ctx, "runtime-1", protocol.ReconcileRequest{RuntimeEpoch: 3, Runs: []protocol.ReconcileRun{}})
@@ -118,8 +119,8 @@ func TestClientProtocolRequests(t *testing.T) {
 			},
 		},
 		{
-			name: "acknowledge command", method: http.MethodPost, path: "/api/v1/commands/command-1/ack", wantAuth: "Bearer " + machineToken,
-			wantBody: `{"runtime_id":"runtime-1","runtime_epoch":3,"generation":2,"claim_id":"claim-1","lease_token":"lease-1","run_id":"run-1","command_id":"command-1","outcome":"applied","ack_id":"ack-1"}`,
+			name: "acknowledge command", method: http.MethodPut, path: "/api/v1/commands/command-1/acknowledgements/ack-1", wantAuth: "Bearer " + machineToken,
+			wantBody: `{"runtime_id":"runtime-1","runtime_epoch":3,"generation":2,"claim_id":"claim-1","lease_token":"lease-1","run_id":"run-1","outcome":"applied"}`,
 			response: `{}`,
 			invoke: func(ctx context.Context, client *Client) error {
 				return client.AcknowledgeCommand(ctx, "command-1", protocol.CommandAcknowledgement{Fence: fence(), RunID: "run-1", CommandID: "command-1", Outcome: "applied", AckID: "ack-1"})
@@ -127,7 +128,7 @@ func TestClientProtocolRequests(t *testing.T) {
 		},
 		{
 			name: "submit task", method: http.MethodPost, path: "/api/v1/tasks", wantAuth: "Bearer operator-token", wantHeader: "submit-1",
-			wantBody: `{"work":{"goal":"work","agent_profile":"codex","workspace":"primary","input":{}}}`, response: `{"task_id":"task-1","state":"queued"}`,
+			wantBody: `{"work":{"goal":"work","agent_profile":"codex","workspace":"primary","input":{}}}`, response: taskJSON(),
 			invoke: func(ctx context.Context, client *Client) error {
 				response, err := operatorClient.SubmitTask(ctx, "submit-1", protocol.TaskSubmitRequest{Work: work()})
 				if err == nil && response.TaskID != "task-1" {
@@ -138,25 +139,25 @@ func TestClientProtocolRequests(t *testing.T) {
 		},
 		{
 			name: "get task", method: http.MethodGet, path: "/api/v1/tasks/task-1", wantAuth: "Bearer operator-token",
-			response: `{"task_id":"task-1","state":"queued","future_field":{"kept":"compatible"}}`,
+			response: taskJSONWithUnknownField(),
 			invoke: func(ctx context.Context, client *Client) error {
 				_, err := operatorClient.GetTask(ctx, "task-1")
 				return err
 			},
 		},
 		{
-			name: "cancel task", method: http.MethodPost, path: "/api/v1/tasks/task-1/cancel", wantAuth: "Bearer operator-token",
-			wantBody: `{}`, response: `{"task_id":"task-1","state":"cancelled"}`,
+			name: "create cancel command", method: http.MethodPost, path: "/api/v1/tasks/task-1/commands", wantAuth: "Bearer operator-token", wantHeader: "cancel-1",
+			wantBody: `{"kind":"cancel"}`, response: commandJSON(),
 			invoke: func(ctx context.Context, client *Client) error {
-				_, err := operatorClient.CancelTask(ctx, "task-1")
+				_, err := operatorClient.CreateTaskCommand(ctx, "task-1", "cancel-1", protocol.TaskCommandRequest{Kind: "cancel"})
 				return err
 			},
 		},
 		{
-			name: "submit input", method: http.MethodPost, path: "/api/v1/tasks/task-1/input", wantAuth: "Bearer operator-token", wantHeader: "input-1",
-			wantBody: `{"input":{"answer":"main"}}`, response: `{"task_id":"task-1","state":"waiting_for_input"}`,
+			name: "create provide input command", method: http.MethodPost, path: "/api/v1/tasks/task-1/commands", wantAuth: "Bearer operator-token", wantHeader: "input-1",
+			wantBody: `{"kind":"provide_input","payload":{"answer":"main"}}`, response: provideInputCommandJSON(`{"answer":"main"}`),
 			invoke: func(ctx context.Context, client *Client) error {
-				_, err := operatorClient.SubmitInput(ctx, "task-1", "input-1", protocol.TaskInputRequest{Input: json.RawMessage(`{"answer":"main"}`)})
+				_, err := operatorClient.CreateTaskCommand(ctx, "task-1", "input-1", protocol.TaskCommandRequest{Kind: "provide_input", Payload: json.RawMessage(`{"answer":"main"}`)})
 				return err
 			},
 		},
@@ -185,8 +186,13 @@ func TestClientProtocolRequests(t *testing.T) {
 					}
 					assertJSONEqual(t, test.wantBody, string(body))
 				}
-				writer.Header().Set("Content-Type", "application/json")
-				_, _ = io.WriteString(writer, test.response)
+				if test.status != 0 {
+					writer.WriteHeader(test.status)
+				}
+				if test.response != "" {
+					writer.Header().Set("Content-Type", "application/json")
+					_, _ = io.WriteString(writer, test.response)
+				}
 			}))
 			defer server.Close()
 
@@ -327,7 +333,7 @@ func TestClientUsesProtocolAPIPrefixForOriginBaseURL(t *testing.T) {
 		if got, want := request.URL.Path, "/api/v1/tasks/task-1"; got != want {
 			t.Errorf("path = %q, want %q", got, want)
 		}
-		_, _ = io.WriteString(writer, `{"task_id":"task-1","state":"queued"}`)
+		_, _ = io.WriteString(writer, taskJSON())
 	}))
 	defer server.Close()
 
@@ -382,4 +388,92 @@ func work() protocol.Work {
 
 func snapshotJSON(now time.Time) string {
 	return fmt.Sprintf(`{"assignments":[{"run_id":"run-1","task_id":"task-1","generation":2,"assignment_expires_at":%q,"work":{"goal":"work","agent_profile":"codex","workspace":"primary","input":{}}}],"commands":[{"command_id":"command-1","run_id":"run-1","generation":2,"kind":"cancel","payload":{},"issued_at":%q}],"server_time":%q}`, now.Format(time.RFC3339), now.Add(-9*time.Second).Format(time.RFC3339), now.Add(-8*time.Second).Format(time.RFC3339))
+}
+
+func TestU2CreateTaskCommandUsesTaskOwnedRoute(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if got, want := request.Method, http.MethodPost; got != want {
+			t.Errorf("method = %q, want %q", got, want)
+		}
+		if got, want := request.URL.Path, "/api/v1/tasks/task-1/commands"; got != want {
+			t.Errorf("path = %q, want %q", got, want)
+		}
+		if got, want := request.Header.Get("Idempotency-Key"), "command-1"; got != want {
+			t.Errorf("Idempotency-Key = %q, want %q", got, want)
+		}
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertJSONEqual(t, `{"kind":"cancel"}`, string(body))
+		writer.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(writer, commandJSON())
+	}))
+	defer server.Close()
+
+	client, err := NewOperatorClient(server.URL+"/api", "operator-token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.CreateTaskCommand(context.Background(), "task-1", "command-1", protocol.TaskCommandRequest{Kind: "cancel"})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSubmitTaskPreservesOptionalWorkInputSerialization(t *testing.T) {
+	tests := []struct {
+		name  string
+		input json.RawMessage
+		want  string
+	}{
+		{name: "omitted", want: `{"work":{"goal":"work","agent_profile":"codex","workspace":"primary"}}`},
+		{name: "explicit null", input: json.RawMessage(`null`), want: `{"work":{"goal":"work","agent_profile":"codex","workspace":"primary","input":null}}`},
+		{name: "empty object", input: json.RawMessage(`{}`), want: `{"work":{"goal":"work","agent_profile":"codex","workspace":"primary","input":{}}}`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				body, err := io.ReadAll(request.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertJSONEqual(t, test.want, string(body))
+				_, _ = io.WriteString(writer, taskJSON())
+			}))
+			defer server.Close()
+
+			_, err := newOperatorClient(t, server).SubmitTask(context.Background(), "task-1", protocol.TaskSubmitRequest{Work: protocol.Work{
+				Goal: "work", AgentProfile: "codex", Workspace: "primary", Input: test.input,
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func commandJSON() string {
+	return `{"command_id":"command-1","task_id":"task-1","run_id":"run-1","generation":1,"kind":"cancel","payload":{},"state":"pending","issued_at":"2026-09-03T00:00:00Z","applied_at":null,"acknowledgement_id":null,"acknowledgement_outcome":null,"acknowledged_at":null}`
+}
+
+func runlessAppliedCommandJSON() string {
+	return `{"command_id":"command-1","task_id":"task-1","run_id":null,"generation":null,"kind":"cancel","payload":{},"state":"applied","issued_at":"2026-09-03T00:00:00Z","applied_at":"2026-09-03T00:00:01Z","acknowledgement_id":null,"acknowledgement_outcome":null,"acknowledged_at":null}`
+}
+
+func acknowledgedCommandJSON() string {
+	return `{"command_id":"command-1","task_id":"task-1","run_id":"run-1","generation":1,"kind":"cancel","payload":{},"state":"acknowledged","issued_at":"2026-09-03T00:00:00Z","applied_at":null,"acknowledgement_id":"ack-1","acknowledgement_outcome":"applied","acknowledged_at":"2026-09-03T00:00:01Z"}`
+}
+
+func provideInputCommandJSON(payload string) string {
+	return strings.Replace(strings.Replace(commandJSON(), `"kind":"cancel"`, `"kind":"provide_input"`, 1), `"payload":{}`, `"payload":`+payload, 1)
+}
+
+func taskJSON() string {
+	return `{"task_id":"task-1","state":"queued","run_id":null,"generation":0,"work":{"goal":"work","agent_profile":"codex","workspace":"primary","input":{}},"result":null,"failure":null}`
+}
+
+func taskJSONWithUnknownField() string {
+	return `{"task_id":"task-1","state":"queued","run_id":null,"generation":0,"work":{"goal":"work","agent_profile":"codex","workspace":"primary","input":{}},"result":null,"failure":null,"future_field":{"kept":"compatible"}}`
 }

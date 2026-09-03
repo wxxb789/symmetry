@@ -26,21 +26,21 @@ defmodule SymmetryControlWeb.Router do
   scope "/api/v1", SymmetryControlWeb do
     pipe_through [:api, :enrollment]
 
-    post "/daemon/enroll", DaemonController, :enroll
+    post "/machines", DaemonController, :enroll
   end
 
   scope "/api/v1", SymmetryControlWeb do
     pipe_through [:api, :machine]
 
-    post "/daemon/sessions", DaemonController, :register_session
-    post "/runtimes/:runtime_id/heartbeat", DaemonController, :heartbeat
-    get "/runtimes/:runtime_id/work", DaemonController, :work
-    post "/runtimes/:runtime_id/reconcile", DaemonController, :reconcile
-    post "/runs/:run_id/claim", DaemonController, :claim
-    post "/runs/:run_id/heartbeat", DaemonController, :heartbeat_run
+    put "/machines/:machine_id/sessions/:daemon_instance_id", DaemonController, :register_session
+    patch "/runtimes/:runtime_id", DaemonController, :heartbeat
+    get "/runtimes/:runtime_id/dispatch", DaemonController, :work
+    put "/runtimes/:runtime_id/reconciliation", DaemonController, :reconcile
+    put "/runs/:run_id/claims/:claim_id", DaemonController, :claim
+    patch "/runs/:run_id/lease", DaemonController, :heartbeat_run
     post "/runs/:run_id/events", DaemonController, :append_events
-    post "/runs/:run_id/state", DaemonController, :transition
-    post "/commands/:command_id/ack", DaemonController, :acknowledge_command
+    put "/runs/:run_id/transitions/:transition_id", DaemonController, :transition
+    put "/commands/:command_id/acknowledgements/:ack_id", DaemonController, :acknowledge_command
   end
 
   scope "/api/v1", SymmetryControlWeb do
@@ -48,7 +48,6 @@ defmodule SymmetryControlWeb.Router do
 
     post "/tasks", TaskController, :create
     get "/tasks/:task_id", TaskController, :show
-    post "/tasks/:task_id/cancel", TaskController, :cancel
-    post "/tasks/:task_id/input", TaskController, :input
+    post "/tasks/:task_id/commands", TaskController, :command
   end
 end

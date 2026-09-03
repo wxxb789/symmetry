@@ -4,6 +4,7 @@ defmodule SymmetryControlWeb.Protocol do
   import Plug.Conn
   import Phoenix.Controller, only: [json: 2]
 
+  alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.{Command, Run, Runtime, Task}
 
   @error_statuses %{
@@ -37,6 +38,22 @@ defmodule SymmetryControlWeb.Protocol do
 
   def configured_token(kind),
     do: Application.fetch_env!(:symmetry_control, :orchestration) |> Keyword.fetch!(kind)
+
+  def credential_class(token) when is_binary(token) do
+    cond do
+      secure_compare(token, configured_token(:enrollment_token)) ->
+        :enrollment
+
+      secure_compare(token, configured_token(:operator_token)) ->
+        :operator
+
+      true ->
+        case Orchestration.authenticate_machine(token) do
+          {:ok, machine} -> {:machine, machine}
+          {:error, :unauthenticated} -> :unknown
+        end
+    end
+  end
 
   def secure_compare(left, right)
       when is_binary(left) and is_binary(right) and byte_size(left) == byte_size(right),
@@ -100,11 +117,14 @@ defmodule SymmetryControlWeb.Protocol do
   def command(%Command{} = command) do
     %{
       command_id: command.id,
+      task_id: command.task_id,
       run_id: command.run_id,
       generation: command.generation,
       kind: command.kind,
       payload: command.payload,
+      state: command.state,
       issued_at: iso8601(command.inserted_at),
+      applied_at: iso8601(command.applied_at),
       acknowledgement_id: command.acknowledgement_id,
       acknowledgement_outcome: command.acknowledgement_outcome,
       acknowledged_at: iso8601(command.acknowledged_at)

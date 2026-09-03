@@ -74,19 +74,22 @@ before lease expiry, the reaper finalizes the run and task as `cancelled`.
 
 ## Authentication
 
-`POST /api/v1/daemon/enroll` accepts the configured one-time enrollment bearer
-token and returns a stable `machine_id` plus a machine bearer token. The control
-plane stores only the SHA-256 digest of the machine token.
+`POST /api/v1/machines` accepts the configured one-time enrollment bearer token
+and returns a stable `machine_id` plus a machine bearer token. The control plane
+stores only the SHA-256 digest of the machine token.
 
 All other daemon HTTP endpoints use the machine bearer token. The WebSocket
 upgrade sends the same token in `X-Symmetry-Token`, because Phoenix exposes
 `x-` request headers to socket connect callbacks without putting credentials in
 the URL. A runtime must belong to the authenticated machine. The Task Control
 API uses a separate operator bearer token; an execution machine credential
-cannot submit, cancel, or provide input to tasks. Command acknowledgement is
-not a Task Control API operation: it is a machine-authenticated, fenced daemon
-mutation. Coding-agent, Git, SSH, and repository-provider credentials remain
-on the execution machine and must not appear in protocol payloads.
+cannot submit tasks or create task commands. Command acknowledgement is not a
+Task Control API operation: it is a machine-authenticated, fenced daemon
+mutation. An invalid, unknown, or missing credential returns `401`; a valid
+credential of the wrong class, or a machine credential that does not own a
+resource, returns `403`. Coding-agent, Git, SSH, and repository-provider
+credentials remain on the execution machine and must not appear in protocol
+payloads.
 
 Production traffic must use TLS. Plain HTTP is permitted only on an explicitly
 trusted local or container network.
@@ -96,7 +99,7 @@ trusted local or container network.
 ### Enroll A Machine
 
 ```http
-POST /api/v1/daemon/enroll
+POST /api/v1/machines
 Authorization: Bearer <enrollment-token>
 Content-Type: application/json
 ```
@@ -119,13 +122,12 @@ Content-Type: application/json
 ### Register A Daemon Session And Runtime
 
 ```http
-POST /api/v1/daemon/sessions
+PUT /api/v1/machines/{machine_id}/sessions/{daemon_instance_id}
 Authorization: Bearer <machine-token>
 ```
 
 ```json
 {
-  "daemon_instance_id": "uuid",
   "runtimes": [
     {
       "runtime_key": "default",
@@ -166,11 +168,11 @@ A runtime is online when its last valid heartbeat is no older than three
 heartbeat intervals. The control plane marks it offline after that threshold,
 but does not reassign its work until each run's durable lease expires.
 
-### Heartbeat And Work Snapshot
+### Update Runtime And Read Dispatch Snapshot
 
 ```http
-POST /api/v1/runtimes/{runtime_id}/heartbeat
-GET  /api/v1/runtimes/{runtime_id}/work?runtime_epoch={epoch}
+PATCH /api/v1/runtimes/{runtime_id}
+GET   /api/v1/runtimes/{runtime_id}/dispatch?runtime_epoch={epoch}
 ```
 
 The heartbeat request carries active run references:
@@ -191,8 +193,9 @@ The heartbeat request carries active run references:
 }
 ```
 
-Both heartbeat and work return the complete current snapshot for that runtime,
-not a destructive queue read:
+The runtime update returns the complete current dispatch snapshot for that
+runtime. Dispatch is also available as a non-destructive GET for recovery and
+polling:
 
 ```json
 {
@@ -232,22 +235,21 @@ human-input commands must remain deliverable during active execution.
 ### Claim And Renew A Run
 
 ```http
-POST /api/v1/runs/{run_id}/claim
-POST /api/v1/runs/{run_id}/heartbeat
+PUT   /api/v1/runs/{run_id}/claims/{claim_id}
+PATCH /api/v1/runs/{run_id}/lease
 ```
 
 Before the request, the daemon atomically writes a local journal entry containing
-`run_id`, `generation`, the current `runtime_epoch`, and a new `claim_id`.
-It reuses that `claim_id` after an HTTP timeout or network reconnect by the
-same daemon instance and never launches the process until the returned lease is
-durably journaled.
+`run_id`, `generation`, the current `runtime_epoch`, and a new `claim_id`. It
+uses that `claim_id` in the claim resource path after an HTTP timeout or network
+reconnect by the same daemon instance and never launches the process until the
+returned lease is durably journaled.
 
 ```json
 {
   "runtime_id": "uuid",
   "runtime_epoch": 3,
-  "generation": 2,
-  "claim_id": "uuid"
+  "generation": 2
 }
 ```
 
@@ -304,11 +306,12 @@ It never revives an expired or terminal run:
 
 ```http
 POST /api/v1/runs/{run_id}/events
-POST /api/v1/runs/{run_id}/state
+PUT  /api/v1/runs/{run_id}/transitions/{transition_id}
 ```
 
 Both requests carry the complete fence and `claim_id`. Events are append-only
-and deduplicated by `(run_id, event_id)`:
+and deduplicated by `(run_id, event_id)`. Event append returns `204 No Content`;
+clients must not decode or expect a response body:
 
 ```json
 {
@@ -329,7 +332,7 @@ and deduplicated by `(run_id, event_id)`:
 }
 ```
 
-Materialized lifecycle state changes only through the state endpoint:
+Materialized lifecycle state changes only through the transition resource:
 
 ```json
 {
@@ -338,7 +341,6 @@ Materialized lifecycle state changes only through the state endpoint:
   "generation": 2,
   "claim_id": "uuid",
   "lease_token": "uuid",
-  "transition_id": "uuid",
   "state": "waiting_for_input",
   "payload": {
     "question": "Choose the target branch",
@@ -357,7 +359,7 @@ already advanced under a different ID returns `409 state_conflict`.
 ### Reconcile After Start Or Reconnect
 
 ```http
-POST /api/v1/runtimes/{runtime_id}/reconcile
+PUT /api/v1/runtimes/{runtime_id}/reconciliation
 ```
 
 The daemon sends its current local run journal:
@@ -412,19 +414,19 @@ terminal result in its journal without sending another terminal transition.
 ```http
 POST /api/v1/tasks
 GET  /api/v1/tasks/{task_id}
-POST /api/v1/tasks/{task_id}/cancel
-POST /api/v1/tasks/{task_id}/input
+POST /api/v1/tasks/{task_id}/commands
 ```
 
-Task submission accepts an `Idempotency-Key` header and a work object containing
-`goal`, `agent_profile`, `workspace`, and structured `input`. The scheduler
-matches the requested agent profile and workspace against a runtime before
-assignment. Repeating the same key and payload returns the existing task;
-reusing the key with different payload returns `409 idempotency_conflict`.
+Task submission requires an `Idempotency-Key` header and accepts a work object
+containing `goal`, `agent_profile`, `workspace`, and structured `input`. The
+scheduler matches the requested agent profile and workspace against a runtime
+before assignment. Repeating the same key and payload returns the existing task;
+reusing the key with different payload returns `409 idempotency_conflict`. An
+omitted task input is stored and returned as `null`; an explicit `{}` stays `{}`.
 All Task Control API requests authenticate with the configured operator bearer
 token rather than a daemon machine token.
 
-Task create, read, cancel, and input return the same stable shape:
+Task creation and reads return the same stable shape:
 
 ```json
 {
@@ -443,41 +445,83 @@ Task create, read, cancel, and input return the same stable shape:
 }
 ```
 
-Cancellation locks the task and its current run when one exists. A queued task
-with no capacity-bearing run moves directly to `cancelled` and creates no
-command. If `completed`, `failed`, or `cancelled` committed first,
-cancellation returns the existing terminal result. Only a live run moves with
-its task to `cancelling` and inserts one durable `cancel` command in the same
-transaction. The command includes the current `run_id` and `generation`. It
-remains in heartbeat, work, and reconcile snapshots until the daemon reports
-the run `cancelled`. Duplicate cancellation returns the same command. Expiry
-finalizes a still-cancelling run as cancelled.
+Task commands require an `Idempotency-Key` header and accept exactly one of the
+following request bodies:
 
-Human input is accepted only while the current run is `waiting_for_input`.
-`Idempotency-Key` identifies the input submission. In one transaction the
-control plane locks the task and current run, rechecks the waiting state, and
-stores a `provide_input` command bound to that `run_id` and `generation`.
-If cancellation, expiry, reclaim, or a terminal result committed first, the
-input is rejected and is never delivered to a later generation. The run stays
-`waiting_for_input` until the daemon delivers the input, acknowledges the
-command, and makes a fenced transition back to `running`. The command remains
-visible until both acknowledgement and the target lifecycle transition exist,
-so either request may be retried after an unknown outcome.
+```http
+POST /api/v1/tasks/{task_id}/commands
+Authorization: Bearer <operator-token>
+Idempotency-Key: <client-generated-key>
+Content-Type: application/json
+```
+
+```json
+{"kind":"cancel"}
+```
+
+```json
+{"kind":"provide_input","payload":{"answer":"continue"}}
+```
+
+`cancel` forbids `payload` and normalizes its stored payload to `{}`.
+`provide_input` requires a non-null JSON object; `{}` is valid and remains
+distinct from an omitted payload. A command response is a command resource,
+not a task snapshot, and has these required fields. Clients must reject a
+response that omits any required field, including a nullable field; unknown
+fields are additive and clients must accept them.
+
+```json
+{
+  "command_id": "uuid",
+  "task_id": "uuid",
+  "run_id": "uuid",
+  "generation": 2,
+  "kind": "provide_input",
+  "payload": {"answer": "continue"},
+  "state": "pending",
+  "issued_at": "2026-09-03T00:00:20Z",
+  "applied_at": null,
+  "acknowledgement_id": null,
+  "acknowledgement_outcome": null,
+  "acknowledged_at": null
+}
+```
+
+`run_id` and `generation` are nullable together. `applied_at`, `acknowledgement_id`,
+`acknowledgement_outcome`, and `acknowledged_at` are nullable. Command state is
+`pending`, `applied`, or `acknowledged`; acknowledgement outcome is `applied`,
+`rejected`, or `failed`. A new command returns `201`; an exact replay of
+`(task_id, Idempotency-Key, kind, payload)` returns the original command with
+`200`; reusing a key with different normalized content returns
+`409 idempotency_conflict`; a disallowed new command returns
+`409 state_conflict`. Replay and idempotency-conflict resolution occur before
+current-state validation.
+
+Cancellation locks the task and current run when one exists. A queued
+cancellation creates and applies a runless command in one transaction, and it
+never enters daemon dispatch. An assigned-but-unclaimed cancellation binds the
+existing `run_id` and `generation` and is immediately `applied`. A claimed-run
+command remains `pending`, daemon-delivered, and fenced. Human input is
+accepted only while the current run is `waiting_for_input`; its command is
+atomically bound to the current run and generation, never a later generation.
+The daemon acknowledges and transitions the run back to `running`; both writes
+are independently retryable.
 
 ### Acknowledge A Command
 
 ```http
-POST /api/v1/commands/{command_id}/ack
+PUT /api/v1/commands/{command_id}/acknowledgements/{ack_id}
 Authorization: Bearer <machine-token>
 Content-Type: application/json
 ```
 
 This is a machine-authenticated, fenced daemon mutation, not an operator Task
-Control endpoint. The acknowledgement body carries the complete execution fence
-(`runtime_id`, `runtime_epoch`, `run_id`, `generation`, `claim_id`, and
-`lease_token`), plus `command_id`, outcome (`applied`, `rejected`, or
-`failed`), and an `ack_id` UUID. The authenticated machine must own the
-runtime named by the fence.
+Control endpoint. The acknowledgement body carries `run_id`, the verified fence
+fields `runtime_id`, `runtime_epoch`, `generation`, `claim_id`, and
+`lease_token`, plus outcome (`applied`, `rejected`, or `failed`). The supplied
+`run_id` must own the command. The caller supplies `command_id` and `ack_id` in
+the resource path. The authenticated machine must own the runtime named by the
+fence.
 Repeating the same acknowledgement UUID and body is idempotent; reusing it with
 a different body returns `409 idempotency_conflict`. Acknowledgement records
 delivery outcome but never changes run state or removes a lifecycle command by
@@ -534,8 +578,9 @@ exception details:
   They follow the idempotent and unknown-outcome retry rules below.
 
 - `400 invalid_request`: malformed or unsupported input; do not retry unchanged.
-- `401 unauthenticated`: missing or invalid credential.
-- `403 forbidden`: authenticated machine does not own the resource.
+- `401 unauthenticated`: missing, invalid, or unknown credential.
+- `403 forbidden`: valid credential has the wrong class or the authenticated
+  machine does not own the resource.
 - `404 not_found`: resource is absent; reconcile local state.
 - `409 capacity_exhausted`: retry after the next snapshot.
 - `409 idempotency_conflict`: the same key was reused with different input.

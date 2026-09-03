@@ -36,9 +36,9 @@ const (
 
 // ControlAPI is the authenticated protocol boundary used by the loop.
 type ControlAPI interface {
-	RegisterSession(context.Context, protocol.SessionRegistrationRequest) (protocol.SessionRegistrationResponse, error)
+	RegisterSession(context.Context, string, string, protocol.SessionRegistrationRequest) (protocol.SessionRegistrationResponse, error)
 	Heartbeat(context.Context, string, protocol.RuntimeHeartbeatRequest) (protocol.RuntimeSnapshot, error)
-	Work(context.Context, string, int64) (protocol.RuntimeSnapshot, error)
+	Dispatch(context.Context, string, int64) (protocol.RuntimeSnapshot, error)
 	Claim(context.Context, string, protocol.ClaimRequest) (protocol.ClaimResponse, error)
 	RenewLease(context.Context, string, protocol.LeaseHeartbeatRequest) (protocol.LeaseHeartbeatResponse, error)
 	AppendEvents(context.Context, string, protocol.AppendEventsRequest) error
@@ -319,13 +319,12 @@ func (daemon *daemon) initialize(ctx context.Context) error {
 		return fmt.Errorf("generate daemon instance ID: %w", idErr)
 	}
 	registrationRequest := protocol.SessionRegistrationRequest{
-		DaemonInstanceID: instanceID,
-		Runtimes:         []protocol.RuntimeRegistration{{RuntimeKey: daemon.config.Runtime.RuntimeKey, Name: daemon.config.Runtime.Name, Capacity: daemon.config.Runtime.Capacity, AgentProfile: daemon.config.Runtime.AgentProfile, Workspace: daemon.config.Runtime.Workspace, Capabilities: json.RawMessage(`{}`)}},
+		Runtimes: []protocol.RuntimeRegistration{{RuntimeKey: daemon.config.Runtime.RuntimeKey, Name: daemon.config.Runtime.Name, Capacity: daemon.config.Runtime.Capacity, AgentProfile: daemon.config.Runtime.AgentProfile, Workspace: daemon.config.Runtime.Workspace, Capabilities: json.RawMessage(`{}`)}},
 	}
 	var registration protocol.SessionRegistrationResponse
 	registerErr := retry(ctx, func() error {
 		var requestErr error
-		registration, requestErr = daemon.control.RegisterSession(ctx, registrationRequest)
+		registration, requestErr = daemon.control.RegisterSession(ctx, identity.MachineID, instanceID, registrationRequest)
 		return requestErr
 	})
 	if registerErr != nil {
@@ -382,7 +381,7 @@ func (daemon *daemon) heartbeat(ctx context.Context) {
 }
 
 func (daemon *daemon) sync(ctx context.Context) {
-	snapshot, err := daemon.control.Work(ctx, daemon.runtimeID, daemon.runtimeEpoch)
+	snapshot, err := daemon.control.Dispatch(ctx, daemon.runtimeID, daemon.runtimeEpoch)
 	if err != nil {
 		daemon.log.Warn("runtime_poll_failed", "error", err)
 		daemon.flushAll(ctx)
@@ -491,7 +490,9 @@ func (daemon *daemon) flushTerminalJournals(ctx context.Context) error {
 		if journal.LocalState != "terminal_pending" {
 			continue
 		}
-		daemon.flushRun(ctx, journal)
+		if err := daemon.flushRun(ctx, journal); err != nil {
+			return err
+		}
 		if _, err := daemon.store.LoadJournal(journal.Key()); err == nil {
 			return fmt.Errorf("terminal journal %s/%d remains pending", journal.RunID, journal.Generation)
 		} else if !state.IsNotFound(err) {
@@ -1128,10 +1129,10 @@ func (daemon *daemon) flushAll(ctx context.Context) {
 	}
 }
 
-func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) {
+func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) error {
 	key := journal.Key()
 	if journal.LocalState == "stale" {
-		return
+		return nil
 	}
 	terminalSucceeded := hasTransition(journal.PendingTransitions, "completed")
 	if len(journal.PendingEvents) > 0 {
@@ -1139,7 +1140,7 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) {
 			if control.IsOwnershipLost(err) {
 				daemon.terminateForLease(journal, "event ownership lost")
 			}
-			return
+			return err
 		}
 		ids := make([]string, len(journal.PendingEvents))
 		for index, event := range journal.PendingEvents {
@@ -1155,7 +1156,7 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) {
 				if control.IsOwnershipLost(err) {
 					daemon.terminateForLease(journal, "ack ownership lost")
 				}
-				return
+				return err
 			}
 			sentAcknowledgements = append(sentAcknowledgements, acknowledgement.AckID)
 		}
@@ -1166,7 +1167,7 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) {
 			if control.IsOwnershipLost(err) {
 				daemon.terminateForLease(journal, "transition ownership lost")
 			}
-			return
+			return err
 		}
 		journal, _ = daemon.store.MarkTransitionsDelivered(key, []string{transition.TransitionID})
 	}
@@ -1180,7 +1181,7 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) {
 				if control.IsOwnershipLost(err) {
 					daemon.terminateForLease(journal, "ack ownership lost")
 				}
-				return
+				return err
 			}
 			journal, _ = daemon.store.MarkCommandAcknowledgementsDelivered(key, []string{acknowledgement.AckID})
 		}
@@ -1196,7 +1197,7 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) {
 		if active != nil {
 			if err := daemon.workspace.Cleanup(context.Background(), prepared, terminalSucceeded); err != nil {
 				daemon.log.Warn("cleanup_terminal_workspace_failed", "run_id", journal.RunID, "error", err)
-				return
+				return err
 			}
 			daemon.mu.Lock()
 			delete(daemon.running, key)
@@ -1204,12 +1205,14 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) {
 			<-daemon.slots
 		} else if err := daemon.cleanupRecoveredWorkspace(journal, terminalSucceeded); err != nil {
 			daemon.log.Warn("cleanup_terminal_workspace_failed", "run_id", journal.RunID, "error", err)
-			return
+			return err
 		}
 		if err := daemon.store.DeleteJournal(key); err != nil {
 			daemon.log.Warn("delete_terminal_journal_failed", "run_id", journal.RunID, "error", err)
+			return err
 		}
 	}
+	return nil
 }
 
 func hasTransition(transitions []protocol.StateTransitionRequest, stateName string) bool {
@@ -1332,30 +1335,21 @@ func (daemon *daemon) claimWithRetry(ctx context.Context, runID string, request 
 	delay := minimumInterval
 	for {
 		response, err := daemon.control.Claim(ctx, runID, request)
-		if err == nil || control.IsOwnershipLost(err) || !retryableClaim(err) {
+		if err == nil {
 			return response, err
 		}
-		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
+		if ctx.Err() != nil {
 			return protocol.ClaimResponse{}, ctx.Err()
-		case <-timer.C:
 		}
-		if delay < retryMaximum/2 {
-			delay *= 2
-		} else {
-			delay = retryMaximum
+		wait, shouldRetry := control.RetryDelay(ctx, err, delay)
+		if !shouldRetry {
+			return response, err
 		}
+		if err := waitForRetry(ctx, wait); err != nil {
+			return protocol.ClaimResponse{}, err
+		}
+		delay = nextRetryDelay(delay)
 	}
-}
-
-func retryableClaim(err error) bool {
-	var apiError *control.APIError
-	if !errors.As(err, &apiError) {
-		return true
-	}
-	return apiError.StatusCode == http.StatusTooManyRequests || apiError.StatusCode >= http.StatusInternalServerError
 }
 
 func retry(ctx context.Context, operation func() error) error {
@@ -1363,20 +1357,36 @@ func retry(ctx context.Context, operation func() error) error {
 	for {
 		if err := operation(); err == nil {
 			return nil
-		} else if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
-		}
-		if delay < retryMaximum/2 {
-			delay *= 2
 		} else {
-			delay = retryMaximum
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			wait, shouldRetry := control.RetryDelay(ctx, err, delay)
+			if !shouldRetry {
+				return err
+			}
+			if err := waitForRetry(ctx, wait); err != nil {
+				return err
+			}
+			delay = nextRetryDelay(delay)
 		}
 	}
+}
+
+func waitForRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func nextRetryDelay(delay time.Duration) time.Duration {
+	if delay < retryMaximum/2 {
+		return delay * 2
+	}
+	return retryMaximum
 }

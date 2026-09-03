@@ -7,11 +7,14 @@ defmodule SymmetryControlWeb.Plugs.EnrollmentAuth do
   def init(options), do: options
 
   def call(conn, _options) do
-    with {:ok, token} <- Protocol.machine_token(conn),
-         true <- Protocol.secure_compare(token, Protocol.configured_token(:enrollment_token)) do
-      assign(conn, :enrollment_token, token)
+    with {:ok, token} <- Protocol.machine_token(conn) do
+      case Protocol.credential_class(token) do
+        :enrollment -> assign(conn, :enrollment_token, token)
+        :unknown -> conn |> Protocol.error(:unauthenticated) |> halt()
+        _known_credential -> conn |> Protocol.error(:forbidden) |> halt()
+      end
     else
-      _ -> conn |> Protocol.error(:unauthenticated) |> halt()
+      {:error, :unauthenticated} -> conn |> Protocol.error(:unauthenticated) |> halt()
     end
   end
 end
@@ -20,26 +23,24 @@ defmodule SymmetryControlWeb.Plugs.MachineAuth do
   @moduledoc false
   import Plug.Conn
 
-  alias SymmetryControl.Orchestration
   alias SymmetryControlWeb.Protocol
 
   def init(options), do: options
 
   def call(conn, _options) do
     with {:ok, token} <- Protocol.machine_token(conn) do
-      case Orchestration.authenticate_machine(token) do
-        {:ok, machine} ->
+      case Protocol.credential_class(token) do
+        {:machine, machine} ->
           assign(conn, :machine, machine)
 
-        {:error, :unauthenticated} ->
-          if Protocol.secure_compare(token, Protocol.configured_token(:operator_token)) do
-            conn |> Protocol.error(:forbidden) |> halt()
-          else
-            conn |> Protocol.error(:unauthenticated) |> halt()
-          end
+        :unknown ->
+          conn |> Protocol.error(:unauthenticated) |> halt()
+
+        _known_credential ->
+          conn |> Protocol.error(:forbidden) |> halt()
       end
     else
-      _ -> conn |> Protocol.error(:unauthenticated) |> halt()
+      {:error, :unauthenticated} -> conn |> Protocol.error(:unauthenticated) |> halt()
     end
   end
 end
@@ -54,13 +55,13 @@ defmodule SymmetryControlWeb.Plugs.OperatorAuth do
 
   def call(conn, _options) do
     with {:ok, token} <- Protocol.machine_token(conn) do
-      if Protocol.secure_compare(token, Protocol.configured_token(:operator_token)) do
-        conn
-      else
-        conn |> Protocol.error(:forbidden) |> halt()
+      case Protocol.credential_class(token) do
+        :operator -> conn
+        :unknown -> conn |> Protocol.error(:unauthenticated) |> halt()
+        _known_credential -> conn |> Protocol.error(:forbidden) |> halt()
       end
     else
-      _ -> conn |> Protocol.error(:unauthenticated) |> halt()
+      {:error, :unauthenticated} -> conn |> Protocol.error(:unauthenticated) |> halt()
     end
   end
 end

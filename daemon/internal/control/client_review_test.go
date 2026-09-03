@@ -2,11 +2,14 @@ package control
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -27,7 +30,6 @@ func TestClaimRejectsUntrustedResponses(t *testing.T) {
 		{name: "missing task ID", response: claimResponse(`"task_id":""`)},
 		{name: "missing lease token", response: claimResponse(`"lease_token":""`)},
 		{name: "missing lease expiry", response: claimResponse(`"lease_expires_at":null`)},
-		{name: "null work input", response: claimResponse(`"work":{"goal":"work","agent_profile":"codex","workspace":"primary","input":null}`)},
 	}
 
 	for _, test := range tests {
@@ -60,14 +62,14 @@ func TestClientRejectsIncompleteSuccessResponses(t *testing.T) {
 		{
 			name: "session", body: `{"runtimes":[],"heartbeat_interval_ms":1,"poll_interval_ms":1,"lease_duration_ms":1,"websocket_path":"/socket"}`, wantError: "invalid session registration response",
 			invoke: func(machine *Client, enrollment *EnrollmentClient, operator *OperatorClient) error {
-				_, err := machine.RegisterSession(context.Background(), protocol.SessionRegistrationRequest{Runtimes: []protocol.RuntimeRegistration{{RuntimeKey: "default"}}})
+				_, err := machine.RegisterSession(context.Background(), "machine-1", "daemon-1", protocol.SessionRegistrationRequest{Runtimes: []protocol.RuntimeRegistration{{RuntimeKey: "default"}}})
 				return err
 			},
 		},
 		{
 			name: "snapshot", body: `{"assignments":[],"commands":[]}`, wantError: "invalid runtime snapshot response",
 			invoke: func(machine *Client, enrollment *EnrollmentClient, operator *OperatorClient) error {
-				_, err := machine.Work(context.Background(), "runtime-1", 3)
+				_, err := machine.Dispatch(context.Background(), "runtime-1", 3)
 				return err
 			},
 		},
@@ -119,7 +121,7 @@ func TestRegisterSessionAcceptsRuntimesInAnyOrder(t *testing.T) {
 	server := jsonServer(t, http.StatusOK, `{"runtimes":[{"runtime_key":"secondary","runtime_id":"runtime-2","runtime_epoch":4},{"runtime_key":"primary","runtime_id":"runtime-1","runtime_epoch":3}],"heartbeat_interval_ms":5000,"poll_interval_ms":5000,"lease_duration_ms":30000,"websocket_path":"/socket"}`, nil)
 	defer server.Close()
 
-	response, err := mustMachineClient(t, server).RegisterSession(context.Background(), protocol.SessionRegistrationRequest{
+	response, err := mustMachineClient(t, server).RegisterSession(context.Background(), "machine-1", "daemon-1", protocol.SessionRegistrationRequest{
 		Runtimes: []protocol.RuntimeRegistration{{RuntimeKey: "primary"}, {RuntimeKey: "secondary"}},
 	})
 	if err != nil {
@@ -135,9 +137,12 @@ func TestClientRejectsUnsafePathIDsBeforeRequest(t *testing.T) {
 		name   string
 		invoke func(*Client) error
 	}{
-		{name: "empty runtime", invoke: func(client *Client) error { _, err := client.Work(context.Background(), "", 3); return err }},
-		{name: "runtime dot segment", invoke: func(client *Client) error { _, err := client.Work(context.Background(), "..", 3); return err }},
-		{name: "runtime slash", invoke: func(client *Client) error { _, err := client.Work(context.Background(), "runtime/1", 3); return err }},
+		{name: "empty runtime", invoke: func(client *Client) error { _, err := client.Dispatch(context.Background(), "", 3); return err }},
+		{name: "runtime dot segment", invoke: func(client *Client) error { _, err := client.Dispatch(context.Background(), "..", 3); return err }},
+		{name: "runtime slash", invoke: func(client *Client) error {
+			_, err := client.Dispatch(context.Background(), "runtime/1", 3)
+			return err
+		}},
 		{name: "run percent", invoke: func(client *Client) error {
 			_, err := client.Claim(context.Background(), "run%2F1", protocol.ClaimRequest{})
 			return err
@@ -211,7 +216,7 @@ func TestOversizedErrorResponseKeepsTypedFallback(t *testing.T) {
 }
 
 func TestOperatorClientUsesDedicatedToken(t *testing.T) {
-	server := jsonServer(t, http.StatusOK, `{"task_id":"task-1","state":"queued"}`, func(request *http.Request) {
+	server := jsonServer(t, http.StatusOK, taskJSON(), func(request *http.Request) {
 		if got, want := request.Header.Get("Authorization"), "Bearer operator-token"; got != want {
 			t.Errorf("Authorization = %q, want %q", got, want)
 		}
@@ -232,6 +237,363 @@ func TestOperatorClientUsesDedicatedToken(t *testing.T) {
 	}); ok {
 		t.Fatal("machine Client must not implement task APIs")
 	}
+}
+
+func TestTaskResponseRequiresPresenceAndStateInvariants(t *testing.T) {
+	tests := []struct {
+		name      string
+		body      string
+		wantError string
+	}{
+		{name: "missing result", body: strings.Replace(taskJSON(), `,"result":null`, "", 1), wantError: "result is required"},
+		{name: "null work", body: strings.Replace(taskJSON(), `"work":{"goal":"work","agent_profile":"codex","workspace":"primary","input":{}}`, `"work":null`, 1), wantError: "work must be non-null"},
+		{name: "missing work input", body: strings.Replace(taskJSON(), `,"input":{}`, "", 1), wantError: "work input is required"},
+		{name: "non-object work input", body: strings.Replace(taskJSON(), `"input":{}`, `"input":[]`, 1), wantError: "work input must be a JSON object"},
+		{name: "runless task has generation", body: strings.Replace(taskJSON(), `"generation":0`, `"generation":1`, 1), wantError: "runless task must have generation zero"},
+		{name: "active task without run", body: strings.Replace(taskJSON(), `"state":"queued"`, `"state":"running"`, 1), wantError: "state requires a run_id"},
+		{name: "completed task without result", body: strings.Replace(taskJSON(), `"state":"queued","run_id":null,"generation":0`, `"state":"completed","run_id":"run-1","generation":1`, 1), wantError: "completed state requires result"},
+		{name: "failed task without failure", body: strings.Replace(taskJSON(), `"state":"queued","run_id":null,"generation":0`, `"state":"failed","run_id":"run-1","generation":1`, 1), wantError: "failed state requires failure"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := jsonServer(t, http.StatusOK, test.body, nil)
+			defer server.Close()
+			_, err := newOperatorClient(t, server).GetTask(context.Background(), "task-1")
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("error = %v, want containing %q", err, test.wantError)
+			}
+		})
+	}
+}
+
+func TestTaskResponsePreservesExplicitNullWorkInputAndUnknownFields(t *testing.T) {
+	body := strings.Replace(taskJSONWithUnknownField(), `"input":{}`, `"input":null`, 1)
+	server := jsonServer(t, http.StatusOK, body, nil)
+	defer server.Close()
+
+	task, err := newOperatorClient(t, server).GetTask(context.Background(), "task-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Work == nil || string(task.Work.Input) != "null" {
+		t.Fatalf("work input = %#v, want explicit null", task.Work)
+	}
+}
+
+func TestCreateTaskCommandValidatesRequestBeforeTransport(t *testing.T) {
+	tests := []struct {
+		name      string
+		key       string
+		request   protocol.TaskCommandRequest
+		wantError string
+	}{
+		{name: "missing idempotency key", request: protocol.TaskCommandRequest{Kind: "cancel"}, wantError: "idempotency key must not be empty"},
+		{name: "cancel with payload", key: "command-1", request: protocol.TaskCommandRequest{Kind: "cancel", Payload: json.RawMessage(`{}`)}, wantError: "cancel command must omit payload"},
+		{name: "unknown kind", key: "command-1", request: protocol.TaskCommandRequest{Kind: "pause"}, wantError: "kind is not recognized"},
+		{name: "provide input missing payload", key: "command-1", request: protocol.TaskCommandRequest{Kind: "provide_input"}, wantError: "must be a non-null JSON object"},
+		{name: "provide input null payload", key: "command-1", request: protocol.TaskCommandRequest{Kind: "provide_input", Payload: json.RawMessage(`null`)}, wantError: "must be a non-null JSON object"},
+		{name: "provide input array payload", key: "command-1", request: protocol.TaskCommandRequest{Kind: "provide_input", Payload: json.RawMessage(`[]`)}, wantError: "must be a JSON object"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls.Add(1) }))
+			defer server.Close()
+			_, err := newOperatorClient(t, server).CreateTaskCommand(context.Background(), "task-1", test.key, test.request)
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("error = %v, want containing %q", err, test.wantError)
+			}
+			if got := calls.Load(); got != 0 {
+				t.Fatalf("calls = %d, want 0", got)
+			}
+		})
+	}
+}
+
+func TestCreateTaskCommandAcceptsEmptyObjectAndReplay(t *testing.T) {
+	for _, status := range []int{http.StatusCreated, http.StatusOK} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			server := jsonServer(t, status, strings.Replace(commandJSON(), `"kind":"cancel"`, `"kind":"provide_input"`, 1), func(request *http.Request) {
+				if got := request.Header.Get("Idempotency-Key"); got != "input-1" {
+					t.Errorf("Idempotency-Key = %q", got)
+				}
+			})
+			defer server.Close()
+			command, err := newOperatorClient(t, server).CreateTaskCommand(context.Background(), "task-1", "input-1", protocol.TaskCommandRequest{Kind: "provide_input", Payload: json.RawMessage(`{}`)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if command.CommandID != "command-1" {
+				t.Fatalf("command = %#v", command)
+			}
+		})
+	}
+}
+
+func TestCreateTaskCommandRejectsUnexpectedSuccessStatus(t *testing.T) {
+	server := jsonServer(t, http.StatusAccepted, commandJSON(), nil)
+	defer server.Close()
+
+	_, err := newOperatorClient(t, server).CreateTaskCommand(context.Background(), "task-1", "command-1", protocol.TaskCommandRequest{Kind: "cancel"})
+	if err == nil || !strings.Contains(err.Error(), "expected HTTP 200 or 201") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestCreateTaskCommandAcceptsEquivalentProvideInputObject(t *testing.T) {
+	server := jsonServer(t, http.StatusCreated, provideInputCommandJSON(`{"second":2,"first":1}`), nil)
+	defer server.Close()
+
+	_, err := newOperatorClient(t, server).CreateTaskCommand(context.Background(), "task-1", "input-1", protocol.TaskCommandRequest{Kind: "provide_input", Payload: json.RawMessage(`{"first":1,"second":2}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCreateTaskCommandDistinguishesLargeIntegerPayloads(t *testing.T) {
+	server := jsonServer(t, http.StatusCreated, provideInputCommandJSON(`{"value":9007199254740993}`), nil)
+	defer server.Close()
+
+	_, err := newOperatorClient(t, server).CreateTaskCommand(context.Background(), "task-1", "input-1", protocol.TaskCommandRequest{Kind: "provide_input", Payload: json.RawMessage(`{"value":9007199254740992}`)})
+	if err == nil || !strings.Contains(err.Error(), "does not match the request") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestTaskCommandResponseRequiresExplicitNullableFields(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "missing applied at", body: strings.Replace(commandJSON(), `,"applied_at":null`, "", 1)},
+		{name: "unpaired run", body: strings.Replace(commandJSON(), `"generation":1`, `"generation":null`, 1)},
+		{name: "partial acknowledgement", body: strings.Replace(commandJSON(), `"acknowledgement_id":null`, `"acknowledgement_id":"ack-1"`, 1)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := jsonServer(t, http.StatusCreated, test.body, nil)
+			defer server.Close()
+			_, err := newOperatorClient(t, server).CreateTaskCommand(context.Background(), "task-1", "command-1", protocol.TaskCommandRequest{Kind: "cancel"})
+			if err == nil || !strings.Contains(err.Error(), "invalid create task command response") {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
+func TestTaskCommandResponseStateInvariants(t *testing.T) {
+	valid := []string{
+		commandJSON(),
+		runlessAppliedCommandJSON(),
+		acknowledgedCommandJSON(),
+	}
+	for _, body := range valid {
+		server := jsonServer(t, http.StatusCreated, body, nil)
+		_, err := newOperatorClient(t, server).CreateTaskCommand(context.Background(), "task-1", "command-1", protocol.TaskCommandRequest{Kind: "cancel"})
+		server.Close()
+		if err != nil {
+			t.Fatalf("valid command response rejected: %v", err)
+		}
+	}
+
+	acknowledged := acknowledgedCommandJSON()
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "runless pending", body: strings.Replace(commandJSON(), `"run_id":"run-1","generation":1`, `"run_id":null,"generation":null`, 1)},
+		{name: "runless provide input", body: strings.Replace(runlessAppliedCommandJSON(), `"kind":"cancel"`, `"kind":"provide_input"`, 1)},
+		{name: "pending applied at", body: strings.Replace(commandJSON(), `"applied_at":null`, `"applied_at":"2026-09-03T00:00:01Z"`, 1)},
+		{name: "pending acknowledgement", body: strings.Replace(commandJSON(), `"acknowledgement_id":null,"acknowledgement_outcome":null,"acknowledged_at":null`, `"acknowledgement_id":"ack-1","acknowledgement_outcome":"applied","acknowledged_at":"2026-09-03T00:00:01Z"`, 1)},
+		{name: "applied provide input", body: strings.Replace(strings.Replace(commandJSON(), `"kind":"cancel"`, `"kind":"provide_input"`, 1), `"state":"pending","issued_at":"2026-09-03T00:00:00Z","applied_at":null`, `"state":"applied","issued_at":"2026-09-03T00:00:00Z","applied_at":"2026-09-03T00:00:01Z"`, 1)},
+		{name: "applied without timestamp", body: strings.Replace(commandJSON(), `"state":"pending"`, `"state":"applied"`, 1)},
+		{name: "acknowledged runless", body: strings.Replace(acknowledged, `"run_id":"run-1","generation":1`, `"run_id":null,"generation":null`, 1)},
+		{name: "acknowledged applied at", body: strings.Replace(acknowledged, `"applied_at":null`, `"applied_at":"2026-09-03T00:00:01Z"`, 1)},
+		{name: "acknowledged without acknowledgement", body: strings.Replace(acknowledged, `"acknowledgement_id":"ack-1","acknowledgement_outcome":"applied","acknowledged_at":"2026-09-03T00:00:01Z"`, `"acknowledgement_id":null,"acknowledgement_outcome":null,"acknowledged_at":null`, 1)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := jsonServer(t, http.StatusCreated, test.body, nil)
+			defer server.Close()
+			_, err := newOperatorClient(t, server).CreateTaskCommand(context.Background(), "task-1", "command-1", protocol.TaskCommandRequest{Kind: "cancel"})
+			if err == nil || !strings.Contains(err.Error(), "invalid create task command response") {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
+func TestCreateTaskCommandRejectsRequestResponseMismatch(t *testing.T) {
+	tests := []struct {
+		name    string
+		request protocol.TaskCommandRequest
+		body    string
+	}{
+		{name: "kind", request: protocol.TaskCommandRequest{Kind: "cancel"}, body: strings.Replace(commandJSON(), `"kind":"cancel"`, `"kind":"provide_input"`, 1)},
+		{name: "provide input payload", request: protocol.TaskCommandRequest{Kind: "provide_input", Payload: json.RawMessage(`{"answer":"yes"}`)}, body: strings.Replace(commandJSON(), `"kind":"cancel","payload":{}`, `"kind":"provide_input","payload":{"answer":"no"}`, 1)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := jsonServer(t, http.StatusCreated, test.body, nil)
+			defer server.Close()
+			_, err := newOperatorClient(t, server).CreateTaskCommand(context.Background(), "task-1", "command-1", test.request)
+			if err == nil || !strings.Contains(err.Error(), "does not match the request") {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
+func TestAppendEventsRequiresNoContentWithoutBody(t *testing.T) {
+	tests := []struct {
+		name    string
+		status  int
+		body    string
+		wantErr bool
+	}{
+		{name: "no content", status: http.StatusNoContent},
+		{name: "ok empty", status: http.StatusOK, wantErr: true},
+		{name: "created body", status: http.StatusCreated, body: `{}`, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := jsonServer(t, test.status, test.body, nil)
+			defer server.Close()
+			err := mustMachineClient(t, server).AppendEvents(context.Background(), "run-1", protocol.AppendEventsRequest{Fence: fence()})
+			if test.wantErr && (err == nil || !strings.Contains(err.Error(), "invalid append events response")) {
+				t.Fatalf("error = %v", err)
+			}
+			if !test.wantErr && err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+
+	client, err := NewClient("https://control.example.test/api", machineToken, &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusNoContent, Body: io.NopCloser(strings.NewReader(`{}`)), Header: make(http.Header)}, nil
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = client.AppendEvents(context.Background(), "run-1", protocol.AppendEventsRequest{Fence: fence()})
+	if err == nil || !strings.Contains(err.Error(), "invalid append events response") {
+		t.Fatalf("204 body error = %v", err)
+	}
+}
+
+func TestRetryDelayClassification(t *testing.T) {
+	fallback := 3 * time.Second
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	tests := []struct {
+		name      string
+		context   context.Context
+		err       error
+		wantDelay time.Duration
+		wantRetry bool
+	}{
+		{name: "ordinary error is permanent", context: context.Background(), err: errors.New("network unavailable"), wantRetry: false},
+		{name: "URL policy error is permanent", context: context.Background(), err: &url.Error{Op: "Get", URL: "https://control.example.test", Err: errors.New("redirect policy rejected")}, wantRetry: false},
+		{name: "URL TLS error is permanent", context: context.Background(), err: &url.Error{Op: "Get", URL: "https://control.example.test", Err: x509.UnknownAuthorityError{}}, wantRetry: false},
+		{name: "URL network error", context: context.Background(), err: &url.Error{Op: "Get", URL: "https://control.example.test", Err: &net.DNSError{IsTimeout: true}}, wantDelay: fallback, wantRetry: true},
+		{name: "network error", context: context.Background(), err: &net.DNSError{IsTimeout: true}, wantDelay: fallback, wantRetry: true},
+		{name: "truncated transport response", context: context.Background(), err: io.ErrUnexpectedEOF, wantDelay: fallback, wantRetry: true},
+		{name: "malformed response is permanent", context: context.Background(), err: responseErrorf("decode response: %w", io.ErrUnexpectedEOF), wantRetry: false},
+		{name: "rate limited retry after", context: context.Background(), err: &APIError{StatusCode: http.StatusTooManyRequests, RetryAfter: 7 * time.Second}, wantDelay: 7 * time.Second, wantRetry: true},
+		{name: "server error", context: context.Background(), err: &APIError{StatusCode: http.StatusBadGateway}, wantDelay: fallback, wantRetry: true},
+		{name: "permanent client error", context: context.Background(), err: &APIError{StatusCode: http.StatusConflict}, wantRetry: false},
+		{name: "context cancelled", context: cancelled, err: errors.New("network unavailable"), wantRetry: false},
+		{name: "request cancelled", context: context.Background(), err: context.Canceled, wantRetry: false},
+		{name: "request timeout", context: context.Background(), err: context.DeadlineExceeded, wantDelay: fallback, wantRetry: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			delay, retry := RetryDelay(test.context, test.err, fallback)
+			if delay != test.wantDelay || retry != test.wantRetry {
+				t.Fatalf("RetryDelay() = (%s, %t), want (%s, %t)", delay, retry, test.wantDelay, test.wantRetry)
+			}
+		})
+	}
+}
+
+func TestRetryAfterOverflowFallsBack(t *testing.T) {
+	got, present := retryAfter("9223372036854775807")
+	if present || got != 0 {
+		t.Fatalf("retryAfter() = (%s, %t), want (0s, false)", got, present)
+	}
+	delay, retry := RetryDelay(context.Background(), &APIError{StatusCode: http.StatusTooManyRequests, RetryAfter: got, retryAfterSet: present}, 3*time.Second)
+	if !retry || delay != 3*time.Second {
+		t.Fatalf("RetryDelay() = (%s, %t), want (3s, true)", delay, retry)
+	}
+}
+
+func TestRuntimeSnapshotCommandsRejectInvalidKindsAndPayloads(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "unknown kind", body: strings.Replace(snapshotJSON(time.Now().UTC()), `"kind":"cancel"`, `"kind":"pause"`, 1)},
+		{name: "cancel payload", body: strings.Replace(snapshotJSON(time.Now().UTC()), `"payload":{}`, `"payload":{"reason":"later"}`, 1)},
+		{name: "provide input payload", body: strings.Replace(snapshotJSON(time.Now().UTC()), `"kind":"cancel","payload":{}`, `"kind":"provide_input","payload":[]`, 1)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := jsonServer(t, http.StatusOK, test.body, nil)
+			defer server.Close()
+			_, err := mustMachineClient(t, server).Dispatch(context.Background(), "runtime-1", 1)
+			if err == nil || !strings.Contains(err.Error(), "invalid runtime snapshot response") {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
+func TestCreateTaskCommandComparesNumericPayloadsPrecisely(t *testing.T) {
+	t.Run("equivalent number spellings", func(t *testing.T) {
+		server := jsonServer(t, http.StatusCreated, provideInputCommandJSON(`{"value":1e0,"zero":-0}`), nil)
+		defer server.Close()
+		_, err := newOperatorClient(t, server).CreateTaskCommand(context.Background(), "task-1", "command-1", protocol.TaskCommandRequest{Kind: "provide_input", Payload: json.RawMessage(`{"zero":0.0,"value":1.0}`)})
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("distinct large integers", func(t *testing.T) {
+		server := jsonServer(t, http.StatusCreated, provideInputCommandJSON(`{"value":9007199254740993}`), nil)
+		defer server.Close()
+		_, err := newOperatorClient(t, server).CreateTaskCommand(context.Background(), "task-1", "command-1", protocol.TaskCommandRequest{Kind: "provide_input", Payload: json.RawMessage(`{"value":9007199254740992}`)})
+		if err == nil || !strings.Contains(err.Error(), "does not match the request") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+}
+
+func TestRetryDelayHonorsExplicitZeroRetryAfter(t *testing.T) {
+	server := jsonServer(t, http.StatusTooManyRequests, `{"error":{"code":"rate_limited"}}`, map[string]string{"Retry-After": "0"})
+	defer server.Close()
+
+	_, err := newOperatorClient(t, server).GetTask(context.Background(), "task-1")
+	delay, retry := RetryDelay(context.Background(), err, 3*time.Second)
+	if delay != 0 || !retry {
+		t.Fatalf("RetryDelay() = (%s, %t), want (0s, true)", delay, retry)
+	}
+}
+
+func newOperatorClient(t *testing.T, server *httptest.Server) *OperatorClient {
+	t.Helper()
+	client, err := NewOperatorClient(server.URL+"/api", "operator-token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return function(request)
 }
 
 func mustMachineClient(t *testing.T, server *httptest.Server) *Client {

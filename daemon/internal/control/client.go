@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -40,10 +41,26 @@ const (
 
 // APIError describes a non-success response returned by the control plane.
 type APIError struct {
-	StatusCode int
-	Code       ErrorCode
-	Message    string
-	RetryAfter time.Duration
+	StatusCode    int
+	Code          ErrorCode
+	Message       string
+	RetryAfter    time.Duration
+	retryAfterSet bool
+}
+
+// ResponseError marks a malformed or unexpected successful control-plane response.
+// It preserves the underlying cause for diagnostics while remaining permanent for
+// retry classification.
+type ResponseError struct {
+	cause error
+}
+
+func (err *ResponseError) Error() string { return err.cause.Error() }
+
+func (err *ResponseError) Unwrap() error { return err.cause }
+
+func responseErrorf(format string, arguments ...any) error {
+	return &ResponseError{cause: fmt.Errorf(format, arguments...)}
 }
 
 func (err *APIError) Error() string {
@@ -166,7 +183,7 @@ func parseBaseURL(value string) (*url.URL, error) {
 // Enroll registers a machine using a one-time enrollment bearer token.
 func (client *EnrollmentClient) Enroll(ctx context.Context, enrollmentToken string, request protocol.EnrollRequest) (protocol.EnrollResponse, error) {
 	var response protocol.EnrollResponse
-	if err := client.request(ctx, http.MethodPost, "v1/daemon/enroll", nil, enrollmentToken, "", request, &response); err != nil {
+	if err := client.request(ctx, http.MethodPost, "v1/machines", nil, enrollmentToken, "", request, &response); err != nil {
 		return protocol.EnrollResponse{}, err
 	}
 	if err := validateEnrollResponse(response); err != nil {
@@ -176,9 +193,16 @@ func (client *EnrollmentClient) Enroll(ctx context.Context, enrollmentToken stri
 }
 
 // RegisterSession registers a daemon instance and its configured runtimes.
-func (client *Client) RegisterSession(ctx context.Context, request protocol.SessionRegistrationRequest) (protocol.SessionRegistrationResponse, error) {
+func (client *Client) RegisterSession(ctx context.Context, machineID, daemonInstanceID string, request protocol.SessionRegistrationRequest) (protocol.SessionRegistrationResponse, error) {
+	if err := validatePathID("machine ID", machineID); err != nil {
+		return protocol.SessionRegistrationResponse{}, err
+	}
+	if err := validatePathID("daemon instance ID", daemonInstanceID); err != nil {
+		return protocol.SessionRegistrationResponse{}, err
+	}
 	var response protocol.SessionRegistrationResponse
-	if err := client.machineRequest(ctx, http.MethodPost, "v1/daemon/sessions", nil, "", request, &response); err != nil {
+	endpoint := "v1/machines/" + machineID + "/sessions/" + daemonInstanceID
+	if err := client.machineRequest(ctx, http.MethodPut, endpoint, nil, "", request, &response); err != nil {
 		return protocol.SessionRegistrationResponse{}, err
 	}
 	if err := validateSessionResponse(request, response); err != nil {
@@ -193,7 +217,7 @@ func (client *Client) Heartbeat(ctx context.Context, runtimeID string, request p
 		return protocol.RuntimeSnapshot{}, err
 	}
 	var response protocol.RuntimeSnapshot
-	if err := client.machineRequest(ctx, http.MethodPost, "v1/runtimes/"+runtimeID+"/heartbeat", nil, "", request, &response); err != nil {
+	if err := client.machineRequest(ctx, http.MethodPatch, "v1/runtimes/"+runtimeID, nil, "", request, &response); err != nil {
 		return protocol.RuntimeSnapshot{}, err
 	}
 	if err := validateRuntimeSnapshot(response); err != nil {
@@ -202,14 +226,14 @@ func (client *Client) Heartbeat(ctx context.Context, runtimeID string, request p
 	return response, nil
 }
 
-// Work fetches the non-destructive current snapshot for a runtime.
-func (client *Client) Work(ctx context.Context, runtimeID string, runtimeEpoch int64) (protocol.RuntimeSnapshot, error) {
+// Dispatch fetches the non-destructive current snapshot for a runtime.
+func (client *Client) Dispatch(ctx context.Context, runtimeID string, runtimeEpoch int64) (protocol.RuntimeSnapshot, error) {
 	if err := validatePathID("runtime ID", runtimeID); err != nil {
 		return protocol.RuntimeSnapshot{}, err
 	}
 	var response protocol.RuntimeSnapshot
 	query := url.Values{"runtime_epoch": []string{strconv.FormatInt(runtimeEpoch, 10)}}
-	if err := client.machineRequest(ctx, http.MethodGet, "v1/runtimes/"+runtimeID+"/work", query, "", nil, &response); err != nil {
+	if err := client.machineRequest(ctx, http.MethodGet, "v1/runtimes/"+runtimeID+"/dispatch", query, "", nil, &response); err != nil {
 		return protocol.RuntimeSnapshot{}, err
 	}
 	if err := validateRuntimeSnapshot(response); err != nil {
@@ -223,8 +247,17 @@ func (client *Client) Claim(ctx context.Context, runID string, request protocol.
 	if err := validatePathID("run ID", runID); err != nil {
 		return protocol.ClaimResponse{}, err
 	}
+	if err := validatePathID("claim ID", request.ClaimID); err != nil {
+		return protocol.ClaimResponse{}, err
+	}
 	var response protocol.ClaimResponse
-	if err := client.machineRequest(ctx, http.MethodPost, "v1/runs/"+runID+"/claim", nil, "", request, &response); err != nil {
+	body := struct {
+		RuntimeID    string `json:"runtime_id"`
+		RuntimeEpoch int64  `json:"runtime_epoch"`
+		Generation   int64  `json:"generation"`
+	}{RuntimeID: request.RuntimeID, RuntimeEpoch: request.RuntimeEpoch, Generation: request.Generation}
+	endpoint := "v1/runs/" + runID + "/claims/" + request.ClaimID
+	if err := client.machineRequest(ctx, http.MethodPut, endpoint, nil, "", body, &response); err != nil {
 		return protocol.ClaimResponse{}, err
 	}
 	if err := validateClaimResponse(runID, request, response); err != nil {
@@ -239,7 +272,7 @@ func (client *Client) RenewLease(ctx context.Context, runID string, request prot
 		return protocol.LeaseHeartbeatResponse{}, err
 	}
 	var response protocol.LeaseHeartbeatResponse
-	if err := client.machineRequest(ctx, http.MethodPost, "v1/runs/"+runID+"/heartbeat", nil, "", request, &response); err != nil {
+	if err := client.machineRequest(ctx, http.MethodPatch, "v1/runs/"+runID+"/lease", nil, "", request, &response); err != nil {
 		return protocol.LeaseHeartbeatResponse{}, err
 	}
 	if err := validateLeaseHeartbeatResponse(response); err != nil {
@@ -253,7 +286,7 @@ func (client *Client) AppendEvents(ctx context.Context, runID string, request pr
 	if err := validatePathID("run ID", runID); err != nil {
 		return err
 	}
-	return client.machineRequest(ctx, http.MethodPost, "v1/runs/"+runID+"/events", nil, "", request, nil)
+	return client.requestNoContent(ctx, http.MethodPost, "v1/runs/"+runID+"/events", nil, client.machineToken, "", request)
 }
 
 // Transition applies a caller-identified lifecycle transition without a retry policy.
@@ -261,7 +294,16 @@ func (client *Client) Transition(ctx context.Context, runID string, request prot
 	if err := validatePathID("run ID", runID); err != nil {
 		return err
 	}
-	return client.machineRequest(ctx, http.MethodPost, "v1/runs/"+runID+"/state", nil, "", request, nil)
+	if err := validatePathID("transition ID", request.TransitionID); err != nil {
+		return err
+	}
+	body := struct {
+		protocol.Fence
+		State   string          `json:"state"`
+		Payload json.RawMessage `json:"payload"`
+	}{Fence: request.Fence, State: request.State, Payload: request.Payload}
+	endpoint := "v1/runs/" + runID + "/transitions/" + request.TransitionID
+	return client.machineRequest(ctx, http.MethodPut, endpoint, nil, "", body, nil)
 }
 
 // Reconcile compares the caller's local run journal with durable control-plane state.
@@ -270,7 +312,7 @@ func (client *Client) Reconcile(ctx context.Context, runtimeID string, request p
 		return protocol.ReconcileResponse{}, err
 	}
 	var response protocol.ReconcileResponse
-	if err := client.machineRequest(ctx, http.MethodPost, "v1/runtimes/"+runtimeID+"/reconcile", nil, "", request, &response); err != nil {
+	if err := client.machineRequest(ctx, http.MethodPut, "v1/runtimes/"+runtimeID+"/reconciliation", nil, "", request, &response); err != nil {
 		return protocol.ReconcileResponse{}, err
 	}
 	if err := validateReconcileResponse(response); err != nil {
@@ -287,7 +329,16 @@ func (client *Client) AcknowledgeCommand(ctx context.Context, commandID string, 
 	if commandID != request.CommandID {
 		return errors.New("command ID does not match acknowledgement body")
 	}
-	return client.machineRequest(ctx, http.MethodPost, "v1/commands/"+commandID+"/ack", nil, "", request, nil)
+	if err := validatePathID("acknowledgement ID", request.AckID); err != nil {
+		return err
+	}
+	body := struct {
+		protocol.Fence
+		RunID   string `json:"run_id"`
+		Outcome string `json:"outcome"`
+	}{Fence: request.Fence, RunID: request.RunID, Outcome: request.Outcome}
+	endpoint := "v1/commands/" + commandID + "/acknowledgements/" + request.AckID
+	return client.machineRequest(ctx, http.MethodPut, endpoint, nil, "", body, nil)
 }
 
 // SubmitTask creates or retrieves a task under the supplied idempotency key.
@@ -317,34 +368,72 @@ func (client *OperatorClient) GetTask(ctx context.Context, taskID string) (proto
 	return response, nil
 }
 
-// CancelTask requests cancellation for a task.
-func (client *OperatorClient) CancelTask(ctx context.Context, taskID string) (protocol.Task, error) {
+// CreateTaskCommand creates or retrieves an operator command under the supplied
+// idempotency key. The returned resource may be runless for historical actions.
+func (client *OperatorClient) CreateTaskCommand(ctx context.Context, taskID, idempotencyKey string, request protocol.TaskCommandRequest) (protocol.TaskCommand, error) {
 	if err := validatePathID("task ID", taskID); err != nil {
-		return protocol.Task{}, err
+		return protocol.TaskCommand{}, err
 	}
-	var response protocol.Task
-	if err := client.operatorRequest(ctx, http.MethodPost, "v1/tasks/"+taskID+"/cancel", nil, "", struct{}{}, &response); err != nil {
-		return protocol.Task{}, err
+	if strings.TrimSpace(idempotencyKey) == "" {
+		return protocol.TaskCommand{}, errors.New("idempotency key must not be empty")
 	}
-	if err := validateTaskResponse("cancel task", taskID, response); err != nil {
-		return protocol.Task{}, err
+	if err := validateTaskCommandRequest(request); err != nil {
+		return protocol.TaskCommand{}, err
+	}
+	var response protocol.TaskCommand
+	endpoint := "v1/tasks/" + taskID + "/commands"
+	statusCode, err := client.operatorRequestWithStatus(ctx, http.MethodPost, endpoint, nil, idempotencyKey, request, &response)
+	if err != nil {
+		return protocol.TaskCommand{}, err
+	}
+	if statusCode != http.StatusOK && statusCode != http.StatusCreated {
+		return protocol.TaskCommand{}, responseErrorf("invalid create task command response: expected HTTP 200 or 201, got HTTP %d", statusCode)
+	}
+	if err := validateTaskCommandResponse("create task command", taskID, request, response); err != nil {
+		return protocol.TaskCommand{}, err
 	}
 	return response, nil
 }
 
-// SubmitInput sends human input under the supplied idempotency key.
-func (client *OperatorClient) SubmitInput(ctx context.Context, taskID, idempotencyKey string, request protocol.TaskInputRequest) (protocol.Task, error) {
-	if err := validatePathID("task ID", taskID); err != nil {
-		return protocol.Task{}, err
+// RetryDelay classifies a failed request and selects a retry delay. It does not
+// perform retries; callers retain their own retry and liveness policies.
+func RetryDelay(ctx context.Context, err error, fallback time.Duration) (time.Duration, bool) {
+	if err == nil || (ctx != nil && ctx.Err() != nil) || errors.Is(err, context.Canceled) {
+		return 0, false
 	}
-	var response protocol.Task
-	if err := client.operatorRequest(ctx, http.MethodPost, "v1/tasks/"+taskID+"/input", nil, idempotencyKey, request, &response); err != nil {
-		return protocol.Task{}, err
+	var apiError *APIError
+	if errors.As(err, &apiError) {
+		if apiError.StatusCode != http.StatusTooManyRequests && apiError.StatusCode < http.StatusInternalServerError {
+			return 0, false
+		}
+		if apiError.retryAfterSet || apiError.RetryAfter > 0 {
+			return apiError.RetryAfter, true
+		}
+		return fallback, true
 	}
-	if err := validateTaskResponse("submit task input", taskID, response); err != nil {
-		return protocol.Task{}, err
+	var responseError *ResponseError
+	if errors.As(err, &responseError) {
+		return 0, false
 	}
-	return response, nil
+	var urlError *url.Error
+	if errors.As(err, &urlError) {
+		if retryableTransportCause(urlError.Err) {
+			return fallback, true
+		}
+		return 0, false
+	}
+	if retryableTransportCause(err) {
+		return fallback, true
+	}
+	return 0, false
+}
+
+func retryableTransportCause(err error) bool {
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var networkError net.Error
+	return errors.As(err, &networkError)
 }
 
 func (client *Client) machineRequest(ctx context.Context, method, endpoint string, query url.Values, idempotencyKey string, request, response any) error {
@@ -355,16 +444,63 @@ func (client *OperatorClient) operatorRequest(ctx context.Context, method, endpo
 	return client.request(ctx, method, endpoint, query, client.operatorToken, idempotencyKey, request, response)
 }
 
+func (client *OperatorClient) operatorRequestWithStatus(ctx context.Context, method, endpoint string, query url.Values, idempotencyKey string, request, response any) (int, error) {
+	return client.requestWithStatus(ctx, method, endpoint, query, client.operatorToken, idempotencyKey, request, response)
+}
+
 func (client *transport) request(ctx context.Context, method, endpoint string, query url.Values, token, idempotencyKey string, request, response any) error {
+	_, err := client.requestWithStatus(ctx, method, endpoint, query, token, idempotencyKey, request, response)
+	return err
+}
+
+func (client *transport) requestWithStatus(ctx context.Context, method, endpoint string, query url.Values, token, idempotencyKey string, request, response any) (int, error) {
+	statusCode, responseBody, oversized, err := client.perform(ctx, method, endpoint, query, token, idempotencyKey, request)
+	if err != nil {
+		return 0, err
+	}
+	if oversized {
+		return 0, responseErrorf("response body exceeds %d bytes", client.maxResponseBytes)
+	}
+	if response == nil && len(responseBody) == 0 {
+		return statusCode, nil
+	}
+	if response == nil {
+		var discarded any
+		if err := decodeJSON(responseBody, &discarded); err != nil {
+			return 0, responseErrorf("decode response: %w", err)
+		}
+		return statusCode, nil
+	}
+	if err := decodeJSON(responseBody, response); err != nil {
+		return 0, responseErrorf("decode response: %w", err)
+	}
+	return statusCode, nil
+}
+
+func (client *transport) requestNoContent(ctx context.Context, method, endpoint string, query url.Values, token, idempotencyKey string, request any) error {
+	statusCode, responseBody, oversized, err := client.perform(ctx, method, endpoint, query, token, idempotencyKey, request)
+	if err != nil {
+		return err
+	}
+	if statusCode != http.StatusNoContent {
+		return responseErrorf("invalid append events response: expected HTTP 204 No Content, got HTTP %d", statusCode)
+	}
+	if oversized || len(responseBody) != 0 {
+		return responseErrorf("invalid append events response: HTTP 204 must not include a response body")
+	}
+	return nil
+}
+
+func (client *transport) perform(ctx context.Context, method, endpoint string, query url.Values, token, idempotencyKey string, request any) (int, []byte, bool, error) {
 	if strings.TrimSpace(token) == "" {
-		return errors.New("bearer token must not be empty")
+		return 0, nil, false, errors.New("bearer token must not be empty")
 	}
 
 	var body io.Reader
 	if request != nil {
 		encoded, err := json.Marshal(request)
 		if err != nil {
-			return fmt.Errorf("encode request: %w", err)
+			return 0, nil, false, fmt.Errorf("encode request: %w", err)
 		}
 		body = bytes.NewReader(encoded)
 	}
@@ -375,7 +511,7 @@ func (client *transport) request(ctx context.Context, method, endpoint string, q
 	endpointURL.RawQuery = query.Encode()
 	httpRequest, err := http.NewRequestWithContext(ctx, method, endpointURL.String(), body)
 	if err != nil {
-		return fmt.Errorf("create request: %w", err)
+		return 0, nil, false, fmt.Errorf("create request: %w", err)
 	}
 	httpRequest.Header.Set("Authorization", "Bearer "+token)
 	if request != nil {
@@ -387,34 +523,18 @@ func (client *transport) request(ctx context.Context, method, endpoint string, q
 
 	httpResponse, err := client.httpClient.Do(httpRequest)
 	if err != nil {
-		return fmt.Errorf("perform request: %w", err)
+		return 0, nil, false, fmt.Errorf("perform request: %w", err)
 	}
 	defer httpResponse.Body.Close()
 
 	responseBody, oversized, err := readBounded(httpResponse.Body, client.maxResponseBytes)
 	if err != nil {
-		return err
+		return 0, nil, false, err
 	}
 	if httpResponse.StatusCode < http.StatusOK || httpResponse.StatusCode >= http.StatusMultipleChoices {
-		return decodeAPIError(httpResponse.StatusCode, httpResponse.Header, responseBody)
+		return 0, nil, false, decodeAPIError(httpResponse.StatusCode, httpResponse.Header, responseBody)
 	}
-	if oversized {
-		return fmt.Errorf("response body exceeds %d bytes", client.maxResponseBytes)
-	}
-	if response == nil && len(responseBody) == 0 {
-		return nil
-	}
-	if response == nil {
-		var discarded any
-		if err := decodeJSON(responseBody, &discarded); err != nil {
-			return fmt.Errorf("decode response: %w", err)
-		}
-		return nil
-	}
-	if err := decodeJSON(responseBody, response); err != nil {
-		return fmt.Errorf("decode response: %w", err)
-	}
-	return nil
+	return httpResponse.StatusCode, responseBody, oversized, nil
 }
 
 func readBounded(reader io.Reader, limit int64) ([]byte, bool, error) {
@@ -447,7 +567,13 @@ func decodeJSON(value []byte, target any) error {
 }
 
 func decodeAPIError(statusCode int, header http.Header, body []byte) error {
-	apiError := &APIError{StatusCode: statusCode, Code: errorCodeForStatus(statusCode), RetryAfter: retryAfter(header.Get("Retry-After"))}
+	retryDelay, retryAfterSet := retryAfter(header.Get("Retry-After"))
+	apiError := &APIError{
+		StatusCode:    statusCode,
+		Code:          errorCodeForStatus(statusCode),
+		RetryAfter:    retryDelay,
+		retryAfterSet: retryAfterSet,
+	}
 	var envelope protocol.ErrorEnvelope
 	if err := decodeJSON(body, &envelope); err == nil {
 		if envelope.Error.Code != "" {
@@ -483,17 +609,25 @@ func errorCodeForStatus(statusCode int) ErrorCode {
 	}
 }
 
-func retryAfter(value string) time.Duration {
+func retryAfter(value string) (time.Duration, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, false
+	}
 	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds >= 0 {
-		return time.Duration(seconds) * time.Second
+		if seconds > int64(1<<63-1)/int64(time.Second) {
+			return 0, false
+		}
+		return time.Duration(seconds) * time.Second, true
 	}
 	if date, err := http.ParseTime(value); err == nil {
 		remaining := time.Until(date)
-		if remaining > 0 {
-			return remaining
+		if remaining < 0 {
+			remaining = 0
 		}
+		return remaining, true
 	}
-	return 0
+	return 0, false
 }
 
 func validatePathID(field, value string) error {

@@ -260,9 +260,9 @@ jobs:
             --header 'Content-Type: application/json' \
             --data '{"work":{"goal":"compose smoke test","agent_profile":"default","workspace":"primary","input":{"mode":"success"}}}' \
             http://127.0.0.1:4000/api/v1/tasks)
-          task_id=$(jq --exit-status --raw-output '.id // .task_id' <<<"$task_json")
+          task_id=$(jq --exit-status --raw-output '.task_id' <<<"$task_json")
           test -n "$task_id"
 
           task_url="http://127.0.0.1:4000/api/v1/tasks/${task_id}"
           wait_for "fake-agent task ${task_id} to complete" 60 \
-            bash -c 'task=$(curl --fail --silent --show-error --header "Authorization: Bearer development-operator-token" "$0"); jq --exit-status -e '\''(.state == "completed") or (.status == "completed")'\'' <<<"$task" >/dev/null' "$task_url"
+            bash -c 'task=$(curl --fail --silent --show-error --header "Authorization: Bearer development-operator-token" "$0"); jq --exit-status -e '\''.state == "completed"'\'' <<<"$task" >/dev/null' "$task_url"

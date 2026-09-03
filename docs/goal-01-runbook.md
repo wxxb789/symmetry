@@ -133,18 +133,31 @@ curl -H "Authorization: Bearer $SYMMETRY_OPERATOR_TOKEN" \
   http://127.0.0.1:4000/api/v1/tasks/TASK_ID
 ```
 
-Cancel or supply consequential input:
+Create a task-owned command to cancel or supply consequential input. Each
+command requires its own `Idempotency-Key`; the success body is the command
+resource, not an updated task:
 
 ```sh
 curl -X POST -H "Authorization: Bearer $SYMMETRY_OPERATOR_TOKEN" \
-  http://127.0.0.1:4000/api/v1/tasks/TASK_ID/cancel
+  -H "Idempotency-Key: cancel-001" \
+  -H "Content-Type: application/json" \
+  -d '{"kind":"cancel"}' \
+  http://127.0.0.1:4000/api/v1/tasks/TASK_ID/commands
 
 curl -X POST -H "Authorization: Bearer $SYMMETRY_OPERATOR_TOKEN" \
   -H "Idempotency-Key: input-001" \
   -H "Content-Type: application/json" \
-  -d '{"input":{"answer":"continue"}}' \
-  http://127.0.0.1:4000/api/v1/tasks/TASK_ID/input
+  -d '{"kind":"provide_input","payload":{"answer":"continue"}}' \
+  http://127.0.0.1:4000/api/v1/tasks/TASK_ID/commands
 ```
+
+`cancel` has no `payload` member. `provide_input` requires an object payload;
+`{}` is valid. New commands return `201`; an exact idempotency replay returns
+`200`; conflicting key reuse returns `409 idempotency_conflict`; a command that
+is not allowed in the current task state returns `409 state_conflict`.
+
+For task creation, omit `work.input` to preserve `null`; send `"input":{}` to
+preserve an explicit empty object.
 
 ## Verification
 

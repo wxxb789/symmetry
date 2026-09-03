@@ -7,7 +7,9 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
@@ -43,6 +45,9 @@ func TestRunEnrollsOnceAndReusesPersistedIdentity(t *testing.T) {
 	}
 	if control.registerCalls != 2 {
 		t.Fatalf("RegisterSession calls = %d, want 2", control.registerCalls)
+	}
+	if control.machineIDs[0] != "machine-1" || control.machineIDs[1] != "machine-1" {
+		t.Fatalf("RegisterSession machine IDs = %#v", control.machineIDs)
 	}
 	identity, err := store.LoadIdentity()
 	if err != nil || identity.MachineID != "machine-1" {
@@ -862,15 +867,47 @@ func TestJSONLRawFallbackDoesNotDropLaterRecords(t *testing.T) {
 	}
 }
 
-func TestRetryableClaimUsesHTTPStatus(t *testing.T) {
-	if !retryableClaim(&control.APIError{StatusCode: http.StatusInternalServerError, Code: "internal_error"}) {
-		t.Fatal("500 internal_error was not retryable")
+func TestRetryStopsAfterPermanentError(t *testing.T) {
+	var calls int
+	want := &control.APIError{StatusCode: http.StatusBadRequest, Code: control.InvalidRequest}
+	err := retry(context.Background(), func() error {
+		calls++
+		return want
+	})
+	if !errors.Is(err, want) || calls != 1 {
+		t.Fatalf("retry error = %v, calls = %d", err, calls)
 	}
-	if !retryableClaim(&control.APIError{StatusCode: http.StatusTooManyRequests, Code: "rate_limited"}) {
-		t.Fatal("429 was not retryable")
+}
+
+func TestRetryHonorsRetryAfter(t *testing.T) {
+	var calls int
+	err := retry(context.Background(), func() error {
+		calls++
+		if calls == 1 {
+			return &control.APIError{StatusCode: http.StatusTooManyRequests, Code: control.RateLimited, RetryAfter: time.Nanosecond}
+		}
+		return nil
+	})
+	if err != nil || calls != 2 {
+		t.Fatalf("retry error = %v, calls = %d", err, calls)
 	}
-	if retryableClaim(&control.APIError{StatusCode: http.StatusBadRequest, Code: "internal_error"}) {
-		t.Fatal("4xx was retryable")
+}
+
+func TestClaimWithRetryStopsAfterPermanentError(t *testing.T) {
+	api := &fakeControl{claimErr: &control.APIError{StatusCode: http.StatusBadRequest, Code: control.InvalidRequest}}
+	daemon := &daemon{control: api}
+	_, err := daemon.claimWithRetry(context.Background(), "run-1", protocol.ClaimRequest{Generation: 1, ClaimID: "claim-1"})
+	if err == nil || api.claimCalls != 1 {
+		t.Fatalf("claim error = %v, calls = %d", err, api.claimCalls)
+	}
+}
+
+func TestClaimWithRetryHonorsRetryAfter(t *testing.T) {
+	api := &fakeControl{claimErrors: []error{&control.APIError{StatusCode: http.StatusTooManyRequests, Code: control.RateLimited, RetryAfter: time.Nanosecond}}}
+	daemon := &daemon{control: api}
+	claim, err := daemon.claimWithRetry(context.Background(), "run-1", protocol.ClaimRequest{Generation: 1, ClaimID: "claim-1"})
+	if err != nil || api.claimCalls != 2 || claim.ClaimID != "claim-1" {
+		t.Fatalf("claim = %#v, error = %v, calls = %d", claim, err, api.claimCalls)
 	}
 }
 
@@ -995,7 +1032,7 @@ func TestTransientClaimRetryUsesPersistedClaimID(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	control := &fakeControl{claimErrors: []error{errors.New("network interrupted")}}
+	control := &fakeControl{claimErrors: []error{transportError("network interrupted")}}
 	daemon := &daemon{config: testConfig(t), store: store, control: control, log: slog.New(slog.NewJSONHandler(io.Discard, nil)), workspace: &fakeWorkspace{}, start: func(context.Context, execution.Invocation, execution.Sink) (Process, error) {
 		return fakeProcess{}, nil
 	}, options: options{newID: ids(), clock: time.Now}, runtimeID: "runtime-1", runtimeEpoch: 1, running: make(map[state.RunKey]*runningRun), slots: make(chan struct{}, 1)}
@@ -1146,6 +1183,10 @@ func failStart(context.Context, execution.Invocation, execution.Sink) (Process, 
 	return nil, errors.New("unexpected start")
 }
 
+func transportError(message string) error {
+	return &url.Error{Op: "POST", URL: "https://control.example.test", Err: &net.DNSError{Err: message, IsTemporary: true}}
+}
+
 type fakeEnrollment struct{ calls int }
 
 func (client *fakeEnrollment) Enroll(context.Context, string, protocol.EnrollRequest) (protocol.EnrollResponse, error) {
@@ -1154,20 +1195,22 @@ func (client *fakeEnrollment) Enroll(context.Context, string, protocol.EnrollReq
 }
 
 type fakeControl struct {
-	registerCalls int
-	claimCalls    int
-	eventCalls    int
-	assignment    protocol.Assignment
-	beforeClaim   func()
-	cancel        context.CancelFunc
-	claimErr      error
-	claimErrors   []error
-	claimIDs      []string
-	workEnabled   <-chan struct{}
-	claimBlock    <-chan struct{}
-	claimEntered  chan<- struct{}
-	renewCalls    int
-	heartbeat     protocol.RuntimeHeartbeatRequest
+	registerCalls     int
+	machineIDs        []string
+	daemonInstanceIDs []string
+	claimCalls        int
+	eventCalls        int
+	assignment        protocol.Assignment
+	beforeClaim       func()
+	cancel            context.CancelFunc
+	claimErr          error
+	claimErrors       []error
+	claimIDs          []string
+	workEnabled       <-chan struct{}
+	claimBlock        <-chan struct{}
+	claimEntered      chan<- struct{}
+	renewCalls        int
+	heartbeat         protocol.RuntimeHeartbeatRequest
 }
 
 type orderingControl struct {
@@ -1200,12 +1243,12 @@ func (client *terminalRecoveryControl) Transition(_ context.Context, _ string, r
 	}
 	if client.failOnce {
 		client.failOnce = false
-		return errors.New("temporary failure")
+		return transportError("temporary failure")
 	}
 	return client.transitionErr
 }
 
-func (client *terminalRecoveryControl) RegisterSession(_ context.Context, _ protocol.SessionRegistrationRequest) (protocol.SessionRegistrationResponse, error) {
+func (client *terminalRecoveryControl) RegisterSession(_ context.Context, _, _ string, _ protocol.SessionRegistrationRequest) (protocol.SessionRegistrationResponse, error) {
 	client.registerCalls++
 	client.registeredAfterFlush = client.flushed
 	if client.cancel != nil {
@@ -1279,8 +1322,10 @@ func sameStrings(left, right []string) bool {
 	return true
 }
 
-func (client *fakeControl) RegisterSession(_ context.Context, _ protocol.SessionRegistrationRequest) (protocol.SessionRegistrationResponse, error) {
+func (client *fakeControl) RegisterSession(_ context.Context, machineID, daemonInstanceID string, _ protocol.SessionRegistrationRequest) (protocol.SessionRegistrationResponse, error) {
 	client.registerCalls++
+	client.machineIDs = append(client.machineIDs, machineID)
+	client.daemonInstanceIDs = append(client.daemonInstanceIDs, daemonInstanceID)
 	if client.cancel != nil && client.assignment.RunID == "" {
 		client.cancel()
 	}
@@ -1290,7 +1335,7 @@ func (client *fakeControl) Heartbeat(_ context.Context, _ string, request protoc
 	client.heartbeat = request
 	return protocol.RuntimeSnapshot{}, nil
 }
-func (client *fakeControl) Work(context.Context, string, int64) (protocol.RuntimeSnapshot, error) {
+func (client *fakeControl) Dispatch(context.Context, string, int64) (protocol.RuntimeSnapshot, error) {
 	if client.workEnabled != nil {
 		select {
 		case <-client.workEnabled:
