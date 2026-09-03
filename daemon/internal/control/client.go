@@ -321,7 +321,18 @@ func (client *Client) Transition(ctx context.Context, runID string, request prot
 		Payload json.RawMessage `json:"payload"`
 	}{Fence: request.Fence, State: request.State, Payload: request.Payload}
 	endpoint := "v1/runs/" + runID + "/transitions/" + request.TransitionID
-	return client.machineRequest(ctx, http.MethodPut, endpoint, nil, "", body, nil)
+	var response protocol.Run
+	statusCode, err := client.requestWithStatus(ctx, http.MethodPut, endpoint, nil, client.machineToken, "", body, &response)
+	if err != nil {
+		return err
+	}
+	if statusCode != http.StatusOK {
+		return responseErrorf("invalid transition response: expected HTTP 200 OK, got HTTP %d", statusCode)
+	}
+	if err := validateTransitionResponse(runID, request, response); err != nil {
+		return responseErrorf("%v", err)
+	}
+	return nil
 }
 
 // Reconcile compares the caller's local run journal with durable control-plane state.
@@ -356,7 +367,18 @@ func (client *Client) AcknowledgeCommand(ctx context.Context, commandID string, 
 		Outcome string `json:"outcome"`
 	}{Fence: request.Fence, RunID: request.RunID, Outcome: request.Outcome}
 	endpoint := "v1/commands/" + commandID + "/acknowledgements/" + request.AckID
-	return client.machineRequest(ctx, http.MethodPut, endpoint, nil, "", body, nil)
+	var response protocol.TaskCommand
+	statusCode, err := client.requestWithStatus(ctx, http.MethodPut, endpoint, nil, client.machineToken, "", body, &response)
+	if err != nil {
+		return err
+	}
+	if statusCode != http.StatusOK {
+		return responseErrorf("invalid acknowledge command response: expected HTTP 200 OK, got HTTP %d", statusCode)
+	}
+	if err := validateAcknowledgementResponse(commandID, request, response); err != nil {
+		return responseErrorf("%v", err)
+	}
+	return nil
 }
 
 // SubmitTask creates or retrieves a task under the supplied idempotency key.

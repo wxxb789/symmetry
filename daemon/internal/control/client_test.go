@@ -105,7 +105,7 @@ func TestClientProtocolRequests(t *testing.T) {
 		{
 			name: "transition", method: http.MethodPut, path: "/api/v1/runs/run-1/transitions/transition-1", wantAuth: "Bearer " + machineToken,
 			wantBody: `{"runtime_id":"runtime-1","runtime_epoch":3,"generation":2,"claim_id":"claim-1","lease_token":"lease-1","state":"waiting_for_input","payload":{"question":"branch"}}`,
-			response: `{}`,
+			response: runJSON("waiting_for_input", `null`, `null`),
 			invoke: func(ctx context.Context, client *Client) error {
 				return client.Transition(ctx, "run-1", protocol.StateTransitionRequest{Fence: fence(), TransitionID: "transition-1", State: "waiting_for_input", Payload: json.RawMessage(`{"question":"branch"}`)})
 			},
@@ -121,7 +121,7 @@ func TestClientProtocolRequests(t *testing.T) {
 		{
 			name: "acknowledge command", method: http.MethodPut, path: "/api/v1/commands/command-1/acknowledgements/ack-1", wantAuth: "Bearer " + machineToken,
 			wantBody: `{"runtime_id":"runtime-1","runtime_epoch":3,"generation":2,"claim_id":"claim-1","lease_token":"lease-1","run_id":"run-1","outcome":"applied"}`,
-			response: `{}`,
+			response: acknowledgedCommandForGeneration(2),
 			invoke: func(ctx context.Context, client *Client) error {
 				return client.AcknowledgeCommand(ctx, "command-1", protocol.CommandAcknowledgement{Fence: fence(), RunID: "run-1", CommandID: "command-1", Outcome: "applied", AckID: "ack-1"})
 			},
@@ -467,7 +467,15 @@ func runlessAppliedCommandJSON() string {
 }
 
 func acknowledgedCommandJSON() string {
-	return `{"command_id":"command-1","task_id":"task-1","run_id":"run-1","generation":1,"kind":"cancel","payload":{},"state":"acknowledged","issued_at":"2026-09-03T00:00:00Z","applied_at":null,"acknowledgement_id":"ack-1","acknowledgement_outcome":"applied","acknowledged_at":"2026-09-03T00:00:01Z"}`
+	return acknowledgedCommandForGeneration(1)
+}
+
+func acknowledgedCommandForGeneration(generation int64) string {
+	return fmt.Sprintf(`{"command_id":"command-1","task_id":"task-1","run_id":"run-1","generation":%d,"kind":"cancel","payload":{},"state":"acknowledged","issued_at":"2026-09-03T00:00:00Z","applied_at":null,"acknowledgement_id":"ack-1","acknowledgement_outcome":"applied","acknowledged_at":"2026-09-03T00:00:01Z"}`, generation)
+}
+
+func runJSON(state, result, failure string) string {
+	return fmt.Sprintf(`{"run_id":"run-1","task_id":"task-1","runtime_id":"runtime-1","generation":2,"state":%q,"claim_id":"claim-1","lease_token":"lease-1","lease_expires_at":"2026-09-03T00:00:30Z","result":%s,"failure":%s}`, state, result, failure)
 }
 
 func provideInputCommandJSON(payload string) string {

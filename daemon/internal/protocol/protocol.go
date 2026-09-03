@@ -211,6 +211,43 @@ type StateTransitionRequest struct {
 	Payload      json.RawMessage `json:"payload"`
 }
 
+// Run is the durable run resource returned after a state transition.
+type Run struct {
+	RunID          string          `json:"run_id"`
+	TaskID         string          `json:"task_id"`
+	RuntimeID      string          `json:"runtime_id"`
+	Generation     int64           `json:"generation"`
+	State          string          `json:"state"`
+	ClaimID        string          `json:"claim_id"`
+	LeaseToken     string          `json:"lease_token"`
+	LeaseExpiresAt time.Time       `json:"lease_expires_at"`
+	Result         json.RawMessage `json:"result"`
+	Failure        json.RawMessage `json:"failure"`
+	present        map[string]struct{}
+}
+
+// UnmarshalJSON retains response-field presence for strict protocol validation.
+func (run *Run) UnmarshalJSON(value []byte) error {
+	type wire Run
+	var decoded wire
+	if err := json.Unmarshal(value, &decoded); err != nil {
+		return err
+	}
+	present, err := presentFields(value)
+	if err != nil {
+		return err
+	}
+	*run = Run(decoded)
+	run.present = present
+	return nil
+}
+
+// HasField reports whether a field was present when this value was decoded.
+func (run Run) HasField(name string) bool {
+	_, ok := run.present[name]
+	return ok
+}
+
 // ReconcileRun describes one run retained in the daemon's local journal.
 type ReconcileRun struct {
 	RunID               string `json:"run_id"`

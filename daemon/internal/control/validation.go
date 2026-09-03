@@ -78,6 +78,47 @@ func validateClaimResponse(runID string, request protocol.ClaimRequest, response
 	return nil
 }
 
+func validateTransitionResponse(runID string, request protocol.StateTransitionRequest, response protocol.Run) error {
+	for _, field := range []string{
+		"run_id", "task_id", "runtime_id", "generation", "state", "claim_id", "lease_token", "lease_expires_at", "result", "failure",
+	} {
+		if !response.HasField(field) {
+			return invalidResponse("transition", field+" is required")
+		}
+	}
+	if response.RunID == "" || response.TaskID == "" || response.RuntimeID == "" || response.Generation <= 0 || response.State == "" || response.ClaimID == "" || response.LeaseToken == "" || response.LeaseExpiresAt.IsZero() {
+		return invalidResponse("transition", "run identifiers, state, fence, and lease_expires_at must be non-null")
+	}
+	if response.RunID != runID || response.RuntimeID != request.RuntimeID || response.Generation != request.Generation || response.ClaimID != request.ClaimID || response.LeaseToken != request.LeaseToken {
+		return invalidResponse("transition", "run_id or fence does not match the request")
+	}
+	if response.State != request.State {
+		return invalidResponse("transition", "state does not match the request")
+	}
+	if !isTransitionState(response.State) {
+		return invalidResponse("transition", "state is not recognized")
+	}
+	if err := validateNullableJSONObject(response.Result); err != nil {
+		return invalidResponse("transition", "result "+err.Error())
+	}
+	if err := validateNullableJSONObject(response.Failure); err != nil {
+		return invalidResponse("transition", "failure "+err.Error())
+	}
+	if response.State == "completed" && isJSONNull(response.Result) {
+		return invalidResponse("transition", "completed state requires result")
+	}
+	if response.State == "failed" && isJSONNull(response.Failure) {
+		return invalidResponse("transition", "failed state requires failure")
+	}
+	if response.State != "completed" && !isJSONNull(response.Result) {
+		return invalidResponse("transition", "only completed state may include result")
+	}
+	if response.State != "failed" && !isJSONNull(response.Failure) {
+		return invalidResponse("transition", "only failed state may include failure")
+	}
+	return nil
+}
+
 func validateLeaseHeartbeatResponse(response protocol.LeaseHeartbeatResponse) error {
 	if response.LeaseExpiresAt.IsZero() || response.Commands == nil {
 		return invalidResponse("lease heartbeat", "lease_expires_at and commands are required")
@@ -188,6 +229,22 @@ func validateTaskCommandResponse(operation, expectedTaskID string, request proto
 	}
 	if response.Kind != request.Kind || !sameCommandPayload(request, response.Payload) {
 		return invalidResponse(operation, "kind or payload does not match the request")
+	}
+	return nil
+}
+
+func validateAcknowledgementResponse(commandID string, request protocol.CommandAcknowledgement, response protocol.TaskCommand) error {
+	if err := validateTaskCommandResource("", response); err != nil {
+		return invalidResponse("acknowledge command", err.Error())
+	}
+	if response.CommandID != commandID || response.RunID == nil || *response.RunID != request.RunID || response.Generation == nil || *response.Generation != request.Generation {
+		return invalidResponse("acknowledge command", "command_id, run_id, or generation does not match the request")
+	}
+	if response.State != "acknowledged" {
+		return invalidResponse("acknowledge command", "state must be acknowledged")
+	}
+	if response.AcknowledgementID == nil || *response.AcknowledgementID != request.AckID || response.AcknowledgementOutcome == nil || *response.AcknowledgementOutcome != request.Outcome {
+		return invalidResponse("acknowledge command", "acknowledgement_id or outcome does not match the request")
 	}
 	return nil
 }
@@ -440,6 +497,15 @@ func isJSONNull(value json.RawMessage) bool {
 func isTaskState(value string) bool {
 	switch value {
 	case "queued", "assigned", "claimed", "running", "waiting_for_input", "cancelling", "completed", "failed", "cancelled":
+		return true
+	default:
+		return false
+	}
+}
+
+func isTransitionState(value string) bool {
+	switch value {
+	case "running", "waiting_for_input", "completed", "failed", "cancelled":
 		return true
 	default:
 		return false

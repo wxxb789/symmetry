@@ -88,6 +88,18 @@ func TestClientRejectsIncompleteSuccessResponses(t *testing.T) {
 			},
 		},
 		{
+			name: "transition", body: `{}`, wantError: "invalid transition response",
+			invoke: func(machine *Client, enrollment *EnrollmentClient, operator *OperatorClient) error {
+				return machine.Transition(context.Background(), "run-1", protocol.StateTransitionRequest{Fence: fence(), TransitionID: "transition-1", State: "running", Payload: json.RawMessage(`{}`)})
+			},
+		},
+		{
+			name: "acknowledgement", body: `{}`, wantError: "invalid acknowledge command response",
+			invoke: func(machine *Client, enrollment *EnrollmentClient, operator *OperatorClient) error {
+				return machine.AcknowledgeCommand(context.Background(), "command-1", protocol.CommandAcknowledgement{Fence: fence(), RunID: "run-1", CommandID: "command-1", Outcome: "applied", AckID: "ack-1"})
+			},
+		},
+		{
 			name: "task", body: `{"state":"queued"}`, wantError: "invalid get task response",
 			invoke: func(machine *Client, enrollment *EnrollmentClient, operator *OperatorClient) error {
 				_, err := operator.GetTask(context.Background(), "task-1")
@@ -555,6 +567,118 @@ func TestCreateTaskCommandRejectsRequestResponseMismatch(t *testing.T) {
 				t.Fatalf("error = %v", err)
 			}
 		})
+	}
+}
+
+func TestTransitionRequiresMatchingRunResource(t *testing.T) {
+	request := protocol.StateTransitionRequest{
+		Fence:        fence(),
+		TransitionID: "transition-1",
+		State:        "running",
+		Payload:      json.RawMessage(`{}`),
+	}
+	valid := runJSON("running", `null`, `null`)
+	tests := []struct {
+		name    string
+		status  int
+		body    string
+		wantErr string
+	}{
+		{name: "accepted", status: http.StatusAccepted, body: valid, wantErr: "expected HTTP 200"},
+		{name: "no content", status: http.StatusNoContent, wantErr: "decode response"},
+		{name: "empty object", status: http.StatusOK, body: `{}`, wantErr: "invalid transition response"},
+		{name: "missing result", status: http.StatusOK, body: strings.Replace(valid, `,"result":null`, ``, 1), wantErr: "result is required"},
+		{name: "mismatched run", status: http.StatusOK, body: strings.Replace(valid, `"run_id":"run-1"`, `"run_id":"run-2"`, 1), wantErr: "run_id or fence does not match the request"},
+		{name: "mismatched fence", status: http.StatusOK, body: strings.Replace(valid, `"runtime_id":"runtime-1"`, `"runtime_id":"runtime-2"`, 1), wantErr: "run_id or fence does not match the request"},
+		{name: "mismatched state", status: http.StatusOK, body: strings.Replace(valid, `"state":"running"`, `"state":"waiting_for_input"`, 1), wantErr: "state does not match the request"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := jsonServer(t, test.status, test.body, nil)
+			defer server.Close()
+			err := mustMachineClient(t, server).Transition(context.Background(), "run-1", request)
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("error = %v, want containing %q", err, test.wantErr)
+			}
+			var responseError *ResponseError
+			if !errors.As(err, &responseError) {
+				t.Fatalf("error = %T %v, want ResponseError", err, err)
+			}
+		})
+	}
+
+	completed := request
+	completed.State = "completed"
+	server := jsonServer(t, http.StatusOK, runJSON("completed", `null`, `null`), nil)
+	defer server.Close()
+	err := mustMachineClient(t, server).Transition(context.Background(), "run-1", completed)
+	if err == nil || !strings.Contains(err.Error(), "completed state requires result") {
+		t.Fatalf("completed response error = %v", err)
+	}
+
+	failed := request
+	failed.State = "failed"
+	server = jsonServer(t, http.StatusOK, runJSON("failed", `null`, `null`), nil)
+	defer server.Close()
+	err = mustMachineClient(t, server).Transition(context.Background(), "run-1", failed)
+	if err == nil || !strings.Contains(err.Error(), "failed state requires failure") {
+		t.Fatalf("failed response error = %v", err)
+	}
+
+	server = jsonServer(t, http.StatusOK, strings.TrimSuffix(valid, `}`)+`,"future_field":true}`, nil)
+	defer server.Close()
+	if err := mustMachineClient(t, server).Transition(context.Background(), "run-1", request); err != nil {
+		t.Fatalf("unknown additive field: %v", err)
+	}
+}
+
+func TestAcknowledgeCommandRequiresMatchingCommandResource(t *testing.T) {
+	request := protocol.CommandAcknowledgement{
+		Fence:     fence(),
+		RunID:     "run-1",
+		CommandID: "command-1",
+		Outcome:   "applied",
+		AckID:     "ack-1",
+	}
+	valid := acknowledgedCommandForGeneration(2)
+	tests := []struct {
+		name    string
+		status  int
+		body    string
+		wantErr string
+	}{
+		{name: "accepted", status: http.StatusAccepted, body: valid, wantErr: "expected HTTP 200"},
+		{name: "no content", status: http.StatusNoContent, wantErr: "decode response"},
+		{name: "empty object", status: http.StatusOK, body: `{}`, wantErr: "invalid acknowledge command response"},
+		{name: "missing task", status: http.StatusOK, body: strings.Replace(valid, `,"task_id":"task-1"`, ``, 1), wantErr: "task_id is required"},
+		{name: "mismatched command", status: http.StatusOK, body: strings.Replace(valid, `"command_id":"command-1"`, `"command_id":"command-2"`, 1), wantErr: "command_id, run_id, or generation does not match the request"},
+		{name: "mismatched run", status: http.StatusOK, body: strings.Replace(valid, `"run_id":"run-1"`, `"run_id":"run-2"`, 1), wantErr: "command_id, run_id, or generation does not match the request"},
+		{name: "mismatched generation", status: http.StatusOK, body: strings.Replace(valid, `"generation":2`, `"generation":3`, 1), wantErr: "command_id, run_id, or generation does not match the request"},
+		{name: "mismatched state", status: http.StatusOK, body: strings.Replace(valid, `"state":"acknowledged"`, `"state":"pending"`, 1), wantErr: "pending command must be run-bound without applied_at or acknowledgement"},
+		{name: "mismatched acknowledgement", status: http.StatusOK, body: strings.Replace(valid, `"acknowledgement_id":"ack-1"`, `"acknowledgement_id":"ack-2"`, 1), wantErr: "acknowledgement_id or outcome does not match the request"},
+		{name: "mismatched outcome", status: http.StatusOK, body: strings.Replace(valid, `"acknowledgement_outcome":"applied"`, `"acknowledgement_outcome":"rejected"`, 1), wantErr: "acknowledgement_id or outcome does not match the request"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := jsonServer(t, test.status, test.body, nil)
+			defer server.Close()
+			err := mustMachineClient(t, server).AcknowledgeCommand(context.Background(), "command-1", request)
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("error = %v, want containing %q", err, test.wantErr)
+			}
+			var responseError *ResponseError
+			if !errors.As(err, &responseError) {
+				t.Fatalf("error = %T %v, want ResponseError", err, err)
+			}
+		})
+	}
+
+	server := jsonServer(t, http.StatusOK, strings.TrimSuffix(valid, `}`)+`,"future_field":true}`, nil)
+	defer server.Close()
+	if err := mustMachineClient(t, server).AcknowledgeCommand(context.Background(), "command-1", request); err != nil {
+		t.Fatalf("unknown additive field: %v", err)
 	}
 }
 
