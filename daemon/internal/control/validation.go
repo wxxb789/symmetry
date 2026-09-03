@@ -101,7 +101,7 @@ func validateReconcileResponse(response protocol.ReconcileResponse) error {
 }
 
 func validateTaskResponse(operation, expectedTaskID string, response protocol.Task) error {
-	for _, field := range []string{"task_id", "state", "run_id", "generation", "work", "result", "failure"} {
+	for _, field := range []string{"task_id", "state", "run_id", "generation", "work", "result", "failure", "waiting", "latest_command"} {
 		if !response.HasField(field) {
 			return invalidResponse(operation, field+" is required")
 		}
@@ -146,6 +146,23 @@ func validateTaskResponse(operation, expectedTaskID string, response protocol.Ta
 	if response.State != "failed" && !isJSONNull(response.Failure) {
 		return invalidResponse(operation, "only failed state may include failure")
 	}
+	if response.Waiting == nil {
+		if response.State == "waiting_for_input" {
+			return invalidResponse(operation, "waiting_for_input state requires waiting")
+		}
+	} else {
+		if response.State != "waiting_for_input" {
+			return invalidResponse(operation, "only waiting_for_input state may include waiting")
+		}
+		if err := validateTaskWaiting(response, *response.Waiting); err != nil {
+			return invalidResponse(operation, "waiting "+err.Error())
+		}
+	}
+	if response.LatestCommand != nil {
+		if err := validateTaskCommandResource(response.TaskID, *response.LatestCommand); err != nil {
+			return invalidResponse(operation, "latest_command "+err.Error())
+		}
+	}
 	return nil
 }
 
@@ -166,38 +183,66 @@ func validateTaskCommandRequest(request protocol.TaskCommandRequest) error {
 }
 
 func validateTaskCommandResponse(operation, expectedTaskID string, request protocol.TaskCommandRequest, response protocol.TaskCommand) error {
+	if err := validateTaskCommandResource(expectedTaskID, response); err != nil {
+		return invalidResponse(operation, err.Error())
+	}
+	if response.Kind != request.Kind || !sameCommandPayload(request, response.Payload) {
+		return invalidResponse(operation, "kind or payload does not match the request")
+	}
+	return nil
+}
+
+func validateTaskWaiting(task protocol.Task, waiting protocol.TaskWaiting) error {
+	for _, field := range []string{"run_id", "generation", "transition_id", "question", "payload", "recorded_at"} {
+		if !waiting.HasField(field) {
+			return errors.New(field + " is required")
+		}
+	}
+	if waiting.RunID == "" || waiting.Generation <= 0 || waiting.TransitionID == "" || waiting.RecordedAt.IsZero() {
+		return errors.New("run_id, generation, transition_id, and recorded_at must be non-null")
+	}
+	if task.RunID == nil || task.Generation == nil || waiting.RunID != *task.RunID || waiting.Generation != *task.Generation {
+		return errors.New("run_id and generation must match the current run")
+	}
+	if err := validateJSONObject(waiting.Payload); err != nil {
+		return fmt.Errorf("payload %w", err)
+	}
+	return nil
+}
+
+func validateTaskCommandResource(expectedTaskID string, response protocol.TaskCommand) error {
 	for _, field := range []string{
 		"command_id", "task_id", "run_id", "generation", "kind", "payload", "state", "issued_at", "applied_at",
 		"acknowledgement_id", "acknowledgement_outcome", "acknowledged_at",
 	} {
 		if !response.HasField(field) {
-			return invalidResponse(operation, field+" is required")
+			return errors.New(field + " is required")
 		}
 	}
 	if response.CommandID == "" || response.TaskID == "" || response.IssuedAt.IsZero() {
-		return invalidResponse(operation, "command_id, task_id, and issued_at must be non-null")
+		return errors.New("command_id, task_id, and issued_at must be non-null")
 	}
 	if expectedTaskID != "" && response.TaskID != expectedTaskID {
-		return invalidResponse(operation, "task_id does not match the request")
+		return errors.New("task_id does not match expected task")
 	}
 	if (response.RunID == nil && response.Generation != nil) || (response.RunID != nil && response.Generation == nil) {
-		return invalidResponse(operation, "run_id and generation must be null together")
+		return errors.New("run_id and generation must be null together")
 	}
 	runBound := response.RunID != nil
 	if runBound && (*response.RunID == "" || *response.Generation <= 0) {
-		return invalidResponse(operation, "run_id requires a positive generation")
+		return errors.New("run_id requires a positive generation")
 	}
 	if response.Kind != "cancel" && response.Kind != "provide_input" {
-		return invalidResponse(operation, "kind is not recognized")
+		return errors.New("kind is not recognized")
 	}
 	if err := validateJSONObject(response.Payload); err != nil {
-		return invalidResponse(operation, "payload "+err.Error())
+		return fmt.Errorf("payload %w", err)
 	}
-	if response.Kind != request.Kind || !sameCommandPayload(request, response.Payload) {
-		return invalidResponse(operation, "kind or payload does not match the request")
+	if response.Kind == "cancel" && !sameJSONObject(response.Payload, json.RawMessage(`{}`)) {
+		return errors.New("cancel command payload must be an empty JSON object")
 	}
 	if response.State != "pending" && response.State != "applied" && response.State != "acknowledged" {
-		return invalidResponse(operation, "state is not recognized")
+		return errors.New("state is not recognized")
 	}
 	acknowledgementCount := 0
 	if response.AcknowledgementID != nil {
@@ -210,32 +255,32 @@ func validateTaskCommandResponse(operation, expectedTaskID string, request proto
 		acknowledgementCount++
 	}
 	if acknowledgementCount != 0 && acknowledgementCount != 3 {
-		return invalidResponse(operation, "acknowledgement fields must be null together")
+		return errors.New("acknowledgement fields must be null together")
 	}
 	if response.AcknowledgementID != nil && (*response.AcknowledgementID == "" || *response.AcknowledgementOutcome == "" || response.AcknowledgedAt.IsZero()) {
-		return invalidResponse(operation, "acknowledgement fields are invalid")
+		return errors.New("acknowledgement fields are invalid")
 	}
 	if response.AcknowledgementOutcome != nil && *response.AcknowledgementOutcome != "applied" && *response.AcknowledgementOutcome != "rejected" && *response.AcknowledgementOutcome != "failed" {
-		return invalidResponse(operation, "acknowledgement outcome is not recognized")
+		return errors.New("acknowledgement outcome is not recognized")
 	}
 	if !runBound && (response.Kind != "cancel" || response.State != "applied") {
-		return invalidResponse(operation, "runless command must be an applied cancel")
+		return errors.New("runless command must be an applied cancel")
 	}
 	if response.Kind == "provide_input" && !runBound {
-		return invalidResponse(operation, "provide_input command requires a run_id")
+		return errors.New("provide_input command requires a run_id")
 	}
 	switch response.State {
 	case "pending":
 		if !runBound || response.AppliedAt != nil || acknowledgementCount != 0 {
-			return invalidResponse(operation, "pending command must be run-bound without applied_at or acknowledgement")
+			return errors.New("pending command must be run-bound without applied_at or acknowledgement")
 		}
 	case "applied":
 		if response.Kind != "cancel" || response.AppliedAt == nil || response.AppliedAt.IsZero() || acknowledgementCount != 0 {
-			return invalidResponse(operation, "applied command must be a cancel with applied_at and no acknowledgement")
+			return errors.New("applied command must be a cancel with applied_at and no acknowledgement")
 		}
 	case "acknowledged":
 		if !runBound || response.AppliedAt != nil || acknowledgementCount != 3 {
-			return invalidResponse(operation, "acknowledged command must be run-bound with acknowledgement and no applied_at")
+			return errors.New("acknowledged command must be run-bound with acknowledgement and no applied_at")
 		}
 	}
 	return nil

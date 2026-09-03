@@ -397,20 +397,20 @@ terminal grace; the daemon retires them locally instead of sending them, so
 they cannot block or determine the terminal verdict. Control accepts direct
 `claimed` or `waiting_for_input` completion/failure when an undelivered local
 transition was retired this way. Only a successful terminal transition records
-`accepted`; a terminal transition or
-command acknowledgement may conclusively record `ownership_lost` or
+`accepted`. A terminal transition response or a command acknowledgement
+response may independently record the conclusive verdict `ownership_lost` or
 `terminal_grace_expired`. Exact transition replay remains valid after the grace
 deadline, but a new transition ID is rejected. A newer task generation always
 returns `ownership_lost`.
 
-The daemon releases its local execution slot once when the terminal transition
-or related command acknowledgement is accepted, or when eight minutes have
-elapsed since it entered `terminal_pending`. This local capacity deadline is
-separate from Control's acceptance deadline at `lease_expires_at + 8 minutes`;
-terminal retries are paced to reach the earlier remote deadline when necessary.
-Local expiry releases capacity only: the durable journal remains until the
-control plane accepts or conclusively rejects terminal delivery and workspace
-cleanup succeeds.
+The daemon releases its local execution slot once when its terminal transition
+response records `accepted`, when either terminal response records a conclusive
+rejection, or when eight minutes have elapsed since it entered
+`terminal_pending`. This local capacity deadline is separate from Control's
+acceptance deadline at `lease_expires_at + 8 minutes`; terminal retries are
+paced to reach the earlier remote deadline when necessary. Local expiry releases
+capacity only: the durable journal remains until the control plane accepts or
+conclusively rejects terminal delivery and workspace cleanup succeeds.
 
 ### Reconcile After Start Or Reconnect
 
@@ -705,8 +705,9 @@ a different body returns `409 idempotency_conflict`. Acknowledgement records
 delivery outcome but never changes run state or removes a lifecycle command by
 itself. A new acknowledgement follows the same eight-minute terminal grace and
 current-generation fence as terminal delivery. Exact replay remains valid after
-the deadline. Acceptance may release the daemon's local slot, but only a
-terminal transition response records the terminal delivery verdict.
+the deadline. Acknowledgement success records its command outcome, never
+`accepted`; while draining a terminal journal, its response can instead record
+the conclusive `ownership_lost` or `terminal_grace_expired` verdict.
 
 ## Agent Standard Input
 

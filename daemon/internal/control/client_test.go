@@ -475,9 +475,38 @@ func provideInputCommandJSON(payload string) string {
 }
 
 func taskJSON() string {
-	return `{"task_id":"task-1","state":"queued","run_id":null,"generation":0,"work":{"goal":"work","agent_profile":"codex","workspace":"primary","input":{}},"result":null,"failure":null}`
+	return `{"task_id":"task-1","state":"queued","run_id":null,"generation":0,"work":{"goal":"work","agent_profile":"codex","workspace":"primary","input":{}},"result":null,"failure":null,"waiting":null,"latest_command":null}`
 }
 
 func taskJSONWithUnknownField() string {
-	return `{"task_id":"task-1","state":"queued","run_id":null,"generation":0,"work":{"goal":"work","agent_profile":"codex","workspace":"primary","input":{}},"result":null,"failure":null,"future_field":{"kept":"compatible"}}`
+	return `{"task_id":"task-1","state":"queued","run_id":null,"generation":0,"work":{"goal":"work","agent_profile":"codex","workspace":"primary","input":{}},"result":null,"failure":null,"waiting":null,"latest_command":null,"future_field":{"kept":"compatible"}}`
+}
+
+func waitingTaskJSON() string {
+	return `{"task_id":"task-1","state":"waiting_for_input","run_id":"run-current","generation":2,"work":{"goal":"work","agent_profile":"codex","workspace":"primary","input":{}},"result":null,"failure":null,"waiting":{"run_id":"run-current","generation":2,"transition_id":"transition-1","question":"Choose the target branch","payload":{"question":"Choose the target branch"},"recorded_at":"2026-09-03T00:00:00Z","future_waiting_field":true},"latest_command":{"command_id":"command-1","task_id":"task-1","run_id":"run-earlier","generation":1,"kind":"cancel","payload":{},"state":"applied","issued_at":"2026-09-03T00:00:00Z","applied_at":"2026-09-03T00:00:01Z","acknowledgement_id":null,"acknowledgement_outcome":null,"acknowledged_at":null,"future_command_field":true}}`
+}
+
+func TestGetTaskProjectsWaitingAndHistoricalLatestCommand(t *testing.T) {
+	server := jsonServer(t, http.StatusOK, waitingTaskJSON(), nil)
+	defer server.Close()
+
+	task, err := newOperatorClient(t, server).GetTask(context.Background(), "task-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Waiting == nil {
+		t.Fatal("waiting = nil")
+	}
+	if task.Waiting.RunID != "run-current" || task.Waiting.Generation != 2 || task.Waiting.TransitionID != "transition-1" || task.Waiting.Question == nil || *task.Waiting.Question != "Choose the target branch" {
+		t.Fatalf("waiting = %#v", task.Waiting)
+	}
+	if string(task.Waiting.Payload) != `{"question":"Choose the target branch"}` || task.Waiting.RecordedAt.IsZero() {
+		t.Fatalf("waiting payload or recorded_at = %#v", task.Waiting)
+	}
+	if task.LatestCommand == nil {
+		t.Fatal("latest_command = nil")
+	}
+	if task.LatestCommand.TaskID != task.TaskID || task.LatestCommand.RunID == nil || *task.LatestCommand.RunID != "run-earlier" || task.LatestCommand.Generation == nil || *task.LatestCommand.Generation != 1 {
+		t.Fatalf("latest_command = %#v", task.LatestCommand)
+	}
 }

@@ -335,6 +335,8 @@ func TestTaskResponseRequiresPresenceAndStateInvariants(t *testing.T) {
 		wantError string
 	}{
 		{name: "missing result", body: strings.Replace(taskJSON(), `,"result":null`, "", 1), wantError: "result is required"},
+		{name: "missing waiting", body: strings.Replace(taskJSON(), `,"waiting":null`, "", 1), wantError: "waiting is required"},
+		{name: "missing latest command", body: strings.Replace(taskJSON(), `,"latest_command":null`, "", 1), wantError: "latest_command is required"},
 		{name: "null work", body: strings.Replace(taskJSON(), `"work":{"goal":"work","agent_profile":"codex","workspace":"primary","input":{}}`, `"work":null`, 1), wantError: "work must be non-null"},
 		{name: "missing work input", body: strings.Replace(taskJSON(), `,"input":{}`, "", 1), wantError: "work input is required"},
 		{name: "non-object work input", body: strings.Replace(taskJSON(), `"input":{}`, `"input":[]`, 1), wantError: "work input must be a JSON object"},
@@ -342,6 +344,13 @@ func TestTaskResponseRequiresPresenceAndStateInvariants(t *testing.T) {
 		{name: "active task without run", body: strings.Replace(taskJSON(), `"state":"queued"`, `"state":"running"`, 1), wantError: "state requires a run_id"},
 		{name: "completed task without result", body: strings.Replace(taskJSON(), `"state":"queued","run_id":null,"generation":0`, `"state":"completed","run_id":"run-1","generation":1`, 1), wantError: "completed state requires result"},
 		{name: "failed task without failure", body: strings.Replace(taskJSON(), `"state":"queued","run_id":null,"generation":0`, `"state":"failed","run_id":"run-1","generation":1`, 1), wantError: "failed state requires failure"},
+		{name: "waiting state without waiting projection", body: strings.Replace(taskJSON(), `"state":"queued","run_id":null,"generation":0`, `"state":"waiting_for_input","run_id":"run-1","generation":1`, 1), wantError: "waiting_for_input state requires waiting"},
+		{name: "waiting projection outside waiting state", body: strings.Replace(taskJSON(), `"waiting":null`, `"waiting":{"run_id":"run-1","generation":1,"transition_id":"transition-1","question":"Choose","payload":{},"recorded_at":"2026-09-03T00:00:00Z"}`, 1), wantError: "only waiting_for_input state may include waiting"},
+		{name: "waiting run differs from current run", body: strings.Replace(waitingTaskJSON(), `"run_id":"run-current","generation":2,"transition_id"`, `"run_id":"run-other","generation":2,"transition_id"`, 1), wantError: "waiting run_id and generation must match the current run"},
+		{name: "waiting misses required field", body: strings.Replace(waitingTaskJSON(), `,"question":"Choose the target branch"`, "", 1), wantError: "waiting question is required"},
+		{name: "waiting payload is not object", body: strings.Replace(waitingTaskJSON(), `"payload":{"question":"Choose the target branch"}`, `"payload":[]`, 1), wantError: "waiting payload must be a JSON object"},
+		{name: "latest command task differs", body: strings.Replace(waitingTaskJSON(), `"task_id":"task-1","run_id":"run-earlier"`, `"task_id":"task-other","run_id":"run-earlier"`, 1), wantError: "latest_command task_id does not match expected task"},
+		{name: "latest command violates resource invariant", body: strings.Replace(waitingTaskJSON(), `"state":"applied","issued_at"`, `"state":"pending","issued_at"`, 1), wantError: "latest_command pending command must be run-bound without applied_at or acknowledgement"},
 	}
 
 	for _, test := range tests {
@@ -353,6 +362,20 @@ func TestTaskResponseRequiresPresenceAndStateInvariants(t *testing.T) {
 				t.Fatalf("error = %v, want containing %q", err, test.wantError)
 			}
 		})
+	}
+}
+
+func TestTaskResponseAcceptsNullWaitingQuestion(t *testing.T) {
+	body := strings.Replace(waitingTaskJSON(), `"question":"Choose the target branch"`, `"question":null`, 1)
+	server := jsonServer(t, http.StatusOK, body, nil)
+	defer server.Close()
+
+	task, err := newOperatorClient(t, server).GetTask(context.Background(), "task-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Waiting == nil || task.Waiting.Question != nil {
+		t.Fatalf("waiting question = %#v, want explicit null", task.Waiting)
 	}
 }
 

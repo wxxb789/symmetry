@@ -1,18 +1,22 @@
-# SymmetryControl
+# Symmetry Control
 
-To start your Phoenix server:
+`control/` is the Phoenix control plane for Symmetry. It owns durable
+orchestration state and exposes the versioned API consumed by operators and
+execution daemons.
 
-* Run `mix setup` to install and setup dependencies
-* Start Phoenix endpoint with `mix phx.server` or inside IEx with `iex -S mix phx.server`
+For local development, install dependencies and start the endpoint:
 
-Now you can visit [`localhost:4000`](http://localhost:4000) from your browser.
+```sh
+mix setup
+mix phx.server
+```
 
-Ready to run in production? Please [check our deployment guides](https://phoenix.hexdocs.pm/deployment.html).
+The local endpoint is available at `http://127.0.0.1:4000`. Local HTTP is only
+for an explicitly trusted development or container network.
 
-## Learn more
-
-* Official website: https://www.phoenixframework.org/
-* Guides: https://phoenix.hexdocs.pm/overview.html
-* Docs: https://phoenix.hexdocs.pm
-* Forum: https://elixirforum.com/c/phoenix-forum
-* Source: https://github.com/phoenixframework/phoenix
+In production, do not publish Phoenix directly. It must receive private HTTP
+only from the trusted TLS edge; the public boundary terminates HTTPS before
+requests reach this service. See the repository [README](../README.md) for the
+topology and [`docs/goal-01-runbook.md`](../docs/goal-01-runbook.md) for
+deployment and operational steps. The API contract is
+[`docs/protocol-v1.md`](../docs/protocol-v1.md).

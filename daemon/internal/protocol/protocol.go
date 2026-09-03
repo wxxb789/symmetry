@@ -315,16 +315,51 @@ func (command TaskCommand) HasField(name string) bool {
 	return ok
 }
 
-// Task is the stable portion of a task-control response. Result fields are extensible.
+// TaskWaiting is the current run's waiting-for-input projection.
+type TaskWaiting struct {
+	RunID        string          `json:"run_id"`
+	Generation   int64           `json:"generation"`
+	TransitionID string          `json:"transition_id"`
+	Question     *string         `json:"question"`
+	Payload      json.RawMessage `json:"payload"`
+	RecordedAt   time.Time       `json:"recorded_at"`
+	present      map[string]struct{}
+}
+
+// UnmarshalJSON retains response-field presence for strict protocol validation.
+func (waiting *TaskWaiting) UnmarshalJSON(value []byte) error {
+	type wire TaskWaiting
+	var decoded wire
+	if err := json.Unmarshal(value, &decoded); err != nil {
+		return err
+	}
+	present, err := presentFields(value)
+	if err != nil {
+		return err
+	}
+	*waiting = TaskWaiting(decoded)
+	waiting.present = present
+	return nil
+}
+
+// HasField reports whether a field was present when this value was decoded.
+func (waiting TaskWaiting) HasField(name string) bool {
+	_, ok := waiting.present[name]
+	return ok
+}
+
+// Task is the stable task-control response projection.
 type Task struct {
-	TaskID     string          `json:"task_id"`
-	State      string          `json:"state"`
-	RunID      *string         `json:"run_id"`
-	Generation *int64          `json:"generation"`
-	Work       *Work           `json:"work"`
-	Result     json.RawMessage `json:"result"`
-	Failure    json.RawMessage `json:"failure"`
-	present    map[string]struct{}
+	TaskID        string          `json:"task_id"`
+	State         string          `json:"state"`
+	RunID         *string         `json:"run_id"`
+	Generation    *int64          `json:"generation"`
+	Work          *Work           `json:"work"`
+	Result        json.RawMessage `json:"result"`
+	Failure       json.RawMessage `json:"failure"`
+	Waiting       *TaskWaiting    `json:"waiting"`
+	LatestCommand *TaskCommand    `json:"latest_command"`
+	present       map[string]struct{}
 }
 
 // UnmarshalJSON retains response-field presence for strict protocol validation.
