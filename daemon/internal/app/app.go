@@ -707,10 +707,15 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 }
 
 func (daemon *daemon) markRunning(key state.RunKey) error {
-	if err := daemon.queueTransition(key, "running", map[string]any{}); err != nil {
+	encoded, err := json.Marshal(map[string]any{})
+	if err != nil {
 		return err
 	}
-	_, err := daemon.store.SetLocalState(key, "running")
+	id, err := daemon.options.newID()
+	if err != nil {
+		return err
+	}
+	_, err = daemon.store.QueueRunningTransition(key, protocol.StateTransitionRequest{TransitionID: id, State: "running", Payload: encoded})
 	return err
 }
 
@@ -759,10 +764,11 @@ func initialInput(profile config.AgentProfile, work protocol.Work) ([]byte, erro
 	if profile.InputMode == config.InputModeGoal {
 		return append([]byte(work.Goal), '\n'), nil
 	}
-	encoded, err := json.Marshal(struct {
-		Goal  string          `json:"goal"`
-		Input json.RawMessage `json:"input"`
-	}{Goal: work.Goal, Input: work.Input})
+	return inputRecord(protocol.AgentInputRecordTaskInput, work.Goal, work.Input)
+}
+
+func inputRecord(recordType protocol.AgentInputRecordType, goal string, input json.RawMessage) ([]byte, error) {
+	encoded, err := json.Marshal(protocol.AgentInputRecord{Type: recordType, Goal: goal, Input: input})
 	if err != nil {
 		return nil, err
 	}
@@ -803,12 +809,14 @@ func (daemon *daemon) queueOutput(key state.RunKey, format config.EventFormat, p
 		case "progress", "waiting_for_input":
 			kind = declaredType
 		}
+		if kind == "waiting_for_input" {
+			if err := daemon.queueWaitingForInput(key, json.RawMessage(record.data), event.At); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := daemon.queueEvent(key, kind, json.RawMessage(record.data), event.At); err != nil {
 			return err
-		}
-		if kind == "waiting_for_input" {
-			_ = daemon.queueTransition(key, "waiting_for_input", json.RawMessage(record.data))
-			_, _ = daemon.store.SetLocalState(key, "waiting_for_input")
 		}
 	}
 	return nil
@@ -852,6 +860,18 @@ func (daemon *daemon) queueEvent(key state.RunKey, kind string, payload json.Raw
 		return err
 	}
 	_, err = daemon.store.QueueEvent(key, protocol.RunEvent{EventID: id, Sequence: journal.LastEventSequence + 1, Kind: kind, OccurredAt: at, Payload: payload})
+	return err
+}
+
+func (daemon *daemon) queueWaitingForInput(key state.RunKey, payload json.RawMessage, at time.Time) error {
+	id, err := daemon.options.newID()
+	if err != nil {
+		return err
+	}
+	_, err = daemon.store.QueueWaitingForInput(key,
+		protocol.RunEvent{EventID: id, Kind: "waiting_for_input", OccurredAt: at, Payload: payload},
+		protocol.StateTransitionRequest{TransitionID: id, State: "waiting_for_input", Payload: payload},
+	)
 	return err
 }
 
@@ -992,17 +1012,24 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 	outcome := "rejected"
 	switch command.Kind {
 	case "provide_input":
-		if !json.Valid(command.Payload) {
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(command.Payload, &object); err != nil || object == nil {
 			break
 		}
-		input := append(append([]byte(nil), command.Payload...), '\n')
+		input, err := inputRecord(protocol.AgentInputRecordProvideInput, journal.Work.Goal, command.Payload)
+		if err != nil {
+			outcome = "failed"
+			break
+		}
 		if err := process.WriteInput(input); err != nil {
 			outcome = "failed"
-		} else {
-			_ = daemon.queueTransition(key, "running", map[string]any{})
-			_, _ = daemon.store.SetLocalState(key, "running")
-			outcome = "applied"
+			break
 		}
+		if err := daemon.markRunning(key); err != nil {
+			outcome = "failed"
+			break
+		}
+		outcome = "applied"
 	}
 	daemon.queueCommandAcknowledgement(key, command.CommandID, outcome)
 }
@@ -1146,7 +1173,11 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) er
 		for index, event := range journal.PendingEvents {
 			ids[index] = event.EventID
 		}
-		journal, _ = daemon.store.MarkEventsDelivered(key, ids)
+		updated, err := daemon.store.MarkEventsDelivered(key, ids)
+		if err != nil {
+			return err
+		}
+		journal = updated
 	}
 	cancelledPending := hasTransition(journal.PendingTransitions, "cancelled")
 	sentAcknowledgements := make([]string, 0, len(journal.PendingCommandAcknowledgements))
@@ -1162,6 +1193,11 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) er
 		}
 	}
 	for len(journal.PendingTransitions) > 0 {
+		updated, err := daemon.store.MarkTransitionAttempted(key, journal.PendingTransitions[0].TransitionID)
+		if err != nil {
+			return err
+		}
+		journal = updated
 		transition := journal.PendingTransitions[0]
 		if err := daemon.control.Transition(ctx, journal.RunID, transition); err != nil {
 			if control.IsOwnershipLost(err) {
@@ -1169,11 +1205,19 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) er
 			}
 			return err
 		}
-		journal, _ = daemon.store.MarkTransitionsDelivered(key, []string{transition.TransitionID})
+		updated, err = daemon.store.MarkTransitionsDelivered(key, []string{transition.TransitionID})
+		if err != nil {
+			return err
+		}
+		journal = updated
 	}
 	if cancelledPending {
 		if len(sentAcknowledgements) > 0 {
-			journal, _ = daemon.store.MarkCommandAcknowledgementsDelivered(key, sentAcknowledgements)
+			updated, err := daemon.store.MarkCommandAcknowledgementsDelivered(key, sentAcknowledgements)
+			if err != nil {
+				return err
+			}
+			journal = updated
 		}
 	} else {
 		for _, acknowledgement := range journal.PendingCommandAcknowledgements {
@@ -1183,7 +1227,11 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) er
 				}
 				return err
 			}
-			journal, _ = daemon.store.MarkCommandAcknowledgementsDelivered(key, []string{acknowledgement.AckID})
+			updated, err := daemon.store.MarkCommandAcknowledgementsDelivered(key, []string{acknowledgement.AckID})
+			if err != nil {
+				return err
+			}
+			journal = updated
 		}
 	}
 	if journal.LocalState == "terminal_pending" && len(journal.PendingTransitions) == 0 {

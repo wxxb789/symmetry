@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -474,6 +475,355 @@ func TestQueueTerminalTransitionValidatesFenceBeforeCancelledReplacement(t *test
 	}
 	if got := transitionStates(loaded.PendingTransitions); !equalStrings(got, []string{"completed"}) {
 		t.Fatalf("mismatched fence mutated transitions: %#v", got)
+	}
+}
+
+func TestQueueWaitingForInputCoalescesEventsAndPendingTransition(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-1", 1)
+	journal.LastEventSequence = 0
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatalf("SaveJournal() error = %v", err)
+	}
+
+	firstEvent := protocol.RunEvent{EventID: "event-1", Kind: "waiting_for_input", OccurredAt: time.Date(2026, 9, 3, 1, 2, 5, 0, time.UTC), Payload: json.RawMessage(`{"type":"waiting_for_input","question":"first"}`)}
+	firstTransition := protocol.StateTransitionRequest{TransitionID: "transition-1", State: "waiting_for_input", Payload: firstEvent.Payload}
+	queued, err := store.QueueWaitingForInput(journal.Key(), firstEvent, firstTransition)
+	if err != nil {
+		t.Fatalf("QueueWaitingForInput(first) error = %v", err)
+	}
+	secondEvent := protocol.RunEvent{EventID: "event-2", Kind: "waiting_for_input", OccurredAt: time.Date(2026, 9, 3, 1, 2, 6, 0, time.UTC), Payload: json.RawMessage(`{"type":"waiting_for_input","question":"second"}`)}
+	secondTransition := protocol.StateTransitionRequest{TransitionID: "transition-2", State: "waiting_for_input", Payload: secondEvent.Payload}
+	queued, err = store.QueueWaitingForInput(journal.Key(), secondEvent, secondTransition)
+	if err != nil {
+		t.Fatalf("QueueWaitingForInput(second) error = %v", err)
+	}
+
+	if queued.LocalState != "waiting_for_input" || queued.LastEventSequence != 2 || len(queued.PendingEvents) != 2 || len(queued.PendingTransitions) != 1 {
+		t.Fatalf("QueueWaitingForInput() = %#v", queued)
+	}
+	transition := queued.PendingTransitions[0]
+	if transition.TransitionID != firstTransition.TransitionID || !sameFence(transition.Fence, queued.Fence()) || string(transition.Payload) != string(secondEvent.Payload) {
+		t.Fatalf("pending waiting transition = %#v", transition)
+	}
+
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	restarted, err := New(store.dir)
+	if err != nil {
+		t.Fatalf("New() after restart error = %v", err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	loaded, err := restarted.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatalf("LoadJournal() after restart error = %v", err)
+	}
+	if loaded.LocalState != "waiting_for_input" || loaded.LastEventSequence != 2 || len(loaded.PendingEvents) != 2 || len(loaded.PendingTransitions) != 1 || loaded.PendingTransitions[0].TransitionID != firstTransition.TransitionID || string(loaded.PendingTransitions[0].Payload) != string(secondEvent.Payload) {
+		t.Fatalf("journal after restart = %#v", loaded)
+	}
+}
+
+func TestQueueWaitingForInputDoesNotRecreateDeliveredTransition(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-1", 1)
+	journal.LastEventSequence = 0
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatalf("SaveJournal() error = %v", err)
+	}
+	firstEvent := protocol.RunEvent{EventID: "event-1", Kind: "waiting_for_input", OccurredAt: time.Date(2026, 9, 3, 1, 2, 5, 0, time.UTC), Payload: json.RawMessage(`{"type":"waiting_for_input"}`)}
+	queued, err := store.QueueWaitingForInput(journal.Key(), firstEvent, protocol.StateTransitionRequest{TransitionID: "transition-1", State: "waiting_for_input", Payload: firstEvent.Payload})
+	if err != nil {
+		t.Fatalf("QueueWaitingForInput(first) error = %v", err)
+	}
+	if _, err := store.MarkTransitionsDelivered(journal.Key(), []string{queued.PendingTransitions[0].TransitionID}); err != nil {
+		t.Fatalf("MarkTransitionsDelivered() error = %v", err)
+	}
+	secondEvent := protocol.RunEvent{EventID: "event-2", Kind: "waiting_for_input", OccurredAt: time.Date(2026, 9, 3, 1, 2, 6, 0, time.UTC), Payload: json.RawMessage(`{"type":"waiting_for_input","question":"again"}`)}
+	queued, err = store.QueueWaitingForInput(journal.Key(), secondEvent, protocol.StateTransitionRequest{TransitionID: "transition-2", State: "waiting_for_input", Payload: secondEvent.Payload})
+	if err != nil {
+		t.Fatalf("QueueWaitingForInput(after delivery) error = %v", err)
+	}
+	if queued.LocalState != "waiting_for_input" || queued.LastEventSequence != 2 || len(queued.PendingEvents) != 2 || len(queued.PendingTransitions) != 0 {
+		t.Fatalf("QueueWaitingForInput() after delivery = %#v", queued)
+	}
+}
+
+func TestQueueWaitingForInputRejectsInvalidTransitionWithoutPartialEvent(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-1", 1)
+	journal.LastEventSequence = 0
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatalf("SaveJournal() error = %v", err)
+	}
+	event := protocol.RunEvent{EventID: "event-1", Kind: "waiting_for_input", OccurredAt: time.Date(2026, 9, 3, 1, 2, 5, 0, time.UTC), Payload: json.RawMessage(`{"type":"waiting_for_input"}`)}
+	if _, err := store.QueueWaitingForInput(journal.Key(), event, protocol.StateTransitionRequest{State: "waiting_for_input", Payload: event.Payload}); err == nil {
+		t.Fatal("QueueWaitingForInput() accepted invalid transition")
+	}
+	loaded, err := store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatalf("LoadJournal() error = %v", err)
+	}
+	if loaded.LocalState != journal.LocalState || loaded.LastEventSequence != 0 || len(loaded.PendingEvents) != 0 || len(loaded.PendingTransitions) != 0 {
+		t.Fatalf("invalid waiting transition partially mutated journal: %#v", loaded)
+	}
+}
+
+func TestQueueWaitingForInputPreservesTerminalTransitionsAndRestarts(t *testing.T) {
+	for _, terminalState := range []string{"completed", "failed", "cancelled"} {
+		t.Run(terminalState, func(t *testing.T) {
+			store := mustStore(t)
+			journal := testJournal("run-1", 1)
+			journal.LastEventSequence = 0
+			if err := store.SaveJournal(journal); err != nil {
+				t.Fatalf("SaveJournal() error = %v", err)
+			}
+			terminal, err := store.QueueTerminalTransition(journal.Key(), protocol.StateTransitionRequest{TransitionID: "terminal-1", State: terminalState, Payload: json.RawMessage(`{"terminal":true}`)})
+			if err != nil {
+				t.Fatalf("QueueTerminalTransition() error = %v", err)
+			}
+			before := append([]protocol.StateTransitionRequest(nil), terminal.PendingTransitions...)
+			event := protocol.RunEvent{EventID: "event-1", Kind: "waiting_for_input", OccurredAt: time.Date(2026, 9, 3, 1, 2, 5, 0, time.UTC), Payload: json.RawMessage(`{"type":"waiting_for_input","question":"late"}`)}
+			queued, err := store.QueueWaitingForInput(journal.Key(), event, protocol.StateTransitionRequest{TransitionID: "waiting-1", State: "waiting_for_input", Payload: event.Payload})
+			if err != nil {
+				t.Fatalf("QueueWaitingForInput() error = %v", err)
+			}
+			if queued.LocalState != "terminal_pending" || queued.LastEventSequence != 1 || len(queued.PendingEvents) != 1 || !reflect.DeepEqual(queued.PendingTransitions, before) {
+				t.Fatalf("terminal waiting race = %#v", queued)
+			}
+
+			if err := store.Close(); err != nil {
+				t.Fatalf("Close() error = %v", err)
+			}
+			restarted, err := New(store.dir)
+			if err != nil {
+				t.Fatalf("New() after restart error = %v", err)
+			}
+			t.Cleanup(func() { _ = restarted.Close() })
+			loaded, err := restarted.LoadJournal(journal.Key())
+			if err != nil {
+				t.Fatalf("LoadJournal() after restart error = %v", err)
+			}
+			if loaded.LocalState != "terminal_pending" || loaded.LastEventSequence != 1 || len(loaded.PendingEvents) != 1 || !reflect.DeepEqual(loaded.PendingTransitions, before) {
+				t.Fatalf("terminal journal after restart = %#v", loaded)
+			}
+		})
+	}
+}
+
+func TestQueueWaitingForInputPreservesPendingTerminalTransition(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-1", 1)
+	journal.LastEventSequence = 0
+	journal.PendingTransitions = transitionsForStates(journal, []string{"running", "failed"})
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatalf("SaveJournal() error = %v", err)
+	}
+	before := append([]protocol.StateTransitionRequest(nil), journal.PendingTransitions...)
+	event := protocol.RunEvent{EventID: "event-1", Kind: "waiting_for_input", OccurredAt: time.Date(2026, 9, 3, 1, 2, 5, 0, time.UTC), Payload: json.RawMessage(`{"type":"waiting_for_input"}`)}
+	queued, err := store.QueueWaitingForInput(journal.Key(), event, protocol.StateTransitionRequest{TransitionID: "waiting-1", State: "waiting_for_input", Payload: event.Payload})
+	if err != nil {
+		t.Fatalf("QueueWaitingForInput() error = %v", err)
+	}
+	if queued.LocalState != "running" || queued.LastEventSequence != 1 || len(queued.PendingEvents) != 1 || !reflect.DeepEqual(queued.PendingTransitions, before) {
+		t.Fatalf("pending terminal waiting race = %#v", queued)
+	}
+}
+
+func TestQueueWaitingForInputStartsNewEpisodeAfterRunning(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-1", 1)
+	journal.LastEventSequence = 0
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatalf("SaveJournal() error = %v", err)
+	}
+	first := protocol.RunEvent{EventID: "waiting-1", Kind: "waiting_for_input", OccurredAt: time.Date(2026, 9, 3, 1, 2, 5, 0, time.UTC), Payload: json.RawMessage(`{"type":"waiting_for_input","question":"first"}`)}
+	if _, err := store.QueueWaitingForInput(journal.Key(), first, protocol.StateTransitionRequest{TransitionID: "waiting-1", State: "waiting_for_input", Payload: first.Payload}); err != nil {
+		t.Fatalf("QueueWaitingForInput(first) error = %v", err)
+	}
+	if _, err := store.QueueRunningTransition(journal.Key(), protocol.StateTransitionRequest{TransitionID: "running-1", State: "running", Payload: json.RawMessage(`{}`)}); err != nil {
+		t.Fatalf("QueueRunningTransition() error = %v", err)
+	}
+	second := protocol.RunEvent{EventID: "waiting-2", Kind: "waiting_for_input", OccurredAt: time.Date(2026, 9, 3, 1, 2, 6, 0, time.UTC), Payload: json.RawMessage(`{"type":"waiting_for_input","question":"second"}`)}
+	queued, err := store.QueueWaitingForInput(journal.Key(), second, protocol.StateTransitionRequest{TransitionID: "waiting-2", State: "waiting_for_input", Payload: second.Payload})
+	if err != nil {
+		t.Fatalf("QueueWaitingForInput(second) error = %v", err)
+	}
+	if got, want := transitionStates(queued.PendingTransitions), []string{"waiting_for_input", "running", "waiting_for_input"}; !equalStrings(got, want) || queued.LastEventSequence != 2 || len(queued.PendingEvents) != 2 || string(queued.PendingTransitions[0].Payload) != string(first.Payload) || string(queued.PendingTransitions[2].Payload) != string(second.Payload) {
+		t.Fatalf("waiting episodes = %#v", queued)
+	}
+}
+
+func TestQueueWaitingForInputDoesNotUpdateAttemptedTransition(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-1", 1)
+	journal.LastEventSequence = 0
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatalf("SaveJournal() error = %v", err)
+	}
+	first := protocol.RunEvent{EventID: "waiting-1", Kind: "waiting_for_input", OccurredAt: time.Date(2026, 9, 3, 1, 2, 5, 0, time.UTC), Payload: json.RawMessage(`{"type":"waiting_for_input","question":"first"}`)}
+	queued, err := store.QueueWaitingForInput(journal.Key(), first, protocol.StateTransitionRequest{TransitionID: "waiting-1", State: "waiting_for_input", Payload: first.Payload})
+	if err != nil {
+		t.Fatalf("QueueWaitingForInput(first) error = %v", err)
+	}
+	if _, err := store.MarkTransitionAttempted(journal.Key(), queued.PendingTransitions[0].TransitionID); err != nil {
+		t.Fatalf("MarkTransitionAttempted() error = %v", err)
+	}
+	second := protocol.RunEvent{EventID: "waiting-2", Kind: "waiting_for_input", OccurredAt: time.Date(2026, 9, 3, 1, 2, 6, 0, time.UTC), Payload: json.RawMessage(`{"type":"waiting_for_input","question":"second"}`)}
+	queued, err = store.QueueWaitingForInput(journal.Key(), second, protocol.StateTransitionRequest{TransitionID: "waiting-2", State: "waiting_for_input", Payload: second.Payload})
+	if err != nil {
+		t.Fatalf("QueueWaitingForInput(second) error = %v", err)
+	}
+	if len(queued.PendingEvents) != 2 || len(queued.PendingTransitions) != 1 || queued.PendingTransitions[0].TransitionID != "waiting-1" || string(queued.PendingTransitions[0].Payload) != string(first.Payload) || !equalStrings(queued.AttemptedTransitionIDs, []string{"waiting-1"}) {
+		t.Fatalf("attempted waiting transition = %#v", queued)
+	}
+}
+
+func TestTransitionAttemptMarkersRestartValidateAndCleanUp(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-1", 1)
+	journal.PendingTransitions = transitionsForStates(journal, []string{"running"})
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatalf("SaveJournal() error = %v", err)
+	}
+	marked, err := store.MarkTransitionAttempted(journal.Key(), "pending-0")
+	if err != nil {
+		t.Fatalf("MarkTransitionAttempted() error = %v", err)
+	}
+	if _, err := store.MarkTransitionAttempted(journal.Key(), "pending-0"); err != nil {
+		t.Fatalf("MarkTransitionAttempted() idempotency error = %v", err)
+	}
+	if !equalStrings(marked.AttemptedTransitionIDs, []string{"pending-0"}) {
+		t.Fatalf("attempted transitions = %#v", marked.AttemptedTransitionIDs)
+	}
+	if _, err := store.MarkTransitionAttempted(journal.Key(), "missing"); err == nil {
+		t.Fatal("MarkTransitionAttempted() accepted a non-pending transition")
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	restarted, err := New(store.dir)
+	if err != nil {
+		t.Fatalf("New() after restart error = %v", err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	loaded, err := restarted.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatalf("LoadJournal() after restart error = %v", err)
+	}
+	if !equalStrings(loaded.AttemptedTransitionIDs, []string{"pending-0"}) {
+		t.Fatalf("attempted transitions after restart = %#v", loaded.AttemptedTransitionIDs)
+	}
+	if _, err := restarted.MarkTransitionsDelivered(journal.Key(), []string{"pending-0"}); err != nil {
+		t.Fatalf("MarkTransitionsDelivered() error = %v", err)
+	}
+	loaded, err = restarted.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatalf("LoadJournal() after delivery error = %v", err)
+	}
+	if len(loaded.PendingTransitions) != 0 || len(loaded.AttemptedTransitionIDs) != 0 {
+		t.Fatalf("delivered transition markers = %#v", loaded)
+	}
+}
+
+func TestAttemptedTransitionMarkerValidationAndLegacyCompatibility(t *testing.T) {
+	store := mustStore(t)
+	legacy := testJournal("legacy-run", 1)
+	if err := store.SaveJournal(legacy); err != nil {
+		t.Fatalf("SaveJournal(legacy) error = %v", err)
+	}
+	encoded, err := os.ReadFile(store.journalPath(legacy.Key()))
+	if err != nil {
+		t.Fatalf("ReadFile(legacy) error = %v", err)
+	}
+	if strings.Contains(string(encoded), "attempted_transition_ids") {
+		t.Fatalf("legacy journal unexpectedly serialized empty markers: %s", encoded)
+	}
+	if _, err := store.LoadJournal(legacy.Key()); err != nil {
+		t.Fatalf("LoadJournal(legacy) error = %v", err)
+	}
+
+	for _, test := range []struct {
+		name      string
+		attempted []string
+	}{
+		{name: "unknown pending transition", attempted: []string{"missing"}},
+		{name: "duplicate marker", attempted: []string{"pending-0", "pending-0"}},
+		{name: "blank marker", attempted: []string{" "}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			journal := testJournal("run-"+strings.ReplaceAll(test.name, " ", "-"), 1)
+			journal.PendingTransitions = transitionsForStates(journal, []string{"running"})
+			journal.AttemptedTransitionIDs = test.attempted
+			if err := store.SaveJournal(journal); err == nil {
+				t.Fatal("SaveJournal() accepted invalid attempted transition markers")
+			}
+		})
+	}
+}
+
+func TestTerminalReplacementRemovesAttemptMarkers(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-1", 1)
+	journal.PendingTransitions = transitionsForStates(journal, []string{"running"})
+	journal.AttemptedTransitionIDs = []string{"pending-0"}
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatalf("SaveJournal() error = %v", err)
+	}
+	queued, err := store.QueueTerminalTransition(journal.Key(), protocol.StateTransitionRequest{TransitionID: "cancelled-1", State: "cancelled", Payload: json.RawMessage(`{}`)})
+	if err != nil {
+		t.Fatalf("QueueTerminalTransition() error = %v", err)
+	}
+	if got, want := transitionStates(queued.PendingTransitions), []string{"cancelled"}; !equalStrings(got, want) || len(queued.AttemptedTransitionIDs) != 0 {
+		t.Fatalf("cancel replacement = %#v", queued)
+	}
+}
+
+func TestQueueRunningTransitionIsAtomic(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-1", 1)
+	journal.LocalState = "waiting_for_input"
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatalf("SaveJournal() error = %v", err)
+	}
+	queued, err := store.QueueRunningTransition(journal.Key(), protocol.StateTransitionRequest{TransitionID: "running-1", State: "running", Payload: json.RawMessage(`{}`)})
+	if err != nil {
+		t.Fatalf("QueueRunningTransition() error = %v", err)
+	}
+	if queued.LocalState != "running" || len(queued.PendingTransitions) != 1 || queued.PendingTransitions[0].TransitionID != "running-1" || !sameFence(queued.PendingTransitions[0].Fence, queued.Fence()) {
+		t.Fatalf("QueueRunningTransition() = %#v", queued)
+	}
+	if _, err := store.QueueRunningTransition(journal.Key(), protocol.StateTransitionRequest{TransitionID: "waiting-1", State: "waiting_for_input", Payload: json.RawMessage(`{}`)}); err == nil {
+		t.Fatal("QueueRunningTransition() accepted non-running state")
+	}
+	loaded, err := store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatalf("LoadJournal() error = %v", err)
+	}
+	if loaded.LocalState != "running" || len(loaded.PendingTransitions) != 1 || loaded.PendingTransitions[0].TransitionID != "running-1" {
+		t.Fatalf("invalid running transition partially mutated journal: %#v", loaded)
+	}
+}
+
+func TestQueueRunningTransitionRejectsTerminalPendingJournal(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-1", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatalf("SaveJournal() error = %v", err)
+	}
+	terminal, err := store.QueueTerminalTransition(journal.Key(), protocol.StateTransitionRequest{TransitionID: "completed-1", State: "completed", Payload: json.RawMessage(`{}`)})
+	if err != nil {
+		t.Fatalf("QueueTerminalTransition() error = %v", err)
+	}
+	if _, err := store.QueueRunningTransition(journal.Key(), protocol.StateTransitionRequest{TransitionID: "running-1", State: "running", Payload: json.RawMessage(`{}`)}); err == nil {
+		t.Fatal("QueueRunningTransition() succeeded after terminal transition")
+	}
+	loaded, err := store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatalf("LoadJournal() error = %v", err)
+	}
+	if !reflect.DeepEqual(loaded, terminal) {
+		t.Fatalf("terminal journal mutated by running transition: %#v", loaded)
 	}
 }
 

@@ -14,6 +14,8 @@ import (
 	"os/signal"
 	"strings"
 	"time"
+
+	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
 const modeEnvironment = "SYMMETRY_FAKE_AGENT_MODE"
@@ -43,7 +45,12 @@ func run(input io.Reader, output io.Writer, errorOutput io.Writer) error {
 		return fmt.Errorf("read initial input: %w", err)
 	}
 
-	mode, err := selectMode(initial, os.Getenv(modeEnvironment))
+	envelope, err := decodeTaskInput(initial)
+	if err != nil {
+		return fmt.Errorf("decode initial input: %w", err)
+	}
+
+	mode, err := selectMode(envelope.Input, os.Getenv(modeEnvironment))
 	if err != nil {
 		return err
 	}
@@ -57,7 +64,7 @@ func run(input io.Reader, output io.Writer, errorOutput io.Writer) error {
 	case "slow":
 		return runSlow(output)
 	case "wait_input":
-		return runWaitInput(reader, output)
+		return runWaitInput(reader, output, envelope.Goal)
 	case "spawn_child":
 		return runSpawnChild(output)
 	default:
@@ -72,15 +79,19 @@ func runSuccess(output io.Writer) error {
 	return writeProgress(output, "completed")
 }
 
-func runWaitInput(input *bufio.Reader, output io.Writer) error {
+func runWaitInput(input *bufio.Reader, output io.Writer, goal string) error {
 	if err := writeProgress(output, "started"); err != nil {
 		return err
 	}
 	if err := writeEvent(output, event{Type: "waiting_for_input", Question: "Provide the requested input."}); err != nil {
 		return err
 	}
-	if _, err := readLine(input); err != nil {
+	followUp, err := readLine(input)
+	if err != nil {
 		return fmt.Errorf("read follow-up input: %w", err)
+	}
+	if _, err := decodeProvideInput(followUp, goal); err != nil {
+		return fmt.Errorf("decode follow-up input: %w", err)
 	}
 	if err := writeProgress(output, "input_received"); err != nil {
 		return err
@@ -145,8 +156,8 @@ func runChild() int {
 	}
 }
 
-func selectMode(initial []byte, environment string) (string, error) {
-	if mode, found, err := modeFromJSON(initial); err != nil {
+func selectMode(input json.RawMessage, environment string) (string, error) {
+	if mode, found, err := modeFromInput(input); err != nil {
 		return "", err
 	} else if found {
 		return mode, nil
@@ -157,32 +168,72 @@ func selectMode(initial []byte, environment string) (string, error) {
 	return "success", nil
 }
 
-func modeFromJSON(initial []byte) (string, bool, error) {
-	var value map[string]json.RawMessage
-	if err := json.Unmarshal(initial, &value); err != nil {
-		return "", false, nil // A goal-mode invocation is a plain text line.
+func modeFromInput(input json.RawMessage) (string, bool, error) {
+	if bytes.Equal(bytes.TrimSpace(input), []byte("null")) {
+		return "", false, nil
 	}
-
+	var value map[string]json.RawMessage
+	if err := json.Unmarshal(input, &value); err != nil {
+		return "", false, fmt.Errorf("decode input mode: %w", err)
+	}
 	for _, key := range []string{"mode", "fake_agent_mode"} {
 		if mode, found, err := stringField(value, key); found || err != nil {
 			return mode, found, err
 		}
 	}
-
-	input, found := value["input"]
-	if !found || bytes.Equal(input, []byte("null")) {
-		return "", false, nil
-	}
-	var nested map[string]json.RawMessage
-	if err := json.Unmarshal(input, &nested); err != nil {
-		return "", false, fmt.Errorf("decode input mode: %w", err)
-	}
-	for _, key := range []string{"mode", "fake_agent_mode"} {
-		if mode, found, err := stringField(nested, key); found || err != nil {
-			return mode, found, err
-		}
-	}
 	return "", false, nil
+}
+
+func decodeTaskInput(line []byte) (protocol.AgentInputRecord, error) {
+	return decodeInputRecord(line, protocol.AgentInputRecordTaskInput, "", false)
+}
+
+func decodeProvideInput(line []byte, goal string) (protocol.AgentInputRecord, error) {
+	return decodeInputRecord(line, protocol.AgentInputRecordProvideInput, goal, true)
+}
+
+func decodeInputRecord(line []byte, expectedType protocol.AgentInputRecordType, expectedGoal string, requireObjectInput bool) (protocol.AgentInputRecord, error) {
+	var envelope protocol.AgentInputRecord
+	decoder := json.NewDecoder(bytes.NewReader(line))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&envelope); err != nil {
+		return protocol.AgentInputRecord{}, fmt.Errorf("decode JSON envelope: %w", err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return protocol.AgentInputRecord{}, errors.New("JSON envelope must contain one object")
+		}
+		return protocol.AgentInputRecord{}, fmt.Errorf("decode JSON envelope: %w", err)
+	}
+	if envelope.Type != expectedType {
+		return protocol.AgentInputRecord{}, fmt.Errorf("type must be %s", expectedType)
+	}
+	if strings.TrimSpace(envelope.Goal) == "" {
+		return protocol.AgentInputRecord{}, errors.New("goal must not be empty")
+	}
+	if expectedGoal != "" && envelope.Goal != expectedGoal {
+		return protocol.AgentInputRecord{}, errors.New("goal must match initial input")
+	}
+	if len(envelope.Input) == 0 {
+		return protocol.AgentInputRecord{}, errors.New("input is required")
+	}
+
+	input := bytes.TrimSpace(envelope.Input)
+	if bytes.Equal(input, []byte("null")) {
+		if requireObjectInput {
+			return protocol.AgentInputRecord{}, errors.New("input must be a JSON object")
+		}
+		return envelope, nil
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(input, &object); err != nil {
+		if requireObjectInput {
+			return protocol.AgentInputRecord{}, errors.New("input must be a JSON object")
+		}
+		return protocol.AgentInputRecord{}, errors.New("input must be null or a JSON object")
+	}
+	return envelope, nil
 }
 
 func stringField(value map[string]json.RawMessage, key string) (string, bool, error) {
@@ -202,7 +253,10 @@ func stringField(value map[string]json.RawMessage, key string) (string, bool, er
 
 func readLine(reader *bufio.Reader) ([]byte, error) {
 	line, err := reader.ReadBytes('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, errors.New("input record must end with newline")
+		}
 		return nil, err
 	}
 	line = bytes.TrimSpace(line)

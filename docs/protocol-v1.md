@@ -448,8 +448,12 @@ Task creation and reads return the same stable shape:
 ```
 
 `waiting` is `null` unless the current run is in `waiting_for_input`. When it
-is present, it identifies the current run and generation and preserves the
-latest waiting transition exactly as recorded:
+is present, it identifies the current run and generation. Its `transition_id`
+is the identity of the transition that put the current run into
+`waiting_for_input`. Its `question`, `payload`, and `recorded_at` come from the
+current run's highest-sequence `waiting_for_input` event. For older data with
+no such event, those fields fall back to the waiting transition's payload and
+recorded time:
 
 ```json
 {
@@ -644,18 +648,27 @@ itself.
 
 The daemon writes exactly one initial stdin record when it launches an agent.
 With `input_mode: "goal"`, the record is the plain-text task goal followed by a
-newline; structured task input is not written. With `input_mode: "json"`, the
-record is one JSON object followed by a newline and always includes both task
-fields:
+newline; structured task input is not written. This mode is valid only for a
+non-interactive profile. With `input_mode: "json"`, the record is one
+newline-terminated JSON envelope:
 
 ```json
-{"goal":"Run the configured agent","input":{"branch":"main"}}
+{"type":"task_input","goal":"Run the configured agent","input":{"branch":"main"}}
 ```
 
+The envelope always has `type`, `goal`, and `input`. The `goal` is non-empty.
 The `input` member preserves the task's structured input, using `null` when no
-input was supplied. Interactive profiles keep stdin open for later
-`provide_input` commands; non-interactive profiles receive EOF after the first
-record.
+input was supplied, and otherwise is a JSON object. Interactive profiles use
+`input_mode: "json"`, keep stdin open, and receive each `provide_input` command
+as another newline-terminated envelope with the same goal:
+
+```json
+{"type":"provide_input","goal":"Run the configured agent","input":{"answer":"continue"}}
+```
+
+Follow-up `input` must be a JSON object; `{}` is valid. Non-interactive
+profiles receive EOF after the first record. An `interactive: true` profile
+with `input_mode: "goal"` is invalid daemon configuration.
 
 ## Phoenix Channel Notifications
 

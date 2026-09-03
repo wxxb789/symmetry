@@ -611,13 +611,26 @@ defmodule SymmetryControl.Orchestration do
         nil
 
       transition ->
+        {payload, recorded_at} =
+          case Repo.one(
+                 from event in RunEvent,
+                   where: event.run_id == ^run.id and event.kind == "waiting_for_input",
+                   order_by: [desc: event.sequence, desc: event.id],
+                   limit: 1,
+                   select: event
+               ) do
+            nil -> {transition.payload, transition.inserted_at}
+            event -> {event.payload, event.inserted_at}
+          end
+
         %{
           run_id: run.id,
           generation: run.generation,
           transition_id: transition.transition_id,
-          question: value(transition.payload, :question),
-          payload: transition.payload,
-          inserted_at: transition.inserted_at
+          question: value(payload, :question),
+          payload: payload,
+          recorded_at: recorded_at,
+          inserted_at: recorded_at
         }
     end
   end

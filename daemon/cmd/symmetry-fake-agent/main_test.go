@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
+	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
 var (
@@ -37,7 +38,7 @@ func TestMain(mainTest *testing.M) {
 }
 
 func TestSuccessEmitsProgressJSONLines(t *testing.T) {
-	process := startFixture(t, `{"goal":"write tests"}`+"\n", nil)
+	process := startFixture(t, taskInput(`"write tests"`, `null`), nil)
 	_, stderr, err := waitForProcess(t, process, time.Second)
 	if err != nil {
 		t.Fatalf("fixture failed: %v; stderr: %s", err, stderr)
@@ -53,7 +54,7 @@ func TestSuccessEmitsProgressJSONLines(t *testing.T) {
 }
 
 func TestFailWritesStderrAndExitsNonZero(t *testing.T) {
-	process := startFixture(t, `{"input":{"mode":"fail"}}`+"\n", nil)
+	process := startFixture(t, taskInput(`"fail task"`, `{"mode":"fail"}`), nil)
 	_, stderr, err := waitForProcess(t, process, time.Second)
 	if err == nil {
 		t.Fatal("fixture succeeded, want failure")
@@ -67,7 +68,7 @@ func TestFailWritesStderrAndExitsNonZero(t *testing.T) {
 }
 
 func TestWaitInputReadsFollowUpAndCompletes(t *testing.T) {
-	process := startFixture(t, `{"input":{"mode":"wait_input"}}`+"\n", nil)
+	process := startFixture(t, taskInput(`"wait for answer"`, `{"mode":"wait_input"}`), nil)
 	defer closeStdin(t, process)
 
 	first := readEvent(t, process.output)
@@ -78,7 +79,7 @@ func TestWaitInputReadsFollowUpAndCompletes(t *testing.T) {
 	if waiting.Type != "waiting_for_input" || waiting.Question == "" {
 		t.Fatalf("waiting event = %#v", waiting)
 	}
-	if _, err := io.WriteString(process.stdin, `{"answer":"main"}`+"\n"); err != nil {
+	if _, err := io.WriteString(process.stdin, provideInput(`"wait for answer"`, `{"answer":"main"}`)); err != nil {
 		t.Fatalf("write follow-up input: %v", err)
 	}
 	closeStdin(t, process)
@@ -102,7 +103,7 @@ func TestSlowCancellationStopsTheFixture(t *testing.T) {
 		context.Background(),
 		execution.Invocation{
 			Program:                fixtureBinary(t),
-			InitialInput:           []byte(`{"input":{"mode":"slow"}}` + "\n"),
+			InitialInput:           []byte(taskInput(`"slow task"`, `{"mode":"slow"}`)),
 			CloseInputAfterInitial: true,
 		},
 		fixtureSink{output: output},
@@ -136,7 +137,7 @@ func TestSlowCancellationStopsTheFixture(t *testing.T) {
 }
 
 func TestSpawnChildEmitsChildPID(t *testing.T) {
-	process := startFixture(t, `{"mode":"spawn_child"}`+"\n", nil)
+	process := startFixture(t, taskInput(`"spawn child"`, `{"mode":"spawn_child"}`), nil)
 	_, stderr, err := waitForProcess(t, process, time.Second)
 	if err != nil {
 		t.Fatalf("fixture failed: %v; stderr: %s", err, stderr)
@@ -147,6 +148,110 @@ func TestSpawnChildEmitsChildPID(t *testing.T) {
 	}
 	childPID := events[1].PID
 	t.Cleanup(func() { terminatePID(t, childPID) })
+}
+
+func TestRejectsInvalidInitialEnvelope(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "plain text", input: "write tests\n", want: "decode initial input"},
+		{name: "wrong type", input: `{"type":"provide_input","goal":"write tests","input":{}}` + "\n", want: "type must be task_input"},
+		{name: "empty goal", input: `{"type":"task_input","goal":" ","input":null}` + "\n", want: "goal must not be empty"},
+		{name: "missing input", input: `{"type":"task_input","goal":"write tests"}` + "\n", want: "input is required"},
+		{name: "array input", input: `{"type":"task_input","goal":"write tests","input":[]}` + "\n", want: "input must be null or a JSON object"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			process := startFixture(t, test.input, nil)
+			_, stderr, err := waitForProcess(t, process, time.Second)
+			if err == nil {
+				t.Fatal("fixture succeeded, want failure")
+			}
+			if !strings.Contains(stderr, test.want) {
+				t.Fatalf("stderr = %q, want %q", stderr, test.want)
+			}
+		})
+	}
+}
+
+func TestRejectsInitialInputWithoutTrailingNewline(t *testing.T) {
+	process := startFixture(t, `{"type":"task_input","goal":"write tests","input":null}`, nil)
+	closeStdin(t, process)
+
+	_, stderr, err := waitForProcess(t, process, time.Second)
+	if err == nil {
+		t.Fatal("fixture succeeded, want failure")
+	}
+	if !strings.Contains(stderr, "input record must end with newline") {
+		t.Fatalf("stderr = %q, want missing newline error", stderr)
+	}
+}
+
+func TestWaitInputRejectsInvalidFollowUpEnvelope(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "wrong type", input: taskInput(`"wait for answer"`, `{}`), want: "type must be provide_input"},
+		{name: "different goal", input: provideInput(`"other task"`, `{}`), want: "goal must match initial input"},
+		{name: "missing input", input: `{"type":"provide_input","goal":"wait for answer"}` + "\n", want: "input is required"},
+		{name: "null input", input: provideInput(`"wait for answer"`, `null`), want: "input must be a JSON object"},
+		{name: "array input", input: provideInput(`"wait for answer"`, `[]`), want: "input must be a JSON object"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			process := startFixture(t, taskInput(`"wait for answer"`, `{"mode":"wait_input"}`), nil)
+			defer closeStdin(t, process)
+
+			_ = readEvent(t, process.output)
+			_ = readEvent(t, process.output)
+			if _, err := io.WriteString(process.stdin, test.input); err != nil {
+				t.Fatalf("write follow-up input: %v", err)
+			}
+			closeStdin(t, process)
+
+			_, stderr, err := waitForProcess(t, process, time.Second)
+			if err == nil {
+				t.Fatal("fixture succeeded, want failure")
+			}
+			if !strings.Contains(stderr, test.want) {
+				t.Fatalf("stderr = %q, want %q", stderr, test.want)
+			}
+		})
+	}
+}
+
+func TestWaitInputRejectsFollowUpWithoutTrailingNewline(t *testing.T) {
+	process := startFixture(t, taskInput(`"wait for answer"`, `{"mode":"wait_input"}`), nil)
+	defer closeStdin(t, process)
+
+	_ = readEvent(t, process.output)
+	_ = readEvent(t, process.output)
+	if _, err := io.WriteString(process.stdin, `{"type":"provide_input","goal":"wait for answer","input":{}}`); err != nil {
+		t.Fatalf("write follow-up input: %v", err)
+	}
+	closeStdin(t, process)
+
+	_, stderr, err := waitForProcess(t, process, time.Second)
+	if err == nil {
+		t.Fatal("fixture succeeded, want failure")
+	}
+	if !strings.Contains(stderr, "input record must end with newline") {
+		t.Fatalf("stderr = %q, want missing newline error", stderr)
+	}
+}
+
+func taskInput(goal, input string) string {
+	return `{"type":"` + string(protocol.AgentInputRecordTaskInput) + `","goal":` + goal + `,"input":` + input + "}\n"
+}
+
+func provideInput(goal, input string) string {
+	return `{"type":"` + string(protocol.AgentInputRecordProvideInput) + `","goal":` + goal + `,"input":` + input + "}\n"
 }
 
 type fixtureSink struct {

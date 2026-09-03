@@ -6,6 +6,23 @@ import (
 	"time"
 )
 
+// AgentInputRecordType identifies a newline-delimited message sent to an agent.
+type AgentInputRecordType string
+
+const (
+	// AgentInputRecordTaskInput starts an agent execution.
+	AgentInputRecordTaskInput AgentInputRecordType = "task_input"
+	// AgentInputRecordProvideInput continues an interactive agent execution.
+	AgentInputRecordProvideInput AgentInputRecordType = "provide_input"
+)
+
+// AgentInputRecord is the JSON envelope sent to an agent over standard input.
+type AgentInputRecord struct {
+	Type  AgentInputRecordType `json:"type"`
+	Goal  string               `json:"goal"`
+	Input json.RawMessage      `json:"input"`
+}
+
 // MachineEnrollment identifies a machine during one-time enrollment.
 type MachineEnrollment struct {
 	Name string `json:"name"`

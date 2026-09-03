@@ -128,15 +128,144 @@ func TestJSONLWaitingInputTransitionsAndAcknowledges(t *testing.T) {
 		t.Fatal(err)
 	}
 	daemon.handleCommand(context.Background(), protocol.Command{CommandID: "command-1", RunID: "run-1", Generation: 1, Kind: "provide_input", Payload: []byte(`{"answer":"yes"}`)})
-	if got := string(process.input); got != "{\"answer\":\"yes\"}\n" {
+	if got := string(process.input); got != "{\"type\":\"provide_input\",\"goal\":\"g\",\"input\":{\"answer\":\"yes\"}}\n" {
 		t.Fatalf("input = %q", got)
 	}
 	journal, err := store.LoadJournal(key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(journal.PendingCommandAcknowledgements) != 1 || len(journal.PendingTransitions) < 2 {
+	if journal.LocalState != "running" || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].Outcome != "applied" || len(journal.PendingTransitions) != 2 || journal.PendingTransitions[0].State != "waiting_for_input" || journal.PendingTransitions[1].State != "running" {
 		t.Fatalf("journal = %#v", journal)
+	}
+}
+
+func TestWaitingInputDrainsThroughRunningAndTerminal(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	process := &recordingProcess{}
+	api := &orderingControl{}
+	daemon := &daemon{
+		store:     store,
+		control:   api,
+		workspace: &fakeWorkspace{},
+		options:   options{newID: ids()},
+		running:   map[state.RunKey]*runningRun{key: {process: process}},
+	}
+	if err := daemon.queueOutput(key, config.EventFormatJSONL, &jsonlParser{}, execution.Event{Stream: execution.Stdout, At: time.Now().UTC(), Data: []byte("{\"type\":\"waiting_for_input\",\"question\":\"continue?\"}\n")}); err != nil {
+		t.Fatal(err)
+	}
+	daemon.handleCommand(context.Background(), protocol.Command{CommandID: "input-1", RunID: key.RunID, Generation: key.Generation, Kind: "provide_input", Payload: []byte(`{"answer":"yes"}`)})
+	if err := daemon.queueTerminalTransition(key, "completed", map[string]any{"exit_code": 0}); err != nil {
+		t.Fatal(err)
+	}
+
+	daemon.mu.Lock()
+	delete(daemon.running, key)
+	daemon.mu.Unlock()
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := daemon.flushRun(context.Background(), journal); err != nil {
+		t.Fatalf("flushRun() error = %v", err)
+	}
+	if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
+		t.Fatalf("journal = %v, want deleted after terminal drain", err)
+	}
+	if got, want := api.calls, []string{"transition:waiting_for_input", "transition:running", "transition:completed", "ack:input-1"}; !sameStrings(got, want) {
+		t.Fatalf("flush calls = %#v, want %#v", got, want)
+	}
+}
+
+func TestQueueWaitingForInputUsesOneIDAcrossLifecycleStates(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		prepare     func(*testing.T, *state.Store, state.RunKey)
+		transitions int
+		localState  string
+		wantEventID string
+		wantQueueID bool
+	}{
+		{
+			name:        "running queues shared event and transition ID",
+			transitions: 1,
+			localState:  "waiting_for_input",
+			wantEventID: "waiting-id",
+			wantQueueID: true,
+		},
+		{
+			name: "terminal keeps telemetry when a second ID would fail",
+			prepare: func(t *testing.T, store *state.Store, key state.RunKey) {
+				t.Helper()
+				if _, err := store.QueueTerminalTransition(key, protocol.StateTransitionRequest{TransitionID: "completed-1", State: "completed", Payload: json.RawMessage(`{}`)}); err != nil {
+					t.Fatal(err)
+				}
+			},
+			transitions: 1,
+			localState:  "terminal_pending",
+			wantEventID: "waiting-id",
+		},
+		{
+			name: "delivered keeps telemetry when a second ID would fail",
+			prepare: func(t *testing.T, store *state.Store, key state.RunKey) {
+				t.Helper()
+				if _, err := store.SetLocalState(key, "waiting_for_input"); err != nil {
+					t.Fatal(err)
+				}
+			},
+			localState:  "waiting_for_input",
+			wantEventID: "waiting-id",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, key := claimedStore(t)
+			defer store.Close()
+			if test.prepare != nil {
+				test.prepare(t, store, key)
+			}
+			calls := 0
+			daemon := &daemon{store: store, options: options{newID: func() (string, error) {
+				calls++
+				if calls > 1 {
+					return "", errors.New("unexpected second ID allocation")
+				}
+				return "waiting-id", nil
+			}}}
+			if err := daemon.queueWaitingForInput(key, json.RawMessage(`{"type":"waiting_for_input"}`), time.Now().UTC()); err != nil {
+				t.Fatalf("queueWaitingForInput() error = %v", err)
+			}
+			journal, err := store.LoadJournal(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if calls != 1 || journal.LocalState != test.localState || len(journal.PendingEvents) != 1 || journal.PendingEvents[0].EventID != test.wantEventID || len(journal.PendingTransitions) != test.transitions {
+				t.Fatalf("journal = %#v, ID calls = %d", journal, calls)
+			}
+			if test.wantQueueID && journal.PendingTransitions[0].TransitionID != journal.PendingEvents[0].EventID {
+				t.Fatalf("event ID = %q, transition ID = %q", journal.PendingEvents[0].EventID, journal.PendingTransitions[0].TransitionID)
+			}
+		})
+	}
+}
+
+func TestMarkRunningRejectsTerminalPendingJournal(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	terminal, err := store.QueueTerminalTransition(key, protocol.StateTransitionRequest{TransitionID: "completed-1", State: "completed", Payload: json.RawMessage(`{}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemon := &daemon{store: store, options: options{newID: ids()}}
+	if err := daemon.markRunning(key); err == nil {
+		t.Fatal("markRunning() succeeded after terminal transition")
+	}
+	loaded, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.LocalState != terminal.LocalState || len(loaded.PendingTransitions) != 1 || len(terminal.PendingTransitions) != 1 || loaded.PendingTransitions[0].TransitionID != terminal.PendingTransitions[0].TransitionID || loaded.PendingTransitions[0].State != terminal.PendingTransitions[0].State || string(loaded.PendingTransitions[0].Payload) != string(terminal.PendingTransitions[0].Payload) {
+		t.Fatalf("terminal journal mutated by markRunning(): %#v", loaded)
 	}
 }
 
@@ -217,7 +346,7 @@ func TestCommandAcknowledgementIsIdempotentAndUsesAllowedOutcomes(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := string(process.input); got != "{\"answer\":\"yes\"}\n" {
+	if got := string(process.input); got != "{\"type\":\"provide_input\",\"goal\":\"g\",\"input\":{\"answer\":\"yes\"}}\n" {
 		t.Fatalf("input = %q, want one write", got)
 	}
 	if len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].Outcome != "applied" {
@@ -486,6 +615,34 @@ func TestFlushInputTransitionStillPrecedesAcknowledgement(t *testing.T) {
 	daemon.flushRun(context.Background(), journal)
 	if got, want := api.calls, []string{"transition:running", "ack:input-1"}; !sameStrings(got, want) {
 		t.Fatalf("calls = %#v, want %#v", got, want)
+	}
+}
+
+func TestFlushTransitionRetriesUnknownResultWithFrozenBody(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	api := &retryTransitionControl{failFirst: true}
+	daemon := &daemon{store: store, control: api, options: options{newID: ids()}}
+	if err := daemon.queueWaitingForInput(key, json.RawMessage(`{"type":"waiting_for_input","question":"first"}`), time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := daemon.flushRun(context.Background(), journal); err == nil {
+		t.Fatal("flushRun() succeeded after unknown transition result")
+	}
+	journal, err = store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.PendingTransitions) != 1 || len(journal.AttemptedTransitionIDs) != 1 || journal.AttemptedTransitionIDs[0] != journal.PendingTransitions[0].TransitionID {
+		t.Fatalf("journal after unknown result = %#v", journal)
+	}
+	daemon.flushRun(context.Background(), journal)
+	if len(api.requests) != 2 || api.requests[0].TransitionID != api.requests[1].TransitionID || string(api.requests[0].Payload) != string(api.requests[1].Payload) {
+		t.Fatalf("retry requests = %#v", api.requests)
 	}
 }
 
@@ -969,15 +1126,20 @@ func TestInitialInputUsesLocalModeAndPreservesGoalAndStructuredInput(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	var payload struct {
-		Goal  string          `json:"goal"`
-		Input json.RawMessage `json:"input"`
-	}
+	var payload protocol.AgentInputRecord
 	if err := json.Unmarshal(jsonInput, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Goal != "implement feature" || string(payload.Input) != `{"mode":"review"}` {
+	if payload.Type != protocol.AgentInputRecordTaskInput || payload.Goal != "implement feature" || string(payload.Input) != `{"mode":"review"}` {
 		t.Fatalf("JSON input = %s", jsonInput)
+	}
+	omittedInput, err := initialInput(config.AgentProfile{InputMode: config.InputModeJSON}, protocol.Work{Goal: "implement feature"})
+	if err != nil || string(omittedInput) != "{\"type\":\"task_input\",\"goal\":\"implement feature\",\"input\":null}\n" {
+		t.Fatalf("omitted JSON input = %q, %v", omittedInput, err)
+	}
+	emptyInput, err := initialInput(config.AgentProfile{InputMode: config.InputModeJSON}, protocol.Work{Goal: "implement feature", Input: json.RawMessage(`{}`)})
+	if err != nil || string(emptyInput) != "{\"type\":\"task_input\",\"goal\":\"implement feature\",\"input\":{}}\n" {
+		t.Fatalf("empty JSON input = %q, %v", emptyInput, err)
 	}
 	goalInput, err := initialInput(config.AgentProfile{InputMode: config.InputModeGoal}, protocol.Work{Goal: "implement feature", Input: []byte(`{"ignored":true}`)})
 	if err != nil || string(goalInput) != "implement feature\n" {
@@ -1218,6 +1380,21 @@ type orderingControl struct {
 	calls             []string
 	terminal          bool
 	failCancelledOnce bool
+}
+
+type retryTransitionControl struct {
+	fakeControl
+	requests  []protocol.StateTransitionRequest
+	failFirst bool
+}
+
+func (client *retryTransitionControl) Transition(_ context.Context, _ string, request protocol.StateTransitionRequest) error {
+	client.requests = append(client.requests, request)
+	if client.failFirst {
+		client.failFirst = false
+		return errors.New("unknown transition result")
+	}
+	return nil
 }
 
 type ownershipLossControl struct{ fakeControl }

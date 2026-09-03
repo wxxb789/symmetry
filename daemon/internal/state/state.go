@@ -99,6 +99,7 @@ type RunJournal struct {
 	LastEventSequence              int64                             `json:"last_event_sequence"`
 	PendingEvents                  []protocol.RunEvent               `json:"pending_events"`
 	PendingTransitions             []protocol.StateTransitionRequest `json:"pending_transitions"`
+	AttemptedTransitionIDs         []string                          `json:"attempted_transition_ids,omitempty"`
 	PendingCommandAcknowledgements []protocol.CommandAcknowledgement `json:"pending_command_acknowledgements"`
 }
 
@@ -434,16 +435,58 @@ func (store *Store) UpdateLeaseExpiry(key RunKey, expiry time.Time) (RunJournal,
 // QueueEvent durably enqueues an idempotent event before its HTTP request.
 func (store *Store) QueueEvent(key RunKey, event protocol.RunEvent) (RunJournal, error) {
 	return store.mutateJournal(key, func(journal *RunJournal) error {
-		if !journal.hasClaimGrant() {
-			return errors.New("journal has no claim grant")
+		return appendEvent(journal, event, "event is invalid")
+	})
+}
+
+// QueueWaitingForInput atomically records a waiting event and the associated
+// lifecycle transition. Repeated waiting records refresh an undelivered
+// transition's payload without creating a second transition.
+func (store *Store) QueueWaitingForInput(key RunKey, event protocol.RunEvent, transition protocol.StateTransitionRequest) (RunJournal, error) {
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		event.Sequence = journal.LastEventSequence + 1
+		if event.Kind != "waiting_for_input" {
+			return errors.New("waiting event is invalid")
 		}
-		if strings.TrimSpace(event.EventID) == "" || strings.TrimSpace(event.Kind) == "" || event.Sequence != journal.LastEventSequence+1 || event.OccurredAt.IsZero() || !validRawMessage(event.Payload) {
-			return errors.New("event is invalid")
+		if journal.LocalState == "terminal_pending" || hasPendingTerminalTransition(journal.PendingTransitions) {
+			return appendEvent(journal, event, "waiting event is invalid")
 		}
-		journal.PendingEvents = append(journal.PendingEvents, event)
-		journal.LastEventSequence = event.Sequence
+		prepared, err := prepareTransition(journal, transition)
+		if err != nil {
+			return err
+		}
+		if prepared.State != "waiting_for_input" {
+			return errors.New("waiting transition state is invalid")
+		}
+		if err := appendEvent(journal, event, "waiting event is invalid"); err != nil {
+			return err
+		}
+		if len(journal.PendingTransitions) == 0 {
+			if journal.LocalState != "waiting_for_input" {
+				journal.PendingTransitions = append(journal.PendingTransitions, prepared)
+			}
+		} else if last := len(journal.PendingTransitions) - 1; journal.PendingTransitions[last].State == "waiting_for_input" {
+			if !hasAttemptedTransition(journal.AttemptedTransitionIDs, journal.PendingTransitions[last].TransitionID) {
+				journal.PendingTransitions[last].Payload = prepared.Payload
+			}
+		} else {
+			journal.PendingTransitions = append(journal.PendingTransitions, prepared)
+		}
+		journal.LocalState = "waiting_for_input"
 		return nil
 	})
+}
+
+func appendEvent(journal *RunJournal, event protocol.RunEvent, invalidMessage string) error {
+	if !journal.hasClaimGrant() {
+		return errors.New("journal has no claim grant")
+	}
+	if strings.TrimSpace(event.EventID) == "" || strings.TrimSpace(event.Kind) == "" || event.Sequence != journal.LastEventSequence+1 || event.OccurredAt.IsZero() || !validRawMessage(event.Payload) {
+		return errors.New(invalidMessage)
+	}
+	journal.PendingEvents = append(journal.PendingEvents, event)
+	journal.LastEventSequence = event.Sequence
+	return nil
 }
 
 // MarkEventsDelivered removes successfully appended events by their stable IDs.
@@ -461,6 +504,26 @@ func (store *Store) QueueTransition(key RunKey, transition protocol.StateTransit
 	})
 }
 
+// QueueRunningTransition atomically queues a running transition and records
+// the corresponding local lifecycle state.
+func (store *Store) QueueRunningTransition(key RunKey, transition protocol.StateTransitionRequest) (RunJournal, error) {
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		prepared, err := prepareTransition(journal, transition)
+		if err != nil {
+			return err
+		}
+		if prepared.State != "running" {
+			return errors.New("running transition state is invalid")
+		}
+		if journal.LocalState == "terminal_pending" || hasPendingTerminalTransition(journal.PendingTransitions) {
+			return errors.New("running transition follows terminal transition")
+		}
+		journal.PendingTransitions = append(journal.PendingTransitions, prepared)
+		journal.LocalState = "running"
+		return nil
+	})
+}
+
 // QueueTerminalTransition atomically makes a terminal transition durable and
 // marks the local process terminal-pending before any HTTP request is sent.
 func (store *Store) QueueTerminalTransition(key RunKey, transition protocol.StateTransitionRequest) (RunJournal, error) {
@@ -474,6 +537,7 @@ func (store *Store) QueueTerminalTransition(key RunKey, transition protocol.Stat
 		}
 		if prepared.State == "cancelled" {
 			journal.PendingTransitions = []protocol.StateTransitionRequest{prepared}
+			journal.AttemptedTransitionIDs = retainAttemptedTransitions(journal.AttemptedTransitionIDs, journal.PendingTransitions)
 			journal.LocalState = "terminal_pending"
 			return nil
 		}
@@ -490,6 +554,25 @@ func (store *Store) QueueTerminalTransition(key RunKey, transition protocol.Stat
 func (store *Store) MarkTransitionsDelivered(key RunKey, transitionIDs []string) (RunJournal, error) {
 	return store.mutateJournal(key, func(journal *RunJournal) error {
 		journal.PendingTransitions = removeTransitions(journal.PendingTransitions, transitionIDs)
+		journal.AttemptedTransitionIDs = retainAttemptedTransitions(journal.AttemptedTransitionIDs, journal.PendingTransitions)
+		return nil
+	})
+}
+
+// MarkTransitionAttempted durably freezes a pending transition before its HTTP
+// request is sent. Repeating the marker for the same pending transition is a
+// no-op.
+func (store *Store) MarkTransitionAttempted(key RunKey, transitionID string) (RunJournal, error) {
+	if !validRequiredString(transitionID, 4096) {
+		return RunJournal{}, errors.New("transition ID is invalid")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if !hasPendingTransition(journal.PendingTransitions, transitionID) {
+			return errors.New("transition is not pending")
+		}
+		if !hasAttemptedTransition(journal.AttemptedTransitionIDs, transitionID) {
+			journal.AttemptedTransitionIDs = append(journal.AttemptedTransitionIDs, transitionID)
+		}
 		return nil
 	})
 }
@@ -835,6 +918,9 @@ func validateJournal(journal RunJournal) error {
 			return errors.New("run journal is invalid")
 		}
 	}
+	if !validAttemptedTransitions(journal.AttemptedTransitionIDs, journal.PendingTransitions) {
+		return errors.New("run journal is invalid")
+	}
 	for _, acknowledgement := range journal.PendingCommandAcknowledgements {
 		if !validAcknowledgement(acknowledgement, journal) {
 			return errors.New("run journal is invalid")
@@ -857,6 +943,27 @@ func validEvent(event protocol.RunEvent) bool {
 
 func validTransition(transition protocol.StateTransitionRequest) bool {
 	return validRequiredString(transition.TransitionID, 4096) && validRequiredString(transition.State, 256) && validRawMessage(transition.Payload)
+}
+
+func validAttemptedTransitions(attempted []string, pending []protocol.StateTransitionRequest) bool {
+	pendingIDs := make(map[string]struct{}, len(pending))
+	for _, transition := range pending {
+		pendingIDs[transition.TransitionID] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(attempted))
+	for _, transitionID := range attempted {
+		if !validRequiredString(transitionID, 4096) {
+			return false
+		}
+		if _, exists := pendingIDs[transitionID]; !exists {
+			return false
+		}
+		if _, duplicate := seen[transitionID]; duplicate {
+			return false
+		}
+		seen[transitionID] = struct{}{}
+	}
+	return true
 }
 
 func validAcknowledgement(acknowledgement protocol.CommandAcknowledgement, journal RunJournal) bool {
@@ -898,6 +1005,37 @@ func removeTransitions(transitions []protocol.StateTransitionRequest, ids []stri
 	for _, transition := range transitions {
 		if !remove[transition.TransitionID] {
 			result = append(result, transition)
+		}
+	}
+	return result
+}
+
+func hasPendingTransition(transitions []protocol.StateTransitionRequest, transitionID string) bool {
+	for _, transition := range transitions {
+		if transition.TransitionID == transitionID {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAttemptedTransition(attempted []string, transitionID string) bool {
+	for _, attemptedID := range attempted {
+		if attemptedID == transitionID {
+			return true
+		}
+	}
+	return false
+}
+
+func retainAttemptedTransitions(attempted []string, pending []protocol.StateTransitionRequest) []string {
+	if len(attempted) == 0 {
+		return nil
+	}
+	result := attempted[:0]
+	for _, transitionID := range attempted {
+		if hasPendingTransition(pending, transitionID) {
+			result = append(result, transitionID)
 		}
 	}
 	return result

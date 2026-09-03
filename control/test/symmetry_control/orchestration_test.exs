@@ -861,6 +861,36 @@ defmodule SymmetryControl.OrchestrationTest do
                now: @now
              )
 
+    assert {:ok, fallback_snapshot} = Orchestration.task_snapshot(task.id)
+    assert fallback_snapshot.waiting.transition_id == "00000000-0000-0000-0000-000000000112"
+    assert fallback_snapshot.waiting.question == "What should happen next?"
+    assert fallback_snapshot.waiting.recorded_at == @now
+
+    batch_recorded_at = DateTime.add(@now, 1, :microsecond)
+
+    assert {:ok, [_, _]} =
+             Orchestration.append_events(
+               run.id,
+               fence,
+               [
+                 %{
+                   event_id: "00000000-0000-0000-0000-000000000116",
+                   sequence: 1,
+                   kind: "waiting_for_input",
+                   payload: %{"question" => "Which branch?", "choices" => ["main", "release"]},
+                   occurred_at: batch_recorded_at
+                 },
+                 %{
+                   event_id: "00000000-0000-0000-0000-000000000117",
+                   sequence: 2,
+                   kind: "waiting_for_input",
+                   payload: %{"question" => "Which environment?", "choices" => ["staging"]},
+                   occurred_at: DateTime.add(batch_recorded_at, 1, :microsecond)
+                 }
+               ],
+               now: batch_recorded_at
+             )
+
     assert {:ok, pending, :created} =
              Orchestration.create_command(
                task.id,
@@ -872,15 +902,17 @@ defmodule SymmetryControl.OrchestrationTest do
 
     assert {:ok, snapshot} = Orchestration.task_snapshot(task.id)
     assert snapshot.run.id == run.id
-    assert snapshot.waiting.question == "What should happen next?"
+    assert snapshot.waiting.transition_id == "00000000-0000-0000-0000-000000000112"
+    assert snapshot.waiting.question == "Which environment?"
 
     assert snapshot.waiting.payload == %{
-             "question" => "What should happen next?",
-             "choices" => ["continue"]
+             "question" => "Which environment?",
+             "choices" => ["staging"]
            }
 
     assert snapshot.waiting.run_id == run.id
     assert snapshot.waiting.generation == run.generation
+    assert snapshot.waiting.recorded_at == batch_recorded_at
     assert snapshot.latest_command.id == pending.id
     assert snapshot.latest_command.state == "pending"
 
@@ -891,7 +923,7 @@ defmodule SymmetryControl.OrchestrationTest do
                "running",
                %{},
                "00000000-0000-0000-0000-000000000113",
-               now: DateTime.add(@now, 1, :microsecond)
+               now: DateTime.add(@now, 3, :microsecond)
              )
 
     assert {:ok, _} =
@@ -901,15 +933,36 @@ defmodule SymmetryControl.OrchestrationTest do
                "waiting_for_input",
                %{"question" => "Which option now?"},
                "00000000-0000-0000-0000-000000000115",
-               now: DateTime.add(@now, 2, :microsecond)
+               now: DateTime.add(@now, 4, :microsecond)
+             )
+
+    assert {:ok, [_]} =
+             Orchestration.append_events(
+               run.id,
+               fence,
+               [
+                 %{
+                   event_id: "00000000-0000-0000-0000-000000000118",
+                   sequence: 3,
+                   kind: "waiting_for_input",
+                   payload: %{"question" => "Which option now?"},
+                   occurred_at: DateTime.add(@now, 5, :microsecond)
+                 }
+               ],
+               now: DateTime.add(@now, 5, :microsecond)
              )
 
     assert {:ok, refreshed_waiting_snapshot} = Orchestration.task_snapshot(task.id)
     assert refreshed_waiting_snapshot.waiting.question == "Which option now?"
+
+    assert refreshed_waiting_snapshot.waiting.transition_id ==
+             "00000000-0000-0000-0000-000000000115"
+
+    assert refreshed_waiting_snapshot.waiting.recorded_at == DateTime.add(@now, 5, :microsecond)
     assert refreshed_waiting_snapshot.latest_command.id == pending.id
 
     assert {:ok, _task, cancel} =
-             Orchestration.request_cancel(task.id, now: DateTime.add(@now, 3, :microsecond))
+             Orchestration.request_cancel(task.id, now: DateTime.add(@now, 6, :microsecond))
 
     assert {:ok, acknowledged} =
              Orchestration.acknowledge_command(
@@ -917,7 +970,7 @@ defmodule SymmetryControl.OrchestrationTest do
                fence,
                "applied",
                "00000000-0000-0000-0000-000000000114",
-               now: DateTime.add(@now, 4, :microsecond)
+               now: DateTime.add(@now, 7, :microsecond)
              )
 
     assert {:ok, acknowledged_snapshot} = Orchestration.task_snapshot(task.id)
@@ -1005,6 +1058,109 @@ defmodule SymmetryControl.OrchestrationTest do
 
     assert {:error, :not_found} =
              Orchestration.list_task_commands("00000000-0000-0000-0000-000000000129")
+  end
+
+  test "task snapshots do not mix waiting telemetry across generations" do
+    %{machine: machine} = enroll_machine()
+    runtime = register_runtime(machine)
+
+    {:ok, task, :created} =
+      Orchestration.submit_task(task_attrs(), "waiting-generation", now: @now)
+
+    {:ok, first_run} = Orchestration.assign_one(now: @now)
+    first_fence = claim(first_run, runtime)
+
+    assert {:ok, _} =
+             Orchestration.transition(
+               first_run.id,
+               first_fence,
+               "running",
+               %{},
+               "00000000-0000-0000-0000-000000000141",
+               now: @now
+             )
+
+    assert {:ok, _} =
+             Orchestration.transition(
+               first_run.id,
+               first_fence,
+               "waiting_for_input",
+               %{"question" => "stale transition"},
+               "00000000-0000-0000-0000-000000000142",
+               now: @now
+             )
+
+    assert {:ok, [_]} =
+             Orchestration.append_events(
+               first_run.id,
+               first_fence,
+               [
+                 %{
+                   event_id: "00000000-0000-0000-0000-000000000143",
+                   sequence: 1,
+                   kind: "waiting_for_input",
+                   payload: %{"question" => "stale event"},
+                   occurred_at: @now
+                 }
+               ],
+               now: @now
+             )
+
+    later = DateTime.add(@now, 31, :second)
+    assert %{expired_runs: 1} = Orchestration.expire(now: later)
+
+    assert {:ok, _} =
+             Orchestration.heartbeat(runtime.id, runtime.connection_epoch, [], now: later)
+
+    assert {:ok, second_run} = Orchestration.assign_one(now: later)
+    second_fence = claim(second_run, runtime, later)
+
+    assert {:ok, _} =
+             Orchestration.transition(
+               second_run.id,
+               second_fence,
+               "running",
+               %{},
+               "00000000-0000-0000-0000-000000000144",
+               now: later
+             )
+
+    assert {:ok, _} =
+             Orchestration.transition(
+               second_run.id,
+               second_fence,
+               "waiting_for_input",
+               %{"question" => "current transition"},
+               "00000000-0000-0000-0000-000000000145",
+               now: later
+             )
+
+    current_event_time = DateTime.add(later, 1, :microsecond)
+
+    assert {:ok, [_]} =
+             Orchestration.append_events(
+               second_run.id,
+               second_fence,
+               [
+                 %{
+                   event_id: "00000000-0000-0000-0000-000000000146",
+                   sequence: 1,
+                   kind: "waiting_for_input",
+                   payload: %{"question" => "current event"},
+                   occurred_at: current_event_time
+                 }
+               ],
+               now: current_event_time
+             )
+
+    assert {:ok, snapshot} = Orchestration.task_snapshot(task.id)
+    assert snapshot.run.id == second_run.id
+    assert snapshot.waiting.run_id == second_run.id
+    assert snapshot.waiting.generation == second_run.generation
+    assert snapshot.waiting.transition_id == "00000000-0000-0000-0000-000000000145"
+    assert snapshot.waiting.question == "current event"
+    assert snapshot.waiting.payload == %{"question" => "current event"}
+    assert snapshot.waiting.recorded_at == current_event_time
   end
 
   test "timeline spans generations, uses durable insertion order, and has stable source and id ties" do

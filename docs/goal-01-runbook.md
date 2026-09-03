@@ -99,11 +99,17 @@ its protected state directory. Do not share one state directory between daemon
 processes.
 
 The daemon writes one initial stdin record for every launch. `input_mode: "goal"`
-writes the task goal as plain text followed by a newline. `input_mode: "json"`
-writes one newline-terminated JSON envelope containing both task fields, for
-example `{"goal":"Update the project","input":{"branch":"main"}}`.
-Interactive profiles keep stdin open for later `provide_input` commands;
-non-interactive profiles receive EOF after that first record.
+writes the task goal as plain text followed by a newline and is valid only when
+`interactive` is false. `input_mode: "json"` writes one newline-terminated JSON
+envelope, for example
+`{"type":"task_input","goal":"Update the project","input":{"branch":"main"}}`.
+The envelope always contains `type`, non-empty `goal`, and `input`; omitted task
+input is encoded as `null`, while explicit `{}` remains `{}`. Interactive
+profiles must use `input_mode: "json"`, keep stdin open, and receive later input
+as `{"type":"provide_input","goal":"Update the project","input":{"answer":"continue"}}`.
+Follow-up `input` must be an object. Non-interactive profiles receive EOF after
+the first record. `interactive: true` with `input_mode: "goal"` is rejected as
+invalid configuration.
 
 For Codex non-interactive execution, a profile can use:
 

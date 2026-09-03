@@ -194,6 +194,9 @@ func validateAgentProfiles(profiles map[string]AgentProfile) error {
 		default:
 			return fmt.Errorf("%s.input_mode must be goal or json", field)
 		}
+		if profile.Interactive && profile.InputMode == InputModeGoal {
+			return fmt.Errorf("%s.interactive requires %s.input_mode to be json", field, field)
+		}
 		switch profile.EventFormat {
 		case "", EventFormatRaw:
 			profile.EventFormat = EventFormatRaw
