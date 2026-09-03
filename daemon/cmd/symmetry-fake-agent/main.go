@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -58,6 +59,8 @@ func run(input io.Reader, output io.Writer, errorOutput io.Writer) error {
 	switch mode {
 	case "success":
 		return runSuccess(output)
+	case "inspect_input":
+		return runInspectInput(envelope.Input, output)
 	case "fail":
 		fmt.Fprintln(errorOutput, "fake agent failure")
 		return errors.New("fake agent failed")
@@ -65,6 +68,10 @@ func run(input io.Reader, output io.Writer, errorOutput io.Writer) error {
 		return runSlow(output)
 	case "wait_input":
 		return runWaitInput(reader, output, envelope.Goal)
+	case "wait_twice":
+		return runWaitTwice(reader, output, envelope.Goal)
+	case "exit_on_file":
+		return runExitOnFile(envelope.Input, output)
 	case "spawn_child":
 		return runSpawnChild(output)
 	default:
@@ -79,12 +86,36 @@ func runSuccess(output io.Writer) error {
 	return writeProgress(output, "completed")
 }
 
+func runInspectInput(input json.RawMessage, output io.Writer) error {
+	message := "input:object"
+	if bytes.Equal(bytes.TrimSpace(input), []byte("null")) {
+		message = "input:null"
+	}
+	if err := writeProgress(output, message); err != nil {
+		return err
+	}
+	return writeProgress(output, "completed")
+}
+
 func runWaitInput(input *bufio.Reader, output io.Writer, goal string) error {
+	return runWaitForInput(input, output, goal, "Provide the requested input.")
+}
+
+func runWaitTwice(input *bufio.Reader, output io.Writer, goal string) error {
+	return runWaitForInput(input, output, goal,
+		"Provide the first requested input.",
+		"Confirm the requested input before continuing.",
+	)
+}
+
+func runWaitForInput(input *bufio.Reader, output io.Writer, goal string, questions ...string) error {
 	if err := writeProgress(output, "started"); err != nil {
 		return err
 	}
-	if err := writeEvent(output, event{Type: "waiting_for_input", Question: "Provide the requested input."}); err != nil {
-		return err
+	for _, question := range questions {
+		if err := writeEvent(output, event{Type: "waiting_for_input", Question: question}); err != nil {
+			return err
+		}
 	}
 	followUp, err := readLine(input)
 	if err != nil {
@@ -97,6 +128,59 @@ func runWaitInput(input *bufio.Reader, output io.Writer, goal string) error {
 		return err
 	}
 	return writeProgress(output, "completed")
+}
+
+func runExitOnFile(input json.RawMessage, output io.Writer) error {
+	path, err := exitOnFilePath(input)
+	if err != nil {
+		return err
+	}
+	if err := writeProgress(output, "started"); err != nil {
+		return err
+	}
+	if err := writeProgress(output, "waiting_for_file"); err != nil {
+		return err
+	}
+
+	interrupts := make(chan os.Signal, 1)
+	signal.Notify(interrupts, terminationSignals()...)
+	defer signal.Stop(interrupts)
+
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-interrupts:
+			if err := writeProgress(output, "termination_requested"); err != nil {
+				return err
+			}
+			return errors.New("fake agent interrupted")
+		case <-ticker.C:
+			if _, err := os.Stat(path); err == nil {
+				return writeProgress(output, "released")
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("stat release file: %w", err)
+			}
+		}
+	}
+}
+
+func exitOnFilePath(input json.RawMessage) (string, error) {
+	var value map[string]json.RawMessage
+	if err := json.Unmarshal(input, &value); err != nil || value == nil {
+		return "", errors.New("exit_on_file input must be a JSON object")
+	}
+	path, found, err := stringField(value, "path")
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", errors.New("exit_on_file path is required")
+	}
+	if !filepath.IsAbs(path) {
+		return "", errors.New("exit_on_file path must be absolute")
+	}
+	return path, nil
 }
 
 func runSlow(output io.Writer) error {

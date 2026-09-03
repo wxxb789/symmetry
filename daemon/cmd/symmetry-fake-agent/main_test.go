@@ -53,6 +53,36 @@ func TestSuccessEmitsProgressJSONLines(t *testing.T) {
 	}
 }
 
+func TestInspectInputDistinguishesNullAndEmptyObject(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "null", input: `null`, want: "input:null"},
+		{name: "empty object", input: `{}`, want: "input:object"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			process := startFixture(t, taskInput(`"inspect input"`, test.input), []string{modeEnvironment + "=inspect_input"})
+			_, stderr, err := waitForProcess(t, process, time.Second)
+			if err != nil {
+				t.Fatalf("fixture failed: %v; stderr: %s", err, stderr)
+			}
+			if stderr != "" {
+				t.Fatalf("unexpected stderr: %q", stderr)
+			}
+			if got, want := decodeEvents(t, process.output.String()), []event{
+				{Type: "progress", Message: test.want},
+				{Type: "progress", Message: "completed"},
+			}; !equalEvents(got, want) {
+				t.Fatalf("events = %#v, want %#v", got, want)
+			}
+		})
+	}
+}
+
 func TestFailWritesStderrAndExitsNonZero(t *testing.T) {
 	process := startFixture(t, taskInput(`"fail task"`, `{"mode":"fail"}`), nil)
 	_, stderr, err := waitForProcess(t, process, time.Second)
@@ -94,6 +124,137 @@ func TestWaitInputReadsFollowUpAndCompletes(t *testing.T) {
 	events := decodeEvents(t, process.output.String())
 	if got, want := events, []event{{Type: "progress", Message: "started"}, {Type: "waiting_for_input", Question: "Provide the requested input."}, {Type: "progress", Message: "input_received"}, {Type: "progress", Message: "completed"}}; !equalEvents(got, want) {
 		t.Fatalf("events = %#v, want %#v", got, want)
+	}
+}
+
+func TestWaitTwiceEmitsDistinctQuestionsThenCompletes(t *testing.T) {
+	process := startFixture(t, taskInput(`"wait twice"`, `{"mode":"wait_twice"}`), nil)
+	defer closeStdin(t, process)
+
+	if first := readEvent(t, process.output); first != (event{Type: "progress", Message: "started"}) {
+		t.Fatalf("first event = %#v", first)
+	}
+	firstWaiting := readEvent(t, process.output)
+	secondWaiting := readEvent(t, process.output)
+	if firstWaiting.Type != "waiting_for_input" || firstWaiting.Question == "" {
+		t.Fatalf("first waiting event = %#v", firstWaiting)
+	}
+	if secondWaiting.Type != "waiting_for_input" || secondWaiting.Question == "" || secondWaiting.Question == firstWaiting.Question {
+		t.Fatalf("second waiting event = %#v, first waiting event = %#v", secondWaiting, firstWaiting)
+	}
+	if _, err := io.WriteString(process.stdin, provideInput(`"wait twice"`, `{"answer":"confirmed"}`)); err != nil {
+		t.Fatalf("write follow-up input: %v", err)
+	}
+	closeStdin(t, process)
+
+	_, stderr, err := waitForProcess(t, process, time.Second)
+	if err != nil {
+		t.Fatalf("fixture failed: %v; stderr: %s", err, stderr)
+	}
+	if stderr != "" {
+		t.Fatalf("unexpected stderr: %q", stderr)
+	}
+	if got, want := decodeEvents(t, process.output.String()), []event{
+		{Type: "progress", Message: "started"},
+		{Type: "waiting_for_input", Question: "Provide the first requested input."},
+		{Type: "waiting_for_input", Question: "Confirm the requested input before continuing."},
+		{Type: "progress", Message: "input_received"},
+		{Type: "progress", Message: "completed"},
+	}; !equalEvents(got, want) {
+		t.Fatalf("events = %#v, want %#v", got, want)
+	}
+}
+
+func TestExitOnFileWaitsThenReleases(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "release")
+	process := startFixture(t, taskInput(`"wait for file"`, fmt.Sprintf(`{"mode":"exit_on_file","path":%s}`, strconv.Quote(path))), nil)
+	defer closeStdin(t, process)
+
+	if first := readEvent(t, process.output); first != (event{Type: "progress", Message: "started"}) {
+		t.Fatalf("first event = %#v", first)
+	}
+	if waiting := readEvent(t, process.output); waiting != (event{Type: "progress", Message: "waiting_for_file"}) {
+		t.Fatalf("waiting event = %#v", waiting)
+	}
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("create release file: %v", err)
+	}
+	closeStdin(t, process)
+
+	_, stderr, err := waitForProcess(t, process, time.Second)
+	if err != nil {
+		t.Fatalf("fixture failed: %v; stderr: %s", err, stderr)
+	}
+	if stderr != "" {
+		t.Fatalf("unexpected stderr: %q", stderr)
+	}
+	if got, want := decodeEvents(t, process.output.String()), []event{
+		{Type: "progress", Message: "started"},
+		{Type: "progress", Message: "waiting_for_file"},
+		{Type: "progress", Message: "released"},
+	}; !equalEvents(got, want) {
+		t.Fatalf("events = %#v, want %#v", got, want)
+	}
+}
+
+func TestExitOnFileCancellationStopsTheFixture(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "release")
+	output := newEventCollector()
+	process, err := execution.NewRunner().Start(
+		context.Background(),
+		execution.Invocation{
+			Program:                fixtureBinary(t),
+			InitialInput:           []byte(taskInput(`"wait for file"`, fmt.Sprintf(`{"mode":"exit_on_file","path":%s}`, strconv.Quote(path)))),
+			CloseInputAfterInitial: true,
+		},
+		fixtureSink{output: output},
+	)
+	if err != nil {
+		t.Fatalf("start fixture through Runner: %v", err)
+	}
+	if first := readEvent(t, output); first != (event{Type: "progress", Message: "started"}) {
+		t.Fatalf("first event = %#v", first)
+	}
+	if waiting := readEvent(t, output); waiting != (event{Type: "progress", Message: "waiting_for_file"}) {
+		t.Fatalf("waiting event = %#v", waiting)
+	}
+
+	terminationContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := process.Terminate(terminationContext, 100*time.Millisecond); err != nil {
+		t.Fatalf("terminate fixture: %v", err)
+	}
+	result := process.Wait()
+	if !result.Terminated {
+		t.Fatal("Terminated = false, want true")
+	}
+	if result.Success() || result.ExitCode == 0 {
+		t.Fatalf("result = %+v, want terminated failure", result)
+	}
+}
+
+func TestExitOnFileRejectsInvalidPath(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "missing", input: `{"mode":"exit_on_file"}`, want: "exit_on_file path is required"},
+		{name: "empty", input: `{"mode":"exit_on_file","path":" "}`, want: "path must not be empty"},
+		{name: "relative", input: `{"mode":"exit_on_file","path":"release"}`, want: "exit_on_file path must be absolute"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			process := startFixture(t, taskInput(`"wait for file"`, test.input), nil)
+			_, stderr, err := waitForProcess(t, process, time.Second)
+			if err == nil {
+				t.Fatal("fixture succeeded, want failure")
+			}
+			if !strings.Contains(stderr, test.want) {
+				t.Fatalf("stderr = %q, want %q", stderr, test.want)
+			}
+		})
 	}
 }
 

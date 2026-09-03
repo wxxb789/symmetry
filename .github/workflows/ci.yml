@@ -57,8 +57,14 @@ jobs:
           cache-dependency-path: daemon/go.sum
       - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
-      - run: go test -count=3 -timeout 180s ./...
-      - run: go build ./cmd/symmetry-daemon ./cmd/symmetry-fake-agent
+      - run: go test -count=3 -timeout 300s ./...
+      - run: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...
+
+  legacy-route-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/audit-no-legacy-routes.sh
 
   daemon-windows:
     runs-on: windows-latest
@@ -130,7 +136,7 @@ jobs:
           SYMMETRY_E2E_AGENT: /tmp/symmetry-fake-agent
         run: |
           go build -o /tmp/symmetry-fake-agent ./cmd/symmetry-fake-agent
-          go test -count=1 -timeout 120s -v ./e2e -run '^(TestCoreDaemonWorkflows|TestPollingFallbackDispatchesWithoutNotifications|TestStaleRuntimeEpochCannotOverwriteNewGeneration|TestDaemonReregistersAfterRestart|TestDaemonReconnectReclaimsExpiredRunWithNewGeneration)$'
+          go test -count=1 -timeout 180s -v ./e2e -run '^(TestCoreDaemonWorkflows|TestPollingFallbackDispatchesWithoutNotifications|TestStaleRuntimeEpochCannotOverwriteNewGeneration|TestDaemonReregistersAfterRestart|TestDaemonReconnectReclaimsExpiredRunWithNewGeneration|TestTaskInputDistinguishesOmissionFromEmptyObject|TestGitWorktreeCleanupRemovesOwnedArtifacts|TestTerminalTransitionRetriesAfterLeaseExpiry)$'
       - name: Verify daemon recovers a live run after control restart
         working-directory: daemon
         shell: bash

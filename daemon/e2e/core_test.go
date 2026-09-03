@@ -7,9 +7,15 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -56,18 +62,22 @@ func TestCoreDaemonWorkflows(t *testing.T) {
 		return task.State == "completed"
 	})
 
-	waiting := submit(t, operator, daemon, "wait-input", "wait_input")
-	waitForTask(t, operator, waiting.TaskID, 20*time.Second, func(task protocol.Task) bool {
-		return task.State == "waiting_for_input"
+	waiting := submit(t, operator, daemon, "wait-input", "wait_twice")
+	waitingSnapshot := waitForTask(t, operator, waiting.TaskID, 20*time.Second, func(task protocol.Task) bool {
+		return task.State == "waiting_for_input" && task.Waiting != nil && task.Waiting.Question != nil && *task.Waiting.Question == "Confirm the requested input before continuing."
 	})
+	waitingRunID := taskRunID(t, waitingSnapshot)
+	waitingGeneration := taskGeneration(t, waitingSnapshot)
 	if _, err := operator.CreateTaskCommand(context.Background(), waiting.TaskID, unique("input"), protocol.TaskCommandRequest{
 		Kind: "provide_input", Payload: json.RawMessage(`{"answer":"continue"}`),
 	}); err != nil {
 		t.Fatalf("submit input: %v", err)
 	}
 	waitForTask(t, operator, waiting.TaskID, 20*time.Second, func(task protocol.Task) bool {
-		return task.State == "completed"
+		return task.State == "completed" && task.LatestCommand != nil && task.LatestCommand.State == "acknowledged" &&
+			task.LatestCommand.AcknowledgementOutcome != nil && *task.LatestCommand.AcknowledgementOutcome == "applied"
 	})
+	assertWaitingInputHistory(t, environment, waiting.TaskID, waitingRunID, waitingGeneration)
 
 	failed := submit(t, operator, daemon, "failure", "fail")
 	waitForTask(t, operator, failed.TaskID, 20*time.Second, func(task protocol.Task) bool {
@@ -92,6 +102,143 @@ func TestPollingFallbackDispatchesWithoutNotifications(t *testing.T) {
 
 	task := submit(t, operator, daemon, "poll-fallback", "success")
 	waitForTask(t, operator, task.TaskID, 20*time.Second, func(task protocol.Task) bool {
+		return task.State == "completed"
+	})
+}
+
+func TestTaskInputDistinguishesOmissionFromEmptyObject(t *testing.T) {
+	environment := loadEnvironment(t)
+	operator := newOperator(t, environment)
+	t.Setenv("SYMMETRY_FAKE_AGENT_MODE", "inspect_input")
+	profile := unique("input-presence-profile")
+	workspace := unique("input-presence-workspace")
+	value := daemonConfig(environment, "input-presence", t.TempDir(), t.TempDir(), profile, workspace)
+	profileConfig := value.AgentProfiles[profile]
+	profileConfig.EnvAllowlist = []string{"SYMMETRY_FAKE_AGENT_MODE"}
+	value.AgentProfiles[profile] = profileConfig
+
+	ctx, cancel := context.WithCancel(context.Background())
+	daemon := startConfiguredDaemon(t, ctx, environment, value, nil)
+	t.Cleanup(func() {
+		cancel()
+		waitForDaemon(t, daemon.done)
+	})
+
+	omitted := submitWithInput(t, operator, daemon, "input-omitted", nil)
+	omittedCompleted := waitForTask(t, operator, omitted.TaskID, 20*time.Second, func(task protocol.Task) bool {
+		return task.State == "completed"
+	})
+	assertTaskInput(t, omittedCompleted, "null")
+	assertInputInspectionEvent(t, environment, omitted.TaskID, "input:null")
+
+	empty := submitWithInput(t, operator, daemon, "input-empty", json.RawMessage(`{}`))
+	emptyCompleted := waitForTask(t, operator, empty.TaskID, 20*time.Second, func(task protocol.Task) bool {
+		return task.State == "completed"
+	})
+	assertTaskInput(t, emptyCompleted, "{}")
+	assertInputInspectionEvent(t, environment, empty.TaskID, "input:object")
+}
+
+func TestGitWorktreeCleanupRemovesOwnedArtifacts(t *testing.T) {
+	environment := loadEnvironment(t)
+	operator := newOperator(t, environment)
+	repository := initializeGitRepository(t)
+	workspaceRoot := t.TempDir()
+	stateDir := t.TempDir()
+	profile := unique("worktree-profile")
+	workspace := unique("worktree-workspace")
+	value := daemonConfig(environment, "worktree-cleanup", stateDir, t.TempDir(), profile, workspace)
+	value.Workspaces[workspace] = config.Workspace{
+		Policy: config.WorkspacePolicyGitWorktree, Repository: repository, Root: workspaceRoot,
+		Ref: "HEAD", Cleanup: config.CleanupAlways,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	daemon := startConfiguredDaemon(t, ctx, environment, value, nil)
+	t.Cleanup(func() {
+		cancel()
+		waitForDaemon(t, daemon.done)
+	})
+
+	task := submit(t, operator, daemon, "worktree-cleanup", "success")
+	completed := waitForTask(t, operator, task.TaskID, 20*time.Second, func(task protocol.Task) bool {
+		return task.State == "completed"
+	})
+	key := state.RunKey{RunID: taskRunID(t, completed), Generation: taskGeneration(t, completed)}
+	target := filepath.Join(workspaceRoot, "binding-"+workspace, "run-"+key.RunID, fmt.Sprintf("generation-%d", key.Generation))
+	reservation := filepath.Join(workspaceRoot, ".symmetry-reservations", "binding-"+workspace, "run-"+key.RunID, fmt.Sprintf("generation-%d.json", key.Generation))
+	ownershipJournal := filepath.Join(target, ".symmetry-workspace.json")
+
+	waitForPathsAbsent(t, 20*time.Second, target, reservation, ownershipJournal)
+	waitForJournalAbsentOnDisk(t, stateDir, key, 20*time.Second)
+}
+
+func TestTerminalTransitionRetriesAfterLeaseExpiry(t *testing.T) {
+	environment := loadEnvironment(t)
+	operator := newOperator(t, environment)
+	proxy, outage := startTerminalTransitionProxy(t, environment.baseURL)
+	proxied := environment
+	proxied.baseURL = proxy.URL
+
+	stateDir := t.TempDir()
+	profile := unique("terminal-outage-profile")
+	workspace := unique("terminal-outage-workspace")
+	value := daemonConfig(proxied, "terminal-outage", stateDir, t.TempDir(), profile, workspace)
+	ctx, cancel := context.WithCancel(context.Background())
+	daemon := startConfiguredDaemon(t, ctx, proxied, value, silentNotifications{})
+	t.Cleanup(func() {
+		cancel()
+		waitForDaemon(t, daemon.done)
+	})
+
+	releaseFile := filepath.Join(t.TempDir(), "release")
+	input, err := json.Marshal(map[string]string{"mode": "exit_on_file", "path": releaseFile})
+	if err != nil {
+		t.Fatalf("marshal exit-on-file input: %v", err)
+	}
+	task := submitWithInput(t, operator, daemon, "terminal-outage", input)
+	running := waitForTask(t, operator, task.TaskID, 15*time.Second, func(task protocol.Task) bool {
+		return task.State == "running"
+	})
+	key := state.RunKey{RunID: taskRunID(t, running), Generation: taskGeneration(t, running)}
+
+	outage.beginOutage()
+	waitForCondition(t, 10*time.Second, "forwarded daemon RPCs to drain", func() bool {
+		return outage.activeForwarded.Load() == 0
+	})
+	if err := os.WriteFile(releaseFile, []byte("release\n"), 0o600); err != nil {
+		t.Fatalf("release exit-on-file agent: %v", err)
+	}
+	pending := waitForJournalOnDisk(t, stateDir, key, 15*time.Second, func(journal state.RunJournal) bool {
+		return journal.LocalState == "terminal_pending" && journal.TerminalState == "completed" && !journal.LeaseExpiresAt.IsZero()
+	})
+	waitForCondition(t, 10*time.Second, "an outbox delivery blocked by the outage proxy", func() bool {
+		return outage.blockedOutboxDeliveries.Load() > 0
+	})
+	leaseExpiresAt := pending.LeaseExpiresAt
+	if observed := outage.latestLeaseExpiry(); observed.After(leaseExpiresAt) {
+		leaseExpiresAt = observed
+	}
+	if remaining := time.Until(leaseExpiresAt); remaining > 45*time.Second {
+		t.Skipf("lease expires in %s; integration gate requires SYMMETRY_LEASE_DURATION_MS=30000", remaining.Round(time.Second))
+	}
+	waitForTime(t, leaseExpiresAt.Add(250*time.Millisecond), 45*time.Second)
+
+	outage.allowDelivery()
+	completed := waitForTask(t, operator, task.TaskID, 15*time.Second, func(task protocol.Task) bool {
+		return task.State == "completed" && taskGeneration(t, task) == key.Generation
+	})
+	if !time.Now().Before(leaseExpiresAt.Add(8 * time.Minute)) {
+		t.Fatalf("terminal transition completed after the terminal grace window")
+	}
+	if taskRunID(t, completed) != key.RunID {
+		t.Fatalf("completed run id = %s, want %s", taskRunID(t, completed), key.RunID)
+	}
+	assertOutboxDeliveryOrder(t, outage, key.RunID)
+
+	outage.endOutage()
+	after := submit(t, operator, daemon, "terminal-outage-after", "success")
+	waitForTask(t, operator, after.TaskID, 15*time.Second, func(task protocol.Task) bool {
 		return task.State == "completed"
 	})
 }
@@ -470,17 +617,22 @@ func loadFakeAgentPath(t *testing.T) string {
 
 func startDaemon(t *testing.T, ctx context.Context, environment e2eEnvironment, name string, notifier app.NotificationClient) daemonRun {
 	t.Helper()
-	t.Setenv("SYMMETRY_ENROLLMENT_TOKEN", environment.enrollmentToken)
 	profile := unique(name + "-profile")
 	workspace := unique(name + "-workspace")
 	value := daemonConfig(environment, name, t.TempDir(), t.TempDir(), profile, workspace)
+	return startConfiguredDaemon(t, ctx, environment, value, notifier)
+}
+
+func startConfiguredDaemon(t *testing.T, ctx context.Context, environment e2eEnvironment, value config.Config, notifier app.NotificationClient) daemonRun {
+	t.Helper()
+	t.Setenv("SYMMETRY_ENROLLMENT_TOKEN", environment.enrollmentToken)
 	options := []app.Options{app.WithHTTPClient(localHTTPClient(30 * time.Second)), app.WithLogWriter(io.Discard)}
 	if notifier != nil {
 		options = append(options, app.WithNotificationClient(notifier))
 	}
 	done := make(chan error, 1)
 	go func() { done <- app.Run(ctx, value, options...) }()
-	return daemonRun{done: done, profile: profile, workspace: workspace}
+	return daemonRun{done: done, profile: value.Runtime.AgentProfile, workspace: value.Runtime.Workspace}
 }
 
 func daemonConfig(environment e2eEnvironment, name, stateDir, workspacePath, profile, workspace string) config.Config {
@@ -516,16 +668,599 @@ func newOperator(t *testing.T, environment e2eEnvironment) *control.OperatorClie
 
 func submit(t *testing.T, operator *control.OperatorClient, daemon daemonRun, name, mode string) protocol.Task {
 	t.Helper()
+	return submitWithInput(t, operator, daemon, name, json.RawMessage(fmt.Sprintf(`{"mode":%q}`, mode)))
+}
+
+func submitWithInput(t *testing.T, operator *control.OperatorClient, daemon daemonRun, name string, input json.RawMessage) protocol.Task {
+	t.Helper()
 	task, err := operator.SubmitTask(context.Background(), unique(name), protocol.TaskSubmitRequest{Work: protocol.Work{
 		Goal:         name,
 		AgentProfile: daemon.profile,
 		Workspace:    daemon.workspace,
-		Input:        json.RawMessage(fmt.Sprintf(`{"mode":%q}`, mode)),
+		Input:        input,
 	}})
 	if err != nil {
 		t.Fatalf("submit %s task: %v", name, err)
 	}
 	return task
+}
+
+func assertTaskInput(t *testing.T, task protocol.Task, want string) {
+	t.Helper()
+	if task.Work == nil {
+		t.Fatalf("task %s has no work", task.TaskID)
+	}
+	if got := strings.TrimSpace(string(task.Work.Input)); got != want {
+		t.Fatalf("task %s work.input = %s, want %s", task.TaskID, got, want)
+	}
+}
+
+func assertInputInspectionEvent(t *testing.T, environment e2eEnvironment, taskID, wantMessage string) {
+	t.Helper()
+	for _, event := range collectHistory(t, environment, taskID, "events") {
+		if historyString(t, event, "kind") == "progress" && historyPayloadString(t, event, "message") == wantMessage {
+			return
+		}
+	}
+	t.Fatalf("task %s has no input inspection event %q", taskID, wantMessage)
+}
+
+func assertWaitingInputHistory(t *testing.T, environment e2eEnvironment, taskID, runID string, generation int64) {
+	t.Helper()
+	events := collectHistory(t, environment, taskID, "events")
+	waitingEvents := filterHistory(events, func(entry map[string]json.RawMessage) bool {
+		return historyString(t, entry, "kind") == "waiting_for_input"
+	})
+	if len(waitingEvents) != 2 {
+		t.Fatalf("waiting events = %d, want 2", len(waitingEvents))
+	}
+	for index, wantQuestion := range []string{"Provide the first requested input.", "Confirm the requested input before continuing."} {
+		if got := historyPayloadString(t, waitingEvents[index], "question"); got != wantQuestion {
+			t.Fatalf("waiting event %d question = %q, want %q", index, got, wantQuestion)
+		}
+		assertHistoryRunOwnership(t, waitingEvents[index], runID, generation)
+	}
+
+	transitions := collectHistory(t, environment, taskID, "transitions")
+	waitingTransitions := filterHistory(transitions, func(entry map[string]json.RawMessage) bool {
+		return historyString(t, entry, "state") == "waiting_for_input"
+	})
+	if len(waitingTransitions) != 1 {
+		t.Fatalf("waiting transitions = %d, want 1", len(waitingTransitions))
+	}
+	assertHistoryRunOwnership(t, waitingTransitions[0], runID, generation)
+
+	commands := collectHistory(t, environment, taskID, "commands")
+	if len(commands) != 1 {
+		t.Fatalf("commands = %d, want 1", len(commands))
+	}
+	command := commands[0]
+	if got := historyString(t, command, "kind"); got != "provide_input" {
+		t.Fatalf("command kind = %q, want provide_input", got)
+	}
+	assertHistoryRunOwnership(t, command, runID, generation)
+	if got := historyString(t, command, "state"); got != "acknowledged" {
+		t.Fatalf("command state = %q, want acknowledged", got)
+	}
+	if got := historyNullableString(t, command, "acknowledgement_outcome"); got != "applied" {
+		t.Fatalf("command acknowledgement outcome = %q, want applied", got)
+	}
+	if historyNullableString(t, command, "acknowledgement_id") == "" || historyNullableString(t, command, "acknowledged_at") == "" {
+		t.Fatal("command acknowledgement identity or time is missing")
+	}
+
+	assertPagedOrderingWithoutDuplicates(t, environment, taskID, "events")
+	assertPagedOrderingWithoutDuplicates(t, environment, taskID, "transitions")
+	assertPagedOrderingWithoutDuplicates(t, environment, taskID, "timeline")
+}
+
+func collectHistory(t *testing.T, environment e2eEnvironment, taskID, surface string) []map[string]json.RawMessage {
+	t.Helper()
+	entries := make([]map[string]json.RawMessage, 0)
+	cursor := ""
+	for {
+		page, next := historyPage(t, environment, taskID, surface, cursor, 100)
+		entries = append(entries, page...)
+		if next == "" {
+			return entries
+		}
+		cursor = next
+	}
+}
+
+func assertPagedOrderingWithoutDuplicates(t *testing.T, environment e2eEnvironment, taskID, surface string) {
+	t.Helper()
+	baseline := collectHistory(t, environment, taskID, surface)
+	if len(baseline) < 2 {
+		t.Fatalf("%s baseline has %d entries, want at least 2 for cursor traversal", surface, len(baseline))
+	}
+	want := make(map[string]struct{}, len(baseline))
+	for _, entry := range baseline {
+		identity := historyIdentity(t, surface, entry)
+		if _, duplicate := want[identity]; duplicate {
+			t.Fatalf("%s baseline contains duplicate entry %q", surface, identity)
+		}
+		want[identity] = struct{}{}
+	}
+	seen := make(map[string]struct{})
+	cursor := ""
+	var previous time.Time
+	for {
+		page, next := historyPage(t, environment, taskID, surface, cursor, 1)
+		if len(page) != 1 {
+			t.Fatalf("%s page with cursor %q has %d entries, want 1", surface, cursor, len(page))
+		}
+		entry := page[0]
+		identity := historyIdentity(t, surface, entry)
+		if _, duplicate := seen[identity]; duplicate {
+			t.Fatalf("%s repeated entry %q across cursor pages", surface, identity)
+		}
+		seen[identity] = struct{}{}
+		recordedAt := historyTime(t, entry, "recorded_at")
+		if !previous.IsZero() {
+			if surface == "timeline" && recordedAt.After(previous) {
+				t.Fatalf("timeline is not newest-first: %s after %s", recordedAt, previous)
+			}
+			if surface != "timeline" && recordedAt.Before(previous) {
+				t.Fatalf("%s is not oldest-first: %s before %s", surface, recordedAt, previous)
+			}
+		}
+		previous = recordedAt
+		if next == "" {
+			if len(seen) != len(want) {
+				t.Fatalf("%s cursor traversal has %d entries, baseline has %d", surface, len(seen), len(want))
+			}
+			for identity := range want {
+				if _, found := seen[identity]; !found {
+					t.Fatalf("%s cursor traversal omitted baseline entry %q", surface, identity)
+				}
+			}
+			return
+		}
+		cursor = next
+	}
+}
+
+func historyPage(t *testing.T, environment e2eEnvironment, taskID, surface, cursor string, limit int) ([]map[string]json.RawMessage, string) {
+	t.Helper()
+	query := url.Values{"limit": []string{fmt.Sprintf("%d", limit)}}
+	if cursor != "" {
+		if surface == "timeline" {
+			query.Set("before", cursor)
+		} else {
+			query.Set("after", cursor)
+		}
+	}
+	document := operatorGetJSON(t, environment, "v1/tasks/"+taskID+"/"+surface, query)
+	entryKey, cursorKey := surface, "next_after"
+	if surface == "timeline" {
+		entryKey, cursorKey = "items", "next_before"
+	}
+	var entries []map[string]json.RawMessage
+	if err := json.Unmarshal(historyField(t, document, entryKey), &entries); err != nil {
+		t.Fatalf("decode %s entries: %v", surface, err)
+	}
+	var next string
+	rawNext := historyField(t, document, cursorKey)
+	if string(rawNext) != "null" {
+		if err := json.Unmarshal(rawNext, &next); err != nil {
+			t.Fatalf("decode %s cursor: %v", surface, err)
+		}
+	}
+	return entries, next
+}
+
+func operatorGetJSON(t *testing.T, environment e2eEnvironment, endpoint string, query url.Values) map[string]json.RawMessage {
+	t.Helper()
+	requestURL := operatorURL(t, environment.baseURL, endpoint, query)
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, requestURL, nil)
+	if err != nil {
+		t.Fatalf("create operator history request: %v", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+environment.operatorToken)
+	response, err := localHTTPClient(5 * time.Second).Do(request)
+	if err != nil {
+		t.Fatalf("get %s: %v", endpoint, err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read %s response: %v", endpoint, err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("get %s = HTTP %d: %s", endpoint, response.StatusCode, body)
+	}
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(body, &document); err != nil {
+		t.Fatalf("decode %s response: %v", endpoint, err)
+	}
+	return document
+}
+
+func operatorURL(t *testing.T, baseURL, endpoint string, query url.Values) string {
+	t.Helper()
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		t.Fatalf("parse operator base URL: %v", err)
+	}
+	basePath := strings.TrimRight(parsed.Path, "/")
+	if basePath == "" {
+		basePath = "/api"
+	}
+	parsed.Path = basePath + "/" + strings.TrimLeft(endpoint, "/")
+	parsed.RawPath = ""
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
+}
+
+func historyField(t *testing.T, document map[string]json.RawMessage, field string) json.RawMessage {
+	t.Helper()
+	value, ok := document[field]
+	if !ok {
+		t.Fatalf("history response has no %q field", field)
+	}
+	return value
+}
+
+func historyString(t *testing.T, entry map[string]json.RawMessage, field string) string {
+	t.Helper()
+	var value string
+	if err := json.Unmarshal(historyField(t, entry, field), &value); err != nil {
+		t.Fatalf("decode history %s: %v", field, err)
+	}
+	return value
+}
+
+func historyNullableString(t *testing.T, entry map[string]json.RawMessage, field string) string {
+	t.Helper()
+	value := historyField(t, entry, field)
+	if string(value) == "null" {
+		return ""
+	}
+	var decoded string
+	if err := json.Unmarshal(value, &decoded); err != nil {
+		t.Fatalf("decode history %s: %v", field, err)
+	}
+	return decoded
+}
+
+func historyPayloadString(t *testing.T, entry map[string]json.RawMessage, field string) string {
+	t.Helper()
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(historyField(t, entry, "payload"), &payload); err != nil {
+		t.Fatalf("decode history payload: %v", err)
+	}
+	return historyString(t, payload, field)
+}
+
+func historyTime(t *testing.T, entry map[string]json.RawMessage, field string) time.Time {
+	t.Helper()
+	value, err := time.Parse(time.RFC3339Nano, historyString(t, entry, field))
+	if err != nil {
+		t.Fatalf("parse history %s: %v", field, err)
+	}
+	return value
+}
+
+func historyIdentity(t *testing.T, surface string, entry map[string]json.RawMessage) string {
+	t.Helper()
+	if surface != "timeline" {
+		switch surface {
+		case "events":
+			return historyString(t, entry, "event_id")
+		case "transitions":
+			return historyString(t, entry, "transition_id")
+		case "commands":
+			return historyString(t, entry, "command_id")
+		}
+	}
+	data := make(map[string]json.RawMessage)
+	if err := json.Unmarshal(historyField(t, entry, "data"), &data); err != nil {
+		t.Fatalf("decode timeline data: %v", err)
+	}
+	source := historyString(t, entry, "source")
+	for _, field := range []string{"event_id", "transition_id", "command_id"} {
+		if _, ok := data[field]; ok {
+			return source + ":" + historyString(t, data, field)
+		}
+	}
+	t.Fatalf("timeline %s item has no source identifier", source)
+	return ""
+}
+
+func assertHistoryRunOwnership(t *testing.T, entry map[string]json.RawMessage, runID string, generation int64) {
+	t.Helper()
+	if got := historyString(t, entry, "run_id"); got != runID {
+		t.Fatalf("history run_id = %q, want %q", got, runID)
+	}
+	var gotGeneration int64
+	if err := json.Unmarshal(historyField(t, entry, "generation"), &gotGeneration); err != nil {
+		t.Fatalf("decode history generation: %v", err)
+	}
+	if gotGeneration != generation {
+		t.Fatalf("history generation = %d, want %d", gotGeneration, generation)
+	}
+}
+
+func filterHistory(entries []map[string]json.RawMessage, keep func(map[string]json.RawMessage) bool) []map[string]json.RawMessage {
+	result := make([]map[string]json.RawMessage, 0, len(entries))
+	for _, entry := range entries {
+		if keep(entry) {
+			result = append(result, entry)
+		}
+	}
+	return result
+}
+
+func initializeGitRepository(t *testing.T) string {
+	t.Helper()
+	repository := t.TempDir()
+	runGit(t, repository, "init", "--quiet")
+	runGit(t, repository, "config", "user.email", "symmetry-e2e@example.test")
+	runGit(t, repository, "config", "user.name", "Symmetry E2E")
+	if err := os.WriteFile(filepath.Join(repository, "README.md"), []byte("# e2e\n"), 0o600); err != nil {
+		t.Fatalf("write worktree source: %v", err)
+	}
+	runGit(t, repository, "add", "README.md")
+	runGit(t, repository, "commit", "--quiet", "-m", "initial e2e workspace")
+	return repository
+}
+
+func runGit(t *testing.T, directory string, arguments ...string) {
+	t.Helper()
+	command := exec.Command("git", append([]string{"-C", directory}, arguments...)...)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v: %s", strings.Join(arguments, " "), err, output)
+	}
+}
+
+func waitForPathsAbsent(t *testing.T, timeout time.Duration, paths ...string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		missing := true
+		for _, path := range paths {
+			if _, err := os.Stat(path); err == nil {
+				missing = false
+				break
+			} else if !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("inspect cleanup path %q: %v", path, err)
+			}
+		}
+		if missing {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("cleanup paths remain after %s: %s", timeout, strings.Join(paths, ", "))
+}
+
+func waitForJournalOnDisk(t *testing.T, stateDir string, key state.RunKey, timeout time.Duration, ready func(state.RunJournal) bool) state.RunJournal {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var last state.RunJournal
+	var lastErr error
+	for time.Now().Before(deadline) {
+		journal, found, err := journalOnDisk(stateDir, key)
+		if err == nil && found {
+			last = journal
+			if ready(journal) {
+				return journal
+			}
+		}
+		lastErr = err
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("journal %s/%d did not reach expected state: last=%#v error=%v", key.RunID, key.Generation, last, lastErr)
+	return state.RunJournal{}
+}
+
+func waitForJournalAbsentOnDisk(t *testing.T, stateDir string, key state.RunKey, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		_, found, err := journalOnDisk(stateDir, key)
+		if err != nil {
+			t.Fatalf("read journal %s/%d: %v", key.RunID, key.Generation, err)
+		}
+		if !found {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("journal %s/%d remains after %s", key.RunID, key.Generation, timeout)
+}
+
+func journalOnDisk(stateDir string, key state.RunKey) (state.RunJournal, bool, error) {
+	entries, err := os.ReadDir(filepath.Join(stateDir, "runs"))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return state.RunJournal{}, false, nil
+		}
+		return state.RunJournal{}, false, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "journal-") || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		contents, err := os.ReadFile(filepath.Join(stateDir, "runs", entry.Name()))
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return state.RunJournal{}, false, err
+		}
+		var journal state.RunJournal
+		if err := json.Unmarshal(contents, &journal); err != nil {
+			return state.RunJournal{}, false, err
+		}
+		if journal.Key() == key {
+			return journal, true, nil
+		}
+	}
+	return state.RunJournal{}, false, nil
+}
+
+func waitForTime(t *testing.T, target time.Time, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if !time.Now().Before(target) {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("time %s did not arrive within %s", target, timeout)
+}
+
+func waitForCondition(t *testing.T, timeout time.Duration, description string, ready func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if ready() {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", description)
+}
+
+type terminalOutageProxy struct {
+	mu                      sync.RWMutex
+	leaseMu                 sync.Mutex
+	forwardedMu             sync.Mutex
+	outage                  bool
+	deliveryAllowed         bool
+	blockedOutboxDeliveries atomic.Int64
+	activeForwarded         atomic.Int64
+	forwardedOutbox         []string
+	leaseExpiresAt          time.Time
+}
+
+func (proxy *terminalOutageProxy) beginOutage() {
+	proxy.mu.Lock()
+	proxy.outage = true
+	proxy.mu.Unlock()
+}
+
+func (proxy *terminalOutageProxy) allowDelivery() {
+	proxy.mu.Lock()
+	proxy.deliveryAllowed = true
+	proxy.mu.Unlock()
+}
+
+func (proxy *terminalOutageProxy) endOutage() {
+	proxy.mu.Lock()
+	proxy.outage = false
+	proxy.deliveryAllowed = false
+	proxy.mu.Unlock()
+}
+
+func (proxy *terminalOutageProxy) forwardedOutboxDeliveries() []string {
+	proxy.forwardedMu.Lock()
+	defer proxy.forwardedMu.Unlock()
+	return append([]string(nil), proxy.forwardedOutbox...)
+}
+
+func (proxy *terminalOutageProxy) latestLeaseExpiry() time.Time {
+	proxy.leaseMu.Lock()
+	defer proxy.leaseMu.Unlock()
+	return proxy.leaseExpiresAt
+}
+
+func startTerminalTransitionProxy(t *testing.T, baseURL string) (*httptest.Server, *terminalOutageProxy) {
+	t.Helper()
+	upstream, err := url.Parse(baseURL)
+	if err != nil {
+		t.Fatalf("parse proxy upstream: %v", err)
+	}
+	upstream.Path = ""
+	upstream.RawPath = ""
+	upstream.RawQuery = ""
+	state := &terminalOutageProxy{}
+	proxy := httputil.NewSingleHostReverseProxy(upstream)
+	proxy.ErrorHandler = func(response http.ResponseWriter, _ *http.Request, err error) {
+		http.Error(response, "proxy upstream error: "+err.Error(), http.StatusBadGateway)
+	}
+	proxy.ModifyResponse = func(response *http.Response) error {
+		if response.StatusCode != http.StatusOK || response.Request.Method != http.MethodPatch || !strings.HasSuffix(response.Request.URL.Path, "/lease") {
+			return nil
+		}
+		contents, err := io.ReadAll(response.Body)
+		if err != nil {
+			return err
+		}
+		_ = response.Body.Close()
+		response.Body = io.NopCloser(strings.NewReader(string(contents)))
+		var value struct {
+			LeaseExpiresAt time.Time `json:"lease_expires_at"`
+		}
+		if err := json.Unmarshal(contents, &value); err != nil {
+			return err
+		}
+		state.leaseMu.Lock()
+		if value.LeaseExpiresAt.After(state.leaseExpiresAt) {
+			state.leaseExpiresAt = value.LeaseExpiresAt
+		}
+		state.leaseMu.Unlock()
+		return nil
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		outboxDelivery := isOutboxDelivery(request)
+		state.mu.RLock()
+		outage := state.outage
+		deliveryAllowed := state.deliveryAllowed
+		if outage && !(outboxDelivery && deliveryAllowed) {
+			state.mu.RUnlock()
+			if outboxDelivery {
+				state.blockedOutboxDeliveries.Add(1)
+			}
+			response.Header().Set("Content-Type", "application/json")
+			response.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = response.Write([]byte(`{"error":{"code":"service_unavailable","message":"daemon control RPC temporarily unavailable"}}`))
+			return
+		}
+		state.activeForwarded.Add(1)
+		if outage && outboxDelivery && deliveryAllowed {
+			state.forwardedMu.Lock()
+			state.forwardedOutbox = append(state.forwardedOutbox, request.Method+" "+request.URL.Path)
+			state.forwardedMu.Unlock()
+		}
+		state.mu.RUnlock()
+		defer state.activeForwarded.Add(-1)
+		proxy.ServeHTTP(response, request)
+	}))
+	t.Cleanup(server.Close)
+	return server, state
+}
+
+func isOutboxDelivery(request *http.Request) bool {
+	path := request.URL.Path
+	return (request.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/runs/") && strings.HasSuffix(path, "/events")) ||
+		(request.Method == http.MethodPut && strings.HasPrefix(path, "/api/v1/runs/") && strings.Contains(path, "/transitions/")) ||
+		(request.Method == http.MethodPut && strings.HasPrefix(path, "/api/v1/commands/") && strings.Contains(path, "/acknowledgements/"))
+}
+
+func assertOutboxDeliveryOrder(t *testing.T, proxy *terminalOutageProxy, runID string) {
+	t.Helper()
+	eventRequest := "POST /api/v1/runs/" + runID + "/events"
+	transitionPrefix := "PUT /api/v1/runs/" + runID + "/transitions/"
+	eventIndex := -1
+	transitionIndex := -1
+	for index, request := range proxy.forwardedOutboxDeliveries() {
+		if request == eventRequest && eventIndex == -1 {
+			eventIndex = index
+		}
+		if strings.HasPrefix(request, transitionPrefix) && transitionIndex == -1 {
+			transitionIndex = index
+		}
+	}
+	if eventIndex == -1 || transitionIndex == -1 {
+		t.Fatalf("allowed outbox deliveries = %v, want %q before %q", proxy.forwardedOutboxDeliveries(), eventRequest, transitionPrefix+"...")
+	}
+	if eventIndex >= transitionIndex {
+		t.Fatalf("allowed outbox delivery order = %v, want %q before %q", proxy.forwardedOutboxDeliveries(), eventRequest, transitionPrefix+"...")
+	}
 }
 
 func cancelTask(t *testing.T, operator *control.OperatorClient, taskID string) {
