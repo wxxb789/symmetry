@@ -823,6 +823,7 @@ func (store *Store) ResolveTerminalForCleanup(key RunKey, verdict string, resolv
 		journal.PendingTransitions = nil
 		journal.AttemptedTransitionIDs = nil
 		journal.PendingCommandAcknowledgements = nil
+		journal.InputCommandIntent = nil
 		journal.LocalState = "cleanup_pending"
 		return nil
 	})
@@ -1005,6 +1006,9 @@ func settleUnresolvedInputCommand(journal *RunJournal) error {
 func queueCommandAcknowledgement(journal *RunJournal, acknowledgement protocol.CommandAcknowledgement) error {
 	if !journal.hasClaimGrant() {
 		return errors.New("journal has no claim grant")
+	}
+	if journal.LocalState == "cleanup_pending" || (journal.LocalState == "terminal_pending" && (journal.TerminalVerdict == TerminalVerdictOwnershipLost || journal.TerminalVerdict == TerminalVerdictGraceExpired)) {
+		return errors.New("command acknowledgement is no longer deliverable")
 	}
 	if acknowledgement.RunID == "" {
 		acknowledgement.RunID = journal.RunID

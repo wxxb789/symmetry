@@ -402,6 +402,30 @@ func TestTerminalTransitionSettlesUnresolvedInputBeforeCleanup(t *testing.T) {
 	}
 }
 
+func TestResolveTerminalForCleanupRetiresUndeliveredInputIntent(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-input-cleanup", 1)
+	journal.LocalState = "waiting_for_input"
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	intent := InputCommandIntent{CommandID: "command-1", PayloadDigest: strings.Repeat("d", sha256.Size*2), RunningTransitionID: "running-1", AckID: "ack-1"}
+	if _, _, err := store.PrepareProvideInput(journal.Key(), intent); err != nil {
+		t.Fatal(err)
+	}
+	pendingAt := time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC)
+	if _, err := store.QueueTerminalTransitionAt(journal.Key(), protocol.StateTransitionRequest{TransitionID: "failed-1", State: "failed", Payload: json.RawMessage(`{}`)}, pendingAt); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := store.ResolveTerminalForCleanup(journal.Key(), TerminalVerdictOwnershipLost, pendingAt.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.LocalState != "cleanup_pending" || updated.InputCommandIntent != nil || len(updated.PendingCommandAcknowledgements) != 0 {
+		t.Fatalf("ResolveTerminalForCleanup() = %#v", updated)
+	}
+}
+
 func TestJournalRejectsDuplicatePendingCommandAcknowledgementCommandIDs(t *testing.T) {
 	directory := t.TempDir()
 	store, err := New(directory)

@@ -662,6 +662,400 @@ func TestRecoverUnresolvedInputAfterWriteTerminatesAndDoesNotReplay(t *testing.T
 	}
 }
 
+func TestInitializeRecoversPersistedInputIntentWithoutReplayingStdin(t *testing.T) {
+	directory := t.TempDir()
+	store, key := claimedStoreAt(t, directory)
+	if err := store.SaveIdentity(state.MachineIdentity{MachineID: "machine-1", MachineToken: "machine-token"}); err != nil {
+		t.Fatal(err)
+	}
+	command := protocol.Command{CommandID: "input-1", RunID: key.RunID, Generation: key.Generation, Kind: "provide_input", Payload: json.RawMessage(`{"answer":"yes"}`)}
+	digest, err := canonicalInputDigest(command.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := state.InputCommandIntent{CommandID: command.CommandID, PayloadDigest: digest, RunningTransitionID: "running-1", AckID: "ack-1"}
+	if _, created, err := store.PrepareProvideInput(key, intent); err != nil || !created {
+		t.Fatalf("PrepareProvideInput() created=%t error=%v", created, err)
+	}
+	if _, err := store.SetProcessDetails(key, 71, "agent:71", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	original := &recordingProcess{}
+	if err := original.WriteInput([]byte(`already written`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	recoveredStore, err := state.New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer recoveredStore.Close()
+	terminated := false
+	daemon := &daemon{
+		config: testConfig(t),
+		log:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		options: options{
+			store:     recoveredStore,
+			control:   &fakeControl{},
+			workspace: &fakeWorkspace{},
+			start:     failStart,
+			clock:     time.Now,
+			newID:     ids(),
+			terminatePersist: func(pid int, identity string) error {
+				if pid != 71 || identity != "agent:71" {
+					t.Fatalf("persisted process = (%d, %q)", pid, identity)
+				}
+				terminated = true
+				return nil
+			},
+		},
+		running: make(map[state.RunKey]*runningRun),
+	}
+	if err := daemon.initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := recoveredStore.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := &recordingProcess{}
+	daemon.running[key] = &runningRun{process: replacement}
+	if !daemon.handleCommand(context.Background(), command) {
+		t.Fatal("replayed command was not recognized from its durable receipt")
+	}
+	if !terminated || replacement.writes != 0 || journal.LocalState != "terminal_pending" || journal.InputCommandIntent == nil || journal.InputCommandIntent.Outcome != "failed" || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].AckID != intent.AckID {
+		t.Fatalf("recovered journal = %#v, terminated = %t, replacement writes = %d", journal, terminated, replacement.writes)
+	}
+}
+
+func TestCancelWinsInputLifecycleGateWithoutWritingStdin(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	command := protocol.Command{CommandID: "input-1", RunID: key.RunID, Generation: key.Generation, Kind: "provide_input", Payload: json.RawMessage(`{"answer":"yes"}`)}
+	terminated := make(chan struct{}, 1)
+	process := &recordingProcess{onTerminate: func() { terminated <- struct{}{} }}
+	active := &runningRun{process: process, claimed: true}
+	active.inputMu.Lock()
+	daemon := &daemon{
+		store:   store,
+		options: options{newID: ids()},
+		running: map[state.RunKey]*runningRun{key: active},
+	}
+	inputDone := make(chan bool, 1)
+	go func() { inputDone <- daemon.handleCommand(context.Background(), command) }()
+	cancelDone := make(chan bool, 1)
+	go func() {
+		cancelDone <- daemon.handleCommand(context.Background(), protocol.Command{CommandID: "cancel-1", RunID: key.RunID, Generation: key.Generation, Kind: "cancel"})
+	}()
+	select {
+	case <-terminated:
+	case <-time.After(time.Second):
+		t.Fatal("cancel did not terminate before entering the input lifecycle gate")
+	}
+	active.inputMu.Unlock()
+	if !<-inputDone || !<-cancelDone {
+		t.Fatal("input or cancellation receipt did not persist")
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcomes := make(map[string]string, len(journal.PendingCommandAcknowledgements))
+	for _, acknowledgement := range journal.PendingCommandAcknowledgements {
+		outcomes[acknowledgement.CommandID] = acknowledgement.Outcome
+	}
+	if process.writes != 0 || journal.InputCommandIntent != nil || journal.LocalState != "terminal_pending" || outcomes[command.CommandID] != "rejected" || outcomes["cancel-1"] != "applied" {
+		t.Fatalf("cancelled input journal = %#v, writes = %d", journal, process.writes)
+	}
+}
+
+func TestConclusiveCleanupStopsQueuedInputAndCancellationReceipts(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	process := &recordingProcess{}
+	active := &runningRun{process: process, claimed: true}
+	active.inputMu.Lock()
+	daemon := &daemon{
+		store:          store,
+		options:        options{newID: ids()},
+		running:        map[state.RunKey]*runningRun{key: active},
+		commandWake:    make(chan struct{}, 1),
+		queuedCommands: make(map[commandKey]*queuedCommand),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	executorDone := make(chan struct{})
+	go func() {
+		daemon.runCommandExecutor(ctx)
+		close(executorDone)
+	}()
+	inputDone := daemon.enqueueCommand(protocol.Command{CommandID: "input-1", RunID: key.RunID, Generation: key.Generation, Kind: "provide_input", Payload: json.RawMessage(`{"answer":"yes"}`)})
+	if _, err := store.QueueTerminalTransition(key, protocol.StateTransitionRequest{TransitionID: "failed-1", State: "failed", Payload: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ResolveTerminalForCleanup(key, state.TerminalVerdictOwnershipLost, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	cancelDone := daemon.enqueueCommand(protocol.Command{CommandID: "cancel-1", RunID: key.RunID, Generation: key.Generation, Kind: "cancel"})
+	active.inputMu.Unlock()
+	for name, completion := range map[string]<-chan struct{}{"input": inputDone, "cancel": cancelDone} {
+		select {
+		case <-completion:
+		case <-time.After(time.Second):
+			t.Fatalf("%s command completion hung after conclusive cleanup", name)
+		}
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.LocalState != "cleanup_pending" || len(journal.PendingCommandAcknowledgements) != 0 || process.writes != 0 {
+		t.Fatalf("conclusive cleanup journal = %#v, writes = %d", journal, process.writes)
+	}
+	cancel()
+	<-executorDone
+}
+
+func TestShutdownCancelsInputCompletionRetryBeforeTerminating(t *testing.T) {
+	store, key := claimedStore(t)
+	writeClosed := make(chan struct{}, 1)
+	process := &recordingProcess{afterWrite: func() {
+		_ = store.Close()
+		writeClosed <- struct{}{}
+	}}
+	daemon := &daemon{
+		store:   store,
+		options: options{newID: ids(), newTimer: blockedTimerFactory},
+		running: map[state.RunKey]*runningRun{key: {process: process}},
+	}
+	background, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := daemon.startBackground(background)
+	inputDone := make(chan bool, 1)
+	go func() {
+		inputDone <- daemon.handleCommand(background, protocol.Command{CommandID: "input-1", RunID: key.RunID, Generation: key.Generation, Kind: "provide_input", Payload: json.RawMessage(`{"answer":"yes"}`)})
+	}()
+	select {
+	case <-writeClosed:
+	case <-time.After(time.Second):
+		t.Fatal("input write did not begin")
+	}
+	waitingDone := make(chan error, 1)
+	go func() {
+		waitingDone <- daemon.queueWaitingForInput(key, json.RawMessage(`{"type":"waiting_for_input"}`), time.Now().UTC())
+	}()
+	shutdownDone := make(chan struct{})
+	go func() {
+		daemon.stopBackground()
+		daemon.stopAll()
+		done()
+		close(shutdownDone)
+	}()
+	select {
+	case received := <-inputDone:
+		if received {
+			t.Fatal("input completion unexpectedly persisted after closing the store")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("input completion retry did not stop during shutdown")
+	}
+	select {
+	case <-waitingDone:
+	case <-time.After(time.Second):
+		t.Fatal("waiting output remained blocked on input lifecycle mutex")
+	}
+	select {
+	case <-shutdownDone:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not join after cancelling input completion retry")
+	}
+	if process.terminations != 1 {
+		t.Fatalf("process terminations = %d, want 1", process.terminations)
+	}
+}
+
+func TestInputLifecycleOrdersInputBeforeWaitingOrExit(t *testing.T) {
+	t.Run("waiting follows completed input", func(t *testing.T) {
+		store, key := claimedStore(t)
+		defer store.Close()
+		process := &blockingInputProcess{entered: make(chan struct{}, 1), release: make(chan struct{})}
+		daemon := &daemon{store: store, options: options{newID: ids()}, running: map[state.RunKey]*runningRun{key: {process: process}}}
+		inputDone := make(chan bool, 1)
+		go func() {
+			inputDone <- daemon.handleCommand(context.Background(), protocol.Command{CommandID: "input-1", RunID: key.RunID, Generation: key.Generation, Kind: "provide_input", Payload: json.RawMessage(`{"answer":"yes"}`)})
+		}()
+		<-process.entered
+		waitingStarted := make(chan struct{}, 1)
+		waitingDone := make(chan error, 1)
+		go func() {
+			waitingStarted <- struct{}{}
+			waitingDone <- daemon.queueWaitingForInput(key, json.RawMessage(`{"type":"waiting_for_input"}`), time.Now().UTC())
+		}()
+		<-waitingStarted
+		select {
+		case err := <-waitingDone:
+			t.Fatalf("waiting output bypassed the input lifecycle mutex: %v", err)
+		default:
+		}
+		close(process.release)
+		if !<-inputDone {
+			t.Fatal("input was not completed")
+		}
+		if err := <-waitingDone; err != nil {
+			t.Fatal(err)
+		}
+		journal, err := store.LoadJournal(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if journal.LocalState != "waiting_for_input" || journal.InputCommandIntent == nil || journal.InputCommandIntent.Outcome != "applied" || len(journal.PendingTransitions) != 2 || journal.PendingTransitions[0].State != "running" || journal.PendingTransitions[1].State != "waiting_for_input" {
+			t.Fatalf("input then waiting journal = %#v", journal)
+		}
+	})
+
+	t.Run("exit follows completed input", func(t *testing.T) {
+		store, key := claimedStore(t)
+		defer store.Close()
+		process := &blockingInputProcess{entered: make(chan struct{}, 1), release: make(chan struct{}), waitEntered: make(chan struct{}, 1)}
+		daemon := &daemon{store: store, log: slog.New(slog.NewJSONHandler(io.Discard, nil)), options: options{newID: ids()}, running: map[state.RunKey]*runningRun{key: {process: process}}}
+		inputDone := make(chan bool, 1)
+		go func() {
+			inputDone <- daemon.handleCommand(context.Background(), protocol.Command{CommandID: "input-1", RunID: key.RunID, Generation: key.Generation, Kind: "provide_input", Payload: json.RawMessage(`{"answer":"yes"}`)})
+		}()
+		<-process.entered
+		exitDone := make(chan struct{})
+		go func() {
+			daemon.waitForRunWithContext(context.Background(), key)
+			close(exitDone)
+		}()
+		select {
+		case <-process.waitEntered:
+		case <-time.After(time.Second):
+			t.Fatal("process exit did not reach Wait()")
+		}
+		select {
+		case <-exitDone:
+			t.Fatal("process exit bypassed the input lifecycle mutex")
+		default:
+		}
+		close(process.release)
+		if !<-inputDone {
+			t.Fatal("input was not completed")
+		}
+		select {
+		case <-exitDone:
+		case <-time.After(time.Second):
+			t.Fatal("process exit did not finish")
+		}
+		journal, err := store.LoadJournal(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if journal.LocalState != "terminal_pending" || journal.InputCommandIntent == nil || journal.InputCommandIntent.Outcome != "applied" || len(journal.PendingTransitions) != 2 || journal.PendingTransitions[0].State != "running" || journal.PendingTransitions[1].State != "completed" {
+			t.Fatalf("input then exit journal = %#v", journal)
+		}
+	})
+}
+
+func TestStartupFailureRetriesTerminalPersistenceWithStableID(t *testing.T) {
+	store, err := state.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	retryTimer := &manualDeadlineTimer{channel: make(chan time.Time, 1)}
+	timerCreated := make(chan struct{}, 1)
+	firstFailure := make(chan struct{}, 1)
+	var transitions []protocol.StateTransitionRequest
+	daemon := startupTestDaemon(t, store, &fakeWorkspace{})
+	daemon.options.newTimer = func(time.Duration) deadlineTimer {
+		timerCreated <- struct{}{}
+		return retryTimer
+	}
+	daemon.options.queueTerminalTransition = func(key state.RunKey, transition protocol.StateTransitionRequest, pendingAt time.Time) (state.RunJournal, error) {
+		transitions = append(transitions, transition)
+		if len(transitions) == 1 {
+			firstFailure <- struct{}{}
+			return state.RunJournal{}, errors.New("injected terminal persistence failure")
+		}
+		return store.QueueTerminalTransitionAt(key, transition, pendingAt)
+	}
+	daemon.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: protocol.Work{Goal: "g"}})
+	select {
+	case <-firstFailure:
+	case <-time.After(time.Second):
+		t.Fatal("startup failure did not enter terminal persistence retry")
+	}
+	select {
+	case <-timerCreated:
+	case <-time.After(time.Second):
+		t.Fatal("terminal persistence retry did not create its timer")
+	}
+	if len(transitions) != 1 {
+		t.Fatalf("terminal retries before timer = %#v", transitions)
+	}
+	retryTimer.channel <- time.Now()
+	daemon.workers.Wait()
+	journal, err := store.LoadJournal(state.RunKey{RunID: "run-1", Generation: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(transitions) != 2 || transitions[0].TransitionID != transitions[1].TransitionID || journal.LocalState != "terminal_pending" || journal.TerminalState != "failed" {
+		t.Fatalf("terminal retries = %#v, journal = %#v", transitions, journal)
+	}
+}
+
+func TestRenewLeaseErrorClearsCommandRequestBarrier(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	now := time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC)
+	if _, err := store.UpdateLeaseExpiry(key, now.Add(10*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	daemon := &daemon{
+		store:   store,
+		control: &failingRenewControl{err: errors.New("injected renew failure"), entered: entered, release: release},
+		options: options{clock: func() time.Time { return now }},
+		running: map[state.RunKey]*runningRun{key: {process: fakeProcess{}}},
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan struct {
+		requestID uint64
+		err       error
+	}, 1)
+	go func() {
+		_, requestID, renewErr := daemon.renewLease(context.Background(), journal)
+		result <- struct {
+			requestID uint64
+			err       error
+		}{requestID, renewErr}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("renew RPC did not start")
+	}
+	if requests, _ := commandRequestCounts(daemon); requests != 1 {
+		t.Fatalf("command request barriers during renew = %d, want 1", requests)
+	}
+	close(release)
+	completed := <-result
+	if completed.err == nil || completed.requestID != 0 {
+		t.Fatalf("renewLease() requestID=%d error=%v", completed.requestID, completed.err)
+	}
+	if requests, _ := commandRequestCounts(daemon); requests != 0 {
+		t.Fatalf("command request barriers = %d, want 0", requests)
+	}
+}
+
 func TestAssignmentQueuesRunningBeforeSynchronousAgentOutput(t *testing.T) {
 	store, err := state.New(t.TempDir())
 	if err != nil {
@@ -2949,8 +3343,8 @@ func TestCancelRejectsQueuedInputAfterPreemption(t *testing.T) {
 	if outcomes["input-2"] != "rejected" {
 		t.Fatalf("queued input outcome = %q, want rejected", outcomes["input-2"])
 	}
-	if outcomes["input-1"] != "failed" {
-		t.Fatalf("in-flight input outcome = %q, want failed after cancellation races its completion", outcomes["input-1"])
+	if outcomes["input-1"] != "applied" {
+		t.Fatalf("in-flight input outcome = %q, want applied after it won the input lifecycle lock", outcomes["input-1"])
 	}
 }
 
@@ -2962,11 +3356,23 @@ func TestScheduledSnapshotCancelPreemptsBlockedInputAndJoins(t *testing.T) {
 		t.Fatal(err)
 	}
 	input := &blockingInputProcess{entered: make(chan struct{}, 1), release: make(chan struct{}), terminated: make(chan struct{})}
+	cancelPersisted := make(chan struct{}, 1)
 	daemon := &daemon{
-		store:         store,
-		control:       &terminalRetryControl{transitionErr: transportError("offline")},
-		log:           slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		options:       options{clock: func() time.Time { return now }, newID: ids(), newTimer: blockedTimerFactory},
+		store:   store,
+		control: &terminalRetryControl{transitionErr: transportError("offline")},
+		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		options: options{
+			clock:    func() time.Time { return now },
+			newID:    ids(),
+			newTimer: blockedTimerFactory,
+			queueCancelledTransitionAndAcknowledgement: func(key state.RunKey, transition protocol.StateTransitionRequest, acknowledgement protocol.CommandAcknowledgement, enteredAt time.Time) (state.RunJournal, error) {
+				journal, err := store.QueueCancelledTransitionAndAcknowledgementAt(key, transition, acknowledgement, enteredAt)
+				if err == nil {
+					cancelPersisted <- struct{}{}
+				}
+				return journal, err
+			},
+		},
 		leaseDuration: 120 * time.Second,
 		running:       map[state.RunKey]*runningRun{key: {process: input, claimed: true}},
 		slots:         make(chan struct{}, 1),
@@ -2983,6 +3389,12 @@ func TestScheduledSnapshotCancelPreemptsBlockedInputAndJoins(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("scheduled cancel did not preempt blocked input")
 	}
+	close(input.release)
+	select {
+	case <-cancelPersisted:
+	case <-time.After(time.Second):
+		t.Fatal("scheduled cancellation did not persist after input completion")
+	}
 	journal, err := store.LoadJournal(key)
 	if err != nil {
 		t.Fatal(err)
@@ -2994,11 +3406,10 @@ func TestScheduledSnapshotCancelPreemptsBlockedInputAndJoins(t *testing.T) {
 	for _, acknowledgement := range journal.PendingCommandAcknowledgements {
 		outcomes[acknowledgement.CommandID] = acknowledgement.Outcome
 	}
-	if outcomes["input-1"] != "failed" || outcomes["cancel-1"] != "applied" {
+	if outcomes["input-1"] != "applied" || outcomes["cancel-1"] != "applied" {
 		t.Fatalf("scheduled cancellation outcomes = %#v", outcomes)
 	}
 
-	close(input.release)
 	joined := make(chan struct{})
 	go func() {
 		done()
@@ -4333,7 +4744,12 @@ func startupTestDaemon(t *testing.T, store *state.Store, service workspace.Servi
 
 func claimedStore(t *testing.T) (*state.Store, state.RunKey) {
 	t.Helper()
-	store, err := state.New(t.TempDir())
+	return claimedStoreAt(t, t.TempDir())
+}
+
+func claimedStoreAt(t *testing.T, directory string) (*state.Store, state.RunKey) {
+	t.Helper()
+	store, err := state.New(directory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4473,6 +4889,7 @@ func (*manualDeadlineTimer) Stop()                        {}
 type blockingInputProcess struct {
 	entered       chan struct{}
 	release       chan struct{}
+	waitEntered   chan struct{}
 	terminated    chan struct{}
 	terminateOnce sync.Once
 	writes        int
@@ -4491,7 +4908,12 @@ func (process *blockingInputProcess) Terminate(context.Context, time.Duration) e
 	}
 	return nil
 }
-func (*blockingInputProcess) Wait() execution.Result        { return execution.Result{} }
+func (process *blockingInputProcess) Wait() execution.Result {
+	if process.waitEntered != nil {
+		process.waitEntered <- struct{}{}
+	}
+	return execution.Result{}
+}
 func (*blockingInputProcess) ProcessDetails() (int, string) { return 44, "test:44" }
 
 func blockedTimerFactory(time.Duration) deadlineTimer {
@@ -4632,6 +5054,23 @@ type renewalCommandControl struct {
 	fakeControl
 	command      protocol.Command
 	renewEntered chan struct{}
+}
+
+type failingRenewControl struct {
+	fakeControl
+	err     error
+	entered chan<- struct{}
+	release <-chan struct{}
+}
+
+func (client *failingRenewControl) RenewLease(context.Context, string, protocol.LeaseHeartbeatRequest) (protocol.LeaseHeartbeatResponse, error) {
+	if client.entered != nil {
+		client.entered <- struct{}{}
+	}
+	if client.release != nil {
+		<-client.release
+	}
+	return protocol.LeaseHeartbeatResponse{}, client.err
 }
 
 func (client *renewalCommandControl) RenewLease(context.Context, string, protocol.LeaseHeartbeatRequest) (protocol.LeaseHeartbeatResponse, error) {
@@ -5362,6 +5801,8 @@ type recordingProcess struct {
 	input        []byte
 	writes       int
 	beforeWrite  func()
+	afterWrite   func()
+	onTerminate  func()
 	terminations int
 }
 
@@ -5371,10 +5812,16 @@ func (process *recordingProcess) WriteInput(input []byte) error {
 	}
 	process.writes++
 	process.input = append(process.input, input...)
+	if process.afterWrite != nil {
+		process.afterWrite()
+	}
 	return nil
 }
 func (process *recordingProcess) Terminate(context.Context, time.Duration) error {
 	process.terminations++
+	if process.onTerminate != nil {
+		process.onTerminate()
+	}
 	return nil
 }
 func (*recordingProcess) Wait() execution.Result        { return execution.Result{} }

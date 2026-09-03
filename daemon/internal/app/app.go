@@ -109,6 +109,7 @@ type options struct {
 	terminatePersist                           func(pid int, identity string) error
 	recordWorkspace                            func(state.RunKey, string) (state.RunJournal, error)
 	recordProcess                              func(state.RunKey, int, string, time.Time) (state.RunJournal, error)
+	queueTerminalTransition                    func(state.RunKey, protocol.StateTransitionRequest, time.Time) (state.RunJournal, error)
 	markCommandAcknowledgementsDelivered       func(state.RunKey, []string) (state.RunJournal, error)
 	queueCancelledTransitionAndAcknowledgement func(state.RunKey, protocol.StateTransitionRequest, protocol.CommandAcknowledgement, time.Time) (state.RunJournal, error)
 }
@@ -204,6 +205,7 @@ type daemon struct {
 	commandReceiptMu   sync.Mutex
 	workers            sync.WaitGroup
 	background         context.Context
+	backgroundCancel   context.CancelFunc
 	backgroundStop     bool
 	backgroundWG       sync.WaitGroup
 	terminalReleaseWG  sync.WaitGroup
@@ -261,6 +263,9 @@ type commandLane struct {
 }
 
 type runningRun struct {
+	// inputMu serializes stdin delivery with input-related lifecycle mutations.
+	// Never wait for it while holding daemon.mu.
+	inputMu         sync.Mutex
 	process         Process
 	prepared        workspace.Prepared
 	parser          *jsonlParser
@@ -321,6 +326,7 @@ func (daemon *daemon) run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
+			daemon.stopBackground()
 			daemon.stopAll()
 			done()
 			daemon.workers.Wait()
@@ -346,6 +352,7 @@ func (daemon *daemon) startBackground(ctx context.Context) func() {
 	background, cancel := context.WithCancel(ctx)
 	daemon.mu.Lock()
 	daemon.background = background
+	daemon.backgroundCancel = cancel
 	daemon.backgroundStop = false
 	daemon.outboxWake = make(chan struct{}, 1)
 	daemon.outboxRetry = make(map[state.RunKey]outboxRetry)
@@ -382,15 +389,22 @@ func (daemon *daemon) startBackground(ctx context.Context) func() {
 	var once sync.Once
 	return func() {
 		once.Do(func() {
-			daemon.mu.Lock()
-			daemon.backgroundStop = true
-			daemon.mu.Unlock()
-			cancel()
+			daemon.stopBackground()
 			daemon.backgroundWG.Wait()
 			daemon.commandWG.Wait()
 			daemon.snapshotWG.Wait()
 			daemon.terminalReleaseWG.Wait()
 		})
+	}
+}
+
+func (daemon *daemon) stopBackground() {
+	daemon.mu.Lock()
+	daemon.backgroundStop = true
+	cancel := daemon.backgroundCancel
+	daemon.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 }
 
@@ -1288,19 +1302,19 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 	}
 	if err != nil {
 		daemon.log.Error("queue_running_failed", "run_id", assignment.RunID, "error", err)
-		daemon.queueFailure(key, "queue_running", err)
+		daemon.queueFailure(ctx, key, "queue_running", err)
 		return
 	}
 	daemon.signalOutboxFor(key)
 	if _, err := daemon.store.MarkWorkspaceRecoveryRequired(key); err != nil {
 		daemon.log.Error("mark_workspace_recovery_required_failed", "run_id", assignment.RunID, "error", err)
-		daemon.queueFailure(key, "mark_workspace_recovery_required", err)
+		daemon.queueFailure(ctx, key, "mark_workspace_recovery_required", err)
 		return
 	}
 	prepared, err = daemon.workspace.Prepare(ctx, daemon.config.Runtime.Workspace, workspace.RunRef{RunID: key.RunID, Generation: key.Generation})
 	if err != nil {
 		if !daemon.isCancelled(key) {
-			daemon.queueFailure(key, "prepare_workspace", err)
+			daemon.queueFailure(ctx, key, "prepare_workspace", err)
 		}
 		return
 	}
@@ -1316,14 +1330,14 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 	environment, err := execution.BuildEnvironment(profile.EnvAllowlist...)
 	if err != nil {
 		if !daemon.isCancelled(key) {
-			daemon.queueFailure(key, "build_environment", err)
+			daemon.queueFailure(ctx, key, "build_environment", err)
 		}
 		return
 	}
 	input, err := initialInput(profile, claim.Work)
 	if err != nil {
 		if !daemon.isCancelled(key) {
-			daemon.queueFailure(key, "encode_input", err)
+			daemon.queueFailure(ctx, key, "encode_input", err)
 		}
 		return
 	}
@@ -1334,7 +1348,7 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 	process, err := daemon.start(ctx, execution.Invocation{Program: profile.Command, Args: profile.Args, Dir: prepared.Path, Env: environment, InitialInput: input, CloseInputAfterInitial: !profile.Interactive}, sink)
 	if err != nil {
 		if !daemon.isCancelled(key) {
-			daemon.queueFailure(key, "start_agent", err)
+			daemon.queueFailure(ctx, key, "start_agent", err)
 		}
 		return
 	}
@@ -1354,7 +1368,7 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 	pid, identity, detailsErr := processDetails(process)
 	if detailsErr != nil {
 		if !daemon.isCancelled(key) {
-			daemon.queueFailure(key, "read_process_identity", detailsErr)
+			daemon.queueFailure(ctx, key, "read_process_identity", detailsErr)
 		}
 		_ = process.Terminate(context.Background(), 0)
 		if daemon.finishAttachedStart(key) {
@@ -1371,7 +1385,7 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 	}
 	if err != nil {
 		if !daemon.isCancelled(key) {
-			daemon.queueFailure(key, "record_process", err)
+			daemon.queueFailure(ctx, key, "record_process", err)
 		}
 		_ = process.Terminate(context.Background(), 0)
 		if daemon.finishAttachedStart(key) {
@@ -1706,6 +1720,11 @@ func (daemon *daemon) queueEvent(key state.RunKey, kind string, payload json.Raw
 }
 
 func (daemon *daemon) queueWaitingForInput(key state.RunKey, payload json.RawMessage, at time.Time) error {
+	active := daemon.runningRun(key)
+	if active != nil {
+		active.inputMu.Lock()
+		defer active.inputMu.Unlock()
+	}
 	id, err := daemon.options.newID()
 	if err != nil {
 		return err
@@ -1736,8 +1755,8 @@ func (daemon *daemon) queueTransition(key state.RunKey, stateName string, payloa
 	return err
 }
 
-func (daemon *daemon) queueFailure(key state.RunKey, stage string, cause error) {
-	if err := daemon.queueTerminalTransition(key, "failed", map[string]string{"stage": stage, "error": cause.Error()}); err != nil {
+func (daemon *daemon) queueFailure(ctx context.Context, key state.RunKey, stage string, cause error) {
+	if err := daemon.queueTerminalTransitionWithRetry(ctx, key, "failed", map[string]string{"stage": stage, "error": cause.Error()}); err != nil {
 		daemon.log.Error("queue_failed_transition_failed", "run_id", key.RunID, "generation", key.Generation, "stage", stage, "error", err)
 	}
 }
@@ -1778,7 +1797,16 @@ func (daemon *daemon) queueTerminalTransitionWithRetry(ctx context.Context, key 
 	persisted := false
 	defer func() { finishTerminal(persisted) }()
 	for {
-		journal, queueErr := daemon.store.QueueTerminalTransitionAt(key, protocol.StateTransitionRequest{TransitionID: id, State: stateName, Payload: encoded}, enteredAt)
+		transition := protocol.StateTransitionRequest{TransitionID: id, State: stateName, Payload: encoded}
+		var (
+			journal  state.RunJournal
+			queueErr error
+		)
+		if daemon.options.queueTerminalTransition != nil {
+			journal, queueErr = daemon.options.queueTerminalTransition(key, transition, enteredAt)
+		} else {
+			journal, queueErr = daemon.store.QueueTerminalTransitionAt(key, transition, enteredAt)
+		}
 		if queueErr == nil {
 			persisted = true
 			daemon.scheduleTerminalSlotRelease(key, journal.TerminalPendingAt)
@@ -1807,6 +1835,9 @@ func (daemon *daemon) queueCancelledTerminalAndAcknowledgement(key state.RunKey,
 
 func (daemon *daemon) queueCancelledTerminalAndAcknowledgementWithContext(ctx context.Context, key state.RunKey, commandID string) error {
 	rootContext := daemon.rootContext(ctx)
+	if daemon.commandAcknowledgementRetired(key) {
+		return errors.New("command acknowledgement is no longer deliverable")
+	}
 	transitionID, err := daemon.newIDWithRetry(rootContext, key, commandID, "transition")
 	if err != nil {
 		return err
@@ -1838,6 +1869,9 @@ func (daemon *daemon) queueCancelledTerminalAndAcknowledgementWithContext(ctx co
 			daemon.signalOutbox()
 			return nil
 		}
+		if daemon.commandAcknowledgementRetired(key) {
+			return errors.New("command acknowledgement is no longer deliverable")
+		}
 		if daemon.log != nil {
 			daemon.log.Warn("queue_cancelled_transition_and_acknowledgement_failed", "run_id", key.RunID, "generation", key.Generation, "command_id", commandID, "error", err)
 		}
@@ -1867,12 +1901,14 @@ func (daemon *daemon) waitForRunWithContext(ctx context.Context, key state.RunKe
 		return
 	}
 	result := process.Wait()
+	active.inputMu.Lock()
 	daemon.mu.Lock()
 	cancelled := active.cancelled
 	stale := active.stale
 	active.cleanupBlocked = false
 	daemon.mu.Unlock()
 	if stale {
+		active.inputMu.Unlock()
 		journal, err := daemon.store.SetLocalState(key, "stale")
 		daemon.releaseRun(key)
 		if err == nil {
@@ -1891,6 +1927,7 @@ func (daemon *daemon) waitForRunWithContext(ctx context.Context, key state.RunKe
 			}
 		}
 	}
+	active.inputMu.Unlock()
 	daemon.releaseCleanupAfterProcessExit(key)
 }
 
@@ -1941,17 +1978,15 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 		if terminateErr != nil {
 			return daemon.queueCommandAcknowledgementWithContext(ctx, key, command.CommandID, "failed")
 		}
+		active.inputMu.Lock()
+		defer active.inputMu.Unlock()
 		return daemon.queueCancellationReceipt(ctx, key, command.CommandID)
 	}
 
 	daemon.mu.Lock()
 	active := daemon.running[key]
-	process := Process(nil)
-	if activeRunAcceptsCommand(active) {
-		process = active.process
-	}
 	daemon.mu.Unlock()
-	if process == nil {
+	if active == nil {
 		return daemon.queueCommandAcknowledgementWithContext(ctx, key, command.CommandID, "rejected")
 	}
 	outcome := "rejected"
@@ -1978,6 +2013,23 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 		if err != nil {
 			return daemon.queueCommandAcknowledgementWithContext(ctx, key, command.CommandID, "failed")
 		}
+		active.inputMu.Lock()
+		defer active.inputMu.Unlock()
+		daemon.mu.Lock()
+		accepted := daemon.running[key] == active && activeRunAcceptsCommand(active)
+		process := active.process
+		daemon.mu.Unlock()
+		if !accepted {
+			current, loadErr := daemon.store.LoadJournal(key)
+			if loadErr == nil && current.InputCommandIntent != nil && current.InputCommandIntent.CommandID == command.CommandID && current.InputCommandIntent.PayloadDigest == payloadDigest {
+				if current.InputCommandIntent.Outcome == "" {
+					return daemon.completeProvideInputWithRetry(ctx, key, command.CommandID, payloadDigest, "failed")
+				}
+				daemon.signalOutboxFor(key)
+				return true
+			}
+			return daemon.queueCommandAcknowledgementWithContext(ctx, key, command.CommandID, "rejected")
+		}
 		prepared, created, err := daemon.store.PrepareProvideInput(key, state.InputCommandIntent{
 			CommandID:           command.CommandID,
 			PayloadDigest:       payloadDigest,
@@ -1998,15 +2050,18 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 			daemon.signalOutboxFor(key)
 			return true
 		}
-		daemon.mu.Lock()
-		accepted := daemon.running[key] == active && activeRunAcceptsCommand(active)
-		daemon.mu.Unlock()
-		if !accepted || process.WriteInput(input) != nil {
+		if process.WriteInput(input) != nil {
 			return daemon.completeProvideInputWithRetry(ctx, key, command.CommandID, payloadDigest, "failed")
 		}
 		return daemon.completeProvideInputWithRetry(ctx, key, command.CommandID, payloadDigest, "applied")
 	}
 	return daemon.queueCommandAcknowledgementWithContext(ctx, key, command.CommandID, outcome)
+}
+
+func (daemon *daemon) runningRun(key state.RunKey) *runningRun {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	return daemon.running[key]
 }
 
 func activeRunAcceptsCommand(active *runningRun) bool {
@@ -2076,6 +2131,9 @@ func (daemon *daemon) queueCommandAcknowledgementWithContext(ctx context.Context
 	rootContext := daemon.rootContext(ctx)
 	acknowledgement := protocol.CommandAcknowledgement{RunID: key.RunID, CommandID: commandID, Outcome: outcome}
 	for {
+		if daemon.commandAcknowledgementRetired(key) {
+			return false
+		}
 		if acknowledgement.AckID == "" {
 			id, err := daemon.options.newID()
 			if err != nil {
@@ -2098,6 +2156,9 @@ func (daemon *daemon) queueCommandAcknowledgementWithContext(ctx context.Context
 			daemon.signalOutbox()
 			return true
 		}
+		if daemon.commandAcknowledgementRetired(key) {
+			return false
+		}
 		if daemon.log != nil {
 			daemon.log.Warn("queue_command_acknowledgement_failed", "run_id", key.RunID, "generation", key.Generation, "command_id", commandID, "error", err)
 		}
@@ -2109,6 +2170,17 @@ func (daemon *daemon) queueCommandAcknowledgementWithContext(ctx context.Context
 		case <-timer.Chan():
 		}
 	}
+}
+
+func (daemon *daemon) commandAcknowledgementRetired(key state.RunKey) bool {
+	journal, err := daemon.store.LoadJournal(key)
+	if state.IsNotFound(err) {
+		return true
+	}
+	if err != nil {
+		return false
+	}
+	return journal.LocalState == "cleanup_pending" || (journal.LocalState == "terminal_pending" && (journal.TerminalVerdict == state.TerminalVerdictOwnershipLost || journal.TerminalVerdict == state.TerminalVerdictGraceExpired))
 }
 
 func (daemon *daemon) completeProvideInputWithRetry(ctx context.Context, key state.RunKey, commandID, payloadDigest, outcome string) bool {
