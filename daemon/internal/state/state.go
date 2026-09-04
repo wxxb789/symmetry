@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -707,7 +708,7 @@ func (store *Store) CompleteProvideInput(key RunKey, commandID, payloadDigest, o
 			if err != nil {
 				return err
 			}
-			if !hasTransition(journal.PendingTransitions, prepared.TransitionID) {
+			if !journal.HasPendingTransition(prepared.TransitionID) {
 				journal.PendingTransitions = append(journal.PendingTransitions, prepared)
 			}
 			journal.LocalState = "running"
@@ -908,7 +909,7 @@ func (store *Store) QueueCommandAcknowledgement(key RunKey, acknowledgement prot
 func (store *Store) MarkCommandAcknowledgementsDelivered(key RunKey, acknowledgementIDs []string) (RunJournal, error) {
 	return store.mutateJournal(key, func(journal *RunJournal) error {
 		journal.PendingCommandAcknowledgements = removeAcknowledgements(journal.PendingCommandAcknowledgements, acknowledgementIDs)
-		if journal.InputCommandIntent != nil && containsString(acknowledgementIDs, journal.InputCommandIntent.AckID) {
+		if journal.InputCommandIntent != nil && slices.Contains(acknowledgementIDs, journal.InputCommandIntent.AckID) {
 			if journal.InputCommandIntent.Outcome == "" {
 				return errors.New("input command acknowledgement is unresolved")
 			}
@@ -985,8 +986,8 @@ func queueTerminalTransition(journal *RunJournal, transition protocol.StateTrans
 		setTerminalPending(journal, pendingAt, prepared.State)
 		return nil
 	}
-	if hasPendingTerminalTransition(journal.PendingTransitions) {
-		setTerminalPending(journal, pendingAt, pendingTerminalState(journal.PendingTransitions))
+	if terminalState := pendingTerminalState(journal.PendingTransitions); terminalState != "" {
+		setTerminalPending(journal, pendingAt, terminalState)
 		return nil
 	}
 	journal.PendingTransitions = append(journal.PendingTransitions, prepared)
@@ -1035,15 +1036,6 @@ func queueCommandAcknowledgement(journal *RunJournal, acknowledgement protocol.C
 	return nil
 }
 
-func hasTransition(transitions []protocol.StateTransitionRequest, transitionID string) bool {
-	for _, transition := range transitions {
-		if transition.TransitionID == transitionID {
-			return true
-		}
-	}
-	return false
-}
-
 func validInputCommandIntent(intent InputCommandIntent) bool {
 	return validRequiredString(intent.CommandID, 4096) && len(intent.PayloadDigest) == sha256.Size*2 && validHex(intent.PayloadDigest) && validRequiredString(intent.RunningTransitionID, 4096) && validRequiredString(intent.AckID, 4096) && validInputCommandOutcome(intent.Outcome) && (!intent.AcknowledgementDelivered || intent.Outcome != "")
 }
@@ -1060,15 +1052,6 @@ func validInputCommandOutcome(outcome string) bool {
 func validHex(value string) bool {
 	_, err := hex.DecodeString(value)
 	return err == nil
-}
-
-func containsString(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
 }
 
 func isTerminalTransitionState(state string) bool {
@@ -1521,12 +1504,7 @@ func hasPendingTransition(transitions []protocol.StateTransitionRequest, transit
 }
 
 func hasAttemptedTransition(attempted []string, transitionID string) bool {
-	for _, attemptedID := range attempted {
-		if attemptedID == transitionID {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(attempted, transitionID)
 }
 
 func retainAttemptedTransitions(attempted []string, pending []protocol.StateTransitionRequest) []string {

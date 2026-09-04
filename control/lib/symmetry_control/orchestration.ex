@@ -694,8 +694,7 @@ defmodule SymmetryControl.Orchestration do
           transition_id: transition.transition_id,
           question: value(payload, :question),
           payload: payload,
-          recorded_at: recorded_at,
-          inserted_at: recorded_at
+          recorded_at: recorded_at
         }
     end
   end

@@ -468,12 +468,6 @@ func (daemon *daemon) signalOutboxFor(key state.RunKey) {
 	}
 }
 
-func (daemon *daemon) enqueueCommands(commands []protocol.Command) {
-	for _, command := range commands {
-		daemon.enqueueCommand(command)
-	}
-}
-
 func (daemon *daemon) enqueueCommand(command protocol.Command) <-chan struct{} {
 	daemon.mu.Lock()
 	done, wake := daemon.enqueueCommandLocked(command)

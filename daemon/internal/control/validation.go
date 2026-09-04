@@ -104,19 +104,7 @@ func validateTransitionResponse(runID string, request protocol.StateTransitionRe
 	if err := validateNullableJSONObject(response.Failure); err != nil {
 		return invalidResponse("transition", "failure "+err.Error())
 	}
-	if response.State == "completed" && isJSONNull(response.Result) {
-		return invalidResponse("transition", "completed state requires result")
-	}
-	if response.State == "failed" && isJSONNull(response.Failure) {
-		return invalidResponse("transition", "failed state requires failure")
-	}
-	if response.State != "completed" && !isJSONNull(response.Result) {
-		return invalidResponse("transition", "only completed state may include result")
-	}
-	if response.State != "failed" && !isJSONNull(response.Failure) {
-		return invalidResponse("transition", "only failed state may include failure")
-	}
-	return nil
+	return validateTerminalPayloads("transition", response.State, response.Result, response.Failure)
 }
 
 func validateLeaseHeartbeatResponse(response protocol.LeaseHeartbeatResponse) error {
@@ -175,17 +163,8 @@ func validateTaskResponse(operation, expectedTaskID string, response protocol.Ta
 	if requiresTaskRun(response.State) && response.RunID == nil {
 		return invalidResponse(operation, "state requires a run_id")
 	}
-	if response.State == "completed" && isJSONNull(response.Result) {
-		return invalidResponse(operation, "completed state requires result")
-	}
-	if response.State == "failed" && isJSONNull(response.Failure) {
-		return invalidResponse(operation, "failed state requires failure")
-	}
-	if response.State != "completed" && !isJSONNull(response.Result) {
-		return invalidResponse(operation, "only completed state may include result")
-	}
-	if response.State != "failed" && !isJSONNull(response.Failure) {
-		return invalidResponse(operation, "only failed state may include failure")
+	if err := validateTerminalPayloads(operation, response.State, response.Result, response.Failure); err != nil {
+		return err
 	}
 	if response.Waiting == nil {
 		if response.State == "waiting_for_input" {
@@ -203,6 +182,22 @@ func validateTaskResponse(operation, expectedTaskID string, response protocol.Ta
 		if err := validateTaskCommandResource(response.TaskID, *response.LatestCommand); err != nil {
 			return invalidResponse(operation, "latest_command "+err.Error())
 		}
+	}
+	return nil
+}
+
+func validateTerminalPayloads(operation, state string, result, failure json.RawMessage) error {
+	if state == "completed" && isJSONNull(result) {
+		return invalidResponse(operation, "completed state requires result")
+	}
+	if state == "failed" && isJSONNull(failure) {
+		return invalidResponse(operation, "failed state requires failure")
+	}
+	if state != "completed" && !isJSONNull(result) {
+		return invalidResponse(operation, "only completed state may include result")
+	}
+	if state != "failed" && !isJSONNull(failure) {
+		return invalidResponse(operation, "only failed state may include failure")
 	}
 	return nil
 }

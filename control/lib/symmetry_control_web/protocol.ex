@@ -312,7 +312,7 @@ defmodule SymmetryControlWeb.Protocol do
       transition_id: Map.fetch!(waiting, :transition_id),
       question: Map.fetch!(waiting, :question),
       payload: Map.fetch!(waiting, :payload),
-      recorded_at: iso8601(Map.fetch!(waiting, :inserted_at))
+      recorded_at: iso8601(Map.fetch!(waiting, :recorded_at))
     }
   end
 
