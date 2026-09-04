@@ -77,10 +77,12 @@ PHX_SERVER=true DATABASE_URL=... SECRET_KEY_BASE=... \
 
 `compose.production.yaml` is independent from the trusted-local
 `compose.yaml`; do not combine the two files. The production topology exposes
-only the Nginx edge on ports `80` and `443`. Its HTTP listener returns an exact
-`308` redirect to HTTPS. Nginx terminates TLS, sends HSTS responses, forwards
-WebSocket upgrades, and overwrites client-supplied forwarding headers before
-proxying to the private HTTP control service. The control port is not published.
+only the Nginx edge on ports `80` and `443`. Only the configured `PHX_HOST` is
+served: its HTTP listener returns an exact `308` redirect to HTTPS, while other
+Host values receive `421`. Nginx terminates TLS, sends HSTS responses, forwards
+WebSocket upgrades, and overwrites client-supplied forwarding headers with the
+configured authority before proxying to the private HTTP control service. The
+control port is not published.
 
 Provide these values through the deployment environment or an untracked env
 file. The certificate and key files must be externally provisioned and must not

@@ -43,6 +43,8 @@ services:
     depends_on:
       control:
         condition: service_started
+    environment:
+      PHX_HOST: ${PHX_HOST:?PHX_HOST is required}
     ports:
       - "80:80"
       - "443:443"
@@ -57,7 +59,7 @@ services:
         read_only: true
       - type: bind
         source: ./docker/edge-nginx.conf
-        target: /etc/nginx/conf.d/default.conf
+        target: /etc/nginx/templates/default.conf.template
         read_only: true
     networks:
       - backend

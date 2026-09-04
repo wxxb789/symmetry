@@ -272,6 +272,14 @@ jobs:
             tr -d '\r' < "$redirect_headers" | grep --ignore-case --fixed-strings --line-regexp 'location: https://localhost/healthz' >/dev/null
           }
 
+          forged_host_is_rejected() {
+            forged_http_status=$(curl --silent --output /dev/null --write-out '%{http_code}' --header 'Host: forged.example' http://127.0.0.1/healthz || true)
+            [[ "$forged_http_status" == '421' ]] || return 1
+
+            forged_https_status=$(curl --silent --output /dev/null --write-out '%{http_code}' --cacert "$cert_dir/tls.crt" --header 'Host: forged.example' https://localhost/healthz || true)
+            [[ "$forged_https_status" == '421' ]]
+          }
+
           "${local_compose[@]}" config --quiet
           "${local_compose[@]}" up --build --detach
 
@@ -381,15 +389,18 @@ jobs:
 
           "${production_compose[@]}" --file "$production_override" --env-file "$production_env" up --build --detach
           wait_for "production HTTP to HTTPS redirect" 60 http_redirect_is_ready
+          wait_for "production edge to reject forged Host headers" 10 forged_host_is_rejected
 
           "${production_compose[@]}" --file "$production_override" --env-file "$production_env" exec --no-TTY edge nginx -T > "$runtime_nginx" 2>&1
           required_forwarded_headers=(
+            'proxy_set_header Host localhost;'
             'proxy_set_header Forwarded "";'
             'proxy_set_header X-Real-IP $remote_addr;'
             'proxy_set_header X-Forwarded-For $remote_addr;'
-            'proxy_set_header X-Forwarded-Host $host;'
+            'proxy_set_header X-Forwarded-Host localhost;'
             'proxy_set_header X-Forwarded-Port 443;'
             'proxy_set_header X-Forwarded-Proto https;'
+            'proxy_set_header X-Forwarded-Server localhost;'
           )
           for required_header in "${required_forwarded_headers[@]}"; do
             grep --fixed-strings --quiet -- "$required_header" "$runtime_nginx"
