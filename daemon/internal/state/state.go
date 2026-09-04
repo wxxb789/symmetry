@@ -196,7 +196,7 @@ func New(directory string) (*Store, error) {
 	}
 	if err := applyFileSecurity(lockPath); err != nil {
 		_ = releaseStoreLock(lock)
-		return nil, errors.New("secure state lock")
+		return nil, fmt.Errorf("secure state lock: %w", err)
 	}
 	store := &Store{dir: directory, lock: lock}
 	if err := ensurePrivateDirectory(store.runsDir()); err != nil {

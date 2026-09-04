@@ -151,7 +151,8 @@ func TestStateSecuritySetupFailuresPropagateWithoutToken(t *testing.T) {
 	t.Run("file", func(t *testing.T) {
 		store := mustStore(t)
 		original := applyFileSecurity
-		applyFileSecurity = func(string) error { return errors.New("security setup denied") }
+		denied := errors.New("security setup denied")
+		applyFileSecurity = func(string) error { return denied }
 		t.Cleanup(func() { applyFileSecurity = original })
 
 		const token = "never-report-this-token"
@@ -161,6 +162,16 @@ func TestStateSecuritySetupFailuresPropagateWithoutToken(t *testing.T) {
 		}
 		if strings.Contains(err.Error(), token) {
 			t.Fatalf("SaveIdentity() error exposed token: %v", err)
+		}
+	})
+	t.Run("lock file", func(t *testing.T) {
+		original := applyFileSecurity
+		denied := errors.New("security setup denied")
+		applyFileSecurity = func(string) error { return denied }
+		t.Cleanup(func() { applyFileSecurity = original })
+
+		if _, err := New(t.TempDir()); !errors.Is(err, denied) {
+			t.Fatalf("New() error = %v, want wrapped security cause", err)
 		}
 	})
 }
