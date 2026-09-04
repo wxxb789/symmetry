@@ -280,6 +280,13 @@ jobs:
             [[ "$forged_https_status" == '421' ]]
           }
 
+          forged_sni_is_rejected() {
+            ! curl --silent --show-error --insecure \
+              --resolve forged.example:443:127.0.0.1 \
+              --header 'Host: localhost' \
+              https://forged.example/healthz >/dev/null 2>&1
+          }
+
           "${local_compose[@]}" config --quiet
           "${local_compose[@]}" up --build --detach
 
@@ -390,6 +397,7 @@ jobs:
           "${production_compose[@]}" --file "$production_override" --env-file "$production_env" up --build --detach
           wait_for "production HTTP to HTTPS redirect" 60 http_redirect_is_ready
           wait_for "production edge to reject forged Host headers" 10 forged_host_is_rejected
+          wait_for "production edge to reject forged TLS SNI" 10 forged_sni_is_rejected
 
           "${production_compose[@]}" --file "$production_override" --env-file "$production_env" exec --no-TTY edge nginx -T > "$runtime_nginx" 2>&1
           required_forwarded_headers=(
