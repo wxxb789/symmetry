@@ -110,7 +110,8 @@ The daemon is not part of the production control-plane Compose topology. Run it
 on each execution machine with `control_plane_url` set to the public
 `https://` address and without `allow_insecure_http`. Plain HTTP is allowed only
 for an explicitly trusted local or container network, including the default
-development Compose stack.
+development Compose stack. Configure the canonical control URL directly: the
+daemon rejects redirects for authenticated HTTP and WebSocket requests.
 
 Codex normally reads its authentication from its machine-local credential store.
 When the configured CLI instead requires an environment credential, allowlist

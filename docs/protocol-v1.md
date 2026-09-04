@@ -104,7 +104,9 @@ credentials remain on the execution machine and must not appear in protocol
 payloads.
 
 Production traffic must use TLS. Plain HTTP is permitted only on an explicitly
-trusted local or container network.
+trusted local or container network. Authenticated HTTP and WebSocket clients
+treat every redirect as a protocol error and never forward credentials to a
+redirect target.
 
 ## HTTP Endpoints
 

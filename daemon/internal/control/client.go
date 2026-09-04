@@ -20,6 +20,8 @@ import (
 
 const defaultMaxResponseBytes int64 = 1 << 20
 
+var errRedirectNotAllowed = errors.New("control client does not allow redirects")
+
 // ErrorCode is a control-plane error that callers can branch on safely.
 type ErrorCode string
 
@@ -162,9 +164,13 @@ func newTransport(baseURL string, httpClient *http.Client, options ...Option) (*
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
+	clonedHTTPClient := *httpClient
+	clonedHTTPClient.CheckRedirect = func(request *http.Request, _ []*http.Request) error {
+		return fmt.Errorf("%w: %s", errRedirectNotAllowed, request.URL.Redacted())
+	}
 	transport := &transport{
 		baseURL:          parsed,
-		httpClient:       httpClient,
+		httpClient:       &clonedHTTPClient,
 		maxResponseBytes: defaultMaxResponseBytes,
 	}
 	for _, option := range options {

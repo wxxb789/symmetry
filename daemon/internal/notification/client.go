@@ -24,6 +24,8 @@ const (
 	defaultHeartbeatTimeout  = 10 * time.Second
 )
 
+var errAuthenticatedWebSocketRedirect = errors.New("authenticated WebSocket handshake redirect is not allowed")
+
 // Hint tells the daemon to fetch authoritative state from the control plane.
 type Hint struct {
 	Type      string
@@ -83,6 +85,12 @@ func newClient(baseURL, websocketPath, machineID, machineToken string, httpClien
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
+	// Preserve caller transport settings without letting an authenticated
+	// upgrade request move to another URL.
+	clientCopy := *httpClient
+	clientCopy.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return errAuthenticatedWebSocketRedirect
+	}
 	if err := options.validate(); err != nil {
 		return nil, err
 	}
@@ -90,7 +98,7 @@ func newClient(baseURL, websocketPath, machineID, machineToken string, httpClien
 		websocketURL: websocketURL,
 		machineID:    machineID,
 		machineToken: machineToken,
-		httpClient:   httpClient,
+		httpClient:   &clientCopy,
 		options:      options,
 	}, nil
 }

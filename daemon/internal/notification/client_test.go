@@ -320,6 +320,81 @@ func TestRunDialUsesDeadline(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedWebSocketRejectsRedirectBeforeForwardingMachineToken(t *testing.T) {
+	var targetRequests atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		targetRequests.Add(1)
+		if got := request.Header.Get("X-Symmetry-Token"); got != "" {
+			t.Errorf("redirect target X-Symmetry-Token = %q, want empty", got)
+		}
+	}))
+	defer target.Close()
+
+	var sourceRequests atomic.Int32
+	source := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		sourceRequests.Add(1)
+		if got := request.Header.Get("X-Symmetry-Token"); got != "machine-token" {
+			t.Errorf("source X-Symmetry-Token = %q, want machine token", got)
+		}
+		http.Redirect(writer, request, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer source.Close()
+
+	permissiveClient := source.Client()
+	permissiveClient.Timeout = 5 * time.Second
+	var permissiveRedirects atomic.Int32
+	permissiveClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		permissiveRedirects.Add(1)
+		return nil
+	}
+	client, err := newClient(source.URL, "/socket/websocket?vsn=2.0.0", "machine-1", "machine-token", permissiveClient, clientOptions{
+		heartbeatInterval: time.Hour,
+		reconnectInitial:  time.Second,
+		reconnectMaximum:  time.Second,
+		dialTimeout:       time.Second,
+		writeTimeout:      time.Second,
+		heartbeatTimeout:  time.Second,
+	})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	if client.httpClient == permissiveClient {
+		t.Fatal("notification client reused caller HTTP client")
+	}
+	if got := client.httpClient.Timeout; got != permissiveClient.Timeout {
+		t.Errorf("cloned HTTP client timeout = %v, want %v", got, permissiveClient.Timeout)
+	}
+
+	dialContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	connection, _, err := websocket.Dial(dialContext, client.websocketURL, &websocket.DialOptions{
+		HTTPClient: client.httpClient,
+		HTTPHeader: http.Header{"X-Symmetry-Token": []string{client.machineToken}},
+	})
+	if connection != nil {
+		connection.CloseNow()
+	}
+	if !errors.Is(err, errAuthenticatedWebSocketRedirect) {
+		t.Fatalf("Dial error = %v, want redirect policy error", err)
+	}
+	if got := sourceRequests.Load(); got != 1 {
+		t.Fatalf("source requests = %d, want 1", got)
+	}
+	if got := targetRequests.Load(); got != 0 {
+		t.Fatalf("target requests = %d, want 0", got)
+	}
+	if got := permissiveRedirects.Load(); got != 0 {
+		t.Fatalf("caller CheckRedirect calls = %d, want 0", got)
+	}
+
+	if err := permissiveClient.CheckRedirect(nil, nil); err != nil {
+		t.Errorf("caller CheckRedirect was modified: %v", err)
+	}
+	if got := permissiveRedirects.Load(); got != 1 {
+		t.Errorf("caller CheckRedirect calls after direct use = %d, want 1", got)
+	}
+}
+
 func TestNewRejectsUnsafeInputs(t *testing.T) {
 	for _, test := range []struct {
 		name          string

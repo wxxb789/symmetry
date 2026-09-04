@@ -340,6 +340,60 @@ func TestOperatorClientUsesDedicatedToken(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedRequestsRejectRedirectsBeforeDowngrade(t *testing.T) {
+	var sourceRequests atomic.Int32
+	var targetRequests atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		targetRequests.Add(1)
+		if got := request.Header.Get("Authorization"); got != "" {
+			t.Errorf("redirect target Authorization = %q, want empty", got)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, taskJSON())
+	}))
+	defer target.Close()
+
+	source := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		sourceRequests.Add(1)
+		if got, want := request.Header.Get("Authorization"), "Bearer operator-token"; got != want {
+			t.Errorf("source Authorization = %q, want %q", got, want)
+		}
+		http.Redirect(writer, request, target.URL+"/api/v1/tasks/task-1", http.StatusFound)
+	}))
+	defer source.Close()
+
+	permissive := source.Client()
+	var permissiveRedirects atomic.Int32
+	permissive.CheckRedirect = func(*http.Request, []*http.Request) error {
+		permissiveRedirects.Add(1)
+		return nil
+	}
+	client, err := NewOperatorClient(source.URL+"/api", "operator-token", permissive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.httpClient == permissive {
+		t.Fatal("NewOperatorClient reused the caller-owned HTTP client")
+	}
+
+	_, err = client.GetTask(context.Background(), "task-1")
+	if !errors.Is(err, errRedirectNotAllowed) {
+		t.Fatalf("error = %v, want redirect policy error", err)
+	}
+	if delay, retry := RetryDelay(context.Background(), err, time.Second); retry || delay != 0 {
+		t.Fatalf("RetryDelay() = (%s, %t), want (0s, false)", delay, retry)
+	}
+	if got := sourceRequests.Load(); got != 1 {
+		t.Fatalf("source requests = %d, want 1", got)
+	}
+	if got := targetRequests.Load(); got != 0 {
+		t.Fatalf("target requests = %d, want 0", got)
+	}
+	if got := permissiveRedirects.Load(); got != 0 {
+		t.Fatalf("caller CheckRedirect calls = %d, want 0", got)
+	}
+}
+
 func TestTaskResponseRequiresPresenceAndStateInvariants(t *testing.T) {
 	tests := []struct {
 		name      string
