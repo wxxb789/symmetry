@@ -761,6 +761,13 @@ func TestRunRestartDrainsAppliedInputOutboxBeforeRegistrationThenFailsTerminal(t
 	if _, err := store.QueueTransition(key, protocol.StateTransitionRequest{TransitionID: "waiting-after-input", State: "waiting_for_input", Payload: json.RawMessage(`{}`)}); err != nil {
 		t.Fatal(err)
 	}
+	persistedOrdinaryTransitions, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(persistedOrdinaryTransitions.PendingTransitions) != 2 {
+		t.Fatalf("persisted ordinary transitions = %#v, want running and waiting transitions", persistedOrdinaryTransitions.PendingTransitions)
+	}
 	persistWorkspacePath(t, store, key, "C:\\workspace")
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
@@ -818,6 +825,17 @@ func TestRunRestartDrainsAppliedInputOutboxBeforeRegistrationThenFailsTerminal(t
 	}; !sameStrings(got, want) {
 		t.Fatalf("restart recovery calls = %#v, want %#v", got, want)
 	}
+	ordinaryTransitions := api.ordinaryTransitionsSnapshot()
+	if len(ordinaryTransitions) != len(persistedOrdinaryTransitions.PendingTransitions) {
+		t.Fatalf("ordinary transition count = %d, want %d", len(ordinaryTransitions), len(persistedOrdinaryTransitions.PendingTransitions))
+	}
+	wantOldFence := protocol.Fence{RuntimeID: "runtime-1", RuntimeEpoch: 1, Generation: key.Generation, ClaimID: "claim-1", LeaseToken: "lease"}
+	for index, want := range persistedOrdinaryTransitions.PendingTransitions {
+		got := ordinaryTransitions[index]
+		if got.TransitionID != want.TransitionID || got.State != want.State || !bytes.Equal(got.Payload, want.Payload) || got.Fence != want.Fence || got.Fence != wantOldFence {
+			t.Fatalf("ordinary transition %d = %#v, want persisted %#v with old fence %#v", index, got, want, wantOldFence)
+		}
+	}
 	if api.failedTransition.Fence.RuntimeEpoch != 1 || api.failedTransition.Fence.RuntimeID != "runtime-1" {
 		t.Fatalf("failed terminal fence = %#v, want old epoch", api.failedTransition.Fence)
 	}
@@ -828,6 +846,136 @@ func TestRunRestartDrainsAppliedInputOutboxBeforeRegistrationThenFailsTerminal(t
 	if api.inputAcknowledgement.AckID != intent.AckID || api.inputAcknowledgement.Outcome != "applied" || api.inputAcknowledgement.Fence.RuntimeEpoch != 1 {
 		t.Fatalf("input acknowledgement = %#v, want preserved old-epoch applied acknowledgement", api.inputAcknowledgement)
 	}
+}
+
+func TestRestartInputRecoveryRetryDelayUsesFallbackAndMinimumCadence(t *testing.T) {
+	t.Run("malformed success response uses fallback", func(t *testing.T) {
+		err := malformedControlResponseError(t)
+		var responseError *control.ResponseError
+		if !errors.As(err, &responseError) {
+			t.Fatalf("error = %T %v, want *control.ResponseError", err, err)
+		}
+		fallback := 7 * time.Second
+		delay, retryable := restartInputRecoveryRetryDelay(context.Background(), err, fallback)
+		if !retryable || delay != fallback {
+			t.Fatalf("retry delay = (%s, %t), want (%s, true)", delay, retryable, fallback)
+		}
+	})
+
+	t.Run("explicit zero retry after is clamped", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			writer.Header().Set("Retry-After", "0")
+			writer.WriteHeader(http.StatusTooManyRequests)
+			_, _ = writer.Write([]byte(`{"error":{"code":"rate_limited","message":"retry"}}`))
+		}))
+		defer server.Close()
+		client, err := control.NewClient(server.URL+"/api", "machine-token", server.Client())
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = client.Dispatch(context.Background(), "runtime-1", 1)
+		if err == nil {
+			t.Fatal("Dispatch() error = nil, want HTTP 429")
+		}
+		delay, retryable := restartInputRecoveryRetryDelay(context.Background(), err, 7*time.Second)
+		if !retryable || delay != minimumInterval {
+			t.Fatalf("retry delay = (%s, %t), want (%s, true)", delay, retryable, minimumInterval)
+		}
+	})
+
+	t.Run("subsecond retry after is clamped", func(t *testing.T) {
+		delay, retryable := restartInputRecoveryRetryDelay(context.Background(), &control.APIError{StatusCode: http.StatusTooManyRequests, Code: control.RateLimited, RetryAfter: time.Nanosecond}, 7*time.Second)
+		if !retryable || delay != minimumInterval {
+			t.Fatalf("retry delay = (%s, %t), want (%s, true)", delay, retryable, minimumInterval)
+		}
+	})
+}
+
+func TestRestartInputRecoveryDoesNotRegisterUntilMalformedResponseDrainSucceeds(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	if err := store.SaveIdentity(state.MachineIdentity{MachineID: "machine-1", MachineToken: "machine-token"}); err != nil {
+		t.Fatal(err)
+	}
+	payload := json.RawMessage(`{"answer":"yes"}`)
+	digest, err := canonicalInputDigest(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := state.InputCommandIntent{CommandID: "input-1", PayloadDigest: digest, RunningTransitionID: "running-after-input", AckID: "input-ack-1"}
+	if _, created, err := store.PrepareProvideInput(key, intent); err != nil || !created {
+		t.Fatalf("PrepareProvideInput() created=%t error=%v", created, err)
+	}
+	if _, err := store.CompleteProvideInput(key, intent.CommandID, intent.PayloadDigest, "applied"); err != nil {
+		t.Fatal(err)
+	}
+
+	timers := make(chan *manualDeadlineTimer, 1)
+	api := &restartRecoveryControl{registeredEpoch: 2, ordinaryErrors: []error{malformedControlResponseError(t)}}
+	restarted := &daemon{
+		config: testConfig(t),
+		log:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		options: options{
+			store:     store,
+			control:   api,
+			workspace: &fakeWorkspace{},
+			start:     failStart,
+			clock:     time.Now,
+			newID:     ids(),
+			newTimer: func(delay time.Duration) deadlineTimer {
+				timer := &manualDeadlineTimer{channel: make(chan time.Time, 1), delay: delay}
+				timers <- timer
+				return timer
+			},
+		},
+		running: make(map[state.RunKey]*runningRun),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- restarted.initialize(ctx) }()
+
+	var timer *manualDeadlineTimer
+	select {
+	case timer = <-timers:
+	case <-time.After(time.Second):
+		t.Fatal("restart recovery did not schedule a retry")
+	}
+	if timer.delay != minimumInterval {
+		t.Fatalf("restart retry delay = %s, want %s", timer.delay, minimumInterval)
+	}
+	if got, want := api.callsSnapshot(), []string{"transition:running"}; !sameStrings(got, want) {
+		t.Fatalf("calls before successful drain = %#v, want %#v", got, want)
+	}
+	timer.channel <- time.Now()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("initialize error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("restart recovery did not complete after a successful drain")
+	}
+	if got, want := api.callsSnapshot(), []string{"transition:running", "transition:running", "ack:input-1:applied:input-ack-1", "register"}; !sameStrings(got, want) {
+		t.Fatalf("calls after successful drain = %#v, want %#v", got, want)
+	}
+}
+
+func malformedControlResponseError(t *testing.T) error {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte(`{"`))
+	}))
+	t.Cleanup(server.Close)
+	client, err := control.NewClient(server.URL+"/api", "machine-token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Dispatch(context.Background(), "runtime-1", 1)
+	if err == nil {
+		t.Fatal("Dispatch() error = nil, want malformed success response error")
+	}
+	return err
 }
 
 func TestRestartInputRecoveryOwnershipLossQueuesTerminalBeforeCleanup(t *testing.T) {
@@ -5399,8 +5547,10 @@ type restartRecoveryControl struct {
 	calls                []string
 	registeredEpoch      int64
 	ordinaryErr          error
+	ordinaryErrors       []error
 	terminalErr          error
 	claimCalls           int
+	ordinaryTransitions  []protocol.StateTransitionRequest
 	failedTransition     protocol.StateTransitionRequest
 	inputAcknowledgement protocol.CommandAcknowledgement
 }
@@ -5415,6 +5565,23 @@ func (client *restartRecoveryControl) callsSnapshot() []string {
 	client.mutex.Lock()
 	defer client.mutex.Unlock()
 	return append([]string(nil), client.calls...)
+}
+
+func (client *restartRecoveryControl) ordinaryTransitionsSnapshot() []protocol.StateTransitionRequest {
+	client.mutex.Lock()
+	defer client.mutex.Unlock()
+	return append([]protocol.StateTransitionRequest(nil), client.ordinaryTransitions...)
+}
+
+func (client *restartRecoveryControl) nextOrdinaryError() error {
+	client.mutex.Lock()
+	defer client.mutex.Unlock()
+	if len(client.ordinaryErrors) == 0 {
+		return client.ordinaryErr
+	}
+	err := client.ordinaryErrors[0]
+	client.ordinaryErrors = client.ordinaryErrors[1:]
+	return err
 }
 
 func (client *restartRecoveryControl) RegisterSession(context.Context, string, string, protocol.SessionRegistrationRequest) (protocol.SessionRegistrationResponse, error) {
@@ -5445,7 +5612,7 @@ func (client *restartRecoveryControl) AppendEvents(_ context.Context, _ string, 
 	for _, event := range request.Events {
 		client.record("event:" + event.EventID)
 	}
-	return client.ordinaryErr
+	return client.nextOrdinaryError()
 }
 
 func (client *restartRecoveryControl) Transition(_ context.Context, _ string, request protocol.StateTransitionRequest) error {
@@ -5453,10 +5620,14 @@ func (client *restartRecoveryControl) Transition(_ context.Context, _ string, re
 	if request.State == "failed" {
 		client.mutex.Lock()
 		client.failedTransition = request
+		err := client.terminalErr
 		client.mutex.Unlock()
-		return client.terminalErr
+		return err
 	}
-	return client.ordinaryErr
+	client.mutex.Lock()
+	client.ordinaryTransitions = append(client.ordinaryTransitions, request)
+	client.mutex.Unlock()
+	return client.nextOrdinaryError()
 }
 
 func (client *restartRecoveryControl) Reconcile(context.Context, string, protocol.ReconcileRequest) (protocol.ReconcileResponse, error) {
@@ -5470,7 +5641,7 @@ func (client *restartRecoveryControl) AcknowledgeCommand(_ context.Context, _ st
 		client.inputAcknowledgement = acknowledgement
 		client.mutex.Unlock()
 	}
-	return client.ordinaryErr
+	return client.nextOrdinaryError()
 }
 
 type restartRecoveryWorkspace struct {
