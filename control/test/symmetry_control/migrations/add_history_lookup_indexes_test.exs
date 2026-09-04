@@ -8,12 +8,23 @@ defmodule SymmetryControl.Migrations.AddHistoryLookupIndexesTest do
   alias SymmetryControl.Repo.Migrations.AddTaskCommandOwnership
   alias SymmetryControl.Repo.Migrations.CreateOrchestrationTables
 
-  test "creates history and current-wait lookup indexes" do
+  @migration_version 20_260_903_020_000
+
+  @index_names [
+    "run_events_run_id_inserted_at_id",
+    "run_transitions_run_id_inserted_at_id",
+    "commands_task_id_inserted_at_id",
+    "run_events_waiting_for_input_run_sequence_id",
+    "run_transitions_waiting_for_input_run_inserted_at_id"
+  ]
+
+  test "creates valid history and current-wait lookup indexes after a migration rerun" do
     load_migration_modules!()
 
     migration_config = Map.new(AddHistoryLookupIndexes.__migration__())
     assert migration_config.disable_ddl_transaction
-    assert migration_config.disable_migration_lock
+    refute migration_config.disable_migration_lock
+    assert Application.fetch_env!(:symmetry_control, Repo)[:migration_lock] == :pg_advisory_lock
 
     schema = "history_lookup_indexes_#{System.unique_integer([:positive])}"
     create_schema!(schema)
@@ -29,7 +40,9 @@ defmodule SymmetryControl.Migrations.AddHistoryLookupIndexesTest do
         dynamic_repo: repo
       )
 
-      Repo.query!("DELETE FROM schema_migrations WHERE version = $1", [20_260_903_020_000])
+      assert_indexes_valid!()
+
+      Repo.query!("DELETE FROM schema_migrations WHERE version = $1", [@migration_version])
 
       Ecto.Migrator.run(Repo, migrations(), :up,
         all: true,
@@ -63,6 +76,8 @@ defmodule SymmetryControl.Migrations.AddHistoryLookupIndexesTest do
         "(run_id, inserted_at DESC, id DESC)",
         ~r/state.*waiting_for_input/
       )
+
+      assert_indexes_valid!()
     after
       Repo.put_dynamic_repo(previous_dynamic_repo)
       GenServer.stop(repo)
@@ -89,12 +104,29 @@ defmodule SymmetryControl.Migrations.AddHistoryLookupIndexesTest do
     end
   end
 
+  defp assert_indexes_valid! do
+    valid_indexes =
+      Repo.query!("""
+      SELECT index_class.relname, index_metadata.indisvalid
+      FROM pg_index AS index_metadata
+      JOIN pg_class AS index_class ON index_class.oid = index_metadata.indexrelid
+      JOIN pg_namespace AS index_namespace ON index_namespace.oid = index_class.relnamespace
+      WHERE index_namespace.nspname = current_schema()
+      """)
+      |> Map.fetch!(:rows)
+      |> Map.new(fn [name, valid] -> {name, valid} end)
+
+    for name <- @index_names do
+      assert Map.fetch!(valid_indexes, name)
+    end
+  end
+
   defp migrations do
     [
       {20_260_902_000_000, CreateOrchestrationTables},
       {20_260_903_000_000, AddTaskCommandOwnership},
       {20_260_903_010_000, AddMachineEnrollmentReplay},
-      {20_260_903_020_000, AddHistoryLookupIndexes}
+      {@migration_version, AddHistoryLookupIndexes}
     ]
   end
 
