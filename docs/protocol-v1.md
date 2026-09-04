@@ -741,6 +741,24 @@ Follow-up `input` must be a JSON object; `{}` is valid. Non-interactive
 profiles receive EOF after the first record. An `interactive: true` profile
 with `input_mode: "goal"` is invalid daemon configuration.
 
+### Restart During Input Delivery
+
+`provide_input` delivery is at-most-once. If a daemon restart finds a durable
+`InputCommandIntent` on a non-terminal journal without a live in-memory run,
+it first terminates the recorded agent PID and never reattaches to that process
+or replays stdin. Before registering its new `daemon_instance_id` and runtime
+epoch, it drains the old fence's durable ordinary events, transitions, and
+input acknowledgement in normal event-sequence-barrier order. Retries retain
+the original event, transition, and acknowledgement IDs.
+
+Once that old-epoch drain has completed, or ordinary authority is conclusively
+lost, the daemon durably queues `failed` with
+`{"stage":"daemon_restart","error":"input command recovery cannot safely replay stdin"}`.
+The new daemon session then uses the original fence's terminal-only grace path
+to report that failure and deliver any still-permitted command acknowledgement.
+An `ownership_lost` or `terminal_grace_expired` result is conclusive cleanup,
+not permission to mark the pre-fallback journal stale or to replay input.
+
 ## Phoenix Channel Notifications
 
 The daemon connects with Phoenix Channel protocol v2 and joins
@@ -796,10 +814,14 @@ exception details:
 - `503 service_unavailable`: retry with backoff and `Retry-After` when present.
 
 An HTTP timeout has an unknown outcome. Each control request has a 15-second
-maximum. Enrollment, session registration, claim, and terminal-journal recovery
-retry transport failures, `429`, and `5xx` under the daemon lifecycle, honoring
-`Retry-After` when present; other `4xx` responses and malformed successful
-responses stop that recovery attempt. Heartbeat, dispatch, reconciliation, and
+maximum. Enrollment, session registration, and claim retry transport failures,
+`429`, and `5xx` under the daemon lifecycle, honoring `Retry-After` when
+present; other `4xx` responses and malformed successful responses stop that
+recovery attempt. Terminal-journal and pre-registration input-command recovery
+also retry malformed successful responses because an idempotent persisted
+mutation may already have been accepted; retries retain their stable ID. An
+`ownership_lost` or `terminal_grace_expired` result instead directs the input
+restart terminal fallback. Heartbeat, dispatch, reconciliation, and
 ordinary non-terminal outbox delivery make one attempt per cadence or wakeup.
 Writes are retried only when they carry the same claim, transition, command
 acknowledgement, idempotency, or event identifier.
@@ -832,3 +854,6 @@ releases the reserved slot and lets a later snapshot provide fresh work.
    local slot is released at most once, no later than eight minutes after the
    process enters `terminal_pending`, while unresolved delivery state remains
    durable across daemon and control restarts.
+10. Restart recovery never replays a durable input command. It drains its old
+    ordinary outbox while that fence remains current, then reports a durable
+    `daemon_restart` failure through terminal-only authority.

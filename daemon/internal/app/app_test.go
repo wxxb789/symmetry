@@ -633,7 +633,7 @@ func TestRecoverUnresolvedInputAfterWriteTerminatesAndDoesNotReplay(t *testing.T
 				return nil
 			},
 		},
-		running: map[state.RunKey]*runningRun{key: {process: process}},
+		running: make(map[state.RunKey]*runningRun),
 	}
 	if err := daemon.recoverUnresolvedInputIntents(context.Background()); err != nil {
 		t.Fatal(err)
@@ -728,6 +728,238 @@ func TestInitializeRecoversPersistedInputIntentWithoutReplayingStdin(t *testing.
 	}
 	if !terminated || replacement.writes != 0 || journal.LocalState != "terminal_pending" || journal.InputCommandIntent == nil || journal.InputCommandIntent.Outcome != "failed" || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].AckID != intent.AckID {
 		t.Fatalf("recovered journal = %#v, terminated = %t, replacement writes = %d", journal, terminated, replacement.writes)
+	}
+}
+
+func TestRunRestartDrainsAppliedInputOutboxBeforeRegistrationThenFailsTerminal(t *testing.T) {
+	directory := t.TempDir()
+	store, key := claimedStoreAt(t, directory)
+	if err := store.SaveIdentity(state.MachineIdentity{MachineID: "machine-1", MachineToken: "machine-token"}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.September, 4, 1, 2, 3, 0, time.UTC)
+	beforeInput := protocol.RunEvent{EventID: "event-before-input", Sequence: 1, Kind: "waiting_for_input", OccurredAt: now, Payload: json.RawMessage(`{}`)}
+	if _, err := store.QueueEvent(key, beforeInput); err != nil {
+		t.Fatal(err)
+	}
+	payload := json.RawMessage(`{"answer":"yes"}`)
+	digest, err := canonicalInputDigest(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := state.InputCommandIntent{CommandID: "input-1", PayloadDigest: digest, RunningTransitionID: "running-after-input", AckID: "input-ack-1"}
+	if _, created, err := store.PrepareProvideInput(key, intent); err != nil || !created {
+		t.Fatalf("PrepareProvideInput() created=%t error=%v", created, err)
+	}
+	if _, err := store.CompleteProvideInput(key, intent.CommandID, intent.PayloadDigest, "applied"); err != nil {
+		t.Fatal(err)
+	}
+	afterInput := protocol.RunEvent{EventID: "event-after-input", Sequence: 2, Kind: "waiting_for_input", OccurredAt: now.Add(time.Second), Payload: json.RawMessage(`{}`)}
+	if _, err := store.QueueEvent(key, afterInput); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.QueueTransition(key, protocol.StateTransitionRequest{TransitionID: "waiting-after-input", State: "waiting_for_input", Payload: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	persistWorkspacePath(t, store, key, "C:\\workspace")
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	recoveredStore, err := state.New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer recoveredStore.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	api := &restartRecoveryControl{registeredEpoch: 2}
+	cleaner := &restartRecoveryWorkspace{store: recoveredStore, key: key, cancel: cancel, observed: make(chan state.RunJournal, 1)}
+	startCalls := 0
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, testConfig(t), WithStore(recoveredStore), WithControl(api), WithWorkspace(cleaner), WithStartProcess(func(context.Context, execution.Invocation, execution.Sink) (Process, error) {
+			startCalls++
+			return nil, errors.New("restart recovery must not start an agent")
+		}), WithLogWriter(io.Discard))
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("restart recovery did not converge")
+	}
+
+	select {
+	case journal := <-cleaner.observed:
+		if journal.LocalState != "cleanup_pending" || journal.TerminalState != "failed" || journal.TerminalVerdict != state.TerminalVerdictAccepted || journal.InputCommandIntent == nil || !journal.InputCommandIntent.AcknowledgementDelivered {
+			t.Fatalf("terminal journal before cleanup = %#v", journal)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("failed terminal was not durably queued before cleanup")
+	}
+	if _, err := recoveredStore.LoadJournal(key); !state.IsNotFound(err) {
+		t.Fatalf("journal = %v, want removed after restart cleanup", err)
+	}
+	if startCalls != 0 || api.claimCalls != 0 {
+		t.Fatalf("restart recovery started=%d claimed=%d, want zero", startCalls, api.claimCalls)
+	}
+	if got, want := api.callsSnapshot(), []string{
+		"event:event-before-input",
+		"transition:running",
+		"ack:input-1:applied:input-ack-1",
+		"event:event-after-input",
+		"transition:waiting_for_input",
+		"register",
+		"transition:failed",
+	}; !sameStrings(got, want) {
+		t.Fatalf("restart recovery calls = %#v, want %#v", got, want)
+	}
+	if api.failedTransition.Fence.RuntimeEpoch != 1 || api.failedTransition.Fence.RuntimeID != "runtime-1" {
+		t.Fatalf("failed terminal fence = %#v, want old epoch", api.failedTransition.Fence)
+	}
+	var failure map[string]string
+	if err := json.Unmarshal(api.failedTransition.Payload, &failure); err != nil || failure["stage"] != "daemon_restart" || failure["error"] != "input command recovery cannot safely replay stdin" {
+		t.Fatalf("failed terminal payload = %s, error = %v", api.failedTransition.Payload, err)
+	}
+	if api.inputAcknowledgement.AckID != intent.AckID || api.inputAcknowledgement.Outcome != "applied" || api.inputAcknowledgement.Fence.RuntimeEpoch != 1 {
+		t.Fatalf("input acknowledgement = %#v, want preserved old-epoch applied acknowledgement", api.inputAcknowledgement)
+	}
+}
+
+func TestRestartInputRecoveryOwnershipLossQueuesTerminalBeforeCleanup(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	if err := store.SaveIdentity(state.MachineIdentity{MachineID: "machine-1", MachineToken: "machine-token"}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.September, 4, 1, 2, 3, 0, time.UTC)
+	if _, err := store.QueueEvent(key, protocol.RunEvent{EventID: "event-before-input", Sequence: 1, Kind: "waiting_for_input", OccurredAt: now, Payload: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	payload := json.RawMessage(`{"answer":"yes"}`)
+	digest, err := canonicalInputDigest(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := state.InputCommandIntent{CommandID: "input-1", PayloadDigest: digest, RunningTransitionID: "running-after-input", AckID: "input-ack-1"}
+	if _, created, err := store.PrepareProvideInput(key, intent); err != nil || !created {
+		t.Fatalf("PrepareProvideInput() created=%t error=%v", created, err)
+	}
+	if _, err := store.CompleteProvideInput(key, intent.CommandID, intent.PayloadDigest, "applied"); err != nil {
+		t.Fatal(err)
+	}
+	api := &restartRecoveryControl{registeredEpoch: 2, ordinaryErr: &control.APIError{StatusCode: http.StatusConflict, Code: control.OwnershipLost}, terminalErr: &control.APIError{StatusCode: http.StatusConflict, Code: control.OwnershipLost}}
+	daemon := &daemon{
+		config:  testConfig(t),
+		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		options: options{store: store, control: api, workspace: &fakeWorkspace{}, start: failStart, clock: func() time.Time { return now }, newID: ids()},
+		running: make(map[state.RunKey]*runningRun),
+	}
+	if err := daemon.initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.LocalState != "terminal_pending" || journal.TerminalState != "failed" || journal.InputCommandIntent == nil || journal.InputCommandIntent.Outcome != "applied" || journal.InputCommandIntent.AcknowledgementDelivered || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].AckID != intent.AckID {
+		t.Fatalf("ownership-loss fallback journal = %#v", journal)
+	}
+	if got, want := api.callsSnapshot(), []string{"event:event-before-input", "register"}; !sameStrings(got, want) {
+		t.Fatalf("calls before terminal fallback delivery = %#v, want %#v", got, want)
+	}
+	if err := daemon.flushRun(context.Background(), journal); err == nil || !control.IsOwnershipLost(err) {
+		t.Fatalf("terminal fallback delivery error = %v, want ownership_lost", err)
+	}
+	if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
+		t.Fatalf("journal = %v, want cleanup after conclusive terminal ownership loss", err)
+	}
+	if got, want := api.callsSnapshot(), []string{"event:event-before-input", "register", "transition:failed"}; !sameStrings(got, want) {
+		t.Fatalf("conclusive terminal calls = %#v, want %#v", got, want)
+	}
+}
+
+func TestRestartInputRecoveryDoesNotRegisterAfterPermanentOrdinaryFailure(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	if err := store.SaveIdentity(state.MachineIdentity{MachineID: "machine-1", MachineToken: "machine-token"}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.September, 4, 1, 2, 3, 0, time.UTC)
+	if _, err := store.QueueEvent(key, protocol.RunEvent{EventID: "event-before-input", Sequence: 1, Kind: "waiting_for_input", OccurredAt: now, Payload: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	payload := json.RawMessage(`{"answer":"yes"}`)
+	digest, err := canonicalInputDigest(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := state.InputCommandIntent{CommandID: "input-1", PayloadDigest: digest, RunningTransitionID: "running-after-input", AckID: "input-ack-1"}
+	if _, created, err := store.PrepareProvideInput(key, intent); err != nil || !created {
+		t.Fatalf("PrepareProvideInput() created=%t error=%v", created, err)
+	}
+	if _, err := store.CompleteProvideInput(key, intent.CommandID, intent.PayloadDigest, "applied"); err != nil {
+		t.Fatal(err)
+	}
+	api := &restartRecoveryControl{registeredEpoch: 2, ordinaryErr: &control.APIError{StatusCode: http.StatusUnprocessableEntity, Code: control.InvalidTransition}}
+	daemon := &daemon{
+		config:  testConfig(t),
+		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		options: options{store: store, control: api, workspace: &fakeWorkspace{}, start: failStart, clock: func() time.Time { return now }, newID: ids()},
+		running: make(map[state.RunKey]*runningRun),
+	}
+	if err := daemon.initialize(context.Background()); err == nil || !strings.Contains(err.Error(), "drain input command outbox") {
+		t.Fatalf("initialize error = %v, want failed old-epoch drain", err)
+	}
+	if got, want := api.callsSnapshot(), []string{"event:event-before-input"}; !sameStrings(got, want) {
+		t.Fatalf("permanent recovery calls = %#v, want %#v", got, want)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.LocalState != "running" || len(journal.PendingEvents) != 1 || journal.InputCommandIntent == nil || journal.InputCommandIntent.AcknowledgementDelivered {
+		t.Fatalf("permanent recovery changed journal = %#v", journal)
+	}
+}
+
+func TestRecoverUnresolvedInputIntentsSkipsLiveRun(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	payload := json.RawMessage(`{"answer":"yes"}`)
+	digest, err := canonicalInputDigest(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := state.InputCommandIntent{CommandID: "input-1", PayloadDigest: digest, RunningTransitionID: "running-after-input", AckID: "input-ack-1"}
+	if _, created, err := store.PrepareProvideInput(key, intent); err != nil || !created {
+		t.Fatalf("PrepareProvideInput() created=%t error=%v", created, err)
+	}
+	terminated := false
+	daemon := &daemon{
+		store: store,
+		options: options{
+			newID: ids(),
+			terminatePersist: func(int, string) error {
+				terminated = true
+				return nil
+			},
+		},
+		running: map[state.RunKey]*runningRun{key: {process: &recordingProcess{}}},
+	}
+	if err := daemon.recoverUnresolvedInputIntents(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if terminated || journal.LocalState != "waiting_for_input" || journal.InputCommandIntent == nil || journal.InputCommandIntent.Outcome != "" || len(journal.PendingTransitions) != 0 || len(journal.PendingCommandAcknowledgements) != 0 {
+		t.Fatalf("live journal was recovered: %#v, terminated=%t", journal, terminated)
 	}
 }
 
@@ -5160,6 +5392,110 @@ type fakeControl struct {
 	claimEntered      chan<- struct{}
 	renewCalls        int
 	heartbeat         protocol.RuntimeHeartbeatRequest
+}
+
+type restartRecoveryControl struct {
+	mutex                sync.Mutex
+	calls                []string
+	registeredEpoch      int64
+	ordinaryErr          error
+	terminalErr          error
+	claimCalls           int
+	failedTransition     protocol.StateTransitionRequest
+	inputAcknowledgement protocol.CommandAcknowledgement
+}
+
+func (client *restartRecoveryControl) record(call string) {
+	client.mutex.Lock()
+	defer client.mutex.Unlock()
+	client.calls = append(client.calls, call)
+}
+
+func (client *restartRecoveryControl) callsSnapshot() []string {
+	client.mutex.Lock()
+	defer client.mutex.Unlock()
+	return append([]string(nil), client.calls...)
+}
+
+func (client *restartRecoveryControl) RegisterSession(context.Context, string, string, protocol.SessionRegistrationRequest) (protocol.SessionRegistrationResponse, error) {
+	client.record("register")
+	return protocol.SessionRegistrationResponse{Runtimes: []protocol.RegisteredRuntime{{RuntimeKey: "default", RuntimeID: "runtime-1", RuntimeEpoch: client.registeredEpoch}}, LeaseDurationMS: protocol.MinimumLeaseDurationMS}, nil
+}
+
+func (client *restartRecoveryControl) Heartbeat(context.Context, string, protocol.RuntimeHeartbeatRequest) (protocol.RuntimeSnapshot, error) {
+	return protocol.RuntimeSnapshot{}, nil
+}
+
+func (client *restartRecoveryControl) Dispatch(context.Context, string, int64) (protocol.RuntimeSnapshot, error) {
+	return protocol.RuntimeSnapshot{}, nil
+}
+
+func (client *restartRecoveryControl) Claim(context.Context, string, protocol.ClaimRequest) (protocol.ClaimResponse, error) {
+	client.mutex.Lock()
+	client.claimCalls++
+	client.mutex.Unlock()
+	return protocol.ClaimResponse{}, errors.New("restart recovery must not claim")
+}
+
+func (client *restartRecoveryControl) RenewLease(context.Context, string, protocol.LeaseHeartbeatRequest) (protocol.LeaseHeartbeatResponse, error) {
+	return protocol.LeaseHeartbeatResponse{}, errors.New("restart recovery must not renew")
+}
+
+func (client *restartRecoveryControl) AppendEvents(_ context.Context, _ string, request protocol.AppendEventsRequest) error {
+	for _, event := range request.Events {
+		client.record("event:" + event.EventID)
+	}
+	return client.ordinaryErr
+}
+
+func (client *restartRecoveryControl) Transition(_ context.Context, _ string, request protocol.StateTransitionRequest) error {
+	client.record("transition:" + request.State)
+	if request.State == "failed" {
+		client.mutex.Lock()
+		client.failedTransition = request
+		client.mutex.Unlock()
+		return client.terminalErr
+	}
+	return client.ordinaryErr
+}
+
+func (client *restartRecoveryControl) Reconcile(context.Context, string, protocol.ReconcileRequest) (protocol.ReconcileResponse, error) {
+	return protocol.ReconcileResponse{}, nil
+}
+
+func (client *restartRecoveryControl) AcknowledgeCommand(_ context.Context, _ string, acknowledgement protocol.CommandAcknowledgement) error {
+	client.record("ack:" + acknowledgement.CommandID + ":" + acknowledgement.Outcome + ":" + acknowledgement.AckID)
+	if acknowledgement.CommandID == "input-1" {
+		client.mutex.Lock()
+		client.inputAcknowledgement = acknowledgement
+		client.mutex.Unlock()
+	}
+	return client.ordinaryErr
+}
+
+type restartRecoveryWorkspace struct {
+	store    *state.Store
+	key      state.RunKey
+	cancel   context.CancelFunc
+	observed chan state.RunJournal
+}
+
+func (*restartRecoveryWorkspace) Prepare(context.Context, string, workspace.RunRef) (workspace.Prepared, error) {
+	return workspace.Prepared{}, errors.New("restart recovery must not prepare a workspace")
+}
+
+func (*restartRecoveryWorkspace) Recover(_ context.Context, key string, run workspace.RunRef, path string) (workspace.Prepared, error) {
+	return workspace.Prepared{Path: path, BindingKey: key, Run: run}, nil
+}
+
+func (service *restartRecoveryWorkspace) Cleanup(context.Context, workspace.Prepared, bool) error {
+	journal, err := service.store.LoadJournal(service.key)
+	if err != nil {
+		return err
+	}
+	service.observed <- journal
+	service.cancel()
+	return nil
 }
 
 type deadlineRecordingControl struct {

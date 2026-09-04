@@ -43,6 +43,10 @@ var (
 	errOutboxChanged        = errors.New("outbox changed during delivery")
 )
 
+// restartOutboxRecoveryContextKey suppresses ordinary ownership-loss cleanup
+// until restart recovery has converted the journal into a terminal fallback.
+type restartOutboxRecoveryContextKey struct{}
+
 // ControlAPI is the authenticated protocol boundary used by the loop.
 type ControlAPI interface {
 	RegisterSession(context.Context, string, string, protocol.SessionRegistrationRequest) (protocol.SessionRegistrationResponse, error)
@@ -662,9 +666,6 @@ func (daemon *daemon) initialize(ctx context.Context) error {
 		}
 		daemon.store = store
 	}
-	if err := daemon.recoverUnresolvedInputIntents(ctx); err != nil {
-		return fmt.Errorf("recover input command intents: %w", err)
-	}
 	identity, err := daemon.store.LoadIdentity()
 	if err != nil {
 		if !state.IsNotFound(err) {
@@ -735,6 +736,9 @@ func (daemon *daemon) initialize(ctx context.Context) error {
 		daemon.start = func(ctx context.Context, invocation execution.Invocation, sink execution.Sink) (Process, error) {
 			return runner.Start(ctx, invocation, sink)
 		}
+	}
+	if err := daemon.recoverUnresolvedInputIntents(ctx); err != nil {
+		return fmt.Errorf("recover input command intents: %w", err)
 	}
 	daemon.slots = make(chan struct{}, daemon.config.Runtime.Capacity)
 	instanceID, idErr := daemon.options.newID()
@@ -868,38 +872,121 @@ func (daemon *daemon) recoverUnresolvedInputIntents(ctx context.Context) error {
 		return err
 	}
 	rootContext := daemon.rootContext(ctx)
+	recoveries := make([]state.RunJournal, 0, len(journals))
 	for _, journal := range journals {
-		intent := journal.InputCommandIntent
-		if intent == nil || intent.Outcome != "" {
+		if !restartInputRecoveryRequired(journal) || daemon.hasRun(journal.Key()) {
 			continue
 		}
+		recoveries = append(recoveries, journal)
 		if journal.PID > 0 && !daemon.terminatePersistedProcessWithRetry(rootContext, journal.Key()) {
 			return rootContext.Err()
 		}
-		transitionID, err := daemon.newIDWithRetry(rootContext, journal.Key(), intent.CommandID, "recovery terminal transition")
-		if err != nil {
-			return err
+	}
+	for _, journal := range recoveries {
+		if daemon.hasRun(journal.Key()) {
+			continue
 		}
-		for {
-			updated, recoveryErr := daemon.store.FailUnresolvedProvideInput(journal.Key(), protocol.StateTransitionRequest{TransitionID: transitionID, State: "failed", Payload: json.RawMessage(`{}`)}, daemon.now())
-			if recoveryErr == nil {
-				daemon.signalOutbox()
-				_ = updated
-				break
-			}
-			if daemon.log != nil {
-				daemon.log.Warn("recover_input_command_intent_failed", "run_id", journal.RunID, "generation", journal.Generation, "command_id", intent.CommandID, "error", recoveryErr)
-			}
-			timer := daemon.timer(minimumInterval)
-			select {
-			case <-rootContext.Done():
-				timer.Stop()
-				return rootContext.Err()
-			case <-timer.Chan():
-			}
+		if err := daemon.drainRestartInputOutbox(rootContext, journal.Key()); err != nil && !isConclusiveRestartInputFailure(err) {
+			return fmt.Errorf("drain input command outbox for %s/%d: %w", journal.RunID, journal.Generation, err)
+		}
+		if err := daemon.queueRestartInputFailure(rootContext, journal.Key()); err != nil {
+			return fmt.Errorf("queue restart input failure for %s/%d: %w", journal.RunID, journal.Generation, err)
 		}
 	}
 	return nil
+}
+
+func restartInputRecoveryRequired(journal state.RunJournal) bool {
+	if journal.InputCommandIntent == nil {
+		return false
+	}
+	switch journal.LocalState {
+	case "stale", "terminal_pending", "cleanup_pending":
+		return false
+	default:
+		return true
+	}
+}
+
+func (daemon *daemon) drainRestartInputOutbox(ctx context.Context, key state.RunKey) error {
+	ctx = context.WithValue(ctx, restartOutboxRecoveryContextKey{}, true)
+	delay := minimumInterval
+	for {
+		if daemon.hasRun(key) {
+			return nil
+		}
+		journal, err := daemon.store.LoadJournal(key)
+		if state.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !restartInputRecoveryRequired(journal) {
+			return nil
+		}
+		err = daemon.flushRun(ctx, journal)
+		if err == nil {
+			return nil
+		}
+		if errors.Is(err, errOutboxChanged) {
+			continue
+		}
+		if isConclusiveRestartInputFailure(err) {
+			return err
+		}
+		wait, retryable := restartInputRecoveryRetryDelay(ctx, err, delay)
+		if !retryable {
+			return err
+		}
+		timer := daemon.timer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.Chan():
+		}
+		delay = nextRetryDelay(delay)
+	}
+}
+
+func restartInputRecoveryRetryDelay(ctx context.Context, err error, fallback time.Duration) (time.Duration, bool) {
+	delay, retryable := control.RetryDelay(ctx, err, fallback)
+	if !retryable {
+		var responseError *control.ResponseError
+		if !errors.As(err, &responseError) {
+			return 0, false
+		}
+		delay, retryable = fallback, true
+	}
+	if delay < minimumInterval {
+		delay = minimumInterval
+	}
+	return delay, retryable
+}
+
+func isConclusiveRestartInputFailure(err error) bool {
+	return control.IsOwnershipLost(err) || control.IsTerminalGraceExpired(err)
+}
+
+func (daemon *daemon) queueRestartInputFailure(ctx context.Context, key state.RunKey) error {
+	if daemon.hasRun(key) {
+		return nil
+	}
+	journal, err := daemon.store.LoadJournal(key)
+	if state.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !restartInputRecoveryRequired(journal) {
+		return nil
+	}
+	return daemon.queueTerminalTransitionWithRetry(ctx, key, "failed", map[string]string{
+		"stage": "daemon_restart",
+		"error": "input command recovery cannot safely replay stdin",
+	})
 }
 
 func (daemon *daemon) heartbeat(ctx context.Context) {
@@ -2748,7 +2835,7 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) (e
 			if isTerminalTransition(transition.State) {
 				return daemon.handleTerminalDeliveryError(journal, err)
 			}
-			return daemon.handleOrdinaryDeliveryError(journal, err, "transition ownership lost")
+			return daemon.handleOrdinaryDeliveryError(ctx, journal, err, "transition ownership lost")
 		}
 		if journal.LocalState == "terminal_pending" && isTerminalTransition(transition.State) {
 			updated, err := daemon.resolveTerminal(journal, state.TerminalVerdictAccepted)
@@ -2829,7 +2916,7 @@ func (daemon *daemon) deliverEvents(ctx context.Context, journal state.RunJourna
 		if !wasTerminal && journal.LocalState == "terminal_pending" {
 			return journal, errOutboxChanged
 		}
-		return journal, daemon.handleOrdinaryDeliveryError(journal, err, "event ownership lost")
+		return journal, daemon.handleOrdinaryDeliveryError(ctx, journal, err, "event ownership lost")
 	}
 	ids := make([]string, len(events))
 	for index, event := range events {
@@ -2880,7 +2967,7 @@ func (daemon *daemon) deliverAcknowledgement(ctx context.Context, journal state.
 			}
 			return updated, nil
 		}
-		return journal, daemon.handleAcknowledgementDeliveryError(journal, err)
+		return journal, daemon.handleAcknowledgementDeliveryError(ctx, journal, err)
 	}
 	if journal.LocalState == "terminal_pending" {
 		daemon.releaseSlotOnce(key)
@@ -2966,11 +3053,11 @@ func (daemon *daemon) handleTerminalDeliveryError(journal state.RunJournal, err 
 	return err
 }
 
-func (daemon *daemon) handleAcknowledgementDeliveryError(journal state.RunJournal, err error) error {
+func (daemon *daemon) handleAcknowledgementDeliveryError(ctx context.Context, journal state.RunJournal, err error) error {
 	if journal.LocalState == "terminal_pending" {
 		return daemon.handleTerminalDeliveryError(journal, err)
 	}
-	return daemon.handleOrdinaryDeliveryError(journal, err, "ack ownership lost")
+	return daemon.handleOrdinaryDeliveryError(ctx, journal, err, "ack ownership lost")
 }
 
 func (daemon *daemon) retireAcceptedTerminalAcknowledgement(journal state.RunJournal, acknowledgement protocol.CommandAcknowledgement, err error) (state.RunJournal, bool, error) {
@@ -3022,11 +3109,19 @@ func (daemon *daemon) markCommandAcknowledgementDelivered(key state.RunKey, ackn
 	return updated, nil
 }
 
-func (daemon *daemon) handleOrdinaryDeliveryError(journal state.RunJournal, err error, ownershipReason string) error {
-	if control.IsOwnershipLost(err) {
+func (daemon *daemon) handleOrdinaryDeliveryError(ctx context.Context, journal state.RunJournal, err error, ownershipReason string) error {
+	if control.IsOwnershipLost(err) && !restartOutboxRecovery(ctx) {
 		daemon.terminateForLease(journal, ownershipReason)
 	}
 	return err
+}
+
+func restartOutboxRecovery(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	value, _ := ctx.Value(restartOutboxRecoveryContextKey{}).(bool)
+	return value
 }
 
 func (daemon *daemon) activeRuns() []protocol.ActiveRun {
