@@ -29,6 +29,15 @@ defmodule SymmetryControl.Migrations.AddHistoryLookupIndexesTest do
         dynamic_repo: repo
       )
 
+      Repo.query!("DELETE FROM schema_migrations WHERE version = $1", [20_260_903_020_000])
+
+      Ecto.Migrator.run(Repo, migrations(), :up,
+        all: true,
+        log: false,
+        migration_lock: false,
+        dynamic_repo: repo
+      )
+
       indexes = indexes_by_name()
 
       assert_index!(indexes, "run_events_run_id_inserted_at_id", "(run_id, inserted_at, id)")
