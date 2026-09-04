@@ -332,6 +332,30 @@ func TestQueueCommandAcknowledgementIsIdempotentByCommandAndOutcome(t *testing.T
 	}
 }
 
+func TestCommandAcknowledgementRetiredUsesConclusiveTerminalVerdict(t *testing.T) {
+	tests := []struct {
+		name    string
+		journal RunJournal
+		retired bool
+	}{
+		{name: "active run", journal: RunJournal{LocalState: "running"}},
+		{name: "accepted terminal", journal: RunJournal{LocalState: "terminal_pending", TerminalVerdict: TerminalVerdictAccepted}},
+		{name: "ownership lost", journal: RunJournal{LocalState: "terminal_pending", TerminalVerdict: TerminalVerdictOwnershipLost}, retired: true},
+		{name: "terminal grace expired", journal: RunJournal{LocalState: "terminal_pending", TerminalVerdict: TerminalVerdictGraceExpired}, retired: true},
+		{name: "cleanup pending", journal: RunJournal{LocalState: "cleanup_pending"}, retired: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := CommandAcknowledgementRetired(test.journal); got != test.retired {
+				t.Fatalf("CommandAcknowledgementRetired(%#v) = %t, want %t", test.journal, got, test.retired)
+			}
+		})
+	}
+	if !IsConclusiveTerminalVerdict(TerminalVerdictOwnershipLost) || !IsConclusiveTerminalVerdict(TerminalVerdictGraceExpired) || IsConclusiveTerminalVerdict(TerminalVerdictAccepted) {
+		t.Fatal("IsConclusiveTerminalVerdict() did not classify terminal verdicts")
+	}
+}
+
 func TestProvideInputIntentIsAtomicAcrossCompletionDeliveryAndEpisodes(t *testing.T) {
 	store := mustStore(t)
 	journal := testJournal("run-input", 1)

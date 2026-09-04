@@ -41,6 +41,12 @@ const (
 	TerminalVerdictGraceExpired  = "terminal_grace_expired"
 )
 
+// IsConclusiveTerminalVerdict reports whether the control plane can no longer
+// accept delivery for the terminal run generation.
+func IsConclusiveTerminalVerdict(verdict string) bool {
+	return verdict == TerminalVerdictOwnershipLost || verdict == TerminalVerdictGraceExpired
+}
+
 // ErrStoreInUse indicates that another daemon process currently owns this
 // state directory.
 var ErrStoreInUse = errors.New("state directory is already in use")
@@ -151,6 +157,12 @@ func (journal RunJournal) Fence() protocol.Fence {
 		ClaimID:      journal.ClaimID,
 		LeaseToken:   journal.LeaseToken,
 	}
+}
+
+// CommandAcknowledgementRetired reports whether a command acknowledgement can
+// no longer be delivered for journal's run generation.
+func CommandAcknowledgementRetired(journal RunJournal) bool {
+	return journal.LocalState == "cleanup_pending" || (journal.LocalState == "terminal_pending" && IsConclusiveTerminalVerdict(journal.TerminalVerdict))
 }
 
 // NotFoundError distinguishes absent local durable state from malformed state.
@@ -1008,7 +1020,7 @@ func queueCommandAcknowledgement(journal *RunJournal, acknowledgement protocol.C
 	if !journal.hasClaimGrant() {
 		return errors.New("journal has no claim grant")
 	}
-	if journal.LocalState == "cleanup_pending" || (journal.LocalState == "terminal_pending" && (journal.TerminalVerdict == TerminalVerdictOwnershipLost || journal.TerminalVerdict == TerminalVerdictGraceExpired)) {
+	if CommandAcknowledgementRetired(*journal) {
 		return errors.New("command acknowledgement is no longer deliverable")
 	}
 	if acknowledgement.RunID == "" {
@@ -1421,7 +1433,7 @@ func validTerminalVerdict(verdict string) bool {
 }
 
 func validConclusiveTerminalVerdict(verdict string) bool {
-	return verdict == TerminalVerdictOwnershipLost || verdict == TerminalVerdictGraceExpired
+	return IsConclusiveTerminalVerdict(verdict)
 }
 
 func validAttemptedTransitions(attempted []string, pending []protocol.StateTransitionRequest) bool {

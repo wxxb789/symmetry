@@ -1641,6 +1641,85 @@ func TestFlushInputTransitionStillPrecedesAcknowledgement(t *testing.T) {
 	}
 }
 
+func TestFlushAppliedInputAcknowledgementPrecedesLaterNonTerminalTransition(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	if _, err := store.SetLocalState(key, "waiting_for_input"); err != nil {
+		t.Fatal(err)
+	}
+	process := &recordingProcess{}
+	api := &orderingControl{}
+	daemon := &daemon{
+		store:   store,
+		control: api,
+		options: options{newID: ids()},
+		running: map[state.RunKey]*runningRun{key: {process: process}},
+	}
+	command := protocol.Command{CommandID: "input-1", RunID: key.RunID, Generation: key.Generation, Kind: "provide_input", Payload: json.RawMessage(`{"answer":"yes"}`)}
+	if !daemon.handleCommand(context.Background(), command) {
+		t.Fatal("provide_input was not completed")
+	}
+	if err := daemon.queueWaitingForInput(key, json.RawMessage(`{"type":"waiting_for_input","question":"next"}`), time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := daemon.flushRun(context.Background(), journal); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := api.calls, []string{"transition:running", "ack:input-1", "transition:waiting_for_input"}; !sameStrings(got, want) {
+		t.Fatalf("calls = %#v, want %#v", got, want)
+	}
+}
+
+func TestFlushRetriesAppliedInputAcknowledgementBeforeLaterNonTerminalTransition(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	if _, err := store.SetLocalState(key, "waiting_for_input"); err != nil {
+		t.Fatal(err)
+	}
+	process := &recordingProcess{}
+	api := &orderingControl{failAcknowledgementOnce: true}
+	daemon := &daemon{
+		store:   store,
+		control: api,
+		options: options{newID: ids()},
+		running: map[state.RunKey]*runningRun{key: {process: process}},
+	}
+	command := protocol.Command{CommandID: "input-1", RunID: key.RunID, Generation: key.Generation, Kind: "provide_input", Payload: json.RawMessage(`{"answer":"yes"}`)}
+	if !daemon.handleCommand(context.Background(), command) {
+		t.Fatal("provide_input was not completed")
+	}
+	if err := daemon.queueWaitingForInput(key, json.RawMessage(`{"type":"waiting_for_input","question":"next"}`), time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := daemon.flushRun(context.Background(), journal); err == nil {
+		t.Fatal("flushRun() succeeded despite acknowledgement failure")
+	}
+	if got, want := api.calls, []string{"transition:running", "ack:input-1"}; !sameStrings(got, want) {
+		t.Fatalf("first flush calls = %#v, want %#v", got, want)
+	}
+	journal, err = store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].State != "waiting_for_input" || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].CommandID != command.CommandID {
+		t.Fatalf("journal after failed acknowledgement = %#v", journal)
+	}
+	if err := daemon.flushRun(context.Background(), journal); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := api.calls, []string{"transition:running", "ack:input-1", "ack:input-1", "transition:waiting_for_input"}; !sameStrings(got, want) {
+		t.Fatalf("retry flush calls = %#v, want %#v", got, want)
+	}
+}
+
 func TestFlushTransitionRetriesUnknownResultWithFrozenBody(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
@@ -3991,7 +4070,7 @@ func TestTerminalOutboxBackoffSuppressesPermanentFailuresAndResets(t *testing.T)
 		}
 	})
 
-	t.Run("malformed terminal response is permanent", func(t *testing.T) {
+	t.Run("malformed terminal transition response retries on cadence", func(t *testing.T) {
 		store, key := claimedStore(t)
 		defer store.Close()
 		now := time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC)
@@ -3999,19 +4078,89 @@ func TestTerminalOutboxBackoffSuppressesPermanentFailuresAndResets(t *testing.T)
 			t.Fatal(err)
 		}
 		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-			_, _ = writer.Write([]byte(`{}`))
+			_, _ = writer.Write([]byte(`{"`))
 		}))
 		defer server.Close()
 		client, err := control.NewClient(server.URL+"/api", "machine-token", server.Client())
 		if err != nil {
 			t.Fatal(err)
 		}
-		api := &responseErrorTerminalControl{client: client}
+		api := &responseErrorTerminalControl{client: client, transitionFailures: 1}
 		loop := &daemon{store: store, control: api, options: options{clock: func() time.Time { return now }}, outboxRetry: make(map[state.RunKey]outboxRetry)}
 		loop.flushAll(context.Background())
-		loop.flushAll(context.Background())
 		if api.transitionCalls != 1 {
-			t.Fatalf("malformed terminal response calls = %d, want 1", api.transitionCalls)
+			t.Fatalf("malformed terminal transition calls = %d, want 1", api.transitionCalls)
+		}
+		entry := loop.outboxRetry[key]
+		if entry.permanent || !entry.retryAt.Equal(now.Add(minimumInterval)) {
+			t.Fatalf("malformed terminal transition retry = %#v", entry)
+		}
+		journal, err := store.LoadJournal(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].TransitionID != "completed-1" {
+			t.Fatalf("malformed terminal transition changed durable outbox: %#v", journal)
+		}
+		now = now.Add(minimumInterval)
+		loop.flushAll(context.Background())
+		if api.transitionCalls != 2 {
+			t.Fatalf("recovered terminal transition calls = %d, want 2", api.transitionCalls)
+		}
+		if got, want := api.transitionIDs, []string{"completed-1", "completed-1"}; !sameStrings(got, want) {
+			t.Fatalf("terminal transition IDs = %#v, want %#v", got, want)
+		}
+		if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
+			t.Fatalf("terminal transition journal = %v, want deleted", err)
+		}
+	})
+
+	t.Run("malformed terminal acknowledgement response retries on cadence", func(t *testing.T) {
+		store, key := claimedStore(t)
+		defer store.Close()
+		now := time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC)
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			_, _ = writer.Write([]byte(`{"`))
+		}))
+		defer server.Close()
+		client, err := control.NewClient(server.URL+"/api", "machine-token", server.Client())
+		if err != nil {
+			t.Fatal(err)
+		}
+		api := &responseErrorTerminalControl{client: client, acknowledgementFailures: 1}
+		loop := &daemon{store: store, control: api, options: options{newID: ids(), clock: func() time.Time { return now }}, outboxRetry: make(map[state.RunKey]outboxRetry)}
+		if err := loop.queueCancelledTerminalAndAcknowledgement(key, "cancel-1"); err != nil {
+			t.Fatal(err)
+		}
+		loop.flushAll(context.Background())
+		if api.acknowledgementCalls != 1 {
+			t.Fatalf("malformed terminal acknowledgement calls = %d, want 1", api.acknowledgementCalls)
+		}
+		entry := loop.outboxRetry[key]
+		if entry.permanent || !entry.retryAt.Equal(now.Add(minimumInterval)) {
+			t.Fatalf("malformed terminal acknowledgement retry = %#v", entry)
+		}
+		journal, err := store.LoadJournal(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if journal.TerminalVerdict != state.TerminalVerdictAccepted || len(journal.PendingTransitions) != 0 || len(journal.PendingCommandAcknowledgements) != 1 {
+			t.Fatalf("malformed terminal acknowledgement changed durable outbox: %#v", journal)
+		}
+		ackID := journal.PendingCommandAcknowledgements[0].AckID
+		now = now.Add(minimumInterval)
+		loop.flushAll(context.Background())
+		if api.acknowledgementCalls != 2 {
+			t.Fatalf("recovered terminal acknowledgement calls = %d, want 2", api.acknowledgementCalls)
+		}
+		if got, want := api.acknowledgementIDs, []string{ackID, ackID}; !sameStrings(got, want) {
+			t.Fatalf("terminal acknowledgement IDs = %#v, want %#v", got, want)
+		}
+		if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
+			t.Fatalf("terminal acknowledgement journal = %v, want deleted", err)
+		}
+		if ackID == "" {
+			t.Fatal("terminal acknowledgement did not preserve an acknowledgement ID")
 		}
 	})
 }
@@ -5085,12 +5234,33 @@ func (client *terminalRetryControl) Transition(context.Context, string, protocol
 
 type responseErrorTerminalControl struct {
 	fakeControl
-	client          *control.Client
-	transitionCalls int
+	client                  *control.Client
+	transitionFailures      int
+	acknowledgementFailures int
+	transitionCalls         int
+	acknowledgementCalls    int
+	transitionIDs           []string
+	acknowledgementIDs      []string
 }
 
-func (client *responseErrorTerminalControl) Transition(ctx context.Context, _ string, _ protocol.StateTransitionRequest) error {
+func (client *responseErrorTerminalControl) Transition(ctx context.Context, _ string, request protocol.StateTransitionRequest) error {
 	client.transitionCalls++
+	client.transitionIDs = append(client.transitionIDs, request.TransitionID)
+	if client.transitionFailures == 0 {
+		return nil
+	}
+	client.transitionFailures--
+	_, err := client.client.Dispatch(ctx, "runtime-1", 1)
+	return err
+}
+
+func (client *responseErrorTerminalControl) AcknowledgeCommand(ctx context.Context, _ string, acknowledgement protocol.CommandAcknowledgement) error {
+	client.acknowledgementCalls++
+	client.acknowledgementIDs = append(client.acknowledgementIDs, acknowledgement.AckID)
+	if client.acknowledgementFailures == 0 {
+		return nil
+	}
+	client.acknowledgementFailures--
 	_, err := client.client.Dispatch(ctx, "runtime-1", 1)
 	return err
 }
@@ -5149,9 +5319,10 @@ func (client *deadlineRecordingControl) AcknowledgeCommand(ctx context.Context, 
 
 type orderingControl struct {
 	fakeControl
-	calls             []string
-	terminal          bool
-	failCancelledOnce bool
+	calls                   []string
+	terminal                bool
+	failCancelledOnce       bool
+	failAcknowledgementOnce bool
 }
 
 type retryTransitionControl struct {
@@ -5582,6 +5753,10 @@ func (client *orderingControl) Transition(_ context.Context, _ string, request p
 
 func (client *orderingControl) AcknowledgeCommand(_ context.Context, commandID string, _ protocol.CommandAcknowledgement) error {
 	client.calls = append(client.calls, "ack:"+commandID)
+	if client.failAcknowledgementOnce {
+		client.failAcknowledgementOnce = false
+		return errors.New("temporary acknowledgement failure")
+	}
 	if client.terminal {
 		return &control.APIError{Code: control.OwnershipLost}
 	}

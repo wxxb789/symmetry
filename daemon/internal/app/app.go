@@ -2174,7 +2174,7 @@ func (daemon *daemon) commandAcknowledgementRetired(key state.RunKey) bool {
 	if err != nil {
 		return false
 	}
-	return journal.LocalState == "cleanup_pending" || (journal.LocalState == "terminal_pending" && (journal.TerminalVerdict == state.TerminalVerdictOwnershipLost || journal.TerminalVerdict == state.TerminalVerdictGraceExpired))
+	return state.CommandAcknowledgementRetired(journal)
 }
 
 func (daemon *daemon) completeProvideInputWithRetry(ctx context.Context, key state.RunKey, commandID, payloadDigest, outcome string) bool {
@@ -2495,6 +2495,9 @@ func (daemon *daemon) recordOutboxFailure(ctx context.Context, journal state.Run
 	daemon.mu.Unlock()
 
 	delay, retryable := control.RetryDelay(ctx, err, fallback)
+	if !retryable && isAmbiguousTerminalDeliveryFailure(journal, err) {
+		delay, retryable = fallback, true
+	}
 	if !retryable && isOutboxMaintenanceFailure(journal, err) {
 		delay, retryable = fallback, true
 	}
@@ -2517,6 +2520,14 @@ func (daemon *daemon) recordOutboxFailure(ctx context.Context, journal state.Run
 		}
 	}
 	daemon.outboxRetry[key] = outboxRetry{fingerprint: fingerprint, retryAt: retryAt, delay: nextRetryDelay(fallback)}
+}
+
+func isAmbiguousTerminalDeliveryFailure(journal state.RunJournal, err error) bool {
+	if journal.LocalState != "terminal_pending" {
+		return false
+	}
+	var responseError *control.ResponseError
+	return errors.As(err, &responseError)
 }
 
 func isOutboxMaintenanceFailure(journal state.RunJournal, err error) bool {
@@ -2714,6 +2725,17 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) (e
 		journal = updated
 	}
 	for len(journal.PendingTransitions) > 0 {
+		nextTransition := journal.PendingTransitions[0]
+		if !isTerminalTransition(nextTransition.State) {
+			updated, delivered, err := daemon.deliverAppliedInputAcknowledgement(ctx, journal)
+			journal = updated
+			if err != nil {
+				return err
+			}
+			if delivered {
+				continue
+			}
+		}
 		updated, err := daemon.store.MarkTransitionAttempted(key, journal.PendingTransitions[0].TransitionID)
 		if err != nil {
 			return err
@@ -2754,40 +2776,13 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) (e
 		}
 		journal = updated
 	}
-	for _, acknowledgement := range journal.PendingCommandAcknowledgements {
-		wasTerminal := journal.LocalState == "terminal_pending"
-		requestContext, cancel := daemon.controlContext(ctx)
-		err := daemon.control.AcknowledgeCommand(requestContext, acknowledgement.CommandID, acknowledgement)
-		cancel()
-		current, loadErr := daemon.store.LoadJournal(key)
-		if loadErr != nil {
-			return loadErr
-		}
-		journal = current
-		if !hasPendingAcknowledgement(journal, acknowledgement.AckID) {
-			return errOutboxChanged
-		}
-		if err != nil {
-			if !wasTerminal && journal.LocalState == "terminal_pending" {
-				return errOutboxChanged
-			}
-			if updated, retired, retireErr := daemon.retireAcceptedTerminalAcknowledgement(journal, acknowledgement, err); retired || retireErr != nil {
-				if retireErr != nil {
-					return retireErr
-				}
-				journal = updated
-				continue
-			}
-			return daemon.handleAcknowledgementDeliveryError(journal, err)
-		}
-		if journal.LocalState == "terminal_pending" {
-			daemon.releaseSlotOnce(key)
-		}
-		updated, err := daemon.markCommandAcknowledgementDelivered(key, acknowledgement)
+	for len(journal.PendingCommandAcknowledgements) > 0 {
+		acknowledgement := journal.PendingCommandAcknowledgements[0]
+		updated, err := daemon.deliverAcknowledgement(ctx, journal, acknowledgement)
+		journal = updated
 		if err != nil {
 			return err
 		}
-		journal = updated
 	}
 	if journal.LocalState == "terminal_pending" && journal.TerminalVerdict == state.TerminalVerdictAccepted && len(journal.PendingTransitions) == 0 && len(journal.PendingCommandAcknowledgements) == 0 {
 		updated, err := daemon.enterCleanupPending(journal)
@@ -2797,6 +2792,56 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) (e
 		return daemon.scheduleCleanup(ctx, updated)
 	}
 	return nil
+}
+
+func (daemon *daemon) deliverAppliedInputAcknowledgement(ctx context.Context, journal state.RunJournal) (state.RunJournal, bool, error) {
+	intent := journal.InputCommandIntent
+	if intent == nil || intent.Outcome != "applied" || intent.AcknowledgementDelivered || journal.HasPendingTransition(intent.RunningTransitionID) {
+		return journal, false, nil
+	}
+	for _, acknowledgement := range journal.PendingCommandAcknowledgements {
+		if acknowledgement.AckID == intent.AckID {
+			updated, err := daemon.deliverAcknowledgement(ctx, journal, acknowledgement)
+			return updated, true, err
+		}
+	}
+	return journal, false, errors.New("applied input acknowledgement is not pending")
+}
+
+func (daemon *daemon) deliverAcknowledgement(ctx context.Context, journal state.RunJournal, acknowledgement protocol.CommandAcknowledgement) (state.RunJournal, error) {
+	key := journal.Key()
+	wasTerminal := journal.LocalState == "terminal_pending"
+	requestContext, cancel := daemon.controlContext(ctx)
+	err := daemon.control.AcknowledgeCommand(requestContext, acknowledgement.CommandID, acknowledgement)
+	cancel()
+	current, loadErr := daemon.store.LoadJournal(key)
+	if loadErr != nil {
+		return journal, loadErr
+	}
+	journal = current
+	if !hasPendingAcknowledgement(journal, acknowledgement.AckID) {
+		return journal, errOutboxChanged
+	}
+	if err != nil {
+		if !wasTerminal && journal.LocalState == "terminal_pending" {
+			return journal, errOutboxChanged
+		}
+		if updated, retired, retireErr := daemon.retireAcceptedTerminalAcknowledgement(journal, acknowledgement, err); retired || retireErr != nil {
+			if retireErr != nil {
+				return journal, retireErr
+			}
+			return updated, nil
+		}
+		return journal, daemon.handleAcknowledgementDeliveryError(journal, err)
+	}
+	if journal.LocalState == "terminal_pending" {
+		daemon.releaseSlotOnce(key)
+	}
+	updated, err := daemon.markCommandAcknowledgementDelivered(key, acknowledgement)
+	if err != nil {
+		return journal, err
+	}
+	return updated, nil
 }
 
 func hasPendingAcknowledgement(journal state.RunJournal, acknowledgementID string) bool {
