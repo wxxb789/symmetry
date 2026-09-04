@@ -129,22 +129,68 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
     assert Enum.map(first_page ++ second_page, & &1["event_id"]) ==
              event_ids
 
-    transition = insert_transition(first_run, "running", DateTime.add(at, 102, :microsecond))
-    command = insert_command(task, second_run, "pending", DateTime.add(at, 103, :microsecond))
+    first_transition = insert_transition(first_run, "running", DateTime.add(at, 502, :microsecond))
 
-    assert %{"transitions" => [transition_dto], "next_after" => nil} =
+    second_transition =
+      insert_transition(second_run, "waiting_for_input", DateTime.add(at, 503, :microsecond))
+
+    third_transition = insert_transition(first_run, "running", DateTime.add(at, 504, :microsecond))
+
+    assert %{"transitions" => first_transition_page, "next_after" => transition_after_cursor} =
              bearer(conn)
-             |> get("/api/v1/tasks/#{task.id}/transitions?limit=500")
+             |> get("/api/v1/tasks/#{task.id}/transitions?limit=2")
              |> json_response(200)
 
-    assert transition_dto["transition_id"] == transition.transition_id
+    assert Enum.map(first_transition_page, & &1["transition_id"]) == [
+             first_transition.transition_id,
+             second_transition.transition_id
+           ]
 
-    assert %{"commands" => [command_dto], "next_after" => nil} =
+    assert is_binary(transition_after_cursor)
+
+    assert %{"transitions" => second_transition_page, "next_after" => nil} =
              bearer(conn)
-             |> get("/api/v1/tasks/#{task.id}/commands?limit=500")
+             |> get(
+               "/api/v1/tasks/#{task.id}/transitions?after=#{URI.encode_www_form(transition_after_cursor)}&limit=2"
+             )
              |> json_response(200)
 
-    assert command_dto["command_id"] == command.id
+    assert Enum.map(second_transition_page, & &1["transition_id"]) == [third_transition.transition_id]
+
+    assert Enum.map(first_transition_page ++ second_transition_page, & &1["transition_id"]) == [
+             first_transition.transition_id,
+             second_transition.transition_id,
+             third_transition.transition_id
+           ]
+
+    first_command = insert_command(task, second_run, "pending", DateTime.add(at, 505, :microsecond))
+    second_command = insert_command(task, first_run, "pending", DateTime.add(at, 506, :microsecond))
+
+    third_command =
+      insert_command(task, second_run, "pending", DateTime.add(at, 507, :microsecond))
+
+    assert %{"commands" => first_command_page, "next_after" => command_after_cursor} =
+             bearer(conn)
+             |> get("/api/v1/tasks/#{task.id}/commands?limit=2")
+             |> json_response(200)
+
+    assert Enum.map(first_command_page, & &1["command_id"]) == [first_command.id, second_command.id]
+    assert is_binary(command_after_cursor)
+
+    assert %{"commands" => second_command_page, "next_after" => nil} =
+             bearer(conn)
+             |> get(
+               "/api/v1/tasks/#{task.id}/commands?after=#{URI.encode_www_form(command_after_cursor)}&limit=2"
+             )
+             |> json_response(200)
+
+    assert Enum.map(second_command_page, & &1["command_id"]) == [third_command.id]
+
+    assert Enum.map(first_command_page ++ second_command_page, & &1["command_id"]) == [
+             first_command.id,
+             second_command.id,
+             third_command.id
+           ]
 
     for path <- [
           "/api/v1/tasks/#{task.id}/events?limit=0",

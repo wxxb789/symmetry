@@ -56,7 +56,7 @@ defmodule SymmetryControl.OrchestrationReviewTest do
              )
   end
 
-  test "assigned cancellation is applied by control and rejects late claim" do
+  test "assigned cancellation is applied by control, audited as a command, and rejects late claim" do
     %{machine: machine} = enroll_machine()
     runtime = register_runtime(machine)
     {:ok, task, :created} = Orchestration.submit_task(task_attrs(), "assigned-cancel", now: @now)
@@ -72,6 +72,19 @@ defmodule SymmetryControl.OrchestrationReviewTest do
     assert command.applied_at == @now
     assert {:ok, cancelled_run} = Orchestration.fetch_run(run.id)
     assert cancelled_run.state == "cancelled"
+
+    assert {:ok, %{entries: [], next_after: nil}} = Orchestration.list_task_transitions(task.id)
+
+    assert {:ok, %{entries: [command_history], next_after: nil}} =
+             Orchestration.list_task_commands(task.id)
+
+    assert command_history.id == command.id
+
+    assert {:ok, %{entries: [timeline_entry], next_before: nil}} =
+             Orchestration.task_timeline(task.id)
+
+    assert timeline_entry.source == "command"
+    assert timeline_entry.id == command.id
 
     assert {:ok, ^cancelled_task, replayed_command} =
              Orchestration.request_cancel(task.id, now: @now)
@@ -162,7 +175,7 @@ defmodule SymmetryControl.OrchestrationReviewTest do
     assert replacement.id != first.id
   end
 
-  test "transition replay returns its original state and event replay rejects body changes" do
+  test "transition replay projects the stored transition onto the current run and event replay rejects body changes" do
     %{machine: machine} = enroll_machine()
     runtime = register_runtime(machine)
     {:ok, _task, :created} = Orchestration.submit_task(task_attrs(), "replay-body", now: @now)
@@ -170,22 +183,28 @@ defmodule SymmetryControl.OrchestrationReviewTest do
     fence = claim(run, runtime)
     transition(run.id, fence, "running", 71)
 
+    transition_id = uuid(72)
+
     assert {:ok, waiting} =
-             Orchestration.transition(run.id, fence, "waiting_for_input", %{}, uuid(72),
+             Orchestration.transition(run.id, fence, "waiting_for_input", %{}, transition_id,
                now: @now
              )
 
     assert waiting.state == "waiting_for_input"
-    transition(run.id, fence, "running", 73)
+    transition(run.id, fence, "running", 73, DateTime.add(@now, 1, :second))
+
+    assert {:ok, current_run} = Orchestration.fetch_run(run.id)
+    assert current_run.state == "running"
 
     assert {:ok, replayed} =
-             Orchestration.transition(run.id, fence, "waiting_for_input", %{}, uuid(72),
-               now: @now
+             Orchestration.transition(run.id, fence, "waiting_for_input", %{}, transition_id,
+               now: DateTime.add(@now, 2, :second)
              )
 
     assert replayed.state == "waiting_for_input"
     assert replayed.result == nil
     assert replayed.failure == nil
+    assert replayed.updated_at == current_run.updated_at
 
     event = %{
       event_id: uuid(74),

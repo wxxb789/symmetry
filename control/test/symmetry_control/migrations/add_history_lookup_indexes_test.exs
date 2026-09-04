@@ -11,6 +11,10 @@ defmodule SymmetryControl.Migrations.AddHistoryLookupIndexesTest do
   test "creates history and current-wait lookup indexes" do
     load_migration_modules!()
 
+    migration_config = Map.new(AddHistoryLookupIndexes.__migration__())
+    assert migration_config.disable_ddl_transaction
+    assert migration_config.disable_migration_lock
+
     schema = "history_lookup_indexes_#{System.unique_integer([:positive])}"
     create_schema!(schema)
 

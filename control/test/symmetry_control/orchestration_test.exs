@@ -1704,7 +1704,7 @@ defmodule SymmetryControl.OrchestrationTest do
              third.id
            ]
 
-    transition =
+    first_transition =
       insert_history_transition(
         first_run,
         "00000000-0000-0000-0000-000000000124",
@@ -1712,22 +1712,102 @@ defmodule SymmetryControl.OrchestrationTest do
         DateTime.add(at, 3, :microsecond)
       )
 
-    command =
-      insert_history_command(
-        task,
+    second_transition =
+      insert_history_transition(
         second_run,
         "00000000-0000-0000-0000-000000000125",
-        "pending",
+        "waiting_for_input",
         DateTime.add(at, 4, :microsecond)
       )
 
-    assert {:ok, transitions} = Orchestration.list_task_transitions(task.id, limit: 500)
-    assert Enum.map(transitions.entries, & &1.id) == [transition.id]
-    assert transitions.next_after == nil
+    third_transition =
+      insert_history_transition(
+        first_run,
+        "00000000-0000-0000-0000-000000000126",
+        "running",
+        DateTime.add(at, 5, :microsecond)
+      )
 
-    assert {:ok, commands} = Orchestration.list_task_commands(task.id)
-    assert Enum.map(commands.entries, & &1.id) == [command.id]
-    assert commands.next_after == nil
+    assert {:ok, first_transition_page} = Orchestration.list_task_transitions(task.id, limit: 2)
+
+    assert Enum.map(first_transition_page.entries, & &1.id) == [
+             first_transition.id,
+             second_transition.id
+           ]
+
+    assert first_transition_page.next_after == %{
+             inserted_at: second_transition.inserted_at,
+             id: second_transition.id
+           }
+
+    assert {:ok, second_transition_page} =
+             Orchestration.list_task_transitions(task.id,
+               after: first_transition_page.next_after,
+               limit: 2
+             )
+
+    assert Enum.map(second_transition_page.entries, & &1.id) == [third_transition.id]
+    assert second_transition_page.next_after == nil
+
+    assert Enum.map(first_transition_page.entries ++ second_transition_page.entries, & &1.id) == [
+             first_transition.id,
+             second_transition.id,
+             third_transition.id
+           ]
+
+    first_command =
+      insert_history_command(
+        task,
+        second_run,
+        "00000000-0000-0000-0000-000000000127",
+        "pending",
+        DateTime.add(at, 6, :microsecond)
+      )
+
+    second_command =
+      insert_history_command(
+        task,
+        first_run,
+        "00000000-0000-0000-0000-000000000128",
+        "pending",
+        DateTime.add(at, 7, :microsecond)
+      )
+
+    third_command =
+      insert_history_command(
+        task,
+        second_run,
+        "00000000-0000-0000-0000-000000000129",
+        "pending",
+        DateTime.add(at, 8, :microsecond)
+      )
+
+    assert {:ok, first_command_page} = Orchestration.list_task_commands(task.id, limit: 2)
+
+    assert Enum.map(first_command_page.entries, & &1.id) == [
+             first_command.id,
+             second_command.id
+           ]
+
+    assert first_command_page.next_after == %{
+             inserted_at: second_command.inserted_at,
+             id: second_command.id
+           }
+
+    assert {:ok, second_command_page} =
+             Orchestration.list_task_commands(task.id,
+               after: first_command_page.next_after,
+               limit: 2
+             )
+
+    assert Enum.map(second_command_page.entries, & &1.id) == [third_command.id]
+    assert second_command_page.next_after == nil
+
+    assert Enum.map(first_command_page.entries ++ second_command_page.entries, & &1.id) == [
+             first_command.id,
+             second_command.id,
+             third_command.id
+           ]
 
     assert {:error, :not_found} =
              Orchestration.list_task_commands("00000000-0000-0000-0000-000000000129")

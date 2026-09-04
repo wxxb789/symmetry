@@ -361,7 +361,7 @@ clients must not decode or expect a response body:
 }
 ```
 
-Materialized lifecycle state changes only through the transition resource:
+Daemon-originated materialized lifecycle state changes use the transition resource:
 
 ```json
 {
@@ -381,12 +381,14 @@ Materialized lifecycle state changes only through the transition resource:
 Valid targets are `running`, `waiting_for_input`, `completed`, `failed`,
 and `cancelled`. Completion and failure include a structured result or failure
 payload. `(run_id, transition_id)` is the retry identity: repeating the same ID
-and canonical JSON body returns the stored response; reusing the ID with a
-different body returns `409 idempotency_conflict`. A transition whose state has
-already advanced under a different ID returns `409 state_conflict`. If the
-reaper has already finalized `cancelling` as `cancelled`, any new late terminal
-transition returns `409 ownership_lost`; an exact stored transition replay still
-returns its original response.
+and canonical JSON body is idempotent. The response is assembled from the
+current run representation at replay time, with the stored transition state and
+terminal payload projection (`result` or `failure`); it is not a byte-frozen
+historical HTTP response. Reusing the ID with a different body returns
+`409 idempotency_conflict`. A transition whose state has already advanced under
+a different ID returns `409 state_conflict`. If the reaper has already finalized
+`cancelling` as `cancelled`, any new late terminal transition returns
+`409 ownership_lost`; an exact stored transition replay remains idempotent.
 
 When the agent process exits, the daemon durably enters `terminal_pending`,
 records the intended terminal state and first terminal-pending time, stops lease
@@ -586,12 +588,16 @@ current-state validation.
 Cancellation locks the task and current run when one exists. A queued
 cancellation creates and applies a runless command in one transaction, and it
 never enters daemon dispatch. An assigned-but-unclaimed cancellation binds the
-existing `run_id` and `generation` and is immediately `applied`. A claimed-run
-command remains `pending`, daemon-delivered, and fenced. Human input is
-accepted only while the current run is `waiting_for_input`; its command is
-atomically bound to the current run and generation, never a later generation.
-The daemon acknowledges and transitions the run back to `running`; both writes
-are independently retryable.
+existing `run_id` and `generation` and is immediately `applied`. These
+control-applied cancellations are audited by their durable command resource and
+directly materialize task/run state; they do not create synthetic transition
+rows. They remain visible through command history and the unified timeline.
+A claimed-run command remains `pending`, daemon-delivered, and fenced. Human
+input is accepted only while the current run is `waiting_for_input`; its command
+is atomically bound to the current run and generation, never a later generation.
+Daemon-originated lifecycle writes use transition resources. The daemon
+acknowledges and transitions the run back to `running`; both writes are
+independently retryable.
 
 ### Operator Runtime And History Reads
 
