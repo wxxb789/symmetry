@@ -201,7 +201,7 @@ func New(directory string) (*Store, error) {
 	store := &Store{dir: directory, lock: lock}
 	if err := ensurePrivateDirectory(store.runsDir()); err != nil {
 		_ = releaseStoreLock(lock)
-		return nil, errors.New("create run journal directory")
+		return nil, fmt.Errorf("create run journal directory: %w", err)
 	}
 	return store, nil
 }

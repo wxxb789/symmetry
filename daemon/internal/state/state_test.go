@@ -139,13 +139,42 @@ func TestStoreExclusiveLockAndClose(t *testing.T) {
 }
 
 func TestStateSecuritySetupFailuresPropagateWithoutToken(t *testing.T) {
-	t.Run("directory", func(t *testing.T) {
+	t.Run("state root directory", func(t *testing.T) {
 		original := applyDirectorySecurity
-		applyDirectorySecurity = func(string) error { return errors.New("security setup denied") }
+		denied := errors.New("security setup denied")
+		applyDirectorySecurity = func(string) error { return denied }
 		t.Cleanup(func() { applyDirectorySecurity = original })
 
-		if _, err := New(t.TempDir()); err == nil {
-			t.Fatal("New() succeeded when directory security setup failed")
+		if _, err := New(t.TempDir()); !errors.Is(err, denied) || !strings.Contains(err.Error(), "initialize state directory") {
+			t.Fatalf("New() error = %v, want wrapped state root security cause", err)
+		}
+	})
+	t.Run("run journal directory", func(t *testing.T) {
+		directory := t.TempDir()
+		original := applyDirectorySecurity
+		denied := errors.New("security setup denied")
+		calls := 0
+		applyDirectorySecurity = func(string) error {
+			calls++
+			if calls == 1 {
+				return nil
+			}
+			return denied
+		}
+		t.Cleanup(func() { applyDirectorySecurity = original })
+
+		store, err := New(directory)
+		if store != nil {
+			t.Fatal("New() returned a store when runs directory security setup failed")
+		}
+		if !errors.Is(err, denied) {
+			t.Fatalf("New() error = %v, want wrapped security cause", err)
+		}
+		if !strings.Contains(err.Error(), "create run journal directory") {
+			t.Fatalf("New() error = %v, want run journal context", err)
+		}
+		if calls != 2 {
+			t.Fatalf("directory security calls = %d, want 2", calls)
 		}
 	})
 	t.Run("file", func(t *testing.T) {

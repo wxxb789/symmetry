@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"os"
 	"syscall"
 	"unsafe"
@@ -110,45 +111,51 @@ func verifyPrivateFile(path string) error {
 func secureWindowsPath(path string) error {
 	sid, err := currentUserSID()
 	if err != nil {
-		return errors.New("get current account SID")
+		return fmt.Errorf("get current account SID: %w", err)
 	}
 	acl, err := accountOnlyDACL(sid)
 	if err != nil {
-		return errors.New("create account-only DACL")
+		return fmt.Errorf("create account-only DACL: %w", err)
 	}
 	var descriptor windowsSecurityDescriptor
 	if err := windowsBool(procInitializeSecurity, uintptr(unsafe.Pointer(&descriptor)), securityDescriptorRevision); err != nil {
-		return errors.New("initialize security descriptor")
+		return fmt.Errorf("initialize security descriptor: %w", err)
 	}
 	if err := windowsBool(procSetSecurityDACL, uintptr(unsafe.Pointer(&descriptor)), 1, uintptr(unsafe.Pointer(&acl[0])), 0); err != nil {
-		return errors.New("set security descriptor DACL")
+		return fmt.Errorf("set security descriptor DACL: %w", err)
 	}
 	if err := windowsBool(procSetSecurityControl, uintptr(unsafe.Pointer(&descriptor)), securityDescriptorDACLProtect, securityDescriptorDACLProtect); err != nil {
-		return errors.New("protect security descriptor DACL")
+		return fmt.Errorf("protect security descriptor DACL: %w", err)
 	}
 	pathPointer, err := syscall.UTF16PtrFromString(path)
 	if err != nil {
-		return errors.New("encode state path")
+		return fmt.Errorf("encode state path: %w", err)
 	}
 	if err := windowsBool(procSetFileSecurity, uintptr(unsafe.Pointer(pathPointer)), daclSecurityInformation, uintptr(unsafe.Pointer(&descriptor))); err != nil {
-		return errors.New("apply account-only DACL")
+		return fmt.Errorf("apply account-only DACL: %w", err)
 	}
-	return verifyWindowsPrivatePath(path)
+	if err := verifyWindowsPrivatePath(path); err != nil {
+		return fmt.Errorf("verify account-only DACL: %w", err)
+	}
+	return nil
 }
 
 func verifyWindowsPrivatePath(path string) error {
 	sid, err := currentUserSID()
 	if err != nil {
-		return errors.New("get current account SID")
+		return fmt.Errorf("get current account SID: %w", err)
 	}
 	descriptor, err := readWindowsDACL(path)
 	if err != nil {
-		return errors.New("read state DACL")
+		return fmt.Errorf("read state DACL: %w", err)
 	}
 	var present uint32
 	var defaulted uint32
 	var dacl unsafe.Pointer
-	if err := windowsBool(procGetSecurityDACL, uintptr(unsafe.Pointer(&descriptor[0])), uintptr(unsafe.Pointer(&present)), uintptr(unsafe.Pointer(&dacl)), uintptr(unsafe.Pointer(&defaulted))); err != nil || present == 0 || dacl == nil {
+	if err := windowsBool(procGetSecurityDACL, uintptr(unsafe.Pointer(&descriptor[0])), uintptr(unsafe.Pointer(&present)), uintptr(unsafe.Pointer(&dacl)), uintptr(unsafe.Pointer(&defaulted))); err != nil {
+		return fmt.Errorf("read state DACL descriptor: %w", err)
+	}
+	if present == 0 || dacl == nil {
 		return errors.New("state DACL is not private")
 	}
 	aclHeader := unsafe.Slice((*byte)(dacl), 8)
@@ -156,7 +163,10 @@ func verifyWindowsPrivatePath(path string) error {
 		return errors.New("state DACL header is not account-only")
 	}
 	var ace unsafe.Pointer
-	if err := windowsBool(procGetACE, uintptr(dacl), 0, uintptr(unsafe.Pointer(&ace))); err != nil || ace == nil {
+	if err := windowsBool(procGetACE, uintptr(dacl), 0, uintptr(unsafe.Pointer(&ace))); err != nil {
+		return fmt.Errorf("read state DACL ACE: %w", err)
+	}
+	if ace == nil {
 		return errors.New("state DACL ACE is unavailable")
 	}
 	aceHeader := unsafe.Slice((*byte)(ace), 8)
@@ -212,27 +222,37 @@ func accountOnlyDACL(sid *syscall.SID) ([]byte, error) {
 func readWindowsDACL(path string) ([]byte, error) {
 	pathPointer, err := syscall.UTF16PtrFromString(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("encode state path: %w", err)
 	}
 	var needed uint32
-	result, _, _ := procGetFileSecurity.Call(uintptr(unsafe.Pointer(pathPointer)), daclSecurityInformation, 0, 0, uintptr(unsafe.Pointer(&needed)))
+	result, _, callErr := procGetFileSecurity.Call(uintptr(unsafe.Pointer(pathPointer)), daclSecurityInformation, 0, 0, uintptr(unsafe.Pointer(&needed)))
 	if result != 0 || needed == 0 {
-		return nil, errors.New("query state DACL size")
+		return nil, fmt.Errorf("query state DACL size: %w", windowsCallError(callErr))
+	}
+	if callErr != nil && !errors.Is(callErr, syscall.Errno(0)) && !errors.Is(callErr, syscall.ERROR_INSUFFICIENT_BUFFER) {
+		return nil, fmt.Errorf("query state DACL size: %w", callErr)
 	}
 	descriptor := make([]byte, needed)
-	result, _, _ = procGetFileSecurity.Call(uintptr(unsafe.Pointer(pathPointer)), daclSecurityInformation, uintptr(unsafe.Pointer(&descriptor[0])), uintptr(len(descriptor)), uintptr(unsafe.Pointer(&needed)))
+	result, _, callErr = procGetFileSecurity.Call(uintptr(unsafe.Pointer(pathPointer)), daclSecurityInformation, uintptr(unsafe.Pointer(&descriptor[0])), uintptr(len(descriptor)), uintptr(unsafe.Pointer(&needed)))
 	if result == 0 {
-		return nil, errors.New("query state DACL")
+		return nil, fmt.Errorf("query state DACL: %w", windowsCallError(callErr))
 	}
 	return descriptor, nil
 }
 
 func windowsBool(procedure *syscall.LazyProc, arguments ...uintptr) error {
-	result, _, _ := procedure.Call(arguments...)
+	result, _, callErr := procedure.Call(arguments...)
 	if result == 0 {
-		return errors.New("Windows API call failed")
+		return windowsCallError(callErr)
 	}
 	return nil
+}
+
+func windowsCallError(callErr error) error {
+	if callErr != nil && !errors.Is(callErr, syscall.Errno(0)) {
+		return callErr
+	}
+	return errors.New("Windows API call failed")
 }
 
 func syncDirectory(string) error {
