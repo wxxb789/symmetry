@@ -139,6 +139,7 @@ type InputCommandIntent struct {
 	PayloadDigest            string `json:"payload_digest"`
 	RunningTransitionID      string `json:"running_transition_id"`
 	AckID                    string `json:"ack_id"`
+	EventSequenceBarrier     int64  `json:"event_sequence_barrier"`
 	Outcome                  string `json:"outcome,omitempty"`
 	AcknowledgementDelivered bool   `json:"acknowledgement_delivered,omitempty"`
 }
@@ -688,6 +689,7 @@ func (store *Store) PrepareProvideInput(key RunKey, intent InputCommandIntent) (
 			return errors.New("journal is not waiting for input")
 		}
 		copy := intent
+		copy.EventSequenceBarrier = journal.LastEventSequence
 		journal.InputCommandIntent = &copy
 		created = true
 		return nil
@@ -1049,7 +1051,7 @@ func queueCommandAcknowledgement(journal *RunJournal, acknowledgement protocol.C
 }
 
 func validInputCommandIntent(intent InputCommandIntent) bool {
-	return validRequiredString(intent.CommandID, 4096) && len(intent.PayloadDigest) == sha256.Size*2 && validHex(intent.PayloadDigest) && validRequiredString(intent.RunningTransitionID, 4096) && validRequiredString(intent.AckID, 4096) && validInputCommandOutcome(intent.Outcome) && (!intent.AcknowledgementDelivered || intent.Outcome != "")
+	return validRequiredString(intent.CommandID, 4096) && len(intent.PayloadDigest) == sha256.Size*2 && validHex(intent.PayloadDigest) && validRequiredString(intent.RunningTransitionID, 4096) && validRequiredString(intent.AckID, 4096) && intent.EventSequenceBarrier >= 0 && validInputCommandOutcome(intent.Outcome) && (!intent.AcknowledgementDelivered || intent.Outcome != "")
 }
 
 func validInputCommandOutcome(outcome string) bool {
@@ -1368,7 +1370,7 @@ func validateJournal(journal RunJournal) error {
 		commandIDs[acknowledgement.CommandID] = struct{}{}
 	}
 	if intent := journal.InputCommandIntent; intent != nil {
-		if !validInputCommandIntent(*intent) {
+		if !validInputCommandIntent(*intent) || intent.EventSequenceBarrier > journal.LastEventSequence {
 			return errors.New("run journal input command intent is invalid")
 		}
 		pending := false

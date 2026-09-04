@@ -1644,22 +1644,23 @@ func TestFlushInputTransitionStillPrecedesAcknowledgement(t *testing.T) {
 func TestFlushAppliedInputAcknowledgementPrecedesLaterNonTerminalTransition(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
-	if _, err := store.SetLocalState(key, "waiting_for_input"); err != nil {
-		t.Fatal(err)
-	}
+	now := time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC)
 	process := &recordingProcess{}
-	api := &orderingControl{}
+	api := &orderingControl{recordEvents: true}
 	daemon := &daemon{
 		store:   store,
 		control: api,
 		options: options{newID: ids()},
 		running: map[state.RunKey]*runningRun{key: {process: process}},
 	}
+	if err := daemon.queueEvent(key, "progress", json.RawMessage(`{}`), now); err != nil {
+		t.Fatal(err)
+	}
 	command := protocol.Command{CommandID: "input-1", RunID: key.RunID, Generation: key.Generation, Kind: "provide_input", Payload: json.RawMessage(`{"answer":"yes"}`)}
 	if !daemon.handleCommand(context.Background(), command) {
 		t.Fatal("provide_input was not completed")
 	}
-	if err := daemon.queueWaitingForInput(key, json.RawMessage(`{"type":"waiting_for_input","question":"next"}`), time.Now().UTC()); err != nil {
+	if err := daemon.queueWaitingForInput(key, json.RawMessage(`{"type":"waiting_for_input","question":"next"}`), now.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	journal, err := store.LoadJournal(key)
@@ -1669,53 +1670,70 @@ func TestFlushAppliedInputAcknowledgementPrecedesLaterNonTerminalTransition(t *t
 	if err := daemon.flushRun(context.Background(), journal); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := api.calls, []string{"transition:running", "ack:input-1", "transition:waiting_for_input"}; !sameStrings(got, want) {
+	if journal.InputCommandIntent == nil || journal.InputCommandIntent.EventSequenceBarrier != 1 {
+		t.Fatalf("input event barrier = %#v", journal.InputCommandIntent)
+	}
+	if got, want := api.calls, []string{"event:progress", "transition:running", "ack:input-1", "event:waiting_for_input", "transition:waiting_for_input"}; !sameStrings(got, want) {
 		t.Fatalf("calls = %#v, want %#v", got, want)
 	}
 }
 
 func TestFlushRetriesAppliedInputAcknowledgementBeforeLaterNonTerminalTransition(t *testing.T) {
-	store, key := claimedStore(t)
-	defer store.Close()
-	if _, err := store.SetLocalState(key, "waiting_for_input"); err != nil {
-		t.Fatal(err)
-	}
+	directory := t.TempDir()
+	store, key := claimedStoreAt(t, directory)
+	now := time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC)
 	process := &recordingProcess{}
-	api := &orderingControl{failAcknowledgementOnce: true}
-	daemon := &daemon{
+	api := &orderingControl{recordEvents: true, failAcknowledgementOnce: true}
+	app := &daemon{
 		store:   store,
 		control: api,
 		options: options{newID: ids()},
 		running: map[state.RunKey]*runningRun{key: {process: process}},
 	}
+	if err := app.queueEvent(key, "progress", json.RawMessage(`{}`), now); err != nil {
+		t.Fatal(err)
+	}
 	command := protocol.Command{CommandID: "input-1", RunID: key.RunID, Generation: key.Generation, Kind: "provide_input", Payload: json.RawMessage(`{"answer":"yes"}`)}
-	if !daemon.handleCommand(context.Background(), command) {
+	if !app.handleCommand(context.Background(), command) {
 		t.Fatal("provide_input was not completed")
 	}
-	if err := daemon.queueWaitingForInput(key, json.RawMessage(`{"type":"waiting_for_input","question":"next"}`), time.Now().UTC()); err != nil {
+	if err := app.queueWaitingForInput(key, json.RawMessage(`{"type":"waiting_for_input","question":"next"}`), now.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	journal, err := store.LoadJournal(key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := daemon.flushRun(context.Background(), journal); err == nil {
+	if err := app.flushRun(context.Background(), journal); err == nil {
 		t.Fatal("flushRun() succeeded despite acknowledgement failure")
 	}
-	if got, want := api.calls, []string{"transition:running", "ack:input-1"}; !sameStrings(got, want) {
+	if got, want := api.calls, []string{"event:progress", "transition:running", "ack:input-1"}; !sameStrings(got, want) {
 		t.Fatalf("first flush calls = %#v, want %#v", got, want)
 	}
 	journal, err = store.LoadJournal(key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].State != "waiting_for_input" || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].CommandID != command.CommandID {
+	if journal.InputCommandIntent == nil || journal.InputCommandIntent.EventSequenceBarrier != 1 || len(journal.PendingEvents) != 1 || journal.PendingEvents[0].Kind != "waiting_for_input" || len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].State != "waiting_for_input" || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].CommandID != command.CommandID {
 		t.Fatalf("journal after failed acknowledgement = %#v", journal)
 	}
-	if err := daemon.flushRun(context.Background(), journal); err != nil {
+	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := api.calls, []string{"transition:running", "ack:input-1", "ack:input-1", "transition:waiting_for_input"}; !sameStrings(got, want) {
+	restarted, err := state.New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	journal, err = restarted.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumed := &daemon{store: restarted, control: api, options: options{newID: ids()}}
+	if err := resumed.flushRun(context.Background(), journal); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := api.calls, []string{"event:progress", "transition:running", "ack:input-1", "ack:input-1", "event:waiting_for_input", "transition:waiting_for_input"}; !sameStrings(got, want) {
 		t.Fatalf("retry flush calls = %#v, want %#v", got, want)
 	}
 }
@@ -4165,6 +4183,62 @@ func TestTerminalOutboxBackoffSuppressesPermanentFailuresAndResets(t *testing.T)
 	})
 }
 
+func TestTerminalOutboxRetryDelayUsesMinimumCadence(t *testing.T) {
+	tests := []struct {
+		name   string
+		newErr func(*testing.T) error
+	}{
+		{
+			name: "subsecond retry after",
+			newErr: func(*testing.T) error {
+				return &control.APIError{StatusCode: http.StatusTooManyRequests, Code: control.RateLimited, RetryAfter: time.Nanosecond}
+			},
+		},
+		{
+			name: "explicit zero retry after",
+			newErr: func(t *testing.T) error {
+				t.Helper()
+				server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+					writer.Header().Set("Retry-After", "0")
+					writer.WriteHeader(http.StatusTooManyRequests)
+					_, _ = writer.Write([]byte(`{"error":{"code":"rate_limited","message":"retry"}}`))
+				}))
+				t.Cleanup(server.Close)
+				client, err := control.NewClient(server.URL+"/api", "machine-token", server.Client())
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = client.Dispatch(context.Background(), "runtime-1", 1)
+				return err
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store, key := claimedStore(t)
+			defer store.Close()
+			now := time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC)
+			journal, err := store.QueueTerminalTransitionAt(key, protocol.StateTransitionRequest{TransitionID: "completed-1", State: "completed", Payload: json.RawMessage(`{}`)}, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			loop := &daemon{store: store, options: options{clock: func() time.Time { return now }}, outboxRetry: make(map[state.RunKey]outboxRetry)}
+			loop.recordOutboxFailure(context.Background(), journal, test.newErr(t))
+			entry := loop.outboxRetry[key]
+			if entry.permanent || !entry.retryAt.Equal(now.Add(minimumInterval)) {
+				t.Fatalf("terminal retry = %#v", entry)
+			}
+			if loop.outboxDue(journal) {
+				t.Fatal("terminal outbox was due before the minimum retry interval")
+			}
+			now = now.Add(minimumInterval)
+			if !loop.outboxDue(journal) {
+				t.Fatal("terminal outbox was not due at the minimum retry interval")
+			}
+		})
+	}
+}
+
 func TestOrdinaryOutboxFailuresRemainCadenceDriven(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
@@ -5320,6 +5394,7 @@ func (client *deadlineRecordingControl) AcknowledgeCommand(ctx context.Context, 
 type orderingControl struct {
 	fakeControl
 	calls                   []string
+	recordEvents            bool
 	terminal                bool
 	failCancelledOnce       bool
 	failAcknowledgementOnce bool
@@ -5749,6 +5824,15 @@ func (client *orderingControl) Transition(_ context.Context, _ string, request p
 		client.terminal = true
 	}
 	return nil
+}
+
+func (client *orderingControl) AppendEvents(ctx context.Context, runID string, request protocol.AppendEventsRequest) error {
+	if client.recordEvents {
+		for _, event := range request.Events {
+			client.calls = append(client.calls, "event:"+event.Kind)
+		}
+	}
+	return client.fakeControl.AppendEvents(ctx, runID, request)
 }
 
 func (client *orderingControl) AcknowledgeCommand(_ context.Context, commandID string, _ protocol.CommandAcknowledgement) error {

@@ -2511,6 +2511,9 @@ func (daemon *daemon) recordOutboxFailure(ctx context.Context, journal state.Run
 		daemon.outboxRetry[key] = outboxRetry{fingerprint: fingerprint, delay: fallback, permanent: true}
 		return
 	}
+	if journal.LocalState == "terminal_pending" && delay < minimumInterval {
+		delay = minimumInterval
+	}
 	now := daemon.now()
 	retryAt := now.Add(delay)
 	if journal.TerminalVerdict == "" && !journal.LeaseExpiresAt.IsZero() {
@@ -2698,31 +2701,10 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) (e
 		}
 		journal = updated
 	}
-	if len(journal.PendingEvents) > 0 {
-		wasTerminal := journal.LocalState == "terminal_pending"
-		requestContext, cancel := daemon.controlContext(ctx)
-		err := daemon.control.AppendEvents(requestContext, journal.RunID, protocol.AppendEventsRequest{Fence: journal.Fence(), Events: journal.PendingEvents})
-		cancel()
-		if err != nil {
-			current, loadErr := daemon.store.LoadJournal(key)
-			if loadErr != nil {
-				return loadErr
-			}
-			journal = current
-			if !wasTerminal && journal.LocalState == "terminal_pending" {
-				return errOutboxChanged
-			}
-			return daemon.handleOrdinaryDeliveryError(journal, err, "event ownership lost")
-		}
-		ids := make([]string, len(journal.PendingEvents))
-		for index, event := range journal.PendingEvents {
-			ids[index] = event.EventID
-		}
-		updated, err := daemon.store.MarkEventsDelivered(key, ids)
-		if err != nil {
-			return err
-		}
-		journal = updated
+	updated, err := daemon.deliverEventsBeforeAppliedInputAcknowledgement(ctx, journal)
+	journal = updated
+	if err != nil {
+		return err
 	}
 	for len(journal.PendingTransitions) > 0 {
 		nextTransition := journal.PendingTransitions[0]
@@ -2733,6 +2715,11 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) (e
 				return err
 			}
 			if delivered {
+				updated, err := daemon.deliverPendingEvents(ctx, journal)
+				journal = updated
+				if err != nil {
+					return err
+				}
 				continue
 			}
 		}
@@ -2776,6 +2763,18 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) (e
 		}
 		journal = updated
 	}
+	updated, delivered, err := daemon.deliverAppliedInputAcknowledgement(ctx, journal)
+	journal = updated
+	if err != nil {
+		return err
+	}
+	if delivered {
+		updated, err := daemon.deliverPendingEvents(ctx, journal)
+		journal = updated
+		if err != nil {
+			return err
+		}
+	}
 	for len(journal.PendingCommandAcknowledgements) > 0 {
 		acknowledgement := journal.PendingCommandAcknowledgements[0]
 		updated, err := daemon.deliverAcknowledgement(ctx, journal, acknowledgement)
@@ -2792,6 +2791,55 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) (e
 		return daemon.scheduleCleanup(ctx, updated)
 	}
 	return nil
+}
+
+func (daemon *daemon) deliverEventsBeforeAppliedInputAcknowledgement(ctx context.Context, journal state.RunJournal) (state.RunJournal, error) {
+	intent := journal.InputCommandIntent
+	if intent == nil || intent.Outcome != "applied" || intent.AcknowledgementDelivered {
+		return daemon.deliverPendingEvents(ctx, journal)
+	}
+	events := make([]protocol.RunEvent, 0, len(journal.PendingEvents))
+	for _, event := range journal.PendingEvents {
+		if event.Sequence <= intent.EventSequenceBarrier {
+			events = append(events, event)
+		}
+	}
+	return daemon.deliverEvents(ctx, journal, events)
+}
+
+func (daemon *daemon) deliverPendingEvents(ctx context.Context, journal state.RunJournal) (state.RunJournal, error) {
+	return daemon.deliverEvents(ctx, journal, journal.PendingEvents)
+}
+
+func (daemon *daemon) deliverEvents(ctx context.Context, journal state.RunJournal, events []protocol.RunEvent) (state.RunJournal, error) {
+	if len(events) == 0 {
+		return journal, nil
+	}
+	key := journal.Key()
+	wasTerminal := journal.LocalState == "terminal_pending"
+	requestContext, cancel := daemon.controlContext(ctx)
+	err := daemon.control.AppendEvents(requestContext, journal.RunID, protocol.AppendEventsRequest{Fence: journal.Fence(), Events: events})
+	cancel()
+	if err != nil {
+		current, loadErr := daemon.store.LoadJournal(key)
+		if loadErr != nil {
+			return journal, loadErr
+		}
+		journal = current
+		if !wasTerminal && journal.LocalState == "terminal_pending" {
+			return journal, errOutboxChanged
+		}
+		return journal, daemon.handleOrdinaryDeliveryError(journal, err, "event ownership lost")
+	}
+	ids := make([]string, len(events))
+	for index, event := range events {
+		ids[index] = event.EventID
+	}
+	updated, err := daemon.store.MarkEventsDelivered(key, ids)
+	if err != nil {
+		return journal, err
+	}
+	return updated, nil
 }
 
 func (daemon *daemon) deliverAppliedInputAcknowledgement(ctx context.Context, journal state.RunJournal) (state.RunJournal, bool, error) {

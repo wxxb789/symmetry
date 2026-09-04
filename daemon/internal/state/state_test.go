@@ -393,6 +393,52 @@ func TestProvideInputIntentIsAtomicAcrossCompletionDeliveryAndEpisodes(t *testin
 	}
 }
 
+func TestPrepareProvideInputCapturesEventSequenceBarrierAndValidatesIt(t *testing.T) {
+	directory := t.TempDir()
+	store, err := New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal := testJournal("run-input-barrier", 1)
+	journal.LocalState = "waiting_for_input"
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.QueueEvent(journal.Key(), protocol.RunEvent{EventID: "event-2", Sequence: 2, Kind: "progress", OccurredAt: time.Date(2026, 9, 3, 1, 2, 5, 0, time.UTC), Payload: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	prepared, created, err := store.PrepareProvideInput(journal.Key(), InputCommandIntent{
+		CommandID:            "command-1",
+		PayloadDigest:        strings.Repeat("e", sha256.Size*2),
+		RunningTransitionID:  "running-1",
+		AckID:                "ack-1",
+		EventSequenceBarrier: 99,
+	})
+	if err != nil || !created || prepared.InputCommandIntent == nil || prepared.InputCommandIntent.EventSequenceBarrier != 2 {
+		t.Fatalf("PrepareProvideInput() = %#v, %t, %v", prepared, created, err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	loaded, err := restarted.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.InputCommandIntent == nil || loaded.InputCommandIntent.EventSequenceBarrier != 2 {
+		t.Fatalf("input barrier after restart = %#v", loaded.InputCommandIntent)
+	}
+	invalid := loaded
+	invalid.InputCommandIntent.EventSequenceBarrier = loaded.LastEventSequence + 1
+	if err := restarted.SaveJournal(invalid); err == nil {
+		t.Fatal("SaveJournal() accepted an input barrier after the last event")
+	}
+}
+
 func TestTerminalTransitionSettlesUnresolvedInputBeforeCleanup(t *testing.T) {
 	store := mustStore(t)
 	journal := testJournal("run-input-terminal", 1)
