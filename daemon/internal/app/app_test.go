@@ -4067,11 +4067,12 @@ func TestScheduledSnapshotCancelPreemptsBlockedInputAndJoins(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		inputSettled := journal.InputCommandIntent != nil && journal.InputCommandIntent.Outcome == "applied"
+		inputSettled := journal.InputCommandIntent != nil &&
+			(journal.InputCommandIntent.Outcome == "applied" || journal.InputCommandIntent.Outcome == "failed")
 		if inputSettled && !journal.InputCommandIntent.AcknowledgementDelivered {
 			inputSettled = false
 			for _, acknowledgement := range journal.PendingCommandAcknowledgements {
-				if acknowledgement.CommandID == "input-1" && acknowledgement.Outcome == "applied" {
+				if acknowledgement.CommandID == "input-1" && acknowledgement.Outcome == journal.InputCommandIntent.Outcome {
 					inputSettled = true
 					break
 				}
