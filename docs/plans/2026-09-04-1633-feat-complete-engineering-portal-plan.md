@@ -2,7 +2,7 @@
 title: Complete Engineering Workspace Portal - Plan
 type: feat
 date: 2026-09-04
-origin: docs/goals/02-goal.md
+origin: docs/goals/archive/02-goal.md
 artifact_contract: ce-unified-plan/v1
 artifact_readiness: implementation-ready
 product_contract_source: ce-plan-bootstrap
@@ -15,7 +15,7 @@ execution: code
 
 - **Objective:** Turn the existing Goal 2 portal skeleton into a complete daily engineering workspace whose individual features finish their intended jobs, not merely render or return successful HTTP responses.
 - **Means:** Complete the project, resource, work-item, Kanban, execution, activity, delivery, health, and progressive-disclosure flows on the existing Phoenix/EEx/JavaScript surface and durable Goal 1 orchestration model.
-- **Authority:** `docs/goals/02-goal.md` defines the product outcome; `docs/protocol-v1.md` and Goal 1 orchestration behavior define the execution boundary.
+- **Authority:** `docs/goals/archive/02-goal.md` defines the product outcome; `docs/protocol-v1.md` and Goal 1 orchestration behavior define the execution boundary.
 - **Execution profile:** Implement feature slices test-first where behavior changes, then verify every acceptance flow through context/API tests and a real browser; run a live daemon workflow for execution-specific proof.
 - **Stop conditions:** Every in-scope acceptance example passes, no visible control is a placeholder, the full control and daemon gates pass, production assets are present, and the Compose topology either passes live validation or has a concrete external environment blocker recorded.
 - **Tail ownership:** Keep the completed work in the current working tree. Commit, push, and PR creation require separate user authorization.

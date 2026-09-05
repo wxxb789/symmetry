@@ -16,7 +16,7 @@ execution: code
 - **Objective:** Close the 15 validated Goal 01 review findings and the session-directed REST and command contract corrections without expanding into unproven residual risks.
 - **Outcome:** The orchestration protocol, daemon liveness model, operator read surfaces, deployment boundary, and cross-language contracts are internally consistent and covered by deterministic tests.
 - **Execution:** Code changes on `main`, with one verified commit for each meaningful work unit and no pull request.
-- **Product authority:** `docs/goals/01-goal.md` defines the Goal 01 outcome; the session-settled decisions in this artifact govern this remediation when they narrow or clarify that goal.
+- **Product authority:** `docs/goals/archive/01-goal.md` defines the Goal 01 outcome; the session-settled decisions in this artifact govern this remediation when they narrow or clarify that goal.
 - **Compatibility boundary:** Breaking protocol changes are allowed before `1.0.0`; compatibility becomes a release constraint at `1.0.0`.
 - **Open blockers:** None. All product and contract decisions required for planning are resolved.
 - **Stop condition:** All requirements below pass focused and full release validation, and a follow-up review reports no remaining actionable finding in this scope.
@@ -125,7 +125,7 @@ Goal 01 has a working durable control plane and execution daemon, but a second f
 
 ### Sources
 
-- `docs/goals/01-goal.md`
+- `docs/goals/archive/01-goal.md`
 - `docs/protocol-v1.md`
 - `docs/goal-01-runbook.md`
 - `control/lib/symmetry_control/orchestration.ex`
