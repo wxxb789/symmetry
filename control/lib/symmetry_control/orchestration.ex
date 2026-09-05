@@ -265,7 +265,9 @@ defmodule SymmetryControl.Orchestration do
                   idempotency_key: idempotency_key,
                   request_hash: request_hash,
                   state: "queued",
-                  current_generation: 0
+                  current_generation: 0,
+                  attempt_generation: 1,
+                  waiting_transition_id: nil
                 })
               )
 
@@ -478,7 +480,7 @@ defmodule SymmetryControl.Orchestration do
         run =
           Repo.one(
             from run in Run,
-              where: run.task_id == ^task.id and run.generation == ^task.current_generation
+              where: run.task_id == ^task.id and run.generation == ^task.attempt_generation
           )
 
         %{
@@ -635,6 +637,9 @@ defmodule SymmetryControl.Orchestration do
       connection_epoch: runtime.connection_epoch,
       capacity: runtime.capacity,
       reserved_capacity: 0,
+      agent_profile: runtime.agent_profile,
+      workspace: runtime.workspace,
+      capabilities: runtime.capabilities,
       active_runs: []
     }
     |> add_active_run(run)
@@ -662,15 +667,13 @@ defmodule SymmetryControl.Orchestration do
     do: %{snapshot | active_runs: Enum.reverse(snapshot.active_runs)}
 
   defp current_waiting_context(
-         %Task{state: "waiting_for_input", current_generation: generation},
+         %Task{state: "waiting_for_input", current_generation: generation} = task,
          %Run{state: "waiting_for_input", generation: generation} = run
        ) do
-    case Repo.one(
-           from transition in RunTransition,
-             where: transition.run_id == ^run.id and transition.state == "waiting_for_input",
-             order_by: [desc: transition.inserted_at, desc: transition.id],
-             limit: 1,
-             select: transition
+    case Repo.get_by(RunTransition,
+           run_id: run.id,
+           transition_id: task.waiting_transition_id,
+           state: "waiting_for_input"
          ) do
       nil ->
         nil
@@ -953,11 +956,15 @@ defmodule SymmetryControl.Orchestration do
     Repo.transaction(fn ->
       {task, runtime} = next_assignable_task_and_runtime(current) || rollback(:no_assignment)
 
-      generation = task.current_generation + 1
+      generation = task.attempt_generation
 
       task =
         task
-        |> Task.changeset(%{state: "assigned", current_generation: generation})
+        |> Task.changeset(%{
+          state: "assigned",
+          current_generation: generation,
+          waiting_transition_id: nil
+        })
         |> stamp_update(current)
         |> Repo.update!()
 
@@ -1239,7 +1246,8 @@ defmodule SymmetryControl.Orchestration do
           normalized_payload,
           idempotency_key,
           command_hash,
-          current
+          current,
+          opts
         )
       end)
       |> case do
@@ -1282,7 +1290,8 @@ defmodule SymmetryControl.Orchestration do
             %{},
             idempotency_key,
             command_hash,
-            current
+            current,
+            opts
           )
 
         task = lock_task(task.id)
@@ -1307,13 +1316,91 @@ defmodule SymmetryControl.Orchestration do
 
   def provide_input(_, _, _, _), do: {:error, :invalid_request}
 
+  @spec retry_task(Ecto.UUID.t(), map(), String.t(), keyword()) ::
+          {:ok, Task.t(), Command.t(), :created | :replayed} | {:error, atom()}
+  def retry_task(task_id, attrs, idempotency_key, opts \\ [])
+
+  def retry_task(task_id, attrs, idempotency_key, opts)
+      when is_binary(task_id) and is_map(attrs) and is_binary(idempotency_key) and
+             byte_size(idempotency_key) > 0 do
+    task_attrs = %{
+      goal: value(attrs, :goal),
+      agent_profile: value(attrs, :agent_profile),
+      workspace: value(attrs, :workspace),
+      input: value(attrs, :input)
+    }
+
+    if not (valid_uuid?(task_id) and valid_task_attrs?(task_attrs)) do
+      {:error, :invalid_request}
+    else
+      payload = %{work: task_attrs}
+      command_hash = request_hash(%{kind: "retry", payload: payload})
+      current = now(opts)
+
+      Repo.transaction(fn ->
+        task = lock_task(task_id)
+
+        case lock_task_command(task.id, idempotency_key) do
+          %Command{request_hash: ^command_hash} = command ->
+            {task, command, :replayed}
+
+          %Command{} ->
+            rollback(:idempotency_conflict)
+
+          nil ->
+            ensure_expected_generation!(task, Keyword.get(opts, :expected_generation))
+            if task.state not in ["failed", "cancelled"], do: rollback(:state_conflict)
+
+            run = if task.current_generation > 0, do: lock_current_run(task), else: nil
+
+            command =
+              insert_command!(
+                task.id,
+                run && run.id,
+                run && run.generation,
+                "retry",
+                payload,
+                idempotency_key,
+                command_hash,
+                state: "applied",
+                applied_at: current,
+                now: current
+              )
+
+            task =
+              task
+              |> Task.changeset(
+                Map.merge(task_attrs, %{
+                  state: "queued",
+                  attempt_generation: task.attempt_generation + 1,
+                  waiting_transition_id: nil,
+                  result: nil,
+                  failure: nil
+                })
+              )
+              |> stamp_update(current)
+              |> Repo.update!()
+
+            {task, command, :created}
+        end
+      end)
+      |> case do
+        {:ok, {task, command, disposition}} -> {:ok, task, command, disposition}
+        error -> error
+      end
+    end
+  end
+
+  def retry_task(_, _, _, _), do: {:error, :invalid_request}
+
   defp create_or_replay_locked_command!(
          task,
          kind,
          payload,
          idempotency_key,
          command_hash,
-         current
+         current,
+         opts
        ) do
     case lock_task_command(task.id, idempotency_key) do
       %Command{request_hash: ^command_hash} = command ->
@@ -1323,11 +1410,13 @@ defmodule SymmetryControl.Orchestration do
         rollback(:idempotency_conflict)
 
       nil ->
-        create_new_command!(task, kind, payload, idempotency_key, command_hash, current)
+        create_new_command!(task, kind, payload, idempotency_key, command_hash, current, opts)
     end
   end
 
-  defp create_new_command!(task, "cancel", payload, idempotency_key, command_hash, current) do
+  defp create_new_command!(task, "cancel", payload, idempotency_key, command_hash, current, opts) do
+    ensure_expected_generation!(task, Keyword.get(opts, :expected_generation))
+
     case task.state do
       "queued" ->
         command =
@@ -1338,7 +1427,7 @@ defmodule SymmetryControl.Orchestration do
           )
 
         task
-        |> Task.changeset(%{state: "cancelled"})
+        |> Task.changeset(%{state: "cancelled", waiting_transition_id: nil})
         |> stamp_update(current)
         |> Repo.update!()
 
@@ -1367,7 +1456,7 @@ defmodule SymmetryControl.Orchestration do
         |> Repo.update!()
 
         task
-        |> Task.changeset(%{state: "cancelled"})
+        |> Task.changeset(%{state: "cancelled", waiting_transition_id: nil})
         |> stamp_update(current)
         |> Repo.update!()
 
@@ -1395,7 +1484,7 @@ defmodule SymmetryControl.Orchestration do
         |> Repo.update!()
 
         task
-        |> Task.changeset(%{state: "cancelling"})
+        |> Task.changeset(%{state: "cancelling", waiting_transition_id: nil})
         |> stamp_update(current)
         |> Repo.update!()
 
@@ -1406,7 +1495,15 @@ defmodule SymmetryControl.Orchestration do
     end
   end
 
-  defp create_new_command!(task, "provide_input", payload, idempotency_key, command_hash, current) do
+  defp create_new_command!(
+         task,
+         "provide_input",
+         payload,
+         idempotency_key,
+         command_hash,
+         current,
+         opts
+       ) do
     if task.state != "waiting_for_input" do
       rollback(:state_conflict)
     end
@@ -1414,6 +1511,8 @@ defmodule SymmetryControl.Orchestration do
     run = lock_current_run(task)
 
     if run.state != "waiting_for_input", do: rollback(:state_conflict)
+
+    ensure_expected_waiting!(task, run, Keyword.get(opts, :expected_waiting_transition_id))
 
     case Repo.one(
            from command in Command,
@@ -1672,8 +1771,19 @@ defmodule SymmetryControl.Orchestration do
            if task.current_generation == run.generation do
              task_state = if terminal_state == "cancelled", do: "cancelled", else: "queued"
 
+             task_attrs =
+               if task_state == "queued" do
+                 %{
+                   state: task_state,
+                   attempt_generation: task.current_generation + 1,
+                   waiting_transition_id: nil
+                 }
+               else
+                 %{state: task_state, waiting_transition_id: nil}
+               end
+
              task
-             |> Task.changeset(%{state: task_state})
+             |> Task.changeset(task_attrs)
              |> stamp_update(current)
              |> Repo.update!()
            end
@@ -1736,8 +1846,12 @@ defmodule SymmetryControl.Orchestration do
         _ -> %{state: target_state}
       end
 
+    task_attrs =
+      target_state
+      |> task_attrs_for_transition(payload, transition_id)
+      |> restore_expired_attempt_generation(run)
+
     run = run |> Run.changeset(run_attrs) |> stamp_update(current) |> Repo.update!()
-    task_attrs = task_attrs_for_transition(target_state, payload)
     task |> Task.changeset(task_attrs) |> stamp_update(current) |> Repo.update!()
 
     %RunTransition{}
@@ -1754,9 +1868,25 @@ defmodule SymmetryControl.Orchestration do
     run
   end
 
-  defp task_attrs_for_transition("completed", payload), do: %{state: "completed", result: payload}
-  defp task_attrs_for_transition("failed", payload), do: %{state: "failed", failure: payload}
-  defp task_attrs_for_transition(target_state, _payload), do: %{state: target_state}
+  defp task_attrs_for_transition("completed", payload, _transition_id),
+    do: %{state: "completed", waiting_transition_id: nil, result: payload, failure: nil}
+
+  defp task_attrs_for_transition("failed", payload, _transition_id),
+    do: %{state: "failed", waiting_transition_id: nil, result: nil, failure: payload}
+
+  defp task_attrs_for_transition("waiting_for_input", _payload, transition_id),
+    do: %{state: "waiting_for_input", waiting_transition_id: transition_id}
+
+  defp task_attrs_for_transition(target_state, _payload, _transition_id),
+    do: %{state: target_state, waiting_transition_id: nil}
+
+  defp restore_expired_attempt_generation(task_attrs, %Run{
+         state: "expired",
+         generation: generation
+       }),
+       do: Map.put(task_attrs, :attempt_generation, generation)
+
+  defp restore_expired_attempt_generation(task_attrs, _run), do: task_attrs
 
   defp ensure_expired_run_can_settle_task!(%Task{state: "queued"}, %Run{state: "expired"}),
     do: :ok
@@ -2054,6 +2184,25 @@ defmodule SymmetryControl.Orchestration do
     kind in ["cancel", "provide_input"] and jsonb_compatible?(payload) and
       (kind != "cancel" or payload == %{})
   end
+
+  defp ensure_expected_generation!(_task, nil), do: :ok
+
+  defp ensure_expected_generation!(task, expected_generation)
+       when is_integer(expected_generation) do
+    if task.attempt_generation != expected_generation, do: rollback(:state_conflict)
+  end
+
+  defp ensure_expected_generation!(_task, _expected_generation), do: rollback(:invalid_request)
+
+  defp ensure_expected_waiting!(_task, _run, nil), do: :ok
+
+  defp ensure_expected_waiting!(task, _run, expected_transition_id)
+       when is_binary(expected_transition_id) do
+    if task.waiting_transition_id != expected_transition_id, do: rollback(:state_conflict)
+  end
+
+  defp ensure_expected_waiting!(_task, _run, _expected_transition_id),
+    do: rollback(:invalid_request)
 
   defp normalize_command_payload("cancel", _payload), do: %{}
   defp normalize_command_payload("provide_input", payload), do: payload

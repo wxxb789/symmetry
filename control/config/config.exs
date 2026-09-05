@@ -18,12 +18,14 @@ config :symmetry_control,
     lease_duration_ms: 120_000,
     assignment_duration_ms: 30_000,
     reaper_interval_ms: 5_000,
+    portal_session_max_age_seconds: 28_800,
     reaper_enabled: true,
     scheduler_enabled: true
   ]
 
-config :symmetry_control, SymmetryControl.Repo,
-  migration_lock: :pg_advisory_lock
+config :symmetry_control, :portal_session_secure, false
+
+config :symmetry_control, SymmetryControl.Repo, migration_lock: :pg_advisory_lock
 
 # Configure the endpoint
 config :symmetry_control, SymmetryControlWeb.Endpoint,

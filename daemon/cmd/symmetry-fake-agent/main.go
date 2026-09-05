@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +28,8 @@ type event struct {
 	Question string `json:"question,omitempty"`
 	PID      int    `json:"pid,omitempty"`
 }
+
+const semanticSchemaVersion = 1
 
 func main() {
 	if len(os.Args) == 2 && os.Args[1] == "--child" {
@@ -51,7 +54,7 @@ func run(input io.Reader, output io.Writer, errorOutput io.Writer) error {
 		return fmt.Errorf("decode initial input: %w", err)
 	}
 
-	mode, err := selectMode(envelope.Input, os.Getenv(modeEnvironment))
+	mode, err := selectMode(envelope.Goal, envelope.Input, os.Getenv(modeEnvironment))
 	if err != nil {
 		return err
 	}
@@ -59,8 +62,16 @@ func run(input io.Reader, output io.Writer, errorOutput io.Writer) error {
 	switch mode {
 	case "success":
 		return runSuccess(output)
+	case "evidence_success":
+		return runEvidenceSuccess(output)
+	case "history_success":
+		return runHistorySuccess(output)
+	case "fail_once_then_evidence_success":
+		return runFailOnceThenEvidenceSuccess(envelope.Input, output, errorOutput)
 	case "inspect_input":
 		return runInspectInput(envelope.Input, output)
+	case "json_values":
+		return runJSONValues(output)
 	case "fail":
 		fmt.Fprintln(errorOutput, "fake agent failure")
 		return errors.New("fake agent failed")
@@ -84,6 +95,72 @@ func runSuccess(output io.Writer) error {
 		return err
 	}
 	return writeProgress(output, "completed")
+}
+
+func runJSONValues(output io.Writer) error {
+	for _, value := range []string{"42", `["progress"]`, "9007199254740993"} {
+		if _, err := fmt.Fprintln(output, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func runEvidenceSuccess(output io.Writer) error {
+	records := []map[string]any{
+		{"type": "progress", "schema_version": semanticSchemaVersion, "message": "started"},
+		{"type": "finding", "schema_version": semanticSchemaVersion, "message": "Verified the requested change", "severity": "info"},
+		{"type": "artifact", "schema_version": semanticSchemaVersion, "path": "README.md", "kind": "file"},
+		{"type": "test", "schema_version": semanticSchemaVersion, "name": "fake-agent verification", "status": "passed"},
+		{"type": "pull_request", "schema_version": semanticSchemaVersion, "url": "https://example.invalid/pull/42", "state": "open"},
+		{"type": "ci", "schema_version": semanticSchemaVersion, "status": "passed"},
+		{"type": "review", "schema_version": semanticSchemaVersion, "status": "required"},
+		{"type": "summary", "schema_version": semanticSchemaVersion, "summary": "Completed the requested engineering work"},
+		{"type": "progress", "schema_version": semanticSchemaVersion, "message": "completed"},
+	}
+
+	for _, record := range records {
+		if err := writeRecord(output, record); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func runHistorySuccess(output io.Writer) error {
+	for number := 1; number <= 110; number++ {
+		if err := writeRecord(output, map[string]any{
+			"type":    "debug",
+			"message": fmt.Sprintf("debug-%03d", number),
+		}); err != nil {
+			return err
+		}
+	}
+	return runEvidenceSuccess(output)
+}
+
+func runFailOnceThenEvidenceSuccess(input json.RawMessage, output, errorOutput io.Writer) error {
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal(input, &values); err != nil {
+		return fmt.Errorf("decode fail-once input: %w", err)
+	}
+	workItemID, found, err := stringField(values, "work_item_id")
+	if err != nil || !found || strings.TrimSpace(workItemID) == "" {
+		return errors.New("fail_once_then_evidence_success requires work_item_id")
+	}
+	digest := sha256.Sum256([]byte(workItemID))
+	marker := filepath.Join(".", fmt.Sprintf(".symmetry-fake-agent-%x.attempted", digest[:8]))
+	if _, err := os.Stat(marker); errors.Is(err, os.ErrNotExist) {
+		if writeErr := os.WriteFile(marker, []byte("failed\n"), 0o600); writeErr != nil {
+			return fmt.Errorf("write fail-once marker: %w", writeErr)
+		}
+		_ = writeProgress(output, "first_attempt_failed")
+		fmt.Fprintln(errorOutput, "fake agent planned first-attempt failure")
+		return errors.New("fake agent failed once")
+	} else if err != nil {
+		return fmt.Errorf("read fail-once marker: %w", err)
+	}
+	return runEvidenceSuccess(output)
 }
 
 func runInspectInput(input json.RawMessage, output io.Writer) error {
@@ -240,16 +317,34 @@ func runChild() int {
 	}
 }
 
-func selectMode(input json.RawMessage, environment string) (string, error) {
+func selectMode(goal string, input json.RawMessage, environment string) (string, error) {
 	if mode, found, err := modeFromInput(input); err != nil {
 		return "", err
 	} else if found {
+		return mode, nil
+	}
+	if mode, found := modeFromGoal(goal); found {
 		return mode, nil
 	}
 	if environment != "" {
 		return environment, nil
 	}
 	return "success", nil
+}
+
+func modeFromGoal(goal string) (string, bool) {
+	const prefix = "[symmetry-fake-agent:"
+
+	for _, line := range strings.Split(goal, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, prefix) && strings.HasSuffix(line, "]") {
+			mode := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, prefix), "]"))
+			if mode != "" {
+				return mode, true
+			}
+		}
+	}
+	return "", false
 }
 
 func modeFromInput(input json.RawMessage) (string, bool, error) {
@@ -355,6 +450,10 @@ func writeProgress(output io.Writer, message string) error {
 }
 
 func writeEvent(output io.Writer, value event) error {
+	return writeRecord(output, value)
+}
+
+func writeRecord(output io.Writer, value any) error {
 	encoded, err := json.Marshal(value)
 	if err != nil {
 		return fmt.Errorf("encode event: %w", err)

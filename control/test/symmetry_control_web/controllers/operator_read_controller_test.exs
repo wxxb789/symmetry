@@ -102,6 +102,58 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
     assert_error(bearer(conn) |> get("/api/v1/tasks/#{uuid()}"), 404, "not_found")
   end
 
+  test "task resource exposes queued attempt identity and an applied retry command", %{conn: conn} do
+    %{machine: machine} = enroll_machine()
+    runtime = register_runtime(machine)
+
+    assert {:ok, task, :created} =
+             Orchestration.submit_task(task_attrs(), "retry-read", now: @now)
+
+    assert %{"state" => "queued", "run_id" => nil, "generation" => 1} =
+             bearer(conn)
+             |> get("/api/v1/tasks/#{task.id}")
+             |> json_response(200)
+
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+
+    assert {:ok, _} = Orchestration.transition(run.id, fence, "running", %{}, uuid(), now: @now)
+
+    assert {:ok, _} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "failed",
+               %{"reason" => "retry proof"},
+               uuid(),
+               now: DateTime.add(@now, 1, :microsecond)
+             )
+
+    replacement = task_attrs(goal: "Run tests again")
+
+    assert {:ok, _retried, retry_command, :created} =
+             Orchestration.retry_task(
+               task.id,
+               replacement,
+               "retry-read-action",
+               now: DateTime.add(@now, 2, :microsecond)
+             )
+
+    assert %{
+             "state" => "queued",
+             "run_id" => nil,
+             "generation" => 2,
+             "work" => %{"goal" => "Run tests again"},
+             "latest_command" => latest_command
+           } =
+             bearer(conn)
+             |> get("/api/v1/tasks/#{task.id}")
+             |> json_response(200)
+
+    assert_command(latest_command, retry_command, "applied")
+    assert latest_command["kind"] == "retry"
+  end
+
   test "operator history collections use ascending after cursors, a default limit, and a maximum limit",
        %{
          conn: conn
@@ -129,12 +181,14 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
     assert Enum.map(first_page ++ second_page, & &1["event_id"]) ==
              event_ids
 
-    first_transition = insert_transition(first_run, "running", DateTime.add(at, 502, :microsecond))
+    first_transition =
+      insert_transition(first_run, "running", DateTime.add(at, 502, :microsecond))
 
     second_transition =
       insert_transition(second_run, "waiting_for_input", DateTime.add(at, 503, :microsecond))
 
-    third_transition = insert_transition(first_run, "running", DateTime.add(at, 504, :microsecond))
+    third_transition =
+      insert_transition(first_run, "running", DateTime.add(at, 504, :microsecond))
 
     assert %{"transitions" => first_transition_page, "next_after" => transition_after_cursor} =
              bearer(conn)
@@ -155,7 +209,9 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
              )
              |> json_response(200)
 
-    assert Enum.map(second_transition_page, & &1["transition_id"]) == [third_transition.transition_id]
+    assert Enum.map(second_transition_page, & &1["transition_id"]) == [
+             third_transition.transition_id
+           ]
 
     assert Enum.map(first_transition_page ++ second_transition_page, & &1["transition_id"]) == [
              first_transition.transition_id,
@@ -163,18 +219,31 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
              third_transition.transition_id
            ]
 
-    first_command = insert_command(task, second_run, "pending", DateTime.add(at, 505, :microsecond))
-    second_command = insert_command(task, first_run, "pending", DateTime.add(at, 506, :microsecond))
+    first_command =
+      insert_command(task, second_run, "pending", DateTime.add(at, 505, :microsecond))
+
+    second_command =
+      insert_command(task, first_run, "pending", DateTime.add(at, 506, :microsecond))
 
     third_command =
-      insert_command(task, second_run, "pending", DateTime.add(at, 507, :microsecond))
+      insert_command(
+        task,
+        second_run,
+        "pending",
+        DateTime.add(at, 507, :microsecond),
+        "provide_input"
+      )
 
     assert %{"commands" => first_command_page, "next_after" => command_after_cursor} =
              bearer(conn)
              |> get("/api/v1/tasks/#{task.id}/commands?limit=2")
              |> json_response(200)
 
-    assert Enum.map(first_command_page, & &1["command_id"]) == [first_command.id, second_command.id]
+    assert Enum.map(first_command_page, & &1["command_id"]) == [
+             first_command.id,
+             second_command.id
+           ]
+
     assert is_binary(command_after_cursor)
 
     assert %{"commands" => second_command_page, "next_after" => nil} =
@@ -519,7 +588,7 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
     |> Repo.insert!()
   end
 
-  defp insert_command(task, run, state, inserted_at) do
+  defp insert_command(task, run, state, inserted_at, kind \\ "cancel") do
     idempotency_key = uuid()
 
     %Command{}
@@ -527,7 +596,7 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
       task_id: task.id,
       run_id: run.id,
       generation: run.generation,
-      kind: "cancel",
+      kind: kind,
       payload: %{},
       idempotency_key: idempotency_key,
       request_hash: :crypto.hash(:sha256, idempotency_key),
@@ -556,6 +625,9 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
              "connection_epoch" => connection_epoch,
              "capacity" => 2,
              "reserved_capacity" => 1,
+             "agent_profile" => "codex",
+             "workspace" => "primary",
+             "capabilities" => %{},
              "active_runs" => [active_run]
            } = snapshot
 
@@ -594,7 +666,7 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
     assert run_id == command.run_id
     assert generation == command.generation
     assert kind == command.kind
-    assert payload == command.payload
+    assert payload == SymmetryControlWeb.Protocol.normalize_map(command.payload)
     assert is_binary(issued_at)
   end
 

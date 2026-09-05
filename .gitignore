@@ -39,3 +39,8 @@ Thumbs.db
 # Docker overrides
 compose.override.yaml
 compose.override.yml
+
+# Browser acceptance artifacts
+/browser/node_modules/
+/browser/playwright-report/
+/browser/test-results/

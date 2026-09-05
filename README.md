@@ -2,6 +2,14 @@
 
 Symmetry is an agent orchestration and execution platform for engineering work.
 
+The operator-facing engineering workspace is available at `/portal`. It groups
+work into projects and Kanban work items, connects repositories and CI, exposes
+runtime and connection health, and presents agent runs with outcome-first detail
+while retaining paginated raw execution history for debugging. Agent ownership
+configures execution intent; the operator starts a run explicitly and can then
+provide input, cancel, or retry failed and cancelled work. See
+[`docs/goal-02-runbook.md`](docs/goal-02-runbook.md).
+
 ## Architecture
 
 The repository is a small monorepo with two independently deployable services:

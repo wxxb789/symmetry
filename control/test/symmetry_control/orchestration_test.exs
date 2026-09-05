@@ -369,28 +369,92 @@ defmodule SymmetryControl.OrchestrationTest do
     end
   end
 
-  test "an expired current generation can complete within terminal grace" do
-    {task, run, _runtime, fence} = terminal_grace_fixture("expired-current")
-    expired_at = DateTime.add(@now, 30, :second)
+  test "an expired current generation becomes the visible attempt after a late terminal transition" do
+    for target_state <- ["completed", "failed", "cancelled"] do
+      {task, run, runtime, fence} = terminal_grace_fixture("expired-current-#{target_state}")
+      expired_at = DateTime.add(@now, 30, :second)
+      terminal_at = DateTime.add(expired_at, 1, :second)
+      payload = %{"summary" => "late #{target_state} delivery"}
 
-    assert %{expired_runs: 1} = Orchestration.expire(now: expired_at)
-    assert {:ok, %{state: "expired"}} = Orchestration.fetch_run(run.id)
-    assert {:ok, %{state: "queued", current_generation: 1}} = Orchestration.fetch_task(task.id)
+      assert %{expired_runs: 1} = Orchestration.expire(now: expired_at)
+      assert {:ok, %{state: "expired"}} = Orchestration.fetch_run(run.id)
 
-    assert {:ok, %{state: "completed"}} =
-             Orchestration.transition(
-               run.id,
-               fence,
-               "completed",
-               %{"summary" => "late terminal delivery"},
-               Ecto.UUID.generate(),
-               now: DateTime.add(expired_at, 1, :second)
-             )
+      assert {:ok, %{state: "queued", current_generation: 1, attempt_generation: 2}} =
+               Orchestration.fetch_task(task.id)
 
-    assert {:ok, %{state: "completed"}} = Orchestration.fetch_run(run.id)
+      assert {:ok, %{state: ^target_state}} =
+               Orchestration.transition(
+                 run.id,
+                 fence,
+                 target_state,
+                 payload,
+                 Ecto.UUID.generate(),
+                 now: terminal_at
+               )
 
-    assert {:ok, %{state: "completed", result: %{"summary" => "late terminal delivery"}}} =
-             Orchestration.fetch_task(task.id)
+      assert {:ok, terminal_task} = Orchestration.fetch_task(task.id)
+      assert terminal_task.state == target_state
+      assert terminal_task.current_generation == run.generation
+      assert terminal_task.attempt_generation == run.generation
+
+      assert {:ok, %{task: snapshot_task, run: snapshot_run}} =
+               Orchestration.task_snapshot(task.id)
+
+      assert snapshot_task.id == task.id
+      assert snapshot_run.id == run.id
+      assert snapshot_run.state == target_state
+      assert snapshot_run.generation == run.generation
+
+      case target_state do
+        "completed" ->
+          assert snapshot_task.result == payload
+          assert snapshot_task.failure == nil
+          assert snapshot_run.result == payload
+          assert snapshot_run.failure == nil
+
+        "failed" ->
+          assert snapshot_task.result == nil
+          assert snapshot_task.failure == payload
+          assert snapshot_run.result == nil
+          assert snapshot_run.failure == payload
+
+        "cancelled" ->
+          assert snapshot_task.result == nil
+          assert snapshot_task.failure == nil
+          assert snapshot_run.result == nil
+          assert snapshot_run.failure == nil
+      end
+
+      if target_state in ["failed", "cancelled"] do
+        retry_attrs = %{
+          goal: task.goal,
+          agent_profile: task.agent_profile,
+          workspace: task.workspace,
+          input: task.input
+        }
+
+        assert {:ok, retried_task, _command, :created} =
+                 Orchestration.retry_task(
+                   task.id,
+                   retry_attrs,
+                   "late-terminal-retry-#{target_state}",
+                   expected_generation: run.generation,
+                   now: terminal_at
+                 )
+
+        assert retried_task.current_generation == run.generation
+        assert retried_task.attempt_generation == run.generation + 1
+
+        assert {:ok, _snapshot} =
+                 Orchestration.heartbeat(runtime.id, runtime.connection_epoch, [],
+                   now: terminal_at
+                 )
+
+        assert {:ok, retry_run} = Orchestration.assign_one(now: terminal_at)
+        assert retry_run.task_id == task.id
+        assert retry_run.generation == run.generation + 1
+      end
+    end
   end
 
   test "terminal grace cannot overwrite an operator cancellation after expiry" do
@@ -1779,7 +1843,8 @@ defmodule SymmetryControl.OrchestrationTest do
         second_run,
         "00000000-0000-0000-0000-000000000129",
         "pending",
-        DateTime.add(at, 8, :microsecond)
+        DateTime.add(at, 8, :microsecond),
+        "provide_input"
       )
 
     assert {:ok, first_command_page} = Orchestration.list_task_commands(task.id, limit: 2)
@@ -1813,7 +1878,7 @@ defmodule SymmetryControl.OrchestrationTest do
              Orchestration.list_task_commands("00000000-0000-0000-0000-000000000129")
   end
 
-  test "task snapshots do not mix waiting telemetry across generations" do
+  test "task snapshots use the latest waiting event without mixing generations" do
     %{machine: machine} = enroll_machine()
     runtime = register_runtime(machine)
 
@@ -2177,13 +2242,13 @@ defmodule SymmetryControl.OrchestrationTest do
     |> Repo.insert!()
   end
 
-  defp insert_history_command(task, run, idempotency_key, state, inserted_at) do
+  defp insert_history_command(task, run, idempotency_key, state, inserted_at, kind \\ "cancel") do
     %Command{}
     |> Command.changeset(%{
       task_id: task.id,
       run_id: run.id,
       generation: run.generation,
-      kind: "cancel",
+      kind: kind,
       payload: %{},
       idempotency_key: idempotency_key,
       request_hash: :crypto.hash(:sha256, idempotency_key),

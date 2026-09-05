@@ -363,6 +363,34 @@ clients must not decode or expect a response body:
 }
 ```
 
+For `event_format: "jsonl"`, the daemon recognizes a versioned semantic event
+vocabulary used by operator-facing read models. `schema_version` may be omitted
+for backward-compatible version 1 records; an explicit value other than `1`, an
+invalid payload, or an encoded record larger than 64 KiB is retained as a
+generic `agent_event` instead of influencing outcome state.
+Valid JSON values that are not objects are retained as an `agent_event` with an
+object payload shaped as `{"value": <original-json-value>}`. Non-JSON output
+continues through the raw output path.
+
+| `type` | Required payload | Projection rule |
+| --- | --- | --- |
+| `progress` | Optional `message` | Timeline entry; does not replace a final summary. |
+| `summary` | Non-empty `summary` or `message` | Latest event in the current generation wins. |
+| `finding` | Non-empty `message` or `title`; optional `severity` | Accumulates in event order within the current generation. |
+| `artifact` | Non-empty `path` or HTTP(S) `url`; optional `name` and `kind` | Accumulates in event order within the current generation. |
+| `test` | Non-empty `name`; `status` in `running`, `passed`, `failed`, `skipped` | Latest event for each test name wins. |
+| `pull_request` | HTTP(S) `url`; optional `state` | Latest event in the current generation wins. |
+| `ci` | `status` in `unknown`, `pending`, `passed`, `failed`; optional HTTP(S) `url` and `summary` | Latest event in the current generation wins. |
+| `review` | `status` in `none`, `required`, `changes_requested`, `approved`; optional HTTP(S) `url` and `summary` | Latest event in the current generation wins. |
+| `waiting_for_input` | Existing Goal 1 waiting payload | Drives both the event timeline and waiting-state transition. |
+
+The control plane supplies provenance through the stored `event_id`, run
+generation, and recorded timestamp. Current portal status uses only the current
+attempt. Earlier generations remain available in history but cannot overwrite
+the current attempt's summary, pull request, CI, review, findings, artifacts, or
+tests. Explicit operator-entered delivery fields override agent evidence until
+the operator clears the override.
+
 Daemon-originated materialized lifecycle state changes use the transition resource:
 
 ```json
@@ -512,13 +540,18 @@ Task creation and reads return the same stable shape:
 }
 ```
 
+`generation` identifies the current execution attempt and is always positive.
+It remains present when `run_id` is `null`, such as while a new or retried
+attempt is queued before the scheduler materializes its run.
+
 `waiting` is `null` unless the current run is in `waiting_for_input`. When it
 is present, it identifies the current run and generation. Its `transition_id`
 is the identity of the transition that put the current run into
 `waiting_for_input`. Its `question`, `payload`, and `recorded_at` come from the
-current run's highest-sequence `waiting_for_input` event. For older data with
-no such event, those fields fall back to the waiting transition's payload and
-recorded time:
+current run's highest-sequence `waiting_for_input` event. The transition ID
+remains stable while later waiting events update the visible question. For
+older data with no waiting event, those fields fall back to the waiting
+transition's payload and recorded time:
 
 ```json
 {
@@ -533,7 +566,10 @@ recorded time:
 
 `latest_command` is `null` when the task has no commands; otherwise it uses
 the command resource shape documented below. It may be `pending`, `applied`,
-or `acknowledged` independently of whether `waiting` is currently present.
+or `acknowledged` independently of whether `waiting` is currently present. In
+addition to the requestable command kinds below, it may expose an `applied`
+`retry` command created by the portal retry workflow. Its payload contains the
+replacement `work` object; retry commands are not accepted by this endpoint.
 
 Task commands require an `Idempotency-Key` header and accept exactly one of the
 following request bodies:

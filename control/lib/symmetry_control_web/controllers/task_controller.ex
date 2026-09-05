@@ -2,7 +2,7 @@ defmodule SymmetryControlWeb.TaskController do
   use SymmetryControlWeb, :controller
 
   alias SymmetryControl.Orchestration
-  alias SymmetryControl.Orchestration.Scheduler
+  alias SymmetryControl.Orchestration.{Notifier, Scheduler}
   alias SymmetryControlWeb.Protocol
 
   def create(conn, _params) do
@@ -41,7 +41,7 @@ defmodule SymmetryControlWeb.TaskController do
          {:ok, command, disposition} <-
            Orchestration.create_command(task_id, kind, payload, idempotency_key) do
       if disposition == :created do
-        broadcast_command(command)
+        Notifier.command_available(command)
         Scheduler.wake()
       end
 
@@ -70,18 +70,4 @@ defmodule SymmetryControlWeb.TaskController do
 
   defp body_params(conn) when is_map(conn.body_params), do: conn.body_params
   defp body_params(_conn), do: %{}
-
-  defp broadcast_command(%{id: command_id, state: "pending", run_id: run_id})
-       when is_binary(run_id) do
-    with {:ok, %{machine_id: machine_id, runtime_id: runtime_id}} <-
-           Orchestration.assignment_target(run_id) do
-      Phoenix.PubSub.broadcast(
-        SymmetryControl.PubSub,
-        "daemon:" <> machine_id,
-        {:command_available, %{runtime_id: runtime_id, command_id: command_id}}
-      )
-    end
-  end
-
-  defp broadcast_command(_command), do: :ok
 end

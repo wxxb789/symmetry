@@ -1,0 +1,17 @@
+{
+  "name": "symmetry-browser-acceptance",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:compose": "playwright test tests/portal-compose-daemon.spec.mjs --project=desktop-chromium",
+    "test:compose:read": "playwright test tests/portal-compose-restart.spec.mjs --project=desktop-chromium",
+    "test:live": "playwright test tests/portal-live-daemon.spec.mjs --project=desktop-chromium",
+    "test:headed": "playwright test --headed",
+    "show-report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1"
+  }
+}

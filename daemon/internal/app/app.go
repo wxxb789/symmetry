@@ -12,7 +12,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -27,14 +29,15 @@ import (
 )
 
 const (
-	minimumInterval     = time.Second
-	maximumInterval     = time.Minute
-	leaseSafetyMargin   = 5 * time.Second
-	retryMaximum        = 30 * time.Second
-	terminalGrace       = 8 * time.Minute
-	controlRequestLimit = 15 * time.Second
-	maxJSONLRecordBytes = 256 * 1024
-	rawOutputChunkBytes = 32 * 1024
+	minimumInterval       = time.Second
+	maximumInterval       = time.Minute
+	leaseSafetyMargin     = 5 * time.Second
+	retryMaximum          = 30 * time.Second
+	terminalGrace         = 8 * time.Minute
+	controlRequestLimit   = 15 * time.Second
+	maxJSONLRecordBytes   = 256 * 1024
+	maxSemanticEventBytes = 64 * 1024
+	rawOutputChunkBytes   = 32 * 1024
 )
 
 var (
@@ -1729,20 +1732,12 @@ func (daemon *daemon) queueOutput(key state.RunKey, format config.EventFormat, p
 		}
 		payload, ok := decoded.(map[string]any)
 		if !ok {
-			if err := daemon.queueRawEvent(key, execution.Event{Stream: event.Stream, At: event.At, Data: record.data}); err != nil {
+			if err := daemon.queueEvent(key, "agent_event", wrapAgentEventValue(record.data), event.At); err != nil {
 				return err
 			}
 			continue
 		}
-		kind := "agent_event"
-		var declaredType string
-		if raw, ok := payload["type"].(string); ok {
-			declaredType = raw
-		}
-		switch declaredType {
-		case "progress", "waiting_for_input":
-			kind = declaredType
-		}
+		kind := semanticEventKind(payload, len(record.data))
 		if kind == "waiting_for_input" {
 			if err := daemon.queueWaitingForInput(key, json.RawMessage(record.data), event.At); err != nil {
 				return err
@@ -1754,6 +1749,87 @@ func (daemon *daemon) queueOutput(key state.RunKey, format config.EventFormat, p
 		}
 	}
 	return nil
+}
+
+func wrapAgentEventValue(value []byte) json.RawMessage {
+	payload := make([]byte, 0, len(value)+len(`{"value":}`))
+	payload = append(payload, `{"value":`...)
+	payload = append(payload, value...)
+	return append(payload, '}')
+}
+
+func semanticEventKind(payload map[string]any, encodedBytes int) string {
+	if encodedBytes > maxSemanticEventBytes || !semanticVersionSupported(payload) {
+		return "agent_event"
+	}
+
+	kind, _ := payload["type"].(string)
+	switch kind {
+	case "progress", "waiting_for_input":
+		return kind
+	case "summary":
+		if nonEmptyString(payload["summary"]) || nonEmptyString(payload["message"]) {
+			return kind
+		}
+	case "finding":
+		if nonEmptyString(payload["message"]) || nonEmptyString(payload["title"]) {
+			return kind
+		}
+	case "artifact":
+		if nonEmptyString(payload["path"]) || httpURL(payload["url"]) {
+			return kind
+		}
+	case "test":
+		if nonEmptyString(payload["name"]) && stringIn(payload["status"], "running", "passed", "failed", "skipped") {
+			return kind
+		}
+	case "pull_request":
+		if httpURL(payload["url"]) {
+			return kind
+		}
+	case "ci":
+		if stringIn(payload["status"], "unknown", "pending", "passed", "failed") {
+			return kind
+		}
+	case "review":
+		if stringIn(payload["status"], "none", "required", "changes_requested", "approved") {
+			return kind
+		}
+	}
+
+	return "agent_event"
+}
+
+func semanticVersionSupported(payload map[string]any) bool {
+	version, ok := payload["schema_version"]
+	if !ok {
+		return true
+	}
+	number, ok := version.(float64)
+	return ok && number == 1
+}
+
+func nonEmptyString(value any) bool {
+	text, ok := value.(string)
+	return ok && strings.TrimSpace(text) != ""
+}
+
+func stringIn(value any, allowed ...string) bool {
+	text, ok := value.(string)
+	return ok && slices.Contains(allowed, text)
+}
+
+func httpURL(value any) bool {
+	text, ok := value.(string)
+	if !ok {
+		return false
+	}
+	parsed, err := url.ParseRequestURI(strings.TrimSpace(text))
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	return scheme == "https" || scheme == "http"
 }
 
 func containsNUL(value any) bool {
@@ -2781,21 +2857,47 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) (e
 		}
 		return daemon.scheduleCleanup(ctx, updated)
 	}
-	if journal.LocalState == "terminal_pending" {
-		updated, err := daemon.retireOrdinaryTerminalOutbox(journal)
-		if err != nil {
-			return err
-		}
-		journal = updated
-	}
+	predecessorsUnavailable := false
 	updated, err := daemon.deliverEventsBeforeAppliedInputAcknowledgement(ctx, journal)
 	journal = updated
 	if err != nil {
-		return err
+		if journal.LocalState != "terminal_pending" || !terminalPredecessorUnavailable(err) {
+			return err
+		}
+		updated, retireErr := daemon.retireOrdinaryTerminalOutbox(journal)
+		if retireErr != nil {
+			return retireErr
+		}
+		journal = updated
+		predecessorsUnavailable = true
 	}
 	for len(journal.PendingTransitions) > 0 {
 		nextTransition := journal.PendingTransitions[0]
-		if !isTerminalTransition(nextTransition.State) {
+		if isTerminalTransition(nextTransition.State) {
+			if !predecessorsUnavailable {
+				updated, delivered, err := daemon.deliverAppliedInputAcknowledgement(ctx, journal)
+				journal = updated
+				if err != nil {
+					return err
+				}
+				updated, err = daemon.deliverPendingEvents(ctx, journal)
+				journal = updated
+				if err != nil {
+					if !terminalPredecessorUnavailable(err) {
+						return err
+					}
+					updated, retireErr := daemon.retireOrdinaryTerminalOutbox(journal)
+					if retireErr != nil {
+						return retireErr
+					}
+					journal = updated
+					predecessorsUnavailable = true
+				}
+				if delivered {
+					continue
+				}
+			}
+		} else {
 			updated, delivered, err := daemon.deliverAppliedInputAcknowledgement(ctx, journal)
 			journal = updated
 			if err != nil {
@@ -2834,6 +2936,15 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) (e
 			}
 			if isTerminalTransition(transition.State) {
 				return daemon.handleTerminalDeliveryError(journal, err)
+			}
+			if journal.LocalState == "terminal_pending" && terminalPredecessorUnavailable(err) {
+				updated, retireErr := daemon.retireOrdinaryTerminalOutbox(journal)
+				if retireErr != nil {
+					return retireErr
+				}
+				journal = updated
+				predecessorsUnavailable = true
+				continue
 			}
 			return daemon.handleOrdinaryDeliveryError(ctx, journal, err, "transition ownership lost")
 		}
@@ -3019,6 +3130,10 @@ func (daemon *daemon) retireOrdinaryTerminalOutbox(journal state.RunJournal) (st
 		return journal, nil
 	}
 	return daemon.store.MarkTransitionsDelivered(journal.Key(), transitionIDs)
+}
+
+func terminalPredecessorUnavailable(err error) bool {
+	return control.IsOwnershipLost(err) || control.IsTerminalGraceExpired(err)
 }
 
 func (daemon *daemon) resolveTerminal(journal state.RunJournal, verdict string) (state.RunJournal, error) {

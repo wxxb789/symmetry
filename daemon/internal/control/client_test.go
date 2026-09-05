@@ -483,15 +483,19 @@ func provideInputCommandJSON(payload string) string {
 }
 
 func taskJSON() string {
-	return `{"task_id":"task-1","state":"queued","run_id":null,"generation":0,"work":{"goal":"work","agent_profile":"codex","workspace":"primary","input":{}},"result":null,"failure":null,"waiting":null,"latest_command":null}`
+	return `{"task_id":"task-1","state":"queued","run_id":null,"generation":1,"work":{"goal":"work","agent_profile":"codex","workspace":"primary","input":{}},"result":null,"failure":null,"waiting":null,"latest_command":null}`
 }
 
 func taskJSONWithUnknownField() string {
-	return `{"task_id":"task-1","state":"queued","run_id":null,"generation":0,"work":{"goal":"work","agent_profile":"codex","workspace":"primary","input":{}},"result":null,"failure":null,"waiting":null,"latest_command":null,"future_field":{"kept":"compatible"}}`
+	return `{"task_id":"task-1","state":"queued","run_id":null,"generation":1,"work":{"goal":"work","agent_profile":"codex","workspace":"primary","input":{}},"result":null,"failure":null,"waiting":null,"latest_command":null,"future_field":{"kept":"compatible"}}`
 }
 
 func waitingTaskJSON() string {
 	return `{"task_id":"task-1","state":"waiting_for_input","run_id":"run-current","generation":2,"work":{"goal":"work","agent_profile":"codex","workspace":"primary","input":{}},"result":null,"failure":null,"waiting":{"run_id":"run-current","generation":2,"transition_id":"transition-1","question":"Choose the target branch","payload":{"question":"Choose the target branch"},"recorded_at":"2026-09-03T00:00:00Z","future_waiting_field":true},"latest_command":{"command_id":"command-1","task_id":"task-1","run_id":"run-earlier","generation":1,"kind":"cancel","payload":{},"state":"applied","issued_at":"2026-09-03T00:00:00Z","applied_at":"2026-09-03T00:00:01Z","acknowledgement_id":null,"acknowledgement_outcome":null,"acknowledged_at":null,"future_command_field":true}}`
+}
+
+func retriedTaskJSON() string {
+	return `{"task_id":"task-1","state":"queued","run_id":null,"generation":2,"work":{"goal":"work again","agent_profile":"codex","workspace":"primary","input":{}},"result":null,"failure":null,"waiting":null,"latest_command":{"command_id":"command-2","task_id":"task-1","run_id":"run-earlier","generation":1,"kind":"retry","payload":{"work":{"goal":"work again","agent_profile":"codex","workspace":"primary","input":{}}},"state":"applied","issued_at":"2026-09-03T00:00:00Z","applied_at":"2026-09-03T00:00:01Z","acknowledgement_id":null,"acknowledgement_outcome":null,"acknowledged_at":null}}`
 }
 
 func TestGetTaskProjectsWaitingAndHistoricalLatestCommand(t *testing.T) {
@@ -515,6 +519,22 @@ func TestGetTaskProjectsWaitingAndHistoricalLatestCommand(t *testing.T) {
 		t.Fatal("latest_command = nil")
 	}
 	if task.LatestCommand.TaskID != task.TaskID || task.LatestCommand.RunID == nil || *task.LatestCommand.RunID != "run-earlier" || task.LatestCommand.Generation == nil || *task.LatestCommand.Generation != 1 {
+		t.Fatalf("latest_command = %#v", task.LatestCommand)
+	}
+}
+
+func TestGetTaskAcceptsQueuedRetryAttemptAndHistoricalRetryCommand(t *testing.T) {
+	server := jsonServer(t, http.StatusOK, retriedTaskJSON(), nil)
+	defer server.Close()
+
+	task, err := newOperatorClient(t, server).GetTask(context.Background(), "task-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.RunID != nil || task.Generation == nil || *task.Generation != 2 {
+		t.Fatalf("task attempt = run %#v generation %#v", task.RunID, task.Generation)
+	}
+	if task.LatestCommand == nil || task.LatestCommand.Kind != "retry" || task.LatestCommand.State != "applied" {
 		t.Fatalf("latest_command = %#v", task.LatestCommand)
 	}
 }

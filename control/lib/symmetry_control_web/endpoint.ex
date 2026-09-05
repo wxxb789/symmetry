@@ -8,12 +8,20 @@ defmodule SymmetryControlWeb.Endpoint do
     store: :cookie,
     key: "_symmetry_control_key",
     signing_salt: "AsyeG8tI",
-    same_site: "Lax"
+    same_site: "Lax",
+    http_only: true,
+    secure: Application.compile_env(:symmetry_control, :portal_session_secure, false)
   ]
 
   socket "/socket", SymmetryControlWeb.UserSocket,
     websocket: [connect_info: [:x_headers]],
     longpoll: false
+
+  plug Plug.Static,
+    at: "/assets",
+    from: {:symmetry_control, "priv/portal_assets"},
+    gzip: false,
+    only: ~w(portal.css portal.js)
 
   # Serve at "/" the static files from "priv/static" directory.
   #

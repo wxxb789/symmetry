@@ -22,6 +22,7 @@ defmodule SymmetryControlWeb.Protocol do
     idempotency_conflict:
       {409, "idempotency_conflict", "idempotency key was reused with different input"},
     ownership_lost: {409, "ownership_lost", "execution lease is no longer authoritative"},
+    stale: {409, "stale", "resource changed since it was loaded"},
     terminal_grace_expired:
       {409, "terminal_grace_expired", "terminal delivery grace period has expired"},
     state_conflict: {409, "state_conflict", "state has already advanced"},
@@ -161,7 +162,7 @@ defmodule SymmetryControlWeb.Protocol do
       task_id: task.id,
       state: task.state,
       run_id: run && run.id,
-      generation: task.current_generation,
+      generation: task.attempt_generation,
       work: work(task),
       result: task.result,
       failure: task.failure,
@@ -184,6 +185,9 @@ defmodule SymmetryControlWeb.Protocol do
       connection_epoch: Map.fetch!(snapshot, :connection_epoch),
       capacity: Map.fetch!(snapshot, :capacity),
       reserved_capacity: Map.fetch!(snapshot, :reserved_capacity),
+      agent_profile: Map.fetch!(snapshot, :agent_profile),
+      workspace: Map.fetch!(snapshot, :workspace),
+      capabilities: Map.fetch!(snapshot, :capabilities),
       active_runs: Enum.map(Map.fetch!(snapshot, :active_runs), &active_run/1)
     }
   end

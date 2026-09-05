@@ -34,6 +34,7 @@ config :symmetry_control, :orchestration,
   lease_duration_ms: 30_000,
   assignment_duration_ms: 30_000,
   reaper_interval_ms: 60_000,
+  portal_session_max_age_seconds: 28_800,
   reaper_enabled: false,
   scheduler_enabled: false
 

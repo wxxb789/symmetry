@@ -102,6 +102,8 @@ defmodule SymmetryControl.Orchestration.Task do
     field :input, :map
     field :state, :string
     field :current_generation, :integer
+    field :attempt_generation, :integer, default: 1
+    field :waiting_transition_id, Ecto.UUID
     field :result, :map
     field :failure, :map
     timestamps(type: :utc_datetime_usec)
@@ -118,6 +120,8 @@ defmodule SymmetryControl.Orchestration.Task do
       :input,
       :state,
       :current_generation,
+      :attempt_generation,
+      :waiting_transition_id,
       :result,
       :failure
     ])
@@ -128,9 +132,11 @@ defmodule SymmetryControl.Orchestration.Task do
       :agent_profile,
       :workspace,
       :state,
-      :current_generation
+      :current_generation,
+      :attempt_generation
     ])
     |> validate_number(:current_generation, greater_than_or_equal_to: 0)
+    |> validate_number(:attempt_generation, greater_than: 0)
     |> validate_inclusion(:state, [
       "queued",
       "assigned",
@@ -145,6 +151,8 @@ defmodule SymmetryControl.Orchestration.Task do
     |> unique_constraint(:idempotency_key)
     |> check_constraint(:state, name: :tasks_state_check)
     |> check_constraint(:current_generation, name: :tasks_generation_nonnegative)
+    |> check_constraint(:attempt_generation, name: :tasks_attempt_generation_valid)
+    |> check_constraint(:waiting_transition_id, name: :tasks_waiting_transition_matches_state)
   end
 end
 
@@ -318,7 +326,7 @@ defmodule SymmetryControl.Orchestration.Command do
     ])
     |> validate_required([:task_id, :kind, :payload, :idempotency_key, :request_hash, :state])
     |> validate_number(:generation, greater_than: 0)
-    |> validate_inclusion(:kind, ["cancel", "provide_input"])
+    |> validate_inclusion(:kind, ["cancel", "provide_input", "retry"])
     |> validate_inclusion(:state, ["pending", "applied", "acknowledged"])
     |> validate_inclusion(:acknowledgement_outcome, ["applied", "rejected", "failed"])
     |> unique_constraint([:task_id, :idempotency_key])

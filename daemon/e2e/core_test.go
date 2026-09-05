@@ -89,6 +89,24 @@ func TestCoreDaemonWorkflows(t *testing.T) {
 	})
 }
 
+func TestJSONValuesRoundTripThroughControl(t *testing.T) {
+	environment := loadEnvironment(t)
+	operator := newOperator(t, environment)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	daemon := startDaemon(t, ctx, environment, "json-values", nil)
+	t.Cleanup(func() {
+		cancel()
+		waitForDaemon(t, daemon.done)
+	})
+
+	task := submit(t, operator, daemon, "json-values", "json_values")
+	waitForTask(t, operator, task.TaskID, 20*time.Second, func(task protocol.Task) bool {
+		return task.State == "completed"
+	})
+	assertJSONValueEvents(t, environment, task.TaskID)
+}
+
 func TestPollingFallbackDispatchesWithoutNotifications(t *testing.T) {
 	environment := loadEnvironment(t)
 	operator := newOperator(t, environment)
@@ -703,6 +721,27 @@ func assertInputInspectionEvent(t *testing.T, environment e2eEnvironment, taskID
 		}
 	}
 	t.Fatalf("task %s has no input inspection event %q", taskID, wantMessage)
+}
+
+func assertJSONValueEvents(t *testing.T, environment e2eEnvironment, taskID string) {
+	t.Helper()
+	events := filterHistory(collectHistory(t, environment, taskID, "events"), func(entry map[string]json.RawMessage) bool {
+		return historyString(t, entry, "kind") == "agent_event"
+	})
+	if len(events) != 3 {
+		t.Fatalf("agent events = %d, want 3", len(events))
+	}
+
+	want := []string{"42", `["progress"]`, "9007199254740993"}
+	for index, event := range events {
+		var payload map[string]json.RawMessage
+		if err := json.Unmarshal(historyField(t, event, "payload"), &payload); err != nil {
+			t.Fatalf("decode agent event payload %d: %v", index, err)
+		}
+		if got := string(payload["value"]); got != want[index] {
+			t.Fatalf("agent event %d value = %s, want %s", index, got, want[index])
+		}
+	}
 }
 
 func assertWaitingInputHistory(t *testing.T, environment e2eEnvironment, taskID, runID string, generation int64) {
