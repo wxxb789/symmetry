@@ -379,7 +379,7 @@
   async function moveByOffset(id, offset) {
     const item = selectedItem(id);
     if (!item) return;
-    const siblings = selectedProject().work_items.filter((candidate) => candidate.status === item.status);
+    const siblings = visibleItems(selectedProject().work_items).filter((candidate) => candidate.status === item.status);
     const index = siblings.findIndex((candidate) => candidate.id === id);
     const target = index + offset;
     if (target < 0 || target >= siblings.length) return;

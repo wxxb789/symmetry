@@ -1351,7 +1351,10 @@ defmodule SymmetryControl.Orchestration do
             ensure_expected_generation!(task, Keyword.get(opts, :expected_generation))
             if task.state not in ["failed", "cancelled"], do: rollback(:state_conflict)
 
-            run = if task.current_generation > 0, do: lock_current_run(task), else: nil
+            run =
+              if task.current_generation == task.attempt_generation,
+                do: lock_current_run(task),
+                else: nil
 
             command =
               insert_command!(

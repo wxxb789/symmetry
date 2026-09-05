@@ -110,7 +110,7 @@ defmodule SymmetryControl.OrchestrationRetryTest do
     assert cancelled_again.state == "cancelled"
     assert cancelled_again.attempt_generation == 2
 
-    assert {:ok, third_attempt, _command, :created} =
+    assert {:ok, third_attempt, third_retry_command, :created} =
              Orchestration.retry_task(
                queued.id,
                task_attrs(goal: "Try after queued cancellation"),
@@ -121,6 +121,8 @@ defmodule SymmetryControl.OrchestrationRetryTest do
 
     assert third_attempt.current_generation == 0
     assert third_attempt.attempt_generation == 3
+    assert third_retry_command.run_id == nil
+    assert third_retry_command.generation == nil
 
     %{machine: machine} = enroll_machine("completed-machine")
     runtime = register_runtime(machine, "completed-runtime")
