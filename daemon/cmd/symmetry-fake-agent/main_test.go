@@ -83,6 +83,48 @@ func TestInspectInputDistinguishesNullAndEmptyObject(t *testing.T) {
 	}
 }
 
+func TestJSONValuesEmitsScalarArrayAndLargeIntegerLines(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := run(strings.NewReader(taskInput(`"json values"`, `{"mode":"json_values"}`)), &stdout, &stderr); err != nil {
+		t.Fatalf("fixture failed: %v; stderr: %s", err, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("unexpected stderr: %q", stderr.String())
+	}
+
+	if got, want := strings.TrimSpace(stdout.String()), "42\n[\"progress\"]\n9007199254740993"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+}
+
+func TestSelectModeUsesExplicitInputThenGoalDirectiveThenEnvironment(t *testing.T) {
+	tests := []struct {
+		name        string
+		goal        string
+		input       string
+		environment string
+		want        string
+	}{
+		{name: "input", goal: "[symmetry-fake-agent:wait_input]", input: `{"mode":"fail"}`, environment: "slow", want: "fail"},
+		{name: "goal", goal: "work\n\n[symmetry-fake-agent:wait_input]", input: `{}`, environment: "slow", want: "wait_input"},
+		{name: "environment", goal: "work", input: `{}`, environment: "slow", want: "slow"},
+		{name: "default", goal: "work", input: `{}`, want: "success"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := selectMode(test.goal, json.RawMessage(test.input), test.environment)
+			if err != nil {
+				t.Fatalf("selectMode() error = %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("selectMode() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestFailWritesStderrAndExitsNonZero(t *testing.T) {
 	process := startFixture(t, taskInput(`"fail task"`, `{"mode":"fail"}`), nil)
 	_, stderr, err := waitForProcess(t, process, time.Second)
@@ -94,6 +136,73 @@ func TestFailWritesStderrAndExitsNonZero(t *testing.T) {
 	}
 	if len(decodeEvents(t, process.output.String())) != 0 {
 		t.Fatalf("stdout = %q, want no events", process.output.String())
+	}
+}
+
+func TestEvidenceSuccessEmitsOutcomeEvents(t *testing.T) {
+	process := startFixture(t, taskInput(`"evidence"`, `{"mode":"evidence_success"}`), nil)
+	_, stderr, err := waitForProcess(t, process, time.Second)
+	if err != nil {
+		t.Fatalf("fixture failed: %v; stderr: %s", err, stderr)
+	}
+
+	var kinds []string
+	for _, line := range strings.Split(strings.TrimSpace(process.output.String()), "\n") {
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("decode record: %v", err)
+		}
+		if record["schema_version"] != float64(semanticSchemaVersion) {
+			t.Fatalf("schema_version = %#v", record["schema_version"])
+		}
+		kinds = append(kinds, record["type"].(string))
+	}
+
+	want := []string{"progress", "finding", "artifact", "test", "pull_request", "ci", "review", "summary", "progress"}
+	if strings.Join(kinds, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("kinds = %#v, want %#v", kinds, want)
+	}
+}
+
+func TestHistorySuccessEmitsPageableRawRecordsBeforeOutcome(t *testing.T) {
+	process := startFixture(t, taskInput(`"history"`, `{"mode":"history_success"}`), nil)
+	_, stderr, err := waitForProcess(t, process, time.Second)
+	if err != nil {
+		t.Fatalf("fixture failed: %v; stderr: %s", err, stderr)
+	}
+
+	lines := strings.Split(strings.TrimSpace(process.output.String()), "\n")
+	if len(lines) != 119 {
+		t.Fatalf("records = %d, want 119", len(lines))
+	}
+	if !strings.Contains(lines[0], `"type":"debug"`) || !strings.Contains(lines[0], `"message":"debug-001"`) {
+		t.Fatalf("first record = %q", lines[0])
+	}
+	if !strings.Contains(lines[109], `"message":"debug-110"`) {
+		t.Fatalf("last raw record = %q", lines[109])
+	}
+	if !strings.Contains(strings.Join(lines[110:], "\n"), `"type":"summary"`) {
+		t.Fatal("semantic outcome records do not include a summary")
+	}
+}
+
+func TestFailOnceThenEvidenceSuccessPersistsAcrossProcesses(t *testing.T) {
+	directory := t.TempDir()
+	input := taskInput(`"retry fixture"`, `{"mode":"fail_once_then_evidence_success","work_item_id":"item-42"}`)
+
+	first := startFixtureInDir(t, directory, input, nil)
+	_, firstStderr, firstErr := waitForProcess(t, first, time.Second)
+	if firstErr == nil || !strings.Contains(firstStderr, "planned first-attempt failure") {
+		t.Fatalf("first attempt error = %v, stderr = %q", firstErr, firstStderr)
+	}
+
+	second := startFixtureInDir(t, directory, input, nil)
+	_, secondStderr, secondErr := waitForProcess(t, second, time.Second)
+	if secondErr != nil {
+		t.Fatalf("second attempt failed: %v; stderr: %s", secondErr, secondStderr)
+	}
+	if !strings.Contains(second.output.String(), `"type":"summary"`) {
+		t.Fatalf("second attempt output = %q, want summary event", second.output.String())
 	}
 }
 
@@ -435,9 +544,16 @@ type fixtureProcess struct {
 }
 
 func startFixture(t *testing.T, initial string, environment []string) *fixtureProcess {
+	return startFixtureInDir(t, "", initial, environment)
+}
+
+func startFixtureInDir(t *testing.T, directory, initial string, environment []string) *fixtureProcess {
 	t.Helper()
 	path := fixtureBinary(t)
 	command := exec.Command(path)
+	if directory != "" {
+		command.Dir = directory
+	}
 	stdin, err := command.StdinPipe()
 	if err != nil {
 		t.Fatalf("open fixture stdin: %v", err)

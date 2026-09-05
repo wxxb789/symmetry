@@ -137,8 +137,14 @@ func (manager *Manager) Recover(ctx context.Context, bindingKey string, run RunR
 		if err != nil {
 			return Prepared{}, err
 		}
-		if persistedPath != "" && filepath.Clean(persistedPath) != prepared.Path {
-			return Prepared{}, fmt.Errorf("persisted workspace path %q does not match configured worktree target", persistedPath)
+		if persistedPath != "" {
+			same, err := samePath(persistedPath, prepared.Path)
+			if err != nil {
+				return Prepared{}, fmt.Errorf("compare persisted worktree path: %w", err)
+			}
+			if !same {
+				return Prepared{}, fmt.Errorf("persisted workspace path %q does not match configured worktree target", persistedPath)
+			}
 		}
 		reservationExists, err := pathExists(prepared.reservation)
 		if err != nil {
@@ -785,4 +791,18 @@ func sameDirectory(left, right string) (bool, error) {
 		return false, err
 	}
 	return os.SameFile(leftInfo, rightInfo), nil
+}
+
+func samePath(left, right string) (bool, error) {
+	if filepath.Clean(left) == filepath.Clean(right) {
+		return true, nil
+	}
+	same, err := sameDirectory(left, right)
+	if err == nil || !errors.Is(err, os.ErrNotExist) {
+		return same, err
+	}
+	if filepath.Base(left) != filepath.Base(right) {
+		return false, nil
+	}
+	return sameDirectory(filepath.Dir(left), filepath.Dir(right))
 }

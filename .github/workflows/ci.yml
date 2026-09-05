@@ -267,24 +267,24 @@ jobs:
           }
 
           http_redirect_is_ready() {
-            redirect_status=$(curl --silent --output /dev/null --dump-header "$redirect_headers" --write-out '%{http_code}' http://localhost/healthz || true)
+            redirect_status=$(curl --silent --output /dev/null --dump-header "$redirect_headers" --write-out '%{http_code}' --header 'Host: localhost' http://127.0.0.1:8080/healthz || true)
             [[ "$redirect_status" == '308' ]] || return 1
             tr -d '\r' < "$redirect_headers" | grep --ignore-case --fixed-strings --line-regexp 'location: https://localhost/healthz' >/dev/null
           }
 
           forged_host_is_rejected() {
-            forged_http_status=$(curl --silent --output /dev/null --write-out '%{http_code}' --header 'Host: forged.example' http://127.0.0.1/healthz || true)
+            forged_http_status=$(curl --silent --output /dev/null --write-out '%{http_code}' --header 'Host: forged.example' http://127.0.0.1:8080/healthz || true)
             [[ "$forged_http_status" == '421' ]] || return 1
 
-            forged_https_status=$(curl --silent --output /dev/null --write-out '%{http_code}' --cacert "$cert_dir/tls.crt" --header 'Host: forged.example' https://localhost/healthz || true)
+            forged_https_status=$(curl --silent --output /dev/null --write-out '%{http_code}' --cacert "$cert_dir/tls.crt" --header 'Host: forged.example' https://localhost:8443/healthz || true)
             [[ "$forged_https_status" == '421' ]]
           }
 
           forged_sni_is_rejected() {
             ! curl --silent --show-error --insecure \
-              --resolve forged.example:443:127.0.0.1 \
+              --resolve forged.example:8443:127.0.0.1 \
               --header 'Host: localhost' \
-              https://forged.example/healthz >/dev/null 2>&1
+              https://forged.example:8443/healthz >/dev/null 2>&1
           }
 
           "${local_compose[@]}" config --quiet
@@ -394,7 +394,8 @@ jobs:
             ([.services.edge.volumes[] | select(.target == "/run/symmetry/tls.crt" or .target == "/run/symmetry/tls.key") | select(.read_only == true)] | length == 2)
           ' "$rendered_production" >/dev/null
 
-          "${production_compose[@]}" --file "$production_override" --env-file "$production_env" up --build --detach
+          SYMMETRY_HTTP_PORT=8080 SYMMETRY_HTTPS_PORT=8443 \
+            "${production_compose[@]}" --file "$production_override" --env-file "$production_env" up --build --detach
           wait_for "production HTTP to HTTPS redirect" 60 http_redirect_is_ready
           wait_for "production edge to reject forged Host headers" 10 forged_host_is_rejected
           wait_for "production edge to reject forged TLS SNI" 10 forged_sni_is_rejected
@@ -415,7 +416,7 @@ jobs:
           done
 
           wait_for "production HTTPS control health endpoint" 60 \
-            bash -c 'curl --fail --silent --show-error --cacert "$0" --header "Forwarded: proto=http" --header "X-Forwarded-Proto: http" https://localhost/healthz | jq --exit-status -e '\''.status == "ok"'\'' >/dev/null' "$cert_dir/tls.crt"
+            bash -c 'curl --fail --silent --show-error --cacert "$0" --header "Forwarded: proto=http" --header "X-Forwarded-Proto: http" https://localhost:8443/healthz | jq --exit-status -e '\''.status == "ok"'\'' >/dev/null' "$cert_dir/tls.crt"
 
           machine_token=$(openssl rand -hex 32)
           enrollment=$(curl --fail --silent --show-error --cacert "$cert_dir/tls.crt" \
@@ -424,7 +425,7 @@ jobs:
             --header 'Idempotency-Key: edge-websocket-enrollment' \
             --header 'Content-Type: application/json' \
             --data "{\"machine\":{\"name\":\"edge-websocket-machine\"},\"machine_token\":\"$machine_token\"}" \
-            https://localhost/api/v1/machines)
+            https://localhost:8443/api/v1/machines)
           machine_id=$(jq --exit-status --raw-output '.machine_id' <<<"$enrollment")
           test -n "$machine_id"
           test "$(jq --raw-output '.machine_token' <<<"$enrollment")" = "$machine_token"
@@ -441,7 +442,7 @@ jobs:
             --header 'Sec-WebSocket-Version: 13' \
             --header "Sec-WebSocket-Key: $websocket_key" \
             --header "X-Symmetry-Token: $machine_token" \
-            'https://localhost/socket/websocket?vsn=2.0.0')
+            'https://localhost:8443/socket/websocket?vsn=2.0.0')
           websocket_exit=$?
           set -e
           if [[ "$websocket_exit" -ne 0 && "$websocket_exit" -ne 28 ]]; then

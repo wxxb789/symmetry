@@ -313,7 +313,7 @@ type TaskCommandRequest struct {
 }
 
 // TaskCommand is an operator-facing command resource. Unlike daemon dispatch
-// commands, historical commands may not be associated with a run.
+// commands, historical cancel or retry commands may not be associated with a run.
 type TaskCommand struct {
 	CommandID              string          `json:"command_id"`
 	TaskID                 string          `json:"task_id"`
@@ -385,7 +385,8 @@ func (waiting TaskWaiting) HasField(name string) bool {
 	return ok
 }
 
-// Task is the stable task-control response projection.
+// Task is the stable task-control response projection. Generation identifies
+// the current attempt even before its run has been materialized.
 type Task struct {
 	TaskID        string          `json:"task_id"`
 	State         string          `json:"state"`

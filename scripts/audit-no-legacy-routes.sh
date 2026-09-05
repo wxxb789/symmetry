@@ -35,9 +35,17 @@ done
 # Go path fragments, curl commands, and JSON fixtures.
 legacy_route_pattern='(/api/)?v1/(daemon/(enroll|sessions)([^[:alpha:]]|$)|runtimes/[^/[:space:]]+/(heartbeat|work|reconcile)([^[:alpha:]]|$)|runs/[^/[:space:]]+/(claim|heartbeat|state)([^[:alpha:]]|$)|commands/[^/[:space:]]+/ack([^[:alpha:]]|$)|tasks/[^/[:space:]]+/(cancel|input)([^[:alpha:]]|$))|/(daemon/(enroll|sessions)([^[:alpha:]]|$)|runtimes/[^/[:space:]]+/(heartbeat|work|reconcile)([^[:alpha:]]|$)|runs/[^/[:space:]]+/(claim|heartbeat|state)([^[:alpha:]]|$)|commands/[^/[:space:]]+/ack([^[:alpha:]]|$)|tasks/[^/[:space:]]+/(cancel|input)([^[:alpha:]]|$))'
 
-if audit_output=$(rg --line-number --color=never --glob '*.go' --glob '*.json' --glob '*.md' \
-  --glob '*.ex' --glob '*.exs' --glob '*.yaml' --glob '*.yml' --glob '*.conf' \
-  --glob '!docs/plans/**' --regexp "$legacy_route_pattern" -- "${audit_targets[@]}" 2>&1); then
+if command -v rg >/dev/null 2>&1; then
+  audit_command=(rg --line-number --color=never --glob '*.go' --glob '*.json' --glob '*.md'
+    --glob '*.ex' --glob '*.exs' --glob '*.yaml' --glob '*.yml' --glob '*.conf'
+    --glob '!docs/plans/**' --regexp "$legacy_route_pattern" --)
+else
+  audit_command=(grep -ERn --include='*.go' --include='*.json' --include='*.md'
+    --include='*.ex' --include='*.exs' --include='*.yaml' --include='*.yml' --include='*.conf'
+    --exclude-dir=plans -- "$legacy_route_pattern")
+fi
+
+if audit_output=$("${audit_command[@]}" "${audit_targets[@]}" 2>&1); then
   printf '%s\n' "$audit_output" >&2
   printf '%s\n' 'U2 legacy action endpoints are forbidden in production contract surfaces.' >&2
   exit 1

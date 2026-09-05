@@ -153,12 +153,11 @@ func validateTaskResponse(operation, expectedTaskID string, response protocol.Ta
 	if !isTaskState(response.State) {
 		return invalidResponse(operation, "state is not recognized")
 	}
-	if response.RunID == nil {
-		if *response.Generation != 0 {
-			return invalidResponse(operation, "runless task must have generation zero")
-		}
-	} else if *response.RunID == "" || *response.Generation <= 0 {
-		return invalidResponse(operation, "run_id requires a positive generation")
+	if *response.Generation <= 0 {
+		return invalidResponse(operation, "task generation must be positive")
+	}
+	if response.RunID != nil && *response.RunID == "" {
+		return invalidResponse(operation, "run_id must be non-empty when present")
 	}
 	if requiresTaskRun(response.State) && response.RunID == nil {
 		return invalidResponse(operation, "state requires a run_id")
@@ -284,7 +283,7 @@ func validateTaskCommandResource(expectedTaskID string, response protocol.TaskCo
 	if runBound && (*response.RunID == "" || *response.Generation <= 0) {
 		return errors.New("run_id requires a positive generation")
 	}
-	if response.Kind != "cancel" && response.Kind != "provide_input" {
+	if response.Kind != "cancel" && response.Kind != "provide_input" && response.Kind != "retry" {
 		return errors.New("kind is not recognized")
 	}
 	if err := validateJSONObject(response.Payload); err != nil {
@@ -315,23 +314,24 @@ func validateTaskCommandResource(expectedTaskID string, response protocol.TaskCo
 	if response.AcknowledgementOutcome != nil && *response.AcknowledgementOutcome != "applied" && *response.AcknowledgementOutcome != "rejected" && *response.AcknowledgementOutcome != "failed" {
 		return errors.New("acknowledgement outcome is not recognized")
 	}
-	if !runBound && (response.Kind != "cancel" || response.State != "applied") {
-		return errors.New("runless command must be an applied cancel")
+	controlApplied := response.Kind == "cancel" || response.Kind == "retry"
+	if !runBound && (!controlApplied || response.State != "applied") {
+		return errors.New("runless command must be an applied cancel or retry")
 	}
 	if response.Kind == "provide_input" && !runBound {
 		return errors.New("provide_input command requires a run_id")
 	}
 	switch response.State {
 	case "pending":
-		if !runBound || response.AppliedAt != nil || acknowledgementCount != 0 {
+		if response.Kind == "retry" || !runBound || response.AppliedAt != nil || acknowledgementCount != 0 {
 			return errors.New("pending command must be run-bound without applied_at or acknowledgement")
 		}
 	case "applied":
-		if response.Kind != "cancel" || response.AppliedAt == nil || response.AppliedAt.IsZero() || acknowledgementCount != 0 {
-			return errors.New("applied command must be a cancel with applied_at and no acknowledgement")
+		if !controlApplied || response.AppliedAt == nil || response.AppliedAt.IsZero() || acknowledgementCount != 0 {
+			return errors.New("applied command must be a cancel or retry with applied_at and no acknowledgement")
 		}
 	case "acknowledged":
-		if !runBound || response.AppliedAt != nil || acknowledgementCount != 3 {
+		if response.Kind == "retry" || !runBound || response.AppliedAt != nil || acknowledgementCount != 3 {
 			return errors.New("acknowledged command must be run-bound with acknowledgement and no applied_at")
 		}
 	}

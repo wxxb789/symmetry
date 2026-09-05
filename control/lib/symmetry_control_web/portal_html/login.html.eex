@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f4f5f7">
+    <title>Sign in | Symmetry</title>
+    <link rel="stylesheet" href="/assets/portal.css">
+  </head>
+  <body class="login-page">
+    <main class="login-shell">
+      <section class="login-panel" aria-labelledby="login-title">
+        <div class="brand-mark" aria-hidden="true"><span></span><span></span></div>
+        <p class="eyebrow">SYMMETRY CONTROL</p>
+        <h1 id="login-title">Engineering workspace</h1>
+        <p class="login-copy">Use the operator credential configured for this control plane.</p>
+        <%= if assigns.error do %>
+          <div class="form-alert" role="alert"><%= assigns.error %></div>
+        <% end %>
+        <form method="post" action="/portal/login" class="login-form">
+          <input type="hidden" name="_csrf_token" value="<%= assigns.csrf_token %>">
+          <label for="operator-token">Operator token</label>
+          <input id="operator-token" name="operator_token" type="password" autocomplete="current-password" autofocus required>
+          <button class="button button-primary" type="submit">Open workspace</button>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>

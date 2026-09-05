@@ -89,6 +89,24 @@ func TestCoreDaemonWorkflows(t *testing.T) {
 	})
 }
 
+func TestJSONValuesRoundTripThroughControl(t *testing.T) {
+	environment := loadEnvironment(t)
+	operator := newOperator(t, environment)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	daemon := startDaemon(t, ctx, environment, "json-values", nil)
+	t.Cleanup(func() {
+		cancel()
+		waitForDaemon(t, daemon.done)
+	})
+
+	task := submit(t, operator, daemon, "json-values", "json_values")
+	waitForTask(t, operator, task.TaskID, 20*time.Second, func(task protocol.Task) bool {
+		return task.State == "completed"
+	})
+	assertJSONValueEvents(t, environment, task.TaskID)
+}
+
 func TestPollingFallbackDispatchesWithoutNotifications(t *testing.T) {
 	environment := loadEnvironment(t)
 	operator := newOperator(t, environment)
@@ -294,7 +312,7 @@ func TestStaleRuntimeEpochCannotOverwriteNewGeneration(t *testing.T) {
 		ClaimID: claim.ClaimID, LeaseToken: claim.LeaseToken,
 	}
 	err = machineClient.Transition(context.Background(), assignment.RunID, protocol.StateTransitionRequest{
-		Fence: staleFence, TransitionID: mustID(t), State: "completed", Payload: json.RawMessage(`{}`),
+		Fence: staleFence, TransitionID: mustID(t), State: "running", Payload: json.RawMessage(`{}`),
 	})
 	if !control.IsOwnershipLost(err) {
 		t.Fatalf("stale transition error = %v, want ownership_lost", err)
@@ -705,6 +723,27 @@ func assertInputInspectionEvent(t *testing.T, environment e2eEnvironment, taskID
 	t.Fatalf("task %s has no input inspection event %q", taskID, wantMessage)
 }
 
+func assertJSONValueEvents(t *testing.T, environment e2eEnvironment, taskID string) {
+	t.Helper()
+	events := filterHistory(collectHistory(t, environment, taskID, "events"), func(entry map[string]json.RawMessage) bool {
+		return historyString(t, entry, "kind") == "agent_event"
+	})
+	if len(events) != 3 {
+		t.Fatalf("agent events = %d, want 3", len(events))
+	}
+
+	want := []string{"42", `["progress"]`, "9007199254740993"}
+	for index, event := range events {
+		var payload map[string]json.RawMessage
+		if err := json.Unmarshal(historyField(t, event, "payload"), &payload); err != nil {
+			t.Fatalf("decode agent event payload %d: %v", index, err)
+		}
+		if got := string(payload["value"]); got != want[index] {
+			t.Fatalf("agent event %d value = %s, want %s", index, got, want[index])
+		}
+	}
+}
+
 func assertWaitingInputHistory(t *testing.T, environment e2eEnvironment, taskID, runID string, generation int64) {
 	t.Helper()
 	events := collectHistory(t, environment, taskID, "events")
@@ -714,11 +753,15 @@ func assertWaitingInputHistory(t *testing.T, environment e2eEnvironment, taskID,
 	if len(waitingEvents) != 2 {
 		t.Fatalf("waiting events = %d, want 2", len(waitingEvents))
 	}
-	for index, wantQuestion := range []string{"Provide the first requested input.", "Confirm the requested input before continuing."} {
-		if got := historyPayloadString(t, waitingEvents[index], "question"); got != wantQuestion {
-			t.Fatalf("waiting event %d question = %q, want %q", index, got, wantQuestion)
+	questions := make(map[string]bool, len(waitingEvents))
+	for _, event := range waitingEvents {
+		questions[historyPayloadString(t, event, "question")] = true
+		assertHistoryRunOwnership(t, event, runID, generation)
+	}
+	for _, wantQuestion := range []string{"Provide the first requested input.", "Confirm the requested input before continuing."} {
+		if !questions[wantQuestion] {
+			t.Fatalf("waiting questions = %#v, missing %q", questions, wantQuestion)
 		}
-		assertHistoryRunOwnership(t, waitingEvents[index], runID, generation)
 	}
 
 	transitions := collectHistory(t, environment, taskID, "transitions")

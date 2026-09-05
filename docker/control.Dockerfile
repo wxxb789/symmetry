@@ -1,12 +1,12 @@
 # syntax=docker/dockerfile:1
 
 ARG ELIXIR_IMAGE=elixir:1.20.4-otp-29-slim
-ARG RUNTIME_IMAGE=debian:bookworm-slim
+ARG RUNTIME_IMAGE=debian:trixie-slim
 
 FROM ${ELIXIR_IMAGE} AS build
 
 RUN apt-get update -y \
-    && apt-get install --no-install-recommends -y build-essential git \
+    && apt-get install --no-install-recommends -y build-essential ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -17,7 +17,7 @@ RUN mix local.hex --force && mix local.rebar --force
 COPY control/mix.exs control/mix.lock ./
 RUN mix deps.get --only $MIX_ENV
 
-COPY control/config/config.exs config/config.exs
+COPY control/config/ config/
 RUN mix deps.compile
 
 COPY control/ ./

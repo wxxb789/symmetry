@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -266,8 +267,8 @@ func TestRunPersistsClaimIntentBeforeClaimAndHandlesNotification(t *testing.T) {
 	if control.claimCalls != 1 {
 		t.Fatalf("Claim calls = %d, want 1", control.claimCalls)
 	}
-	if control.eventCalls != 0 {
-		t.Fatal("terminal run sent ordinary output events")
+	if control.eventCalls != 1 {
+		t.Fatalf("terminal run event calls = %d, want 1", control.eventCalls)
 	}
 }
 
@@ -308,7 +309,7 @@ func TestWaitingInputDrainsThroughRunningAndTerminal(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
 	process := &recordingProcess{}
-	api := &orderingControl{}
+	api := &orderingControl{recordEvents: true}
 	daemon := &daemon{
 		store:     store,
 		control:   api,
@@ -320,6 +321,9 @@ func TestWaitingInputDrainsThroughRunningAndTerminal(t *testing.T) {
 		t.Fatal(err)
 	}
 	daemon.handleCommand(context.Background(), protocol.Command{CommandID: "input-1", RunID: key.RunID, Generation: key.Generation, Kind: "provide_input", Payload: []byte(`{"answer":"yes"}`)})
+	if err := daemon.queueOutput(key, config.EventFormatJSONL, &jsonlParser{}, execution.Event{Stream: execution.Stdout, At: time.Now().UTC(), Data: []byte("{\"type\":\"progress\",\"message\":\"input_received\"}\n")}); err != nil {
+		t.Fatal(err)
+	}
 	if err := daemon.queueTerminalTransition(key, "completed", map[string]any{"exit_code": 0}); err != nil {
 		t.Fatal(err)
 	}
@@ -337,8 +341,132 @@ func TestWaitingInputDrainsThroughRunningAndTerminal(t *testing.T) {
 	if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
 		t.Fatalf("journal = %v, want deleted after terminal drain", err)
 	}
-	if got, want := api.calls, []string{"transition:completed", "ack:input-1"}; !sameStrings(got, want) {
+	if got, want := api.calls, []string{"event:waiting_for_input", "transition:running", "ack:input-1", "event:progress", "transition:completed"}; !sameStrings(got, want) {
 		t.Fatalf("flush calls = %#v, want %#v", got, want)
+	}
+}
+
+func TestTerminalFlushDeliversQueuedEventsBeforeCompletion(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	persistWorkspacePath(t, store, key, "C:\\workspace")
+	now := time.Now().UTC()
+	nextID := ids()
+	for index, kind := range []string{"summary", "finding"} {
+		eventID, err := nextID()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.QueueEvent(key, protocol.RunEvent{
+			EventID:    eventID,
+			Sequence:   int64(index + 1),
+			Kind:       kind,
+			OccurredAt: now.Add(time.Duration(index) * time.Millisecond),
+			Payload:    json.RawMessage(`{"schema_version":1}`),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.QueueTerminalTransition(key, protocol.StateTransitionRequest{
+		TransitionID: "completed-1",
+		State:        "completed",
+		Payload:      json.RawMessage(`{"exit_code":0}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	api := &orderingControl{recordEvents: true}
+	daemon := &daemon{
+		store:     store,
+		control:   api,
+		workspace: &fakeWorkspace{},
+		log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := daemon.flushRun(context.Background(), journal); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := api.calls, []string{"event:summary", "event:finding", "transition:completed"}; !sameStrings(got, want) {
+		t.Fatalf("flush calls = %#v, want %#v", got, want)
+	}
+}
+
+func TestTerminalEventTransientFailureBlocksTerminalAndSurvivesRestart(t *testing.T) {
+	directory := t.TempDir()
+	store, key := claimedStoreAt(t, directory)
+	persistWorkspacePath(t, store, key, "C:\\workspace")
+	now := time.Now().UTC()
+	if _, err := store.QueueEvent(key, protocol.RunEvent{
+		EventID:    "event-stable",
+		Sequence:   1,
+		Kind:       "summary",
+		OccurredAt: now,
+		Payload:    json.RawMessage(`{"summary":"durable"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.QueueTerminalTransition(key, protocol.StateTransitionRequest{
+		TransitionID: "terminal-stable",
+		State:        "completed",
+		Payload:      json.RawMessage(`{"exit_code":0}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	api := &terminalEventRetryControl{failOnce: true}
+	first := &daemon{
+		store:     store,
+		control:   api,
+		workspace: &fakeWorkspace{},
+		log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.flushRun(context.Background(), journal); err == nil {
+		t.Fatal("flushRun() succeeded despite transient event delivery failure")
+	}
+	if api.terminalCalls != 0 {
+		t.Fatalf("terminal calls = %d, want 0 while events remain pending", api.terminalCalls)
+	}
+	pending, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending.PendingEvents) != 1 || pending.PendingEvents[0].EventID != "event-stable" {
+		t.Fatalf("pending events = %#v, want stable event", pending.PendingEvents)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	restartedStore, err := state.New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restartedStore.Close()
+	restarted := &daemon{
+		store:     restartedStore,
+		control:   api,
+		workspace: &fakeWorkspace{},
+		log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	}
+	journal, err = restartedStore.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.flushRun(context.Background(), journal); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := api.eventIDs, [][]string{{"event-stable"}, {"event-stable"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("event IDs = %#v, want %#v", got, want)
+	}
+	if api.terminalCalls != 1 {
+		t.Fatalf("terminal calls = %d, want 1 after event delivery", api.terminalCalls)
 	}
 }
 
@@ -1026,7 +1154,7 @@ func TestRestartInputRecoveryOwnershipLossQueuesTerminalBeforeCleanup(t *testing
 	if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
 		t.Fatalf("journal = %v, want cleanup after conclusive terminal ownership loss", err)
 	}
-	if got, want := api.callsSnapshot(), []string{"event:event-before-input", "register", "transition:failed"}; !sameStrings(got, want) {
+	if got, want := api.callsSnapshot(), []string{"event:event-before-input", "register", "event:event-before-input", "transition:failed"}; !sameStrings(got, want) {
 		t.Fatalf("conclusive terminal calls = %#v, want %#v", got, want)
 	}
 }
@@ -2672,7 +2800,7 @@ func TestTerminalOutboxOwnershipLossDropsOrdinaryItemsAndDeliversTerminal(t *tes
 	if len(journal.PendingEvents) != 0 || len(journal.PendingTransitions) != 0 || journal.TerminalVerdict != state.TerminalVerdictAccepted {
 		t.Fatalf("ordinary terminal outbox items were not retired: %#v", journal)
 	}
-	if control.eventCalls != 0 || control.nonTerminalTransitionCalls != 0 {
+	if control.eventCalls != 1 || control.nonTerminalTransitionCalls != 0 {
 		t.Fatalf("terminal flush called ordinary control APIs: events=%d transitions=%d", control.eventCalls, control.nonTerminalTransitionCalls)
 	}
 }
@@ -3318,12 +3446,16 @@ func TestJSONLParserBoundsUnterminatedRecordsAndPreservesNormalJSONL(t *testing.
 	}
 }
 
-func TestJSONLPrimitiveAndArrayUseRawOutputAndFlushWithTerminal(t *testing.T) {
+func TestJSONLPrimitiveAndArrayUseAgentEventsAndFlushWithTerminal(t *testing.T) {
 	store, key := terminalStore(t)
 	defer store.Close()
-	daemon := &daemon{store: store, control: &orderingControl{}, workspace: &fakeWorkspace{}, log: slog.New(slog.NewJSONHandler(io.Discard, nil)), options: options{newID: ids()}}
+	daemon := &daemon{store: store, control: &payloadValidatingControl{}, workspace: &fakeWorkspace{}, log: slog.New(slog.NewJSONHandler(io.Discard, nil)), options: options{newID: ids()}}
 	parser := &jsonlParser{}
-	for _, value := range [][]byte{[]byte("42\n"), []byte("[\"progress\"]\n")} {
+	for _, value := range [][]byte{
+		[]byte("42\n"),
+		[]byte("[\"progress\"]\n"),
+		[]byte("9007199254740993\n"),
+	} {
 		if err := daemon.queueOutput(key, config.EventFormatJSONL, parser, execution.Event{Stream: execution.Stdout, At: time.Now().UTC(), Data: value}); err != nil {
 			t.Fatal(err)
 		}
@@ -3332,8 +3464,17 @@ func TestJSONLPrimitiveAndArrayUseRawOutputAndFlushWithTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(journal.PendingEvents) != 2 || journal.PendingEvents[0].Kind != "output" || journal.PendingEvents[1].Kind != "output" {
+	if len(journal.PendingEvents) != 3 || journal.PendingEvents[0].Kind != "agent_event" || journal.PendingEvents[1].Kind != "agent_event" || journal.PendingEvents[2].Kind != "agent_event" {
 		t.Fatalf("events = %#v", journal.PendingEvents)
+	}
+	if got, want := string(journal.PendingEvents[0].Payload), `{"value":42}`; got != want {
+		t.Fatalf("scalar payload = %s, want %s", got, want)
+	}
+	if got, want := string(journal.PendingEvents[1].Payload), `{"value":["progress"]}`; got != want {
+		t.Fatalf("array payload = %s, want %s", got, want)
+	}
+	if got, want := string(journal.PendingEvents[2].Payload), `{"value":9007199254740993}`; got != want {
+		t.Fatalf("large integer payload = %s, want %s", got, want)
 	}
 	daemon.flushRun(context.Background(), journal)
 	if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
@@ -3341,7 +3482,7 @@ func TestJSONLPrimitiveAndArrayUseRawOutputAndFlushWithTerminal(t *testing.T) {
 	}
 }
 
-func TestJSONLRawFallbackDoesNotDropLaterRecords(t *testing.T) {
+func TestJSONLUnknownValuesDoNotDropLaterRecords(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
 	if _, err := store.SetLocalState(key, "running"); err != nil {
@@ -3356,11 +3497,57 @@ func TestJSONLRawFallbackDoesNotDropLaterRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(journal.PendingEvents) != 4 || journal.PendingEvents[0].Kind != "output" || journal.PendingEvents[1].Kind != "output" || journal.PendingEvents[2].Kind != "waiting_for_input" || journal.PendingEvents[3].Kind != "progress" {
+	if len(journal.PendingEvents) != 4 || journal.PendingEvents[0].Kind != "agent_event" || journal.PendingEvents[1].Kind != "agent_event" || journal.PendingEvents[2].Kind != "waiting_for_input" || journal.PendingEvents[3].Kind != "progress" {
 		t.Fatalf("events = %#v", journal.PendingEvents)
 	}
 	if len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].State != "waiting_for_input" {
 		t.Fatalf("transitions = %#v", journal.PendingTransitions)
+	}
+}
+
+func TestJSONLSemanticEventsPreserveValidKindsAndDowngradeInvalidRecords(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	if _, err := store.SetLocalState(key, "running"); err != nil {
+		t.Fatal(err)
+	}
+	daemon := &daemon{store: store, options: options{newID: ids()}}
+	records := []string{
+		`{"type":"summary","schema_version":1,"summary":"done"}`,
+		`{"type":"finding","schema_version":1,"message":"race fixed","severity":"high"}`,
+		`{"type":"artifact","schema_version":1,"path":"control/portal.js"}`,
+		`{"type":"test","schema_version":1,"name":"portal","status":"passed"}`,
+		`{"type":"pull_request","schema_version":1,"url":"https://example.invalid/pull/1"}`,
+		`{"type":"ci","schema_version":1,"status":"passed"}`,
+		`{"type":"review","schema_version":1,"status":"required"}`,
+		`{"type":"ci","schema_version":2,"status":"passed"}`,
+		`{"type":"pull_request","schema_version":1,"url":"javascript:alert(1)"}`,
+		`{"type":"pull_request","schema_version":1,"url":"https://"}`,
+	}
+
+	data := []byte(strings.Join(records, "\n") + "\n")
+	if err := daemon.queueOutput(key, config.EventFormatJSONL, &jsonlParser{}, execution.Event{Stream: execution.Stdout, At: time.Now().UTC(), Data: data}); err != nil {
+		t.Fatal(err)
+	}
+
+	oversized := `{"type":"summary","schema_version":1,"summary":"` + strings.Repeat("x", maxSemanticEventBytes) + `"}` + "\n"
+	if err := daemon.queueOutput(key, config.EventFormatJSONL, &jsonlParser{}, execution.Event{Stream: execution.Stdout, At: time.Now().UTC(), Data: []byte(oversized)}); err != nil {
+		t.Fatal(err)
+	}
+
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"summary", "finding", "artifact", "test", "pull_request", "ci", "review", "agent_event", "agent_event", "agent_event", "agent_event"}
+	if len(journal.PendingEvents) != len(want) {
+		t.Fatalf("events = %d, want %d", len(journal.PendingEvents), len(want))
+	}
+	for index, event := range journal.PendingEvents {
+		if event.Kind != want[index] {
+			t.Fatalf("event %d kind = %q, want %q", index, event.Kind, want[index])
+		}
 	}
 }
 
@@ -3872,18 +4059,38 @@ func TestScheduledSnapshotCancelPreemptsBlockedInputAndJoins(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("scheduled cancellation did not persist after input completion")
 	}
-	journal, err := store.LoadJournal(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if journal.LocalState != "terminal_pending" || len(journal.PendingCommandAcknowledgements) != 2 {
-		t.Fatalf("scheduled cancellation journal = %#v", journal)
+	deadline := time.Now().Add(time.Second)
+	var journal state.RunJournal
+	var err error
+	for {
+		journal, err = store.LoadJournal(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		inputSettled := journal.InputCommandIntent != nil &&
+			(journal.InputCommandIntent.Outcome == "applied" || journal.InputCommandIntent.Outcome == "failed")
+		if inputSettled && !journal.InputCommandIntent.AcknowledgementDelivered {
+			inputSettled = false
+			for _, acknowledgement := range journal.PendingCommandAcknowledgements {
+				if acknowledgement.CommandID == "input-1" && acknowledgement.Outcome == journal.InputCommandIntent.Outcome {
+					inputSettled = true
+					break
+				}
+			}
+		}
+		if journal.LocalState == "terminal_pending" && inputSettled {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("scheduled cancellation journal = %#v", journal)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	outcomes := make(map[string]string, len(journal.PendingCommandAcknowledgements))
 	for _, acknowledgement := range journal.PendingCommandAcknowledgements {
 		outcomes[acknowledgement.CommandID] = acknowledgement.Outcome
 	}
-	if outcomes["input-1"] != "applied" || outcomes["cancel-1"] != "applied" {
+	if outcomes["cancel-1"] != "applied" {
 		t.Fatalf("scheduled cancellation outcomes = %#v", outcomes)
 	}
 
@@ -5907,6 +6114,45 @@ type orderingControl struct {
 	failAcknowledgementOnce bool
 }
 
+type payloadValidatingControl struct{ orderingControl }
+
+func (client *payloadValidatingControl) AppendEvents(ctx context.Context, runID string, request protocol.AppendEventsRequest) error {
+	for _, event := range request.Events {
+		var payload map[string]any
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			return &control.APIError{StatusCode: http.StatusBadRequest, Code: control.InvalidRequest}
+		}
+	}
+	return client.orderingControl.AppendEvents(ctx, runID, request)
+}
+
+type terminalEventRetryControl struct {
+	fakeControl
+	failOnce      bool
+	eventIDs      [][]string
+	terminalCalls int
+}
+
+func (client *terminalEventRetryControl) AppendEvents(_ context.Context, _ string, request protocol.AppendEventsRequest) error {
+	ids := make([]string, len(request.Events))
+	for index, event := range request.Events {
+		ids[index] = event.EventID
+	}
+	client.eventIDs = append(client.eventIDs, ids)
+	if client.failOnce {
+		client.failOnce = false
+		return transportError("temporary event failure")
+	}
+	return nil
+}
+
+func (client *terminalEventRetryControl) Transition(_ context.Context, _ string, request protocol.StateTransitionRequest) error {
+	if isTerminalTransition(request.State) {
+		client.terminalCalls++
+	}
+	return nil
+}
+
 type retryTransitionControl struct {
 	fakeControl
 	requests  []protocol.StateTransitionRequest
@@ -5997,7 +6243,7 @@ type terminalOutboxOwnershipControl struct {
 
 func (client *terminalOutboxOwnershipControl) AppendEvents(context.Context, string, protocol.AppendEventsRequest) error {
 	client.eventCalls++
-	return errors.New("ordinary events must not be sent after terminal entry")
+	return &control.APIError{Code: control.OwnershipLost}
 }
 
 func (client *terminalOutboxOwnershipControl) Transition(_ context.Context, _ string, request protocol.StateTransitionRequest) error {

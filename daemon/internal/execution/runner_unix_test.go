@@ -5,6 +5,7 @@ package execution
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/signal"
 	"strconv"
@@ -15,13 +16,15 @@ import (
 )
 
 func TestTerminatedZeroExitIsNotSuccessfulOnUnix(t *testing.T) {
+	sink := &recordingSink{notify: make(chan struct{}, 1)}
 	invocation := helperInvocation("unused")
 	invocation.Args = []string{"-test.run=^TestUnixTerminationHelper$"}
 	invocation.Env = append(minimalEnvironment(), "GO_WANT_UNIX_TERMINATION_HELPER=1")
-	process, err := NewRunner().Start(context.Background(), invocation, &recordingSink{})
+	process, err := NewRunner().Start(context.Background(), invocation, sink)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
+	waitForUnixOutput(t, sink, "ready")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -61,6 +64,10 @@ func TestRootExitDoesNotLeaveADescendantHoldingStdoutOnUnix(t *testing.T) {
 	if !result.Success() {
 		t.Fatalf("result = %+v, want successful root completion", result)
 	}
+	deadline := time.Now().Add(5 * time.Second)
+	for unixProcessExists(childPID) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
 	if unixProcessExists(childPID) {
 		t.Fatalf("descendant process %d survived root exit", childPID)
 	}
@@ -74,16 +81,21 @@ func TestUnixTerminationHelper(t *testing.T) {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGTERM)
 	defer signal.Stop(signals)
+	fmt.Fprint(os.Stdout, "ready")
 	<-signals
 	os.Exit(0)
 }
 
 func waitForUnixStdout(t *testing.T, sink *recordingSink) string {
+	return waitForUnixOutput(t, sink, "child:")
+}
+
+func waitForUnixOutput(t *testing.T, sink *recordingSink, prefix string) string {
 	t.Helper()
 	timer := time.NewTimer(5 * time.Second)
 	defer timer.Stop()
 	for {
-		if output := sink.output(Stdout); strings.HasPrefix(output, "child:") {
+		if output := sink.output(Stdout); strings.HasPrefix(output, prefix) {
 			return output
 		}
 		select {

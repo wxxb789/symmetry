@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f6f7f9">
+    <meta name="csrf-token" content="<%= assigns.csrf_token %>">
+    <title>Engineering workspace | Symmetry</title>
+    <link rel="stylesheet" href="/assets/portal.css">
+    <script defer src="/assets/portal.js"></script>
+  </head>
+  <body class="app-page">
+    <div class="app-shell">
+      <aside class="workspace-nav" aria-label="Workspace navigation">
+        <a class="brand-button" href="/portal" aria-label="Symmetry workspace" title="Symmetry">
+          <span class="brand-mark" aria-hidden="true"><span></span><span></span></span>
+        </a>
+        <nav class="primary-nav">
+          <a class="nav-button is-active" href="#board" data-view="board" aria-label="Board" title="Board"><span data-icon="columns"></span></a>
+          <a class="nav-button" href="#activity" data-view="activity" aria-label="Activity" title="Activity"><span data-icon="activity"></span></a>
+          <a class="nav-button" href="#resources" data-view="resources" aria-label="Resources" title="Resources"><span data-icon="plug"></span></a>
+        </nav>
+        <form method="post" action="/portal/logout" class="logout-form">
+          <input type="hidden" name="_csrf_token" value="<%= assigns.csrf_token %>">
+          <button class="nav-button" type="submit" aria-label="Sign out" title="Sign out"><span data-icon="log-out"></span></button>
+        </form>
+      </aside>
+
+      <header class="topbar">
+        <div class="project-context">
+          <select id="project-switcher" class="project-switcher" aria-label="Project"></select>
+          <button id="project-settings-button" class="icon-button" type="button" aria-label="Project settings" title="Project settings"><span data-icon="settings"></span></button>
+          <button id="new-project-button" class="icon-button" type="button" aria-label="New project" title="New project"><span data-icon="plus"></span></button>
+        </div>
+        <label class="search-control" for="work-search">
+          <span data-icon="search" aria-hidden="true"></span>
+          <input id="work-search" type="search" placeholder="Search work" autocomplete="off">
+        </label>
+        <div class="topbar-actions">
+          <button id="refresh-button" class="icon-button" type="button" aria-label="Refresh workspace" title="Refresh"><span data-icon="refresh"></span></button>
+          <button id="new-item-button" class="button button-primary" type="button" aria-label="New work item"><span data-icon="plus"></span><span>New work item</span></button>
+        </div>
+      </header>
+
+      <main class="workspace-content">
+        <div class="workspace-main">
+          <section class="workspace-view" id="board-view" data-view-panel="board" aria-labelledby="project-title">
+            <header class="project-header">
+              <div>
+                <div class="project-key-row"><span id="project-key" class="project-key">---</span><span id="project-state" class="status-dot-label">Loading</span></div>
+                <h1 id="project-title">Engineering workspace</h1>
+                <p id="project-description"></p>
+              </div>
+              <div class="project-metrics" aria-label="Project summary">
+                <div><strong id="metric-open">0</strong><span>Open</span></div>
+                <div><strong id="metric-active">0</strong><span>Active</span></div>
+                <div><strong id="metric-review">0</strong><span>Review</span></div>
+              </div>
+            </header>
+
+            <div class="board-toolbar">
+              <div class="segmented-control" aria-label="Board filter">
+                <button class="segment is-active" data-filter="all" type="button">All</button>
+                <button class="segment" data-filter="assigned" type="button">Assigned</button>
+                <button class="segment" data-filter="attention" type="button">Attention</button>
+              </div>
+              <div class="toolbar-meta" id="board-summary">0 work items</div>
+            </div>
+
+            <section id="kanban-board" class="kanban-board" aria-label="Project Kanban" aria-live="polite"></section>
+          </section>
+
+          <section class="workspace-view" id="activity-view" data-view-panel="activity" hidden aria-labelledby="activity-title">
+            <header class="view-header">
+              <div><p class="eyebrow">EXECUTION</p><h1 id="activity-title">Activity</h1></div>
+              <div id="activity-summary" class="toolbar-meta">0 linked runs</div>
+            </header>
+            <div id="activity-list" class="activity-list" aria-live="polite"></div>
+          </section>
+
+          <section class="workspace-view" id="resources-view" data-view-panel="resources" hidden aria-labelledby="resources-title">
+            <header class="view-header">
+              <div><p class="eyebrow">PROJECT INFRASTRUCTURE</p><h1 id="resources-title">Resources</h1></div>
+              <button id="resources-add-button" class="button button-primary" type="button"><span data-icon="plus"></span><span>Attach resource</span></button>
+            </header>
+            <div id="resource-table" class="resource-table" aria-live="polite"></div>
+            <section class="runtime-section" aria-labelledby="runtimes-title">
+              <div class="section-heading"><h2 id="runtimes-title">Compatible runtimes</h2><span id="runtime-total">0</span></div>
+              <div id="runtime-table" class="runtime-table"></div>
+            </section>
+          </section>
+        </div>
+
+        <aside class="context-rail" aria-label="Workspace health and context">
+          <section class="rail-section">
+            <div class="section-heading"><h2>System health</h2><span id="last-refreshed">Now</span></div>
+            <div id="health-grid" class="health-grid"></div>
+          </section>
+          <section class="rail-section">
+            <div class="section-heading"><h2>Needs attention</h2><span id="attention-count">0</span></div>
+            <div id="attention-list" class="rail-list"></div>
+          </section>
+          <section class="rail-section">
+            <div class="section-heading"><h2>Runtime capacity</h2><span id="runtime-count">0</span></div>
+            <div id="runtime-list" class="rail-list"></div>
+          </section>
+        </aside>
+      </main>
+    </div>
+
+    <aside id="detail-drawer" class="detail-drawer" aria-label="Work item details" aria-hidden="true" inert>
+      <div class="drawer-header">
+        <div><span id="detail-key" class="project-key"></span><h2 id="detail-title">Work item</h2></div>
+        <button id="close-detail-button" class="icon-button" type="button" aria-label="Close details" title="Close"><span data-icon="x"></span></button>
+      </div>
+      <div id="detail-content" class="drawer-content"></div>
+    </aside>
+    <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
+
+    <dialog id="work-item-dialog" class="dialog">
+      <form id="work-item-form" method="dialog">
+        <input type="hidden" name="id">
+        <input type="hidden" name="version">
+        <header class="dialog-header"><div><p class="eyebrow" id="work-item-dialog-eyebrow">WORK ITEM</p><h2 id="work-item-dialog-title">Create work</h2></div><button class="icon-button" type="button" data-close-dialog aria-label="Close" title="Close"><span data-icon="x"></span></button></header>
+        <div class="dialog-body">
+          <p class="form-alert" data-form-error hidden></p>
+          <label class="field field-wide" data-intent-field><span>Title</span><input name="title" maxlength="240" required autofocus></label>
+          <label class="field field-wide" data-intent-field><span>Description</span><textarea name="description" rows="5" maxlength="20000"></textarea></label>
+          <label class="field"><span>Status</span><select name="status"><option value="backlog">Backlog</option><option value="ready" selected>Ready</option><option value="in_progress">In progress</option><option value="review">Review</option><option value="done">Done</option></select></label>
+          <label class="field"><span>Priority</span><select name="priority"><option value="urgent">Urgent</option><option value="high">High</option><option value="medium" selected>Medium</option><option value="low">Low</option><option value="no_priority">No priority</option></select></label>
+          <label class="field" data-intent-field><span>Owner type</span><select name="assignee_type"><option value="unassigned">Unassigned</option><option value="human">Human</option><option value="agent">Agent</option></select></label>
+          <label class="field" data-intent-field><span>Owner</span><input name="assignee_name" maxlength="120"></label>
+          <label class="field" data-intent-field><span>Agent profile</span><input name="agent_profile" maxlength="120" placeholder="Project default"></label>
+          <label class="field" data-intent-field><span>Workspace</span><input name="workspace" maxlength="240" placeholder="Project default"></label>
+          <label class="field field-wide" data-intent-field><span>Repository</span><select name="repository_resource_id"><option value="">Not linked</option></select></label>
+          <label class="field field-wide"><span>Branch</span><input name="branch" maxlength="500"></label>
+          <label class="field field-wide"><span>Pull request URL</span><input name="pull_request_url" type="url"></label>
+          <label class="field"><span>CI</span><select name="ci_status"><option value="">Use agent result</option><option value="unknown">Unknown</option><option value="pending">Pending</option><option value="passed">Passed</option><option value="failed">Failed</option></select></label>
+          <label class="field"><span>Review</span><select name="review_status"><option value="">Use agent result</option><option value="none">None</option><option value="required">Required</option><option value="changes_requested">Changes requested</option><option value="approved">Approved</option></select></label>
+          <label class="field field-checkbox"><input name="blocked" type="checkbox"><span>Blocked</span></label>
+          <label class="field field-wide"><span>Blocker</span><input name="blocker" maxlength="1000"></label>
+          <p class="field-wide form-note" id="intent-lock-note" hidden>Execution-defining fields are locked while this run is active.</p>
+        </div>
+        <footer class="dialog-footer"><button class="button" type="button" data-close-dialog>Cancel</button><button class="button button-primary" type="submit"><span data-icon="check"></span><span id="work-item-submit-label">Create</span></button></footer>
+      </form>
+    </dialog>
+
+    <dialog id="project-dialog" class="dialog dialog-small">
+      <form id="project-form" method="dialog">
+        <input type="hidden" name="id">
+        <input type="hidden" name="version">
+        <header class="dialog-header"><div><p class="eyebrow">PROJECT</p><h2 id="project-dialog-title">Create project</h2></div><button class="icon-button" type="button" data-close-dialog aria-label="Close" title="Close"><span data-icon="x"></span></button></header>
+        <div class="dialog-body">
+          <p class="form-alert" data-form-error hidden></p>
+          <label class="field field-wide"><span>Name</span><input name="name" maxlength="120" required autofocus></label>
+          <label class="field"><span>Key</span><input name="key" maxlength="8" pattern="[A-Za-z][A-Za-z0-9]{1,7}" required></label>
+          <label class="field"><span>Status</span><select name="status"><option value="active">Active</option><option value="archived">Archived</option></select></label>
+          <label class="field"><span>Default agent</span><input name="default_agent_profile" maxlength="120" value="default" required></label>
+          <label class="field"><span>Workspace</span><input name="default_workspace" maxlength="240" value="primary" required></label>
+          <label class="field field-wide"><span>Description</span><textarea name="description" rows="4" maxlength="4000"></textarea></label>
+        </div>
+        <footer class="dialog-footer"><button class="button" type="button" data-close-dialog>Cancel</button><button class="button button-primary" type="submit"><span data-icon="check"></span><span id="project-submit-label">Create</span></button></footer>
+      </form>
+    </dialog>
+
+    <dialog id="resource-dialog" class="dialog dialog-small">
+      <form id="resource-form" method="dialog">
+        <input type="hidden" name="id">
+        <input type="hidden" name="version">
+        <header class="dialog-header"><div><p class="eyebrow">PROJECT RESOURCE</p><h2 id="resource-dialog-title">Attach resource</h2></div><button class="icon-button" type="button" data-close-dialog aria-label="Close" title="Close"><span data-icon="x"></span></button></header>
+        <div class="dialog-body">
+          <p class="form-alert" data-form-error hidden></p>
+          <label class="field"><span>Type</span><select name="kind"><option value="repository">Repository</option><option value="work_tracking">Work tracking</option><option value="ci">CI</option><option value="agent">Agent</option><option value="runtime">Runtime</option><option value="connection">Connection</option></select></label>
+          <label class="field"><span>Connection</span><select name="status"><option value="healthy">Healthy</option><option value="degraded">Degraded</option><option value="offline">Offline</option><option value="unknown" selected>Unknown</option></select></label>
+          <label class="field"><span>Sync</span><select name="sync_status"><option value="synced">Synced</option><option value="syncing">Syncing</option><option value="stale">Stale</option><option value="failed">Failed</option><option value="unknown" selected>Unknown</option></select></label>
+          <label class="field field-wide"><span>Name</span><input name="name" maxlength="160" required autofocus></label>
+          <label class="field"><span>Provider</span><input name="provider" maxlength="120"></label>
+          <label class="field"><span>Reference</span><input name="external_ref" maxlength="500"><select name="registered_external_ref" aria-label="Registered reference" hidden disabled></select></label>
+          <label class="field field-wide"><span>URL</span><input name="url" type="url"></label>
+          <label class="field field-wide"><span>Status detail</span><input name="status_message" maxlength="1000"></label>
+          <label class="field"><span>Last checked</span><input name="last_checked_at" type="datetime-local"></label>
+          <label class="field"><span>Last synced</span><input name="last_synced_at" type="datetime-local"></label>
+        </div>
+        <footer class="dialog-footer dialog-footer-split"><button id="delete-resource-button" class="button button-danger" type="button" hidden>Detach</button><span></span><button class="button" type="button" data-close-dialog>Cancel</button><button class="button button-primary" type="submit"><span data-icon="plug"></span><span id="resource-submit-label">Attach</span></button></footer>
+      </form>
+    </dialog>
+
+    <dialog id="confirm-dialog" class="dialog dialog-confirm">
+      <form method="dialog">
+        <header class="dialog-header"><div><p class="eyebrow">CONFIRM</p><h2 id="confirm-title">Confirm action</h2></div></header>
+        <div class="dialog-body"><p id="confirm-message"></p></div>
+        <footer class="dialog-footer"><button class="button" value="cancel">Cancel</button><button id="confirm-action-button" class="button button-danger" value="confirm">Confirm</button></footer>
+      </form>
+    </dialog>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  </body>
+</html>

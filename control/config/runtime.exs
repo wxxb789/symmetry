@@ -55,6 +55,8 @@ if config_env() != :test do
     assignment_duration_ms:
       String.to_integer(System.get_env("SYMMETRY_ASSIGNMENT_DURATION_MS", "30000")),
     reaper_interval_ms: String.to_integer(System.get_env("SYMMETRY_REAPER_INTERVAL_MS", "5000")),
+    portal_session_max_age_seconds:
+      String.to_integer(System.get_env("SYMMETRY_PORTAL_SESSION_MAX_AGE_SECONDS", "28800")),
     reaper_enabled: true,
     scheduler_enabled: true
 end
@@ -103,5 +105,4 @@ if config_env() == :prod do
       ip: {0, 0, 0, 0, 0, 0, 0, 0}
     ],
     secret_key_base: secret_key_base
-
 end
