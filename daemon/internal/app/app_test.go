@@ -4059,12 +4059,21 @@ func TestScheduledSnapshotCancelPreemptsBlockedInputAndJoins(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("scheduled cancellation did not persist after input completion")
 	}
-	journal, err := store.LoadJournal(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if journal.LocalState != "terminal_pending" || len(journal.PendingCommandAcknowledgements) != 2 {
-		t.Fatalf("scheduled cancellation journal = %#v", journal)
+	deadline := time.Now().Add(time.Second)
+	var journal state.RunJournal
+	var err error
+	for {
+		journal, err = store.LoadJournal(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if journal.LocalState == "terminal_pending" && len(journal.PendingCommandAcknowledgements) == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("scheduled cancellation journal = %#v", journal)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	outcomes := make(map[string]string, len(journal.PendingCommandAcknowledgements))
 	for _, acknowledgement := range journal.PendingCommandAcknowledgements {

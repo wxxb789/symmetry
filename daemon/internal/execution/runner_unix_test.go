@@ -24,7 +24,7 @@ func TestTerminatedZeroExitIsNotSuccessfulOnUnix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	waitForUnixStdout(t, sink)
+	waitForUnixOutput(t, sink, "ready")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -87,11 +87,15 @@ func TestUnixTerminationHelper(t *testing.T) {
 }
 
 func waitForUnixStdout(t *testing.T, sink *recordingSink) string {
+	return waitForUnixOutput(t, sink, "child:")
+}
+
+func waitForUnixOutput(t *testing.T, sink *recordingSink, prefix string) string {
 	t.Helper()
 	timer := time.NewTimer(5 * time.Second)
 	defer timer.Stop()
 	for {
-		if output := sink.output(Stdout); strings.HasPrefix(output, "child:") {
+		if output := sink.output(Stdout); strings.HasPrefix(output, prefix) {
 			return output
 		}
 		select {
