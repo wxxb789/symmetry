@@ -772,6 +772,17 @@ func runGit(t *testing.T, directory string, arguments ...string) {
 }
 
 func pathWithin(root, target string) bool {
-	relative, err := filepath.Rel(root, target)
-	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+	rootInfo, err := os.Stat(root)
+	if err != nil {
+		return false
+	}
+	for current := target; ; current = filepath.Dir(current) {
+		if info, err := os.Stat(current); err == nil && os.SameFile(rootInfo, info) {
+			return true
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return false
+		}
+	}
 }

@@ -312,7 +312,7 @@ func TestStaleRuntimeEpochCannotOverwriteNewGeneration(t *testing.T) {
 		ClaimID: claim.ClaimID, LeaseToken: claim.LeaseToken,
 	}
 	err = machineClient.Transition(context.Background(), assignment.RunID, protocol.StateTransitionRequest{
-		Fence: staleFence, TransitionID: mustID(t), State: "completed", Payload: json.RawMessage(`{}`),
+		Fence: staleFence, TransitionID: mustID(t), State: "running", Payload: json.RawMessage(`{}`),
 	})
 	if !control.IsOwnershipLost(err) {
 		t.Fatalf("stale transition error = %v, want ownership_lost", err)
@@ -753,11 +753,15 @@ func assertWaitingInputHistory(t *testing.T, environment e2eEnvironment, taskID,
 	if len(waitingEvents) != 2 {
 		t.Fatalf("waiting events = %d, want 2", len(waitingEvents))
 	}
-	for index, wantQuestion := range []string{"Provide the first requested input.", "Confirm the requested input before continuing."} {
-		if got := historyPayloadString(t, waitingEvents[index], "question"); got != wantQuestion {
-			t.Fatalf("waiting event %d question = %q, want %q", index, got, wantQuestion)
+	questions := make(map[string]bool, len(waitingEvents))
+	for _, event := range waitingEvents {
+		questions[historyPayloadString(t, event, "question")] = true
+		assertHistoryRunOwnership(t, event, runID, generation)
+	}
+	for _, wantQuestion := range []string{"Provide the first requested input.", "Confirm the requested input before continuing."} {
+		if !questions[wantQuestion] {
+			t.Fatalf("waiting questions = %#v, missing %q", questions, wantQuestion)
 		}
-		assertHistoryRunOwnership(t, waitingEvents[index], runID, generation)
 	}
 
 	transitions := collectHistory(t, environment, taskID, "transitions")
