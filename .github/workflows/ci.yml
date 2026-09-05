@@ -267,7 +267,7 @@ jobs:
           }
 
           http_redirect_is_ready() {
-            redirect_status=$(curl --silent --output /dev/null --dump-header "$redirect_headers" --write-out '%{http_code}' http://localhost/healthz || true)
+            redirect_status=$(curl --silent --output /dev/null --dump-header "$redirect_headers" --write-out '%{http_code}' --header 'Host: localhost' http://127.0.0.1/healthz || true)
             [[ "$redirect_status" == '308' ]] || return 1
             tr -d '\r' < "$redirect_headers" | grep --ignore-case --fixed-strings --line-regexp 'location: https://localhost/healthz' >/dev/null
           }
