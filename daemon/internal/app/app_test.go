@@ -4067,7 +4067,17 @@ func TestScheduledSnapshotCancelPreemptsBlockedInputAndJoins(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if journal.LocalState == "terminal_pending" && len(journal.PendingCommandAcknowledgements) == 2 {
+		inputSettled := journal.InputCommandIntent != nil && journal.InputCommandIntent.Outcome == "applied"
+		if inputSettled && !journal.InputCommandIntent.AcknowledgementDelivered {
+			inputSettled = false
+			for _, acknowledgement := range journal.PendingCommandAcknowledgements {
+				if acknowledgement.CommandID == "input-1" && acknowledgement.Outcome == "applied" {
+					inputSettled = true
+					break
+				}
+			}
+		}
+		if journal.LocalState == "terminal_pending" && inputSettled {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -4079,7 +4089,7 @@ func TestScheduledSnapshotCancelPreemptsBlockedInputAndJoins(t *testing.T) {
 	for _, acknowledgement := range journal.PendingCommandAcknowledgements {
 		outcomes[acknowledgement.CommandID] = acknowledgement.Outcome
 	}
-	if outcomes["input-1"] != "applied" || outcomes["cancel-1"] != "applied" {
+	if outcomes["cancel-1"] != "applied" {
 		t.Fatalf("scheduled cancellation outcomes = %#v", outcomes)
 	}
 
