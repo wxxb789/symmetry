@@ -1303,7 +1303,7 @@ defmodule SymmetryControl.IntegrationsTest do
     assert delivered.external_review_status == nil
   end
 
-  test "connection capability changes preserve archived project snapshots" do
+  test "connection capability changes clear archived delivery projections and preserve resource sync state" do
     project = project_fixture()
     connection = connection_fixture("github", "gh_cli")
 
@@ -1334,6 +1334,9 @@ defmodule SymmetryControl.IntegrationsTest do
 
     assert {:ok, synced_repository} = Integrations.sync_resource(repository.id)
     delivered = Repo.get!(WorkItem, item.id)
+    assert delivered.external_pull_request_url == "https://github.com/acme/symmetry/pull/42"
+    assert delivered.external_ci_status == "passed"
+    assert delivered.external_review_status == "approved"
 
     assert {:ok, _archived} =
              Workspaces.update_project(project.id, %{
@@ -1353,10 +1356,19 @@ defmodule SymmetryControl.IntegrationsTest do
     assert archived_repository.lock_version == synced_repository.lock_version
     assert archived_repository.status == synced_repository.status
     assert archived_repository.sync_status == synced_repository.sync_status
-    assert archived_item.lock_version == delivered.lock_version
-    assert archived_item.external_pull_request_url == delivered.external_pull_request_url
-    assert archived_item.external_ci_status == delivered.external_ci_status
-    assert archived_item.external_review_status == delivered.external_review_status
+    assert archived_repository.status_message == synced_repository.status_message
+    assert archived_repository.metadata == synced_repository.metadata
+    assert archived_repository.last_checked_at == synced_repository.last_checked_at
+    assert archived_repository.last_synced_at == synced_repository.last_synced_at
+    assert archived_item.lock_version > delivered.lock_version
+    assert archived_item.external_pull_request_url == nil
+    assert archived_item.external_pull_request_state == nil
+    assert archived_item.external_review_status == nil
+    assert archived_item.external_change_updated_at == nil
+    assert archived_item.external_change_data == %{}
+    assert archived_item.external_ci_status == nil
+    assert archived_item.external_ci_updated_at == nil
+    assert archived_item.external_ci_data == %{}
   end
 
   defp use_credential_leak_provider do

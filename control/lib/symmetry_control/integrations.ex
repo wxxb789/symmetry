@@ -1394,11 +1394,7 @@ defmodule SymmetryControl.Integrations do
   defp connection_resource_ids(connection_id, kind) do
     Repo.all(
       from resource in ProjectResource,
-        join: project in Project,
-        on: project.id == resource.project_id,
-        where:
-          resource.connection_id == ^connection_id and resource.kind == ^kind and
-            project.status == "active",
+        where: resource.connection_id == ^connection_id and resource.kind == ^kind,
         select: resource.id
     )
   end

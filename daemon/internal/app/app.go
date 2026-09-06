@@ -1721,12 +1721,14 @@ func resolveProviderAccess(controlPlaneURL string, access *protocol.ProviderAcce
 	if err != nil || base.Scheme == "" || base.Host == "" || base.User != nil {
 		return nil, errors.New("control plane URL is invalid")
 	}
-	reference, err := url.Parse(access.Path)
-	if err != nil {
-		return nil, errors.New("provider access path is invalid")
+	base.Path = strings.TrimRight(base.Path, "/")
+	if base.Path == "" {
+		base.Path = "/api"
 	}
+	base.Path += strings.TrimPrefix(access.Path, "/api")
+	base.RawPath = ""
 	resolved := *access
-	resolved.Path = base.ResolveReference(reference).String()
+	resolved.Path = base.String()
 	return &resolved, nil
 }
 

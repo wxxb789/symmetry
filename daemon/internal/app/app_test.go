@@ -5363,7 +5363,7 @@ func TestInitialInputUsesLocalModeAndPreservesGoalAndStructuredInput(t *testing.
 	if err := json.Unmarshal(connectedInput, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.ProviderAccess == nil || payload.ProviderAccess.Path != "https://control.example.test/api/v1/provider-actions" || payload.ProviderAccess.Token != "provider-token" || len(payload.ProviderAccess.Grants) != 1 {
+	if payload.ProviderAccess == nil || payload.ProviderAccess.Path != "https://control.example.test/control-root/v1/provider-actions" || payload.ProviderAccess.Token != "provider-token" || len(payload.ProviderAccess.Grants) != 1 {
 		t.Fatalf("connected JSON input = %s", connectedInput)
 	}
 	if providerAccess.Path != "/api/v1/provider-actions" {
@@ -5383,6 +5383,20 @@ func TestInitialInputUsesLocalModeAndPreservesGoalAndStructuredInput(t *testing.
 	invalidAccess.Path = "/api/v1/other"
 	if _, err := initialInput(config.AgentProfile{InputMode: config.InputModeJSON, ProviderAccess: true}, protocol.Work{Goal: "implement feature"}, &invalidAccess, controlPlaneURL); err == nil || !strings.Contains(err.Error(), "provider access path") {
 		t.Fatalf("invalid provider path error = %v", err)
+	}
+}
+
+func TestResolveProviderAccessPreservesControlPlanePrefix(t *testing.T) {
+	access := &protocol.ProviderAccess{Path: "/api/v1/provider-actions", Token: "provider-token"}
+	resolved, err := resolveProviderAccess("https://control.example.test/control-root/", access)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Path != "https://control.example.test/control-root/v1/provider-actions" {
+		t.Fatalf("resolved provider access path = %q", resolved.Path)
+	}
+	if access.Path != "/api/v1/provider-actions" {
+		t.Fatalf("provider access was mutated: %#v", access)
 	}
 }
 
