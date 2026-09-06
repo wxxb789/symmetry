@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -95,6 +97,89 @@ func TestJSONValuesEmitsScalarArrayAndLargeIntegerLines(t *testing.T) {
 
 	if got, want := strings.TrimSpace(stdout.String()), "42\n[\"progress\"]\n9007199254740993"; got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+}
+
+func TestProviderActionFlowUsesBrokerCapability(t *testing.T) {
+	requests := make(chan map[string]any, 3)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if got := request.Header.Get("Authorization"); got != "Bearer broker-token" {
+			t.Errorf("authorization = %q", got)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		requests <- body
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{}`)
+	}))
+	defer server.Close()
+
+	input := providerTaskInput(t, server.URL, []protocol.ProviderGrant{
+		{
+			ResourceID: "11111111-1111-1111-1111-111111111111",
+			Provider:   "github",
+			Kind:       "repository",
+			Operations: []string{"resource.sync", "change.upsert", "change.update"},
+		},
+		{
+			ResourceID: "22222222-2222-2222-2222-222222222222",
+			Provider:   "github",
+			Kind:       "ci",
+			Operations: []string{"resource.sync"},
+		},
+	})
+	process := startFixture(t, input, nil)
+	_, stderr, err := waitForProcess(t, process, 2*time.Second)
+	if err != nil {
+		t.Fatalf("fixture failed: %v; stderr: %s", err, stderr)
+	}
+
+	first := <-requests
+	second := <-requests
+	third := <-requests
+	if got := first["operation"]; got != "change.upsert" {
+		t.Fatalf("first operation = %#v", got)
+	}
+	if got := first["resource_id"]; got != "11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("first resource_id = %#v", got)
+	}
+	if got := first["input"].(map[string]any)["title"]; got != "Provider broker end-to-end" {
+		t.Fatalf("first title = %#v", got)
+	}
+	if got := second["operation"]; got != "resource.sync" {
+		t.Fatalf("second operation = %#v", got)
+	}
+	if got := second["resource_id"]; got != "11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("second resource_id = %#v", got)
+	}
+	if got := third["operation"]; got != "resource.sync" {
+		t.Fatalf("third operation = %#v", got)
+	}
+	if got := third["resource_id"]; got != "22222222-2222-2222-2222-222222222222" {
+		t.Fatalf("third resource_id = %#v", got)
+	}
+	if first["action_id"] == second["action_id"] || second["action_id"] == third["action_id"] {
+		t.Fatalf("action IDs must differ: %#v", []any{first["action_id"], second["action_id"], third["action_id"]})
+	}
+
+	if got, want := decodeEvents(t, process.output.String()), []event{
+		{Type: "progress", Message: "provider_action_started"},
+		{Type: "progress", Message: "provider_action_completed"},
+	}; !equalEvents(got, want) {
+		t.Fatalf("events = %#v, want %#v", got, want)
+	}
+}
+
+func TestProviderActionFlowRequiresCapability(t *testing.T) {
+	process := startFixture(t, taskInput(`"provider action"`, `{"mode":"provider_action_flow","work_item_id":"item-42"}`), nil)
+	_, stderr, err := waitForProcess(t, process, time.Second)
+	if err == nil {
+		t.Fatal("fixture succeeded, want failure")
+	}
+	if !strings.Contains(stderr, "requires provider_access") {
+		t.Fatalf("stderr = %q", stderr)
 	}
 }
 
@@ -522,6 +607,23 @@ func taskInput(goal, input string) string {
 
 func provideInput(goal, input string) string {
 	return `{"type":"` + string(protocol.AgentInputRecordProvideInput) + `","goal":` + goal + `,"input":` + input + "}\n"
+}
+
+func providerTaskInput(t *testing.T, path string, grants []protocol.ProviderGrant) string {
+	t.Helper()
+	record := protocol.AgentInputRecord{
+		Type:  protocol.AgentInputRecordTaskInput,
+		Goal:  "provider action",
+		Input: json.RawMessage(`{"mode":"provider_action_flow","work_item_id":"item-42"}`),
+		ProviderAccess: &protocol.ProviderAccess{
+			Path: path, Token: "broker-token", Grants: grants,
+		},
+	}
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		t.Fatalf("encode provider task input: %v", err)
+	}
+	return string(encoded) + "\n"
 }
 
 type fixtureSink struct {

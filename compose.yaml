@@ -43,8 +43,12 @@ services:
       SECRET_KEY_BASE: development-only-secret-key-base-change-before-production-0123456789
       SYMMETRY_ENROLLMENT_TOKEN: ${SYMMETRY_ENROLLMENT_TOKEN:-development-enrollment-token}
       SYMMETRY_OPERATOR_TOKEN: ${SYMMETRY_OPERATOR_TOKEN:-development-operator-token}
+      SYMMETRY_INTEGRATION_SYNC_INTERVAL_MS: ${SYMMETRY_INTEGRATION_SYNC_INTERVAL_MS:-300000}
     ports:
       - "127.0.0.1:4000:4000"
+    volumes:
+      - provider_gh_state:/app/.config/gh
+      - provider_azure_state:/app/.azure
 
   daemon:
     build:
@@ -64,3 +68,5 @@ volumes:
   postgres_data:
   daemon_state:
   daemon_workspaces:
+  provider_gh_state:
+  provider_azure_state:

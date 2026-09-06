@@ -898,13 +898,29 @@ svg {
 
 .activity-list,
 .resource-table,
+.connection-table,
 .runtime-table {
   display: grid;
   gap: 8px;
 }
 
+.view-actions,
+.resource-entry,
+.connection-row {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.resource-entry .resource-row,
+.connection-row .connection-primary {
+  flex: 1;
+  min-width: 0;
+}
+
 .activity-row,
 .resource-row,
+.connection-primary,
 .runtime-row {
   align-items: center;
   background: var(--surface);
@@ -927,18 +943,24 @@ svg {
   grid-template-columns: 116px minmax(160px, 1fr) 96px 96px minmax(140px, 0.8fr);
 }
 
+.connection-primary {
+  grid-template-columns: 116px minmax(160px, 1fr) 96px minmax(180px, 1fr) minmax(140px, 0.8fr);
+}
+
 .runtime-row {
   grid-template-columns: 34px minmax(180px, 1fr) auto auto;
 }
 
 .activity-row:hover,
-.resource-row:hover {
+.resource-row:hover,
+.connection-primary:hover {
   border-color: var(--border-strong);
   box-shadow: 0 3px 10px rgba(24, 28, 36, 0.06);
 }
 
 .activity-copy,
-.resource-primary {
+.resource-primary,
+.connection-capabilities {
   min-width: 0;
 }
 
@@ -958,6 +980,47 @@ svg {
 .resource-message {
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.connection-capabilities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.connection-capabilities span {
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 10px;
+  padding: 2px 5px;
+}
+
+.resource-sync-button,
+.connection-check-button {
+  flex: 0 0 auto;
+}
+
+.capability-fieldset {
+  border: 0;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+  padding: 0;
+}
+
+.capability-fieldset legend {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-bottom: 7px;
+}
+
+.capability-fieldset label {
+  align-items: center;
+  display: flex;
+  gap: 8px;
 }
 
 .activity-action {
@@ -1616,9 +1679,20 @@ svg {
 
   .activity-row,
   .resource-row,
+  .connection-primary,
   .runtime-row {
     align-items: flex-start;
     grid-template-columns: 1fr;
+  }
+
+  .resource-entry,
+  .connection-row {
+    align-items: stretch;
+  }
+
+  .resource-sync-button,
+  .connection-check-button {
+    margin-top: 12px;
   }
 
   .activity-action {

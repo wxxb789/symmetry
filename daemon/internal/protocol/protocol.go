@@ -22,9 +22,10 @@ const (
 
 // AgentInputRecord is the JSON envelope sent to an agent over standard input.
 type AgentInputRecord struct {
-	Type  AgentInputRecordType `json:"type"`
-	Goal  string               `json:"goal"`
-	Input json.RawMessage      `json:"input"`
+	Type           AgentInputRecordType `json:"type"`
+	Goal           string               `json:"goal"`
+	Input          json.RawMessage      `json:"input"`
+	ProviderAccess *ProviderAccess      `json:"provider_access,omitempty"`
 }
 
 // MachineEnrollment identifies a machine during one-time enrollment.
@@ -46,12 +47,20 @@ type EnrollResponse struct {
 
 // RuntimeRegistration declares one machine-local execution runtime.
 type RuntimeRegistration struct {
-	RuntimeKey   string          `json:"runtime_key"`
-	Name         string          `json:"name"`
-	Capacity     int             `json:"capacity"`
-	AgentProfile string          `json:"agent_profile"`
-	Workspace    string          `json:"workspace"`
-	Capabilities json.RawMessage `json:"capabilities"`
+	RuntimeKey   string              `json:"runtime_key"`
+	Name         string              `json:"name"`
+	Capacity     int                 `json:"capacity"`
+	AgentProfile string              `json:"agent_profile"`
+	Workspace    string              `json:"workspace"`
+	Capabilities RuntimeCapabilities `json:"capabilities"`
+}
+
+// RuntimeCapabilities declares the protocol features supported by one local
+// agent binding. Provider access requires structured JSON input because its
+// short-lived grant is delivered only in the initial standard-input envelope.
+type RuntimeCapabilities struct {
+	StructuredInput bool `json:"structured_input"`
+	ProviderAccess  bool `json:"provider_access"`
 }
 
 // SessionRegistrationRequest registers a daemon process and its runtimes.
@@ -166,15 +175,57 @@ type ClaimRequest struct {
 	ClaimID      string `json:"claim_id"`
 }
 
+// ProviderGrant describes one narrowly scoped connected resource made
+// available through the control-plane provider-action broker.
+type ProviderGrant struct {
+	ResourceID string   `json:"resource_id"`
+	Provider   string   `json:"provider"`
+	Kind       string   `json:"kind"`
+	Operations []string `json:"operations"`
+}
+
+// ProviderAccess is a broker capability. Token is intentionally delivered only
+// through the claim response and the JSON agent input envelope.
+type ProviderAccess struct {
+	Path   string          `json:"path"`
+	Token  string          `json:"token"`
+	Grants []ProviderGrant `json:"grants"`
+}
+
 // ClaimResponse returns a durable lease and its assigned work.
 type ClaimResponse struct {
-	RunID          string    `json:"run_id"`
-	TaskID         string    `json:"task_id"`
-	Generation     int64     `json:"generation"`
-	ClaimID        string    `json:"claim_id"`
-	LeaseToken     string    `json:"lease_token"`
-	LeaseExpiresAt time.Time `json:"lease_expires_at"`
-	Work           Work      `json:"work"`
+	RunID          string          `json:"run_id"`
+	TaskID         string          `json:"task_id"`
+	Generation     int64           `json:"generation"`
+	ClaimID        string          `json:"claim_id"`
+	LeaseToken     string          `json:"lease_token"`
+	LeaseExpiresAt time.Time       `json:"lease_expires_at"`
+	Work           Work            `json:"work"`
+	ProviderAccess *ProviderAccess `json:"provider_access,omitempty"`
+	present        map[string]struct{}
+}
+
+// UnmarshalJSON retains whether optional claim fields were sent so a present
+// null provider_access can be rejected instead of treated as absent.
+func (response *ClaimResponse) UnmarshalJSON(value []byte) error {
+	type wire ClaimResponse
+	var decoded wire
+	if err := json.Unmarshal(value, &decoded); err != nil {
+		return err
+	}
+	present, err := presentFields(value)
+	if err != nil {
+		return err
+	}
+	*response = ClaimResponse(decoded)
+	response.present = present
+	return nil
+}
+
+// HasField reports whether a field was present when this value was decoded.
+func (response ClaimResponse) HasField(name string) bool {
+	_, ok := response.present[name]
+	return ok
 }
 
 // LeaseHeartbeatRequest renews a current lease.

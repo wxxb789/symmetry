@@ -275,7 +275,7 @@ type runningRun struct {
 	inputMu         sync.Mutex
 	process         Process
 	prepared        workspace.Prepared
-	parser          *jsonlParser
+	output          *agentOutput
 	starting        bool
 	claimed         bool
 	cancel          context.CancelFunc
@@ -748,8 +748,18 @@ func (daemon *daemon) initialize(ctx context.Context) error {
 	if idErr != nil {
 		return fmt.Errorf("generate daemon instance ID: %w", idErr)
 	}
+	profile := daemon.config.AgentProfiles[daemon.config.Runtime.AgentProfile]
+	structuredInput := profile.InputMode == config.InputModeJSON
 	registrationRequest := protocol.SessionRegistrationRequest{
-		Runtimes: []protocol.RuntimeRegistration{{RuntimeKey: daemon.config.Runtime.RuntimeKey, Name: daemon.config.Runtime.Name, Capacity: daemon.config.Runtime.Capacity, AgentProfile: daemon.config.Runtime.AgentProfile, Workspace: daemon.config.Runtime.Workspace, Capabilities: json.RawMessage(`{}`)}},
+		Runtimes: []protocol.RuntimeRegistration{{
+			RuntimeKey: daemon.config.Runtime.RuntimeKey, Name: daemon.config.Runtime.Name,
+			Capacity: daemon.config.Runtime.Capacity, AgentProfile: daemon.config.Runtime.AgentProfile,
+			Workspace: daemon.config.Runtime.Workspace,
+			Capabilities: protocol.RuntimeCapabilities{
+				StructuredInput: structuredInput,
+				ProviderAccess:  profile.ProviderAccess,
+			},
+		}},
 	}
 	var registration protocol.SessionRegistrationResponse
 	registerErr := retry(ctx, func() error {
@@ -1418,16 +1428,20 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		}
 		return
 	}
-	input, err := initialInput(profile, claim.Work)
+	input, err := initialInput(profile, claim.Work, claim.ProviderAccess, daemon.config.ControlPlaneURL)
 	if err != nil {
 		if !daemon.isCancelled(key) {
 			daemon.queueFailure(ctx, key, "encode_input", err)
 		}
 		return
 	}
-	parser := &jsonlParser{}
+	providerToken := ""
+	if claim.ProviderAccess != nil {
+		providerToken = claim.ProviderAccess.Token
+	}
+	output := newAgentOutput(profile.EventFormat, providerToken)
 	sink := execution.SinkFunc(func(_ context.Context, event execution.Event) error {
-		return daemon.queueOutput(key, profile.EventFormat, parser, event)
+		return output.handle(daemon, key, event)
 	})
 	process, err := daemon.start(ctx, execution.Invocation{Program: profile.Command, Args: profile.Args, Dir: prepared.Path, Env: environment, InitialInput: input, CloseInputAfterInitial: !profile.Interactive}, sink)
 	if err != nil {
@@ -1446,7 +1460,7 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 	}
 	active.process = process
 	active.prepared = prepared
-	active.parser = parser
+	active.output = output
 	daemon.mu.Unlock()
 
 	pid, identity, detailsErr := processDetails(process)
@@ -1682,15 +1696,44 @@ func processDetails(process Process) (int, string, error) {
 	return 0, "", errors.New("process does not expose a persistent identity")
 }
 
-func initialInput(profile config.AgentProfile, work protocol.Work) ([]byte, error) {
+func initialInput(profile config.AgentProfile, work protocol.Work, providerAccess *protocol.ProviderAccess, controlPlaneURL string) ([]byte, error) {
+	if providerAccess != nil && !profile.ProviderAccess {
+		return nil, errors.New("agent profile does not allow provider access")
+	}
 	if profile.InputMode == config.InputModeGoal {
 		return append([]byte(work.Goal), '\n'), nil
 	}
-	return inputRecord(protocol.AgentInputRecordTaskInput, work.Goal, work.Input)
+	resolved, err := resolveProviderAccess(controlPlaneURL, providerAccess)
+	if err != nil {
+		return nil, err
+	}
+	return inputRecord(protocol.AgentInputRecordTaskInput, work.Goal, work.Input, resolved)
 }
 
-func inputRecord(recordType protocol.AgentInputRecordType, goal string, input json.RawMessage) ([]byte, error) {
-	encoded, err := json.Marshal(protocol.AgentInputRecord{Type: recordType, Goal: goal, Input: input})
+func resolveProviderAccess(controlPlaneURL string, access *protocol.ProviderAccess) (*protocol.ProviderAccess, error) {
+	if access == nil {
+		return nil, nil
+	}
+	if access.Path != "/api/v1/provider-actions" {
+		return nil, errors.New("provider access path is invalid")
+	}
+	base, err := url.Parse(controlPlaneURL)
+	if err != nil || base.Scheme == "" || base.Host == "" || base.User != nil {
+		return nil, errors.New("control plane URL is invalid")
+	}
+	base.Path = strings.TrimRight(base.Path, "/")
+	if base.Path == "" {
+		base.Path = "/api"
+	}
+	base.Path += strings.TrimPrefix(access.Path, "/api")
+	base.RawPath = ""
+	resolved := *access
+	resolved.Path = base.String()
+	return &resolved, nil
+}
+
+func inputRecord(recordType protocol.AgentInputRecordType, goal string, input json.RawMessage, providerAccess *protocol.ProviderAccess) ([]byte, error) {
+	encoded, err := json.Marshal(protocol.AgentInputRecord{Type: recordType, Goal: goal, Input: input, ProviderAccess: providerAccess})
 	if err != nil {
 		return nil, err
 	}
@@ -1710,6 +1753,238 @@ func canonicalInputDigest(payload json.RawMessage) (string, error) {
 	}
 	digest := sha256.Sum256(encoded)
 	return fmt.Sprintf("%x", digest), nil
+}
+
+const (
+	redactedProviderToken            = "*"
+	maxProviderRedactorPendingBytes  = 1 << 20
+	maxProviderRedactorPendingEvents = 128
+)
+
+type agentOutput struct {
+	format   config.EventFormat
+	parser   *jsonlParser
+	redactor *streamingTokenRedactor
+	stdoutAt time.Time
+	flushed  bool
+}
+
+func newAgentOutput(format config.EventFormat, token string) *agentOutput {
+	output := &agentOutput{format: format, parser: &jsonlParser{}}
+	if token != "" {
+		output.redactor = newStreamingTokenRedactor(token)
+	}
+	return output
+}
+
+func (output *agentOutput) handle(daemon *daemon, key state.RunKey, event execution.Event) error {
+	if event.Stream == execution.Stdout {
+		output.stdoutAt = event.At
+	}
+	if output.redactor != nil {
+		for _, ready := range output.redactor.push(event) {
+			if err := daemon.queueOutput(key, output.format, output.parser, ready); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return daemon.queueOutput(key, output.format, output.parser, event)
+}
+
+func (output *agentOutput) flush(daemon *daemon, key state.RunKey, at time.Time) error {
+	if output.flushed {
+		return nil
+	}
+	output.flushed = true
+	if output.redactor != nil {
+		for _, event := range output.redactor.flush() {
+			if err := daemon.queueOutput(key, output.format, output.parser, event); err != nil {
+				return err
+			}
+		}
+	}
+	if output.format != config.EventFormatJSONL {
+		return nil
+	}
+	if output.stdoutAt.IsZero() {
+		output.stdoutAt = at
+	}
+	for _, record := range output.parser.flush() {
+		if err := daemon.queueRawEvent(key, execution.Event{Stream: execution.Stdout, At: output.stdoutAt, Data: record.data}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type redactorStream struct {
+	candidate []redactorByte
+}
+
+type redactorByte struct {
+	value byte
+	owner *redactorEvent
+}
+
+type redactorEvent struct {
+	event       execution.Event
+	output      []byte
+	remaining   int
+	sourceBytes int
+}
+
+type streamingTokenRedactor struct {
+	token        []byte
+	replacement  byte
+	streams      map[execution.Stream]*redactorStream
+	pending      []*redactorEvent
+	pendingBytes int
+}
+
+func newStreamingTokenRedactor(token string) *streamingTokenRedactor {
+	encoded := []byte(token)
+	return &streamingTokenRedactor{
+		token:       encoded,
+		replacement: redactionMarker(encoded),
+		streams: map[execution.Stream]*redactorStream{
+			execution.Stdout: {},
+			execution.Stderr: {},
+		},
+	}
+}
+
+func redactionMarker(token []byte) byte {
+	for _, candidate := range []byte(redactedProviderToken + "~!@#$%^&()-_=+[]{};:,.?/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 ") {
+		if !bytes.Contains(token, []byte{candidate}) {
+			return candidate
+		}
+	}
+	return 0xff
+}
+
+func (redactor *streamingTokenRedactor) push(event execution.Event) []execution.Event {
+	entry := &redactorEvent{event: event, remaining: len(event.Data), sourceBytes: len(event.Data)}
+	entry.event.Data = nil
+	redactor.pending = append(redactor.pending, entry)
+	redactor.pendingBytes += entry.sourceBytes
+	state := redactor.streams[event.Stream]
+	if state == nil {
+		state = &redactorStream{}
+		redactor.streams[event.Stream] = state
+	}
+	for _, value := range event.Data {
+		state.candidate = append(state.candidate, redactorByte{value: value, owner: entry})
+	}
+	redactor.resolve(state)
+	ready := redactor.drain()
+	for redactor.overLimit() {
+		if !redactor.redactOldestCandidate() {
+			break
+		}
+		ready = append(ready, redactor.drain()...)
+	}
+	return ready
+}
+
+func (redactor *streamingTokenRedactor) flush() []execution.Event {
+	for _, state := range redactor.streams {
+		for _, pending := range state.candidate {
+			pending.owner.output = append(pending.owner.output, pending.value)
+			pending.owner.remaining--
+		}
+		clear(state.candidate)
+		state.candidate = nil
+	}
+	events := redactor.drain()
+	clear(redactor.token)
+	redactor.token = nil
+	return events
+}
+
+func (redactor *streamingTokenRedactor) resolve(state *redactorStream) {
+	for len(state.candidate) > 0 {
+		if len(state.candidate) >= len(redactor.token) && candidateMatches(state.candidate[:len(redactor.token)], redactor.token) {
+			owner := state.candidate[len(redactor.token)-1].owner
+			owner.output = append(owner.output, redactor.replacement)
+			for _, matched := range state.candidate[:len(redactor.token)] {
+				matched.owner.remaining--
+			}
+			state.candidate = state.candidate[len(redactor.token):]
+			continue
+		}
+		if candidateIsTokenPrefix(state.candidate, redactor.token) {
+			return
+		}
+		first := state.candidate[0]
+		first.owner.output = append(first.owner.output, first.value)
+		first.owner.remaining--
+		state.candidate = state.candidate[1:]
+	}
+}
+
+func (redactor *streamingTokenRedactor) drain() []execution.Event {
+	ready := make([]execution.Event, 0, len(redactor.pending))
+	for len(redactor.pending) > 0 && redactor.pending[0].remaining == 0 {
+		entry := redactor.pending[0]
+		redactor.pending[0] = nil
+		redactor.pending = redactor.pending[1:]
+		redactor.pendingBytes -= entry.sourceBytes
+		if len(entry.output) != 0 {
+			entry.event.Data = entry.output
+			ready = append(ready, entry.event)
+		}
+	}
+	if len(redactor.pending) == 0 {
+		redactor.pending = nil
+	}
+	return ready
+}
+
+func (redactor *streamingTokenRedactor) overLimit() bool {
+	return len(redactor.pending) > maxProviderRedactorPendingEvents || redactor.pendingBytes > maxProviderRedactorPendingBytes
+}
+
+func (redactor *streamingTokenRedactor) redactOldestCandidate() bool {
+	if len(redactor.pending) == 0 {
+		return false
+	}
+	head := redactor.pending[0]
+	state := redactor.streams[head.event.Stream]
+	if state == nil || len(state.candidate) == 0 || state.candidate[0].owner != head {
+		return false
+	}
+	state.candidate[0].owner.output = append(state.candidate[0].owner.output, redactor.replacement)
+	for _, pending := range state.candidate {
+		pending.owner.remaining--
+	}
+	clear(state.candidate)
+	state.candidate = nil
+	return true
+}
+
+func candidateMatches(candidate []redactorByte, token []byte) bool {
+	if len(candidate) != len(token) {
+		return false
+	}
+	for index, value := range candidate {
+		if value.value != token[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func candidateIsTokenPrefix(candidate []redactorByte, token []byte) bool {
+	if len(candidate) >= len(token) {
+		return false
+	}
+	for index, value := range candidate {
+		if value.value != token[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func (daemon *daemon) queueOutput(key state.RunKey, format config.EventFormat, parser *jsonlParser, event execution.Event) error {
@@ -2050,14 +2325,21 @@ func (daemon *daemon) waitForRunWithContext(ctx context.Context, key state.RunKe
 	daemon.mu.Lock()
 	active := daemon.running[key]
 	process := Process(nil)
+	output := (*agentOutput)(nil)
 	if active != nil {
 		process = active.process
+		output = active.output
 	}
 	daemon.mu.Unlock()
 	if active == nil || process == nil {
 		return
 	}
 	result := process.Wait()
+	if output != nil {
+		if err := output.flush(daemon, key, daemon.now()); err != nil && result.SinkError == nil {
+			result.SinkError = err
+		}
+	}
 	active.inputMu.Lock()
 	daemon.mu.Lock()
 	cancelled := active.cancelled
@@ -2125,7 +2407,14 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 		active.cancelled = true
 		process := active.process
 		cancel := active.cancel
+		terminalReserved := process == nil && cancel != nil
+		if terminalReserved {
+			active.terminalizing++
+		}
 		daemon.mu.Unlock()
+		if terminalReserved {
+			defer daemon.releaseTerminalReservation(key)
+		}
 		var terminateErr error
 		if process != nil {
 			terminateErr = process.Terminate(ctx, 2*time.Second)
@@ -2157,7 +2446,7 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 		if err != nil {
 			break
 		}
-		input, err := inputRecord(protocol.AgentInputRecordProvideInput, journal.Work.Goal, command.Payload)
+		input, err := inputRecord(protocol.AgentInputRecordProvideInput, journal.Work.Goal, command.Payload, nil)
 		if err != nil {
 			outcome = "failed"
 			break
@@ -2213,6 +2502,14 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 		return daemon.completeProvideInputWithRetry(ctx, key, command.CommandID, payloadDigest, "applied")
 	}
 	return daemon.queueCommandAcknowledgementWithContext(ctx, key, command.CommandID, outcome)
+}
+
+func (daemon *daemon) releaseTerminalReservation(key state.RunKey) {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	if active := daemon.running[key]; active != nil && active.terminalizing > 0 {
+		active.terminalizing--
+	}
 }
 
 func (daemon *daemon) runningRun(key state.RunKey) *runningRun {
@@ -3326,6 +3623,18 @@ func (parser *jsonlParser) push(value []byte) []jsonlRecord {
 		}
 		break
 	}
+	return records
+}
+
+func (parser *jsonlParser) flush() []jsonlRecord {
+	if len(parser.pending) == 0 {
+		parser.overflow = false
+		return nil
+	}
+	records := appendRawRecords(nil, parser.pending)
+	clear(parser.pending)
+	parser.pending = nil
+	parser.overflow = false
 	return records
 }
 

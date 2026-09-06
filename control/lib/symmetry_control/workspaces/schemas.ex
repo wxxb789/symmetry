@@ -96,17 +96,20 @@ defmodule SymmetryControl.Workspaces.ProjectResource do
   use Ecto.Schema
   import Ecto.Changeset
 
+  alias SymmetryControl.Integrations.Connection
   alias SymmetryControl.Workspaces.Project
   alias SymmetryControl.Workspaces.ChangesetValidators
 
   @kinds ["repository", "work_tracking", "ci", "agent", "runtime", "connection"]
   @statuses ["healthy", "degraded", "offline", "unknown"]
   @sync_statuses ["unknown", "syncing", "synced", "stale", "failed"]
+  @connected_identity_index :project_resources_connected_identity
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
   schema "project_resources" do
     belongs_to :project, Project
+    belongs_to :connection, Connection
     field :kind, :string
     field :name, :string
     field :provider, :string
@@ -119,6 +122,10 @@ defmodule SymmetryControl.Workspaces.ProjectResource do
     field :last_checked_at, :utc_datetime_usec
     field :last_synced_at, :utc_datetime_usec
     field :lock_version, :integer, default: 1
+
+    has_many :provider_action_intents, SymmetryControl.Integrations.ProviderActionIntent,
+      foreign_key: :resource_id
+
     timestamps(type: :utc_datetime_usec)
   end
 
@@ -126,6 +133,7 @@ defmodule SymmetryControl.Workspaces.ProjectResource do
     resource
     |> cast(attrs, [
       :project_id,
+      :connection_id,
       :kind,
       :name,
       :provider,
@@ -142,12 +150,15 @@ defmodule SymmetryControl.Workspaces.ProjectResource do
     |> update_change(:external_ref, &trim/1)
     |> validate_resource()
     |> assoc_constraint(:project)
+    |> assoc_constraint(:connection)
     |> unique_constraint([:project_id, :kind, :name])
+    |> connected_identity_constraint()
   end
 
   def update_changeset(resource, attrs) do
     resource
     |> cast(attrs, [
+      :connection_id,
       :kind,
       :name,
       :provider,
@@ -163,13 +174,32 @@ defmodule SymmetryControl.Workspaces.ProjectResource do
     |> update_change(:name, &trim/1)
     |> update_change(:external_ref, &trim/1)
     |> validate_resource()
+    |> assoc_constraint(:connection)
     |> unique_constraint([:project_id, :kind, :name])
+    |> connected_identity_constraint()
+    |> optimistic_lock(:lock_version)
+  end
+
+  def sync_changeset(resource, attrs) do
+    resource
+    |> cast(attrs, [
+      :provider,
+      :url,
+      :status,
+      :sync_status,
+      :status_message,
+      :metadata,
+      :last_checked_at,
+      :last_synced_at
+    ])
+    |> validate_resource()
     |> optimistic_lock(:lock_version)
   end
 
   def delete_changeset(resource) do
     resource
     |> change()
+    |> no_assoc_constraint(:provider_action_intents)
     |> optimistic_lock(:lock_version)
   end
 
@@ -184,6 +214,7 @@ defmodule SymmetryControl.Workspaces.ProjectResource do
     |> validate_inclusion(:status, @statuses)
     |> validate_inclusion(:sync_status, @sync_statuses)
     |> validate_registered_reference_required()
+    |> validate_connected_reference()
     |> ChangesetValidators.validate_http_url(:url)
     |> validate_attention_message()
     |> check_constraint(:kind, name: :project_resources_kind_check)
@@ -195,6 +226,29 @@ defmodule SymmetryControl.Workspaces.ProjectResource do
     if get_field(changeset, :kind) in ["agent", "runtime"],
       do: validate_required(changeset, [:external_ref]),
       else: changeset
+  end
+
+  defp validate_connected_reference(changeset) do
+    connection_id = get_field(changeset, :connection_id)
+    kind = get_field(changeset, :kind)
+
+    cond do
+      is_nil(connection_id) ->
+        changeset
+
+      kind in ["repository", "work_tracking", "ci"] ->
+        validate_required(changeset, [:external_ref])
+
+      true ->
+        add_error(changeset, :connection_id, "can only be used by external engineering resources")
+    end
+  end
+
+  defp connected_identity_constraint(changeset) do
+    unique_constraint(changeset, :external_ref,
+      name: @connected_identity_index,
+      message: "has already been connected for this resource kind"
+    )
   end
 
   defp validate_attention_message(changeset) do
@@ -229,6 +283,8 @@ defmodule SymmetryControl.Workspaces.WorkItem do
   @assignee_types ["unassigned", "human", "agent"]
   @ci_statuses ["unknown", "pending", "passed", "failed"]
   @review_statuses ["none", "required", "changes_requested", "approved"]
+  @pull_request_states ["unknown", "open", "closed", "merged"]
+  @provider_owned_fields [:title, :description, :priority]
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
@@ -237,6 +293,8 @@ defmodule SymmetryControl.Workspaces.WorkItem do
     belongs_to :project, Project
     belongs_to :orchestration_task, Task
     belongs_to :repository_resource, ProjectResource
+    belongs_to :ci_resource, ProjectResource
+    belongs_to :external_work_item_resource, ProjectResource
     field :title, :string
     field :description, :string
     field :status, :string, default: "backlog"
@@ -253,15 +311,38 @@ defmodule SymmetryControl.Workspaces.WorkItem do
     field :pull_request_url, :string
     field :ci_status, :string
     field :review_status, :string
+    field :external_provider, :string
+    field :external_id, :string
+    field :external_url, :string
+    field :external_state, :string
+    field :external_updated_at, :utc_datetime_usec
+    field :external_available, :boolean, default: true
+    field :external_assignee_name, :string
+    field :labels, {:array, :string}, default: []
+    field :external_data, :map, default: %{}
+    field :external_pull_request_url, :string
+    field :external_pull_request_state, :string
+    field :external_ci_status, :string
+    field :external_review_status, :string
+    field :external_change_updated_at, :utc_datetime_usec
+    field :external_ci_updated_at, :utc_datetime_usec
+    field :external_change_data, :map, default: %{}
+    field :external_ci_data, :map, default: %{}
     field :lock_version, :integer, default: 1
     timestamps(type: :utc_datetime_usec)
   end
+
+  def provider_owned_field?(field), do: field in @provider_owned_fields
+
+  def external_work_available?(%{external_work_item_resource_id: nil}), do: true
+  def external_work_available?(%{external_available: available}), do: available
 
   def changeset(work_item, attrs) do
     work_item
     |> cast(attrs, [
       :project_id,
       :repository_resource_id,
+      :ci_resource_id,
       :title,
       :description,
       :status,
@@ -290,6 +371,7 @@ defmodule SymmetryControl.Workspaces.WorkItem do
       :description,
       :priority,
       :repository_resource_id,
+      :ci_resource_id,
       :assignee_type,
       :assignee_name,
       :agent_profile,
@@ -302,6 +384,7 @@ defmodule SymmetryControl.Workspaces.WorkItem do
       :ci_status,
       :review_status
     ])
+    |> clear_changed_delivery_bindings()
     |> reject_move_fields(attrs)
     |> validate_work_item()
     |> optimistic_lock(:lock_version)
@@ -316,7 +399,9 @@ defmodule SymmetryControl.Workspaces.WorkItem do
     |> optimistic_lock(:lock_version)
   end
 
-  defp validate_work_item(changeset) do
+  defp validate_work_item(changeset), do: validate_work_item(changeset, 240, 20_000)
+
+  defp validate_work_item(changeset, title_limit, description_limit) do
     changeset
     |> update_change(:title, &trim/1)
     |> validate_required([
@@ -328,8 +413,8 @@ defmodule SymmetryControl.Workspaces.WorkItem do
       :assignee_type,
       :blocked
     ])
-    |> validate_length(:title, min: 1, max: 240)
-    |> validate_length(:description, max: 20_000)
+    |> validate_length(:title, min: 1, max: title_limit)
+    |> validate_length(:description, max: description_limit)
     |> validate_length(:assignee_name, max: 120)
     |> validate_length(:agent_profile, max: 120)
     |> validate_length(:workspace, max: 240)
@@ -353,6 +438,7 @@ defmodule SymmetryControl.Workspaces.WorkItem do
     |> check_constraint(:blocker, name: :work_items_blocker_check)
     |> check_constraint(:assignee_type, name: :work_items_owner_fields_check)
     |> assoc_constraint(:repository_resource)
+    |> assoc_constraint(:ci_resource)
   end
 
   def execution_changeset(work_item, attrs) do
@@ -377,6 +463,136 @@ defmodule SymmetryControl.Workspaces.WorkItem do
     |> validate_inclusion(:assignee_type, @assignee_types)
     |> assoc_constraint(:orchestration_task)
     |> optimistic_lock(:lock_version)
+  end
+
+  def provider_changeset(work_item, attrs) do
+    work_item
+    |> cast(attrs, [
+      :project_id,
+      :repository_resource_id,
+      :external_work_item_resource_id,
+      :external_provider,
+      :external_id,
+      :external_url,
+      :external_state,
+      :external_updated_at,
+      :external_available,
+      :external_assignee_name,
+      :labels,
+      :external_data,
+      :title,
+      :description,
+      :status,
+      :priority,
+      :position,
+      :assignee_type,
+      :blocked
+    ])
+    |> validate_work_item(255, 1_048_576)
+    |> validate_external_work_item()
+    |> assoc_constraint(:project)
+    |> assoc_constraint(:external_work_item_resource)
+    |> unique_constraint([:external_work_item_resource_id, :external_id],
+      name: :work_items_external_identity
+    )
+  end
+
+  def provider_update_changeset(work_item, attrs) do
+    work_item
+    |> cast(attrs, [
+      :repository_resource_id,
+      :external_provider,
+      :external_id,
+      :external_url,
+      :external_state,
+      :external_updated_at,
+      :external_available,
+      :external_assignee_name,
+      :labels,
+      :external_data,
+      :title,
+      :description,
+      :priority
+    ])
+    |> validate_external_work_item()
+    |> validate_required([:title, :status, :priority])
+    |> validate_length(:title, min: 1, max: 255)
+    |> validate_length(:description, max: 1_048_576)
+    |> validate_inclusion(:priority, @priorities)
+    |> assoc_constraint(:repository_resource)
+    |> unique_constraint([:external_work_item_resource_id, :external_id],
+      name: :work_items_external_identity
+    )
+    |> optimistic_lock(:lock_version)
+  end
+
+  def delivery_changeset(work_item, attrs) do
+    work_item
+    |> cast(attrs, [
+      :external_pull_request_url,
+      :external_pull_request_state,
+      :external_ci_status,
+      :external_review_status,
+      :external_change_updated_at,
+      :external_ci_updated_at,
+      :external_change_data,
+      :external_ci_data
+    ])
+    |> ChangesetValidators.validate_http_url(:external_pull_request_url)
+    |> validate_inclusion(:external_pull_request_state, @pull_request_states)
+    |> validate_inclusion(:external_ci_status, @ci_statuses)
+    |> validate_inclusion(:external_review_status, @review_statuses)
+    |> check_constraint(:external_ci_status, name: :work_items_external_ci_status_check)
+    |> check_constraint(:external_review_status, name: :work_items_external_review_status_check)
+    |> check_constraint(:external_pull_request_state,
+      name: :work_items_external_pull_request_state_check
+    )
+    |> optimistic_lock(:lock_version)
+  end
+
+  defp validate_external_work_item(changeset) do
+    changeset
+    |> validate_required([
+      :external_work_item_resource_id,
+      :external_provider,
+      :external_id,
+      :external_url,
+      :external_state,
+      :external_updated_at
+    ])
+    |> validate_inclusion(:external_provider, ["github", "azure_devops"])
+    |> validate_length(:external_id, min: 1, max: 240)
+    |> validate_length(:external_state, min: 1, max: 240)
+    |> validate_length(:external_assignee_name, max: 240)
+    |> ChangesetValidators.validate_http_url(:external_url)
+    |> check_constraint(:external_provider, name: :work_items_external_provider_check)
+  end
+
+  defp clear_changed_delivery_bindings(changeset) do
+    cond do
+      Enum.any?(
+        [:repository_resource_id, :pull_request_url],
+        &Map.has_key?(changeset.changes, &1)
+      ) ->
+        changeset
+        |> put_change(:external_pull_request_url, nil)
+        |> put_change(:external_pull_request_state, nil)
+        |> put_change(:external_review_status, nil)
+        |> put_change(:external_ci_status, nil)
+        |> put_change(:external_change_updated_at, nil)
+        |> put_change(:external_ci_updated_at, nil)
+        |> put_change(:external_change_data, %{})
+        |> put_change(:external_ci_data, %{})
+
+      Enum.any?([:ci_resource_id, :branch], &Map.has_key?(changeset.changes, &1)) ->
+        changeset
+        |> put_change(:external_ci_status, nil)
+        |> put_change(:external_ci_updated_at, nil)
+        |> put_change(:external_ci_data, %{})
+
+      true ->
+        changeset
+    end
   end
 
   defp validate_blocker(changeset) do

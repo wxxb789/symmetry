@@ -4,6 +4,7 @@ defmodule SymmetryControl.Workspaces.ReadModel do
   import Ecto.Query
 
   alias SymmetryControl.Orchestration
+  alias SymmetryControl.Integrations
   alias SymmetryControl.Orchestration.{Command, Run, RunEvent, RunTransition, Task}
   alias SymmetryControl.Repo
   alias SymmetryControl.Workspaces
@@ -25,6 +26,7 @@ defmodule SymmetryControl.Workspaces.ReadModel do
     with {:ok, snapshot} <- Workspaces.workspace_snapshot(selected_project_id),
          {:ok, runtimes} <- Orchestration.runtime_snapshots() do
       project = snapshot.selected_project
+      connections = Integrations.list_connections()
       work_items = if project, do: project.work_items, else: []
       projections = projections(work_items)
       compatible_runtimes = compatible_runtimes(project, runtimes)
@@ -32,11 +34,12 @@ defmodule SymmetryControl.Workspaces.ReadModel do
       {:ok,
        %{
          snapshot: snapshot,
+         connections: connections,
          runtimes: compatible_runtimes,
          registered_runtimes: runtimes,
          projections: projections,
          activity: activity(work_items, projections, compatible_runtimes),
-         health: health(project, projections, compatible_runtimes)
+         health: health(project, connections, projections, compatible_runtimes)
        }}
     end
   end
@@ -389,11 +392,11 @@ defmodule SymmetryControl.Workspaces.ReadModel do
   defp activity_rank("failed"), do: 2
   defp activity_rank(_state), do: 3
 
-  defp health(nil, _projections, _runtimes) do
+  defp health(nil, _connections, _projections, _runtimes) do
     %{connections: "unknown", runtimes: "offline", executions: "idle", synchronization: "unknown"}
   end
 
-  defp health(project, projections, runtimes) do
+  defp health(project, connections, projections, runtimes) do
     external_resources =
       Enum.filter(
         project.resources,
@@ -401,16 +404,43 @@ defmodule SymmetryControl.Workspaces.ReadModel do
       )
 
     %{
-      connections: connection_health(external_resources),
+      connections: connection_health(external_resources, connections),
       runtimes: runtime_health(runtimes),
       executions: execution_health(Map.values(projections)),
       synchronization: synchronization_health(external_resources)
     }
   end
 
-  defp connection_health([]), do: "unknown"
+  defp connection_health(resources, connections) do
+    connection_ids =
+      resources
+      |> Enum.map(& &1.connection_id)
+      |> Enum.reject(&is_nil/1)
+      |> MapSet.new()
 
-  defp connection_health(resources) do
+    bound_connections = Enum.filter(connections, &MapSet.member?(connection_ids, &1.id))
+
+    connected_resources =
+      Enum.filter(resources, &MapSet.member?(connection_ids, &1.connection_id))
+
+    cond do
+      bound_connections == [] ->
+        resource_connection_health(resources)
+
+      Enum.any?(bound_connections ++ connected_resources, &(&1.status in ["degraded", "offline"])) ->
+        "degraded"
+
+      Enum.all?(bound_connections ++ connected_resources, &(&1.status == "healthy")) ->
+        "healthy"
+
+      true ->
+        "unknown"
+    end
+  end
+
+  defp resource_connection_health([]), do: "unknown"
+
+  defp resource_connection_health(resources) do
     cond do
       Enum.any?(resources, &(&1.status in ["degraded", "offline"])) -> "degraded"
       Enum.all?(resources, &(&1.status == "healthy")) -> "healthy"

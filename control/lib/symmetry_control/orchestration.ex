@@ -238,12 +238,7 @@ defmodule SymmetryControl.Orchestration do
 
   def submit_task(attrs, idempotency_key, opts)
       when is_map(attrs) and is_binary(idempotency_key) and byte_size(idempotency_key) > 0 do
-    task_attrs = %{
-      goal: value(attrs, :goal),
-      agent_profile: value(attrs, :agent_profile),
-      workspace: value(attrs, :workspace),
-      input: value(attrs, :input)
-    }
+    task_attrs = normalize_task_attrs(attrs)
 
     if not valid_task_attrs?(task_attrs) do
       {:error, :invalid_request}
@@ -988,7 +983,8 @@ defmodule SymmetryControl.Orchestration do
         join: runtime in Runtime,
         on:
           runtime.status == "online" and runtime.agent_profile == task.agent_profile and
-            runtime.workspace == task.workspace,
+            runtime.workspace == task.workspace and
+            fragment("? @> ?", runtime.capabilities, task.required_capabilities),
         where: task.state == "queued",
         where:
           fragment(
@@ -1045,6 +1041,9 @@ defmodule SymmetryControl.Orchestration do
           runtime.connection_epoch != request_epoch or
             task.current_generation != request_generation or
               run.generation != request_generation ->
+            rollback(:ownership_lost)
+
+          not runtime_matches_task?(runtime, task) ->
             rollback(:ownership_lost)
 
           run.state in ["claimed", "cancelling"] and run.claim_id == request_claim_id and
@@ -1323,12 +1322,7 @@ defmodule SymmetryControl.Orchestration do
   def retry_task(task_id, attrs, idempotency_key, opts)
       when is_binary(task_id) and is_map(attrs) and is_binary(idempotency_key) and
              byte_size(idempotency_key) > 0 do
-    task_attrs = %{
-      goal: value(attrs, :goal),
-      agent_profile: value(attrs, :agent_profile),
-      workspace: value(attrs, :workspace),
-      input: value(attrs, :input)
-    }
+    task_attrs = normalize_task_attrs(attrs)
 
     if not (valid_uuid?(task_id) and valid_task_attrs?(task_attrs)) do
       {:error, :invalid_request}
@@ -2070,6 +2064,21 @@ defmodule SymmetryControl.Orchestration do
     {task, run, runtime}
   end
 
+  defp runtime_matches_task?(runtime, task) do
+    runtime.status == "online" and runtime.agent_profile == task.agent_profile and
+      runtime.workspace == task.workspace and
+      Repo.exists?(
+        from candidate in Runtime,
+          where: candidate.id == ^runtime.id,
+          where:
+            fragment(
+              "? @> ?",
+              candidate.capabilities,
+              type(^task.required_capabilities, :map)
+            )
+      )
+  end
+
   defp lock_machine(machine_id),
     do:
       Repo.one(from machine in Machine, where: machine.id == ^machine_id, lock: "FOR UPDATE") ||
@@ -2173,14 +2182,39 @@ defmodule SymmetryControl.Orchestration do
 
   defp valid_runtime_specification?(specification) when is_map(specification) do
     capabilities = value(specification, :capabilities, %{})
-    is_map(capabilities) and jsonb_compatible?(capabilities)
+
+    is_map(capabilities) and jsonb_compatible?(capabilities) and
+      valid_boolean_capability?(capabilities, :structured_input) and
+      valid_boolean_capability?(capabilities, :provider_access) and
+      (value(capabilities, :provider_access, false) != true or
+         value(capabilities, :structured_input, false) == true)
   end
 
   defp valid_runtime_specification?(_), do: false
 
+  defp normalize_task_attrs(attrs) do
+    %{
+      goal: value(attrs, :goal),
+      agent_profile: value(attrs, :agent_profile),
+      workspace: value(attrs, :workspace),
+      input: value(attrs, :input),
+      required_capabilities: value(attrs, :required_capabilities, %{})
+    }
+  end
+
+  defp valid_boolean_capability?(capabilities, key) do
+    case value(capabilities, key, :missing) do
+      :missing -> true
+      value -> is_boolean(value)
+    end
+  end
+
   defp valid_task_attrs?(task_attrs) do
     input = value(task_attrs, :input)
-    (is_nil(input) or is_map(input)) and jsonb_compatible?(input)
+    required_capabilities = value(task_attrs, :required_capabilities, %{})
+
+    (is_nil(input) or is_map(input)) and jsonb_compatible?(input) and
+      is_map(required_capabilities) and jsonb_compatible?(required_capabilities)
   end
 
   defp valid_command_request?(kind, payload) do

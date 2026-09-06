@@ -1,6 +1,7 @@
 defmodule SymmetryControlWeb.PortalApiController do
   use SymmetryControlWeb, :controller
 
+  alias SymmetryControl.Integrations
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Workspaces
   alias SymmetryControl.Workspaces.ReadModel
@@ -10,6 +11,87 @@ defmodule SymmetryControlWeb.PortalApiController do
     case ReadModel.workspace(Map.get(params, "project_id")) do
       {:ok, model} -> json(conn, PortalJSON.workspace(model))
       {:error, reason} -> error(conn, reason)
+    end
+  end
+
+  def create_connection(conn, params) do
+    case Integrations.create_connection(params) do
+      {:ok, connection} ->
+        conn
+        |> put_status(:created)
+        |> json(%{connection: PortalJSON.connection(connection)})
+
+      {:error, reason} ->
+        error(conn, reason)
+    end
+  end
+
+  def update_connection(conn, params) do
+    connection_id = Map.fetch!(conn.path_params, "connection_id")
+
+    case Integrations.update_connection(connection_id, Map.delete(params, "connection_id")) do
+      {:ok, connection} -> json(conn, %{connection: PortalJSON.connection(connection)})
+      {:error, reason} -> error(conn, reason)
+    end
+  end
+
+  def delete_connection(conn, params) do
+    connection_id = Map.fetch!(conn.path_params, "connection_id")
+
+    with {:ok, version} <- version_param(params),
+         {:ok, connection} <- Integrations.delete_connection(connection_id, version) do
+      json(conn, %{deleted_connection_id: connection.id})
+    else
+      {:error, reason} -> error(conn, reason)
+    end
+  end
+
+  def check_connection(conn, _params) do
+    connection_id = Map.fetch!(conn.path_params, "connection_id")
+
+    case Integrations.check_connection(connection_id) do
+      {:ok, connection} ->
+        json(conn, %{connection: PortalJSON.connection(connection)})
+
+      {:error, reason, connection} ->
+        projected_error(conn, reason, :connection, PortalJSON.connection(connection))
+
+      {:error, reason} ->
+        error(conn, reason)
+    end
+  end
+
+  def sync_project(conn, _params) do
+    project_id = Map.fetch!(conn.path_params, "project_id")
+
+    case Integrations.sync_project(project_id) do
+      {:ok, results} ->
+        json(conn, %{synced_resource_ids: Enum.map(results, &elem(&1, 0))})
+
+      {:error, results} when is_list(results) ->
+        {status, error, formatted_results} = sync_failure(results)
+
+        conn
+        |> put_status(status)
+        |> json(%{error: error, results: formatted_results})
+
+      {:error, reason} ->
+        error(conn, reason)
+    end
+  end
+
+  def sync_resource(conn, _params) do
+    resource_id = Map.fetch!(conn.path_params, "resource_id")
+
+    case Integrations.sync_resource(resource_id) do
+      {:ok, resource} ->
+        json(conn, %{resource: PortalJSON.resource(resource)})
+
+      {:error, reason, resource} ->
+        projected_error(conn, reason, :resource, PortalJSON.resource(resource))
+
+      {:error, reason} ->
+        error(conn, reason)
     end
   end
 
@@ -242,7 +324,13 @@ defmodule SymmetryControlWeb.PortalApiController do
   def provide_input(conn, _params), do: error(conn, :invalid_request)
 
   defp hydrate_work_item(work_item),
-    do: SymmetryControl.Repo.preload(work_item, [:project, :repository_resource])
+    do:
+      SymmetryControl.Repo.preload(work_item, [
+        :project,
+        :repository_resource,
+        :ci_resource,
+        :external_work_item_resource
+      ])
 
   defp work_item_json(work_item) do
     work_item = hydrate_work_item(work_item)
@@ -262,6 +350,82 @@ defmodule SymmetryControlWeb.PortalApiController do
   end
 
   defp error(conn, reason), do: Protocol.error(conn, reason)
+
+  defp projected_error(conn, reason, projection_key, projection) do
+    {status, code, message} = Protocol.error_details(reason)
+
+    conn
+    |> put_status(status)
+    |> json(%{projection_key => projection, error: %{code: code, message: message}})
+  end
+
+  defp sync_results(results) do
+    Enum.map(results, fn
+      {id, {:ok, _resource}} ->
+        %{resource_id: id, status: "synced"}
+
+      {id, {:error, reason, resource}} ->
+        failed_sync_result(id, reason, resource)
+
+      {id, {:error, reason}} ->
+        failed_sync_result(id, reason, nil)
+    end)
+  end
+
+  defp sync_failure(results) do
+    formatted_results = sync_results(results)
+
+    causes =
+      formatted_results
+      |> Enum.filter(&(&1.status == "failed"))
+      |> Enum.group_by(& &1.error.code)
+      |> Enum.map(fn {_code, failures} ->
+        error = hd(failures).error
+        Map.put(error, :count, length(failures))
+      end)
+      |> Enum.sort_by(& &1.code)
+
+    {status, error} = aggregate_sync_error(causes)
+    {status, Map.put(error, :causes, causes), formatted_results}
+  end
+
+  defp aggregate_sync_error([cause]) do
+    {cause.http_status, Map.take(cause, [:code, :message])}
+  end
+
+  defp aggregate_sync_error(causes) when length(causes) > 1 do
+    statuses = causes |> Enum.map(& &1.http_status) |> Enum.uniq()
+    status = if length(statuses) == 1, do: hd(statuses), else: 422
+
+    {status,
+     %{
+       code: "multiple_failures",
+       message: "resources failed to synchronize for multiple reasons"
+     }}
+  end
+
+  defp aggregate_sync_error([]) do
+    {status, code, message} = Protocol.error_details(:provider_failure)
+    {status, %{code: code, message: message}}
+  end
+
+  defp failed_sync_result(id, reason, resource) do
+    {status, code, default_message} = Protocol.error_details(reason)
+    message = resource_status_message(resource) || default_message
+
+    %{
+      resource_id: id,
+      status: "failed",
+      reason: to_string(reason),
+      error: %{code: code, message: message, http_status: status}
+    }
+  end
+
+  defp resource_status_message(%{status_message: message})
+       when is_binary(message) and message != "",
+       do: message
+
+  defp resource_status_message(_resource), do: nil
 
   defp version_param(%{"version" => version}) when is_integer(version) and version > 0,
     do: {:ok, version}

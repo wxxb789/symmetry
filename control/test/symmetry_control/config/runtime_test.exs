@@ -8,7 +8,8 @@ defmodule SymmetryControl.Config.RuntimeTest do
   @variables [
     "SYMMETRY_ENROLLMENT_TOKEN",
     "SYMMETRY_OPERATOR_TOKEN",
-    "SYMMETRY_LEASE_DURATION_MS"
+    "SYMMETRY_LEASE_DURATION_MS",
+    "SYMMETRY_INTEGRATION_SYNC_INTERVAL_MS"
   ]
 
   setup do
@@ -37,6 +38,15 @@ defmodule SymmetryControl.Config.RuntimeTest do
     config = Config.Reader.read!(@base_config, env: :dev)
 
     assert 120_000 == config[:symmetry_control][:orchestration][:lease_duration_ms]
+  end
+
+  test "base configuration filters provider credential parameters" do
+    config = Config.Reader.read!(@base_config, env: :dev)
+
+    assert Enum.all?(
+             ["password", "credential", "token", "pat", "secret", "authorization"],
+             &(&1 in config[:phoenix][:filter_parameters])
+           )
   end
 
   test "development runtime configuration defaults and overrides lease duration" do
@@ -75,5 +85,24 @@ defmodule SymmetryControl.Config.RuntimeTest do
     config = Config.Reader.read!(@test_config, env: :test)
 
     assert 30_000 == config[:symmetry_control][:orchestration][:lease_duration_ms]
+  end
+
+  test "development integration configuration supports sync overrides" do
+    System.put_env("SYMMETRY_INTEGRATION_SYNC_INTERVAL_MS", "60000")
+
+    config = Config.Reader.read!(@runtime_config, env: :dev)
+
+    assert 60_000 == config[:symmetry_control][:integrations][:sync_interval_ms]
+    assert config[:symmetry_control][:integrations][:syncer_enabled]
+  end
+
+  test "runtime configuration rejects invalid sync intervals" do
+    for value <- ["0", "29999", "invalid"] do
+      System.put_env("SYMMETRY_INTEGRATION_SYNC_INTERVAL_MS", value)
+
+      assert_raise RuntimeError,
+                   ~r/SYMMETRY_INTEGRATION_SYNC_INTERVAL_MS must be at least 30000/,
+                   fn -> Config.Reader.read!(@runtime_config, env: :dev) end
+    end
   end
 end

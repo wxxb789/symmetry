@@ -52,12 +52,13 @@ const (
 
 // AgentProfile is a machine-local coding agent command binding.
 type AgentProfile struct {
-	Command      string      `json:"command"`
-	Args         []string    `json:"args"`
-	InputMode    InputMode   `json:"input_mode"`
-	Interactive  bool        `json:"interactive"`
-	EventFormat  EventFormat `json:"event_format"`
-	EnvAllowlist []string    `json:"env_allowlist"`
+	Command        string      `json:"command"`
+	Args           []string    `json:"args"`
+	InputMode      InputMode   `json:"input_mode"`
+	ProviderAccess bool        `json:"provider_access"`
+	Interactive    bool        `json:"interactive"`
+	EventFormat    EventFormat `json:"event_format"`
+	EnvAllowlist   []string    `json:"env_allowlist"`
 }
 
 // EventFormat specifies how the local agent represents events on stdout.
@@ -219,6 +220,9 @@ func validateAgentProfiles(profiles map[string]AgentProfile) error {
 		}
 		if profile.Interactive && profile.InputMode == InputModeGoal {
 			return fmt.Errorf("%s.interactive requires %s.input_mode to be json", field, field)
+		}
+		if profile.ProviderAccess && profile.InputMode != InputModeJSON {
+			return fmt.Errorf("%s.provider_access requires %s.input_mode to be json", field, field)
 		}
 		switch profile.EventFormat {
 		case "", EventFormatRaw:

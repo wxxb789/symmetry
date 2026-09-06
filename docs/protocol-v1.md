@@ -99,9 +99,11 @@ cannot submit tasks or create task commands. Command acknowledgement is not a
 Task Control API operation: it is a machine-authenticated, fenced daemon
 mutation. An invalid, unknown, or missing credential returns `401`; a valid
 credential of the wrong class, or a machine credential that does not own a
-resource, returns `403`. Coding-agent, Git, SSH, and repository-provider
-credentials remain on the execution machine and must not appear in protocol
-payloads.
+resource, returns `403`. Coding-agent, Git, and SSH credentials remain on the
+execution machine. GitHub OAuth and Azure Entra ID credentials remain in the
+control-plane CLI login stores. Provider credentials never appear in daemon or
+agent protocol payloads; agents receive only the scoped broker capability
+described below.
 
 Production traffic must use TLS. Plain HTTP is permitted only on an explicitly
 trusted local or container network. Authenticated HTTP and WebSocket clients
@@ -158,7 +160,10 @@ Authorization: Bearer <machine-token>
       "capacity": 1,
       "agent_profile": "codex",
       "workspace": "primary",
-      "capabilities": {}
+      "capabilities": {
+        "structured_input": true,
+        "provider_access": true
+      }
     }
   ]
 }
@@ -186,6 +191,13 @@ runtime's `runtime_epoch` and fences the previous process. Repeating the same
 instance registration is idempotent and returns the existing epochs. Lowering
 capacity prevents new assignment while current reservations meet or exceed the
 new value; it does not cancel existing work.
+
+`structured_input` declares that the selected agent profile accepts the JSON
+stdin envelope described below. `provider_access` is a separate, explicit
+profile opt-in; JSON framing alone does not imply that an agent understands the
+provider broker. A runtime may advertise `provider_access: true` only for a JSON
+input profile configured to consume the broker capability. Tasks that require
+provider access are assigned only to runtimes that advertise it.
 
 The default execution lease is two minutes, and registration rejects lease
 durations below 30 seconds. The daemon maintains leases in an
@@ -299,6 +311,18 @@ runtime capacity, and expiry before issuing a lease:
     "agent_profile": "codex",
     "workspace": "primary",
     "input": {}
+  },
+  "provider_access": {
+    "path": "/api/v1/provider-actions",
+    "token": "opaque-signed-capability",
+    "grants": [
+      {
+        "resource_id": "uuid",
+        "provider": "github",
+        "kind": "repository",
+        "operations": ["resource.sync", "change.upsert", "change.update"]
+      }
+    ]
   }
 }
 ```
@@ -306,6 +330,25 @@ runtime capacity, and expiry before issuing a lease:
 Repeating the same `claim_id` returns the same lease. A different `claim_id`
 for an already claimed run returns `409 ownership_lost`; therefore two local
 paths cannot obtain the same fence and independently launch the agent.
+
+Claim also revalidates the locked runtime against the task immediately before
+the state transition. The runtime must still be online and retain the assigned
+`agent_profile`, `workspace`, and every `required_capabilities` entry. A
+same-daemon re-registration that changes any of those fields invalidates the
+assignment; claim returns `409 ownership_lost` and leaves the run assigned.
+
+When a task requires provider access, claim and complete-grant validation occur
+in one PostgreSQL transaction. Every resource snapshotted as connected when the
+task was launched must still be bound, connected, and expose its required
+provider capability. Manual resources do not require a grant, and a resource
+connected after launch cannot widen the task. If any required grant is missing,
+claim rolls back and returns `503 provider_access_unavailable`; the run remains
+assigned so the daemon may retry until assignment expiry. A successful claim
+returns one broker token bound to the run, task, runtime epoch, generation, and
+claim ID. The token has no independent wall-clock expiry in the wire contract.
+Every broker request checks the current run state and live lease, so renewal
+extends broker usability and lease expiry, cancellation, terminal state,
+generation advance, or runtime re-registration revokes it.
 
 A new daemon process registers a new instance and epoch. It never retries or
 launches a claim journaled under an older epoch. Reconciliation returns
@@ -332,6 +375,82 @@ never revives an expired or terminal run:
   "commands": []
 }
 ```
+
+### Execute A Provider Action
+
+```http
+POST /api/v1/provider-actions
+Authorization: Bearer <provider-access-token>
+Content-Type: application/json
+```
+
+The provider-access token is not a provider credential. It authorizes only the
+resource and operation pairs returned in the claim response. Every request also
+needs a caller-generated UUID `action_id` that remains stable across retries:
+
+```json
+{
+  "action_id": "uuid",
+  "resource_id": "uuid",
+  "operation": "change.upsert",
+  "input": {
+    "title": "Implement connected delivery",
+    "body": "Optional pull-request body"
+  }
+}
+```
+
+Supported operations are `resource.sync`, `change.upsert`, and
+`change.update`. `resource.sync` requires an empty `input`. Change actions
+accept only `title` and optional `body`. The agent cannot supply repository,
+branch, or pull-request identity: Control injects the work item's source-branch
+snapshot, the bound repository's default target-branch snapshot, and the
+task-linked pull request.
+
+Control records an immutable provider-action intent in the same short database
+transaction that locks and validates the current execution and resource fence.
+The committed intent is the authorization linearization point; a cancellation,
+generation change, runtime-epoch change, lease expiry, project archive, binding
+change, or capability revocation that settles first prevents dispatch. A later
+change does not retroactively revoke an already accepted provider request.
+Provider execution is owned by a supervised broker worker rather than the HTTP
+request process. A per-intent PostgreSQL advisory session lock prevents another
+Control instance from dispatching the same action concurrently, while provider
+network calls remain outside database transactions.
+
+A successful response includes `projected`. `projected: true` means Control
+persisted the provider result into the current Symmetry resource or work-item
+projection. `projected: false` means the provider operation completed, but a
+newer local version or binding won the projection race; the response still
+contains the credential-free provider result observed by this action. Clients
+must treat either value as a definitive action outcome and must not retry the
+same logical mutation merely to force projection. A later `resource.sync` or
+normal provider synchronization reconciles the current external state.
+
+`(run_id, action_id)` is unique. Reusing an action ID with different normalized
+input returns `409 idempotency_conflict`. While the token still owns a live
+execution, replaying a successful action returns its stored, credential-free
+result and a definitively failed action replays its stored sanitized error. An
+accepted intent without an active dispatch owner is resumed automatically. An
+intent whose provider call is actively executing returns `409 state_conflict`;
+Control never starts a concurrent provider mutation for that run and resource.
+After an owner disappears, recovery converts an interrupted execution to
+`unknown` only after confirming that its advisory lock is no longer held.
+
+A change action whose provider call ends with an ambiguous outcome is stored as
+`unknown` and returns the sanitized provider error. Ambiguous outcomes include
+transport failure, HTTP 5xx, and an invalid success response after a mutation
+may have occurred. Pre-dispatch authentication or configuration failures and
+definitive HTTP 4xx responses are stored as `failed` and replayed. While the
+same execution fence and capability remain live, retrying an unknown action
+with the same `action_id` and normalized input atomically reopens and
+redispatches that intent. A different action remains blocked until the unknown
+intent is resolved. Once the live fence is lost, even a matching retry returns
+`409 ownership_lost`. After a definitive failure, a live agent may use a new
+action ID for a new logical attempt. Provider adapters query by the server-owned
+change scope and reconcile title/body, so a retry converges without creating an
+unrelated pull request. Provider credentials, request headers, and action input
+are not emitted to application or database query logs.
 
 ### Append Events And Advance State
 
@@ -759,17 +878,22 @@ The daemon writes exactly one initial stdin record when it launches an agent.
 With `input_mode: "goal"`, the record is the plain-text task goal followed by a
 newline; structured task input is not written. This mode is valid only for a
 non-interactive profile. With `input_mode: "json"`, the record is one
-newline-terminated JSON envelope:
+newline-terminated JSON envelope. A profile that consumes broker capabilities
+must also set `provider_access: true` in daemon configuration:
 
 ```json
-{"type":"task_input","goal":"Run the configured agent","input":{"branch":"main"}}
+{"type":"task_input","goal":"Run the configured agent","input":{"provider_resource_ids":["uuid"],"source_branch":"codex/work-42","target_branch":"main"},"provider_access":{"path":"https://control.example.test/api/v1/provider-actions","token":"opaque-signed-capability","grants":[{"resource_id":"uuid","provider":"github","kind":"repository","operations":["resource.sync","change.upsert","change.update"]}]}}
 ```
 
 The envelope always has `type`, `goal`, and `input`. The `goal` is non-empty.
 The `input` member preserves the task's structured input, using `null` when no
-input was supplied, and otherwise is a JSON object. Interactive profiles use
-`input_mode: "json"`, keep stdin open, and receive each `provide_input` command
-as another newline-terminated envelope with the same goal:
+input was supplied, and otherwise is a JSON object. `provider_access` is omitted
+for tasks that do not require it. Its relative API path is resolved against the
+configured control-plane URL before delivery. A profile that did not opt in
+rejects an unexpected provider capability instead of silently exposing it.
+Interactive profiles use `input_mode: "json"`, keep stdin open, and receive each
+`provide_input` command as another newline-terminated envelope with the same
+goal:
 
 ```json
 {"type":"provide_input","goal":"Run the configured agent","input":{"answer":"continue"}}

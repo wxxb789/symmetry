@@ -8,6 +8,7 @@ defmodule SymmetryControl.Workspaces do
 
   import Ecto.Query
 
+  alias SymmetryControl.Integrations.{ChangeAction, Connection}
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.{Notifier, Runtime, Scheduler}
   alias SymmetryControl.Repo
@@ -29,7 +30,10 @@ defmodule SymmetryControl.Workspaces do
     :agent_profile,
     :workspace,
     :repository,
-    :repository_resource_id
+    :repository_resource_id,
+    :ci_resource_id,
+    :branch,
+    :pull_request_url
   ]
 
   @spec create_project(map()) :: {:ok, Project.t()} | {:error, Ecto.Changeset.t()}
@@ -69,6 +73,7 @@ defmodule SymmetryControl.Workspaces do
       Repo.transaction(fn ->
         project = lock_project(project_id)
         ensure_active_project(project) |> require_ok!()
+        attrs = prepare_resource_attrs(attrs) |> unwrap_or_rollback()
 
         project
         |> Ecto.build_assoc(:resources)
@@ -92,13 +97,14 @@ defmodule SymmetryControl.Workspaces do
         ensure_active_project(resource.project) |> require_ok!()
 
         with {:ok, attrs} <- expect_version(resource, attrs),
+             {:ok, attrs} <- prepare_resource_attrs(attrs, resource),
              changeset <-
                ProjectResource.update_changeset(
                  resource,
                  Map.drop(attrs, [:project_id, "project_id"])
                )
                |> validate_registered_reference(),
-             :ok <- resource_kind_change_allowed(resource, changeset) do
+             :ok <- resource_identity_change_allowed(resource, changeset) do
           changeset |> update_with_stale_error() |> unwrap_or_rollback()
         else
           {:error, reason} -> Repo.rollback(reason)
@@ -151,7 +157,7 @@ defmodule SymmetryControl.Workspaces do
           project
           |> Ecto.build_assoc(:work_items)
           |> WorkItem.changeset(attrs)
-          |> validate_repository_resource(project.id)
+          |> validate_work_item_resources(project.id)
 
         changeset |> Repo.insert() |> unwrap_or_rollback()
       end)
@@ -177,9 +183,10 @@ defmodule SymmetryControl.Workspaces do
                  |> Map.drop([:project_id, "project_id"])
                  |> normalize_work_item_attrs(work_item.project, work_item)
                ),
+             :ok <- provider_owned_fields_editable(work_item, changeset),
              :ok <- execution_fields_editable(work_item, changeset) do
           changeset
-          |> validate_repository_resource(work_item.project_id)
+          |> validate_work_item_resources(work_item.project_id)
           |> update_with_stale_error()
           |> unwrap_or_rollback()
         else
@@ -374,6 +381,7 @@ defmodule SymmetryControl.Workspaces do
         Repo.transaction(fn ->
           work_item = lock_work_item_with_project(work_item_id)
           ensure_active_project(work_item.project) |> require_ok!()
+          ensure_external_work_available(work_item) |> require_ok!()
           if work_item.assignee_type != "agent", do: Repo.rollback(:state_conflict)
 
           task_id = work_item.orchestration_task_id || Repo.rollback(:state_conflict)
@@ -432,7 +440,7 @@ defmodule SymmetryControl.Workspaces do
   @spec work_item_snapshot(Ecto.UUID.t()) :: {:ok, map()} | {:error, atom()}
   def work_item_snapshot(work_item_id) do
     with {:ok, work_item} <- fetch(WorkItem, work_item_id) do
-      work_item = Repo.preload(work_item, [:project, :repository_resource])
+      work_item = Repo.preload(work_item, [:project, :repository_resource, :ci_resource])
 
       case work_item.orchestration_task_id do
         nil ->
@@ -466,7 +474,8 @@ defmodule SymmetryControl.Workspaces do
 
   defp launch_locked_work_item(%WorkItem{project: project} = work_item) do
     if project.status != "active" or work_item.assignee_type != "agent" or
-         work_item.status not in ["backlog", "ready"] do
+         work_item.status not in ["backlog", "ready"] or
+         not WorkItem.external_work_available?(work_item) do
       Repo.rollback(:state_conflict)
     end
 
@@ -508,6 +517,7 @@ defmodule SymmetryControl.Workspaces do
 
   defp execution_attrs(work_item, agent_profile, workspace) do
     project = work_item.project
+    provider_resource_ids = provider_resource_ids(work_item)
 
     repository =
       case work_item.repository_resource do
@@ -515,20 +525,106 @@ defmodule SymmetryControl.Workspaces do
         _not_loaded_or_missing -> work_item.repository
       end
 
-    %{
-      goal: execution_goal(work_item),
-      agent_profile: agent_profile,
-      workspace: workspace,
-      input: %{
+    input =
+      %{
         "project_id" => project.id,
         "project_key" => project.key,
+        "provider_resource_ids" => provider_resource_ids,
         "repository" => repository,
         "repository_resource_id" => work_item.repository_resource_id,
         "work_item_id" => work_item.id,
         "work_item_key" => work_item_key(project, work_item)
       }
+      |> maybe_put_ci_resource(work_item)
+      |> maybe_put_external_work_item(work_item)
+      |> maybe_put_change_scope(work_item)
+      |> unwrap_or_rollback()
+
+    %{
+      goal: execution_goal(work_item),
+      agent_profile: agent_profile,
+      workspace: workspace,
+      input: input,
+      required_capabilities: required_capabilities(provider_resource_ids)
     }
   end
+
+  defp required_capabilities([]), do: %{}
+  defp required_capabilities(_provider_resource_ids), do: %{"provider_access" => true}
+
+  defp provider_resource_ids(work_item) do
+    [
+      work_item.external_work_item_resource,
+      work_item.repository_resource,
+      work_item.ci_resource
+    ]
+    |> Enum.flat_map(fn
+      %ProjectResource{id: id, connection_id: connection_id} when is_binary(connection_id) ->
+        [id]
+
+      _manual_or_missing ->
+        []
+    end)
+    |> Enum.uniq()
+  end
+
+  defp maybe_put_change_scope(
+         input,
+         %WorkItem{
+           repository_resource: %ProjectResource{
+             connection_id: connection_id,
+             connection: %Connection{capabilities: capabilities}
+           }
+         } = work_item
+       )
+       when is_binary(connection_id) do
+    if "changes" in capabilities do
+      with {:ok, source_branch} <- ChangeAction.normalize_branch(work_item.branch),
+           {:ok, target_branch} <-
+             ChangeAction.normalize_branch(
+               work_item.repository_resource.metadata["default_branch"]
+             ) do
+        input =
+          input
+          |> Map.put("source_branch", source_branch)
+          |> Map.put("target_branch", target_branch)
+          |> maybe_put_linked_pull_request(ChangeAction.linked_pull_request_url(work_item))
+
+        {:ok, input}
+      else
+        {:error, :invalid_request} -> {:error, :state_conflict}
+      end
+    else
+      {:ok, input}
+    end
+  end
+
+  defp maybe_put_change_scope(input, _work_item), do: {:ok, input}
+
+  defp maybe_put_linked_pull_request(input, pull_request_url) do
+    case present(pull_request_url) do
+      nil -> input
+      url -> Map.put(input, "pull_request_url", url)
+    end
+  end
+
+  defp maybe_put_external_work_item(input, %WorkItem{external_work_item_resource_id: nil}),
+    do: input
+
+  defp maybe_put_external_work_item(input, work_item) do
+    Map.put(input, "external_work_item", %{
+      "provider" => work_item.external_provider,
+      "id" => work_item.external_id,
+      "url" => work_item.external_url,
+      "state" => work_item.external_state,
+      "resource_id" => work_item.external_work_item_resource_id
+    })
+  end
+
+  defp maybe_put_ci_resource(input, %WorkItem{ci_resource_id: nil}), do: input
+
+  defp maybe_put_ci_resource(input, work_item),
+    do: Map.put(input, "ci_resource_id", work_item.ci_resource_id)
 
   defp execution_goal(%WorkItem{description: description, title: title}) do
     case present(description) do
@@ -547,7 +643,7 @@ defmodule SymmetryControl.Workspaces do
     work_items =
       from work_item in WorkItem,
         order_by: [asc: work_item.position, desc: work_item.updated_at, asc: work_item.number],
-        preload: [:project, :repository_resource]
+        preload: [:project, :repository_resource, :ci_resource, :external_work_item_resource]
 
     Repo.preload(project, resources: resources, work_items: work_items)
   end
@@ -590,7 +686,11 @@ defmodule SymmetryControl.Workspaces do
 
     work_item
     |> Map.put(:project, project)
-    |> Repo.preload(:repository_resource)
+    |> Repo.preload([
+      :ci_resource,
+      :external_work_item_resource,
+      repository_resource: :connection
+    ])
   end
 
   defp lock_resource_with_project(resource_id) do
@@ -618,6 +718,12 @@ defmodule SymmetryControl.Workspaces do
 
   defp ensure_active_project(%Project{status: "active"}), do: :ok
   defp ensure_active_project(%Project{}), do: {:error, :state_conflict}
+
+  defp ensure_external_work_available(work_item) do
+    if WorkItem.external_work_available?(work_item),
+      do: :ok,
+      else: {:error, :state_conflict}
+  end
 
   defp project_mutation_allowed(%Project{status: "active"}, _attrs), do: :ok
 
@@ -647,34 +753,190 @@ defmodule SymmetryControl.Workspaces do
   end
 
   defp ensure_resource_unreferenced(resource) do
-    if Repo.exists?(from item in WorkItem, where: item.repository_resource_id == ^resource.id),
-      do: {:error, :state_conflict},
+    if Repo.exists?(
+         from item in WorkItem,
+           where:
+             item.repository_resource_id == ^resource.id or
+               item.ci_resource_id == ^resource.id or
+               item.external_work_item_resource_id == ^resource.id
+       ),
+       do: {:error, :state_conflict},
+       else: :ok
+  end
+
+  defp resource_identity_change_allowed(resource, changeset) do
+    if Enum.any?([:kind, :connection_id, :external_ref], &Map.has_key?(changeset.changes, &1)),
+      do: ensure_resource_unreferenced(resource),
       else: :ok
   end
 
-  defp resource_kind_change_allowed(resource, changeset) do
-    case Ecto.Changeset.get_change(changeset, :kind) do
-      nil -> :ok
-      _kind -> ensure_resource_unreferenced(resource)
-    end
+  defp validate_work_item_resources(changeset, project_id) do
+    resources =
+      [:repository_resource_id, :ci_resource_id]
+      |> Enum.map(&Ecto.Changeset.get_field(changeset, &1))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+      |> case do
+        [] ->
+          %{}
+
+        ids ->
+          from(resource in ProjectResource, where: resource.id in ^ids)
+          |> Repo.all()
+          |> Map.new(&{&1.id, &1})
+      end
+
+    changeset
+    |> validate_project_resource(
+      :repository_resource_id,
+      project_id,
+      "repository",
+      "must belong to the work item's project",
+      resources
+    )
+    |> validate_project_resource(
+      :ci_resource_id,
+      project_id,
+      "ci",
+      "must be a CI resource in the work item's project",
+      resources
+    )
   end
 
-  defp validate_repository_resource(changeset, project_id) do
-    case Ecto.Changeset.get_field(changeset, :repository_resource_id) do
+  defp validate_project_resource(
+         changeset,
+         field,
+         project_id,
+         kind,
+         error_message,
+         resources
+       ) do
+    case Ecto.Changeset.get_field(changeset, field) do
       nil ->
         changeset
 
       resource_id ->
-        case Repo.get(ProjectResource, resource_id) do
-          %ProjectResource{project_id: ^project_id, kind: "repository"} ->
+        case Map.get(resources, resource_id) do
+          %ProjectResource{project_id: ^project_id, kind: ^kind} ->
             changeset
 
           _resource ->
-            Ecto.Changeset.add_error(
-              changeset,
-              :repository_resource_id,
-              "must belong to the work item's project"
-            )
+            Ecto.Changeset.add_error(changeset, field, error_message)
+        end
+    end
+  end
+
+  defp provider_owned_fields_editable(
+         %WorkItem{external_work_item_resource_id: resource_id},
+         changeset
+       )
+       when is_binary(resource_id) do
+    if Enum.any?(
+         Map.keys(changeset.changes),
+         &WorkItem.provider_owned_field?/1
+       ),
+       do: {:error, :provider_owned},
+       else: :ok
+  end
+
+  defp provider_owned_fields_editable(_work_item, _changeset), do: :ok
+
+  defp ensure_connection_capability(connection, kind) do
+    capability =
+      case kind do
+        "repository" -> "repositories"
+        "work_tracking" -> "work_items"
+        "ci" -> "ci"
+        _ -> nil
+      end
+
+    cond do
+      is_nil(capability) -> {:error, :invalid_request}
+      capability in connection.capabilities -> :ok
+      true -> {:error, :forbidden}
+    end
+  end
+
+  defp prepare_resource_attrs(attrs, resource \\ nil) do
+    connection_id =
+      if attr_present?(attrs, :connection_id),
+        do: present(attr_value(attrs, :connection_id, nil)),
+        else: resource && resource.connection_id
+
+    case connection_id do
+      nil ->
+        attrs =
+          if resource && resource.connection_id do
+            attrs
+            |> put_attr(:connection_id, nil)
+            |> put_attr(:provider, nil)
+            |> put_attr(:status, "unknown")
+            |> put_attr(:sync_status, "unknown")
+            |> put_attr(:status_message, nil)
+            |> put_attr(:last_checked_at, nil)
+            |> put_attr(:last_synced_at, nil)
+          else
+            attrs
+          end
+
+        {:ok, attrs}
+
+      id ->
+        with {:ok, connection_id} <- Ecto.UUID.cast(id),
+             %Connection{} = connection <-
+               Repo.one(
+                 from connection in Connection,
+                   where: connection.id == ^connection_id,
+                   lock: "FOR SHARE"
+               ) do
+          kind = attr_value(attrs, :kind, resource && resource.kind)
+          ensure_connection_capability(connection, kind) |> require_ok!()
+
+          SymmetryControl.Integrations.validate_resource_reference(
+            connection,
+            kind,
+            attr_value(attrs, :external_ref, resource && resource.external_ref)
+          )
+          |> require_ok!()
+
+          reset? =
+            is_nil(resource) or resource.connection_id != connection.id or
+              kind != resource.kind or
+              (attr_present?(attrs, :external_ref) and
+                 present(attr_value(attrs, :external_ref, nil)) != resource.external_ref)
+
+          attrs =
+            attrs
+            |> drop_attrs([
+              :provider,
+              :url,
+              :status,
+              :sync_status,
+              :status_message,
+              :metadata,
+              :last_checked_at,
+              :last_synced_at
+            ])
+            |> put_attr(:connection_id, connection.id)
+            |> put_attr(:provider, connection.provider)
+
+          attrs =
+            if reset? do
+              attrs
+              |> put_attr(:url, nil)
+              |> put_attr(:status, "unknown")
+              |> put_attr(:sync_status, "unknown")
+              |> put_attr(:status_message, nil)
+              |> put_attr(:metadata, %{})
+              |> put_attr(:last_checked_at, nil)
+              |> put_attr(:last_synced_at, nil)
+            else
+              attrs
+            end
+
+          {:ok, attrs}
+        else
+          _ -> {:error, :not_found}
         end
     end
   end
@@ -732,7 +994,11 @@ defmodule SymmetryControl.Workspaces do
   end
 
   defp normalize_stale_result({:error, changeset} = error) do
-    if Keyword.has_key?(changeset.errors, :lock_version), do: {:error, :stale}, else: error
+    cond do
+      Keyword.has_key?(changeset.errors, :lock_version) -> {:error, :stale}
+      Keyword.has_key?(changeset.errors, :provider_action_intents) -> {:error, :state_conflict}
+      true -> error
+    end
   end
 
   defp normalize_stale_result(result), do: result
@@ -836,6 +1102,10 @@ defmodule SymmetryControl.Workspaces do
 
   defp attr_present?(attrs, key),
     do: Map.has_key?(attrs, key) or Map.has_key?(attrs, Atom.to_string(key))
+
+  defp drop_attrs(attrs, keys) do
+    Enum.reduce(keys, attrs, fn key, acc -> Map.drop(acc, [key, Atom.to_string(key)]) end)
+  end
 
   defp attr_value(attrs, key, default) do
     cond do

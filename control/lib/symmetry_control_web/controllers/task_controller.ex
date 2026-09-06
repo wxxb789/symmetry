@@ -5,12 +5,15 @@ defmodule SymmetryControlWeb.TaskController do
   alias SymmetryControl.Orchestration.{Notifier, Scheduler}
   alias SymmetryControlWeb.Protocol
 
+  @work_fields ["goal", "agent_profile", "workspace", "input"]
+
   def create(conn, _params) do
     case body_params(conn) do
       %{"work" => work} = body when is_map(work) and map_size(body) == 1 ->
         with {:ok, idempotency_key} <- idempotency_key(conn),
+             {:ok, work} <- public_work(work),
              {:ok, task, disposition} <-
-               Orchestration.submit_task(Protocol.normalize_map(work), idempotency_key),
+               Orchestration.submit_task(work, idempotency_key),
              {:ok, snapshot} <- Orchestration.task_snapshot(task.id) do
           Scheduler.wake()
           status = if disposition == :created, do: :created, else: :ok
@@ -66,6 +69,14 @@ defmodule SymmetryControlWeb.TaskController do
       [key] when byte_size(key) > 0 -> {:ok, key}
       _ -> {:error, :invalid_request}
     end
+  end
+
+  defp public_work(work) do
+    work = Protocol.normalize_map(work)
+
+    if Enum.all?(Map.keys(work), &(&1 in @work_fields)),
+      do: {:ok, work},
+      else: {:error, :invalid_request}
   end
 
   defp body_params(conn) when is_map(conn.body_params), do: conn.body_params

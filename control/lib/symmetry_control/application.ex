@@ -7,21 +7,28 @@ defmodule SymmetryControl.Application do
 
   @impl true
   def start(_type, _args) do
-    children = [
-      SymmetryControlWeb.Telemetry,
-      SymmetryControl.Repo,
-      {DNSCluster, query: Application.get_env(:symmetry_control, :dns_cluster_query) || :ignore},
-      {Phoenix.PubSub, name: SymmetryControl.PubSub},
-      SymmetryControl.Orchestration.Scheduler,
-      SymmetryControl.Orchestration.Reconciler,
-      # Start to serve requests, typically the last entry
-      SymmetryControlWeb.Endpoint
-    ]
+    children =
+      [
+        SymmetryControlWeb.Telemetry,
+        SymmetryControl.Repo,
+        {DNSCluster,
+         query: Application.get_env(:symmetry_control, :dns_cluster_query) || :ignore},
+        {Phoenix.PubSub, name: SymmetryControl.PubSub},
+        SymmetryControl.Integrations.ProviderAccess,
+        SymmetryControl.Orchestration.Scheduler,
+        SymmetryControl.Orchestration.Reconciler
+      ] ++ integration_children() ++ [SymmetryControlWeb.Endpoint]
 
     # See https://elixir.hexdocs.pm/Supervisor.html
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: SymmetryControl.Supervisor]
     Supervisor.start_link(children, opts)
+  end
+
+  defp integration_children do
+    if Application.get_env(:symmetry_control, :integrations, [])[:syncer_enabled],
+      do: [SymmetryControl.Integrations.Syncer],
+      else: []
   end
 
   # Tell Phoenix to update the endpoint configuration

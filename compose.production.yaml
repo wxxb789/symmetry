@@ -33,9 +33,13 @@ services:
       SECRET_KEY_BASE: ${SECRET_KEY_BASE:?SECRET_KEY_BASE is required}
       SYMMETRY_ENROLLMENT_TOKEN: ${SYMMETRY_ENROLLMENT_TOKEN:?SYMMETRY_ENROLLMENT_TOKEN is required}
       SYMMETRY_OPERATOR_TOKEN: ${SYMMETRY_OPERATOR_TOKEN:?SYMMETRY_OPERATOR_TOKEN is required}
+      SYMMETRY_INTEGRATION_SYNC_INTERVAL_MS: ${SYMMETRY_INTEGRATION_SYNC_INTERVAL_MS:-300000}
     networks:
       - backend
       - database
+    volumes:
+      - provider_gh_state:/app/.config/gh
+      - provider_azure_state:/app/.azure
     restart: unless-stopped
 
   edge:
@@ -71,3 +75,7 @@ networks:
   backend:
     internal: true
   database:
+
+volumes:
+  provider_gh_state:
+  provider_azure_state:

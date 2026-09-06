@@ -47,10 +47,10 @@ func TestClientProtocolRequests(t *testing.T) {
 		},
 		{
 			name: "register session", method: http.MethodPut, path: "/api/v1/machines/machine-1/sessions/daemon-1", wantAuth: "Bearer " + machineToken,
-			wantBody: `{"runtimes":[{"runtime_key":"default","name":"Local Codex","capacity":1,"agent_profile":"codex","workspace":"primary","capabilities":{}}]}`,
+			wantBody: `{"runtimes":[{"runtime_key":"default","name":"Local Codex","capacity":1,"agent_profile":"codex","workspace":"primary","capabilities":{"structured_input":true,"provider_access":true}}]}`,
 			response: `{"runtimes":[{"runtime_key":"default","runtime_id":"runtime-1","runtime_epoch":3}],"heartbeat_interval_ms":5000,"poll_interval_ms":5000,"lease_duration_ms":30000,"websocket_path":"/socket/websocket?vsn=2.0.0"}`,
 			invoke: func(ctx context.Context, client *Client) error {
-				response, err := client.RegisterSession(ctx, "machine-1", "daemon-1", protocol.SessionRegistrationRequest{Runtimes: []protocol.RuntimeRegistration{{RuntimeKey: "default", Name: "Local Codex", Capacity: 1, AgentProfile: "codex", Workspace: "primary", Capabilities: json.RawMessage(`{}`)}}})
+				response, err := client.RegisterSession(ctx, "machine-1", "daemon-1", protocol.SessionRegistrationRequest{Runtimes: []protocol.RuntimeRegistration{{RuntimeKey: "default", Name: "Local Codex", Capacity: 1, AgentProfile: "codex", Workspace: "primary", Capabilities: protocol.RuntimeCapabilities{StructuredInput: true, ProviderAccess: true}}}})
 				if err == nil && (len(response.Runtimes) != 1 || response.Runtimes[0].RuntimeEpoch != 3) {
 					return fmt.Errorf("unexpected session response: %#v", response)
 				}

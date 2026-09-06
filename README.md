@@ -10,6 +10,11 @@ configures execution intent; the operator starts a run explicitly and can then
 provide input, cancel, or retry failed and cancelled work. See
 [`docs/goal-02-runbook.md`](docs/goal-02-runbook.md).
 
+GitHub and Azure DevOps connections can import externally owned work, bind code
+and CI resources, and refresh pull-request, review, and pipeline state without
+persisting provider tokens or passing them to execution daemons. See
+[`docs/goal-03-runbook.md`](docs/goal-03-runbook.md).
+
 ## Architecture
 
 The repository is a small monorepo with two independently deployable services:
@@ -59,6 +64,8 @@ runnable local profile.
 For the agent's first stdin record, `input_mode: "goal"` sends the plain-text
 task goal followed by a newline. `input_mode: "json"` sends one JSON envelope
 containing both `goal` and structured `input`, followed by a newline. The
+separate `provider_access: true` profile option explicitly enables the scoped
+provider broker for that JSON consumer; JSON mode alone does not enable it. The
 protocol details, including interactive input behavior and command
 acknowledgement authentication, are in
 [`docs/protocol-v1.md`](docs/protocol-v1.md).
@@ -83,8 +90,9 @@ docker compose down
 ```
 
 Use `docker compose down -v` only when intentionally deleting local database
-data. The daemon image is a static Go binary and deliberately does not contain
-machine-local coding-agent or repository credentials.
+data and the persisted GitHub/Azure CLI login state. The daemon image is a
+static Go binary and deliberately does not contain machine-local coding-agent
+or repository credentials.
 
 `compose.production.yaml` is an independent production topology: Nginx is the
 only public service, terminating TLS on ports `80` and `443`, while the control

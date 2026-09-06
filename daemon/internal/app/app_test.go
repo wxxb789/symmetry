@@ -61,6 +61,49 @@ func TestRunEnrollsOnceAndReusesPersistedIdentity(t *testing.T) {
 	}
 }
 
+func TestRunAdvertisesConfiguredCapabilities(t *testing.T) {
+	tests := []struct {
+		name                string
+		mode                config.InputMode
+		providerAccess      bool
+		wantStructuredInput bool
+		wantProviderAccess  bool
+	}{
+		{name: "goal", mode: config.InputModeGoal},
+		{name: "json without provider access", mode: config.InputModeJSON, wantStructuredInput: true},
+		{name: "json with provider access", mode: config.InputModeJSON, providerAccess: true, wantStructuredInput: true, wantProviderAccess: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store, err := state.New(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			if err := store.SaveIdentity(state.MachineIdentity{MachineID: "machine-1", MachineToken: "machine-token"}); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			control := &fakeControl{cancel: cancel}
+			value := testConfig(t)
+			profile := value.AgentProfiles[value.Runtime.AgentProfile]
+			profile.InputMode = test.mode
+			profile.ProviderAccess = test.providerAccess
+			value.AgentProfiles[value.Runtime.AgentProfile] = profile
+			if err := Run(ctx, value, WithStore(store), WithControl(control), WithWorkspace(&fakeWorkspace{}), WithStartProcess(failStart)); err != nil {
+				t.Fatal(err)
+			}
+			if len(control.registrations) != 1 || len(control.registrations[0].Runtimes) != 1 {
+				t.Fatalf("registrations = %#v", control.registrations)
+			}
+			capabilities := control.registrations[0].Runtimes[0].Capabilities
+			if capabilities.StructuredInput != test.wantStructuredInput || capabilities.ProviderAccess != test.wantProviderAccess {
+				t.Fatalf("capabilities = %#v", capabilities)
+			}
+		})
+	}
+}
+
 func TestEnrollmentIntentSurvivesUnknownOutcomeAndRestart(t *testing.T) {
 	store, err := state.New(t.TempDir())
 	if err != nil {
@@ -233,6 +276,10 @@ func TestRunPersistsClaimIntentBeforeClaimAndHandlesNotification(t *testing.T) {
 	defer cancel()
 	control := &fakeControl{
 		assignment: protocol.Assignment{RunID: "run-1", Generation: 1, Work: protocol.Work{Goal: "work"}},
+		providerAccess: &protocol.ProviderAccess{
+			Path: "/api/v1/provider-actions", Token: "provider-token",
+			Grants: []protocol.ProviderGrant{{ResourceID: "resource-1", Provider: "github", Kind: "repository", Operations: []string{"resource.sync"}}},
+		},
 		beforeClaim: func() {
 			journals, listErr := store.ListJournals()
 			if listErr != nil || len(journals) != 1 || journals[0].LocalState != "claiming" {
@@ -252,7 +299,13 @@ func TestRunPersistsClaimIntentBeforeClaimAndHandlesNotification(t *testing.T) {
 		}
 		return fakeProcess{result: execution.Result{ExitCode: 0, FinishedAt: time.Now().UTC()}}, nil
 	}
-	err = Run(ctx, testConfig(t), WithStore(store), WithControl(control), WithWorkspace(&fakeWorkspace{}), WithStartProcess(start), WithNotificationClient(notifier))
+	value := testConfig(t)
+	profile := value.AgentProfiles[value.Runtime.AgentProfile]
+	profile.InputMode = config.InputModeJSON
+	profile.ProviderAccess = true
+	value.AgentProfiles[value.Runtime.AgentProfile] = profile
+	var logs bytes.Buffer
+	err = Run(ctx, value, WithStore(store), WithControl(control), WithWorkspace(&fakeWorkspace{}), WithStartProcess(start), WithNotificationClient(notifier), WithLogWriter(&logs))
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -260,6 +313,16 @@ func TestRunPersistsClaimIntentBeforeClaimAndHandlesNotification(t *testing.T) {
 	case invocation := <-started:
 		if invocation.Program != "agent" || invocation.Dir == "" {
 			t.Fatalf("Invocation = %#v", invocation)
+		}
+		var input protocol.AgentInputRecord
+		if err := json.Unmarshal(invocation.InitialInput, &input); err != nil {
+			t.Fatal(err)
+		}
+		if input.ProviderAccess == nil || input.ProviderAccess.Path != "https://control.example.test/api/v1/provider-actions" || input.ProviderAccess.Token != "provider-token" {
+			t.Fatalf("provider access input = %s", invocation.InitialInput)
+		}
+		if strings.Contains(strings.Join(invocation.Args, "\x00"), "provider-token") || strings.Contains(strings.Join(invocation.Env, "\x00"), "provider-token") {
+			t.Fatalf("provider token leaked outside stdin: %#v", invocation)
 		}
 	default:
 		t.Fatal("notification did not trigger assignment processing")
@@ -269,6 +332,9 @@ func TestRunPersistsClaimIntentBeforeClaimAndHandlesNotification(t *testing.T) {
 	}
 	if control.eventCalls != 1 {
 		t.Fatalf("terminal run event calls = %d, want 1", control.eventCalls)
+	}
+	if strings.Contains(logs.String(), "provider-token") {
+		t.Fatal("provider token was written to daemon logs")
 	}
 }
 
@@ -1777,11 +1843,21 @@ func TestCancelDuringBlockedPrepareAcknowledgesAndCleansUp(t *testing.T) {
 	}
 	daemon.startAssignment(context.Background(), protocol.Assignment{RunID: key.RunID, Generation: key.Generation, Work: protocol.Work{Goal: "g"}})
 	<-workspace.entered
+	active := daemon.runningRun(key)
+	if active == nil {
+		t.Fatal("run was not active during Prepare")
+	}
+	active.inputMu.Lock()
+	inputUnlocked := false
+	defer func() {
+		if !inputUnlocked {
+			active.inputMu.Unlock()
+		}
+	}()
 	commandDone := make(chan bool, 1)
 	go func() {
 		commandDone <- daemon.handleCommand(context.Background(), protocol.Command{CommandID: "cancel-1", RunID: key.RunID, Generation: key.Generation, Kind: "cancel"})
 	}()
-	<-firstPersistenceFailure
 	select {
 	case <-workspace.cancelled:
 	case <-time.After(time.Second):
@@ -1799,6 +1875,13 @@ func TestCancelDuringBlockedPrepareAcknowledgesAndCleansUp(t *testing.T) {
 	case <-workspace.cleaned:
 		t.Fatal("workspace cleanup started before terminal receipt delivery")
 	default:
+	}
+	active.inputMu.Unlock()
+	inputUnlocked = true
+	select {
+	case <-firstPersistenceFailure:
+	case <-time.After(time.Second):
+		t.Fatal("cancel command did not attempt atomic receipt persistence")
 	}
 	retryTimer.channel <- time.Now()
 	select {
@@ -3443,6 +3526,136 @@ func TestJSONLParserBoundsUnterminatedRecordsAndPreservesNormalJSONL(t *testing.
 	normal := (&jsonlParser{}).push([]byte(`{"type":"progress"}` + "\n"))
 	if len(normal) != 1 || normal[0].raw || string(normal[0].data) != `{"type":"progress"}` {
 		t.Fatalf("normal JSONL = %#v", normal)
+	}
+}
+
+func TestProviderTokenIsRedactedAcrossOutputStreamsAndChunkBoundaries(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	daemon := &daemon{store: store, options: options{newID: ids()}}
+	const token = "provider-secret"
+	output := newAgentOutput(config.EventFormatJSONL, token)
+	now := time.Now().UTC()
+	events := []execution.Event{
+		{Stream: execution.Stdout, Sequence: 1, At: now, Data: []byte(`{"type":"progress","message":"before provider-`)},
+		{Stream: execution.Stdout, Sequence: 2, At: now, Data: []byte("secret after" + `"}` + "\n")},
+		{Stream: execution.Stderr, Sequence: 3, At: now, Data: []byte("stderr provider-")},
+		{Stream: execution.Stderr, Sequence: 4, At: now, Data: []byte("secret after")},
+		{Stream: execution.Stdout, Sequence: 5, At: now, Data: []byte("tail provider")},
+	}
+	for _, event := range events {
+		if err := output.handle(daemon, key, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := output.flush(daemon, key, now); err != nil {
+		t.Fatal(err)
+	}
+	if output.redactor == nil || output.redactor.token != nil {
+		t.Fatal("provider token remained in redactor after output flush")
+	}
+
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte(token)) || bytes.Contains(encoded, []byte(base64.StdEncoding.EncodeToString([]byte(token)))) {
+		t.Fatalf("provider token leaked into journal: %s", encoded)
+	}
+	streams := map[string][]byte{}
+	var progress protocol.RunEvent
+	for _, event := range journal.PendingEvents {
+		if event.Kind == "progress" {
+			progress = event
+			continue
+		}
+		if event.Kind != "output" {
+			continue
+		}
+		var payload struct {
+			Stream string `json:"stream"`
+			Data   string `json:"data"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := base64.StdEncoding.DecodeString(payload.Data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		streams[payload.Stream] = append(streams[payload.Stream], decoded...)
+	}
+	if progress.EventID == "" || strings.Contains(string(progress.Payload), token) || !strings.Contains(string(progress.Payload), redactedProviderToken) {
+		t.Fatalf("progress payload = %s", progress.Payload)
+	}
+	if got := string(streams[string(execution.Stderr)]); got != "stderr * after" || strings.Contains(got, token) {
+		t.Fatalf("stderr output = %q", got)
+	}
+	if got := string(streams[string(execution.Stdout)]); got != "tail provider" {
+		t.Fatalf("stdout tail = %q", got)
+	}
+}
+
+func TestStreamingTokenRedactorPreservesGlobalSequenceWhilePrefixIsPending(t *testing.T) {
+	redactor := newStreamingTokenRedactor("provider-secret")
+	now := time.Now().UTC()
+	if ready := redactor.push(execution.Event{Stream: execution.Stdout, Sequence: 1, At: now, Data: []byte("stdout provider")}); len(ready) != 0 {
+		t.Fatalf("stdout prefix released early: %#v", ready)
+	}
+	if ready := redactor.push(execution.Event{Stream: execution.Stderr, Sequence: 2, At: now, Data: []byte("stderr normal")}); len(ready) != 0 {
+		t.Fatalf("later stderr released before stdout: %#v", ready)
+	}
+	ready := redactor.flush()
+	if len(ready) != 2 || ready[0].Sequence != 1 || ready[0].Stream != execution.Stdout || string(ready[0].Data) != "stdout provider" || ready[1].Sequence != 2 || ready[1].Stream != execution.Stderr || string(ready[1].Data) != "stderr normal" {
+		t.Fatalf("flushed events = %#v", ready)
+	}
+}
+
+func TestStreamingTokenRedactorBoundsBlockedGlobalQueue(t *testing.T) {
+	tests := []struct {
+		name    string
+		count   int
+		payload []byte
+	}{
+		{name: "event limit", count: maxProviderRedactorPendingEvents + 1, payload: []byte("x")},
+		{name: "byte limit", count: 5, payload: bytes.Repeat([]byte("x"), maxProviderRedactorPendingBytes/4)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			redactor := newStreamingTokenRedactor("provider-secret")
+			now := time.Now().UTC()
+			ready := redactor.push(execution.Event{Stream: execution.Stdout, Sequence: 1, At: now, Data: []byte("provider")})
+			if len(ready) != 0 {
+				t.Fatalf("stdout prefix released early: %#v", ready)
+			}
+			for index := 0; index < test.count; index++ {
+				ready = append(ready, redactor.push(execution.Event{Stream: execution.Stderr, Sequence: uint64(index + 2), At: now, Data: test.payload})...)
+				if len(redactor.pending) > maxProviderRedactorPendingEvents || redactor.pendingBytes > maxProviderRedactorPendingBytes {
+					t.Fatalf("pending queue exceeded bounds: events=%d bytes=%d", len(redactor.pending), redactor.pendingBytes)
+				}
+			}
+			ready = append(ready, redactor.flush()...)
+			if len(ready) != test.count+1 || ready[0].Sequence != 1 || ready[0].Stream != execution.Stdout || string(ready[0].Data) != redactedProviderToken {
+				t.Fatalf("first released event = %#v, count=%d", ready, len(ready))
+			}
+			stderr := make([]byte, 0, test.count*len(test.payload))
+			for index, event := range ready[1:] {
+				if event.Sequence != uint64(index+2) || event.Stream != execution.Stderr {
+					t.Fatalf("event %d = %#v", index+1, event)
+				}
+				stderr = append(stderr, event.Data...)
+			}
+			if want := bytes.Repeat(test.payload, test.count); !bytes.Equal(stderr, want) {
+				t.Fatalf("stderr bytes = %d, want %d", len(stderr), len(want))
+			}
+			if bytes.Contains(stderr, []byte("provider-secret")) {
+				t.Fatal("provider token leaked into buffered stderr")
+			}
+		})
 	}
 }
 
@@ -5119,7 +5332,8 @@ func TestCancelWinsCompletionAndFlushesAcknowledgement(t *testing.T) {
 }
 
 func TestInitialInputUsesLocalModeAndPreservesGoalAndStructuredInput(t *testing.T) {
-	jsonInput, err := initialInput(config.AgentProfile{InputMode: config.InputModeJSON}, protocol.Work{Goal: "implement feature", Input: []byte(`{"mode":"review"}`)})
+	const controlPlaneURL = "https://control.example.test/control-root"
+	jsonInput, err := initialInput(config.AgentProfile{InputMode: config.InputModeJSON}, protocol.Work{Goal: "implement feature", Input: []byte(`{"mode":"review"}`)}, nil, controlPlaneURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5130,17 +5344,59 @@ func TestInitialInputUsesLocalModeAndPreservesGoalAndStructuredInput(t *testing.
 	if payload.Type != protocol.AgentInputRecordTaskInput || payload.Goal != "implement feature" || string(payload.Input) != `{"mode":"review"}` {
 		t.Fatalf("JSON input = %s", jsonInput)
 	}
-	omittedInput, err := initialInput(config.AgentProfile{InputMode: config.InputModeJSON}, protocol.Work{Goal: "implement feature"})
+	omittedInput, err := initialInput(config.AgentProfile{InputMode: config.InputModeJSON}, protocol.Work{Goal: "implement feature"}, nil, controlPlaneURL)
 	if err != nil || string(omittedInput) != "{\"type\":\"task_input\",\"goal\":\"implement feature\",\"input\":null}\n" {
 		t.Fatalf("omitted JSON input = %q, %v", omittedInput, err)
 	}
-	emptyInput, err := initialInput(config.AgentProfile{InputMode: config.InputModeJSON}, protocol.Work{Goal: "implement feature", Input: json.RawMessage(`{}`)})
+	emptyInput, err := initialInput(config.AgentProfile{InputMode: config.InputModeJSON}, protocol.Work{Goal: "implement feature", Input: json.RawMessage(`{}`)}, nil, controlPlaneURL)
 	if err != nil || string(emptyInput) != "{\"type\":\"task_input\",\"goal\":\"implement feature\",\"input\":{}}\n" {
 		t.Fatalf("empty JSON input = %q, %v", emptyInput, err)
 	}
-	goalInput, err := initialInput(config.AgentProfile{InputMode: config.InputModeGoal}, protocol.Work{Goal: "implement feature", Input: []byte(`{"ignored":true}`)})
+	providerAccess := &protocol.ProviderAccess{
+		Path: "/api/v1/provider-actions", Token: "provider-token",
+		Grants: []protocol.ProviderGrant{{ResourceID: "resource-1", Provider: "github", Kind: "repository", Operations: []string{"resource.sync", "change.upsert"}}},
+	}
+	connectedInput, err := initialInput(config.AgentProfile{InputMode: config.InputModeJSON, ProviderAccess: true}, protocol.Work{Goal: "implement feature", Input: json.RawMessage(`{}`)}, providerAccess, controlPlaneURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(connectedInput, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.ProviderAccess == nil || payload.ProviderAccess.Path != "https://control.example.test/control-root/v1/provider-actions" || payload.ProviderAccess.Token != "provider-token" || len(payload.ProviderAccess.Grants) != 1 {
+		t.Fatalf("connected JSON input = %s", connectedInput)
+	}
+	if providerAccess.Path != "/api/v1/provider-actions" {
+		t.Fatalf("claim provider access was mutated: %#v", providerAccess)
+	}
+	goalInput, err := initialInput(config.AgentProfile{InputMode: config.InputModeGoal}, protocol.Work{Goal: "implement feature", Input: []byte(`{"ignored":true}`)}, nil, "not a URL")
 	if err != nil || string(goalInput) != "implement feature\n" {
 		t.Fatalf("goal input = %q, %v", goalInput, err)
+	}
+	if _, err := initialInput(config.AgentProfile{InputMode: config.InputModeGoal}, protocol.Work{Goal: "implement feature"}, providerAccess, controlPlaneURL); err == nil || !strings.Contains(err.Error(), "does not allow provider access") {
+		t.Fatalf("goal provider access error = %v", err)
+	}
+	if _, err := initialInput(config.AgentProfile{InputMode: config.InputModeJSON}, protocol.Work{Goal: "implement feature"}, providerAccess, controlPlaneURL); err == nil || !strings.Contains(err.Error(), "does not allow provider access") {
+		t.Fatalf("unconfigured JSON provider access error = %v", err)
+	}
+	invalidAccess := *providerAccess
+	invalidAccess.Path = "/api/v1/other"
+	if _, err := initialInput(config.AgentProfile{InputMode: config.InputModeJSON, ProviderAccess: true}, protocol.Work{Goal: "implement feature"}, &invalidAccess, controlPlaneURL); err == nil || !strings.Contains(err.Error(), "provider access path") {
+		t.Fatalf("invalid provider path error = %v", err)
+	}
+}
+
+func TestResolveProviderAccessPreservesControlPlanePrefix(t *testing.T) {
+	access := &protocol.ProviderAccess{Path: "/api/v1/provider-actions", Token: "provider-token"}
+	resolved, err := resolveProviderAccess("https://control.example.test/control-root/", access)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Path != "https://control.example.test/control-root/v1/provider-actions" {
+		t.Fatalf("resolved provider access path = %q", resolved.Path)
+	}
+	if access.Path != "/api/v1/provider-actions" {
+		t.Fatalf("provider access was mutated: %#v", access)
 	}
 }
 
@@ -5747,6 +6003,8 @@ type fakeControl struct {
 	claimEntered      chan<- struct{}
 	renewCalls        int
 	heartbeat         protocol.RuntimeHeartbeatRequest
+	registrations     []protocol.SessionRegistrationRequest
+	providerAccess    *protocol.ProviderAccess
 }
 
 type restartRecoveryControl struct {
@@ -6624,10 +6882,11 @@ func sameBools(left, right []bool) bool {
 	return true
 }
 
-func (client *fakeControl) RegisterSession(_ context.Context, machineID, daemonInstanceID string, _ protocol.SessionRegistrationRequest) (protocol.SessionRegistrationResponse, error) {
+func (client *fakeControl) RegisterSession(_ context.Context, machineID, daemonInstanceID string, request protocol.SessionRegistrationRequest) (protocol.SessionRegistrationResponse, error) {
 	client.registerCalls++
 	client.machineIDs = append(client.machineIDs, machineID)
 	client.daemonInstanceIDs = append(client.daemonInstanceIDs, daemonInstanceID)
+	client.registrations = append(client.registrations, request)
 	if client.cancel != nil && client.assignment.RunID == "" {
 		client.cancel()
 	}
@@ -6672,7 +6931,7 @@ func (client *fakeControl) Claim(_ context.Context, runID string, request protoc
 		client.claimErrors = client.claimErrors[1:]
 		return protocol.ClaimResponse{}, err
 	}
-	return protocol.ClaimResponse{RunID: runID, Generation: request.Generation, ClaimID: request.ClaimID, LeaseToken: "lease", LeaseExpiresAt: time.Now().Add(time.Minute), Work: protocol.Work{Goal: "work"}}, nil
+	return protocol.ClaimResponse{RunID: runID, Generation: request.Generation, ClaimID: request.ClaimID, LeaseToken: "lease", LeaseExpiresAt: time.Now().Add(time.Minute), Work: protocol.Work{Goal: "work"}, ProviderAccess: client.providerAccess}, nil
 }
 func (client *fakeControl) RenewLease(context.Context, string, protocol.LeaseHeartbeatRequest) (protocol.LeaseHeartbeatResponse, error) {
 	client.renewCalls++

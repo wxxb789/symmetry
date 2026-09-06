@@ -54,7 +54,7 @@ async function attachFreeformResource(page, resource) {
   await dialog.locator('select[name="status"]').selectOption(resource.status);
   await dialog.locator('select[name="sync_status"]').selectOption(resource.sync_status);
   await dialog.getByLabel("Name").fill(resource.name);
-  await dialog.getByLabel("Provider").fill(resource.provider);
+  await dialog.getByLabel("Provider", { exact: true }).fill(resource.provider);
   await dialog.getByLabel("Reference", { exact: true }).fill(resource.external_ref);
   await dialog.getByLabel("URL").fill(resource.url);
   await dialog.getByRole("button", { name: "Attach" }).click();

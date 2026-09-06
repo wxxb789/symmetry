@@ -100,6 +100,7 @@ defmodule SymmetryControl.Orchestration.Task do
     field :agent_profile, :string
     field :workspace, :string
     field :input, :map
+    field :required_capabilities, :map, default: %{}
     field :state, :string
     field :current_generation, :integer
     field :attempt_generation, :integer, default: 1
@@ -118,6 +119,7 @@ defmodule SymmetryControl.Orchestration.Task do
       :agent_profile,
       :workspace,
       :input,
+      :required_capabilities,
       :state,
       :current_generation,
       :attempt_generation,
@@ -131,6 +133,7 @@ defmodule SymmetryControl.Orchestration.Task do
       :goal,
       :agent_profile,
       :workspace,
+      :required_capabilities,
       :state,
       :current_generation,
       :attempt_generation
