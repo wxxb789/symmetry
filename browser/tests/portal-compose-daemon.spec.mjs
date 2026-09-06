@@ -63,7 +63,7 @@ async function attachResource(page, resource) {
   await dialog.locator('select[name="status"]').selectOption(resource.status);
   await dialog.locator('select[name="sync_status"]').selectOption(resource.sync_status);
   await dialog.getByLabel("Name").fill(resource.name);
-  await dialog.getByLabel("Provider").fill(resource.provider);
+  await dialog.getByLabel("Provider", { exact: true }).fill(resource.provider);
   if (resource.registered_ref) {
     const select = dialog.getByLabel("Registered reference");
     await expect(select.locator(`option[value="${resource.registered_ref}"]`)).toHaveCount(1);
@@ -92,7 +92,11 @@ async function createWorkItem(page, item) {
   await dialog.getByLabel("Priority").selectOption(item.priority || "medium");
   await dialog.getByLabel("Owner type").selectOption(item.assignee_type);
   if (item.assignee_name) await dialog.getByLabel("Owner", { exact: true }).fill(item.assignee_name);
-  if (item.repository) await dialog.getByLabel("Repository").selectOption({ label: item.repository });
+  if (item.repository) {
+    await dialog.locator('select[name="repository_resource_id"]').selectOption({
+      label: item.repository
+    });
+  }
   if (item.branch) await dialog.getByLabel("Branch").fill(item.branch);
   if (item.blocked) {
     await dialog.getByLabel("Blocked").check();
@@ -244,7 +248,7 @@ test.describe("Goal 2 Compose daemon acceptance", () => {
     await page.getByRole("button", { name: "Edit" }).click();
     const humanDialog = page.locator("#work-item-dialog");
     await humanDialog.getByLabel("Pull request URL").fill("https://github.com/wxxb789/symmetry/pull/42");
-    await humanDialog.getByLabel("CI").selectOption("passed");
+    await humanDialog.locator('select[name="ci_status"]').selectOption("passed");
     await humanDialog.locator('select[name="review_status"]').selectOption("approved");
     await humanDialog.getByRole("button", { name: "Save" }).click();
     await expect(page.locator("#detail-content")).toContainText("Approved");
@@ -406,7 +410,7 @@ test.describe("Goal 2 Compose daemon acceptance", () => {
     await page.getByRole("button", { name: "Edit" }).click();
     const deliveryDialog = page.locator("#work-item-dialog");
     await deliveryDialog.getByLabel("Pull request URL").fill("https://github.com/wxxb789/symmetry/pull/84");
-    await deliveryDialog.getByLabel("CI").selectOption("passed");
+    await deliveryDialog.locator('select[name="ci_status"]').selectOption("passed");
     await deliveryDialog.locator('select[name="review_status"]').selectOption("approved");
     await deliveryDialog.getByRole("button", { name: "Save" }).click();
     await expect(page.locator("#detail-content")).toContainText("Approved");

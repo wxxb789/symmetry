@@ -17,6 +17,7 @@ defmodule SymmetryControlWeb.Protocol do
     invalid_request: {400, "invalid_request", "request payload is invalid"},
     unauthenticated: {401, "unauthenticated", "credential is missing or invalid"},
     forbidden: {403, "forbidden", "credential does not own this resource"},
+    provider_owned: {409, "provider_owned", "field is authoritative in the external provider"},
     not_found: {404, "not_found", "resource was not found"},
     capacity_exhausted: {409, "capacity_exhausted", "runtime capacity is exhausted"},
     idempotency_conflict:
@@ -27,13 +28,22 @@ defmodule SymmetryControlWeb.Protocol do
       {409, "terminal_grace_expired", "terminal delivery grace period has expired"},
     state_conflict: {409, "state_conflict", "state has already advanced"},
     assignment_expired: {410, "assignment_expired", "assignment has expired"},
-    invalid_transition: {422, "invalid_transition", "state transition is invalid"}
+    invalid_transition: {422, "invalid_transition", "state transition is invalid"},
+    not_connected: {409, "not_connected", "resource has no external connection"},
+    provider_unauthorized:
+      {502, "provider_unauthorized", "external provider authentication failed"},
+    provider_failure: {502, "provider_failure", "external provider request failed"},
+    provider_access_unavailable:
+      {503, "provider_access_unavailable", "required provider access is unavailable"}
   }
 
   def error(conn, reason) do
-    {status, code, message} = Map.get(@error_statuses, reason, @error_statuses.invalid_request)
+    {status, code, message} = error_details(reason)
     conn |> put_status(status) |> json(%{error: %{code: code, message: message}})
   end
+
+  def error_details(reason),
+    do: Map.get(@error_statuses, reason, @error_statuses.invalid_request)
 
   def machine_token(conn) do
     with [header] <- get_req_header(conn, "authorization"),
@@ -96,8 +106,8 @@ defmodule SymmetryControlWeb.Protocol do
     |> Map.put(:decisions, Enum.map(snapshot.decisions, &decision/1))
   end
 
-  def claimed_run(%Run{} = run, %Task{} = task) do
-    %{
+  def claimed_run(%Run{} = run, %Task{} = task, provider_access \\ nil) do
+    response = %{
       run_id: run.id,
       task_id: task.id,
       generation: run.generation,
@@ -106,6 +116,18 @@ defmodule SymmetryControlWeb.Protocol do
       lease_expires_at: iso8601(run.lease_expires_at),
       work: work(task)
     }
+
+    case provider_access do
+      nil ->
+        response
+
+      access ->
+        Map.put(response, :provider_access, %{
+          path: Map.fetch!(access, :path),
+          token: Map.fetch!(access, :token),
+          grants: Map.fetch!(access, :grants)
+        })
+    end
   end
 
   def run(%Run{} = run) do

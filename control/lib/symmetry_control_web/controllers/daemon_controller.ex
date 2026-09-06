@@ -1,8 +1,10 @@
 defmodule SymmetryControlWeb.DaemonController do
   use SymmetryControlWeb, :controller
 
+  alias SymmetryControl.Integrations.ProviderAccess
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.Scheduler
+  alias SymmetryControl.Repo
   alias SymmetryControlWeb.Protocol
 
   def enroll(conn, _params) do
@@ -107,13 +109,25 @@ defmodule SymmetryControlWeb.DaemonController do
       |> Map.put("claim_id", claim_id)
 
     with :ok <- owns_run(conn, run_id),
-         {:ok, run} <-
-           Orchestration.claim(run_id, request, lease_duration_ms: config(:lease_duration_ms)),
-         {:ok, %{task: task}} <- Orchestration.task_snapshot(run.task_id) do
-      json(conn, Protocol.claimed_run(run, task))
+         {:ok, {run, task, provider_access}} <- claim_with_provider_access(run_id, request) do
+      json(conn, Protocol.claimed_run(run, task, provider_access))
     else
       {:error, reason} -> Protocol.error(conn, reason)
     end
+  end
+
+  defp claim_with_provider_access(run_id, request) do
+    Repo.transaction(fn ->
+      with {:ok, provider_scope} <- ProviderAccess.lock_claim_scope(run_id),
+           {:ok, run} <-
+             Orchestration.claim(run_id, request, lease_duration_ms: config(:lease_duration_ms)),
+           {:ok, %{task: task}} <- Orchestration.task_snapshot(run.task_id),
+           {:ok, provider_access} <- ProviderAccess.issue(provider_scope, run, task) do
+        {run, task, provider_access}
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
   end
 
   def heartbeat_run(conn, _params) do

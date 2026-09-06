@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
@@ -74,6 +75,60 @@ func validateClaimResponse(runID string, request protocol.ClaimRequest, response
 	}
 	if err := validateWork(response.Work); err != nil {
 		return invalidResponse("claim", err.Error())
+	}
+	if response.HasField("provider_access") && response.ProviderAccess == nil {
+		return invalidResponse("claim", "provider_access must be non-null when present")
+	}
+	if response.ProviderAccess != nil {
+		if err := validateProviderAccess(*response.ProviderAccess); err != nil {
+			return invalidResponse("claim", "provider_access "+err.Error())
+		}
+	}
+	return nil
+}
+
+func validateProviderAccess(access protocol.ProviderAccess) error {
+	if access.Path != "/api/v1/provider-actions" {
+		return errors.New("path is invalid")
+	}
+	if strings.TrimSpace(access.Token) == "" || len(access.Token) > 65536 {
+		return errors.New("token is invalid")
+	}
+	if len(access.Grants) == 0 {
+		return errors.New("grants must not be empty")
+	}
+	for _, grant := range access.Grants {
+		if strings.TrimSpace(grant.ResourceID) == "" || len(grant.ResourceID) > 4096 {
+			return errors.New("grant resource_id is invalid")
+		}
+		switch grant.Provider {
+		case "github", "azure_devops":
+		default:
+			return errors.New("grant provider is invalid")
+		}
+		switch grant.Kind {
+		case "repository", "work_tracking", "ci":
+		default:
+			return errors.New("grant kind is invalid")
+		}
+		if len(grant.Operations) == 0 {
+			return errors.New("grant operations must not be empty")
+		}
+		seen := make(map[string]struct{}, len(grant.Operations))
+		for _, operation := range grant.Operations {
+			switch operation {
+			case "resource.sync", "change.upsert", "change.update":
+			default:
+				return errors.New("grant operation is invalid")
+			}
+			if _, duplicate := seen[operation]; duplicate {
+				return errors.New("grant operations contain a duplicate")
+			}
+			if operation != "resource.sync" && grant.Kind != "repository" {
+				return errors.New("change grant operations require repository kind")
+			}
+			seen[operation] = struct{}{}
+		}
 	}
 	return nil
 }

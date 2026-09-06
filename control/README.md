@@ -28,3 +28,7 @@ Portal project, Kanban, health, and execution workflows are documented in
 to an agent records its execution settings; `Start run` explicitly creates the
 durable task, after which the portal supports input, cancellation, and legal
 failed/cancelled retries.
+
+GitHub and Azure DevOps connection setup, credential handling, resource binding,
+external ownership rules, and synchronization are documented in
+[`docs/goal-03-runbook.md`](../docs/goal-03-runbook.md).

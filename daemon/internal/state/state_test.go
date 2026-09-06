@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -308,9 +309,23 @@ func TestClaimIntentGrantAndPendingOutboxSurviveRestart(t *testing.T) {
 		t.Fatalf("SaveClaimIntent() error = %v", err)
 	}
 
-	grant := protocol.ClaimResponse{RunID: key.RunID, Generation: key.Generation, ClaimID: intent.ClaimID, LeaseToken: "lease-1", LeaseExpiresAt: time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC), Work: intent.Work}
+	grant := protocol.ClaimResponse{
+		RunID: key.RunID, Generation: key.Generation, ClaimID: intent.ClaimID,
+		LeaseToken: "lease-1", LeaseExpiresAt: time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC), Work: intent.Work,
+		ProviderAccess: &protocol.ProviderAccess{
+			Path: "/api/v1/provider-actions", Token: "provider-token",
+			Grants: []protocol.ProviderGrant{{ResourceID: "resource-1", Provider: "github", Kind: "repository", Operations: []string{"resource.sync"}}},
+		},
+	}
 	if _, err := store.SaveClaimGrant(key, grant); err != nil {
 		t.Fatalf("SaveClaimGrant() error = %v", err)
+	}
+	journalContents, err := os.ReadFile(store.journalPath(key))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if bytes.Contains(journalContents, []byte("provider-token")) || bytes.Contains(journalContents, []byte("provider_access")) {
+		t.Fatalf("provider access leaked into run journal: %s", journalContents)
 	}
 	event := protocol.RunEvent{EventID: "event-1", Sequence: 1, Kind: "started", OccurredAt: time.Date(2026, 9, 3, 1, 2, 4, 0, time.UTC), Payload: json.RawMessage(`{"pid":42}`)}
 	transition := protocol.StateTransitionRequest{TransitionID: "transition-1", State: "active", Payload: json.RawMessage(`{}`)}

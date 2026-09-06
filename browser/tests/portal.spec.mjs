@@ -67,7 +67,7 @@ async function attachResource(page, resource) {
   await dialog.locator('select[name="status"]').selectOption(resource.status);
   await dialog.locator('select[name="sync_status"]').selectOption(resource.sync_status);
   await dialog.getByLabel("Name").fill(resource.name);
-  await dialog.getByLabel("Provider").fill(resource.provider);
+  await dialog.getByLabel("Provider", { exact: true }).fill(resource.provider);
   await dialog.getByLabel("Reference", { exact: true }).fill(resource.external_ref);
   if (resource.url) await dialog.getByLabel("URL").fill(resource.url);
   if (resource.status_message) await dialog.getByLabel("Status detail").fill(resource.status_message);
@@ -88,7 +88,11 @@ async function createWorkItem(page, item) {
   if (item.assignee_name) await dialog.getByLabel("Owner", { exact: true }).fill(item.assignee_name);
   if (item.agent_profile) await dialog.getByLabel("Agent profile").fill(item.agent_profile);
   if (item.workspace) await dialog.getByLabel("Workspace").fill(item.workspace);
-  if (item.repository) await dialog.getByLabel("Repository").selectOption({ label: item.repository });
+  if (item.repository) {
+    await dialog.locator('select[name="repository_resource_id"]').selectOption({
+      label: item.repository
+    });
+  }
   if (item.branch) await dialog.getByLabel("Branch").fill(item.branch);
   if (item.blocked) {
     await dialog.getByLabel("Blocked").check();
@@ -169,7 +173,7 @@ test.describe("Goal 2 feature acceptance", () => {
     await page.getByRole("button", { name: "Edit" }).click();
     const editDialog = page.locator("#work-item-dialog");
     await editDialog.getByLabel("Pull request URL").fill("https://github.com/wxxb789/symmetry/pull/42");
-    await editDialog.getByLabel("CI").selectOption("passed");
+    await editDialog.locator('select[name="ci_status"]').selectOption("passed");
     await editDialog.locator('select[name="review_status"]').selectOption("required");
     await editDialog.getByRole("button", { name: "Save" }).click();
     await expect(page.locator("#toast")).toHaveText("Work item updated");
@@ -621,6 +625,75 @@ test.describe("Goal 2 concurrency", () => {
     releaseFirst();
     await page.waitForTimeout(250);
     await expect(page.locator("#detail-title")).toHaveText(secondTitle);
+  });
+
+  test("an older history failure cannot notify or mutate a newer drawer", async ({ page }) => {
+    const project = uniqueProject("HX");
+    await login(page);
+    await createProject(page, project);
+    const firstTitle = `History owner ${project.key}`;
+    const secondTitle = `Current owner ${project.key}`;
+
+    for (const title of [firstTitle, secondTitle]) {
+      await createWorkItem(page, {
+        title,
+        description: title,
+        status: "ready",
+        priority: "medium",
+        assignee_type: "unassigned"
+      });
+    }
+
+    const projectState = await selectedProject(page);
+    const firstId = projectState.work_items.find((item) => item.title === firstTitle).id;
+    let releaseHistory;
+    let markHistoryStarted;
+    let detailIntercepted = 0;
+    const historyStarted = new Promise((resolve) => { markHistoryStarted = resolve; });
+    const historyRelease = new Promise((resolve) => { releaseHistory = resolve; });
+
+    await page.route("**/portal/api/work-items/**", async (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname === `/portal/api/work-items/${firstId}`) {
+        const response = await route.fetch();
+        const body = await response.json();
+        body.raw.next_before = "older-cursor";
+        detailIntercepted += 1;
+        await route.fulfill({ response, json: body });
+        return;
+      }
+      if (url.pathname === `/portal/api/work-items/${firstId}/timeline`) {
+        markHistoryStarted();
+        await historyRelease;
+        await route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({ error: { code: "provider_failure", message: "Old history failed" } })
+        });
+        return;
+      }
+      await route.continue();
+    });
+
+    allowBrowserError(page, /status of 503/);
+    await page.locator(".work-card", { hasText: firstTitle }).click();
+    await expect.poll(() => detailIntercepted).toBe(1);
+    await expect(page.locator("#detail-title")).toHaveText(firstTitle);
+    await page.locator("#toast").evaluate((toast) => { toast.hidden = true; });
+    await page.locator("details.raw-details summary").click();
+    await page.getByRole("button", { name: "Load older" }).click();
+    await historyStarted;
+    await page.getByRole("button", { name: "Close details" }).click();
+    await page.locator(".work-card", { hasText: secondTitle }).click();
+    await expect(page.locator("#detail-title")).toHaveText(secondTitle);
+    const historyResponse = page.waitForResponse((response) =>
+      response.status() === 503 && new URL(response.url()).pathname === `/portal/api/work-items/${firstId}/timeline`
+    );
+    releaseHistory();
+    await historyResponse;
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await expect(page.locator("#detail-title")).toHaveText(secondTitle);
+    await expect(page.locator("#toast")).toBeHidden();
   });
 
   test("background refresh preserves drawer input, focus, and expanded raw history", async ({ page }) => {

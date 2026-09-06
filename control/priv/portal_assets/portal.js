@@ -8,6 +8,15 @@
     ["review", "Review"],
     ["done", "Done"]
   ];
+  const validViews = new Set(["board", "activity", "resources", "connections"]);
+  const workspaceFocusTargets = {
+    activity: ["[data-work-item-id]", "workItemId"],
+    attention: ["[data-attention-id]", "attentionId"],
+    resource: ["[data-resource-id]", "resourceId"],
+    "resource-sync": ["[data-sync-resource-id]", "syncResourceId"],
+    connection: ["[data-connection-id]", "connectionId"],
+    "connection-check": ["[data-check-connection-id]", "checkConnectionId"]
+  };
 
   const icons = {
     activity: '<svg viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>',
@@ -19,6 +28,7 @@
     check: '<svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg>',
     ci: '<svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 8-8"/><path d="M4 4v5h5"/></svg>',
     columns: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="7" height="16" rx="1"/><rect x="14" y="4" width="7" height="16" rx="1"/></svg>',
+    connection: '<svg viewBox="0 0 24 24"><path d="M8 12h8M5 8h3v8H5a3 3 0 0 1-3-3v-2a3 3 0 0 1 3-3ZM19 8h-3v8h3a3 3 0 0 0 3-3v-2a3 3 0 0 0-3-3Z"/></svg>',
     external: '<svg viewBox="0 0 24 24"><path d="M14 5h5v5M10 14 19 5M19 13v6H5V5h6"/></svg>',
     logOut: '<svg viewBox="0 0 24 24"><path d="M10 5H5v14h5M14 8l4 4-4 4M8 12h10"/></svg>',
     play: '<svg viewBox="0 0 24 24"><path d="m8 5 11 7-11 7V5Z"/></svg>',
@@ -46,22 +56,29 @@
     returnFocus: null,
     editingWorkItemId: null,
     editingResourceId: null,
+    editingConnectionId: null,
     editingProjectId: null,
     workspaceRequestId: 0,
     detailRequestId: 0,
-    mutationRequestId: 0
+    mutationRequestId: 0,
+    projectSwitchRequestId: 0,
+    projectSwitchTargetId: null,
+    backgroundRefreshPending: false,
+    pendingOperations: new Set(),
+    staleEditors: new Set(),
+    persistentStaleEditors: new Set()
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
   const csrfToken = $("meta[name='csrf-token']")?.content || "";
+  let submitLockGeneration = 0;
 
   class PortalRequestError extends Error {
-    constructor(message, code, status, fields) {
+    constructor(message, code, causes = []) {
       super(message);
       this.code = code;
-      this.status = status;
-      this.fields = fields;
+      this.causes = Array.isArray(causes) ? causes : [];
     }
   }
 
@@ -86,9 +103,16 @@
   }
 
   function formatLabel(value) {
+    if (value === "github") return "GitHub";
+    if (value === "azure_devops") return "Azure DevOps";
+    if (value === "ci") return "CI";
     return String(value || "unknown")
       .replaceAll("_", " ")
       .replace(/\b\w/g, (letter) => letter.toUpperCase());
+  }
+
+  function authLabel(value) {
+    return value === "gh_cli" ? "GitHub CLI · HTTPS" : value === "entra_id" ? "Microsoft Entra ID" : formatLabel(value);
   }
 
   async function request(path, options = {}) {
@@ -105,7 +129,7 @@
 
     if (response.status === 401) {
       window.location.assign("/portal/login");
-      throw new PortalRequestError("Session expired", "unauthenticated", 401);
+      throw new PortalRequestError("Session expired", "unauthenticated");
     }
 
     const body = await response.json().catch(() => ({}));
@@ -119,8 +143,7 @@
       throw new PortalRequestError(
         fieldMessage || body.error?.message || `Request failed (${response.status})`,
         body.error?.code,
-        response.status,
-        fields
+        body.error?.causes
       );
     }
 
@@ -151,28 +174,189 @@
     state.mutationRequestId += 1;
   }
 
-  async function loadWorkspace({ silent = false, refreshDetail = true } = {}) {
+  function beginOperation(key) {
+    if (state.pendingOperations.has(key)) return false;
+    state.pendingOperations.add(key);
+    return true;
+  }
+
+  function endOperation(key) {
+    state.pendingOperations.delete(key);
+  }
+
+  function operationPending(key) {
+    return state.pendingOperations.has(key);
+  }
+
+  function resourceOperationKey(resource) {
+    return `resource:${resource.project_id}:${resource.id}`;
+  }
+
+  function projectSyncKey(projectId) {
+    return `project-sync:${projectId}`;
+  }
+
+  function connectionOperationKey(connectionId) {
+    return `connection:${connectionId}`;
+  }
+
+  function resourceOperationPending(resource) {
+    return Boolean(resource && operationPending(resourceOperationKey(resource)));
+  }
+
+  function projectResourceOperationPending(project) {
+    return Boolean(project?.resources.some(resourceOperationPending));
+  }
+
+  function projectSyncBusy(project) {
+    return Boolean(project && (
+      operationPending(projectSyncKey(project.id)) ||
+      projectResourceOperationPending(project)
+    ));
+  }
+
+  function resourceActionBusy(resource) {
+    return Boolean(resource && (
+      resourceOperationPending(resource) ||
+      operationPending(projectSyncKey(resource.project_id))
+    ));
+  }
+
+  function resourceEditorBlocked(resource) {
+    const current = resource || selectedProject()?.resources.find((candidate) => candidate.id === state.editingResourceId);
+    const resourceId = current?.id || state.editingResourceId;
+    const projectId = current?.project_id || selectedProject()?.id;
+    return Boolean(resourceId && (
+      resourceActionBusy(current) ||
+      state.staleEditors.has(`resource:${resourceId}`) ||
+      state.persistentStaleEditors.has(`resource:${resourceId}`) ||
+      state.staleEditors.has(`project:${projectId}`)
+    ));
+  }
+
+  function connectionBusy(connectionId) {
+    return Boolean(connectionId && operationPending(connectionOperationKey(connectionId)));
+  }
+
+  function connectionEditorBlocked(connectionId = state.editingConnectionId) {
+    return connectionBusy(connectionId) ||
+      state.staleEditors.has(`connection:${connectionId}`) ||
+      state.persistentStaleEditors.has(`connection:${connectionId}`);
+  }
+
+  function captureWorkspaceFocus() {
+    const active = document.activeElement;
+    if (!(active instanceof Element) || !$(".workspace-content")?.contains(active)) return null;
+
+    const card = active.closest(".work-card[data-id]");
+    if (card) return { type: "card", id: card.dataset.id, action: active.dataset.move || null };
+
+    for (const [type, [selector, key]] of Object.entries(workspaceFocusTargets)) {
+      const element = active.closest(selector);
+      if (element) return { type, id: element.dataset[key] };
+    }
+
+    return active.id ? { type: "id", id: active.id } : null;
+  }
+
+  function restoreWorkspaceFocus(focus) {
+    if (!focus) return;
+    let target = null;
+    if (focus.type === "card") {
+      const card = $$(".work-card[data-id]").find((element) => element.dataset.id === focus.id);
+      target = focus.action && card
+        ? $$('[data-move]', card).find((element) => element.dataset.move === focus.action)
+        : card;
+    } else if (focus.type === "id") {
+      target = document.getElementById(focus.id);
+    } else {
+      const [selector, key] = workspaceFocusTargets[focus.type] || [];
+      if (selector) target = $$(selector).find((element) => element.dataset[key] === focus.id);
+    }
+    if (target && !target.disabled) target.focus();
+  }
+
+  function restoreLostWorkspaceFocus(focus) {
+    if (document.activeElement === document.body) restoreWorkspaceFocus(focus);
+  }
+
+  function projectSyncErrorMessage(error) {
+    const causes = error.causes?.length ? error.causes : [{ code: error.code, count: 1 }];
+    const guidance = {
+      stale: ["stale resources", "Reload and retry."],
+      state_conflict: ["state conflict", "Reload and resolve the changed project or resource."],
+      forbidden: ["permission denied", "Grant the required provider permissions."],
+      provider_unauthorized: ["authentication required", "Reauthenticate the provider connection."],
+      provider_failure: ["provider failure", "Check provider availability and retry."]
+    };
+    const knownCauses = causes.filter((cause) => guidance[cause.code]);
+    if (!knownCauses.length) return error.message;
+
+    const summary = knownCauses
+      .map((cause) => `${guidance[cause.code][0]}${cause.count > 1 ? ` (${cause.count})` : ""}`)
+      .join(", ");
+    const actions = [...new Set(knownCauses.map((cause) => guidance[cause.code][1]))].join(" ");
+    return `Project sync failed: ${summary}. ${actions}`;
+  }
+
+  async function loadWorkspace({ silent = false, refreshDetail = true, projectId = state.selectedProjectId } = {}) {
     const requestId = ++state.workspaceRequestId;
-    const selectedAtStart = state.selectedProjectId;
-    if (!silent) renderLoading();
+    if (!silent && !state.workspace) renderLoading();
 
-    const query = selectedAtStart ? `?project_id=${encodeURIComponent(selectedAtStart)}` : "";
-    const workspace = await request(`/portal/api/workspace${query}`);
-    if (requestId !== state.workspaceRequestId || state.selectedProjectId !== selectedAtStart) return;
+    const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : "";
+    let workspace;
+    try {
+      workspace = await request(`/portal/api/workspace${query}`);
+    } catch (error) {
+      if (requestId !== state.workspaceRequestId) return false;
+      throw error;
+    }
+    if (requestId !== state.workspaceRequestId) return false;
 
+    const focus = captureWorkspaceFocus();
+    const resourceForm = $("#resource-form");
+    const resourceEditor = $("#resource-dialog").open && state.editingResourceId
+      ? { id: state.editingResourceId, version: Number(resourceForm.elements.version.value) }
+      : null;
+    const connectionForm = $("#connection-form");
+    const connectionEditor = $("#connection-dialog").open && state.editingConnectionId
+      ? { id: state.editingConnectionId, version: Number(connectionForm.elements.version.value) }
+      : null;
     state.workspace = workspace;
     state.selectedProjectId = workspace.selected_project_id;
+    state.staleEditors.clear();
+    state.persistentStaleEditors.clear();
+    const refreshedProject = workspace.projects.find((project) => project.id === workspace.selected_project_id);
+    const refreshedResource = resourceEditor
+      ? refreshedProject?.resources.find((resource) => resource.id === resourceEditor.id)
+      : null;
+    const refreshedConnection = connectionEditor
+      ? workspace.connections.find((connection) => connection.id === connectionEditor.id)
+      : null;
+    if (resourceEditor && (!refreshedResource || refreshedResource.version !== resourceEditor.version)) {
+      state.staleEditors.add(`resource:${resourceEditor.id}`);
+    }
+    if (connectionEditor && (!refreshedConnection || refreshedConnection.version !== connectionEditor.version)) {
+      state.staleEditors.add(`connection:${connectionEditor.id}`);
+    }
     syncLocation();
     renderWorkspace();
     if ($("#resource-dialog").open) {
-      const form = $("#resource-form");
-      const selectedReference = form.elements.registered_external_ref.value || form.elements.external_ref.value;
+      const selectedReference = resourceForm.elements.registered_external_ref.value || resourceForm.elements.external_ref.value;
+      const selectedConnection = resourceForm.elements.connection_id.value;
       syncResourceReferenceControl(selectedReference);
+      syncResourceConnectionControl(selectedConnection);
+      reconcileResourceEditor(refreshedResource);
     }
+    if ($("#connection-dialog").open) {
+      reconcileConnectionEditor(refreshedConnection);
+    }
+    restoreWorkspaceFocus(focus);
 
     if (refreshDetail && state.activeWorkItemId && !dialogOpen()) {
       await openWorkItem(state.activeWorkItemId, { preserveDrawer: true });
     }
+    return true;
   }
 
   function selectedProject() {
@@ -203,12 +387,14 @@
       renderRuntimes();
       renderActivity();
       renderResourcesView();
+      if (state.activeView === "connections") renderConnectionsView();
       return;
     }
 
     const archived = project.status === "archived";
     $("#new-item-button").disabled = archived;
     $("#resources-add-button").disabled = archived;
+    reconcileProjectSyncButton();
     $("#project-settings-button").disabled = false;
     $("#project-key").textContent = project.key;
     $("#project-title").textContent = project.name;
@@ -226,6 +412,7 @@
     renderBoard(project.work_items);
     renderActivity();
     renderResourcesView();
+    if (state.activeView === "connections") renderConnectionsView();
     renderHealth();
     renderAttention();
     renderRuntimes();
@@ -243,6 +430,7 @@
     $("#new-item-button").disabled = true;
     $("#project-settings-button").disabled = true;
     $("#resources-add-button").disabled = true;
+    $("#sync-project-button").disabled = true;
     $("#board-summary").textContent = "0 work items";
     $("#kanban-board").innerHTML = `<div class="empty-workspace"><span class="rail-icon">${icon("columns")}</span><h2>No projects yet</h2><p>Create the first project and start organizing engineering work.</p><button class="button button-primary" id="empty-new-project"><span data-icon="plus"></span><span>New project</span></button></div>`;
     $("#empty-new-project")?.addEventListener("click", () => openProjectDialog());
@@ -312,6 +500,7 @@
 
   function renderCard(item, index, count, readOnly) {
     const signals = [];
+    if (item.external) signals.push(`<span class="signal external">${icon("external")}${escapeHtml(formatLabel(item.external.provider))} #${escapeHtml(item.external.id)}</span>`);
     if (item.blocked) signals.push(`<span class="signal blocked">${icon("alert")}Blocked</span>`);
     if (item.execution?.state) signals.push(`<span class="signal agent">${icon("agent")}${formatLabel(item.execution.state)}</span>`);
     if (item.pull_request_url) signals.push(`<span class="signal">${icon("branch")}PR</span>`);
@@ -457,15 +646,25 @@
     const resources = project?.resources || [];
     $("#resources-add-button").disabled = !project || project.status !== "active";
     $("#resource-table").innerHTML = resources.length
-      ? resources.map((resource) => `<button class="resource-row" type="button" data-resource-id="${resource.id}"><span class="resource-kind">${escapeHtml(formatLabel(resource.kind))}</span><span class="resource-primary"><strong>${escapeHtml(resource.name)}</strong><span>${escapeHtml(resource.provider || resource.external_ref || "Manual")}</span></span><span><span class="state-badge ${resource.status}">${formatLabel(resource.status)}</span></span><span><span class="state-badge ${resource.sync_status}">${formatLabel(resource.sync_status)}</span></span><span class="resource-message">${escapeHtml(resource.status_message || "No issues")}</span></button>`).join("")
+      ? resources.map((resource) => `<div class="resource-entry"><button class="resource-row" type="button" data-resource-id="${resource.id}" ${resourceEditorBlocked(resource) ? "disabled" : ""}><span class="resource-kind">${escapeHtml(formatLabel(resource.kind))}</span><span class="resource-primary"><strong>${escapeHtml(resource.name)}</strong><span>${escapeHtml(resource.provider || resource.external_ref || "Manual")}</span></span><span><span class="state-badge ${resource.status}">${formatLabel(resource.status)}</span></span><span><span class="state-badge ${resource.sync_status}">${formatLabel(resource.sync_status)}</span></span><span class="resource-message">${escapeHtml(resource.status_message || "No issues")}</span></button>${resource.connection_id ? `<button class="icon-button resource-sync-button" type="button" data-sync-resource-id="${resource.id}" aria-label="Sync ${escapeHtml(resource.name)}" title="Sync ${escapeHtml(resource.name)}" ${project.status !== "active" || resourceActionBusy(resource) ? "disabled" : ""}>${icon("refresh")}</button>` : ""}</div>`).join("")
       : '<div class="empty-view"><h2>No resources attached</h2><p>Attach a repository, tracker, CI system, runtime, agent, or connection.</p></div>';
     $$('[data-resource-id]', $("#resource-table")).forEach((button) => button.addEventListener("click", () => openResourceDialog(resources.find((resource) => resource.id === button.dataset.resourceId))));
+    $$('[data-sync-resource-id]', $("#resource-table")).forEach((button) => button.addEventListener("click", () => syncResource(button.dataset.syncResourceId)));
 
     const runtimes = state.workspace?.runtimes || [];
     $("#runtime-total").textContent = runtimes.length;
     $("#runtime-table").innerHTML = runtimes.length
       ? runtimes.map((runtime) => `<div class="runtime-row"><span class="rail-icon">${icon("agent")}</span><span class="resource-primary"><strong>${escapeHtml(runtime.runtime_name)}</strong><span>${escapeHtml(runtime.machine_name)} · ${escapeHtml(runtime.agent_profile)} · ${escapeHtml(runtime.workspace)}</span></span><span>${runtime.reserved_capacity}/${runtime.capacity} slots</span><span class="state-badge ${runtime.status}">${formatLabel(runtime.status)}</span></div>`).join("")
       : '<div class="empty-view"><h2>No compatible runtimes</h2><p>Work can be queued, but it will not start until a matching runtime is online.</p></div>';
+  }
+
+  function renderConnectionsView() {
+    const connections = state.workspace?.connections || [];
+    $("#connection-table").innerHTML = connections.length
+      ? connections.map((connection) => `<div class="connection-row"><button class="connection-primary" type="button" data-connection-id="${connection.id}" ${connectionEditorBlocked(connection.id) ? "disabled" : ""}><span class="resource-kind">${escapeHtml(formatLabel(connection.provider))}</span><span class="resource-primary"><strong>${escapeHtml(connection.name)}</strong><span>${escapeHtml(connection.account_ref)} · ${escapeHtml(authLabel(connection.auth_type))}</span></span><span><span class="state-badge ${connection.status}">${formatLabel(connection.status)}</span></span><span class="connection-capabilities">${(connection.capabilities || []).map((capability) => `<span>${escapeHtml(formatLabel(capability))}</span>`).join("")}</span><span class="resource-message">${escapeHtml(connection.status_message || "No issues")}</span></button><button class="icon-button connection-check-button" type="button" data-check-connection-id="${connection.id}" aria-label="Check ${escapeHtml(connection.name)}" title="Check ${escapeHtml(connection.name)}" ${connectionBusy(connection.id) ? "disabled" : ""}>${icon("refresh")}</button></div>`).join("")
+      : '<div class="empty-view"><h2>No engineering connections</h2></div>';
+    $$('[data-connection-id]', $("#connection-table")).forEach((button) => button.addEventListener("click", () => openConnectionDialog(connections.find((connection) => connection.id === button.dataset.connectionId))));
+    $$('[data-check-connection-id]', $("#connection-table")).forEach((button) => button.addEventListener("click", () => checkConnection(button.dataset.checkConnectionId)));
   }
 
   function renderHealth() {
@@ -548,11 +747,13 @@
         ${canCancel ? `<button class="button button-danger" id="cancel-item-button">${icon("x")}<span>Cancel run</span></button>` : ""}
         ${nextAction}
         <select id="detail-status-select" aria-label="Workflow status" ${archived ? "disabled" : ""}>${columns.map(([status, label]) => `<option value="${status}" ${item.status === status ? "selected" : ""}>${label}</option>`).join("")}</select>
-        <select id="detail-priority-select" aria-label="Priority" ${archived ? "disabled" : ""}>${["urgent", "high", "medium", "low", "no_priority"].map((priority) => `<option value="${priority}" ${item.priority === priority ? "selected" : ""}>${formatLabel(priority)}</option>`).join("")}</select>
+        <select id="detail-priority-select" aria-label="Priority" ${archived || item.external ? "disabled" : ""}>${["urgent", "high", "medium", "low", "no_priority"].map((priority) => `<option value="${priority}" ${item.priority === priority ? "selected" : ""}>${formatLabel(priority)}</option>`).join("")}</select>
       </div>
       ${item.assignee.type !== "agent" && !execution ? '<div class="inline-notice">Set Owner type to Agent before starting a run.</div>' : ""}
+      ${item.external?.available === false ? '<div class="inline-notice attention">Unavailable in provider. Synchronize the work tracker after restoring access or the external item.</div>' : ""}
       ${waiting ? `<div class="input-request"><p><strong>Agent needs a decision</strong><br>${escapeHtml(waiting.question || "Provide the requested input to continue.")}</p><form id="provide-input-form" class="input-row"><input name="answer" required aria-label="Response"><button class="button button-primary" type="submit">Send</button></form></div>` : ""}
       <section class="detail-summary"><p>${escapeHtml(outcome.summary || item.description || "No outcome summary yet.")}</p></section>
+      ${item.external ? `<section class="detail-section"><h3>External work</h3><div class="detail-facts">${detailFact("Provider", escapeHtml(formatLabel(item.external.provider)))}${detailFact("Availability", item.external.available === false ? '<span class="state-badge attention">Unavailable</span>' : '<span class="state-badge healthy">Available</span>')}${detailFact("Reference", `<a class="detail-link" href="${escapeHtml(item.external.url)}" target="_blank" rel="noreferrer">#${escapeHtml(item.external.id)} ${icon("external")}</a>`)}${detailFact("State", escapeHtml(item.external.state))}${detailFact("Assigned human", escapeHtml(item.external.assignee || "Unassigned"))}${detailFact("Labels", escapeHtml(item.external.labels.join(", ") || "None"))}</div></section>` : ""}
       ${outcome.failure ? `<section class="detail-section"><h3>Failure</h3><div class="failure-panel"><pre>${escapeHtml(formatOutcome(outcome.failure))}</pre></div></section>` : ""}
       ${hasOutcome(outcome.result) ? `<section class="detail-section"><h3>Completion result</h3><div class="detail-summary"><pre>${escapeHtml(formatOutcome(outcome.result))}</pre></div></section>` : ""}
       <section class="detail-section"><h3>Execution</h3><div class="detail-facts">
@@ -560,10 +761,11 @@
         ${detailFact("Generation", execution ? String(execution.generation) : "Not started")}
         ${detailFact("Owner", escapeHtml(outcome.owner.name || "Unassigned"))}
         ${detailFact("Repository", escapeHtml(item.repository || "Not linked"))}
+        ${detailFact("CI resource", escapeHtml(item.ci_resource || "Repository provider"))}
         ${detailFact("Branch", escapeHtml(item.branch || "Not created"))}
-        ${detailFact("Pull request", item.pull_request_url ? `<a class="detail-link" href="${escapeHtml(item.pull_request_url)}" target="_blank" rel="noreferrer">Open PR ${icon("external")}</a>${sourceLabel(item.delivery.pull_request.source)}` : "Not created")}
-        ${detailFact("CI", `<span class="state-badge ${item.ci_status}">${formatLabel(item.ci_status)}</span>${sourceLabel(item.delivery.ci.source)}`)}
-        ${detailFact("Review", `<span class="state-badge ${item.review_status}">${formatLabel(item.review_status)}</span>${sourceLabel(item.delivery.review.source)}`)}
+        ${detailFact("Pull request", item.pull_request_url ? `<a class="detail-link" href="${escapeHtml(item.pull_request_url)}" target="_blank" rel="noreferrer">Open PR ${icon("external")}</a> <span class="state-badge ${escapeHtml(item.delivery.pull_request.status || "unknown")}">${escapeHtml(formatLabel(item.delivery.pull_request.status || "unknown"))}</span>${sourceLabel(item.delivery.pull_request)}` : "Not created")}
+        ${detailFact("CI", `<span class="state-badge ${item.ci_status}">${formatLabel(item.ci_status)}</span>${sourceLabel(item.delivery.ci)}`)}
+        ${detailFact("Review", `<span class="state-badge ${item.review_status}">${formatLabel(item.review_status)}</span>${sourceLabel(item.delivery.review)}`)}
         ${outcome.blocker ? detailFact("Blocker", `<span class="state-badge attention">${escapeHtml(outcome.blocker)}</span>`) : ""}
       </div></section>
       ${renderListSection("Important findings", outcome.findings, "message")}
@@ -602,8 +804,11 @@
     });
   }
 
-  function sourceLabel(source) {
-    return source && source !== "none" ? `<small class="source-label">${escapeHtml(formatLabel(source))}</small>` : "";
+  function sourceLabel(delivery) {
+    const source = delivery?.source;
+    if (!source || source === "none") return "";
+    const label = source === "provider" && delivery.provider ? delivery.provider : source;
+    return `<small class="source-label">${escapeHtml(formatLabel(label))}</small>`;
   }
 
   function hasOutcome(value) {
@@ -642,9 +847,12 @@
     const workItemId = detail.work_item.id;
     const button = $("#load-history-button");
     button.disabled = true;
+    const ownsRequest = () => requestId === state.detailRequestId &&
+      state.activeWorkItemId === workItemId &&
+      state.currentDetail === detail;
     try {
       const page = await request(`/portal/api/work-items/${workItemId}/timeline?before=${encodeURIComponent(cursor)}`);
-      if (requestId !== state.detailRequestId || state.activeWorkItemId !== workItemId || state.currentDetail?.work_item.id !== workItemId) return;
+      if (!ownsRequest()) return;
       detail.raw.timeline = detail.raw.timeline.concat(page.items);
       detail.raw.next_before = page.next_before;
       detail.rawHistoryLoaded = true;
@@ -652,8 +860,9 @@
       interaction.rawOpen = true;
       renderDetail(detail, interaction);
     } catch (error) {
+      if (!ownsRequest()) return;
       showToast(error.message, "error");
-      button.disabled = false;
+      $("#load-history-button")?.removeAttribute("disabled");
     }
   }
 
@@ -669,8 +878,7 @@
       await request(`/portal/api/work-items/${item.id}`, { method: "PATCH", body: JSON.stringify({ ...changes, version: item.version }) });
       if (!ownsMutation(owner)) return;
       closeDialog(form);
-      showToast("Work item updated", "success");
-      await loadWorkspace({ silent: true });
+      await refreshAfterMutation("Work item updated");
     } catch (error) {
       await handleMutationError(error, form, owner);
     }
@@ -683,8 +891,7 @@
       await request(`/portal/api/work-items/${item.id}/run`, { method: "POST", body: JSON.stringify({ action_id: action.id }) });
       clearActionId(action.key);
       if (!ownsMutation(owner)) return;
-      showToast("Agent run queued", "success");
-      await loadWorkspace({ silent: true });
+      await refreshAfterMutation("Agent run queued");
     } catch (error) {
       await handleControlError(error, action.key, null, owner);
     }
@@ -698,8 +905,7 @@
       await request(`/portal/api/work-items/${item.id}/cancel`, { method: "POST", body: JSON.stringify({ action_id: action.id, generation }) });
       clearActionId(action.key);
       if (!ownsMutation(owner)) return;
-      showToast("Cancellation requested", "success");
-      await loadWorkspace({ silent: true });
+      await refreshAfterMutation("Cancellation requested");
     } catch (error) {
       await handleControlError(error, action.key, null, owner);
     }
@@ -713,8 +919,7 @@
       await request(`/portal/api/work-items/${item.id}/retry`, { method: "POST", body: JSON.stringify({ action_id: action.id, generation }) });
       clearActionId(action.key);
       if (!ownsMutation(owner)) return;
-      showToast("Retry queued", "success");
-      await loadWorkspace({ silent: true });
+      await refreshAfterMutation("Retry queued");
     } catch (error) {
       await handleControlError(error, action.key, null, owner);
     }
@@ -736,8 +941,7 @@
         });
         clearActionId(action.key);
         if (!ownsMutation(owner)) return;
-        showToast("Input sent", "success");
-        await loadWorkspace({ silent: true });
+        await refreshAfterMutation("Input sent");
       } catch (error) {
         await handleControlError(error, action.key, form, owner);
       }
@@ -763,13 +967,50 @@
     await handleMutationError(error, form, owner);
   }
 
-  async function handleMutationError(error, form = null, owner = null) {
-    if (owner && !ownsMutation(owner)) return;
-    showFormError(form, error.message);
-    showToast(error.code === "stale" ? "This item changed elsewhere. Current data was reloaded." : error.message, "error");
-    if (["stale", "state_conflict"].includes(error.code)) {
+  async function handleMutationError(error, form = null, owner = null, staleTarget = {}) {
+    const owns = !owner || ownsMutation(owner);
+    const conflict = ["stale", "state_conflict"].includes(error.code);
+    if (!conflict) {
+      if (!owns) return;
+      showFormError(form, error.message);
+      showToast(error.message, "error");
+      return;
+    }
+
+    const resourceId = staleTarget.resourceId || (form?.id === "resource-form" ? form.elements.id.value || state.editingResourceId : null);
+    const connectionId = staleTarget.connectionId || (form?.id === "connection-form" ? form.elements.id.value || state.editingConnectionId : null);
+    if (resourceId) state.persistentStaleEditors.add(`resource:${resourceId}`);
+    if (connectionId) state.persistentStaleEditors.add(`connection:${connectionId}`);
+    if (owns) {
+      showFormError(form, error.message);
       closeDialog(form);
-      await loadWorkspace({ silent: true });
+    }
+    if (resourceId) {
+      state.staleEditors.add(`resource:${resourceId}`);
+      reconcileResourceButtons(resourceId);
+    }
+    if (connectionId) {
+      state.staleEditors.add(`connection:${connectionId}`);
+      reconcileConnectionButtons(connectionId);
+    }
+    const projectId = staleTarget.projectId || owner?.projectId;
+    if (state.projectSwitchTargetId !== null || (projectId && state.selectedProjectId !== projectId)) return;
+
+    try {
+      const loaded = await loadWorkspace({ silent: true });
+      if (loaded) {
+        showToast(error.code === "stale" ? "This item changed elsewhere. Current data was reloaded." : `${error.message}. Current data was reloaded.`, "error");
+      }
+    } catch (refreshError) {
+      if (resourceId || connectionId) {
+        renderWorkspace();
+        if (resourceId) reconcileResourceButtons(resourceId);
+        if (connectionId) reconcileConnectionButtons(connectionId);
+      }
+      showToast(
+        `This item changed elsewhere, but current data could not be reloaded: ${refreshError.message}. Refresh the workspace to continue.`,
+        "error"
+      );
     }
   }
 
@@ -933,16 +1174,21 @@
   }
 
   async function withSubmitLock(form, operation) {
-    if (form.dataset.submitting === "true") return;
+    if (form.dataset.submitting) return;
     const submit = form.querySelector('[type="submit"]');
-    form.dataset.submitting = "true";
+    const generation = String(++submitLockGeneration);
+    form.dataset.submitting = generation;
     if (submit) submit.disabled = true;
     showFormError(form, "");
     try {
       await operation();
     } finally {
-      delete form.dataset.submitting;
-      if (submit) submit.disabled = false;
+      if (form.dataset.submitting === generation) {
+        delete form.dataset.submitting;
+        if (form.id === "resource-form") reconcileResourceEditor();
+        else if (form.id === "connection-form") reconcileConnectionEditor();
+        else if (submit) submit.disabled = false;
+      }
     }
   }
 
@@ -951,13 +1197,41 @@
     return ['<option value="">Not linked</option>', ...repositories.map((resource) => `<option value="${resource.id}" ${resource.id === selectedId ? "selected" : ""}>${escapeHtml(resource.name)}</option>`)].join("");
   }
 
+  function ciResourceOptions(selectedId = "") {
+    const resources = selectedProject()?.resources.filter((resource) => resource.kind === "ci") || [];
+    return ['<option value="">Use repository provider</option>', ...resources.map((resource) => `<option value="${resource.id}" ${resource.id === selectedId ? "selected" : ""}>${escapeHtml(resource.name)}</option>`)].join("");
+  }
+
+  function connectionOptions(selectedId = "", kind = "repository") {
+    const capability = { repository: "repositories", work_tracking: "work_items", ci: "ci" }[kind];
+    const connections = (state.workspace?.connections || [])
+      .filter((connection) => !capability || connection.capabilities.includes(capability));
+    return ['<option value="">Manual</option>', ...connections.map((connection) => `<option value="${connection.id}" ${connection.id === selectedId ? "selected" : ""}>${escapeHtml(connection.name)} · ${escapeHtml(formatLabel(connection.provider))}</option>`)].join("");
+  }
+
+  function syncResourceConnectionControl(selectedId = null) {
+    const form = $("#resource-form");
+    const externalKind = ["repository", "work_tracking", "ci"].includes(form.elements.kind.value);
+    const resource = selectedProject()?.resources.find((candidate) => candidate.id === state.editingResourceId);
+    const readOnly = selectedProject()?.status !== "active" || resourceEditorBlocked(resource);
+    const current = selectedId ?? form.elements.connection_id.value;
+    form.elements.connection_id.innerHTML = connectionOptions(current, form.elements.kind.value);
+    form.elements.connection_id.value = externalKind ? current : "";
+    form.elements.connection_id.disabled = !externalKind || readOnly;
+    const connected = Boolean(form.elements.connection_id.value);
+    $$('[data-manual-resource-field] input, [data-manual-resource-field] select', form).forEach((input) => {
+      input.disabled = connected || readOnly;
+    });
+  }
+
   function syncResourceReferenceControl(selectedValue = "") {
     const form = $("#resource-form");
     const input = form.elements.external_ref;
     const select = form.elements.registered_external_ref;
     const kind = form.elements.kind.value;
     const registered = state.workspace?.registered_runtimes || [];
-    const readOnly = selectedProject()?.status !== "active";
+    const resource = selectedProject()?.resources.find((candidate) => candidate.id === state.editingResourceId);
+    const readOnly = selectedProject()?.status !== "active" || resourceEditorBlocked(resource);
     const usesRegistry = kind === "agent" || kind === "runtime";
 
     input.hidden = usesRegistry;
@@ -999,6 +1273,7 @@
     $("#work-item-dialog-title").textContent = item ? "Edit work item" : "Create work";
     $("#work-item-submit-label").textContent = item ? "Save" : "Create";
     form.elements.repository_resource_id.innerHTML = repositoryOptions(item?.repository_resource_id || "");
+    form.elements.ci_resource_id.innerHTML = ciResourceOptions(item?.ci_resource_id || "");
 
     if (item) {
       const values = {
@@ -1011,6 +1286,7 @@
         agent_profile: item.assignee.agent_profile,
         workspace: item.workspace,
         repository_resource_id: item.repository_resource_id,
+        ci_resource_id: item.ci_resource_id,
         branch: item.branch,
         pull_request_url: item.delivery.pull_request.source === "manual" ? item.pull_request_url : "",
         ci_status: item.delivery.ci.source === "manual" ? item.ci_status : "",
@@ -1024,7 +1300,10 @@
     form.elements.status.disabled = Boolean(item);
     const locked = Boolean(item?.execution?.intent_locked);
     $$('[data-intent-field] input, [data-intent-field] textarea, [data-intent-field] select', form).forEach((input) => { input.disabled = locked; });
+    const providerOwned = Boolean(item?.external);
+    $$('[data-provider-owned-field] input, [data-provider-owned-field] textarea, [data-provider-owned-field] select', form).forEach((input) => { input.disabled = locked || providerOwned; });
     $("#intent-lock-note").hidden = !locked;
+    $("#provider-owner-note").hidden = !providerOwned;
     $("#work-item-dialog").showModal();
   }
 
@@ -1055,8 +1334,8 @@
   }
 
   function openResourceDialog(resource = null) {
+    if (resourceEditorBlocked(resource)) return;
     const form = $("#resource-form");
-    const readOnly = selectedProject()?.status !== "active";
     invalidateMutationContext();
     form.reset();
     resetSubmitLock(form);
@@ -1066,16 +1345,120 @@
     form.elements.version.value = resource?.version || "";
     $("#resource-dialog-title").textContent = resource ? "Update resource" : "Attach resource";
     $("#resource-submit-label").textContent = resource ? "Update" : "Attach";
-    $("#delete-resource-button").hidden = !resource || readOnly;
     if (resource) {
       for (const name of ["kind", "status", "sync_status", "name", "provider", "url", "status_message"]) form.elements[name].value = resource[name] || "";
       form.elements.last_checked_at.value = localDateTime(resource.last_checked_at);
       form.elements.last_synced_at.value = localDateTime(resource.last_synced_at);
     }
-    $$('input, select, textarea', form).forEach((input) => { if (!input.matches('[type="hidden"]')) input.disabled = readOnly; });
-    syncResourceReferenceControl(resource?.external_ref || "");
-    form.querySelector('[type="submit"]').disabled = readOnly;
+    reconcileResourceEditor(resource);
     $("#resource-dialog").showModal();
+  }
+
+  function openConnectionDialog(connection = null) {
+    if (connectionEditorBlocked(connection?.id)) return;
+    const form = $("#connection-form");
+    invalidateMutationContext();
+    form.reset();
+    resetSubmitLock(form);
+    showFormError(form, "");
+    state.editingConnectionId = connection?.id || null;
+    form.elements.id.value = connection?.id || "";
+    form.elements.version.value = connection?.version || "";
+    $("#connection-dialog-title").textContent = connection ? "Connection settings" : "New connection";
+    $("#connection-submit-label").textContent = connection ? "Save" : "Connect";
+    if (connection) {
+      for (const name of ["provider", "name", "account_ref", "auth_type"]) form.elements[name].value = connection[name] || "";
+      $$('input[name="capabilities"]', form).forEach((input) => { input.checked = connection.capabilities.includes(input.value); });
+    }
+
+    syncConnectionCapabilityControls();
+    syncConnectionAuthControl();
+    reconcileConnectionEditor(connection);
+    $("#connection-dialog").showModal();
+  }
+
+  function syncConnectionAuthControl() {
+    const form = $("#connection-form");
+    const provider = form.elements.provider.value;
+    form.elements.auth_type.value = provider === "github" ? "gh_cli" : "entra_id";
+    $("#connection-auth-label").textContent = authLabel(form.elements.auth_type.value);
+  }
+
+  function syncConnectionCapabilityControls(changed = null) {
+    const form = $("#connection-form");
+    const repositories = form.querySelector('input[name="capabilities"][value="repositories"]');
+    const changes = form.querySelector('input[name="capabilities"][value="changes"]');
+
+    if (changed === repositories && !repositories.checked) changes.checked = false;
+    else if (changes.checked) repositories.checked = true;
+  }
+
+  function reconcileResourceEditor(resource = selectedProject()?.resources.find((candidate) => candidate.id === state.editingResourceId)) {
+    const form = $("#resource-form");
+    const stale = Boolean(state.editingResourceId && state.staleEditors.has(`resource:${state.editingResourceId}`));
+    const readOnly = Boolean(form.dataset.submitting) || selectedProject()?.status !== "active" || stale || Boolean(state.editingResourceId && !resource) || resourceEditorBlocked(resource);
+    $("#delete-resource-button").hidden = !resource || selectedProject()?.status !== "active";
+    $("#delete-resource-button").disabled = readOnly;
+    $("#sync-resource-button").hidden = !resource?.connection_id || selectedProject()?.status !== "active";
+    $("#sync-resource-button").disabled = selectedProject()?.status !== "active" || resourceActionBusy(resource);
+    $$('input, select, textarea', form).forEach((input) => { if (!input.matches('[type="hidden"]')) input.disabled = readOnly; });
+    syncResourceReferenceControl(resource?.external_ref || form.elements.external_ref.value);
+    syncResourceConnectionControl(resource?.connection_id || form.elements.connection_id.value);
+    form.querySelector('[type="submit"]').disabled = readOnly;
+    if (stale) showFormError(form, "This resource changed while the editor was open. Close and reopen it to edit the current version.");
+  }
+
+  function reconcileConnectionEditor(connection = state.workspace?.connections.find((candidate) => candidate.id === state.editingConnectionId)) {
+    const form = $("#connection-form");
+    const stale = Boolean(state.editingConnectionId && state.staleEditors.has(`connection:${state.editingConnectionId}`));
+    const blocked = Boolean(form.dataset.submitting) || Boolean(state.editingConnectionId && !connection) || connectionEditorBlocked(connection?.id);
+    $$('input, select, textarea', form).forEach((input) => { if (!input.matches('[type="hidden"]')) input.disabled = blocked; });
+    form.elements.provider.disabled = blocked || Boolean(connection);
+    form.elements.account_ref.disabled = blocked || Boolean(connection);
+    form.querySelector('[type="submit"]').disabled = blocked;
+    $("#delete-connection-button").hidden = !connection;
+    $("#delete-connection-button").disabled = blocked;
+    if (stale) showFormError(form, "This connection changed while the editor was open. Close and reopen it to edit the current version.");
+  }
+
+  function reconcileConnectionButtons(connectionId) {
+    $$('[data-connection-id], [data-check-connection-id]', $("#connection-table")).forEach((button) => {
+      if (button.dataset.connectionId === connectionId || button.dataset.checkConnectionId === connectionId) {
+        button.disabled = button.dataset.connectionId
+          ? connectionEditorBlocked(connectionId)
+          : connectionBusy(connectionId);
+      }
+    });
+  }
+
+  function reconcileResourceButtons(resourceId = null) {
+    const project = selectedProject();
+    const resource = resourceId
+      ? project?.resources.find((candidate) => candidate.id === resourceId)
+      : null;
+    const resources = resourceId
+      ? null
+      : new Map((project?.resources || []).map((candidate) => [candidate.id, candidate]));
+    $$('[data-resource-id], [data-sync-resource-id]', $("#resource-table")).forEach((button) => {
+      const buttonResourceId = button.dataset.resourceId || button.dataset.syncResourceId;
+      if (resourceId && buttonResourceId !== resourceId) return;
+      const currentResource = resourceId ? resource : resources.get(buttonResourceId);
+      button.disabled = project?.status !== "active" || (button.dataset.resourceId
+        ? resourceEditorBlocked(currentResource)
+        : resourceActionBusy(currentResource));
+    });
+  }
+
+  function reconcileProjectSyncButton() {
+    const project = selectedProject();
+    $("#sync-project-button").disabled = !project || project.status !== "active" || projectSyncBusy(project);
+  }
+
+  function reconcileProjectResources(projectId) {
+    const project = selectedProject();
+    if (project?.id !== projectId) return;
+    reconcileResourceButtons();
+    if ($("#resource-dialog").open) reconcileResourceEditor();
   }
 
   function localDateTime(value) {
@@ -1107,11 +1490,12 @@
   }
 
   function setView(view, updateHash = true) {
-    const nextView = ["board", "activity", "resources"].includes(view) ? view : "board";
+    const nextView = validViews.has(view) ? view : "board";
     if (nextView !== state.activeView) invalidateMutationContext();
     state.activeView = nextView;
     if (updateHash && window.location.hash !== `#${state.activeView}`) history.replaceState(null, "", `${window.location.pathname}${window.location.search}#${state.activeView}`);
     renderNavigation();
+    if (state.workspace && state.activeView === "connections") renderConnectionsView();
   }
 
   function syncLocation() {
@@ -1133,12 +1517,7 @@
     }));
     window.addEventListener("hashchange", () => setView(window.location.hash.slice(1), false));
 
-    $("#project-switcher").addEventListener("change", async (event) => {
-      invalidateMutationContext();
-      state.selectedProjectId = event.target.value || null;
-      closeDrawer();
-      await loadWorkspaceWithFeedback();
-    });
+    $("#project-switcher").addEventListener("change", (event) => switchProject(event.target.value || null));
     $("#work-search").addEventListener("input", (event) => {
       state.query = event.target.value;
       if (selectedProject()) renderBoard(selectedProject().work_items);
@@ -1149,25 +1528,67 @@
       if (selectedProject()) renderBoard(selectedProject().work_items);
     }));
     $("#refresh-button").addEventListener("click", () => loadWorkspaceWithFeedback());
-    $("#new-item-button").addEventListener("click", () => openWorkItemDialog());
-    $("#new-project-button").addEventListener("click", () => openProjectDialog());
-    $("#project-settings-button").addEventListener("click", () => openProjectDialog(selectedProject()));
+    $("#new-item-button").addEventListener("click", () => {
+      if (state.projectSwitchTargetId === null) openWorkItemDialog();
+    });
+    $("#new-project-button").addEventListener("click", () => {
+      if (state.projectSwitchTargetId === null) openProjectDialog();
+    });
+    $("#project-settings-button").addEventListener("click", () => {
+      if (state.projectSwitchTargetId === null) openProjectDialog(selectedProject());
+    });
     $("#resources-add-button").addEventListener("click", () => openResourceDialog());
+    $("#connections-add-button").addEventListener("click", () => openConnectionDialog());
+    $("#sync-project-button").addEventListener("click", syncProject);
     $("#close-detail-button").addEventListener("click", closeDrawer);
     $("#drawer-backdrop").addEventListener("click", closeDrawer);
     $$('[data-close-dialog]').forEach((button) => button.addEventListener("click", () => button.closest("dialog").close()));
     $$('dialog').forEach((dialog) => dialog.addEventListener("close", invalidateMutationContext));
+    $("#resource-dialog").addEventListener("close", () => {
+      const resourceId = state.editingResourceId;
+      const resource = selectedProject()?.resources.find((candidate) => candidate.id === resourceId);
+      state.editingResourceId = null;
+      if (resourceId &&
+          !resourceOperationPending(resource) &&
+          !state.persistentStaleEditors.has(`resource:${resourceId}`) &&
+          state.staleEditors.delete(`resource:${resourceId}`)) {
+        reconcileResourceButtons(resourceId);
+      }
+    });
+    $("#connection-dialog").addEventListener("close", () => {
+      const connectionId = state.editingConnectionId;
+      state.editingConnectionId = null;
+      if (connectionId &&
+          !connectionBusy(connectionId) &&
+          !state.persistentStaleEditors.has(`connection:${connectionId}`) &&
+          state.staleEditors.delete(`connection:${connectionId}`)) {
+        reconcileConnectionButtons(connectionId);
+      }
+    });
     document.addEventListener("keydown", (event) => {
       trapDrawerFocus(event);
       if (event.key === "Escape" && $("#detail-drawer").classList.contains("is-open") && !dialogOpen()) closeDrawer();
     });
-    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") loadWorkspaceWithFeedback({ silent: true }); });
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") refreshWorkspaceInBackground(true);
+    });
 
     $("#work-item-form").addEventListener("submit", handleWorkItemSubmit);
     $("#project-form").addEventListener("submit", handleProjectSubmit);
     $("#resource-form").addEventListener("submit", handleResourceSubmit);
-    $("#resource-form").elements.kind.addEventListener("change", () => syncResourceReferenceControl());
+    $("#resource-form").elements.kind.addEventListener("change", () => {
+      syncResourceReferenceControl();
+      syncResourceConnectionControl("");
+    });
+    $("#resource-form").elements.connection_id.addEventListener("change", () => syncResourceConnectionControl());
     $("#delete-resource-button").addEventListener("click", handleResourceDelete);
+    $("#sync-resource-button").addEventListener("click", () => syncResource(state.editingResourceId, $("#resource-dialog")));
+    $("#connection-form").addEventListener("submit", handleConnectionSubmit);
+    $("#connection-form").elements.provider.addEventListener("change", syncConnectionAuthControl);
+    $$('#connection-form input[name="capabilities"]').forEach((input) => {
+      input.addEventListener("change", (event) => syncConnectionCapabilityControls(event.target));
+    });
+    $("#delete-connection-button").addEventListener("click", handleConnectionDelete);
   }
 
   async function handleWorkItemSubmit(event) {
@@ -1193,8 +1614,7 @@
           if (!ownsMutation(owner)) return;
           form.reset();
           closeDialog(form);
-          showToast("Work item created", "success");
-          await loadWorkspace({ silent: true });
+          await refreshAfterMutation("Work item created");
         }
       } catch (error) {
         await handleMutationError(error, form, owner);
@@ -1207,6 +1627,7 @@
     const form = event.currentTarget;
     await withSubmitLock(form, async () => {
       const owner = beginMutation(form.closest("dialog"));
+      const previousProjectId = state.selectedProjectId;
       const payload = formPayload(form, Boolean(state.editingProjectId));
       const version = Number(payload.version);
       delete payload.id;
@@ -1220,9 +1641,19 @@
         if (!ownsMutation(owner)) return;
         state.selectedProjectId = body.project.id;
         closeDialog(form);
-        showToast(state.editingProjectId ? "Project updated" : "Project created", "success");
+        const successMessage = state.editingProjectId ? "Project updated" : "Project created";
+        const created = !state.editingProjectId;
         state.editingProjectId = null;
-        await loadWorkspace({ silent: true });
+        await refreshAfterMutation(successMessage, {
+          projectId: body.project.id,
+          onFailure: created
+            ? () => {
+                state.selectedProjectId = previousProjectId;
+                syncLocation();
+                renderWorkspace();
+              }
+            : null
+        });
       } catch (error) {
         await handleMutationError(error, form, owner);
       }
@@ -1232,52 +1663,323 @@
   async function handleResourceSubmit(event) {
     event.preventDefault();
     const form = event.currentTarget;
-    await withSubmitLock(form, async () => {
-      const owner = beginMutation(form.closest("dialog"));
-      const payload = formPayload(form, Boolean(state.editingResourceId));
-      if (!form.elements.registered_external_ref.disabled) payload.external_ref = form.elements.registered_external_ref.value;
-      delete payload.registered_external_ref;
-      const version = Number(payload.version);
-      delete payload.id;
-      delete payload.version;
-      try {
-        const path = state.editingResourceId ? `/portal/api/resources/${state.editingResourceId}` : `/portal/api/projects/${state.selectedProjectId}/resources`;
-        const method = state.editingResourceId ? "PATCH" : "POST";
-        if (state.editingResourceId) payload.version = version;
-        await request(path, { method, body: JSON.stringify(payload) });
-        if (!ownsMutation(owner)) return;
-        closeDialog(form);
-        showToast(state.editingResourceId ? "Resource updated" : "Resource attached", "success");
-        state.editingResourceId = null;
-        await loadWorkspace({ silent: true });
-      } catch (error) {
-        await handleMutationError(error, form, owner);
-      }
-    });
+    const editingResourceId = state.editingResourceId;
+    const resource = selectedProject()?.resources.find((candidate) => candidate.id === editingResourceId);
+    const payload = formPayload(form, Boolean(editingResourceId));
+    if (!form.elements.registered_external_ref.disabled) payload.external_ref = form.elements.registered_external_ref.value;
+    delete payload.registered_external_ref;
+    const version = Number(payload.version);
+    delete payload.id;
+    delete payload.version;
+    const operationKey = resource ? resourceOperationKey(resource) : null;
+    if (resource && resourceEditorBlocked(resource)) return;
+    if (operationKey && !beginOperation(operationKey)) return;
+    if (resource) {
+      reconcileResourceEditor(resource);
+      reconcileResourceButtons(resource.id);
+      reconcileProjectSyncButton();
+    }
+
+    try {
+      await withSubmitLock(form, async () => {
+        const owner = beginMutation(form.closest("dialog"));
+        try {
+          const path = editingResourceId ? `/portal/api/resources/${editingResourceId}` : `/portal/api/projects/${state.selectedProjectId}/resources`;
+          const method = editingResourceId ? "PATCH" : "POST";
+          if (editingResourceId) payload.version = version;
+          await request(path, { method, body: JSON.stringify(payload) });
+          const successMessage = editingResourceId ? "Resource updated" : "Resource attached";
+          if (ownsMutation(owner)) closeDialog(form);
+          if (resource) {
+            state.staleEditors.add(`resource:${resource.id}`);
+            reconcileResourceButtons(resource.id);
+          }
+          const projectId = resource?.project_id || owner.projectId;
+          if (state.selectedProjectId === projectId && state.projectSwitchTargetId === null) {
+            await refreshAfterMutation(successMessage, { projectId });
+          }
+        } catch (error) {
+          await handleMutationError(error, form, owner, { resourceId: resource?.id, projectId: resource?.project_id || owner.projectId });
+        }
+      });
+    } finally {
+      if (operationKey) endOperation(operationKey);
+      if (resource) reconcileResourceButtons(resource.id);
+      reconcileProjectSyncButton();
+      if ($("#resource-dialog").open && state.editingResourceId === resource?.id) reconcileResourceEditor(resource);
+    }
   }
 
   async function handleResourceDelete() {
     const resource = selectedProject()?.resources.find((candidate) => candidate.id === state.editingResourceId);
-    if (!resource) return;
-    if (!await confirmAction("Detach resource", `Detach ${resource.name} from this project?`, "Detach")) return;
-    const owner = beginMutation($("#resource-dialog"));
+    if (!resource || resourceActionBusy(resource)) return;
+    const operationKey = resourceOperationKey(resource);
+    if (!beginOperation(operationKey)) return;
+    reconcileResourceEditor(resource);
+    reconcileResourceButtons(resource.id);
+    reconcileProjectSyncButton();
+    let owner = null;
     try {
+      if (!await confirmAction("Detach resource", `Detach ${resource.name} from this project?`, "Detach")) return;
+      owner = beginMutation($("#resource-dialog"));
       await request(`/portal/api/resources/${resource.id}`, { method: "DELETE", body: JSON.stringify({ version: resource.version }) });
-      if (!ownsMutation(owner)) return;
-      $("#resource-dialog").close();
-      state.editingResourceId = null;
-      showToast("Resource detached", "success");
-      await loadWorkspace({ silent: true });
+      if (ownsMutation(owner)) {
+        $("#resource-dialog").close();
+        state.editingResourceId = null;
+      }
+      state.staleEditors.add(`resource:${resource.id}`);
+      reconcileResourceButtons(resource.id);
+      if (state.selectedProjectId === resource.project_id && state.projectSwitchTargetId === null) {
+        await refreshAfterMutation("Resource detached", { projectId: resource.project_id });
+      }
     } catch (error) {
-      await handleMutationError(error, $("#resource-form"), owner);
+      await handleMutationError(error, $("#resource-form"), owner, { resourceId: resource.id, projectId: resource.project_id });
+    } finally {
+      endOperation(operationKey);
+      reconcileResourceButtons(resource.id);
+      reconcileProjectSyncButton();
+      if ($("#resource-dialog").open && state.editingResourceId === resource.id) reconcileResourceEditor(resource);
+    }
+  }
+
+  async function handleConnectionSubmit(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const editingConnectionId = state.editingConnectionId;
+    const connection = state.workspace?.connections.find((candidate) => candidate.id === editingConnectionId);
+    if (connection && connectionEditorBlocked(connection.id)) return;
+    syncConnectionCapabilityControls();
+    const payload = formPayload(form, Boolean(editingConnectionId));
+    payload.capabilities = $$('input[name="capabilities"]:checked', form).map((input) => input.value);
+    const version = Number(payload.version);
+    delete payload.id;
+    delete payload.version;
+    if (editingConnectionId) {
+      delete payload.provider;
+      payload.version = version;
+    }
+    const operationKey = connection ? connectionOperationKey(connection.id) : null;
+    if (operationKey && !beginOperation(operationKey)) return;
+    if (connection) {
+      reconcileConnectionEditor(connection);
+      reconcileConnectionButtons(connection.id);
+    }
+
+    try {
+      await withSubmitLock(form, async () => {
+        const owner = beginMutation(form.closest("dialog"));
+        try {
+          const path = editingConnectionId ? `/portal/api/connections/${editingConnectionId}` : "/portal/api/connections";
+          const method = editingConnectionId ? "PATCH" : "POST";
+          await request(path, { method, body: JSON.stringify(payload) });
+          const successMessage = editingConnectionId ? "Connection updated" : "Connection created";
+          if (ownsMutation(owner)) closeDialog(form);
+          if (connection) {
+            state.staleEditors.add(`connection:${connection.id}`);
+            reconcileConnectionButtons(connection.id);
+          }
+          if (state.projectSwitchTargetId === null) await refreshAfterMutation(successMessage);
+        } catch (error) {
+          await handleMutationError(error, form, owner, { connectionId: connection?.id });
+        }
+      });
+    } finally {
+      if (operationKey) endOperation(operationKey);
+      if (connection) reconcileConnectionButtons(connection.id);
+      if ($("#connection-dialog").open && state.editingConnectionId === connection?.id) reconcileConnectionEditor(connection);
+    }
+  }
+
+  async function handleConnectionDelete() {
+    const connection = state.workspace?.connections.find((candidate) => candidate.id === state.editingConnectionId);
+    if (!connection || connectionEditorBlocked(connection.id)) return;
+    const operationKey = connectionOperationKey(connection.id);
+    if (!beginOperation(operationKey)) return;
+    reconcileConnectionEditor(connection);
+    reconcileConnectionButtons(connection.id);
+    let owner = null;
+    let deleted = false;
+
+    try {
+      if (!await confirmAction("Delete connection", `Delete ${connection.name}?`, "Delete")) return;
+      owner = beginMutation($("#connection-dialog"));
+      await request(`/portal/api/connections/${connection.id}`, {
+        method: "DELETE",
+        body: JSON.stringify({ version: connection.version })
+      });
+      deleted = true;
+      if (ownsMutation(owner)) {
+        $("#connection-dialog").close();
+        state.editingConnectionId = null;
+      }
+    } catch (error) {
+      await handleMutationError(error, $("#connection-form"), owner, { connectionId: connection.id });
+    } finally {
+      if (deleted) {
+        state.staleEditors.add(`connection:${connection.id}`);
+        if (state.projectSwitchTargetId === null) await refreshAfterMutation("Connection deleted");
+      }
+      endOperation(operationKey);
+      reconcileConnectionButtons(connection.id);
+      if ($("#connection-dialog").open && state.editingConnectionId === connection.id) reconcileConnectionEditor(connection);
+    }
+  }
+
+  async function checkConnection(connectionId) {
+    const operationKey = connectionOperationKey(connectionId);
+    if (!beginOperation(operationKey)) return;
+    const returnFocus = captureWorkspaceFocus();
+    reconcileConnectionButtons(connectionId);
+    let checked = false;
+    try {
+      await request(`/portal/api/connections/${connectionId}/check`, { method: "POST" });
+      checked = true;
+    } catch (error) {
+      showToast(error.message, "error");
+    } finally {
+      state.staleEditors.add(`connection:${connectionId}`);
+      if (state.projectSwitchTargetId === null) {
+        if (checked) await refreshAfterMutation("Connection checked");
+        else await loadWorkspaceWithFeedback({ silent: true });
+      }
+      endOperation(operationKey);
+      reconcileConnectionButtons(connectionId);
+      restoreLostWorkspaceFocus(returnFocus);
+    }
+  }
+
+  async function syncResource(resourceId, dialog = null) {
+    const projectId = state.selectedProjectId;
+    const resource = selectedProject()?.resources.find((candidate) => candidate.id === resourceId);
+    if (!resource || selectedProject()?.status !== "active" || resourceActionBusy(resource)) return;
+    const operationKey = resourceOperationKey(resource);
+    if (!beginOperation(operationKey)) return;
+    const returnFocus = captureWorkspaceFocus();
+    const owner = dialog ? beginMutation(dialog) : null;
+    reconcileResourceButtons(resourceId);
+    reconcileProjectSyncButton();
+    if (dialog) reconcileResourceEditor();
+    let synchronized = false;
+    try {
+      await request(`/portal/api/resources/${resourceId}/sync`, { method: "POST" });
+      synchronized = true;
+      if (owner && ownsMutation(owner) && state.editingResourceId === resourceId) {
+        dialog.close();
+        state.editingResourceId = null;
+      }
+    } catch (error) {
+      if (state.selectedProjectId === projectId) showToast(error.message, "error");
+    } finally {
+      state.staleEditors.add(`resource:${resourceId}`);
+      if (state.selectedProjectId === projectId && state.projectSwitchTargetId === null) {
+        if (synchronized) await refreshAfterMutation("Resource synchronized", { projectId });
+        else await loadWorkspaceWithFeedback({ silent: true, projectId });
+      }
+      endOperation(operationKey);
+      reconcileResourceButtons(resourceId);
+      reconcileProjectSyncButton();
+      if (dialog?.open && state.editingResourceId === resourceId) reconcileResourceEditor();
+      restoreLostWorkspaceFocus(returnFocus);
+    }
+  }
+
+  async function syncProject() {
+    const project = selectedProject();
+    if (!project || project.status !== "active" || projectSyncBusy(project)) return;
+    const operationKey = projectSyncKey(project.id);
+    if (!beginOperation(operationKey)) return;
+    const returnFocus = captureWorkspaceFocus();
+    reconcileProjectSyncButton();
+    reconcileProjectResources(project.id);
+    let synchronized = false;
+    try {
+      await request(`/portal/api/projects/${project.id}/sync`, { method: "POST" });
+      synchronized = true;
+    } catch (error) {
+      if (state.selectedProjectId === project.id) showToast(projectSyncErrorMessage(error), "error");
+    } finally {
+      state.staleEditors.add(`project:${project.id}`);
+      if (state.selectedProjectId === project.id && state.projectSwitchTargetId === null) {
+        if (synchronized) await refreshAfterMutation("Project resources synchronized", { projectId: project.id });
+        else await loadWorkspaceWithFeedback({ silent: true, projectId: project.id });
+      }
+      endOperation(operationKey);
+      reconcileProjectSyncButton();
+      reconcileProjectResources(project.id);
+      restoreLostWorkspaceFocus(returnFocus);
+    }
+  }
+
+  async function switchProject(projectId) {
+    const previousProjectId = state.selectedProjectId;
+    const requestId = ++state.projectSwitchRequestId;
+    state.projectSwitchTargetId = projectId;
+    invalidateMutationContext();
+    $$('dialog[open]').forEach((dialog) => dialog.close());
+    closeDrawer();
+    $(".workspace-content").setAttribute("inert", "");
+    $("#project-switcher").setAttribute("aria-busy", "true");
+    $("#refresh-button").disabled = true;
+    $("#new-item-button").disabled = true;
+    $("#new-project-button").disabled = true;
+    $("#project-settings-button").disabled = true;
+
+    try {
+      const loaded = await loadWorkspace({ silent: true, projectId });
+      if (!loaded && requestId === state.projectSwitchRequestId) {
+        state.selectedProjectId = previousProjectId;
+        syncLocation();
+        renderWorkspace();
+      }
+    } catch (error) {
+      if (requestId !== state.projectSwitchRequestId) return;
+      state.selectedProjectId = previousProjectId;
+      syncLocation();
+      renderWorkspace();
+      showToast(error.message, "error");
+    } finally {
+      if (requestId === state.projectSwitchRequestId) {
+        state.projectSwitchTargetId = null;
+        $(".workspace-content").removeAttribute("inert");
+        $("#project-switcher").removeAttribute("aria-busy");
+        $("#refresh-button").disabled = false;
+        $("#new-project-button").disabled = false;
+      }
     }
   }
 
   async function loadWorkspaceWithFeedback(options) {
     try {
-      await loadWorkspace(options);
+      return await loadWorkspace(options);
     } catch (error) {
       showToast(error.message, "error");
+      return false;
+    }
+  }
+
+  async function refreshAfterMutation(successMessage, options = {}) {
+    try {
+      const loaded = await loadWorkspace({ silent: true, projectId: options.projectId ?? state.selectedProjectId });
+      if (loaded) showToast(successMessage, "success");
+      return loaded;
+    } catch (error) {
+      options.onFailure?.();
+      showToast(
+        `${successMessage}, but refreshing the workspace failed: ${error.message}. The change was saved; refresh the workspace to load it.`,
+        "error"
+      );
+      return false;
+    }
+  }
+
+  async function refreshWorkspaceInBackground(showErrors = false) {
+    if (state.backgroundRefreshPending || state.projectSwitchTargetId !== null) return false;
+    state.backgroundRefreshPending = true;
+    try {
+      if (showErrors) return await loadWorkspaceWithFeedback({ silent: true });
+      return await loadWorkspace({ silent: true }).catch(() => false);
+    } finally {
+      state.backgroundRefreshPending = false;
     }
   }
 
@@ -1286,12 +1988,12 @@
     bindEvents();
     const params = new URLSearchParams(window.location.search);
     state.selectedProjectId = params.get("project_id");
-    state.activeView = ["board", "activity", "resources"].includes(window.location.hash.slice(1)) ? window.location.hash.slice(1) : "board";
+    state.activeView = validViews.has(window.location.hash.slice(1)) ? window.location.hash.slice(1) : "board";
     renderNavigation();
     try {
       await loadWorkspace();
       window.setInterval(() => {
-        if (document.visibilityState === "visible" && !dialogOpen()) loadWorkspace({ silent: true }).catch(() => {});
+        if (document.visibilityState === "visible" && !dialogOpen()) refreshWorkspaceInBackground();
       }, 5_000);
     } catch (error) {
       showToast(error.message, "error");

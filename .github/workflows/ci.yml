@@ -38,10 +38,19 @@ jobs:
         with:
           elixir-version: 1.20.4
           otp-version: 29.0.6
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.27.0
+          cache-dependency-path: daemon/go.sum
       - run: mix deps.get
       - run: mix format --check-formatted
       - run: mix compile --warnings-as-errors
       - run: mix test
+      - name: Run provider broker end-to-end tests
+        timeout-minutes: 10
+        env:
+          SYMMETRY_PROVIDER_BROKER_E2E: "1"
+        run: mix test test/symmetry_control/provider_broker_e2e_test.exs
       - run: MIX_ENV=prod mix release --overwrite
 
   daemon:

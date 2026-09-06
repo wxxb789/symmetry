@@ -55,11 +55,17 @@ defmodule SymmetryControlWeb.Router do
     pipe_through :portal_api
 
     get "/workspace", PortalApiController, :workspace
+    post "/connections", PortalApiController, :create_connection
+    patch "/connections/:connection_id", PortalApiController, :update_connection
+    delete "/connections/:connection_id", PortalApiController, :delete_connection
+    post "/connections/:connection_id/check", PortalApiController, :check_connection
     post "/projects", PortalApiController, :create_project
     patch "/projects/:project_id", PortalApiController, :update_project
+    post "/projects/:project_id/sync", PortalApiController, :sync_project
     post "/projects/:project_id/resources", PortalApiController, :create_resource
     patch "/resources/:resource_id", PortalApiController, :update_resource
     delete "/resources/:resource_id", PortalApiController, :delete_resource
+    post "/resources/:resource_id/sync", PortalApiController, :sync_resource
     post "/projects/:project_id/work-items", PortalApiController, :create_work_item
     get "/work-items/:work_item_id", PortalApiController, :show_work_item
     get "/work-items/:work_item_id/timeline", PortalApiController, :work_item_timeline
@@ -81,6 +87,12 @@ defmodule SymmetryControlWeb.Router do
     pipe_through [:api, :enrollment]
 
     post "/machines", DaemonController, :enroll
+  end
+
+  scope "/api/v1", SymmetryControlWeb do
+    pipe_through :api
+
+    post "/provider-actions", ProviderActionController, :create, log: false
   end
 
   scope "/api/v1", SymmetryControlWeb do

@@ -2,7 +2,9 @@ defmodule SymmetryControl.WorkspacesTest do
   use SymmetryControl.DataCase, async: false
 
   alias SymmetryControl.Orchestration
+  alias SymmetryControl.Repo
   alias SymmetryControl.Workspaces
+  alias SymmetryControl.Workspaces.ProjectResource
 
   test "projects aggregate independent engineering resources and prioritized work items" do
     assert {:ok, project} =
@@ -112,6 +114,83 @@ defmodule SymmetryControl.WorkspacesTest do
     assert updated.blocker == "Linux integration test is failing"
   end
 
+  test "work item repository and CI bindings require the correct kind in the same project" do
+    project = project_fixture()
+
+    assert {:ok, repository} =
+             Workspaces.create_resource(project.id, %{kind: "repository", name: "Repository"})
+
+    assert {:ok, ci} =
+             Workspaces.create_resource(project.id, %{kind: "ci", name: "CI"})
+
+    assert {:ok, other_project} =
+             Workspaces.create_project(%{
+               name: "Other project",
+               key: "OTHER",
+               default_agent_profile: "codex",
+               default_workspace: "primary"
+             })
+
+    assert {:ok, other_ci} =
+             Workspaces.create_resource(other_project.id, %{kind: "ci", name: "Other CI"})
+
+    assert {:error, invalid_repository} =
+             Workspaces.create_work_item(project.id, %{
+               title: "Wrong repository kind",
+               repository_resource_id: ci.id
+             })
+
+    assert "must belong to the work item's project" in errors_on(invalid_repository).repository_resource_id
+
+    assert {:ok, item} =
+             Workspaces.create_work_item(project.id, %{
+               title: "Validate CI bindings",
+               repository_resource_id: repository.id
+             })
+
+    assert {:error, invalid_ci_kind} =
+             Workspaces.update_work_item(item.id, %{
+               version: item.lock_version,
+               ci_resource_id: repository.id
+             })
+
+    assert "must be a CI resource in the work item's project" in errors_on(invalid_ci_kind).ci_resource_id
+
+    assert {:error, cross_project_ci} =
+             Workspaces.update_work_item(item.id, %{
+               version: item.lock_version,
+               ci_resource_id: other_ci.id
+             })
+
+    assert "must be a CI resource in the work item's project" in errors_on(cross_project_ci).ci_resource_id
+  end
+
+  test "updates continue to reject unchanged resource bindings that became invalid" do
+    project = project_fixture()
+
+    assert {:ok, repository} =
+             Workspaces.create_resource(project.id, %{kind: "repository", name: "Repository"})
+
+    assert {:ok, item} =
+             Workspaces.create_work_item(project.id, %{
+               title: "Validate unchanged bindings",
+               repository_resource_id: repository.id
+             })
+
+    Repo.update_all(
+      from(resource in ProjectResource, where: resource.id == ^repository.id),
+      set: [kind: "ci"]
+    )
+
+    assert {:error, changeset} =
+             Workspaces.update_work_item(item.id, %{
+               version: item.lock_version,
+               title: "Still validate unchanged bindings"
+             })
+
+    assert "must belong to the work item's project" in errors_on(changeset).repository_resource_id
+  end
+
   test "launching an agent creates one durable task and links it to the work item" do
     project = project_fixture()
 
@@ -138,6 +217,7 @@ defmodule SymmetryControl.WorkspacesTest do
     assert first.task.task.input == %{
              "project_id" => project.id,
              "project_key" => project.key,
+             "provider_resource_ids" => [],
              "repository" => "acme/symmetry",
              "repository_resource_id" => nil,
              "work_item_id" => item.id,

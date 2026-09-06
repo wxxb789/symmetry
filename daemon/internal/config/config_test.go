@@ -133,6 +133,15 @@ func TestLoadRejectsInvalidLocalBindings(t *testing.T) {
 			wantField: "agent_profiles.default",
 		},
 		{
+			name: "provider access with goal input mode",
+			mutate: func(value map[string]any) {
+				profile := value["agent_profiles"].(map[string]any)["default"].(map[string]any)
+				profile["provider_access"] = true
+				profile["input_mode"] = "goal"
+			},
+			wantField: "agent_profiles.default",
+		},
+		{
 			name: "unknown event format",
 			mutate: func(value map[string]any) {
 				value["agent_profiles"].(map[string]any)["default"].(map[string]any)["event_format"] = "shell"

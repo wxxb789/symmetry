@@ -1388,7 +1388,7 @@ func registerRuntime(t *testing.T, client *control.Client, machineID, runtimeKey
 	response, err := client.RegisterSession(context.Background(), machineID, mustID(t), protocol.SessionRegistrationRequest{
 		Runtimes: []protocol.RuntimeRegistration{{
 			RuntimeKey: runtimeKey, Name: runtimeKey, Capacity: 1,
-			AgentProfile: profile, Workspace: workspace, Capabilities: json.RawMessage(`{}`),
+			AgentProfile: profile, Workspace: workspace, Capabilities: protocol.RuntimeCapabilities{},
 		}},
 	})
 	if err != nil {

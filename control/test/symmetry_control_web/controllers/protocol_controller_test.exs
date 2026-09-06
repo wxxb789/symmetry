@@ -229,6 +229,46 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
     )
   end
 
+  test "session validates structured input and provider access capabilities", %{conn: conn} do
+    {machine_id, machine_token} = enroll(conn)
+
+    base_runtime = %{
+      "runtime_key" => "capability-contract",
+      "name" => "Capability contract",
+      "capacity" => 1,
+      "agent_profile" => "codex",
+      "workspace" => "primary"
+    }
+
+    for capabilities <- [
+          %{"provider_access" => true},
+          %{"structured_input" => false, "provider_access" => true},
+          %{"structured_input" => "true", "provider_access" => true},
+          %{"structured_input" => true, "provider_access" => "true"}
+        ] do
+      assert_error(
+        bearer(conn, machine_token)
+        |> put("/api/v1/machines/#{machine_id}/sessions/#{uuid()}", %{
+          "runtimes" => [Map.put(base_runtime, "capabilities", capabilities)]
+        }),
+        400,
+        "invalid_request"
+      )
+    end
+
+    assert %{"runtimes" => [_runtime]} =
+             bearer(conn, machine_token)
+             |> put("/api/v1/machines/#{machine_id}/sessions/#{uuid()}", %{
+               "runtimes" => [
+                 Map.put(base_runtime, "capabilities", %{
+                   "structured_input" => true,
+                   "provider_access" => true
+                 })
+               ]
+             })
+             |> json_response(200)
+  end
+
   test "session response advertises the configured lease duration", %{conn: conn} do
     {machine_id, machine_token} = enroll(conn)
 
@@ -414,6 +454,20 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
              |> put_req_header("idempotency-key", "empty-input")
              |> post("/api/v1/tasks", %{"work" => explicit_empty_input})
              |> json_response(201)
+  end
+
+  test "public task creation rejects server-owned work fields", %{conn: conn} do
+    for field <- ["required_capabilities", "unknown"] do
+      assert_error(
+        bearer(conn, @operator_token)
+        |> put_req_header("idempotency-key", "server-owned-#{field}")
+        |> post("/api/v1/tasks", %{
+          "work" => Map.put(work_payload(), field, %{"provider_access" => true})
+        }),
+        400,
+        "invalid_request"
+      )
+    end
   end
 
   test "a stale fence on the lease resource returns ownership_lost", %{conn: conn} do

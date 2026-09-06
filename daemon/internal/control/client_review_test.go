@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -30,6 +31,17 @@ func TestClaimRejectsUntrustedResponses(t *testing.T) {
 		{name: "missing task ID", response: claimResponse(`"task_id":""`)},
 		{name: "missing lease token", response: claimResponse(`"lease_token":""`)},
 		{name: "missing lease expiry", response: claimResponse(`"lease_expires_at":null`)},
+		{name: "null provider access", response: claimResponse(`"provider_access":null`)},
+		{name: "invalid provider path", response: claimResponse(`"provider_access":{"path":"/api/v1/other","token":"provider-token","grants":[{"resource_id":"resource-1","provider":"github","kind":"repository","operations":["resource.sync"]}]}`)},
+		{name: "missing provider token", response: claimResponse(`"provider_access":{"path":"/api/v1/provider-actions","token":"","grants":[{"resource_id":"resource-1","provider":"github","kind":"repository","operations":["resource.sync"]}]}`)},
+		{name: "empty provider grants", response: claimResponse(`"provider_access":{"path":"/api/v1/provider-actions","token":"provider-token","grants":[]}`)},
+		{name: "missing grant resource", response: claimResponse(`"provider_access":{"path":"/api/v1/provider-actions","token":"provider-token","grants":[{"resource_id":"","provider":"github","kind":"repository","operations":["resource.sync"]}]}`)},
+		{name: "unknown grant provider", response: claimResponse(`"provider_access":{"path":"/api/v1/provider-actions","token":"provider-token","grants":[{"resource_id":"resource-1","provider":"gitlab","kind":"repository","operations":["resource.sync"]}]}`)},
+		{name: "unknown grant kind", response: claimResponse(`"provider_access":{"path":"/api/v1/provider-actions","token":"provider-token","grants":[{"resource_id":"resource-1","provider":"github","kind":"issue","operations":["resource.sync"]}]}`)},
+		{name: "empty grant operations", response: claimResponse(`"provider_access":{"path":"/api/v1/provider-actions","token":"provider-token","grants":[{"resource_id":"resource-1","provider":"github","kind":"repository","operations":[]}]}`)},
+		{name: "unknown grant operation", response: claimResponse(`"provider_access":{"path":"/api/v1/provider-actions","token":"provider-token","grants":[{"resource_id":"resource-1","provider":"github","kind":"repository","operations":["repository.delete"]}]}`)},
+		{name: "change operation on CI grant", response: claimResponse(`"provider_access":{"path":"/api/v1/provider-actions","token":"provider-token","grants":[{"resource_id":"resource-1","provider":"azure_devops","kind":"ci","operations":["change.update"]}]}`)},
+		{name: "duplicate grant operation", response: claimResponse(`"provider_access":{"path":"/api/v1/provider-actions","token":"provider-token","grants":[{"resource_id":"resource-1","provider":"github","kind":"repository","operations":["resource.sync","resource.sync"]}]}`)},
 	}
 
 	for _, test := range tests {
@@ -42,6 +54,23 @@ func TestClaimRejectsUntrustedResponses(t *testing.T) {
 				t.Fatalf("error = %v, want invalid claim response", err)
 			}
 		})
+	}
+}
+
+func TestClaimDecodesProviderAccess(t *testing.T) {
+	server := jsonServer(t, http.StatusOK, claimResponse(`"provider_access":{"path":"/api/v1/provider-actions","token":"provider-token","grants":[{"resource_id":"resource-1","provider":"github","kind":"repository","operations":["resource.sync","change.upsert"]},{"resource_id":"resource-2","provider":"azure_devops","kind":"ci","operations":["resource.sync"]}]}`), nil)
+	defer server.Close()
+	client := mustMachineClient(t, server)
+	response, err := client.Claim(context.Background(), "run-1", protocol.ClaimRequest{RuntimeID: "runtime-1", RuntimeEpoch: 3, Generation: 2, ClaimID: "claim-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	access := response.ProviderAccess
+	if access == nil || access.Path != "/api/v1/provider-actions" || access.Token != "provider-token" || len(access.Grants) != 2 {
+		t.Fatalf("provider access = %#v", access)
+	}
+	if grant := access.Grants[1]; grant.ResourceID != "resource-2" || grant.Provider != "azure_devops" || grant.Kind != "ci" || !slices.Equal(grant.Operations, []string{"resource.sync"}) {
+		t.Fatalf("second grant = %#v", grant)
 	}
 }
 

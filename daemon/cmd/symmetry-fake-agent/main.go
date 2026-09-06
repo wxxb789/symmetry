@@ -10,10 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -70,6 +72,8 @@ func run(input io.Reader, output io.Writer, errorOutput io.Writer) error {
 		return runFailOnceThenEvidenceSuccess(envelope.Input, output, errorOutput)
 	case "inspect_input":
 		return runInspectInput(envelope.Input, output)
+	case "provider_action_flow":
+		return runProviderActionFlow(envelope, output)
 	case "json_values":
 		return runJSONValues(output)
 	case "fail":
@@ -88,6 +92,115 @@ func run(input io.Reader, output io.Writer, errorOutput io.Writer) error {
 	default:
 		return fmt.Errorf("unsupported fake-agent mode %q", mode)
 	}
+}
+
+func runProviderActionFlow(envelope protocol.AgentInputRecord, output io.Writer) error {
+	if envelope.ProviderAccess == nil {
+		return errors.New("provider_action_flow requires provider_access")
+	}
+
+	grant, err := changeGrant(envelope.ProviderAccess.Grants)
+	if err != nil {
+		return err
+	}
+	workItemID, err := requiredInputString(envelope.Input, "work_item_id")
+	if err != nil {
+		return err
+	}
+
+	if err := writeProgress(output, "provider_action_started"); err != nil {
+		return err
+	}
+	for _, action := range []struct {
+		operation string
+		input     map[string]any
+	}{
+		{operation: "change.upsert", input: map[string]any{"title": "Provider broker end-to-end"}},
+		{operation: "resource.sync", input: map[string]any{}},
+	} {
+		if err := postProviderAction(
+			envelope.ProviderAccess,
+			grant.ResourceID,
+			action.operation,
+			actionID(workItemID+":"+grant.ResourceID+":"+action.operation),
+			action.input,
+		); err != nil {
+			return err
+		}
+	}
+	for _, grant := range envelope.ProviderAccess.Grants {
+		if grant.Kind != "ci" || !slices.Contains(grant.Operations, "resource.sync") {
+			continue
+		}
+		if err := postProviderAction(
+			envelope.ProviderAccess,
+			grant.ResourceID,
+			"resource.sync",
+			actionID(workItemID+":"+grant.ResourceID+":resource.sync"),
+			map[string]any{},
+		); err != nil {
+			return err
+		}
+	}
+	return writeProgress(output, "provider_action_completed")
+}
+
+func changeGrant(grants []protocol.ProviderGrant) (protocol.ProviderGrant, error) {
+	for _, grant := range grants {
+		if grant.Kind == "repository" && slices.Contains(grant.Operations, "change.upsert") && slices.Contains(grant.Operations, "resource.sync") {
+			return grant, nil
+		}
+	}
+	return protocol.ProviderGrant{}, errors.New("provider_action_flow requires a repository change grant")
+}
+
+func postProviderAction(access *protocol.ProviderAccess, resourceID, operation, actionID string, input map[string]any) error {
+	body, err := json.Marshal(map[string]any{
+		"action_id":   actionID,
+		"resource_id": resourceID,
+		"operation":   operation,
+		"input":       input,
+	})
+	if err != nil {
+		return fmt.Errorf("encode provider action: %w", err)
+	}
+
+	request, err := http.NewRequest(http.MethodPost, access.Path, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create provider action request: %w", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+access.Token)
+	request.Header.Set("Content-Type", "application/json")
+
+	response, err := (&http.Client{Timeout: 5 * time.Second}).Do(request)
+	if err != nil {
+		return fmt.Errorf("execute provider action %s: %w", operation, err)
+	}
+	defer response.Body.Close()
+	_, _ = io.Copy(io.Discard, response.Body)
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return fmt.Errorf("provider action %s returned HTTP %d", operation, response.StatusCode)
+	}
+	return nil
+}
+
+func requiredInputString(input json.RawMessage, key string) (string, error) {
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal(input, &values); err != nil {
+		return "", fmt.Errorf("decode provider action input: %w", err)
+	}
+	value, found, err := stringField(values, key)
+	if err != nil || !found {
+		return "", errors.New("provider_action_flow requires " + key)
+	}
+	return value, nil
+}
+
+func actionID(seed string) string {
+	digest := sha256.Sum256([]byte(seed))
+	digest[6] = (digest[6] & 0x0f) | 0x50
+	digest[8] = (digest[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", digest[0:4], digest[4:6], digest[6:8], digest[8:10], digest[10:16])
 }
 
 func runSuccess(output io.Writer) error {

@@ -2,7 +2,7 @@ defmodule SymmetryControlWeb.PortalJSON do
   @moduledoc false
 
   alias SymmetryControl.Orchestration.Task
-  alias SymmetryControl.Workspaces.ProjectResource
+  alias SymmetryControl.Workspaces.{ProjectResource, WorkItem}
   alias SymmetryControlWeb.Protocol
 
   def workspace(model) do
@@ -11,10 +11,27 @@ defmodule SymmetryControlWeb.PortalJSON do
     %{
       selected_project_id: snapshot.selected_project && snapshot.selected_project.id,
       projects: Enum.map(snapshot.projects, &project(&1, model.projections)),
+      connections: Enum.map(model.connections, &connection/1),
       runtimes: Enum.map(model.runtimes, &Protocol.runtime/1),
       registered_runtimes: Enum.map(model.registered_runtimes, &Protocol.runtime/1),
       activity: Enum.map(model.activity, &activity_entry/1),
       health: model.health
+    }
+  end
+
+  def connection(connection) do
+    %{
+      id: connection.id,
+      provider: connection.provider,
+      name: connection.name,
+      account_ref: connection.account_ref,
+      auth_type: connection.auth_type,
+      capabilities: connection.capabilities,
+      status: connection.status,
+      status_message: connection.status_message,
+      metadata: connection.metadata,
+      last_checked_at: iso8601(connection.last_checked_at),
+      version: connection.lock_version
     }
   end
 
@@ -37,6 +54,7 @@ defmodule SymmetryControlWeb.PortalJSON do
     %{
       id: resource.id,
       project_id: resource.project_id,
+      connection_id: resource.connection_id,
       kind: resource.kind,
       name: resource.name,
       provider: resource.provider,
@@ -73,15 +91,19 @@ defmodule SymmetryControlWeb.PortalJSON do
       blocker: work_item.blocker,
       repository_resource_id: work_item.repository_resource_id,
       repository: repository_label(work_item),
+      ci_resource_id: work_item.ci_resource_id,
+      ci_resource: resource_label(work_item.ci_resource),
       branch: work_item.branch,
       pull_request_url: delivery.pull_request.url,
       ci_status: delivery.ci.status,
       review_status: delivery.review.status,
       delivery: delivery,
+      external: external_work_item(work_item),
       version: work_item.lock_version,
       can_start:
         is_nil(work_item.orchestration_task_id) and work_item.assignee_type == "agent" and
-          work_item.status in ["backlog", "ready"] and project_active?(work_item.project),
+          work_item.status in ["backlog", "ready"] and project_active?(work_item.project) and
+          WorkItem.external_work_available?(work_item),
       execution: execution,
       updated_at: iso8601(work_item.updated_at)
     }
@@ -173,7 +195,12 @@ defmodule SymmetryControlWeb.PortalJSON do
   defp retry_capability(nil, _work_item), do: nil
 
   defp retry_capability(execution, work_item) do
-    Map.update!(execution, :can_retry, &(&1 and work_item.assignee_type == "agent"))
+    Map.update!(
+      execution,
+      :can_retry,
+      &(&1 and work_item.assignee_type == "agent" and
+          WorkItem.external_work_available?(work_item))
+    )
   end
 
   defp execution_timing(task, run) do
@@ -241,14 +268,77 @@ defmodule SymmetryControlWeb.PortalJSON do
     %{
       pull_request:
         effective_delivery(
+          work_item.external_pull_request_url,
           work_item.pull_request_url,
           evidence && evidence.pull_request,
           :url,
-          nil
+          nil,
+          delivery_context(work_item, change_provider(work_item), :change)
+        )
+        |> provider_pull_request_state(work_item),
+      ci:
+        effective_delivery(
+          work_item.external_ci_status,
+          work_item.ci_status,
+          evidence && evidence.ci,
+          :status,
+          "unknown",
+          delivery_context(work_item, ci_provider(work_item), :ci)
         ),
-      ci: effective_delivery(work_item.ci_status, evidence && evidence.ci, :status, "unknown"),
       review:
-        effective_delivery(work_item.review_status, evidence && evidence.review, :status, "none")
+        effective_delivery(
+          work_item.external_review_status,
+          work_item.review_status,
+          evidence && evidence.review,
+          :status,
+          "none",
+          delivery_context(work_item, change_provider(work_item), :change)
+        )
+    }
+  end
+
+  defp effective_delivery(provider_value, _manual_value, _agent_value, field, fallback, context)
+       when is_binary(provider_value) and provider_value != "" do
+    %{
+      value: provider_value,
+      source: "provider",
+      provider: context.provider,
+      generation: nil,
+      recorded_at: iso8601(context.recorded_at)
+    }
+    |> Map.put(field, provider_value)
+    |> normalize_delivery(fallback)
+  end
+
+  defp effective_delivery(
+         _provider_value,
+         manual_value,
+         agent_value,
+         field,
+         fallback,
+         _context
+       ),
+       do: effective_delivery(manual_value, agent_value, field, fallback)
+
+  defp external_work_item(%{external_work_item_resource_id: nil}), do: nil
+
+  defp external_work_item(work_item) do
+    %{
+      provider: work_item.external_provider,
+      id: work_item.external_id,
+      url: work_item.external_url,
+      state: work_item.external_state,
+      available: work_item.external_available,
+      assignee: work_item.external_assignee_name,
+      labels: work_item.labels,
+      updated_at: iso8601(work_item.external_updated_at),
+      resource_id: work_item.external_work_item_resource_id,
+      data: work_item.external_data,
+      delivery_data: %{
+        change: work_item.external_change_data,
+        ci: work_item.external_ci_data
+      },
+      provider_owned_fields: ["title", "description", "priority", "state", "labels", "assignee"]
     }
   end
 
@@ -286,6 +376,34 @@ defmodule SymmetryControlWeb.PortalJSON do
     case work_item.repository_resource do
       %ProjectResource{} = resource -> resource.external_ref || resource.name
       _not_loaded_or_missing -> work_item.repository
+    end
+  end
+
+  defp resource_label(%ProjectResource{} = resource), do: resource.external_ref || resource.name
+  defp resource_label(_not_loaded_or_missing), do: nil
+
+  defp delivery_context(work_item, provider, :change),
+    do: %{provider: provider, recorded_at: work_item.external_change_updated_at}
+
+  defp delivery_context(work_item, provider, :ci),
+    do: %{provider: provider, recorded_at: work_item.external_ci_updated_at}
+
+  defp provider_pull_request_state(%{source: "provider"} = delivery, work_item),
+    do: Map.put(delivery, :status, work_item.external_pull_request_state || "unknown")
+
+  defp provider_pull_request_state(delivery, _work_item), do: delivery
+
+  defp change_provider(work_item) do
+    case work_item.repository_resource do
+      %ProjectResource{provider: provider} when is_binary(provider) -> provider
+      _not_loaded_or_missing -> work_item.external_provider
+    end
+  end
+
+  defp ci_provider(work_item) do
+    case work_item.ci_resource do
+      %ProjectResource{provider: provider} when is_binary(provider) -> provider
+      _not_loaded_or_missing -> change_provider(work_item)
     end
   end
 

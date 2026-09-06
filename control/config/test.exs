@@ -38,6 +38,11 @@ config :symmetry_control, :orchestration,
   reaper_enabled: false,
   scheduler_enabled: false
 
+config :symmetry_control, :integrations,
+  syncer_enabled: false,
+  sync_interval_ms: 300_000,
+  provider_action_recovery_interval_ms: :infinity
+
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime
 

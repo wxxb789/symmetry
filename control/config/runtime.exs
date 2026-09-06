@@ -35,6 +35,12 @@ if config_env() != :test do
   enrollment_token = token.("SYMMETRY_ENROLLMENT_TOKEN", "development-enrollment-token")
   operator_token = token.("SYMMETRY_OPERATOR_TOKEN", "development-operator-token")
 
+  integration_sync_interval_ms =
+    case Integer.parse(System.get_env("SYMMETRY_INTEGRATION_SYNC_INTERVAL_MS", "300000")) do
+      {value, ""} when value >= 30_000 -> value
+      _ -> raise "SYMMETRY_INTEGRATION_SYNC_INTERVAL_MS must be at least 30000"
+    end
+
   lease_duration_ms =
     case Integer.parse(System.get_env("SYMMETRY_LEASE_DURATION_MS", "120000")) do
       {value, ""} when value >= 30_000 -> value
@@ -59,6 +65,10 @@ if config_env() != :test do
       String.to_integer(System.get_env("SYMMETRY_PORTAL_SESSION_MAX_AGE_SECONDS", "28800")),
     reaper_enabled: true,
     scheduler_enabled: true
+
+  config :symmetry_control, :integrations,
+    syncer_enabled: true,
+    sync_interval_ms: integration_sync_interval_ms
 end
 
 if config_env() == :prod do
