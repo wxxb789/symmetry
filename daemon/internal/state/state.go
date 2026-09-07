@@ -120,6 +120,7 @@ type RunJournal struct {
 	Work                           protocol.Work                     `json:"work"`
 	WorkspacePath                  string                            `json:"workspace_path"`
 	WorkspaceRecoveryRequired      bool                              `json:"workspace_recovery_required,omitempty"`
+	RetainWorkspace                bool                              `json:"retain_workspace,omitempty"`
 	WorkspaceBindingKey            string                            `json:"workspace_binding_key"`
 	PID                            int                               `json:"pid"`
 	ProcessIdentity                string                            `json:"process_identity"`
@@ -130,6 +131,7 @@ type RunJournal struct {
 	AttemptedTransitionIDs         []string                          `json:"attempted_transition_ids,omitempty"`
 	PendingCommandAcknowledgements []protocol.CommandAcknowledgement `json:"pending_command_acknowledgements"`
 	InputCommandIntent             *InputCommandIntent               `json:"input_command_intent,omitempty"`
+	ControlCommandIntents          []ControlCommandIntent            `json:"control_command_intents,omitempty"`
 }
 
 // InputCommandIntent is the durable at-most-once record for one provide_input
@@ -581,6 +583,15 @@ func (store *Store) QueueEvent(key RunKey, event protocol.RunEvent) (RunJournal,
 	})
 }
 
+// QueueNextEvent assigns sequence under the same lock as control receipts, so
+// concurrent stdin failures cannot invalidate an output event's sequence.
+func (store *Store) QueueNextEvent(key RunKey, event protocol.RunEvent) (RunJournal, error) {
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		event.Sequence = journal.LastEventSequence + 1
+		return appendEvent(journal, event, "event is invalid")
+	})
+}
+
 // QueueWaitingForInput atomically records a waiting event and the associated
 // lifecycle transition. Repeated waiting records refresh an undelivered
 // transition's payload without creating a second transition.
@@ -589,6 +600,10 @@ func (store *Store) QueueWaitingForInput(key RunKey, event protocol.RunEvent, tr
 		event.Sequence = journal.LastEventSequence + 1
 		if event.Kind != "waiting_for_input" {
 			return errors.New("waiting event is invalid")
+		}
+		if journal.LocalState == "paused" {
+			event.Kind = "agent_event"
+			return appendEvent(journal, event, "waiting event is invalid")
 		}
 		if journal.LocalState == "terminal_pending" || hasPendingTerminalTransition(journal.PendingTransitions) {
 			return appendEvent(journal, event, "waiting event is invalid")
@@ -718,7 +733,8 @@ func (store *Store) CompleteProvideInput(key RunKey, commandID, payloadDigest, o
 			return nil
 		}
 		if outcome == "applied" && journal.LocalState == "waiting_for_input" {
-			prepared, err := prepareTransition(journal, protocol.StateTransitionRequest{TransitionID: intent.RunningTransitionID, State: "running", Payload: json.RawMessage(`{}`)})
+			payload, _ := json.Marshal(map[string]string{"command_id": intent.CommandID})
+			prepared, err := prepareTransition(journal, protocol.StateTransitionRequest{TransitionID: intent.RunningTransitionID, State: "running", Payload: payload})
 			if err != nil {
 				return err
 			}
@@ -834,11 +850,17 @@ func (store *Store) ResolveTerminalForCleanup(key RunKey, verdict string, resolv
 			journal.TerminalVerdict = verdict
 			journal.TerminalResolvedAt = resolvedAt
 		}
+		// Retention may have failed before mandatory fencing. Preserve the
+		// durable supervisory evidence before retiring unreachable intents.
+		if journal.TerminalState != "completed" && len(journal.ControlCommandIntents) != 0 {
+			journal.RetainWorkspace = true
+		}
 		journal.PendingEvents = nil
 		journal.PendingTransitions = nil
 		journal.AttemptedTransitionIDs = nil
 		journal.PendingCommandAcknowledgements = nil
 		journal.InputCommandIntent = nil
+		journal.ControlCommandIntents = nil
 		journal.LocalState = "cleanup_pending"
 		return nil
 	})
@@ -861,12 +883,18 @@ func (store *Store) EnterCleanupPending(key RunKey) (RunJournal, error) {
 			return errors.New("input command receipt is not delivered")
 		}
 		if journal.TerminalVerdict == TerminalVerdictAccepted {
+			for _, intent := range journal.ControlCommandIntents {
+				if intent.Outcome == "" || !intent.AcknowledgementDelivered {
+					return errors.New("control command receipt is not delivered")
+				}
+			}
 			if len(journal.PendingTransitions) != 0 || len(journal.PendingCommandAcknowledgements) != 0 {
 				return errors.New("accepted terminal delivery is incomplete")
 			}
 		} else {
 			journal.PendingTransitions = nil
 			journal.PendingCommandAcknowledgements = nil
+			journal.ControlCommandIntents = nil
 		}
 		journal.PendingEvents = nil
 		journal.AttemptedTransitionIDs = nil
@@ -929,6 +957,15 @@ func (store *Store) MarkCommandAcknowledgementsDelivered(key RunKey, acknowledge
 			}
 			journal.InputCommandIntent.AcknowledgementDelivered = true
 		}
+		for index := range journal.ControlCommandIntents {
+			intent := &journal.ControlCommandIntents[index]
+			if slices.Contains(acknowledgementIDs, intent.AckID) {
+				if intent.Outcome == "" {
+					return errors.New("control command acknowledgement is unresolved")
+				}
+				intent.AcknowledgementDelivered = true
+			}
+		}
 		return nil
 	})
 }
@@ -984,6 +1021,9 @@ func queueTerminalTransition(journal *RunJournal, transition protocol.StateTrans
 	if err := settleUnresolvedInputCommand(journal); err != nil {
 		return err
 	}
+	if err := settleUnresolvedControlCommands(journal); err != nil {
+		return err
+	}
 	if journal.TerminalVerdict != "" {
 		return errors.New("terminal verdict is already recorded")
 	}
@@ -995,6 +1035,7 @@ func queueTerminalTransition(journal *RunJournal, transition protocol.StateTrans
 		return errors.New("terminal transition state is invalid")
 	}
 	if prepared.State == "cancelled" {
+		journal.RetainWorkspace = true
 		journal.PendingTransitions = []protocol.StateTransitionRequest{prepared}
 		journal.AttemptedTransitionIDs = retainAttemptedTransitions(journal.AttemptedTransitionIDs, journal.PendingTransitions)
 		setTerminalPending(journal, pendingAt, prepared.State)
@@ -1386,6 +1427,9 @@ func validateJournal(journal RunJournal) error {
 		if intent.Outcome != "" && intent.AcknowledgementDelivered == pending {
 			return errors.New("input command acknowledgement delivery is invalid")
 		}
+	}
+	if err := validateControlCommandIntents(journal); err != nil {
+		return err
 	}
 	return nil
 }

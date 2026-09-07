@@ -5,7 +5,7 @@ defmodule SymmetryControl.Workspaces.ReadModel do
 
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Integrations
-  alias SymmetryControl.Orchestration.{Command, Run, RunEvent, RunTransition, Task}
+  alias SymmetryControl.Orchestration.{Command, Run, RunEvent, RunTransition, Runtime, Task}
   alias SymmetryControl.Repo
   alias SymmetryControl.Workspaces
 
@@ -13,6 +13,7 @@ defmodule SymmetryControl.Workspaces.ReadModel do
   @semantic_kinds [
     "progress",
     "summary",
+    "rationale",
     "finding",
     "artifact",
     "test",
@@ -63,6 +64,7 @@ defmodule SymmetryControl.Workspaces.ReadModel do
       runs = current_runs(task_ids)
       commands = latest_commands(task_ids)
       waiting = waiting_contexts(tasks, runs)
+      controls = controls(tasks, runs)
       evidence = evidence(task_ids)
 
       Map.new(task_ids, fn task_id ->
@@ -74,7 +76,8 @@ defmodule SymmetryControl.Workspaces.ReadModel do
              task: task,
              run: Map.get(runs, task_id),
              waiting: Map.get(waiting, task_id),
-             latest_command: Map.get(commands, task_id)
+             latest_command: Map.get(commands, task_id),
+             controls: Map.fetch!(controls, task_id)
            },
            evidence:
              Map.get(
@@ -85,6 +88,38 @@ defmodule SymmetryControl.Workspaces.ReadModel do
          }}
       end)
     end
+  end
+
+  defp controls(tasks, runs) do
+    runtime_ids = runs |> Map.values() |> Enum.map(& &1.runtime_id) |> Enum.uniq()
+    run_ids = runs |> Map.values() |> Enum.map(& &1.id)
+
+    runtimes =
+      Repo.all(from runtime in Runtime, where: runtime.id in ^runtime_ids)
+      |> Map.new(&{&1.id, &1})
+
+    pending =
+      Repo.all(
+        from command in Command,
+          where:
+            command.run_id in ^run_ids and command.kind in ["pause", "resume"] and
+              command.state in ["pending", "applied"],
+          select: command.run_id
+      )
+      |> MapSet.new()
+
+    Map.new(tasks, fn {id, task} ->
+      run = Map.get(runs, id)
+      runtime = run && Map.get(runtimes, run.runtime_id)
+
+      {id,
+       Orchestration.control_capabilities(
+         task,
+         run,
+         runtime,
+         not is_nil(run) and MapSet.member?(pending, run.id)
+       )}
+    end)
   end
 
   defp current_runs(task_ids) do
@@ -144,8 +179,17 @@ defmodule SymmetryControl.Workspaces.ReadModel do
         transition_id = Map.fetch!(tasks, run.task_id).waiting_transition_id
         transition = Map.get(transitions, transition_id)
         event = Map.get(events, transition_id)
-        payload = if event, do: event.payload, else: transition && transition.payload
-        recorded_at = if event, do: event.inserted_at, else: transition && transition.inserted_at
+        authoritative_packet? = transition && value(transition.payload, "decision")
+
+        payload =
+          if event && !authoritative_packet?,
+            do: event.payload,
+            else: transition && transition.payload
+
+        recorded_at =
+          if event && !authoritative_packet?,
+            do: event.inserted_at,
+            else: transition && transition.inserted_at
 
         {run.task_id,
          if transition do
@@ -154,6 +198,7 @@ defmodule SymmetryControl.Workspaces.ReadModel do
              generation: run.generation,
              transition_id: transition.transition_id,
              question: value(payload, "question"),
+             decision: value(payload, "decision"),
              payload: payload || %{},
              recorded_at: recorded_at
            }
@@ -162,14 +207,31 @@ defmodule SymmetryControl.Workspaces.ReadModel do
     end
   end
 
+  def evidence_for_run(%Run{id: run_id, task_id: task_id, generation: generation}) do
+    from(event in RunEvent,
+      join: run in Run,
+      on: run.id == event.run_id,
+      where: run.id == ^run_id and run.task_id == ^task_id and run.generation == ^generation
+    )
+    |> project_evidence()
+    |> Map.get(task_id, generation |> empty_evidence() |> finalize_evidence())
+  end
+
   defp evidence(task_ids) do
+    from(event in RunEvent,
+      join: run in Run,
+      on: run.id == event.run_id,
+      join: task in Task,
+      on: task.id == run.task_id and task.attempt_generation == run.generation,
+      where: task.id in ^task_ids
+    )
+    |> project_evidence()
+  end
+
+  defp project_evidence(query) do
     Repo.all(
-      from event in RunEvent,
-        join: run in Run,
-        on: run.id == event.run_id,
-        join: task in Task,
-        on: task.id == run.task_id and task.attempt_generation == run.generation,
-        where: task.id in ^task_ids and event.kind in ^@semantic_kinds,
+      from [event, run] in query,
+        where: event.kind in ^@semantic_kinds,
         order_by: [
           asc: run.generation,
           asc: event.sequence,
@@ -388,6 +450,7 @@ defmodule SymmetryControl.Workspaces.ReadModel do
   end
 
   defp activity_rank("waiting_for_input"), do: 0
+  defp activity_rank("paused"), do: 0
   defp activity_rank(state) when state in @active_states, do: 1
   defp activity_rank("failed"), do: 2
   defp activity_rank(_state), do: 3
@@ -459,7 +522,7 @@ defmodule SymmetryControl.Workspaces.ReadModel do
 
     cond do
       Enum.any?(states, &(&1 == "failed")) -> "fault"
-      Enum.any?(states, &(&1 == "waiting_for_input")) -> "waiting"
+      Enum.any?(states, &(&1 in ["waiting_for_input", "paused"])) -> "waiting"
       Enum.any?(states, &(&1 in @active_states)) -> "active"
       true -> "idle"
     end

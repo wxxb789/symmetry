@@ -15,6 +15,12 @@ and CI resources, and refresh pull-request, review, and pipeline state without
 persisting provider tokens or passing them to execution daemons. See
 [`docs/goal-03-runbook.md`](docs/goal-03-runbook.md).
 
+Chat at `/portal#chat` provides workspace, project, and run conversations. Start
+work, inspect progress, deliver durable guidance, answer consequential decisions,
+and pause/resume or cancel compatible agents. Ordinary questions use recorded
+evidence without interrupting execution. See
+[`docs/goal-04-runbook.md`](docs/goal-04-runbook.md).
+
 ## Architecture
 
 The repository is a small monorepo with two independently deployable services:
@@ -71,7 +77,9 @@ acknowledgement authentication, are in
 [`docs/protocol-v1.md`](docs/protocol-v1.md).
 
 The operator API creates tasks at `POST /api/v1/tasks` and creates durable
-cancel or input instructions at `POST /api/v1/tasks/{task_id}/commands`. Both
+cancel, input, guidance, pause, or resume instructions at
+`POST /api/v1/tasks/{task_id}/commands`. Supervisory controls require a compatible
+runtime and an explicit generation. Both
 write operations require `Idempotency-Key`; task commands return command
 resources rather than task snapshots. See the runbook for curl examples and
 the protocol document for response and status semantics.

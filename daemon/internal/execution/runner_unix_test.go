@@ -19,7 +19,9 @@ func TestTerminatedZeroExitIsNotSuccessfulOnUnix(t *testing.T) {
 	sink := &recordingSink{notify: make(chan struct{}, 1)}
 	invocation := helperInvocation("unused")
 	invocation.Args = []string{"-test.run=^TestUnixTerminationHelper$"}
-	invocation.Env = append(minimalEnvironment(), "GO_WANT_UNIX_TERMINATION_HELPER=1")
+	// The race runtime's default 1s exit sleep equals the termination grace.
+	// Remove that test-process delay so the handled SIGTERM can exit normally.
+	invocation.Env = append(minimalEnvironment(), "GO_WANT_UNIX_TERMINATION_HELPER=1", "GORACE=atexit_sleep_ms=0")
 	process, err := NewRunner().Start(context.Background(), invocation, sink)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)

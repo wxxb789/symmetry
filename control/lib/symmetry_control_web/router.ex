@@ -55,6 +55,8 @@ defmodule SymmetryControlWeb.Router do
     pipe_through :portal_api
 
     get "/workspace", PortalApiController, :workspace
+    get "/chat", ChatController, :index
+    post "/chat/messages", ChatController, :create
     post "/connections", PortalApiController, :create_connection
     patch "/connections/:connection_id", PortalApiController, :update_connection
     delete "/connections/:connection_id", PortalApiController, :delete_connection

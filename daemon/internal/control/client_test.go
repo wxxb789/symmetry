@@ -425,6 +425,83 @@ func TestU2CreateTaskCommandUsesTaskOwnedRoute(t *testing.T) {
 	}
 }
 
+func TestCreateFencedCancelPreservesGenerationWithoutPayload(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost || request.URL.Path != "/api/v1/tasks/task-1/commands" {
+			t.Errorf("unexpected route: %s %s", request.Method, request.URL.Path)
+		}
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertJSONEqual(t, `{"kind":"cancel","generation":2}`, string(body))
+		writer.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(writer, strings.Replace(commandJSON(), `"generation":1`, `"generation":2`, 1))
+	}))
+	defer server.Close()
+	_, err := newOperatorClient(t, server).CreateTaskCommand(context.Background(), "task-1", "cancel-generation-2", protocol.TaskCommandRequest{Kind: "cancel", Generation: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCreateFencedCancelAcceptsOnlyValidRunlessCancellationOrMatchingGeneration(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		body  string
+		valid bool
+	}{
+		{"queued cancellation has no run", runlessAppliedCommandJSON(), true},
+		{"assigned generation mismatch", commandJSON(), false},
+		{"runless pending is invalid", strings.Replace(runlessAppliedCommandJSON(), `"state":"applied"`, `"state":"pending"`, 1), false},
+		{"runless wrong task is invalid", strings.Replace(runlessAppliedCommandJSON(), `"task_id":"task-1"`, `"task_id":"task-2"`, 1), false},
+		{"runless other kind is invalid", strings.Replace(runlessAppliedCommandJSON(), `"kind":"cancel"`, `"kind":"retry"`, 1), false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				body, err := io.ReadAll(request.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertJSONEqual(t, `{"kind":"cancel","generation":2}`, string(body))
+				writer.WriteHeader(http.StatusCreated)
+				_, _ = io.WriteString(writer, test.body)
+			}))
+			defer server.Close()
+			command, err := newOperatorClient(t, server).CreateTaskCommand(context.Background(), "task-1", "fenced-queued-cancel", protocol.TaskCommandRequest{Kind: "cancel", Generation: 2})
+			if (err == nil) != test.valid {
+				t.Fatalf("fenced cancel response = %#v, %v; want valid %t", command, err, test.valid)
+			}
+			if test.valid && (command.RunID != nil || command.Generation != nil || command.State != "applied") {
+				t.Fatalf("queued cancellation invented a run: %#v", command)
+			}
+		})
+	}
+}
+
+func TestWorkValidationRetainsBooleanCapabilityRequirements(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		field string
+		valid bool
+	}{
+		{"legacy omitted", "", true},
+		{"empty map", `,"required_capabilities":{}`, true},
+		{"forward compatible boolean map", `,"required_capabilities":{"supervisory_control":true,"future_capability":false}`, true},
+		{"null map", `,"required_capabilities":null`, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var work protocol.Work
+			if err := json.Unmarshal([]byte(`{"goal":"goal","agent_profile":"agent","workspace":"local","input":{}`+test.field+`}`), &work); err != nil {
+				t.Fatal(err)
+			}
+			if err := validateWork(work); (err == nil) != test.valid {
+				t.Fatalf("validation = %v, want valid %v", err, test.valid)
+			}
+		})
+	}
+}
+
 func TestSubmitTaskPreservesOptionalWorkInputSerialization(t *testing.T) {
 	tests := []struct {
 		name  string

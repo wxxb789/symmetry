@@ -119,6 +119,7 @@ type options struct {
 	queueTerminalTransition                    func(state.RunKey, protocol.StateTransitionRequest, time.Time) (state.RunJournal, error)
 	markCommandAcknowledgementsDelivered       func(state.RunKey, []string) (state.RunJournal, error)
 	queueCancelledTransitionAndAcknowledgement func(state.RunKey, protocol.StateTransitionRequest, protocol.CommandAcknowledgement, time.Time) (state.RunJournal, error)
+	retainWorkspace                            func(state.RunKey) (state.RunJournal, error)
 }
 
 // WithHTTPClient replaces the HTTP transport used for production clients.
@@ -223,6 +224,7 @@ type daemon struct {
 	cleanupWake        chan struct{}
 	cleanupQueued      map[state.RunKey]struct{}
 	cleanupRetry       map[state.RunKey]time.Time
+	retainedWorkspaces map[state.RunKey]struct{}
 	commandWake        chan struct{}
 	commandQueue       []*queuedCommand
 	queuedCommands     map[commandKey]*queuedCommand
@@ -756,8 +758,10 @@ func (daemon *daemon) initialize(ctx context.Context) error {
 			Capacity: daemon.config.Runtime.Capacity, AgentProfile: daemon.config.Runtime.AgentProfile,
 			Workspace: daemon.config.Runtime.Workspace,
 			Capabilities: protocol.RuntimeCapabilities{
-				StructuredInput: structuredInput,
-				ProviderAccess:  profile.ProviderAccess,
+				StructuredInput:    structuredInput,
+				ProviderAccess:     profile.ProviderAccess,
+				Interactive:        profile.Interactive,
+				SupervisoryControl: profile.SupervisoryControl,
 			},
 		}},
 	}
@@ -890,6 +894,9 @@ func (daemon *daemon) recoverUnresolvedInputIntents(ctx context.Context) error {
 		if !restartInputRecoveryRequired(journal) || daemon.hasRun(journal.Key()) {
 			continue
 		}
+		if supervisoryRecoveryRequired(journal) {
+			daemon.rememberWorkspaceRetention(journal.Key())
+		}
 		recoveries = append(recoveries, journal)
 		if journal.PID > 0 && !daemon.terminatePersistedProcessWithRetry(rootContext, journal.Key()) {
 			return rootContext.Err()
@@ -898,6 +905,9 @@ func (daemon *daemon) recoverUnresolvedInputIntents(ctx context.Context) error {
 	for _, journal := range recoveries {
 		if daemon.hasRun(journal.Key()) {
 			continue
+		}
+		if supervisoryRecoveryRequired(journal) {
+			daemon.persistWorkspaceRetention(journal.Key())
 		}
 		if err := daemon.drainRestartInputOutbox(rootContext, journal.Key()); err != nil && !isConclusiveRestartInputFailure(err) {
 			return fmt.Errorf("drain input command outbox for %s/%d: %w", journal.RunID, journal.Generation, err)
@@ -910,7 +920,7 @@ func (daemon *daemon) recoverUnresolvedInputIntents(ctx context.Context) error {
 }
 
 func restartInputRecoveryRequired(journal state.RunJournal) bool {
-	if journal.InputCommandIntent == nil {
+	if journal.InputCommandIntent == nil && !supervisoryRecoveryRequired(journal) {
 		return false
 	}
 	switch journal.LocalState {
@@ -996,9 +1006,13 @@ func (daemon *daemon) queueRestartInputFailure(ctx context.Context, key state.Ru
 	if !restartInputRecoveryRequired(journal) {
 		return nil
 	}
+	recoveryError := "input command recovery cannot safely replay stdin"
+	if supervisoryRecoveryRequired(journal) {
+		recoveryError = "supervisory recovery cannot safely reattach a paused or controlled agent"
+	}
 	return daemon.queueTerminalTransitionWithRetry(ctx, key, "failed", map[string]string{
 		"stage": "daemon_restart",
-		"error": "input command recovery cannot safely replay stdin",
+		"error": recoveryError,
 	})
 }
 
@@ -1084,7 +1098,7 @@ func (daemon *daemon) reconcile(ctx context.Context) {
 
 func isReconcileState(localState string) bool {
 	switch localState {
-	case "claimed", "running", "waiting_for_input", "cancelling":
+	case "claimed", "running", "paused", "waiting_for_input", "cancelling":
 		return true
 	default:
 		return false
@@ -1440,11 +1454,24 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		providerToken = claim.ProviderAccess.Token
 	}
 	output := newAgentOutput(profile.EventFormat, providerToken)
+	executionContext, stopExecution := context.WithCancelCause(ctx)
+	defer stopExecution(nil)
+	output.executionContext = executionContext
 	sink := execution.SinkFunc(func(_ context.Context, event execution.Event) error {
-		return output.handle(daemon, key, event)
+		err := output.handle(daemon, key, event)
+		if errors.Is(err, errRequiredDecisionPacket) {
+			// A contract-invalid required wait cannot be resumed. Cancel only
+			// this process context, even if stdout precedes process attachment;
+			// it remains a failed execution rather than an operator cancellation.
+			stopExecution(err)
+		}
+		return err
 	})
-	process, err := daemon.start(ctx, execution.Invocation{Program: profile.Command, Args: profile.Args, Dir: prepared.Path, Env: environment, InitialInput: input, CloseInputAfterInitial: !profile.Interactive}, sink)
+	process, err := daemon.start(executionContext, execution.Invocation{Program: profile.Command, Args: profile.Args, Dir: prepared.Path, Env: environment, InitialInput: input, CloseInputAfterInitial: !profile.Interactive}, sink)
 	if err != nil {
+		if cause := context.Cause(executionContext); errors.Is(cause, errRequiredDecisionPacket) {
+			err = cause
+		}
 		if !daemon.isCancelled(key) {
 			daemon.queueFailure(ctx, key, "start_agent", err)
 		}
@@ -1707,7 +1734,23 @@ func initialInput(profile config.AgentProfile, work protocol.Work, providerAcces
 	if err != nil {
 		return nil, err
 	}
-	return inputRecord(protocol.AgentInputRecordTaskInput, work.Goal, work.Input, resolved)
+	if !profile.SupervisoryControl {
+		return inputRecord(protocol.AgentInputRecordTaskInput, work.Goal, work.Input, resolved)
+	}
+	encoded, err := json.Marshal(protocol.AgentInputRecord{
+		Type: protocol.AgentInputRecordTaskInput, Goal: work.Goal, Input: work.Input, ProviderAccess: resolved,
+		Autonomy: &protocol.AutonomyPolicy{
+			Mode:              "high",
+			EscalationReasons: []string{"blocked", "consequential", "irreversible", "security", "business_policy", "expensive", "product_change"},
+			RoutineDecisions:  "Proceed autonomously with implementation choices, tool selection, recoverable errors, and temporary uncertainty; do not request routine approvals.",
+			ControlBoundary:   "Apply guidance, pause, and resume only at a safe boundary after the current atomic operation. Pause retains process and workspace and stops further autonomous progress until resume. Preserve the original goal.",
+			Acknowledgement:   "After applying a control emit command_applied with its command_id, kind, and applied/rejected/failed outcome. Stdin receipt is not application. Consequential decisions require a concise waiting_for_input decision packet.",
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return append(encoded, '\n'), nil
 }
 
 func resolveProviderAccess(controlPlaneURL string, access *protocol.ProviderAccess) (*protocol.ProviderAccess, error) {
@@ -1762,11 +1805,12 @@ const (
 )
 
 type agentOutput struct {
-	format   config.EventFormat
-	parser   *jsonlParser
-	redactor *streamingTokenRedactor
-	stdoutAt time.Time
-	flushed  bool
+	executionContext context.Context
+	format           config.EventFormat
+	parser           *jsonlParser
+	redactor         *streamingTokenRedactor
+	stdoutAt         time.Time
+	flushed          bool
 }
 
 func newAgentOutput(format config.EventFormat, token string) *agentOutput {
@@ -2013,7 +2057,20 @@ func (daemon *daemon) queueOutput(key state.RunKey, format config.EventFormat, p
 			continue
 		}
 		kind := semanticEventKind(payload, len(record.data))
+		if kind == "command_applied" {
+			matched, err := daemon.queueCommandApplied(key, payload, event.At)
+			if err != nil {
+				return err
+			}
+			if matched {
+				continue
+			}
+			kind = "agent_event"
+		}
 		if kind == "waiting_for_input" {
+			if err := daemon.validateWaitingPacket(key, payload); err != nil {
+				return err
+			}
 			if err := daemon.queueWaitingForInput(key, json.RawMessage(record.data), event.At); err != nil {
 				return err
 			}
@@ -2040,6 +2097,10 @@ func semanticEventKind(payload map[string]any, encodedBytes int) string {
 
 	kind, _ := payload["type"].(string)
 	switch kind {
+	case "command_applied":
+		if nonEmptyString(payload["command_id"]) && stringIn(payload["kind"], "guidance", "pause", "resume") && stringIn(payload["outcome"], "applied", "rejected", "failed") {
+			return kind
+		}
 	case "progress", "waiting_for_input":
 		return kind
 	case "summary":
@@ -2140,11 +2201,7 @@ func (daemon *daemon) queueEvent(key state.RunKey, kind string, payload json.Raw
 	if err != nil {
 		return err
 	}
-	journal, err := daemon.store.LoadJournal(key)
-	if err != nil {
-		return err
-	}
-	_, err = daemon.store.QueueEvent(key, protocol.RunEvent{EventID: id, Sequence: journal.LastEventSequence + 1, Kind: kind, OccurredAt: at, Payload: payload})
+	_, err = daemon.store.QueueNextEvent(key, protocol.RunEvent{EventID: id, Kind: kind, OccurredAt: at, Payload: payload})
 	if err == nil {
 		daemon.signalOutboxFor(key)
 	}
@@ -2336,6 +2393,13 @@ func (daemon *daemon) waitForRunWithContext(ctx context.Context, key state.RunKe
 	}
 	result := process.Wait()
 	if output != nil {
+		// Cancellation may stop delivery before Runner stores its sink error.
+		// The cancellation cause was set first and survives that race.
+		if output.executionContext != nil {
+			if cause := context.Cause(output.executionContext); errors.Is(cause, errRequiredDecisionPacket) {
+				result.SinkError = cause
+			}
+		}
 		if err := output.flush(daemon, key, daemon.now()); err != nil && result.SinkError == nil {
 			result.SinkError = err
 		}
@@ -2356,12 +2420,19 @@ func (daemon *daemon) waitForRunWithContext(ctx context.Context, key state.RunKe
 		return
 	}
 	if !cancelled {
+		if err := daemon.supervisedExitFailure(key); err != nil && result.WaitError == nil {
+			result.WaitError = err
+		}
 		if result.Success() {
 			if err := daemon.queueTerminalTransitionWithRetry(ctx, key, "completed", map[string]any{"exit_code": result.ExitCode}); err != nil {
 				daemon.log.Error("queue_completed_transition_failed", "run_id", key.RunID, "generation", key.Generation, "error", err)
 			}
 		} else {
-			if err := daemon.queueTerminalTransitionWithRetry(ctx, key, "failed", map[string]any{"exit_code": result.ExitCode, "error": errorText(result.WaitError)}); err != nil {
+			cause := result.WaitError
+			if result.SinkError != nil {
+				cause = result.SinkError
+			}
+			if err := daemon.queueTerminalTransitionWithRetry(ctx, key, "failed", map[string]any{"exit_code": result.ExitCode, "error": errorText(cause)}); err != nil {
 				daemon.log.Error("queue_failed_transition_failed", "run_id", key.RunID, "generation", key.Generation, "stage", "process_exit", "error", err)
 			}
 		}
@@ -2388,7 +2459,14 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 			return true
 		}
 	}
+	for _, intent := range journal.ControlCommandIntents {
+		if intent.CommandID == command.CommandID {
+			return true
+		}
+	}
 	if command.Kind == "cancel" {
+		daemon.rememberWorkspaceRetention(key)
+		defer daemon.persistWorkspaceRetention(key)
 		daemon.mu.Lock()
 		active := daemon.running[key]
 		if active == nil {
@@ -2437,6 +2515,8 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 	}
 	outcome := "rejected"
 	switch command.Kind {
+	case "guidance", "pause", "resume":
+		return daemon.handleSupervisoryCommand(ctx, key, journal, active, command)
 	case "provide_input":
 		var object map[string]json.RawMessage
 		if err := json.Unmarshal(command.Payload, &object); err != nil || object == nil {
@@ -2831,6 +2911,10 @@ func (daemon *daemon) renewalStillEligible(snapshot state.RunJournal) bool {
 func (daemon *daemon) terminateForLease(journal state.RunJournal, reason string) {
 	if journal.LocalState == "terminal_pending" {
 		return
+	}
+	if supervisoryRecoveryRequired(journal) {
+		daemon.rememberWorkspaceRetention(journal.Key())
+		defer daemon.persistWorkspaceRetention(journal.Key())
 	}
 	daemon.mu.Lock()
 	active := daemon.running[journal.Key()]
@@ -3340,7 +3424,7 @@ func (daemon *daemon) deliverEvents(ctx context.Context, journal state.RunJourna
 func (daemon *daemon) deliverAppliedInputAcknowledgement(ctx context.Context, journal state.RunJournal) (state.RunJournal, bool, error) {
 	intent := journal.InputCommandIntent
 	if intent == nil || intent.Outcome != "applied" || intent.AcknowledgementDelivered || journal.HasPendingTransition(intent.RunningTransitionID) {
-		return journal, false, nil
+		return daemon.deliverAppliedControlAcknowledgement(ctx, journal)
 	}
 	for _, acknowledgement := range journal.PendingCommandAcknowledgements {
 		if acknowledgement.AckID == intent.AckID {
@@ -3473,7 +3557,7 @@ func (daemon *daemon) handleAcknowledgementDeliveryError(ctx context.Context, jo
 }
 
 func (daemon *daemon) retireAcceptedTerminalAcknowledgement(journal state.RunJournal, acknowledgement protocol.CommandAcknowledgement, err error) (state.RunJournal, bool, error) {
-	if journal.LocalState != "terminal_pending" || journal.TerminalVerdict != state.TerminalVerdictAccepted || (!control.IsOwnershipLost(err) && !control.IsTerminalGraceExpired(err)) {
+	if journal.LocalState != "terminal_pending" || journal.TerminalVerdict != state.TerminalVerdictAccepted || (!control.IsOwnershipLost(err) && !control.IsTerminalGraceExpired(err) && !invalidatedSupervisoryAcknowledgement(journal, acknowledgement, err)) {
 		return journal, false, nil
 	}
 	updated, markErr := daemon.markCommandAcknowledgementDelivered(journal.Key(), acknowledgement)
@@ -3556,7 +3640,7 @@ func activeRunState(journal state.RunJournal) (string, bool) {
 		return "", false
 	}
 	switch journal.LocalState {
-	case "claimed", "running", "waiting_for_input", "cancelling":
+	case "claimed", "running", "paused", "waiting_for_input", "cancelling":
 		return journal.LocalState, true
 	default:
 		return "", false
