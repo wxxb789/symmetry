@@ -266,6 +266,11 @@ func validateTaskCommandRequest(request protocol.TaskCommandRequest) error {
 		if err := validateJSONObject(request.Payload); err != nil {
 			return fmt.Errorf("provide_input payload %w", err)
 		}
+	case "guidance", "pause", "resume":
+		if request.Generation <= 0 {
+			return errors.New("supervisory command requires a positive generation")
+		}
+		return ValidateSupervisoryPayload(request.Kind, request.Payload)
 	default:
 		return errors.New("task command kind is not recognized")
 	}
@@ -278,6 +283,12 @@ func validateTaskCommandResponse(operation, expectedTaskID string, request proto
 	}
 	if response.Kind != request.Kind || !sameCommandPayload(request, response.Payload) {
 		return invalidResponse(operation, "kind or payload does not match the request")
+	}
+	// Cancelling queued work applies to the task without creating a run. The
+	// server validates its generation fence, while the command retains nil run IDs.
+	runlessCancellation := response.Kind == "cancel" && response.State == "applied" && response.RunID == nil && response.Generation == nil
+	if request.Generation > 0 && !runlessCancellation && (response.Generation == nil || *response.Generation != request.Generation) {
+		return invalidResponse(operation, "generation does not match the request")
 	}
 	return nil
 }
@@ -338,7 +349,8 @@ func validateTaskCommandResource(expectedTaskID string, response protocol.TaskCo
 	if runBound && (*response.RunID == "" || *response.Generation <= 0) {
 		return errors.New("run_id requires a positive generation")
 	}
-	if response.Kind != "cancel" && response.Kind != "provide_input" && response.Kind != "retry" {
+	supervisory := isSupervisoryCommand(response.Kind)
+	if response.Kind != "cancel" && response.Kind != "provide_input" && response.Kind != "retry" && !supervisory {
 		return errors.New("kind is not recognized")
 	}
 	if err := validateJSONObject(response.Payload); err != nil {
@@ -346,6 +358,11 @@ func validateTaskCommandResource(expectedTaskID string, response protocol.TaskCo
 	}
 	if response.Kind == "cancel" && !sameJSONObject(response.Payload, json.RawMessage(`{}`)) {
 		return errors.New("cancel command payload must be an empty JSON object")
+	}
+	if supervisory {
+		if err := ValidateSupervisoryPayload(response.Kind, response.Payload); err != nil {
+			return err
+		}
 	}
 	if response.State != "pending" && response.State != "applied" && response.State != "acknowledged" {
 		return errors.New("state is not recognized")
@@ -360,7 +377,12 @@ func validateTaskCommandResource(expectedTaskID string, response protocol.TaskCo
 	if response.AcknowledgedAt != nil {
 		acknowledgementCount++
 	}
-	if acknowledgementCount != 0 && acknowledgementCount != 3 {
+	// Cancellation can settle outstanding input/control intents before a daemon
+	// receipt exists. This is historical state, never proof of a matching ack.
+	serverRejected := (supervisory || response.Kind == "provide_input") && response.State == "acknowledged" &&
+		response.AcknowledgementID == nil && response.AcknowledgementOutcome != nil && *response.AcknowledgementOutcome == "rejected" &&
+		response.AcknowledgedAt != nil && !response.AcknowledgedAt.IsZero() && response.AppliedAt == nil
+	if acknowledgementCount != 0 && acknowledgementCount != 3 && !serverRejected {
 		return errors.New("acknowledgement fields must be null together")
 	}
 	if response.AcknowledgementID != nil && (*response.AcknowledgementID == "" || *response.AcknowledgementOutcome == "" || response.AcknowledgedAt.IsZero()) {
@@ -382,12 +404,13 @@ func validateTaskCommandResource(expectedTaskID string, response protocol.TaskCo
 			return errors.New("pending command must be run-bound without applied_at or acknowledgement")
 		}
 	case "applied":
-		if !controlApplied || response.AppliedAt == nil || response.AppliedAt.IsZero() || acknowledgementCount != 0 {
-			return errors.New("applied command must be a cancel or retry with applied_at and no acknowledgement")
+		if (!controlApplied && !supervisory && response.Kind != "provide_input") || response.AppliedAt == nil || response.AppliedAt.IsZero() || acknowledgementCount != 0 {
+			return errors.New("applied command requires a supported kind, applied_at, and no acknowledgement")
 		}
 	case "acknowledged":
-		if response.Kind == "retry" || !runBound || response.AppliedAt != nil || acknowledgementCount != 3 {
-			return errors.New("acknowledged command must be run-bound with acknowledgement and no applied_at")
+		retainedApplication := (supervisory || response.Kind == "provide_input") && response.AcknowledgementOutcome != nil && *response.AcknowledgementOutcome == "applied" && response.AppliedAt != nil && !response.AppliedAt.IsZero()
+		if response.Kind == "retry" || !runBound || (response.AppliedAt != nil && !retainedApplication) || (acknowledgementCount != 3 && !serverRejected) {
+			return errors.New("acknowledged command must be run-bound with acknowledgement and no unrelated applied_at")
 		}
 	}
 	return nil
@@ -485,9 +508,37 @@ func validateCommands(operation string, commands []protocol.Command) error {
 			if err := validateJSONObject(command.Payload); err != nil {
 				return invalidResponse(operation, "provide_input command payload "+err.Error())
 			}
+		case "guidance", "pause", "resume":
+			if err := ValidateSupervisoryPayload(command.Kind, command.Payload); err != nil {
+				return invalidResponse(operation, err.Error())
+			}
 		default:
 			return invalidResponse(operation, "command kind is not recognized")
 		}
+	}
+	return nil
+}
+
+func isSupervisoryCommand(kind string) bool {
+	return kind == "guidance" || kind == "pause" || kind == "resume"
+}
+
+// ValidateSupervisoryPayload validates the payload of a recognized supervisory command.
+func ValidateSupervisoryPayload(kind string, payload json.RawMessage) error {
+	if err := validateJSONObject(payload); err != nil {
+		return fmt.Errorf("%s command payload %w", kind, err)
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &object); err != nil {
+		return err
+	}
+	if kind == "guidance" {
+		var message string
+		if len(object) != 1 || json.Unmarshal(object["message"], &message) != nil || strings.TrimSpace(message) == "" || len(message) > 32768 {
+			return errors.New("guidance payload must contain only a non-empty message of at most 32768 bytes")
+		}
+	} else if len(object) != 0 {
+		return fmt.Errorf("%s command payload must be an empty JSON object", kind)
 	}
 	return nil
 }
@@ -501,6 +552,9 @@ func validateWork(work protocol.Work) error {
 	}
 	if err := validateNullableJSONObject(work.Input); err != nil {
 		return fmt.Errorf("work input %w", err)
+	}
+	if work.HasField("required_capabilities") && work.RequiredCapabilities == nil {
+		return errors.New("work required_capabilities must be a non-null boolean map")
 	}
 	return nil
 }
@@ -546,7 +600,7 @@ func isJSONNull(value json.RawMessage) bool {
 
 func isTaskState(value string) bool {
 	switch value {
-	case "queued", "assigned", "claimed", "running", "waiting_for_input", "cancelling", "completed", "failed", "cancelled":
+	case "queued", "assigned", "claimed", "running", "paused", "waiting_for_input", "cancelling", "completed", "failed", "cancelled":
 		return true
 	default:
 		return false
@@ -555,7 +609,7 @@ func isTaskState(value string) bool {
 
 func isTransitionState(value string) bool {
 	switch value {
-	case "running", "waiting_for_input", "completed", "failed", "cancelled":
+	case "running", "paused", "waiting_for_input", "completed", "failed", "cancelled":
 		return true
 	default:
 		return false
@@ -564,7 +618,7 @@ func isTransitionState(value string) bool {
 
 func requiresTaskRun(state string) bool {
 	switch state {
-	case "assigned", "claimed", "running", "waiting_for_input", "cancelling", "completed", "failed":
+	case "assigned", "claimed", "running", "paused", "waiting_for_input", "cancelling", "completed", "failed":
 		return true
 	default:
 		return false

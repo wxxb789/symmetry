@@ -186,7 +186,12 @@ defmodule SymmetryControlWeb.PortalJSON do
       result: task.result,
       failure: task.failure,
       timing: execution_timing(task_record, run),
-      can_cancel: task.state in ["queued", "assigned", "claimed", "running", "waiting_for_input"],
+      supervisory_control: task.controls.supervisory_control,
+      can_guide: task.controls.can_guide,
+      can_pause: task.controls.can_pause,
+      can_resume: task.controls.can_resume,
+      can_cancel:
+        task.state in ["queued", "assigned", "claimed", "running", "paused", "waiting_for_input"],
       can_retry: task.state in ["failed", "cancelled"],
       intent_locked: task.state not in ["failed", "cancelled"]
     }
@@ -449,6 +454,7 @@ defmodule SymmetryControlWeb.PortalJSON do
         kind in [
           "progress",
           "summary",
+          "rationale",
           "finding",
           "artifact",
           "test",

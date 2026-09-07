@@ -32,3 +32,6 @@ failed/cancelled retries.
 GitHub and Azure DevOps connection setup, credential handling, resource binding,
 external ownership rules, and synchronization are documented in
 [`docs/goal-03-runbook.md`](../docs/goal-03-runbook.md).
+
+Chat, durable instructions, decision packets, and cooperative worker controls
+are documented in [`docs/goal-04-runbook.md`](../docs/goal-04-runbook.md).

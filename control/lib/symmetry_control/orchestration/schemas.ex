@@ -145,6 +145,7 @@ defmodule SymmetryControl.Orchestration.Task do
       "assigned",
       "claimed",
       "running",
+      "paused",
       "waiting_for_input",
       "cancelling",
       "completed",
@@ -212,6 +213,7 @@ defmodule SymmetryControl.Orchestration.Run do
       "assigned",
       "claimed",
       "running",
+      "paused",
       "waiting_for_input",
       "cancelling",
       "completed",
@@ -281,6 +283,7 @@ defmodule SymmetryControl.Orchestration.RunTransition do
       |> validate_required([:run_id, :transition_id, :request_hash, :state, :payload])
       |> validate_inclusion(:state, [
         "running",
+        "paused",
         "waiting_for_input",
         "completed",
         "failed",
@@ -303,6 +306,7 @@ defmodule SymmetryControl.Orchestration.Command do
     field :payload, :map, default: %{}
     field :idempotency_key, :string
     field :request_hash, :binary
+    field :request_hash_version, :integer, default: 2
     field :state, :string
     field :applied_at, :utc_datetime_usec
     field :acknowledgement_id, Ecto.UUID
@@ -321,6 +325,7 @@ defmodule SymmetryControl.Orchestration.Command do
       :payload,
       :idempotency_key,
       :request_hash,
+      :request_hash_version,
       :state,
       :applied_at,
       :acknowledgement_id,
@@ -329,7 +334,16 @@ defmodule SymmetryControl.Orchestration.Command do
     ])
     |> validate_required([:task_id, :kind, :payload, :idempotency_key, :request_hash, :state])
     |> validate_number(:generation, greater_than: 0)
-    |> validate_inclusion(:kind, ["cancel", "provide_input", "retry"])
+    |> validate_inclusion(:request_hash_version, [1, 2])
+    |> check_constraint(:request_hash_version, name: :commands_request_hash_version_check)
+    |> validate_inclusion(:kind, [
+      "cancel",
+      "provide_input",
+      "retry",
+      "guidance",
+      "pause",
+      "resume"
+    ])
     |> validate_inclusion(:state, ["pending", "applied", "acknowledged"])
     |> validate_inclusion(:acknowledgement_outcome, ["applied", "rejected", "failed"])
     |> unique_constraint([:task_id, :idempotency_key])

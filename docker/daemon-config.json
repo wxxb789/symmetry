@@ -10,6 +10,7 @@
       "args": [],
       "input_mode": "json",
       "interactive": true,
+      "supervisory_control": true,
       "event_format": "jsonl",
       "env_allowlist": []
     }

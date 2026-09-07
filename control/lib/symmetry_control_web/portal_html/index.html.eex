@@ -17,6 +17,7 @@
         </a>
         <nav class="primary-nav">
           <a class="nav-button is-active" href="#board" data-view="board" aria-label="Board" title="Board"><span data-icon="columns"></span></a>
+          <a class="nav-button" href="#chat" data-view="chat" aria-label="Chat" title="Chat"><span data-icon="review"></span></a>
           <a class="nav-button" href="#activity" data-view="activity" aria-label="Activity" title="Activity"><span data-icon="activity"></span></a>
           <a class="nav-button" href="#resources" data-view="resources" aria-label="Resources" title="Resources"><span data-icon="plug"></span></a>
           <a class="nav-button" href="#connections" data-view="connections" aria-label="Connections" title="Connections"><span data-icon="connection"></span></a>
@@ -69,6 +70,43 @@
             </div>
 
             <section id="kanban-board" class="kanban-board" aria-label="Project Kanban" aria-live="polite"></section>
+          </section>
+
+          <section class="workspace-view chat-view" id="chat-view" data-view-panel="chat" hidden aria-labelledby="chat-title">
+            <header class="chat-header">
+              <div><p class="eyebrow">HUMAN + AGENT</p><h1 id="chat-title">Chat</h1><p>Set the goal. Let the agent carry the work.</p></div>
+              <span class="chat-autonomy"><span class="health-dot healthy"></span>Autonomy by default</span>
+            </header>
+            <div class="chat-context-bar">
+              <label><span>Context</span><select id="chat-scope" aria-label="Chat context"><option value="workspace">Workspace</option><option value="project" selected>Project</option><option value="run">Run</option></select></label>
+              <span id="chat-project-label"></span>
+              <label id="chat-run-field" hidden><span>Run</span><select id="chat-run-select" aria-label="Chat run"></select></label>
+            </div>
+            <div class="chat-body">
+              <section class="chat-conversation" aria-label="Conversation">
+                <div id="chat-scroll" class="chat-scroll" tabindex="0" aria-label="Conversation history">
+                  <button id="chat-load-older" class="button chat-load-older" type="button" hidden>Earlier messages</button>
+                  <div id="chat-messages" class="chat-messages" aria-live="polite" aria-relevant="additions text"></div>
+                </div>
+                <form id="chat-form" class="chat-composer">
+                  <div class="chat-intent-row"><label for="chat-intent">Intent</label><select id="chat-intent"><option value="discuss">Discuss</option><option value="status">Ask for status</option><option value="start_work">Start work</option><option value="guidance">Give guidance</option></select><span id="chat-intent-note">Discuss without changing execution.</span></div>
+                  <div id="chat-start-fields" class="chat-start-fields" hidden>
+                    <label id="chat-target-project-field" class="field"><span>Target project</span><select id="chat-target-project"></select></label>
+                    <details><summary>Work settings <span>Project defaults unless changed</span></summary><div class="chat-work-settings">
+                      <label class="field"><span>Work title</span><input id="chat-work-title" maxlength="240" placeholder="Derived from your goal"></label>
+                      <label class="field"><span>Agent profile</span><input id="chat-agent-profile" maxlength="120" placeholder="Project default"></label>
+                      <label class="field"><span>Workspace</span><input id="chat-workspace" maxlength="240" placeholder="Project default"></label>
+                      <label class="field"><span>Repository</span><select id="chat-repository"><option value="">Project default</option></select></label>
+                      <label class="field"><span>CI resource</span><select id="chat-ci"><option value="">Repository provider</option></select></label>
+                    </div></details>
+                  </div>
+                  <label class="sr-only" for="chat-content">Message</label><textarea id="chat-content" rows="3" maxlength="20000" placeholder="Ask about progress, discuss an idea, or describe a goal…" required></textarea>
+                  <div class="chat-send-row"><p id="chat-send-status" role="status" aria-live="polite">Messages are saved to this context.</p><button id="chat-send" class="button button-primary" type="submit"><span data-icon="arrow-up"></span><span>Send</span></button></div>
+                  <p class="chat-grounding">Replies summarize recorded work and evidence. Worker execution continues independently.</p>
+                </form>
+              </section>
+              <aside id="chat-run-context" class="chat-run-context" aria-label="Shared work state"></aside>
+            </div>
           </section>
 
           <section class="workspace-view" id="activity-view" data-view-panel="activity" hidden aria-labelledby="activity-title">

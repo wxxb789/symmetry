@@ -3,6 +3,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"errors"
 	"time"
 )
 
@@ -26,6 +27,17 @@ type AgentInputRecord struct {
 	Goal           string               `json:"goal"`
 	Input          json.RawMessage      `json:"input"`
 	ProviderAccess *ProviderAccess      `json:"provider_access,omitempty"`
+	CommandID      string               `json:"command_id,omitempty"`
+	Autonomy       *AutonomyPolicy      `json:"autonomy,omitempty"`
+}
+
+// AutonomyPolicy states the cooperative execution contract for an opted-in agent.
+type AutonomyPolicy struct {
+	Mode              string   `json:"mode"`
+	EscalationReasons []string `json:"escalation_reasons"`
+	RoutineDecisions  string   `json:"routine_decisions"`
+	ControlBoundary   string   `json:"control_boundary"`
+	Acknowledgement   string   `json:"acknowledgement"`
 }
 
 // MachineEnrollment identifies a machine during one-time enrollment.
@@ -59,8 +71,10 @@ type RuntimeRegistration struct {
 // agent binding. Provider access requires structured JSON input because its
 // short-lived grant is delivered only in the initial standard-input envelope.
 type RuntimeCapabilities struct {
-	StructuredInput bool `json:"structured_input"`
-	ProviderAccess  bool `json:"provider_access"`
+	StructuredInput    bool `json:"structured_input"`
+	ProviderAccess     bool `json:"provider_access"`
+	Interactive        bool `json:"interactive,omitempty"`
+	SupervisoryControl bool `json:"supervisory_control,omitempty"`
 }
 
 // SessionRegistrationRequest registers a daemon process and its runtimes.
@@ -102,11 +116,12 @@ type RuntimeHeartbeatRequest struct {
 
 // Work is an execution request. Input remains open for forward-compatible agent payloads.
 type Work struct {
-	Goal         string          `json:"goal"`
-	AgentProfile string          `json:"agent_profile"`
-	Workspace    string          `json:"workspace"`
-	Input        json.RawMessage `json:"input,omitempty"`
-	present      map[string]struct{}
+	Goal                 string          `json:"goal"`
+	AgentProfile         string          `json:"agent_profile"`
+	Workspace            string          `json:"workspace"`
+	Input                json.RawMessage `json:"input,omitempty"`
+	RequiredCapabilities map[string]bool `json:"required_capabilities,omitempty"`
+	present              map[string]struct{}
 }
 
 // UnmarshalJSON retains whether optional-looking protocol fields were sent.
@@ -116,6 +131,20 @@ func (work *Work) UnmarshalJSON(value []byte) error {
 	var decoded wire
 	if err := json.Unmarshal(value, &decoded); err != nil {
 		return err
+	}
+	// JSON null must not silently become false for a declared requirement.
+	if decoded.RequiredCapabilities != nil {
+		var requirements struct {
+			RequiredCapabilities map[string]*bool `json:"required_capabilities"`
+		}
+		if err := json.Unmarshal(value, &requirements); err != nil {
+			return err
+		}
+		for _, required := range requirements.RequiredCapabilities {
+			if required == nil {
+				return errors.New("required_capabilities values must be booleans")
+			}
+		}
 	}
 	present, err := presentFields(value)
 	if err != nil {
@@ -359,8 +388,10 @@ type TaskSubmitRequest struct {
 // TaskCommandRequest creates an operator command under an HTTP idempotency key.
 // Cancel requests omit Payload; provide_input requests require an object Payload.
 type TaskCommandRequest struct {
-	Kind    string          `json:"kind"`
-	Payload json.RawMessage `json:"payload,omitempty"`
+	Kind                string          `json:"kind"`
+	Payload             json.RawMessage `json:"payload,omitempty"`
+	Generation          int64           `json:"generation,omitempty"`
+	WaitingTransitionID string          `json:"waiting_transition_id,omitempty"`
 }
 
 // TaskCommand is an operator-facing command resource. Unlike daemon dispatch

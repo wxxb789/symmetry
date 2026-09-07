@@ -131,22 +131,60 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
       "invalid_request"
     )
 
+    acknowledged =
+      bearer(conn, machine_token)
+      |> put(
+        "/api/v1/commands/#{command_id}/acknowledgements/#{ack_id}",
+        Map.merge(fence, %{
+          "command_id" => uuid(),
+          "ack_id" => uuid(),
+          "run_id" => run_id,
+          "outcome" => "applied"
+        })
+      )
+      |> json_response(200)
+
     assert %{
              "command_id" => ^command_id,
              "state" => "acknowledged",
-             "acknowledgement_id" => ^ack_id
-           } =
+             "acknowledgement_id" => ^ack_id,
+             "acknowledgement_outcome" => "applied",
+             "applied_at" => nil
+           } = acknowledged
+
+    assert ^acknowledged =
              bearer(conn, machine_token)
              |> put(
                "/api/v1/commands/#{command_id}/acknowledgements/#{ack_id}",
-               Map.merge(fence, %{
-                 "command_id" => uuid(),
-                 "ack_id" => uuid(),
-                 "run_id" => run_id,
-                 "outcome" => "applied"
-               })
+               Map.merge(fence, %{"run_id" => run_id, "outcome" => "applied"})
              )
              |> json_response(200)
+
+    # Older control versions persisted an incompatible application time on cancel receipts.
+    assert {:ok, stored_acknowledgement} = Orchestration.fetch_command(command_id)
+    assert stored_acknowledgement.applied_at == nil
+    legacy_applied_at = stored_acknowledgement.acknowledged_at
+
+    legacy_acknowledgement =
+      stored_acknowledgement
+      |> Ecto.Changeset.change(applied_at: legacy_applied_at)
+      |> SymmetryControl.Repo.update!()
+
+    assert ^acknowledged =
+             bearer(conn, machine_token)
+             |> put(
+               "/api/v1/commands/#{command_id}/acknowledgements/#{ack_id}",
+               Map.merge(fence, %{"run_id" => run_id, "outcome" => "applied"})
+             )
+             |> json_response(200)
+
+    history =
+      bearer(conn, @operator_token)
+      |> get("/api/v1/tasks/#{task_id}/commands")
+      |> json_response(200)
+
+    assert Enum.find(history["commands"], &(&1["command_id"] == command_id)) == acknowledged
+    assert {:ok, ^legacy_acknowledgement} = Orchestration.fetch_command(command_id)
 
     assert %{"decisions" => _} =
              bearer(conn, machine_token)
@@ -539,6 +577,93 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
     end
   end
 
+  test "payload-free cancellation accepts a generation fence and rejects stale generations", %{
+    conn: conn
+  } do
+    task_id = submit_task(conn)
+    assert {:ok, task} = Orchestration.fetch_task(task_id)
+    key = "fenced-cancel-#{System.unique_integer([:positive])}"
+
+    assert %{"error" => %{"code" => "state_conflict"}} =
+             bearer(conn, @operator_token)
+             |> put_req_header("idempotency-key", key)
+             |> post("/api/v1/tasks/#{task_id}/commands", %{
+               "kind" => "cancel",
+               "generation" => task.attempt_generation + 1
+             })
+             |> json_response(409)
+
+    assert {:ok, %{state: "queued"}} = Orchestration.fetch_task(task_id)
+
+    body = %{"kind" => "cancel", "generation" => task.attempt_generation}
+
+    assert %{"error" => %{"code" => "invalid_request"}} =
+             bearer(conn, @operator_token)
+             |> put_req_header("idempotency-key", key)
+             |> post("/api/v1/tasks/#{task_id}/commands", Map.put(body, "payload", %{}))
+             |> json_response(400)
+
+    assert {:ok, %{state: "queued"}} = Orchestration.fetch_task(task_id)
+    assert {:ok, %{entries: []}} = Orchestration.list_task_commands(task_id)
+
+    command =
+      bearer(conn, @operator_token)
+      |> put_req_header("idempotency-key", key)
+      |> post("/api/v1/tasks/#{task_id}/commands", body)
+      |> json_response(201)
+
+    assert_command(command, task_id, nil, nil, "cancel", %{}, "applied")
+
+    assert ^command =
+             bearer(conn, @operator_token)
+             |> put_req_header("idempotency-key", key)
+             |> post("/api/v1/tasks/#{task_id}/commands", body)
+             |> json_response(200)
+  end
+
+  test "guidance rejects oversized UTF-8 messages before creating a command", %{conn: conn} do
+    {machine_id, machine_token} = enroll(conn)
+
+    runtime_id =
+      register(conn, machine_id, machine_token, %{
+        "supervisory_control" => true,
+        "structured_input" => true,
+        "interactive" => true
+      })
+
+    task_id = submit_and_assign(conn)
+    {run_id, generation, fence} = claim(conn, machine_token, runtime_id)
+    assert {:ok, _} = Orchestration.transition(run_id, fence, "running", %{}, uuid())
+
+    for message <- [String.duplicate("a", 32_768), String.duplicate("é", 16_384)] do
+      body = %{
+        "kind" => "guidance",
+        "generation" => generation,
+        "payload" => %{"message" => message}
+      }
+
+      assert %{"kind" => "guidance", "state" => "pending"} =
+               bearer(conn, @operator_token)
+               |> put_req_header("idempotency-key", uuid())
+               |> post("/api/v1/tasks/#{task_id}/commands", body)
+               |> json_response(201)
+
+      assert {:ok, before} = Orchestration.list_task_commands(task_id)
+
+      assert %{"error" => %{"code" => "invalid_request"}} =
+               bearer(conn, @operator_token)
+               |> put_req_header("idempotency-key", uuid())
+               |> post(
+                 "/api/v1/tasks/#{task_id}/commands",
+                 put_in(body, ["payload", "message"], message <> "x")
+               )
+               |> json_response(400)
+
+      assert {:ok, after_rejection} = Orchestration.list_task_commands(task_id)
+      assert length(after_rejection.entries) == length(before.entries)
+    end
+  end
+
   test "provide_input permits an empty payload only for a current waiting run", %{conn: conn} do
     {machine_id, machine_token} = enroll(conn)
     runtime_id = register(conn, machine_id, machine_token)
@@ -798,7 +923,7 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
     {response["machine_id"], response["machine_token"]}
   end
 
-  defp register(conn, machine_id, machine_token) do
+  defp register(conn, machine_id, machine_token, capabilities \\ %{}) do
     response =
       bearer(conn, machine_token)
       |> put("/api/v1/machines/#{machine_id}/sessions/#{uuid()}", %{
@@ -809,7 +934,7 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
             "capacity" => 1,
             "agent_profile" => "codex",
             "workspace" => "primary",
-            "capabilities" => %{}
+            "capabilities" => capabilities
           }
         ]
       })

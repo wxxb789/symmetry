@@ -308,12 +308,9 @@ func TestTerminalDeliveryWaitsForStartingWorkspacePersistence(t *testing.T) {
 		t.Fatalf("terminal delivery calls = %#v, want %#v", got, want)
 	}
 	select {
-	case succeeded := <-workspace.cleaned:
-		if succeeded {
-			t.Fatal("cancelled workspace cleanup used success policy")
-		}
+	case <-workspace.cleaned:
+		t.Fatal("cancelled workspace artifacts were not retained")
 	default:
-		t.Fatal("workspace was not cleaned after terminal delivery")
 	}
 }
 
@@ -480,12 +477,9 @@ func TestReturnedProcessBlocksCleanupUntilWaitCompletes(t *testing.T) {
 		t.Fatalf("journal = %v, want deleted after process exit cleanup", err)
 	}
 	select {
-	case succeeded := <-cleaned:
-		if succeeded {
-			t.Fatal("cancelled process cleanup used success policy")
-		}
+	case <-cleaned:
+		t.Fatal("cancelled process artifacts were not retained")
 	default:
-		t.Fatal("workspace was not cleaned after process exit")
 	}
 	daemon.flushCleanups(context.Background())
 	select {

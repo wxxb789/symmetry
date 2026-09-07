@@ -54,3 +54,15 @@ pwsh -NoProfile -File .\browser\scripts\run-compose-daemon-tests.ps1
 This scenario uses the Compose runtime's `default` agent profile and `primary`
 workspace, then verifies task completion, generation, durable events, Activity,
 and the final Kanban move.
+
+## Live Chat acceptance
+
+```powershell
+pwsh -NoProfile -File .\browser\scripts\run-chat-daemon-tests.ps1
+```
+
+The isolated cooperative daemon verifies Chat-created work, questions without
+execution mutation, durable guidance in real artifacts, safe-boundary pause,
+same-run resume, structured decisions, completion, and cancellation with retained
+artifacts. It reports its log/artifact directory and stops its own daemon on exit.
+The normal suite includes deterministic Chat coverage at desktop/mobile widths.

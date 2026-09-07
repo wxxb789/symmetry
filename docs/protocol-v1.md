@@ -51,7 +51,9 @@ Task states:
 
 ```text
 queued -> assigned -> claimed -> running -> waiting_for_input -> running
-assigned | claimed | running | waiting_for_input -> cancelling -> cancelled
+running -> paused -> running
+paused -> failed (worker exit or lost lease)
+assigned | claimed | running | waiting_for_input | paused -> cancelling -> cancelled
 queued -> cancelled
 claimed | running | waiting_for_input -> completed | failed
 assigned | claimed | running | waiting_for_input -> queued (new generation only)
@@ -61,7 +63,9 @@ Run states:
 
 ```text
 assigned -> claimed -> running -> waiting_for_input -> running
-assigned | claimed | running | waiting_for_input -> cancelling -> cancelled
+running -> paused -> running
+paused -> failed (worker exit or lost lease)
+assigned | claimed | running | waiting_for_input | paused -> cancelling -> cancelled
 claimed | running | waiting_for_input -> completed | failed
 assigned | claimed | running | waiting_for_input | cancelling -> expired
 expired -> completed | failed | cancelled (current-generation terminal grace only)
@@ -74,7 +78,13 @@ result during its bounded grace only while its task is still queued at the same
 generation; an operator-applied queued cancellation cannot be overwritten.
 `waiting_for_input` remains capacity-bearing until resumed, cancelled, or
 expired. `assigned`, `claimed`, `running`,
-`waiting_for_input`, and `cancelling` all reserve one runtime slot.
+`waiting_for_input`, `paused`, and `cancelling` all reserve one runtime slot.
+
+Pause is cooperative. A pending `pause` command does not claim that execution
+has stopped. Only its matching safe-boundary transition changes the run to
+`paused`. Resume uses the same process and generation. Expiry while paused or
+while a pause is pending records a failure instead of automatically requeuing
+work, so lost pause intent cannot cause autonomous execution to restart.
 
 Cancellation and completion serialize on the task and current run rows. If
 completion commits first, cancellation returns the existing terminal result.
@@ -198,6 +208,18 @@ profile opt-in; JSON framing alone does not imply that an agent understands the
 provider broker. A runtime may advertise `provider_access: true` only for a JSON
 input profile configured to consume the broker capability. Tasks that require
 provider access are assigned only to runtimes that advertise it.
+
+`supervisory_control` is a separate opt-in capability requiring structured JSON
+input, interactive stdin, and JSONL output. It supports safe-boundary guidance,
+pause, and resume. Chat-created tasks require this capability; old tasks can
+still use the legacy input protocol on a capable runtime. The runtime also
+advertises `interactive` so incompatible capability combinations are rejected.
+
+Serialized work includes `required_capabilities` when the task has requirements.
+The daemon persists this boolean map with its work journal and enforces the
+task-level decision-packet requirement before queueing an agent wait. Public
+task submission retains its existing accepted fields; scheduling requirements
+are attached by the control plane's work-launch workflow.
 
 The default execution lease is two minutes, and registration rejects lease
 durations below 30 seconds. The daemon maintains leases in an
@@ -527,7 +549,7 @@ Daemon-originated materialized lifecycle state changes use the transition resour
 }
 ```
 
-Valid targets are `running`, `waiting_for_input`, `completed`, `failed`,
+Valid targets are `running`, `paused`, `waiting_for_input`, `completed`, `failed`,
 and `cancelled`. Completion and failure include a structured result or failure
 payload. `(run_id, transition_id)` is the retry identity: repeating the same ID
 and canonical JSON body is idempotent. The response is assembled from the
@@ -666,11 +688,12 @@ attempt is queued before the scheduler materializes its run.
 `waiting` is `null` unless the current run is in `waiting_for_input`. When it
 is present, it identifies the current run and generation. Its `transition_id`
 is the identity of the transition that put the current run into
-`waiting_for_input`. Its `question`, `payload`, and `recorded_at` come from the
-current run's highest-sequence `waiting_for_input` event. The transition ID
-remains stable while later waiting events update the visible question. For
-older data with no waiting event, those fields fall back to the waiting
-transition's payload and recorded time:
+`waiting_for_input`. A structured decision's `question`, `decision`, `payload`,
+and `recorded_at` come from that authoritative transition; later diagnostic
+events cannot replace the choice being authorized. Legacy question-only waits
+use the current run's highest-sequence waiting event while retaining the same
+transition identity. With no waiting event, they fall back to the transition's
+payload and recorded time:
 
 ```json
 {
@@ -708,6 +731,40 @@ Content-Type: application/json
 {"kind":"provide_input","payload":{"answer":"continue"}}
 ```
 
+Supervisory commands require the current generation explicitly:
+
+```json
+{"kind":"guidance","payload":{"message":"Use the existing adapter."},"generation":1}
+```
+
+Guidance messages are nonempty and at most 32,768 UTF-8 bytes. The control plane
+rejects oversized messages before creating a command or its Chat messages.
+
+```json
+{"kind":"pause","payload":{},"generation":1}
+```
+
+```json
+{"kind":"resume","payload":{},"generation":1}
+```
+
+```json
+{"kind":"cancel","generation":1}
+```
+
+Fenced cancellation retains the payload-free form used by legacy cancellation.
+
+A structured decision response also binds the current waiting transition:
+
+```json
+{"kind":"provide_input","payload":{"option_id":"staged"},"generation":1,"waiting_transition_id":"uuid"}
+```
+
+The chosen option must exist in the authoritative decision packet. Legacy
+question-only input remains supported for tasks without a supervisory-control
+requirement. Guidance is accepted while running or paused; pause only while
+running; resume only while paused. An unsupported runtime rejects these controls.
+
 `cancel` forbids `payload` and normalizes its stored payload to `{}`.
 `provide_input` requires a non-null JSON object; `{}` is valid and remains
 distinct from an omitted payload. A command response is a command resource,
@@ -742,6 +799,17 @@ fields are additive and clients must accept them.
 `409 state_conflict`. Replay and idempotency-conflict resolution occur before
 current-state validation.
 
+An acknowledged cancellation has `applied_at: null`; `acknowledged_at` records
+the daemon receipt time. Cancellation applied directly by the control plane
+retains `applied_at` and has no daemon acknowledgement. Replaying an older
+acknowledged cancellation with an incorrect stored application timestamp returns
+the compatible null field without rewriting its acknowledgement history.
+
+New commands also bind any explicitly supplied generation and waiting-transition
+context to their replay identity. Persisted command hashes are versioned, so
+commands written before this extension retain the original kind/payload replay
+algorithm without rewriting history.
+
 Cancellation locks the task and current run when one exists. A queued
 cancellation creates and applies a runless command in one transaction, and it
 never enters daemon dispatch. An assigned-but-unclaimed cancellation binds the
@@ -755,6 +823,10 @@ is atomically bound to the current run and generation, never a later generation.
 Daemon-originated lifecycle writes use transition resources. The daemon
 acknowledges and transitions the run back to `running`; both writes are
 independently retryable.
+
+For a task requiring supervisory control, that decision-resuming `running`
+transition includes the `provide_input` command's `command_id`. The control plane
+matches it to the current decision before advancing execution.
 
 ### Operator Runtime And History Reads
 
@@ -800,7 +872,7 @@ and runtime, and reports its durable liveness and reservations:
 ```
 
 `reserved_capacity` and `active_runs` include every capacity-bearing run:
-`assigned`, `claimed`, `running`, `waiting_for_input`, and `cancelling`.
+`assigned`, `claimed`, `running`, `paused`, `waiting_for_input`, and `cancelling`.
 Unknown task and runtime IDs return `404 not_found`.
 
 Separate task history collections are oldest-first. Their response collection
@@ -902,6 +974,60 @@ goal:
 Follow-up `input` must be a JSON object; `{}` is valid. Non-interactive
 profiles receive EOF after the first record. An `interactive: true` profile
 with `input_mode: "goal"` is invalid daemon configuration.
+
+### Cooperative Supervision
+
+A `supervisory_control: true` profile receives an `autonomy` policy in its first
+envelope: high autonomy, independent routine decisions, the meaningful escalation
+reasons, safe-boundary control delivery, and explicit application receipts.
+The adapter must finish atomic work before applying non-emergency controls.
+
+```json
+{"type":"guidance","command_id":"uuid","goal":"Original goal","input":{"message":"Use the existing adapter."}}
+```
+
+Pause and resume use the corresponding `type` with empty `input`. The adapter
+confirms application by emitting one JSONL record:
+
+```json
+{"type":"command_applied","command_id":"uuid","kind":"pause","outcome":"applied"}
+```
+
+The outcome may be `applied`, `rejected`, or `failed`. The daemon matches the
+receipt to a durably recorded pending instruction. Merely writing stdin never
+marks it applied. A pause/resume lifecycle transition carries that command ID;
+guidance records application without changing the lifecycle. Durable outboxes
+preserve event/transition/acknowledgement ordering across transport failures.
+
+A consequential blocker is a concise decision packet:
+
+```json
+{
+  "type":"waiting_for_input",
+  "question":"Which migration strategy should be used?",
+  "decision":{
+    "reason":"irreversible",
+    "context":"The migration removes the legacy column.",
+    "recommended_option_id":"staged",
+    "options":[
+      {"id":"staged","label":"Stage migration","consequence":"Keeps rollback available."},
+      {"id":"defer","label":"Defer","consequence":"Leaves this work blocked."}
+    ]
+  }
+}
+```
+
+Reasons are `blocked`, `consequential`, `irreversible`, `security`,
+`business_policy`, `expensive`, or `product_change`. A recommendation is optional
+and, when present, identifies an offered option. Every option states its
+consequence. Tasks requiring supervisory control must supply a valid packet;
+old tasks may continue using a question-only wait. The waiting transition is
+the authority for the packet and its identity.
+
+Paused workers keep their lease and runtime slot. Cancellation terminates their
+process tree and retains useful workspace artifacts. A restarted daemon cannot
+reattach to an old process or safely replay uncertain stdin; it records a failed
+execution and retains artifacts for an explicit recovery decision instead.
 
 ### Restart During Input Delivery
 

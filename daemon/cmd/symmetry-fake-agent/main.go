@@ -64,6 +64,8 @@ func run(input io.Reader, output io.Writer, errorOutput io.Writer) error {
 	switch mode {
 	case "success":
 		return runSuccess(output)
+	case "autonomous":
+		return runAutonomous(reader, output, envelope)
 	case "evidence_success":
 		return runEvidenceSuccess(output)
 	case "history_success":

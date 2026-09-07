@@ -8,7 +8,7 @@
     ["review", "Review"],
     ["done", "Done"]
   ];
-  const validViews = new Set(["board", "activity", "resources", "connections"]);
+  const validViews = new Set(["board", "chat", "activity", "resources", "connections"]);
   const workspaceFocusTargets = {
     activity: ["[data-work-item-id]", "workItemId"],
     attention: ["[data-attention-id]", "attentionId"],
@@ -72,6 +72,8 @@
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
   const csrfToken = $("meta[name='csrf-token']")?.content || "";
+  const chat = { scope: "project", runId: null, contextKey: null, requestId: 0, snapshot: null, drafts: new Map(), pending: new Set(), notices: new Map() };
+  const chatMarkup = new WeakMap();
   let submitLockGeneration = 0;
 
   class PortalRequestError extends Error {
@@ -299,7 +301,7 @@
     return `Project sync failed: ${summary}. ${actions}`;
   }
 
-  async function loadWorkspace({ silent = false, refreshDetail = true, projectId = state.selectedProjectId } = {}) {
+  async function loadWorkspace({ silent = false, refreshDetail = true, refreshChat = true, projectId = state.selectedProjectId, resetChatContext = false } = {}) {
     const requestId = ++state.workspaceRequestId;
     if (!silent && !state.workspace) renderLoading();
 
@@ -323,6 +325,11 @@
       ? { id: state.editingConnectionId, version: Number(connectionForm.elements.version.value) }
       : null;
     state.workspace = workspace;
+    if (resetChatContext) {
+      saveChatDraft();
+      chat.scope = "project";
+      chat.runId = null;
+    }
     state.selectedProjectId = workspace.selected_project_id;
     state.staleEditors.clear();
     state.persistentStaleEditors.clear();
@@ -355,6 +362,10 @@
 
     if (refreshDetail && state.activeWorkItemId && !dialogOpen()) {
       await openWorkItem(state.activeWorkItemId, { preserveDrawer: true });
+    }
+    if (state.activeView === "chat") {
+      if (refreshChat) await loadChat({ silent: true });
+      else prepareChatContext();
     }
     return true;
   }
@@ -459,6 +470,7 @@
     $$('[data-view]').forEach((link) => link.classList.toggle("is-active", link.dataset.view === state.activeView));
     $(".search-control").hidden = state.activeView !== "board";
     $("#new-item-button").hidden = state.activeView !== "board";
+    $(".workspace-content").classList.toggle("is-chat", state.activeView === "chat");
   }
 
   function visibleItems(items) {
@@ -741,6 +753,7 @@
 
     $("#detail-content").innerHTML = `
       <div class="detail-actions">
+        ${execution?.run_id ? `<button class="button" id="open-chat-button">${icon("review")}<span>Open Chat</span></button>` : ""}
         <button class="button" id="edit-item-button" ${archived ? "disabled" : ""}>${icon("settings")}<span>Edit</span></button>
         ${canStart ? `<button class="button button-primary" id="run-item-button">${icon("play")}<span>Start run</span></button>` : ""}
         ${canRetry ? `<button class="button button-primary" id="retry-item-button">${icon("rotate")}<span>Retry</span></button>` : ""}
@@ -751,7 +764,7 @@
       </div>
       ${item.assignee.type !== "agent" && !execution ? '<div class="inline-notice">Set Owner type to Agent before starting a run.</div>' : ""}
       ${item.external?.available === false ? '<div class="inline-notice attention">Unavailable in provider. Synchronize the work tracker after restoring access or the external item.</div>' : ""}
-      ${waiting ? `<div class="input-request"><p><strong>Agent needs a decision</strong><br>${escapeHtml(waiting.question || "Provide the requested input to continue.")}</p><form id="provide-input-form" class="input-row"><input name="answer" required aria-label="Response"><button class="button button-primary" type="submit">Send</button></form></div>` : ""}
+      ${waiting ? `<div class="input-request"><p><strong>Agent needs a decision</strong><br>${escapeHtml(waiting.question || "Provide the requested input to continue.")}</p>${waiting.decision || waiting.payload?.decision ? '<p>Review the options, consequences, and recommendation in Chat.</p><button class="button button-primary" id="decision-chat-button" type="button">Review decision in Chat</button>' : '<form id="provide-input-form" class="input-row"><input name="answer" required aria-label="Response"><button class="button button-primary" type="submit">Send</button></form>'}</div>` : ""}
       <section class="detail-summary"><p>${escapeHtml(outcome.summary || item.description || "No outcome summary yet.")}</p></section>
       ${item.external ? `<section class="detail-section"><h3>External work</h3><div class="detail-facts">${detailFact("Provider", escapeHtml(formatLabel(item.external.provider)))}${detailFact("Availability", item.external.available === false ? '<span class="state-badge attention">Unavailable</span>' : '<span class="state-badge healthy">Available</span>')}${detailFact("Reference", `<a class="detail-link" href="${escapeHtml(item.external.url)}" target="_blank" rel="noreferrer">#${escapeHtml(item.external.id)} ${icon("external")}</a>`)}${detailFact("State", escapeHtml(item.external.state))}${detailFact("Assigned human", escapeHtml(item.external.assignee || "Unassigned"))}${detailFact("Labels", escapeHtml(item.external.labels.join(", ") || "None"))}</div></section>` : ""}
       ${outcome.failure ? `<section class="detail-section"><h3>Failure</h3><div class="failure-panel"><pre>${escapeHtml(formatOutcome(outcome.failure))}</pre></div></section>` : ""}
@@ -775,6 +788,8 @@
       <section class="detail-section"><details class="raw-details"><summary>Raw execution data</summary><pre id="raw-execution-data">${escapeHtml(JSON.stringify(detail.raw, null, 2))}</pre>${detail.raw.next_before ? '<button class="button" id="load-history-button" type="button">Load older</button>' : ""}</details></section>`;
 
     $("#edit-item-button")?.addEventListener("click", () => openWorkItemDialog(item));
+    $("#open-chat-button")?.addEventListener("click", () => openRunChat(execution.run_id));
+    $("#decision-chat-button")?.addEventListener("click", () => openRunChat(execution.run_id));
     $("#run-item-button")?.addEventListener("click", () => runWorkItem(item));
     $("#retry-item-button")?.addEventListener("click", () => retryWorkItem(item));
     $("#cancel-item-button")?.addEventListener("click", () => cancelWorkItem(item));
@@ -1489,6 +1504,419 @@
     return new Promise((resolve) => dialog.addEventListener("close", () => resolve(dialog.returnValue === "confirm"), { once: true }));
   }
 
+  function chatScope() {
+    if (chat.scope === "run") return { scope: "run", run_id: chat.runId };
+    if (chat.scope === "project") return { scope: "project", project_id: state.selectedProjectId };
+    return { scope: "workspace" };
+  }
+
+  function chatContextKey() {
+    return JSON.stringify(chatScope());
+  }
+
+  function saveChatDraft() {
+    if (!chat.contextKey) return;
+    chat.drafts.set(chat.contextKey, Object.fromEntries($$("input, textarea, select", $("#chat-form")).map((field) => [field.id, field.value])));
+  }
+
+  function setChatMarkup(root, html) {
+    if (chatMarkup.get(root) === html) return;
+    root.innerHTML = html;
+    chatMarkup.set(root, html);
+  }
+
+  function updateChatOptions(select, html, value = select.value) {
+    setChatMarkup(select, html);
+    if (Array.from(select.options).some((option) => option.value === value)) select.value = value;
+  }
+
+  function renderChatSelectors() {
+    $("#chat-scope").value = chat.scope;
+    $("#chat-run-field").hidden = chat.scope !== "run";
+    const projects = state.workspace?.projects || [];
+    const items = projects.flatMap((project) => project.work_items).filter((item) => item.execution?.run_id);
+    const runProjectId = currentChatRun()?.work_item.project_id || items.find((item) => item.execution.run_id === chat.runId)?.project_id;
+    const contextProject = chat.scope === "run" ? projects.find((project) => project.id === runProjectId) : selectedProject();
+    $("#chat-project-label").textContent = chat.scope === "workspace" ? "Across your projects" : contextProject?.name || (chat.scope === "run" ? "Pinned run context" : "Select or create a project");
+    const pinned = chat.runId && !items.some((item) => item.execution.run_id === chat.runId)
+      ? `<option value="${escapeHtml(chat.runId)}">Pinned run · ${escapeHtml(chat.runId.slice(0, 8))}</option>` : "";
+    updateChatOptions($("#chat-run-select"), '<option value="">Choose a run</option>' + pinned + items.map((item) => `<option value="${escapeHtml(item.execution.run_id)}">${escapeHtml(item.key)} · ${escapeHtml(item.title)} · Attempt ${item.execution.generation}</option>`).join(""), chat.runId || "");
+    updateChatOptions($("#chat-target-project"), projects.filter((project) => project.status === "active").map(projectOption).join(""), $("#chat-target-project").value || state.selectedProjectId);
+    renderChatWorkResources();
+  }
+
+  function renderChatWorkResources() {
+    const projectId = chat.scope === "workspace" ? $("#chat-target-project").value : state.selectedProjectId;
+    const project = state.workspace?.projects.find((candidate) => candidate.id === projectId);
+    for (const [selector, kind, placeholder] of [["#chat-repository", "repository", "Project default"], ["#chat-ci", "ci", "Repository provider"]]) {
+      updateChatOptions($(selector), `<option value="">${placeholder}</option>` + (project?.resources || []).filter((resource) => resource.kind === kind).map((resource) => `<option value="${escapeHtml(resource.id)}">${escapeHtml(resource.name)}</option>`).join(""));
+    }
+  }
+
+  function prepareChatContext() {
+    const key = chatContextKey();
+    if (chat.contextKey !== key) {
+      saveChatDraft();
+      chat.contextKey = key;
+      chat.snapshot = null;
+      chat.requestId += 1;
+      [$("#chat-messages"), $("#chat-run-context"), $("#chat-run-select"), ...$$("select", $("#chat-form"))].forEach((root) => chatMarkup.delete(root));
+      $("#chat-form").reset();
+      renderChatSelectors();
+      const draft = chat.drafts.get(key) || {};
+      if (draft["chat-target-project"]) {
+        $("#chat-target-project").value = draft["chat-target-project"];
+        renderChatWorkResources();
+      }
+      for (const [id, value] of Object.entries(draft)) {
+        const field = document.getElementById(id);
+        if (field) field.value = value;
+      }
+      $("#chat-scroll").scrollTop = 0;
+      setChatMarkup($("#chat-messages"), '<div class="chat-empty"><span class="chat-empty-mark">' + icon("review") + '</span><h2>A clear goal goes a long way.</h2><p>Discuss the work, ask for status, or choose Start work to put an agent on it.</p></div>');
+      setChatMarkup($("#chat-run-context"), "");
+      $("#chat-load-older").hidden = true;
+    } else renderChatSelectors();
+    renderChatComposer();
+    syncLocation();
+  }
+
+  function currentChatRun() {
+    return chat.scope === "run" ? chat.snapshot?.runs.find((detail) => detail.work_item.execution?.run_id === chat.runId) : null;
+  }
+
+  function renderChatComposer() {
+    const intent = $("#chat-intent").value;
+    const run = currentChatRun();
+    const contextMissing = (chat.scope === "project" && !state.selectedProjectId) || (chat.scope === "run" && !chat.runId);
+    const targetProjectId = chat.scope === "workspace" ? $("#chat-target-project").value : state.selectedProjectId;
+    const target = state.workspace?.projects.find((project) => project.id === targetProjectId);
+    const intentUnavailable = (intent === "guidance" && !run?.work_item.execution?.can_guide) || (intent === "start_work" && (chat.scope === "run" || target?.status !== "active"));
+    const pending = chat.pending.has(chat.contextKey);
+    $("#chat-send").disabled = contextMissing || intentUnavailable || pending;
+    $("#chat-start-fields").hidden = intent !== "start_work";
+    $("#chat-target-project-field").hidden = chat.scope !== "workspace";
+    const notes = {
+      discuss: "Discuss without changing execution.",
+      status: "Read recorded progress. The worker keeps running.",
+      start_work: chat.scope === "run" ? "Choose Project or Workspace context to start new work." : "Creates real work and queues an agent run.",
+      guidance: run?.work_item.execution?.can_guide ? "Applied at a safe boundary. Limit: 32,768 UTF-8 bytes." : "Select an active run that supports supervisory guidance."
+    };
+    $("#chat-intent-note").textContent = notes[intent];
+    const notice = chat.notices.get(chat.contextKey);
+    $("#chat-send-status").textContent = pending ? "Saving… Wait for durable confirmation." : notice?.message || "Messages are saved to this context.";
+    $("#chat-send-status").classList.toggle("is-error", Boolean(notice?.error));
+    $("#chat-form").setAttribute("aria-busy", String(pending));
+  }
+
+  async function loadChat({ silent = false, older = false } = {}) {
+    prepareChatContext();
+    const scope = chatScope();
+    if ((scope.scope === "run" && !scope.run_id) || (scope.scope === "project" && !scope.project_id)) return;
+    const key = chat.contextKey;
+    const requestId = ++chat.requestId;
+    const params = new URLSearchParams(scope);
+    const previous = chat.snapshot;
+    if (older && previous?.next_before) params.set("before", previous.next_before);
+    $("#chat-load-older").disabled = older;
+    try {
+      const snapshot = await request(`/portal/api/chat?${params}`);
+      if (key !== chat.contextKey || requestId !== chat.requestId) return;
+      const messages = new Map();
+      // Keep loaded history through refresh, but replace matching receipts with current durable state.
+      for (const message of previous?.messages || []) messages.set(message.id, message);
+      const gap = !older && snapshot.next_before && messages.size > 0 && snapshot.messages.length > 0 && !snapshot.messages.some((message) => messages.has(message.id));
+      for (const message of snapshot.messages || []) messages.set(message.id, message);
+      refreshChatReceipts(messages, snapshot, key);
+      snapshot.messages = Array.from(messages.values()).sort((a, b) => String(a.inserted_at).localeCompare(String(b.inserted_at)) || String(a.id).localeCompare(String(b.id)));
+      if (!older && previous?.historyLoaded && !gap) snapshot.next_before = previous.next_before;
+      snapshot.historyLoaded = !gap && (older || previous?.historyLoaded);
+      chat.snapshot = snapshot;
+      renderChatSelectors();
+      renderChatSnapshot({ older });
+    } catch (error) {
+      if (key !== chat.contextKey || requestId !== chat.requestId) return;
+      if (!silent || !chat.snapshot) {
+        chat.notices.set(key, { message: `Could not refresh this conversation: ${error.message}. Your draft is kept.`, error: true });
+        renderChatComposer();
+      }
+    } finally {
+      if (key === chat.contextKey && requestId === chat.requestId) $("#chat-load-older").disabled = false;
+    }
+  }
+
+  function refreshChatReceipts(messages, snapshot, contextKey) {
+    const currentMessages = new Set(snapshot.messages.map((message) => message.id));
+    const commands = new Map();
+    for (const message of snapshot.messages) {
+      if (message.command?.command_id) commands.set(message.command.command_id, message.command);
+    }
+    for (const detail of snapshot.runs || []) {
+      for (const entry of detail.timeline || []) {
+        if (entry.source === "command" && entry.data?.command_id) commands.set(entry.data.command_id, entry.data);
+      }
+      const command = detail.work_item.execution?.latest_command;
+      if (command?.command_id) commands.set(command.command_id, command);
+    }
+    for (const [id, message] of messages) {
+      const command = message.command;
+      const current = commands.get(command?.command_id);
+      if (current) messages.set(id, { ...message, command: current, receipt_stale: false });
+      else if (command && !currentMessages.has(id) && !command.acknowledgement_outcome && !["acknowledged", "cancelled", "superseded"].includes(command.state)) {
+        messages.set(id, { ...message, receipt_stale: true });
+      }
+    }
+    const notice = chat.notices.get(contextKey);
+    if (notice?.command && !notice.error) {
+      const command = commands.get(notice.command.command_id);
+      if (command) chat.notices.set(contextKey, { ...notice, command, message: chatCommandLabel(command) });
+      else if (!notice.command.acknowledgement_outcome && !["acknowledged", "cancelled", "superseded"].includes(notice.command.state)) {
+        chat.notices.set(contextKey, { ...notice, message: "Saved · acknowledgement not refreshed with this page." });
+      }
+    }
+  }
+
+  function chatCommandLabel(command) {
+    if (!command) return "Saved";
+    const outcome = command.acknowledgement_outcome;
+    if (outcome === "applied") return "Applied at a safe boundary";
+    if (outcome === "rejected" || outcome === "failed") return `Saved · ${formatLabel(outcome)} by agent`;
+    if (command.state === "acknowledged") return "Saved · acknowledged";
+    if (["cancelled", "superseded"].includes(command.state)) return `Saved · ${formatLabel(command.state)}`;
+    return "Saved · awaiting agent acknowledgement";
+  }
+
+  function chatFailureText(failure) {
+    const text = [failure, failure?.message, failure?.summary, failure?.error]
+      .find((value) => typeof value === "string" && value.trim());
+    return text ? text.length > 2_000 ? `${text.slice(0, 2_000)}…` : text : null;
+  }
+
+  function chatTimelineMessages() {
+    const entries = [...chat.snapshot.messages];
+    const eventKinds = new Set(["progress", "summary", "rationale", "finding", "artifact", "test", "pull_request", "ci", "review", "waiting_for_input"]);
+    const transitionStates = new Set(["completed", "failed", "cancelled", "paused", "waiting_for_input"]);
+    for (const detail of chat.snapshot.runs || []) {
+      for (const entry of detail.timeline || []) {
+        const data = entry.data || {};
+        const payload = data.payload || {};
+        const isEvent = entry.source === "event" && eventKinds.has(data.kind);
+        const isTransition = entry.source === "transition" && transitionStates.has(data.state);
+        if (!isEvent && !isTransition) continue;
+        const kind = data.kind || data.state;
+        const content = [isTransition && data.state === "failed" ? chatFailureText(payload) : null, payload.summary, payload.message, payload.rationale, payload.question, payload.path, payload.url]
+          .find((value) => typeof value === "string" && value.trim());
+        const status = typeof payload.status === "string" ? formatLabel(payload.status) : "";
+        if (!content && !status && !isTransition) continue;
+        entries.push({
+          id: `run:${entry.run_id}:${data.event_id || data.transition_id}`,
+          role: "assistant", intent: kind, content: content || `${formatLabel(kind)}${status ? `: ${status}` : "."}`,
+          inserted_at: entry.recorded_at, work_key: detail.work_item.key, evidence: true
+        });
+      }
+    }
+    return entries.sort((a, b) => String(a.inserted_at).localeCompare(String(b.inserted_at)) || String(a.id).localeCompare(String(b.id)));
+  }
+
+  function renderChatMessage(message) {
+    const human = message.role === "human" || message.role === "user";
+    const receipt = message.evidence ? "Recorded execution evidence" : message.receipt_stale ? "Saved · acknowledgement not refreshed with this page." : chatCommandLabel(message.command);
+    return `<article class="chat-message ${human ? "from-human" : "from-agent"}${message.evidence ? " from-evidence" : ""}" data-message-id="${escapeHtml(message.id)}"><div class="chat-message-meta"><strong>${human ? "You" : message.evidence ? "Agent update" : "Symmetry"}</strong>${message.work_key ? `<span>${escapeHtml(message.work_key)}</span>` : ""}<span>${escapeHtml(formatLabel(message.intent))}</span><time datetime="${escapeHtml(message.inserted_at)}">${escapeHtml(formatTime(message.inserted_at))}</time></div><div class="chat-message-content">${escapeHtml(message.content)}</div><div class="chat-message-receipt">${escapeHtml(receipt)}</div></article>`;
+  }
+
+  function renderChatSnapshot({ older = false } = {}) {
+    const scroll = $("#chat-scroll");
+    const nearBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 80;
+    const oldHeight = scroll.scrollHeight;
+    const oldTop = scroll.scrollTop;
+    const snapshot = chat.snapshot;
+    const messages = chatTimelineMessages();
+    const markup = messages.length ? messages.map(renderChatMessage).join("") : '<div class="chat-empty"><span class="chat-empty-mark">' + icon("review") + '</span><h2>A clear goal goes a long way.</h2><p>Discuss the work, ask for status, or choose Start work to put an agent on it.</p><p class="chat-empty-note">Routine choices stay with the agent. Consequential decisions come back to you.</p></div>';
+    setChatMarkup($("#chat-messages"), markup);
+    $("#chat-load-older").hidden = !snapshot.next_before;
+    if (older) scroll.scrollTop = oldTop + scroll.scrollHeight - oldHeight;
+    else scroll.scrollTop = nearBottom ? scroll.scrollHeight : oldTop;
+    renderChatRuns();
+    renderChatComposer();
+  }
+
+  function chatDelivery(item) {
+    const url = item.pull_request_url;
+    const safeUrl = url && /^https?:\/\//i.test(url);
+    return `<div class="chat-delivery">${safeUrl ? `<a class="detail-link" href="${escapeHtml(url)}" target="_blank" rel="noreferrer">Open PR ${icon("external")}</a>${sourceLabel(item.delivery?.pull_request)}` : '<span>No pull request yet</span>'}<span>CI <strong class="${item.ci_status === "failed" ? "is-error" : ""}">${escapeHtml(formatLabel(item.ci_status))}</strong>${sourceLabel(item.delivery?.ci)}</span><span>Review <strong>${escapeHtml(formatLabel(item.review_status))}</strong>${sourceLabel(item.delivery?.review)}</span></div>`;
+  }
+
+  function renderChatRuns() {
+    const root = $("#chat-run-context");
+    const active = root.contains(document.activeElement) ? document.activeElement : null;
+    const focusId = active?.id;
+    const focusAction = active ? ["chatControl", "chatRun", "chatWork", "chatDecision"].find((key) => active.dataset[key]) : null;
+    const selection = active && typeof active.selectionStart === "number" ? [active.selectionStart, active.selectionEnd] : null;
+    const scrollTop = root.scrollTop;
+    const diagnosticOpen = $("details.chat-diagnostics", root)?.open;
+    const runs = chat.snapshot?.runs || [];
+    const detail = currentChatRun();
+    let markup;
+    if (detail) {
+      const item = detail.work_item;
+      const execution = item.execution;
+      const outcome = detail.outcome || {};
+      const busy = chat.pending.has(chat.contextKey);
+      const waiting = execution.waiting;
+      const decision = waiting?.decision || waiting?.payload?.decision;
+      const failure = chatFailureText(outcome.failure);
+      const failureMarkup = failure ? `<section class="failure-panel chat-failure"><strong>Run failed</strong><p>${escapeHtml(failure)}</p></section>` : "";
+      const decisionMarkup = waiting ? `<section class="chat-decision"><p class="eyebrow">YOUR DECISION</p><h3>${escapeHtml(waiting.question || "A decision is needed to continue.")}</h3>${decision ? `<p class="source-label">${escapeHtml(formatLabel(decision.reason))}</p><p>${escapeHtml(decision.context)}</p><div class="chat-decision-options">${(decision.options || []).map((option) => `<button class="chat-decision-option" id="chat-option-${escapeHtml(option.id)}" type="button" data-chat-decision="${escapeHtml(option.id)}" ${busy ? "disabled" : ""}><strong>${escapeHtml(option.label)}${decision.recommended_option_id === option.id ? '<span class="chat-recommendation">Recommended</span>' : ""}</strong><span>${escapeHtml(option.consequence)}</span></button>`).join("")}</div>` : '<form id="chat-decision-form"><label class="field"><span>Your response</span><input id="chat-decision-answer" required maxlength="20000"></label><button class="button button-primary" type="submit">Send decision</button></form>'}</section>` : "";
+      const summaryMarkup = failureMarkup + (outcome.summary || (!waiting && !failure) ? `<p class="chat-run-summary">${escapeHtml(outcome.summary || "The agent has not recorded a summary yet.")}</p>` : "");
+      markup = `<div class="chat-context-heading"><p class="eyebrow">SAME WORK. SHARED STATE.</p><span class="project-key">${escapeHtml(item.key)} · Attempt ${execution.generation}</span><h2>${escapeHtml(item.title)}</h2><span class="state-badge ${escapeHtml(execution.state)}">${escapeHtml(formatLabel(execution.state))}</span></div>${decisionMarkup}${summaryMarkup}${outcome.blocker && !waiting ? `<p class="chat-blocker">${icon("alert")}${escapeHtml(outcome.blocker)}</p>` : ""}${chatDelivery(item)}<div class="chat-run-controls">${execution.can_pause ? `<button class="button" type="button" data-chat-control="pause" ${busy ? "disabled" : ""}>Pause</button>` : ""}${execution.can_resume ? `<button class="button" type="button" data-chat-control="resume" ${busy ? "disabled" : ""}>Resume</button>` : ""}${execution.can_cancel ? `<button class="button button-danger" type="button" data-chat-control="cancel" ${busy ? "disabled" : ""}>Cancel run</button>` : ""}</div>${execution.latest_command ? `<p class="chat-control-status">${escapeHtml(formatLabel(execution.latest_command.kind))}: ${escapeHtml(chatCommandLabel(execution.latest_command))}</p>` : ""}${execution.supervisory_control === false && ["running", "paused"].includes(execution.state) ? '<p class="form-note">This runtime does not support safe-boundary guidance or pause.</p>' : ""}${renderListSection("Important findings", outcome.findings, "message")}${renderListSection("Changed artifacts", outcome.changed_artifacts, "path")}${renderTestSection(outcome.tests)}<button class="button" id="chat-open-details" type="button">Open work details</button><details class="chat-diagnostics"><summary>Execution details &amp; diagnostics</summary><p>Inspect the complete run history and raw execution data in work details.</p><p>Run ${escapeHtml(execution.run_id)}</p><p>Generation ${execution.generation}</p><button class="button" type="button" data-chat-diagnostics>Inspect execution</button></details>`;
+    } else {
+      markup = `<div class="chat-context-heading"><p class="eyebrow">SHARED WORK STATE</p><h2>${chat.scope === "run" ? "Select a run" : "Work in this context"}</h2><p>Progress, blockers, PRs, and CI are shared with the Board.</p></div>${runs.length ? runs.map((run) => {
+        const item = run.work_item;
+        return `<article class="chat-work-card"><span class="project-key">${escapeHtml(item.key)}</span><h3>${escapeHtml(item.title)}</h3><span class="state-badge ${escapeHtml(item.execution?.state || item.status)}">${escapeHtml(formatLabel(item.execution?.state || item.status))}</span><p>${escapeHtml(run.outcome?.summary || item.description || "No summary yet.")}</p>${chatDelivery(item)}${item.execution?.run_id ? `<button class="button" type="button" data-chat-run="${escapeHtml(item.execution.run_id)}">Open run Chat</button>` : `<button class="button" type="button" data-chat-work="${escapeHtml(item.id)}">Open work details</button>`}</article>`;
+      }).join("") : '<p class="chat-no-work">No work recorded in this context yet. Choose Start work to begin.</p>'}`;
+    }
+    const transitionId = detail?.work_item.execution?.waiting?.transition_id || "";
+    const legacyDraft = root.dataset.waitingTransition === transitionId ? $("#chat-decision-answer")?.value : null;
+    setChatMarkup(root, markup);
+    root.dataset.waitingTransition = transitionId;
+    if (legacyDraft && $("#chat-decision-answer")) $("#chat-decision-answer").value = legacyDraft;
+    if (diagnosticOpen) $("details.chat-diagnostics", root)?.setAttribute("open", "");
+    if (active && document.activeElement === document.body) {
+      const matchingAction = focusAction ? $$("button", root).find((button) => button.dataset[focusAction] === active.dataset[focusAction]) : null;
+      const diagnosticTarget = active.matches(".chat-diagnostics summary") ? $(".chat-diagnostics summary", root) : active.hasAttribute("data-chat-diagnostics") ? $("[data-chat-diagnostics]", root) : null;
+      const target = (focusId && document.getElementById(focusId)) || matchingAction || diagnosticTarget || root;
+      if (target === root) root.tabIndex = -1;
+      target.focus({ preventScroll: true });
+      if (selection && target?.setSelectionRange && legacyDraft !== null) target.setSelectionRange(...selection);
+    }
+    root.scrollTop = scrollTop;
+  }
+
+  async function openRunChat(runId) {
+    saveChatDraft();
+    chat.scope = "run";
+    chat.runId = runId;
+    closeDrawer();
+    setView("chat");
+  }
+
+  async function openChatWorkDetail(item, trigger) {
+    if (item.project_id !== state.selectedProjectId) {
+      await switchProject(item.project_id);
+      if (state.selectedProjectId !== item.project_id || state.activeView !== "chat") return;
+    }
+    await openWorkItem(item.id, { trigger });
+  }
+
+  async function sendChat(payload, { clearDraft = false } = {}) {
+    const key = chat.contextKey;
+    const projectSwitchId = state.projectSwitchRequestId;
+    const ownsRefresh = () => chat.contextKey === key && state.activeView === "chat" && state.projectSwitchTargetId === null && state.projectSwitchRequestId === projectSwitchId;
+    if (chat.pending.has(key)) return;
+    chat.pending.add(key);
+    chat.notices.delete(key);
+    renderChatComposer();
+    renderChatRuns();
+    let action;
+    let saved = false;
+    try {
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(payload)));
+      action = actionId("chat", key, Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(""));
+      const result = await request("/portal/api/chat/messages", { method: "POST", body: JSON.stringify({ ...payload, action_id: action.id }) });
+      saved = true;
+      clearActionId(action.key);
+      chat.notices.set(key, { command: result.command, message: result.command ? chatCommandLabel(result.command) : "Saved to durable history." });
+      if (clearDraft) {
+        if (chat.contextKey === key && $("#chat-content").value === payload.content) $("#chat-content").value = "";
+        const draft = chat.drafts.get(key);
+        if (draft?.["chat-content"] === payload.content) draft["chat-content"] = "";
+      }
+      if (ownsRefresh()) {
+        await loadChat({ silent: true });
+        if (ownsRefresh()) await loadWorkspace({ silent: true, refreshChat: false });
+      }
+    } catch (error) {
+      if (action && ["invalid_request", "state_conflict", "stale", "not_found", "unsupported_control"].includes(error.code)) clearActionId(action.key);
+      chat.notices.set(key, { message: saved ? `Saved to durable history, but refresh failed: ${error.message}. Refresh to see the latest work.` : `Send not confirmed: ${error.message}. Your draft is kept; retry safely.`, error: true });
+      if (ownsRefresh() && ["state_conflict", "stale"].includes(error.code)) await loadChat({ silent: true });
+    } finally {
+      chat.pending.delete(key);
+      if (chat.contextKey === key) {
+        renderChatComposer();
+        renderChatRuns();
+      }
+    }
+  }
+
+  function bindChatEvents() {
+    $("#chat-scope").addEventListener("change", (event) => {
+      saveChatDraft();
+      chat.scope = event.target.value;
+      loadChat();
+    });
+    $("#chat-run-select").addEventListener("change", (event) => {
+      saveChatDraft();
+      chat.runId = event.target.value || null;
+      loadChat();
+    });
+    $("#chat-intent").addEventListener("change", renderChatComposer);
+    $("#chat-target-project").addEventListener("change", () => { renderChatWorkResources(); renderChatComposer(); });
+    $("#chat-load-older").addEventListener("click", () => loadChat({ older: true }));
+    $("#chat-form").addEventListener("submit", (event) => {
+      event.preventDefault();
+      if ($("#chat-send").disabled) return;
+      const content = $("#chat-content").value;
+      if (!content.trim()) return;
+      const intent = $("#chat-intent").value;
+      if (intent === "guidance" && new TextEncoder().encode(content).byteLength > 32_768) {
+        chat.notices.set(chat.contextKey, { message: "Guidance must be 32,768 UTF-8 bytes or fewer.", error: true });
+        renderChatComposer();
+        return;
+      }
+      const payload = { ...chatScope(), intent, content };
+      if (intent === "start_work") {
+        payload.work = {};
+        for (const [field, selector] of [["title", "#chat-work-title"], ["agent_profile", "#chat-agent-profile"], ["workspace", "#chat-workspace"], ["repository_resource_id", "#chat-repository"], ["ci_resource_id", "#chat-ci"]]) {
+          if ($(selector).value.trim()) payload.work[field] = $(selector).value.trim();
+        }
+        if (chat.scope === "workspace") payload.target_project_id = $("#chat-target-project").value;
+      }
+      if (intent === "guidance") {
+        const item = currentChatRun()?.work_item;
+        if (!item?.execution?.can_guide) return;
+        Object.assign(payload, { work_item_id: item.id, generation: item.execution.generation });
+      }
+      sendChat(payload, { clearDraft: true });
+    });
+    $("#chat-run-context").addEventListener("click", async (event) => {
+      const button = event.target.closest("button");
+      if (!button || button.disabled) return;
+      if (button.dataset.chatRun) return openRunChat(button.dataset.chatRun);
+      if (button.dataset.chatWork) {
+        const detail = chat.snapshot?.runs.find((candidate) => candidate.work_item.id === button.dataset.chatWork);
+        if (detail) return openChatWorkDetail(detail.work_item, button);
+      }
+      const item = currentChatRun()?.work_item;
+      if (!item) return;
+      if (button.id === "chat-open-details" || button.hasAttribute("data-chat-diagnostics")) return openChatWorkDetail(item, button);
+      const intent = button.dataset.chatControl || (button.dataset.chatDecision ? "decision" : null);
+      if (!intent) return;
+      const key = chat.contextKey;
+      const payload = { ...chatScope(), intent, content: intent === "decision" ? `Choose ${button.querySelector("strong").firstChild.textContent.trim()}` : `${formatLabel(intent)} this run.`, work_item_id: item.id, generation: item.execution.generation };
+      if (intent === "decision") Object.assign(payload, { waiting_transition_id: item.execution.waiting.transition_id, option_id: button.dataset.chatDecision });
+      if (intent === "cancel" && !await confirmAction("Cancel this run", "End this execution and keep its history and artifacts?", "Cancel run")) return;
+      if (key !== chat.contextKey) return;
+      await sendChat(payload);
+    });
+    $("#chat-run-context").addEventListener("submit", (event) => {
+      if (event.target.id !== "chat-decision-form") return;
+      event.preventDefault();
+      const item = currentChatRun()?.work_item;
+      if (!item?.execution?.waiting) return;
+      sendChat({ ...chatScope(), intent: "decision", content: $("#chat-decision-answer").value, work_item_id: item.id, generation: item.execution.generation, waiting_transition_id: item.execution.waiting.transition_id });
+    });
+  }
+
   function setView(view, updateHash = true) {
     const nextView = validViews.has(view) ? view : "board";
     if (nextView !== state.activeView) invalidateMutationContext();
@@ -1496,6 +1924,7 @@
     if (updateHash && window.location.hash !== `#${state.activeView}`) history.replaceState(null, "", `${window.location.pathname}${window.location.search}#${state.activeView}`);
     renderNavigation();
     if (state.workspace && state.activeView === "connections") renderConnectionsView();
+    if (state.workspace && state.activeView === "chat") loadChat();
   }
 
   function syncLocation() {
@@ -1503,6 +1932,14 @@
     if (state.selectedProjectId) url.searchParams.set("project_id", state.selectedProjectId);
     else url.searchParams.delete("project_id");
     url.hash = state.activeView;
+    if (state.activeView === "chat") {
+      url.searchParams.set("chat_scope", chat.scope);
+      if (chat.scope === "run" && chat.runId) url.searchParams.set("run_id", chat.runId);
+      else url.searchParams.delete("run_id");
+    } else {
+      url.searchParams.delete("chat_scope");
+      url.searchParams.delete("run_id");
+    }
     history.replaceState(null, "", url);
   }
 
@@ -1511,6 +1948,7 @@
   }
 
   function bindEvents() {
+    bindChatEvents();
     $$('[data-view]').forEach((link) => link.addEventListener("click", (event) => {
       event.preventDefault();
       setView(link.dataset.view);
@@ -1911,6 +2349,7 @@
   }
 
   async function switchProject(projectId) {
+    chat.requestId += 1;
     const previousProjectId = state.selectedProjectId;
     const requestId = ++state.projectSwitchRequestId;
     state.projectSwitchTargetId = projectId;
@@ -1925,7 +2364,7 @@
     $("#project-settings-button").disabled = true;
 
     try {
-      const loaded = await loadWorkspace({ silent: true, projectId });
+      const loaded = await loadWorkspace({ silent: true, projectId, resetChatContext: true });
       if (!loaded && requestId === state.projectSwitchRequestId) {
         state.selectedProjectId = previousProjectId;
         syncLocation();
@@ -1988,6 +2427,8 @@
     bindEvents();
     const params = new URLSearchParams(window.location.search);
     state.selectedProjectId = params.get("project_id");
+    chat.scope = ["workspace", "project", "run"].includes(params.get("chat_scope")) ? params.get("chat_scope") : "project";
+    chat.runId = params.get("run_id");
     state.activeView = validViews.has(window.location.hash.slice(1)) ? window.location.hash.slice(1) : "board";
     renderNavigation();
     try {

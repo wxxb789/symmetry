@@ -24,7 +24,24 @@ defmodule SymmetryControl.Orchestration do
   @terminal_targets ["completed", "failed", "cancelled"]
   @terminal_grace_ms 8 * 60 * 1_000
   @minimum_lease_duration_ms 30_000
-  @capacity_bearing_states ["assigned", "claimed", "running", "waiting_for_input", "cancelling"]
+  @capacity_bearing_states [
+    "assigned",
+    "claimed",
+    "running",
+    "paused",
+    "waiting_for_input",
+    "cancelling"
+  ]
+  @supervisory_commands ["guidance", "pause", "resume"]
+  @decision_reasons [
+    "blocked",
+    "consequential",
+    "irreversible",
+    "security",
+    "business_policy",
+    "expensive",
+    "product_change"
+  ]
   @default_history_limit 100
   @max_history_limit 500
   @timeline_source_ranks %{"event" => 0, "transition" => 1, "command" => 2}
@@ -482,7 +499,8 @@ defmodule SymmetryControl.Orchestration do
           task: task,
           run: run,
           waiting: current_waiting_context(task, run),
-          latest_command: latest_task_command(task.id)
+          latest_command: latest_task_command(task.id),
+          controls: control_capabilities(task, run)
         }
       end)
       |> case do
@@ -495,6 +513,29 @@ defmodule SymmetryControl.Orchestration do
   end
 
   def task_snapshot(_), do: {:error, :invalid_request}
+
+  def control_capabilities(task, run) do
+    runtime = run && Repo.get(Runtime, run.runtime_id)
+    pending? = not is_nil(run) and pending_supervisory_transition?(run.id)
+    control_capabilities(task, run, runtime, pending?)
+  end
+
+  def control_capabilities(task, run, runtime, pending?) do
+    supported? =
+      not is_nil(runtime) and value(runtime.capabilities, :supervisory_control, false) == true
+
+    current? =
+      not is_nil(run) and not is_nil(runtime) and
+        run.generation == task.attempt_generation and run.state == task.state and
+        run.claimed_runtime_epoch == runtime.connection_epoch
+
+    %{
+      supervisory_control: supported?,
+      can_guide: supported? and current? and task.state in ["running", "paused"],
+      can_pause: supported? and current? and task.state == "running" and not pending?,
+      can_resume: supported? and current? and task.state == "paused" and not pending?
+    }
+  end
 
   @spec list_task_events(Ecto.UUID.t(), keyword()) :: {:ok, map()} | {:error, atom()}
   def list_task_events(task_id, opts \\ []) do
@@ -682,8 +723,13 @@ defmodule SymmetryControl.Orchestration do
                    limit: 1,
                    select: event
                ) do
-            nil -> {transition.payload, transition.inserted_at}
-            event -> {event.payload, event.inserted_at}
+            nil ->
+              {transition.payload, transition.inserted_at}
+
+            event ->
+              if value(transition.payload, :decision),
+                do: {transition.payload, transition.inserted_at},
+                else: {event.payload, event.inserted_at}
           end
 
         %{
@@ -691,6 +737,7 @@ defmodule SymmetryControl.Orchestration do
           generation: run.generation,
           transition_id: transition.transition_id,
           question: value(payload, :question),
+          decision: value(payload, :decision),
           payload: payload,
           recorded_at: recorded_at
         }
@@ -1130,6 +1177,12 @@ defmodule SymmetryControl.Orchestration do
         {task, run, runtime} = lock_chain(run_id)
         ensure_fence!(task, run, runtime, fence, current)
 
+        Enum.each(events, fn event ->
+          if value(event, :kind) == "waiting_for_input" do
+            validate_decision_packet!(task, value(event, :payload, %{}))
+          end
+        end)
+
         event_ids = Enum.map(events, &value(&1, :event_id))
 
         existing_events =
@@ -1205,6 +1258,7 @@ defmodule SymmetryControl.Orchestration do
           nil ->
             ensure_cancelled_transition_authority!(run, target_state)
             ensure_transition_fence!(task, run, runtime, fence, target_state, current)
+            if target_state == "waiting_for_input", do: validate_decision_packet!(task, payload)
 
             transition_once!(
               task,
@@ -1233,7 +1287,7 @@ defmodule SymmetryControl.Orchestration do
       {:error, :invalid_request}
     else
       normalized_payload = normalize_command_payload(kind, payload)
-      command_hash = request_hash(%{kind: kind, payload: normalized_payload})
+      command_hash = command_request_hash(kind, normalized_payload, opts)
       current = now(opts)
 
       Repo.transaction(fn ->
@@ -1280,7 +1334,7 @@ defmodule SymmetryControl.Orchestration do
         {task, nil}
       else
         idempotency_key = legacy_cancel_idempotency_key(task)
-        command_hash = request_hash(%{kind: "cancel", payload: %{}})
+        command_hash = command_request_hash("cancel", %{}, opts)
 
         {command, _disposition} =
           create_or_replay_locked_command!(
@@ -1327,19 +1381,28 @@ defmodule SymmetryControl.Orchestration do
     if not (valid_uuid?(task_id) and valid_task_attrs?(task_attrs)) do
       {:error, :invalid_request}
     else
-      payload = %{work: task_attrs}
-      command_hash = request_hash(%{kind: "retry", payload: payload})
       current = now(opts)
 
       Repo.transaction(fn ->
         task = lock_task(task_id)
 
-        case lock_task_command(task.id, idempotency_key) do
-          %Command{request_hash: ^command_hash} = command ->
-            {task, command, :replayed}
+        task_attrs =
+          if value(task.required_capabilities, :supervisory_control, false) == true,
+            do:
+              Map.update!(
+                task_attrs,
+                :required_capabilities,
+                &Map.put(&1, "supervisory_control", true)
+              ),
+            else: task_attrs
 
-          %Command{} ->
-            rollback(:idempotency_conflict)
+        payload = %{work: task_attrs}
+        command_hash = command_request_hash("retry", payload, opts)
+
+        case lock_task_command(task.id, idempotency_key) do
+          %Command{} = command ->
+            ensure_command_replay!(command, "retry", payload, command_hash)
+            {task, command, :replayed}
 
           nil ->
             ensure_expected_generation!(task, Keyword.get(opts, :expected_generation))
@@ -1400,11 +1463,9 @@ defmodule SymmetryControl.Orchestration do
          opts
        ) do
     case lock_task_command(task.id, idempotency_key) do
-      %Command{request_hash: ^command_hash} = command ->
+      %Command{} = command ->
+        ensure_command_replay!(command, kind, payload, command_hash)
         {command, :replayed}
-
-      %Command{} ->
-        rollback(:idempotency_conflict)
 
       nil ->
         create_new_command!(task, kind, payload, idempotency_key, command_hash, current, opts)
@@ -1459,8 +1520,9 @@ defmodule SymmetryControl.Orchestration do
 
         {command, :created}
 
-      state when state in ["claimed", "running", "waiting_for_input"] ->
+      state when state in ["claimed", "running", "paused", "waiting_for_input"] ->
         run = lock_current_run(task)
+        reject_pending_commands!(task, run.id, current)
 
         command =
           insert_command!(
@@ -1501,6 +1563,8 @@ defmodule SymmetryControl.Orchestration do
          current,
          opts
        ) do
+    ensure_expected_generation!(task, Keyword.get(opts, :expected_generation))
+
     if task.state != "waiting_for_input" do
       rollback(:state_conflict)
     end
@@ -1510,6 +1574,7 @@ defmodule SymmetryControl.Orchestration do
     if run.state != "waiting_for_input", do: rollback(:state_conflict)
 
     ensure_expected_waiting!(task, run, Keyword.get(opts, :expected_waiting_transition_id))
+    validate_decision_choice!(task, run, payload, opts)
 
     case Repo.one(
            from command in Command,
@@ -1539,6 +1604,49 @@ defmodule SymmetryControl.Orchestration do
     end
   end
 
+  defp create_new_command!(task, kind, payload, idempotency_key, command_hash, current, opts)
+       when kind in @supervisory_commands do
+    ensure_expected_generation!(task, Keyword.get(opts, :expected_generation))
+    if task.state not in ["running", "paused"], do: rollback(:state_conflict)
+    run = lock_current_run(task)
+    runtime = lock_runtime(run.runtime_id)
+
+    unless value(runtime.capabilities, :supervisory_control, false) == true,
+      do: rollback(:unsupported_control)
+
+    allowed? =
+      case kind do
+        "guidance" -> task.state in ["running", "paused"]
+        "pause" -> task.state == "running"
+        "resume" -> task.state == "paused"
+      end
+
+    unless allowed? and run.state == task.state and task.attempt_generation == run.generation,
+      do: rollback(:state_conflict)
+
+    if runtime.connection_epoch != run.claimed_runtime_epoch or
+         is_nil(run.lease_expires_at) or DateTime.compare(run.lease_expires_at, current) != :gt,
+       do: rollback(:ownership_lost)
+
+    if kind in ["pause", "resume"] and pending_supervisory_transition?(run.id),
+      do: rollback(:state_conflict)
+
+    command =
+      insert_command!(
+        task.id,
+        run.id,
+        run.generation,
+        kind,
+        payload,
+        idempotency_key,
+        command_hash,
+        state: "pending",
+        now: current
+      )
+
+    {command, :created}
+  end
+
   defp insert_command!(
          task_id,
          run_id,
@@ -1558,6 +1666,7 @@ defmodule SymmetryControl.Orchestration do
       payload: payload,
       idempotency_key: idempotency_key,
       request_hash: command_hash,
+      request_hash_version: 2,
       state: Keyword.fetch!(opts, :state),
       applied_at: Keyword.get(opts, :applied_at)
     })
@@ -1604,15 +1713,35 @@ defmodule SymmetryControl.Orchestration do
           not is_nil(command.acknowledgement_id) ->
             rollback(:idempotency_conflict)
 
+          command.state == "acknowledged" and command.acknowledgement_outcome != outcome ->
+            rollback(:state_conflict)
+
+          command.state == "applied" and
+            command.kind in ["guidance", "pause", "resume", "provide_input"] and
+              outcome != "applied" ->
+            rollback(:state_conflict)
+
           true ->
             ensure_terminal_fence!(task, run, runtime, fence, current)
+
+            if command.kind in @supervisory_commands and command.state == "pending" and
+                 outcome == "applied",
+               do: ensure_fence!(task, run, runtime, fence, current)
 
             cond do
               outcome not in ["applied", "rejected", "failed"] ->
                 rollback(:invalid_request)
 
               outcome == "applied" and command.kind == "provide_input" and
-                  run.state == "waiting_for_input" ->
+                run.state == "waiting_for_input" and is_nil(command.applied_at) ->
+                rollback(:state_conflict)
+
+              outcome == "applied" and command.kind in ["pause", "resume"] and
+                  is_nil(command.applied_at) ->
+                rollback(:state_conflict)
+
+              command.kind in @supervisory_commands and command.state == "pending" and
+                outcome == "applied" and run.state not in ["running", "paused"] ->
                 rollback(:state_conflict)
 
               true ->
@@ -1621,7 +1750,14 @@ defmodule SymmetryControl.Orchestration do
                   state: "acknowledged",
                   acknowledgement_id: acknowledgement_id,
                   acknowledgement_outcome: outcome,
-                  acknowledged_at: current
+                  acknowledged_at: current,
+                  applied_at:
+                    if(
+                      outcome == "applied" and
+                        command.kind in ["guidance", "pause", "resume", "provide_input"],
+                      do: command.applied_at || current,
+                      else: command.applied_at
+                    )
                 })
                 |> stamp_update(current)
                 |> Repo.update!()
@@ -1735,7 +1871,7 @@ defmodule SymmetryControl.Orchestration do
         from run in Run,
           where:
             (run.state == "assigned" and run.assignment_expires_at <= ^current) or
-              (run.state in ["claimed", "running", "waiting_for_input", "cancelling"] and
+              (run.state in ["claimed", "running", "paused", "waiting_for_input", "cancelling"] and
                  run.lease_expires_at <= ^current),
           select: run.id
       )
@@ -1752,21 +1888,39 @@ defmodule SymmetryControl.Orchestration do
            expired? =
              (run.state == "assigned" and
                 DateTime.compare(run.assignment_expires_at, current) != :gt) or
-               (run.state in ["claimed", "running", "waiting_for_input", "cancelling"] and
+               (run.state in ["claimed", "running", "paused", "waiting_for_input", "cancelling"] and
                   not is_nil(run.lease_expires_at) and
                   DateTime.compare(run.lease_expires_at, current) != :gt)
 
            if not expired?, do: rollback(:not_expired)
 
-           terminal_state = if run.state == "cancelling", do: "cancelled", else: "expired"
+           stopped? = run.state == "paused" or pending_pause?(run.id)
+
+           terminal_state =
+             cond do
+               run.state == "cancelling" -> "cancelled"
+               stopped? -> "failed"
+               true -> "expired"
+             end
+
+           failure =
+             if stopped?,
+               do: %{
+                 "reason" => "supervised_worker_lost",
+                 "message" =>
+                   "Paused worker or pending pause lost its lease; explicit retry is required."
+               }
+
+           reject_pending_commands!(task, run.id, current)
 
            run
-           |> Run.changeset(%{state: terminal_state})
+           |> Run.changeset(%{state: terminal_state, failure: failure})
            |> stamp_update(current)
            |> Repo.update!()
 
            if task.current_generation == run.generation do
-             task_state = if terminal_state == "cancelled", do: "cancelled", else: "queued"
+             task_state =
+               if terminal_state in ["cancelled", "failed"], do: terminal_state, else: "queued"
 
              task_attrs =
                if task_state == "queued" do
@@ -1776,7 +1930,7 @@ defmodule SymmetryControl.Orchestration do
                    waiting_transition_id: nil
                  }
                else
-                 %{state: task_state, waiting_transition_id: nil}
+                 %{state: task_state, waiting_transition_id: nil, failure: failure}
                end
 
              task
@@ -1835,6 +1989,8 @@ defmodule SymmetryControl.Orchestration do
        ) do
     validate_transition!(run.state, target_state)
     ensure_expired_run_can_settle_task!(task, run)
+    apply_supervisory_transition!(task, run, target_state, payload, current)
+    if target_state in @terminal_targets, do: reject_pending_commands!(task, run.id, current)
 
     run_attrs =
       case target_state do
@@ -1909,7 +2065,9 @@ defmodule SymmetryControl.Orchestration do
     do: true
 
   defp valid_transition?("running", state)
-       when state in ["waiting_for_input", "completed", "failed"], do: true
+       when state in ["paused", "waiting_for_input", "completed", "failed"], do: true
+
+  defp valid_transition?("paused", state) when state in ["running", "failed"], do: true
 
   defp valid_transition?("waiting_for_input", state)
        when state in ["running", "completed", "failed"],
@@ -1920,7 +2078,7 @@ defmodule SymmetryControl.Orchestration do
 
   defp validate_transition!(current_state, target_state) do
     cond do
-      target_state not in ["running", "waiting_for_input" | @terminal_targets] ->
+      target_state not in ["running", "paused", "waiting_for_input" | @terminal_targets] ->
         rollback(:invalid_transition)
 
       current_state == "expired" and target_state in @terminal_targets ->
@@ -1948,6 +2106,125 @@ defmodule SymmetryControl.Orchestration do
     struct(run, attrs)
   end
 
+  defp apply_supervisory_transition!(task, run, target_state, payload, current) do
+    kind =
+      case {run.state, target_state} do
+        {"running", "paused"} ->
+          "pause"
+
+        {"paused", "running"} ->
+          "resume"
+
+        {"waiting_for_input", "running"} ->
+          if value(task.required_capabilities, :supervisory_control, false) == true,
+            do: "provide_input"
+
+        _ ->
+          nil
+      end
+
+    if kind do
+      command_id = value(payload, :command_id)
+      unless valid_uuid?(command_id), do: rollback(:invalid_request)
+
+      command =
+        Repo.one(
+          from command in Command,
+            where:
+              command.id == ^command_id and command.run_id == ^run.id and
+                command.generation == ^run.generation and command.kind == ^kind and
+                command.state == "pending",
+            lock: "FOR UPDATE"
+        )
+
+      if is_nil(command), do: rollback(:state_conflict)
+
+      command
+      |> Command.changeset(%{state: "applied", applied_at: current})
+      |> stamp_update(current)
+      |> Repo.update!()
+    end
+  end
+
+  defp pending_supervisory_transition?(run_id) do
+    Repo.exists?(
+      from command in Command,
+        where:
+          command.run_id == ^run_id and command.kind in ["pause", "resume"] and
+            command.state in ["pending", "applied"]
+    )
+  end
+
+  defp pending_pause?(run_id) do
+    Repo.exists?(
+      from command in Command,
+        where:
+          command.run_id == ^run_id and command.kind == "pause" and command.state == "pending"
+    )
+  end
+
+  defp reject_pending_commands!(task, run_id, current) do
+    kinds =
+      if value(task.required_capabilities, :supervisory_control, false) == true,
+        do: ["provide_input" | @supervisory_commands],
+        else: @supervisory_commands
+
+    from(command in Command,
+      where:
+        command.run_id == ^run_id and command.kind in ^kinds and
+          command.state == "pending"
+    )
+    |> Repo.update_all(
+      set: [
+        state: "acknowledged",
+        acknowledgement_outcome: "rejected",
+        acknowledged_at: current,
+        updated_at: current
+      ]
+    )
+  end
+
+  defp validate_decision_packet!(task, payload) do
+    decision = value(payload, :decision)
+    required? = value(task.required_capabilities, :supervisory_control, false) == true
+
+    if (required? or not is_nil(decision)) and
+         not (nonempty_text?(value(payload, :question)) and valid_decision?(decision)),
+       do: rollback(:invalid_request)
+  end
+
+  defp valid_decision?(decision) when is_map(decision) do
+    options = value(decision, :options)
+    recommendation = value(decision, :recommended_option_id)
+
+    value(decision, :reason) in @decision_reasons and
+      nonempty_text?(value(decision, :context)) and is_list(options) and length(options) >= 2 and
+      Enum.all?(options, fn option ->
+        is_map(option) and nonempty_text?(value(option, :id)) and
+          nonempty_text?(value(option, :label)) and nonempty_text?(value(option, :consequence))
+      end) and
+      length(Enum.uniq_by(options, &value(&1, :id))) == length(options) and
+      (is_nil(recommendation) or Enum.any?(options, &(value(&1, :id) == recommendation)))
+  end
+
+  defp valid_decision?(_), do: false
+
+  defp validate_decision_choice!(task, run, payload, opts) do
+    waiting = current_waiting_context(task, run)
+
+    if waiting && waiting.decision do
+      unless Keyword.get(opts, :expected_waiting_transition_id) == task.waiting_transition_id,
+        do: rollback(:invalid_request)
+
+      option_id = value(payload, :option_id)
+
+      unless Enum.any?(value(waiting.decision, :options, []), &(value(&1, :id) == option_id)),
+        do: rollback(:invalid_request)
+    end
+  end
+
+  defp nonempty_text?(text), do: is_binary(text) and String.trim(text) != ""
+
   defp snapshot_for(runtime, current) do
     assignments =
       Repo.all(
@@ -1973,9 +2250,12 @@ defmodule SymmetryControl.Orchestration do
               task.current_generation == run.generation and
               ((command.state == "pending" and command.kind == "cancel" and
                   run.state == "cancelling") or
-                 (command.state == "pending" and command.kind == "provide_input" and
+                 (command.state in ["pending", "applied"] and command.kind == "provide_input" and
                     is_nil(command.acknowledged_at) and
-                    run.state in ["waiting_for_input", "running"])),
+                    run.state in ["waiting_for_input", "running"]) or
+                 (command.state in ["pending", "applied"] and
+                    command.kind in ^@supervisory_commands and
+                    run.state in ["running", "paused"])),
           order_by: [asc: command.inserted_at]
       )
 
@@ -1986,7 +2266,7 @@ defmodule SymmetryControl.Orchestration do
     ensure_static_fence!(task, run, runtime, fence)
 
     valid? =
-      run.state in ["claimed", "running", "waiting_for_input", "cancelling"] and
+      run.state in ["claimed", "running", "paused", "waiting_for_input", "cancelling"] and
         not is_nil(run.lease_expires_at) and
         DateTime.compare(run.lease_expires_at, current) == :gt
 
@@ -2013,7 +2293,7 @@ defmodule SymmetryControl.Orchestration do
     ensure_terminal_static_fence!(task, run, fence)
 
     valid? =
-      (run.state in ["claimed", "running", "waiting_for_input", "cancelling"] and
+      (run.state in ["claimed", "running", "paused", "waiting_for_input", "cancelling"] and
          not is_nil(run.lease_expires_at) and
          DateTime.compare(run.lease_expires_at, current) == :gt) or
         within_terminal_grace?(run, current)
@@ -2186,6 +2466,11 @@ defmodule SymmetryControl.Orchestration do
     is_map(capabilities) and jsonb_compatible?(capabilities) and
       valid_boolean_capability?(capabilities, :structured_input) and
       valid_boolean_capability?(capabilities, :provider_access) and
+      valid_boolean_capability?(capabilities, :interactive) and
+      valid_boolean_capability?(capabilities, :supervisory_control) and
+      (value(capabilities, :supervisory_control, false) != true or
+         (value(capabilities, :structured_input, false) == true and
+            value(capabilities, :interactive, false) == true)) and
       (value(capabilities, :provider_access, false) != true or
          value(capabilities, :structured_input, false) == true)
   end
@@ -2214,12 +2499,26 @@ defmodule SymmetryControl.Orchestration do
     required_capabilities = value(task_attrs, :required_capabilities, %{})
 
     (is_nil(input) or is_map(input)) and jsonb_compatible?(input) and
-      is_map(required_capabilities) and jsonb_compatible?(required_capabilities)
+      is_map(required_capabilities) and jsonb_compatible?(required_capabilities) and
+      valid_boolean_capability?(required_capabilities, :supervisory_control)
   end
 
   defp valid_command_request?(kind, payload) do
-    kind in ["cancel", "provide_input"] and jsonb_compatible?(payload) and
-      (kind != "cancel" or payload == %{})
+    jsonb_compatible?(payload) and
+      case kind do
+        kind when kind in ["cancel", "pause", "resume"] ->
+          payload == %{}
+
+        "provide_input" ->
+          true
+
+        "guidance" ->
+          message = value(payload, :message)
+          map_size(payload) == 1 and nonempty_text?(message) and byte_size(message) <= 32_768
+
+        _ ->
+          false
+      end
   end
 
   defp ensure_expected_generation!(_task, nil), do: :ok
@@ -2243,6 +2542,25 @@ defmodule SymmetryControl.Orchestration do
 
   defp normalize_command_payload("cancel", _payload), do: %{}
   defp normalize_command_payload("provide_input", payload), do: payload
+  defp normalize_command_payload(kind, payload) when kind in @supervisory_commands, do: payload
+
+  defp command_request_hash(kind, payload, opts) do
+    context =
+      opts |> Keyword.take([:expected_generation, :expected_waiting_transition_id]) |> Map.new()
+
+    body = %{kind: kind, payload: payload}
+    request_hash(if map_size(context) == 0, do: body, else: Map.put(body, :context, context))
+  end
+
+  defp ensure_command_replay!(command, kind, payload, current_hash) do
+    expected_hash =
+      case command.request_hash_version do
+        1 -> request_hash(%{kind: kind, payload: payload})
+        2 -> current_hash
+      end
+
+    unless command.request_hash == expected_hash, do: rollback(:idempotency_conflict)
+  end
 
   defp lock_task_command(task_id, idempotency_key) do
     Repo.one(
@@ -2300,7 +2618,7 @@ defmodule SymmetryControl.Orchestration do
       is_integer(value(run, :claimed_runtime_epoch)) and
       value(run, :claimed_runtime_epoch) > 0 and
       valid_uuid?(value(run, :claim_id)) and valid_uuid?(value(run, :lease_token)) and
-      value(run, :state) in ["claimed", "running", "waiting_for_input", "cancelling"]
+      value(run, :state) in ["claimed", "running", "paused", "waiting_for_input", "cancelling"]
   end
 
   defp valid_active_run?(_), do: false

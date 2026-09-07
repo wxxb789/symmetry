@@ -498,7 +498,7 @@ func TestCreateTaskCommandValidatesRequestBeforeTransport(t *testing.T) {
 	}{
 		{name: "missing idempotency key", request: protocol.TaskCommandRequest{Kind: "cancel"}, wantError: "idempotency key must not be empty"},
 		{name: "cancel with payload", key: "command-1", request: protocol.TaskCommandRequest{Kind: "cancel", Payload: json.RawMessage(`{}`)}, wantError: "cancel command must omit payload"},
-		{name: "unknown kind", key: "command-1", request: protocol.TaskCommandRequest{Kind: "pause"}, wantError: "kind is not recognized"},
+		{name: "unknown kind", key: "command-1", request: protocol.TaskCommandRequest{Kind: "teleport"}, wantError: "kind is not recognized"},
 		{name: "retry is read only", key: "command-1", request: protocol.TaskCommandRequest{Kind: "retry", Payload: json.RawMessage(`{"work":{}}`)}, wantError: "kind is not recognized"},
 		{name: "provide input missing payload", key: "command-1", request: protocol.TaskCommandRequest{Kind: "provide_input"}, wantError: "must be a non-null JSON object"},
 		{name: "provide input null payload", key: "command-1", request: protocol.TaskCommandRequest{Kind: "provide_input", Payload: json.RawMessage(`null`)}, wantError: "must be a non-null JSON object"},
@@ -616,7 +616,7 @@ func TestTaskCommandResponseStateInvariants(t *testing.T) {
 		{name: "runless provide input", body: strings.Replace(runlessAppliedCommandJSON(), `"kind":"cancel"`, `"kind":"provide_input"`, 1)},
 		{name: "pending applied at", body: strings.Replace(commandJSON(), `"applied_at":null`, `"applied_at":"2026-09-03T00:00:01Z"`, 1)},
 		{name: "pending acknowledgement", body: strings.Replace(commandJSON(), `"acknowledgement_id":null,"acknowledgement_outcome":null,"acknowledged_at":null`, `"acknowledgement_id":"ack-1","acknowledgement_outcome":"applied","acknowledged_at":"2026-09-03T00:00:01Z"`, 1)},
-		{name: "applied provide input", body: strings.Replace(strings.Replace(commandJSON(), `"kind":"cancel"`, `"kind":"provide_input"`, 1), `"state":"pending","issued_at":"2026-09-03T00:00:00Z","applied_at":null`, `"state":"applied","issued_at":"2026-09-03T00:00:00Z","applied_at":"2026-09-03T00:00:01Z"`, 1)},
+		{name: "applied provide input without timestamp", body: strings.Replace(strings.Replace(commandJSON(), `"kind":"cancel"`, `"kind":"provide_input"`, 1), `"state":"pending"`, `"state":"applied"`, 1)},
 		{name: "applied without timestamp", body: strings.Replace(commandJSON(), `"state":"pending"`, `"state":"applied"`, 1)},
 		{name: "acknowledged runless", body: strings.Replace(acknowledged, `"run_id":"run-1","generation":1`, `"run_id":null,"generation":null`, 1)},
 		{name: "acknowledged applied at", body: strings.Replace(acknowledged, `"applied_at":null`, `"applied_at":"2026-09-03T00:00:01Z"`, 1)},
@@ -855,7 +855,7 @@ func TestRuntimeSnapshotCommandsRejectInvalidKindsAndPayloads(t *testing.T) {
 		name string
 		body string
 	}{
-		{name: "unknown kind", body: strings.Replace(snapshotJSON(time.Now().UTC()), `"kind":"cancel"`, `"kind":"pause"`, 1)},
+		{name: "unknown kind", body: strings.Replace(snapshotJSON(time.Now().UTC()), `"kind":"cancel"`, `"kind":"teleport"`, 1)},
 		{name: "cancel payload", body: strings.Replace(snapshotJSON(time.Now().UTC()), `"payload":{}`, `"payload":{"reason":"later"}`, 1)},
 		{name: "provide input payload", body: strings.Replace(snapshotJSON(time.Now().UTC()), `"kind":"cancel","payload":{}`, `"kind":"provide_input","payload":[]`, 1)},
 	}
