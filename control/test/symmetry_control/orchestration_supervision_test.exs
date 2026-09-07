@@ -422,6 +422,45 @@ defmodule SymmetryControl.OrchestrationSupervisionTest do
              })
   end
 
+  test "decision packets preserve more than ten options and allow choosing the last one" do
+    {task, run, _runtime, fence} = running()
+    waiting_id = Ecto.UUID.generate()
+
+    options =
+      for index <- 1..11 do
+        %{
+          "id" => "option-#{index}",
+          "label" => "Migration strategy #{index}",
+          "consequence" => "Uses migration strategy #{index}."
+        }
+      end
+
+    payload =
+      packet()
+      |> put_in(["decision", "options"], options)
+      |> put_in(["decision", "recommended_option_id"], "option-11")
+
+    assert {:ok, _} =
+             Orchestration.transition(run.id, fence, "waiting_for_input", payload, waiting_id,
+               now: @now
+             )
+
+    assert {:ok, snapshot} = Orchestration.task_snapshot(task.id)
+    assert Protocol.task(snapshot).waiting.decision == payload["decision"]
+
+    assert {:ok, input, :created} =
+             Orchestration.provide_input(
+               task.id,
+               %{"option_id" => "option-11"},
+               Ecto.UUID.generate(),
+               expected_generation: task.attempt_generation,
+               expected_waiting_transition_id: waiting_id,
+               now: @now
+             )
+
+    assert input.payload == %{"option_id" => "option-11"}
+  end
+
   test "decision choices are constrained to the exact durable waiting packet" do
     {task, run, _runtime, fence} = running()
     waiting_id = Ecto.UUID.generate()

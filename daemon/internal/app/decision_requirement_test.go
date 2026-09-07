@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -52,6 +53,72 @@ func TestWaitingDecisionRequirementIsBoundToWorkAndPrecedesPersistence(t *testin
 				}
 			} else if after.LocalState != "waiting_for_input" || len(after.PendingEvents) != 1 || len(after.PendingTransitions) != 1 {
 				t.Fatalf("valid wait was not persisted: %#v", after)
+			}
+		})
+	}
+}
+
+func TestWaitingDecisionPreservesMoreThanTenOptions(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		required bool
+	}{
+		{name: "required packet", required: true},
+		{name: "optional packet"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			app, key, process := supervisoryDaemon(t)
+			journal := supervisoryJournal(t, app, key)
+			journal.Work.RequiredCapabilities = map[string]bool{"supervisory_control": test.required}
+			if err := app.store.SaveJournal(journal); err != nil {
+				t.Fatal(err)
+			}
+			options := make([]any, 11)
+			for i := range options {
+				options[i] = map[string]any{
+					"id":          fmt.Sprintf("rollout-%d", i+1),
+					"label":       fmt.Sprintf("Roll out to %d regions", i+1),
+					"consequence": fmt.Sprintf("Expose %d regions to the release before expanding.", i+1),
+				}
+			}
+			packet := map[string]any{
+				"type":     "waiting_for_input",
+				"question": "How broadly should the release roll out?",
+				"decision": map[string]any{
+					"reason":                "product_change",
+					"context":               "Choose the initial release footprint.",
+					"options":               options,
+					"recommended_option_id": "rollout-11",
+				},
+			}
+			data, err := json.Marshal(packet)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := app.queueOutput(key, config.EventFormatJSONL, &jsonlParser{}, execution.Event{
+				Stream: execution.Stdout, At: time.Now().UTC(), Data: append(data, '\n'),
+			}); err != nil {
+				t.Fatalf("valid eleven-option packet was rejected: %v", err)
+			}
+			after := supervisoryJournal(t, app, key)
+			if after.LocalState != "waiting_for_input" || after.TerminalState != "" || len(after.PendingEvents) != 1 || len(after.PendingTransitions) != 1 {
+				t.Fatalf("valid decision did not persist a nonterminal wait: %#v", after)
+			}
+			if after.PendingEvents[0].Kind != "waiting_for_input" || after.PendingTransitions[0].State != "waiting_for_input" {
+				t.Fatalf("decision did not retain its event and transition kinds: %#v", after)
+			}
+			for _, payload := range []json.RawMessage{after.PendingEvents[0].Payload, after.PendingTransitions[0].Payload} {
+				var persisted map[string]any
+				if err := json.Unmarshal(payload, &persisted); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(persisted, packet) {
+					t.Fatalf("persisted decision changed options or recommendation: %#v", persisted)
+				}
+			}
+			active := app.runningRun(key)
+			if active == nil || active.process != process || active.cancelled || active.terminal || process.terminations != 0 {
+				t.Fatal("valid decision terminated the active process")
 			}
 		})
 	}

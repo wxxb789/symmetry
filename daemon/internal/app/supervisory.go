@@ -164,7 +164,7 @@ func validDecisionPacket(payload map[string]any) bool {
 		return false
 	}
 	options, ok := decision["options"].([]any)
-	if !ok || len(options) < 2 || len(options) > 10 {
+	if !ok || len(options) < 2 {
 		return false
 	}
 	seen := make(map[string]bool, len(options))
