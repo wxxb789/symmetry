@@ -40,9 +40,9 @@ defmodule SymmetryControlWeb.TaskController do
     task_id = Map.fetch!(conn.path_params, "task_id")
 
     with {:ok, idempotency_key} <- idempotency_key(conn),
-         {:ok, kind, payload} <- command_request(body_params(conn)),
+         {:ok, kind, payload, opts} <- command_request(body_params(conn)),
          {:ok, command, disposition} <-
-           Orchestration.create_command(task_id, kind, payload, idempotency_key) do
+           Orchestration.create_command(task_id, kind, payload, idempotency_key, opts) do
       if disposition == :created do
         Notifier.command_available(command)
         Scheduler.wake()
@@ -56,11 +56,34 @@ defmodule SymmetryControlWeb.TaskController do
   end
 
   defp command_request(%{"kind" => "cancel"} = body) when map_size(body) == 1,
-    do: {:ok, "cancel", %{}}
+    do: {:ok, "cancel", %{}, []}
+
+  defp command_request(%{"kind" => "cancel", "generation" => generation} = body)
+       when map_size(body) == 2 and is_integer(generation) and generation > 0,
+       do: {:ok, "cancel", %{}, [expected_generation: generation]}
 
   defp command_request(%{"kind" => "provide_input", "payload" => payload} = body)
        when map_size(body) == 2 and is_map(payload),
-       do: {:ok, "provide_input", Protocol.normalize_map(payload)}
+       do: {:ok, "provide_input", Protocol.normalize_map(payload), []}
+
+  defp command_request(%{"kind" => kind, "payload" => payload, "generation" => generation} = body)
+       when kind in ["guidance", "pause", "resume"] and map_size(body) == 3 and
+              is_map(payload) and is_integer(generation) and generation > 0,
+       do: {:ok, kind, Protocol.normalize_map(payload), [expected_generation: generation]}
+
+  defp command_request(
+         %{
+           "kind" => "provide_input",
+           "payload" => payload,
+           "generation" => generation,
+           "waiting_transition_id" => waiting_id
+         } = body
+       )
+       when map_size(body) == 4 and is_map(payload) and is_integer(generation) and generation > 0 and
+              is_binary(waiting_id),
+       do:
+         {:ok, "provide_input", Protocol.normalize_map(payload),
+          [expected_generation: generation, expected_waiting_transition_id: waiting_id]}
 
   defp command_request(_), do: {:error, :invalid_request}
 

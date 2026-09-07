@@ -19,6 +19,7 @@ defmodule SymmetryControl.Workspaces do
     "assigned",
     "claimed",
     "running",
+    "paused",
     "waiting_for_input",
     "cancelling"
   ]
@@ -284,7 +285,12 @@ defmodule SymmetryControl.Workspaces do
 
   @spec launch_work_item(Ecto.UUID.t(), String.t()) ::
           {:ok, map(), :created | :replayed} | {:error, atom() | Ecto.Changeset.t()}
-  def launch_work_item(work_item_id, action_id) when is_binary(action_id) do
+  def launch_work_item(work_item_id, action_id), do: launch_work_item(work_item_id, action_id, [])
+
+  @spec launch_work_item(Ecto.UUID.t(), String.t(), keyword()) ::
+          {:ok, map(), :created | :replayed} | {:error, atom() | Ecto.Changeset.t()}
+  def launch_work_item(work_item_id, action_id, opts)
+      when is_binary(action_id) and is_list(opts) do
     with :ok <- validate_action_id(action_id),
          true <- valid_uuid?(work_item_id) do
       result =
@@ -292,12 +298,12 @@ defmodule SymmetryControl.Workspaces do
           work_item = lock_work_item_with_project(work_item_id)
           ensure_active_project(work_item.project) |> require_ok!()
 
-          launch_locked_work_item(work_item)
+          launch_locked_work_item(work_item, opts)
         end)
 
       case result do
         {:ok, {snapshot, disposition, should_wake?}} ->
-          if should_wake?, do: Scheduler.wake()
+          if should_wake? and Keyword.get(opts, :notify, true), do: Scheduler.wake()
           {:ok, snapshot, disposition}
 
         {:error, reason} ->
@@ -309,7 +315,7 @@ defmodule SymmetryControl.Workspaces do
     end
   end
 
-  def launch_work_item(_, _), do: {:error, :invalid_request}
+  def launch_work_item(_, _, _), do: {:error, :invalid_request}
 
   @spec cancel_work_item(Ecto.UUID.t(), non_neg_integer(), String.t()) ::
           {:ok, map(), :created | :replayed} | {:error, atom()}
@@ -464,15 +470,26 @@ defmodule SymmetryControl.Workspaces do
   @spec fetch_work_item(Ecto.UUID.t()) :: {:ok, WorkItem.t()} | {:error, :not_found}
   def fetch_work_item(work_item_id), do: fetch(WorkItem, work_item_id)
 
-  defp launch_locked_work_item(%WorkItem{orchestration_task_id: task_id} = work_item)
+  defp launch_locked_work_item(%WorkItem{orchestration_task_id: task_id} = work_item, opts)
        when is_binary(task_id) do
     case Orchestration.task_snapshot(task_id) do
-      {:ok, task} -> {%{work_item: work_item, task: task}, :replayed, false}
-      {:error, reason} -> Repo.rollback(reason)
+      {:ok, task} ->
+        required = Keyword.get(opts, :required_capabilities, %{})
+
+        unless is_map(required) and
+                 Enum.all?(required, fn {key, value} ->
+                   Map.get(task.task.required_capabilities, to_string(key)) == value
+                 end),
+               do: Repo.rollback(:idempotency_conflict)
+
+        {%{work_item: work_item, task: task}, :replayed, false}
+
+      {:error, reason} ->
+        Repo.rollback(reason)
     end
   end
 
-  defp launch_locked_work_item(%WorkItem{project: project} = work_item) do
+  defp launch_locked_work_item(%WorkItem{project: project} = work_item, opts) do
     if project.status != "active" or work_item.assignee_type != "agent" or
          work_item.status not in ["backlog", "ready"] or
          not WorkItem.external_work_available?(work_item) do
@@ -483,6 +500,9 @@ defmodule SymmetryControl.Workspaces do
     workspace = present(work_item.workspace) || project.default_workspace
 
     attrs = execution_attrs(work_item, agent_profile, workspace)
+    required = Keyword.get(opts, :required_capabilities, %{})
+    unless is_map(required), do: Repo.rollback(:invalid_request)
+    attrs = Map.update!(attrs, :required_capabilities, &Map.merge(required, &1))
 
     case Orchestration.submit_task(attrs, "portal-work-item-#{work_item.id}") do
       {:ok, task, disposition} ->

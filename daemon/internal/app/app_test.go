@@ -1906,12 +1906,9 @@ func TestCancelDuringBlockedPrepareAcknowledgesAndCleansUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	select {
-	case succeeded := <-workspace.cleaned:
-		if succeeded {
-			t.Fatal("cancelled startup cleanup used success policy")
-		}
+	case <-workspace.cleaned:
+		t.Fatal("cancelled startup workspace artifacts were not retained")
 	default:
-		t.Fatal("completed Prepare was not cleaned after cancellation")
 	}
 }
 
@@ -2805,13 +2802,15 @@ func TestTerminalAcknowledgementDoesNotMaskTransitionRejection(t *testing.T) {
 			slots := make(chan struct{}, 1)
 			slots <- struct{}{}
 			daemon := &daemon{
-				store:     store,
-				control:   &terminalAcknowledgementControl{transitionErr: test.err},
-				workspace: failingCleanupWorkspace{},
-				log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
-				options:   options{clock: func() time.Time { return now }, newID: ids()},
-				running:   map[state.RunKey]*runningRun{key: {slotHeld: true}},
-				slots:     slots,
+				store:       store,
+				control:     &terminalAcknowledgementControl{transitionErr: test.err},
+				workspace:   failingCleanupWorkspace{},
+				cleanupWake: make(chan struct{}, 1),
+				background:  context.Background(),
+				log:         slog.New(slog.NewJSONHandler(io.Discard, nil)),
+				options:     options{clock: func() time.Time { return now }, newID: ids()},
+				running:     map[state.RunKey]*runningRun{key: {slotHeld: true}},
+				slots:       slots,
 			}
 			if err := daemon.queueTerminalTransition(key, "cancelled", map[string]any{}); err != nil {
 				t.Fatal(err)
@@ -2832,8 +2831,10 @@ func TestTerminalAcknowledgementDoesNotMaskTransitionRejection(t *testing.T) {
 			if journal.LocalState != "cleanup_pending" || journal.TerminalVerdict != test.verdict || !journal.TerminalResolvedAt.Equal(now) || len(slots) != 0 || len(journal.PendingTransitions) != 0 || len(journal.PendingCommandAcknowledgements) != 0 {
 				t.Fatalf("acknowledged terminal journal = %#v, slots = %d", journal, len(slots))
 			}
-			daemon.workspace = &fakeWorkspace{}
-			daemon.flushAll(context.Background())
+			if !journal.RetainWorkspace {
+				t.Fatal("cancelled artifacts were not retained with terminal verdict")
+			}
+			daemon.flushCleanups(context.Background())
 			if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
 				t.Fatalf("conclusively rejected journal = %v, want deleted after cleanup", err)
 			}
@@ -3147,11 +3148,13 @@ func TestCancelledTerminalOwnershipLossPersistsVerdictAndReleasesSlot(t *testing
 	slots := make(chan struct{}, 1)
 	slots <- struct{}{}
 	daemon := &daemon{
-		store:     store,
-		control:   &terminalVerdictControl{transitionErr: &control.APIError{StatusCode: http.StatusConflict, Code: control.OwnershipLost}},
-		workspace: failingCleanupWorkspace{},
-		log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		options:   options{newID: ids()},
+		store:       store,
+		control:     &terminalVerdictControl{transitionErr: &control.APIError{StatusCode: http.StatusConflict, Code: control.OwnershipLost}},
+		workspace:   failingCleanupWorkspace{},
+		cleanupWake: make(chan struct{}, 1),
+		background:  context.Background(),
+		log:         slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		options:     options{newID: ids()},
 		running: map[state.RunKey]*runningRun{key: {
 			slotHeld: true,
 		}},
@@ -3173,8 +3176,12 @@ func TestCancelledTerminalOwnershipLossPersistsVerdictAndReleasesSlot(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if journal.TerminalState != "cancelled" || journal.TerminalVerdict != state.TerminalVerdictOwnershipLost || len(slots) != 0 {
+	if journal.TerminalState != "cancelled" || journal.TerminalVerdict != state.TerminalVerdictOwnershipLost || !journal.RetainWorkspace || len(slots) != 0 {
 		t.Fatalf("cancelled terminal ownership loss = %#v, slots = %d", journal, len(slots))
+	}
+	daemon.flushCleanups(context.Background())
+	if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
+		t.Fatalf("resolved cancelled journal = %v, want deleted with artifacts retained", err)
 	}
 }
 
@@ -5322,12 +5329,9 @@ func TestCancelWinsCompletionAndFlushesAcknowledgement(t *testing.T) {
 		t.Fatal("slot was not released after cancelled terminal flush")
 	}
 	select {
-	case succeeded := <-cleaned:
-		if succeeded {
-			t.Fatal("cancelled cleanup used successful process exit instead of terminal state")
-		}
+	case <-cleaned:
+		t.Fatal("cancelled workspace artifacts were not retained")
 	default:
-		t.Fatal("cancelled workspace was not cleaned")
 	}
 }
 

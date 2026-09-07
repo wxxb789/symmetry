@@ -27,6 +27,8 @@ defmodule SymmetryControlWeb.Protocol do
     terminal_grace_expired:
       {409, "terminal_grace_expired", "terminal delivery grace period has expired"},
     state_conflict: {409, "state_conflict", "state has already advanced"},
+    unsupported_control:
+      {409, "unsupported_control", "runtime does not support supervisory control"},
     assignment_expired: {410, "assignment_expired", "assignment has expired"},
     invalid_transition: {422, "invalid_transition", "state transition is invalid"},
     not_connected: {409, "not_connected", "resource has no external connection"},
@@ -155,7 +157,7 @@ defmodule SymmetryControlWeb.Protocol do
       payload: command.payload,
       state: command.state,
       issued_at: iso8601(command.inserted_at),
-      applied_at: iso8601(command.applied_at),
+      applied_at: command_applied_at(command),
       acknowledgement_id: command.acknowledgement_id,
       acknowledgement_outcome: command.acknowledgement_outcome,
       acknowledged_at: iso8601(command.acknowledged_at)
@@ -172,12 +174,23 @@ defmodule SymmetryControlWeb.Protocol do
       payload: Map.fetch!(command, :payload),
       state: Map.fetch!(command, :state),
       issued_at: iso8601(Map.fetch!(command, :inserted_at)),
-      applied_at: iso8601(Map.fetch!(command, :applied_at)),
+      applied_at: command_applied_at(command),
       acknowledgement_id: Map.fetch!(command, :acknowledgement_id),
       acknowledgement_outcome: Map.fetch!(command, :acknowledgement_outcome),
       acknowledged_at: iso8601(Map.fetch!(command, :acknowledged_at))
     }
   end
+
+  # Keep old cancellation receipts replayable without rewriting stored history.
+  defp command_applied_at(%{
+         kind: "cancel",
+         state: "acknowledged",
+         acknowledgement_outcome: "applied",
+         applied_at: _
+       }),
+       do: nil
+
+  defp command_applied_at(command), do: iso8601(Map.fetch!(command, :applied_at))
 
   def task(%{task: %Task{} = task, run: run} = snapshot) do
     %{
@@ -188,6 +201,13 @@ defmodule SymmetryControlWeb.Protocol do
       work: work(task),
       result: task.result,
       failure: task.failure,
+      controls:
+        Map.get(snapshot, :controls, %{
+          supervisory_control: false,
+          can_guide: false,
+          can_pause: false,
+          can_resume: false
+        }),
       waiting: waiting(Map.get(snapshot, :waiting)),
       latest_command: latest_command(Map.get(snapshot, :latest_command))
     }
@@ -309,13 +329,18 @@ defmodule SymmetryControlWeb.Protocol do
     }
   end
 
-  defp work(%Task{} = task),
-    do: %{
+  defp work(%Task{} = task) do
+    work = %{
       goal: task.goal,
       agent_profile: task.agent_profile,
       workspace: task.workspace,
       input: task.input
     }
+
+    if task.required_capabilities == %{},
+      do: work,
+      else: Map.put(work, :required_capabilities, task.required_capabilities)
+  end
 
   defp decision(decision) do
     %{
@@ -337,6 +362,7 @@ defmodule SymmetryControlWeb.Protocol do
       generation: Map.fetch!(waiting, :generation),
       transition_id: Map.fetch!(waiting, :transition_id),
       question: Map.fetch!(waiting, :question),
+      decision: Map.get(waiting, :decision) || Map.get(Map.fetch!(waiting, :payload), "decision"),
       payload: Map.fetch!(waiting, :payload),
       recorded_at: iso8601(Map.fetch!(waiting, :recorded_at))
     }

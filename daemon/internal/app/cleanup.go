@@ -161,6 +161,7 @@ func (daemon *daemon) flushCleanups(ctx context.Context) {
 		}
 		journal, err := daemon.store.LoadJournal(key)
 		if state.IsNotFound(err) {
+			daemon.forgetWorkspaceRetention(key)
 			daemon.completeCleanup(key)
 			continue
 		}
@@ -193,6 +194,10 @@ func (daemon *daemon) cleanupContext(ctx context.Context) (context.Context, cont
 }
 
 func (daemon *daemon) cleanupRecoveredWorkspace(ctx context.Context, journal state.RunJournal, succeeded bool) error {
+	if journal.RetainWorkspace || journal.TerminalState == "cancelled" || daemon.workspaceRetentionRemembered(journal.Key()) ||
+		(journal.TerminalState != "completed" && supervisoryRecoveryRequired(journal)) {
+		return nil
+	}
 	if journal.WorkspacePath == "" && !journal.WorkspaceRecoveryRequired {
 		return nil
 	}
@@ -228,6 +233,7 @@ func (daemon *daemon) cleanupPending(ctx context.Context, journal state.RunJourn
 		daemon.log.Warn("delete_terminal_journal_failed", "run_id", journal.RunID, "error", err)
 		return err
 	}
+	daemon.forgetWorkspaceRetention(journal.Key())
 	daemon.clearCompletedCommandReceipts(journal.Key())
 	return nil
 }
