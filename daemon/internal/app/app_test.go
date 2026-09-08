@@ -3617,6 +3617,8 @@ func TestRunRetriesReconcileWithBackoffWithoutNotifications(t *testing.T) {
 	persisted.PID = 99
 	persisted.ProcessIdentity = "test:99"
 	persisted.StartedAt = time.Now().UTC()
+	persisted.WorkspacePath = "C:\\workspace"
+	persisted.WorkspaceBindingKey = "local"
 	if err := store.SaveJournal(persisted); err != nil {
 		t.Fatal(err)
 	}
@@ -3633,12 +3635,13 @@ func TestRunRetriesReconcileWithBackoffWithoutNotifications(t *testing.T) {
 	}
 	timers := newRecordingTimerFactory()
 	terminated := make(chan int, 1)
+	cleanup := newBlockingCleanupWorkspace()
 	value := testConfig(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, value, WithStore(store), WithControl(control), WithWorkspace(&fakeWorkspace{}), WithStartProcess(failStart), WithLogWriter(io.Discard), func(settings *options) {
+		done <- Run(ctx, value, WithStore(store), WithControl(control), WithWorkspace(cleanup), WithStartProcess(failStart), WithLogWriter(io.Discard), func(settings *options) {
 			settings.newTimer = timers.new
 			settings.newID = ids()
 			settings.terminatePersist = func(pid int, identity string) error {
@@ -3663,6 +3666,11 @@ func TestRunRetriesReconcileWithBackoffWithoutNotifications(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("retry did not process stale_stop for the persisted run")
+	}
+	select {
+	case <-cleanup.entered:
+	case <-time.After(time.Second):
+		t.Fatal("stale journal cleanup did not start")
 	}
 	journal, err := store.LoadJournal(key)
 	if err != nil {
