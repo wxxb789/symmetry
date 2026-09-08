@@ -7,7 +7,7 @@ defmodule SymmetryControl.Health do
   def check(checks) do
     statuses =
       Map.new(checks, fn {name, check} ->
-        {name, if(check.() == :ok, do: "ok", else: "error")}
+        {name, if(run_check(check) == :ok, do: "ok", else: "error")}
       end)
 
     body = %{
@@ -39,6 +39,16 @@ defmodule SymmetryControl.Health do
     end
   rescue
     error in DBConnection.ConnectionError -> {:error, error}
+  end
+
+  defp run_check(check) do
+    try do
+      check.()
+    rescue
+      _error -> :error
+    catch
+      _kind, _reason -> :error
+    end
   end
 
   defp registered?(name), do: if(is_pid(Process.whereis(name)), do: :ok, else: {:error, :down})

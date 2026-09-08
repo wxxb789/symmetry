@@ -12,4 +12,17 @@ defmodule SymmetryControl.HealthTest do
     assert {:error, %{status: "unavailable", checks: %{database: "error", scheduler: "ok"}}} =
              Health.check(database: fn -> {:error, :down} end, scheduler: fn -> :ok end)
   end
+
+  test "returns unavailable when an injected check raises, throws, or exits" do
+    failing_checks = [
+      fn -> raise "probe failed" end,
+      fn -> throw(:probe_failed) end,
+      fn -> exit(:probe_failed) end
+    ]
+
+    for check <- failing_checks do
+      assert {:error, %{status: "unavailable", checks: %{database: "error", scheduler: "ok"}}} =
+               Health.check(database: check, scheduler: fn -> :ok end)
+    end
+  end
 end
