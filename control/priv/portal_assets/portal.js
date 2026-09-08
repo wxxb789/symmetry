@@ -104,6 +104,10 @@
       .replaceAll("'", "&#039;");
   }
 
+  function safeHref(url) {
+    return url && /^https?:\/\//i.test(String(url)) ? escapeHtml(url) : null;
+  }
+
   function formatLabel(value) {
     if (value === "github") return "GitHub";
     if (value === "azure_devops") return "Azure DevOps";
@@ -750,6 +754,11 @@
     const canRetry = execution?.can_retry && !archived;
     const waiting = execution?.waiting;
     const nextAction = !archived && execution?.state === "completed" && item.status !== "review" && item.status !== "done" ? `<button class="button" id="move-review-button">Move to review</button>` : "";
+    const externalHref = safeHref(item.external?.url);
+    const pullRequestHref = safeHref(item.pull_request_url);
+    const externalReference = externalHref
+      ? `<a class="detail-link" href="${externalHref}" target="_blank" rel="noreferrer">#${escapeHtml(item.external?.id)} ${icon("external")}</a>`
+      : `#${escapeHtml(item.external?.id || "Unavailable")}`;
 
     $("#detail-content").innerHTML = `
       <div class="detail-actions">
@@ -760,25 +769,25 @@
         ${canCancel ? `<button class="button button-danger" id="cancel-item-button">${icon("x")}<span>Cancel run</span></button>` : ""}
         ${nextAction}
         <select id="detail-status-select" aria-label="Workflow status" ${archived ? "disabled" : ""}>${columns.map(([status, label]) => `<option value="${status}" ${item.status === status ? "selected" : ""}>${label}</option>`).join("")}</select>
-        <select id="detail-priority-select" aria-label="Priority" ${archived || item.external ? "disabled" : ""}>${["urgent", "high", "medium", "low", "no_priority"].map((priority) => `<option value="${priority}" ${item.priority === priority ? "selected" : ""}>${formatLabel(priority)}</option>`).join("")}</select>
+        <select id="detail-priority-select" aria-label="Priority" ${archived || item.external ? "disabled" : ""}>${["urgent", "high", "medium", "low", "no_priority"].map((priority) => `<option value="${priority}" ${item.priority === priority ? "selected" : ""}>${escapeHtml(formatLabel(priority))}</option>`).join("")}</select>
       </div>
       ${item.assignee.type !== "agent" && !execution ? '<div class="inline-notice">Set Owner type to Agent before starting a run.</div>' : ""}
       ${item.external?.available === false ? '<div class="inline-notice attention">Unavailable in provider. Synchronize the work tracker after restoring access or the external item.</div>' : ""}
       ${waiting ? `<div class="input-request"><p><strong>Agent needs a decision</strong><br>${escapeHtml(waiting.question || "Provide the requested input to continue.")}</p>${waiting.decision || waiting.payload?.decision ? '<p>Review the options, consequences, and recommendation in Chat.</p><button class="button button-primary" id="decision-chat-button" type="button">Review decision in Chat</button>' : '<form id="provide-input-form" class="input-row"><input name="answer" required aria-label="Response"><button class="button button-primary" type="submit">Send</button></form>'}</div>` : ""}
       <section class="detail-summary"><p>${escapeHtml(outcome.summary || item.description || "No outcome summary yet.")}</p></section>
-      ${item.external ? `<section class="detail-section"><h3>External work</h3><div class="detail-facts">${detailFact("Provider", escapeHtml(formatLabel(item.external.provider)))}${detailFact("Availability", item.external.available === false ? '<span class="state-badge attention">Unavailable</span>' : '<span class="state-badge healthy">Available</span>')}${detailFact("Reference", `<a class="detail-link" href="${escapeHtml(item.external.url)}" target="_blank" rel="noreferrer">#${escapeHtml(item.external.id)} ${icon("external")}</a>`)}${detailFact("State", escapeHtml(item.external.state))}${detailFact("Assigned human", escapeHtml(item.external.assignee || "Unassigned"))}${detailFact("Labels", escapeHtml(item.external.labels.join(", ") || "None"))}</div></section>` : ""}
+      ${item.external ? `<section class="detail-section"><h3>External work</h3><div class="detail-facts">${detailFact("Provider", escapeHtml(formatLabel(item.external.provider)))}${detailFact("Availability", item.external.available === false ? '<span class="state-badge attention">Unavailable</span>' : '<span class="state-badge healthy">Available</span>')}${detailFact("Reference", externalReference)}${detailFact("State", escapeHtml(item.external.state))}${detailFact("Assigned human", escapeHtml(item.external.assignee || "Unassigned"))}${detailFact("Labels", escapeHtml(item.external.labels.join(", ") || "None"))}</div></section>` : ""}
       ${outcome.failure ? `<section class="detail-section"><h3>Failure</h3><div class="failure-panel"><pre>${escapeHtml(formatOutcome(outcome.failure))}</pre></div></section>` : ""}
       ${hasOutcome(outcome.result) ? `<section class="detail-section"><h3>Completion result</h3><div class="detail-summary"><pre>${escapeHtml(formatOutcome(outcome.result))}</pre></div></section>` : ""}
       <section class="detail-section"><h3>Execution</h3><div class="detail-facts">
-        ${detailFact("Phase", `<span class="state-badge ${outcome.phase}">${formatLabel(outcome.phase)}</span>`)}
+        ${detailFact("Phase", `<span class="state-badge ${escapeHtml(outcome.phase)}">${escapeHtml(formatLabel(outcome.phase))}</span>`)}
         ${detailFact("Generation", execution ? String(execution.generation) : "Not started")}
         ${detailFact("Owner", escapeHtml(outcome.owner.name || "Unassigned"))}
         ${detailFact("Repository", escapeHtml(item.repository || "Not linked"))}
         ${detailFact("CI resource", escapeHtml(item.ci_resource || "Repository provider"))}
         ${detailFact("Branch", escapeHtml(item.branch || "Not created"))}
-        ${detailFact("Pull request", item.pull_request_url ? `<a class="detail-link" href="${escapeHtml(item.pull_request_url)}" target="_blank" rel="noreferrer">Open PR ${icon("external")}</a> <span class="state-badge ${escapeHtml(item.delivery.pull_request.status || "unknown")}">${escapeHtml(formatLabel(item.delivery.pull_request.status || "unknown"))}</span>${sourceLabel(item.delivery.pull_request)}` : "Not created")}
-        ${detailFact("CI", `<span class="state-badge ${item.ci_status}">${formatLabel(item.ci_status)}</span>${sourceLabel(item.delivery.ci)}`)}
-        ${detailFact("Review", `<span class="state-badge ${item.review_status}">${formatLabel(item.review_status)}</span>${sourceLabel(item.delivery.review)}`)}
+        ${detailFact("Pull request", pullRequestHref ? `<a class="detail-link" href="${pullRequestHref}" target="_blank" rel="noreferrer">Open PR ${icon("external")}</a> <span class="state-badge ${escapeHtml(item.delivery.pull_request.status || "unknown")}">${escapeHtml(formatLabel(item.delivery.pull_request.status || "unknown"))}</span>${sourceLabel(item.delivery.pull_request)}` : "Not created")}
+        ${detailFact("CI", `<span class="state-badge ${escapeHtml(item.ci_status)}">${escapeHtml(formatLabel(item.ci_status))}</span>${sourceLabel(item.delivery.ci)}`)}
+        ${detailFact("Review", `<span class="state-badge ${escapeHtml(item.review_status)}">${escapeHtml(formatLabel(item.review_status))}</span>${sourceLabel(item.delivery.review)}`)}
         ${outcome.blocker ? detailFact("Blocker", `<span class="state-badge attention">${escapeHtml(outcome.blocker)}</span>`) : ""}
       </div></section>
       ${renderListSection("Important findings", outcome.findings, "message")}
@@ -1741,9 +1750,8 @@
   }
 
   function chatDelivery(item) {
-    const url = item.pull_request_url;
-    const safeUrl = url && /^https?:\/\//i.test(url);
-    return `<div class="chat-delivery">${safeUrl ? `<a class="detail-link" href="${escapeHtml(url)}" target="_blank" rel="noreferrer">Open PR ${icon("external")}</a>${sourceLabel(item.delivery?.pull_request)}` : '<span>No pull request yet</span>'}<span>CI <strong class="${item.ci_status === "failed" ? "is-error" : ""}">${escapeHtml(formatLabel(item.ci_status))}</strong>${sourceLabel(item.delivery?.ci)}</span><span>Review <strong>${escapeHtml(formatLabel(item.review_status))}</strong>${sourceLabel(item.delivery?.review)}</span></div>`;
+    const safeUrl = safeHref(item.pull_request_url);
+    return `<div class="chat-delivery">${safeUrl ? `<a class="detail-link" href="${safeUrl}" target="_blank" rel="noreferrer">Open PR ${icon("external")}</a>${sourceLabel(item.delivery?.pull_request)}` : '<span>No pull request yet</span>'}<span>CI <strong class="${item.ci_status === "failed" ? "is-error" : ""}">${escapeHtml(formatLabel(item.ci_status))}</strong>${sourceLabel(item.delivery?.ci)}</span><span>Review <strong>${escapeHtml(formatLabel(item.review_status))}</strong>${sourceLabel(item.delivery?.review)}</span></div>`;
   }
 
   function renderChatRuns() {

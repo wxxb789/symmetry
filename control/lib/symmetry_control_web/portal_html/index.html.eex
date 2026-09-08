@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#f6f7f9">
-    <meta name="csrf-token" content="<%= assigns.csrf_token %>">
+    <meta name="csrf-token" content="<%= Plug.HTML.html_escape(assigns.csrf_token) %>">
     <title>Engineering workspace | Symmetry</title>
     <link rel="stylesheet" href="/assets/portal.css">
     <script defer src="/assets/portal.js"></script>
@@ -23,7 +23,7 @@
           <a class="nav-button" href="#connections" data-view="connections" aria-label="Connections" title="Connections"><span data-icon="connection"></span></a>
         </nav>
         <form method="post" action="/portal/logout" class="logout-form">
-          <input type="hidden" name="_csrf_token" value="<%= assigns.csrf_token %>">
+          <input type="hidden" name="_csrf_token" value="<%= Plug.HTML.html_escape(assigns.csrf_token) %>">
           <button class="nav-button" type="submit" aria-label="Sign out" title="Sign out"><span data-icon="log-out"></span></button>
         </form>
       </aside>

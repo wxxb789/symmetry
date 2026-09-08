@@ -3,6 +3,8 @@ defmodule SymmetryControl.Orchestration.Scheduler do
 
   use GenServer
 
+  require Logger
+
   alias SymmetryControl.Orchestration
 
   @name __MODULE__
@@ -10,7 +12,13 @@ defmodule SymmetryControl.Orchestration.Scheduler do
   def start_link(_opts), do: GenServer.start_link(__MODULE__, :ok, name: @name)
 
   def wake do
-    if enabled?(), do: send(@name, :wake)
+    if enabled?() do
+      case Process.whereis(@name) do
+        pid when is_pid(pid) -> send(pid, :wake)
+        nil -> :ok
+      end
+    end
+
     :ok
   end
 
@@ -49,7 +57,7 @@ defmodule SymmetryControl.Orchestration.Scheduler do
 
     case Orchestration.assign_all(options) do
       {:ok, runs} -> Enum.each(runs, &broadcast_assignment/1)
-      {:error, _reason} -> :ok
+      {:error, reason} -> Logger.warning("scheduler assignment failed", reason: inspect(reason))
     end
   end
 

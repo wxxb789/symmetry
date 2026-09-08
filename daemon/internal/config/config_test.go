@@ -26,6 +26,9 @@ func TestLoadAcceptsValidConfiguration(t *testing.T) {
 	if actual.AgentProfiles["default"].InputMode != InputModeGoal {
 		t.Errorf("AgentProfiles[default].InputMode = %q", actual.AgentProfiles["default"].InputMode)
 	}
+	if actual.AgentProfiles["default"].EventFormat != EventFormatRaw {
+		t.Errorf("AgentProfiles[default].EventFormat = %q, want %q", actual.AgentProfiles["default"].EventFormat, EventFormatRaw)
+	}
 	if actual.Workspaces["primary"].Policy != WorkspacePolicyExistingCheckout {
 		t.Errorf("Workspaces[primary].Policy = %q", actual.Workspaces["primary"].Policy)
 	}

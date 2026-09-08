@@ -361,6 +361,105 @@ func TestClaimIntentGrantAndPendingOutboxSurviveRestart(t *testing.T) {
 	}
 }
 
+func TestQueueOutputEventBoundsPendingPayloadAndQueuesMarker(t *testing.T) {
+	store := mustStore(t)
+	defer store.Close()
+	journal := testJournal("run-output-budget", 1)
+	journal.LastEventSequence = 0
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC)
+	firstPayload := json.RawMessage(`{"chunk":"first"}`)
+	queued, dropped, err := store.QueueOutputEvent(journal.Key(), protocol.RunEvent{
+		EventID: "output-1", Kind: "output", OccurredAt: now, Payload: firstPayload,
+	}, len(firstPayload))
+	if err != nil || dropped || queued.LastEventSequence != 1 || len(queued.PendingEvents) != 1 {
+		t.Fatalf("QueueOutputEvent(first) = %#v, dropped=%t, err=%v", queued, dropped, err)
+	}
+	secondPayload := json.RawMessage(`{"chunk":"second"}`)
+	queued, dropped, err = store.QueueOutputEvent(journal.Key(), protocol.RunEvent{
+		EventID: "output-2", Kind: "output", OccurredAt: now.Add(time.Second), Payload: secondPayload,
+	}, len(firstPayload))
+	if err != nil || !dropped || queued.LastEventSequence != 1 || len(queued.PendingEvents) != 1 || queued.DroppedOutputChunks != 1 || queued.DroppedOutputBytes != int64(len(secondPayload)) {
+		t.Fatalf("QueueOutputEvent(over budget) = %#v, dropped=%t, err=%v", queued, dropped, err)
+	}
+	progress, err := store.QueueNextEvent(journal.Key(), protocol.RunEvent{
+		EventID: "progress-1", Kind: "progress", OccurredAt: now.Add(2 * time.Second), Payload: json.RawMessage(`{}`),
+	})
+	if err != nil || progress.LastEventSequence != 2 {
+		t.Fatalf("QueueNextEvent() = %#v, err=%v", progress, err)
+	}
+	marked, appended, err := store.QueueOutputTruncatedMarker(journal.Key(), now.Add(3*time.Second), func() (string, error) { return "marker-1", nil })
+	if err != nil || !appended || marked.DroppedOutputChunks != 0 || marked.DroppedOutputBytes != 0 || marked.LastEventSequence != 3 || len(marked.PendingEvents) != 3 {
+		t.Fatalf("QueueOutputTruncatedMarker() = %#v, appended=%t, err=%v", marked, appended, err)
+	}
+	var markerPayload map[string]int64
+	if err := json.Unmarshal(marked.PendingEvents[2].Payload, &markerPayload); err != nil || markerPayload["dropped_chunks"] != 1 || markerPayload["dropped_bytes"] != int64(len(secondPayload)) {
+		t.Fatalf("marker payload = %#v, err=%v", markerPayload, err)
+	}
+	unchanged, appended, err := store.QueueOutputTruncatedMarker(journal.Key(), now.Add(4*time.Second), nil)
+	if err != nil || appended || unchanged.LastEventSequence != 3 {
+		t.Fatalf("QueueOutputTruncatedMarker(empty) = %#v, appended=%t, err=%v", unchanged, appended, err)
+	}
+
+	directory := store.dir
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	loaded, err := restarted.LoadJournal(journal.Key())
+	if err != nil || loaded.DroppedOutputChunks != 0 || loaded.DroppedOutputBytes != 0 || loaded.LastEventSequence != 3 {
+		t.Fatalf("journal after restart = %#v, err=%v", loaded, err)
+	}
+}
+
+func TestMarkEventsDeliveredAndQueueOutputTruncatedMarkerSurvivesRestart(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-output-marker", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	key := journal.Key()
+	now := time.Date(2026, 9, 7, 1, 2, 3, 0, time.UTC)
+	payload := json.RawMessage(`{"chunk":"first"}`)
+
+	if _, dropped, err := store.QueueOutputEvent(key, protocol.RunEvent{
+		EventID: "output-1", Kind: "output", OccurredAt: now, Payload: payload,
+	}, len(payload)); err != nil || dropped {
+		t.Fatalf("QueueOutputEvent(first) dropped=%t, err=%v", dropped, err)
+	}
+
+	if _, dropped, err := store.QueueOutputEvent(key, protocol.RunEvent{
+		EventID: "output-2", Kind: "output", OccurredAt: now.Add(time.Second), Payload: json.RawMessage(`{"chunk":"second"}`),
+	}, len(payload)); err != nil || !dropped {
+		t.Fatalf("QueueOutputEvent(second) dropped=%t, err=%v", dropped, err)
+	}
+
+	updated, appended, err := store.MarkEventsDeliveredAndQueueOutputTruncatedMarker(key, []string{"output-1"}, now.Add(2*time.Second), func() (string, error) { return "marker-1", nil })
+	if err != nil || !appended || updated.DroppedOutputChunks != 0 || updated.DroppedOutputBytes != 0 || len(updated.PendingEvents) != 1 || updated.PendingEvents[0].Kind != "output_truncated" {
+		t.Fatalf("MarkEventsDeliveredAndQueueOutputTruncatedMarker() = %#v, appended=%t, err=%v", updated, appended, err)
+	}
+
+	directory := store.dir
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	loaded, err := restarted.LoadJournal(key)
+	if err != nil || len(loaded.PendingEvents) != 1 || loaded.PendingEvents[0].Kind != "output_truncated" || loaded.DroppedOutputChunks != 0 || loaded.DroppedOutputBytes != 0 {
+		t.Fatalf("journal after restart = %#v, err=%v", loaded, err)
+	}
+}
+
 func TestQueueCommandAcknowledgementIsIdempotentByCommandAndOutcome(t *testing.T) {
 	store := mustStore(t)
 	journal := testJournal("run-1", 1)

@@ -127,6 +127,8 @@ type RunJournal struct {
 	StartedAt                      time.Time                         `json:"started_at"`
 	LastEventSequence              int64                             `json:"last_event_sequence"`
 	PendingEvents                  []protocol.RunEvent               `json:"pending_events"`
+	DroppedOutputChunks            int64                             `json:"dropped_output_chunks,omitempty"`
+	DroppedOutputBytes             int64                             `json:"dropped_output_bytes,omitempty"`
 	PendingTransitions             []protocol.StateTransitionRequest `json:"pending_transitions"`
 	AttemptedTransitionIDs         []string                          `json:"attempted_transition_ids,omitempty"`
 	PendingCommandAcknowledgements []protocol.CommandAcknowledgement `json:"pending_command_acknowledgements"`
@@ -590,6 +592,97 @@ func (store *Store) QueueNextEvent(key RunKey, event protocol.RunEvent) (RunJour
 		event.Sequence = journal.LastEventSequence + 1
 		return appendEvent(journal, event, "event is invalid")
 	})
+}
+
+// QueueOutputEvent bounds only pending raw output. Dropped chunks are recorded
+// durably without consuming an event sequence so later semantic events remain
+// contiguous.
+func (store *Store) QueueOutputEvent(key RunKey, event protocol.RunEvent, budget int) (RunJournal, bool, error) {
+	dropped := false
+	journal, err := store.mutateJournal(key, func(journal *RunJournal) error {
+		if !journal.hasClaimGrant() {
+			return errors.New("journal has no claim grant")
+		}
+		if event.Kind != "output" || !validRequiredString(event.EventID, 4096) || event.OccurredAt.IsZero() || !validRawMessage(event.Payload) {
+			return errors.New("event is invalid")
+		}
+		pending := 0
+		for _, pendingEvent := range journal.PendingEvents {
+			if pendingEvent.Kind == "output" {
+				pending += len(pendingEvent.Payload)
+			}
+		}
+		payloadBytes := len(event.Payload)
+		if budget >= 0 && (pending > budget || payloadBytes > budget-pending) {
+			journal.DroppedOutputChunks++
+			journal.DroppedOutputBytes += int64(payloadBytes)
+			dropped = true
+			return nil
+		}
+		event.Sequence = journal.LastEventSequence + 1
+		return appendEvent(journal, event, "event is invalid")
+	})
+	return journal, dropped, err
+}
+
+// QueueOutputTruncatedMarker turns accumulated raw-output drops into one
+// durable event while clearing the counters in the same journal mutation. It
+// calls newEventID only after observing drops in the authoritative journal.
+func (store *Store) QueueOutputTruncatedMarker(key RunKey, at time.Time, newEventID func() (string, error)) (RunJournal, bool, error) {
+	appended := false
+	journal, err := store.mutateJournal(key, func(journal *RunJournal) error {
+		var err error
+		appended, err = appendOutputTruncatedMarker(journal, at, newEventID)
+		return err
+	})
+	return journal, appended, err
+}
+
+// MarkEventsDeliveredAndQueueOutputTruncatedMarker atomically confirms an
+// accepted batch and records any preceding raw-output loss. A crash cannot
+// otherwise leave loss counters with no pending event that can trigger a marker.
+// newEventID is called inside the mutation only when the authoritative journal
+// has drops to report, so a concurrent output drop cannot leave an accepted
+// event pending because its caller used an older journal snapshot.
+func (store *Store) MarkEventsDeliveredAndQueueOutputTruncatedMarker(key RunKey, eventIDs []string, at time.Time, newEventID func() (string, error)) (RunJournal, bool, error) {
+	appended := false
+	journal, err := store.mutateJournal(key, func(journal *RunJournal) error {
+		journal.PendingEvents = removeEvents(journal.PendingEvents, eventIDs)
+		var err error
+		appended, err = appendOutputTruncatedMarker(journal, at, newEventID)
+		return err
+	})
+	return journal, appended, err
+}
+
+func appendOutputTruncatedMarker(journal *RunJournal, at time.Time, newEventID func() (string, error)) (bool, error) {
+	if !journal.hasClaimGrant() {
+		return false, errors.New("journal has no claim grant")
+	}
+	if journal.DroppedOutputChunks == 0 {
+		return false, nil
+	}
+	if newEventID == nil {
+		return false, errors.New("output truncation marker ID generator is unavailable")
+	}
+	eventID, err := newEventID()
+	if err != nil {
+		return false, err
+	}
+	payload, err := json.Marshal(map[string]int64{
+		"dropped_chunks": journal.DroppedOutputChunks,
+		"dropped_bytes":  journal.DroppedOutputBytes,
+	})
+	if err != nil {
+		return false, err
+	}
+	event := protocol.RunEvent{EventID: eventID, Kind: "output_truncated", Sequence: journal.LastEventSequence + 1, OccurredAt: at, Payload: payload}
+	if err := appendEvent(journal, event, "event is invalid"); err != nil {
+		return false, err
+	}
+	journal.DroppedOutputChunks = 0
+	journal.DroppedOutputBytes = 0
+	return true, nil
 }
 
 // QueueWaitingForInput atomically records a waiting event and the associated
@@ -1382,7 +1475,10 @@ func validateJournal(journal RunJournal) error {
 	if !validTerminalState(journal) {
 		return errors.New("run journal is invalid")
 	}
-	if !journal.hasClaimGrant() && (journal.PID != 0 || !journal.StartedAt.IsZero() || len(journal.PendingEvents) != 0 || len(journal.PendingTransitions) != 0 || len(journal.PendingCommandAcknowledgements) != 0) {
+	if journal.DroppedOutputChunks < 0 || journal.DroppedOutputBytes < 0 {
+		return errors.New("run journal is invalid")
+	}
+	if !journal.hasClaimGrant() && (journal.PID != 0 || !journal.StartedAt.IsZero() || len(journal.PendingEvents) != 0 || journal.DroppedOutputChunks != 0 || journal.DroppedOutputBytes != 0 || len(journal.PendingTransitions) != 0 || len(journal.PendingCommandAcknowledgements) != 0) {
 		return errors.New("run journal is invalid")
 	}
 	lastSequence := int64(0)

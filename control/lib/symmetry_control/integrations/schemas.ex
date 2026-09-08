@@ -174,6 +174,7 @@ defmodule SymmetryControl.Integrations.ProviderActionIntent do
     :claim_id,
     :operation,
     :request_hash,
+    :request_hash_version,
     :input,
     :state,
     :provider,
@@ -201,6 +202,7 @@ defmodule SymmetryControl.Integrations.ProviderActionIntent do
     field :claim_id, Ecto.UUID
     field :operation, :string
     field :request_hash, :binary
+    field :request_hash_version, :integer, default: 1
     field :input, :map, default: %{}
     field :state, :string, default: "accepted"
     field :dispatch_token, Ecto.UUID
@@ -232,12 +234,16 @@ defmodule SymmetryControl.Integrations.ProviderActionIntent do
     |> validate_number(:resource_lock_version, greater_than: 0)
     |> validate_number(:connection_lock_version, greater_than: 0)
     |> validate_number(:work_item_lock_version, greater_than: 0)
+    |> validate_inclusion(:request_hash_version, [1, 2])
     |> validate_change(:request_hash, fn :request_hash, hash ->
       if is_binary(hash) and byte_size(hash) == 32,
         do: [],
         else: [request_hash: "must be a 32-byte digest"]
     end)
     |> unique_constraint([:run_id, :action_id])
+    |> check_constraint(:request_hash_version,
+      name: :provider_action_intents_request_hash_version_check
+    )
     |> unique_constraint([:run_id, :resource_id],
       name: :provider_action_intents_active_resource
     )

@@ -22,14 +22,20 @@ RUN apt-get update -y \
     && apt-get install --no-install-recommends -y ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+FROM alpine:3.23 AS init
+
+RUN apk add --no-cache tini-static
+
 FROM scratch
 
 COPY --from=build /out/symmetry-daemon /symmetry-daemon
 COPY --from=build /out/symmetry-fake-agent /symmetry-fake-agent
 COPY --from=certificates /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=init /sbin/tini-static /tini
 COPY --from=build --chown=65532:65532 /out/state /var/lib/symmetry
 COPY --from=build --chown=65532:65532 /out/workspaces /workspaces
 COPY --chown=65532:65532 docker/daemon-config.json /etc/symmetry/daemon.json
 
 USER 65532:65532
-ENTRYPOINT ["/symmetry-daemon", "-config", "/etc/symmetry/daemon.json"]
+# Tini adopts orphaned grandchildren and forwards stop signals to the daemon's process group.
+ENTRYPOINT ["/tini", "-s", "-g", "--", "/symmetry-daemon", "-config", "/etc/symmetry/daemon.json"]

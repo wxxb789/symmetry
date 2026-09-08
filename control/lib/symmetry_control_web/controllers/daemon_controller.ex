@@ -54,7 +54,7 @@ defmodule SymmetryControlWeb.DaemonController do
         |> Enum.map(fn runtime ->
           runtime
           |> Protocol.normalize_map()
-          |> Map.put_new("heartbeat_interval_ms", configured_heartbeat)
+          |> Map.put("heartbeat_interval_ms", configured_heartbeat)
         end)
 
       with :ok <- owns_machine(conn, machine_id),
@@ -119,15 +119,28 @@ defmodule SymmetryControlWeb.DaemonController do
   defp claim_with_provider_access(run_id, request) do
     Repo.transaction(fn ->
       with {:ok, provider_scope} <- ProviderAccess.lock_claim_scope(run_id),
-           {:ok, run} <-
-             Orchestration.claim(run_id, request, lease_duration_ms: config(:lease_duration_ms)),
+           {:ok, run, disposition} <-
+             Orchestration.claim_with_disposition(run_id, request,
+               lease_duration_ms: config(:lease_duration_ms)
+             ),
            {:ok, %{task: task}} <- Orchestration.task_snapshot(run.task_id),
            {:ok, provider_access} <- ProviderAccess.issue(provider_scope, run, task) do
-        {run, task, provider_access}
+        {run, task, provider_access, disposition}
       else
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
+    |> case do
+      {:ok, {run, task, provider_access, :created}} ->
+        Orchestration.emit_claimed(run)
+        {:ok, {run, task, provider_access}}
+
+      {:ok, {run, task, provider_access, :replayed}} ->
+        {:ok, {run, task, provider_access}}
+
+      error ->
+        error
+    end
   end
 
   def heartbeat_run(conn, _params) do

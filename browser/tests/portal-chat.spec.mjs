@@ -151,6 +151,16 @@ async function send(page, intent, content) {
   await expect(page.locator("#chat-send")).toBeEnabled();
 }
 
+test("Chat delivery rejects unsafe pull request links", async ({ page }) => {
+  const model = await chatFixture(page);
+  model.item.pull_request_url = "javascript:alert(1)";
+
+  await selectRun(page);
+  const delivery = page.locator(".chat-delivery");
+  await expect(delivery).toContainText("No pull request yet");
+  await expect(delivery.locator("a")).toHaveCount(0);
+});
+
 test("Chat separates discussion from starting real project work and preserves the complete goal", async ({ page }) => {
   const model = await chatFixture(page);
   await page.locator("#chat-scope").selectOption("workspace");

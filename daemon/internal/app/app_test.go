@@ -1534,6 +1534,162 @@ func TestInputLifecycleOrdersInputBeforeWaitingOrExit(t *testing.T) {
 	})
 }
 
+func TestBoundedInputWriteCancelsExecutionAfterTimeout(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	process := &blockingInputProcess{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	active := &runningRun{process: process}
+	timer := &manualDeadlineTimer{channel: make(chan time.Time, 1), delay: inputWriteTimeout}
+	stopCause := make(chan error, 1)
+	active.stopExecution = func(err error) {
+		stopCause <- err
+		close(process.release)
+	}
+	daemon := &daemon{
+		store:   store,
+		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		options: options{newTimer: func(time.Duration) deadlineTimer { return timer }},
+		running: map[state.RunKey]*runningRun{key: active},
+	}
+	done := make(chan error, 1)
+	go func() { done <- daemon.writeInputBounded(context.Background(), active, process, []byte("input")) }()
+	<-process.entered
+	timer.channel <- time.Now()
+	if err := <-done; !errors.Is(err, errInputWriteTimeout) {
+		t.Fatalf("writeInputBounded() error = %v, want timeout", err)
+	}
+	if timer.delay != inputWriteTimeout {
+		t.Fatalf("timer delay = %s, want %s", timer.delay, inputWriteTimeout)
+	}
+	select {
+	case cause := <-stopCause:
+		if !errors.Is(cause, errInputWriteTimeout) {
+			t.Fatalf("stopExecution cause = %v, want timeout", cause)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout did not cancel execution")
+	}
+}
+
+func TestInputWriteTimeoutFailsAcknowledgementAndTerminalForCommandPaths(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		command    protocol.Command
+		localState string
+		profile    func(*config.AgentProfile)
+	}{
+		{
+			name:    "provide input",
+			command: protocol.Command{CommandID: "input-1", Kind: "provide_input", Payload: json.RawMessage(`{"answer":"yes"}`)},
+		},
+		{
+			name:       "supervisory guidance",
+			command:    protocol.Command{CommandID: "guidance-1", Kind: "guidance", Payload: json.RawMessage(`{"message":"use the existing adapter"}`)},
+			localState: "running",
+			profile: func(profile *config.AgentProfile) {
+				profile.Interactive = true
+				profile.SupervisoryControl = true
+				profile.InputMode = config.InputModeJSON
+				profile.EventFormat = config.EventFormatJSONL
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, key := claimedStore(t)
+			defer store.Close()
+			if test.localState != "" {
+				if _, err := store.SetLocalState(key, test.localState); err != nil {
+					t.Fatal(err)
+				}
+			}
+			value := testConfig(t)
+			profile := value.AgentProfiles[value.Runtime.AgentProfile]
+			if test.profile != nil {
+				test.profile(&profile)
+				value.AgentProfiles[value.Runtime.AgentProfile] = profile
+			}
+			process := newInputTimeoutProcess()
+			executionContext, stopExecution := context.WithCancelCause(context.Background())
+			active := &runningRun{process: process, output: &agentOutput{executionContext: executionContext}, stopExecution: stopExecution}
+			timer := &manualDeadlineTimer{channel: make(chan time.Time, 1), delay: inputWriteTimeout}
+			control := &commandTerminalControl{}
+			d := &daemon{
+				config:    value,
+				store:     store,
+				control:   control,
+				workspace: &fakeWorkspace{},
+				log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
+				options: options{
+					clock:    time.Now,
+					newID:    ids(),
+					newTimer: func(time.Duration) deadlineTimer { return timer },
+				},
+				running: map[state.RunKey]*runningRun{key: active},
+				slots:   make(chan struct{}, 1),
+			}
+			terminationDone := make(chan struct{})
+			go func() {
+				<-executionContext.Done()
+				_ = process.Terminate(context.Background(), 5*time.Second)
+				close(terminationDone)
+			}()
+			waitDone := make(chan struct{})
+			go func() {
+				d.waitForRunWithContext(context.Background(), key)
+				close(waitDone)
+			}()
+			command := test.command
+			command.RunID = key.RunID
+			command.Generation = key.Generation
+			handled := make(chan bool, 1)
+			go func() { handled <- d.handleCommand(context.Background(), command) }()
+			select {
+			case <-process.entered:
+			case <-time.After(time.Second):
+				t.Fatal("command did not reach blocking WriteInput")
+			}
+			timer.channel <- time.Now()
+			select {
+			case accepted := <-handled:
+				if !accepted {
+					t.Fatal("command timeout was not durably acknowledged")
+				}
+			case <-time.After(time.Second):
+				t.Fatal("bounded command handler did not return after timer fired")
+			}
+			select {
+			case <-terminationDone:
+			case <-time.After(time.Second):
+				t.Fatal("timeout did not terminate the execution")
+			}
+			select {
+			case <-waitDone:
+			case <-time.After(time.Second):
+				t.Fatal("process exit did not queue a terminal failure")
+			}
+			journal, err := store.LoadJournal(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !journalHasFailedAcknowledgement(journal, command.CommandID) {
+				t.Fatalf("command acknowledgement after timeout = %#v", journal.PendingCommandAcknowledgements)
+			}
+			if !journalHasTerminalFailure(journal) {
+				t.Fatalf("terminal transitions after timeout = %#v", journal.PendingTransitions)
+			}
+			if !journalTerminalFailureContains(journal, "standard input") {
+				t.Fatalf("terminal failure did not preserve the write timeout cause: %#v", journal.PendingTransitions)
+			}
+			if err := d.flushRun(context.Background(), journal); err != nil {
+				t.Fatalf("flushRun() error = %v", err)
+			}
+			if !control.hasFailedAcknowledgement(command.CommandID) || !control.hasFailedTerminal() {
+				t.Fatalf("delivered acknowledgements = %#v, transitions = %#v", control.acknowledgements, control.transitions)
+			}
+		})
+	}
+}
+
 func TestStartupFailureRetriesTerminalPersistenceWithStableID(t *testing.T) {
 	store, err := state.New(t.TempDir())
 	if err != nil {
@@ -3410,6 +3566,117 @@ func TestReconcileFiltersIneligibleJournalStates(t *testing.T) {
 	}
 }
 
+func TestReconcileReportsTransientFailureAndEventuallyProcessesResponse(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	initial, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaseExpiry := initial.LeaseExpiresAt.Add(time.Hour)
+	control := &retryReconcileControl{failures: 2, response: protocol.ReconcileResponse{Decisions: []protocol.ReconcileDecision{{RunID: key.RunID, Generation: key.Generation, Decision: protocol.ReconcileContinue, LeaseExpiresAt: &leaseExpiry}}}}
+	daemon := &daemon{
+		store:     store,
+		control:   control,
+		log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		workspace: &fakeWorkspace{},
+		options:   options{terminatePersist: func(int, string) error { return nil }},
+		running:   make(map[state.RunKey]*runningRun),
+	}
+	if daemon.reconcile(context.Background()) {
+		t.Fatal("first transient reconcile unexpectedly succeeded")
+	}
+	if daemon.reconcile(context.Background()) {
+		t.Fatal("second transient reconcile unexpectedly succeeded")
+	}
+	if !daemon.reconcile(context.Background()) {
+		t.Fatal("successful reconcile reported failure")
+	}
+	if control.calls != 3 {
+		t.Fatalf("Reconcile calls = %d, want 3", control.calls)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.LocalState != "waiting_for_input" || !journal.LeaseExpiresAt.Equal(leaseExpiry) {
+		t.Fatalf("journal after retry = %#v", journal)
+	}
+}
+
+func TestRunRetriesReconcileWithBackoffWithoutNotifications(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	if _, err := store.SetLocalState(key, "running"); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted.PID = 99
+	persisted.ProcessIdentity = "test:99"
+	persisted.StartedAt = time.Now().UTC()
+	if err := store.SaveJournal(persisted); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveIdentity(state.MachineIdentity{MachineID: "machine-1", MachineToken: "machine-token"}); err != nil {
+		t.Fatal(err)
+	}
+
+	control := &runRetryReconcileControl{
+		failures: 2,
+		calls:    make(chan int, 4),
+		response: protocol.ReconcileResponse{Decisions: []protocol.ReconcileDecision{{
+			RunID: key.RunID, Generation: key.Generation, Decision: protocol.ReconcileStaleStop,
+		}}},
+	}
+	timers := newRecordingTimerFactory()
+	terminated := make(chan int, 1)
+	value := testConfig(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, value, WithStore(store), WithControl(control), WithWorkspace(&fakeWorkspace{}), WithStartProcess(failStart), WithLogWriter(io.Discard), func(settings *options) {
+			settings.newTimer = timers.new
+			settings.newID = ids()
+			settings.terminatePersist = func(pid int, identity string) error {
+				if identity != "test:99" {
+					return errors.New("unexpected persisted process identity")
+				}
+				terminated <- pid
+				return nil
+			}
+		})
+	}()
+
+	awaitReconcileCall(t, control.calls, 1)
+	timers.fireUntil(t, minimumInterval, control.calls, 2)
+	secondRetry := timers.await(t, 2*time.Second)
+	secondRetry.channel <- time.Now()
+	awaitReconcileCall(t, control.calls, 3)
+	select {
+	case pid := <-terminated:
+		if pid != 99 {
+			t.Fatalf("terminated persisted PID = %d, want 99", pid)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("retry did not process stale_stop for the persisted run")
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.LocalState != "stale" {
+		t.Fatalf("journal local state = %q, want stale", journal.LocalState)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+}
+
 func TestHeartbeatExcludesTerminalPendingRun(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
@@ -3466,6 +3733,257 @@ func TestTerminalTransitionEnqueueFailureRetainsJournalAndSlot(t *testing.T) {
 	}
 	if _, exists := daemon.running[key]; !exists {
 		t.Fatal("run was removed after failed terminal enqueue")
+	}
+}
+
+func TestRawOutputBudgetDropsWithoutFailingSemanticEvents(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	var logs bytes.Buffer
+	daemon := &daemon{
+		store:   store,
+		log:     slog.New(slog.NewJSONHandler(&logs, nil)),
+		options: options{newID: ids()},
+		running: map[state.RunKey]*runningRun{key: {}},
+	}
+	data := bytes.Repeat([]byte("x"), rawOutputChunkBytes)
+	for index := range 100 {
+		if err := daemon.queueRawEvent(key, execution.Event{Stream: execution.Stdout, At: time.Now().UTC().Add(time.Duration(index) * time.Millisecond), Data: data}); err != nil {
+			t.Fatalf("queueRawEvent(%d) error = %v", index, err)
+		}
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.DroppedOutputChunks == 0 || journal.DroppedOutputBytes == 0 || journal.LastEventSequence == 0 {
+		t.Fatalf("output budget journal = %#v", journal)
+	}
+	if got := strings.Count(logs.String(), "output_dropped_pending_budget"); got != 1 {
+		t.Fatalf("output drop warning count = %d, want 1; logs=%s", got, logs.String())
+	}
+	before := journal.LastEventSequence
+	if err := daemon.queueEvent(key, "agent_event", json.RawMessage(`{"type":"progress"}`), time.Now().UTC()); err != nil {
+		t.Fatalf("queueEvent() after output drops = %v", err)
+	}
+	journal, err = store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.LastEventSequence != before+1 {
+		t.Fatalf("semantic event sequence = %d, want %d", journal.LastEventSequence, before+1)
+	}
+}
+
+func TestOutputBackpressureRecoversWithOneTruncationMarker(t *testing.T) {
+	store, err := state.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	control := &gatedAppendControl{release: make(chan struct{})}
+	value := testConfig(t)
+	profile := value.AgentProfiles[value.Runtime.AgentProfile]
+	profile.EventFormat = config.EventFormatJSONL
+	value.AgentProfiles[value.Runtime.AgentProfile] = profile
+	const outputBytes = 5 << 20
+	chunks := outputBytes / rawOutputChunkBytes
+	d := &daemon{
+		config:       value,
+		store:        store,
+		control:      control,
+		workspace:    &fakeWorkspace{},
+		log:          slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		runtimeID:    "runtime-1",
+		runtimeEpoch: 1,
+		start: func(_ context.Context, _ execution.Invocation, sink execution.Sink) (Process, error) {
+			chunk := append(bytes.Repeat([]byte("x"), rawOutputChunkBytes-1), '\n')
+			for index := range chunks {
+				if err := sink.Handle(context.Background(), execution.Event{Stream: execution.Stdout, Sequence: uint64(index), At: time.Now().UTC(), Data: chunk}); err != nil {
+					return nil, err
+				}
+			}
+			if err := sink.Handle(context.Background(), execution.Event{Stream: execution.Stdout, Sequence: uint64(chunks), At: time.Now().UTC(), Data: []byte("{\"type\":\"waiting_for_input\",\"question\":\"continue?\"}\n")}); err != nil {
+				return nil, err
+			}
+			return fakeProcess{result: execution.Result{}}, nil
+		},
+		options: options{newID: ids(), clock: time.Now},
+		running: make(map[state.RunKey]*runningRun),
+		slots:   make(chan struct{}, 1),
+	}
+	d.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: protocol.Work{Goal: "g"}})
+	d.workers.Wait()
+	key := state.RunKey{RunID: "run-1", Generation: 1}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !journalHasEvent(journal, "waiting_for_input") || journal.DroppedOutputChunks == 0 {
+		t.Fatalf("journal before recovery: event_kinds=%v dropped_chunks=%d", journalEventKinds(journal), journal.DroppedOutputChunks)
+	}
+	if err := d.flushRun(context.Background(), journal); err == nil {
+		t.Fatal("flushRun() succeeded while control was unavailable")
+	}
+	journal, err = store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journalHasTerminalFailure(journal) {
+		t.Fatalf("output backpressure queued a failed terminal transition: %#v", journal.PendingTransitions)
+	}
+	close(control.release)
+	if err := d.flushRun(context.Background(), journal); err != nil {
+		t.Fatalf("flushRun() after control recovery = %v", err)
+	}
+	if got := control.acceptedEventKindCount("output_truncated"); got != 1 {
+		t.Fatalf("accepted output_truncated events = %d, want 1; events=%#v", got, control.acceptedEvents())
+	}
+}
+
+func TestDeliverEventsAtomicallyQueuesConcurrentOutputTruncationMarker(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	now := time.Date(2026, 9, 8, 1, 2, 3, 0, time.UTC)
+	payload := json.RawMessage(`{"chunk":"first"}`)
+	journal, dropped, err := store.QueueOutputEvent(key, protocol.RunEvent{
+		EventID: "output-accepted", Kind: "output", OccurredAt: now, Payload: payload,
+	}, len(payload))
+	if err != nil || dropped {
+		t.Fatalf("QueueOutputEvent(accepted) dropped=%t, err=%v", dropped, err)
+	}
+
+	control := &markerInterleavingControl{afterAccepted: func() error {
+		_, dropped, err := store.QueueOutputEvent(key, protocol.RunEvent{
+			EventID: "output-dropped", Kind: "output", OccurredAt: now.Add(time.Second), Payload: json.RawMessage(`{"chunk":"second"}`),
+		}, len(payload))
+		if err != nil {
+			return err
+		}
+		if !dropped {
+			return errors.New("concurrent output was not dropped")
+		}
+		return nil
+	}}
+	markerIDCalls := 0
+	d := &daemon{
+		store:   store,
+		control: control,
+		options: options{
+			clock: func() time.Time { return now.Add(2 * time.Second) },
+			newID: func() (string, error) {
+				markerIDCalls++
+				return "marker-1", nil
+			},
+		},
+	}
+
+	updated, err := d.deliverEvents(context.Background(), journal, journal.PendingEvents)
+	if err != nil {
+		t.Fatalf("deliverEvents(accepted output) = %v", err)
+	}
+	if markerIDCalls != 1 || len(updated.PendingEvents) != 1 || updated.PendingEvents[0].Kind != "output_truncated" || updated.DroppedOutputChunks != 0 {
+		t.Fatalf("journal after concurrent drop = %#v, marker ID calls=%d", updated, markerIDCalls)
+	}
+	updated, err = d.deliverEvents(context.Background(), updated, updated.PendingEvents)
+	if err != nil {
+		t.Fatalf("deliverEvents(marker) = %v", err)
+	}
+	if markerIDCalls != 1 || len(updated.PendingEvents) != 0 {
+		t.Fatalf("journal after marker delivery = %#v, marker ID calls=%d", updated, markerIDCalls)
+	}
+	if got := control.acceptedEventIDCount("output-accepted"); got != 1 {
+		t.Fatalf("accepted output deliveries = %d, want 1; events=%#v", got, control.acceptedEvents())
+	}
+	if got := control.acceptedEventKindCount("output_truncated"); got != 1 {
+		t.Fatalf("accepted truncation markers = %d, want 1; events=%#v", got, control.acceptedEvents())
+	}
+}
+
+func TestDeliverEventsWithoutDroppedOutputDoesNotNeedMarkerIDGenerator(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	now := time.Date(2026, 9, 8, 1, 2, 3, 0, time.UTC)
+	journal, err := store.QueueNextEvent(key, protocol.RunEvent{
+		EventID: "progress-1", Kind: "progress", OccurredAt: now, Payload: json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("QueueNextEvent() = %v", err)
+	}
+	d := &daemon{store: store, control: &fakeControl{}}
+	updated, err := d.deliverEvents(context.Background(), journal, journal.PendingEvents)
+	if err != nil {
+		t.Fatalf("deliverEvents() = %v", err)
+	}
+	if len(updated.PendingEvents) != 0 {
+		t.Fatalf("journal pending events = %#v, want none", updated.PendingEvents)
+	}
+}
+
+func TestFlushRunQueuesCounterOnlyMarkerBeforeTerminalCleanup(t *testing.T) {
+	directory := t.TempDir()
+	store, key := claimedStoreAt(t, directory)
+	now := time.Date(2026, 9, 7, 1, 2, 3, 0, time.UTC)
+	if _, err := store.QueueTerminalTransitionAt(key, protocol.StateTransitionRequest{
+		TransitionID: "completed-1", State: "completed", Payload: json.RawMessage(`{}`),
+	}, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ResolveTerminal(key, state.TerminalVerdictAccepted, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkTransitionsDelivered(key, []string{"completed-1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := json.RawMessage(`{"chunk":"first"}`)
+	if _, dropped, err := store.QueueOutputEvent(key, protocol.RunEvent{
+		EventID: "output-1", Kind: "output", OccurredAt: now, Payload: payload,
+	}, len(payload)); err != nil || dropped {
+		t.Fatalf("QueueOutputEvent(first) dropped=%t, err=%v", dropped, err)
+	}
+	if _, dropped, err := store.QueueOutputEvent(key, protocol.RunEvent{
+		EventID: "output-2", Kind: "output", OccurredAt: now.Add(time.Second), Payload: json.RawMessage(`{"chunk":"second"}`),
+	}, len(payload)); err != nil || !dropped {
+		t.Fatalf("QueueOutputEvent(second) dropped=%t, err=%v", dropped, err)
+	}
+
+	// Simulate a pre-fix crash after confirming the output event but before
+	// queuing its truncation marker.
+	if _, err := store.MarkEventsDelivered(key, []string{"output-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted, err := state.New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	journal, err := restarted.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.PendingEvents) != 0 || journal.DroppedOutputChunks == 0 {
+		t.Fatalf("simulated crash journal = %#v", journal)
+	}
+
+	daemon := &daemon{
+		store:   restarted,
+		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		options: options{newID: ids(), clock: func() time.Time { return now.Add(2 * time.Second) }},
+	}
+	if err := daemon.flushRun(context.Background(), journal); err != nil {
+		t.Fatalf("flushRun() = %v", err)
+	}
+	journal, err = restarted.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.LocalState != "terminal_pending" || journal.DroppedOutputChunks != 0 || len(journal.PendingEvents) != 1 || journal.PendingEvents[0].Kind != "output_truncated" {
+		t.Fatalf("counter-only recovery lost the marker or entered cleanup: %#v", journal)
 	}
 }
 
@@ -3935,6 +4453,58 @@ func TestRenewalCommandsUseSerialExecutorWithoutBlockingLiveness(t *testing.T) {
 	}
 	if input.writes != 1 {
 		t.Fatalf("WriteInput calls = %d, want 1 for duplicate command ID", input.writes)
+	}
+}
+
+func TestObserveControlClockLogsOnlyStateChanges(t *testing.T) {
+	now := time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC)
+	var logs bytes.Buffer
+	daemon := &daemon{
+		options: options{clock: func() time.Time { return now }},
+		log:     slog.New(slog.NewJSONHandler(&logs, nil)),
+	}
+	daemon.observeControlClock(now.Add(30 * time.Second))
+	daemon.observeControlClock(now.Add(30 * time.Second))
+	daemon.observeControlClock(now.Add(30 * time.Second))
+	if got := strings.Count(logs.String(), "control_clock_skew_detected"); got != 1 {
+		t.Fatalf("skew warning count = %d, want 1; logs=%s", got, logs.String())
+	}
+	daemon.observeControlClock(now)
+	if got := strings.Count(logs.String(), "control_clock_skew_cleared"); got != 1 {
+		t.Fatalf("skew cleared count = %d, want 1; logs=%s", got, logs.String())
+	}
+}
+
+func TestHeartbeatAndSyncObserveControlServerTime(t *testing.T) {
+	store, err := state.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Date(2026, 9, 8, 1, 2, 3, 0, time.UTC)
+	var logs bytes.Buffer
+	control := &clockSnapshotControl{
+		heartbeat: protocol.RuntimeSnapshot{ServerTime: now.Add(30 * time.Second)},
+		dispatch:  protocol.RuntimeSnapshot{ServerTime: now.Add(30 * time.Second)},
+	}
+	d := &daemon{
+		store:        store,
+		control:      control,
+		log:          slog.New(slog.NewJSONHandler(&logs, nil)),
+		runtimeID:    "runtime-1",
+		runtimeEpoch: 1,
+		options:      options{clock: func() time.Time { return now }},
+	}
+	d.heartbeat(context.Background())
+	d.sync(context.Background())
+	d.heartbeat(context.Background())
+	if got := strings.Count(logs.String(), "control_clock_skew_detected"); got != 1 {
+		t.Fatalf("clock skew warnings = %d, want 1; logs=%s", got, logs.String())
+	}
+	control.heartbeat.ServerTime = now
+	d.heartbeat(context.Background())
+	if got := strings.Count(logs.String(), "control_clock_skew_cleared"); got != 1 {
+		t.Fatalf("clock skew clear messages = %d, want 1; logs=%s", got, logs.String())
 	}
 }
 
@@ -5956,6 +6526,108 @@ type manualDeadlineTimer struct {
 func (timer *manualDeadlineTimer) Chan() <-chan time.Time { return timer.channel }
 func (*manualDeadlineTimer) Stop()                        {}
 
+type recordingDeadlineTimer struct {
+	channel chan time.Time
+	delay   time.Duration
+
+	mutex       sync.Mutex
+	fired       bool
+	stopInvoked bool
+	stoppedChan chan struct{}
+	stopOnce    sync.Once
+}
+
+func (timer *recordingDeadlineTimer) Chan() <-chan time.Time { return timer.channel }
+func (timer *recordingDeadlineTimer) Stop() {
+	timer.mutex.Lock()
+	timer.stopInvoked = true
+	timer.mutex.Unlock()
+	timer.stopOnce.Do(func() { close(timer.stoppedChan) })
+}
+
+type recordingTimerFactory struct {
+	mutex   sync.Mutex
+	timers  []*recordingDeadlineTimer
+	changed chan struct{}
+}
+
+func newRecordingTimerFactory() *recordingTimerFactory {
+	return &recordingTimerFactory{changed: make(chan struct{}, 1)}
+}
+
+func (factory *recordingTimerFactory) new(delay time.Duration) deadlineTimer {
+	timer := &recordingDeadlineTimer{channel: make(chan time.Time, 1), delay: delay, stoppedChan: make(chan struct{})}
+	factory.mutex.Lock()
+	factory.timers = append(factory.timers, timer)
+	factory.mutex.Unlock()
+	select {
+	case factory.changed <- struct{}{}:
+	default:
+	}
+	return timer
+}
+
+func (factory *recordingTimerFactory) await(t *testing.T, delay time.Duration) *recordingDeadlineTimer {
+	t.Helper()
+	timeout := time.NewTimer(time.Second)
+	defer timeout.Stop()
+	for {
+		if timer := factory.next(delay); timer != nil {
+			return timer
+		}
+		select {
+		case <-factory.changed:
+		case <-timeout.C:
+			t.Fatalf("timer with delay %s was not created", delay)
+		}
+	}
+}
+
+func (factory *recordingTimerFactory) fireUntil(t *testing.T, delay time.Duration, calls <-chan int, want int) {
+	t.Helper()
+	timeout := time.NewTimer(time.Second)
+	defer timeout.Stop()
+	for {
+		if timer := factory.next(delay); timer != nil {
+			timer.channel <- time.Now()
+		}
+		select {
+		case got := <-calls:
+			if got != want {
+				t.Fatalf("Reconcile call = %d, want %d", got, want)
+			}
+			return
+		case <-factory.changed:
+		case <-timeout.C:
+			t.Fatalf("Reconcile call %d did not occur after firing %s timer", want, delay)
+		}
+	}
+}
+
+func (factory *recordingTimerFactory) next(delay time.Duration) *recordingDeadlineTimer {
+	factory.mutex.Lock()
+	defer factory.mutex.Unlock()
+	for _, timer := range factory.timers {
+		if timer.delay == delay && !timer.fired {
+			timer.fired = true
+			return timer
+		}
+	}
+	return nil
+}
+
+func awaitReconcileCall(t *testing.T, calls <-chan int, want int) {
+	t.Helper()
+	select {
+	case got := <-calls:
+		if got != want {
+			t.Fatalf("Reconcile call = %d, want %d", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("Reconcile call %d did not occur", want)
+	}
+}
+
 type blockingInputProcess struct {
 	entered       chan struct{}
 	release       chan struct{}
@@ -5964,6 +6636,38 @@ type blockingInputProcess struct {
 	terminateOnce sync.Once
 	writes        int
 }
+
+type inputTimeoutProcess struct {
+	entered chan struct{}
+	release chan struct{}
+	done    chan struct{}
+	once    sync.Once
+}
+
+func newInputTimeoutProcess() *inputTimeoutProcess {
+	return &inputTimeoutProcess{entered: make(chan struct{}, 1), release: make(chan struct{}), done: make(chan struct{})}
+}
+
+func (process *inputTimeoutProcess) WriteInput([]byte) error {
+	process.entered <- struct{}{}
+	<-process.release
+	return errors.New("standard input was closed after write timeout")
+}
+
+func (process *inputTimeoutProcess) Terminate(context.Context, time.Duration) error {
+	process.once.Do(func() {
+		close(process.release)
+		close(process.done)
+	})
+	return nil
+}
+
+func (process *inputTimeoutProcess) Wait() execution.Result {
+	<-process.done
+	return execution.Result{Terminated: true}
+}
+
+func (*inputTimeoutProcess) ProcessDetails() (int, string) { return 46, "test:46" }
 
 func (process *blockingInputProcess) WriteInput([]byte) error {
 	process.writes++
@@ -6022,6 +6726,229 @@ type restartRecoveryControl struct {
 	ordinaryTransitions  []protocol.StateTransitionRequest
 	failedTransition     protocol.StateTransitionRequest
 	inputAcknowledgement protocol.CommandAcknowledgement
+}
+
+type retryReconcileControl struct {
+	fakeControl
+	failures int
+	calls    int
+	response protocol.ReconcileResponse
+}
+
+func (client *retryReconcileControl) Reconcile(context.Context, string, protocol.ReconcileRequest) (protocol.ReconcileResponse, error) {
+	client.calls++
+	if client.calls <= client.failures {
+		return protocol.ReconcileResponse{}, transportError("temporary reconcile outage")
+	}
+	return client.response, nil
+}
+
+type runRetryReconcileControl struct {
+	fakeControl
+	mutex    sync.Mutex
+	failures int
+	count    int
+	calls    chan int
+	response protocol.ReconcileResponse
+}
+
+func (client *runRetryReconcileControl) Reconcile(context.Context, string, protocol.ReconcileRequest) (protocol.ReconcileResponse, error) {
+	client.mutex.Lock()
+	client.count++
+	call := client.count
+	client.mutex.Unlock()
+	client.calls <- call
+	if call <= client.failures {
+		return protocol.ReconcileResponse{}, transportError("temporary reconcile outage")
+	}
+	return client.response, nil
+}
+
+type gatedAppendControl struct {
+	fakeControl
+	mutex    sync.Mutex
+	release  chan struct{}
+	accepted []protocol.RunEvent
+}
+
+type markerInterleavingControl struct {
+	fakeControl
+	mutex         sync.Mutex
+	afterAccepted func() error
+	accepted      []protocol.RunEvent
+}
+
+func (client *markerInterleavingControl) AppendEvents(_ context.Context, _ string, request protocol.AppendEventsRequest) error {
+	client.mutex.Lock()
+	client.accepted = append(client.accepted, request.Events...)
+	afterAccepted := client.afterAccepted
+	client.afterAccepted = nil
+	client.mutex.Unlock()
+	if afterAccepted != nil {
+		return afterAccepted()
+	}
+	return nil
+}
+
+func (client *markerInterleavingControl) acceptedEventIDCount(eventID string) int {
+	client.mutex.Lock()
+	defer client.mutex.Unlock()
+	count := 0
+	for _, event := range client.accepted {
+		if event.EventID == eventID {
+			count++
+		}
+	}
+	return count
+}
+
+func (client *markerInterleavingControl) acceptedEventKindCount(kind string) int {
+	client.mutex.Lock()
+	defer client.mutex.Unlock()
+	count := 0
+	for _, event := range client.accepted {
+		if event.Kind == kind {
+			count++
+		}
+	}
+	return count
+}
+
+func (client *markerInterleavingControl) acceptedEvents() []protocol.RunEvent {
+	client.mutex.Lock()
+	defer client.mutex.Unlock()
+	return append([]protocol.RunEvent(nil), client.accepted...)
+}
+
+func (client *gatedAppendControl) AppendEvents(_ context.Context, _ string, request protocol.AppendEventsRequest) error {
+	select {
+	case <-client.release:
+		client.mutex.Lock()
+		client.accepted = append(client.accepted, request.Events...)
+		client.mutex.Unlock()
+		return nil
+	default:
+		return transportError("control is unavailable")
+	}
+}
+
+func (client *gatedAppendControl) acceptedEventKindCount(kind string) int {
+	client.mutex.Lock()
+	defer client.mutex.Unlock()
+	count := 0
+	for _, event := range client.accepted {
+		if event.Kind == kind {
+			count++
+		}
+	}
+	return count
+}
+
+func (client *gatedAppendControl) acceptedEvents() []protocol.RunEvent {
+	client.mutex.Lock()
+	defer client.mutex.Unlock()
+	return append([]protocol.RunEvent(nil), client.accepted...)
+}
+
+type commandTerminalControl struct {
+	fakeControl
+	mutex            sync.Mutex
+	acknowledgements []protocol.CommandAcknowledgement
+	transitions      []protocol.StateTransitionRequest
+}
+
+func (client *commandTerminalControl) AcknowledgeCommand(_ context.Context, _ string, acknowledgement protocol.CommandAcknowledgement) error {
+	client.mutex.Lock()
+	defer client.mutex.Unlock()
+	client.acknowledgements = append(client.acknowledgements, acknowledgement)
+	return nil
+}
+
+func (client *commandTerminalControl) Transition(_ context.Context, _ string, transition protocol.StateTransitionRequest) error {
+	client.mutex.Lock()
+	defer client.mutex.Unlock()
+	client.transitions = append(client.transitions, transition)
+	return nil
+}
+
+func (client *commandTerminalControl) hasFailedAcknowledgement(commandID string) bool {
+	client.mutex.Lock()
+	defer client.mutex.Unlock()
+	for _, acknowledgement := range client.acknowledgements {
+		if acknowledgement.CommandID == commandID && acknowledgement.Outcome == "failed" {
+			return true
+		}
+	}
+	return false
+}
+
+func (client *commandTerminalControl) hasFailedTerminal() bool {
+	client.mutex.Lock()
+	defer client.mutex.Unlock()
+	for _, transition := range client.transitions {
+		if transition.State == "failed" {
+			return true
+		}
+	}
+	return false
+}
+
+type clockSnapshotControl struct {
+	fakeControl
+	heartbeat protocol.RuntimeSnapshot
+	dispatch  protocol.RuntimeSnapshot
+}
+
+func (client *clockSnapshotControl) Heartbeat(context.Context, string, protocol.RuntimeHeartbeatRequest) (protocol.RuntimeSnapshot, error) {
+	return client.heartbeat, nil
+}
+
+func (client *clockSnapshotControl) Dispatch(context.Context, string, int64) (protocol.RuntimeSnapshot, error) {
+	return client.dispatch, nil
+}
+
+func journalHasEvent(journal state.RunJournal, kind string) bool {
+	for _, event := range journal.PendingEvents {
+		if event.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func journalEventKinds(journal state.RunJournal) []string {
+	kinds := make([]string, len(journal.PendingEvents))
+	for index, event := range journal.PendingEvents {
+		kinds[index] = event.Kind
+	}
+	return kinds
+}
+
+func journalHasFailedAcknowledgement(journal state.RunJournal, commandID string) bool {
+	for _, acknowledgement := range journal.PendingCommandAcknowledgements {
+		if acknowledgement.CommandID == commandID && acknowledgement.Outcome == "failed" {
+			return true
+		}
+	}
+	return false
+}
+
+func journalHasTerminalFailure(journal state.RunJournal) bool {
+	for _, transition := range journal.PendingTransitions {
+		if transition.State == "failed" {
+			return true
+		}
+	}
+	return false
+}
+
+func journalTerminalFailureContains(journal state.RunJournal, text string) bool {
+	for _, transition := range journal.PendingTransitions {
+		if transition.State == "failed" && strings.Contains(string(transition.Payload), text) {
+			return true
+		}
+	}
+	return false
 }
 
 func (client *restartRecoveryControl) record(call string) {

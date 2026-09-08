@@ -12,6 +12,7 @@ defmodule SymmetryControl.Chat do
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.{Notifier, Run, Scheduler, Task}
   alias SymmetryControl.Repo
+  alias SymmetryControl.RequestHash
   alias SymmetryControl.Workspaces
   alias SymmetryControl.Workspaces.{Project, WorkItem}
   alias SymmetryControlWeb.Protocol
@@ -68,8 +69,8 @@ defmodule SymmetryControl.Chat do
     with {:ok, params} <- validate_message(params) do
       action_id = params["action_id"]
 
-      request_hash =
-        :crypto.hash(:sha256, :erlang.term_to_binary(Map.delete(params, "action_id")))
+      request = Map.delete(params, "action_id")
+      {request_hash, request_hash_version} = RequestHash.write(request)
 
       result =
         Repo.transaction(fn ->
@@ -79,11 +80,10 @@ defmodule SymmetryControl.Chat do
           ])
 
           case Repo.get_by(Action, action_id: action_id) do
-            %Action{request_hash: ^request_hash} = action ->
-              {response(action), :replayed, nil}
-
-            %Action{} ->
-              Repo.rollback(:idempotency_conflict)
+            %Action{} = action ->
+              if RequestHash.matches?(action.request_hash, action.request_hash_version, request),
+                do: {response(action), :replayed, nil},
+                else: Repo.rollback(:idempotency_conflict)
 
             nil ->
               scope = resolve_scope(params) |> unwrap!()
@@ -103,12 +103,15 @@ defmodule SymmetryControl.Chat do
               reply = insert_message(attrs, "assistant", reply)
 
               action =
-                Repo.insert!(%Action{
+                %Action{}
+                |> Action.changeset(%{
                   action_id: action_id,
                   request_hash: request_hash,
+                  request_hash_version: request_hash_version,
                   message_id: message.id,
                   reply_id: reply.id
                 })
+                |> Repo.insert!()
 
               {response(action), :created, command}
           end

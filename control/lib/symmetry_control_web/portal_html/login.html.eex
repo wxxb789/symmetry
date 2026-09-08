@@ -15,10 +15,10 @@
         <h1 id="login-title">Engineering workspace</h1>
         <p class="login-copy">Use the operator credential configured for this control plane.</p>
         <%= if assigns.error do %>
-          <div class="form-alert" role="alert"><%= assigns.error %></div>
+          <div class="form-alert" role="alert"><%= Plug.HTML.html_escape(assigns.error) %></div>
         <% end %>
         <form method="post" action="/portal/login" class="login-form">
-          <input type="hidden" name="_csrf_token" value="<%= assigns.csrf_token %>">
+          <input type="hidden" name="_csrf_token" value="<%= Plug.HTML.html_escape(assigns.csrf_token) %>">
           <label for="operator-token">Operator token</label>
           <input id="operator-token" name="operator_token" type="password" autocomplete="current-password" autofocus required>
           <button class="button button-primary" type="submit">Open workspace</button>

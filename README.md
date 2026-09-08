@@ -18,7 +18,9 @@ persisting provider tokens or passing them to execution daemons. See
 Chat at `/portal#chat` provides workspace, project, and run conversations. Start
 work, inspect progress, deliver durable guidance, answer consequential decisions,
 and pause/resume or cancel compatible agents. Ordinary questions use recorded
-evidence without interrupting execution. See
+evidence without interrupting execution. Discussion and status replies are
+deterministic summaries of recorded execution evidence; the control plane does
+not call a language model. See
 [`docs/goal-04-runbook.md`](docs/goal-04-runbook.md).
 
 ## Architecture
@@ -38,10 +40,21 @@ The control plane does not execute coding agents directly, and the daemon does
 not own shared orchestration truth. The cross-language contract is documented
 in [`docs/protocol-v1.md`](docs/protocol-v1.md).
 
+## Platform Support
+
+The control plane is supported as a native Linux deployment. Run it on a
+Windows or macOS host through Docker; Kubernetes deployments use the same Linux
+container image. The execution daemon is natively supported on Linux and
+Windows. FreeBSD is unsupported. Native macOS daemon support and verification
+are deferred and must not be treated as supported.
+
 ## Local Development
 
 Prerequisites are Elixir 1.20 with Erlang/OTP 29 for `control/`, Go 1.27 for
 `daemon/`, and PostgreSQL 18 or compatible.
+
+The direct process commands below are the supported native Linux development
+workflow. On Windows or macOS hosts, use Docker Compose for the control plane.
 
 Start PostgreSQL locally, then run the services from separate terminals:
 

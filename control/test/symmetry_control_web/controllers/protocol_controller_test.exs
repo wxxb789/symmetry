@@ -3,6 +3,7 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
 
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.Scheduler
+  alias SymmetryControl.Repo
 
   @enrollment_token "test-enrollment-token"
   @operator_token "test-operator-token"
@@ -320,7 +321,8 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
             "capacity" => 1,
             "agent_profile" => "codex",
             "workspace" => "primary",
-            "capabilities" => %{}
+            "capabilities" => %{},
+            "heartbeat_interval_ms" => 999_999_999
           }
         ]
       })
@@ -328,6 +330,10 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
 
     configured = Application.fetch_env!(:symmetry_control, :orchestration)
     assert response["lease_duration_ms"] == configured[:lease_duration_ms]
+    [%{"runtime_id" => runtime_id}] = response["runtimes"]
+
+    assert Repo.get!(Orchestration.Runtime, runtime_id).heartbeat_interval_ms ==
+             configured[:heartbeat_interval_ms]
   end
 
   test "runtime mutations do not source required business fields from query params", %{conn: conn} do

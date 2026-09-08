@@ -9,6 +9,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
   alias SymmetryControl.Integrations.{ChangeAction, Connection, ProviderActionIntent}
   alias SymmetryControl.Orchestration.{Run, Runtime, Task}
   alias SymmetryControl.Repo
+  alias SymmetryControl.RequestHash
   alias SymmetryControl.Workspaces.{Project, ProjectResource, WorkItem}
 
   @salt "provider-access-v1"
@@ -410,11 +411,13 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
          {:ok, claims} <- verify_token(token),
          :ok <- reject_token_content(input, token),
          {:ok, caller_input} <- normalize_caller_input(operation, input),
-         request_hash <- request_hash(resource_id, operation, caller_input) do
+         request_body <- request_body(resource_id, operation, caller_input),
+         request_hash <- RequestHash.write(request_body) do
       try do
         GenServer.call(
           __MODULE__,
-          {:execute, {claims, action_id, resource_id, operation, caller_input, request_hash}},
+          {:execute,
+           {claims, action_id, resource_id, operation, caller_input, request_hash, request_body}},
           :infinity
         )
       catch
@@ -451,18 +454,26 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
 
   defp valid_claims?(_), do: false
 
-  defp accept_intent(claims, action_id, resource_id, operation, caller_input, request_hash) do
+  defp accept_intent(
+         claims,
+         action_id,
+         resource_id,
+         operation,
+         caller_input,
+         request_hash,
+         request_body
+       ) do
     Repo.transaction(fn ->
       case find_intent(claims["run"], action_id) do
         %ProviderActionIntent{} = intent ->
-          existing_intent_decision(intent, request_hash, claims)
+          existing_intent_decision(intent, request_hash, request_body, claims)
 
         nil ->
           context = lock_new_intent_context(claims, resource_id)
 
           case lock_intent(claims["run"], action_id) do
             %ProviderActionIntent{} = intent ->
-              existing_intent_decision(intent, request_hash, claims)
+              existing_intent_decision(intent, request_hash, request_body, claims)
 
             nil ->
               accept_new_intent(
@@ -478,28 +489,32 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     end)
   end
 
-  defp existing_intent_decision(intent, request_hash, claims) do
-    if intent.request_hash != request_hash, do: Repo.rollback(:idempotency_conflict)
+  defp existing_intent_decision(intent, request_hash, request_body, claims) do
+    unless RequestHash.matches?(intent.request_hash, intent.request_hash_version, request_body),
+      do: Repo.rollback(:idempotency_conflict)
 
     case intent.state do
       "accepted" ->
-        resume_accepted_intent(intent, request_hash, claims)
+        resume_accepted_intent(intent, request_hash, request_body, claims)
 
       "executing" ->
-        recover_executing_intent(intent, request_hash, claims)
+        recover_executing_intent(intent, request_hash, request_body, claims)
 
       "unknown" ->
-        retry_unknown_intent(intent, request_hash, claims)
+        retry_unknown_intent(intent, request_hash, request_body, claims)
 
       _state ->
-        intent |> lock_existing_intent(request_hash, claims) |> completed_intent_decision()
+        intent |> lock_existing_intent(request_body, claims) |> completed_intent_decision()
     end
   end
 
-  defp recover_executing_intent(intent, request_hash, claims) do
+  defp recover_executing_intent(intent, _request_hash, request_body, claims) do
     validate_intent_claims!(intent, claims)
     intent = lock_record(ProviderActionIntent, intent.id) || Repo.rollback(:not_found)
-    if intent.request_hash != request_hash, do: Repo.rollback(:idempotency_conflict)
+
+    unless RequestHash.matches?(intent.request_hash, intent.request_hash_version, request_body),
+      do: Repo.rollback(:idempotency_conflict)
+
     validate_intent_claims!(intent, claims)
 
     case intent.state do
@@ -518,7 +533,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     end
   end
 
-  defp resume_accepted_intent(intent, request_hash, claims) do
+  defp resume_accepted_intent(intent, _request_hash, request_body, claims) do
     context = lock_intent_context(intent)
     validate_intent_claims!(intent, claims)
     validate_live_execution!(claims, context)
@@ -526,7 +541,9 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     validate_operation!(intent.operation, context.resource, context.connection, context.task)
 
     intent = lock_record(ProviderActionIntent, intent.id) || Repo.rollback(:not_found)
-    if intent.request_hash != request_hash, do: Repo.rollback(:idempotency_conflict)
+
+    unless RequestHash.matches?(intent.request_hash, intent.request_hash_version, request_body),
+      do: Repo.rollback(:idempotency_conflict)
 
     case intent.state do
       "accepted" -> {:execute, authorized_context(context, intent)}
@@ -534,7 +551,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     end
   end
 
-  defp retry_unknown_intent(intent, request_hash, claims) do
+  defp retry_unknown_intent(intent, _request_hash, request_body, claims) do
     context = lock_intent_context(intent)
     validate_intent_claims!(intent, claims)
     validate_live_execution!(claims, context)
@@ -542,7 +559,9 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     validate_operation!(intent.operation, context.resource, context.connection, context.task)
 
     intent = lock_record(ProviderActionIntent, intent.id) || Repo.rollback(:not_found)
-    if intent.request_hash != request_hash, do: Repo.rollback(:idempotency_conflict)
+
+    unless RequestHash.matches?(intent.request_hash, intent.request_hash_version, request_body),
+      do: Repo.rollback(:idempotency_conflict)
 
     case intent.state do
       "unknown" ->
@@ -556,7 +575,14 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     end
   end
 
-  defp accept_new_intent(context, claims, action_id, operation, caller_input, request_hash) do
+  defp accept_new_intent(
+         context,
+         claims,
+         action_id,
+         operation,
+         caller_input,
+         {request_hash, request_hash_version}
+       ) do
     validate_live_execution!(claims, context)
     validate_bound_resource!(context)
 
@@ -580,6 +606,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
       claim_id: claims["claim"],
       operation: operation,
       request_hash: request_hash,
+      request_hash_version: request_hash_version,
       input: scoped_input,
       state: "accepted",
       provider: context.connection.provider,
@@ -671,7 +698,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     unless valid?, do: Repo.rollback(:ownership_lost)
   end
 
-  defp lock_existing_intent(intent, request_hash, claims) do
+  defp lock_existing_intent(intent, request_body, claims) do
     validate_intent_claims!(intent, claims)
 
     task = lock_record(Task, intent.task_id) || Repo.rollback(:ownership_lost)
@@ -679,7 +706,9 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     runtime = lock_record(Runtime, intent.runtime_id) || Repo.rollback(:ownership_lost)
     intent = lock_record(ProviderActionIntent, intent.id) || Repo.rollback(:not_found)
 
-    if intent.request_hash != request_hash, do: Repo.rollback(:idempotency_conflict)
+    unless RequestHash.matches?(intent.request_hash, intent.request_hash_version, request_body),
+      do: Repo.rollback(:idempotency_conflict)
+
     validate_intent_claims!(intent, claims)
 
     unless live_execution?(claims, run, task, runtime), do: Repo.rollback(:ownership_lost)
@@ -873,18 +902,30 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
   end
 
   defp execute_dispatch_job(
-         {:request, {claims, action_id, resource_id, operation, caller_input, request_hash}}
+         {:request,
+          {claims, action_id, resource_id, operation, caller_input, request_hash, request_body}}
        ) do
-    request = {claims, action_id, resource_id, operation, caller_input, request_hash}
+    request =
+      {claims, action_id, resource_id, operation, caller_input, request_hash, request_body}
 
-    case accept_intent(claims, action_id, resource_id, operation, caller_input, request_hash) do
+    case accept_intent(
+           claims,
+           action_id,
+           resource_id,
+           operation,
+           caller_input,
+           request_hash,
+           request_body
+         ) do
       {:ok, {:execute, context}} ->
-        with_dispatch_lock(context.intent.id, fn -> claim_and_execute(context, request_hash) end)
+        with_dispatch_lock(context.intent.id, fn ->
+          claim_and_execute(context, context.intent.request_hash)
+        end)
 
       {:ok, {:recover, intent_id}} ->
         case with_dispatch_lock(intent_id, fn -> recover_and_retry(intent_id, request) end) do
           {:error, :state_conflict} ->
-            active_dispatch_conflict(claims, intent_id, request_hash)
+            active_dispatch_conflict(claims, intent_id, request_body)
 
           result ->
             result
@@ -923,7 +964,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
 
   defp recover_and_retry(
          intent_id,
-         {claims, action_id, resource_id, operation, caller_input, request_hash}
+         {claims, action_id, resource_id, operation, caller_input, request_hash, request_body}
        ) do
     case recover_dispatch_context(intent_id) do
       {:ok, {:interrupted, dispatch_token}} ->
@@ -935,9 +976,10 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
                  resource_id,
                  operation,
                  caller_input,
-                 request_hash
+                 request_hash,
+                 request_body
                ) do
-          claim_and_execute(context, request_hash)
+          claim_and_execute(context, context.intent.request_hash)
         else
           {:ok, {:replay, result}} -> {:ok, result}
           {:ok, {:failed, reason}} -> {:error, reason}
@@ -951,11 +993,12 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
           resource_id,
           operation,
           caller_input,
-          request_hash
+          request_hash,
+          request_body
         )
 
-      {:ok, {:execute, context, ^request_hash, dispatch_token}} ->
-        execute_owned(context, request_hash, dispatch_token)
+      {:ok, {:execute, context, _stored_hash, dispatch_token}} ->
+        execute_owned(context, context.intent.request_hash, dispatch_token)
 
       {:error, reason} ->
         {:error, reason}
@@ -968,10 +1011,19 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
          resource_id,
          operation,
          caller_input,
-         request_hash
+         request_hash,
+         request_body
        ) do
-    case accept_intent(claims, action_id, resource_id, operation, caller_input, request_hash) do
-      {:ok, {:execute, context}} -> claim_and_execute(context, request_hash)
+    case accept_intent(
+           claims,
+           action_id,
+           resource_id,
+           operation,
+           caller_input,
+           request_hash,
+           request_body
+         ) do
+      {:ok, {:execute, context}} -> claim_and_execute(context, context.intent.request_hash)
       {:ok, {:replay, result}} -> {:ok, result}
       {:ok, {:failed, reason}} -> {:error, reason}
       {:ok, {:recover, _intent_id}} -> {:error, :state_conflict}
@@ -979,10 +1031,10 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     end
   end
 
-  defp active_dispatch_conflict(claims, intent_id, request_hash) do
+  defp active_dispatch_conflict(claims, intent_id, request_body) do
     Repo.transaction(fn ->
       intent = Repo.get(ProviderActionIntent, intent_id) || Repo.rollback(:not_found)
-      intent |> lock_existing_intent(request_hash, claims) |> completed_intent_decision()
+      intent |> lock_existing_intent(request_body, claims) |> completed_intent_decision()
     end)
     |> case do
       {:ok, {:replay, result}} -> {:ok, result}
@@ -1460,16 +1512,8 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     Repo.one(from record in schema, where: record.id == ^id, lock: "FOR UPDATE")
   end
 
-  defp request_hash(resource_id, operation, input) do
-    :crypto.hash(
-      :sha256,
-      :erlang.term_to_binary(%{
-        "resource_id" => resource_id,
-        "operation" => operation,
-        "input" => input
-      })
-    )
-  end
+  defp request_body(resource_id, operation, input),
+    do: %{"resource_id" => resource_id, "operation" => operation, "input" => input}
 
   defp normalize_json(%DateTime{} = value), do: DateTime.to_iso8601(value)
 

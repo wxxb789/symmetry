@@ -9,7 +9,13 @@ defmodule SymmetryControl.Config.RuntimeTest do
     "SYMMETRY_ENROLLMENT_TOKEN",
     "SYMMETRY_OPERATOR_TOKEN",
     "SYMMETRY_LEASE_DURATION_MS",
-    "SYMMETRY_INTEGRATION_SYNC_INTERVAL_MS"
+    "SYMMETRY_INTEGRATION_SYNC_INTERVAL_MS",
+    "SYMMETRY_HEARTBEAT_INTERVAL_MS",
+    "SYMMETRY_POLL_INTERVAL_MS",
+    "SYMMETRY_ASSIGNMENT_DURATION_MS",
+    "SYMMETRY_REAPER_INTERVAL_MS",
+    "SYMMETRY_PORTAL_SESSION_MAX_AGE_SECONDS",
+    "SYMMETRY_REQUEST_HASH_WRITE_MODE"
   ]
 
   setup do
@@ -85,6 +91,33 @@ defmodule SymmetryControl.Config.RuntimeTest do
     config = Config.Reader.read!(@test_config, env: :test)
 
     assert 30_000 == config[:symmetry_control][:orchestration][:lease_duration_ms]
+    assert :legacy == config[:symmetry_control][:orchestration][:request_hash_write_mode]
+  end
+
+  test "runtime configuration keeps legacy request hashes until canonical cutover is explicit" do
+    System.delete_env("SYMMETRY_REQUEST_HASH_WRITE_MODE")
+
+    assert :legacy ==
+             Config.Reader.read!(@runtime_config, env: :dev)[:symmetry_control][:orchestration][
+               :request_hash_write_mode
+             ]
+
+    System.put_env("SYMMETRY_REQUEST_HASH_WRITE_MODE", "canonical")
+
+    assert :canonical ==
+             Config.Reader.read!(@runtime_config, env: :dev)[:symmetry_control][:orchestration][
+               :request_hash_write_mode
+             ]
+  end
+
+  test "runtime configuration rejects an unknown request hash write mode" do
+    System.put_env("SYMMETRY_REQUEST_HASH_WRITE_MODE", "v2")
+
+    assert_raise RuntimeError,
+                 ~r/SYMMETRY_REQUEST_HASH_WRITE_MODE must be legacy or canonical/,
+                 fn ->
+                   Config.Reader.read!(@runtime_config, env: :dev)
+                 end
   end
 
   test "development integration configuration supports sync overrides" do
@@ -104,5 +137,45 @@ defmodule SymmetryControl.Config.RuntimeTest do
                    ~r/SYMMETRY_INTEGRATION_SYNC_INTERVAL_MS must be at least 30000/,
                    fn -> Config.Reader.read!(@runtime_config, env: :dev) end
     end
+  end
+
+  test "runtime configuration rejects malformed and non-positive orchestration intervals" do
+    variables = [
+      "SYMMETRY_HEARTBEAT_INTERVAL_MS",
+      "SYMMETRY_POLL_INTERVAL_MS",
+      "SYMMETRY_ASSIGNMENT_DURATION_MS",
+      "SYMMETRY_REAPER_INTERVAL_MS",
+      "SYMMETRY_PORTAL_SESSION_MAX_AGE_SECONDS"
+    ]
+
+    Enum.each(variables, &System.delete_env/1)
+
+    for variable <- variables, value <- ["0", "-1", "abc"] do
+      System.put_env(variable, value)
+
+      assert_raise RuntimeError, ~r/#{variable} must be a positive integer/, fn ->
+        Config.Reader.read!(@runtime_config, env: :dev)
+      end
+
+      System.delete_env(variable)
+    end
+  end
+
+  test "runtime configuration applies valid orchestration interval overrides" do
+    overrides = %{
+      "SYMMETRY_HEARTBEAT_INTERVAL_MS" => :heartbeat_interval_ms,
+      "SYMMETRY_POLL_INTERVAL_MS" => :poll_interval_ms,
+      "SYMMETRY_ASSIGNMENT_DURATION_MS" => :assignment_duration_ms,
+      "SYMMETRY_REAPER_INTERVAL_MS" => :reaper_interval_ms,
+      "SYMMETRY_PORTAL_SESSION_MAX_AGE_SECONDS" => :portal_session_max_age_seconds
+    }
+
+    Enum.each(Map.keys(overrides), &System.delete_env/1)
+    Enum.each(overrides, fn {variable, _key} -> System.put_env(variable, "1500") end)
+    config = Config.Reader.read!(@runtime_config, env: :dev)
+
+    Enum.each(overrides, fn {_variable, key} ->
+      assert config[:symmetry_control][:orchestration][key] == 1_500
+    end)
   end
 end

@@ -34,6 +34,7 @@ defmodule SymmetryControl.ChatTest do
     assert Repo.aggregate(Task, :count) == 1
     assert Repo.aggregate(Message, :count) == 2
     assert Repo.aggregate(Action, :count) == 1
+    assert Repo.get_by!(Action, action_id: "start-one").request_hash_version == 1
 
     item = Repo.get!(WorkItem, response.work_item_id)
     task = Repo.get!(Task, item.orchestration_task_id)
@@ -696,6 +697,8 @@ defmodule SymmetryControl.ChatTest do
     assert {:ok, first} = Chat.conversation(%{scope: "workspace"})
     assert length(first.messages) == 50
     assert is_binary(first.next_before)
+    assert Enum.all?(Repo.all(Action), &(&1.request_hash_version == 1))
+
     assert {:ok, second} = Chat.conversation(%{scope: "workspace", before: first.next_before})
     assert length(second.messages) == 2
     assert second.next_before == nil

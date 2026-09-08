@@ -9,6 +9,7 @@ defmodule SymmetryControl.Orchestration do
   import Ecto.Query
 
   alias SymmetryControl.Repo
+  alias SymmetryControl.RequestHash
 
   alias SymmetryControl.Orchestration.{
     Command,
@@ -65,7 +66,8 @@ defmodule SymmetryControl.Orchestration do
         {:error, :invalid_request}
 
       true ->
-        request_hash = request_hash(%{name: value(attrs, :name), machine_token: token})
+        request = %{name: value(attrs, :name), machine_token: token}
+        {request_hash, request_hash_version} = RequestHash.write(request)
 
         Repo.transaction(fn ->
           case Repo.one(
@@ -79,8 +81,13 @@ defmodule SymmetryControl.Orchestration do
                   name: value(attrs, :name),
                   token_digest: digest(token),
                   enrollment_idempotency_key: idempotency_key,
-                  enrollment_request_hash: request_hash
+                  enrollment_request_hash: request_hash,
+                  enrollment_request_hash_version: request_hash_version
                 })
+                |> Ecto.Changeset.force_change(
+                  :enrollment_request_hash_version,
+                  request_hash_version
+                )
 
               case insert_ignoring_conflict(
                      Machine,
@@ -103,11 +110,14 @@ defmodule SymmetryControl.Orchestration do
                            where: machine.enrollment_idempotency_key == ^idempotency_key,
                            lock: "FOR UPDATE"
                        ) do
-                    %Machine{enrollment_request_hash: ^request_hash} = machine ->
-                      {machine, :replayed}
-
-                    %Machine{} ->
-                      rollback(:idempotency_conflict)
+                    %Machine{} = machine ->
+                      if RequestHash.matches?(
+                           machine.enrollment_request_hash,
+                           machine.enrollment_request_hash_version,
+                           request
+                         ),
+                         do: {machine, :replayed},
+                         else: rollback(:idempotency_conflict)
 
                     nil ->
                       rollback(:invalid_request)
@@ -117,11 +127,14 @@ defmodule SymmetryControl.Orchestration do
                   rollback(:invalid_request)
               end
 
-            %Machine{enrollment_request_hash: ^request_hash} = machine ->
-              {machine, :replayed}
-
-            %Machine{} ->
-              rollback(:idempotency_conflict)
+            %Machine{} = machine ->
+              if RequestHash.matches?(
+                   machine.enrollment_request_hash,
+                   machine.enrollment_request_hash_version,
+                   request
+                 ),
+                 do: {machine, :replayed},
+                 else: rollback(:idempotency_conflict)
           end
         end)
         |> case do
@@ -260,7 +273,7 @@ defmodule SymmetryControl.Orchestration do
     if not valid_task_attrs?(task_attrs) do
       {:error, :invalid_request}
     else
-      request_hash = request_hash(task_attrs)
+      {request_hash, request_hash_version} = RequestHash.write(task_attrs)
       current = now(opts)
 
       Repo.transaction(fn ->
@@ -276,12 +289,14 @@ defmodule SymmetryControl.Orchestration do
                 Map.merge(task_attrs, %{
                   idempotency_key: idempotency_key,
                   request_hash: request_hash,
+                  request_hash_version: request_hash_version,
                   state: "queued",
                   current_generation: 0,
                   attempt_generation: 1,
                   waiting_transition_id: nil
                 })
               )
+              |> Ecto.Changeset.force_change(:request_hash_version, request_hash_version)
 
             case insert_ignoring_conflict(
                    Task,
@@ -304,20 +319,27 @@ defmodule SymmetryControl.Orchestration do
                          where: task.idempotency_key == ^idempotency_key,
                          lock: "FOR UPDATE"
                      ) do
-                  %Task{request_hash: ^request_hash} = task -> {task, :replayed}
-                  %Task{} -> rollback(:idempotency_conflict)
-                  nil -> rollback(:invalid_request)
+                  %Task{} = task ->
+                    if RequestHash.matches?(
+                         task.request_hash,
+                         task.request_hash_version,
+                         task_attrs
+                       ),
+                       do: {task, :replayed},
+                       else: rollback(:idempotency_conflict)
+
+                  nil ->
+                    rollback(:invalid_request)
                 end
 
               :invalid ->
                 rollback(:invalid_request)
             end
 
-          task when task.request_hash == request_hash ->
-            {task, :replayed}
-
-          _task ->
-            rollback(:idempotency_conflict)
+          %Task{} = task ->
+            if RequestHash.matches?(task.request_hash, task.request_hash_version, task_attrs),
+              do: {task, :replayed},
+              else: rollback(:idempotency_conflict)
         end
       end)
       |> case do
@@ -995,33 +1017,49 @@ defmodule SymmetryControl.Orchestration do
     current = now(opts)
     assignment_duration_ms = Keyword.get(opts, :assignment_duration_ms, 30_000)
 
-    Repo.transaction(fn ->
-      {task, runtime} = next_assignable_task_and_runtime(current) || rollback(:no_assignment)
+    result =
+      Repo.transaction(fn ->
+        {task, runtime} = next_assignable_task_and_runtime(current) || rollback(:no_assignment)
 
-      generation = task.attempt_generation
+        generation = task.attempt_generation
 
-      task =
-        task
-        |> Task.changeset(%{
+        task =
+          task
+          |> Task.changeset(%{
+            state: "assigned",
+            current_generation: generation,
+            waiting_transition_id: nil
+          })
+          |> stamp_update(current)
+          |> Repo.update!()
+
+        %Run{}
+        |> Run.changeset(%{
+          task_id: task.id,
+          runtime_id: runtime.id,
+          generation: generation,
           state: "assigned",
-          current_generation: generation,
-          waiting_transition_id: nil
+          assigned_at: current,
+          assignment_expires_at: DateTime.add(current, assignment_duration_ms, :millisecond)
         })
-        |> stamp_update(current)
-        |> Repo.update!()
+        |> stamp_insert(current)
+        |> Repo.insert!()
+      end)
 
-      %Run{}
-      |> Run.changeset(%{
-        task_id: task.id,
-        runtime_id: runtime.id,
-        generation: generation,
-        state: "assigned",
-        assigned_at: current,
-        assignment_expires_at: DateTime.add(current, assignment_duration_ms, :millisecond)
-      })
-      |> stamp_insert(current)
-      |> Repo.insert!()
-    end)
+    case result do
+      {:ok, run} ->
+        emit([:run, :assigned], %{
+          task_id: run.task_id,
+          run_id: run.id,
+          runtime_id: run.runtime_id,
+          generation: run.generation
+        })
+
+        result
+
+      _ ->
+        result
+    end
   end
 
   defp next_assignable_task_and_runtime(current) do
@@ -1067,73 +1105,120 @@ defmodule SymmetryControl.Orchestration do
   end
 
   @spec claim(Ecto.UUID.t(), map(), keyword()) :: {:ok, Run.t()} | {:error, atom()}
-  def claim(run_id, request, opts \\ [])
+  def claim(run_id, request, opts \\ []) do
+    case claim_with_disposition(run_id, request, opts) do
+      {:ok, run, :created} ->
+        emit_claimed(run)
+        {:ok, run}
 
-  def claim(run_id, request, opts) when is_map(request) do
+      {:ok, run, :replayed} ->
+        {:ok, run}
+
+      error ->
+        error
+    end
+  end
+
+  @doc false
+  @spec claim_with_disposition(Ecto.UUID.t(), map(), keyword()) ::
+          {:ok, Run.t(), :created | :replayed} | {:error, atom()}
+  def claim_with_disposition(run_id, request, opts) when is_map(request) do
     with true <- valid_uuid?(run_id) and valid_claim_request?(request),
          {:ok, lease_duration_ms} <- lease_duration_ms(opts) do
       current = now(opts)
 
-      Repo.transaction(fn ->
-        {task, run, runtime} = lock_chain(run_id)
-        request_runtime_id = value(request, :runtime_id)
-        request_epoch = value(request, :runtime_epoch)
-        request_generation = value(request, :generation)
-        request_claim_id = value(request, :claim_id)
+      result =
+        Repo.transaction(fn ->
+          {task, run, runtime} = lock_chain(run_id)
+          request_runtime_id = value(request, :runtime_id)
+          request_epoch = value(request, :runtime_epoch)
+          request_generation = value(request, :generation)
+          request_claim_id = value(request, :claim_id)
 
-        cond do
-          run.runtime_id != request_runtime_id or runtime.id != request_runtime_id ->
-            rollback(:ownership_lost)
+          cond do
+            run.runtime_id != request_runtime_id or runtime.id != request_runtime_id ->
+              rollback(:ownership_lost)
 
-          runtime.connection_epoch != request_epoch or
-            task.current_generation != request_generation or
-              run.generation != request_generation ->
-            rollback(:ownership_lost)
+            runtime.connection_epoch != request_epoch or
+              task.current_generation != request_generation or
+                run.generation != request_generation ->
+              rollback(:ownership_lost)
 
-          not runtime_matches_task?(runtime, task) ->
-            rollback(:ownership_lost)
+            not runtime_matches_task?(runtime, task) ->
+              rollback(:ownership_lost)
 
-          run.state in ["claimed", "cancelling"] and run.claim_id == request_claim_id and
-            run.claimed_runtime_epoch == request_epoch and
-            not is_nil(run.lease_expires_at) and
-              DateTime.compare(run.lease_expires_at, current) == :gt ->
-            run
-
-          run.state != "assigned" ->
-            rollback(:ownership_lost)
-
-          DateTime.compare(run.assignment_expires_at, current) != :gt ->
-            rollback(:assignment_expired)
-
-          task.state != "assigned" ->
-            rollback(:ownership_lost)
-
-          true ->
-            lease_expires_at = DateTime.add(current, lease_duration_ms, :millisecond)
-
-            run =
+            run.state in ["claimed", "cancelling"] and run.claim_id == request_claim_id and
+              run.claimed_runtime_epoch == request_epoch and
+              not is_nil(run.lease_expires_at) and
+                DateTime.compare(run.lease_expires_at, current) == :gt ->
               run
-              |> Run.changeset(%{
-                state: "claimed",
-                claimed_runtime_epoch: request_epoch,
-                claim_id: request_claim_id,
-                lease_token: Ecto.UUID.generate(),
-                claimed_at: current,
-                lease_expires_at: lease_expires_at
-              })
+
+            run.state != "assigned" ->
+              rollback(:ownership_lost)
+
+            DateTime.compare(run.assignment_expires_at, current) != :gt ->
+              rollback(:assignment_expired)
+
+            task.state != "assigned" ->
+              rollback(:ownership_lost)
+
+            true ->
+              lease_expires_at = DateTime.add(current, lease_duration_ms, :millisecond)
+
+              run =
+                run
+                |> Run.changeset(%{
+                  state: "claimed",
+                  claimed_runtime_epoch: request_epoch,
+                  claim_id: request_claim_id,
+                  lease_token: Ecto.UUID.generate(),
+                  claimed_at: current,
+                  lease_expires_at: lease_expires_at
+                })
+                |> stamp_update(current)
+                |> Repo.update!()
+
+              task
+              |> Task.changeset(%{state: "claimed"})
               |> stamp_update(current)
               |> Repo.update!()
 
-            task |> Task.changeset(%{state: "claimed"}) |> stamp_update(current) |> Repo.update!()
-            run
+              {:created, run}
+          end
+        end)
+        |> case do
+          {:ok, {:created, run}} -> {:created, run}
+          {:ok, run} -> {:replayed, run}
+          error -> error
         end
-      end)
+
+      case result do
+        {:created, run} ->
+          {:ok, run, :created}
+
+        {:replayed, run} ->
+          {:ok, run, :replayed}
+
+        error ->
+          error
+      end
     else
       _ -> {:error, :invalid_request}
     end
   end
 
-  def claim(_, _, _), do: {:error, :invalid_request}
+  def claim_with_disposition(_, _, _), do: {:error, :invalid_request}
+
+  @doc false
+  @spec emit_claimed(Run.t()) :: :ok
+  def emit_claimed(%Run{} = run) do
+    emit([:run, :claimed], %{
+      task_id: run.task_id,
+      run_id: run.id,
+      runtime_id: run.runtime_id,
+      generation: run.generation
+    })
+  end
 
   @spec renew_lease(Ecto.UUID.t(), map(), keyword()) :: {:ok, Run.t()} | {:error, atom()}
   def renew_lease(run_id, fence, opts \\ [])
@@ -1195,7 +1280,8 @@ defmodule SymmetryControl.Orchestration do
         {stored, _events_by_id} =
           Enum.map_reduce(events, existing_events, fn event, events_by_id ->
             event_id = value(event, :event_id)
-            event_hash = request_hash(event_body(event))
+            body = event_body(event)
+            {event_hash, event_hash_version} = RequestHash.write(body)
 
             case Map.get(events_by_id, event_id) do
               nil ->
@@ -1205,6 +1291,7 @@ defmodule SymmetryControl.Orchestration do
                     run_id: run.id,
                     event_id: event_id,
                     request_hash: event_hash,
+                    request_hash_version: event_hash_version,
                     sequence: value(event, :sequence),
                     kind: value(event, :kind),
                     payload: value(event, :payload, %{}),
@@ -1215,11 +1302,14 @@ defmodule SymmetryControl.Orchestration do
 
                 {stored_event, Map.put(events_by_id, event_id, stored_event)}
 
-              %RunEvent{request_hash: ^event_hash} = existing ->
-                {existing, events_by_id}
-
-              %RunEvent{} ->
-                rollback(:idempotency_conflict)
+              %RunEvent{} = existing ->
+                if RequestHash.matches?(
+                     existing.request_hash,
+                     existing.request_hash_version,
+                     body
+                   ),
+                   do: {existing, events_by_id},
+                   else: rollback(:idempotency_conflict)
             end
           end)
 
@@ -1242,35 +1332,59 @@ defmodule SymmetryControl.Orchestration do
       {:error, :invalid_request}
     else
       current = now(opts)
-      body_hash = request_hash(%{state: target_state, payload: payload})
+      body = %{state: target_state, payload: payload}
+      {body_hash, body_hash_version} = RequestHash.write(body)
 
-      Repo.transaction(fn ->
-        {task, run, runtime} = lock_chain(run_id)
-        ensure_transition_static_fence!(task, run, runtime, fence, target_state)
+      result =
+        Repo.transaction(fn ->
+          {task, run, runtime} = lock_chain(run_id)
+          ensure_transition_static_fence!(task, run, runtime, fence, target_state)
 
-        case Repo.get_by(RunTransition, run_id: run.id, transition_id: transition_id) do
-          %RunTransition{request_hash: ^body_hash} = transition ->
-            transition_response(run, transition)
+          case Repo.get_by(RunTransition, run_id: run.id, transition_id: transition_id) do
+            %RunTransition{} = transition ->
+              if RequestHash.matches?(
+                   transition.request_hash,
+                   transition.request_hash_version,
+                   body
+                 ),
+                 do: {:replayed, transition_response(run, transition)},
+                 else: rollback(:idempotency_conflict)
 
-          %RunTransition{} ->
-            rollback(:idempotency_conflict)
+            nil ->
+              ensure_cancelled_transition_authority!(run, target_state)
+              ensure_transition_fence!(task, run, runtime, fence, target_state, current)
+              if target_state == "waiting_for_input", do: validate_decision_packet!(task, payload)
 
-          nil ->
-            ensure_cancelled_transition_authority!(run, target_state)
-            ensure_transition_fence!(task, run, runtime, fence, target_state, current)
-            if target_state == "waiting_for_input", do: validate_decision_packet!(task, payload)
+              {:created,
+               transition_once!(
+                 task,
+                 run,
+                 target_state,
+                 payload,
+                 transition_id,
+                 body_hash,
+                 body_hash_version,
+                 current
+               )}
+          end
+        end)
 
-            transition_once!(
-              task,
-              run,
-              target_state,
-              payload,
-              transition_id,
-              body_hash,
-              current
-            )
-        end
-      end)
+      case result do
+        {:ok, {:created, run}} ->
+          emit([:run, :transition], %{
+            run_id: run.id,
+            generation: run.generation,
+            state: target_state
+          })
+
+          {:ok, run}
+
+        {:ok, {:replayed, run}} ->
+          {:ok, run}
+
+        error ->
+          error
+      end
     end
   end
 
@@ -1401,7 +1515,7 @@ defmodule SymmetryControl.Orchestration do
 
         case lock_task_command(task.id, idempotency_key) do
           %Command{} = command ->
-            ensure_command_replay!(command, "retry", payload, command_hash)
+            ensure_command_replay!(command, "retry", payload, opts)
             {task, command, :replayed}
 
           nil ->
@@ -1464,7 +1578,7 @@ defmodule SymmetryControl.Orchestration do
        ) do
     case lock_task_command(task.id, idempotency_key) do
       %Command{} = command ->
-        ensure_command_replay!(command, kind, payload, command_hash)
+        ensure_command_replay!(command, kind, payload, opts)
         {command, :replayed}
 
       nil ->
@@ -1654,7 +1768,7 @@ defmodule SymmetryControl.Orchestration do
          kind,
          payload,
          idempotency_key,
-         command_hash,
+         {command_hash, command_hash_version},
          opts
        ) do
     %Command{}
@@ -1666,7 +1780,7 @@ defmodule SymmetryControl.Orchestration do
       payload: payload,
       idempotency_key: idempotency_key,
       request_hash: command_hash,
-      request_hash_version: 2,
+      request_hash_version: command_hash_version,
       state: Keyword.fetch!(opts, :state),
       applied_at: Keyword.get(opts, :applied_at)
     })
@@ -1876,7 +1990,18 @@ defmodule SymmetryControl.Orchestration do
           select: run.id
       )
 
-    expired_runs = Enum.count(run_ids, &expire_run(&1, current))
+    expired_runs =
+      Enum.count(run_ids, fn run_id ->
+        case expire_run(run_id, current) do
+          {:ok, metadata} ->
+            emit([:run, :expired], metadata)
+            true
+
+          :not_expired ->
+            false
+        end
+      end)
+
     offline_runtimes = expire_offline_runtimes(current)
     %{expired_runs: expired_runs, offline_runtimes: offline_runtimes}
   end
@@ -1939,10 +2064,10 @@ defmodule SymmetryControl.Orchestration do
              |> Repo.update!()
            end
 
-           :expired
+           %{run_id: run.id, generation: run.generation, state: terminal_state}
          end) do
-      {:ok, :expired} -> true
-      _ -> false
+      {:ok, metadata} -> {:ok, metadata}
+      _ -> :not_expired
     end
   end
 
@@ -1967,13 +2092,17 @@ defmodule SymmetryControl.Orchestration do
                |> stamp_update(current)
                |> Repo.update!()
 
-               :offline
+               %{runtime_id: runtime.id}
              else
-               :online
+               nil
              end
            end) do
-        {:ok, :offline} -> true
-        _ -> false
+        {:ok, %{runtime_id: _runtime_id} = metadata} ->
+          emit([:runtime, :offline], metadata)
+          true
+
+        _ ->
+          false
       end
     end)
   end
@@ -1985,6 +2114,7 @@ defmodule SymmetryControl.Orchestration do
          payload,
          transition_id,
          body_hash,
+         body_hash_version,
          current
        ) do
     validate_transition!(run.state, target_state)
@@ -2012,6 +2142,7 @@ defmodule SymmetryControl.Orchestration do
       run_id: run.id,
       transition_id: transition_id,
       request_hash: body_hash,
+      request_hash_version: body_hash_version,
       state: target_state,
       payload: payload
     })
@@ -2544,19 +2675,23 @@ defmodule SymmetryControl.Orchestration do
   defp normalize_command_payload("provide_input", payload), do: payload
   defp normalize_command_payload(kind, payload) when kind in @supervisory_commands, do: payload
 
-  defp command_request_hash(kind, payload, opts) do
+  defp command_request_hash(kind, payload, opts),
+    do: kind |> command_request_body(payload, opts) |> RequestHash.write(:command)
+
+  defp command_request_body(kind, payload, opts) do
     context =
       opts |> Keyword.take([:expected_generation, :expected_waiting_transition_id]) |> Map.new()
 
     body = %{kind: kind, payload: payload}
-    request_hash(if map_size(context) == 0, do: body, else: Map.put(body, :context, context))
+    if map_size(context) == 0, do: body, else: Map.put(body, :context, context)
   end
 
-  defp ensure_command_replay!(command, kind, payload, current_hash) do
+  defp ensure_command_replay!(command, kind, payload, opts) do
     expected_hash =
       case command.request_hash_version do
-        1 -> request_hash(%{kind: kind, payload: payload})
-        2 -> current_hash
+        1 -> RequestHash.legacy(%{kind: kind, payload: payload})
+        2 -> RequestHash.legacy(command_request_body(kind, payload, opts))
+        3 -> RequestHash.canonical(command_request_body(kind, payload, opts))
       end
 
     unless command.request_hash == expected_hash, do: rollback(:idempotency_conflict)
@@ -2591,6 +2726,9 @@ defmodule SymmetryControl.Orchestration do
   # PostgreSQL jsonb rejects U+0000. Validate every untrusted JSONB value before a transaction.
   defp jsonb_compatible?(value) when is_binary(value), do: not String.contains?(value, <<0>>)
 
+  defp jsonb_compatible?(%DateTime{}), do: true
+  defp jsonb_compatible?(%_{}), do: false
+
   defp jsonb_compatible?(value) when is_list(value),
     do: Enum.all?(value, &jsonb_compatible?/1)
 
@@ -2603,14 +2741,14 @@ defmodule SymmetryControl.Orchestration do
   defp jsonb_compatible?(value) when is_number(value) or is_boolean(value) or is_nil(value),
     do: true
 
-  defp jsonb_compatible?(_), do: true
+  defp jsonb_compatible?(_), do: false
 
   defp jsonb_key_compatible?(key) when is_binary(key), do: jsonb_compatible?(key)
 
   defp jsonb_key_compatible?(key) when is_atom(key),
     do: key |> Atom.to_string() |> jsonb_compatible?()
 
-  defp jsonb_key_compatible?(_), do: true
+  defp jsonb_key_compatible?(_), do: false
 
   defp valid_active_run?(run) when is_map(run) do
     valid_uuid?(value(run, :run_id)) and
@@ -2659,6 +2797,9 @@ defmodule SymmetryControl.Orchestration do
 
   defp digest(value), do: :crypto.hash(:sha256, value)
 
+  defp emit(event, metadata),
+    do: :telemetry.execute([:symmetry_control, :orchestration | event], %{count: 1}, metadata)
+
   defp owned?(schema, machine_id, id, machine_field)
        when is_binary(machine_id) and is_binary(id) do
     if valid_uuid?(machine_id) and valid_uuid?(id) do
@@ -2672,7 +2813,6 @@ defmodule SymmetryControl.Orchestration do
   end
 
   defp owned?(_, _, _, _), do: false
-  defp request_hash(value), do: value |> :erlang.term_to_binary() |> digest()
 
   defp secure_compare(left, right) when byte_size(left) == byte_size(right),
     do: Plug.Crypto.secure_compare(left, right)

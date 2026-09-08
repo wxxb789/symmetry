@@ -40,14 +40,25 @@ end
 
 defmodule SymmetryControl.Chat.Action do
   use Ecto.Schema
+  import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
   schema "chat_actions" do
     field :action_id, :string
     field :request_hash, :binary
+    field :request_hash_version, :integer, default: 1
     belongs_to :message, SymmetryControl.Chat.Message
     belongs_to :reply, SymmetryControl.Chat.Message
     timestamps(type: :utc_datetime_usec, updated_at: false)
+  end
+
+  def changeset(action, attrs) do
+    action
+    |> cast(attrs, [:action_id, :request_hash, :request_hash_version, :message_id, :reply_id])
+    |> validate_required([:action_id, :request_hash, :message_id, :reply_id])
+    |> validate_inclusion(:request_hash_version, [1, 2])
+    |> unique_constraint(:action_id)
+    |> check_constraint(:request_hash_version, name: :chat_actions_request_hash_version_check)
   end
 end
