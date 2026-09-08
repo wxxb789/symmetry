@@ -50,10 +50,23 @@ Server admission envelope (inside existing work.input for opted-in runtimes):
   "model_profile": "implementation-default",
   "session_mode": "fresh",
   "requested_session_id": null,
-  "subject": {"resource_id": "<uuid>", "commit": "<git-object-id>"},
+  "subject": {
+    "resource_id": "<uuid>",
+    "commit": "<git-object-id>",
+    "tree_digest": "sha256:<digest>"
+  },
   "limits": {"max_turns": 1, "deadline_at": "<RFC3339>"}
 }
 ```
+
+Admission carries the complete shared `Subject` from [typed structures](contracts.md):
+resource_id, commit and tree_digest. The server, daemon and validator compute its
+subject hash from the same canonical complete object; none may omit the digest
+or substitute an implicit local value. A validation admission names the exact
+candidate subject being checked. A newly produced candidate commit has its own
+complete Subject and hash, not the implementation admission's starting-subject
+hash. Contract fixtures must cover complete-subject round trips and rejection of
+missing or mismatched tree_digest.
 
 Angle-bracket values illustrate types, not runnable fixture values. One turn
 means one host invocation under an admitted contract, not one model API call.

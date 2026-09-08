@@ -191,6 +191,11 @@ operating on goal-managed items must delegate before acquiring their old locks.
 - **Accept outcome:** replay; lock goal/items/tasks/runs; verify terminal subject,
   required evidence, revision and decision; insert outcome + goal event + next
   wakeup. Usage ingestion is independent and never conditional on acceptance.
+- **Achieve:** replay; lock Goal; verify current revision, required outcomes,
+  goal predicates and decisions; reject if any goal Task is in the nonterminal
+  set used by the partial index, including optional WorkItem tasks. Commit
+  achieved state and goal event atomically. Concurrent admission uses the same
+  Goal lock and rechecks active state; it cannot insert after achievement.
 - **Resolve decision:** replay; lock scope; verify expected version/action hash;
   resolve + event + wakeup together. Double resolution differs -> conflict.
 - **Amend:** replay; lock goal/items; append revision, pause goal, supersede open

@@ -125,8 +125,13 @@ agent narration. Subject mismatch or missing evidence prevents acceptance.
 
 Goal completion requires all admitted required WorkItems accepted under the
 current revision, goal-level predicates satisfied, no unresolved blocking
-decision, and no running/queued goal Task. Default final acceptance is an
-operator decision. Automatic final acceptance is allowed only when the approved
+decision, and no nonterminal goal Task, including tasks for optional WorkItems.
+The nonterminal set is `queued`, `assigned`, `claimed`, `running`,
+`waiting_for_input`, `paused`, and `cancelling`, matching the partial index in
+[data.md](data.md). Check this predicate and commit `achieved` under the same
+Goal row lock used by admission; an admission must recheck that the goal is active
+after acquiring that lock. A cancellation request does not satisfy completion
+until the Task is terminal. Default final acceptance is an operator decision. Automatic final acceptance is allowed only when the approved
 revision explicitly opts in and all final predicates are machine-verifiable;
 an LLM score alone is not such a predicate. Publication/merge authority is
 explicitly separate and defaults to disallowed.
