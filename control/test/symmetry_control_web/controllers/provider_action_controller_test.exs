@@ -671,6 +671,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
       Repo.get_by!(ProviderActionIntent, run_id: context.run.id, action_id: action_id)
 
     assert intent.state == "succeeded"
+    assert intent.request_hash_version == 1
     assert intent.failure == nil
     assert intent.result["projected"] == false
 
@@ -1529,6 +1530,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
       claim_id: context.claim_id,
       operation: operation,
       request_hash: request_hash,
+      request_hash_version: 1,
       input: scoped_input,
       state: "accepted",
       provider: connection.provider,

@@ -75,7 +75,7 @@ func (daemon *daemon) handleSupervisoryCommand(ctx context.Context, key state.Ru
 		daemon.signalOutboxFor(key)
 		return true
 	}
-	if err := process.WriteInput(append(input, '\n')); err != nil {
+	if err := daemon.writeInputBounded(ctx, active, process, append(input, '\n')); err != nil {
 		return daemon.completeControlWriteFailure(ctx, key, command)
 	}
 	return true

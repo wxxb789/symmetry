@@ -23,6 +23,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/control"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/notification"
+	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 	"github.com/wxxb789/symmetry/daemon/internal/workspace"
@@ -31,6 +32,7 @@ import (
 const (
 	minimumInterval       = time.Second
 	maximumInterval       = time.Minute
+	reconcileRetryMax     = 30 * time.Second
 	leaseSafetyMargin     = 5 * time.Second
 	retryMaximum          = 30 * time.Second
 	terminalGrace         = 8 * time.Minute
@@ -38,12 +40,15 @@ const (
 	maxJSONLRecordBytes   = 256 * 1024
 	maxSemanticEventBytes = 64 * 1024
 	rawOutputChunkBytes   = 32 * 1024
+	maxPendingOutputBytes = 2 << 20
+	inputWriteTimeout     = 60 * time.Second
 )
 
 var (
 	errAssignmentExpired    = errors.New("assignment expired")
 	errLeaseDeadlineReached = errors.New("lease renewal deadline reached")
 	errOutboxChanged        = errors.New("outbox changed during delivery")
+	errInputWriteTimeout    = errors.New("agent did not consume standard input within the write timeout")
 )
 
 // restartOutboxRecoveryContextKey suppresses ordinary ownership-loss cleanup
@@ -225,6 +230,7 @@ type daemon struct {
 	cleanupQueued      map[state.RunKey]struct{}
 	cleanupRetry       map[state.RunKey]time.Time
 	retainedWorkspaces map[state.RunKey]struct{}
+	clockSkewWarned    bool
 	commandWake        chan struct{}
 	commandQueue       []*queuedCommand
 	queuedCommands     map[commandKey]*queuedCommand
@@ -274,23 +280,25 @@ type commandLane struct {
 type runningRun struct {
 	// inputMu serializes stdin delivery with input-related lifecycle mutations.
 	// Never wait for it while holding daemon.mu.
-	inputMu         sync.Mutex
-	process         Process
-	prepared        workspace.Prepared
-	output          *agentOutput
-	starting        bool
-	claimed         bool
-	cancel          context.CancelFunc
-	cancelled       bool
-	cancelCommandID string
-	stale           bool
-	terminal        bool
-	terminalizing   int
-	slotHeld        bool
-	cleanupBlocked  bool
-	renewCancel     context.CancelFunc
-	renewCancelID   uint64
-	terminalCancel  context.CancelFunc
+	inputMu          sync.Mutex
+	process          Process
+	prepared         workspace.Prepared
+	output           *agentOutput
+	starting         bool
+	claimed          bool
+	cancel           context.CancelFunc
+	cancelled        bool
+	cancelCommandID  string
+	stale            bool
+	terminal         bool
+	terminalizing    int
+	slotHeld         bool
+	cleanupBlocked   bool
+	outputDropWarned bool
+	stopExecution    context.CancelCauseFunc
+	renewCancel      context.CancelFunc
+	renewCancelID    uint64
+	terminalCancel   context.CancelFunc
 }
 
 func (daemon *daemon) run(ctx context.Context) error {
@@ -305,10 +313,37 @@ func (daemon *daemon) run(ctx context.Context) error {
 	defer func() {
 		done()
 	}()
+	var reconcileRetry deadlineTimer
+	var reconcileRetryChan <-chan time.Time
+	reconcileBackoff := minimumInterval
+	stopReconcileRetry := func() {
+		if reconcileRetry != nil {
+			reconcileRetry.Stop()
+			reconcileRetry = nil
+			reconcileRetryChan = nil
+		}
+		reconcileBackoff = minimumInterval
+	}
+	armReconcileRetry := func() {
+		if reconcileRetry != nil {
+			reconcileRetry.Stop()
+		}
+		reconcileRetry = daemon.timer(reconcileBackoff)
+		reconcileRetryChan = reconcileRetry.Chan()
+		if reconcileBackoff < reconcileRetryMax {
+			reconcileBackoff *= 2
+			if reconcileBackoff > reconcileRetryMax {
+				reconcileBackoff = reconcileRetryMax
+			}
+		}
+	}
+	defer stopReconcileRetry()
 
 	// Registration is complete before liveness starts, but reconciliation can
 	// block on the control plane. Keep lease maintenance alive while it does.
-	daemon.reconcile(ctx)
+	if !daemon.reconcile(ctx) {
+		armReconcileRetry()
+	}
 
 	triggers := make(chan struct{}, 1)
 	trigger := func() {
@@ -342,9 +377,21 @@ func (daemon *daemon) run(ctx context.Context) error {
 			return nil
 		case hint := <-hints:
 			if hint.Type == "connected" {
-				daemon.reconcile(ctx)
+				if daemon.reconcile(ctx) {
+					stopReconcileRetry()
+				} else {
+					armReconcileRetry()
+				}
 			}
 			trigger()
+		case <-reconcileRetryChan:
+			reconcileRetry = nil
+			reconcileRetryChan = nil
+			if daemon.reconcile(ctx) {
+				reconcileBackoff = minimumInterval
+			} else {
+				armReconcileRetry()
+			}
 		case <-triggers:
 			daemon.sync(ctx)
 		case <-poll.C:
@@ -662,6 +709,9 @@ func (daemon *daemon) commandSignal() <-chan struct{} {
 }
 
 func (daemon *daemon) initialize(ctx context.Context) error {
+	if _, err := platform.ProcessIdentity(os.Getpid()); err != nil {
+		return fmt.Errorf("platform does not support restart-safe process identity: %w", err)
+	}
 	if daemon.options.store != nil {
 		daemon.store = daemon.options.store
 	} else {
@@ -1026,6 +1076,7 @@ func (daemon *daemon) heartbeat(ctx context.Context) {
 		daemon.log.Warn("runtime_heartbeat_failed", "error", err)
 		return
 	}
+	daemon.observeControlClock(snapshot.ServerTime)
 	daemon.scheduleSnapshotForRequest(requestID, snapshot)
 }
 
@@ -1039,18 +1090,19 @@ func (daemon *daemon) sync(ctx context.Context) {
 		daemon.log.Warn("runtime_poll_failed", "error", err)
 		return
 	}
+	daemon.observeControlClock(snapshot.ServerTime)
 	daemon.scheduleSnapshotForRequest(requestID, snapshot)
 }
 
-func (daemon *daemon) reconcile(ctx context.Context) {
+func (daemon *daemon) reconcile(ctx context.Context) bool {
 	if err := daemon.recoverUnresolvedInputIntents(ctx); err != nil {
 		daemon.log.Warn("recover_input_command_intents_failed", "error", err)
-		return
+		return false
 	}
 	journals, err := daemon.store.ListJournals()
 	if err != nil {
 		daemon.log.Error("list_journals_failed", "error", err)
-		return
+		return false
 	}
 	runs := make([]protocol.ReconcileRun, 0, len(journals))
 	for _, journal := range journals {
@@ -1072,7 +1124,7 @@ func (daemon *daemon) reconcile(ctx context.Context) {
 	if err != nil {
 		daemon.finishCommandRequest(requestID)
 		daemon.log.Warn("runtime_reconcile_failed", "error", err)
-		return
+		return false
 	}
 	for _, decision := range response.Decisions {
 		key := state.RunKey{RunID: decision.RunID, Generation: decision.Generation}
@@ -1094,6 +1146,31 @@ func (daemon *daemon) reconcile(ctx context.Context) {
 		}
 	}
 	daemon.scheduleSnapshotForRequest(requestID, protocol.RuntimeSnapshot{Assignments: response.Assignments, Commands: response.Commands})
+	return true
+}
+
+func (daemon *daemon) observeControlClock(serverTime time.Time) {
+	if serverTime.IsZero() {
+		return
+	}
+	skew := serverTime.Sub(daemon.now())
+	absSkew := skew
+	if absSkew < 0 {
+		absSkew = -absSkew
+	}
+	outOfTolerance := absSkew > leaseSafetyMargin
+	daemon.mu.Lock()
+	changed := daemon.clockSkewWarned != outOfTolerance
+	daemon.clockSkewWarned = outOfTolerance
+	daemon.mu.Unlock()
+	if !changed || daemon.log == nil {
+		return
+	}
+	if outOfTolerance {
+		daemon.log.Warn("control_clock_skew_detected", "skew_ms", skew.Milliseconds(), "lease_safety_margin_ms", leaseSafetyMargin.Milliseconds())
+	} else {
+		daemon.log.Info("control_clock_skew_cleared", "skew_ms", skew.Milliseconds(), "lease_safety_margin_ms", leaseSafetyMargin.Milliseconds())
+	}
 }
 
 func isReconcileState(localState string) bool {
@@ -1488,6 +1565,7 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 	active.process = process
 	active.prepared = prepared
 	active.output = output
+	active.stopExecution = stopExecution
 	daemon.mu.Unlock()
 
 	pid, identity, detailsErr := processDetails(process)
@@ -2193,7 +2271,33 @@ func (daemon *daemon) queueRawEvent(key state.RunKey, event execution.Event) err
 	if err != nil {
 		return err
 	}
-	return daemon.queueEvent(key, "output", payload, event.At)
+	id, err := daemon.options.newID()
+	if err != nil {
+		return err
+	}
+	_, dropped, err := daemon.store.QueueOutputEvent(key, protocol.RunEvent{EventID: id, Kind: "output", OccurredAt: event.At, Payload: payload}, maxPendingOutputBytes)
+	if err != nil {
+		return err
+	}
+	if dropped {
+		daemon.warnOutputDropOnce(key, len(event.Data))
+		return nil
+	}
+	daemon.signalOutboxFor(key)
+	return nil
+}
+
+func (daemon *daemon) warnOutputDropOnce(key state.RunKey, rawBytes int) {
+	daemon.mu.Lock()
+	active := daemon.running[key]
+	warn := active != nil && !active.outputDropWarned
+	if warn {
+		active.outputDropWarned = true
+	}
+	daemon.mu.Unlock()
+	if warn && daemon.log != nil {
+		daemon.log.Warn("output_dropped_pending_budget", "run_id", key.RunID, "generation", key.Generation, "bytes", rawBytes)
+	}
 }
 
 func (daemon *daemon) queueEvent(key state.RunKey, kind string, payload json.RawMessage, at time.Time) error {
@@ -2206,6 +2310,40 @@ func (daemon *daemon) queueEvent(key state.RunKey, kind string, payload json.Raw
 		daemon.signalOutboxFor(key)
 	}
 	return err
+}
+
+func (daemon *daemon) writeInputBounded(ctx context.Context, active *runningRun, process Process, input []byte) error {
+	result := make(chan error, 1)
+	go func() {
+		result <- process.WriteInput(input)
+	}()
+	timer := daemon.timer(inputWriteTimeout)
+	defer timer.Stop()
+	select {
+	case err := <-result:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.Chan():
+		var stopExecution context.CancelCauseFunc
+		var key state.RunKey
+		daemon.mu.Lock()
+		stopExecution = active.stopExecution
+		for candidate, current := range daemon.running {
+			if current == active {
+				key = candidate
+				break
+			}
+		}
+		daemon.mu.Unlock()
+		if daemon.log != nil {
+			daemon.log.Warn("input_write_timeout", "run_id", key.RunID, "generation", key.Generation, "bytes", len(input))
+		}
+		if stopExecution != nil {
+			stopExecution(errInputWriteTimeout)
+		}
+		return errInputWriteTimeout
+	}
 }
 
 func (daemon *daemon) queueWaitingForInput(key state.RunKey, payload json.RawMessage, at time.Time) error {
@@ -2396,7 +2534,7 @@ func (daemon *daemon) waitForRunWithContext(ctx context.Context, key state.RunKe
 		// Cancellation may stop delivery before Runner stores its sink error.
 		// The cancellation cause was set first and survives that race.
 		if output.executionContext != nil {
-			if cause := context.Cause(output.executionContext); errors.Is(cause, errRequiredDecisionPacket) {
+			if cause := context.Cause(output.executionContext); errors.Is(cause, errRequiredDecisionPacket) || errors.Is(cause, errInputWriteTimeout) {
 				result.SinkError = cause
 			}
 		}
@@ -2576,7 +2714,7 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 			daemon.signalOutboxFor(key)
 			return true
 		}
-		if process.WriteInput(input) != nil {
+		if daemon.writeInputBounded(ctx, active, process, input) != nil {
 			return daemon.completeProvideInputWithRetry(ctx, key, command.CommandID, payloadDigest, "failed")
 		}
 		return daemon.completeProvideInputWithRetry(ctx, key, command.CommandID, payloadDigest, "applied")
@@ -3362,7 +3500,7 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) (e
 			return err
 		}
 	}
-	if journal.LocalState == "terminal_pending" && journal.TerminalVerdict == state.TerminalVerdictAccepted && len(journal.PendingTransitions) == 0 && len(journal.PendingCommandAcknowledgements) == 0 {
+	if journal.LocalState == "terminal_pending" && journal.TerminalVerdict == state.TerminalVerdictAccepted && len(journal.PendingEvents) == 0 && len(journal.PendingTransitions) == 0 && len(journal.PendingCommandAcknowledgements) == 0 {
 		updated, err := daemon.enterCleanupPending(journal)
 		if err != nil {
 			return err
@@ -3387,11 +3525,17 @@ func (daemon *daemon) deliverEventsBeforeAppliedInputAcknowledgement(ctx context
 }
 
 func (daemon *daemon) deliverPendingEvents(ctx context.Context, journal state.RunJournal) (state.RunJournal, error) {
+	if len(journal.PendingEvents) == 0 && journal.DroppedOutputChunks > 0 {
+		return daemon.queueOutputTruncatedMarker(journal)
+	}
 	return daemon.deliverEvents(ctx, journal, journal.PendingEvents)
 }
 
 func (daemon *daemon) deliverEvents(ctx context.Context, journal state.RunJournal, events []protocol.RunEvent) (state.RunJournal, error) {
 	if len(events) == 0 {
+		if journal.DroppedOutputChunks > 0 {
+			return daemon.queueOutputTruncatedMarker(journal)
+		}
 		return journal, nil
 	}
 	key := journal.Key()
@@ -3414,9 +3558,23 @@ func (daemon *daemon) deliverEvents(ctx context.Context, journal state.RunJourna
 	for index, event := range events {
 		ids[index] = event.EventID
 	}
-	updated, err := daemon.store.MarkEventsDelivered(key, ids)
+	updated, appended, err := daemon.store.MarkEventsDeliveredAndQueueOutputTruncatedMarker(key, ids, daemon.now(), daemon.options.newID)
 	if err != nil {
 		return journal, err
+	}
+	if appended {
+		daemon.signalOutboxFor(key)
+	}
+	return updated, nil
+}
+
+func (daemon *daemon) queueOutputTruncatedMarker(journal state.RunJournal) (state.RunJournal, error) {
+	updated, appended, err := daemon.store.QueueOutputTruncatedMarker(journal.Key(), daemon.now(), daemon.options.newID)
+	if err != nil {
+		return journal, err
+	}
+	if appended {
+		daemon.signalOutboxFor(journal.Key())
 	}
 	return updated, nil
 }

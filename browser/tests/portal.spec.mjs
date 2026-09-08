@@ -299,6 +299,53 @@ test.describe("Goal 2 feature acceptance", () => {
     await expect(page.getByRole("button", { name: "New work item" })).toBeEnabled();
   });
 
+  test("detail output encodes untrusted statuses and rejects unsafe links", async ({ page }) => {
+    const project = uniqueProject("EN");
+    const title = `Encoded detail ${project.key}`;
+    await login(page);
+    await createProject(page, project);
+    await createWorkItem(page, {
+      title,
+      description: "Render untrusted detail fields safely.",
+      status: "ready",
+      priority: "medium",
+      assignee_type: "unassigned"
+    });
+
+    const item = (await selectedProject(page)).work_items.find((candidate) => candidate.title === title);
+    await page.route(`**/portal/api/work-items/${item.id}`, async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      body.work_item.external = {
+        provider: "github",
+        available: true,
+        url: "javascript:alert(1)",
+        id: "42",
+        state: "open",
+        assignee: null,
+        labels: []
+      };
+      body.work_item.pull_request_url = "javascript:alert(1)";
+      body.work_item.ci_status = '\"><img src=x onerror=alert(1)>';
+      body.work_item.review_status = "<svg/onload=alert(1)>";
+      body.outcome.phase = '\"><img src=x onerror=alert(1)>';
+      await route.fulfill({ response, json: body });
+    });
+
+    await page.locator(".work-card", { hasText: title }).click();
+    const pullRequest = page.locator(".detail-fact", { hasText: "Pull request" });
+    const externalReference = page.locator(".detail-fact", { hasText: "Reference" });
+    await expect(pullRequest).toContainText("Not created");
+    await expect(pullRequest.locator("a")).toHaveCount(0);
+    await expect(externalReference).toContainText("#42");
+    await expect(externalReference.locator("a")).toHaveCount(0);
+
+    const markup = await page.locator("#detail-content").innerHTML();
+    expect(markup).not.toContain("javascript:");
+    expect(markup).not.toContain("<img");
+    expect(markup).not.toContain("<svg/onload");
+  });
+
   test("login, CSRF rejection, and logout enforce the browser session boundary", async ({ page }) => {
     allowBrowserError(page, /status of 401/);
     allowBrowserError(page, /status of 403/);

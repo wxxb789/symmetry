@@ -14,10 +14,22 @@ contract and lifecycle rules are defined in [`protocol-v1.md`](protocol-v1.md).
   acknowledgements retain a separate eight-minute, current-generation-only
   grace; a newer generation always wins.
 - A daemon executes only machine-local allowlisted agent and workspace bindings.
+- Execution machines must synchronize time with NTP. The daemon compares the
+  control snapshot's `server_time` with its local clock and warns when absolute
+  skew exceeds the five-second lease safety margin; this is diagnostic only and
+  does not alter lease behavior.
+- Before downgrading a daemon binary, drain its pending journals. Journal
+  decoding rejects unknown fields, so an older binary cannot read journals
+  written by a newer binary that adds durable state.
 - The operator token creates, reads, cancels, and supplies input to tasks. A
   machine token cannot use operator endpoints.
 
 ## Control Plane
+
+The control plane is supported as a native Linux deployment. Windows and macOS
+hosts must run it through Docker. Kubernetes deployments use the same Linux
+container image; non-Linux control-plane hosts are not native deployment
+targets.
 
 Required production environment variables:
 
@@ -72,6 +84,24 @@ PHX_SERVER=true DATABASE_URL=... SECRET_KEY_BASE=... \
   SYMMETRY_OPERATOR_TOKEN=... \
   _build/prod/rel/symmetry_control/bin/symmetry_control start
 ```
+
+### Request Hash Cutover
+
+The request-hash migration is safe to apply before a rolling control-plane
+deployment because its database defaults remain legacy-compatible. New control
+releases also write legacy hash versions by default, so they can coexist with
+pre-migration application nodes without changing idempotency replay behavior.
+
+Keep `SYMMETRY_REQUEST_HASH_WRITE_MODE` unset (the correct, safe `legacy`
+default) throughout the rolling deployment. Enable
+`SYMMETRY_REQUEST_HASH_WRITE_MODE=canonical` only after every old
+control-plane node has exited and cannot return to traffic. Draining a node is
+not sufficient if its process, container, or pod can be restored behind the
+load balancer. Then set the variable on every remaining control-plane release
+and deploy that configuration. This switches standard request rows to version
+`2` and command rows to version `3`. New releases continue to read legacy
+version `1`, legacy command version `2`, and canonical versions during and
+after the cutover.
 
 ### Production Compose Edge
 
@@ -138,6 +168,10 @@ does not discard the journal or workspace reservation. They remain available
 for later delivery and cleanup recovery.
 
 ## Daemon Configuration
+
+The execution daemon is natively supported on Linux and Windows. FreeBSD is
+unsupported. Native macOS daemon support and verification are deferred; do not
+deploy or describe a macOS daemon as supported.
 
 Minimal trusted-local configuration using the deterministic fixture:
 

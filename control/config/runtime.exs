@@ -35,6 +35,13 @@ if config_env() != :test do
   enrollment_token = token.("SYMMETRY_ENROLLMENT_TOKEN", "development-enrollment-token")
   operator_token = token.("SYMMETRY_OPERATOR_TOKEN", "development-operator-token")
 
+  positive_integer = fn variable, default ->
+    case Integer.parse(System.get_env(variable, default)) do
+      {value, ""} when value >= 1 -> value
+      _ -> raise "#{variable} must be a positive integer"
+    end
+  end
+
   integration_sync_interval_ms =
     case Integer.parse(System.get_env("SYMMETRY_INTEGRATION_SYNC_INTERVAL_MS", "300000")) do
       {value, ""} when value >= 30_000 -> value
@@ -47,6 +54,13 @@ if config_env() != :test do
       _ -> raise "SYMMETRY_LEASE_DURATION_MS must be at least 30000"
     end
 
+  request_hash_write_mode =
+    case System.get_env("SYMMETRY_REQUEST_HASH_WRITE_MODE", "legacy") do
+      "legacy" -> :legacy
+      "canonical" -> :canonical
+      _ -> raise "SYMMETRY_REQUEST_HASH_WRITE_MODE must be legacy or canonical"
+    end
+
   if enrollment_token == operator_token do
     raise "SYMMETRY_ENROLLMENT_TOKEN and SYMMETRY_OPERATOR_TOKEN must differ"
   end
@@ -54,15 +68,14 @@ if config_env() != :test do
   config :symmetry_control, :orchestration,
     enrollment_token: enrollment_token,
     operator_token: operator_token,
-    heartbeat_interval_ms:
-      String.to_integer(System.get_env("SYMMETRY_HEARTBEAT_INTERVAL_MS", "5000")),
-    poll_interval_ms: String.to_integer(System.get_env("SYMMETRY_POLL_INTERVAL_MS", "5000")),
+    heartbeat_interval_ms: positive_integer.("SYMMETRY_HEARTBEAT_INTERVAL_MS", "5000"),
+    poll_interval_ms: positive_integer.("SYMMETRY_POLL_INTERVAL_MS", "5000"),
     lease_duration_ms: lease_duration_ms,
-    assignment_duration_ms:
-      String.to_integer(System.get_env("SYMMETRY_ASSIGNMENT_DURATION_MS", "30000")),
-    reaper_interval_ms: String.to_integer(System.get_env("SYMMETRY_REAPER_INTERVAL_MS", "5000")),
+    assignment_duration_ms: positive_integer.("SYMMETRY_ASSIGNMENT_DURATION_MS", "30000"),
+    reaper_interval_ms: positive_integer.("SYMMETRY_REAPER_INTERVAL_MS", "5000"),
     portal_session_max_age_seconds:
-      String.to_integer(System.get_env("SYMMETRY_PORTAL_SESSION_MAX_AGE_SECONDS", "28800")),
+      positive_integer.("SYMMETRY_PORTAL_SESSION_MAX_AGE_SECONDS", "28800"),
+    request_hash_write_mode: request_hash_write_mode,
     reaper_enabled: true,
     scheduler_enabled: true
 

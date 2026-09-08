@@ -28,6 +28,29 @@ defmodule SymmetryControl.Orchestration.SchedulerTest do
     assert {:ok, ^runtime} = Orchestration.fetch_runtime(runtime.id)
   end
 
+  test "wake succeeds while the supervised scheduler is temporarily unregistered" do
+    config = Application.fetch_env!(:symmetry_control, :orchestration)
+    pid = Process.whereis(Scheduler)
+    assert is_pid(pid)
+
+    Application.put_env(
+      :symmetry_control,
+      :orchestration,
+      Keyword.put(config, :scheduler_enabled, true)
+    )
+
+    Process.unregister(Scheduler)
+
+    try do
+      assert :ok = Scheduler.wake()
+    after
+      if Process.whereis(Scheduler) == nil and Process.alive?(pid),
+        do: Process.register(pid, Scheduler)
+
+      Application.put_env(:symmetry_control, :orchestration, config)
+    end
+  end
+
   defp enroll_machine do
     key = Ecto.UUID.generate()
     token = "machine-token-#{key}"

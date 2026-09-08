@@ -9,6 +9,7 @@ defmodule SymmetryControl.Orchestration.Machine do
     field :token_digest, :binary
     field :enrollment_idempotency_key, :string
     field :enrollment_request_hash, :binary
+    field :enrollment_request_hash_version, :integer, default: 1
     timestamps(type: :utc_datetime_usec)
   end
 
@@ -19,10 +20,15 @@ defmodule SymmetryControl.Orchestration.Machine do
         :name,
         :token_digest,
         :enrollment_idempotency_key,
-        :enrollment_request_hash
+        :enrollment_request_hash,
+        :enrollment_request_hash_version
       ])
       |> validate_required([:name, :token_digest])
+      |> validate_inclusion(:enrollment_request_hash_version, [1, 2])
       |> unique_constraint(:enrollment_idempotency_key)
+      |> check_constraint(:enrollment_request_hash_version,
+        name: :machines_enrollment_request_hash_version_check
+      )
 end
 
 defmodule SymmetryControl.Orchestration.Runtime do
@@ -96,6 +102,7 @@ defmodule SymmetryControl.Orchestration.Task do
   schema "tasks" do
     field :idempotency_key, :string
     field :request_hash, :binary
+    field :request_hash_version, :integer, default: 1
     field :goal, :string
     field :agent_profile, :string
     field :workspace, :string
@@ -115,6 +122,7 @@ defmodule SymmetryControl.Orchestration.Task do
     |> cast(attrs, [
       :idempotency_key,
       :request_hash,
+      :request_hash_version,
       :goal,
       :agent_profile,
       :workspace,
@@ -140,6 +148,7 @@ defmodule SymmetryControl.Orchestration.Task do
     ])
     |> validate_number(:current_generation, greater_than_or_equal_to: 0)
     |> validate_number(:attempt_generation, greater_than: 0)
+    |> validate_inclusion(:request_hash_version, [1, 2])
     |> validate_inclusion(:state, [
       "queued",
       "assigned",
@@ -153,6 +162,7 @@ defmodule SymmetryControl.Orchestration.Task do
       "cancelled"
     ])
     |> unique_constraint(:idempotency_key)
+    |> check_constraint(:request_hash_version, name: :tasks_request_hash_version_check)
     |> check_constraint(:state, name: :tasks_state_check)
     |> check_constraint(:current_generation, name: :tasks_generation_nonnegative)
     |> check_constraint(:attempt_generation, name: :tasks_attempt_generation_valid)
@@ -237,6 +247,7 @@ defmodule SymmetryControl.Orchestration.RunEvent do
     belongs_to :run, SymmetryControl.Orchestration.Run
     field :event_id, Ecto.UUID
     field :request_hash, :binary
+    field :request_hash_version, :integer, default: 1
     field :sequence, :integer
     field :kind, :string
     field :payload, :map, default: %{}
@@ -247,7 +258,16 @@ defmodule SymmetryControl.Orchestration.RunEvent do
   def changeset(event, attrs),
     do:
       event
-      |> cast(attrs, [:run_id, :event_id, :request_hash, :sequence, :kind, :payload, :occurred_at])
+      |> cast(attrs, [
+        :run_id,
+        :event_id,
+        :request_hash,
+        :request_hash_version,
+        :sequence,
+        :kind,
+        :payload,
+        :occurred_at
+      ])
       |> validate_required([
         :run_id,
         :event_id,
@@ -259,6 +279,8 @@ defmodule SymmetryControl.Orchestration.RunEvent do
       ])
       |> validate_number(:sequence, greater_than_or_equal_to: 0)
       |> unique_constraint([:run_id, :event_id])
+      |> validate_inclusion(:request_hash_version, [1, 2])
+      |> check_constraint(:request_hash_version, name: :run_events_request_hash_version_check)
 end
 
 defmodule SymmetryControl.Orchestration.RunTransition do
@@ -271,6 +293,7 @@ defmodule SymmetryControl.Orchestration.RunTransition do
     belongs_to :run, SymmetryControl.Orchestration.Run
     field :transition_id, Ecto.UUID
     field :request_hash, :binary
+    field :request_hash_version, :integer, default: 1
     field :state, :string
     field :payload, :map, default: %{}
     timestamps(type: :utc_datetime_usec)
@@ -279,7 +302,14 @@ defmodule SymmetryControl.Orchestration.RunTransition do
   def changeset(transition, attrs),
     do:
       transition
-      |> cast(attrs, [:run_id, :transition_id, :request_hash, :state, :payload])
+      |> cast(attrs, [
+        :run_id,
+        :transition_id,
+        :request_hash,
+        :request_hash_version,
+        :state,
+        :payload
+      ])
       |> validate_required([:run_id, :transition_id, :request_hash, :state, :payload])
       |> validate_inclusion(:state, [
         "running",
@@ -290,6 +320,10 @@ defmodule SymmetryControl.Orchestration.RunTransition do
         "cancelled"
       ])
       |> unique_constraint([:run_id, :transition_id])
+      |> validate_inclusion(:request_hash_version, [1, 2])
+      |> check_constraint(:request_hash_version,
+        name: :run_transitions_request_hash_version_check
+      )
 end
 
 defmodule SymmetryControl.Orchestration.Command do
@@ -334,7 +368,7 @@ defmodule SymmetryControl.Orchestration.Command do
     ])
     |> validate_required([:task_id, :kind, :payload, :idempotency_key, :request_hash, :state])
     |> validate_number(:generation, greater_than: 0)
-    |> validate_inclusion(:request_hash_version, [1, 2])
+    |> validate_inclusion(:request_hash_version, [1, 2, 3])
     |> check_constraint(:request_hash_version, name: :commands_request_hash_version_check)
     |> validate_inclusion(:kind, [
       "cancel",

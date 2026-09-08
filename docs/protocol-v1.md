@@ -95,10 +95,12 @@ before lease expiry, the reaper finalizes the run and task as `cancelled`.
 
 ## Authentication
 
-`POST /api/v1/machines` accepts the configured one-time enrollment bearer token,
-a daemon-generated machine token, and a durable idempotency key. It returns a
-stable `machine_id` plus that same machine bearer token. The control plane stores
-only the SHA-256 digest of the machine token.
+`POST /api/v1/machines` accepts the configured shared enrollment bearer token
+(`SYMMETRY_ENROLLMENT_TOKEN`), a daemon-generated machine token, and a durable
+idempotency key. It returns a stable `machine_id` plus that same machine bearer
+token. The enrollment token is not single-use and must be protected and rotated
+like any deployment secret. The control plane stores only the SHA-256 digest of
+the machine token.
 
 All other daemon HTTP endpoints use the machine bearer token. The WebSocket
 upgrade sends the same token in `X-Symmetry-Token`, because Phoenix exposes
@@ -200,7 +202,9 @@ machine. Registering a different `daemon_instance_id` increments each declared
 runtime's `runtime_epoch` and fences the previous process. Repeating the same
 instance registration is idempotent and returns the existing epochs. Lowering
 capacity prevents new assignment while current reservations meet or exceed the
-new value; it does not cancel existing work.
+new value; it does not cancel existing work. The control plane supplies
+`heartbeat_interval_ms` in the session response; any client-supplied
+`heartbeat_interval_ms` in a runtime specification is ignored.
 
 `structured_input` declares that the selected agent profile accepts the JSON
 stdin envelope described below. `provider_access` is a separate, explicit
@@ -256,6 +260,9 @@ The heartbeat request carries active run references:
   ]
 }
 ```
+
+The control plane validates `active_runs` structurally; it does not currently
+reconcile them, and they are reserved for drift diagnostics.
 
 The runtime update returns the complete current dispatch snapshot for that
 runtime. Dispatch is also available as a non-destructive GET for recovery and
@@ -317,8 +324,10 @@ returned lease is durably journaled.
 }
 ```
 
-Claim is a single PostgreSQL transaction that verifies assignment ownership,
-runtime capacity, and expiry before issuing a lease:
+Claim is a single PostgreSQL transaction that verifies assigned-runtime
+ownership, runtime epoch, task and run generation, task compatibility,
+assignment expiry, and claim identity before issuing a lease. Capacity is
+reserved when the control plane assigns work, rather than rechecked at claim:
 
 ```json
 {
@@ -349,7 +358,9 @@ runtime capacity, and expiry before issuing a lease:
 }
 ```
 
-Repeating the same `claim_id` returns the same lease. A different `claim_id`
+Repeating the same `claim_id` returns the same lease only while the run remains
+`claimed` or `cancelling` and that lease is unexpired. After the run has entered
+`running`, the same claim returns `409 ownership_lost`. A different `claim_id`
 for an already claimed run returns `409 ownership_lost`; therefore two local
 paths cannot obtain the same fence and independently launch the agent.
 
@@ -511,7 +522,12 @@ invalid payload, or an encoded record larger than 64 KiB is retained as a
 generic `agent_event` instead of influencing outcome state.
 Valid JSON values that are not objects are retained as an `agent_event` with an
 object payload shaped as `{"value": <original-json-value>}`. Non-JSON output
-continues through the raw output path.
+continues through the raw output path. Pending raw-output event payloads are
+bounded to 2 MiB per run. When that budget is exceeded, later raw-output chunks
+are dropped rather than failing the run; after a successful event delivery, the
+daemon appends one `output_truncated` event with `dropped_chunks` and
+`dropped_bytes`. Dropped chunks do not consume event sequence numbers. Semantic
+events and lifecycle state continue through their normal unbudgeted paths.
 
 | `type` | Required payload | Projection rule |
 | --- | --- | --- |

@@ -79,7 +79,12 @@ defmodule SymmetryControlWeb.Telemetry do
       summary("vm.memory.total", unit: {:byte, :kilobyte}),
       summary("vm.total_run_queue_lengths.total"),
       summary("vm.total_run_queue_lengths.cpu"),
-      summary("vm.total_run_queue_lengths.io")
+      summary("vm.total_run_queue_lengths.io"),
+      counter("symmetry_control.orchestration.run.assigned.count"),
+      counter("symmetry_control.orchestration.run.claimed.count"),
+      counter("symmetry_control.orchestration.run.transition.count"),
+      counter("symmetry_control.orchestration.run.expired.count"),
+      counter("symmetry_control.orchestration.runtime.offline.count")
     ]
   end
 

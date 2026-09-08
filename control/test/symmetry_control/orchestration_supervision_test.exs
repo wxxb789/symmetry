@@ -3,6 +3,7 @@ defmodule SymmetryControl.OrchestrationSupervisionTest do
 
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.{Command, RunTransition}
+  alias SymmetryControl.RequestHash
   alias SymmetryControl.Workspaces
   alias SymmetryControlWeb.{PortalJSON, Protocol}
 
@@ -97,7 +98,7 @@ defmodule SymmetryControl.OrchestrationSupervisionTest do
     assert Repo.aggregate(Command, :count) == 1
   end
 
-  test "new input hashes bind the waiting identity as well as the payload" do
+  test "legacy-compatible input hashes bind the waiting identity as well as the payload" do
     {task, run, _runtime, fence} = running()
     waiting_id = Ecto.UUID.generate()
 
@@ -117,6 +118,40 @@ defmodule SymmetryControl.OrchestrationSupervisionTest do
 
     assert {:ok, input, :created} = Orchestration.provide_input(task.id, payload, key, opts)
     assert input.request_hash_version == 2
+
+    assert {:error, :idempotency_conflict} =
+             Orchestration.provide_input(
+               task.id,
+               payload,
+               key,
+               Keyword.put(opts, :expected_waiting_transition_id, Ecto.UUID.generate())
+             )
+  end
+
+  test "version 2 input hashes replay only with their original context" do
+    {task, run, _runtime, fence} = running()
+    waiting_id = Ecto.UUID.generate()
+
+    assert {:ok, _} =
+             Orchestration.transition(run.id, fence, "waiting_for_input", packet(), waiting_id,
+               now: @now
+             )
+
+    key = Ecto.UUID.generate()
+    payload = %{"option_id" => "staged"}
+
+    opts = [
+      expected_generation: task.attempt_generation,
+      expected_waiting_transition_id: waiting_id,
+      now: @now
+    ]
+
+    assert {:ok, input, :created} = Orchestration.provide_input(task.id, payload, key, opts)
+    legacy_contextual_command_hash(input, "provide_input", payload, opts)
+
+    assert {:ok, replayed, :replayed} = Orchestration.provide_input(task.id, payload, key, opts)
+    assert replayed.id == input.id
+    assert replayed.request_hash_version == 2
 
     assert {:error, :idempotency_conflict} =
              Orchestration.provide_input(
@@ -548,6 +583,18 @@ defmodule SymmetryControl.OrchestrationSupervisionTest do
 
     command
     |> Command.changeset(%{request_hash: hash, request_hash_version: 1})
+    |> Repo.update!()
+  end
+
+  defp legacy_contextual_command_hash(command, kind, payload, opts) do
+    context =
+      opts |> Keyword.take([:expected_generation, :expected_waiting_transition_id]) |> Map.new()
+
+    command
+    |> Command.changeset(%{
+      request_hash: RequestHash.legacy(%{kind: kind, payload: payload, context: context}),
+      request_hash_version: 2
+    })
     |> Repo.update!()
   end
 

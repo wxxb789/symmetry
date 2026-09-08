@@ -245,6 +245,7 @@ func validateAgentProfiles(profiles map[string]AgentProfile) error {
 			}
 			seen[name] = struct{}{}
 		}
+		profiles[key] = profile
 	}
 	return nil
 }
