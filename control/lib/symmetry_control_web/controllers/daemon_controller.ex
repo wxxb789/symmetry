@@ -297,6 +297,19 @@ defmodule SymmetryControlWeb.DaemonController do
     end
   end
 
+  def mark_harness_session_stopped(conn, _params) do
+    run_id = path_param(conn, "run_id")
+
+    with :ok <- owns_run(conn, run_id),
+         {:ok, fence, attrs} <- fenced_body(body_params(conn), run_id, :absent),
+         {:ok, receipt, disposition} <-
+           Goals.mark_harness_session_stopped(conn.assigns.machine.id, run_id, fence, attrs) do
+      receipt(conn, receipt, disposition)
+    else
+      {:error, reason} -> Protocol.error(conn, reason)
+    end
+  end
+
   def append_evidence(conn, _params) do
     run_id = path_param(conn, "run_id")
 

@@ -346,6 +346,7 @@ defmodule SymmetryControl.Orchestration.Run do
     belongs_to :task, SymmetryControl.Orchestration.Task
     belongs_to :runtime, SymmetryControl.Orchestration.Runtime
     belongs_to :harness_session, SymmetryControl.Goals.HarnessSession
+    field :harness_binding_id, Ecto.UUID
     field :generation, :integer
     field :state, :string
     field :claimed_runtime_epoch, :integer
@@ -367,6 +368,7 @@ defmodule SymmetryControl.Orchestration.Run do
       :task_id,
       :runtime_id,
       :harness_session_id,
+      :harness_binding_id,
       :generation,
       :state,
       :claimed_runtime_epoch,
@@ -389,6 +391,7 @@ defmodule SymmetryControl.Orchestration.Run do
       :assignment_expires_at
     ])
     |> validate_number(:generation, greater_than: 0)
+    |> validate_harness_attachment_identity()
     |> validate_inclusion(:state, [
       "assigned",
       "claimed",
@@ -404,7 +407,23 @@ defmodule SymmetryControl.Orchestration.Run do
     |> unique_constraint([:task_id, :generation])
     |> check_constraint(:state, name: :runs_state_check)
     |> check_constraint(:generation, name: :runs_generation_positive)
+    |> check_constraint(:harness_binding_id, name: :runs_harness_attachment_identity_check)
     |> assoc_constraint(:harness_session)
+  end
+
+  defp validate_harness_attachment_identity(changeset) do
+    session_id = get_field(changeset, :harness_session_id)
+    binding_id = get_field(changeset, :harness_binding_id)
+
+    if is_nil(session_id) == is_nil(binding_id) do
+      changeset
+    else
+      add_error(
+        changeset,
+        :harness_binding_id,
+        "must be present exactly when harness session is attached"
+      )
+    end
   end
 end
 

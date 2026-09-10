@@ -6,6 +6,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   alias SymmetryControl.Repo.Migrations.AddGoal0006ControlPlane
   alias SymmetryControl.Repo.Migrations.AddGoalTerminalGuardsAndExecutionPolicy
   alias SymmetryControl.Repo.Migrations.AddGoalTerminalAuthorityGuardsAndSessionReciprocity
+  alias SymmetryControl.Repo.Migrations.AddHarnessSessionStopReceipts
   alias SymmetryControl.Repo.Migrations.AddGoalIntegrationWorkItemDesignation
   alias SymmetryControl.Repo.Migrations.AddGoalIdentityGuards
   alias SymmetryControl.Repo.Migrations.AddTaskHandoffLineage
@@ -51,6 +52,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   @runtime_affinity_guard_migration_version 20_260_910_020_000
   @terminal_authority_migration_version 20_260_910_030_000
   @handoff_lineage_migration_version 20_260_910_040_000
+  @session_stop_receipt_migration_version 20_260_910_050_000
 
   test "upgrades legacy rows without assigning their textual goal to durable Goal history" do
     with_schema(fn ->
@@ -2136,6 +2138,87 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
     end)
   end
 
+  test "adds a per-attachment binding and immutable stop receipt history" do
+    with_schema(fn ->
+      migrate_goal_up!()
+
+      %{machine_id: machine_id, runtime_id: runtime_id, session_id: session_id} =
+        insert_harness_session_fixture!()
+
+      task_id = insert_legacy_task!("Stop receipt migration")
+      run_id = Ecto.UUID.bingenerate()
+      insert_harness_run!(run_id, task_id, runtime_id, session_id, 1, "completed")
+      migrate_session_stop_receipt_up!()
+
+      assert %{rows: [[session_binding_id]]} =
+               Repo.query!("SELECT binding_id::text FROM harness_sessions WHERE id = $1", [
+                 session_id
+               ])
+
+      assert is_binary(session_binding_id)
+
+      assert %{rows: [[run_binding_id]]} =
+               Repo.query!("SELECT harness_binding_id::text FROM runs WHERE id = $1", [run_id])
+
+      assert run_binding_id == session_binding_id
+
+      assert_raise Postgrex.Error, ~r/goal_0006_harness_session_binding_rotation_invalid/i, fn ->
+        Repo.query!("UPDATE harness_sessions SET binding_id = $1 WHERE id = $2", [
+          Ecto.UUID.bingenerate(),
+          session_id
+        ])
+      end
+
+      assert_raise Postgrex.Error, ~r/goal_0006_run_harness_attachment_binding_immutable/i, fn ->
+        Repo.query!("UPDATE runs SET harness_binding_id = $1 WHERE id = $2", [
+          Ecto.UUID.bingenerate(),
+          run_id
+        ])
+      end
+
+      Repo.query!("UPDATE harness_sessions SET state = 'unavailable' WHERE id = $1", [session_id])
+
+      receipt_id = Ecto.UUID.bingenerate()
+      response = Jason.encode!(%{"session_stopped" => %{"state" => "available"}})
+
+      Repo.query!(
+        """
+        INSERT INTO harness_session_stop_receipts (
+          id, session_id, run_id, machine_id, binding_id, request_hash, response, inserted_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7::text::jsonb, now())
+        """,
+        [receipt_id, session_id, run_id, machine_id, session_binding_id, hash(19), response]
+      )
+
+      assert_raise Postgrex.Error,
+                   ~r/harness_session_stop_receipts_session_id_binding_id_key/i,
+                   fn ->
+                     Repo.query!(
+                       """
+                       INSERT INTO harness_session_stop_receipts (
+                         id, session_id, run_id, machine_id, binding_id, request_hash, response, inserted_at
+                       )
+                       VALUES ($1, $2, $3, $4, $5, $6, $7::text::jsonb, now())
+                       """,
+                       [
+                         Ecto.UUID.bingenerate(),
+                         session_id,
+                         run_id,
+                         machine_id,
+                         session_binding_id,
+                         hash(20),
+                         response
+                       ]
+                     )
+                   end
+
+      assert_raise Postgrex.Error,
+                   ~r/cannot roll back harness session stop receipts while durable receipt history exists/i,
+                   &migrate_session_stop_receipt_down!/0
+    end)
+  end
+
   test "guards terminal Goal authority, terminal decisions, and exact execution policies in SQL" do
     with_schema(fn ->
       migrate_goal_up!()
@@ -3437,6 +3520,30 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
     )
   end
 
+  defp migrate_session_stop_receipt_up! do
+    Ecto.Migrator.run(
+      Repo,
+      [{@session_stop_receipt_migration_version, AddHarnessSessionStopReceipts}],
+      :up,
+      all: true,
+      log: false,
+      migration_lock: false,
+      dynamic_repo: Repo.get_dynamic_repo()
+    )
+  end
+
+  defp migrate_session_stop_receipt_down! do
+    Ecto.Migrator.run(
+      Repo,
+      [{@session_stop_receipt_migration_version, AddHarnessSessionStopReceipts}],
+      :down,
+      step: 1,
+      log: false,
+      migration_lock: false,
+      dynamic_repo: Repo.get_dynamic_repo()
+    )
+  end
+
   defp migrate_provider_access_snapshot_up! do
     Ecto.Migrator.run(
       Repo,
@@ -3686,7 +3793,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
       [session_id, machine_id, runtime_id, Ecto.UUID.bingenerate(), resource_id]
     )
 
-    %{runtime_id: runtime_id, session_id: session_id}
+    %{machine_id: machine_id, runtime_id: runtime_id, session_id: session_id}
   end
 
   defp insert_harness_run!(run_id, task_id, runtime_id, session_id, generation, state) do
@@ -4196,7 +4303,8 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
        "20260910020000_enforce_runtime_repository_resource_affinity.exs"},
       {AddGoalTerminalAuthorityGuardsAndSessionReciprocity,
        "20260910030000_add_goal_terminal_authority_guards_and_session_reciprocity.exs"},
-      {AddTaskHandoffLineage, "20260910040000_add_task_handoff_lineage.exs"}
+      {AddTaskHandoffLineage, "20260910040000_add_task_handoff_lineage.exs"},
+      {AddHarnessSessionStopReceipts, "20260910050000_add_harness_session_stop_receipts.exs"}
     ]
 
     Enum.each(migrations, fn {module, filename} ->

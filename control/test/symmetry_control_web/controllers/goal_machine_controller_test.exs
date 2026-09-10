@@ -169,6 +169,85 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
              |> json_response(200)
   end
 
+  test "the owning machine releases a settled session through an exact stop receipt", %{
+    conn: conn
+  } do
+    %{token: token, item: item, run: run, fence: fence} = claimed_goal_run_fixture(conn)
+    attached_request = Map.merge(fence, session_attrs(item))
+
+    attached =
+      bearer(conn, token)
+      |> put("/api/v1/runs/#{run.id}/session", attached_request)
+      |> json_response(201)
+
+    stop_request =
+      Map.merge(fence, %{
+        "session_id" => attached["session"]["id"],
+        "local_handle_id" => attached["session"]["local_handle_id"],
+        "binding_id" => attached["session"]["binding_id"]
+      })
+
+    assert_error(
+      bearer(conn, token) |> put("/api/v1/runs/#{run.id}/session/stopped", stop_request),
+      409,
+      "state_conflict"
+    )
+
+    Repo.update_all(from(row in Task, where: row.id == ^run.task_id), set: [state: "completed"])
+    Repo.update_all(from(row in Run, where: row.id == ^run.id), set: [state: "completed"])
+
+    assert {:ok, %{"settlement" => "missing_result"}} =
+             Goals.settle_task(run.task_id, run.id, run.generation)
+
+    stopped =
+      bearer(conn, token)
+      |> put("/api/v1/runs/#{run.id}/session/stopped", stop_request)
+      |> json_response(201)
+
+    assert %{
+             "session_stopped" => %{
+               "receipt_id" => receipt_id,
+               "run_id" => run_id,
+               "session_id" => session_id,
+               "local_handle_id" => local_handle_id,
+               "binding_id" => binding_id,
+               "state" => "available",
+               "active_run_id" => nil
+             }
+           } = stopped
+
+    assert receipt_id
+    assert run_id == run.id
+    assert session_id == attached["session"]["id"]
+    assert local_handle_id == attached["session"]["local_handle_id"]
+    assert binding_id == attached["session"]["binding_id"]
+
+    assert ^stopped =
+             bearer(conn, token)
+             |> put("/api/v1/runs/#{run.id}/session/stopped", stop_request)
+             |> json_response(200)
+
+    assert_error(
+      bearer(conn, token)
+      |> put(
+        "/api/v1/runs/#{run.id}/session/stopped",
+        Map.put(stop_request, "local_handle_id", Ecto.UUID.generate())
+      ),
+      409,
+      "idempotency_conflict"
+    )
+
+    assert_error(
+      bearer(conn, token)
+      |> put(
+        "/api/v1/runs/#{run.id}/session/stopped",
+        Map.put(stop_request, "machine_id", Ecto.UUID.generate())
+      ),
+      400,
+      "invalid_request"
+    )
+  end
+
   test "evidence and usage use exact per-run replay identities", %{conn: conn} do
     %{token: token, run: run, fence: fence, subject: subject} = claimed_goal_run_fixture(conn)
     evidence = Map.merge(fence, evidence_attrs(run.id, subject))
@@ -428,6 +507,7 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
               runtime_id: runtime.id,
               repository_resource_id: get_in(item, [:baseline, :subject, "resource_id"]),
               local_handle_id: attrs.local_handle_id,
+              binding_id: Ecto.UUID.generate(),
               harness_kind: attrs.harness_kind,
               harness_version: attrs.harness_version,
               adapter_version: attrs.adapter_version,
@@ -634,6 +714,7 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
 
     %{
       local_handle_id: Ecto.UUID.generate(),
+      binding_id: Ecto.UUID.generate(),
       harness_kind: "codex",
       harness_version: "1.0.0",
       adapter_version: "1.0.0",

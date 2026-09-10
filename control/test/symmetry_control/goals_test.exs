@@ -3,7 +3,7 @@ defmodule SymmetryControl.GoalsTest do
 
   alias SymmetryControl.Goals
   alias SymmetryControl.Goals.ReadModel
-  alias SymmetryControl.Goals.{GoalExternalWait, HarnessSession}
+  alias SymmetryControl.Goals.{GoalExternalWait, HarnessSession, HarnessSessionStopReceipt}
   alias SymmetryControl.Goals.Workers.{GoalControlWorker, SettleTaskWorker, WakeupWorker}
   alias SymmetryControl.Integrations
   alias SymmetryControl.Orchestration.{Machine, Run, Runtime, Task}
@@ -4590,6 +4590,77 @@ defmodule SymmetryControl.GoalsTest do
     assert %{state: "available", active_run_id: nil} = Repo.get!(HarnessSession, unrelated.id)
   end
 
+  test "a terminal stop receipt releases one attachment identity and replays exactly" do
+    {_goal, item, task, runtime, run, fence} = claimed_goal_run_fixture()
+    attrs = session_attrs(item, "workspace-stop-receipt")
+
+    assert {:ok, %{session: session}, :created} =
+             Goals.attach_harness_session(runtime.machine_id, run.id, fence, attrs, now: @now)
+
+    stop = %{
+      session_id: session.id,
+      local_handle_id: attrs.local_handle_id,
+      binding_id: attrs.binding_id
+    }
+
+    assert {:error, :state_conflict} =
+             Goals.mark_harness_session_stopped(runtime.machine_id, run.id, fence, stop,
+               now: @now
+             )
+
+    Repo.update_all(from(row in Task, where: row.id == ^task.id), set: [state: "completed"])
+    Repo.update_all(from(row in Run, where: row.id == ^run.id), set: [state: "completed"])
+
+    assert {:ok, %{"settlement" => "missing_result"}} =
+             Goals.settle_task(task.id, run.id, run.generation, now: @now)
+
+    assert %{state: "unavailable", active_run_id: nil, binding_id: binding_id} =
+             Repo.get!(HarnessSession, session.id)
+
+    assert binding_id == attrs.binding_id
+
+    assert {:ok,
+            %{
+              "session_stopped" => %{
+                "receipt_id" => receipt_id,
+                "run_id" => run_id,
+                "session_id" => session_id,
+                "local_handle_id" => local_handle_id,
+                "binding_id" => binding_id,
+                "state" => "available",
+                "active_run_id" => nil
+              }
+            } = receipt, :created} =
+             Goals.mark_harness_session_stopped(runtime.machine_id, run.id, fence, stop,
+               now: @now
+             )
+
+    assert receipt_id
+    assert run_id == run.id
+    assert session_id == session.id
+    assert local_handle_id == attrs.local_handle_id
+    assert binding_id == attrs.binding_id
+    assert %{state: "available", active_run_id: nil} = Repo.get!(HarnessSession, session.id)
+    assert Repo.aggregate(HarnessSessionStopReceipt, :count) == 1
+
+    assert {:ok, ^receipt, :replayed} =
+             Goals.mark_harness_session_stopped(runtime.machine_id, run.id, fence, stop,
+               now: @now
+             )
+
+    assert %{binding_id: ^binding_id, state: "available", active_run_id: nil} =
+             Repo.get!(HarnessSession, session.id)
+
+    assert {:error, :idempotency_conflict} =
+             Goals.mark_harness_session_stopped(
+               runtime.machine_id,
+               run.id,
+               fence,
+               %{stop | local_handle_id: Ecto.UUID.generate()},
+               now: @now
+             )
+  end
+
   test "resume admission without its requested session never creates a fresh session" do
     {goal, item, nil} = admitted_task_fixture("primary", check_contract(), %{}, false)
 
@@ -6704,6 +6775,7 @@ defmodule SymmetryControl.GoalsTest do
       runtime_id: runtime.id,
       repository_resource_id: item_repository_resource_id(item),
       local_handle_id: attrs.local_handle_id,
+      binding_id: Ecto.UUID.generate(),
       harness_kind: attrs.harness_kind,
       harness_version: attrs.harness_version,
       adapter_version: attrs.adapter_version,
@@ -6829,6 +6901,7 @@ defmodule SymmetryControl.GoalsTest do
   defp session_attrs(item, workspace_fingerprint) do
     %{
       local_handle_id: Ecto.UUID.generate(),
+      binding_id: Ecto.UUID.generate(),
       harness_kind: "codex",
       harness_version: "1.0.0",
       adapter_version: "1.0.0",
@@ -6845,6 +6918,7 @@ defmodule SymmetryControl.GoalsTest do
       runtime_id: runtime.id,
       repository_resource_id: item_repository_resource_id(item),
       local_handle_id: attrs.local_handle_id,
+      binding_id: Ecto.UUID.generate(),
       harness_kind: attrs.harness_kind,
       harness_version: attrs.harness_version,
       adapter_version: attrs.adapter_version,

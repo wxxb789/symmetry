@@ -1088,6 +1088,9 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     assert run.harness_session_id == retained_session.id
     assert retained_session.runtime_id == retained_runtime.id
 
+    reserved_session = Repo.get!(HarnessSession, retained_session.id)
+    assert run.harness_binding_id == reserved_session.binding_id
+
     fence = claim(run, retained_runtime)
 
     assert {:ok, %{session: %{id: session_id, state: "busy"}}, :replayed} =
@@ -1097,6 +1100,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
                fence,
                %{
                  local_handle_id: retained_session.local_handle_id,
+                 binding_id: run.harness_binding_id,
                  harness_kind: retained_session.harness_kind,
                  harness_version: retained_session.harness_version,
                  adapter_version: retained_session.adapter_version,
@@ -1187,13 +1191,14 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     assert 0 == Repo.aggregate(from(run in Run, where: run.task_id == ^target_task.id), :count)
   end
 
-  test "only one queued Goal task reserves a retained session before either daemon attaches" do
+  test "retained reservation rotates the binding before dispatch and an old stop replay cannot release it" do
     retained_runtime = register_runtime("exclusive-retained", resume?: true, capacity: 2)
 
     {first_task, _first_goal_id} =
       insert_goal_task(max_run_attempts: 2, retained_runtime: retained_runtime)
 
     session = Repo.get!(HarnessSession, first_task.requested_session_id)
+    original_binding_id = session.binding_id
     first_item = Repo.get!(WorkItem, first_task.work_item_id)
 
     {second_task, _second_goal_id} =
@@ -1208,18 +1213,75 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     assert {:ok, first_run} = Orchestration.assign_one(now: @now)
     assert first_run.task_id == first_task.id
     assert first_run.harness_session_id == session.id
-    assert %{state: "busy", active_run_id: active_run_id} = Repo.get!(HarnessSession, session.id)
+    assert is_binary(first_run.harness_binding_id)
+    refute first_run.harness_binding_id == original_binding_id
+
+    assert %{state: "busy", active_run_id: active_run_id, binding_id: first_binding_id} =
+             Repo.get!(HarnessSession, session.id)
+
     assert active_run_id == first_run.id
+    assert first_binding_id == first_run.harness_binding_id
 
     assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
     assert %{state: "queued", current_generation: 0} = Repo.get!(Task, second_task.id)
     assert 0 == Repo.aggregate(from(run in Run, where: run.task_id == ^second_task.id), :count)
 
-    assert %{expired_runs: 1} = Orchestration.expire(now: DateTime.add(@now, 31, :second))
+    first_fence = claim(first_run, retained_runtime)
+
+    assert {:ok, %{state: "failed"}} =
+             Orchestration.transition(
+               first_run.id,
+               first_fence,
+               "failed",
+               %{"reason" => "native turn stopped before the next retained reservation"},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    assert %{state: "unavailable", active_run_id: nil, binding_id: ^first_binding_id} =
+             Repo.get!(HarnessSession, session.id)
+
+    stop = %{
+      session_id: session.id,
+      local_handle_id: session.local_handle_id,
+      binding_id: first_binding_id
+    }
+
+    assert {:ok, stop_receipt, :created} =
+             Goals.mark_harness_session_stopped(
+               retained_runtime.machine_id,
+               first_run.id,
+               first_fence,
+               stop,
+               now: @now
+             )
+
     assert %{state: "available", active_run_id: nil} = Repo.get!(HarnessSession, session.id)
+
+    assert {:ok, second_run} = Orchestration.assign_one(now: DateTime.add(@now, 1, :second))
+    assert second_run.task_id == second_task.id
+    refute second_run.harness_binding_id == first_binding_id
+
+    assert %{state: "busy", active_run_id: active_run_id, binding_id: second_binding_id} =
+             Repo.get!(HarnessSession, session.id)
+
+    assert active_run_id == second_run.id
+    assert second_binding_id == second_run.harness_binding_id
+
+    assert {:ok, ^stop_receipt, :replayed} =
+             Goals.mark_harness_session_stopped(
+               retained_runtime.machine_id,
+               first_run.id,
+               first_fence,
+               stop,
+               now: DateTime.add(@now, 1, :second)
+             )
+
+    assert %{state: "busy", active_run_id: ^active_run_id, binding_id: ^second_binding_id} =
+             Repo.get!(HarnessSession, session.id)
   end
 
-  test "lease expiry and a late terminal receipt keep a claimed retained session unavailable" do
+  test "lease expiry keeps a retained session unavailable until a fenced stop receipt arrives" do
     retained_runtime = register_runtime("retained-expiry", resume?: true)
     {task, _goal_id} = insert_goal_task(max_run_attempts: 2, retained_runtime: retained_runtime)
     session = Repo.get!(HarnessSession, task.requested_session_id)
@@ -1244,6 +1306,21 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
              )
 
     assert %{state: "unavailable", active_run_id: nil} = Repo.get!(HarnessSession, session.id)
+
+    assert {:ok, %{"session_stopped" => %{"state" => "available"}}, :created} =
+             Goals.mark_harness_session_stopped(
+               retained_runtime.machine_id,
+               run.id,
+               fence,
+               %{
+                 session_id: session.id,
+                 local_handle_id: session.local_handle_id,
+                 binding_id: run.harness_binding_id
+               },
+               now: DateTime.add(expired_at, 1, :second)
+             )
+
+    assert %{state: "available", active_run_id: nil} = Repo.get!(HarnessSession, session.id)
   end
 
   test "Goal machine retries an exact committed claim after pause but rejects a new claimant" do
@@ -1966,6 +2043,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
                    harness_version: retained_runtime.harness_version,
                    adapter_version: retained_runtime.adapter_version,
                    local_handle_id: Ecto.UUID.generate(),
+                   binding_id: Ecto.UUID.generate(),
                    workspace_fingerprint: "workspace:#{retained_runtime.id}",
                    state: Keyword.get(opts, :retained_session_state, "available")
                  })

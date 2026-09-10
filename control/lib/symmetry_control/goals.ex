@@ -23,6 +23,7 @@ defmodule SymmetryControl.Goals do
     GoalEvent,
     GoalRevision,
     HarnessSession,
+    HarnessSessionStopReceipt,
     ReadModel,
     RunEvidence,
     RunUsage,
@@ -364,6 +365,82 @@ defmodule SymmetryControl.Goals do
 
   def attach_harness_session(_, _, _, _, _), do: {:error, :invalid_request}
 
+  @spec mark_harness_session_stopped(Ecto.UUID.t(), Ecto.UUID.t(), map(), map(), keyword()) ::
+          {:ok, map(), :created | :replayed} | {:error, term()}
+  def mark_harness_session_stopped(machine_id, run_id, fence, attrs, opts \\ [])
+
+  def mark_harness_session_stopped(machine_id, run_id, fence, attrs, opts)
+      when is_binary(machine_id) and is_binary(run_id) and is_map(fence) and is_map(attrs) and
+             is_list(opts) do
+    with :ok <- valid_uuid(machine_id),
+         :ok <- valid_uuid(run_id),
+         :ok <- valid_fence(fence),
+         {:ok, stop_attrs} <- session_stop_attrs(attrs) do
+      Repo.transaction(fn ->
+        {_goal, _task, _item, run, runtime} =
+          lock_goal_run!(machine_id, run_id, fence, opts, :session_stop)
+
+        unless run.state in @accounting_terminal_run_states, do: rollback(:state_conflict)
+
+        session =
+          Repo.one(
+            from(session in HarnessSession,
+              where: session.id == ^stop_attrs.session_id,
+              lock: "FOR UPDATE"
+            )
+          ) || rollback(:ownership_lost)
+
+        request_hash = RequestHash.canonical(session_stop_request(fence, stop_attrs))
+
+        case Repo.one(
+               from(receipt in HarnessSessionStopReceipt,
+                 where:
+                   receipt.session_id == ^session.id and
+                     receipt.binding_id == ^stop_attrs.binding_id,
+                 lock: "FOR UPDATE"
+               )
+             ) do
+          %HarnessSessionStopReceipt{} = receipt ->
+            if stop_receipt_matches?(receipt, machine_id, run, request_hash) do
+              {:replayed, receipt.response}
+            else
+              rollback(:idempotency_conflict)
+            end
+
+          nil ->
+            ensure_stoppable_session!(session, run, runtime, machine_id, stop_attrs)
+
+            receipt_id = Ecto.UUID.generate()
+
+            response =
+              normalize_map(session_stop_receipt(receipt_id, session, run, stop_attrs.binding_id))
+
+            %HarnessSessionStopReceipt{id: receipt_id}
+            |> HarnessSessionStopReceipt.changeset(%{
+              session_id: session.id,
+              run_id: run.id,
+              machine_id: machine_id,
+              binding_id: stop_attrs.binding_id,
+              request_hash: request_hash,
+              response: normalize_map(response)
+            })
+            |> stamp_insert(now(opts))
+            |> Repo.insert!()
+
+            session
+            |> HarnessSession.update_changeset(%{state: "available", active_run_id: nil})
+            |> stamp_update(now(opts))
+            |> Repo.update!()
+
+            {:created, response}
+        end
+      end)
+      |> machine_session_stop_result()
+    end
+  end
+
+  def mark_harness_session_stopped(_, _, _, _, _), do: {:error, :invalid_request}
+
   @spec append_evidence(Ecto.UUID.t(), Ecto.UUID.t(), map(), map(), keyword()) ::
           {:ok, map(), :created | :replayed} | {:error, term()}
   def append_evidence(machine_id, run_id, fence, evidence, opts \\ [])
@@ -528,7 +605,8 @@ defmodule SymmetryControl.Goals do
               from(session in HarnessSession,
                 where:
                   session.id == ^run.harness_session_id and session.machine_id == ^machine_id and
-                    session.active_run_id == ^run.id,
+                    session.active_run_id == ^run.id and
+                    session.binding_id == ^run.harness_binding_id,
                 lock: "FOR UPDATE"
               )
             )
@@ -602,7 +680,7 @@ defmodule SymmetryControl.Goals do
 
     unless static?, do: rollback(:ownership_lost)
 
-    if mode not in [:late_accounting, :attach_replay, :delivery_replay] and
+    if mode not in [:late_accounting, :attach_replay, :delivery_replay, :session_stop] and
          task.current_generation != value(fence, :generation),
        do: rollback(:ownership_lost)
 
@@ -631,6 +709,7 @@ defmodule SymmetryControl.Goals do
   defp session_attrs(attrs) do
     allowed = [
       "local_handle_id",
+      "binding_id",
       "harness_kind",
       "harness_version",
       "adapter_version",
@@ -641,6 +720,7 @@ defmodule SymmetryControl.Goals do
 
     with true <- only_known_keys?(attrs, allowed),
          {:ok, local_handle_id} <- required_uuid(attrs, :local_handle_id),
+         {:ok, binding_id} <- required_uuid(attrs, :binding_id),
          {:ok, harness_kind} <- required_string(attrs, :harness_kind),
          true <- harness_kind in ["codex", "claude_code", "pi", "opencode"],
          {:ok, harness_version} <- required_string(attrs, :harness_version),
@@ -651,6 +731,7 @@ defmodule SymmetryControl.Goals do
       {:ok,
        %{
          local_handle_id: local_handle_id,
+         binding_id: binding_id,
          harness_kind: harness_kind,
          harness_version: harness_version,
          adapter_version: adapter_version,
@@ -661,6 +742,53 @@ defmodule SymmetryControl.Goals do
     else
       _ -> {:error, :invalid_request}
     end
+  end
+
+  defp session_stop_attrs(attrs) do
+    allowed = ["session_id", "local_handle_id", "binding_id"]
+
+    with true <- only_known_keys?(attrs, allowed),
+         {:ok, session_id} <- required_uuid(attrs, :session_id),
+         {:ok, local_handle_id} <- required_uuid(attrs, :local_handle_id),
+         {:ok, binding_id} <- required_uuid(attrs, :binding_id) do
+      {:ok,
+       %{
+         session_id: session_id,
+         local_handle_id: local_handle_id,
+         binding_id: binding_id
+       }}
+    else
+      _ -> {:error, :invalid_request}
+    end
+  end
+
+  defp session_stop_request(fence, attrs) do
+    %{
+      "runtime_id" => value(fence, :runtime_id),
+      "runtime_epoch" => value(fence, :runtime_epoch),
+      "generation" => value(fence, :generation),
+      "claim_id" => value(fence, :claim_id),
+      "lease_token" => value(fence, :lease_token),
+      "session_id" => attrs.session_id,
+      "local_handle_id" => attrs.local_handle_id,
+      "binding_id" => attrs.binding_id
+    }
+  end
+
+  defp ensure_stoppable_session!(session, run, runtime, machine_id, attrs) do
+    stoppable? =
+      session.machine_id == machine_id and session.runtime_id == runtime.id and
+        session.id == run.harness_session_id and run.harness_binding_id == attrs.binding_id and
+        session.local_handle_id == attrs.local_handle_id and
+        session.binding_id == attrs.binding_id and session.state == "unavailable" and
+        is_nil(session.active_run_id)
+
+    unless stoppable?, do: rollback(:ownership_lost)
+  end
+
+  defp stop_receipt_matches?(receipt, machine_id, run, request_hash) do
+    receipt.machine_id == machine_id and receipt.run_id == run.id and
+      receipt.request_hash == request_hash
   end
 
   defp ensure_session_scope!(attrs, task, item, run, runtime, machine_id) do
@@ -690,7 +818,7 @@ defmodule SymmetryControl.Goals do
   defp replayed_attached_session?(nil, _attrs, _run, _runtime, _item, _task), do: false
 
   defp replayed_attached_session?(session, attrs, run, runtime, item, task) do
-    run.harness_session_id == session.id and
+    run.harness_session_id == session.id and run.harness_binding_id == attrs.binding_id and
       session_matches?(
         session,
         attrs,
@@ -701,7 +829,8 @@ defmodule SymmetryControl.Goals do
   end
 
   defp session_matches?(session, attrs, run_id, runtime_id, repository_resource_id) do
-    session.local_handle_id == attrs.local_handle_id and session.active_run_id == run_id and
+    session.local_handle_id == attrs.local_handle_id and session.binding_id == attrs.binding_id and
+      session.active_run_id == run_id and
       session.state == "busy" and session.runtime_id == runtime_id and
       session.repository_resource_id == repository_resource_id and
       session.harness_kind == attrs.harness_kind and
@@ -735,6 +864,7 @@ defmodule SymmetryControl.Goals do
           harness_kind: runtime.harness_kind,
           harness_version: runtime.harness_version,
           adapter_version: runtime.adapter_version,
+          binding_id: attrs.binding_id,
           state: "busy",
           active_run_id: run.id
         })
@@ -800,9 +930,15 @@ defmodule SymmetryControl.Goals do
 
     case session.state do
       "available" when is_nil(session.active_run_id) and is_nil(run.harness_session_id) ->
+        if session.binding_id == attrs.binding_id, do: rollback(:idempotency_conflict)
+
         session =
           session
-          |> HarnessSession.update_changeset(%{state: "busy", active_run_id: run.id})
+          |> HarnessSession.update_changeset(%{
+            state: "busy",
+            active_run_id: run.id,
+            binding_id: attrs.binding_id
+          })
           |> stamp_update(now(opts))
           |> Repo.update!()
 
@@ -811,6 +947,7 @@ defmodule SymmetryControl.Goals do
 
       "busy" ->
         if run.harness_session_id in [nil, session.id] and
+             run.harness_binding_id == attrs.binding_id and
              session_matches?(
                session,
                attrs,
@@ -833,13 +970,16 @@ defmodule SymmetryControl.Goals do
 
   defp attach_session_to_run!(run, session, opts) do
     cond do
-      is_nil(run.harness_session_id) ->
+      is_nil(run.harness_session_id) and is_nil(run.harness_binding_id) ->
         run
-        |> Changeset.change(harness_session_id: session.id)
+        |> Changeset.change(
+          harness_session_id: session.id,
+          harness_binding_id: session.binding_id
+        )
         |> stamp_update(now(opts))
         |> Repo.update!()
 
-      run.harness_session_id == session.id ->
+      run.harness_session_id == session.id and run.harness_binding_id == session.binding_id ->
         :ok
 
       true ->
@@ -861,7 +1001,8 @@ defmodule SymmetryControl.Goals do
         )
       )
 
-    if session && session.state == "busy" && session.active_run_id == run.id do
+    if session && session.state == "busy" && session.active_run_id == run.id &&
+         session.binding_id == run.harness_binding_id do
       session
       |> HarnessSession.update_changeset(%{state: "unavailable", active_run_id: nil})
       |> stamp_update(now(opts))
@@ -883,12 +1024,28 @@ defmodule SymmetryControl.Goals do
         repository_resource_id: session.repository_resource_id,
         active_run_id: session.active_run_id,
         local_handle_id: session.local_handle_id,
+        binding_id: session.binding_id,
         harness_kind: session.harness_kind,
         harness_version: session.harness_version,
         adapter_version: session.adapter_version,
         state: session.state,
         workspace_fingerprint: session.workspace_fingerprint,
         workspace: task.workspace
+      }
+    }
+  end
+
+  defp session_stop_receipt(receipt_id, session, run, binding_id) do
+    %{
+      session_stopped: %{
+        receipt_id: receipt_id,
+        run_id: run.id,
+        session_id: session.id,
+        local_handle_id: session.local_handle_id,
+        binding_id: binding_id,
+        state: "available",
+        active_run_id: nil,
+        lock_version: session.lock_version + 1
       }
     }
   end
@@ -2078,6 +2235,17 @@ defmodule SymmetryControl.Goals do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp machine_session_stop_result(result) do
+    case machine_write_result(result) do
+      {:ok, _receipt, :created} = created ->
+        Scheduler.wake()
+        created
+
+      result ->
+        result
     end
   end
 

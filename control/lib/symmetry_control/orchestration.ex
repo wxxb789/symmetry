@@ -1418,8 +1418,8 @@ defmodule SymmetryControl.Orchestration do
       else: where(query, [runtime], false)
   end
 
-  # The scheduler reserves a retained session with its Run in one transaction.
-  # Goals.attach_harness_session/5 treats this matching busy binding as a replay.
+  # The scheduler owns each retained attachment identity. It is persisted with
+  # the Run before dispatch so a daemon cannot choose or reuse a stale binding.
   defp reserve_requested_session!(
          %Task{requested_session_id: nil},
          _runtime,
@@ -1447,13 +1447,19 @@ defmodule SymmetryControl.Orchestration do
           lock: "FOR UPDATE"
       ) || rollback(:no_assignment)
 
+    binding_id = Ecto.UUID.generate()
+
     session
-    |> HarnessSession.update_changeset(%{state: "busy", active_run_id: run.id})
+    |> HarnessSession.update_changeset(%{
+      state: "busy",
+      active_run_id: run.id,
+      binding_id: binding_id
+    })
     |> stamp_update(current)
     |> Repo.update!()
 
     run
-    |> Ecto.Changeset.change(harness_session_id: session.id)
+    |> Ecto.Changeset.change(harness_session_id: session.id, harness_binding_id: binding_id)
     |> stamp_update(current)
     |> Repo.update!()
   end
@@ -1468,7 +1474,8 @@ defmodule SymmetryControl.Orchestration do
           lock: "FOR UPDATE"
       )
 
-    if session && session.state == "busy" && session.active_run_id == run.id do
+    if session && session.state == "busy" && session.active_run_id == run.id &&
+         session.binding_id == run.harness_binding_id do
       session
       |> HarnessSession.update_changeset(%{state: "available", active_run_id: nil})
       |> stamp_update(current)
@@ -1486,7 +1493,8 @@ defmodule SymmetryControl.Orchestration do
           lock: "FOR UPDATE"
       )
 
-    if session && session.state == "busy" && session.active_run_id == run.id do
+    if session && session.state == "busy" && session.active_run_id == run.id &&
+         session.binding_id == run.harness_binding_id do
       session
       |> HarnessSession.update_changeset(%{state: "unavailable", active_run_id: nil})
       |> stamp_update(current)
@@ -3594,7 +3602,9 @@ defmodule SymmetryControl.Orchestration do
           lock: "FOR UPDATE"
       )
 
-    unless session && run.harness_session_id == session.id, do: rollback(:ownership_lost)
+    unless (session && run.harness_session_id == session.id) and
+             run.harness_binding_id == session.binding_id,
+           do: rollback(:ownership_lost)
   end
 
   defp handoff_source_machine_matches?(_runtime, %Task{handoff_source_run_id: nil}), do: true

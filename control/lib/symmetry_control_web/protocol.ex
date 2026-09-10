@@ -205,6 +205,8 @@ defmodule SymmetryControlWeb.Protocol do
       run_id: run.id,
       task_id: task.id,
       generation: run.generation,
+      harness_session_id: run.harness_session_id,
+      harness_binding_id: run.harness_binding_id,
       claim_id: run.claim_id,
       lease_token: run.lease_token,
       lease_expires_at: iso8601(run.lease_expires_at),
@@ -230,6 +232,8 @@ defmodule SymmetryControlWeb.Protocol do
       task_id: run.task_id,
       runtime_id: run.runtime_id,
       generation: run.generation,
+      harness_session_id: run.harness_session_id,
+      harness_binding_id: run.harness_binding_id,
       state: run.state,
       claim_id: run.claim_id,
       lease_token: run.lease_token,
@@ -417,6 +421,8 @@ defmodule SymmetryControlWeb.Protocol do
       run_id: run.id,
       task_id: task.id,
       generation: run.generation,
+      harness_session_id: run.harness_session_id,
+      harness_binding_id: run.harness_binding_id,
       assignment_expires_at: iso8601(run.assignment_expires_at),
       work: work(task)
     }

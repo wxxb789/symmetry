@@ -500,6 +500,7 @@ defmodule SymmetryControl.Goals.HarnessSession do
     field(:harness_version, :string)
     field(:adapter_version, :string)
     field(:local_handle_id, Ecto.UUID)
+    field(:binding_id, Ecto.UUID)
     field(:workspace_fingerprint, :string)
     field(:state, :string, default: "available")
     field(:lock_version, :integer, default: 1)
@@ -517,6 +518,7 @@ defmodule SymmetryControl.Goals.HarnessSession do
       :harness_version,
       :adapter_version,
       :local_handle_id,
+      :binding_id,
       :workspace_fingerprint,
       :state,
       :active_run_id
@@ -529,6 +531,7 @@ defmodule SymmetryControl.Goals.HarnessSession do
       :harness_version,
       :adapter_version,
       :local_handle_id,
+      :binding_id,
       :workspace_fingerprint,
       :state
     ])
@@ -553,7 +556,7 @@ defmodule SymmetryControl.Goals.HarnessSession do
 
   def update_changeset(session, attrs) do
     session
-    |> cast(attrs, [:state, :active_run_id])
+    |> cast(attrs, [:state, :active_run_id, :binding_id])
     |> validate_required([:state])
     |> validate_inclusion(:state, @states)
     |> validate_active_run()
@@ -572,6 +575,64 @@ defmodule SymmetryControl.Goals.HarnessSession do
     else
       changeset
     end
+  end
+end
+
+defmodule SymmetryControl.Goals.HarnessSessionStopReceipt do
+  use Ecto.Schema
+  import Ecto.Changeset
+
+  alias SymmetryControl.Goals.HarnessSession
+  alias SymmetryControl.Orchestration.{Machine, Run}
+
+  @primary_key {:id, :binary_id, autogenerate: true}
+  @foreign_key_type :binary_id
+  schema "harness_session_stop_receipts" do
+    belongs_to(:session, HarnessSession)
+    belongs_to(:run, Run)
+    belongs_to(:machine, Machine)
+    field(:binding_id, Ecto.UUID)
+    field(:request_hash, :binary)
+    field(:response, :map)
+
+    timestamps(type: :utc_datetime_usec, updated_at: false)
+  end
+
+  def changeset(receipt, attrs) do
+    receipt
+    |> cast(attrs, [:session_id, :run_id, :machine_id, :binding_id, :request_hash, :response])
+    |> validate_required([
+      :session_id,
+      :run_id,
+      :machine_id,
+      :binding_id,
+      :request_hash,
+      :response
+    ])
+    |> validate_request_hash()
+    |> validate_response()
+    |> assoc_constraint(:session)
+    |> assoc_constraint(:run)
+    |> assoc_constraint(:machine)
+    |> unique_constraint([:session_id, :binding_id],
+      name: :harness_session_stop_receipts_session_id_binding_id_key
+    )
+    |> check_constraint(:request_hash, name: :harness_session_stop_receipts_request_hash_size)
+    |> check_constraint(:response, name: :harness_session_stop_receipts_response_object)
+  end
+
+  defp validate_request_hash(changeset) do
+    validate_change(changeset, :request_hash, fn :request_hash, value ->
+      if is_binary(value) and byte_size(value) == 32,
+        do: [],
+        else: [request_hash: "must be a 32-byte digest"]
+    end)
+  end
+
+  defp validate_response(changeset) do
+    validate_change(changeset, :response, fn :response, value ->
+      if is_map(value), do: [], else: [response: "must be an object"]
+    end)
   end
 end
 
