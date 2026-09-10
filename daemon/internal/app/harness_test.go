@@ -1784,8 +1784,11 @@ func TestFreshCodexGoalCancellationUsesNativeControlBeforeReceipt(t *testing.T) 
 		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
 	}
 	gate := make(chan struct{})
+	turnReturn := make(chan struct{})
 	app, store, session, controlClient := nativeAdmissionDaemon(t, admission, validNativeTaskResult(t, admission), gate)
 	defer store.Close()
+	session.turnReturnGate = turnReturn
+	session.onControl = func() { close(gate) }
 
 	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
 	select {
@@ -1800,7 +1803,7 @@ func TestFreshCodexGoalCancellationUsesNativeControlBeforeReceipt(t *testing.T) 
 	if len(session.calls) < 5 || !sameStrings(session.calls[:5], []string{"start", "details", "open", "start_turn", "control:cancel"}) {
 		t.Fatalf("native cancellation order = %#v", session.calls)
 	}
-	close(gate)
+	close(turnReturn)
 	app.workers.Wait()
 	journal, err := store.LoadJournal(state.RunKey{RunID: "run-1", Generation: 1})
 	if err != nil {
@@ -2152,20 +2155,22 @@ func (adapter *fakeNativeGoalAdapter) Start(_ context.Context, request harness.S
 }
 
 type fakeNativeGoalSession struct {
-	callsMu       sync.Mutex
-	calls         []string
-	request       harness.StartRequest
-	turnRequest   harness.TurnRequest
-	sink          harness.EventSink
-	handle        harness.NativeSessionHandle
-	result        harness.TaskResult
-	waitGate      <-chan struct{}
-	finalWaitGate <-chan struct{}
-	turnStarted   chan struct{}
-	startErr      error
-	closeErr      error
-	closeEntered  chan struct{}
-	waitTurnDone  bool
+	callsMu        sync.Mutex
+	calls          []string
+	request        harness.StartRequest
+	turnRequest    harness.TurnRequest
+	sink           harness.EventSink
+	handle         harness.NativeSessionHandle
+	result         harness.TaskResult
+	waitGate       <-chan struct{}
+	finalWaitGate  <-chan struct{}
+	turnReturnGate <-chan struct{}
+	turnStarted    chan struct{}
+	startErr       error
+	closeErr       error
+	closeEntered   chan struct{}
+	onControl      func()
+	waitTurnDone   bool
 }
 
 func (session *fakeNativeGoalSession) recordCall(call string) {
@@ -2202,11 +2207,25 @@ func (session *fakeNativeGoalSession) StartTurn(ctx context.Context, request har
 	if err != nil {
 		return err
 	}
-	return session.sink.Handle(ctx, harness.Event{Kind: harness.EventTaskResult, At: time.Now().UTC(), Payload: payload})
+	if err := session.sink.Handle(ctx, harness.Event{Kind: harness.EventTaskResult, At: time.Now().UTC(), Payload: payload}); err != nil {
+		return err
+	}
+	if session.turnReturnGate == nil {
+		return nil
+	}
+	select {
+	case <-session.turnReturnGate:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (session *fakeNativeGoalSession) Control(_ context.Context, request harness.ControlRequest) (harness.ControlReceipt, error) {
 	session.recordCall("control:" + string(request.Kind))
+	if session.onControl != nil {
+		session.onControl()
+	}
 	return harness.ControlReceipt{CommandID: request.CommandID, Kind: request.Kind, Outcome: harness.ControlApplied, Capability: harness.CapabilityCancel}, nil
 }
 
