@@ -10,13 +10,47 @@ defmodule SymmetryControl.GoalsReadModelTest do
       Process.get(:goals_read_model_attention_rows, [])
     end
 
+    def all(%Ecto.Query{from: %{source: {_source, SymmetryControl.Goals.GoalEvent}}}) do
+      Process.get(:goals_read_model_event_rows, [])
+    end
+
     def all(_query), do: []
+
+    def get(SymmetryControl.Goals.Goal, goal_id) do
+      Process.get(:goals_read_model_event_goal, %{id: goal_id})
+    end
 
     def preload(goal, associations) do
       Enum.reduce(associations, goal, fn association, goal ->
         if is_list(Map.get(goal, association)), do: goal, else: Map.put(goal, association, [])
       end)
     end
+  end
+
+  test "projects allow-listed Goal event fields without exposing unknown fields" do
+    Process.put(:goals_read_model_event_goal, %{id: "goal-events"})
+
+    Process.put(:goals_read_model_event_rows, [
+      %{
+        id: "event-1",
+        goal_id: "goal-events",
+        sequence: 1,
+        kind: "task_admitted",
+        payload: %{
+          "purpose" => "plan",
+          "untrusted_details" => "must not be exposed"
+        },
+        response: %{
+          "debug_trace" => "must not be exposed"
+        }
+      }
+    ])
+
+    assert {:ok, %{entries: [event], next_after: nil}} =
+             ReadModel.events("goal-events", repo: CursorRepo)
+
+    assert event.payload == %{purpose: "plan"}
+    assert event.response == %{}
   end
 
   test "projects lifecycle separately from execution and accepted outcome receipts" do

@@ -1379,11 +1379,23 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
 
   defp capabilities_match?(available, required) when is_map(available) and is_map(required) do
     Enum.all?(required, fn {key, value} ->
-      Map.get(available, to_string(key), Map.get(available, key)) == value
+      case Map.fetch(available, to_string(key)) do
+        {:ok, available_value} ->
+          capabilities_match?(available_value, value)
+
+        :error ->
+          case Map.fetch(available, key) do
+            {:ok, available_value} -> capabilities_match?(available_value, value)
+            :error -> false
+          end
+      end
     end)
   end
 
-  defp capabilities_match?(_available, _required), do: false
+  defp capabilities_match?(available, required) when is_map(available) or is_map(required),
+    do: false
+
+  defp capabilities_match?(available, required), do: available == required
 
   defp validate_bound_resource!(context) do
     provider_resource_ids =
@@ -2182,6 +2194,10 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
 
   defp provider_failure({:provider_action_failure, code, outcome})
        when is_atom(code) and outcome in [:definite, :ambiguous],
+       do: {code, outcome}
+
+  defp provider_failure({:provider_action_failure, code, outcome, message})
+       when is_atom(code) and outcome in [:definite, :ambiguous] and is_binary(message),
        do: {code, outcome}
 
   defp provider_failure({:http, status, _body}) when status in 400..499,

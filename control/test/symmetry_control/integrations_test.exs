@@ -55,8 +55,12 @@ defmodule SymmetryControl.Integrations.CredentialLeakProviderStub do
     do: ProviderStub.sync_ci(connection, resource, work_item, auth)
 
   @impl true
-  def execute(connection, resource, work_item, operation, input, auth),
-    do: ProviderStub.execute(connection, resource, work_item, operation, input, auth)
+  def execute(connection, resource, work_item, operation, input, auth) do
+    case Process.get({__MODULE__, :execute}) do
+      nil -> ProviderStub.execute(connection, resource, work_item, operation, input, auth)
+      result -> result
+    end
+  end
 end
 
 defmodule SymmetryControl.IntegrationsTest do
@@ -1369,6 +1373,53 @@ defmodule SymmetryControl.IntegrationsTest do
     assert archived_item.external_ci_status == nil
     assert archived_item.external_ci_updated_at == nil
     assert archived_item.external_ci_data == %{}
+  end
+
+  test "unprojected provider actions preserve sanitized failures when projected" do
+    use_credential_leak_provider()
+    project = project_fixture()
+    connection = connection_fixture("github", "gh_cli")
+
+    assert {:ok, repository} =
+             Workspaces.create_resource(project.id, %{
+               connection_id: connection.id,
+               kind: "repository",
+               name: "Unprojected action failure",
+               external_ref: "acme/symmetry"
+             })
+
+    assert {:ok, item} =
+             Workspaces.create_work_item(project.id, %{
+               title: "Keep sanitized provider failure",
+               repository_resource_id: repository.id,
+               pull_request_url: "https://github.com/acme/symmetry/pull/42"
+             })
+
+    for {provider_result, message} <- [
+          {{:ok, %{}}, "Provider response is invalid"},
+          {{:error, {:transport, :forced_failure}}, "Provider transport failed"}
+        ] do
+      CredentialLeakProviderStub.respond_with(:execute, provider_result)
+
+      assert {:error,
+              failure = {:provider_action_failure, :provider_failure, :ambiguous, ^message}} =
+               Integrations.execute_unprojected_provider_action(
+                 connection,
+                 repository,
+                 item,
+                 "change.upsert",
+                 %{}
+               )
+
+      assert :ok =
+               Integrations.project_provider_action_failure(
+                 Repo.get!(SymmetryControl.Workspaces.ProjectResource, repository.id),
+                 failure
+               )
+
+      assert Repo.get!(SymmetryControl.Workspaces.ProjectResource, repository.id).status_message ==
+               message
+    end
   end
 
   defp use_credential_leak_provider do

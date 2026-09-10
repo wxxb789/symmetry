@@ -7096,7 +7096,7 @@ defmodule SymmetryControl.Goals do
         )
         SELECT EXISTS (SELECT 1 FROM reachable WHERE id = $3::uuid)
         """,
-        [depends_on_id, goal_id, work_item_id]
+        Enum.map([depends_on_id, goal_id, work_item_id], &Ecto.UUID.dump!/1)
       )
 
     match?(%{rows: [[true]]}, result)
@@ -7222,7 +7222,7 @@ defmodule SymmetryControl.Goals do
   end
 
   defp receipt!(goal, event, response) do
-    case decode_receipt_snapshot(response) do
+    case decode_receipt_snapshot(event.response) do
       {:ok, receipt} -> receipt
       :error -> current_receipt(goal, event, response)
     end

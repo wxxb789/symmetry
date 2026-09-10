@@ -2818,6 +2818,10 @@ defmodule SymmetryControl.Goals.ReadModel do
   defp event_key("proposed_next_action_status"), do: :proposed_next_action_status
   defp event_key("subject_hash"), do: :subject_hash
   defp event_key("evidence_refs"), do: :evidence_refs
+  defp event_key("disposition"), do: :disposition
+  defp event_key("purpose"), do: :purpose
+  defp event_key("source_identity"), do: :source_identity
+  defp event_key("candidate_identity"), do: :candidate_identity
   defp event_key("deferred_identity"), do: :deferred_identity
   defp event_key("admission_key"), do: :admission_key
 

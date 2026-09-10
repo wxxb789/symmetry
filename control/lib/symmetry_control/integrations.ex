@@ -282,7 +282,8 @@ defmodule SymmetryControl.Integrations do
   def execute_unprojected_provider_action(_, _, _, _, _), do: {:error, :invalid_request}
 
   defp unprojected_provider_action_failure(reason) do
-    {:provider_action_failure, provider_action_error(reason), mutation_failure_outcome(reason)}
+    {code, message} = failure(reason)
+    {:provider_action_failure, code, mutation_failure_outcome(reason), message}
   end
 
   defp execute_unprojected_provider_delivery(
@@ -405,6 +406,18 @@ defmodule SymmetryControl.Integrations do
   @doc false
   def unprojected_resource_sync_result(%ProjectResource{} = resource, %{provider_result: result}) do
     accepted_sync_result(resource, false, result)
+  end
+
+  @doc false
+  def project_provider_action_failure(
+        %ProjectResource{} = resource,
+        {:provider_action_failure, code, outcome, message}
+      )
+      when is_atom(code) and outcome in [:definite, :ambiguous] and is_binary(message) do
+    case record_resource_failure(resource, code, message) do
+      {:error, _code, _resource} -> :ok
+      {:error, _reason} -> :error
+    end
   end
 
   @doc false
@@ -656,40 +669,53 @@ defmodule SymmetryControl.Integrations do
     with {:ok, resource_attrs} <- provider_resource_attrs(result, resource),
          {:ok, work_items} <- provider_work_items(result),
          {:ok, prepared_deliveries} <- prepare_deliveries(deliveries) do
-      Repo.transaction(
-        fn ->
-          synced_at = now()
+      case Repo.transaction(
+             fn ->
+               synced_at = now()
 
-          project =
-            Repo.one(
-              from project in Project,
-                where: project.id == ^resource.project_id,
-                lock: "FOR UPDATE"
-            )
-
-          with :ok <- require_active_project(project),
-               {:ok, synced_resource} <-
-                 resource
-                 |> ProjectResource.sync_changeset(
-                   Map.merge(resource_attrs, %{
-                     provider: connection.provider,
-                     status: "healthy",
-                     sync_status: "synced",
-                     status_message: nil,
-                     last_checked_at: synced_at,
-                     last_synced_at: synced_at
-                   })
+               project =
+                 Repo.one(
+                   from project in Project,
+                     where: project.id == ^resource.project_id,
+                     lock: "FOR UPDATE"
                  )
-                 |> update_with_stale_error(),
-               :ok <- upsert_work_items(synced_resource, connection, work_items),
-               :ok <- persist_deliveries(prepared_deliveries) do
-            synced_resource
-          else
-            {:error, reason} -> Repo.rollback(reason)
-          end
-        end,
-        mode: :savepoint
-      )
+
+               with :ok <- require_active_project(project) do
+                 case resource
+                      |> ProjectResource.sync_changeset(
+                        Map.merge(resource_attrs, %{
+                          provider: connection.provider,
+                          status: "healthy",
+                          sync_status: "synced",
+                          status_message: nil,
+                          last_checked_at: synced_at,
+                          last_synced_at: synced_at
+                        })
+                      )
+                      |> update_with_stale_error() do
+                   {:ok, synced_resource} ->
+                     with :ok <- upsert_work_items(synced_resource, connection, work_items),
+                          :ok <- persist_deliveries(prepared_deliveries) do
+                       synced_resource
+                     else
+                       {:error, reason} -> Repo.rollback(reason)
+                     end
+
+                   {:error, :stale} ->
+                     :stale
+
+                   {:error, reason} ->
+                     Repo.rollback(reason)
+                 end
+               else
+                 {:error, reason} -> Repo.rollback(reason)
+               end
+             end,
+             mode: :savepoint
+           ) do
+        {:ok, :stale} -> {:error, :stale}
+        result -> result
+      end
     end
   end
 
@@ -763,61 +789,67 @@ defmodule SymmetryControl.Integrations do
   end
 
   defp persist_provider_action(connection, resource, work_item, attrs) do
-    Repo.transaction(
-      fn ->
-        project =
-          Repo.one(
-            from project in Project,
-              where: project.id == ^work_item.project_id,
-              lock: "FOR UPDATE"
-          )
+    case Repo.transaction(
+           fn ->
+             project =
+               Repo.one(
+                 from project in Project,
+                   where: project.id == ^work_item.project_id,
+                   lock: "FOR UPDATE"
+               )
 
-        current_resource =
-          Repo.one(
-            from current in ProjectResource,
-              where: current.id == ^resource.id,
-              lock: "FOR UPDATE"
-          )
+             current_resource =
+               Repo.one(
+                 from current in ProjectResource,
+                   where: current.id == ^resource.id,
+                   lock: "FOR UPDATE"
+               )
 
-        current_connection =
-          Repo.one(
-            from current in Connection,
-              where: current.id == ^connection.id,
-              lock: "FOR UPDATE"
-          )
+             current_connection =
+               Repo.one(
+                 from current in Connection,
+                   where: current.id == ^connection.id,
+                   lock: "FOR UPDATE"
+               )
 
-        current_work_item =
-          Repo.one(
-            from current in WorkItem,
-              where: current.id == ^work_item.id,
-              lock: "FOR UPDATE"
-          )
+             current_work_item =
+               Repo.one(
+                 from current in WorkItem,
+                   where: current.id == ^work_item.id,
+                   lock: "FOR UPDATE"
+               )
 
-        with :ok <- require_active_project(project),
-             true <- match?(%ProjectResource{}, current_resource) || {:error, :stale},
-             true <- match?(%Connection{}, current_connection) || {:error, :stale},
-             true <- match?(%WorkItem{}, current_work_item) || {:error, :stale},
-             :ok <- matches_version(current_work_item, work_item.lock_version),
-             true <-
-               current_resource.project_id == current_work_item.project_id || {:error, :stale},
-             true <- current_resource.connection_id == current_connection.id || {:error, :stale},
-             true <- same_resource_identity?(current_resource, resource) || {:error, :stale},
-             true <- same_connection_identity?(current_connection, connection) || {:error, :stale},
-             true <-
-               current_work_item.repository_resource_id == current_resource.id ||
-                 {:error, :stale},
-             {:ok, persisted} <-
-               current_work_item
-               |> WorkItem.delivery_changeset(attrs)
-               |> update_with_stale_error() do
-          persisted
-        else
-          {:error, reason} -> Repo.rollback(reason)
-        end
-      end,
-      mode: :savepoint
-    )
-    |> unwrap_transaction()
+             with :ok <- require_active_project(project),
+                  true <- match?(%ProjectResource{}, current_resource) || {:error, :stale},
+                  true <- match?(%Connection{}, current_connection) || {:error, :stale},
+                  true <- match?(%WorkItem{}, current_work_item) || {:error, :stale},
+                  :ok <- matches_version(current_work_item, work_item.lock_version),
+                  true <-
+                    current_resource.project_id == current_work_item.project_id ||
+                      {:error, :stale},
+                  true <-
+                    current_resource.connection_id == current_connection.id || {:error, :stale},
+                  true <- same_resource_identity?(current_resource, resource) || {:error, :stale},
+                  true <-
+                    same_connection_identity?(current_connection, connection) || {:error, :stale},
+                  true <-
+                    current_work_item.repository_resource_id == current_resource.id ||
+                      {:error, :stale},
+                  {:ok, persisted} <-
+                    current_work_item
+                    |> WorkItem.delivery_changeset(attrs)
+                    |> update_with_stale_error() do
+               persisted
+             else
+               {:error, :stale} -> :stale
+               {:error, reason} -> Repo.rollback(reason)
+             end
+           end,
+           mode: :savepoint
+         ) do
+      {:ok, :stale} -> {:error, :stale}
+      result -> unwrap_transaction(result)
+    end
   end
 
   defp same_resource_identity?(current, snapshot) do
@@ -1408,7 +1440,11 @@ defmodule SymmetryControl.Integrations do
 
   defp record_resource_failure(%ProjectResource{} = resource_snapshot, reason) do
     {code, message} = failure(reason)
+    record_resource_failure(resource_snapshot, code, message)
+  end
 
+  defp record_resource_failure(%ProjectResource{} = resource_snapshot, code, message)
+       when is_atom(code) and is_binary(message) do
     case Repo.transaction(
            fn ->
              project =
@@ -1425,7 +1461,7 @@ defmodule SymmetryControl.Integrations do
                      resource.id == ^resource_snapshot.id and
                        resource.project_id == ^resource_snapshot.project_id,
                    lock: "FOR UPDATE"
-               ) || Repo.rollback(:stale)
+               )
 
              with :ok <- require_active_project(project),
                   :ok <- matches_version(resource, resource_snapshot.lock_version),
@@ -1440,11 +1476,13 @@ defmodule SymmetryControl.Integrations do
                     |> update_with_stale_error() do
                degraded
              else
+               {:error, :stale} -> :stale
                {:error, update_reason} -> Repo.rollback(update_reason)
              end
            end,
            mode: :savepoint
          ) do
+      {:ok, :stale} -> {:error, :stale}
       {:ok, degraded} -> {:error, code, degraded}
       {:error, update_reason} -> {:error, update_reason}
     end
