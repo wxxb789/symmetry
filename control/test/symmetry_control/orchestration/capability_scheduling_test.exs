@@ -261,7 +261,7 @@ defmodule SymmetryControl.Orchestration.CapabilitySchedulingTest do
     %{machine: compatible_machine} = enroll_machine("compatible-machine")
 
     _incompatible =
-      register_runtime(incompatible_machine, "incompatible", %{}, @now)
+      register_runtime(incompatible_machine, "incompatible", %{}, @now, handoff?: false)
 
     assert {:ok, task, :created} =
              Orchestration.submit_task(
@@ -277,7 +277,8 @@ defmodule SymmetryControl.Orchestration.CapabilitySchedulingTest do
         compatible_machine,
         "compatible",
         %{"structured_input" => true, "provider_access" => true, "shell" => true},
-        DateTime.add(@now, 1, :microsecond)
+        DateTime.add(@now, 1, :microsecond),
+        handoff?: true
       )
 
     assert {:ok, run} = Orchestration.assign_one(now: @now)
@@ -462,6 +463,8 @@ defmodule SymmetryControl.Orchestration.CapabilitySchedulingTest do
   end
 
   defp register_runtime(machine, runtime_key, capabilities, now, opts \\ []) do
+    handoff? = Keyword.get(opts, :handoff?, false)
+
     assert {:ok, [runtime]} =
              Orchestration.register_runtimes(
                machine.id,
@@ -473,7 +476,11 @@ defmodule SymmetryControl.Orchestration.CapabilitySchedulingTest do
                    capacity: 1,
                    agent_profile: Keyword.get(opts, :agent_profile, "codex"),
                    workspace: Keyword.get(opts, :workspace, "primary"),
-                   capabilities: capabilities,
+                   harness_kind: "codex",
+                   harness_version: "0.153.4",
+                   adapter_version: "symmetry-codex-1",
+                   adapter_protocol_version: 1,
+                   capabilities: runtime_capabilities(capabilities, handoff?),
                    heartbeat_interval_ms: 60_000
                  }
                ],
@@ -481,6 +488,32 @@ defmodule SymmetryControl.Orchestration.CapabilitySchedulingTest do
              )
 
     runtime
+  end
+
+  defp runtime_capabilities(capabilities, handoff?) do
+    interactive = Map.get(capabilities, "interactive", Map.get(capabilities, "shell", false))
+
+    capabilities
+    |> Map.delete("shell")
+    |> Map.put("interactive", interactive)
+    |> Map.put("adapter", %{
+      "kind" => "codex",
+      "native_version" => "0.153.4",
+      "implementation_version" => "symmetry-codex-1",
+      "protocol_version" => 1,
+      "operations" => %{
+        "start" => true,
+        "events" => true,
+        "cancel" => true,
+        "resume" => false,
+        "handoff" => handoff?,
+        "guidance" => "next_turn",
+        "pause" => "unsupported",
+        "approval_response" => false,
+        "usage" => "reported",
+        "hard_cost_limit" => false
+      }
+    })
   end
 
   defp task_attrs(overrides) do
