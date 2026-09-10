@@ -26,36 +26,36 @@ importers:
 packages:
 
   '@apidevtools/json-schema-ref-parser@11.9.3':
-    resolution: {integrity: sha1-DgyQYfxBzwNzfUmaTmqCmf3Sv6c=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/@apidevtools/json-schema-ref-parser/-/json-schema-ref-parser-11.9.3.tgz}
+    resolution: {integrity: sha1-DgyQYfxBzwNzfUmaTmqCmf3Sv6c=, tarball: https://registry.npmjs.org/@apidevtools/json-schema-ref-parser/-/json-schema-ref-parser-11.9.3.tgz}
     engines: {node: '>= 16'}
 
   '@glideapps/ts-necessities@2.2.3':
-    resolution: {integrity: sha1-YuJbOhrOi4w/R+VeZtEBoKhU6yM=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/@glideapps/ts-necessities/-/ts-necessities-2.2.3.tgz}
+    resolution: {integrity: sha1-YuJbOhrOi4w/R+VeZtEBoKhU6yM=, tarball: https://registry.npmjs.org/@glideapps/ts-necessities/-/ts-necessities-2.2.3.tgz}
 
   '@jsdevtools/ono@7.1.3':
-    resolution: {integrity: sha1-nfA7vXxpalxYiFw0qgbaQchUN5Y=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/@jsdevtools/ono/-/ono-7.1.3.tgz}
+    resolution: {integrity: sha1-nfA7vXxpalxYiFw0qgbaQchUN5Y=, tarball: https://registry.npmjs.org/@jsdevtools/ono/-/ono-7.1.3.tgz}
 
   '@types/json-schema@7.0.15':
-    resolution: {integrity: sha1-WWoXRyM2lNUPatinhp/Lb1bPWEE=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/@types/json-schema/-/json-schema-7.0.15.tgz}
+    resolution: {integrity: sha1-WWoXRyM2lNUPatinhp/Lb1bPWEE=, tarball: https://registry.npmjs.org/@types/json-schema/-/json-schema-7.0.15.tgz}
 
   '@types/lodash@4.17.25':
-    resolution: {integrity: sha1-aXZax7zdsOsHKWHPKSUkqPWzwsA=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/@types/lodash/-/lodash-4.17.25.tgz}
+    resolution: {integrity: sha1-aXZax7zdsOsHKWHPKSUkqPWzwsA=, tarball: https://registry.npmjs.org/@types/lodash/-/lodash-4.17.25.tgz}
 
   '@types/node@26.4.1':
-    resolution: {integrity: sha1-PY3IBRWJSVhEjuJmz11rw+UgW9U=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/@types/node/-/node-26.4.1.tgz}
+    resolution: {integrity: sha1-PY3IBRWJSVhEjuJmz11rw+UgW9U=, tarball: https://registry.npmjs.org/@types/node/-/node-26.4.1.tgz}
 
   '@types/readable-stream@4.0.10':
-    resolution: {integrity: sha1-AJu4DVIRYZzcy+CkwHWuGO9S6rE=, tarball: https://ms-feed-12.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/@types/readable-stream/-/readable-stream-4.0.10.tgz}
+    resolution: {integrity: sha1-AJu4DVIRYZzcy+CkwHWuGO9S6rE=, tarball: https://registry.npmjs.org/@types/readable-stream/-/readable-stream-4.0.10.tgz}
 
   '@types/urijs@1.19.26':
-    resolution: {integrity: sha1-UA/JkS4LoB1jVICXC9yboPRde8Y=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/@types/urijs/-/urijs-1.19.26.tgz}
+    resolution: {integrity: sha1-UA/JkS4LoB1jVICXC9yboPRde8Y=, tarball: https://registry.npmjs.org/@types/urijs/-/urijs-1.19.26.tgz}
 
   abort-controller@3.0.0:
-    resolution: {integrity: sha1-6vVNU7YrrkE46AnKIlyEOabvs5I=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/abort-controller/-/abort-controller-3.0.0.tgz}
+    resolution: {integrity: sha1-6vVNU7YrrkE46AnKIlyEOabvs5I=, tarball: https://registry.npmjs.org/abort-controller/-/abort-controller-3.0.0.tgz}
     engines: {node: '>=6.5'}
 
   ajv-formats@3.0.1:
-    resolution: {integrity: sha1-PV3HYryhdnnDwup+kK1rdTIwlXg=, tarball: https://ms-feed-12.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/ajv-formats/-/ajv-formats-3.0.1.tgz}
+    resolution: {integrity: sha1-PV3HYryhdnnDwup+kK1rdTIwlXg=, tarball: https://registry.npmjs.org/ajv-formats/-/ajv-formats-3.0.1.tgz}
     peerDependencies:
       ajv: ^8.0.0
     peerDependenciesMeta:
@@ -63,39 +63,39 @@ packages:
         optional: true
 
   ajv@8.20.0:
-    resolution: {integrity: sha1-MEs2Nq3Yi6fZNnYN1Q7OAG3qlfk=, tarball: https://ms-feed-12.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/ajv/-/ajv-8.20.0.tgz}
+    resolution: {integrity: sha1-MEs2Nq3Yi6fZNnYN1Q7OAG3qlfk=, tarball: https://registry.npmjs.org/ajv/-/ajv-8.20.0.tgz}
 
   argparse@2.0.1:
-    resolution: {integrity: sha1-JG9Q88p4oyQPbJl+ipvR6sSeSzg=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/argparse/-/argparse-2.0.1.tgz}
+    resolution: {integrity: sha1-JG9Q88p4oyQPbJl+ipvR6sSeSzg=, tarball: https://registry.npmjs.org/argparse/-/argparse-2.0.1.tgz}
 
   base64-js@1.5.1:
-    resolution: {integrity: sha1-GxtEAWClv3rUC2UPCVljSBkDkwo=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/base64-js/-/base64-js-1.5.1.tgz}
+    resolution: {integrity: sha1-GxtEAWClv3rUC2UPCVljSBkDkwo=, tarball: https://registry.npmjs.org/base64-js/-/base64-js-1.5.1.tgz}
 
   browser-or-node@3.0.0:
-    resolution: {integrity: sha1-KxEzVXCyiIfgv1zYV/LoBixq4pM=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/browser-or-node/-/browser-or-node-3.0.0.tgz}
+    resolution: {integrity: sha1-KxEzVXCyiIfgv1zYV/LoBixq4pM=, tarball: https://registry.npmjs.org/browser-or-node/-/browser-or-node-3.0.0.tgz}
 
   buffer@6.0.3:
-    resolution: {integrity: sha1-Ks5XhFnMj74qcKqo9S7mO2p0xsY=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/buffer/-/buffer-6.0.3.tgz}
+    resolution: {integrity: sha1-Ks5XhFnMj74qcKqo9S7mO2p0xsY=, tarball: https://registry.npmjs.org/buffer/-/buffer-6.0.3.tgz}
 
   collection-utils@1.0.1:
-    resolution: {integrity: sha1-MdFDNkiGdPJ678CnxezKz233gEQ=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/collection-utils/-/collection-utils-1.0.1.tgz}
+    resolution: {integrity: sha1-MdFDNkiGdPJ678CnxezKz233gEQ=, tarball: https://registry.npmjs.org/collection-utils/-/collection-utils-1.0.1.tgz}
 
   event-target-shim@5.0.1:
-    resolution: {integrity: sha1-XU0+vflYPWOlMzzi3rdICrKwV4k=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/event-target-shim/-/event-target-shim-5.0.1.tgz}
+    resolution: {integrity: sha1-XU0+vflYPWOlMzzi3rdICrKwV4k=, tarball: https://registry.npmjs.org/event-target-shim/-/event-target-shim-5.0.1.tgz}
     engines: {node: '>=6'}
 
   events@3.3.0:
-    resolution: {integrity: sha1-Mala0Kkk4tLEGagTrrLE6HjqdAA=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/events/-/events-3.3.0.tgz}
+    resolution: {integrity: sha1-Mala0Kkk4tLEGagTrrLE6HjqdAA=, tarball: https://registry.npmjs.org/events/-/events-3.3.0.tgz}
     engines: {node: '>=0.8.x'}
 
   fast-deep-equal@3.1.3:
-    resolution: {integrity: sha1-On1WtVnWy8PrUSMlJE5hmmXGxSU=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/fast-deep-equal/-/fast-deep-equal-3.1.3.tgz}
+    resolution: {integrity: sha1-On1WtVnWy8PrUSMlJE5hmmXGxSU=, tarball: https://registry.npmjs.org/fast-deep-equal/-/fast-deep-equal-3.1.3.tgz}
 
   fast-uri@3.1.6:
-    resolution: {integrity: sha1-v90wjvdj+DX+0Fnzxskl9wjjPjo=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/fast-uri/-/fast-uri-3.1.6.tgz}
+    resolution: {integrity: sha1-v90wjvdj+DX+0Fnzxskl9wjjPjo=, tarball: https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.6.tgz}
 
   fdir@6.5.0:
-    resolution: {integrity: sha1-7Sq5Z6MxreYvGNB32uGSaE1Q01A=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/fdir/-/fdir-6.5.0.tgz}
+    resolution: {integrity: sha1-7Sq5Z6MxreYvGNB32uGSaE1Q01A=, tarball: https://registry.npmjs.org/fdir/-/fdir-6.5.0.tgz}
     engines: {node: '>=12.0.0'}
     peerDependencies:
       picomatch: ^3 || ^4
@@ -104,98 +104,98 @@ packages:
         optional: true
 
   ieee754@1.2.1:
-    resolution: {integrity: sha1-jrehCmP/8l0VpXsAFYbRd9Gw01I=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/ieee754/-/ieee754-1.2.1.tgz}
+    resolution: {integrity: sha1-jrehCmP/8l0VpXsAFYbRd9Gw01I=, tarball: https://registry.npmjs.org/ieee754/-/ieee754-1.2.1.tgz}
 
   is-url@1.2.4:
-    resolution: {integrity: sha1-BKTfRtKMTP89c9Af8Gq+sxihqlI=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/is-url/-/is-url-1.2.4.tgz}
+    resolution: {integrity: sha1-BKTfRtKMTP89c9Af8Gq+sxihqlI=, tarball: https://registry.npmjs.org/is-url/-/is-url-1.2.4.tgz}
 
   js-yaml@4.3.2:
-    resolution: {integrity: sha1-jkT7FKJkPFlya7FXh7XxUSyz0/s=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/js-yaml/-/js-yaml-4.3.2.tgz}
+    resolution: {integrity: sha1-jkT7FKJkPFlya7FXh7XxUSyz0/s=, tarball: https://registry.npmjs.org/js-yaml/-/js-yaml-4.3.2.tgz}
     hasBin: true
 
   js-yaml@5.4.1:
-    resolution: {integrity: sha1-RinZHUtFUfMAQ18OQSeJlxD4Fvs=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/js-yaml/-/js-yaml-5.4.1.tgz}
+    resolution: {integrity: sha1-RinZHUtFUfMAQ18OQSeJlxD4Fvs=, tarball: https://registry.npmjs.org/js-yaml/-/js-yaml-5.4.1.tgz}
     hasBin: true
 
   json-schema-to-typescript@16.0.0:
-    resolution: {integrity: sha1-upeUFE43OWSRULl+ZhnyjWXpt1c=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/json-schema-to-typescript/-/json-schema-to-typescript-16.0.0.tgz}
+    resolution: {integrity: sha1-upeUFE43OWSRULl+ZhnyjWXpt1c=, tarball: https://registry.npmjs.org/json-schema-to-typescript/-/json-schema-to-typescript-16.0.0.tgz}
     engines: {node: '>=16.0.0'}
     hasBin: true
 
   json-schema-traverse@1.0.0:
-    resolution: {integrity: sha1-rnvLNlard6c7pcSb9lTzjmtoYOI=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/json-schema-traverse/-/json-schema-traverse-1.0.0.tgz}
+    resolution: {integrity: sha1-rnvLNlard6c7pcSb9lTzjmtoYOI=, tarball: https://registry.npmjs.org/json-schema-traverse/-/json-schema-traverse-1.0.0.tgz}
 
   lodash@4.18.1:
-    resolution: {integrity: sha1-/ytmwfYybVlRPeJAe/iBQ5gSdxw=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/lodash/-/lodash-4.18.1.tgz}
+    resolution: {integrity: sha1-/ytmwfYybVlRPeJAe/iBQ5gSdxw=, tarball: https://registry.npmjs.org/lodash/-/lodash-4.18.1.tgz}
 
   minimist@1.2.8:
-    resolution: {integrity: sha1-waRk52kzAuCCoHXO4MBXdBrEdyw=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/minimist/-/minimist-1.2.8.tgz}
+    resolution: {integrity: sha1-waRk52kzAuCCoHXO4MBXdBrEdyw=, tarball: https://registry.npmjs.org/minimist/-/minimist-1.2.8.tgz}
 
   pako@0.2.9:
-    resolution: {integrity: sha1-8/dSL073gjSNqBYbrZ7P1Rv4OnU=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/pako/-/pako-0.2.9.tgz}
+    resolution: {integrity: sha1-8/dSL073gjSNqBYbrZ7P1Rv4OnU=, tarball: https://registry.npmjs.org/pako/-/pako-0.2.9.tgz}
 
   picomatch@4.0.7:
-    resolution: {integrity: sha1-YxM2ADTMs2s9xh7L3/eBIfkP4h8=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/picomatch/-/picomatch-4.0.7.tgz}
+    resolution: {integrity: sha1-YxM2ADTMs2s9xh7L3/eBIfkP4h8=, tarball: https://registry.npmjs.org/picomatch/-/picomatch-4.0.7.tgz}
     engines: {node: '>=12'}
 
   pluralize@8.0.0:
-    resolution: {integrity: sha1-Gm+hajjRKhkB4DIPoBcFHFOc47E=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/pluralize/-/pluralize-8.0.0.tgz}
+    resolution: {integrity: sha1-Gm+hajjRKhkB4DIPoBcFHFOc47E=, tarball: https://registry.npmjs.org/pluralize/-/pluralize-8.0.0.tgz}
     engines: {node: '>=4'}
 
   prettier@3.9.6:
-    resolution: {integrity: sha1-s+pRRlFdQPxT8YqmP3Tfqx4Q2/Y=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/prettier/-/prettier-3.9.6.tgz}
+    resolution: {integrity: sha1-s+pRRlFdQPxT8YqmP3Tfqx4Q2/Y=, tarball: https://registry.npmjs.org/prettier/-/prettier-3.9.6.tgz}
     engines: {node: '>=14'}
     hasBin: true
 
   process@0.11.10:
-    resolution: {integrity: sha1-czIwDoQBYb2j5podHZGn1LwW8YI=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/process/-/process-0.11.10.tgz}
+    resolution: {integrity: sha1-czIwDoQBYb2j5podHZGn1LwW8YI=, tarball: https://registry.npmjs.org/process/-/process-0.11.10.tgz}
     engines: {node: '>= 0.6.0'}
 
   quicktype-core@26.0.0:
-    resolution: {integrity: sha1-SNxICmdSfz7tjljheyeBIY3NDW0=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/quicktype-core/-/quicktype-core-26.0.0.tgz}
+    resolution: {integrity: sha1-SNxICmdSfz7tjljheyeBIY3NDW0=, tarball: https://registry.npmjs.org/quicktype-core/-/quicktype-core-26.0.0.tgz}
     engines: {node: '>=20.0.0'}
 
   readable-stream@4.5.2:
-    resolution: {integrity: sha1-nn/ExFCZuu7ZNL/265e6bPJyngk=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/readable-stream/-/readable-stream-4.5.2.tgz}
+    resolution: {integrity: sha1-nn/ExFCZuu7ZNL/265e6bPJyngk=, tarball: https://registry.npmjs.org/readable-stream/-/readable-stream-4.5.2.tgz}
     engines: {node: ^12.22.0 || ^14.17.0 || >=16.0.0}
 
   require-from-string@2.0.2:
-    resolution: {integrity: sha1-iaf92TgmEmcxjq/hT5wy5ZjDaQk=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/require-from-string/-/require-from-string-2.0.2.tgz}
+    resolution: {integrity: sha1-iaf92TgmEmcxjq/hT5wy5ZjDaQk=, tarball: https://registry.npmjs.org/require-from-string/-/require-from-string-2.0.2.tgz}
     engines: {node: '>=0.10.0'}
 
   safe-buffer@5.1.2:
-    resolution: {integrity: sha1-mR7GnSluAxN0fVm9/St0XDX4go0=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/safe-buffer/-/safe-buffer-5.1.2.tgz}
+    resolution: {integrity: sha1-mR7GnSluAxN0fVm9/St0XDX4go0=, tarball: https://registry.npmjs.org/safe-buffer/-/safe-buffer-5.1.2.tgz}
 
   safe-buffer@5.2.1:
-    resolution: {integrity: sha1-Hq+fqb2x/dTsdfWPnNtOa3gn7sY=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/safe-buffer/-/safe-buffer-5.2.1.tgz}
+    resolution: {integrity: sha1-Hq+fqb2x/dTsdfWPnNtOa3gn7sY=, tarball: https://registry.npmjs.org/safe-buffer/-/safe-buffer-5.2.1.tgz}
 
   string_decoder@1.3.0:
-    resolution: {integrity: sha1-QvEUWUpGzxqOMLCoT1bHjD7awh4=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/string_decoder/-/string_decoder-1.3.0.tgz}
+    resolution: {integrity: sha1-QvEUWUpGzxqOMLCoT1bHjD7awh4=, tarball: https://registry.npmjs.org/string_decoder/-/string_decoder-1.3.0.tgz}
 
   tiny-inflate@1.0.3:
-    resolution: {integrity: sha1-EicVSUkToYBRZqr3yTRnkz7qJsQ=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/tiny-inflate/-/tiny-inflate-1.0.3.tgz}
+    resolution: {integrity: sha1-EicVSUkToYBRZqr3yTRnkz7qJsQ=, tarball: https://registry.npmjs.org/tiny-inflate/-/tiny-inflate-1.0.3.tgz}
 
   tinyglobby@0.2.17:
-    resolution: {integrity: sha1-ViqabJ6ys7Ej05cZ+a9btE/NdjE=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/tinyglobby/-/tinyglobby-0.2.17.tgz}
+    resolution: {integrity: sha1-ViqabJ6ys7Ej05cZ+a9btE/NdjE=, tarball: https://registry.npmjs.org/tinyglobby/-/tinyglobby-0.2.17.tgz}
     engines: {node: '>=12.0.0'}
 
   undici-types@8.3.0:
-    resolution: {integrity: sha1-ROn8nzJEZIzeo15Pm7LWgelBCAk=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/undici-types/-/undici-types-8.3.0.tgz}
+    resolution: {integrity: sha1-ROn8nzJEZIzeo15Pm7LWgelBCAk=, tarball: https://registry.npmjs.org/undici-types/-/undici-types-8.3.0.tgz}
 
   unicode-properties@1.4.1:
-    resolution: {integrity: sha1-lqnP+35hmg3HNowo2ifgX8j5vl8=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/unicode-properties/-/unicode-properties-1.4.1.tgz}
+    resolution: {integrity: sha1-lqnP+35hmg3HNowo2ifgX8j5vl8=, tarball: https://registry.npmjs.org/unicode-properties/-/unicode-properties-1.4.1.tgz}
 
   unicode-trie@2.0.0:
-    resolution: {integrity: sha1-j9iEVpbi4UqLZ9ePqeDdLK1i/sg=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/unicode-trie/-/unicode-trie-2.0.0.tgz}
+    resolution: {integrity: sha1-j9iEVpbi4UqLZ9ePqeDdLK1i/sg=, tarball: https://registry.npmjs.org/unicode-trie/-/unicode-trie-2.0.0.tgz}
 
   urijs@1.19.11:
-    resolution: {integrity: sha1-IEsNa2Ba6AvqVL6jkoDNt8n5I8w=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/urijs/-/urijs-1.19.11.tgz}
+    resolution: {integrity: sha1-IEsNa2Ba6AvqVL6jkoDNt8n5I8w=, tarball: https://registry.npmjs.org/urijs/-/urijs-1.19.11.tgz}
 
   wordwrap@1.0.0:
-    resolution: {integrity: sha1-J1hIEIkUVqQXHI0CJkQa3pDLyus=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/wordwrap/-/wordwrap-1.0.0.tgz}
+    resolution: {integrity: sha1-J1hIEIkUVqQXHI0CJkQa3pDLyus=, tarball: https://registry.npmjs.org/wordwrap/-/wordwrap-1.0.0.tgz}
 
   yaml@2.9.0:
-    resolution: {integrity: sha1-eCdK/ZNZih391hMN9qVm3vy/mqQ=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/yaml/-/yaml-2.9.0.tgz}
+    resolution: {integrity: sha1-eCdK/ZNZih391hMN9qVm3vy/mqQ=, tarball: https://registry.npmjs.org/yaml/-/yaml-2.9.0.tgz}
     engines: {node: '>= 14.6'}
     hasBin: true
 
