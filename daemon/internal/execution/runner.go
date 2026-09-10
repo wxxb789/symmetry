@@ -24,7 +24,9 @@ const (
 	defaultTerminationGrace = 5 * time.Second
 )
 
-var errInputClosed = errors.New("process standard input is closed")
+// ErrInputClosed reports that the process input transport can no longer accept
+// a complete write.
+var ErrInputClosed = errors.New("process standard input is closed")
 
 // Stream identifies the source of an output event.
 type Stream string
@@ -71,6 +73,9 @@ type Invocation struct {
 	Env                    []string
 	InitialInput           []byte
 	CloseInputAfterInitial bool
+	// PersistProcess runs immediately after the OS process identity is
+	// captured, before output readers or the Process value are exposed.
+	PersistProcess func(pid int, identity string) error
 }
 
 // Runner starts coding-agent process invocations.
@@ -98,8 +103,9 @@ type Process struct {
 	sinkContext context.Context
 	cancelSink  context.CancelFunc
 
-	stdinMutex sync.Mutex
-	stdin      *os.File
+	stdinMutex       sync.Mutex
+	stdin            *os.File
+	stdinWritePermit chan struct{}
 
 	events       chan Event
 	eventMutex   sync.Mutex
@@ -218,6 +224,18 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 		_ = command.Wait()
 		return nil, fmt.Errorf("capture process creation identity: %w", err)
 	}
+	if invocation.PersistProcess != nil {
+		if persistErr := invocation.PersistProcess(command.Process.Pid, identity); persistErr != nil {
+			terminationErr := containment.Terminate(true)
+			if terminationErr != nil {
+				_ = command.Process.Kill()
+			}
+			_, _ = command.Process.Wait()
+			closeErr := containment.Close()
+			closeFiles(stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite)
+			return nil, errors.Join(fmt.Errorf("persist process identity: %w", persistErr), terminationErr, closeErr)
+		}
+	}
 
 	// These ends belong only to the child after Start. Closing them here is
 	// essential: otherwise the readers would never observe EOF.
@@ -225,25 +243,27 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 
 	sinkContext, cancelSink := context.WithCancel(context.Background())
 	process := &Process{
-		PID:             command.Process.Pid,
-		Identity:        identity,
-		command:         command,
-		sink:            sink,
-		containment:     containment,
-		sinkContext:     sinkContext,
-		cancelSink:      cancelSink,
-		stdin:           stdinWrite,
-		events:          make(chan Event, eventQueueCapacity),
-		deliveryDone:    make(chan struct{}),
-		resultDone:      make(chan struct{}),
-		commandDone:     make(chan struct{}),
-		terminationDone: make(chan struct{}),
-		outputStop:      make(chan struct{}),
+		PID:              command.Process.Pid,
+		Identity:         identity,
+		command:          command,
+		sink:             sink,
+		containment:      containment,
+		sinkContext:      sinkContext,
+		cancelSink:       cancelSink,
+		stdin:            stdinWrite,
+		stdinWritePermit: make(chan struct{}, 1),
+		events:           make(chan Event, eventQueueCapacity),
+		deliveryDone:     make(chan struct{}),
+		resultDone:       make(chan struct{}),
+		commandDone:      make(chan struct{}),
+		terminationDone:  make(chan struct{}),
+		outputStop:       make(chan struct{}),
 		result: Result{
 			PID:       command.Process.Pid,
 			StartedAt: startedAt,
 		},
 	}
+	process.stdinWritePermit <- struct{}{}
 
 	process.readers.Add(2)
 	go process.readOutput(stdoutRead, Stdout)
@@ -253,19 +273,27 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 	go process.terminateWhenContextCancels(ctx)
 
 	if len(invocation.InitialInput) > 0 {
-		if err := process.WriteInput(invocation.InitialInput); err != nil {
+		if err := process.WriteInputContext(ctx, invocation.InitialInput); err != nil {
 			terminationContext, cancel := context.WithTimeout(context.Background(), defaultTerminationGrace)
-			_ = process.Terminate(terminationContext, 0)
+			terminationErr := process.Terminate(terminationContext, 0)
 			cancel()
-			return nil, fmt.Errorf("write initial input: %w", err)
+			writeErr := fmt.Errorf("write initial input: %w", err)
+			if terminationErr != nil {
+				return process, errors.Join(writeErr, fmt.Errorf("terminate after initial input failure: %w", terminationErr))
+			}
+			return nil, writeErr
 		}
 	}
 	if invocation.CloseInputAfterInitial {
 		if err := process.CloseInput(); err != nil {
 			terminationContext, cancel := context.WithTimeout(context.Background(), defaultTerminationGrace)
-			_ = process.Terminate(terminationContext, 0)
+			terminationErr := process.Terminate(terminationContext, 0)
 			cancel()
-			return nil, fmt.Errorf("close initial input: %w", err)
+			closeErr := fmt.Errorf("close initial input: %w", err)
+			if terminationErr != nil {
+				return process, errors.Join(closeErr, fmt.Errorf("terminate after initial input close failure: %w", terminationErr))
+			}
+			return nil, closeErr
 		}
 	}
 	return process, nil
@@ -274,22 +302,59 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 // WriteInput appends human input to the agent's standard input. Concurrent
 // callers are serialized, preserving write order and avoiding interleaving.
 func (process *Process) WriteInput(input []byte) error {
+	return process.WriteInputContext(context.Background(), input)
+}
+
+// WriteInputContext appends input while allowing a caller to cancel a blocked
+// pipe write. A nil result means every byte was written. Once cancellation or
+// a write failure interrupts an attempted write, the input transport is closed
+// permanently so a later caller cannot mistake a partial request for success.
+func (process *Process) WriteInputContext(ctx context.Context, input []byte) error {
+	if ctx == nil {
+		return errors.New("input context must not be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("write process input: %w", err)
+	}
 	if len(input) == 0 {
 		return nil
 	}
 
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("write process input: %w", ctx.Err())
+	case <-process.stdinWritePermit:
+	}
+	defer func() { process.stdinWritePermit <- struct{}{} }()
+
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("write process input: %w", err)
+	}
 	process.stdinMutex.Lock()
-	defer process.stdinMutex.Unlock()
-	if process.stdin == nil {
-		return errInputClosed
+	stdin := process.stdin
+	process.stdinMutex.Unlock()
+	if stdin == nil {
+		return ErrInputClosed
 	}
 
-	for len(input) > 0 {
-		written, err := process.stdin.Write(input)
-		if err != nil {
-			return fmt.Errorf("write process input: %w", err)
-		}
-		input = input[written:]
+	cancellationDone := make(chan struct{})
+	cancelled := false
+	stopCancellation := context.AfterFunc(ctx, func() {
+		cancelled = true
+		_ = process.closeInputFile(stdin)
+		close(cancellationDone)
+	})
+
+	writeErr := writeAll(stdin, input)
+	if !stopCancellation() {
+		<-cancellationDone
+	}
+	if cancelled {
+		return fmt.Errorf("write process input cancelled; standard input is closed: %w", errors.Join(ctx.Err(), ErrInputClosed))
+	}
+	if writeErr != nil {
+		_ = process.closeInputFile(stdin)
+		return fmt.Errorf("write process input interrupted; standard input is closed: %w", errors.Join(writeErr, ErrInputClosed))
 	}
 	return nil
 }
@@ -298,14 +363,42 @@ func (process *Process) WriteInput(input []byte) error {
 // stderr output to drain. It is safe to call more than once.
 func (process *Process) CloseInput() error {
 	process.stdinMutex.Lock()
-	defer process.stdinMutex.Unlock()
-	if process.stdin == nil {
+	stdin := process.stdin
+	process.stdin = nil
+	process.stdinMutex.Unlock()
+	if stdin == nil {
 		return nil
 	}
-	err := process.stdin.Close()
-	process.stdin = nil
+	err := stdin.Close()
 	if err != nil {
 		return fmt.Errorf("close process input: %w", err)
+	}
+	return nil
+}
+
+// closeInputFile closes stdin only when it is still the process's active
+// transport. This lets a cancellation race safely with CloseInput.
+func (process *Process) closeInputFile(stdin *os.File) error {
+	process.stdinMutex.Lock()
+	if process.stdin != stdin {
+		process.stdinMutex.Unlock()
+		return nil
+	}
+	process.stdin = nil
+	process.stdinMutex.Unlock()
+	return stdin.Close()
+}
+
+func writeAll(stdin *os.File, input []byte) error {
+	for len(input) > 0 {
+		written, err := stdin.Write(input)
+		if err != nil {
+			return err
+		}
+		if written == 0 {
+			return io.ErrShortWrite
+		}
+		input = input[written:]
 	}
 	return nil
 }
@@ -481,7 +574,12 @@ func (process *Process) terminateTree(grace time.Duration) {
 	}
 
 	if err := process.containment.Terminate(true); err != nil {
-		process.recordTerminationError(errors.Join(softTerminationError, err))
+		// Containment is responsible for descendants, but it must not be the
+		// sole termination mechanism for the root process. Otherwise a failed
+		// job/task-kill leaves command.Wait blocked forever after a failed
+		// initial-input cleanup path.
+		killErr := process.command.Process.Kill()
+		process.recordTerminationError(errors.Join(softTerminationError, err, killErr))
 		return
 	}
 	<-process.resultDone

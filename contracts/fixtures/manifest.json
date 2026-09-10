@@ -1,0 +1,897 @@
+{
+  "manifest_version": 1,
+  "fixtures": [
+    {
+      "id": "goal-revision.basic",
+      "schema": "goal-revision",
+      "path": "valid/goal-revision.basic.json",
+      "valid": true,
+      "tags": ["happy-path", "strict-control-fields"]
+    },
+    {
+      "id": "context-snapshot.basic",
+      "schema": "context-snapshot",
+      "path": "valid/context-snapshot.basic.json",
+      "valid": true,
+      "tags": ["happy-path", "subject", "trusted-and-untrusted-sources", "context-self-hash", "stable-sections"]
+    },
+    {
+      "id": "context-snapshot.plan",
+      "schema": "context-snapshot",
+      "path": "valid/context-snapshot.plan.json",
+      "valid": true,
+      "tags": ["context-snapshot", "planning", "nullable", "context-self-hash"]
+    },
+    {
+      "id": "context-snapshot.plan-work-item",
+      "schema": "context-snapshot",
+      "path": "invalid/context-snapshot.plan-work-item.json",
+      "valid": false,
+      "tags": ["context-snapshot", "planning", "wrong-identity"]
+    },
+    {
+      "id": "admission.basic",
+      "schema": "admission",
+      "path": "valid/admission.basic.json",
+      "valid": true,
+      "tags": ["happy-path", "complete-subject", "nullable"]
+    },
+    {
+      "id": "admission.validate",
+      "schema": "admission",
+      "path": "valid/admission.validate.json",
+      "valid": true,
+      "tags": ["admission", "validation-task", "purpose-discriminator"]
+    },
+    {
+      "id": "admission.plan",
+      "schema": "admission",
+      "path": "valid/admission.plan.json",
+      "valid": true,
+      "tags": ["admission", "planning", "nullable", "complete-subject"]
+    },
+    {
+      "id": "admission.plan-work-item",
+      "schema": "admission",
+      "path": "invalid/admission.plan-work-item.json",
+      "valid": false,
+      "tags": ["admission", "planning", "wrong-identity"]
+    },
+    {
+      "id": "task-result.candidate",
+      "schema": "task-result",
+      "path": "valid/task-result.candidate.json",
+      "valid": true,
+      "tags": ["happy-path", "candidate-not-acceptance", "candidate-subject", "task-result-subject-hash"]
+    },
+    {
+      "id": "task-result.plan-proposed",
+      "schema": "task-result",
+      "path": "valid/task-result.plan-proposed.json",
+      "valid": true,
+      "tags": ["task-result", "plan-proposed", "plan-proposal", "candidate-subject", "task-result-subject-hash"]
+    },
+    {
+      "id": "task-result.failed",
+      "schema": "task-result",
+      "path": "valid/task-result.failed.json",
+      "valid": true,
+      "tags": ["task-result", "terminal-failure-reason"]
+    },
+    {
+      "id": "task-result.failed-null-reason",
+      "schema": "task-result",
+      "path": "invalid/task-result.failed-null-reason.json",
+      "valid": false,
+      "tags": ["task-result", "required-reason", "semantic-consistency"]
+    },
+    {
+      "id": "task-result.failed-nonterminal-reason",
+      "schema": "task-result",
+      "path": "invalid/task-result.failed-nonterminal-reason.json",
+      "valid": false,
+      "tags": ["task-result", "terminal-failure-reason", "semantic-consistency"]
+    },
+    {
+      "id": "task-result.progress-reason",
+      "schema": "task-result",
+      "path": "invalid/task-result.progress-reason.json",
+      "valid": false,
+      "tags": ["task-result", "reason-nullability", "semantic-consistency"]
+    },
+    {
+      "id": "task-result.plan-proposed-null-proposal",
+      "schema": "task-result",
+      "path": "invalid/task-result.plan-proposed-null-proposal.json",
+      "valid": false,
+      "tags": ["task-result", "plan-proposed", "missing-control-field"]
+    },
+    {
+      "id": "task-result.missing-proposal",
+      "schema": "task-result",
+      "path": "invalid/task-result.missing-proposal.json",
+      "valid": false,
+      "tags": ["task-result", "missing-control-field", "plan-proposed"]
+    },
+    {
+      "id": "task-result.candidate-proposal",
+      "schema": "task-result",
+      "path": "invalid/task-result.candidate-proposal.json",
+      "valid": false,
+      "tags": ["task-result", "plan-proposed", "semantic-consistency"]
+    },
+    {
+      "id": "task-result.automatic-baseline-blocker",
+      "schema": "task-result",
+      "path": "invalid/task-result.automatic-baseline-blocker.json",
+      "valid": false,
+      "tags": ["task-result", "kernel-derived-blocker", "unknown-enum", "authority-boundary"]
+    },
+    {
+      "id": "evidence.check",
+      "schema": "evidence",
+      "path": "valid/evidence.check.json",
+      "valid": true,
+      "tags": ["happy-path", "check-receipt"]
+    },
+    {
+      "id": "evidence.artifact",
+      "schema": "evidence",
+      "path": "valid/evidence.artifact.json",
+      "valid": true,
+      "tags": ["artifact-receipt", "complete-subject"]
+    },
+    {
+      "id": "evidence.review",
+      "schema": "evidence",
+      "path": "valid/evidence.review.json",
+      "valid": true,
+      "tags": ["review-receipt", "complete-subject"]
+    },
+    {
+      "id": "evidence.observation",
+      "schema": "evidence",
+      "path": "valid/evidence.observation.json",
+      "valid": true,
+      "tags": ["observation-receipt", "nullable", "complete-subject"]
+    },
+    {
+      "id": "decision.open",
+      "schema": "decision",
+      "path": "valid/decision.open.json",
+      "valid": true,
+      "tags": ["happy-path", "nullable", "open-decision"]
+    },
+    {
+      "id": "usage.nullable",
+      "schema": "usage",
+      "path": "valid/usage.nullable.json",
+      "valid": true,
+      "tags": ["happy-path", "nullable", "unknown-usage"]
+    },
+    {
+      "id": "usage.safe-integer-limit",
+      "schema": "usage",
+      "path": "valid/usage.safe-integer-limit.json",
+      "valid": true,
+      "tags": ["boundary", "safe-integer-limit"]
+    },
+    {
+      "id": "usage.estimated-cost",
+      "schema": "usage",
+      "path": "valid/usage.estimated-cost.json",
+      "valid": true,
+      "tags": ["happy-path", "estimated-usage", "cost-basis-consistency"]
+    },
+    {
+      "id": "usage.microusd-max-int64",
+      "schema": "usage",
+      "path": "valid/usage.microusd-max-int64.json",
+      "valid": true,
+      "tags": ["boundary", "microusd", "max-int64"]
+    },
+    {
+      "id": "usage.microusd-9200000000000000000",
+      "schema": "usage",
+      "path": "valid/usage.microusd-9200000000000000000.json",
+      "valid": true,
+      "tags": ["boundary", "microusd", "max-int64"]
+    },
+    {
+      "id": "adapter-capabilities.basic",
+      "schema": "adapter-capabilities",
+      "path": "valid/adapter-capabilities.basic.json",
+      "valid": true,
+      "tags": ["happy-path", "legacy-booleans", "versioned-adapter"]
+    },
+    {
+      "id": "admission.missing-tree-digest",
+      "schema": "admission",
+      "path": "invalid/admission.missing-tree-digest.json",
+      "valid": false,
+      "tags": ["missing-control-field", "incomplete-subject"]
+    },
+    {
+      "id": "admission.extra-control-field",
+      "schema": "admission",
+      "path": "invalid/admission.extra-control-field.json",
+      "valid": false,
+      "tags": ["extra-control-field"]
+    },
+    {
+      "id": "admission.wrong-identity",
+      "schema": "admission",
+      "path": "invalid/admission.wrong-identity.json",
+      "valid": false,
+      "tags": ["wrong-identity"]
+    },
+    {
+      "id": "admission.uppercase-uuid",
+      "schema": "admission",
+      "path": "invalid/admission.uppercase-uuid.json",
+      "valid": false,
+      "tags": ["uuid-canonical"]
+    },
+    {
+      "id": "admission.unsupported-uuid-version",
+      "schema": "admission",
+      "path": "invalid/admission.unsupported-uuid-version.json",
+      "valid": false,
+      "tags": ["uuid-version"]
+    },
+    {
+      "id": "admission.unsupported-uuid-variant",
+      "schema": "admission",
+      "path": "invalid/admission.unsupported-uuid-variant.json",
+      "valid": false,
+      "tags": ["uuid-variant"]
+    },
+    {
+      "id": "admission.version-mismatch",
+      "schema": "admission",
+      "path": "invalid/admission.version-mismatch.json",
+      "valid": false,
+      "tags": ["version-mismatch"]
+    },
+    {
+      "id": "admission.handoff-session-id",
+      "schema": "admission",
+      "path": "invalid/admission.handoff-session-id.json",
+      "valid": false,
+      "tags": ["session-mode", "handoff-session", "no-native-session-source"]
+    },
+    {
+      "id": "admission.resume-null-session-id",
+      "schema": "admission",
+      "path": "invalid/admission.resume-null-session-id.json",
+      "valid": false,
+      "tags": ["session-mode", "resume-session"]
+    },
+    {
+      "id": "adapter.unknown-enum",
+      "schema": "adapter-capabilities",
+      "path": "invalid/adapter.unknown-enum.json",
+      "valid": false,
+      "tags": ["unknown-enum", "unsupported-capability"]
+    },
+    {
+      "id": "goal-revision.safe-integer-overflow",
+      "schema": "goal-revision",
+      "path": "invalid/goal-revision.safe-integer-overflow.json",
+      "valid": false,
+      "tags": ["safe-integer-overflow"]
+    },
+    {
+      "id": "goal-revision.duplicate-predicate-id",
+      "schema": "goal-revision",
+      "path": "invalid/goal-revision.duplicate-predicate-id.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "tags": ["predicate-id-unique", "semantic-consistency"]
+    },
+    {
+      "id": "task-result.unknown-kind",
+      "schema": "task-result",
+      "path": "invalid/task-result.unknown-kind.json",
+      "valid": false,
+      "tags": ["unknown-enum", "producer-cannot-self-accept"]
+    },
+    {
+      "id": "task-result.missing-subject",
+      "schema": "task-result",
+      "path": "invalid/task-result.missing-subject.json",
+      "valid": false,
+      "tags": ["missing-control-field", "incomplete-subject", "candidate-subject"]
+    },
+    {
+      "id": "task-result.subject-hash-mismatch",
+      "schema": "task-result",
+      "path": "invalid/task-result.subject-hash-mismatch.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "tags": ["task-result-subject-hash", "semantic-consistency"]
+    },
+    {
+      "id": "usage.wrong-nullable-type",
+      "schema": "usage",
+      "path": "invalid/usage.wrong-nullable-type.json",
+      "valid": false,
+      "tags": ["nullable", "wrong-type"]
+    },
+    {
+      "id": "usage.unknown-cost-non-null",
+      "schema": "usage",
+      "path": "invalid/usage.unknown-cost-non-null.json",
+      "valid": false,
+      "tags": ["unknown-usage", "cost-basis-consistency"]
+    },
+    {
+      "id": "usage.reported-cost-null",
+      "schema": "usage",
+      "path": "invalid/usage.reported-cost-null.json",
+      "valid": false,
+      "tags": ["reported-usage", "cost-basis-consistency"]
+    },
+    {
+      "id": "usage.estimated-cost-null",
+      "schema": "usage",
+      "path": "invalid/usage.estimated-cost-null.json",
+      "valid": false,
+      "tags": ["estimated-usage", "cost-basis-consistency"]
+    },
+    {
+      "id": "usage.microusd-overflow",
+      "schema": "usage",
+      "path": "invalid/usage.microusd-overflow.json",
+      "valid": false,
+      "tags": ["boundary", "microusd", "max-int64-overflow"]
+    },
+    {
+      "id": "usage.input-tokens-fraction",
+      "schema": "usage",
+      "path": "invalid/usage.input-tokens-fraction.json",
+      "valid": false,
+      "tags": ["number-precision", "safe-integer-overflow"]
+    },
+    {
+      "id": "usage.input-tokens-unsafe-integer",
+      "schema": "usage",
+      "path": "invalid/usage.input-tokens-unsafe-integer.json",
+      "valid": false,
+      "tags": ["number-precision", "safe-integer-overflow"]
+    },
+    {
+      "id": "evidence.kind-payload-mismatch",
+      "schema": "evidence",
+      "path": "invalid/evidence.kind-payload-mismatch.json",
+      "valid": false,
+      "tags": ["discriminated-union", "wrong-identity"]
+    },
+    {
+      "id": "evidence.subject-hash-mismatch",
+      "schema": "evidence",
+      "path": "invalid/evidence.subject-hash-mismatch.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "tags": ["subject-hash-mismatch", "semantic-consistency"]
+    },
+    {
+      "id": "evidence.source-ref-mismatch",
+      "schema": "evidence",
+      "path": "invalid/evidence.source-ref-mismatch.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "tags": ["source-identity", "semantic-consistency"]
+    },
+    {
+      "id": "goal-revision.extra-field",
+      "schema": "goal-revision",
+      "path": "invalid/goal-revision.extra-field.json",
+      "valid": false,
+      "tags": ["extra-control-field"]
+    },
+    {
+      "id": "goal-revision.null-reason",
+      "schema": "goal-revision",
+      "path": "invalid/goal-revision.null-reason.json",
+      "valid": false,
+      "tags": ["required-reason"]
+    },
+    {
+      "id": "goal-revision.null-actor-ref",
+      "schema": "goal-revision",
+      "path": "invalid/goal-revision.null-actor-ref.json",
+      "valid": false,
+      "tags": ["required-actor-ref"]
+    },
+    {
+      "id": "context-snapshot.content-hash-mismatch",
+      "schema": "context-snapshot",
+      "path": "invalid/context-snapshot.content-hash-mismatch.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "tags": ["context-self-hash-mismatch", "semantic-consistency"]
+    },
+    {
+      "id": "context-snapshot.missing-sources",
+      "schema": "context-snapshot",
+      "path": "invalid/context-snapshot.missing-sources.json",
+      "valid": false,
+      "tags": ["stable-sections", "missing-control-field"]
+    },
+    {
+      "id": "context-snapshot.validation-binding-extra-field",
+      "schema": "context-snapshot",
+      "path": "invalid/context-snapshot.validation-binding-extra-field.json",
+      "valid": false,
+      "tags": ["extra-control-field", "validation-binding", "credentials-not-carried"]
+    },
+    {
+      "id": "context-snapshot.duplicate-predicate-id",
+      "schema": "context-snapshot",
+      "path": "invalid/context-snapshot.duplicate-predicate-id.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "tags": ["predicate-id-unique", "semantic-consistency"]
+    },
+    {
+      "id": "goal-create.basic",
+      "schema": "goal-create",
+      "path": "valid/goal-create.basic.json",
+      "valid": true,
+      "tags": ["goal-command", "initial-revision", "strict-control-fields"]
+    },
+    {
+      "id": "goal-create.deterministic-review",
+      "schema": "goal-create",
+      "path": "invalid/goal-create.deterministic-review.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "tags": ["goal-command", "deterministic-acceptance", "semantic-consistency"]
+    },
+    {
+      "id": "plan-proposal.basic",
+      "schema": "plan-proposal",
+      "path": "valid/plan-proposal.basic.json",
+      "valid": true,
+      "tags": ["plan-proposal", "baseline-subject", "baseline-dependency", "integration"]
+    },
+    {
+      "id": "plan-proposal.integration-omitted",
+      "schema": "plan-proposal",
+      "path": "valid/plan-proposal.integration-omitted.json",
+      "valid": true,
+      "tags": ["plan-proposal", "integration-default"]
+    },
+    {
+      "id": "goal-command.activate",
+      "schema": "goal-command",
+      "path": "valid/goal-command.activate.json",
+      "valid": true,
+      "tags": ["goal-command", "activate", "expected-version-zero"]
+    },
+    {
+      "id": "goal-command.pause",
+      "schema": "goal-command",
+      "path": "valid/goal-command.pause.json",
+      "valid": true,
+      "tags": ["goal-command", "control-reason"]
+    },
+    {
+      "id": "goal-command.resume",
+      "schema": "goal-command",
+      "path": "valid/goal-command.resume.json",
+      "valid": true,
+      "tags": ["goal-command", "control-reason"]
+    },
+    {
+      "id": "goal-command.cancel",
+      "schema": "goal-command",
+      "path": "valid/goal-command.cancel.json",
+      "valid": true,
+      "tags": ["goal-command", "control-reason"]
+    },
+    {
+      "id": "goal-command.amend",
+      "schema": "goal-command",
+      "path": "valid/goal-command.amend.json",
+      "valid": true,
+      "tags": ["goal-command", "revision-contract"]
+    },
+    {
+      "id": "goal-command.amend-deterministic-review",
+      "schema": "goal-command",
+      "path": "invalid/goal-command.amend-deterministic-review.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "tags": ["goal-command", "deterministic-acceptance", "semantic-consistency"]
+    },
+    {
+      "id": "goal-command.accept-plan",
+      "schema": "goal-command",
+      "path": "valid/goal-command.accept-plan.json",
+      "valid": true,
+      "tags": ["goal-command", "plan-proposal", "proposal-hash"]
+    },
+    {
+      "id": "goal-command.request-plan-fresh",
+      "schema": "goal-command",
+      "path": "valid/goal-command.request-plan-fresh.json",
+      "valid": true,
+      "tags": ["goal-command", "request-plan", "planning", "fresh-session"]
+    },
+    {
+      "id": "goal-command.request-plan-resume",
+      "schema": "goal-command",
+      "path": "valid/goal-command.request-plan-resume.json",
+      "valid": true,
+      "tags": ["goal-command", "request-plan", "planning", "resume-session"]
+    },
+    {
+      "id": "goal-command.request-plan-handoff",
+      "schema": "goal-command",
+      "path": "valid/goal-command.request-plan-handoff.json",
+      "valid": true,
+      "tags": ["goal-command", "request-plan", "planning", "handoff-session"]
+    },
+    {
+      "id": "goal-command.request-plan-decision",
+      "schema": "goal-command",
+      "path": "valid/goal-command.request-plan-decision.json",
+      "valid": true,
+      "tags": ["goal-command", "plan-decision", "kernel-derived-options"]
+    },
+    {
+      "id": "goal-command.request-scope-decision",
+      "schema": "goal-command",
+      "path": "valid/goal-command.request-scope-decision.json",
+      "valid": true,
+      "tags": ["goal-command", "scope-decision", "kernel-derived-options"]
+    },
+    {
+      "id": "goal-command.request-review-decision",
+      "schema": "goal-command",
+      "path": "valid/goal-command.request-review-decision.json",
+      "valid": true,
+      "tags": ["goal-command", "review-decision", "complete-subject"]
+    },
+    {
+      "id": "goal-command.request-completion-decision",
+      "schema": "goal-command",
+      "path": "valid/goal-command.request-completion-decision.json",
+      "valid": true,
+      "tags": ["goal-command", "completion-decision", "complete-subject"]
+    },
+    {
+      "id": "goal-command.resolve-decision",
+      "schema": "goal-command",
+      "path": "valid/goal-command.resolve-decision.json",
+      "valid": true,
+      "tags": ["goal-command", "nullable", "decision-version"]
+    },
+    {
+      "id": "goal-command.admit-fresh",
+      "schema": "goal-command",
+      "path": "valid/goal-command.admit-fresh.json",
+      "valid": true,
+      "tags": ["goal-command", "server-derived-admission", "fresh-session"]
+    },
+    {
+      "id": "goal-command.admit-validate-fresh",
+      "schema": "goal-command",
+      "path": "valid/goal-command.admit-validate-fresh.json",
+      "valid": true,
+      "tags": ["goal-command", "server-derived-admission", "validation-task", "purpose-discriminator"]
+    },
+    {
+      "id": "goal-command.admit-resume",
+      "schema": "goal-command",
+      "path": "valid/goal-command.admit-resume.json",
+      "valid": true,
+      "tags": ["goal-command", "server-derived-admission", "resume-session"]
+    },
+    {
+      "id": "goal-command.admit-handoff",
+      "schema": "goal-command",
+      "path": "valid/goal-command.admit-handoff.json",
+      "valid": true,
+      "tags": ["goal-command", "server-derived-admission", "handoff-session"]
+    },
+    {
+      "id": "goal-command.add-dependency",
+      "schema": "goal-command",
+      "path": "valid/goal-command.add-dependency.json",
+      "valid": true,
+      "tags": ["goal-command", "dependency"]
+    },
+    {
+      "id": "goal-command.remove-dependency",
+      "schema": "goal-command",
+      "path": "valid/goal-command.remove-dependency.json",
+      "valid": true,
+      "tags": ["goal-command", "dependency"]
+    },
+    {
+      "id": "goal-command.achieve",
+      "schema": "goal-command",
+      "path": "valid/goal-command.achieve.json",
+      "valid": true,
+      "tags": ["goal-command", "complete-subject", "nullable"]
+    },
+    {
+      "id": "goal-command.extra-control-field",
+      "schema": "goal-command",
+      "path": "invalid/goal-command.extra-control-field.json",
+      "valid": false,
+      "tags": ["goal-command", "extra-control-field"]
+    },
+    {
+      "id": "goal-command.derived-admission-field",
+      "schema": "goal-command",
+      "path": "invalid/goal-command.derived-admission-field.json",
+      "valid": false,
+      "tags": ["goal-command", "server-derived-admission", "extra-control-field"]
+    },
+    {
+      "id": "goal-command.admit-plan",
+      "schema": "goal-command",
+      "path": "invalid/goal-command.admit-plan.json",
+      "valid": false,
+      "tags": ["goal-command", "planning", "request-plan", "wrong-identity"]
+    },
+    {
+      "id": "goal-command.admit-implement-validation-id",
+      "schema": "goal-command",
+      "path": "invalid/goal-command.admit-implement-validation-id.json",
+      "valid": false,
+      "tags": ["goal-command", "validation-task", "purpose-discriminator"]
+    },
+    {
+      "id": "goal-command.admit-validate-null-validation-id",
+      "schema": "goal-command",
+      "path": "invalid/goal-command.admit-validate-null-validation-id.json",
+      "valid": false,
+      "tags": ["goal-command", "validation-task", "purpose-discriminator", "nullable"]
+    },
+    {
+      "id": "goal-command.request-plan-derived-field",
+      "schema": "goal-command",
+      "path": "invalid/goal-command.request-plan-derived-field.json",
+      "valid": false,
+      "tags": ["goal-command", "request-plan", "server-derived-admission", "extra-control-field"]
+    },
+    {
+      "id": "goal-command.kind-payload-mismatch",
+      "schema": "goal-command",
+      "path": "invalid/goal-command.kind-payload-mismatch.json",
+      "valid": false,
+      "tags": ["goal-command", "discriminated-union"]
+    },
+    {
+      "id": "goal-command.proposal-hash-mismatch",
+      "schema": "goal-command",
+      "path": "invalid/goal-command.proposal-hash-mismatch.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "tags": ["goal-command", "proposal-hash", "semantic-consistency"]
+    },
+    {
+      "id": "goal-command.request-decision-caller-options",
+      "schema": "goal-command",
+      "path": "invalid/goal-command.request-decision-caller-options.json",
+      "valid": false,
+      "tags": ["goal-command", "kernel-derived-options", "extra-control-field"]
+    },
+    {
+      "id": "goal-command.request-decision-unsupported-kind",
+      "schema": "goal-command",
+      "path": "invalid/goal-command.request-decision-unsupported-kind.json",
+      "valid": false,
+      "tags": ["goal-command", "unknown-enum", "unsupported-capability"]
+    },
+    {
+      "id": "goal-command.fresh-session-id",
+      "schema": "goal-command",
+      "path": "invalid/goal-command.fresh-session-id.json",
+      "valid": false,
+      "tags": ["goal-command", "session-mode"]
+    },
+    {
+      "id": "goal-command.request-plan-fresh-session-id",
+      "schema": "goal-command",
+      "path": "invalid/goal-command.request-plan-fresh-session-id.json",
+      "valid": false,
+      "tags": ["goal-command", "request-plan", "session-mode"]
+    },
+    {
+      "id": "goal-command.request-plan-subject-resource-mismatch",
+      "schema": "goal-command",
+      "path": "invalid/goal-command.request-plan-subject-resource-mismatch.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "semantic_error": "request_plan_subject_resource_mismatch",
+      "tags": ["goal-command", "request-plan", "wrong-identity", "semantic-consistency"]
+    },
+    {
+      "id": "goal-command.handoff-session-id",
+      "schema": "goal-command",
+      "path": "invalid/goal-command.handoff-session-id.json",
+      "valid": false,
+      "tags": ["goal-command", "session-mode", "handoff-session", "no-native-session-source"]
+    },
+    {
+      "id": "goal-command.resume-null-session-id",
+      "schema": "goal-command",
+      "path": "invalid/goal-command.resume-null-session-id.json",
+      "valid": false,
+      "tags": ["goal-command", "session-mode", "resume-session"]
+    },
+    {
+      "id": "goal-command.version-mismatch",
+      "schema": "goal-command",
+      "path": "invalid/goal-command.version-mismatch.json",
+      "valid": false,
+      "tags": ["goal-command", "version-mismatch"]
+    },
+    {
+      "id": "goal-command.unpaired-surrogate",
+      "schema": "goal-command",
+      "path": "invalid/goal-command.unpaired-surrogate.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "tags": ["goal-command", "unicode", "semantic-consistency"]
+    },
+    {
+      "id": "goal-command.nul-text",
+      "schema": "goal-command",
+      "path": "invalid/goal-command.nul-text.json",
+      "valid": false,
+      "tags": ["goal-command", "nul-text", "durable-storage"]
+    },
+    {
+      "id": "goal-command.expected-version-unsafe-integer",
+      "schema": "goal-command",
+      "path": "invalid/goal-command.expected-version-unsafe-integer.json",
+      "valid": false,
+      "tags": ["goal-command", "number-precision", "safe-integer-limit"]
+    },
+    {
+      "id": "plan-proposal.missing-baseline",
+      "schema": "plan-proposal",
+      "path": "invalid/plan-proposal.missing-baseline.json",
+      "valid": false,
+      "tags": ["plan-proposal", "missing-control-field", "baseline"]
+    },
+    {
+      "id": "plan-proposal.missing-change-target",
+      "schema": "plan-proposal",
+      "path": "invalid/plan-proposal.missing-change-target.json",
+      "valid": false,
+      "tags": ["plan-proposal", "missing-control-field", "change-target"]
+    },
+    {
+      "id": "plan-proposal.duplicate-predicate-id",
+      "schema": "plan-proposal",
+      "path": "invalid/plan-proposal.duplicate-predicate-id.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "tags": ["plan-proposal", "predicate-id-unique", "semantic-consistency"]
+    },
+    {
+      "id": "admission.missing-max-cost",
+      "schema": "admission",
+      "path": "invalid/admission.missing-max-cost.json",
+      "valid": false,
+      "tags": ["admission", "missing-control-field", "per-run-cost-limit"]
+    },
+    {
+      "id": "admission.provider-scope",
+      "schema": "admission",
+      "path": "valid/admission.provider-scope.json",
+      "valid": true,
+      "tags": ["admission", "provider-scope", "provider-operation-bound", "change-target"]
+    },
+    {
+      "id": "admission.provider-scope-credential",
+      "schema": "admission",
+      "path": "invalid/admission.provider-scope-credential.json",
+      "valid": false,
+      "tags": ["admission", "provider-scope", "credential-locality", "extra-control-field"]
+    },
+    {
+      "id": "admission.non-implement-provider-scope",
+      "schema": "admission",
+      "path": "invalid/admission.non-implement-provider-scope.json",
+      "valid": false,
+      "tags": ["admission", "provider-scope", "least-authority", "purpose"]
+    },
+    {
+      "id": "admission.implement-validation-id",
+      "schema": "admission",
+      "path": "invalid/admission.implement-validation-id.json",
+      "valid": false,
+      "tags": ["admission", "validation-task", "purpose-discriminator"]
+    },
+    {
+      "id": "admission.validate-null-validation-id",
+      "schema": "admission",
+      "path": "invalid/admission.validate-null-validation-id.json",
+      "valid": false,
+      "tags": ["admission", "validation-task", "purpose-discriminator", "nullable"]
+    },
+    {
+      "id": "admission.provider-scope-resource-mismatch",
+      "schema": "admission",
+      "path": "invalid/admission.provider-scope-resource-mismatch.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "tags": ["admission", "provider-scope", "provider-operation-bound", "semantic-consistency"]
+    },
+    {
+      "id": "admission.provider-scope-equal-branches",
+      "schema": "admission",
+      "path": "invalid/admission.provider-scope-equal-branches.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "tags": ["admission", "provider-scope", "change-target", "semantic-consistency"]
+    },
+    {
+      "id": "goal-revision.strict-budget",
+      "schema": "goal-revision",
+      "path": "valid/goal-revision.strict-budget.json",
+      "valid": true,
+      "tags": ["strict-budget", "hard-cost-limit", "per-run-cost-limit"]
+    },
+    {
+      "id": "goal-revision.automatic-soft-budget",
+      "schema": "goal-revision",
+      "path": "valid/goal-revision.automatic-soft-budget.json",
+      "valid": true,
+      "tags": ["automatic-execution", "soft-budget", "total-budget-limit"]
+    },
+    {
+      "id": "goal-revision.deterministic-machine-only",
+      "schema": "goal-revision",
+      "path": "valid/goal-revision.deterministic-machine-only.json",
+      "valid": true,
+      "tags": ["deterministic-acceptance", "machine-predicate"]
+    },
+    {
+      "id": "goal-revision.deterministic-review",
+      "schema": "goal-revision",
+      "path": "invalid/goal-revision.deterministic-review.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "tags": ["deterministic-acceptance", "semantic-consistency"]
+    },
+    {
+      "id": "goal-revision.strict-budget-without-hard-limit",
+      "schema": "goal-revision",
+      "path": "invalid/goal-revision.strict-budget-without-hard-limit.json",
+      "valid": false,
+      "tags": ["strict-budget", "hard-cost-limit", "per-run-cost-limit"]
+    },
+    {
+      "id": "goal-revision.automatic-unlimited-budget",
+      "schema": "goal-revision",
+      "path": "invalid/goal-revision.automatic-unlimited-budget.json",
+      "valid": false,
+      "tags": ["automatic-execution", "total-budget-limit"]
+    }
+  ]
+}

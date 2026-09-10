@@ -19,18 +19,74 @@ defmodule SymmetryControlWeb.Protocol do
     forbidden: {403, "forbidden", "credential does not own this resource"},
     provider_owned: {409, "provider_owned", "field is authoritative in the external provider"},
     not_found: {404, "not_found", "resource was not found"},
+    requested_session_not_found:
+      {404, "requested_session_not_found", "requested harness session was not found"},
     capacity_exhausted: {409, "capacity_exhausted", "runtime capacity is exhausted"},
     idempotency_conflict:
       {409, "idempotency_conflict", "idempotency key was reused with different input"},
     ownership_lost: {409, "ownership_lost", "execution lease is no longer authoritative"},
     stale: {409, "stale", "resource changed since it was loaded"},
+    stale_revision: {409, "stale_revision", "goal revision is no longer current"},
+    stale_run: {409, "stale_run", "run is no longer current for this Goal"},
     terminal_grace_expired:
       {409, "terminal_grace_expired", "terminal delivery grace period has expired"},
     state_conflict: {409, "state_conflict", "state has already advanced"},
+    requested_session_unavailable:
+      {409, "requested_session_unavailable", "requested harness session is unavailable"},
+    invalid_decision: {409, "invalid_decision", "decision is no longer valid for this Goal"},
+    decision_expired: {409, "decision_expired", "decision has expired"},
+    goal_admission_disabled:
+      {409, "goal_admission_disabled", "Goal admission is currently unavailable"},
     unsupported_control:
       {409, "unsupported_control", "runtime does not support supervisory control"},
     assignment_expired: {410, "assignment_expired", "assignment has expired"},
+    invalid_cursor: {400, "invalid_cursor", "cursor is invalid"},
     invalid_transition: {422, "invalid_transition", "state transition is invalid"},
+    invalid_contract: {422, "invalid_contract", "goal contract is invalid"},
+    admitted_work_required: {422, "admitted_work_required", "Goal requires admitted work"},
+    integration_outcome_required:
+      {422, "integration_outcome_required", "Goal requires an accepted integration outcome"},
+    context_budget_exceeded:
+      {422, "context_budget_exceeded", "mandatory Goal context exceeds the configured budget"},
+    required_context_source_missing:
+      {422, "required_context_source_missing", "a required Goal context source is missing"},
+    unsatisfied_predicate:
+      {422, "unsatisfied_predicate", "goal command predicates are not satisfied"},
+    unsupported_capability:
+      {422, "unsupported_capability", "required capability is not supported"},
+    dependency_cycle: {422, "dependency_cycle", "dependency would create a cycle"},
+    waiting_dependency:
+      {422, "waiting_dependency", "a required Goal dependency is not yet accepted"},
+    budget_exhausted: {422, "budget_exhausted", "Goal budget is exhausted"},
+    budget_unknown: {422, "budget_unknown", "Goal budget cannot be safely determined"},
+    missing_evidence: {422, "missing_evidence", "required evidence is missing"},
+    goal_authority_required:
+      {403, "goal_authority_required", "Goal authority is required for this operation"},
+    admission_limit_reached:
+      {422, "admission_limit_reached", "Goal admission limit has been reached"},
+    parallel_limit_reached:
+      {422, "parallel_limit_reached", "Goal parallel execution limit has been reached"},
+    active_task: {422, "active_task", "work item already has active Goal work"},
+    incomplete_work: {422, "incomplete_work", "required Goal work is incomplete"},
+    unresolved_decision: {422, "unresolved_decision", "Goal has unresolved decisions"},
+    nonterminal_task: {422, "nonterminal_task", "Goal has nonterminal tasks"},
+    operator_acceptance_required:
+      {422, "operator_acceptance_required", "operator acceptance is required"},
+    strict_budget_requires_reservation:
+      {422, "strict_budget_requires_reservation", "strict budget policy requires a reservation"},
+    validation_required: {422, "validation_required", "independent validation is required"},
+    invalid_validation: {422, "invalid_validation", "validation does not satisfy Goal policy"},
+    invalid_outcome: {422, "invalid_outcome", "outcome does not match Goal ownership"},
+    invalid_evidence_identity:
+      {422, "invalid_evidence_identity", "evidence does not match the admitted Goal subject"},
+    invalid_subject: {422, "invalid_subject", "repository subject is invalid for the Goal"},
+    invalid_context_snapshot:
+      {422, "invalid_context_snapshot", "context snapshot does not match its Goal identity"},
+    requested_session_required:
+      {422, "requested_session_required", "resume requires a requested harness session"},
+    invalid_plan: {422, "invalid_plan", "plan does not satisfy Goal contract"},
+    resource_not_allowed: {422, "resource_not_allowed", "resource is not allowed by Goal policy"},
+    model_not_allowed: {422, "model_not_allowed", "model profile is not allowed by Goal policy"},
     not_connected: {409, "not_connected", "resource has no external connection"},
     provider_unauthorized:
       {502, "provider_unauthorized", "external provider authentication failed"},
@@ -39,13 +95,36 @@ defmodule SymmetryControlWeb.Protocol do
       {503, "provider_access_unavailable", "required provider access is unavailable"}
   }
 
+  # Contract validator details can contain provider/schema internals. Preserve
+  # the typed outer error without exposing the nested value to clients.
+  def error(conn, {:invalid_contract, _details}), do: error(conn, :invalid_contract)
+
+  def error(conn, {reason, fields}) when is_map(fields) do
+    {status, code, message} = error_details(reason)
+
+    conn
+    |> put_status(status)
+    |> json(%{error: Map.merge(%{code: code, message: message}, goal_error_fields(fields))})
+  end
+
   def error(conn, reason) do
     {status, code, message} = error_details(reason)
     conn |> put_status(status) |> json(%{error: %{code: code, message: message}})
   end
 
+  def error_details({:invalid_contract, _details}), do: @error_statuses.invalid_contract
+  def error_details({:stale, _fields}), do: @error_statuses.stale
+
   def error_details(reason),
     do: Map.get(@error_statuses, reason, @error_statuses.invalid_request)
+
+  defp goal_error_fields(fields) do
+    fields
+    |> Map.take([:current_version, :current_revision, :allowed_actions, :details])
+    |> Map.merge(
+      Map.take(fields, ["current_version", "current_revision", "allowed_actions", "details"])
+    )
+  end
 
   def machine_token(conn) do
     with [header] <- get_req_header(conn, "authorization"),
@@ -229,6 +308,7 @@ defmodule SymmetryControlWeb.Protocol do
       reserved_capacity: Map.fetch!(snapshot, :reserved_capacity),
       agent_profile: Map.fetch!(snapshot, :agent_profile),
       workspace: Map.fetch!(snapshot, :workspace),
+      repository_resource_id: Map.fetch!(snapshot, :repository_resource_id),
       capabilities: Map.fetch!(snapshot, :capabilities),
       active_runs: Enum.map(Map.fetch!(snapshot, :active_runs), &active_run/1)
     }

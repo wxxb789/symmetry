@@ -1,0 +1,13 @@
+{
+  "schema_version": "symmetry.goal_command.v1",
+  "mutation_id": "29292929-2929-4929-8929-292929292929",
+  "expected_version": 3,
+  "expected_revision": 1,
+  "kind": "request_decision",
+  "payload": {
+    "kind": "completion",
+    "work_item_id": null,
+    "subject_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "proposal": null
+  }
+}

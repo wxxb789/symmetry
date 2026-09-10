@@ -1,10 +1,11 @@
 defmodule SymmetryControl.WorkspacesTest do
   use SymmetryControl.DataCase, async: false
 
+  alias SymmetryControl.Goals.{Goal, GoalRevision}
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Repo
   alias SymmetryControl.Workspaces
-  alias SymmetryControl.Workspaces.ProjectResource
+  alias SymmetryControl.Workspaces.{ProjectResource, WorkItem}
 
   test "projects aggregate independent engineering resources and prioritized work items" do
     assert {:ok, project} =
@@ -231,6 +232,69 @@ defmodule SymmetryControl.WorkspacesTest do
     assert stored_task.id == first.task.task.id
   end
 
+  test "goal-owned work items reject legacy mutation and control paths" do
+    project = project_fixture()
+
+    assert {:ok, repository} =
+             Workspaces.create_resource(project.id, %{
+               kind: "repository",
+               name: "Goal-owned repository"
+             })
+
+    assert {:ok, item} =
+             Workspaces.create_work_item(project.id, %{
+               title: "Goal-owned work",
+               status: "ready",
+               assignee_type: "agent",
+               agent_profile: "codex",
+               repository_resource_id: repository.id
+             })
+
+    goal = goal_fixture(project)
+
+    assert {:ok, item} =
+             item
+             |> WorkItem.goal_membership_changeset(%{
+               goal_id: goal.id,
+               admitted_revision: 1,
+               acceptance_contract: %{"checks" => ["mix test"]},
+               baseline_subject: %{
+                 "resource_id" => repository.id,
+                 "commit" => String.duplicate("a", 40),
+                 "tree_digest" => "sha256:" <> String.duplicate("4", 64)
+               }
+             })
+             |> Repo.update()
+
+    assert {:error, :goal_authority_required} =
+             Workspaces.update_work_item(item.id, %{version: item.lock_version, title: "Bypass"})
+
+    assert {:error, :goal_authority_required} =
+             Workspaces.move_work_item(item.id, %{version: item.lock_version, status: "review"})
+
+    assert {:error, :goal_authority_required} =
+             Workspaces.launch_work_item(item.id, "goal-launch")
+
+    assert {:error, :goal_authority_required} =
+             Workspaces.cancel_work_item(item.id, 0, "goal-cancel")
+
+    assert {:error, :goal_authority_required} =
+             Workspaces.provide_work_item_input(
+               item.id,
+               %{"decision" => "continue"},
+               Ecto.UUID.generate(),
+               "goal-input"
+             )
+
+    assert {:error, :goal_authority_required} =
+             Workspaces.retry_work_item(item.id, 0, "goal-retry")
+
+    stored = Repo.get!(WorkItem, item.id)
+    assert stored.orchestration_task_id == nil
+    assert stored.status == "ready"
+    assert stored.title == "Goal-owned work"
+  end
+
   test "missing parents and work items return not found without orphaned records" do
     assert {:error, :not_found} =
              Workspaces.create_resource(Ecto.UUID.generate(), %{
@@ -255,5 +319,58 @@ defmodule SymmetryControl.WorkspacesTest do
              })
 
     project
+  end
+
+  defp goal_fixture(project) do
+    assert {:ok, goal} =
+             Repo.transaction(fn ->
+               goal =
+                 %Goal{}
+                 |> Goal.changeset(%{
+                   project_id: project.id,
+                   title: "Protect legacy controls",
+                   state: "active",
+                   current_revision: 1,
+                   event_sequence: 0
+                 })
+                 |> Repo.insert!()
+
+               %GoalRevision{}
+               |> GoalRevision.changeset(%{
+                 goal_id: goal.id,
+                 revision: 1,
+                 objective: "Keep Goal authority intact",
+                 non_goals: [],
+                 acceptance_contract: %{"checks" => ["mix test"]},
+                 authority_policy: %{},
+                 execution_policy: execution_policy(),
+                 context_manifest: %{},
+                 reason: "initial admission",
+                 actor_ref: "operator:test"
+               })
+               |> Repo.insert!()
+
+               goal
+             end)
+
+    goal
+  end
+
+  defp execution_policy do
+    %{
+      "automatic_execution" => false,
+      "max_parallel_tasks" => 1,
+      "max_task_admissions" => 1,
+      "max_run_attempts_per_task" => 1,
+      "budget_limit_microusd" => nil,
+      "per_run_cost_limit_microusd" => nil,
+      "budget_mode" => "soft",
+      "hard_cost_limit_required" => false,
+      "allowed_runtime_ids" => [],
+      "allowed_model_profiles" => [],
+      "final_acceptance" => "operator",
+      "allowed_actions" => [],
+      "allowed_resource_ids" => []
+    }
   end
 end

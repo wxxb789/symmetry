@@ -1,7 +1,9 @@
 package execution
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -146,6 +148,23 @@ func TestTerminateIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestTerminateFallsBackToRootKillWhenForcedContainmentFails(t *testing.T) {
+	process := startHelper(t, &recordingSink{}, "wait")
+	forceFailure := errors.New("forced containment termination failed")
+	process.containment = &forceFailingContainment{forceErr: forceFailure}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := process.Terminate(ctx, 0)
+	if !errors.Is(err, forceFailure) {
+		t.Fatalf("Terminate() error = %v, want forced containment error", err)
+	}
+	result := waitForResult(t, process)
+	if !result.Terminated || !errors.Is(result.TerminationError, forceFailure) {
+		t.Fatalf("fallback root kill result = %#v", result)
+	}
+}
+
 func TestTerminateCancelsABlockingSinkAndCompletesDrain(t *testing.T) {
 	t.Parallel()
 
@@ -189,6 +208,45 @@ func TestStartRejectsAnAlreadyCancelledContext(t *testing.T) {
 	}
 }
 
+func TestStartPersistsProcessIdentityBeforeStartingOutputReaders(t *testing.T) {
+	sink := &recordingSink{}
+	invocation := helperInvocation("stdout", "64")
+	called := false
+	invocation.PersistProcess = func(pid int, identity string) error {
+		called = true
+		if pid <= 0 || identity == "" {
+			t.Fatalf("process identity = (%d, %q), want non-empty identity", pid, identity)
+		}
+		if got := sink.output(Stdout); got != "" {
+			t.Fatalf("stdout delivered before process identity persistence: %q", got)
+		}
+		return nil
+	}
+	process, err := NewRunner().Start(context.Background(), invocation, sink)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if !called {
+		t.Fatal("PersistProcess callback was not called")
+	}
+	if result := waitForResult(t, process); result.ExitCode != 0 {
+		t.Fatalf("exit code = %d, wait error = %v", result.ExitCode, result.WaitError)
+	}
+}
+
+func TestStartPersistenceFailureTerminatesBeforeReturning(t *testing.T) {
+	want := errors.New("journal unavailable")
+	invocation := helperInvocation("wait")
+	invocation.PersistProcess = func(int, string) error { return want }
+	process, err := NewRunner().Start(context.Background(), invocation, &recordingSink{})
+	if process != nil {
+		t.Fatal("Start() returned a process after persistence failure")
+	}
+	if !errors.Is(err, want) {
+		t.Fatalf("Start() error = %v, want persistence failure", err)
+	}
+}
+
 func TestCloseInputAfterInitialInputSupportsEOFDrivenAgent(t *testing.T) {
 	t.Parallel()
 
@@ -226,6 +284,90 @@ func TestCloseInputEndsAnInteractiveInputStream(t *testing.T) {
 	}
 	if got, want := sink.output(Stdout), "human follow-up"; got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+}
+
+func TestWriteInputContextCancellationClosesABlockedPipeBeforeReturning(t *testing.T) {
+	reader, process := newInputPipeProcess(t)
+	defer reader.Close()
+	defer process.CloseInput()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	writeResult := make(chan error, 1)
+	go func() {
+		writeResult <- process.WriteInputContext(ctx, bytes.Repeat([]byte("x"), 8*1024*1024))
+	}()
+	awaitPipeByte(t, reader)
+
+	cancel()
+	err := receiveInputResult(t, writeResult)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("WriteInputContext() error = %v, want context cancellation", err)
+	}
+	if !errors.Is(err, ErrInputClosed) {
+		t.Fatalf("WriteInputContext() error = %v, want ErrInputClosed", err)
+	}
+	if err := process.WriteInput([]byte("later")); !errors.Is(err, ErrInputClosed) {
+		t.Fatalf("WriteInput() after cancelled partial write error = %v, want ErrInputClosed", err)
+	}
+}
+
+func TestCloseInputClosesABlockedPipeWithoutWaitingForWriter(t *testing.T) {
+	reader, process := newInputPipeProcess(t)
+	defer reader.Close()
+	defer process.CloseInput()
+
+	writeResult := make(chan error, 1)
+	go func() {
+		writeResult <- process.WriteInput(bytes.Repeat([]byte("x"), 8*1024*1024))
+	}()
+	awaitPipeByte(t, reader)
+
+	closeResults := make(chan error, 2)
+	for range 2 {
+		go func() { closeResults <- process.CloseInput() }()
+	}
+	for range 2 {
+		if err := receiveInputResult(t, closeResults); err != nil {
+			t.Fatalf("CloseInput() error = %v", err)
+		}
+	}
+	if err := receiveInputResult(t, writeResult); !errors.Is(err, ErrInputClosed) {
+		t.Fatalf("WriteInput() after concurrent CloseInput error = %v, want ErrInputClosed", err)
+	}
+}
+
+func TestWriteInputContextCancellationWhileQueuedDoesNotCloseAnotherWrite(t *testing.T) {
+	reader, process := newInputPipeProcess(t)
+	defer reader.Close()
+	defer process.CloseInput()
+
+	firstResult := make(chan error, 1)
+	go func() {
+		firstResult <- process.WriteInput(bytes.Repeat([]byte("x"), 8*1024*1024))
+	}()
+	awaitPipeByte(t, reader)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	queuedResult := make(chan error, 1)
+	go func() { queuedResult <- process.WriteInputContext(ctx, []byte("queued")) }()
+	cancel()
+	if err := receiveInputResult(t, queuedResult); !errors.Is(err, context.Canceled) {
+		t.Fatalf("queued WriteInputContext() error = %v, want context cancellation", err)
+	}
+	process.stdinMutex.Lock()
+	inputStillOpen := process.stdin != nil
+	process.stdinMutex.Unlock()
+	if !inputStillOpen {
+		t.Fatal("queued cancellation closed the active writer's input transport")
+	}
+
+	if err := process.CloseInput(); err != nil {
+		t.Fatalf("CloseInput() error = %v", err)
+	}
+	if err := receiveInputResult(t, firstResult); !errors.Is(err, ErrInputClosed) {
+		t.Fatalf("first WriteInput() error = %v, want ErrInputClosed", err)
 	}
 }
 
@@ -339,6 +481,52 @@ func minimalEnvironment() []string {
 	return values
 }
 
+func newInputPipeProcess(t *testing.T) (*os.File, *Process) {
+	t.Helper()
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	process := &Process{
+		stdin:            writer,
+		stdinWritePermit: make(chan struct{}, 1),
+	}
+	process.stdinWritePermit <- struct{}{}
+	return reader, process
+}
+
+func awaitPipeByte(t *testing.T, reader *os.File) {
+	t.Helper()
+	readResult := make(chan error, 1)
+	go func() {
+		buffer := make([]byte, 1)
+		count, err := reader.Read(buffer)
+		if err != nil {
+			readResult <- err
+			return
+		}
+		if count != 1 {
+			readResult <- fmt.Errorf("pipe read count = %d, want 1", count)
+			return
+		}
+		readResult <- nil
+	}()
+	if err := receiveInputResult(t, readResult); err != nil {
+		t.Fatalf("wait for input write to enter pipe: %v", err)
+	}
+}
+
+func receiveInputResult(t *testing.T, results <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-results:
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatal("input operation did not return")
+		return nil
+	}
+}
+
 func waitForResult(t *testing.T, process *Process) Result {
 	t.Helper()
 	results := make(chan Result, 1)
@@ -350,6 +538,17 @@ func waitForResult(t *testing.T, process *Process) Result {
 		t.Fatal("Process.Wait() did not return")
 		return Result{}
 	}
+}
+
+type forceFailingContainment struct{ forceErr error }
+
+func (*forceFailingContainment) Close() error { return nil }
+
+func (containment *forceFailingContainment) Terminate(force bool) error {
+	if force {
+		return containment.forceErr
+	}
+	return nil
 }
 
 type recordingSink struct {

@@ -1,0 +1,138 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "contracts/v1/admission.schema.json",
+  "title": "Symmetry Admission v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "admission_id",
+    "goal_id",
+    "goal_revision",
+    "work_item_id",
+    "purpose",
+    "context_snapshot_id",
+    "context_hash",
+    "model_profile",
+    "session_mode",
+    "requested_session_id",
+    "subject",
+    "limits",
+    "validation_of_task_id",
+    "provider_scope"
+  ],
+  "properties": {
+    "schema_version": {"const": "symmetry.admission.v1"},
+    "admission_id": {"$ref": "common.schema.json#/definitions/UUID"},
+    "goal_id": {"$ref": "common.schema.json#/definitions/UUID"},
+    "goal_revision": {"$ref": "common.schema.json#/definitions/Revision"},
+    "work_item_id": {
+      "oneOf": [
+        {"$ref": "common.schema.json#/definitions/UUID"},
+        {"type": "null"}
+      ]
+    },
+    "purpose": {"enum": ["implement", "validate", "plan", "observe", "chat"]},
+    "context_snapshot_id": {"$ref": "common.schema.json#/definitions/UUID"},
+    "context_hash": {"$ref": "common.schema.json#/definitions/Sha256"},
+    "model_profile": {"$ref": "common.schema.json#/definitions/ShortIdentifier"},
+    "session_mode": {"enum": ["fresh", "resume", "handoff"]},
+    "requested_session_id": {
+      "oneOf": [
+        {"$ref": "common.schema.json#/definitions/UUID"},
+        {"type": "null"}
+      ]
+    },
+    "subject": {"$ref": "common.schema.json#/definitions/Subject"},
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_turns", "deadline_at", "max_cost_microusd"],
+      "properties": {
+        "max_turns": {"$ref": "common.schema.json#/definitions/PositiveInteger"},
+        "deadline_at": {"$ref": "common.schema.json#/definitions/UtcTimestamp"},
+        "max_cost_microusd": {
+          "oneOf": [
+            {"$ref": "common.schema.json#/definitions/Microusd"},
+            {"type": "null"}
+          ]
+        }
+      }
+    },
+    "validation_of_task_id": {
+      "oneOf": [
+        {"$ref": "common.schema.json#/definitions/UUID"},
+        {"type": "null"}
+      ]
+    },
+    "provider_scope": {
+      "oneOf": [
+        {"$ref": "common.schema.json#/definitions/ProviderScope"},
+        {"type": "null"}
+      ]
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "purpose": {"const": "implement"},
+        "work_item_id": {"$ref": "common.schema.json#/definitions/UUID"}
+      }
+    },
+    {
+      "properties": {
+        "purpose": {"enum": ["validate", "observe", "chat"]},
+        "work_item_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "provider_scope": {"type": "null"}
+      }
+    },
+    {
+      "properties": {
+        "purpose": {"const": "plan"},
+        "work_item_id": {"type": "null"},
+        "validation_of_task_id": {"type": "null"},
+        "provider_scope": {"type": "null"}
+      }
+    }
+  ],
+  "allOf": [
+    {
+      "oneOf": [
+        {
+          "properties": {
+            "session_mode": {"const": "fresh"},
+            "requested_session_id": {"type": "null"}
+          }
+        },
+        {
+          "properties": {
+            "session_mode": {"const": "resume"},
+            "requested_session_id": {"$ref": "common.schema.json#/definitions/UUID"}
+          }
+        },
+        {
+          "properties": {
+            "session_mode": {"const": "handoff"},
+            "requested_session_id": {"type": "null"}
+          }
+        }
+      ]
+    },
+    {
+      "oneOf": [
+        {
+          "properties": {
+            "purpose": {"const": "validate"},
+            "validation_of_task_id": {"$ref": "common.schema.json#/definitions/UUID"}
+          }
+        },
+        {
+          "properties": {
+            "purpose": {"enum": ["implement", "plan", "observe", "chat"]},
+            "validation_of_task_id": {"type": "null"}
+          }
+        }
+      ]
+    }
+  ]
+}

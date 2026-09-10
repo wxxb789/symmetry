@@ -255,6 +255,10 @@ func prepareExisting(bindingKey string, binding config.Workspace, run RunRef) (P
 }
 
 func (manager *Manager) prepareWorktree(ctx context.Context, bindingKey string, binding config.Workspace, run RunRef) (Prepared, error) {
+	return manager.prepareWorktreeAt(ctx, bindingKey, binding, run, binding.Ref)
+}
+
+func (manager *Manager) prepareWorktreeAt(ctx context.Context, bindingKey string, binding config.Workspace, run RunRef, ref string) (Prepared, error) {
 	repository, err := resolveDirectory(binding.Repository)
 	if err != nil {
 		return Prepared{}, fmt.Errorf("resolve workspace repository %q: %w", binding.Repository, err)
@@ -301,7 +305,7 @@ func (manager *Manager) prepareWorktree(ctx context.Context, bindingKey string, 
 		return Prepared{}, fmt.Errorf("refusing foreign worktree target %q after creating reservation", target)
 	}
 
-	command := exec.CommandContext(ctx, "git", "-C", repository, "worktree", "add", "--detach", target, binding.Ref)
+	command := exec.CommandContext(ctx, "git", "-C", repository, "worktree", "add", "--detach", target, ref)
 	if output, err := command.CombinedOutput(); err != nil {
 		return manager.handleFailedAdd(ctx, err, output, prepared)
 	}

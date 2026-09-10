@@ -1,0 +1,21 @@
+{
+  "schema_version": "symmetry.task_result.v1",
+  "result_id": "66666666-6666-4666-8666-666666666666",
+  "kind": "candidate_completion",
+  "summary": "The candidate is ready for independent validation.",
+  "subject": {
+    "resource_id": "22222222-2222-4222-8222-222222222222",
+    "commit": "fedcba9876543210fedcba9876543210fedcba98",
+    "tree_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "subject_hash": "sha256:f347107963c353d0e1c0515dbbf147666cbaad469168ad0fc0cde534e25228af",
+  "evidence_refs": ["77777777-7777-4777-8777-777777777777"],
+  "blocker": null,
+  "proposed_next_action": {
+    "kind": "validate",
+    "producing_task_id": "99999999-9999-4999-8999-999999999999"
+  },
+  "proposal": null,
+  "reason": null,
+  "diagnostics": []
+}

@@ -1,0 +1,17 @@
+{
+  "schema_version": "symmetry.goal_command.v1",
+  "mutation_id": "10101010-1010-4010-8010-101010101010",
+  "expected_version": 7,
+  "expected_revision": 1,
+  "kind": "achieve",
+  "payload": {
+    "subject": {
+      "resource_id": "22222222-2222-4222-8222-222222222222",
+      "commit": "0123456789abcdef0123456789abcdef01234567",
+      "tree_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "integration_work_item_id": "33333333-3333-4333-8333-333333333333",
+    "evidence_ids": ["88888888-8888-4888-8888-888888888888"],
+    "decision_id": null
+  }
+}

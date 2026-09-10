@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -256,6 +258,78 @@ func TestRecoveredCleanupWithEmptyWorkspacePathUsesRecoveryIntent(t *testing.T) 
 	}
 	if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
 		t.Fatalf("journal = %v, want deleted after empty-path recovery cleanup", err)
+	}
+}
+
+func TestGoalCandidateCleanupRequiresPublishedArtifactReceipt(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
+	persistWorkspacePath(t, store, key, "C:\\workspace")
+	transition := protocol.StateTransitionRequest{
+		TransitionID: "completed-1",
+		State:        "completed",
+		Payload: json.RawMessage(`{
+			"task_result": {"kind": "candidate_completion"}
+		}`),
+	}
+	if _, err := store.QueueTerminalTransitionAt(key, transition, time.Date(2026, 9, 10, 1, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ResolveTerminal(key, state.TerminalVerdictAccepted, time.Date(2026, 9, 10, 1, 1, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkTransitionsDelivered(key, []string{transition.TransitionID}); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.EnterCleanupPending(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal.GoalDeliveryEnabled = true
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+
+	cleaned := make(chan bool, 1)
+	d := &daemon{
+		config:    config.Config{CleanupTimeoutMS: 10000},
+		store:     store,
+		workspace: &trackingWorkspace{cleaned: cleaned},
+		log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	}
+	if err := d.cleanupPending(context.Background(), journal); err == nil || !strings.Contains(err.Error(), "candidate artifact") {
+		t.Fatalf("cleanupPending() error = %v, want pending candidate artifact receipt", err)
+	}
+	select {
+	case <-cleaned:
+		t.Fatal("candidate workspace was cleaned before its artifact receipt")
+	default:
+	}
+	if _, err := store.LoadJournal(key); err != nil {
+		t.Fatalf("candidate journal was deleted before its artifact receipt: %v", err)
+	}
+
+	evidence := cleanupGoalArtifactEvidence(t, key.RunID)
+	queued, err := store.QueueGoalEvidence(key, evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delivered, err := store.MarkGoalDeliveryDelivered(key, state.GoalDeliveryEvidence, evidence.EvidenceKey, queued.PendingGoalDeliveries[0].PayloadDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.cleanupPending(context.Background(), delivered); err != nil {
+		t.Fatalf("cleanupPending() after artifact receipt: %v", err)
+	}
+	select {
+	case succeeded := <-cleaned:
+		if !succeeded {
+			t.Fatal("artifact-backed successful Goal cleanup used failure policy")
+		}
+	default:
+		t.Fatal("candidate workspace was not cleaned after its artifact receipt")
+	}
+	if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
+		t.Fatalf("journal = %v, want deleted after artifact-backed cleanup", err)
 	}
 }
 
@@ -626,6 +700,38 @@ func cleanupPendingStore(t *testing.T) (*state.Store, state.RunKey) {
 		t.Fatal(err)
 	}
 	return store, key
+}
+
+func cleanupGoalArtifactEvidence(t *testing.T, runID string) protocol.Evidence {
+	t.Helper()
+	subject := protocol.Subject{
+		ResourceID: "00000000-0000-4000-8000-000000000012",
+		Commit:     "1111111111111111111111111111111111111111",
+		TreeDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	subjectHash, err := subject.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := protocol.ParseEvidence([]byte(fmt.Sprintf(`{
+		"schema_version":"symmetry.evidence.v1",
+		"evidence_id":"00000000-0000-4000-8000-000000000011",
+		"run_id":"%s",
+		"evidence_key":"candidate-artifact",
+		"kind":"artifact",
+		"subject":{"resource_id":"%s","commit":"%s","tree_digest":"%s"},
+		"subject_hash":"%s",
+		"source_ref":{"kind":"artifact","ref":"artifact-publish","subject_hash":"%s","resource_id":"%s","commit":"%s","path":"result.txt"},
+		"source_revision":"artifact-publisher",
+		"validator_profile":"artifact-publisher",
+		"verdict":"passed",
+		"payload":{"predicate_id":"artifact-publish","subject":{"resource_id":"%s","commit":"%s","tree_digest":"%s"},"subject_hash":"%s","resource_id":"%s","commit":"%s","path":"result.txt","content_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+		"observed_at":"2026-09-10T01:01:00Z"
+	}`, runID, subject.ResourceID, subject.Commit, subject.TreeDigest, subjectHash, subjectHash, subject.ResourceID, subject.Commit, subject.ResourceID, subject.Commit, subject.TreeDigest, subjectHash, subject.ResourceID, subject.Commit)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return evidence
 }
 
 type eventDeliveryControl struct {

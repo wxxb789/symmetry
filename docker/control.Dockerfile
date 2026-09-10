@@ -21,6 +21,7 @@ COPY control/config/ config/
 RUN mix deps.compile
 
 COPY control/ ./
+COPY contracts/ /app/contracts/
 RUN if [ -d assets ]; then mix assets.deploy; fi \
     && mix compile \
     && mix release
@@ -44,11 +45,14 @@ ENV HOME=/app \
     GIT_CONFIG_GLOBAL=/app/.config/gh/gitconfig \
     LANG=C.UTF-8 \
     MIX_ENV=prod \
-    PHX_SERVER=true
+    PHX_SERVER=true \
+    SYMMETRY_CONTRACTS_DIR=/app/contracts
 
 COPY --from=build --chown=nobody:root /app/_build/prod/rel/symmetry_control /app
+COPY --from=build --chown=nobody:root /app/contracts /app/contracts
 
 RUN mkdir -p /app/.config/gh /app/.azure \
+    && chmod -R a-w /app/contracts \
     && chown -R nobody:root /app/.config /app/.azure
 
 USER nobody

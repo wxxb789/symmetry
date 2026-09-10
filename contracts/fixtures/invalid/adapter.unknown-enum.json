@@ -1,0 +1,21 @@
+{
+  "structured_input": true,
+  "provider_access": true,
+  "adapter": {
+    "kind": "codex",
+    "native_version": "1.2.3",
+    "implementation_version": "symmetry-daemon:1",
+    "protocol_version": 1,
+    "operations": {
+      "start": true,
+      "events": true,
+      "cancel": true,
+      "resume": false,
+      "guidance": "telepathic",
+      "pause": "unsupported",
+      "approval_response": false,
+      "usage": "unknown",
+      "hard_cost_limit": false
+    }
+  }
+}

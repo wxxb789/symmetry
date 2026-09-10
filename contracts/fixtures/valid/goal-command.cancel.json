@@ -1,0 +1,8 @@
+{
+  "schema_version": "symmetry.goal_command.v1",
+  "mutation_id": "20202020-2020-4020-8020-202020202020",
+  "expected_version": 1,
+  "expected_revision": 1,
+  "kind": "cancel",
+  "payload": {"reason": "Operator revoked this goal."}
+}

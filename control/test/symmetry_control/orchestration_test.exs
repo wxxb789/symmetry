@@ -1053,6 +1053,31 @@ defmodule SymmetryControl.OrchestrationTest do
     assert Repo.aggregate(SymmetryControl.Orchestration.RunTransition, :count) == 2
   end
 
+  test "runtime registration validates capabilities with the canonical schema" do
+    %{machine: machine} = enroll_machine()
+
+    assert {:error, :invalid_request} =
+             Orchestration.register_runtimes(
+               machine.id,
+               "00000000-0000-0000-0000-000000000064",
+               [
+                 %{
+                   runtime_key: "unknown-capability",
+                   name: "Unknown capability",
+                   capacity: 1,
+                   agent_profile: "codex",
+                   workspace: "primary",
+                   capabilities: %{
+                     "structured_input" => true,
+                     "provider_access" => true,
+                     "future_capability" => true
+                   }
+                 }
+               ],
+               now: @now
+             )
+  end
+
   test "unknown targets and illegal lifecycle edges are invalid transitions" do
     %{machine: machine} = enroll_machine()
     runtime = register_runtime(machine)

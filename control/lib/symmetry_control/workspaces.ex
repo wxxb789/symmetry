@@ -10,7 +10,7 @@ defmodule SymmetryControl.Workspaces do
 
   alias SymmetryControl.Integrations.{ChangeAction, Connection}
   alias SymmetryControl.Orchestration
-  alias SymmetryControl.Orchestration.{Notifier, Runtime, Scheduler}
+  alias SymmetryControl.Orchestration.{Notifier, Runtime, Scheduler, Task}
   alias SymmetryControl.Repo
   alias SymmetryControl.Workspaces.{Project, ProjectResource, WorkItem}
 
@@ -172,29 +172,33 @@ defmodule SymmetryControl.Workspaces do
           {:ok, WorkItem.t()} | {:error, :not_found | Ecto.Changeset.t()}
   def update_work_item(work_item_id, attrs) when is_map(attrs) do
     if valid_uuid?(work_item_id) do
-      Repo.transaction(fn ->
-        work_item = lock_work_item_with_project(work_item_id)
-        ensure_active_project(work_item.project) |> require_ok!()
+      with {:ok, work_item} <- fetch(WorkItem, work_item_id),
+           :ok <- ensure_legacy_work_item(work_item) do
+        Repo.transaction(fn ->
+          work_item = lock_work_item_with_project(work_item_id)
+          ensure_active_project(work_item.project) |> require_ok!()
 
-        with {:ok, attrs} <- expect_version(work_item, attrs),
-             changeset <-
-               WorkItem.update_changeset(
-                 work_item,
-                 attrs
-                 |> Map.drop([:project_id, "project_id"])
-                 |> normalize_work_item_attrs(work_item.project, work_item)
-               ),
-             :ok <- provider_owned_fields_editable(work_item, changeset),
-             :ok <- execution_fields_editable(work_item, changeset) do
-          changeset
-          |> validate_work_item_resources(work_item.project_id)
-          |> update_with_stale_error()
-          |> unwrap_or_rollback()
-        else
-          {:error, reason} -> Repo.rollback(reason)
-        end
-      end)
-      |> unwrap_transaction()
+          with {:ok, attrs} <- expect_version(work_item, attrs),
+               :ok <- ensure_legacy_work_item(work_item),
+               changeset <-
+                 WorkItem.update_changeset(
+                   work_item,
+                   attrs
+                   |> Map.drop([:project_id, "project_id"])
+                   |> normalize_work_item_attrs(work_item.project, work_item)
+                 ),
+               :ok <- provider_owned_fields_editable(work_item, changeset),
+               :ok <- execution_fields_editable(work_item, changeset) do
+            changeset
+            |> validate_work_item_resources(work_item.project_id)
+            |> update_with_stale_error()
+            |> unwrap_or_rollback()
+          else
+            {:error, reason} -> Repo.rollback(reason)
+          end
+        end)
+        |> unwrap_transaction()
+      end
     else
       {:error, :not_found}
     end
@@ -208,7 +212,9 @@ defmodule SymmetryControl.Workspaces do
          {:ok, status} <- work_item_move_status(attrs),
          {:ok, before_id} <-
            optional_uuid(attr_value(attrs, :before_id, nil)),
-         true <- valid_uuid?(work_item_id) do
+         true <- valid_uuid?(work_item_id),
+         {:ok, work_item} <- fetch(WorkItem, work_item_id),
+         :ok <- ensure_legacy_work_item(work_item) do
       Repo.transaction(fn ->
         project_id = work_item_project_id(work_item_id)
         project = lock_project(project_id)
@@ -223,6 +229,7 @@ defmodule SymmetryControl.Workspaces do
           )
 
         work_item = Enum.find(locked_items, &(&1.id == work_item_id)) || Repo.rollback(:not_found)
+        ensure_legacy_work_item(work_item) |> require_ok!()
         if work_item.lock_version != expected_version, do: Repo.rollback(:stale)
 
         items = Enum.sort_by(locked_items, &{&1.position, &1.number, &1.id})
@@ -292,10 +299,13 @@ defmodule SymmetryControl.Workspaces do
   def launch_work_item(work_item_id, action_id, opts)
       when is_binary(action_id) and is_list(opts) do
     with :ok <- validate_action_id(action_id),
-         true <- valid_uuid?(work_item_id) do
+         true <- valid_uuid?(work_item_id),
+         {:ok, work_item} <- fetch(WorkItem, work_item_id),
+         :ok <- ensure_legacy_work_item(work_item) do
       result =
         Repo.transaction(fn ->
           work_item = lock_work_item_with_project(work_item_id)
+          ensure_legacy_work_item(work_item) |> require_ok!()
           ensure_active_project(work_item.project) |> require_ok!()
 
           launch_locked_work_item(work_item, opts)
@@ -323,6 +333,7 @@ defmodule SymmetryControl.Workspaces do
       when is_integer(generation) and generation >= 0 and is_binary(action_id) do
     with :ok <- validate_action_id(action_id),
          {:ok, work_item} <- fetch(WorkItem, work_item_id),
+         :ok <- ensure_legacy_work_item(work_item),
          task_id when is_binary(task_id) <- work_item.orchestration_task_id,
          {:ok, command, disposition} <-
            Orchestration.create_command(
@@ -350,6 +361,7 @@ defmodule SymmetryControl.Workspaces do
       when is_map(input) and is_binary(waiting_transition_id) and is_binary(action_id) do
     with :ok <- validate_action_id(action_id),
          {:ok, work_item} <- fetch(WorkItem, work_item_id),
+         :ok <- ensure_legacy_work_item(work_item),
          task_id when is_binary(task_id) <- work_item.orchestration_task_id,
          {:ok, task_before} <- Orchestration.task_snapshot(task_id),
          {:ok, command, disposition} <-
@@ -382,10 +394,13 @@ defmodule SymmetryControl.Workspaces do
   def retry_work_item(work_item_id, generation, action_id)
       when is_integer(generation) and generation >= 0 and is_binary(action_id) do
     with :ok <- validate_action_id(action_id),
-         true <- valid_uuid?(work_item_id) do
+         true <- valid_uuid?(work_item_id),
+         {:ok, work_item} <- fetch(WorkItem, work_item_id),
+         :ok <- ensure_legacy_work_item(work_item) do
       result =
         Repo.transaction(fn ->
           work_item = lock_work_item_with_project(work_item_id)
+          ensure_legacy_work_item(work_item) |> require_ok!()
           ensure_active_project(work_item.project) |> require_ok!()
           ensure_external_work_available(work_item) |> require_ok!()
           if work_item.assignee_type != "agent", do: Repo.rollback(:state_conflict)
@@ -745,6 +760,20 @@ defmodule SymmetryControl.Workspaces do
       else: {:error, :state_conflict}
   end
 
+  # Goal ownership is an all-or-nothing relational invariant. Partial rows stay
+  # on the legacy path until the Goals migration has made them authoritative.
+  defp ensure_legacy_work_item(work_item) do
+    if goal_owned_work_item?(work_item),
+      do: {:error, :goal_authority_required},
+      else: :ok
+  end
+
+  defp goal_owned_work_item?(work_item) do
+    is_binary(Map.get(work_item, :goal_id)) and
+      is_integer(Map.get(work_item, :admitted_revision)) and
+      is_map(Map.get(work_item, :acceptance_contract))
+  end
+
   defp project_mutation_allowed(%Project{status: "active"}, _attrs), do: :ok
 
   defp project_mutation_allowed(%Project{status: "archived"}, attrs) do
@@ -764,30 +793,52 @@ defmodule SymmetryControl.Workspaces do
   end
 
   defp project_has_active_execution?(project_id) do
-    Repo.exists?(
-      from item in WorkItem,
-        join: task in SymmetryControl.Orchestration.Task,
-        on: task.id == item.orchestration_task_id,
-        where: item.project_id == ^project_id and task.state in ^@active_execution_states
-    )
+    legacy_execution? =
+      Repo.exists?(
+        from item in WorkItem,
+          join: task in Task,
+          on: task.id == item.orchestration_task_id,
+          where: item.project_id == ^project_id and task.state in ^@active_execution_states
+      )
+
+    goal_execution? =
+      Repo.exists?(
+        from task in Task,
+          join: goal in SymmetryControl.Goals.Goal,
+          on: goal.id == task.goal_id,
+          where:
+            goal.project_id == ^project_id and not is_nil(task.goal_id) and
+              task.state in ^@active_execution_states
+      )
+
+    legacy_execution? or goal_execution?
   end
 
   defp ensure_resource_unreferenced(resource) do
-    if Repo.exists?(
-         from item in WorkItem,
-           where:
-             item.repository_resource_id == ^resource.id or
-               item.ci_resource_id == ^resource.id or
-               item.external_work_item_resource_id == ^resource.id
-       ),
-       do: {:error, :state_conflict},
-       else: :ok
+    work_item_reference? =
+      Repo.exists?(
+        from item in WorkItem,
+          where:
+            item.repository_resource_id == ^resource.id or
+              item.ci_resource_id == ^resource.id or
+              item.external_work_item_resource_id == ^resource.id
+      )
+
+    runtime_reference? =
+      Repo.exists?(from runtime in Runtime, where: runtime.repository_resource_id == ^resource.id)
+
+    if work_item_reference? or runtime_reference?,
+      do: {:error, :state_conflict},
+      else: :ok
   end
 
   defp resource_identity_change_allowed(resource, changeset) do
-    if Enum.any?([:kind, :connection_id, :external_ref], &Map.has_key?(changeset.changes, &1)),
-      do: ensure_resource_unreferenced(resource),
-      else: :ok
+    if Enum.any?(
+         [:kind, :provider, :connection_id, :external_ref],
+         &Map.has_key?(changeset.changes, &1)
+       ),
+       do: ensure_resource_unreferenced(resource),
+       else: :ok
   end
 
   defp validate_work_item_resources(changeset, project_id) do

@@ -1,0 +1,807 @@
+package state
+
+import (
+	"encoding/json"
+	"errors"
+	"os"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+func TestGoalSessionJournalRoundTripAcrossRestart(t *testing.T) {
+	directory := t.TempDir()
+	store, err := New(directory)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	intent := testGoalSessionIntent()
+	saved, err := store.SaveGoalSessionLaunchIntent(intent)
+	if err != nil {
+		t.Fatalf("SaveGoalSessionLaunchIntent() error = %v", err)
+	}
+	if saved.LaunchState != GoalSessionLaunchStateIntent || saved.SessionState != GoalSessionStateBusy || saved.NeedsReconciliation() {
+		t.Fatalf("saved launch intent = %#v", saved)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	restarted, err := New(directory)
+	if err != nil {
+		t.Fatalf("restart New() error = %v", err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	loaded, err := restarted.LoadGoalSession(saved.Key())
+	if err != nil {
+		t.Fatalf("LoadGoalSession() error = %v", err)
+	}
+	if loaded.Intent() != saved.Intent() || loaded.SchemaVersion != goalSessionSchemaVersion || loaded.CreatedAt.IsZero() {
+		t.Fatalf("loaded journal = %#v, want %#v", loaded, saved)
+	}
+
+	startedAt := time.Date(2026, 9, 9, 1, 2, 3, 0, time.UTC)
+	if _, err := restarted.MarkGoalSessionLaunchStarted(saved.Key(), startedAt); err != nil {
+		t.Fatalf("MarkGoalSessionLaunchStarted() error = %v", err)
+	}
+	attached, err := restarted.PersistGoalSessionHandle(saved.Key(), GoalSessionHandle{
+		NativeSessionID:       "native-session-local-only",
+		NativeSessionFilename: `C:\native\session.json`,
+	}, testGoalSessionCompatibility())
+	if err != nil {
+		t.Fatalf("PersistGoalSessionHandle() error = %v", err)
+	}
+	if attached.LaunchState != GoalSessionLaunchStateAttached || attached.NeedsReconciliation() {
+		t.Fatalf("attached journal = %#v", attached)
+	}
+	if err := restarted.Close(); err != nil {
+		t.Fatalf("restart Close() error = %v", err)
+	}
+
+	restartedAgain, err := New(directory)
+	if err != nil {
+		t.Fatalf("second restart New() error = %v", err)
+	}
+	t.Cleanup(func() { _ = restartedAgain.Close() })
+	loaded, err = restartedAgain.LoadGoalSession(saved.Key())
+	if err != nil {
+		t.Fatalf("LoadGoalSession() after attach error = %v", err)
+	}
+	if loaded.NativeSessionID != "native-session-local-only" || loaded.NativeSessionFilename != `C:\native\session.json` {
+		t.Fatalf("native handle was not durable: %#v", loaded)
+	}
+}
+
+func TestGoalSessionLaunchIntentReplayAndConflict(t *testing.T) {
+	store := mustStore(t)
+	intent := testGoalSessionIntent()
+	first, err := store.SaveGoalSessionLaunchIntent(intent)
+	if err != nil {
+		t.Fatalf("first SaveGoalSessionLaunchIntent() error = %v", err)
+	}
+	replayed, err := store.SaveGoalSessionLaunchIntent(intent)
+	if err != nil {
+		t.Fatalf("same SaveGoalSessionLaunchIntent() error = %v", err)
+	}
+	if replayed != first {
+		t.Fatalf("same intent replay = %#v, want %#v", replayed, first)
+	}
+	conflict := intent
+	conflict.WorkspaceFingerprint = "sha256:workspace-two"
+	if _, err := store.SaveGoalSessionLaunchIntent(conflict); !errors.Is(err, ErrGoalSessionConflict) {
+		t.Fatalf("changed intent error = %v, want ErrGoalSessionConflict", err)
+	}
+	duplicate := intent
+	duplicate.LocalHandleID = "handle-2"
+	if _, err := store.SaveGoalSessionLaunchIntent(duplicate); !errors.Is(err, ErrGoalSessionConflict) {
+		t.Fatalf("duplicate active launch error = %v, want ErrGoalSessionConflict", err)
+	}
+}
+
+func TestGoalSessionConcurrentIntentReplayIsSerialized(t *testing.T) {
+	store := mustStore(t)
+	intent := testGoalSessionIntent()
+	var group sync.WaitGroup
+	for range 32 {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			if _, err := store.SaveGoalSessionLaunchIntent(intent); err != nil {
+				t.Errorf("SaveGoalSessionLaunchIntent() error = %v", err)
+			}
+		}()
+	}
+	group.Wait()
+	journals, err := store.ListGoalSessions()
+	if err != nil {
+		t.Fatalf("ListGoalSessions() error = %v", err)
+	}
+	if len(journals) != 1 || journals[0].Key() != intent.Key() {
+		t.Fatalf("journals after concurrent replay = %#v", journals)
+	}
+}
+
+func TestGoalSessionUnknownFieldsAreRejected(t *testing.T) {
+	store := mustStore(t)
+	saved, err := store.SaveGoalSessionLaunchIntent(testGoalSessionIntent())
+	if err != nil {
+		t.Fatalf("SaveGoalSessionLaunchIntent() error = %v", err)
+	}
+	encoded, err := json.Marshal(saved)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var object map[string]any
+	if err := json.Unmarshal(encoded, &object); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	object["unexpected"] = true
+	encoded, err = json.Marshal(object)
+	if err != nil {
+		t.Fatalf("Marshal(object) error = %v", err)
+	}
+	if err := os.WriteFile(store.goalSessionPath(saved.Key()), encoded, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if _, err := store.LoadGoalSession(saved.Key()); err == nil || !strings.Contains(err.Error(), "decode goal session journal") {
+		t.Fatalf("LoadGoalSession() error = %v, want strict unknown-field failure", err)
+	}
+}
+
+func TestGoalSessionCrashGapIsQueryableAndBlocksDuplicateRestart(t *testing.T) {
+	store := mustStore(t)
+	intent := testGoalSessionIntent()
+	saved, err := store.SaveGoalSessionLaunchIntent(intent)
+	if err != nil {
+		t.Fatalf("SaveGoalSessionLaunchIntent() error = %v", err)
+	}
+	if _, err := store.MarkGoalSessionLaunchStarted(saved.Key(), time.Date(2026, 9, 9, 2, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("MarkGoalSessionLaunchStarted() error = %v", err)
+	}
+
+	loaded, err := store.LoadGoalSession(saved.Key())
+	if err != nil {
+		t.Fatalf("LoadGoalSession() error = %v", err)
+	}
+	if !loaded.IsUncertainLaunch() || loaded.LaunchState != GoalSessionLaunchStateLaunching || loaded.NativeSessionID != "" {
+		t.Fatalf("crash-gap journal = %#v", loaded)
+	}
+	if replayed, err := store.SaveGoalSessionLaunchIntent(intent); !errors.Is(err, ErrGoalSessionUncertain) || !replayed.NeedsReconciliation() {
+		t.Fatalf("same uncertain replay = %#v, error = %v", replayed, err)
+	}
+
+	duplicate := intent
+	duplicate.LocalHandleID = "handle-replacement"
+	if _, err := store.SaveGoalSessionLaunchIntent(duplicate); !errors.Is(err, ErrGoalSessionUncertain) {
+		t.Fatalf("duplicate restart error = %v, want ErrGoalSessionUncertain", err)
+	}
+	if err := store.CheckGoalSessionCompatibility(saved.Key(), testGoalSessionCompatibility()); !errors.Is(err, ErrGoalSessionUncertain) {
+		t.Fatalf("compatibility check error = %v, want ErrGoalSessionUncertain", err)
+	}
+
+	if _, err := store.MarkGoalSessionUncertain(saved.Key(), "native creation returned before handle persistence"); err != nil {
+		t.Fatalf("MarkGoalSessionUncertain() error = %v", err)
+	}
+	reconciled, err := store.ResolveGoalSessionUncertain(saved.Key(), GoalSessionHandle{NativeSessionID: "reconciled-native"}, testGoalSessionCompatibility())
+	if err != nil {
+		t.Fatalf("ResolveGoalSessionUncertain() error = %v", err)
+	}
+	if reconciled.LaunchState != GoalSessionLaunchStateAttached || reconciled.NeedsReconciliation() {
+		t.Fatalf("reconciled journal = %#v", reconciled)
+	}
+}
+
+func TestGoalSessionLineageBlocksCrossGenerationButAllowsIndependentWorkItem(t *testing.T) {
+	store := mustStore(t)
+	firstIntent := testGoalSessionIntent()
+	first, err := store.SaveGoalSessionLaunchIntent(firstIntent)
+	if err != nil {
+		t.Fatalf("SaveGoalSessionLaunchIntent(first) error = %v", err)
+	}
+	if _, err := store.MarkGoalSessionLaunchStarted(first.Key(), time.Date(2026, 9, 9, 4, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("MarkGoalSessionLaunchStarted() error = %v", err)
+	}
+
+	status, err := store.CheckGoalSessionLineage(firstIntent.LineageKey())
+	if err != nil {
+		t.Fatalf("CheckGoalSessionLineage() error = %v", err)
+	}
+	if !status.BlocksNewLaunch() || status.State != GoalSessionLineageStateUncertain || len(status.SessionKeys) != 1 || status.SessionKeys[0] != first.Key() {
+		t.Fatalf("lineage status = %#v", status)
+	}
+
+	retry := firstIntent
+	retry.LaunchIntentID = "intent-retry-2"
+	retry.LocalHandleID = "handle-retry-2"
+	retry.RunID = "run-2"
+	retry.Generation = 2
+	if _, err := store.SaveGoalSessionLaunchIntent(retry); !errors.Is(err, ErrGoalSessionUncertain) {
+		t.Fatalf("cross-generation retry error = %v, want ErrGoalSessionUncertain", err)
+	}
+
+	independent := retry
+	independent.LaunchIntentID = "intent-independent"
+	independent.LocalHandleID = "handle-independent"
+	independent.RunID = "run-independent"
+	independent.Generation = 1
+	independent.WorkItemID = "work-item-independent"
+	independent.TaskID = "task-independent"
+	if saved, err := store.SaveGoalSessionLaunchIntent(independent); err != nil {
+		t.Fatalf("independent WorkItem launch error = %v", err)
+	} else if saved.LineageKey() == firstIntent.LineageKey() {
+		t.Fatalf("independent launch reused blocked lineage: %#v", saved)
+	}
+}
+
+func TestGoalSessionLineageReleasesOnlyAfterExplicitKnownStopAcrossRestart(t *testing.T) {
+	directory := t.TempDir()
+	store, err := New(directory)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	intent := testGoalSessionIntent()
+	saved, err := store.SaveGoalSessionLaunchIntent(intent)
+	if err != nil {
+		t.Fatalf("SaveGoalSessionLaunchIntent() error = %v", err)
+	}
+	if _, err := store.MarkGoalSessionLaunchStarted(saved.Key(), time.Date(2026, 9, 9, 4, 1, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("MarkGoalSessionLaunchStarted() error = %v", err)
+	}
+	if _, err := store.MarkGoalSessionUncertain(saved.Key(), "native launch result was lost"); err != nil {
+		t.Fatalf("MarkGoalSessionUncertain() error = %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	restarted, err := New(directory)
+	if err != nil {
+		t.Fatalf("restart New() error = %v", err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	status, err := restarted.CheckGoalSessionLineage(intent.LineageKey())
+	if err != nil {
+		t.Fatalf("CheckGoalSessionLineage() after restart error = %v", err)
+	}
+	if !status.BlocksNewLaunch() || status.State != GoalSessionLineageStateUncertain {
+		t.Fatalf("restarted lineage status = %#v", status)
+	}
+
+	retry := intent
+	retry.LaunchIntentID = "intent-after-restart"
+	retry.LocalHandleID = "handle-after-restart"
+	retry.RunID = "run-after-restart"
+	retry.Generation = 2
+	if _, err := restarted.SaveGoalSessionLaunchIntent(retry); !errors.Is(err, ErrGoalSessionUncertain) {
+		t.Fatalf("retry before known stop error = %v, want ErrGoalSessionUncertain", err)
+	}
+
+	wrong := testGoalSessionCompatibility()
+	wrong.WorkspaceFingerprint = "sha256:other-workspace"
+	if _, err := restarted.ResolveGoalSessionUncertainStopped(saved.Key(), wrong); !errors.Is(err, ErrGoalSessionWorkspaceMismatch) {
+		t.Fatalf("ResolveGoalSessionUncertainStopped() mismatch error = %v", err)
+	}
+	if _, err := restarted.ResolveGoalSessionUncertainStopped(saved.Key(), testGoalSessionCompatibility()); err != nil {
+		t.Fatalf("ResolveGoalSessionUncertainStopped() error = %v", err)
+	}
+	status, err = restarted.CheckGoalSessionLineage(intent.LineageKey())
+	if err != nil {
+		t.Fatalf("CheckGoalSessionLineage() after known stop error = %v", err)
+	}
+	if status.BlocksNewLaunch() || status.State != GoalSessionLineageStateFree || len(status.SessionKeys) != 0 {
+		t.Fatalf("lineage remained blocked after known stop: %#v", status)
+	}
+	if saved, err := restarted.SaveGoalSessionLaunchIntent(retry); err != nil {
+		t.Fatalf("retry after known stop error = %v", err)
+	} else if saved.Key() != retry.Key() {
+		t.Fatalf("retry after known stop key = %#v, want %#v", saved.Key(), retry.Key())
+	}
+}
+
+func TestGoalSessionLineageAttachedStateReleasesOnlyAfterClose(t *testing.T) {
+	store := mustStore(t)
+	intent := testGoalSessionIntent()
+	saved, err := store.SaveGoalSessionLaunchIntent(intent)
+	if err != nil {
+		t.Fatalf("SaveGoalSessionLaunchIntent() error = %v", err)
+	}
+	if _, err := store.MarkGoalSessionLaunchStarted(saved.Key()); err != nil {
+		t.Fatalf("MarkGoalSessionLaunchStarted() error = %v", err)
+	}
+	if _, err := store.PersistGoalSessionHandle(saved.Key(), GoalSessionHandle{NativeSessionID: "native-session"}); err != nil {
+		t.Fatalf("PersistGoalSessionHandle() error = %v", err)
+	}
+	status, err := store.CheckGoalSessionLineage(intent.LineageKey())
+	if err != nil {
+		t.Fatalf("CheckGoalSessionLineage() attached error = %v", err)
+	}
+	if !status.BlocksNewLaunch() || status.State != GoalSessionLineageStateAttached {
+		t.Fatalf("attached lineage status = %#v", status)
+	}
+	retry := intent
+	retry.LaunchIntentID = "intent-attached-retry"
+	retry.LocalHandleID = "handle-attached-retry"
+	retry.RunID = "run-attached-retry"
+	retry.Generation = 2
+	if _, err := store.SaveGoalSessionLaunchIntent(retry); !errors.Is(err, ErrGoalSessionConflict) {
+		t.Fatalf("attached retry error = %v, want ErrGoalSessionConflict", err)
+	}
+	if _, err := store.CloseGoalSession(saved.Key()); err != nil {
+		t.Fatalf("CloseGoalSession() error = %v", err)
+	}
+	status, err = store.CheckGoalSessionLineage(intent.LineageKey())
+	if err != nil {
+		t.Fatalf("CheckGoalSessionLineage() closed error = %v", err)
+	}
+	if status.BlocksNewLaunch() || status.State != GoalSessionLineageStateFree {
+		t.Fatalf("closed lineage status = %#v", status)
+	}
+}
+
+func TestGoalSessionLineageDirtyIndexRebuildsFromJournal(t *testing.T) {
+	store := mustStore(t)
+	intent := testGoalSessionIntent()
+	saved, err := store.SaveGoalSessionLaunchIntent(intent)
+	if err != nil {
+		t.Fatalf("SaveGoalSessionLaunchIntent() error = %v", err)
+	}
+	if _, err := store.MarkGoalSessionLaunchStarted(saved.Key()); err != nil {
+		t.Fatalf("MarkGoalSessionLaunchStarted() error = %v", err)
+	}
+	dirty := goalSessionLineageIndex{
+		SchemaVersion: goalSessionLineageSchemaVersion,
+		Lineage:       intent.LineageKey(),
+		Dirty:         true,
+		Entries:       []goalSessionLineageEntry{},
+	}
+	encoded, err := json.Marshal(dirty)
+	if err != nil {
+		t.Fatalf("Marshal(dirty index) error = %v", err)
+	}
+	if err := os.WriteFile(store.goalSessionLineagePath(intent.LineageKey()), encoded, 0o600); err != nil {
+		t.Fatalf("WriteFile(dirty index) error = %v", err)
+	}
+
+	status, err := store.CheckGoalSessionLineage(intent.LineageKey())
+	if err != nil {
+		t.Fatalf("CheckGoalSessionLineage() error = %v", err)
+	}
+	if !status.BlocksNewLaunch() || status.State != GoalSessionLineageStateUncertain || len(status.SessionKeys) != 1 || status.SessionKeys[0] != saved.Key() {
+		t.Fatalf("rebuilt lineage status = %#v", status)
+	}
+	clean, err := store.loadGoalSessionLineageIndexLocked(intent.LineageKey())
+	if err != nil {
+		t.Fatalf("load rebuilt index error = %v", err)
+	}
+	if clean.Dirty || len(clean.Entries) != 1 || clean.Entries[0].SessionKey != saved.Key() {
+		t.Fatalf("rebuilt index = %#v", clean)
+	}
+}
+
+func TestGoalSessionReconciliationRequiresStrictCompatibilityIncludingClosedReplay(t *testing.T) {
+	store := mustStore(t)
+	intent := testGoalSessionIntent()
+	saved, err := store.SaveGoalSessionLaunchIntent(intent)
+	if err != nil {
+		t.Fatalf("SaveGoalSessionLaunchIntent() error = %v", err)
+	}
+	if _, err := store.MarkGoalSessionLaunchStarted(saved.Key()); err != nil {
+		t.Fatalf("MarkGoalSessionLaunchStarted() error = %v", err)
+	}
+	if _, err := store.MarkGoalSessionUncertain(saved.Key(), "reconcile strict compatibility"); err != nil {
+		t.Fatalf("MarkGoalSessionUncertain() error = %v", err)
+	}
+
+	if _, err := store.ResolveGoalSessionUncertainStopped(saved.Key(), GoalSessionCompatibility{}); !errors.Is(err, ErrGoalSessionCompatibilityIncomplete) {
+		t.Fatalf("zero compatibility error = %v, want ErrGoalSessionCompatibilityIncomplete", err)
+	}
+	if _, err := store.ResolveGoalSessionUncertain(saved.Key(), GoalSessionHandle{NativeSessionID: "native-reconciled"}, GoalSessionCompatibility{}); !errors.Is(err, ErrGoalSessionCompatibilityIncomplete) {
+		t.Fatalf("zero compatibility reattach error = %v, want ErrGoalSessionCompatibilityIncomplete", err)
+	}
+	if _, err := store.ResolveGoalSessionUncertainStopped(saved.Key(), testGoalSessionCompatibility()); err != nil {
+		t.Fatalf("ResolveGoalSessionUncertainStopped() error = %v", err)
+	}
+
+	wrong := testGoalSessionCompatibility()
+	wrong.WorkspaceFingerprint = "sha256:wrong-after-close"
+	if _, err := store.ResolveGoalSessionUncertainStopped(saved.Key(), wrong); !errors.Is(err, ErrGoalSessionWorkspaceMismatch) {
+		t.Fatalf("closed replay mismatch error = %v, want ErrGoalSessionWorkspaceMismatch", err)
+	}
+	closed, err := store.LoadGoalSession(saved.Key())
+	if err != nil {
+		t.Fatalf("LoadGoalSession() after closed replay error = %v", err)
+	}
+	if closed.LaunchState != GoalSessionLaunchStateClosed || closed.SessionState != GoalSessionStateClosed {
+		t.Fatalf("closed journal changed after rejected replay: %#v", closed)
+	}
+	if replayed, err := store.ResolveGoalSessionUncertainStopped(saved.Key(), testGoalSessionCompatibility()); err != nil || replayed != closed {
+		t.Fatalf("exact closed replay = %#v, error = %v, want %#v", replayed, err, closed)
+	}
+}
+
+func TestGoalSessionJournalCommitSurvivesLineageIndexRefreshFailure(t *testing.T) {
+	store := mustStore(t)
+	saved, err := store.SaveGoalSessionLaunchIntent(testGoalSessionIntent())
+	if err != nil {
+		t.Fatalf("SaveGoalSessionLaunchIntent() error = %v", err)
+	}
+	original := applyFileSecurity
+	denied := errors.New("derived index refresh denied")
+	calls := 0
+	applyFileSecurity = func(path string) error {
+		calls++
+		if calls == 3 {
+			return denied
+		}
+		return original(path)
+	}
+	started, startErr := store.MarkGoalSessionLaunchStarted(saved.Key())
+	applyFileSecurity = original
+	if startErr != nil {
+		t.Fatalf("MarkGoalSessionLaunchStarted() error = %v after journal commit, calls=%d", startErr, calls)
+	}
+	if started.LaunchState != GoalSessionLaunchStateLaunching || !started.NeedsReconciliation() {
+		t.Fatalf("started journal = %#v", started)
+	}
+	status, err := store.CheckGoalSessionLineage(testGoalSessionIntent().LineageKey())
+	if err != nil {
+		t.Fatalf("CheckGoalSessionLineage() after failed refresh error = %v", err)
+	}
+	if !status.BlocksNewLaunch() || status.State != GoalSessionLineageStateUncertain {
+		t.Fatalf("rebuilt status after failed refresh = %#v", status)
+	}
+}
+
+func TestGoalSessionIntentGapClosesIdempotentlyBeforeNativeLaunch(t *testing.T) {
+	store := mustStore(t)
+	intent := testGoalSessionIntent()
+	saved, err := store.SaveGoalSessionLaunchIntent(intent)
+	if err != nil {
+		t.Fatalf("SaveGoalSessionLaunchIntent() error = %v", err)
+	}
+	closed, err := store.AbortGoalSessionLaunchBeforeNativeStart(saved.Key())
+	if err != nil {
+		t.Fatalf("AbortGoalSessionLaunchBeforeNativeStart() error = %v", err)
+	}
+	if closed.LaunchState != GoalSessionLaunchStateClosed || closed.SessionState != GoalSessionStateClosed || closed.NeedsReconciliation() {
+		t.Fatalf("closed pre-launch gap = %#v", closed)
+	}
+	if replayed, err := store.AbortGoalSessionLaunchBeforeNativeStart(saved.Key()); err != nil || replayed != closed {
+		t.Fatalf("pre-launch abort replay = %#v, error = %v, want %#v", replayed, err, closed)
+	}
+	status, err := store.CheckGoalSessionLineage(intent.LineageKey())
+	if err != nil {
+		t.Fatalf("CheckGoalSessionLineage() after pre-launch abort error = %v", err)
+	}
+	if status.BlocksNewLaunch() {
+		t.Fatalf("pre-launch abort left lineage blocked: %#v", status)
+	}
+
+	retry := intent
+	retry.LaunchIntentID = "intent-after-prelaunch-abort"
+	retry.LocalHandleID = "handle-after-prelaunch-abort"
+	retry.RunID = "run-after-prelaunch-abort"
+	retry.Generation = 2
+	if _, err := store.SaveGoalSessionLaunchIntent(retry); err != nil {
+		t.Fatalf("retry after pre-launch abort error = %v", err)
+	}
+}
+
+func TestGoalSessionRecoveryDoesNotUpgradeUnstartedIntentToUncertain(t *testing.T) {
+	store := mustStore(t)
+	intent := testGoalSessionIntent()
+	saved, err := store.SaveGoalSessionLaunchIntent(intent)
+	if err != nil {
+		t.Fatalf("SaveGoalSessionLaunchIntent() error = %v", err)
+	}
+	recovered, err := store.MarkGoalSessionUncertain(saved.Key(), "daemon restart before launch boundary")
+	if err != nil {
+		t.Fatalf("MarkGoalSessionUncertain() error = %v", err)
+	}
+	if recovered.LaunchState != GoalSessionLaunchStateClosed || recovered.SessionState != GoalSessionStateClosed || recovered.NeedsReconciliation() || recovered.UncertainReason != "" {
+		t.Fatalf("unstarted intent was upgraded instead of closed: %#v", recovered)
+	}
+	status, err := store.CheckGoalSessionLineage(intent.LineageKey())
+	if err != nil {
+		t.Fatalf("CheckGoalSessionLineage() after recovery error = %v", err)
+	}
+	if status.BlocksNewLaunch() {
+		t.Fatalf("recovery of unstarted intent left lineage blocked: %#v", status)
+	}
+}
+
+func TestGoalSessionCompatibilityRejectsOwnerVersionAndWorkspaceMismatch(t *testing.T) {
+	store := mustStore(t)
+	saved, err := store.SaveGoalSessionLaunchIntent(testGoalSessionIntent())
+	if err != nil {
+		t.Fatalf("SaveGoalSessionLaunchIntent() error = %v", err)
+	}
+	if _, err := store.MarkGoalSessionLaunchStarted(saved.Key()); err != nil {
+		t.Fatalf("MarkGoalSessionLaunchStarted() error = %v", err)
+	}
+	if _, err := store.PersistGoalSessionHandle(saved.Key(), GoalSessionHandle{NativeSessionID: "native"}); err != nil {
+		t.Fatalf("PersistGoalSessionHandle() error = %v", err)
+	}
+
+	cases := []struct {
+		name   string
+		want   error
+		mutate func(*GoalSessionCompatibility)
+	}{
+		{name: "owner", want: ErrGoalSessionOwnerMismatch, mutate: func(value *GoalSessionCompatibility) { value.OwnerID = "other-owner" }},
+		{name: "version", want: ErrGoalSessionVersionMismatch, mutate: func(value *GoalSessionCompatibility) { value.AdapterProtocolVersion++ }},
+		{name: "workspace", want: ErrGoalSessionWorkspaceMismatch, mutate: func(value *GoalSessionCompatibility) { value.WorkspaceFingerprint = "sha256:other-workspace" }},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			expected := testGoalSessionCompatibility()
+			test.mutate(&expected)
+			if err := store.CheckGoalSessionCompatibility(saved.Key(), expected); !errors.Is(err, test.want) {
+				t.Fatalf("CheckGoalSessionCompatibility() error = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
+func TestGoalSessionControlProjectionOmitsRawNativeIdentity(t *testing.T) {
+	store := mustStore(t)
+	saved, err := store.SaveGoalSessionLaunchIntent(testGoalSessionIntent())
+	if err != nil {
+		t.Fatalf("SaveGoalSessionLaunchIntent() error = %v", err)
+	}
+	if _, err := store.MarkGoalSessionLaunchStarted(saved.Key()); err != nil {
+		t.Fatalf("MarkGoalSessionLaunchStarted() error = %v", err)
+	}
+	attached, err := store.PersistGoalSessionHandle(saved.Key(), GoalSessionHandle{
+		NativeSessionID:       "native-private-id",
+		NativeSessionFilename: `C:\private\native.json`,
+	})
+	if err != nil {
+		t.Fatalf("PersistGoalSessionHandle() error = %v", err)
+	}
+	encoded, err := json.Marshal(attached.ControlProjection())
+	if err != nil {
+		t.Fatalf("Marshal(ControlProjection()) error = %v", err)
+	}
+	if strings.Contains(string(encoded), "native-private-id") || strings.Contains(string(encoded), "native.json") {
+		t.Fatalf("control projection leaked local native identity: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), `"local_handle_id":"handle-1"`) {
+		t.Fatalf("control projection omitted local_handle_id: %s", encoded)
+	}
+}
+
+func TestCloseGoalSessionClearsNativeHandleAndReplaysAfterRestart(t *testing.T) {
+	directory := t.TempDir()
+	store, err := New(directory)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	intent := testGoalSessionIntent()
+	saved, err := store.SaveGoalSessionLaunchIntent(intent)
+	if err != nil {
+		t.Fatalf("SaveGoalSessionLaunchIntent() error = %v", err)
+	}
+	if _, err := store.MarkGoalSessionLaunchStarted(saved.Key(), time.Date(2026, 9, 9, 3, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("MarkGoalSessionLaunchStarted() error = %v", err)
+	}
+	if _, err := store.PersistGoalSessionHandle(saved.Key(), GoalSessionHandle{
+		NativeSessionID:       "native-session-local-only",
+		NativeSessionFilename: `C:\native\session.json`,
+	}, testGoalSessionCompatibility()); err != nil {
+		t.Fatalf("PersistGoalSessionHandle() error = %v", err)
+	}
+
+	closed, err := store.CloseGoalSession(saved.Key())
+	if err != nil {
+		t.Fatalf("CloseGoalSession() error = %v", err)
+	}
+	if closed.SessionState != GoalSessionStateClosed || closed.LaunchState != GoalSessionLaunchStateClosed || closed.NativeSessionID != "" || closed.NativeSessionFilename != "" {
+		t.Fatalf("closed journal = %#v", closed)
+	}
+	if closed.Intent() != intent || closed.Compatibility() != testGoalSessionCompatibility() {
+		t.Fatalf("close did not retain audit identity: %#v", closed)
+	}
+	if replayed, err := store.CloseGoalSession(saved.Key()); err != nil || replayed != closed {
+		t.Fatalf("closed session replay = %#v, error = %v, want %#v", replayed, err, closed)
+	}
+	if _, err := store.PersistGoalSessionHandle(saved.Key(), GoalSessionHandle{NativeSessionID: "replacement-native"}); !errors.Is(err, ErrGoalSessionClosed) {
+		t.Fatalf("PersistGoalSessionHandle() after close error = %v, want ErrGoalSessionClosed", err)
+	}
+	if replayed, err := store.SaveGoalSessionLaunchIntent(intent); err != nil || replayed != closed {
+		t.Fatalf("closed intent replay = %#v, error = %v, want %#v", replayed, err, closed)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	restarted, err := New(directory)
+	if err != nil {
+		t.Fatalf("restart New() error = %v", err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	replayed, err := restarted.LoadGoalSession(saved.Key())
+	if err != nil {
+		t.Fatalf("LoadGoalSession() after close error = %v", err)
+	}
+	if replayed != closed {
+		t.Fatalf("replayed closed journal = %#v, want %#v", replayed, closed)
+	}
+	if err := restarted.CheckGoalSessionCompatibility(saved.Key(), testGoalSessionCompatibility()); !errors.Is(err, ErrGoalSessionClosed) {
+		t.Fatalf("CheckGoalSessionCompatibility() after close error = %v, want ErrGoalSessionClosed", err)
+	}
+}
+
+func TestCloseGoalSessionRejectsUncertainJournalAndPreservesIt(t *testing.T) {
+	store := mustStore(t)
+	saved, err := store.SaveGoalSessionLaunchIntent(testGoalSessionIntent())
+	if err != nil {
+		t.Fatalf("SaveGoalSessionLaunchIntent() error = %v", err)
+	}
+	if _, err := store.MarkGoalSessionLaunchStarted(saved.Key(), time.Date(2026, 9, 9, 3, 1, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("MarkGoalSessionLaunchStarted() error = %v", err)
+	}
+	if _, err := store.MarkGoalSessionUncertain(saved.Key(), "native process status is unavailable"); err != nil {
+		t.Fatalf("MarkGoalSessionUncertain() error = %v", err)
+	}
+	before, err := store.LoadGoalSession(saved.Key())
+	if err != nil {
+		t.Fatalf("LoadGoalSession() error = %v", err)
+	}
+	if _, err := store.CloseGoalSession(saved.Key()); !errors.Is(err, ErrGoalSessionUncertain) {
+		t.Fatalf("CloseGoalSession() error = %v, want ErrGoalSessionUncertain", err)
+	}
+	after, err := store.LoadGoalSession(saved.Key())
+	if err != nil {
+		t.Fatalf("LoadGoalSession() after failed close error = %v", err)
+	}
+	if after != before || !after.NeedsReconciliation() || after.LaunchState != GoalSessionLaunchStateUncertain {
+		t.Fatalf("uncertain journal changed by close: before=%#v after=%#v", before, after)
+	}
+	if err := store.DeleteGoalSession(saved.Key()); !errors.Is(err, ErrGoalSessionUncertain) {
+		t.Fatalf("DeleteGoalSession() error = %v, want ErrGoalSessionUncertain", err)
+	}
+}
+
+func TestMarkGoalSessionUncertainClearsAttachedHandleAndSurvivesReplay(t *testing.T) {
+	directory := t.TempDir()
+	store, err := New(directory)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	intent := testGoalSessionIntent()
+	saved, err := store.SaveGoalSessionLaunchIntent(intent)
+	if err != nil {
+		t.Fatalf("SaveGoalSessionLaunchIntent() error = %v", err)
+	}
+	if _, err := store.MarkGoalSessionLaunchStarted(saved.Key(), time.Date(2026, 9, 9, 3, 2, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("MarkGoalSessionLaunchStarted() error = %v", err)
+	}
+	if _, err := store.PersistGoalSessionHandle(saved.Key(), GoalSessionHandle{
+		NativeSessionID:       "native-private-id",
+		NativeSessionFilename: `C:\private\native.json`,
+	}, testGoalSessionCompatibility()); err != nil {
+		t.Fatalf("PersistGoalSessionHandle() error = %v", err)
+	}
+
+	uncertain, err := store.MarkGoalSessionUncertain(saved.Key(), "native process status is unavailable")
+	if err != nil {
+		t.Fatalf("MarkGoalSessionUncertain() error = %v", err)
+	}
+	if uncertain.LaunchState != GoalSessionLaunchStateUncertain || uncertain.SessionState != GoalSessionStateUnavailable || uncertain.NativeSessionID != "" || uncertain.NativeSessionFilename != "" || !uncertain.NeedsReconciliation() {
+		t.Fatalf("uncertain journal = %#v", uncertain)
+	}
+	if uncertain.Intent() != intent || uncertain.Compatibility() != testGoalSessionCompatibility() {
+		t.Fatalf("uncertain journal did not retain audit identity: %#v", uncertain)
+	}
+	if retried, err := store.MarkGoalSessionUncertain(saved.Key(), "native process status is unavailable"); err != nil || retried.LaunchState != GoalSessionLaunchStateUncertain || retried.NativeSessionID != "" || retried.NativeSessionFilename != "" {
+		t.Fatalf("uncertain retry = %#v, error = %v", retried, err)
+	}
+	if replayed, err := store.SaveGoalSessionLaunchIntent(intent); !errors.Is(err, ErrGoalSessionUncertain) || replayed.NativeSessionID != "" || replayed.NativeSessionFilename != "" {
+		t.Fatalf("uncertain intent replay = %#v, error = %v", replayed, err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	restarted, err := New(directory)
+	if err != nil {
+		t.Fatalf("restart New() error = %v", err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	replayed, err := restarted.LoadGoalSession(saved.Key())
+	if err != nil {
+		t.Fatalf("LoadGoalSession() after restart error = %v", err)
+	}
+	if replayed.LaunchState != GoalSessionLaunchStateUncertain || replayed.NativeSessionID != "" || replayed.NativeSessionFilename != "" || !replayed.NeedsReconciliation() {
+		t.Fatalf("replayed uncertain journal = %#v", replayed)
+	}
+	if err := restarted.DeleteGoalSession(saved.Key()); !errors.Is(err, ErrGoalSessionUncertain) {
+		t.Fatalf("DeleteGoalSession() after restart error = %v, want ErrGoalSessionUncertain", err)
+	}
+}
+
+func TestSetGoalSessionStateClosedUsesSafeClose(t *testing.T) {
+	store := mustStore(t)
+	saved, err := store.SaveGoalSessionLaunchIntent(testGoalSessionIntent())
+	if err != nil {
+		t.Fatalf("SaveGoalSessionLaunchIntent() error = %v", err)
+	}
+	if _, err := store.MarkGoalSessionLaunchStarted(saved.Key()); err != nil {
+		t.Fatalf("MarkGoalSessionLaunchStarted() error = %v", err)
+	}
+	if _, err := store.PersistGoalSessionHandle(saved.Key(), GoalSessionHandle{NativeSessionID: "native-private-id"}); err != nil {
+		t.Fatalf("PersistGoalSessionHandle() error = %v", err)
+	}
+	closed, err := store.SetGoalSessionState(saved.Key(), GoalSessionStateClosed)
+	if err != nil {
+		t.Fatalf("SetGoalSessionState(closed) error = %v", err)
+	}
+	if closed.NativeSessionID != "" || closed.LaunchState != GoalSessionLaunchStateClosed {
+		t.Fatalf("SetGoalSessionState(closed) retained native identity: %#v", closed)
+	}
+}
+
+func TestGoalSessionAtomicWriteFailureLeavesPriorRecord(t *testing.T) {
+	store := mustStore(t)
+	saved, err := store.SaveGoalSessionLaunchIntent(testGoalSessionIntent())
+	if err != nil {
+		t.Fatalf("SaveGoalSessionLaunchIntent() error = %v", err)
+	}
+	original := applyFileSecurity
+	denied := errors.New("security setup denied")
+	applyFileSecurity = func(string) error { return denied }
+	t.Cleanup(func() { applyFileSecurity = original })
+	if _, err := store.MarkGoalSessionLaunchStarted(saved.Key()); err == nil {
+		t.Fatal("MarkGoalSessionLaunchStarted() succeeded when atomic write was denied")
+	}
+	loaded, err := store.LoadGoalSession(saved.Key())
+	if err != nil {
+		t.Fatalf("LoadGoalSession() after failed write error = %v", err)
+	}
+	if loaded.LaunchState != GoalSessionLaunchStateIntent || loaded.LaunchAttempted {
+		t.Fatalf("failed atomic write mutated prior record: %#v", loaded)
+	}
+}
+
+func testGoalSessionIntent() GoalSessionLaunchIntent {
+	return GoalSessionLaunchIntent{
+		LaunchIntentID:         "intent-1",
+		GoalID:                 "goal-1",
+		GoalRevision:           2,
+		WorkItemID:             "work-item-1",
+		TaskID:                 "task-1",
+		RunID:                  "run-1",
+		Generation:             1,
+		AdmissionID:            "admission-1",
+		LocalHandleID:          "handle-1",
+		OwnerID:                "owner-1",
+		MachineID:              "machine-1",
+		RuntimeID:              "runtime-1",
+		RuntimeEpoch:           7,
+		DaemonInstanceID:       "daemon-1",
+		HarnessKind:            "codex",
+		HarnessVersion:         "1.2.3",
+		AdapterVersion:         "adapter-4",
+		AdapterProtocolVersion: 3,
+		WorkspaceFingerprint:   "sha256:workspace-one",
+		SessionMode:            GoalSessionModeFresh,
+	}
+}
+
+func testGoalSessionCompatibility() GoalSessionCompatibility {
+	intent := testGoalSessionIntent()
+	return GoalSessionCompatibility{
+		OwnerID:                intent.OwnerID,
+		MachineID:              intent.MachineID,
+		RuntimeID:              intent.RuntimeID,
+		RuntimeEpoch:           intent.RuntimeEpoch,
+		DaemonInstanceID:       intent.DaemonInstanceID,
+		HarnessKind:            intent.HarnessKind,
+		HarnessVersion:         intent.HarnessVersion,
+		AdapterVersion:         intent.AdapterVersion,
+		AdapterProtocolVersion: intent.AdapterProtocolVersion,
+		WorkspaceFingerprint:   intent.WorkspaceFingerprint,
+	}
+}

@@ -1,0 +1,1294 @@
+package state
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+)
+
+const (
+	goalSessionsDirectoryName       = "sessions"
+	goalSessionFilePrefix           = "session-"
+	goalSessionFileSuffix           = ".json"
+	goalSessionLineageFilePrefix    = "lineage-"
+	goalSessionLineageFileSuffix    = ".json"
+	goalSessionSchemaVersion        = 1
+	goalSessionLineageSchemaVersion = 1
+)
+
+const (
+	// Goal session lifecycle states mirror the durable harness_sessions state
+	// values in docs/design/data.md.
+	GoalSessionStateAvailable   = "available"
+	GoalSessionStateBusy        = "busy"
+	GoalSessionStateUnavailable = "unavailable"
+	GoalSessionStateClosed      = "closed"
+
+	// Launch states are local recovery facts. They are deliberately separate
+	// from SessionState, which is the state exposed to the control plane.
+	GoalSessionLaunchStateIntent    = "intent"
+	GoalSessionLaunchStateLaunching = "launching"
+	GoalSessionLaunchStateAttached  = "attached"
+	GoalSessionLaunchStateUncertain = "uncertain"
+	GoalSessionLaunchStateClosed    = "closed"
+
+	GoalSessionModeFresh   = "fresh"
+	GoalSessionModeResume  = "resume"
+	GoalSessionModeHandoff = "handoff"
+)
+
+const (
+	// GoalSessionLineageStateFree means that no local launch reservation remains
+	// for the lineage. Every other state is a barrier for a replacement launch.
+	GoalSessionLineageStateFree      GoalSessionLineageState = "free"
+	GoalSessionLineageStateReserved  GoalSessionLineageState = "reserved"
+	GoalSessionLineageStateLaunching GoalSessionLineageState = "launching"
+	GoalSessionLineageStateAttached  GoalSessionLineageState = "attached"
+	GoalSessionLineageStateUncertain GoalSessionLineageState = "uncertain"
+)
+
+var (
+	// ErrGoalSessionConflict means that an idempotent launch replay contains
+	// different identity or launch data, or that another active session already
+	// owns the requested local handle.
+	ErrGoalSessionConflict = errors.New("goal session journal conflict")
+	// ErrGoalSessionUncertain means that native launch effects cannot be proved
+	// from the local journal. Callers must reconcile before starting again.
+	ErrGoalSessionUncertain = errors.New("goal session launch is uncertain")
+	// ErrGoalSessionOwnerMismatch means that a session is being used by a
+	// different machine/runtime/daemon owner.
+	ErrGoalSessionOwnerMismatch = errors.New("goal session owner mismatch")
+	// ErrGoalSessionVersionMismatch means that the installed native harness or
+	// adapter does not match the version recorded at launch.
+	ErrGoalSessionVersionMismatch = errors.New("goal session version mismatch")
+	// ErrGoalSessionWorkspaceMismatch means that a session is being resumed in
+	// a different machine-local workspace.
+	ErrGoalSessionWorkspaceMismatch = errors.New("goal session workspace mismatch")
+	// ErrGoalSessionClosed means that a closed session cannot be resumed.
+	ErrGoalSessionClosed = errors.New("goal session is closed")
+	// ErrGoalSessionNotAttached means that a native identity has not yet been
+	// durably recorded for the requested resume operation.
+	ErrGoalSessionNotAttached = errors.New("goal session native handle is not attached")
+	// ErrGoalSessionCompatibilityIncomplete means that a reconciliation attempt
+	// did not provide an exact recorded identity. Reconciliation never treats
+	// zero values as wildcards.
+	ErrGoalSessionCompatibilityIncomplete = errors.New("goal session compatibility is incomplete")
+)
+
+// GoalSessionKey identifies a local native session without exposing the raw
+// native handle to the control plane. A goal may own more than one session.
+type GoalSessionKey struct {
+	GoalID        string
+	LocalHandleID string
+}
+
+// GoalSessionLineageKey is the identity shared by retries of one Goal task.
+// GoalRevision, RunID and Generation are deliberately excluded: a new
+// revision or fenced run must not bypass an unresolved native launch from the
+// same Goal/WorkItem/Task lineage.
+type GoalSessionLineageKey struct {
+	GoalID     string `json:"goal_id"`
+	WorkItemID string `json:"work_item_id,omitempty"`
+	TaskID     string `json:"task_id,omitempty"`
+}
+
+// GoalSessionLineageState describes the strongest local recovery fact found
+// for a lineage. The state is derived from durable journals, not caller input.
+type GoalSessionLineageState string
+
+// GoalSessionLineageStatus is the durable launch barrier returned to admission
+// code. SessionKeys contains every currently blocking local session, sorted by
+// stable key. An empty/free status is the only result that permits a new
+// lineage launch.
+type GoalSessionLineageStatus struct {
+	Lineage     GoalSessionLineageKey
+	State       GoalSessionLineageState
+	Blocking    bool
+	SessionKeys []GoalSessionKey
+}
+
+// BlocksNewLaunch reports whether a new run/generation would risk duplicating
+// an external native effect for this lineage.
+func (status GoalSessionLineageStatus) BlocksNewLaunch() bool {
+	return status.Blocking
+}
+
+type goalSessionLineageIndex struct {
+	SchemaVersion int                       `json:"schema_version"`
+	Lineage       GoalSessionLineageKey     `json:"lineage"`
+	Dirty         bool                      `json:"dirty,omitempty"`
+	Entries       []goalSessionLineageEntry `json:"entries"`
+}
+
+type goalSessionLineageEntry struct {
+	SessionKey GoalSessionKey          `json:"session_key"`
+	State      GoalSessionLineageState `json:"state"`
+	UpdatedAt  time.Time               `json:"updated_at"`
+}
+
+// GoalSessionLaunchIntent is the exact admission and local ownership data
+// persisted before starting a native session. It contains no native session
+// ID or native filename; those are written only after native creation.
+type GoalSessionLaunchIntent struct {
+	LaunchIntentID         string `json:"launch_intent_id"`
+	GoalID                 string `json:"goal_id"`
+	GoalRevision           int64  `json:"goal_revision"`
+	WorkItemID             string `json:"work_item_id,omitempty"`
+	TaskID                 string `json:"task_id,omitempty"`
+	RunID                  string `json:"run_id,omitempty"`
+	Generation             int64  `json:"generation,omitempty"`
+	AdmissionID            string `json:"admission_id,omitempty"`
+	LocalHandleID          string `json:"local_handle_id"`
+	OwnerID                string `json:"owner_id,omitempty"`
+	MachineID              string `json:"machine_id,omitempty"`
+	RuntimeID              string `json:"runtime_id,omitempty"`
+	RuntimeEpoch           int64  `json:"runtime_epoch,omitempty"`
+	DaemonInstanceID       string `json:"daemon_instance_id,omitempty"`
+	HarnessKind            string `json:"harness_kind"`
+	HarnessVersion         string `json:"harness_version"`
+	AdapterVersion         string `json:"adapter_version"`
+	AdapterProtocolVersion int    `json:"adapter_protocol_version"`
+	WorkspaceFingerprint   string `json:"workspace_fingerprint"`
+	SessionMode            string `json:"session_mode"`
+}
+
+// GoalSessionJournal is a machine-local recovery record for one native Goal
+// session. NativeSessionID and NativeSessionFilename are intentionally local
+// fields: callers must use ControlProjection when building a control request.
+// They are never part of the control-plane projection.
+type GoalSessionJournal struct {
+	GoalSessionLaunchIntent
+	SchemaVersion         int       `json:"schema_version"`
+	SessionState          string    `json:"session_state"`
+	LaunchState           string    `json:"launch_state"`
+	LaunchAttempted       bool      `json:"launch_attempted,omitempty"`
+	LaunchAttemptedAt     time.Time `json:"launch_attempted_at,omitempty"`
+	RecoveryRequired      bool      `json:"recovery_required,omitempty"`
+	NativeSessionID       string    `json:"native_session_id,omitempty"`
+	NativeSessionFilename string    `json:"native_session_filename,omitempty"`
+	UncertainReason       string    `json:"uncertain_reason,omitempty"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
+}
+
+// GoalSessionHandle is the local native identity obtained after a successful
+// native launch. It must not be serialized into control-plane payloads.
+type GoalSessionHandle struct {
+	NativeSessionID       string
+	NativeSessionFilename string
+}
+
+// GoalSessionCompatibility is the set of values that must match before a
+// retained native session can be inspected or explicitly reattached.
+type GoalSessionCompatibility struct {
+	OwnerID                string
+	MachineID              string
+	RuntimeID              string
+	RuntimeEpoch           int64
+	DaemonInstanceID       string
+	HarnessKind            string
+	HarnessVersion         string
+	AdapterVersion         string
+	AdapterProtocolVersion int
+	WorkspaceFingerprint   string
+}
+
+// GoalSessionControlProjection is safe to put on the control wire. In
+// particular it contains local_handle_id but no raw native ID or filename.
+type GoalSessionControlProjection struct {
+	GoalID                 string `json:"goal_id"`
+	GoalRevision           int64  `json:"goal_revision"`
+	WorkItemID             string `json:"work_item_id,omitempty"`
+	TaskID                 string `json:"task_id,omitempty"`
+	RunID                  string `json:"run_id,omitempty"`
+	Generation             int64  `json:"generation,omitempty"`
+	AdmissionID            string `json:"admission_id,omitempty"`
+	LocalHandleID          string `json:"local_handle_id"`
+	OwnerID                string `json:"owner_id,omitempty"`
+	MachineID              string `json:"machine_id,omitempty"`
+	RuntimeID              string `json:"runtime_id,omitempty"`
+	RuntimeEpoch           int64  `json:"runtime_epoch,omitempty"`
+	HarnessKind            string `json:"harness_kind"`
+	HarnessVersion         string `json:"harness_version"`
+	AdapterVersion         string `json:"adapter_version"`
+	AdapterProtocolVersion int    `json:"adapter_protocol_version"`
+	WorkspaceFingerprint   string `json:"workspace_fingerprint"`
+	SessionState           string `json:"session_state"`
+	LaunchState            string `json:"launch_state"`
+	RecoveryRequired       bool   `json:"recovery_required,omitempty"`
+}
+
+// Key returns the stable key used for the session journal filename.
+func (intent GoalSessionLaunchIntent) Key() GoalSessionKey {
+	return GoalSessionKey{GoalID: intent.GoalID, LocalHandleID: intent.LocalHandleID}
+}
+
+// LineageKey returns the retry identity for this Goal session intent. It does
+// not include the fenced run generation because retries across generations are
+// exactly the case the unresolved-launch barrier protects.
+func (intent GoalSessionLaunchIntent) LineageKey() GoalSessionLineageKey {
+	return GoalSessionLineageKey{GoalID: intent.GoalID, WorkItemID: intent.WorkItemID, TaskID: intent.TaskID}
+}
+
+// Key returns the stable key used for the session journal filename.
+func (journal GoalSessionJournal) Key() GoalSessionKey {
+	return journal.GoalSessionLaunchIntent.Key()
+}
+
+// LineageKey returns the retry identity recorded in the journal.
+func (journal GoalSessionJournal) LineageKey() GoalSessionLineageKey {
+	return journal.GoalSessionLaunchIntent.LineageKey()
+}
+
+// Intent returns the launch identity without any post-launch native fields.
+func (journal GoalSessionJournal) Intent() GoalSessionLaunchIntent {
+	return journal.GoalSessionLaunchIntent
+}
+
+// Compatibility returns the recorded owner, adapter and workspace binding for
+// an explicit resume or reconciliation check.
+func (journal GoalSessionJournal) Compatibility() GoalSessionCompatibility {
+	return GoalSessionCompatibility{
+		OwnerID: journal.OwnerID, MachineID: journal.MachineID, RuntimeID: journal.RuntimeID,
+		RuntimeEpoch: journal.RuntimeEpoch, DaemonInstanceID: journal.DaemonInstanceID,
+		HarnessKind: journal.HarnessKind, HarnessVersion: journal.HarnessVersion,
+		AdapterVersion: journal.AdapterVersion, AdapterProtocolVersion: journal.AdapterProtocolVersion,
+		WorkspaceFingerprint: journal.WorkspaceFingerprint,
+	}
+}
+
+// NeedsReconciliation reports whether starting a replacement could duplicate
+// an unverified native launch.
+func (journal GoalSessionJournal) NeedsReconciliation() bool {
+	return journal.RecoveryRequired || (journal.LaunchAttempted && journal.LaunchState != GoalSessionLaunchStateAttached && journal.LaunchState != GoalSessionLaunchStateClosed)
+}
+
+// IsUncertainLaunch reports whether the record explicitly represents an
+// uncertain native launch.
+func (journal GoalSessionJournal) IsUncertainLaunch() bool {
+	return journal.LaunchState == GoalSessionLaunchStateUncertain || journal.NeedsReconciliation()
+}
+
+// ControlProjection strips all machine-local native identity from a journal.
+func (journal GoalSessionJournal) ControlProjection() GoalSessionControlProjection {
+	return GoalSessionControlProjection{
+		GoalID: journal.GoalID, GoalRevision: journal.GoalRevision, WorkItemID: journal.WorkItemID,
+		TaskID: journal.TaskID, RunID: journal.RunID, Generation: journal.Generation,
+		AdmissionID: journal.AdmissionID, LocalHandleID: journal.LocalHandleID,
+		OwnerID: journal.OwnerID, MachineID: journal.MachineID, RuntimeID: journal.RuntimeID,
+		RuntimeEpoch: journal.RuntimeEpoch, HarnessKind: journal.HarnessKind,
+		HarnessVersion: journal.HarnessVersion, AdapterVersion: journal.AdapterVersion,
+		AdapterProtocolVersion: journal.AdapterProtocolVersion,
+		WorkspaceFingerprint:   journal.WorkspaceFingerprint, SessionState: journal.SessionState,
+		LaunchState: journal.LaunchState, RecoveryRequired: journal.NeedsReconciliation(),
+	}
+}
+
+// NewGoalSessionLocalHandleID returns a UUID suitable for local_handle_id.
+func NewGoalSessionLocalHandleID() (string, error) {
+	return NewDaemonInstanceID()
+}
+
+// SaveGoalSessionLaunchIntent persists the launch intent before native launch.
+// Replaying the exact same intent is idempotent. Any changed replay is a
+// conflict, including an attempted or uncertain launch, so a caller cannot
+// silently start a duplicate native session.
+func (store *Store) SaveGoalSessionLaunchIntent(intent GoalSessionLaunchIntent) (GoalSessionJournal, error) {
+	if err := normalizeGoalSessionIntent(&intent); err != nil {
+		return GoalSessionJournal{}, err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.ensureOpenLocked(); err != nil {
+		return GoalSessionJournal{}, err
+	}
+	path := store.goalSessionPath(intent.Key())
+	existing, err := store.loadGoalSessionPathLocked(path)
+	if err == nil {
+		if sameGoalSessionIntent(existing.Intent(), intent) {
+			if existing.NeedsReconciliation() {
+				return existing, ErrGoalSessionUncertain
+			}
+			return existing, nil
+		}
+		return GoalSessionJournal{}, ErrGoalSessionConflict
+	}
+	if !IsNotFound(err) {
+		return GoalSessionJournal{}, err
+	}
+	if err := store.ensureLocalHandleAvailableLocked(intent); err != nil {
+		return GoalSessionJournal{}, err
+	}
+	now := time.Now().UTC()
+	journal := GoalSessionJournal{
+		GoalSessionLaunchIntent: intent,
+		SchemaVersion:           goalSessionSchemaVersion,
+		SessionState:            GoalSessionStateBusy,
+		LaunchState:             GoalSessionLaunchStateIntent,
+		CreatedAt:               now,
+		UpdatedAt:               now,
+	}
+	if err := validateGoalSessionJournal(journal); err != nil {
+		return GoalSessionJournal{}, err
+	}
+	if err := store.beginGoalSessionLineageMutationLocked(intent.LineageKey()); err != nil {
+		return GoalSessionJournal{}, err
+	}
+	if err := store.saveGoalSessionJournalLocked(journal); err != nil {
+		// Leave the index dirty if the write outcome is not provable. The next
+		// query will rebuild from the authoritative journal set and fail closed
+		// if anything was actually persisted.
+		return GoalSessionJournal{}, err
+	}
+	// The lineage index is a derived acceleration structure. The journal above
+	// is the commit point; a refresh failure leaves a durable dirty marker and is
+	// repaired by the next query instead of making callers retry a committed
+	// launch intent as if it had not been saved.
+	_ = store.refreshGoalSessionLineageIndexLocked(intent.LineageKey())
+	return journal, nil
+}
+
+// LoadGoalSession loads one local native session journal.
+func (store *Store) LoadGoalSession(key GoalSessionKey) (GoalSessionJournal, error) {
+	if err := validateGoalSessionKey(key); err != nil {
+		return GoalSessionJournal{}, err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.ensureOpenLocked(); err != nil {
+		return GoalSessionJournal{}, err
+	}
+	return store.loadGoalSessionPathLocked(store.goalSessionPath(key))
+}
+
+// LoadGoalSessionByHandle finds a session by local_handle_id without exposing
+// the raw native identity to the caller's control-plane code.
+func (store *Store) LoadGoalSessionByHandle(localHandleID string) (GoalSessionJournal, error) {
+	if !validRequiredString(localHandleID, 4096) {
+		return GoalSessionJournal{}, errors.New("local handle ID is invalid")
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.ensureOpenLocked(); err != nil {
+		return GoalSessionJournal{}, err
+	}
+	journals, err := store.listGoalSessionsLocked()
+	if err != nil {
+		return GoalSessionJournal{}, err
+	}
+	for _, journal := range journals {
+		if journal.LocalHandleID == localHandleID {
+			return journal, nil
+		}
+	}
+	return GoalSessionJournal{}, &NotFoundError{Resource: "goal session journal"}
+}
+
+// ListGoalSessions loads all authoritative native session journals and fails
+// closed on malformed records. Temporary files owned by this package are
+// removed, matching ListJournals behavior.
+func (store *Store) ListGoalSessions() ([]GoalSessionJournal, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.ensureOpenLocked(); err != nil {
+		return nil, err
+	}
+	return store.listGoalSessionsLocked()
+}
+
+// CheckGoalSessionLineage returns the durable local barrier for one
+// Goal/WorkItem/Task lineage. The query is backed by a per-lineage index after
+// its first rebuild, so admission does not need to scan every session journal
+// on each retry. A dirty or missing index is rebuilt from the journals before
+// the result is returned; any rebuild uncertainty fails closed.
+func (store *Store) CheckGoalSessionLineage(lineage GoalSessionLineageKey) (GoalSessionLineageStatus, error) {
+	if err := validateGoalSessionLineageKey(lineage); err != nil {
+		return GoalSessionLineageStatus{}, err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.ensureOpenLocked(); err != nil {
+		return GoalSessionLineageStatus{}, err
+	}
+	return store.checkGoalSessionLineageLocked(lineage)
+}
+
+// EnsureGoalSessionLineageAvailable is the admission guard for a new local
+// session. It maps the indexed status to the same typed errors used by launch
+// intent persistence, while callers that need diagnostics can use
+// CheckGoalSessionLineage directly.
+func (store *Store) EnsureGoalSessionLineageAvailable(lineage GoalSessionLineageKey) error {
+	status, err := store.CheckGoalSessionLineage(lineage)
+	if err != nil {
+		return err
+	}
+	if !status.BlocksNewLaunch() {
+		return nil
+	}
+	if status.State == GoalSessionLineageStateUncertain || status.State == GoalSessionLineageStateLaunching {
+		return ErrGoalSessionUncertain
+	}
+	return ErrGoalSessionConflict
+}
+
+// MarkGoalSessionLaunchStarted records the point after which a crash may have
+// left a native session alive without a persisted native handle.
+func (store *Store) MarkGoalSessionLaunchStarted(key GoalSessionKey, at ...time.Time) (GoalSessionJournal, error) {
+	when := time.Now().UTC()
+	if len(at) > 1 {
+		return GoalSessionJournal{}, errors.New("launch start time is invalid")
+	}
+	if len(at) == 1 {
+		when = at[0].UTC()
+	}
+	if when.IsZero() {
+		return GoalSessionJournal{}, errors.New("launch start time is invalid")
+	}
+	return store.mutateGoalSession(key, func(journal *GoalSessionJournal) error {
+		if journal.LaunchState == GoalSessionLaunchStateClosed || journal.SessionState == GoalSessionStateClosed {
+			return ErrGoalSessionClosed
+		}
+		if journal.NeedsReconciliation() {
+			return ErrGoalSessionUncertain
+		}
+		if journal.LaunchState == GoalSessionLaunchStateAttached {
+			return errors.New("goal session native handle is already attached")
+		}
+		journal.LaunchState = GoalSessionLaunchStateLaunching
+		journal.SessionState = GoalSessionStateBusy
+		journal.LaunchAttempted = true
+		journal.LaunchAttemptedAt = when
+		journal.RecoveryRequired = true
+		journal.UpdatedAt = when
+		return nil
+	})
+}
+
+// AbortGoalSessionLaunchBeforeNativeStart records a known local abort before
+// Adapter.Start was invoked. It is deliberately unavailable once a native
+// handle exists or recovery is required; those cases are unknown external
+// effects and must remain reconcilable rather than being closed optimistically.
+func (store *Store) AbortGoalSessionLaunchBeforeNativeStart(key GoalSessionKey) (GoalSessionJournal, error) {
+	return store.mutateGoalSession(key, func(journal *GoalSessionJournal) error {
+		if journal.LaunchState == GoalSessionLaunchStateClosed && journal.SessionState == GoalSessionStateClosed {
+			return nil
+		}
+		if journal.LaunchState == GoalSessionLaunchStateIntent && !journal.LaunchAttempted && !journal.RecoveryRequired && journal.NativeSessionID == "" && journal.NativeSessionFilename == "" {
+			journal.LaunchState = GoalSessionLaunchStateClosed
+			journal.SessionState = GoalSessionStateClosed
+			journal.RecoveryRequired = false
+			journal.UncertainReason = ""
+			journal.UpdatedAt = time.Now().UTC()
+			return nil
+		}
+		if journal.LaunchState != GoalSessionLaunchStateLaunching || !journal.LaunchAttempted || journal.NativeSessionID != "" || journal.NativeSessionFilename != "" {
+			return ErrGoalSessionUncertain
+		}
+		journal.LaunchState = GoalSessionLaunchStateClosed
+		journal.SessionState = GoalSessionStateClosed
+		journal.RecoveryRequired = false
+		journal.UncertainReason = ""
+		journal.UpdatedAt = time.Now().UTC()
+		return nil
+	})
+}
+
+// PersistGoalSessionHandle durably binds local_handle_id to the native
+// identity. The optional compatibility argument is checked before the write.
+func (store *Store) PersistGoalSessionHandle(key GoalSessionKey, handle GoalSessionHandle, expected ...GoalSessionCompatibility) (GoalSessionJournal, error) {
+	if err := validateGoalSessionHandle(handle); err != nil {
+		return GoalSessionJournal{}, err
+	}
+	if len(expected) > 1 {
+		return GoalSessionJournal{}, errors.New("goal session compatibility is invalid")
+	}
+	return store.mutateGoalSession(key, func(journal *GoalSessionJournal) error {
+		if len(expected) == 1 {
+			if err := compareGoalSessionIdentity(*journal, expected[0]); err != nil {
+				return err
+			}
+		}
+		if journal.LaunchState == GoalSessionLaunchStateClosed || journal.SessionState == GoalSessionStateClosed {
+			return ErrGoalSessionClosed
+		}
+		if journal.LaunchState == GoalSessionLaunchStateUncertain || (journal.NeedsReconciliation() && journal.LaunchState != GoalSessionLaunchStateLaunching) {
+			return ErrGoalSessionUncertain
+		}
+		if journal.LaunchState == GoalSessionLaunchStateAttached {
+			if journal.NativeSessionID == handle.NativeSessionID && journal.NativeSessionFilename == handle.NativeSessionFilename {
+				return nil
+			}
+			return ErrGoalSessionConflict
+		}
+		journal.NativeSessionID = handle.NativeSessionID
+		journal.NativeSessionFilename = handle.NativeSessionFilename
+		journal.LaunchState = GoalSessionLaunchStateAttached
+		journal.LaunchAttempted = true
+		if journal.LaunchAttemptedAt.IsZero() {
+			journal.LaunchAttemptedAt = time.Now().UTC()
+		}
+		journal.RecoveryRequired = false
+		journal.UncertainReason = ""
+		journal.UpdatedAt = time.Now().UTC()
+		return nil
+	})
+}
+
+// AttachGoalSession is an alias for the explicit post-launch persistence
+// operation. It never reattaches merely because a journal exists.
+func (store *Store) AttachGoalSession(key GoalSessionKey, handle GoalSessionHandle, expected ...GoalSessionCompatibility) (GoalSessionJournal, error) {
+	return store.PersistGoalSessionHandle(key, handle, expected...)
+}
+
+// MarkGoalSessionUncertain makes an unknown native outcome explicit and
+// durable. It clears any retained native handle so an attached session cannot
+// be re-used after its state becomes uncertain.
+func (store *Store) MarkGoalSessionUncertain(key GoalSessionKey, reason string) (GoalSessionJournal, error) {
+	if !validRequiredString(reason, 4096) {
+		return GoalSessionJournal{}, errors.New("uncertain launch reason is invalid")
+	}
+	return store.mutateGoalSession(key, func(journal *GoalSessionJournal) error {
+		if journal.LaunchState == GoalSessionLaunchStateClosed || journal.SessionState == GoalSessionStateClosed {
+			return ErrGoalSessionClosed
+		}
+		// SaveGoalSessionLaunchIntent is durably written before the native
+		// launch boundary. If recovery observes this pre-boundary state, the
+		// native effect is known not to have been attempted; close it rather
+		// than manufacturing an uncertain external outcome.
+		if journal.LaunchState == GoalSessionLaunchStateIntent && !journal.LaunchAttempted && !journal.RecoveryRequired && journal.NativeSessionID == "" && journal.NativeSessionFilename == "" {
+			journal.LaunchState = GoalSessionLaunchStateClosed
+			journal.SessionState = GoalSessionStateClosed
+			journal.RecoveryRequired = false
+			journal.UncertainReason = ""
+			journal.UpdatedAt = time.Now().UTC()
+			return nil
+		}
+		journal.LaunchState = GoalSessionLaunchStateUncertain
+		journal.SessionState = GoalSessionStateUnavailable
+		journal.LaunchAttempted = true
+		if journal.LaunchAttemptedAt.IsZero() {
+			journal.LaunchAttemptedAt = time.Now().UTC()
+		}
+		journal.NativeSessionID = ""
+		journal.NativeSessionFilename = ""
+		journal.RecoveryRequired = true
+		journal.UncertainReason = reason
+		journal.UpdatedAt = time.Now().UTC()
+		return nil
+	})
+}
+
+// ResolveGoalSessionUncertain explicitly records a reconciled native handle.
+// The caller must provide the expected owner/version/workspace identity; no
+// automatic re-attach path exists.
+func (store *Store) ResolveGoalSessionUncertain(key GoalSessionKey, handle GoalSessionHandle, expected GoalSessionCompatibility) (GoalSessionJournal, error) {
+	if err := validateGoalSessionHandle(handle); err != nil {
+		return GoalSessionJournal{}, err
+	}
+	return store.mutateGoalSession(key, func(journal *GoalSessionJournal) error {
+		if err := compareGoalSessionIdentityStrict(*journal, expected); err != nil {
+			return err
+		}
+		if !journal.NeedsReconciliation() {
+			return errors.New("goal session is not awaiting reconciliation")
+		}
+		journal.NativeSessionID = handle.NativeSessionID
+		journal.NativeSessionFilename = handle.NativeSessionFilename
+		journal.LaunchState = GoalSessionLaunchStateAttached
+		journal.SessionState = GoalSessionStateBusy
+		journal.RecoveryRequired = false
+		journal.UncertainReason = ""
+		journal.LaunchAttempted = true
+		if journal.LaunchAttemptedAt.IsZero() {
+			journal.LaunchAttemptedAt = time.Now().UTC()
+		}
+		journal.UpdatedAt = time.Now().UTC()
+		return nil
+	})
+}
+
+// ResolveGoalSessionUncertainStopped closes an unresolved launch only after a
+// caller has explicitly reconciled the native side and established that it is
+// stopped or was never created. This is the no-handle recovery path; it is the
+// only operation, besides a known pre-native abort, that releases an
+// unresolved lineage barrier without attaching a native identity.
+func (store *Store) ResolveGoalSessionUncertainStopped(key GoalSessionKey, expected GoalSessionCompatibility) (GoalSessionJournal, error) {
+	return store.mutateGoalSession(key, func(journal *GoalSessionJournal) error {
+		if err := compareGoalSessionIdentityStrict(*journal, expected); err != nil {
+			return err
+		}
+		if !journal.NeedsReconciliation() {
+			if journal.LaunchState == GoalSessionLaunchStateClosed && journal.SessionState == GoalSessionStateClosed {
+				return nil
+			}
+			return errors.New("goal session is not awaiting reconciliation")
+		}
+		journal.NativeSessionID = ""
+		journal.NativeSessionFilename = ""
+		journal.SessionState = GoalSessionStateClosed
+		journal.LaunchState = GoalSessionLaunchStateClosed
+		journal.RecoveryRequired = false
+		journal.UncertainReason = ""
+		journal.UpdatedAt = time.Now().UTC()
+		return nil
+	})
+}
+
+// CloseGoalSession records that an attached native process is known to have
+// stopped. It retains the launch identity for audit but removes the private
+// native handle, which cannot be valid after close. Callers must reconcile an
+// uncertain launch instead of closing or deleting its journal.
+func (store *Store) CloseGoalSession(key GoalSessionKey) (GoalSessionJournal, error) {
+	return store.mutateGoalSession(key, func(journal *GoalSessionJournal) error {
+		if journal.LaunchState == GoalSessionLaunchStateClosed && journal.SessionState == GoalSessionStateClosed {
+			return nil
+		}
+		if journal.NeedsReconciliation() {
+			return ErrGoalSessionUncertain
+		}
+		if journal.LaunchState != GoalSessionLaunchStateAttached || journal.NativeSessionID == "" {
+			return ErrGoalSessionNotAttached
+		}
+		journal.NativeSessionID = ""
+		journal.NativeSessionFilename = ""
+		journal.SessionState = GoalSessionStateClosed
+		journal.LaunchState = GoalSessionLaunchStateClosed
+		journal.UpdatedAt = time.Now().UTC()
+		return nil
+	})
+}
+
+// SetGoalSessionState persists the control-facing session state. Closing is
+// routed through CloseGoalSession so an attached native handle cannot remain
+// in a closed journal.
+func (store *Store) SetGoalSessionState(key GoalSessionKey, sessionState string) (GoalSessionJournal, error) {
+	if !validGoalSessionState(sessionState) {
+		return GoalSessionJournal{}, errors.New("goal session state is invalid")
+	}
+	if sessionState == GoalSessionStateClosed {
+		return store.CloseGoalSession(key)
+	}
+	return store.mutateGoalSession(key, func(journal *GoalSessionJournal) error {
+		if journal.LaunchState == GoalSessionLaunchStateClosed || journal.SessionState == GoalSessionStateClosed {
+			return ErrGoalSessionClosed
+		}
+		journal.SessionState = sessionState
+		journal.UpdatedAt = time.Now().UTC()
+		return nil
+	})
+}
+
+// CheckGoalSessionCompatibility verifies the exact local ownership and
+// version/workspace binding required for an explicit resume or reconciliation.
+func (store *Store) CheckGoalSessionCompatibility(key GoalSessionKey, expected GoalSessionCompatibility) error {
+	journal, err := store.LoadGoalSession(key)
+	if err != nil {
+		return err
+	}
+	return compareGoalSessionCompatibility(journal, expected)
+}
+
+// DeleteGoalSession removes only a closed, fully resolved session journal. An
+// uncertain record must remain available for reconciliation and cannot be
+// removed by a normal cleanup path.
+func (store *Store) DeleteGoalSession(key GoalSessionKey) error {
+	if err := validateGoalSessionKey(key); err != nil {
+		return err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.ensureOpenLocked(); err != nil {
+		return err
+	}
+	journal, err := store.loadGoalSessionPathLocked(store.goalSessionPath(key))
+	if err != nil {
+		return err
+	}
+	if journal.NeedsReconciliation() {
+		return ErrGoalSessionUncertain
+	}
+	if journal.SessionState != GoalSessionStateClosed && journal.LaunchState != GoalSessionLaunchStateClosed {
+		return errors.New("goal session is not closed")
+	}
+	lineage := journal.LineageKey()
+	if err := store.beginGoalSessionLineageMutationLocked(lineage); err != nil {
+		return err
+	}
+	if err := os.Remove(store.goalSessionPath(key)); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return &NotFoundError{Resource: "goal session journal"}
+		}
+		return errors.New("delete goal session journal")
+	}
+	if err := syncDirectory(store.goalSessionsDir()); err != nil {
+		return err
+	}
+	// The journal deletion is already durably committed. The lineage index is
+	// derived and rebuildable, so a refresh failure must not make a successful
+	// cleanup look uncommitted to the caller.
+	_ = store.refreshGoalSessionLineageIndexLocked(lineage)
+	return nil
+}
+
+// mutateGoalSession performs a serialized read-modify-write update using the
+// same atomic fsync+rename primitive as legacy RunJournal.
+func (store *Store) mutateGoalSession(key GoalSessionKey, mutate func(*GoalSessionJournal) error) (GoalSessionJournal, error) {
+	if err := validateGoalSessionKey(key); err != nil {
+		return GoalSessionJournal{}, err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.ensureOpenLocked(); err != nil {
+		return GoalSessionJournal{}, err
+	}
+	journal, err := store.loadGoalSessionPathLocked(store.goalSessionPath(key))
+	if err != nil {
+		return GoalSessionJournal{}, err
+	}
+	if err := mutate(&journal); err != nil {
+		return GoalSessionJournal{}, err
+	}
+	if err := validateGoalSessionJournal(journal); err != nil {
+		return GoalSessionJournal{}, err
+	}
+	if err := store.beginGoalSessionLineageMutationLocked(journal.LineageKey()); err != nil {
+		return GoalSessionJournal{}, err
+	}
+	if err := store.saveGoalSessionJournalLocked(journal); err != nil {
+		return GoalSessionJournal{}, err
+	}
+	// The session journal is the authoritative commit. A failed derived-index
+	// refresh leaves the dirty marker for the next query to rebuild and must not
+	// make a successful state transition look uncommitted to the caller.
+	_ = store.refreshGoalSessionLineageIndexLocked(journal.LineageKey())
+	return journal, nil
+}
+
+func (store *Store) loadGoalSessionPathLocked(path string) (GoalSessionJournal, error) {
+	var journal GoalSessionJournal
+	if err := store.readJSONWithLimit(path, "goal session journal", &journal, maxJournalFileBytes); err != nil {
+		return GoalSessionJournal{}, err
+	}
+	if err := validateGoalSessionJournal(journal); err != nil {
+		return GoalSessionJournal{}, errors.New("invalid goal session journal")
+	}
+	if filepath.Base(path) != filepath.Base(store.goalSessionPath(journal.Key())) {
+		return GoalSessionJournal{}, errors.New("goal session journal does not match requested key")
+	}
+	return journal, nil
+}
+
+func (store *Store) saveGoalSessionJournalLocked(journal GoalSessionJournal) error {
+	if err := validateGoalSessionJournal(journal); err != nil {
+		return err
+	}
+	if err := store.ensureGoalSessionsDirLocked(); err != nil {
+		return fmt.Errorf("create goal session journal directory: %w", err)
+	}
+	return store.writeJSONWithLimit(store.goalSessionPath(journal.Key()), journal, "goal session journal", maxJournalFileBytes)
+}
+
+func (store *Store) checkGoalSessionLineageLocked(lineage GoalSessionLineageKey) (GoalSessionLineageStatus, error) {
+	index, err := store.loadGoalSessionLineageIndexLocked(lineage)
+	if IsNotFound(err) || (err == nil && index.Dirty) {
+		if err := store.refreshGoalSessionLineageIndexLocked(lineage); err != nil {
+			return GoalSessionLineageStatus{}, err
+		}
+		index, err = store.loadGoalSessionLineageIndexLocked(lineage)
+	}
+	if err != nil {
+		return GoalSessionLineageStatus{}, err
+	}
+	return goalSessionLineageStatus(index), nil
+}
+
+// beginGoalSessionLineageMutationLocked writes a durable dirty marker before
+// changing a session journal. If the process stops between the journal write
+// and index refresh, a later query will scan journals rather than trusting a
+// possibly incomplete snapshot.
+func (store *Store) beginGoalSessionLineageMutationLocked(lineage GoalSessionLineageKey) error {
+	if err := validateGoalSessionLineageKey(lineage); err != nil {
+		return err
+	}
+	index := goalSessionLineageIndex{
+		SchemaVersion: goalSessionLineageSchemaVersion,
+		Lineage:       lineage,
+		Dirty:         true,
+		Entries:       []goalSessionLineageEntry{},
+	}
+	return store.saveGoalSessionLineageIndexLocked(index)
+}
+
+// refreshGoalSessionLineageIndexLocked rebuilds one index from authoritative
+// session journals and publishes it clean only after the scan completes.
+func (store *Store) refreshGoalSessionLineageIndexLocked(lineage GoalSessionLineageKey) error {
+	if err := validateGoalSessionLineageKey(lineage); err != nil {
+		return err
+	}
+	journals, err := store.listGoalSessionsLocked()
+	if err != nil {
+		return err
+	}
+	entries := make([]goalSessionLineageEntry, 0)
+	for _, journal := range journals {
+		if journal.LineageKey() != lineage || goalSessionLineageStateForJournal(journal) == GoalSessionLineageStateFree {
+			continue
+		}
+		entries = append(entries, goalSessionLineageEntry{
+			SessionKey: journal.Key(),
+			State:      goalSessionLineageStateForJournal(journal),
+			UpdatedAt:  journal.UpdatedAt,
+		})
+	}
+	sort.Slice(entries, func(left, right int) bool {
+		if entries[left].SessionKey.GoalID == entries[right].SessionKey.GoalID {
+			return entries[left].SessionKey.LocalHandleID < entries[right].SessionKey.LocalHandleID
+		}
+		return entries[left].SessionKey.GoalID < entries[right].SessionKey.GoalID
+	})
+	return store.saveGoalSessionLineageIndexLocked(goalSessionLineageIndex{
+		SchemaVersion: goalSessionLineageSchemaVersion,
+		Lineage:       lineage,
+		Entries:       entries,
+	})
+}
+
+func (store *Store) loadGoalSessionLineageIndexLocked(lineage GoalSessionLineageKey) (goalSessionLineageIndex, error) {
+	if err := validateGoalSessionLineageKey(lineage); err != nil {
+		return goalSessionLineageIndex{}, err
+	}
+	var index goalSessionLineageIndex
+	path := store.goalSessionLineagePath(lineage)
+	if err := store.readJSONWithLimit(path, "goal session lineage index", &index, maxJournalFileBytes); err != nil {
+		return goalSessionLineageIndex{}, err
+	}
+	if err := validateGoalSessionLineageIndex(index); err != nil {
+		return goalSessionLineageIndex{}, errors.New("invalid goal session lineage index")
+	}
+	if index.Lineage != lineage || filepath.Base(path) != filepath.Base(store.goalSessionLineagePath(index.Lineage)) {
+		return goalSessionLineageIndex{}, errors.New("goal session lineage index does not match requested lineage")
+	}
+	return index, nil
+}
+
+func (store *Store) saveGoalSessionLineageIndexLocked(index goalSessionLineageIndex) error {
+	if err := validateGoalSessionLineageIndex(index); err != nil {
+		return err
+	}
+	if err := store.ensureGoalSessionsDirLocked(); err != nil {
+		return fmt.Errorf("create goal session lineage index directory: %w", err)
+	}
+	return store.writeJSONWithLimit(store.goalSessionLineagePath(index.Lineage), index, "goal session lineage index", maxJournalFileBytes)
+}
+
+func goalSessionLineageStatus(index goalSessionLineageIndex) GoalSessionLineageStatus {
+	status := GoalSessionLineageStatus{Lineage: index.Lineage, State: GoalSessionLineageStateFree}
+	if len(index.Entries) == 0 {
+		return status
+	}
+	status.Blocking = true
+	status.SessionKeys = make([]GoalSessionKey, 0, len(index.Entries))
+	for _, entry := range index.Entries {
+		status.SessionKeys = append(status.SessionKeys, entry.SessionKey)
+		if lineageStateRank(entry.State) > lineageStateRank(status.State) {
+			status.State = entry.State
+		}
+	}
+	sort.Slice(status.SessionKeys, func(left, right int) bool {
+		if status.SessionKeys[left].GoalID == status.SessionKeys[right].GoalID {
+			return status.SessionKeys[left].LocalHandleID < status.SessionKeys[right].LocalHandleID
+		}
+		return status.SessionKeys[left].GoalID < status.SessionKeys[right].GoalID
+	})
+	return status
+}
+
+func goalSessionLineageStateForJournal(journal GoalSessionJournal) GoalSessionLineageState {
+	if journal.LaunchState == GoalSessionLaunchStateClosed && journal.SessionState == GoalSessionStateClosed {
+		return GoalSessionLineageStateFree
+	}
+	if journal.LaunchState == GoalSessionLaunchStateUncertain || journal.NeedsReconciliation() {
+		return GoalSessionLineageStateUncertain
+	}
+	switch journal.LaunchState {
+	case GoalSessionLaunchStateIntent:
+		return GoalSessionLineageStateReserved
+	case GoalSessionLaunchStateLaunching:
+		return GoalSessionLineageStateLaunching
+	case GoalSessionLaunchStateAttached:
+		return GoalSessionLineageStateAttached
+	default:
+		// validateGoalSessionJournal rejects this state. Keep the helper
+		// conservative if it is ever called before validation.
+		return GoalSessionLineageStateUncertain
+	}
+}
+
+func lineageStateRank(state GoalSessionLineageState) int {
+	switch state {
+	case GoalSessionLineageStateReserved:
+		return 1
+	case GoalSessionLineageStateAttached:
+		return 2
+	case GoalSessionLineageStateLaunching:
+		return 3
+	case GoalSessionLineageStateUncertain:
+		return 4
+	default:
+		return 0
+	}
+}
+
+func validateGoalSessionLineageIndex(index goalSessionLineageIndex) error {
+	if index.SchemaVersion != goalSessionLineageSchemaVersion || validateGoalSessionLineageKey(index.Lineage) != nil || len(index.Entries) > 4096 {
+		return errors.New("goal session lineage index is invalid")
+	}
+	seen := make(map[GoalSessionKey]struct{}, len(index.Entries))
+	for _, entry := range index.Entries {
+		if err := validateGoalSessionKey(entry.SessionKey); err != nil || !validGoalSessionLineageState(entry.State) || entry.State == GoalSessionLineageStateFree || entry.UpdatedAt.IsZero() {
+			return errors.New("goal session lineage index is invalid")
+		}
+		if _, exists := seen[entry.SessionKey]; exists {
+			return errors.New("goal session lineage index is invalid")
+		}
+		seen[entry.SessionKey] = struct{}{}
+	}
+	return nil
+}
+
+func (store *Store) listGoalSessionsLocked() ([]GoalSessionJournal, error) {
+	if _, err := os.Stat(store.goalSessionsDir()); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return []GoalSessionJournal{}, nil
+		}
+		return nil, errors.New("list goal session journal directory")
+	}
+	entries, err := os.ReadDir(store.goalSessionsDir())
+	if err != nil {
+		return nil, errors.New("list goal session journal directory")
+	}
+	if err := removeOwnedGoalSessionTemps(store.goalSessionsDir(), entries); err != nil {
+		return nil, err
+	}
+	result := make([]GoalSessionJournal, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !isGoalSessionFile(entry.Name()) {
+			continue
+		}
+		journal, err := store.loadGoalSessionPathLocked(filepath.Join(store.goalSessionsDir(), entry.Name()))
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, journal)
+	}
+	sort.Slice(result, func(left, right int) bool {
+		if result[left].GoalID == result[right].GoalID {
+			return result[left].LocalHandleID < result[right].LocalHandleID
+		}
+		return result[left].GoalID < result[right].GoalID
+	})
+	return result, nil
+}
+
+func (store *Store) ensureGoalSessionsDirLocked() error {
+	return ensurePrivateDirectory(store.goalSessionsDir())
+}
+
+func (store *Store) goalSessionsDir() string {
+	return filepath.Join(store.dir, goalSessionsDirectoryName)
+}
+
+func (store *Store) goalSessionPath(key GoalSessionKey) string {
+	input := key.GoalID + "\x00" + key.LocalHandleID
+	digest := sha256.Sum256([]byte(input))
+	return filepath.Join(store.goalSessionsDir(), goalSessionFilePrefix+hex.EncodeToString(digest[:])+goalSessionFileSuffix)
+}
+
+func (store *Store) goalSessionLineagePath(lineage GoalSessionLineageKey) string {
+	input := lineage.GoalID + "\x00" + lineage.WorkItemID + "\x00" + lineage.TaskID
+	digest := sha256.Sum256([]byte(input))
+	return filepath.Join(store.goalSessionsDir(), goalSessionLineageFilePrefix+hex.EncodeToString(digest[:])+goalSessionLineageFileSuffix)
+}
+
+func (store *Store) ensureLocalHandleAvailableLocked(intent GoalSessionLaunchIntent) error {
+	status, err := store.checkGoalSessionLineageLocked(intent.LineageKey())
+	if err != nil {
+		return err
+	}
+	if status.BlocksNewLaunch() {
+		if status.State == GoalSessionLineageStateUncertain || status.State == GoalSessionLineageStateLaunching {
+			return ErrGoalSessionUncertain
+		}
+		return ErrGoalSessionConflict
+	}
+	journals, err := store.listGoalSessionsLocked()
+	if err != nil {
+		return err
+	}
+	for _, existing := range journals {
+		if existing.LocalHandleID == intent.LocalHandleID && existing.Key() != intent.Key() {
+			return ErrGoalSessionConflict
+		}
+		if existing.GoalID == intent.GoalID && existing.WorkItemID == intent.WorkItemID && existing.TaskID == intent.TaskID && existing.RunID == intent.RunID && existing.Generation == intent.Generation && existing.LaunchState != GoalSessionLaunchStateClosed && existing.SessionState != GoalSessionStateClosed {
+			if existing.NeedsReconciliation() {
+				return ErrGoalSessionUncertain
+			}
+			return ErrGoalSessionConflict
+		}
+	}
+	return nil
+}
+
+func normalizeGoalSessionIntent(intent *GoalSessionLaunchIntent) error {
+	if intent.LaunchIntentID == "" {
+		id, err := NewGoalSessionLocalHandleID()
+		if err != nil {
+			return err
+		}
+		intent.LaunchIntentID = id
+	}
+	if intent.LocalHandleID == "" {
+		id, err := NewGoalSessionLocalHandleID()
+		if err != nil {
+			return err
+		}
+		intent.LocalHandleID = id
+	}
+	if intent.SessionMode == "" {
+		intent.SessionMode = GoalSessionModeFresh
+	}
+	return validateGoalSessionIntent(*intent)
+}
+
+func validateGoalSessionKey(key GoalSessionKey) error {
+	if !validRequiredString(key.GoalID, 4096) || !validRequiredString(key.LocalHandleID, 4096) {
+		return errors.New("goal session key is invalid")
+	}
+	return nil
+}
+
+func validateGoalSessionLineageKey(lineage GoalSessionLineageKey) error {
+	if !validRequiredString(lineage.GoalID, 4096) || len(lineage.WorkItemID) > 4096 || len(lineage.TaskID) > 4096 {
+		return errors.New("goal session lineage key is invalid")
+	}
+	return nil
+}
+
+func validateGoalSessionIntent(intent GoalSessionLaunchIntent) error {
+	if err := validateGoalSessionKey(intent.Key()); err != nil || !validRequiredString(intent.LaunchIntentID, 4096) || intent.GoalRevision <= 0 || intent.Generation < 0 || len(intent.WorkItemID) > 4096 || len(intent.TaskID) > 4096 || len(intent.RunID) > 4096 || len(intent.AdmissionID) > 4096 {
+		return errors.New("goal session launch intent is invalid")
+	}
+	if intent.RunID != "" && intent.Generation <= 0 {
+		return errors.New("goal session generation is invalid")
+	}
+	if len(intent.OwnerID) > 4096 || len(intent.MachineID) > 4096 || len(intent.RuntimeID) > 4096 || len(intent.DaemonInstanceID) > 4096 || (intent.OwnerID == "" && intent.MachineID == "" && intent.RuntimeID == "" && intent.DaemonInstanceID == "") {
+		return errors.New("goal session owner is invalid")
+	}
+	if intent.RuntimeEpoch < 0 || !validRequiredString(intent.HarnessKind, 4096) || !validRequiredString(intent.HarnessVersion, 4096) || !validRequiredString(intent.AdapterVersion, 4096) || intent.AdapterProtocolVersion <= 0 || !validRequiredString(intent.WorkspaceFingerprint, 4096) || !validGoalSessionMode(intent.SessionMode) {
+		return errors.New("goal session launch identity is invalid")
+	}
+	return nil
+}
+
+func validateGoalSessionJournal(journal GoalSessionJournal) error {
+	// Wall-clock time can move backwards across a restart or an injected
+	// recovery timestamp; ordering is not a journal-integrity invariant.
+	if journal.SchemaVersion != goalSessionSchemaVersion || journal.CreatedAt.IsZero() || journal.UpdatedAt.IsZero() {
+		return errors.New("goal session journal is invalid")
+	}
+	if err := validateGoalSessionIntent(journal.Intent()); err != nil {
+		return err
+	}
+	if !validGoalSessionState(journal.SessionState) || !validGoalSessionLaunchState(journal.LaunchState) || len(journal.NativeSessionID) > 65536 || len(journal.NativeSessionFilename) > 32768 || len(journal.UncertainReason) > 4096 {
+		return errors.New("goal session journal is invalid")
+	}
+	if journal.LaunchAttemptedAt.IsZero() != !journal.LaunchAttempted {
+		return errors.New("goal session launch attempt metadata is invalid")
+	}
+	if journal.LaunchState == GoalSessionLaunchStateIntent && journal.LaunchAttempted {
+		return errors.New("goal session launch state is invalid")
+	}
+	if journal.LaunchState == GoalSessionLaunchStateLaunching && !journal.LaunchAttempted {
+		return errors.New("goal session launch state is invalid")
+	}
+	if journal.LaunchState == GoalSessionLaunchStateAttached && (!journal.LaunchAttempted || journal.NativeSessionID == "") {
+		return errors.New("goal session native handle is invalid")
+	}
+	if journal.LaunchState == GoalSessionLaunchStateUncertain && !journal.NeedsReconciliation() {
+		return errors.New("goal session uncertainty is invalid")
+	}
+	if journal.LaunchState == GoalSessionLaunchStateClosed && journal.SessionState != GoalSessionStateClosed {
+		return errors.New("goal session closed state is invalid")
+	}
+	if journal.RecoveryRequired != journal.NeedsReconciliation() {
+		return errors.New("goal session recovery marker is invalid")
+	}
+	if journal.LaunchState == GoalSessionLaunchStateAttached && journal.UncertainReason != "" {
+		return errors.New("goal session uncertainty reason is invalid")
+	}
+	if journal.LaunchState != GoalSessionLaunchStateAttached && (journal.NativeSessionID != "" || journal.NativeSessionFilename != "") {
+		return errors.New("goal session native handle is invalid")
+	}
+	return nil
+}
+
+func validateGoalSessionHandle(handle GoalSessionHandle) error {
+	if !validRequiredString(handle.NativeSessionID, 65536) || len(handle.NativeSessionFilename) > 32768 {
+		return errors.New("goal session native handle is invalid")
+	}
+	return nil
+}
+
+func validGoalSessionState(value string) bool {
+	switch value {
+	case GoalSessionStateAvailable, GoalSessionStateBusy, GoalSessionStateUnavailable, GoalSessionStateClosed:
+		return true
+	default:
+		return false
+	}
+}
+
+func validGoalSessionLaunchState(value string) bool {
+	switch value {
+	case GoalSessionLaunchStateIntent, GoalSessionLaunchStateLaunching, GoalSessionLaunchStateAttached, GoalSessionLaunchStateUncertain, GoalSessionLaunchStateClosed:
+		return true
+	default:
+		return false
+	}
+}
+
+func validGoalSessionLineageState(value GoalSessionLineageState) bool {
+	switch value {
+	case GoalSessionLineageStateReserved, GoalSessionLineageStateLaunching, GoalSessionLineageStateAttached, GoalSessionLineageStateUncertain:
+		return true
+	default:
+		return false
+	}
+}
+
+func validGoalSessionMode(value string) bool {
+	switch value {
+	case GoalSessionModeFresh, GoalSessionModeResume, GoalSessionModeHandoff:
+		return true
+	default:
+		return false
+	}
+}
+
+func sameGoalSessionIntent(left, right GoalSessionLaunchIntent) bool {
+	return left == right
+}
+
+func compareGoalSessionCompatibility(journal GoalSessionJournal, expected GoalSessionCompatibility) error {
+	if err := compareGoalSessionIdentity(journal, expected); err != nil {
+		return err
+	}
+	if journal.LaunchState == GoalSessionLaunchStateClosed || journal.SessionState == GoalSessionStateClosed {
+		return ErrGoalSessionClosed
+	}
+	if journal.NeedsReconciliation() {
+		return ErrGoalSessionUncertain
+	}
+	if journal.LaunchState != GoalSessionLaunchStateAttached || journal.NativeSessionID == "" {
+		return ErrGoalSessionNotAttached
+	}
+	return nil
+}
+
+func compareGoalSessionIdentity(journal GoalSessionJournal, expected GoalSessionCompatibility) error {
+	if expected.OwnerID != "" && journal.OwnerID != expected.OwnerID {
+		return ErrGoalSessionOwnerMismatch
+	}
+	if expected.MachineID != "" && journal.MachineID != expected.MachineID {
+		return ErrGoalSessionOwnerMismatch
+	}
+	if expected.RuntimeID != "" && journal.RuntimeID != expected.RuntimeID {
+		return ErrGoalSessionOwnerMismatch
+	}
+	if expected.RuntimeEpoch > 0 && journal.RuntimeEpoch != expected.RuntimeEpoch {
+		return ErrGoalSessionOwnerMismatch
+	}
+	if expected.DaemonInstanceID != "" && journal.DaemonInstanceID != expected.DaemonInstanceID {
+		return ErrGoalSessionOwnerMismatch
+	}
+	if expected.HarnessKind != "" && journal.HarnessKind != expected.HarnessKind || expected.HarnessVersion != "" && journal.HarnessVersion != expected.HarnessVersion || expected.AdapterVersion != "" && journal.AdapterVersion != expected.AdapterVersion || expected.AdapterProtocolVersion > 0 && journal.AdapterProtocolVersion != expected.AdapterProtocolVersion {
+		return ErrGoalSessionVersionMismatch
+	}
+	if expected.WorkspaceFingerprint != "" && journal.WorkspaceFingerprint != expected.WorkspaceFingerprint {
+		return ErrGoalSessionWorkspaceMismatch
+	}
+	return nil
+}
+
+// compareGoalSessionIdentityStrict is used only for reconciliation operations
+// that can release or reattach an unresolved external effect. Unlike the
+// ordinary compatibility check, every recorded field is compared exactly;
+// zero values are never interpreted as caller wildcards.
+func compareGoalSessionIdentityStrict(journal GoalSessionJournal, expected GoalSessionCompatibility) error {
+	recorded := journal.Compatibility()
+	if expected == (GoalSessionCompatibility{}) ||
+		(recorded.OwnerID != "" && expected.OwnerID == "") ||
+		(recorded.MachineID != "" && expected.MachineID == "") ||
+		(recorded.RuntimeID != "" && expected.RuntimeID == "") ||
+		(recorded.RuntimeEpoch > 0 && expected.RuntimeEpoch <= 0) ||
+		(recorded.DaemonInstanceID != "" && expected.DaemonInstanceID == "") ||
+		(recorded.HarnessKind != "" && expected.HarnessKind == "") ||
+		(recorded.HarnessVersion != "" && expected.HarnessVersion == "") ||
+		(recorded.AdapterVersion != "" && expected.AdapterVersion == "") ||
+		(recorded.AdapterProtocolVersion > 0 && expected.AdapterProtocolVersion <= 0) ||
+		(recorded.WorkspaceFingerprint != "" && expected.WorkspaceFingerprint == "") {
+		return ErrGoalSessionCompatibilityIncomplete
+	}
+	if expected.OwnerID != recorded.OwnerID || expected.MachineID != recorded.MachineID || expected.RuntimeID != recorded.RuntimeID || expected.RuntimeEpoch != recorded.RuntimeEpoch || expected.DaemonInstanceID != recorded.DaemonInstanceID {
+		return ErrGoalSessionOwnerMismatch
+	}
+	if expected.HarnessKind != recorded.HarnessKind || expected.HarnessVersion != recorded.HarnessVersion || expected.AdapterVersion != recorded.AdapterVersion || expected.AdapterProtocolVersion != recorded.AdapterProtocolVersion {
+		return ErrGoalSessionVersionMismatch
+	}
+	if expected.WorkspaceFingerprint != recorded.WorkspaceFingerprint {
+		return ErrGoalSessionWorkspaceMismatch
+	}
+	return nil
+}
+
+func removeOwnedGoalSessionTemps(directory string, entries []os.DirEntry) error {
+	for _, entry := range entries {
+		if entry.IsDir() || !isOwnedTemp(entry.Name()) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(directory, entry.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return errors.New("remove goal session temporary file")
+		}
+	}
+	return nil
+}
+
+func isGoalSessionFile(name string) bool {
+	if !strings.HasPrefix(name, goalSessionFilePrefix) || !strings.HasSuffix(name, goalSessionFileSuffix) {
+		return false
+	}
+	digest := strings.TrimSuffix(strings.TrimPrefix(name, goalSessionFilePrefix), goalSessionFileSuffix)
+	if len(digest) != sha256.Size*2 {
+		return false
+	}
+	_, err := hex.DecodeString(digest)
+	return err == nil
+}
+
+func isGoalSessionLineageFile(name string) bool {
+	if !strings.HasPrefix(name, goalSessionLineageFilePrefix) || !strings.HasSuffix(name, goalSessionLineageFileSuffix) {
+		return false
+	}
+	digest := strings.TrimSuffix(strings.TrimPrefix(name, goalSessionLineageFilePrefix), goalSessionLineageFileSuffix)
+	if len(digest) != sha256.Size*2 {
+		return false
+	}
+	_, err := hex.DecodeString(digest)
+	return err == nil
+}

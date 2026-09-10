@@ -1,0 +1,13 @@
+{
+  "schema_version": "symmetry.goal_command.v1",
+  "mutation_id": "06060606-0606-4606-8606-060606060606",
+  "expected_version": 4,
+  "expected_revision": 1,
+  "kind": "resolve_decision",
+  "payload": {
+    "decision_id": "55555555-5555-4555-8555-555555555555",
+    "expected_decision_version": 1,
+    "option_id": "accept",
+    "comment": null
+  }
+}

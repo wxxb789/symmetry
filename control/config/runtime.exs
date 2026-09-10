@@ -23,6 +23,34 @@ end
 config :symmetry_control, SymmetryControlWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+goals_rollout_enabled =
+  case System.get_env("SYMMETRY_GOALS_ROLLOUT_ENABLED", "false") do
+    "true" -> true
+    "false" -> false
+    _ -> raise "SYMMETRY_GOALS_ROLLOUT_ENABLED must be true or false"
+  end
+
+default_contracts_dir =
+  if config_env() == :prod,
+    do: "/app/contracts",
+    else: Path.expand("../../contracts", __DIR__)
+
+contracts_dir = System.get_env("SYMMETRY_CONTRACTS_DIR", default_contracts_dir)
+
+contracts_dir_required =
+  config_env() != :prod or goals_rollout_enabled or
+    not is_nil(System.get_env("SYMMETRY_CONTRACTS_DIR"))
+
+if contracts_dir_required and Path.type(contracts_dir) != :absolute do
+  raise "SYMMETRY_CONTRACTS_DIR must be an absolute path"
+end
+
+if contracts_dir_required and not File.dir?(contracts_dir) do
+  raise "SYMMETRY_CONTRACTS_DIR must name an existing directory"
+end
+
+config :symmetry_control, :contracts, directory: contracts_dir
+
 if config_env() != :test do
   token = fn variable, development_default ->
     if config_env() == :prod do
@@ -82,6 +110,11 @@ if config_env() != :test do
   config :symmetry_control, :integrations,
     syncer_enabled: true,
     sync_interval_ms: integration_sync_interval_ms
+
+  goals = Application.get_env(:symmetry_control, :goals) || []
+  goals = Keyword.put(goals, :rollout_enabled, goals_rollout_enabled)
+
+  config :symmetry_control, :goals, goals
 end
 
 if config_env() == :prod do

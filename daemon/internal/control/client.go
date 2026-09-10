@@ -121,6 +121,265 @@ type OperatorClient struct {
 	operatorToken string
 }
 
+// GoalSessionAttachRequest is the flat request body accepted by the fenced
+// machine-only session endpoint. The run ID remains authoritative in the URL;
+// it is intentionally not duplicated in this body.
+type GoalSessionAttachRequest struct {
+	protocol.Fence
+	LocalHandleID        string  `json:"local_handle_id"`
+	HarnessKind          string  `json:"harness_kind"`
+	HarnessVersion       string  `json:"harness_version"`
+	AdapterVersion       string  `json:"adapter_version"`
+	WorkspaceFingerprint string  `json:"workspace_fingerprint"`
+	Workspace            string  `json:"workspace"`
+	RepositoryResourceID *string `json:"repository_resource_id,omitempty"`
+}
+
+// GoalSessionReceipt is the durable session identity returned by attach. The
+// endpoint may omit optional projection fields, but never private native
+// session payloads or credentials.
+type GoalSessionReceipt struct {
+	ID                   string `json:"id"`
+	GoalID               string `json:"goal_id,omitempty"`
+	TaskID               string `json:"task_id,omitempty"`
+	RunID                string `json:"run_id"`
+	MachineID            string `json:"machine_id,omitempty"`
+	RuntimeID            string `json:"runtime_id,omitempty"`
+	RepositoryResourceID string `json:"repository_resource_id,omitempty"`
+	ActiveRunID          string `json:"active_run_id,omitempty"`
+	HarnessKind          string `json:"harness_kind,omitempty"`
+	HarnessVersion       string `json:"harness_version,omitempty"`
+	AdapterVersion       string `json:"adapter_version,omitempty"`
+	LocalHandleID        string `json:"local_handle_id,omitempty"`
+	WorkspaceFingerprint string `json:"workspace_fingerprint,omitempty"`
+	Workspace            string `json:"workspace,omitempty"`
+	State                string `json:"state,omitempty"`
+	LockVersion          int64  `json:"lock_version,omitempty"`
+	InsertedAt           string `json:"inserted_at,omitempty"`
+	UpdatedAt            string `json:"updated_at,omitempty"`
+}
+
+// GoalEvidenceReceipt is the compact receipt returned after an evidence batch
+// is durably inserted or replayed.
+type GoalEvidenceReceipt struct {
+	ID          string `json:"id"`
+	RunID       string `json:"run_id"`
+	EvidenceKey string `json:"evidence_key"`
+	Kind        string `json:"kind"`
+	SubjectHash string `json:"subject_hash"`
+	Verdict     string `json:"verdict"`
+}
+
+// GoalUsageReceipt is the compact receipt returned after usage accounting is
+// durably inserted or replayed. cost_microusd follows the wire decimal-string
+// convention and may be null when cost_basis is unknown.
+type GoalUsageReceipt struct {
+	ID           string  `json:"id"`
+	RunID        string  `json:"run_id"`
+	UsageKey     string  `json:"usage_key"`
+	CostMicrousd *string `json:"cost_microusd"`
+	CostBasis    string  `json:"cost_basis"`
+}
+
+// UnmarshalJSON accepts only the documented decimal-string form or null.
+// Unknown fields remain rejected.
+func (receipt *GoalUsageReceipt) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		ID           string          `json:"id"`
+		RunID        string          `json:"run_id"`
+		UsageKey     string          `json:"usage_key"`
+		CostMicrousd json.RawMessage `json:"cost_microusd"`
+		CostBasis    string          `json:"cost_basis"`
+	}
+	if err := decodeStrictObjectJSON(data, &wire, "id", "run_id", "usage_key", "cost_microusd", "cost_basis"); err != nil {
+		return err
+	}
+	var cost *string
+	trimmed := bytes.TrimSpace(wire.CostMicrousd)
+	if !bytes.Equal(trimmed, []byte("null")) {
+		var text string
+		if err := json.Unmarshal(trimmed, &text); err != nil {
+			return errors.New("cost_microusd must be a decimal string or null")
+		}
+		if err := protocol.ValidateMicroUSD(text); err != nil {
+			return err
+		}
+		cost = &text
+	}
+	*receipt = GoalUsageReceipt{ID: wire.ID, RunID: wire.RunID, UsageKey: wire.UsageKey, CostMicrousd: cost, CostBasis: wire.CostBasis}
+	return nil
+}
+
+// ApprovedGoal is the authority-bearing portion of a canonical context
+// snapshot. It contains policy data, but no executable command or credential.
+type ApprovedGoal struct {
+	GoalID          string          `json:"goal_id"`
+	Revision        int64           `json:"revision"`
+	Objective       string          `json:"objective"`
+	AuthorityPolicy AuthorityPolicy `json:"authority_policy"`
+}
+
+// AuthorityPolicy describes the operator boundaries carried by an approved
+// goal. It is descriptive context; it never grants authority to the daemon.
+type AuthorityPolicy struct {
+	OperatorRequiredForScopeChange bool     `json:"operator_required_for_scope_change"`
+	OperatorRequiredForCompletion  bool     `json:"operator_required_for_completion"`
+	PublicationAllowed             bool     `json:"publication_allowed"`
+	AllowedActions                 []string `json:"allowed_actions"`
+}
+
+// AcceptancePredicate is one typed acceptance condition in a work contract.
+// The populated identity fields depend on Kind.
+type AcceptancePredicate struct {
+	ID               string `json:"id"`
+	Kind             string `json:"kind"`
+	ValidatorProfile string `json:"validator_profile,omitempty"`
+	ResourceID       string `json:"resource_id,omitempty"`
+	Path             string `json:"path,omitempty"`
+	ReviewerProfile  string `json:"reviewer_profile,omitempty"`
+	present          map[string]struct{}
+}
+
+// AcceptanceContract is the versioned predicate contract embedded in a work
+// contract.
+type AcceptanceContract struct {
+	SchemaVersion string                `json:"schema_version"`
+	Description   string                `json:"description"`
+	Predicates    []AcceptancePredicate `json:"predicates"`
+}
+
+// WorkContract identifies the bounded work and its acceptance rules.
+type WorkContract struct {
+	Title              string                         `json:"title"`
+	Description        string                         `json:"description"`
+	Purpose            string                         `json:"purpose"`
+	ChangeTarget       *protocol.ProviderChangeTarget `json:"change_target"`
+	Acceptance         AcceptanceContract             `json:"acceptance"`
+	ValidationBindings []ValidationBinding            `json:"validation_bindings"`
+}
+
+// ValidationBinding freezes one server-resolved validation profile and the
+// runtimes authorized to produce its evidence for this context snapshot.
+type ValidationBinding struct {
+	ProfileName       string   `json:"profile_name"`
+	Kind              string   `json:"kind"`
+	ProfileDigest     string   `json:"profile_digest"`
+	AllowedRuntimeIDs []string `json:"allowed_runtime_ids"`
+}
+
+// ContextContent is the safe, typed content carried by a context source.
+type ContextContent struct {
+	Kind  string `json:"kind"`
+	Value string `json:"value"`
+}
+
+// ContextSource identifies one bounded source included in a snapshot.
+type ContextSource struct {
+	ResourceID     string         `json:"resource_id"`
+	SourceKind     string         `json:"source_kind"`
+	SourceRevision string         `json:"source_revision"`
+	ContentHash    string         `json:"content_hash"`
+	ObservedAt     string         `json:"observed_at"`
+	Trust          string         `json:"trust"`
+	Required       bool           `json:"required"`
+	Content        ContextContent `json:"content"`
+	Stale          *bool          `json:"stale,omitempty"`
+	present        map[string]struct{}
+}
+
+// DecisionReference is a compact reference to a durable decision.
+type DecisionReference struct {
+	DecisionID string `json:"decision_id"`
+	ActionHash string `json:"action_hash"`
+	State      string `json:"state"`
+}
+
+// EvidenceReference is a compact reference to validated evidence.
+type EvidenceReference struct {
+	EvidenceID  string `json:"evidence_id"`
+	PredicateID string `json:"predicate_id"`
+	SubjectHash string `json:"subject_hash"`
+	Verdict     string `json:"verdict"`
+}
+
+// FailedAttempt records a prior execution attempt without exposing native
+// transcripts or local session identifiers.
+type FailedAttempt struct {
+	TaskID     string  `json:"task_id"`
+	RunID      *string `json:"run_id"`
+	Reason     string  `json:"reason"`
+	ObservedAt string  `json:"observed_at"`
+}
+
+// Blocker is the typed blocker used by a wait next action.
+type Blocker struct {
+	Kind        string   `json:"kind"`
+	DecisionID  string   `json:"decision_id,omitempty"`
+	ResourceID  string   `json:"resource_id,omitempty"`
+	ExternalRef string   `json:"external_ref,omitempty"`
+	NextCheckAt string   `json:"next_check_at,omitempty"`
+	WorkItemIDs []string `json:"work_item_ids,omitempty"`
+	Code        string   `json:"code,omitempty"`
+	Detail      string   `json:"detail,omitempty"`
+	present     map[string]struct{}
+}
+
+// NextAction is a typed, non-authoritative follow-up proposal.
+type NextAction struct {
+	Kind            string   `json:"kind"`
+	ProducingTaskID string   `json:"producing_task_id,omitempty"`
+	WorkItemID      string   `json:"work_item_id,omitempty"`
+	Reason          string   `json:"reason,omitempty"`
+	ResourceID      string   `json:"resource_id,omitempty"`
+	ExternalRef     string   `json:"external_ref,omitempty"`
+	Blocker         *Blocker `json:"blocker,omitempty"`
+	present         map[string]struct{}
+}
+
+// ContextSize reports the bounded size accounting for a canonical snapshot.
+type ContextSize struct {
+	MandatoryBytes int64  `json:"mandatory_bytes"`
+	OptionalBytes  int64  `json:"optional_bytes"`
+	TotalBytes     int64  `json:"total_bytes"`
+	ByteBudget     int64  `json:"byte_budget"`
+	TokenEstimate  *int64 `json:"token_estimate"`
+}
+
+// GoalContextSnapshot is the canonical symmetry.context_snapshot.v1 payload
+// returned to the owning machine. It is deliberately modeled as typed data so
+// additive or legacy DB projections cannot be mistaken for canonical context.
+type GoalContextSnapshot struct {
+	SchemaVersion string `json:"schema_version"`
+	SnapshotID    string `json:"snapshot_id"`
+	GoalID        string `json:"goal_id"`
+	GoalRevision  int64  `json:"goal_revision"`
+	// WorkItemID is nil only for a planning context. Keep the nullable wire
+	// identity explicit instead of treating an empty string as absence.
+	WorkItemID        *string             `json:"work_item_id"`
+	ContentHash       string              `json:"content_hash"`
+	CreatedAt         string              `json:"created_at"`
+	ApprovedGoal      ApprovedGoal        `json:"approved_goal"`
+	WorkContract      WorkContract        `json:"work_contract"`
+	Subject           protocol.Subject    `json:"subject"`
+	Sources           []ContextSource     `json:"sources"`
+	CurrentDecisions  []DecisionReference `json:"current_decisions"`
+	ValidatedEvidence []EvidenceReference `json:"validated_evidence"`
+	FailedAttempts    []FailedAttempt     `json:"failed_attempts"`
+	AdvisoryRecall    []ContextSource     `json:"advisory_recall"`
+	NextAction        *NextAction         `json:"next_action"`
+	Size              ContextSize         `json:"size"`
+}
+
+// GoalRunContext binds the sanitized context to the current run/session.
+type GoalRunContext struct {
+	GoalID     string              `json:"goal_id"`
+	TaskID     string              `json:"task_id"`
+	RunID      string              `json:"run_id"`
+	Generation int64               `json:"generation"`
+	SessionID  *string             `json:"session_id"`
+	Context    GoalContextSnapshot `json:"context"`
+}
+
 // NewClient creates a machine-authenticated client. baseURL is the API prefix,
 // for example https://control.example.test/api.
 func NewClient(baseURL, machineToken string, httpClient *http.Client, options ...Option) (*Client, error) {
@@ -224,6 +483,9 @@ func (client *Client) RegisterSession(ctx context.Context, machineID, daemonInst
 	if err := validatePathID("daemon instance ID", daemonInstanceID); err != nil {
 		return protocol.SessionRegistrationResponse{}, err
 	}
+	if err := request.Validate(); err != nil {
+		return protocol.SessionRegistrationResponse{}, fmt.Errorf("validate session registration: %w", err)
+	}
 	var response protocol.SessionRegistrationResponse
 	endpoint := "v1/machines/" + machineID + "/sessions/" + daemonInstanceID
 	if err := client.machineRequest(ctx, http.MethodPut, endpoint, nil, "", request, &response); err != nil {
@@ -311,6 +573,109 @@ func (client *Client) AppendEvents(ctx context.Context, runID string, request pr
 		return err
 	}
 	return client.requestNoContent(ctx, http.MethodPost, "v1/runs/"+runID+"/events", nil, client.machineToken, "", request)
+}
+
+// AttachHarnessSession attaches a daemon-local native session to a fenced run.
+// The response is decoded with the Goal strict decoder; legacy endpoint
+// decoders remain tolerant of additive fields.
+func (client *Client) AttachHarnessSession(ctx context.Context, runID string, request GoalSessionAttachRequest) (GoalSessionReceipt, error) {
+	if err := validateGoalSessionAttach(runID, request); err != nil {
+		return GoalSessionReceipt{}, err
+	}
+	body := request
+	var wire struct {
+		Session GoalSessionReceipt `json:"session"`
+	}
+	statusCode, err := client.requestGoalWithStatus(ctx, http.MethodPut, "v1/runs/"+runID+"/session", nil, "", body, &wire)
+	if err != nil {
+		return GoalSessionReceipt{}, err
+	}
+	if statusCode != http.StatusOK && statusCode != http.StatusCreated {
+		return GoalSessionReceipt{}, responseErrorf("invalid attach session response: expected HTTP 200 or 201, got HTTP %d", statusCode)
+	}
+	if err := validateGoalSessionReceipt(runID, request, wire.Session); err != nil {
+		return GoalSessionReceipt{}, err
+	}
+	return wire.Session, nil
+}
+
+// AppendEvidence submits one normalized evidence receipt under the current
+// run fence. The request's run_id must match the path run ID.
+func (client *Client) AppendEvidence(ctx context.Context, runID string, fence protocol.Fence, evidence protocol.Evidence) (GoalEvidenceReceipt, error) {
+	if err := validateGoalEvidence(runID, fence, evidence); err != nil {
+		return GoalEvidenceReceipt{}, err
+	}
+	body := struct {
+		protocol.Fence
+		protocol.Evidence
+	}{Fence: fence, Evidence: evidence}
+	var wire struct {
+		Evidence GoalEvidenceReceipt `json:"evidence"`
+	}
+	statusCode, err := client.requestGoalWithStatus(ctx, http.MethodPost, "v1/runs/"+runID+"/evidence", nil, "", body, &wire)
+	if err != nil {
+		return GoalEvidenceReceipt{}, err
+	}
+	if statusCode != http.StatusOK && statusCode != http.StatusCreated {
+		return GoalEvidenceReceipt{}, responseErrorf("invalid evidence response: expected HTTP 200 or 201, got HTTP %d", statusCode)
+	}
+	if err := validateGoalEvidenceReceipt(runID, evidence, wire.Evidence); err != nil {
+		return GoalEvidenceReceipt{}, err
+	}
+	return wire.Evidence, nil
+}
+
+// RecordUsage submits normalized usage under the current run fence. Late usage
+// remains accepted by the server only under its documented accounting rule.
+func (client *Client) RecordUsage(ctx context.Context, runID string, fence protocol.Fence, usage protocol.Usage) (GoalUsageReceipt, error) {
+	if err := validateGoalUsage(runID, fence, usage); err != nil {
+		return GoalUsageReceipt{}, err
+	}
+	body := struct {
+		protocol.Fence
+		protocol.Usage
+	}{Fence: fence, Usage: usage}
+	var wire struct {
+		Usage GoalUsageReceipt `json:"usage"`
+	}
+	statusCode, err := client.requestGoalWithStatus(ctx, http.MethodPost, "v1/runs/"+runID+"/usage", nil, "", body, &wire)
+	if err != nil {
+		return GoalUsageReceipt{}, err
+	}
+	if statusCode != http.StatusOK && statusCode != http.StatusCreated {
+		return GoalUsageReceipt{}, responseErrorf("invalid usage response: expected HTTP 200 or 201, got HTTP %d", statusCode)
+	}
+	if err := validateGoalUsageReceipt(runID, usage, wire.Usage); err != nil {
+		return GoalUsageReceipt{}, err
+	}
+	return wire.Usage, nil
+}
+
+// FetchRunContext returns the current sanitized context for a claimed run.
+// Fence values are query parameters because the endpoint has no request body.
+func (client *Client) FetchRunContext(ctx context.Context, runID string, fence protocol.Fence) (GoalRunContext, error) {
+	if err := validateGoalFence(runID, fence); err != nil {
+		return GoalRunContext{}, err
+	}
+	query := goalFenceQuery(fence)
+	var response GoalRunContext
+	if err := client.requestGoal(ctx, http.MethodGet, "v1/runs/"+runID+"/context", query, "", nil, &response); err != nil {
+		return GoalRunContext{}, err
+	}
+	if err := validateGoalRunContext(runID, fence, response); err != nil {
+		return GoalRunContext{}, err
+	}
+	return response, nil
+}
+
+func goalFenceQuery(fence protocol.Fence) url.Values {
+	return url.Values{
+		"runtime_id":    []string{fence.RuntimeID},
+		"runtime_epoch": []string{strconv.FormatInt(fence.RuntimeEpoch, 10)},
+		"generation":    []string{strconv.FormatInt(fence.Generation, 10)},
+		"claim_id":      []string{fence.ClaimID},
+		"lease_token":   []string{fence.LeaseToken},
+	}
 }
 
 // Transition applies a caller-identified lifecycle transition without a retry policy.
@@ -484,6 +849,28 @@ func retryableTransportCause(err error) bool {
 
 func (client *Client) machineRequest(ctx context.Context, method, endpoint string, query url.Values, idempotencyKey string, request, response any) error {
 	return client.request(ctx, method, endpoint, query, client.machineToken, idempotencyKey, request, response)
+}
+
+func (client *Client) requestGoal(ctx context.Context, method, endpoint string, query url.Values, idempotencyKey string, request, response any) error {
+	_, err := client.requestGoalWithStatus(ctx, method, endpoint, query, idempotencyKey, request, response)
+	return err
+}
+
+func (client *Client) requestGoalWithStatus(ctx context.Context, method, endpoint string, query url.Values, idempotencyKey string, request, response any) (int, error) {
+	statusCode, responseBody, oversized, err := client.perform(ctx, method, endpoint, query, client.machineToken, idempotencyKey, request)
+	if err != nil {
+		return 0, err
+	}
+	if oversized {
+		return 0, responseErrorf("response body exceeds %d bytes", client.maxResponseBytes)
+	}
+	if response == nil {
+		return statusCode, nil
+	}
+	if err := decodeStrictJSON(responseBody, response); err != nil {
+		return 0, responseErrorf("decode strict goal response: %w", err)
+	}
+	return statusCode, nil
 }
 
 func (client *OperatorClient) operatorRequest(ctx context.Context, method, endpoint string, query url.Values, idempotencyKey string, request, response any) error {

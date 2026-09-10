@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "contracts/v1/goal-create.schema.json",
+  "title": "Symmetry GoalCreate v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "mutation_id", "title", "initial_revision"],
+  "properties": {
+    "schema_version": {"const": "symmetry.goal_create.v1"},
+    "mutation_id": {"$ref": "common.schema.json#/definitions/UUID"},
+    "title": {"$ref": "common.schema.json#/definitions/LongText"},
+    "initial_revision": {"$ref": "common.schema.json#/definitions/InitialGoalRevisionContract"}
+  }
+}

@@ -3,8 +3,10 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 	"github.com/wxxb789/symmetry/daemon/internal/workspace"
 )
@@ -56,11 +58,17 @@ func (daemon *daemon) cleanupWorkerActive() bool {
 }
 
 func (daemon *daemon) scheduleCleanup(ctx context.Context, journal state.RunJournal) error {
+	if journal.NativeUsageRecoveryRequired {
+		return errors.New("native usage recovery remains pending")
+	}
 	if !daemon.releaseCleanupIfReady(journal.Key()) {
 		return nil
 	}
 	daemon.enqueueCleanup(journal.Key())
 	if daemon.cleanupWorkerActive() {
+		return nil
+	}
+	if journal.HasPendingGoalDeliveries() {
 		return nil
 	}
 	return daemon.cleanupPending(ctx, journal)
@@ -96,7 +104,7 @@ func (daemon *daemon) enqueueRecoveredCleanups() {
 		return
 	}
 	for _, journal := range journals {
-		if journal.LocalState == "cleanup_pending" {
+		if journal.LocalState == "cleanup_pending" || journal.LocalState == "stale" {
 			daemon.enqueueCleanup(journal.Key())
 		}
 	}
@@ -225,6 +233,20 @@ func (daemon *daemon) cleanupPending(ctx context.Context, journal state.RunJourn
 	if journal.LocalState != "cleanup_pending" && journal.LocalState != "stale" {
 		return nil
 	}
+	if journal.HasPendingGoalDeliveries() {
+		return errors.New("Goal delivery remains pending")
+	}
+	if goalArtifactReceiptRequired(journal) {
+		return errors.New("Goal candidate artifact acceptance or publish receipt remains pending")
+	}
+	if goalRecovery, err := daemon.goalRecoveryEvidenceRequired(journal); err != nil {
+		return err
+	} else if goalRecovery {
+		return errors.New("Goal native recovery evidence remains pending")
+	}
+	if journal.GoalDeliveryEnabled && (journal.PID > 0 || journal.ProcessIdentity != "" || !journal.StartedAt.IsZero()) {
+		return errors.New("Goal native process identity remains pending")
+	}
 	if err := daemon.cleanupRecoveredWorkspace(ctx, journal, journal.LocalState == "cleanup_pending" && journal.TerminalState == "completed"); err != nil {
 		daemon.log.Warn("cleanup_terminal_workspace_failed", "run_id", journal.RunID, "error", err)
 		return err
@@ -236,4 +258,35 @@ func (daemon *daemon) cleanupPending(ctx context.Context, journal state.RunJourn
 	daemon.forgetWorkspaceRetention(journal.Key())
 	daemon.clearCompletedCommandReceipts(journal.Key())
 	return nil
+}
+
+// goalArtifactReceiptRequired keeps a successful native Goal run distinct from
+// a durably published candidate artifact. Terminal delivery only records that
+// the process result reached control; it is not outcome acceptance.
+func goalArtifactReceiptRequired(journal state.RunJournal) bool {
+	if !journal.GoalDeliveryEnabled || journal.TerminalState != "completed" {
+		return false
+	}
+	for _, delivery := range journal.DeliveredGoalDeliveries {
+		if delivery.Kind == state.GoalDeliveryEvidence && delivery.Evidence != nil && delivery.Evidence.Kind == protocol.EvidenceArtifact {
+			return false
+		}
+	}
+	return true
+}
+
+func (daemon *daemon) goalRecoveryEvidenceRequired(journal state.RunJournal) (bool, error) {
+	sessions, err := daemon.store.ListGoalSessions()
+	if err != nil {
+		return true, fmt.Errorf("list Goal sessions before cleanup: %w", err)
+	}
+	for _, session := range sessions {
+		if session.RunID != journal.RunID || session.Generation != journal.Generation {
+			continue
+		}
+		if session.NeedsReconciliation() || session.SessionState != state.GoalSessionStateClosed {
+			return true, nil
+		}
+	}
+	return false, nil
 }

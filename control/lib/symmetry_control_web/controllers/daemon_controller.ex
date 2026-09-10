@@ -2,6 +2,7 @@ defmodule SymmetryControlWeb.DaemonController do
   use SymmetryControlWeb, :controller
 
   alias SymmetryControl.Integrations.ProviderAccess
+  alias SymmetryControl.Goals
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.Scheduler
   alias SymmetryControl.Repo
@@ -117,20 +118,53 @@ defmodule SymmetryControlWeb.DaemonController do
   end
 
   defp claim_with_provider_access(run_id, request) do
+    if ProviderAccess.exact_claim_replay?(run_id, request) do
+      replay_claim_with_provider_access(run_id, request)
+    else
+      create_claim_with_provider_access(run_id, request)
+    end
+  end
+
+  defp replay_claim_with_provider_access(run_id, request) do
     Repo.transaction(fn ->
-      with {:ok, provider_scope} <- ProviderAccess.lock_claim_scope(run_id),
-           {:ok, run, disposition} <-
+      with {:ok, run, :replayed} <-
              Orchestration.claim_with_disposition(run_id, request,
                lease_duration_ms: config(:lease_duration_ms)
              ),
            {:ok, %{task: task}} <- Orchestration.task_snapshot(run.task_id),
-           {:ok, provider_access} <- ProviderAccess.issue(provider_scope, run, task) do
+           {:ok, provider_access} <- ProviderAccess.replay_claim_access(run, task) do
+        {run, task, provider_access, :replayed}
+      else
+        {:ok, _run, :created} -> Repo.rollback(:ownership_lost)
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> claim_provider_access_result()
+  end
+
+  defp create_claim_with_provider_access(run_id, request) do
+    Repo.transaction(fn ->
+      # Scope locking precedes a new claim to preserve Goal -> Project -> resource
+      # lock order. A replay intentionally ignores a now-stale scope result.
+      provider_scope = ProviderAccess.lock_claim_scope(run_id)
+
+      with {:ok, run, disposition} <-
+             Orchestration.claim_with_disposition(run_id, request,
+               lease_duration_ms: config(:lease_duration_ms)
+             ),
+           {:ok, %{task: task}} <- Orchestration.task_snapshot(run.task_id),
+           {:ok, provider_access} <-
+             provider_access_for_claim(provider_scope, disposition, run, task) do
         {run, task, provider_access, disposition}
       else
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
-    |> case do
+    |> claim_provider_access_result()
+  end
+
+  defp claim_provider_access_result(result) do
+    case result do
       {:ok, {run, task, provider_access, :created}} ->
         Orchestration.emit_claimed(run)
         {:ok, {run, task, provider_access}}
@@ -142,6 +176,18 @@ defmodule SymmetryControlWeb.DaemonController do
         error
     end
   end
+
+  defp provider_access_for_claim(_scope, :replayed, run, task),
+    do: ProviderAccess.replay_claim_access(run, task)
+
+  defp provider_access_for_claim({:ok, scope}, :created, run, task) do
+    with {:ok, provider_access} <- ProviderAccess.issue(scope, run, task),
+         {:ok, _run} <- ProviderAccess.persist_claim_access(run, provider_access) do
+      {:ok, provider_access}
+    end
+  end
+
+  defp provider_access_for_claim({:error, reason}, :created, _run, _task), do: {:error, reason}
 
   def heartbeat_run(conn, _params) do
     run_id = path_param(conn, "run_id")
@@ -238,6 +284,57 @@ defmodule SymmetryControlWeb.DaemonController do
     end
   end
 
+  def attach_harness_session(conn, _params) do
+    run_id = path_param(conn, "run_id")
+
+    with :ok <- owns_run(conn, run_id),
+         {:ok, fence, attrs} <- fenced_body(body_params(conn), run_id, :absent),
+         {:ok, receipt, disposition} <-
+           Goals.attach_harness_session(conn.assigns.machine.id, run_id, fence, attrs) do
+      receipt(conn, receipt, disposition)
+    else
+      {:error, reason} -> Protocol.error(conn, reason)
+    end
+  end
+
+  def append_evidence(conn, _params) do
+    run_id = path_param(conn, "run_id")
+
+    with :ok <- owns_run(conn, run_id),
+         {:ok, fence, evidence} <- fenced_body(body_params(conn), run_id, :required),
+         {:ok, receipt, disposition} <-
+           Goals.append_evidence(conn.assigns.machine.id, run_id, fence, evidence) do
+      receipt(conn, receipt, disposition)
+    else
+      {:error, reason} -> Protocol.error(conn, reason)
+    end
+  end
+
+  def record_usage(conn, _params) do
+    run_id = path_param(conn, "run_id")
+
+    with :ok <- owns_run(conn, run_id),
+         {:ok, fence, usage} <- fenced_body(body_params(conn), run_id, :required),
+         {:ok, receipt, disposition} <-
+           Goals.record_usage(conn.assigns.machine.id, run_id, fence, usage) do
+      receipt(conn, receipt, disposition)
+    else
+      {:error, reason} -> Protocol.error(conn, reason)
+    end
+  end
+
+  def fetch_run_context(conn, _params) do
+    run_id = path_param(conn, "run_id")
+
+    with :ok <- owns_run(conn, run_id),
+         {:ok, fence} <- query_fence(conn),
+         {:ok, context} <- Goals.fetch_run_context(conn.assigns.machine.id, run_id, fence) do
+      json(conn, context)
+    else
+      {:error, reason} -> Protocol.error(conn, reason)
+    end
+  end
+
   defp owns_machine(conn, machine_id) do
     if machine_id == conn.assigns.machine.id, do: :ok, else: {:error, :forbidden}
   end
@@ -272,6 +369,103 @@ defmodule SymmetryControlWeb.DaemonController do
        do: {:ok, run_id, outcome}
 
   defp acknowledgement_body(_body), do: {:error, :invalid_request}
+
+  @fence_fields ["runtime_id", "runtime_epoch", "generation", "claim_id", "lease_token"]
+
+  defp fenced_body(body, run_id, run_id_mode) when is_map(body) do
+    with {:ok, fence} <- fence(body),
+         false <- Map.has_key?(body, "machine_id"),
+         :ok <- run_id_matches?(body, run_id, run_id_mode) do
+      {:ok, fence, body |> Map.drop(@fence_fields) |> Protocol.normalize_map()}
+    else
+      true -> {:error, :invalid_request}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp query_fence(conn) do
+    query = fetch_query_params(conn).query_params
+
+    with {:ok, fence} <- query_fence_values(query),
+         false <- Map.has_key?(query, "machine_id"),
+         true <- MapSet.subset?(MapSet.new(Map.keys(query)), MapSet.new(@fence_fields)) do
+      {:ok, fence}
+    else
+      false -> {:error, :invalid_request}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp fence(params) do
+    with {:ok, runtime_id} <- nonempty_string(params, "runtime_id"),
+         {:ok, runtime_epoch} <- positive_integer(params, "runtime_epoch"),
+         {:ok, generation} <- positive_integer(params, "generation"),
+         {:ok, claim_id} <- nonempty_string(params, "claim_id"),
+         {:ok, lease_token} <- nonempty_string(params, "lease_token") do
+      {:ok,
+       %{
+         "runtime_id" => runtime_id,
+         "runtime_epoch" => runtime_epoch,
+         "generation" => generation,
+         "claim_id" => claim_id,
+         "lease_token" => lease_token
+       }}
+    end
+  end
+
+  defp query_fence_values(params) do
+    with {:ok, runtime_id} <- nonempty_string(params, "runtime_id"),
+         {:ok, runtime_epoch} <- query_positive_integer(params, "runtime_epoch"),
+         {:ok, generation} <- query_positive_integer(params, "generation"),
+         {:ok, claim_id} <- nonempty_string(params, "claim_id"),
+         {:ok, lease_token} <- nonempty_string(params, "lease_token") do
+      {:ok,
+       %{
+         "runtime_id" => runtime_id,
+         "runtime_epoch" => runtime_epoch,
+         "generation" => generation,
+         "claim_id" => claim_id,
+         "lease_token" => lease_token
+       }}
+    end
+  end
+
+  defp run_id_matches?(body, _run_id, :absent) do
+    if Map.has_key?(body, "run_id"), do: {:error, :invalid_request}, else: :ok
+  end
+
+  defp run_id_matches?(%{"run_id" => run_id}, run_id, :required), do: :ok
+  defp run_id_matches?(_body, _run_id, :required), do: {:error, :invalid_request}
+
+  defp nonempty_string(params, key) do
+    case Map.get(params, key) do
+      value when is_binary(value) and byte_size(value) > 0 -> {:ok, value}
+      _ -> {:error, :invalid_request}
+    end
+  end
+
+  defp positive_integer(params, key) do
+    case Map.get(params, key) do
+      value when is_integer(value) and value > 0 -> {:ok, value}
+      _ -> {:error, :invalid_request}
+    end
+  end
+
+  defp query_positive_integer(params, key) do
+    case Map.get(params, key) do
+      value when is_binary(value) ->
+        case Integer.parse(value) do
+          {parsed, ""} when parsed > 0 -> {:ok, parsed}
+          _ -> {:error, :invalid_request}
+        end
+
+      _ ->
+        {:error, :invalid_request}
+    end
+  end
+
+  defp receipt(conn, response, :created), do: conn |> put_status(:created) |> json(response)
+  defp receipt(conn, response, :replayed), do: json(conn, response)
 
   defp mutation_params(conn, path_keys) when is_struct(conn, Plug.Conn),
     do: conn |> body_params() |> Map.drop(path_keys)

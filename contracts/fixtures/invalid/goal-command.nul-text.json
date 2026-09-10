@@ -1,0 +1,8 @@
+{
+  "schema_version": "symmetry.goal_command.v1",
+  "mutation_id": "34343434-3434-4434-8434-343434343433",
+  "expected_version": 1,
+  "expected_revision": 1,
+  "kind": "pause",
+  "payload": {"reason": "NUL\u0000is not durable text."}
+}

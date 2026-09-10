@@ -1,0 +1,135 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "contracts/v1/evidence.schema.json",
+  "title": "Symmetry Evidence v1",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "evidence_id", "run_id", "evidence_key", "kind", "subject", "subject_hash", "source_ref", "source_revision", "validator_profile", "verdict", "payload", "observed_at"],
+      "properties": {
+        "schema_version": {"const": "symmetry.evidence.v1"},
+        "evidence_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "run_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "evidence_key": {"$ref": "common.schema.json#/definitions/ShortIdentifier"},
+        "kind": {"const": "check"},
+        "subject": {"$ref": "common.schema.json#/definitions/Subject"},
+        "subject_hash": {"$ref": "common.schema.json#/definitions/Sha256"},
+        "source_ref": {"$ref": "#/definitions/CheckSourceRef"},
+        "source_revision": {"$ref": "common.schema.json#/definitions/ShortIdentifier"},
+        "validator_profile": {"$ref": "common.schema.json#/definitions/ShortIdentifier"},
+        "verdict": {"enum": ["passed", "failed", "unknown", "not_applicable"]},
+        "payload": {"$ref": "common.schema.json#/definitions/CheckReceipt"},
+        "observed_at": {"$ref": "common.schema.json#/definitions/UtcTimestamp"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "evidence_id", "run_id", "evidence_key", "kind", "subject", "subject_hash", "source_ref", "source_revision", "validator_profile", "verdict", "payload", "observed_at"],
+      "properties": {
+        "schema_version": {"const": "symmetry.evidence.v1"},
+        "evidence_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "run_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "evidence_key": {"$ref": "common.schema.json#/definitions/ShortIdentifier"},
+        "kind": {"const": "artifact"},
+        "subject": {"$ref": "common.schema.json#/definitions/Subject"},
+        "subject_hash": {"$ref": "common.schema.json#/definitions/Sha256"},
+        "source_ref": {"$ref": "#/definitions/ArtifactSourceRef"},
+        "source_revision": {"$ref": "common.schema.json#/definitions/ShortIdentifier"},
+        "validator_profile": {"$ref": "common.schema.json#/definitions/ShortIdentifier"},
+        "verdict": {"enum": ["passed", "failed", "unknown", "not_applicable"]},
+        "payload": {"$ref": "common.schema.json#/definitions/ArtifactReceipt"},
+        "observed_at": {"$ref": "common.schema.json#/definitions/UtcTimestamp"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "evidence_id", "run_id", "evidence_key", "kind", "subject", "subject_hash", "source_ref", "source_revision", "validator_profile", "verdict", "payload", "observed_at"],
+      "properties": {
+        "schema_version": {"const": "symmetry.evidence.v1"},
+        "evidence_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "run_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "evidence_key": {"$ref": "common.schema.json#/definitions/ShortIdentifier"},
+        "kind": {"const": "review"},
+        "subject": {"$ref": "common.schema.json#/definitions/Subject"},
+        "subject_hash": {"$ref": "common.schema.json#/definitions/Sha256"},
+        "source_ref": {"$ref": "#/definitions/ReviewSourceRef"},
+        "source_revision": {"$ref": "common.schema.json#/definitions/ShortIdentifier"},
+        "validator_profile": {"$ref": "common.schema.json#/definitions/ShortIdentifier"},
+        "verdict": {"enum": ["passed", "failed", "unknown", "not_applicable"]},
+        "payload": {"$ref": "common.schema.json#/definitions/ReviewReceipt"},
+        "observed_at": {"$ref": "common.schema.json#/definitions/UtcTimestamp"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "evidence_id", "run_id", "evidence_key", "kind", "subject", "subject_hash", "source_ref", "source_revision", "validator_profile", "verdict", "payload", "observed_at"],
+      "properties": {
+        "schema_version": {"const": "symmetry.evidence.v1"},
+        "evidence_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "run_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "evidence_key": {"$ref": "common.schema.json#/definitions/ShortIdentifier"},
+        "kind": {"const": "observation"},
+        "subject": {"$ref": "common.schema.json#/definitions/Subject"},
+        "subject_hash": {"$ref": "common.schema.json#/definitions/Sha256"},
+        "source_ref": {"$ref": "#/definitions/ObservationSourceRef"},
+        "source_revision": {"$ref": "common.schema.json#/definitions/ShortIdentifier"},
+        "validator_profile": {"oneOf": [{"$ref": "common.schema.json#/definitions/ShortIdentifier"}, {"type": "null"}]},
+        "verdict": {"enum": ["passed", "failed", "unknown", "not_applicable"]},
+        "payload": {"$ref": "common.schema.json#/definitions/ObservationReceipt"},
+        "observed_at": {"$ref": "common.schema.json#/definitions/UtcTimestamp"}
+      }
+    }
+  ],
+  "definitions": {
+    "CheckSourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "ref", "validator_profile", "subject_hash"],
+      "properties": {
+        "kind": {"const": "check"},
+        "ref": {"$ref": "common.schema.json#/definitions/ShortIdentifier"},
+        "validator_profile": {"$ref": "common.schema.json#/definitions/ShortIdentifier"},
+        "subject_hash": {"$ref": "common.schema.json#/definitions/Sha256"}
+      }
+    },
+    "ArtifactSourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "ref", "resource_id", "commit", "path", "subject_hash"],
+      "properties": {
+        "kind": {"const": "artifact"},
+        "ref": {"$ref": "common.schema.json#/definitions/ShortIdentifier"},
+        "resource_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "commit": {"$ref": "common.schema.json#/definitions/Commit"},
+        "path": {"$ref": "common.schema.json#/definitions/CommitPath"},
+        "subject_hash": {"$ref": "common.schema.json#/definitions/Sha256"}
+      }
+    },
+    "ReviewSourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "ref", "review_task_id", "subject_hash"],
+      "properties": {
+        "kind": {"const": "review"},
+        "ref": {"$ref": "common.schema.json#/definitions/ShortIdentifier"},
+        "review_task_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "subject_hash": {"$ref": "common.schema.json#/definitions/Sha256"}
+      }
+    },
+    "ObservationSourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "ref", "external_ref", "subject_hash"],
+      "properties": {
+        "kind": {"const": "observation"},
+        "ref": {"$ref": "common.schema.json#/definitions/ShortIdentifier"},
+        "external_ref": {"$ref": "common.schema.json#/definitions/LongText"},
+        "subject_hash": {"$ref": "common.schema.json#/definitions/Sha256"}
+      }
+    }
+  }
+}

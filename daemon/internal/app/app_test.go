@@ -3517,6 +3517,219 @@ func TestReconcileCancelPreservesActiveExecution(t *testing.T) {
 	close(process.done)
 }
 
+func TestReconcileCancelStopsRecoveredExecutionAndRecordsCommandReceipt(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	if _, err := store.SetLocalState(key, "running"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetProcessDetails(key, 71, "agent:71", time.Date(2026, 9, 10, 1, 2, 3, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	terminated := 0
+	control := &reconcileControl{response: protocol.ReconcileResponse{
+		Decisions: []protocol.ReconcileDecision{{RunID: key.RunID, Generation: key.Generation, Decision: protocol.ReconcileCancel}},
+		Commands:  []protocol.Command{{CommandID: "cancel-1", RunID: key.RunID, Generation: key.Generation, Kind: "cancel"}},
+	}}
+	daemon := &daemon{
+		store:   store,
+		control: control,
+		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		running: map[state.RunKey]*runningRun{},
+		slots:   make(chan struct{}, 1),
+		options: options{
+			newID: ids(),
+			terminatePersist: func(pid int, identity string) error {
+				if pid != 71 || identity != "agent:71" {
+					t.Fatalf("recovered termination = (%d, %q)", pid, identity)
+				}
+				terminated++
+				return nil
+			},
+		},
+	}
+	if !daemon.reconcile(context.Background()) {
+		t.Fatal("reconcile() failed")
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if terminated != 1 || journal.PID != 0 || journal.ProcessIdentity != "" || journal.TerminalState != "cancelled" || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].CommandID != "cancel-1" || journal.PendingCommandAcknowledgements[0].Outcome != "applied" {
+		t.Fatalf("recovered cancellation was not stopped and durably acknowledged: terminated=%d journal=%#v", terminated, journal)
+	}
+}
+
+func TestReconcileCancelKeepsRecoveredExecutionWhenTerminationFails(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	if _, err := store.SetLocalState(key, "running"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetProcessDetails(key, 71, "agent:71", time.Date(2026, 9, 10, 1, 2, 3, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	control := &reconcileControl{response: protocol.ReconcileResponse{Decisions: []protocol.ReconcileDecision{{RunID: key.RunID, Generation: key.Generation, Decision: protocol.ReconcileCancel}}}}
+	daemon := &daemon{
+		store:   store,
+		control: control,
+		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		running: map[state.RunKey]*runningRun{},
+		slots:   make(chan struct{}, 1),
+		options: options{
+			newID: ids(),
+			terminatePersist: func(int, string) error {
+				return errors.New("still running")
+			},
+		},
+	}
+	if !daemon.reconcile(context.Background()) {
+		t.Fatal("reconcile() failed")
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.LocalState != "running" || journal.PID != 71 || journal.TerminalState != "" || len(journal.PendingCommandAcknowledgements) != 0 || !journal.RetainWorkspace {
+		t.Fatalf("failed recovered cancellation retired mutable execution: %#v", journal)
+	}
+}
+
+func TestRecoveredCancelResolvesCompatibleGoalSessionAfterConfirmedStop(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000007"}
+	saveAttachedGoalSession(t, store, key, admission, sessionKey)
+	if _, err := store.MarkGoalSessionUncertain(sessionKey, "daemon stopped before native close"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetProcessDetails(key, 71, "agent:71", time.Date(2026, 9, 10, 1, 2, 3, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	daemon := &daemon{
+		store:   store,
+		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		running: map[state.RunKey]*runningRun{},
+		slots:   make(chan struct{}, 1),
+		options: options{
+			newID: ids(),
+			terminatePersist: func(int, string) error {
+				return nil
+			},
+		},
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !daemon.cancelRecoveredJournal(context.Background(), journal, "") {
+		t.Fatal("cancelRecoveredJournal() failed after confirmed stop")
+	}
+	session, err := store.LoadGoalSession(sessionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.NeedsReconciliation() || session.SessionState != state.GoalSessionStateClosed {
+		t.Fatalf("confirmed recovered cancellation did not resolve Goal session barrier: %#v", session)
+	}
+}
+
+func TestRecoveredCancelDoesNotResolveGoalSessionWithoutStopEvidence(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000007"}
+	saveAttachedGoalSession(t, store, key, admission, sessionKey)
+	if _, err := store.MarkGoalSessionUncertain(sessionKey, "native launch stop is not proven"); err != nil {
+		t.Fatal(err)
+	}
+	daemon := &daemon{
+		store:   store,
+		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		running: map[state.RunKey]*runningRun{},
+		slots:   make(chan struct{}, 1),
+		options: options{newID: ids()},
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if daemon.cancelRecoveredJournal(context.Background(), journal, "") {
+		t.Fatal("cancelRecoveredJournal() accepted a Goal session without stop evidence")
+	}
+	session, err := store.LoadGoalSession(sessionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err = store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !session.NeedsReconciliation() || journal.TerminalState != "" || !journal.RetainWorkspace {
+		t.Fatalf("unproven recovered Goal stop lost its barrier or workspace: session=%#v journal=%#v", session, journal)
+	}
+}
+
+func TestRecoveredCancelQueuesReceiptBeforeResolvingGoalSessionBarrier(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000007"}
+	saveAttachedGoalSession(t, store, key, admission, sessionKey)
+	if _, err := store.MarkGoalSessionUncertain(sessionKey, "native launch stop requires reconciliation"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetProcessDetails(key, 71, "agent:71", time.Date(2026, 9, 10, 1, 2, 3, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	queueAttempted := make(chan struct{})
+	daemon := &daemon{
+		store:   store,
+		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		running: map[state.RunKey]*runningRun{},
+		slots:   make(chan struct{}, 1),
+		options: options{
+			newID: ids(),
+			terminatePersist: func(int, string) error {
+				return nil
+			},
+			queueCancelledTransitionAndAcknowledgement: func(state.RunKey, protocol.StateTransitionRequest, protocol.CommandAcknowledgement, time.Time) (state.RunJournal, error) {
+				close(queueAttempted)
+				return state.RunJournal{}, errors.New("simulated durable cancellation write failure")
+			},
+		},
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan bool, 1)
+	go func() { done <- daemon.cancelRecoveredJournal(ctx, journal, "cancel-1") }()
+	<-queueAttempted
+	session, err := store.LoadGoalSession(sessionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !session.NeedsReconciliation() {
+		t.Fatalf("Goal session barrier was resolved before cancelled receipt persisted: %#v", session)
+	}
+	cancel()
+	if <-done {
+		t.Fatal("recovered cancel succeeded despite durable receipt failure")
+	}
+}
+
 func TestRecoveredJournalCleanupDeletesOnlyAfterRecover(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
@@ -7893,13 +8106,37 @@ func (client *fakeControl) AcknowledgeCommand(context.Context, string, protocol.
 	return nil
 }
 
-type fakeWorkspace struct{}
+type fakeWorkspace struct {
+	subject        protocol.Subject
+	derivedSubject protocol.Subject
+	deriveErr      error
+}
 
 func (*fakeWorkspace) Prepare(_ context.Context, key string, run workspace.RunRef) (workspace.Prepared, error) {
 	return workspace.Prepared{Path: "C:\\workspace", BindingKey: key, Run: run}, nil
 }
 func (*fakeWorkspace) Recover(_ context.Context, key string, run workspace.RunRef, path string) (workspace.Prepared, error) {
 	return workspace.Prepared{Path: path, BindingKey: key, Run: run}, nil
+}
+func (fake *fakeWorkspace) PrepareSubject(_ context.Context, key string, run workspace.RunRef, subject protocol.Subject) (workspace.SubjectWorkspace, error) {
+	if fake.deriveErr != nil {
+		return workspace.SubjectWorkspace{}, fake.deriveErr
+	}
+	fake.subject = subject
+	return workspace.SubjectWorkspace{Prepared: workspace.Prepared{Path: "C:\\workspace", BindingKey: key, Run: run}, Subject: subject}, nil
+}
+func (fake *fakeWorkspace) DeriveSubject(_ context.Context, _ workspace.Prepared, resourceID string) (protocol.Subject, error) {
+	if fake.deriveErr != nil {
+		return protocol.Subject{}, fake.deriveErr
+	}
+	subject := fake.derivedSubject
+	if subject.ResourceID == "" {
+		subject = fake.subject
+	}
+	if subject.ResourceID != resourceID {
+		return protocol.Subject{}, errors.New("fake workspace resource does not match subject")
+	}
+	return subject, nil
 }
 func (*fakeWorkspace) Cleanup(context.Context, workspace.Prepared, bool) error { return nil }
 
@@ -8001,6 +8238,142 @@ func (client fakeNotifier) Run(ctx context.Context, hints chan<- notification.Hi
 }
 
 type fakeProcess struct{ result execution.Result }
+
+func TestStartFailureRetainsReturnedProcessUntilItExits(t *testing.T) {
+	store, err := state.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	process := newStartFailureProcess()
+	startErr := errors.New("initial stdin write failed")
+	daemon := &daemon{
+		config:       testConfig(t),
+		store:        store,
+		control:      &fakeControl{},
+		workspace:    &fakeWorkspace{},
+		start:        func(context.Context, execution.Invocation, execution.Sink) (Process, error) { return process, startErr },
+		options:      options{newID: ids(), clock: time.Now},
+		runtimeID:    "runtime-1",
+		runtimeEpoch: 1,
+		running:      make(map[state.RunKey]*runningRun),
+		slots:        make(chan struct{}, 1),
+	}
+	key := state.RunKey{RunID: "run-1", Generation: 1}
+	daemon.startAssignment(context.Background(), protocol.Assignment{RunID: key.RunID, Generation: key.Generation, Work: protocol.Work{Goal: "work"}})
+	select {
+	case <-process.waitStarted:
+	case <-time.After(time.Second):
+		t.Fatal("returned process was not retained for Wait")
+	}
+	active := daemon.runningRun(key)
+	if active == nil || active.process != process {
+		t.Fatalf("start failure dropped returned process ownership: active=%#v", active)
+	}
+	close(process.releaseWait)
+	daemon.workers.Wait()
+	if process.terminations != 0 {
+		t.Fatalf("app retried process termination after Start returned ownership: %d", process.terminations)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.TerminalState != "failed" || len(journal.PendingTransitions) != 2 || journal.PendingTransitions[len(journal.PendingTransitions)-1].State != "failed" {
+		t.Fatalf("start failure terminal journal = %#v", journal)
+	}
+}
+
+func TestRunShutdownDoesNotWaitForUnresolvedProcessReturnedWithStartError(t *testing.T) {
+	store, err := state.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.SaveIdentity(state.MachineIdentity{MachineID: "machine-1", MachineToken: "machine-token"}); err != nil {
+		t.Fatal(err)
+	}
+	process := newStartFailureProcess()
+	started := make(chan struct{})
+	recorded := make(chan struct{})
+	var startOnce, recordOnce sync.Once
+	control := &fakeControl{assignment: protocol.Assignment{RunID: "run-1", Generation: 1, Work: protocol.Work{Goal: "work"}}}
+	value := testConfig(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, value, WithStore(store), WithControl(control), WithWorkspace(&fakeWorkspace{}), WithStartProcess(func(context.Context, execution.Invocation, execution.Sink) (Process, error) {
+			startOnce.Do(func() { close(started) })
+			return process, errors.New("initial input cleanup could not terminate process")
+		}), WithLogWriter(io.Discard), func(settings *options) {
+			settings.newID = ids()
+			settings.recordProcess = func(key state.RunKey, pid int, identity string, startedAt time.Time) (state.RunJournal, error) {
+				journal, recordErr := store.SetProcessDetails(key, pid, identity, startedAt)
+				if recordErr == nil {
+					recordOnce.Do(func() { close(recorded) })
+				}
+				return journal, recordErr
+			}
+		})
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("assignment did not reach Start")
+	}
+	select {
+	case <-recorded:
+	case <-time.After(time.Second):
+		t.Fatal("returned process identity was not persisted")
+	}
+	select {
+	case <-process.waitStarted:
+	case <-time.After(time.Second):
+		t.Fatal("returned process was not handed to the exit watcher")
+	}
+
+	cancel()
+	select {
+	case runErr := <-done:
+		if runErr != nil {
+			t.Fatalf("Run() error = %v", runErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run() waited for unresolved Process.Wait")
+	}
+	journal, err := store.LoadJournal(state.RunKey{RunID: "run-1", Generation: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.PID != 42 || journal.ProcessIdentity != "test:42" || journal.LocalState == "cleanup_pending" {
+		t.Fatalf("unresolved process did not retain durable recovery ownership: %#v", journal)
+	}
+	close(process.releaseWait)
+}
+
+type startFailureProcess struct {
+	waitStarted  chan struct{}
+	releaseWait  chan struct{}
+	waitOnce     sync.Once
+	terminations int
+}
+
+func newStartFailureProcess() *startFailureProcess {
+	return &startFailureProcess{waitStarted: make(chan struct{}), releaseWait: make(chan struct{})}
+}
+
+func (*startFailureProcess) WriteInput([]byte) error { return nil }
+func (process *startFailureProcess) Terminate(context.Context, time.Duration) error {
+	process.terminations++
+	return errors.New("termination failed")
+}
+func (process *startFailureProcess) Wait() execution.Result {
+	process.waitOnce.Do(func() { close(process.waitStarted) })
+	<-process.releaseWait
+	return execution.Result{ExitCode: 1, WaitError: errors.New("exit status 1")}
+}
+func (*startFailureProcess) ProcessDetails() (int, string) { return 42, "test:42" }
 
 func (process fakeProcess) WriteInput([]byte) error                        { return nil }
 func (process fakeProcess) Terminate(context.Context, time.Duration) error { return nil }

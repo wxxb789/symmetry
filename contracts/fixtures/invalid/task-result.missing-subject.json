@@ -1,0 +1,13 @@
+{
+  "schema_version": "symmetry.task_result.v1",
+  "result_id": "66666666-6666-4666-8666-666666666666",
+  "kind": "candidate_completion",
+  "summary": "A candidate result without its complete subject is invalid.",
+  "subject_hash": "sha256:f347107963c353d0e1c0515dbbf147666cbaad469168ad0fc0cde534e25228af",
+  "evidence_refs": [],
+  "blocker": null,
+  "proposed_next_action": null,
+  "proposal": null,
+  "reason": null,
+  "diagnostics": []
+}

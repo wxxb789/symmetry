@@ -44,6 +44,15 @@ config :symmetry_control, :integrations,
   sync_interval_ms: 300_000,
   provider_action_recovery_interval_ms: :infinity
 
+config :symmetry_control, :contracts, directory: Path.expand("../../contracts", __DIR__)
+
+# Goal tests submit durable wakeup/control jobs while keeping execution disabled.
+config :symmetry_control, Oban,
+  repo: SymmetryControl.Repo,
+  queues: false,
+  plugins: false,
+  testing: :manual
+
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime
 

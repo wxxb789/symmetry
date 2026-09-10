@@ -1,0 +1,75 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "contracts/v1/decision.schema.json",
+  "title": "Symmetry Decision v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "decision_id",
+    "goal_id",
+    "goal_revision",
+    "work_item_id",
+    "kind",
+    "action_hash",
+    "subject_hash",
+    "state",
+    "question",
+    "options",
+    "resolution",
+    "actor_ref",
+    "expires_at",
+    "lock_version",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "symmetry.decision.v1"},
+    "decision_id": {"$ref": "common.schema.json#/definitions/UUID"},
+    "goal_id": {"$ref": "common.schema.json#/definitions/UUID"},
+    "goal_revision": {"$ref": "common.schema.json#/definitions/Revision"},
+    "work_item_id": {
+      "oneOf": [
+        {"$ref": "common.schema.json#/definitions/UUID"},
+        {"type": "null"}
+      ]
+    },
+    "kind": {"enum": ["plan", "scope", "review", "budget", "external_action", "completion"]},
+    "action_hash": {"$ref": "common.schema.json#/definitions/Sha256"},
+    "subject_hash": {
+      "oneOf": [
+        {"$ref": "common.schema.json#/definitions/Sha256"},
+        {"type": "null"}
+      ]
+    },
+    "state": {"enum": ["open", "resolved", "superseded"]},
+    "question": {"$ref": "common.schema.json#/definitions/LongText"},
+    "options": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {"$ref": "common.schema.json#/definitions/DecisionOption"}
+    },
+    "resolution": {
+      "oneOf": [
+        {"$ref": "common.schema.json#/definitions/DecisionResolution"},
+        {"type": "null"}
+      ]
+    },
+    "actor_ref": {
+      "oneOf": [
+        {"$ref": "common.schema.json#/definitions/ShortIdentifier"},
+        {"type": "null"}
+      ]
+    },
+    "expires_at": {
+      "oneOf": [
+        {"$ref": "common.schema.json#/definitions/UtcTimestamp"},
+        {"type": "null"}
+      ]
+    },
+    "lock_version": {"$ref": "common.schema.json#/definitions/PositiveInteger"},
+    "created_at": {"$ref": "common.schema.json#/definitions/UtcTimestamp"},
+    "updated_at": {"$ref": "common.schema.json#/definitions/UtcTimestamp"}
+  }
+}

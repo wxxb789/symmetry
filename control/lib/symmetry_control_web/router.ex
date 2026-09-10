@@ -69,6 +69,13 @@ defmodule SymmetryControlWeb.Router do
     delete "/resources/:resource_id", PortalApiController, :delete_resource
     post "/resources/:resource_id/sync", PortalApiController, :sync_resource
     post "/projects/:project_id/work-items", PortalApiController, :create_work_item
+    post "/projects/:project_id/goals", GoalController, :create
+    get "/goals/:goal_id", GoalController, :show
+    post "/goals/:goal_id/commands", GoalController, :command
+    get "/goals/:goal_id/events", GoalController, :events
+    get "/goals/:goal_id/graph", GoalController, :graph
+    get "/goals/:goal_id/contexts/:snapshot_id", GoalController, :context
+    get "/attention", GoalController, :attention
     get "/work-items/:work_item_id", PortalApiController, :show_work_item
     get "/work-items/:work_item_id/timeline", PortalApiController, :work_item_timeline
     patch "/work-items/:work_item_id", PortalApiController, :update_work_item
@@ -108,12 +115,23 @@ defmodule SymmetryControlWeb.Router do
     patch "/runs/:run_id/lease", DaemonController, :heartbeat_run
     post "/runs/:run_id/events", DaemonController, :append_events
     put "/runs/:run_id/transitions/:transition_id", DaemonController, :transition
+    put "/runs/:run_id/session", DaemonController, :attach_harness_session
+    post "/runs/:run_id/evidence", DaemonController, :append_evidence
+    post "/runs/:run_id/usage", DaemonController, :record_usage
+    get "/runs/:run_id/context", DaemonController, :fetch_run_context
     put "/commands/:command_id/acknowledgements/:ack_id", DaemonController, :acknowledge_command
   end
 
   scope "/api/v1", SymmetryControlWeb do
     pipe_through [:api, :operator]
 
+    post "/projects/:project_id/goals", GoalController, :create
+    get "/goals/:goal_id", GoalController, :show
+    post "/goals/:goal_id/commands", GoalController, :command
+    get "/goals/:goal_id/events", GoalController, :events
+    get "/goals/:goal_id/graph", GoalController, :graph
+    get "/goals/:goal_id/contexts/:snapshot_id", GoalController, :context
+    get "/attention", GoalController, :attention
     post "/tasks", TaskController, :create
     get "/tasks/:task_id", TaskController, :show
     post "/tasks/:task_id/commands", TaskController, :command

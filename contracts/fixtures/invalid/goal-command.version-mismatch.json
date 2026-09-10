@@ -1,0 +1,8 @@
+{
+  "schema_version": "symmetry.goal_command.v2",
+  "mutation_id": "16161616-1616-4616-8616-161616161616",
+  "expected_version": 0,
+  "expected_revision": 1,
+  "kind": "activate",
+  "payload": {"approved_revision": 1}
+}

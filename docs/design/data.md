@@ -11,14 +11,33 @@ versioned payload data; identity, ownership, state and dedup keys stay relationa
 
 | Table | Additions and meaning |
 | --- | --- |
-| `work_items` | nullable `goal_id uuid`; `admitted_revision integer`; `required boolean DEFAULT true`; `acceptance_contract jsonb`; goal-less items retain current behavior |
+| `work_items` | nullable `goal_id uuid`; `admitted_revision integer`; `required boolean DEFAULT true`; `integration boolean NOT NULL DEFAULT false`; `acceptance_contract jsonb`; nullable immutable `baseline_subject jsonb` or `baseline_dependency_id uuid`; nullable immutable `change_target jsonb`; goal-less items retain current behavior |
 | `tasks` | nullable `work_item_id uuid`, `goal_id uuid`, `goal_revision integer`, `context_snapshot_id uuid`; `purpose text DEFAULT 'implement'`; nullable `validation_of_task_id uuid`; `admission_key uuid`; `max_run_attempts integer` for goal tasks; nullable `requested_session_id uuid` |
 | `runs` | nullable `harness_session_id uuid`; native result/evidence remain associated with the original execution fence |
-| `runtimes` | `harness_kind text`, `harness_version text`, `adapter_version text`, `adapter_protocol_version integer`; explicit capabilities described in protocol.md |
+| `runtimes` | `harness_kind text`, `harness_version text`, `adapter_version text`, `adapter_protocol_version integer`, nullable `repository_resource_id uuid`; explicit capabilities described in protocol.md |
 
 For goal-owned WorkItems, goal_id/admitted_revision/acceptance_contract are all
-non-null; enforce revision and same-project ownership via composite FKs. Goal-less
-items leave these fields null.
+non-null; enforce revision and same-project ownership via composite FKs. `integration`
+may be true only for a goal-owned WorkItem and is immutable once admitted. It is an
+explicit plan designation, never inferred from title, order, dependencies, or board
+state. Goal-less items leave these fields null and `integration` false.
+
+Every Goal WorkItem pins exactly one automatic baseline source: a complete
+`baseline_subject` whose resource matches the WorkItem repository, or a
+`baseline_dependency_id` referencing one explicit same-goal, same-revision
+dependency. The fields are mutually exclusive and immutable after admission.
+Automatic initial execution never infers a Subject from multiple dependencies,
+provider metadata, a filesystem path or the current branch. A dependency baseline
+becomes executable only when that exact dependency has a current-revision accepted
+`work_outcomes` receipt; the receipt's candidate Subject is copied verbatim.
+
+`change_target` is nullable only for a Goal WorkItem and has a strict object shape:
+either exact `branches` source/target names or an exact `pull_request` URL. It is
+set by the operator-approved plan, bound to the immutable repository resource, and
+cannot change after admission. Goal-less WorkItems retain `NULL`; no migration
+backfills this field from branch or pull-request presentation data. A non-null
+target requires the bound repository's matching supported connection and its
+`repositories` plus `changes` capabilities before admission can exist.
 
 Preserve `work_items.orchestration_task_id` as the current/latest task pointer for
 existing APIs. `tasks.work_item_id` is durable membership for historical queries;
@@ -28,10 +47,13 @@ captured at admission; do not recompute them from a mutable WorkItem later.
 `UNIQUE(tasks.goal_id, admission_key)` for non-null goal_id. Add composite unique
 keys and foreign keys to enforce `(work_item_id, goal_id)` membership and
 `(goal_id, goal_revision)` revision existence. Goal task fields are all present
-or all absent (context/goal/revision/admission/work item); goal-less chat remains
-compatible. A validate task must reference a producing task of the same work
-item and revision. Validate this under the goal lock and enforce using a
-composite FK including work_item_id, goal_id, goal_revision.
+or all absent except for operator-authorized `purpose=plan`: that branch has a
+Goal, revision, context snapshot, admission key and retry limit, but a null
+WorkItem and validation source. It is limited to one nonterminal Task per Goal.
+Every other Goal Task requires a WorkItem. Goal-less chat remains compatible. A
+validate task must reference a producing task of the same work item and revision.
+Validate this under the goal lock and enforce using a composite FK including
+work_item_id, goal_id, goal_revision.
 
 One nonterminal goal Task per WorkItem: partial unique index on work_item_id
 where goal_id IS NOT NULL and state IN
@@ -41,6 +63,25 @@ tasks, Orchestration enforces the admission-snapshotted max_run_attempts before
 creating another Run (including automatic lease-expiry retry); exhaustion fails
 the Task with attempt_limit. Goal-less tasks retain the existing retry policy.
 Orchestration enforces this local Task field without calling Goals policy.
+
+### Additive amendment: native runtime repository affinity
+
+A native runtime may register one nullable `repository_resource_id` foreign key.
+It identifies the exact repository resource whose admitted Subjects that local
+runtime can materialize; it is not a display label or a daemon-selected routing
+hint. The staged nullable migration preserves existing runtime rows and their
+goal-less behavior. A missing binding leaves a runtime registration valid but
+makes it ineligible for Goal admission, assignment and new claims.
+
+Scheduler selection and new-claim authority require the runtime binding,
+WorkItem repository resource and admitted Subject resource to match exactly,
+and require the resource to remain a repository in the Goal's project. Admission
+does not require a currently online runtime: it can safely queue approved work
+for a matching runtime that registers later. The daemon rechecks the same
+binding before creating a workspace or native session. Exact lost-ack claim
+replay returns its recorded receipt before re-evaluating mutable affinity; it
+never grants a new claim. A resource bound by an active runtime cannot have its
+identity rewritten or be deleted until the binding is removed.
 
 ## New tables
 
@@ -61,11 +102,16 @@ execution_policy v1 fields: `automatic_execution boolean`,
 `max_parallel_tasks positive integer` (default 1),
 `max_task_admissions positive integer` (explicit at activation),
 `max_run_attempts_per_task positive integer` (default 2),
-`budget_limit_microusd nullable bigint`, `budget_mode 'soft'|'strict'`,
+`budget_limit_microusd nullable bigint`, `per_run_cost_limit_microusd nullable bigint`,
+`budget_mode 'soft'|'strict'`, `hard_cost_limit_required boolean`,
 `allowed_runtime_ids uuid[]`, `allowed_model_profiles string[]`,
 `final_acceptance 'operator'|'deterministic'`, `allowed_actions string[]`,
 `allowed_resource_ids uuid[]`. Default automatic_execution false, final_acceptance
-operator, and no merge/publish action. No implicit unlimited auto budget.
+operator, and no merge/publish action. Automatic execution requires a non-null
+total budget even in soft mode. Strict mode additionally requires a non-null
+per-Run ceiling and verified native/provider enforcement; a Task reserves
+`max_run_attempts_per_task * per_run_cost_limit_microusd` before admission.
+No implicit unlimited auto budget.
 The model profile resolves machine-local CLI/model config, not credentials.
 
 ### `work_dependencies`
@@ -79,10 +125,12 @@ edges in v1. Read models derive graph layout and blocked reasons.
 
 ### `context_snapshots`
 
-id, goal_id, goal_revision, work_item_id, schema_version integer,
+id, goal_id, goal_revision, work_item_id nullable, schema_version integer,
 content_hash bytea (32 bytes), payload jsonb, inserted_at.
-Composite FK to revision; WorkItem ownership FK. Add composite unique keys on
-referenced (id,goal_id) pairs before their FKs. Immutable. Unique
+Composite FK to revision; WorkItem ownership FK for non-plan snapshots. Add
+composite unique keys on referenced (id,goal_id) pairs before their FKs.
+Immutable. A `purpose=plan` snapshot has `work_item_id NULL`; all other Goal
+snapshots require a matching WorkItem. Unique
 `(goal_id,goal_revision,work_item_id,content_hash)` permits safe reuse.
 Payload includes exact source refs/revisions, approved task contract, repository
 commit, relevant decisions, accepted evidence pointers, failed attempts,
@@ -149,6 +197,13 @@ Write commands and internal settlements each use a stable mutation id. On replay
 authorize access then compare request hash before checking mutable preconditions.
 Same identity/content returns stored response; different content returns 409.
 Never include current timestamps or regenerated random fields in retry identity.
+Automatic admission failures use the same immutable event table. A candidate
+that violates revision-stable policy/context records `automatic_admission_blocked`
+with its source identity and no admission rows. A condition that may change
+outside the Goal records `automatic_reconciliation_deferred` with a normalized
+reason and bounded next wake; its mutation identity includes that reason so a
+changed diagnosis cannot replay stale details. Read models omit prior-revision,
+terminal, accepted, or subsequently replaced blockers.
 
 ### `goal_budget_reservations` / `run_usage`
 
@@ -177,10 +232,47 @@ existing liabilities. Limits describe total goal spend/admissions. Late usage
 is always recorded and may block subsequent admission. Do not falsify history
 to fit a cap or describe an admission limit as an upstream billing guarantee.
 
+### `goal_external_waits`
+
+An external blocker creates one immutable wait source: Goal/revision/WorkItem,
+Task/Run/generation, complete result and Subject, resource ID and external ref.
+It also pins a strict `check_spec` derived by the kernel from an approved
+WorkItem contract, bound resource and supported checker configuration; a model
+may not widen the selector or choose a more privileged check. Only `state`,
+`next_check_at`, `check_seq` and the compact reconciliation receipt change. The
+active unique key is one wait per current Goal WorkItem; source identity is
+unique for replay.
+
+A due wake first invokes the matching Integration checker, outside database
+locks. Its immutable receipt binds the wait identity, exact Subject, provider
+object/version or content digest, and one of `pending`, `satisfied`,
+`ready_for_interpretation`, `failed` or `unknown`. `pending` and `unknown`
+advance a bounded schedule without admitting a model Task; `satisfied`
+terminalizes the wait then wakes ordinary continuation. Only a new
+`ready_for_interpretation` evidence digest may admit one bounded `observe` Task,
+whose semantic admission identity is `(wait_id, evidence_digest)`. Replayed
+polling or an observation without new evidence never consumes a task admission
+or budget reservation. Unsupported selectors remain visibly unsupported rather
+than falling back to a model turn. The wait ledger is not a duplicate provider
+mutation ledger: unknown external mutations remain in `ProviderActionIntent`
+readback.
+
+Current adapters expose no server-owned Integration checker that can issue this
+exact receipt. Therefore every model-authored external blocker is retained as an
+immutable `unsupported` wait with reason `unsupported_external_check`, no
+`next_check_at`, and no model `observe` admission. Its source Task/Run/result
+identities, Subject, resource and external reference remain available in the Goal
+projection and compact audit identity. This is an explicit interim boundary, not a claim that polling or
+manual observation can safely substitute for Integration readback.
+
 ## Transaction boundaries
 
-Global lock order for new goal-aware operations: Goal -> WorkItems sorted UUID
--> Tasks sorted UUID -> Runs sorted UUID -> sessions -> decisions/reservations.
+Global lock order for new goal-aware operations that grant authority: Project
+-> Goal -> WorkItems sorted UUID -> Tasks sorted UUID -> Runs sorted UUID ->
+sessions -> decisions/reservations. The Project is locked `FOR SHARE`, which
+serializes with archival's `FOR UPDATE`; exact receipt replay is read-only and
+may precede this lock. Late usage, evidence and settlement retain their original
+fence path but cannot authorize fresh work in an archived Project.
 Existing Orchestration never acquires Goal after Task/Run: terminal completion
 enqueues a settlement job and releases its transaction first. Legacy paths
 operating on goal-managed items must delegate before acquiring their old locks.
@@ -188,9 +280,12 @@ operating on goal-managed items must delegate before acquiring their old locks.
 - **Admit:** replay check; lock goal/item; check revision/eligibility; create or
   reuse context; insert reservation + Task + current pointer + goal event + Oban
   dispatch wakeup in one Repo transaction. No network in transaction.
-- **Accept outcome:** replay; lock goal/items/tasks/runs; verify terminal subject,
-  required evidence, revision and decision; insert outcome + goal event + next
-  wakeup. Usage ingestion is independent and never conditional on acceptance.
+- **Settle validation outcome:** replay the terminal validation Task receipt; lock
+  goal/items/tasks/runs; derive accepted or rejected work only from its frozen
+  candidate Subject and complete persisted required evidence, then insert the
+  immutable outcome + goal event + next wakeup. There is no caller-selected
+  acceptance payload. Usage ingestion is independent and never conditional on
+  acceptance.
 - **Achieve:** replay; lock Goal; verify current revision, required outcomes,
   goal predicates and decisions; reject if any goal Task is in the nonterminal
   set used by the partial index, including optional WorkItem tasks. Commit
@@ -218,6 +313,11 @@ as a durable Goal. Backfill tasks.work_item_id from unambiguous current pointers
 leave unprovable historical membership NULL and label legacy history accordingly.
 Introduce Goal ownership constraints and indexes after validating existing rows.
 Existing goal-less tasks keep v1 routes, semantics and tests.
+
+The baseline-source migration is additive and leaves existing Goal WorkItems with
+both baseline fields NULL. Its destructive down refuses while any baseline source
+exists, because removing an approved Subject or dependency identity would erase
+automatic-execution authority.
 
 Expose goal admission behind a disabled-by-default rollout flag until schema,
 domain and adapter checks pass. Once enabled, direct legacy run/retry/move paths

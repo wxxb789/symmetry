@@ -831,6 +831,42 @@ func TestSetProcessDetailsRejectsInvalidIdentityWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestClearProcessDetailsUsesExpectedIdentityAndIsIdempotent(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-1", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatalf("SaveJournal() error = %v", err)
+	}
+	key := journal.Key()
+	startedAt := time.Date(2026, 9, 9, 1, 2, 5, 0, time.UTC)
+	if _, err := store.SetProcessDetails(key, 99, "linux:99:created-at", startedAt); err != nil {
+		t.Fatalf("SetProcessDetails() error = %v", err)
+	}
+	cleared, err := store.ClearProcessDetails(key, 99, "linux:99:created-at")
+	if err != nil {
+		t.Fatalf("ClearProcessDetails() error = %v", err)
+	}
+	if cleared.PID != 0 || cleared.ProcessIdentity != "" || !cleared.StartedAt.IsZero() {
+		t.Fatalf("cleared process details = %#v", cleared)
+	}
+	if _, err := store.ClearProcessDetails(key, 99, "linux:99:created-at"); err != nil {
+		t.Fatalf("replayed ClearProcessDetails() error = %v", err)
+	}
+	if _, err := store.SetProcessDetails(key, 100, "linux:100:created-at", startedAt); err != nil {
+		t.Fatalf("replacement SetProcessDetails() error = %v", err)
+	}
+	if _, err := store.ClearProcessDetails(key, 99, "linux:99:created-at"); err == nil {
+		t.Fatal("ClearProcessDetails() erased a changed process identity")
+	}
+	current, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatalf("LoadJournal() error = %v", err)
+	}
+	if current.PID != 100 || current.ProcessIdentity != "linux:100:created-at" || !current.StartedAt.Equal(startedAt) {
+		t.Fatalf("changed process details = %#v", current)
+	}
+}
+
 func TestQueueTerminalTransitionIsAtomic(t *testing.T) {
 	store := mustStore(t)
 	journal := testJournal("run-1", 1)

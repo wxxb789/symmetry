@@ -8,6 +8,20 @@ permissions:
   contents: read
 
 jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm contracts:check
+
   control:
     runs-on: ubuntu-latest
     services:
@@ -119,6 +133,8 @@ jobs:
       SYMMETRY_LEASE_DURATION_MS: "30000"
       SYMMETRY_ASSIGNMENT_DURATION_MS: "5000"
       SYMMETRY_REAPER_INTERVAL_MS: "500"
+      SYMMETRY_CONTRACTS_DIR: ${{ github.workspace }}/contracts
+      SYMMETRY_GOALS_ROLLOUT_ENABLED: "true"
     steps:
       - uses: actions/checkout@v4
       - uses: erlef/setup-beam@v1
@@ -138,6 +154,46 @@ jobs:
           _build/prod/rel/symmetry_control/bin/symmetry_control start > /tmp/symmetry-control.log 2>&1 &
           echo "$!" > /tmp/symmetry-control.pid
           curl --fail --retry 30 --retry-delay 1 --retry-connrefused http://127.0.0.1:4000/healthz
+      - name: Verify Goal rollout and Oban worker execution
+        working-directory: control
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          control_bin=_build/prod/rel/symmetry_control/bin/symmetry_control
+          smoke_expr='
+          if Application.get_env(:symmetry_control, :goals, [])[:rollout_enabled] != true do
+            raise "Goal rollout is disabled"
+          end
+
+          unless is_pid(Process.whereis(Oban)) do
+            raise "Oban supervisor is not running"
+          end
+
+          job = SymmetryControl.Goals.Workers.WakeupWorker.new(%{}) |> Oban.insert!()
+
+          result =
+            Enum.reduce_while(1..60, nil, fn _, _ ->
+              case SymmetryControl.Repo.get!(Oban.Job, job.id).state do
+                "completed" ->
+                  {:halt, :completed}
+
+                state when state in ["cancelled", "discarded"] ->
+                  raise "Goal Oban smoke job ended in #{state}"
+
+                _ ->
+                  Process.sleep(1000)
+                  {:cont, nil}
+              end
+            end)
+
+          unless result == :completed do
+            raise "Goal Oban smoke job did not complete"
+          end
+
+          IO.puts("goal_oban_smoke=completed")
+          '
+          "$control_bin" rpc "$smoke_expr"
       - name: Run live daemon scenarios
         working-directory: daemon
         env:

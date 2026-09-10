@@ -76,10 +76,18 @@ type PlanProposal = {
     title: string;
     description: string;
     required: boolean;
+    integration?: boolean;       // defaults false; explicit final combined subject producer
     repository_resource_id: UUID;
     acceptance: AcceptanceContract;
     depends_on_keys: string[];    // only this proposal's keys
     model_profile: string;
+    change_target:
+      | { kind: "branches"; source_branch: string; target_branch: string }
+      | { kind: "pull_request"; pull_request_url: string }
+      | null;
+    baseline:
+      | { kind: "subject"; subject: Subject }
+      | { kind: "dependency"; key: string };
   }>;
 };
 ```
@@ -91,29 +99,94 @@ assigns UUIDs and records the mapping in the replayable response. The model does
 not invent server IDs. Adding a plan to an existing admitted graph first requires
 a scoped plan decision; dependency edits follow the same authority rules.
 
+`integration` is a strict boolean, defaults to false when omitted, and is included
+in the operator-authorized proposal hash. It may be true only on an admitted
+Goal WorkItem and becomes immutable at admission. Goal achievement names an
+`integration_work_item_id`; it must identify a current-revision WorkItem explicitly
+designated `integration: true`, whose accepted outcome has the exact final Subject
+and evidence. No title, ordering, dependency shape, or board state implies this role.
+
+`baseline` is required for every Goal WorkItem. A subject baseline is the complete
+canonical Subject and must match the
+WorkItem repository resource exactly. A dependency baseline names one of the
+proposal's explicit dependency keys; it does not merge or infer subjects from
+multiple dependencies. The admitted WorkItem stores the immutable baseline source.
+Automatic execution of a dependency baseline waits for that exact dependency's
+current-revision accepted WorkOutcome and uses its candidate Subject verbatim.
+No provider metadata, filesystem path, current branch or board state is a baseline.
+
+`change_target` is required but nullable. `null` authorizes no provider change
+and may derive only a `resource.sync` scope. A branches target contains already
+normalized, distinct legal Git branch names and authorizes `change.upsert` (plus
+`change.update` only when both approved policies permit it). A pull-request target
+must be a provider-supported URL whose parsed identity belongs to the pinned
+repository resource; it authorizes only `change.update`. The target is part of the
+operator-authorized plan hash, is persisted immutably with the admitted WorkItem,
+and is never inferred from mutable branch or pull-request presentation fields.
+A provider target requires a matching supported repository connection with the
+`repositories` and `changes` capabilities before plan acceptance.
+This target-to-operation mapping applies only to `implement` admissions;
+`validate`, `plan`, `observe`, and `chat` admissions always carry a null provider
+scope and receive no provider-effect authority.
+
 Task admissions select one existing admitted WorkItem, purpose, model profile,
-session mode, optional requested session and validation_of_task_id. The server
-derives goal revision, resource, snapshot, subject and limits from current approved
-state. A caller cannot override these derived fields in the operator API. The
+session mode, requested session according to that mode, and validation_of_task_id.
+The sole exception is an operator `request_plan` admission for a draft Goal: it
+uses `purpose: plan` and `work_item_id: null`, binds an approved repository
+Subject, has `provider_scope: null`, and may not be generated automatically.
+`fresh` and `handoff` require `requested_session_id: null`; `resume` requires
+the exact retained session UUID. Handoff is a request for a new native session
+from the immutable snapshot and reachable authorized artifact, not a native-session
+attach or proprietary session transfer. The server derives goal revision, resource,
+snapshot, subject and limits from current approved state. A caller cannot override
+these derived fields in the operator API. The
 server-to-daemon admission envelope in protocol.md contains the resolved values.
+For strict budgets, the revision supplies an approved per-Run cost ceiling and
+the server reserves the full retry liability before admission. A non-null
+provider scope is likewise server-derived from approved WorkItem bindings and
+the revision policies; it freezes per-resource operations and a change target,
+never a credential or a live connection grant.
 
 ## Decisions, blockers and subsequent work
 
 ```typescript
-type Blocker =
+type ModelBlocker =
   | { kind: "decision"; decision_id: UUID }
   | { kind: "external"; resource_id: UUID; external_ref: string;
       next_check_at: string }
   | { kind: "dependency"; work_item_ids: UUID[] }
   | { kind: "environment"; code: string; detail: string };
 
+type KernelReadModelBlocker =
+  | ModelBlocker
+  | { kind: "automatic_baseline"; work_item_id: UUID;
+      reason: "missing_explicit_baseline" | "baseline_dependency_not_accepted";
+      baseline_dependency_id?: UUID };
+
 type NextAction =
   | { kind: "validate"; producing_task_id: UUID }
   | { kind: "repair"; work_item_id: UUID; reason: string }
   | { kind: "observe"; resource_id: UUID; external_ref: string }
   | { kind: "replan"; reason: string }
-  | { kind: "wait"; blocker: Blocker };
+  | { kind: "wait"; blocker: ModelBlocker };
 ```
+
+An external `ModelBlocker` is not authority to poll or interpret a provider.
+Until an Integration exposes a server-derived `check_spec` and exact
+Subject-bound reconciliation receipt, Control persists that blocker as
+`unsupported_external_check`. It does not schedule a wake or admit an `observe`
+Task, whether automatically or through an operator command. The original result
+is durable audit evidence only; a future checker capability must satisfy the
+external-wait contract in `data.md` before it can activate the bounded observe
+path.
+
+`automatic_baseline` is a kernel-derived read-model blocker for an unstarted
+automatic WorkItem whose explicit baseline is missing or whose named baseline
+dependency is not yet accepted. It is not a model authority claim and is not an
+admissible model-authored `TaskResult.blocker`; the kernel may materialize it
+from durable WorkItem and accepted-outcome state when building the goal
+projection. Model results may propose only schema-valid actions, and never
+establish the baseline or mark that blocker satisfied.
 
 The kernel checks these against current state; a next action is a proposal. The
 model cannot claim a dependency satisfied, approve a decision, choose a new
@@ -140,13 +213,15 @@ All commands carry the common identity/preconditions from protocol.md.
 | amend | revision_contract, reason |
 | accept_plan | proposal, proposal_hash, decision_id |
 | resolve_decision | decision_id, expected_decision_version, option_id, comment |
-| admit_task | work_item_id, purpose, model_profile, session_mode, requested_session_id nullable, validation_of_task_id nullable |
+| admit_task | work_item_id, purpose, model_profile, session_mode, requested_session_id (null for fresh/handoff, retained UUID for resume), validation_of_task_id nullable |
 | add_dependency / remove_dependency | work_item_id, depends_on_id, decision_id |
-| achieve | subject, evidence_ids, decision_id nullable |
+| achieve | subject, integration_work_item_id, evidence_ids, decision_id nullable |
 
 Initial plan decision is created from the proposed plan as a server-validated
-decision request; add `request_decision` with payload `kind, work_item_id nullable,
-subject_hash nullable, proposal` to the command union. Only authorized operator
+decision request. `request_decision` has strict typed branches: plan uses a
+PlanProposal with null work item/subject; scope uses an add/remove dependency
+proposal for one WorkItem; review uses a WorkItem and Subject hash; completion
+uses only a Subject hash. Only authorized operator
 or a fenced goal task through its typed result may request it. Kernel derives
 options/action hash, rather than letting an agent assign authority. For an
 operator-authored initial plan, request_decision and resolution may be composed

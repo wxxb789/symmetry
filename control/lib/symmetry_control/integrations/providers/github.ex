@@ -23,6 +23,19 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
   def validate_resource_reference(_connection, _kind, _reference),
     do: {:error, :invalid_request}
 
+  @doc false
+  def validate_pull_request_url(_connection, %{kind: "repository", external_ref: reference}, url) do
+    with {:ok, {owner, name}} <- repository_parts(reference),
+         {:ok, _number} <- pull_request_number(url, owner, name) do
+      :ok
+    else
+      _ -> {:error, :invalid_pull_request_url}
+    end
+  end
+
+  def validate_pull_request_url(_connection, _resource, _url),
+    do: {:error, :invalid_pull_request_url}
+
   def check(connection) do
     with {:ok, headers} <- authenticate(connection), do: check(connection, headers)
   end

@@ -4,12 +4,20 @@ package protocol
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
+
+	contractdto "github.com/wxxb789/symmetry/daemon/internal/contracts"
 )
 
 // MinimumLeaseDurationMS leaves enough time for the renewal cadence, request
 // deadline, and expiry safety margin used by the daemon.
 const MinimumLeaseDurationMS int64 = 30_000
+
+// maxRuntimeAdapterProtocolVersion matches the Control persistence boundary
+// for runtime registration metadata.
+const maxRuntimeAdapterProtocolVersion = 2_147_483_647
 
 // AgentInputRecordType identifies a newline-delimited message sent to an agent.
 type AgentInputRecordType string
@@ -59,27 +67,192 @@ type EnrollResponse struct {
 
 // RuntimeRegistration declares one machine-local execution runtime.
 type RuntimeRegistration struct {
-	RuntimeKey   string              `json:"runtime_key"`
-	Name         string              `json:"name"`
-	Capacity     int                 `json:"capacity"`
-	AgentProfile string              `json:"agent_profile"`
-	Workspace    string              `json:"workspace"`
-	Capabilities RuntimeCapabilities `json:"capabilities"`
+	RuntimeKey   string `json:"runtime_key"`
+	Name         string `json:"name"`
+	Capacity     int    `json:"capacity"`
+	AgentProfile string `json:"agent_profile"`
+	Workspace    string `json:"workspace"`
+	// RepositoryResourceID is the durable repository identity available to a
+	// native runtime. It is optional on the wire so pre-Goal registrations stay
+	// compatible; control-plane Goal selection requires it to match the item.
+	RepositoryResourceID   *string             `json:"repository_resource_id,omitempty"`
+	HarnessKind            string              `json:"harness_kind,omitempty"`
+	HarnessVersion         string              `json:"harness_version,omitempty"`
+	AdapterVersion         string              `json:"adapter_version,omitempty"`
+	AdapterProtocolVersion int                 `json:"adapter_protocol_version,omitempty"`
+	Capabilities           RuntimeCapabilities `json:"capabilities"`
+}
+
+// Validate checks additive harness metadata while allowing the complete
+// omission used by legacy generic registrations.
+func (registration RuntimeRegistration) Validate() error {
+	if registration.RepositoryResourceID != nil {
+		if err := validateRegistrationUUID(*registration.RepositoryResourceID, "repository_resource_id"); err != nil {
+			return err
+		}
+	}
+	metadata := []string{registration.HarnessKind, registration.HarnessVersion, registration.AdapterVersion}
+	metadataPresent := registration.AdapterProtocolVersion != 0
+	for _, value := range metadata {
+		metadataPresent = metadataPresent || strings.TrimSpace(value) != ""
+	}
+	if metadataPresent {
+		if err := validateRuntimeMetadata(registration.HarnessKind, registration.HarnessVersion, registration.AdapterVersion, registration.AdapterProtocolVersion); err != nil {
+			return err
+		}
+	}
+	if err := registration.Capabilities.Validate(); err != nil {
+		return err
+	}
+	return registration.validateRegisteredAdapter(metadataPresent)
+}
+
+func (registration RuntimeRegistration) validateRegisteredAdapter(metadataPresent bool) error {
+	adapter := registration.Capabilities.Adapter
+	if adapter == nil {
+		return nil
+	}
+	if !metadataPresent {
+		return errors.New("adapter capabilities require complete harness metadata")
+	}
+	if adapter.Kind != registration.HarnessKind ||
+		adapter.NativeVersion != registration.HarnessVersion ||
+		adapter.ImplementationVersion != registration.AdapterVersion ||
+		adapter.ProtocolVersion != int64(registration.AdapterProtocolVersion) {
+		return errors.New("adapter metadata must match runtime harness metadata")
+	}
+	if registration.HarnessKind == "generic" {
+		return adapter.Operations.validateForHarness("generic")
+	}
+	if registration.Capabilities.SupervisoryControl {
+		return errors.New("native adapter registrations cannot advertise supervisory_control")
+	}
+	if adapter.Operations.Pause != PauseUnsupported {
+		return errors.New("native adapter registrations must advertise pause as unsupported")
+	}
+	return nil
+}
+
+func validateRegistrationUUID(value, field string) error {
+	if len(value) != 36 {
+		return fmt.Errorf("%s must be a canonical UUID", field)
+	}
+	for index, character := range value {
+		if index == 8 || index == 13 || index == 18 || index == 23 {
+			if character != '-' {
+				return fmt.Errorf("%s must be a canonical UUID", field)
+			}
+			continue
+		}
+		if character >= 'A' && character <= 'F' || !(character >= '0' && character <= '9' || character >= 'a' && character <= 'f') {
+			return fmt.Errorf("%s must be a canonical UUID", field)
+		}
+	}
+	if value[14] < '1' || value[14] > '5' || !strings.ContainsRune("89ab", rune(value[19])) {
+		return fmt.Errorf("%s must be a canonical UUID", field)
+	}
+	return nil
+}
+
+// UnmarshalJSON retains legacy unknown-field tolerance while validating any
+// newly advertised metadata. Existing registrations without the additive
+// fields decode exactly as before.
+func (registration *RuntimeRegistration) UnmarshalJSON(data []byte) error {
+	type wire RuntimeRegistration
+	var decoded wire
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	value := RuntimeRegistration(decoded)
+	if err := value.Validate(); err != nil {
+		return err
+	}
+	*registration = value
+	return nil
 }
 
 // RuntimeCapabilities declares the protocol features supported by one local
 // agent binding. Provider access requires structured JSON input because its
 // short-lived grant is delivered only in the initial standard-input envelope.
 type RuntimeCapabilities struct {
-	StructuredInput    bool `json:"structured_input"`
-	ProviderAccess     bool `json:"provider_access"`
-	Interactive        bool `json:"interactive,omitempty"`
-	SupervisoryControl bool `json:"supervisory_control,omitempty"`
+	StructuredInput    bool     `json:"structured_input"`
+	ProviderAccess     bool     `json:"provider_access"`
+	Interactive        bool     `json:"interactive,omitempty"`
+	SupervisoryControl bool     `json:"supervisory_control,omitempty"`
+	Adapter            *Adapter `json:"adapter,omitempty"`
+}
+
+// Validate checks the canonical runtime-capabilities schema first. The
+// adapter-specific checks which remain are cross-field invariants not encoded
+// in the schema.
+func (capabilities RuntimeCapabilities) Validate() error {
+	data, err := json.Marshal(capabilities)
+	if err != nil {
+		return fmt.Errorf("encode runtime capabilities: %w", err)
+	}
+	if err := contractdto.Validate(contractdto.EnvelopeAdapterCapabilities, data); err != nil {
+		return fmt.Errorf("validate runtime capabilities schema: %w", err)
+	}
+	if capabilities.Adapter == nil {
+		return nil
+	}
+	if err := capabilities.Adapter.Validate(); err != nil {
+		return fmt.Errorf("adapter capabilities: %w", err)
+	}
+	return nil
+}
+
+// UnmarshalJSON validates the raw capabilities object before conversion so an
+// unknown field cannot disappear during unmarshalling. Empty and legacy
+// boolean-only capability maps remain schema-valid.
+func (capabilities *RuntimeCapabilities) UnmarshalJSON(data []byte) error {
+	if err := contractdto.Validate(contractdto.EnvelopeAdapterCapabilities, data); err != nil {
+		return fmt.Errorf("validate runtime capabilities schema: %w", err)
+	}
+	type wire RuntimeCapabilities
+	var decoded wire
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	value := RuntimeCapabilities(decoded)
+	if err := value.Validate(); err != nil {
+		return err
+	}
+	*capabilities = value
+	return nil
+}
+
+func validateRuntimeMetadata(kind, harnessVersion, adapterVersion string, protocolVersion int) error {
+	if strings.TrimSpace(kind) == "" || strings.TrimSpace(harnessVersion) == "" || strings.TrimSpace(adapterVersion) == "" {
+		return errors.New("harness metadata must include harness_kind, harness_version, and adapter_version")
+	}
+	if len(kind) > 120 || len(harnessVersion) > 240 || len(adapterVersion) > 240 {
+		return errors.New("harness metadata exceeds its wire length limit")
+	}
+	switch kind {
+	case "generic", "codex", "claude_code", "pi", "opencode":
+	default:
+		return fmt.Errorf("harness_kind %q is invalid", kind)
+	}
+	if protocolVersion <= 0 || int64(protocolVersion) > maxRuntimeAdapterProtocolVersion {
+		return errors.New("adapter_protocol_version must be a positive supported integer")
+	}
+	return nil
 }
 
 // SessionRegistrationRequest registers a daemon process and its runtimes.
 type SessionRegistrationRequest struct {
 	Runtimes []RuntimeRegistration `json:"runtimes"`
+}
+
+// Validate checks every outbound registration before it is serialized.
+func (request SessionRegistrationRequest) Validate() error {
+	for index := range request.Runtimes {
+		if err := request.Runtimes[index].Validate(); err != nil {
+			return fmt.Errorf("runtimes[%d]: %w", index, err)
+		}
+	}
+	return nil
 }
 
 // RegisteredRuntime identifies the current epoch for a registered runtime.

@@ -1,0 +1,8 @@
+{
+  "schema_version": "symmetry.goal_command.v1",
+  "mutation_id": "33333333-3333-4333-8333-333333333332",
+  "expected_version": 1,
+  "expected_revision": 1,
+  "kind": "pause",
+  "payload": {"reason": "\uD800"}
+}

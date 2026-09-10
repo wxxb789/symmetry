@@ -1,0 +1,16 @@
+{
+  "schema_version": "symmetry.usage.v1",
+  "usage_id": "f0f0f0f0-f0f0-4f0f-8f0f-f0f0f0f0f0f0",
+  "run_id": "99999999-9999-4999-8999-999999999999",
+  "usage_key": "unknown-cost-non-null",
+  "provider": "codex",
+  "model": "implementation-default",
+  "input_tokens": null,
+  "output_tokens": null,
+  "cached_input_tokens": null,
+  "cost_microusd": "123456",
+  "cost_basis": "unknown",
+  "price_version": null,
+  "supersedes_id": null,
+  "observed_at": "2026-09-09T00:04:08Z"
+}

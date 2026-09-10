@@ -1,0 +1,39 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "contracts/v1/goal-revision.schema.json",
+  "title": "Symmetry GoalRevision v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "goal_id",
+    "revision",
+    "objective",
+    "non_goals",
+    "acceptance_contract",
+    "authority_policy",
+    "execution_policy",
+    "context_manifest",
+    "reason",
+    "actor_ref",
+    "inserted_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "symmetry.goal_revision.v1"},
+    "goal_id": {"$ref": "common.schema.json#/definitions/UUID"},
+    "revision": {"$ref": "common.schema.json#/definitions/Revision"},
+    "objective": {"$ref": "common.schema.json#/definitions/LongText"},
+    "non_goals": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {"$ref": "common.schema.json#/definitions/LongText"}
+    },
+    "acceptance_contract": {"$ref": "common.schema.json#/definitions/AcceptanceContract"},
+    "authority_policy": {"$ref": "common.schema.json#/definitions/AuthorityPolicy"},
+    "execution_policy": {"$ref": "common.schema.json#/definitions/ExecutionPolicy"},
+    "context_manifest": {"$ref": "common.schema.json#/definitions/ContextManifest"},
+    "reason": {"$ref": "common.schema.json#/definitions/LongText"},
+    "actor_ref": {"$ref": "common.schema.json#/definitions/ShortIdentifier"},
+    "inserted_at": {"$ref": "common.schema.json#/definitions/UtcTimestamp"}
+  }
+}

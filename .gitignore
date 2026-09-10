@@ -44,3 +44,6 @@ compose.override.yml
 /browser/node_modules/
 /browser/playwright-report/
 /browser/test-results/
+
+# Root contract tooling
+/node_modules/

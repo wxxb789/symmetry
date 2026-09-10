@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "contracts/v1/adapter-capabilities.schema.json",
+  "title": "Symmetry adapter capabilities v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "structured_input": {"type": "boolean"},
+    "provider_access": {"type": "boolean"},
+    "interactive": {"type": "boolean"},
+    "supervisory_control": {"type": "boolean"},
+    "adapter": {"$ref": "common.schema.json#/definitions/Adapter"}
+  }
+}

@@ -2,11 +2,16 @@ package control
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
@@ -640,4 +645,1214 @@ func isReconcileDecision(value protocol.ReconcileDecisionKind) bool {
 	default:
 		return false
 	}
+}
+
+// decodeStrictJSON is reserved for the additive Goal machine endpoints. The
+// legacy decodeJSON helper intentionally remains tolerant for protocol-v1
+// response evolution.
+func decodeStrictJSON(value []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(value))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return errors.New("response must contain one JSON value")
+		}
+		return err
+	}
+	return nil
+}
+
+func decodeStrictObjectJSON(value []byte, target any, required ...string) error {
+	trimmed := bytes.TrimSpace(value)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return errors.New("response must be a JSON object")
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &fields); err != nil {
+		return err
+	}
+	for _, field := range required {
+		if _, present := fields[field]; !present {
+			return fmt.Errorf("missing required field %q", field)
+		}
+	}
+	return decodeStrictJSON(trimmed, target)
+}
+
+func validateGoalFence(runID string, fence protocol.Fence) error {
+	if err := validateGoalUUID(runID, "run ID"); err != nil {
+		return err
+	}
+	for field, value := range map[string]string{
+		"runtime ID":  fence.RuntimeID,
+		"claim ID":    fence.ClaimID,
+		"lease token": fence.LeaseToken,
+	} {
+		if err := validateGoalUUID(value, field); err != nil {
+			return err
+		}
+	}
+	if fence.RuntimeEpoch <= 0 || fence.Generation <= 0 {
+		return errors.New("fence runtime_epoch and generation must be positive")
+	}
+	return nil
+}
+
+func validateGoalSessionAttach(runID string, request GoalSessionAttachRequest) error {
+	if err := validateGoalFence(runID, request.Fence); err != nil {
+		return err
+	}
+	for field, value := range map[string]string{
+		"local handle ID":       request.LocalHandleID,
+		"harness version":       request.HarnessVersion,
+		"adapter version":       request.AdapterVersion,
+		"workspace fingerprint": request.WorkspaceFingerprint,
+		"workspace":             request.Workspace,
+	} {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("%s must not be empty", field)
+		}
+	}
+	switch request.HarnessKind {
+	case "codex", "claude_code", "pi", "opencode":
+	default:
+		return fmt.Errorf("harness_kind %q is invalid", request.HarnessKind)
+	}
+	if request.RepositoryResourceID != nil {
+		if err := validateGoalUUID(*request.RepositoryResourceID, "repository resource ID"); err != nil {
+			return err
+		}
+	}
+	if err := validateGoalUUID(request.LocalHandleID, "local handle ID"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateGoalEvidence(runID string, fence protocol.Fence, evidence protocol.Evidence) error {
+	if err := validateGoalFence(runID, fence); err != nil {
+		return err
+	}
+	if evidence.RunID != runID {
+		return errors.New("evidence run_id does not match the path run ID")
+	}
+	if err := evidence.Validate(); err != nil {
+		return fmt.Errorf("invalid evidence request: %w", err)
+	}
+	return nil
+}
+
+func validateGoalUsage(runID string, fence protocol.Fence, usage protocol.Usage) error {
+	if err := validateGoalFence(runID, fence); err != nil {
+		return err
+	}
+	if usage.RunID != runID {
+		return errors.New("usage run_id does not match the path run ID")
+	}
+	if err := usage.Validate(); err != nil {
+		return fmt.Errorf("invalid usage request: %w", err)
+	}
+	return nil
+}
+
+func validateGoalSessionReceipt(runID string, request GoalSessionAttachRequest, receipt GoalSessionReceipt) error {
+	if err := validateGoalFence(runID, request.Fence); err != nil {
+		return invalidResponse("attach session", err.Error())
+	}
+	if err := validateGoalUUID(receipt.ID, "session.id"); err != nil {
+		return invalidResponse("attach session", err.Error())
+	}
+	if err := validateGoalUUID(receipt.RunID, "session.run_id"); err != nil {
+		return invalidResponse("attach session", err.Error())
+	}
+	if receipt.RunID != runID {
+		return invalidResponse("attach session", "session run_id does not match the path run ID")
+	}
+	if receipt.State != "busy" {
+		return invalidResponse("attach session", "session state must be busy")
+	}
+	if receipt.RuntimeID == "" || receipt.ActiveRunID == "" || receipt.LocalHandleID == "" ||
+		receipt.HarnessKind == "" || receipt.HarnessVersion == "" || receipt.AdapterVersion == "" ||
+		receipt.WorkspaceFingerprint == "" {
+		return invalidResponse("attach session", "session receipt is missing request correlation fields")
+	}
+	for field, value := range map[string]string{
+		"session.goal_id":                receipt.GoalID,
+		"session.task_id":                receipt.TaskID,
+		"session.machine_id":             receipt.MachineID,
+		"session.repository_resource_id": receipt.RepositoryResourceID,
+		"session.local_handle_id":        receipt.LocalHandleID,
+	} {
+		if value != "" {
+			if err := validateGoalUUID(value, field); err != nil {
+				return invalidResponse("attach session", err.Error())
+			}
+		}
+	}
+	if err := validateGoalUUID(receipt.RuntimeID, "session.runtime_id"); err != nil || receipt.RuntimeID != request.RuntimeID {
+		return invalidResponse("attach session", "session runtime_id does not match the fence")
+	}
+	if err := validateGoalUUID(receipt.ActiveRunID, "session.active_run_id"); err != nil || receipt.ActiveRunID != runID {
+		return invalidResponse("attach session", "session active_run_id does not match the run")
+	}
+	if err := validateGoalUUID(receipt.LocalHandleID, "session.local_handle_id"); err != nil || receipt.LocalHandleID != request.LocalHandleID {
+		return invalidResponse("attach session", "session local_handle_id does not match the request")
+	}
+	if receipt.HarnessKind != request.HarnessKind || receipt.HarnessVersion != request.HarnessVersion ||
+		receipt.AdapterVersion != request.AdapterVersion || receipt.WorkspaceFingerprint != request.WorkspaceFingerprint {
+		return invalidResponse("attach session", "session harness or workspace identity does not match the request")
+	}
+	if receipt.Workspace != "" && receipt.Workspace != request.Workspace {
+		return invalidResponse("attach session", "session workspace does not match the request")
+	}
+	if receipt.RepositoryResourceID != "" {
+		if err := validateGoalUUID(receipt.RepositoryResourceID, "session.repository_resource_id"); err != nil {
+			return invalidResponse("attach session", err.Error())
+		}
+	}
+	if request.RepositoryResourceID != nil && receipt.RepositoryResourceID != *request.RepositoryResourceID {
+		return invalidResponse("attach session", "session repository_resource_id does not match the request")
+	}
+	if receipt.LockVersion < 0 {
+		return invalidResponse("attach session", "session lock_version is invalid")
+	}
+	for field, value := range map[string]string{
+		"session.inserted_at": receipt.InsertedAt,
+		"session.updated_at":  receipt.UpdatedAt,
+	} {
+		if value != "" {
+			if err := validateGoalUTCTimestamp(value, field); err != nil {
+				return invalidResponse("attach session", err.Error())
+			}
+		}
+	}
+	return nil
+}
+
+func validateGoalEvidenceReceipt(runID string, evidence protocol.Evidence, receipt GoalEvidenceReceipt) error {
+	if err := validateGoalUUID(receipt.ID, "evidence.id"); err != nil || receipt.ID != evidence.EvidenceID || receipt.RunID != runID {
+		return invalidResponse("evidence", "id and run_id must match the request and path run ID")
+	}
+	if err := validateGoalUUID(receipt.RunID, "evidence.run_id"); err != nil || receipt.RunID != evidence.RunID {
+		return invalidResponse("evidence", "run_id must match the request and path run ID")
+	}
+	if receipt.EvidenceKey != evidence.EvidenceKey {
+		return invalidResponse("evidence", "evidence_key does not match the request")
+	}
+	if err := validateGoalShortIdentifier(receipt.EvidenceKey, "evidence.evidence_key"); err != nil {
+		return invalidResponse("evidence", err.Error())
+	}
+	if receipt.Kind != string(evidence.Kind) {
+		return invalidResponse("evidence", "kind does not match the request")
+	}
+	if receipt.Verdict != string(evidence.Verdict) {
+		return invalidResponse("evidence", "verdict does not match the request")
+	}
+	if receipt.SubjectHash != evidence.SubjectHash {
+		return invalidResponse("evidence", "subject_hash does not match the request")
+	}
+	if !validGoalDigest(receipt.SubjectHash) {
+		return invalidResponse("evidence", "subject_hash is invalid")
+	}
+	return nil
+}
+
+func validateGoalUsageReceipt(runID string, usage protocol.Usage, receipt GoalUsageReceipt) error {
+	if err := validateGoalUUID(receipt.ID, "usage.id"); err != nil || receipt.ID != usage.UsageID || receipt.RunID != runID {
+		return invalidResponse("usage", "id and run_id must match the request and path run ID")
+	}
+	if err := validateGoalUUID(receipt.RunID, "usage.run_id"); err != nil || receipt.RunID != usage.RunID {
+		return invalidResponse("usage", "run_id must match the request and path run ID")
+	}
+	if receipt.UsageKey != usage.UsageKey {
+		return invalidResponse("usage", "usage_key does not match the request")
+	}
+	if err := validateGoalShortIdentifier(receipt.UsageKey, "usage.usage_key"); err != nil {
+		return invalidResponse("usage", err.Error())
+	}
+	if receipt.CostBasis != string(usage.CostBasis) {
+		return invalidResponse("usage", "cost_basis does not match the request")
+	}
+	if !equalGoalOptionalString(receipt.CostMicrousd, usage.CostMicrousd) {
+		return invalidResponse("usage", "cost_microusd does not match the request")
+	}
+	switch receipt.CostBasis {
+	case "reported", "estimated":
+		if receipt.CostMicrousd == nil {
+			return invalidResponse("usage", "reported or estimated cost requires cost_microusd")
+		}
+	case "unknown":
+		if receipt.CostMicrousd != nil {
+			if err := protocol.ValidateMicroUSD(*receipt.CostMicrousd); err != nil {
+				return invalidResponse("usage", err.Error())
+			}
+		}
+	default:
+		return invalidResponse("usage", "cost_basis is not recognized")
+	}
+	if receipt.CostMicrousd != nil {
+		if err := protocol.ValidateMicroUSD(*receipt.CostMicrousd); err != nil {
+			return invalidResponse("usage", err.Error())
+		}
+	}
+	return nil
+}
+
+func equalGoalOptionalString(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+func validateGoalRunContext(runID string, fence protocol.Fence, response GoalRunContext) error {
+	for field, value := range map[string]string{
+		"goal_id": response.GoalID,
+		"task_id": response.TaskID,
+		"run_id":  response.RunID,
+	} {
+		if err := validateGoalUUID(value, field); err != nil {
+			return invalidResponse("run context", err.Error())
+		}
+	}
+	if response.SessionID == nil {
+		if response.Context.WorkContract.Purpose != "validate" {
+			return invalidResponse("run context", "session_id may be null only for validation context")
+		}
+	} else if err := validateGoalUUID(*response.SessionID, "session_id"); err != nil {
+		return invalidResponse("run context", err.Error())
+	}
+	if response.RunID != runID || response.Context.GoalID != response.GoalID || response.Generation != fence.Generation {
+		return invalidResponse("run context", "run ownership identifiers do not match the request")
+	}
+	if err := validateGoalSafePositiveInteger(response.Generation, "generation"); err != nil {
+		return invalidResponse("run context", err.Error())
+	}
+	if err := validateGoalFence(runID, fence); err != nil {
+		return invalidResponse("run context", err.Error())
+	}
+	if response.Context.SchemaVersion != goalContextSnapshotSchemaVersion {
+		return invalidResponse("run context", "context schema_version is not canonical")
+	}
+	if response.Context.ApprovedGoal.GoalID != response.Context.GoalID ||
+		response.Context.ApprovedGoal.Revision != response.Context.GoalRevision {
+		return invalidResponse("run context", "approved_goal identity does not match the snapshot")
+	}
+	if response.Context.GoalID != response.GoalID {
+		return invalidResponse("run context", "context goal_id does not match the run goal_id")
+	}
+	return nil
+}
+
+func validGoalDigest(value string) bool {
+	if strings.HasPrefix(value, "sha256:") {
+		return len(value) == len("sha256:")+64 && strings.Trim(value[len("sha256:"):], "0123456789abcdef") == ""
+	}
+	return len(value) == 64 && strings.Trim(value, "0123456789abcdef") == ""
+}
+
+func validateGoalUUID(value, field string) error {
+	if len(value) != 36 {
+		return fmt.Errorf("%s must be a canonical UUID", field)
+	}
+	for index := 0; index < len(value); index++ {
+		if index == 8 || index == 13 || index == 18 || index == 23 {
+			if value[index] != '-' {
+				return fmt.Errorf("%s must be a canonical UUID", field)
+			}
+			continue
+		}
+		character := value[index]
+		if character >= 'A' && character <= 'F' || character < '0' || character > 'f' || character > '9' && character < 'a' {
+			return fmt.Errorf("%s must use lowercase hexadecimal UUID digits", field)
+		}
+	}
+	if value[14] < '1' || value[14] > '5' || !strings.ContainsRune("89ab", rune(value[19])) {
+		return fmt.Errorf("%s must use a supported UUID version and variant", field)
+	}
+	return nil
+}
+
+const (
+	goalContextSnapshotSchemaVersion = "symmetry.context_snapshot.v1"
+	goalAcceptanceSchemaVersion      = "symmetry.acceptance.v1"
+)
+
+func validateGoalSafePositiveInteger(value int64, field string) error {
+	if value <= 0 || value > protocol.MaxJSONSafeInteger {
+		return fmt.Errorf("%s must be a positive JSON-safe integer", field)
+	}
+	return nil
+}
+
+func validateGoalSafeNonNegativeInteger(value int64, field string) error {
+	if value < 0 || value > protocol.MaxJSONSafeInteger {
+		return fmt.Errorf("%s must be a non-negative JSON-safe integer", field)
+	}
+	return nil
+}
+
+func validateGoalShortIdentifier(value, field string) error {
+	if len(value) < 1 || len(value) > 128 {
+		return fmt.Errorf("%s must contain 1..128 characters", field)
+	}
+	for index, character := range value {
+		if index == 0 {
+			if !goalASCIIAlphaNumeric(character) {
+				return fmt.Errorf("%s has an invalid identifier", field)
+			}
+			continue
+		}
+		if !goalASCIIAlphaNumeric(character) && !strings.ContainsRune("._:-", character) {
+			return fmt.Errorf("%s has an invalid identifier", field)
+		}
+	}
+	return nil
+}
+
+func validateGoalLongText(value, field string) error {
+	if !utf8.ValidString(value) {
+		return fmt.Errorf("%s must contain valid UTF-8", field)
+	}
+	length := utf8.RuneCountInString(value)
+	if length < 1 || length > 16_384 {
+		return fmt.Errorf("%s must contain 1..16384 characters", field)
+	}
+	return nil
+}
+
+func validateGoalUTCTimestamp(value, field string) error {
+	if strings.TrimSpace(value) == "" || !strings.HasSuffix(value, "Z") {
+		return fmt.Errorf("%s must be an RFC3339 UTC timestamp", field)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, value); err != nil {
+		return fmt.Errorf("%s must be an RFC3339 UTC timestamp: %w", field, err)
+	}
+	return nil
+}
+
+func validateGoalSHA256(value, field string) error {
+	if len(value) != len("sha256:")+64 || !strings.HasPrefix(value, "sha256:") ||
+		strings.Trim(value[len("sha256:"):], "0123456789abcdef") != "" {
+		return fmt.Errorf("%s must be sha256:<64 lowercase hex characters>", field)
+	}
+	return nil
+}
+
+func validateGoalCommit(value, field string) error {
+	if len(value) != 40 && len(value) != 64 {
+		return fmt.Errorf("%s must be a full Git object ID", field)
+	}
+	if strings.Trim(value, "0123456789abcdef") != "" {
+		return fmt.Errorf("%s must be a full Git object ID", field)
+	}
+	return nil
+}
+
+func validateGoalCommitPath(value, field string) error {
+	if len(value) < 1 || len(value) > 1024 || value[0] == '/' || strings.ContainsRune(value, '\x00') ||
+		strings.ContainsRune(value, '\\') || strings.Contains(value, "//") {
+		return fmt.Errorf("%s is not a normalized relative commit path", field)
+	}
+	for _, part := range strings.Split(value, "/") {
+		if part == ".." {
+			return fmt.Errorf("%s must not traverse parent directories", field)
+		}
+	}
+	return nil
+}
+
+func goalASCIIAlphaNumeric(value rune) bool {
+	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= '0' && value <= '9'
+}
+
+func validateGoalUniqueShortIdentifiers(values []string, field string) error {
+	seen := make(map[string]struct{}, len(values))
+	for index, value := range values {
+		if err := validateGoalShortIdentifier(value, fmt.Sprintf("%s[%d]", field, index)); err != nil {
+			return err
+		}
+		if _, exists := seen[value]; exists {
+			return fmt.Errorf("%s must not contain duplicates", field)
+		}
+		seen[value] = struct{}{}
+	}
+	return nil
+}
+
+func goalObjectFieldSet(data []byte) map[string]struct{} {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(bytes.TrimSpace(data), &fields); err != nil {
+		return nil
+	}
+	present := make(map[string]struct{}, len(fields))
+	for field := range fields {
+		present[field] = struct{}{}
+	}
+	return present
+}
+
+func goalFieldIsNull(data []byte, field string) bool {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(bytes.TrimSpace(data), &fields); err != nil {
+		return false
+	}
+	raw, ok := fields[field]
+	return ok && bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
+}
+
+func goalFieldPresent(present map[string]struct{}, field string) bool {
+	if present == nil {
+		return false
+	}
+	_, ok := present[field]
+	return ok
+}
+
+func goalAnyFieldPresent(present map[string]struct{}, fields ...string) bool {
+	for _, field := range fields {
+		if goalFieldPresent(present, field) {
+			return true
+		}
+	}
+	return false
+}
+
+func validateAuthorityPolicy(value AuthorityPolicy) error {
+	if value.AllowedActions == nil || len(value.AllowedActions) > 64 {
+		return errors.New("authority_policy.allowed_actions must be an array of at most 64 items")
+	}
+	return validateGoalUniqueShortIdentifiers(value.AllowedActions, "authority_policy.allowed_actions")
+}
+
+func validateApprovedGoal(value ApprovedGoal) error {
+	if err := validateGoalUUID(value.GoalID, "approved_goal.goal_id"); err != nil {
+		return err
+	}
+	if err := validateGoalSafePositiveInteger(value.Revision, "approved_goal.revision"); err != nil {
+		return err
+	}
+	if err := validateGoalLongText(value.Objective, "approved_goal.objective"); err != nil {
+		return err
+	}
+	return validateAuthorityPolicy(value.AuthorityPolicy)
+}
+
+func validateAcceptancePredicate(value AcceptancePredicate) error {
+	if err := validateGoalShortIdentifier(value.ID, "acceptance.predicate.id"); err != nil {
+		return err
+	}
+	switch value.Kind {
+	case "check":
+		if err := validateGoalShortIdentifier(value.ValidatorProfile, "acceptance.predicate.validator_profile"); err != nil {
+			return err
+		}
+		if goalAnyFieldPresent(value.present, "resource_id", "path", "reviewer_profile") || value.ResourceID != "" || value.Path != "" || value.ReviewerProfile != "" {
+			return errors.New("check predicate contains fields for another kind")
+		}
+	case "artifact":
+		if err := validateGoalUUID(value.ResourceID, "acceptance.predicate.resource_id"); err != nil {
+			return err
+		}
+		if err := validateGoalCommitPath(value.Path, "acceptance.predicate.path"); err != nil {
+			return err
+		}
+		if goalAnyFieldPresent(value.present, "validator_profile", "reviewer_profile") || value.ValidatorProfile != "" || value.ReviewerProfile != "" {
+			return errors.New("artifact predicate contains fields for another kind")
+		}
+	case "review":
+		if err := validateGoalShortIdentifier(value.ReviewerProfile, "acceptance.predicate.reviewer_profile"); err != nil {
+			return err
+		}
+		if goalAnyFieldPresent(value.present, "validator_profile", "resource_id", "path") || value.ValidatorProfile != "" || value.ResourceID != "" || value.Path != "" {
+			return errors.New("review predicate contains fields for another kind")
+		}
+	case "operator_acceptance":
+		if goalAnyFieldPresent(value.present, "validator_profile", "resource_id", "path", "reviewer_profile") || value.ValidatorProfile != "" || value.ResourceID != "" || value.Path != "" || value.ReviewerProfile != "" {
+			return errors.New("operator_acceptance predicate contains fields for another kind")
+		}
+	default:
+		return fmt.Errorf("acceptance.predicate.kind %q is invalid", value.Kind)
+	}
+	return nil
+}
+
+func validateAcceptanceContract(value AcceptanceContract) error {
+	if value.SchemaVersion != goalAcceptanceSchemaVersion {
+		return fmt.Errorf("acceptance.schema_version must be %q", goalAcceptanceSchemaVersion)
+	}
+	if err := validateGoalLongText(value.Description, "acceptance.description"); err != nil {
+		return err
+	}
+	if value.Predicates == nil || len(value.Predicates) < 1 || len(value.Predicates) > 256 {
+		return errors.New("acceptance.predicates must contain 1..256 items")
+	}
+	for _, predicate := range value.Predicates {
+		if err := validateAcceptancePredicate(predicate); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateWorkContract(value WorkContract) error {
+	if err := validateGoalLongText(value.Title, "work_contract.title"); err != nil {
+		return err
+	}
+	if err := validateGoalLongText(value.Description, "work_contract.description"); err != nil {
+		return err
+	}
+	switch value.Purpose {
+	case "implement", "validate", "plan", "observe", "chat":
+	default:
+		return fmt.Errorf("work_contract.purpose %q is invalid", value.Purpose)
+	}
+	if err := validateAcceptanceContract(value.Acceptance); err != nil {
+		return err
+	}
+	if value.ValidationBindings == nil || len(value.ValidationBindings) > 256 {
+		return errors.New("work_contract.validation_bindings must be an array of at most 256 items")
+	}
+	requiredProfiles := make(map[[2]string]struct{})
+	for _, predicate := range value.Acceptance.Predicates {
+		switch predicate.Kind {
+		case "check":
+			requiredProfiles[[2]string{"check", predicate.ValidatorProfile}] = struct{}{}
+		case "review":
+			requiredProfiles[[2]string{"review", predicate.ReviewerProfile}] = struct{}{}
+		}
+	}
+	boundProfiles := make(map[[2]string]struct{}, len(value.ValidationBindings))
+	for index, binding := range value.ValidationBindings {
+		if err := validateValidationBinding(binding); err != nil {
+			return fmt.Errorf("work_contract.validation_bindings[%d]: %w", index, err)
+		}
+		key := [2]string{binding.Kind, binding.ProfileName}
+		if _, exists := boundProfiles[key]; exists {
+			return fmt.Errorf("work_contract.validation_bindings[%d]: duplicate profile binding", index)
+		}
+		if _, required := requiredProfiles[key]; !required {
+			return fmt.Errorf("work_contract.validation_bindings[%d]: profile does not match an acceptance predicate", index)
+		}
+		boundProfiles[key] = struct{}{}
+	}
+	for key := range requiredProfiles {
+		if _, bound := boundProfiles[key]; !bound {
+			return fmt.Errorf("work_contract.validation_bindings is missing %s profile %q", key[0], key[1])
+		}
+	}
+	return nil
+}
+
+func validateValidationBinding(value ValidationBinding) error {
+	if err := validateGoalShortIdentifier(value.ProfileName, "profile_name"); err != nil {
+		return err
+	}
+	switch value.Kind {
+	case "check", "review":
+	default:
+		return fmt.Errorf("kind %q is invalid", value.Kind)
+	}
+	if err := validateGoalSHA256(value.ProfileDigest, "profile_digest"); err != nil {
+		return err
+	}
+	if value.AllowedRuntimeIDs == nil || len(value.AllowedRuntimeIDs) < 1 || len(value.AllowedRuntimeIDs) > 256 {
+		return errors.New("allowed_runtime_ids must contain 1..256 items")
+	}
+	seen := make(map[string]struct{}, len(value.AllowedRuntimeIDs))
+	for index, runtimeID := range value.AllowedRuntimeIDs {
+		if err := validateGoalUUID(runtimeID, fmt.Sprintf("allowed_runtime_ids[%d]", index)); err != nil {
+			return err
+		}
+		if _, exists := seen[runtimeID]; exists {
+			return errors.New("allowed_runtime_ids must not contain duplicates")
+		}
+		seen[runtimeID] = struct{}{}
+	}
+	return nil
+}
+
+func validateContextContent(value ContextContent) error {
+	switch value.Kind {
+	case "excerpt", "path", "evidence", "pointer":
+	default:
+		return fmt.Errorf("context source content.kind %q is invalid", value.Kind)
+	}
+	return validateGoalLongText(value.Value, "context source content.value")
+}
+
+func validateContextSource(value ContextSource) error {
+	if err := validateGoalUUID(value.ResourceID, "context source.resource_id"); err != nil {
+		return err
+	}
+	if err := validateGoalShortIdentifier(value.SourceKind, "context source.source_kind"); err != nil {
+		return err
+	}
+	if err := validateGoalShortIdentifier(value.SourceRevision, "context source.source_revision"); err != nil {
+		return err
+	}
+	if err := validateGoalSHA256(value.ContentHash, "context source.content_hash"); err != nil {
+		return err
+	}
+	if err := validateGoalUTCTimestamp(value.ObservedAt, "context source.observed_at"); err != nil {
+		return err
+	}
+	switch value.Trust {
+	case "trusted_policy", "validated_evidence", "repository_untrusted", "advisory":
+	default:
+		return fmt.Errorf("context source.trust %q is invalid", value.Trust)
+	}
+	if goalFieldPresent(value.present, "stale") && value.Stale == nil {
+		return errors.New("context source.stale must be a boolean when present")
+	}
+	return validateContextContent(value.Content)
+}
+
+func validateDecisionReference(value DecisionReference) error {
+	if err := validateGoalUUID(value.DecisionID, "decision.decision_id"); err != nil {
+		return err
+	}
+	if err := validateGoalSHA256(value.ActionHash, "decision.action_hash"); err != nil {
+		return err
+	}
+	switch value.State {
+	case "open", "resolved", "superseded":
+		return nil
+	default:
+		return fmt.Errorf("decision.state %q is invalid", value.State)
+	}
+}
+
+func validateEvidenceReference(value EvidenceReference) error {
+	if err := validateGoalUUID(value.EvidenceID, "evidence.evidence_id"); err != nil {
+		return err
+	}
+	if err := validateGoalShortIdentifier(value.PredicateID, "evidence.predicate_id"); err != nil {
+		return err
+	}
+	if err := validateGoalSHA256(value.SubjectHash, "evidence.subject_hash"); err != nil {
+		return err
+	}
+	switch value.Verdict {
+	case "passed", "failed", "unknown", "not_applicable":
+		return nil
+	default:
+		return fmt.Errorf("evidence.verdict %q is invalid", value.Verdict)
+	}
+}
+
+func validateFailedAttempt(value FailedAttempt) error {
+	if err := validateGoalUUID(value.TaskID, "failed_attempt.task_id"); err != nil {
+		return err
+	}
+	if value.RunID != nil {
+		if err := validateGoalUUID(*value.RunID, "failed_attempt.run_id"); err != nil {
+			return err
+		}
+	}
+	if err := validateGoalLongText(value.Reason, "failed_attempt.reason"); err != nil {
+		return err
+	}
+	return validateGoalUTCTimestamp(value.ObservedAt, "failed_attempt.observed_at")
+}
+
+func validateBlocker(value Blocker) error {
+	switch value.Kind {
+	case "decision":
+		if err := validateGoalUUID(value.DecisionID, "blocker.decision_id"); err != nil {
+			return err
+		}
+		if goalAnyFieldPresent(value.present, "resource_id", "external_ref", "next_check_at", "work_item_ids", "code", "detail") || value.ResourceID != "" || value.ExternalRef != "" || value.NextCheckAt != "" || len(value.WorkItemIDs) != 0 || value.Code != "" || value.Detail != "" {
+			return errors.New("decision blocker contains fields for another kind")
+		}
+	case "external":
+		if err := validateGoalUUID(value.ResourceID, "blocker.resource_id"); err != nil {
+			return err
+		}
+		if err := validateGoalLongText(value.ExternalRef, "blocker.external_ref"); err != nil {
+			return err
+		}
+		if err := validateGoalUTCTimestamp(value.NextCheckAt, "blocker.next_check_at"); err != nil {
+			return err
+		}
+		if goalAnyFieldPresent(value.present, "decision_id", "work_item_ids", "code", "detail") || value.DecisionID != "" || len(value.WorkItemIDs) != 0 || value.Code != "" || value.Detail != "" {
+			return errors.New("external blocker contains fields for another kind")
+		}
+	case "dependency":
+		if len(value.WorkItemIDs) < 1 || len(value.WorkItemIDs) > 256 {
+			return errors.New("blocker.work_item_ids must contain 1..256 items")
+		}
+		seen := make(map[string]struct{}, len(value.WorkItemIDs))
+		for _, id := range value.WorkItemIDs {
+			if err := validateGoalUUID(id, "blocker.work_item_ids"); err != nil {
+				return err
+			}
+			if _, exists := seen[id]; exists {
+				return errors.New("blocker.work_item_ids must not contain duplicates")
+			}
+			seen[id] = struct{}{}
+		}
+		if goalAnyFieldPresent(value.present, "decision_id", "resource_id", "external_ref", "next_check_at", "code", "detail") || value.DecisionID != "" || value.ResourceID != "" || value.ExternalRef != "" || value.NextCheckAt != "" || value.Code != "" || value.Detail != "" {
+			return errors.New("dependency blocker contains fields for another kind")
+		}
+	case "environment":
+		if err := validateGoalShortIdentifier(value.Code, "blocker.code"); err != nil {
+			return err
+		}
+		if err := validateGoalLongText(value.Detail, "blocker.detail"); err != nil {
+			return err
+		}
+		if goalAnyFieldPresent(value.present, "decision_id", "resource_id", "external_ref", "next_check_at", "work_item_ids") || value.DecisionID != "" || value.ResourceID != "" || value.ExternalRef != "" || value.NextCheckAt != "" || len(value.WorkItemIDs) != 0 {
+			return errors.New("environment blocker contains fields for another kind")
+		}
+	default:
+		return fmt.Errorf("blocker.kind %q is invalid", value.Kind)
+	}
+	return nil
+}
+
+func validateNextAction(value NextAction) error {
+	switch value.Kind {
+	case "validate":
+		if err := validateGoalUUID(value.ProducingTaskID, "next_action.producing_task_id"); err != nil {
+			return err
+		}
+		if goalAnyFieldPresent(value.present, "work_item_id", "reason", "resource_id", "external_ref", "blocker") || value.WorkItemID != "" || value.Reason != "" || value.ResourceID != "" || value.ExternalRef != "" || value.Blocker != nil {
+			return errors.New("validate next action contains fields for another kind")
+		}
+	case "repair":
+		if err := validateGoalUUID(value.WorkItemID, "next_action.work_item_id"); err != nil {
+			return err
+		}
+		if err := validateGoalLongText(value.Reason, "next_action.reason"); err != nil {
+			return err
+		}
+		if goalAnyFieldPresent(value.present, "producing_task_id", "resource_id", "external_ref", "blocker") || value.ProducingTaskID != "" || value.ResourceID != "" || value.ExternalRef != "" || value.Blocker != nil {
+			return errors.New("repair next action contains fields for another kind")
+		}
+	case "observe":
+		if err := validateGoalUUID(value.ResourceID, "next_action.resource_id"); err != nil {
+			return err
+		}
+		if err := validateGoalLongText(value.ExternalRef, "next_action.external_ref"); err != nil {
+			return err
+		}
+		if goalAnyFieldPresent(value.present, "producing_task_id", "work_item_id", "reason", "blocker") || value.ProducingTaskID != "" || value.WorkItemID != "" || value.Reason != "" || value.Blocker != nil {
+			return errors.New("observe next action contains fields for another kind")
+		}
+	case "replan":
+		if err := validateGoalLongText(value.Reason, "next_action.reason"); err != nil {
+			return err
+		}
+		if goalAnyFieldPresent(value.present, "producing_task_id", "work_item_id", "resource_id", "external_ref", "blocker") || value.ProducingTaskID != "" || value.WorkItemID != "" || value.ResourceID != "" || value.ExternalRef != "" || value.Blocker != nil {
+			return errors.New("replan next action contains fields for another kind")
+		}
+	case "wait":
+		if value.Blocker == nil {
+			return errors.New("next_action.blocker is required")
+		}
+		if err := validateBlocker(*value.Blocker); err != nil {
+			return fmt.Errorf("next_action.blocker: %w", err)
+		}
+		if goalAnyFieldPresent(value.present, "producing_task_id", "work_item_id", "reason", "resource_id", "external_ref") || value.ProducingTaskID != "" || value.WorkItemID != "" || value.Reason != "" || value.ResourceID != "" || value.ExternalRef != "" {
+			return errors.New("wait next action contains fields for another kind")
+		}
+	default:
+		return fmt.Errorf("next_action.kind %q is invalid", value.Kind)
+	}
+	return nil
+}
+
+func validateContextSize(value ContextSize) error {
+	for field, number := range map[string]int64{
+		"size.mandatory_bytes": value.MandatoryBytes,
+		"size.optional_bytes":  value.OptionalBytes,
+		"size.total_bytes":     value.TotalBytes,
+	} {
+		if err := validateGoalSafeNonNegativeInteger(number, field); err != nil {
+			return err
+		}
+	}
+	if err := validateGoalSafePositiveInteger(value.ByteBudget, "size.byte_budget"); err != nil {
+		return err
+	}
+	if value.TokenEstimate != nil {
+		if err := validateGoalSafeNonNegativeInteger(*value.TokenEstimate, "size.token_estimate"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateGoalContextSnapshot(value GoalContextSnapshot) error {
+	if value.SchemaVersion != goalContextSnapshotSchemaVersion {
+		return fmt.Errorf("context schema_version must be %q", goalContextSnapshotSchemaVersion)
+	}
+	if err := validateGoalUUID(value.SnapshotID, "context.snapshot_id"); err != nil {
+		return err
+	}
+	if err := validateGoalUUID(value.GoalID, "context.goal_id"); err != nil {
+		return err
+	}
+	if err := validateGoalSafePositiveInteger(value.GoalRevision, "context.goal_revision"); err != nil {
+		return err
+	}
+	if err := validateGoalSHA256(value.ContentHash, "context.content_hash"); err != nil {
+		return err
+	}
+	if err := validateGoalUTCTimestamp(value.CreatedAt, "context.created_at"); err != nil {
+		return err
+	}
+	if err := validateApprovedGoal(value.ApprovedGoal); err != nil {
+		return err
+	}
+	if value.ApprovedGoal.GoalID != value.GoalID || value.ApprovedGoal.Revision != value.GoalRevision {
+		return errors.New("context approved_goal identity does not match the snapshot")
+	}
+	if err := validateWorkContract(value.WorkContract); err != nil {
+		return err
+	}
+	if value.WorkContract.Purpose == "plan" {
+		if value.WorkItemID != nil {
+			return errors.New("context.work_item_id must be null for plan purpose")
+		}
+	} else {
+		if value.WorkItemID == nil {
+			return fmt.Errorf("context.work_item_id is required for purpose %q", value.WorkContract.Purpose)
+		}
+		if err := validateGoalUUID(*value.WorkItemID, "context.work_item_id"); err != nil {
+			return err
+		}
+	}
+	if err := value.Subject.Validate(); err != nil {
+		return fmt.Errorf("context subject: %w", err)
+	}
+	if value.Sources == nil || len(value.Sources) < 1 || len(value.Sources) > 512 {
+		return errors.New("context sources must contain 1..512 items")
+	}
+	for _, source := range value.Sources {
+		if err := validateContextSource(source); err != nil {
+			return err
+		}
+	}
+	if value.CurrentDecisions == nil || len(value.CurrentDecisions) > 256 {
+		return errors.New("context current_decisions must be an array of at most 256 items")
+	}
+	for _, decision := range value.CurrentDecisions {
+		if err := validateDecisionReference(decision); err != nil {
+			return err
+		}
+	}
+	if value.ValidatedEvidence == nil || len(value.ValidatedEvidence) > 1024 {
+		return errors.New("context validated_evidence must be an array of at most 1024 items")
+	}
+	for _, evidence := range value.ValidatedEvidence {
+		if err := validateEvidenceReference(evidence); err != nil {
+			return err
+		}
+	}
+	if value.FailedAttempts == nil || len(value.FailedAttempts) > 256 {
+		return errors.New("context failed_attempts must be an array of at most 256 items")
+	}
+	for _, attempt := range value.FailedAttempts {
+		if err := validateFailedAttempt(attempt); err != nil {
+			return err
+		}
+	}
+	if value.AdvisoryRecall == nil || len(value.AdvisoryRecall) > 256 {
+		return errors.New("context advisory_recall must be an array of at most 256 items")
+	}
+	for _, source := range value.AdvisoryRecall {
+		if err := validateContextSource(source); err != nil {
+			return err
+		}
+	}
+	if value.NextAction != nil {
+		if err := validateNextAction(*value.NextAction); err != nil {
+			return err
+		}
+	}
+	if err := validateContextSize(value.Size); err != nil {
+		return err
+	}
+	return validateGoalContextContentHash(value)
+}
+
+func validateGoalContextContentHash(value GoalContextSnapshot) error {
+	// Hash the complete canonical context envelope except for its self-referential
+	// content_hash field. The protocol package owns canonical JSON ordering and
+	// number handling; this boundary only supplies the SHA-256 digest format.
+	type wire GoalContextSnapshot
+	encoded, err := json.Marshal(wire(value))
+	if err != nil {
+		return fmt.Errorf("marshal context for content_hash: %w", err)
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &envelope); err != nil {
+		return fmt.Errorf("decode context for content_hash: %w", err)
+	}
+	if _, present := envelope["content_hash"]; !present {
+		return errors.New("context.content_hash is missing from the canonical envelope")
+	}
+	delete(envelope, "content_hash")
+	withoutHash, err := json.Marshal(envelope)
+	if err != nil {
+		return fmt.Errorf("marshal context content envelope: %w", err)
+	}
+	canonical, err := protocol.CanonicalizeJSON(withoutHash)
+	if err != nil {
+		return fmt.Errorf("canonicalize context content envelope: %w", err)
+	}
+	digest := sha256.Sum256(canonical)
+	expected := "sha256:" + hex.EncodeToString(digest[:])
+	if value.ContentHash != expected {
+		return fmt.Errorf("context.content_hash does not match canonical snapshot (expected %s)", expected)
+	}
+	return nil
+}
+
+func (policy *AuthorityPolicy) UnmarshalJSON(data []byte) error {
+	type wire AuthorityPolicy
+	var decoded wire
+	if err := decodeStrictObjectJSON(data, &decoded,
+		"operator_required_for_scope_change", "operator_required_for_completion", "publication_allowed", "allowed_actions"); err != nil {
+		return err
+	}
+	if goalFieldIsNull(data, "operator_required_for_scope_change") || goalFieldIsNull(data, "operator_required_for_completion") || goalFieldIsNull(data, "publication_allowed") {
+		return errors.New("authority_policy boolean fields must not be null")
+	}
+	value := AuthorityPolicy(decoded)
+	if err := validateAuthorityPolicy(value); err != nil {
+		return err
+	}
+	*policy = value
+	return nil
+}
+
+func (goal *ApprovedGoal) UnmarshalJSON(data []byte) error {
+	type wire ApprovedGoal
+	var decoded wire
+	if err := decodeStrictObjectJSON(data, &decoded, "goal_id", "revision", "objective", "authority_policy"); err != nil {
+		return err
+	}
+	value := ApprovedGoal(decoded)
+	if err := validateApprovedGoal(value); err != nil {
+		return err
+	}
+	*goal = value
+	return nil
+}
+
+func (predicate *AcceptancePredicate) UnmarshalJSON(data []byte) error {
+	type wire AcceptancePredicate
+	var decoded wire
+	if err := decodeStrictObjectJSON(data, &decoded, "id", "kind"); err != nil {
+		return err
+	}
+	value := AcceptancePredicate(decoded)
+	value.present = goalObjectFieldSet(data)
+	if err := validateAcceptancePredicate(value); err != nil {
+		return err
+	}
+	*predicate = value
+	return nil
+}
+
+func (contract *AcceptanceContract) UnmarshalJSON(data []byte) error {
+	type wire AcceptanceContract
+	var decoded wire
+	if err := decodeStrictObjectJSON(data, &decoded, "schema_version", "description", "predicates"); err != nil {
+		return err
+	}
+	value := AcceptanceContract(decoded)
+	if err := validateAcceptanceContract(value); err != nil {
+		return err
+	}
+	*contract = value
+	return nil
+}
+
+func (contract *WorkContract) UnmarshalJSON(data []byte) error {
+	type wire WorkContract
+	var decoded wire
+	if err := decodeStrictObjectJSON(data, &decoded, "title", "description", "purpose", "change_target", "acceptance", "validation_bindings"); err != nil {
+		return err
+	}
+	value := WorkContract(decoded)
+	if err := validateWorkContract(value); err != nil {
+		return err
+	}
+	*contract = value
+	return nil
+}
+
+func (binding *ValidationBinding) UnmarshalJSON(data []byte) error {
+	type wire ValidationBinding
+	var decoded wire
+	if err := decodeStrictObjectJSON(data, &decoded, "profile_name", "kind", "profile_digest", "allowed_runtime_ids"); err != nil {
+		return err
+	}
+	value := ValidationBinding(decoded)
+	if err := validateValidationBinding(value); err != nil {
+		return err
+	}
+	*binding = value
+	return nil
+}
+
+func (content *ContextContent) UnmarshalJSON(data []byte) error {
+	type wire ContextContent
+	var decoded wire
+	if err := decodeStrictObjectJSON(data, &decoded, "kind", "value"); err != nil {
+		return err
+	}
+	value := ContextContent(decoded)
+	if err := validateContextContent(value); err != nil {
+		return err
+	}
+	*content = value
+	return nil
+}
+
+func (source *ContextSource) UnmarshalJSON(data []byte) error {
+	type wire ContextSource
+	var decoded wire
+	if err := decodeStrictObjectJSON(data, &decoded,
+		"resource_id", "source_kind", "source_revision", "content_hash", "observed_at", "trust", "required", "content"); err != nil {
+		return err
+	}
+	if goalFieldIsNull(data, "required") {
+		return errors.New("context source.required must not be null")
+	}
+	value := ContextSource(decoded)
+	value.present = goalObjectFieldSet(data)
+	if err := validateContextSource(value); err != nil {
+		return err
+	}
+	*source = value
+	return nil
+}
+
+func (reference *DecisionReference) UnmarshalJSON(data []byte) error {
+	type wire DecisionReference
+	var decoded wire
+	if err := decodeStrictObjectJSON(data, &decoded, "decision_id", "action_hash", "state"); err != nil {
+		return err
+	}
+	value := DecisionReference(decoded)
+	if err := validateDecisionReference(value); err != nil {
+		return err
+	}
+	*reference = value
+	return nil
+}
+
+func (reference *EvidenceReference) UnmarshalJSON(data []byte) error {
+	type wire EvidenceReference
+	var decoded wire
+	if err := decodeStrictObjectJSON(data, &decoded, "evidence_id", "predicate_id", "subject_hash", "verdict"); err != nil {
+		return err
+	}
+	value := EvidenceReference(decoded)
+	if err := validateEvidenceReference(value); err != nil {
+		return err
+	}
+	*reference = value
+	return nil
+}
+
+func (attempt *FailedAttempt) UnmarshalJSON(data []byte) error {
+	type wire FailedAttempt
+	var decoded wire
+	if err := decodeStrictObjectJSON(data, &decoded, "task_id", "run_id", "reason", "observed_at"); err != nil {
+		return err
+	}
+	value := FailedAttempt(decoded)
+	if err := validateFailedAttempt(value); err != nil {
+		return err
+	}
+	*attempt = value
+	return nil
+}
+
+func (blocker *Blocker) UnmarshalJSON(data []byte) error {
+	type wire Blocker
+	var decoded wire
+	if err := decodeStrictObjectJSON(data, &decoded, "kind"); err != nil {
+		return err
+	}
+	value := Blocker(decoded)
+	value.present = goalObjectFieldSet(data)
+	if err := validateBlocker(value); err != nil {
+		return err
+	}
+	*blocker = value
+	return nil
+}
+
+func (action *NextAction) UnmarshalJSON(data []byte) error {
+	type wire NextAction
+	var decoded wire
+	if err := decodeStrictObjectJSON(data, &decoded, "kind"); err != nil {
+		return err
+	}
+	value := NextAction(decoded)
+	value.present = goalObjectFieldSet(data)
+	if err := validateNextAction(value); err != nil {
+		return err
+	}
+	*action = value
+	return nil
+}
+
+func (size *ContextSize) UnmarshalJSON(data []byte) error {
+	type wire ContextSize
+	var decoded wire
+	if err := decodeStrictObjectJSON(data, &decoded,
+		"mandatory_bytes", "optional_bytes", "total_bytes", "byte_budget", "token_estimate"); err != nil {
+		return err
+	}
+	if goalFieldIsNull(data, "mandatory_bytes") || goalFieldIsNull(data, "optional_bytes") || goalFieldIsNull(data, "total_bytes") || goalFieldIsNull(data, "byte_budget") {
+		return errors.New("context size integer fields must not be null")
+	}
+	value := ContextSize(decoded)
+	if err := validateContextSize(value); err != nil {
+		return err
+	}
+	*size = value
+	return nil
+}
+
+func (snapshot *GoalContextSnapshot) UnmarshalJSON(data []byte) error {
+	if _, err := protocol.DecodeContextSnapshot(data); err != nil {
+		return fmt.Errorf("decode context snapshot schema: %w", err)
+	}
+	type wire GoalContextSnapshot
+	var decoded wire
+	if err := decodeStrictObjectJSON(data, &decoded,
+		"schema_version", "snapshot_id", "goal_id", "goal_revision", "work_item_id", "content_hash", "created_at",
+		"approved_goal", "work_contract", "subject", "sources", "current_decisions", "validated_evidence",
+		"failed_attempts", "advisory_recall", "next_action", "size"); err != nil {
+		return err
+	}
+	value := GoalContextSnapshot(decoded)
+	if err := validateGoalContextSnapshot(value); err != nil {
+		return err
+	}
+	*snapshot = value
+	return nil
+}
+
+func (context *GoalRunContext) UnmarshalJSON(data []byte) error {
+	type wire GoalRunContext
+	var decoded wire
+	if err := decodeStrictObjectJSON(data, &decoded, "goal_id", "task_id", "run_id", "generation", "session_id", "context"); err != nil {
+		return err
+	}
+	*context = GoalRunContext(decoded)
+	return nil
 }

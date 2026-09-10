@@ -4,6 +4,7 @@
 package platform
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -16,16 +17,18 @@ import (
 const (
 	jobObjectExtendedLimitInformation = 9
 	jobObjectLimitKillOnJobClose      = 0x00002000
+	createBreakawayFromJob            = 0x01000000
 	processTerminate                  = 0x0001
 	processSetQuota                   = 0x0100
 )
 
 var (
-	kernel32                 = syscall.NewLazyDLL("kernel32.dll")
-	createJobObject          = kernel32.NewProc("CreateJobObjectW")
-	setInformationJobObject  = kernel32.NewProc("SetInformationJobObject")
-	assignProcessToJobObject = kernel32.NewProc("AssignProcessToJobObject")
-	terminateJobObject       = kernel32.NewProc("TerminateJobObject")
+	kernel32                             = syscall.NewLazyDLL("kernel32.dll")
+	createJobObject                      = kernel32.NewProc("CreateJobObjectW")
+	setInformationJobObject              = kernel32.NewProc("SetInformationJobObject")
+	assignProcessToJobObject             = kernel32.NewProc("AssignProcessToJobObject")
+	terminateJobObject                   = kernel32.NewProc("TerminateJobObject")
+	terminateProcessTreeForAttachFailure = func(pid int) error { return terminateWithTaskkill(pid, true) }
 )
 
 // Containment owns the platform mechanism that keeps all descendants under the
@@ -71,9 +74,15 @@ type jobContainment struct {
 	pid    int
 }
 
-// ConfigureProcess has no setup work on Windows. taskkill targets the process
-// tree by PID, so no Job Object or shell wrapper is required.
+// ConfigureProcess requests that the child leave an inherited CI/service Job
+// Object before AttachProcess places it in the daemon-owned Job Object. Windows
+// honors this only when the inherited job permits breakaway; otherwise the
+// subsequent attachment remains fail-closed and cleans up the launched tree.
 func ConfigureProcess(command *exec.Cmd) {
+	if command.SysProcAttr == nil {
+		command.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	command.SysProcAttr.CreationFlags |= createBreakawayFromJob
 }
 
 // AttachProcess adds the root process to a fresh Job Object. The kill-on-close
@@ -81,12 +90,11 @@ func ConfigureProcess(command *exec.Cmd) {
 func AttachProcess(pid int) (Containment, error) {
 	handle, _, callError := createJobObject.Call(0, 0)
 	if handle == 0 {
-		return nil, fmt.Errorf("create job object: %w", callError)
+		return cleanupFailedAttach(pid, 0, fmt.Errorf("create job object: %w", callError))
 	}
 	job := syscall.Handle(handle)
 	cleanup := func(errorValue error) (Containment, error) {
-		_ = syscall.CloseHandle(job)
-		return nil, errorValue
+		return cleanupFailedAttach(pid, job, errorValue)
 	}
 
 	limits := extendedLimitInformation{}
@@ -112,6 +120,17 @@ func AttachProcess(pid int) (Containment, error) {
 		return cleanup(fmt.Errorf("assign process to job object: %w", callError))
 	}
 	return &jobContainment{handle: job, pid: pid}, nil
+}
+
+func cleanupFailedAttach(pid int, job syscall.Handle, attachErr error) (Containment, error) {
+	terminateErr := terminateProcessTreeForAttachFailure(pid)
+	if job != 0 {
+		_ = syscall.CloseHandle(job)
+	}
+	if terminateErr != nil {
+		return nil, errors.Join(attachErr, fmt.Errorf("terminate process tree after containment setup failure: %w", terminateErr))
+	}
+	return nil, attachErr
 }
 
 func (job *jobContainment) Terminate(force bool) error {

@@ -11,6 +11,18 @@ defmodule SymmetryControl.Orchestration do
   alias SymmetryControl.Repo
   alias SymmetryControl.RequestHash
 
+  alias SymmetryControl.Goals.{
+    ContextSnapshot,
+    ContractValidation,
+    Goal,
+    GoalEvent,
+    GoalRevision,
+    HarnessSession
+  }
+
+  alias SymmetryControl.Goals.Workers.SettleTaskWorker
+  alias SymmetryControl.Workspaces.{Project, ProjectResource, WorkItem}
+
   alias SymmetryControl.Orchestration.{
     Command,
     Machine,
@@ -34,6 +46,10 @@ defmodule SymmetryControl.Orchestration do
     "cancelling"
   ]
   @supervisory_commands ["guidance", "pause", "resume"]
+  @native_harness_kinds ["codex", "claude_code", "pi", "opencode"]
+  @goal_assignment_scan_page_size 32
+  @validation_profile_name ~r/\A[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\z/
+  @sha256 ~r/\Asha256:[0-9a-f]{64}\z/
   @decision_reasons [
     "blocked",
     "consequential",
@@ -176,6 +192,8 @@ defmodule SymmetryControl.Orchestration do
 
         Enum.map(specifications, fn specification ->
           runtime_key = value(specification, :runtime_key)
+          repository_resource_id = value(specification, :repository_resource_id)
+          ensure_runtime_repository_resource!(repository_resource_id)
 
           existing =
             Repo.one(
@@ -184,12 +202,19 @@ defmodule SymmetryControl.Orchestration do
                 lock: "FOR UPDATE"
             )
 
+          ensure_runtime_repository_binding_change_safe!(existing, repository_resource_id)
+
           attrs = %{
             name: value(specification, :name),
             capacity: value(specification, :capacity),
             agent_profile: value(specification, :agent_profile),
             workspace: value(specification, :workspace),
+            repository_resource_id: repository_resource_id,
             capabilities: value(specification, :capabilities, %{}),
+            harness_kind: value(specification, :harness_kind),
+            harness_version: value(specification, :harness_version),
+            adapter_version: value(specification, :adapter_version),
+            adapter_protocol_version: value(specification, :adapter_protocol_version),
             status: "online",
             last_heartbeat_at: now,
             heartbeat_interval_ms: value(specification, :heartbeat_interval_ms, 5_000)
@@ -544,7 +569,8 @@ defmodule SymmetryControl.Orchestration do
 
   def control_capabilities(task, run, runtime, pending?) do
     supported? =
-      not is_nil(runtime) and value(runtime.capabilities, :supervisory_control, false) == true
+      not is_nil(runtime) and legacy_supervisory_runtime?(runtime) and
+        value(runtime.capabilities, :supervisory_control, false) == true
 
     current? =
       not is_nil(run) and not is_nil(runtime) and
@@ -697,6 +723,7 @@ defmodule SymmetryControl.Orchestration do
       reserved_capacity: 0,
       agent_profile: runtime.agent_profile,
       workspace: runtime.workspace,
+      repository_resource_id: runtime.repository_resource_id,
       capabilities: runtime.capabilities,
       active_runs: []
     }
@@ -1018,33 +1045,10 @@ defmodule SymmetryControl.Orchestration do
     assignment_duration_ms = Keyword.get(opts, :assignment_duration_ms, 30_000)
 
     result =
-      Repo.transaction(fn ->
-        {task, runtime} = next_assignable_task_and_runtime(current) || rollback(:no_assignment)
-
-        generation = task.attempt_generation
-
-        task =
-          task
-          |> Task.changeset(%{
-            state: "assigned",
-            current_generation: generation,
-            waiting_transition_id: nil
-          })
-          |> stamp_update(current)
-          |> Repo.update!()
-
-        %Run{}
-        |> Run.changeset(%{
-          task_id: task.id,
-          runtime_id: runtime.id,
-          generation: generation,
-          state: "assigned",
-          assigned_at: current,
-          assignment_expires_at: DateTime.add(current, assignment_duration_ms, :millisecond)
-        })
-        |> stamp_insert(current)
-        |> Repo.insert!()
-      end)
+      case assign_one_goal(current, assignment_duration_ms) do
+        {:error, :no_assignment} -> assign_one_legacy(current, assignment_duration_ms)
+        result -> result
+      end
 
     case result do
       {:ok, run} ->
@@ -1062,7 +1066,199 @@ defmodule SymmetryControl.Orchestration do
     end
   end
 
-  defp next_assignable_task_and_runtime(current) do
+  # Goal candidates are scanned by a stable keyset. Each candidate gets its own
+  # transaction so an unavailable or malformed frozen validation binding cannot
+  # retain locks or starve a later eligible Goal task.
+  defp assign_one_goal(current, assignment_duration_ms),
+    do: assign_one_goal(current, assignment_duration_ms, nil)
+
+  defp assign_one_goal(current, assignment_duration_ms, cursor) do
+    case next_goal_task_candidate_page(current, cursor) do
+      [] ->
+        {:error, :no_assignment}
+
+      candidates ->
+        case assign_goal_candidate_page(candidates, current, assignment_duration_ms) do
+          {:ok, run} -> {:ok, run}
+          :skip -> assign_one_goal(current, assignment_duration_ms, List.last(candidates))
+          error -> error
+        end
+    end
+  end
+
+  defp next_goal_task_candidate_page(current, cursor) do
+    query =
+      from task in Task,
+        join: goal in Goal,
+        on: goal.id == task.goal_id,
+        join: revision in GoalRevision,
+        on: revision.goal_id == goal.id and revision.revision == goal.current_revision,
+        left_join: item in WorkItem,
+        on: item.id == task.work_item_id,
+        where: task.state == "queued" and not is_nil(task.goal_id),
+        where: task.inserted_at <= ^current,
+        where:
+          task.goal_revision == goal.current_revision and
+            ((goal.state == "draft" and task.purpose == "plan" and is_nil(task.work_item_id)) or
+               (goal.state == "active" and task.purpose != "plan" and
+                  not is_nil(task.work_item_id))),
+        where: task.attempt_generation <= task.max_run_attempts,
+        order_by: [asc: task.inserted_at, asc: task.id],
+        limit: ^@goal_assignment_scan_page_size,
+        select: %{
+          goal_id: task.goal_id,
+          task_id: task.id,
+          work_item_id: task.work_item_id,
+          inserted_at: task.inserted_at
+        }
+
+    query =
+      case cursor do
+        nil ->
+          query
+
+        %{inserted_at: inserted_at, task_id: task_id} ->
+          where(
+            query,
+            [task],
+            task.inserted_at > ^inserted_at or
+              (task.inserted_at == ^inserted_at and task.id > ^task_id)
+          )
+      end
+
+    Repo.all(query)
+  end
+
+  defp assign_goal_candidate_page([], _current, _assignment_duration_ms), do: :skip
+
+  defp assign_goal_candidate_page([candidate | remaining], current, assignment_duration_ms) do
+    case try_assign_goal_candidate(candidate, current, assignment_duration_ms) do
+      {:ok, run} -> {:ok, run}
+      :skip -> assign_goal_candidate_page(remaining, current, assignment_duration_ms)
+      error -> error
+    end
+  end
+
+  defp try_assign_goal_candidate(candidate, current, assignment_duration_ms) do
+    Repo.transaction(fn ->
+      with {:ok, _project, goal, item, revision, task} <-
+             try_lock_goal_assignment_chain(candidate),
+           true <- goal_task_assignable?(goal, task) and goal_work_item_owned?(goal, item, task),
+           %Runtime{} = runtime <- next_goal_runtime(task, revision, item, current),
+           true <- runtime_has_capacity?(runtime) do
+        {:assigned, assign_task_to_runtime!(task, runtime, item, current, assignment_duration_ms)}
+      else
+        _ -> :skip
+      end
+    end)
+    |> case do
+      {:ok, {:assigned, run}} -> {:ok, run}
+      {:ok, :skip} -> :skip
+      {:error, reason} when reason in [:no_assignment, :ownership_lost, :stale_revision] -> :skip
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp try_lock_goal_assignment_chain(candidate) do
+    with %Project{} = project <- try_lock_goal_project(candidate.goal_id),
+         true <- project.status == "active",
+         %Goal{} = goal <- try_lock_goal(candidate.goal_id),
+         item <- try_lock_goal_task_item(candidate.work_item_id),
+         true <- is_nil(item) or match?(%WorkItem{}, item),
+         %GoalRevision{} = revision <- try_lock_goal_revision(goal),
+         %Task{} = task <- try_lock_task(candidate.task_id) do
+      {:ok, project, goal, item, revision, task}
+    else
+      _ -> :skip
+    end
+  end
+
+  defp try_lock_goal_project(goal_id) do
+    with project_id when is_binary(project_id) <-
+           Repo.one(from(goal in Goal, where: goal.id == ^goal_id, select: goal.project_id)) do
+      Repo.one(
+        from(project in Project,
+          where: project.id == ^project_id,
+          lock: "FOR SHARE SKIP LOCKED"
+        )
+      )
+    end
+  end
+
+  defp try_lock_goal(goal_id),
+    do: Repo.one(from goal in Goal, where: goal.id == ^goal_id, lock: "FOR UPDATE SKIP LOCKED")
+
+  defp try_lock_work_item(work_item_id),
+    do:
+      Repo.one(
+        from item in WorkItem, where: item.id == ^work_item_id, lock: "FOR UPDATE SKIP LOCKED"
+      )
+
+  defp try_lock_goal_task_item(nil), do: nil
+  defp try_lock_goal_task_item(work_item_id), do: try_lock_work_item(work_item_id)
+
+  defp try_lock_goal_revision(goal) do
+    Repo.one(
+      from revision in GoalRevision,
+        where: revision.goal_id == ^goal.id and revision.revision == ^goal.current_revision,
+        lock: "FOR SHARE SKIP LOCKED"
+    )
+  end
+
+  defp try_lock_task(task_id),
+    do: Repo.one(from task in Task, where: task.id == ^task_id, lock: "FOR UPDATE SKIP LOCKED")
+
+  defp assign_one_legacy(current, assignment_duration_ms) do
+    Repo.transaction(fn ->
+      case next_assignable_legacy_task_and_runtime(current) do
+        nil ->
+          rollback(:no_assignment)
+
+        {task, runtime} ->
+          assign_task_to_runtime!(task, runtime, nil, current, assignment_duration_ms)
+      end
+    end)
+  end
+
+  defp assign_task_to_runtime!(task, runtime, item, current, assignment_duration_ms) do
+    generation = task.attempt_generation
+
+    task =
+      task
+      |> Task.changeset(%{
+        state: "assigned",
+        current_generation: generation,
+        waiting_transition_id: nil
+      })
+      |> stamp_update(current)
+      |> Repo.update!()
+
+    run =
+      %Run{}
+      |> Run.changeset(%{
+        task_id: task.id,
+        runtime_id: runtime.id,
+        generation: generation,
+        state: "assigned",
+        assigned_at: current,
+        assignment_expires_at: DateTime.add(current, assignment_duration_ms, :millisecond)
+      })
+      |> stamp_insert(current)
+      |> Repo.insert!()
+
+    reserve_requested_session!(task, runtime, item, run, current)
+  end
+
+  defp runtime_has_capacity?(runtime) do
+    Repo.aggregate(
+      from(run in Run,
+        where: run.runtime_id == ^runtime.id and run.state in ^@capacity_bearing_states
+      ),
+      :count
+    ) < runtime.capacity
+  end
+
+  defp next_assignable_legacy_task_and_runtime(current) do
     Repo.one(
       from task in Task,
         join: runtime in Runtime,
@@ -1070,7 +1266,13 @@ defmodule SymmetryControl.Orchestration do
           runtime.status == "online" and runtime.agent_profile == task.agent_profile and
             runtime.workspace == task.workspace and
             fragment("? @> ?", runtime.capabilities, task.required_capabilities),
-        where: task.state == "queued",
+        where: task.state == "queued" and is_nil(task.goal_id),
+        where:
+          fragment(
+            "?->>'supervisory_control' IS DISTINCT FROM 'true'",
+            task.required_capabilities
+          ) or
+            is_nil(runtime.harness_kind) or runtime.harness_kind == "generic",
         where:
           fragment(
             "? > CAST(? AS timestamp) - (? * INTERVAL '3 milliseconds')",
@@ -1090,6 +1292,424 @@ defmodule SymmetryControl.Orchestration do
         lock: "FOR UPDATE SKIP LOCKED",
         select: {task, runtime}
     )
+  end
+
+  defp next_goal_runtime(task, revision, item, current) do
+    case {goal_task_repository_resource_id(task, item),
+          allowed_runtime_ids(revision.execution_policy || %{}),
+          validation_runtime_ids_for_task(task)} do
+      {nil, _, _} ->
+        nil
+
+      {_, :invalid, _} ->
+        nil
+
+      {_, _, :invalid} ->
+        nil
+
+      {repository_resource_id, {:ok, allowed_runtime_ids}, {:ok, validation_runtime_ids}} ->
+        adapter_requirement = native_goal_adapter_requirement()
+        resume_requirement = native_goal_resume_requirement()
+
+        strict_budget_requirement =
+          strict_budget_capability_requirement(revision.execution_policy)
+
+        query =
+          from runtime in Runtime,
+            where:
+              runtime.status == "online" and runtime.agent_profile == ^task.agent_profile and
+                runtime.workspace == ^task.workspace and
+                runtime.repository_resource_id == ^repository_resource_id and
+                runtime.harness_kind in ^@native_harness_kinds,
+            where:
+              fragment("? @> ?", runtime.capabilities, type(^task.required_capabilities, :map)),
+            where: fragment("? @> ?", runtime.capabilities, type(^adapter_requirement, :map)),
+            where:
+              fragment("? @> ?", runtime.capabilities, type(^strict_budget_requirement, :map)),
+            where:
+              fragment(
+                "? > CAST(? AS timestamp) - (? * INTERVAL '3 milliseconds')",
+                runtime.last_heartbeat_at,
+                ^current,
+                runtime.heartbeat_interval_ms
+              ),
+            where:
+              fragment(
+                "(SELECT count(*) FROM runs AS active_run WHERE active_run.runtime_id = ? AND active_run.state = ANY(CAST(? AS text[]))) < ?",
+                runtime.id,
+                ^@capacity_bearing_states,
+                runtime.capacity
+              ),
+            order_by: [asc: runtime.inserted_at, asc: runtime.id],
+            limit: 1,
+            lock: "FOR UPDATE SKIP LOCKED"
+
+        query =
+          if allowed_runtime_ids == [],
+            do: query,
+            else: where(query, [runtime], runtime.id in ^allowed_runtime_ids)
+
+        query =
+          if is_nil(validation_runtime_ids),
+            do: query,
+            else: where(query, [runtime], runtime.id in ^validation_runtime_ids)
+
+        query =
+          if is_nil(task.requested_session_id),
+            do: query,
+            else:
+              where(
+                query,
+                [runtime],
+                fragment("? @> ?", runtime.capabilities, type(^resume_requirement, :map))
+              )
+
+        query = restrict_to_requested_session(query, task, item)
+
+        case Repo.one(query) do
+          nil ->
+            nil
+
+          runtime ->
+            if goal_runtime_matches?(runtime, task, revision, item), do: runtime, else: nil
+        end
+    end
+  end
+
+  # A retained native session is machine-local. Resume and handoff must not
+  # fall back to another runtime merely because it matches the task profile.
+  defp restrict_to_requested_session(query, %Task{requested_session_id: nil}, _item), do: query
+
+  defp restrict_to_requested_session(query, %Task{} = task, item) do
+    repository_resource_id =
+      goal_task_repository_resource_id(task, item) || rollback(:ownership_lost)
+
+    retained_runtime =
+      from session in HarnessSession,
+        join: runtime in Runtime,
+        on: runtime.id == session.runtime_id,
+        where:
+          session.id == ^task.requested_session_id and session.state == "available" and
+            is_nil(session.active_run_id) and
+            session.repository_resource_id == ^repository_resource_id and
+            session.machine_id == runtime.machine_id and
+            session.harness_kind == runtime.harness_kind and
+            session.harness_version == runtime.harness_version and
+            session.adapter_version == runtime.adapter_version,
+        select: session.runtime_id
+
+    from runtime in query,
+      where: runtime.id == subquery(retained_runtime)
+  end
+
+  # The scheduler reserves a retained session with its Run in one transaction.
+  # Goals.attach_harness_session/5 treats this matching busy binding as a replay.
+  defp reserve_requested_session!(
+         %Task{requested_session_id: nil},
+         _runtime,
+         _item,
+         run,
+         _current
+       ),
+       do: run
+
+  defp reserve_requested_session!(task, runtime, item, run, current) do
+    repository_resource_id =
+      goal_task_repository_resource_id(task, item) || rollback(:ownership_lost)
+
+    session =
+      Repo.one(
+        from session in HarnessSession,
+          where:
+            session.id == ^task.requested_session_id and session.runtime_id == ^runtime.id and
+              session.machine_id == ^runtime.machine_id and session.state == "available" and
+              is_nil(session.active_run_id) and
+              session.repository_resource_id == ^repository_resource_id and
+              session.harness_kind == ^runtime.harness_kind and
+              session.harness_version == ^runtime.harness_version and
+              session.adapter_version == ^runtime.adapter_version,
+          lock: "FOR UPDATE"
+      ) || rollback(:no_assignment)
+
+    session
+    |> HarnessSession.update_changeset(%{state: "busy", active_run_id: run.id})
+    |> stamp_update(current)
+    |> Repo.update!()
+
+    run
+    |> Ecto.Changeset.change(harness_session_id: session.id)
+    |> stamp_update(current)
+    |> Repo.update!()
+  end
+
+  defp release_reserved_session!(%Run{harness_session_id: nil}, _current), do: :ok
+
+  defp release_reserved_session!(run, current) do
+    session =
+      Repo.one(
+        from session in HarnessSession,
+          where: session.id == ^run.harness_session_id,
+          lock: "FOR UPDATE"
+      )
+
+    if session && session.state == "busy" && session.active_run_id == run.id do
+      session
+      |> HarnessSession.update_changeset(%{state: "available", active_run_id: nil})
+      |> stamp_update(current)
+      |> Repo.update!()
+    end
+  end
+
+  defp mark_reserved_session_unavailable!(%Run{harness_session_id: nil}, _current), do: :ok
+
+  defp mark_reserved_session_unavailable!(run, current) do
+    session =
+      Repo.one(
+        from session in HarnessSession,
+          where: session.id == ^run.harness_session_id,
+          lock: "FOR UPDATE"
+      )
+
+    if session && session.state == "busy" && session.active_run_id == run.id do
+      session
+      |> HarnessSession.update_changeset(%{state: "unavailable", active_run_id: nil})
+      |> stamp_update(current)
+      |> Repo.update!()
+    end
+  end
+
+  defp goal_task_current?(goal, task) do
+    task.goal_id == goal.id and task.goal_revision == goal.current_revision and
+      ((goal.state == "draft" and planning_task?(task)) or
+         (goal.state == "active" and task.purpose != "plan"))
+  end
+
+  defp planning_task?(%Task{purpose: "plan", work_item_id: nil, validation_of_task_id: nil}),
+    do: true
+
+  defp planning_task?(_task), do: false
+
+  defp goal_task_repository_resource_id(%Task{} = task, nil) do
+    if planning_task?(task) do
+      task.input
+      |> value(:subject)
+      |> value(:resource_id)
+      |> case do
+        resource_id when is_binary(resource_id) ->
+          if valid_uuid?(resource_id), do: resource_id, else: nil
+
+        _ ->
+          nil
+      end
+    end
+  end
+
+  defp goal_task_repository_resource_id(_task, %WorkItem{} = item),
+    do: item.repository_resource_id
+
+  defp goal_task_repository_resource_id(_task, _item), do: nil
+
+  defp goal_work_item_owned?(goal, nil, task) do
+    planning_task?(task) and task.goal_id == goal.id
+  end
+
+  defp goal_work_item_owned?(goal, item, task) do
+    task.goal_id == goal.id and task.work_item_id == item.id and item.goal_id == goal.id and
+      item.admitted_revision == task.goal_revision
+  end
+
+  defp goal_task_assignable?(goal, task) do
+    goal_task_current?(goal, task) and task.state == "queued" and
+      task.current_generation < task.attempt_generation and
+      task.attempt_generation <= task.max_run_attempts
+  end
+
+  defp goal_runtime_matches?(runtime, task, revision, item) do
+    runtime_matches_task?(runtime, task) and
+      goal_subject_matches_resource?(task, goal_task_repository_resource_id(task, item)) and
+      runtime_matches_goal_resource?(
+        runtime,
+        task.goal_id,
+        goal_task_repository_resource_id(task, item)
+      ) and
+      runtime_allowed_for_goal?(runtime, revision) and
+      validation_runtime_allowed?(runtime, task) and
+      native_goal_adapter_capable?(runtime, task, revision)
+  end
+
+  # Validation profile authorization is frozen into the admitted ContextSnapshot.
+  # Never consult the live profile registry while assigning or claiming a run.
+  defp validation_runtime_allowed?(runtime, task) do
+    case validation_runtime_ids_for_task(task) do
+      {:ok, nil} -> true
+      {:ok, runtime_ids} -> runtime.id in runtime_ids
+      :invalid -> false
+    end
+  end
+
+  defp validation_runtime_ids_for_task(%Task{purpose: "validate"} = task) do
+    snapshot =
+      Repo.one(
+        from snapshot in ContextSnapshot,
+          where:
+            snapshot.id == ^task.context_snapshot_id and snapshot.goal_id == ^task.goal_id and
+              snapshot.goal_revision == ^task.goal_revision and
+              snapshot.work_item_id == ^task.work_item_id
+      )
+
+    with %ContextSnapshot{} = snapshot <- snapshot,
+         work_contract when is_map(work_contract) <-
+           value(snapshot.payload || %{}, :work_contract),
+         bindings when is_list(bindings) <-
+           value(work_contract, :validation_bindings),
+         {:ok, runtime_ids} <- validation_binding_runtime_ids(bindings) do
+      {:ok, runtime_ids}
+    else
+      _ -> :invalid
+    end
+  end
+
+  defp validation_runtime_ids_for_task(_task), do: {:ok, nil}
+
+  defp validation_binding_runtime_ids([]), do: {:ok, nil}
+
+  defp validation_binding_runtime_ids(bindings),
+    do: intersect_validation_binding_runtime_ids(bindings)
+
+  defp intersect_validation_binding_runtime_ids(bindings) do
+    with true <- Enum.all?(bindings, &valid_validation_binding?/1),
+         identities <- Enum.map(bindings, &{value(&1, :profile_name), value(&1, :kind)}),
+         true <- length(identities) == MapSet.size(MapSet.new(identities)) do
+      bindings
+      |> Enum.map(&(value(&1, :allowed_runtime_ids) |> MapSet.new()))
+      |> Enum.reduce_while(nil, fn runtime_ids, intersection ->
+        intersection =
+          if is_nil(intersection),
+            do: runtime_ids,
+            else: MapSet.intersection(intersection, runtime_ids)
+
+        if MapSet.size(intersection) == 0,
+          do: {:halt, :invalid},
+          else: {:cont, intersection}
+      end)
+      |> case do
+        :invalid -> :invalid
+        nil -> :invalid
+        runtime_ids -> {:ok, MapSet.to_list(runtime_ids)}
+      end
+    else
+      _ -> :invalid
+    end
+  end
+
+  defp valid_validation_binding?(binding) when is_map(binding) do
+    runtime_ids = value(binding, :allowed_runtime_ids)
+
+    exact_map_keys?(binding, ["profile_name", "kind", "profile_digest", "allowed_runtime_ids"]) and
+      is_binary(value(binding, :profile_name)) and
+      Regex.match?(@validation_profile_name, value(binding, :profile_name)) and
+      value(binding, :kind) in ["check", "review"] and
+      is_binary(value(binding, :profile_digest)) and
+      Regex.match?(@sha256, value(binding, :profile_digest)) and
+      is_list(runtime_ids) and runtime_ids != [] and
+      Enum.all?(runtime_ids, &canonical_runtime_uuid?/1) and
+      length(runtime_ids) == MapSet.size(MapSet.new(runtime_ids))
+  end
+
+  defp valid_validation_binding?(_binding), do: false
+
+  defp canonical_runtime_uuid?(value) when is_binary(value) do
+    match?({:ok, ^value}, Ecto.UUID.cast(value))
+  end
+
+  defp canonical_runtime_uuid?(_value), do: false
+
+  defp goal_subject_matches_resource?(%Task{} = task, repository_resource_id)
+       when is_binary(repository_resource_id) do
+    subject = value(task.input || %{}, :subject)
+    is_map(subject) and value(subject, :resource_id) == repository_resource_id
+  end
+
+  defp goal_subject_matches_resource?(_task, _repository_resource_id), do: false
+
+  defp runtime_matches_goal_resource?(runtime, goal_id, repository_resource_id)
+       when is_binary(goal_id) and is_binary(repository_resource_id) do
+    runtime.repository_resource_id == repository_resource_id and
+      Repo.exists?(
+        from repository in ProjectResource,
+          join: goal in Goal,
+          on: goal.project_id == repository.project_id,
+          where:
+            repository.id == ^repository_resource_id and repository.kind == "repository" and
+              goal.id == ^goal_id
+      )
+  end
+
+  defp runtime_matches_goal_resource?(_runtime, _goal_id, _repository_resource_id), do: false
+
+  defp runtime_allowed_for_goal?(runtime, revision) do
+    case allowed_runtime_ids(revision.execution_policy || %{}) do
+      {:ok, []} -> true
+      {:ok, allowed_runtime_ids} -> runtime.id in allowed_runtime_ids
+      :invalid -> false
+    end
+  end
+
+  defp allowed_runtime_ids(policy) do
+    case value(policy, :allowed_runtime_ids, []) do
+      ids when is_list(ids) ->
+        if Enum.all?(ids, &valid_uuid?/1), do: {:ok, ids}, else: :invalid
+
+      _ ->
+        :invalid
+    end
+  end
+
+  defp native_goal_adapter_requirement do
+    %{
+      "adapter" => %{
+        "operations" => %{
+          "start" => true,
+          "events" => true,
+          "cancel" => true,
+          "pause" => "unsupported"
+        }
+      }
+    }
+  end
+
+  defp native_goal_resume_requirement do
+    %{
+      "adapter" => %{
+        "operations" => %{
+          "resume" => true
+        }
+      }
+    }
+  end
+
+  defp native_goal_adapter_capable?(runtime, task, revision) do
+    adapter = value(runtime.capabilities, :adapter)
+    operations = value(adapter, :operations)
+    session_mode = value(task.input || %{}, :session_mode, "fresh")
+
+    valid_runtime_metadata?(runtime) and is_map(adapter) and
+      adapter_matches_runtime_metadata?(adapter, runtime) and
+      valid_adapter_operations?(operations) and
+      value(operations, :start) == true and value(operations, :events) == true and
+      value(operations, :cancel) == true and value(operations, :pause) == "unsupported" and
+      value(runtime.capabilities, :supervisory_control, false) != true and
+      (value(revision.execution_policy || %{}, :budget_mode, "soft") != "strict" or
+         value(operations, :hard_cost_limit) == true) and
+      (session_mode not in ["resume", "handoff"] or value(operations, :resume) == true)
+  end
+
+  defp strict_budget_capability_requirement(execution_policy) do
+    if value(execution_policy || %{}, :budget_mode, "soft") == "strict" do
+      %{"adapter" => %{"operations" => %{"hard_cost_limit" => true}}}
+    else
+      %{}
+    end
   end
 
   @spec assign_all(keyword()) :: {:ok, [Run.t()]}
@@ -1129,61 +1749,62 @@ defmodule SymmetryControl.Orchestration do
 
       result =
         Repo.transaction(fn ->
-          {task, run, runtime} = lock_chain(run_id)
+          {task, run, runtime, goal, item} = lock_claim_chain(run_id)
           request_runtime_id = value(request, :runtime_id)
           request_epoch = value(request, :runtime_epoch)
           request_generation = value(request, :generation)
           request_claim_id = value(request, :claim_id)
 
-          cond do
-            run.runtime_id != request_runtime_id or runtime.id != request_runtime_id ->
-              rollback(:ownership_lost)
+          if replayed_claim?(task, run, runtime, request, current) do
+            run
+          else
+            ensure_requested_session_claim_binding!(task, runtime, item, run)
+            ensure_new_goal_claim_authority!(goal, item, task, runtime)
 
-            runtime.connection_epoch != request_epoch or
-              task.current_generation != request_generation or
-                run.generation != request_generation ->
-              rollback(:ownership_lost)
+            cond do
+              run.runtime_id != request_runtime_id or runtime.id != request_runtime_id ->
+                rollback(:ownership_lost)
 
-            not runtime_matches_task?(runtime, task) ->
-              rollback(:ownership_lost)
+              runtime.connection_epoch != request_epoch or
+                task.current_generation != request_generation or
+                  run.generation != request_generation ->
+                rollback(:ownership_lost)
 
-            run.state in ["claimed", "cancelling"] and run.claim_id == request_claim_id and
-              run.claimed_runtime_epoch == request_epoch and
-              not is_nil(run.lease_expires_at) and
-                DateTime.compare(run.lease_expires_at, current) == :gt ->
-              run
+              not runtime_matches_task?(runtime, task) ->
+                rollback(:ownership_lost)
 
-            run.state != "assigned" ->
-              rollback(:ownership_lost)
+              run.state != "assigned" ->
+                rollback(:ownership_lost)
 
-            DateTime.compare(run.assignment_expires_at, current) != :gt ->
-              rollback(:assignment_expired)
+              DateTime.compare(run.assignment_expires_at, current) != :gt ->
+                rollback(:assignment_expired)
 
-            task.state != "assigned" ->
-              rollback(:ownership_lost)
+              task.state != "assigned" ->
+                rollback(:ownership_lost)
 
-            true ->
-              lease_expires_at = DateTime.add(current, lease_duration_ms, :millisecond)
+              true ->
+                lease_expires_at = DateTime.add(current, lease_duration_ms, :millisecond)
 
-              run =
-                run
-                |> Run.changeset(%{
-                  state: "claimed",
-                  claimed_runtime_epoch: request_epoch,
-                  claim_id: request_claim_id,
-                  lease_token: Ecto.UUID.generate(),
-                  claimed_at: current,
-                  lease_expires_at: lease_expires_at
-                })
+                run =
+                  run
+                  |> Run.changeset(%{
+                    state: "claimed",
+                    claimed_runtime_epoch: request_epoch,
+                    claim_id: request_claim_id,
+                    lease_token: Ecto.UUID.generate(),
+                    claimed_at: current,
+                    lease_expires_at: lease_expires_at
+                  })
+                  |> stamp_update(current)
+                  |> Repo.update!()
+
+                task
+                |> Task.changeset(%{state: "claimed"})
                 |> stamp_update(current)
                 |> Repo.update!()
 
-              task
-              |> Task.changeset(%{state: "claimed"})
-              |> stamp_update(current)
-              |> Repo.update!()
-
-              {:created, run}
+                {:created, run}
+            end
           end
         end)
         |> case do
@@ -1229,7 +1850,7 @@ defmodule SymmetryControl.Orchestration do
       current = now(opts)
 
       Repo.transaction(fn ->
-        {task, run, runtime} = lock_chain(run_id)
+        {task, run, runtime} = lock_execution_chain(run_id)
         if run.state == "cancelling", do: rollback(:ownership_lost)
         ensure_fence!(task, run, runtime, fence, current)
 
@@ -1259,14 +1880,8 @@ defmodule SymmetryControl.Orchestration do
       current = now(opts)
 
       Repo.transaction(fn ->
-        {task, run, runtime} = lock_chain(run_id)
+        {task, run, runtime, goal, item} = lock_goal_chain(run_id)
         ensure_fence!(task, run, runtime, fence, current)
-
-        Enum.each(events, fn event ->
-          if value(event, :kind) == "waiting_for_input" do
-            validate_decision_packet!(task, value(event, :payload, %{}))
-          end
-        end)
 
         event_ids = Enum.map(events, &value(&1, :event_id))
 
@@ -1277,43 +1892,54 @@ defmodule SymmetryControl.Orchestration do
           )
           |> Map.new(&{&1.event_id, &1})
 
-        {stored, _events_by_id} =
-          Enum.map_reduce(events, existing_events, fn event, events_by_id ->
-            event_id = value(event, :event_id)
-            body = event_body(event)
-            {event_hash, event_hash_version} = RequestHash.write(body)
+        case event_replay(events, existing_events) do
+          {:replayed, stored} ->
+            stored
 
-            case Map.get(events_by_id, event_id) do
-              nil ->
-                stored_event =
-                  %RunEvent{}
-                  |> RunEvent.changeset(%{
-                    run_id: run.id,
-                    event_id: event_id,
-                    request_hash: event_hash,
-                    request_hash_version: event_hash_version,
-                    sequence: value(event, :sequence),
-                    kind: value(event, :kind),
-                    payload: value(event, :payload, %{}),
-                    occurred_at: value(event, :occurred_at, current)
-                  })
-                  |> stamp_insert(current)
-                  |> Repo.insert!()
+          :missing ->
+            ensure_current_goal_execution_if_present!(goal, item, task)
 
-                {stored_event, Map.put(events_by_id, event_id, stored_event)}
+            Enum.each(events, fn event ->
+              if value(event, :kind) == "waiting_for_input" do
+                validate_decision_packet!(task, value(event, :payload, %{}))
+              end
+            end)
 
-              %RunEvent{} = existing ->
-                if RequestHash.matches?(
-                     existing.request_hash,
-                     existing.request_hash_version,
-                     body
-                   ),
-                   do: {existing, events_by_id},
-                   else: rollback(:idempotency_conflict)
-            end
-          end)
+            {stored, _events_by_id} =
+              Enum.map_reduce(events, existing_events, fn event, events_by_id ->
+                event_id = value(event, :event_id)
+                body = event_body(event)
+                {event_hash, event_hash_version} = RequestHash.write(body)
 
-        stored
+                case Map.get(events_by_id, event_id) do
+                  nil ->
+                    stored_event =
+                      %RunEvent{}
+                      |> RunEvent.changeset(%{
+                        run_id: run.id,
+                        event_id: event_id,
+                        request_hash: event_hash,
+                        request_hash_version: event_hash_version,
+                        sequence: value(event, :sequence),
+                        kind: value(event, :kind),
+                        payload: value(event, :payload, %{}),
+                        occurred_at: value(event, :occurred_at, current)
+                      })
+                      |> stamp_insert(current)
+                      |> Repo.insert!()
+
+                    {stored_event, Map.put(events_by_id, event_id, stored_event)}
+
+                  %RunEvent{} = existing ->
+                    {existing, events_by_id}
+                end
+              end)
+
+            stored
+
+          :conflict ->
+            rollback(:idempotency_conflict)
+        end
       end)
     end
   end
@@ -1334,10 +1960,11 @@ defmodule SymmetryControl.Orchestration do
       current = now(opts)
       body = %{state: target_state, payload: payload}
       {body_hash, body_hash_version} = RequestHash.write(body)
+      notify? = not Repo.in_transaction?()
 
       result =
         Repo.transaction(fn ->
-          {task, run, runtime} = lock_chain(run_id)
+          {task, run, runtime, goal, item} = lock_transition_chain(run_id, target_state)
           ensure_transition_static_fence!(task, run, runtime, fence, target_state)
 
           case Repo.get_by(RunTransition, run_id: run.id, transition_id: transition_id) do
@@ -1351,6 +1978,7 @@ defmodule SymmetryControl.Orchestration do
                  else: rollback(:idempotency_conflict)
 
             nil ->
+              ensure_current_goal_transition_authority!(goal, item, task, target_state)
               ensure_cancelled_transition_authority!(run, target_state)
               ensure_transition_fence!(task, run, runtime, fence, target_state, current)
               if target_state == "waiting_for_input", do: validate_decision_packet!(task, payload)
@@ -1364,19 +1992,21 @@ defmodule SymmetryControl.Orchestration do
                  transition_id,
                  body_hash,
                  body_hash_version,
-                 current
+                 current,
+                 goal
                )}
           end
         end)
 
       case result do
-        {:ok, {:created, run}} ->
+        {:ok, {:created, {run, receipt}}} ->
           emit([:run, :transition], %{
             run_id: run.id,
             generation: run.generation,
             state: target_state
           })
 
+          notify_goal_task_terminal(receipt, opts, notify?)
           {:ok, run}
 
         {:ok, {:replayed, run}} ->
@@ -1403,9 +2033,12 @@ defmodule SymmetryControl.Orchestration do
       normalized_payload = normalize_command_payload(kind, payload)
       command_hash = command_request_hash(kind, normalized_payload, opts)
       current = now(opts)
+      notify? = not Repo.in_transaction?()
 
       Repo.transaction(fn ->
         task = lock_task(task_id)
+
+        if not is_nil(task.goal_id), do: rollback(:goal_authority_required)
 
         create_or_replay_locked_command!(
           task,
@@ -1418,13 +2051,88 @@ defmodule SymmetryControl.Orchestration do
         )
       end)
       |> case do
-        {:ok, {command, disposition}} -> {:ok, command, disposition}
-        error -> error
+        {:ok, {command, disposition, receipt}} ->
+          notify_goal_task_terminal(receipt, opts, notify?)
+          {:ok, command, disposition}
+
+        error ->
+          error
       end
     end
   end
 
   def create_command(_, _, _, _, _), do: {:error, :invalid_request}
+
+  @doc false
+  @spec create_goal_control_command(
+          Ecto.UUID.t(),
+          pos_integer(),
+          Ecto.UUID.t(),
+          Ecto.UUID.t(),
+          String.t(),
+          map(),
+          String.t(),
+          keyword()
+        ) :: {:ok, Command.t(), :created | :replayed} | {:error, atom()}
+  def create_goal_control_command(
+        goal_id,
+        revision,
+        action_id,
+        task_id,
+        kind,
+        payload,
+        idempotency_key,
+        opts \\ []
+      )
+
+  def create_goal_control_command(
+        goal_id,
+        revision,
+        action_id,
+        task_id,
+        kind,
+        payload,
+        idempotency_key,
+        opts
+      )
+      when is_binary(goal_id) and is_integer(revision) and revision > 0 and is_binary(action_id) and
+             is_binary(task_id) and kind in ["pause", "cancel"] and is_map(payload) and
+             is_binary(idempotency_key) and byte_size(idempotency_key) > 0 and is_list(opts) do
+    if not (valid_uuid?(goal_id) and valid_uuid?(action_id) and valid_uuid?(task_id) and
+              valid_command_request?(kind, payload) and
+              idempotency_key == goal_control_idempotency_key(action_id, kind, task_id)) do
+      {:error, :invalid_request}
+    else
+      command_hash = command_request_hash(kind, payload, opts)
+      current = now(opts)
+
+      Repo.transaction(fn ->
+        goal = lock_goal(goal_id)
+        ensure_current_goal_control_action!(goal, revision, action_id, kind)
+        untrusted_task = Repo.get(Task, task_id) || rollback(:not_found)
+        item = if untrusted_task.work_item_id, do: lock_work_item(untrusted_task.work_item_id)
+        task = lock_task(task_id)
+
+        ensure_goal_work_item_ownership!(goal, item, task)
+
+        create_or_replay_locked_command!(
+          task,
+          kind,
+          payload,
+          idempotency_key,
+          command_hash,
+          current,
+          opts
+        )
+      end)
+      |> case do
+        {:ok, {command, disposition, _receipt}} -> {:ok, command, disposition}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  def create_goal_control_command(_, _, _, _, _, _, _, _), do: {:error, :invalid_request}
 
   @spec request_cancel(Ecto.UUID.t(), keyword()) ::
           {:ok, Task.t(), Command.t() | nil} | {:error, atom()}
@@ -1440,17 +2148,20 @@ defmodule SymmetryControl.Orchestration do
 
   defp request_task_cancel(task_id, opts) do
     current = now(opts)
+    notify? = not Repo.in_transaction?()
 
     Repo.transaction(fn ->
       task = lock_task(task_id)
 
+      if not is_nil(task.goal_id), do: rollback(:goal_authority_required)
+
       if task.state in ["completed", "failed"] do
-        {task, nil}
+        {task, nil, nil}
       else
         idempotency_key = legacy_cancel_idempotency_key(task)
         command_hash = command_request_hash("cancel", %{}, opts)
 
-        {command, _disposition} =
+        {command, _disposition, receipt} =
           create_or_replay_locked_command!(
             task,
             "cancel",
@@ -1462,12 +2173,16 @@ defmodule SymmetryControl.Orchestration do
           )
 
         task = lock_task(task.id)
-        {task, command}
+        {task, command, receipt}
       end
     end)
     |> case do
-      {:ok, {task, command}} -> {:ok, task, command}
-      error -> error
+      {:ok, {task, command, receipt}} ->
+        notify_goal_task_terminal(receipt, opts, notify?)
+        {:ok, task, command}
+
+      error ->
+        error
     end
   end
 
@@ -1500,6 +2215,8 @@ defmodule SymmetryControl.Orchestration do
       Repo.transaction(fn ->
         task = lock_task(task_id)
 
+        if not is_nil(task.goal_id), do: rollback(:goal_authority_required)
+
         task_attrs =
           if value(task.required_capabilities, :supervisory_control, false) == true,
             do:
@@ -1522,44 +2239,51 @@ defmodule SymmetryControl.Orchestration do
             ensure_expected_generation!(task, Keyword.get(opts, :expected_generation))
             if task.state not in ["failed", "cancelled"], do: rollback(:state_conflict)
 
-            run =
-              if task.current_generation == task.attempt_generation,
-                do: lock_current_run(task),
-                else: nil
+            next_generation = next_retry_generation(task)
 
-            command =
-              insert_command!(
-                task.id,
-                run && run.id,
-                run && run.generation,
-                "retry",
-                payload,
-                idempotency_key,
-                command_hash,
-                state: "applied",
-                applied_at: current,
-                now: current
-              )
+            if goal_attempt_limit_exhausted?(task, next_generation) do
+              {:attempt_limit, fail_task_for_attempt_limit!(task, current)}
+            else
+              run =
+                if task.current_generation == task.attempt_generation,
+                  do: lock_current_run(task),
+                  else: nil
 
-            task =
-              task
-              |> Task.changeset(
-                Map.merge(task_attrs, %{
-                  state: "queued",
-                  attempt_generation: task.attempt_generation + 1,
-                  waiting_transition_id: nil,
-                  result: nil,
-                  failure: nil
-                })
-              )
-              |> stamp_update(current)
-              |> Repo.update!()
+              command =
+                insert_command!(
+                  task.id,
+                  run && run.id,
+                  run && run.generation,
+                  "retry",
+                  payload,
+                  idempotency_key,
+                  command_hash,
+                  state: "applied",
+                  applied_at: current,
+                  now: current
+                )
 
-            {task, command, :created}
+              task =
+                task
+                |> Task.changeset(
+                  Map.merge(task_attrs, %{
+                    state: "queued",
+                    attempt_generation: next_generation,
+                    waiting_transition_id: nil,
+                    result: nil,
+                    failure: nil
+                  })
+                )
+                |> stamp_update(current)
+                |> Repo.update!()
+
+              {task, command, :created}
+            end
         end
       end)
       |> case do
         {:ok, {task, command, disposition}} -> {:ok, task, command, disposition}
+        {:ok, {:attempt_limit, _task}} -> {:error, :attempt_limit}
         error -> error
       end
     end
@@ -1579,7 +2303,7 @@ defmodule SymmetryControl.Orchestration do
     case lock_task_command(task.id, idempotency_key) do
       %Command{} = command ->
         ensure_command_replay!(command, kind, payload, opts)
-        {command, :replayed}
+        {command, :replayed, nil}
 
       nil ->
         create_new_command!(task, kind, payload, idempotency_key, command_hash, current, opts)
@@ -1603,7 +2327,7 @@ defmodule SymmetryControl.Orchestration do
         |> stamp_update(current)
         |> Repo.update!()
 
-        {command, :created}
+        {command, :created, nil}
 
       "assigned" ->
         run = lock_current_run(task)
@@ -1622,17 +2346,21 @@ defmodule SymmetryControl.Orchestration do
             now: current
           )
 
-        run
-        |> Run.changeset(%{state: "cancelled"})
-        |> stamp_update(current)
-        |> Repo.update!()
+        run =
+          run
+          |> Run.changeset(%{state: "cancelled"})
+          |> stamp_update(current)
+          |> Repo.update!()
+
+        release_reserved_session!(run, current)
 
         task
         |> Task.changeset(%{state: "cancelled", waiting_transition_id: nil})
         |> stamp_update(current)
         |> Repo.update!()
 
-        {command, :created}
+        receipt = enqueue_goal_task_terminal!(task, run, "cancelled", now: current)
+        {command, :created, receipt}
 
       state when state in ["claimed", "running", "paused", "waiting_for_input"] ->
         run = lock_current_run(task)
@@ -1661,7 +2389,7 @@ defmodule SymmetryControl.Orchestration do
         |> stamp_update(current)
         |> Repo.update!()
 
-        {command, :created}
+        {command, :created, nil}
 
       _ ->
         rollback(:state_conflict)
@@ -1711,7 +2439,7 @@ defmodule SymmetryControl.Orchestration do
             now: current
           )
 
-        {command, :created}
+        {command, :created, nil}
 
       _command ->
         rollback(:state_conflict)
@@ -1725,8 +2453,9 @@ defmodule SymmetryControl.Orchestration do
     run = lock_current_run(task)
     runtime = lock_runtime(run.runtime_id)
 
-    unless value(runtime.capabilities, :supervisory_control, false) == true,
-      do: rollback(:unsupported_control)
+    unless legacy_supervisory_runtime?(runtime) and
+             value(runtime.capabilities, :supervisory_control, false) == true,
+           do: rollback(:unsupported_control)
 
     allowed? =
       case kind do
@@ -1758,7 +2487,7 @@ defmodule SymmetryControl.Orchestration do
         now: current
       )
 
-    {command, :created}
+    {command, :created, nil}
   end
 
   defp insert_command!(
@@ -1979,6 +2708,7 @@ defmodule SymmetryControl.Orchestration do
         }
   def expire(opts \\ []) do
     current = now(opts)
+    notify? = not Repo.in_transaction?()
 
     run_ids =
       Repo.all(
@@ -1993,8 +2723,9 @@ defmodule SymmetryControl.Orchestration do
     expired_runs =
       Enum.count(run_ids, fn run_id ->
         case expire_run(run_id, current) do
-          {:ok, metadata} ->
+          {:ok, {metadata, receipt}} ->
             emit([:run, :expired], metadata)
+            notify_goal_task_terminal(receipt, opts, notify?)
             true
 
           :not_expired ->
@@ -2019,6 +2750,7 @@ defmodule SymmetryControl.Orchestration do
 
            if not expired?, do: rollback(:not_expired)
 
+           assigned_before_expiry? = run.state == "assigned"
            stopped? = run.state == "paused" or pending_pause?(run.id)
 
            terminal_state =
@@ -2028,35 +2760,53 @@ defmodule SymmetryControl.Orchestration do
                true -> "expired"
              end
 
+           retryable_expiration? = terminal_state == "expired"
+
+           attempt_limit_exhausted? =
+             retryable_expiration? and goal_attempt_limit_exhausted?(task, run.generation + 1)
+
+           persisted_run_state =
+             if attempt_limit_exhausted?, do: "failed", else: terminal_state
+
            failure =
-             if stopped?,
-               do: %{
-                 "reason" => "supervised_worker_lost",
-                 "message" =>
-                   "Paused worker or pending pause lost its lease; explicit retry is required."
-               }
+             cond do
+               stopped? ->
+                 %{
+                   "reason" => "supervised_worker_lost",
+                   "message" =>
+                     "Paused worker or pending pause lost its lease; explicit retry is required."
+                 }
+
+               attempt_limit_exhausted? ->
+                 lease_expired_failure()
+
+               true ->
+                 nil
+             end
 
            reject_pending_commands!(task, run.id, current)
 
-           run
-           |> Run.changeset(%{state: terminal_state, failure: failure})
-           |> stamp_update(current)
-           |> Repo.update!()
+           run =
+             run
+             |> Run.changeset(%{state: persisted_run_state, failure: failure})
+             |> stamp_update(current)
+             |> Repo.update!()
+
+           if assigned_before_expiry? do
+             release_reserved_session!(run, current)
+           else
+             mark_reserved_session_unavailable!(run, current)
+           end
 
            if task.current_generation == run.generation do
-             task_state =
-               if terminal_state in ["cancelled", "failed"], do: terminal_state, else: "queued"
-
              task_attrs =
-               if task_state == "queued" do
-                 %{
-                   state: task_state,
-                   attempt_generation: task.current_generation + 1,
-                   waiting_transition_id: nil
-                 }
-               else
-                 %{state: task_state, waiting_transition_id: nil, failure: failure}
-               end
+               task_attrs_for_expiry(
+                 task,
+                 run,
+                 retryable_expiration?,
+                 persisted_run_state,
+                 failure
+               )
 
              task
              |> Task.changeset(task_attrs)
@@ -2064,9 +2814,33 @@ defmodule SymmetryControl.Orchestration do
              |> Repo.update!()
            end
 
-           %{run_id: run.id, generation: run.generation, state: terminal_state}
+           metadata = %{run_id: run.id, generation: run.generation, state: persisted_run_state}
+
+           receipt =
+             cond do
+               attempt_limit_exhausted? ->
+                 settlement_opts =
+                   if is_nil(run.lease_expires_at) do
+                     [now: current]
+                   else
+                     [
+                       now: current,
+                       scheduled_at: DateTime.add(current, @terminal_grace_ms, :millisecond)
+                     ]
+                   end
+
+                 enqueue_goal_task_terminal!(task, run, persisted_run_state, settlement_opts)
+
+               not retryable_expiration? ->
+                 enqueue_goal_task_terminal!(task, run, persisted_run_state, now: current)
+
+               true ->
+                 nil
+             end
+
+           {metadata, receipt}
          end) do
-      {:ok, metadata} -> {:ok, metadata}
+      {:ok, result} -> {:ok, result}
       _ -> :not_expired
     end
   end
@@ -2115,17 +2889,19 @@ defmodule SymmetryControl.Orchestration do
          transition_id,
          body_hash,
          body_hash_version,
-         current
+         current,
+         goal
        ) do
-    validate_transition!(run.state, target_state)
+    validate_transition!(transition_origin_state(run), target_state)
     ensure_expired_run_can_settle_task!(task, run)
-    apply_supervisory_transition!(task, run, target_state, payload, current)
+    apply_supervisory_transition!(task, run, target_state, payload, current, goal)
     if target_state in @terminal_targets, do: reject_pending_commands!(task, run.id, current)
 
     run_attrs =
       case target_state do
-        "completed" -> %{state: target_state, result: payload}
+        "completed" -> %{state: target_state, result: payload, failure: nil}
         "failed" -> %{state: target_state, failure: payload}
+        "cancelled" -> %{state: target_state, result: nil, failure: nil}
         _ -> %{state: target_state}
       end
 
@@ -2135,6 +2911,7 @@ defmodule SymmetryControl.Orchestration do
       |> restore_expired_attempt_generation(run)
 
     run = run |> Run.changeset(run_attrs) |> stamp_update(current) |> Repo.update!()
+    if target_state in @terminal_targets, do: mark_reserved_session_unavailable!(run, current)
     task |> Task.changeset(task_attrs) |> stamp_update(current) |> Repo.update!()
 
     %RunTransition{}
@@ -2149,7 +2926,8 @@ defmodule SymmetryControl.Orchestration do
     |> stamp_insert(current)
     |> Repo.insert!()
 
-    run
+    receipt = enqueue_goal_task_terminal!(task, run, target_state, now: current)
+    {run, receipt}
   end
 
   defp task_attrs_for_transition("completed", payload, _transition_id),
@@ -2158,11 +2936,85 @@ defmodule SymmetryControl.Orchestration do
   defp task_attrs_for_transition("failed", payload, _transition_id),
     do: %{state: "failed", waiting_transition_id: nil, result: nil, failure: payload}
 
+  defp task_attrs_for_transition("cancelled", _payload, _transition_id),
+    do: %{state: "cancelled", waiting_transition_id: nil, result: nil, failure: nil}
+
   defp task_attrs_for_transition("waiting_for_input", _payload, transition_id),
     do: %{state: "waiting_for_input", waiting_transition_id: transition_id}
 
   defp task_attrs_for_transition(target_state, _payload, _transition_id),
     do: %{state: target_state, waiting_transition_id: nil}
+
+  defp task_attrs_for_expiry(task, run, true, _persisted_run_state, _failure) do
+    next_generation = run.generation + 1
+
+    if goal_attempt_limit_exhausted?(task, next_generation) do
+      %{
+        state: "failed",
+        attempt_generation: run.generation,
+        waiting_transition_id: nil,
+        result: nil,
+        failure: attempt_limit_failure(task)
+      }
+    else
+      %{
+        state: "queued",
+        attempt_generation: next_generation,
+        waiting_transition_id: nil
+      }
+    end
+  end
+
+  defp task_attrs_for_expiry(_task, _run, false, terminal_state, failure) do
+    %{state: terminal_state, waiting_transition_id: nil, failure: failure}
+  end
+
+  defp next_retry_generation(%Task{goal_id: nil, attempt_generation: generation}),
+    do: generation + 1
+
+  defp next_retry_generation(%Task{} = task) do
+    case Repo.one(from run in Run, where: run.task_id == ^task.id, select: max(run.generation)) do
+      nil -> 1
+      generation -> generation + 1
+    end
+  end
+
+  defp goal_attempt_limit_exhausted?(
+         %Task{goal_id: goal_id, max_run_attempts: maximum},
+         generation
+       )
+       when not is_nil(goal_id) and is_integer(maximum),
+       do: generation > maximum
+
+  defp goal_attempt_limit_exhausted?(_task, _generation), do: false
+
+  defp fail_task_for_attempt_limit!(task, current) do
+    task
+    |> Task.changeset(%{
+      state: "failed",
+      attempt_generation: min(task.attempt_generation, task.max_run_attempts),
+      waiting_transition_id: nil,
+      result: nil,
+      failure: attempt_limit_failure(task)
+    })
+    |> stamp_update(current)
+    |> Repo.update!()
+  end
+
+  defp attempt_limit_failure(task) do
+    %{
+      "reason" => "attempt_limit",
+      "message" => "The admitted run attempt limit has been exhausted.",
+      "max_run_attempts" => task.max_run_attempts
+    }
+  end
+
+  defp lease_expired_failure do
+    %{
+      "reason" => "lease_expired",
+      "message" => "Worker lease expired before a terminal delivery was accepted."
+    }
+  end
 
   defp restore_expired_attempt_generation(task_attrs, %Run{
          state: "expired",
@@ -2170,15 +3022,97 @@ defmodule SymmetryControl.Orchestration do
        }),
        do: Map.put(task_attrs, :attempt_generation, generation)
 
+  defp restore_expired_attempt_generation(task_attrs, %Run{
+         state: "failed",
+         failure: %{"reason" => "lease_expired"},
+         generation: generation
+       }),
+       do: Map.put(task_attrs, :attempt_generation, generation)
+
   defp restore_expired_attempt_generation(task_attrs, _run), do: task_attrs
+
+  defp enqueue_goal_task_terminal!(task, run, terminal_state, opts)
+       when terminal_state in @terminal_states do
+    case goal_task_terminal_receipt(task, run) do
+      nil ->
+        nil
+
+      receipt ->
+        receipt
+        |> settlement_job_args()
+        |> SettleTaskWorker.new(Keyword.take(opts, [:scheduled_at]))
+        |> Oban.insert!()
+
+        receipt
+    end
+  end
+
+  defp enqueue_goal_task_terminal!(_task, _run, _state, _opts), do: nil
+
+  defp goal_task_terminal_receipt(%Task{goal_id: goal_id}, %Run{} = run)
+       when not is_nil(goal_id) do
+    %{task_id: run.task_id, run_id: run.id, generation: run.generation}
+  end
+
+  defp goal_task_terminal_receipt(_task, _run), do: nil
+
+  defp settlement_job_args(%{task_id: task_id, run_id: run_id, generation: generation}) do
+    %{"task_id" => task_id, "run_id" => run_id, "generation" => generation}
+  end
+
+  defp notify_goal_task_terminal(_receipt, _opts, false), do: :ok
+
+  defp notify_goal_task_terminal(nil, _opts, true), do: :ok
+
+  defp notify_goal_task_terminal(receipt, opts, true) do
+    case Keyword.get(opts, :on_goal_task_terminal) do
+      hook when is_function(hook, 1) ->
+        _ = hook.(receipt)
+        :ok
+
+      _ ->
+        :ok
+    end
+  end
 
   defp ensure_expired_run_can_settle_task!(%Task{state: "queued"}, %Run{state: "expired"}),
     do: :ok
+
+  defp ensure_expired_run_can_settle_task!(
+         %Task{state: "queued"},
+         %Run{state: "failed", failure: %{"reason" => "lease_expired"}}
+       ),
+       do: :ok
+
+  defp ensure_expired_run_can_settle_task!(
+         %Task{
+           state: "failed",
+           current_generation: generation,
+           failure: %{"reason" => "attempt_limit"}
+         },
+         %Run{state: "expired", generation: generation}
+       ),
+       do: :ok
+
+  defp ensure_expired_run_can_settle_task!(
+         %Task{
+           state: "failed",
+           current_generation: generation,
+           failure: %{"reason" => "attempt_limit"}
+         },
+         %Run{state: "failed", failure: %{"reason" => "lease_expired"}, generation: generation}
+       ),
+       do: :ok
 
   defp ensure_expired_run_can_settle_task!(_task, %Run{state: "expired"}),
     do: rollback(:ownership_lost)
 
   defp ensure_expired_run_can_settle_task!(_task, _run), do: :ok
+
+  defp transition_origin_state(%Run{state: "failed", failure: %{"reason" => "lease_expired"}}),
+    do: "expired"
+
+  defp transition_origin_state(%Run{state: state}), do: state
 
   defp ensure_cancelled_transition_authority!(%Run{state: "cancelled"} = run, target_state) do
     if target_state in @terminal_targets and
@@ -2237,7 +3171,7 @@ defmodule SymmetryControl.Orchestration do
     struct(run, attrs)
   end
 
-  defp apply_supervisory_transition!(task, run, target_state, payload, current) do
+  defp apply_supervisory_transition!(task, run, target_state, payload, current, goal) do
     kind =
       case {run.state, target_state} do
         {"running", "paused"} ->
@@ -2270,12 +3204,35 @@ defmodule SymmetryControl.Orchestration do
 
       if is_nil(command), do: rollback(:state_conflict)
 
+      ensure_goal_pause_command_current!(goal, task, command, kind)
+
       command
       |> Command.changeset(%{state: "applied", applied_at: current})
       |> stamp_update(current)
       |> Repo.update!()
     end
   end
+
+  defp ensure_goal_pause_command_current!(nil, _task, _command, _kind), do: :ok
+
+  defp ensure_goal_pause_command_current!(_goal, _task, _command, kind) when kind != "pause",
+    do: :ok
+
+  defp ensure_goal_pause_command_current!(goal, task, command, "pause") do
+    action_id =
+      case String.split(command.idempotency_key, ":", parts: 4) do
+        ["goal-control", action_id, "pause", task_id] when task_id == task.id ->
+          if valid_uuid?(action_id), do: action_id, else: rollback(:goal_authority_required)
+
+        _ ->
+          rollback(:goal_authority_required)
+      end
+
+    ensure_current_goal_control_action!(goal, goal.current_revision, action_id, "pause")
+  end
+
+  defp goal_control_idempotency_key(action_id, kind, task_id),
+    do: "goal-control:#{action_id}:#{kind}:#{task_id}"
 
   defp pending_supervisory_transition?(run_id) do
     Repo.exists?(
@@ -2475,9 +3432,227 @@ defmodule SymmetryControl.Orchestration do
     {task, run, runtime}
   end
 
+  # A Goal pause transition consumes a Goal-issued control action. It must keep
+  # the Goal -> WorkItem -> Task -> Run lock order, but its paused Goal state is
+  # itself the authority for this one transition.
+  defp lock_transition_chain(run_id, "paused") do
+    {task, run, runtime, goal, _item} = lock_goal_chain(run_id)
+    {task, run, runtime, goal, nil}
+  end
+
+  # A terminal receipt can still settle an already-started Goal run after its
+  # Goal changes. All other progress requires current Goal authority.
+  defp lock_transition_chain(run_id, target_state) when target_state in @terminal_targets do
+    {task, run, runtime} = lock_chain(run_id)
+    {task, run, runtime, nil, nil}
+  end
+
+  defp lock_transition_chain(run_id, _target_state) do
+    lock_goal_chain(run_id)
+  end
+
+  defp lock_execution_chain(run_id) do
+    {task, run, runtime, goal, item} = lock_goal_chain(run_id)
+
+    if goal do
+      ensure_current_goal_execution!(goal, item, task)
+    end
+
+    {task, run, runtime}
+  end
+
+  # Read ownership without a lock, then take the durable locks in the one
+  # ordering shared by Goal execution paths. This prevents a lifecycle command
+  # from racing a legacy Task -> Run acquisition order.
+  defp lock_goal_chain(run_id) do
+    ownership =
+      Repo.one(
+        from run in Run,
+          join: task in Task,
+          on: task.id == run.task_id,
+          where: run.id == ^run_id,
+          select: %{task_id: task.id, goal_id: task.goal_id, work_item_id: task.work_item_id}
+      ) || rollback(:not_found)
+
+    case ownership.goal_id do
+      nil ->
+        {task, run, runtime} = lock_chain(run_id)
+        {task, run, runtime, nil, nil}
+
+      goal_id ->
+        goal = lock_goal(goal_id)
+        item = if ownership.work_item_id, do: lock_work_item(ownership.work_item_id)
+        task = lock_task(ownership.task_id)
+        run = Repo.one!(from run in Run, where: run.id == ^run_id, lock: "FOR UPDATE")
+        runtime = lock_runtime(run.runtime_id)
+
+        ensure_goal_work_item_ownership!(goal, item, task)
+        {task, run, runtime, goal, item}
+    end
+  end
+
+  defp ensure_goal_work_item_ownership!(goal, item, task) do
+    unless goal_work_item_owned?(goal, item, task),
+      do: rollback(:ownership_lost)
+  end
+
+  defp ensure_current_goal_execution!(goal, item, task) do
+    ensure_goal_work_item_ownership!(goal, item, task)
+    unless goal_task_current?(goal, task), do: rollback(:ownership_lost)
+  end
+
+  defp ensure_current_goal_execution_if_present!(nil, _item, _task), do: :ok
+
+  defp ensure_current_goal_execution_if_present!(goal, item, task) do
+    ensure_current_goal_execution!(goal, item, task)
+  end
+
+  defp ensure_current_goal_transition_authority!(nil, _item, _task, _target_state), do: :ok
+
+  defp ensure_current_goal_transition_authority!(_goal, _item, _task, target_state)
+       when target_state in @terminal_targets or target_state == "paused",
+       do: :ok
+
+  defp ensure_current_goal_transition_authority!(goal, item, task, _target_state) do
+    ensure_current_goal_execution!(goal, item, task)
+  end
+
+  # Claim additionally verifies that the currently selected runtime still
+  # satisfies the active Goal policy.
+  defp lock_claim_chain(run_id) do
+    lock_goal_chain(run_id)
+  end
+
+  defp ensure_new_goal_claim_authority!(nil, _item, _task, _runtime), do: :ok
+
+  defp ensure_new_goal_claim_authority!(goal, item, task, runtime) do
+    revision = lock_goal_revision(goal)
+    ensure_current_goal_execution!(goal, item, task)
+    unless goal_runtime_matches?(runtime, task, revision, item), do: rollback(:ownership_lost)
+  end
+
+  defp ensure_requested_session_claim_binding!(
+         %Task{requested_session_id: nil},
+         _runtime,
+         _item,
+         _run
+       ),
+       do: :ok
+
+  defp ensure_requested_session_claim_binding!(task, runtime, item, run) do
+    repository_resource_id =
+      goal_task_repository_resource_id(task, item) || rollback(:ownership_lost)
+
+    session =
+      Repo.one(
+        from session in HarnessSession,
+          where:
+            session.id == ^task.requested_session_id and session.runtime_id == ^runtime.id and
+              session.machine_id == ^runtime.machine_id and session.state == "busy" and
+              session.active_run_id == ^run.id and
+              session.repository_resource_id == ^repository_resource_id and
+              session.harness_kind == ^runtime.harness_kind and
+              session.harness_version == ^runtime.harness_version and
+              session.adapter_version == ^runtime.adapter_version,
+          lock: "FOR UPDATE"
+      )
+
+    unless session && run.harness_session_id == session.id, do: rollback(:ownership_lost)
+  end
+
+  defp replayed_claim?(task, run, runtime, request, current) do
+    run.runtime_id == value(request, :runtime_id) and runtime.id == value(request, :runtime_id) and
+      runtime.connection_epoch == value(request, :runtime_epoch) and
+      task.current_generation == value(request, :generation) and
+      run.generation == value(request, :generation) and
+      run.state in ["claimed", "cancelling"] and run.claim_id == value(request, :claim_id) and
+      run.claimed_runtime_epoch == value(request, :runtime_epoch) and
+      not is_nil(run.lease_expires_at) and
+      DateTime.compare(run.lease_expires_at, current) == :gt
+  end
+
+  defp event_replay([], _existing_events), do: :missing
+
+  defp event_replay(events, existing_events) do
+    {all_present?, conflict?, stored} =
+      Enum.reduce(events, {true, false, []}, fn event, {all_present?, conflict?, stored} ->
+        event_id = value(event, :event_id)
+        body = event_body(event)
+
+        case Map.get(existing_events, event_id) do
+          nil ->
+            {false, conflict?, stored}
+
+          existing ->
+            matches? =
+              RequestHash.matches?(existing.request_hash, existing.request_hash_version, body)
+
+            {all_present?, conflict? or not matches?, [existing | stored]}
+        end
+      end)
+
+    cond do
+      conflict? -> :conflict
+      all_present? -> {:replayed, Enum.reverse(stored)}
+      true -> :missing
+    end
+  end
+
+  defp lock_goal(goal_id),
+    do:
+      Repo.one(from goal in Goal, where: goal.id == ^goal_id, lock: "FOR UPDATE") ||
+        rollback(:not_found)
+
+  defp lock_work_item(work_item_id),
+    do:
+      Repo.one(from item in WorkItem, where: item.id == ^work_item_id, lock: "FOR UPDATE") ||
+        rollback(:not_found)
+
+  defp lock_goal_revision(goal) do
+    Repo.one(
+      from revision in GoalRevision,
+        where: revision.goal_id == ^goal.id and revision.revision == ^goal.current_revision,
+        lock: "FOR SHARE"
+    ) || rollback(:stale_revision)
+  end
+
+  defp ensure_current_goal_control_action!(goal, revision, action_id, command_kind) do
+    action =
+      Repo.one(
+        from event in GoalEvent,
+          where: event.id == ^action_id and event.goal_id == ^goal.id,
+          lock: "FOR UPDATE"
+      )
+
+    latest_lifecycle_action =
+      Repo.one(
+        from event in GoalEvent,
+          where:
+            event.goal_id == ^goal.id and event.kind in ["pause", "resume", "cancel", "amend"],
+          order_by: [desc: event.sequence],
+          limit: 1,
+          lock: "FOR UPDATE"
+      )
+
+    current_lifecycle? =
+      case {action && action.kind, command_kind, goal.state} do
+        {"pause", "pause", "paused"} -> true
+        {"cancel", "cancel", "cancelled"} -> true
+        {"amend", kind, "paused"} when kind in ["pause", "cancel"] -> true
+        _ -> false
+      end
+
+    unless (((action && action.revision == revision) and goal.current_revision == revision and
+               latest_lifecycle_action) && latest_lifecycle_action.id == action_id) and
+             current_lifecycle?,
+           do: rollback(:stale_revision)
+  end
+
   defp runtime_matches_task?(runtime, task) do
     runtime.status == "online" and runtime.agent_profile == task.agent_profile and
       runtime.workspace == task.workspace and
+      (value(task.required_capabilities, :supervisory_control, false) != true or
+         legacy_supervisory_runtime?(runtime)) and
       Repo.exists?(
         from candidate in Runtime,
           where: candidate.id == ^runtime.id,
@@ -2595,18 +3770,101 @@ defmodule SymmetryControl.Orchestration do
     capabilities = value(specification, :capabilities, %{})
 
     is_map(capabilities) and jsonb_compatible?(capabilities) and
-      valid_boolean_capability?(capabilities, :structured_input) and
-      valid_boolean_capability?(capabilities, :provider_access) and
-      valid_boolean_capability?(capabilities, :interactive) and
-      valid_boolean_capability?(capabilities, :supervisory_control) and
+      valid_runtime_capabilities_schema?(specification, capabilities) and
       (value(capabilities, :supervisory_control, false) != true or
          (value(capabilities, :structured_input, false) == true and
             value(capabilities, :interactive, false) == true)) and
       (value(capabilities, :provider_access, false) != true or
-         value(capabilities, :structured_input, false) == true)
+         value(capabilities, :structured_input, false) == true) and
+      valid_runtime_repository_resource?(specification) and
+      valid_runtime_adapter_metadata?(specification, capabilities)
   end
 
   defp valid_runtime_specification?(_), do: false
+
+  # A pre-Goal release can omit contracts entirely, but only old registrations
+  # without adapter metadata may use the legacy capability subset in that mode.
+  # Any available schema, Goal rollout, or new adapter declaration stays strict.
+  defp valid_runtime_capabilities_schema?(specification, capabilities) do
+    schema_root =
+      :symmetry_control
+      |> Application.fetch_env!(:contracts)
+      |> Keyword.fetch!(:directory)
+      |> Path.join("v1")
+
+    if File.dir?(schema_root) do
+      ContractValidation.validate_adapter_capabilities(capabilities, schema_root: schema_root) ==
+        :ok
+    else
+      legacy_contract_fallback?(specification, capabilities)
+    end
+  end
+
+  defp legacy_contract_fallback?(specification, capabilities) do
+    goals_rollout_disabled?() and not runtime_metadata_present?(specification) and
+      Enum.all?(capabilities, fn {key, value} ->
+        key in [
+          :structured_input,
+          :provider_access,
+          :interactive,
+          :supervisory_control,
+          "structured_input",
+          "provider_access",
+          "interactive",
+          "supervisory_control"
+        ] and is_boolean(value)
+      end)
+  end
+
+  defp goals_rollout_disabled? do
+    goals = Application.get_env(:symmetry_control, :goals) || []
+    Keyword.get(goals, :rollout_enabled, false) != true
+  end
+
+  defp valid_runtime_repository_resource?(specification) do
+    not map_key?(specification, :repository_resource_id) or
+      is_nil(value(specification, :repository_resource_id)) or
+      valid_uuid?(value(specification, :repository_resource_id))
+  end
+
+  defp ensure_runtime_repository_resource!(nil), do: :ok
+
+  defp ensure_runtime_repository_resource!(resource_id) do
+    resource =
+      Repo.one(
+        from resource in ProjectResource,
+          where: resource.id == ^resource_id,
+          lock: "FOR SHARE"
+      ) || rollback(:invalid_request)
+
+    unless resource.kind == "repository", do: rollback(:invalid_request)
+  end
+
+  defp ensure_runtime_repository_binding_change_safe!(nil, _repository_resource_id), do: :ok
+
+  defp ensure_runtime_repository_binding_change_safe!(runtime, repository_resource_id)
+       when runtime.repository_resource_id == repository_resource_id,
+       do: :ok
+
+  defp ensure_runtime_repository_binding_change_safe!(runtime, _repository_resource_id) do
+    active_goal_run? =
+      Repo.exists?(
+        from run in Run,
+          join: task in Task,
+          on: task.id == run.task_id,
+          where:
+            run.runtime_id == ^runtime.id and not is_nil(task.goal_id) and
+              run.state not in ^@terminal_states
+      )
+
+    retained_harness_session? =
+      Repo.exists?(
+        from session in HarnessSession,
+          where: session.runtime_id == ^runtime.id and session.state != "closed"
+      )
+
+    if active_goal_run? or retained_harness_session?, do: rollback(:state_conflict)
+  end
 
   defp normalize_task_attrs(attrs) do
     %{
@@ -2624,6 +3882,146 @@ defmodule SymmetryControl.Orchestration do
       value -> is_boolean(value)
     end
   end
+
+  defp valid_runtime_adapter_metadata?(specification, capabilities) do
+    adapter_present? = map_key?(capabilities, :adapter)
+    adapter = value(capabilities, :adapter)
+
+    if runtime_metadata_present?(specification) do
+      valid_runtime_metadata?(specification) and
+        valid_registered_adapter?(adapter, adapter_present?, specification, capabilities)
+    else
+      not adapter_present?
+    end
+  end
+
+  defp runtime_metadata_present?(specification) do
+    Enum.any?(
+      [:harness_kind, :harness_version, :adapter_version, :adapter_protocol_version],
+      &map_key?(specification, &1)
+    )
+  end
+
+  defp valid_runtime_metadata?(specification) do
+    harness_kind = value(specification, :harness_kind)
+    harness_version = value(specification, :harness_version)
+    adapter_version = value(specification, :adapter_version)
+    protocol_version = value(specification, :adapter_protocol_version)
+
+    harness_kind in ["generic", "codex", "claude_code", "pi", "opencode"] and
+      nonempty_bounded_text?(harness_version, 240) and
+      nonempty_bounded_text?(adapter_version, 240) and
+      is_integer(protocol_version) and protocol_version > 0 and protocol_version <= 2_147_483_647
+  end
+
+  defp valid_registered_adapter?(adapter, _adapter_present?, specification, capabilities)
+       when is_map(adapter) do
+    adapter_matches_runtime_metadata?(adapter, specification) and
+      valid_adapter_operations?(value(adapter, :operations)) and
+      generic_adapter_operations_allowed?(
+        value(specification, :harness_kind),
+        value(adapter, :operations)
+      ) and
+      native_capabilities_match_adapter?(
+        value(specification, :harness_kind),
+        capabilities,
+        value(adapter, :operations)
+      )
+  end
+
+  defp valid_registered_adapter?(nil, false, _specification, _capabilities), do: true
+
+  defp valid_registered_adapter?(_adapter, _adapter_present?, _specification, _capabilities),
+    do: false
+
+  defp adapter_matches_runtime_metadata?(adapter, specification) do
+    exact_map_keys?(adapter, [
+      "kind",
+      "native_version",
+      "implementation_version",
+      "protocol_version",
+      "operations"
+    ]) and
+      value(adapter, :kind) == value(specification, :harness_kind) and
+      value(adapter, :native_version) == value(specification, :harness_version) and
+      value(adapter, :implementation_version) == value(specification, :adapter_version) and
+      value(adapter, :protocol_version) == value(specification, :adapter_protocol_version)
+  end
+
+  defp valid_adapter_operations?(operations) when is_map(operations) do
+    exact_map_keys?(operations, [
+      "start",
+      "events",
+      "cancel",
+      "resume",
+      "guidance",
+      "pause",
+      "approval_response",
+      "usage",
+      "hard_cost_limit"
+    ]) and
+      is_boolean(value(operations, :start)) and
+      is_boolean(value(operations, :events)) and
+      is_boolean(value(operations, :cancel)) and
+      is_boolean(value(operations, :resume)) and
+      value(operations, :guidance) in ["native_steer", "next_turn", "unsupported"] and
+      value(operations, :pause) in ["safe_boundary", "unsupported"] and
+      is_boolean(value(operations, :approval_response)) and
+      value(operations, :usage) in ["reported", "estimated", "unknown"] and
+      is_boolean(value(operations, :hard_cost_limit)) and
+      (value(operations, :resume) != true or value(operations, :start) == true) and
+      (value(operations, :events) != true or value(operations, :start) == true) and
+      (value(operations, :guidance) != "native_steer" or value(operations, :start) == true) and
+      (value(operations, :pause) != "safe_boundary" or value(operations, :resume) == true) and
+      (value(operations, :usage) != "reported" or value(operations, :events) == true)
+  end
+
+  defp valid_adapter_operations?(_operations), do: false
+
+  defp generic_adapter_operations_allowed?("generic", operations) do
+    value(operations, :resume) == false and
+      value(operations, :guidance) == "unsupported" and
+      value(operations, :pause) == "unsupported" and
+      value(operations, :approval_response) == false and
+      value(operations, :usage) == "unknown" and
+      value(operations, :hard_cost_limit) == false
+  end
+
+  defp generic_adapter_operations_allowed?(_harness_kind, _operations), do: true
+
+  defp native_capabilities_match_adapter?("generic", _capabilities, _operations), do: true
+
+  defp native_capabilities_match_adapter?(_harness_kind, capabilities, operations) do
+    value(capabilities, :supervisory_control, false) != true and
+      value(operations, :pause) == "unsupported"
+  end
+
+  defp legacy_supervisory_runtime?(runtime),
+    do: is_nil(runtime.harness_kind) or runtime.harness_kind == "generic"
+
+  defp exact_map_keys?(map, expected_keys) do
+    normalized_keys =
+      map
+      |> Map.keys()
+      |> Enum.map(fn
+        key when is_binary(key) -> key
+        key when is_atom(key) -> Atom.to_string(key)
+        _key -> nil
+      end)
+
+    Enum.sort(normalized_keys) == Enum.sort(expected_keys)
+  end
+
+  defp map_key?(map, key) when is_map(map),
+    do: Map.has_key?(map, key) or Map.has_key?(map, Atom.to_string(key))
+
+  defp map_key?(_map, _key), do: false
+
+  defp nonempty_bounded_text?(value, maximum)
+       when is_binary(value) and byte_size(value) <= maximum,
+       do: String.trim(value) != ""
+
+  defp nonempty_bounded_text?(_value, _maximum), do: false
 
   defp valid_task_attrs?(task_attrs) do
     input = value(task_attrs, :input)

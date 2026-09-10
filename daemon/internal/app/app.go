@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,8 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/config"
 	"github.com/wxxb789/symmetry/daemon/internal/control"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
+	"github.com/wxxb789/symmetry/daemon/internal/harness"
+	"github.com/wxxb789/symmetry/daemon/internal/harness/codex"
 	"github.com/wxxb789/symmetry/daemon/internal/notification"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
@@ -30,18 +33,21 @@ import (
 )
 
 const (
-	minimumInterval       = time.Second
-	maximumInterval       = time.Minute
-	reconcileRetryMax     = 30 * time.Second
-	leaseSafetyMargin     = 5 * time.Second
-	retryMaximum          = 30 * time.Second
-	terminalGrace         = 8 * time.Minute
-	controlRequestLimit   = 15 * time.Second
-	maxJSONLRecordBytes   = 256 * 1024
-	maxSemanticEventBytes = 64 * 1024
-	rawOutputChunkBytes   = 32 * 1024
-	maxPendingOutputBytes = 2 << 20
-	inputWriteTimeout     = 60 * time.Second
+	minimumInterval        = time.Second
+	maximumInterval        = time.Minute
+	reconcileRetryMax      = 30 * time.Second
+	leaseSafetyMargin      = 5 * time.Second
+	retryMaximum           = 30 * time.Second
+	terminalGrace          = 8 * time.Minute
+	controlRequestLimit    = 15 * time.Second
+	nativeUsageRetryLimit  = 5
+	nativeUsageRetryWindow = 2 * time.Minute
+	maxJSONLRecordBytes    = 256 * 1024
+	maxSemanticEventBytes  = 64 * 1024
+	rawOutputChunkBytes    = 32 * 1024
+	maxPendingOutputBytes  = 2 << 20
+	inputWriteTimeout      = 60 * time.Second
+	shutdownTerminateLimit = 2 * time.Second
 )
 
 var (
@@ -49,7 +55,35 @@ var (
 	errLeaseDeadlineReached = errors.New("lease renewal deadline reached")
 	errOutboxChanged        = errors.New("outbox changed during delivery")
 	errInputWriteTimeout    = errors.New("agent did not consume standard input within the write timeout")
+	errInvalidAdmission     = errors.New("invalid symmetry.admission.v1")
+	errMissingResult        = errors.New("missing_result")
+	workspaceFingerprint    = workspace.Fingerprint
 )
+
+// taskResultReasonError keeps a canonical terminal reason through local
+// preflight failures without asking string matching to recover domain state.
+type taskResultReasonError struct {
+	reason protocol.TaskResultReason
+	cause  error
+}
+
+func (err *taskResultReasonError) Error() string { return err.cause.Error() }
+func (err *taskResultReasonError) Unwrap() error { return err.cause }
+
+func taskResultFailure(reason protocol.TaskResultReason, cause error) error {
+	if cause == nil {
+		cause = errors.New(string(reason))
+	}
+	return &taskResultReasonError{reason: reason, cause: cause}
+}
+
+func taskResultFailureReason(cause error) (protocol.TaskResultReason, bool) {
+	var typed *taskResultReasonError
+	if errors.As(cause, &typed) {
+		return typed.reason, true
+	}
+	return "", false
+}
 
 // restartOutboxRecoveryContextKey suppresses ordinary ownership-loss cleanup
 // until restart recovery has converted the journal into a terminal fallback.
@@ -66,6 +100,23 @@ type ControlAPI interface {
 	Transition(context.Context, string, protocol.StateTransitionRequest) error
 	Reconcile(context.Context, string, protocol.ReconcileRequest) (protocol.ReconcileResponse, error)
 	AcknowledgeCommand(context.Context, string, protocol.CommandAcknowledgement) error
+}
+
+// goalControlAPI is deliberately a narrow optional extension to protocol v1.
+// A non-Goal daemon remains compatible with an ordinary ControlAPI.
+type goalControlAPI interface {
+	AttachHarnessSession(context.Context, string, control.GoalSessionAttachRequest) (control.GoalSessionReceipt, error)
+	FetchRunContext(context.Context, string, protocol.Fence) (control.GoalRunContext, error)
+	AppendEvidence(context.Context, string, protocol.Fence, protocol.Evidence) (control.GoalEvidenceReceipt, error)
+	RecordUsage(context.Context, string, protocol.Fence, protocol.Usage) (control.GoalUsageReceipt, error)
+}
+
+// goalSubjectWorkspace is the immutable artifact boundary required only by
+// Goal execution. Legacy work intentionally retains workspace.Service's
+// configured-ref behavior.
+type goalSubjectWorkspace interface {
+	PrepareSubject(context.Context, string, workspace.RunRef, protocol.Subject) (workspace.SubjectWorkspace, error)
+	DeriveSubject(context.Context, workspace.Prepared, string) (protocol.Subject, error)
 }
 
 // EnrollmentAPI is deliberately separate because it is authorized by the
@@ -122,6 +173,9 @@ type options struct {
 	recordWorkspace                            func(state.RunKey, string) (state.RunJournal, error)
 	recordProcess                              func(state.RunKey, int, string, time.Time) (state.RunJournal, error)
 	queueTerminalTransition                    func(state.RunKey, protocol.StateTransitionRequest, time.Time) (state.RunJournal, error)
+	queueGoalUsage                             func(state.RunKey, protocol.Usage) (state.RunJournal, error)
+	markGoalSessionAttachDeliveryReady         func(state.RunKey, string) (state.RunJournal, error)
+	discardUnreadyGoalSessionAttachDelivery    func(state.RunKey, string) (state.RunJournal, error)
 	markCommandAcknowledgementsDelivered       func(state.RunKey, []string) (state.RunJournal, error)
 	queueCancelledTransitionAndAcknowledgement func(state.RunKey, protocol.StateTransitionRequest, protocol.CommandAcknowledgement, time.Time) (state.RunJournal, error)
 	retainWorkspace                            func(state.RunKey) (state.RunJournal, error)
@@ -203,40 +257,42 @@ type daemon struct {
 	options options
 	log     *slog.Logger
 
-	store              *state.Store
-	control            ControlAPI
-	workspace          workspace.Service
-	start              StartProcess
-	runtimeID          string
-	runtimeEpoch       int64
-	leaseDuration      time.Duration
-	pollEvery          time.Duration
-	heartbeatEvery     time.Duration
-	running            map[state.RunKey]*runningRun
-	slots              chan struct{}
-	mu                 sync.Mutex
-	commandReceiptMu   sync.Mutex
-	workers            sync.WaitGroup
-	background         context.Context
-	backgroundCancel   context.CancelFunc
-	backgroundStop     bool
-	backgroundWG       sync.WaitGroup
-	terminalReleaseWG  sync.WaitGroup
-	commandWG          sync.WaitGroup
-	snapshotWG         sync.WaitGroup
-	outboxWake         chan struct{}
-	outboxRetry        map[state.RunKey]outboxRetry
-	cleanupWake        chan struct{}
-	cleanupQueued      map[state.RunKey]struct{}
-	cleanupRetry       map[state.RunKey]time.Time
-	retainedWorkspaces map[state.RunKey]struct{}
-	clockSkewWarned    bool
-	commandWake        chan struct{}
-	commandQueue       []*queuedCommand
-	queuedCommands     map[commandKey]*queuedCommand
-	commandLanes       map[state.RunKey]*commandLane
-	commandRequests    map[uint64]map[commandKey]struct{}
-	nextCommandRequest uint64
+	store               *state.Store
+	control             ControlAPI
+	workspace           workspace.Service
+	start               StartProcess
+	harnessRegistry     *harness.Registry
+	harnessCapabilities harness.Capabilities
+	runtimeID           string
+	runtimeEpoch        int64
+	leaseDuration       time.Duration
+	pollEvery           time.Duration
+	heartbeatEvery      time.Duration
+	running             map[state.RunKey]*runningRun
+	slots               chan struct{}
+	mu                  sync.Mutex
+	commandReceiptMu    sync.Mutex
+	workers             sync.WaitGroup
+	background          context.Context
+	backgroundCancel    context.CancelFunc
+	backgroundStop      bool
+	backgroundWG        sync.WaitGroup
+	terminalReleaseWG   sync.WaitGroup
+	commandWG           sync.WaitGroup
+	snapshotWG          sync.WaitGroup
+	outboxWake          chan struct{}
+	outboxRetry         map[state.RunKey]outboxRetry
+	cleanupWake         chan struct{}
+	cleanupQueued       map[state.RunKey]struct{}
+	cleanupRetry        map[state.RunKey]time.Time
+	retainedWorkspaces  map[state.RunKey]struct{}
+	clockSkewWarned     bool
+	commandWake         chan struct{}
+	commandQueue        []*queuedCommand
+	queuedCommands      map[commandKey]*queuedCommand
+	commandLanes        map[state.RunKey]*commandLane
+	commandRequests     map[uint64]map[commandKey]struct{}
+	nextCommandRequest  uint64
 }
 
 type outboxRetry struct {
@@ -250,6 +306,11 @@ type outboxFailure struct {
 	journal state.RunJournal
 	err     error
 }
+
+type goalDeliveryRejectedError struct{ err error }
+
+func (err *goalDeliveryRejectedError) Error() string { return err.err.Error() }
+func (err *goalDeliveryRejectedError) Unwrap() error { return err.err }
 
 func (failure *outboxFailure) Error() string { return failure.err.Error() }
 func (failure *outboxFailure) Unwrap() error { return failure.err }
@@ -280,25 +341,52 @@ type commandLane struct {
 type runningRun struct {
 	// inputMu serializes stdin delivery with input-related lifecycle mutations.
 	// Never wait for it while holding daemon.mu.
-	inputMu          sync.Mutex
-	process          Process
-	prepared         workspace.Prepared
-	output           *agentOutput
-	starting         bool
-	claimed          bool
-	cancel           context.CancelFunc
-	cancelled        bool
-	cancelCommandID  string
-	stale            bool
-	terminal         bool
-	terminalizing    int
-	slotHeld         bool
-	cleanupBlocked   bool
-	outputDropWarned bool
-	stopExecution    context.CancelCauseFunc
-	renewCancel      context.CancelFunc
-	renewCancelID    uint64
-	terminalCancel   context.CancelFunc
+	inputMu                  sync.Mutex
+	process                  Process
+	nativeSession            harness.Session
+	goalSession              *state.GoalSessionKey
+	goalAdmission            *protocol.Admission
+	goalUsage                *harness.Usage
+	goalUsageAt              time.Time
+	goalCachedInputTokens    int64
+	goalUsageHasCached       bool
+	goalUsageObservation     *state.NativeUsageObservation
+	nativeDeadline           time.Time
+	prepared                 workspace.Prepared
+	output                   *agentOutput
+	starting                 bool
+	claimed                  bool
+	cancel                   context.CancelFunc
+	cancelled                bool
+	cancelCommandID          string
+	stale                    bool
+	terminal                 bool
+	terminalizing            int
+	slotHeld                 bool
+	cleanupBlocked           bool
+	startFailure             error
+	nativeCloseRetryRequired bool
+	nativeCloseRetrying      bool
+	// Native completion is retained locally until accounting is durably queued.
+	nativeFinalResult            *harness.TaskResult
+	nativeFinalWaitErr           error
+	nativeFinalCloseErr          error
+	nativeFinalAdmission         *protocol.Admission
+	nativeFinalUsage             *protocol.Usage
+	nativeUsageRetryAt           time.Time
+	nativeUsageRetryDeadline     time.Time
+	nativeUsageRetryAttempts     int
+	nativeUsageRetryPending      bool
+	nativeUsageRetryInFlight     bool
+	nativeUsageRetryNeedsPrepare bool
+	nativeUsageRenewalBlocked    bool
+	nativeUsageRetryExhausted    bool
+	nativeUsageFinalized         bool
+	outputDropWarned             bool
+	stopExecution                context.CancelCauseFunc
+	renewCancel                  context.CancelFunc
+	renewCancelID                uint64
+	terminalCancel               context.CancelFunc
 }
 
 func (daemon *daemon) run(ctx context.Context) error {
@@ -708,7 +796,207 @@ func (daemon *daemon) commandSignal() <-chan struct{} {
 	return daemon.commandWake
 }
 
+func (daemon *daemon) ensureHarnessProbe(ctx context.Context) error {
+	if daemon.harnessRegistry != nil && daemon.harnessCapabilities.Kind != "" {
+		return nil
+	}
+	runtime, err := normalizeRuntimeForProbe(daemon.config.Runtime)
+	if err != nil {
+		return err
+	}
+	registry := daemon.harnessRegistry
+	if registry == nil {
+		registry = newHarnessRegistry(daemon.config.AgentProfiles[runtime.AgentProfile])
+	}
+	kind, err := configuredHarnessKind(runtime.HarnessKind)
+	if err != nil {
+		return err
+	}
+	capabilities, probeErr := registry.Probe(ctx, kind)
+	unverified := errors.Is(probeErr, harness.ErrNativeUnverified)
+	unavailable := errors.Is(probeErr, harness.ErrHarnessUnavailable) && unavailableRuntimeKind(runtime.HarnessKind)
+	if probeErr != nil && !unverified && !unavailable {
+		return fmt.Errorf("probe %s adapter: %w", runtime.HarnessKind, probeErr)
+	}
+	if probeErr == nil && !capabilities.Verified {
+		return fmt.Errorf("probe %s adapter: %w", runtime.HarnessKind, harness.ErrNativeUnverified)
+	}
+	if !unavailable && runtime.HarnessVersion != "legacy" && runtime.HarnessVersion != capabilities.NativeVersion {
+		return fmt.Errorf("runtime.harness_version %q does not match probed %q", runtime.HarnessVersion, capabilities.NativeVersion)
+	}
+	if !unverified && !unavailable && runtime.AdapterVersion != "legacy" && runtime.AdapterVersion != capabilities.ImplementationVersion {
+		return fmt.Errorf("runtime.adapter_version %q does not match probed %q", runtime.AdapterVersion, capabilities.ImplementationVersion)
+	}
+	if runtime.AdapterProtocolVersion != capabilities.ProtocolVersion {
+		return fmt.Errorf("runtime.adapter_protocol_version %d does not match probed %d", runtime.AdapterProtocolVersion, capabilities.ProtocolVersion)
+	}
+	daemon.config.Runtime = runtime
+	daemon.harnessRegistry = registry
+	daemon.harnessCapabilities = capabilities
+	return nil
+}
+
+// newHarnessRegistry is the daemon composition root. Native adapter packages
+// depend on harness interfaces, so they are wired here rather than from the
+// harness package itself.
+func newHarnessRegistry(profile config.AgentProfile) *harness.Registry {
+	registry := harness.NewRegistry()
+	_ = registry.Register(harness.KindCodex, codex.NewAdapterWithNativeIdentity(profile.Command, profile.NativeModel, profile.NativeModelProvider))
+	_ = registry.Register(harness.KindClaude, harness.NewClaudeAdapterWithExecutable(profile.Command))
+	return registry
+}
+
+func normalizeRuntimeForProbe(runtime config.Runtime) (config.Runtime, error) {
+	if runtime.HarnessKind == "" && runtime.HarnessVersion == "" && runtime.AdapterVersion == "" && runtime.AdapterProtocolVersion == 0 {
+		runtime.HarnessKind = config.RuntimeHarnessGeneric
+		runtime.HarnessVersion = "legacy"
+		runtime.AdapterVersion = "legacy"
+		runtime.AdapterProtocolVersion = 1
+	}
+	if runtime.HarnessKind == "" || runtime.HarnessVersion == "" || runtime.AdapterVersion == "" || runtime.AdapterProtocolVersion <= 0 {
+		return config.Runtime{}, errors.New("runtime adapter metadata must include harness_kind, harness_version, adapter_version, and adapter_protocol_version")
+	}
+	return runtime, nil
+}
+
+func configuredHarnessKind(value string) (harness.Kind, error) {
+	switch value {
+	case config.RuntimeHarnessGeneric:
+		return harness.KindGeneric, nil
+	case config.RuntimeHarnessCodex:
+		return harness.KindCodex, nil
+	case config.RuntimeHarnessClaudeCode:
+		return harness.KindClaude, nil
+	case config.RuntimeHarnessPi:
+		return harness.KindPi, nil
+	case config.RuntimeHarnessOpenCode:
+		return harness.KindOpenCode, nil
+	default:
+		return "", fmt.Errorf("runtime.harness_kind %q is unsupported", value)
+	}
+}
+
+func unavailableRuntimeKind(value string) bool {
+	switch value {
+	case config.RuntimeHarnessClaudeCode, config.RuntimeHarnessPi, config.RuntimeHarnessOpenCode:
+		return true
+	default:
+		return false
+	}
+}
+
+type runtimeRegistrationMetadata struct {
+	HarnessKind            string
+	HarnessVersion         string
+	AdapterVersion         string
+	AdapterProtocolVersion int
+	Adapter                protocol.Adapter
+}
+
+func buildRuntimeRegistration(runtime config.Runtime, profile config.AgentProfile, capabilities harness.Capabilities) (protocol.RuntimeRegistration, runtimeRegistrationMetadata, error) {
+	if err := capabilities.Validate(); err != nil {
+		return protocol.RuntimeRegistration{}, runtimeRegistrationMetadata{}, fmt.Errorf("validate adapter capabilities: %w", err)
+	}
+	configuredKind, err := configuredHarnessKind(runtime.HarnessKind)
+	if err != nil {
+		return protocol.RuntimeRegistration{}, runtimeRegistrationMetadata{}, err
+	}
+	if configuredKind != capabilities.Kind {
+		return protocol.RuntimeRegistration{}, runtimeRegistrationMetadata{}, fmt.Errorf(
+			"runtime harness kind %q does not match probed adapter kind %q",
+			runtime.HarnessKind,
+			capabilities.Kind,
+		)
+	}
+	registration := protocol.RuntimeRegistration{
+		RuntimeKey:           runtime.RuntimeKey,
+		Name:                 runtime.Name,
+		Capacity:             runtime.Capacity,
+		AgentProfile:         runtime.AgentProfile,
+		Workspace:            runtime.Workspace,
+		RepositoryResourceID: optionalRuntimeRepositoryResourceID(runtime.RepositoryResourceID),
+		Capabilities: protocol.RuntimeCapabilities{
+			StructuredInput:    structuredInputForProfile(profile),
+			ProviderAccess:     legacyProviderAccessForRegistration(runtime, profile),
+			Interactive:        profile.Interactive,
+			SupervisoryControl: profile.SupervisoryControl,
+		},
+	}
+	metadata := runtimeRegistrationMetadata{
+		HarnessKind:            runtime.HarnessKind,
+		HarnessVersion:         runtime.HarnessVersion,
+		AdapterVersion:         runtime.AdapterVersion,
+		AdapterProtocolVersion: runtime.AdapterProtocolVersion,
+		Adapter: protocol.Adapter{
+			Kind:                  runtime.HarnessKind,
+			NativeVersion:         runtime.HarnessVersion,
+			ImplementationVersion: runtime.AdapterVersion,
+			ProtocolVersion:       int64(runtime.AdapterProtocolVersion),
+			Operations: protocol.AdapterOperations{
+				Start:            capabilities.Start,
+				Events:           capabilities.Events,
+				Cancel:           capabilities.Cancel,
+				Resume:           capabilities.Resume,
+				Guidance:         protocol.GuidanceCapability(capabilities.Guidance),
+				Pause:            protocol.PauseCapability(capabilities.Pause),
+				ApprovalResponse: capabilities.ApprovalResponse,
+				Usage:            protocol.UsageCapability(capabilities.Usage),
+				HardCostLimit:    capabilities.HardCostLimit,
+			},
+		},
+	}
+	if runtime.HarnessKind != config.RuntimeHarnessGeneric && capabilities.NativeVersion != "" {
+		metadata.HarnessVersion = capabilities.NativeVersion
+	}
+	if runtime.HarnessKind != config.RuntimeHarnessGeneric && capabilities.ImplementationVersion != "" {
+		metadata.AdapterVersion = capabilities.ImplementationVersion
+	}
+	metadata.Adapter.NativeVersion = metadata.HarnessVersion
+	metadata.Adapter.ImplementationVersion = metadata.AdapterVersion
+	if err := metadata.Adapter.Validate(); err != nil {
+		return protocol.RuntimeRegistration{}, runtimeRegistrationMetadata{}, fmt.Errorf("validate adapter registration: %w", err)
+	}
+	if err := writeRuntimeRegistrationMetadata(&registration, metadata); err != nil {
+		return protocol.RuntimeRegistration{}, runtimeRegistrationMetadata{}, err
+	}
+	return registration, metadata, nil
+}
+
+func optionalRuntimeRepositoryResourceID(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func structuredInputForProfile(profile config.AgentProfile) bool {
+	return profile.InputMode == config.InputModeJSON
+}
+
+// legacyProviderAccessForRegistration describes the existing stdin envelope
+// contract only. Native harnesses must not advertise provider access until
+// their broker bridge is independently verified.
+func legacyProviderAccessForRegistration(runtime config.Runtime, profile config.AgentProfile) bool {
+	return runtime.HarnessKind == config.RuntimeHarnessGeneric &&
+		profile.InputMode == config.InputModeJSON && profile.ProviderAccess
+}
+
+func writeRuntimeRegistrationMetadata(registration *protocol.RuntimeRegistration, metadata runtimeRegistrationMetadata) error {
+	if registration == nil {
+		return errors.New("runtime registration must not be nil")
+	}
+	registration.HarnessKind = metadata.HarnessKind
+	registration.HarnessVersion = metadata.HarnessVersion
+	registration.AdapterVersion = metadata.AdapterVersion
+	registration.AdapterProtocolVersion = metadata.AdapterProtocolVersion
+	registration.Capabilities.Adapter = &metadata.Adapter
+	return nil
+}
+
 func (daemon *daemon) initialize(ctx context.Context) error {
+	if err := daemon.ensureHarnessProbe(ctx); err != nil {
+		return fmt.Errorf("probe runtime harness: %w", err)
+	}
 	if _, err := platform.ProcessIdentity(os.Getpid()); err != nil {
 		return fmt.Errorf("platform does not support restart-safe process identity: %w", err)
 	}
@@ -795,26 +1083,20 @@ func (daemon *daemon) initialize(ctx context.Context) error {
 	if err := daemon.recoverUnresolvedInputIntents(ctx); err != nil {
 		return fmt.Errorf("recover input command intents: %w", err)
 	}
+	if err := daemon.recoverUnclosedGoalSessions(ctx); err != nil {
+		return fmt.Errorf("recover unclosed Goal sessions: %w", err)
+	}
 	daemon.slots = make(chan struct{}, daemon.config.Runtime.Capacity)
 	instanceID, idErr := daemon.options.newID()
 	if idErr != nil {
 		return fmt.Errorf("generate daemon instance ID: %w", idErr)
 	}
 	profile := daemon.config.AgentProfiles[daemon.config.Runtime.AgentProfile]
-	structuredInput := profile.InputMode == config.InputModeJSON
-	registrationRequest := protocol.SessionRegistrationRequest{
-		Runtimes: []protocol.RuntimeRegistration{{
-			RuntimeKey: daemon.config.Runtime.RuntimeKey, Name: daemon.config.Runtime.Name,
-			Capacity: daemon.config.Runtime.Capacity, AgentProfile: daemon.config.Runtime.AgentProfile,
-			Workspace: daemon.config.Runtime.Workspace,
-			Capabilities: protocol.RuntimeCapabilities{
-				StructuredInput:    structuredInput,
-				ProviderAccess:     profile.ProviderAccess,
-				Interactive:        profile.Interactive,
-				SupervisoryControl: profile.SupervisoryControl,
-			},
-		}},
+	registeredRuntime, _, registrationMetadataErr := buildRuntimeRegistration(daemon.config.Runtime, profile, daemon.harnessCapabilities)
+	if registrationMetadataErr != nil {
+		return fmt.Errorf("build runtime registration: %w", registrationMetadataErr)
 	}
+	registrationRequest := protocol.SessionRegistrationRequest{Runtimes: []protocol.RuntimeRegistration{registeredRuntime}}
 	var registration protocol.SessionRegistrationResponse
 	registerErr := retry(ctx, func() error {
 		requestContext, cancel := daemon.controlContext(ctx)
@@ -948,8 +1230,13 @@ func (daemon *daemon) recoverUnresolvedInputIntents(ctx context.Context) error {
 			daemon.rememberWorkspaceRetention(journal.Key())
 		}
 		recoveries = append(recoveries, journal)
-		if journal.PID > 0 && !daemon.terminatePersistedProcessWithRetry(rootContext, journal.Key()) {
-			return rootContext.Err()
+		if journal.PID > 0 {
+			if !daemon.terminatePersistedProcessWithRetry(rootContext, journal.Key()) {
+				return rootContext.Err()
+			}
+			if _, err := daemon.store.ClearProcessDetails(journal.Key(), journal.PID, journal.ProcessIdentity); err != nil {
+				return fmt.Errorf("record stopped recovered input process %s/%d: %w", journal.RunID, journal.Generation, err)
+			}
 		}
 	}
 	for _, journal := range recoveries {
@@ -964,6 +1251,97 @@ func (daemon *daemon) recoverUnresolvedInputIntents(ctx context.Context) error {
 		}
 		if err := daemon.queueRestartInputFailure(rootContext, journal.Key()); err != nil {
 			return fmt.Errorf("queue restart input failure for %s/%d: %w", journal.RunID, journal.Generation, err)
+		}
+	}
+	return nil
+}
+
+// recoverUnclosedGoalSessions prevents a restart from silently attaching to,
+// replacing, or cleaning up around a native session whose stopped state has not
+// been proven. The Goal session journal is the durable source for this local
+// recovery decision; control-plane reattachment is deliberately out of scope.
+func (daemon *daemon) recoverUnclosedGoalSessions(ctx context.Context) error {
+	sessions, err := daemon.store.ListGoalSessions()
+	if err != nil {
+		return err
+	}
+	rootContext := daemon.rootContext(ctx)
+	for _, session := range sessions {
+		key := state.RunKey{RunID: session.RunID, Generation: session.Generation}
+		if key.RunID == "" || key.Generation <= 0 || daemon.hasRun(key) {
+			continue
+		}
+		journal, loadErr := daemon.store.LoadJournal(key)
+		if loadErr != nil {
+			if state.IsNotFound(loadErr) {
+				if session.SessionState != state.GoalSessionStateClosed {
+					if _, markErr := daemon.store.MarkGoalSessionUncertain(session.Key(), "associated run journal is unavailable during daemon recovery"); markErr != nil {
+						return fmt.Errorf("mark Goal session uncertain without run %s/%d: %w", key.RunID, key.Generation, markErr)
+					}
+				}
+				continue
+			}
+			return fmt.Errorf("load associated run %s/%d: %w", key.RunID, key.Generation, loadErr)
+		}
+		processEvidence := journal.PID > 0 || strings.TrimSpace(journal.ProcessIdentity) != "" || !journal.StartedAt.IsZero()
+		terminalKnown := journal.TerminalState != "" || journal.LocalState == "terminal_pending" || journal.LocalState == "cleanup_pending"
+		// cancelRecoveredJournal commits cancelled only after it has stopped and
+		// cleared the persisted process marker. If its subsequent session write
+		// failed, this durable ordering is the specific recovery proof needed to
+		// retry releasing the uncertainty barrier without guessing from an empty
+		// marker on unrelated recovered sessions.
+		if terminalKnown && journal.TerminalState == "cancelled" && !processEvidence && session.NeedsReconciliation() {
+			resolved, resolveErr := daemon.store.ResolveGoalSessionUncertainStopped(session.Key(), session.Compatibility())
+			if resolveErr != nil {
+				return fmt.Errorf("resolve cancelled Goal session after confirmed stop %s/%d: %w", key.RunID, key.Generation, resolveErr)
+			}
+			session = resolved
+		}
+		for _, delivery := range journal.PendingGoalDeliveries {
+			if delivery.Kind != state.GoalDeliverySessionAttach || delivery.DeliveryID != session.LocalHandleID || delivery.Ready {
+				continue
+			}
+			updated, discardErr := daemon.store.DiscardUnreadyGoalSessionAttachDelivery(key, session.LocalHandleID)
+			if discardErr != nil {
+				return fmt.Errorf("discard unready Goal session attach for %s/%d: %w", key.RunID, key.Generation, discardErr)
+			}
+			journal = updated
+			break
+		}
+		if session.SessionState == state.GoalSessionStateClosed && terminalKnown && !processEvidence {
+			continue
+		}
+
+		// Retention is durable before any process-control action. The native
+		// session could have changed the worktree after the last Run event.
+		if err := daemon.retainUnknownGoalLaunchWorkspaceChecked(key); err != nil {
+			return fmt.Errorf("retain workspace for recovered Goal session %s/%d: %w", key.RunID, key.Generation, err)
+		}
+		if session.SessionState != state.GoalSessionStateClosed && session.LaunchState != state.GoalSessionLaunchStateUncertain {
+			if _, err := daemon.store.MarkGoalSessionUncertain(session.Key(), "native Goal session was left unclosed across daemon restart"); err != nil {
+				return fmt.Errorf("mark Goal session uncertain for %s/%d: %w", key.RunID, key.Generation, err)
+			}
+		}
+		if journal.PID > 0 && strings.TrimSpace(journal.ProcessIdentity) != "" {
+			if !daemon.terminatePersistedProcessWithRetry(rootContext, key) {
+				return fmt.Errorf("stop recovered native process %s/%d: %w", key.RunID, key.Generation, rootContext.Err())
+			}
+			if _, err := daemon.store.ClearProcessDetails(key, journal.PID, journal.ProcessIdentity); err != nil {
+				return fmt.Errorf("record stopped native process %s/%d: %w", key.RunID, key.Generation, err)
+			}
+		}
+		if err := daemon.queueNativeGoalUsage(rootContext, key, nil); err != nil {
+			return fmt.Errorf("queue recovered Goal usage for %s/%d: %w", key.RunID, key.Generation, err)
+		}
+		if journal.LocalState == "terminal_pending" || journal.LocalState == "cleanup_pending" {
+			continue
+		}
+		if err := daemon.queueTerminalTransitionWithRetry(rootContext, key, "failed", map[string]string{
+			"stage":  "goal_session_recovery",
+			"reason": string(protocol.TaskResultReasonUnknownOutcome),
+			"error":  "native Goal session was not safely recoverable after daemon restart",
+		}); err != nil {
+			return fmt.Errorf("queue unknown native outcome for %s/%d: %w", key.RunID, key.Generation, err)
 		}
 	}
 	return nil
@@ -1126,9 +1504,21 @@ func (daemon *daemon) reconcile(ctx context.Context) bool {
 		daemon.log.Warn("runtime_reconcile_failed", "error", err)
 		return false
 	}
+	handledCancels := make(map[commandKey]struct{})
 	for _, decision := range response.Decisions {
 		key := state.RunKey{RunID: decision.RunID, Generation: decision.Generation}
 		if decision.Decision == protocol.ReconcileCancel {
+			if daemon.hasRun(key) {
+				// A live run receives the durable command from this same snapshot.
+				// Its in-memory process/session is the only authority able to stop it.
+				continue
+			}
+			if journal, loadErr := daemon.store.LoadJournal(key); loadErr == nil {
+				commandID := reconcileCancelCommand(response.Commands, key)
+				if daemon.cancelRecoveredJournal(ctx, journal, commandID) && commandID != "" {
+					handledCancels[commandKey{run: key, id: commandID}] = struct{}{}
+				}
+			}
 			continue
 		}
 		if decision.Decision != protocol.ReconcileContinue {
@@ -1145,8 +1535,35 @@ func (daemon *daemon) reconcile(ctx context.Context) bool {
 			_, _ = daemon.store.AdvanceLeaseExpiry(key, *decision.LeaseExpiresAt)
 		}
 	}
-	daemon.scheduleSnapshotForRequest(requestID, protocol.RuntimeSnapshot{Assignments: response.Assignments, Commands: response.Commands})
+	// Reconcile decisions are the authoritative recovery instruction. In
+	// particular, process-backed Goal sessions must see ReconcileCancel before
+	// the conservative unknown-outcome fallback can terminalize their journal.
+	if err := daemon.recoverUnclosedGoalSessions(ctx); err != nil {
+		if daemon.log != nil {
+			daemon.log.Warn("recover_unclosed_goal_sessions_failed", "error", err)
+		}
+		return false
+	}
+	commands := response.Commands
+	if len(handledCancels) != 0 {
+		commands = make([]protocol.Command, 0, len(response.Commands)-len(handledCancels))
+		for _, command := range response.Commands {
+			if _, handled := handledCancels[commandKey{run: state.RunKey{RunID: command.RunID, Generation: command.Generation}, id: command.CommandID}]; !handled {
+				commands = append(commands, command)
+			}
+		}
+	}
+	daemon.scheduleSnapshotForRequest(requestID, protocol.RuntimeSnapshot{Assignments: response.Assignments, Commands: commands})
 	return true
+}
+
+func reconcileCancelCommand(commands []protocol.Command, key state.RunKey) string {
+	for _, command := range commands {
+		if command.Kind == "cancel" && command.RunID == key.RunID && command.Generation == key.Generation && command.CommandID != "" {
+			return command.CommandID
+		}
+	}
+	return ""
 }
 
 func (daemon *daemon) observeControlClock(serverTime time.Time) {
@@ -1195,11 +1612,48 @@ func (daemon *daemon) stopRecoveredJournal(journal state.RunJournal, reason stri
 		daemon.enqueueCleanup(journal.Key())
 		return
 	}
-	if journal.PID > 0 && daemon.options.terminatePersist != nil {
-		if err := daemon.options.terminatePersist(journal.PID, journal.ProcessIdentity); err != nil {
-			daemon.log.Warn("stop_recovered_process_failed", "run_id", journal.RunID, "error", err)
+	hasUnclosedGoalSession, err := daemon.recoveredGoalSessionRequiresStop(journal.Key())
+	if err != nil {
+		if daemon.log != nil {
+			daemon.log.Warn("load_recovered_goal_session_failed", "run_id", journal.RunID, "generation", journal.Generation, "error", err)
+		}
+		return
+	}
+	if hasUnclosedGoalSession && !recoveredProcessRecorded(journal) {
+		daemon.retainUnknownGoalLaunchWorkspace(journal.Key())
+		if daemon.log != nil {
+			daemon.log.Warn("stop_recovered_goal_session_unproven", "run_id", journal.RunID, "generation", journal.Generation)
+		}
+		return
+	}
+	if recoveredProcessRecorded(journal) {
+		if hasUnclosedGoalSession {
+			daemon.retainUnknownGoalLaunchWorkspace(journal.Key())
+		}
+		if journal.PID <= 0 || strings.TrimSpace(journal.ProcessIdentity) == "" || daemon.options.terminatePersist == nil {
+			if daemon.log != nil {
+				daemon.log.Warn("stop_recovered_process_unavailable", "run_id", journal.RunID, "generation", journal.Generation)
+			}
 			return
 		}
+		if err := daemon.options.terminatePersist(journal.PID, journal.ProcessIdentity); err != nil {
+			if daemon.log != nil {
+				daemon.log.Warn("stop_recovered_process_failed", "run_id", journal.RunID, "generation", journal.Generation, "error", err)
+			}
+			return
+		}
+		if _, err := daemon.store.ClearProcessDetails(journal.Key(), journal.PID, journal.ProcessIdentity); err != nil {
+			if daemon.log != nil {
+				daemon.log.Warn("record_recovered_process_stop_failed", "run_id", journal.RunID, "generation", journal.Generation, "error", err)
+			}
+			return
+		}
+	}
+	if err := daemon.resolveRecoveredGoalSessionStopped(journal.Key()); err != nil {
+		if daemon.log != nil {
+			daemon.log.Warn("resolve_recovered_goal_session_stop_failed", "run_id", journal.RunID, "generation", journal.Generation, "error", err)
+		}
+		return
 	}
 	updated, err := daemon.store.SetLocalState(journal.Key(), "stale")
 	if err != nil {
@@ -1211,6 +1665,118 @@ func (daemon *daemon) stopRecoveredJournal(journal state.RunJournal, reason stri
 		return
 	}
 	daemon.log.Warn("recovered_journal_stopped", "run_id", journal.RunID, "generation", journal.Generation, "reason", reason)
+}
+
+func recoveredProcessRecorded(journal state.RunJournal) bool {
+	return journal.PID > 0 || strings.TrimSpace(journal.ProcessIdentity) != "" || !journal.StartedAt.IsZero()
+}
+
+// cancelRecoveredJournal has no in-memory owner to race against. It retains
+// artifacts before process control, records a stopped process durably, then
+// commits the cancellation and its matching command acknowledgement together.
+// A failed stop deliberately leaves the journal non-stale and uncleaned.
+func (daemon *daemon) cancelRecoveredJournal(ctx context.Context, journal state.RunJournal, commandID string) bool {
+	key := journal.Key()
+	if journal.LocalState == "cleanup_pending" || (journal.LocalState == "terminal_pending" && journal.TerminalVerdict != "") {
+		return false
+	}
+	if err := daemon.retainUnknownGoalLaunchWorkspaceChecked(key); err != nil {
+		if daemon.log != nil {
+			daemon.log.Warn("retain_recovered_cancel_workspace_failed", "run_id", journal.RunID, "generation", journal.Generation, "error", err)
+		}
+		return false
+	}
+	hasUnclosedGoalSession, err := daemon.recoveredGoalSessionRequiresStop(key)
+	if err != nil {
+		if daemon.log != nil {
+			daemon.log.Warn("load_recovered_goal_session_failed", "run_id", journal.RunID, "generation", journal.Generation, "error", err)
+		}
+		return false
+	}
+	if recoveredProcessRecorded(journal) {
+		if strings.TrimSpace(journal.ProcessIdentity) == "" || daemon.options.terminatePersist == nil {
+			if daemon.log != nil {
+				daemon.log.Warn("stop_recovered_cancel_process_unavailable", "run_id", journal.RunID, "generation", journal.Generation)
+			}
+			return false
+		}
+		if err := daemon.options.terminatePersist(journal.PID, journal.ProcessIdentity); err != nil {
+			if daemon.log != nil {
+				daemon.log.Warn("stop_recovered_cancel_process_failed", "run_id", journal.RunID, "generation", journal.Generation, "error", err)
+			}
+			return false
+		}
+		if _, err := daemon.store.ClearProcessDetails(key, journal.PID, journal.ProcessIdentity); err != nil {
+			if daemon.log != nil {
+				daemon.log.Warn("record_recovered_cancel_process_stop_failed", "run_id", journal.RunID, "generation", journal.Generation, "error", err)
+			}
+			return false
+		}
+	} else if hasUnclosedGoalSession {
+		// The missing process marker is not proof that an uncertain native launch
+		// never escaped. Keep the lineage barrier until a bounded stop has been
+		// recorded instead of acknowledging a cancellation that may leave work.
+		if daemon.log != nil {
+			daemon.log.Warn("stop_recovered_cancel_goal_session_unproven", "run_id", journal.RunID, "generation", journal.Generation)
+		}
+		return false
+	}
+	queued := false
+	if commandID != "" {
+		if !daemon.queueCancellationReceipt(ctx, key, commandID) {
+			return false
+		}
+		queued = true
+	} else if err := daemon.queueTerminalTransitionWithRetry(ctx, key, "cancelled", map[string]string{"reason": string(protocol.TaskResultReasonCancelled)}); err != nil {
+		if daemon.log != nil {
+			daemon.log.Warn("queue_recovered_cancel_transition_failed", "run_id", journal.RunID, "generation", journal.Generation, "error", err)
+		}
+		return false
+	} else {
+		queued = true
+	}
+	if err := daemon.resolveRecoveredGoalSessionStopped(key); err != nil {
+		if daemon.log != nil {
+			daemon.log.Warn("resolve_recovered_goal_session_stop_failed", "run_id", journal.RunID, "generation", journal.Generation, "error", err)
+		}
+		return queued
+	}
+	return true
+}
+
+func (daemon *daemon) recoveredGoalSessionRequiresStop(key state.RunKey) (bool, error) {
+	sessions, err := daemon.store.ListGoalSessions()
+	if err != nil {
+		return false, err
+	}
+	for _, session := range sessions {
+		if session.RunID == key.RunID && session.Generation == key.Generation && session.SessionState != state.GoalSessionStateClosed {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (daemon *daemon) resolveRecoveredGoalSessionStopped(key state.RunKey) error {
+	sessions, err := daemon.store.ListGoalSessions()
+	if err != nil {
+		return err
+	}
+	for _, session := range sessions {
+		if session.RunID != key.RunID || session.Generation != key.Generation {
+			continue
+		}
+		if session.NeedsReconciliation() {
+			if _, err := daemon.store.ResolveGoalSessionUncertainStopped(session.Key(), session.Compatibility()); err != nil {
+				return err
+			}
+		} else if session.SessionState != state.GoalSessionStateClosed {
+			if _, err := daemon.store.CloseGoalSession(session.Key()); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (daemon *daemon) handleSnapshot(ctx context.Context, snapshot protocol.RuntimeSnapshot) {
@@ -1462,6 +2028,7 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		daemon.log.Error("save_claim_grant_failed", "run_id", assignment.RunID, "error", err)
 		return
 	}
+	admission, admissionPresent, admissionErr := parseAdmissionInput(claim.Work.Input)
 	daemon.mu.Lock()
 	active := daemon.running[key]
 	cancelCommandID := ""
@@ -1473,7 +2040,7 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		cancelCommandID = active.cancelCommandID
 		stale = active.stale
 	}
-	if !operatorCancelled && !stale && !contextCancelled {
+	if !operatorCancelled && !stale && !contextCancelled && !admissionPresent {
 		err = daemon.markRunning(key)
 	}
 	daemon.mu.Unlock()
@@ -1483,6 +2050,23 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		return
 	}
 	if stale || contextCancelled {
+		return
+	}
+	if admissionPresent {
+		if admissionErr != nil {
+			daemon.queueFailure(ctx, key, "invalid_admission", admissionErr)
+			return
+		}
+		if err := daemon.startGoalAdmission(ctx, key, claim, admission, func(value workspace.Prepared) {
+			prepared = value
+			preparedOK = true
+			workspacePersisted = true
+		}); err != nil {
+			daemon.queueFailure(ctx, key, "goal_admission", err)
+			return
+		}
+		handoff = true
+		daemon.waitForRunWithContext(ctx, key)
 		return
 	}
 	if err != nil {
@@ -1544,10 +2128,65 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		}
 		return err
 	})
-	process, err := daemon.start(executionContext, execution.Invocation{Program: profile.Command, Args: profile.Args, Dir: prepared.Path, Env: environment, InitialInput: input, CloseInputAfterInitial: !profile.Interactive}, sink)
+	process, err := daemon.start(executionContext, execution.Invocation{
+		Program:                profile.Command,
+		Args:                   profile.Args,
+		Dir:                    prepared.Path,
+		Env:                    environment,
+		InitialInput:           input,
+		CloseInputAfterInitial: !profile.Interactive,
+		PersistProcess: func(pid int, identity string) error {
+			if daemon.options.recordProcess != nil {
+				_, recordErr := daemon.options.recordProcess(key, pid, identity, daemon.now())
+				return recordErr
+			}
+			_, recordErr := daemon.store.SetProcessDetails(key, pid, identity, daemon.now())
+			return recordErr
+		},
+	}, sink)
 	if err != nil {
 		if cause := context.Cause(executionContext); errors.Is(cause, errRequiredDecisionPacket) {
 			err = cause
+		}
+		if process != nil {
+			daemon.mu.Lock()
+			active = daemon.running[key]
+			if active != nil {
+				active.process = process
+				active.prepared = prepared
+				active.output = output
+				active.stopExecution = stopExecution
+			}
+			daemon.mu.Unlock()
+			if active == nil {
+				daemon.terminateProcessBounded(process, 0)
+				return
+			}
+			if pid, identity, detailsErr := processDetails(process); detailsErr != nil {
+				err = errors.Join(err, fmt.Errorf("read process identity after start failure: %w", detailsErr))
+			} else if daemon.options.recordProcess != nil {
+				if _, recordErr := daemon.options.recordProcess(key, pid, identity, daemon.now()); recordErr != nil {
+					err = errors.Join(err, fmt.Errorf("record process after start failure: %w", recordErr))
+				}
+			} else if _, recordErr := daemon.store.SetProcessDetails(key, pid, identity, daemon.now()); recordErr != nil {
+				err = errors.Join(err, fmt.Errorf("record process after start failure: %w", recordErr))
+			}
+			daemon.mu.Lock()
+			if active := daemon.running[key]; active != nil && active.process == process {
+				active.startFailure = err
+			}
+			daemon.mu.Unlock()
+			daemon.finishAttachedStart(key)
+			handoff = true
+			if !daemon.isCancelled(key) {
+				daemon.queueFailure(ctx, key, "start_agent", err)
+			}
+			// Runner owns the physical command wait after it has exposed a
+			// Process. Do not make daemon shutdown depend on an indeterminate
+			// post-start failure path; the persisted identity remains available
+			// to recovery if its bounded termination cannot prove exit.
+			go daemon.watchFailedStartProcess(ctx, key, process)
+			return
 		}
 		if !daemon.isCancelled(key) {
 			daemon.queueFailure(ctx, key, "start_agent", err)
@@ -1558,8 +2197,7 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 	active = daemon.running[key]
 	if active == nil {
 		daemon.mu.Unlock()
-		_ = process.Terminate(context.Background(), 0)
-		_ = process.Wait()
+		daemon.terminateProcessBounded(process, 0)
 		return
 	}
 	active.process = process
@@ -1799,6 +2437,901 @@ func processDetails(process Process) (int, string, error) {
 		return pid, identity, nil
 	}
 	return 0, "", errors.New("process does not expose a persistent identity")
+}
+
+func parseAdmissionInput(input json.RawMessage) (protocol.Admission, bool, error) {
+	trimmed := bytes.TrimSpace(input)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) || trimmed[0] != '{' {
+		return protocol.Admission{}, false, nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &fields); err != nil {
+		return protocol.Admission{}, true, fmt.Errorf("%w: %v", errInvalidAdmission, err)
+	}
+	if nested, present := fields["goal_admission"]; present {
+		if len(bytes.TrimSpace(nested)) == 0 || bytes.Equal(bytes.TrimSpace(nested), []byte("null")) {
+			return protocol.Admission{}, false, nil
+		}
+		admission, err := protocol.ParseAdmission(nested)
+		if err == nil {
+			return admission, true, nil
+		}
+		if admissionSchemaVersion(nested) == protocol.AdmissionSchemaVersion {
+			return protocol.Admission{}, true, fmt.Errorf("%w: %v", errInvalidAdmission, err)
+		}
+		return protocol.Admission{}, false, nil
+	}
+	if admissionSchemaVersion(trimmed) != protocol.AdmissionSchemaVersion {
+		return protocol.Admission{}, false, nil
+	}
+	admission, err := protocol.ParseAdmission(trimmed)
+	if err != nil {
+		return protocol.Admission{}, true, fmt.Errorf("%w: %v", errInvalidAdmission, err)
+	}
+	return admission, true, nil
+}
+
+func admissionSchemaVersion(input json.RawMessage) string {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(input, &object); err != nil {
+		return ""
+	}
+	var schemaVersion string
+	if err := json.Unmarshal(object["schema_version"], &schemaVersion); err != nil {
+		return ""
+	}
+	return schemaVersion
+}
+
+func admissionLaunchFailure(admission protocol.Admission, capabilities harness.Capabilities, providerAccess *protocol.ProviderAccess) error {
+	// Handoff is intentionally a distinct mode. This daemon has no verified
+	// cross-harness native-session transfer, so reject it before any workspace,
+	// launch-intent, or native-process side effect can be created.
+	if admission.SessionMode == protocol.SessionModeHandoff {
+		return taskResultFailure(protocol.TaskResultReasonHandoffUnsupported, fmt.Errorf("%s: cross-harness Goal session handoff is not supported by this daemon", protocol.TaskResultReasonHandoffUnsupported))
+	}
+	if err := capabilities.Require(harness.CapabilityStart, harness.CapabilityEvents, harness.CapabilityCancel); err != nil {
+		return err
+	}
+	if providerAccess != nil {
+		return &harness.CapabilityError{
+			Kind:       capabilities.Kind,
+			Capability: harness.CapabilityProviderAccess,
+			Reason:     "native provider broker bridge is not verified",
+		}
+	}
+	if admission.Limits.MaxCostMicrousd != nil {
+		if err := capabilities.Require(harness.CapabilityHardCostLimit); err != nil {
+			return err
+		}
+	}
+	if admission.SessionMode != protocol.SessionModeFresh || admission.RequestedSessionID != nil {
+		return taskResultFailure(protocol.TaskResultReasonResumeRejected, fmt.Errorf("%s: only fresh native Goal sessions are implemented", protocol.TaskResultReasonResumeRejected))
+	}
+	if admission.Limits.MaxTurns != 1 {
+		return errors.New("Goal admission must request exactly one native turn")
+	}
+	return nil
+}
+
+// startGoalAdmission crosses the staged native-launch barriers in their only
+// safe order. Every pre-turn failure either closes the known process or leaves
+// the local session journal explicitly uncertain; neither path starts a second
+// native session on retry.
+func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, claim protocol.ClaimResponse, admission protocol.Admission, workspacePersisted func(workspace.Prepared)) (returnErr error) {
+	nativeLaunchAttempted := false
+	defer func() {
+		if returnErr == nil || !nativeLaunchAttempted {
+			return
+		}
+		if _, typed := taskResultFailureReason(returnErr); !typed {
+			returnErr = taskResultFailure(protocol.TaskResultReasonUnknownOutcome, returnErr)
+		}
+	}()
+	if admission.ModelProfile != daemon.config.Runtime.AgentProfile {
+		return fmt.Errorf("Goal admission model_profile %q does not match configured runtime agent_profile %q", admission.ModelProfile, daemon.config.Runtime.AgentProfile)
+	}
+	if err := admissionLaunchFailure(admission, daemon.harnessCapabilities, claim.ProviderAccess); err != nil {
+		return err
+	}
+	if admission.Subject.ResourceID != daemon.config.Runtime.RepositoryResourceID {
+		return errors.New("Goal admission subject resource_id does not match the configured runtime repository_resource_id")
+	}
+	if daemon.harnessCapabilities.Kind != harness.KindCodex {
+		return fmt.Errorf("Goal admission harness %q is unsupported", daemon.harnessCapabilities.Kind)
+	}
+	goalAPI, ok := daemon.control.(goalControlAPI)
+	if !ok {
+		return errors.New("control API does not implement Goal session admission")
+	}
+	if daemon.harnessRegistry == nil {
+		return errors.New("native harness registry is unavailable")
+	}
+	deadline := parseAdmissionDeadline(admission.Limits.DeadlineAt)
+	if deadline.IsZero() || !deadline.After(daemon.now()) {
+		return errors.New("Goal admission deadline has elapsed before native launch")
+	}
+	adapter, err := daemon.harnessRegistry.Lookup(harness.KindCodex)
+	if err != nil {
+		return fmt.Errorf("lookup Codex adapter: %w", err)
+	}
+	profile := daemon.config.AgentProfiles[daemon.config.Runtime.AgentProfile]
+	providerAccess, err := goalProviderAccess(profile, claim.ProviderAccess, daemon.config.ControlPlaneURL)
+	if err != nil {
+		return err
+	}
+
+	if _, err := daemon.store.MarkWorkspaceRecoveryRequired(key); err != nil {
+		return fmt.Errorf("mark workspace recovery required: %w", err)
+	}
+	subjectWorkspace, ok := daemon.workspace.(goalSubjectWorkspace)
+	if !ok {
+		return errors.New("workspace service does not support immutable Goal subjects")
+	}
+	preparedSubject, err := subjectWorkspace.PrepareSubject(ctx, daemon.config.Runtime.Workspace, workspace.RunRef{RunID: key.RunID, Generation: key.Generation}, admission.Subject)
+	if err != nil {
+		return fmt.Errorf("prepare admitted Subject workspace: %w", err)
+	}
+	prepared := preparedSubject.Prepared
+	if preparedSubject.Subject != admission.Subject {
+		return errors.New("prepared Goal workspace does not match the admitted Subject")
+	}
+	if !daemon.persistWorkspacePath(ctx, key, prepared.Path) {
+		return errors.New("persist workspace path")
+	}
+	if workspacePersisted != nil {
+		workspacePersisted(prepared)
+	}
+	fingerprint, err := workspaceFingerprint(ctx, prepared)
+	if err != nil {
+		return fmt.Errorf("fingerprint workspace: %w", err)
+	}
+	localHandleID, err := state.NewGoalSessionLocalHandleID()
+	if err != nil {
+		return fmt.Errorf("generate local native session handle: %w", err)
+	}
+	launchIntentID, err := state.NewGoalSessionLocalHandleID()
+	if err != nil {
+		return fmt.Errorf("generate native launch intent: %w", err)
+	}
+	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: localHandleID}
+	intent := state.GoalSessionLaunchIntent{
+		LaunchIntentID:         launchIntentID,
+		GoalID:                 admission.GoalID,
+		GoalRevision:           admission.GoalRevision,
+		WorkItemID:             admissionWorkItemIDValue(admission.WorkItemID),
+		TaskID:                 claim.TaskID,
+		RunID:                  key.RunID,
+		Generation:             key.Generation,
+		AdmissionID:            admission.AdmissionID,
+		LocalHandleID:          localHandleID,
+		RuntimeID:              daemon.runtimeID,
+		RuntimeEpoch:           daemon.runtimeEpoch,
+		HarnessKind:            string(daemon.harnessCapabilities.Kind),
+		HarnessVersion:         daemon.harnessCapabilities.NativeVersion,
+		AdapterVersion:         daemon.harnessCapabilities.ImplementationVersion,
+		AdapterProtocolVersion: daemon.harnessCapabilities.ProtocolVersion,
+		WorkspaceFingerprint:   fingerprint,
+		SessionMode:            state.GoalSessionModeFresh,
+	}
+	if _, err := daemon.store.SaveGoalSessionLaunchIntent(intent); err != nil {
+		return fmt.Errorf("save Goal session launch intent: %w", err)
+	}
+	if _, err := daemon.store.MarkGoalSessionLaunchStarted(sessionKey, daemon.now()); err != nil {
+		return fmt.Errorf("mark Goal session launch: %w", err)
+	}
+	if _, err := daemon.store.QueueGoalSessionAttach(key, state.GoalSessionAttachDelivery{
+		GoalID:               admission.GoalID,
+		LocalHandleID:        localHandleID,
+		HarnessKind:          string(daemon.harnessCapabilities.Kind),
+		HarnessVersion:       daemon.harnessCapabilities.NativeVersion,
+		AdapterVersion:       daemon.harnessCapabilities.ImplementationVersion,
+		WorkspaceFingerprint: fingerprint,
+		// Control owns a logical workspace key. The absolute local worktree path
+		// remains in the daemon journal and must not become control-plane identity.
+		Workspace:            daemon.config.Runtime.Workspace,
+		RepositoryResourceID: &admission.Subject.ResourceID,
+	}); err != nil {
+		_, _ = daemon.store.AbortGoalSessionLaunchBeforeNativeStart(sessionKey)
+		return fmt.Errorf("queue native Goal session attach intent: %w", err)
+	}
+
+	environment, err := execution.BuildEnvironment(profile.EnvAllowlist...)
+	if err != nil {
+		_, _ = daemon.store.DiscardUnreadyGoalSessionAttachDelivery(key, localHandleID)
+		_, _ = daemon.store.AbortGoalSessionLaunchBeforeNativeStart(sessionKey)
+		return fmt.Errorf("build native environment: %w", err)
+	}
+	sink := harness.EventSinkFunc(func(_ context.Context, event harness.Event) error {
+		return daemon.queueNativeEvent(key, event)
+	})
+	session, err := adapter.Start(ctx, harness.StartRequest{
+		AdmissionID:   admission.AdmissionID,
+		LocalHandleID: localHandleID,
+		Workspace:     prepared.Path,
+		Goal:          claim.Work.Goal,
+		ModelProfile:  admission.ModelProfile,
+		Limits: harness.Limits{
+			MaxTurns:        int(admission.Limits.MaxTurns),
+			DeadlineAt:      parseAdmissionDeadline(admission.Limits.DeadlineAt),
+			MaxCostMicrousd: admission.Limits.MaxCostMicrousd,
+		},
+		ProviderAccess: providerAccess,
+		Invocation:     execution.Invocation{Program: profile.Command, Args: profile.Args, Dir: prepared.Path, Env: environment},
+		PersistProcess: func(pid int, identity string) error {
+			if daemon.options.recordProcess != nil {
+				_, err := daemon.options.recordProcess(key, pid, identity, daemon.now())
+				return err
+			}
+			_, err := daemon.store.SetProcessDetails(key, pid, identity, daemon.now())
+			return err
+		},
+	}, sink)
+	nativeLaunchAttempted = true
+	if err != nil {
+		daemon.retainUnknownGoalLaunchWorkspace(key)
+		if _, discardErr := daemon.store.DiscardUnreadyGoalSessionAttachDelivery(key, localHandleID); discardErr != nil {
+			return fmt.Errorf("discard unsent native Goal session attach intent: %w", errors.Join(err, discardErr))
+		}
+		_, _ = daemon.store.MarkGoalSessionUncertain(sessionKey, "native transport start outcome is unknown: "+errorText(err))
+		return taskResultFailure(protocol.TaskResultReasonUnknownOutcome, fmt.Errorf("start native Goal session: %w", err))
+	}
+	staged, ok := session.(harness.StagedSession)
+	if !ok {
+		if _, discardErr := daemon.store.DiscardUnreadyGoalSessionAttachDelivery(key, localHandleID); discardErr != nil {
+			return fmt.Errorf("discard unsent native Goal session attach intent: %w", discardErr)
+		}
+		cause := errors.New("native Goal adapter does not implement staged session launch")
+		daemon.retainUnknownGoalLaunchWorkspace(key)
+		if abandonErr := daemon.abandonGoalSession(sessionKey, session, false, cause); abandonErr != nil {
+			return taskResultFailure(protocol.TaskResultReasonUnknownOutcome, errors.Join(cause, abandonErr))
+		}
+		return taskResultFailure(protocol.TaskResultReasonUnknownOutcome, cause)
+	}
+	if err := daemon.attachNativeSession(key, session, sessionKey, admission, prepared, deadline); err != nil {
+		daemon.retainUnknownGoalLaunchWorkspace(key)
+		if _, discardErr := daemon.store.DiscardUnreadyGoalSessionAttachDelivery(key, localHandleID); discardErr != nil {
+			return fmt.Errorf("discard unsent native Goal session attach intent: %w", errors.Join(err, discardErr))
+		}
+		daemon.abandonGoalSession(sessionKey, session, false, err)
+		return err
+	}
+
+	operationContext, operationCancel := context.WithDeadline(ctx, deadline)
+	defer operationCancel()
+	handle, err := staged.Open(operationContext)
+	if err != nil {
+		daemon.retainUnknownGoalLaunchWorkspace(key)
+		if _, discardErr := daemon.store.DiscardUnreadyGoalSessionAttachDelivery(key, localHandleID); discardErr != nil {
+			return fmt.Errorf("discard unsent native Goal session attach intent: %w", errors.Join(err, discardErr))
+		}
+		daemon.abandonGoalSession(sessionKey, session, false, err)
+		return fmt.Errorf("open native Goal session: %w", err)
+	}
+	if _, err := daemon.store.PersistGoalSessionHandle(sessionKey, state.GoalSessionHandle{NativeSessionID: handle.ID, NativeSessionFilename: handle.Filename}); err != nil {
+		daemon.retainUnknownGoalLaunchWorkspace(key)
+		if _, discardErr := daemon.store.DiscardUnreadyGoalSessionAttachDelivery(key, localHandleID); discardErr != nil {
+			return fmt.Errorf("discard unsent native Goal session attach intent: %w", errors.Join(err, discardErr))
+		}
+		daemon.abandonGoalSession(sessionKey, session, false, err)
+		return fmt.Errorf("persist native Goal session handle: %w", err)
+	}
+	attached := true
+	if _, err := daemon.markGoalSessionAttachDeliveryReady(key, localHandleID); err != nil {
+		discardErr := daemon.discardUnreadyGoalSessionAttachDelivery(key, localHandleID)
+		abandonErr := daemon.abandonGoalSession(sessionKey, session, attached, err)
+		if abandonErr != nil {
+			daemon.requireNativeSessionCloseRetry(key, session)
+		}
+		return fmt.Errorf("mark native Goal session attach delivery ready: %w", errors.Join(err, discardErr, abandonErr))
+	}
+
+	runJournal, err := daemon.store.LoadJournal(key)
+	if err != nil {
+		daemon.abandonGoalSession(sessionKey, session, attached, err)
+		return fmt.Errorf("load native run fence: %w", err)
+	}
+	var receipt *control.GoalSessionReceipt
+	runJournal, receipt, err = daemon.deliverGoalDelivery(operationContext, runJournal, state.GoalDeliverySessionAttach, localHandleID, func(receipt control.GoalSessionReceipt) error {
+		return validateGoalSessionReceipt(admission, claim, key, localHandleID, receipt)
+	})
+	if err != nil {
+		daemon.abandonGoalSession(sessionKey, session, attached, err)
+		return fmt.Errorf("attach native Goal session: %w", err)
+	}
+	if receipt == nil {
+		daemon.abandonGoalSession(sessionKey, session, attached, errors.New("native Goal session attach receipt is unavailable"))
+		return errors.New("native Goal session attach receipt is unavailable")
+	}
+	requestContext, cancel := daemon.controlContext(operationContext)
+	canonical, err := goalAPI.FetchRunContext(requestContext, key.RunID, runJournal.Fence())
+	cancel()
+	if err != nil {
+		daemon.abandonGoalSession(sessionKey, session, attached, err)
+		return fmt.Errorf("fetch Goal run context: %w", err)
+	}
+	if err := validateGoalRunContext(admission, claim, key, *receipt, canonical); err != nil {
+		daemon.abandonGoalSession(sessionKey, session, attached, err)
+		return err
+	}
+	canonicalJSON, err := json.Marshal(canonical.Context)
+	if err != nil {
+		daemon.abandonGoalSession(sessionKey, session, attached, err)
+		return fmt.Errorf("encode canonical Goal context: %w", err)
+	}
+	if err := daemon.markRunning(key); err != nil {
+		daemon.abandonGoalSession(sessionKey, session, attached, err)
+		return fmt.Errorf("mark native Goal run running: %w", err)
+	}
+	daemon.mu.Lock()
+	active := daemon.running[key]
+	if active != nil {
+		active.nativeSession = session
+		active.goalSession = &sessionKey
+		admissionCopy := admission
+		active.goalAdmission = &admissionCopy
+		active.prepared = prepared
+	}
+	daemon.mu.Unlock()
+	if active == nil || daemon.isCancelled(key) || ctx.Err() != nil {
+		daemon.abandonGoalSession(sessionKey, session, attached, errors.New("Goal run was cancelled before native turn start"))
+		return errors.New("Goal run was cancelled before native turn start")
+	}
+	if err := staged.StartTurn(operationContext, harness.TurnRequest{Goal: claim.Work.Goal, Context: canonicalJSON}); err != nil {
+		if abandonErr := daemon.abandonGoalSessionUncertain(sessionKey, session, err); abandonErr != nil {
+			return fmt.Errorf("start native Goal turn: %w", errors.Join(err, abandonErr))
+		}
+		return fmt.Errorf("start native Goal turn: %w", err)
+	}
+	if daemon.finishAttachedStart(key) {
+		daemon.signalOutbox()
+	}
+	return nil
+}
+
+// goalProviderAccess is intentionally separate from legacy initialInput: a
+// native harness must receive the broker capability out of band rather than
+// through a persisted prompt or process environment.
+func goalProviderAccess(profile config.AgentProfile, access *protocol.ProviderAccess, controlPlaneURL string) (*protocol.ProviderAccess, error) {
+	if access == nil {
+		return nil, nil
+	}
+	if !profile.ProviderAccess {
+		return nil, errors.New("agent profile does not allow provider access")
+	}
+	return resolveProviderAccess(controlPlaneURL, access)
+}
+
+func parseAdmissionDeadline(value string) time.Time {
+	deadline, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}
+	}
+	return deadline.UTC()
+}
+
+func (daemon *daemon) attachNativeSession(key state.RunKey, session harness.Session, sessionKey state.GoalSessionKey, admission protocol.Admission, prepared workspace.Prepared, deadline time.Time) error {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	active := daemon.running[key]
+	if active == nil {
+		return errors.New("Goal run is no longer active")
+	}
+	active.nativeSession = session
+	active.goalSession = &sessionKey
+	admissionCopy := admission
+	active.goalAdmission = &admissionCopy
+	active.nativeDeadline = deadline
+	active.prepared = prepared
+	return nil
+}
+
+func (daemon *daemon) clearNativeSession(key state.RunKey, session harness.Session) {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	if active := daemon.running[key]; active != nil && active.nativeSession == session {
+		active.nativeSession = nil
+		active.goalSession = nil
+		active.goalAdmission = nil
+		active.nativeDeadline = time.Time{}
+	}
+}
+
+func (daemon *daemon) clearNativeSessionByValue(session harness.Session) {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	for _, active := range daemon.running {
+		if active.nativeSession == session {
+			active.nativeSession = nil
+			active.goalSession = nil
+			active.goalAdmission = nil
+			active.nativeDeadline = time.Time{}
+		}
+	}
+}
+
+func (daemon *daemon) requireNativeSessionCloseRetry(key state.RunKey, session harness.Session) {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	if active := daemon.running[key]; active != nil && active.nativeSession == session {
+		active.nativeCloseRetryRequired = true
+		active.cleanupBlocked = true
+	}
+}
+
+func (daemon *daemon) markGoalSessionAttachDeliveryReady(key state.RunKey, localHandleID string) (state.RunJournal, error) {
+	mark := daemon.options.markGoalSessionAttachDeliveryReady
+	if mark == nil {
+		mark = daemon.store.MarkGoalSessionAttachDeliveryReady
+	}
+	journal, err := mark(key, localHandleID)
+	if err == nil {
+		return journal, nil
+	}
+
+	// A failed directory sync can follow a visible atomic rename. Read back the
+	// journal before treating the attachment as unready so we never discard a
+	// receipt that is already eligible for exact replay.
+	observed, readErr := daemon.store.LoadJournal(key)
+	if readErr == nil {
+		for _, delivery := range observed.PendingGoalDeliveries {
+			if delivery.Kind == state.GoalDeliverySessionAttach && delivery.DeliveryID == localHandleID && delivery.Ready {
+				return observed, nil
+			}
+		}
+	}
+	if readErr != nil && !state.IsNotFound(readErr) {
+		err = errors.Join(err, fmt.Errorf("read Goal session attach delivery after ready failure: %w", readErr))
+	}
+	return journal, err
+}
+
+func (daemon *daemon) discardUnreadyGoalSessionAttachDelivery(key state.RunKey, localHandleID string) error {
+	discard := daemon.options.discardUnreadyGoalSessionAttachDelivery
+	if discard == nil {
+		discard = daemon.store.DiscardUnreadyGoalSessionAttachDelivery
+	}
+	_, err := discard(key, localHandleID)
+	return err
+}
+
+// retryUnreadyGoalSessionAttachDeliveries clears only pre-send receipts once
+// their starter has finished. It covers a transient failure while compensating
+// a rejected Ready barrier without ever promoting an unready receipt.
+func (daemon *daemon) retryUnreadyGoalSessionAttachDeliveries() {
+	journals, err := daemon.store.ListJournals()
+	if err != nil {
+		return
+	}
+	for _, journal := range journals {
+		if daemon.isStarting(journal.Key()) {
+			continue
+		}
+		for _, delivery := range journal.PendingGoalDeliveries {
+			if delivery.Kind != state.GoalDeliverySessionAttach || delivery.Ready {
+				continue
+			}
+			if err := daemon.discardUnreadyGoalSessionAttachDelivery(journal.Key(), delivery.DeliveryID); err != nil && daemon.log != nil {
+				daemon.log.Warn("discard_unready_goal_session_attach_failed", "run_id", journal.RunID, "generation", journal.Generation, "error", err)
+			}
+		}
+	}
+}
+
+type blockedNativeSession struct {
+	key     state.RunKey
+	active  *runningRun
+	session harness.Session
+}
+
+// retryBlockedNativeSessionCloses keeps cleanup owned by this daemon when a
+// failed Ready barrier also encounters a bounded native Close failure. The
+// durable session remains uncertain until Close and its process-marker cleanup
+// both succeed.
+func (daemon *daemon) retryBlockedNativeSessionCloses() {
+	blocked := make([]blockedNativeSession, 0)
+	daemon.mu.Lock()
+	for key, active := range daemon.running {
+		if active.nativeSession == nil || active.goalSession == nil || !active.nativeCloseRetryRequired || active.nativeCloseRetrying {
+			continue
+		}
+		active.nativeCloseRetrying = true
+		blocked = append(blocked, blockedNativeSession{key: key, active: active, session: active.nativeSession})
+	}
+	daemon.mu.Unlock()
+
+	for _, candidate := range blocked {
+		err := daemon.closeNativeGoalSession(candidate.key, candidate.active, candidate.session)
+		if err == nil {
+			daemon.clearNativeSession(candidate.key, candidate.session)
+			daemon.mu.Lock()
+			if daemon.running[candidate.key] == candidate.active {
+				candidate.active.cleanupBlocked = false
+				candidate.active.nativeCloseRetryRequired = false
+			}
+			daemon.mu.Unlock()
+			daemon.signalOutboxFor(candidate.key)
+		} else if daemon.log != nil {
+			daemon.log.Warn("retry_native_goal_session_close_failed", "run_id", candidate.key.RunID, "generation", candidate.key.Generation, "error", err)
+		}
+		daemon.mu.Lock()
+		if daemon.running[candidate.key] == candidate.active {
+			candidate.active.nativeCloseRetrying = false
+		}
+		daemon.mu.Unlock()
+	}
+}
+
+func (daemon *daemon) abandonGoalSession(key state.GoalSessionKey, session harness.Session, attached bool, cause error) error {
+	closeContext, cancel := context.WithTimeout(context.Background(), controlRequestLimit)
+	closeErr := session.Close(closeContext)
+	cancel()
+	nativeCloseErr := closeErr
+	if closeErr == nil {
+		daemon.clearNativeSessionByValue(session)
+	}
+	var runKey state.RunKey
+	if sessionJournal, err := daemon.store.LoadGoalSession(key); err == nil {
+		runKey = state.RunKey{RunID: sessionJournal.RunID, Generation: sessionJournal.Generation}
+	} else if !state.IsNotFound(err) {
+		closeErr = errors.Join(closeErr, fmt.Errorf("load Goal session after close: %w", err))
+	}
+	if closeErr == nil && attached {
+		if _, err := daemon.store.CloseGoalSession(key); err != nil {
+			closeErr = err
+		}
+	}
+	if closeErr == nil && runKey.RunID != "" && runKey.Generation > 0 {
+		if err := daemon.clearNativeProcessDetails(runKey); err != nil {
+			closeErr = err
+		}
+	}
+	if nativeCloseErr != nil && runKey.RunID != "" && runKey.Generation > 0 {
+		daemon.requireNativeSessionCloseRetry(runKey, session)
+	}
+	if closeErr == nil && attached {
+		return nil
+	}
+	reason := "native Goal session did not reach a known stopped state"
+	if cause != nil {
+		reason += ": " + cause.Error()
+	}
+	if closeErr != nil {
+		reason += "; close: " + closeErr.Error()
+	}
+	var retentionErr error
+	if closeErr != nil && runKey.RunID != "" && runKey.Generation > 0 {
+		retentionErr = daemon.retainUnknownGoalLaunchWorkspaceChecked(runKey)
+	}
+	_, uncertainErr := daemon.store.MarkGoalSessionUncertain(key, reason)
+	return errors.Join(closeErr, retentionErr, uncertainErr)
+}
+
+func (daemon *daemon) abandonGoalSessionUncertain(key state.GoalSessionKey, session harness.Session, cause error) error {
+	closeContext, cancel := context.WithTimeout(context.Background(), controlRequestLimit)
+	closeErr := session.Close(closeContext)
+	cancel()
+	nativeCloseErr := closeErr
+	if closeErr == nil {
+		daemon.clearNativeSessionByValue(session)
+	}
+	sessionJournal, sessionErr := daemon.store.LoadGoalSession(key)
+	if sessionErr != nil {
+		return errors.Join(closeErr, fmt.Errorf("load Goal session after uncertain close: %w", sessionErr))
+	}
+	runKey := state.RunKey{RunID: sessionJournal.RunID, Generation: sessionJournal.Generation}
+	var clearErr error
+	if closeErr == nil {
+		clearErr = daemon.clearNativeProcessDetails(runKey)
+	} else if nativeCloseErr != nil {
+		daemon.requireNativeSessionCloseRetry(runKey, session)
+	}
+	reason := "native Goal turn start outcome is unknown"
+	if cause != nil {
+		reason += ": " + cause.Error()
+	}
+	if closeErr != nil {
+		reason += "; close: " + closeErr.Error()
+	}
+	retentionErr := daemon.retainUnknownGoalLaunchWorkspaceChecked(runKey)
+	_, uncertainErr := daemon.store.MarkGoalSessionUncertain(key, reason)
+	return errors.Join(closeErr, clearErr, retentionErr, uncertainErr)
+}
+
+// retainUnknownGoalLaunchWorkspace prevents cleanup from deleting a worktree
+// that an unconfirmed native transport may still be modifying.
+func (daemon *daemon) retainUnknownGoalLaunchWorkspace(key state.RunKey) {
+	if err := daemon.retainUnknownGoalLaunchWorkspaceChecked(key); err != nil && daemon.log != nil {
+		daemon.log.Error("retain_unknown_goal_workspace_failed", "run_id", key.RunID, "generation", key.Generation, "error", err)
+	}
+}
+
+func (daemon *daemon) retainUnknownGoalLaunchWorkspaceChecked(key state.RunKey) error {
+	daemon.rememberWorkspaceRetention(key)
+	retain := daemon.options.retainWorkspace
+	if retain == nil {
+		retain = daemon.store.RetainWorkspace
+	}
+	if _, err := retain(key); err != nil {
+		return fmt.Errorf("persist workspace retention: %w", err)
+	}
+	return nil
+}
+
+func validateGoalSessionReceipt(admission protocol.Admission, claim protocol.ClaimResponse, key state.RunKey, localHandleID string, receipt control.GoalSessionReceipt) error {
+	if receipt.GoalID != admission.GoalID || receipt.TaskID != claim.TaskID || receipt.RunID != key.RunID || receipt.ActiveRunID != key.RunID || receipt.LocalHandleID != localHandleID {
+		return errors.New("attached Goal session receipt does not match admission and claim")
+	}
+	if receipt.RepositoryResourceID != admission.Subject.ResourceID || receipt.State != state.GoalSessionStateBusy {
+		return errors.New("attached Goal session receipt has incompatible repository or state")
+	}
+	return nil
+}
+
+func validateGoalRunContext(admission protocol.Admission, claim protocol.ClaimResponse, key state.RunKey, receipt control.GoalSessionReceipt, runContext control.GoalRunContext) error {
+	context := runContext.Context
+	if runContext.GoalID != admission.GoalID || runContext.TaskID != claim.TaskID || runContext.RunID != key.RunID || runContext.Generation != key.Generation || runContext.SessionID == nil || *runContext.SessionID != receipt.ID {
+		return errors.New("Goal run context does not match admission, claim, or attached session")
+	}
+	if context.GoalID != admission.GoalID || context.GoalRevision != admission.GoalRevision ||
+		!equalOptionalGoalString(context.WorkItemID, admission.WorkItemID) ||
+		context.WorkContract.Purpose != string(admission.Purpose) ||
+		context.SnapshotID != admission.ContextSnapshotID || context.ContentHash != admission.ContextHash || context.Subject != admission.Subject {
+		return errors.New("canonical Goal context does not match admission")
+	}
+	return nil
+}
+
+func admissionWorkItemIDValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func equalOptionalGoalString(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+func (daemon *daemon) queueNativeEvent(key state.RunKey, event harness.Event) error {
+	at := event.At
+	if at.IsZero() {
+		at = daemon.now()
+	}
+	if event.Kind == harness.EventUsageObserved {
+		if observation, ok := parseNativeUsageSnapshot(event.Payload); ok {
+			observation.ObservedAt = at.UTC()
+			journal, observationErr := daemon.store.RecordNativeUsageObservation(key, observation)
+			if observationErr != nil {
+				return observationErr
+			}
+			daemon.mu.Lock()
+			if active := daemon.running[key]; active != nil && active.goalSession != nil {
+				retained := journal.NativeUsageObservation
+				if retained != nil {
+					retainedCopy := *retained
+					active.goalUsageObservation = &retainedCopy
+					usage := usageFromNativeObservation(retainedCopy)
+					active.goalUsage = &usage
+					active.goalUsageAt = retainedCopy.ObservedAt.UTC()
+					active.goalCachedInputTokens = retainedCopy.CachedInputTokens
+				}
+				active.goalUsageHasCached = true
+			}
+			daemon.mu.Unlock()
+		}
+	}
+	payload := event.Payload
+	if len(payload) == 0 || !json.Valid(payload) {
+		encoded, err := json.Marshal(map[string]any{
+			"native_kind": string(event.Kind), "code": event.Code, "message": event.Message,
+			"data": string(event.Data), "diagnostic": event.Diagnostic,
+		})
+		if err != nil {
+			return err
+		}
+		payload = encoded
+	}
+	return daemon.queueEvent(key, string(event.Kind), payload, at)
+}
+
+type nativeUsageSnapshot struct {
+	Total *nativeUsageCounters `json:"total"`
+}
+
+type nativeUsageCounters struct {
+	CachedInputTokens     *int64 `json:"cached_input_tokens"`
+	InputTokens           *int64 `json:"input_tokens"`
+	OutputTokens          *int64 `json:"output_tokens"`
+	ReasoningOutputTokens *int64 `json:"reasoning_output_tokens"`
+	TotalTokens           *int64 `json:"total_tokens"`
+}
+
+func parseNativeUsageSnapshot(payload json.RawMessage) (state.NativeUsageObservation, bool) {
+	if len(payload) == 0 {
+		return state.NativeUsageObservation{}, false
+	}
+	var snapshot nativeUsageSnapshot
+	if err := json.Unmarshal(payload, &snapshot); err != nil ||
+		snapshot.Total == nil || snapshot.Total.CachedInputTokens == nil || snapshot.Total.InputTokens == nil ||
+		snapshot.Total.OutputTokens == nil || snapshot.Total.ReasoningOutputTokens == nil || snapshot.Total.TotalTokens == nil ||
+		*snapshot.Total.CachedInputTokens < 0 || *snapshot.Total.InputTokens < 0 || *snapshot.Total.OutputTokens < 0 ||
+		*snapshot.Total.ReasoningOutputTokens < 0 || *snapshot.Total.TotalTokens < 0 {
+		return state.NativeUsageObservation{}, false
+	}
+	return state.NativeUsageObservation{
+		SchemaVersion:         state.NativeUsageObservationSchemaVersion,
+		InputTokens:           *snapshot.Total.InputTokens,
+		OutputTokens:          *snapshot.Total.OutputTokens,
+		CachedInputTokens:     *snapshot.Total.CachedInputTokens,
+		ReasoningOutputTokens: *snapshot.Total.ReasoningOutputTokens,
+		TotalTokens:           *snapshot.Total.TotalTokens,
+	}, true
+}
+
+func usageFromNativeObservation(observation state.NativeUsageObservation) harness.Usage {
+	return harness.Usage{
+		State:        harness.UsageUnknown,
+		InputTokens:  observation.InputTokens,
+		OutputTokens: observation.OutputTokens,
+		CostMicrousd: "",
+	}
+}
+
+const nativeGoalUsageKey = "native-final"
+
+func (daemon *daemon) queueNativeGoalUsage(ctx context.Context, key state.RunKey, result *harness.TaskResult) error {
+	usage, shouldQueue, err := daemon.prepareNativeGoalUsage(key, result)
+	if err != nil || !shouldQueue {
+		return err
+	}
+	return daemon.queueNativeGoalUsageRecord(key, usage)
+}
+
+func (daemon *daemon) prepareNativeGoalUsage(key state.RunKey, result *harness.TaskResult) (protocol.Usage, bool, error) {
+	if !canonicalGoalRunID(key.RunID) {
+		// Legacy/unit fixtures may use descriptive run IDs. Goal transport IDs
+		// are UUIDs in production; do not let a compatibility fixture invent a
+		// malformed accounting receipt.
+		return protocol.Usage{}, false, nil
+	}
+	journal, err := daemon.store.LoadJournal(key)
+	if state.IsNotFound(err) {
+		return protocol.Usage{}, false, nil
+	}
+	if err != nil {
+		return protocol.Usage{}, false, err
+	}
+	for _, delivery := range journal.PendingGoalDeliveries {
+		if delivery.Kind == state.GoalDeliveryUsage && delivery.DeliveryID == nativeGoalUsageKey {
+			return protocol.Usage{}, false, nil
+		}
+	}
+	for _, retired := range journal.RetiredGoalDeliveries {
+		if retired.Delivery.Kind == state.GoalDeliveryUsage && retired.Delivery.DeliveryID == nativeGoalUsageKey {
+			return protocol.Usage{}, false, nil
+		}
+	}
+	for _, delivered := range journal.DeliveredGoalDeliveries {
+		if delivered.Kind == state.GoalDeliveryUsage && delivered.DeliveryID == nativeGoalUsageKey {
+			return protocol.Usage{}, false, nil
+		}
+	}
+
+	observed := harness.Usage{}
+	hasSnapshot := false
+	observedAt := daemon.now().UTC()
+	cachedInputTokens := int64(0)
+	hasCachedInputTokens := false
+	if journal.NativeUsageObservation != nil {
+		observation := *journal.NativeUsageObservation
+		observed = usageFromNativeObservation(observation)
+		cachedInputTokens = observation.CachedInputTokens
+		hasCachedInputTokens = true
+		hasSnapshot = true
+		observedAt = observation.ObservedAt.UTC()
+	}
+	daemon.mu.Lock()
+	if !hasSnapshot {
+		if active := daemon.running[key]; active != nil && active.goalUsageObservation != nil {
+			observation := *active.goalUsageObservation
+			observed = usageFromNativeObservation(observation)
+			cachedInputTokens = observation.CachedInputTokens
+			hasCachedInputTokens = true
+			hasSnapshot = true
+			observedAt = observation.ObservedAt.UTC()
+		} else if active := daemon.running[key]; active != nil && active.goalUsage != nil {
+			observed = *active.goalUsage
+			hasSnapshot = true
+			cachedInputTokens = active.goalCachedInputTokens
+			hasCachedInputTokens = active.goalUsageHasCached
+			if !active.goalUsageAt.IsZero() {
+				observedAt = active.goalUsageAt.UTC()
+			}
+		}
+	}
+	daemon.mu.Unlock()
+	if result != nil && !hasSnapshot && result.Usage.State != "" {
+		observed = result.Usage
+		hasSnapshot = result.Usage.State != harness.UsageUnknown
+	}
+
+	profile := daemon.config.AgentProfiles[daemon.config.Runtime.AgentProfile]
+	provider := strings.TrimSpace(profile.NativeModelProvider)
+	if provider == "" {
+		provider = "unknown"
+	}
+	model := strings.TrimSpace(profile.NativeModel)
+	if model == "" {
+		model = "unknown"
+	}
+	usage := protocol.Usage{
+		SchemaVersion: protocol.UsageSchemaVersion,
+		RunID:         key.RunID,
+		UsageKey:      nativeGoalUsageKey,
+		Provider:      provider,
+		Model:         model,
+		CostBasis:     protocol.CostUnknown,
+		ObservedAt:    observedAt.Format(time.RFC3339),
+	}
+	if hasSnapshot {
+		inputTokens := observed.InputTokens
+		outputTokens := observed.OutputTokens
+		usage.InputTokens = &inputTokens
+		usage.OutputTokens = &outputTokens
+		if hasCachedInputTokens {
+			usage.CachedInputTokens = &cachedInputTokens
+		}
+		if (observed.State == harness.UsageReported || observed.State == harness.UsageEstimated) && observed.CostMicrousd != "" && protocol.ValidateMicroUSD(observed.CostMicrousd) == nil {
+			cost := observed.CostMicrousd
+			usage.CostMicrousd = &cost
+			if observed.State == harness.UsageReported {
+				usage.CostBasis = protocol.CostReported
+			} else {
+				usage.CostBasis = protocol.CostEstimated
+			}
+		}
+	}
+
+	if usage.UsageID == "" {
+		id, idErr := state.NewDaemonInstanceID()
+		if idErr != nil {
+			return protocol.Usage{}, false, idErr
+		}
+		usage.UsageID = id
+	}
+	return usage, true, nil
+}
+
+func (daemon *daemon) queueNativeGoalUsageRecord(key state.RunKey, usage protocol.Usage) error {
+	queue := daemon.options.queueGoalUsage
+	if queue == nil {
+		queue = daemon.store.QueueGoalUsage
+	}
+	if _, err := queue(key, usage); err != nil {
+		return err
+	}
+	daemon.signalOutboxFor(key)
+	return nil
+}
+
+func canonicalGoalRunID(value string) bool {
+	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
+		return false
+	}
+	for index := range value {
+		if index == 8 || index == 13 || index == 18 || index == 23 {
+			continue
+		}
+		character := value[index]
+		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') || (character >= 'A' && character <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
 
 func initialInput(profile config.AgentProfile, work protocol.Work, providerAccess *protocol.ProviderAccess, controlPlaneURL string) ([]byte, error) {
@@ -2383,7 +3916,11 @@ func (daemon *daemon) queueTransition(key state.RunKey, stateName string, payloa
 }
 
 func (daemon *daemon) queueFailure(ctx context.Context, key state.RunKey, stage string, cause error) {
-	if err := daemon.queueTerminalTransitionWithRetry(ctx, key, "failed", map[string]string{"stage": stage, "error": cause.Error()}); err != nil {
+	payload := map[string]string{"stage": stage, "error": cause.Error()}
+	if reason, ok := typedTaskResultReason(cause); ok {
+		payload["reason"] = string(reason)
+	}
+	if err := daemon.queueTerminalTransitionWithRetry(ctx, key, "failed", payload); err != nil {
 		daemon.log.Error("queue_failed_transition_failed", "run_id", key.RunID, "generation", key.Generation, "stage", stage, "error", err)
 	}
 }
@@ -2520,13 +4057,22 @@ func (daemon *daemon) waitForRunWithContext(ctx context.Context, key state.RunKe
 	daemon.mu.Lock()
 	active := daemon.running[key]
 	process := Process(nil)
+	nativeSession := harness.Session(nil)
 	output := (*agentOutput)(nil)
 	if active != nil {
 		process = active.process
+		nativeSession = active.nativeSession
 		output = active.output
 	}
 	daemon.mu.Unlock()
-	if active == nil || process == nil {
+	if active == nil {
+		return
+	}
+	if nativeSession != nil {
+		daemon.waitForNativeRun(ctx, key, active, nativeSession)
+		return
+	}
+	if process == nil {
 		return
 	}
 	result := process.Wait()
@@ -2546,6 +4092,7 @@ func (daemon *daemon) waitForRunWithContext(ctx context.Context, key state.RunKe
 	daemon.mu.Lock()
 	cancelled := active.cancelled
 	stale := active.stale
+	startFailure := active.startFailure
 	active.cleanupBlocked = false
 	daemon.mu.Unlock()
 	if stale {
@@ -2558,6 +4105,9 @@ func (daemon *daemon) waitForRunWithContext(ctx context.Context, key state.RunKe
 		return
 	}
 	if !cancelled {
+		if startFailure != nil {
+			result.WaitError = errors.Join(startFailure, result.WaitError)
+		}
 		if err := daemon.supervisedExitFailure(key); err != nil && result.WaitError == nil {
 			result.WaitError = err
 		}
@@ -2577,6 +4127,777 @@ func (daemon *daemon) waitForRunWithContext(ctx context.Context, key state.RunKe
 	}
 	active.inputMu.Unlock()
 	daemon.releaseCleanupAfterProcessExit(key)
+}
+
+// watchFailedStartProcess restores the usual exit cleanup when a Process was
+// exposed together with a Start error. It is deliberately outside workers: a
+// stuck Process must not make daemon shutdown wait forever. Its process marker
+// was saved before this watcher is started, so restart recovery retains the
+// authority to stop an unresolved child.
+func (daemon *daemon) watchFailedStartProcess(ctx context.Context, key state.RunKey, process Process) {
+	done := make(chan struct{}, 1)
+	go func() {
+		_ = process.Wait()
+		done <- struct{}{}
+	}()
+	select {
+	case <-ctx.Done():
+		return
+	case <-done:
+		if ctx.Err() == nil {
+			daemon.waitForRunWithContext(context.Background(), key)
+		}
+	}
+}
+
+// waitForNativeRun deliberately treats a native TaskResult, not app-server
+// process exit, as terminal execution truth. A successful terminal transition
+// settles the bounded Task only; the semantic result remains a proposal and
+// cannot accept a Goal outcome by itself.
+func (daemon *daemon) waitForNativeRun(ctx context.Context, key state.RunKey, active *runningRun, session harness.Session) {
+	staged, isStaged := session.(harness.StagedSession)
+	waitContext := ctx
+	stopWaitDeadline := func() {}
+	if !active.nativeDeadline.IsZero() {
+		waitContext, stopWaitDeadline = context.WithDeadline(ctx, active.nativeDeadline)
+	}
+	var result harness.TaskResult
+	var waitErr error
+	if isStaged {
+		// A retained app-server stays alive after turn/completed. WaitTurn is the
+		// close permission only; it must never expose an early TaskResult.
+		waitErr = staged.WaitTurn(waitContext)
+	} else {
+		// Legacy/non-staged sessions retain the original physical Wait behavior.
+		result, waitErr = session.Wait(waitContext)
+	}
+	stopWaitDeadline()
+	if !isStaged && errors.Is(waitErr, context.DeadlineExceeded) {
+		// The session remains live because its process context is not the wait
+		// deadline. Request native interruption before Close performs the final
+		// process stop, so an elapsed admission cannot keep making progress.
+		interruptContext, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_, interruptErr := session.Control(interruptContext, harness.ControlRequest{Kind: harness.ControlCancel})
+		cancel()
+		if interruptErr != nil {
+			waitErr = errors.Join(waitErr, fmt.Errorf("interrupt native turn at deadline: %w", interruptErr))
+		}
+	}
+	closeErr := daemon.closeNativeGoalSession(key, active, session)
+	if isStaged {
+		// Close joins the adapter watcher, but retain a bounded final Wait as a
+		// second barrier for deferred interrupt classification and process truth.
+		finalContext, cancel := context.WithTimeout(context.Background(), controlRequestLimit)
+		finalResult, finalWaitErr := session.Wait(finalContext)
+		cancel()
+		if finalWaitErr != nil {
+			waitErr = errors.Join(waitErr, fmt.Errorf("wait native final result: %w", finalWaitErr))
+		} else {
+			result = finalResult
+		}
+	}
+
+	daemon.mu.Lock()
+	admission := active.goalAdmission
+	prepared := active.prepared
+	daemon.mu.Unlock()
+	if waitErr == nil && closeErr == nil {
+		if err := daemon.verifyNativeTaskResultSubject(ctx, prepared, admission, &result); err != nil {
+			waitErr = err
+		}
+	}
+	usage, shouldQueue, usageErr := daemon.prepareNativeGoalUsage(key, &result)
+	if usageErr != nil {
+		daemon.deferNativeUsageRetry(key, active, result, waitErr, closeErr, nil, true, usageErr)
+		return
+	}
+	if shouldQueue {
+		daemon.rememberNativeFinalUsage(key, active, usage)
+		if usageErr = daemon.queueNativeGoalUsageRecord(key, usage); usageErr != nil {
+			daemon.deferNativeUsageRetry(key, active, result, waitErr, closeErr, &usage, false, usageErr)
+			return
+		}
+	}
+	daemon.completeNativeRunAfterUsage(ctx, key, active, result, waitErr, closeErr)
+}
+
+func (daemon *daemon) completeNativeRunAfterUsage(ctx context.Context, key state.RunKey, active *runningRun, result harness.TaskResult, waitErr, closeErr error) {
+	active.inputMu.Lock()
+	daemon.mu.Lock()
+	if daemon.running[key] != active || active.nativeUsageFinalized {
+		daemon.mu.Unlock()
+		active.inputMu.Unlock()
+		return
+	}
+	admission := active.nativeFinalAdmission
+	if admission == nil && active.goalAdmission != nil {
+		admissionCopy := *active.goalAdmission
+		admission = &admissionCopy
+	}
+	cancelled := active.cancelled
+	stale := active.stale
+	if closeErr == nil {
+		active.cleanupBlocked = false
+	} else {
+		active.cleanupBlocked = true
+	}
+	active.nativeUsageRetryPending = false
+	active.nativeUsageRetryInFlight = false
+	// The native session has reached its final turn barrier. Keep renewal
+	// disabled until releaseRun, even if terminal transition persistence later
+	// needs another recovery pass.
+	active.nativeUsageRenewalBlocked = true
+	active.nativeUsageFinalized = true
+	daemon.mu.Unlock()
+	if stale {
+		active.inputMu.Unlock()
+		journal, err := daemon.store.SetLocalState(key, "stale")
+		daemon.mu.Lock()
+		cleanupBlocked := active.cleanupBlocked
+		daemon.mu.Unlock()
+		if !cleanupBlocked {
+			daemon.releaseRun(key)
+		}
+		if err == nil && !cleanupBlocked {
+			_ = daemon.scheduleCleanup(context.Background(), journal)
+		}
+		return
+	}
+	terminalQueued := false
+	if !cancelled {
+		stateName, payload := nativeTerminalPayload(result, admission, waitErr, closeErr)
+		if err := daemon.queueTerminalTransitionWithRetry(ctx, key, stateName, payload); err != nil && daemon.log != nil {
+			daemon.log.Error("queue_native_terminal_transition_failed", "run_id", key.RunID, "generation", key.Generation, "error", err)
+		} else if err == nil {
+			terminalQueued = true
+		}
+	}
+	active.inputMu.Unlock()
+	if terminalQueued {
+		if err := daemon.clearNativeUsageRecoveryBarrier(key); err != nil && daemon.log != nil {
+			daemon.log.Error("clear_native_usage_recovery_failed", "run_id", key.RunID, "generation", key.Generation, "error", err)
+		}
+	}
+	daemon.releaseCleanupAfterProcessExit(key)
+}
+
+type nativeUsageRetryWork struct {
+	key          state.RunKey
+	active       *runningRun
+	result       harness.TaskResult
+	waitErr      error
+	closeErr     error
+	usage        *protocol.Usage
+	needsPrepare bool
+}
+
+func (daemon *daemon) deferNativeUsageRetry(key state.RunKey, active *runningRun, result harness.TaskResult, waitErr, closeErr error, usage *protocol.Usage, needsPrepare bool, cause error) {
+	now := daemon.now().UTC()
+	daemon.mu.Lock()
+	if daemon.running[key] != active || active.nativeUsageFinalized || active.nativeUsageRetryPending || active.nativeUsageRetryInFlight {
+		daemon.mu.Unlock()
+		return
+	}
+	finalResult := cloneNativeTaskResult(result)
+	active.nativeFinalResult = &finalResult
+	active.nativeFinalWaitErr = waitErr
+	active.nativeFinalCloseErr = closeErr
+	if active.goalAdmission != nil {
+		admission := *active.goalAdmission
+		active.nativeFinalAdmission = &admission
+	}
+	if usage != nil {
+		finalUsage := cloneNativeUsage(*usage)
+		active.nativeFinalUsage = &finalUsage
+	}
+	active.nativeUsageRetryAttempts = 1
+	active.nativeUsageRetryAt = now.Add(minimumInterval)
+	active.nativeUsageRetryDeadline = now.Add(nativeUsageRetryWindow)
+	active.nativeUsageRetryPending = true
+	active.nativeUsageRetryInFlight = false
+	active.nativeUsageRetryNeedsPrepare = needsPrepare
+	active.nativeUsageRenewalBlocked = true
+	active.nativeUsageRetryExhausted = false
+	active.cleanupBlocked = true
+	daemon.mu.Unlock()
+
+	var recoveryErr error
+	if usage != nil && !needsPrepare {
+		if _, err := daemon.store.QueueNativeUsageRecovery(key, *usage); err != nil {
+			recoveryErr = fmt.Errorf("persist native Goal usage recovery: %w", err)
+		} else {
+			daemon.signalOutboxFor(key)
+		}
+	}
+	retentionErr := daemon.retainUnknownGoalLaunchWorkspaceChecked(key)
+	daemon.signalOutboxFor(key)
+	if daemon.log != nil {
+		daemon.log.Error("queue_native_goal_usage_failed", "run_id", key.RunID, "generation", key.Generation, "error", errors.Join(cause, recoveryErr, retentionErr))
+	}
+}
+
+func (daemon *daemon) flushPendingNativeUsage(ctx context.Context) {
+	now := daemon.now().UTC()
+	var retries []nativeUsageRetryWork
+	var exhausted []nativeUsageRetryWork
+	daemon.mu.Lock()
+	for key, active := range daemon.running {
+		if !active.nativeUsageRetryPending || active.nativeUsageRetryInFlight || active.nativeFinalResult == nil {
+			continue
+		}
+		if !active.nativeUsageRetryAt.IsZero() && now.Before(active.nativeUsageRetryAt) {
+			continue
+		}
+		work := nativeUsageRetryWork{
+			key:          key,
+			active:       active,
+			result:       cloneNativeTaskResult(*active.nativeFinalResult),
+			waitErr:      active.nativeFinalWaitErr,
+			closeErr:     active.nativeFinalCloseErr,
+			needsPrepare: active.nativeUsageRetryNeedsPrepare,
+		}
+		if active.nativeFinalUsage != nil {
+			usage := cloneNativeUsage(*active.nativeFinalUsage)
+			work.usage = &usage
+		}
+		if active.nativeUsageRetryAttempts >= nativeUsageRetryLimit || (!active.nativeUsageRetryDeadline.IsZero() && !now.Before(active.nativeUsageRetryDeadline)) {
+			active.nativeUsageRetryPending = false
+			active.nativeUsageRetryInFlight = false
+			active.nativeUsageRetryExhausted = true
+			active.nativeUsageRenewalBlocked = true
+			exhausted = append(exhausted, work)
+			continue
+		}
+		active.nativeUsageRetryInFlight = true
+		retries = append(retries, work)
+	}
+	daemon.mu.Unlock()
+
+	for _, work := range exhausted {
+		daemon.exhaustNativeUsageRetry(ctx, work.key, work.active, errors.New("native Goal usage persistence retry budget exhausted"))
+	}
+	for _, work := range retries {
+		var usageErr error
+		if work.usage != nil && !work.needsPrepare {
+			usageErr = daemon.queueNativeGoalUsageRecord(work.key, *work.usage)
+		} else {
+			usage, shouldQueue, prepareErr := daemon.prepareNativeGoalUsage(work.key, &work.result)
+			usageErr = prepareErr
+			if usageErr == nil && shouldQueue {
+				daemon.rememberNativeFinalUsage(work.key, work.active, usage)
+				usageErr = daemon.queueNativeGoalUsageRecord(work.key, usage)
+			}
+		}
+		if usageErr != nil {
+			daemon.noteNativeUsageRetryFailure(ctx, work.key, work.active, usageErr)
+			continue
+		}
+		daemon.completeNativeRunAfterUsage(ctx, work.key, work.active, work.result, work.waitErr, work.closeErr)
+	}
+}
+
+func (daemon *daemon) noteNativeUsageRetryFailure(ctx context.Context, key state.RunKey, active *runningRun, cause error) {
+	now := daemon.now().UTC()
+	exhausted := false
+	attempt := 0
+	daemon.mu.Lock()
+	if daemon.running[key] != active || active.nativeUsageFinalized {
+		daemon.mu.Unlock()
+		return
+	}
+	active.nativeUsageRetryInFlight = false
+	active.nativeUsageRetryAttempts++
+	attempt = active.nativeUsageRetryAttempts
+	if active.nativeUsageRetryAttempts >= nativeUsageRetryLimit || (!active.nativeUsageRetryDeadline.IsZero() && !now.Before(active.nativeUsageRetryDeadline)) {
+		active.nativeUsageRetryPending = false
+		active.nativeUsageRetryExhausted = true
+		active.nativeUsageRenewalBlocked = true
+		exhausted = true
+	} else {
+		active.nativeUsageRetryPending = true
+		active.nativeUsageRetryAt = now.Add(nativeUsageRetryDelay(active.nativeUsageRetryAttempts))
+	}
+	daemon.mu.Unlock()
+
+	if exhausted {
+		daemon.exhaustNativeUsageRetry(ctx, key, active, cause)
+		return
+	}
+	retentionErr := daemon.retainUnknownGoalLaunchWorkspaceChecked(key)
+	if daemon.log != nil {
+		daemon.log.Warn("retry_native_goal_usage_failed", "run_id", key.RunID, "generation", key.Generation, "attempt", attempt, "error", errors.Join(cause, retentionErr))
+	}
+}
+
+func (daemon *daemon) exhaustNativeUsageRetry(ctx context.Context, key state.RunKey, active *runningRun, cause error) {
+	daemon.mu.Lock()
+	if daemon.running[key] != active {
+		daemon.mu.Unlock()
+		return
+	}
+	active.nativeUsageRetryPending = false
+	active.nativeUsageRetryInFlight = false
+	active.nativeUsageRetryExhausted = true
+	active.nativeUsageRenewalBlocked = true
+	active.stale = true
+	active.cleanupBlocked = true
+	var finalUsage *protocol.Usage
+	if active.nativeFinalUsage != nil {
+		copy := cloneNativeUsage(*active.nativeFinalUsage)
+		finalUsage = &copy
+	}
+	var goalSession *state.GoalSessionKey
+	if active.goalSession != nil {
+		copy := *active.goalSession
+		goalSession = &copy
+	}
+	daemon.mu.Unlock()
+
+	retentionErr := daemon.retainUnknownGoalLaunchWorkspaceChecked(key)
+
+	// A close failure already marks the native session uncertain. If the session
+	// is still open for any other reason, make that recovery barrier durable
+	// before dropping the in-memory run. A successfully closed session remains
+	// closed; the retained journal/usage evidence below is the recovery record.
+	var recoveryErr error
+	if goalSession != nil {
+		if sessionJournal, err := daemon.store.LoadGoalSession(*goalSession); err == nil {
+			if sessionJournal.SessionState != state.GoalSessionStateClosed && !sessionJournal.NeedsReconciliation() {
+				_, recoveryErr = daemon.store.MarkGoalSessionUncertain(*goalSession, "native Goal usage persistence retry budget exhausted")
+			}
+		} else if !state.IsNotFound(err) {
+			recoveryErr = err
+		}
+	}
+
+	if finalUsage == nil {
+		usage, shouldQueue, usageErr := daemon.prepareNativeGoalUsage(key, nil)
+		if usageErr != nil || !shouldQueue {
+			if usageErr == nil {
+				usageErr = errors.New("native Goal usage recovery body is unavailable")
+			}
+			daemon.retryNativeUsageRecoveryPersistence(key, active, errors.Join(cause, usageErr, retentionErr, recoveryErr))
+			return
+		}
+		finalUsage = &usage
+		daemon.rememberNativeFinalUsage(key, active, usage)
+	}
+
+	// The accounting barrier and immutable receipt must become durable together.
+	// A failed write keeps the stopped native run resident with its exact body so
+	// a retry cannot invent a replacement usage identity.
+	journal, usageEvidenceErr := daemon.store.QueueNativeUsageRecovery(key, *finalUsage)
+	if usageEvidenceErr != nil {
+		daemon.retryNativeUsageRecoveryPersistence(key, active, errors.Join(cause, retentionErr, recoveryErr, usageEvidenceErr))
+		return
+	}
+	daemon.signalOutboxFor(key)
+	var staleErr error
+	if journal.LocalState != "terminal_pending" && journal.LocalState != "cleanup_pending" && journal.LocalState != "stale" {
+		_, staleErr = daemon.store.SetLocalState(key, "stale")
+	}
+	var terminalErr error
+	if loaded, loadErr := daemon.store.LoadJournal(key); loadErr == nil {
+		if _, terminalErr = daemon.queueNativeUsageRecoveryTerminal(ctx, loaded, cause); terminalErr == nil {
+			_, terminalErr = daemon.store.ClearNativeUsageRecoveryRequired(key, *finalUsage)
+		}
+	} else if !state.IsNotFound(loadErr) {
+		terminalErr = loadErr
+	}
+
+	// All durable recovery markers have been attempted. Do not retain a dead
+	// native run in daemon.running: renewal and command admission are already
+	// disabled, and restart must not be required to release the slot/memory.
+	daemon.releaseRun(key)
+	if daemon.log != nil {
+		daemon.log.Error("native_goal_usage_retry_exhausted", "run_id", key.RunID, "generation", key.Generation, "error", errors.Join(cause, retentionErr, staleErr, recoveryErr, terminalErr))
+	}
+}
+
+func (daemon *daemon) retryNativeUsageRecoveryPersistence(key state.RunKey, active *runningRun, cause error) {
+	now := daemon.now().UTC()
+	daemon.mu.Lock()
+	if daemon.running[key] != active || active.nativeUsageFinalized {
+		daemon.mu.Unlock()
+		return
+	}
+	active.nativeUsageRetryPending = true
+	active.nativeUsageRetryInFlight = false
+	active.nativeUsageRetryExhausted = true
+	active.nativeUsageRetryAttempts = nativeUsageRetryLimit
+	active.nativeUsageRetryAt = now.Add(nativeUsageRetryDelay(1))
+	active.nativeUsageRetryDeadline = now.Add(nativeUsageRetryWindow)
+	active.nativeUsageRetryNeedsPrepare = active.nativeFinalUsage == nil
+	active.nativeUsageRenewalBlocked = true
+	active.cleanupBlocked = true
+	daemon.mu.Unlock()
+	retentionErr := daemon.retainUnknownGoalLaunchWorkspaceChecked(key)
+	daemon.signalOutboxFor(key)
+	if daemon.log != nil {
+		daemon.log.Error("persist_native_goal_usage_recovery_failed", "run_id", key.RunID, "generation", key.Generation, "error", errors.Join(cause, retentionErr))
+	}
+}
+
+func (daemon *daemon) queueNativeUsageRecoveryTerminal(ctx context.Context, journal state.RunJournal, cause error) (state.RunJournal, error) {
+	if !journal.NativeUsageRecoveryRequired {
+		return journal, nil
+	}
+	if journal.LocalState == "terminal_pending" || journal.LocalState == "cleanup_pending" {
+		if journal.TerminalState == "" {
+			return journal, errors.New("native usage recovery terminal state is missing")
+		}
+		return journal, nil
+	}
+	errorText := "native Goal usage persistence retry budget exhausted"
+	if cause != nil {
+		errorText = cause.Error()
+	}
+	if err := daemon.queueTerminalTransitionWithRetry(ctx, journal.Key(), "failed", map[string]string{
+		"stage":  "native_goal_usage_recovery",
+		"reason": string(protocol.TaskResultReasonUnknownOutcome),
+		"error":  errorText,
+	}); err != nil {
+		return journal, err
+	}
+	updated, err := daemon.store.LoadJournal(journal.Key())
+	if err != nil {
+		return journal, err
+	}
+	return updated, nil
+}
+
+func nativeUsageRecoveryUsage(journal state.RunJournal) (protocol.Usage, bool) {
+	for _, delivery := range journal.PendingGoalDeliveries {
+		if delivery.Kind == state.GoalDeliveryUsage && delivery.DeliveryID == nativeGoalUsageKey && delivery.Usage != nil {
+			return cloneNativeUsage(*delivery.Usage), true
+		}
+	}
+	for _, delivery := range journal.DeliveredGoalDeliveries {
+		if delivery.Kind == state.GoalDeliveryUsage && delivery.DeliveryID == nativeGoalUsageKey && delivery.Usage != nil {
+			return cloneNativeUsage(*delivery.Usage), true
+		}
+	}
+	for _, delivery := range journal.RetiredGoalDeliveries {
+		if delivery.Delivery.Kind == state.GoalDeliveryUsage && delivery.Delivery.DeliveryID == nativeGoalUsageKey && delivery.Delivery.Usage != nil {
+			return cloneNativeUsage(*delivery.Delivery.Usage), true
+		}
+	}
+	return protocol.Usage{}, false
+}
+
+func (daemon *daemon) clearNativeUsageRecoveryBarrier(key state.RunKey) error {
+	journal, err := daemon.store.LoadJournal(key)
+	if err != nil || !journal.NativeUsageRecoveryRequired {
+		return err
+	}
+	usage, ok := nativeUsageRecoveryUsage(journal)
+	if !ok {
+		return errors.New("native usage recovery body is unavailable")
+	}
+	_, err = daemon.store.ClearNativeUsageRecoveryRequired(key, usage)
+	return err
+}
+
+// recoverNativeUsageDelivery restores a pre-existing immutable usage body. A
+// legacy marker without one gets one explicit unknown accounting receipt before
+// terminal recovery is allowed to proceed.
+func (daemon *daemon) recoverNativeUsageDelivery(journal state.RunJournal) (state.RunJournal, protocol.Usage, error) {
+	if usage, ok := nativeUsageRecoveryUsage(journal); ok {
+		return journal, usage, nil
+	}
+	usage, shouldQueue, err := daemon.prepareNativeGoalUsage(journal.Key(), nil)
+	if err != nil {
+		return journal, protocol.Usage{}, err
+	}
+	if !shouldQueue {
+		return journal, protocol.Usage{}, errors.New("native usage recovery body is unavailable")
+	}
+	updated, err := daemon.store.QueueGoalUsage(journal.Key(), usage)
+	if err != nil {
+		return journal, protocol.Usage{}, err
+	}
+	return updated, usage, nil
+}
+
+func nativeUsageRetryDelay(attempt int) time.Duration {
+	delay := minimumInterval
+	for index := 1; index < attempt; index++ {
+		delay = nextRetryDelay(delay)
+	}
+	return delay
+}
+
+func (daemon *daemon) rememberNativeFinalUsage(key state.RunKey, active *runningRun, usage protocol.Usage) {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	if daemon.running[key] != active {
+		return
+	}
+	copy := cloneNativeUsage(usage)
+	active.nativeFinalUsage = &copy
+	active.nativeUsageRetryNeedsPrepare = false
+}
+
+func cloneNativeUsage(usage protocol.Usage) protocol.Usage {
+	copy := usage
+	if usage.InputTokens != nil {
+		value := *usage.InputTokens
+		copy.InputTokens = &value
+	}
+	if usage.OutputTokens != nil {
+		value := *usage.OutputTokens
+		copy.OutputTokens = &value
+	}
+	if usage.CachedInputTokens != nil {
+		value := *usage.CachedInputTokens
+		copy.CachedInputTokens = &value
+	}
+	if usage.CostMicrousd != nil {
+		value := *usage.CostMicrousd
+		copy.CostMicrousd = &value
+	}
+	if usage.PriceVersion != nil {
+		value := *usage.PriceVersion
+		copy.PriceVersion = &value
+	}
+	if usage.SupersedesID != nil {
+		value := *usage.SupersedesID
+		copy.SupersedesID = &value
+	}
+	return copy
+}
+
+func cloneNativeTaskResult(result harness.TaskResult) harness.TaskResult {
+	copy := result
+	if result.Semantic != nil {
+		semantic := *result.Semantic
+		semantic.EvidenceRefs = slices.Clone(result.Semantic.EvidenceRefs)
+		semantic.Diagnostics = slices.Clone(result.Semantic.Diagnostics)
+		if result.Semantic.Blocker != nil {
+			blocker := *result.Semantic.Blocker
+			blocker.WorkItemIDs = slices.Clone(result.Semantic.Blocker.WorkItemIDs)
+			semantic.Blocker = &blocker
+		}
+		if result.Semantic.ProposedNextAction != nil {
+			action := *result.Semantic.ProposedNextAction
+			if result.Semantic.ProposedNextAction.Blocker != nil {
+				blocker := *result.Semantic.ProposedNextAction.Blocker
+				blocker.WorkItemIDs = slices.Clone(result.Semantic.ProposedNextAction.Blocker.WorkItemIDs)
+				action.Blocker = &blocker
+			}
+			semantic.ProposedNextAction = &action
+		}
+		if result.Semantic.Proposal != nil {
+			proposal := append(json.RawMessage(nil), (*result.Semantic.Proposal)...)
+			semantic.Proposal = &proposal
+		}
+		for index := range semantic.Diagnostics {
+			if result.Semantic.Diagnostics[index].Severity != nil {
+				severity := *result.Semantic.Diagnostics[index].Severity
+				semantic.Diagnostics[index].Severity = &severity
+			}
+		}
+		copy.Semantic = &semantic
+	}
+	if result.Reason != nil {
+		reason := *result.Reason
+		copy.Reason = &reason
+	}
+	return copy
+}
+
+func (daemon *daemon) closeNativeGoalSession(key state.RunKey, active *runningRun, session harness.Session) error {
+	if active == nil || session == nil {
+		return errors.New("native Goal session is unavailable")
+	}
+	daemon.mu.Lock()
+	goalSession := active.goalSession
+	if goalSession == nil {
+		daemon.mu.Unlock()
+		return errors.New("native Goal session key is unavailable")
+	}
+	daemon.mu.Unlock()
+	closeContext, cancel := context.WithTimeout(context.Background(), controlRequestLimit)
+	closeErr := session.Close(closeContext)
+	cancel()
+	if closeErr != nil {
+		daemon.requireNativeSessionCloseRetry(key, session)
+		daemon.markNativeCleanupBlocked(active)
+		retentionErr := daemon.retainUnknownGoalLaunchWorkspaceChecked(key)
+		_, uncertainErr := daemon.store.MarkGoalSessionUncertain(*goalSession, "native session close failed: "+closeErr.Error())
+		return errors.Join(closeErr, retentionErr, uncertainErr)
+	}
+	sessionJournal, err := daemon.store.LoadGoalSession(*goalSession)
+	if err != nil {
+		daemon.markNativeCleanupBlocked(active)
+		retentionErr := daemon.retainUnknownGoalLaunchWorkspaceChecked(key)
+		return errors.Join(fmt.Errorf("load durable Goal session after process stop: %w", err), retentionErr)
+	}
+	if sessionJournal.NeedsReconciliation() {
+		_, err = daemon.store.ResolveGoalSessionUncertainStopped(*goalSession, sessionJournal.Compatibility())
+	} else {
+		_, err = daemon.store.CloseGoalSession(*goalSession)
+	}
+	if err != nil {
+		daemon.markNativeCleanupBlocked(active)
+		retentionErr := daemon.retainUnknownGoalLaunchWorkspaceChecked(key)
+		_, uncertainErr := daemon.store.MarkGoalSessionUncertain(*goalSession, "durable native session close failed after process stop: "+err.Error())
+		return errors.Join(fmt.Errorf("record durable native session close: %w", err), retentionErr, uncertainErr)
+	}
+	if err := daemon.clearNativeProcessDetails(key); err != nil {
+		daemon.markNativeCleanupBlocked(active)
+		retentionErr := daemon.retainUnknownGoalLaunchWorkspaceChecked(key)
+		return errors.Join(err, retentionErr)
+	}
+	return nil
+}
+
+func (daemon *daemon) clearNativeProcessDetails(key state.RunKey) error {
+	journal, err := daemon.store.LoadJournal(key)
+	if err != nil {
+		return fmt.Errorf("load native process record after close: %w", err)
+	}
+	if journal.PID == 0 && strings.TrimSpace(journal.ProcessIdentity) == "" && journal.StartedAt.IsZero() {
+		return nil
+	}
+	if journal.PID <= 0 || strings.TrimSpace(journal.ProcessIdentity) == "" {
+		return errors.New("native process record is incomplete after close")
+	}
+	if _, err := daemon.store.ClearProcessDetails(key, journal.PID, journal.ProcessIdentity); err != nil {
+		return fmt.Errorf("clear native process record after close: %w", err)
+	}
+	return nil
+}
+
+func (daemon *daemon) markNativeCleanupBlocked(active *runningRun) {
+	daemon.mu.Lock()
+	if active != nil {
+		active.cleanupBlocked = true
+	}
+	daemon.mu.Unlock()
+}
+
+func nativeTerminalPayload(result harness.TaskResult, admission *protocol.Admission, waitErr, closeErr error) (string, map[string]any) {
+	payload := map[string]any{"summary": result.Summary}
+	if result.Semantic != nil {
+		payload["task_result"] = result.Semantic
+	}
+	if waitErr != nil {
+		payload["reason"] = string(canonicalTaskResultReason(waitErr, &result, protocol.TaskResultReasonUnknownOutcome))
+		payload["error"] = waitErr.Error()
+		return "failed", payload
+	}
+	if closeErr != nil {
+		payload["reason"] = string(canonicalTaskResultReason(closeErr, &result, protocol.TaskResultReasonUnknownOutcome))
+		payload["error"] = closeErr.Error()
+		return "failed", payload
+	}
+	if admission == nil {
+		payload["reason"] = string(canonicalTaskResultReason(nil, &result, protocol.TaskResultReasonUnknownOutcome))
+		payload["error"] = "native Goal admission is unavailable"
+		return "failed", payload
+	}
+	if result.Semantic == nil {
+		switch result.Kind {
+		case harness.ResultCancelled:
+			payload["reason"] = string(protocol.TaskResultReasonCancelled)
+			return "cancelled", payload
+		case harness.ResultUnknown:
+			payload["reason"] = string(canonicalTaskResultReason(nil, &result, protocol.TaskResultReasonUnknownOutcome))
+			payload["error"] = "native turn outcome is unknown"
+			return "failed", payload
+		case harness.ResultFailed:
+			payload["reason"] = string(canonicalTaskResultReason(nil, &result, protocol.TaskResultReasonProcessFailure))
+			return "failed", payload
+		default:
+			payload["reason"] = string(protocol.TaskResultReasonMissingResult)
+			payload["error"] = "native turn finished without a canonical task_result"
+			return "failed", payload
+		}
+	}
+	if err := result.Semantic.Validate(); err != nil {
+		payload["reason"] = string(canonicalTaskResultReason(err, &result, protocol.TaskResultReasonValidationFailed))
+		payload["error"] = "invalid native task_result: " + err.Error()
+		return "failed", payload
+	}
+	if err := protocol.ValidateTaskResultForAdmission(*admission, *result.Semantic); err != nil {
+		payload["reason"] = string(canonicalTaskResultReason(err, &result, protocol.TaskResultReasonValidationFailed))
+		payload["error"] = "native task_result is incompatible with admission: " + err.Error()
+		return "failed", payload
+	}
+	if result.Semantic.Kind != protocol.TaskResultCandidateCompletion && result.Semantic.Subject != admission.Subject {
+		payload["reason"] = string(canonicalTaskResultReason(nil, &result, protocol.TaskResultReasonValidationFailed))
+		payload["error"] = "non-candidate native task_result Subject does not match the admitted Subject"
+		return "failed", payload
+	}
+	switch result.Kind {
+	case harness.ResultSucceeded:
+		return "completed", payload
+	case harness.ResultCancelled:
+		payload["reason"] = string(protocol.TaskResultReasonCancelled)
+		return "cancelled", payload
+	case harness.ResultFailed:
+		payload["reason"] = string(canonicalTaskResultReason(nil, &result, protocol.TaskResultReasonProcessFailure))
+		return "failed", payload
+	default:
+		payload["reason"] = string(protocol.TaskResultReasonUnknownOutcome)
+		payload["error"] = "native turn outcome is unknown"
+		return "failed", payload
+	}
+}
+
+func typedTaskResultReason(cause error) (protocol.TaskResultReason, bool) {
+	if reason, ok := taskResultFailureReason(cause); ok {
+		return reason, true
+	}
+	return "", false
+}
+
+// canonicalTaskResultReason defines one precedence order for native terminal
+// payloads: an explicitly classified local failure, then the adapter's
+// normalized TaskResult reason, then the boundary-specific fallback.
+func canonicalTaskResultReason(cause error, result *harness.TaskResult, fallback protocol.TaskResultReason) protocol.TaskResultReason {
+	if reason, ok := typedTaskResultReason(cause); ok {
+		return reason
+	}
+	if result != nil && result.Reason != nil {
+		return *result.Reason
+	}
+	return fallback
+}
+
+// verifyNativeTaskResultSubject ensures a native model only proposes the
+// artifact actually present in its daemon-owned worktree. A candidate result
+// may advance from admission Subject A to commit B; all other result kinds
+// remain bound to A.
+func (daemon *daemon) verifyNativeTaskResultSubject(ctx context.Context, prepared workspace.Prepared, admission *protocol.Admission, result *harness.TaskResult) error {
+	if admission == nil {
+		return errors.New("native Goal admission is unavailable")
+	}
+	if result == nil || result.Semantic == nil {
+		return nil
+	}
+	if err := result.Semantic.Validate(); err != nil {
+		return fmt.Errorf("validate native task_result: %w", err)
+	}
+	if err := protocol.ValidateTaskResultForAdmission(*admission, *result.Semantic); err != nil {
+		return fmt.Errorf("native task_result is incompatible with admission: %w", err)
+	}
+	subjectWorkspace, ok := daemon.workspace.(goalSubjectWorkspace)
+	if !ok {
+		return errors.New("workspace service does not support immutable Goal subjects")
+	}
+	actual, err := subjectWorkspace.DeriveSubject(ctx, prepared, admission.Subject.ResourceID)
+	if err != nil {
+		return fmt.Errorf("derive native worktree Subject: %w", err)
+	}
+	if result.Semantic.Subject != actual {
+		return errors.New("native task_result Subject does not match the daemon-derived worktree Subject")
+	}
+	if result.Semantic.Kind != protocol.TaskResultCandidateCompletion && actual != admission.Subject {
+		return errors.New("non-candidate native task_result advanced beyond the admitted Subject")
+	}
+	return nil
 }
 
 func errorText(err error) string {
@@ -2621,9 +4942,11 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 			return false
 		}
 		active.cancelled = true
+		active.cancelCommandID = command.CommandID
 		process := active.process
+		nativeSession := active.nativeSession
 		cancel := active.cancel
-		terminalReserved := process == nil && cancel != nil
+		terminalReserved := process == nil && nativeSession == nil && cancel != nil
 		if terminalReserved {
 			active.terminalizing++
 		}
@@ -2632,12 +4955,78 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 			defer daemon.releaseTerminalReservation(key)
 		}
 		var terminateErr error
-		if process != nil {
+		var finalResult harness.TaskResult
+		finalResultKnown := false
+		if nativeSession != nil {
+			interruptContext, stopInterrupt := context.WithTimeout(ctx, 2*time.Second)
+			receipt, controlErr := nativeSession.Control(interruptContext, harness.ControlRequest{CommandID: command.CommandID, Kind: harness.ControlCancel})
+			stopInterrupt()
+			controlFailure := controlErr
+			if controlFailure == nil && receipt.Outcome != harness.ControlApplied {
+				controlFailure = fmt.Errorf("native cancel was %s: %s", receipt.Outcome, receipt.Message)
+			}
+			// A control acknowledgement only accepts the native request. The
+			// staged turn barrier is the first close permission; it never returns
+			// an early TaskResult and it remains bounded when acknowledgement is
+			// lost.
+			waitContext, stopWait := context.WithTimeout(ctx, 2*time.Second)
+			var waitErr error
+			if staged, ok := nativeSession.(harness.StagedSession); ok {
+				waitErr = staged.WaitTurn(waitContext)
+			} else {
+				finalResult, waitErr = nativeSession.Wait(waitContext)
+				finalResultKnown = waitErr == nil
+			}
+			stopWait()
+			if waitErr != nil && !errors.Is(waitErr, context.DeadlineExceeded) && !errors.Is(waitErr, context.Canceled) {
+				terminateErr = waitErr
+			}
+			closeErr := daemon.closeNativeGoalSession(key, active, nativeSession)
+			if controlFailure != nil {
+				if closeErr != nil {
+					terminateErr = errors.Join(terminateErr, controlFailure, closeErr)
+				} else {
+					// Preserve the existing cancellation contract: a bounded process
+					// close is sufficient even when the native interrupt receipt was
+					// unavailable.
+					terminateErr = errors.Join(terminateErr)
+				}
+			} else {
+				terminateErr = errors.Join(terminateErr, closeErr)
+			}
+			if _, ok := nativeSession.(harness.StagedSession); ok {
+				finalContext, cancel := context.WithTimeout(context.Background(), controlRequestLimit)
+				result, finalWaitErr := nativeSession.Wait(finalContext)
+				cancel()
+				if finalWaitErr != nil {
+					terminateErr = errors.Join(terminateErr, fmt.Errorf("wait native final result: %w", finalWaitErr))
+				} else {
+					finalResult = result
+					finalResultKnown = true
+				}
+			}
+		} else if process != nil {
 			terminateErr = process.Terminate(ctx, 2*time.Second)
 		} else if cancel != nil {
 			cancel()
 		}
+		if nativeSession != nil {
+			var usageResult *harness.TaskResult
+			if finalResultKnown {
+				usageResult = &finalResult
+			}
+			if usageErr := daemon.queueNativeGoalUsage(ctx, key, usageResult); usageErr != nil {
+				// Do not acknowledge cancellation or allow terminal cleanup to
+				// proceed while a terminal native outcome has no durable accounting.
+				daemon.retainUnknownGoalLaunchWorkspace(key)
+				if daemon.log != nil {
+					daemon.log.Warn("queue_native_goal_usage_before_cancel_failed", "run_id", key.RunID, "generation", key.Generation, "error", usageErr)
+				}
+				return false
+			}
+		}
 		if terminateErr != nil {
+			daemon.queueFailure(ctx, key, "cancel_native", terminateErr)
 			return daemon.queueCommandAcknowledgementWithContext(ctx, key, command.CommandID, "failed")
 		}
 		active.inputMu.Lock()
@@ -2649,6 +5038,12 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 	active := daemon.running[key]
 	daemon.mu.Unlock()
 	if active == nil {
+		return daemon.queueCommandAcknowledgementWithContext(ctx, key, command.CommandID, "rejected")
+	}
+	if active.nativeSession != nil {
+		// This vertical slice only has a verified cancellation delivery path.
+		// Guidance, pause/resume, approval, and a second native turn remain
+		// visible as unsupported rather than falling back to legacy stdin.
 		return daemon.queueCommandAcknowledgementWithContext(ctx, key, command.CommandID, "rejected")
 	}
 	outcome := "rejected"
@@ -3035,7 +5430,8 @@ func (daemon *daemon) renewalEligible(snapshot state.RunJournal) bool {
 }
 
 func activeRunCanRenew(active *runningRun) bool {
-	return active != nil && active.process != nil && !active.starting && !active.stale && !active.terminal && active.terminalizing == 0
+	return active != nil && (active.process != nil || active.nativeSession != nil) &&
+		!active.starting && !active.stale && !active.terminal && active.terminalizing == 0 && !active.nativeUsageRenewalBlocked
 }
 
 func (daemon *daemon) renewalStillEligible(snapshot state.RunJournal) bool {
@@ -3057,16 +5453,22 @@ func (daemon *daemon) terminateForLease(journal state.RunJournal, reason string)
 	daemon.mu.Lock()
 	active := daemon.running[journal.Key()]
 	process := Process(nil)
+	nativeSession := harness.Session(nil)
 	if active != nil {
 		active.cancelled = true
 		active.stale = true
 		process = active.process
+		nativeSession = active.nativeSession
 		if active.cancel != nil {
 			active.cancel()
 		}
 	}
 	daemon.mu.Unlock()
-	if process != nil {
+	if nativeSession != nil {
+		if closeErr := daemon.closeNativeGoalSession(journal.Key(), active, nativeSession); closeErr != nil && daemon.log != nil {
+			daemon.log.Error("close_native_session_for_lease_failed", "run_id", journal.RunID, "generation", journal.Generation, "error", closeErr)
+		}
+	} else if process != nil {
 		_ = process.Terminate(context.Background(), 0)
 	} else {
 		if active == nil {
@@ -3077,6 +5479,9 @@ func (daemon *daemon) terminateForLease(journal state.RunJournal, reason string)
 }
 
 func (daemon *daemon) flushAll(ctx context.Context) {
+	daemon.retryBlockedNativeSessionCloses()
+	daemon.retryUnreadyGoalSessionAttachDeliveries()
+	daemon.flushPendingNativeUsage(ctx)
 	journals, err := daemon.store.ListJournals()
 	if err != nil {
 		return
@@ -3088,8 +5493,9 @@ func (daemon *daemon) flushAll(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
-			terminal := journal.LocalState == "terminal_pending"
-			if journal.LocalState == "cleanup_pending" {
+			terminal := journal.LocalState == "terminal_pending" ||
+				((journal.LocalState == "cleanup_pending" || journal.LocalState == "stale") && journal.HasPendingGoalDeliveries())
+			if journal.LocalState == "cleanup_pending" && !journal.HasPendingGoalDeliveries() {
 				_ = daemon.scheduleCleanup(ctx, journal)
 				break
 			}
@@ -3111,7 +5517,8 @@ func (daemon *daemon) flushAll(ctx context.Context) {
 				}
 				break
 			}
-			if current.LocalState == "terminal_pending" {
+			if current.LocalState == "terminal_pending" ||
+				((current.LocalState == "cleanup_pending" || current.LocalState == "stale") && current.HasPendingGoalDeliveries()) {
 				seen[key] = struct{}{}
 			}
 			if err == nil {
@@ -3129,12 +5536,14 @@ func (daemon *daemon) flushAll(ctx context.Context) {
 				journal = current
 				continue
 			}
-			if current.LocalState == "terminal_pending" {
+			if current.LocalState == "terminal_pending" ||
+				((current.LocalState == "cleanup_pending" || current.LocalState == "stale") && current.HasPendingGoalDeliveries()) {
 				daemon.recordOutboxFailure(ctx, current, err)
 			}
 			break
 		}
 	}
+	daemon.flushLateGoalUsage(ctx)
 	daemon.pruneOutboxRetries(seen)
 }
 
@@ -3180,6 +5589,12 @@ func (daemon *daemon) recordOutboxFailure(ctx context.Context, journal state.Run
 	if !retryable && isAmbiguousTerminalDeliveryFailure(journal, err) {
 		delay, retryable = fallback, true
 	}
+	if !retryable && journal.HasPendingGoalDeliveries() {
+		// Goal receipts have their own durable idempotency and must continue
+		// independently of a conclusive terminal verdict. Never convert a
+		// pending Goal delivery into a permanent local backoff.
+		delay, retryable = fallback, true
+	}
 	if !retryable && isOutboxMaintenanceFailure(journal, err) {
 		delay, retryable = fallback, true
 	}
@@ -3208,7 +5623,7 @@ func (daemon *daemon) recordOutboxFailure(ctx context.Context, journal state.Run
 }
 
 func isAmbiguousTerminalDeliveryFailure(journal state.RunJournal, err error) bool {
-	if journal.LocalState != "terminal_pending" {
+	if journal.LocalState != "terminal_pending" && journal.LocalState != "cleanup_pending" {
 		return false
 	}
 	var responseError *control.ResponseError
@@ -3253,6 +5668,14 @@ func journalFingerprint(journal state.RunJournal) string {
 	for index, acknowledgement := range journal.PendingCommandAcknowledgements {
 		acknowledgementIDs[index] = acknowledgement.AckID
 	}
+	goalDeliveryIDs := make([]string, len(journal.PendingGoalDeliveries))
+	for index, delivery := range journal.PendingGoalDeliveries {
+		goalDeliveryIDs[index] = string(delivery.Kind) + ":" + delivery.DeliveryID + ":" + delivery.PayloadDigest + ":" + strconv.FormatBool(delivery.Ready)
+	}
+	deliveredGoalDeliveryIDs := make([]string, len(journal.DeliveredGoalDeliveries))
+	for index, delivery := range journal.DeliveredGoalDeliveries {
+		deliveredGoalDeliveryIDs[index] = string(delivery.Kind) + ":" + delivery.DeliveryID + ":" + delivery.PayloadDigest
+	}
 	value := struct {
 		Key                       state.RunKey
 		Fence                     protocol.Fence
@@ -3265,6 +5688,10 @@ func journalFingerprint(journal state.RunJournal) string {
 		PendingTransitionIDs      []string
 		AttemptedTransitionIDs    []string
 		PendingAcknowledgementIDs []string
+		PendingGoalDeliveryIDs    []string
+		DeliveredGoalDeliveryIDs  []string
+		NativeUsageObservation    *state.NativeUsageObservation
+		NativeUsageRecovery       bool
 	}{
 		Key:                       journal.Key(),
 		Fence:                     journal.Fence(),
@@ -3277,6 +5704,10 @@ func journalFingerprint(journal state.RunJournal) string {
 		PendingTransitionIDs:      transitionIDs,
 		AttemptedTransitionIDs:    journal.AttemptedTransitionIDs,
 		PendingAcknowledgementIDs: acknowledgementIDs,
+		PendingGoalDeliveryIDs:    goalDeliveryIDs,
+		DeliveredGoalDeliveryIDs:  deliveredGoalDeliveryIDs,
+		NativeUsageObservation:    journal.NativeUsageObservation,
+		NativeUsageRecovery:       journal.NativeUsageRecoveryRequired,
 	}
 	encoded, err := json.Marshal(value)
 	if err != nil {
@@ -3300,7 +5731,7 @@ func (daemon *daemon) finishStarting(key state.RunKey, cleanupReady bool) bool {
 		return false
 	}
 	active.starting = false
-	if cleanupReady && active.process == nil {
+	if cleanupReady && active.process == nil && active.nativeSession == nil {
 		active.cleanupBlocked = false
 	}
 	return active.terminal
@@ -3360,11 +5791,48 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) (e
 	}()
 
 	key := journal.Key()
+	if journal.NativeUsageRecoveryRequired {
+		updated, usage, recoveryErr := daemon.recoverNativeUsageDelivery(journal)
+		if recoveryErr != nil {
+			return recoveryErr
+		}
+		journal = updated
+		updated, recoveryErr = daemon.queueNativeUsageRecoveryTerminal(ctx, journal, nil)
+		if recoveryErr != nil {
+			return recoveryErr
+		}
+		journal = updated
+		updated, recoveryErr = daemon.store.ClearNativeUsageRecoveryRequired(key, usage)
+		if recoveryErr != nil {
+			return recoveryErr
+		}
+		journal = updated
+	}
 	if journal.LocalState == "stale" {
+		// A stale run must not send ordinary lifecycle traffic, but immutable Goal
+		// receipts still need a final delivery or a durable retirement. Otherwise a
+		// stale fence can wedge cleanup forever behind its own pending outbox.
+		if !journal.HasPendingGoalDeliveries() {
+			return daemon.scheduleCleanup(ctx, journal)
+		}
+		updated, _, err := daemon.flushGoalDeliveries(ctx, journal)
+		if err != nil {
+			return err
+		}
+		if !updated.HasPendingGoalDeliveries() {
+			return daemon.scheduleCleanup(ctx, updated)
+		}
 		return nil
 	}
 	if journal.LocalState == "cleanup_pending" {
-		return daemon.scheduleCleanup(ctx, journal)
+		updated, _, err := daemon.flushGoalDeliveries(ctx, journal)
+		if err != nil {
+			return err
+		}
+		if updated.HasPendingGoalDeliveries() {
+			return nil
+		}
+		return daemon.scheduleCleanup(ctx, updated)
 	}
 	if daemon.isStarting(key) {
 		return nil
@@ -3374,10 +5842,15 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) (e
 		if err != nil {
 			return err
 		}
-		return daemon.scheduleCleanup(ctx, updated)
+		return daemon.flushRun(ctx, updated)
+	}
+	updated, _, err := daemon.flushGoalDeliveries(ctx, journal)
+	journal = updated
+	if err != nil {
+		return err
 	}
 	predecessorsUnavailable := false
-	updated, err := daemon.deliverEventsBeforeAppliedInputAcknowledgement(ctx, journal)
+	updated, err = daemon.deliverEventsBeforeAppliedInputAcknowledgement(ctx, journal)
 	journal = updated
 	if err != nil {
 		if journal.LocalState != "terminal_pending" || !terminalPredecessorUnavailable(err) {
@@ -3500,7 +5973,7 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) (e
 			return err
 		}
 	}
-	if journal.LocalState == "terminal_pending" && journal.TerminalVerdict == state.TerminalVerdictAccepted && len(journal.PendingEvents) == 0 && len(journal.PendingTransitions) == 0 && len(journal.PendingCommandAcknowledgements) == 0 {
+	if journal.LocalState == "terminal_pending" && journal.TerminalVerdict == state.TerminalVerdictAccepted && len(journal.PendingEvents) == 0 && len(journal.PendingTransitions) == 0 && len(journal.PendingCommandAcknowledgements) == 0 && !journal.HasPendingGoalDeliveries() {
 		updated, err := daemon.enterCleanupPending(journal)
 		if err != nil {
 			return err
@@ -3508,6 +5981,252 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) (e
 		return daemon.scheduleCleanup(ctx, updated)
 	}
 	return nil
+}
+
+// flushGoalDeliveries transmits only caller-supplied typed Goal receipts. It
+// never converts raw native events or TaskResult evidence references into
+// evidence or usage. A missing receipt leaves the original immutable body in
+// the journal for an exact retry after a timeout or daemon restart.
+func (daemon *daemon) flushGoalDeliveries(ctx context.Context, journal state.RunJournal) (state.RunJournal, *control.GoalSessionReceipt, error) {
+	var attachReceipt *control.GoalSessionReceipt
+	for len(journal.PendingGoalDeliveries) > 0 {
+		index := -1
+		for candidateIndex, candidate := range journal.PendingGoalDeliveries {
+			if candidate.Kind != state.GoalDeliverySessionAttach || candidate.Ready {
+				index = candidateIndex
+				break
+			}
+		}
+		if index < 0 {
+			return journal, attachReceipt, nil
+		}
+		delivery := journal.PendingGoalDeliveries[index]
+		updated, receipt, err := daemon.deliverGoalDelivery(ctx, journal, delivery.Kind, delivery.DeliveryID, nil)
+		if err != nil {
+			var rejected *goalDeliveryRejectedError
+			if errors.As(err, &rejected) {
+				journal = updated
+				continue
+			}
+			return journal, attachReceipt, err
+		}
+		journal = updated
+		if receipt != nil {
+			attachReceipt = receipt
+		}
+	}
+	return journal, attachReceipt, nil
+}
+
+// deliverGoalDelivery sends one exact durable body and deletes it only after
+// the control client has verified its typed receipt.
+func (daemon *daemon) deliverGoalDelivery(ctx context.Context, journal state.RunJournal, kind state.GoalDeliveryKind, deliveryID string, validateAttach func(control.GoalSessionReceipt) error) (state.RunJournal, *control.GoalSessionReceipt, error) {
+	var delivery *state.GoalDelivery
+	for index := range journal.PendingGoalDeliveries {
+		candidate := &journal.PendingGoalDeliveries[index]
+		if candidate.Kind == kind && candidate.DeliveryID == deliveryID {
+			delivery = candidate
+			break
+		}
+	}
+	if delivery == nil {
+		return journal, nil, errors.New("Goal delivery is not pending")
+	}
+	if kind == state.GoalDeliverySessionAttach && !delivery.Ready {
+		return journal, nil, nil
+	}
+	goalAPI, ok := daemon.control.(goalControlAPI)
+	if !ok {
+		return journal, nil, errors.New("control API does not implement Goal delivery")
+	}
+	requestContext, cancel := daemon.controlContext(ctx)
+	var attachReceipt *control.GoalSessionReceipt
+	var evidenceReceipt *control.GoalEvidenceReceipt
+	var usageReceipt *control.GoalUsageReceipt
+	var err error
+	switch kind {
+	case state.GoalDeliverySessionAttach:
+		payload := delivery.SessionAttach
+		if payload == nil {
+			cancel()
+			return journal, nil, errors.New("Goal session attach payload is missing")
+		}
+		receipt, callErr := goalAPI.AttachHarnessSession(requestContext, journal.RunID, control.GoalSessionAttachRequest{
+			Fence:                delivery.Fence,
+			LocalHandleID:        payload.LocalHandleID,
+			HarnessKind:          payload.HarnessKind,
+			HarnessVersion:       payload.HarnessVersion,
+			AdapterVersion:       payload.AdapterVersion,
+			WorkspaceFingerprint: payload.WorkspaceFingerprint,
+			Workspace:            payload.Workspace,
+			RepositoryResourceID: payload.RepositoryResourceID,
+		})
+		err = callErr
+		if err == nil {
+			attachReceipt = &receipt
+		}
+	case state.GoalDeliveryEvidence:
+		if delivery.Evidence == nil {
+			cancel()
+			return journal, nil, errors.New("Goal evidence payload is missing")
+		}
+		receipt, callErr := goalAPI.AppendEvidence(requestContext, journal.RunID, delivery.Fence, *delivery.Evidence)
+		err = callErr
+		if err == nil {
+			evidenceReceipt = &receipt
+		}
+	case state.GoalDeliveryUsage:
+		if delivery.Usage == nil {
+			cancel()
+			return journal, nil, errors.New("Goal usage payload is missing")
+		}
+		receipt, callErr := goalAPI.RecordUsage(requestContext, journal.RunID, delivery.Fence, *delivery.Usage)
+		err = callErr
+		if err == nil {
+			usageReceipt = &receipt
+		}
+	default:
+		cancel()
+		return journal, nil, errors.New("Goal delivery kind is invalid")
+	}
+	cancel()
+	if err != nil {
+		if statusCode, code, message, definitive := definitiveGoalDeliveryRejection(delivery.Kind, err); definitive {
+			updated, retireErr := daemon.store.RetireGoalDelivery(journal.Key(), delivery.Kind, delivery.DeliveryID, delivery.PayloadDigest, statusCode, code, message, daemon.now())
+			if retireErr != nil {
+				return journal, nil, retireErr
+			}
+			return updated, nil, &goalDeliveryRejectedError{err: err}
+		}
+		return journal, nil, err
+	}
+	if err := validateGoalDeliveryReceipt(journal, *delivery, attachReceipt, evidenceReceipt, usageReceipt); err != nil {
+		return journal, nil, err
+	}
+	if attachReceipt != nil && validateAttach != nil {
+		if err := validateAttach(*attachReceipt); err != nil {
+			return journal, nil, err
+		}
+	}
+	updated, err := daemon.store.MarkGoalDeliveryDelivered(journal.Key(), delivery.Kind, delivery.DeliveryID, delivery.PayloadDigest)
+	if err != nil {
+		return journal, nil, err
+	}
+	return updated, attachReceipt, nil
+}
+
+func definitiveGoalDeliveryRejection(kind state.GoalDeliveryKind, err error) (int, string, string, bool) {
+	var apiError *control.APIError
+	if !errors.As(err, &apiError) {
+		return 0, "", "", false
+	}
+	switch apiError.StatusCode {
+	case http.StatusBadRequest, http.StatusNotFound, http.StatusForbidden, http.StatusUnprocessableEntity:
+		message := apiError.Message
+		if message == "" {
+			message = apiError.Error()
+		}
+		return apiError.StatusCode, string(apiError.Code), message, true
+	case http.StatusConflict:
+		// A usage-key conflict could be an earlier accepted accounting record or
+		// a changed body. Without a readback receipt it is an unknown external
+		// effect, except for the control plane's explicit idempotency conflict.
+		if kind == state.GoalDeliveryUsage && apiError.Code != control.IdempotencyConflict {
+			return 0, "", "", false
+		}
+		message := apiError.Message
+		if message == "" {
+			message = apiError.Error()
+		}
+		return apiError.StatusCode, string(apiError.Code), message, true
+	default:
+		return 0, "", "", false
+	}
+}
+
+// flushLateGoalUsage drains the retained accounting ledger independently of
+// the run lifecycle. It never renews a lease, recreates a run, or starts work.
+func (daemon *daemon) flushLateGoalUsage(ctx context.Context) {
+	ledgers, err := daemon.store.ListLateGoalUsage()
+	if err != nil {
+		return
+	}
+	goalAPI, ok := daemon.control.(goalControlAPI)
+	if !ok {
+		return
+	}
+	for _, ledger := range ledgers {
+		for len(ledger.PendingUsageDeliveries) > 0 {
+			delivery := ledger.PendingUsageDeliveries[0]
+			if delivery.Usage == nil {
+				return
+			}
+			requestContext, cancel := daemon.controlContext(ctx)
+			receipt, callErr := goalAPI.RecordUsage(requestContext, ledger.RunID, ledger.Fence, *delivery.Usage)
+			cancel()
+			if callErr != nil {
+				if statusCode, code, message, definitive := definitiveGoalDeliveryRejection(state.GoalDeliveryUsage, callErr); definitive {
+					updated, retireErr := daemon.store.RetireLateGoalUsage(state.RunKey{RunID: ledger.RunID, Generation: ledger.Generation}, delivery.DeliveryID, delivery.PayloadDigest, statusCode, code, message, daemon.now())
+					if retireErr == nil {
+						ledger = updated
+						continue
+					}
+				}
+				break
+			}
+			if err := validateGoalDeliveryReceipt(state.RunJournal{RunID: ledger.RunID}, delivery, nil, nil, &receipt); err != nil {
+				break
+			}
+			updated, err := daemon.store.MarkLateGoalUsageDelivered(state.RunKey{RunID: ledger.RunID, Generation: ledger.Generation}, delivery.DeliveryID, delivery.PayloadDigest)
+			if err != nil {
+				break
+			}
+			ledger = updated
+		}
+	}
+}
+
+// validateGoalDeliveryReceipt is a second deletion barrier. The production
+// client performs strict wire validation, but the daemon must still protect its
+// durable outbox if a different ControlAPI implementation returns a malformed
+// or mismatched typed receipt.
+func validateGoalDeliveryReceipt(journal state.RunJournal, delivery state.GoalDelivery, attach *control.GoalSessionReceipt, evidence *control.GoalEvidenceReceipt, usage *control.GoalUsageReceipt) error {
+	switch delivery.Kind {
+	case state.GoalDeliverySessionAttach:
+		if delivery.SessionAttach == nil || attach == nil {
+			return errors.New("Goal session attach receipt is missing")
+		}
+		payload := delivery.SessionAttach
+		if attach.ID == "" || attach.GoalID != payload.GoalID || attach.RunID != journal.RunID || attach.RuntimeID != delivery.Fence.RuntimeID ||
+			attach.ActiveRunID != journal.RunID || attach.LocalHandleID != payload.LocalHandleID || attach.HarnessKind != payload.HarnessKind ||
+			attach.HarnessVersion != payload.HarnessVersion || attach.AdapterVersion != payload.AdapterVersion || attach.WorkspaceFingerprint != payload.WorkspaceFingerprint || attach.State != state.GoalSessionStateBusy {
+			return errors.New("Goal session attach receipt does not match durable request")
+		}
+		if attach.Workspace != "" && attach.Workspace != payload.Workspace {
+			return errors.New("Goal session attach receipt workspace does not match durable request")
+		}
+		if payload.RepositoryResourceID != nil && attach.RepositoryResourceID != *payload.RepositoryResourceID {
+			return errors.New("Goal session attach receipt repository does not match durable request")
+		}
+	case state.GoalDeliveryEvidence:
+		if delivery.Evidence == nil || evidence == nil || evidence.ID != delivery.Evidence.EvidenceID || evidence.RunID != journal.RunID || evidence.EvidenceKey != delivery.Evidence.EvidenceKey || evidence.Kind != string(delivery.Evidence.Kind) || evidence.SubjectHash != delivery.Evidence.SubjectHash || evidence.Verdict != string(delivery.Evidence.Verdict) {
+			return errors.New("Goal evidence receipt does not match durable request")
+		}
+	case state.GoalDeliveryUsage:
+		if delivery.Usage == nil || usage == nil || usage.ID != delivery.Usage.UsageID || usage.RunID != journal.RunID || usage.UsageKey != delivery.Usage.UsageKey || usage.CostBasis != string(delivery.Usage.CostBasis) || !sameOptionalString(usage.CostMicrousd, delivery.Usage.CostMicrousd) {
+			return errors.New("Goal usage receipt does not match durable request")
+		}
+	default:
+		return errors.New("Goal delivery kind is invalid")
+	}
+	return nil
+}
+
+func sameOptionalString(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func (daemon *daemon) deliverEventsBeforeAppliedInputAcknowledgement(ctx context.Context, journal state.RunJournal) (state.RunJournal, error) {
@@ -3824,8 +6543,32 @@ func (daemon *daemon) stopAll() {
 		}
 	}
 	daemon.mu.Unlock()
+	// Failed Ready-barrier cleanup has no worker waiting on the native session.
+	// Give it one bounded in-process retry before the store becomes unavailable.
+	daemon.retryBlockedNativeSessionCloses()
 	for _, process := range processes {
-		_ = process.Terminate(context.Background(), 0)
+		daemon.terminateProcessBounded(process, 0)
+	}
+}
+
+// terminateProcessBounded makes shutdown independent of a Process
+// implementation that fails to honour its cancellation context. The runner
+// still owns physical reaping; the persisted marker remains for recovery when
+// that cannot be confirmed during this daemon lifetime.
+func (daemon *daemon) terminateProcessBounded(process Process, grace time.Duration) {
+	if process == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTerminateLimit)
+	defer cancel()
+	done := make(chan struct{}, 1)
+	go func() {
+		_ = process.Terminate(ctx, grace)
+		done <- struct{}{}
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
 	}
 }
 

@@ -34,6 +34,32 @@ defmodule SymmetryControl.Integrations.AzureDevOpsTest do
     :ok
   end
 
+  test "validates a pull request URL against the exact Azure repository without network access" do
+    connection = %{account_ref: "acme"}
+    resource = %{kind: "repository", external_ref: "Platform/symmetry"}
+
+    assert :ok ==
+             AzureDevOps.validate_pull_request_url(
+               connection,
+               resource,
+               "https://dev.azure.com/acme/Platform/_git/symmetry/pullrequest/42"
+             )
+
+    assert {:error, :invalid_pull_request_url} =
+             AzureDevOps.validate_pull_request_url(
+               connection,
+               resource,
+               "https://dev.azure.com/acme/Platform/_git/other/pullrequest/42"
+             )
+
+    assert {:error, :invalid_pull_request_url} =
+             AzureDevOps.validate_pull_request_url(
+               connection,
+               resource,
+               "https://dev.azure.com/other/Platform/_git/symmetry/pullrequest/42"
+             )
+  end
+
   test "checks an organization and normalizes Azure Boards work items" do
     auth = "Bearer azure-token"
 

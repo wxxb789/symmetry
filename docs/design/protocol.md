@@ -7,9 +7,12 @@ No native harness sees machine bearer credentials or lease tokens.
 ## Contract source and evolution
 
 Implementation creates `contracts/v1/` JSON Schema Draft 7 documents for
-GoalRevision, ContextSnapshot, Admission, TaskResult, Evidence, Decision,
-Usage and adapter capabilities. These are the single wire authority, separate
-from Ecto persistence structs. IDs are UUID strings; timestamps RFC3339 UTC;
+`GoalCreate` (`goal-create.schema.json`), `GoalCommand`
+(`goal-command.schema.json`), `PlanProposal` (`plan-proposal.schema.json`),
+`GoalRevision`, `ContextSnapshot`, `Admission`, `TaskResult`, `Evidence`,
+`Decision`, `Usage` and adapter capabilities. These are the single wire
+authority, separate from Ecto persistence structs. IDs are UUID strings;
+timestamps RFC3339 UTC;
 hashes lowercase `sha256:<64 hex>` on wire and 32-byte bytea in storage.
 All monetary amounts are decimal-string microusd on wire. Counts and revisions
 are JSON safe integers with schema maxima; reject overflow, never round.
@@ -55,7 +58,13 @@ Server admission envelope (inside existing work.input for opted-in runtimes):
     "commit": "<git-object-id>",
     "tree_digest": "sha256:<digest>"
   },
-  "limits": {"max_turns": 1, "deadline_at": "<RFC3339>"}
+  "limits": {
+    "max_turns": 1,
+    "deadline_at": "<RFC3339>",
+    "max_cost_microusd": null
+  },
+  "validation_of_task_id": null,
+  "provider_scope": null
 }
 ```
 
@@ -65,15 +74,50 @@ subject hash from the same canonical complete object; none may omit the digest
 or substitute an implicit local value. A validation admission names the exact
 candidate subject being checked. A newly produced candidate commit has its own
 complete Subject and hash, not the implementation admission's starting-subject
-hash. Contract fixtures must cover complete-subject round trips and rejection of
-missing or mismatched tree_digest.
+hash. `limits.max_cost_microusd` is required on every admission. `null` is the
+explicit soft-budget value; it does not grant caller-selected or unlimited
+spend. A non-null decimal-string ceiling is server-derived and is emitted only
+for a strict revision whose selected adapter has verified native cost-ceiling
+enforcement. `validation_of_task_id` is also a required nullable key: it is
+non-null only for a validation admission and binds that admission to the exact
+producer Task. `provider_scope` is a required nullable key; `null` means that
+the approved WorkItem has no provider-effect scope, never an implicit broad
+scope. When non-null, it is a server-derived frozen map of resource IDs,
+per-resource operations and an explicit change target; it contains neither
+credentials nor connection grants. Contract fixtures must cover complete-subject
+round trips and rejection of missing or mismatched tree_digest.
+
+For a PlanItem, `change_target` is required and nullable. The accepted plan hash
+binds its exact value before the server persists it with the WorkItem. At admission,
+`null` derives only `resource.sync`; branches derive `change.upsert` and optionally
+`change.update` when policy permits; a pull-request target derives only
+`change.update`. The server never derives a target from mutable WorkItem branch or
+pull-request URL fields. A provider scope is emitted only after the bound repository
+has a matching supported connection with the capabilities required by its operations.
+This mapping applies only to `implement` admissions. `validate`, `plan`, `observe`,
+and `chat` admissions always receive `provider_scope: null`.
+
+An operator `request_plan` admission is the only Goal admission with
+`work_item_id: null`. It is `purpose: "plan"`, runs only while the Goal remains
+draft, has `validation_of_task_id: null`, and uses an immutable planning context
+for the operator-selected approved Subject. Its TaskResult must be
+`plan_proposed` with a schema-valid PlanProposal. The kernel persists that
+proposal as a scoped open plan Decision; it does not create WorkItems, outcomes,
+dependencies, provider actions or an implicit approval.
 
 Angle-bracket values illustrate types, not runnable fixture values. One turn
 means one host invocation under an admitted contract, not one model API call.
 Daemon resolves model_profile and credentials locally. `fresh|resume|handoff`
-are distinct modes. A rejected resume returns a typed reason; a fresh fallback
-requires a new admission against the same preserved artifact and fresh snapshot.
-An in-flight Task is never silently switched to another model/harness.
+are distinct modes. `fresh` requires `requested_session_id: null`; `resume`
+requires the exact retained `requested_session_id`; and `handoff` always has
+`requested_session_id: null` because it creates a new native session from the
+immutable context snapshot and reachable authorized artifact, never by
+transferring a native handle or proprietary session format. A rejected resume
+returns `resume_rejected`. A daemon without a verified cross-harness handoff
+adapter rejects handoff with `handoff_unsupported` before creating any local
+session journal or native process. A fresh fallback requires a new admission
+against the same preserved artifact and fresh snapshot. An in-flight Task is
+never silently switched to another model/harness.
 
 Capabilities retain existing booleans for old clients. Add a versioned
 `adapter` object containing kind, native_version, implementation_version,
@@ -99,6 +143,19 @@ Required operations are checked at admission and claim. Old clients cannot claim
 new supervised work by merely declaring generic JSON input. Advertised native
 operations must correspond to the exact version's integration tests.
 
+### Additive native runtime repository binding
+
+Native runtime registration may include nullable `repository_resource_id`.
+This is a durable repository identity, not an arbitrary daemon workspace path;
+the local path remains machine-local. Existing registrations that omit it remain
+wire-compatible and can continue goal-less work, but cannot receive a Goal
+assignment. Scheduler selection and a new claim require it to match the WorkItem
+repository resource and admitted Subject resource; the daemon rechecks before
+workspace or native-process effects. Admission may queue work before a matching
+runtime is online or registered. An exact replay of an already persisted claim
+remains valid after a later resource binding change, but no new work is
+authorized by that replay.
+
 ## Normalized results and controls
 
 Reuse run_events for transcript metadata and normalized native events. Event
@@ -107,12 +164,24 @@ kinds: `session_started`, `message_delta`, `tool_started`, `tool_finished`,
 The authenticated producer and run fence determine identity, not payload fields.
 Unknown native events become diagnostics, never terminal success.
 
-task_result has schema_version, result_id UUID, kind (core.md), summary,
-subject_hash, evidence_refs UUID[], blocker nullable, proposed_next_action
-nullable. Proposals are schema-checked data, not executable shell strings.
+An external blocker in a normalized TaskResult currently produces the explicit
+`unsupported_external_check` outcome. The Control plane retains the immutable
+external-wait source and exposes it to operators, but emits no scheduled check
+and never sends an `observe` admission to a model. A future Integration checker
+must return the exact wait/Subject-bound receipt described in `data.md`; model
+output, an operator retry, or a fresh timestamp cannot stand in for that receipt.
+
+task_result has schema_version, result_id UUID, kind (core.md), summary, a
+complete Subject, and subject_hash equal to SHA-256 of that canonical Subject,
+plus evidence_refs UUID[], blocker nullable, proposed_next_action nullable.
+For candidate_completion, Subject identifies the newly produced candidate, not
+the implementation admission's starting Subject. Proposals are schema-checked
+data, not executable shell strings.
 A producer cannot submit an accepted outcome directly. Successful native exit
 without usable result is `failed` with reason `missing_result`, while preserving
 the physical process-exit event. Run lifecycle and semantic result remain separate.
+`plan_proposed` is accepted only for an admitted planning Task and must carry a
+schema-valid PlanProposal; all other result kinds must carry `proposal: null`.
 
 Existing commands retain idempotency and generation. Guidance has delivery
 `queued|applied|failed`; writing bytes is not proof of application. A next-turn
@@ -129,15 +198,15 @@ same context command implementation; no duplicated business logic.
 
 | Method and path under `/portal/api` | Payload |
 | --- | --- |
-| POST `/projects/:id/goals` | title, initial revision contract, mutation_id |
+| POST `/projects/:id/goals` | `symmetry.goal_create.v1` |
 | GET `/goals/:id` | current projection including allowed_actions and blocker reasons |
-| POST `/goals/:id/commands` | mutation_id, expected_version, expected_revision, kind, payload |
+| POST `/goals/:id/commands` | `symmetry.goal_command.v1` discriminated command envelope |
 | GET `/goals/:id/events?after=N` | ordered compact goal events, next cursor |
 | GET `/goals/:id/graph` | dependency nodes/edges and blocker explanation |
 | GET `/goals/:id/contexts/:snapshot_id` | authorized compact context snapshot |
 | GET `/attention` | goal/work/decision projections with cursor pagination |
 
-Command kinds are `activate`, `pause`, `resume`, `cancel`, `amend`, `accept_plan`,
+Command kinds are `activate`, `pause`, `resume`, `cancel`, `amend`, `request_plan`, `accept_plan`,
 `request_decision`, `resolve_decision`, `admit_task`, `add_dependency`, `remove_dependency`, `achieve`.
 Each payload has a separate discriminated schema, fixed in [typed structures](contracts.md). Expected version and revision
 are mandatory after creation. Permission checks occur on every replay. Same
@@ -177,9 +246,11 @@ adapter-specific tokenization only when available. If mandatory context exceeds
 budget, block with `context_budget_exceeded` instead of silently losing authority.
 
 Hash canonicalized schema-valid JSON with a documented normalization shared by
-fixtures; arrays preserve order, object keys sort recursively, strings are UTF-8,
-integers exact. Preserve existing versioned RequestHash behavior for old commands;
-do not change it opportunistically to match snapshot hashing.
+fixtures: arrays preserve order, object keys sort recursively, strings are UTF-8
+without Unicode normalization, and `U+2028`/`U+2029` remain raw UTF-8 rather than
+serializer-specific escapes. Integers remain exact and numeric negative zero
+canonicalizes to zero. Preserve existing versioned RequestHash behavior for old
+commands; do not change it opportunistically to match snapshot hashing.
 
 Cross-harness handoff creates a new native session from this snapshot and an
 authorized reachable Git commit. Never transfer raw proprietary session formats.

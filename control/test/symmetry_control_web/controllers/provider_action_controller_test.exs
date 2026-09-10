@@ -19,36 +19,42 @@ defmodule SymmetryControl.Integrations.ProviderActionTestStub do
 
   @impl true
   def sync_resource(connection, %{kind: "work_tracking"} = resource, _auth) do
-    {:ok,
-     %{
-       resource: %{url: resource_url(connection, resource), metadata: %{}},
-       work_items: [
-         %{
-           external_id: "101",
-           external_url: resource_url(connection, resource) <> "/items/101",
-           external_state: "open",
-           external_updated_at: ~U[2026-09-06 08:00:00.000000Z],
-           title: "Provider-backed work",
-           description: "Exercise provider access.",
-           labels: [],
-           external_assignee_name: nil,
-           status: "ready",
-           priority: "high",
-           provider_data: provider_work_item_data(connection.provider)
-         }
-       ]
-     }}
+    notify_readback(connection, resource)
+
+    result = %{
+      resource: %{url: resource_url(connection, resource), metadata: %{}},
+      work_items: [
+        %{
+          external_id: "101",
+          external_url: resource_url(connection, resource) <> "/items/101",
+          external_state: "open",
+          external_updated_at: ~U[2026-09-06 08:00:00.000000Z],
+          title: "Provider-backed work",
+          description: "Exercise provider access.",
+          labels: [],
+          external_assignee_name: nil,
+          status: "ready",
+          priority: "high",
+          provider_data: provider_work_item_data(connection.provider)
+        }
+      ]
+    }
+
+    {:ok, Map.merge(result, readback_marker(resource))}
   end
 
   def sync_resource(connection, resource, _auth) do
-    {:ok,
-     %{
-       resource: %{
-         url: resource_url(connection, resource),
-         metadata: %{"default_branch" => "main"}
-       },
-       work_items: []
-     }}
+    notify_readback(connection, resource)
+
+    result = %{
+      resource: %{
+        url: resource_url(connection, resource),
+        metadata: %{"default_branch" => "main"}
+      },
+      work_items: []
+    }
+
+    {:ok, Map.merge(result, readback_marker(resource))}
   end
 
   @impl true
@@ -138,6 +144,29 @@ defmodule SymmetryControl.Integrations.ProviderActionTestStub do
          provider_data: provider_data
        }}
 
+  defp notify_readback(connection, resource) do
+    if :ets.lookup(:provider_action_test_state, {:readback, resource.id}) != [] do
+      send(
+        Application.fetch_env!(:symmetry_control, :provider_action_test_controller),
+        {:provider_readback, connection.provider, resource.id}
+      )
+    end
+
+    if :ets.lookup(:provider_action_test_state, {:readback_target, resource.id}) != [] do
+      send(
+        Application.fetch_env!(:symmetry_control, :provider_action_test_controller),
+        {:provider_readback_target, connection.account_ref, resource.external_ref}
+      )
+    end
+  end
+
+  defp readback_marker(resource) do
+    case :ets.lookup(:provider_action_test_state, {:readback_outcome, resource.id}) do
+      [{{:readback_outcome, _resource_id}, outcome}] -> %{readback: outcome}
+      _ -> %{}
+    end
+  end
+
   defp resource_url(%{provider: "github"}, resource),
     do: "https://github.com/" <> resource.external_ref
 
@@ -154,8 +183,9 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
   import Ecto.Query
   import ExUnit.CaptureLog
 
+  alias SymmetryControl.Goals.{ContextSnapshot, Goal, GoalRevision}
   alias SymmetryControl.Integrations
-  alias SymmetryControl.Integrations.{Connection, ProviderActionIntent}
+  alias SymmetryControl.Integrations.{Connection, ProviderAccess, ProviderActionIntent}
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.{Run, Runtime, Task}
   alias SymmetryControl.Repo
@@ -282,6 +312,687 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
              )
 
     assert Repo.get!(Connection, detached_connection.id)
+  end
+
+  test "provider scope uses durable Goal task membership after the current pointer advances",
+       context do
+    assert {:ok, %{task_id: task_id}} = ProviderAccess.lock_claim_scope(context.run.id)
+    assert task_id == context.task.id
+
+    goal =
+      goal_fixture(
+        context.item.project_id,
+        provider_goal_authority(["resource.sync"], [context.repository.id])
+      )
+
+    item = admit_goal_owned_item(context.item, goal)
+    snapshot = goal_context_snapshot(item, goal)
+
+    task =
+      goal_task(
+        item,
+        goal,
+        snapshot,
+        context.repository.id,
+        frozen_goal_provider_scope([context.repository.id], ["resource.sync"])
+      )
+
+    run = goal_run(task, context.runtime_id)
+
+    {1, _} =
+      Repo.update_all(
+        from(work_item in WorkItem, where: work_item.id == ^item.id),
+        set: [orchestration_task_id: context.task.id]
+      )
+
+    assert {:ok, %{task_id: durable_task_id, resources: [{resource, connection}]}} =
+             ProviderAccess.lock_claim_scope(run.id)
+
+    assert durable_task_id == task.id
+    assert resource.id == context.repository.id
+    assert connection.id == context.github.id
+  end
+
+  test "Goal provider claim scope locks Project before Goal", context do
+    goal =
+      goal_fixture(
+        context.item.project_id,
+        provider_goal_authority(["change.upsert"], [context.repository.id])
+      )
+
+    item = admit_goal_owned_item(context.item, goal)
+    snapshot = goal_context_snapshot(item, goal)
+    task = goal_task(item, goal, snapshot, context.repository.id)
+    run = goal_run(task, context.runtime_id)
+
+    {:ok, lock_connection} = Postgrex.start_link(postgrex_test_options())
+    assert {:ok, _result} = Postgrex.query(lock_connection, "BEGIN", [])
+
+    assert {:ok, %Postgrex.Result{}} =
+             Postgrex.query(
+               lock_connection,
+               "SELECT id FROM projects WHERE id = $1 FOR UPDATE",
+               [goal.project_id]
+             )
+
+    owner = self()
+    ref = make_ref()
+    handler_id = {__MODULE__, ref}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:symmetry_control, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if String.contains?(metadata.query, "FOR SHARE") and
+               String.contains?(metadata.query, "\"projects\"") do
+            send(owner, {:goal_claim_scope_waiting_on_project, ref})
+          end
+        end,
+        nil
+      )
+
+    requester =
+      Elixir.Task.async(fn ->
+        receive do
+          :lock_claim_scope -> Repo.transaction(fn -> ProviderAccess.lock_claim_scope(run.id) end)
+        end
+      end)
+
+    Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), requester.pid)
+    send(requester.pid, :lock_claim_scope)
+
+    try do
+      assert_receive {:goal_claim_scope_waiting_on_project, ^ref}, 1_000
+
+      assert {:ok, %Postgrex.Result{}} =
+               Postgrex.query(
+                 lock_connection,
+                 "SELECT id FROM goals WHERE id = $1 FOR UPDATE NOWAIT",
+                 [goal.id]
+               )
+
+      assert {:ok, _result} = Postgrex.query(lock_connection, "ROLLBACK", [])
+
+      assert {:ok, {:ok, %{task_id: task_id}}} = Elixir.Task.await(requester, 5_000)
+      assert task_id == task.id
+    after
+      :telemetry.detach(handler_id)
+
+      if Process.alive?(lock_connection) do
+        _ = Postgrex.query(lock_connection, "ROLLBACK", [])
+        GenServer.stop(lock_connection, :normal, :infinity)
+      end
+    end
+  end
+
+  test "Goal provider grants expose only current revision operations", context do
+    goal =
+      goal_fixture(
+        context.item.project_id,
+        provider_goal_authority(["change.upsert"], [context.repository.id])
+      )
+
+    item = admit_goal_owned_item(context.item, goal)
+    snapshot = goal_context_snapshot(item, goal)
+    task = goal_task(item, goal, snapshot, context.repository.id)
+    run = goal_run(task, context.runtime_id)
+
+    %{access: access} = claim_goal_provider_access(context, run)
+
+    assert access["grants"] == [
+             %{
+               "resource_id" => context.repository.id,
+               "provider" => "github",
+               "kind" => "repository",
+               "operations" => ["change.upsert"]
+             }
+           ]
+  end
+
+  test "Goal branch targets permit their frozen sync and upsert operations", context do
+    goal =
+      goal_fixture(
+        context.item.project_id,
+        provider_goal_authority(["resource.sync", "change.upsert"], [context.repository.id])
+      )
+
+    item = admit_goal_owned_item(context.item, goal)
+    snapshot = goal_context_snapshot(item, goal)
+
+    task =
+      goal_task(
+        item,
+        goal,
+        snapshot,
+        context.repository.id,
+        frozen_goal_provider_scope([context.repository.id], ["resource.sync", "change.upsert"])
+      )
+
+    run = goal_run(task, context.runtime_id)
+    %{access: access} = claim_goal_provider_access(context, run)
+
+    assert access["grants"] == [
+             %{
+               "resource_id" => context.repository.id,
+               "provider" => "github",
+               "kind" => "repository",
+               "operations" => ["resource.sync", "change.upsert"]
+             }
+           ]
+  end
+
+  test "Goal claim uses only its frozen provider scope and cannot expand it", context do
+    goal =
+      goal_fixture(
+        context.item.project_id,
+        provider_goal_authority(
+          ["resource.sync", "change.upsert", "change.update"],
+          []
+        )
+      )
+
+    item = admit_goal_owned_item(context.item, goal)
+    snapshot = goal_context_snapshot(item, goal)
+
+    task =
+      goal_task(
+        item,
+        goal,
+        snapshot,
+        context.repository.id,
+        frozen_goal_provider_scope([context.repository.id], ["resource.sync"])
+      )
+
+    Repo.update_all(from(stored in Task, where: stored.id == ^task.id),
+      set: [input: Map.put(task.input, "provider_resource_ids", [context.tracker.id])]
+    )
+
+    run = goal_run(task, context.runtime_id)
+    %{access: access} = claim_goal_provider_access(context, run)
+
+    assert access["grants"] == [
+             %{
+               "resource_id" => context.repository.id,
+               "provider" => "github",
+               "kind" => "repository",
+               "operations" => ["resource.sync"]
+             }
+           ]
+  end
+
+  test "Goal provider claim rejects a resource outside the current revision", context do
+    goal =
+      goal_fixture(
+        context.item.project_id,
+        provider_goal_authority(["change.upsert"], [context.tracker.id])
+      )
+
+    item = admit_goal_owned_item(context.item, goal)
+    snapshot = goal_context_snapshot(item, goal)
+    task = goal_task(item, goal, snapshot, context.repository.id)
+    run = goal_run(task, context.runtime_id)
+    claim_id = uuid()
+
+    assert_error(
+      bearer(build_conn(), context.machine_token)
+      |> put("/api/v1/runs/#{run.id}/claims/#{claim_id}", %{
+        "runtime_id" => context.runtime_id,
+        "runtime_epoch" => 1,
+        "generation" => run.generation
+      }),
+      503,
+      "provider_access_unavailable"
+    )
+
+    assert Repo.get!(Run, run.id).state == "assigned"
+    assert Repo.get!(Task, task.id).state == "queued"
+  end
+
+  test "Goal claim rejects frozen change grants after the connection loses changes capability",
+       context do
+    goal =
+      goal_fixture(
+        context.item.project_id,
+        provider_goal_authority(["change.upsert"], [context.repository.id])
+      )
+
+    item = admit_goal_owned_item(context.item, goal)
+    snapshot = goal_context_snapshot(item, goal)
+    task = goal_task(item, goal, snapshot, context.repository.id)
+    run = goal_run(task, context.runtime_id)
+    connection = Repo.get!(Connection, context.github.id)
+
+    assert {:ok, _connection} =
+             Integrations.update_connection(connection.id, %{
+               version: connection.lock_version,
+               capabilities: ["repositories"]
+             })
+
+    assert_error(
+      bearer(build_conn(), context.machine_token)
+      |> put("/api/v1/runs/#{run.id}/claims/#{uuid()}", %{
+        "runtime_id" => context.runtime_id,
+        "runtime_epoch" => 1,
+        "generation" => run.generation
+      }),
+      503,
+      "provider_access_unavailable"
+    )
+
+    assert Repo.get!(Run, run.id).state == "assigned"
+    assert Repo.get!(Task, task.id).state == "queued"
+    refute_receive {:provider_action, _, _, _, _, _, _}, 50
+  end
+
+  test "Goal provider intent is not dispatched after pause, cancel, or amended authority",
+       context do
+    Enum.each([:paused, :cancelled, :stale_revision], fn revocation ->
+      goal =
+        goal_fixture(
+          context.item.project_id,
+          provider_goal_authority(["change.upsert"], [context.repository.id])
+        )
+
+      item = admit_goal_owned_item(context.item, goal)
+      snapshot = goal_context_snapshot(item, goal)
+      task = goal_task(item, goal, snapshot, context.repository.id)
+      run = goal_run(task, context.runtime_id)
+      %{access: access, claim_id: claim_id} = claim_goal_provider_access(context, run)
+
+      goal_context = %{
+        context
+        | access: access,
+          claim_id: claim_id,
+          item: item,
+          task: task,
+          run: Repo.get!(Run, run.id)
+      }
+
+      action_id = uuid()
+
+      intent =
+        insert_accepted_intent(goal_context, action_id, "change.upsert", %{"title" => "Frozen"})
+
+      revoke_goal_provider_authority(goal, revocation)
+
+      assert_error(
+        provider_request(
+          goal_context,
+          context.repository.id,
+          "change.upsert",
+          %{"title" => "Frozen"},
+          action_id
+        ),
+        503,
+        "provider_access_unavailable"
+      )
+
+      assert Repo.get!(ProviderActionIntent, intent.id).state == "accepted"
+      refute_receive {:provider_action, _, _, _, _, _, _}, 50
+    end)
+  end
+
+  test "stale public Goal unknown retry cannot read back or mutate the intent",
+       context do
+    goal =
+      goal_fixture(
+        context.item.project_id,
+        provider_goal_authority(["change.upsert"], [context.repository.id])
+      )
+
+    item = admit_goal_owned_item(context.item, goal)
+    snapshot = goal_context_snapshot(item, goal)
+    task = goal_task(item, goal, snapshot, context.repository.id)
+    run = goal_run(task, context.runtime_id)
+    %{access: access, claim_id: claim_id} = claim_goal_provider_access(context, run)
+
+    goal_context = %{
+      context
+      | access: access,
+        claim_id: claim_id,
+        item: item,
+        task: task,
+        run: Repo.get!(Run, run.id)
+    }
+
+    action_id = uuid()
+
+    intent =
+      insert_accepted_intent(goal_context, action_id, "change.upsert", %{"title" => "Frozen"})
+
+    Repo.update_all(from(stored in ProviderActionIntent, where: stored.id == ^intent.id),
+      set: [state: "unknown"]
+    )
+
+    :ets.insert(:provider_action_test_state, {{:readback, context.repository.id}, true})
+    set_readback(context.repository.id, :applied)
+    revoke_goal_provider_authority(goal, :stale_revision)
+
+    assert_error(
+      provider_request(
+        goal_context,
+        context.repository.id,
+        "change.upsert",
+        %{"title" => "Frozen"},
+        action_id
+      ),
+      409,
+      "ownership_lost"
+    )
+
+    observed = Repo.get!(ProviderActionIntent, intent.id)
+    assert observed.state == "unknown"
+    assert observed.failure == nil
+    refute_receive {:provider_readback, _, _}, 50
+    refute_receive {:provider_action, _, _, _, _, _, _}, 50
+  end
+
+  test "Goal unknown generic readback remains unconfirmed without redispatch", context do
+    goal_context = goal_provider_context(context)
+    action_id = uuid()
+
+    intent =
+      insert_accepted_intent(goal_context, action_id, "change.upsert", %{
+        "title" => "Readback applied"
+      })
+
+    Repo.update_all(from(stored in ProviderActionIntent, where: stored.id == ^intent.id),
+      set: [state: "unknown"]
+    )
+
+    Repo.update_all(
+      from(resource in ProjectResource, where: resource.id == ^context.repository.id),
+      set: [external_ref: "acme/retargeted"],
+      inc: [lock_version: 1]
+    )
+
+    :ets.insert(:provider_action_test_state, {{:readback_target, context.repository.id}, true})
+    set_readback(context.repository.id, :applied)
+
+    assert %{
+             "operation" => "change.upsert",
+             "outcome" => "unknown",
+             "readback_status" => "unconfirmed",
+             "projected" => false,
+             "readback" => %{"operation" => "resource.sync", "projected" => false}
+           } =
+             provider_request(
+               goal_context,
+               context.repository.id,
+               "change.upsert",
+               %{"title" => "Readback applied"},
+               action_id
+             )
+             |> json_response(200)
+
+    observed = Repo.get!(ProviderActionIntent, intent.id)
+    assert observed.state == "unknown"
+    assert observed.failure["readback_status"] == "unconfirmed"
+    assert_received {:provider_readback_target, "acme", "acme/symmetry"}
+    refute_receive {:provider_action, _, _, _, _, _, _}, 50
+  end
+
+  test "Goal unknown readback unconfirmed remains unknown without redispatch", context do
+    goal_context = goal_provider_context(context)
+    action_id = uuid()
+
+    intent =
+      insert_accepted_intent(goal_context, action_id, "change.upsert", %{
+        "title" => "Readback unconfirmed"
+      })
+
+    Repo.update_all(from(stored in ProviderActionIntent, where: stored.id == ^intent.id),
+      set: [state: "unknown"]
+    )
+
+    set_readback(context.repository.id, :unconfirmed)
+
+    assert %{
+             "operation" => "change.upsert",
+             "outcome" => "unknown",
+             "readback_status" => "unconfirmed"
+           } =
+             provider_request(
+               goal_context,
+               context.repository.id,
+               "change.upsert",
+               %{"title" => "Readback unconfirmed"},
+               action_id
+             )
+             |> json_response(200)
+
+    observed = Repo.get!(ProviderActionIntent, intent.id)
+    assert observed.state == "unknown"
+    assert observed.failure["readback_status"] == "unconfirmed"
+    refute_receive {:provider_action, _, _, _, _, _, _}, 50
+  end
+
+  test "stale public Goal unknown retry cannot read back after its execution fence expires",
+       context do
+    goal_context = goal_provider_context(context)
+    action_id = uuid()
+
+    intent =
+      insert_accepted_intent(goal_context, action_id, "change.upsert", %{
+        "title" => "Expired public readback"
+      })
+
+    Repo.update_all(from(stored in ProviderActionIntent, where: stored.id == ^intent.id),
+      set: [state: "unknown"]
+    )
+
+    :ets.insert(:provider_action_test_state, {{:readback, context.repository.id}, true})
+    set_readback(context.repository.id, :applied)
+    expire_run(goal_context.run.id)
+
+    assert_error(
+      provider_request(
+        goal_context,
+        context.repository.id,
+        "change.upsert",
+        %{"title" => "Expired public readback"},
+        action_id
+      ),
+      409,
+      "ownership_lost"
+    )
+
+    assert Repo.get!(ProviderActionIntent, intent.id).state == "unknown"
+    refute_receive {:provider_readback, _, _}, 50
+    refute_receive {:provider_action, _, _, _, _, _, _}, 50
+  end
+
+  test "Goal unknown generic not-applied readback does not retry the mutation",
+       context do
+    goal_context = goal_provider_context(context)
+    action_id = uuid()
+    input = %{"title" => "Readback not applied"}
+
+    intent = insert_accepted_intent(goal_context, action_id, "change.upsert", input)
+
+    Repo.update_all(from(stored in ProviderActionIntent, where: stored.id == ^intent.id),
+      set: [state: "unknown"]
+    )
+
+    set_readback(context.repository.id, :not_applied)
+
+    assert %{
+             "operation" => "change.upsert",
+             "outcome" => "unknown",
+             "readback_status" => "unconfirmed",
+             "projected" => false
+           } =
+             provider_request(
+               goal_context,
+               context.repository.id,
+               "change.upsert",
+               input,
+               action_id
+             )
+             |> json_response(200)
+
+    observed = Repo.get!(ProviderActionIntent, intent.id)
+    assert observed.state == "unknown"
+    assert observed.failure["readback_status"] == "unconfirmed"
+    refute_receive {:provider_action, "github", _, _, "change.upsert", _, _}, 50
+  end
+
+  test "expired Goal accepted intent is terminalized without provider dispatch", context do
+    goal_context = goal_provider_context(context)
+
+    intent =
+      insert_accepted_intent(goal_context, uuid(), "change.upsert", %{"title" => "Expired"})
+
+    expire_run(goal_context.run.id)
+    recover_pending_and_wait()
+
+    failed = Repo.get!(ProviderActionIntent, intent.id)
+    assert failed.state == "failed"
+    assert failed.failure == %{"code" => "ownership_lost"}
+    refute_receive {:provider_action, _, _, _, _, _, _}, 50
+  end
+
+  test "expired paused Goal accepted intent is terminalized without provider dispatch", context do
+    goal_context = goal_provider_context(context)
+
+    intent =
+      insert_accepted_intent(goal_context, uuid(), "change.upsert", %{"title" => "Expired paused"})
+
+    goal = Repo.get!(Goal, goal_context.task.goal_id)
+    revoke_goal_provider_authority(goal, :paused)
+    expire_run(goal_context.run.id)
+    recover_pending_and_wait()
+
+    failed = Repo.get!(ProviderActionIntent, intent.id)
+    assert failed.state == "failed"
+    assert failed.failure == %{"code" => "ownership_lost"}
+    refute_receive {:provider_action, _, _, _, _, _, _}, 50
+  end
+
+  test "expired paused Goal executing intent becomes unknown without redispatch", context do
+    goal_context = goal_provider_context(context)
+
+    intent =
+      insert_accepted_intent(goal_context, uuid(), "change.upsert", %{
+        "title" => "Expired paused execution"
+      })
+
+    goal = Repo.get!(Goal, goal_context.task.goal_id)
+    dispatch_token = uuid()
+
+    Repo.update_all(from(stored in ProviderActionIntent, where: stored.id == ^intent.id),
+      set: [state: "executing", dispatch_token: dispatch_token]
+    )
+
+    revoke_goal_provider_authority(goal, :paused)
+    expire_run(goal_context.run.id)
+    recover_pending_and_wait()
+
+    observed = Repo.get!(ProviderActionIntent, intent.id)
+    assert observed.state == "unknown"
+    assert observed.dispatch_token == nil
+    refute_receive {:provider_action, _, _, _, _, _, _}, 50
+  end
+
+  test "expired Goal accepted replay terminalizes without waiting for recovery", context do
+    goal_context = goal_provider_context(context)
+    action_id = uuid()
+    input = %{"title" => "Expired replay"}
+
+    intent = insert_accepted_intent(goal_context, action_id, "change.upsert", input)
+    expire_run(goal_context.run.id)
+
+    assert_error(
+      provider_request(goal_context, context.repository.id, "change.upsert", input, action_id),
+      409,
+      "ownership_lost"
+    )
+
+    failed = Repo.get!(ProviderActionIntent, intent.id)
+    assert failed.state == "failed"
+    assert failed.failure == %{"code" => "ownership_lost"}
+    refute_receive {:provider_action, _, _, _, _, _, _}, 50
+  end
+
+  test "recovery sweeps a stale Goal unknown intent by readback without redispatch", context do
+    goal =
+      goal_fixture(
+        context.item.project_id,
+        provider_goal_authority(["change.upsert"], [context.repository.id])
+      )
+
+    item = admit_goal_owned_item(context.item, goal)
+    snapshot = goal_context_snapshot(item, goal)
+    task = goal_task(item, goal, snapshot, context.repository.id)
+    run = goal_run(task, context.runtime_id)
+    %{access: access, claim_id: claim_id} = claim_goal_provider_access(context, run)
+
+    goal_context = %{
+      context
+      | access: access,
+        claim_id: claim_id,
+        item: item,
+        task: task,
+        run: Repo.get!(Run, run.id)
+    }
+
+    action_id = uuid()
+
+    intent =
+      insert_accepted_intent(goal_context, action_id, "change.upsert", %{"title" => "Frozen"})
+
+    Repo.update_all(from(stored in ProviderActionIntent, where: stored.id == ^intent.id),
+      set: [state: "unknown"]
+    )
+
+    revoke_goal_provider_authority(goal, :stale_revision)
+    expire_run(goal_context.run.id)
+    :ets.insert(:provider_action_test_state, {{:readback, context.repository.id}, true})
+
+    recover_pending_and_wait()
+
+    assert_received {:provider_readback, "github", repository_id}
+    assert repository_id == context.repository.id
+    observed = Repo.get!(ProviderActionIntent, intent.id)
+    assert observed.state == "unknown"
+    assert is_binary(observed.failure["readback_observed_at"])
+    refute_receive {:provider_action, _, _, _, _, _, _}, 50
+  end
+
+  test "recovery leaves a stale accepted Goal intent unredispatched", context do
+    goal =
+      goal_fixture(
+        context.item.project_id,
+        provider_goal_authority(["change.upsert"], [context.repository.id])
+      )
+
+    item = admit_goal_owned_item(context.item, goal)
+    snapshot = goal_context_snapshot(item, goal)
+    task = goal_task(item, goal, snapshot, context.repository.id)
+    run = goal_run(task, context.runtime_id)
+    %{access: access, claim_id: claim_id} = claim_goal_provider_access(context, run)
+
+    goal_context = %{
+      context
+      | access: access,
+        claim_id: claim_id,
+        item: item,
+        task: task,
+        run: Repo.get!(Run, run.id)
+    }
+
+    intent =
+      insert_accepted_intent(goal_context, uuid(), "change.upsert", %{"title" => "Frozen"})
+
+    revoke_goal_provider_authority(goal, :stale_revision)
+    recover_pending_and_wait()
+
+    failed = Repo.get!(ProviderActionIntent, intent.id)
+    assert failed.state == "failed"
+    assert failed.failure == %{"code" => "provider_access_unavailable"}
+    refute_receive {:provider_action, _, _, _, _, _, _}, 50
+    refute_receive {:provider_readback, _, _}, 50
   end
 
   test "claim emits exact mixed-provider grants without provider credentials", context do
@@ -525,6 +1236,68 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
              grant["resource_id"] == context.repository.id and
                "change.upsert" in grant["operations"]
            end)
+  end
+
+  test "claim replay rebuilds the persisted grants after Goal authority and runtime capability change",
+       context do
+    goal_context = goal_provider_context(context)
+    initial_run = Repo.get!(Run, goal_context.run.id)
+    initial_access = goal_context.access
+    initial_fence = Map.take(initial_run, [:claim_id, :lease_token, :lease_expires_at])
+
+    assert initial_run.provider_access_snapshot == %{
+             "v" => 1,
+             "kind" => "granted",
+             "grants" => initial_access["grants"]
+           }
+
+    refute inspect(initial_run.provider_access_snapshot) =~ "provider-secret"
+    refute inspect(initial_run.provider_access_snapshot) =~ initial_access["token"]
+
+    goal = Repo.get!(Goal, goal_context.task.goal_id)
+    revoke_goal_provider_authority(goal, :paused)
+
+    paused_replay =
+      bearer(build_conn(), context.machine_token)
+      |> put("/api/v1/runs/#{initial_run.id}/claims/#{goal_context.claim_id}", %{
+        "runtime_id" => goal_context.runtime_id,
+        "runtime_epoch" => 1,
+        "generation" => initial_run.generation
+      })
+      |> json_response(200)
+
+    assert paused_replay["provider_access"]["grants"] == initial_access["grants"]
+
+    Repo.update_all(from(stored in Goal, where: stored.id == ^goal.id), set: [state: "active"])
+    revoke_goal_provider_authority(goal, :stale_revision)
+
+    Repo.update_all(from(runtime in Runtime, where: runtime.id == ^goal_context.runtime_id),
+      set: [capabilities: %{"provider_access" => false, "structured_input" => true}]
+    )
+
+    assert {:ok, new_claim_scope} = ProviderAccess.lock_claim_scope(initial_run.id)
+
+    assert {:error, :provider_access_unavailable} =
+             ProviderAccess.issue(new_claim_scope, initial_run, goal_context.task)
+
+    replay =
+      bearer(build_conn(), context.machine_token)
+      |> put("/api/v1/runs/#{initial_run.id}/claims/#{goal_context.claim_id}", %{
+        "runtime_id" => goal_context.runtime_id,
+        "runtime_epoch" => 1,
+        "generation" => initial_run.generation
+      })
+      |> json_response(200)
+
+    replayed_run = Repo.get!(Run, initial_run.id)
+
+    assert Map.take(replayed_run, [:claim_id, :lease_token, :lease_expires_at]) == initial_fence
+    assert replay["claim_id"] == initial_fence.claim_id
+    assert replay["lease_token"] == initial_fence.lease_token
+    assert replay["lease_expires_at"] == DateTime.to_iso8601(initial_fence.lease_expires_at)
+    assert replay["provider_access"]["grants"] == initial_access["grants"]
+    assert is_binary(replay["provider_access"]["token"])
+    refute inspect(replay) =~ "provider-secret"
   end
 
   test "manual bindings are excluded from the connected provider snapshot", context do
@@ -1461,6 +2234,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     refute resource.status_message =~ "provider-secret"
 
     intent = Repo.get_by!(ProviderActionIntent, run_id: context.run.id)
+    assert intent.state == "unknown"
     refute inspect(intent) =~ "provider-secret"
   end
 
@@ -1616,6 +2390,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
         claimed_runtime_epoch: nil,
         claim_id: nil,
         lease_token: nil,
+        provider_access_snapshot: nil,
         claimed_at: nil,
         lease_expires_at: nil
       ]
@@ -1645,6 +2420,260 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
              })
 
     project
+  end
+
+  defp goal_fixture(project_id, authority \\ provider_goal_authority([], [])) do
+    assert {:ok, goal} =
+             Repo.transaction(fn ->
+               goal =
+                 %Goal{}
+                 |> Goal.changeset(%{
+                   project_id: project_id,
+                   title: "Preserve provider ownership",
+                   state: "active",
+                   current_revision: 1,
+                   event_sequence: 0
+                 })
+                 |> Repo.insert!()
+
+               %GoalRevision{}
+               |> GoalRevision.changeset(%{
+                 goal_id: goal.id,
+                 revision: 1,
+                 objective: "Use durable Goal task membership",
+                 non_goals: [],
+                 acceptance_contract: %{"checks" => ["mix test"]},
+                 authority_policy: authority.authority_policy,
+                 execution_policy: authority.execution_policy,
+                 context_manifest: %{},
+                 reason: "initial admission",
+                 actor_ref: "operator:test"
+               })
+               |> Repo.insert!()
+
+               goal
+             end)
+
+    goal
+  end
+
+  defp admit_goal_owned_item(item, goal) do
+    assert {:ok, item} =
+             item
+             |> WorkItem.goal_membership_changeset(%{
+               goal_id: goal.id,
+               admitted_revision: 1,
+               acceptance_contract: %{"checks" => ["mix test"]},
+               baseline_subject: goal_subject(item.repository_resource_id)
+             })
+             |> Repo.update()
+
+    item
+  end
+
+  defp goal_subject(resource_id) do
+    %{
+      "resource_id" => resource_id,
+      "commit" => String.duplicate("a", 40),
+      "tree_digest" => "sha256:" <> String.duplicate("4", 64)
+    }
+  end
+
+  defp goal_context_snapshot(item, goal) do
+    %ContextSnapshot{}
+    |> ContextSnapshot.changeset(%{
+      goal_id: goal.id,
+      goal_revision: 1,
+      work_item_id: item.id,
+      schema_version: 1,
+      content_hash: :crypto.hash(:sha256, "provider-access-goal-context"),
+      payload: %{}
+    })
+    |> Repo.insert!()
+  end
+
+  defp goal_task(
+         item,
+         goal,
+         snapshot,
+         resource_id,
+         provider_scope \\ frozen_goal_provider_scope([resource_id], ["change.upsert"])
+       ) do
+    %Task{}
+    |> Task.changeset(%{
+      idempotency_key: "goal-provider-scope-#{uuid()}",
+      request_hash: :crypto.hash(:sha256, "provider-access-goal-task"),
+      request_hash_version: 1,
+      work_item_id: item.id,
+      goal_id: goal.id,
+      goal_revision: 1,
+      context_snapshot_id: snapshot.id,
+      goal: "Verify durable provider scope",
+      agent_profile: "codex",
+      workspace: "primary",
+      input: %{
+        "provider_scope" => provider_scope,
+        "provider_resource_ids" => [resource_id]
+      },
+      required_capabilities: %{"provider_access" => true},
+      state: "queued",
+      current_generation: 0,
+      attempt_generation: 1,
+      purpose: "implement",
+      admission_key: uuid(),
+      max_run_attempts: 1
+    })
+    |> Repo.insert!()
+  end
+
+  defp goal_run(task, runtime_id) do
+    now = DateTime.utc_now()
+
+    %Run{}
+    |> Run.changeset(%{
+      task_id: task.id,
+      runtime_id: runtime_id,
+      generation: 1,
+      state: "assigned",
+      assigned_at: now,
+      assignment_expires_at: DateTime.add(now, 60, :second)
+    })
+    |> Repo.insert!()
+  end
+
+  defp claim_goal_provider_access(context, run) do
+    claim_id = uuid()
+
+    response =
+      bearer(build_conn(), context.machine_token)
+      |> put("/api/v1/runs/#{run.id}/claims/#{claim_id}", %{
+        "runtime_id" => context.runtime_id,
+        "runtime_epoch" => 1,
+        "generation" => run.generation
+      })
+      |> json_response(200)
+
+    %{access: response["provider_access"], claim_id: claim_id}
+  end
+
+  defp goal_provider_context(context, actions \\ ["change.upsert"]) do
+    goal =
+      goal_fixture(
+        context.item.project_id,
+        provider_goal_authority(actions, [context.repository.id])
+      )
+
+    item = admit_goal_owned_item(context.item, goal)
+    snapshot = goal_context_snapshot(item, goal)
+    task = goal_task(item, goal, snapshot, context.repository.id)
+    run = goal_run(task, context.runtime_id)
+    %{access: access, claim_id: claim_id} = claim_goal_provider_access(context, run)
+
+    %{
+      context
+      | access: access,
+        claim_id: claim_id,
+        item: item,
+        task: task,
+        run: Repo.get!(Run, run.id)
+    }
+  end
+
+  defp set_readback(resource_id, outcome),
+    do: :ets.insert(:provider_action_test_state, {{:readback_outcome, resource_id}, outcome})
+
+  defp frozen_goal_provider_scope(resource_ids, operations, change_target \\ nil) do
+    operations_by_resource = Map.new(resource_ids, &{&1, operations})
+
+    change_target =
+      change_target ||
+        cond do
+          "change.upsert" in operations ->
+            %{
+              "kind" => "branches",
+              "source_branch" => "feature/provider-access",
+              "target_branch" => "main"
+            }
+
+          "change.update" in operations ->
+            %{
+              "kind" => "pull_request",
+              "pull_request_url" => "https://github.com/acme/symmetry/pull/42"
+            }
+
+          true ->
+            nil
+        end
+
+    %{
+      "resource_ids" => resource_ids,
+      "operations_by_resource" => operations_by_resource,
+      "change_target" => change_target
+    }
+  end
+
+  defp revoke_goal_provider_authority(goal, :paused) do
+    Repo.update_all(from(stored in Goal, where: stored.id == ^goal.id), set: [state: "paused"])
+  end
+
+  defp revoke_goal_provider_authority(goal, :cancelled) do
+    Repo.update_all(from(stored in Goal, where: stored.id == ^goal.id), set: [state: "cancelled"])
+  end
+
+  defp revoke_goal_provider_authority(goal, :stale_revision) do
+    revision = Repo.get_by!(GoalRevision, goal_id: goal.id, revision: 1)
+
+    %GoalRevision{}
+    |> GoalRevision.changeset(%{
+      goal_id: goal.id,
+      revision: 2,
+      objective: revision.objective,
+      non_goals: revision.non_goals,
+      acceptance_contract: revision.acceptance_contract,
+      authority_policy: Map.put(revision.authority_policy, "allowed_actions", []),
+      execution_policy: Map.put(revision.execution_policy, "allowed_actions", []),
+      context_manifest: revision.context_manifest,
+      reason: "Supersede provider authority",
+      actor_ref: "operator:test"
+    })
+    |> Repo.insert!()
+
+    Repo.update_all(from(stored in Goal, where: stored.id == ^goal.id),
+      set: [current_revision: 2]
+    )
+  end
+
+  defp provider_goal_authority(actions, resource_ids) do
+    %{
+      authority_policy: %{
+        "operator_required_for_scope_change" => true,
+        "operator_required_for_completion" => true,
+        "publication_allowed" => false,
+        "allowed_actions" => actions
+      },
+      execution_policy:
+        execution_policy()
+        |> Map.put("allowed_actions", actions)
+        |> Map.put("allowed_resource_ids", resource_ids)
+    }
+  end
+
+  defp execution_policy do
+    %{
+      "automatic_execution" => false,
+      "max_parallel_tasks" => 1,
+      "max_task_admissions" => 1,
+      "max_run_attempts_per_task" => 1,
+      "budget_limit_microusd" => nil,
+      "per_run_cost_limit_microusd" => nil,
+      "budget_mode" => "soft",
+      "hard_cost_limit_required" => false,
+      "allowed_runtime_ids" => [],
+      "allowed_model_profiles" => [],
+      "final_acceptance" => "operator",
+      "allowed_actions" => [],
+      "allowed_resource_ids" => []
+    }
   end
 
   defp connection_fixture(provider, capabilities) do

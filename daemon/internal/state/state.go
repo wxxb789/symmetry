@@ -24,15 +24,16 @@ import (
 )
 
 const (
-	maxStateFileBytes   = 1 << 20
-	maxJournalFileBytes = 4 << 20
-	identityFileName    = "identity.json"
-	enrollmentFileName  = "enrollment.json"
-	runsDirectoryName   = "runs"
-	lockFileName        = ".symmetry-daemon.lock"
-	journalFilePrefix   = "journal-"
-	journalFileSuffix   = ".json"
-	atomicTempPrefix    = ".symmetry-state-"
+	maxStateFileBytes      = 1 << 20
+	maxJournalFileBytes    = 4 << 20
+	identityFileName       = "identity.json"
+	enrollmentFileName     = "enrollment.json"
+	runsDirectoryName      = "runs"
+	goalUsageDirectoryName = "goal-usage"
+	lockFileName           = ".symmetry-daemon.lock"
+	journalFilePrefix      = "journal-"
+	journalFileSuffix      = ".json"
+	atomicTempPrefix       = ".symmetry-state-"
 )
 
 const (
@@ -60,10 +61,11 @@ var (
 // Its methods are serialized so related read-modify-write operations cannot
 // overwrite each other within a daemon process.
 type Store struct {
-	dir    string
-	mu     sync.Mutex
-	lock   *os.File
-	closed bool
+	dir         string
+	mu          sync.Mutex
+	lock        *os.File
+	closed      bool
+	atomicWrite func(string, []byte) error
 }
 
 // MachineIdentity is the durable result of machine enrollment.
@@ -132,6 +134,12 @@ type RunJournal struct {
 	PendingTransitions             []protocol.StateTransitionRequest `json:"pending_transitions"`
 	AttemptedTransitionIDs         []string                          `json:"attempted_transition_ids,omitempty"`
 	PendingCommandAcknowledgements []protocol.CommandAcknowledgement `json:"pending_command_acknowledgements"`
+	PendingGoalDeliveries          []GoalDelivery                    `json:"pending_goal_deliveries,omitempty"`
+	DeliveredGoalDeliveries        []GoalDelivery                    `json:"delivered_goal_deliveries,omitempty"`
+	RetiredGoalDeliveries          []GoalDeliveryRetirement          `json:"retired_goal_deliveries,omitempty"`
+	GoalDeliveryEnabled            bool                              `json:"goal_delivery_enabled,omitempty"`
+	NativeUsageObservation         *NativeUsageObservation           `json:"native_usage_observation,omitempty"`
+	NativeUsageRecoveryRequired    bool                              `json:"native_usage_recovery_required,omitempty"`
 	InputCommandIntent             *InputCommandIntent               `json:"input_command_intent,omitempty"`
 	ControlCommandIntents          []ControlCommandIntent            `json:"control_command_intents,omitempty"`
 }
@@ -202,12 +210,29 @@ func New(directory string) (*Store, error) {
 		_ = releaseStoreLock(lock)
 		return nil, fmt.Errorf("secure state lock: %w", err)
 	}
-	store := &Store{dir: directory, lock: lock}
+	store := &Store{dir: directory, lock: lock, atomicWrite: writeAtomic}
 	if err := ensurePrivateDirectory(store.runsDir()); err != nil {
 		_ = releaseStoreLock(lock)
 		return nil, fmt.Errorf("create run journal directory: %w", err)
 	}
 	return store, nil
+}
+
+// SetAtomicWriterForTesting replaces the final journal-write primitive for a
+// focused fault-injection test. Production callers must not use this seam.
+func (store *Store) SetAtomicWriterForTesting(writer func(string, []byte) error) func() {
+	store.mu.Lock()
+	previous := store.atomicWrite
+	if writer == nil {
+		writer = writeAtomic
+	}
+	store.atomicWrite = writer
+	store.mu.Unlock()
+	return func() {
+		store.mu.Lock()
+		store.atomicWrite = previous
+		store.mu.Unlock()
+	}
 }
 
 // Close releases the state directory's cross-process exclusive lock. It is
@@ -445,6 +470,61 @@ func (store *Store) MarkWorkspaceRecoveryRequired(key RunKey) (RunJournal, error
 	})
 }
 
+// MarkNativeUsageRecoveryRequired records that a native run reached a final
+// outcome but its accounting delivery could not yet be made durable. The flag
+// keeps stale local state from being treated as ordinary lease recovery; the
+// outbox must persist a conservative terminal path before cleanup is allowed.
+func (store *Store) MarkNativeUsageRecoveryRequired(key RunKey) (RunJournal, error) {
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		journal.NativeUsageRecoveryRequired = true
+		return nil
+	})
+}
+
+// ClearNativeUsageRecoveryRequired releases the accounting recovery barrier
+// only after the exact native usage body is durable in delivery history.
+func (store *Store) ClearNativeUsageRecoveryRequired(key RunKey, usage protocol.Usage) (RunJournal, error) {
+	if err := usage.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if usage.RunID != key.RunID {
+		return RunJournal{}, errors.New("native usage recovery run ID does not match journal")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if !journal.NativeUsageRecoveryRequired {
+			return nil
+		}
+		if !hasExactUsageDelivery(*journal, usage) {
+			return errors.New("native usage recovery delivery is not durable")
+		}
+		journal.NativeUsageRecoveryRequired = false
+		return nil
+	})
+}
+
+func hasExactUsageDelivery(journal RunJournal, usage protocol.Usage) bool {
+	delivery := GoalDelivery{Kind: GoalDeliveryUsage, DeliveryID: usage.UsageKey, Fence: journal.Fence(), Usage: &usage, Ready: true}
+	if err := prepareGoalDelivery(journal.RunID, &delivery); err != nil {
+		return false
+	}
+	for _, candidate := range journal.PendingGoalDeliveries {
+		if candidate.PayloadDigest == delivery.PayloadDigest && equalGoalDelivery(candidate, delivery) {
+			return true
+		}
+	}
+	for _, candidate := range journal.DeliveredGoalDeliveries {
+		if candidate.PayloadDigest == delivery.PayloadDigest && equalGoalDelivery(candidate, delivery) {
+			return true
+		}
+	}
+	for _, candidate := range journal.RetiredGoalDeliveries {
+		if candidate.Delivery.PayloadDigest == delivery.PayloadDigest && equalGoalDelivery(candidate.Delivery, delivery) {
+			return true
+		}
+	}
+	return false
+}
+
 // SetWorkspacePath atomically records a prepared workspace path without
 // overwriting concurrently queued terminal delivery state.
 func (store *Store) SetWorkspacePath(key RunKey, path string) (RunJournal, error) {
@@ -466,6 +546,21 @@ func (store *Store) DeleteJournal(key RunKey) error {
 	defer store.mu.Unlock()
 	if err := store.ensureOpenLocked(); err != nil {
 		return err
+	}
+	journal, err := store.loadJournalLocked(key)
+	if err != nil {
+		return err
+	}
+	if journal.HasPendingGoalDeliveries() {
+		return errors.New("run journal has pending Goal delivery")
+	}
+	if journal.NativeUsageRecoveryRequired {
+		return errors.New("native usage recovery remains pending")
+	}
+	if journal.GoalDeliveryEnabled {
+		if err := store.archiveLateGoalUsageLocked(journal); err != nil {
+			return err
+		}
 	}
 	if err := os.Remove(store.journalPath(key)); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -541,6 +636,29 @@ func (store *Store) SetProcessDetails(key RunKey, pid int, identity string, star
 		journal.PID = pid
 		journal.ProcessIdentity = identity
 		journal.StartedAt = startedAt
+		return nil
+	})
+}
+
+// ClearProcessDetails records that the process identified by the expected PID
+// and identity has been stopped. The compare-and-clear guard prevents recovery
+// from erasing a newer process record if another owner replaced the process
+// between termination and durable marker persistence. Replaying the same
+// clear after the marker is already persisted is idempotent.
+func (store *Store) ClearProcessDetails(key RunKey, pid int, identity string) (RunJournal, error) {
+	if pid <= 0 || !validRequiredString(identity, 4096) {
+		return RunJournal{}, errors.New("process details are invalid")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.PID == 0 && journal.ProcessIdentity == "" && journal.StartedAt.IsZero() {
+			return nil
+		}
+		if journal.PID != pid || journal.ProcessIdentity != identity {
+			return errors.New("persisted process details changed during termination")
+		}
+		journal.PID = 0
+		journal.ProcessIdentity = ""
+		journal.StartedAt = time.Time{}
 		return nil
 	})
 }
@@ -952,6 +1070,9 @@ func (store *Store) ResolveTerminalForCleanup(key RunKey, verdict string, resolv
 		journal.PendingTransitions = nil
 		journal.AttemptedTransitionIDs = nil
 		journal.PendingCommandAcknowledgements = nil
+		// Goal evidence and usage remain deliverable under their original fence
+		// after a terminal verdict. Do not retire them with ordinary v1 outbox
+		// state: their receiver has its own durable idempotency receipts.
 		journal.InputCommandIntent = nil
 		journal.ControlCommandIntents = nil
 		journal.LocalState = "cleanup_pending"
@@ -972,6 +1093,9 @@ func (store *Store) EnterCleanupPending(key RunKey) (RunJournal, error) {
 		if journal.LocalState != "terminal_pending" || !validTerminalVerdict(journal.TerminalVerdict) {
 			return errors.New("journal is not cleanup eligible")
 		}
+		if journal.NativeUsageRecoveryRequired {
+			return errors.New("native usage recovery remains pending")
+		}
 		if journal.InputCommandIntent != nil && (journal.InputCommandIntent.Outcome == "" || !journal.InputCommandIntent.AcknowledgementDelivered) {
 			return errors.New("input command receipt is not delivered")
 		}
@@ -981,7 +1105,7 @@ func (store *Store) EnterCleanupPending(key RunKey) (RunJournal, error) {
 					return errors.New("control command receipt is not delivered")
 				}
 			}
-			if len(journal.PendingTransitions) != 0 || len(journal.PendingCommandAcknowledgements) != 0 {
+			if len(journal.PendingTransitions) != 0 || len(journal.PendingCommandAcknowledgements) != 0 || len(journal.PendingGoalDeliveries) != 0 {
 				return errors.New("accepted terminal delivery is incomplete")
 			}
 		} else {
@@ -1294,7 +1418,11 @@ func (store *Store) writeJSONWithLimit(path string, value any, resource string, 
 	if err != nil || len(data) > limit {
 		return errors.New("encode " + resource)
 	}
-	if err := writeAtomic(path, data); err != nil {
+	writer := store.atomicWrite
+	if writer == nil {
+		writer = writeAtomic
+	}
+	if err := writer(path, data); err != nil {
 		return errors.New("write " + resource)
 	}
 	return nil
@@ -1506,6 +1634,14 @@ func validateJournal(journal RunJournal) error {
 		}
 		commandIDs[acknowledgement.CommandID] = struct{}{}
 	}
+	if err := validateGoalDeliveries(journal); err != nil {
+		return err
+	}
+	if journal.NativeUsageObservation != nil {
+		if err := journal.NativeUsageObservation.Validate(); err != nil {
+			return err
+		}
+	}
 	if intent := journal.InputCommandIntent; intent != nil {
 		if !validInputCommandIntent(*intent) || intent.EventSequenceBarrier > journal.LastEventSequence {
 			return errors.New("run journal input command intent is invalid")
@@ -1557,6 +1693,8 @@ func validTerminalState(journal RunJournal) bool {
 		if !validTerminalVerdict(journal.TerminalVerdict) || journal.TerminalResolvedAt.IsZero() {
 			return false
 		}
+		// Conclusive v1 terminal delivery may retire ordinary items while late
+		// Goal usage/evidence remains retriable under its original fence.
 		return len(journal.PendingEvents) == 0 && len(journal.PendingTransitions) == 0 && len(journal.PendingCommandAcknowledgements) == 0 && len(journal.AttemptedTransitionIDs) == 0
 	}
 	if journal.TerminalVerdict == "" {
