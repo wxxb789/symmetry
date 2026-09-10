@@ -34,7 +34,14 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     assert task.goal_id == nil
     assert task.request_hash == RequestHash.legacy(Map.put(attrs, :required_capabilities, %{}))
     assert task.request_hash_version == 1
-    assert [] == Repo.all(Job)
+
+    assert [] ==
+             Repo.all(
+               from job in Job,
+                 where:
+                   job.worker == "SymmetryControl.Goals.Workers.SettleTaskWorker" and
+                     fragment("? ->> 'task_id' = ?", job.args, ^task.id)
+             )
   end
 
   test "legacy command entry points cannot mutate a Goal task or its reservation" do
@@ -569,7 +576,11 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     {task, _goal_id} =
       insert_goal_task(
         max_run_attempts: 2,
-        execution_policy: Map.put(execution_policy(2), "budget_mode", "strict")
+        execution_policy:
+          execution_policy(2)
+          |> Map.put("budget_mode", "strict")
+          |> Map.put("per_run_cost_limit_microusd", 1)
+          |> Map.put("hard_cost_limit_required", true)
       )
 
     _without_hard_limit = register_runtime("strict-budget-without-hard-limit")
@@ -671,9 +682,9 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
   end
 
   test "runtime re-registration rejects an affinity change while a harness session is retained" do
-    {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
     runtime = register_runtime("retained-affinity-registration", resume?: true)
-    {_task, session} = bind_retained_session(task, runtime)
+    {task, _goal_id} = insert_goal_task(max_run_attempts: 2, retained_runtime: runtime)
+    session = Repo.get!(HarnessSession, task.requested_session_id)
     runtime = Repo.get!(Runtime, runtime.id)
     item = Repo.get!(WorkItem, task.work_item_id)
 
@@ -781,25 +792,22 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
   end
 
   test "validation assignment requires every frozen binding to allow the runtime" do
+    {project, repository} = project_repository_fixture("validation-assignment")
+    first = register_runtime("validation-first", repository_resource_id: repository.id)
+    second = register_runtime("validation-second", repository_resource_id: repository.id)
+    outside = register_runtime("validation-outside", repository_resource_id: repository.id)
+
     {task, _goal_id} =
       insert_goal_task(
         max_run_attempts: 2,
         purpose: "validate",
+        project_id: project.id,
+        repository_id: repository.id,
         validation_bindings: [
-          validation_binding("checks", "check", []),
-          validation_binding("review", "review", [])
+          validation_binding("checks", "check", [first.id, second.id]),
+          validation_binding("review", "review", [second.id])
         ]
       )
-
-    first = register_runtime("validation-first")
-    second = register_runtime("validation-second")
-    outside = register_runtime("validation-outside")
-
-    task =
-      replace_validation_bindings!(task, [
-        validation_binding("checks", "check", [first.id, second.id]),
-        validation_binding("review", "review", [second.id])
-      ])
 
     assert task.purpose == "validate"
     assert {:ok, run} = Orchestration.assign_one(now: @now)
@@ -808,23 +816,21 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
   end
 
   test "validation assignment fails closed when frozen bindings have no common runtime" do
+    {project, repository} = project_repository_fixture("validation-no-common-runtime")
+    first = register_runtime("validation-empty-first", repository_resource_id: repository.id)
+    second = register_runtime("validation-empty-second", repository_resource_id: repository.id)
+
     {task, _goal_id} =
       insert_goal_task(
         max_run_attempts: 2,
         purpose: "validate",
+        project_id: project.id,
+        repository_id: repository.id,
         validation_bindings: [
-          validation_binding("checks", "check", []),
-          validation_binding("review", "review", [])
+          validation_binding("checks", "check", [first.id]),
+          validation_binding("review", "review", [second.id])
         ]
       )
-
-    first = register_runtime("validation-empty-first")
-    second = register_runtime("validation-empty-second")
-
-    replace_validation_bindings!(task, [
-      validation_binding("checks", "check", [first.id]),
-      validation_binding("review", "review", [second.id])
-    ])
 
     assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
     assert %{state: "queued"} = Repo.get!(Task, task.id)
@@ -860,14 +866,29 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
     assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
 
-    task = replace_validation_bindings!(task, [%{"profile_name" => "checks", "kind" => "check"}])
-    assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
+    {malformed_task, _goal_id} =
+      insert_goal_task(
+        max_run_attempts: 2,
+        purpose: "validate",
+        project_id: item.project_id,
+        repository_id: item.repository_resource_id,
+        validation_bindings: [%{"profile_name" => "checks", "kind" => "check"}]
+      )
 
-    replace_validation_bindings!(task, [
-      validation_binding("checks", "check", ["not-a-runtime-id"])
-    ])
+    assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
+    assert %{state: "queued"} = Repo.get!(Task, malformed_task.id)
+
+    {invalid_runtime_task, _goal_id} =
+      insert_goal_task(
+        max_run_attempts: 2,
+        purpose: "validate",
+        project_id: item.project_id,
+        repository_id: item.repository_resource_id,
+        validation_bindings: [validation_binding("checks", "check", ["not-a-runtime-id"])]
+      )
 
     assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
+    assert %{state: "queued"} = Repo.get!(Task, invalid_runtime_task.id)
   end
 
   test "an unschedulable validation task does not starve a later eligible Goal task" do
@@ -931,26 +952,25 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     assert run.runtime_id == ready_runtime.id
   end
 
-  test "validation binding replacement blocks a new claim but preserves an exact claim replay" do
+  test "validation binding mismatch blocks a new claim but preserves an exact claim replay" do
+    {project, repository} = project_repository_fixture("validation-claim")
+
+    assigned_runtime =
+      register_runtime("validation-claim-assigned", repository_resource_id: repository.id)
+
+    rejected_runtime =
+      register_runtime("validation-claim-rejected", repository_resource_id: repository.id)
+
     {assigned_task, _goal_id} =
       insert_goal_task(
         max_run_attempts: 2,
         purpose: "validate",
-        validation_bindings: [validation_binding("checks", "check", [])]
+        project_id: project.id,
+        repository_id: repository.id,
+        validation_bindings: [validation_binding("checks", "check", [rejected_runtime.id])]
       )
 
-    assigned_runtime = register_runtime("validation-claim-assigned")
-    rejected_runtime = register_runtime("validation-claim-rejected")
-
-    replace_validation_bindings!(assigned_task, [
-      validation_binding("checks", "check", [assigned_runtime.id])
-    ])
-
-    assert {:ok, assigned_run} = Orchestration.assign_one(now: @now)
-
-    replace_validation_bindings!(Repo.get!(Task, assigned_task.id), [
-      validation_binding("checks", "check", [rejected_runtime.id])
-    ])
+    assigned_run = insert_assigned_run!(assigned_task, assigned_runtime)
 
     assert {:error, :ownership_lost} =
              Orchestration.claim(
@@ -964,28 +984,17 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
                now: @now
              )
 
+    replay_runtime =
+      register_runtime("validation-claim-replay", repository_resource_id: repository.id)
+
     {replay_task, _replay_goal_id} =
       insert_goal_task(
         max_run_attempts: 2,
         purpose: "validate",
-        validation_bindings: [validation_binding("checks", "check", [])]
+        project_id: project.id,
+        repository_id: repository.id,
+        validation_bindings: [validation_binding("checks", "check", [replay_runtime.id])]
       )
-
-    replay_item = Repo.get!(WorkItem, replay_task.work_item_id)
-
-    replay_runtime =
-      register_runtime("validation-claim-replay",
-        repository_resource_id: replay_item.repository_resource_id
-      )
-
-    replacement_runtime =
-      register_runtime("validation-claim-replacement",
-        repository_resource_id: replay_item.repository_resource_id
-      )
-
-    replace_validation_bindings!(replay_task, [
-      validation_binding("checks", "check", [replay_runtime.id])
-    ])
 
     assert {:ok, replay_run} = Orchestration.assign_one(now: DateTime.add(@now, 1, :second))
 
@@ -1000,10 +1009,6 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
              Orchestration.claim(replay_run.id, replay_request,
                now: DateTime.add(@now, 1, :second)
              )
-
-    replace_validation_bindings!(Repo.get!(Task, replay_task.id), [
-      validation_binding("checks", "check", [replacement_runtime.id])
-    ])
 
     assert {:ok, replayed} =
              Orchestration.claim(replay_run.id, replay_request,
@@ -1072,10 +1077,10 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
   end
 
   test "Goal resume assignment is pinned to its retained compatible runtime" do
-    {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
     _other = register_runtime("resume-other")
     retained_runtime = register_runtime("resume-retained", resume?: true)
-    {_task, retained_session} = bind_retained_session(task, retained_runtime)
+    {task, _goal_id} = insert_goal_task(max_run_attempts: 2, retained_runtime: retained_runtime)
+    retained_session = Repo.get!(HarnessSession, task.requested_session_id)
 
     assert {:ok, run} = Orchestration.assign_one(now: @now)
     assert run.task_id == task.id
@@ -1118,12 +1123,17 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
   end
 
   test "Goal resume with no viable retained runtime remains queued without fallback" do
-    {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
     _other = register_runtime("resume-fallback")
     retained_runtime = register_runtime("resume-unavailable", resume?: true)
 
-    {_task, retained_session} =
-      bind_retained_session(task, retained_runtime, state: "unavailable")
+    {task, _goal_id} =
+      insert_goal_task(
+        max_run_attempts: 2,
+        retained_runtime: retained_runtime,
+        retained_session_state: "unavailable"
+      )
+
+    retained_session = Repo.get!(HarnessSession, task.requested_session_id)
 
     assert retained_session.state == "unavailable"
     assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
@@ -1133,7 +1143,14 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   test "Goal handoff selects a same-machine runtime with handoff support without reserving a session" do
     {source_task, _goal_id} = insert_goal_task(max_run_attempts: 2)
-    unsupported_source_runtime = register_runtime("handoff-source", handoff?: false)
+    source_item = Repo.get!(WorkItem, source_task.work_item_id)
+
+    unsupported_source_runtime =
+      register_runtime("handoff-source",
+        handoff?: false,
+        repository_resource_id: source_item.repository_resource_id
+      )
+
     source_run = complete_source_run!(source_task, unsupported_source_runtime)
     target_task = insert_handoff_successor!(source_task, source_run)
 
@@ -1141,12 +1158,14 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
       register_runtime_on_machine(
         "handoff-without-support",
         unsupported_source_runtime.machine_id,
-        handoff?: false
+        handoff?: false,
+        repository_resource_id: source_item.repository_resource_id
       )
 
     eligible_runtime =
       register_runtime_on_machine("handoff-eligible", unsupported_source_runtime.machine_id,
-        handoff?: true
+        handoff?: true,
+        repository_resource_id: source_item.repository_resource_id
       )
 
     assert {:ok, run} = Orchestration.assign_one(now: @now)
@@ -1169,38 +1188,22 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
   end
 
   test "only one queued Goal task reserves a retained session before either daemon attaches" do
-    {first_task, _first_goal_id} = insert_goal_task(max_run_attempts: 2)
     retained_runtime = register_runtime("exclusive-retained", resume?: true, capacity: 2)
-    {_first_task, session} = bind_retained_session(first_task, retained_runtime)
+
+    {first_task, _first_goal_id} =
+      insert_goal_task(max_run_attempts: 2, retained_runtime: retained_runtime)
+
+    session = Repo.get!(HarnessSession, first_task.requested_session_id)
     first_item = Repo.get!(WorkItem, first_task.work_item_id)
 
     {second_task, _second_goal_id} =
       insert_goal_task(
         max_run_attempts: 2,
         project_id: first_item.project_id,
-        repository_id: first_item.repository_resource_id
-      )
-
-    second_item = Repo.get!(WorkItem, second_task.work_item_id)
-
-    second_input =
-      second_task.input
-      |> Map.put("session_mode", "resume")
-      |> Map.put("requested_session_id", session.id)
-
-    Repo.update_all(
-      from(item in WorkItem, where: item.id == ^second_item.id),
-      set: [repository_resource_id: first_item.repository_resource_id]
-    )
-
-    Repo.update_all(
-      from(task in Task, where: task.id == ^second_task.id),
-      set: [
-        input: second_input,
+        repository_id: first_item.repository_resource_id,
         requested_session_id: session.id,
         inserted_at: DateTime.add(@now, 1, :second)
-      ]
-    )
+      )
 
     assert {:ok, first_run} = Orchestration.assign_one(now: @now)
     assert first_run.task_id == first_task.id
@@ -1217,9 +1220,9 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
   end
 
   test "lease expiry and a late terminal receipt keep a claimed retained session unavailable" do
-    {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
     retained_runtime = register_runtime("retained-expiry", resume?: true)
-    {_task, session} = bind_retained_session(task, retained_runtime)
+    {task, _goal_id} = insert_goal_task(max_run_attempts: 2, retained_runtime: retained_runtime)
+    session = Repo.get!(HarnessSession, task.requested_session_id)
     assert {:ok, run} = Orchestration.assign_one(now: @now)
     fence = claim(run, retained_runtime)
     expired_at = DateTime.add(@now, 30, :second)
@@ -1842,6 +1845,30 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     validation_of_task_id = if purpose == "validate", do: Ecto.UUID.generate(), else: nil
     validation_bindings = Keyword.get(opts, :validation_bindings, [])
     policy = Keyword.get(opts, :execution_policy, execution_policy(max_run_attempts))
+    retained_runtime = Keyword.get(opts, :retained_runtime)
+
+    requested_session_id =
+      Keyword.get(opts, :requested_session_id) || if(retained_runtime, do: Ecto.UUID.generate())
+
+    task_inserted_at = Keyword.get(opts, :inserted_at, @now)
+
+    task_input =
+      %{
+        "subject" => %{
+          "resource_id" => repository_id,
+          "commit" => String.duplicate("a", 40),
+          "tree_digest" => "sha256:" <> String.duplicate("b", 64)
+        }
+      }
+      |> then(fn input ->
+        if requested_session_id do
+          input
+          |> Map.put("session_mode", "resume")
+          |> Map.put("requested_session_id", requested_session_id)
+        else
+          input
+        end
+      end)
 
     assert {:ok, {task, goal_id}} =
              Repo.transaction(fn ->
@@ -1924,6 +1951,27 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
                  )
                end
 
+               if retained_runtime do
+                 Repo.update_all(
+                   from(runtime_row in Runtime, where: runtime_row.id == ^retained_runtime.id),
+                   set: [repository_resource_id: repository_id]
+                 )
+
+                 %HarnessSession{id: requested_session_id}
+                 |> HarnessSession.changeset(%{
+                   machine_id: retained_runtime.machine_id,
+                   runtime_id: retained_runtime.id,
+                   repository_resource_id: repository_id,
+                   harness_kind: retained_runtime.harness_kind,
+                   harness_version: retained_runtime.harness_version,
+                   adapter_version: retained_runtime.adapter_version,
+                   local_handle_id: Ecto.UUID.generate(),
+                   workspace_fingerprint: "workspace:#{retained_runtime.id}",
+                   state: Keyword.get(opts, :retained_session_state, "available")
+                 })
+                 |> Repo.insert!()
+               end
+
                Repo.query!(
                  """
                  INSERT INTO context_snapshots (
@@ -1972,40 +2020,28 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
                Repo.query!(
                  """
-                  INSERT INTO tasks (
-                   id, idempotency_key, request_hash, request_hash_version, goal, agent_profile, workspace,
-                   input, required_capabilities, state, current_generation, attempt_generation, work_item_id,
-                   goal_id, goal_revision, context_snapshot_id, purpose, validation_of_task_id, admission_key, max_run_attempts,
-                   inserted_at, updated_at
-                 ) VALUES ($1, $2, $3, 1, 'Goal admission task', 'codex', 'primary', '{}'::jsonb,
-                   '{}'::jsonb, 'queued', 0, 1, $4, $5, 1, $6, $7, $8, $9, $10, $11, $11)
+                 INSERT INTO tasks (
+                 id, idempotency_key, request_hash, request_hash_version, goal, agent_profile, workspace,
+                 input, required_capabilities, state, current_generation, attempt_generation, work_item_id,
+                 goal_id, goal_revision, context_snapshot_id, purpose, validation_of_task_id, admission_key, max_run_attempts,
+                 requested_session_id, inserted_at, updated_at
+                 ) VALUES ($1, $2, $3, 1, 'Goal admission task', 'codex', 'primary', $4::text::jsonb,
+                 '{}'::jsonb, 'queued', 0, 1, $5, $6, 1, $7, $8, $9, $10, $11, $12, $13, $13)
                  """,
                  [
                    db_uuid(task_id),
                    "goal-admission-task-#{System.unique_integer([:positive])}",
                    :crypto.hash(:sha256, "goal-admission-task"),
-                   db_uuid(work_item_id),
+                   Jason.encode!(task_input),
+                   maybe_db_uuid(work_item_id),
                    db_uuid(goal_id),
                    db_uuid(snapshot_id),
                    purpose,
                    maybe_db_uuid(validation_of_task_id),
                    db_uuid(admission_key),
                    max_run_attempts,
-                   @now
-                 ]
-               )
-
-               Repo.query!(
-                 "UPDATE tasks SET input = $1::text::jsonb WHERE id = $2",
-                 [
-                   Jason.encode!(%{
-                     "subject" => %{
-                       "resource_id" => repository_id,
-                       "commit" => String.duplicate("a", 40),
-                       "tree_digest" => "sha256:" <> String.duplicate("b", 64)
-                     }
-                   }),
-                   db_uuid(task_id)
+                   maybe_db_uuid(requested_session_id),
+                   task_inserted_at
                  ]
                )
 
@@ -2035,34 +2071,6 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
   defp maybe_db_uuid(nil), do: nil
   defp maybe_db_uuid(uuid), do: db_uuid(uuid)
 
-  defp replace_validation_bindings!(task, bindings) do
-    snapshot_id = Ecto.UUID.generate()
-
-    Repo.query!(
-      """
-      INSERT INTO context_snapshots (
-        id, goal_id, goal_revision, work_item_id, schema_version, content_hash, payload, inserted_at
-       ) VALUES ($1, $2, $3, $4, 1, $5, $6::text::jsonb, $7)
-      """,
-      [
-        db_uuid(snapshot_id),
-        db_uuid(task.goal_id),
-        task.goal_revision,
-        db_uuid(task.work_item_id),
-        :crypto.hash(:sha256, "validation-bindings-#{snapshot_id}"),
-        Jason.encode!(%{"work_contract" => %{"validation_bindings" => bindings}}),
-        @now
-      ]
-    )
-
-    Repo.update_all(
-      from(task_row in Task, where: task_row.id == ^task.id),
-      set: [context_snapshot_id: snapshot_id]
-    )
-
-    Repo.get!(Task, task.id)
-  end
-
   defp validation_binding(profile_name, kind, allowed_runtime_ids) do
     %{
       "profile_name" => profile_name,
@@ -2070,6 +2078,22 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
       "profile_digest" => "sha256:" <> String.duplicate("a", 64),
       "allowed_runtime_ids" => allowed_runtime_ids
     }
+  end
+
+  defp project_repository_fixture(label) do
+    assert {:ok, project} =
+             Workspaces.create_project(%{
+               name: "Goal admission #{label}",
+               key: project_key()
+             })
+
+    assert {:ok, repository} =
+             Workspaces.create_resource(project.id, %{
+               kind: "repository",
+               name: "Goal admission repository #{label}"
+             })
+
+    {project, repository}
   end
 
   defp enroll_machine(label) do
@@ -2149,7 +2173,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
       "max_parallel_tasks" => 1,
       "max_task_admissions" => 1,
       "max_run_attempts_per_task" => max_run_attempts,
-      "budget_limit_microusd" => nil,
+      "budget_limit_microusd" => 1_000_000,
       "per_run_cost_limit_microusd" => nil,
       "budget_mode" => "soft",
       "hard_cost_limit_required" => false,
@@ -2169,6 +2193,12 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   defp register_runtime(label, opts \\ []) do
     machine_token = "goal-admission-machine-#{label}-#{System.unique_integer([:positive])}"
+
+    machine = enroll_machine(label, machine_token)
+    register_runtime_on_machine(label, machine.id, opts)
+  end
+
+  defp register_runtime_on_machine(label, machine_id, opts) do
     resume? = Keyword.get(opts, :resume?, false)
     handoff? = Keyword.get(opts, :handoff?, false)
     hard_cost_limit? = Keyword.get(opts, :hard_cost_limit?, false)
@@ -2191,18 +2221,9 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
       |> put_in(["operations", "handoff"], handoff?)
       |> put_in(["operations", "hard_cost_limit"], hard_cost_limit?)
 
-    assert {:ok, %{machine: machine}, :created} =
-             Orchestration.enroll_machine(
-               %{name: "Goal admission #{label}", machine_token: machine_token},
-               Ecto.UUID.generate(),
-               enrollment_token: "test-enrollment-token",
-               expected_enrollment_token: "test-enrollment-token",
-               now: @now
-             )
-
     assert {:ok, [runtime]} =
              Orchestration.register_runtimes(
-               machine.id,
+               machine_id,
                Ecto.UUID.generate(),
                [
                  %{
@@ -2233,15 +2254,17 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     runtime
   end
 
-  defp register_runtime_on_machine(label, machine_id, opts) do
-    runtime = register_runtime(label, opts)
+  defp enroll_machine(label, machine_token) do
+    assert {:ok, %{machine: machine}, :created} =
+             Orchestration.enroll_machine(
+               %{name: "Goal admission #{label}", machine_token: machine_token},
+               Ecto.UUID.generate(),
+               enrollment_token: "test-enrollment-token",
+               expected_enrollment_token: "test-enrollment-token",
+               now: @now
+             )
 
-    Repo.update_all(
-      from(runtime_row in Runtime, where: runtime_row.id == ^runtime.id),
-      set: [machine_id: machine_id]
-    )
-
-    Repo.get!(Runtime, runtime.id)
+    machine
   end
 
   defp complete_source_run!(task, runtime) do
@@ -2256,6 +2279,24 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
       runtime_id: runtime.id,
       generation: 1,
       state: "completed",
+      assigned_at: @now,
+      assignment_expires_at: DateTime.add(@now, 60, :second)
+    })
+    |> Repo.insert!()
+  end
+
+  defp insert_assigned_run!(task, runtime) do
+    Repo.update_all(
+      from(task_row in Task, where: task_row.id == ^task.id),
+      set: [state: "assigned", current_generation: task.attempt_generation]
+    )
+
+    %Run{}
+    |> Run.changeset(%{
+      task_id: task.id,
+      runtime_id: runtime.id,
+      generation: task.attempt_generation,
+      state: "assigned",
       assigned_at: @now,
       assignment_expires_at: DateTime.add(@now, 60, :second)
     })
@@ -2295,6 +2336,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
       requested_session_id: nil,
       handoff_source_run_id: source_run.id
     })
+    |> Ecto.Changeset.change(inserted_at: @now, updated_at: @now)
     |> Repo.insert!()
   end
 
@@ -2316,44 +2358,6 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
       },
       overrides
     )
-  end
-
-  defp bind_retained_session(task, runtime, opts \\ []) do
-    item = Repo.get!(WorkItem, task.work_item_id)
-    repository_id = item.repository_resource_id
-
-    Repo.update_all(
-      from(runtime_row in Runtime, where: runtime_row.id == ^runtime.id),
-      set: [repository_resource_id: repository_id]
-    )
-
-    session =
-      %HarnessSession{}
-      |> HarnessSession.changeset(%{
-        machine_id: runtime.machine_id,
-        runtime_id: runtime.id,
-        repository_resource_id: repository_id,
-        harness_kind: runtime.harness_kind,
-        harness_version: runtime.harness_version,
-        adapter_version: runtime.adapter_version,
-        local_handle_id: Ecto.UUID.generate(),
-        workspace_fingerprint: "workspace:#{runtime.id}",
-        state: Keyword.get(opts, :state, "available")
-      })
-      |> Repo.insert!()
-
-    input =
-      task.input
-      |> put_in(["subject", "resource_id"], repository_id)
-      |> Map.put("session_mode", "resume")
-      |> Map.put("requested_session_id", session.id)
-
-    Repo.update_all(
-      from(task_row in Task, where: task_row.id == ^task.id),
-      set: [input: input, requested_session_id: session.id]
-    )
-
-    {Repo.get!(Task, task.id), session}
   end
 
   defp pause_goal!(goal_id) do

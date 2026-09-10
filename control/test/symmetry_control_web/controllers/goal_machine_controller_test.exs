@@ -117,33 +117,16 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
   end
 
   test "resume session receipts preserve durable identity on replay", %{conn: conn} do
-    %{token: token, item: item, run: run, fence: fence} = claimed_goal_run_fixture(conn)
+    %{
+      token: token,
+      item: item,
+      run: run,
+      fence: fence,
+      retained_session: retained,
+      session_attrs: attrs
+    } = claimed_goal_run_fixture(conn, session_mode: "resume")
+
     runtime = Repo.get!(Runtime, run.runtime_id)
-    attrs = session_attrs(item)
-    task = Repo.get!(Task, run.task_id)
-
-    retained =
-      %HarnessSession{}
-      |> HarnessSession.changeset(%{
-        machine_id: runtime.machine_id,
-        runtime_id: runtime.id,
-        repository_resource_id: get_in(item, [:baseline, :subject, "resource_id"]),
-        local_handle_id: attrs.local_handle_id,
-        harness_kind: attrs.harness_kind,
-        harness_version: attrs.harness_version,
-        adapter_version: attrs.adapter_version,
-        workspace_fingerprint: attrs.workspace_fingerprint,
-        state: "available"
-      })
-      |> Repo.insert!()
-
-    Repo.update_all(
-      from(task_row in Task, where: task_row.id == ^task.id),
-      set: [
-        input: Map.put(task.input, "session_mode", "resume"),
-        requested_session_id: retained.id
-      ]
-    )
 
     request = Map.merge(fence, attrs)
 
@@ -371,7 +354,7 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     assert_error(bearer(conn, owner_token) |> get(stale_path), 409, "ownership_lost")
   end
 
-  defp claimed_goal_run_fixture(conn) do
+  defp claimed_goal_run_fixture(conn, opts \\ []) do
     {machine_id, token} = enroll(conn, "owner")
     runtime = register_runtime(conn, machine_id, token)
     project = project_fixture()
@@ -404,7 +387,7 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
                option_id: "accept"
              })
 
-    assert {:ok, planned, :created} =
+    assert {:ok, _planned, :created} =
              command_current(
                goal_id,
                "accept_plan",
@@ -418,7 +401,7 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
                validation_profiles: validation_profiles(runtime.id)
              )
 
-    [item] = planned.goal.work_items
+    assert {:ok, %{work_items: [item]}} = Goals.fetch_goal(goal_id)
 
     Repo.update_all(
       from(runtime_row in Runtime, where: runtime_row.id == ^runtime.id),
@@ -426,6 +409,40 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     )
 
     runtime = Repo.get!(Runtime, runtime.id)
+
+    {runtime, session_mode, retained_session, resume_attrs} =
+      case Keyword.get(opts, :session_mode, "fresh") do
+        "resume" ->
+          Repo.update_all(
+            from(runtime_row in Runtime, where: runtime_row.id == ^runtime.id),
+            set: [capabilities: %{"adapter" => %{"operations" => %{"resume" => true}}}]
+          )
+
+          runtime = Repo.get!(Runtime, runtime.id)
+          attrs = session_attrs(item)
+
+          retained =
+            %HarnessSession{}
+            |> HarnessSession.changeset(%{
+              machine_id: runtime.machine_id,
+              runtime_id: runtime.id,
+              repository_resource_id: get_in(item, [:baseline, :subject, "resource_id"]),
+              local_handle_id: attrs.local_handle_id,
+              harness_kind: attrs.harness_kind,
+              harness_version: attrs.harness_version,
+              adapter_version: attrs.adapter_version,
+              workspace_fingerprint: attrs.workspace_fingerprint,
+              state: "available"
+            })
+            |> Repo.insert!()
+
+          {runtime, "resume", retained, attrs}
+
+        "fresh" ->
+          {runtime, "fresh", nil, nil}
+      end
+
+    requested_session_id = if(retained_session, do: retained_session.id, else: nil)
 
     assert {:ok, _active, :created} =
              command_current(goal_id, "activate", %{approved_revision: 1})
@@ -438,8 +455,8 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
                  work_item_id: item.id,
                  purpose: "implement",
                  model_profile: "codex",
-                 session_mode: "fresh",
-                 requested_session_id: nil,
+                 session_mode: session_mode,
+                 requested_session_id: requested_session_id,
                  validation_of_task_id: nil
                },
                rollout_enabled: true
@@ -456,8 +473,8 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
              "context_snapshot_id" => _,
              "context_hash" => "sha256:" <> _,
              "model_profile" => "codex",
-             "session_mode" => "fresh",
-             "requested_session_id" => nil,
+             "session_mode" => ^session_mode,
+             "requested_session_id" => ^requested_session_id,
              "subject" => ^subject,
              "limits" => %{"max_turns" => 1, "deadline_at" => _},
              "validation_of_task_id" => nil
@@ -496,6 +513,8 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
       item: item,
       run: run,
       subject: subject,
+      retained_session: retained_session,
+      session_attrs: resume_attrs,
       fence: %{
         runtime_id: runtime.id,
         runtime_epoch: runtime.connection_epoch,
@@ -591,7 +610,9 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
           repository_resource_id: repository_id,
           acceptance: check_contract(),
           depends_on_keys: [],
+          integration: true,
           model_profile: "codex",
+          change_target: nil,
           baseline: %{kind: "subject", subject: subject(repository_id)}
         }
       ]

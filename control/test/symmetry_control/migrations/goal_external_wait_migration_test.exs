@@ -22,33 +22,35 @@ defmodule SymmetryControl.Migrations.GoalExternalWaitMigrationTest do
                Repo.query!("""
                SELECT column_name, is_nullable
                FROM information_schema.columns
-               WHERE table_name = 'goal_external_waits'
+               WHERE table_schema = current_schema()
+                 AND table_name = 'goal_external_waits'
                ORDER BY ordinal_position
                """)
 
-      assert {"goal_id", "NO"} in rows
-      assert {"goal_revision", "NO"} in rows
-      assert {"work_item_id", "NO"} in rows
-      assert {"task_id", "NO"} in rows
-      assert {"run_id", "NO"} in rows
-      assert {"run_generation", "NO"} in rows
-      assert {"source_ref", "NO"} in rows
-      assert {"result_id", "NO"} in rows
-      assert {"result", "NO"} in rows
-      assert {"resource_id", "NO"} in rows
-      assert {"external_ref", "NO"} in rows
-      assert {"subject", "NO"} in rows
-      assert {"subject_hash", "NO"} in rows
-      assert {"next_check_at", "YES"} in rows
-      assert {"state", "NO"} in rows
-      assert {"check_seq", "NO"} in rows
-      assert {"receipt_event_id", "YES"} in rows
+      assert ["goal_id", "NO"] in rows
+      assert ["goal_revision", "NO"] in rows
+      assert ["work_item_id", "NO"] in rows
+      assert ["task_id", "NO"] in rows
+      assert ["run_id", "NO"] in rows
+      assert ["run_generation", "NO"] in rows
+      assert ["source_ref", "NO"] in rows
+      assert ["result_id", "NO"] in rows
+      assert ["result", "NO"] in rows
+      assert ["resource_id", "NO"] in rows
+      assert ["external_ref", "NO"] in rows
+      assert ["subject", "NO"] in rows
+      assert ["subject_hash", "NO"] in rows
+      assert ["next_check_at", "YES"] in rows
+      assert ["state", "NO"] in rows
+      assert ["check_seq", "NO"] in rows
+      assert ["receipt_event_id", "YES"] in rows
 
       assert %{rows: [[1]]} =
                Repo.query!("""
                SELECT COUNT(*)
                FROM pg_indexes
-               WHERE tablename = 'goal_external_waits'
+               WHERE schemaname = current_schema()
+                 AND tablename = 'goal_external_waits'
                  AND indexname = 'goal_external_waits_current_work_item_key'
                """)
 
@@ -85,14 +87,16 @@ defmodule SymmetryControl.Migrations.GoalExternalWaitMigrationTest do
                Repo.query!("""
                SELECT 1
                FROM information_schema.tables
-               WHERE table_name = 'goal_external_waits'
+               WHERE table_schema = current_schema()
+                 AND table_name = 'goal_external_waits'
                """)
 
       assert %{rows: []} =
                Repo.query!("""
                SELECT 1
                FROM pg_indexes
-               WHERE indexname IN ('runs_id_task_id_generation_key', 'goal_events_id_goal_id_key')
+               WHERE schemaname = current_schema()
+                 AND indexname IN ('runs_id_task_id_generation_key', 'goal_events_id_goal_id_key')
                """)
     end)
   end
@@ -115,7 +119,8 @@ defmodule SymmetryControl.Migrations.GoalExternalWaitMigrationTest do
                Repo.query!("""
                SELECT column_default
                FROM information_schema.columns
-               WHERE table_name = 'goal_external_waits' AND column_name = 'state'
+               WHERE table_schema = current_schema()
+                 AND table_name = 'goal_external_waits' AND column_name = 'state'
                """)
 
       assert default =~ "unsupported"
@@ -144,7 +149,8 @@ defmodule SymmetryControl.Migrations.GoalExternalWaitMigrationTest do
                Repo.query!("""
                SELECT column_default
                FROM information_schema.columns
-               WHERE table_name = 'goal_external_waits' AND column_name = 'state'
+               WHERE table_schema = current_schema()
+                 AND table_name = 'goal_external_waits' AND column_name = 'state'
                """)
 
       assert prior_default =~ "waiting"
@@ -190,8 +196,8 @@ defmodule SymmetryControl.Migrations.GoalExternalWaitMigrationTest do
 
       for statement <- [
             "UPDATE goal_external_waits SET receipt_event_id = $1 WHERE id = $2",
-            "UPDATE goal_external_waits SET check_seq = check_seq + 1 WHERE id = $2",
-            "UPDATE goal_external_waits SET next_check_at = now() WHERE id = $2"
+            "UPDATE goal_external_waits SET check_seq = check_seq + 1 WHERE id = $1",
+            "UPDATE goal_external_waits SET next_check_at = now() WHERE id = $1"
           ] do
         assert_raise Postgrex.Error, ~r/goal_0006_external_wait_terminal_immutable/i, fn ->
           parameters =
@@ -254,13 +260,13 @@ defmodule SymmetryControl.Migrations.GoalExternalWaitMigrationTest do
     subject_hash = :crypto.hash(:sha256, "external-wait-migration-subject")
 
     subject = %{
-      "resource_id" => repository_id,
+      "resource_id" => Ecto.UUID.cast!(repository_id),
       "commit" => String.duplicate("a", 40),
       "tree_digest" => "sha256:" <> String.duplicate("b", 64)
     }
 
     result = %{
-      "result_id" => result_id,
+      "result_id" => Ecto.UUID.cast!(result_id),
       "subject" => subject,
       "subject_hash" => "sha256:" <> Base.encode16(subject_hash, case: :lower)
     }
@@ -403,7 +409,10 @@ defmodule SymmetryControl.Migrations.GoalExternalWaitMigrationTest do
         work_item_id,
         task_id,
         run_id,
-        Jason.encode!(%{"kind" => "task_result", "result_id" => result_id}),
+        Jason.encode!(%{
+          "kind" => "task_result",
+          "result_id" => Ecto.UUID.cast!(result_id)
+        }),
         result_id,
         Jason.encode!(result),
         repository_id,

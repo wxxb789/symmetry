@@ -37,7 +37,7 @@ defmodule SymmetryControlWeb.GoalControllerTest do
              |> get("/api/v1/goals/#{goal_id}")
              |> json_response(200)
 
-    assert "activate" in allowed_actions
+    assert allowed_actions == ["request_plan", "amend", "cancel"]
     assert is_list(blocker_reasons)
 
     assert_error(
@@ -88,9 +88,12 @@ defmodule SymmetryControlWeb.GoalControllerTest do
            } =
              operator_conn(conn)
              |> post("/api/v1/goals/#{goal_id}/commands", %{
-               command
-               | "mutation_id" => Ecto.UUID.generate(),
-                 "expected_version" => goal["version"]
+               "schema_version" => "symmetry.goal_command.v1",
+               "mutation_id" => Ecto.UUID.generate(),
+               "expected_version" => goal["version"],
+               "expected_revision" => goal["current_revision"],
+               "kind" => "pause",
+               "payload" => %{"reason" => "Verify stale Goal version handling."}
              })
              |> json_response(409)
 
@@ -99,7 +102,11 @@ defmodule SymmetryControlWeb.GoalControllerTest do
 
     assert_error(
       operator_conn(conn)
-      |> post("/api/v1/goals/#{goal_id}/commands", %{command | "kind" => "pause"}),
+      |> post("/api/v1/goals/#{goal_id}/commands", %{
+        command
+        | "kind" => "pause",
+          "payload" => %{"reason" => "Verify mutation identity conflicts."}
+      }),
       409,
       "idempotency_conflict"
     )
@@ -249,6 +256,7 @@ defmodule SymmetryControlWeb.GoalControllerTest do
   end
 
   defp create_goal_with_accepted_plan(conn) do
+    enable_goal_rollout()
     project = create_project()
 
     {:ok, repository} =
@@ -273,11 +281,12 @@ defmodule SymmetryControlWeb.GoalControllerTest do
           "title" => "Implement Goal API",
           "description" => "Bounded Goal work",
           "required" => true,
-          "integration" => false,
+          "integration" => true,
           "repository_resource_id" => repository.id,
           "acceptance" => acceptance_contract(),
           "depends_on_keys" => [],
           "model_profile" => "codex",
+          "change_target" => nil,
           "baseline" => %{
             "kind" => "subject",
             "subject" => %{
@@ -346,6 +355,18 @@ defmodule SymmetryControlWeb.GoalControllerTest do
       })
 
     project
+  end
+
+  defp enable_goal_rollout do
+    goals_config = Application.fetch_env!(:symmetry_control, :goals)
+
+    Application.put_env(
+      :symmetry_control,
+      :goals,
+      Keyword.put(goals_config, :rollout_enabled, true)
+    )
+
+    on_exit(fn -> Application.put_env(:symmetry_control, :goals, goals_config) end)
   end
 
   defp goal_payload do
