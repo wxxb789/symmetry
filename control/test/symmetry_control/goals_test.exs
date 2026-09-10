@@ -16,6 +16,19 @@ defmodule SymmetryControl.GoalsTest do
   @validation_runtime_id "00000000-0000-4000-8000-000000000001"
   @validation_profile_digest "sha256:" <> String.duplicate("c", 64)
 
+  setup do
+    previous_goals = Application.fetch_env!(:symmetry_control, :goals)
+
+    Application.put_env(
+      :symmetry_control,
+      :goals,
+      Keyword.put(previous_goals, :validation_profiles, validation_profiles())
+    )
+
+    on_exit(fn -> Application.put_env(:symmetry_control, :goals, previous_goals) end)
+    :ok
+  end
+
   test "creation and command receipts replay before stale preconditions" do
     project = project_fixture()
     mutation_id = Ecto.UUID.generate()
@@ -247,6 +260,7 @@ defmodule SymmetryControl.GoalsTest do
           title: "Revised work",
           description: "Admitted under the revised Goal contract.",
           required: true,
+          integration: true,
           repository_resource_id: item_repository_resource_id(item),
           acceptance: check_contract(),
           depends_on_keys: [],
@@ -294,7 +308,7 @@ defmodule SymmetryControl.GoalsTest do
     [revised_item] = planned.goal.work_items
     assert revised_item.id != item.id
     assert revised_item.admitted_revision == amended.goal.current_revision
-    refute Repo.get!(SymmetryControl.Workspaces.WorkItem, revised_item.id).integration
+    assert Repo.get!(SymmetryControl.Workspaces.WorkItem, revised_item.id).integration
     assert Enum.any?(planned.goal.history.work_items, &(&1.id == item.id))
   end
 
@@ -337,6 +351,7 @@ defmodule SymmetryControl.GoalsTest do
           title: "Revised work",
           description: "Admitted under the revised Goal contract.",
           required: true,
+          integration: true,
           repository_resource_id: item_repository_resource_id(item),
           acceptance: check_contract(),
           depends_on_keys: [],
@@ -553,6 +568,7 @@ defmodule SymmetryControl.GoalsTest do
         title: "#{key} work",
         description: "Keep #{key} work bounded.",
         required: true,
+        integration: key == "first",
         repository_resource_id: repository.id,
         acceptance: check_contract(),
         depends_on_keys: [],
@@ -1280,6 +1296,197 @@ defmodule SymmetryControl.GoalsTest do
              ),
              :count
            ) == 1
+  end
+
+  test "plan_proposed from a WorkItem Task settles as a stable invalid receipt" do
+    {goal, item, task} = admitted_task_fixture()
+    runtime = runtime_fixture()
+    {run, _fence} = completed_goal_run_fixture(task, runtime)
+
+    proposal =
+      plan_proposal(goal.id, [
+        %{
+          key: "misplaced-plan",
+          title: "Misplaced plan result",
+          description: "A WorkItem Task must not create planning authority.",
+          required: true,
+          integration: true,
+          repository_resource_id: item_repository_resource_id(item),
+          acceptance: check_contract(),
+          depends_on_keys: [],
+          model_profile: "codex",
+          baseline: baseline_subject(item_repository_resource_id(item))
+        }
+      ])
+
+    put_task_result!(run, task_result(task, "plan_proposed", %{proposal: proposal}))
+
+    assert {:ok, receipt} = Goals.settle_task(task.id, run.id, 1, now: @now)
+    assert receipt["settlement"] == "invalid_task_result"
+    assert receipt["reason"] == "invalid_task_result"
+
+    assert {:ok, replayed} = Goals.settle_task(task.id, run.id, 1, now: @now)
+    assert replayed == receipt
+  end
+
+  test "Goal creation rejects an immutable validation contract without its operator profile" do
+    project = project_fixture()
+
+    assert {:error, :invalid_validation_profile} =
+             Goals.create_goal(project.id, goal_attrs(), "operator:test",
+               now: @now,
+               validation_profiles: []
+             )
+  end
+
+  test "Goal amendment rejects an immutable validation contract without its operator profile" do
+    project = project_fixture()
+
+    assert {:ok, created, :created} =
+             Goals.create_goal(project.id, goal_attrs(), "operator:test", now: @now)
+
+    assert {:error, :invalid_validation_profile} =
+             command_current(
+               created.goal.id,
+               "amend",
+               %{
+                 revision_contract: amended_revision_contract("A profile-less amendment."),
+                 reason: "The configured validator profile is unavailable."
+               },
+               validation_profiles: []
+             )
+
+    assert {:ok, unchanged} = Goals.fetch_goal(created.goal.id)
+    assert unchanged.current_revision == 1
+  end
+
+  test "plan preflight requires an integration item and a same-resource dependency baseline" do
+    project = project_fixture()
+    first_repository = repository_fixture(project)
+    second_repository = repository_fixture(project)
+
+    assert {:ok, created, :created} =
+             Goals.create_goal(project.id, goal_attrs(), "operator:test", now: @now)
+
+    no_integration =
+      plan_proposal(created.goal.id, [
+        %{
+          key: "no-integration",
+          title: "No integration work",
+          description: "This plan cannot establish final completion.",
+          required: true,
+          integration: false,
+          repository_resource_id: first_repository.id,
+          acceptance: check_contract(),
+          depends_on_keys: [],
+          model_profile: "codex",
+          baseline: baseline_subject(first_repository.id)
+        }
+      ])
+
+    assert :invalid_plan == reject_plan_admission!(created.goal.id, no_integration)
+
+    cross_resource_baseline =
+      plan_proposal(created.goal.id, [
+        %{
+          key: "source",
+          title: "Source work",
+          description: "Produce a source Subject.",
+          required: true,
+          integration: false,
+          repository_resource_id: first_repository.id,
+          acceptance: check_contract(),
+          depends_on_keys: [],
+          model_profile: "codex",
+          baseline: baseline_subject(first_repository.id)
+        },
+        %{
+          key: "consumer",
+          title: "Consumer work",
+          description: "Cannot inherit a Subject from another repository.",
+          required: true,
+          integration: true,
+          repository_resource_id: second_repository.id,
+          acceptance: check_contract(),
+          depends_on_keys: ["source"],
+          model_profile: "codex",
+          baseline: %{kind: "dependency", key: "source"}
+        }
+      ])
+
+    assert :invalid_plan == reject_plan_admission!(created.goal.id, cross_resource_baseline)
+  end
+
+  test "plan acceptance rejects a missing immutable validation profile before inserting WorkItems" do
+    project = project_fixture()
+    repository = repository_fixture(project)
+
+    assert {:ok, created, :created} =
+             Goals.create_goal(project.id, goal_attrs(), "operator:test", now: @now)
+
+    proposal =
+      plan_proposal(created.goal.id, [
+        %{
+          key: "profile-bound-work",
+          title: "Profile-bound work",
+          description: "The validator profile must exist before plan admission.",
+          required: true,
+          integration: true,
+          repository_resource_id: repository.id,
+          acceptance: check_contract(),
+          depends_on_keys: [],
+          model_profile: "codex",
+          baseline: baseline_subject(repository.id)
+        }
+      ])
+
+    assert :invalid_plan ==
+             reject_plan_admission!(created.goal.id, proposal, validation_profiles: [])
+
+    assert Repo.aggregate(WorkItem, :count) == 0
+  end
+
+  test "plan admission retains ordinary cross-resource dependency edges" do
+    project = project_fixture()
+    first_repository = repository_fixture(project)
+    second_repository = repository_fixture(project)
+
+    assert {:ok, created, :created} =
+             Goals.create_goal(project.id, goal_attrs(), "operator:test", now: @now)
+
+    planned =
+      accept_plan!(
+        created.goal.id,
+        plan_proposal(created.goal.id, [
+          %{
+            key: "source",
+            title: "Source work",
+            description: "Produce an independently scoped source outcome.",
+            required: true,
+            integration: false,
+            repository_resource_id: first_repository.id,
+            acceptance: check_contract(),
+            depends_on_keys: [],
+            model_profile: "codex",
+            baseline: baseline_subject(first_repository.id)
+          },
+          %{
+            key: "consumer",
+            title: "Consumer work",
+            description: "May depend on completion in another repository.",
+            required: true,
+            integration: true,
+            repository_resource_id: second_repository.id,
+            acceptance: check_contract(),
+            depends_on_keys: ["source"],
+            model_profile: "codex",
+            baseline: baseline_subject(second_repository.id)
+          }
+        ])
+      )
+
+    assert Enum.map(planned.goal.work_items, & &1.repository_resource_id) |> Enum.sort() ==
+             Enum.sort([first_repository.id, second_repository.id])
   end
 
   test "amended planning Task results remain historical and do not create current authorization" do
@@ -5578,7 +5785,7 @@ defmodule SymmetryControl.GoalsTest do
     wait = Repo.get_by!(GoalExternalWait, goal_id: goal.id, work_item_id: item.id)
     assert wait.state == "unsupported"
     assert wait.next_check_at == nil
-    assert wait.check_seq == 1
+    assert wait.check_seq == 0
     assert wait.result == blocked_result
     assert wait.subject == source_task.input["subject"]
     assert wait.resource_id == item_repository_resource_id(item)
@@ -6435,7 +6642,7 @@ defmodule SymmetryControl.GoalsTest do
       items:
         Enum.map(items, fn item ->
           item
-          |> Map.put_new(:integration, false)
+          |> Map.put_new(:integration, true)
           |> Map.put_new(:change_target, nil)
         end)
     }
@@ -6477,6 +6684,42 @@ defmodule SymmetryControl.GoalsTest do
              )
 
     planned
+  end
+
+  defp reject_plan_admission!(goal_id, proposal, opts \\ []) do
+    assert {:ok, decision, :created} =
+             command_current(goal_id, "request_decision", %{
+               kind: "plan",
+               question: "Accept this plan?",
+               options: [%{"id" => "accept", "label" => "Accept", "consequence" => "Proceed"}],
+               proposal: proposal
+             })
+
+    decision_id = decision.response["decision"]["id"]
+
+    assert {:ok, _resolved, :created} =
+             command_current(goal_id, "resolve_decision", %{
+               decision_id: decision_id,
+               expected_decision_version:
+                 Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version,
+               option_id: "accept"
+             })
+
+    assert {:error, reason} =
+             command_current(
+               goal_id,
+               "accept_plan",
+               %{
+                 proposal: proposal,
+                 proposal_hash:
+                   "sha256:" <>
+                     Base.encode16(SymmetryControl.RequestHash.canonical(proposal), case: :lower),
+                 decision_id: decision_id
+               },
+               Keyword.merge([rollout_enabled: true], opts)
+             )
+
+    reason
   end
 
   defp configure_automatic_runtimes!(item, runtimes) do

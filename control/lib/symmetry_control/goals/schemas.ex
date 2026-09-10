@@ -1348,8 +1348,8 @@ defmodule SymmetryControl.Goals.GoalExternalWait do
   @doc "Build the immutable source and target snapshot for a new external wait."
   def changeset(wait, attrs) do
     wait
-    |> cast(attrs, @identity_fields ++ [:next_check_at, :state])
-    |> validate_required(@identity_fields ++ [:state])
+    |> cast(attrs, @identity_fields ++ [:next_check_at, :state, :receipt_event_id])
+    |> validate_required(@identity_fields ++ [:state, :receipt_event_id])
     |> validate_number(:goal_revision, greater_than: 0)
     |> validate_number(:run_generation, greater_than: 0)
     |> validate_number(:check_seq, greater_than_or_equal_to: 0)
@@ -1397,7 +1397,7 @@ defmodule SymmetryControl.Goals.GoalExternalWait do
     |> validate_required([:state])
     |> validate_inclusion(:state, @states)
     |> validate_schedule()
-    |> reject_terminal_transition()
+    |> reject_terminal_mutation()
     |> assoc_constraint(:receipt_event)
     |> foreign_key_constraint(:receipt_event_id,
       name: :goal_external_waits_receipt_event_identity_fkey
@@ -1459,12 +1459,13 @@ defmodule SymmetryControl.Goals.GoalExternalWait do
       else: add_error(changeset, :next_check_at, "must be absent after the wait is terminal")
   end
 
-  defp reject_terminal_transition(changeset) do
+  defp reject_terminal_mutation(changeset) do
     current_state = changeset.data.state
-    requested_state = get_field(changeset, :state)
 
-    if current_state in @terminal_states and requested_state != current_state do
-      add_error(changeset, :state, "cannot transition a terminal external wait")
+    if current_state in @terminal_states and changeset.changes != %{} do
+      Enum.reduce(changeset.changes, changeset, fn {field, _value}, acc ->
+        add_error(acc, field, "terminal external wait is immutable")
+      end)
     else
       changeset
     end

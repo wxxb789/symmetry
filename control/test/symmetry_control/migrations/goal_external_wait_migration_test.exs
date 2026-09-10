@@ -161,6 +161,42 @@ defmodule SymmetryControl.Migrations.GoalExternalWaitMigrationTest do
     end)
   end
 
+  test "preserves an inserted terminal receipt and rejects every later wait mutation" do
+    with_schema(fn ->
+      migrate_all_up!()
+
+      %{wait_id: wait_id, goal_id: goal_id, receipt_event_id: receipt_event_id} =
+        insert_terminal_wait_fixture!()
+
+      replacement_receipt_id = insert_goal_event!(goal_id, 2)
+
+      for statement <- [
+            "UPDATE goal_external_waits SET receipt_event_id = $1 WHERE id = $2",
+            "UPDATE goal_external_waits SET check_seq = check_seq + 1 WHERE id = $2",
+            "UPDATE goal_external_waits SET next_check_at = now() WHERE id = $2"
+          ] do
+        assert_raise Postgrex.Error, ~r/goal_0006_external_wait_terminal_immutable/i, fn ->
+          parameters =
+            if String.contains?(statement, "receipt_event_id"),
+              do: [replacement_receipt_id, wait_id],
+              else: [wait_id]
+
+          Repo.query!(statement, parameters)
+        end
+      end
+
+      assert_raise Postgrex.Error, ~r/goal_0006_external_wait_history_immutable/i, fn ->
+        Repo.query!("DELETE FROM goal_external_waits WHERE id = $1", [wait_id])
+      end
+
+      assert %{rows: [[^receipt_event_id, 0, nil]]} =
+               Repo.query!(
+                 "SELECT receipt_event_id, check_seq, next_check_at FROM goal_external_waits WHERE id = $1",
+                 [wait_id]
+               )
+    end)
+  end
+
   defp with_schema(test) do
     schema = "goal_external_wait_migration_#{System.unique_integer([:positive])}"
     create_schema!(schema)
@@ -183,6 +219,219 @@ defmodule SymmetryControl.Migrations.GoalExternalWaitMigrationTest do
       migration_lock: false,
       dynamic_repo: Repo.get_dynamic_repo()
     )
+  end
+
+  defp insert_terminal_wait_fixture! do
+    project_id = Ecto.UUID.bingenerate()
+    repository_id = Ecto.UUID.bingenerate()
+    goal_id = Ecto.UUID.bingenerate()
+    work_item_id = Ecto.UUID.bingenerate()
+    context_snapshot_id = Ecto.UUID.bingenerate()
+    machine_id = Ecto.UUID.bingenerate()
+    runtime_id = Ecto.UUID.bingenerate()
+    task_id = Ecto.UUID.bingenerate()
+    run_id = Ecto.UUID.bingenerate()
+    result_id = Ecto.UUID.bingenerate()
+    wait_id = Ecto.UUID.bingenerate()
+    subject_hash = :crypto.hash(:sha256, "external-wait-migration-subject")
+
+    subject = %{
+      "resource_id" => repository_id,
+      "commit" => String.duplicate("a", 40),
+      "tree_digest" => "sha256:" <> String.duplicate("b", 64)
+    }
+
+    result = %{
+      "result_id" => result_id,
+      "subject" => subject,
+      "subject_hash" => "sha256:" <> Base.encode16(subject_hash, case: :lower)
+    }
+
+    Repo.query!(
+      """
+      INSERT INTO projects (
+        id, name, key, status, default_agent_profile, default_workspace, inserted_at, updated_at
+      )
+      VALUES ($1, 'external wait migration project', 'EWMT', 'active', 'default', 'primary', now(), now())
+      """,
+      [project_id]
+    )
+
+    Repo.query!(
+      """
+      INSERT INTO project_resources (
+        id, project_id, kind, name, status, sync_status, metadata, lock_version, inserted_at, updated_at
+      )
+      VALUES ($1, $2, 'repository', 'external wait repository', 'unknown', 'unknown', '{}'::jsonb, 1,
+              now(), now())
+      """,
+      [repository_id, project_id]
+    )
+
+    Repo.transaction(fn ->
+      Repo.query!(
+        """
+        INSERT INTO goals (id, project_id, title, state, current_revision, inserted_at, updated_at)
+        VALUES ($1, $2, 'External wait migration Goal', 'draft', 1, now(), now())
+        """,
+        [goal_id, project_id]
+      )
+
+      Repo.query!(
+        """
+        INSERT INTO goal_revisions (
+          goal_id, revision, objective, non_goals, acceptance_contract, authority_policy,
+          execution_policy, context_manifest, reason, actor_ref, inserted_at
+        )
+        VALUES ($1, 1, 'Verify external wait history', '[]'::jsonb, '{}'::jsonb, '{}'::jsonb,
+                $2::text::jsonb, '{}'::jsonb, 'initial', 'operator:test', now())
+        """,
+        [goal_id, execution_policy_json()]
+      )
+    end)
+
+    Repo.query!(
+      """
+      INSERT INTO work_items (
+        id, project_id, repository_resource_id, title, status, priority, position, assignee_type,
+        blocked, ci_status, review_status, goal_id, admitted_revision, acceptance_contract,
+        baseline_subject, integration, inserted_at, updated_at
+      )
+      VALUES ($1, $2, $3, 'External wait WorkItem', 'backlog', 'no_priority', 0, 'unassigned',
+              FALSE, NULL, NULL, $4, 1, '{}'::jsonb, $5::text::jsonb, TRUE, now(), now())
+      """,
+      [work_item_id, project_id, repository_id, goal_id, Jason.encode!(subject)]
+    )
+
+    Repo.query!(
+      """
+      INSERT INTO context_snapshots (
+        id, goal_id, goal_revision, work_item_id, schema_version, content_hash, payload, inserted_at
+      )
+      VALUES ($1, $2, 1, $3, 1, $4, '{}'::jsonb, now())
+      """,
+      [context_snapshot_id, goal_id, work_item_id, :crypto.hash(:sha256, "external-wait-context")]
+    )
+
+    Repo.query!(
+      """
+      INSERT INTO machines (id, name, token_digest, inserted_at, updated_at)
+      VALUES ($1, 'external-wait-machine', $2, now(), now())
+      """,
+      [machine_id, :crypto.hash(:sha256, "external-wait-machine")]
+    )
+
+    Repo.query!(
+      """
+      INSERT INTO runtimes (
+        id, machine_id, runtime_key, name, daemon_instance_id, connection_epoch, capacity,
+        agent_profile, workspace, capabilities, status, heartbeat_interval_ms, repository_resource_id,
+        inserted_at, updated_at
+      )
+      VALUES ($1, $2, 'external-wait-runtime', 'external-wait-runtime', $3, 1, 1,
+              'default', 'primary', '{}'::jsonb, 'online', 5000, $4, now(), now())
+      """,
+      [runtime_id, machine_id, Ecto.UUID.bingenerate(), repository_id]
+    )
+
+    Repo.query!(
+      """
+      INSERT INTO tasks (
+        id, idempotency_key, request_hash, goal, agent_profile, workspace, input,
+        required_capabilities, state, current_generation, attempt_generation, work_item_id,
+        goal_id, goal_revision, context_snapshot_id, purpose, validation_of_task_id, admission_key,
+        max_run_attempts, inserted_at, updated_at
+      )
+      VALUES ($1, 'external-wait-task', $2, 'External wait task', 'default', 'primary',
+              '{}'::jsonb, '{}'::jsonb, 'completed', 1, 1, $3, $4, 1, $5, 'implement', NULL,
+              $6, 2, now(), now())
+      """,
+      [
+        task_id,
+        :crypto.hash(:sha256, "external-wait-task"),
+        work_item_id,
+        goal_id,
+        context_snapshot_id,
+        Ecto.UUID.bingenerate()
+      ]
+    )
+
+    Repo.query!(
+      """
+      INSERT INTO runs (
+        id, task_id, runtime_id, generation, state, assigned_at, assignment_expires_at,
+        result, inserted_at, updated_at
+      )
+      VALUES ($1, $2, $3, 1, 'completed', now(), now(), $4::text::jsonb, now(), now())
+      """,
+      [run_id, task_id, runtime_id, Jason.encode!(%{"task_result" => result})]
+    )
+
+    receipt_event_id = insert_goal_event!(goal_id, 1)
+
+    Repo.query!(
+      """
+      INSERT INTO goal_external_waits (
+        id, goal_id, goal_revision, work_item_id, task_id, run_id, run_generation, source_ref,
+        result_id, result, resource_id, external_ref, subject, subject_hash, next_check_at, state,
+        check_seq, receipt_event_id, inserted_at, updated_at
+      )
+      VALUES ($1, $2, 1, $3, $4, $5, 1, $6::text::jsonb, $7, $8::text::jsonb, $9,
+              'external://receipt', $10::text::jsonb, $11, NULL, 'unsupported', 0, $12, now(), now())
+      """,
+      [
+        wait_id,
+        goal_id,
+        work_item_id,
+        task_id,
+        run_id,
+        Jason.encode!(%{"kind" => "task_result", "result_id" => result_id}),
+        result_id,
+        Jason.encode!(result),
+        repository_id,
+        Jason.encode!(subject),
+        subject_hash,
+        receipt_event_id
+      ]
+    )
+
+    %{goal_id: goal_id, wait_id: wait_id, receipt_event_id: receipt_event_id}
+  end
+
+  defp insert_goal_event!(goal_id, sequence) do
+    event_id = Ecto.UUID.bingenerate()
+
+    Repo.query!(
+      """
+      INSERT INTO goal_events (
+        id, goal_id, sequence, kind, actor_ref, request_hash, request_hash_version, revision,
+        payload, response, inserted_at
+      )
+      VALUES ($1, $2, $3, 'external_wait_receipt', 'server:integration', $4, 1, 1,
+              '{}'::jsonb, '{}'::jsonb, now())
+      """,
+      [event_id, goal_id, sequence, :crypto.hash(:sha256, "external-wait-event-#{sequence}")]
+    )
+
+    event_id
+  end
+
+  defp execution_policy_json do
+    Jason.encode!(%{
+      "automatic_execution" => false,
+      "max_parallel_tasks" => 1,
+      "max_task_admissions" => 1,
+      "max_run_attempts_per_task" => 2,
+      "budget_limit_microusd" => nil,
+      "per_run_cost_limit_microusd" => nil,
+      "budget_mode" => "soft",
+      "hard_cost_limit_required" => false,
+      "allowed_runtime_ids" => [],
+      "allowed_model_profiles" => [],
+      "final_acceptance" => "operator",
+      "allowed_actions" => [],
+      "allowed_resource_ids" => []
+    })
   end
 
   defp migrations_path do

@@ -8,6 +8,7 @@ defmodule SymmetryControl.GoalsExternalWaitSchemaTest do
   @work_item_id Ecto.UUID.generate()
   @task_id Ecto.UUID.generate()
   @run_id Ecto.UUID.generate()
+  @receipt_event_id Ecto.UUID.generate()
   @resource_id Ecto.UUID.generate()
   @result_id Ecto.UUID.generate()
   @source_resource_id Ecto.UUID.generate()
@@ -25,6 +26,7 @@ defmodule SymmetryControl.GoalsExternalWaitSchemaTest do
     assert Changeset.get_field(changeset, :state) == "unsupported"
     assert Changeset.get_field(changeset, :check_seq) == 0
     assert Changeset.get_field(changeset, :subject) == @subject
+    assert Changeset.get_field(changeset, :receipt_event_id) == @receipt_event_id
   end
 
   test "the schema defaults a new wait to the fail-closed terminal state" do
@@ -60,7 +62,7 @@ defmodule SymmetryControl.GoalsExternalWaitSchemaTest do
     assert "is invalid" in errors_on(active_changeset).state
   end
 
-  test "reconcile changeset uses check_seq as the optimistic CAS version" do
+  test "terminal external waits reject reconciliation mutation" do
     wait = %GoalExternalWait{
       id: Ecto.UUID.generate(),
       state: "unsupported",
@@ -75,10 +77,8 @@ defmodule SymmetryControl.GoalsExternalWaitSchemaTest do
         receipt_event_id: Ecto.UUID.generate()
       })
 
-    assert changeset.valid?
-    assert changeset.prepare != []
-    assert changeset.filters[:check_seq] == 4
-    assert Changeset.get_change(changeset, :state) == nil
+    refute changeset.valid?
+    assert "terminal external wait is immutable" in errors_on(changeset).receipt_event_id
   end
 
   test "terminal waits cannot be reopened" do
@@ -108,11 +108,15 @@ defmodule SymmetryControl.GoalsExternalWaitSchemaTest do
       next_check_at: nil
     }
 
-    assert GoalExternalWait.reconcile_changeset(wait, %{
-             state: "unsupported",
-             next_check_at: nil,
-             receipt_event_id: Ecto.UUID.generate()
-           }).valid?
+    changeset =
+      GoalExternalWait.reconcile_changeset(wait, %{
+        state: "unsupported",
+        next_check_at: nil,
+        receipt_event_id: Ecto.UUID.generate()
+      })
+
+    refute changeset.valid?
+    assert "terminal external wait is immutable" in errors_on(changeset).receipt_event_id
 
     changeset =
       GoalExternalWait.reconcile_changeset(wait, %{
@@ -183,7 +187,8 @@ defmodule SymmetryControl.GoalsExternalWaitSchemaTest do
       subject: @subject,
       subject_hash: @subject_hash,
       next_check_at: nil,
-      state: "unsupported"
+      state: "unsupported",
+      receipt_event_id: @receipt_event_id
     }
   end
 

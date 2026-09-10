@@ -404,7 +404,9 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     subject = subject(repository.id)
 
     assert {:ok, created, :created} =
-             Goals.create_goal(project.id, goal_attrs(repository.id), "operator:test")
+             Goals.create_goal(project.id, goal_attrs(repository.id), "operator:test",
+               validation_profiles: validation_profiles(runtime.id)
+             )
 
     goal_id = created.goal.id
     proposal = plan_proposal(goal_id, repository.id)

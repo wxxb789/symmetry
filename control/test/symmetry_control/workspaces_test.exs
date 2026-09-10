@@ -258,6 +258,7 @@ defmodule SymmetryControl.WorkspacesTest do
                goal_id: goal.id,
                admitted_revision: 1,
                acceptance_contract: %{"checks" => ["mix test"]},
+               integration: true,
                baseline_subject: %{
                  "resource_id" => repository.id,
                  "commit" => String.duplicate("a", 40),

@@ -1587,6 +1587,33 @@ defmodule SymmetryControl.GoalsReadModelTest do
     refute "achieve" in projection.allowed_actions
   end
 
+  test "authority policy keeps deterministic execution behind an exact completion Decision" do
+    subject = subject()
+    subject_hash = SymmetryControl.RequestHash.canonical(subject)
+
+    related =
+      final_acceptance_related(subject, subject_hash,
+        decisions: [],
+        acceptance_contract: %{
+          "predicates" => [%{"id" => "operator", "kind" => "operator_acceptance"}]
+        }
+      )
+      |> put_in([:revisions, Access.at(0), :authority_policy], %{
+        "operator_required_for_completion" => true
+      })
+      |> put_in([:revisions, Access.at(0), :execution_policy], %{
+        "final_acceptance" => "deterministic"
+      })
+
+    projection =
+      ReadModel.project(%{id: "goal-final-ready", state: "active", current_revision: 1}, related)
+
+    refute projection.completion.ready?
+
+    assert [%{reason: "final_acceptance_required", ids: ["integration-item"]}] =
+             projection.blockers
+  end
+
   test "one authorized integration subject does not leave another candidate as a final-acceptance blocker" do
     subject_a = subject()
     subject_b = Map.put(subject(), "commit", String.duplicate("d", 40))
@@ -2030,6 +2057,10 @@ defmodule SymmetryControl.GoalsReadModelTest do
       revisions: [
         %{
           revision: 1,
+          authority_policy:
+            Keyword.get(opts, :authority_policy, %{
+              "operator_required_for_completion" => true
+            }),
           execution_policy: %{"final_acceptance" => "operator"},
           acceptance_contract:
             Keyword.get(opts, :acceptance_contract, %{

@@ -1840,11 +1840,11 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
                  Repo.query!(
                    """
                    INSERT INTO work_items (
-                     id, project_id, title, status, priority, position, assignee_type, blocked,
-                      goal_id, admitted_revision, acceptance_contract, repository_resource_id,
-                      baseline_subject, inserted_at, updated_at
-                    ) VALUES ($1, $2, 'Goal admission work item', 'ready', 'no_priority', 0, 'unassigned',
-                      FALSE, $3, 1, '{}'::jsonb, $4, $5::text::jsonb, $6, $6)
+                      id, project_id, title, status, priority, position, assignee_type, blocked,
+                       goal_id, admitted_revision, acceptance_contract, integration, repository_resource_id,
+                       baseline_subject, inserted_at, updated_at
+                     ) VALUES ($1, $2, 'Goal admission work item', 'ready', 'no_priority', 0, 'unassigned',
+                       FALSE, $3, 1, '{}'::jsonb, TRUE, $4, $5::text::jsonb, $6, $6)
                    """,
                    [
                      db_uuid(work_item_id),

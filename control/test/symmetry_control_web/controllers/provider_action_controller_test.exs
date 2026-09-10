@@ -2464,6 +2464,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
                goal_id: goal.id,
                admitted_revision: 1,
                acceptance_contract: %{"checks" => ["mix test"]},
+               integration: true,
                baseline_subject: goal_subject(item.repository_resource_id)
              })
              |> Repo.update()

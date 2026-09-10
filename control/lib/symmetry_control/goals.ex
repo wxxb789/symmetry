@@ -127,8 +127,7 @@ defmodule SymmetryControl.Goals do
          :ok <- validate_goal_contract(:goal_create, attrs, opts),
          {:ok, mutation_id} <- required_uuid(attrs, :mutation_id),
          {:ok, title} <- required_string(attrs, :title),
-         {:ok, initial_revision} <- required_map(attrs, :initial_revision),
-         :ok <- valid_initial_revision(initial_revision) do
+         {:ok, initial_revision} <- required_map(attrs, :initial_revision) do
       body = %{project_id: project_id, title: title, initial_revision: initial_revision}
 
       case replay_create(mutation_id, body) do
@@ -136,7 +135,17 @@ defmodule SymmetryControl.Goals do
           {:ok, receipt, :replayed}
 
         :missing ->
-          create_new_goal(project_id, title, initial_revision, mutation_id, actor_ref, body, opts)
+          with :ok <- valid_initial_revision(initial_revision, opts) do
+            create_new_goal(
+              project_id,
+              title,
+              initial_revision,
+              mutation_id,
+              actor_ref,
+              body,
+              opts
+            )
+          end
 
         {:error, reason} ->
           {:error, reason}
@@ -2021,21 +2030,28 @@ defmodule SymmetryControl.Goals do
              is_list(opts) do
     with :ok <- valid_uuid(task_id), :ok <- valid_uuid(run_id) do
       Repo.transaction(fn ->
-        task = Repo.get(Task, task_id)
+        task_locator = Repo.get(Task, task_id)
 
         cond do
-          is_nil(task) or is_nil(task.goal_id) ->
+          is_nil(task_locator) or is_nil(task_locator.goal_id) ->
             {:ignored, %{task_id: task_id, run_id: run_id, generation: generation}}
 
           true ->
-            goal = lock_goal(task.goal_id)
+            goal = lock_goal(task_locator.goal_id)
+
+            # Keep settlement compatible with commands that take a WorkItem
+            # lock: Goal -> WorkItem -> Tasks (sorted) -> Runs (sorted).
+            item =
+              if task_locator.work_item_id,
+                do: lock_work_item(task_locator.work_item_id)
 
             {task, producer} =
-              lock_settlement_tasks!(task_id, task.validation_of_task_id)
+              lock_settlement_tasks!(task_id, task_locator.validation_of_task_id)
 
-            item = if task.work_item_id, do: lock_work_item(task.work_item_id)
-
-            unless settlement_task_owned_by_goal?(task, goal, item), do: rollback(:stale_run)
+            unless settlement_task_owned_by_goal?(task, goal, item) and
+                     task.work_item_id == task_locator.work_item_id and
+                     task.validation_of_task_id == task_locator.validation_of_task_id,
+                   do: rollback(:stale_run)
 
             {run, producing_run} = lock_settlement_runs!(run_id, task_id, producer)
 
@@ -2139,7 +2155,16 @@ defmodule SymmetryControl.Goals do
                     |> Keyword.put(:settlement_next_wake_at, next_wake_at)
                   )
 
-                finalize_external_wait!(external_wait, event, terminal, opts)
+                finalize_external_wait!(
+                  external_wait,
+                  event,
+                  goal,
+                  item,
+                  task,
+                  run,
+                  terminal,
+                  opts
+                )
 
                 {:created, Map.put(response, "event_sequence", event.sequence)}
 
@@ -2178,6 +2203,7 @@ defmodule SymmetryControl.Goals do
            :ok <- validate_contract(:task_result, task_result, opts),
            {:ok, result_id} <- required_uuid(task_result, :result_id),
            {:ok, kind} <- required_string(task_result, :kind),
+           true <- task_result_matches_task?(task, kind),
            {:ok, subject} <- parse_subject(value(task_result, "subject")),
            true <- value(subject, "resource_id") == item.repository_resource_id,
            subject_hash = RequestHash.canonical(subject),
@@ -2267,6 +2293,7 @@ defmodule SymmetryControl.Goals do
          :ok <- validate_contract(:task_result, task_result, opts),
          {:ok, result_id} <- required_uuid(task_result, :result_id),
          "plan_proposed" <- value(task_result, :kind),
+         true <- task_result_matches_task?(task, "plan_proposed"),
          {:ok, subject} <- parse_subject(value(task_result, :subject)),
          true <- subject == admitted_subject,
          subject_hash = RequestHash.canonical(subject),
@@ -2632,7 +2659,7 @@ defmodule SymmetryControl.Goals do
     }
   end
 
-  defp prepare_external_wait!(goal, item, task, run, terminal, opts) do
+  defp prepare_external_wait!(goal, item, task, _run, terminal, _opts) do
     active_wait =
       if task.purpose == "observe" do
         external_wait_for_observation(goal, item, task)
@@ -2656,7 +2683,7 @@ defmodule SymmetryControl.Goals do
       nil ->
         case {task.purpose, terminal.result_kind, terminal.blocker} do
           {_purpose, "blocked", %{"kind" => "external"} = blocker} ->
-            {:created, create_external_wait!(goal, item, task, run, terminal, blocker, opts)}
+            {:new, blocker}
 
           _ ->
             nil
@@ -2715,7 +2742,7 @@ defmodule SymmetryControl.Goals do
   # External checks require a server-derived Integration receipt contract. The
   # current adapters do not expose that capability, so retain the model result
   # as durable history without turning its selector into a model observation.
-  defp create_external_wait!(goal, item, task, run, terminal, blocker, opts) do
+  defp create_external_wait!(goal, item, task, run, terminal, blocker, event, opts) do
     task_result = value(run.result || %{}, "task_result")
     subject = value(task_result, "subject")
 
@@ -2741,32 +2768,32 @@ defmodule SymmetryControl.Goals do
       subject: subject,
       subject_hash: RequestHash.canonical(subject),
       next_check_at: nil,
-      state: "unsupported"
+      state: "unsupported",
+      receipt_event_id: event.id
     })
     |> stamp_insert(now(opts))
     |> Repo.insert!()
   end
 
-  defp finalize_external_wait!(nil, _event, _terminal, _opts), do: :ok
+  defp finalize_external_wait!(nil, _event, _goal, _item, _task, _run, _terminal, _opts), do: :ok
 
-  defp finalize_external_wait!({:created, wait}, event, _terminal, opts) do
-    terminalize_unsupported_external_wait!(wait, event, opts)
+  defp finalize_external_wait!({:new, blocker}, event, goal, item, task, run, terminal, opts) do
+    create_external_wait!(goal, item, task, run, terminal, blocker, event, opts)
+    :ok
   end
 
-  defp finalize_external_wait!({:unsupported, wait}, event, _terminal, opts) do
-    terminalize_unsupported_external_wait!(wait, event, opts)
-  end
-
-  defp terminalize_unsupported_external_wait!(wait, event, opts) do
-    wait
-    |> GoalExternalWait.reconcile_changeset(%{
-      state: "unsupported",
-      next_check_at: nil,
-      receipt_event_id: event.id
-    })
-    |> stamp_update(now(opts))
-    |> Repo.update!()
-
+  defp finalize_external_wait!(
+         {:unsupported, _wait},
+         _event,
+         _goal,
+         _item,
+         _task,
+         _run,
+         _terminal,
+         _opts
+       ) do
+    # Existing unsupported waits are terminal historical records. Their first
+    # settlement event is immutable, so a later Task cannot attach a new one.
     :ok
   end
 
@@ -2787,7 +2814,7 @@ defmodule SymmetryControl.Goals do
 
   defp unsupported_external_wait_terminal(
          terminal,
-         {:created, %GoalExternalWait{state: "unsupported"}}
+         {:new, %{"kind" => "external"}}
        ) do
     %{
       terminal
@@ -5035,7 +5062,11 @@ defmodule SymmetryControl.Goals do
 
     revision_contract = required_map!(payload, :revision_contract)
     reason = required_string!(payload, :reason)
-    unless valid_initial_revision(revision_contract) == :ok, do: rollback(:invalid_request)
+
+    case valid_initial_revision(revision_contract, opts) do
+      :ok -> :ok
+      {:error, reason} -> rollback(reason)
+    end
 
     next_revision = goal.current_revision + 1
 
@@ -5394,7 +5425,7 @@ defmodule SymmetryControl.Goals do
   end
 
   defp admit_plan_items!(goal, items, opts) do
-    unless Enum.all?(items, &valid_plan_item?/1), do: rollback(:invalid_plan)
+    unless plan_admission_preflight?(items, opts), do: rollback(:invalid_plan)
 
     keys = Enum.map(items, &required_string!(&1, :key))
     if length(keys) != MapSet.size(MapSet.new(keys)), do: rollback(:invalid_plan)
@@ -7415,6 +7446,24 @@ defmodule SymmetryControl.Goals do
   defp plan_task?(%Task{purpose: "plan", work_item_id: nil, validation_of_task_id: nil}), do: true
   defp plan_task?(_task), do: false
 
+  # `plan_proposed` is a scoped planning result, never a generic Task result.
+  # Other purpose/result combinations remain intentionally open until a full
+  # purpose matrix is part of the approved contract.
+  defp task_result_matches_task?(task, "plan_proposed"), do: plan_task?(task)
+
+  defp task_result_matches_task?(task, kind)
+       when kind in [
+              "progress",
+              "candidate_completion",
+              "blocked",
+              "repair_required",
+              "replan_required",
+              "failed"
+            ],
+       do: not plan_task?(task)
+
+  defp task_result_matches_task?(_task, _kind), do: false
+
   defp task_repository_resource_id!(%Task{} = task, nil) do
     if plan_task?(task) do
       task.input
@@ -7531,23 +7580,13 @@ defmodule SymmetryControl.Goals do
   end
 
   defp ensure_goal_final_acceptance!(revision) do
-    predicates = value(revision.acceptance_contract || %{}, "predicates", [])
-    final_acceptance = value(revision.execution_policy || %{}, "final_acceptance", "operator")
-
-    case final_acceptance do
-      "operator" ->
-        :operator
-
-      "deterministic" ->
-        if predicates == [] or
-             Enum.any?(predicates, &(value(&1, :kind) not in ["check", "artifact"])) do
-          rollback(:invalid_contract)
-        end
-
-        :deterministic
-
-      _ ->
-        rollback(:invalid_contract)
+    case ContractValidation.final_acceptance_authority(
+           revision.authority_policy || %{},
+           revision.execution_policy || %{},
+           revision.acceptance_contract || %{}
+         ) do
+      {:ok, authority} -> authority
+      {:error, _reason} -> rollback(:invalid_contract)
     end
   end
 
@@ -7559,7 +7598,7 @@ defmodule SymmetryControl.Goals do
   defp ensure_final_acceptance_authority!(_goal, :deterministic, _decision_id, _subject_hash),
     do: :ok
 
-  defp valid_initial_revision(revision) when is_map(revision) do
+  defp valid_initial_revision(revision, opts) when is_map(revision) and is_list(opts) do
     with {:ok, _} <- required_string(revision, :objective),
          {:ok, non_goals} <- optional_list(revision, :non_goals, []),
          true <- Enum.all?(non_goals, &(is_binary(&1) and String.trim(&1) != "")),
@@ -7568,14 +7607,16 @@ defmodule SymmetryControl.Goals do
          true <- is_map(value(revision, :execution_policy, %{})),
          true <- is_map(value(revision, :context_manifest, %{})),
          {:ok, _} <- required_string(revision, :reason),
-         true <- valid_acceptance_contract?(acceptance) do
+         true <- valid_acceptance_contract?(acceptance),
+         :ok <- immutable_acceptance_contracts_valid?([acceptance], opts) do
       :ok
     else
+      {:error, reason} -> {:error, reason}
       _ -> {:error, :invalid_request}
     end
   end
 
-  defp valid_initial_revision(_), do: {:error, :invalid_request}
+  defp valid_initial_revision(_, _), do: {:error, :invalid_request}
 
   defp valid_acceptance_contract?(contract) when is_map(contract) do
     predicates = value(contract, :predicates)
@@ -7596,6 +7637,36 @@ defmodule SymmetryControl.Goals do
 
   defp valid_acceptance_contract?(_contract), do: false
 
+  defp immutable_plan_contracts_valid?(items, opts) do
+    items
+    |> Enum.map(&value(&1, :acceptance))
+    |> immutable_acceptance_contracts_valid?(opts)
+  end
+
+  defp immutable_acceptance_contracts_valid?(acceptance_contracts, opts)
+       when is_list(acceptance_contracts) and is_list(opts) do
+    registry_opts =
+      case Keyword.fetch(opts, :validation_profiles) do
+        {:ok, profiles} -> [profiles: profiles]
+        :error -> []
+      end
+
+    with {:ok, profiles} <- ValidationProfiles.snapshot(registry_opts) do
+      if Enum.all?(acceptance_contracts, fn acceptance_contract ->
+           match?(
+             {:ok, _bindings},
+             ValidationProfiles.bindings_for_acceptance(acceptance_contract, profiles: profiles)
+           )
+         end),
+         do: :ok,
+         else: {:error, :invalid_validation_profile}
+    else
+      {:error, _reason} -> {:error, :invalid_validation_profile}
+    end
+  end
+
+  defp immutable_acceptance_contracts_valid?(_, _), do: {:error, :invalid_validation_profile}
+
   defp valid_plan_proposal?(proposal, goal, opts) when is_map(proposal) do
     items = value(proposal, :items)
 
@@ -7607,6 +7678,74 @@ defmodule SymmetryControl.Goals do
   end
 
   defp valid_plan_proposal?(_proposal, _goal, _opts), do: false
+
+  # This is intentionally Goal-context admission validation rather than JSON
+  # Schema validation: a PlanProposal remains wire-valid without an integration
+  # item, but it cannot be admitted as a complete Goal plan.
+  defp plan_admission_preflight?(items, opts) when is_list(items) and is_list(opts) do
+    if Enum.all?(items, &is_map/1) do
+      keys = Enum.map(items, &value(&1, :key))
+      items_by_key = Map.new(items, &{value(&1, :key), &1})
+
+      Enum.any?(items, &(value(&1, :integration, false) == true)) and
+        Enum.all?(items, &valid_plan_item?/1) and
+        length(keys) == MapSet.size(MapSet.new(keys)) and
+        Enum.all?(items, &plan_item_dependencies_valid?(&1, items_by_key)) and
+        plan_dependencies_acyclic?(items_by_key) and
+        immutable_plan_contracts_valid?(items, opts) == :ok
+    else
+      false
+    end
+  end
+
+  defp plan_admission_preflight?(_items, _opts), do: false
+
+  defp plan_item_dependencies_valid?(item, items_by_key) do
+    item_key = value(item, :key)
+    dependencies = value(item, :depends_on_keys, [])
+
+    Enum.all?(dependencies, &(Map.has_key?(items_by_key, &1) and &1 != item_key)) and
+      plan_dependency_baseline_same_resource?(item, items_by_key)
+  end
+
+  defp plan_dependency_baseline_same_resource?(item, items_by_key) do
+    case value(value(item, :baseline), :kind) do
+      "dependency" ->
+        dependency_key = value(value(item, :baseline), :key)
+        dependency = Map.get(items_by_key, dependency_key)
+
+        dependency_key in value(item, :depends_on_keys, []) and is_map(dependency) and
+          value(dependency, :repository_resource_id) == value(item, :repository_resource_id)
+
+      _ ->
+        true
+    end
+  end
+
+  defp plan_dependencies_acyclic?(items_by_key) do
+    Enum.all?(Map.keys(items_by_key), fn key ->
+      not plan_dependency_cycle?(key, items_by_key, MapSet.new(), MapSet.new())
+    end)
+  end
+
+  defp plan_dependency_cycle?(key, items_by_key, visiting, visited) do
+    cond do
+      MapSet.member?(visiting, key) ->
+        true
+
+      MapSet.member?(visited, key) ->
+        false
+
+      true ->
+        item = Map.fetch!(items_by_key, key)
+        visiting = MapSet.put(visiting, key)
+        visited = MapSet.put(visited, key)
+
+        Enum.any?(value(item, :depends_on_keys, []), fn dependency_key ->
+          plan_dependency_cycle?(dependency_key, items_by_key, visiting, visited)
+        end)
+    end
+  end
 
   defp valid_plan_envelope?(proposal, goal) do
     full_keys = ["schema_version", "proposal_id", "goal_id", "expected_revision", "items"]

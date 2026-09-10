@@ -5,7 +5,7 @@ defmodule SymmetryControl.Repo.Migrations.AddGoalExternalWaitUnsupportedState do
     drop(constraint(:goal_external_waits, :goal_external_waits_next_check_state_check))
     drop(constraint(:goal_external_waits, :goal_external_waits_state_check))
 
-    replace_history_guard!(["satisfied", "failed", "cancelled", "unsupported"])
+    replace_history_guard!(["satisfied", "failed", "cancelled", "unsupported"], true)
 
     # Older rows were created before a server-owned Integration checker existed.
     # Preserve their immutable source records, but stop their model-driven polling.
@@ -64,11 +64,22 @@ defmodule SymmetryControl.Repo.Migrations.AddGoalExternalWaitUnsupportedState do
 
     execute("ALTER TABLE goal_external_waits ALTER COLUMN state SET DEFAULT 'waiting'")
 
-    replace_history_guard!(["satisfied", "failed", "cancelled"])
+    replace_history_guard!(["satisfied", "failed", "cancelled"], false)
   end
 
-  defp replace_history_guard!(terminal_states) do
+  defp replace_history_guard!(terminal_states, require_receipt_on_insert?) do
     terminal_states = terminal_states |> Enum.map(&"'#{&1}'") |> Enum.join(", ")
+
+    insert_guard =
+      if require_receipt_on_insert? do
+        """
+        IF NEW.receipt_event_id IS NULL THEN
+          RAISE EXCEPTION 'goal_0006_external_wait_receipt_required';
+        END IF;
+        """
+      else
+        ""
+      end
 
     execute("""
     CREATE OR REPLACE FUNCTION goal_0006_guard_external_wait_history()
@@ -76,6 +87,11 @@ defmodule SymmetryControl.Repo.Migrations.AddGoalExternalWaitUnsupportedState do
     LANGUAGE plpgsql
     AS $$
     BEGIN
+      IF TG_OP = 'INSERT' THEN
+        #{insert_guard}
+        RETURN NEW;
+      END IF;
+
       IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'goal_0006_external_wait_history_immutable';
       END IF;
@@ -96,8 +112,12 @@ defmodule SymmetryControl.Repo.Migrations.AddGoalExternalWaitUnsupportedState do
         RAISE EXCEPTION 'goal_0006_external_wait_identity_immutable';
       END IF;
 
-      IF OLD.state IN (#{terminal_states})
-         AND NEW.state IS DISTINCT FROM OLD.state THEN
+      IF OLD.state IN (#{terminal_states}) AND (
+           NEW.state IS DISTINCT FROM OLD.state
+        OR NEW.next_check_at IS DISTINCT FROM OLD.next_check_at
+        OR NEW.check_seq IS DISTINCT FROM OLD.check_seq
+        OR NEW.receipt_event_id IS DISTINCT FROM OLD.receipt_event_id
+      ) THEN
         RAISE EXCEPTION 'goal_0006_external_wait_terminal_immutable';
       END IF;
 

@@ -101,6 +101,42 @@ defmodule SymmetryControl.Goals.ContractValidation do
   @spec validate_adapter(map() | list(), keyword()) :: validation_result()
   def validate_adapter(data, opts \\ []), do: validate_adapter_capabilities(data, opts)
 
+  @doc """
+  Resolve the effective final-acceptance authority for one immutable revision.
+
+  A revision can require an exact operator completion Decision either directly
+  through `execution_policy.final_acceptance` or through the broader
+  `authority_policy.operator_required_for_completion` fence. Deterministic
+  acceptance is valid only when no operator fence applies and every predicate
+  is independently checkable.
+  """
+  @spec final_acceptance_authority(map(), map(), map()) ::
+          {:ok, :operator | :deterministic} | {:error, term()}
+  def final_acceptance_authority(authority_policy, execution_policy, acceptance_contract)
+      when is_map(authority_policy) and is_map(execution_policy) and
+             is_map(acceptance_contract) do
+    predicates = value(acceptance_contract, "predicates")
+    final_acceptance = value(execution_policy, "final_acceptance")
+
+    cond do
+      final_acceptance == "operator" or
+          value(authority_policy, "operator_required_for_completion", true) == true ->
+        {:ok, :operator}
+
+      final_acceptance == "deterministic" and is_list(predicates) and predicates != [] and
+          Enum.all?(predicates, &deterministic_predicate?/1) ->
+        {:ok, :deterministic}
+
+      final_acceptance == "deterministic" ->
+        {:error, :deterministic_acceptance_contract}
+
+      true ->
+        {:error, :invalid_final_acceptance}
+    end
+  end
+
+  def final_acceptance_authority(_, _, _), do: {:error, :invalid_final_acceptance}
+
   defp validate(kind, data, opts) when is_list(opts) do
     with :ok <- ensure_ex_json_schema(),
          {:ok, schema_root} <- schema_root(opts),
@@ -613,9 +649,15 @@ defmodule SymmetryControl.Goals.ContractValidation do
 
   defp validate_goal_revision_semantics(%{
          "acceptance_contract" => %{"predicates" => predicates},
+         "authority_policy" => authority_policy,
          "execution_policy" => execution_policy
        }) do
-    validate_execution_policy_semantics(execution_policy, predicates)
+    case final_acceptance_authority(authority_policy, execution_policy, %{
+           "predicates" => predicates
+         }) do
+      {:ok, _authority} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   defp validate_goal_revision_semantics(_revision), do: :ok
@@ -683,16 +725,28 @@ defmodule SymmetryControl.Goals.ContractValidation do
 
   defp canonical_plan_proposal(proposal), do: proposal
 
-  defp validate_execution_policy_semantics(policy, predicates) do
-    cond do
-      policy["final_acceptance"] == "deterministic" and
-          Enum.any?(predicates, &(&1["kind"] not in ["check", "artifact"])) ->
-        {:error, :deterministic_acceptance_contract}
+  defp deterministic_predicate?(predicate) when is_map(predicate),
+    do: value(predicate, "kind") in ["check", "artifact"]
 
-      true ->
-        :ok
-    end
-  end
+  defp deterministic_predicate?(_predicate), do: false
+
+  defp value(map, key, default \\ nil)
+
+  defp value(map, "predicates", default),
+    do: Map.get(map, "predicates", Map.get(map, :predicates, default))
+
+  defp value(map, "final_acceptance", default),
+    do: Map.get(map, "final_acceptance", Map.get(map, :final_acceptance, default))
+
+  defp value(map, "operator_required_for_completion", default),
+    do:
+      Map.get(
+        map,
+        "operator_required_for_completion",
+        Map.get(map, :operator_required_for_completion, default)
+      )
+
+  defp value(map, "kind", default), do: Map.get(map, "kind", Map.get(map, :kind, default))
 
   defp ensure_equal(left, right, _field) when left == right, do: :ok
   defp ensure_equal(_left, _right, field), do: {:error, {:evidence_identity_mismatch, field}}

@@ -176,16 +176,24 @@ defmodule SymmetryControl.Repo.Migrations.AddGoalTerminalGuardsAndExecutionPolic
   end
 
   defp normalize_existing_policies! do
-    execute("""
-    UPDATE goal_revisions
-    SET execution_policy = execution_policy || jsonb_build_object(
-      'per_run_cost_limit_microusd',
-      COALESCE(execution_policy -> 'per_run_cost_limit_microusd', 'null'::jsonb),
-      'hard_cost_limit_required',
-      COALESCE(execution_policy -> 'hard_cost_limit_required', 'false'::jsonb)
-    )
-    WHERE NOT execution_policy ?& ARRAY['per_run_cost_limit_microusd', 'hard_cost_limit_required']
-    """)
+    # The base Goal migration freezes revision history. This one-time, additive
+    # normalization must run before the stronger exact-key constraint is added.
+    execute("ALTER TABLE goal_revisions DISABLE TRIGGER goal_revisions_immutable_history")
+
+    try do
+      execute("""
+      UPDATE goal_revisions
+      SET execution_policy = execution_policy || jsonb_build_object(
+        'per_run_cost_limit_microusd',
+        COALESCE(execution_policy -> 'per_run_cost_limit_microusd', 'null'::jsonb),
+        'hard_cost_limit_required',
+        COALESCE(execution_policy -> 'hard_cost_limit_required', 'false'::jsonb)
+      )
+      WHERE NOT execution_policy ?& ARRAY['per_run_cost_limit_microusd', 'hard_cost_limit_required']
+      """)
+    after
+      execute("ALTER TABLE goal_revisions ENABLE TRIGGER goal_revisions_immutable_history")
+    end
   end
 
   defp refuse_rollback! do
@@ -199,8 +207,8 @@ defmodule SymmetryControl.Repo.Migrations.AddGoalTerminalGuardsAndExecutionPolic
          OR EXISTS (
            SELECT 1
            FROM goal_revisions
-           WHERE execution_policy ? 'per_run_cost_limit_microusd'
-              OR execution_policy ? 'hard_cost_limit_required'
+           WHERE execution_policy -> 'per_run_cost_limit_microusd' IS DISTINCT FROM 'null'::jsonb
+              OR execution_policy -> 'hard_cost_limit_required' IS DISTINCT FROM 'false'::jsonb
          ) THEN
         RAISE EXCEPTION 'cannot roll back terminal Goal guards and execution policy while protected history exists';
       END IF;

@@ -95,7 +95,10 @@ defmodule SymmetryControl.Goals.WorkersTest do
         default_workspace: "primary"
       })
 
-    {:ok, created, :created} = Goals.create_goal(project.id, goal_attrs(), "operator:test")
+    {:ok, created, :created} =
+      Goals.create_goal(project.id, goal_attrs(), "operator:test",
+        validation_profiles: validation_profiles()
+      )
 
     {:ok, repository} =
       Workspaces.create_resource(project.id, %{
@@ -171,6 +174,7 @@ defmodule SymmetryControl.Goals.WorkersTest do
 
   defp command_current(goal_id, kind, payload, opts \\ []) do
     {:ok, goal} = Goals.fetch_goal(goal_id)
+    opts = Keyword.put_new(opts, :validation_profiles, validation_profiles())
 
     Goals.command(
       goal_id,
@@ -185,6 +189,17 @@ defmodule SymmetryControl.Goals.WorkersTest do
       "operator:test",
       opts
     )
+  end
+
+  defp validation_profiles do
+    [
+      test: [
+        kind: :check,
+        profile_digest: "sha256:" <> String.duplicate("c", 64),
+        enabled: true,
+        allowed_runtime_ids: [Ecto.UUID.generate()]
+      ]
+    ]
   end
 
   defp goal_attrs do

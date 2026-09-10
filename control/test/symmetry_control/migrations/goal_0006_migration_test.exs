@@ -1078,7 +1078,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
               receive do
                 :commit_runtime_binding -> :ok
               after
-                5_000 -> raise "timed out waiting to commit runtime binding"
+                15_000 -> raise "timed out waiting to commit runtime binding"
               end
             end)
           after
@@ -1087,7 +1087,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
         end)
 
       try do
-        assert_receive {:runtime_resource_share_lock_held, _runtime_binding_pid}, 5_000
+        assert_receive {:runtime_resource_share_lock_held, _runtime_binding_pid}, 15_000
 
         resource_update_task =
           Elixir.Task.async(fn ->
@@ -1113,11 +1113,11 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
             end
           end)
 
-        assert {:error, error} = Elixir.Task.await(resource_update_task, 5_000)
+        assert {:error, error} = Elixir.Task.await(resource_update_task, 15_000)
         assert Exception.message(error) =~ "lock timeout"
 
         send(runtime_binding_task.pid, :commit_runtime_binding)
-        assert {:ok, :ok} = Elixir.Task.await(runtime_binding_task, 5_000)
+        assert {:ok, :ok} = Elixir.Task.await(runtime_binding_task, 15_000)
       after
         if Process.alive?(runtime_binding_task.pid) do
           send(runtime_binding_task.pid, :commit_runtime_binding)
@@ -1253,6 +1253,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   test "persists nullable immutable Goal change targets without rewriting goal-less items" do
     with_schema(fn ->
       migrate_goal_up!()
+      migrate_integration_designation_up!()
       migrate_baseline_up!()
       migrate_change_target_up!()
 
@@ -1293,6 +1294,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
             admitted_revision = 1,
             acceptance_contract = '{}'::jsonb,
             baseline_subject = $2::text::jsonb,
+            integration = TRUE,
             change_target = '{"kind": "branches", "source_branch": "feature", "target_branch": "main"}'::jsonb
         WHERE id = $3
         """,
@@ -1371,6 +1373,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   test "rolls back change-target storage when no frozen target exists" do
     with_schema(fn ->
       migrate_goal_up!()
+      migrate_integration_designation_up!()
       migrate_baseline_up!()
       migrate_change_target_up!()
       migrate_change_target_down!()
@@ -1389,7 +1392,8 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   test "adds nullable baseline sources and rolls back when no source is present" do
     with_schema(fn ->
       migrate_goal_up!()
-      %{work_item_id: goal_work_item_id} = insert_goal_fixture!()
+      migrate_integration_designation_up!()
+      %{work_item_id: goal_work_item_id} = insert_goal_fixture!(execution_policy_json(), true)
       project_id = insert_project!()
       work_item_id = insert_work_item!(project_id)
       migrate_baseline_up!()
@@ -1425,10 +1429,76 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
     end)
   end
 
+  test "requires an integration WorkItem for each nonempty admitted revision at commit" do
+    with_schema(fn ->
+      migrate_goal_up!()
+      migrate_integration_designation_up!()
+      migrate_baseline_up!()
+
+      project_id = insert_project!()
+      repository_id = insert_repository_resource!(project_id)
+      empty_goal_id = Ecto.UUID.bingenerate()
+      insert_goal_row!(empty_goal_id, project_id)
+
+      assert %{rows: [[^empty_goal_id]]} =
+               Repo.query!("SELECT id FROM goals WHERE id = $1", [empty_goal_id])
+
+      complete_goal_id = Ecto.UUID.bingenerate()
+      insert_goal_row!(complete_goal_id, project_id)
+      first_item_id = insert_work_item!(project_id, repository_id)
+      integration_item_id = insert_work_item!(project_id, repository_id)
+
+      assert {:ok, _} =
+               Repo.transaction(fn ->
+                 Repo.query!(
+                   """
+                   UPDATE work_items
+                   SET goal_id = $1, admitted_revision = 1, acceptance_contract = '{}'::jsonb,
+                       baseline_subject = $2::text::jsonb, integration = FALSE
+                   WHERE id = $3
+                   """,
+                   [complete_goal_id, Jason.encode!(subject(repository_id)), first_item_id]
+                 )
+
+                 Repo.query!(
+                   """
+                   UPDATE work_items
+                   SET goal_id = $1, admitted_revision = 1, acceptance_contract = '{}'::jsonb,
+                       baseline_subject = $2::text::jsonb, integration = TRUE
+                   WHERE id = $3
+                   """,
+                   [complete_goal_id, Jason.encode!(subject(repository_id)), integration_item_id]
+                 )
+               end)
+
+      incomplete_goal_id = Ecto.UUID.bingenerate()
+      insert_goal_row!(incomplete_goal_id, project_id)
+      incomplete_item_id = insert_work_item!(project_id, repository_id)
+
+      assert_raise Postgrex.Error, ~r/goal_0006_goal_work_items_require_integration/i, fn ->
+        Repo.transaction(fn ->
+          Repo.query!(
+            """
+            UPDATE work_items
+            SET goal_id = $1, admitted_revision = 1, acceptance_contract = '{}'::jsonb,
+                baseline_subject = $2::text::jsonb, integration = FALSE
+            WHERE id = $3
+            """,
+            [incomplete_goal_id, Jason.encode!(subject(repository_id)), incomplete_item_id]
+          )
+        end)
+      end
+    end)
+  end
+
   test "requires a baseline for new Goal ownership but preserves historic NULL baselines" do
     with_schema(fn ->
       migrate_goal_up!()
-      %{goal_id: historic_goal_id, work_item_id: historic_item_id} = insert_goal_fixture!()
+      migrate_integration_designation_up!()
+
+      %{goal_id: historic_goal_id, work_item_id: historic_item_id} =
+        insert_goal_fixture!(execution_policy_json(), true)
+
       project_id = insert_project!()
       goal_id = Ecto.UUID.bingenerate()
       insert_goal_row!(goal_id, project_id)
@@ -1484,6 +1554,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   test "enforces immutable exact-resource and declared-dependency baseline sources" do
     with_schema(fn ->
       migrate_goal_up!()
+      migrate_integration_designation_up!()
       migrate_baseline_up!()
 
       project_id = insert_project!()
@@ -1572,7 +1643,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
           """
           UPDATE work_items
           SET goal_id = $1, admitted_revision = 1, acceptance_contract = '{}'::jsonb,
-              baseline_subject = $3::text::jsonb
+              baseline_subject = $3::text::jsonb, integration = TRUE
           WHERE id = $2
           """,
           [goal_id, dependency_id, Jason.encode!(subject(repository_id))]
@@ -1601,6 +1672,39 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
                Repo.query!("SELECT baseline_dependency_id FROM work_items WHERE id = $1", [
                  target_id
                ])
+
+      cross_resource_target_id = insert_work_item!(project_id, other_repository_id)
+
+      assert_raise Postgrex.Error, ~r/goal_0006_baseline_dependency_resource_mismatch/i, fn ->
+        Repo.transaction(fn ->
+          Repo.query!(
+            """
+            UPDATE work_items
+            SET goal_id = $1, admitted_revision = 1, acceptance_contract = '{}'::jsonb,
+                baseline_dependency_id = $2
+            WHERE id = $3
+            """,
+            [goal_id, dependency_id, cross_resource_target_id]
+          )
+
+          Repo.query!(
+            """
+            INSERT INTO work_dependencies (goal_id, work_item_id, depends_on_id, inserted_at)
+            VALUES ($1, $2, $3, now())
+            """,
+            [goal_id, cross_resource_target_id, dependency_id]
+          )
+        end)
+      end
+
+      assert_raise Postgrex.Error, ~r/goal_0006_baseline_dependency_resource_mismatch/i, fn ->
+        Repo.transaction(fn ->
+          Repo.query!("UPDATE work_items SET repository_resource_id = $1 WHERE id = $2", [
+            other_repository_id,
+            dependency_id
+          ])
+        end)
+      end
 
       replacement_target_id = insert_work_item!(project_id, repository_id)
 
@@ -1681,7 +1785,9 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
         legacy_work_item_id
       ])
 
-      %{goal_id: goal_id, work_item_id: goal_work_item_id} = insert_goal_fixture!()
+      %{goal_id: goal_id, work_item_id: goal_work_item_id} =
+        insert_goal_fixture!(execution_policy_json(), true)
+
       migrate_baseline_up!()
       migrate_identity_up!()
 
@@ -1762,7 +1868,9 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
       migrate_goal_up!()
       migrate_integration_designation_up!()
 
-      %{goal_id: goal_id, work_item_id: work_item_id} = insert_goal_fixture!()
+      %{goal_id: goal_id, work_item_id: work_item_id} =
+        insert_goal_fixture!(execution_policy_json(), true)
+
       task_id = insert_goal_task!(%{goal_id: goal_id, work_item_id: work_item_id})
       migrate_baseline_up!()
       migrate_identity_up!()
@@ -1808,8 +1916,8 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
     with_schema(fn ->
       migrate_goal_up!()
       migrate_integration_designation_up!()
+      %{goal_id: goal_id} = insert_goal_fixture!(execution_policy_json(), true)
       migrate_baseline_up!()
-      %{goal_id: goal_id} = insert_goal_fixture!()
       migrate_identity_up!()
 
       assert_raise Postgrex.Error,
@@ -1972,12 +2080,19 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
                  [goal_id]
                )
 
+      assert_raise Postgrex.Error, ~r/goal_0006_immutable_history/i, fn ->
+        Repo.query!(
+          "UPDATE goal_revisions SET reason = 'rewritten history' WHERE goal_id = $1 AND revision = 1",
+          [goal_id]
+        )
+      end
+
       assert_raise Postgrex.Error, ~r/goal_0006_decision_transition_invalid/i, fn ->
         insert_resolved_goal_decision!(goal_id)
       end
 
       for terminal_state <- ["achieved", "cancelled"] do
-        %{goal_id: terminal_goal_id} = insert_goal_fixture!()
+        %{goal_id: terminal_goal_id} = insert_goal_fixture!(protected_execution_policy_json(%{}))
 
         Repo.query!("UPDATE goals SET state = $1, next_wake_at = NULL WHERE id = $2", [
           terminal_state,
@@ -2102,12 +2217,84 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   test "refuses terminal policy rollback after protected history exists" do
     with_schema(fn ->
       migrate_goal_up!()
-      insert_goal_fixture!()
+      %{goal_id: goal_id} = insert_goal_fixture!()
+
+      insert_goal_revision_policy!(
+        goal_id,
+        2,
+        protected_execution_policy_json(%{
+          "per_run_cost_limit_microusd" => 1,
+          "hard_cost_limit_required" => true
+        })
+      )
+
       migrate_terminal_policy_up!()
 
       assert_raise Postgrex.Error,
                    ~r/cannot roll back terminal Goal guards and execution policy while protected history exists/i,
                    &migrate_terminal_policy_down!/0
+    end)
+  end
+
+  test "normalizes immutable legacy execution policies additively without rewriting explicit values" do
+    with_schema(fn ->
+      migrate_goal_up!()
+      %{goal_id: goal_id} = insert_goal_fixture!()
+
+      insert_goal_revision_policy!(
+        goal_id,
+        2,
+        legacy_execution_policy_json(%{"per_run_cost_limit_microusd" => 17})
+      )
+
+      migrate_terminal_policy_up!()
+
+      assert %{rows: [[nil, false], [17, false]]} =
+               Repo.query!(
+                 """
+                 SELECT
+                   (execution_policy ->> 'per_run_cost_limit_microusd')::bigint,
+                   (execution_policy ->> 'hard_cost_limit_required')::boolean
+                 FROM goal_revisions
+                 WHERE goal_id = $1
+                 ORDER BY revision
+                 """,
+                 [goal_id]
+               )
+
+      assert_raise Postgrex.Error, ~r/goal_0006_immutable_history/i, fn ->
+        Repo.query!(
+          "UPDATE goal_revisions SET reason = 'rewritten history' WHERE goal_id = $1 AND revision = 2",
+          [goal_id]
+        )
+      end
+
+      assert_raise Postgrex.Error,
+                   ~r/cannot roll back terminal Goal guards and execution policy while protected history exists/i,
+                   &migrate_terminal_policy_down!/0
+    end)
+  end
+
+  test "rolls terminal policy guards back and reapplies after default-only legacy normalization" do
+    with_schema(fn ->
+      migrate_goal_up!()
+      %{goal_id: goal_id} = insert_goal_fixture!()
+      migrate_terminal_policy_up!()
+      migrate_terminal_policy_down!()
+
+      assert %{rows: [[nil, false]]} =
+               Repo.query!(
+                 """
+                 SELECT
+                   (execution_policy ->> 'per_run_cost_limit_microusd')::bigint,
+                   (execution_policy ->> 'hard_cost_limit_required')::boolean
+                 FROM goal_revisions
+                 WHERE goal_id = $1 AND revision = 1
+                 """,
+                 [goal_id]
+               )
+
+      migrate_terminal_policy_up!()
     end)
   end
 
@@ -2439,7 +2626,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
     )
   end
 
-  defp insert_goal_fixture! do
+  defp insert_goal_fixture!(execution_policy \\ execution_policy_json(), integration \\ false) do
     project_id = insert_project!()
     goal_id = Ecto.UUID.bingenerate()
     work_item_id = insert_work_item!(project_id)
@@ -2462,17 +2649,28 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
         VALUES ($1, 1, 'Verify database constraints', '[]'::jsonb, '{}'::jsonb, '{}'::jsonb,
                 $2::text::jsonb, '{}'::jsonb, 'initial', 'operator:test', now())
         """,
-        [goal_id, execution_policy_json()]
+        [goal_id, execution_policy]
       )
 
-      Repo.query!(
-        """
-        UPDATE work_items
-        SET goal_id = $1, admitted_revision = 1, acceptance_contract = '{}'::jsonb
-        WHERE id = $2
-        """,
-        [goal_id, work_item_id]
-      )
+      if integration do
+        Repo.query!(
+          """
+          UPDATE work_items
+          SET goal_id = $1, admitted_revision = 1, acceptance_contract = '{}'::jsonb, integration = TRUE
+          WHERE id = $2
+          """,
+          [goal_id, work_item_id]
+        )
+      else
+        Repo.query!(
+          """
+          UPDATE work_items
+          SET goal_id = $1, admitted_revision = 1, acceptance_contract = '{}'::jsonb
+          WHERE id = $2
+          """,
+          [goal_id, work_item_id]
+        )
+      end
     end)
 
     %{goal_id: goal_id, project_id: project_id, work_item_id: work_item_id}

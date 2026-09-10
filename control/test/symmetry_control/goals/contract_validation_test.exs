@@ -288,12 +288,46 @@ defmodule SymmetryControl.Goals.ContractValidationTest do
              ContractValidation.validate_goal_revision(automatic_execution, opts)
 
     deterministic_with_operator_acceptance =
-      put_in(goal_revision, ["execution_policy", "final_acceptance"], "deterministic")
+      goal_revision
+      |> put_in(["execution_policy", "final_acceptance"], "deterministic")
+      |> put_in(["authority_policy", "operator_required_for_completion"], false)
 
     assert {:error, :deterministic_acceptance_contract} =
              ContractValidation.validate_goal_revision(
                deterministic_with_operator_acceptance,
                opts
+             )
+  end
+
+  test "resolves final authority from both execution and authority policies" do
+    check_contract = %{"predicates" => [%{"kind" => "check"}]}
+
+    assert {:ok, :operator} =
+             ContractValidation.final_acceptance_authority(
+               %{"operator_required_for_completion" => true},
+               %{"final_acceptance" => "deterministic"},
+               check_contract
+             )
+
+    assert {:ok, :operator} =
+             ContractValidation.final_acceptance_authority(
+               %{"operator_required_for_completion" => false},
+               %{"final_acceptance" => "operator"},
+               check_contract
+             )
+
+    assert {:ok, :deterministic} =
+             ContractValidation.final_acceptance_authority(
+               %{operator_required_for_completion: false},
+               %{final_acceptance: "deterministic"},
+               %{predicates: [%{kind: "artifact"}]}
+             )
+
+    assert {:error, :deterministic_acceptance_contract} =
+             ContractValidation.final_acceptance_authority(
+               %{"operator_required_for_completion" => false},
+               %{"final_acceptance" => "deterministic"},
+               %{"predicates" => [%{"kind" => "review"}]}
              )
   end
 

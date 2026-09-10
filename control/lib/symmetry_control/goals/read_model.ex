@@ -11,6 +11,7 @@ defmodule SymmetryControl.Goals.ReadModel do
   import Ecto.Query
 
   alias SymmetryControl.Goals.{
+    ContractValidation,
     ContextSnapshot,
     Goal,
     GoalBudgetReservation,
@@ -1626,9 +1627,9 @@ defmodule SymmetryControl.Goals.ReadModel do
          current_revision,
          required_items
        ) do
-    if map_value(goal, :state) in ["active", "paused"] and
-         value(map_value(revision, :execution_policy, %{}), :final_acceptance, "operator") ==
-           "operator" and
+    authority = final_acceptance_authority(revision)
+
+    if map_value(goal, :state) in ["active", "paused"] and authority == :operator and
          Enum.all?(required_items, &Map.has_key?(accepted, map_value(&1, :id))) and
          not Enum.any?(tasks, &(map_value(&1, :state) in @nonterminal_task_states)) and
          not Enum.any?(
@@ -1651,7 +1652,7 @@ defmodule SymmetryControl.Goals.ReadModel do
           not MapSet.member?(resolved_subjects, candidate.subject_hash) and
           required_goal_predicates_satisfied?(
             map_value(revision, :acceptance_contract, %{}),
-            "operator",
+            Atom.to_string(authority),
             candidate.subject_hash,
             evidence,
             tasks,
@@ -1743,34 +1744,47 @@ defmodule SymmetryControl.Goals.ReadModel do
          evidence,
          current_revision
        ) do
-    policy = map_value(revision, :execution_policy, %{})
-    final_acceptance = value(policy, :final_acceptance, "operator")
+    case final_acceptance_authority(revision) do
+      authority when authority in [:operator, :deterministic] ->
+        candidate_subjects =
+          case authority do
+            :operator -> resolved_completion_subjects(goal, decisions, current_revision)
+            :deterministic -> accepted |> Map.values() |> Enum.map(&map_value(&1, :subject_hash))
+          end
 
-    candidate_subjects =
-      case final_acceptance do
-        "operator" -> resolved_completion_subjects(goal, decisions, current_revision)
-        "deterministic" -> accepted |> Map.values() |> Enum.map(&map_value(&1, :subject_hash))
-        _ -> []
-      end
+        Enum.any?(candidate_subjects, fn subject_hash ->
+          valid_digest?(subject_hash) and
+            integration_candidate_dependencies_satisfied?(
+              work_items,
+              dependencies,
+              accepted,
+              subject_hash
+            ) and
+            required_goal_predicates_satisfied?(
+              map_value(revision, :acceptance_contract, %{}),
+              Atom.to_string(authority),
+              subject_hash,
+              evidence,
+              tasks,
+              runs,
+              current_revision
+            )
+        end)
 
-    Enum.any?(candidate_subjects, fn subject_hash ->
-      valid_digest?(subject_hash) and
-        integration_candidate_dependencies_satisfied?(
-          work_items,
-          dependencies,
-          accepted,
-          subject_hash
-        ) and
-        required_goal_predicates_satisfied?(
-          map_value(revision, :acceptance_contract, %{}),
-          final_acceptance,
-          subject_hash,
-          evidence,
-          tasks,
-          runs,
-          current_revision
-        )
-    end)
+      :invalid ->
+        false
+    end
+  end
+
+  defp final_acceptance_authority(revision) do
+    case ContractValidation.final_acceptance_authority(
+           map_value(revision, :authority_policy, %{}),
+           map_value(revision, :execution_policy, %{}),
+           map_value(revision, :acceptance_contract, %{})
+         ) do
+      {:ok, authority} -> authority
+      {:error, _reason} -> :invalid
+    end
   end
 
   defp integration_candidate_dependencies_satisfied?(

@@ -69,7 +69,9 @@ defmodule SymmetryControlWeb.TaskGoalGuardControllerTest do
       })
 
     assert {:ok, created, :created} =
-             Goals.create_goal(project.id, goal_attrs(repository.id), "operator:test")
+             Goals.create_goal(project.id, goal_attrs(repository.id), "operator:test",
+               validation_profiles: validation_profiles()
+             )
 
     goal_id = created.goal.id
     proposal = proposal(goal_id, repository.id)

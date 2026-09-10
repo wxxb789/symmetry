@@ -32,6 +32,16 @@ defmodule SymmetryControl.Goals.ValidationProfiles do
   end
 
   @doc """
+  Capture and validate the operator profile registry once.
+
+  Callers admitting several immutable contracts can pass the returned map back
+  through `profiles:` so every contract is checked against one registry
+  snapshot.
+  """
+  @spec snapshot(keyword()) :: {:ok, map()} | {:error, term()}
+  def snapshot(opts \\ []), do: configured_profiles(opts)
+
+  @doc """
   Derives the unique check/review bindings required by an acceptance contract.
 
   Artifact and operator-acceptance predicates require no validation profile.
