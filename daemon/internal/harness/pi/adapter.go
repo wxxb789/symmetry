@@ -20,6 +20,7 @@ import (
 const (
 	processCleanupTimeout   = 5 * time.Second
 	processTerminationGrace = 5 * time.Second
+	nativeCancelTimeout     = 5 * time.Second
 	maxPreReadyEvents       = 64
 	maxPreReadyBytes        = 1 << 20
 )
@@ -52,9 +53,10 @@ func runnerProcessStarter(ctx context.Context, invocation execution.Invocation, 
 // registry integration must not expose this transport as a supported adapter
 // until credentialed lifecycle evidence exists.
 type Adapter struct {
-	executable   string
-	runner       CommandRunner
-	startProcess processStarter
+	executable    string
+	runner        CommandRunner
+	startProcess  processStarter
+	cancelTimeout time.Duration
 }
 
 // NewAdapter creates a pi --mode rpc transport adapter.
@@ -63,7 +65,7 @@ func NewAdapter(executables ...string) *Adapter {
 	if len(executables) > 0 && strings.TrimSpace(executables[0]) != "" {
 		executable = executables[0]
 	}
-	return &Adapter{executable: executable, startProcess: runnerProcessStarter}
+	return &Adapter{executable: executable, startProcess: runnerProcessStarter, cancelTimeout: nativeCancelTimeout}
 }
 
 // NewAdapterWithRunner creates an adapter with an injectable probe runner.
@@ -120,15 +122,23 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 	if len(request.Invocation.InitialInput) != 0 || request.Invocation.CloseInputAfterInitial {
 		return nil, errors.New("pi native transport does not accept legacy initial input")
 	}
+	args, err := piRPCArgs(request.Invocation.Args)
+	if err != nil {
+		return nil, err
+	}
 	if adapter.startProcess == nil {
 		adapter.startProcess = runnerProcessStarter
 	}
 
 	processContext, cancel := context.WithCancel(ctx)
-	session := newNativeSession(processContext, cancel, sink)
+	cancelTimeout := adapter.cancelTimeout
+	if cancelTimeout <= 0 {
+		cancelTimeout = nativeCancelTimeout
+	}
+	session := newNativeSession(processContext, cancel, sink, cancelTimeout)
 	invocation := execution.Invocation{
 		Program:        adapter.executable,
-		Args:           []string{"--mode", "rpc"},
+		Args:           args,
 		Dir:            request.Workspace,
 		Env:            append([]string(nil), request.Invocation.Env...),
 		PersistProcess: request.PersistProcess,
@@ -166,6 +176,27 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 	return session, nil
 }
 
+// piRPCArgs preserves profile flags while preventing a transport override or a
+// positional startup prompt before Open establishes a native session handle.
+// execution.Runner launches argv directly, never through a command shell.
+func piRPCArgs(profileArgs []string) ([]string, error) {
+	args := make([]string, 0, len(profileArgs)+2)
+	args = append(args, "--mode", "rpc")
+	for _, argument := range profileArgs {
+		if strings.IndexByte(argument, 0) >= 0 {
+			return nil, errors.New("pi invocation argument contains NUL")
+		}
+		if argument == "--" {
+			return nil, errors.New("pi invocation argument separator is not allowed for RPC transport")
+		}
+		if argument == "--mode" || strings.HasPrefix(argument, "--mode=") {
+			return nil, errors.New("pi invocation must not override required --mode rpc transport")
+		}
+		args = append(args, argument)
+	}
+	return args, nil
+}
+
 func isNilNativeProcess(process nativeProcess) bool {
 	if process == nil {
 		return true
@@ -192,6 +223,7 @@ type nativeSession struct {
 	cancelMutex sync.Mutex
 
 	process              nativeProcess
+	cancelTimeout        time.Duration
 	processReady         bool
 	preReadyEvents       []execution.Event
 	preReadyBytes        int
@@ -229,17 +261,18 @@ type closeAttempt struct {
 	err  error
 }
 
-func newNativeSession(ctx context.Context, cancel context.CancelFunc, sink harness.EventSink) *nativeSession {
+func newNativeSession(ctx context.Context, cancel context.CancelFunc, sink harness.EventSink, cancelTimeout time.Duration) *nativeSession {
 	return &nativeSession{
-		context:    ctx,
-		cancel:     cancel,
-		sink:       sink,
-		decoder:    NewDecoder(defaultMaxRecordBytes),
-		validator:  NewValidator(nil),
-		pending:    make(map[string]chan Response),
-		turnDone:   make(chan struct{}),
-		resultDone: make(chan struct{}),
-		watchDone:  make(chan struct{}),
+		context:       ctx,
+		cancel:        cancel,
+		sink:          sink,
+		cancelTimeout: cancelTimeout,
+		decoder:       NewDecoder(defaultMaxRecordBytes),
+		validator:     NewValidator(nil),
+		pending:       make(map[string]chan Response),
+		turnDone:      make(chan struct{}),
+		resultDone:    make(chan struct{}),
+		watchDone:     make(chan struct{}),
 	}
 }
 
@@ -533,7 +566,9 @@ func (session *nativeSession) closeOnce(ctx context.Context) error {
 	if active {
 		// A failed native cancel must remain visible in the turn result, but a
 		// later successful process-tree cleanup still satisfies Close itself.
-		_, _ = session.Control(ctx, harness.ControlRequest{CommandID: "close", Kind: harness.ControlCancel})
+		cancelContext, cancel := context.WithTimeout(context.Background(), session.cancelTimeout)
+		_, _ = session.Control(cancelContext, harness.ControlRequest{CommandID: "close", Kind: harness.ControlCancel})
+		cancel()
 	}
 	session.mutex.Lock()
 	session.closeNormalCandidate = session.turnFinal && session.failure == nil
@@ -542,6 +577,10 @@ func (session *nativeSession) closeOnce(ctx context.Context) error {
 	if process == nil {
 		return nil
 	}
+	// The Runner stops output delivery on termination, but its sink context is
+	// distinct from the session-owned EventSink context. Cancel this context
+	// before cleanup so a blocked sink cannot indefinitely delay Close.
+	session.cancel()
 	cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), processCleanupTimeout+processTerminationGrace)
 	defer cleanupCancel()
 	terminateErr := process.Terminate(cleanupContext, processTerminationGrace)

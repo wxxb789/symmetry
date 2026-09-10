@@ -51,12 +51,15 @@ func TestAdapterStagesPiRPCAndRequiresSettledExplicitTaskResult(t *testing.T) {
 	var persistedIdentity string
 	session := startPiSession(t, adapter, harness.StartRequest{
 		Workspace: t.TempDir(),
+		Invocation: execution.Invocation{Args: []string{
+			"--provider", "openai", "--model", "gpt-5.6", "--session-dir", "C:/sessions",
+		}},
 		PersistProcess: func(pid int, identity string) error {
 			persistedPID, persistedIdentity = pid, identity
 			return nil
 		},
 	}, sink)
-	if got, want := strings.Join(invocation.Args, " "), "--mode rpc"; got != want {
+	if got, want := strings.Join(invocation.Args, " "), "--mode rpc --provider openai --model gpt-5.6 --session-dir C:/sessions"; got != want {
 		t.Fatalf("args = %q, want %q", got, want)
 	}
 	if invocation.InitialInput != nil || invocation.CloseInputAfterInitial {
@@ -187,6 +190,63 @@ func TestCloseRetriesAfterTerminationFailure(t *testing.T) {
 	}
 	if got := process.terminateCount(); got != 2 {
 		t.Fatalf("Terminate calls = %d, want 2", got)
+	}
+}
+
+func TestStartRejectsRPCTransportOverrideBeforeLaunchingProcess(t *testing.T) {
+	called := false
+	adapter := &Adapter{
+		executable: "pi-test",
+		startProcess: func(_ context.Context, _ execution.Invocation, _ execution.Sink) (nativeProcess, error) {
+			called = true
+			return newFakeNativeProcess(), nil
+		},
+	}
+	_, err := adapter.Start(context.Background(), harness.StartRequest{
+		Workspace:  t.TempDir(),
+		Invocation: execution.Invocation{Args: []string{"--mode=text"}},
+	}, &recordingHarnessSink{})
+	if err == nil || !strings.Contains(err.Error(), "must not override") {
+		t.Fatalf("Start() error = %v, want mode override rejection", err)
+	}
+	if called {
+		t.Fatal("Start() launched a process despite a mode override")
+	}
+}
+
+func TestCloseBoundsMissingClearQueueAcknowledgementThenTerminates(t *testing.T) {
+	process := newFakeNativeProcess()
+	adapter := fakePiAdapter(process)
+	adapter.cancelTimeout = 10 * time.Millisecond
+	process.onWrite = func(request Request) {
+		switch request.Type {
+		case CommandGetState:
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "get_state", "success": true, "data": map[string]any{"sessionId": "pi-1", "sessionFile": "C:/sessions/pi-1.jsonl"}})
+		case CommandPrompt:
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "prompt", "success": true})
+			process.emitJSON(t, map[string]any{"type": "agent_start"})
+		case CommandClearQueue:
+			// The missing acknowledgement must not block Close forever or allow
+			// abort to be written out of the documented clear_queue ordering.
+		}
+	}
+	session := startPiSession(t, adapter, harness.StartRequest{Workspace: t.TempDir()}, &recordingHarnessSink{})
+	_ = openPiSession(t, session)
+	if err := session.StartTurn(context.Background(), harness.TurnRequest{Goal: "Make bounded progress.", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v, want process cleanup despite missing native ACK", err)
+	}
+	if writes := process.requestTypes(); strings.Join(writes, ",") != "get_state,prompt,clear_queue" {
+		t.Fatalf("request order = %v, want clear_queue only before fallback", writes)
+	}
+	if got := process.terminateCount(); got != 1 {
+		t.Fatalf("Terminate calls = %d, want one fallback cleanup", got)
+	}
+	result, err := session.Wait(context.Background())
+	if err != nil || result.Kind != harness.ResultFailed {
+		t.Fatalf("Wait() = %+v, %v; want failed unknown outcome after unacknowledged cancel", result, err)
 	}
 }
 
