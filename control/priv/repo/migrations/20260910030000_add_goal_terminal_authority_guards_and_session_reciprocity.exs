@@ -290,7 +290,8 @@ defmodule SymmetryControl.Repo.Migrations.AddGoalTerminalAuthorityGuardsAndSessi
             FROM harness_sessions
             WHERE active_run_id = run.id
           )
-        ) THEN
+        )
+      ) THEN
         RAISE EXCEPTION
           'cannot add Goal final session/run reciprocity guard while existing session/run relationships are inconsistent';
       END IF;
