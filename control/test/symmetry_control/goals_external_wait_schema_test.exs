@@ -97,7 +97,8 @@ defmodule SymmetryControl.GoalsExternalWaitSchemaTest do
       })
 
     refute changeset.valid?
-    assert "cannot transition a terminal external wait" in errors_on(changeset).state
+    assert "terminal external wait is immutable" in errors_on(changeset).state
+    assert "is invalid" in errors_on(changeset).state
   end
 
   test "unsupported waits are terminal and cannot carry a schedule" do
@@ -126,7 +127,8 @@ defmodule SymmetryControl.GoalsExternalWaitSchemaTest do
       })
 
     refute changeset.valid?
-    assert "cannot transition a terminal external wait" in errors_on(changeset).state
+    assert "terminal external wait is immutable" in errors_on(changeset).state
+    assert "is invalid" in errors_on(changeset).state
   end
 
   test "immutable changeset rejects changes to source and target snapshots" do

@@ -2498,8 +2498,11 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
          goal,
          snapshot,
          resource_id,
-         provider_scope \\ frozen_goal_provider_scope([resource_id], ["change.upsert"])
+         provider_scope \\ nil
        ) do
+    provider_scope =
+      provider_scope || frozen_goal_provider_scope([resource_id], ["change.upsert"])
+
     %Task{}
     |> Task.changeset(%{
       idempotency_key: "goal-provider-scope-#{uuid()}",
