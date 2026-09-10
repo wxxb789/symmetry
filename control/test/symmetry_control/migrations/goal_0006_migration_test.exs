@@ -101,7 +101,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
         ]
       )
 
-      Repo.query!("UPDATE tasks SET required_capabilities = $1::jsonb WHERE id = $2", [
+      Repo.query!("UPDATE tasks SET required_capabilities = $1::text::jsonb WHERE id = $2", [
         Jason.encode!(%{"provider_access" => true}),
         provider_task_id
       ])
@@ -195,7 +195,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
       Enum.each(invalid_snapshots, fn snapshot ->
         assert_raise Postgrex.Error, ~r/runs_provider_access_snapshot_shape_check/i, fn ->
           Repo.query!(
-            "UPDATE runs SET provider_access_snapshot = $1::jsonb WHERE id = $2",
+            "UPDATE runs SET provider_access_snapshot = $1::text::jsonb WHERE id = $2",
             [Jason.encode!(snapshot), provider_run_id]
           )
         end
@@ -215,7 +215,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
       }
 
       Repo.query!(
-        "UPDATE runs SET provider_access_snapshot = $1::jsonb WHERE id = $2",
+        "UPDATE runs SET provider_access_snapshot = $1::text::jsonb WHERE id = $2",
         [Jason.encode!(valid_snapshot), provider_run_id]
       )
 
@@ -244,14 +244,14 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
 
       assert %{rows: []} =
                Repo.query!(
-                 "SELECT 1 FROM information_schema.columns WHERE table_name = 'runs' AND column_name = 'provider_access_snapshot'"
+                 "SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'runs' AND column_name = 'provider_access_snapshot'"
                )
 
       migrate_provider_access_snapshot_up!()
 
       assert %{rows: [["provider_access_snapshot"]]} =
                Repo.query!(
-                 "SELECT column_name FROM information_schema.columns WHERE table_name = 'runs' AND column_name = 'provider_access_snapshot'"
+                 "SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'runs' AND column_name = 'provider_access_snapshot'"
                )
     end)
   end
@@ -268,6 +268,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
       ])
 
       migrate_goal_up!()
+      migrate_handoff_lineage_up!()
       task = Repo.get!(Task, Ecto.UUID.cast!(task_id))
 
       assert task.goal_id == nil
@@ -394,11 +395,16 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   test "enforces the planning Task and ContextSnapshot ownership branch" do
     with_schema(fn ->
       migrate_goal_up!()
-      migrate_identity_up!()
-      migrate_planning_task_up!()
+      migrate_integration_designation_up!()
 
       %{goal_id: goal_id, project_id: project_id, work_item_id: work_item_id} =
-        insert_goal_fixture!()
+        insert_goal_fixture!(execution_policy_json(), true)
+
+      second_work_item_id = insert_goal_work_item!(project_id, goal_id)
+
+      migrate_baseline_up!()
+      migrate_identity_up!()
+      migrate_planning_task_up!()
 
       plan_task_id =
         Repo.transaction(fn ->
@@ -432,9 +438,15 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
         end)
       end
 
-      assert_raise Postgrex.Error, ~r/tasks_goal_fields_all_or_none/i, fn ->
-        insert_goal_task!(%{goal_id: goal_id, work_item_id: work_item_id, purpose: "plan"})
-      end
+      assert_raise Postgrex.Error,
+                   ~r/goal_0006_planning_task_requires_goal_scoped_context_snapshot/i,
+                   fn ->
+                     insert_goal_task!(%{
+                       goal_id: goal_id,
+                       work_item_id: work_item_id,
+                       purpose: "plan"
+                     })
+                   end
 
       assert_raise Postgrex.Error, ~r/tasks_goal_fields_all_or_none/i, fn ->
         Repo.transaction(fn ->
@@ -460,8 +472,6 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
                        purpose: "plan"
                      })
                    end
-
-      second_work_item_id = insert_goal_work_item!(project_id, goal_id)
 
       assert_raise Postgrex.Error, ~r/goal_0006_task_context_snapshot_work_item_mismatch/i, fn ->
         insert_goal_task!(%{
@@ -505,6 +515,8 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   test "planning Task identity guards roll back and reapply on a clean tree" do
     with_schema(fn ->
       migrate_goal_up!()
+      migrate_integration_designation_up!()
+      migrate_baseline_up!()
       migrate_identity_up!()
       migrate_planning_task_up!()
       migrate_planning_task_down!()
@@ -513,7 +525,8 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
                Repo.query!("""
                SELECT is_nullable
                FROM information_schema.columns
-               WHERE table_name = 'context_snapshots'
+                WHERE table_schema = current_schema()
+                  AND table_name = 'context_snapshots'
                  AND column_name = 'work_item_id'
                """)
 
@@ -523,7 +536,8 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
                Repo.query!("""
                SELECT is_nullable
                FROM information_schema.columns
-               WHERE table_name = 'context_snapshots'
+                WHERE table_schema = current_schema()
+                  AND table_name = 'context_snapshots'
                  AND column_name = 'work_item_id'
                """)
     end)
@@ -858,12 +872,28 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   test "refuses Oban rollback while an incomplete Goal worker remains queued" do
     with_schema(fn ->
       migrate_goal_up!()
+
+      assert %{rows: [[oban_jobs_before]]} =
+               Repo.query!("SELECT to_regclass('public.oban_jobs')::text")
+
       migrate_oban_up!()
 
-      Repo.query!("""
-       INSERT INTO public.oban_jobs (state, queue, worker, args)
-      VALUES ('available', 'goal_wakeup', 'SymmetryControl.Goals.Workers.WakeupWorker', '{}'::jsonb)
-      """)
+      job_marker = "goal-0006-oban-#{System.unique_integer([:positive])}"
+
+      assert %{rows: [[job_id]]} =
+               Repo.query!(
+                 """
+                 INSERT INTO public.oban_jobs (state, queue, worker, args)
+                 VALUES (
+                   'available',
+                   'goal_wakeup',
+                   'SymmetryControl.Goals.Workers.WakeupWorker',
+                   $1::text::jsonb
+                 )
+                 RETURNING id
+                 """,
+                 [Jason.encode!(%{"goal_0006_test_marker" => job_marker})]
+               )
 
       assert_raise Postgrex.Error,
                    ~r/cannot roll back Oban jobs while queued Goal wakeups exist/i,
@@ -872,10 +902,18 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
       assert %{rows: [["public.oban_jobs"]]} =
                Repo.query!("SELECT to_regclass('public.oban_jobs')::text")
 
-      Repo.query!("DELETE FROM public.oban_jobs")
-      migrate_oban_down!()
+      Repo.query!(
+        "DELETE FROM public.oban_jobs WHERE id = $1 AND args ->> 'goal_0006_test_marker' = $2",
+        [job_id, job_marker]
+      )
 
-      assert %{rows: [[nil]]} = Repo.query!("SELECT to_regclass('public.oban_jobs')::text")
+      if is_nil(oban_jobs_before) do
+        migrate_oban_down!()
+        assert %{rows: [[nil]]} = Repo.query!("SELECT to_regclass('public.oban_jobs')::text")
+      else
+        assert %{rows: [["public.oban_jobs"]]} =
+                 Repo.query!("SELECT to_regclass('public.oban_jobs')::text")
+      end
     end)
   end
 
@@ -1320,7 +1358,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
                  goal_work_item_id
                ])
 
-      assert_raise Postgrex.Error, ~r/work_items_change_target_shape_check/i, fn ->
+      assert_raise Postgrex.Error, ~r/goal_0006_work_item_change_target_immutable/i, fn ->
         Repo.query!(
           "UPDATE work_items SET change_target = '{\"kind\": \"branches\", \"source_branch\": \"feature\", \"target_branch\": \"main\", \"unexpected\": true}'::jsonb WHERE id = $1",
           [goal_work_item_id]
@@ -1651,6 +1689,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
         )
       end
 
+      dependency_baseline_id = insert_work_item!(project_id, repository_id)
       dependency_id = insert_work_item!(project_id, repository_id)
       target_id = insert_work_item!(project_id, repository_id)
 
@@ -1659,10 +1698,20 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
           """
           UPDATE work_items
           SET goal_id = $1, admitted_revision = 1, acceptance_contract = '{}'::jsonb,
-              baseline_subject = $3::text::jsonb, integration = TRUE
+              baseline_subject = $3::text::jsonb
           WHERE id = $2
           """,
-          [goal_id, dependency_id, Jason.encode!(subject(repository_id))]
+          [goal_id, dependency_baseline_id, Jason.encode!(subject(repository_id))]
+        )
+
+        Repo.query!(
+          """
+          UPDATE work_items
+          SET goal_id = $1, admitted_revision = 1, acceptance_contract = '{}'::jsonb,
+              baseline_dependency_id = $2, integration = TRUE
+          WHERE id = $3
+          """,
+          [goal_id, dependency_baseline_id, dependency_id]
         )
 
         Repo.query!(
@@ -1681,6 +1730,14 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
           VALUES ($1, $2, $3, now())
           """,
           [goal_id, target_id, dependency_id]
+        )
+
+        Repo.query!(
+          """
+          INSERT INTO work_dependencies (goal_id, work_item_id, depends_on_id, inserted_at)
+          VALUES ($1, $2, $3, now())
+          """,
+          [goal_id, dependency_id, dependency_baseline_id]
         )
       end)
 
@@ -1844,7 +1901,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
       Repo.query!(
         """
         UPDATE work_items
-        SET goal_id = $1, admitted_revision = 1, acceptance_contract = '{}'::jsonb
+        SET goal_id = $1, admitted_revision = 1, acceptance_contract = '{}'::jsonb, integration = TRUE
         WHERE id = $2
         """,
         [goal_id, work_item_id]
@@ -1948,8 +2005,12 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
     with_schema(fn ->
       migrate_goal_up!()
       migrate_integration_designation_up!()
+
       migrate_baseline_up!()
       migrate_identity_up!()
+
+      migrate_terminal_policy_up!()
+      migrate_terminal_authority_up!()
 
       project_id = insert_project!()
       resource_id = insert_repository_resource!(project_id)
@@ -2372,6 +2433,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
     with_schema(fn ->
       migrate_goal_up!()
       migrate_integration_designation_up!()
+
       migrate_baseline_up!()
       migrate_identity_up!()
       migrate_terminal_policy_up!()
@@ -2540,6 +2602,9 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
     with_schema(fn ->
       migrate_goal_up!()
       migrate_integration_designation_up!()
+
+      %{goal_id: goal_id} = insert_goal_fixture!(protected_execution_policy_json(%{}), true)
+
       migrate_baseline_up!()
       migrate_identity_up!()
       migrate_terminal_policy_up!()
@@ -2559,8 +2624,6 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
 
       migrate_terminal_authority_down!()
       migrate_terminal_authority_up!()
-
-      %{goal_id: goal_id} = insert_goal_fixture!(protected_execution_policy_json(%{}))
 
       Repo.query!("UPDATE goals SET state = 'cancelled', next_wake_at = NULL WHERE id = $1", [
         goal_id
@@ -2713,6 +2776,10 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
 
       source_task_id = insert_goal_task!(%{goal_id: goal_id, work_item_id: work_item_id})
 
+      missing_input_work_item_id = insert_goal_work_item!(project_id, goal_id)
+      different_input_work_item_id = insert_goal_work_item!(project_id, goal_id)
+      noncanonical_input_work_item_id = insert_goal_work_item!(project_id, goal_id)
+
       %{goal_id: other_goal_id, work_item_id: other_goal_work_item_id} =
         insert_goal_fixture!(protected_execution_policy_json(%{}), true)
 
@@ -2738,7 +2805,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
       source_result = %{"kind" => "progress"}
 
       Repo.query!(
-        "UPDATE tasks SET state = 'completed', current_generation = 1, result = $1::jsonb WHERE id = $2",
+        "UPDATE tasks SET state = 'completed', current_generation = 1, result = $1::text::jsonb WHERE id = $2",
         [Jason.encode!(source_result), source_task_id]
       )
 
@@ -2759,7 +2826,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
         )
       end
 
-      Repo.query!("UPDATE runs SET result = $1::jsonb WHERE id = $2", [
+      Repo.query!("UPDATE runs SET result = $1::text::jsonb WHERE id = $2", [
         Jason.encode!(source_result),
         source_run_id
       ])
@@ -2836,7 +2903,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
       end
 
       assert_raise Postgrex.Error, ~r/goal_0006_handoff_source_run_mismatch/i, fn ->
-        insert_handoff_task!(goal_id, work_item_id, 1, source_run_id, %{
+        insert_handoff_task!(goal_id, missing_input_work_item_id, 1, source_run_id, %{
           "session_mode" => "handoff"
         })
       end
@@ -2844,7 +2911,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
       assert_raise Postgrex.Error, ~r/goal_0006_handoff_source_run_mismatch/i, fn ->
         insert_handoff_task!(
           goal_id,
-          work_item_id,
+          different_input_work_item_id,
           1,
           source_run_id,
           handoff_input(Ecto.UUID.bingenerate())
@@ -2854,10 +2921,13 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
       assert_raise Postgrex.Error, ~r/goal_0006_handoff_source_run_mismatch/i, fn ->
         insert_handoff_task!(
           goal_id,
-          work_item_id,
+          noncanonical_input_work_item_id,
           1,
           source_run_id,
-          handoff_input(String.upcase(source_run_id))
+          %{
+            "session_mode" => "handoff",
+            "handoff_source_run_id" => String.upcase(Ecto.UUID.cast!(source_run_id))
+          }
         )
       end
 
@@ -2911,9 +2981,10 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
       generation_source_task_id =
         insert_goal_task!(%{goal_id: goal_id, work_item_id: same_goal_other_work_item_id})
 
-      Repo.query!("UPDATE tasks SET state = 'completed', current_generation = 2 WHERE id = $1", [
-        generation_source_task_id
-      ])
+      Repo.query!(
+        "UPDATE tasks SET state = 'completed', current_generation = 2, attempt_generation = 2 WHERE id = $1",
+        [generation_source_task_id]
+      )
 
       generation_source_run_id =
         insert_terminal_goal_run!(generation_source_task_id, runtime_id, "completed")
@@ -3088,17 +3159,24 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
 
   defp with_schema(test) do
     load_migration_modules!()
-    schema = "goal_0006_migration_#{System.unique_integer([:positive])}"
+
+    schema =
+      "goal_0006_migration_#{System.system_time(:microsecond)}_#{System.unique_integer([:positive])}"
+
     create_schema!(schema)
-    repo = start_schema_repo(schema)
-    previous_dynamic_repo = Repo.put_dynamic_repo(repo)
 
     try do
-      migrate_base_up!()
-      test.()
+      repo = start_schema_repo(schema)
+      previous_dynamic_repo = Repo.put_dynamic_repo(repo)
+
+      try do
+        migrate_base_up!()
+        test.()
+      after
+        Repo.put_dynamic_repo(previous_dynamic_repo)
+        GenServer.stop(repo)
+      end
     after
-      Repo.put_dynamic_repo(previous_dynamic_repo)
-      GenServer.stop(repo)
       drop_schema!(schema)
     end
   end
@@ -3878,7 +3956,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
         goal_id, goal_revision, context_snapshot_id, purpose, validation_of_task_id, admission_key,
         max_run_attempts, requested_session_id, handoff_source_run_id, inserted_at, updated_at
       )
-      VALUES ($1, $2, $3, 'Goal task', 'codex', 'primary', $4::jsonb, '{}'::jsonb,
+      VALUES ($1, $2, $3, 'Goal task', 'codex', 'primary', $4::text::jsonb, '{}'::jsonb,
               'queued', 0, 1, $5, $6, $7, $8, 'implement', NULL, $9, 2, NULL, $10, now(), now())
       """,
       [
@@ -3945,7 +4023,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
           goal_id, goal_revision, context_snapshot_id, purpose, validation_of_task_id, admission_key,
           max_run_attempts, requested_session_id, handoff_source_run_id, inserted_at, updated_at
         )
-        VALUES ($1, $2, $3, 'Goal plan', 'codex', 'primary', $4::jsonb, '{}'::jsonb,
+        VALUES ($1, $2, $3, 'Goal plan', 'codex', 'primary', $4::text::jsonb, '{}'::jsonb,
                 'queued', 0, 1, NULL, $5, 1, $6, 'plan', NULL, $7, 2, NULL, $8, now(), now())
         """,
         [
@@ -3963,7 +4041,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   end
 
   defp handoff_input(source_run_id) do
-    %{"session_mode" => "handoff", "handoff_source_run_id" => source_run_id}
+    %{"session_mode" => "handoff", "handoff_source_run_id" => Ecto.UUID.cast!(source_run_id)}
   end
 
   defp insert_context_snapshot_at_revision!(goal_id, work_item_id, revision) do
