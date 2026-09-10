@@ -99,6 +99,131 @@ func TestGoalSessionLaunchIntentReplayAndConflict(t *testing.T) {
 	}
 }
 
+func TestGoalSessionHandoffLaunchIntentReplayPreservesSourceLineage(t *testing.T) {
+	store := mustStore(t)
+	intent := testGoalSessionIntent()
+	intent.SessionMode = GoalSessionModeHandoff
+	intent.HandoffSourceRunID = "00000000-0000-4000-8000-000000000090"
+
+	first, err := store.SaveGoalSessionLaunchIntent(intent)
+	if err != nil {
+		t.Fatalf("SaveGoalSessionLaunchIntent() error = %v", err)
+	}
+	if first.HandoffSourceRunID != intent.HandoffSourceRunID || first.NativeSessionID != "" || first.NativeSessionFilename != "" {
+		t.Fatalf("handoff launch intent = %#v, want source provenance without a native handle", first)
+	}
+	replayed, err := store.SaveGoalSessionLaunchIntent(intent)
+	if err != nil {
+		t.Fatalf("replay SaveGoalSessionLaunchIntent() error = %v", err)
+	}
+	if replayed != first {
+		t.Fatalf("handoff replay = %#v, want %#v", replayed, first)
+	}
+
+	changedSource := intent
+	changedSource.HandoffSourceRunID = "00000000-0000-4000-8000-000000000091"
+	if _, err := store.SaveGoalSessionLaunchIntent(changedSource); !errors.Is(err, ErrGoalSessionConflict) {
+		t.Fatalf("changed handoff source error = %v, want ErrGoalSessionConflict", err)
+	}
+}
+
+func TestGoalSessionHandoffLaunchIntentValidationKeepsNativeSessionsFresh(t *testing.T) {
+	base := testGoalSessionIntent()
+	validSource := "00000000-0000-4000-8000-000000000092"
+
+	tests := []struct {
+		name   string
+		intent GoalSessionLaunchIntent
+	}{
+		{
+			name: "handoff requires source Run UUID",
+			intent: func() GoalSessionLaunchIntent {
+				intent := base
+				intent.SessionMode = GoalSessionModeHandoff
+				return intent
+			}(),
+		},
+		{
+			name: "handoff rejects malformed source Run UUID",
+			intent: func() GoalSessionLaunchIntent {
+				intent := base
+				intent.SessionMode = GoalSessionModeHandoff
+				intent.HandoffSourceRunID = "not-a-uuid"
+				return intent
+			}(),
+		},
+		{
+			name: "fresh rejects handoff source Run",
+			intent: func() GoalSessionLaunchIntent {
+				intent := base
+				intent.HandoffSourceRunID = validSource
+				return intent
+			}(),
+		},
+		{
+			name: "resume rejects handoff source Run",
+			intent: func() GoalSessionLaunchIntent {
+				intent := base
+				intent.SessionMode = GoalSessionModeResume
+				intent.HandoffSourceRunID = validSource
+				return intent
+			}(),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := mustStore(t).SaveGoalSessionLaunchIntent(test.intent); err == nil {
+				t.Fatal("SaveGoalSessionLaunchIntent() succeeded with invalid handoff lineage")
+			}
+		})
+	}
+}
+
+func TestGoalSessionHandoffLineageSurvivesRestartAndRecovery(t *testing.T) {
+	directory := t.TempDir()
+	store, err := New(directory)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	intent := testGoalSessionIntent()
+	intent.SessionMode = GoalSessionModeHandoff
+	intent.HandoffSourceRunID = "00000000-0000-4000-8000-000000000093"
+	saved, err := store.SaveGoalSessionLaunchIntent(intent)
+	if err != nil {
+		t.Fatalf("SaveGoalSessionLaunchIntent() error = %v", err)
+	}
+	if _, err := store.MarkGoalSessionLaunchStarted(saved.Key()); err != nil {
+		t.Fatalf("MarkGoalSessionLaunchStarted() error = %v", err)
+	}
+	if _, err := store.MarkGoalSessionUncertain(saved.Key(), "restart after fresh handoff launch"); err != nil {
+		t.Fatalf("MarkGoalSessionUncertain() error = %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	restarted, err := New(directory)
+	if err != nil {
+		t.Fatalf("restart New() error = %v", err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	loaded, err := restarted.LoadGoalSession(saved.Key())
+	if err != nil {
+		t.Fatalf("LoadGoalSession() error = %v", err)
+	}
+	if loaded.HandoffSourceRunID != intent.HandoffSourceRunID || loaded.NativeSessionID != "" || loaded.NativeSessionFilename != "" || !loaded.NeedsReconciliation() {
+		t.Fatalf("restarted handoff journal = %#v", loaded)
+	}
+
+	recovered, err := restarted.ResolveGoalSessionUncertain(saved.Key(), GoalSessionHandle{NativeSessionID: "fresh-handoff-native-session"}, testGoalSessionCompatibility())
+	if err != nil {
+		t.Fatalf("ResolveGoalSessionUncertain() error = %v", err)
+	}
+	if recovered.HandoffSourceRunID != intent.HandoffSourceRunID || recovered.NativeSessionID != "fresh-handoff-native-session" || recovered.NativeSessionFilename != "" {
+		t.Fatalf("recovered handoff journal = %#v", recovered)
+	}
+}
+
 func TestGoalSessionConcurrentIntentReplayIsSerialized(t *testing.T) {
 	store := mustStore(t)
 	intent := testGoalSessionIntent()

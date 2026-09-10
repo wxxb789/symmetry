@@ -136,14 +136,18 @@ type goalSessionLineageEntry struct {
 // persisted before starting a native session. It contains no native session
 // ID or native filename; those are written only after native creation.
 type GoalSessionLaunchIntent struct {
-	LaunchIntentID         string `json:"launch_intent_id"`
-	GoalID                 string `json:"goal_id"`
-	GoalRevision           int64  `json:"goal_revision"`
-	WorkItemID             string `json:"work_item_id,omitempty"`
-	TaskID                 string `json:"task_id,omitempty"`
-	RunID                  string `json:"run_id,omitempty"`
-	Generation             int64  `json:"generation,omitempty"`
-	AdmissionID            string `json:"admission_id,omitempty"`
+	LaunchIntentID string `json:"launch_intent_id"`
+	GoalID         string `json:"goal_id"`
+	GoalRevision   int64  `json:"goal_revision"`
+	WorkItemID     string `json:"work_item_id,omitempty"`
+	TaskID         string `json:"task_id,omitempty"`
+	RunID          string `json:"run_id,omitempty"`
+	Generation     int64  `json:"generation,omitempty"`
+	AdmissionID    string `json:"admission_id,omitempty"`
+	// HandoffSourceRunID records the completed Run whose accepted context is
+	// continuing in a newly created local native session. It is provenance,
+	// never a native-session handle, and only applies to handoff admissions.
+	HandoffSourceRunID     string `json:"handoff_source_run_id,omitempty"`
 	LocalHandleID          string `json:"local_handle_id"`
 	OwnerID                string `json:"owner_id,omitempty"`
 	MachineID              string `json:"machine_id,omitempty"`
@@ -1081,7 +1085,7 @@ func validateGoalSessionLineageKey(lineage GoalSessionLineageKey) error {
 }
 
 func validateGoalSessionIntent(intent GoalSessionLaunchIntent) error {
-	if err := validateGoalSessionKey(intent.Key()); err != nil || !validRequiredString(intent.LaunchIntentID, 4096) || intent.GoalRevision <= 0 || intent.Generation < 0 || len(intent.WorkItemID) > 4096 || len(intent.TaskID) > 4096 || len(intent.RunID) > 4096 || len(intent.AdmissionID) > 4096 {
+	if err := validateGoalSessionKey(intent.Key()); err != nil || !validRequiredString(intent.LaunchIntentID, 4096) || intent.GoalRevision <= 0 || intent.Generation < 0 || len(intent.WorkItemID) > 4096 || len(intent.TaskID) > 4096 || len(intent.RunID) > 4096 || len(intent.AdmissionID) > 4096 || len(intent.HandoffSourceRunID) > 36 {
 		return errors.New("goal session launch intent is invalid")
 	}
 	if intent.RunID != "" && intent.Generation <= 0 {
@@ -1092,6 +1096,16 @@ func validateGoalSessionIntent(intent GoalSessionLaunchIntent) error {
 	}
 	if intent.RuntimeEpoch < 0 || !validRequiredString(intent.HarnessKind, 4096) || !validRequiredString(intent.HarnessVersion, 4096) || !validRequiredString(intent.AdapterVersion, 4096) || intent.AdapterProtocolVersion <= 0 || !validRequiredString(intent.WorkspaceFingerprint, 4096) || !validGoalSessionMode(intent.SessionMode) {
 		return errors.New("goal session launch identity is invalid")
+	}
+	switch intent.SessionMode {
+	case GoalSessionModeHandoff:
+		if !validGoalSessionUUID(intent.HandoffSourceRunID) {
+			return errors.New("goal session handoff source Run ID is invalid")
+		}
+	case GoalSessionModeFresh, GoalSessionModeResume:
+		if intent.HandoffSourceRunID != "" {
+			return errors.New("goal session handoff source Run ID is invalid")
+		}
 	}
 	return nil
 }
@@ -1179,6 +1193,24 @@ func validGoalSessionMode(value string) bool {
 	default:
 		return false
 	}
+}
+
+func validGoalSessionUUID(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for index, character := range value {
+		if index == 8 || index == 13 || index == 18 || index == 23 {
+			if character != '-' {
+				return false
+			}
+			continue
+		}
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return value[14] >= '1' && value[14] <= '5' && strings.ContainsRune("89ab", rune(value[19]))
 }
 
 func sameGoalSessionIntent(left, right GoalSessionLaunchIntent) bool {
