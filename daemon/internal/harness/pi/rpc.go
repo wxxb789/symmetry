@@ -777,6 +777,21 @@ func (validator *Validator) Finish() (NativeCompletion, error) {
 	}, nil
 }
 
+// SessionState returns the identity observed through a correlated get_state
+// response. It is intended for the owning serial transport loop only.
+func (validator *Validator) SessionState() (SessionState, bool) {
+	if validator == nil || validator.state == nil {
+		return SessionState{}, false
+	}
+	return *validator.state, true
+}
+
+// Settled reports only the documented native settlement boundary. It does not
+// imply a semantic task result or an accepted engineering outcome.
+func (validator *Validator) Settled() bool {
+	return validator != nil && validator.settled
+}
+
 func normalAssistantStop(raw json.RawMessage) error {
 	object, err := strictObject(raw)
 	if err != nil {
@@ -809,4 +824,43 @@ func DecodeTaskResultJSON(raw json.RawMessage) (protocol.TaskResult, error) {
 		return protocol.TaskResult{}, fmt.Errorf("%w: %v", ErrInvalidTaskResult, err)
 	}
 	return result, nil
+}
+
+// DecodeAssistantTaskResult accepts the one deliberate output convention used
+// by the private pi adapter: a complete assistant message with exactly one text
+// content block whose entire text is a canonical Symmetry TaskResult JSON
+// object. It never searches prose, deltas, fences, or multiple text blocks.
+func DecodeAssistantTaskResult(raw json.RawMessage) (protocol.TaskResult, error) {
+	message, err := strictObject(raw)
+	if err != nil {
+		return protocol.TaskResult{}, fmt.Errorf("%w: assistant message: %v", ErrInvalidTaskResult, err)
+	}
+	role, ok := message["role"]
+	var roleName string
+	if !ok || !nonEmptyString(role, &roleName) || roleName != "assistant" {
+		return protocol.TaskResult{}, ErrInvalidTaskResult
+	}
+	content, ok := message["content"]
+	if !ok || !isJSONArray(content) {
+		return protocol.TaskResult{}, ErrInvalidTaskResult
+	}
+	var blocks []json.RawMessage
+	if err := json.Unmarshal(content, &blocks); err != nil || len(blocks) != 1 {
+		return protocol.TaskResult{}, ErrInvalidTaskResult
+	}
+	block, err := strictObject(blocks[0])
+	if err != nil {
+		return protocol.TaskResult{}, ErrInvalidTaskResult
+	}
+	kind, ok := block["type"]
+	var kindName string
+	if !ok || !nonEmptyString(kind, &kindName) || kindName != "text" {
+		return protocol.TaskResult{}, ErrInvalidTaskResult
+	}
+	text, ok := block["text"]
+	var resultJSON string
+	if !ok || !nonEmptyString(text, &resultJSON) {
+		return protocol.TaskResult{}, ErrInvalidTaskResult
+	}
+	return DecodeTaskResultJSON(json.RawMessage(resultJSON))
 }
