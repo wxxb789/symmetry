@@ -414,6 +414,9 @@ func (process *Process) Wait() Result {
 // ProcessDetails returns the restart-safe identity recorded when this process
 // was started. Both values remain stable for the Process lifetime.
 func (process *Process) ProcessDetails() (int, string) {
+	if process == nil {
+		return 0, ""
+	}
 	return process.PID, process.Identity
 }
 

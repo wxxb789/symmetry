@@ -5,18 +5,23 @@ package platform
 import (
 	"errors"
 	"os/exec"
+	"syscall"
 	"testing"
 )
 
-func TestConfigureProcessRequestsBreakawayFromInheritedJob(t *testing.T) {
+func TestConfigureProcessDoesNotRequireBreakawayFromInheritedJob(t *testing.T) {
 	command := exec.Command("example.exe")
 	ConfigureProcess(command)
 
-	if command.SysProcAttr == nil {
-		t.Fatal("ConfigureProcess() did not configure SysProcAttr")
+	if command.SysProcAttr != nil {
+		t.Fatalf("ConfigureProcess() changed SysProcAttr = %#v", command.SysProcAttr)
 	}
-	if command.SysProcAttr.CreationFlags&createBreakawayFromJob == 0 {
-		t.Fatalf("CreationFlags = %#x, want CREATE_BREAKAWAY_FROM_JOB", command.SysProcAttr.CreationFlags)
+
+	attributes := &syscall.SysProcAttr{CreationFlags: 0x00000200}
+	command.SysProcAttr = attributes
+	ConfigureProcess(command)
+	if command.SysProcAttr != attributes || command.SysProcAttr.CreationFlags != 0x00000200 {
+		t.Fatalf("ConfigureProcess() changed existing SysProcAttr = %#v", command.SysProcAttr)
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -55,6 +56,7 @@ var (
 	errLeaseDeadlineReached = errors.New("lease renewal deadline reached")
 	errOutboxChanged        = errors.New("outbox changed during delivery")
 	errInputWriteTimeout    = errors.New("agent did not consume standard input within the write timeout")
+	errStartProcessNil      = errors.New("start process returned nil")
 	errInvalidAdmission     = errors.New("invalid symmetry.admission.v1")
 	errMissingResult        = errors.New("missing_result")
 	workspaceFingerprint    = workspace.Fingerprint
@@ -2187,6 +2189,12 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 			return recordErr
 		},
 	}, sink)
+	if isNilProcess(process) {
+		process = nil
+		if err == nil {
+			err = errStartProcessNil
+		}
+	}
 	if err != nil {
 		if cause := context.Cause(executionContext); errors.Is(cause, errRequiredDecisionPacket) {
 			err = cause
@@ -2475,11 +2483,27 @@ func (daemon *daemon) isTerminal(key state.RunKey) bool {
 }
 
 func processDetails(process Process) (int, string, error) {
+	if isNilProcess(process) {
+		return 0, "", errors.New("process does not expose a persistent identity")
+	}
 	pid, identity := process.ProcessDetails()
 	if pid > 0 && identity != "" {
 		return pid, identity, nil
 	}
 	return 0, "", errors.New("process does not expose a persistent identity")
+}
+
+func isNilProcess(process Process) bool {
+	if process == nil {
+		return true
+	}
+	value := reflect.ValueOf(process)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 func parseAdmissionInput(input json.RawMessage) (protocol.Admission, bool, error) {

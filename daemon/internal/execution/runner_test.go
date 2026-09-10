@@ -208,6 +208,14 @@ func TestStartRejectsAnAlreadyCancelledContext(t *testing.T) {
 	}
 }
 
+func TestProcessDetailsNilReceiverHasNoIdentity(t *testing.T) {
+	var process *Process
+	pid, identity := process.ProcessDetails()
+	if pid != 0 || identity != "" {
+		t.Fatalf("ProcessDetails() = (%d, %q), want empty identity", pid, identity)
+	}
+}
+
 func TestStartPersistsProcessIdentityBeforeStartingOutputReaders(t *testing.T) {
 	sink := &recordingSink{}
 	invocation := helperInvocation("stdout", "64")

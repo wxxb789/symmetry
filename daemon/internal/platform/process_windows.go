@@ -17,7 +17,6 @@ import (
 const (
 	jobObjectExtendedLimitInformation = 9
 	jobObjectLimitKillOnJobClose      = 0x00002000
-	createBreakawayFromJob            = 0x01000000
 	processTerminate                  = 0x0001
 	processSetQuota                   = 0x0100
 )
@@ -74,16 +73,11 @@ type jobContainment struct {
 	pid    int
 }
 
-// ConfigureProcess requests that the child leave an inherited CI/service Job
-// Object before AttachProcess places it in the daemon-owned Job Object. Windows
-// honors this only when the inherited job permits breakaway; otherwise the
-// subsequent attachment remains fail-closed and cleans up the launched tree.
-func ConfigureProcess(command *exec.Cmd) {
-	if command.SysProcAttr == nil {
-		command.SysProcAttr = &syscall.SysProcAttr{}
-	}
-	command.SysProcAttr.CreationFlags |= createBreakawayFromJob
-}
+// ConfigureProcess leaves inherited Job Object handling to AttachProcess.
+// CREATE_BREAKAWAY_FROM_JOB fails before the child starts when an inherited
+// CI Job Object does not permit it, while AssignProcessToJobObject retains the
+// existing fail-closed containment path.
+func ConfigureProcess(_ *exec.Cmd) {}
 
 // AttachProcess adds the root process to a fresh Job Object. The kill-on-close
 // limit makes descendants die even after the root exits or they are reparented.

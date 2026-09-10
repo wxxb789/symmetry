@@ -8284,6 +8284,45 @@ func TestStartFailureRetainsReturnedProcessUntilItExits(t *testing.T) {
 	}
 }
 
+func TestStartAssignedRejectsTypedNilProcess(t *testing.T) {
+	store, err := state.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var process *typedNilProcess
+	daemon := &daemon{
+		config:       testConfig(t),
+		store:        store,
+		control:      &fakeControl{},
+		workspace:    &fakeWorkspace{},
+		start:        func(context.Context, execution.Invocation, execution.Sink) (Process, error) { return process, nil },
+		options:      options{newID: ids(), clock: time.Now},
+		runtimeID:    "runtime-1",
+		runtimeEpoch: 1,
+		running:      make(map[state.RunKey]*runningRun),
+		slots:        make(chan struct{}, 1),
+	}
+	key := state.RunKey{RunID: "run-1", Generation: 1}
+	daemon.startAssignment(context.Background(), protocol.Assignment{RunID: key.RunID, Generation: key.Generation, Work: protocol.Work{Goal: "work"}})
+	daemon.workers.Wait()
+
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.TerminalState != "failed" || journal.PID != 0 || journal.ProcessIdentity != "" {
+		t.Fatalf("typed nil process journal = %#v", journal)
+	}
+}
+
+func TestProcessDetailsRejectsTypedNilProcess(t *testing.T) {
+	var process *typedNilProcess
+	if _, _, err := processDetails(process); err == nil {
+		t.Fatal("processDetails() error = nil, want typed-nil process failure")
+	}
+}
+
 func TestRunShutdownDoesNotWaitForUnresolvedProcessReturnedWithStartError(t *testing.T) {
 	store, err := state.New(t.TempDir())
 	if err != nil {
@@ -8358,6 +8397,15 @@ type startFailureProcess struct {
 	waitOnce     sync.Once
 	terminations int
 }
+
+type typedNilProcess struct{}
+
+func (*typedNilProcess) WriteInput([]byte) error { panic("unexpected WriteInput") }
+func (*typedNilProcess) Terminate(context.Context, time.Duration) error {
+	panic("unexpected Terminate")
+}
+func (*typedNilProcess) Wait() execution.Result        { panic("unexpected Wait") }
+func (*typedNilProcess) ProcessDetails() (int, string) { panic("unexpected ProcessDetails") }
 
 func newStartFailureProcess() *startFailureProcess {
 	return &startFailureProcess{waitStarted: make(chan struct{}), releaseWait: make(chan struct{})}
