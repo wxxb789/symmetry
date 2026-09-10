@@ -5128,8 +5128,12 @@ defmodule SymmetryControl.Goals do
   defp apply_command!(goal, %{kind: "amend", payload: payload}, actor_ref, opts) do
     if goal.state not in ["draft", "active", "paused"], do: rollback(:invalid_transition)
 
-    revision_contract = required_map!(payload, :revision_contract)
     reason = required_string!(payload, :reason)
+
+    revision_contract =
+      payload
+      |> required_map!(:revision_contract)
+      |> Map.put("reason", reason)
 
     case valid_initial_revision(revision_contract, opts) do
       :ok -> :ok
