@@ -166,7 +166,7 @@ jobs:
             raise "Goal rollout is disabled"
           end
 
-          unless is_pid(Process.whereis(Oban)) do
+          unless is_pid(Oban.whereis(Oban)) do
             raise "Oban supervisor is not running"
           end
 
