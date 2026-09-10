@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -28,7 +29,41 @@ const (
 var (
 	errNativeSessionClosed = errors.New("pi native session is closed")
 	errNativeProcessNil    = errors.New("pi native process starter returned a nil process")
+	// ErrResumeRejected identifies a local pi resume that cannot safely bind to
+	// the retained native session selected by the daemon.
+	ErrResumeRejected = errors.New("pi native resume rejected")
 )
+
+// ResumeRejectedError preserves the native or local validation cause while
+// allowing the caller to classify the admission as resume_rejected.
+type ResumeRejectedError struct {
+	Cause error
+}
+
+func (err *ResumeRejectedError) Error() string {
+	if err == nil || err.Cause == nil {
+		return ErrResumeRejected.Error()
+	}
+	return fmt.Sprintf("%s: %v", ErrResumeRejected, err.Cause)
+}
+
+func (err *ResumeRejectedError) Unwrap() []error {
+	if err == nil || err.Cause == nil {
+		return []error{ErrResumeRejected}
+	}
+	return []error{ErrResumeRejected, err.Cause}
+}
+
+func resumeRejected(cause error) error {
+	if cause == nil {
+		return &ResumeRejectedError{}
+	}
+	var rejected *ResumeRejectedError
+	if errors.As(cause, &rejected) {
+		return cause
+	}
+	return &ResumeRejectedError{Cause: cause}
+}
 
 // nativeProcess is the test seam at the existing execution.Runner boundary.
 // Production construction always uses execution.NewRunner.
@@ -116,13 +151,14 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 	if request.Limits.MaxCostMicrousd != nil {
 		return nil, unsupported(harness.CapabilityHardCostLimit, "pi provider-enforced hard cost limits are not verified")
 	}
-	if request.Resume != nil {
-		return nil, unsupported(harness.CapabilityResume, "pi native resume is not verified")
-	}
 	if len(request.Invocation.InitialInput) != 0 || request.Invocation.CloseInputAfterInitial {
 		return nil, errors.New("pi native transport does not accept legacy initial input")
 	}
-	args, err := piRPCArgs(request.Invocation.Args)
+	resumeState, err := piResumeState(request.Resume)
+	if err != nil {
+		return nil, err
+	}
+	args, err := piRPCArgs(request.Invocation.Args, resumeState)
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +171,7 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 	if cancelTimeout <= 0 {
 		cancelTimeout = nativeCancelTimeout
 	}
-	session := newNativeSession(processContext, cancel, sink, cancelTimeout)
+	session := newNativeSession(processContext, cancel, sink, cancelTimeout, resumeState)
 	invocation := execution.Invocation{
 		Program:        adapter.executable,
 		Args:           args,
@@ -188,10 +224,14 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 
 // piRPCArgs preserves profile flags while preventing a transport override or a
 // positional startup prompt before Open establishes a native session handle.
+// A resume session path is daemon-owned and cannot be supplied by a profile.
 // execution.Runner launches argv directly, never through a command shell.
-func piRPCArgs(profileArgs []string) ([]string, error) {
-	args := make([]string, 0, len(profileArgs)+2)
+func piRPCArgs(profileArgs []string, resumeState *SessionState) ([]string, error) {
+	args := make([]string, 0, len(profileArgs)+4)
 	args = append(args, "--mode", "rpc")
+	if resumeState != nil {
+		args = append(args, "--session", resumeState.SessionFile)
+	}
 	for _, argument := range profileArgs {
 		if strings.IndexByte(argument, 0) >= 0 {
 			return nil, errors.New("pi invocation argument contains NUL")
@@ -208,6 +248,44 @@ func piRPCArgs(profileArgs []string) ([]string, error) {
 		args = append(args, argument)
 	}
 	return args, nil
+}
+
+// piResumeState validates the daemon-local handle before pi is launched. pi
+// remains responsible for loading the session, and Open then binds the exact
+// returned session ID and file through a correlated get_state response.
+func piResumeState(resume *harness.ResumeHandle) (*SessionState, error) {
+	if resume == nil {
+		return nil, nil
+	}
+	if strings.TrimSpace(resume.LocalHandleID) == "" {
+		return nil, resumeRejected(errors.New("local handle ID is missing"))
+	}
+	if strings.TrimSpace(resume.NativeSessionID) == "" {
+		return nil, resumeRejected(errors.New("native session ID is missing"))
+	}
+	if strings.TrimSpace(resume.NativeSessionFilename) == "" {
+		return nil, resumeRejected(errors.New("native session filename is missing"))
+	}
+	if !filepath.IsAbs(resume.NativeSessionFilename) {
+		return nil, resumeRejected(errors.New("native session filename must be absolute"))
+	}
+	if strings.IndexByte(resume.NativeSessionFilename, 0) >= 0 {
+		return nil, resumeRejected(errors.New("native session filename contains NUL"))
+	}
+	info, err := os.Stat(resume.NativeSessionFilename)
+	if err != nil {
+		return nil, resumeRejected(fmt.Errorf("native session file is unavailable: %w", err))
+	}
+	if !info.Mode().IsRegular() {
+		return nil, resumeRejected(errors.New("native session filename is not a regular file"))
+	}
+	if strings.TrimSpace(resume.WorkspaceFingerprint) == "" {
+		return nil, resumeRejected(errors.New("workspace fingerprint is missing"))
+	}
+	if resume.NativeVersion != TestedVersion {
+		return nil, resumeRejected(fmt.Errorf("native version %q is not compatible with pi %s transport", resume.NativeVersion, TestedVersion))
+	}
+	return &SessionState{SessionID: resume.NativeSessionID, SessionFile: resume.NativeSessionFilename}, nil
 }
 
 func forbiddenFreshSessionArgument(argument string) bool {
@@ -265,6 +343,7 @@ type nativeSession struct {
 	failure              error
 	processResult        *execution.Result
 	closeNormalCandidate bool
+	resumeState          *SessionState
 
 	turnDone   chan struct{}
 	turnOnce   sync.Once
@@ -285,14 +364,20 @@ type closeAttempt struct {
 	err  error
 }
 
-func newNativeSession(ctx context.Context, cancel context.CancelFunc, sink harness.EventSink, cancelTimeout time.Duration) *nativeSession {
+func newNativeSession(ctx context.Context, cancel context.CancelFunc, sink harness.EventSink, cancelTimeout time.Duration, resumeState *SessionState) *nativeSession {
+	var expected *SessionState
+	if resumeState != nil {
+		copied := *resumeState
+		expected = &copied
+	}
 	return &nativeSession{
 		context:       ctx,
 		cancel:        cancel,
 		sink:          sink,
 		cancelTimeout: cancelTimeout,
 		decoder:       NewDecoder(defaultMaxRecordBytes),
-		validator:     NewValidator(nil),
+		validator:     NewValidator(expected),
+		resumeState:   expected,
 		pending:       make(map[string]chan Response),
 		turnDone:      make(chan struct{}),
 		resultDone:    make(chan struct{}),
@@ -356,6 +441,9 @@ func (session *nativeSession) Open(ctx context.Context) (harness.NativeSessionHa
 		return harness.NativeSessionHandle{}, err
 	}
 	if _, err := session.call(ctx, request); err != nil {
+		if session.resumeState != nil {
+			return harness.NativeSessionHandle{}, resumeRejected(fmt.Errorf("get resumed pi session state: %w", err))
+		}
 		return harness.NativeSessionHandle{}, fmt.Errorf("get pi session state: %w", err)
 	}
 	session.mutex.Lock()
@@ -366,6 +454,11 @@ func (session *nativeSession) Open(ctx context.Context) (harness.NativeSessionHa
 	state, ok := session.validator.SessionState()
 	if !ok {
 		return harness.NativeSessionHandle{}, ErrMissingSessionState
+	}
+	if session.resumeState != nil {
+		if err := state.ValidateResumeReady(); err != nil {
+			return harness.NativeSessionHandle{}, resumeRejected(err)
+		}
 	}
 	session.opened = true
 	session.opening = false

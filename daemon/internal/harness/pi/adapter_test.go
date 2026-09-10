@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -431,6 +433,154 @@ func TestProbeRemainsNativeUnverifiedWithAllExecutableCapabilitiesFalse(t *testi
 	}
 }
 
+func TestAdapterResumesExactPiSessionAtAnIdleBoundary(t *testing.T) {
+	process := newFakeNativeProcess()
+	var invocation execution.Invocation
+	adapter := &Adapter{
+		executable: "pi-test",
+		startProcess: func(_ context.Context, got execution.Invocation, sink execution.Sink) (nativeProcess, error) {
+			invocation = got
+			process.sink = sink
+			return process, nil
+		},
+	}
+	resume := piResumeHandle(t)
+	process.onWrite = func(request Request) {
+		if request.Type != CommandGetState {
+			t.Fatalf("resume request = %+v, want get_state before a prompt", request)
+		}
+		process.emitJSON(t, map[string]any{
+			"type": "response", "id": request.ID, "command": "get_state", "success": true,
+			"data": map[string]any{
+				"sessionId": resume.NativeSessionID, "sessionFile": resume.NativeSessionFilename,
+				"isStreaming": false, "pendingMessageCount": 0,
+			},
+		})
+	}
+	session := startPiSession(t, adapter, harness.StartRequest{
+		Workspace: t.TempDir(), Resume: resume,
+		Invocation: execution.Invocation{Args: []string{"--provider", "openai", "--model", "gpt-5.6"}},
+	}, &recordingHarnessSink{})
+	defer closePiSession(t, session)
+	if got, want := strings.Join(invocation.Args, "\x00"), strings.Join([]string{"--mode", "rpc", "--session", resume.NativeSessionFilename, "--provider", "openai", "--model", "gpt-5.6"}, "\x00"); got != want {
+		t.Fatalf("resume args = %q, want %q", got, want)
+	}
+	handle := openPiSession(t, session)
+	if handle.ID != resume.NativeSessionID || handle.Filename != resume.NativeSessionFilename {
+		t.Fatalf("Open() = %+v, want retained native identity", handle)
+	}
+	if writes := process.requestTypes(); strings.Join(writes, ",") != "get_state" {
+		t.Fatalf("requests = %v, want get_state only", writes)
+	}
+}
+
+func TestAdapterRejectsMissingOrOverriddenPiResumeBeforeLaunch(t *testing.T) {
+	valid := piResumeHandle(t)
+	tests := []struct {
+		name   string
+		resume *harness.ResumeHandle
+		args   []string
+		want   error
+	}{
+		{name: "missing native filename", resume: &harness.ResumeHandle{LocalHandleID: valid.LocalHandleID, NativeSessionID: valid.NativeSessionID, WorkspaceFingerprint: valid.WorkspaceFingerprint, NativeVersion: valid.NativeVersion}, want: ErrResumeRejected},
+		{name: "missing native file", resume: &harness.ResumeHandle{LocalHandleID: valid.LocalHandleID, NativeSessionID: valid.NativeSessionID, NativeSessionFilename: filepath.Join(t.TempDir(), "missing.jsonl"), WorkspaceFingerprint: valid.WorkspaceFingerprint, NativeVersion: valid.NativeVersion}, want: ErrResumeRejected},
+		{name: "incompatible native version", resume: &harness.ResumeHandle{LocalHandleID: valid.LocalHandleID, NativeSessionID: valid.NativeSessionID, NativeSessionFilename: valid.NativeSessionFilename, WorkspaceFingerprint: valid.WorkspaceFingerprint, NativeVersion: "0.0.0"}, want: ErrResumeRejected},
+		{name: "profile session override", resume: valid, args: []string{"--session", filepath.Join(t.TempDir(), "other.jsonl")}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			started := false
+			adapter := &Adapter{executable: "pi-test", startProcess: func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
+				started = true
+				return newFakeNativeProcess(), nil
+			}}
+			_, err := adapter.Start(context.Background(), harness.StartRequest{Workspace: t.TempDir(), Resume: test.resume, Invocation: execution.Invocation{Args: test.args}}, &recordingHarnessSink{})
+			if test.want != nil && !errors.Is(err, test.want) {
+				t.Fatalf("Start() error = %v, want %v", err, test.want)
+			}
+			if test.want == nil && (err == nil || !strings.Contains(err.Error(), "not allowed")) {
+				t.Fatalf("Start() error = %v, want session override rejection", err)
+			}
+			if started {
+				t.Fatal("Start() launched despite invalid or profile-overridden resume identity")
+			}
+		})
+	}
+}
+
+func TestAdapterRejectsPiResumeWithMismatchedOrActiveStateBeforePrompt(t *testing.T) {
+	tests := []struct {
+		name             string
+		data             func(*harness.ResumeHandle) map[string]any
+		want             error
+		wantHandlerError bool
+	}{
+		{name: "mismatched ID", data: func(resume *harness.ResumeHandle) map[string]any {
+			return map[string]any{"sessionId": "other", "sessionFile": resume.NativeSessionFilename, "isStreaming": false, "pendingMessageCount": 0}
+		}, want: ErrResumeRejected, wantHandlerError: true},
+		{name: "mismatched filename", data: func(resume *harness.ResumeHandle) map[string]any {
+			return map[string]any{"sessionId": resume.NativeSessionID, "sessionFile": filepath.Join(t.TempDir(), "other.jsonl"), "isStreaming": false, "pendingMessageCount": 0}
+		}, want: ErrResumeRejected, wantHandlerError: true},
+		{name: "streaming", data: func(resume *harness.ResumeHandle) map[string]any {
+			return map[string]any{"sessionId": resume.NativeSessionID, "sessionFile": resume.NativeSessionFilename, "isStreaming": true, "pendingMessageCount": 0}
+		}, want: ErrResumeRejected},
+		{name: "queued", data: func(resume *harness.ResumeHandle) map[string]any {
+			return map[string]any{"sessionId": resume.NativeSessionID, "sessionFile": resume.NativeSessionFilename, "isStreaming": false, "pendingMessageCount": 1}
+		}, want: ErrResumeRejected},
+		{name: "state omits queue status", data: func(resume *harness.ResumeHandle) map[string]any {
+			return map[string]any{"sessionId": resume.NativeSessionID, "sessionFile": resume.NativeSessionFilename, "isStreaming": false}
+		}, want: ErrResumeRejected},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			process := newFakeNativeProcess()
+			adapter := fakePiAdapter(process)
+			resume := piResumeHandle(t)
+			process.onWrite = func(request Request) {
+				if request.Type != CommandGetState {
+					t.Fatalf("request = %+v, want get_state", request)
+				}
+				if err := process.emitJSONError(map[string]any{"type": "response", "id": request.ID, "command": "get_state", "success": true, "data": test.data(resume)}); err == nil && test.wantHandlerError {
+					t.Fatal("mismatched get_state was accepted")
+				}
+			}
+			session := startPiSession(t, adapter, harness.StartRequest{Workspace: t.TempDir(), Resume: resume}, &recordingHarnessSink{})
+			_, err := session.Open(context.Background())
+			if !errors.Is(err, test.want) {
+				t.Fatalf("Open() error = %v, want %v", err, test.want)
+			}
+			if writes := process.requestTypes(); strings.Join(writes, ",") != "get_state" {
+				t.Fatalf("requests = %v, want get_state only", writes)
+			}
+			closePiSession(t, session)
+		})
+	}
+}
+
+func piResumeHandle(t *testing.T) *harness.ResumeHandle {
+	t.Helper()
+	filename := filepath.Join(t.TempDir(), "retained.jsonl")
+	if err := os.WriteFile(filename, []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write retained pi session: %v", err)
+	}
+	return &harness.ResumeHandle{
+		LocalHandleID:         "local-retained-pi-handle",
+		NativeSessionID:       "pi-retained-session",
+		NativeSessionFilename: filename,
+		WorkspaceFingerprint:  "sha256:workspace",
+		NativeVersion:         TestedVersion,
+	}
+}
+
+func closePiSession(t *testing.T, session *nativeSession) {
+	t.Helper()
+	context, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := session.Close(context); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
 func startPiSession(t *testing.T, adapter *Adapter, request harness.StartRequest, sink harness.EventSink) *nativeSession {
 	t.Helper()
 	started, err := adapter.Start(context.Background(), request, sink)
@@ -552,6 +702,22 @@ func (process *fakeNativeProcess) emitJSON(t *testing.T, value any) {
 	if err := sink.Handle(context.Background(), execution.Event{Stream: execution.Stdout, Sequence: sequence, At: time.Now().UTC(), Data: append(encoded, '\n')}); err != nil {
 		t.Fatalf("emit native JSON: %v", err)
 	}
+}
+
+func (process *fakeNativeProcess) emitJSONError(value any) error {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	process.mutex.Lock()
+	process.sequence++
+	sequence := process.sequence
+	sink := process.sink
+	process.mutex.Unlock()
+	if sink == nil {
+		return errors.New("native output sink is nil")
+	}
+	return sink.Handle(context.Background(), execution.Event{Stream: execution.Stdout, Sequence: sequence, At: time.Now().UTC(), Data: append(encoded, '\n')})
 }
 
 func (process *fakeNativeProcess) emitRaw(t *testing.T, data []byte) {

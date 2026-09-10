@@ -52,6 +52,8 @@ var (
 	ErrUnexpectedAssistantStop = errors.New("pi rpc final assistant message did not stop normally")
 	ErrNotSettled              = errors.New("pi rpc stream has not reached agent_settled")
 	ErrInvalidTaskResult       = errors.New("pi task result must be one complete JSON object")
+	ErrResumeStateIncomplete   = errors.New("pi resume state omits streaming or queue status")
+	ErrResumeStateActive       = errors.New("pi resume state has active streaming or queued work")
 )
 
 // Command is a documented pi RPC command name.
@@ -524,8 +526,12 @@ func scanJSONValue(decoder *json.Decoder) error {
 // intentionally rejects --no-session state because it cannot support retained
 // session recovery without both documented fields.
 type SessionState struct {
-	SessionID   string
-	SessionFile string
+	SessionID               string
+	SessionFile             string
+	isStreaming             bool
+	pendingMessageCount     int
+	streamingStatusObserved bool
+	queueStatusObserved     bool
 }
 
 func decodeSessionState(raw json.RawMessage) (SessionState, error) {
@@ -540,7 +546,32 @@ func decodeSessionState(raw json.RawMessage) (SessionState, error) {
 	if value, ok := object["sessionFile"]; !ok || !nonEmptyString(value, &state.SessionFile) {
 		return SessionState{}, fmt.Errorf("%w: sessionFile must be non-empty", ErrMissingSessionState)
 	}
+	if value, ok := object["isStreaming"]; ok {
+		if err := json.Unmarshal(value, &state.isStreaming); err != nil {
+			return SessionState{}, fmt.Errorf("%w: isStreaming must be boolean", ErrInvalidResponse)
+		}
+		state.streamingStatusObserved = true
+	}
+	if value, ok := object["pendingMessageCount"]; ok {
+		if err := json.Unmarshal(value, &state.pendingMessageCount); err != nil || state.pendingMessageCount < 0 {
+			return SessionState{}, fmt.Errorf("%w: pendingMessageCount must be a non-negative integer", ErrInvalidResponse)
+		}
+		state.queueStatusObserved = true
+	}
 	return state, nil
+}
+
+// ValidateResumeReady proves that the resumed pi RPC process has loaded the
+// expected session at a turn boundary. Omitted state fields are not treated as
+// idle because a prompt could otherwise join a native stream or queue.
+func (state SessionState) ValidateResumeReady() error {
+	if !state.streamingStatusObserved || !state.queueStatusObserved {
+		return ErrResumeStateIncomplete
+	}
+	if state.isStreaming || state.pendingMessageCount != 0 {
+		return ErrResumeStateActive
+	}
+	return nil
 }
 
 // NativeCompletion is a native-settlement observation, not Symmetry success.
@@ -743,15 +774,19 @@ func (validator *Validator) observeEvent(event Event) error {
 }
 
 func (validator *Validator) bindState(state SessionState) error {
-	if validator.expected != nil && *validator.expected != state {
+	if validator.expected != nil && !sameSessionIdentity(*validator.expected, state) {
 		return fmt.Errorf("%w: expected %q/%q, got %q/%q", ErrConflictingSessionState, validator.expected.SessionID, validator.expected.SessionFile, state.SessionID, state.SessionFile)
 	}
-	if validator.state != nil && *validator.state != state {
+	if validator.state != nil && !sameSessionIdentity(*validator.state, state) {
 		return fmt.Errorf("%w: observed %q/%q, got %q/%q", ErrConflictingSessionState, validator.state.SessionID, validator.state.SessionFile, state.SessionID, state.SessionFile)
 	}
 	copied := state
 	validator.state = &copied
 	return nil
+}
+
+func sameSessionIdentity(left, right SessionState) bool {
+	return left.SessionID == right.SessionID && left.SessionFile == right.SessionFile
 }
 
 func assistantMessage(raw json.RawMessage) (string, bool) {

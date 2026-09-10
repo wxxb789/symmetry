@@ -859,6 +859,7 @@ func TestLegacyControlAttachmentJournalLoadsButCannotResumeOrRelease(t *testing.
 		t.Fatal(err)
 	}
 	delete(raw, "control_attachment_receipt_id")
+	delete(raw, "control_attachment_lineage")
 	legacyEncoded, err := json.Marshal(raw)
 	if err != nil {
 		t.Fatal(err)
@@ -938,6 +939,219 @@ func TestRetainedGoalSessionStopCertificateSurvivesStoreRestart(t *testing.T) {
 	loaded, err := restarted.LoadGoalSession(saved.Key())
 	if err != nil || loaded.StopCertificate == nil || *loaded.StopCertificate != certificate || !loaded.HasVerifiedControlAttachment() || loaded.SessionState != GoalSessionStateAvailable {
 		t.Fatalf("restarted retained stop certificate = %#v, error = %v", loaded, err)
+	}
+}
+
+func TestRebindGoalSessionForResumeConsumesExactStoppedAttachment(t *testing.T) {
+	store := mustStore(t)
+	source, certificate := mustAvailableRetainedGoalSession(t, store)
+	owner := source.WorkspaceOwnerRunKey
+	lineage := *source.ControlAttachmentLineage
+
+	rebind := testGoalSessionResumeRebind(certificate)
+	rebound, err := store.RebindGoalSessionForResume(source.Key(), rebind)
+	if err != nil {
+		t.Fatalf("RebindGoalSessionForResume() error = %v", err)
+	}
+	if rebound.RunID != rebind.RunID || rebound.Generation != rebind.Generation || rebound.TaskID != rebind.TaskID ||
+		rebound.AdmissionID != rebind.AdmissionID || rebound.BindingID != rebind.BindingID || rebound.SessionMode != GoalSessionModeResume ||
+		rebound.SessionState != GoalSessionStateBusy || rebound.StopCertificate != nil || rebound.ControlAttachmentReceiptID != "" {
+		t.Fatalf("rebound journal current execution = %#v", rebound)
+	}
+	if rebound.NativeSessionID != source.NativeSessionID || rebound.NativeSessionFilename != source.NativeSessionFilename ||
+		rebound.WorkspacePath != source.WorkspacePath || rebound.WorkspaceOwnerRunKey != owner ||
+		rebound.ControlSessionID != source.ControlSessionID || rebound.ControlAttachmentLineage == nil || *rebound.ControlAttachmentLineage != lineage {
+		t.Fatalf("rebind did not preserve retained identity/lineage: %#v", rebound)
+	}
+	if rebound.HasVerifiedControlAttachment() {
+		t.Fatalf("rebind treated predecessor attachment as verification for new Run: %#v", rebound)
+	}
+	oldLineage, err := store.CheckGoalSessionLineage(source.LineageKey())
+	if err != nil {
+		t.Fatalf("CheckGoalSessionLineage() for source task error = %v", err)
+	}
+	if oldLineage.BlocksNewLaunch() {
+		t.Fatalf("source task lineage remained blocked after rebind: %#v", oldLineage)
+	}
+	newLineage, err := store.CheckGoalSessionLineage(rebound.LineageKey())
+	if err != nil {
+		t.Fatalf("CheckGoalSessionLineage() for resume task error = %v", err)
+	}
+	if !newLineage.BlocksNewLaunch() || newLineage.State != GoalSessionLineageStateAttached {
+		t.Fatalf("resume task lineage was not durably blocked: %#v", newLineage)
+	}
+
+	replayed, err := store.RebindGoalSessionForResume(source.Key(), rebind)
+	if err != nil {
+		t.Fatalf("exact RebindGoalSessionForResume() replay error = %v", err)
+	}
+	if replayed.RunID != rebound.RunID || replayed.Generation != rebound.Generation || replayed.TaskID != rebound.TaskID ||
+		replayed.BindingID != rebound.BindingID || replayed.ResumeSourceStopCertificate == nil || *replayed.ResumeSourceStopCertificate != certificate {
+		t.Fatalf("exact rebind replay = %#v", replayed)
+	}
+
+	newAttachmentReceiptID := "00000000-0000-4000-8000-000000000021"
+	reattached, err := store.PersistGoalSessionControlAttachment(source.Key(), source.ControlSessionID, rebind.BindingID, newAttachmentReceiptID, false)
+	if err != nil {
+		t.Fatalf("PersistGoalSessionControlAttachment() after rebind error = %v", err)
+	}
+	if !reattached.HasVerifiedControlAttachment() || reattached.ControlAttachmentReceiptID != newAttachmentReceiptID || reattached.ControlAttachmentLineage == nil ||
+		reattached.ControlAttachmentLineage.Original != lineage.Original || reattached.ControlAttachmentLineage.Current.RunID != rebind.RunID ||
+		reattached.ControlAttachmentLineage.Current.BindingID != rebind.BindingID || reattached.ControlAttachmentLineage.Current.ReceiptID != newAttachmentReceiptID {
+		t.Fatalf("reattached resume journal = %#v", reattached)
+	}
+}
+
+func TestRebindGoalSessionForResumeRejectsStaleCertificateAndCompetingCAS(t *testing.T) {
+	store := mustStore(t)
+	source, certificate := mustAvailableRetainedGoalSession(t, store)
+	rebind := testGoalSessionResumeRebind(certificate)
+
+	stale := rebind
+	stale.ExactStopCertificate.DeliveryDigest = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	if _, err := store.RebindGoalSessionForResume(source.Key(), stale); !errors.Is(err, ErrGoalSessionConflict) {
+		t.Fatalf("stale certificate rebind error = %v, want ErrGoalSessionConflict", err)
+	}
+	before, err := store.LoadGoalSession(source.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.StopCertificate == nil || *before.StopCertificate != certificate || before.SessionState != GoalSessionStateAvailable {
+		t.Fatalf("stale rebind mutated source: %#v", before)
+	}
+
+	competing := rebind
+	competing.RunID = "run-3"
+	competing.Generation = 3
+	competing.TaskID = "task-3"
+	competing.AdmissionID = "admission-3"
+	competing.BindingID = "00000000-0000-4000-8000-000000000022"
+	start := make(chan struct{})
+	errorsByTarget := make(chan error, 2)
+	for _, request := range []GoalSessionResumeRebind{rebind, competing} {
+		request := request
+		go func() {
+			<-start
+			_, err := store.RebindGoalSessionForResume(source.Key(), request)
+			errorsByTarget <- err
+		}()
+	}
+	close(start)
+	first, second := <-errorsByTarget, <-errorsByTarget
+	if !((first == nil && errors.Is(second, ErrGoalSessionConflict)) || (second == nil && errors.Is(first, ErrGoalSessionConflict))) {
+		t.Fatalf("competing rebind errors = %v, %v; want one success and one conflict", first, second)
+	}
+}
+
+func TestRebindGoalSessionForResumeRequiresExactCompatibility(t *testing.T) {
+	tests := []struct {
+		name   string
+		want   error
+		mutate func(*GoalSessionCompatibility)
+	}{
+		{name: "machine", want: ErrGoalSessionOwnerMismatch, mutate: func(value *GoalSessionCompatibility) { value.MachineID = "machine-2" }},
+		{name: "runtime", want: ErrGoalSessionOwnerMismatch, mutate: func(value *GoalSessionCompatibility) { value.RuntimeEpoch++ }},
+		{name: "native version", want: ErrGoalSessionVersionMismatch, mutate: func(value *GoalSessionCompatibility) { value.HarnessVersion = "9.9.9" }},
+		{name: "adapter version", want: ErrGoalSessionVersionMismatch, mutate: func(value *GoalSessionCompatibility) { value.AdapterProtocolVersion++ }},
+		{name: "workspace fingerprint", want: ErrGoalSessionWorkspaceMismatch, mutate: func(value *GoalSessionCompatibility) { value.WorkspaceFingerprint = "sha256:workspace-two" }},
+		{name: "repository", want: ErrGoalSessionWorkspaceMismatch, mutate: func(value *GoalSessionCompatibility) {
+			value.RepositoryResourceID = "00000000-0000-4000-8000-000000000023"
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := mustStore(t)
+			source, certificate := mustAvailableRetainedGoalSession(t, store)
+			rebind := testGoalSessionResumeRebind(certificate)
+			test.mutate(&rebind.Compatibility)
+			if _, err := store.RebindGoalSessionForResume(source.Key(), rebind); !errors.Is(err, test.want) {
+				t.Fatalf("RebindGoalSessionForResume() error = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
+func TestRebindGoalSessionForResumeFailsClosedForLegacyOrAfterRestart(t *testing.T) {
+	directory := t.TempDir()
+	store, err := New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, certificate := mustAvailableRetainedGoalSession(t, store)
+	path := store.goalSessionPath(source.Key())
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	encoded, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &raw); err != nil {
+		t.Fatal(err)
+	}
+	delete(raw, "workspace_owner_run_key")
+	delete(raw, "control_attachment_lineage")
+	legacy, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted, err := New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	if _, err := restarted.RebindGoalSessionForResume(source.Key(), testGoalSessionResumeRebind(certificate)); !errors.Is(err, ErrGoalSessionCompatibilityIncomplete) {
+		t.Fatalf("legacy RebindGoalSessionForResume() error = %v, want ErrGoalSessionCompatibilityIncomplete", err)
+	}
+}
+
+func mustAvailableRetainedGoalSession(t *testing.T, store *Store) (GoalSessionJournal, GoalSessionStopCertificate) {
+	t.Helper()
+	intent := testGoalSessionIntent()
+	intent.LocalHandleID = "00000000-0000-4000-8000-000000000010"
+	intent.BindingID = "00000000-0000-4000-8000-000000000011"
+	intent.WorkspacePath = `C:\worktree\retained`
+	saved, err := store.SaveGoalSessionLaunchIntent(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkGoalSessionLaunchStarted(saved.Key()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PersistGoalSessionHandle(saved.Key(), GoalSessionHandle{NativeSessionID: "native-retained", NativeSessionFilename: `C:\native\retained.json`}); err != nil {
+		t.Fatal(err)
+	}
+	controlSessionID := "00000000-0000-4000-8000-000000000012"
+	attachmentReceiptID := "00000000-0000-4000-8000-000000000015"
+	if _, err := store.PersistGoalSessionControlAttachment(saved.Key(), controlSessionID, intent.BindingID, attachmentReceiptID, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkGoalSessionStoppedPending(saved.Key()); err != nil {
+		t.Fatal(err)
+	}
+	certificate := GoalSessionStopCertificate{
+		RunID: intent.RunID, Generation: intent.Generation, SessionID: controlSessionID, LocalHandleID: intent.LocalHandleID,
+		BindingID: intent.BindingID, DeliveryDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		ReceiptID: "00000000-0000-4000-8000-000000000014",
+	}
+	available, err := store.MarkGoalSessionAvailable(saved.Key(), certificate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return available, certificate
+}
+
+func testGoalSessionResumeRebind(certificate GoalSessionStopCertificate) GoalSessionResumeRebind {
+	return GoalSessionResumeRebind{
+		RunID: "run-2", Generation: 2, TaskID: "task-2", AdmissionID: "admission-2",
+		BindingID: "00000000-0000-4000-8000-000000000020", ExactStopCertificate: certificate,
+		Compatibility: testGoalSessionCompatibility(),
 	}
 }
 
@@ -1119,6 +1333,8 @@ func testGoalSessionIntent() GoalSessionLaunchIntent {
 		AdapterVersion:         "adapter-4",
 		AdapterProtocolVersion: 3,
 		WorkspaceFingerprint:   "sha256:workspace-one",
+		WorkspaceOwnerRunKey:   WorkspaceOwnerRunKey{RunID: "run-1", Generation: 1},
+		RepositoryResourceID:   "00000000-0000-4000-8000-000000000017",
 		SessionMode:            GoalSessionModeFresh,
 	}
 }
@@ -1136,5 +1352,6 @@ func testGoalSessionCompatibility() GoalSessionCompatibility {
 		AdapterVersion:         intent.AdapterVersion,
 		AdapterProtocolVersion: intent.AdapterProtocolVersion,
 		WorkspaceFingerprint:   intent.WorkspaceFingerprint,
+		RepositoryResourceID:   intent.RepositoryResourceID,
 	}
 }

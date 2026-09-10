@@ -161,7 +161,22 @@ type GoalSessionLaunchIntent struct {
 	AdapterProtocolVersion int    `json:"adapter_protocol_version"`
 	WorkspaceFingerprint   string `json:"workspace_fingerprint"`
 	WorkspacePath          string `json:"workspace_path,omitempty"`
-	SessionMode            string `json:"session_mode"`
+	// WorkspaceOwnerRunKey permanently identifies the Run that materialized the
+	// retained worktree. Resume changes the current execution Run, never this
+	// original workspace owner.
+	WorkspaceOwnerRunKey WorkspaceOwnerRunKey `json:"workspace_owner_run_key,omitempty"`
+	// RepositoryResourceID is the canonical Control repository identity bound to
+	// the workspace fingerprint. It is required for a retained native resume.
+	RepositoryResourceID string `json:"repository_resource_id,omitempty"`
+	SessionMode          string `json:"session_mode"`
+}
+
+// WorkspaceOwnerRunKey identifies the immutable original owner of a retained
+// workspace. It deliberately remains separate from GoalSessionLaunchIntent's
+// current RunID and Generation, which change on a later resume admission.
+type WorkspaceOwnerRunKey struct {
+	RunID      string `json:"run_id,omitempty"`
+	Generation int64  `json:"generation,omitempty"`
 }
 
 // GoalSessionJournal is a machine-local recovery record for one native Goal
@@ -170,20 +185,48 @@ type GoalSessionLaunchIntent struct {
 // They are never part of the control-plane projection.
 type GoalSessionJournal struct {
 	GoalSessionLaunchIntent
-	SchemaVersion              int                         `json:"schema_version"`
-	SessionState               string                      `json:"session_state"`
-	LaunchState                string                      `json:"launch_state"`
-	LaunchAttempted            bool                        `json:"launch_attempted,omitempty"`
-	LaunchAttemptedAt          time.Time                   `json:"launch_attempted_at,omitempty"`
-	RecoveryRequired           bool                        `json:"recovery_required,omitempty"`
-	NativeSessionID            string                      `json:"native_session_id,omitempty"`
-	NativeSessionFilename      string                      `json:"native_session_filename,omitempty"`
-	ControlSessionID           string                      `json:"control_session_id,omitempty"`
-	ControlAttachmentReceiptID string                      `json:"control_attachment_receipt_id,omitempty"`
-	StopCertificate            *GoalSessionStopCertificate `json:"stop_certificate,omitempty"`
-	UncertainReason            string                      `json:"uncertain_reason,omitempty"`
-	CreatedAt                  time.Time                   `json:"created_at"`
-	UpdatedAt                  time.Time                   `json:"updated_at"`
+	SchemaVersion              int       `json:"schema_version"`
+	SessionState               string    `json:"session_state"`
+	LaunchState                string    `json:"launch_state"`
+	LaunchAttempted            bool      `json:"launch_attempted,omitempty"`
+	LaunchAttemptedAt          time.Time `json:"launch_attempted_at,omitempty"`
+	RecoveryRequired           bool      `json:"recovery_required,omitempty"`
+	NativeSessionID            string    `json:"native_session_id,omitempty"`
+	NativeSessionFilename      string    `json:"native_session_filename,omitempty"`
+	ControlSessionID           string    `json:"control_session_id,omitempty"`
+	ControlAttachmentReceiptID string    `json:"control_attachment_receipt_id,omitempty"`
+	// ControlAttachmentLineage preserves the first verified Control attachment
+	// while current attachment fields rotate for each resumed Run.
+	ControlAttachmentLineage *GoalSessionControlAttachmentLineage `json:"control_attachment_lineage,omitempty"`
+	// ResumeSourceStopCertificate is the exact available certificate consumed by
+	// the current resume Run. It makes a retry prove the same predecessor rather
+	// than treating a matching target alone as an idempotency key.
+	ResumeSourceStopCertificate *GoalSessionStopCertificate `json:"resume_source_stop_certificate,omitempty"`
+	StopCertificate             *GoalSessionStopCertificate `json:"stop_certificate,omitempty"`
+	UncertainReason             string                      `json:"uncertain_reason,omitempty"`
+	CreatedAt                   time.Time                   `json:"created_at"`
+	UpdatedAt                   time.Time                   `json:"updated_at"`
+}
+
+// GoalSessionControlAttachmentLineage is the immutable first fenced Control
+// attachment for a retained native session. It survives resume rebinds so a
+// later Run cannot substitute a different Control session as its provenance.
+type GoalSessionControlAttachmentLineage struct {
+	Original GoalSessionControlAttachment `json:"original"`
+	Current  GoalSessionControlAttachment `json:"current"`
+}
+
+// GoalSessionControlAttachment records one immutable Control attachment
+// receipt. Original never changes; Current advances only after a new resume
+// Run's attachment has been durably persisted.
+type GoalSessionControlAttachment struct {
+	RunID       string `json:"run_id"`
+	Generation  int64  `json:"generation"`
+	TaskID      string `json:"task_id,omitempty"`
+	AdmissionID string `json:"admission_id,omitempty"`
+	SessionID   string `json:"session_id"`
+	BindingID   string `json:"binding_id"`
+	ReceiptID   string `json:"receipt_id"`
 }
 
 // GoalSessionStopCertificate is the durable local proof that Control accepted
@@ -219,6 +262,21 @@ type GoalSessionCompatibility struct {
 	AdapterVersion         string
 	AdapterProtocolVersion int
 	WorkspaceFingerprint   string
+	RepositoryResourceID   string
+}
+
+// GoalSessionResumeRebind is the complete CAS input for moving a stopped,
+// retained native session to a newly admitted execution. ExactStopCertificate
+// identifies the completed execution; the target fields identify the only Run
+// that may consume it.
+type GoalSessionResumeRebind struct {
+	RunID                string
+	Generation           int64
+	TaskID               string
+	AdmissionID          string
+	BindingID            string
+	ExactStopCertificate GoalSessionStopCertificate
+	Compatibility        GoalSessionCompatibility
 }
 
 // GoalSessionControlProjection is safe to put on the control wire. In
@@ -281,7 +339,7 @@ func (journal GoalSessionJournal) Compatibility() GoalSessionCompatibility {
 		RuntimeEpoch: journal.RuntimeEpoch, DaemonInstanceID: journal.DaemonInstanceID,
 		HarnessKind: journal.HarnessKind, HarnessVersion: journal.HarnessVersion,
 		AdapterVersion: journal.AdapterVersion, AdapterProtocolVersion: journal.AdapterProtocolVersion,
-		WorkspaceFingerprint: journal.WorkspaceFingerprint,
+		WorkspaceFingerprint: journal.WorkspaceFingerprint, RepositoryResourceID: journal.RepositoryResourceID,
 	}
 }
 
@@ -296,7 +354,9 @@ func (journal GoalSessionJournal) NeedsReconciliation() bool {
 func (journal GoalSessionJournal) HasVerifiedControlAttachment() bool {
 	return journal.LaunchState == GoalSessionLaunchStateAttached && journal.NativeSessionID != "" &&
 		validGoalSessionUUID(journal.ControlSessionID) && validGoalSessionUUID(journal.BindingID) &&
-		validGoalSessionUUID(journal.ControlAttachmentReceiptID)
+		validGoalSessionUUID(journal.ControlAttachmentReceiptID) && journal.ControlAttachmentLineage != nil &&
+		validGoalSessionControlAttachmentLineage(*journal.ControlAttachmentLineage) &&
+		matchesGoalSessionControlAttachment(journal.ControlAttachmentLineage.Current, journal)
 }
 
 // IsLegacyControlAttachment identifies a journal written before attachment
@@ -305,7 +365,7 @@ func (journal GoalSessionJournal) HasVerifiedControlAttachment() bool {
 func (journal GoalSessionJournal) IsLegacyControlAttachment() bool {
 	return journal.LaunchState == GoalSessionLaunchStateAttached && journal.NativeSessionID != "" &&
 		validGoalSessionUUID(journal.ControlSessionID) && validGoalSessionUUID(journal.BindingID) &&
-		journal.ControlAttachmentReceiptID == ""
+		journal.ControlAttachmentLineage == nil
 }
 
 // IsUncertainLaunch reports whether the record explicitly represents an
@@ -605,12 +665,113 @@ func (store *Store) PersistGoalSessionControlAttachment(key GoalSessionKey, cont
 		if journal.ControlAttachmentReceiptID != "" && journal.ControlAttachmentReceiptID != attachmentReceiptID {
 			return ErrGoalSessionConflict
 		}
+		if journal.ControlAttachmentLineage != nil {
+			lineage := *journal.ControlAttachmentLineage
+			if lineage.Original.SessionID != controlSessionID {
+				return ErrGoalSessionConflict
+			}
+			lineage.Current = goalSessionControlAttachment(*journal, controlSessionID, bindingID, attachmentReceiptID)
+			journal.ControlAttachmentLineage = &lineage
+		} else {
+			attachment := goalSessionControlAttachment(*journal, controlSessionID, bindingID, attachmentReceiptID)
+			journal.ControlAttachmentLineage = &GoalSessionControlAttachmentLineage{
+				Original: attachment,
+				Current:  attachment,
+			}
+		}
 		journal.ControlSessionID = controlSessionID
 		journal.ControlAttachmentReceiptID = attachmentReceiptID
 		journal.BindingID = bindingID
 		journal.UpdatedAt = time.Now().UTC()
 		return nil
 	})
+}
+
+// RebindGoalSessionForResume atomically consumes one exact stopped attachment
+// and binds the retained native session to a newly admitted resume Run. The
+// caller must subsequently persist that Run's new fenced Control attachment
+// before it may start a native turn. Replaying the same target before another
+// state transition is idempotent; every other concurrent or stale request
+// fails closed.
+func (store *Store) RebindGoalSessionForResume(key GoalSessionKey, rebind GoalSessionResumeRebind) (GoalSessionJournal, error) {
+	if err := validateGoalSessionKey(key); err != nil {
+		return GoalSessionJournal{}, err
+	}
+	if err := validateGoalSessionResumeRebind(rebind); err != nil {
+		return GoalSessionJournal{}, err
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.ensureOpenLocked(); err != nil {
+		return GoalSessionJournal{}, err
+	}
+	journal, err := store.loadGoalSessionPathLocked(store.goalSessionPath(key))
+	if err != nil {
+		return GoalSessionJournal{}, err
+	}
+	if sameGoalSessionResumeTarget(journal, rebind) {
+		return journal, nil
+	}
+	if err := validateGoalSessionResumeSource(journal, rebind); err != nil {
+		return GoalSessionJournal{}, err
+	}
+
+	previousLineage := journal.LineageKey()
+	targetLineage := GoalSessionLineageKey{GoalID: journal.GoalID, WorkItemID: journal.WorkItemID, TaskID: rebind.TaskID}
+	if targetLineage != previousLineage {
+		status, err := store.checkGoalSessionLineageLocked(targetLineage)
+		if err != nil {
+			return GoalSessionJournal{}, err
+		}
+		if status.BlocksNewLaunch() {
+			if status.State == GoalSessionLineageStateUncertain || status.State == GoalSessionLineageStateLaunching {
+				return GoalSessionJournal{}, ErrGoalSessionUncertain
+			}
+			return GoalSessionJournal{}, ErrGoalSessionConflict
+		}
+	}
+
+	// Mark every affected derived index dirty before publishing the authoritative
+	// journal. A crash between these writes is conservatively rebuilt from the
+	// journal set on the next lineage check.
+	if err := store.beginGoalSessionLineageMutationLocked(previousLineage); err != nil {
+		return GoalSessionJournal{}, err
+	}
+	if targetLineage != previousLineage {
+		if err := store.beginGoalSessionLineageMutationLocked(targetLineage); err != nil {
+			return GoalSessionJournal{}, err
+		}
+	}
+
+	journal.RunID = rebind.RunID
+	journal.Generation = rebind.Generation
+	journal.TaskID = rebind.TaskID
+	journal.AdmissionID = rebind.AdmissionID
+	journal.BindingID = rebind.BindingID
+	journal.SessionMode = GoalSessionModeResume
+	journal.HandoffSourceRunID = ""
+	journal.ControlAttachmentReceiptID = ""
+	sourceCertificate := rebind.ExactStopCertificate
+	journal.ResumeSourceStopCertificate = &sourceCertificate
+	journal.StopCertificate = nil
+	journal.SessionState = GoalSessionStateBusy
+	journal.LaunchState = GoalSessionLaunchStateAttached
+	journal.LaunchAttempted = true
+	journal.RecoveryRequired = false
+	journal.UncertainReason = ""
+	journal.UpdatedAt = time.Now().UTC()
+	if err := validateGoalSessionJournal(journal); err != nil {
+		return GoalSessionJournal{}, err
+	}
+	if err := store.saveGoalSessionJournalLocked(journal); err != nil {
+		return GoalSessionJournal{}, err
+	}
+	_ = store.refreshGoalSessionLineageIndexLocked(previousLineage)
+	if targetLineage != previousLineage {
+		_ = store.refreshGoalSessionLineageIndexLocked(targetLineage)
+	}
+	return journal, nil
 }
 
 // MarkGoalSessionStoppedPending records known native termination without
@@ -624,7 +785,7 @@ func (store *Store) MarkGoalSessionStoppedPending(key GoalSessionKey) (GoalSessi
 		if journal.LaunchState != GoalSessionLaunchStateAttached || journal.NativeSessionID == "" {
 			return ErrGoalSessionNotAttached
 		}
-		if journal.IsLegacyControlAttachment() {
+		if journal.IsLegacyControlAttachment() || !journal.HasVerifiedControlAttachment() {
 			return ErrGoalSessionCompatibilityIncomplete
 		}
 		if !validGoalSessionUUID(journal.ControlSessionID) || !validGoalSessionUUID(journal.BindingID) {
@@ -650,7 +811,7 @@ func (store *Store) MarkGoalSessionAvailable(key GoalSessionKey, certificate Goa
 		if journal.NeedsReconciliation() {
 			return ErrGoalSessionUncertain
 		}
-		if journal.IsLegacyControlAttachment() {
+		if journal.IsLegacyControlAttachment() || !journal.HasVerifiedControlAttachment() {
 			return ErrGoalSessionCompatibilityIncomplete
 		}
 		if journal.LaunchState != GoalSessionLaunchStateAttached || journal.NativeSessionID == "" ||
@@ -1211,6 +1372,9 @@ func normalizeGoalSessionIntent(intent *GoalSessionLaunchIntent) error {
 	if intent.SessionMode == "" {
 		intent.SessionMode = GoalSessionModeFresh
 	}
+	if intent.WorkspaceOwnerRunKey == (WorkspaceOwnerRunKey{}) && intent.RunID != "" && intent.Generation > 0 {
+		intent.WorkspaceOwnerRunKey = WorkspaceOwnerRunKey{RunID: intent.RunID, Generation: intent.Generation}
+	}
 	return validateGoalSessionIntent(*intent)
 }
 
@@ -1240,6 +1404,12 @@ func validateGoalSessionIntent(intent GoalSessionLaunchIntent) error {
 	}
 	if intent.RuntimeEpoch < 0 || !validRequiredString(intent.HarnessKind, 4096) || !validRequiredString(intent.HarnessVersion, 4096) || !validRequiredString(intent.AdapterVersion, 4096) || intent.AdapterProtocolVersion <= 0 || !validRequiredString(intent.WorkspaceFingerprint, 4096) || !validGoalSessionMode(intent.SessionMode) {
 		return errors.New("goal session launch identity is invalid")
+	}
+	if intent.RepositoryResourceID != "" && !validGoalSessionUUID(intent.RepositoryResourceID) {
+		return errors.New("goal session repository resource ID is invalid")
+	}
+	if intent.WorkspaceOwnerRunKey != (WorkspaceOwnerRunKey{}) && !validWorkspaceOwnerRunKey(intent.WorkspaceOwnerRunKey) {
+		return errors.New("goal session workspace owner Run key is invalid")
 	}
 	if intent.BindingID != "" && !validGoalSessionUUID(intent.BindingID) {
 		return errors.New("goal session binding ID is invalid")
@@ -1299,6 +1469,16 @@ func validateGoalSessionJournal(journal GoalSessionJournal) error {
 	if (journal.ControlSessionID != "" || journal.ControlAttachmentReceiptID != "") && (journal.LaunchState != GoalSessionLaunchStateAttached || journal.BindingID == "" || journal.ControlSessionID == "") {
 		return errors.New("goal session control attachment is invalid")
 	}
+	if journal.ControlAttachmentLineage != nil && !validGoalSessionControlAttachmentLineage(*journal.ControlAttachmentLineage) {
+		return errors.New("goal session control attachment lineage is invalid")
+	}
+	if journal.ControlAttachmentLineage != nil && journal.ControlSessionID != "" &&
+		(journal.ControlAttachmentLineage.Original.SessionID != journal.ControlSessionID || journal.ControlAttachmentLineage.Current.SessionID != journal.ControlSessionID) {
+		return errors.New("goal session control attachment lineage is invalid")
+	}
+	if journal.ResumeSourceStopCertificate != nil && !validGoalSessionStopCertificate(*journal.ResumeSourceStopCertificate) {
+		return errors.New("goal session resume source receipt is invalid")
+	}
 	if journal.StopCertificate != nil && (!validGoalSessionStopCertificate(*journal.StopCertificate) || journal.SessionState != GoalSessionStateAvailable || journal.ControlSessionID != journal.StopCertificate.SessionID || journal.BindingID != journal.StopCertificate.BindingID || journal.RunID != journal.StopCertificate.RunID || journal.Generation != journal.StopCertificate.Generation || journal.LocalHandleID != journal.StopCertificate.LocalHandleID) {
 		return errors.New("goal session stop receipt is invalid")
 	}
@@ -1310,6 +1490,111 @@ func validGoalSessionStopCertificate(certificate GoalSessionStopCertificate) boo
 		validGoalSessionUUID(certificate.SessionID) && validGoalSessionUUID(certificate.LocalHandleID) &&
 		validGoalSessionUUID(certificate.BindingID) && validGoalDeliveryDigest(certificate.DeliveryDigest) &&
 		validGoalSessionUUID(certificate.ReceiptID)
+}
+
+func validWorkspaceOwnerRunKey(key WorkspaceOwnerRunKey) bool {
+	return validRequiredString(key.RunID, 4096) && key.Generation > 0
+}
+
+func validGoalSessionControlAttachmentLineage(lineage GoalSessionControlAttachmentLineage) bool {
+	return validGoalSessionControlAttachment(lineage.Original) && validGoalSessionControlAttachment(lineage.Current) &&
+		lineage.Original.SessionID == lineage.Current.SessionID
+}
+
+func validGoalSessionControlAttachment(attachment GoalSessionControlAttachment) bool {
+	return validRequiredString(attachment.RunID, 4096) && attachment.Generation > 0 &&
+		validRequiredString(attachment.TaskID, 4096) && validRequiredString(attachment.AdmissionID, 4096) &&
+		validGoalSessionUUID(attachment.SessionID) && validGoalSessionUUID(attachment.BindingID) &&
+		validGoalSessionUUID(attachment.ReceiptID)
+}
+
+func goalSessionControlAttachment(journal GoalSessionJournal, sessionID, bindingID, receiptID string) GoalSessionControlAttachment {
+	return GoalSessionControlAttachment{
+		RunID: journal.RunID, Generation: journal.Generation, TaskID: journal.TaskID, AdmissionID: journal.AdmissionID,
+		SessionID: sessionID, BindingID: bindingID, ReceiptID: receiptID,
+	}
+}
+
+func matchesGoalSessionControlAttachment(attachment GoalSessionControlAttachment, journal GoalSessionJournal) bool {
+	return attachment.RunID == journal.RunID && attachment.Generation == journal.Generation &&
+		attachment.TaskID == journal.TaskID && attachment.AdmissionID == journal.AdmissionID &&
+		attachment.SessionID == journal.ControlSessionID && attachment.BindingID == journal.BindingID &&
+		attachment.ReceiptID == journal.ControlAttachmentReceiptID
+}
+
+func validateGoalSessionResumeRebind(rebind GoalSessionResumeRebind) error {
+	if !validRequiredString(rebind.RunID, 4096) || rebind.Generation <= 0 ||
+		!validRequiredString(rebind.TaskID, 4096) || !validRequiredString(rebind.AdmissionID, 4096) ||
+		!validGoalSessionUUID(rebind.BindingID) || !validGoalSessionStopCertificate(rebind.ExactStopCertificate) {
+		return errors.New("goal session resume rebind is invalid")
+	}
+	if !completeGoalSessionResumeCompatibility(rebind.Compatibility) {
+		return ErrGoalSessionCompatibilityIncomplete
+	}
+	return nil
+}
+
+func completeGoalSessionResumeCompatibility(value GoalSessionCompatibility) bool {
+	return validRequiredString(value.MachineID, 4096) && validRequiredString(value.RuntimeID, 4096) &&
+		value.RuntimeEpoch > 0 && validRequiredString(value.HarnessKind, 4096) &&
+		validRequiredString(value.HarnessVersion, 4096) && validRequiredString(value.AdapterVersion, 4096) &&
+		value.AdapterProtocolVersion > 0 && validRequiredString(value.WorkspaceFingerprint, 4096) &&
+		validGoalSessionUUID(value.RepositoryResourceID)
+}
+
+func sameGoalSessionResumeTarget(journal GoalSessionJournal, rebind GoalSessionResumeRebind) bool {
+	return journal.RunID == rebind.RunID && journal.Generation == rebind.Generation &&
+		journal.TaskID == rebind.TaskID && journal.AdmissionID == rebind.AdmissionID &&
+		journal.BindingID == rebind.BindingID && journal.SessionMode == GoalSessionModeResume &&
+		journal.SessionState == GoalSessionStateBusy && journal.LaunchState == GoalSessionLaunchStateAttached &&
+		journal.StopCertificate == nil && journal.ControlAttachmentReceiptID == "" &&
+		journal.ResumeSourceStopCertificate != nil && *journal.ResumeSourceStopCertificate == rebind.ExactStopCertificate &&
+		journal.NativeSessionID != "" && !journal.NeedsReconciliation()
+}
+
+func validateGoalSessionResumeSource(journal GoalSessionJournal, rebind GoalSessionResumeRebind) error {
+	if journal.LaunchState == GoalSessionLaunchStateClosed || journal.SessionState == GoalSessionStateClosed {
+		return ErrGoalSessionClosed
+	}
+	if journal.NeedsReconciliation() {
+		return ErrGoalSessionUncertain
+	}
+	if journal.ResumeSourceStopCertificate != nil {
+		// A prior resume CAS has already consumed an available certificate. The
+		// exact target replay was handled above; every other request is a stale
+		// concurrent consumer, not an incomplete source record.
+		return ErrGoalSessionConflict
+	}
+	if journal.SessionState != GoalSessionStateAvailable || journal.LaunchState != GoalSessionLaunchStateAttached ||
+		journal.NativeSessionID == "" || !journal.HasVerifiedControlAttachment() ||
+		journal.StopCertificate == nil || !validWorkspaceOwnerRunKey(journal.WorkspaceOwnerRunKey) ||
+		journal.RepositoryResourceID == "" {
+		return ErrGoalSessionCompatibilityIncomplete
+	}
+	if *journal.StopCertificate != rebind.ExactStopCertificate {
+		return ErrGoalSessionConflict
+	}
+	if err := compareGoalSessionResumeCompatibility(journal, rebind.Compatibility); err != nil {
+		return err
+	}
+	return nil
+}
+
+func compareGoalSessionResumeCompatibility(journal GoalSessionJournal, expected GoalSessionCompatibility) error {
+	if !completeGoalSessionResumeCompatibility(expected) || !completeGoalSessionResumeCompatibility(journal.Compatibility()) {
+		return ErrGoalSessionCompatibilityIncomplete
+	}
+	if journal.MachineID != expected.MachineID || journal.RuntimeID != expected.RuntimeID || journal.RuntimeEpoch != expected.RuntimeEpoch {
+		return ErrGoalSessionOwnerMismatch
+	}
+	if journal.HarnessKind != expected.HarnessKind || journal.HarnessVersion != expected.HarnessVersion ||
+		journal.AdapterVersion != expected.AdapterVersion || journal.AdapterProtocolVersion != expected.AdapterProtocolVersion {
+		return ErrGoalSessionVersionMismatch
+	}
+	if journal.WorkspaceFingerprint != expected.WorkspaceFingerprint || journal.RepositoryResourceID != expected.RepositoryResourceID {
+		return ErrGoalSessionWorkspaceMismatch
+	}
+	return nil
 }
 
 func validateGoalSessionHandle(handle GoalSessionHandle) error {
@@ -1418,6 +1703,9 @@ func compareGoalSessionIdentity(journal GoalSessionJournal, expected GoalSession
 	if expected.WorkspaceFingerprint != "" && journal.WorkspaceFingerprint != expected.WorkspaceFingerprint {
 		return ErrGoalSessionWorkspaceMismatch
 	}
+	if expected.RepositoryResourceID != "" && journal.RepositoryResourceID != expected.RepositoryResourceID {
+		return ErrGoalSessionWorkspaceMismatch
+	}
 	return nil
 }
 
@@ -1437,7 +1725,8 @@ func compareGoalSessionIdentityStrict(journal GoalSessionJournal, expected GoalS
 		(recorded.HarnessVersion != "" && expected.HarnessVersion == "") ||
 		(recorded.AdapterVersion != "" && expected.AdapterVersion == "") ||
 		(recorded.AdapterProtocolVersion > 0 && expected.AdapterProtocolVersion <= 0) ||
-		(recorded.WorkspaceFingerprint != "" && expected.WorkspaceFingerprint == "") {
+		(recorded.WorkspaceFingerprint != "" && expected.WorkspaceFingerprint == "") ||
+		(recorded.RepositoryResourceID != "" && expected.RepositoryResourceID == "") {
 		return ErrGoalSessionCompatibilityIncomplete
 	}
 	if expected.OwnerID != recorded.OwnerID || expected.MachineID != recorded.MachineID || expected.RuntimeID != recorded.RuntimeID || expected.RuntimeEpoch != recorded.RuntimeEpoch || expected.DaemonInstanceID != recorded.DaemonInstanceID {
@@ -1446,7 +1735,7 @@ func compareGoalSessionIdentityStrict(journal GoalSessionJournal, expected GoalS
 	if expected.HarnessKind != recorded.HarnessKind || expected.HarnessVersion != recorded.HarnessVersion || expected.AdapterVersion != recorded.AdapterVersion || expected.AdapterProtocolVersion != recorded.AdapterProtocolVersion {
 		return ErrGoalSessionVersionMismatch
 	}
-	if expected.WorkspaceFingerprint != recorded.WorkspaceFingerprint {
+	if expected.WorkspaceFingerprint != recorded.WorkspaceFingerprint || expected.RepositoryResourceID != recorded.RepositoryResourceID {
 		return ErrGoalSessionWorkspaceMismatch
 	}
 	return nil

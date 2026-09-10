@@ -321,6 +321,7 @@ type Limits struct {
 type ResumeHandle struct {
 	LocalHandleID        string
 	NativeSessionID      string
+	NativeSessionFilename string
 	WorkspaceFingerprint string
 	NativeVersion        string
 }
