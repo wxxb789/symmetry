@@ -1285,18 +1285,6 @@ func (daemon *daemon) recoverUnclosedGoalSessions(ctx context.Context) error {
 		}
 		processEvidence := journal.PID > 0 || strings.TrimSpace(journal.ProcessIdentity) != "" || !journal.StartedAt.IsZero()
 		terminalKnown := journal.TerminalState != "" || journal.LocalState == "terminal_pending" || journal.LocalState == "cleanup_pending"
-		// cancelRecoveredJournal commits cancelled only after it has stopped and
-		// cleared the persisted process marker. If its subsequent session write
-		// failed, this durable ordering is the specific recovery proof needed to
-		// retry releasing the uncertainty barrier without guessing from an empty
-		// marker on unrelated recovered sessions.
-		if terminalKnown && journal.TerminalState == "cancelled" && !processEvidence && session.NeedsReconciliation() {
-			resolved, resolveErr := daemon.store.ResolveGoalSessionUncertainStopped(session.Key(), session.Compatibility())
-			if resolveErr != nil {
-				return fmt.Errorf("resolve cancelled Goal session after confirmed stop %s/%d: %w", key.RunID, key.Generation, resolveErr)
-			}
-			session = resolved
-		}
 		for _, delivery := range journal.PendingGoalDeliveries {
 			if delivery.Kind != state.GoalDeliverySessionAttach || delivery.DeliveryID != session.LocalHandleID || delivery.Ready {
 				continue
@@ -1337,9 +1325,10 @@ func (daemon *daemon) recoverUnclosedGoalSessions(ctx context.Context) error {
 			continue
 		}
 		if err := daemon.queueTerminalTransitionWithRetry(rootContext, key, "failed", map[string]string{
-			"stage":  "goal_session_recovery",
-			"reason": string(protocol.TaskResultReasonUnknownOutcome),
-			"error":  "native Goal session was not safely recoverable after daemon restart",
+			"stage":   "goal_session_recovery",
+			"reason":  string(protocol.TaskResultReasonUnknownOutcome),
+			"summary": "native Goal session was not safely recoverable after daemon restart",
+			"error":   "native Goal session was not safely recoverable after daemon restart",
 		}); err != nil {
 			return fmt.Errorf("queue unknown native outcome for %s/%d: %w", key.RunID, key.Generation, err)
 		}
@@ -1439,8 +1428,10 @@ func (daemon *daemon) queueRestartInputFailure(ctx context.Context, key state.Ru
 		recoveryError = "supervisory recovery cannot safely reattach a paused or controlled agent"
 	}
 	return daemon.queueTerminalTransitionWithRetry(ctx, key, "failed", map[string]string{
-		"stage": "daemon_restart",
-		"error": recoveryError,
+		"stage":   "daemon_restart",
+		"reason":  string(protocol.TaskResultReasonUnknownOutcome),
+		"summary": recoveryError,
+		"error":   recoveryError,
 	})
 }
 
@@ -2484,6 +2475,12 @@ func admissionSchemaVersion(input json.RawMessage) string {
 }
 
 func admissionLaunchFailure(admission protocol.Admission, capabilities harness.Capabilities, providerAccess *protocol.ProviderAccess) error {
+	// Observe admissions require an Integration-owned external-check receipt.
+	// Current native adapters cannot produce that receipt, so reject before
+	// workspace, launch-intent, or session-journal side effects.
+	if admission.Purpose == protocol.AdmissionPurposeObserve {
+		return taskResultFailure(protocol.TaskResultReasonUnsupportedVersion, fmt.Errorf("Goal admission purpose %q is unsupported without a verified external-check adapter", admission.Purpose))
+	}
 	// Handoff is intentionally a distinct mode. This daemon has no verified
 	// cross-harness native-session transfer, so reject it before any workspace,
 	// launch-intent, or native-process side effect can be created.
@@ -3916,9 +3913,11 @@ func (daemon *daemon) queueTransition(key state.RunKey, stateName string, payloa
 }
 
 func (daemon *daemon) queueFailure(ctx context.Context, key state.RunKey, stage string, cause error) {
-	payload := map[string]string{"stage": stage, "error": cause.Error()}
-	if reason, ok := typedTaskResultReason(cause); ok {
-		payload["reason"] = string(reason)
+	payload := map[string]string{
+		"stage":   stage,
+		"reason":  string(canonicalTaskResultReason(cause, nil, protocol.TaskResultReasonUnknownOutcome)),
+		"summary": "daemon failed during " + stage,
+		"error":   cause.Error(),
 	}
 	if err := daemon.queueTerminalTransitionWithRetry(ctx, key, "failed", payload); err != nil {
 		daemon.log.Error("queue_failed_transition_failed", "run_id", key.RunID, "generation", key.Generation, "stage", stage, "error", err)
@@ -4120,7 +4119,12 @@ func (daemon *daemon) waitForRunWithContext(ctx context.Context, key state.RunKe
 			if result.SinkError != nil {
 				cause = result.SinkError
 			}
-			if err := daemon.queueTerminalTransitionWithRetry(ctx, key, "failed", map[string]any{"exit_code": result.ExitCode, "error": errorText(cause)}); err != nil {
+			if err := daemon.queueTerminalTransitionWithRetry(ctx, key, "failed", map[string]any{
+				"exit_code": result.ExitCode,
+				"reason":    string(canonicalTaskResultReason(cause, nil, protocol.TaskResultReasonProcessFailure)),
+				"summary":   "agent process exited unsuccessfully",
+				"error":     errorText(cause),
+			}); err != nil {
 				daemon.log.Error("queue_failed_transition_failed", "run_id", key.RunID, "generation", key.Generation, "stage", "process_exit", "error", err)
 			}
 		}
@@ -4553,9 +4557,10 @@ func (daemon *daemon) queueNativeUsageRecoveryTerminal(ctx context.Context, jour
 		errorText = cause.Error()
 	}
 	if err := daemon.queueTerminalTransitionWithRetry(ctx, journal.Key(), "failed", map[string]string{
-		"stage":  "native_goal_usage_recovery",
-		"reason": string(protocol.TaskResultReasonUnknownOutcome),
-		"error":  errorText,
+		"stage":   "native_goal_usage_recovery",
+		"reason":  string(protocol.TaskResultReasonUnknownOutcome),
+		"summary": "native Goal usage persistence retry budget exhausted",
+		"error":   errorText,
 	}); err != nil {
 		return journal, err
 	}
@@ -4778,7 +4783,11 @@ func (daemon *daemon) markNativeCleanupBlocked(active *runningRun) {
 }
 
 func nativeTerminalPayload(result harness.TaskResult, admission *protocol.Admission, waitErr, closeErr error) (string, map[string]any) {
-	payload := map[string]any{"summary": result.Summary}
+	summary := strings.TrimSpace(result.Summary)
+	if summary == "" {
+		summary = "native Goal execution failed"
+	}
+	payload := map[string]any{"summary": summary}
 	if result.Semantic != nil {
 		payload["task_result"] = result.Semantic
 	}
@@ -4853,10 +4862,13 @@ func typedTaskResultReason(cause error) (protocol.TaskResultReason, bool) {
 	return "", false
 }
 
-// canonicalTaskResultReason defines one precedence order for native terminal
-// payloads: an explicitly classified local failure, then the adapter's
-// normalized TaskResult reason, then the boundary-specific fallback.
+// canonicalTaskResultReason defines one precedence order for failed terminal
+// payloads. A valid semantic TaskResult records the turn's own outcome and
+// therefore outranks physical transport/process failures observed afterward.
 func canonicalTaskResultReason(cause error, result *harness.TaskResult, fallback protocol.TaskResultReason) protocol.TaskResultReason {
+	if result != nil && result.Semantic != nil && result.Semantic.Kind == protocol.TaskResultFailed && result.Semantic.Reason != nil && result.Semantic.Validate() == nil {
+		return *result.Semantic.Reason
+	}
 	if reason, ok := typedTaskResultReason(cause); ok {
 		return reason
 	}

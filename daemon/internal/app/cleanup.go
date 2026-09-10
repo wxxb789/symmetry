@@ -260,12 +260,32 @@ func (daemon *daemon) cleanupPending(ctx context.Context, journal state.RunJourn
 	return nil
 }
 
-// goalArtifactReceiptRequired keeps a successful native Goal run distinct from
-// a durably published candidate artifact. Terminal delivery only records that
-// the process result reached control; it is not outcome acceptance.
+// goalArtifactReceiptRequired keeps a successful candidate completion distinct
+// from a durably published candidate artifact. Terminal delivery only records
+// that the process result reached control; it is not outcome acceptance.
 func goalArtifactReceiptRequired(journal state.RunJournal) bool {
 	if !journal.GoalDeliveryEnabled || journal.TerminalState != "completed" {
 		return false
+	}
+	admission, present, err := parseAdmissionInput(journal.Work.Input)
+	if err != nil || !present || admission.Purpose != protocol.AdmissionPurposeImplement {
+		return err != nil || !present
+	}
+	switch journal.TerminalTaskResultKind {
+	case protocol.TaskResultCandidateCompletion:
+		// A candidate can only be cleaned after the immutable artifact receipt is
+		// delivered under the same run fence.
+	case protocol.TaskResultProgress,
+		protocol.TaskResultBlocked,
+		protocol.TaskResultRepairRequired,
+		protocol.TaskResultReplanRequired,
+		protocol.TaskResultFailed,
+		protocol.TaskResultPlanProposed:
+		return false
+	default:
+		// A missing marker could be an older or interrupted candidate completion.
+		// Retain the workspace rather than infer that no artifact was proposed.
+		return true
 	}
 	for _, delivery := range journal.DeliveredGoalDeliveries {
 		if delivery.Kind == state.GoalDeliveryEvidence && delivery.Evidence != nil && delivery.Evidence.Kind == protocol.EvidenceArtifact {

@@ -394,6 +394,44 @@ func TestHandoffAdmissionFailsBeforeWorkspaceAndNativeSessionSideEffects(t *test
 	}
 }
 
+func TestObserveAdmissionFailsBeforeWorkspaceAndNativeSessionSideEffects(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	admission.Purpose = protocol.AdmissionPurposeObserve
+
+	app, store, session, controlClient := nativeAdmissionDaemon(t, admission, validNativeTaskResult(t, admission), nil)
+	defer store.Close()
+	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
+	app.workers.Wait()
+
+	if len(session.calls) != 0 || len(controlClient.calls) != 0 {
+		t.Fatalf("observe rejection crossed native or control boundary: native=%#v control=%#v", session.calls, controlClient.calls)
+	}
+	sessions, err := store.ListGoalSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("observe created local Goal session journal: %#v", sessions)
+	}
+	journal, err := store.LoadJournal(state.RunKey{RunID: "run-1", Generation: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.WorkspaceRecoveryRequired || journal.WorkspacePath != "" {
+		t.Fatalf("observe workspace side effects = recovery %v, path %q; want none", journal.WorkspaceRecoveryRequired, journal.WorkspacePath)
+	}
+	var failure map[string]string
+	if err := json.Unmarshal(journal.PendingTransitions[0].Payload, &failure); err != nil {
+		t.Fatal(err)
+	}
+	if failure["reason"] != string(protocol.TaskResultReasonUnsupportedVersion) || !strings.Contains(failure["error"], "purpose") {
+		t.Fatalf("observe rejection payload = %#v", failure)
+	}
+}
+
 func TestResumeAdmissionPersistsCanonicalRejectionReason(t *testing.T) {
 	admission, present, err := parseAdmissionInput(validAdmissionInput())
 	if err != nil || !present {
@@ -1086,6 +1124,27 @@ func TestNativeTerminalPayloadPreservesProcessFailureWhenWaitFails(t *testing.T)
 	}
 }
 
+func TestNativeTerminalPayloadPrefersSemanticFailureReason(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	semantic := validNativeTaskResult(t, admission)
+	semantic.Kind = protocol.TaskResultFailed
+	semanticReason := protocol.TaskResultReasonQuota
+	semantic.Reason = &semanticReason
+	physicalReason := protocol.TaskResultReasonProcessFailure
+	stateName, payload := nativeTerminalPayload(harness.TaskResult{
+		Kind:     harness.ResultFailed,
+		Summary:  "native process exited after reporting a quota result",
+		Semantic: &semantic,
+		Reason:   &physicalReason,
+	}, &admission, taskResultFailure(protocol.TaskResultReasonProcessFailure, errors.New("process exited")), nil)
+	if stateName != "failed" || payload["reason"] != string(protocol.TaskResultReasonQuota) {
+		t.Fatalf("nativeTerminalPayload() = (%q, %#v), want failed quota", stateName, payload)
+	}
+}
+
 func TestRecoverUnclosedGoalSessionStopsPersistedProcessAfterTerminalTransition(t *testing.T) {
 	admission, present, err := parseAdmissionInput(validAdmissionInput())
 	if err != nil || !present {
@@ -1137,6 +1196,43 @@ func TestRecoverUnclosedGoalSessionStopsPersistedProcessAfterTerminalTransition(
 	}
 	if journal.TerminalState != "failed" || len(journal.PendingTransitions) != 1 {
 		t.Fatalf("terminal run journal = %#v", journal)
+	}
+}
+
+func TestRecoverCancelledGoalSessionWithoutProcessEvidenceRetainsBarrier(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	store, key := claimedStore(t)
+	defer store.Close()
+	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000021"}
+	saveAttachedGoalSession(t, store, key, admission, sessionKey)
+	if _, err := store.MarkGoalSessionUncertain(sessionKey, "native stop has no persisted evidence"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.QueueTerminalTransition(key, protocol.StateTransitionRequest{
+		TransitionID: "cancelled-without-stop-proof", State: "cancelled", Payload: json.RawMessage(`{"reason":"cancelled"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	app := &daemon{config: testConfig(t), store: store, options: options{newID: ids(), clock: time.Now}, running: make(map[state.RunKey]*runningRun), slots: make(chan struct{}, 1)}
+	if err := app.recoverUnclosedGoalSessions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.LoadGoalSession(sessionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !session.NeedsReconciliation() {
+		t.Fatalf("recovery inferred stopped native session without positive process evidence: %#v", session)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !journal.RetainWorkspace || journal.TerminalState != "cancelled" {
+		t.Fatalf("cancelled recovery did not retain unresolved session workspace: %#v", journal)
 	}
 }
 

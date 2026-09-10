@@ -894,6 +894,143 @@ func TestQueueTerminalTransitionIsAtomic(t *testing.T) {
 	}
 }
 
+func TestCompletedTerminalTaskResultKindSurvivesDeliveryAndRestart(t *testing.T) {
+	directory := t.TempDir()
+	store, err := New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal := testJournal("run-terminal-result", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	pendingAt := time.Date(2026, 9, 10, 1, 2, 3, 0, time.UTC)
+	transition := protocol.StateTransitionRequest{
+		TransitionID: "completed-candidate",
+		State:        "completed",
+		Payload:      json.RawMessage(`{"task_result":{"kind":"candidate_completion"}}`),
+	}
+	queued, err := store.QueueTerminalTransitionAt(journal.Key(), transition, pendingAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued.TerminalTaskResultKind != protocol.TaskResultCandidateCompletion {
+		t.Fatalf("queued terminal task result kind = %q, want candidate_completion", queued.TerminalTaskResultKind)
+	}
+	replayed, err := store.QueueTerminalTransitionAt(journal.Key(), transition, pendingAt.Add(time.Second))
+	if err != nil {
+		t.Fatalf("replayed QueueTerminalTransitionAt() error = %v", err)
+	}
+	if replayed.TerminalTaskResultKind != protocol.TaskResultCandidateCompletion || replayed.TerminalState != "completed" {
+		t.Fatalf("replayed completed terminal transition changed metadata: %#v", replayed)
+	}
+	if _, err := store.ResolveTerminal(journal.Key(), TerminalVerdictAccepted, pendingAt.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkTransitionsDelivered(journal.Key(), []string{transition.TransitionID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.EnterCleanupPending(journal.Key()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	loaded, err := restarted.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.TerminalTaskResultKind != protocol.TaskResultCandidateCompletion {
+		t.Fatalf("restarted terminal task result kind = %q, want candidate_completion", loaded.TerminalTaskResultKind)
+	}
+}
+
+func TestCancelledTerminalReplacementPreservesCompletedTaskResultKind(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-terminal-cancel", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	pendingAt := time.Date(2026, 9, 10, 1, 2, 3, 0, time.UTC)
+	if _, err := store.QueueTerminalTransitionAt(journal.Key(), protocol.StateTransitionRequest{
+		TransitionID: "completed-candidate",
+		State:        "completed",
+		Payload:      json.RawMessage(`{"task_result":{"kind":"candidate_completion"}}`),
+	}, pendingAt); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := store.QueueCancelledTransitionAndAcknowledgementAt(journal.Key(), protocol.StateTransitionRequest{
+		TransitionID: "cancelled-1", State: "cancelled", Payload: json.RawMessage(`{"reason":"cancelled"}`),
+	}, protocol.CommandAcknowledgement{CommandID: "cancel-1", Outcome: "applied", AckID: "ack-1"}, pendingAt.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.TerminalState != "cancelled" || updated.TerminalTaskResultKind != protocol.TaskResultCandidateCompletion {
+		t.Fatalf("cancelled replacement = %#v", updated)
+	}
+}
+
+func TestCompletedTerminalTaskResultKindRejectsInvalidAtomicWrite(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-terminal-invalid", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.QueueTerminalTransition(journal.Key(), protocol.StateTransitionRequest{
+		TransitionID: "completed-invalid", State: "completed", Payload: json.RawMessage(`{"task_result":{"kind":"invalid"}}`),
+	}); err == nil {
+		t.Fatal("QueueTerminalTransition() accepted an invalid task result kind")
+	}
+	loaded, err := store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.TerminalState != "" || loaded.TerminalTaskResultKind != "" || len(loaded.PendingTransitions) != 0 {
+		t.Fatalf("invalid completed transition partially updated journal: %#v", loaded)
+	}
+}
+
+func TestSaveJournalCannotChangeOrClearTerminalTaskResultKind(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-terminal-immutable", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.QueueTerminalTransition(journal.Key(), protocol.StateTransitionRequest{
+		TransitionID: "completed-candidate",
+		State:        "completed",
+		Payload:      json.RawMessage(`{"task_result":{"kind":"candidate_completion"}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleared := loaded
+	cleared.TerminalTaskResultKind = ""
+	if err := store.SaveJournal(cleared); err == nil {
+		t.Fatal("SaveJournal() cleared immutable terminal task result kind")
+	}
+	changed := loaded
+	changed.TerminalTaskResultKind = protocol.TaskResultProgress
+	if err := store.SaveJournal(changed); err == nil {
+		t.Fatal("SaveJournal() changed immutable terminal task result kind")
+	}
+	loaded, err = store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.TerminalTaskResultKind != protocol.TaskResultCandidateCompletion {
+		t.Fatalf("terminal task result kind changed after rejected saves: %#v", loaded)
+	}
+}
+
 func TestEnterCleanupPendingPreservesTerminalAuditAndControlsDelivery(t *testing.T) {
 	store := mustStore(t)
 	journal := testJournal("run-1", 1)

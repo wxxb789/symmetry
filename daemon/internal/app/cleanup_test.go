@@ -264,6 +264,7 @@ func TestRecoveredCleanupWithEmptyWorkspacePathUsesRecoveryIntent(t *testing.T) 
 func TestGoalCandidateCleanupRequiresPublishedArtifactReceipt(t *testing.T) {
 	store, key := claimedGoalDeliveryStore(t)
 	persistWorkspacePath(t, store, key, "C:\\workspace")
+	setGoalCleanupAdmissionInput(t, store, key, validAdmissionInput())
 	transition := protocol.StateTransitionRequest{
 		TransitionID: "completed-1",
 		State:        "completed",
@@ -287,6 +288,9 @@ func TestGoalCandidateCleanupRequiresPublishedArtifactReceipt(t *testing.T) {
 	journal.GoalDeliveryEnabled = true
 	if err := store.SaveJournal(journal); err != nil {
 		t.Fatal(err)
+	}
+	if journal.TerminalTaskResultKind != protocol.TaskResultCandidateCompletion {
+		t.Fatalf("terminal task result kind = %q, want candidate_completion", journal.TerminalTaskResultKind)
 	}
 
 	cleaned := make(chan bool, 1)
@@ -330,6 +334,65 @@ func TestGoalCandidateCleanupRequiresPublishedArtifactReceipt(t *testing.T) {
 	}
 	if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
 		t.Fatalf("journal = %v, want deleted after artifact-backed cleanup", err)
+	}
+}
+
+func TestGoalCleanupDoesNotRequireArtifactForNonCandidateSuccessfulPurposes(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		input      json.RawMessage
+		resultKind protocol.TaskResultKind
+	}{
+		{name: "implement progress", input: validAdmissionInput(), resultKind: protocol.TaskResultProgress},
+		{name: "plan proposed", input: goalCleanupAdmissionInput(t, protocol.AdmissionPurposePlan), resultKind: protocol.TaskResultPlanProposed},
+		{name: "validate progress", input: goalCleanupAdmissionInput(t, protocol.AdmissionPurposeValidate), resultKind: protocol.TaskResultProgress},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, key := claimedGoalDeliveryStore(t)
+			persistWorkspacePath(t, store, key, "C:\\workspace")
+			setGoalCleanupAdmissionInput(t, store, key, test.input)
+			journal := queueCompletedGoalCleanupJournal(t, store, key, test.resultKind)
+			cleaned := make(chan bool, 1)
+			d := &daemon{
+				config:    config.Config{CleanupTimeoutMS: 10000},
+				store:     store,
+				workspace: &trackingWorkspace{cleaned: cleaned},
+				log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
+			}
+			if err := d.cleanupPending(context.Background(), journal); err != nil {
+				t.Fatalf("cleanupPending() error = %v", err)
+			}
+			select {
+			case succeeded := <-cleaned:
+				if !succeeded {
+					t.Fatal("successful Goal cleanup used failure policy")
+				}
+			default:
+				t.Fatal("successful non-candidate Goal workspace was not cleaned")
+			}
+		})
+	}
+}
+
+func TestGoalImplementCleanupFailsClosedWithoutTerminalTaskResultKind(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
+	persistWorkspacePath(t, store, key, "C:\\workspace")
+	setGoalCleanupAdmissionInput(t, store, key, validAdmissionInput())
+	journal := queueCompletedGoalCleanupJournal(t, store, key, "")
+	cleaned := make(chan bool, 1)
+	d := &daemon{
+		config:    config.Config{CleanupTimeoutMS: 10000},
+		store:     store,
+		workspace: &trackingWorkspace{cleaned: cleaned},
+		log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	}
+	if err := d.cleanupPending(context.Background(), journal); err == nil || !strings.Contains(err.Error(), "candidate artifact") {
+		t.Fatalf("cleanupPending() error = %v, want missing terminal task result gate", err)
+	}
+	select {
+	case <-cleaned:
+		t.Fatal("implement workspace was cleaned without a terminal task result kind")
+	default:
 	}
 }
 
@@ -700,6 +763,69 @@ func cleanupPendingStore(t *testing.T) (*state.Store, state.RunKey) {
 		t.Fatal(err)
 	}
 	return store, key
+}
+
+func setGoalCleanupAdmissionInput(t *testing.T, store *state.Store, key state.RunKey, input json.RawMessage) {
+	t.Helper()
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal.Work.Input = input
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func goalCleanupAdmissionInput(t *testing.T, purpose protocol.AdmissionPurpose) json.RawMessage {
+	t.Helper()
+	input := string(validAdmissionInput())
+	switch purpose {
+	case protocol.AdmissionPurposePlan:
+		input = strings.Replace(input, `"work_item_id":"00000000-0000-4000-8000-000000000003"`, `"work_item_id":null`, 1)
+	case protocol.AdmissionPurposeValidate:
+		input = strings.Replace(input, `"validation_of_task_id":null`, `"validation_of_task_id":"00000000-0000-4000-8000-000000000003"`, 1)
+	default:
+		t.Fatalf("unsupported cleanup admission purpose %q", purpose)
+	}
+	input = strings.Replace(input, `"purpose":"implement"`, `"purpose":"`+string(purpose)+`"`, 1)
+	return json.RawMessage(input)
+}
+
+func queueCompletedGoalCleanupJournal(t *testing.T, store *state.Store, key state.RunKey, kind protocol.TaskResultKind) state.RunJournal {
+	t.Helper()
+	payload := json.RawMessage(`{}`)
+	if kind != "" {
+		encoded, err := json.Marshal(map[string]any{"task_result": map[string]string{"kind": string(kind)}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload = encoded
+	}
+	transition := protocol.StateTransitionRequest{TransitionID: "completed-1", State: "completed", Payload: payload}
+	pendingAt := time.Date(2026, 9, 10, 1, 0, 0, 0, time.UTC)
+	if _, err := store.QueueTerminalTransitionAt(key, transition, pendingAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ResolveTerminal(key, state.TerminalVerdictAccepted, pendingAt.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkTransitionsDelivered(key, []string{transition.TransitionID}); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal.GoalDeliveryEnabled = true
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	journal, err = store.EnterCleanupPending(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return journal
 }
 
 func cleanupGoalArtifactEvidence(t *testing.T, runID string) protocol.Evidence {

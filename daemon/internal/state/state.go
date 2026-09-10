@@ -106,17 +106,21 @@ type ClaimIntent struct {
 // generation. It contains only opaque protocol state and machine-local process
 // information; coding-agent and repository credentials never belong here.
 type RunJournal struct {
-	RunID                          string                            `json:"run_id"`
-	Generation                     int64                             `json:"generation"`
-	RuntimeKey                     string                            `json:"runtime_key"`
-	RuntimeID                      string                            `json:"runtime_id"`
-	ClaimedRuntimeEpoch            int64                             `json:"claimed_runtime_epoch"`
-	ClaimID                        string                            `json:"claim_id"`
-	LeaseToken                     string                            `json:"lease_token"`
-	LeaseExpiresAt                 time.Time                         `json:"lease_expires_at"`
-	LocalState                     string                            `json:"local_state"`
-	TerminalPendingAt              time.Time                         `json:"terminal_pending_at,omitempty"`
-	TerminalState                  string                            `json:"terminal_state,omitempty"`
+	RunID               string    `json:"run_id"`
+	Generation          int64     `json:"generation"`
+	RuntimeKey          string    `json:"runtime_key"`
+	RuntimeID           string    `json:"runtime_id"`
+	ClaimedRuntimeEpoch int64     `json:"claimed_runtime_epoch"`
+	ClaimID             string    `json:"claim_id"`
+	LeaseToken          string    `json:"lease_token"`
+	LeaseExpiresAt      time.Time `json:"lease_expires_at"`
+	LocalState          string    `json:"local_state"`
+	TerminalPendingAt   time.Time `json:"terminal_pending_at,omitempty"`
+	TerminalState       string    `json:"terminal_state,omitempty"`
+	// TerminalTaskResultKind is the immutable semantic result kind carried by
+	// the first completed transition. It survives transition delivery so local
+	// cleanup can distinguish a candidate artifact from other successful work.
+	TerminalTaskResultKind         protocol.TaskResultKind           `json:"terminal_task_result_kind,omitempty"`
 	TerminalVerdict                string                            `json:"terminal_verdict,omitempty"`
 	TerminalResolvedAt             time.Time                         `json:"terminal_resolved_at,omitempty"`
 	Work                           protocol.Work                     `json:"work"`
@@ -456,6 +460,13 @@ func (store *Store) SaveJournal(journal RunJournal) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if err := store.ensureOpenLocked(); err != nil {
+		return err
+	}
+	if current, err := store.loadJournalLocked(journal.Key()); err == nil {
+		if current.TerminalTaskResultKind != journal.TerminalTaskResultKind {
+			return errors.New("terminal task result kind is immutable")
+		}
+	} else if !IsNotFound(err) {
 		return err
 	}
 	return store.saveJournalLocked(journal)
@@ -1251,6 +1262,13 @@ func queueTerminalTransition(journal *RunJournal, transition protocol.StateTrans
 	if !isTerminalTransitionState(prepared.State) {
 		return errors.New("terminal transition state is invalid")
 	}
+	if prepared.State == "completed" && journal.TerminalTaskResultKind == "" {
+		kind, err := terminalTaskResultKind(prepared.Payload)
+		if err != nil {
+			return err
+		}
+		journal.TerminalTaskResultKind = kind
+	}
 	if prepared.State == "cancelled" {
 		journal.RetainWorkspace = true
 		journal.PendingTransitions = []protocol.StateTransitionRequest{prepared}
@@ -1684,9 +1702,12 @@ func validTransition(transition protocol.StateTransitionRequest) bool {
 
 func validTerminalState(journal RunJournal) bool {
 	if journal.LocalState != "terminal_pending" && journal.LocalState != "cleanup_pending" {
-		return !hasPendingTerminalTransition(journal.PendingTransitions) && journal.TerminalPendingAt.IsZero() && journal.TerminalState == "" && journal.TerminalVerdict == "" && journal.TerminalResolvedAt.IsZero()
+		return !hasPendingTerminalTransition(journal.PendingTransitions) && journal.TerminalPendingAt.IsZero() && journal.TerminalState == "" && journal.TerminalTaskResultKind == "" && journal.TerminalVerdict == "" && journal.TerminalResolvedAt.IsZero()
 	}
 	if journal.TerminalPendingAt.IsZero() || !isTerminalTransitionState(journal.TerminalState) {
+		return false
+	}
+	if journal.TerminalTaskResultKind != "" && !validTaskResultKind(journal.TerminalTaskResultKind) {
 		return false
 	}
 	if journal.LocalState == "cleanup_pending" {
@@ -1701,6 +1722,39 @@ func validTerminalState(journal RunJournal) bool {
 		return journal.TerminalResolvedAt.IsZero()
 	}
 	return validTerminalVerdict(journal.TerminalVerdict) && !journal.TerminalResolvedAt.IsZero()
+}
+
+func terminalTaskResultKind(payload json.RawMessage) (protocol.TaskResultKind, error) {
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return "", errors.New("completed terminal payload is invalid")
+	}
+	rawResult, present := envelope["task_result"]
+	if !present {
+		return "", nil
+	}
+	var result struct {
+		Kind protocol.TaskResultKind `json:"kind"`
+	}
+	if err := json.Unmarshal(rawResult, &result); err != nil || !validTaskResultKind(result.Kind) {
+		return "", errors.New("completed terminal task result kind is invalid")
+	}
+	return result.Kind, nil
+}
+
+func validTaskResultKind(kind protocol.TaskResultKind) bool {
+	switch kind {
+	case protocol.TaskResultProgress,
+		protocol.TaskResultCandidateCompletion,
+		protocol.TaskResultBlocked,
+		protocol.TaskResultRepairRequired,
+		protocol.TaskResultReplanRequired,
+		protocol.TaskResultFailed,
+		protocol.TaskResultPlanProposed:
+		return true
+	default:
+		return false
+	}
 }
 
 func validTerminalVerdict(verdict string) bool {
