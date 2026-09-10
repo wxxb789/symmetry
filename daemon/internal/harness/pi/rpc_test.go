@@ -87,12 +87,49 @@ func TestValidatorDoesNotTreatPromptAcceptanceOrAgentEndAsFinal(t *testing.T) {
 	}
 }
 
+func TestValidatorAcceptsDocumentedCompactionContinuationAndRejectsInvalidLifecycle(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("..", "testdata", "pi", "0.85.1", "compaction-continuation.jsonl"))
+	if err != nil {
+		t.Fatalf("read continuation fixture: %v", err)
+	}
+	records, err := NewDecoder(4096).Feed(fixture)
+	if err != nil || len(records) != 11 {
+		t.Fatalf("Feed() = %d records, %v; want 11 records", len(records), err)
+	}
+	validator := registeredValidator(t)
+	for _, record := range records {
+		if err := validator.Observe(record); err != nil {
+			t.Fatalf("Observe(record %d) error = %v", record.Sequence, err)
+		}
+	}
+	if _, err := validator.Finish(); err != nil {
+		t.Fatalf("Finish() error = %v", err)
+	}
+
+	validator = registeredValidator(t)
+	observeJSON(t, validator, `{"type":"response","id":"state-1","command":"get_state","success":true,"data":{"sessionId":"s","sessionFile":"C:/s.jsonl"}}`)
+	observeJSON(t, validator, `{"type":"response","id":"prompt-1","command":"prompt","success":true}`)
+	observeJSON(t, validator, `{"type":"agent_start"}`)
+	if err := validator.Observe(decodeOne(t, `{"type":"agent_settled"}`)); !errors.Is(err, ErrUnexpectedAgentEvent) {
+		t.Fatalf("active agent_settled error = %v, want ErrUnexpectedAgentEvent", err)
+	}
+
+	validator = registeredValidator(t)
+	observeJSON(t, validator, `{"type":"response","id":"state-1","command":"get_state","success":true,"data":{"sessionId":"s","sessionFile":"C:/s.jsonl"}}`)
+	observeJSON(t, validator, `{"type":"response","id":"prompt-1","command":"prompt","success":true}`)
+	observeJSON(t, validator, `{"type":"agent_start"}`)
+	observeJSON(t, validator, `{"type":"agent_end","messages":[],"willRetry":false}`)
+	if err := validator.Observe(decodeOne(t, `{"type":"agent_end","messages":[],"willRetry":false}`)); !errors.Is(err, ErrDuplicateAgentEnd) {
+		t.Fatalf("duplicate agent_end error = %v, want ErrDuplicateAgentEnd", err)
+	}
+}
+
 func TestValidatorAllowsEventBeforePromptResponseButRequiresAcceptance(t *testing.T) {
 	validator := registeredValidator(t)
 	observeJSON(t, validator, `{"type":"response","id":"state-1","command":"get_state","success":true,"data":{"sessionId":"s","sessionFile":"C:/s.jsonl"}}`)
 	observeJSON(t, validator, `{"type":"agent_start"}`)
 	observeJSON(t, validator, `{"type":"message_end","message":{"role":"assistant","content":"done","stopReason":"stop"}}`)
-	observeJSON(t, validator, `{"type":"agent_end","messages":[]}`)
+	observeJSON(t, validator, `{"type":"agent_end","messages":[],"willRetry":false}`)
 	observeJSON(t, validator, `{"type":"agent_settled"}`)
 	if _, err := validator.Finish(); !errors.Is(err, ErrPromptNotAccepted) {
 		t.Fatalf("Finish() before prompt response error = %v, want ErrPromptNotAccepted", err)
@@ -271,9 +308,9 @@ func TestValidatorBindsFinalAssistantToTheLastLowLevelRun(t *testing.T) {
 	observeJSON(t, validator, `{"type":"response","id":"prompt-1","command":"prompt","success":true}`)
 	observeJSON(t, validator, `{"type":"agent_start"}`)
 	observeJSON(t, validator, `{"type":"message_end","message":{"role":"assistant","content":"old","stopReason":"stop"}}`)
-	observeJSON(t, validator, `{"type":"agent_end","messages":[]}`)
+	observeJSON(t, validator, `{"type":"agent_end","messages":[],"willRetry":false}`)
 	observeJSON(t, validator, `{"type":"agent_start"}`)
-	observeJSON(t, validator, `{"type":"agent_end","messages":[]}`)
+	observeJSON(t, validator, `{"type":"agent_end","messages":[],"willRetry":false}`)
 	observeJSON(t, validator, `{"type":"agent_settled"}`)
 	if _, err := validator.Finish(); !errors.Is(err, ErrMissingAssistantMessage) {
 		t.Fatalf("Finish() error = %v, want ErrMissingAssistantMessage", err)
@@ -355,7 +392,7 @@ func readyToSettle(t *testing.T, assistant string) *Validator {
 	observeJSON(t, validator, `{"type":"response","id":"prompt-1","command":"prompt","success":true}`)
 	observeJSON(t, validator, `{"type":"agent_start"}`)
 	observeJSON(t, validator, `{"type":"message_end","message":`+assistant+`}`)
-	observeJSON(t, validator, `{"type":"agent_end","messages":[]}`)
+	observeJSON(t, validator, `{"type":"agent_end","messages":[],"willRetry":false}`)
 	observeJSON(t, validator, `{"type":"agent_settled"}`)
 	return validator
 }

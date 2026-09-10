@@ -21,6 +21,8 @@ defmodule SymmetryControlWeb.Protocol do
     not_found: {404, "not_found", "resource was not found"},
     requested_session_not_found:
       {404, "requested_session_not_found", "requested harness session was not found"},
+    handoff_source_not_found:
+      {404, "handoff_source_not_found", "handoff source Run was not found"},
     capacity_exhausted: {409, "capacity_exhausted", "runtime capacity is exhausted"},
     idempotency_conflict:
       {409, "idempotency_conflict", "idempotency key was reused with different input"},
@@ -33,6 +35,10 @@ defmodule SymmetryControlWeb.Protocol do
     state_conflict: {409, "state_conflict", "state has already advanced"},
     requested_session_unavailable:
       {409, "requested_session_unavailable", "requested harness session is unavailable"},
+    handoff_source_consumed:
+      {409, "handoff_source_consumed", "handoff source Run already has a successor admission"},
+    handoff_session_reuse:
+      {409, "handoff_session_reuse", "handoff must create a new native session"},
     invalid_decision: {409, "invalid_decision", "decision is no longer valid for this Goal"},
     decision_expired: {409, "decision_expired", "decision has expired"},
     goal_admission_disabled:
@@ -84,6 +90,13 @@ defmodule SymmetryControlWeb.Protocol do
       {422, "invalid_context_snapshot", "context snapshot does not match its Goal identity"},
     requested_session_required:
       {422, "requested_session_required", "resume requires a requested harness session"},
+    handoff_source_ineligible:
+      {422, "handoff_source_ineligible",
+       "handoff source Run is not a current settled progression"},
+    handoff_source_stale:
+      {422, "handoff_source_stale", "handoff source Run is not the current progression tip"},
+    handoff_source_subject_mismatch:
+      {422, "handoff_source_subject_mismatch", "handoff source subject is inconsistent"},
     invalid_plan: {422, "invalid_plan", "plan does not satisfy Goal contract"},
     resource_not_allowed: {422, "resource_not_allowed", "resource is not allowed by Goal policy"},
     model_not_allowed: {422, "model_not_allowed", "model profile is not allowed by Goal policy"},

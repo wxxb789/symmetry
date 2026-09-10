@@ -45,6 +45,7 @@ var (
 	ErrPromptNotAccepted       = errors.New("pi rpc prompt was not accepted")
 	ErrUnexpectedAgentEvent    = errors.New("pi rpc agent event is not valid for the active operation")
 	ErrDuplicateSettled        = errors.New("pi rpc stream contains more than one agent_settled event")
+	ErrDuplicateAgentEnd       = errors.New("pi rpc stream contains more than one agent_end event for a run")
 	ErrEventAfterSettled       = errors.New("pi rpc stream contains an event after agent_settled")
 	ErrMissingAgentEnd         = errors.New("pi rpc stream settled without an agent_end event")
 	ErrMissingAssistantMessage = errors.New("pi rpc stream settled without a complete assistant message")
@@ -180,6 +181,7 @@ type Event struct {
 	Type             EventType
 	Message          json.RawMessage
 	AgentEndMessages json.RawMessage
+	WillRetry        bool
 }
 
 // Record is one complete bounded JSONL record. DecodeError is retained so a
@@ -413,6 +415,10 @@ func decodeEvent(eventType EventType, object map[string]json.RawMessage) (*Event
 			return nil, fmt.Errorf("%w: agent_end.messages must be an array", ErrInvalidEventPayload)
 		}
 		event.AgentEndMessages = append(json.RawMessage(nil), messages...)
+		willRetry, ok := object["willRetry"]
+		if !ok || bytes.Equal(bytes.TrimSpace(willRetry), []byte("null")) || json.Unmarshal(willRetry, &event.WillRetry) != nil {
+			return nil, fmt.Errorf("%w: agent_end.willRetry must be a boolean", ErrInvalidEventPayload)
+		}
 	}
 	return event, nil
 }
@@ -546,6 +552,15 @@ type NativeCompletion struct {
 	AgentEndMessages json.RawMessage
 }
 
+type lifecycleState uint8
+
+const (
+	lifecycleAwaitingStart lifecycleState = iota
+	lifecycleRunning
+	lifecycleBetweenRuns
+	lifecycleSettled
+)
+
 // Validator correlates requests and observes exactly one in-flight prompt on a
 // single pi process stream. It is deliberately not safe for concurrent calls.
 type Validator struct {
@@ -555,8 +570,10 @@ type Validator struct {
 	responded        map[string]struct{}
 	promptPending    bool
 	promptAccepted   bool
+	lifecycle        lifecycleState
 	agentStarted     bool
 	agentEnded       bool
+	lastWillRetry    bool
 	settled          bool
 	currentAssistant json.RawMessage
 	finalAssistant   json.RawMessage
@@ -684,22 +701,31 @@ func (validator *Validator) observeEvent(event Event) error {
 		if !validator.promptPending && !validator.promptAccepted {
 			return validator.fail(fmt.Errorf("%w: agent_start before prompt", ErrUnexpectedAgentEvent))
 		}
-		if validator.agentStarted && !validator.agentEnded {
-			return validator.fail(fmt.Errorf("%w: nested agent_start", ErrUnexpectedAgentEvent))
+		if validator.lifecycle != lifecycleAwaitingStart && validator.lifecycle != lifecycleBetweenRuns {
+			return validator.fail(fmt.Errorf("%w: nested or terminal agent_start", ErrUnexpectedAgentEvent))
 		}
+		// willRetry predicts only transient-error retry. pi may also begin a
+		// later run for compaction or queued continuation, so a prior false is
+		// retained as evidence but is not a prohibition on this transition.
+		validator.lifecycle = lifecycleRunning
 		validator.agentStarted = true
 		validator.agentEnded = false
 		validator.currentAssistant = nil
 		validator.finalAssistant = nil
 	case EventAgentEnd:
-		if !validator.agentStarted {
+		if validator.lifecycle == lifecycleBetweenRuns {
+			return validator.fail(ErrDuplicateAgentEnd)
+		}
+		if validator.lifecycle != lifecycleRunning {
 			return validator.fail(fmt.Errorf("%w: agent_end before agent_start", ErrUnexpectedAgentEvent))
 		}
+		validator.lifecycle = lifecycleBetweenRuns
 		validator.agentEnded = true
+		validator.lastWillRetry = event.WillRetry
 		validator.agentEndMessages = append(json.RawMessage(nil), event.AgentEndMessages...)
 		validator.finalAssistant = append(json.RawMessage(nil), validator.currentAssistant...)
 	case EventMessageEnd:
-		if !validator.agentStarted || validator.agentEnded {
+		if validator.lifecycle != lifecycleRunning {
 			return validator.fail(fmt.Errorf("%w: message_end outside an active agent run", ErrUnexpectedAgentEvent))
 		}
 		if role, assistant := assistantMessage(event.Message); assistant {
@@ -707,9 +733,10 @@ func (validator *Validator) observeEvent(event Event) error {
 			validator.currentAssistant = append(json.RawMessage(nil), event.Message...)
 		}
 	case EventAgentSettled:
-		if !validator.agentStarted {
-			return validator.fail(fmt.Errorf("%w: agent_settled before agent_start", ErrUnexpectedAgentEvent))
+		if validator.lifecycle != lifecycleBetweenRuns {
+			return validator.fail(fmt.Errorf("%w: agent_settled requires a completed agent run", ErrUnexpectedAgentEvent))
 		}
+		validator.lifecycle = lifecycleSettled
 		validator.settled = true
 	}
 	return nil

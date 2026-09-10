@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"strings"
 	"sync"
 	"testing"
@@ -91,7 +92,7 @@ func TestStartUsesOwnedServeInvocationPersistsBeforeOutputAndWithholdsSecrets(t 
 	if !persisted || pid != 123 || identity != "created:123" {
 		t.Fatalf("ProcessDetails() = %d, %q; persisted=%v", pid, identity, persisted)
 	}
-	wantArgs := []string{"serve", "--hostname", "127.0.0.1", "--port", "43123", "--pure"}
+	wantArgs := []string{"serve", "--hostname", "127.0.0.1", "--port", "0", "--pure"}
 	if strings.Join(invocation.Args, "|") != strings.Join(wantArgs, "|") || invocation.Program != "opencode-test" || invocation.Dir != request.Workspace {
 		t.Fatalf("invocation = %+v, want owned explicit serve", invocation)
 	}
@@ -239,10 +240,12 @@ func TestCloseCancelsInFlightPromptAndPreventsSecondAdmission(t *testing.T) {
 }
 
 func TestSessionWatcherRejectsUnexpectedAdmissionIdentityBeforePublishingFrame(t *testing.T) {
-	context, cancel := context.WithCancel(context.Background())
+	sessionContext, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	sink := &recordingSink{}
-	session := newNativeSession(context, cancel, sink, t.TempDir(), &fakeAPI{}, time.Millisecond, time.Second)
+	eventContext, cancelEvents := context.WithCancel(sessionContext)
+	defer cancelEvents()
+	session := newNativeSession(sessionContext, cancel, eventContext, cancelEvents, sink, t.TempDir(), func(Config) (api, error) { return &fakeAPI{}, nil }, "opencode", "secret", func(int, string) ConnectionVerifier { return func(context.Context, net.Conn) error { return nil } }, time.Millisecond, time.Second)
 	stream := &streamHandle{body: io.NopCloser(strings.NewReader("data: {\"id\":\"evt_1\",\"type\":\"session.next.prompt.admitted\",\"durable\":{\"aggregateID\":\"ses_native_1\",\"seq\":1,\"version\":1},\"data\":{\"timestamp\":1,\"sessionID\":\"ses_native_1\",\"messageID\":\"msg_other\",\"prompt\":{\"text\":\"other\"},\"delivery\":\"steer\"}}\n\n"))}
 	done := make(chan struct{})
 	go session.watchSessionEvents(stream, done, "ses_native_1", "msg_expected")
@@ -268,6 +271,50 @@ func TestStartRejectsUnsupportedOrUnsafeInputsBeforeLaunch(t *testing.T) {
 	request.Limits.MaxCostMicrousd = &cap
 	if _, err := adapter.Start(context.Background(), request, &recordingSink{}); !errors.Is(err, harness.ErrUnsupportedCapability) || processStarted {
 		t.Fatalf("cost Start() error = %v started=%v", err, processStarted)
+	}
+	request = startRequest(t)
+	request.ModelProfile = "  profile is not mapped  "
+	if _, err := adapter.Start(context.Background(), request, &recordingSink{}); err == nil || processStarted {
+		t.Fatalf("model profile Start() error = %v started=%v", err, processStarted)
+	}
+	request = startRequest(t)
+	request.Invocation.Args = []string{"--unsafe-unknown-flag"}
+	if _, err := adapter.Start(context.Background(), request, &recordingSink{}); err == nil || processStarted {
+		t.Fatalf("args Start() error = %v started=%v", err, processStarted)
+	}
+}
+
+func TestCloseCancelsBlockedSSEPersistenceBeforeWaitCompletes(t *testing.T) {
+	process := newFakeProcess()
+	processContext, cancelProcess := context.WithCancel(context.Background())
+	defer cancelProcess()
+	eventContext, cancelEvents := context.WithCancel(processContext)
+	defer cancelEvents()
+	sink := newBlockingEventSink()
+	session := newNativeSession(processContext, cancelProcess, eventContext, cancelEvents, sink, t.TempDir(), func(Config) (api, error) { return &fakeAPI{}, nil }, "opencode", "secret", func(int, string) ConnectionVerifier { return func(context.Context, net.Conn) error { return nil } }, time.Millisecond, time.Second)
+	stream := &streamHandle{body: io.NopCloser(strings.NewReader("data: {\"id\":\"evt_1\",\"type\":\"session.next.prompt.admitted\",\"durable\":{\"aggregateID\":\"ses_native_1\",\"seq\":1,\"version\":1},\"data\":{\"timestamp\":1,\"sessionID\":\"ses_native_1\",\"messageID\":\"msg_expected\",\"prompt\":{\"text\":\"one\"},\"delivery\":\"steer\"}}\n\n"))}
+	session.mu.Lock()
+	session.process = process
+	session.stream = stream
+	session.streamDone = make(chan struct{})
+	streamDone := session.streamDone
+	session.mu.Unlock()
+	go session.watchSessionEvents(stream, streamDone, "ses_native_1", "msg_expected")
+	<-sink.entered
+	go session.watchProcess(process)
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- session.Close(context.Background()) }()
+	if err := <-closeDone; err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case <-sink.returned:
+	default:
+		t.Fatal("Close() returned before the cancelled SSE persistence call returned")
+	}
+	result, err := session.Wait(context.Background())
+	if err != nil || result.Kind != harness.ResultUnknown {
+		t.Fatalf("Wait() = %+v, %v", result, err)
 	}
 }
 
@@ -429,6 +476,26 @@ type recordingSink struct {
 	events []harness.Event
 }
 
+type blockingEventSink struct {
+	entered  chan struct{}
+	returned chan struct{}
+	once     sync.Once
+}
+
+func newBlockingEventSink() *blockingEventSink {
+	return &blockingEventSink{entered: make(chan struct{}), returned: make(chan struct{})}
+}
+
+func (sink *blockingEventSink) Handle(ctx context.Context, event harness.Event) error {
+	if event.Kind != harness.EventNativeFrame {
+		return nil
+	}
+	sink.once.Do(func() { close(sink.entered) })
+	<-ctx.Done()
+	close(sink.returned)
+	return ctx.Err()
+}
+
 func (sink *recordingSink) Handle(_ context.Context, event harness.Event) error {
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
@@ -470,7 +537,17 @@ func (sink *recordingSink) hasDiagnostic(code string) bool {
 }
 
 func newTestAdapter(start processStarter, fake api) *Adapter {
-	adapter := newAdapter("opencode-test", nil, start, func(Config) (api, error) { return fake, nil }, func() (int, error) { return 43123, nil }, func() (string, string, error) { return "opencode", "test-secret", nil })
+	readyStart := func(ctx context.Context, invocation execution.Invocation, sink execution.Sink) (nativeProcess, error) {
+		process, err := start(ctx, invocation, sink)
+		if err != nil {
+			return nil, err
+		}
+		if err := sink.Handle(ctx, execution.Event{Stream: execution.Stdout, Sequence: 2, Data: []byte("opencode server listening on http://127.0.0.1:43123\n")}); err != nil {
+			return nil, err
+		}
+		return process, nil
+	}
+	adapter := newAdapter("opencode-test", nil, readyStart, func(Config) (api, error) { return fake, nil }, func() (string, string, error) { return "opencode", "test-secret", nil }, func(int, string) ConnectionVerifier { return func(context.Context, net.Conn) error { return nil } })
 	adapter.healthRetryWait = time.Millisecond
 	adapter.terminationWait = time.Second
 	return adapter

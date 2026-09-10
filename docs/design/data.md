@@ -12,7 +12,7 @@ versioned payload data; identity, ownership, state and dedup keys stay relationa
 | Table | Additions and meaning |
 | --- | --- |
 | `work_items` | nullable `goal_id uuid`; `admitted_revision integer`; `required boolean DEFAULT true`; `integration boolean NOT NULL DEFAULT false`; `acceptance_contract jsonb`; nullable immutable `baseline_subject jsonb` or `baseline_dependency_id uuid`; nullable immutable `change_target jsonb`; goal-less items retain current behavior |
-| `tasks` | nullable `work_item_id uuid`, `goal_id uuid`, `goal_revision integer`, `context_snapshot_id uuid`; `purpose text DEFAULT 'implement'`; nullable `validation_of_task_id uuid`; `admission_key uuid`; `max_run_attempts integer` for goal tasks; nullable `requested_session_id uuid` |
+| `tasks` | nullable `work_item_id uuid`, `goal_id uuid`, `goal_revision integer`, `context_snapshot_id uuid`; `purpose text DEFAULT 'implement'`; nullable `validation_of_task_id uuid`; `admission_key uuid`; `max_run_attempts integer` for goal tasks; nullable `requested_session_id uuid`; nullable immutable `handoff_source_run_id uuid` |
 | `runs` | nullable `harness_session_id uuid`; native result/evidence remain associated with the original execution fence |
 | `runtimes` | `harness_kind text`, `harness_version text`, `adapter_version text`, `adapter_protocol_version integer`, nullable `repository_resource_id uuid`; explicit capabilities described in protocol.md |
 
@@ -54,6 +54,14 @@ Every other Goal Task requires a WorkItem. Goal-less chat remains compatible. A
 validate task must reference a producing task of the same work item and revision.
 Validate this under the goal lock and enforce using a composite FK including
 work_item_id, goal_id, goal_revision.
+
+A `session_mode=handoff` Task has a non-null `handoff_source_run_id` and the
+same canonical UUID in its immutable admission input; fresh and resume Tasks
+have neither. A partial unique index permits only one successor per source Run.
+The source Run and source Task must be same Goal, revision and WorkItem, current
+generation and terminal; their identity, result and runtime binding freeze once
+consumed. Handoff creates a new Task, Run, context snapshot and native session,
+never transfers the source native handle or retained session.
 
 One nonterminal goal Task per WorkItem: partial unique index on work_item_id
 where goal_id IS NOT NULL and state IN

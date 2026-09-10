@@ -29,12 +29,18 @@ type Client struct {
 
 // Config configures one private OpenCode serve connection.
 type Config struct {
-	BaseURL      string
-	Username     string
-	Password     string
-	Timeout      time.Duration
-	MaxBodyBytes int64
+	BaseURL          string
+	Username         string
+	Password         string
+	Timeout          time.Duration
+	MaxBodyBytes     int64
+	VerifyConnection ConnectionVerifier
 }
+
+// ConnectionVerifier confirms that one already-connected TCP peer belongs to
+// the daemon-owned server before http.Transport can write any request bytes.
+// It must validate the connection itself, not a second listener lookup.
+type ConnectionVerifier func(context.Context, net.Conn) error
 
 // NewClient validates credential locality before any request is issued.
 func NewClient(config Config) (*Client, error) {
@@ -56,6 +62,20 @@ func NewClient(config Config) (*Client, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
 	transport.DisableCompression = true
+	if config.VerifyConnection != nil {
+		dialer := &net.Dialer{}
+		transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+			connection, err := dialer.DialContext(ctx, network, address)
+			if err != nil {
+				return nil, err
+			}
+			if err := config.VerifyConnection(ctx, connection); err != nil {
+				_ = connection.Close()
+				return nil, fmt.Errorf("%w: %v", ErrPeerOwnership, err)
+			}
+			return connection, nil
+		}
+	}
 	return &Client{
 		baseURL:  baseURL,
 		username: config.Username,

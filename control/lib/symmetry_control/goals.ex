@@ -8194,6 +8194,8 @@ defmodule SymmetryControl.Goals do
       rollback(:handoff_source_ineligible)
     end
 
+    ensure_handoff_source_is_current_tip!(goal, source_task)
+
     task_result = value(source_run.result || %{}, "task_result")
 
     unless source_task.result == source_run.result and is_map(task_result) and
@@ -8208,8 +8210,17 @@ defmodule SymmetryControl.Goals do
              value(task_result, "subject_hash") == context_digest(subject_hash),
            do: rollback(:handoff_source_subject_mismatch)
 
+    evidence_refs = handoff_evidence_refs!(value(task_result, "evidence_refs"))
+
     settlement =
-      handoff_source_settlement!(goal, source_task, source_run, task_result, subject_hash)
+      handoff_source_settlement!(
+        goal,
+        source_task,
+        source_run,
+        task_result,
+        subject_hash,
+        evidence_refs
+      )
 
     unless {value(task_result, "kind"), settlement} in [
              {"progress", "progress"},
@@ -8221,28 +8232,61 @@ defmodule SymmetryControl.Goals do
       run_id: source_run.id,
       task_id: source_task.id,
       result_id: required_uuid!(task_result, :result_id),
+      result_kind: value(task_result, "kind"),
       subject: subject,
       subject_hash: subject_hash,
-      evidence_ids: value(task_result, "evidence_refs")
+      evidence_ids: evidence_refs
     }
   end
 
-  defp handoff_admission_subject!(goal, item, "validate", payload, source, opts) do
+  defp handoff_admission_subject!(_goal, _item, "validate", payload, source, _opts) do
     producer_id = optional_uuid!(payload, :validation_of_task_id) || rollback(:invalid_validation)
 
-    unless producer_id == source.task_id, do: rollback(:handoff_source_ineligible)
+    unless producer_id == source.task_id and source.result_kind == "candidate_completion",
+      do: rollback(:handoff_source_ineligible)
 
-    expected = admission_subject!(goal, item, "validate", payload, opts)
-
-    if expected == source.subject,
-      do: source.subject,
-      else: rollback(:handoff_source_subject_mismatch)
+    source.subject
   end
 
   defp handoff_admission_subject!(_goal, _item, _purpose, _payload, source, _opts),
     do: source.subject
 
-  defp handoff_source_settlement!(goal, source_task, source_run, task_result, subject_hash) do
+  defp ensure_handoff_source_is_current_tip!(goal, source_task) do
+    tip =
+      Repo.one(
+        from(task in Task,
+          where:
+            task.goal_id == ^goal.id and task.goal_revision == ^goal.current_revision and
+              task.work_item_id == ^source_task.work_item_id and task.state == "completed" and
+              task.current_generation > 0,
+          order_by: [desc: task.inserted_at, desc: task.id],
+          limit: 1,
+          lock: "FOR UPDATE"
+        )
+      )
+
+    unless tip && tip.id == source_task.id, do: rollback(:handoff_source_stale)
+  end
+
+  defp handoff_evidence_refs!(evidence_refs) when is_list(evidence_refs) do
+    if Enum.all?(evidence_refs, &valid_uuid?/1) and
+         length(evidence_refs) == length(Enum.uniq(evidence_refs)) do
+      Enum.sort(evidence_refs)
+    else
+      rollback(:handoff_source_ineligible)
+    end
+  end
+
+  defp handoff_evidence_refs!(_evidence_refs), do: rollback(:handoff_source_ineligible)
+
+  defp handoff_source_settlement!(
+         goal,
+         source_task,
+         source_run,
+         task_result,
+         subject_hash,
+         evidence_refs
+       ) do
     mutation_id = settlement_mutation_id(source_task.id, source_run.id, source_run.generation)
 
     event =
@@ -8274,7 +8318,7 @@ defmodule SymmetryControl.Goals do
              value(response, "result_id") == value(task_result, "result_id") and
              value(response, "result_kind") == value(task_result, "kind") and
              value(response, "subject_hash") == context_digest(subject_hash) and
-             value(response, "evidence_refs") == value(task_result, "evidence_refs"),
+             handoff_evidence_refs!(value(response, "evidence_refs")) == evidence_refs,
            do: rollback(:handoff_source_ineligible)
 
     value(response, "settlement")

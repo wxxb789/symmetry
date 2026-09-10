@@ -110,17 +110,21 @@ means one host invocation under an admitted contract, not one model API call.
 Daemon resolves model_profile and credentials locally. `fresh|resume|handoff`
 are distinct modes. `fresh` requires `requested_session_id: null`; `resume`
 requires the exact retained `requested_session_id`; and `handoff` always has
-`requested_session_id: null` because it creates a new native session from the
-immutable context snapshot and reachable authorized artifact, never by
+`requested_session_id: null` and an exact `handoff_source_run_id` because it
+creates a new native session from the immutable context snapshot and reachable
+authorized artifact, never by
 transferring a native handle or proprietary session format. A rejected resume
 returns `resume_rejected`. A daemon without a verified cross-harness handoff
 adapter rejects handoff with `handoff_unsupported` before creating any local
-session journal or native process. A fresh fallback requires a new admission
-against the same preserved artifact and fresh snapshot. An in-flight Task is
-never silently switched to another model/harness.
+session journal or native process. The source is a same-Goal, same-revision,
+current-generation settled producer Run and can produce at most one handoff
+Task; it is immutable once consumed. Planning and external-observation Tasks
+do not hand off. A fresh fallback requires a new admission against the same
+preserved artifact and fresh snapshot. An in-flight Task is never silently
+switched to another model/harness.
 
-Capabilities retain existing booleans for old clients. Add a versioned
-`adapter` object containing kind, native_version, implementation_version,
+Capabilities use a versioned `adapter` object containing kind, native_version,
+implementation_version,
 protocol_version and `operations`:
 
 ```json
@@ -129,6 +133,7 @@ protocol_version and `operations`:
   "events": true,
   "cancel": true,
   "resume": false,
+  "handoff": false,
   "guidance": "next_turn",
   "pause": "unsupported",
   "approval_response": false,
@@ -139,9 +144,11 @@ protocol_version and `operations`:
 
 guidance enum `native_steer|next_turn|unsupported`; pause enum
 `safe_boundary|unsupported`; usage enum `reported|estimated|unknown`.
-Required operations are checked at admission and claim. Old clients cannot claim
-new supervised work by merely declaring generic JSON input. Advertised native
-operations must correspond to the exact version's integration tests.
+Required operations are checked at admission and claim. `handoff` is independent
+of `resume` and requires verified start, events and cancel behavior for the
+exact native version. Clients cannot claim new supervised work by merely
+declaring generic JSON input. Advertised native operations must correspond to
+the exact version's integration tests.
 
 ### Additive native runtime repository binding
 

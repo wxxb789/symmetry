@@ -349,6 +349,32 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
             )
         }
       }),
+      runtime_spec("cancel-without-events", %{
+        harness_kind: "codex",
+        harness_version: "0.153.4",
+        adapter_version: "symmetry-codex-1",
+        adapter_protocol_version: 1,
+        capabilities: %{
+          "adapter" =>
+            put_in(
+              native_adapter("codex", "0.153.4", "symmetry-codex-1", 1),
+              ["operations", "events"],
+              false
+            )
+        }
+      }),
+      runtime_spec("approval-without-events", %{
+        harness_kind: "codex",
+        harness_version: "0.153.4",
+        adapter_version: "symmetry-codex-1",
+        adapter_protocol_version: 1,
+        capabilities: %{
+          "adapter" =>
+            native_adapter("codex", "0.153.4", "symmetry-codex-1", 1)
+            |> put_in(["operations", "events"], false)
+            |> put_in(["operations", "approval_response"], true)
+        }
+      }),
       runtime_spec("incompatible-supervision", %{
         harness_kind: "codex",
         harness_version: "0.153.4",

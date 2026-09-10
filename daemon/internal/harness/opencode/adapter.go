@@ -28,6 +28,7 @@ const (
 	defaultHealthRetryDelay = 50 * time.Millisecond
 	defaultTerminationGrace = 5 * time.Second
 	streamReadChunkSize     = 32 * 1024
+	maxReadinessLineBytes   = 4096
 )
 
 var (
@@ -36,6 +37,7 @@ var (
 	errNilNativeProcess   = errors.New("opencode native process starter returned a nil process")
 	versionPattern        = regexp.MustCompile(`\b([0-9]+\.[0-9]+\.[0-9]+)\b`)
 	unsupportedOperations = "OpenCode native lifecycle behavior is unverified"
+	listeningLinePattern  = regexp.MustCompile(`^opencode server listening on http://127\.0\.0\.1:([1-9][0-9]{0,4})$`)
 )
 
 // CommandRunner is the injection boundary for deterministic executable probes.
@@ -79,21 +81,6 @@ type apiFactory func(Config) (api, error)
 
 func newAPI(config Config) (api, error) { return NewClient(config) }
 
-type portAllocator func() (int, error)
-
-func allocateLoopbackPort() (int, error) {
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		return 0, fmt.Errorf("reserve OpenCode loopback port: %w", err)
-	}
-	defer listener.Close()
-	port := listener.Addr().(*net.TCPAddr).Port
-	if port <= 0 {
-		return 0, errors.New("reserve OpenCode loopback port: invalid port")
-	}
-	return port, nil
-}
-
 type credentialFactory func() (username, password string, err error)
 
 func newCredentials() (string, string, error) {
@@ -104,6 +91,12 @@ func newCredentials() (string, string, error) {
 	return "opencode", base64.RawURLEncoding.EncodeToString(bytes), nil
 }
 
+type peerVerifierFactory func(pid int, identity string) ConnectionVerifier
+
+func unavailablePeerVerifier(int, string) ConnectionVerifier {
+	return func(context.Context, net.Conn) error { return ErrPeerOwnership }
+}
+
 // Adapter launches an owned, local OpenCode serve process. It is intentionally
 // not usable through capability admission yet: probe and all terminal behavior
 // remain fail-closed until a real lifecycle capture verifies them.
@@ -112,8 +105,8 @@ type Adapter struct {
 	runner          CommandRunner
 	startProcess    processStarter
 	newAPI          apiFactory
-	allocatePort    portAllocator
 	newCredentials  credentialFactory
+	newPeerVerifier peerVerifierFactory
 	healthRetryWait time.Duration
 	terminationWait time.Duration
 }
@@ -125,7 +118,7 @@ func NewAdapter(executables ...string) *Adapter {
 	if len(executables) > 0 && strings.TrimSpace(executables[0]) != "" {
 		executable = executables[0]
 	}
-	return newAdapter(executable, nil, runnerProcessStarter, newAPI, allocateLoopbackPort, newCredentials)
+	return newAdapter(executable, nil, runnerProcessStarter, newAPI, newCredentials, unavailablePeerVerifier)
 }
 
 // NewAdapterWithRunner supplies deterministic executable probing while keeping
@@ -134,17 +127,17 @@ func NewAdapterWithRunner(executable string, runner CommandRunner) *Adapter {
 	if strings.TrimSpace(executable) == "" {
 		executable = DefaultExecutable
 	}
-	return newAdapter(executable, runner, runnerProcessStarter, newAPI, allocateLoopbackPort, newCredentials)
+	return newAdapter(executable, runner, runnerProcessStarter, newAPI, newCredentials, unavailablePeerVerifier)
 }
 
-func newAdapter(executable string, runner CommandRunner, start processStarter, apiFactory apiFactory, ports portAllocator, credentials credentialFactory) *Adapter {
+func newAdapter(executable string, runner CommandRunner, start processStarter, apiFactory apiFactory, credentials credentialFactory, peerVerifier peerVerifierFactory) *Adapter {
 	return &Adapter{
 		executable:      executable,
 		runner:          runner,
 		startProcess:    start,
 		newAPI:          apiFactory,
-		allocatePort:    ports,
 		newCredentials:  credentials,
+		newPeerVerifier: peerVerifier,
 		healthRetryWait: defaultHealthRetryDelay,
 		terminationWait: defaultTerminationGrace,
 	}
@@ -236,6 +229,12 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 	if request.Resume != nil {
 		return nil, unsupportedCapability(harness.CapabilityResume, "OpenCode native resume is not verified")
 	}
+	if request.ModelProfile != "" {
+		return nil, errors.New("opencode native model profile mapping is unverified")
+	}
+	if len(request.Invocation.Args) != 0 {
+		return nil, errors.New("opencode native transport does not accept invocation arguments")
+	}
 	if strings.TrimSpace(request.Workspace) == "" || !filepath.IsAbs(request.Workspace) {
 		return nil, errors.New("opencode workspace must be an absolute path")
 	}
@@ -245,40 +244,31 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 	if len(request.Invocation.InitialInput) != 0 || request.Invocation.CloseInputAfterInitial {
 		return nil, errors.New("opencode native transport does not accept legacy initial input")
 	}
-	if adapter.startProcess == nil || adapter.newAPI == nil || adapter.allocatePort == nil || adapter.newCredentials == nil {
+	if adapter.startProcess == nil || adapter.newAPI == nil || adapter.newCredentials == nil || adapter.newPeerVerifier == nil {
 		return nil, errors.New("opencode adapter dependencies are incomplete")
-	}
-	port, err := adapter.allocatePort()
-	if err != nil {
-		return nil, err
 	}
 	username, password, err := adapter.newCredentials()
 	if err != nil {
 		return nil, err
 	}
-	client, err := adapter.newAPI(Config{
-		BaseURL:  "http://127.0.0.1:" + strconv.Itoa(port),
-		Username: username,
-		Password: password,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("configure OpenCode local API: %w", err)
-	}
 	sessionContext, cancel := context.WithCancel(ctx)
-	session := newNativeSession(sessionContext, cancel, sink, request.Workspace, client, adapter.healthRetryWait, adapter.terminationWait)
+	eventContext, cancelEvents := context.WithCancel(ctx)
+	session := newNativeSession(sessionContext, cancel, eventContext, cancelEvents, sink, request.Workspace, adapter.newAPI, username, password, adapter.newPeerVerifier, adapter.healthRetryWait, adapter.terminationWait)
 	invocation := execution.Invocation{
 		Program:        adapter.executable,
-		Args:           []string{"serve", "--hostname", "127.0.0.1", "--port", strconv.Itoa(port), "--pure"},
+		Args:           []string{"serve", "--hostname", "127.0.0.1", "--port", "0", "--pure"},
 		Dir:            request.Workspace,
 		Env:            appendCredentialEnvironment(request.Invocation.Env, username, password),
 		PersistProcess: request.PersistProcess,
 	}
 	process, err := adapter.startProcess(sessionContext, invocation, execution.SinkFunc(session.handleProcessOutput))
 	if err != nil {
+		cancelEvents()
 		cancel()
 		return nil, fmt.Errorf("start OpenCode serve: %w", err)
 	}
 	if isNilNativeProcess(process) {
+		cancelEvents()
 		cancel()
 		return nil, errNilNativeProcess
 	}
@@ -356,17 +346,28 @@ func (stream *streamHandle) Close() error {
 }
 
 type nativeSession struct {
-	context context.Context
-	cancel  context.CancelFunc
-	sink    harness.EventSink
+	context      context.Context
+	cancel       context.CancelFunc
+	eventContext context.Context
+	cancelEvents context.CancelFunc
+	sink         harness.EventSink
 
 	workspace       string
+	newAPI          apiFactory
+	username        string
+	password        string
+	newPeerVerifier peerVerifierFactory
 	client          api
 	healthRetryWait time.Duration
 	terminationWait time.Duration
 
 	mu              sync.Mutex
 	process         nativeProcess
+	readinessBuffer []byte
+	listeningPort   int
+	readinessErr    error
+	readinessDone   chan struct{}
+	readinessOnce   sync.Once
 	opened          bool
 	closed          bool
 	openAttempt     *openAttempt
@@ -376,6 +377,7 @@ type nativeSession struct {
 	turnStarting    bool
 	turnErr         error
 	turnCancel      context.CancelFunc
+	turnAttemptDone chan struct{}
 	stream          *streamHandle
 	streamDone      chan struct{}
 	streamErr       error
@@ -385,6 +387,7 @@ type nativeSession struct {
 	processResult   execution.Result
 	processDone     chan struct{}
 	processDoneOnce sync.Once
+	emitMu          sync.Mutex
 
 	interruptMu        sync.Mutex
 	interruptAttempt   *interruptAttempt
@@ -394,15 +397,21 @@ type nativeSession struct {
 	closeSucceeded     bool
 }
 
-func newNativeSession(ctx context.Context, cancel context.CancelFunc, sink harness.EventSink, workspace string, client api, healthRetryWait, terminationWait time.Duration) *nativeSession {
+func newNativeSession(ctx context.Context, cancel context.CancelFunc, eventContext context.Context, cancelEvents context.CancelFunc, sink harness.EventSink, workspace string, newAPI apiFactory, username, password string, peerVerifier peerVerifierFactory, healthRetryWait, terminationWait time.Duration) *nativeSession {
 	return &nativeSession{
 		context:         ctx,
 		cancel:          cancel,
+		eventContext:    eventContext,
+		cancelEvents:    cancelEvents,
 		sink:            sink,
 		workspace:       workspace,
-		client:          client,
+		newAPI:          newAPI,
+		username:        username,
+		password:        password,
+		newPeerVerifier: peerVerifier,
 		healthRetryWait: healthRetryWait,
 		terminationWait: terminationWait,
+		readinessDone:   make(chan struct{}),
 		processDone:     make(chan struct{}),
 	}
 }
@@ -491,10 +500,14 @@ func (session *nativeSession) Open(ctx context.Context) (harness.NativeSessionHa
 }
 
 func (session *nativeSession) openOnce(ctx context.Context) (harness.NativeSessionHandle, error) {
-	if err := session.waitForHealth(ctx); err != nil {
+	client, err := session.clientForOwnedServer(ctx)
+	if err != nil {
 		return harness.NativeSessionHandle{}, err
 	}
-	info, err := session.client.CreateSession(ctx, CreateSessionRequest{ID: randomID("ses_"), Location: SessionLocation{Directory: session.workspace}})
+	if err := session.waitForHealth(ctx, client); err != nil {
+		return harness.NativeSessionHandle{}, err
+	}
+	info, err := client.CreateSession(ctx, CreateSessionRequest{ID: randomID("ses_"), Location: SessionLocation{Directory: session.workspace}})
 	if err != nil {
 		return harness.NativeSessionHandle{}, fmt.Errorf("create OpenCode session: %w", err)
 	}
@@ -507,9 +520,79 @@ func (session *nativeSession) openOnce(ctx context.Context) (harness.NativeSessi
 	return harness.NativeSessionHandle{ID: info.ID}, nil
 }
 
-func (session *nativeSession) waitForHealth(ctx context.Context) error {
+func (session *nativeSession) clientForOwnedServer(ctx context.Context) (api, error) {
+	if err := session.waitForReadiness(ctx); err != nil {
+		return nil, err
+	}
+	session.mu.Lock()
+	if session.closed {
+		session.mu.Unlock()
+		return nil, errSessionClosed
+	}
+	if session.client != nil {
+		client := session.client
+		session.mu.Unlock()
+		return client, nil
+	}
+	process := session.process
+	port := session.listeningPort
+	newAPI := session.newAPI
+	verifierFactory := session.newPeerVerifier
+	username, password := session.username, session.password
+	session.mu.Unlock()
+	if process == nil || port <= 0 || newAPI == nil || verifierFactory == nil {
+		return nil, ErrPeerOwnership
+	}
+	pid, identity := process.ProcessDetails()
+	if pid <= 0 || strings.TrimSpace(identity) == "" {
+		return nil, ErrPeerOwnership
+	}
+	verifier := verifierFactory(pid, identity)
+	if verifier == nil {
+		return nil, ErrPeerOwnership
+	}
+	client, err := newAPI(Config{
+		BaseURL:          "http://127.0.0.1:" + strconv.Itoa(port),
+		Username:         username,
+		Password:         password,
+		VerifyConnection: verifier,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("configure verified OpenCode local API: %w", err)
+	}
+	session.mu.Lock()
+	if session.closed {
+		session.mu.Unlock()
+		return nil, errSessionClosed
+	}
+	session.client = client
+	session.mu.Unlock()
+	return client, nil
+}
+
+func (session *nativeSession) waitForReadiness(ctx context.Context) error {
+	select {
+	case <-session.readinessDone:
+		session.mu.Lock()
+		port, err := session.listeningPort, session.readinessErr
+		session.mu.Unlock()
+		if err != nil {
+			return err
+		}
+		if port <= 0 {
+			return ErrPeerOwnership
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-session.context.Done():
+		return errSessionClosed
+	}
+}
+
+func (session *nativeSession) waitForHealth(ctx context.Context, client api) error {
 	for {
-		err := session.client.Health(ctx)
+		err := client.Health(ctx)
 		if err == nil {
 			return nil
 		}
@@ -578,17 +661,16 @@ func (session *nativeSession) StartTurn(ctx context.Context, request harness.Tur
 	turnContext, turnCancel := context.WithCancel(ctx)
 	session.turnStarting = true
 	session.turnCancel = turnCancel
+	turnAttemptDone := make(chan struct{})
+	session.turnAttemptDone = turnAttemptDone
 	handle := session.handle
 	session.mu.Unlock()
 
 	succeeded := false
 	defer func() {
-		if succeeded {
-			return
-		}
 		turnCancel()
 		session.mu.Lock()
-		if session.turnErr == nil {
+		if !succeeded && session.turnErr == nil {
 			if err == nil {
 				err = errTurnUnverified
 			}
@@ -596,12 +678,19 @@ func (session *nativeSession) StartTurn(ctx context.Context, request harness.Tur
 		}
 		session.turnCancel = nil
 		session.turnStarting = false
+		if session.turnAttemptDone == turnAttemptDone {
+			session.turnAttemptDone = nil
+		}
+		close(turnAttemptDone)
 		session.mu.Unlock()
+		if succeeded {
+			return
+		}
 		cleanupContext, cancel := context.WithTimeout(context.Background(), session.terminationGrace()*2)
 		_ = session.Close(cleanupContext)
 		cancel()
 	}()
-	if err := session.emit(harness.Event{Kind: harness.EventSessionStarted}); err != nil {
+	if err := session.emit(session.eventContext, harness.Event{Kind: harness.EventSessionStarted}); err != nil {
 		return err
 	}
 	promptID := randomID("msg_")
@@ -646,11 +735,11 @@ func (session *nativeSession) StartTurn(ctx context.Context, request harness.Tur
 	}
 	session.turnStarting = false
 	session.turnStarted = true
-	succeeded = true
 	session.mu.Unlock()
-	if err := session.emit(harness.Event{Kind: harness.EventNativeFrame, Code: "opencode_prompt_admitted", Message: "OpenCode prompt admission observed; terminal outcome remains unverified"}); err != nil {
+	if err := session.emit(session.eventContext, harness.Event{Kind: harness.EventNativeFrame, Code: "opencode_prompt_admitted", Message: "OpenCode prompt admission observed; terminal outcome remains unverified"}); err != nil {
 		return err
 	}
+	succeeded = true
 	return nil
 }
 
@@ -804,9 +893,12 @@ func (session *nativeSession) closeOnce(ctx context.Context) error {
 	turnStarted := session.turnStarted || session.turnStarting
 	turnCancel := session.turnCancel
 	stream := session.stream
-	streamDone := session.streamDone
 	process := session.process
 	session.mu.Unlock()
+	// Cancel journal delivery before closing the stream: this releases a sink
+	// that is currently persisting an SSE event, so watcher completion remains
+	// a real Close/Wait barrier rather than a background leak.
+	session.cancelEvents()
 	if turnCancel != nil {
 		turnCancel()
 	}
@@ -822,14 +914,6 @@ func (session *nativeSession) closeOnce(ctx context.Context) error {
 	if process != nil {
 		terminateErr = process.Terminate(ctx, session.terminationGrace())
 	}
-	var streamErr error
-	if streamDone != nil {
-		select {
-		case <-streamDone:
-		case <-ctx.Done():
-			streamErr = ctx.Err()
-		}
-	}
 	var processErr error
 	if process != nil {
 		select {
@@ -838,10 +922,10 @@ func (session *nativeSession) closeOnce(ctx context.Context) error {
 			processErr = ctx.Err()
 		}
 	}
-	if terminateErr == nil && streamErr == nil && processErr == nil {
+	if terminateErr == nil && processErr == nil {
 		return nil
 	}
-	return errors.Join(interruptErr, terminateErr, streamErr, processErr)
+	return errors.Join(interruptErr, terminateErr, processErr)
 }
 
 func (session *nativeSession) terminationGrace() time.Duration {
@@ -855,15 +939,32 @@ func (session *nativeSession) watchProcess(process nativeProcess) {
 	result := process.Wait()
 	session.mu.Lock()
 	session.processResult = result
+	session.closed = true
 	stream := session.stream
 	turnCancel := session.turnCancel
+	streamDone := session.streamDone
+	turnAttemptDone := session.turnAttemptDone
 	session.mu.Unlock()
+	session.finishReadiness(errors.New("OpenCode serve process exited before readiness"))
+	session.cancelEvents()
 	if turnCancel != nil {
 		turnCancel()
 	}
 	if stream != nil {
 		_ = stream.Close()
 	}
+	if turnAttemptDone != nil {
+		<-turnAttemptDone
+	}
+	if streamDone != nil {
+		<-streamDone
+	}
+	// Every remaining producer is either the execution.Runner (joined by
+	// Process.Wait), StartTurn (turnAttemptDone), or the SSE watcher
+	// (streamDone). Serializing with emitMu proves no sink call survives this
+	// final physical process barrier.
+	session.emitMu.Lock()
+	session.emitMu.Unlock()
 	session.processDoneOnce.Do(func() { close(session.processDone) })
 }
 
@@ -919,7 +1020,7 @@ func (session *nativeSession) observeSessionFrames(validator *SessionEventValida
 		if event.MessageID != messageID {
 			return fmt.Errorf("%w: expected message %q", ErrIdentityMismatch, messageID)
 		}
-		if err := session.emit(harness.Event{Kind: harness.EventNativeFrame, Sequence: frame.Sequence, Code: "opencode_session_event", Message: "OpenCode durable session event observed"}); err != nil {
+		if err := session.emit(session.eventContext, harness.Event{Kind: harness.EventNativeFrame, Sequence: frame.Sequence, Code: "opencode_session_event", Message: "OpenCode durable session event observed"}); err != nil {
 			return err
 		}
 	}
@@ -927,7 +1028,53 @@ func (session *nativeSession) observeSessionFrames(validator *SessionEventValida
 }
 
 func (session *nativeSession) handleProcessOutput(ctx context.Context, event execution.Event) error {
-	return session.emit(harness.Event{Kind: harness.EventDiagnostic, Stream: string(event.Stream), Sequence: event.Sequence, At: event.At, Diagnostic: true, Code: "opencode_process_output", Message: "OpenCode serve process emitted output; bytes withheld from journal"})
+	if event.Stream == execution.Stdout {
+		session.observeReadiness(event.Data)
+	}
+	return session.emit(ctx, harness.Event{Kind: harness.EventDiagnostic, Stream: string(event.Stream), Sequence: event.Sequence, At: event.At, Diagnostic: true, Code: "opencode_process_output", Message: "OpenCode serve process emitted output; bytes withheld from journal"})
+}
+
+func (session *nativeSession) observeReadiness(data []byte) {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.readinessErr != nil || session.listeningPort > 0 || len(data) == 0 {
+		return
+	}
+	if len(session.readinessBuffer)+len(data) > maxReadinessLineBytes {
+		session.readinessErr = errors.New("OpenCode serve readiness output exceeds limit")
+		session.readinessOnce.Do(func() { close(session.readinessDone) })
+		return
+	}
+	session.readinessBuffer = append(session.readinessBuffer, data...)
+	for {
+		lineEnd := strings.IndexByte(string(session.readinessBuffer), '\n')
+		if lineEnd < 0 {
+			return
+		}
+		line := strings.TrimSuffix(string(session.readinessBuffer[:lineEnd]), "\r")
+		session.readinessBuffer = append([]byte(nil), session.readinessBuffer[lineEnd+1:]...)
+		matches := listeningLinePattern.FindStringSubmatch(line)
+		if len(matches) != 2 {
+			continue
+		}
+		port, err := strconv.Atoi(matches[1])
+		if err != nil || port <= 0 || port > 65535 {
+			session.readinessErr = errors.New("OpenCode serve reported an invalid loopback port")
+		} else {
+			session.listeningPort = port
+		}
+		session.readinessOnce.Do(func() { close(session.readinessDone) })
+		return
+	}
+}
+
+func (session *nativeSession) finishReadiness(cause error) {
+	session.mu.Lock()
+	if session.listeningPort == 0 && session.readinessErr == nil {
+		session.readinessErr = cause
+	}
+	session.mu.Unlock()
+	session.readinessOnce.Do(func() { close(session.readinessDone) })
 }
 
 func (session *nativeSession) recordStreamError(err error) {
@@ -939,17 +1086,22 @@ func (session *nativeSession) recordStreamError(err error) {
 		session.streamErr = err
 	}
 	session.mu.Unlock()
-	_ = session.emit(harness.Event{Kind: harness.EventDiagnostic, Diagnostic: true, Code: "opencode_stream_error", Message: err.Error()})
+	_ = session.emit(session.eventContext, harness.Event{Kind: harness.EventDiagnostic, Diagnostic: true, Code: "opencode_stream_error", Message: err.Error()})
 }
 
-func (session *nativeSession) emit(event harness.Event) error {
+func (session *nativeSession) emit(ctx context.Context, event harness.Event) error {
 	if session == nil || session.sink == nil {
 		return errors.New("opencode event sink is nil")
 	}
+	if ctx == nil {
+		return errors.New("opencode event context is nil")
+	}
+	session.emitMu.Lock()
+	defer session.emitMu.Unlock()
 	if event.At.IsZero() {
 		event.At = time.Now().UTC()
 	}
-	if err := session.sink.Handle(context.Background(), event); err != nil {
+	if err := session.sink.Handle(ctx, event); err != nil {
 		session.mu.Lock()
 		if session.sinkErr == nil {
 			session.sinkErr = err

@@ -4713,6 +4713,43 @@ defmodule SymmetryControl.GoalsTest do
     assert handoff_admission_counts(goal.id) == counts_before
   end
 
+  test "handoff rejects an earlier settled source instead of rolling work back from the progression tip" do
+    {goal, item, first_task} =
+      admitted_task_fixture("primary", check_contract(), %{
+        execution_policy: %{"max_task_admissions" => 4}
+      })
+
+    runtime = runtime_fixture()
+    {first_run, _first_fence} = completed_goal_run_fixture(first_task, runtime)
+    replace_terminal_result!(first_task, first_run, task_result(first_task, "progress"))
+
+    assert {:ok, %{"settlement" => "progress"}} =
+             Goals.settle_task(first_task.id, first_run.id, first_run.generation, now: @now)
+
+    assert {:ok, second_admission, :created} =
+             command_current(goal.id, "admit_task", admission_payload(item),
+               rollout_enabled: true
+             )
+
+    second_task = Repo.get!(Task, second_admission.response["task"]["id"])
+    {second_run, _second_fence} = completed_goal_run_fixture(second_task, runtime)
+    replace_terminal_result!(second_task, second_run, task_result(second_task, "progress"))
+
+    assert {:ok, %{"settlement" => "progress"}} =
+             Goals.settle_task(second_task.id, second_run.id, second_run.generation, now: @now)
+
+    assert {:error, :handoff_source_stale} =
+             command_current(
+               goal.id,
+               "admit_task",
+               admission_payload(item, %{
+                 session_mode: "handoff",
+                 handoff_source_run_id: first_run.id
+               }),
+               rollout_enabled: true
+             )
+  end
+
   test "validation handoff binds the exact settled source producer" do
     {goal, item, source_task} =
       admitted_task_fixture("primary", check_contract(), %{
@@ -6704,6 +6741,13 @@ defmodule SymmetryControl.GoalsTest do
       from(row in Run, where: row.id == ^run.id),
       set: [result: %{"task_result" => task_result}]
     )
+  end
+
+  defp replace_terminal_result!(task, run, task_result) do
+    result = %{"task_result" => task_result}
+
+    Repo.update_all(from(row in Task, where: row.id == ^task.id), set: [result: result])
+    Repo.update_all(from(row in Run, where: row.id == ^run.id), set: [result: result])
   end
 
   defp delete_goal_wakeup_jobs(goal_id) do

@@ -17,6 +17,22 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
              Jason.decode!(response.resp_body)
   end
 
+  test "renders handoff domain errors as inspectable protocol outcomes" do
+    for {reason, status, code} <- [
+          {:handoff_source_not_found, 404, "handoff_source_not_found"},
+          {:handoff_source_consumed, 409, "handoff_source_consumed"},
+          {:handoff_session_reuse, 409, "handoff_session_reuse"},
+          {:handoff_source_ineligible, 422, "handoff_source_ineligible"},
+          {:handoff_source_stale, 422, "handoff_source_stale"},
+          {:handoff_source_subject_mismatch, 422, "handoff_source_subject_mismatch"}
+        ] do
+      response = SymmetryControlWeb.Protocol.error(build_conn(), reason)
+
+      assert response.status == status
+      assert %{"error" => %{"code" => ^code}} = Jason.decode!(response.resp_body)
+    end
+  end
+
   test "uses the resource-oriented machine, runtime, run, and acknowledgement routes", %{
     conn: conn
   } do

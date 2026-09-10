@@ -34,6 +34,7 @@ var (
 	ErrUnsupportedEvent     = errors.New("opencode SSE event type is unsupported")
 	ErrInvalidDurableCursor = errors.New("opencode SSE durable cursor is invalid")
 	ErrCursorRegression     = errors.New("opencode SSE durable sequence is not strictly increasing")
+	ErrPeerOwnership        = errors.New("opencode loopback peer ownership is unverified")
 	errStreamEndedUnknown   = errors.New("opencode SSE stream ended without a verified terminal event")
 )
 

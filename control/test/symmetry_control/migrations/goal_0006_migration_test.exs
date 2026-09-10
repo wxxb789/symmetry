@@ -2735,11 +2735,34 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
       migrate_terminal_authority_up!()
       migrate_handoff_lineage_up!()
 
-      Repo.query!("UPDATE tasks SET state = 'completed' WHERE id = $1", [source_task_id])
-      Repo.query!("UPDATE tasks SET state = 'completed' WHERE id = $1", [revision_source_task_id])
+      source_result = %{"kind" => "progress"}
+
+      Repo.query!(
+        "UPDATE tasks SET state = 'completed', current_generation = 1, result = $1::jsonb WHERE id = $2",
+        [Jason.encode!(source_result), source_task_id]
+      )
+
+      Repo.query!("UPDATE tasks SET state = 'completed', current_generation = 1 WHERE id = $1", [
+        revision_source_task_id
+      ])
 
       %{runtime_id: runtime_id} = insert_harness_session_fixture!()
       source_run_id = insert_terminal_goal_run!(source_task_id, runtime_id, "completed")
+
+      assert_raise Postgrex.Error, ~r/goal_0006_handoff_source_run_ineligible/i, fn ->
+        insert_handoff_task!(
+          goal_id,
+          work_item_id,
+          1,
+          source_run_id,
+          handoff_input(source_run_id)
+        )
+      end
+
+      Repo.query!("UPDATE runs SET result = $1::jsonb WHERE id = $2", [
+        Jason.encode!(source_result),
+        source_run_id
+      ])
 
       target_task_id =
         insert_handoff_task!(
@@ -2767,6 +2790,13 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
 
       assert_raise Postgrex.Error, ~r/goal_0006_handoff_source_run_immutable/i, fn ->
         Repo.query!("UPDATE runs SET generation = generation + 1 WHERE id = $1", [source_run_id])
+      end
+
+      assert_raise Postgrex.Error, ~r/goal_0006_handoff_source_run_immutable/i, fn ->
+        Repo.query!("UPDATE runs SET runtime_id = $1 WHERE id = $2", [
+          Ecto.UUID.bingenerate(),
+          source_run_id
+        ])
       end
 
       assert_raise Postgrex.Error, ~r/goal_0006_handoff_source_run_immutable/i, fn ->
@@ -2878,6 +2908,26 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
         )
       end
 
+      generation_source_task_id =
+        insert_goal_task!(%{goal_id: goal_id, work_item_id: same_goal_other_work_item_id})
+
+      Repo.query!("UPDATE tasks SET state = 'completed', current_generation = 2 WHERE id = $1", [
+        generation_source_task_id
+      ])
+
+      generation_source_run_id =
+        insert_terminal_goal_run!(generation_source_task_id, runtime_id, "completed")
+
+      assert_raise Postgrex.Error, ~r/goal_0006_handoff_source_run_ineligible/i, fn ->
+        insert_handoff_task!(
+          goal_id,
+          same_goal_other_work_item_id,
+          1,
+          generation_source_run_id,
+          handoff_input(generation_source_run_id)
+        )
+      end
+
       failed_source_task_id =
         insert_goal_task!(%{goal_id: goal_id, work_item_id: same_goal_other_work_item_id})
 
@@ -2959,7 +3009,10 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
       migrate_terminal_authority_up!()
       migrate_handoff_lineage_up!()
 
-      Repo.query!("UPDATE tasks SET state = 'completed' WHERE id = $1", [source_task_id])
+      Repo.query!("UPDATE tasks SET state = 'completed', current_generation = 1 WHERE id = $1", [
+        source_task_id
+      ])
+
       %{runtime_id: runtime_id} = insert_harness_session_fixture!()
       source_run_id = insert_terminal_goal_run!(source_task_id, runtime_id, "completed")
       parent = self()

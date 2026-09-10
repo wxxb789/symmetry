@@ -4023,10 +4023,14 @@ defmodule SymmetryControl.Orchestration do
       value(operations, :usage) in ["reported", "estimated", "unknown"] and
       is_boolean(value(operations, :hard_cost_limit)) and
       (value(operations, :resume) != true or value(operations, :start) == true) and
+      (value(operations, :cancel) != true or
+         (value(operations, :start) == true and value(operations, :events) == true)) and
       (value(operations, :handoff) != true or
          (value(operations, :start) == true and value(operations, :events) == true and
             value(operations, :cancel) == true)) and
       (value(operations, :events) != true or value(operations, :start) == true) and
+      (value(operations, :approval_response) != true or
+         (value(operations, :start) == true and value(operations, :events) == true)) and
       (value(operations, :guidance) != "native_steer" or value(operations, :start) == true) and
       (value(operations, :pause) != "safe_boundary" or value(operations, :resume) == true) and
       (value(operations, :usage) != "reported" or value(operations, :events) == true)

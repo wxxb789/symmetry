@@ -5,10 +5,12 @@ import (
 	"encoding/base64"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -296,5 +298,60 @@ func TestClientRejectsNonSuccessAPIStatus(t *testing.T) {
 	})
 	if err := newClient(t, server).Health(context.Background()); !errors.Is(err, ErrUnexpectedStatus) || !strings.Contains(err.Error(), "401") {
 		t.Fatalf("Health() error = %v, want 401 unexpected status", err)
+	}
+}
+
+func TestClientRejectsUnverifiedPeerBeforeWritingHTTPOrBasicAuth(t *testing.T) {
+	var requests atomic.Int32
+	server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		requests.Add(1)
+		writer.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(writer, `{"healthy":true}`)
+	})
+	client, err := NewClient(Config{
+		BaseURL:  server.URL,
+		Username: "opencode",
+		Password: "secret",
+		VerifyConnection: func(context.Context, net.Conn) error {
+			return errors.New("peer identity unavailable")
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	if err := client.Health(context.Background()); !errors.Is(err, ErrPeerOwnership) {
+		t.Fatalf("Health() error = %v, want ErrPeerOwnership", err)
+	}
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("server received %d HTTP requests; verifier must fail before request bytes", got)
+	}
+}
+
+func TestClientVerifiesEveryNewConnection(t *testing.T) {
+	server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = io.WriteString(writer, `{"healthy":true}`)
+	})
+	var verifications atomic.Int32
+	client, err := NewClient(Config{
+		BaseURL:  server.URL,
+		Username: "opencode",
+		Password: "secret",
+		VerifyConnection: func(context.Context, net.Conn) error {
+			verifications.Add(1)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	if err := client.Health(context.Background()); err != nil {
+		t.Fatalf("first Health() error = %v", err)
+	}
+	client.httpClient.CloseIdleConnections()
+	if err := client.Health(context.Background()); err != nil {
+		t.Fatalf("second Health() error = %v", err)
+	}
+	if got := verifications.Load(); got != 2 {
+		t.Fatalf("connection verifications = %d, want one check per new connection", got)
 	}
 }

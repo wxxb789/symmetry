@@ -172,6 +172,16 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 		}
 	}
 	session.outputMutex.Unlock()
+	session.mutex.Lock()
+	startFailure := session.failure
+	session.mutex.Unlock()
+	if startFailure != nil {
+		cleanupContext, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), processCleanupTimeout)
+		_ = process.Terminate(cleanupContext, 0)
+		cleanupCancel()
+		cancel()
+		return nil, startFailure
+	}
 	go session.watchProcess()
 	return session, nil
 }
@@ -192,9 +202,22 @@ func piRPCArgs(profileArgs []string) ([]string, error) {
 		if argument == "--mode" || strings.HasPrefix(argument, "--mode=") {
 			return nil, errors.New("pi invocation must not override required --mode rpc transport")
 		}
+		if forbiddenFreshSessionArgument(argument) {
+			return nil, fmt.Errorf("pi invocation argument %q is not allowed for a fresh or handoff RPC session", argument)
+		}
 		args = append(args, argument)
 	}
 	return args, nil
+}
+
+func forbiddenFreshSessionArgument(argument string) bool {
+	switch argument {
+	case "--continue", "-c", "--resume", "-r", "--session", "--session-id", "--fork", "--no-session":
+		return true
+	}
+	return strings.HasPrefix(argument, "--continue=") || strings.HasPrefix(argument, "--resume=") ||
+		strings.HasPrefix(argument, "--session=") || strings.HasPrefix(argument, "--session-id=") ||
+		strings.HasPrefix(argument, "--fork=")
 }
 
 func isNilNativeProcess(process nativeProcess) bool {
@@ -231,6 +254,7 @@ type nativeSession struct {
 	pending              map[string]chan Response
 	nextRequestID        uint64
 	opened               bool
+	opening              bool
 	turnStarted          bool
 	turnFinal            bool
 	turnResult           *harness.TaskResult
@@ -307,12 +331,26 @@ func (session *nativeSession) Open(ctx context.Context) (harness.NativeSessionHa
 		}
 		return harness.NativeSessionHandle{ID: state.SessionID, Filename: state.SessionFile}, nil
 	}
+	if session.opening {
+		session.mutex.Unlock()
+		return harness.NativeSessionHandle{}, errors.New("pi native session is already opening")
+	}
 	if err := session.usableLocked(); err != nil {
 		session.mutex.Unlock()
 		return harness.NativeSessionHandle{}, err
 	}
+	session.opening = true
 	id := session.requestIDLocked("state")
 	session.mutex.Unlock()
+	opened := false
+	defer func() {
+		if opened {
+			return
+		}
+		session.mutex.Lock()
+		session.opening = false
+		session.mutex.Unlock()
+	}()
 	request, err := GetStateRequest(id)
 	if err != nil {
 		return harness.NativeSessionHandle{}, err
@@ -330,6 +368,8 @@ func (session *nativeSession) Open(ctx context.Context) (harness.NativeSessionHa
 		return harness.NativeSessionHandle{}, ErrMissingSessionState
 	}
 	session.opened = true
+	session.opening = false
+	opened = true
 	return harness.NativeSessionHandle{ID: state.SessionID, Filename: state.SessionFile}, nil
 }
 
@@ -544,18 +584,33 @@ func (session *nativeSession) Close(ctx context.Context) error {
 	attempt := &closeAttempt{done: make(chan struct{})}
 	session.closeAttempt = attempt
 	session.closeMutex.Unlock()
-	err := session.closeOnce(ctx)
-	session.closeMutex.Lock()
-	attempt.err = err
-	if err == nil {
-		session.closeSucceeded = true
+	// The initiating caller may leave at any time, but a close that has begun
+	// must still attempt bounded process-tree cleanup. WithoutCancel preserves
+	// request values without deriving an unbounded Background operation.
+	cleanupContext, cleanupCancel := context.WithTimeout(
+		context.WithoutCancel(ctx),
+		session.cancelTimeout+processCleanupTimeout+processTerminationGrace,
+	)
+	go func() {
+		err := session.closeOnce(cleanupContext)
+		cleanupCancel()
+		session.closeMutex.Lock()
+		attempt.err = err
+		if err == nil {
+			session.closeSucceeded = true
+		}
+		if session.closeAttempt == attempt {
+			session.closeAttempt = nil
+		}
+		close(attempt.done)
+		session.closeMutex.Unlock()
+	}()
+	select {
+	case <-attempt.done:
+		return attempt.err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	if session.closeAttempt == attempt {
-		session.closeAttempt = nil
-	}
-	close(attempt.done)
-	session.closeMutex.Unlock()
-	return err
 }
 
 func (session *nativeSession) closeOnce(ctx context.Context) error {
@@ -566,7 +621,7 @@ func (session *nativeSession) closeOnce(ctx context.Context) error {
 	if active {
 		// A failed native cancel must remain visible in the turn result, but a
 		// later successful process-tree cleanup still satisfies Close itself.
-		cancelContext, cancel := context.WithTimeout(context.Background(), session.cancelTimeout)
+		cancelContext, cancel := context.WithTimeout(ctx, session.cancelTimeout)
 		_, _ = session.Control(cancelContext, harness.ControlRequest{CommandID: "close", Kind: harness.ControlCancel})
 		cancel()
 	}
@@ -581,17 +636,15 @@ func (session *nativeSession) closeOnce(ctx context.Context) error {
 	// distinct from the session-owned EventSink context. Cancel this context
 	// before cleanup so a blocked sink cannot indefinitely delay Close.
 	session.cancel()
-	cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), processCleanupTimeout+processTerminationGrace)
-	defer cleanupCancel()
-	terminateErr := process.Terminate(cleanupContext, processTerminationGrace)
+	terminateErr := process.Terminate(ctx, processTerminationGrace)
 	if terminateErr != nil {
 		return terminateErr
 	}
 	select {
 	case <-session.watchDone:
 		return nil
-	case <-cleanupContext.Done():
-		return cleanupContext.Err()
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -714,6 +767,13 @@ func (session *nativeSession) handleRecord(ctx context.Context, processEvent exe
 	err := session.validator.Observe(record)
 	var waiter chan Response
 	if err == nil && record.Response != nil {
+		if record.Response.Command == CommandAbort && record.Response.Success {
+			// Record cancellation at the correlated native acknowledgement, before
+			// waking the Control caller. A process exit can otherwise race that
+			// goroutine and be incorrectly reported as a process failure.
+			session.cancelInFlight = false
+			session.cancelApplied = true
+		}
 		waiter = session.pending[record.Response.ID]
 		delete(session.pending, record.Response.ID)
 	}
@@ -921,22 +981,34 @@ func (session *nativeSession) watchProcess() {
 	session.mutex.Lock()
 	session.processResult = &processResult
 	turnFinal := session.turnFinal
+	session.mutex.Unlock()
+	if turnFinal {
+		<-session.turnDone
+	}
+	session.mutex.Lock()
+	turnFinal = session.turnFinal
 	turnResult := cloneTaskResultPointer(session.turnResult)
 	turnErr := session.turnErr
 	failure := session.failure
 	normalClose := session.closeNormalCandidate
+	cancelApplied := session.cancelApplied
 	session.mutex.Unlock()
 	if !turnFinal {
-		reason := protocol.TaskResultReasonMissingResult
-		if !processResult.Success() {
-			reason = protocol.TaskResultReasonProcessFailure
+		if cancelApplied {
+			turnResult = &harness.TaskResult{Kind: harness.ResultCancelled, Summary: "pi abort was accepted before the native process stopped", Usage: harness.Usage{State: harness.UsageUnknown}}
+			turnErr = nil
+		} else {
+			reason := protocol.TaskResultReasonMissingResult
+			if !processResult.Success() {
+				reason = protocol.TaskResultReasonProcessFailure
+			}
+			cause := failure
+			if cause == nil {
+				cause = errors.New("pi process ended before a settled structured task result")
+			}
+			turnResult = &harness.TaskResult{Kind: harness.ResultFailed, Summary: cause.Error(), Reason: &reason, Usage: harness.Usage{State: harness.UsageUnknown}}
+			turnErr = cause
 		}
-		cause := failure
-		if cause == nil {
-			cause = errors.New("pi process ended before a settled structured task result")
-		}
-		turnResult = &harness.TaskResult{Kind: harness.ResultFailed, Summary: cause.Error(), Reason: &reason, Usage: harness.Usage{State: harness.UsageUnknown}}
-		turnErr = cause
 		session.completeTurn(*turnResult, turnErr, false)
 	}
 	if turnResult == nil {
@@ -944,7 +1016,7 @@ func (session *nativeSession) watchProcess() {
 	}
 	final := cloneTaskResult(*turnResult)
 	final.Process = processResult
-	if !processResult.Success() && !normalClose {
+	if !processResult.Success() && !expectedNormalClose(processResult, normalClose) && !expectedCancelledExit(processResult, cancelApplied, final) {
 		reason := protocol.TaskResultReasonProcessFailure
 		final.Kind = harness.ResultFailed
 		final.Reason = &reason
@@ -966,6 +1038,17 @@ func (session *nativeSession) watchProcess() {
 		final.Summary = turnErr.Error()
 	}
 	session.completeFinal(final)
+}
+
+func expectedNormalClose(result execution.Result, candidate bool) bool {
+	return candidate && result.Terminated && result.SinkError == nil && result.OutputError == nil &&
+		result.TerminationError == nil && result.ContainmentError == nil
+}
+
+func expectedCancelledExit(result execution.Result, cancelApplied bool, final harness.TaskResult) bool {
+	return cancelApplied && final.Kind == harness.ResultCancelled && result.Terminated &&
+		result.SinkError == nil && result.OutputError == nil &&
+		result.TerminationError == nil && result.ContainmentError == nil
 }
 
 func (session *nativeSession) completeFinal(result harness.TaskResult) {

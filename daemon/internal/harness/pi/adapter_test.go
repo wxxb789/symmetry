@@ -39,7 +39,7 @@ func TestAdapterStagesPiRPCAndRequiresSettledExplicitTaskResult(t *testing.T) {
 			// remains pending until the matching response is observed.
 			process.emitJSON(t, map[string]any{"type": "agent_start"})
 			process.emitJSON(t, map[string]any{"type": "message_end", "message": assistantTaskResultMessage(t)})
-			process.emitJSON(t, map[string]any{"type": "agent_end", "messages": []any{}})
+			process.emitJSON(t, map[string]any{"type": "agent_end", "messages": []any{}, "willRetry": false})
 			process.emitJSON(t, map[string]any{"type": "agent_settled"})
 			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "prompt", "success": true})
 		default:
@@ -109,7 +109,7 @@ func TestControlCancelSendsClearQueueBeforeAbortAndNeedsSettlement(t *testing.T)
 			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "clear_queue", "success": true, "data": map[string]any{"steering": []any{}, "followUp": []any{}}})
 		case CommandAbort:
 			// Abort's response may be delayed until after native settlement.
-			process.emitJSON(t, map[string]any{"type": "agent_end", "messages": []any{}})
+			process.emitJSON(t, map[string]any{"type": "agent_end", "messages": []any{}, "willRetry": false})
 			process.emitJSON(t, map[string]any{"type": "agent_settled"})
 			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "abort", "success": true})
 		}
@@ -157,7 +157,7 @@ func TestWaitTurnRejectsMalformedOrNonStructuredFinalContent(t *testing.T) {
 					process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "prompt", "success": true})
 					process.emitJSON(t, map[string]any{"type": "agent_start"})
 					process.emitJSON(t, map[string]any{"type": "message_end", "message": test.message})
-					process.emitJSON(t, map[string]any{"type": "agent_end", "messages": []any{}})
+					process.emitJSON(t, map[string]any{"type": "agent_end", "messages": []any{}, "willRetry": false})
 					process.emitJSON(t, map[string]any{"type": "agent_settled"})
 				}
 			}
@@ -214,6 +214,38 @@ func TestStartRejectsRPCTransportOverrideBeforeLaunchingProcess(t *testing.T) {
 	}
 }
 
+func TestStartRejectsHistoryMutatingArgumentsBeforeLaunchingProcess(t *testing.T) {
+	for _, argument := range []string{
+		"--continue", "--continue=latest", "-c",
+		"--resume", "--resume=session-1", "-r",
+		"--session", "--session=session-1",
+		"--session-id", "--session-id=session-1",
+		"--fork", "--fork=session-1",
+		"--no-session",
+	} {
+		t.Run(argument, func(t *testing.T) {
+			called := false
+			adapter := &Adapter{
+				executable: "pi-test",
+				startProcess: func(_ context.Context, _ execution.Invocation, _ execution.Sink) (nativeProcess, error) {
+					called = true
+					return newFakeNativeProcess(), nil
+				},
+			}
+			_, err := adapter.Start(context.Background(), harness.StartRequest{
+				Workspace:  t.TempDir(),
+				Invocation: execution.Invocation{Args: []string{argument}},
+			}, &recordingHarnessSink{})
+			if err == nil || !strings.Contains(err.Error(), "not allowed") {
+				t.Fatalf("Start() error = %v, want history/session flag rejection", err)
+			}
+			if called {
+				t.Fatal("Start() launched a process despite a prohibited history/session flag")
+			}
+		})
+	}
+}
+
 func TestCloseBoundsMissingClearQueueAcknowledgementThenTerminates(t *testing.T) {
 	process := newFakeNativeProcess()
 	adapter := fakePiAdapter(process)
@@ -250,6 +282,77 @@ func TestCloseBoundsMissingClearQueueAcknowledgementThenTerminates(t *testing.T)
 	}
 }
 
+func TestCloseHonorsCallerCancellationWhileBoundedCleanupContinues(t *testing.T) {
+	process := newFakeNativeProcess()
+	adapter := fakePiAdapter(process)
+	adapter.cancelTimeout = 10 * time.Millisecond
+	clearWritten := make(chan struct{})
+	process.onWrite = func(request Request) {
+		switch request.Type {
+		case CommandGetState:
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "get_state", "success": true, "data": map[string]any{"sessionId": "pi-1", "sessionFile": "C:/sessions/pi-1.jsonl"}})
+		case CommandPrompt:
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "prompt", "success": true})
+			process.emitJSON(t, map[string]any{"type": "agent_start"})
+		case CommandClearQueue:
+			close(clearWritten)
+		}
+	}
+	session := startPiSession(t, adapter, harness.StartRequest{Workspace: t.TempDir()}, &recordingHarnessSink{})
+	_ = openPiSession(t, session)
+	if err := session.StartTurn(context.Background(), harness.TurnRequest{Goal: "Make bounded progress.", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	closeResult := make(chan error, 1)
+	go func() { closeResult <- session.Close(ctx) }()
+	<-clearWritten
+	cancel()
+	if err := <-closeResult; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Close() error = %v, want caller cancellation", err)
+	}
+	result, err := session.Wait(context.Background())
+	if err != nil || result.Kind != harness.ResultFailed {
+		t.Fatalf("Wait() = %+v, %v; want bounded cleanup failure", result, err)
+	}
+	if got := process.terminateCount(); got != 1 {
+		t.Fatalf("Terminate calls = %d, want bounded cleanup fallback", got)
+	}
+}
+
+func TestAcceptedAbortWithProcessExitBeforeSettlementRemainsCancelled(t *testing.T) {
+	process := newFakeNativeProcess()
+	process.onWrite = func(request Request) {
+		switch request.Type {
+		case CommandGetState:
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "get_state", "success": true, "data": map[string]any{"sessionId": "pi-1", "sessionFile": "C:/sessions/pi-1.jsonl"}})
+		case CommandPrompt:
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "prompt", "success": true})
+			process.emitJSON(t, map[string]any{"type": "agent_start"})
+		case CommandClearQueue:
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "clear_queue", "success": true, "data": map[string]any{"steering": []any{}, "followUp": []any{}}})
+		case CommandAbort:
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "abort", "success": true})
+			process.finish(execution.Result{PID: 42, Terminated: true, OutputTruncated: true})
+		}
+	}
+	session := startPiSession(t, fakePiAdapter(process), harness.StartRequest{Workspace: t.TempDir()}, &recordingHarnessSink{})
+	_ = openPiSession(t, session)
+	if err := session.StartTurn(context.Background(), harness.TurnRequest{Goal: "Make bounded progress.", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	if receipt, err := session.Control(context.Background(), harness.ControlRequest{CommandID: "cancel-1", Kind: harness.ControlCancel}); err != nil || receipt.Outcome != harness.ControlApplied {
+		t.Fatalf("Control(cancel) = %+v, %v", receipt, err)
+	}
+	if err := session.WaitTurn(context.Background()); err != nil {
+		t.Fatalf("WaitTurn() error = %v, want accepted cancellation", err)
+	}
+	result, err := session.Wait(context.Background())
+	if err != nil || result.Kind != harness.ResultCancelled {
+		t.Fatalf("Wait() = %+v, %v; want cancelled rather than process failure", result, err)
+	}
+}
+
 func TestDeliberateCloseAfterSettledTurnDoesNotDowngradeValidResult(t *testing.T) {
 	process := newFakeNativeProcess()
 	process.onWrite = func(request Request) {
@@ -260,7 +363,7 @@ func TestDeliberateCloseAfterSettledTurnDoesNotDowngradeValidResult(t *testing.T
 			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "prompt", "success": true})
 			process.emitJSON(t, map[string]any{"type": "agent_start"})
 			process.emitJSON(t, map[string]any{"type": "message_end", "message": assistantTaskResultMessage(t)})
-			process.emitJSON(t, map[string]any{"type": "agent_end", "messages": []any{}})
+			process.emitJSON(t, map[string]any{"type": "agent_end", "messages": []any{}, "willRetry": false})
 			process.emitJSON(t, map[string]any{"type": "agent_settled"})
 		}
 	}
@@ -291,7 +394,7 @@ func TestMalformedRecordAfterSemanticTurnInvalidatesFinalWaitResult(t *testing.T
 			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "prompt", "success": true})
 			process.emitJSON(t, map[string]any{"type": "agent_start"})
 			process.emitJSON(t, map[string]any{"type": "message_end", "message": assistantTaskResultMessage(t)})
-			process.emitJSON(t, map[string]any{"type": "agent_end", "messages": []any{}})
+			process.emitJSON(t, map[string]any{"type": "agent_end", "messages": []any{}, "willRetry": false})
 			process.emitJSON(t, map[string]any{"type": "agent_settled"})
 		}
 	}

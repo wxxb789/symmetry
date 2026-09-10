@@ -218,7 +218,9 @@ defmodule SymmetryControlWeb.TaskGoalGuardControllerTest do
           repository_resource_id: repository_id,
           acceptance: acceptance_contract(),
           depends_on_keys: [],
+          integration: true,
           model_profile: "codex",
+          change_target: nil,
           baseline: %{kind: "subject", subject: subject(repository_id)}
         }
       ]

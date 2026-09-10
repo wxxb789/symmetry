@@ -120,7 +120,9 @@ defmodule SymmetryControl.Goals.WorkersTest do
           repository_resource_id: repository.id,
           acceptance: acceptance_contract(),
           depends_on_keys: [],
+          integration: true,
           model_profile: "codex",
+          change_target: nil,
           baseline: %{
             kind: "subject",
             subject: %{

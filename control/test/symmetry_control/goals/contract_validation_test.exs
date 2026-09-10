@@ -278,7 +278,7 @@ defmodule SymmetryControl.Goals.ContractValidationTest do
         [first_predicate, Map.put(second_predicate, "id", first_predicate["id"])]
       )
 
-    assert {:error, {:duplicate_predicate_id, "check"}} =
+    assert {:error, {:duplicate_predicate_id, "tests"}} =
              ContractValidation.validate_goal_revision(duplicate_predicate_ids, opts)
 
     automatic_execution =
