@@ -125,8 +125,17 @@ func (capabilities Capabilities) Validate() error {
 	if strings.TrimSpace(string(capabilities.Kind)) == "" {
 		return errors.New("harness capability kind must not be empty")
 	}
-	if capabilities.ProtocolVersion < 0 {
-		return errors.New("harness capability protocol version must not be negative")
+	if capabilities.ProtocolVersion <= 0 {
+		return errors.New("harness capability protocol version must be positive")
+	}
+	if capabilities.VersionKnown != (strings.TrimSpace(capabilities.NativeVersion) != "") {
+		return errors.New("harness capability version_known must match native_version presence")
+	}
+	if capabilities.TransportVerified && !capabilities.VersionKnown {
+		return errors.New("verified harness transport requires a known native version")
+	}
+	if capabilities.Verified && (!capabilities.VersionKnown || !capabilities.TransportVerified || strings.TrimSpace(capabilities.ImplementationVersion) == "") {
+		return errors.New("verified harness adapter requires a known native version, verified transport, and implementation version")
 	}
 	if capabilities.Guidance != GuidanceNativeSteer &&
 		capabilities.Guidance != GuidanceNextTurn &&
@@ -146,6 +155,12 @@ func (capabilities Capabilities) Validate() error {
 	}
 	if capabilities.Events && !capabilities.Start {
 		return errors.New("events capability requires start capability")
+	}
+	if capabilities.Cancel && (!capabilities.Start || !capabilities.Events) {
+		return errors.New("cancel capability requires start and events capabilities")
+	}
+	if capabilities.ApprovalResponse && (!capabilities.Start || !capabilities.Events) {
+		return errors.New("approval response capability requires start and events capabilities")
 	}
 	if capabilities.Guidance == GuidanceNativeSteer && !capabilities.Start {
 		return errors.New("native guidance capability requires start capability")
@@ -169,7 +184,7 @@ func (capabilities Capabilities) Validate() error {
 
 // Supports reports whether an operation is explicitly verified and available.
 func (capabilities Capabilities) Supports(capability Capability) bool {
-	if !capabilities.Verified {
+	if capabilities.Validate() != nil || !capabilities.Verified {
 		return false
 	}
 	switch capability {

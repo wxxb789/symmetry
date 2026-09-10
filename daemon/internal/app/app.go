@@ -806,6 +806,9 @@ func (daemon *daemon) commandSignal() <-chan struct{} {
 
 func (daemon *daemon) ensureHarnessProbe(ctx context.Context) error {
 	if daemon.harnessRegistry != nil && daemon.harnessCapabilities.Kind != "" {
+		if err := daemon.harnessCapabilities.Validate(); err != nil {
+			return fmt.Errorf("validate cached harness capability projection: %w", err)
+		}
 		return nil
 	}
 	runtime, err := normalizeRuntimeForProbe(daemon.config.Runtime)
@@ -821,8 +824,14 @@ func (daemon *daemon) ensureHarnessProbe(ctx context.Context) error {
 		return err
 	}
 	capabilities, probeErr := registry.Probe(ctx, kind)
-	unverified := errors.Is(probeErr, harness.ErrNativeUnverified)
-	unavailable := errors.Is(probeErr, harness.ErrHarnessUnavailable) && unavailableRuntimeKind(runtime.HarnessKind)
+	// Registry.Probe joins adapter failures with capability validation. Validate
+	// again before tolerating expected unavailable/unverified sentinels so a
+	// malformed projection cannot be hidden behind errors.Is on a joined error.
+	if err := capabilities.Validate(); err != nil {
+		return fmt.Errorf("probe %s adapter capability projection: %w", runtime.HarnessKind, err)
+	}
+	unverified := probeErrorContainsOnly(probeErr, harness.ErrNativeUnverified)
+	unavailable := probeErrorContainsOnly(probeErr, harness.ErrHarnessUnavailable) && unavailableRuntimeKind(runtime.HarnessKind)
 	if probeErr != nil && !unverified && !unavailable {
 		return fmt.Errorf("probe %s adapter: %w", runtime.HarnessKind, probeErr)
 	}
@@ -842,6 +851,32 @@ func (daemon *daemon) ensureHarnessProbe(ctx context.Context) error {
 	daemon.harnessRegistry = registry
 	daemon.harnessCapabilities = capabilities
 	return nil
+}
+
+// probeErrorContainsOnly allows a probe's expected sentinel and contextual
+// wrappers, but does not let errors.Join hide an independent fatal failure.
+func probeErrorContainsOnly(err, expected error) bool {
+	if err == nil || expected == nil {
+		return false
+	}
+	type unwrapMany interface{ Unwrap() []error }
+	if joined, ok := err.(unwrapMany); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !probeErrorContainsOnly(child, expected) {
+				return false
+			}
+		}
+		return true
+	}
+	type unwrapOne interface{ Unwrap() error }
+	if wrapped, ok := err.(unwrapOne); ok {
+		return probeErrorContainsOnly(wrapped.Unwrap(), expected)
+	}
+	return errors.Is(err, expected)
 }
 
 // newHarnessRegistry is the daemon composition root. Native adapter packages
@@ -901,6 +936,8 @@ type runtimeRegistrationMetadata struct {
 	Adapter                protocol.Adapter
 }
 
+const unavailableNativeMetadataVersion = "unavailable"
+
 func buildRuntimeRegistration(runtime config.Runtime, profile config.AgentProfile, capabilities harness.Capabilities) (protocol.RuntimeRegistration, runtimeRegistrationMetadata, error) {
 	if err := capabilities.Validate(); err != nil {
 		return protocol.RuntimeRegistration{}, runtimeRegistrationMetadata{}, fmt.Errorf("validate adapter capabilities: %w", err)
@@ -953,11 +990,11 @@ func buildRuntimeRegistration(runtime config.Runtime, profile config.AgentProfil
 			},
 		},
 	}
-	if runtime.HarnessKind != config.RuntimeHarnessGeneric && capabilities.NativeVersion != "" {
-		metadata.HarnessVersion = capabilities.NativeVersion
-	}
-	if runtime.HarnessKind != config.RuntimeHarnessGeneric && capabilities.ImplementationVersion != "" {
-		metadata.AdapterVersion = capabilities.ImplementationVersion
+	if runtime.HarnessKind != config.RuntimeHarnessGeneric {
+		// Native identity is evidence from this probe, never an operator pin.
+		// A failed probe advertises an explicit sentinel rather than stale config.
+		metadata.HarnessVersion = probedMetadataVersion(capabilities.NativeVersion)
+		metadata.AdapterVersion = probedMetadataVersion(capabilities.ImplementationVersion)
 	}
 	metadata.Adapter.NativeVersion = metadata.HarnessVersion
 	metadata.Adapter.ImplementationVersion = metadata.AdapterVersion
@@ -968,6 +1005,13 @@ func buildRuntimeRegistration(runtime config.Runtime, profile config.AgentProfil
 		return protocol.RuntimeRegistration{}, runtimeRegistrationMetadata{}, err
 	}
 	return registration, metadata, nil
+}
+
+func probedMetadataVersion(version string) string {
+	if strings.TrimSpace(version) == "" {
+		return unavailableNativeMetadataVersion
+	}
+	return version
 }
 
 func optionalRuntimeRepositoryResourceID(value string) *string {
@@ -5152,13 +5196,11 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 		return daemon.queueCancellationReceipt(ctx, key, command.CommandID)
 	}
 
-	daemon.mu.Lock()
-	active := daemon.running[key]
-	daemon.mu.Unlock()
+	active, nativeSessionActive := daemon.commandRunSnapshot(key)
 	if active == nil {
 		return daemon.queueCommandAcknowledgementWithContext(ctx, key, command.CommandID, "rejected")
 	}
-	if active.nativeSession != nil {
+	if nativeSessionActive {
 		// This vertical slice only has a verified cancellation delivery path.
 		// Guidance, pause/resume, approval, and a second native turn remain
 		// visible as unsupported rather than falling back to legacy stdin.
@@ -5233,6 +5275,16 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 		return daemon.completeProvideInputWithRetry(ctx, key, command.CommandID, payloadDigest, "applied")
 	}
 	return daemon.queueCommandAcknowledgementWithContext(ctx, key, command.CommandID, outcome)
+}
+
+// commandRunSnapshot reads run ownership and native-session state together.
+// Close recovery may clear nativeSession on a concurrent outbox worker, so
+// command routing must use this protected snapshot after releasing daemon.mu.
+func (daemon *daemon) commandRunSnapshot(key state.RunKey) (*runningRun, bool) {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	active := daemon.running[key]
+	return active, active != nil && active.nativeSession != nil
 }
 
 func (daemon *daemon) releaseTerminalReservation(key state.RunKey) {

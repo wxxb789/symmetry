@@ -165,8 +165,8 @@ func TestStartupProbeRegistersUnavailableNativeProjections(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			value := testConfig(t)
 			value.Runtime.HarnessKind = test.configKind
-			value.Runtime.HarnessVersion = "unavailable"
-			value.Runtime.AdapterVersion = "symmetry-daemon:unavailable"
+			value.Runtime.HarnessVersion = "configured-native-9"
+			value.Runtime.AdapterVersion = "configured-adapter-9"
 			value.Runtime.AdapterProtocolVersion = 1
 			registry := harness.NewRegistry()
 			if err := registry.Register(test.harnessKind, test.adapter); err != nil {
@@ -186,7 +186,92 @@ func TestStartupProbeRegistersUnavailableNativeProjections(t *testing.T) {
 			if registration.Capabilities.Adapter == nil || registration.Capabilities.Adapter.Operations.Start || registration.Capabilities.Adapter.Operations.Events {
 				t.Fatalf("registration adapter = %+v, want explicit unsupported operations", registration.Capabilities.Adapter)
 			}
+			if registration.HarnessVersion != unavailableNativeMetadataVersion || registration.AdapterVersion != unavailableNativeMetadataVersion ||
+				registration.Capabilities.Adapter.NativeVersion != unavailableNativeMetadataVersion || registration.Capabilities.Adapter.ImplementationVersion != unavailableNativeMetadataVersion {
+				t.Fatalf("unavailable registration retained configured version pins: %+v", registration)
+			}
 		})
+	}
+}
+
+func TestStartupProbeRejectsInvalidUnverifiedProjection(t *testing.T) {
+	value := testConfig(t)
+	value.Runtime.HarnessKind = config.RuntimeHarnessCodex
+	value.Runtime.HarnessVersion = "0.153.4"
+	value.Runtime.AdapterVersion = "symmetry-daemon:test"
+	value.Runtime.AdapterProtocolVersion = 1
+	capabilities := verifiedCodexCapabilities()
+	capabilities.ProtocolVersion = 0
+	registry := harness.NewRegistry()
+	if err := registry.Register(harness.KindCodex, &fakeNativeGoalAdapter{capabilities: capabilities, probeErr: harness.ErrNativeUnverified}); err != nil {
+		t.Fatal(err)
+	}
+	daemon := &daemon{config: value, harnessRegistry: registry}
+	err := daemon.ensureHarnessProbe(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "protocol version must be positive") {
+		t.Fatalf("ensureHarnessProbe() error = %v, want invalid capability projection", err)
+	}
+}
+
+func TestStartupProbeRejectsUnexpectedJoinedProbeError(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		harness  string
+		kind     harness.Kind
+		probeErr error
+	}{
+		{
+			name:     "unverified and deadline",
+			harness:  config.RuntimeHarnessCodex,
+			kind:     harness.KindCodex,
+			probeErr: errors.Join(harness.ErrNativeUnverified, context.DeadlineExceeded),
+		},
+		{
+			name:     "unavailable and deadline",
+			harness:  config.RuntimeHarnessPi,
+			kind:     harness.KindPi,
+			probeErr: errors.Join(harness.ErrHarnessUnavailable, context.DeadlineExceeded),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value := testConfig(t)
+			value.Runtime.HarnessKind = test.harness
+			value.Runtime.HarnessVersion = "configured-native-9"
+			value.Runtime.AdapterVersion = "configured-adapter-9"
+			value.Runtime.AdapterProtocolVersion = 1
+			registry := harness.NewRegistry()
+			capabilities := harness.UnsupportedCapabilities(test.kind, "probe is unavailable")
+			if err := registry.Register(test.kind, &fakeNativeGoalAdapter{capabilities: capabilities, probeErr: test.probeErr}); err != nil {
+				t.Fatal(err)
+			}
+			daemon := &daemon{config: value, harnessRegistry: registry}
+			err := daemon.ensureHarnessProbe(context.Background())
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("ensureHarnessProbe() error = %v, want unexpected joined error rejection", err)
+			}
+		})
+	}
+}
+
+func TestStartupProbeRejectsMismatchedKnownNativeVersion(t *testing.T) {
+	value := testConfig(t)
+	value.Runtime.HarnessKind = config.RuntimeHarnessCodex
+	value.Runtime.HarnessVersion = "0.153.5"
+	value.Runtime.AdapterVersion = "symmetry-daemon:test"
+	value.Runtime.AdapterProtocolVersion = 1
+	registry := harness.NewRegistry()
+	if err := registry.Register(harness.KindCodex, codex.NewAdapterWithRunner("codex", codexCommandFixtures{
+		responses: map[string][]byte{
+			"--version":         []byte("codex-cli 0.153.4\n"),
+			"app-server --help": []byte("app-server\nstdio://\n"),
+		},
+	})); err != nil {
+		t.Fatal(err)
+	}
+	daemon := &daemon{config: value, harnessRegistry: registry}
+	err := daemon.ensureHarnessProbe(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "runtime.harness_version") {
+		t.Fatalf("ensureHarnessProbe() error = %v, want known native version mismatch", err)
 	}
 }
 
@@ -195,11 +280,10 @@ func TestRegistrationWireIncludesAdapterObject(t *testing.T) {
 		RuntimeKey: "default", Name: "runtime", Capacity: 1, AgentProfile: "default", Workspace: "primary",
 		HarnessKind: config.RuntimeHarnessGeneric, HarnessVersion: "legacy", AdapterVersion: "legacy", AdapterProtocolVersion: 1,
 	}
-	capabilities := harness.UnsupportedCapabilities(harness.KindGeneric, "test")
-	capabilities.Verified = true
-	capabilities.Start = true
-	capabilities.Events = true
-	capabilities.Cancel = true
+	capabilities, err := harness.NewGenericAdapter().Probe(context.Background())
+	if err != nil {
+		t.Fatalf("generic Probe() error = %v", err)
+	}
 	profile := config.AgentProfile{InputMode: config.InputModeJSON}
 	registration, _, err := buildRuntimeRegistration(runtime, profile, capabilities)
 	if err != nil {
@@ -854,6 +938,29 @@ func TestNativeCloseRetrySuccessDoesNotEraseUsageRecoveryBarrier(t *testing.T) {
 	app.publishNativeCloseRetrySuccess(key, active, session)
 	if active.nativeSession != nil || active.goalSession != nil || active.nativeCloseRetryRequired || active.nativeCloseRetrying || !active.nativeUsageRetryPending || !active.cleanupBlocked {
 		t.Fatalf("native close retry erased usage recovery barrier: %#v", active)
+	}
+}
+
+func TestCommandRunSnapshotRetainsNativeRouteAcrossCloseRecovery(t *testing.T) {
+	key := state.RunKey{RunID: "run-1", Generation: 1}
+	session := &fakeNativeGoalSession{turnStarted: make(chan struct{})}
+	active := &runningRun{nativeSession: session}
+	app := &daemon{running: map[state.RunKey]*runningRun{key: active}}
+
+	snapshot, nativeSessionActive := app.commandRunSnapshot(key)
+	if snapshot != active || !nativeSessionActive {
+		t.Fatalf("command snapshot = (%#v, %t), want active native session", snapshot, nativeSessionActive)
+	}
+	// This is the close-recovery publication that races command routing in the
+	// daemon. The command must use its captured boolean rather than rereading a
+	// field which this path clears under daemon.mu.
+	app.publishNativeCloseRetrySuccess(key, active, session)
+	if !nativeSessionActive {
+		t.Fatal("close recovery changed the command's native-session snapshot")
+	}
+	_, currentNativeSession := app.commandRunSnapshot(key)
+	if currentNativeSession {
+		t.Fatal("close recovery did not clear the current native session")
 	}
 }
 
@@ -1904,10 +2011,11 @@ func (client *nativeAdmissionControl) RecordUsage(_ context.Context, _ string, _
 type fakeNativeGoalAdapter struct {
 	session      *fakeNativeGoalSession
 	capabilities harness.Capabilities
+	probeErr     error
 }
 
 func (adapter *fakeNativeGoalAdapter) Probe(context.Context) (harness.Capabilities, error) {
-	return adapter.capabilities, nil
+	return adapter.capabilities, adapter.probeErr
 }
 
 func (adapter *fakeNativeGoalAdapter) Start(_ context.Context, request harness.StartRequest, sink harness.EventSink) (harness.Session, error) {

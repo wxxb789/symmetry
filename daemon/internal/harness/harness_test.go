@@ -36,6 +36,63 @@ func TestRegistryKeepsUnavailableCapabilitiesExplicit(t *testing.T) {
 	}
 }
 
+func TestCapabilitiesRejectUnsafeVersionAndOperationClaims(t *testing.T) {
+	verified := Capabilities{
+		Kind:                  KindCodex,
+		NativeVersion:         "1.2.3",
+		ImplementationVersion: "adapter-v1",
+		ProtocolVersion:       1,
+		VersionKnown:          true,
+		TransportVerified:     true,
+		Verified:              true,
+		Start:                 true,
+		Events:                true,
+		Cancel:                true,
+		Guidance:              GuidanceUnsupported,
+		Pause:                 PauseUnsupported,
+		Usage:                 UsageUnknown,
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*Capabilities)
+	}{
+		{name: "zero protocol", mutate: func(value *Capabilities) { value.ProtocolVersion = 0 }},
+		{name: "known without native version", mutate: func(value *Capabilities) { value.NativeVersion = "" }},
+		{name: "native version not marked known", mutate: func(value *Capabilities) { value.VersionKnown = false }},
+		{name: "verified transport without version", mutate: func(value *Capabilities) { value.NativeVersion = ""; value.VersionKnown = false }},
+		{name: "verified without implementation", mutate: func(value *Capabilities) { value.ImplementationVersion = "" }},
+		{name: "cancel without start", mutate: func(value *Capabilities) { value.Start = false }},
+		{name: "cancel without events", mutate: func(value *Capabilities) { value.Events = false }},
+		{name: "approval without start", mutate: func(value *Capabilities) { value.ApprovalResponse = true; value.Start = false }},
+		{name: "approval without events", mutate: func(value *Capabilities) { value.ApprovalResponse = true; value.Events = false }},
+		{name: "unverified executable start", mutate: func(value *Capabilities) { value.Verified = false }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			capabilities := verified
+			test.mutate(&capabilities)
+			if err := capabilities.Validate(); err == nil {
+				t.Fatalf("Validate() succeeded for unsafe capabilities: %+v", capabilities)
+			}
+			if capabilities.Supports(CapabilityStart) {
+				t.Fatalf("Supports(start) accepted invalid capabilities: %+v", capabilities)
+			}
+		})
+	}
+}
+
+func TestGenericAdapterProbeCarriesCoherentVersionEvidence(t *testing.T) {
+	capabilities, err := NewGenericAdapter().Probe(context.Background())
+	if err != nil {
+		t.Fatalf("Probe() error = %v", err)
+	}
+	if capabilities.NativeVersion != "generic-v1" || !capabilities.VersionKnown || !capabilities.TransportVerified || !capabilities.Verified {
+		t.Fatalf("generic capabilities = %+v, want verified version and transport evidence", capabilities)
+	}
+	if err := capabilities.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
 func TestGenericAdapterDoesNotInterpretFakeAgentJSON(t *testing.T) {
 	process := newFakeProcess()
 	runner := &fakeRunner{process: process}
