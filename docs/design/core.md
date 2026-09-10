@@ -43,7 +43,8 @@ specific WorkItem and goal revision, not for an entire mutable conversation.
 
 Stored states: `draft`, `active`, `paused`, `achieved`, `cancelled`.
 Derived blockers: `waiting_decision`, `waiting_dependency`, `waiting_external`,
-`budget_blocked`, `validation_failed`, `stale_context`, `runtime_unavailable`.
+`budget_blocked`, `validation_failed`, `stale_context`, `runtime_unavailable`,
+`integration_outcome_required`, `required_predicates_unmet`.
 These are read-model reasons, not additional lifecycle states.
 
 Automatic admission may additionally expose a revision-scoped

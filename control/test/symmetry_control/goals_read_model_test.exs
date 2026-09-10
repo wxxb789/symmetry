@@ -13,7 +13,9 @@ defmodule SymmetryControl.GoalsReadModelTest do
     def all(_query), do: []
 
     def preload(goal, associations) do
-      Enum.reduce(associations, goal, &Map.put(&2, &1, []))
+      Enum.reduce(associations, goal, fn association, goal ->
+        if is_list(Map.get(goal, association)), do: goal, else: Map.put(goal, association, [])
+      end)
     end
   end
 
@@ -1585,6 +1587,164 @@ defmodule SymmetryControl.GoalsReadModelTest do
 
     refute projection.completion.ready?
     refute "achieve" in projection.allowed_actions
+  end
+
+  test "deterministic completion with unmet required evidence is an inspectable attention blocker" do
+    subject = subject()
+    subject_hash = SymmetryControl.RequestHash.canonical(subject)
+
+    related =
+      final_acceptance_related(subject, subject_hash,
+        authority_policy: %{"operator_required_for_completion" => false},
+        acceptance_contract: %{
+          "predicates" => [
+            %{"id" => "goal-check", "kind" => "check", "validator_profile" => "test"}
+          ]
+        },
+        decisions: []
+      )
+      |> put_in([:revisions, Access.at(0), :execution_policy], %{
+        "final_acceptance" => "deterministic"
+      })
+
+    projection =
+      ReadModel.project(%{id: "goal-final-ready", state: "active", current_revision: 1}, related)
+
+    assert [%{reason: "required_predicates_unmet", ids: ["integration-item"]} = blocker] =
+             projection.blockers
+
+    assert blocker.details == [
+             %{
+               work_item_id: "integration-item",
+               subject_hash: "sha256:" <> Base.encode16(subject_hash, case: :lower),
+               predicate_ids: ["goal-check"],
+               predicate_kinds: ["check"]
+             }
+           ]
+
+    refute "final_acceptance_required" in projection.blocker_reasons
+    refute projection.completion.ready?
+    refute "achieve" in projection.allowed_actions
+
+    goal =
+      struct(Goal, %{
+        id: "goal-final-ready",
+        project_id: "project-final-ready",
+        title: "Ready only with evidence",
+        state: "active",
+        current_revision: 1,
+        lock_version: 1,
+        updated_at: ~U[2026-09-10 00:00:00Z],
+        revisions: related.revisions,
+        work_items: related.work_items,
+        dependencies: Map.get(related, :dependencies, []),
+        outcomes: related.outcomes,
+        decisions: related.decisions
+      })
+
+    Process.put(:goals_read_model_attention_rows, [goal])
+    on_exit(fn -> Process.delete(:goals_read_model_attention_rows) end)
+
+    assert {:ok, %{entries: [entry]}} = ReadModel.attention(repo: CursorRepo, limit: 1)
+    assert entry.goal_id == goal.id
+    assert entry.blocker_reasons == ["required_predicates_unmet"]
+    refute entry.ready_to_achieve?
+
+    satisfied =
+      related
+      |> Map.put(:tasks, [
+        %{
+          id: "validation-task",
+          work_item_id: "integration-item",
+          goal_id: "goal-final-ready",
+          goal_revision: 1,
+          purpose: "validate",
+          current_generation: 1,
+          state: "completed"
+        }
+      ])
+      |> Map.put(:runs, [
+        %{id: "validation-run", task_id: "validation-task", generation: 1, state: "completed"}
+      ])
+      |> Map.put(:evidence, [goal_check_evidence(subject, subject_hash)])
+
+    satisfied_projection =
+      ReadModel.project(
+        %{id: "goal-final-ready", state: "active", current_revision: 1},
+        satisfied
+      )
+
+    assert satisfied_projection.completion.ready?
+    assert "achieve" in satisfied_projection.allowed_actions
+    refute "required_predicates_unmet" in satisfied_projection.blocker_reasons
+  end
+
+  test "an accepted integration outcome is required and remains visible in attention" do
+    subject_hash = :crypto.hash(:sha256, "missing-integration-outcome")
+
+    related =
+      final_acceptance_related(%{}, subject_hash,
+        outcomes: [],
+        decisions: []
+      )
+
+    projection =
+      ReadModel.project(
+        %{id: "goal-missing-integration", state: "active", current_revision: 1},
+        related
+      )
+
+    assert [%{reason: "integration_outcome_required", ids: ["integration-item"]} = blocker] =
+             projection.blockers
+
+    assert blocker.details == [
+             %{work_item_id: "integration-item", reason: "accepted_outcome_required"}
+           ]
+
+    refute projection.completion.ready?
+    refute "achieve" in projection.allowed_actions
+    refute "final_acceptance_required" in projection.blocker_reasons
+
+    goal =
+      struct(Goal, %{
+        id: "goal-missing-integration",
+        project_id: "project-missing-integration",
+        title: "Missing integration outcome",
+        state: "active",
+        current_revision: 1,
+        lock_version: 1,
+        updated_at: ~U[2026-09-10 00:00:00Z],
+        revisions: related.revisions,
+        work_items: related.work_items,
+        dependencies: [],
+        outcomes: related.outcomes,
+        decisions: related.decisions
+      })
+
+    Process.put(:goals_read_model_attention_rows, [goal])
+    on_exit(fn -> Process.delete(:goals_read_model_attention_rows) end)
+
+    assert {:ok, %{entries: [entry]}} = ReadModel.attention(repo: CursorRepo, limit: 1)
+    assert entry.goal_id == goal.id
+    assert entry.blocker_reasons == ["integration_outcome_required"]
+    refute entry.ready_to_achieve?
+
+    rejected =
+      ReadModel.project(
+        %{id: "goal-missing-integration", state: "active", current_revision: 1},
+        Map.put(related, :outcomes, [
+          %{
+            id: "rejected-integration-outcome",
+            goal_revision: 1,
+            work_item_id: "integration-item",
+            disposition: "rejected",
+            subject_hash: subject_hash
+          }
+        ])
+      )
+
+    assert "integration_outcome_required" in rejected.blocker_reasons
+    refute rejected.completion.ready?
   end
 
   test "authority policy keeps deterministic execution behind an exact completion Decision" do

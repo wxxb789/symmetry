@@ -701,6 +701,97 @@ defmodule SymmetryControl.GoalsTest do
     assert Repo.aggregate(SymmetryControl.Goals.WorkDependency, :count) == 1
   end
 
+  test "same Goal dependency commands retain an acyclic DAG across inverse additions" do
+    project = project_fixture()
+    repository = repository_fixture(project)
+
+    assert {:ok, created, :created} =
+             Goals.create_goal(project.id, goal_attrs(), "operator:test", now: @now)
+
+    plan_item = fn key ->
+      %{
+        key: key,
+        title: "#{key} work",
+        description: "Keep #{key} work bounded.",
+        required: true,
+        integration: key == "integration",
+        repository_resource_id: repository.id,
+        acceptance: check_contract(),
+        depends_on_keys: [],
+        model_profile: "codex",
+        change_target: nil,
+        baseline: baseline_subject(repository.id)
+      }
+    end
+
+    planned =
+      created.goal.id
+      |> plan_proposal([plan_item.("first"), plan_item.("second"), plan_item.("integration")])
+      |> then(&accept_plan!(created.goal.id, &1))
+
+    items_by_title = Map.new(planned.goal.work_items, &{&1.title, &1})
+    first = Map.fetch!(items_by_title, "first work")
+    second = Map.fetch!(items_by_title, "second work")
+    integration = Map.fetch!(items_by_title, "integration work")
+
+    assert {:ok, _receipt, :created} =
+             command_current(created.goal.id, "add_dependency", %{
+               work_item_id: second.id,
+               depends_on_id: first.id,
+               decision_id:
+                 approve_dependency_change!(
+                   created.goal.id,
+                   second.id,
+                   first.id,
+                   "add_dependency"
+                 )
+             })
+
+    assert {:ok, _receipt, :created} =
+             command_current(created.goal.id, "add_dependency", %{
+               work_item_id: integration.id,
+               depends_on_id: second.id,
+               decision_id:
+                 approve_dependency_change!(
+                   created.goal.id,
+                   integration.id,
+                   second.id,
+                   "add_dependency"
+                 )
+             })
+
+    # These commands are equivalent to two contenders reaching the Goal lock
+    # in either order: the first valid edge persists and its inverse closes a
+    # cycle, while the already-admitted chain remains usable.
+    assert {:error, :dependency_cycle} =
+             command_current(created.goal.id, "add_dependency", %{
+               work_item_id: first.id,
+               depends_on_id: second.id,
+               decision_id:
+                 approve_dependency_change!(
+                   created.goal.id,
+                   first.id,
+                   second.id,
+                   "add_dependency"
+                 )
+             })
+
+    assert {:error, :dependency_cycle} =
+             command_current(created.goal.id, "add_dependency", %{
+               work_item_id: first.id,
+               depends_on_id: integration.id,
+               decision_id:
+                 approve_dependency_change!(
+                   created.goal.id,
+                   first.id,
+                   integration.id,
+                   "add_dependency"
+                 )
+             })
+
+    assert Repo.aggregate(SymmetryControl.Goals.WorkDependency, :count) == 2
+  end
+
   test "Decision v1 validation rejects untrusted options and malformed resolutions" do
     project = project_fixture()
 
@@ -6686,6 +6777,32 @@ defmodule SymmetryControl.GoalsTest do
              )
 
     planned
+  end
+
+  defp approve_dependency_change!(goal_id, work_item_id, depends_on_id, operation) do
+    assert {:ok, decision, :created} =
+             command_current(goal_id, "request_decision", %{
+               kind: "scope",
+               question: "Approve this dependency change?",
+               options: [
+                 %{"id" => "accept", "label" => "Accept", "consequence" => "Apply the change"}
+               ],
+               work_item_id: work_item_id,
+               depends_on_id: depends_on_id,
+               dependency_operation: operation
+             })
+
+    decision_id = decision.response["decision"]["id"]
+
+    assert {:ok, _resolved, :created} =
+             command_current(goal_id, "resolve_decision", %{
+               decision_id: decision_id,
+               expected_decision_version:
+                 Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).lock_version,
+               option_id: "accept"
+             })
+
+    decision_id
   end
 
   defp reject_plan_admission!(goal_id, proposal, opts \\ []) do

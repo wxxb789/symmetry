@@ -6984,22 +6984,28 @@ defmodule SymmetryControl.Goals do
   end
 
   defp creates_cycle?(goal_id, work_item_id, depends_on_id) do
-    edges = Repo.all(from(edge in WorkDependency, where: edge.goal_id == ^goal_id))
-    adjacency = Enum.group_by(edges, & &1.work_item_id, & &1.depends_on_id)
-    reachable?(adjacency, depends_on_id, work_item_id, MapSet.new())
-  end
+    # Commands already hold the Goal row lock. Keep the traversal in PostgreSQL
+    # so that check and insert observe the same serialized Goal mutation stream.
+    result =
+      Ecto.Adapters.SQL.query!(
+        Repo,
+        """
+        WITH RECURSIVE reachable(id) AS (
+          SELECT $1::uuid
 
-  defp reachable?(_adjacency, node, target, _visited) when node == target, do: true
-  defp reachable?(_adjacency, nil, _target, _visited), do: false
+          UNION
 
-  defp reachable?(adjacency, node, target, visited) do
-    if MapSet.member?(visited, node) do
-      false
-    else
-      adjacency
-      |> Map.get(node, [])
-      |> Enum.any?(&reachable?(adjacency, &1, target, MapSet.put(visited, node)))
-    end
+          SELECT dependency.depends_on_id
+          FROM work_dependencies AS dependency
+          INNER JOIN reachable ON dependency.work_item_id = reachable.id
+          WHERE dependency.goal_id = $2::uuid
+        )
+        SELECT EXISTS (SELECT 1 FROM reachable WHERE id = $3::uuid)
+        """,
+        [depends_on_id, goal_id, work_item_id]
+      )
+
+    match?(%{rows: [[true]]}, result)
   end
 
   defp replay_create(mutation_id, body) do

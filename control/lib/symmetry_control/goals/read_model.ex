@@ -755,6 +755,16 @@ defmodule SymmetryControl.Goals.ReadModel do
       waiting_external_blocker(work_items, settled_receipts, accepted, external_waits)
     )
     |> add_blocker(
+      integration_outcome_required_blocker(
+        goal,
+        work_items,
+        accepted,
+        decisions,
+        tasks,
+        current_revision
+      )
+    )
+    |> add_blocker(
       final_acceptance_required_blocker(
         goal,
         revision,
@@ -1563,58 +1573,7 @@ defmodule SymmetryControl.Goals.ReadModel do
          evidence,
          current_revision
        ) do
-    required_items = Enum.filter(work_items, &map_value(&1, :required, true))
-
-    candidates =
-      if final_acceptance_ready?(
-           goal,
-           revision,
-           work_items,
-           dependencies,
-           accepted,
-           decisions,
-           tasks,
-           runs,
-           evidence,
-           current_revision
-         ) do
-        []
-      else
-        final_acceptance_required_candidates(
-          goal,
-          revision,
-          work_items,
-          dependencies,
-          accepted,
-          decisions,
-          tasks,
-          runs,
-          evidence,
-          current_revision,
-          required_items
-        )
-      end
-
-    if candidates == [] do
-      nil
-    else
-      %{
-        reason: "final_acceptance_required",
-        count: length(candidates),
-        ids: Enum.map(candidates, & &1.work_item_id),
-        details:
-          Enum.map(candidates, fn candidate ->
-            %{
-              work_item_id: candidate.work_item_id,
-              subject_hash: digest(candidate.subject_hash),
-              final_acceptance: "operator"
-            }
-          end)
-      }
-    end
-  end
-
-  defp final_acceptance_required_candidates(
+    if final_acceptance_ready?(
          goal,
          revision,
          work_items,
@@ -1624,32 +1583,69 @@ defmodule SymmetryControl.Goals.ReadModel do
          tasks,
          runs,
          evidence,
-         current_revision,
-         required_items
+         current_revision
+       ) do
+      nil
+    else
+      completion_readiness_blocker(
+        goal,
+        revision,
+        work_items,
+        dependencies,
+        accepted,
+        decisions,
+        tasks,
+        runs,
+        evidence,
+        current_revision
+      )
+    end
+  end
+
+  # Completion needs one eligible integration subject. A subject that is still
+  # missing required check/artifact/review evidence is not an authority problem;
+  # render that separately from a missing operator completion Decision.
+  defp completion_readiness_blocker(
+         goal,
+         revision,
+         work_items,
+         dependencies,
+         accepted,
+         decisions,
+         tasks,
+         runs,
+         evidence,
+         current_revision
        ) do
     authority = final_acceptance_authority(revision)
 
-    if map_value(goal, :state) in ["active", "paused"] and authority == :operator and
-         Enum.all?(required_items, &Map.has_key?(accepted, map_value(&1, :id))) and
-         not Enum.any?(tasks, &(map_value(&1, :state) in @nonterminal_task_states)) and
-         not Enum.any?(
-           decisions,
-           &(map_value(&1, :goal_revision) == current_revision and
-               map_value(&1, :state) == "open")
-         ) do
-      resolved_subjects =
-        MapSet.new(resolved_completion_subjects(goal, decisions, current_revision))
+    candidates =
+      completion_readiness_candidates(
+        goal,
+        work_items,
+        dependencies,
+        accepted,
+        decisions,
+        tasks,
+        current_revision
+      )
 
-      accepted_integration_outcomes(accepted, work_items)
-      |> Enum.filter(fn candidate ->
-        valid_digest?(candidate.subject_hash) and
-          integration_item_dependencies_satisfied?(
-            work_items,
-            dependencies,
-            accepted,
-            candidate.work_item_id
-          ) and
-          not MapSet.member?(resolved_subjects, candidate.subject_hash) and
+    candidates_with_unmet_predicates =
+      Enum.map(candidates, fn candidate ->
+        {candidate,
+         unmet_required_goal_evidence_predicates(
+           map_value(revision, :acceptance_contract, %{}),
+           candidate.subject_hash,
+           evidence,
+           tasks,
+           runs,
+           current_revision
+         )}
+      end)
+
+    candidates_with_all_evidence =
+      Enum.filter(candidates_with_unmet_predicates, fn {candidate, unmet_predicates} ->
+        unmet_predicates == [] and
           required_goal_predicates_satisfied?(
             map_value(revision, :acceptance_contract, %{}),
             Atom.to_string(authority),
@@ -1660,9 +1656,130 @@ defmodule SymmetryControl.Goals.ReadModel do
             current_revision
           )
       end)
+
+    case authority do
+      :operator when candidates_with_all_evidence != [] ->
+        resolved_subjects =
+          MapSet.new(resolved_completion_subjects(goal, decisions, current_revision))
+
+        candidates_with_all_evidence
+        |> Enum.map(&elem(&1, 0))
+        |> Enum.reject(&MapSet.member?(resolved_subjects, &1.subject_hash))
+        |> final_acceptance_required_blocker_for_candidates()
+
+      authority when authority in [:operator, :deterministic] ->
+        candidates_with_unmet_predicates
+        |> Enum.filter(fn {_candidate, unmet_predicates} -> unmet_predicates != [] end)
+        |> required_predicates_unmet_blocker()
+
+      :invalid ->
+        nil
+    end
+  end
+
+  defp completion_readiness_candidates(
+         goal,
+         work_items,
+         dependencies,
+         accepted,
+         decisions,
+         tasks,
+         current_revision
+       ) do
+    if completion_readiness_gate?(goal, work_items, accepted, decisions, tasks, current_revision) do
+      accepted_integration_outcomes(accepted, work_items)
+      |> Enum.filter(fn candidate ->
+        valid_digest?(candidate.subject_hash) and
+          integration_item_dependencies_satisfied?(
+            work_items,
+            dependencies,
+            accepted,
+            candidate.work_item_id
+          )
+      end)
     else
       []
     end
+  end
+
+  defp integration_outcome_required_blocker(
+         goal,
+         work_items,
+         accepted,
+         decisions,
+         tasks,
+         current_revision
+       ) do
+    integration_items = Enum.filter(work_items, &(map_value(&1, :integration, false) == true))
+
+    if completion_readiness_gate?(goal, work_items, accepted, decisions, tasks, current_revision) and
+         accepted_integration_outcomes(accepted, work_items) == [] do
+      %{
+        reason: "integration_outcome_required",
+        count: max(length(integration_items), 1),
+        ids: Enum.map(integration_items, &map_value(&1, :id)),
+        details:
+          case integration_items do
+            [] ->
+              [%{reason: "no_integration_work_item"}]
+
+            _ ->
+              Enum.map(integration_items, fn item ->
+                %{work_item_id: map_value(item, :id), reason: "accepted_outcome_required"}
+              end)
+          end
+      }
+    end
+  end
+
+  defp completion_readiness_gate?(goal, work_items, accepted, decisions, tasks, current_revision) do
+    required_items = Enum.filter(work_items, &map_value(&1, :required, true))
+
+    map_value(goal, :state) in ["active", "paused"] and
+      Enum.all?(required_items, &Map.has_key?(accepted, map_value(&1, :id))) and
+      not Enum.any?(tasks, &(map_value(&1, :state) in @nonterminal_task_states)) and
+      not Enum.any?(
+        decisions,
+        &(map_value(&1, :goal_revision) == current_revision and map_value(&1, :state) == "open")
+      )
+  end
+
+  defp final_acceptance_required_blocker_for_candidates([]), do: nil
+
+  defp final_acceptance_required_blocker_for_candidates(candidates) do
+    %{
+      reason: "final_acceptance_required",
+      count: length(candidates),
+      ids: Enum.map(candidates, & &1.work_item_id),
+      details:
+        Enum.map(candidates, fn candidate ->
+          %{
+            work_item_id: candidate.work_item_id,
+            subject_hash: digest(candidate.subject_hash),
+            final_acceptance: "operator"
+          }
+        end)
+    }
+  end
+
+  defp required_predicates_unmet_blocker([]), do: nil
+
+  defp required_predicates_unmet_blocker(candidates_with_unmet_predicates) do
+    %{
+      reason: "required_predicates_unmet",
+      count: length(candidates_with_unmet_predicates),
+      ids:
+        Enum.map(candidates_with_unmet_predicates, fn {candidate, _} -> candidate.work_item_id end),
+      details:
+        Enum.map(candidates_with_unmet_predicates, fn {candidate, unmet_predicates} ->
+          %{
+            work_item_id: candidate.work_item_id,
+            subject_hash: digest(candidate.subject_hash),
+            predicate_ids: Enum.map(unmet_predicates, &value(&1, :id)),
+            predicate_kinds: Enum.map(unmet_predicates, &value(&1, :kind))
+          }
+        end)
+    }
   end
 
   defp completion_projection(
@@ -1907,23 +2024,54 @@ defmodule SymmetryControl.Goals.ReadModel do
     predicates = value(acceptance_contract, :predicates, [])
 
     predicates != [] and
+      unmet_required_goal_evidence_predicates(
+        acceptance_contract,
+        subject_hash,
+        evidence,
+        tasks,
+        runs,
+        current_revision
+      ) == [] and
       Enum.all?(predicates, fn predicate ->
         case value(predicate, :kind) do
           "operator_acceptance" ->
             final_acceptance == "operator"
 
-          kind when kind in ["check", "artifact", "review"] ->
-            Enum.any?(eligible_goal_evidence(evidence, tasks, runs, current_revision), fn row ->
-              map_value(row, :subject_hash) == subject_hash and
-                map_value(row, :verdict) == "passed" and
-                value(map_value(row, :payload, %{}), "predicate_id") == value(predicate, :id) and
-                goal_predicate_matches_evidence?(predicate, row)
-            end)
-
           _ ->
-            false
+            true
         end
       end)
+  end
+
+  defp unmet_required_goal_evidence_predicates(
+         acceptance_contract,
+         subject_hash,
+         evidence,
+         tasks,
+         runs,
+         current_revision
+       ) do
+    eligible_evidence = eligible_goal_evidence(evidence, tasks, runs, current_revision)
+
+    acceptance_contract
+    |> value(:predicates, [])
+    |> Enum.reject(fn predicate ->
+      case value(predicate, :kind) do
+        "operator_acceptance" ->
+          true
+
+        kind when kind in ["check", "artifact", "review"] ->
+          Enum.any?(eligible_evidence, fn row ->
+            map_value(row, :subject_hash) == subject_hash and
+              map_value(row, :verdict) == "passed" and
+              value(map_value(row, :payload, %{}), "predicate_id") == value(predicate, :id) and
+              goal_predicate_matches_evidence?(predicate, row)
+          end)
+
+        _ ->
+          false
+      end
+    end)
   end
 
   defp eligible_goal_evidence(evidence, tasks, runs, current_revision) do

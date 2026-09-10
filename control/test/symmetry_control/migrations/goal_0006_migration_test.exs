@@ -5,6 +5,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   alias SymmetryControl.Repo
   alias SymmetryControl.Repo.Migrations.AddGoal0006ControlPlane
   alias SymmetryControl.Repo.Migrations.AddGoalTerminalGuardsAndExecutionPolicy
+  alias SymmetryControl.Repo.Migrations.AddGoalTerminalAuthorityGuardsAndSessionReciprocity
   alias SymmetryControl.Repo.Migrations.AddGoalIntegrationWorkItemDesignation
   alias SymmetryControl.Repo.Migrations.AddGoalIdentityGuards
   alias SymmetryControl.Repo.Migrations.AddPlanningTaskIdentityGuards
@@ -47,6 +48,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   @planning_task_migration_version 20_260_910_000_000
   @terminal_policy_migration_version 20_260_910_010_000
   @runtime_affinity_guard_migration_version 20_260_910_020_000
+  @terminal_authority_migration_version 20_260_910_030_000
 
   test "upgrades legacy rows without assigning their textual goal to durable Goal history" do
     with_schema(fn ->
@@ -2064,6 +2066,10 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
                  "SELECT harness_session_id, state FROM runs WHERE id IN ($1, $2) ORDER BY generation",
                  [first_run_id, second_run_id]
                )
+
+      assert_raise Postgrex.Error,
+                   ~r/cannot roll back terminal Goal authority and session reciprocity guards while protected Goal or session history exists/i,
+                   &migrate_terminal_authority_down!/0
     end)
   end
 
@@ -2223,6 +2229,344 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
           protected_execution_policy_json(%{"unexpected" => true})
         )
       end
+    end)
+  end
+
+  test "guards terminal Goal parent authority while preserving nonterminal decisions and late audit history" do
+    with_schema(fn ->
+      migrate_goal_up!()
+      migrate_terminal_policy_up!()
+      migrate_terminal_authority_up!()
+
+      %{goal_id: goal_id, work_item_id: work_item_id} =
+        insert_goal_fixture!(protected_execution_policy_json(%{}))
+
+      insert_goal_revision_policy!(goal_id, 2, protected_execution_policy_json(%{}))
+
+      resolved_decision_id = insert_open_goal_decision!(goal_id)
+
+      Repo.query!("UPDATE goal_decisions SET question = 'Review the final Goal?' WHERE id = $1", [
+        resolved_decision_id
+      ])
+
+      mutable_decision_id = insert_open_goal_decision!(goal_id)
+      late_usage_task_id = insert_goal_task!(%{goal_id: goal_id, work_item_id: work_item_id})
+      %{runtime_id: runtime_id, session_id: session_id} = insert_harness_session_fixture!()
+      late_usage_run_id = Ecto.UUID.bingenerate()
+
+      insert_harness_run!(
+        late_usage_run_id,
+        late_usage_task_id,
+        runtime_id,
+        session_id,
+        1,
+        "completed"
+      )
+
+      Repo.transaction(fn ->
+        Repo.query!(
+          """
+          UPDATE goal_decisions
+          SET state = 'resolved', resolution = '{"option_id": "accept"}'::jsonb
+          WHERE id = $1
+          """,
+          [resolved_decision_id]
+        )
+
+        Repo.query!("UPDATE goals SET state = 'achieved', next_wake_at = NULL WHERE id = $1", [
+          goal_id
+        ])
+      end)
+
+      assert_raise Postgrex.Error, ~r/goal_0006_terminal_goal_authority/i, fn ->
+        insert_goal_revision_policy!(goal_id, 3, protected_execution_policy_json(%{}))
+      end
+
+      assert_raise Postgrex.Error, ~r/goal_0006_terminal_goal_authority/i, fn ->
+        insert_open_goal_decision!(goal_id)
+      end
+
+      assert_raise Postgrex.Error, ~r/goal_0006_terminal_goal_authority/i, fn ->
+        Repo.query!("UPDATE goal_decisions SET question = 'Rewrite authority?' WHERE id = $1", [
+          mutable_decision_id
+        ])
+      end
+
+      assert_raise Postgrex.Error, ~r/goal_0006_terminal_goal_authority/i, fn ->
+        Repo.query!(
+          """
+          UPDATE goal_decisions
+          SET state = 'resolved', resolution = '{"option_id": "accept"}'::jsonb
+          WHERE id = $1
+          """,
+          [mutable_decision_id]
+        )
+      end
+
+      assert_raise Postgrex.Error, ~r/goal_0006_terminal_goal_authority/i, fn ->
+        Repo.query!("UPDATE goal_decisions SET lock_version = lock_version + 1 WHERE id = $1", [
+          resolved_decision_id
+        ])
+      end
+
+      %{goal_id: active_goal_id} = insert_goal_fixture!(protected_execution_policy_json(%{}))
+
+      assert_raise Postgrex.Error, ~r/goal_0006_terminal_goal_authority/i, fn ->
+        Repo.query!(
+          "UPDATE goal_decisions SET goal_id = $1, goal_revision = 1 WHERE id = $2",
+          [active_goal_id, mutable_decision_id]
+        )
+      end
+
+      assert_raise Postgrex.Error, ~r/goal_0006_terminal_goal_authority/i, fn ->
+        Repo.query!("DELETE FROM goal_decisions WHERE id = $1", [mutable_decision_id])
+      end
+
+      audit_event_id = Ecto.UUID.bingenerate()
+
+      Repo.query!(
+        """
+        INSERT INTO goal_events (
+          id, goal_id, sequence, kind, actor_ref, request_hash, request_hash_version, revision,
+          payload, response, inserted_at
+        )
+        VALUES ($1, $2, 1, 'settled', 'operator:test', $3, 1, 1, '{}'::jsonb, '{}'::jsonb, now())
+        """,
+        [audit_event_id, goal_id, hash(23)]
+      )
+
+      assert %{rows: [[^audit_event_id]]} =
+               Repo.query!("SELECT id FROM goal_events WHERE id = $1", [audit_event_id])
+
+      insert_run_usage!(late_usage_run_id, "late-terminal-usage", "reported", 1)
+
+      assert %{rows: [["late-terminal-usage"]]} =
+               Repo.query!("SELECT usage_key FROM run_usage WHERE run_id = $1", [
+                 late_usage_run_id
+               ])
+
+      %{goal_id: cancelled_goal_id} = insert_goal_fixture!(protected_execution_policy_json(%{}))
+      cancelled_open_decision_id = insert_open_goal_decision!(cancelled_goal_id)
+
+      Repo.query!("UPDATE goals SET state = 'cancelled', next_wake_at = NULL WHERE id = $1", [
+        cancelled_goal_id
+      ])
+
+      assert_raise Postgrex.Error, ~r/goal_0006_terminal_goal_authority/i, fn ->
+        insert_goal_revision_policy!(cancelled_goal_id, 2, protected_execution_policy_json(%{}))
+      end
+
+      assert_raise Postgrex.Error, ~r/goal_0006_terminal_goal_authority/i, fn ->
+        Repo.query!("DELETE FROM goal_decisions WHERE id = $1", [cancelled_open_decision_id])
+      end
+
+      assert_raise Postgrex.Error, ~r/goal_0006_terminal_goal_authority/i, fn ->
+        insert_open_goal_decision!(cancelled_goal_id)
+      end
+    end)
+  end
+
+  test "uses final deferred session and run rows while retaining completed run session history" do
+    with_schema(fn ->
+      migrate_goal_up!()
+      migrate_integration_designation_up!()
+      migrate_baseline_up!()
+      migrate_identity_up!()
+      migrate_terminal_policy_up!()
+      migrate_terminal_authority_up!()
+
+      %{runtime_id: runtime_id, session_id: session_id} = insert_harness_session_fixture!()
+      first_task_id = insert_legacy_task!("First session turn")
+      second_task_id = insert_legacy_task!("Second session turn")
+      third_task_id = insert_legacy_task!("Third session turn")
+      first_run_id = Ecto.UUID.bingenerate()
+      second_run_id = Ecto.UUID.bingenerate()
+      third_run_id = Ecto.UUID.bingenerate()
+
+      Repo.transaction(fn ->
+        insert_harness_run!(first_run_id, first_task_id, runtime_id, session_id, 1, "running")
+
+        Repo.query!(
+          "UPDATE harness_sessions SET state = 'busy', active_run_id = $1 WHERE id = $2",
+          [first_run_id, session_id]
+        )
+      end)
+
+      assert_raise Postgrex.Error, ~r/goal_0006_active_session_run_identity/i, fn ->
+        Repo.query!("UPDATE runs SET state = 'completed' WHERE id = $1", [first_run_id])
+      end
+
+      assert_raise Postgrex.Error, ~r/goal_0006_active_session_run_identity/i, fn ->
+        Repo.query!(
+          "UPDATE harness_sessions SET state = 'available', active_run_id = NULL WHERE id = $1",
+          [session_id]
+        )
+      end
+
+      Repo.transaction(fn ->
+        Repo.query!(
+          "UPDATE harness_sessions SET state = 'available', active_run_id = NULL WHERE id = $1",
+          [session_id]
+        )
+
+        Repo.query!("UPDATE runs SET state = 'completed' WHERE id = $1", [first_run_id])
+      end)
+
+      insert_harness_run!(second_run_id, second_task_id, runtime_id, session_id, 2, "completed")
+
+      Repo.transaction(fn ->
+        Repo.query!("UPDATE runs SET state = 'running' WHERE id = $1", [second_run_id])
+
+        Repo.query!(
+          "UPDATE harness_sessions SET state = 'busy', active_run_id = $1 WHERE id = $2",
+          [second_run_id, session_id]
+        )
+      end)
+
+      insert_harness_run!(third_run_id, third_task_id, runtime_id, session_id, 3, "completed")
+
+      Repo.transaction(fn ->
+        Repo.query!("UPDATE runs SET state = 'completed' WHERE id = $1", [second_run_id])
+
+        Repo.query!(
+          "UPDATE harness_sessions SET state = 'available', active_run_id = NULL WHERE id = $1",
+          [session_id]
+        )
+
+        Repo.query!("UPDATE runs SET state = 'running' WHERE id = $1", [third_run_id])
+
+        Repo.query!(
+          "UPDATE harness_sessions SET state = 'busy', active_run_id = $1 WHERE id = $2",
+          [third_run_id, session_id]
+        )
+      end)
+
+      assert %{rows: [["busy", ^third_run_id]]} =
+               Repo.query!("SELECT state, active_run_id FROM harness_sessions WHERE id = $1", [
+                 session_id
+               ])
+
+      assert %{
+               rows: [
+                 [^session_id, "completed"],
+                 [^session_id, "completed"],
+                 [^session_id, "running"]
+               ]
+             } =
+               Repo.query!(
+                 "SELECT harness_session_id, state FROM runs WHERE id IN ($1, $2, $3) ORDER BY generation",
+                 [first_run_id, second_run_id, third_run_id]
+               )
+
+      assert_raise Postgrex.Error,
+                   ~r/cannot roll back terminal Goal authority and session reciprocity guards while protected Goal or session history exists/i,
+                   &migrate_terminal_authority_down!/0
+    end)
+  end
+
+  test "refuses inconsistent legacy session and run rows before installing final-state reciprocity" do
+    with_schema(fn ->
+      migrate_goal_up!()
+      migrate_integration_designation_up!()
+      migrate_baseline_up!()
+      migrate_identity_up!()
+      migrate_terminal_policy_up!()
+
+      %{runtime_id: runtime_id, session_id: session_id} = insert_harness_session_fixture!()
+      task_id = insert_legacy_task!("Inconsistent session run")
+
+      Repo.query!("ALTER TABLE runs DISABLE TRIGGER runs_active_session_identity_guard")
+
+      try do
+        insert_harness_run!(
+          Ecto.UUID.bingenerate(),
+          task_id,
+          runtime_id,
+          session_id,
+          1,
+          "running"
+        )
+      after
+        Repo.query!("ALTER TABLE runs ENABLE TRIGGER runs_active_session_identity_guard")
+      end
+
+      assert_raise Postgrex.Error,
+                   ~r/cannot add Goal final session\/run reciprocity guard while existing session\/run relationships are inconsistent/i,
+                   &migrate_terminal_authority_up!/0
+    end)
+  end
+
+  test "refuses a legacy terminal Run that remains active in a session" do
+    with_schema(fn ->
+      migrate_goal_up!()
+      migrate_integration_designation_up!()
+      migrate_baseline_up!()
+      migrate_identity_up!()
+      migrate_terminal_policy_up!()
+
+      %{runtime_id: runtime_id, session_id: session_id} = insert_harness_session_fixture!()
+      task_id = insert_legacy_task!("Terminal active session run")
+      run_id = Ecto.UUID.bingenerate()
+
+      insert_harness_run!(run_id, task_id, runtime_id, session_id, 1, "completed")
+
+      Repo.query!(
+        "ALTER TABLE harness_sessions DISABLE TRIGGER harness_sessions_active_run_identity_guard"
+      )
+
+      try do
+        Repo.query!(
+          "UPDATE harness_sessions SET state = 'busy', active_run_id = $1 WHERE id = $2",
+          [
+            run_id,
+            session_id
+          ]
+        )
+      after
+        Repo.query!(
+          "ALTER TABLE harness_sessions ENABLE TRIGGER harness_sessions_active_run_identity_guard"
+        )
+      end
+
+      assert_raise Postgrex.Error,
+                   ~r/cannot add Goal final session\/run reciprocity guard while existing session\/run relationships are inconsistent/i,
+                   &migrate_terminal_authority_up!/0
+    end)
+  end
+
+  test "terminal authority and final-state reciprocity guards roll back only without protected Goal or active session history" do
+    with_schema(fn ->
+      migrate_goal_up!()
+      migrate_integration_designation_up!()
+      migrate_baseline_up!()
+      migrate_identity_up!()
+      migrate_terminal_policy_up!()
+      migrate_terminal_authority_up!()
+
+      %{runtime_id: runtime_id, session_id: session_id} = insert_harness_session_fixture!()
+      task_id = insert_legacy_task!("Released session history")
+
+      insert_harness_run!(
+        Ecto.UUID.bingenerate(),
+        task_id,
+        runtime_id,
+        session_id,
+        1,
+        "completed"
+      )
+
+      migrate_terminal_authority_down!()
+      migrate_terminal_authority_up!()
+
+      %{goal_id: goal_id} = insert_goal_fixture!(protected_execution_policy_json(%{}))
+
+      Repo.query!("UPDATE goals SET state = 'cancelled', next_wake_at = NULL WHERE id = $1", [
+        goal_id
+      ])
+
+      assert_raise Postgrex.Error,
+                   ~r/cannot roll back terminal Goal authority and session reciprocity guards while protected Goal or session history exists/i,
+                   &migrate_terminal_authority_down!/0
     end)
   end
 
@@ -2582,6 +2926,36 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
     )
   end
 
+  defp migrate_terminal_authority_up! do
+    Ecto.Migrator.run(
+      Repo,
+      [
+        {@terminal_authority_migration_version,
+         AddGoalTerminalAuthorityGuardsAndSessionReciprocity}
+      ],
+      :up,
+      all: true,
+      log: false,
+      migration_lock: false,
+      dynamic_repo: Repo.get_dynamic_repo()
+    )
+  end
+
+  defp migrate_terminal_authority_down! do
+    Ecto.Migrator.run(
+      Repo,
+      [
+        {@terminal_authority_migration_version,
+         AddGoalTerminalAuthorityGuardsAndSessionReciprocity}
+      ],
+      :down,
+      step: 1,
+      log: false,
+      migration_lock: false,
+      dynamic_repo: Repo.get_dynamic_repo()
+    )
+  end
+
   defp migrate_provider_access_snapshot_up! do
     Ecto.Migrator.run(
       Repo,
@@ -2786,6 +3160,65 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
     )
 
     id
+  end
+
+  defp insert_harness_session_fixture! do
+    project_id = insert_project!()
+    resource_id = insert_repository_resource!(project_id)
+    machine_id = Ecto.UUID.bingenerate()
+    runtime_id = Ecto.UUID.bingenerate()
+    session_id = Ecto.UUID.bingenerate()
+
+    Repo.query!(
+      """
+      INSERT INTO machines (id, name, token_digest, inserted_at, updated_at)
+      VALUES ($1, $2, $3, now(), now())
+      """,
+      [machine_id, "session-machine-#{System.unique_integer([:positive])}", <<24>>]
+    )
+
+    Repo.query!(
+      """
+      INSERT INTO runtimes (
+        id, machine_id, runtime_key, name, daemon_instance_id, connection_epoch, capacity,
+        agent_profile, workspace, status, heartbeat_interval_ms, inserted_at, updated_at
+      )
+      VALUES ($1, $2, $3, $3, $4, 1, 1, 'default', 'primary', 'online', 5000, now(), now())
+      """,
+      [
+        runtime_id,
+        machine_id,
+        "session-runtime-#{System.unique_integer([:positive])}",
+        Ecto.UUID.bingenerate()
+      ]
+    )
+
+    Repo.query!(
+      """
+      INSERT INTO harness_sessions (
+        id, machine_id, runtime_id, harness_kind, harness_version, adapter_version,
+        local_handle_id, repository_resource_id, workspace_fingerprint, state, inserted_at, updated_at
+      )
+      VALUES ($1, $2, $3, 'codex', '1.0.0', 'adapter-1', $4, $5, 'fingerprint', 'available',
+              now(), now())
+      """,
+      [session_id, machine_id, runtime_id, Ecto.UUID.bingenerate(), resource_id]
+    )
+
+    %{runtime_id: runtime_id, session_id: session_id}
+  end
+
+  defp insert_harness_run!(run_id, task_id, runtime_id, session_id, generation, state) do
+    Repo.query!(
+      """
+      INSERT INTO runs (
+        id, task_id, runtime_id, generation, state, assigned_at, assignment_expires_at,
+        harness_session_id, inserted_at, updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, now(), now(), $6, now(), now())
+      """,
+      [run_id, task_id, runtime_id, generation, state, session_id]
+    )
   end
 
   defp insert_connection! do
@@ -3121,7 +3554,9 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
       {AddGoalTerminalGuardsAndExecutionPolicy,
        "20260910010000_add_goal_terminal_guards_and_execution_policy.exs"},
       {EnforceRuntimeRepositoryResourceAffinity,
-       "20260910020000_enforce_runtime_repository_resource_affinity.exs"}
+       "20260910020000_enforce_runtime_repository_resource_affinity.exs"},
+      {AddGoalTerminalAuthorityGuardsAndSessionReciprocity,
+       "20260910030000_add_goal_terminal_authority_guards_and_session_reciprocity.exs"}
     ]
 
     Enum.each(migrations, fn {module, filename} ->
