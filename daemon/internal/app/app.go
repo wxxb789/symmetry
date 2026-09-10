@@ -179,6 +179,9 @@ type options struct {
 	markCommandAcknowledgementsDelivered       func(state.RunKey, []string) (state.RunJournal, error)
 	queueCancelledTransitionAndAcknowledgement func(state.RunKey, protocol.StateTransitionRequest, protocol.CommandAcknowledgement, time.Time) (state.RunJournal, error)
 	retainWorkspace                            func(state.RunKey) (state.RunJournal, error)
+	loadGoalSession                            func(state.GoalSessionKey) (state.GoalSessionJournal, error)
+	closeGoalSession                           func(state.GoalSessionKey) (state.GoalSessionJournal, error)
+	clearProcessDetails                        func(state.RunKey, int, string) (state.RunJournal, error)
 }
 
 // WithHTTPClient replaces the HTTP transport used for production clients.
@@ -4732,8 +4735,9 @@ func (daemon *daemon) closeNativeGoalSession(key state.RunKey, active *runningRu
 		_, uncertainErr := daemon.store.MarkGoalSessionUncertain(*goalSession, "native session close failed: "+closeErr.Error())
 		return errors.Join(closeErr, retentionErr, uncertainErr)
 	}
-	sessionJournal, err := daemon.store.LoadGoalSession(*goalSession)
+	sessionJournal, err := daemon.loadGoalSession(*goalSession)
 	if err != nil {
+		daemon.requireNativeSessionCloseRetry(key, session)
 		daemon.markNativeCleanupBlocked(active)
 		retentionErr := daemon.retainUnknownGoalLaunchWorkspaceChecked(key)
 		return errors.Join(fmt.Errorf("load durable Goal session after process stop: %w", err), retentionErr)
@@ -4741,15 +4745,17 @@ func (daemon *daemon) closeNativeGoalSession(key state.RunKey, active *runningRu
 	if sessionJournal.NeedsReconciliation() {
 		_, err = daemon.store.ResolveGoalSessionUncertainStopped(*goalSession, sessionJournal.Compatibility())
 	} else {
-		_, err = daemon.store.CloseGoalSession(*goalSession)
+		_, err = daemon.closeGoalSession(*goalSession)
 	}
 	if err != nil {
+		daemon.requireNativeSessionCloseRetry(key, session)
 		daemon.markNativeCleanupBlocked(active)
 		retentionErr := daemon.retainUnknownGoalLaunchWorkspaceChecked(key)
 		_, uncertainErr := daemon.store.MarkGoalSessionUncertain(*goalSession, "durable native session close failed after process stop: "+err.Error())
 		return errors.Join(fmt.Errorf("record durable native session close: %w", err), retentionErr, uncertainErr)
 	}
 	if err := daemon.clearNativeProcessDetails(key); err != nil {
+		daemon.requireNativeSessionCloseRetry(key, session)
 		daemon.markNativeCleanupBlocked(active)
 		retentionErr := daemon.retainUnknownGoalLaunchWorkspaceChecked(key)
 		return errors.Join(err, retentionErr)
@@ -4768,10 +4774,30 @@ func (daemon *daemon) clearNativeProcessDetails(key state.RunKey) error {
 	if journal.PID <= 0 || strings.TrimSpace(journal.ProcessIdentity) == "" {
 		return errors.New("native process record is incomplete after close")
 	}
-	if _, err := daemon.store.ClearProcessDetails(key, journal.PID, journal.ProcessIdentity); err != nil {
+	clear := daemon.options.clearProcessDetails
+	if clear == nil {
+		clear = daemon.store.ClearProcessDetails
+	}
+	if _, err := clear(key, journal.PID, journal.ProcessIdentity); err != nil {
 		return fmt.Errorf("clear native process record after close: %w", err)
 	}
 	return nil
+}
+
+func (daemon *daemon) loadGoalSession(key state.GoalSessionKey) (state.GoalSessionJournal, error) {
+	load := daemon.options.loadGoalSession
+	if load == nil {
+		load = daemon.store.LoadGoalSession
+	}
+	return load(key)
+}
+
+func (daemon *daemon) closeGoalSession(key state.GoalSessionKey) (state.GoalSessionJournal, error) {
+	close := daemon.options.closeGoalSession
+	if close == nil {
+		close = daemon.store.CloseGoalSession
+	}
+	return close(key)
 }
 
 func (daemon *daemon) markNativeCleanupBlocked(active *runningRun) {

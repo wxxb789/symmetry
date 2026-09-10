@@ -1262,13 +1262,6 @@ func queueTerminalTransition(journal *RunJournal, transition protocol.StateTrans
 	if !isTerminalTransitionState(prepared.State) {
 		return errors.New("terminal transition state is invalid")
 	}
-	if prepared.State == "completed" && journal.TerminalTaskResultKind == "" {
-		kind, err := terminalTaskResultKind(prepared.Payload)
-		if err != nil {
-			return err
-		}
-		journal.TerminalTaskResultKind = kind
-	}
 	if prepared.State == "cancelled" {
 		journal.RetainWorkspace = true
 		journal.PendingTransitions = []protocol.StateTransitionRequest{prepared}
@@ -1279,6 +1272,13 @@ func queueTerminalTransition(journal *RunJournal, transition protocol.StateTrans
 	if terminalState := pendingTerminalState(journal.PendingTransitions); terminalState != "" {
 		setTerminalPending(journal, pendingAt, terminalState)
 		return nil
+	}
+	if prepared.State == "completed" {
+		kind, err := terminalTaskResultKind(prepared.Payload)
+		if err != nil {
+			return err
+		}
+		journal.TerminalTaskResultKind = kind
 	}
 	journal.PendingTransitions = append(journal.PendingTransitions, prepared)
 	setTerminalPending(journal, pendingAt, prepared.State)

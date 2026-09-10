@@ -728,6 +728,111 @@ func TestNativeTurnCloseFailureEntersSameDaemonRetry(t *testing.T) {
 	}
 }
 
+func TestNativeCloseDurableWriteFailuresRetryWithoutLeakingRecoveryBarrier(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		wire func(*daemon, *state.Store, state.GoalSessionKey) func()
+	}{
+		{
+			name: "load Goal session",
+			wire: func(app *daemon, store *state.Store, sessionKey state.GoalSessionKey) func() {
+				calls := 0
+				app.options.loadGoalSession = func(key state.GoalSessionKey) (state.GoalSessionJournal, error) {
+					calls++
+					if calls == 1 {
+						return state.GoalSessionJournal{}, errors.New("temporary Goal session load failure")
+					}
+					return store.LoadGoalSession(key)
+				}
+				return func() {}
+			},
+		},
+		{
+			name: "close Goal session",
+			wire: func(app *daemon, store *state.Store, sessionKey state.GoalSessionKey) func() {
+				calls := 0
+				app.options.closeGoalSession = func(key state.GoalSessionKey) (state.GoalSessionJournal, error) {
+					calls++
+					if calls == 1 {
+						return state.GoalSessionJournal{}, errors.New("temporary Goal session close failure")
+					}
+					return store.CloseGoalSession(key)
+				}
+				return func() {}
+			},
+		},
+		{
+			name: "clear process details",
+			wire: func(app *daemon, store *state.Store, _ state.GoalSessionKey) func() {
+				calls := 0
+				app.options.clearProcessDetails = func(key state.RunKey, pid int, identity string) (state.RunJournal, error) {
+					calls++
+					if calls == 1 {
+						return state.RunJournal{}, errors.New("temporary process clear failure")
+					}
+					return store.ClearProcessDetails(key, pid, identity)
+				}
+				return func() {}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			admission, present, err := parseAdmissionInput(validAdmissionInput())
+			if err != nil || !present {
+				t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+			}
+			store, key := claimedGoalDeliveryStore(t)
+			sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000022"}
+			saveAttachedGoalSession(t, store, key, admission, sessionKey)
+			if _, err := store.SetProcessDetails(key, 71, "native:71", time.Now().UTC()); err != nil {
+				t.Fatal(err)
+			}
+			session := &fakeNativeGoalSession{turnStarted: make(chan struct{})}
+			active := &runningRun{nativeSession: session, goalSession: &sessionKey, slotHeld: true}
+			app := &daemon{
+				store:   store,
+				log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
+				running: map[state.RunKey]*runningRun{key: active},
+				slots:   make(chan struct{}, 1),
+				options: options{clock: time.Now},
+			}
+			app.slots <- struct{}{}
+			_ = test.wire(app, store, sessionKey)
+
+			if err := app.closeNativeGoalSession(key, active, session); err == nil {
+				t.Fatal("closeNativeGoalSession() succeeded despite durable write failure")
+			}
+			if active.nativeSession != session || !active.nativeCloseRetryRequired || !active.cleanupBlocked || !active.slotHeld {
+				t.Fatalf("durable close failure lost active recovery barrier: %#v", active)
+			}
+			journal, err := store.LoadJournal(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if journal.PID != 71 || journal.ProcessIdentity != "native:71" {
+				t.Fatalf("durable close failure cleared process evidence: %#v", journal)
+			}
+
+			app.retryBlockedNativeSessionCloses()
+			journal, err = store.LoadJournal(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if journal.PID != 0 || journal.ProcessIdentity != "" || active.nativeSession != nil || active.goalSession != nil || active.nativeCloseRetryRequired || active.cleanupBlocked {
+				t.Fatalf("same-daemon durable close retry left recovery state: journal=%#v active=%#v", journal, active)
+			}
+			sessionJournal, err := store.LoadGoalSession(sessionKey)
+			if err != nil || sessionJournal.SessionState != state.GoalSessionStateClosed {
+				t.Fatalf("same-daemon durable close retry did not close session: %#v, %v", sessionJournal, err)
+			}
+			app.releaseRun(key)
+			if len(app.slots) != 0 {
+				t.Fatal("recovered run leaked its capacity slot")
+			}
+		})
+	}
+}
+
 func TestFreshCodexGoalAdmissionRejectsMismatchedRuntimeRepositoryBeforeWorkspace(t *testing.T) {
 	admission, present, err := parseAdmissionInput(validAdmissionInput())
 	if err != nil || !present {

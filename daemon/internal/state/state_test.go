@@ -995,6 +995,42 @@ func TestCompletedTerminalTaskResultKindRejectsInvalidAtomicWrite(t *testing.T) 
 	}
 }
 
+func TestTerminalTaskResultKindNeverBackfillsAfterFirstTerminalTransition(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		first protocol.StateTransitionRequest
+	}{
+		{
+			name:  "failed before completed candidate",
+			first: protocol.StateTransitionRequest{TransitionID: "failed-first", State: "failed", Payload: json.RawMessage(`{"reason":"process_failure"}`)},
+		},
+		{
+			name:  "completed without task result",
+			first: protocol.StateTransitionRequest{TransitionID: "completed-without-result", State: "completed", Payload: json.RawMessage(`{}`)},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := mustStore(t)
+			journal := testJournal("run-no-backfill", 1)
+			if err := store.SaveJournal(journal); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.QueueTerminalTransition(journal.Key(), test.first); err != nil {
+				t.Fatal(err)
+			}
+			updated, err := store.QueueTerminalTransition(journal.Key(), protocol.StateTransitionRequest{
+				TransitionID: "completed-candidate", State: "completed", Payload: json.RawMessage(`{"task_result":{"kind":"candidate_completion"}}`),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if updated.TerminalTaskResultKind != "" || len(updated.PendingTransitions) != 1 || updated.PendingTransitions[0].TransitionID != test.first.TransitionID {
+				t.Fatalf("later completed transition backfilled terminal metadata: %#v", updated)
+			}
+		})
+	}
+}
+
 func TestSaveJournalCannotChangeOrClearTerminalTaskResultKind(t *testing.T) {
 	store := mustStore(t)
 	journal := testJournal("run-terminal-immutable", 1)
