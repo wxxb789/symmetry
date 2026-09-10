@@ -22,6 +22,7 @@ var (
 	ErrUnsupportedEvent          = errors.New("Claude stream-json event type is unsupported")
 	ErrInvalidSessionID          = errors.New("Claude stream-json session_id must be a non-empty string")
 	ErrInvalidResult             = errors.New("Claude stream-json result is invalid")
+	ErrMissingResultPayload      = errors.New("Claude stream-json successful result must contain a non-empty result payload")
 	ErrInvalidControlRequest     = errors.New("Claude stream-json control_request is invalid")
 	ErrMissingResult             = errors.New("Claude stream-json stream ended without a result event")
 	ErrMissingResultIdentity     = errors.New("Claude stream-json result did not establish a session identity")
@@ -30,6 +31,7 @@ var (
 	ErrEventAfterResult          = errors.New("Claude stream-json stream contains an event after the result event")
 	ErrResultReportedError       = errors.New("Claude stream-json result reports an error")
 	ErrUnexpectedResultSubtype   = errors.New("Claude stream-json result subtype is not a verified success")
+	ErrNonSuccessTerminalReason  = errors.New("Claude stream-json result terminal_reason is not a verified success")
 	ErrControlRequestUnsupported = errors.New("Claude stream-json control requests are unsupported")
 )
 
@@ -63,10 +65,11 @@ type Event struct {
 // Result carries only terminal fields required to reject unsafe promotion.
 // Usage is deliberately raw and is not a claim of verified usage semantics.
 type Result struct {
-	Subtype string
-	IsError bool
-	Output  json.RawMessage
-	Usage   json.RawMessage
+	Subtype        string
+	TerminalReason string
+	IsError        bool
+	Output         json.RawMessage
+	Usage          json.RawMessage
 }
 
 // ControlRequest makes native control prompts visible without treating them
@@ -212,11 +215,21 @@ func decodeResult(object map[string]json.RawMessage) *Result {
 		return nil
 	}
 	result := &Result{}
-	if err := json.Unmarshal(isError, &result.IsError); err != nil {
+	switch string(bytes.TrimSpace(isError)) {
+	case "true":
+		result.IsError = true
+	case "false":
+		result.IsError = false
+	default:
 		return nil
 	}
 	if value, ok := object["subtype"]; ok {
-		if err := json.Unmarshal(value, &result.Subtype); err != nil {
+		if !decodeJSONNonNullString(value, &result.Subtype) {
+			return nil
+		}
+	}
+	if value, ok := object["terminal_reason"]; ok {
+		if !decodeJSONNonNullString(value, &result.TerminalReason) {
 			return nil
 		}
 	}
@@ -227,6 +240,10 @@ func decodeResult(object map[string]json.RawMessage) *Result {
 		result.Usage = append(json.RawMessage(nil), value...)
 	}
 	return result
+}
+
+func decodeJSONNonNullString(raw json.RawMessage, target *string) bool {
+	return !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) && json.Unmarshal(raw, target) == nil
 }
 
 func decodeControlRequest(object map[string]json.RawMessage) *ControlRequest {
@@ -325,11 +342,24 @@ func (validator *TerminalValidator) Observe(event Event) error {
 		validator.failed = fmt.Errorf("%w: %q", ErrUnexpectedResultSubtype, event.Result.Subtype)
 		return validator.failed
 	}
+	if event.Result.TerminalReason != "" && event.Result.TerminalReason != "success" && event.Result.TerminalReason != "completed" {
+		validator.failed = fmt.Errorf("%w: %q", ErrNonSuccessTerminalReason, event.Result.TerminalReason)
+		return validator.failed
+	}
+	if !isUsableResultPayload(event.Result.Output) {
+		validator.failed = ErrMissingResultPayload
+		return validator.failed
+	}
 	stored := *event.Result
 	stored.Output = append(json.RawMessage(nil), event.Result.Output...)
 	stored.Usage = append(json.RawMessage(nil), event.Result.Usage...)
 	validator.result = &stored
 	return nil
+}
+
+func isUsableResultPayload(raw json.RawMessage) bool {
+	var output string
+	return len(raw) > 0 && json.Unmarshal(raw, &output) == nil && strings.TrimSpace(output) != ""
 }
 
 // Finish returns the one observed terminal result after the caller has drained

@@ -45,7 +45,7 @@ func TestDecoderReadsFixtureAcrossCRLFAndChunkBoundaries(t *testing.T) {
 
 func TestTerminalValidatorAcceptsOnlyObservedMatchingSuccessfulResult(t *testing.T) {
 	decoder := NewDecoder(1024)
-	events, err := decoder.Feed([]byte("{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"actual\"}\n{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"session_id\":\"actual\",\"result\":\"done\",\"usage\":{\"input_tokens\":1}}\n"))
+	events, err := decoder.Feed([]byte("{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"actual\"}\n{\"type\":\"result\",\"subtype\":\"success\",\"terminal_reason\":\"completed\",\"is_error\":false,\"session_id\":\"actual\",\"result\":\"done\",\"usage\":{\"input_tokens\":1}}\n"))
 	if err != nil {
 		t.Fatalf("Feed() error = %v", err)
 	}
@@ -105,6 +105,10 @@ func TestDecoderAndValidatorFailClosedForInvalidRecords(t *testing.T) {
 		{name: "unknown type", input: "{\"type\":\"future\"}\n", want: ErrUnsupportedEvent},
 		{name: "invalid result", input: "{\"type\":\"result\",\"session_id\":\"s\"}\n", want: ErrInvalidResult},
 		{name: "invalid result subtype", input: "{\"type\":\"result\",\"subtype\":1,\"is_error\":false,\"session_id\":\"s\"}\n", want: ErrInvalidResult},
+		{name: "null result subtype", input: "{\"type\":\"result\",\"subtype\":null,\"is_error\":false,\"session_id\":\"s\"}\n", want: ErrInvalidResult},
+		{name: "null is error", input: "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":null,\"session_id\":\"s\"}\n", want: ErrInvalidResult},
+		{name: "string is error", input: "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":\"false\",\"session_id\":\"s\"}\n", want: ErrInvalidResult},
+		{name: "null terminal reason", input: "{\"type\":\"result\",\"subtype\":\"success\",\"terminal_reason\":null,\"is_error\":false,\"session_id\":\"s\"}\n", want: ErrInvalidResult},
 		{name: "invalid control", input: "{\"type\":\"control_request\",\"session_id\":\"s\",\"request_id\":\"\"}\n", want: ErrInvalidControlRequest},
 	}
 	for _, test := range tests {
@@ -119,6 +123,30 @@ func TestDecoderAndValidatorFailClosedForInvalidRecords(t *testing.T) {
 			}
 			if _, err := validator.Finish(); !errors.Is(err, test.want) {
 				t.Fatalf("Finish() error = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
+func TestTerminalValidatorRequiresUsableSuccessfulResultPayload(t *testing.T) {
+	tests := []struct {
+		name   string
+		result string
+	}{
+		{name: "missing", result: ""},
+		{name: "null", result: ",\"result\":null"},
+		{name: "empty string", result: ",\"result\":\"  \""},
+		{name: "non string", result: ",\"result\":{}"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"session_id\":\"s\"" + test.result + "}\n"
+			events, err := NewDecoder(1024).Feed([]byte(input))
+			if err != nil || len(events) != 1 || events[0].DecodeError != nil {
+				t.Fatalf("Feed() = %#v, %v", events, err)
+			}
+			if err := NewTerminalValidator("s").Observe(events[0]); !errors.Is(err, ErrMissingResultPayload) {
+				t.Fatalf("Observe() error = %v, want ErrMissingResultPayload", err)
 			}
 		})
 	}
@@ -146,6 +174,8 @@ func TestTerminalValidatorRejectsErrorResultsControlRequestsAndConflicts(t *test
 	}{
 		{name: "error result", input: "{\"type\":\"result\",\"subtype\":\"error_during_execution\",\"is_error\":true,\"session_id\":\"s\"}\n", want: ErrResultReportedError},
 		{name: "unexpected success subtype", input: "{\"type\":\"result\",\"subtype\":\"future_success\",\"is_error\":false,\"session_id\":\"s\"}\n", want: ErrUnexpectedResultSubtype},
+		{name: "prompt too long terminal reason", input: "{\"type\":\"result\",\"subtype\":\"success\",\"terminal_reason\":\"prompt_too_long\",\"is_error\":false,\"session_id\":\"s\",\"result\":\"unexpected\"}\n", want: ErrNonSuccessTerminalReason},
+		{name: "other non success terminal reason", input: "{\"type\":\"result\",\"subtype\":\"success\",\"terminal_reason\":\"max_turns\",\"is_error\":false,\"session_id\":\"s\",\"result\":\"unexpected\"}\n", want: ErrNonSuccessTerminalReason},
 		{name: "control request", input: "{\"type\":\"control_request\",\"session_id\":\"s\",\"request_id\":\"r-1\",\"request\":{\"kind\":\"permission\"}}\n", want: ErrControlRequestUnsupported},
 		{name: "expected conflict", input: "{\"type\":\"system\",\"session_id\":\"other\"}\n", want: ErrConflictingIdentity},
 	}
@@ -165,7 +195,7 @@ func TestTerminalValidatorRejectsErrorResultsControlRequestsAndConflicts(t *test
 
 func TestTerminalValidatorRejectsRepeatedAndPostTerminalRecords(t *testing.T) {
 	decoder := NewDecoder(1024)
-	events, err := decoder.Feed([]byte("{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"session_id\":\"s\"}\n{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"session_id\":\"s\"}\n"))
+	events, err := decoder.Feed([]byte("{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"session_id\":\"s\",\"result\":\"done\"}\n{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"session_id\":\"s\",\"result\":\"done\"}\n"))
 	if err != nil || len(events) != 2 {
 		t.Fatalf("Feed() = %#v, %v", events, err)
 	}
@@ -192,7 +222,7 @@ func TestTerminalValidatorRejectsIdentityChangesAndTrailingRecords(t *testing.T)
 		t.Fatalf("second Observe() error = %v, want ErrConflictingIdentity", err)
 	}
 
-	events, err = NewDecoder(1024).Feed([]byte("{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"session_id\":\"s\"}\n{\"type\":\"log\",\"session_id\":\"s\"}\n"))
+	events, err = NewDecoder(1024).Feed([]byte("{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"session_id\":\"s\",\"result\":\"done\"}\n{\"type\":\"log\",\"session_id\":\"s\"}\n"))
 	if err != nil || len(events) != 2 {
 		t.Fatalf("trailing Feed() = %#v, %v", events, err)
 	}

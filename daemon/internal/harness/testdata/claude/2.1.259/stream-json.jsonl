@@ -2,4 +2,4 @@
 {"type":"user","session_id":"native-session-1","message":{"role":"user","content":"inspect"}}
 {"type":"assistant","session_id":"native-session-1","message":{"role":"assistant","content":[{"type":"text","text":"working"}]}}
 {"type":"log","session_id":"native-session-1","level":"info","message":"synthetic log"}
-{"type":"result","subtype":"success","is_error":false,"session_id":"native-session-1","result":"done","usage":{"input_tokens":1,"output_tokens":1}}
+{"type":"result","subtype":"success","terminal_reason":"completed","is_error":false,"session_id":"native-session-1","result":"done","usage":{"input_tokens":1,"output_tokens":1}}
