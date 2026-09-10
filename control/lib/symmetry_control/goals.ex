@@ -5436,13 +5436,18 @@ defmodule SymmetryControl.Goals do
     profiles = allowed_values(policy, "allowed_model_profiles")
     project = Repo.get(Project, goal.project_id) || rollback(:not_found)
 
+    resources_by_id =
+      items
+      |> Enum.map(&required_uuid!(&1, :repository_resource_id))
+      |> lock_repository_resources!()
+
     inserted =
       Enum.map(items, fn item ->
         item_id = Map.fetch!(item_ids, required_string!(item, :key))
         resource_id = required_uuid!(item, :repository_resource_id)
         profile = required_string!(item, :model_profile)
         acceptance = required_map!(item, :acceptance)
-        resource = lock_repository_resource!(resource_id)
+        resource = Map.fetch!(resources_by_id, resource_id)
         unless valid_acceptance_contract?(acceptance), do: rollback(:invalid_plan)
 
         unless acceptance_contract_matches_resource?(acceptance, resource_id),
@@ -7324,6 +7329,27 @@ defmodule SymmetryControl.Goals do
 
     if resource.kind != "repository", do: rollback(:resource_not_allowed)
     resource
+  end
+
+  # A plan may refer to several repositories in arbitrary proposal order.
+  # Take every resource lock once in canonical UUID order, then use the map to
+  # preserve the proposal's original business ordering during admission.
+  defp lock_repository_resources!(ids) do
+    ids = ids |> Enum.uniq() |> Enum.sort()
+
+    resources =
+      Repo.all(
+        from(resource in ProjectResource,
+          where: resource.id in ^ids,
+          order_by: [asc: resource.id],
+          lock: "FOR UPDATE"
+        )
+      )
+
+    if length(resources) != length(ids), do: rollback(:not_found)
+    if Enum.any?(resources, &(&1.kind != "repository")), do: rollback(:resource_not_allowed)
+
+    Map.new(resources, &{&1.id, &1})
   end
 
   defp lock_work_items(ids) do

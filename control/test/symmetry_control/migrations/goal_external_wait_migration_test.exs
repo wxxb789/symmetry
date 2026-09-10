@@ -170,6 +170,24 @@ defmodule SymmetryControl.Migrations.GoalExternalWaitMigrationTest do
 
       replacement_receipt_id = insert_goal_event!(goal_id, 2)
 
+      assert_raise Postgrex.Error, ~r/goal_0006_external_wait_receipt_required/i, fn ->
+        Repo.query!(
+          """
+          INSERT INTO goal_external_waits (
+            id, goal_id, goal_revision, work_item_id, task_id, run_id, run_generation, source_ref,
+            result_id, result, resource_id, external_ref, subject, subject_hash, next_check_at, state,
+            check_seq, receipt_event_id, inserted_at, updated_at
+          )
+          SELECT $1, goal_id, goal_revision, work_item_id, task_id, run_id, run_generation, source_ref,
+                 result_id, result, resource_id, external_ref, subject, subject_hash, next_check_at, state,
+                 check_seq, NULL, now(), now()
+          FROM goal_external_waits
+          WHERE id = $2
+          """,
+          [Ecto.UUID.bingenerate(), wait_id]
+        )
+      end
+
       for statement <- [
             "UPDATE goal_external_waits SET receipt_event_id = $1 WHERE id = $2",
             "UPDATE goal_external_waits SET check_seq = check_seq + 1 WHERE id = $2",

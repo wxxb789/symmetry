@@ -307,6 +307,10 @@ defmodule SymmetryControl.Repo.Migrations.AddGoalExternalWaits do
     LANGUAGE plpgsql
     AS $$
     BEGIN
+      IF TG_OP = 'INSERT' THEN
+        RETURN NEW;
+      END IF;
+
       IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'goal_0006_external_wait_history_immutable';
       END IF;
@@ -356,7 +360,7 @@ defmodule SymmetryControl.Repo.Migrations.AddGoalExternalWaits do
 
     execute("""
     CREATE TRIGGER goal_external_waits_history_guard
-    BEFORE UPDATE OR DELETE ON goal_external_waits
+    BEFORE INSERT OR UPDATE OR DELETE ON goal_external_waits
     FOR EACH ROW EXECUTE FUNCTION goal_0006_guard_external_wait_history()
     """)
 

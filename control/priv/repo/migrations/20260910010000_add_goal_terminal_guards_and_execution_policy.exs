@@ -152,6 +152,31 @@ defmodule SymmetryControl.Repo.Migrations.AddGoalTerminalGuardsAndExecutionPolic
       IF EXISTS (
         SELECT 1
         FROM goal_revisions
+        WHERE execution_policy ? 'per_run_cost_limit_microusd'
+          AND NOT CASE
+            WHEN execution_policy -> 'per_run_cost_limit_microusd' = 'null'::jsonb THEN TRUE
+            WHEN jsonb_typeof(execution_policy -> 'per_run_cost_limit_microusd') = 'number' THEN
+              (execution_policy ->> 'per_run_cost_limit_microusd')::numeric BETWEEN 0 AND 9223372036854775807
+              AND (execution_policy ->> 'per_run_cost_limit_microusd')::numeric =
+                    TRUNC((execution_policy ->> 'per_run_cost_limit_microusd')::numeric)
+            ELSE FALSE
+          END
+      ) THEN
+        RAISE EXCEPTION 'cannot add exact execution policy guard while revisions contain an invalid per-run cost limit';
+      END IF;
+
+      IF EXISTS (
+        SELECT 1
+        FROM goal_revisions
+        WHERE execution_policy ? 'hard_cost_limit_required'
+          AND jsonb_typeof(execution_policy -> 'hard_cost_limit_required') <> 'boolean'
+      ) THEN
+        RAISE EXCEPTION 'cannot add exact execution policy guard while revisions contain an invalid hard-cost-limit requirement';
+      END IF;
+
+      IF EXISTS (
+        SELECT 1
+        FROM goal_revisions
         WHERE execution_policy -> 'automatic_execution' = 'true'::jsonb
           AND execution_policy -> 'budget_limit_microusd' = 'null'::jsonb
       ) THEN

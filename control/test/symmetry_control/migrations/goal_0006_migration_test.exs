@@ -1429,6 +1429,18 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
     end)
   end
 
+  test "refuses baseline guards when admitted history lacks an integration WorkItem" do
+    with_schema(fn ->
+      migrate_goal_up!()
+      migrate_integration_designation_up!()
+      insert_goal_fixture!()
+
+      assert_raise Postgrex.Error,
+                   ~r/cannot add Goal WorkItem integration guard while an admitted revision has no integration WorkItem/i,
+                   &migrate_baseline_up!/0
+    end)
+  end
+
   test "requires an integration WorkItem for each nonempty admitted revision at commit" do
     with_schema(fn ->
       migrate_goal_up!()
@@ -2303,7 +2315,11 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
           {%{"automatic_execution" => true},
            ~r/cannot require automatic Goal budget while existing automatic revisions have no total budget/i},
           {%{"budget_mode" => "strict"},
-           ~r/cannot require strict Goal cost ceiling while existing strict revisions are not enforceable/i}
+           ~r/cannot require strict Goal cost ceiling while existing strict revisions are not enforceable/i},
+          {%{"per_run_cost_limit_microusd" => "1"},
+           ~r/cannot add exact execution policy guard while revisions contain an invalid per-run cost limit/i},
+          {%{"hard_cost_limit_required" => "false"},
+           ~r/cannot add exact execution policy guard while revisions contain an invalid hard-cost-limit requirement/i}
         ] do
       with_schema(fn ->
         migrate_goal_up!()

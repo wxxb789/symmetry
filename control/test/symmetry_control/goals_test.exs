@@ -1446,10 +1446,12 @@ defmodule SymmetryControl.GoalsTest do
     assert Repo.aggregate(WorkItem, :count) == 0
   end
 
-  test "plan admission retains ordinary cross-resource dependency edges" do
+  test "plan admission accepts reverse-sorted repository resources and retains cross-resource edges" do
     project = project_fixture()
-    first_repository = repository_fixture(project)
-    second_repository = repository_fixture(project)
+
+    [consumer_repository, source_repository] =
+      [repository_fixture(project), repository_fixture(project)]
+      |> Enum.sort_by(& &1.id)
 
     assert {:ok, created, :created} =
              Goals.create_goal(project.id, goal_attrs(), "operator:test", now: @now)
@@ -1464,11 +1466,11 @@ defmodule SymmetryControl.GoalsTest do
             description: "Produce an independently scoped source outcome.",
             required: true,
             integration: false,
-            repository_resource_id: first_repository.id,
+            repository_resource_id: source_repository.id,
             acceptance: check_contract(),
             depends_on_keys: [],
             model_profile: "codex",
-            baseline: baseline_subject(first_repository.id)
+            baseline: baseline_subject(source_repository.id)
           },
           %{
             key: "consumer",
@@ -1476,17 +1478,17 @@ defmodule SymmetryControl.GoalsTest do
             description: "May depend on completion in another repository.",
             required: true,
             integration: true,
-            repository_resource_id: second_repository.id,
+            repository_resource_id: consumer_repository.id,
             acceptance: check_contract(),
             depends_on_keys: ["source"],
             model_profile: "codex",
-            baseline: baseline_subject(second_repository.id)
+            baseline: baseline_subject(consumer_repository.id)
           }
         ])
       )
 
     assert Enum.map(planned.goal.work_items, & &1.repository_resource_id) |> Enum.sort() ==
-             Enum.sort([first_repository.id, second_repository.id])
+             [consumer_repository.id, source_repository.id]
   end
 
   test "amended planning Task results remain historical and do not create current authorization" do
