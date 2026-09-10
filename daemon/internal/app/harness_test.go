@@ -1987,7 +1987,7 @@ func (session *fakeNativeGoalSession) Wait(ctx context.Context) (harness.TaskRes
 	waitTurnDone := session.waitTurnDone
 	session.callsMu.Unlock()
 	waitGate := session.waitGate
-	if waitTurnDone && session.finalWaitGate != nil {
+	if waitTurnDone {
 		waitGate = session.finalWaitGate
 	}
 	if waitGate != nil {
