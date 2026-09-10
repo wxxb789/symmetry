@@ -34,6 +34,7 @@ var (
 	ErrUnsupportedEvent     = errors.New("opencode SSE event type is unsupported")
 	ErrInvalidDurableCursor = errors.New("opencode SSE durable cursor is invalid")
 	ErrCursorRegression     = errors.New("opencode SSE durable sequence is not strictly increasing")
+	errStreamEndedUnknown   = errors.New("opencode SSE stream ended without a verified terminal event")
 )
 
 // SessionLocation is the narrow persisted identity OpenCode reports for a

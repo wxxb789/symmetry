@@ -64,7 +64,9 @@ func (decoder *Decoder) Feed(chunk []byte) ([]Frame, error) {
 	return frames, nil
 }
 
-// Close rejects an event that did not end on an SSE blank line.
+// Close rejects an unterminated line. A complete final data field is dispatched
+// at EOF, matching SSE's end-of-stream behavior even when its final blank line
+// was omitted by the peer.
 func (decoder *Decoder) Close() ([]Frame, error) {
 	if decoder == nil {
 		return nil, fmt.Errorf("opencode SSE decoder is nil")
@@ -72,8 +74,11 @@ func (decoder *Decoder) Close() ([]Frame, error) {
 	if decoder.failed != nil {
 		return nil, decoder.failed
 	}
-	if len(decoder.line) > 0 || len(decoder.data) > 0 || decoder.frameLen > 0 {
+	if len(decoder.line) > 0 {
 		return nil, decoder.fail(ErrIncompleteFrame)
+	}
+	if len(decoder.data) > 0 {
+		return decoder.finishFrame(), nil
 	}
 	return nil, nil
 }
@@ -84,11 +89,7 @@ func (decoder *Decoder) consumeLine(line []byte) ([]Frame, error) {
 			decoder.frameLen = 0
 			return nil, nil
 		}
-		data := bytes.Join(decoder.data, []byte("\n"))
-		decoder.data = nil
-		decoder.frameLen = 0
-		decoder.sequence++
-		return []Frame{{Sequence: decoder.sequence, Data: append(json.RawMessage(nil), data...)}}, nil
+		return decoder.finishFrame(), nil
 	}
 	if len(line) > decoder.max || decoder.frameLen+len(line)+1 > decoder.max {
 		return nil, ErrFrameTooLarge
@@ -106,6 +107,14 @@ func (decoder *Decoder) consumeLine(line []byte) ([]Frame, error) {
 	}
 	decoder.data = append(decoder.data, append([]byte(nil), value...))
 	return nil, nil
+}
+
+func (decoder *Decoder) finishFrame() []Frame {
+	data := bytes.Join(decoder.data, []byte("\n"))
+	decoder.data = nil
+	decoder.frameLen = 0
+	decoder.sequence++
+	return []Frame{{Sequence: decoder.sequence, Data: append(json.RawMessage(nil), data...)}}
 }
 
 func (decoder *Decoder) fail(err error) error {

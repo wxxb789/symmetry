@@ -21,8 +21,10 @@ func TestDecoderReadsFixtureAcrossChunksCRLFAndHeartbeat(t *testing.T) {
 		}
 		frames = append(frames, decoded...)
 	}
-	if trailing, err := decoder.Close(); err != nil || len(trailing) != 0 {
-		t.Fatalf("Close() = %#v, %v", trailing, err)
+	if trailing, err := decoder.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	} else {
+		frames = append(frames, trailing...)
 	}
 	if len(frames) != 1 || frames[0].Sequence != 1 {
 		t.Fatalf("frames = %#v, want one frame", frames)
