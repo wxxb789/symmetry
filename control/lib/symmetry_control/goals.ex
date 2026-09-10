@@ -23,6 +23,7 @@ defmodule SymmetryControl.Goals do
     GoalEvent,
     GoalRevision,
     HarnessSession,
+    HarnessSessionAttachReceipt,
     HarnessSessionStopReceipt,
     ReadModel,
     RunEvidence,
@@ -290,73 +291,58 @@ defmodule SymmetryControl.Goals do
         {goal, task, item, run, runtime} =
           lock_goal_run!(machine_id, run_id, fence, opts, :attach_replay)
 
-        ensure_session_scope!(session_attrs, task, item, run, runtime, machine_id)
         session_mode = value(task.input || %{}, "session_mode", "fresh")
+        request_hash = RequestHash.canonical(session_attach_request(fence, session_attrs))
 
-        session =
-          if task.requested_session_id do
-            Repo.one(
-              from(session in HarnessSession,
-                where: session.id == ^task.requested_session_id,
-                lock: "FOR UPDATE"
-              )
-            )
-          else
-            Repo.one(
-              from(session in HarnessSession,
-                where:
-                  session.machine_id == ^machine_id and
-                    session.local_handle_id == ^session_attrs.local_handle_id,
-                lock: "FOR UPDATE"
-              )
-            )
-          end
+        case lock_attach_receipt(run.id) do
+          %HarnessSessionAttachReceipt{} = receipt ->
+            if attach_receipt_matches?(receipt, machine_id, fence, request_hash) do
+              {:replayed, attachment_receipt_response(receipt)}
+            else
+              rollback(:idempotency_conflict)
+            end
 
-        if replayed_attached_session?(session, session_attrs, run, runtime, item, task) do
-          {:replayed, session_receipt(goal, task, run, session)}
-        else
-          ensure_current_attachment!(goal, task, run, runtime, machine_id, fence, opts)
+          nil ->
+            ensure_current_attachment!(goal, task, run, runtime, machine_id, fence, opts)
+            ensure_attachment_binding_shape!(session_mode, run, session_attrs)
+            ensure_session_scope!(session_attrs, task, item, run, runtime, machine_id)
 
-          # A handoff owns a newly created native session. An existing handle
-          # may only be the exact replay above; attaching it to another Run
-          # would turn artifact handoff into native-session transfer.
-          if session_mode == "handoff" and not is_nil(session),
-            do: rollback(:handoff_session_reuse)
+            session =
+              case session_mode do
+                "resume" ->
+                  attach_reserved_session!(task, run, runtime, item, machine_id, session_attrs)
 
-          case session do
-            nil when not is_nil(run.harness_session_id) ->
-              rollback(:ownership_lost)
+                "fresh" ->
+                  attach_fresh_session!(task, item, run, runtime, machine_id, session_attrs, opts)
 
-            nil when session_mode == "resume" ->
-              rollback(:requested_session_not_found)
+                "handoff" ->
+                  attach_handoff_session!(
+                    task,
+                    item,
+                    run,
+                    runtime,
+                    machine_id,
+                    session_attrs,
+                    opts
+                  )
 
-            nil ->
-              create_harness_session!(
+                _ ->
+                  rollback(:invalid_request)
+              end
+
+            response =
+              create_attach_receipt!(
                 goal,
                 task,
-                item,
                 run,
-                runtime,
-                machine_id,
-                session_attrs,
-                session_mode,
-                opts
-              )
-
-            session ->
-              attach_existing_session!(
                 session,
-                session_attrs,
-                run,
-                runtime,
-                item,
                 machine_id,
-                goal,
-                task,
-                session_mode,
+                fence,
+                request_hash,
                 opts
               )
-          end
+
+            {:created, response}
         end
       end)
       |> machine_write_result()
@@ -364,6 +350,30 @@ defmodule SymmetryControl.Goals do
   end
 
   def attach_harness_session(_, _, _, _, _), do: {:error, :invalid_request}
+
+  @spec fetch_harness_session_attachment(Ecto.UUID.t(), Ecto.UUID.t(), map()) ::
+          {:ok, map()} | {:error, term()}
+  def fetch_harness_session_attachment(machine_id, run_id, fence)
+      when is_binary(machine_id) and is_binary(run_id) and is_map(fence) do
+    with :ok <- valid_uuid(machine_id), :ok <- valid_uuid(run_id), :ok <- valid_fence(fence) do
+      Repo.transaction(fn ->
+        {_goal, _task, _item, run, _runtime} =
+          lock_goal_run!(machine_id, run_id, fence, [], :attach_replay)
+
+        receipt = lock_attach_receipt(run.id) || rollback(:not_found)
+
+        if attach_receipt_fence_matches?(receipt, machine_id, fence),
+          do: attachment_receipt_response(receipt),
+          else: rollback(:ownership_lost)
+      end)
+      |> case do
+        {:ok, receipt} -> {:ok, receipt}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  def fetch_harness_session_attachment(_, _, _), do: {:error, :invalid_request}
 
   @spec mark_harness_session_stopped(Ecto.UUID.t(), Ecto.UUID.t(), map(), map(), keyword()) ::
           {:ok, map(), :created | :replayed} | {:error, term()}
@@ -720,7 +730,7 @@ defmodule SymmetryControl.Goals do
 
     with true <- only_known_keys?(attrs, allowed),
          {:ok, local_handle_id} <- required_uuid(attrs, :local_handle_id),
-         {:ok, binding_id} <- required_uuid(attrs, :binding_id),
+         {:ok, binding_id} <- optional_uuid(attrs, :binding_id),
          {:ok, harness_kind} <- required_string(attrs, :harness_kind),
          true <- harness_kind in ["codex", "claude_code", "pi", "opencode"],
          {:ok, harness_version} <- required_string(attrs, :harness_version),
@@ -732,6 +742,7 @@ defmodule SymmetryControl.Goals do
        %{
          local_handle_id: local_handle_id,
          binding_id: binding_id,
+         binding_supplied?: has_key?(attrs, :binding_id),
          harness_kind: harness_kind,
          harness_version: harness_version,
          adapter_version: adapter_version,
@@ -775,6 +786,27 @@ defmodule SymmetryControl.Goals do
     }
   end
 
+  defp session_attach_request(fence, attrs) do
+    request = %{
+      "runtime_id" => value(fence, :runtime_id),
+      "runtime_epoch" => value(fence, :runtime_epoch),
+      "generation" => value(fence, :generation),
+      "claim_id" => value(fence, :claim_id),
+      "lease_token" => value(fence, :lease_token),
+      "local_handle_id" => attrs.local_handle_id,
+      "harness_kind" => attrs.harness_kind,
+      "harness_version" => attrs.harness_version,
+      "adapter_version" => attrs.adapter_version,
+      "workspace_fingerprint" => attrs.workspace_fingerprint,
+      "workspace" => attrs.workspace,
+      "repository_resource_id" => attrs.repository_resource_id
+    }
+
+    if attrs.binding_supplied?,
+      do: Map.put(request, "binding_id", attrs.binding_id),
+      else: request
+  end
+
   defp ensure_stoppable_session!(session, run, runtime, machine_id, attrs) do
     stoppable? =
       session.machine_id == machine_id and session.runtime_id == runtime.id and
@@ -816,44 +848,51 @@ defmodule SymmetryControl.Goals do
     ensure_machine_fence!(machine_id, task, run, runtime, fence, :current, now(opts))
   end
 
-  defp replayed_attached_session?(nil, _attrs, _run, _runtime, _item, _task), do: false
+  # The admission mode decides binding authority. A fresh or handoff native
+  # process has no server-issued attachment identity yet; a resumed process can
+  # only echo the pair atomically reserved by the scheduler.
+  defp ensure_attachment_binding_shape!("resume", run, attrs) do
+    unless attrs.binding_supplied?, do: rollback(:invalid_request)
 
-  defp replayed_attached_session?(session, attrs, run, runtime, item, task) do
-    run.harness_session_id == session.id and run.harness_binding_id == attrs.binding_id and
-      session_matches?(
-        session,
-        attrs,
-        run.id,
-        runtime.id,
-        task_repository_resource_id!(task, item)
-      )
+    unless is_binary(run.harness_session_id) and attrs.binding_id == run.harness_binding_id do
+      rollback(:ownership_lost)
+    end
   end
 
-  defp session_matches?(session, attrs, run_id, runtime_id, repository_resource_id) do
-    session.local_handle_id == attrs.local_handle_id and session.binding_id == attrs.binding_id and
-      session.binding_verified and
-      session.active_run_id == run_id and
-      session.state == "busy" and session.runtime_id == runtime_id and
-      session.repository_resource_id == repository_resource_id and
-      session.harness_kind == attrs.harness_kind and
-      session.harness_version == attrs.harness_version and
-      session.adapter_version == attrs.adapter_version and
-      session.workspace_fingerprint == attrs.workspace_fingerprint and
-      (is_nil(attrs.repository_resource_id) or
-         session.repository_resource_id == attrs.repository_resource_id)
+  defp ensure_attachment_binding_shape!(mode, run, attrs) when mode in ["fresh", "handoff"] do
+    if attrs.binding_supplied?, do: rollback(:invalid_request)
+
+    if not is_nil(run.harness_session_id) or not is_nil(run.harness_binding_id) do
+      rollback(:ownership_lost)
+    end
   end
 
-  defp create_harness_session!(
-         goal,
-         task,
-         item,
-         run,
-         runtime,
-         machine_id,
-         attrs,
-         session_mode,
-         opts
-       ) do
+  defp ensure_attachment_binding_shape!(_, _run, _attrs), do: rollback(:invalid_request)
+
+  defp attach_fresh_session!(task, item, run, runtime, machine_id, attrs, opts) do
+    reject_existing_handle!(machine_id, attrs.local_handle_id, :idempotency_conflict)
+    create_fresh_harness_session!(task, item, run, runtime, machine_id, attrs, opts)
+  end
+
+  defp attach_handoff_session!(task, item, run, runtime, machine_id, attrs, opts) do
+    reject_existing_handle!(machine_id, attrs.local_handle_id, :handoff_session_reuse)
+    create_fresh_harness_session!(task, item, run, runtime, machine_id, attrs, opts)
+  end
+
+  defp reject_existing_handle!(machine_id, local_handle_id, reason) do
+    if Repo.exists?(
+         from(session in HarnessSession,
+           where:
+             session.machine_id == ^machine_id and session.local_handle_id == ^local_handle_id,
+           lock: "FOR KEY SHARE"
+         )
+       ),
+       do: rollback(reason)
+  end
+
+  defp create_fresh_harness_session!(task, item, run, runtime, machine_id, attrs, opts) do
+    binding_id = Ecto.UUID.generate()
+
     changeset =
       %HarnessSession{}
       |> HarnessSession.changeset(
@@ -866,7 +905,7 @@ defmodule SymmetryControl.Goals do
           harness_kind: runtime.harness_kind,
           harness_version: runtime.harness_version,
           adapter_version: runtime.adapter_version,
-          binding_id: attrs.binding_id,
+          binding_id: binding_id,
           binding_verified: true,
           state: "busy",
           active_run_id: run.id
@@ -877,48 +916,21 @@ defmodule SymmetryControl.Goals do
     case Repo.insert(changeset) do
       {:ok, session} ->
         attach_session_to_run!(run, session, opts)
-        {:created, session_receipt(goal, task, run, session)}
+        session
 
       {:error, _changeset} ->
-        session =
-          Repo.one(
-            from(session in HarnessSession,
-              where:
-                session.machine_id == ^machine_id and
-                  session.local_handle_id == ^attrs.local_handle_id,
-              lock: "FOR UPDATE"
-            )
-          ) || rollback(:idempotency_conflict)
-
-        attach_existing_session!(
-          session,
-          attrs,
-          run,
-          runtime,
-          item,
-          machine_id,
-          goal,
-          task,
-          session_mode,
-          opts
-        )
+        rollback(:idempotency_conflict)
     end
   end
 
-  defp attach_existing_session!(
-         session,
-         attrs,
-         run,
-         runtime,
-         item,
-         machine_id,
-         goal,
-         task,
-         session_mode,
-         opts
-       ) do
-    if session_mode == "resume" and not session.binding_verified,
-      do: rollback(:requested_session_unavailable)
+  defp attach_reserved_session!(task, run, runtime, item, machine_id, attrs) do
+    session =
+      Repo.one(
+        from(session in HarnessSession,
+          where: session.id == ^task.requested_session_id,
+          lock: "FOR UPDATE"
+        )
+      ) || rollback(:requested_session_not_found)
 
     compatible? =
       session.machine_id == machine_id and session.runtime_id == runtime.id and
@@ -927,51 +939,12 @@ defmodule SymmetryControl.Goals do
         session.harness_kind == attrs.harness_kind and
         session.harness_version == attrs.harness_version and
         session.adapter_version == attrs.adapter_version and
-        session.workspace_fingerprint == attrs.workspace_fingerprint and session.binding_verified
+        session.workspace_fingerprint == attrs.workspace_fingerprint and session.binding_verified and
+        session.state == "busy" and session.active_run_id == run.id and
+        session.id == run.harness_session_id and session.binding_id == run.harness_binding_id
 
-    unless compatible?, do: rollback(:idempotency_conflict)
-
-    if session_mode == "handoff" and session.active_run_id != run.id,
-      do: rollback(:handoff_session_reuse)
-
-    case session.state do
-      "available" when is_nil(session.active_run_id) and is_nil(run.harness_session_id) ->
-        if session.binding_id == attrs.binding_id, do: rollback(:idempotency_conflict)
-
-        session =
-          session
-          |> HarnessSession.update_changeset(%{
-            state: "busy",
-            active_run_id: run.id,
-            binding_id: attrs.binding_id
-          })
-          |> stamp_update(now(opts))
-          |> Repo.update!()
-
-        attach_session_to_run!(run, session, opts)
-        {:created, session_receipt(goal, task, run, session)}
-
-      "busy" ->
-        if run.harness_session_id in [nil, session.id] and
-             run.harness_binding_id == attrs.binding_id and
-             session_matches?(
-               session,
-               attrs,
-               run.id,
-               runtime.id,
-               task_repository_resource_id!(task, item)
-             ) do
-          attach_session_to_run!(run, session, opts)
-          {:replayed, session_receipt(goal, task, run, session)}
-        else
-          rollback(:idempotency_conflict)
-        end
-
-      _ ->
-        if session_mode == "resume",
-          do: rollback(:requested_session_unavailable),
-          else: rollback(:ownership_lost)
-    end
+    unless compatible?, do: rollback(:ownership_lost)
+    session
   end
 
   defp attach_session_to_run!(run, session, opts) do
@@ -992,6 +965,90 @@ defmodule SymmetryControl.Goals do
         rollback(:ownership_lost)
     end
   end
+
+  defp lock_attach_receipt(run_id) do
+    Repo.one(
+      from(receipt in HarnessSessionAttachReceipt,
+        where: receipt.run_id == ^run_id,
+        lock: "FOR UPDATE"
+      )
+    )
+  end
+
+  defp attach_receipt_matches?(receipt, machine_id, fence, request_hash) do
+    receipt.request_hash == request_hash and
+      attach_receipt_fence_matches?(receipt, machine_id, fence)
+  end
+
+  defp attach_receipt_fence_matches?(receipt, machine_id, fence) do
+    receipt.machine_id == machine_id and
+      receipt.runtime_id == value(fence, :runtime_id) and
+      receipt.runtime_epoch == value(fence, :runtime_epoch) and
+      receipt.generation == value(fence, :generation) and
+      receipt.claim_id == value(fence, :claim_id) and
+      receipt.lease_token == value(fence, :lease_token)
+  end
+
+  defp create_attach_receipt!(goal, task, run, session, machine_id, fence, request_hash, opts) do
+    receipt_id = Ecto.UUID.generate()
+    response = session_receipt(receipt_id, goal, task, run, session)
+
+    %HarnessSessionAttachReceipt{id: receipt_id}
+    |> HarnessSessionAttachReceipt.changeset(%{
+      session_id: session.id,
+      run_id: run.id,
+      runtime_id: value(fence, :runtime_id),
+      machine_id: machine_id,
+      runtime_epoch: value(fence, :runtime_epoch),
+      generation: value(fence, :generation),
+      claim_id: value(fence, :claim_id),
+      lease_token: value(fence, :lease_token),
+      request_hash: request_hash,
+      response: normalize_map(response)
+    })
+    |> stamp_insert(now(opts))
+    |> Repo.insert!()
+
+    response
+  end
+
+  # The receipt remains JSONB with string keys, but the Goals context has
+  # historically returned atom-keyed session receipts to its direct callers.
+  # Decode only the fixed envelope; never reflect arbitrary persisted keys.
+  defp attachment_receipt_response(%HarnessSessionAttachReceipt{
+         response: %{"session" => session}
+       })
+       when is_map(session) do
+    fields = [
+      {:attachment_receipt_id, "attachment_receipt_id"},
+      {:id, "id"},
+      {:session_id, "session_id"},
+      {:goal_id, "goal_id"},
+      {:task_id, "task_id"},
+      {:run_id, "run_id"},
+      {:runtime_id, "runtime_id"},
+      {:machine_id, "machine_id"},
+      {:repository_resource_id, "repository_resource_id"},
+      {:active_run_id, "active_run_id"},
+      {:local_handle_id, "local_handle_id"},
+      {:binding_id, "binding_id"},
+      {:harness_kind, "harness_kind"},
+      {:harness_version, "harness_version"},
+      {:adapter_version, "adapter_version"},
+      {:state, "state"},
+      {:workspace_fingerprint, "workspace_fingerprint"},
+      {:workspace, "workspace"}
+    ]
+
+    receipt_session =
+      Enum.reduce(fields, %{}, fn {field, key}, acc ->
+        Map.put(acc, field, Map.fetch!(session, key))
+      end)
+
+    %{session: receipt_session}
+  end
+
+  defp attachment_receipt_response(_receipt), do: rollback(:ownership_lost)
 
   # A terminal Run does not prove that a retained native session stopped.
   # Until a durable session_stopped receipt exists, preserve the session as
@@ -1018,10 +1075,12 @@ defmodule SymmetryControl.Goals do
     end
   end
 
-  defp session_receipt(goal, task, run, session) do
+  defp session_receipt(receipt_id, goal, task, run, session) do
     %{
       session: %{
+        attachment_receipt_id: receipt_id,
         id: session.id,
+        session_id: session.id,
         goal_id: goal.id,
         task_id: task.id,
         run_id: run.id,
@@ -9498,6 +9557,9 @@ defmodule SymmetryControl.Goals do
   defp value(map, key, default \\ nil) when is_map(map) do
     Map.get(map, key, Map.get(map, to_string(key), default))
   end
+
+  defp has_key?(map, key) when is_map(map),
+    do: Map.has_key?(map, key) or Map.has_key?(map, to_string(key))
 
   defp normalize_map(map) when is_map(map),
     do: Map.new(map, fn {key, value} -> {to_string(key), normalize_value(value)} end)

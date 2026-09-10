@@ -297,6 +297,19 @@ defmodule SymmetryControlWeb.DaemonController do
     end
   end
 
+  def fetch_harness_session_attachment(conn, _params) do
+    run_id = path_param(conn, "run_id")
+
+    with :ok <- owns_run(conn, run_id),
+         {:ok, fence} <- query_fence(conn),
+         {:ok, receipt} <-
+           Goals.fetch_harness_session_attachment(conn.assigns.machine.id, run_id, fence) do
+      json(conn, receipt)
+    else
+      {:error, reason} -> Protocol.error(conn, reason)
+    end
+  end
+
   def mark_harness_session_stopped(conn, _params) do
     run_id = path_param(conn, "run_id")
 

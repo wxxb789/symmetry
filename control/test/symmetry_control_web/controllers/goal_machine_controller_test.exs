@@ -64,6 +64,17 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
   } do
     %{token: token, item: item, run: run, fence: fence} = claimed_goal_run_fixture(conn)
     request = Map.merge(fence, session_attrs(item))
+    refute Map.has_key?(request, :binding_id)
+
+    assert_error(
+      bearer(conn, token)
+      |> put(
+        "/api/v1/runs/#{run.id}/session",
+        Map.put(request, :binding_id, Ecto.UUID.generate())
+      ),
+      400,
+      "invalid_request"
+    )
 
     attached =
       bearer(conn, token)
@@ -87,6 +98,7 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     assert active_run_id == run.id
     assert repository_resource_id == get_in(item, [:baseline, :subject, "resource_id"])
     assert is_binary(local_handle_id)
+    assert is_binary(attached["session"]["binding_id"])
     refute inspect(attached) =~ "token"
     refute inspect(attached) =~ "transcript"
 
@@ -116,6 +128,42 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     )
   end
 
+  test "an owning machine reads the immutable attach receipt after terminal settlement", %{
+    conn: conn
+  } do
+    %{token: token, item: item, run: run, fence: fence} = claimed_goal_run_fixture(conn)
+    request = Map.merge(fence, session_attrs(item))
+
+    attached =
+      bearer(conn, token)
+      |> put("/api/v1/runs/#{run.id}/session", request)
+      |> json_response(201)
+
+    Repo.update_all(from(row in Task, where: row.id == ^run.task_id), set: [state: "completed"])
+    Repo.update_all(from(row in Run, where: row.id == ^run.id), set: [state: "completed"])
+
+    assert {:ok, %{"settlement" => "missing_result"}} =
+             Goals.settle_task(run.task_id, run.id, run.generation)
+
+    assert %{state: "unavailable", active_run_id: nil} =
+             Repo.get!(HarnessSession, attached["session"]["id"])
+
+    receipt_path = "/api/v1/runs/#{run.id}/session?#{URI.encode_query(stringify_keys(fence))}"
+
+    assert ^attached =
+             bearer(conn, token)
+             |> get(receipt_path)
+             |> json_response(200)
+
+    assert attached["session"]["state"] == "busy"
+    assert attached["session"]["active_run_id"] == run.id
+
+    stale_path =
+      "/api/v1/runs/#{run.id}/session?#{URI.encode_query(stringify_keys(Map.put(fence, :lease_token, Ecto.UUID.generate())))}"
+
+    assert_error(bearer(conn, token) |> get(stale_path), 409, "ownership_lost")
+  end
+
   test "resume session receipts preserve durable identity on replay", %{conn: conn} do
     %{
       token: token,
@@ -129,6 +177,13 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     runtime = Repo.get!(Runtime, run.runtime_id)
 
     request = Map.merge(fence, attrs)
+
+    assert_error(
+      bearer(conn, token)
+      |> put("/api/v1/runs/#{run.id}/session", Map.delete(request, :binding_id)),
+      400,
+      "invalid_request"
+    )
 
     attached =
       bearer(conn, token)
@@ -588,6 +643,31 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
       })
       |> Repo.insert!()
 
+    {run, resume_attrs} =
+      if retained_session do
+        binding_id = Ecto.UUID.generate()
+
+        retained_session
+        |> HarnessSession.update_changeset(%{
+          state: "busy",
+          active_run_id: run.id,
+          binding_id: binding_id
+        })
+        |> Repo.update!()
+
+        run =
+          run
+          |> Ecto.Changeset.change(
+            harness_session_id: retained_session.id,
+            harness_binding_id: binding_id
+          )
+          |> Repo.update!()
+
+        {run, Map.put(resume_attrs, :binding_id, binding_id)}
+      else
+        {run, resume_attrs}
+      end
+
     %{
       token: token,
       goal_id: goal_id,
@@ -715,7 +795,6 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
 
     %{
       local_handle_id: Ecto.UUID.generate(),
-      binding_id: Ecto.UUID.generate(),
       harness_kind: "codex",
       harness_version: "1.0.0",
       adapter_version: "1.0.0",

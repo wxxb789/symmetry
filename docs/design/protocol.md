@@ -124,13 +124,16 @@ preserved artifact and fresh snapshot. An in-flight Task is never silently
 switched to another model/harness.
 
 Retained-session attachment uses a server-generated opaque `binding_id`. The
-scheduler rotates it while atomically reserving the exact session for a new
-Run, persists the same value on that Run, and includes it in assignment and
-claim delivery. The daemon persists and echoes that value on attach and later
-stop delivery; it must not generate a replacement. A session becomes available
-for resume only after a machine-authenticated, exact-fence stop receipt proves
-the preceding native execution stopped. Legacy sessions without this durable
-binding provenance remain unsupported for resume.
+scheduler rotates it while atomically reserving the exact retained session for
+a `resume` Run, persists the same value on that Run, and includes it in
+assignment and claim delivery. The daemon persists and echoes that value only
+for `resume`; it must not generate a replacement. A `fresh` or `handoff`
+attach must omit `binding_id`: Control generates the binding while creating the
+first session/Run pair and returns the immutable attachment receipt. An existing
+handle is rejected for those modes except an exact replay of that receipt.
+A session becomes available for resume only after a machine-authenticated,
+exact-fence stop receipt proves the preceding native execution stopped. Legacy
+sessions without this durable binding provenance remain unsupported for resume.
 
 Capabilities use a versioned `adapter` object containing kind, native_version,
 implementation_version,
@@ -237,6 +240,7 @@ secrets/raw private evidence in errors.
 
 Machine-only additions:
 `PUT /api/v1/runs/:id/session` (fenced attach),
+`GET /api/v1/runs/:id/session` (exact-original-fence immutable attach receipt),
 `PUT /api/v1/runs/:id/session/stopped` (fenced retained-session stop receipt),
 `POST /api/v1/runs/:id/evidence` (fenced idempotent batch),
 `POST /api/v1/runs/:id/usage` (normal fence or limited late-accounting rule in data.md),
@@ -249,6 +253,14 @@ credential-authoritative. It is accepted only after the exact Run is terminal
 and its session is unavailable. First delivery returns 201, exact lost-ack
 replay returns the stored 200 receipt, and stale or changed attachment identity
 cannot alter a later session cycle.
+The attach body carries local handle and immutable adapter/workspace metadata
+beside the existing fence. `binding_id` is forbidden for `fresh` and `handoff`,
+and required for `resume`. The first successful attach writes an immutable
+receipt containing the Run/session/binding pair and the original fence. The
+owning machine can read that receipt with `GET` and the exact original fence
+after terminal settlement, including after the mutable session has become
+available or is reserved for a later Run. The historical top-level `session`
+object is a snapshot, not a mutable session lookup.
 
 ## Context assembly and handoff
 

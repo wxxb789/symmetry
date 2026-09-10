@@ -1093,7 +1093,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
     fence = claim(run, retained_runtime)
 
-    assert {:ok, %{session: %{id: session_id, state: "busy"}}, :replayed} =
+    assert {:ok, %{session: %{id: session_id, state: "busy"}}, :created} =
              Goals.attach_harness_session(
                retained_runtime.machine_id,
                run.id,
@@ -1246,6 +1246,24 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
     first_fence = claim(first_run, retained_runtime)
 
+    assert {:ok, %{session: first_attachment}, :created} =
+             Goals.attach_harness_session(
+               retained_runtime.machine_id,
+               first_run.id,
+               first_fence,
+               %{
+                 local_handle_id: session.local_handle_id,
+                 binding_id: first_binding_id,
+                 harness_kind: session.harness_kind,
+                 harness_version: session.harness_version,
+                 adapter_version: session.adapter_version,
+                 workspace_fingerprint: session.workspace_fingerprint,
+                 workspace: "primary",
+                 repository_resource_id: session.repository_resource_id
+               },
+               now: @now
+             )
+
     assert {:ok, %{state: "failed"}} =
              Orchestration.transition(
                first_run.id,
@@ -1297,6 +1315,16 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
     assert %{state: "busy", active_run_id: ^active_run_id, binding_id: ^second_binding_id} =
              Repo.get!(HarnessSession, session.id)
+
+    assert {:ok, %{session: ^first_attachment}} =
+             Goals.fetch_harness_session_attachment(
+               retained_runtime.machine_id,
+               first_run.id,
+               first_fence
+             )
+
+    assert first_attachment.binding_id == first_binding_id
+    assert first_attachment.state == "busy"
   end
 
   test "lease expiry keeps a retained session unavailable until a fenced stop receipt arrives" do

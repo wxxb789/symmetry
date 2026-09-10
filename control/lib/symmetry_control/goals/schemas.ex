@@ -638,6 +638,83 @@ defmodule SymmetryControl.Goals.HarnessSessionStopReceipt do
   end
 end
 
+defmodule SymmetryControl.Goals.HarnessSessionAttachReceipt do
+  use Ecto.Schema
+  import Ecto.Changeset
+
+  alias SymmetryControl.Goals.HarnessSession
+  alias SymmetryControl.Orchestration.{Run, Runtime}
+
+  @primary_key {:id, :binary_id, autogenerate: true}
+  @foreign_key_type :binary_id
+  schema "harness_session_attach_receipts" do
+    belongs_to(:session, HarnessSession)
+    belongs_to(:run, Run)
+    belongs_to(:runtime, Runtime)
+    field(:machine_id, Ecto.UUID)
+    field(:runtime_epoch, :integer)
+    field(:generation, :integer)
+    field(:claim_id, Ecto.UUID)
+    field(:lease_token, Ecto.UUID)
+    field(:request_hash, :binary)
+    field(:response, :map)
+
+    timestamps(type: :utc_datetime_usec, updated_at: false)
+  end
+
+  def changeset(receipt, attrs) do
+    receipt
+    |> cast(attrs, [
+      :session_id,
+      :run_id,
+      :runtime_id,
+      :machine_id,
+      :runtime_epoch,
+      :generation,
+      :claim_id,
+      :lease_token,
+      :request_hash,
+      :response
+    ])
+    |> validate_required([
+      :session_id,
+      :run_id,
+      :runtime_id,
+      :machine_id,
+      :runtime_epoch,
+      :generation,
+      :claim_id,
+      :lease_token,
+      :request_hash,
+      :response
+    ])
+    |> validate_number(:runtime_epoch, greater_than: 0)
+    |> validate_number(:generation, greater_than: 0)
+    |> validate_request_hash()
+    |> validate_response()
+    |> assoc_constraint(:session)
+    |> assoc_constraint(:run)
+    |> assoc_constraint(:runtime)
+    |> unique_constraint(:run_id, name: :harness_session_attach_receipts_run_id_index)
+    |> check_constraint(:request_hash, name: :harness_session_attach_receipts_request_hash_size)
+    |> check_constraint(:response, name: :harness_session_attach_receipts_response_object)
+  end
+
+  defp validate_request_hash(changeset) do
+    validate_change(changeset, :request_hash, fn :request_hash, value ->
+      if is_binary(value) and byte_size(value) == 32,
+        do: [],
+        else: [request_hash: "must be a 32-byte digest"]
+    end)
+  end
+
+  defp validate_response(changeset) do
+    validate_change(changeset, :response, fn :response, value ->
+      if is_map(value), do: [], else: [response: "must be an object"]
+    end)
+  end
+end
+
 defmodule SymmetryControl.Goals.RunEvidence do
   use Ecto.Schema
   import Ecto.Changeset

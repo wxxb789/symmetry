@@ -116,6 +116,7 @@ defmodule SymmetryControlWeb.Router do
     post "/runs/:run_id/events", DaemonController, :append_events
     put "/runs/:run_id/transitions/:transition_id", DaemonController, :transition
     put "/runs/:run_id/session", DaemonController, :attach_harness_session
+    get "/runs/:run_id/session", DaemonController, :fetch_harness_session_attachment
     put "/runs/:run_id/session/stopped", DaemonController, :mark_harness_session_stopped
     post "/runs/:run_id/evidence", DaemonController, :append_evidence
     post "/runs/:run_id/usage", DaemonController, :record_usage

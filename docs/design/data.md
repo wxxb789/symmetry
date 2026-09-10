@@ -158,10 +158,27 @@ using composite FK. Raw native IDs and filesystem locations live in the daemon
 journal behind local_handle_id. A verified session claim is conditional on
 available and matching machine/workspace; reservation atomically rotates
 binding_id and records the same immutable value in the Run before dispatch.
-The daemon can only attach with that value. `binding_verified` is true only for
-a session created through the fenced attachment protocol; migrated legacy
-sessions remain false and may finish cleanup but cannot resume or release. A
-closed/unavailable session does not prevent a fresh-session handoff.
+For `resume`, the daemon can only attach by echoing that scheduler-reserved
+pair. For `fresh` and `handoff`, there is no pre-existing pair: the first
+fenced attach creates both session and server-generated binding atomically,
+then freezes the pair on the Run. Those modes reject an existing local handle
+unless the original Run's immutable attach receipt is being replayed.
+`binding_verified` is true only for a session created through the fenced
+attachment protocol; migrated legacy sessions remain false and may finish
+cleanup but cannot resume or release. A closed/unavailable session does not
+prevent a fresh-session handoff.
+
+### `harness_session_attach_receipts`
+
+id, session_id FK, unique run_id FK, runtime_id FK, machine_id, original
+runtime epoch/generation/claim ID/lease token, request_hash bytea(32), response
+jsonb, inserted_at. Rows are append-only. The insert transaction verifies the
+Run/session/binding pair while the session is busy, and snapshots the initial
+attachment response. The response has historical `session` field compatibility
+but is an immutable attachment receipt, not a view of the mutable
+`harness_sessions` row. An owning machine may read it with the exact original
+fence even after the Run is terminal; a later reservation cannot change or
+rebind that history. Missing pre-receipt legacy history is not reconstructed.
 
 ### `harness_session_stop_receipts`
 

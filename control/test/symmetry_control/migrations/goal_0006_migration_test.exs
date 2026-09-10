@@ -7,6 +7,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   alias SymmetryControl.Repo.Migrations.AddGoalTerminalGuardsAndExecutionPolicy
   alias SymmetryControl.Repo.Migrations.AddGoalTerminalAuthorityGuardsAndSessionReciprocity
   alias SymmetryControl.Repo.Migrations.AddHarnessSessionStopReceipts
+  alias SymmetryControl.Repo.Migrations.AddHarnessSessionAttachReceipts
   alias SymmetryControl.Repo.Migrations.AddGoalIntegrationWorkItemDesignation
   alias SymmetryControl.Repo.Migrations.AddGoalIdentityGuards
   alias SymmetryControl.Repo.Migrations.AddTaskHandoffLineage
@@ -53,6 +54,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   @terminal_authority_migration_version 20_260_910_030_000
   @handoff_lineage_migration_version 20_260_910_040_000
   @session_stop_receipt_migration_version 20_260_910_050_000
+  @session_attach_receipt_migration_version 20_260_911_000_000
 
   test "upgrades legacy rows without assigning their textual goal to durable Goal history" do
     with_schema(fn ->
@@ -2400,6 +2402,32 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
     end)
   end
 
+  test "adds immutable attach receipt storage without reconstructing legacy history" do
+    with_schema(fn ->
+      migrate_goal_up!()
+      migrate_session_stop_receipt_up!()
+      migrate_session_attach_receipt_up!()
+
+      assert %{rows: [[12]]} =
+               Repo.query!("""
+               SELECT count(*)
+               FROM information_schema.columns
+               WHERE table_schema = current_schema()
+                 AND table_name = 'harness_session_attach_receipts'
+               """)
+
+      migrate_session_attach_receipt_down!()
+
+      assert %{rows: [[0]]} =
+               Repo.query!("""
+               SELECT count(*)
+               FROM information_schema.tables
+               WHERE table_schema = current_schema()
+                 AND table_name = 'harness_session_attach_receipts'
+               """)
+    end)
+  end
+
   test "guards terminal Goal authority, terminal decisions, and exact execution policies in SQL" do
     with_schema(fn ->
       migrate_goal_up!()
@@ -3725,6 +3753,30 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
     )
   end
 
+  defp migrate_session_attach_receipt_up! do
+    Ecto.Migrator.run(
+      Repo,
+      [{@session_attach_receipt_migration_version, AddHarnessSessionAttachReceipts}],
+      :up,
+      all: true,
+      log: false,
+      migration_lock: false,
+      dynamic_repo: Repo.get_dynamic_repo()
+    )
+  end
+
+  defp migrate_session_attach_receipt_down! do
+    Ecto.Migrator.run(
+      Repo,
+      [{@session_attach_receipt_migration_version, AddHarnessSessionAttachReceipts}],
+      :down,
+      step: 1,
+      log: false,
+      migration_lock: false,
+      dynamic_repo: Repo.get_dynamic_repo()
+    )
+  end
+
   defp migrate_provider_access_snapshot_up! do
     Ecto.Migrator.run(
       Repo,
@@ -4490,7 +4542,8 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
       {AddGoalTerminalAuthorityGuardsAndSessionReciprocity,
        "20260910030000_add_goal_terminal_authority_guards_and_session_reciprocity.exs"},
       {AddTaskHandoffLineage, "20260910040000_add_task_handoff_lineage.exs"},
-      {AddHarnessSessionStopReceipts, "20260910050000_add_harness_session_stop_receipts.exs"}
+      {AddHarnessSessionStopReceipts, "20260910050000_add_harness_session_stop_receipts.exs"},
+      {AddHarnessSessionAttachReceipts, "20260911000000_add_harness_session_attach_receipts.exs"}
     ]
 
     Enum.each(migrations, fn {module, filename} ->

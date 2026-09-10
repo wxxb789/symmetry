@@ -3,7 +3,14 @@ defmodule SymmetryControl.GoalsTest do
 
   alias SymmetryControl.Goals
   alias SymmetryControl.Goals.ReadModel
-  alias SymmetryControl.Goals.{GoalExternalWait, HarnessSession, HarnessSessionStopReceipt}
+
+  alias SymmetryControl.Goals.{
+    GoalExternalWait,
+    HarnessSession,
+    HarnessSessionAttachReceipt,
+    HarnessSessionStopReceipt
+  }
+
   alias SymmetryControl.Goals.Workers.{GoalControlWorker, SettleTaskWorker, WakeupWorker}
   alias SymmetryControl.Integrations
   alias SymmetryControl.Orchestration.{Machine, Run, Runtime, Task}
@@ -4468,6 +4475,8 @@ defmodule SymmetryControl.GoalsTest do
     assert session.run_id == run.id
     assert session.runtime_id == runtime.id
     assert session.local_handle_id == attrs.local_handle_id
+    assert is_binary(session.attachment_receipt_id)
+    assert Repo.aggregate(HarnessSessionAttachReceipt, :count) == 1
 
     Repo.update_all(from(row in Task, where: row.id == ^run.task_id),
       set: [current_generation: 2, attempt_generation: 2]
@@ -4488,7 +4497,7 @@ defmodule SymmetryControl.GoalsTest do
                now: @now
              )
 
-    assert {:error, :ownership_lost} =
+    assert {:error, :idempotency_conflict} =
              Goals.attach_harness_session(
                runtime.machine_id,
                run.id,
@@ -4505,6 +4514,22 @@ defmodule SymmetryControl.GoalsTest do
                Map.put(attrs, :native_session_id, "must-stay-local"),
                now: @now
              )
+  end
+
+  test "fresh attach never adopts an existing available local handle" do
+    {_goal, item, _task, runtime, run, fence} = claimed_goal_run_fixture()
+    attrs = session_attrs(item, "workspace-fresh-reuse")
+    existing = available_session_fixture(runtime, item, attrs)
+
+    assert {:error, :idempotency_conflict} =
+             Goals.attach_harness_session(runtime.machine_id, run.id, fence, attrs, now: @now)
+
+    assert %{id: existing_id, state: "available", active_run_id: nil} =
+             Repo.get!(HarnessSession, existing.id)
+
+    assert existing_id == existing.id
+    assert %{harness_session_id: nil, harness_binding_id: nil} = Repo.get!(Run, run.id)
+    assert Repo.aggregate(HarnessSessionAttachReceipt, :count) == 0
   end
 
   test "an exact attached session replays after pause or amendment but rejects changed runtime identity" do
@@ -4532,7 +4557,7 @@ defmodule SymmetryControl.GoalsTest do
     assert {:ok, %{session: ^session}, :replayed} =
              Goals.attach_harness_session(runtime.machine_id, run.id, fence, attrs, now: @now)
 
-    assert {:error, :ownership_lost} =
+    assert {:error, :idempotency_conflict} =
              Goals.attach_harness_session(
                runtime.machine_id,
                run.id,
@@ -4571,6 +4596,8 @@ defmodule SymmetryControl.GoalsTest do
 
     task = Repo.get!(Task, admission.response["task"]["id"])
     {run, fence} = running_goal_run_fixture(task, runtime)
+    run = reserve_requested_session!(requested, run)
+    attrs = Map.put(attrs, :binding_id, run.harness_binding_id)
 
     assert {:ok, %{session: %{id: requested_id, state: "busy"}}, :created} =
              Goals.attach_harness_session(runtime.machine_id, run.id, fence, attrs, now: @now)
@@ -4600,7 +4627,7 @@ defmodule SymmetryControl.GoalsTest do
     stop = %{
       session_id: session.id,
       local_handle_id: attrs.local_handle_id,
-      binding_id: attrs.binding_id
+      binding_id: session.binding_id
     }
 
     assert {:error, :state_conflict} =
@@ -4617,7 +4644,7 @@ defmodule SymmetryControl.GoalsTest do
     assert %{state: "unavailable", active_run_id: nil, binding_id: binding_id} =
              Repo.get!(HarnessSession, session.id)
 
-    assert binding_id == attrs.binding_id
+    assert binding_id == session.binding_id
 
     assert {:ok,
             %{
@@ -4639,7 +4666,7 @@ defmodule SymmetryControl.GoalsTest do
     assert run_id == run.id
     assert session_id == session.id
     assert local_handle_id == attrs.local_handle_id
-    assert binding_id == attrs.binding_id
+    assert binding_id == session.binding_id
     assert %{state: "available", active_run_id: nil} = Repo.get!(HarnessSession, session.id)
     assert Repo.aggregate(HarnessSessionStopReceipt, :count) == 1
 
@@ -4893,6 +4920,15 @@ defmodule SymmetryControl.GoalsTest do
     target = Repo.get!(Task, admission.response["task"]["id"])
     {target_run, target_fence} = running_goal_run_fixture(target, source_runtime)
     attrs = session_attrs(item, "workspace-handoff-target")
+
+    assert {:error, :invalid_request} =
+             Goals.attach_harness_session(
+               source_runtime.machine_id,
+               target_run.id,
+               target_fence,
+               Map.put(attrs, :binding_id, Ecto.UUID.generate()),
+               now: @now
+             )
 
     assert {:ok, %{session: %{run_id: run_id, local_handle_id: local_handle_id}}, :created} =
              Goals.attach_harness_session(
@@ -6902,7 +6938,6 @@ defmodule SymmetryControl.GoalsTest do
   defp session_attrs(item, workspace_fingerprint) do
     %{
       local_handle_id: Ecto.UUID.generate(),
-      binding_id: Ecto.UUID.generate(),
       harness_kind: "codex",
       harness_version: "1.0.0",
       adapter_version: "1.0.0",
@@ -6928,6 +6963,22 @@ defmodule SymmetryControl.GoalsTest do
       state: "available"
     })
     |> Repo.insert!()
+  end
+
+  defp reserve_requested_session!(session, run) do
+    binding_id = Ecto.UUID.generate()
+
+    session
+    |> HarnessSession.update_changeset(%{
+      state: "busy",
+      active_run_id: run.id,
+      binding_id: binding_id
+    })
+    |> Repo.update!()
+
+    run
+    |> Ecto.Changeset.change(harness_session_id: session.id, harness_binding_id: binding_id)
+    |> Repo.update!()
   end
 
   defp amended_revision_contract(objective) do
