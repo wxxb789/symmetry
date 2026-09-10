@@ -15,3 +15,9 @@ Future credentialed captures must add sanitized fresh/resume identity,
 interleaved stream, cancellation/drain, usage, and retained-artifact recovery
 evidence for each claimed platform. Do not treat this probe fixture as a native
 smoke test.
+
+`stream-json.jsonl` is synthetic, Multica-derived framing evidence for the
+documented Claude Code `stream-json` envelope shape. It covers decoder DTO
+handling only; identifiers, messages, result text, and usage values are
+invented. It is not a credentialed native capture and cannot verify session
+creation, result/usage semantics, controls, resume, or artifact recovery.
