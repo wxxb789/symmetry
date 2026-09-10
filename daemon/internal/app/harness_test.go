@@ -833,6 +833,131 @@ func TestNativeCloseDurableWriteFailuresRetryWithoutLeakingRecoveryBarrier(t *te
 	}
 }
 
+func TestNativeCloseRetrySuccessDoesNotEraseUsageRecoveryBarrier(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000023"}
+	session := &fakeNativeGoalSession{turnStarted: make(chan struct{})}
+	active := &runningRun{
+		nativeSession:            session,
+		goalSession:              &sessionKey,
+		nativeCloseRetryRequired: true,
+		nativeCloseRetrying:      true,
+		nativeUsageRetryPending:  true,
+		cleanupBlocked:           true,
+	}
+	app := &daemon{store: store, running: map[state.RunKey]*runningRun{key: active}}
+
+	app.publishNativeCloseRetrySuccess(key, active, session)
+	if active.nativeSession != nil || active.goalSession != nil || active.nativeCloseRetryRequired || active.nativeCloseRetrying || !active.nativeUsageRetryPending || !active.cleanupBlocked {
+		t.Fatalf("native close retry erased usage recovery barrier: %#v", active)
+	}
+}
+
+func TestOriginalNativeCompletionDoesNotEraseUsageRetryBarrier(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
+	active := &runningRun{
+		nativeUsageRetryPending:  true,
+		nativeUsageRetryInFlight: true,
+		cleanupBlocked:           true,
+	}
+	app := &daemon{store: store, running: map[state.RunKey]*runningRun{key: active}}
+
+	app.completeNativeRunAfterUsage(context.Background(), key, active, harness.TaskResult{Kind: harness.ResultSucceeded}, nil, nil, false)
+	if !active.nativeUsageRetryPending || !active.nativeUsageRetryInFlight || !active.cleanupBlocked || active.nativeUsageFinalized {
+		t.Fatalf("original completion erased active usage retry barrier: %#v", active)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.TerminalState != "" {
+		t.Fatalf("original completion published alongside a newer usage retry: %#v", journal)
+	}
+}
+
+func TestNativeCloseRetrySuccessDoesNotLeaveStaleCloseErrorAsCleanupBarrier(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	store, key := claimedGoalDeliveryStore(t)
+	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000024"}
+	saveAttachedGoalSession(t, store, key, admission, sessionKey)
+	if _, err := store.SetProcessDetails(key, 71, "native:71", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	finalGate := make(chan struct{})
+	closeEntered := make(chan struct{}, 2)
+	retryPublished := make(chan struct{}, 1)
+	result := validNativeTaskResult(t, admission)
+	session := &fakeNativeGoalSession{
+		result:        harness.TaskResult{Kind: harness.ResultSucceeded, Summary: result.Summary, Semantic: &result},
+		finalWaitGate: finalGate,
+		turnStarted:   make(chan struct{}),
+		closeErr:      errors.New("first close failed"),
+		closeEntered:  closeEntered,
+	}
+	active := &runningRun{
+		nativeSession:  session,
+		goalSession:    &sessionKey,
+		goalAdmission:  &admission,
+		prepared:       workspace.Prepared{Path: "C:\\workspace"},
+		slotHeld:       true,
+		cleanupBlocked: true,
+	}
+	app := &daemon{
+		store:   store,
+		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		running: map[state.RunKey]*runningRun{key: active},
+		slots:   make(chan struct{}, 1),
+		options: options{newID: ids(), clock: time.Now, nativeCloseRetryPublished: func() { retryPublished <- struct{}{} }},
+	}
+	app.slots <- struct{}{}
+	done := make(chan struct{})
+	go func() {
+		app.waitForNativeRun(context.Background(), key, active, session)
+		close(done)
+	}()
+	select {
+	case <-closeEntered:
+	case <-time.After(time.Second):
+		t.Fatal("initial native close did not start")
+	}
+	select {
+	case <-retryPublished:
+	case <-time.After(time.Second):
+		t.Fatal("initial native close failure did not publish recovery barrier")
+	}
+	if !active.nativeCloseRetryRequired || !active.cleanupBlocked {
+		t.Fatalf("initial native close failure did not publish recovery barrier: %#v", active)
+	}
+	session.closeErr = nil
+	app.retryBlockedNativeSessionCloses()
+	if active.nativeSession != nil || active.nativeCloseRetryRequired || active.cleanupBlocked {
+		t.Fatalf("successful close retry retained stale cleanup barrier: %#v", active)
+	}
+	close(finalGate)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("original native completion did not finish after retry")
+	}
+	if active.cleanupBlocked || active.nativeUsageRetryPending || active.nativeUsageRetryInFlight || !active.nativeUsageFinalized {
+		t.Fatalf("original completion recreated stale close or usage barrier: %#v", active)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.TerminalState != "failed" || !strings.Contains(string(journal.PendingTransitions[0].Payload), "first close failed") {
+		t.Fatalf("stale close error was not retained only as terminal diagnosis: %#v", journal)
+	}
+}
+
 func TestFreshCodexGoalAdmissionRejectsMismatchedRuntimeRepositoryBeforeWorkspace(t *testing.T) {
 	admission, present, err := parseAdmissionInput(validAdmissionInput())
 	if err != nil || !present {
@@ -1802,17 +1927,19 @@ func (adapter *fakeNativeGoalAdapter) Start(_ context.Context, request harness.S
 }
 
 type fakeNativeGoalSession struct {
-	callsMu      sync.Mutex
-	calls        []string
-	request      harness.StartRequest
-	sink         harness.EventSink
-	handle       harness.NativeSessionHandle
-	result       harness.TaskResult
-	waitGate     <-chan struct{}
-	turnStarted  chan struct{}
-	startErr     error
-	closeErr     error
-	waitTurnDone bool
+	callsMu       sync.Mutex
+	calls         []string
+	request       harness.StartRequest
+	sink          harness.EventSink
+	handle        harness.NativeSessionHandle
+	result        harness.TaskResult
+	waitGate      <-chan struct{}
+	finalWaitGate <-chan struct{}
+	turnStarted   chan struct{}
+	startErr      error
+	closeErr      error
+	closeEntered  chan struct{}
+	waitTurnDone  bool
 }
 
 func (session *fakeNativeGoalSession) recordCall(call string) {
@@ -1859,9 +1986,13 @@ func (session *fakeNativeGoalSession) Wait(ctx context.Context) (harness.TaskRes
 	session.callsMu.Lock()
 	waitTurnDone := session.waitTurnDone
 	session.callsMu.Unlock()
-	if session.waitGate != nil && !waitTurnDone {
+	waitGate := session.waitGate
+	if waitTurnDone && session.finalWaitGate != nil {
+		waitGate = session.finalWaitGate
+	}
+	if waitGate != nil {
 		select {
-		case <-session.waitGate:
+		case <-waitGate:
 		case <-ctx.Done():
 			return harness.TaskResult{Kind: harness.ResultCancelled}, ctx.Err()
 		}
@@ -1887,6 +2018,9 @@ func (session *fakeNativeGoalSession) WaitTurn(ctx context.Context) error {
 
 func (session *fakeNativeGoalSession) Close(context.Context) error {
 	session.recordCall("close")
+	if session.closeEntered != nil {
+		session.closeEntered <- struct{}{}
+	}
 	return session.closeErr
 }
 

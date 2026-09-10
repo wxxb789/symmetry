@@ -182,6 +182,7 @@ type options struct {
 	loadGoalSession                            func(state.GoalSessionKey) (state.GoalSessionJournal, error)
 	closeGoalSession                           func(state.GoalSessionKey) (state.GoalSessionJournal, error)
 	clearProcessDetails                        func(state.RunKey, int, string) (state.RunJournal, error)
+	nativeCloseRetryPublished                  func()
 }
 
 // WithHTTPClient replaces the HTTP transport used for production clients.
@@ -344,7 +345,11 @@ type commandLane struct {
 type runningRun struct {
 	// inputMu serializes stdin delivery with input-related lifecycle mutations.
 	// Never wait for it while holding daemon.mu.
-	inputMu                  sync.Mutex
+	inputMu sync.Mutex
+	// nativeCloseMu serializes one native session Close with the durable session
+	// and process-marker evidence that proves its result. It is never acquired
+	// while daemon.mu is held.
+	nativeCloseMu            sync.Mutex
 	process                  Process
 	nativeSession            harness.Session
 	goalSession              *state.GoalSessionKey
@@ -2851,12 +2856,21 @@ func (daemon *daemon) clearNativeSessionByValue(session harness.Session) {
 }
 
 func (daemon *daemon) requireNativeSessionCloseRetry(key state.RunKey, session harness.Session) {
+	var published func()
 	daemon.mu.Lock()
-	defer daemon.mu.Unlock()
 	if active := daemon.running[key]; active != nil && active.nativeSession == session {
 		active.nativeCloseRetryRequired = true
-		active.cleanupBlocked = true
+		active.cleanupBlocked = nativeCleanupBlocked(active)
+		published = daemon.options.nativeCloseRetryPublished
 	}
+	daemon.mu.Unlock()
+	if published != nil {
+		published()
+	}
+}
+
+func nativeCleanupBlocked(active *runningRun) bool {
+	return active.nativeCloseRetryRequired || active.nativeCloseRetrying || active.nativeUsageRetryPending || active.nativeUsageRetryInFlight || active.nativeUsageRetryExhausted
 }
 
 func (daemon *daemon) markGoalSessionAttachDeliveryReady(key state.RunKey, localHandleID string) (state.RunJournal, error) {
@@ -2943,13 +2957,7 @@ func (daemon *daemon) retryBlockedNativeSessionCloses() {
 	for _, candidate := range blocked {
 		err := daemon.closeNativeGoalSession(candidate.key, candidate.active, candidate.session)
 		if err == nil {
-			daemon.clearNativeSession(candidate.key, candidate.session)
-			daemon.mu.Lock()
-			if daemon.running[candidate.key] == candidate.active {
-				candidate.active.cleanupBlocked = false
-				candidate.active.nativeCloseRetryRequired = false
-			}
-			daemon.mu.Unlock()
+			daemon.publishNativeCloseRetrySuccess(candidate.key, candidate.active, candidate.session)
 			daemon.signalOutboxFor(candidate.key)
 		} else if daemon.log != nil {
 			daemon.log.Warn("retry_native_goal_session_close_failed", "run_id", candidate.key.RunID, "generation", candidate.key.Generation, "error", err)
@@ -2962,19 +2970,48 @@ func (daemon *daemon) retryBlockedNativeSessionCloses() {
 	}
 }
 
+func (daemon *daemon) publishNativeCloseRetrySuccess(key state.RunKey, expected *runningRun, session harness.Session) {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	active := daemon.running[key]
+	if active != expected || active.nativeSession != session {
+		return
+	}
+	active.nativeSession = nil
+	active.goalSession = nil
+	active.goalAdmission = nil
+	active.nativeDeadline = time.Time{}
+	active.nativeCloseRetryRequired = false
+	active.nativeCloseRetrying = false
+	active.cleanupBlocked = nativeCleanupBlocked(active)
+}
+
+func (daemon *daemon) publishNativeCloseRetryAfterEvidence(key state.RunKey, active *runningRun, session harness.Session, goalSession state.GoalSessionKey, reason string, markUncertain bool) error {
+	retentionErr := daemon.retainUnknownGoalLaunchWorkspaceChecked(key)
+	var uncertaintyErr error
+	if markUncertain {
+		_, uncertaintyErr = daemon.store.MarkGoalSessionUncertain(goalSession, reason)
+	}
+	// Publish retry only after all recovery evidence has been attempted. A
+	// concurrent final waiter then observes the actual close/accounting flags.
+	daemon.requireNativeSessionCloseRetry(key, session)
+	return errors.Join(retentionErr, uncertaintyErr)
+}
+
 func (daemon *daemon) abandonGoalSession(key state.GoalSessionKey, session harness.Session, attached bool, cause error) error {
+	unlock := daemon.lockNativeSessionClose(session)
+	defer unlock()
 	closeContext, cancel := context.WithTimeout(context.Background(), controlRequestLimit)
 	closeErr := session.Close(closeContext)
 	cancel()
-	nativeCloseErr := closeErr
-	if closeErr == nil {
-		daemon.clearNativeSessionByValue(session)
-	}
 	var runKey state.RunKey
 	if sessionJournal, err := daemon.store.LoadGoalSession(key); err == nil {
 		runKey = state.RunKey{RunID: sessionJournal.RunID, Generation: sessionJournal.Generation}
 	} else if !state.IsNotFound(err) {
 		closeErr = errors.Join(closeErr, fmt.Errorf("load Goal session after close: %w", err))
+	}
+	if runKey.RunID == "" {
+		runKey, _ = daemon.activeNativeSessionKey(session)
 	}
 	if closeErr == nil && attached {
 		if _, err := daemon.store.CloseGoalSession(key); err != nil {
@@ -2986,10 +3023,8 @@ func (daemon *daemon) abandonGoalSession(key state.GoalSessionKey, session harne
 			closeErr = err
 		}
 	}
-	if nativeCloseErr != nil && runKey.RunID != "" && runKey.Generation > 0 {
-		daemon.requireNativeSessionCloseRetry(runKey, session)
-	}
 	if closeErr == nil && attached {
+		daemon.clearNativeSessionByValue(session)
 		return nil
 	}
 	reason := "native Goal session did not reach a known stopped state"
@@ -3004,27 +3039,33 @@ func (daemon *daemon) abandonGoalSession(key state.GoalSessionKey, session harne
 		retentionErr = daemon.retainUnknownGoalLaunchWorkspaceChecked(runKey)
 	}
 	_, uncertainErr := daemon.store.MarkGoalSessionUncertain(key, reason)
+	if (closeErr != nil || retentionErr != nil || uncertainErr != nil) && runKey.RunID != "" && runKey.Generation > 0 {
+		daemon.requireNativeSessionCloseRetry(runKey, session)
+	} else if closeErr == nil && retentionErr == nil && uncertainErr == nil {
+		daemon.clearNativeSessionByValue(session)
+	}
 	return errors.Join(closeErr, retentionErr, uncertainErr)
 }
 
 func (daemon *daemon) abandonGoalSessionUncertain(key state.GoalSessionKey, session harness.Session, cause error) error {
+	unlock := daemon.lockNativeSessionClose(session)
+	defer unlock()
 	closeContext, cancel := context.WithTimeout(context.Background(), controlRequestLimit)
 	closeErr := session.Close(closeContext)
 	cancel()
-	nativeCloseErr := closeErr
-	if closeErr == nil {
-		daemon.clearNativeSessionByValue(session)
-	}
 	sessionJournal, sessionErr := daemon.store.LoadGoalSession(key)
-	if sessionErr != nil {
-		return errors.Join(closeErr, fmt.Errorf("load Goal session after uncertain close: %w", sessionErr))
+	var runKey state.RunKey
+	if sessionErr == nil {
+		runKey = state.RunKey{RunID: sessionJournal.RunID, Generation: sessionJournal.Generation}
+	} else {
+		closeErr = errors.Join(closeErr, fmt.Errorf("load Goal session after uncertain close: %w", sessionErr))
+		if runKey, _ = daemon.activeNativeSessionKey(session); runKey.RunID == "" {
+			return closeErr
+		}
 	}
-	runKey := state.RunKey{RunID: sessionJournal.RunID, Generation: sessionJournal.Generation}
 	var clearErr error
 	if closeErr == nil {
 		clearErr = daemon.clearNativeProcessDetails(runKey)
-	} else if nativeCloseErr != nil {
-		daemon.requireNativeSessionCloseRetry(runKey, session)
 	}
 	reason := "native Goal turn start outcome is unknown"
 	if cause != nil {
@@ -3035,7 +3076,40 @@ func (daemon *daemon) abandonGoalSessionUncertain(key state.GoalSessionKey, sess
 	}
 	retentionErr := daemon.retainUnknownGoalLaunchWorkspaceChecked(runKey)
 	_, uncertainErr := daemon.store.MarkGoalSessionUncertain(key, reason)
+	if closeErr != nil || clearErr != nil || retentionErr != nil || uncertainErr != nil {
+		daemon.requireNativeSessionCloseRetry(runKey, session)
+	} else {
+		daemon.clearNativeSessionByValue(session)
+	}
 	return errors.Join(closeErr, clearErr, retentionErr, uncertainErr)
+}
+
+func (daemon *daemon) lockNativeSessionClose(session harness.Session) func() {
+	daemon.mu.Lock()
+	var active *runningRun
+	for _, candidate := range daemon.running {
+		if candidate.nativeSession == session {
+			active = candidate
+			break
+		}
+	}
+	daemon.mu.Unlock()
+	if active == nil {
+		return func() {}
+	}
+	active.nativeCloseMu.Lock()
+	return active.nativeCloseMu.Unlock
+}
+
+func (daemon *daemon) activeNativeSessionKey(session harness.Session) (state.RunKey, bool) {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	for key, active := range daemon.running {
+		if active.nativeSession == session {
+			return key, true
+		}
+	}
+	return state.RunKey{}, false
 }
 
 // retainUnknownGoalLaunchWorkspace prevents cleanup from deleting a worktree
@@ -4165,8 +4239,21 @@ func (daemon *daemon) waitForNativeRun(ctx context.Context, key state.RunKey, ac
 	staged, isStaged := session.(harness.StagedSession)
 	waitContext := ctx
 	stopWaitDeadline := func() {}
-	if !active.nativeDeadline.IsZero() {
-		waitContext, stopWaitDeadline = context.WithDeadline(ctx, active.nativeDeadline)
+	daemon.mu.Lock()
+	deadline := active.nativeDeadline
+	admission := active.goalAdmission
+	if admission != nil {
+		admissionCopy := *admission
+		admission = &admissionCopy
+		// A close retry can clear the live session while this waiter is blocked
+		// on the final native result. Retain the admitted context for its exact
+		// terminal/usage publication rather than rereading mutable active state.
+		active.nativeFinalAdmission = &admissionCopy
+	}
+	prepared := active.prepared
+	daemon.mu.Unlock()
+	if !deadline.IsZero() {
+		waitContext, stopWaitDeadline = context.WithDeadline(ctx, deadline)
 	}
 	var result harness.TaskResult
 	var waitErr error
@@ -4204,10 +4291,6 @@ func (daemon *daemon) waitForNativeRun(ctx context.Context, key state.RunKey, ac
 		}
 	}
 
-	daemon.mu.Lock()
-	admission := active.goalAdmission
-	prepared := active.prepared
-	daemon.mu.Unlock()
 	if waitErr == nil && closeErr == nil {
 		if err := daemon.verifyNativeTaskResultSubject(ctx, prepared, admission, &result); err != nil {
 			waitErr = err
@@ -4225,13 +4308,20 @@ func (daemon *daemon) waitForNativeRun(ctx context.Context, key state.RunKey, ac
 			return
 		}
 	}
-	daemon.completeNativeRunAfterUsage(ctx, key, active, result, waitErr, closeErr)
+	daemon.completeNativeRunAfterUsage(ctx, key, active, result, waitErr, closeErr, false)
 }
 
-func (daemon *daemon) completeNativeRunAfterUsage(ctx context.Context, key state.RunKey, active *runningRun, result harness.TaskResult, waitErr, closeErr error) {
+func (daemon *daemon) completeNativeRunAfterUsage(ctx context.Context, key state.RunKey, active *runningRun, result harness.TaskResult, waitErr, closeErr error, usageRetryCompletion bool) {
 	active.inputMu.Lock()
 	daemon.mu.Lock()
 	if daemon.running[key] != active || active.nativeUsageFinalized {
+		daemon.mu.Unlock()
+		active.inputMu.Unlock()
+		return
+	}
+	if !usageRetryCompletion && (active.nativeUsageRetryPending || active.nativeUsageRetryInFlight) {
+		// A newer accounting retry owns terminal publication. An older completion
+		// must not clear its durable recovery barrier or publish stale close state.
 		daemon.mu.Unlock()
 		active.inputMu.Unlock()
 		return
@@ -4243,11 +4333,6 @@ func (daemon *daemon) completeNativeRunAfterUsage(ctx context.Context, key state
 	}
 	cancelled := active.cancelled
 	stale := active.stale
-	if closeErr == nil {
-		active.cleanupBlocked = false
-	} else {
-		active.cleanupBlocked = true
-	}
 	active.nativeUsageRetryPending = false
 	active.nativeUsageRetryInFlight = false
 	// The native session has reached its final turn barrier. Keep renewal
@@ -4255,6 +4340,9 @@ func (daemon *daemon) completeNativeRunAfterUsage(ctx context.Context, key state
 	// needs another recovery pass.
 	active.nativeUsageRenewalBlocked = true
 	active.nativeUsageFinalized = true
+	// closeErr is terminal diagnosis from this observation. The current retry
+	// and accounting flags, rather than that historical error, own cleanup.
+	active.cleanupBlocked = nativeCleanupBlocked(active)
 	daemon.mu.Unlock()
 	if stale {
 		active.inputMu.Unlock()
@@ -4399,7 +4487,7 @@ func (daemon *daemon) flushPendingNativeUsage(ctx context.Context) {
 			daemon.noteNativeUsageRetryFailure(ctx, work.key, work.active, usageErr)
 			continue
 		}
-		daemon.completeNativeRunAfterUsage(ctx, work.key, work.active, work.result, work.waitErr, work.closeErr)
+		daemon.completeNativeRunAfterUsage(ctx, work.key, work.active, work.result, work.waitErr, work.closeErr, true)
 	}
 }
 
@@ -4718,47 +4806,39 @@ func (daemon *daemon) closeNativeGoalSession(key state.RunKey, active *runningRu
 	if active == nil || session == nil {
 		return errors.New("native Goal session is unavailable")
 	}
+	active.nativeCloseMu.Lock()
+	defer active.nativeCloseMu.Unlock()
 	daemon.mu.Lock()
-	goalSession := active.goalSession
-	if goalSession == nil {
+	if daemon.running[key] != active || active.nativeSession != session || active.goalSession == nil {
 		daemon.mu.Unlock()
 		return errors.New("native Goal session key is unavailable")
 	}
+	goalSession := *active.goalSession
 	daemon.mu.Unlock()
 	closeContext, cancel := context.WithTimeout(context.Background(), controlRequestLimit)
 	closeErr := session.Close(closeContext)
 	cancel()
 	if closeErr != nil {
-		daemon.requireNativeSessionCloseRetry(key, session)
-		daemon.markNativeCleanupBlocked(active)
-		retentionErr := daemon.retainUnknownGoalLaunchWorkspaceChecked(key)
-		_, uncertainErr := daemon.store.MarkGoalSessionUncertain(*goalSession, "native session close failed: "+closeErr.Error())
-		return errors.Join(closeErr, retentionErr, uncertainErr)
+		evidenceErr := daemon.publishNativeCloseRetryAfterEvidence(key, active, session, goalSession, "native session close failed: "+closeErr.Error(), true)
+		return errors.Join(closeErr, evidenceErr)
 	}
-	sessionJournal, err := daemon.loadGoalSession(*goalSession)
+	sessionJournal, err := daemon.loadGoalSession(goalSession)
 	if err != nil {
-		daemon.requireNativeSessionCloseRetry(key, session)
-		daemon.markNativeCleanupBlocked(active)
-		retentionErr := daemon.retainUnknownGoalLaunchWorkspaceChecked(key)
-		return errors.Join(fmt.Errorf("load durable Goal session after process stop: %w", err), retentionErr)
+		evidenceErr := daemon.publishNativeCloseRetryAfterEvidence(key, active, session, goalSession, "load durable Goal session after native close: "+err.Error(), true)
+		return errors.Join(fmt.Errorf("load durable Goal session after process stop: %w", err), evidenceErr)
 	}
 	if sessionJournal.NeedsReconciliation() {
-		_, err = daemon.store.ResolveGoalSessionUncertainStopped(*goalSession, sessionJournal.Compatibility())
+		_, err = daemon.store.ResolveGoalSessionUncertainStopped(goalSession, sessionJournal.Compatibility())
 	} else {
-		_, err = daemon.closeGoalSession(*goalSession)
+		_, err = daemon.closeGoalSession(goalSession)
 	}
 	if err != nil {
-		daemon.requireNativeSessionCloseRetry(key, session)
-		daemon.markNativeCleanupBlocked(active)
-		retentionErr := daemon.retainUnknownGoalLaunchWorkspaceChecked(key)
-		_, uncertainErr := daemon.store.MarkGoalSessionUncertain(*goalSession, "durable native session close failed after process stop: "+err.Error())
-		return errors.Join(fmt.Errorf("record durable native session close: %w", err), retentionErr, uncertainErr)
+		evidenceErr := daemon.publishNativeCloseRetryAfterEvidence(key, active, session, goalSession, "durable native session close failed after process stop: "+err.Error(), true)
+		return errors.Join(fmt.Errorf("record durable native session close: %w", err), evidenceErr)
 	}
 	if err := daemon.clearNativeProcessDetails(key); err != nil {
-		daemon.requireNativeSessionCloseRetry(key, session)
-		daemon.markNativeCleanupBlocked(active)
-		retentionErr := daemon.retainUnknownGoalLaunchWorkspaceChecked(key)
-		return errors.Join(err, retentionErr)
+		evidenceErr := daemon.publishNativeCloseRetryAfterEvidence(key, active, session, goalSession, "native process marker clear failed after close: "+err.Error(), false)
+		return errors.Join(err, evidenceErr)
 	}
 	return nil
 }
