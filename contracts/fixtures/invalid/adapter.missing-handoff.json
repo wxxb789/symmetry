@@ -1,8 +1,6 @@
 {
   "structured_input": true,
   "provider_access": true,
-  "interactive": false,
-  "supervisory_control": false,
   "adapter": {
     "kind": "codex",
     "native_version": "1.2.3",
@@ -13,7 +11,6 @@
       "events": true,
       "cancel": true,
       "resume": false,
-      "handoff": false,
       "guidance": "next_turn",
       "pause": "unsupported",
       "approval_response": false,

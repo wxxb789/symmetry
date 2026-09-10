@@ -58,10 +58,14 @@ const (
 type Capability string
 
 const (
-	CapabilityStart            Capability = "start"
-	CapabilityEvents           Capability = "events"
-	CapabilityCancel           Capability = "cancel"
-	CapabilityResume           Capability = "resume"
+	CapabilityStart  Capability = "start"
+	CapabilityEvents Capability = "events"
+	CapabilityCancel Capability = "cancel"
+	CapabilityResume Capability = "resume"
+	// CapabilityHandoff permits a Goal admission to create a new local native
+	// session from an already authorized same-machine handoff source. It never
+	// permits transferring a native session handle or process between Runs.
+	CapabilityHandoff          Capability = "handoff"
 	CapabilityGuidance         Capability = "guidance"
 	CapabilityPause            Capability = "pause"
 	CapabilityApprovalResponse Capability = "approval_response"
@@ -85,6 +89,7 @@ type Capabilities struct {
 	Events                bool               `json:"events"`
 	Cancel                bool               `json:"cancel"`
 	Resume                bool               `json:"resume"`
+	Handoff               bool               `json:"handoff"`
 	Guidance              GuidanceCapability `json:"guidance"`
 	Pause                 PauseCapability    `json:"pause"`
 	ApprovalResponse      bool               `json:"approval_response"`
@@ -110,6 +115,7 @@ func UnsupportedCapabilities(kind Kind, reason string) Capabilities {
 			string(CapabilityEvents):           reason,
 			string(CapabilityCancel):           reason,
 			string(CapabilityResume):           reason,
+			string(CapabilityHandoff):          reason,
 			string(CapabilityGuidance):         reason,
 			string(CapabilityPause):            reason,
 			string(CapabilityApprovalResponse): reason,
@@ -153,6 +159,9 @@ func (capabilities Capabilities) Validate() error {
 	if capabilities.Resume && !capabilities.Start {
 		return errors.New("resume capability requires start capability")
 	}
+	if capabilities.Handoff && (!capabilities.Start || !capabilities.Events || !capabilities.Cancel) {
+		return errors.New("handoff capability requires start, events, and cancel capabilities")
+	}
 	if capabilities.Events && !capabilities.Start {
 		return errors.New("events capability requires start capability")
 	}
@@ -172,7 +181,7 @@ func (capabilities Capabilities) Validate() error {
 		return errors.New("reported usage capability requires events capability")
 	}
 	if !capabilities.Verified {
-		if capabilities.Start || capabilities.Events || capabilities.Cancel || capabilities.Resume ||
+		if capabilities.Start || capabilities.Events || capabilities.Cancel || capabilities.Resume || capabilities.Handoff ||
 			capabilities.ApprovalResponse || capabilities.HardCostLimit ||
 			capabilities.Guidance != GuidanceUnsupported ||
 			capabilities.Pause != PauseUnsupported || capabilities.Usage != UsageUnknown {
@@ -196,6 +205,8 @@ func (capabilities Capabilities) Supports(capability Capability) bool {
 		return capabilities.Cancel
 	case CapabilityResume:
 		return capabilities.Resume
+	case CapabilityHandoff:
+		return capabilities.Handoff
 	case CapabilityGuidance:
 		return capabilities.Guidance != GuidanceUnsupported
 	case CapabilityPause:

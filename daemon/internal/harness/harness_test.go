@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +11,18 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
+
+type testAdapter struct {
+	capabilities Capabilities
+}
+
+func (adapter *testAdapter) Probe(context.Context) (Capabilities, error) {
+	return adapter.capabilities, nil
+}
+
+func (*testAdapter) Start(context.Context, StartRequest, EventSink) (Session, error) {
+	return nil, errors.New("not implemented")
+}
 
 func TestRegistryRejectsUnknownAdapter(t *testing.T) {
 	registry := NewRegistry()
@@ -63,6 +76,10 @@ func TestCapabilitiesRejectUnsafeVersionAndOperationClaims(t *testing.T) {
 		{name: "verified without implementation", mutate: func(value *Capabilities) { value.ImplementationVersion = "" }},
 		{name: "cancel without start", mutate: func(value *Capabilities) { value.Start = false }},
 		{name: "cancel without events", mutate: func(value *Capabilities) { value.Events = false }},
+		{name: "handoff without start", mutate: func(value *Capabilities) { value.Handoff = true; value.Start = false }},
+		{name: "handoff without events", mutate: func(value *Capabilities) { value.Handoff = true; value.Events = false }},
+		{name: "handoff without cancel", mutate: func(value *Capabilities) { value.Handoff = true; value.Cancel = false }},
+		{name: "unverified handoff", mutate: func(value *Capabilities) { value.Handoff = true; value.Verified = false }},
 		{name: "approval without start", mutate: func(value *Capabilities) { value.ApprovalResponse = true; value.Start = false }},
 		{name: "approval without events", mutate: func(value *Capabilities) { value.ApprovalResponse = true; value.Events = false }},
 		{name: "unverified executable start", mutate: func(value *Capabilities) { value.Verified = false }},
@@ -77,6 +94,18 @@ func TestCapabilitiesRejectUnsafeVersionAndOperationClaims(t *testing.T) {
 				t.Fatalf("Supports(start) accepted invalid capabilities: %+v", capabilities)
 			}
 		})
+	}
+}
+
+func TestRegistryRejectsAdapterThatReportsAnotherHarnessKind(t *testing.T) {
+	registry := NewRegistry()
+	capabilities := UnsupportedCapabilities(KindCodex, "test adapter")
+	if err := registry.Register(KindPi, &testAdapter{capabilities: capabilities}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := registry.Probe(context.Background(), KindPi)
+	if err == nil || !strings.Contains(err.Error(), "reported capability kind") {
+		t.Fatalf("Probe() error = %v, want capability kind mismatch", err)
 	}
 }
 

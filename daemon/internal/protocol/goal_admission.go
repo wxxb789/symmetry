@@ -449,6 +449,7 @@ type AdapterOperations struct {
 	Events           bool               `json:"events"`
 	Cancel           bool               `json:"cancel"`
 	Resume           bool               `json:"resume"`
+	Handoff          bool               `json:"handoff"`
 	Guidance         GuidanceCapability `json:"guidance"`
 	Pause            PauseCapability    `json:"pause"`
 	ApprovalResponse bool               `json:"approval_response"`
@@ -475,6 +476,9 @@ func (operations AdapterOperations) Validate() error {
 	if operations.Resume && !operations.Start {
 		return fmt.Errorf("operations.resume requires operations.start")
 	}
+	if operations.Handoff && (!operations.Start || !operations.Events || !operations.Cancel) {
+		return fmt.Errorf("operations.handoff requires operations.start, operations.events, and operations.cancel")
+	}
 	if operations.Events && !operations.Start {
 		return fmt.Errorf("operations.events requires operations.start")
 	}
@@ -494,7 +498,7 @@ func (operations AdapterOperations) validateForHarness(harnessKind string) error
 	if harnessKind != "generic" {
 		return nil
 	}
-	if operations.Resume || operations.Guidance != GuidanceUnsupported ||
+	if operations.Resume || operations.Handoff || operations.Guidance != GuidanceUnsupported ||
 		operations.Pause != PauseUnsupported || operations.ApprovalResponse ||
 		operations.Usage != UsageUnknown || operations.HardCostLimit {
 		return fmt.Errorf("generic adapter operations advertise unsupported native behavior")
@@ -505,7 +509,7 @@ func (operations AdapterOperations) validateForHarness(harnessKind string) error
 func (operations *AdapterOperations) UnmarshalJSON(data []byte) error {
 	var decoded adapterOperationsWire
 	if err := decodeStrictObject(data, &decoded,
-		"start", "events", "cancel", "resume", "guidance", "pause",
+		"start", "events", "cancel", "resume", "handoff", "guidance", "pause",
 		"approval_response", "usage", "hard_cost_limit"); err != nil {
 		return err
 	}

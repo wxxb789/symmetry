@@ -94,7 +94,7 @@ func TestAdmissionAndAdapterCapabilitiesRejectUnknownFieldsAndEnums(t *testing.T
 		})
 	}
 
-	validAdapter := `{"structured_input":true,"provider_access":true,"interactive":false,"supervisory_control":false,"adapter":{"kind":"codex","native_version":"1.2.3","implementation_version":"symmetry-codex-1","protocol_version":1,"operations":{"start":true,"events":true,"cancel":true,"resume":false,"guidance":"next_turn","pause":"unsupported","approval_response":false,"usage":"unknown","hard_cost_limit":false}}}`
+	validAdapter := `{"structured_input":true,"provider_access":true,"interactive":false,"supervisory_control":false,"adapter":{"kind":"codex","native_version":"1.2.3","implementation_version":"symmetry-codex-1","protocol_version":1,"operations":{"start":true,"events":true,"cancel":true,"resume":false,"handoff":true,"guidance":"next_turn","pause":"unsupported","approval_response":false,"usage":"unknown","hard_cost_limit":false}}}`
 	if _, err := ParseAdapterCapabilities([]byte(validAdapter)); err != nil {
 		t.Fatal(err)
 	}

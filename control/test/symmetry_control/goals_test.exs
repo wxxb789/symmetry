@@ -4609,7 +4609,7 @@ defmodule SymmetryControl.GoalsTest do
     assert Repo.aggregate(from(session in HarnessSession), :count) == 0
   end
 
-  test "resume requires a retained session and unsupported handoff creates no admission records" do
+  test "resume requires a retained session" do
     {goal, item, task} = admitted_task_fixture()
     complete_task_and_release_reservation!(goal, task)
 
@@ -4620,42 +4620,241 @@ defmodule SymmetryControl.GoalsTest do
                admission_payload(item, %{session_mode: "resume", reserved_microusd: 1}),
                rollout_enabled: true
              )
+  end
 
-    delete_goal_wakeup_jobs(goal.id)
+  test "handoff creates a fresh Task from one current settled source Run" do
+    {goal, item, source_task} =
+      admitted_task_fixture("primary", check_contract(), %{
+        execution_policy: %{"max_task_admissions" => 3}
+      })
 
-    counts_before = %{
-      snapshots: Repo.aggregate(SymmetryControl.Goals.ContextSnapshot, :count),
-      tasks: Repo.aggregate(Task, :count),
-      reservations: Repo.aggregate(SymmetryControl.Goals.GoalBudgetReservation, :count),
-      events: Repo.aggregate(SymmetryControl.Goals.GoalEvent, :count),
-      wakeups: wakeup_job_count(goal.id),
-      goal: Repo.get!(SymmetryControl.Goals.Goal, goal.id)
-    }
+    source_runtime = runtime_fixture()
+    {source_run, _source_fence} = completed_goal_run_fixture(source_task, source_runtime)
+
+    assert {:ok, %{"settlement" => "awaiting_validation"}} =
+             Goals.settle_task(source_task.id, source_run.id, source_run.generation, now: @now)
+
+    assert {:ok, admission, :created} =
+             command_current(
+               goal.id,
+               "admit_task",
+               admission_payload(item, %{
+                 session_mode: "handoff",
+                 handoff_source_run_id: source_run.id
+               }),
+               rollout_enabled: true
+             )
+
+    target = Repo.get!(Task, admission.response["task"]["id"])
+    snapshot = Repo.get!(SymmetryControl.Goals.ContextSnapshot, target.context_snapshot_id)
+
+    assert target.id != source_task.id
+    assert target.handoff_source_run_id == source_run.id
+    assert target.requested_session_id == nil
+    assert target.input["session_mode"] == "handoff"
+    assert target.input["handoff_source_run_id"] == source_run.id
+    assert target.input["subject"] == source_run.result["task_result"]["subject"]
+
+    assert Enum.any?(snapshot.payload["sources"], fn source ->
+             source["source_kind"] == "handoff_source" and
+               source["source_revision"] == "run:" <> source_run.id and
+               source["content"]["value"] == "run:" <> source_run.id and
+               source["trust"] == "advisory" and source["required"] == true
+           end)
+
+    assert Repo.aggregate(
+             from(reservation in SymmetryControl.Goals.GoalBudgetReservation,
+               where: reservation.task_id == ^target.id
+             ),
+             :count
+           ) == 1
+
+    assert Repo.get!(SymmetryControl.Goals.Goal, goal.id).state == "active"
+
+    refute Repo.exists?(
+             from(outcome in SymmetryControl.Goals.WorkOutcome,
+               where:
+                 outcome.goal_id == ^goal.id and outcome.work_item_id == ^item.id and
+                   outcome.disposition == "accepted"
+             )
+           )
+
+    complete_task_and_release_reservation!(goal, target)
+
+    assert {:error, :handoff_source_consumed} =
+             command_current(
+               goal.id,
+               "admit_task",
+               admission_payload(item, %{
+                 session_mode: "handoff",
+                 handoff_source_run_id: source_run.id
+               }),
+               rollout_enabled: true
+             )
+  end
+
+  test "handoff rejects a source Run without a current canonical settlement before writing admission records" do
+    {goal, item, source_task} = admitted_task_fixture()
+    source_runtime = runtime_fixture()
+    {source_run, _source_fence} = completed_goal_run_fixture(source_task, source_runtime)
+    counts_before = handoff_admission_counts(goal.id)
+
+    assert {:error, :handoff_source_ineligible} =
+             command_current(
+               goal.id,
+               "admit_task",
+               admission_payload(item, %{
+                 session_mode: "handoff",
+                 handoff_source_run_id: source_run.id
+               }),
+               rollout_enabled: true
+             )
+
+    assert handoff_admission_counts(goal.id) == counts_before
+  end
+
+  test "validation handoff binds the exact settled source producer" do
+    {goal, item, source_task} =
+      admitted_task_fixture("primary", check_contract(), %{
+        execution_policy: %{"max_task_admissions" => 3}
+      })
+
+    source_runtime = runtime_fixture()
+    {source_run, _source_fence} = completed_goal_run_fixture(source_task, source_runtime)
+
+    assert {:ok, %{"settlement" => "awaiting_validation"}} =
+             Goals.settle_task(source_task.id, source_run.id, source_run.generation, now: @now)
+
+    assert {:ok, admission, :created} =
+             command_current(
+               goal.id,
+               "admit_task",
+               admission_payload(item, %{
+                 purpose: "validate",
+                 session_mode: "handoff",
+                 handoff_source_run_id: source_run.id,
+                 validation_of_task_id: source_task.id
+               }),
+               rollout_enabled: true
+             )
+
+    target = Repo.get!(Task, admission.response["task"]["id"])
+    assert target.validation_of_task_id == source_task.id
+    assert target.handoff_source_run_id == source_run.id
+    assert target.input["subject"] == source_run.result["task_result"]["subject"]
+  end
+
+  test "handoff session attach replays only its own fresh native handle" do
+    {goal, item, source_task} =
+      admitted_task_fixture("primary", check_contract(), %{
+        execution_policy: %{"max_task_admissions" => 3}
+      })
+
+    source_runtime = runtime_fixture()
+    {source_run, _source_fence} = completed_goal_run_fixture(source_task, source_runtime)
+
+    assert {:ok, %{"settlement" => "awaiting_validation"}} =
+             Goals.settle_task(source_task.id, source_run.id, source_run.generation, now: @now)
+
+    assert {:ok, admission, :created} =
+             command_current(
+               goal.id,
+               "admit_task",
+               admission_payload(item, %{
+                 session_mode: "handoff",
+                 handoff_source_run_id: source_run.id
+               }),
+               rollout_enabled: true
+             )
+
+    target = Repo.get!(Task, admission.response["task"]["id"])
+    {target_run, target_fence} = running_goal_run_fixture(target, source_runtime)
+    attrs = session_attrs(item, "workspace-handoff-target")
+
+    assert {:ok, %{session: %{run_id: run_id, local_handle_id: local_handle_id}}, :created} =
+             Goals.attach_harness_session(
+               source_runtime.machine_id,
+               target_run.id,
+               target_fence,
+               attrs,
+               now: @now
+             )
+
+    assert run_id == target_run.id
+    assert local_handle_id == attrs.local_handle_id
+
+    assert {:ok, %{session: %{id: session_id}}, :replayed} =
+             Goals.attach_harness_session(
+               source_runtime.machine_id,
+               target_run.id,
+               target_fence,
+               attrs,
+               now: @now
+             )
+
+    assert Repo.aggregate(
+             from(session in HarnessSession, where: session.id == ^session_id),
+             :count
+           ) == 1
+  end
+
+  test "handoff session attach rejects a handle already owned by another Run" do
+    {goal, item, source_task} =
+      admitted_task_fixture("primary", check_contract(), %{
+        execution_policy: %{"max_task_admissions" => 3}
+      })
+
+    source_runtime = runtime_fixture()
+    {source_run, _source_fence} = completed_goal_run_fixture(source_task, source_runtime)
+
+    assert {:ok, %{"settlement" => "awaiting_validation"}} =
+             Goals.settle_task(source_task.id, source_run.id, source_run.generation, now: @now)
+
+    assert {:ok, admission, :created} =
+             command_current(
+               goal.id,
+               "admit_task",
+               admission_payload(item, %{
+                 session_mode: "handoff",
+                 handoff_source_run_id: source_run.id
+               }),
+               rollout_enabled: true
+             )
+
+    target = Repo.get!(Task, admission.response["task"]["id"])
+    {target_run, target_fence} = running_goal_run_fixture(target, source_runtime)
+    attrs = session_attrs(item, "workspace-handoff-conflict")
+    insert_handoff_conflict_session!(source_runtime, item, attrs)
+
+    assert {:error, :handoff_session_reuse} =
+             Goals.attach_harness_session(
+               source_runtime.machine_id,
+               target_run.id,
+               target_fence,
+               attrs,
+               now: @now
+             )
+
+    assert Repo.get!(Run, target_run.id).harness_session_id == nil
+  end
+
+  test "handoff cannot bypass the unsupported external observation contract" do
+    {goal, item, _task} = admitted_task_fixture()
+    counts_before = handoff_admission_counts(goal.id)
 
     assert {:error, :unsupported_capability} =
              command_current(
                goal.id,
                "admit_task",
-               admission_payload(item, %{session_mode: "handoff", reserved_microusd: 1}),
+               admission_payload(item, %{
+                 purpose: "observe",
+                 session_mode: "handoff",
+                 handoff_source_run_id: Ecto.UUID.generate()
+               }),
                rollout_enabled: true
              )
 
-    assert counts_before.snapshots ==
-             Repo.aggregate(SymmetryControl.Goals.ContextSnapshot, :count)
-
-    assert counts_before.tasks == Repo.aggregate(Task, :count)
-
-    assert counts_before.reservations ==
-             Repo.aggregate(SymmetryControl.Goals.GoalBudgetReservation, :count)
-
-    assert counts_before.events == Repo.aggregate(SymmetryControl.Goals.GoalEvent, :count)
-    assert counts_before.wakeups == wakeup_job_count(goal.id)
-
-    previous_next_wake_at = counts_before.goal.next_wake_at
-    previous_lock_version = counts_before.goal.lock_version
-
-    assert %{next_wake_at: ^previous_next_wake_at, lock_version: ^previous_lock_version} =
-             Repo.get!(SymmetryControl.Goals.Goal, goal.id)
+    assert handoff_admission_counts(goal.id) == counts_before
   end
 
   test "resume admission rejects an unavailable retained session before writing admission records" do
@@ -6381,6 +6580,58 @@ defmodule SymmetryControl.GoalsTest do
      }}
   end
 
+  defp running_goal_run_fixture(task, runtime) do
+    claim_id = Ecto.UUID.generate()
+    lease_token = Ecto.UUID.generate()
+
+    Repo.update_all(
+      from(row in Task, where: row.id == ^task.id),
+      set: [state: "running", current_generation: 1, updated_at: @now]
+    )
+
+    run =
+      %Run{}
+      |> Run.changeset(%{
+        task_id: task.id,
+        runtime_id: runtime.id,
+        generation: 1,
+        state: "running",
+        claimed_runtime_epoch: runtime.connection_epoch,
+        claim_id: claim_id,
+        lease_token: lease_token,
+        assigned_at: @now,
+        assignment_expires_at: DateTime.add(@now, 60, :second),
+        claimed_at: @now,
+        lease_expires_at: DateTime.add(DateTime.utc_now(), 3_600, :second)
+      })
+      |> Repo.insert!()
+
+    {run,
+     %{
+       runtime_id: runtime.id,
+       runtime_epoch: runtime.connection_epoch,
+       generation: 1,
+       claim_id: claim_id,
+       lease_token: lease_token
+     }}
+  end
+
+  defp insert_handoff_conflict_session!(runtime, item, attrs) do
+    %HarnessSession{}
+    |> HarnessSession.changeset(%{
+      machine_id: runtime.machine_id,
+      runtime_id: runtime.id,
+      repository_resource_id: item_repository_resource_id(item),
+      local_handle_id: attrs.local_handle_id,
+      harness_kind: attrs.harness_kind,
+      harness_version: attrs.harness_version,
+      adapter_version: attrs.adapter_version,
+      workspace_fingerprint: attrs.workspace_fingerprint,
+      state: "available"
+    })
+    |> Repo.insert!()
+  end
+
   defp independent_validation_attempt_fixture(acceptance_contract \\ check_contract()) do
     {goal, item, producer} =
       admitted_task_fixture("primary", acceptance_contract, %{
@@ -6669,6 +6920,16 @@ defmodule SymmetryControl.GoalsTest do
     }
   end
 
+  defp handoff_admission_counts(goal_id) do
+    %{
+      snapshots: Repo.aggregate(SymmetryControl.Goals.ContextSnapshot, :count),
+      tasks: Repo.aggregate(Task, :count),
+      reservations: Repo.aggregate(SymmetryControl.Goals.GoalBudgetReservation, :count),
+      events: Repo.aggregate(SymmetryControl.Goals.GoalEvent, :count),
+      wakeups: wakeup_job_count(goal_id)
+    }
+  end
+
   defp observation_evidence_attrs(run_id, item) do
     subject = evidence_subject(item)
     subject_hash = evidence_subject_hash(subject)
@@ -6859,6 +7120,7 @@ defmodule SymmetryControl.GoalsTest do
                 "events" => true,
                 "cancel" => true,
                 "resume" => false,
+                "handoff" => false,
                 "guidance" => "unsupported",
                 "pause" => "unsupported",
                 "approval_response" => false,

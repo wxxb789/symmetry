@@ -292,8 +292,6 @@ defmodule SymmetryControl.Goals do
         ensure_session_scope!(session_attrs, task, item, run, runtime, machine_id)
         session_mode = value(task.input || %{}, "session_mode", "fresh")
 
-        if session_mode == "handoff", do: rollback(:unsupported_capability)
-
         session =
           if task.requested_session_id do
             Repo.one(
@@ -318,6 +316,12 @@ defmodule SymmetryControl.Goals do
         else
           ensure_current_attachment!(goal, task, run, runtime, machine_id, fence, opts)
 
+          # A handoff owns a newly created native session. An existing handle
+          # may only be the exact replay above; attaching it to another Run
+          # would turn artifact handoff into native-session transfer.
+          if session_mode == "handoff" and not is_nil(session),
+            do: rollback(:handoff_session_reuse)
+
           case session do
             nil when not is_nil(run.harness_session_id) ->
               rollback(:ownership_lost)
@@ -334,6 +338,7 @@ defmodule SymmetryControl.Goals do
                 runtime,
                 machine_id,
                 session_attrs,
+                session_mode,
                 opts
               )
 
@@ -707,7 +712,17 @@ defmodule SymmetryControl.Goals do
          session.repository_resource_id == attrs.repository_resource_id)
   end
 
-  defp create_harness_session!(goal, task, item, run, runtime, machine_id, attrs, opts) do
+  defp create_harness_session!(
+         goal,
+         task,
+         item,
+         run,
+         runtime,
+         machine_id,
+         attrs,
+         session_mode,
+         opts
+       ) do
     changeset =
       %HarnessSession{}
       |> HarnessSession.changeset(
@@ -751,7 +766,7 @@ defmodule SymmetryControl.Goals do
           machine_id,
           goal,
           task,
-          "fresh",
+          session_mode,
           opts
         )
     end
@@ -779,6 +794,9 @@ defmodule SymmetryControl.Goals do
         session.workspace_fingerprint == attrs.workspace_fingerprint
 
     unless compatible?, do: rollback(:idempotency_conflict)
+
+    if session_mode == "handoff" and session.active_run_id != run.id,
+      do: rollback(:handoff_session_reuse)
 
     case session.state do
       "available" when is_nil(session.active_run_id) and is_nil(run.harness_session_id) ->
@@ -1478,7 +1496,8 @@ defmodule SymmetryControl.Goals do
          validation_bindings,
          snapshot_id,
          next_action,
-         inserted_at
+         inserted_at,
+         handoff_source
        ) do
     byte_budget = value(revision.context_manifest || %{}, "byte_budget", 32_768)
 
@@ -1510,7 +1529,16 @@ defmodule SymmetryControl.Goals do
       "work_contract" => work_contract,
       "subject" => subject,
       "sources" =>
-        context_sources!(goal, revision, item, subject, approved_goal, work_contract, inserted_at),
+        context_sources!(
+          goal,
+          revision,
+          item,
+          subject,
+          approved_goal,
+          work_contract,
+          inserted_at,
+          handoff_source
+        ),
       "current_decisions" => context_decisions(goal.id, revision.revision),
       "validated_evidence" => context_evidence(goal.id, revision.revision, item.id, subject),
       "failed_attempts" => context_failed_attempts(goal.id, revision.revision, item.id),
@@ -1540,7 +1568,8 @@ defmodule SymmetryControl.Goals do
          resource,
          subject,
          snapshot_id,
-         inserted_at
+         inserted_at,
+         handoff_source
        ) do
     byte_budget = value(revision.context_manifest || %{}, "byte_budget", 32_768)
 
@@ -1580,7 +1609,8 @@ defmodule SymmetryControl.Goals do
           subject,
           approved_goal,
           work_contract,
-          inserted_at
+          inserted_at,
+          handoff_source
         ),
       "current_decisions" => context_decisions(goal.id, revision.revision),
       "validated_evidence" => [],
@@ -1612,7 +1642,8 @@ defmodule SymmetryControl.Goals do
          subject,
          approved_goal,
          work_contract,
-         inserted_at
+         inserted_at,
+         handoff_source
        ) do
     observed_at = DateTime.to_iso8601(inserted_at)
     required_kinds = value(revision.context_manifest || %{}, "required_source_kinds", [])
@@ -1663,6 +1694,7 @@ defmodule SymmetryControl.Goals do
       }
     ]
 
+    sources = sources ++ handoff_context_source(handoff_source, inserted_at)
     source_kinds = sources |> Enum.map(& &1["source_kind"]) |> MapSet.new()
 
     unless is_list(required_kinds) and
@@ -1673,7 +1705,16 @@ defmodule SymmetryControl.Goals do
     sources
   end
 
-  defp context_sources!(goal, revision, item, subject, approved_goal, work_contract, inserted_at) do
+  defp context_sources!(
+         goal,
+         revision,
+         item,
+         subject,
+         approved_goal,
+         work_contract,
+         inserted_at,
+         handoff_source
+       ) do
     observed_at = DateTime.to_iso8601(inserted_at)
     required_kinds = value(revision.context_manifest || %{}, "required_source_kinds", [])
 
@@ -1726,6 +1767,7 @@ defmodule SymmetryControl.Goals do
       }
     ]
 
+    sources = sources ++ handoff_context_source(handoff_source, inserted_at)
     source_kinds = sources |> Enum.map(& &1["source_kind"]) |> MapSet.new()
 
     unless is_list(required_kinds) and
@@ -1734,6 +1776,32 @@ defmodule SymmetryControl.Goals do
     end
 
     sources
+  end
+
+  defp handoff_context_source(nil, _inserted_at), do: []
+
+  defp handoff_context_source(source, inserted_at) do
+    [
+      %{
+        "resource_id" => source.subject["resource_id"],
+        "source_kind" => "handoff_source",
+        "source_revision" => "run:" <> source.run_id,
+        "content_hash" =>
+          %{
+            run_id: source.run_id,
+            task_id: source.task_id,
+            result_id: source.result_id,
+            subject_hash: context_digest(source.subject_hash),
+            evidence_ids: source.evidence_ids
+          }
+          |> RequestHash.canonical()
+          |> context_digest(),
+        "observed_at" => DateTime.to_iso8601(inserted_at),
+        "trust" => "advisory",
+        "required" => true,
+        "content" => %{"kind" => "pointer", "value" => "run:" <> source.run_id}
+      }
+    ]
   end
 
   defp advisory_recall(goal, revision, item, subject) do
@@ -5652,10 +5720,19 @@ defmodule SymmetryControl.Goals do
 
     if active_task_for_item?(item.id), do: rollback(:active_task)
 
-    subject = admission_subject!(goal, item, purpose, payload, opts)
     requested_session_id = optional_uuid!(payload, :requested_session_id)
     session_mode = admission_session_mode!(payload, requested_session_id)
     ensure_requested_session_available!(item, requested_session_id, session_mode)
+
+    handoff_source =
+      handoff_source!(goal, item.id, item.repository_resource_id, payload, session_mode, opts)
+
+    subject =
+      case handoff_source do
+        nil -> admission_subject!(goal, item, purpose, payload, opts)
+        source -> handoff_admission_subject!(goal, item, purpose, payload, source, opts)
+      end
+
     limits = admission_limits!(payload, opts)
 
     {limits, reservation_amount, required_capabilities} =
@@ -5688,7 +5765,8 @@ defmodule SymmetryControl.Goals do
         validation_bindings,
         snapshot_id,
         admission_next_action(payload, purpose, model_profile),
-        now(opts)
+        now(opts),
+        handoff_source
       )
 
     case validate_contract(:context_snapshot, snapshot_document, opts) do
@@ -5729,6 +5807,11 @@ defmodule SymmetryControl.Goals do
       "provider_scope" => provider_scope
     }
 
+    admission =
+      if handoff_source,
+        do: Map.put(admission, "handoff_source_run_id", handoff_source.run_id),
+        else: admission
+
     case validate_contract(:admission, admission, opts) do
       :ok -> :ok
       {:error, reason} -> rollback({:invalid_contract, reason})
@@ -5763,7 +5846,8 @@ defmodule SymmetryControl.Goals do
             "max_run_attempts_per_task",
             @default_max_run_attempts
           ),
-        requested_session_id: optional_uuid!(payload, :requested_session_id)
+        requested_session_id: requested_session_id,
+        handoff_source_run_id: handoff_source && handoff_source.run_id
       })
       |> Changeset.force_change(:request_hash_version, request_hash_version)
       |> stamp_insert(now(opts))
@@ -5820,6 +5904,8 @@ defmodule SymmetryControl.Goals do
     session_mode = admission_session_mode!(payload, requested_session_id)
     ensure_plan_requested_session_available!(resource, requested_session_id, session_mode)
 
+    if session_mode == "handoff", do: rollback(:unsupported_capability)
+
     limits = admission_limits!(%{}, opts)
 
     {limits, reservation_amount, required_capabilities} =
@@ -5834,7 +5920,8 @@ defmodule SymmetryControl.Goals do
         resource,
         subject,
         snapshot_id,
-        now(opts)
+        now(opts),
+        nil
       )
 
     case validate_contract(:context_snapshot, snapshot_document, opts) do
@@ -5911,7 +5998,8 @@ defmodule SymmetryControl.Goals do
             "max_run_attempts_per_task",
             @default_max_run_attempts
           ),
-        requested_session_id: requested_session_id
+        requested_session_id: requested_session_id,
+        handoff_source_run_id: nil
       })
       |> Changeset.force_change(:request_hash_version, request_hash_version)
       |> stamp_insert(now(opts))
@@ -5947,11 +6035,17 @@ defmodule SymmetryControl.Goals do
   defp manual_admission_payload!(goal, item, purpose, payload, mutation_id, opts) do
     reject_caller_derived_admission_fields!(payload)
 
-    case purpose do
-      "observe" ->
+    case {purpose, value(payload, :session_mode, "fresh")} do
+      {"observe", "handoff"} ->
+        rollback(:unsupported_capability)
+
+      {_purpose, "handoff"} ->
+        Map.put(payload, :admission_key, mutation_id)
+
+      {"observe", _session_mode} ->
         manual_external_observation_payload!(goal, item, payload)
 
-      "validate" ->
+      {"validate", _session_mode} ->
         Map.put(payload, :admission_key, mutation_id)
 
       _ ->
@@ -8042,6 +8136,150 @@ defmodule SymmetryControl.Goals do
     end
   end
 
+  # A handoff is a new admission that receives only a source Run identity. The
+  # caller never chooses its Subject or native session handle.
+  defp handoff_source!(
+         _goal,
+         _target_work_item_id,
+         _repository_resource_id,
+         _payload,
+         "fresh",
+         _opts
+       ),
+       do: nil
+
+  defp handoff_source!(
+         _goal,
+         _target_work_item_id,
+         _repository_resource_id,
+         _payload,
+         "resume",
+         _opts
+       ),
+       do: nil
+
+  defp handoff_source!(
+         goal,
+         target_work_item_id,
+         repository_resource_id,
+         payload,
+         "handoff",
+         opts
+       ) do
+    source_run_id = required_uuid!(payload, :handoff_source_run_id)
+
+    source_task_id =
+      Repo.one(from(source in Run, where: source.id == ^source_run_id, select: source.task_id)) ||
+        rollback(:handoff_source_not_found)
+
+    source_task = lock_task(source_task_id)
+    source_run = lock_run(source_run_id)
+
+    if Repo.one(
+         from(target in Task,
+           where: target.handoff_source_run_id == ^source_run_id,
+           select: target.id,
+           lock: "FOR UPDATE"
+         )
+       ),
+       do: rollback(:handoff_source_consumed)
+
+    unless source_run.task_id == source_task.id and source_task.goal_id == goal.id and
+             source_task.goal_revision == goal.current_revision and
+             source_task.work_item_id == target_work_item_id and
+             not is_nil(target_work_item_id) and source_task.purpose != "plan" and
+             source_task.state == "completed" and
+             source_task.current_generation == source_run.generation and
+             source_run.state == "completed" do
+      rollback(:handoff_source_ineligible)
+    end
+
+    task_result = value(source_run.result || %{}, "task_result")
+
+    unless source_task.result == source_run.result and is_map(task_result) and
+             validate_contract(:task_result, task_result, opts) == :ok and
+             value(task_result, "kind") in ["progress", "candidate_completion"],
+           do: rollback(:handoff_source_ineligible)
+
+    subject = parse_subject!(value(task_result, "subject"))
+    subject_hash = RequestHash.canonical(subject)
+
+    unless subject["resource_id"] == repository_resource_id and
+             value(task_result, "subject_hash") == context_digest(subject_hash),
+           do: rollback(:handoff_source_subject_mismatch)
+
+    settlement =
+      handoff_source_settlement!(goal, source_task, source_run, task_result, subject_hash)
+
+    unless {value(task_result, "kind"), settlement} in [
+             {"progress", "progress"},
+             {"candidate_completion", "awaiting_validation"}
+           ],
+           do: rollback(:handoff_source_ineligible)
+
+    %{
+      run_id: source_run.id,
+      task_id: source_task.id,
+      result_id: required_uuid!(task_result, :result_id),
+      subject: subject,
+      subject_hash: subject_hash,
+      evidence_ids: value(task_result, "evidence_refs")
+    }
+  end
+
+  defp handoff_admission_subject!(goal, item, "validate", payload, source, opts) do
+    producer_id = optional_uuid!(payload, :validation_of_task_id) || rollback(:invalid_validation)
+
+    unless producer_id == source.task_id, do: rollback(:handoff_source_ineligible)
+
+    expected = admission_subject!(goal, item, "validate", payload, opts)
+
+    if expected == source.subject,
+      do: source.subject,
+      else: rollback(:handoff_source_subject_mismatch)
+  end
+
+  defp handoff_admission_subject!(_goal, _item, _purpose, _payload, source, _opts),
+    do: source.subject
+
+  defp handoff_source_settlement!(goal, source_task, source_run, task_result, subject_hash) do
+    mutation_id = settlement_mutation_id(source_task.id, source_run.id, source_run.generation)
+
+    event =
+      Repo.one(
+        from(event in GoalEvent,
+          where: event.goal_id == ^goal.id and event.id == ^mutation_id,
+          lock: "FOR UPDATE"
+        )
+      ) || rollback(:handoff_source_ineligible)
+
+    expected_body = %{
+      "task_id" => source_task.id,
+      "run_id" => source_run.id,
+      "generation" => source_run.generation,
+      "state" => source_run.state,
+      "goal_revision" => source_task.goal_revision
+    }
+
+    response = event.response || %{}
+
+    unless event.kind == "task_settled" and event.revision == source_task.goal_revision and
+             event.actor_ref == "system:settlement" and event.payload == expected_body and
+             value(response, "goal_id") == goal.id and
+             value(response, "goal_revision") == source_task.goal_revision and
+             value(response, "mutation_id") == mutation_id and
+             value(response, "task_id") == source_task.id and
+             value(response, "run_id") == source_run.id and
+             value(response, "generation") == source_run.generation and
+             value(response, "result_id") == value(task_result, "result_id") and
+             value(response, "result_kind") == value(task_result, "kind") and
+             value(response, "subject_hash") == context_digest(subject_hash) and
+             value(response, "evidence_refs") == value(task_result, "evidence_refs"),
+           do: rollback(:handoff_source_ineligible)
+
+    value(response, "settlement")
+  end
+
   defp parse_subject!(subject) do
     case parse_subject(subject) do
       {:ok, parsed} -> parsed
@@ -8074,12 +8312,12 @@ defmodule SymmetryControl.Goals do
       do: rollback(:requested_session_required)
 
     if mode == "handoff" and not is_nil(requested_session_id), do: rollback(:invalid_request)
-    if mode == "handoff", do: rollback(:unsupported_capability)
 
     mode
   end
 
   defp ensure_requested_session_available!(_item, nil, "fresh"), do: :ok
+  defp ensure_requested_session_available!(_item, nil, "handoff"), do: :ok
 
   defp ensure_requested_session_available!(item, requested_session_id, session_mode)
        when session_mode == "resume" do
@@ -8115,6 +8353,7 @@ defmodule SymmetryControl.Goals do
   end
 
   defp ensure_plan_requested_session_available!(_resource, nil, "fresh"), do: :ok
+  defp ensure_plan_requested_session_available!(_resource, nil, "handoff"), do: :ok
 
   defp ensure_plan_requested_session_available!(resource, requested_session_id, "resume") do
     untrusted_session =
@@ -8413,7 +8652,8 @@ defmodule SymmetryControl.Goals do
         "repository_resource_id",
         "subject",
         "session_mode",
-        "requested_session_id"
+        "requested_session_id",
+        "handoff_source_run_id"
       ])
 
   defp valid_command_payload?("accept_plan", payload),
@@ -8450,6 +8690,7 @@ defmodule SymmetryControl.Goals do
         "model_profile",
         "session_mode",
         "requested_session_id",
+        "handoff_source_run_id",
         "validation_of_task_id"
       ])
 

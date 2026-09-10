@@ -71,9 +71,11 @@ defmodule SymmetryControl.Repo.Migrations.AddTaskHandoffLineage do
       source_goal_id uuid;
       source_goal_revision integer;
       source_work_item_id uuid;
+      source_task_purpose text;
       source_task_state text;
       source_run_state text;
       checked_source_task_id uuid;
+      input_handoff_source_run_id text;
     BEGIN
       IF TG_OP = 'UPDATE'
          AND OLD.handoff_source_run_id IS DISTINCT FROM NEW.handoff_source_run_id THEN
@@ -81,9 +83,11 @@ defmodule SymmetryControl.Repo.Migrations.AddTaskHandoffLineage do
       END IF;
 
       session_mode := COALESCE(NEW.input ->> 'session_mode', 'fresh');
+      input_handoff_source_run_id := NEW.input ->> 'handoff_source_run_id';
 
       IF session_mode <> 'handoff' THEN
-        IF NEW.handoff_source_run_id IS NOT NULL THEN
+        IF NEW.handoff_source_run_id IS NOT NULL
+           OR NEW.input ? 'handoff_source_run_id' THEN
           RAISE EXCEPTION 'goal_0006_handoff_source_requires_handoff_mode';
         END IF;
 
@@ -94,12 +98,21 @@ defmodule SymmetryControl.Repo.Migrations.AddTaskHandoffLineage do
         RAISE EXCEPTION 'goal_0006_handoff_source_run_required';
       END IF;
 
+      IF NOT NEW.input ? 'handoff_source_run_id'
+         OR input_handoff_source_run_id IS DISTINCT FROM NEW.handoff_source_run_id::text THEN
+        RAISE EXCEPTION 'goal_0006_handoff_source_run_mismatch';
+      END IF;
+
       IF NEW.requested_session_id IS NOT NULL THEN
         RAISE EXCEPTION 'goal_0006_handoff_cannot_request_native_session';
       END IF;
 
       IF NEW.goal_id IS NULL OR NEW.goal_revision IS NULL THEN
         RAISE EXCEPTION 'goal_0006_handoff_requires_goal_task';
+      END IF;
+
+      IF NEW.purpose = 'plan' OR NEW.work_item_id IS NULL THEN
+        RAISE EXCEPTION 'goal_0006_handoff_plan_unsupported';
       END IF;
 
       SELECT goal.current_revision
@@ -137,11 +150,13 @@ defmodule SymmetryControl.Repo.Migrations.AddTaskHandoffLineage do
         source_task.goal_id,
         source_task.goal_revision,
         source_task.work_item_id,
+        source_task.purpose,
         source_task.state
       INTO
         source_goal_id,
         source_goal_revision,
         source_work_item_id,
+        source_task_purpose,
         source_task_state
       FROM tasks AS source_task
       WHERE source_task.id = source_task_id
@@ -162,6 +177,10 @@ defmodule SymmetryControl.Repo.Migrations.AddTaskHandoffLineage do
       END IF;
 
       IF source_run_state <> 'completed' OR source_task_state <> 'completed' THEN
+        RAISE EXCEPTION 'goal_0006_handoff_source_run_ineligible';
+      END IF;
+
+      IF source_task_purpose = 'plan' OR source_work_item_id IS NULL THEN
         RAISE EXCEPTION 'goal_0006_handoff_source_run_ineligible';
       END IF;
 
@@ -221,7 +240,12 @@ defmodule SymmetryControl.Repo.Migrations.AddTaskHandoffLineage do
         SELECT 1
         FROM tasks AS target_task
         WHERE target_task.handoff_source_run_id = OLD.id
-      ) AND (NEW.task_id IS DISTINCT FROM OLD.task_id OR NEW.state IS DISTINCT FROM 'completed') THEN
+      ) AND (
+        NEW.task_id IS DISTINCT FROM OLD.task_id
+        OR NEW.generation IS DISTINCT FROM OLD.generation
+        OR NEW.result IS DISTINCT FROM OLD.result
+        OR NEW.state IS DISTINCT FROM 'completed'
+      ) THEN
         RAISE EXCEPTION 'goal_0006_handoff_source_run_immutable';
       END IF;
 
@@ -232,7 +256,7 @@ defmodule SymmetryControl.Repo.Migrations.AddTaskHandoffLineage do
 
     execute("""
     CREATE TRIGGER runs_handoff_source_terminal_guard
-    BEFORE UPDATE OF task_id, state ON runs
+    BEFORE UPDATE OF task_id, generation, result, state ON runs
     FOR EACH ROW EXECUTE FUNCTION goal_0006_freeze_handoff_source_run()
     """)
 
@@ -247,7 +271,15 @@ defmodule SymmetryControl.Repo.Migrations.AddTaskHandoffLineage do
         FROM runs AS source_run
         JOIN tasks AS target_task ON target_task.handoff_source_run_id = source_run.id
         WHERE source_run.task_id = OLD.id
-      ) AND NEW.state IS DISTINCT FROM 'completed' THEN
+      ) AND (
+        NEW.goal_id IS DISTINCT FROM OLD.goal_id
+        OR NEW.goal_revision IS DISTINCT FROM OLD.goal_revision
+        OR NEW.work_item_id IS DISTINCT FROM OLD.work_item_id
+        OR NEW.purpose IS DISTINCT FROM OLD.purpose
+        OR NEW.current_generation IS DISTINCT FROM OLD.current_generation
+        OR NEW.result IS DISTINCT FROM OLD.result
+        OR NEW.state IS DISTINCT FROM 'completed'
+      ) THEN
         RAISE EXCEPTION 'goal_0006_handoff_source_task_immutable';
       END IF;
 
@@ -258,7 +290,7 @@ defmodule SymmetryControl.Repo.Migrations.AddTaskHandoffLineage do
 
     execute("""
     CREATE TRIGGER tasks_handoff_source_terminal_guard
-    BEFORE UPDATE OF state ON tasks
+    BEFORE UPDATE OF goal_id, goal_revision, work_item_id, purpose, current_generation, result, state ON tasks
     FOR EACH ROW EXECUTE FUNCTION goal_0006_freeze_handoff_source_task()
     """)
   end

@@ -1297,19 +1297,22 @@ defmodule SymmetryControl.Orchestration do
   defp next_goal_runtime(task, revision, item, current) do
     case {goal_task_repository_resource_id(task, item),
           allowed_runtime_ids(revision.execution_policy || %{}),
-          validation_runtime_ids_for_task(task)} do
-      {nil, _, _} ->
+          validation_runtime_ids_for_task(task), native_goal_session_requirement(task)} do
+      {nil, _, _, _} ->
         nil
 
-      {_, :invalid, _} ->
+      {_, :invalid, _, _} ->
         nil
 
-      {_, _, :invalid} ->
+      {_, _, :invalid, _} ->
         nil
 
-      {repository_resource_id, {:ok, allowed_runtime_ids}, {:ok, validation_runtime_ids}} ->
+      {_, _, _, :invalid} ->
+        nil
+
+      {repository_resource_id, {:ok, allowed_runtime_ids}, {:ok, validation_runtime_ids},
+       session_requirement} ->
         adapter_requirement = native_goal_adapter_requirement()
-        resume_requirement = native_goal_resume_requirement()
 
         strict_budget_requirement =
           strict_budget_capability_requirement(revision.execution_policy)
@@ -1324,6 +1327,7 @@ defmodule SymmetryControl.Orchestration do
             where:
               fragment("? @> ?", runtime.capabilities, type(^task.required_capabilities, :map)),
             where: fragment("? @> ?", runtime.capabilities, type(^adapter_requirement, :map)),
+            where: fragment("? @> ?", runtime.capabilities, type(^session_requirement, :map)),
             where:
               fragment("? @> ?", runtime.capabilities, type(^strict_budget_requirement, :map)),
             where:
@@ -1354,17 +1358,8 @@ defmodule SymmetryControl.Orchestration do
             do: query,
             else: where(query, [runtime], runtime.id in ^validation_runtime_ids)
 
-        query =
-          if is_nil(task.requested_session_id),
-            do: query,
-            else:
-              where(
-                query,
-                [runtime],
-                fragment("? @> ?", runtime.capabilities, type(^resume_requirement, :map))
-              )
-
         query = restrict_to_requested_session(query, task, item)
+        query = restrict_to_handoff_source_machine(query, task)
 
         case Repo.one(query) do
           nil ->
@@ -1376,8 +1371,8 @@ defmodule SymmetryControl.Orchestration do
     end
   end
 
-  # A retained native session is machine-local. Resume and handoff must not
-  # fall back to another runtime merely because it matches the task profile.
+  # A retained native session is machine-local and must not fall back to another
+  # runtime merely because it matches the task profile.
   defp restrict_to_requested_session(query, %Task{requested_session_id: nil}, _item), do: query
 
   defp restrict_to_requested_session(query, %Task{} = task, item) do
@@ -1400,6 +1395,27 @@ defmodule SymmetryControl.Orchestration do
 
     from runtime in query,
       where: runtime.id == subquery(retained_runtime)
+  end
+
+  # Handoff starts a fresh native session, but its verified artifact belongs to
+  # the source machine. Selecting another machine would turn a local artifact
+  # pointer into an unsupported cross-machine transfer.
+  defp restrict_to_handoff_source_machine(query, %Task{handoff_source_run_id: nil}), do: query
+
+  defp restrict_to_handoff_source_machine(query, %Task{} = task) do
+    source_machine_id =
+      Repo.one(
+        from(source_run in Run,
+          join: source_runtime in Runtime,
+          on: source_runtime.id == source_run.runtime_id,
+          where: source_run.id == ^task.handoff_source_run_id,
+          select: source_runtime.machine_id
+        )
+      )
+
+    if is_binary(source_machine_id),
+      do: where(query, [runtime], runtime.machine_id == ^source_machine_id),
+      else: where(query, [runtime], false)
   end
 
   # The scheduler reserves a retained session with its Run in one transaction.
@@ -1534,6 +1550,7 @@ defmodule SymmetryControl.Orchestration do
       ) and
       runtime_allowed_for_goal?(runtime, revision) and
       validation_runtime_allowed?(runtime, task) and
+      handoff_source_machine_matches?(runtime, task) and
       native_goal_adapter_capable?(runtime, task, revision)
   end
 
@@ -1688,6 +1705,25 @@ defmodule SymmetryControl.Orchestration do
     }
   end
 
+  defp native_goal_handoff_requirement do
+    %{
+      "adapter" => %{
+        "operations" => %{
+          "handoff" => true
+        }
+      }
+    }
+  end
+
+  defp native_goal_session_requirement(task) do
+    case value(task.input || %{}, :session_mode, "fresh") do
+      "fresh" -> %{}
+      "resume" -> native_goal_resume_requirement()
+      "handoff" -> native_goal_handoff_requirement()
+      _ -> :invalid
+    end
+  end
+
   defp native_goal_adapter_capable?(runtime, task, revision) do
     adapter = value(runtime.capabilities, :adapter)
     operations = value(adapter, :operations)
@@ -1701,7 +1737,8 @@ defmodule SymmetryControl.Orchestration do
       value(runtime.capabilities, :supervisory_control, false) != true and
       (value(revision.execution_policy || %{}, :budget_mode, "soft") != "strict" or
          value(operations, :hard_cost_limit) == true) and
-      (session_mode not in ["resume", "handoff"] or value(operations, :resume) == true)
+      (session_mode != "resume" or value(operations, :resume) == true) and
+      (session_mode != "handoff" or value(operations, :handoff) == true)
   end
 
   defp strict_budget_capability_requirement(execution_policy) do
@@ -3560,6 +3597,20 @@ defmodule SymmetryControl.Orchestration do
     unless session && run.harness_session_id == session.id, do: rollback(:ownership_lost)
   end
 
+  defp handoff_source_machine_matches?(_runtime, %Task{handoff_source_run_id: nil}), do: true
+
+  defp handoff_source_machine_matches?(runtime, %Task{} = task) do
+    Repo.exists?(
+      from(source_run in Run,
+        join: source_runtime in Runtime,
+        on: source_runtime.id == source_run.runtime_id,
+        where:
+          source_run.id == ^task.handoff_source_run_id and
+            source_runtime.machine_id == ^runtime.machine_id
+      )
+    )
+  end
+
   defp replayed_claim?(task, run, runtime, request, current) do
     run.runtime_id == value(request, :runtime_id) and runtime.id == value(request, :runtime_id) and
       runtime.connection_epoch == value(request, :runtime_epoch) and
@@ -3954,6 +4005,7 @@ defmodule SymmetryControl.Orchestration do
       "events",
       "cancel",
       "resume",
+      "handoff",
       "guidance",
       "pause",
       "approval_response",
@@ -3964,12 +4016,16 @@ defmodule SymmetryControl.Orchestration do
       is_boolean(value(operations, :events)) and
       is_boolean(value(operations, :cancel)) and
       is_boolean(value(operations, :resume)) and
+      is_boolean(value(operations, :handoff)) and
       value(operations, :guidance) in ["native_steer", "next_turn", "unsupported"] and
       value(operations, :pause) in ["safe_boundary", "unsupported"] and
       is_boolean(value(operations, :approval_response)) and
       value(operations, :usage) in ["reported", "estimated", "unknown"] and
       is_boolean(value(operations, :hard_cost_limit)) and
       (value(operations, :resume) != true or value(operations, :start) == true) and
+      (value(operations, :handoff) != true or
+         (value(operations, :start) == true and value(operations, :events) == true and
+            value(operations, :cancel) == true)) and
       (value(operations, :events) != true or value(operations, :start) == true) and
       (value(operations, :guidance) != "native_steer" or value(operations, :start) == true) and
       (value(operations, :pause) != "safe_boundary" or value(operations, :resume) == true) and
@@ -3980,6 +4036,7 @@ defmodule SymmetryControl.Orchestration do
 
   defp generic_adapter_operations_allowed?("generic", operations) do
     value(operations, :resume) == false and
+      value(operations, :handoff) == false and
       value(operations, :guidance) == "unsupported" and
       value(operations, :pause) == "unsupported" and
       value(operations, :approval_response) == false and

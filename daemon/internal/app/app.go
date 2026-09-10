@@ -26,6 +26,8 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/codex"
+	"github.com/wxxb789/symmetry/daemon/internal/harness/opencode"
+	"github.com/wxxb789/symmetry/daemon/internal/harness/pi"
 	"github.com/wxxb789/symmetry/daemon/internal/notification"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
@@ -888,6 +890,11 @@ func newHarnessRegistry(profile config.AgentProfile) *harness.Registry {
 	registry := harness.NewRegistry()
 	_ = registry.Register(harness.KindCodex, codex.NewAdapterWithNativeIdentity(profile.Command, profile.NativeModel, profile.NativeModelProvider))
 	_ = registry.Register(harness.KindClaude, harness.NewClaudeAdapterWithExecutable(profile.Command))
+	// These adapters retain conservative probes until native lifecycle evidence
+	// exists. Registering the concrete transports lets the configured runtime
+	// use exactly one implementation for both probing and a future verified run.
+	_ = registry.Register(harness.KindPi, pi.NewAdapter(profile.Command))
+	_ = registry.Register(harness.KindOpenCode, opencode.NewAdapter(profile.Command))
 	return registry
 }
 
@@ -924,6 +931,18 @@ func configuredHarnessKind(value string) (harness.Kind, error) {
 func unavailableRuntimeKind(value string) bool {
 	switch value {
 	case config.RuntimeHarnessClaudeCode, config.RuntimeHarnessPi, config.RuntimeHarnessOpenCode:
+		return true
+	default:
+		return false
+	}
+}
+
+// nativeGoalHarnessKind identifies adapter families whose launch contract is
+// staged: process identity, then native session handle, then a native turn.
+// The generic adapter deliberately remains outside this set.
+func nativeGoalHarnessKind(kind harness.Kind) bool {
+	switch kind {
+	case harness.KindCodex, harness.KindClaude, harness.KindPi, harness.KindOpenCode:
 		return true
 	default:
 		return false
@@ -984,6 +1003,7 @@ func buildRuntimeRegistration(runtime config.Runtime, profile config.AgentProfil
 				Events:           capabilities.Events,
 				Cancel:           capabilities.Cancel,
 				Resume:           capabilities.Resume,
+				Handoff:          capabilities.Handoff,
 				Guidance:         protocol.GuidanceCapability(capabilities.Guidance),
 				Pause:            protocol.PauseCapability(capabilities.Pause),
 				ApprovalResponse: capabilities.ApprovalResponse,
@@ -2557,13 +2577,17 @@ func admissionLaunchFailure(admission protocol.Admission, capabilities harness.C
 	if admission.Purpose == protocol.AdmissionPurposeObserve {
 		return taskResultFailure(protocol.TaskResultReasonUnsupportedVersion, fmt.Errorf("Goal admission purpose %q is unsupported without a verified external-check adapter", admission.Purpose))
 	}
-	// Handoff is intentionally a distinct mode. This daemon has no verified
-	// cross-harness native-session transfer, so reject it before any workspace,
-	// launch-intent, or native-process side effect can be created.
+	required := []harness.Capability{harness.CapabilityStart, harness.CapabilityEvents, harness.CapabilityCancel}
 	if admission.SessionMode == protocol.SessionModeHandoff {
-		return taskResultFailure(protocol.TaskResultReasonHandoffUnsupported, fmt.Errorf("%s: cross-harness Goal session handoff is not supported by this daemon", protocol.TaskResultReasonHandoffUnsupported))
+		if admission.RequestedSessionID != nil || admission.HandoffSourceRunID == nil || strings.TrimSpace(*admission.HandoffSourceRunID) == "" {
+			return taskResultFailure(protocol.TaskResultReasonHandoffUnsupported, fmt.Errorf("%s: a handoff requires a source Run and no retained native session", protocol.TaskResultReasonHandoffUnsupported))
+		}
+		required = append(required, harness.CapabilityHandoff)
 	}
-	if err := capabilities.Require(harness.CapabilityStart, harness.CapabilityEvents, harness.CapabilityCancel); err != nil {
+	if err := capabilities.Require(required...); err != nil {
+		if admission.SessionMode == protocol.SessionModeHandoff {
+			return taskResultFailure(protocol.TaskResultReasonHandoffUnsupported, err)
+		}
 		return err
 	}
 	if providerAccess != nil {
@@ -2578,8 +2602,8 @@ func admissionLaunchFailure(admission protocol.Admission, capabilities harness.C
 			return err
 		}
 	}
-	if admission.SessionMode != protocol.SessionModeFresh || admission.RequestedSessionID != nil {
-		return taskResultFailure(protocol.TaskResultReasonResumeRejected, fmt.Errorf("%s: only fresh native Goal sessions are implemented", protocol.TaskResultReasonResumeRejected))
+	if admission.SessionMode != protocol.SessionModeFresh && admission.SessionMode != protocol.SessionModeHandoff || admission.RequestedSessionID != nil {
+		return taskResultFailure(protocol.TaskResultReasonResumeRejected, fmt.Errorf("%s: only fresh native Goal sessions and fresh-session handoff are implemented", protocol.TaskResultReasonResumeRejected))
 	}
 	if admission.Limits.MaxTurns != 1 {
 		return errors.New("Goal admission must request exactly one native turn")
@@ -2610,8 +2634,15 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 	if admission.Subject.ResourceID != daemon.config.Runtime.RepositoryResourceID {
 		return errors.New("Goal admission subject resource_id does not match the configured runtime repository_resource_id")
 	}
-	if daemon.harnessCapabilities.Kind != harness.KindCodex {
-		return fmt.Errorf("Goal admission harness %q is unsupported", daemon.harnessCapabilities.Kind)
+	configuredKind, err := configuredHarnessKind(daemon.config.Runtime.HarnessKind)
+	if err != nil {
+		return err
+	}
+	if configuredKind != daemon.harnessCapabilities.Kind {
+		return fmt.Errorf("configured Goal runtime harness %q does not match capability kind %q", configuredKind, daemon.harnessCapabilities.Kind)
+	}
+	if !nativeGoalHarnessKind(configuredKind) {
+		return fmt.Errorf("Goal admission harness %q is not a native staged adapter", configuredKind)
 	}
 	goalAPI, ok := daemon.control.(goalControlAPI)
 	if !ok {
@@ -2624,9 +2655,16 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 	if deadline.IsZero() || !deadline.After(daemon.now()) {
 		return errors.New("Goal admission deadline has elapsed before native launch")
 	}
-	adapter, err := daemon.harnessRegistry.Lookup(harness.KindCodex)
+	adapter, err := daemon.harnessRegistry.Lookup(configuredKind)
 	if err != nil {
-		return fmt.Errorf("lookup Codex adapter: %w", err)
+		return fmt.Errorf("lookup configured Goal adapter %q: %w", configuredKind, err)
+	}
+	probedCapabilities, err := daemon.harnessRegistry.Probe(ctx, configuredKind)
+	if err != nil {
+		return fmt.Errorf("probe configured Goal adapter %q before native launch: %w", configuredKind, err)
+	}
+	if !reflect.DeepEqual(probedCapabilities, daemon.harnessCapabilities) {
+		return fmt.Errorf("configured Goal adapter %q capability projection changed since runtime registration", configuredKind)
 	}
 	profile := daemon.config.AgentProfiles[daemon.config.Runtime.AgentProfile]
 	providerAccess, err := goalProviderAccess(profile, claim.ProviderAccess, daemon.config.ControlPlaneURL)
@@ -2677,6 +2715,7 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 		RunID:                  key.RunID,
 		Generation:             key.Generation,
 		AdmissionID:            admission.AdmissionID,
+		HandoffSourceRunID:     admissionHandoffSourceRunID(admission.HandoffSourceRunID),
 		LocalHandleID:          localHandleID,
 		RuntimeID:              daemon.runtimeID,
 		RuntimeEpoch:           daemon.runtimeEpoch,
@@ -2685,7 +2724,7 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 		AdapterVersion:         daemon.harnessCapabilities.ImplementationVersion,
 		AdapterProtocolVersion: daemon.harnessCapabilities.ProtocolVersion,
 		WorkspaceFingerprint:   fingerprint,
-		SessionMode:            state.GoalSessionModeFresh,
+		SessionMode:            string(admission.SessionMode),
 	}
 	if _, err := daemon.store.SaveGoalSessionLaunchIntent(intent); err != nil {
 		return fmt.Errorf("save Goal session launch intent: %w", err)
@@ -3225,6 +3264,13 @@ func validateGoalRunContext(admission protocol.Admission, claim protocol.ClaimRe
 }
 
 func admissionWorkItemIDValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func admissionHandoffSourceRunID(value *string) string {
 	if value == nil {
 		return ""
 	}

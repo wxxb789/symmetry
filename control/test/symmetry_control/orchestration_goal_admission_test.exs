@@ -1105,6 +1105,43 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     assert 0 == Repo.aggregate(from(run in Run, where: run.task_id == ^task.id), :count)
   end
 
+  test "Goal handoff selects a same-machine runtime with handoff support without reserving a session" do
+    {source_task, _goal_id} = insert_goal_task(max_run_attempts: 2)
+    unsupported_source_runtime = register_runtime("handoff-source", handoff?: false)
+    source_run = complete_source_run!(source_task, unsupported_source_runtime)
+    target_task = insert_handoff_successor!(source_task, source_run)
+
+    _same_machine_without_handoff =
+      register_runtime_on_machine(
+        "handoff-without-support",
+        unsupported_source_runtime.machine_id,
+        handoff?: false
+      )
+
+    eligible_runtime =
+      register_runtime_on_machine("handoff-eligible", unsupported_source_runtime.machine_id,
+        handoff?: true
+      )
+
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    assert run.task_id == target_task.id
+    assert run.runtime_id == eligible_runtime.id
+    assert run.harness_session_id == nil
+  end
+
+  test "Goal handoff remains queued when only a different machine advertises handoff" do
+    {source_task, _goal_id} = insert_goal_task(max_run_attempts: 2)
+    source_runtime = register_runtime("handoff-local-source", handoff?: false)
+    source_run = complete_source_run!(source_task, source_runtime)
+    target_task = insert_handoff_successor!(source_task, source_run)
+
+    _different_machine = register_runtime("handoff-other-machine", handoff?: true)
+
+    assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
+    assert %{state: "queued", current_generation: 0} = Repo.get!(Task, target_task.id)
+    assert 0 == Repo.aggregate(from(run in Run, where: run.task_id == ^target_task.id), :count)
+  end
+
   test "only one queued Goal task reserves a retained session before either daemon attaches" do
     {first_task, _first_goal_id} = insert_goal_task(max_run_attempts: 2)
     retained_runtime = register_runtime("exclusive-retained", resume?: true, capacity: 2)
@@ -2049,6 +2086,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
         "events" => true,
         "cancel" => true,
         "resume" => false,
+        "handoff" => false,
         "guidance" => "next_turn",
         "pause" => "unsupported",
         "approval_response" => false,
@@ -2069,6 +2107,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
         "events" => true,
         "cancel" => true,
         "resume" => false,
+        "handoff" => false,
         "guidance" => "unsupported",
         "pause" => "unsupported",
         "approval_response" => false,
@@ -2105,6 +2144,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
   defp register_runtime(label, opts \\ []) do
     machine_token = "goal-admission-machine-#{label}-#{System.unique_integer([:positive])}"
     resume? = Keyword.get(opts, :resume?, false)
+    handoff? = Keyword.get(opts, :handoff?, false)
     hard_cost_limit? = Keyword.get(opts, :hard_cost_limit?, false)
     capacity = Keyword.get(opts, :capacity, 1)
 
@@ -2122,6 +2162,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     adapter =
       native_adapter("codex", "0.153.4", "symmetry-codex-1", 1)
       |> put_in(["operations", "resume"], resume?)
+      |> put_in(["operations", "handoff"], handoff?)
       |> put_in(["operations", "hard_cost_limit"], hard_cost_limit?)
 
     assert {:ok, %{machine: machine}, :created} =
@@ -2164,6 +2205,71 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
              )
 
     runtime
+  end
+
+  defp register_runtime_on_machine(label, machine_id, opts) do
+    runtime = register_runtime(label, opts)
+
+    Repo.update_all(
+      from(runtime_row in Runtime, where: runtime_row.id == ^runtime.id),
+      set: [machine_id: machine_id]
+    )
+
+    Repo.get!(Runtime, runtime.id)
+  end
+
+  defp complete_source_run!(task, runtime) do
+    Repo.update_all(
+      from(task_row in Task, where: task_row.id == ^task.id),
+      set: [state: "completed", current_generation: 1]
+    )
+
+    %Run{}
+    |> Run.changeset(%{
+      task_id: task.id,
+      runtime_id: runtime.id,
+      generation: 1,
+      state: "completed",
+      assigned_at: @now,
+      assignment_expires_at: DateTime.add(@now, 60, :second)
+    })
+    |> Repo.insert!()
+  end
+
+  defp insert_handoff_successor!(source_task, source_run) do
+    source_task = Repo.get!(Task, source_task.id)
+
+    input =
+      source_task.input
+      |> Map.put("session_mode", "handoff")
+      |> Map.put("requested_session_id", nil)
+      |> Map.put("handoff_source_run_id", source_run.id)
+
+    %Task{}
+    |> Task.changeset(%{
+      idempotency_key: "handoff-successor:#{Ecto.UUID.generate()}",
+      request_hash: :crypto.hash(:sha256, Ecto.UUID.generate()),
+      request_hash_version: 2,
+      goal: source_task.goal,
+      agent_profile: source_task.agent_profile,
+      workspace: source_task.workspace,
+      input: input,
+      required_capabilities: source_task.required_capabilities,
+      state: "queued",
+      current_generation: 0,
+      attempt_generation: 1,
+      work_item_id: source_task.work_item_id,
+      goal_id: source_task.goal_id,
+      goal_revision: source_task.goal_revision,
+      context_snapshot_id: source_task.context_snapshot_id,
+      purpose: source_task.purpose,
+      validation_of_task_id: source_task.validation_of_task_id,
+      admission_key: Ecto.UUID.generate(),
+      max_run_attempts: source_task.max_run_attempts,
+      requested_session_id: nil,
+      handoff_source_run_id: source_run.id
+    })
+    |> Repo.insert!()
   end
 
   defp runtime_registration_spec(runtime, overrides \\ %{}) do

@@ -17,6 +17,8 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/codex"
+	"github.com/wxxb789/symmetry/daemon/internal/harness/opencode"
+	"github.com/wxxb789/symmetry/daemon/internal/harness/pi"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 	"github.com/wxxb789/symmetry/daemon/internal/workspace"
@@ -40,6 +42,24 @@ func TestNewHarnessRegistryBindsConfiguredCodexNativeModel(t *testing.T) {
 	configuredProvider := reflect.ValueOf(codexAdapter).Elem().FieldByName("configuredNativeProvider")
 	if !configuredProvider.IsValid() || configuredProvider.String() != profile.NativeModelProvider {
 		t.Fatalf("configured native provider = %q, want %q", configuredProvider.String(), profile.NativeModelProvider)
+	}
+}
+
+func TestNewHarnessRegistryBindsConcretePiAndOpenCodeAdapters(t *testing.T) {
+	registry := newHarnessRegistry(config.AgentProfile{Command: "configured-agent"})
+	piAdapter, err := registry.Lookup(harness.KindPi)
+	if err != nil {
+		t.Fatalf("Lookup(pi) error = %v", err)
+	}
+	if _, ok := piAdapter.(*pi.Adapter); !ok {
+		t.Fatalf("Pi adapter type = %T, want *pi.Adapter", piAdapter)
+	}
+	openCodeAdapter, err := registry.Lookup(harness.KindOpenCode)
+	if err != nil {
+		t.Fatalf("Lookup(opencode) error = %v", err)
+	}
+	if _, ok := openCodeAdapter.(*opencode.Adapter); !ok {
+		t.Fatalf("OpenCode adapter type = %T, want *opencode.Adapter", openCodeAdapter)
 	}
 }
 
@@ -90,7 +110,7 @@ func TestLegacyConfigBuildsGenericRegistrationWithUnsupportedOperations(t *testi
 	if adapter.Operations.Start != true || adapter.Operations.Events != true || adapter.Operations.Cancel != true {
 		t.Fatalf("adapter lifecycle operations = %+v", adapter.Operations)
 	}
-	if adapter.Operations.Resume || adapter.Operations.ApprovalResponse || adapter.Operations.HardCostLimit ||
+	if adapter.Operations.Resume || adapter.Operations.Handoff || adapter.Operations.ApprovalResponse || adapter.Operations.HardCostLimit ||
 		adapter.Operations.Guidance != protocol.GuidanceUnsupported || adapter.Operations.Pause != protocol.PauseUnsupported || adapter.Operations.Usage != protocol.UsageUnknown {
 		t.Fatalf("adapter unsupported operations = %+v", adapter.Operations)
 	}
@@ -436,12 +456,14 @@ func TestAdmissionAssignmentFailsBeforeGenericProcessLaunch(t *testing.T) {
 	}
 }
 
-func TestHandoffAdmissionFailsBeforeWorkspaceAndNativeSessionSideEffects(t *testing.T) {
+func TestHandoffAdmissionWithoutVerifiedCapabilityFailsBeforeWorkspaceAndNativeSessionSideEffects(t *testing.T) {
 	admission, present, err := parseAdmissionInput(validAdmissionInput())
 	if err != nil || !present {
 		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
 	}
 	admission.SessionMode = protocol.SessionModeHandoff
+	sourceRunID := "00000000-0000-4000-8000-000000000007"
+	admission.HandoffSourceRunID = &sourceRunID
 
 	app, store, session, controlClient := nativeAdmissionDaemon(t, admission, validNativeTaskResult(t, admission), nil)
 	defer store.Close()
@@ -475,6 +497,93 @@ func TestHandoffAdmissionFailsBeforeWorkspaceAndNativeSessionSideEffects(t *test
 	}
 	if failure["reason"] != string(protocol.TaskResultReasonHandoffUnsupported) {
 		t.Fatalf("handoff failure payload = %s, want canonical unsupported reason", journal.PendingTransitions[0].Payload)
+	}
+}
+
+func TestVerifiedPiAndOpenCodeHandoffAdmissionsStartNewNativeSessions(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		kind       harness.Kind
+		configKind string
+	}{
+		{name: "pi", kind: harness.KindPi, configKind: config.RuntimeHarnessPi},
+		{name: "opencode", kind: harness.KindOpenCode, configKind: config.RuntimeHarnessOpenCode},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			admission, present, err := parseAdmissionInput(validAdmissionInput())
+			if err != nil || !present {
+				t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+			}
+			sourceRunID := "00000000-0000-4000-8000-000000000007"
+			admission.SessionMode = protocol.SessionModeHandoff
+			admission.HandoffSourceRunID = &sourceRunID
+			capabilities := verifiedNativeCapabilities(test.kind)
+			capabilities.Handoff = true
+			result := validNativeTaskResult(t, admission)
+			app, store, session, controlClient := nativeAdmissionDaemonForHarness(t, admission, result, nil, test.kind, test.configKind, capabilities)
+			defer store.Close()
+
+			app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
+			app.workers.Wait()
+			journal, err := store.LoadJournal(state.RunKey{RunID: "run-1", Generation: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if got, want := session.calls, []string{"start", "details", "open", "start_turn", "wait_turn", "close", "wait"}; !sameStrings(got, want) {
+				t.Fatalf("native lifecycle = %#v, want %#v; journal=%#v", got, want, journal)
+			}
+			if session.request.Resume != nil {
+				t.Fatalf("handoff passed a resume handle to a new session: %#v", session.request.Resume)
+			}
+			if session.request.LocalHandleID == "" || session.request.LocalHandleID == sourceRunID {
+				t.Fatalf("handoff local handle = %q, want new local native handle", session.request.LocalHandleID)
+			}
+			if session.turnRequest.Goal != controlClient.work.Goal || len(session.turnRequest.Context) == 0 || !strings.Contains(string(session.turnRequest.Context), admission.ContextSnapshotID) {
+				t.Fatalf("handoff turn request = %#v, want canonical Goal and context", session.turnRequest)
+			}
+			if workspace := app.workspace.(*fakeWorkspace); workspace.subject != admission.Subject {
+				t.Fatalf("handoff workspace subject = %#v, want %#v", workspace.subject, admission.Subject)
+			}
+			sessions, err := store.ListGoalSessions()
+			if err != nil || len(sessions) != 1 {
+				t.Fatalf("Goal session journals = %#v, error = %v", sessions, err)
+			}
+			if sessions[0].SessionMode != state.GoalSessionModeHandoff {
+				t.Fatalf("handoff session mode = %q, want %q", sessions[0].SessionMode, state.GoalSessionModeHandoff)
+			}
+			if sessions[0].HandoffSourceRunID != sourceRunID {
+				t.Fatalf("handoff source Run = %q, want %q", sessions[0].HandoffSourceRunID, sourceRunID)
+			}
+
+			firstLifecycle := append([]string(nil), session.calls...)
+			app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
+			app.workers.Wait()
+			if !sameStrings(session.calls, firstLifecycle) {
+				t.Fatalf("handoff assignment replay started another native session: before=%#v after=%#v", firstLifecycle, session.calls)
+			}
+		})
+	}
+}
+
+func TestHandoffAdmissionRejectsMismatchedConfiguredAdapterBeforeWorkspace(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	sourceRunID := "00000000-0000-4000-8000-000000000007"
+	admission.SessionMode = protocol.SessionModeHandoff
+	admission.HandoffSourceRunID = &sourceRunID
+	capabilities := verifiedNativeCapabilities(harness.KindCodex)
+	capabilities.Handoff = true
+	app, store, session, controlClient := nativeAdmissionDaemonForHarness(t, admission, validNativeTaskResult(t, admission), nil, harness.KindCodex, config.RuntimeHarnessPi, capabilities)
+	defer store.Close()
+
+	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
+	app.workers.Wait()
+
+	if len(session.calls) != 0 || app.workspace.(*fakeWorkspace).subject != (protocol.Subject{}) || len(controlClient.calls) != 0 {
+		t.Fatalf("mismatched runtime adapter crossed a side-effect boundary: native=%#v workspace=%#v control=%#v", session.calls, app.workspace.(*fakeWorkspace).subject, controlClient.calls)
 	}
 }
 
@@ -1878,6 +1987,10 @@ func runAdmissionAssignment(t *testing.T, input json.RawMessage) (state.RunJourn
 }
 
 func nativeAdmissionDaemon(t *testing.T, admission protocol.Admission, result protocol.TaskResult, waitGate <-chan struct{}) (*daemon, *state.Store, *fakeNativeGoalSession, *nativeAdmissionControl) {
+	return nativeAdmissionDaemonForHarness(t, admission, result, waitGate, harness.KindCodex, config.RuntimeHarnessCodex, verifiedCodexCapabilities())
+}
+
+func nativeAdmissionDaemonForHarness(t *testing.T, admission protocol.Admission, result protocol.TaskResult, waitGate <-chan struct{}, kind harness.Kind, configKind string, capabilities harness.Capabilities) (*daemon, *state.Store, *fakeNativeGoalSession, *nativeAdmissionControl) {
 	t.Helper()
 	store, err := state.New(t.TempDir())
 	if err != nil {
@@ -1894,9 +2007,9 @@ func nativeAdmissionDaemon(t *testing.T, admission protocol.Admission, result pr
 		waitGate:    waitGate,
 		turnStarted: make(chan struct{}),
 	}
-	adapter := &fakeNativeGoalAdapter{session: session, capabilities: verifiedCodexCapabilities()}
+	adapter := &fakeNativeGoalAdapter{session: session, capabilities: capabilities}
 	registry := harness.NewRegistry()
-	if err := registry.Register(harness.KindCodex, adapter); err != nil {
+	if err := registry.Register(kind, adapter); err != nil {
 		t.Fatal(err)
 	}
 	input, err := json.Marshal(admission)
@@ -1905,10 +2018,10 @@ func nativeAdmissionDaemon(t *testing.T, admission protocol.Admission, result pr
 	}
 	controlClient := &nativeAdmissionControl{fakeControl: &fakeControl{}, work: protocol.Work{Goal: "implement the admitted change", Input: input}, admission: admission}
 	value := testConfig(t)
-	value.Runtime.HarnessKind = config.RuntimeHarnessCodex
-	value.Runtime.HarnessVersion = "0.153.4"
-	value.Runtime.AdapterVersion = "symmetry-daemon:test"
-	value.Runtime.AdapterProtocolVersion = 1
+	value.Runtime.HarnessKind = configKind
+	value.Runtime.HarnessVersion = capabilities.NativeVersion
+	value.Runtime.AdapterVersion = capabilities.ImplementationVersion
+	value.Runtime.AdapterProtocolVersion = capabilities.ProtocolVersion
 	value.Runtime.RepositoryResourceID = admission.Subject.ResourceID
 	app := &daemon{
 		config:              value,
@@ -1916,7 +2029,7 @@ func nativeAdmissionDaemon(t *testing.T, admission protocol.Admission, result pr
 		control:             controlClient,
 		workspace:           &fakeWorkspace{},
 		harnessRegistry:     registry,
-		harnessCapabilities: verifiedCodexCapabilities(),
+		harnessCapabilities: capabilities,
 		options:             options{newID: ids(), clock: time.Now},
 		runtimeID:           "runtime-1",
 		runtimeEpoch:        1,
@@ -1927,8 +2040,12 @@ func nativeAdmissionDaemon(t *testing.T, admission protocol.Admission, result pr
 }
 
 func verifiedCodexCapabilities() harness.Capabilities {
+	return verifiedNativeCapabilities(harness.KindCodex)
+}
+
+func verifiedNativeCapabilities(kind harness.Kind) harness.Capabilities {
 	return harness.Capabilities{
-		Kind:                  harness.KindCodex,
+		Kind:                  kind,
 		NativeVersion:         "0.153.4",
 		ImplementationVersion: "symmetry-daemon:test",
 		ProtocolVersion:       1,
@@ -2019,7 +2136,7 @@ func (adapter *fakeNativeGoalAdapter) Probe(context.Context) (harness.Capabiliti
 }
 
 func (adapter *fakeNativeGoalAdapter) Start(_ context.Context, request harness.StartRequest, sink harness.EventSink) (harness.Session, error) {
-	adapter.session.calls = append(adapter.session.calls, "start")
+	adapter.session.recordCall("start")
 	if adapter.session.startErr != nil {
 		return nil, adapter.session.startErr
 	}
@@ -2038,6 +2155,7 @@ type fakeNativeGoalSession struct {
 	callsMu       sync.Mutex
 	calls         []string
 	request       harness.StartRequest
+	turnRequest   harness.TurnRequest
 	sink          harness.EventSink
 	handle        harness.NativeSessionHandle
 	result        harness.TaskResult
@@ -2066,8 +2184,11 @@ func (session *fakeNativeGoalSession) Open(context.Context) (harness.NativeSessi
 	return session.handle, nil
 }
 
-func (session *fakeNativeGoalSession) StartTurn(ctx context.Context, _ harness.TurnRequest) error {
+func (session *fakeNativeGoalSession) StartTurn(ctx context.Context, request harness.TurnRequest) error {
 	session.recordCall("start_turn")
+	session.callsMu.Lock()
+	session.turnRequest = request
+	session.callsMu.Unlock()
 	close(session.turnStarted)
 	for _, event := range []harness.Event{
 		{Kind: harness.EventSessionStarted, At: time.Now().UTC(), Payload: json.RawMessage(`{"thread_id":"native-thread-1"}`)},

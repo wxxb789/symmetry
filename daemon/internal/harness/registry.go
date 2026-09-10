@@ -91,6 +91,13 @@ func (registry *Registry) Probe(ctx context.Context, kind Kind) (Capabilities, e
 		return Capabilities{}, err
 	}
 	capabilities, err := adapter.Probe(ctx)
+	if capabilities.Kind != kind {
+		kindErr := fmt.Errorf("registered harness adapter %q reported capability kind %q", kind, capabilities.Kind)
+		if err != nil {
+			return capabilities, errors.Join(err, kindErr)
+		}
+		return capabilities, kindErr
+	}
 	if validateErr := capabilities.Validate(); validateErr != nil {
 		if err != nil {
 			return capabilities, errors.Join(err, validateErr)

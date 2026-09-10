@@ -2742,9 +2742,13 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
       source_run_id = insert_terminal_goal_run!(source_task_id, runtime_id, "completed")
 
       target_task_id =
-        insert_handoff_task!(goal_id, work_item_id, 1, source_run_id, %{
-          "session_mode" => "handoff"
-        })
+        insert_handoff_task!(
+          goal_id,
+          work_item_id,
+          1,
+          source_run_id,
+          handoff_input(source_run_id)
+        )
 
       assert %{rows: [[^source_run_id]]} =
                Repo.query!("SELECT handoff_source_run_id FROM tasks WHERE id = $1", [
@@ -2761,21 +2765,81 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
         Repo.query!("UPDATE runs SET state = 'failed' WHERE id = $1", [source_run_id])
       end
 
+      assert_raise Postgrex.Error, ~r/goal_0006_handoff_source_run_immutable/i, fn ->
+        Repo.query!("UPDATE runs SET generation = generation + 1 WHERE id = $1", [source_run_id])
+      end
+
+      assert_raise Postgrex.Error, ~r/goal_0006_handoff_source_run_immutable/i, fn ->
+        Repo.query!("UPDATE runs SET result = '{}'::jsonb WHERE id = $1", [source_run_id])
+      end
+
       assert_raise Postgrex.Error, ~r/goal_0006_handoff_source_task_immutable/i, fn ->
         Repo.query!("UPDATE tasks SET state = 'failed' WHERE id = $1", [source_task_id])
+      end
+
+      assert_raise Postgrex.Error, ~r/goal_0006_handoff_source_task_immutable/i, fn ->
+        Repo.query!(
+          "UPDATE tasks SET current_generation = current_generation + 1 WHERE id = $1",
+          [
+            source_task_id
+          ]
+        )
+      end
+
+      assert_raise Postgrex.Error, ~r/goal_0006_handoff_source_task_immutable/i, fn ->
+        Repo.query!("UPDATE tasks SET result = '{}'::jsonb WHERE id = $1", [source_task_id])
+      end
+
+      assert_raise Postgrex.Error, ~r/goal_0006_handoff_plan_unsupported/i, fn ->
+        insert_planning_handoff_task!(goal_id, source_run_id, handoff_input(source_run_id))
       end
 
       assert_raise Postgrex.Error, ~r/goal_0006_handoff_source_requires_handoff_mode/i, fn ->
         insert_handoff_task!(goal_id, work_item_id, 1, source_run_id, %{"session_mode" => "fresh"})
       end
 
+      assert_raise Postgrex.Error, ~r/goal_0006_handoff_source_requires_handoff_mode/i, fn ->
+        insert_handoff_task!(goal_id, work_item_id, 1, nil, %{
+          "session_mode" => "fresh",
+          "handoff_source_run_id" => nil
+        })
+      end
+
+      assert_raise Postgrex.Error, ~r/goal_0006_handoff_source_run_mismatch/i, fn ->
+        insert_handoff_task!(goal_id, work_item_id, 1, source_run_id, %{
+          "session_mode" => "handoff"
+        })
+      end
+
+      assert_raise Postgrex.Error, ~r/goal_0006_handoff_source_run_mismatch/i, fn ->
+        insert_handoff_task!(
+          goal_id,
+          work_item_id,
+          1,
+          source_run_id,
+          handoff_input(Ecto.UUID.bingenerate())
+        )
+      end
+
+      assert_raise Postgrex.Error, ~r/goal_0006_handoff_source_run_mismatch/i, fn ->
+        insert_handoff_task!(
+          goal_id,
+          work_item_id,
+          1,
+          source_run_id,
+          handoff_input(String.upcase(source_run_id))
+        )
+      end
+
+      missing_source_run_id = Ecto.UUID.bingenerate()
+
       assert_raise Postgrex.Error, ~r/goal_0006_handoff_source_run_ineligible/i, fn ->
         insert_handoff_task!(
           goal_id,
           work_item_id,
           1,
-          Ecto.UUID.bingenerate(),
-          %{"session_mode" => "handoff"}
+          missing_source_run_id,
+          handoff_input(missing_source_run_id)
         )
       end
 
@@ -2785,7 +2849,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
           other_goal_work_item_id,
           1,
           source_run_id,
-          %{"session_mode" => "handoff"}
+          handoff_input(source_run_id)
         )
       end
 
@@ -2795,7 +2859,22 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
           same_goal_other_work_item_id,
           1,
           source_run_id,
-          %{"session_mode" => "handoff"}
+          handoff_input(source_run_id)
+        )
+      end
+
+      planning_source_task_id = insert_planning_task!(goal_id)
+
+      planning_source_run_id =
+        insert_terminal_goal_run!(planning_source_task_id, runtime_id, "completed")
+
+      assert_raise Postgrex.Error, ~r/goal_0006_handoff_source_run_ineligible/i, fn ->
+        insert_handoff_task!(
+          goal_id,
+          work_item_id,
+          1,
+          planning_source_run_id,
+          handoff_input(planning_source_run_id)
         )
       end
 
@@ -2813,7 +2892,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
           same_goal_other_work_item_id,
           1,
           failed_source_run_id,
-          %{"session_mode" => "handoff"}
+          handoff_input(failed_source_run_id)
         )
       end
 
@@ -2831,7 +2910,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
           revision_work_item_id,
           1,
           revision_source_run_id,
-          %{"session_mode" => "handoff"}
+          handoff_input(revision_source_run_id)
         )
       end
 
@@ -2841,16 +2920,20 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
           revision_work_item_id,
           2,
           revision_source_run_id,
-          %{"session_mode" => "handoff"}
+          handoff_input(revision_source_run_id)
         )
       end
 
       Repo.query!("UPDATE tasks SET state = 'completed' WHERE id = $1", [target_task_id])
 
       assert_raise Postgrex.Error, ~r/tasks_handoff_source_run_id_key/i, fn ->
-        insert_handoff_task!(goal_id, work_item_id, 1, source_run_id, %{
-          "session_mode" => "handoff"
-        })
+        insert_handoff_task!(
+          goal_id,
+          work_item_id,
+          1,
+          source_run_id,
+          handoff_input(source_run_id)
+        )
       end
 
       assert_raise Postgrex.Error,
@@ -2897,7 +2980,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
                   work_item_id,
                   1,
                   source_run_id,
-                  %{"session_mode" => "handoff"}
+                  handoff_input(source_run_id)
                 )
 
               send(parent, {:handoff_lineage_locks_held, self()})
@@ -2920,6 +3003,16 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
           Repo.query!("UPDATE goals SET event_sequence = event_sequence + 1 WHERE id = $1", [
             goal_id
           ])
+        end)
+
+        assert_handoff_lineage_lock_timeout!(contender_repo, fn ->
+          Repo.query!("UPDATE work_items SET position = position + 1 WHERE id = $1", [
+            work_item_id
+          ])
+        end)
+
+        assert_handoff_lineage_lock_timeout!(contender_repo, fn ->
+          Repo.query!("UPDATE tasks SET state = 'failed' WHERE id = $1", [source_task_id])
         end)
 
         assert_handoff_lineage_lock_timeout!(contender_repo, fn ->
@@ -3752,6 +3845,74 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
     task_id
   end
 
+  defp insert_planning_task!(goal_id) do
+    {:ok, task_id} =
+      Repo.transaction(fn ->
+        context_snapshot_id = insert_planning_context_snapshot!(goal_id)
+        task_id = Ecto.UUID.bingenerate()
+
+        Repo.query!(
+          """
+          INSERT INTO tasks (
+            id, idempotency_key, request_hash, goal, agent_profile, workspace, input,
+            required_capabilities, state, current_generation, attempt_generation, work_item_id,
+            goal_id, goal_revision, context_snapshot_id, purpose, validation_of_task_id, admission_key,
+            max_run_attempts, requested_session_id, handoff_source_run_id, inserted_at, updated_at
+          )
+          VALUES ($1, $2, $3, 'Goal plan', 'codex', 'primary', '{"session_mode":"fresh"}'::jsonb,
+                  '{}'::jsonb, 'completed', 1, 1, NULL, $4, 1, $5, 'plan', NULL, $6, 2, NULL, NULL,
+                  now(), now())
+          """,
+          [
+            task_id,
+            "planning-source-task-#{System.unique_integer([:positive])}",
+            hash(14),
+            goal_id,
+            context_snapshot_id,
+            Ecto.UUID.bingenerate()
+          ]
+        )
+
+        task_id
+      end)
+
+    task_id
+  end
+
+  defp insert_planning_handoff_task!(goal_id, source_run_id, input) do
+    Repo.transaction(fn ->
+      context_snapshot_id = insert_planning_context_snapshot!(goal_id)
+      task_id = Ecto.UUID.bingenerate()
+
+      Repo.query!(
+        """
+        INSERT INTO tasks (
+          id, idempotency_key, request_hash, goal, agent_profile, workspace, input,
+          required_capabilities, state, current_generation, attempt_generation, work_item_id,
+          goal_id, goal_revision, context_snapshot_id, purpose, validation_of_task_id, admission_key,
+          max_run_attempts, requested_session_id, handoff_source_run_id, inserted_at, updated_at
+        )
+        VALUES ($1, $2, $3, 'Goal plan', 'codex', 'primary', $4::jsonb, '{}'::jsonb,
+                'queued', 0, 1, NULL, $5, 1, $6, 'plan', NULL, $7, 2, NULL, $8, now(), now())
+        """,
+        [
+          task_id,
+          "planning-handoff-task-#{System.unique_integer([:positive])}",
+          hash(15),
+          Jason.encode!(input),
+          goal_id,
+          context_snapshot_id,
+          Ecto.UUID.bingenerate(),
+          source_run_id
+        ]
+      )
+    end)
+  end
+
+  defp handoff_input(source_run_id) do
+    %{"session_mode" => "handoff", "handoff_source_run_id" => source_run_id}
+  end
+
   defp insert_context_snapshot_at_revision!(goal_id, work_item_id, revision) do
     id = Ecto.UUID.bingenerate()
 
@@ -3774,10 +3935,16 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
         previous_dynamic_repo = Repo.put_dynamic_repo(repo)
 
         try do
-          Repo.transaction(fn ->
-            Repo.query!("SET LOCAL lock_timeout = '1s'")
-            update.()
-          end)
+          try do
+            Repo.transaction(fn ->
+              Repo.query!("SET LOCAL lock_timeout = '1s'")
+              update.()
+            end)
+
+            :unexpected_success
+          rescue
+            error in Postgrex.Error -> {:error, error}
+          end
         after
           Repo.put_dynamic_repo(previous_dynamic_repo)
         end

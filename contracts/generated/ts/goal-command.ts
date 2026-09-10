@@ -31,14 +31,6 @@ export type SymmetryGoalCommandV1 =
             subject: Subject;
             session_mode: "resume";
             requested_session_id: UUID;
-          }
-        | {
-            model_profile: ShortIdentifier;
-            repository_resource_id: UUID;
-            subject: Subject;
-            session_mode: "handoff";
-            requested_session_id: null;
-            handoff_source_run_id: UUID;
           };
     }
   | {

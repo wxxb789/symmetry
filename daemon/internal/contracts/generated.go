@@ -23,6 +23,7 @@ type AdapterOperations struct {
 	Cancel           bool      `json:"cancel"`
 	Events           bool      `json:"events"`
 	Guidance         Guidance  `json:"guidance"`
+	Handoff          bool      `json:"handoff"`
 	HardCostLimit    bool      `json:"hard_cost_limit"`
 	Pause            PauseEnum `json:"pause"`
 	Resume           bool      `json:"resume"`
@@ -322,7 +323,6 @@ type Payload struct {
 	RequestedSessionID      *string               `json:"requested_session_id"`
 	SessionMode             *SessionMode          `json:"session_mode,omitempty"`
 	Subject                 *PurpleSubject        `json:"subject,omitempty"`
-	HandoffSourceRunID      *string               `json:"handoff_source_run_id,omitempty"`
 	Reason                  *string               `json:"reason,omitempty"`
 	RevisionContract        *GoalRevisionContract `json:"revision_contract,omitempty"`
 	DecisionID              *string               `json:"decision_id"`
@@ -336,6 +336,7 @@ type Payload struct {
 	OptionID                *string               `json:"option_id,omitempty"`
 	Purpose                 *PayloadPurpose       `json:"purpose,omitempty"`
 	ValidationOfTaskID      *string               `json:"validation_of_task_id"`
+	HandoffSourceRunID      *string               `json:"handoff_source_run_id,omitempty"`
 	DependsOnID             *string               `json:"depends_on_id,omitempty"`
 	EvidenceIDS             []string              `json:"evidence_ids,omitempty"`
 	IntegrationWorkItemID   *string               `json:"integration_work_item_id,omitempty"`

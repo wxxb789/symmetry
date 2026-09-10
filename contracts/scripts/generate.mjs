@@ -118,6 +118,40 @@ const preserveGoNullableMicrousd = (contents) =>
     "$1$2$3*string$4"
   );
 
+// json-schema-to-typescript preserves the Draft 7 allOf validation shape for
+// Admission as an intersection, which otherwise leaves the handoff-only source
+// field optional in every TypeScript branch. Preserve the wire schema and emit
+// its session discriminator directly in the generated public type.
+const preserveAdmissionSessionDiscriminator = (contents) => {
+  const declaration = "export type SymmetryAdmissionV1 =";
+  if (!contents.includes(declaration)) {
+    throw new Error("Admission TypeScript output did not contain its expected type declaration");
+  }
+
+  return `${contents.replace(declaration, "type SymmetryAdmissionV1Base =")}
+export type SymmetryAdmissionV1 = SymmetryAdmissionV1Base &
+  (
+    | {
+        session_mode: "fresh";
+        requested_session_id: null;
+        handoff_source_run_id?: never;
+      }
+    | {
+        session_mode: "resume";
+        requested_session_id: UUID;
+        handoff_source_run_id?: never;
+      }
+    | {
+        session_mode: "handoff";
+        requested_session_id: null;
+        handoff_source_run_id: UUID;
+        purpose: "implement" | "validate" | "observe" | "chat";
+        work_item_id: UUID;
+      }
+  );
+`;
+};
+
 const canonicalize = (value) => {
   if (Array.isArray(value)) return value.map(canonicalize);
   if (!value || typeof value !== "object") return value;
@@ -175,7 +209,8 @@ const generate = async (check = false) => {
       style: { bracketSpacing: true },
       strictIndexSignatures: true
     });
-    generatedTypes.push({ key, contents: types.endsWith("\n") ? types : `${types}\n` });
+    const contents = key === "admission" ? preserveAdmissionSessionDiscriminator(types) : types;
+    generatedTypes.push({ key, contents: contents.endsWith("\n") ? contents : `${contents}\n` });
   }
 
   const indexContents = [

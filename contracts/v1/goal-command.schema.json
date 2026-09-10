@@ -58,19 +58,6 @@
                 "session_mode": {"const": "resume"},
                 "requested_session_id": {"$ref": "common.schema.json#/definitions/UUID"}
               }
-            },
-            {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["model_profile", "repository_resource_id", "subject", "session_mode", "requested_session_id", "handoff_source_run_id"],
-              "properties": {
-                "model_profile": {"$ref": "common.schema.json#/definitions/ShortIdentifier"},
-                "repository_resource_id": {"$ref": "common.schema.json#/definitions/UUID"},
-                "subject": {"$ref": "common.schema.json#/definitions/Subject"},
-                "session_mode": {"const": "handoff"},
-                "requested_session_id": {"type": "null"},
-                "handoff_source_run_id": {"$ref": "common.schema.json#/definitions/UUID"}
-              }
             }
           ]
         }

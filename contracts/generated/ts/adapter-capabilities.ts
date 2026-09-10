@@ -22,6 +22,7 @@ export interface AdapterOperations {
   events: boolean;
   cancel: boolean;
   resume: boolean;
+  handoff: boolean;
   guidance: "native_steer" | "next_turn" | "unsupported";
   pause: "safe_boundary" | "unsupported";
   approval_response: boolean;

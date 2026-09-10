@@ -186,31 +186,6 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
              |> json_response(200)
   end
 
-  test "handoff session attachment is visibly unsupported and never claims a retained session", %{
-    conn: conn
-  } do
-    %{token: token, item: item, run: run, fence: fence} = claimed_goal_run_fixture(conn)
-    task = Repo.get!(Task, run.task_id)
-    attrs = session_attrs(item)
-
-    Repo.update_all(
-      from(task_row in Task, where: task_row.id == ^task.id),
-      set: [input: Map.put(task.input, "session_mode", "handoff"), requested_session_id: nil]
-    )
-
-    session_count = Repo.aggregate(HarnessSession, :count)
-
-    assert_error(
-      bearer(conn, token)
-      |> put("/api/v1/runs/#{run.id}/session", Map.merge(fence, attrs)),
-      422,
-      "unsupported_capability"
-    )
-
-    assert Repo.aggregate(HarnessSession, :count) == session_count
-    assert Repo.get!(Run, run.id).harness_session_id == nil
-  end
-
   test "evidence and usage use exact per-run replay identities", %{conn: conn} do
     %{token: token, run: run, fence: fence, subject: subject} = claimed_goal_run_fixture(conn)
     evidence = Map.merge(fence, evidence_attrs(run.id, subject))

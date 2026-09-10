@@ -65,6 +65,13 @@
       "tags": ["admission", "planning", "wrong-identity"]
     },
     {
+      "id": "admission.plan-handoff",
+      "schema": "admission",
+      "path": "invalid/admission.plan-handoff.json",
+      "valid": false,
+      "tags": ["admission", "planning", "handoff-session", "unsupported-capability"]
+    },
+    {
       "id": "task-result.candidate",
       "schema": "task-result",
       "path": "valid/task-result.candidate.json",
@@ -301,6 +308,13 @@
       "path": "invalid/adapter.unknown-enum.json",
       "valid": false,
       "tags": ["unknown-enum", "unsupported-capability"]
+    },
+    {
+      "id": "adapter.missing-handoff",
+      "schema": "adapter-capabilities",
+      "path": "invalid/adapter.missing-handoff.json",
+      "valid": false,
+      "tags": ["adapter-capabilities", "handoff-session", "missing-control-field"]
     },
     {
       "id": "goal-revision.safe-integer-overflow",
@@ -566,9 +580,9 @@
     {
       "id": "goal-command.request-plan-handoff",
       "schema": "goal-command",
-      "path": "valid/goal-command.request-plan-handoff.json",
-      "valid": true,
-      "tags": ["goal-command", "request-plan", "planning", "handoff-session"]
+      "path": "invalid/goal-command.request-plan-handoff.json",
+      "valid": false,
+      "tags": ["goal-command", "request-plan", "planning", "handoff-session", "unsupported-capability"]
     },
     {
       "id": "goal-command.request-plan-decision",

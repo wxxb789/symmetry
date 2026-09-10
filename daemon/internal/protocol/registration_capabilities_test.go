@@ -33,7 +33,7 @@ func TestRuntimeCapabilitiesUseTheCanonicalSchemaAtTheJSONBoundary(t *testing.T)
 	for name, data := range map[string]string{
 		"empty legacy map":  `{}`,
 		"legacy booleans":   `{"structured_input":true,"provider_access":true}`,
-		"versioned adapter": `{"structured_input":true,"provider_access":true,"adapter":{"kind":"codex","native_version":"1.2.3","implementation_version":"symmetry-adapter-1","protocol_version":1,"operations":{"start":true,"events":true,"cancel":true,"resume":false,"guidance":"next_turn","pause":"unsupported","approval_response":false,"usage":"unknown","hard_cost_limit":false}}}`,
+		"versioned adapter": `{"structured_input":true,"provider_access":true,"adapter":{"kind":"codex","native_version":"1.2.3","implementation_version":"symmetry-adapter-1","protocol_version":1,"operations":{"start":true,"events":true,"cancel":true,"resume":false,"handoff":false,"guidance":"next_turn","pause":"unsupported","approval_response":false,"usage":"unknown","hard_cost_limit":false}}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			var capabilities RuntimeCapabilities
@@ -48,7 +48,7 @@ func TestRuntimeCapabilitiesUseTheCanonicalSchemaAtTheJSONBoundary(t *testing.T)
 
 	for name, data := range map[string]string{
 		"unknown legacy capability": `{"structured_input":true,"future_capability":true}`,
-		"unknown adapter operation": `{"adapter":{"kind":"codex","native_version":"1.2.3","implementation_version":"symmetry-adapter-1","protocol_version":1,"operations":{"start":true,"events":true,"cancel":true,"resume":false,"guidance":"next_turn","pause":"unsupported","approval_response":false,"usage":"unknown","hard_cost_limit":false,"extra":true}}}`,
+		"unknown adapter operation": `{"adapter":{"kind":"codex","native_version":"1.2.3","implementation_version":"symmetry-adapter-1","protocol_version":1,"operations":{"start":true,"events":true,"cancel":true,"resume":false,"handoff":false,"guidance":"next_turn","pause":"unsupported","approval_response":false,"usage":"unknown","hard_cost_limit":false,"extra":true}}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			var capabilities RuntimeCapabilities
@@ -62,7 +62,7 @@ func TestRuntimeCapabilitiesUseTheCanonicalSchemaAtTheJSONBoundary(t *testing.T)
 func TestRuntimeRegistrationCarriesNativeAndGenericMetadata(t *testing.T) {
 	repositoryResourceID := "00000000-0000-4000-8000-000000000001"
 	operations := AdapterOperations{
-		Start: true, Events: true, Cancel: true, Resume: false,
+		Start: true, Events: true, Cancel: true, Resume: false, Handoff: true,
 		Guidance: GuidanceNextTurn, Pause: PauseUnsupported,
 		ApprovalResponse: false, Usage: UsageUnknown, HardCostLimit: false,
 	}
@@ -103,7 +103,7 @@ func TestRuntimeRegistrationCarriesNativeAndGenericMetadata(t *testing.T) {
 	if err := restored.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if restored.Capabilities.Adapter == nil || restored.Capabilities.Adapter.Operations.Guidance != GuidanceNextTurn {
+	if restored.Capabilities.Adapter == nil || restored.Capabilities.Adapter.Operations.Guidance != GuidanceNextTurn || !restored.Capabilities.Adapter.Operations.Handoff {
 		t.Fatalf("adapter operations = %#v", restored.Capabilities.Adapter)
 	}
 
@@ -152,7 +152,7 @@ func TestRuntimeRegistrationRejectsInvalidRepositoryResourceID(t *testing.T) {
 func TestAdapterOperationsRejectImpossibleCombinations(t *testing.T) {
 	valid := func() AdapterOperations {
 		return AdapterOperations{
-			Start: true, Events: true, Cancel: true, Resume: false,
+			Start: true, Events: true, Cancel: true, Resume: false, Handoff: false,
 			Guidance: GuidanceNextTurn, Pause: PauseUnsupported,
 			ApprovalResponse: false, Usage: UsageUnknown, HardCostLimit: false,
 		}
@@ -162,6 +162,18 @@ func TestAdapterOperationsRejectImpossibleCombinations(t *testing.T) {
 			operations.Start = false
 			operations.Events = false
 			operations.Resume = true
+		},
+		"handoff requires start": func(operations *AdapterOperations) {
+			operations.Handoff = true
+			operations.Start = false
+		},
+		"handoff requires events": func(operations *AdapterOperations) {
+			operations.Handoff = true
+			operations.Events = false
+		},
+		"handoff requires cancel": func(operations *AdapterOperations) {
+			operations.Handoff = true
+			operations.Cancel = false
 		},
 		"events require start": func(operations *AdapterOperations) {
 			operations.Start = false
@@ -192,7 +204,7 @@ func TestAdapterOperationsRejectImpossibleCombinations(t *testing.T) {
 func TestRuntimeRegistrationRejectsControlIncompatibleAdapterClaims(t *testing.T) {
 	registrationFor := func(harnessKind string) RuntimeRegistration {
 		operations := AdapterOperations{
-			Start: true, Events: true, Cancel: true, Resume: false,
+			Start: true, Events: true, Cancel: true, Resume: false, Handoff: false,
 			Guidance: GuidanceNextTurn, Pause: PauseUnsupported,
 			ApprovalResponse: false, Usage: UsageUnknown, HardCostLimit: false,
 		}
@@ -222,6 +234,9 @@ func TestRuntimeRegistrationRejectsControlIncompatibleAdapterClaims(t *testing.T
 	for name, mutate := range map[string]func(*RuntimeRegistration){
 		"generic resume": func(registration *RuntimeRegistration) {
 			registration.Capabilities.Adapter.Operations.Resume = true
+		},
+		"generic handoff": func(registration *RuntimeRegistration) {
+			registration.Capabilities.Adapter.Operations.Handoff = true
 		},
 		"generic guidance": func(registration *RuntimeRegistration) {
 			registration.Capabilities.Adapter.Operations.Guidance = GuidanceNextTurn
@@ -283,7 +298,7 @@ func TestRuntimeRegistrationRejectsPartialOrInvalidNativeMetadata(t *testing.T) 
 		"partial metadata":               strings.Replace(legacy, `,"capabilities"`, `,"harness_kind":"codex","capabilities"`, 1),
 		"invalid protocol version":       strings.Replace(legacy, `,"capabilities"`, `,"harness_kind":"codex","harness_version":"1","adapter_version":"1","adapter_protocol_version":0,"capabilities"`, 1),
 		"control protocol version limit": strings.Replace(legacy, `,"capabilities"`, `,"harness_kind":"codex","harness_version":"1","adapter_version":"1","adapter_protocol_version":2147483648,"capabilities"`, 1),
-		"unknown adapter operation":      strings.Replace(legacy, `"capabilities":{"structured_input":true,"provider_access":true}`, `"capabilities":{"structured_input":true,"provider_access":true,"adapter":{"kind":"codex","native_version":"1","implementation_version":"adapter","protocol_version":1,"operations":{"start":true,"events":true,"cancel":true,"resume":false,"guidance":"unknown","pause":"unsupported","approval_response":false,"usage":"unknown","hard_cost_limit":false}}}`, 1),
+		"unknown adapter operation":      strings.Replace(legacy, `"capabilities":{"structured_input":true,"provider_access":true}`, `"capabilities":{"structured_input":true,"provider_access":true,"adapter":{"kind":"codex","native_version":"1","implementation_version":"adapter","protocol_version":1,"operations":{"start":true,"events":true,"cancel":true,"resume":false,"handoff":false,"guidance":"unknown","pause":"unsupported","approval_response":false,"usage":"unknown","hard_cost_limit":false}}}`, 1),
 	} {
 		t.Run(name, func(t *testing.T) {
 			var registration RuntimeRegistration

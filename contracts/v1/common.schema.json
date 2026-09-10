@@ -842,12 +842,13 @@
     "AdapterOperations": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["start", "events", "cancel", "resume", "guidance", "pause", "approval_response", "usage", "hard_cost_limit"],
+      "required": ["start", "events", "cancel", "resume", "handoff", "guidance", "pause", "approval_response", "usage", "hard_cost_limit"],
       "properties": {
         "start": {"type": "boolean"},
         "events": {"type": "boolean"},
         "cancel": {"type": "boolean"},
         "resume": {"type": "boolean"},
+        "handoff": {"type": "boolean"},
         "guidance": {"enum": ["native_steer", "next_turn", "unsupported"]},
         "pause": {"enum": ["safe_boundary", "unsupported"]},
         "approval_response": {"type": "boolean"},
