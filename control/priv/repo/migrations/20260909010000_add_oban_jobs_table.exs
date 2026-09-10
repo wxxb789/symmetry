@@ -4,7 +4,7 @@ defmodule SymmetryControl.Repo.Migrations.AddObanJobsTable do
   def up, do: Oban.Migrations.up(unlogged: false)
 
   def down do
-    execute("LOCK TABLE oban_jobs IN SHARE MODE")
+    execute("LOCK TABLE public.oban_jobs IN SHARE MODE")
 
     execute("""
     DO $$

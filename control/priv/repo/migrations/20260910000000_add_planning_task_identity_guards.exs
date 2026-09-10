@@ -125,9 +125,9 @@ defmodule SymmetryControl.Repo.Migrations.AddPlanningTaskIdentityGuards do
   end
 
   defp refuse_planning_history_rollback! do
-    execute("""
-    LOCK TABLE context_snapshots, tasks IN SHARE MODE;
+    execute("LOCK TABLE context_snapshots, tasks IN SHARE MODE")
 
+    execute("""
     DO $$
     BEGIN
       IF EXISTS (SELECT 1 FROM context_snapshots WHERE work_item_id IS NULL)
