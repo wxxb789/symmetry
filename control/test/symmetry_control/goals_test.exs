@@ -7243,14 +7243,16 @@ defmodule SymmetryControl.GoalsTest do
 
   defp goal_attrs(mutation_id \\ nil, execution_policy \\ %{}, context_manifest \\ %{}) do
     execution_policy =
-      execution_policy
-      |> Map.new(fn {key, value} -> {to_string(key), value} end)
-      |> Enum.reduce(["budget_limit_microusd", "per_run_cost_limit_microusd"], fn key, policy ->
-        case Map.get(policy, key) do
-          value when is_integer(value) -> Map.put(policy, key, Integer.to_string(value))
-          _ -> policy
+      Enum.reduce(
+        ["budget_limit_microusd", "per_run_cost_limit_microusd"],
+        Map.new(execution_policy, fn {key, value} -> {to_string(key), value} end),
+        fn key, policy ->
+          case Map.get(policy, key) do
+            value when is_integer(value) -> Map.put(policy, key, Integer.to_string(value))
+            _ -> policy
+          end
         end
-      end)
+      )
 
     execution_policy =
       %{
