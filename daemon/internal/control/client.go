@@ -127,6 +127,7 @@ type OperatorClient struct {
 type GoalSessionAttachRequest struct {
 	protocol.Fence
 	LocalHandleID        string  `json:"local_handle_id"`
+	BindingID            *string `json:"binding_id,omitempty"`
 	HarnessKind          string  `json:"harness_kind"`
 	HarnessVersion       string  `json:"harness_version"`
 	AdapterVersion       string  `json:"adapter_version"`
@@ -140,6 +141,8 @@ type GoalSessionAttachRequest struct {
 // session payloads or credentials.
 type GoalSessionReceipt struct {
 	ID                   string `json:"id"`
+	SessionID            string `json:"session_id,omitempty"`
+	AttachmentReceiptID  string `json:"attachment_receipt_id,omitempty"`
 	GoalID               string `json:"goal_id,omitempty"`
 	TaskID               string `json:"task_id,omitempty"`
 	RunID                string `json:"run_id"`
@@ -151,12 +154,35 @@ type GoalSessionReceipt struct {
 	HarnessVersion       string `json:"harness_version,omitempty"`
 	AdapterVersion       string `json:"adapter_version,omitempty"`
 	LocalHandleID        string `json:"local_handle_id,omitempty"`
+	BindingID            string `json:"binding_id,omitempty"`
 	WorkspaceFingerprint string `json:"workspace_fingerprint,omitempty"`
 	Workspace            string `json:"workspace,omitempty"`
 	State                string `json:"state,omitempty"`
 	LockVersion          int64  `json:"lock_version,omitempty"`
 	InsertedAt           string `json:"inserted_at,omitempty"`
 	UpdatedAt            string `json:"updated_at,omitempty"`
+}
+
+// GoalSessionStoppedRequest is the exact durable proof that one native
+// attachment stopped. The run ID is authoritative in the endpoint path.
+type GoalSessionStoppedRequest struct {
+	protocol.Fence
+	SessionID     string `json:"session_id"`
+	LocalHandleID string `json:"local_handle_id"`
+	BindingID     string `json:"binding_id"`
+}
+
+// GoalSessionStoppedReceipt is the immutable control-plane receipt for a
+// released retained session. It never includes native private identity.
+type GoalSessionStoppedReceipt struct {
+	ReceiptID     string  `json:"receipt_id"`
+	RunID         string  `json:"run_id"`
+	SessionID     string  `json:"session_id"`
+	LocalHandleID string  `json:"local_handle_id"`
+	BindingID     string  `json:"binding_id"`
+	State         string  `json:"state"`
+	ActiveRunID   *string `json:"active_run_id"`
+	LockVersion   int64   `json:"lock_version"`
 }
 
 // GoalEvidenceReceipt is the compact receipt returned after an evidence batch
@@ -597,6 +623,51 @@ func (client *Client) AttachHarnessSession(ctx context.Context, runID string, re
 		return GoalSessionReceipt{}, err
 	}
 	return wire.Session, nil
+}
+
+// FetchHarnessSessionAttachment returns the immutable attach receipt for the
+// current fenced run. It is used to recover an attach request whose response
+// was lost after Control committed it.
+func (client *Client) FetchHarnessSessionAttachment(ctx context.Context, runID string, fence protocol.Fence) (GoalSessionReceipt, error) {
+	if err := validateGoalFence(runID, fence); err != nil {
+		return GoalSessionReceipt{}, err
+	}
+	var wire struct {
+		Session GoalSessionReceipt `json:"session"`
+	}
+	statusCode, err := client.requestGoalWithStatus(ctx, http.MethodGet, "v1/runs/"+runID+"/session", goalFenceQuery(fence), "", nil, &wire)
+	if err != nil {
+		return GoalSessionReceipt{}, err
+	}
+	if statusCode != http.StatusOK {
+		return GoalSessionReceipt{}, responseErrorf("invalid fetch session attachment response: expected HTTP 200, got HTTP %d", statusCode)
+	}
+	if err := validateGoalSessionAttachmentReadback(runID, fence, wire.Session); err != nil {
+		return GoalSessionReceipt{}, err
+	}
+	return wire.Session, nil
+}
+
+// MarkHarnessSessionStopped releases a retained native attachment only after
+// the control plane has accepted the run's terminal transition.
+func (client *Client) MarkHarnessSessionStopped(ctx context.Context, runID string, request GoalSessionStoppedRequest) (GoalSessionStoppedReceipt, error) {
+	if err := validateGoalSessionStopped(runID, request); err != nil {
+		return GoalSessionStoppedReceipt{}, err
+	}
+	var wire struct {
+		SessionStopped GoalSessionStoppedReceipt `json:"session_stopped"`
+	}
+	statusCode, err := client.requestGoalWithStatus(ctx, http.MethodPut, "v1/runs/"+runID+"/session/stopped", nil, "", request, &wire)
+	if err != nil {
+		return GoalSessionStoppedReceipt{}, err
+	}
+	if statusCode != http.StatusOK && statusCode != http.StatusCreated {
+		return GoalSessionStoppedReceipt{}, responseErrorf("invalid session stopped response: expected HTTP 200 or 201, got HTTP %d", statusCode)
+	}
+	if err := validateGoalSessionStoppedReceipt(runID, request, wire.SessionStopped); err != nil {
+		return GoalSessionStoppedReceipt{}, err
+	}
+	return wire.SessionStopped, nil
 }
 
 // AppendEvidence submits one normalized evidence receipt under the current

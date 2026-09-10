@@ -758,6 +758,189 @@ func TestCloseGoalSessionClearsNativeHandleAndReplaysAfterRestart(t *testing.T) 
 	}
 }
 
+func TestRetainedGoalSessionStopPreservesNativeAndControlIdentity(t *testing.T) {
+	store := mustStore(t)
+	intent := testGoalSessionIntent()
+	intent.LocalHandleID = "00000000-0000-4000-8000-000000000010"
+	intent.BindingID = "00000000-0000-4000-8000-000000000011"
+	intent.WorkspacePath = `C:\worktree\retained`
+	saved, err := store.SaveGoalSessionLaunchIntent(intent)
+	if err != nil {
+		t.Fatalf("SaveGoalSessionLaunchIntent() error = %v", err)
+	}
+	if _, err := store.MarkGoalSessionLaunchStarted(saved.Key()); err != nil {
+		t.Fatalf("MarkGoalSessionLaunchStarted() error = %v", err)
+	}
+	if _, err := store.PersistGoalSessionHandle(saved.Key(), GoalSessionHandle{NativeSessionID: "native-retained", NativeSessionFilename: `C:\native\retained.json`}); err != nil {
+		t.Fatalf("PersistGoalSessionHandle() error = %v", err)
+	}
+	controlSessionID := "00000000-0000-4000-8000-000000000012"
+	attachmentReceiptID := "00000000-0000-4000-8000-000000000015"
+	if _, err := store.PersistGoalSessionControlAttachment(saved.Key(), controlSessionID, intent.BindingID, attachmentReceiptID, false); err != nil {
+		t.Fatalf("PersistGoalSessionControlAttachment() error = %v", err)
+	}
+	attached, err := store.LoadGoalSession(saved.Key())
+	if err != nil || attached.ControlAttachmentReceiptID != attachmentReceiptID || !attached.HasVerifiedControlAttachment() {
+		t.Fatalf("persisted attachment receipt = %#v, error = %v", attached, err)
+	}
+	if _, err := store.PersistGoalSessionControlAttachment(saved.Key(), controlSessionID, intent.BindingID, "00000000-0000-4000-8000-000000000016", false); !errors.Is(err, ErrGoalSessionConflict) {
+		t.Fatalf("PersistGoalSessionControlAttachment() with changed receipt error = %v, want ErrGoalSessionConflict", err)
+	}
+	pending, err := store.MarkGoalSessionStoppedPending(saved.Key())
+	if err != nil {
+		t.Fatalf("MarkGoalSessionStoppedPending() error = %v", err)
+	}
+	if pending.SessionState != GoalSessionStateUnavailable || pending.LaunchState != GoalSessionLaunchStateAttached || pending.NativeSessionID != "native-retained" || pending.NativeSessionFilename == "" || pending.ControlSessionID != controlSessionID || pending.WorkspacePath != intent.WorkspacePath {
+		t.Fatalf("stopped-pending journal = %#v", pending)
+	}
+	stopReceiptID := "00000000-0000-4000-8000-000000000014"
+	certificate := GoalSessionStopCertificate{RunID: intent.RunID, Generation: intent.Generation, SessionID: controlSessionID, LocalHandleID: intent.LocalHandleID, BindingID: intent.BindingID, DeliveryDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ReceiptID: stopReceiptID}
+	available, err := store.MarkGoalSessionAvailable(saved.Key(), certificate)
+	if err != nil {
+		t.Fatalf("MarkGoalSessionAvailable() error = %v", err)
+	}
+	if available.SessionState != GoalSessionStateAvailable || available.NativeSessionID != "native-retained" || available.ControlSessionID != controlSessionID || available.StopCertificate == nil || available.StopCertificate.ReceiptID != stopReceiptID || available.BindingID != intent.BindingID {
+		t.Fatalf("available retained journal = %#v", available)
+	}
+	if replayed, err := store.MarkGoalSessionAvailable(saved.Key(), certificate); err != nil || replayed.StopCertificate == nil || *replayed.StopCertificate != certificate || replayed.SessionState != GoalSessionStateAvailable {
+		t.Fatalf("MarkGoalSessionAvailable() exact replay = %#v, error = %v", replayed, err)
+	}
+	staleCertificate := certificate
+	staleCertificate.BindingID = "00000000-0000-4000-8000-000000000013"
+	if _, err := store.MarkGoalSessionAvailable(saved.Key(), staleCertificate); !errors.Is(err, ErrGoalSessionConflict) {
+		t.Fatalf("MarkGoalSessionAvailable() with stale binding error = %v, want ErrGoalSessionConflict", err)
+	}
+	staleCertificate = certificate
+	staleCertificate.ReceiptID = "00000000-0000-4000-8000-000000000016"
+	if _, err := store.MarkGoalSessionAvailable(saved.Key(), staleCertificate); !errors.Is(err, ErrGoalSessionConflict) {
+		t.Fatalf("MarkGoalSessionAvailable() with changed receipt error = %v, want ErrGoalSessionConflict", err)
+	}
+	staleCertificate = certificate
+	staleCertificate.DeliveryDigest = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	if _, err := store.MarkGoalSessionAvailable(saved.Key(), staleCertificate); !errors.Is(err, ErrGoalSessionConflict) {
+		t.Fatalf("MarkGoalSessionAvailable() with changed digest error = %v, want ErrGoalSessionConflict", err)
+	}
+}
+
+func TestLegacyControlAttachmentJournalLoadsButCannotResumeOrRelease(t *testing.T) {
+	directory := t.TempDir()
+	store, err := New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := testGoalSessionIntent()
+	intent.LocalHandleID = "00000000-0000-4000-8000-000000000010"
+	intent.BindingID = "00000000-0000-4000-8000-000000000011"
+	saved, err := store.SaveGoalSessionLaunchIntent(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkGoalSessionLaunchStarted(saved.Key()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PersistGoalSessionHandle(saved.Key(), GoalSessionHandle{NativeSessionID: "native-retained"}); err != nil {
+		t.Fatal(err)
+	}
+	controlSessionID := "00000000-0000-4000-8000-000000000012"
+	attachmentReceiptID := "00000000-0000-4000-8000-000000000015"
+	if _, err := store.PersistGoalSessionControlAttachment(saved.Key(), controlSessionID, intent.BindingID, attachmentReceiptID, false); err != nil {
+		t.Fatal(err)
+	}
+	path := store.goalSessionPath(saved.Key())
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &raw); err != nil {
+		t.Fatal(err)
+	}
+	delete(raw, "control_attachment_receipt_id")
+	legacyEncoded, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, legacyEncoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := New(directory)
+	if err != nil {
+		t.Fatalf("restart with legacy attachment journal: %v", err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	legacy, err := restarted.LoadGoalSession(saved.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !legacy.IsLegacyControlAttachment() || legacy.HasVerifiedControlAttachment() || legacy.ControlSessionID != controlSessionID || legacy.ControlAttachmentReceiptID != "" {
+		t.Fatalf("legacy attachment journal = %#v", legacy)
+	}
+	if err := restarted.CheckGoalSessionCompatibility(saved.Key(), testGoalSessionCompatibility()); !errors.Is(err, ErrGoalSessionCompatibilityIncomplete) {
+		t.Fatalf("legacy CheckGoalSessionCompatibility() error = %v, want ErrGoalSessionCompatibilityIncomplete", err)
+	}
+	if _, err := restarted.MarkGoalSessionStoppedPending(saved.Key()); !errors.Is(err, ErrGoalSessionCompatibilityIncomplete) {
+		t.Fatalf("legacy MarkGoalSessionStoppedPending() error = %v, want ErrGoalSessionCompatibilityIncomplete", err)
+	}
+	certificate := GoalSessionStopCertificate{RunID: intent.RunID, Generation: intent.Generation, SessionID: controlSessionID, LocalHandleID: intent.LocalHandleID, BindingID: intent.BindingID, DeliveryDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ReceiptID: "00000000-0000-4000-8000-000000000014"}
+	if _, err := restarted.MarkGoalSessionAvailable(saved.Key(), certificate); !errors.Is(err, ErrGoalSessionCompatibilityIncomplete) {
+		t.Fatalf("legacy MarkGoalSessionAvailable() error = %v, want ErrGoalSessionCompatibilityIncomplete", err)
+	}
+	upgraded, err := restarted.PersistGoalSessionControlAttachment(saved.Key(), controlSessionID, intent.BindingID, attachmentReceiptID, false)
+	if err != nil || !upgraded.HasVerifiedControlAttachment() || upgraded.IsLegacyControlAttachment() {
+		t.Fatalf("upgrade legacy attachment = %#v, error = %v", upgraded, err)
+	}
+	if _, err := restarted.MarkGoalSessionStoppedPending(saved.Key()); err != nil {
+		t.Fatalf("MarkGoalSessionStoppedPending() after upgrade error = %v", err)
+	}
+}
+
+func TestRetainedGoalSessionStopCertificateSurvivesStoreRestart(t *testing.T) {
+	directory := t.TempDir()
+	store, err := New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := testGoalSessionIntent()
+	intent.LocalHandleID = "00000000-0000-4000-8000-000000000010"
+	intent.BindingID = "00000000-0000-4000-8000-000000000011"
+	saved, err := store.SaveGoalSessionLaunchIntent(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkGoalSessionLaunchStarted(saved.Key()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PersistGoalSessionHandle(saved.Key(), GoalSessionHandle{NativeSessionID: "native-retained"}); err != nil {
+		t.Fatal(err)
+	}
+	controlSessionID := "00000000-0000-4000-8000-000000000012"
+	if _, err := store.PersistGoalSessionControlAttachment(saved.Key(), controlSessionID, intent.BindingID, "00000000-0000-4000-8000-000000000015", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkGoalSessionStoppedPending(saved.Key()); err != nil {
+		t.Fatal(err)
+	}
+	certificate := GoalSessionStopCertificate{RunID: intent.RunID, Generation: intent.Generation, SessionID: controlSessionID, LocalHandleID: intent.LocalHandleID, BindingID: intent.BindingID, DeliveryDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ReceiptID: "00000000-0000-4000-8000-000000000014"}
+	if _, err := store.MarkGoalSessionAvailable(saved.Key(), certificate); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	loaded, err := restarted.LoadGoalSession(saved.Key())
+	if err != nil || loaded.StopCertificate == nil || *loaded.StopCertificate != certificate || !loaded.HasVerifiedControlAttachment() || loaded.SessionState != GoalSessionStateAvailable {
+		t.Fatalf("restarted retained stop certificate = %#v, error = %v", loaded, err)
+	}
+}
+
 func TestCloseGoalSessionRejectsUncertainJournalAndPreservesIt(t *testing.T) {
 	store := mustStore(t)
 	saved, err := store.SaveGoalSessionLaunchIntent(testGoalSessionIntent())
@@ -865,6 +1048,31 @@ func TestSetGoalSessionStateClosedUsesSafeClose(t *testing.T) {
 	}
 	if closed.NativeSessionID != "" || closed.LaunchState != GoalSessionLaunchStateClosed {
 		t.Fatalf("SetGoalSessionState(closed) retained native identity: %#v", closed)
+	}
+}
+
+func TestSetGoalSessionStateRejectsAvailableWithoutCertificate(t *testing.T) {
+	store := mustStore(t)
+	saved, err := store.SaveGoalSessionLaunchIntent(testGoalSessionIntent())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkGoalSessionLaunchStarted(saved.Key()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PersistGoalSessionHandle(saved.Key(), GoalSessionHandle{NativeSessionID: "native-private-id"}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.LoadGoalSession(saved.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetGoalSessionState(saved.Key(), GoalSessionStateAvailable); err == nil {
+		t.Fatal("SetGoalSessionState(available) succeeded without a certificate")
+	}
+	after, err := store.LoadGoalSession(saved.Key())
+	if err != nil || after != before {
+		t.Fatalf("available setter bypass changed journal: before=%#v after=%#v error=%v", before, after, err)
 	}
 }
 

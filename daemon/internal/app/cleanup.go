@@ -212,6 +212,13 @@ func (daemon *daemon) cleanupRecoveredWorkspace(ctx context.Context, journal sta
 	if journal.WorkspaceBindingKey == "" {
 		return errors.New("recovered workspace binding key is missing")
 	}
+	retained, err := daemon.retainedGoalSessionWorkspace(journal.Key())
+	if err != nil {
+		return err
+	}
+	if retained {
+		return nil
+	}
 	cleanupContext, cancel := daemon.cleanupContext(ctx)
 	defer cancel()
 	prepared, err := daemon.workspace.Recover(cleanupContext, journal.WorkspaceBindingKey, workspace.RunRef{RunID: journal.RunID, Generation: journal.Generation}, journal.WorkspacePath)
@@ -304,7 +311,28 @@ func (daemon *daemon) goalRecoveryEvidenceRequired(journal state.RunJournal) (bo
 		if session.RunID != journal.RunID || session.Generation != journal.Generation {
 			continue
 		}
-		if session.NeedsReconciliation() || session.SessionState != state.GoalSessionStateClosed {
+		if session.NeedsReconciliation() {
+			return true, nil
+		}
+		if session.SessionState == state.GoalSessionStateClosed {
+			continue
+		}
+		if session.SessionState == state.GoalSessionStateAvailable && retainedGoalSessionAvailable(session) {
+			continue
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+func (daemon *daemon) retainedGoalSessionWorkspace(key state.RunKey) (bool, error) {
+	sessions, err := daemon.store.ListGoalSessions()
+	if err != nil {
+		return false, fmt.Errorf("list Goal sessions before workspace cleanup: %w", err)
+	}
+	for _, session := range sessions {
+		if session.RunID == key.RunID && session.Generation == key.Generation &&
+			retainedGoalSessionAvailable(session) {
 			return true, nil
 		}
 	}

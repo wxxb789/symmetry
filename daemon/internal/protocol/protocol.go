@@ -396,15 +396,17 @@ type ProviderAccess struct {
 
 // ClaimResponse returns a durable lease and its assigned work.
 type ClaimResponse struct {
-	RunID          string          `json:"run_id"`
-	TaskID         string          `json:"task_id"`
-	Generation     int64           `json:"generation"`
-	ClaimID        string          `json:"claim_id"`
-	LeaseToken     string          `json:"lease_token"`
-	LeaseExpiresAt time.Time       `json:"lease_expires_at"`
-	Work           Work            `json:"work"`
-	ProviderAccess *ProviderAccess `json:"provider_access,omitempty"`
-	present        map[string]struct{}
+	RunID            string          `json:"run_id"`
+	TaskID           string          `json:"task_id"`
+	Generation       int64           `json:"generation"`
+	HarnessSessionID *string         `json:"harness_session_id"`
+	HarnessBindingID *string         `json:"harness_binding_id"`
+	ClaimID          string          `json:"claim_id"`
+	LeaseToken       string          `json:"lease_token"`
+	LeaseExpiresAt   time.Time       `json:"lease_expires_at"`
+	Work             Work            `json:"work"`
+	ProviderAccess   *ProviderAccess `json:"provider_access,omitempty"`
+	present          map[string]struct{}
 }
 
 // UnmarshalJSON retains whether optional claim fields were sent so a present

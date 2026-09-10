@@ -149,6 +149,7 @@ type GoalSessionLaunchIntent struct {
 	// never a native-session handle, and only applies to handoff admissions.
 	HandoffSourceRunID     string `json:"handoff_source_run_id,omitempty"`
 	LocalHandleID          string `json:"local_handle_id"`
+	BindingID              string `json:"binding_id,omitempty"`
 	OwnerID                string `json:"owner_id,omitempty"`
 	MachineID              string `json:"machine_id,omitempty"`
 	RuntimeID              string `json:"runtime_id,omitempty"`
@@ -159,6 +160,7 @@ type GoalSessionLaunchIntent struct {
 	AdapterVersion         string `json:"adapter_version"`
 	AdapterProtocolVersion int    `json:"adapter_protocol_version"`
 	WorkspaceFingerprint   string `json:"workspace_fingerprint"`
+	WorkspacePath          string `json:"workspace_path,omitempty"`
 	SessionMode            string `json:"session_mode"`
 }
 
@@ -168,17 +170,33 @@ type GoalSessionLaunchIntent struct {
 // They are never part of the control-plane projection.
 type GoalSessionJournal struct {
 	GoalSessionLaunchIntent
-	SchemaVersion         int       `json:"schema_version"`
-	SessionState          string    `json:"session_state"`
-	LaunchState           string    `json:"launch_state"`
-	LaunchAttempted       bool      `json:"launch_attempted,omitempty"`
-	LaunchAttemptedAt     time.Time `json:"launch_attempted_at,omitempty"`
-	RecoveryRequired      bool      `json:"recovery_required,omitempty"`
-	NativeSessionID       string    `json:"native_session_id,omitempty"`
-	NativeSessionFilename string    `json:"native_session_filename,omitempty"`
-	UncertainReason       string    `json:"uncertain_reason,omitempty"`
-	CreatedAt             time.Time `json:"created_at"`
-	UpdatedAt             time.Time `json:"updated_at"`
+	SchemaVersion              int                         `json:"schema_version"`
+	SessionState               string                      `json:"session_state"`
+	LaunchState                string                      `json:"launch_state"`
+	LaunchAttempted            bool                        `json:"launch_attempted,omitempty"`
+	LaunchAttemptedAt          time.Time                   `json:"launch_attempted_at,omitempty"`
+	RecoveryRequired           bool                        `json:"recovery_required,omitempty"`
+	NativeSessionID            string                      `json:"native_session_id,omitempty"`
+	NativeSessionFilename      string                      `json:"native_session_filename,omitempty"`
+	ControlSessionID           string                      `json:"control_session_id,omitempty"`
+	ControlAttachmentReceiptID string                      `json:"control_attachment_receipt_id,omitempty"`
+	StopCertificate            *GoalSessionStopCertificate `json:"stop_certificate,omitempty"`
+	UncertainReason            string                      `json:"uncertain_reason,omitempty"`
+	CreatedAt                  time.Time                   `json:"created_at"`
+	UpdatedAt                  time.Time                   `json:"updated_at"`
+}
+
+// GoalSessionStopCertificate is the durable local proof that Control accepted
+// a precise stopped attachment. It survives deletion of the completed Run
+// journal, which intentionally does not own retained-session lifecycle.
+type GoalSessionStopCertificate struct {
+	RunID          string `json:"run_id"`
+	Generation     int64  `json:"generation"`
+	SessionID      string `json:"session_id"`
+	LocalHandleID  string `json:"local_handle_id"`
+	BindingID      string `json:"binding_id"`
+	DeliveryDigest string `json:"delivery_digest"`
+	ReceiptID      string `json:"receipt_id"`
 }
 
 // GoalSessionHandle is the local native identity obtained after a successful
@@ -271,6 +289,23 @@ func (journal GoalSessionJournal) Compatibility() GoalSessionCompatibility {
 // an unverified native launch.
 func (journal GoalSessionJournal) NeedsReconciliation() bool {
 	return journal.RecoveryRequired || (journal.LaunchAttempted && journal.LaunchState != GoalSessionLaunchStateAttached && journal.LaunchState != GoalSessionLaunchStateClosed)
+}
+
+// HasVerifiedControlAttachment reports whether the attachment has the
+// immutable Control receipt required for release or native-session reuse.
+func (journal GoalSessionJournal) HasVerifiedControlAttachment() bool {
+	return journal.LaunchState == GoalSessionLaunchStateAttached && journal.NativeSessionID != "" &&
+		validGoalSessionUUID(journal.ControlSessionID) && validGoalSessionUUID(journal.BindingID) &&
+		validGoalSessionUUID(journal.ControlAttachmentReceiptID)
+}
+
+// IsLegacyControlAttachment identifies a journal written before attachment
+// receipts existed. It remains readable for recovery, but cannot resume or
+// release until readback supplies the immutable receipt.
+func (journal GoalSessionJournal) IsLegacyControlAttachment() bool {
+	return journal.LaunchState == GoalSessionLaunchStateAttached && journal.NativeSessionID != "" &&
+		validGoalSessionUUID(journal.ControlSessionID) && validGoalSessionUUID(journal.BindingID) &&
+		journal.ControlAttachmentReceiptID == ""
 }
 
 // IsUncertainLaunch reports whether the record explicitly represents an
@@ -544,6 +579,103 @@ func (store *Store) PersistGoalSessionHandle(key GoalSessionKey, handle GoalSess
 	})
 }
 
+// PersistGoalSessionControlAttachment durably records the public Control
+// session identity returned by the attach receipt. It is a barrier: callers
+// must not acknowledge the attach outbox item until this mapping is on disk.
+func (store *Store) PersistGoalSessionControlAttachment(key GoalSessionKey, controlSessionID, bindingID, attachmentReceiptID string, serverIssuedBinding bool) (GoalSessionJournal, error) {
+	if !validGoalSessionUUID(controlSessionID) || !validGoalSessionUUID(bindingID) || !validGoalSessionUUID(attachmentReceiptID) {
+		return GoalSessionJournal{}, errors.New("Goal session control attachment is invalid")
+	}
+	return store.mutateGoalSession(key, func(journal *GoalSessionJournal) error {
+		if journal.NeedsReconciliation() {
+			return ErrGoalSessionUncertain
+		}
+		if journal.LaunchState != GoalSessionLaunchStateAttached || journal.NativeSessionID == "" {
+			return ErrGoalSessionNotAttached
+		}
+		if journal.BindingID != "" && journal.BindingID != bindingID {
+			return ErrGoalSessionConflict
+		}
+		if journal.BindingID == "" && !serverIssuedBinding {
+			return ErrGoalSessionConflict
+		}
+		if journal.ControlSessionID != "" && journal.ControlSessionID != controlSessionID {
+			return ErrGoalSessionConflict
+		}
+		if journal.ControlAttachmentReceiptID != "" && journal.ControlAttachmentReceiptID != attachmentReceiptID {
+			return ErrGoalSessionConflict
+		}
+		journal.ControlSessionID = controlSessionID
+		journal.ControlAttachmentReceiptID = attachmentReceiptID
+		journal.BindingID = bindingID
+		journal.UpdatedAt = time.Now().UTC()
+		return nil
+	})
+}
+
+// MarkGoalSessionStoppedPending records known native termination without
+// discarding the native resume identity. A separate fenced Control receipt is
+// required before the journal becomes locally available for a later resume.
+func (store *Store) MarkGoalSessionStoppedPending(key GoalSessionKey) (GoalSessionJournal, error) {
+	return store.mutateGoalSession(key, func(journal *GoalSessionJournal) error {
+		if journal.NeedsReconciliation() {
+			return ErrGoalSessionUncertain
+		}
+		if journal.LaunchState != GoalSessionLaunchStateAttached || journal.NativeSessionID == "" {
+			return ErrGoalSessionNotAttached
+		}
+		if journal.IsLegacyControlAttachment() {
+			return ErrGoalSessionCompatibilityIncomplete
+		}
+		if !validGoalSessionUUID(journal.ControlSessionID) || !validGoalSessionUUID(journal.BindingID) {
+			return ErrGoalSessionConflict
+		}
+		if journal.SessionState != GoalSessionStateBusy && journal.SessionState != GoalSessionStateUnavailable {
+			return ErrGoalSessionConflict
+		}
+		journal.SessionState = GoalSessionStateUnavailable
+		journal.UpdatedAt = time.Now().UTC()
+		return nil
+	})
+}
+
+// MarkGoalSessionAvailable acknowledges the matching Control stop receipt.
+// It deliberately retains the local native session handle and workspace for
+// explicit resume; permanent destruction remains CloseGoalSession's job.
+func (store *Store) MarkGoalSessionAvailable(key GoalSessionKey, certificate GoalSessionStopCertificate) (GoalSessionJournal, error) {
+	if !validGoalSessionStopCertificate(certificate) {
+		return GoalSessionJournal{}, errors.New("Goal session availability receipt is invalid")
+	}
+	return store.mutateGoalSession(key, func(journal *GoalSessionJournal) error {
+		if journal.NeedsReconciliation() {
+			return ErrGoalSessionUncertain
+		}
+		if journal.IsLegacyControlAttachment() {
+			return ErrGoalSessionCompatibilityIncomplete
+		}
+		if journal.LaunchState != GoalSessionLaunchStateAttached || journal.NativeSessionID == "" ||
+			journal.ControlSessionID != certificate.SessionID || journal.BindingID != certificate.BindingID ||
+			journal.RunID != certificate.RunID || journal.Generation != certificate.Generation ||
+			journal.LocalHandleID != certificate.LocalHandleID {
+			return ErrGoalSessionConflict
+		}
+		if journal.StopCertificate != nil {
+			if *journal.StopCertificate == certificate {
+				return nil
+			}
+			return ErrGoalSessionConflict
+		}
+		if journal.SessionState != GoalSessionStateUnavailable && journal.SessionState != GoalSessionStateAvailable {
+			return ErrGoalSessionConflict
+		}
+		journal.SessionState = GoalSessionStateAvailable
+		certificateCopy := certificate
+		journal.StopCertificate = &certificateCopy
+		journal.UpdatedAt = time.Now().UTC()
+		return nil
+	})
+}
+
 // AttachGoalSession is an alias for the explicit post-launch persistence
 // operation. It never reattaches merely because a journal exists.
 func (store *Store) AttachGoalSession(key GoalSessionKey, handle GoalSessionHandle, expected ...GoalSessionCompatibility) (GoalSessionJournal, error) {
@@ -581,6 +713,9 @@ func (store *Store) MarkGoalSessionUncertain(key GoalSessionKey, reason string) 
 		}
 		journal.NativeSessionID = ""
 		journal.NativeSessionFilename = ""
+		journal.ControlSessionID = ""
+		journal.ControlAttachmentReceiptID = ""
+		journal.StopCertificate = nil
 		journal.RecoveryRequired = true
 		journal.UncertainReason = reason
 		journal.UpdatedAt = time.Now().UTC()
@@ -635,6 +770,9 @@ func (store *Store) ResolveGoalSessionUncertainStopped(key GoalSessionKey, expec
 		}
 		journal.NativeSessionID = ""
 		journal.NativeSessionFilename = ""
+		journal.ControlSessionID = ""
+		journal.ControlAttachmentReceiptID = ""
+		journal.StopCertificate = nil
 		journal.SessionState = GoalSessionStateClosed
 		journal.LaunchState = GoalSessionLaunchStateClosed
 		journal.RecoveryRequired = false
@@ -661,6 +799,9 @@ func (store *Store) CloseGoalSession(key GoalSessionKey) (GoalSessionJournal, er
 		}
 		journal.NativeSessionID = ""
 		journal.NativeSessionFilename = ""
+		journal.ControlSessionID = ""
+		journal.ControlAttachmentReceiptID = ""
+		journal.StopCertificate = nil
 		journal.SessionState = GoalSessionStateClosed
 		journal.LaunchState = GoalSessionLaunchStateClosed
 		journal.UpdatedAt = time.Now().UTC()
@@ -677,6 +818,9 @@ func (store *Store) SetGoalSessionState(key GoalSessionKey, sessionState string)
 	}
 	if sessionState == GoalSessionStateClosed {
 		return store.CloseGoalSession(key)
+	}
+	if sessionState == GoalSessionStateAvailable {
+		return GoalSessionJournal{}, errors.New("available Goal session state requires a stop certificate")
 	}
 	return store.mutateGoalSession(key, func(journal *GoalSessionJournal) error {
 		if journal.LaunchState == GoalSessionLaunchStateClosed || journal.SessionState == GoalSessionStateClosed {
@@ -1085,7 +1229,7 @@ func validateGoalSessionLineageKey(lineage GoalSessionLineageKey) error {
 }
 
 func validateGoalSessionIntent(intent GoalSessionLaunchIntent) error {
-	if err := validateGoalSessionKey(intent.Key()); err != nil || !validRequiredString(intent.LaunchIntentID, 4096) || intent.GoalRevision <= 0 || intent.Generation < 0 || len(intent.WorkItemID) > 4096 || len(intent.TaskID) > 4096 || len(intent.RunID) > 4096 || len(intent.AdmissionID) > 4096 || len(intent.HandoffSourceRunID) > 36 {
+	if err := validateGoalSessionKey(intent.Key()); err != nil || !validRequiredString(intent.LaunchIntentID, 4096) || intent.GoalRevision <= 0 || intent.Generation < 0 || len(intent.WorkItemID) > 4096 || len(intent.TaskID) > 4096 || len(intent.RunID) > 4096 || len(intent.AdmissionID) > 4096 || len(intent.HandoffSourceRunID) > 36 || len(intent.WorkspacePath) > 32768 {
 		return errors.New("goal session launch intent is invalid")
 	}
 	if intent.RunID != "" && intent.Generation <= 0 {
@@ -1096,6 +1240,9 @@ func validateGoalSessionIntent(intent GoalSessionLaunchIntent) error {
 	}
 	if intent.RuntimeEpoch < 0 || !validRequiredString(intent.HarnessKind, 4096) || !validRequiredString(intent.HarnessVersion, 4096) || !validRequiredString(intent.AdapterVersion, 4096) || intent.AdapterProtocolVersion <= 0 || !validRequiredString(intent.WorkspaceFingerprint, 4096) || !validGoalSessionMode(intent.SessionMode) {
 		return errors.New("goal session launch identity is invalid")
+	}
+	if intent.BindingID != "" && !validGoalSessionUUID(intent.BindingID) {
+		return errors.New("goal session binding ID is invalid")
 	}
 	switch intent.SessionMode {
 	case GoalSessionModeHandoff:
@@ -1119,7 +1266,7 @@ func validateGoalSessionJournal(journal GoalSessionJournal) error {
 	if err := validateGoalSessionIntent(journal.Intent()); err != nil {
 		return err
 	}
-	if !validGoalSessionState(journal.SessionState) || !validGoalSessionLaunchState(journal.LaunchState) || len(journal.NativeSessionID) > 65536 || len(journal.NativeSessionFilename) > 32768 || len(journal.UncertainReason) > 4096 {
+	if !validGoalSessionState(journal.SessionState) || !validGoalSessionLaunchState(journal.LaunchState) || len(journal.NativeSessionID) > 65536 || len(journal.NativeSessionFilename) > 32768 || len(journal.UncertainReason) > 4096 || (journal.ControlSessionID != "" && !validGoalSessionUUID(journal.ControlSessionID)) || (journal.ControlAttachmentReceiptID != "" && !validGoalSessionUUID(journal.ControlAttachmentReceiptID)) {
 		return errors.New("goal session journal is invalid")
 	}
 	if journal.LaunchAttemptedAt.IsZero() != !journal.LaunchAttempted {
@@ -1149,7 +1296,20 @@ func validateGoalSessionJournal(journal GoalSessionJournal) error {
 	if journal.LaunchState != GoalSessionLaunchStateAttached && (journal.NativeSessionID != "" || journal.NativeSessionFilename != "") {
 		return errors.New("goal session native handle is invalid")
 	}
+	if (journal.ControlSessionID != "" || journal.ControlAttachmentReceiptID != "") && (journal.LaunchState != GoalSessionLaunchStateAttached || journal.BindingID == "" || journal.ControlSessionID == "") {
+		return errors.New("goal session control attachment is invalid")
+	}
+	if journal.StopCertificate != nil && (!validGoalSessionStopCertificate(*journal.StopCertificate) || journal.SessionState != GoalSessionStateAvailable || journal.ControlSessionID != journal.StopCertificate.SessionID || journal.BindingID != journal.StopCertificate.BindingID || journal.RunID != journal.StopCertificate.RunID || journal.Generation != journal.StopCertificate.Generation || journal.LocalHandleID != journal.StopCertificate.LocalHandleID) {
+		return errors.New("goal session stop receipt is invalid")
+	}
 	return nil
+}
+
+func validGoalSessionStopCertificate(certificate GoalSessionStopCertificate) bool {
+	return validRequiredString(certificate.RunID, 4096) && certificate.Generation > 0 &&
+		validGoalSessionUUID(certificate.SessionID) && validGoalSessionUUID(certificate.LocalHandleID) &&
+		validGoalSessionUUID(certificate.BindingID) && validGoalDeliveryDigest(certificate.DeliveryDigest) &&
+		validGoalSessionUUID(certificate.ReceiptID)
 }
 
 func validateGoalSessionHandle(handle GoalSessionHandle) error {
@@ -1226,6 +1386,9 @@ func compareGoalSessionCompatibility(journal GoalSessionJournal, expected GoalSe
 	}
 	if journal.NeedsReconciliation() {
 		return ErrGoalSessionUncertain
+	}
+	if journal.IsLegacyControlAttachment() {
+		return ErrGoalSessionCompatibilityIncomplete
 	}
 	if journal.LaunchState != GoalSessionLaunchStateAttached || journal.NativeSessionID == "" {
 		return ErrGoalSessionNotAttached

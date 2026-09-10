@@ -31,6 +31,7 @@ const (
 	goalLeaseToken            = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 	goalHandleID              = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 	goalSessionID             = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+	goalBindingID             = "ffffffff-ffff-4fff-8fff-ffffffffffff"
 )
 
 func TestGoalMachineEndpointsPropagateFenceAndStrictlyDecodeReceipts(t *testing.T) {
@@ -57,11 +58,33 @@ func TestGoalMachineEndpointsPropagateFenceAndStrictlyDecodeReceipts(t *testing.
 				assertJSONField(t, body, "claim_id", goalClaimID)
 				assertJSONField(t, body, "lease_token", goalLeaseToken)
 				assertJSONField(t, body, "local_handle_id", goalHandleID)
+				assertJSONField(t, body, "binding_id", goalBindingID)
 				if _, present := body["run_id"]; present {
 					t.Fatal("attach request duplicated authoritative run_id in the body")
 				}
 			},
-			body: `{"session":{"id":"` + goalSessionID + `","run_id":"` + goalRunID + `","state":"busy","runtime_id":"` + goalRuntimeID + `","active_run_id":"` + goalRunID + `","local_handle_id":"` + goalHandleID + `","harness_kind":"codex","harness_version":"1.2.3","adapter_version":"symmetry-adapter-1","workspace_fingerprint":"workspace-fingerprint-1","workspace":"primary"}}`,
+			body: goalSessionReceiptJSON(),
+		},
+		{
+			name: "session stopped",
+			call: func(ctx context.Context, client *Client) error {
+				_, err := client.MarkHarnessSessionStopped(ctx, goalRunID, goalSessionStoppedRequest())
+				return err
+			},
+			check: func(t *testing.T, request *http.Request) {
+				if request.Method != http.MethodPut || request.URL.Path != "/api/v1/runs/"+goalRunID+"/session/stopped" {
+					t.Fatalf("request = %s %s", request.Method, request.URL.Path)
+				}
+				body := readRequestBody(t, request)
+				assertJSONField(t, body, "runtime_id", goalRuntimeID)
+				assertJSONField(t, body, "session_id", goalSessionID)
+				assertJSONField(t, body, "local_handle_id", goalHandleID)
+				assertJSONField(t, body, "binding_id", goalBindingID)
+				if _, present := body["run_id"]; present {
+					t.Fatal("session stopped request duplicated authoritative run_id in the body")
+				}
+			},
+			body: `{"session_stopped":{"receipt_id":"11111111-1111-4111-8111-111111111111","run_id":"` + goalRunID + `","session_id":"` + goalSessionID + `","local_handle_id":"` + goalHandleID + `","binding_id":"` + goalBindingID + `","state":"available","active_run_id":null,"lock_version":2}}`,
 		},
 		{
 			name: "evidence",
@@ -150,6 +173,115 @@ func TestGoalMachineEndpointsPropagateFenceAndStrictlyDecodeReceipts(t *testing.
 	}
 }
 
+func TestAttachHarnessSessionAllowsControlIssuedFreshBinding(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body := readRequestBody(t, request)
+		if _, present := body["binding_id"]; present {
+			t.Fatal("fresh attach sent a daemon-issued binding_id")
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, goalSessionReceiptJSON())
+	}))
+	defer server.Close()
+	request := goalSessionRequest()
+	request.BindingID = nil
+	receipt, err := mustMachineClient(t, server).AttachHarnessSession(context.Background(), goalRunID, request)
+	if err != nil || receipt.BindingID != goalBindingID {
+		t.Fatalf("Control-issued fresh binding receipt = %#v, error = %v", receipt, err)
+	}
+}
+
+func TestFetchHarnessSessionAttachmentPropagatesFenceAndValidatesReceipt(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.Path != "/api/v1/runs/"+goalRunID+"/session" {
+			t.Fatalf("request = %s %s", request.Method, request.URL.Path)
+		}
+		for key, want := range map[string]string{
+			"runtime_id": goalRuntimeID, "runtime_epoch": "3", "generation": "2",
+			"claim_id": goalClaimID, "lease_token": goalLeaseToken,
+		} {
+			if got := request.URL.Query().Get(key); got != want {
+				t.Fatalf("query %s = %q, want %q", key, got, want)
+			}
+		}
+		if request.Body != nil {
+			data, err := io.ReadAll(request.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(data) != 0 {
+				t.Fatalf("attachment readback GET body = %q", data)
+			}
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, goalSessionReceiptJSON())
+	}))
+	defer server.Close()
+
+	receipt, err := mustMachineClient(t, server).FetchHarnessSessionAttachment(context.Background(), goalRunID, goalFence())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.ID != goalSessionID || receipt.SessionID != goalSessionID || receipt.AttachmentReceiptID != "11111111-1111-4111-8111-111111111111" || receipt.BindingID != goalBindingID {
+		t.Fatalf("attachment readback receipt = %#v", receipt)
+	}
+}
+
+func TestFetchHarnessSessionAttachmentRejectsInvalidReceipt(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		want   string
+	}{
+		{
+			name:   "missing attachment receipt ID",
+			status: http.StatusOK,
+			body: strings.Replace(
+				goalSessionReceiptJSON(),
+				`"attachment_receipt_id":"11111111-1111-4111-8111-111111111111",`,
+				"",
+				1,
+			),
+			want: "session.attachment_receipt_id",
+		},
+		{
+			name:   "inconsistent session ID alias",
+			status: http.StatusOK,
+			body:   strings.Replace(goalSessionReceiptJSON(), `"session_id":"`+goalSessionID+`"`, `"session_id":"11111111-1111-4111-8111-111111111111"`, 1),
+			want:   "session_id does not match id",
+		},
+		{
+			name:   "missing task ID",
+			status: http.StatusOK,
+			body:   strings.Replace(goalSessionReceiptJSON(), `"task_id":"`+goalTaskID+`",`, "", 1),
+			want:   "missing immutable identity fields",
+		},
+		{
+			name:   "unknown private response field",
+			status: http.StatusOK,
+			body:   strings.Replace(goalSessionReceiptJSON(), `}}`, `,"native_session_payload":"secret"}}`, 1),
+			want:   "decode strict goal response",
+		},
+		{
+			name:   "unexpected created response",
+			status: http.StatusCreated,
+			body:   goalSessionReceiptJSON(),
+			want:   "expected HTTP 200",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := jsonServer(t, test.status, test.body, nil)
+			defer server.Close()
+			_, err := mustMachineClient(t, server).FetchHarnessSessionAttachment(context.Background(), goalRunID, goalFence())
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestGoalUsageReceiptRejectsNumericMicrousd(t *testing.T) {
 	for _, cost := range []string{"1", "1.5", "9007199254740991"} {
 		t.Run(cost, func(t *testing.T) {
@@ -157,6 +289,88 @@ func TestGoalUsageReceiptRejectsNumericMicrousd(t *testing.T) {
 			err := json.Unmarshal([]byte(`{"id":"`+goalUsageID+`","run_id":"`+goalRunID+`","usage_key":"final","cost_microusd":`+cost+`,"cost_basis":"reported"}`), &receipt)
 			if err == nil || !strings.Contains(err.Error(), "cost_microusd must be a decimal string or null") {
 				t.Fatalf("numeric cost_microusd error = %v", err)
+			}
+		})
+	}
+}
+
+func TestGoalSessionStoppedReceiptStrictJSON(t *testing.T) {
+	fields := func() map[string]any {
+		return map[string]any{
+			"receipt_id":      "11111111-1111-4111-8111-111111111111",
+			"run_id":          goalRunID,
+			"session_id":      goalSessionID,
+			"local_handle_id": goalHandleID,
+			"binding_id":      goalBindingID,
+			"state":           "available",
+			"active_run_id":   nil,
+			"lock_version":    int64(2),
+		}
+	}
+	encode := func(t *testing.T, value map[string]any) []byte {
+		t.Helper()
+		data, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+
+	t.Run("valid explicit null and positive lock version", func(t *testing.T) {
+		var receipt GoalSessionStoppedReceipt
+		if err := json.Unmarshal(encode(t, fields()), &receipt); err != nil {
+			t.Fatalf("valid receipt rejected: %v", err)
+		}
+		if receipt.ActiveRunID != nil || receipt.LockVersion != 2 {
+			t.Fatalf("receipt = %#v, want nil active_run_id and lock_version 2", receipt)
+		}
+	})
+
+	for _, field := range []string{
+		"receipt_id", "run_id", "session_id", "local_handle_id", "binding_id", "state", "active_run_id", "lock_version",
+	} {
+		t.Run("missing "+field, func(t *testing.T) {
+			value := fields()
+			delete(value, field)
+			var receipt GoalSessionStoppedReceipt
+			err := json.Unmarshal(encode(t, value), &receipt)
+			if err == nil || !strings.Contains(err.Error(), `missing required field "`+field+`"`) {
+				t.Fatalf("error = %v, want missing required field rejection", err)
+			}
+		})
+	}
+
+	t.Run("unknown field", func(t *testing.T) {
+		value := fields()
+		value["unexpected"] = true
+		var receipt GoalSessionStoppedReceipt
+		err := json.Unmarshal(encode(t, value), &receipt)
+		if err == nil || !strings.Contains(err.Error(), `unknown field "unexpected"`) {
+			t.Fatalf("error = %v, want unknown field rejection", err)
+		}
+	})
+
+	for _, test := range []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{name: "active run id string", value: goalRunID, want: "must be explicitly null"},
+		{name: "active run id object", value: map[string]any{}, want: "must be explicitly null"},
+		{name: "zero lock version", value: int64(0), want: "must be positive"},
+		{name: "negative lock version", value: int64(-1), want: "must be positive"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value := fields()
+			if strings.HasPrefix(test.name, "active run id") {
+				value["active_run_id"] = test.value
+			} else {
+				value["lock_version"] = test.value
+			}
+			var receipt GoalSessionStoppedReceipt
+			err := json.Unmarshal(encode(t, value), &receipt)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want %q", err, test.want)
 			}
 		})
 	}
@@ -577,15 +791,30 @@ func goalFence() protocol.Fence {
 }
 
 func goalSessionRequest() GoalSessionAttachRequest {
+	bindingID := goalBindingID
 	return GoalSessionAttachRequest{
 		Fence:                goalFence(),
 		LocalHandleID:        goalHandleID,
+		BindingID:            &bindingID,
 		HarnessKind:          "codex",
 		HarnessVersion:       "1.2.3",
 		AdapterVersion:       "symmetry-adapter-1",
 		WorkspaceFingerprint: "workspace-fingerprint-1",
 		Workspace:            "primary",
 	}
+}
+
+func goalSessionStoppedRequest() GoalSessionStoppedRequest {
+	return GoalSessionStoppedRequest{
+		Fence:         goalFence(),
+		SessionID:     goalSessionID,
+		LocalHandleID: goalHandleID,
+		BindingID:     goalBindingID,
+	}
+}
+
+func goalSessionReceiptJSON() string {
+	return `{"session":{"attachment_receipt_id":"11111111-1111-4111-8111-111111111111","id":"` + goalSessionID + `","session_id":"` + goalSessionID + `","goal_id":"11111111-1111-4111-8111-111111111111","task_id":"` + goalTaskID + `","run_id":"` + goalRunID + `","machine_id":"22222222-2222-4222-8222-222222222222","runtime_id":"` + goalRuntimeID + `","repository_resource_id":"77777777-7777-4777-8777-777777777777","active_run_id":"` + goalRunID + `","local_handle_id":"` + goalHandleID + `","binding_id":"` + goalBindingID + `","harness_kind":"codex","harness_version":"1.2.3","adapter_version":"symmetry-adapter-1","workspace_fingerprint":"workspace-fingerprint-1","workspace":"primary","state":"busy","lock_version":2}}`
 }
 
 func goalEvidence(t *testing.T) protocol.Evidence {

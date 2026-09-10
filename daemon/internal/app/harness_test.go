@@ -723,8 +723,46 @@ func TestFreshCodexGoalAdmissionUsesDurableStagedNativeLifecycle(t *testing.T) {
 		t.Fatalf("durable native events = %#v", journal.PendingEvents)
 	}
 	sessions, err := store.ListGoalSessions()
-	if err != nil || len(sessions) != 1 || sessions[0].SessionState != state.GoalSessionStateClosed || sessions[0].LaunchState != state.GoalSessionLaunchStateClosed {
+	if err != nil || len(sessions) != 1 || sessions[0].SessionState != state.GoalSessionStateUnavailable || sessions[0].LaunchState != state.GoalSessionLaunchStateAttached || sessions[0].NativeSessionID != "native-thread-1" || sessions[0].MachineID != "machine-1" || sessions[0].ControlSessionID == "" || len(journal.PendingGoalDeliveries) != 1 || journal.PendingGoalDeliveries[0].Kind != state.GoalDeliverySessionStopped {
 		t.Fatalf("Goal session journals = %#v, error = %v", sessions, err)
+	}
+}
+
+func TestGoalSessionBindingIDUsesServerReservationOnlyForResume(t *testing.T) {
+	resumeSessionID := "00000000-0000-4000-8000-000000000007"
+	resumeBindingID := "00000000-0000-4000-8000-000000000008"
+	tests := []struct {
+		name      string
+		mode      protocol.SessionMode
+		claim     protocol.ClaimResponse
+		want      string
+		wantError bool
+	}{
+		{name: "fresh defers binding to Control attach", mode: protocol.SessionModeFresh},
+		{name: "handoff defers binding to Control attach", mode: protocol.SessionModeHandoff},
+		{name: "resume uses server binding", mode: protocol.SessionModeResume, claim: protocol.ClaimResponse{HarnessSessionID: &resumeSessionID, HarnessBindingID: &resumeBindingID}, want: resumeBindingID},
+		{name: "resume requires both server values", mode: protocol.SessionModeResume, claim: protocol.ClaimResponse{HarnessSessionID: &resumeSessionID}, wantError: true},
+		{name: "fresh rejects server reservation", mode: protocol.SessionModeFresh, claim: protocol.ClaimResponse{HarnessBindingID: &resumeBindingID}, wantError: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			bindingID, err := goalSessionBindingID(protocol.Admission{SessionMode: test.mode}, test.claim)
+			if test.wantError {
+				if err == nil {
+					t.Fatal("goalSessionBindingID() succeeded")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.want != "" && bindingID != test.want {
+				t.Fatalf("binding ID = %q, want %q", bindingID, test.want)
+			}
+			if test.want == "" && bindingID != "" {
+				t.Fatalf("fresh binding ID = %q, want deferred empty value", bindingID)
+			}
+		})
 	}
 }
 
@@ -1694,6 +1732,7 @@ func TestRecoverClosedTerminalGoalSessionRetiresUnreadyAttach(t *testing.T) {
 	if _, err := store.QueueGoalSessionAttach(key, state.GoalSessionAttachDelivery{
 		GoalID:               admission.GoalID,
 		LocalHandleID:        sessionKey.LocalHandleID,
+		BindingID:            "00000000-0000-4000-8000-000000000009",
 		HarnessKind:          "codex",
 		HarnessVersion:       "0.153.4",
 		AdapterVersion:       "symmetry-daemon:test",
@@ -2034,6 +2073,7 @@ func nativeAdmissionDaemonForHarness(t *testing.T, admission protocol.Admission,
 		harnessRegistry:     registry,
 		harnessCapabilities: capabilities,
 		options:             options{newID: ids(), clock: time.Now},
+		machineID:           "machine-1",
 		runtimeID:           "runtime-1",
 		runtimeEpoch:        1,
 		running:             make(map[state.RunKey]*runningRun),
@@ -2097,17 +2137,32 @@ func (client *nativeAdmissionControl) Claim(_ context.Context, runID string, req
 
 func (client *nativeAdmissionControl) AttachHarnessSession(_ context.Context, _ string, request control.GoalSessionAttachRequest) (control.GoalSessionReceipt, error) {
 	client.calls = append(client.calls, "attach")
-	return control.GoalSessionReceipt{
-		ID: "server-session-1", GoalID: client.admission.GoalID, TaskID: "task-1", RunID: "run-1", ActiveRunID: "run-1",
-		RuntimeID: request.RuntimeID, RepositoryResourceID: client.admission.Subject.ResourceID, LocalHandleID: request.LocalHandleID,
+	bindingID := "00000000-0000-4000-8000-000000000009"
+	if request.BindingID != nil {
+		bindingID = *request.BindingID
+	}
+	receipt := control.GoalSessionReceipt{
+		ID: "00000000-0000-4000-8000-000000000010", AttachmentReceiptID: "00000000-0000-4000-8000-000000000011", GoalID: client.admission.GoalID, TaskID: "task-1", RunID: "run-1", ActiveRunID: "run-1",
+		MachineID: "machine-1", RuntimeID: request.RuntimeID, RepositoryResourceID: client.admission.Subject.ResourceID, LocalHandleID: request.LocalHandleID,
+		BindingID:   bindingID,
 		HarnessKind: request.HarnessKind, HarnessVersion: request.HarnessVersion, AdapterVersion: request.AdapterVersion,
 		WorkspaceFingerprint: request.WorkspaceFingerprint, Workspace: request.Workspace, State: state.GoalSessionStateBusy,
+	}
+	return receipt, nil
+}
+
+func (client *nativeAdmissionControl) MarkHarnessSessionStopped(_ context.Context, runID string, request control.GoalSessionStoppedRequest) (control.GoalSessionStoppedReceipt, error) {
+	client.calls = append(client.calls, "stopped")
+	return control.GoalSessionStoppedReceipt{
+		ReceiptID: "00000000-0000-4000-8000-000000000011", RunID: runID, SessionID: request.SessionID,
+		LocalHandleID: request.LocalHandleID, BindingID: request.BindingID, State: state.GoalSessionStateAvailable,
+		LockVersion: 1,
 	}, nil
 }
 
 func (client *nativeAdmissionControl) FetchRunContext(_ context.Context, _ string, _ protocol.Fence) (control.GoalRunContext, error) {
 	client.calls = append(client.calls, "context")
-	sessionID := "server-session-1"
+	sessionID := "00000000-0000-4000-8000-000000000010"
 	return control.GoalRunContext{
 		GoalID: client.admission.GoalID, TaskID: "task-1", RunID: "run-1", Generation: 1, SessionID: &sessionID,
 		Context: control.GoalContextSnapshot{

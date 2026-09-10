@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -513,15 +515,10 @@ func TestAbandonGoalSessionClearsPersistedProcessAfterVerifiedClose(t *testing.T
 	}
 }
 
-func TestAbandonGoalSessionAfterStartTurnResponseLossPreservesUncertainty(t *testing.T) {
-	admission, present, err := parseAdmissionInput(validAdmissionInput())
-	if err != nil || !present {
-		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
-	}
-	store, key := claimedStore(t)
+func TestAbandonGoalSessionAfterStartTurnResponseLossQueuesStopWhenCloseSucceeds(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
 	defer store.Close()
-	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000007"}
-	saveAttachedGoalSession(t, store, key, admission, sessionKey)
+	sessionKey, controlSessionID, bindingID := saveRetainedGoalSession(t, store, key)
 	if _, err := store.SetProcessDetails(key, 71, "native:71", time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
@@ -533,15 +530,15 @@ func TestAbandonGoalSessionAfterStartTurnResponseLossPreservesUncertainty(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !session.IsUncertainLaunch() || session.SessionState != state.GoalSessionStateUnavailable || session.LaunchState == state.GoalSessionLaunchStateClosed {
-		t.Fatalf("start-turn uncertainty was released: %#v", session)
+	if session.NeedsReconciliation() || session.SessionState != state.GoalSessionStateUnavailable || session.LaunchState != state.GoalSessionLaunchStateAttached || session.ControlSessionID != controlSessionID || session.BindingID != bindingID || session.NativeSessionID != "native-thread-1" {
+		t.Fatalf("known-close start-turn failure changed retained session: %#v", session)
 	}
 	journal, err := store.LoadJournal(key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !journal.RetainWorkspace || journal.PID != 0 || journal.ProcessIdentity != "" {
-		t.Fatalf("start-turn uncertainty recovery evidence = %#v", journal)
+	if journal.PID != 0 || journal.ProcessIdentity != "" || len(journal.PendingGoalDeliveries) != 1 || journal.PendingGoalDeliveries[0].Kind != state.GoalDeliverySessionStopped || journal.PendingGoalDeliveries[0].SessionStopped == nil || journal.PendingGoalDeliveries[0].SessionStopped.SessionID != controlSessionID || journal.PendingGoalDeliveries[0].SessionStopped.BindingID != bindingID {
+		t.Fatalf("known-close start-turn recovery evidence = %#v", journal)
 	}
 }
 
@@ -663,6 +660,7 @@ func TestJournalFingerprintTracksGoalDeliveryState(t *testing.T) {
 	}
 	payload := state.GoalSessionAttachDelivery{
 		GoalID: "00000000-0000-4000-8000-000000000002", LocalHandleID: "00000000-0000-4000-8000-000000000003",
+		BindingID:   "00000000-0000-4000-8000-000000000004",
 		HarnessKind: "codex", HarnessVersion: "0.153.4", AdapterVersion: "symmetry-daemon:test",
 		WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Workspace: `C:\worktree`,
 	}
@@ -676,6 +674,745 @@ func TestJournalFingerprintTracksGoalDeliveryState(t *testing.T) {
 	}
 	if journalFingerprint(before) == journalFingerprint(queued) || journalFingerprint(queued) == journalFingerprint(ready) {
 		t.Fatalf("Goal delivery mutation did not change retry fingerprint: before=%s queued=%s ready=%s", journalFingerprint(before), journalFingerprint(queued), journalFingerprint(ready))
+	}
+}
+
+func TestRetainedSessionStopDeliveryWaitsForTerminalAcceptance(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000007"}
+	bindingID := "00000000-0000-4000-8000-000000000009"
+	intent := state.GoalSessionLaunchIntent{
+		LaunchIntentID: "00000000-0000-4000-8000-000000000008", GoalID: admission.GoalID, GoalRevision: admission.GoalRevision,
+		WorkItemID: admissionWorkItemIDValue(admission.WorkItemID), TaskID: "task-1", RunID: key.RunID, Generation: key.Generation, AdmissionID: admission.AdmissionID,
+		LocalHandleID: sessionKey.LocalHandleID, BindingID: bindingID, RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: "0.153.4",
+		AdapterVersion: "symmetry-daemon:test", AdapterProtocolVersion: 1, WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		WorkspacePath: `C:\worktree\retained`, SessionMode: state.GoalSessionModeFresh,
+	}
+	if _, err := store.SaveGoalSessionLaunchIntent(intent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkGoalSessionLaunchStarted(sessionKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PersistGoalSessionHandle(sessionKey, state.GoalSessionHandle{NativeSessionID: "native-thread-1"}); err != nil {
+		t.Fatal(err)
+	}
+	controlSessionID := "00000000-0000-4000-8000-000000000010"
+	if _, err := store.PersistGoalSessionControlAttachment(sessionKey, controlSessionID, bindingID, "00000000-0000-4000-8000-000000000012", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkGoalSessionStoppedPending(sessionKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.QueueGoalSessionStopped(key, state.GoalSessionStoppedDelivery{SessionID: controlSessionID, LocalHandleID: sessionKey.LocalHandleID, BindingID: bindingID}); err != nil {
+		t.Fatal(err)
+	}
+	client := &goalDeliveryControl{fakeControl: &fakeControl{}}
+	daemon := &daemon{config: testConfig(t), store: store, control: client, workspace: &fakeWorkspace{}, options: options{clock: time.Now}}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, _, err := daemon.flushGoalDeliveries(context.Background(), journal)
+	if err != nil || len(updated.PendingGoalDeliveries) != 1 || len(client.stops) != 0 {
+		t.Fatalf("pre-terminal stop delivery = updated:%#v stops:%#v error:%v", updated, client.stops, err)
+	}
+	if _, err := store.QueueTerminalTransitionAt(key, protocol.StateTransitionRequest{TransitionID: "terminal", State: "failed", Payload: []byte(`{}`)}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ResolveTerminal(key, state.TerminalVerdictAccepted, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkTransitionsDelivered(key, []string{"terminal"}); err != nil {
+		t.Fatal(err)
+	}
+	journal, err = store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, _, err = daemon.flushGoalDeliveries(context.Background(), journal)
+	if err != nil || updated.HasPendingGoalDeliveries() || len(client.stops) != 1 || client.stops[0].Fence != journal.Fence() {
+		t.Fatalf("accepted terminal stop delivery = updated:%#v stops:%#v error:%v", updated, client.stops, err)
+	}
+	session, err := store.LoadGoalSession(sessionKey)
+	if err != nil || session.SessionState != state.GoalSessionStateAvailable || session.NativeSessionID != "native-thread-1" || session.WorkspacePath != intent.WorkspacePath {
+		t.Fatalf("released retained session = %#v, error = %v", session, err)
+	}
+}
+
+func TestDefinitiveStopRejectionClosesRetainedSession(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	sessionKey, controlSessionID, bindingID := saveRetainedGoalSession(t, store, key)
+	if _, err := store.MarkGoalSessionStoppedPending(sessionKey); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.QueueGoalSessionStopped(key, state.GoalSessionStoppedDelivery{SessionID: controlSessionID, LocalHandleID: sessionKey.LocalHandleID, BindingID: bindingID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	delivery := journal.PendingGoalDeliveries[0]
+	client := &goalDeliveryControl{fakeControl: &fakeControl{}, stopErrors: []error{&control.APIError{StatusCode: http.StatusUnprocessableEntity, Code: control.InvalidRequest, Message: "attachment cannot be released"}}}
+	daemon := &daemon{config: testConfig(t), store: store, control: client, options: options{clock: time.Now}}
+	if _, _, err := daemon.deliverGoalDelivery(context.Background(), journal, delivery.Kind, delivery.DeliveryID, nil); err == nil {
+		t.Fatal("deliverGoalDelivery() succeeded despite definitive stopped rejection")
+	}
+	session, err := store.LoadGoalSession(sessionKey)
+	if err != nil || session.SessionState != state.GoalSessionStateClosed || session.LaunchState != state.GoalSessionLaunchStateClosed || session.NativeSessionID != "" {
+		t.Fatalf("definitive stopped rejection did not close session: %#v, error = %v", session, err)
+	}
+	journal, err = store.LoadJournal(key)
+	if err != nil || len(journal.PendingGoalDeliveries) != 0 || len(journal.RetiredGoalDeliveries) != 1 || journal.RetiredGoalDeliveries[0].Delivery.Kind != state.GoalDeliverySessionStopped {
+		t.Fatalf("definitive stopped rejection journal = %#v, error = %v", journal, err)
+	}
+}
+
+func TestRecoveryClosesRetiredStoppedDeliveryAfterCrash(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	sessionKey, controlSessionID, bindingID := saveRetainedGoalSession(t, store, key)
+	if _, err := store.MarkGoalSessionStoppedPending(sessionKey); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.QueueGoalSessionStopped(key, state.GoalSessionStoppedDelivery{SessionID: controlSessionID, LocalHandleID: sessionKey.LocalHandleID, BindingID: bindingID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	delivery := journal.PendingGoalDeliveries[0]
+	if _, err := store.RetireGoalDelivery(key, delivery.Kind, delivery.DeliveryID, delivery.PayloadDigest, http.StatusUnprocessableEntity, "invalid_request", "attachment cannot be released", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	daemon := &daemon{config: testConfig(t), store: store, options: options{newID: ids(), clock: time.Now}, running: make(map[state.RunKey]*runningRun), slots: make(chan struct{}, 1)}
+	if err := daemon.recoverUnclosedGoalSessions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.LoadGoalSession(sessionKey)
+	if err != nil || session.SessionState != state.GoalSessionStateClosed || session.LaunchState != state.GoalSessionLaunchStateClosed {
+		t.Fatalf("recovery did not close retired stopped session: %#v, error = %v", session, err)
+	}
+}
+
+func TestRecoveredMappedBusySessionQueuesStopInsteadOfClosing(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	sessionKey, controlSessionID, bindingID := saveRetainedGoalSession(t, store, key)
+	daemon := &daemon{store: store, options: options{clock: time.Now}}
+	if err := daemon.resolveRecoveredGoalSessionStopped(key); err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.LoadGoalSession(sessionKey)
+	if err != nil || session.SessionState != state.GoalSessionStateUnavailable || session.LaunchState != state.GoalSessionLaunchStateAttached || session.NativeSessionID != "native-thread-1" || session.ControlSessionID != controlSessionID || session.BindingID != bindingID {
+		t.Fatalf("recovered mapped busy session was closed instead of stopped: %#v, error = %v", session, err)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, delivery := range journal.PendingGoalDeliveries {
+		if delivery.Kind == state.GoalDeliverySessionStopped && delivery.SessionStopped != nil && delivery.SessionStopped.SessionID == controlSessionID && delivery.SessionStopped.BindingID == bindingID {
+			return
+		}
+	}
+	t.Fatalf("recovered mapped busy session did not queue stopped delivery: %#v", journal.PendingGoalDeliveries)
+}
+
+func TestStoppedReceiptRequiresPositiveLockVersionBeforeAvailability(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	sessionKey, controlSessionID, bindingID := saveRetainedGoalSession(t, store, key)
+	if _, err := store.MarkGoalSessionStoppedPending(sessionKey); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.QueueGoalSessionStopped(key, state.GoalSessionStoppedDelivery{SessionID: controlSessionID, LocalHandleID: sessionKey.LocalHandleID, BindingID: bindingID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &goalDeliveryControl{fakeControl: &fakeControl{}, stopReceipt: &control.GoalSessionStoppedReceipt{
+		ReceiptID: "00000000-0000-4000-8000-000000000011", RunID: key.RunID, SessionID: controlSessionID,
+		LocalHandleID: sessionKey.LocalHandleID, BindingID: bindingID, State: state.GoalSessionStateAvailable,
+		LockVersion: 0,
+	}}
+	daemon := &daemon{config: testConfig(t), store: store, control: client, options: options{clock: time.Now}}
+	if _, _, err := daemon.deliverGoalDelivery(context.Background(), journal, state.GoalDeliverySessionStopped, sessionKey.LocalHandleID, nil); err == nil {
+		t.Fatal("deliverGoalDelivery() accepted a zero-lock stopped receipt")
+	}
+	session, err := store.LoadGoalSession(sessionKey)
+	if err != nil || session.SessionState != state.GoalSessionStateUnavailable || session.StopCertificate != nil {
+		t.Fatalf("zero-lock receipt changed retained session: %#v, error = %v", session, err)
+	}
+}
+
+func TestRecoveryPreservesReleasedSessionBeforeStopOutboxAck(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000007"}
+	bindingID := "00000000-0000-4000-8000-000000000009"
+	intent := state.GoalSessionLaunchIntent{
+		LaunchIntentID: "00000000-0000-4000-8000-000000000008", GoalID: admission.GoalID, GoalRevision: admission.GoalRevision,
+		WorkItemID: admissionWorkItemIDValue(admission.WorkItemID), TaskID: "task-1", RunID: key.RunID, Generation: key.Generation, AdmissionID: admission.AdmissionID,
+		LocalHandleID: sessionKey.LocalHandleID, BindingID: bindingID, RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: "0.153.4",
+		AdapterVersion: "symmetry-daemon:test", AdapterProtocolVersion: 1, WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		WorkspacePath: `C:\worktree\retained`, SessionMode: state.GoalSessionModeFresh,
+	}
+	if _, err := store.SaveGoalSessionLaunchIntent(intent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkGoalSessionLaunchStarted(sessionKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PersistGoalSessionHandle(sessionKey, state.GoalSessionHandle{NativeSessionID: "native-thread-1"}); err != nil {
+		t.Fatal(err)
+	}
+	controlSessionID := "00000000-0000-4000-8000-000000000010"
+	if _, err := store.PersistGoalSessionControlAttachment(sessionKey, controlSessionID, bindingID, "00000000-0000-4000-8000-000000000012", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkGoalSessionStoppedPending(sessionKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.QueueGoalSessionStopped(key, state.GoalSessionStoppedDelivery{SessionID: controlSessionID, LocalHandleID: sessionKey.LocalHandleID, BindingID: bindingID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.QueueTerminalTransitionAt(key, protocol.StateTransitionRequest{TransitionID: "terminal", State: "failed", Payload: []byte(`{}`)}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ResolveTerminal(key, state.TerminalVerdictAccepted, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkTransitionsDelivered(key, []string{"terminal"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkGoalSessionAvailable(sessionKey, state.GoalSessionStopCertificate{RunID: key.RunID, Generation: key.Generation, SessionID: controlSessionID, LocalHandleID: sessionKey.LocalHandleID, BindingID: bindingID, DeliveryDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ReceiptID: "00000000-0000-4000-8000-000000000011"}); err != nil {
+		t.Fatal(err)
+	}
+	daemon := &daemon{config: testConfig(t), store: store, options: options{newID: ids(), clock: time.Now}, running: make(map[state.RunKey]*runningRun), slots: make(chan struct{}, 1)}
+	if err := daemon.recoverUnclosedGoalSessions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.LoadGoalSession(sessionKey)
+	if err != nil || session.SessionState != state.GoalSessionStateAvailable || session.LaunchState != state.GoalSessionLaunchStateAttached || session.NativeSessionID != "native-thread-1" || session.NeedsReconciliation() {
+		t.Fatalf("recovered released session = %#v, error = %v", session, err)
+	}
+}
+
+func TestRecoveryReconstructsStopDeliveryAfterProjectionFirstCrash(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	sessionKey, controlSessionID, bindingID := saveRetainedGoalSession(t, store, key)
+	if _, err := store.MarkGoalSessionStoppedPending(sessionKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.QueueTerminalTransitionAt(key, protocol.StateTransitionRequest{TransitionID: "terminal", State: "failed", Payload: []byte(`{}`)}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ResolveTerminal(key, state.TerminalVerdictAccepted, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkTransitionsDelivered(key, []string{"terminal"}); err != nil {
+		t.Fatal(err)
+	}
+	daemon := &daemon{config: testConfig(t), store: store, options: options{newID: ids(), clock: time.Now}, running: make(map[state.RunKey]*runningRun), slots: make(chan struct{}, 1)}
+	if err := daemon.recoverUnclosedGoalSessions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil || len(journal.PendingGoalDeliveries) != 1 || journal.PendingGoalDeliveries[0].Kind != state.GoalDeliverySessionStopped || journal.PendingGoalDeliveries[0].SessionStopped == nil || journal.PendingGoalDeliveries[0].SessionStopped.SessionID != controlSessionID || journal.PendingGoalDeliveries[0].SessionStopped.BindingID != bindingID {
+		t.Fatalf("reconstructed stop delivery = %#v, error = %v", journal.PendingGoalDeliveries, err)
+	}
+	session, err := store.LoadGoalSession(sessionKey)
+	if err != nil || session.NeedsReconciliation() || session.SessionState != state.GoalSessionStateUnavailable {
+		t.Fatalf("recovered stopped projection = %#v, error = %v", session, err)
+	}
+}
+
+func TestRecoveryRepairsUnavailableProjectionFromQueuedStopWitness(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	sessionKey, controlSessionID, bindingID := saveRetainedGoalSession(t, store, key)
+	if _, err := store.QueueGoalSessionStopped(key, state.GoalSessionStoppedDelivery{SessionID: controlSessionID, LocalHandleID: sessionKey.LocalHandleID, BindingID: bindingID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.QueueTerminalTransitionAt(key, protocol.StateTransitionRequest{TransitionID: "terminal", State: "failed", Payload: []byte(`{}`)}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ResolveTerminal(key, state.TerminalVerdictAccepted, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkTransitionsDelivered(key, []string{"terminal"}); err != nil {
+		t.Fatal(err)
+	}
+	daemon := &daemon{config: testConfig(t), store: store, options: options{newID: ids(), clock: time.Now}, running: make(map[state.RunKey]*runningRun), slots: make(chan struct{}, 1)}
+	if err := daemon.recoverUnclosedGoalSessions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.LoadGoalSession(sessionKey)
+	if err != nil || session.NeedsReconciliation() || session.SessionState != state.GoalSessionStateUnavailable || session.NativeSessionID != "native-thread-1" {
+		t.Fatalf("repaired stopped projection = %#v, error = %v", session, err)
+	}
+}
+
+func TestRecoveryStopWitnessClearsStaleProcessMarkerBeforeTerminalTransition(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	sessionKey, controlSessionID, bindingID := saveRetainedGoalSession(t, store, key)
+	if _, err := store.SetProcessDetails(key, 71, "native:71", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.QueueGoalSessionStopped(key, state.GoalSessionStoppedDelivery{
+		SessionID: controlSessionID, LocalHandleID: sessionKey.LocalHandleID, BindingID: bindingID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	terminated := 0
+	daemon := &daemon{
+		config: testConfig(t), store: store, options: options{
+			newID: ids(), clock: time.Now,
+			terminatePersist: func(pid int, identity string) error {
+				terminated++
+				return errors.New("native process must not be terminated after durable stop witness")
+			},
+		},
+		running: make(map[state.RunKey]*runningRun), slots: make(chan struct{}, 1),
+	}
+	if err := daemon.recoverUnclosedGoalSessions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if terminated != 0 {
+		t.Fatalf("recovery terminated stopped native process %d times", terminated)
+	}
+	session, err := store.LoadGoalSession(sessionKey)
+	if err != nil || session.NeedsReconciliation() || session.SessionState != state.GoalSessionStateUnavailable || session.NativeSessionID != "native-thread-1" || session.ControlSessionID != controlSessionID || session.BindingID != bindingID {
+		t.Fatalf("recovered stopped session = %#v, error = %v", session, err)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.PID != 0 || journal.ProcessIdentity != "" || !journal.StartedAt.IsZero() {
+		t.Fatalf("stale process marker survived durable stop recovery: %#v", journal)
+	}
+	if journal.TerminalState != "failed" || len(journal.PendingTransitions) != 1 || !strings.Contains(string(journal.PendingTransitions[0].Payload), string(protocol.TaskResultReasonUnknownOutcome)) {
+		t.Fatalf("terminal recovery after stop witness = %#v", journal)
+	}
+}
+
+func TestRecoveryQuarantinesLegacyStoppedAttachWithoutBindingAuthority(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000007"}
+	intent := state.GoalSessionLaunchIntent{
+		LaunchIntentID: "00000000-0000-4000-8000-000000000008", GoalID: admission.GoalID, GoalRevision: admission.GoalRevision,
+		WorkItemID: admissionWorkItemIDValue(admission.WorkItemID), TaskID: "task-1", RunID: key.RunID, Generation: key.Generation, AdmissionID: admission.AdmissionID,
+		LocalHandleID: sessionKey.LocalHandleID, RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: "0.153.4",
+		AdapterVersion: "symmetry-daemon:test", AdapterProtocolVersion: 1, WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		WorkspacePath: `C:\worktree\retained`, SessionMode: state.GoalSessionModeFresh,
+	}
+	if _, err := store.SaveGoalSessionLaunchIntent(intent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkGoalSessionLaunchStarted(sessionKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PersistGoalSessionHandle(sessionKey, state.GoalSessionHandle{NativeSessionID: "native-thread-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetGoalSessionState(sessionKey, state.GoalSessionStateUnavailable); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := state.GoalDelivery{Kind: state.GoalDeliverySessionAttach, DeliveryID: sessionKey.LocalHandleID, Fence: journal.Fence(), Ready: true, SessionAttach: &state.GoalSessionAttachDelivery{
+		GoalID: admission.GoalID, LocalHandleID: sessionKey.LocalHandleID, HarnessKind: "codex", HarnessVersion: "0.153.4", AdapterVersion: "symmetry-daemon:test",
+		WorkspaceFingerprint: intent.WorkspaceFingerprint, Workspace: "local", RepositoryResourceID: &admission.Subject.ResourceID,
+	}}
+	encoded, err := json.Marshal(struct {
+		Kind          state.GoalDeliveryKind
+		DeliveryID    string
+		Fence         protocol.Fence
+		SessionAttach *state.GoalSessionAttachDelivery
+		Evidence      *protocol.Evidence
+		Usage         *protocol.Usage
+	}{legacy.Kind, legacy.DeliveryID, legacy.Fence, legacy.SessionAttach, legacy.Evidence, legacy.Usage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(encoded)
+	legacy.PayloadDigest = hex.EncodeToString(sum[:])
+	journal.GoalDeliveryEnabled = true
+	journal.PendingGoalDeliveries = []state.GoalDelivery{legacy}
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	daemon := &daemon{config: testConfig(t), store: store, options: options{newID: ids(), clock: time.Now}, running: make(map[state.RunKey]*runningRun), slots: make(chan struct{}, 1)}
+	if err := daemon.recoverUnclosedGoalSessions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.LoadGoalSession(sessionKey)
+	if err != nil || session.SessionState != state.GoalSessionStateClosed || session.LaunchState != state.GoalSessionLaunchStateClosed || session.NativeSessionID != "" || session.NeedsReconciliation() {
+		t.Fatalf("legacy session was not quarantined: %#v, error = %v", session, err)
+	}
+	journal, err = store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.RetiredGoalDeliveries) != 1 || journal.RetiredGoalDeliveries[0].Code != "legacy_attachment_unreplayable" || !journal.RetainWorkspace || journal.TerminalState != "failed" || len(journal.PendingTransitions) != 1 {
+		t.Fatalf("legacy attach quarantine did not converge after known stop: %#v", journal)
+	}
+	for _, delivery := range journal.PendingGoalDeliveries {
+		if delivery.Kind == state.GoalDeliverySessionAttach {
+			t.Fatalf("legacy attach remained pending after quarantine: %#v", journal.PendingGoalDeliveries)
+		}
+	}
+}
+
+func TestRecoveryKeepsBusyLegacyAttachWithoutNativeMarker(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	sessionKey := saveLegacyReadyGoalSessionAttach(t, store, key, state.GoalSessionStateBusy)
+	daemon := &daemon{config: testConfig(t), store: store, options: options{newID: ids(), clock: time.Now}, running: make(map[state.RunKey]*runningRun), slots: make(chan struct{}, 1)}
+	if err := daemon.recoverUnclosedGoalSessions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.LoadGoalSession(sessionKey)
+	if err != nil || session.SessionState != state.GoalSessionStateBusy || session.LaunchState != state.GoalSessionLaunchStateAttached || session.NativeSessionID != "native-thread-1" || session.NeedsReconciliation() {
+		t.Fatalf("busy legacy attach lost native-stop barrier: %#v, error = %v", session, err)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !journal.RetainWorkspace || journal.TerminalState != "" || len(journal.PendingTransitions) != 0 || len(journal.PendingGoalDeliveries) != 1 || journal.PendingGoalDeliveries[0].Kind != state.GoalDeliverySessionAttach {
+		t.Fatalf("busy legacy attach was terminalized: %#v", journal)
+	}
+}
+
+func TestRecoveryRetiresClosedLegacyAttachAfterPartialWrite(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	sessionKey := saveLegacyReadyGoalSessionAttach(t, store, key, state.GoalSessionStateUnavailable)
+	if _, err := store.CloseGoalSession(sessionKey); err != nil {
+		t.Fatal(err)
+	}
+	daemon := &daemon{config: testConfig(t), store: store, options: options{newID: ids(), clock: time.Now}, running: make(map[state.RunKey]*runningRun), slots: make(chan struct{}, 1)}
+	if err := daemon.recoverUnclosedGoalSessions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.LoadGoalSession(sessionKey)
+	if err != nil || session.SessionState != state.GoalSessionStateClosed || session.LaunchState != state.GoalSessionLaunchStateClosed {
+		t.Fatalf("closed legacy attach changed during recovery: %#v, error = %v", session, err)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.RetiredGoalDeliveries) != 1 || journal.RetiredGoalDeliveries[0].Code != "legacy_attachment_unreplayable" || journal.TerminalState != "failed" || len(journal.PendingTransitions) != 1 {
+		t.Fatalf("closed legacy partial write did not converge: %#v", journal)
+	}
+	for _, delivery := range journal.PendingGoalDeliveries {
+		if delivery.Kind == state.GoalDeliverySessionAttach {
+			t.Fatalf("closed legacy attach remained pending: %#v", journal.PendingGoalDeliveries)
+		}
+	}
+}
+
+func TestReleasedRetainedSessionSurvivesRunJournalCleanupAndRestart(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	sessionKey, controlSessionID, bindingID := saveRetainedGoalSession(t, store, key)
+	if _, err := store.MarkGoalSessionStoppedPending(sessionKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkGoalSessionAvailable(sessionKey, state.GoalSessionStopCertificate{RunID: key.RunID, Generation: key.Generation, SessionID: controlSessionID, LocalHandleID: sessionKey.LocalHandleID, BindingID: bindingID, DeliveryDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ReceiptID: "00000000-0000-4000-8000-000000000011"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteJournal(key); err != nil {
+		t.Fatal(err)
+	}
+	daemon := &daemon{config: testConfig(t), store: store, options: options{newID: ids(), clock: time.Now}, running: make(map[state.RunKey]*runningRun), slots: make(chan struct{}, 1)}
+	if err := daemon.recoverUnclosedGoalSessions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.LoadGoalSession(sessionKey)
+	if err != nil || session.NeedsReconciliation() || session.SessionState != state.GoalSessionStateAvailable || session.StopCertificate == nil || session.StopCertificate.SessionID != controlSessionID || session.NativeSessionID != "native-thread-1" {
+		t.Fatalf("released session after RunJournal cleanup = %#v, error = %v", session, err)
+	}
+}
+
+func TestStaleStopDeliveryRetriesStateConflictUntilControlTerminalizesRun(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	sessionKey, controlSessionID, bindingID := saveRetainedGoalSession(t, store, key)
+	if _, err := store.MarkGoalSessionStoppedPending(sessionKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.QueueGoalSessionStopped(key, state.GoalSessionStoppedDelivery{SessionID: controlSessionID, LocalHandleID: sessionKey.LocalHandleID, BindingID: bindingID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetLocalState(key, "stale"); err != nil {
+		t.Fatal(err)
+	}
+	client := &goalDeliveryControl{fakeControl: &fakeControl{}, stopErrors: []error{&control.APIError{StatusCode: http.StatusConflict, Code: control.StateConflict, Message: "run is not terminal"}}}
+	daemon := &daemon{config: testConfig(t), store: store, control: client, workspace: &fakeWorkspace{}, options: options{clock: time.Now}}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := daemon.flushGoalDeliveries(context.Background(), journal); err == nil {
+		t.Fatal("stale stop delivery succeeded before Control terminalized the Run")
+	}
+	journal, err = store.LoadJournal(key)
+	if err != nil || len(journal.PendingGoalDeliveries) != 1 || len(journal.RetiredGoalDeliveries) != 0 {
+		t.Fatalf("state conflict retired stop delivery: journal=%#v error=%v", journal, err)
+	}
+	updated, _, err := daemon.flushGoalDeliveries(context.Background(), journal)
+	if err != nil || updated.HasPendingGoalDeliveries() || len(client.stops) != 2 {
+		t.Fatalf("stale stop retry = updated:%#v stops:%#v error:%v", updated, client.stops, err)
+	}
+}
+
+func TestRecoveryPreservesStaleRetainedStopDelivery(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	sessionKey, controlSessionID, bindingID := saveRetainedGoalSession(t, store, key)
+	if _, err := store.QueueGoalSessionStopped(key, state.GoalSessionStoppedDelivery{SessionID: controlSessionID, LocalHandleID: sessionKey.LocalHandleID, BindingID: bindingID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkGoalSessionStoppedPending(sessionKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetLocalState(key, "stale"); err != nil {
+		t.Fatal(err)
+	}
+	daemon := &daemon{config: testConfig(t), store: store, options: options{newID: ids(), clock: time.Now}, running: make(map[state.RunKey]*runningRun), slots: make(chan struct{}, 1)}
+	if err := daemon.recoverUnclosedGoalSessions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.LoadGoalSession(sessionKey)
+	if err != nil || session.NeedsReconciliation() || session.SessionState != state.GoalSessionStateUnavailable || session.NativeSessionID != "native-thread-1" || session.ControlSessionID != controlSessionID || session.BindingID != bindingID {
+		t.Fatalf("recovered stale retained session = %#v, error = %v", session, err)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil || len(journal.PendingGoalDeliveries) != 1 || journal.PendingGoalDeliveries[0].Kind != state.GoalDeliverySessionStopped {
+		t.Fatalf("recovered stale stop outbox = %#v, error = %v", journal, err)
+	}
+}
+
+func TestAttachReplayBarrierPreservesStoppedNativeSessionUntilMappingRecovers(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	sessionKey, bindingID := saveReadyAttachPendingGoalSession(t, store, key)
+	native := &fakeNativeGoalSession{}
+	daemon := &daemon{config: testConfig(t), store: store, options: options{clock: time.Now}, running: make(map[state.RunKey]*runningRun)}
+	if err := daemon.abandonGoalSession(sessionKey, native, true, errors.New("attach response persistence is unavailable")); err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.LoadGoalSession(sessionKey)
+	if err != nil || session.NeedsReconciliation() || session.SessionState != state.GoalSessionStateUnavailable || session.LaunchState != state.GoalSessionLaunchStateAttached || session.NativeSessionID != "native-thread-1" || session.ControlSessionID != "" {
+		t.Fatalf("attachment replay barrier = %#v, error = %v", session, err)
+	}
+	if _, err := store.QueueTerminalTransitionAt(key, protocol.StateTransitionRequest{TransitionID: "terminal", State: "failed", Payload: []byte(`{}`)}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := daemon.recoverUnclosedGoalSessions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil || len(journal.PendingGoalDeliveries) != 1 || journal.PendingGoalDeliveries[0].Kind != state.GoalDeliverySessionAttach {
+		t.Fatalf("recovered attachment replay barrier = %#v, error = %v", journal, err)
+	}
+	attach := journal.PendingGoalDeliveries[0].SessionAttach
+	client := &goalDeliveryControl{
+		fakeControl:              &fakeControl{},
+		attachErrors:             []error{&control.APIError{StatusCode: http.StatusConflict, Code: control.IdempotencyConflict, Message: "original attach response was lost"}},
+		attachmentReadbackErrors: []error{&control.APIError{StatusCode: http.StatusNotFound, Code: control.NotFound, Message: "attachment not found"}},
+		attachmentReadbackReceipt: &control.GoalSessionReceipt{
+			ID: "00000000-0000-4000-8000-000000000010", AttachmentReceiptID: "00000000-0000-4000-8000-000000000012", GoalID: attach.GoalID, TaskID: "task-1", RunID: key.RunID,
+			MachineID: "machine-1", RuntimeID: journal.RuntimeID, RepositoryResourceID: "00000000-0000-4000-8000-000000000005", ActiveRunID: key.RunID,
+			LocalHandleID: attach.LocalHandleID, BindingID: bindingID, HarnessKind: attach.HarnessKind, HarnessVersion: attach.HarnessVersion,
+			AdapterVersion: attach.AdapterVersion, WorkspaceFingerprint: attach.WorkspaceFingerprint, Workspace: attach.Workspace, State: state.GoalSessionStateBusy,
+		},
+	}
+	daemon.control = client
+	updated, _, err := daemon.flushGoalDeliveries(context.Background(), journal)
+	if err != nil || len(updated.PendingGoalDeliveries) != 1 || updated.PendingGoalDeliveries[0].Kind != state.GoalDeliverySessionStopped {
+		t.Fatalf("attachment replay did not queue retained stop receipt: journal=%#v error=%v", updated, err)
+	}
+	if client.attachmentReadbacks != 2 || client.attachCalls != 1 {
+		t.Fatalf("attachment replay did not converge through immutable readback: readbacks=%d attaches=%d", client.attachmentReadbacks, client.attachCalls)
+	}
+	session, err = store.LoadGoalSession(sessionKey)
+	if err != nil || session.NeedsReconciliation() || session.ControlSessionID != "00000000-0000-4000-8000-000000000010" || session.SessionState != state.GoalSessionStateUnavailable {
+		t.Fatalf("replayed attach mapping = %#v, error = %v", session, err)
+	}
+}
+
+func TestRecoveryReadbackAttachesBeforeStoppingLiveNativeSession(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	sessionKey, bindingID := saveReadyAttachPendingGoalSession(t, store, key)
+	if _, err := store.SetProcessDetails(key, 71, "native:71", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attach := journal.PendingGoalDeliveries[0].SessionAttach
+	client := &goalDeliveryControl{fakeControl: &fakeControl{}, attachmentReadbackReceipt: &control.GoalSessionReceipt{
+		ID: "00000000-0000-4000-8000-000000000010", AttachmentReceiptID: "00000000-0000-4000-8000-000000000012", GoalID: attach.GoalID, TaskID: "task-1", RunID: key.RunID,
+		MachineID: "machine-1", RuntimeID: journal.RuntimeID, RepositoryResourceID: "00000000-0000-4000-8000-000000000005", ActiveRunID: key.RunID,
+		LocalHandleID: attach.LocalHandleID, BindingID: bindingID, HarnessKind: attach.HarnessKind, HarnessVersion: attach.HarnessVersion,
+		AdapterVersion: attach.AdapterVersion, WorkspaceFingerprint: attach.WorkspaceFingerprint, Workspace: attach.Workspace, State: state.GoalSessionStateBusy,
+	}}
+	terminated := 0
+	daemon := &daemon{config: testConfig(t), store: store, control: client, options: options{
+		newID: ids(), clock: time.Now,
+		terminatePersist: func(pid int, identity string) error {
+			terminated++
+			if pid != 71 || identity != "native:71" {
+				t.Fatalf("terminate persisted process = %d %q", pid, identity)
+			}
+			return nil
+		},
+	}, running: make(map[state.RunKey]*runningRun), slots: make(chan struct{}, 1)}
+	if err := daemon.recoverUnclosedGoalSessions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if client.attachmentReadbacks != 1 || client.attachCalls != 0 || terminated != 1 {
+		t.Fatalf("live attachment recovery calls: readbacks=%d attaches=%d terminations=%d", client.attachmentReadbacks, client.attachCalls, terminated)
+	}
+	session, err := store.LoadGoalSession(sessionKey)
+	if err != nil || session.NeedsReconciliation() || session.SessionState != state.GoalSessionStateUnavailable || session.ControlSessionID != "00000000-0000-4000-8000-000000000010" || session.BindingID != bindingID || session.NativeSessionID != "native-thread-1" {
+		t.Fatalf("live attachment recovery session = %#v, error = %v", session, err)
+	}
+	journal, err = store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.PID != 0 || journal.ProcessIdentity != "" || journal.TerminalState != "failed" || len(journal.PendingTransitions) != 1 {
+		t.Fatalf("live attachment recovery journal = %#v", journal)
+	}
+	hasStop := false
+	for _, delivery := range journal.PendingGoalDeliveries {
+		if delivery.Kind == state.GoalDeliverySessionStopped && delivery.SessionStopped != nil && delivery.SessionStopped.SessionID == session.ControlSessionID && delivery.SessionStopped.BindingID == bindingID {
+			hasStop = true
+		}
+	}
+	if !hasStop {
+		t.Fatalf("live attachment recovery did not queue stopped receipt: %#v", journal.PendingGoalDeliveries)
+	}
+}
+
+func TestRecoveryReadbackWithoutNativeMarkerPreservesStopBarrier(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	sessionKey, bindingID := saveReadyAttachPendingGoalSession(t, store, key)
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attach := journal.PendingGoalDeliveries[0].SessionAttach
+	client := &goalDeliveryControl{fakeControl: &fakeControl{}, attachmentReadbackReceipt: &control.GoalSessionReceipt{
+		ID: "00000000-0000-4000-8000-000000000010", AttachmentReceiptID: "00000000-0000-4000-8000-000000000012", GoalID: attach.GoalID, TaskID: "task-1", RunID: key.RunID,
+		MachineID: "machine-1", RuntimeID: journal.RuntimeID, RepositoryResourceID: "00000000-0000-4000-8000-000000000005", ActiveRunID: key.RunID,
+		LocalHandleID: attach.LocalHandleID, BindingID: bindingID, HarnessKind: attach.HarnessKind, HarnessVersion: attach.HarnessVersion,
+		AdapterVersion: attach.AdapterVersion, WorkspaceFingerprint: attach.WorkspaceFingerprint, Workspace: attach.Workspace, State: state.GoalSessionStateBusy,
+	}}
+	daemon := &daemon{config: testConfig(t), store: store, control: client, options: options{newID: ids(), clock: time.Now}, running: make(map[state.RunKey]*runningRun), slots: make(chan struct{}, 1)}
+	if err := daemon.recoverUnclosedGoalSessions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.LoadGoalSession(sessionKey)
+	if err != nil || session.NeedsReconciliation() || session.SessionState != state.GoalSessionStateBusy || session.ControlSessionID != "00000000-0000-4000-8000-000000000010" || session.NativeSessionID != "native-thread-1" {
+		t.Fatalf("readback without marker changed native-stop barrier: %#v, error = %v", session, err)
+	}
+	journal, err = store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.attachmentReadbacks != 1 || client.attachCalls != 0 || journal.TerminalState != "" || len(journal.PendingTransitions) != 0 {
+		t.Fatalf("readback without marker terminalized unknown native state: readbacks=%d attaches=%d journal=%#v", client.attachmentReadbacks, client.attachCalls, journal)
+	}
+}
+
+func TestRecoveryMappedBusySessionStopsBeforeUnknownOutcome(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	sessionKey, controlSessionID, bindingID := saveRetainedGoalSession(t, store, key)
+	if _, err := store.SetProcessDetails(key, 71, "native:71", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	terminated := 0
+	daemon := &daemon{config: testConfig(t), store: store, options: options{
+		newID: ids(), clock: time.Now,
+		terminatePersist: func(pid int, identity string) error {
+			terminated++
+			return nil
+		},
+	}, running: make(map[state.RunKey]*runningRun), slots: make(chan struct{}, 1)}
+	if err := daemon.recoverUnclosedGoalSessions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if terminated != 1 {
+		t.Fatalf("mapped busy session termination count = %d, want 1", terminated)
+	}
+	session, err := store.LoadGoalSession(sessionKey)
+	if err != nil || session.NeedsReconciliation() || session.SessionState != state.GoalSessionStateUnavailable || session.ControlSessionID != controlSessionID || session.BindingID != bindingID || session.NativeSessionID != "native-thread-1" {
+		t.Fatalf("mapped busy recovery session = %#v, error = %v", session, err)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil || journal.PID != 0 || journal.ProcessIdentity != "" || journal.TerminalState != "failed" || len(journal.PendingTransitions) != 1 {
+		t.Fatalf("mapped busy recovery journal = %#v, error = %v", journal, err)
+	}
+	for _, delivery := range journal.PendingGoalDeliveries {
+		if delivery.Kind == state.GoalDeliverySessionStopped && delivery.SessionStopped != nil && delivery.SessionStopped.SessionID == controlSessionID && delivery.SessionStopped.BindingID == bindingID {
+			return
+		}
+	}
+	t.Fatalf("mapped busy recovery did not queue stopped delivery: %#v", journal.PendingGoalDeliveries)
+}
+
+func TestAttachmentReadbackRejectsMismatchedLocalTaskIdentity(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	sessionKey, bindingID := saveReadyAttachPendingGoalSession(t, store, key)
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attach := journal.PendingGoalDeliveries[0].SessionAttach
+	client := &goalDeliveryControl{fakeControl: &fakeControl{}, attachmentReadbackReceipt: &control.GoalSessionReceipt{
+		ID: "00000000-0000-4000-8000-000000000010", AttachmentReceiptID: "00000000-0000-4000-8000-000000000012", GoalID: attach.GoalID, TaskID: "other-task", RunID: key.RunID,
+		MachineID: "machine-1", RuntimeID: journal.RuntimeID, RepositoryResourceID: "00000000-0000-4000-8000-000000000005", ActiveRunID: key.RunID,
+		LocalHandleID: attach.LocalHandleID, BindingID: bindingID, HarnessKind: attach.HarnessKind, HarnessVersion: attach.HarnessVersion,
+		AdapterVersion: attach.AdapterVersion, WorkspaceFingerprint: attach.WorkspaceFingerprint, Workspace: attach.Workspace, State: state.GoalSessionStateBusy,
+	}}
+	daemon := &daemon{config: testConfig(t), store: store, control: client, options: options{clock: time.Now}}
+	if _, _, err := daemon.deliverGoalDelivery(context.Background(), journal, state.GoalDeliverySessionAttach, sessionKey.LocalHandleID, nil); err == nil || !strings.Contains(err.Error(), "local task or machine identity") {
+		t.Fatalf("deliverGoalDelivery() error = %v, want local task identity rejection", err)
+	}
+	session, err := store.LoadGoalSession(sessionKey)
+	if err != nil || session.ControlSessionID != "" || session.ControlAttachmentReceiptID != "" || session.SessionState != state.GoalSessionStateBusy {
+		t.Fatalf("mismatched readback persisted mapping: %#v, error = %v", session, err)
+	}
+	journal, err = store.LoadJournal(key)
+	if err != nil || len(journal.PendingGoalDeliveries) != 1 || journal.PendingGoalDeliveries[0].Kind != state.GoalDeliverySessionAttach {
+		t.Fatalf("mismatched readback changed outbox: %#v, error = %v", journal, err)
 	}
 }
 
@@ -769,6 +1506,7 @@ func TestRecoveryDiscardsUnreadyGoalSessionAttachBeforeTerminalCleanup(t *testin
 		LaunchIntentID: "00000000-0000-4000-8000-000000000008", GoalID: admission.GoalID, GoalRevision: admission.GoalRevision,
 		WorkItemID: admissionWorkItemIDValue(admission.WorkItemID), TaskID: "task-1", RunID: key.RunID, Generation: key.Generation, AdmissionID: admission.AdmissionID,
 		LocalHandleID: sessionKey.LocalHandleID, RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: "0.153.4",
+		BindingID:      "00000000-0000-4000-8000-000000000009",
 		AdapterVersion: "symmetry-daemon:test", AdapterProtocolVersion: 1,
 		WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SessionMode: state.GoalSessionModeFresh,
 	}
@@ -780,6 +1518,7 @@ func TestRecoveryDiscardsUnreadyGoalSessionAttachBeforeTerminalCleanup(t *testin
 	}
 	attach := state.GoalSessionAttachDelivery{
 		GoalID: admission.GoalID, LocalHandleID: sessionKey.LocalHandleID, HarnessKind: "codex", HarnessVersion: "0.153.4",
+		BindingID:      intent.BindingID,
 		AdapterVersion: "symmetry-daemon:test", WorkspaceFingerprint: intent.WorkspaceFingerprint, Workspace: "local",
 	}
 	if _, err := store.QueueGoalSessionAttach(key, attach); err != nil {
@@ -886,7 +1625,7 @@ func TestGoalDeliveryMalformedOrMismatchedReceiptRetainsExactIntent(t *testing.T
 		{
 			name: "attach malformed",
 			queue: func(store *state.Store, key state.RunKey) (state.RunJournal, state.GoalDeliveryKind, string, error) {
-				payload := state.GoalSessionAttachDelivery{GoalID: "00000000-0000-4000-8000-000000000002", LocalHandleID: "00000000-0000-4000-8000-000000000003", HarnessKind: "codex", HarnessVersion: "0.153.4", AdapterVersion: "symmetry-daemon:test", WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Workspace: `C:\worktree`}
+				payload := state.GoalSessionAttachDelivery{GoalID: "00000000-0000-4000-8000-000000000002", LocalHandleID: "00000000-0000-4000-8000-000000000003", BindingID: "00000000-0000-4000-8000-000000000004", HarnessKind: "codex", HarnessVersion: "0.153.4", AdapterVersion: "symmetry-daemon:test", WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Workspace: `C:\worktree`}
 				journal, err := store.QueueGoalSessionAttach(key, payload)
 				if err == nil {
 					journal, err = store.MarkGoalSessionAttachDeliveryReady(key, payload.LocalHandleID)
@@ -898,7 +1637,7 @@ func TestGoalDeliveryMalformedOrMismatchedReceiptRetainsExactIntent(t *testing.T
 		{
 			name: "attach mismatch",
 			queue: func(store *state.Store, key state.RunKey) (state.RunJournal, state.GoalDeliveryKind, string, error) {
-				payload := state.GoalSessionAttachDelivery{GoalID: "00000000-0000-4000-8000-000000000002", LocalHandleID: "00000000-0000-4000-8000-000000000003", HarnessKind: "codex", HarnessVersion: "0.153.4", AdapterVersion: "symmetry-daemon:test", WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Workspace: `C:\worktree`}
+				payload := state.GoalSessionAttachDelivery{GoalID: "00000000-0000-4000-8000-000000000002", LocalHandleID: "00000000-0000-4000-8000-000000000003", BindingID: "00000000-0000-4000-8000-000000000004", HarnessKind: "codex", HarnessVersion: "0.153.4", AdapterVersion: "symmetry-daemon:test", WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Workspace: `C:\worktree`}
 				journal, err := store.QueueGoalSessionAttach(key, payload)
 				if err == nil {
 					journal, err = store.MarkGoalSessionAttachDeliveryReady(key, payload.LocalHandleID)
@@ -959,20 +1698,68 @@ func TestGoalDeliveryMalformedOrMismatchedReceiptRetainsExactIntent(t *testing.T
 
 type goalDeliveryControl struct {
 	*fakeControl
-	usageErrors     []error
-	evidenceErrors  []error
-	usages          []protocol.Usage
-	fences          []protocol.Fence
-	attachReceipt   *control.GoalSessionReceipt
-	evidenceReceipt *control.GoalEvidenceReceipt
-	usageReceipt    *control.GoalUsageReceipt
+	usageErrors               []error
+	evidenceErrors            []error
+	usages                    []protocol.Usage
+	fences                    []protocol.Fence
+	attachReceipt             *control.GoalSessionReceipt
+	attachErrors              []error
+	attachCalls               int
+	attachmentReadbackReceipt *control.GoalSessionReceipt
+	attachmentReadbackErrors  []error
+	attachmentReadbacks       int
+	stopErrors                []error
+	stops                     []control.GoalSessionStoppedRequest
+	stopReceipt               *control.GoalSessionStoppedReceipt
+	evidenceReceipt           *control.GoalEvidenceReceipt
+	usageReceipt              *control.GoalUsageReceipt
+}
+
+func (client *goalDeliveryControl) MarkHarnessSessionStopped(_ context.Context, runID string, request control.GoalSessionStoppedRequest) (control.GoalSessionStoppedReceipt, error) {
+	client.stops = append(client.stops, request)
+	if len(client.stopErrors) != 0 {
+		err := client.stopErrors[0]
+		client.stopErrors = client.stopErrors[1:]
+		return control.GoalSessionStoppedReceipt{}, err
+	}
+	if client.stopReceipt != nil {
+		return *client.stopReceipt, nil
+	}
+	return control.GoalSessionStoppedReceipt{
+		ReceiptID:     "00000000-0000-4000-8000-000000000011",
+		RunID:         runID,
+		SessionID:     request.SessionID,
+		LocalHandleID: request.LocalHandleID,
+		BindingID:     request.BindingID,
+		State:         state.GoalSessionStateAvailable,
+		LockVersion:   1,
+	}, nil
 }
 
 func (client *goalDeliveryControl) AttachHarnessSession(_ context.Context, _ string, request control.GoalSessionAttachRequest) (control.GoalSessionReceipt, error) {
+	client.attachCalls++
+	if len(client.attachErrors) != 0 {
+		err := client.attachErrors[0]
+		client.attachErrors = client.attachErrors[1:]
+		return control.GoalSessionReceipt{}, err
+	}
 	if client.attachReceipt != nil {
 		return *client.attachReceipt, nil
 	}
 	return control.GoalSessionReceipt{}, errors.New("unexpected session attach")
+}
+
+func (client *goalDeliveryControl) FetchHarnessSessionAttachment(_ context.Context, _ string, _ protocol.Fence) (control.GoalSessionReceipt, error) {
+	client.attachmentReadbacks++
+	if len(client.attachmentReadbackErrors) != 0 {
+		err := client.attachmentReadbackErrors[0]
+		client.attachmentReadbackErrors = client.attachmentReadbackErrors[1:]
+		return control.GoalSessionReceipt{}, err
+	}
+	if client.attachmentReadbackReceipt != nil {
+		return *client.attachmentReadbackReceipt, nil
+	}
+	return control.GoalSessionReceipt{}, &control.APIError{StatusCode: http.StatusNotFound, Code: control.NotFound, Message: "attachment not found"}
 }
 
 func (client *goalDeliveryControl) FetchRunContext(context.Context, string, protocol.Fence) (control.GoalRunContext, error) {
@@ -1036,4 +1823,125 @@ func claimedGoalDeliveryStore(t *testing.T) (*state.Store, state.RunKey) {
 		t.Fatal(err)
 	}
 	return store, key
+}
+
+func saveRetainedGoalSession(t *testing.T, store *state.Store, key state.RunKey) (state.GoalSessionKey, string, string) {
+	t.Helper()
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	bindingID := "00000000-0000-4000-8000-000000000009"
+	controlSessionID := "00000000-0000-4000-8000-000000000010"
+	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000007"}
+	intent := state.GoalSessionLaunchIntent{
+		LaunchIntentID: "00000000-0000-4000-8000-000000000008", GoalID: admission.GoalID, GoalRevision: admission.GoalRevision,
+		WorkItemID: admissionWorkItemIDValue(admission.WorkItemID), TaskID: "task-1", RunID: key.RunID, Generation: key.Generation, AdmissionID: admission.AdmissionID,
+		LocalHandleID: sessionKey.LocalHandleID, BindingID: bindingID, MachineID: "machine-1", RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: "0.153.4",
+		AdapterVersion: "symmetry-daemon:test", AdapterProtocolVersion: 1, WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		WorkspacePath: `C:\worktree\retained`, SessionMode: state.GoalSessionModeFresh,
+	}
+	if _, err := store.SaveGoalSessionLaunchIntent(intent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkGoalSessionLaunchStarted(sessionKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PersistGoalSessionHandle(sessionKey, state.GoalSessionHandle{NativeSessionID: "native-thread-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PersistGoalSessionControlAttachment(sessionKey, controlSessionID, bindingID, "00000000-0000-4000-8000-000000000012", false); err != nil {
+		t.Fatal(err)
+	}
+	return sessionKey, controlSessionID, bindingID
+}
+
+func saveReadyAttachPendingGoalSession(t *testing.T, store *state.Store, key state.RunKey) (state.GoalSessionKey, string) {
+	t.Helper()
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	bindingID := "00000000-0000-4000-8000-000000000009"
+	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000007"}
+	intent := state.GoalSessionLaunchIntent{
+		LaunchIntentID: "00000000-0000-4000-8000-000000000008", GoalID: admission.GoalID, GoalRevision: admission.GoalRevision,
+		WorkItemID: admissionWorkItemIDValue(admission.WorkItemID), TaskID: "task-1", RunID: key.RunID, Generation: key.Generation, AdmissionID: admission.AdmissionID,
+		LocalHandleID: sessionKey.LocalHandleID, BindingID: bindingID, MachineID: "machine-1", RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: "0.153.4",
+		AdapterVersion: "symmetry-daemon:test", AdapterProtocolVersion: 1, WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		WorkspacePath: `C:\worktree\retained`, SessionMode: state.GoalSessionModeFresh,
+	}
+	if _, err := store.SaveGoalSessionLaunchIntent(intent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkGoalSessionLaunchStarted(sessionKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PersistGoalSessionHandle(sessionKey, state.GoalSessionHandle{NativeSessionID: "native-thread-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.QueueGoalSessionAttach(key, state.GoalSessionAttachDelivery{GoalID: admission.GoalID, LocalHandleID: sessionKey.LocalHandleID, BindingID: bindingID, HarnessKind: "codex", HarnessVersion: "0.153.4", AdapterVersion: "symmetry-daemon:test", WorkspaceFingerprint: intent.WorkspaceFingerprint, Workspace: "local", RepositoryResourceID: &admission.Subject.ResourceID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkGoalSessionAttachDeliveryReady(key, sessionKey.LocalHandleID); err != nil {
+		t.Fatal(err)
+	}
+	return sessionKey, bindingID
+}
+
+func saveLegacyReadyGoalSessionAttach(t *testing.T, store *state.Store, key state.RunKey, sessionState string) state.GoalSessionKey {
+	t.Helper()
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000007"}
+	intent := state.GoalSessionLaunchIntent{
+		LaunchIntentID: "00000000-0000-4000-8000-000000000008", GoalID: admission.GoalID, GoalRevision: admission.GoalRevision,
+		WorkItemID: admissionWorkItemIDValue(admission.WorkItemID), TaskID: "task-1", RunID: key.RunID, Generation: key.Generation, AdmissionID: admission.AdmissionID,
+		LocalHandleID: sessionKey.LocalHandleID, MachineID: "machine-1", RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: "0.153.4",
+		AdapterVersion: "symmetry-daemon:test", AdapterProtocolVersion: 1, WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		WorkspacePath: `C:\worktree\retained`, SessionMode: state.GoalSessionModeFresh,
+	}
+	if _, err := store.SaveGoalSessionLaunchIntent(intent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkGoalSessionLaunchStarted(sessionKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PersistGoalSessionHandle(sessionKey, state.GoalSessionHandle{NativeSessionID: "native-thread-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if sessionState != state.GoalSessionStateBusy {
+		if _, err := store.SetGoalSessionState(sessionKey, sessionState); err != nil {
+			t.Fatal(err)
+		}
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := state.GoalDelivery{Kind: state.GoalDeliverySessionAttach, DeliveryID: sessionKey.LocalHandleID, Fence: journal.Fence(), Ready: true, SessionAttach: &state.GoalSessionAttachDelivery{
+		GoalID: admission.GoalID, LocalHandleID: sessionKey.LocalHandleID, HarnessKind: "codex", HarnessVersion: "0.153.4", AdapterVersion: "symmetry-daemon:test",
+		WorkspaceFingerprint: intent.WorkspaceFingerprint, Workspace: "local", RepositoryResourceID: &admission.Subject.ResourceID,
+	}}
+	encoded, err := json.Marshal(struct {
+		Kind          state.GoalDeliveryKind
+		DeliveryID    string
+		Fence         protocol.Fence
+		SessionAttach *state.GoalSessionAttachDelivery
+		Evidence      *protocol.Evidence
+		Usage         *protocol.Usage
+	}{legacy.Kind, legacy.DeliveryID, legacy.Fence, legacy.SessionAttach, legacy.Evidence, legacy.Usage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(encoded)
+	legacy.PayloadDigest = hex.EncodeToString(sum[:])
+	journal.GoalDeliveryEnabled = true
+	journal.PendingGoalDeliveries = []state.GoalDelivery{legacy}
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	return sessionKey
 }

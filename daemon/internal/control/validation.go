@@ -89,7 +89,48 @@ func validateClaimResponse(runID string, request protocol.ClaimRequest, response
 			return invalidResponse("claim", "provider_access "+err.Error())
 		}
 	}
+	if response.HasField("harness_session_id") && response.HarnessSessionID != nil {
+		if err := validateGoalUUID(*response.HarnessSessionID, "harness_session_id"); err != nil {
+			return invalidResponse("claim", err.Error())
+		}
+	}
+	if response.HasField("harness_binding_id") && response.HarnessBindingID != nil {
+		if err := validateGoalUUID(*response.HarnessBindingID, "harness_binding_id"); err != nil {
+			return invalidResponse("claim", err.Error())
+		}
+	}
+	if mode, goalAdmission := claimGoalAdmissionSessionMode(response.Work); goalAdmission {
+		switch mode {
+		case protocol.SessionModeResume:
+			if !response.HasField("harness_session_id") || !response.HasField("harness_binding_id") || response.HarnessSessionID == nil || response.HarnessBindingID == nil {
+				return invalidResponse("claim", "resume Goal claim requires harness_session_id and harness_binding_id")
+			}
+		case protocol.SessionModeFresh, protocol.SessionModeHandoff:
+			if response.HarnessSessionID != nil || response.HarnessBindingID != nil {
+				return invalidResponse("claim", "fresh and handoff Goal claims must not reserve a harness session")
+			}
+		}
+	}
 	return nil
+}
+
+func claimGoalAdmissionSessionMode(work protocol.Work) (protocol.SessionMode, bool) {
+	input := bytes.TrimSpace(work.Input)
+	if len(input) == 0 || input[0] != '{' {
+		return "", false
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(input, &envelope); err != nil {
+		return "", false
+	}
+	if nested, present := envelope["goal_admission"]; present {
+		input = bytes.TrimSpace(nested)
+	}
+	admission, err := protocol.ParseAdmission(input)
+	if err != nil {
+		return "", false
+	}
+	return admission.SessionMode, true
 }
 
 func validateProviderAccess(access protocol.ProviderAccess) error {
@@ -730,6 +771,27 @@ func validateGoalSessionAttach(runID string, request GoalSessionAttachRequest) e
 	if err := validateGoalUUID(request.LocalHandleID, "local handle ID"); err != nil {
 		return err
 	}
+	if request.BindingID != nil {
+		if err := validateGoalUUID(*request.BindingID, "binding ID"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateGoalSessionStopped(runID string, request GoalSessionStoppedRequest) error {
+	if err := validateGoalFence(runID, request.Fence); err != nil {
+		return err
+	}
+	for field, value := range map[string]string{
+		"session ID":      request.SessionID,
+		"local handle ID": request.LocalHandleID,
+		"binding ID":      request.BindingID,
+	} {
+		if err := validateGoalUUID(value, field); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -763,44 +825,14 @@ func validateGoalSessionReceipt(runID string, request GoalSessionAttachRequest, 
 	if err := validateGoalFence(runID, request.Fence); err != nil {
 		return invalidResponse("attach session", err.Error())
 	}
-	if err := validateGoalUUID(receipt.ID, "session.id"); err != nil {
-		return invalidResponse("attach session", err.Error())
+	if err := validateGoalSessionAttachmentReceipt("attach session", runID, request.Fence, receipt); err != nil {
+		return err
 	}
-	if err := validateGoalUUID(receipt.RunID, "session.run_id"); err != nil {
-		return invalidResponse("attach session", err.Error())
-	}
-	if receipt.RunID != runID {
-		return invalidResponse("attach session", "session run_id does not match the path run ID")
-	}
-	if receipt.State != "busy" {
-		return invalidResponse("attach session", "session state must be busy")
-	}
-	if receipt.RuntimeID == "" || receipt.ActiveRunID == "" || receipt.LocalHandleID == "" ||
-		receipt.HarnessKind == "" || receipt.HarnessVersion == "" || receipt.AdapterVersion == "" ||
-		receipt.WorkspaceFingerprint == "" {
-		return invalidResponse("attach session", "session receipt is missing request correlation fields")
-	}
-	for field, value := range map[string]string{
-		"session.goal_id":                receipt.GoalID,
-		"session.task_id":                receipt.TaskID,
-		"session.machine_id":             receipt.MachineID,
-		"session.repository_resource_id": receipt.RepositoryResourceID,
-		"session.local_handle_id":        receipt.LocalHandleID,
-	} {
-		if value != "" {
-			if err := validateGoalUUID(value, field); err != nil {
-				return invalidResponse("attach session", err.Error())
-			}
-		}
-	}
-	if err := validateGoalUUID(receipt.RuntimeID, "session.runtime_id"); err != nil || receipt.RuntimeID != request.RuntimeID {
-		return invalidResponse("attach session", "session runtime_id does not match the fence")
-	}
-	if err := validateGoalUUID(receipt.ActiveRunID, "session.active_run_id"); err != nil || receipt.ActiveRunID != runID {
-		return invalidResponse("attach session", "session active_run_id does not match the run")
-	}
-	if err := validateGoalUUID(receipt.LocalHandleID, "session.local_handle_id"); err != nil || receipt.LocalHandleID != request.LocalHandleID {
+	if receipt.LocalHandleID != request.LocalHandleID {
 		return invalidResponse("attach session", "session local_handle_id does not match the request")
+	}
+	if request.BindingID != nil && receipt.BindingID != *request.BindingID {
+		return invalidResponse("attach session", "session binding_id does not match the request")
 	}
 	if receipt.HarnessKind != request.HarnessKind || receipt.HarnessVersion != request.HarnessVersion ||
 		receipt.AdapterVersion != request.AdapterVersion || receipt.WorkspaceFingerprint != request.WorkspaceFingerprint {
@@ -809,16 +841,72 @@ func validateGoalSessionReceipt(runID string, request GoalSessionAttachRequest, 
 	if receipt.Workspace != "" && receipt.Workspace != request.Workspace {
 		return invalidResponse("attach session", "session workspace does not match the request")
 	}
-	if receipt.RepositoryResourceID != "" {
-		if err := validateGoalUUID(receipt.RepositoryResourceID, "session.repository_resource_id"); err != nil {
-			return invalidResponse("attach session", err.Error())
-		}
-	}
 	if request.RepositoryResourceID != nil && receipt.RepositoryResourceID != *request.RepositoryResourceID {
 		return invalidResponse("attach session", "session repository_resource_id does not match the request")
 	}
+	return nil
+}
+
+func validateGoalSessionAttachmentReadback(runID string, fence protocol.Fence, receipt GoalSessionReceipt) error {
+	return validateGoalSessionAttachmentReceipt("fetch session attachment", runID, fence, receipt)
+}
+
+func validateGoalSessionAttachmentReceipt(operation, runID string, fence protocol.Fence, receipt GoalSessionReceipt) error {
+	if err := validateGoalFence(runID, fence); err != nil {
+		return invalidResponse(operation, err.Error())
+	}
+	if err := validateGoalUUID(receipt.ID, "session.id"); err != nil {
+		return invalidResponse(operation, err.Error())
+	}
+	if err := validateGoalUUID(receipt.AttachmentReceiptID, "session.attachment_receipt_id"); err != nil {
+		return invalidResponse(operation, err.Error())
+	}
+	if err := validateGoalUUID(receipt.RunID, "session.run_id"); err != nil {
+		return invalidResponse(operation, err.Error())
+	}
+	if receipt.RunID != runID {
+		return invalidResponse(operation, "session run_id does not match the path run ID")
+	}
+	if receipt.State != "busy" {
+		return invalidResponse(operation, "session state must be busy")
+	}
+	if receipt.SessionID == "" || receipt.GoalID == "" || receipt.TaskID == "" || receipt.MachineID == "" || receipt.RepositoryResourceID == "" ||
+		receipt.RuntimeID == "" || receipt.ActiveRunID == "" || receipt.LocalHandleID == "" ||
+		receipt.HarnessKind == "" || receipt.HarnessVersion == "" || receipt.AdapterVersion == "" ||
+		receipt.WorkspaceFingerprint == "" {
+		return invalidResponse(operation, "session receipt is missing immutable identity fields")
+	}
+	for field, value := range map[string]string{
+		"session.goal_id":                receipt.GoalID,
+		"session.task_id":                receipt.TaskID,
+		"session.machine_id":             receipt.MachineID,
+		"session.repository_resource_id": receipt.RepositoryResourceID,
+		"session.local_handle_id":        receipt.LocalHandleID,
+	} {
+		if err := validateGoalUUID(value, field); err != nil {
+			return invalidResponse(operation, err.Error())
+		}
+	}
+	if err := validateGoalUUID(receipt.RuntimeID, "session.runtime_id"); err != nil || receipt.RuntimeID != fence.RuntimeID {
+		return invalidResponse(operation, "session runtime_id does not match the fence")
+	}
+	if err := validateGoalUUID(receipt.ActiveRunID, "session.active_run_id"); err != nil || receipt.ActiveRunID != runID {
+		return invalidResponse(operation, "session active_run_id does not match the run")
+	}
+	if err := validateGoalUUID(receipt.LocalHandleID, "session.local_handle_id"); err != nil {
+		return invalidResponse(operation, err.Error())
+	}
+	if err := validateGoalUUID(receipt.BindingID, "session.binding_id"); err != nil {
+		return invalidResponse(operation, err.Error())
+	}
+	if err := validateGoalUUID(receipt.SessionID, "session.session_id"); err != nil {
+		return invalidResponse(operation, err.Error())
+	}
+	if receipt.SessionID != receipt.ID {
+		return invalidResponse(operation, "session session_id does not match id")
+	}
 	if receipt.LockVersion < 0 {
-		return invalidResponse("attach session", "session lock_version is invalid")
+		return invalidResponse(operation, "session lock_version is invalid")
 	}
 	for field, value := range map[string]string{
 		"session.inserted_at": receipt.InsertedAt,
@@ -826,9 +914,33 @@ func validateGoalSessionReceipt(runID string, request GoalSessionAttachRequest, 
 	} {
 		if value != "" {
 			if err := validateGoalUTCTimestamp(value, field); err != nil {
-				return invalidResponse("attach session", err.Error())
+				return invalidResponse(operation, err.Error())
 			}
 		}
+	}
+	return nil
+}
+
+func validateGoalSessionStoppedReceipt(runID string, request GoalSessionStoppedRequest, receipt GoalSessionStoppedReceipt) error {
+	if err := validateGoalSessionStopped(runID, request); err != nil {
+		return invalidResponse("session stopped", err.Error())
+	}
+	for field, value := range map[string]string{
+		"session_stopped.receipt_id":      receipt.ReceiptID,
+		"session_stopped.run_id":          receipt.RunID,
+		"session_stopped.session_id":      receipt.SessionID,
+		"session_stopped.local_handle_id": receipt.LocalHandleID,
+		"session_stopped.binding_id":      receipt.BindingID,
+	} {
+		if err := validateGoalUUID(value, field); err != nil {
+			return invalidResponse("session stopped", err.Error())
+		}
+	}
+	if receipt.RunID != runID || receipt.SessionID != request.SessionID || receipt.LocalHandleID != request.LocalHandleID || receipt.BindingID != request.BindingID {
+		return invalidResponse("session stopped", "receipt identity does not match the request")
+	}
+	if receipt.State != "available" || receipt.ActiveRunID != nil || receipt.LockVersion <= 0 {
+		return invalidResponse("session stopped", "receipt must release the session to available")
 	}
 	return nil
 }
@@ -1824,6 +1936,40 @@ func (size *ContextSize) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*size = value
+	return nil
+}
+
+func (receipt *GoalSessionStoppedReceipt) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		ReceiptID     string          `json:"receipt_id"`
+		RunID         string          `json:"run_id"`
+		SessionID     string          `json:"session_id"`
+		LocalHandleID string          `json:"local_handle_id"`
+		BindingID     string          `json:"binding_id"`
+		State         string          `json:"state"`
+		ActiveRunID   json.RawMessage `json:"active_run_id"`
+		LockVersion   int64           `json:"lock_version"`
+	}
+	if err := decodeStrictObjectJSON(data, &wire,
+		"receipt_id", "run_id", "session_id", "local_handle_id", "binding_id", "state", "active_run_id", "lock_version"); err != nil {
+		return err
+	}
+	if !bytes.Equal(bytes.TrimSpace(wire.ActiveRunID), []byte("null")) {
+		return errors.New("session_stopped.active_run_id must be explicitly null")
+	}
+	if wire.LockVersion <= 0 {
+		return errors.New("session_stopped.lock_version must be positive")
+	}
+	*receipt = GoalSessionStoppedReceipt{
+		ReceiptID:     wire.ReceiptID,
+		RunID:         wire.RunID,
+		SessionID:     wire.SessionID,
+		LocalHandleID: wire.LocalHandleID,
+		BindingID:     wire.BindingID,
+		State:         wire.State,
+		ActiveRunID:   nil,
+		LockVersion:   wire.LockVersion,
+	}
 	return nil
 }
 

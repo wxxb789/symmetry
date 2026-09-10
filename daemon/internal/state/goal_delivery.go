@@ -21,9 +21,10 @@ import (
 type GoalDeliveryKind string
 
 const (
-	GoalDeliverySessionAttach GoalDeliveryKind = "session_attach"
-	GoalDeliveryEvidence      GoalDeliveryKind = "evidence"
-	GoalDeliveryUsage         GoalDeliveryKind = "usage"
+	GoalDeliverySessionAttach  GoalDeliveryKind = "session_attach"
+	GoalDeliverySessionStopped GoalDeliveryKind = "session_stopped"
+	GoalDeliveryEvidence       GoalDeliveryKind = "evidence"
+	GoalDeliveryUsage          GoalDeliveryKind = "usage"
 )
 
 // GoalSessionAttachDelivery contains only the safe control-plane projection
@@ -32,6 +33,8 @@ const (
 type GoalSessionAttachDelivery struct {
 	GoalID               string  `json:"goal_id"`
 	LocalHandleID        string  `json:"local_handle_id"`
+	BindingID            string  `json:"binding_id,omitempty"`
+	ServerIssuedBinding  bool    `json:"server_issued_binding,omitempty"`
 	HarnessKind          string  `json:"harness_kind"`
 	HarnessVersion       string  `json:"harness_version"`
 	AdapterVersion       string  `json:"adapter_version"`
@@ -40,18 +43,27 @@ type GoalSessionAttachDelivery struct {
 	RepositoryResourceID *string `json:"repository_resource_id,omitempty"`
 }
 
+// GoalSessionStoppedDelivery is the safe proof needed to release one
+// retained native attachment after its terminal transition is acknowledged.
+type GoalSessionStoppedDelivery struct {
+	SessionID     string `json:"session_id"`
+	LocalHandleID string `json:"local_handle_id"`
+	BindingID     string `json:"binding_id"`
+}
+
 // GoalDelivery is one immutable outbox record. DeliveryID is the receiver's
 // stable idempotency identity: local_handle_id, evidence_key, or usage_key.
 // PayloadDigest covers the kind, ID, full fence, and typed body.
 type GoalDelivery struct {
-	Kind          GoalDeliveryKind           `json:"kind"`
-	DeliveryID    string                     `json:"delivery_id"`
-	PayloadDigest string                     `json:"payload_digest"`
-	Fence         protocol.Fence             `json:"fence"`
-	Ready         bool                       `json:"ready,omitempty"`
-	SessionAttach *GoalSessionAttachDelivery `json:"session_attach,omitempty"`
-	Evidence      *protocol.Evidence         `json:"evidence,omitempty"`
-	Usage         *protocol.Usage            `json:"usage,omitempty"`
+	Kind           GoalDeliveryKind            `json:"kind"`
+	DeliveryID     string                      `json:"delivery_id"`
+	PayloadDigest  string                      `json:"payload_digest"`
+	Fence          protocol.Fence              `json:"fence"`
+	Ready          bool                        `json:"ready,omitempty"`
+	SessionAttach  *GoalSessionAttachDelivery  `json:"session_attach,omitempty"`
+	SessionStopped *GoalSessionStoppedDelivery `json:"session_stopped,omitempty"`
+	Evidence       *protocol.Evidence          `json:"evidence,omitempty"`
+	Usage          *protocol.Usage             `json:"usage,omitempty"`
 }
 
 // GoalDeliveryRetirement preserves a definitive receiver rejection without
@@ -86,6 +98,12 @@ var ErrGoalDeliveryConflict = errors.New("goal delivery conflicts with pending r
 // native launch begins. Call MarkGoalSessionAttachDeliveryReady only after the
 // local native handle has been durably persisted.
 func (store *Store) QueueGoalSessionAttach(key RunKey, payload GoalSessionAttachDelivery) (RunJournal, error) {
+	if (payload.BindingID == "" && !payload.ServerIssuedBinding) || (payload.BindingID != "" && payload.ServerIssuedBinding) {
+		return RunJournal{}, errors.New("Goal session attach binding authority is invalid")
+	}
+	if payload.BindingID != "" && !validGoalSessionUUID(payload.BindingID) {
+		return RunJournal{}, errors.New("Goal session attach binding ID is invalid")
+	}
 	if _, err := store.LoadLateGoalUsage(key); err == nil {
 		return RunJournal{}, ErrGoalDeliveryConflict
 	} else if !IsNotFound(err) {
@@ -101,6 +119,12 @@ func (store *Store) QueueGoalSessionAttach(key RunKey, payload GoalSessionAttach
 		return RunJournal{}, lateErr
 	}
 	return RunJournal{}, err
+}
+
+// QueueGoalSessionStopped persists an exact stop receipt before it can be
+// delivered. The app holds it until the terminal transition is acknowledged.
+func (store *Store) QueueGoalSessionStopped(key RunKey, payload GoalSessionStoppedDelivery) (RunJournal, error) {
+	return store.queueGoalDelivery(key, GoalDelivery{Kind: GoalDeliverySessionStopped, DeliveryID: payload.BindingID, SessionStopped: &payload, Ready: true})
 }
 
 // MarkGoalSessionAttachDeliveryReady records the post-handle-persistence
@@ -343,21 +367,28 @@ func prepareGoalDelivery(runID string, delivery *GoalDelivery) error {
 	}
 	switch delivery.Kind {
 	case GoalDeliverySessionAttach:
-		if delivery.SessionAttach == nil || delivery.Evidence != nil || delivery.Usage != nil || delivery.DeliveryID != delivery.SessionAttach.LocalHandleID {
+		if delivery.SessionAttach == nil || delivery.SessionStopped != nil || delivery.Evidence != nil || delivery.Usage != nil || delivery.DeliveryID != delivery.SessionAttach.LocalHandleID {
 			return errors.New("Goal session attach delivery is invalid")
 		}
 		if err := validateGoalSessionAttachDelivery(*delivery.SessionAttach); err != nil {
 			return err
 		}
+	case GoalDeliverySessionStopped:
+		if delivery.SessionAttach != nil || delivery.SessionStopped == nil || delivery.Evidence != nil || delivery.Usage != nil || !delivery.Ready || delivery.DeliveryID != delivery.SessionStopped.BindingID {
+			return errors.New("Goal session stopped delivery is invalid")
+		}
+		if err := validateGoalSessionStoppedDelivery(*delivery.SessionStopped); err != nil {
+			return err
+		}
 	case GoalDeliveryEvidence:
-		if delivery.SessionAttach != nil || delivery.Evidence == nil || delivery.Usage != nil || !delivery.Ready || delivery.DeliveryID != delivery.Evidence.EvidenceKey || delivery.Evidence.RunID != runID {
+		if delivery.SessionAttach != nil || delivery.SessionStopped != nil || delivery.Evidence == nil || delivery.Usage != nil || !delivery.Ready || delivery.DeliveryID != delivery.Evidence.EvidenceKey || delivery.Evidence.RunID != runID {
 			return errors.New("Goal evidence delivery is invalid")
 		}
 		if err := delivery.Evidence.Validate(); err != nil {
 			return fmt.Errorf("Goal evidence delivery: %w", err)
 		}
 	case GoalDeliveryUsage:
-		if delivery.SessionAttach != nil || delivery.Evidence != nil || delivery.Usage == nil || !delivery.Ready || delivery.DeliveryID != delivery.Usage.UsageKey || delivery.Usage.RunID != runID {
+		if delivery.SessionAttach != nil || delivery.SessionStopped != nil || delivery.Evidence != nil || delivery.Usage == nil || !delivery.Ready || delivery.DeliveryID != delivery.Usage.UsageKey || delivery.Usage.RunID != runID {
 			return errors.New("Goal usage delivery is invalid")
 		}
 		if err := delivery.Usage.Validate(); err != nil {
@@ -695,7 +726,7 @@ func validateLateGoalUsageLedger(ledger LateGoalUsageLedger) error {
 }
 
 func validGoalDeliveryKind(kind GoalDeliveryKind) bool {
-	return kind == GoalDeliverySessionAttach || kind == GoalDeliveryEvidence || kind == GoalDeliveryUsage
+	return kind == GoalDeliverySessionAttach || kind == GoalDeliverySessionStopped || kind == GoalDeliveryEvidence || kind == GoalDeliveryUsage
 }
 
 func validGoalDeliveryDigest(value string) bool {
@@ -707,11 +738,22 @@ func validGoalDeliveryDigest(value string) bool {
 }
 
 func validateGoalSessionAttachDelivery(payload GoalSessionAttachDelivery) error {
-	if !validRequiredString(payload.GoalID, 4096) || !validRequiredString(payload.LocalHandleID, 4096) ||
+	if !validRequiredString(payload.GoalID, 4096) || !validGoalSessionUUID(payload.LocalHandleID) ||
 		!validRequiredString(payload.HarnessKind, 256) || !validRequiredString(payload.HarnessVersion, 4096) ||
 		!validRequiredString(payload.AdapterVersion, 4096) || !validRequiredString(payload.WorkspaceFingerprint, 4096) ||
 		!validRequiredString(payload.Workspace, 32768) {
 		return errors.New("Goal session attach delivery payload is invalid")
+	}
+	if payload.BindingID != "" && !validGoalSessionUUID(payload.BindingID) {
+		return errors.New("Goal session attach delivery binding ID is invalid")
+	}
+	if payload.BindingID == "" && !payload.ServerIssuedBinding {
+		// Legacy journals lack this marker. Keep them readable so recovery can
+		// fail closed at delivery rather than treating state integrity as lost.
+		return nil
+	}
+	if payload.BindingID != "" && payload.ServerIssuedBinding {
+		return errors.New("Goal session attach delivery binding authority is invalid")
 	}
 	if payload.RepositoryResourceID != nil && !validRequiredString(*payload.RepositoryResourceID, 4096) {
 		return errors.New("Goal session attach delivery repository resource ID is invalid")
@@ -719,17 +761,40 @@ func validateGoalSessionAttachDelivery(payload GoalSessionAttachDelivery) error 
 	return nil
 }
 
+func validateGoalSessionStoppedDelivery(payload GoalSessionStoppedDelivery) error {
+	if !validGoalSessionUUID(payload.SessionID) || !validGoalSessionUUID(payload.LocalHandleID) || !validGoalSessionUUID(payload.BindingID) {
+		return errors.New("Goal session stopped delivery is invalid")
+	}
+	return nil
+}
+
 func goalDeliveryDigest(delivery GoalDelivery) (string, error) {
 	// encoding/json deterministically orders map keys and this envelope uses
 	// typed structs, so it is stable across process restart for the same body.
-	encoded, err := json.Marshal(struct {
-		Kind          GoalDeliveryKind
-		DeliveryID    string
-		Fence         protocol.Fence
-		SessionAttach *GoalSessionAttachDelivery
-		Evidence      *protocol.Evidence
-		Usage         *protocol.Usage
-	}{delivery.Kind, delivery.DeliveryID, delivery.Fence, delivery.SessionAttach, delivery.Evidence, delivery.Usage})
+	var encoded []byte
+	var err error
+	if delivery.Kind == GoalDeliverySessionStopped {
+		encoded, err = json.Marshal(struct {
+			Kind           GoalDeliveryKind
+			DeliveryID     string
+			Fence          protocol.Fence
+			SessionAttach  *GoalSessionAttachDelivery
+			SessionStopped *GoalSessionStoppedDelivery
+			Evidence       *protocol.Evidence
+			Usage          *protocol.Usage
+		}{delivery.Kind, delivery.DeliveryID, delivery.Fence, delivery.SessionAttach, delivery.SessionStopped, delivery.Evidence, delivery.Usage})
+	} else {
+		// Preserve the original receipt hash envelope exactly for journals
+		// written before session-stopped deliveries existed.
+		encoded, err = json.Marshal(struct {
+			Kind          GoalDeliveryKind
+			DeliveryID    string
+			Fence         protocol.Fence
+			SessionAttach *GoalSessionAttachDelivery
+			Evidence      *protocol.Evidence
+			Usage         *protocol.Usage
+		}{delivery.Kind, delivery.DeliveryID, delivery.Fence, delivery.SessionAttach, delivery.Evidence, delivery.Usage})
+	}
 	if err != nil {
 		return "", fmt.Errorf("encode Goal delivery: %w", err)
 	}

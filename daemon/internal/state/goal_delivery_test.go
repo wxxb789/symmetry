@@ -1,6 +1,8 @@
 package state
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -64,6 +66,74 @@ func TestGoalSessionAttachDeliveryIsDurableBeforeLaunchAndReadyAfterHandle(t *te
 	}
 	if _, err := store.MarkGoalDeliveryDelivered(key, GoalDeliverySessionAttach, payload.LocalHandleID, first.PayloadDigest); err != nil {
 		t.Fatalf("replayed MarkGoalDeliveryDelivered() error = %v", err)
+	}
+}
+
+func TestGoalSessionStoppedDeliveryIsDurableAndUsesBindingAsReceiptIdentity(t *testing.T) {
+	store := mustStore(t)
+	key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
+	if err := store.SaveJournal(testGoalDeliveryJournal(key)); err != nil {
+		t.Fatal(err)
+	}
+	payload := GoalSessionStoppedDelivery{
+		SessionID:     "00000000-0000-4000-8000-000000000002",
+		LocalHandleID: "00000000-0000-4000-8000-000000000003",
+		BindingID:     "00000000-0000-4000-8000-000000000004",
+	}
+	queued, err := store.QueueGoalSessionStopped(key, payload)
+	if err != nil {
+		t.Fatalf("QueueGoalSessionStopped() error = %v", err)
+	}
+	if len(queued.PendingGoalDeliveries) != 1 || queued.PendingGoalDeliveries[0].Kind != GoalDeliverySessionStopped || queued.PendingGoalDeliveries[0].DeliveryID != payload.BindingID || !queued.PendingGoalDeliveries[0].Ready {
+		t.Fatalf("queued session stop = %#v", queued.PendingGoalDeliveries)
+	}
+	first := queued.PendingGoalDeliveries[0]
+	if _, err := store.QueueGoalSessionStopped(key, payload); err != nil {
+		t.Fatalf("exact QueueGoalSessionStopped() replay error = %v", err)
+	}
+	changed := payload
+	changed.SessionID = "00000000-0000-4000-8000-000000000005"
+	if _, err := store.QueueGoalSessionStopped(key, changed); !errors.Is(err, ErrGoalDeliveryConflict) {
+		t.Fatalf("changed QueueGoalSessionStopped() error = %v, want ErrGoalDeliveryConflict", err)
+	}
+	if _, err := store.MarkGoalDeliveryDelivered(key, GoalDeliverySessionStopped, payload.BindingID, first.PayloadDigest); err != nil {
+		t.Fatalf("MarkGoalDeliveryDelivered() error = %v", err)
+	}
+}
+
+func TestLegacyGoalDeliveryDigestAndJournalRemainReadableWithoutBinding(t *testing.T) {
+	store := mustStore(t)
+	key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
+	delivery := GoalDelivery{Kind: GoalDeliverySessionAttach, DeliveryID: "00000000-0000-4000-8000-000000000004", Fence: testGoalDeliveryJournal(key).Fence(), Ready: true, SessionAttach: &GoalSessionAttachDelivery{
+		GoalID: "00000000-0000-4000-8000-000000000003", LocalHandleID: "00000000-0000-4000-8000-000000000004", HarnessKind: "codex", HarnessVersion: "0.153.4", AdapterVersion: "symmetry-daemon:test",
+		WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Workspace: `C:\worktree`,
+	}}
+	legacyEncoded, err := json.Marshal(struct {
+		Kind          GoalDeliveryKind
+		DeliveryID    string
+		Fence         protocol.Fence
+		SessionAttach *GoalSessionAttachDelivery
+		Evidence      *protocol.Evidence
+		Usage         *protocol.Usage
+	}{delivery.Kind, delivery.DeliveryID, delivery.Fence, delivery.SessionAttach, delivery.Evidence, delivery.Usage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacySum := sha256.Sum256(legacyEncoded)
+	wantDigest := hex.EncodeToString(legacySum[:])
+	gotDigest, err := goalDeliveryDigest(delivery)
+	if err != nil || gotDigest != wantDigest {
+		t.Fatalf("legacy Goal delivery digest = %q, %v; want %q", gotDigest, err, wantDigest)
+	}
+	delivery.PayloadDigest = gotDigest
+	journal := testGoalDeliveryJournal(key)
+	journal.GoalDeliveryEnabled = true
+	journal.PendingGoalDeliveries = []GoalDelivery{delivery}
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatalf("SaveJournal() rejected legacy attach delivery: %v", err)
+	}
+	if _, err := store.QueueGoalSessionAttach(key, *delivery.SessionAttach); err == nil {
+		t.Fatal("QueueGoalSessionAttach() accepted a new attachment without binding ID")
 	}
 }
 
@@ -310,6 +380,7 @@ func testGoalSessionAttachDelivery() GoalSessionAttachDelivery {
 	repositoryID := "00000000-0000-4000-8000-000000000002"
 	return GoalSessionAttachDelivery{
 		GoalID: "00000000-0000-4000-8000-000000000003", LocalHandleID: "00000000-0000-4000-8000-000000000004",
+		BindingID:   "00000000-0000-4000-8000-000000000005",
 		HarnessKind: "codex", HarnessVersion: "0.153.4", AdapterVersion: "symmetry-daemon:test",
 		WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Workspace: `C:\worktree`, RepositoryResourceID: &repositoryID,
 	}

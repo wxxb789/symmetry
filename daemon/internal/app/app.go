@@ -115,6 +115,19 @@ type goalControlAPI interface {
 	RecordUsage(context.Context, string, protocol.Fence, protocol.Usage) (control.GoalUsageReceipt, error)
 }
 
+// goalSessionAttachmentReadbackAPI is an optional recovery extension. Older
+// ControlAPI implementations continue to fail closed on an ambiguous attach.
+type goalSessionAttachmentReadbackAPI interface {
+	FetchHarnessSessionAttachment(context.Context, string, protocol.Fence) (control.GoalSessionReceipt, error)
+}
+
+// goalSessionStopAPI is deliberately separate from the original Goal delivery
+// interface so older embedded test/control implementations fail closed through
+// the durable outbox instead of being treated as a successful release.
+type goalSessionStopAPI interface {
+	MarkHarnessSessionStopped(context.Context, string, control.GoalSessionStoppedRequest) (control.GoalSessionStoppedReceipt, error)
+}
+
 // goalSubjectWorkspace is the immutable artifact boundary required only by
 // Goal execution. Legacy work intentionally retains workspace.Service's
 // configured-ref behavior.
@@ -271,6 +284,7 @@ type daemon struct {
 	start               StartProcess
 	harnessRegistry     *harness.Registry
 	harnessCapabilities harness.Capabilities
+	machineID           string
 	runtimeID           string
 	runtimeEpoch        int64
 	leaseDuration       time.Duration
@@ -1132,6 +1146,7 @@ func (daemon *daemon) initialize(ctx context.Context) error {
 	} else if err := daemon.store.DeleteEnrollmentIntent(); err != nil {
 		daemon.log.Warn("delete_stale_enrollment_intent_failed", "error", err)
 	}
+	daemon.machineID = identity.MachineID
 	client := daemon.options.control
 	if client == nil {
 		built, buildErr := control.NewClient(daemon.config.ControlPlaneURL, identity.MachineToken, daemon.options.httpClient)
@@ -1348,6 +1363,12 @@ func (daemon *daemon) recoverUnclosedGoalSessions(ctx context.Context) error {
 		journal, loadErr := daemon.store.LoadJournal(key)
 		if loadErr != nil {
 			if state.IsNotFound(loadErr) {
+				if retainedGoalSessionAvailable(session) {
+					// A successfully released retained session deliberately outlives
+					// the completed RunJournal. Its own journal owns the resume
+					// identity and workspace binding from this point onward.
+					continue
+				}
 				if session.SessionState != state.GoalSessionStateClosed {
 					if _, markErr := daemon.store.MarkGoalSessionUncertain(session.Key(), "associated run journal is unavailable during daemon recovery"); markErr != nil {
 						return fmt.Errorf("mark Goal session uncertain without run %s/%d: %w", key.RunID, key.Generation, markErr)
@@ -1358,7 +1379,7 @@ func (daemon *daemon) recoverUnclosedGoalSessions(ctx context.Context) error {
 			return fmt.Errorf("load associated run %s/%d: %w", key.RunID, key.Generation, loadErr)
 		}
 		processEvidence := journal.PID > 0 || strings.TrimSpace(journal.ProcessIdentity) != "" || !journal.StartedAt.IsZero()
-		terminalKnown := journal.TerminalState != "" || journal.LocalState == "terminal_pending" || journal.LocalState == "cleanup_pending"
+		terminalKnown := journal.TerminalState != "" || journal.LocalState == "terminal_pending" || journal.LocalState == "cleanup_pending" || journal.LocalState == "stale"
 		for _, delivery := range journal.PendingGoalDeliveries {
 			if delivery.Kind != state.GoalDeliverySessionAttach || delivery.DeliveryID != session.LocalHandleID || delivery.Ready {
 				continue
@@ -1370,7 +1391,71 @@ func (daemon *daemon) recoverUnclosedGoalSessions(ctx context.Context) error {
 			journal = updated
 			break
 		}
-		if session.SessionState == state.GoalSessionStateClosed && terminalKnown && !processEvidence {
+		attachMappingPending := goalSessionAttachmentMappingPending(session, journal)
+		if attachMappingPending {
+			for _, delivery := range journal.PendingGoalDeliveries {
+				if delivery.Kind != state.GoalDeliverySessionAttach || !delivery.Ready || delivery.SessionAttach == nil || delivery.DeliveryID != session.LocalHandleID {
+					continue
+				}
+				updated, _, deliverErr := daemon.deliverGoalDelivery(rootContext, journal, state.GoalDeliverySessionAttach, delivery.DeliveryID, nil)
+				if deliverErr == nil {
+					journal = updated
+					if session, loadErr = daemon.store.LoadGoalSession(session.Key()); loadErr != nil {
+						return fmt.Errorf("reload Goal session after attachment readback for %s/%d: %w", key.RunID, key.Generation, loadErr)
+					}
+				} else if daemon.log != nil {
+					daemon.log.Warn("recover_goal_session_attachment_failed", "run_id", key.RunID, "generation", key.Generation, "error", deliverErr)
+				}
+				break
+			}
+		}
+		if legacyAttach, ok := legacyGoalSessionAttachDelivery(journal, session); ok {
+			updated, quarantineErr := daemon.quarantineLegacyGoalSessionAttach(key, session, legacyAttach)
+			if quarantineErr != nil {
+				return fmt.Errorf("quarantine legacy Goal session attach for %s/%d: %w", key.RunID, key.Generation, quarantineErr)
+			}
+			journal = updated
+			if session, loadErr = daemon.store.LoadGoalSession(session.Key()); loadErr != nil {
+				return fmt.Errorf("reload legacy-quarantined Goal session for %s/%d: %w", key.RunID, key.Generation, loadErr)
+			}
+		} else if retiredLegacyGoalSessionAttach(journal, session) {
+			if _, closeErr := daemon.store.CloseGoalSession(session.Key()); closeErr != nil {
+				return fmt.Errorf("close retired legacy Goal session for %s/%d: %w", key.RunID, key.Generation, closeErr)
+			}
+			if session, loadErr = daemon.store.LoadGoalSession(session.Key()); loadErr != nil {
+				return fmt.Errorf("reload retired legacy Goal session for %s/%d: %w", key.RunID, key.Generation, loadErr)
+			}
+		}
+		if updated, ensureErr := daemon.ensureRetainedGoalSessionStopDelivery(key, session, journal); ensureErr != nil {
+			return fmt.Errorf("restore retained Goal session stop delivery for %s/%d: %w", key.RunID, key.Generation, ensureErr)
+		} else {
+			journal = updated
+		}
+		if session, loadErr = daemon.store.LoadGoalSession(session.Key()); loadErr != nil {
+			return fmt.Errorf("reload retained Goal session after stop delivery recovery for %s/%d: %w", key.RunID, key.Generation, loadErr)
+		}
+		if retiredRetainedGoalSessionStopDelivery(session, journal) {
+			if _, closeErr := daemon.store.CloseGoalSession(session.Key()); closeErr != nil {
+				return fmt.Errorf("close definitively rejected retained Goal session for %s/%d: %w", key.RunID, key.Generation, closeErr)
+			}
+			if session, loadErr = daemon.store.LoadGoalSession(session.Key()); loadErr != nil {
+				return fmt.Errorf("reload rejected retained Goal session for %s/%d: %w", key.RunID, key.Generation, loadErr)
+			}
+		}
+		// A durable stopped delivery is written only after native Close succeeds.
+		// It remains a stronger native-stop fact than a stale process marker in
+		// the separate RunJournal, including the crash window before that marker
+		// is cleared. A generic closed session is not that witness: it still has
+		// to reconcile any persisted process identity.
+		nativeStopWitness := retainedGoalSessionNativeStopWitness(session, journal)
+		if nativeStopWitness && processEvidence {
+			if err := daemon.clearNativeProcessDetails(key); err != nil {
+				return fmt.Errorf("clear stale stopped native process record for %s/%d: %w", key.RunID, key.Generation, err)
+			}
+			processEvidence = false
+		}
+		stoppedWitness := !processEvidence && retainedGoalSessionTerminalState(session, journal)
+		if terminalKnown && stoppedWitness {
 			continue
 		}
 
@@ -1379,18 +1464,37 @@ func (daemon *daemon) recoverUnclosedGoalSessions(ctx context.Context) error {
 		if err := daemon.retainUnknownGoalLaunchWorkspaceChecked(key); err != nil {
 			return fmt.Errorf("retain workspace for recovered Goal session %s/%d: %w", key.RunID, key.Generation, err)
 		}
-		if session.SessionState != state.GoalSessionStateClosed && session.LaunchState != state.GoalSessionLaunchStateUncertain {
+		legacyAttachmentBarrier := legacyGoalSessionAttachmentBarrier(session, journal)
+		attachedStopRecovery := attachMappingPending || (session.HasVerifiedControlAttachment() && session.SessionState == state.GoalSessionStateBusy)
+		if !stoppedWitness && !attachedStopRecovery && !legacyAttachmentBarrier && session.SessionState != state.GoalSessionStateClosed && session.LaunchState != state.GoalSessionLaunchStateUncertain {
 			if _, err := daemon.store.MarkGoalSessionUncertain(session.Key(), "native Goal session was left unclosed across daemon restart"); err != nil {
 				return fmt.Errorf("mark Goal session uncertain for %s/%d: %w", key.RunID, key.Generation, err)
 			}
 		}
-		if journal.PID > 0 && strings.TrimSpace(journal.ProcessIdentity) != "" {
+		if !nativeStopWitness && journal.PID > 0 && strings.TrimSpace(journal.ProcessIdentity) != "" {
 			if !daemon.terminatePersistedProcessWithRetry(rootContext, key) {
 				return fmt.Errorf("stop recovered native process %s/%d: %w", key.RunID, key.Generation, rootContext.Err())
+			}
+			if attachedStopRecovery {
+				if err := daemon.recordStoppedGoalSession(key, session.Key()); err != nil {
+					return fmt.Errorf("record stopped recovered Goal session %s/%d: %w", key.RunID, key.Generation, err)
+				}
 			}
 			if _, err := daemon.store.ClearProcessDetails(key, journal.PID, journal.ProcessIdentity); err != nil {
 				return fmt.Errorf("record stopped native process %s/%d: %w", key.RunID, key.Generation, err)
 			}
+		}
+		if attachedStopRecovery && !nativeStopWitness && (journal.PID <= 0 || strings.TrimSpace(journal.ProcessIdentity) == "") {
+			// A ready attach only proves that its request may have committed. With
+			// no recoverable native process identity it cannot prove stopped, so
+			// retain the exact request and local handle for readback/reconciliation.
+			continue
+		}
+		if legacyAttachmentBarrier && (journal.PID <= 0 || strings.TrimSpace(journal.ProcessIdentity) == "") {
+			// An old ready attach lacks binding authority and cannot establish a
+			// stopped receipt. Without a verifiable native process record, retain
+			// its local handle for explicit reconciliation rather than terminalize.
+			continue
 		}
 		if err := daemon.queueNativeGoalUsage(rootContext, key, nil); err != nil {
 			return fmt.Errorf("queue recovered Goal usage for %s/%d: %w", key.RunID, key.Generation, err)
@@ -1815,7 +1919,7 @@ func (daemon *daemon) recoveredGoalSessionRequiresStop(key state.RunKey) (bool, 
 		return false, err
 	}
 	for _, session := range sessions {
-		if session.RunID == key.RunID && session.Generation == key.Generation && session.SessionState != state.GoalSessionStateClosed {
+		if session.RunID == key.RunID && session.Generation == key.Generation && session.SessionState != state.GoalSessionStateClosed && session.SessionState != state.GoalSessionStateAvailable {
 			return true, nil
 		}
 	}
@@ -1831,17 +1935,120 @@ func (daemon *daemon) resolveRecoveredGoalSessionStopped(key state.RunKey) error
 		if session.RunID != key.RunID || session.Generation != key.Generation {
 			continue
 		}
+		if session.SessionState != state.GoalSessionStateClosed && session.LaunchState == state.GoalSessionLaunchStateAttached && !session.NeedsReconciliation() && session.ControlSessionID == "" {
+			journal, loadErr := daemon.store.LoadJournal(key)
+			if loadErr != nil {
+				return loadErr
+			}
+			if legacyAttach, ok := legacyGoalSessionAttachDelivery(journal, session); ok {
+				if _, err := daemon.quarantineLegacyGoalSessionAttach(key, session, legacyAttach); err != nil {
+					return err
+				}
+				continue
+			}
+			if legacyGoalSessionAttachmentBarrier(session, journal) {
+				continue
+			}
+			if retiredLegacyGoalSessionAttach(journal, session) {
+				if _, err := daemon.store.SetGoalSessionState(session.Key(), state.GoalSessionStateUnavailable); err != nil {
+					return err
+				}
+				continue
+			}
+			if hasReadyGoalSessionAttach(journal, session) {
+				// A prior attach may have committed remotely but has not yet been
+				// durably correlated locally. Keep the exact request and native
+				// handle as an attachment-replay barrier.
+				continue
+			}
+		}
+		if session.HasVerifiedControlAttachment() && session.SessionState == state.GoalSessionStateBusy {
+			if err := daemon.recordStoppedGoalSession(key, session.Key()); err != nil {
+				return err
+			}
+			continue
+		}
+		if session.HasVerifiedControlAttachment() && session.SessionState == state.GoalSessionStateUnavailable {
+			if _, err := daemon.ensureRetainedGoalSessionStopDelivery(key, session, state.RunJournal{}); err != nil {
+				return err
+			}
+			continue
+		}
 		if session.NeedsReconciliation() {
 			if _, err := daemon.store.ResolveGoalSessionUncertainStopped(session.Key(), session.Compatibility()); err != nil {
 				return err
 			}
-		} else if session.SessionState != state.GoalSessionStateClosed {
+		} else if session.SessionState != state.GoalSessionStateClosed && session.SessionState != state.GoalSessionStateAvailable {
 			if _, err := daemon.store.CloseGoalSession(session.Key()); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+func retainedGoalSessionTerminalState(session state.GoalSessionJournal, journal state.RunJournal) bool {
+	if session.SessionState == state.GoalSessionStateClosed {
+		return true
+	}
+	return retainedGoalSessionNativeStopWitness(session, journal)
+}
+
+func retainedGoalSessionNativeStopWitness(session state.GoalSessionJournal, journal state.RunJournal) bool {
+	if !session.HasVerifiedControlAttachment() {
+		return retainedGoalSessionAttachPendingStopped(session, journal)
+	}
+	if session.SessionState == state.GoalSessionStateAvailable {
+		// A crash may occur after the local availability write and before the
+		// stop delivery is moved to delivered history. The persisted immutable
+		// certificate is enough to prove that this session is already released.
+		return session.StopCertificate != nil
+	}
+	if session.SessionState != state.GoalSessionStateUnavailable {
+		return false
+	}
+	for _, delivery := range journal.PendingGoalDeliveries {
+		if sameRetainedGoalSessionStopDelivery(delivery, session) {
+			return true
+		}
+	}
+	for _, delivery := range journal.DeliveredGoalDeliveries {
+		if sameRetainedGoalSessionStopDelivery(delivery, session) {
+			return true
+		}
+	}
+	for _, retired := range journal.RetiredGoalDeliveries {
+		if sameRetainedGoalSessionStopDelivery(retired.Delivery, session) {
+			return true
+		}
+	}
+	return false
+}
+
+func retainedGoalSessionAvailable(session state.GoalSessionJournal) bool {
+	return session.SessionState == state.GoalSessionStateAvailable &&
+		!session.NeedsReconciliation() && session.HasVerifiedControlAttachment() && session.StopCertificate != nil
+}
+
+func retainedGoalSessionAttachPendingStopped(session state.GoalSessionJournal, journal state.RunJournal) bool {
+	return session.SessionState == state.GoalSessionStateUnavailable &&
+		goalSessionAttachmentMappingPending(session, journal)
+}
+
+func goalSessionAttachmentMappingPending(session state.GoalSessionJournal, journal state.RunJournal) bool {
+	return session.LaunchState == state.GoalSessionLaunchStateAttached && session.NativeSessionID != "" &&
+		!session.NeedsReconciliation() && session.ControlSessionID == "" && hasReplayableGoalSessionAttach(journal, session)
+}
+
+func hasReplayableGoalSessionAttach(journal state.RunJournal, session state.GoalSessionJournal) bool {
+	for _, delivery := range journal.PendingGoalDeliveries {
+		if delivery.Kind != state.GoalDeliverySessionAttach || !delivery.Ready || delivery.SessionAttach == nil ||
+			delivery.SessionAttach.LocalHandleID != session.LocalHandleID || delivery.SessionAttach.BindingID != session.BindingID {
+			continue
+		}
+		return delivery.SessionAttach.BindingID != "" || delivery.SessionAttach.ServerIssuedBinding
+	}
+	return false
 }
 
 func (daemon *daemon) handleSnapshot(ctx context.Context, snapshot protocol.RuntimeSnapshot) {
@@ -2611,6 +2818,26 @@ func admissionLaunchFailure(admission protocol.Admission, capabilities harness.C
 	return nil
 }
 
+// goalSessionBindingID preserves Control's authority split: fresh and handoff
+// bindings are generated by the attach transaction, while resume can only
+// consume the scheduler-reserved pair.
+func goalSessionBindingID(admission protocol.Admission, claim protocol.ClaimResponse) (string, error) {
+	switch admission.SessionMode {
+	case protocol.SessionModeFresh, protocol.SessionModeHandoff:
+		if claim.HarnessSessionID != nil || claim.HarnessBindingID != nil {
+			return "", errors.New("fresh and handoff Goal claims unexpectedly reserved a harness session")
+		}
+		return "", nil
+	case protocol.SessionModeResume:
+		if claim.HarnessSessionID == nil || claim.HarnessBindingID == nil || strings.TrimSpace(*claim.HarnessSessionID) == "" || strings.TrimSpace(*claim.HarnessBindingID) == "" {
+			return "", errors.New("resume Goal claim is missing a harness session or binding ID")
+		}
+		return *claim.HarnessBindingID, nil
+	default:
+		return "", errors.New("Goal claim has an invalid session mode")
+	}
+}
+
 // startGoalAdmission crosses the staged native-launch barriers in their only
 // safe order. Every pre-turn failure either closes the known process or leaves
 // the local session journal explicitly uncertain; neither path starts a second
@@ -2630,6 +2857,10 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 	}
 	if err := admissionLaunchFailure(admission, daemon.harnessCapabilities, claim.ProviderAccess); err != nil {
 		return err
+	}
+	bindingID, err := goalSessionBindingID(admission, claim)
+	if err != nil {
+		return taskResultFailure(protocol.TaskResultReasonResumeRejected, err)
 	}
 	if admission.Subject.ResourceID != daemon.config.Runtime.RepositoryResourceID {
 		return errors.New("Goal admission subject resource_id does not match the configured runtime repository_resource_id")
@@ -2717,6 +2948,8 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 		AdmissionID:            admission.AdmissionID,
 		HandoffSourceRunID:     admissionHandoffSourceRunID(admission.HandoffSourceRunID),
 		LocalHandleID:          localHandleID,
+		BindingID:              bindingID,
+		MachineID:              daemon.machineID,
 		RuntimeID:              daemon.runtimeID,
 		RuntimeEpoch:           daemon.runtimeEpoch,
 		HarnessKind:            string(daemon.harnessCapabilities.Kind),
@@ -2724,6 +2957,7 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 		AdapterVersion:         daemon.harnessCapabilities.ImplementationVersion,
 		AdapterProtocolVersion: daemon.harnessCapabilities.ProtocolVersion,
 		WorkspaceFingerprint:   fingerprint,
+		WorkspacePath:          prepared.Path,
 		SessionMode:            string(admission.SessionMode),
 	}
 	if _, err := daemon.store.SaveGoalSessionLaunchIntent(intent); err != nil {
@@ -2735,6 +2969,8 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 	if _, err := daemon.store.QueueGoalSessionAttach(key, state.GoalSessionAttachDelivery{
 		GoalID:               admission.GoalID,
 		LocalHandleID:        localHandleID,
+		BindingID:            bindingID,
+		ServerIssuedBinding:  admission.SessionMode != protocol.SessionModeResume,
 		HarnessKind:          string(daemon.harnessCapabilities.Kind),
 		HarnessVersion:       daemon.harnessCapabilities.NativeVersion,
 		AdapterVersion:       daemon.harnessCapabilities.ImplementationVersion,
@@ -3120,9 +3356,14 @@ func (daemon *daemon) abandonGoalSession(key state.GoalSessionKey, session harne
 	if runKey.RunID == "" {
 		runKey, _ = daemon.activeNativeSessionKey(session)
 	}
+	nativeStopRecorded := false
 	if closeErr == nil && attached {
-		if _, err := daemon.store.CloseGoalSession(key); err != nil {
+		if runKey.RunID == "" || runKey.Generation <= 0 {
+			closeErr = errors.New("attached Goal session has no durable run key for stop receipt")
+		} else if err := daemon.recordStoppedGoalSession(runKey, key); err != nil {
 			closeErr = err
+		} else {
+			nativeStopRecorded = true
 		}
 	}
 	if closeErr == nil && runKey.RunID != "" && runKey.Generation > 0 {
@@ -3133,6 +3374,18 @@ func (daemon *daemon) abandonGoalSession(key state.GoalSessionKey, session harne
 	if closeErr == nil && attached {
 		daemon.clearNativeSessionByValue(session)
 		return nil
+	}
+	if nativeStopRecorded {
+		// Native termination and its durable stop witness are already known.
+		// A process-marker write failure is retryable bookkeeping, not an
+		// unknown native outcome; clearing the retained mapping here would
+		// make the already-queued receipt impossible to finish.
+		var retentionErr error
+		if runKey.RunID != "" && runKey.Generation > 0 {
+			retentionErr = daemon.retainUnknownGoalLaunchWorkspaceChecked(runKey)
+			daemon.requireNativeSessionCloseRetry(runKey, session)
+		}
+		return errors.Join(closeErr, retentionErr)
 	}
 	reason := "native Goal session did not reach a known stopped state"
 	if cause != nil {
@@ -3170,9 +3423,29 @@ func (daemon *daemon) abandonGoalSessionUncertain(key state.GoalSessionKey, sess
 			return closeErr
 		}
 	}
-	var clearErr error
+	nativeStopRecorded := false
 	if closeErr == nil {
+		if err := daemon.recordStoppedGoalSession(runKey, key); err != nil {
+			closeErr = err
+		} else {
+			nativeStopRecorded = true
+		}
+	}
+	var clearErr error
+	if nativeStopRecorded {
 		clearErr = daemon.clearNativeProcessDetails(runKey)
+	}
+	if nativeStopRecorded {
+		// A turn result can be unknown even though native Close is proven. Keep
+		// the attachment and its stopped outbox so Control can release exactly
+		// that session after the caller records unknown_outcome terminal state.
+		if clearErr != nil {
+			retentionErr := daemon.retainUnknownGoalLaunchWorkspaceChecked(runKey)
+			daemon.requireNativeSessionCloseRetry(runKey, session)
+			return errors.Join(clearErr, retentionErr)
+		}
+		daemon.clearNativeSessionByValue(session)
+		return nil
 	}
 	reason := "native Goal turn start outcome is unknown"
 	if cause != nil {
@@ -4936,25 +5209,220 @@ func (daemon *daemon) closeNativeGoalSession(key state.RunKey, active *runningRu
 		evidenceErr := daemon.publishNativeCloseRetryAfterEvidence(key, active, session, goalSession, "native session close failed: "+closeErr.Error(), true)
 		return errors.Join(closeErr, evidenceErr)
 	}
-	sessionJournal, err := daemon.loadGoalSession(goalSession)
-	if err != nil {
-		evidenceErr := daemon.publishNativeCloseRetryAfterEvidence(key, active, session, goalSession, "load durable Goal session after native close: "+err.Error(), true)
-		return errors.Join(fmt.Errorf("load durable Goal session after process stop: %w", err), evidenceErr)
-	}
-	if sessionJournal.NeedsReconciliation() {
-		_, err = daemon.store.ResolveGoalSessionUncertainStopped(goalSession, sessionJournal.Compatibility())
-	} else {
-		_, err = daemon.closeGoalSession(goalSession)
-	}
-	if err != nil {
-		evidenceErr := daemon.publishNativeCloseRetryAfterEvidence(key, active, session, goalSession, "durable native session close failed after process stop: "+err.Error(), true)
-		return errors.Join(fmt.Errorf("record durable native session close: %w", err), evidenceErr)
+	if err := daemon.recordStoppedGoalSession(key, goalSession); err != nil {
+		evidenceErr := daemon.publishNativeCloseRetryAfterEvidence(key, active, session, goalSession, "durable native session stop receipt persistence failed after process stop: "+err.Error(), false)
+		return errors.Join(fmt.Errorf("record durable native session stop receipt: %w", err), evidenceErr)
 	}
 	if err := daemon.clearNativeProcessDetails(key); err != nil {
 		evidenceErr := daemon.publishNativeCloseRetryAfterEvidence(key, active, session, goalSession, "native process marker clear failed after close: "+err.Error(), false)
 		return errors.Join(err, evidenceErr)
 	}
 	return nil
+}
+
+// recordStoppedGoalSession turns known native termination into either a
+// permanent local close (before Control attach) or a durable retained-session
+// stop receipt. The latter is deliberately queued before terminal delivery and
+// released only by flushGoalDeliveries after Control accepts that transition.
+func (daemon *daemon) recordStoppedGoalSession(runKey state.RunKey, goalSession state.GoalSessionKey) error {
+	sessionJournal, err := daemon.loadGoalSession(goalSession)
+	if err != nil {
+		return fmt.Errorf("load durable Goal session after native close: %w", err)
+	}
+	if sessionJournal.NeedsReconciliation() {
+		_, err = daemon.store.ResolveGoalSessionUncertainStopped(goalSession, sessionJournal.Compatibility())
+		return err
+	}
+	if retainedGoalSessionStopCertified(sessionJournal, runKey) {
+		return nil
+	}
+	if sessionJournal.IsLegacyControlAttachment() {
+		// Native Close has already succeeded on this path. Old attachment
+		// journals lack the immutable receipt required to release Control, so
+		// destroy only the local session instead of emitting an unverifiable stop.
+		_, err = daemon.closeGoalSession(goalSession)
+		return err
+	}
+	if sessionJournal.ControlSessionID == "" {
+		journal, loadErr := daemon.store.LoadJournal(runKey)
+		if loadErr != nil {
+			return loadErr
+		}
+		if legacyAttach, ok := legacyGoalSessionAttachDelivery(journal, sessionJournal); ok {
+			_, err = daemon.quarantineLegacyGoalSessionAttach(runKey, sessionJournal, legacyAttach)
+			return err
+		}
+		if hasReadyGoalSessionAttach(journal, sessionJournal) {
+			// The native process is known stopped, but an attach request may have
+			// committed remotely before the daemon persisted its session mapping.
+			// Preserve the handle and exact ready request so a later replay can
+			// establish the mapping; do not close or manufacture uncertainty.
+			_, err = daemon.store.SetGoalSessionState(goalSession, state.GoalSessionStateUnavailable)
+			return err
+		}
+		// No attach receipt was durably correlated or replayable. This session
+		// was never safe to retain, so preserve permanent-close behavior.
+		_, err = daemon.closeGoalSession(goalSession)
+		return err
+	}
+	// The stop outbox is the durable stopped witness. Write it before changing
+	// the local projection so recovery can repair either cross-file window.
+	if _, err = daemon.store.QueueGoalSessionStopped(runKey, state.GoalSessionStoppedDelivery{
+		SessionID:     sessionJournal.ControlSessionID,
+		LocalHandleID: sessionJournal.LocalHandleID,
+		BindingID:     sessionJournal.BindingID,
+	}); err != nil {
+		return err
+	}
+	_, err = daemon.store.MarkGoalSessionStoppedPending(goalSession)
+	return err
+}
+
+func retainedGoalSessionStopCertified(session state.GoalSessionJournal, key state.RunKey) bool {
+	certificate := session.StopCertificate
+	return session.SessionState == state.GoalSessionStateAvailable && certificate != nil &&
+		certificate.RunID == key.RunID && certificate.Generation == key.Generation &&
+		certificate.SessionID == session.ControlSessionID && certificate.LocalHandleID == session.LocalHandleID &&
+		certificate.BindingID == session.BindingID
+}
+
+func hasReadyGoalSessionAttach(journal state.RunJournal, session state.GoalSessionJournal) bool {
+	return hasReplayableGoalSessionAttach(journal, session)
+}
+
+func legacyGoalSessionAttachDelivery(journal state.RunJournal, session state.GoalSessionJournal) (state.GoalDelivery, bool) {
+	closed := session.SessionState == state.GoalSessionStateClosed && session.LaunchState == state.GoalSessionLaunchStateClosed
+	stoppedAwaitingMapping := session.SessionState == state.GoalSessionStateUnavailable && session.LaunchState == state.GoalSessionLaunchStateAttached && !session.NeedsReconciliation() && session.ControlSessionID == "" && session.NativeSessionID != ""
+	if !closed && !stoppedAwaitingMapping {
+		return state.GoalDelivery{}, false
+	}
+	for _, delivery := range journal.PendingGoalDeliveries {
+		if delivery.Kind == state.GoalDeliverySessionAttach && delivery.Ready && delivery.SessionAttach != nil &&
+			delivery.SessionAttach.LocalHandleID == session.LocalHandleID && delivery.SessionAttach.BindingID == session.BindingID &&
+			delivery.SessionAttach.BindingID == "" && !delivery.SessionAttach.ServerIssuedBinding {
+			return delivery, true
+		}
+	}
+	return state.GoalDelivery{}, false
+}
+
+func (daemon *daemon) quarantineLegacyGoalSessionAttach(key state.RunKey, session state.GoalSessionJournal, delivery state.GoalDelivery) (state.RunJournal, error) {
+	if session.SessionState != state.GoalSessionStateClosed || session.LaunchState != state.GoalSessionLaunchStateClosed {
+		if _, err := daemon.store.SetGoalSessionState(session.Key(), state.GoalSessionStateUnavailable); err != nil {
+			return state.RunJournal{}, fmt.Errorf("quarantine unreplayable legacy Goal session: %w", err)
+		}
+	}
+	updated, err := daemon.store.RetireGoalDelivery(key, delivery.Kind, delivery.DeliveryID, delivery.PayloadDigest, http.StatusUnprocessableEntity, "legacy_attachment_unreplayable", "legacy Goal session attach has no binding authority marker", daemon.now())
+	if err != nil {
+		return state.RunJournal{}, fmt.Errorf("retire unreplayable legacy Goal session attach: %w", err)
+	}
+	if session.SessionState != state.GoalSessionStateClosed || session.LaunchState != state.GoalSessionLaunchStateClosed {
+		if _, err := daemon.store.CloseGoalSession(session.Key()); err != nil {
+			return updated, fmt.Errorf("close quarantined legacy Goal session: %w", err)
+		}
+	}
+	return updated, nil
+}
+
+func retiredLegacyGoalSessionAttach(journal state.RunJournal, session state.GoalSessionJournal) bool {
+	if session.SessionState == state.GoalSessionStateClosed || session.LaunchState != state.GoalSessionLaunchStateAttached || session.NeedsReconciliation() || session.ControlSessionID != "" || session.NativeSessionID == "" {
+		return false
+	}
+	for _, retired := range journal.RetiredGoalDeliveries {
+		if retired.Delivery.Kind == state.GoalDeliverySessionAttach && retired.Code == "legacy_attachment_unreplayable" && retired.Delivery.SessionAttach != nil &&
+			retired.Delivery.SessionAttach.LocalHandleID == session.LocalHandleID && retired.Delivery.SessionAttach.BindingID == "" && !retired.Delivery.SessionAttach.ServerIssuedBinding {
+			return true
+		}
+	}
+	return false
+}
+
+func legacyGoalSessionAttachmentBarrier(session state.GoalSessionJournal, journal state.RunJournal) bool {
+	if session.SessionState == state.GoalSessionStateClosed || session.LaunchState != state.GoalSessionLaunchStateAttached || session.NeedsReconciliation() || session.ControlSessionID != "" || session.NativeSessionID == "" {
+		return false
+	}
+	for _, delivery := range journal.PendingGoalDeliveries {
+		if delivery.Kind == state.GoalDeliverySessionAttach && delivery.Ready && delivery.SessionAttach != nil &&
+			delivery.SessionAttach.LocalHandleID == session.LocalHandleID && delivery.SessionAttach.BindingID == "" && !delivery.SessionAttach.ServerIssuedBinding {
+			return true
+		}
+	}
+	return retiredLegacyGoalSessionAttach(journal, session)
+}
+
+// ensureRetainedGoalSessionStopDelivery repairs the cross-file commit window
+// around a retained session stop. The outbox is the source of truth: when it
+// already exists, it repairs the local unavailable projection; when the
+// projection exists without it, it reconstructs the exact receipt.
+func (daemon *daemon) ensureRetainedGoalSessionStopDelivery(key state.RunKey, session state.GoalSessionJournal, journal state.RunJournal) (state.RunJournal, error) {
+	if !session.HasVerifiedControlAttachment() || session.NeedsReconciliation() {
+		return journal, nil
+	}
+	if journal.RunID == "" {
+		loaded, err := daemon.store.LoadJournal(key)
+		if err != nil {
+			return state.RunJournal{}, err
+		}
+		journal = loaded
+	}
+	matchingStop := false
+	for _, delivery := range journal.PendingGoalDeliveries {
+		if sameRetainedGoalSessionStopDelivery(delivery, session) {
+			matchingStop = true
+			break
+		}
+	}
+	if !matchingStop {
+		for _, delivery := range journal.DeliveredGoalDeliveries {
+			if sameRetainedGoalSessionStopDelivery(delivery, session) {
+				matchingStop = true
+				break
+			}
+		}
+	}
+	if !matchingStop {
+		for _, retired := range journal.RetiredGoalDeliveries {
+			if sameRetainedGoalSessionStopDelivery(retired.Delivery, session) {
+				matchingStop = true
+				break
+			}
+		}
+	}
+	if matchingStop {
+		if session.SessionState == state.GoalSessionStateBusy {
+			if _, err := daemon.store.MarkGoalSessionStoppedPending(session.Key()); err != nil {
+				return journal, err
+			}
+		}
+		return journal, nil
+	}
+	if session.SessionState != state.GoalSessionStateUnavailable {
+		return journal, nil
+	}
+	return daemon.store.QueueGoalSessionStopped(key, state.GoalSessionStoppedDelivery{
+		SessionID:     session.ControlSessionID,
+		LocalHandleID: session.LocalHandleID,
+		BindingID:     session.BindingID,
+	})
+}
+
+func sameRetainedGoalSessionStopDelivery(delivery state.GoalDelivery, session state.GoalSessionJournal) bool {
+	return delivery.Kind == state.GoalDeliverySessionStopped && delivery.SessionStopped != nil &&
+		delivery.SessionStopped.SessionID == session.ControlSessionID &&
+		delivery.SessionStopped.LocalHandleID == session.LocalHandleID &&
+		delivery.SessionStopped.BindingID == session.BindingID
+}
+
+func retiredRetainedGoalSessionStopDelivery(session state.GoalSessionJournal, journal state.RunJournal) bool {
+	if !session.HasVerifiedControlAttachment() || session.SessionState != state.GoalSessionStateUnavailable {
+		return false
+	}
+	for _, retired := range journal.RetiredGoalDeliveries {
+		if sameRetainedGoalSessionStopDelivery(retired.Delivery, session) {
+			return true
+		}
+	}
+	return false
 }
 
 func (daemon *daemon) clearNativeProcessDetails(key state.RunKey) error {
@@ -6213,6 +6681,15 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) (e
 			return err
 		}
 	}
+	// A retained-session stop receipt is intentionally blocked until the
+	// terminal transition has been acknowledged by Control. It may have been
+	// queued immediately after the native process stopped, but releasing the
+	// session earlier would let a subsequent Run overlap a terminal one.
+	updated, _, err = daemon.flushGoalDeliveries(ctx, journal)
+	journal = updated
+	if err != nil {
+		return err
+	}
 	if journal.LocalState == "terminal_pending" && journal.TerminalVerdict == state.TerminalVerdictAccepted && len(journal.PendingEvents) == 0 && len(journal.PendingTransitions) == 0 && len(journal.PendingCommandAcknowledgements) == 0 && !journal.HasPendingGoalDeliveries() {
 		updated, err := daemon.enterCleanupPending(journal)
 		if err != nil {
@@ -6232,7 +6709,7 @@ func (daemon *daemon) flushGoalDeliveries(ctx context.Context, journal state.Run
 	for len(journal.PendingGoalDeliveries) > 0 {
 		index := -1
 		for candidateIndex, candidate := range journal.PendingGoalDeliveries {
-			if candidate.Kind != state.GoalDeliverySessionAttach || candidate.Ready {
+			if goalDeliveryReadyForFlush(journal, candidate) {
 				index = candidateIndex
 				break
 			}
@@ -6258,6 +6735,24 @@ func (daemon *daemon) flushGoalDeliveries(ctx context.Context, journal state.Run
 	return journal, attachReceipt, nil
 }
 
+func goalDeliveryReadyForFlush(journal state.RunJournal, delivery state.GoalDelivery) bool {
+	if !delivery.Ready {
+		return false
+	}
+	if delivery.Kind != state.GoalDeliverySessionStopped {
+		return true
+	}
+	if journal.LocalState == "terminal_pending" {
+		return (journal.TerminalVerdict == state.TerminalVerdictAccepted && len(journal.PendingTransitions) == 0) ||
+			state.IsConclusiveTerminalVerdict(journal.TerminalVerdict)
+	}
+	// A lease/reconcile stale transition has no daemon-originated terminal
+	// receipt. Control remains the authority and rejects this request until its
+	// reaper has made the Run terminal, so an early local attempt cannot release
+	// the session.
+	return journal.LocalState == "stale" || journal.LocalState == "cleanup_pending"
+}
+
 // deliverGoalDelivery sends one exact durable body and deletes it only after
 // the control client has verified its typed receipt.
 func (daemon *daemon) deliverGoalDelivery(ctx context.Context, journal state.RunJournal, kind state.GoalDeliveryKind, deliveryID string, validateAttach func(control.GoalSessionReceipt) error) (state.RunJournal, *control.GoalSessionReceipt, error) {
@@ -6281,6 +6776,7 @@ func (daemon *daemon) deliverGoalDelivery(ctx context.Context, journal state.Run
 	}
 	requestContext, cancel := daemon.controlContext(ctx)
 	var attachReceipt *control.GoalSessionReceipt
+	var stoppedReceipt *control.GoalSessionStoppedReceipt
 	var evidenceReceipt *control.GoalEvidenceReceipt
 	var usageReceipt *control.GoalUsageReceipt
 	var err error
@@ -6291,19 +6787,71 @@ func (daemon *daemon) deliverGoalDelivery(ctx context.Context, journal state.Run
 			cancel()
 			return journal, nil, errors.New("Goal session attach payload is missing")
 		}
-		receipt, callErr := goalAPI.AttachHarnessSession(requestContext, journal.RunID, control.GoalSessionAttachRequest{
-			Fence:                delivery.Fence,
-			LocalHandleID:        payload.LocalHandleID,
-			HarnessKind:          payload.HarnessKind,
-			HarnessVersion:       payload.HarnessVersion,
-			AdapterVersion:       payload.AdapterVersion,
-			WorkspaceFingerprint: payload.WorkspaceFingerprint,
-			Workspace:            payload.Workspace,
-			RepositoryResourceID: payload.RepositoryResourceID,
+		var bindingID *string
+		if strings.TrimSpace(payload.BindingID) != "" {
+			bindingID = &payload.BindingID
+		} else if !payload.ServerIssuedBinding {
+			cancel()
+			return journal, nil, errors.New("legacy Goal session attach has no binding authority marker and cannot be replayed")
+		}
+		// A ready request with no local Control mapping can be the response-loss
+		// window. Read the immutable receipt before replaying its idempotent POST.
+		readbackAPI, readbackSupported := daemon.control.(goalSessionAttachmentReadbackAPI)
+		if session, loadErr := daemon.store.LoadGoalSessionByHandle(payload.LocalHandleID); loadErr == nil && session.ControlSessionID == "" && readbackSupported {
+			if receipt, readErr := readbackAPI.FetchHarnessSessionAttachment(requestContext, journal.RunID, delivery.Fence); readErr == nil {
+				attachReceipt = &receipt
+			} else if !goalSessionAttachmentAbsent(readErr) {
+				err = fmt.Errorf("read Goal session attachment: %w", readErr)
+			}
+		} else if loadErr != nil {
+			err = fmt.Errorf("load local Goal session for attachment readback: %w", loadErr)
+		}
+		if err == nil && attachReceipt == nil {
+			receipt, callErr := goalAPI.AttachHarnessSession(requestContext, journal.RunID, control.GoalSessionAttachRequest{
+				Fence:                delivery.Fence,
+				LocalHandleID:        payload.LocalHandleID,
+				BindingID:            bindingID,
+				HarnessKind:          payload.HarnessKind,
+				HarnessVersion:       payload.HarnessVersion,
+				AdapterVersion:       payload.AdapterVersion,
+				WorkspaceFingerprint: payload.WorkspaceFingerprint,
+				Workspace:            payload.Workspace,
+				RepositoryResourceID: payload.RepositoryResourceID,
+			})
+			err = callErr
+			if err == nil {
+				attachReceipt = &receipt
+			} else if goalSessionAttachmentIdempotencyConflict(err) && readbackSupported {
+				// A conflicting replay may be the exact attachment whose original
+				// response was lost. Only the fenced immutable readback may resolve it.
+				if receipt, readErr := readbackAPI.FetchHarnessSessionAttachment(requestContext, journal.RunID, delivery.Fence); readErr == nil {
+					attachReceipt = &receipt
+					err = nil
+				} else {
+					err = fmt.Errorf("read Goal session attachment after idempotency conflict: %w", readErr)
+				}
+			}
+		}
+	case state.GoalDeliverySessionStopped:
+		payload := delivery.SessionStopped
+		if payload == nil {
+			cancel()
+			return journal, nil, errors.New("Goal session stopped payload is missing")
+		}
+		stopAPI, ok := daemon.control.(goalSessionStopAPI)
+		if !ok {
+			cancel()
+			return journal, nil, errors.New("control API does not implement Goal session stop delivery")
+		}
+		receipt, callErr := stopAPI.MarkHarnessSessionStopped(requestContext, journal.RunID, control.GoalSessionStoppedRequest{
+			Fence:         delivery.Fence,
+			SessionID:     payload.SessionID,
+			LocalHandleID: payload.LocalHandleID,
+			BindingID:     payload.BindingID,
 		})
 		err = callErr
 		if err == nil {
-			attachReceipt = &receipt
+			stoppedReceipt = &receipt
 		}
 	case state.GoalDeliveryEvidence:
 		if delivery.Evidence == nil {
@@ -6336,12 +6884,61 @@ func (daemon *daemon) deliverGoalDelivery(ctx context.Context, journal state.Run
 			if retireErr != nil {
 				return journal, nil, retireErr
 			}
+			if delivery.Kind == state.GoalDeliverySessionStopped {
+				session, loadErr := daemon.store.LoadGoalSessionByHandle(delivery.SessionStopped.LocalHandleID)
+				if loadErr != nil {
+					return updated, nil, fmt.Errorf("load local Goal session after definitive stop rejection: %w", loadErr)
+				}
+				if _, closeErr := daemon.store.CloseGoalSession(session.Key()); closeErr != nil {
+					return updated, nil, fmt.Errorf("close local Goal session after definitive stop rejection: %w", closeErr)
+				}
+			}
 			return updated, nil, &goalDeliveryRejectedError{err: err}
 		}
 		return journal, nil, err
 	}
-	if err := validateGoalDeliveryReceipt(journal, *delivery, attachReceipt, evidenceReceipt, usageReceipt); err != nil {
+	if err := validateGoalDeliveryReceipt(journal, *delivery, attachReceipt, stoppedReceipt, evidenceReceipt, usageReceipt); err != nil {
 		return journal, nil, err
+	}
+	if attachReceipt != nil {
+		session, loadErr := daemon.store.LoadGoalSessionByHandle(delivery.SessionAttach.LocalHandleID)
+		if loadErr != nil {
+			return journal, nil, fmt.Errorf("load local Goal session for attach receipt: %w", loadErr)
+		}
+		if attachReceipt.TaskID != session.TaskID || attachReceipt.MachineID != session.MachineID {
+			return journal, nil, errors.New("Goal session attach receipt does not match local task or machine identity")
+		}
+		persisted, persistErr := daemon.store.PersistGoalSessionControlAttachment(session.Key(), attachReceipt.ID, attachReceipt.BindingID, attachReceipt.AttachmentReceiptID, delivery.SessionAttach.ServerIssuedBinding)
+		if persistErr != nil {
+			return journal, nil, fmt.Errorf("persist Control Goal session attachment: %w", persistErr)
+		}
+		if persisted.SessionState == state.GoalSessionStateUnavailable {
+			if _, queueErr := daemon.store.QueueGoalSessionStopped(journal.Key(), state.GoalSessionStoppedDelivery{
+				SessionID:     persisted.ControlSessionID,
+				LocalHandleID: persisted.LocalHandleID,
+				BindingID:     persisted.BindingID,
+			}); queueErr != nil {
+				return journal, nil, fmt.Errorf("queue retained Goal session stop after attach replay: %w", queueErr)
+			}
+		}
+	}
+	if stoppedReceipt != nil {
+		session, loadErr := daemon.store.LoadGoalSessionByHandle(delivery.SessionStopped.LocalHandleID)
+		if loadErr != nil {
+			return journal, nil, fmt.Errorf("load local Goal session for stop receipt: %w", loadErr)
+		}
+		certificate := state.GoalSessionStopCertificate{
+			RunID:          journal.RunID,
+			Generation:     journal.Generation,
+			SessionID:      stoppedReceipt.SessionID,
+			LocalHandleID:  stoppedReceipt.LocalHandleID,
+			BindingID:      stoppedReceipt.BindingID,
+			DeliveryDigest: delivery.PayloadDigest,
+			ReceiptID:      stoppedReceipt.ReceiptID,
+		}
+		if _, persistErr := daemon.store.MarkGoalSessionAvailable(session.Key(), certificate); persistErr != nil {
+			return journal, nil, fmt.Errorf("persist released Goal session: %w", persistErr)
+		}
 	}
 	if attachReceipt != nil && validateAttach != nil {
 		if err := validateAttach(*attachReceipt); err != nil {
@@ -6368,10 +6965,21 @@ func definitiveGoalDeliveryRejection(kind state.GoalDeliveryKind, err error) (in
 		}
 		return apiError.StatusCode, string(apiError.Code), message, true
 	case http.StatusConflict:
+		if kind == state.GoalDeliverySessionAttach && apiError.Code == control.IdempotencyConflict {
+			// Attach idempotency conflict can mean the server committed the same
+			// attachment before a response was lost. Keep the exact request until
+			// the attachment receipt can be read back; never retire this barrier.
+			return 0, "", "", false
+		}
 		// A usage-key conflict could be an earlier accepted accounting record or
 		// a changed body. Without a readback receipt it is an unknown external
 		// effect, except for the control plane's explicit idempotency conflict.
 		if kind == state.GoalDeliveryUsage && apiError.Code != control.IdempotencyConflict {
+			return 0, "", "", false
+		}
+		if kind == state.GoalDeliverySessionStopped && apiError.Code == control.StateConflict {
+			// The daemon can observe lease expiry before Control's reaper commits
+			// the terminal Run. Keep this exact receipt retryable.
 			return 0, "", "", false
 		}
 		message := apiError.Message
@@ -6382,6 +6990,16 @@ func definitiveGoalDeliveryRejection(kind state.GoalDeliveryKind, err error) (in
 	default:
 		return 0, "", "", false
 	}
+}
+
+func goalSessionAttachmentAbsent(err error) bool {
+	var apiError *control.APIError
+	return errors.As(err, &apiError) && apiError.StatusCode == http.StatusNotFound
+}
+
+func goalSessionAttachmentIdempotencyConflict(err error) bool {
+	var apiError *control.APIError
+	return errors.As(err, &apiError) && apiError.StatusCode == http.StatusConflict && apiError.Code == control.IdempotencyConflict
 }
 
 // flushLateGoalUsage drains the retained accounting ledger independently of
@@ -6414,7 +7032,7 @@ func (daemon *daemon) flushLateGoalUsage(ctx context.Context) {
 				}
 				break
 			}
-			if err := validateGoalDeliveryReceipt(state.RunJournal{RunID: ledger.RunID}, delivery, nil, nil, &receipt); err != nil {
+			if err := validateGoalDeliveryReceipt(state.RunJournal{RunID: ledger.RunID}, delivery, nil, nil, nil, &receipt); err != nil {
 				break
 			}
 			updated, err := daemon.store.MarkLateGoalUsageDelivered(state.RunKey{RunID: ledger.RunID, Generation: ledger.Generation}, delivery.DeliveryID, delivery.PayloadDigest)
@@ -6430,23 +7048,34 @@ func (daemon *daemon) flushLateGoalUsage(ctx context.Context) {
 // client performs strict wire validation, but the daemon must still protect its
 // durable outbox if a different ControlAPI implementation returns a malformed
 // or mismatched typed receipt.
-func validateGoalDeliveryReceipt(journal state.RunJournal, delivery state.GoalDelivery, attach *control.GoalSessionReceipt, evidence *control.GoalEvidenceReceipt, usage *control.GoalUsageReceipt) error {
+func validateGoalDeliveryReceipt(journal state.RunJournal, delivery state.GoalDelivery, attach *control.GoalSessionReceipt, stopped *control.GoalSessionStoppedReceipt, evidence *control.GoalEvidenceReceipt, usage *control.GoalUsageReceipt) error {
 	switch delivery.Kind {
 	case state.GoalDeliverySessionAttach:
 		if delivery.SessionAttach == nil || attach == nil {
 			return errors.New("Goal session attach receipt is missing")
 		}
 		payload := delivery.SessionAttach
-		if attach.ID == "" || attach.GoalID != payload.GoalID || attach.RunID != journal.RunID || attach.RuntimeID != delivery.Fence.RuntimeID ||
+		if attach.ID == "" || attach.AttachmentReceiptID == "" || attach.GoalID != payload.GoalID || attach.RunID != journal.RunID || attach.RuntimeID != delivery.Fence.RuntimeID ||
 			attach.ActiveRunID != journal.RunID || attach.LocalHandleID != payload.LocalHandleID || attach.HarnessKind != payload.HarnessKind ||
 			attach.HarnessVersion != payload.HarnessVersion || attach.AdapterVersion != payload.AdapterVersion || attach.WorkspaceFingerprint != payload.WorkspaceFingerprint || attach.State != state.GoalSessionStateBusy {
 			return errors.New("Goal session attach receipt does not match durable request")
+		}
+		if (payload.BindingID != "" && attach.BindingID != payload.BindingID) || (payload.BindingID == "" && !payload.ServerIssuedBinding) {
+			return errors.New("Goal session attach receipt binding does not match durable request")
 		}
 		if attach.Workspace != "" && attach.Workspace != payload.Workspace {
 			return errors.New("Goal session attach receipt workspace does not match durable request")
 		}
 		if payload.RepositoryResourceID != nil && attach.RepositoryResourceID != *payload.RepositoryResourceID {
 			return errors.New("Goal session attach receipt repository does not match durable request")
+		}
+	case state.GoalDeliverySessionStopped:
+		if delivery.SessionStopped == nil || stopped == nil {
+			return errors.New("Goal session stopped receipt is missing")
+		}
+		payload := delivery.SessionStopped
+		if stopped.ReceiptID == "" || stopped.RunID != journal.RunID || stopped.SessionID != payload.SessionID || stopped.LocalHandleID != payload.LocalHandleID || stopped.BindingID != payload.BindingID || stopped.State != state.GoalSessionStateAvailable || stopped.ActiveRunID != nil || stopped.LockVersion <= 0 {
+			return errors.New("Goal session stopped receipt does not match durable request")
 		}
 	case state.GoalDeliveryEvidence:
 		if delivery.Evidence == nil || evidence == nil || evidence.ID != delivery.Evidence.EvidenceID || evidence.RunID != journal.RunID || evidence.EvidenceKey != delivery.Evidence.EvidenceKey || evidence.Kind != string(delivery.Evidence.Kind) || evidence.SubjectHash != delivery.Evidence.SubjectHash || evidence.Verdict != string(delivery.Evidence.Verdict) {
