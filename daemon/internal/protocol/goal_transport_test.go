@@ -159,12 +159,14 @@ func TestTaskResultKindMustMatchAdmissionPurpose(t *testing.T) {
 func TestAdmissionSessionModeBindsRequestedSessionID(t *testing.T) {
 	base := `{"schema_version":"symmetry.admission.v1","admission_id":"` + testUUID + `","goal_id":"` + testUUIDTwo + `","goal_revision":1,"work_item_id":"` + testUUID + `","purpose":"implement","context_snapshot_id":"` + testUUIDTwo + `","context_hash":"` + testTreeDigest + `","model_profile":"implementation-default","session_mode":"fresh","requested_session_id":null,"subject":{"resource_id":"` + testUUID + `","commit":"` + testCommit + `","tree_digest":"` + testTreeDigest + `"},"limits":{"max_turns":1,"deadline_at":"2026-09-09T12:00:00Z","max_cost_microusd":null},"validation_of_task_id":null,"provider_scope":null}`
 
-	handoffJSON := strings.Replace(base, `"session_mode":"fresh"`, `"session_mode":"handoff"`, 1)
+	handoffJSON := strings.Replace(
+		strings.Replace(base, `"session_mode":"fresh"`, `"session_mode":"handoff"`, 1),
+		`"requested_session_id":null`, `"requested_session_id":null,"handoff_source_run_id":"`+testUUIDTwo+`"`, 1)
 	handoff, err := ParseAdmission([]byte(handoffJSON))
 	if err != nil {
 		t.Fatalf("handoff admission rejected: %v", err)
 	}
-	if handoff.SessionMode != SessionModeHandoff || handoff.RequestedSessionID != nil {
+	if handoff.SessionMode != SessionModeHandoff || handoff.RequestedSessionID != nil || handoff.HandoffSourceRunID == nil || *handoff.HandoffSourceRunID != testUUIDTwo {
 		t.Fatalf("handoff admission = %+v, want null requested session", handoff)
 	}
 	encoded, err := json.Marshal(handoff)
@@ -173,6 +175,9 @@ func TestAdmissionSessionModeBindsRequestedSessionID(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), "native_session") || strings.Contains(string(encoded), "native_handle") {
 		t.Fatalf("handoff admission leaked native session identity: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), `"handoff_source_run_id":"`+testUUIDTwo+`"`) {
+		t.Fatalf("handoff admission lost source run identity: %s", encoded)
 	}
 
 	resumeWithoutSession := strings.Replace(base, `"session_mode":"fresh"`, `"session_mode":"resume"`, 1)
@@ -191,6 +196,21 @@ func TestAdmissionSessionModeBindsRequestedSessionID(t *testing.T) {
 	handoffWithSession := strings.Replace(handoffJSON, `"requested_session_id":null`, `"requested_session_id":"`+testUUIDTwo+`"`, 1)
 	if _, err := ParseAdmission([]byte(handoffWithSession)); err == nil {
 		t.Fatal("handoff admission with requested_session_id was accepted")
+	}
+
+	handoffWithoutSource := strings.Replace(handoffJSON, `,"handoff_source_run_id":"`+testUUIDTwo+`"`, "", 1)
+	if _, err := ParseAdmission([]byte(handoffWithoutSource)); err == nil {
+		t.Fatal("handoff admission without handoff_source_run_id was accepted")
+	}
+
+	freshWithSource := strings.Replace(base, `"requested_session_id":null`, `"requested_session_id":null,"handoff_source_run_id":"`+testUUIDTwo+`"`, 1)
+	if _, err := ParseAdmission([]byte(freshWithSource)); err == nil {
+		t.Fatal("fresh admission with handoff_source_run_id was accepted")
+	}
+
+	resumeWithSource := strings.Replace(resumeJSON, `"requested_session_id":"`+testUUIDTwo+`"`, `"requested_session_id":"`+testUUIDTwo+`","handoff_source_run_id":"`+testUUID+`"`, 1)
+	if _, err := ParseAdmission([]byte(resumeWithSource)); err == nil {
+		t.Fatal("resume admission with handoff_source_run_id was accepted")
 	}
 }
 

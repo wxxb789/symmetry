@@ -13,6 +13,7 @@
       "tree_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
     },
     "session_mode": "handoff",
-    "requested_session_id": null
+    "requested_session_id": null,
+    "handoff_source_run_id": "88888888-8888-4888-8888-888888888888"
   }
 }

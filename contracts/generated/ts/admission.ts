@@ -40,6 +40,7 @@ export type SymmetryAdmissionV1 = (
     model_profile: ShortIdentifier;
     session_mode: "fresh" | "resume" | "handoff";
     requested_session_id: UUID | null;
+    handoff_source_run_id?: UUID;
     subject: Subject;
     limits: {
       max_turns: PositiveInteger;

@@ -36,6 +36,7 @@ type SymmetryAdmissionV1 struct {
 	ContextSnapshotID  string                           `json:"context_snapshot_id"`
 	GoalID             string                           `json:"goal_id"`
 	GoalRevision       int64                            `json:"goal_revision"`
+	HandoffSourceRunID *string                          `json:"handoff_source_run_id,omitempty"`
 	Limits             Limits                           `json:"limits"`
 	ModelProfile       string                           `json:"model_profile"`
 	ProviderScope      interface{}                      `json:"provider_scope"`
@@ -321,6 +322,7 @@ type Payload struct {
 	RequestedSessionID      *string               `json:"requested_session_id"`
 	SessionMode             *SessionMode          `json:"session_mode,omitempty"`
 	Subject                 *PurpleSubject        `json:"subject,omitempty"`
+	HandoffSourceRunID      *string               `json:"handoff_source_run_id,omitempty"`
 	Reason                  *string               `json:"reason,omitempty"`
 	RevisionContract        *GoalRevisionContract `json:"revision_contract,omitempty"`
 	DecisionID              *string               `json:"decision_id"`

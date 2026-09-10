@@ -43,6 +43,7 @@
         {"type": "null"}
       ]
     },
+    "handoff_source_run_id": {"$ref": "common.schema.json#/definitions/UUID"},
     "subject": {"$ref": "common.schema.json#/definitions/Subject"},
     "limits": {
       "type": "object",
@@ -102,15 +103,18 @@
           "properties": {
             "session_mode": {"const": "fresh"},
             "requested_session_id": {"type": "null"}
-          }
+          },
+          "not": {"required": ["handoff_source_run_id"]}
         },
         {
           "properties": {
             "session_mode": {"const": "resume"},
             "requested_session_id": {"$ref": "common.schema.json#/definitions/UUID"}
-          }
+          },
+          "not": {"required": ["handoff_source_run_id"]}
         },
         {
+          "required": ["handoff_source_run_id"],
           "properties": {
             "session_mode": {"const": "handoff"},
             "requested_session_id": {"type": "null"}

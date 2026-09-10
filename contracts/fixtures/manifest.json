@@ -37,6 +37,13 @@
       "tags": ["happy-path", "complete-subject", "nullable"]
     },
     {
+      "id": "admission.handoff",
+      "schema": "admission",
+      "path": "valid/admission.handoff.json",
+      "valid": true,
+      "tags": ["admission", "handoff-session", "handoff-source-run", "fresh-native-session"]
+    },
+    {
       "id": "admission.validate",
       "schema": "admission",
       "path": "valid/admission.validate.json",
@@ -259,6 +266,27 @@
       "path": "invalid/admission.handoff-session-id.json",
       "valid": false,
       "tags": ["session-mode", "handoff-session", "no-native-session-source"]
+    },
+    {
+      "id": "admission.handoff-missing-source-run",
+      "schema": "admission",
+      "path": "invalid/admission.handoff-missing-source-run.json",
+      "valid": false,
+      "tags": ["session-mode", "handoff-session", "handoff-source-run", "missing-control-field"]
+    },
+    {
+      "id": "admission.fresh-source-run",
+      "schema": "admission",
+      "path": "invalid/admission.fresh-source-run.json",
+      "valid": false,
+      "tags": ["session-mode", "fresh-session", "handoff-source-run"]
+    },
+    {
+      "id": "admission.resume-source-run",
+      "schema": "admission",
+      "path": "invalid/admission.resume-source-run.json",
+      "valid": false,
+      "tags": ["session-mode", "resume-session", "handoff-source-run"]
     },
     {
       "id": "admission.resume-null-session-id",
@@ -728,6 +756,20 @@
       "path": "invalid/goal-command.handoff-session-id.json",
       "valid": false,
       "tags": ["goal-command", "session-mode", "handoff-session", "no-native-session-source"]
+    },
+    {
+      "id": "goal-command.handoff-missing-source-run",
+      "schema": "goal-command",
+      "path": "invalid/goal-command.handoff-missing-source-run.json",
+      "valid": false,
+      "tags": ["goal-command", "session-mode", "handoff-session", "handoff-source-run", "missing-control-field"]
+    },
+    {
+      "id": "goal-command.fresh-source-run",
+      "schema": "goal-command",
+      "path": "invalid/goal-command.fresh-source-run.json",
+      "valid": false,
+      "tags": ["goal-command", "session-mode", "fresh-session", "handoff-source-run"]
     },
     {
       "id": "goal-command.resume-null-session-id",

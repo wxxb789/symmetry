@@ -10,7 +10,6 @@
     "model_profile": "implementation-default",
     "session_mode": "handoff",
     "requested_session_id": null,
-    "handoff_source_run_id": "88888888-8888-4888-8888-888888888888",
     "validation_of_task_id": null
   }
 }

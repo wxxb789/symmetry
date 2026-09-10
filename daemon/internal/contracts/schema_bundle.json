@@ -1623,6 +1623,11 @@
       {
         "oneOf": [
           {
+            "not": {
+              "required": [
+                "handoff_source_run_id"
+              ]
+            },
             "properties": {
               "requested_session_id": {
                 "type": "null"
@@ -1633,6 +1638,11 @@
             }
           },
           {
+            "not": {
+              "required": [
+                "handoff_source_run_id"
+              ]
+            },
             "properties": {
               "requested_session_id": {
                 "$ref": "#/definitions/UUID"
@@ -1650,7 +1660,10 @@
               "session_mode": {
                 "const": "handoff"
               }
-            }
+            },
+            "required": [
+              "handoff_source_run_id"
+            ]
           }
         ]
       },
@@ -3336,6 +3349,9 @@
       },
       "goal_revision": {
         "$ref": "#/definitions/Revision"
+      },
+      "handoff_source_run_id": {
+        "$ref": "#/definitions/UUID"
       },
       "limits": {
         "additionalProperties": false,
@@ -10597,6 +10613,9 @@
               {
                 "additionalProperties": false,
                 "properties": {
+                  "handoff_source_run_id": {
+                    "$ref": "#/definitions/UUID"
+                  },
                   "model_profile": {
                     "$ref": "#/definitions/ShortIdentifier"
                   },
@@ -10618,7 +10637,8 @@
                   "repository_resource_id",
                   "subject",
                   "session_mode",
-                  "requested_session_id"
+                  "requested_session_id",
+                  "handoff_source_run_id"
                 ],
                 "type": "object"
               }
@@ -11119,6 +11139,9 @@
               {
                 "additionalProperties": false,
                 "properties": {
+                  "handoff_source_run_id": {
+                    "$ref": "#/definitions/UUID"
+                  },
                   "model_profile": {
                     "$ref": "#/definitions/ShortIdentifier"
                   },
@@ -11156,6 +11179,7 @@
                   "model_profile",
                   "session_mode",
                   "requested_session_id",
+                  "handoff_source_run_id",
                   "validation_of_task_id"
                 ],
                 "type": "object"

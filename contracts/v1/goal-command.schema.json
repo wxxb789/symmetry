@@ -62,13 +62,14 @@
             {
               "type": "object",
               "additionalProperties": false,
-              "required": ["model_profile", "repository_resource_id", "subject", "session_mode", "requested_session_id"],
+              "required": ["model_profile", "repository_resource_id", "subject", "session_mode", "requested_session_id", "handoff_source_run_id"],
               "properties": {
                 "model_profile": {"$ref": "common.schema.json#/definitions/ShortIdentifier"},
                 "repository_resource_id": {"$ref": "common.schema.json#/definitions/UUID"},
                 "subject": {"$ref": "common.schema.json#/definitions/Subject"},
                 "session_mode": {"const": "handoff"},
-                "requested_session_id": {"type": "null"}
+                "requested_session_id": {"type": "null"},
+                "handoff_source_run_id": {"$ref": "common.schema.json#/definitions/UUID"}
               }
             }
           ]
@@ -285,13 +286,14 @@
             {
               "type": "object",
               "additionalProperties": false,
-              "required": ["work_item_id", "purpose", "model_profile", "session_mode", "requested_session_id", "validation_of_task_id"],
+              "required": ["work_item_id", "purpose", "model_profile", "session_mode", "requested_session_id", "handoff_source_run_id", "validation_of_task_id"],
               "properties": {
                 "work_item_id": {"$ref": "common.schema.json#/definitions/UUID"},
                 "purpose": {"enum": ["implement", "validate", "observe", "chat"]},
                 "model_profile": {"$ref": "common.schema.json#/definitions/ShortIdentifier"},
                 "session_mode": {"const": "handoff"},
                 "requested_session_id": {"type": "null"},
+                "handoff_source_run_id": {"$ref": "common.schema.json#/definitions/UUID"},
                 "validation_of_task_id": {
                   "oneOf": [
                     {"$ref": "common.schema.json#/definitions/UUID"},

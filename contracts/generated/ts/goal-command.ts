@@ -38,6 +38,7 @@ export type SymmetryGoalCommandV1 =
             subject: Subject;
             session_mode: "handoff";
             requested_session_id: null;
+            handoff_source_run_id: UUID;
           };
     }
   | {
@@ -162,6 +163,7 @@ export type SymmetryGoalCommandV1 =
               model_profile: ShortIdentifier;
               session_mode: "handoff";
               requested_session_id: null;
+              handoff_source_run_id: UUID;
               validation_of_task_id: UUID | null;
             }
         );

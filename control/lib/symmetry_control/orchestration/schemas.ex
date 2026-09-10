@@ -144,6 +144,7 @@ defmodule SymmetryControl.Orchestration.Task do
     belongs_to :context_snapshot, SymmetryControl.Goals.ContextSnapshot
     belongs_to :validation_of_task, __MODULE__
     belongs_to :requested_session, SymmetryControl.Goals.HarnessSession
+    belongs_to :handoff_source_run, SymmetryControl.Orchestration.Run
     field :idempotency_key, :string
     field :request_hash, :binary
     field :request_hash_version, :integer, default: 1
@@ -189,6 +190,7 @@ defmodule SymmetryControl.Orchestration.Task do
       :admission_key,
       :max_run_attempts,
       :requested_session_id,
+      :handoff_source_run_id,
       :result,
       :failure
     ])
@@ -211,6 +213,7 @@ defmodule SymmetryControl.Orchestration.Task do
     |> validate_inclusion(:purpose, ["implement", "validate", "plan", "observe", "chat"])
     |> validate_goal_task_fields()
     |> validate_validation_task()
+    |> validate_handoff_lineage()
     |> validate_inclusion(:state, [
       "queued",
       "assigned",
@@ -239,6 +242,7 @@ defmodule SymmetryControl.Orchestration.Task do
     )
     |> foreign_key_constraint(:validation_of_task_id, name: :tasks_validation_task_identity_fkey)
     |> assoc_constraint(:requested_session)
+    |> assoc_constraint(:handoff_source_run)
   end
 
   defp validate_goal_task_fields(changeset) do
@@ -247,7 +251,13 @@ defmodule SymmetryControl.Orchestration.Task do
     if is_nil(goal_id) do
       changeset =
         Enum.reduce(
-          [:goal_revision, :context_snapshot_id, :admission_key, :max_run_attempts],
+          [
+            :goal_revision,
+            :context_snapshot_id,
+            :admission_key,
+            :max_run_attempts,
+            :handoff_source_run_id
+          ],
           changeset,
           fn field, acc ->
             if is_nil(get_field(acc, field)),
@@ -302,6 +312,23 @@ defmodule SymmetryControl.Orchestration.Task do
 
       purpose != "validate" and not is_nil(validation_of_task_id) ->
         add_error(changeset, :validation_of_task_id, "is only valid for a validation task")
+
+      true ->
+        changeset
+    end
+  end
+
+  defp validate_handoff_lineage(changeset) do
+    input = get_field(changeset, :input, %{}) || %{}
+    session_mode = Map.get(input, "session_mode", "fresh")
+    source_run_id = get_field(changeset, :handoff_source_run_id)
+
+    cond do
+      session_mode == "handoff" and is_nil(source_run_id) ->
+        add_error(changeset, :handoff_source_run_id, "must be present for a handoff task")
+
+      session_mode != "handoff" and not is_nil(source_run_id) ->
+        add_error(changeset, :handoff_source_run_id, "is only valid for a handoff task")
 
       true ->
         changeset

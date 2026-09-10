@@ -266,6 +266,7 @@ type Admission struct {
 	ModelProfile       string           `json:"model_profile"`
 	SessionMode        SessionMode      `json:"session_mode"`
 	RequestedSessionID *string          `json:"requested_session_id"`
+	HandoffSourceRunID *string          `json:"handoff_source_run_id,omitempty"`
 	Subject            Subject          `json:"subject"`
 	Limits             AdmissionLimits  `json:"limits"`
 	ValidationOfTaskID *string          `json:"validation_of_task_id"`
@@ -313,15 +314,31 @@ func (admission Admission) Validate() error {
 		return fmt.Errorf("session_mode %q is invalid", admission.SessionMode)
 	}
 	switch admission.SessionMode {
-	case SessionModeFresh, SessionModeHandoff:
+	case SessionModeFresh:
 		if admission.RequestedSessionID != nil {
 			return fmt.Errorf("requested_session_id must be null for session_mode %q", admission.SessionMode)
+		}
+		if admission.HandoffSourceRunID != nil {
+			return fmt.Errorf("handoff_source_run_id must be null for session_mode %q", admission.SessionMode)
 		}
 	case SessionModeResume:
 		if admission.RequestedSessionID == nil {
 			return fmt.Errorf("requested_session_id is required for session_mode %q", admission.SessionMode)
 		}
 		if err := validateUUID(*admission.RequestedSessionID, "requested_session_id"); err != nil {
+			return err
+		}
+		if admission.HandoffSourceRunID != nil {
+			return fmt.Errorf("handoff_source_run_id must be null for session_mode %q", admission.SessionMode)
+		}
+	case SessionModeHandoff:
+		if admission.RequestedSessionID != nil {
+			return fmt.Errorf("requested_session_id must be null for session_mode %q", admission.SessionMode)
+		}
+		if admission.HandoffSourceRunID == nil {
+			return fmt.Errorf("handoff_source_run_id is required for session_mode %q", admission.SessionMode)
+		}
+		if err := validateUUID(*admission.HandoffSourceRunID, "handoff_source_run_id"); err != nil {
 			return err
 		}
 	}
