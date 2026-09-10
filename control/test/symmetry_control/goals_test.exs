@@ -40,7 +40,18 @@ defmodule SymmetryControl.GoalsTest do
     assert created.goal.state == "draft"
     assert created.goal.current_revision == 1
 
-    assert created.goal.revision.execution_policy == %{
+    assert Map.keys(created.goal) |> Enum.sort() == [
+             :current_revision,
+             :id,
+             :next_wake_at,
+             :state,
+             :updated_at,
+             :version
+           ]
+
+    assert {:ok, created_projection} = Goals.fetch_goal(created.goal.id)
+
+    assert created_projection.revision.execution_policy == %{
              "automatic_execution" => false,
              "max_parallel_tasks" => 1,
              "max_task_admissions" => 1,
@@ -59,15 +70,7 @@ defmodule SymmetryControl.GoalsTest do
     assert {:ok, created_replay, :replayed} =
              Goals.create_goal(project.id, attrs, "operator:test", now: @now)
 
-    assert created_replay.goal.id == created.goal.id
-    assert created_replay.goal.state == created.goal.state
-    assert created_replay.goal.version == created.goal.version
-    assert created_replay.goal.current_revision == created.goal.current_revision
-    assert created_replay.goal.next_wake_at == nil
-    assert created_replay.goal.updated_at == DateTime.to_iso8601(created.goal.updated_at)
-    assert created_replay.event == created.event
-    assert created_replay.response == created.response
-    refute Map.has_key?(created_replay.goal, :revision)
+    assert created_replay == created
 
     stored_create_event = Repo.get!(SymmetryControl.Goals.GoalEvent, created.event.id)
     stored_create_receipt = stored_create_event.response["_receipt_v1"]
@@ -94,11 +97,12 @@ defmodule SymmetryControl.GoalsTest do
 
     goal_id = created.goal.id
 
+    decision_subject_hash = "sha256:" <> String.duplicate("a", 64)
+
     command =
       command(created.goal, "request_decision", %{
-        kind: "scope",
-        question: "Keep the scope bounded?",
-        options: [%{"id" => "yes", "label" => "Yes", "consequence" => "No scope expansion"}]
+        kind: "completion",
+        subject_hash: decision_subject_hash
       })
 
     assert {:ok, receipt, :created} = Goals.command(goal_id, command, "operator:test", now: @now)
@@ -113,34 +117,29 @@ defmodule SymmetryControl.GoalsTest do
                now: @now
              )
 
-    assert {:error, :invalid_request} =
+    assert {:error, {:invalid_contract, _}} =
              command_current(goal_id, "request_decision", %{
-               kind: "scope",
-               question: "Duplicate option identifiers are ambiguous.",
-               options: [
-                 %{"id" => "same", "label" => "First", "consequence" => "First outcome"},
-                 %{"id" => "same", "label" => "Second", "consequence" => "Second outcome"}
-               ]
+               kind: "completion",
+               work_item_id: Ecto.UUID.generate(),
+               subject_hash: decision_subject_hash
              })
 
     assert {:ok, receipt_replay, :replayed} =
              Goals.command(goal_id, command, "operator:test", now: @now)
 
-    assert receipt_replay.response == receipt.response
-    assert receipt_replay.event == receipt.event
-    refute Map.has_key?(receipt_replay.goal, :decisions)
+    assert receipt_replay == receipt
+    refute Map.has_key?(receipt.goal, :decisions)
 
     assert {:ok, _later_receipt, :created} =
              command_current(goal_id, "request_decision", %{
-               kind: "scope",
-               question: "Keep a second scoped decision?",
-               options: [%{"id" => "yes", "label" => "Yes", "consequence" => "Keep it recorded"}]
+               kind: "completion",
+               subject_hash: "sha256:" <> String.duplicate("b", 64)
              })
 
-    assert {:ok, ^receipt_replay, :replayed} =
+    assert {:ok, ^receipt, :replayed} =
              Goals.command(goal_id, command, "operator:test", now: @now)
 
-    assert {:ok, ^created_replay, :replayed} =
+    assert {:ok, ^created, :replayed} =
              Goals.create_goal(project.id, attrs, "operator:test", now: @now)
 
     assert {:error,
@@ -192,15 +191,8 @@ defmodule SymmetryControl.GoalsTest do
 
     assert {:error, :state_conflict} =
              command_current(created.goal.id, "request_decision", %{
-               kind: "scope",
-               question: "Would change Goal authority.",
-               options: [
-                 %{
-                   "id" => "no",
-                   "label" => "No",
-                   "consequence" => "Project is archived."
-                 }
-               ]
+               kind: "completion",
+               subject_hash: "sha256:" <> String.duplicate("a", 64)
              })
   end
 
@@ -210,19 +202,15 @@ defmodule SymmetryControl.GoalsTest do
     assert {:ok, created, :created} =
              Goals.create_goal(project.id, goal_attrs(), "operator:test", now: @now)
 
-    assert {:ok, decision_receipt, :created} =
+    assert {:ok, _decision_receipt, :created} =
              command_current(created.goal.id, "request_decision", %{
-               kind: "scope",
-               question: "Include follow-up work?",
-               options: [%{"id" => "no", "label" => "No", "consequence" => "Keep scope bounded"}]
+               kind: "completion",
+               subject_hash: "sha256:" <> String.duplicate("a", 64)
              })
 
-    assert decision_receipt.goal.decisions |> Enum.any?(&(&1.state == "open"))
+    assert fetch_goal!(created.goal.id).decisions |> Enum.any?(&(&1.state == "open"))
 
-    revision_contract =
-      goal_attrs()
-      |> Map.fetch!(:initial_revision)
-      |> Map.put(:objective, "Amended objective")
+    revision_contract = amended_revision_contract("Amended objective")
 
     assert {:ok, amended, :created} =
              command_current(created.goal.id, "amend", %{
@@ -234,7 +222,7 @@ defmodule SymmetryControl.GoalsTest do
     assert amended.goal.current_revision == 2
 
     assert Enum.any?(
-             amended.goal.decisions,
+             fetch_goal!(created.goal.id).decisions,
              &(&1.state == "superseded" and &1.goal_revision == 1)
            )
   end
@@ -291,7 +279,7 @@ defmodule SymmetryControl.GoalsTest do
                option_id: "accept"
              })
 
-    assert {:ok, planned, :created} =
+    assert {:ok, _planned, :created} =
              command_current(
                goal.id,
                "accept_plan",
@@ -305,11 +293,12 @@ defmodule SymmetryControl.GoalsTest do
                rollout_enabled: true
              )
 
-    [revised_item] = planned.goal.work_items
+    current_goal = fetch_goal!(goal.id)
+    [revised_item] = current_goal.work_items
     assert revised_item.id != item.id
-    assert revised_item.admitted_revision == amended.goal.current_revision
+    assert revised_item.admitted_revision == current_goal.current_revision
     assert Repo.get!(SymmetryControl.Workspaces.WorkItem, revised_item.id).integration
-    assert Enum.any?(planned.goal.history.work_items, &(&1.id == item.id))
+    assert Enum.any?(current_goal.history.work_items, &(&1.id == item.id))
   end
 
   test "an amendment retains prior spent admissions under the Goal admission cap" do
@@ -382,7 +371,7 @@ defmodule SymmetryControl.GoalsTest do
                option_id: "accept"
              })
 
-    assert {:ok, planned, :created} =
+    assert {:ok, _planned, :created} =
              command_current(
                goal.id,
                "accept_plan",
@@ -396,7 +385,7 @@ defmodule SymmetryControl.GoalsTest do
                rollout_enabled: true
              )
 
-    [revised_item] = planned.goal.work_items
+    [revised_item] = fetch_goal!(goal.id).work_items
 
     assert {:ok, _resumed, :created} =
              command_current(goal.id, "resume", %{reason: "Revised work is approved."})
@@ -421,7 +410,7 @@ defmodule SymmetryControl.GoalsTest do
                now: @now
              )
 
-    assert created.goal.revision.execution_policy["budget_limit_microusd"] == "42"
+    assert fetch_goal!(created.goal.id).revision.execution_policy["budget_limit_microusd"] == "42"
   end
 
   test "Goal plan and admitted Task preserve the project workspace and agent assignment" do
@@ -444,7 +433,7 @@ defmodule SymmetryControl.GoalsTest do
         %{"id" => "same", "kind" => "check", "validator_profile" => "test"}
       ])
 
-    assert {:error, :invalid_request} =
+    assert {:error, {:invalid_contract, _}} =
              Goals.create_goal(project.id, duplicate_predicates, "operator:test", now: @now)
 
     unsafe_artifact =
@@ -462,7 +451,7 @@ defmodule SymmetryControl.GoalsTest do
         ]
       })
 
-    assert {:error, :invalid_request} =
+    assert {:error, {:invalid_contract, _}} =
              Goals.create_goal(project.id, unsafe_artifact, "operator:test", now: @now)
 
     unexpected_predicate_field =
@@ -476,7 +465,7 @@ defmodule SymmetryControl.GoalsTest do
         }
       ])
 
-    assert {:error, :invalid_request} =
+    assert {:error, {:invalid_contract, _}} =
              Goals.create_goal(project.id, unexpected_predicate_field, "operator:test", now: @now)
   end
 
@@ -500,7 +489,7 @@ defmodule SymmetryControl.GoalsTest do
       baseline: baseline_subject(repository.id)
     }
 
-    assert {:error, :invalid_plan} =
+    assert {:error, {:invalid_contract, _}} =
              command_current(created.goal.id, "request_decision", %{
                kind: "plan",
                question: "Accept this plan?",
@@ -542,8 +531,8 @@ defmodule SymmetryControl.GoalsTest do
       }
     ]
 
-    for proposal <- malformed do
-      assert {:error, :invalid_plan} =
+    for proposal <- Enum.drop(malformed, -1) do
+      assert {:error, {:invalid_contract, _}} =
                command_current(created.goal.id, "request_decision", %{
                  kind: "plan",
                  question: "Accept this plan?",
@@ -553,6 +542,14 @@ defmodule SymmetryControl.GoalsTest do
                  proposal: proposal
                })
     end
+
+    assert {:error, :invalid_plan} =
+             command_current(created.goal.id, "request_decision", %{
+               kind: "plan",
+               question: "Accept this plan?",
+               options: [%{"id" => "accept", "label" => "Accept", "consequence" => "Proceed"}],
+               proposal: List.last(malformed)
+             })
   end
 
   test "dependency changes require a scope decision bound to its operation and target" do
@@ -611,7 +608,7 @@ defmodule SymmetryControl.GoalsTest do
                option_id: "accept"
              })
 
-    assert {:ok, planned, :created} =
+    assert {:ok, _planned, :created} =
              command_current(
                created.goal.id,
                "accept_plan",
@@ -625,7 +622,7 @@ defmodule SymmetryControl.GoalsTest do
                rollout_enabled: true
              )
 
-    [first, second] = planned.goal.work_items
+    [first, second] = fetch_goal!(created.goal.id).work_items
 
     assert {:ok, scope_decision, :created} =
              command_current(created.goal.id, "request_decision", %{
@@ -724,12 +721,12 @@ defmodule SymmetryControl.GoalsTest do
       }
     end
 
-    planned =
+    _planned =
       created.goal.id
       |> plan_proposal([plan_item.("first"), plan_item.("second"), plan_item.("integration")])
       |> then(&accept_plan!(created.goal.id, &1))
 
-    items_by_title = Map.new(planned.goal.work_items, &{&1.title, &1})
+    items_by_title = Map.new(fetch_goal!(created.goal.id).work_items, &{&1.title, &1})
     first = Map.fetch!(items_by_title, "first work")
     second = Map.fetch!(items_by_title, "second work")
     integration = Map.fetch!(items_by_title, "integration work")
@@ -792,33 +789,25 @@ defmodule SymmetryControl.GoalsTest do
     assert Repo.aggregate(SymmetryControl.Goals.WorkDependency, :count) == 2
   end
 
-  test "Decision v1 validation rejects untrusted options and malformed resolutions" do
+  test "Decision v1 validation rejects malformed commands and resolutions" do
     project = project_fixture()
 
     assert {:ok, created, :created} =
              Goals.create_goal(project.id, goal_attrs(), "operator:test", now: @now)
 
-    assert {:error, :invalid_request} =
+    subject_hash = "sha256:" <> String.duplicate("a", 64)
+
+    assert {:error, {:invalid_contract, _}} =
              command_current(created.goal.id, "request_decision", %{
-               kind: "scope",
-               question: "Keep scope bounded?",
-               options: [
-                 %{
-                   "id" => "accept",
-                   "label" => "Accept",
-                   "consequence" => "Proceed",
-                   "unreviewed" => true
-                 }
-               ]
+               kind: "completion",
+               work_item_id: Ecto.UUID.generate(),
+               subject_hash: subject_hash
              })
 
     assert {:ok, decision, :created} =
              command_current(created.goal.id, "request_decision", %{
-               kind: "scope",
-               question: "Keep scope bounded?",
-               options: [
-                 %{"id" => "accept", "label" => "Accept", "consequence" => "Proceed"}
-               ]
+               kind: "completion",
+               subject_hash: subject_hash
              })
 
     decision_id = decision.response["decision"]["id"]
@@ -849,7 +838,7 @@ defmodule SymmetryControl.GoalsTest do
             resolved_at: DateTime.to_iso8601(@now)
           }
         ] do
-      assert {:error, :invalid_request} =
+      assert {:error, {:invalid_contract, _}} =
                command_current(created.goal.id, "resolve_decision", payload)
     end
 
@@ -858,12 +847,12 @@ defmodule SymmetryControl.GoalsTest do
                decision_id: decision_id,
                expected_decision_version: decision_version,
                option_id: "accept",
-               comment: "The bounded scope is approved."
+               comment: "The bounded completion is approved."
              })
 
     assert Repo.get!(SymmetryControl.Goals.GoalDecision, decision_id).resolution == %{
              "option_id" => "accept",
-             "comment" => "The bounded scope is approved.",
+             "comment" => "The bounded completion is approved.",
              "actor_ref" => "operator:test",
              "resolved_at" => "2026-09-09T00:00:00.000000Z"
            }
@@ -924,7 +913,7 @@ defmodule SymmetryControl.GoalsTest do
                option_id: "accept"
              })
 
-    assert {:ok, planned, :created} =
+    assert {:ok, _planned, :created} =
              command_current(
                goal_id,
                "accept_plan",
@@ -938,7 +927,7 @@ defmodule SymmetryControl.GoalsTest do
                rollout_enabled: true
              )
 
-    assert {:error, :invalid_request} =
+    assert {:error, {:invalid_contract, _}} =
              command_current(
                goal_id,
                "accept_plan",
@@ -952,7 +941,7 @@ defmodule SymmetryControl.GoalsTest do
                rollout_enabled: true
              )
 
-    assert {:error, :invalid_request} =
+    assert {:error, {:invalid_contract, _}} =
              command_current(
                goal_id,
                "accept_plan",
@@ -960,7 +949,7 @@ defmodule SymmetryControl.GoalsTest do
                rollout_enabled: true
              )
 
-    [item] = planned.goal.work_items
+    [item] = fetch_goal!(goal_id).work_items
     assert item.admitted_revision == 1
     assert item.accepted? == false
     assert Repo.get!(SymmetryControl.Workspaces.WorkItem, item.id).integration
@@ -1049,8 +1038,8 @@ defmodule SymmetryControl.GoalsTest do
         }
       ])
 
-    planned = accept_plan!(created.goal.id, proposal)
-    [item] = planned.goal.work_items
+    _planned = accept_plan!(created.goal.id, proposal)
+    [item] = fetch_goal!(created.goal.id).work_items
 
     assert %{
              "kind" => "branches",
@@ -1207,8 +1196,8 @@ defmodule SymmetryControl.GoalsTest do
         }
       ])
 
-    planned = accept_plan!(created.goal.id, proposal)
-    [item] = planned.goal.work_items
+    _planned = accept_plan!(created.goal.id, proposal)
+    [item] = fetch_goal!(created.goal.id).work_items
 
     assert {:ok, _active, :created} =
              command_current(created.goal.id, "activate", %{approved_revision: 1})
@@ -1547,7 +1536,7 @@ defmodule SymmetryControl.GoalsTest do
     assert {:ok, created, :created} =
              Goals.create_goal(project.id, goal_attrs(), "operator:test", now: @now)
 
-    planned =
+    _planned =
       accept_plan!(
         created.goal.id,
         plan_proposal(created.goal.id, [
@@ -1578,7 +1567,8 @@ defmodule SymmetryControl.GoalsTest do
         ])
       )
 
-    assert Enum.map(planned.goal.work_items, & &1.repository_resource_id) |> Enum.sort() ==
+    assert Enum.map(fetch_goal!(created.goal.id).work_items, & &1.repository_resource_id)
+           |> Enum.sort() ==
              [consumer_repository.id, source_repository.id]
   end
 
@@ -1686,7 +1676,7 @@ defmodule SymmetryControl.GoalsTest do
                reason: "A producer result alone is not acceptance"
              })
 
-    assert {:error, :invalid_request} = command_current(goal.id, "achieve", %{})
+    assert {:error, {:invalid_contract, _}} = command_current(goal.id, "achieve", %{})
   end
 
   test "manual admission rejects caller-derived fields and binds its key to the command mutation" do
@@ -1711,7 +1701,7 @@ defmodule SymmetryControl.GoalsTest do
           {:reserved_microusd, "0"},
           {:admission_key, Ecto.UUID.generate()}
         ] do
-      assert {:error, :invalid_request} =
+      assert {:error, {:invalid_contract, _}} =
                command_current(
                  goal.id,
                  "admit_task",
@@ -1748,7 +1738,7 @@ defmodule SymmetryControl.GoalsTest do
              )
            ) == nil
 
-    assert {:error, :invalid_request} =
+    assert {:error, {:invalid_contract, _}} =
              command_current(
                goal.id,
                "admit_task",
@@ -1793,7 +1783,7 @@ defmodule SymmetryControl.GoalsTest do
     assert {:ok, %{"settlement" => "awaiting_validation"}} =
              Goals.settle_task(producer.id, producer_run.id, 1, now: @now)
 
-    assert {:error, :invalid_validation} =
+    assert {:error, {:invalid_contract, _}} =
              command_current(
                goal.id,
                "admit_task",
@@ -1877,7 +1867,7 @@ defmodule SymmetryControl.GoalsTest do
                now: @now
              )
 
-    assert {:error, :invalid_validation} =
+    assert {:error, :already_accepted} =
              command_current(
                goal.id,
                "admit_task",
@@ -1919,14 +1909,15 @@ defmodule SymmetryControl.GoalsTest do
              command_current(goal.id, "achieve", %{
                subject: evidence.subject,
                integration_work_item_id: item.id,
-               evidence_ids: [stored_evidence.id]
+               evidence_ids: [stored_evidence.id],
+               decision_id: nil
              })
 
-    assert {:error, :invalid_request} =
+    assert {:error, {:invalid_contract, _}} =
              command_current(goal.id, "request_decision", %{
                kind: "completion",
                work_item_id: item.id,
-               subject_hash: subject_hash,
+               subject_hash: evidence.subject_hash,
                question: "Accept one work item?",
                options: [
                  %{
@@ -1940,15 +1931,9 @@ defmodule SymmetryControl.GoalsTest do
     assert {:ok, completion_request, :created} =
              command_current(goal.id, "request_decision", %{
                kind: "completion",
-               subject_hash: subject_hash,
-               question: "Accept the validated Goal outcome?",
-               options: [
-                 %{
-                   "id" => "accept",
-                   "label" => "Accept",
-                   "consequence" => "Mark the Goal achieved"
-                 }
-               ]
+               work_item_id: nil,
+               subject_hash: evidence.subject_hash,
+               proposal: nil
              })
 
     decision_id = completion_request.response["decision"]["id"]
@@ -1984,7 +1969,7 @@ defmodule SymmetryControl.GoalsTest do
                decision_id: decision_id
              })
 
-    assert {:error, :invalid_request} =
+    assert {:error, {:invalid_contract, _}} =
              command_current(goal.id, "achieve", %{
                subject: evidence.subject,
                evidence_ids: [stored_evidence.id],
@@ -2108,7 +2093,7 @@ defmodule SymmetryControl.GoalsTest do
       "allowed_actions" => ["validate"],
       "allowed_model_profiles" => ["codex"],
       "allowed_runtime_ids" => [],
-      "budget_limit_microusd" => nil
+      "budget_limit_microusd" => 1_000_000
     }
 
     {goal, item, producer} =
@@ -2181,9 +2166,7 @@ defmodule SymmetryControl.GoalsTest do
     assert {:ok, completion, :created} =
              command_current(goal.id, "request_decision", %{
                kind: "completion",
-               subject_hash: subject_hash,
-               question: "Accept the Goal?",
-               options: [%{"id" => "accept", "label" => "Accept", "consequence" => "Finish"}]
+               subject_hash: subject_hash
              })
 
     completion_id = completion.response["decision"]["id"]
@@ -2204,7 +2187,7 @@ defmodule SymmetryControl.GoalsTest do
     assert {:ok, %{"settlement" => "awaiting_validation"}} =
              Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
 
-    assert {:ok, unscoped_review, :created} =
+    assert {:error, {:invalid_contract, _}} =
              command_current(goal.id, "request_decision", %{
                kind: "review",
                subject_hash: subject_hash,
@@ -2213,21 +2196,6 @@ defmodule SymmetryControl.GoalsTest do
                  %{"id" => "accept", "label" => "Accept", "consequence" => "Incorrect scope"}
                ]
              })
-
-    unscoped_review_id = unscoped_review.response["decision"]["id"]
-
-    assert {:ok, _resolved, :created} =
-             command_current(
-               goal.id,
-               "resolve_decision",
-               %{
-                 decision_id: unscoped_review_id,
-                 expected_decision_version:
-                   Repo.get!(SymmetryControl.Goals.GoalDecision, unscoped_review_id).lock_version,
-                 option_id: "accept"
-               },
-               now: DateTime.add(@now, 2, :second)
-             )
 
     assert {:ok, %{"settlement" => "awaiting_validation"}} =
              Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
@@ -3058,7 +3026,7 @@ defmodule SymmetryControl.GoalsTest do
     assert repair_receipt["settlement"] == "repair_required"
     assert repair_receipt["proposed_next_action"] == repair
     assert repair_receipt["proposed_next_action_status"] == "proposal_only"
-    assert repair_receipt["next_wake_at"] == nil
+    assert repair_receipt["next_wake_at"] == DateTime.to_iso8601(@now)
     assert Repo.aggregate(Task, :count) == tasks_before
 
     assert {:ok, admitted, :created} =
@@ -3627,6 +3595,7 @@ defmodule SymmetryControl.GoalsTest do
         execution_policy: %{
           "automatic_execution" => true,
           "max_parallel_tasks" => 1,
+          "max_task_admissions" => 2,
           "budget_limit_microusd" => 1_000_000,
           "allowed_actions" => ["implement", "validate"]
         }
@@ -3652,22 +3621,23 @@ defmodule SymmetryControl.GoalsTest do
     assert {:ok, %{"settlement" => "awaiting_validation"}} =
              Goals.settle_task(producer.id, producer_run.id, 1, now: @now)
 
-    assert {:ok,
-            [
-              %{
-                goal_id: goal_id,
-                disposition: :admitted,
-                task_id: validation_task_id,
-                work_item_id: work_item_id,
-                purpose: "validate"
-              }
-            ]} =
+    assert {:ok, reconciliations} =
              Goals.reconcile_due_goals(
                goal_ids: [goal.id],
                now: @now,
                rollout_enabled: true,
                validation_profiles: validation_profiles()
              )
+
+    assert [
+             %{
+               goal_id: goal_id,
+               disposition: :admitted,
+               task_id: validation_task_id,
+               work_item_id: work_item_id,
+               purpose: "validate"
+             }
+           ] = Enum.filter(reconciliations, &(&1.disposition == :admitted))
 
     assert goal_id == goal.id
     assert work_item_id == item.id
@@ -3677,7 +3647,7 @@ defmodule SymmetryControl.GoalsTest do
     assert validation.input["subject"] == candidate_subject
 
     assert {:ok, refreshed} = Goals.fetch_goal(goal.id)
-    assert refreshed.next_wake_at == DateTime.add(@now, 60, :second)
+    assert refreshed.next_wake_at == nil
 
     Repo.update_all(from(row in SymmetryControl.Goals.Goal, where: row.id == ^goal.id),
       set: [next_wake_at: @now]
@@ -3725,13 +3695,16 @@ defmodule SymmetryControl.GoalsTest do
 
     set_goal_due!(goal.id)
 
-    assert {:ok, [%{disposition: :admitted, task_id: continuation_task_id, purpose: "implement"}]} =
+    assert {:ok, reconciliations} =
              Goals.reconcile_due_goals(
                goal_ids: [goal.id],
                now: @now,
                rollout_enabled: true,
                validation_profiles: validation_profiles()
              )
+
+    assert [%{disposition: :admitted, task_id: continuation_task_id, purpose: "implement"}] =
+             Enum.filter(reconciliations, &(&1.disposition == :admitted))
 
     continuation = Repo.get!(Task, continuation_task_id)
     assert continuation.id != task.id
@@ -3757,6 +3730,7 @@ defmodule SymmetryControl.GoalsTest do
 
     automatic_policy = %{
       "automatic_execution" => true,
+      "budget_limit_microusd" => 1_000_000,
       "allowed_actions" => ["implement"],
       "allowed_resource_ids" => [repository.id]
     }
@@ -3783,21 +3757,24 @@ defmodule SymmetryControl.GoalsTest do
         }
       ])
 
-    planned = accept_plan!(created.goal.id, proposal)
-    [item] = planned.goal.work_items
+    _planned = accept_plan!(created.goal.id, proposal)
+    [item] = fetch_goal!(created.goal.id).work_items
 
     assert {:ok, _active, :created} =
              command_current(created.goal.id, "activate", %{approved_revision: 1})
 
     set_goal_due!(created.goal.id)
 
-    assert {:ok, [%{disposition: :admitted, purpose: "implement"}]} =
+    assert {:ok, reconciliations} =
              Goals.reconcile_due_goals(
                goal_ids: [created.goal.id],
                now: @now,
                rollout_enabled: true,
                validation_profiles: validation_profiles()
              )
+
+    assert [%{disposition: :admitted, purpose: "implement"}] =
+             Enum.filter(reconciliations, &(&1.disposition == :admitted))
 
     [task] = Repo.all(from(task in Task, where: task.goal_id == ^created.goal.id))
     assert task.state == "queued"
@@ -3876,7 +3853,11 @@ defmodule SymmetryControl.GoalsTest do
              )
 
     assert Enum.count(admissions, &(&1.disposition == :admitted)) == 3
-    assert Enum.all?(admissions, &(&1.purpose == "implement"))
+
+    assert Enum.all?(
+             Enum.filter(admissions, &(&1.disposition == :admitted)),
+             &(&1.purpose == "implement")
+           )
 
     assert Repo.aggregate(from(task in Task, where: task.goal_id == ^created.goal.id), :count) ==
              3
@@ -4116,12 +4097,12 @@ defmodule SymmetryControl.GoalsTest do
     {goal, [item]} = goal_with_items_fixture(policy)
     set_goal_due!(goal.id)
 
+    work_item_id = item.id
+
     assert {:ok,
             [
               %{
                 disposition: :deferred,
-                work_item_id: work_item_id,
-                purpose: "implement",
                 reason: "invalid_validation_profile",
                 next_wake_at: next_wake_at
               }
@@ -4133,7 +4114,6 @@ defmodule SymmetryControl.GoalsTest do
                validation_profiles: []
              )
 
-    assert work_item_id == item.id
     assert next_wake_at == DateTime.add(@now, 60, :second)
     assert Repo.aggregate(from(task in Task, where: task.goal_id == ^goal.id), :count) == 0
 
@@ -4157,13 +4137,16 @@ defmodule SymmetryControl.GoalsTest do
              )
            )
 
-    assert {:ok, [%{disposition: :admitted, work_item_id: ^work_item_id}]} =
+    assert {:ok, reconciliations} =
              Goals.reconcile_due_goals(
                goal_ids: [goal.id],
                now: next_wake_at,
                rollout_enabled: true,
                validation_profiles: validation_profiles()
              )
+
+    assert [%{disposition: :admitted, work_item_id: ^work_item_id}] =
+             Enum.filter(reconciliations, &(&1.disposition == :admitted))
   end
 
   test "automatic deferred receipts distinguish changing reasons for one candidate" do
@@ -4334,9 +4317,10 @@ defmodule SymmetryControl.GoalsTest do
         }
       ])
 
-    planned = accept_plan!(created.goal.id, proposal)
-    source_item = Enum.find(planned.goal.work_items, &(&1.title == "Source work"))
-    dependent_item = Enum.find(planned.goal.work_items, &(&1.title == "Dependent work"))
+    _planned = accept_plan!(created.goal.id, proposal)
+    current_goal = fetch_goal!(created.goal.id)
+    source_item = Enum.find(current_goal.work_items, &(&1.title == "Source work"))
+    dependent_item = Enum.find(current_goal.work_items, &(&1.title == "Dependent work"))
 
     candidate_subject = %{
       "resource_id" => repository.id,
@@ -4559,17 +4543,34 @@ defmodule SymmetryControl.GoalsTest do
   end
 
   test "a requested available session is claimed, then settlement quarantines its terminal run" do
-    {_goal, item, task, runtime, run, fence} = claimed_goal_run_fixture()
+    {goal, item, nil} = admitted_task_fixture("primary", check_contract(), %{}, false)
+    runtime = runtime_fixture()
+
+    Repo.update_all(
+      from(row in Runtime, where: row.id == ^runtime.id),
+      set: [capabilities: %{"adapter" => %{"operations" => %{"resume" => true}}}]
+    )
+
+    runtime = Repo.get!(Runtime, runtime.id)
     attrs = session_attrs(item, "workspace-requested")
     requested = available_session_fixture(runtime, item, attrs)
 
     unrelated =
       available_session_fixture(runtime, item, session_attrs(item, "workspace-unrelated"))
 
-    Repo.update_all(
-      from(row in Task, where: row.id == ^task.id),
-      set: [requested_session_id: requested.id]
-    )
+    assert {:ok, admission, :created} =
+             command_current(
+               goal.id,
+               "admit_task",
+               admission_payload(item, %{
+                 session_mode: "resume",
+                 requested_session_id: requested.id
+               }),
+               rollout_enabled: true
+             )
+
+    task = Repo.get!(Task, admission.response["task"]["id"])
+    {run, fence} = running_goal_run_fixture(task, runtime)
 
     assert {:ok, %{session: %{id: requested_id, state: "busy"}}, :created} =
              Goals.attach_harness_session(runtime.machine_id, run.id, fence, attrs, now: @now)
@@ -4589,21 +4590,18 @@ defmodule SymmetryControl.GoalsTest do
     assert %{state: "available", active_run_id: nil} = Repo.get!(HarnessSession, unrelated.id)
   end
 
-  test "resume without its requested session never creates a fresh session" do
-    {_goal, item, task, runtime, run, fence} = claimed_goal_run_fixture()
-
-    Repo.update_all(
-      from(row in Task, where: row.id == ^task.id),
-      set: [input: Map.put(task.input, "session_mode", "resume"), requested_session_id: nil]
-    )
+  test "resume admission without its requested session never creates a fresh session" do
+    {goal, item, nil} = admitted_task_fixture("primary", check_contract(), %{}, false)
 
     assert {:error, :requested_session_not_found} =
-             Goals.attach_harness_session(
-               runtime.machine_id,
-               run.id,
-               fence,
-               session_attrs(item, "workspace-resume"),
-               now: @now
+             command_current(
+               goal.id,
+               "admit_task",
+               admission_payload(item, %{
+                 session_mode: "resume",
+                 requested_session_id: Ecto.UUID.generate()
+               }),
+               rollout_enabled: true
              )
 
     assert Repo.aggregate(from(session in HarnessSession), :count) == 0
@@ -4613,7 +4611,7 @@ defmodule SymmetryControl.GoalsTest do
     {goal, item, task} = admitted_task_fixture()
     complete_task_and_release_reservation!(goal, task)
 
-    assert {:error, :requested_session_required} =
+    assert {:error, {:invalid_contract, _}} =
              command_current(
                goal.id,
                "admit_task",
@@ -4732,8 +4730,25 @@ defmodule SymmetryControl.GoalsTest do
              )
 
     second_task = Repo.get!(Task, second_admission.response["task"]["id"])
-    {second_run, _second_fence} = completed_goal_run_fixture(second_task, runtime)
-    replace_terminal_result!(second_task, second_run, task_result(second_task, "progress"))
+
+    Repo.update_all(from(task in Task, where: task.id == ^second_task.id),
+      set: [inserted_at: DateTime.add(@now, 1, :second)]
+    )
+
+    progressed_subject = %{
+      "resource_id" => item_repository_resource_id(item),
+      "commit" => String.duplicate("e", 40),
+      "tree_digest" => "sha256:" <> String.duplicate("f", 64)
+    }
+
+    {second_run, _second_fence} =
+      completed_goal_run_fixture(second_task, runtime, progressed_subject)
+
+    replace_terminal_result!(
+      second_task,
+      second_run,
+      task_result(second_task, "progress", %{"subject" => progressed_subject})
+    )
 
     assert {:ok, %{"settlement" => "progress"}} =
              Goals.settle_task(second_task.id, second_run.id, second_run.generation, now: @now)
@@ -5362,7 +5377,11 @@ defmodule SymmetryControl.GoalsTest do
   test "known usage from an earlier Run cannot settle another terminal Run without usage" do
     {goal, item, task, runtime, first_run, first_fence} =
       claimed_goal_run_fixture(check_contract(), nil, %{
-        execution_policy: %{"budget_mode" => "strict"}
+        execution_policy: %{
+          "budget_mode" => "strict",
+          "per_run_cost_limit_microusd" => 1,
+          "hard_cost_limit_required" => true
+        }
       })
 
     Repo.update_all(from(row in Task, where: row.id == ^task.id),
@@ -5486,7 +5505,11 @@ defmodule SymmetryControl.GoalsTest do
   test "an expired earlier Run without usage blocks strict resume while its Task retries" do
     {goal, _item, task, _runtime, run, _fence} =
       claimed_goal_run_fixture(check_contract(), nil, %{
-        execution_policy: %{"budget_mode" => "strict"}
+        execution_policy: %{
+          "budget_mode" => "strict",
+          "per_run_cost_limit_microusd" => 1,
+          "hard_cost_limit_required" => true
+        }
       })
 
     Repo.update_all(from(row in Task, where: row.id == ^task.id),
@@ -5604,9 +5627,13 @@ defmodule SymmetryControl.GoalsTest do
   end
 
   test "run context requires the current owning machine and returns a sanitized snapshot" do
-    {goal, item, task, runtime, run, fence} = claimed_goal_run_fixture()
+    {goal, item, admitted_task} = admitted_task_fixture()
 
-    snapshot = Repo.get!(SymmetryControl.Goals.ContextSnapshot, task.context_snapshot_id)
+    Repo.update_all(from(row in Task, where: row.id == ^admitted_task.id),
+      set: [state: "completed", updated_at: @now]
+    )
+
+    snapshot = Repo.get!(SymmetryControl.Goals.ContextSnapshot, admitted_task.context_snapshot_id)
 
     snapshot_id = Ecto.UUID.generate()
 
@@ -5632,7 +5659,7 @@ defmodule SymmetryControl.GoalsTest do
       %SymmetryControl.Goals.ContextSnapshot{id: snapshot_id}
       |> SymmetryControl.Goals.ContextSnapshot.changeset(%{
         goal_id: goal.id,
-        goal_revision: task.goal_revision,
+        goal_revision: admitted_task.goal_revision,
         work_item_id: item.id,
         schema_version: 1,
         content_hash: content_hash,
@@ -5640,13 +5667,38 @@ defmodule SymmetryControl.GoalsTest do
       })
       |> Repo.insert!()
 
-    Repo.update_all(
-      from(row in Task, where: row.id == ^task.id),
-      set: [
+    task_input =
+      admitted_task.input
+      |> Map.put("admission_id", Ecto.UUID.generate())
+      |> Map.put("context_snapshot_id", snapshot_id)
+      |> Map.put("context_hash", "sha256:" <> Base.encode16(content_hash, case: :lower))
+
+    task =
+      %Task{}
+      |> Task.changeset(%{
+        idempotency_key: Ecto.UUID.generate(),
+        request_hash: :crypto.strong_rand_bytes(32),
+        request_hash_version: admitted_task.request_hash_version,
+        work_item_id: item.id,
+        goal_id: goal.id,
+        goal_revision: admitted_task.goal_revision,
         context_snapshot_id: snapshot_id,
-        input: Map.put(task.input, "context_snapshot_id", snapshot_id)
-      ]
-    )
+        goal: admitted_task.goal,
+        agent_profile: admitted_task.agent_profile,
+        workspace: admitted_task.workspace,
+        input: task_input,
+        required_capabilities: admitted_task.required_capabilities,
+        state: "queued",
+        current_generation: 0,
+        attempt_generation: 1,
+        purpose: "implement",
+        admission_key: task_input["admission_id"],
+        max_run_attempts: admitted_task.max_run_attempts
+      })
+      |> Repo.insert!()
+
+    runtime = runtime_fixture()
+    {run, fence} = running_goal_run_fixture(task, runtime)
 
     assert {:ok, %{session: _}, :created} =
              Goals.attach_harness_session(
@@ -5696,13 +5748,7 @@ defmodule SymmetryControl.GoalsTest do
   end
 
   test "deterministic validation fetches claimed context without a retained harness session" do
-    {_goal, _item, task, runtime, run, fence} = claimed_goal_run_fixture()
-    producer = validation_producer_task_fixture(task)
-
-    Repo.update_all(
-      from(row in Task, where: row.id == ^task.id),
-      set: [purpose: "validate", validation_of_task_id: producer.id]
-    )
+    {_goal, _item, _task, runtime, run, fence} = validation_goal_run_fixture()
 
     assert {:ok, context} = Goals.fetch_run_context(runtime.machine_id, run.id, fence)
     assert context.run_id == run.id
@@ -5753,7 +5799,7 @@ defmodule SymmetryControl.GoalsTest do
     {goal, item, task} = admitted_task_fixture()
     Repo.update_all(from(row in Task, where: row.id == ^task.id), set: [state: "completed"])
 
-    assert {:error, :invalid_request} =
+    assert {:error, {:invalid_contract, _}} =
              command_current(
                goal.id,
                "admit_task",
@@ -5977,7 +6023,7 @@ defmodule SymmetryControl.GoalsTest do
       "max_parallel_tasks" => 2,
       "max_task_admissions" => 2,
       "max_run_attempts_per_task" => 2,
-      "budget_limit_microusd" => 100,
+      "budget_limit_microusd" => 120,
       "per_run_cost_limit_microusd" => 60,
       "budget_mode" => "strict",
       "hard_cost_limit_required" => true,
@@ -5990,7 +6036,7 @@ defmodule SymmetryControl.GoalsTest do
 
     {goal, [first_item, second_item]} = goal_with_items_fixture(strict_policy, 2)
 
-    assert {:error, :invalid_request} =
+    assert {:error, {:invalid_contract, _}} =
              command_current(
                goal.id,
                "admit_task",
@@ -6031,13 +6077,18 @@ defmodule SymmetryControl.GoalsTest do
 
     set_goal_due!(automatic_goal.id)
 
-    assert {:ok, [%{disposition: :admitted, purpose: "implement", task_id: task_id}]} =
+    assert {:ok, reconciliations} =
              Goals.reconcile_due_goals(
                goal_ids: [automatic_goal.id],
                now: @now,
                rollout_enabled: true,
                validation_profiles: validation_profiles()
              )
+
+    assert [%{disposition: :admitted, purpose: "implement", task_id: task_id}] =
+             Enum.filter(reconciliations, &(&1.disposition == :admitted))
+
+    assert [] = Enum.filter(reconciliations, &(&1.disposition == :blocked))
 
     automatic_task = Repo.get!(Task, task_id)
 
@@ -6171,7 +6222,7 @@ defmodule SymmetryControl.GoalsTest do
              command_current(
                goal.id,
                "admit_task",
-               %{work_item_id: item.id, purpose: "observe", model_profile: "codex"},
+               admission_payload(item, %{purpose: "observe"}),
                rollout_enabled: true
              )
   end
@@ -6226,13 +6277,16 @@ defmodule SymmetryControl.GoalsTest do
     assert {:ok, refreshed} = Goals.fetch_goal(goal.id)
     assert DateTime.compare(refreshed.next_wake_at, @now) == :eq
 
-    assert {:ok, [%{disposition: :admitted, purpose: "implement", task_id: repair_task_id}]} =
+    assert {:ok, reconciliations} =
              Goals.reconcile_due_goals(
                goal_ids: [goal.id],
                now: @now,
                rollout_enabled: true,
                validation_profiles: validation_profiles()
              )
+
+    assert [%{disposition: :admitted, purpose: "implement", task_id: repair_task_id}] =
+             Enum.filter(reconciliations, &(&1.disposition == :admitted))
 
     repair_task = Repo.get!(Task, repair_task_id)
     assert repair_task.id != source_task.id
@@ -6328,6 +6382,8 @@ defmodule SymmetryControl.GoalsTest do
   end
 
   defp optional_goal_work_item!(goal, source_item, title) do
+    source_item = Repo.get!(WorkItem, source_item.id)
+
     %WorkItem{id: Ecto.UUID.generate()}
     |> WorkItem.changeset(%{
       project_id: goal.project_id,
@@ -6429,7 +6485,7 @@ defmodule SymmetryControl.GoalsTest do
                option_id: "accept"
              })
 
-    assert {:ok, planned, :created} =
+    assert {:ok, _planned, :created} =
              command_current(
                goal_id,
                "accept_plan",
@@ -6443,7 +6499,7 @@ defmodule SymmetryControl.GoalsTest do
                rollout_enabled: true
              )
 
-    [item] = planned.goal.work_items
+    [item] = fetch_goal!(goal_id).work_items
 
     assert {:ok, _active, :created} =
              command_current(goal_id, "activate", %{approved_revision: 1})
@@ -6517,42 +6573,30 @@ defmodule SymmetryControl.GoalsTest do
          acceptance_contract \\ check_contract(),
          runtime_id \\ @validation_runtime_id
        ) do
-    {goal, item, task, runtime, run, fence} =
-      claimed_goal_run_fixture(acceptance_contract, runtime_id)
+    {goal, item, producer} = admitted_task_fixture("primary", acceptance_contract)
+    producer_runtime = runtime_fixture()
+    {producer_run, _producer_fence} = completed_goal_run_fixture(producer, producer_runtime)
 
-    producer = validation_producer_task_fixture(task)
+    assert {:ok, %{"settlement" => "awaiting_validation"}} =
+             Goals.settle_task(producer.id, producer_run.id, producer_run.generation, now: @now)
 
-    Repo.update_all(
-      from(row in Task, where: row.id == ^task.id),
-      set: [purpose: "validate", validation_of_task_id: producer.id]
-    )
+    assert {:ok, admission, :created} =
+             command_current(
+               goal.id,
+               "admit_task",
+               admission_payload(item, %{
+                 purpose: "validate",
+                 validation_of_task_id: producer.id,
+                 reserved_microusd: 0
+               }),
+               rollout_enabled: true
+             )
+
+    task = Repo.get!(Task, admission.response["task"]["id"])
+    runtime = runtime_fixture(runtime_id)
+    {run, fence} = running_goal_run_fixture(task, runtime)
 
     {goal, item, task, runtime, run, fence}
-  end
-
-  defp validation_producer_task_fixture(task) do
-    %Task{}
-    |> Task.changeset(%{
-      idempotency_key: "validation-producer:" <> Ecto.UUID.generate(),
-      request_hash: :crypto.hash(:sha256, Ecto.UUID.generate()),
-      request_hash_version: 2,
-      work_item_id: task.work_item_id,
-      goal_id: task.goal_id,
-      goal_revision: task.goal_revision,
-      context_snapshot_id: task.context_snapshot_id,
-      goal: task.goal,
-      agent_profile: task.agent_profile,
-      workspace: task.workspace,
-      input: task.input,
-      required_capabilities: task.required_capabilities,
-      state: "completed",
-      current_generation: 1,
-      attempt_generation: 1,
-      purpose: "implement",
-      admission_key: Ecto.UUID.generate(),
-      max_run_attempts: task.max_run_attempts
-    })
-    |> Repo.insert!()
   end
 
   defp completed_goal_run_fixture(task, runtime, candidate_subject \\ nil) do
@@ -6813,6 +6857,7 @@ defmodule SymmetryControl.GoalsTest do
   defp amended_revision_contract(objective) do
     goal_attrs()
     |> Map.fetch!(:initial_revision)
+    |> Map.drop([:reason])
     |> Map.put(:objective, objective)
   end
 
@@ -6832,7 +6877,10 @@ defmodule SymmetryControl.GoalsTest do
       %{
         work_item_id: item.id,
         purpose: "implement",
-        model_profile: "codex"
+        model_profile: "codex",
+        session_mode: "fresh",
+        requested_session_id: nil,
+        validation_of_task_id: nil
       },
       Map.drop(overrides, [:subject, :limits, :reserved_microusd, :admission_key])
     )
@@ -7029,6 +7077,11 @@ defmodule SymmetryControl.GoalsTest do
       "operator:test",
       Keyword.merge([now: @now], opts)
     )
+  end
+
+  defp fetch_goal!(goal_id) do
+    assert {:ok, goal} = Goals.fetch_goal(goal_id)
+    goal
   end
 
   defp plan_proposal(goal_id, items) do

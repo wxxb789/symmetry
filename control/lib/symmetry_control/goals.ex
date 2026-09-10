@@ -3187,7 +3187,11 @@ defmodule SymmetryControl.Goals do
     external_wait_wake_at =
       if goal.state == "active", do: external_wait_wake_at(goal, current), else: nil
 
-    earliest_future_wake(next_wake_at, external_wait_wake_at, current)
+    if next_wake_at == current do
+      current
+    else
+      earliest_future_wake(next_wake_at, external_wait_wake_at, current)
+    end
   end
 
   defp external_wait_wake_at(_goal, _current), do: nil
