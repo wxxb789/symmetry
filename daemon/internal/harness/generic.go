@@ -75,6 +75,7 @@ func (adapter *GenericAdapter) Probe(ctx context.Context) (Capabilities, error) 
 	}
 	capabilities := Capabilities{
 		Kind:                  KindGeneric,
+		NativeVersion:         "generic-v1",
 		ImplementationVersion: "generic-v1",
 		ProtocolVersion:       1,
 		VersionKnown:          true,
