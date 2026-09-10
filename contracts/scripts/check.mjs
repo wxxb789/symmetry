@@ -212,6 +212,7 @@ const validateGoalRevisionContractSemantics = (fixtureId, revision) => {
   validateAcceptancePredicateIDs(fixtureId, revision.acceptance_contract);
   if (
     revision.execution_policy.final_acceptance === "deterministic" &&
+    revision.authority_policy.operator_required_for_completion !== true &&
     revision.acceptance_contract.predicates.some(
       (predicate) => predicate.kind !== "check" && predicate.kind !== "artifact"
     )

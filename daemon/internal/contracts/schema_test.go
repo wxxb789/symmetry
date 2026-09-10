@@ -51,6 +51,62 @@ func TestDecodePreservesNullableMicrousdFields(t *testing.T) {
 	}
 }
 
+func TestGoalRevisionOperatorFenceOverridesDeterministicPredicateRestriction(t *testing.T) {
+	for name, test := range map[string]struct {
+		envelope Envelope
+		fixture  string
+		wantErr  bool
+	}{
+		"goal revision permits review when completion requires an operator": {
+			envelope: EnvelopeGoalRevision,
+			fixture:  "valid/goal-revision.deterministic-operator-override.json",
+		},
+		"goal create permits review when completion requires an operator": {
+			envelope: EnvelopeGoalCreate,
+			fixture:  "valid/goal-create.deterministic-operator-override.json",
+		},
+		"goal amendment permits review when completion requires an operator": {
+			envelope: EnvelopeGoalCommand,
+			fixture:  "valid/goal-command.amend-deterministic-operator-override.json",
+		},
+		"deterministic revision still rejects review without an operator fence": {
+			envelope: EnvelopeGoalRevision,
+			fixture:  "invalid/goal-revision.deterministic-review.json",
+			wantErr:  true,
+		},
+		"goal create still rejects review without an operator fence": {
+			envelope: EnvelopeGoalCreate,
+			fixture:  "invalid/goal-create.deterministic-review.json",
+			wantErr:  true,
+		},
+		"goal amendment still rejects review without an operator fence": {
+			envelope: EnvelopeGoalCommand,
+			fixture:  "invalid/goal-command.amend-deterministic-review.json",
+			wantErr:  true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := Validate(test.envelope, readContractFixture(t, test.fixture))
+			if test.wantErr && err == nil {
+				t.Fatal("Validate accepted a non-machine deterministic acceptance contract")
+			}
+			if !test.wantErr && err != nil {
+				t.Fatalf("Validate rejected an operator-fenced contract: %v", err)
+			}
+		})
+	}
+}
+
+func TestContextSnapshotRejectsDuplicateAcceptancePredicateIDs(t *testing.T) {
+	err := Validate(
+		EnvelopeContextSnapshot,
+		readContractFixture(t, "invalid/context-snapshot.duplicate-predicate-id.json"),
+	)
+	if err == nil || !strings.Contains(err.Error(), "duplicate acceptance predicate id") {
+		t.Fatalf("Validate accepted duplicate ContextSnapshot predicate IDs: %v", err)
+	}
+}
+
 func TestValidateRejectsTrailingJSON(t *testing.T) {
 	data := append(readContractFixture(t, "valid/admission.basic.json"), []byte(" null")...)
 	if err := Validate(EnvelopeAdmission, data); err == nil {

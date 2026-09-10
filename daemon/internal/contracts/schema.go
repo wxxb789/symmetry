@@ -76,6 +76,10 @@ func Validate(envelope Envelope, data []byte) error {
 		if err := validateProviderScope(instance); err != nil {
 			return fmt.Errorf("validate %s provider_scope: %w", envelope, err)
 		}
+	case EnvelopeContextSnapshot:
+		if err := validateContextSnapshotPredicateIDs(instance); err != nil {
+			return fmt.Errorf("validate %s predicate IDs: %w", envelope, err)
+		}
 	case EnvelopeGoalCreate:
 		if err := validateGoalCreatePredicateIDs(instance); err != nil {
 			return fmt.Errorf("validate %s predicate IDs: %w", envelope, err)
@@ -468,6 +472,18 @@ func validateGoalCreatePredicateIDs(value any) error {
 	return validateGoalRevisionContractSemantics(revision)
 }
 
+func validateContextSnapshotPredicateIDs(value any) error {
+	root, ok := value.(map[string]any)
+	if !ok {
+		return fmt.Errorf("context snapshot must be an object")
+	}
+	workContract, ok := root["work_contract"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("work_contract must be an object")
+	}
+	return validateAcceptancePredicateIDs(workContract["acceptance"])
+}
+
 func validateGoalCommandPredicateIDs(value any) error {
 	root, ok := value.(map[string]any)
 	if !ok {
@@ -574,7 +590,11 @@ func validateGoalRevisionContractSemantics(value any) error {
 	if !ok {
 		return fmt.Errorf("execution_policy must be an object")
 	}
-	if executionPolicy["final_acceptance"] != "deterministic" {
+	authorityPolicy, ok := revision["authority_policy"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("authority_policy must be an object")
+	}
+	if executionPolicy["final_acceptance"] != "deterministic" || authorityPolicy["operator_required_for_completion"] == true {
 		return nil
 	}
 	predicates, ok := acceptance["predicates"].([]any)

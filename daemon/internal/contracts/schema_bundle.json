@@ -189,6 +189,7 @@
             "uniqueItems": true
           },
           "operator_required_for_completion": {
+            "$comment": "This stricter fence overrides execution_policy.final_acceptance=deterministic. Machine-only predicates are required only when this is false and final_acceptance is deterministic.",
             "type": "boolean"
           },
           "operator_required_for_scope_change": {
@@ -1907,6 +1908,7 @@
             "uniqueItems": true
           },
           "operator_required_for_completion": {
+            "$comment": "This stricter fence overrides execution_policy.final_acceptance=deterministic. Machine-only predicates are required only when this is false and final_acceptance is deterministic.",
             "type": "boolean"
           },
           "operator_required_for_scope_change": {
@@ -3685,6 +3687,7 @@
             "uniqueItems": true
           },
           "operator_required_for_completion": {
+            "$comment": "This stricter fence overrides execution_policy.final_acceptance=deterministic. Machine-only predicates are required only when this is false and final_acceptance is deterministic.",
             "type": "boolean"
           },
           "operator_required_for_scope_change": {
@@ -5430,6 +5433,7 @@
             "uniqueItems": true
           },
           "operator_required_for_completion": {
+            "$comment": "This stricter fence overrides execution_policy.final_acceptance=deterministic. Machine-only predicates are required only when this is false and final_acceptance is deterministic.",
             "type": "boolean"
           },
           "operator_required_for_scope_change": {
@@ -7187,6 +7191,7 @@
             "uniqueItems": true
           },
           "operator_required_for_completion": {
+            "$comment": "This stricter fence overrides execution_policy.final_acceptance=deterministic. Machine-only predicates are required only when this is false and final_acceptance is deterministic.",
             "type": "boolean"
           },
           "operator_required_for_scope_change": {
@@ -9129,6 +9134,7 @@
             "uniqueItems": true
           },
           "operator_required_for_completion": {
+            "$comment": "This stricter fence overrides execution_policy.final_acceptance=deterministic. Machine-only predicates are required only when this is false and final_acceptance is deterministic.",
             "type": "boolean"
           },
           "operator_required_for_scope_change": {
@@ -11522,6 +11528,7 @@
             "uniqueItems": true
           },
           "operator_required_for_completion": {
+            "$comment": "This stricter fence overrides execution_policy.final_acceptance=deterministic. Machine-only predicates are required only when this is false and final_acceptance is deterministic.",
             "type": "boolean"
           },
           "operator_required_for_scope_change": {
@@ -13145,6 +13152,7 @@
             "uniqueItems": true
           },
           "operator_required_for_completion": {
+            "$comment": "This stricter fence overrides execution_policy.final_acceptance=deterministic. Machine-only predicates are required only when this is false and final_acceptance is deterministic.",
             "type": "boolean"
           },
           "operator_required_for_scope_change": {
@@ -14804,6 +14812,7 @@
             "uniqueItems": true
           },
           "operator_required_for_completion": {
+            "$comment": "This stricter fence overrides execution_policy.final_acceptance=deterministic. Machine-only predicates are required only when this is false and final_acceptance is deterministic.",
             "type": "boolean"
           },
           "operator_required_for_scope_change": {
@@ -16406,6 +16415,7 @@
             "uniqueItems": true
           },
           "operator_required_for_completion": {
+            "$comment": "This stricter fence overrides execution_policy.final_acceptance=deterministic. Machine-only predicates are required only when this is false and final_acceptance is deterministic.",
             "type": "boolean"
           },
           "operator_required_for_scope_change": {
@@ -18181,6 +18191,7 @@
             "uniqueItems": true
           },
           "operator_required_for_completion": {
+            "$comment": "This stricter fence overrides execution_policy.final_acceptance=deterministic. Machine-only predicates are required only when this is false and final_acceptance is deterministic.",
             "type": "boolean"
           },
           "operator_required_for_scope_change": {

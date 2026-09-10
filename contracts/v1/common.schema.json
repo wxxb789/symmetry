@@ -153,7 +153,10 @@
       ],
       "properties": {
         "operator_required_for_scope_change": {"type": "boolean"},
-        "operator_required_for_completion": {"type": "boolean"},
+        "operator_required_for_completion": {
+          "$comment": "This stricter fence overrides execution_policy.final_acceptance=deterministic. Machine-only predicates are required only when this is false and final_acceptance is deterministic.",
+          "type": "boolean"
+        },
         "publication_allowed": {"type": "boolean"},
         "allowed_actions": {
           "type": "array",

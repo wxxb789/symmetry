@@ -64,6 +64,13 @@ session UUID. Handoff is a request to reconstruct a new native session from the
 immutable snapshot and reachable artifact; it never carries or transfers a raw
 native session handle.
 
+`authority_policy.operator_required_for_completion` is a stricter fence than
+`execution_policy.final_acceptance`. When it is `true`, final acceptance is
+operator-authorized even if `final_acceptance` is `"deterministic"`; review and
+operator-acceptance predicates remain valid in that case. Machine-only
+predicates are required only when the effective final-acceptance authority is
+deterministic.
+
 Generated TypeScript DTOs live under `generated/ts`; generated Go DTOs and the
 embedded schema bundle live under `daemon/internal/contracts`. They are not
 runtime validators and must not be edited by hand. Generated Go discriminated

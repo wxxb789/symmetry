@@ -499,6 +499,13 @@
       "tags": ["goal-command", "deterministic-acceptance", "semantic-consistency"]
     },
     {
+      "id": "goal-create.deterministic-operator-override",
+      "schema": "goal-create",
+      "path": "valid/goal-create.deterministic-operator-override.json",
+      "valid": true,
+      "tags": ["goal-command", "deterministic-acceptance", "operator-acceptance-override"]
+    },
+    {
       "id": "plan-proposal.basic",
       "schema": "plan-proposal",
       "path": "valid/plan-proposal.basic.json",
@@ -555,6 +562,13 @@
       "schema_valid": true,
       "semantic_valid": false,
       "tags": ["goal-command", "deterministic-acceptance", "semantic-consistency"]
+    },
+    {
+      "id": "goal-command.amend-deterministic-operator-override",
+      "schema": "goal-command",
+      "path": "valid/goal-command.amend-deterministic-operator-override.json",
+      "valid": true,
+      "tags": ["goal-command", "deterministic-acceptance", "operator-acceptance-override"]
     },
     {
       "id": "goal-command.accept-plan",
@@ -925,6 +939,13 @@
       "path": "valid/goal-revision.deterministic-machine-only.json",
       "valid": true,
       "tags": ["deterministic-acceptance", "machine-predicate"]
+    },
+    {
+      "id": "goal-revision.deterministic-operator-override",
+      "schema": "goal-revision",
+      "path": "valid/goal-revision.deterministic-operator-override.json",
+      "valid": true,
+      "tags": ["deterministic-acceptance", "operator-acceptance-override"]
     },
     {
       "id": "goal-revision.deterministic-review",
