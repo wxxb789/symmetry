@@ -80,12 +80,13 @@ func TestNativeCloseFailurePropagatesRetentionPersistenceError(t *testing.T) {
 	saveAttachedGoalSession(t, store, key, admission, sessionKey)
 	failure := errors.New("native child stop failed")
 	retentionFailure := errors.New("retention persistence failed")
-	active := &runningRun{goalSession: &sessionKey}
+	session := &closeFailureGoalSession{err: failure}
+	active := &runningRun{nativeSession: session, goalSession: &sessionKey}
 	daemon := &daemon{
 		store: store, running: map[state.RunKey]*runningRun{key: active},
 		options: options{clock: time.Now, retainWorkspace: func(state.RunKey) (state.RunJournal, error) { return state.RunJournal{}, retentionFailure }},
 	}
-	err = daemon.closeNativeGoalSession(key, active, &closeFailureGoalSession{err: failure})
+	err = daemon.closeNativeGoalSession(key, active, session)
 	if !errors.Is(err, failure) || !errors.Is(err, retentionFailure) {
 		t.Fatalf("close failure errors = %v, want native and retention errors", err)
 	}
