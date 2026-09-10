@@ -780,7 +780,8 @@ defmodule SymmetryControl.Goals do
       session.machine_id == machine_id and session.runtime_id == runtime.id and
         session.id == run.harness_session_id and run.harness_binding_id == attrs.binding_id and
         session.local_handle_id == attrs.local_handle_id and
-        session.binding_id == attrs.binding_id and session.state == "unavailable" and
+        session.binding_id == attrs.binding_id and session.binding_verified and
+        session.state == "unavailable" and
         is_nil(session.active_run_id)
 
     unless stoppable?, do: rollback(:ownership_lost)
@@ -830,6 +831,7 @@ defmodule SymmetryControl.Goals do
 
   defp session_matches?(session, attrs, run_id, runtime_id, repository_resource_id) do
     session.local_handle_id == attrs.local_handle_id and session.binding_id == attrs.binding_id and
+      session.binding_verified and
       session.active_run_id == run_id and
       session.state == "busy" and session.runtime_id == runtime_id and
       session.repository_resource_id == repository_resource_id and
@@ -865,6 +867,7 @@ defmodule SymmetryControl.Goals do
           harness_version: runtime.harness_version,
           adapter_version: runtime.adapter_version,
           binding_id: attrs.binding_id,
+          binding_verified: true,
           state: "busy",
           active_run_id: run.id
         })
@@ -914,6 +917,9 @@ defmodule SymmetryControl.Goals do
          session_mode,
          opts
        ) do
+    if session_mode == "resume" and not session.binding_verified,
+      do: rollback(:requested_session_unavailable)
+
     compatible? =
       session.machine_id == machine_id and session.runtime_id == runtime.id and
         session.repository_resource_id == task_repository_resource_id!(task, item) and
@@ -921,7 +927,7 @@ defmodule SymmetryControl.Goals do
         session.harness_kind == attrs.harness_kind and
         session.harness_version == attrs.harness_version and
         session.adapter_version == attrs.adapter_version and
-        session.workspace_fingerprint == attrs.workspace_fingerprint
+        session.workspace_fingerprint == attrs.workspace_fingerprint and session.binding_verified
 
     unless compatible?, do: rollback(:idempotency_conflict)
 

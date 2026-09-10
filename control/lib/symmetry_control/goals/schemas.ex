@@ -501,6 +501,7 @@ defmodule SymmetryControl.Goals.HarnessSession do
     field(:adapter_version, :string)
     field(:local_handle_id, Ecto.UUID)
     field(:binding_id, Ecto.UUID)
+    field(:binding_verified, :boolean, default: false)
     field(:workspace_fingerprint, :string)
     field(:state, :string, default: "available")
     field(:lock_version, :integer, default: 1)
@@ -519,6 +520,7 @@ defmodule SymmetryControl.Goals.HarnessSession do
       :adapter_version,
       :local_handle_id,
       :binding_id,
+      :binding_verified,
       :workspace_fingerprint,
       :state,
       :active_run_id
@@ -532,6 +534,7 @@ defmodule SymmetryControl.Goals.HarnessSession do
       :adapter_version,
       :local_handle_id,
       :binding_id,
+      :binding_verified,
       :workspace_fingerprint,
       :state
     ])
@@ -583,14 +586,14 @@ defmodule SymmetryControl.Goals.HarnessSessionStopReceipt do
   import Ecto.Changeset
 
   alias SymmetryControl.Goals.HarnessSession
-  alias SymmetryControl.Orchestration.{Machine, Run}
+  alias SymmetryControl.Orchestration.Run
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
   schema "harness_session_stop_receipts" do
     belongs_to(:session, HarnessSession)
     belongs_to(:run, Run)
-    belongs_to(:machine, Machine)
+    field(:machine_id, Ecto.UUID)
     field(:binding_id, Ecto.UUID)
     field(:request_hash, :binary)
     field(:response, :map)
@@ -613,7 +616,6 @@ defmodule SymmetryControl.Goals.HarnessSessionStopReceipt do
     |> validate_response()
     |> assoc_constraint(:session)
     |> assoc_constraint(:run)
-    |> assoc_constraint(:machine)
     |> unique_constraint([:session_id, :binding_id],
       name: :harness_session_stop_receipts_session_id_binding_id_key
     )

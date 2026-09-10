@@ -508,6 +508,7 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
               repository_resource_id: get_in(item, [:baseline, :subject, "resource_id"]),
               local_handle_id: attrs.local_handle_id,
               binding_id: Ecto.UUID.generate(),
+              binding_verified: true,
               harness_kind: attrs.harness_kind,
               harness_version: attrs.harness_version,
               adapter_version: attrs.adapter_version,

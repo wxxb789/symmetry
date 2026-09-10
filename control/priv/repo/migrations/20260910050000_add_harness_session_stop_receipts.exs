@@ -19,7 +19,12 @@ defmodule SymmetryControl.Repo.Migrations.AddHarnessSessionStopReceipts do
 
     alter table(:harness_sessions) do
       modify :binding_id, :binary_id, null: false
+      add :binding_verified, :boolean, null: false, default: false
     end
+
+    # Legacy sessions lack a daemon-held attachment binding. They may complete
+    # cleanup, but must not be reserved, resumed, or released by a stop receipt.
+    execute("UPDATE harness_sessions SET state = 'unavailable' WHERE state = 'available'")
 
     alter table(:runs) do
       add :harness_binding_id, :binary_id
@@ -58,13 +63,7 @@ defmodule SymmetryControl.Repo.Migrations.AddHarnessSessionStopReceipts do
           ),
           null: false
 
-      add :machine_id,
-          references(:machines,
-            type: :binary_id,
-            on_delete: :restrict,
-            name: :harness_session_stop_receipts_machine_id_fkey
-          ),
-          null: false
+      add :machine_id, :binary_id, null: false
 
       add :binding_id, :binary_id, null: false
       add :request_hash, :binary, null: false
@@ -122,18 +121,23 @@ defmodule SymmetryControl.Repo.Migrations.AddHarnessSessionStopReceipts do
     end
 
     alter table(:harness_sessions) do
+      remove :binding_verified
       remove :binding_id
     end
   end
 
   defp refuse_receipt_history_rollback! do
-    execute("""
-    LOCK TABLE harness_sessions, harness_session_stop_receipts IN SHARE MODE;
+    execute("LOCK TABLE harness_sessions, harness_session_stop_receipts IN SHARE MODE")
 
+    execute("""
     DO $$
     BEGIN
       IF EXISTS (SELECT 1 FROM harness_session_stop_receipts)
-         OR EXISTS (SELECT 1 FROM harness_sessions WHERE state <> 'closed') THEN
+         OR EXISTS (
+           SELECT 1
+           FROM harness_sessions
+           WHERE state <> 'closed' OR binding_verified = TRUE
+         ) THEN
         RAISE EXCEPTION
           'cannot roll back harness session stop receipts while durable session state exists';
       END IF;
@@ -149,13 +153,25 @@ defmodule SymmetryControl.Repo.Migrations.AddHarnessSessionStopReceipts do
     LANGUAGE plpgsql
     AS $$
     BEGIN
-      IF NEW.binding_id IS DISTINCT FROM OLD.binding_id
-         AND NOT (
-           OLD.state = 'available'
-           AND OLD.active_run_id IS NULL
-           AND NEW.state = 'busy'
-           AND NEW.active_run_id IS NOT NULL
-         ) THEN
+      IF NEW.binding_verified IS DISTINCT FROM OLD.binding_verified THEN
+        RAISE EXCEPTION 'goal_0006_harness_session_binding_verification_immutable';
+      END IF;
+
+      IF NEW.state = 'busy' AND NEW.binding_verified IS DISTINCT FROM TRUE THEN
+        RAISE EXCEPTION 'goal_0006_harness_session_binding_unverified';
+      END IF;
+
+      IF OLD.binding_verified IS DISTINCT FROM TRUE
+         AND NEW.binding_id IS DISTINCT FROM OLD.binding_id THEN
+        RAISE EXCEPTION 'goal_0006_harness_session_binding_rotation_invalid';
+      ELSIF OLD.state = 'available'
+         AND OLD.active_run_id IS NULL
+         AND NEW.state = 'busy'
+         AND NEW.active_run_id IS NOT NULL THEN
+        IF NEW.binding_id IS NOT DISTINCT FROM OLD.binding_id THEN
+          RAISE EXCEPTION 'goal_0006_harness_session_binding_rotation_invalid';
+        END IF;
+      ELSIF NEW.binding_id IS DISTINCT FROM OLD.binding_id THEN
         RAISE EXCEPTION 'goal_0006_harness_session_binding_rotation_invalid';
       END IF;
 
@@ -166,7 +182,7 @@ defmodule SymmetryControl.Repo.Migrations.AddHarnessSessionStopReceipts do
 
     execute("""
     CREATE TRIGGER harness_sessions_binding_rotation_guard
-    BEFORE UPDATE OF binding_id ON harness_sessions
+    BEFORE UPDATE OF binding_id, binding_verified, state, active_run_id ON harness_sessions
     FOR EACH ROW EXECUTE FUNCTION goal_0006_validate_harness_session_binding_rotation()
     """)
 
@@ -175,13 +191,36 @@ defmodule SymmetryControl.Repo.Migrations.AddHarnessSessionStopReceipts do
     RETURNS trigger
     LANGUAGE plpgsql
     AS $$
+    DECLARE
+      session_binding_id uuid;
+      session_binding_verified boolean;
+      session_state text;
+      session_active_run_id uuid;
     BEGIN
-      IF OLD.harness_session_id IS NOT NULL
+      IF TG_OP = 'UPDATE'
+         AND OLD.harness_session_id IS NOT NULL
          AND (
            NEW.harness_session_id IS DISTINCT FROM OLD.harness_session_id
            OR NEW.harness_binding_id IS DISTINCT FROM OLD.harness_binding_id
          ) THEN
         RAISE EXCEPTION 'goal_0006_run_harness_attachment_binding_immutable';
+      END IF;
+
+      IF NEW.harness_session_id IS NOT NULL
+         AND (TG_OP = 'INSERT' OR OLD.harness_session_id IS NULL) THEN
+        SELECT binding_id, binding_verified, state, active_run_id
+        INTO session_binding_id, session_binding_verified, session_state, session_active_run_id
+        FROM harness_sessions
+        WHERE id = NEW.harness_session_id
+        FOR KEY SHARE;
+
+        IF NOT FOUND
+           OR session_binding_verified IS DISTINCT FROM TRUE
+           OR session_state IS DISTINCT FROM 'busy'
+           OR session_active_run_id IS DISTINCT FROM NEW.id
+           OR session_binding_id IS DISTINCT FROM NEW.harness_binding_id THEN
+          RAISE EXCEPTION 'goal_0006_run_harness_attachment_binding_invalid';
+        END IF;
       END IF;
 
       RETURN NEW;
@@ -191,7 +230,7 @@ defmodule SymmetryControl.Repo.Migrations.AddHarnessSessionStopReceipts do
 
     execute("""
     CREATE TRIGGER runs_harness_attachment_binding_guard
-    BEFORE UPDATE OF harness_session_id, harness_binding_id ON runs
+    BEFORE INSERT OR UPDATE ON runs
     FOR EACH ROW EXECUTE FUNCTION goal_0006_freeze_run_harness_attachment_binding()
     """)
   end
@@ -205,18 +244,22 @@ defmodule SymmetryControl.Repo.Migrations.AddHarnessSessionStopReceipts do
     DECLARE
       session_machine_id uuid;
       session_binding_id uuid;
+      session_binding_verified boolean;
+      session_local_handle_id uuid;
       session_state text;
       session_active_run_id uuid;
       run_session_id uuid;
       run_binding_id uuid;
       run_state text;
+      response_session jsonb;
     BEGIN
-      IF TG_OP = 'UPDATE' THEN
+      IF TG_OP <> 'INSERT' THEN
         RAISE EXCEPTION 'goal_0006_harness_session_stop_receipt_immutable';
       END IF;
 
-      SELECT machine_id, binding_id, state, active_run_id
-      INTO session_machine_id, session_binding_id, session_state, session_active_run_id
+      SELECT machine_id, binding_id, binding_verified, local_handle_id, state, active_run_id
+      INTO session_machine_id, session_binding_id, session_binding_verified, session_local_handle_id,
+           session_state, session_active_run_id
       FROM harness_sessions
       WHERE id = NEW.session_id
       FOR KEY SHARE;
@@ -227,15 +270,29 @@ defmodule SymmetryControl.Repo.Migrations.AddHarnessSessionStopReceipts do
       WHERE id = NEW.run_id
       FOR KEY SHARE;
 
+      response_session := NEW.response -> 'session_stopped';
+
       IF NOT FOUND
          OR session_machine_id IS DISTINCT FROM NEW.machine_id
          OR session_binding_id IS DISTINCT FROM NEW.binding_id
+         OR session_binding_verified IS DISTINCT FROM TRUE
          OR session_state IS DISTINCT FROM 'unavailable'
          OR session_active_run_id IS NOT NULL
          OR run_session_id IS DISTINCT FROM NEW.session_id
          OR run_binding_id IS DISTINCT FROM NEW.binding_id
          OR run_state NOT IN ('completed', 'failed', 'cancelled', 'expired') THEN
         RAISE EXCEPTION 'goal_0006_harness_session_stop_receipt_identity';
+      END IF;
+
+      IF jsonb_typeof(response_session) IS DISTINCT FROM 'object'
+         OR response_session ->> 'receipt_id' IS DISTINCT FROM NEW.id::text
+         OR response_session ->> 'run_id' IS DISTINCT FROM NEW.run_id::text
+         OR response_session ->> 'session_id' IS DISTINCT FROM NEW.session_id::text
+         OR response_session ->> 'local_handle_id' IS DISTINCT FROM session_local_handle_id::text
+         OR response_session ->> 'binding_id' IS DISTINCT FROM NEW.binding_id::text
+         OR response_session ->> 'state' IS DISTINCT FROM 'available'
+         OR response_session -> 'active_run_id' IS DISTINCT FROM 'null'::jsonb THEN
+        RAISE EXCEPTION 'goal_0006_harness_session_stop_receipt_response';
       END IF;
 
       RETURN NEW;
@@ -245,7 +302,7 @@ defmodule SymmetryControl.Repo.Migrations.AddHarnessSessionStopReceipts do
 
     execute("""
     CREATE TRIGGER harness_session_stop_receipts_identity_guard
-    BEFORE INSERT OR UPDATE ON harness_session_stop_receipts
+    BEFORE INSERT OR UPDATE OR DELETE ON harness_session_stop_receipts
     FOR EACH ROW EXECUTE FUNCTION goal_0006_validate_harness_session_stop_receipt()
     """)
   end

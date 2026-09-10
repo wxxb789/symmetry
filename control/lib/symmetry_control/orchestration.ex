@@ -1385,7 +1385,7 @@ defmodule SymmetryControl.Orchestration do
         on: runtime.id == session.runtime_id,
         where:
           session.id == ^task.requested_session_id and session.state == "available" and
-            is_nil(session.active_run_id) and
+            session.binding_verified == true and is_nil(session.active_run_id) and
             session.repository_resource_id == ^repository_resource_id and
             session.machine_id == runtime.machine_id and
             session.harness_kind == runtime.harness_kind and
@@ -1438,7 +1438,8 @@ defmodule SymmetryControl.Orchestration do
         from session in HarnessSession,
           where:
             session.id == ^task.requested_session_id and session.runtime_id == ^runtime.id and
-              session.machine_id == ^runtime.machine_id and session.state == "available" and
+              session.machine_id == ^runtime.machine_id and session.binding_verified == true and
+              session.state == "available" and
               is_nil(session.active_run_id) and
               session.repository_resource_id == ^repository_resource_id and
               session.harness_kind == ^runtime.harness_kind and
@@ -3594,6 +3595,7 @@ defmodule SymmetryControl.Orchestration do
           where:
             session.id == ^task.requested_session_id and session.runtime_id == ^runtime.id and
               session.machine_id == ^runtime.machine_id and session.state == "busy" and
+              session.binding_verified == true and
               session.active_run_id == ^run.id and
               session.repository_resource_id == ^repository_resource_id and
               session.harness_kind == ^runtime.harness_kind and

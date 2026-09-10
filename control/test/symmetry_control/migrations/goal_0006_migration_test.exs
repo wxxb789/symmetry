@@ -2142,12 +2142,29 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
     with_schema(fn ->
       migrate_goal_up!()
 
-      %{machine_id: machine_id, runtime_id: runtime_id, session_id: session_id} =
+      %{
+        machine_id: machine_id,
+        runtime_id: runtime_id,
+        resource_id: resource_id,
+        session_id: session_id
+      } =
         insert_harness_session_fixture!()
 
       task_id = insert_legacy_task!("Stop receipt migration")
       run_id = Ecto.UUID.bingenerate()
+      historical_task_id = insert_legacy_task!("Historical attachment binding")
+      historical_run_id = Ecto.UUID.bingenerate()
       insert_harness_run!(run_id, task_id, runtime_id, session_id, 1, "completed")
+
+      insert_harness_run!(
+        historical_run_id,
+        historical_task_id,
+        runtime_id,
+        session_id,
+        1,
+        "completed"
+      )
+
       migrate_session_stop_receipt_up!()
 
       assert %{rows: [[session_binding_id]]} =
@@ -2156,17 +2173,40 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
                ])
 
       assert is_binary(session_binding_id)
+      {:ok, session_binding} = Ecto.UUID.dump(session_binding_id)
+
+      assert %{rows: [[false]]} =
+               Repo.query!("SELECT binding_verified FROM harness_sessions WHERE id = $1", [
+                 session_id
+               ])
 
       assert %{rows: [[run_binding_id]]} =
                Repo.query!("SELECT harness_binding_id::text FROM runs WHERE id = $1", [run_id])
 
       assert run_binding_id == session_binding_id
 
+      assert %{rows: [[1]]} =
+               Repo.query!(
+                 "SELECT count(DISTINCT harness_binding_id) FROM runs WHERE id IN ($1, $2)",
+                 [run_id, historical_run_id]
+               )
+
+      assert_raise Postgrex.Error,
+                   ~r/cannot roll back harness session stop receipts while durable session state exists/i,
+                   &migrate_session_stop_receipt_down!/0
+
       assert_raise Postgrex.Error, ~r/goal_0006_harness_session_binding_rotation_invalid/i, fn ->
         Repo.query!("UPDATE harness_sessions SET binding_id = $1 WHERE id = $2", [
           Ecto.UUID.bingenerate(),
           session_id
         ])
+      end
+
+      assert_raise Postgrex.Error, ~r/goal_0006_harness_session_binding_unverified/i, fn ->
+        Repo.query!(
+          "UPDATE harness_sessions SET state = 'busy', active_run_id = $1 WHERE id = $2",
+          [run_id, session_id]
+        )
       end
 
       assert_raise Postgrex.Error, ~r/goal_0006_run_harness_attachment_binding_immutable/i, fn ->
@@ -2176,10 +2216,97 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
         ])
       end
 
-      Repo.query!("UPDATE harness_sessions SET state = 'unavailable' WHERE id = $1", [session_id])
-
       receipt_id = Ecto.UUID.bingenerate()
-      response = Jason.encode!(%{"session_stopped" => %{"state" => "available"}})
+      legacy_response = Jason.encode!(%{"session_stopped" => %{"state" => "available"}})
+
+      assert_raise Postgrex.Error, ~r/goal_0006_harness_session_stop_receipt_identity/i, fn ->
+        Repo.query!(
+          """
+          INSERT INTO harness_session_stop_receipts (
+            id, session_id, run_id, machine_id, binding_id, request_hash, response, inserted_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7::text::jsonb, now())
+          """,
+          [receipt_id, session_id, run_id, machine_id, session_binding, hash(19), legacy_response]
+        )
+      end
+
+      trusted_session_id = Ecto.UUID.bingenerate()
+      trusted_initial_binding_id = Ecto.UUID.bingenerate()
+      trusted_binding_id = Ecto.UUID.bingenerate()
+      trusted_local_handle_id = Ecto.UUID.bingenerate()
+      trusted_task_id = insert_legacy_task!("Verified stop receipt migration")
+      trusted_run_id = Ecto.UUID.bingenerate()
+
+      Repo.query!(
+        """
+        INSERT INTO harness_sessions (
+          id, machine_id, runtime_id, harness_kind, harness_version, adapter_version,
+          local_handle_id, repository_resource_id, workspace_fingerprint, binding_id,
+          binding_verified, state, inserted_at, updated_at
+        )
+        VALUES ($1, $2, $3, 'codex', '1.0.0', 'adapter-1', $4, $5, 'trusted-fingerprint', $6,
+                TRUE, 'available', now(), now())
+        """,
+        [
+          trusted_session_id,
+          machine_id,
+          runtime_id,
+          trusted_local_handle_id,
+          resource_id,
+          trusted_initial_binding_id
+        ]
+      )
+
+      Repo.query!(
+        """
+        INSERT INTO runs (
+          id, task_id, runtime_id, generation, state, assigned_at, assignment_expires_at,
+          inserted_at, updated_at
+        )
+        VALUES ($1, $2, $3, 1, 'completed', now(), now(), now(), now())
+        """,
+        [trusted_run_id, trusted_task_id, runtime_id]
+      )
+
+      assert_raise Postgrex.Error, ~r/goal_0006_run_harness_attachment_binding_invalid/i, fn ->
+        Repo.query!(
+          "UPDATE runs SET harness_session_id = $1, harness_binding_id = $2 WHERE id = $3",
+          [trusted_session_id, Ecto.UUID.bingenerate(), trusted_run_id]
+        )
+      end
+
+      Repo.query!(
+        """
+        UPDATE harness_sessions
+        SET state = 'busy', active_run_id = $1, binding_id = $2
+        WHERE id = $3
+        """,
+        [trusted_run_id, trusted_binding_id, trusted_session_id]
+      )
+
+      Repo.query!(
+        "UPDATE runs SET harness_session_id = $1, harness_binding_id = $2 WHERE id = $3",
+        [trusted_session_id, trusted_binding_id, trusted_run_id]
+      )
+
+      Repo.query!(
+        "UPDATE harness_sessions SET state = 'unavailable', active_run_id = NULL WHERE id = $1",
+        [trusted_session_id]
+      )
+
+      response =
+        Jason.encode!(%{
+          "session_stopped" => %{
+            "receipt_id" => Ecto.UUID.load!(receipt_id),
+            "run_id" => Ecto.UUID.load!(trusted_run_id),
+            "session_id" => Ecto.UUID.load!(trusted_session_id),
+            "local_handle_id" => Ecto.UUID.load!(trusted_local_handle_id),
+            "binding_id" => Ecto.UUID.load!(trusted_binding_id),
+            "state" => "available",
+            "active_run_id" => nil
+          }
+        })
 
       Repo.query!(
         """
@@ -2188,12 +2315,39 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7::text::jsonb, now())
         """,
-        [receipt_id, session_id, run_id, machine_id, session_binding_id, hash(19), response]
+        [
+          receipt_id,
+          trusted_session_id,
+          trusted_run_id,
+          machine_id,
+          trusted_binding_id,
+          hash(20),
+          response
+        ]
       )
+
+      assert_raise Postgrex.Error, ~r/goal_0006_harness_session_stop_receipt_immutable/i, fn ->
+        Repo.query!("DELETE FROM harness_session_stop_receipts WHERE id = $1", [receipt_id])
+      end
 
       assert_raise Postgrex.Error,
                    ~r/harness_session_stop_receipts_session_id_binding_id_key/i,
                    fn ->
+                     duplicate_receipt_id = Ecto.UUID.bingenerate()
+
+                     duplicate_response =
+                       Jason.encode!(%{
+                         "session_stopped" => %{
+                           "receipt_id" => Ecto.UUID.load!(duplicate_receipt_id),
+                           "run_id" => Ecto.UUID.load!(trusted_run_id),
+                           "session_id" => Ecto.UUID.load!(trusted_session_id),
+                           "local_handle_id" => Ecto.UUID.load!(trusted_local_handle_id),
+                           "binding_id" => Ecto.UUID.load!(trusted_binding_id),
+                           "state" => "available",
+                           "active_run_id" => nil
+                         }
+                       })
+
                      Repo.query!(
                        """
                        INSERT INTO harness_session_stop_receipts (
@@ -2202,20 +2356,47 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
                        VALUES ($1, $2, $3, $4, $5, $6, $7::text::jsonb, now())
                        """,
                        [
-                         Ecto.UUID.bingenerate(),
-                         session_id,
-                         run_id,
+                         duplicate_receipt_id,
+                         trusted_session_id,
+                         trusted_run_id,
                          machine_id,
-                         session_binding_id,
-                         hash(20),
-                         response
+                         trusted_binding_id,
+                         hash(21),
+                         duplicate_response
                        ]
                      )
                    end
 
       assert_raise Postgrex.Error,
-                   ~r/cannot roll back harness session stop receipts while durable receipt history exists/i,
+                   ~r/cannot roll back harness session stop receipts while durable session state exists/i,
                    &migrate_session_stop_receipt_down!/0
+    end)
+  end
+
+  test "rolls back stop receipt storage only after every legacy session is closed" do
+    with_schema(fn ->
+      migrate_goal_up!()
+      %{session_id: session_id} = insert_harness_session_fixture!()
+
+      Repo.query!("UPDATE harness_sessions SET state = 'closed' WHERE id = $1", [session_id])
+      migrate_session_stop_receipt_up!()
+
+      assert %{rows: [[false, "closed"]]} =
+               Repo.query!(
+                 "SELECT binding_verified, state FROM harness_sessions WHERE id = $1",
+                 [session_id]
+               )
+
+      migrate_session_stop_receipt_down!()
+
+      assert %{rows: [[0]]} =
+               Repo.query!("""
+               SELECT count(*)
+               FROM information_schema.columns
+               WHERE table_schema = current_schema()
+                 AND table_name = 'harness_sessions'
+                 AND column_name IN ('binding_id', 'binding_verified')
+               """)
     end)
   end
 
@@ -3793,7 +3974,12 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
       [session_id, machine_id, runtime_id, Ecto.UUID.bingenerate(), resource_id]
     )
 
-    %{machine_id: machine_id, runtime_id: runtime_id, session_id: session_id}
+    %{
+      machine_id: machine_id,
+      runtime_id: runtime_id,
+      resource_id: resource_id,
+      session_id: session_id
+    }
   end
 
   defp insert_harness_run!(run_id, task_id, runtime_id, session_id, generation, state) do

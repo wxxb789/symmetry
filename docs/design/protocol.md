@@ -123,6 +123,15 @@ do not hand off. A fresh fallback requires a new admission against the same
 preserved artifact and fresh snapshot. An in-flight Task is never silently
 switched to another model/harness.
 
+Retained-session attachment uses a server-generated opaque `binding_id`. The
+scheduler rotates it while atomically reserving the exact session for a new
+Run, persists the same value on that Run, and includes it in assignment and
+claim delivery. The daemon persists and echoes that value on attach and later
+stop delivery; it must not generate a replacement. A session becomes available
+for resume only after a machine-authenticated, exact-fence stop receipt proves
+the preceding native execution stopped. Legacy sessions without this durable
+binding provenance remain unsupported for resume.
+
 Capabilities use a versioned `adapter` object containing kind, native_version,
 implementation_version,
 protocol_version and `operations`:
@@ -228,11 +237,18 @@ secrets/raw private evidence in errors.
 
 Machine-only additions:
 `PUT /api/v1/runs/:id/session` (fenced attach),
+`PUT /api/v1/runs/:id/session/stopped` (fenced retained-session stop receipt),
 `POST /api/v1/runs/:id/evidence` (fenced idempotent batch),
 `POST /api/v1/runs/:id/usage` (normal fence or limited late-accounting rule in data.md),
 `GET /api/v1/runs/:id/context` (owning machine, current claimed fence).
 No machine credential can call operator goal commands. Evidence IDs derive from
 daemon journal identity and are persisted before transmission.
+The stop body contains only `session_id`, `local_handle_id` and `binding_id`
+beside the existing fence; run_id is path-authoritative and machine_id is
+credential-authoritative. It is accepted only after the exact Run is terminal
+and its session is unavailable. First delivery returns 201, exact lost-ack
+replay returns the stored 200 receipt, and stale or changed attachment identity
+cannot alter a later session cycle.
 
 ## Context assembly and handoff
 

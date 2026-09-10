@@ -1145,6 +1145,24 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     assert 0 == Repo.aggregate(from(run in Run, where: run.task_id == ^task.id), :count)
   end
 
+  test "Goal resume ignores a legacy session without verified binding provenance" do
+    retained_runtime = register_runtime("resume-unverified", resume?: true)
+
+    {task, _goal_id} =
+      insert_goal_task(
+        max_run_attempts: 2,
+        retained_runtime: retained_runtime,
+        retained_session_binding_verified: false
+      )
+
+    assert %{binding_verified: false, state: "available"} =
+             Repo.get!(HarnessSession, task.requested_session_id)
+
+    assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
+    assert %{state: "queued", current_generation: 0} = Repo.get!(Task, task.id)
+    assert 0 == Repo.aggregate(from(run in Run, where: run.task_id == ^task.id), :count)
+  end
+
   test "Goal handoff selects a same-machine runtime with handoff support without reserving a session" do
     {source_task, _goal_id} = insert_goal_task(max_run_attempts: 2)
     source_item = Repo.get!(WorkItem, source_task.work_item_id)
@@ -2044,6 +2062,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
                    adapter_version: retained_runtime.adapter_version,
                    local_handle_id: Ecto.UUID.generate(),
                    binding_id: Ecto.UUID.generate(),
+                   binding_verified: Keyword.get(opts, :retained_session_binding_verified, true),
                    workspace_fingerprint: "workspace:#{retained_runtime.id}",
                    state: Keyword.get(opts, :retained_session_state, "available")
                  })

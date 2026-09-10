@@ -13,7 +13,7 @@ versioned payload data; identity, ownership, state and dedup keys stay relationa
 | --- | --- |
 | `work_items` | nullable `goal_id uuid`; `admitted_revision integer`; `required boolean DEFAULT true`; `integration boolean NOT NULL DEFAULT false`; `acceptance_contract jsonb`; nullable immutable `baseline_subject jsonb` or `baseline_dependency_id uuid`; nullable immutable `change_target jsonb`; goal-less items retain current behavior |
 | `tasks` | nullable `work_item_id uuid`, `goal_id uuid`, `goal_revision integer`, `context_snapshot_id uuid`; `purpose text DEFAULT 'implement'`; nullable `validation_of_task_id uuid`; `admission_key uuid`; `max_run_attempts integer` for goal tasks; nullable `requested_session_id uuid`; nullable immutable `handoff_source_run_id uuid` |
-| `runs` | nullable `harness_session_id uuid`; native result/evidence remain associated with the original execution fence |
+| `runs` | nullable `harness_session_id uuid` paired with immutable `harness_binding_id uuid`; native result/evidence remain associated with the original execution fence |
 | `runtimes` | `harness_kind text`, `harness_version text`, `adapter_version text`, `adapter_protocol_version integer`, nullable `repository_resource_id uuid`; explicit capabilities described in protocol.md |
 
 For goal-owned WorkItems, goal_id/admitted_revision/acceptance_contract are all
@@ -149,14 +149,29 @@ No raw transcripts, secrets or machine-local session filenames.
 
 id, machine_id FK, runtime_id FK, harness_kind text, harness_version text,
 adapter_version text, local_handle_id uuid, repository_resource_id FK,
-workspace_fingerprint text, state text (`available|busy|unavailable|closed`),
+workspace_fingerprint text, attachment `binding_id uuid`, immutable
+`binding_verified boolean`, state text (`available|busy|unavailable|closed`),
 active_run_id nullable FK, lock_version, timestamps.
 Unique `(machine_id,local_handle_id)`; unique active_run_id when present.
 CHECK busy iff active_run_id IS NOT NULL. Runtime ownership must match machine
 using composite FK. Raw native IDs and filesystem locations live in the daemon
-journal behind local_handle_id. Session claim is conditional on available and
-the matching machine/workspace; atomic with Run attachment. A closed/unavailable
-session does not prevent a fresh-session handoff.
+journal behind local_handle_id. A verified session claim is conditional on
+available and matching machine/workspace; reservation atomically rotates
+binding_id and records the same immutable value in the Run before dispatch.
+The daemon can only attach with that value. `binding_verified` is true only for
+a session created through the fenced attachment protocol; migrated legacy
+sessions remain false and may finish cleanup but cannot resume or release. A
+closed/unavailable session does not prevent a fresh-session handoff.
+
+### `harness_session_stop_receipts`
+
+id, session_id FK, run_id FK, machine_id, binding_id uuid, request_hash
+bytea(32), response jsonb, inserted_at. Unique `(session_id,binding_id)`.
+Rows are append-only and require the exact terminal Run, machine, verified
+session, local handle, binding and prior `unavailable` state. The transaction
+inserts the receipt and changes that exact session to available together.
+Exact replay returns its stored response; a different request for the same
+binding conflicts. A stale binding cannot release a later reservation.
 
 ### `run_evidence`
 
