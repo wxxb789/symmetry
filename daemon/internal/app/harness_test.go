@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -650,6 +652,958 @@ func TestResumeAdmissionPersistsCanonicalRejectionReason(t *testing.T) {
 	}
 	if failure["reason"] != string(protocol.TaskResultReasonResumeRejected) {
 		t.Fatalf("resume failure payload = %#v, want canonical reason", failure)
+	}
+}
+
+func TestPiResumeAdmissionRequiresVerifiedResumeCapabilityBeforeSideEffects(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	controlSessionID := "00000000-0000-4000-8000-000000000090"
+	resumeBindingID := "00000000-0000-4000-8000-000000000091"
+	admission.SessionMode = protocol.SessionModeResume
+	admission.RequestedSessionID = &controlSessionID
+	capabilities := verifiedNativeCapabilities(harness.KindPi)
+	capabilities.NativeVersion = pi.TestedVersion
+	app, store, session, controlClient := nativeAdmissionDaemonForHarness(t, admission, validNativeTaskResult(t, admission), nil, harness.KindPi, config.RuntimeHarnessPi, capabilities)
+	defer store.Close()
+	controlClient.harnessSessionID = &controlSessionID
+	controlClient.harnessBindingID = &resumeBindingID
+
+	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-resume", Generation: 2, Work: controlClient.work})
+	app.workers.Wait()
+	if len(session.calls) != 0 || len(controlClient.calls) != 0 || app.workspace.(*fakeWorkspace).prepareCalls != 0 || app.workspace.(*fakeWorkspace).recoverCalls != 0 {
+		t.Fatalf("unverified pi resume crossed a side-effect boundary: native=%#v control=%#v workspace=%#v", session.calls, controlClient.calls, app.workspace)
+	}
+	run, err := store.LoadJournal(state.RunKey{RunID: "run-resume", Generation: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(run.PendingTransitions) != 1 || !strings.Contains(string(run.PendingTransitions[0].Payload), string(protocol.TaskResultReasonResumeRejected)) {
+		t.Fatalf("unverified pi resume terminal = %#v", run)
+	}
+}
+
+func TestPiFreshAndHandoffRejectInvalidRPCProfileBeforeNativeLaunch(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		mode    protocol.SessionMode
+		handoff bool
+	}{
+		{name: "fresh", mode: protocol.SessionModeFresh},
+		{name: "handoff", mode: protocol.SessionModeHandoff, handoff: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			admission, present, err := parseAdmissionInput(validAdmissionInput())
+			if err != nil || !present {
+				t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+			}
+			admission.SessionMode = test.mode
+			if test.handoff {
+				sourceRunID := "00000000-0000-4000-8000-000000000099"
+				admission.HandoffSourceRunID = &sourceRunID
+			}
+			capabilities := verifiedNativeCapabilities(harness.KindPi)
+			capabilities.NativeVersion = pi.TestedVersion
+			capabilities.Handoff = test.handoff
+			app, store, session, controlClient := nativeAdmissionDaemonForHarness(t, admission, validNativeTaskResult(t, admission), nil, harness.KindPi, config.RuntimeHarnessPi, capabilities)
+			defer store.Close()
+			profile := app.config.AgentProfiles[app.config.Runtime.AgentProfile]
+			profile.Args = []string{"--session", "forbidden.jsonl"}
+			app.config.AgentProfiles[app.config.Runtime.AgentProfile] = profile
+
+			app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
+			app.workers.Wait()
+			if len(session.calls) != 0 || len(controlClient.calls) != 0 || app.workspace.(*fakeWorkspace).prepareCalls != 0 {
+				t.Fatalf("invalid pi argv crossed a native/control/workspace boundary: native=%#v control=%#v workspace=%#v", session.calls, controlClient.calls, app.workspace)
+			}
+			sessions, err := store.ListGoalSessions()
+			if err != nil || len(sessions) != 0 {
+				t.Fatalf("invalid pi argv persisted a Goal session: %#v, error=%v", sessions, err)
+			}
+		})
+	}
+}
+
+func TestPiResumeAdmissionReusesRetainedNativeSessionAndWorkspace(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	controlSessionID := "00000000-0000-4000-8000-000000000090"
+	resumeBindingID := "00000000-0000-4000-8000-000000000091"
+	admission.SessionMode = protocol.SessionModeResume
+	admission.RequestedSessionID = &controlSessionID
+	capabilities := verifiedNativeCapabilities(harness.KindPi)
+	capabilities.NativeVersion = pi.TestedVersion
+	capabilities.Resume = true
+	app, store, session, controlClient := nativeAdmissionDaemonForHarness(t, admission, validNativeTaskResult(t, admission), nil, harness.KindPi, config.RuntimeHarnessPi, capabilities)
+	defer store.Close()
+
+	nativeFile := filepath.Join(t.TempDir(), "retained-session.jsonl")
+	if err := os.WriteFile(nativeFile, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := saveAvailablePiGoalSession(t, store, admission, controlSessionID, nativeFile, capabilities)
+	session.handle = harness.NativeSessionHandle{ID: source.NativeSessionID, Filename: source.NativeSessionFilename}
+	controlClient.harnessSessionID = &controlSessionID
+	controlClient.harnessBindingID = &resumeBindingID
+	controlClient.attachSessionID = controlSessionID
+
+	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-resume", Generation: 2, Work: controlClient.work})
+	app.workers.Wait()
+
+	if session.request.Resume == nil || *session.request.Resume != (harness.ResumeHandle{
+		LocalHandleID: source.LocalHandleID, NativeSessionID: source.NativeSessionID, NativeSessionFilename: source.NativeSessionFilename,
+		WorkspaceFingerprint: source.WorkspaceFingerprint, NativeVersion: source.HarnessVersion,
+	}) {
+		t.Fatalf("resume request = %#v, want retained native handle", session.request.Resume)
+	}
+	if session.request.LocalHandleID != source.LocalHandleID || session.request.Workspace != source.WorkspacePath {
+		t.Fatalf("resume started a different local session or workspace: %#v", session.request)
+	}
+	workspaceService := app.workspace.(*fakeWorkspace)
+	if workspaceService.prepareCalls != 0 || workspaceService.recoverCalls != 1 || workspaceService.recoveredRun != (workspace.RunRef{RunID: "run-source", Generation: 7}) || workspaceService.recoveredPath != source.WorkspacePath {
+		t.Fatalf("resume workspace recovery = %#v", workspaceService)
+	}
+	sessions, err := store.ListGoalSessions()
+	if err != nil || len(sessions) != 1 {
+		t.Fatalf("retained Goal sessions = %#v, error = %v", sessions, err)
+	}
+	if sessions[0].Key() != source.Key() || sessions[0].RunID != "run-resume" || sessions[0].Generation != 2 ||
+		sessions[0].BindingID != resumeBindingID || sessions[0].SessionMode != state.GoalSessionModeResume ||
+		sessions[0].ControlSessionID != controlSessionID || sessions[0].NativeSessionID != source.NativeSessionID ||
+		sessions[0].NativeSessionFilename != source.NativeSessionFilename {
+		t.Fatalf("resumed Goal session journal = %#v", sessions[0])
+	}
+	calls := append([]string(nil), session.calls...)
+	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-resume", Generation: 2, Work: controlClient.work})
+	app.workers.Wait()
+	if !sameStrings(session.calls, calls) {
+		t.Fatalf("resume assignment replay started another native session: before=%#v after=%#v", calls, session.calls)
+	}
+}
+
+func TestPiResumeAdmissionRejectsIncompatibleOrUnavailableRetainedSessionBeforeNativeStart(t *testing.T) {
+	for _, test := range []struct {
+		name                string
+		sourceNativeVersion string
+		mutate              func(*daemon, *state.GoalSessionJournal, string)
+	}{
+		{name: "machine", mutate: func(app *daemon, _ *state.GoalSessionJournal, _ string) { app.machineID = "machine-2" }},
+		{name: "native version", sourceNativeVersion: "0.0.0", mutate: func(_ *daemon, _ *state.GoalSessionJournal, _ string) {}},
+		{name: "missing retained file", mutate: func(_ *daemon, _ *state.GoalSessionJournal, file string) { _ = os.Remove(file) }},
+		{name: "workspace fingerprint", mutate: func(_ *daemon, _ *state.GoalSessionJournal, _ string) {
+			workspaceFingerprint = func(context.Context, workspace.Prepared) (string, error) {
+				return "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", nil
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			admission, present, err := parseAdmissionInput(validAdmissionInput())
+			if err != nil || !present {
+				t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+			}
+			controlSessionID := "00000000-0000-4000-8000-000000000090"
+			resumeBindingID := "00000000-0000-4000-8000-000000000091"
+			admission.SessionMode = protocol.SessionModeResume
+			admission.RequestedSessionID = &controlSessionID
+			capabilities := verifiedNativeCapabilities(harness.KindPi)
+			capabilities.NativeVersion = pi.TestedVersion
+			capabilities.Resume = true
+			app, store, session, controlClient := nativeAdmissionDaemonForHarness(t, admission, validNativeTaskResult(t, admission), nil, harness.KindPi, config.RuntimeHarnessPi, capabilities)
+			defer store.Close()
+			nativeFile := filepath.Join(t.TempDir(), "retained-session.jsonl")
+			if err := os.WriteFile(nativeFile, []byte("{}\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			sourceCapabilities := capabilities
+			if test.sourceNativeVersion != "" {
+				sourceCapabilities.NativeVersion = test.sourceNativeVersion
+			}
+			source := saveAvailablePiGoalSession(t, store, admission, controlSessionID, nativeFile, sourceCapabilities)
+			controlClient.harnessSessionID = &controlSessionID
+			controlClient.harnessBindingID = &resumeBindingID
+			controlClient.attachSessionID = controlSessionID
+			test.mutate(app, &source, nativeFile)
+
+			app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-resume", Generation: 2, Work: controlClient.work})
+			app.workers.Wait()
+			if len(session.calls) != 0 || len(controlClient.calls) != 0 {
+				t.Fatalf("rejected resume crossed native/control start boundary: native=%#v control=%#v", session.calls, controlClient.calls)
+			}
+			run, err := store.LoadJournal(state.RunKey{RunID: "run-resume", Generation: 2})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(run.PendingTransitions) != 1 || !strings.Contains(string(run.PendingTransitions[0].Payload), string(protocol.TaskResultReasonResumeRejected)) {
+				t.Fatalf("rejected resume terminal = %#v", run)
+			}
+		})
+	}
+}
+
+func TestRecoveryCompensatesReboundPiSessionBeforeNativeStart(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	controlSessionID := "00000000-0000-4000-8000-000000000090"
+	resumeBindingID := "00000000-0000-4000-8000-000000000091"
+	admission.SessionMode = protocol.SessionModeResume
+	admission.RequestedSessionID = &controlSessionID
+	capabilities := verifiedNativeCapabilities(harness.KindPi)
+	capabilities.NativeVersion = pi.TestedVersion
+	capabilities.Resume = true
+	store, key := claimedStore(t)
+	defer store.Close()
+	nativeFile := filepath.Join(t.TempDir(), "retained-session.jsonl")
+	if err := os.WriteFile(nativeFile, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := saveAvailablePiGoalSession(t, store, admission, controlSessionID, nativeFile, capabilities)
+	if _, err := store.QueueGoalSessionAttach(key, state.GoalSessionAttachDelivery{
+		GoalID: admission.GoalID, LocalHandleID: source.LocalHandleID, BindingID: resumeBindingID,
+		HarnessKind: string(harness.KindPi), HarnessVersion: capabilities.NativeVersion, AdapterVersion: capabilities.ImplementationVersion,
+		WorkspaceFingerprint: source.WorkspaceFingerprint, Workspace: "local", RepositoryResourceID: &admission.Subject.ResourceID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RebindGoalSessionForResume(source.Key(), state.GoalSessionResumeRebind{
+		RunID: key.RunID, Generation: key.Generation, TaskID: "task-1", AdmissionID: admission.AdmissionID, BindingID: resumeBindingID,
+		ExactStopCertificate: *source.StopCertificate,
+		Compatibility: state.GoalSessionCompatibility{
+			MachineID: "machine-1", RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: string(harness.KindPi),
+			HarnessVersion: capabilities.NativeVersion, AdapterVersion: capabilities.ImplementationVersion, AdapterProtocolVersion: capabilities.ProtocolVersion,
+			WorkspaceFingerprint: source.WorkspaceFingerprint, RepositoryResourceID: admission.Subject.ResourceID,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	client := &nativeAdmissionControl{fakeControl: &fakeControl{}, admission: admission, attachSessionID: controlSessionID}
+	app := &daemon{
+		config: testConfig(t), store: store, control: client, workspace: &fakeWorkspace{}, options: options{newID: ids(), clock: time.Now},
+		runtimeID: "runtime-1", runtimeEpoch: 1, running: make(map[state.RunKey]*runningRun), slots: make(chan struct{}, 1),
+	}
+	if err := app.recoverUnclosedGoalSessions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := client.calls, []string{"attach"}; !sameStrings(got, want) {
+		t.Fatalf("pre-start resume recovery control calls = %#v, want %#v", got, want)
+	}
+	recovered, err := store.LoadGoalSession(source.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.SessionState != state.GoalSessionStateUnavailable || recovered.ControlSessionID != controlSessionID || recovered.BindingID != resumeBindingID || recovered.NativeSessionID != source.NativeSessionID || recovered.StopCertificate != nil {
+		t.Fatalf("pre-start resume recovery session = %#v", recovered)
+	}
+	run, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(run.PendingGoalDeliveries) != 1 || run.PendingGoalDeliveries[0].Kind != state.GoalDeliverySessionStopped || len(run.PendingTransitions) != 1 || !strings.Contains(string(run.PendingTransitions[0].Payload), string(protocol.TaskResultReasonUnknownOutcome)) {
+		t.Fatalf("pre-start resume recovery run = %#v", run)
+	}
+}
+
+func TestRecoveryCompletesPreStartPiCompensationAfterSecondCrash(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	controlSessionID := "00000000-0000-4000-8000-000000000090"
+	resumeBindingID := "00000000-0000-4000-8000-000000000091"
+	admission.SessionMode = protocol.SessionModeResume
+	admission.RequestedSessionID = &controlSessionID
+	capabilities := verifiedNativeCapabilities(harness.KindPi)
+	capabilities.NativeVersion = pi.TestedVersion
+	capabilities.Resume = true
+	store, key := claimedStore(t)
+	defer store.Close()
+	nativeFile := filepath.Join(t.TempDir(), "retained-session.jsonl")
+	if err := os.WriteFile(nativeFile, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := saveAvailablePiGoalSession(t, store, admission, controlSessionID, nativeFile, capabilities)
+	if _, err := store.QueueGoalSessionAttach(key, state.GoalSessionAttachDelivery{
+		GoalID: admission.GoalID, LocalHandleID: source.LocalHandleID, BindingID: resumeBindingID,
+		HarnessKind: string(harness.KindPi), HarnessVersion: capabilities.NativeVersion, AdapterVersion: capabilities.ImplementationVersion,
+		WorkspaceFingerprint: source.WorkspaceFingerprint, Workspace: "local", RepositoryResourceID: &admission.Subject.ResourceID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rebindAvailablePiGoalSession(t, store, source, key, admission, resumeBindingID, capabilities)
+	if _, err := store.MarkGoalSessionAttachDeliveryReady(key, source.LocalHandleID); err != nil {
+		t.Fatal(err)
+	}
+	client := &nativeAdmissionControl{fakeControl: &fakeControl{}, admission: admission, attachSessionID: controlSessionID}
+	app := &daemon{config: testConfig(t), store: store, control: client, workspace: &fakeWorkspace{}, options: options{newID: ids(), clock: time.Now}, runtimeID: "runtime-1", runtimeEpoch: 1, running: make(map[state.RunKey]*runningRun), slots: make(chan struct{}, 1)}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// First recovery has made the delivery ready and Control has accepted it,
+	// but crashes before closing ResumeStartPending or recording the stop.
+	if _, receipt, err := app.deliverGoalDelivery(context.Background(), journal, state.GoalDeliverySessionAttach, source.LocalHandleID, nil); err != nil || receipt == nil {
+		t.Fatalf("first recovery attach = receipt:%#v error:%v", receipt, err)
+	}
+	halfway, err := store.LoadGoalSession(source.Key())
+	if err != nil || !halfway.ResumeStartPending || !halfway.HasVerifiedControlAttachment() || halfway.SessionState != state.GoalSessionStateBusy {
+		t.Fatalf("first recovery durable phase = %#v, error=%v", halfway, err)
+	}
+	if err := app.recoverUnclosedGoalSessions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := store.LoadGoalSession(source.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.ResumeStartPending || completed.SessionState != state.GoalSessionStateUnavailable || completed.StopCertificate != nil || completed.NativeSessionID != source.NativeSessionID {
+		t.Fatalf("second recovery did not complete pre-start compensation: %#v", completed)
+	}
+	updated, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated.PendingGoalDeliveries) != 1 || updated.PendingGoalDeliveries[0].Kind != state.GoalDeliverySessionStopped || len(updated.PendingTransitions) != 1 {
+		t.Fatalf("second recovery did not queue exact stop and terminal: %#v", updated)
+	}
+}
+
+func TestRecoveryPreservesPiResumeRejectedReasonAfterRestart(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	controlSessionID := "00000000-0000-4000-8000-000000000090"
+	resumeBindingID := "00000000-0000-4000-8000-000000000091"
+	admission.SessionMode = protocol.SessionModeResume
+	admission.RequestedSessionID = &controlSessionID
+	capabilities := verifiedNativeCapabilities(harness.KindPi)
+	capabilities.NativeVersion = pi.TestedVersion
+	capabilities.Resume = true
+
+	directory := t.TempDir()
+	store, key := claimedStoreAt(t, directory)
+	nativeFile := filepath.Join(t.TempDir(), "retained-session.jsonl")
+	if err := os.WriteFile(nativeFile, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := saveAvailablePiGoalSession(t, store, admission, controlSessionID, nativeFile, capabilities)
+	rebound := rebindAvailablePiGoalSession(t, store, source, key, admission, resumeBindingID, capabilities)
+	if _, err := store.MarkGoalSessionResumeRejected(rebound.Key()); err != nil {
+		t.Fatalf("MarkGoalSessionResumeRejected() error = %v", err)
+	}
+	beforeRestart, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(beforeRestart.PendingTransitions) != 0 {
+		t.Fatalf("resume rejection wrote terminal transition before restart: %#v", beforeRestart.PendingTransitions)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err = state.New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	app := &daemon{
+		config: testConfig(t), store: store, control: &fakeControl{}, workspace: &fakeWorkspace{},
+		options: options{newID: ids(), clock: time.Now}, machineID: "machine-1", runtimeID: "runtime-1", runtimeEpoch: 1,
+		running: make(map[state.RunKey]*runningRun), slots: make(chan struct{}, 1),
+	}
+	if err := app.recoverUnclosedGoalSessions(context.Background()); err != nil {
+		t.Fatalf("recoverUnclosedGoalSessions() error = %v", err)
+	}
+
+	recovered, err := store.LoadGoalSession(rebound.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !recovered.HasKnownRetainedResumeNativeStop() || recovered.ResumeTerminalReason != string(protocol.TaskResultReasonResumeRejected) {
+		t.Fatalf("recovered retained resume state = %#v", recovered)
+	}
+	journ, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journ.TerminalState != "failed" || len(journ.PendingTransitions) != 1 {
+		t.Fatalf("recovered terminal journal = %#v, want one failed transition", journ)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(journ.PendingTransitions[0].Payload, &payload); err != nil {
+		t.Fatalf("decode recovered terminal payload: %v", err)
+	}
+	if payload["reason"] != string(protocol.TaskResultReasonResumeRejected) {
+		t.Fatalf("recovered terminal reason = %#v, want %q", payload, protocol.TaskResultReasonResumeRejected)
+	}
+	if payload["reason"] == string(protocol.TaskResultReasonUnknownOutcome) {
+		t.Fatalf("recovered resume rejection downgraded to unknown_outcome: %#v", payload)
+	}
+}
+
+func TestRecoveryDeliversReadyReboundPiAttachmentBeforeStoppingPersistedProcess(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	controlSessionID := "00000000-0000-4000-8000-000000000090"
+	resumeBindingID := "00000000-0000-4000-8000-000000000091"
+	admission.SessionMode = protocol.SessionModeResume
+	admission.RequestedSessionID = &controlSessionID
+	capabilities := verifiedNativeCapabilities(harness.KindPi)
+	capabilities.NativeVersion = pi.TestedVersion
+	capabilities.Resume = true
+	store, key := claimedStore(t)
+	defer store.Close()
+	nativeFile := filepath.Join(t.TempDir(), "retained-session.jsonl")
+	if err := os.WriteFile(nativeFile, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := saveAvailablePiGoalSession(t, store, admission, controlSessionID, nativeFile, capabilities)
+	if _, err := store.QueueGoalSessionAttach(key, state.GoalSessionAttachDelivery{
+		GoalID: admission.GoalID, LocalHandleID: source.LocalHandleID, BindingID: resumeBindingID,
+		HarnessKind: string(harness.KindPi), HarnessVersion: capabilities.NativeVersion, AdapterVersion: capabilities.ImplementationVersion,
+		WorkspaceFingerprint: source.WorkspaceFingerprint, Workspace: "local", RepositoryResourceID: &admission.Subject.ResourceID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RebindGoalSessionForResume(source.Key(), state.GoalSessionResumeRebind{
+		RunID: key.RunID, Generation: key.Generation, TaskID: "task-1", AdmissionID: admission.AdmissionID, BindingID: resumeBindingID,
+		ExactStopCertificate: *source.StopCertificate,
+		Compatibility: state.GoalSessionCompatibility{
+			MachineID: "machine-1", RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: string(harness.KindPi),
+			HarnessVersion: capabilities.NativeVersion, AdapterVersion: capabilities.ImplementationVersion, AdapterProtocolVersion: capabilities.ProtocolVersion,
+			WorkspaceFingerprint: source.WorkspaceFingerprint, RepositoryResourceID: admission.Subject.ResourceID,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkGoalSessionAttachDeliveryReady(key, source.LocalHandleID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkGoalSessionResumeStartAttempted(source.Key()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetProcessDetails(key, 77, "pi:77", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	terminated := 0
+	client := &nativeAdmissionControl{fakeControl: &fakeControl{}, admission: admission, attachSessionID: controlSessionID}
+	app := &daemon{
+		config: testConfig(t), store: store, control: client, workspace: &fakeWorkspace{},
+		options: options{newID: ids(), clock: time.Now, terminatePersist: func(pid int, identity string) error {
+			terminated++
+			if pid != 77 || identity != "pi:77" {
+				t.Fatalf("terminated persisted pi process = %d %q", pid, identity)
+			}
+			return nil
+		}}, runtimeID: "runtime-1", runtimeEpoch: 1, running: make(map[state.RunKey]*runningRun), slots: make(chan struct{}, 1),
+	}
+	if err := app.recoverUnclosedGoalSessions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if terminated != 1 || !sameStrings(client.calls, []string{"attach"}) {
+		t.Fatalf("ready rebound recovery did not attach then terminate: terminated=%d calls=%#v", terminated, client.calls)
+	}
+	recovered, err := store.LoadGoalSession(source.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.SessionState != state.GoalSessionStateUnavailable || recovered.ControlAttachmentReceiptID == "" || recovered.BindingID != resumeBindingID || recovered.NativeSessionID != source.NativeSessionID {
+		t.Fatalf("ready rebound recovery session = %#v", recovered)
+	}
+}
+
+func TestRecoveryQuarantinesPreStartPiResumeAfterDefinitiveAttachRejection(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	controlSessionID := "00000000-0000-4000-8000-000000000090"
+	resumeBindingID := "00000000-0000-4000-8000-000000000091"
+	admission.SessionMode = protocol.SessionModeResume
+	admission.RequestedSessionID = &controlSessionID
+	capabilities := verifiedNativeCapabilities(harness.KindPi)
+	capabilities.NativeVersion = pi.TestedVersion
+	capabilities.Resume = true
+	store, key := claimedStore(t)
+	defer store.Close()
+	nativeFile := filepath.Join(t.TempDir(), "retained-session.jsonl")
+	if err := os.WriteFile(nativeFile, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := saveAvailablePiGoalSession(t, store, admission, controlSessionID, nativeFile, capabilities)
+	if _, err := store.QueueGoalSessionAttach(key, state.GoalSessionAttachDelivery{
+		GoalID: admission.GoalID, LocalHandleID: source.LocalHandleID, BindingID: resumeBindingID,
+		HarnessKind: string(harness.KindPi), HarnessVersion: capabilities.NativeVersion, AdapterVersion: capabilities.ImplementationVersion,
+		WorkspaceFingerprint: source.WorkspaceFingerprint, Workspace: "local", RepositoryResourceID: &admission.Subject.ResourceID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RebindGoalSessionForResume(source.Key(), state.GoalSessionResumeRebind{
+		RunID: key.RunID, Generation: key.Generation, TaskID: "task-1", AdmissionID: admission.AdmissionID, BindingID: resumeBindingID,
+		ExactStopCertificate: *source.StopCertificate,
+		Compatibility: state.GoalSessionCompatibility{
+			MachineID: "machine-1", RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: string(harness.KindPi),
+			HarnessVersion: capabilities.NativeVersion, AdapterVersion: capabilities.ImplementationVersion, AdapterProtocolVersion: capabilities.ProtocolVersion,
+			WorkspaceFingerprint: source.WorkspaceFingerprint, RepositoryResourceID: admission.Subject.ResourceID,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	client := &nativeAdmissionControl{
+		fakeControl: &fakeControl{}, admission: admission, attachSessionID: controlSessionID,
+		attachErr: &control.APIError{StatusCode: 422, Code: control.InvalidRequest, Message: "attachment is no longer admissible"},
+	}
+	app := &daemon{config: testConfig(t), store: store, control: client, workspace: &fakeWorkspace{}, options: options{newID: ids(), clock: time.Now}, runtimeID: "runtime-1", runtimeEpoch: 1, running: make(map[state.RunKey]*runningRun), slots: make(chan struct{}, 1)}
+	if err := app.recoverUnclosedGoalSessions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := store.LoadGoalSession(source.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.SessionState != state.GoalSessionStateClosed || recovered.NativeSessionID != "" || recovered.ControlSessionID != "" {
+		t.Fatalf("definitively rejected pre-start resume remained live: %#v", recovered)
+	}
+	run, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(run.PendingGoalDeliveries) != 0 || len(run.RetiredGoalDeliveries) != 1 || run.RetiredGoalDeliveries[0].Delivery.Kind != state.GoalDeliverySessionAttach || len(run.PendingTransitions) != 1 {
+		t.Fatalf("definitively rejected pre-start resume run = %#v", run)
+	}
+}
+
+func TestPiResumeRejectedBeforeNativeStartReleasesExactNewBinding(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	controlSessionID := "00000000-0000-4000-8000-000000000090"
+	resumeBindingID := "00000000-0000-4000-8000-000000000091"
+	admission.SessionMode = protocol.SessionModeResume
+	admission.RequestedSessionID = &controlSessionID
+	capabilities := verifiedNativeCapabilities(harness.KindPi)
+	capabilities.NativeVersion = pi.TestedVersion
+	capabilities.Resume = true
+	app, store, session, controlClient := nativeAdmissionDaemonForHarness(t, admission, validNativeTaskResult(t, admission), nil, harness.KindPi, config.RuntimeHarnessPi, capabilities)
+	defer store.Close()
+	nativeFile := filepath.Join(t.TempDir(), "retained-session.jsonl")
+	if err := os.WriteFile(nativeFile, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := saveAvailablePiGoalSession(t, store, admission, controlSessionID, nativeFile, capabilities)
+	session.startErr = pi.ErrResumeRejected
+	controlClient.harnessSessionID = &controlSessionID
+	controlClient.harnessBindingID = &resumeBindingID
+	controlClient.attachSessionID = controlSessionID
+
+	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-resume", Generation: 2, Work: controlClient.work})
+	app.workers.Wait()
+	if len(controlClient.calls) != 0 {
+		t.Fatalf("pre-process rejected resume called Control before persisting local stop: %#v", controlClient.calls)
+	}
+	resumed, err := store.LoadGoalSession(source.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resumed.HasKnownRetainedResumeNativeStop() || resumed.BindingID != resumeBindingID || resumed.ControlSessionID != controlSessionID || resumed.NativeSessionID != source.NativeSessionID {
+		t.Fatalf("rejected resume did not preserve release identity: %#v", resumed)
+	}
+	run, err := store.LoadJournal(state.RunKey{RunID: "run-resume", Generation: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(run.PendingGoalDeliveries) != 1 || run.PendingGoalDeliveries[0].Kind != state.GoalDeliverySessionAttach || !run.PendingGoalDeliveries[0].Ready || len(run.PendingTransitions) != 1 || !strings.Contains(string(run.PendingTransitions[0].Payload), string(protocol.TaskResultReasonResumeRejected)) {
+		t.Fatalf("rejected resume run = %#v", run)
+	}
+}
+
+func TestPiResumeUnknownStartRetainsReadyAttachmentBarrier(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	controlSessionID := "00000000-0000-4000-8000-000000000090"
+	resumeBindingID := "00000000-0000-4000-8000-000000000091"
+	admission.SessionMode = protocol.SessionModeResume
+	admission.RequestedSessionID = &controlSessionID
+	capabilities := verifiedNativeCapabilities(harness.KindPi)
+	capabilities.NativeVersion = pi.TestedVersion
+	capabilities.Resume = true
+	app, store, session, controlClient := nativeAdmissionDaemonForHarness(t, admission, validNativeTaskResult(t, admission), nil, harness.KindPi, config.RuntimeHarnessPi, capabilities)
+	defer store.Close()
+	nativeFile := filepath.Join(t.TempDir(), "retained-session.jsonl")
+	if err := os.WriteFile(nativeFile, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := saveAvailablePiGoalSession(t, store, admission, controlSessionID, nativeFile, capabilities)
+	session.startErr = errors.New("pi transport disconnected after spawn")
+	controlClient.harnessSessionID = &controlSessionID
+	controlClient.harnessBindingID = &resumeBindingID
+	controlClient.attachSessionID = controlSessionID
+
+	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-resume", Generation: 2, Work: controlClient.work})
+	app.workers.Wait()
+	resumed, err := store.LoadGoalSession(source.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.NeedsReconciliation() || resumed.SessionState != state.GoalSessionStateBusy || resumed.ControlSessionID != controlSessionID || resumed.NativeSessionID != source.NativeSessionID {
+		t.Fatalf("unknown resume start discarded the retained barrier: %#v", resumed)
+	}
+	run, err := store.LoadJournal(state.RunKey{RunID: "run-resume", Generation: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(run.PendingGoalDeliveries) != 1 || run.PendingGoalDeliveries[0].Kind != state.GoalDeliverySessionAttach || !run.PendingGoalDeliveries[0].Ready || len(run.PendingTransitions) != 1 || !strings.Contains(string(run.PendingTransitions[0].Payload), string(protocol.TaskResultReasonUnknownOutcome)) {
+		t.Fatalf("unknown resume start run = %#v", run)
+	}
+}
+
+func TestPiResumeAttachTimeoutAfterKnownCloseRepairsThroughReadbackBarrier(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	controlSessionID := "00000000-0000-4000-8000-000000000090"
+	resumeBindingID := "00000000-0000-4000-8000-000000000091"
+	admission.SessionMode = protocol.SessionModeResume
+	admission.RequestedSessionID = &controlSessionID
+	capabilities := verifiedNativeCapabilities(harness.KindPi)
+	capabilities.NativeVersion = pi.TestedVersion
+	capabilities.Resume = true
+	app, store, session, controlClient := nativeAdmissionDaemonForHarness(t, admission, validNativeTaskResult(t, admission), nil, harness.KindPi, config.RuntimeHarnessPi, capabilities)
+	defer store.Close()
+	nativeFile := filepath.Join(t.TempDir(), "retained-session.jsonl")
+	if err := os.WriteFile(nativeFile, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := saveAvailablePiGoalSession(t, store, admission, controlSessionID, nativeFile, capabilities)
+	session.handle = harness.NativeSessionHandle{ID: source.NativeSessionID, Filename: source.NativeSessionFilename}
+	controlClient.harnessSessionID = &controlSessionID
+	controlClient.harnessBindingID = &resumeBindingID
+	controlClient.attachSessionID = controlSessionID
+	controlClient.attachErr = transportError("attach response lost")
+
+	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-resume", Generation: 2, Work: controlClient.work})
+	app.workers.Wait()
+	halfBound, err := store.LoadGoalSession(source.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if halfBound.NeedsReconciliation() || halfBound.SessionState != state.GoalSessionStateUnavailable || halfBound.ControlAttachmentReceiptID != "" || halfBound.NativeSessionID != source.NativeSessionID {
+		t.Fatalf("attach timeout discarded known stopped resume identity: %#v", halfBound)
+	}
+	run, err := store.LoadJournal(state.RunKey{RunID: "run-resume", Generation: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(run.PendingGoalDeliveries) != 1 || run.PendingGoalDeliveries[0].Kind != state.GoalDeliverySessionAttach || !run.PendingGoalDeliveries[0].Ready {
+		t.Fatalf("attach timeout did not retain ready readback barrier: %#v", run)
+	}
+	controlClient.attachErr = nil
+	updated, _, err := app.flushGoalDeliveries(context.Background(), run)
+	if err != nil {
+		t.Fatalf("repair retained pi attach barrier: %v", err)
+	}
+	repaired, err := store.LoadGoalSession(source.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repaired.ControlAttachmentReceiptID == "" || repaired.SessionState != state.GoalSessionStateUnavailable || repaired.NativeSessionID != source.NativeSessionID || len(updated.PendingGoalDeliveries) != 1 || updated.PendingGoalDeliveries[0].Kind != state.GoalDeliverySessionStopped {
+		t.Fatalf("repaired retained pi attachment = session:%#v journal:%#v", repaired, updated)
+	}
+}
+
+func TestPiResumeDefinitiveAttachRejectionAfterKnownCloseQuarantinesSession(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	controlSessionID := "00000000-0000-4000-8000-000000000090"
+	resumeBindingID := "00000000-0000-4000-8000-000000000091"
+	admission.SessionMode = protocol.SessionModeResume
+	admission.RequestedSessionID = &controlSessionID
+	capabilities := verifiedNativeCapabilities(harness.KindPi)
+	capabilities.NativeVersion = pi.TestedVersion
+	capabilities.Resume = true
+	app, store, session, controlClient := nativeAdmissionDaemonForHarness(t, admission, validNativeTaskResult(t, admission), nil, harness.KindPi, config.RuntimeHarnessPi, capabilities)
+	defer store.Close()
+	nativeFile := filepath.Join(t.TempDir(), "retained-session.jsonl")
+	if err := os.WriteFile(nativeFile, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := saveAvailablePiGoalSession(t, store, admission, controlSessionID, nativeFile, capabilities)
+	session.handle = harness.NativeSessionHandle{ID: source.NativeSessionID, Filename: source.NativeSessionFilename}
+	controlClient.harnessSessionID = &controlSessionID
+	controlClient.harnessBindingID = &resumeBindingID
+	controlClient.attachSessionID = controlSessionID
+	controlClient.attachErr = &control.APIError{StatusCode: 422, Code: control.InvalidRequest, Message: "attachment rejected"}
+
+	key := state.RunKey{RunID: "run-resume", Generation: 2}
+	app.startAssignment(context.Background(), protocol.Assignment{RunID: key.RunID, Generation: key.Generation, Work: controlClient.work})
+	app.workers.Wait()
+	knownStopped, err := store.LoadGoalSession(source.Key())
+	if err != nil || !knownStopped.HasKnownRetainedResumeNativeStop() {
+		t.Fatalf("post-start rejection did not persist known native stop: %#v, error=%v", knownStopped, err)
+	}
+	recoveredApp := &daemon{config: app.config, store: store, control: controlClient, workspace: &fakeWorkspace{}, options: options{newID: ids(), clock: time.Now}, runtimeID: "runtime-1", runtimeEpoch: 1, running: make(map[state.RunKey]*runningRun), slots: make(chan struct{}, 1)}
+	if err := recoveredApp.recoverUnclosedGoalSessions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	quarantined, err := store.LoadGoalSession(source.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if quarantined.SessionState != state.GoalSessionStateClosed || quarantined.NativeSessionID != "" || quarantined.ControlSessionID != "" {
+		t.Fatalf("post-start definitive rejection did not close retained session: %#v", quarantined)
+	}
+	run, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(run.RetiredGoalDeliveries) != 1 || run.RetiredGoalDeliveries[0].Delivery.Kind != state.GoalDeliverySessionAttach {
+		t.Fatalf("post-start definitive rejection outbox = %#v", run)
+	}
+}
+
+func TestRecoveryRetiresRejectedReadyPiResumeBeforeClosingWithoutPredecessorStop(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	controlSessionID := "00000000-0000-4000-8000-000000000090"
+	resumeBindingID := "00000000-0000-4000-8000-000000000091"
+	admission.SessionMode = protocol.SessionModeResume
+	admission.RequestedSessionID = &controlSessionID
+	capabilities := verifiedNativeCapabilities(harness.KindPi)
+	capabilities.NativeVersion = pi.TestedVersion
+	capabilities.Resume = true
+	store, key := claimedStore(t)
+	defer store.Close()
+	nativeFile := filepath.Join(t.TempDir(), "retained-session.jsonl")
+	if err := os.WriteFile(nativeFile, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := saveAvailablePiGoalSession(t, store, admission, controlSessionID, nativeFile, capabilities)
+	if _, err := store.QueueGoalSessionAttach(key, state.GoalSessionAttachDelivery{
+		GoalID: admission.GoalID, LocalHandleID: source.LocalHandleID, BindingID: resumeBindingID,
+		HarnessKind: string(harness.KindPi), HarnessVersion: capabilities.NativeVersion, AdapterVersion: capabilities.ImplementationVersion,
+		WorkspaceFingerprint: source.WorkspaceFingerprint, Workspace: "local", RepositoryResourceID: &admission.Subject.ResourceID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rebound := rebindAvailablePiGoalSession(t, store, source, key, admission, resumeBindingID, capabilities)
+	if _, err := store.MarkGoalSessionAttachDeliveryReady(key, rebound.LocalHandleID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkGoalSessionResumeRejected(rebound.Key()); err != nil {
+		t.Fatalf("MarkGoalSessionResumeRejected() error = %v", err)
+	}
+	before, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before.PendingTransitions) != 0 {
+		t.Fatalf("resume rejection unexpectedly had terminal outbox before recovery: %#v", before.PendingTransitions)
+	}
+
+	client := &nativeAdmissionControl{
+		fakeControl: &fakeControl{}, admission: admission, attachSessionID: controlSessionID,
+		attachErr: &control.APIError{StatusCode: 422, Code: control.InvalidRequest, Message: "attachment is no longer admissible"},
+	}
+	app := &daemon{
+		config: testConfig(t), store: store, control: client, workspace: &fakeWorkspace{},
+		options: options{newID: ids(), clock: time.Now}, runtimeID: "runtime-1", runtimeEpoch: 1,
+		running: make(map[state.RunKey]*runningRun), slots: make(chan struct{}, 1),
+	}
+	if err := app.recoverUnclosedGoalSessions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	closed, err := store.LoadGoalSession(rebound.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed.SessionState != state.GoalSessionStateClosed || closed.LaunchState != state.GoalSessionLaunchStateClosed || closed.NativeSessionID != "" || closed.ControlSessionID != "" {
+		t.Fatalf("rejected ready resume was not closed after terminalization: %#v", closed)
+	}
+	run, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(run.RetiredGoalDeliveries) != 1 || run.RetiredGoalDeliveries[0].Delivery.Kind != state.GoalDeliverySessionAttach || len(run.PendingTransitions) != 1 || run.TerminalState != "failed" {
+		t.Fatalf("rejected ready resume recovery journal = %#v", run)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(run.PendingTransitions[0].Payload, &payload); err != nil {
+		t.Fatalf("decode rejected resume terminal payload: %v", err)
+	}
+	if payload["reason"] != string(protocol.TaskResultReasonResumeRejected) {
+		t.Fatalf("rejected resume terminal payload = %#v, want resume_rejected", payload)
+	}
+	for _, delivery := range run.PendingGoalDeliveries {
+		if delivery.Kind == state.GoalDeliverySessionStopped {
+			t.Fatalf("rejected resume queued predecessor/current stop delivery: %#v", run.PendingGoalDeliveries)
+		}
+	}
+	for _, delivery := range run.DeliveredGoalDeliveries {
+		if delivery.Kind == state.GoalDeliverySessionStopped {
+			t.Fatalf("rejected resume delivered predecessor/current stop delivery: %#v", run.DeliveredGoalDeliveries)
+		}
+	}
+	for _, retired := range run.RetiredGoalDeliveries {
+		if retired.Delivery.Kind == state.GoalDeliverySessionStopped {
+			t.Fatalf("rejected resume retired predecessor/current stop delivery: %#v", run.RetiredGoalDeliveries)
+		}
+	}
+	if got, want := client.calls, []string{"attach"}; !sameStrings(got, want) {
+		t.Fatalf("recovery Control calls = %#v, want one rejected attach", got)
+	}
+
+	if err := app.recoverUnclosedGoalSessions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	again, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again.PendingTransitions) != 1 || len(again.RetiredGoalDeliveries) != 1 || len(client.calls) != 1 {
+		t.Fatalf("second recovery was not idempotent: journal=%#v calls=%#v", again, client.calls)
+	}
+}
+
+func TestHalfBoundPiResumeNeverQueuesStopForPredecessorBinding(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	controlSessionID := "00000000-0000-4000-8000-000000000090"
+	resumeBindingID := "00000000-0000-4000-8000-000000000091"
+	admission.SessionMode = protocol.SessionModeResume
+	admission.RequestedSessionID = &controlSessionID
+	capabilities := verifiedNativeCapabilities(harness.KindPi)
+	capabilities.NativeVersion = pi.TestedVersion
+	capabilities.Resume = true
+	store, key := claimedStore(t)
+	defer store.Close()
+	nativeFile := filepath.Join(t.TempDir(), "retained-session.jsonl")
+	if err := os.WriteFile(nativeFile, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := saveAvailablePiGoalSession(t, store, admission, controlSessionID, nativeFile, capabilities)
+	rebindAvailablePiGoalSession(t, store, source, key, admission, resumeBindingID, capabilities)
+	app := &daemon{store: store, options: options{clock: time.Now}}
+	if err := app.recordStoppedGoalSession(key, source.Key()); err == nil {
+		t.Fatal("recordStoppedGoalSession() succeeded for a half-bound resume")
+	}
+	run, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, delivery := range run.PendingGoalDeliveries {
+		if delivery.Kind == state.GoalDeliverySessionStopped {
+			t.Fatalf("half-bound resume queued a stop delivery: %#v", delivery)
+		}
+	}
+}
+
+func TestLatePredecessorStopReceiptAcknowledgesAfterPiRebindWithoutReleasingNewBinding(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	controlSessionID := "00000000-0000-4000-8000-000000000090"
+	resumeBindingID := "00000000-0000-4000-8000-000000000091"
+	admission.SessionMode = protocol.SessionModeResume
+	admission.RequestedSessionID = &controlSessionID
+	capabilities := verifiedNativeCapabilities(harness.KindPi)
+	capabilities.NativeVersion = pi.TestedVersion
+	capabilities.Resume = true
+	store, err := state.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	predecessorKey := state.RunKey{RunID: "run-source", Generation: 7}
+	resumeKey := state.RunKey{RunID: "run-resume", Generation: 2}
+	saveClaimedGoalRun(t, store, predecessorKey)
+	saveClaimedGoalRun(t, store, resumeKey)
+	nativeFile := filepath.Join(t.TempDir(), "retained-session.jsonl")
+	if err := os.WriteFile(nativeFile, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := saveAvailablePiGoalSession(t, store, admission, controlSessionID, nativeFile, capabilities)
+	rebindAvailablePiGoalSession(t, store, source, resumeKey, admission, resumeBindingID, capabilities)
+	oldJournal, err := store.LoadJournal(predecessorKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &nativeAdmissionControl{fakeControl: &fakeControl{}, admission: admission, stopReceiptID: source.StopCertificate.ReceiptID}
+	app := &daemon{store: store, control: client, options: options{clock: time.Now}}
+	updated, _, err := app.deliverGoalDelivery(context.Background(), oldJournal, state.GoalDeliverySessionStopped, source.StopCertificate.BindingID, nil)
+	if err != nil {
+		t.Fatalf("deliver late predecessor stop receipt: %v", err)
+	}
+	if updated.HasPendingGoalDeliveries() || len(updated.DeliveredGoalDeliveries) != 1 {
+		t.Fatalf("late predecessor stop delivery remained pending: %#v", updated)
+	}
+	resumed, err := store.LoadGoalSession(source.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.SessionState != state.GoalSessionStateBusy || resumed.RunID != resumeKey.RunID || resumed.Generation != resumeKey.Generation || resumed.BindingID != resumeBindingID || resumed.StopCertificate != nil {
+		t.Fatalf("late predecessor stop released new pi binding: %#v", resumed)
+	}
+}
+
+func TestRetainedPiWorkspaceOwnerBlocksSourceCleanupAfterRebind(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	controlSessionID := "00000000-0000-4000-8000-000000000090"
+	resumeBindingID := "00000000-0000-4000-8000-000000000091"
+	admission.SessionMode = protocol.SessionModeResume
+	admission.RequestedSessionID = &controlSessionID
+	capabilities := verifiedNativeCapabilities(harness.KindPi)
+	capabilities.NativeVersion = pi.TestedVersion
+	capabilities.Resume = true
+	store, err := state.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	resumeKey := state.RunKey{RunID: "run-resume", Generation: 2}
+	saveClaimedGoalRun(t, store, resumeKey)
+	nativeFile := filepath.Join(t.TempDir(), "retained-session.jsonl")
+	if err := os.WriteFile(nativeFile, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := saveAvailablePiGoalSession(t, store, admission, controlSessionID, nativeFile, capabilities)
+	rebindAvailablePiGoalSession(t, store, source, resumeKey, admission, resumeBindingID, capabilities)
+	if _, err := store.RetainWorkspace(resumeKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CloseGoalSession(source.Key()); err != nil {
+		t.Fatal(err)
+	}
+	app := &daemon{store: store}
+	owned, err := app.retainedGoalSessionWorkspace(state.RunKey{RunID: "run-source", Generation: 7})
+	if err != nil || !owned {
+		t.Fatalf("source workspace retention after rebind = %t, error = %v", owned, err)
+	}
+	current, err := app.retainedGoalSessionWorkspace(resumeKey)
+	if err != nil || current {
+		t.Fatalf("current Run incorrectly owns original retained workspace = %t, error = %v", current, err)
 	}
 }
 
@@ -2032,6 +2986,93 @@ func nativeAdmissionDaemon(t *testing.T, admission protocol.Admission, result pr
 	return nativeAdmissionDaemonForHarness(t, admission, result, waitGate, harness.KindCodex, config.RuntimeHarnessCodex, verifiedCodexCapabilities())
 }
 
+func saveAvailablePiGoalSession(t *testing.T, store *state.Store, admission protocol.Admission, controlSessionID, nativeFilename string, capabilities harness.Capabilities) state.GoalSessionJournal {
+	t.Helper()
+	localHandleID := "00000000-0000-4000-8000-000000000088"
+	sourceBindingID := "00000000-0000-4000-8000-000000000089"
+	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: localHandleID}
+	intent := state.GoalSessionLaunchIntent{
+		LaunchIntentID: "00000000-0000-4000-8000-000000000087", GoalID: admission.GoalID, GoalRevision: admission.GoalRevision,
+		WorkItemID: admissionWorkItemIDValue(admission.WorkItemID), TaskID: "task-source", RunID: "run-source", Generation: 7, AdmissionID: "admission-source",
+		LocalHandleID: localHandleID, BindingID: sourceBindingID, MachineID: "machine-1", RuntimeID: "runtime-1", RuntimeEpoch: 1,
+		HarnessKind: string(harness.KindPi), HarnessVersion: capabilities.NativeVersion, AdapterVersion: capabilities.ImplementationVersion,
+		AdapterProtocolVersion: capabilities.ProtocolVersion, WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		WorkspacePath: "C:\\workspace", RepositoryResourceID: admission.Subject.ResourceID, SessionMode: state.GoalSessionModeFresh,
+	}
+	if _, err := store.SaveGoalSessionLaunchIntent(intent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkGoalSessionLaunchStarted(sessionKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PersistGoalSessionHandle(sessionKey, state.GoalSessionHandle{NativeSessionID: "native-retained", NativeSessionFilename: nativeFilename}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PersistGoalSessionControlAttachment(sessionKey, controlSessionID, sourceBindingID, "00000000-0000-4000-8000-000000000092", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkGoalSessionStoppedPending(sessionKey); err != nil {
+		t.Fatal(err)
+	}
+	deliveryDigest := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if _, err := store.LoadJournal(state.RunKey{RunID: "run-source", Generation: 7}); err == nil {
+		queued, queueErr := store.QueueGoalSessionStopped(state.RunKey{RunID: "run-source", Generation: 7}, state.GoalSessionStoppedDelivery{
+			SessionID: controlSessionID, LocalHandleID: localHandleID, BindingID: sourceBindingID,
+		})
+		if queueErr != nil {
+			t.Fatal(queueErr)
+		}
+		for _, delivery := range queued.PendingGoalDeliveries {
+			if delivery.Kind == state.GoalDeliverySessionStopped && delivery.SessionStopped != nil && delivery.SessionStopped.BindingID == sourceBindingID {
+				deliveryDigest = delivery.PayloadDigest
+				break
+			}
+		}
+	}
+	available, err := store.MarkGoalSessionAvailable(sessionKey, state.GoalSessionStopCertificate{
+		RunID: "run-source", Generation: 7, SessionID: controlSessionID, LocalHandleID: localHandleID, BindingID: sourceBindingID,
+		DeliveryDigest: deliveryDigest, ReceiptID: "00000000-0000-4000-8000-000000000093",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return available
+}
+
+func rebindAvailablePiGoalSession(t *testing.T, store *state.Store, source state.GoalSessionJournal, key state.RunKey, admission protocol.Admission, bindingID string, capabilities harness.Capabilities) state.GoalSessionJournal {
+	t.Helper()
+	rebound, err := store.RebindGoalSessionForResume(source.Key(), state.GoalSessionResumeRebind{
+		RunID: key.RunID, Generation: key.Generation, TaskID: "task-1", AdmissionID: admission.AdmissionID, BindingID: bindingID,
+		ExactStopCertificate: *source.StopCertificate,
+		Compatibility: state.GoalSessionCompatibility{
+			MachineID: "machine-1", RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: string(harness.KindPi),
+			HarnessVersion: capabilities.NativeVersion, AdapterVersion: capabilities.ImplementationVersion, AdapterProtocolVersion: capabilities.ProtocolVersion,
+			WorkspaceFingerprint: source.WorkspaceFingerprint, RepositoryResourceID: admission.Subject.ResourceID,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rebound
+}
+
+func saveClaimedGoalRun(t *testing.T, store *state.Store, key state.RunKey) {
+	t.Helper()
+	claimID := "claim-" + key.RunID
+	if _, err := store.SaveClaimIntent(state.ClaimIntent{
+		Key: key, RuntimeKey: "default", RuntimeID: "runtime-1", RuntimeEpoch: 1, ClaimID: claimID,
+		Work: protocol.Work{Goal: "g"}, WorkspaceBindingKey: "local",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SaveClaimGrant(key, protocol.ClaimResponse{
+		RunID: key.RunID, Generation: key.Generation, ClaimID: claimID, LeaseToken: "lease-" + key.RunID,
+		LeaseExpiresAt: time.Now().Add(time.Minute), Work: protocol.Work{Goal: "g"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func nativeAdmissionDaemonForHarness(t *testing.T, admission protocol.Admission, result protocol.TaskResult, waitGate <-chan struct{}, kind harness.Kind, configKind string, capabilities harness.Capabilities) (*daemon, *state.Store, *fakeNativeGoalSession, *nativeAdmissionControl) {
 	t.Helper()
 	store, err := state.New(t.TempDir())
@@ -2124,25 +3165,37 @@ func validNativeTaskResult(t *testing.T, admission protocol.Admission) protocol.
 
 type nativeAdmissionControl struct {
 	*fakeControl
-	work           protocol.Work
-	admission      protocol.Admission
-	providerAccess *protocol.ProviderAccess
-	calls          []string
+	work             protocol.Work
+	admission        protocol.Admission
+	providerAccess   *protocol.ProviderAccess
+	harnessSessionID *string
+	harnessBindingID *string
+	attachSessionID  string
+	attachErr        error
+	stopReceiptID    string
+	calls            []string
 }
 
 func (client *nativeAdmissionControl) Claim(_ context.Context, runID string, request protocol.ClaimRequest) (protocol.ClaimResponse, error) {
 	client.claimCalls++
-	return protocol.ClaimResponse{RunID: runID, TaskID: "task-1", Generation: request.Generation, ClaimID: request.ClaimID, LeaseToken: "lease", LeaseExpiresAt: time.Now().Add(time.Minute), Work: client.work, ProviderAccess: client.providerAccess}, nil
+	return protocol.ClaimResponse{RunID: runID, TaskID: "task-1", Generation: request.Generation, ClaimID: request.ClaimID, LeaseToken: "lease", LeaseExpiresAt: time.Now().Add(time.Minute), Work: client.work, ProviderAccess: client.providerAccess, HarnessSessionID: client.harnessSessionID, HarnessBindingID: client.harnessBindingID}, nil
 }
 
-func (client *nativeAdmissionControl) AttachHarnessSession(_ context.Context, _ string, request control.GoalSessionAttachRequest) (control.GoalSessionReceipt, error) {
+func (client *nativeAdmissionControl) AttachHarnessSession(_ context.Context, runID string, request control.GoalSessionAttachRequest) (control.GoalSessionReceipt, error) {
 	client.calls = append(client.calls, "attach")
+	if client.attachErr != nil {
+		return control.GoalSessionReceipt{}, client.attachErr
+	}
 	bindingID := "00000000-0000-4000-8000-000000000009"
 	if request.BindingID != nil {
 		bindingID = *request.BindingID
 	}
+	sessionID := client.attachSessionID
+	if sessionID == "" {
+		sessionID = "00000000-0000-4000-8000-000000000010"
+	}
 	receipt := control.GoalSessionReceipt{
-		ID: "00000000-0000-4000-8000-000000000010", AttachmentReceiptID: "00000000-0000-4000-8000-000000000011", GoalID: client.admission.GoalID, TaskID: "task-1", RunID: "run-1", ActiveRunID: "run-1",
+		ID: sessionID, AttachmentReceiptID: "00000000-0000-4000-8000-000000000011", GoalID: client.admission.GoalID, TaskID: "task-1", RunID: runID, ActiveRunID: runID,
 		MachineID: "machine-1", RuntimeID: request.RuntimeID, RepositoryResourceID: client.admission.Subject.ResourceID, LocalHandleID: request.LocalHandleID,
 		BindingID:   bindingID,
 		HarnessKind: request.HarnessKind, HarnessVersion: request.HarnessVersion, AdapterVersion: request.AdapterVersion,
@@ -2153,18 +3206,25 @@ func (client *nativeAdmissionControl) AttachHarnessSession(_ context.Context, _ 
 
 func (client *nativeAdmissionControl) MarkHarnessSessionStopped(_ context.Context, runID string, request control.GoalSessionStoppedRequest) (control.GoalSessionStoppedReceipt, error) {
 	client.calls = append(client.calls, "stopped")
+	receiptID := client.stopReceiptID
+	if receiptID == "" {
+		receiptID = "00000000-0000-4000-8000-000000000011"
+	}
 	return control.GoalSessionStoppedReceipt{
-		ReceiptID: "00000000-0000-4000-8000-000000000011", RunID: runID, SessionID: request.SessionID,
+		ReceiptID: receiptID, RunID: runID, SessionID: request.SessionID,
 		LocalHandleID: request.LocalHandleID, BindingID: request.BindingID, State: state.GoalSessionStateAvailable,
 		LockVersion: 1,
 	}, nil
 }
 
-func (client *nativeAdmissionControl) FetchRunContext(_ context.Context, _ string, _ protocol.Fence) (control.GoalRunContext, error) {
+func (client *nativeAdmissionControl) FetchRunContext(_ context.Context, runID string, fence protocol.Fence) (control.GoalRunContext, error) {
 	client.calls = append(client.calls, "context")
-	sessionID := "00000000-0000-4000-8000-000000000010"
+	sessionID := client.attachSessionID
+	if sessionID == "" {
+		sessionID = "00000000-0000-4000-8000-000000000010"
+	}
 	return control.GoalRunContext{
-		GoalID: client.admission.GoalID, TaskID: "task-1", RunID: "run-1", Generation: 1, SessionID: &sessionID,
+		GoalID: client.admission.GoalID, TaskID: "task-1", RunID: runID, Generation: fence.Generation, SessionID: &sessionID,
 		Context: control.GoalContextSnapshot{
 			SnapshotID: client.admission.ContextSnapshotID, GoalID: client.admission.GoalID, GoalRevision: client.admission.GoalRevision,
 			WorkItemID: client.admission.WorkItemID, ContentHash: client.admission.ContextHash, Subject: client.admission.Subject,

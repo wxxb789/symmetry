@@ -453,7 +453,7 @@ func TestAdapterResumesExactPiSessionAtAnIdleBoundary(t *testing.T) {
 			"type": "response", "id": request.ID, "command": "get_state", "success": true,
 			"data": map[string]any{
 				"sessionId": resume.NativeSessionID, "sessionFile": resume.NativeSessionFilename,
-				"isStreaming": false, "pendingMessageCount": 0,
+				"isStreaming": false, "isCompacting": false, "pendingMessageCount": 0,
 			},
 		})
 	}
@@ -485,7 +485,10 @@ func TestAdapterRejectsMissingOrOverriddenPiResumeBeforeLaunch(t *testing.T) {
 		{name: "missing native filename", resume: &harness.ResumeHandle{LocalHandleID: valid.LocalHandleID, NativeSessionID: valid.NativeSessionID, WorkspaceFingerprint: valid.WorkspaceFingerprint, NativeVersion: valid.NativeVersion}, want: ErrResumeRejected},
 		{name: "missing native file", resume: &harness.ResumeHandle{LocalHandleID: valid.LocalHandleID, NativeSessionID: valid.NativeSessionID, NativeSessionFilename: filepath.Join(t.TempDir(), "missing.jsonl"), WorkspaceFingerprint: valid.WorkspaceFingerprint, NativeVersion: valid.NativeVersion}, want: ErrResumeRejected},
 		{name: "incompatible native version", resume: &harness.ResumeHandle{LocalHandleID: valid.LocalHandleID, NativeSessionID: valid.NativeSessionID, NativeSessionFilename: valid.NativeSessionFilename, WorkspaceFingerprint: valid.WorkspaceFingerprint, NativeVersion: "0.0.0"}, want: ErrResumeRejected},
-		{name: "profile session override", resume: valid, args: []string{"--session", filepath.Join(t.TempDir(), "other.jsonl")}},
+		{name: "profile session override", resume: valid, args: []string{"--session", filepath.Join(t.TempDir(), "other.jsonl")}, want: ErrResumeRejected},
+		{name: "profile resume override", resume: valid, args: []string{"--resume"}, want: ErrResumeRejected},
+		{name: "profile compact resume override", resume: valid, args: []string{"-rother"}, want: ErrResumeRejected},
+		{name: "profile mode override", resume: valid, args: []string{"--mode=json"}, want: ErrResumeRejected},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -497,9 +500,6 @@ func TestAdapterRejectsMissingOrOverriddenPiResumeBeforeLaunch(t *testing.T) {
 			_, err := adapter.Start(context.Background(), harness.StartRequest{Workspace: t.TempDir(), Resume: test.resume, Invocation: execution.Invocation{Args: test.args}}, &recordingHarnessSink{})
 			if test.want != nil && !errors.Is(err, test.want) {
 				t.Fatalf("Start() error = %v, want %v", err, test.want)
-			}
-			if test.want == nil && (err == nil || !strings.Contains(err.Error(), "not allowed")) {
-				t.Fatalf("Start() error = %v, want session override rejection", err)
 			}
 			if started {
 				t.Fatal("Start() launched despite invalid or profile-overridden resume identity")
@@ -516,20 +516,41 @@ func TestAdapterRejectsPiResumeWithMismatchedOrActiveStateBeforePrompt(t *testin
 		wantHandlerError bool
 	}{
 		{name: "mismatched ID", data: func(resume *harness.ResumeHandle) map[string]any {
-			return map[string]any{"sessionId": "other", "sessionFile": resume.NativeSessionFilename, "isStreaming": false, "pendingMessageCount": 0}
+			return map[string]any{"sessionId": "other", "sessionFile": resume.NativeSessionFilename, "isStreaming": false, "isCompacting": false, "pendingMessageCount": 0}
 		}, want: ErrResumeRejected, wantHandlerError: true},
 		{name: "mismatched filename", data: func(resume *harness.ResumeHandle) map[string]any {
-			return map[string]any{"sessionId": resume.NativeSessionID, "sessionFile": filepath.Join(t.TempDir(), "other.jsonl"), "isStreaming": false, "pendingMessageCount": 0}
+			return map[string]any{"sessionId": resume.NativeSessionID, "sessionFile": filepath.Join(t.TempDir(), "other.jsonl"), "isStreaming": false, "isCompacting": false, "pendingMessageCount": 0}
 		}, want: ErrResumeRejected, wantHandlerError: true},
 		{name: "streaming", data: func(resume *harness.ResumeHandle) map[string]any {
-			return map[string]any{"sessionId": resume.NativeSessionID, "sessionFile": resume.NativeSessionFilename, "isStreaming": true, "pendingMessageCount": 0}
+			return map[string]any{"sessionId": resume.NativeSessionID, "sessionFile": resume.NativeSessionFilename, "isStreaming": true, "isCompacting": false, "pendingMessageCount": 0}
+		}, want: ErrResumeRejected},
+		{name: "compacting", data: func(resume *harness.ResumeHandle) map[string]any {
+			return map[string]any{"sessionId": resume.NativeSessionID, "sessionFile": resume.NativeSessionFilename, "isStreaming": false, "isCompacting": true, "pendingMessageCount": 0}
 		}, want: ErrResumeRejected},
 		{name: "queued", data: func(resume *harness.ResumeHandle) map[string]any {
-			return map[string]any{"sessionId": resume.NativeSessionID, "sessionFile": resume.NativeSessionFilename, "isStreaming": false, "pendingMessageCount": 1}
+			return map[string]any{"sessionId": resume.NativeSessionID, "sessionFile": resume.NativeSessionFilename, "isStreaming": false, "isCompacting": false, "pendingMessageCount": 1}
 		}, want: ErrResumeRejected},
 		{name: "state omits queue status", data: func(resume *harness.ResumeHandle) map[string]any {
-			return map[string]any{"sessionId": resume.NativeSessionID, "sessionFile": resume.NativeSessionFilename, "isStreaming": false}
+			return map[string]any{"sessionId": resume.NativeSessionID, "sessionFile": resume.NativeSessionFilename, "isStreaming": false, "isCompacting": false}
 		}, want: ErrResumeRejected},
+		{name: "state omits compacting status", data: func(resume *harness.ResumeHandle) map[string]any {
+			return map[string]any{"sessionId": resume.NativeSessionID, "sessionFile": resume.NativeSessionFilename, "isStreaming": false, "pendingMessageCount": 0}
+		}, want: ErrResumeRejected},
+		{name: "state omits streaming status", data: func(resume *harness.ResumeHandle) map[string]any {
+			return map[string]any{"sessionId": resume.NativeSessionID, "sessionFile": resume.NativeSessionFilename, "isCompacting": false, "pendingMessageCount": 0}
+		}, want: ErrResumeRejected},
+		{name: "null streaming status", data: func(resume *harness.ResumeHandle) map[string]any {
+			return map[string]any{"sessionId": resume.NativeSessionID, "sessionFile": resume.NativeSessionFilename, "isStreaming": nil, "isCompacting": false, "pendingMessageCount": 0}
+		}, want: ErrResumeRejected, wantHandlerError: true},
+		{name: "null compacting status", data: func(resume *harness.ResumeHandle) map[string]any {
+			return map[string]any{"sessionId": resume.NativeSessionID, "sessionFile": resume.NativeSessionFilename, "isStreaming": false, "isCompacting": nil, "pendingMessageCount": 0}
+		}, want: ErrResumeRejected, wantHandlerError: true},
+		{name: "null queue status", data: func(resume *harness.ResumeHandle) map[string]any {
+			return map[string]any{"sessionId": resume.NativeSessionID, "sessionFile": resume.NativeSessionFilename, "isStreaming": false, "isCompacting": false, "pendingMessageCount": nil}
+		}, want: ErrResumeRejected, wantHandlerError: true},
+		{name: "negative queue status", data: func(resume *harness.ResumeHandle) map[string]any {
+			return map[string]any{"sessionId": resume.NativeSessionID, "sessionFile": resume.NativeSessionFilename, "isStreaming": false, "isCompacting": false, "pendingMessageCount": -1}
+		}, want: ErrResumeRejected, wantHandlerError: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

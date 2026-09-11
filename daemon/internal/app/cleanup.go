@@ -331,8 +331,27 @@ func (daemon *daemon) retainedGoalSessionWorkspace(key state.RunKey) (bool, erro
 		return false, fmt.Errorf("list Goal sessions before workspace cleanup: %w", err)
 	}
 	for _, session := range sessions {
-		if session.RunID == key.RunID && session.Generation == key.Generation &&
-			retainedGoalSessionAvailable(session) {
+		owner := session.WorkspaceOwnerRunKey
+		if owner.RunID == "" || owner.Generation <= 0 {
+			// Journals written before workspace ownership was explicit still own
+			// the workspace associated with their recorded execution. Retain
+			// conservatively rather than deleting a resumable legacy worktree.
+			owner = state.WorkspaceOwnerRunKey{RunID: session.RunID, Generation: session.Generation}
+		}
+		// A retained workspace is owned by the Run that first materialized it,
+		// not by the current execution fields. Resume deliberately rotates those
+		// fields to a new Run while continuing to use the original worktree.
+		if owner.RunID != key.RunID || owner.Generation != key.Generation {
+			continue
+		}
+		current, loadErr := daemon.store.LoadJournal(state.RunKey{RunID: session.RunID, Generation: session.Generation})
+		if loadErr == nil && current.RetainWorkspace {
+			return true, nil
+		}
+		if loadErr != nil && !state.IsNotFound(loadErr) {
+			return false, fmt.Errorf("load retained Goal session current Run before workspace cleanup: %w", loadErr)
+		}
+		if session.SessionState != state.GoalSessionStateClosed && session.LaunchState != state.GoalSessionLaunchStateClosed {
 			return true, nil
 		}
 	}

@@ -8110,6 +8110,10 @@ type fakeWorkspace struct {
 	subject        protocol.Subject
 	derivedSubject protocol.Subject
 	deriveErr      error
+	prepareCalls   int
+	recoverCalls   int
+	recoveredRun   workspace.RunRef
+	recoveredPath  string
 }
 
 func (*fakeWorkspace) Prepare(_ context.Context, key string, run workspace.RunRef) (workspace.Prepared, error) {
@@ -8122,8 +8126,19 @@ func (fake *fakeWorkspace) PrepareSubject(_ context.Context, key string, run wor
 	if fake.deriveErr != nil {
 		return workspace.SubjectWorkspace{}, fake.deriveErr
 	}
+	fake.prepareCalls++
 	fake.subject = subject
 	return workspace.SubjectWorkspace{Prepared: workspace.Prepared{Path: "C:\\workspace", BindingKey: key, Run: run}, Subject: subject}, nil
+}
+func (fake *fakeWorkspace) RecoverSubject(_ context.Context, key string, run workspace.RunRef, path string, subject protocol.Subject) (workspace.SubjectWorkspace, error) {
+	if fake.deriveErr != nil {
+		return workspace.SubjectWorkspace{}, fake.deriveErr
+	}
+	fake.recoverCalls++
+	fake.recoveredRun = run
+	fake.recoveredPath = path
+	fake.subject = subject
+	return workspace.SubjectWorkspace{Prepared: workspace.Prepared{Path: path, BindingKey: key, Run: run}, Subject: subject}, nil
 }
 func (fake *fakeWorkspace) DeriveSubject(_ context.Context, _ workspace.Prepared, resourceID string) (protocol.Subject, error) {
 	if fake.deriveErr != nil {

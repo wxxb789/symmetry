@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strconv"
@@ -54,14 +55,15 @@ const (
 )
 
 var (
-	errAssignmentExpired    = errors.New("assignment expired")
-	errLeaseDeadlineReached = errors.New("lease renewal deadline reached")
-	errOutboxChanged        = errors.New("outbox changed during delivery")
-	errInputWriteTimeout    = errors.New("agent did not consume standard input within the write timeout")
-	errStartProcessNil      = errors.New("start process returned nil")
-	errInvalidAdmission     = errors.New("invalid symmetry.admission.v1")
-	errMissingResult        = errors.New("missing_result")
-	workspaceFingerprint    = workspace.Fingerprint
+	errAssignmentExpired     = errors.New("assignment expired")
+	errLeaseDeadlineReached  = errors.New("lease renewal deadline reached")
+	errOutboxChanged         = errors.New("outbox changed during delivery")
+	errInputWriteTimeout     = errors.New("agent did not consume standard input within the write timeout")
+	errStartProcessNil       = errors.New("start process returned nil")
+	errInvalidAdmission      = errors.New("invalid symmetry.admission.v1")
+	errMissingResult         = errors.New("missing_result")
+	errGoalAttachmentPending = errors.New("retained Goal session has no verified current attachment")
+	workspaceFingerprint     = workspace.Fingerprint
 )
 
 // taskResultReasonError keeps a canonical terminal reason through local
@@ -134,6 +136,14 @@ type goalSessionStopAPI interface {
 type goalSubjectWorkspace interface {
 	PrepareSubject(context.Context, string, workspace.RunRef, protocol.Subject) (workspace.SubjectWorkspace, error)
 	DeriveSubject(context.Context, workspace.Prepared, string) (protocol.Subject, error)
+}
+
+// goalRecoveredSubjectWorkspace is the retained-session counterpart to
+// goalSubjectWorkspace. Resume must recover the original daemon-owned
+// workspace; it must never materialize a new worktree for the new Run.
+type goalRecoveredSubjectWorkspace interface {
+	goalSubjectWorkspace
+	RecoverSubject(context.Context, string, workspace.RunRef, string, protocol.Subject) (workspace.SubjectWorkspace, error)
 }
 
 // EnrollmentAPI is deliberately separate because it is authorized by the
@@ -1380,9 +1390,19 @@ func (daemon *daemon) recoverUnclosedGoalSessions(ctx context.Context) error {
 		}
 		processEvidence := journal.PID > 0 || strings.TrimSpace(journal.ProcessIdentity) != "" || !journal.StartedAt.IsZero()
 		terminalKnown := journal.TerminalState != "" || journal.LocalState == "terminal_pending" || journal.LocalState == "cleanup_pending" || journal.LocalState == "stale"
+		resumePreStart := session.ResumeStartPending
 		for _, delivery := range journal.PendingGoalDeliveries {
 			if delivery.Kind != state.GoalDeliverySessionAttach || delivery.DeliveryID != session.LocalHandleID || delivery.Ready {
 				continue
+			}
+			if resumePreStart && resumeGoalSessionPreStartAttachment(session, delivery) {
+				updated, readyErr := daemon.markGoalSessionAttachDeliveryReady(key, session.LocalHandleID)
+				if readyErr != nil {
+					return fmt.Errorf("restore retained pi native-start boundary for %s/%d: %w", key.RunID, key.Generation, readyErr)
+				}
+				journal = updated
+				resumePreStart = true
+				break
 			}
 			updated, discardErr := daemon.store.DiscardUnreadyGoalSessionAttachDelivery(key, session.LocalHandleID)
 			if discardErr != nil {
@@ -1392,7 +1412,8 @@ func (daemon *daemon) recoverUnclosedGoalSessions(ctx context.Context) error {
 			break
 		}
 		attachMappingPending := goalSessionAttachmentMappingPending(session, journal)
-		if attachMappingPending {
+		resumeAttachmentPending := goalSessionResumeAttachmentPending(session, journal)
+		if attachMappingPending || resumeAttachmentPending {
 			for _, delivery := range journal.PendingGoalDeliveries {
 				if delivery.Kind != state.GoalDeliverySessionAttach || !delivery.Ready || delivery.SessionAttach == nil || delivery.DeliveryID != session.LocalHandleID {
 					continue
@@ -1403,8 +1424,15 @@ func (daemon *daemon) recoverUnclosedGoalSessions(ctx context.Context) error {
 					if session, loadErr = daemon.store.LoadGoalSession(session.Key()); loadErr != nil {
 						return fmt.Errorf("reload Goal session after attachment readback for %s/%d: %w", key.RunID, key.Generation, loadErr)
 					}
-				} else if daemon.log != nil {
-					daemon.log.Warn("recover_goal_session_attachment_failed", "run_id", key.RunID, "generation", key.Generation, "error", deliverErr)
+				} else {
+					// Definitive delivery rejection retires the durable item and
+					// returns that post-retirement journal with an error. Preserve
+					// it so the following recovery branch can quarantine a
+					// rejected pre-start resume rather than retaining a stale copy.
+					journal = updated
+					if daemon.log != nil {
+						daemon.log.Warn("recover_goal_session_attachment_failed", "run_id", key.RunID, "generation", key.Generation, "error", deliverErr)
+					}
 				}
 				break
 			}
@@ -1426,6 +1454,39 @@ func (daemon *daemon) recoverUnclosedGoalSessions(ctx context.Context) error {
 				return fmt.Errorf("reload retired legacy Goal session for %s/%d: %w", key.RunID, key.Generation, loadErr)
 			}
 		}
+		if retiredResumedGoalSessionAttachment(journal, session) && (resumePreStart || session.HasKnownRetainedResumeNativeStop()) {
+			// Control definitively rejected the new attachment before a current
+			// receipt existed. Its predecessor stop certificate cannot release a
+			// different binding, so quarantine this local resume identity instead
+			// of fabricating a stop request for the old attachment.
+			//
+			// A typed native rejection is durable before its terminal outbox
+			// transition. Do not erase that marker by closing the session first:
+			// a second crash would otherwise recover it as unknown_outcome.
+			if !terminalKnown && session.ResumeTerminalReason == string(protocol.TaskResultReasonResumeRejected) && session.HasKnownRetainedResumeNativeStop() {
+				if err := daemon.queueNativeGoalUsage(rootContext, key, nil); err != nil {
+					return fmt.Errorf("queue rejected retained pi usage for %s/%d: %w", key.RunID, key.Generation, err)
+				}
+				if err := daemon.queueTerminalTransitionWithRetry(rootContext, key, "failed", map[string]string{
+					"stage":   "goal_session_recovery",
+					"reason":  string(protocol.TaskResultReasonResumeRejected),
+					"summary": "retained pi session was rejected before native work started",
+					"error":   "retained pi session was rejected before native work started",
+				}); err != nil {
+					return fmt.Errorf("queue rejected retained pi terminal transition for %s/%d: %w", key.RunID, key.Generation, err)
+				}
+				if journal, loadErr = daemon.store.LoadJournal(key); loadErr != nil {
+					return fmt.Errorf("reload rejected retained pi run after terminal recovery for %s/%d: %w", key.RunID, key.Generation, loadErr)
+				}
+				terminalKnown = journal.TerminalState != "" || journal.LocalState == "terminal_pending" || journal.LocalState == "cleanup_pending" || journal.LocalState == "stale"
+			}
+			if _, closeErr := daemon.store.CloseGoalSession(session.Key()); closeErr != nil {
+				return fmt.Errorf("close definitively rejected retained pi attachment for %s/%d: %w", key.RunID, key.Generation, closeErr)
+			}
+			if session, loadErr = daemon.store.LoadGoalSession(session.Key()); loadErr != nil {
+				return fmt.Errorf("reload rejected retained pi attachment for %s/%d: %w", key.RunID, key.Generation, loadErr)
+			}
+		}
 		if updated, ensureErr := daemon.ensureRetainedGoalSessionStopDelivery(key, session, journal); ensureErr != nil {
 			return fmt.Errorf("restore retained Goal session stop delivery for %s/%d: %w", key.RunID, key.Generation, ensureErr)
 		} else {
@@ -1433,6 +1494,21 @@ func (daemon *daemon) recoverUnclosedGoalSessions(ctx context.Context) error {
 		}
 		if session, loadErr = daemon.store.LoadGoalSession(session.Key()); loadErr != nil {
 			return fmt.Errorf("reload retained Goal session after stop delivery recovery for %s/%d: %w", key.RunID, key.Generation, loadErr)
+		}
+		if resumePreStart && session.HasVerifiedControlAttachment() && session.SessionState == state.GoalSessionStateBusy {
+			// Ready was not durable before the interrupted daemon reached
+			// adapter.Start, so the predecessor certificate remains positive
+			// evidence that this retained native session is stopped. Attach the
+			// new reservation first, then release that exact binding.
+			if err := daemon.recordStoppedGoalSession(key, session.Key()); err != nil {
+				return fmt.Errorf("release pre-start retained pi session for %s/%d: %w", key.RunID, key.Generation, err)
+			}
+			if journal, loadErr = daemon.store.LoadJournal(key); loadErr != nil {
+				return fmt.Errorf("reload pre-start retained pi run after stop recovery for %s/%d: %w", key.RunID, key.Generation, loadErr)
+			}
+			if session, loadErr = daemon.store.LoadGoalSession(session.Key()); loadErr != nil {
+				return fmt.Errorf("reload pre-start retained pi session after stop recovery for %s/%d: %w", key.RunID, key.Generation, loadErr)
+			}
 		}
 		if retiredRetainedGoalSessionStopDelivery(session, journal) {
 			if _, closeErr := daemon.store.CloseGoalSession(session.Key()); closeErr != nil {
@@ -1465,7 +1541,7 @@ func (daemon *daemon) recoverUnclosedGoalSessions(ctx context.Context) error {
 			return fmt.Errorf("retain workspace for recovered Goal session %s/%d: %w", key.RunID, key.Generation, err)
 		}
 		legacyAttachmentBarrier := legacyGoalSessionAttachmentBarrier(session, journal)
-		attachedStopRecovery := attachMappingPending || (session.HasVerifiedControlAttachment() && session.SessionState == state.GoalSessionStateBusy)
+		attachedStopRecovery := attachMappingPending || resumeAttachmentPending || resumePreStart || (session.HasVerifiedControlAttachment() && session.SessionState == state.GoalSessionStateBusy)
 		if !stoppedWitness && !attachedStopRecovery && !legacyAttachmentBarrier && session.SessionState != state.GoalSessionStateClosed && session.LaunchState != state.GoalSessionLaunchStateUncertain {
 			if _, err := daemon.store.MarkGoalSessionUncertain(session.Key(), "native Goal session was left unclosed across daemon restart"); err != nil {
 				return fmt.Errorf("mark Goal session uncertain for %s/%d: %w", key.RunID, key.Generation, err)
@@ -1484,7 +1560,7 @@ func (daemon *daemon) recoverUnclosedGoalSessions(ctx context.Context) error {
 				return fmt.Errorf("record stopped native process %s/%d: %w", key.RunID, key.Generation, err)
 			}
 		}
-		if attachedStopRecovery && !nativeStopWitness && (journal.PID <= 0 || strings.TrimSpace(journal.ProcessIdentity) == "") {
+		if attachedStopRecovery && !stoppedWitness && !nativeStopWitness && (journal.PID <= 0 || strings.TrimSpace(journal.ProcessIdentity) == "") {
 			// A ready attach only proves that its request may have committed. With
 			// no recoverable native process identity it cannot prove stopped, so
 			// retain the exact request and local handle for readback/reconciliation.
@@ -1502,11 +1578,17 @@ func (daemon *daemon) recoverUnclosedGoalSessions(ctx context.Context) error {
 		if journal.LocalState == "terminal_pending" || journal.LocalState == "cleanup_pending" {
 			continue
 		}
+		reason := protocol.TaskResultReasonUnknownOutcome
+		summary := "native Goal session was not safely recoverable after daemon restart"
+		if session.ResumeTerminalReason == string(protocol.TaskResultReasonResumeRejected) && session.HasKnownRetainedResumeNativeStop() {
+			reason = protocol.TaskResultReasonResumeRejected
+			summary = "retained pi session was rejected before native work started"
+		}
 		if err := daemon.queueTerminalTransitionWithRetry(rootContext, key, "failed", map[string]string{
 			"stage":   "goal_session_recovery",
-			"reason":  string(protocol.TaskResultReasonUnknownOutcome),
-			"summary": "native Goal session was not safely recoverable after daemon restart",
-			"error":   "native Goal session was not safely recoverable after daemon restart",
+			"reason":  string(reason),
+			"summary": summary,
+			"error":   summary,
 		}); err != nil {
 			return fmt.Errorf("queue unknown native outcome for %s/%d: %w", key.RunID, key.Generation, err)
 		}
@@ -1995,6 +2077,13 @@ func retainedGoalSessionTerminalState(session state.GoalSessionJournal, journal 
 }
 
 func retainedGoalSessionNativeStopWitness(session state.GoalSessionJournal, journal state.RunJournal) bool {
+	if session.HasKnownRetainedResumeNativeStop() {
+		// A resumed pi process can be conclusively closed before the current
+		// Control attachment has been read back. This is native-stop evidence,
+		// not a release receipt: the ready attach still has to establish the
+		// exact binding before a stop delivery can make it available.
+		return true
+	}
 	if !session.HasVerifiedControlAttachment() {
 		return retainedGoalSessionAttachPendingStopped(session, journal)
 	}
@@ -2047,6 +2136,63 @@ func hasReplayableGoalSessionAttach(journal state.RunJournal, session state.Goal
 			continue
 		}
 		return delivery.SessionAttach.BindingID != "" || delivery.SessionAttach.ServerIssuedBinding
+	}
+	return false
+}
+
+// resumeGoalSessionPreStartAttachment identifies the only rebind window whose
+// absence of a Ready marker proves adapter.Start was not yet permitted. The
+// new attachment still has to be sent before Control can release the exact
+// reservation, but the predecessor stop certificate remains valid native-stop
+// evidence for this narrow recovery path.
+func resumeGoalSessionPreStartAttachment(session state.GoalSessionJournal, delivery state.GoalDelivery) bool {
+	if delivery.Kind != state.GoalDeliverySessionAttach || delivery.Ready || delivery.SessionAttach == nil ||
+		session.SessionMode != state.GoalSessionModeResume || !session.ResumeStartPending || session.ResumeSourceStopCertificate == nil || session.StopCertificate != nil ||
+		session.SessionState != state.GoalSessionStateBusy || session.LaunchState != state.GoalSessionLaunchStateAttached ||
+		session.NeedsReconciliation() || session.ControlSessionID == "" || session.ControlAttachmentReceiptID != "" || session.NativeSessionID == "" {
+		return false
+	}
+	payload := delivery.SessionAttach
+	return !payload.ServerIssuedBinding && payload.LocalHandleID == session.LocalHandleID && payload.BindingID == session.BindingID
+}
+
+// goalSessionResumeAttachmentPending identifies a rebound retained session
+// whose new Control attachment may be reconstructed from its exact ready
+// delivery. Unlike a fresh attach, the prior Control session ID remains in the
+// journal across the rebind; the missing current attachment receipt is the
+// authority boundary that distinguishes it from an already attached session.
+func goalSessionResumeAttachmentPending(session state.GoalSessionJournal, journal state.RunJournal) bool {
+	if session.SessionMode != state.GoalSessionModeResume || session.ResumeSourceStopCertificate == nil || session.StopCertificate != nil ||
+		(session.SessionState != state.GoalSessionStateBusy && session.SessionState != state.GoalSessionStateUnavailable) || session.LaunchState != state.GoalSessionLaunchStateAttached ||
+		session.NeedsReconciliation() || session.ControlSessionID == "" || session.ControlAttachmentReceiptID != "" || session.NativeSessionID == "" {
+		return false
+	}
+	for _, delivery := range journal.PendingGoalDeliveries {
+		if delivery.Kind != state.GoalDeliverySessionAttach || !delivery.Ready || delivery.SessionAttach == nil {
+			continue
+		}
+		payload := delivery.SessionAttach
+		if !payload.ServerIssuedBinding && payload.LocalHandleID == session.LocalHandleID && payload.BindingID == session.BindingID {
+			return true
+		}
+	}
+	return false
+}
+
+func retiredResumedGoalSessionAttachment(journal state.RunJournal, session state.GoalSessionJournal) bool {
+	if session.SessionMode != state.GoalSessionModeResume || session.ResumeSourceStopCertificate == nil ||
+		session.ControlSessionID == "" || session.ControlAttachmentReceiptID != "" ||
+		session.SessionState == state.GoalSessionStateClosed || session.LaunchState != state.GoalSessionLaunchStateAttached {
+		return false
+	}
+	for _, retired := range journal.RetiredGoalDeliveries {
+		if retired.Delivery.Kind != state.GoalDeliverySessionAttach || retired.Delivery.SessionAttach == nil {
+			continue
+		}
+		payload := retired.Delivery.SessionAttach
+		if !payload.ServerIssuedBinding && payload.LocalHandleID == session.LocalHandleID && payload.BindingID == session.BindingID {
+			return true
+		}
 	}
 	return false
 }
@@ -2809,8 +2955,23 @@ func admissionLaunchFailure(admission protocol.Admission, capabilities harness.C
 			return err
 		}
 	}
-	if admission.SessionMode != protocol.SessionModeFresh && admission.SessionMode != protocol.SessionModeHandoff || admission.RequestedSessionID != nil {
-		return taskResultFailure(protocol.TaskResultReasonResumeRejected, fmt.Errorf("%s: only fresh native Goal sessions and fresh-session handoff are implemented", protocol.TaskResultReasonResumeRejected))
+	switch admission.SessionMode {
+	case protocol.SessionModeFresh, protocol.SessionModeHandoff:
+		if admission.RequestedSessionID != nil {
+			return taskResultFailure(protocol.TaskResultReasonResumeRejected, fmt.Errorf("%s: fresh native Goal sessions cannot name a retained session", protocol.TaskResultReasonResumeRejected))
+		}
+	case protocol.SessionModeResume:
+		// Pi is the only adapter with an implemented, locally validated resume
+		// transport. Every other adapter remains fail-closed even if a caller
+		// supplies a syntactically valid Control reservation.
+		if capabilities.Kind != harness.KindPi {
+			return taskResultFailure(protocol.TaskResultReasonResumeRejected, fmt.Errorf("%s: native retained resume is not implemented for harness %q", protocol.TaskResultReasonResumeRejected, capabilities.Kind))
+		}
+		if err := capabilities.Require(harness.CapabilityResume); err != nil {
+			return taskResultFailure(protocol.TaskResultReasonResumeRejected, err)
+		}
+	default:
+		return taskResultFailure(protocol.TaskResultReasonResumeRejected, fmt.Errorf("%s: unsupported native Goal session mode %q", protocol.TaskResultReasonResumeRejected, admission.SessionMode))
 	}
 	if admission.Limits.MaxTurns != 1 {
 		return errors.New("Goal admission must request exactly one native turn")
@@ -2836,6 +2997,100 @@ func goalSessionBindingID(admission protocol.Admission, claim protocol.ClaimResp
 	default:
 		return "", errors.New("Goal claim has an invalid session mode")
 	}
+}
+
+type resumedGoalSession struct {
+	journal     state.GoalSessionJournal
+	prepared    workspace.Prepared
+	fingerprint string
+	resume      harness.ResumeHandle
+}
+
+// recoverPiGoalSessionForResume proves that the Control reservation names one
+// exact locally retained pi session and that its original workspace is still
+// the admitted Subject. It deliberately makes no native or state transition;
+// the caller consumes the stopped certificate with the CAS immediately before
+// it creates the new native process.
+func (daemon *daemon) recoverPiGoalSessionForResume(ctx context.Context, claim protocol.ClaimResponse, admission protocol.Admission) (resumedGoalSession, error) {
+	if admission.RequestedSessionID == nil || claim.HarnessSessionID == nil || *admission.RequestedSessionID != *claim.HarnessSessionID {
+		return resumedGoalSession{}, errors.New("resume admission and claim do not name the same harness session")
+	}
+	session, err := daemon.store.LoadGoalSessionByControlSessionID(*claim.HarnessSessionID)
+	if err != nil {
+		return resumedGoalSession{}, fmt.Errorf("load retained pi session: %w", err)
+	}
+	if session.GoalID != admission.GoalID || session.GoalRevision != admission.GoalRevision ||
+		session.WorkItemID != admissionWorkItemIDValue(admission.WorkItemID) ||
+		session.ControlSessionID != *admission.RequestedSessionID {
+		return resumedGoalSession{}, errors.New("retained pi session does not match the admitted Goal identity")
+	}
+	if session.StopCertificate == nil || session.NativeSessionID == "" || session.NativeSessionFilename == "" ||
+		!filepath.IsAbs(session.NativeSessionFilename) {
+		return resumedGoalSession{}, errors.New("retained pi session has no usable stopped native handle")
+	}
+	file, err := os.Stat(session.NativeSessionFilename)
+	if err != nil || !file.Mode().IsRegular() {
+		if err != nil {
+			return resumedGoalSession{}, fmt.Errorf("retained pi session file is unavailable: %w", err)
+		}
+		return resumedGoalSession{}, errors.New("retained pi session file is not regular")
+	}
+	if session.WorkspaceOwnerRunKey.RunID == "" || session.WorkspaceOwnerRunKey.Generation <= 0 || session.WorkspacePath == "" {
+		return resumedGoalSession{}, errors.New("retained pi session has no recoverable workspace owner")
+	}
+	workspaceService, ok := daemon.workspace.(goalRecoveredSubjectWorkspace)
+	if !ok {
+		return resumedGoalSession{}, errors.New("workspace service does not support retained Goal subjects")
+	}
+	owner := session.WorkspaceOwnerRunKey
+	recovered, err := workspaceService.RecoverSubject(ctx, daemon.config.Runtime.Workspace, workspace.RunRef{RunID: owner.RunID, Generation: owner.Generation}, session.WorkspacePath, admission.Subject)
+	if err != nil {
+		return resumedGoalSession{}, fmt.Errorf("recover retained Goal Subject workspace: %w", err)
+	}
+	if recovered.Subject != admission.Subject || recovered.Prepared.Path != session.WorkspacePath ||
+		recovered.Prepared.BindingKey != daemon.config.Runtime.Workspace || recovered.Prepared.Run != (workspace.RunRef{RunID: owner.RunID, Generation: owner.Generation}) {
+		return resumedGoalSession{}, errors.New("recovered retained Goal workspace does not match its durable owner")
+	}
+	fingerprint, err := workspaceFingerprint(ctx, recovered.Prepared)
+	if err != nil {
+		return resumedGoalSession{}, fmt.Errorf("fingerprint retained Goal workspace: %w", err)
+	}
+	if fingerprint != session.WorkspaceFingerprint {
+		return resumedGoalSession{}, errors.New("retained Goal workspace fingerprint no longer matches")
+	}
+	return resumedGoalSession{
+		journal:     session,
+		prepared:    recovered.Prepared,
+		fingerprint: fingerprint,
+		resume: harness.ResumeHandle{
+			LocalHandleID:         session.LocalHandleID,
+			NativeSessionID:       session.NativeSessionID,
+			NativeSessionFilename: session.NativeSessionFilename,
+			WorkspaceFingerprint:  fingerprint,
+			NativeVersion:         session.HarnessVersion,
+		},
+	}, nil
+}
+
+// attachResumedPiSession persists Control's current binding before a known
+// native stop is reported. It is intentionally separate from native close:
+// an Open failure may still have created a process, which must be closed
+// before recordStoppedGoalSession can truthfully queue the stop receipt.
+func (daemon *daemon) attachResumedPiSession(ctx context.Context, key state.RunKey, claim protocol.ClaimResponse, admission protocol.Admission, sessionKey state.GoalSessionKey) error {
+	journal, err := daemon.store.LoadJournal(key)
+	if err != nil {
+		return fmt.Errorf("load resumed Goal delivery journal: %w", err)
+	}
+	_, receipt, err := daemon.deliverGoalDelivery(ctx, journal, state.GoalDeliverySessionAttach, sessionKey.LocalHandleID, func(receipt control.GoalSessionReceipt) error {
+		return validateGoalSessionReceipt(admission, claim, key, sessionKey.LocalHandleID, receipt)
+	})
+	if err != nil {
+		return fmt.Errorf("attach retained pi session: %w", err)
+	}
+	if receipt == nil {
+		return errors.New("retained pi session attachment receipt is unavailable")
+	}
+	return nil
 }
 
 // startGoalAdmission crosses the staged native-launch barriers in their only
@@ -2902,93 +3157,173 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 	if err != nil {
 		return err
 	}
-
-	if _, err := daemon.store.MarkWorkspaceRecoveryRequired(key); err != nil {
-		return fmt.Errorf("mark workspace recovery required: %w", err)
+	if configuredKind == harness.KindPi {
+		if err := validatePiRPCProfileArgs(profile.Args); err != nil {
+			return fmt.Errorf("validate pi RPC invocation before native launch: %w", err)
+		}
 	}
-	subjectWorkspace, ok := daemon.workspace.(goalSubjectWorkspace)
-	if !ok {
-		return errors.New("workspace service does not support immutable Goal subjects")
-	}
-	preparedSubject, err := subjectWorkspace.PrepareSubject(ctx, daemon.config.Runtime.Workspace, workspace.RunRef{RunID: key.RunID, Generation: key.Generation}, admission.Subject)
+	environment, err := execution.BuildEnvironment(profile.EnvAllowlist...)
 	if err != nil {
-		return fmt.Errorf("prepare admitted Subject workspace: %w", err)
+		return fmt.Errorf("build native environment: %w", err)
 	}
-	prepared := preparedSubject.Prepared
-	if preparedSubject.Subject != admission.Subject {
-		return errors.New("prepared Goal workspace does not match the admitted Subject")
-	}
-	if !daemon.persistWorkspacePath(ctx, key, prepared.Path) {
-		return errors.New("persist workspace path")
+
+	var (
+		prepared      workspace.Prepared
+		fingerprint   string
+		localHandleID string
+		sessionKey    state.GoalSessionKey
+		resume        *harness.ResumeHandle
+		attachQueued  bool
+		attachReady   bool
+	)
+	if admission.SessionMode == protocol.SessionModeResume {
+		resumed, resumeErr := daemon.recoverPiGoalSessionForResume(ctx, claim, admission)
+		if resumeErr != nil {
+			return taskResultFailure(protocol.TaskResultReasonResumeRejected, resumeErr)
+		}
+		prepared = resumed.prepared
+		fingerprint = resumed.fingerprint
+		localHandleID = resumed.journal.LocalHandleID
+		sessionKey = resumed.journal.Key()
+		resume = &resumed.resume
+
+		// The new Run refers to the retained workspace but never owns its
+		// deletion. Persist that fact before consuming the predecessor receipt.
+		if _, err := daemon.store.MarkWorkspaceRecoveryRequired(key); err != nil {
+			return taskResultFailure(protocol.TaskResultReasonResumeRejected, fmt.Errorf("mark retained workspace recovery required: %w", err))
+		}
+		if !daemon.persistWorkspacePath(ctx, key, prepared.Path) {
+			return taskResultFailure(protocol.TaskResultReasonResumeRejected, errors.New("persist retained workspace path"))
+		}
+		if err := daemon.retainUnknownGoalLaunchWorkspaceChecked(key); err != nil {
+			return taskResultFailure(protocol.TaskResultReasonResumeRejected, err)
+		}
+		// Persist the unready target attachment before consuming the available
+		// certificate. If this write fails, the predecessor remains available;
+		// if the process dies before the CAS, ordinary unready-delivery recovery
+		// can discard it without referring to a new native effect.
+		if _, err := daemon.store.QueueGoalSessionAttach(key, state.GoalSessionAttachDelivery{
+			GoalID: admission.GoalID, LocalHandleID: localHandleID, BindingID: bindingID,
+			ServerIssuedBinding: false,
+			HarnessKind:         string(daemon.harnessCapabilities.Kind), HarnessVersion: daemon.harnessCapabilities.NativeVersion,
+			AdapterVersion: daemon.harnessCapabilities.ImplementationVersion, WorkspaceFingerprint: fingerprint,
+			Workspace: daemon.config.Runtime.Workspace, RepositoryResourceID: &admission.Subject.ResourceID,
+		}); err != nil {
+			return taskResultFailure(protocol.TaskResultReasonResumeRejected, fmt.Errorf("queue retained pi session attach intent: %w", err))
+		}
+		attachQueued = true
+		rebound, rebindErr := daemon.store.RebindGoalSessionForResume(sessionKey, state.GoalSessionResumeRebind{
+			RunID: key.RunID, Generation: key.Generation, TaskID: claim.TaskID, AdmissionID: admission.AdmissionID, BindingID: bindingID,
+			ExactStopCertificate: *resumed.journal.StopCertificate,
+			Compatibility: state.GoalSessionCompatibility{
+				MachineID: daemon.machineID, RuntimeID: daemon.runtimeID, RuntimeEpoch: daemon.runtimeEpoch,
+				HarnessKind: string(daemon.harnessCapabilities.Kind), HarnessVersion: daemon.harnessCapabilities.NativeVersion,
+				AdapterVersion: daemon.harnessCapabilities.ImplementationVersion, AdapterProtocolVersion: daemon.harnessCapabilities.ProtocolVersion,
+				WorkspaceFingerprint: fingerprint, RepositoryResourceID: admission.Subject.ResourceID,
+			},
+		})
+		if rebindErr != nil {
+			observed, observeErr := daemon.store.LoadGoalSession(sessionKey)
+			if observeErr == nil && observed.SessionMode == state.GoalSessionModeResume && observed.RunID == key.RunID &&
+				observed.Generation == key.Generation && observed.BindingID == bindingID && observed.LocalHandleID == localHandleID {
+				daemon.retainUnknownGoalLaunchWorkspace(key)
+				return taskResultFailure(protocol.TaskResultReasonUnknownOutcome, fmt.Errorf("resume rebind outcome is unknown: %w", rebindErr))
+			}
+			if observeErr == nil && observed.SessionState == state.GoalSessionStateAvailable && observed.StopCertificate != nil &&
+				observed.RunID == resumed.journal.RunID && observed.Generation == resumed.journal.Generation && observed.BindingID == resumed.journal.BindingID {
+				if discardErr := daemon.discardUnreadyGoalSessionAttachDelivery(key, localHandleID); discardErr != nil {
+					return taskResultFailure(protocol.TaskResultReasonUnknownOutcome, errors.Join(rebindErr, discardErr))
+				}
+				return taskResultFailure(protocol.TaskResultReasonResumeRejected, fmt.Errorf("consume retained pi session: %w", rebindErr))
+			}
+			daemon.retainUnknownGoalLaunchWorkspace(key)
+			if observeErr != nil {
+				return taskResultFailure(protocol.TaskResultReasonUnknownOutcome, errors.Join(rebindErr, fmt.Errorf("read retained pi session after rebind error: %w", observeErr)))
+			}
+			return taskResultFailure(protocol.TaskResultReasonUnknownOutcome, fmt.Errorf("resume rebind outcome is ambiguous: %w", rebindErr))
+		}
+		sessionKey = rebound.Key()
+	} else {
+		if _, err := daemon.store.MarkWorkspaceRecoveryRequired(key); err != nil {
+			return fmt.Errorf("mark workspace recovery required: %w", err)
+		}
+		subjectWorkspace, ok := daemon.workspace.(goalSubjectWorkspace)
+		if !ok {
+			return errors.New("workspace service does not support immutable Goal subjects")
+		}
+		preparedSubject, err := subjectWorkspace.PrepareSubject(ctx, daemon.config.Runtime.Workspace, workspace.RunRef{RunID: key.RunID, Generation: key.Generation}, admission.Subject)
+		if err != nil {
+			return fmt.Errorf("prepare admitted Subject workspace: %w", err)
+		}
+		prepared = preparedSubject.Prepared
+		if preparedSubject.Subject != admission.Subject {
+			return errors.New("prepared Goal workspace does not match the admitted Subject")
+		}
+		if !daemon.persistWorkspacePath(ctx, key, prepared.Path) {
+			return errors.New("persist workspace path")
+		}
+		fingerprint, err = workspaceFingerprint(ctx, prepared)
+		if err != nil {
+			return fmt.Errorf("fingerprint workspace: %w", err)
+		}
+		localHandleID, err = state.NewGoalSessionLocalHandleID()
+		if err != nil {
+			return fmt.Errorf("generate local native session handle: %w", err)
+		}
+		launchIntentID, err := state.NewGoalSessionLocalHandleID()
+		if err != nil {
+			return fmt.Errorf("generate native launch intent: %w", err)
+		}
+		sessionKey = state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: localHandleID}
+		intent := state.GoalSessionLaunchIntent{
+			LaunchIntentID: launchIntentID, GoalID: admission.GoalID, GoalRevision: admission.GoalRevision,
+			WorkItemID: admissionWorkItemIDValue(admission.WorkItemID), TaskID: claim.TaskID, RunID: key.RunID, Generation: key.Generation,
+			AdmissionID: admission.AdmissionID, HandoffSourceRunID: admissionHandoffSourceRunID(admission.HandoffSourceRunID), LocalHandleID: localHandleID,
+			BindingID: bindingID, MachineID: daemon.machineID, RuntimeID: daemon.runtimeID, RuntimeEpoch: daemon.runtimeEpoch,
+			HarnessKind: string(daemon.harnessCapabilities.Kind), HarnessVersion: daemon.harnessCapabilities.NativeVersion,
+			AdapterVersion: daemon.harnessCapabilities.ImplementationVersion, AdapterProtocolVersion: daemon.harnessCapabilities.ProtocolVersion,
+			WorkspaceFingerprint: fingerprint, WorkspacePath: prepared.Path, RepositoryResourceID: admission.Subject.ResourceID, SessionMode: string(admission.SessionMode),
+		}
+		if _, err := daemon.store.SaveGoalSessionLaunchIntent(intent); err != nil {
+			return fmt.Errorf("save Goal session launch intent: %w", err)
+		}
+		if _, err := daemon.store.MarkGoalSessionLaunchStarted(sessionKey, daemon.now()); err != nil {
+			return fmt.Errorf("mark Goal session launch: %w", err)
+		}
 	}
 	if workspacePersisted != nil {
 		workspacePersisted(prepared)
 	}
-	fingerprint, err := workspaceFingerprint(ctx, prepared)
-	if err != nil {
-		return fmt.Errorf("fingerprint workspace: %w", err)
+	if !attachQueued {
+		if _, err := daemon.store.QueueGoalSessionAttach(key, state.GoalSessionAttachDelivery{
+			GoalID: admission.GoalID, LocalHandleID: localHandleID, BindingID: bindingID,
+			ServerIssuedBinding: admission.SessionMode != protocol.SessionModeResume,
+			HarnessKind:         string(daemon.harnessCapabilities.Kind), HarnessVersion: daemon.harnessCapabilities.NativeVersion,
+			AdapterVersion: daemon.harnessCapabilities.ImplementationVersion, WorkspaceFingerprint: fingerprint,
+			// Control owns a logical workspace key. The absolute local worktree path
+			// remains in the daemon journal and must not become control-plane identity.
+			Workspace: daemon.config.Runtime.Workspace, RepositoryResourceID: &admission.Subject.ResourceID,
+		}); err != nil {
+			if admission.SessionMode != protocol.SessionModeResume {
+				_, _ = daemon.store.AbortGoalSessionLaunchBeforeNativeStart(sessionKey)
+			}
+			return fmt.Errorf("queue native Goal session attach intent: %w", err)
+		}
 	}
-	localHandleID, err := state.NewGoalSessionLocalHandleID()
-	if err != nil {
-		return fmt.Errorf("generate local native session handle: %w", err)
-	}
-	launchIntentID, err := state.NewGoalSessionLocalHandleID()
-	if err != nil {
-		return fmt.Errorf("generate native launch intent: %w", err)
-	}
-	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: localHandleID}
-	intent := state.GoalSessionLaunchIntent{
-		LaunchIntentID:         launchIntentID,
-		GoalID:                 admission.GoalID,
-		GoalRevision:           admission.GoalRevision,
-		WorkItemID:             admissionWorkItemIDValue(admission.WorkItemID),
-		TaskID:                 claim.TaskID,
-		RunID:                  key.RunID,
-		Generation:             key.Generation,
-		AdmissionID:            admission.AdmissionID,
-		HandoffSourceRunID:     admissionHandoffSourceRunID(admission.HandoffSourceRunID),
-		LocalHandleID:          localHandleID,
-		BindingID:              bindingID,
-		MachineID:              daemon.machineID,
-		RuntimeID:              daemon.runtimeID,
-		RuntimeEpoch:           daemon.runtimeEpoch,
-		HarnessKind:            string(daemon.harnessCapabilities.Kind),
-		HarnessVersion:         daemon.harnessCapabilities.NativeVersion,
-		AdapterVersion:         daemon.harnessCapabilities.ImplementationVersion,
-		AdapterProtocolVersion: daemon.harnessCapabilities.ProtocolVersion,
-		WorkspaceFingerprint:   fingerprint,
-		WorkspacePath:          prepared.Path,
-		SessionMode:            string(admission.SessionMode),
-	}
-	if _, err := daemon.store.SaveGoalSessionLaunchIntent(intent); err != nil {
-		return fmt.Errorf("save Goal session launch intent: %w", err)
-	}
-	if _, err := daemon.store.MarkGoalSessionLaunchStarted(sessionKey, daemon.now()); err != nil {
-		return fmt.Errorf("mark Goal session launch: %w", err)
-	}
-	if _, err := daemon.store.QueueGoalSessionAttach(key, state.GoalSessionAttachDelivery{
-		GoalID:               admission.GoalID,
-		LocalHandleID:        localHandleID,
-		BindingID:            bindingID,
-		ServerIssuedBinding:  admission.SessionMode != protocol.SessionModeResume,
-		HarnessKind:          string(daemon.harnessCapabilities.Kind),
-		HarnessVersion:       daemon.harnessCapabilities.NativeVersion,
-		AdapterVersion:       daemon.harnessCapabilities.ImplementationVersion,
-		WorkspaceFingerprint: fingerprint,
-		// Control owns a logical workspace key. The absolute local worktree path
-		// remains in the daemon journal and must not become control-plane identity.
-		Workspace:            daemon.config.Runtime.Workspace,
-		RepositoryResourceID: &admission.Subject.ResourceID,
-	}); err != nil {
-		_, _ = daemon.store.AbortGoalSessionLaunchBeforeNativeStart(sessionKey)
-		return fmt.Errorf("queue native Goal session attach intent: %w", err)
-	}
-
-	environment, err := execution.BuildEnvironment(profile.EnvAllowlist...)
-	if err != nil {
-		_, _ = daemon.store.DiscardUnreadyGoalSessionAttachDelivery(key, localHandleID)
-		_, _ = daemon.store.AbortGoalSessionLaunchBeforeNativeStart(sessionKey)
-		return fmt.Errorf("build native environment: %w", err)
+	if resume != nil {
+		// For a retained session, Ready is also the durable native-start
+		// boundary. Recovery may compensate an unready rebind using the source
+		// stop certificate, but must treat a ready rebind as a possible new pi
+		// process and never infer that it stopped from a missing PID alone.
+		if _, err := daemon.markGoalSessionAttachDeliveryReady(key, localHandleID); err != nil {
+			daemon.retainUnknownGoalLaunchWorkspace(key)
+			return taskResultFailure(protocol.TaskResultReasonUnknownOutcome, fmt.Errorf("persist retained pi native-start boundary: %w", err))
+		}
+		if _, err := daemon.store.MarkGoalSessionResumeStartAttempted(sessionKey); err != nil {
+			daemon.retainUnknownGoalLaunchWorkspace(key)
+			return taskResultFailure(protocol.TaskResultReasonUnknownOutcome, fmt.Errorf("persist retained pi native-start attempt: %w", err))
+		}
+		attachReady = true
 	}
 	sink := harness.EventSinkFunc(func(_ context.Context, event harness.Event) error {
 		return daemon.queueNativeEvent(key, event)
@@ -2999,6 +3334,7 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 		Workspace:     prepared.Path,
 		Goal:          claim.Work.Goal,
 		ModelProfile:  admission.ModelProfile,
+		Resume:        resume,
 		Limits: harness.Limits{
 			MaxTurns:        int(admission.Limits.MaxTurns),
 			DeadlineAt:      parseAdmissionDeadline(admission.Limits.DeadlineAt),
@@ -3017,7 +3353,24 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 	}, sink)
 	nativeLaunchAttempted = true
 	if err != nil {
+		if resume != nil && errors.Is(err, pi.ErrResumeRejected) {
+			// pi rejected the retained handle before returning a session. Persist
+			// known native stop before any Control RPC so an attachment timeout can
+			// be repaired through the ready readback barrier rather than clearing
+			// the current binding as uncertain.
+			if _, stopErr := daemon.store.MarkGoalSessionResumeRejected(sessionKey); stopErr != nil {
+				return taskResultFailure(protocol.TaskResultReasonUnknownOutcome, errors.Join(err, fmt.Errorf("persist rejected retained pi stop: %w", stopErr)))
+			}
+			return taskResultFailure(protocol.TaskResultReasonResumeRejected, fmt.Errorf("start retained pi session: %w", err))
+		}
 		daemon.retainUnknownGoalLaunchWorkspace(key)
+		if resume != nil {
+			// Ready proves that this call was allowed to attempt a native resume.
+			// Do not discard or clear the exact attachment identity on an
+			// ambiguous transport failure; restart recovery must retain this
+			// barrier until process/native termination is proven.
+			return taskResultFailure(protocol.TaskResultReasonUnknownOutcome, fmt.Errorf("start retained pi session: %w", err))
+		}
 		if _, discardErr := daemon.store.DiscardUnreadyGoalSessionAttachDelivery(key, localHandleID); discardErr != nil {
 			return fmt.Errorf("discard unsent native Goal session attach intent: %w", errors.Join(err, discardErr))
 		}
@@ -3026,8 +3379,10 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 	}
 	staged, ok := session.(harness.StagedSession)
 	if !ok {
-		if _, discardErr := daemon.store.DiscardUnreadyGoalSessionAttachDelivery(key, localHandleID); discardErr != nil {
-			return fmt.Errorf("discard unsent native Goal session attach intent: %w", discardErr)
+		if resume == nil {
+			if _, discardErr := daemon.store.DiscardUnreadyGoalSessionAttachDelivery(key, localHandleID); discardErr != nil {
+				return fmt.Errorf("discard unsent native Goal session attach intent: %w", discardErr)
+			}
 		}
 		cause := errors.New("native Goal adapter does not implement staged session launch")
 		daemon.retainUnknownGoalLaunchWorkspace(key)
@@ -3038,8 +3393,10 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 	}
 	if err := daemon.attachNativeSession(key, session, sessionKey, admission, prepared, deadline); err != nil {
 		daemon.retainUnknownGoalLaunchWorkspace(key)
-		if _, discardErr := daemon.store.DiscardUnreadyGoalSessionAttachDelivery(key, localHandleID); discardErr != nil {
-			return fmt.Errorf("discard unsent native Goal session attach intent: %w", errors.Join(err, discardErr))
+		if resume == nil {
+			if _, discardErr := daemon.store.DiscardUnreadyGoalSessionAttachDelivery(key, localHandleID); discardErr != nil {
+				return fmt.Errorf("discard unsent native Goal session attach intent: %w", errors.Join(err, discardErr))
+			}
 		}
 		daemon.abandonGoalSession(sessionKey, session, false, err)
 		return err
@@ -3050,28 +3407,53 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 	handle, err := staged.Open(operationContext)
 	if err != nil {
 		daemon.retainUnknownGoalLaunchWorkspace(key)
-		if _, discardErr := daemon.store.DiscardUnreadyGoalSessionAttachDelivery(key, localHandleID); discardErr != nil {
-			return fmt.Errorf("discard unsent native Goal session attach intent: %w", errors.Join(err, discardErr))
+		if resume == nil {
+			if _, discardErr := daemon.store.DiscardUnreadyGoalSessionAttachDelivery(key, localHandleID); discardErr != nil {
+				return fmt.Errorf("discard unsent native Goal session attach intent: %w", errors.Join(err, discardErr))
+			}
 		}
-		daemon.abandonGoalSession(sessionKey, session, false, err)
+		if resume != nil && errors.Is(err, pi.ErrResumeRejected) {
+			attachErr := daemon.attachResumedPiSession(operationContext, key, claim, admission, sessionKey)
+			abandonErr := daemon.abandonGoalSession(sessionKey, session, attachErr == nil, err)
+			if attachErr == nil && abandonErr == nil {
+				return taskResultFailure(protocol.TaskResultReasonResumeRejected, fmt.Errorf("open retained pi session: %w", err))
+			}
+			return taskResultFailure(protocol.TaskResultReasonUnknownOutcome, errors.Join(err, attachErr, abandonErr))
+		}
+		abandonErr := daemon.abandonGoalSession(sessionKey, session, false, err)
+		if abandonErr != nil {
+			return fmt.Errorf("open native Goal session: %w", errors.Join(err, abandonErr))
+		}
 		return fmt.Errorf("open native Goal session: %w", err)
 	}
-	if _, err := daemon.store.PersistGoalSessionHandle(sessionKey, state.GoalSessionHandle{NativeSessionID: handle.ID, NativeSessionFilename: handle.Filename}); err != nil {
+	if resume != nil && (handle.ID != resume.NativeSessionID || handle.Filename != resume.NativeSessionFilename) {
+		cause := errors.New("retained pi session returned a different native handle")
 		daemon.retainUnknownGoalLaunchWorkspace(key)
-		if _, discardErr := daemon.store.DiscardUnreadyGoalSessionAttachDelivery(key, localHandleID); discardErr != nil {
-			return fmt.Errorf("discard unsent native Goal session attach intent: %w", errors.Join(err, discardErr))
+		if abandonErr := daemon.abandonGoalSession(sessionKey, session, false, cause); abandonErr != nil {
+			return taskResultFailure(protocol.TaskResultReasonUnknownOutcome, errors.Join(cause, abandonErr))
 		}
-		daemon.abandonGoalSession(sessionKey, session, false, err)
-		return fmt.Errorf("persist native Goal session handle: %w", err)
+		return taskResultFailure(protocol.TaskResultReasonResumeRejected, cause)
+	}
+	if resume == nil {
+		if _, err := daemon.store.PersistGoalSessionHandle(sessionKey, state.GoalSessionHandle{NativeSessionID: handle.ID, NativeSessionFilename: handle.Filename}); err != nil {
+			daemon.retainUnknownGoalLaunchWorkspace(key)
+			if _, discardErr := daemon.store.DiscardUnreadyGoalSessionAttachDelivery(key, localHandleID); discardErr != nil {
+				return fmt.Errorf("discard unsent native Goal session attach intent: %w", errors.Join(err, discardErr))
+			}
+			daemon.abandonGoalSession(sessionKey, session, false, err)
+			return fmt.Errorf("persist native Goal session handle: %w", err)
+		}
 	}
 	attached := true
-	if _, err := daemon.markGoalSessionAttachDeliveryReady(key, localHandleID); err != nil {
-		discardErr := daemon.discardUnreadyGoalSessionAttachDelivery(key, localHandleID)
-		abandonErr := daemon.abandonGoalSession(sessionKey, session, attached, err)
-		if abandonErr != nil {
-			daemon.requireNativeSessionCloseRetry(key, session)
+	if !attachReady {
+		if _, err := daemon.markGoalSessionAttachDeliveryReady(key, localHandleID); err != nil {
+			discardErr := daemon.discardUnreadyGoalSessionAttachDelivery(key, localHandleID)
+			abandonErr := daemon.abandonGoalSession(sessionKey, session, attached, err)
+			if abandonErr != nil {
+				daemon.requireNativeSessionCloseRetry(key, session)
+			}
+			return fmt.Errorf("mark native Goal session attach delivery ready: %w", errors.Join(err, discardErr, abandonErr))
 		}
-		return fmt.Errorf("mark native Goal session attach delivery ready: %w", errors.Join(err, discardErr, abandonErr))
 	}
 
 	runJournal, err := daemon.store.LoadJournal(key)
@@ -3133,6 +3515,34 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 	}
 	if daemon.finishAttachedStart(key) {
 		daemon.signalOutbox()
+	}
+	return nil
+}
+
+// validatePiRPCProfileArgs mirrors pi's pre-process RPC transport guards at
+// the admission boundary. It runs before any Goal session journal is created,
+// so a configuration-only argv rejection cannot become an uncertain native
+// launch. The concrete adapter keeps the same validation as defense in depth.
+func validatePiRPCProfileArgs(args []string) error {
+	for _, argument := range args {
+		if strings.IndexByte(argument, 0) >= 0 {
+			return errors.New("pi invocation argument contains NUL")
+		}
+		if argument == "--" {
+			return errors.New("pi invocation argument separator is not allowed for RPC transport")
+		}
+		if argument == "--mode" || strings.HasPrefix(argument, "--mode=") {
+			return errors.New("pi invocation must not override required --mode rpc transport")
+		}
+		switch argument {
+		case "--continue", "-c", "--resume", "-r", "--session", "--session-id", "--fork", "--no-session":
+			return fmt.Errorf("pi invocation argument %q is not allowed for RPC transport", argument)
+		}
+		if strings.HasPrefix(argument, "--continue=") || strings.HasPrefix(argument, "--resume=") ||
+			strings.HasPrefix(argument, "--session=") || strings.HasPrefix(argument, "--session-id=") ||
+			strings.HasPrefix(argument, "--fork=") || strings.HasPrefix(argument, "-r") || strings.HasPrefix(argument, "-c") {
+			return fmt.Errorf("pi invocation argument %q is not allowed for RPC transport", argument)
+		}
 	}
 	return nil
 }
@@ -3268,11 +3678,42 @@ func (daemon *daemon) retryUnreadyGoalSessionAttachDeliveries() {
 			if delivery.Kind != state.GoalDeliverySessionAttach || delivery.Ready {
 				continue
 			}
+			barrier, barrierErr := daemon.unreadyPiResumeAttachBarrier(journal, delivery)
+			if barrierErr != nil {
+				if daemon.log != nil {
+					daemon.log.Warn("load_unready_pi_resume_barrier_failed", "run_id", journal.RunID, "generation", journal.Generation, "error", barrierErr)
+				}
+				continue
+			}
+			if barrier {
+				continue
+			}
 			if err := daemon.discardUnreadyGoalSessionAttachDelivery(journal.Key(), delivery.DeliveryID); err != nil && daemon.log != nil {
 				daemon.log.Warn("discard_unready_goal_session_attach_failed", "run_id", journal.RunID, "generation", journal.Generation, "error", err)
 			}
 		}
 	}
+}
+
+// unreadyPiResumeAttachBarrier prevents ordinary attach cleanup from deleting
+// the target receipt after a rebind may already have committed. The explicit
+// durable resume phase is the only proof that this is not an abandoned fresh
+// launch intent; recovery will promote it or compensate it in fence order.
+func (daemon *daemon) unreadyPiResumeAttachBarrier(journal state.RunJournal, delivery state.GoalDelivery) (bool, error) {
+	if delivery.SessionAttach == nil || delivery.SessionAttach.ServerIssuedBinding || delivery.SessionAttach.BindingID == "" {
+		return false, nil
+	}
+	session, err := daemon.store.LoadGoalSessionByHandle(delivery.SessionAttach.LocalHandleID)
+	if err != nil {
+		if state.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return session.SessionMode == state.GoalSessionModeResume && session.ResumeStartPending &&
+		session.RunID == journal.RunID && session.Generation == journal.Generation &&
+		session.BindingID == delivery.SessionAttach.BindingID && session.SessionState == state.GoalSessionStateBusy &&
+		session.LaunchState == state.GoalSessionLaunchStateAttached && !session.NeedsReconciliation(), nil
 }
 
 type blockedNativeSession struct {
@@ -3361,7 +3802,19 @@ func (daemon *daemon) abandonGoalSession(key state.GoalSessionKey, session harne
 		if runKey.RunID == "" || runKey.Generation <= 0 {
 			closeErr = errors.New("attached Goal session has no durable run key for stop receipt")
 		} else if err := daemon.recordStoppedGoalSession(runKey, key); err != nil {
-			closeErr = err
+			if errors.Is(err, errGoalAttachmentPending) {
+				// Native Close is known, but the ready resume attachment may have
+				// committed before its receipt was lost. Preserve the local/native
+				// identity and exact binding for readback; delivery will queue the
+				// stop receipt only after it proves the current attachment.
+				if _, stateErr := daemon.store.MarkGoalSessionResumeNativeStopped(key); stateErr != nil {
+					closeErr = errors.Join(err, stateErr)
+				} else {
+					nativeStopRecorded = true
+				}
+			} else {
+				closeErr = err
+			}
 		} else {
 			nativeStopRecorded = true
 		}
@@ -3518,6 +3971,12 @@ func validateGoalSessionReceipt(admission protocol.Admission, claim protocol.Cla
 	}
 	if receipt.RepositoryResourceID != admission.Subject.ResourceID || receipt.State != state.GoalSessionStateBusy {
 		return errors.New("attached Goal session receipt has incompatible repository or state")
+	}
+	if admission.SessionMode == protocol.SessionModeResume {
+		if admission.RequestedSessionID == nil || claim.HarnessSessionID == nil || claim.HarnessBindingID == nil ||
+			receipt.ID != *admission.RequestedSessionID || receipt.ID != *claim.HarnessSessionID || receipt.BindingID != *claim.HarnessBindingID {
+			return errors.New("resumed Goal session receipt does not match the reserved Control session and binding")
+		}
 	}
 	return nil
 }
@@ -5265,6 +5724,13 @@ func (daemon *daemon) recordStoppedGoalSession(runKey state.RunKey, goalSession 
 		_, err = daemon.closeGoalSession(goalSession)
 		return err
 	}
+	if !sessionJournal.HasVerifiedControlAttachment() {
+		// A resumed journal keeps the predecessor Control session ID while its
+		// new binding waits for attach. That old mapping is not authority to
+		// send a stop for the new binding. The caller must preserve the exact
+		// ready attach barrier until it can be read back or be quarantined.
+		return errGoalAttachmentPending
+	}
 	// The stop outbox is the durable stopped witness. Write it before changing
 	// the local projection so recovery can repair either cross-file window.
 	if _, err = daemon.store.QueueGoalSessionStopped(runKey, state.GoalSessionStoppedDelivery{
@@ -5274,7 +5740,11 @@ func (daemon *daemon) recordStoppedGoalSession(runKey state.RunKey, goalSession 
 	}); err != nil {
 		return err
 	}
-	_, err = daemon.store.MarkGoalSessionStoppedPending(goalSession)
+	if sessionJournal.SessionMode == state.GoalSessionModeResume && sessionJournal.ResumeStartPending {
+		_, err = daemon.store.MarkGoalSessionResumeNativeStopped(goalSession)
+	} else {
+		_, err = daemon.store.MarkGoalSessionStoppedPending(goalSession)
+	}
 	return err
 }
 
@@ -5390,7 +5860,13 @@ func (daemon *daemon) ensureRetainedGoalSessionStopDelivery(key state.RunKey, se
 	}
 	if matchingStop {
 		if session.SessionState == state.GoalSessionStateBusy {
-			if _, err := daemon.store.MarkGoalSessionStoppedPending(session.Key()); err != nil {
+			var err error
+			if session.SessionMode == state.GoalSessionModeResume && session.ResumeStartPending {
+				_, err = daemon.store.MarkGoalSessionResumeNativeStopped(session.Key())
+			} else {
+				_, err = daemon.store.MarkGoalSessionStoppedPending(session.Key())
+			}
+			if err != nil {
 				return journal, err
 			}
 		}
@@ -6900,6 +7376,11 @@ func (daemon *daemon) deliverGoalDelivery(ctx context.Context, journal state.Run
 	if err := validateGoalDeliveryReceipt(journal, *delivery, attachReceipt, stoppedReceipt, evidenceReceipt, usageReceipt); err != nil {
 		return journal, nil, err
 	}
+	if attachReceipt != nil && validateAttach != nil {
+		if err := validateAttach(*attachReceipt); err != nil {
+			return journal, nil, err
+		}
+	}
 	if attachReceipt != nil {
 		session, loadErr := daemon.store.LoadGoalSessionByHandle(delivery.SessionAttach.LocalHandleID)
 		if loadErr != nil {
@@ -6938,11 +7419,6 @@ func (daemon *daemon) deliverGoalDelivery(ctx context.Context, journal state.Run
 		}
 		if _, persistErr := daemon.store.MarkGoalSessionAvailable(session.Key(), certificate); persistErr != nil {
 			return journal, nil, fmt.Errorf("persist released Goal session: %w", persistErr)
-		}
-	}
-	if attachReceipt != nil && validateAttach != nil {
-		if err := validateAttach(*attachReceipt); err != nil {
-			return journal, nil, err
 		}
 	}
 	updated, err := daemon.store.MarkGoalDeliveryDelivered(journal.Key(), delivery.Kind, delivery.DeliveryID, delivery.PayloadDigest)

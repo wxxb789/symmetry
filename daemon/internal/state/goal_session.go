@@ -20,6 +20,7 @@ const (
 	goalSessionLineageFileSuffix    = ".json"
 	goalSessionSchemaVersion        = 1
 	goalSessionLineageSchemaVersion = 1
+	goalSessionConsumedStopLimit    = 4096
 )
 
 const (
@@ -202,10 +203,26 @@ type GoalSessionJournal struct {
 	// the current resume Run. It makes a retry prove the same predecessor rather
 	// than treating a matching target alone as an idempotency key.
 	ResumeSourceStopCertificate *GoalSessionStopCertificate `json:"resume_source_stop_certificate,omitempty"`
-	StopCertificate             *GoalSessionStopCertificate `json:"stop_certificate,omitempty"`
-	UncertainReason             string                      `json:"uncertain_reason,omitempty"`
-	CreatedAt                   time.Time                   `json:"created_at"`
-	UpdatedAt                   time.Time                   `json:"updated_at"`
+	// ConsumedStopCertificates retains every predecessor stop certificate that
+	// a later rebind consumed. Delayed delivery replays may acknowledge only an
+	// exact member of this history and cannot mutate the current Run.
+	ConsumedStopCertificates *GoalSessionConsumedStopCertificateHistory `json:"consumed_stop_certificates,omitempty"`
+	// ResumeStartPending proves a rebind has completed but no native Start
+	// boundary has yet been crossed. It survives attach Ready/readback crashes;
+	// MarkGoalSessionResumeStartAttempted clears it immediately before Start.
+	ResumeStartPending bool `json:"resume_start_pending,omitempty"`
+	// ResumeNativeStopKnown proves that the current retained pi turn is known
+	// stopped locally even if its new Control attachment has not been read back
+	// yet. It is not a Control release receipt.
+	ResumeNativeStopKnown bool `json:"resume_native_stop_known,omitempty"`
+	// ResumeTerminalReason records a known terminal classification before the
+	// Run terminal outbox is written. It only applies to a proven stopped
+	// retained resume and prevents restart recovery from weakening it.
+	ResumeTerminalReason string                      `json:"resume_terminal_reason,omitempty"`
+	StopCertificate      *GoalSessionStopCertificate `json:"stop_certificate,omitempty"`
+	UncertainReason      string                      `json:"uncertain_reason,omitempty"`
+	CreatedAt            time.Time                   `json:"created_at"`
+	UpdatedAt            time.Time                   `json:"updated_at"`
 }
 
 // GoalSessionControlAttachmentLineage is the immutable first fenced Control
@@ -240,6 +257,13 @@ type GoalSessionStopCertificate struct {
 	BindingID      string `json:"binding_id"`
 	DeliveryDigest string `json:"delivery_digest"`
 	ReceiptID      string `json:"receipt_id"`
+}
+
+// GoalSessionConsumedStopCertificateHistory is append-only predecessor receipt
+// provenance. It is intentionally retained after later stop cycles because an
+// old RunJournal outbox can replay after a newer Run has completed.
+type GoalSessionConsumedStopCertificateHistory struct {
+	Certificates []GoalSessionStopCertificate `json:"certificates"`
 }
 
 // GoalSessionHandle is the local native identity obtained after a successful
@@ -374,6 +398,16 @@ func (journal GoalSessionJournal) IsUncertainLaunch() bool {
 	return journal.LaunchState == GoalSessionLaunchStateUncertain || journal.NeedsReconciliation()
 }
 
+// HasKnownRetainedResumeNativeStop reports a local proof that the current
+// retained resume turn stopped. It intentionally says nothing about whether
+// Control accepted the corresponding stop receipt.
+func (journal GoalSessionJournal) HasKnownRetainedResumeNativeStop() bool {
+	return journal.ResumeNativeStopKnown && journal.SessionMode == GoalSessionModeResume &&
+		journal.ResumeSourceStopCertificate != nil && journal.StopCertificate == nil &&
+		journal.SessionState == GoalSessionStateUnavailable && journal.LaunchState == GoalSessionLaunchStateAttached &&
+		journal.NativeSessionID != "" && !journal.NeedsReconciliation()
+}
+
 // ControlProjection strips all machine-local native identity from a journal.
 func (journal GoalSessionJournal) ControlProjection() GoalSessionControlProjection {
 	return GoalSessionControlProjection{
@@ -487,6 +521,39 @@ func (store *Store) LoadGoalSessionByHandle(localHandleID string) (GoalSessionJo
 		}
 	}
 	return GoalSessionJournal{}, &NotFoundError{Resource: "goal session journal"}
+}
+
+// LoadGoalSessionByControlSessionID finds the local retained-session record
+// for one Control harness session. A duplicate mapping is a local integrity
+// conflict: callers must not choose an arbitrary native handle.
+func (store *Store) LoadGoalSessionByControlSessionID(controlSessionID string) (GoalSessionJournal, error) {
+	if !validGoalSessionUUID(controlSessionID) {
+		return GoalSessionJournal{}, errors.New("Control session ID is invalid")
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.ensureOpenLocked(); err != nil {
+		return GoalSessionJournal{}, err
+	}
+	journals, err := store.listGoalSessionsLocked()
+	if err != nil {
+		return GoalSessionJournal{}, err
+	}
+	var match *GoalSessionJournal
+	for _, journal := range journals {
+		if journal.ControlSessionID != controlSessionID {
+			continue
+		}
+		if match != nil {
+			return GoalSessionJournal{}, ErrGoalSessionConflict
+		}
+		candidate := journal
+		match = &candidate
+	}
+	if match == nil {
+		return GoalSessionJournal{}, &NotFoundError{Resource: "goal session journal"}
+	}
+	return *match, nil
 }
 
 // ListGoalSessions loads all authoritative native session journals and fails
@@ -710,7 +777,13 @@ func (store *Store) RebindGoalSessionForResume(key GoalSessionKey, rebind GoalSe
 	if err != nil {
 		return GoalSessionJournal{}, err
 	}
+	if journal.resumeTargetConflictsWithConsumedHistory(rebind) {
+		return GoalSessionJournal{}, ErrGoalSessionConflict
+	}
 	if sameGoalSessionResumeTarget(journal, rebind) {
+		if err := compareGoalSessionResumeCompatibility(journal, rebind.Compatibility); err != nil {
+			return GoalSessionJournal{}, err
+		}
 		return journal, nil
 	}
 	if err := validateGoalSessionResumeSource(journal, rebind); err != nil {
@@ -754,6 +827,12 @@ func (store *Store) RebindGoalSessionForResume(key GoalSessionKey, rebind GoalSe
 	journal.ControlAttachmentReceiptID = ""
 	sourceCertificate := rebind.ExactStopCertificate
 	journal.ResumeSourceStopCertificate = &sourceCertificate
+	if err := journal.appendConsumedStopCertificate(sourceCertificate); err != nil {
+		return GoalSessionJournal{}, err
+	}
+	journal.ResumeStartPending = true
+	journal.ResumeNativeStopKnown = false
+	journal.ResumeTerminalReason = ""
 	journal.StopCertificate = nil
 	journal.SessionState = GoalSessionStateBusy
 	journal.LaunchState = GoalSessionLaunchStateAttached
@@ -774,6 +853,101 @@ func (store *Store) RebindGoalSessionForResume(key GoalSessionKey, rebind GoalSe
 	return journal, nil
 }
 
+// MarkGoalSessionResumeStartAttempted closes the durable pre-start resume
+// window immediately before the caller invokes adapter.Start. If the process
+// stops after this mutation, recovery must conservatively treat native resume
+// as potentially started rather than compensating with the predecessor stop.
+func (store *Store) MarkGoalSessionResumeStartAttempted(key GoalSessionKey) (GoalSessionJournal, error) {
+	return store.mutateGoalSession(key, func(journal *GoalSessionJournal) error {
+		if journal.LaunchState == GoalSessionLaunchStateClosed || journal.SessionState == GoalSessionStateClosed {
+			return ErrGoalSessionClosed
+		}
+		if journal.NeedsReconciliation() {
+			return ErrGoalSessionUncertain
+		}
+		if journal.SessionMode != GoalSessionModeResume || journal.ResumeSourceStopCertificate == nil || journal.StopCertificate != nil || journal.ResumeNativeStopKnown ||
+			journal.SessionState != GoalSessionStateBusy || journal.LaunchState != GoalSessionLaunchStateAttached || journal.NativeSessionID == "" {
+			return ErrGoalSessionConflict
+		}
+		if !journal.ResumeStartPending {
+			return nil
+		}
+		journal.ResumeStartPending = false
+		journal.UpdatedAt = time.Now().UTC()
+		return nil
+	})
+}
+
+// MarkGoalSessionResumeNativeStopped persists a known local native stop for a
+// rebound retained session. Unlike MarkGoalSessionStoppedPending, it does not
+// require the current Control attachment receipt: callers may need to record a
+// typed native resume rejection before readback/attachment can succeed. The
+// later Control stop receipt remains mandatory before availability.
+func (store *Store) MarkGoalSessionResumeNativeStopped(key GoalSessionKey) (GoalSessionJournal, error) {
+	return store.mutateGoalSession(key, func(journal *GoalSessionJournal) error {
+		if journal.LaunchState == GoalSessionLaunchStateClosed || journal.SessionState == GoalSessionStateClosed {
+			return ErrGoalSessionClosed
+		}
+		if journal.NeedsReconciliation() {
+			return ErrGoalSessionUncertain
+		}
+		if journal.SessionMode != GoalSessionModeResume || journal.ResumeSourceStopCertificate == nil || journal.StopCertificate != nil ||
+			journal.LaunchState != GoalSessionLaunchStateAttached || journal.NativeSessionID == "" ||
+			(journal.SessionState != GoalSessionStateBusy && journal.SessionState != GoalSessionStateUnavailable) {
+			return ErrGoalSessionConflict
+		}
+		if journal.ResumeNativeStopKnown {
+			return nil
+		}
+		journal.SessionState = GoalSessionStateUnavailable
+		journal.ResumeStartPending = false
+		journal.ResumeNativeStopKnown = true
+		journal.ResumeTerminalReason = ""
+		journal.UpdatedAt = time.Now().UTC()
+		return nil
+	})
+}
+
+// MarkGoalSessionResumeRejected persists a known local pi resume rejection
+// before the caller queues the Run terminal transition. It shares the proven
+// native-stop state with MarkGoalSessionResumeNativeStopped but carries the
+// only terminal classification that can safely survive that cross-file gap.
+func (store *Store) MarkGoalSessionResumeRejected(key GoalSessionKey) (GoalSessionJournal, error) {
+	return store.mutateGoalSession(key, func(journal *GoalSessionJournal) error {
+		if journal.LaunchState == GoalSessionLaunchStateClosed || journal.SessionState == GoalSessionStateClosed {
+			return ErrGoalSessionClosed
+		}
+		if journal.NeedsReconciliation() {
+			return ErrGoalSessionUncertain
+		}
+		if journal.SessionMode != GoalSessionModeResume || journal.ResumeSourceStopCertificate == nil || journal.StopCertificate != nil ||
+			journal.LaunchState != GoalSessionLaunchStateAttached || journal.NativeSessionID == "" ||
+			(journal.SessionState != GoalSessionStateBusy && journal.SessionState != GoalSessionStateUnavailable) {
+			return ErrGoalSessionConflict
+		}
+		if journal.ResumeNativeStopKnown {
+			if journal.ResumeTerminalReason == "resume_rejected" {
+				return nil
+			}
+			if journal.ResumeTerminalReason != "" {
+				return ErrGoalSessionConflict
+			}
+			// A generic native-stop witness may have been persisted before the
+			// adapter returned its typed rejection. The typed result is the
+			// stronger classification and may safely upgrade that empty marker.
+			journal.ResumeTerminalReason = "resume_rejected"
+			journal.UpdatedAt = time.Now().UTC()
+			return nil
+		}
+		journal.SessionState = GoalSessionStateUnavailable
+		journal.ResumeStartPending = false
+		journal.ResumeNativeStopKnown = true
+		journal.ResumeTerminalReason = "resume_rejected"
+		journal.UpdatedAt = time.Now().UTC()
+		return nil
+	})
+}
+
 // MarkGoalSessionStoppedPending records known native termination without
 // discarding the native resume identity. A separate fenced Control receipt is
 // required before the journal becomes locally available for a later resume.
@@ -788,6 +962,9 @@ func (store *Store) MarkGoalSessionStoppedPending(key GoalSessionKey) (GoalSessi
 		if journal.IsLegacyControlAttachment() || !journal.HasVerifiedControlAttachment() {
 			return ErrGoalSessionCompatibilityIncomplete
 		}
+		if journal.ResumeStartPending {
+			return ErrGoalSessionConflict
+		}
 		if !validGoalSessionUUID(journal.ControlSessionID) || !validGoalSessionUUID(journal.BindingID) {
 			return ErrGoalSessionConflict
 		}
@@ -795,6 +972,9 @@ func (store *Store) MarkGoalSessionStoppedPending(key GoalSessionKey) (GoalSessi
 			return ErrGoalSessionConflict
 		}
 		journal.SessionState = GoalSessionStateUnavailable
+		if journal.SessionMode == GoalSessionModeResume {
+			journal.ResumeNativeStopKnown = true
+		}
 		journal.UpdatedAt = time.Now().UTC()
 		return nil
 	})
@@ -808,6 +988,15 @@ func (store *Store) MarkGoalSessionAvailable(key GoalSessionKey, certificate Goa
 		return GoalSessionJournal{}, errors.New("Goal session availability receipt is invalid")
 	}
 	return store.mutateGoalSession(key, func(journal *GoalSessionJournal) error {
+		if consumed, exact := journal.consumedStopCertificate(certificate); consumed {
+			if exact {
+				// The predecessor receipt was already consumed by a durable rebind.
+				// Returning success lets its late outbox replay retire without changing
+				// the current Run's binding or availability state.
+				return nil
+			}
+			return ErrGoalSessionConflict
+		}
 		if journal.NeedsReconciliation() {
 			return ErrGoalSessionUncertain
 		}
@@ -829,9 +1018,21 @@ func (store *Store) MarkGoalSessionAvailable(key GoalSessionKey, certificate Goa
 		if journal.SessionState != GoalSessionStateUnavailable && journal.SessionState != GoalSessionStateAvailable {
 			return ErrGoalSessionConflict
 		}
+		if journal.ResumeSourceStopCertificate != nil && journal.ConsumedStopCertificates == nil {
+			if err := journal.appendConsumedStopCertificate(*journal.ResumeSourceStopCertificate); err != nil {
+				return err
+			}
+		}
 		journal.SessionState = GoalSessionStateAvailable
 		certificateCopy := certificate
 		journal.StopCertificate = &certificateCopy
+		// The current Run is now terminally released. Its predecessor certificate
+		// was only an idempotency witness while the rebind remained in flight;
+		// retaining it would incorrectly block the next valid resume cycle.
+		journal.ResumeSourceStopCertificate = nil
+		journal.ResumeStartPending = false
+		journal.ResumeNativeStopKnown = false
+		journal.ResumeTerminalReason = ""
 		journal.UpdatedAt = time.Now().UTC()
 		return nil
 	})
@@ -877,6 +1078,9 @@ func (store *Store) MarkGoalSessionUncertain(key GoalSessionKey, reason string) 
 		journal.ControlSessionID = ""
 		journal.ControlAttachmentReceiptID = ""
 		journal.StopCertificate = nil
+		journal.ResumeStartPending = false
+		journal.ResumeNativeStopKnown = false
+		journal.ResumeTerminalReason = ""
 		journal.RecoveryRequired = true
 		journal.UncertainReason = reason
 		journal.UpdatedAt = time.Now().UTC()
@@ -902,6 +1106,9 @@ func (store *Store) ResolveGoalSessionUncertain(key GoalSessionKey, handle GoalS
 		journal.NativeSessionFilename = handle.NativeSessionFilename
 		journal.LaunchState = GoalSessionLaunchStateAttached
 		journal.SessionState = GoalSessionStateBusy
+		journal.ResumeStartPending = false
+		journal.ResumeNativeStopKnown = false
+		journal.ResumeTerminalReason = ""
 		journal.RecoveryRequired = false
 		journal.UncertainReason = ""
 		journal.LaunchAttempted = true
@@ -934,6 +1141,9 @@ func (store *Store) ResolveGoalSessionUncertainStopped(key GoalSessionKey, expec
 		journal.ControlSessionID = ""
 		journal.ControlAttachmentReceiptID = ""
 		journal.StopCertificate = nil
+		journal.ResumeStartPending = false
+		journal.ResumeNativeStopKnown = false
+		journal.ResumeTerminalReason = ""
 		journal.SessionState = GoalSessionStateClosed
 		journal.LaunchState = GoalSessionLaunchStateClosed
 		journal.RecoveryRequired = false
@@ -963,6 +1173,9 @@ func (store *Store) CloseGoalSession(key GoalSessionKey) (GoalSessionJournal, er
 		journal.ControlSessionID = ""
 		journal.ControlAttachmentReceiptID = ""
 		journal.StopCertificate = nil
+		journal.ResumeStartPending = false
+		journal.ResumeNativeStopKnown = false
+		journal.ResumeTerminalReason = ""
 		journal.SessionState = GoalSessionStateClosed
 		journal.LaunchState = GoalSessionLaunchStateClosed
 		journal.UpdatedAt = time.Now().UTC()
@@ -986,6 +1199,9 @@ func (store *Store) SetGoalSessionState(key GoalSessionKey, sessionState string)
 	return store.mutateGoalSession(key, func(journal *GoalSessionJournal) error {
 		if journal.LaunchState == GoalSessionLaunchStateClosed || journal.SessionState == GoalSessionStateClosed {
 			return ErrGoalSessionClosed
+		}
+		if journal.ResumeStartPending && sessionState != GoalSessionStateBusy {
+			return ErrGoalSessionConflict
 		}
 		journal.SessionState = sessionState
 		journal.UpdatedAt = time.Now().UTC()
@@ -1479,6 +1695,22 @@ func validateGoalSessionJournal(journal GoalSessionJournal) error {
 	if journal.ResumeSourceStopCertificate != nil && !validGoalSessionStopCertificate(*journal.ResumeSourceStopCertificate) {
 		return errors.New("goal session resume source receipt is invalid")
 	}
+	if journal.ConsumedStopCertificates != nil && !validGoalSessionConsumedStopCertificateHistory(*journal.ConsumedStopCertificates) {
+		return errors.New("goal session consumed stop receipt history is invalid")
+	}
+	if journal.ResumeSourceStopCertificate != nil && journal.ConsumedStopCertificates != nil && !journal.ConsumedStopCertificates.containsExact(*journal.ResumeSourceStopCertificate) {
+		return errors.New("goal session resume source receipt history is invalid")
+	}
+	if journal.ResumeStartPending && (journal.SessionMode != GoalSessionModeResume || journal.ResumeSourceStopCertificate == nil || journal.StopCertificate != nil ||
+		journal.SessionState != GoalSessionStateBusy || journal.LaunchState != GoalSessionLaunchStateAttached || journal.NativeSessionID == "") {
+		return errors.New("goal session resume pre-start state is invalid")
+	}
+	if journal.ResumeNativeStopKnown && !journal.HasKnownRetainedResumeNativeStop() {
+		return errors.New("goal session retained native stop state is invalid")
+	}
+	if journal.ResumeTerminalReason != "" && (!journal.HasKnownRetainedResumeNativeStop() || journal.ResumeTerminalReason != "resume_rejected") {
+		return errors.New("goal session retained resume terminal reason is invalid")
+	}
 	if journal.StopCertificate != nil && (!validGoalSessionStopCertificate(*journal.StopCertificate) || journal.SessionState != GoalSessionStateAvailable || journal.ControlSessionID != journal.StopCertificate.SessionID || journal.BindingID != journal.StopCertificate.BindingID || journal.RunID != journal.StopCertificate.RunID || journal.Generation != journal.StopCertificate.Generation || journal.LocalHandleID != journal.StopCertificate.LocalHandleID) {
 		return errors.New("goal session stop receipt is invalid")
 	}
@@ -1490,6 +1722,23 @@ func validGoalSessionStopCertificate(certificate GoalSessionStopCertificate) boo
 		validGoalSessionUUID(certificate.SessionID) && validGoalSessionUUID(certificate.LocalHandleID) &&
 		validGoalSessionUUID(certificate.BindingID) && validGoalDeliveryDigest(certificate.DeliveryDigest) &&
 		validGoalSessionUUID(certificate.ReceiptID)
+}
+
+func validGoalSessionConsumedStopCertificateHistory(history GoalSessionConsumedStopCertificateHistory) bool {
+	if len(history.Certificates) == 0 || len(history.Certificates) > goalSessionConsumedStopLimit {
+		return false
+	}
+	seen := make(map[GoalSessionStopCertificate]struct{}, len(history.Certificates))
+	for _, certificate := range history.Certificates {
+		if !validGoalSessionStopCertificate(certificate) {
+			return false
+		}
+		if _, exists := seen[certificate]; exists {
+			return false
+		}
+		seen[certificate] = struct{}{}
+	}
+	return true
 }
 
 func validWorkspaceOwnerRunKey(key WorkspaceOwnerRunKey) bool {
@@ -1531,12 +1780,15 @@ func validateGoalSessionResumeRebind(rebind GoalSessionResumeRebind) error {
 	if !completeGoalSessionResumeCompatibility(rebind.Compatibility) {
 		return ErrGoalSessionCompatibilityIncomplete
 	}
+	if rebind.RunID == rebind.ExactStopCertificate.RunID || rebind.BindingID == rebind.ExactStopCertificate.BindingID {
+		return ErrGoalSessionConflict
+	}
 	return nil
 }
 
 func completeGoalSessionResumeCompatibility(value GoalSessionCompatibility) bool {
 	return validRequiredString(value.MachineID, 4096) && validRequiredString(value.RuntimeID, 4096) &&
-		value.RuntimeEpoch > 0 && validRequiredString(value.HarnessKind, 4096) &&
+		validRequiredString(value.HarnessKind, 4096) &&
 		validRequiredString(value.HarnessVersion, 4096) && validRequiredString(value.AdapterVersion, 4096) &&
 		value.AdapterProtocolVersion > 0 && validRequiredString(value.WorkspaceFingerprint, 4096) &&
 		validGoalSessionUUID(value.RepositoryResourceID)
@@ -1549,7 +1801,7 @@ func sameGoalSessionResumeTarget(journal GoalSessionJournal, rebind GoalSessionR
 		journal.SessionState == GoalSessionStateBusy && journal.LaunchState == GoalSessionLaunchStateAttached &&
 		journal.StopCertificate == nil && journal.ControlAttachmentReceiptID == "" &&
 		journal.ResumeSourceStopCertificate != nil && *journal.ResumeSourceStopCertificate == rebind.ExactStopCertificate &&
-		journal.NativeSessionID != "" && !journal.NeedsReconciliation()
+		journal.ResumeStartPending && journal.NativeSessionID != "" && !journal.NeedsReconciliation()
 }
 
 func validateGoalSessionResumeSource(journal GoalSessionJournal, rebind GoalSessionResumeRebind) error {
@@ -1584,7 +1836,7 @@ func compareGoalSessionResumeCompatibility(journal GoalSessionJournal, expected 
 	if !completeGoalSessionResumeCompatibility(expected) || !completeGoalSessionResumeCompatibility(journal.Compatibility()) {
 		return ErrGoalSessionCompatibilityIncomplete
 	}
-	if journal.MachineID != expected.MachineID || journal.RuntimeID != expected.RuntimeID || journal.RuntimeEpoch != expected.RuntimeEpoch {
+	if journal.MachineID != expected.MachineID || journal.RuntimeID != expected.RuntimeID {
 		return ErrGoalSessionOwnerMismatch
 	}
 	if journal.HarnessKind != expected.HarnessKind || journal.HarnessVersion != expected.HarnessVersion ||
@@ -1595,6 +1847,82 @@ func compareGoalSessionResumeCompatibility(journal GoalSessionJournal, expected 
 		return ErrGoalSessionWorkspaceMismatch
 	}
 	return nil
+}
+
+func sameGoalSessionCertificateExecution(left, right GoalSessionStopCertificate) bool {
+	return left.RunID == right.RunID && left.Generation == right.Generation &&
+		left.SessionID == right.SessionID && left.LocalHandleID == right.LocalHandleID
+}
+
+func (journal *GoalSessionJournal) appendConsumedStopCertificate(certificate GoalSessionStopCertificate) error {
+	if !validGoalSessionStopCertificate(certificate) {
+		return errors.New("goal session consumed stop receipt is invalid")
+	}
+	history := GoalSessionConsumedStopCertificateHistory{}
+	if journal.ConsumedStopCertificates != nil {
+		history.Certificates = append(history.Certificates, journal.ConsumedStopCertificates.Certificates...)
+	}
+	for _, existing := range history.Certificates {
+		if existing == certificate {
+			return ErrGoalSessionConflict
+		}
+	}
+	if len(history.Certificates) >= goalSessionConsumedStopLimit {
+		return ErrGoalSessionConflict
+	}
+	history.Certificates = append(history.Certificates, certificate)
+	journal.ConsumedStopCertificates = &history
+	return nil
+}
+
+func (history GoalSessionConsumedStopCertificateHistory) containsExact(certificate GoalSessionStopCertificate) bool {
+	for _, existing := range history.Certificates {
+		if existing == certificate {
+			return true
+		}
+	}
+	return false
+}
+
+// consumedStopCertificate reports whether the certificate refers to a known
+// consumed predecessor and whether it is an exact receipt match. A same
+// execution with changed receipt data is never safe to acknowledge.
+func (journal GoalSessionJournal) consumedStopCertificate(certificate GoalSessionStopCertificate) (bool, bool) {
+	if journal.ConsumedStopCertificates != nil {
+		for _, existing := range journal.ConsumedStopCertificates.Certificates {
+			if existing == certificate {
+				return true, true
+			}
+			if sameGoalSessionCertificateExecution(existing, certificate) {
+				return true, false
+			}
+		}
+	}
+	// Journals written by the first retained-resume implementation can contain
+	// ResumeSourceStopCertificate without the later durable history. Preserve an
+	// exact predecessor ACK until that current Run reaches availability, where
+	// MarkGoalSessionAvailable promotes it into history before clearing source.
+	if journal.ConsumedStopCertificates == nil && journal.ResumeSourceStopCertificate != nil {
+		if *journal.ResumeSourceStopCertificate == certificate {
+			return true, true
+		}
+		if sameGoalSessionCertificateExecution(*journal.ResumeSourceStopCertificate, certificate) {
+			return true, false
+		}
+	}
+	return false, false
+}
+
+func (journal GoalSessionJournal) resumeTargetConflictsWithConsumedHistory(rebind GoalSessionResumeRebind) bool {
+	if journal.ConsumedStopCertificates == nil {
+		return false
+	}
+	for _, certificate := range journal.ConsumedStopCertificates.Certificates {
+		if rebind.RunID == certificate.RunID || rebind.BindingID == certificate.BindingID {
+			return true
+		}
+	}
+	return false
 }
 
 func validateGoalSessionHandle(handle GoalSessionHandle) error {
@@ -1672,7 +2000,7 @@ func compareGoalSessionCompatibility(journal GoalSessionJournal, expected GoalSe
 	if journal.NeedsReconciliation() {
 		return ErrGoalSessionUncertain
 	}
-	if journal.IsLegacyControlAttachment() {
+	if journal.IsLegacyControlAttachment() || !journal.HasVerifiedControlAttachment() {
 		return ErrGoalSessionCompatibilityIncomplete
 	}
 	if journal.LaunchState != GoalSessionLaunchStateAttached || journal.NativeSessionID == "" {

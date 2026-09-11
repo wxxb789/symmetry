@@ -526,12 +526,14 @@ func scanJSONValue(decoder *json.Decoder) error {
 // intentionally rejects --no-session state because it cannot support retained
 // session recovery without both documented fields.
 type SessionState struct {
-	SessionID               string
-	SessionFile             string
-	isStreaming             bool
-	pendingMessageCount     int
-	streamingStatusObserved bool
-	queueStatusObserved     bool
+	SessionID                string
+	SessionFile              string
+	isStreaming              bool
+	isCompacting             bool
+	pendingMessageCount      int
+	streamingStatusObserved  bool
+	compactingStatusObserved bool
+	queueStatusObserved      bool
 }
 
 func decodeSessionState(raw json.RawMessage) (SessionState, error) {
@@ -547,12 +549,21 @@ func decodeSessionState(raw json.RawMessage) (SessionState, error) {
 		return SessionState{}, fmt.Errorf("%w: sessionFile must be non-empty", ErrMissingSessionState)
 	}
 	if value, ok := object["isStreaming"]; ok {
-		if err := json.Unmarshal(value, &state.isStreaming); err != nil {
+		if err := decodeRequiredBool(value, &state.isStreaming); err != nil {
 			return SessionState{}, fmt.Errorf("%w: isStreaming must be boolean", ErrInvalidResponse)
 		}
 		state.streamingStatusObserved = true
 	}
+	if value, ok := object["isCompacting"]; ok {
+		if err := decodeRequiredBool(value, &state.isCompacting); err != nil {
+			return SessionState{}, fmt.Errorf("%w: isCompacting must be boolean", ErrInvalidResponse)
+		}
+		state.compactingStatusObserved = true
+	}
 	if value, ok := object["pendingMessageCount"]; ok {
+		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return SessionState{}, fmt.Errorf("%w: pendingMessageCount must be a non-negative integer", ErrInvalidResponse)
+		}
 		if err := json.Unmarshal(value, &state.pendingMessageCount); err != nil || state.pendingMessageCount < 0 {
 			return SessionState{}, fmt.Errorf("%w: pendingMessageCount must be a non-negative integer", ErrInvalidResponse)
 		}
@@ -561,14 +572,21 @@ func decodeSessionState(raw json.RawMessage) (SessionState, error) {
 	return state, nil
 }
 
+func decodeRequiredBool(raw json.RawMessage, destination *bool) error {
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return errors.New("null boolean")
+	}
+	return json.Unmarshal(raw, destination)
+}
+
 // ValidateResumeReady proves that the resumed pi RPC process has loaded the
 // expected session at a turn boundary. Omitted state fields are not treated as
 // idle because a prompt could otherwise join a native stream or queue.
 func (state SessionState) ValidateResumeReady() error {
-	if !state.streamingStatusObserved || !state.queueStatusObserved {
+	if !state.streamingStatusObserved || !state.compactingStatusObserved || !state.queueStatusObserved {
 		return ErrResumeStateIncomplete
 	}
-	if state.isStreaming || state.pendingMessageCount != 0 {
+	if state.isStreaming || state.isCompacting || state.pendingMessageCount != 0 {
 		return ErrResumeStateActive
 	}
 	return nil

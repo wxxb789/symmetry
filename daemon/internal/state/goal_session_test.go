@@ -942,6 +942,30 @@ func TestRetainedGoalSessionStopCertificateSurvivesStoreRestart(t *testing.T) {
 	}
 }
 
+func TestLoadGoalSessionByControlSessionIDFindsRetainedSessionAcrossRestart(t *testing.T) {
+	directory := t.TempDir()
+	store, err := New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, _ := mustAvailableRetainedGoalSession(t, store)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	loaded, err := restarted.LoadGoalSessionByControlSessionID(source.ControlSessionID)
+	if err != nil {
+		t.Fatalf("LoadGoalSessionByControlSessionID() error = %v", err)
+	}
+	if loaded.Key() != source.Key() || loaded.NativeSessionID != source.NativeSessionID || loaded.StopCertificate == nil {
+		t.Fatalf("loaded retained session = %#v", loaded)
+	}
+}
+
 func TestRebindGoalSessionForResumeConsumesExactStoppedAttachment(t *testing.T) {
 	store := mustStore(t)
 	source, certificate := mustAvailableRetainedGoalSession(t, store)
@@ -989,6 +1013,24 @@ func TestRebindGoalSessionForResumeConsumesExactStoppedAttachment(t *testing.T) 
 		replayed.BindingID != rebound.BindingID || replayed.ResumeSourceStopCertificate == nil || *replayed.ResumeSourceStopCertificate != certificate {
 		t.Fatalf("exact rebind replay = %#v", replayed)
 	}
+	changedCompatibility := rebind
+	changedCompatibility.Compatibility.HarnessVersion = "9.9.9"
+	if _, err := store.RebindGoalSessionForResume(source.Key(), changedCompatibility); !errors.Is(err, ErrGoalSessionVersionMismatch) {
+		t.Fatalf("rebind replay with changed compatibility error = %v, want ErrGoalSessionVersionMismatch", err)
+	}
+	latePredecessor, err := store.MarkGoalSessionAvailable(source.Key(), certificate)
+	if err != nil {
+		t.Fatalf("MarkGoalSessionAvailable() for consumed predecessor error = %v", err)
+	}
+	if latePredecessor.RunID != rebind.RunID || latePredecessor.Generation != rebind.Generation ||
+		latePredecessor.BindingID != rebind.BindingID || latePredecessor.SessionState != GoalSessionStateBusy || latePredecessor.StopCertificate != nil {
+		t.Fatalf("late predecessor receipt changed rebound session: %#v", latePredecessor)
+	}
+	stalePredecessor := certificate
+	stalePredecessor.ReceiptID = "00000000-0000-4000-8000-000000000027"
+	if _, err := store.MarkGoalSessionAvailable(source.Key(), stalePredecessor); !errors.Is(err, ErrGoalSessionConflict) {
+		t.Fatalf("stale consumed predecessor receipt error = %v, want ErrGoalSessionConflict", err)
+	}
 
 	newAttachmentReceiptID := "00000000-0000-4000-8000-000000000021"
 	reattached, err := store.PersistGoalSessionControlAttachment(source.Key(), source.ControlSessionID, rebind.BindingID, newAttachmentReceiptID, false)
@@ -999,6 +1041,73 @@ func TestRebindGoalSessionForResumeConsumesExactStoppedAttachment(t *testing.T) 
 		reattached.ControlAttachmentLineage.Original != lineage.Original || reattached.ControlAttachmentLineage.Current.RunID != rebind.RunID ||
 		reattached.ControlAttachmentLineage.Current.BindingID != rebind.BindingID || reattached.ControlAttachmentLineage.Current.ReceiptID != newAttachmentReceiptID {
 		t.Fatalf("reattached resume journal = %#v", reattached)
+	}
+	if _, err := store.MarkGoalSessionResumeStartAttempted(source.Key()); err != nil {
+		t.Fatalf("MarkGoalSessionResumeStartAttempted() error = %v", err)
+	}
+	if _, err := store.MarkGoalSessionStoppedPending(source.Key()); err != nil {
+		t.Fatalf("MarkGoalSessionStoppedPending() for resumed Run error = %v", err)
+	}
+	secondCertificate := GoalSessionStopCertificate{
+		RunID: rebind.RunID, Generation: rebind.Generation, SessionID: source.ControlSessionID, LocalHandleID: source.LocalHandleID,
+		BindingID: rebind.BindingID, DeliveryDigest: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+		ReceiptID: "00000000-0000-4000-8000-000000000025",
+	}
+	availableAgain, err := store.MarkGoalSessionAvailable(source.Key(), secondCertificate)
+	if err != nil {
+		t.Fatalf("MarkGoalSessionAvailable() for resumed Run error = %v", err)
+	}
+	if availableAgain.ResumeSourceStopCertificate != nil {
+		t.Fatalf("available resumed Run retained consumed source certificate: %#v", availableAgain)
+	}
+	secondRebind := testGoalSessionResumeRebind(secondCertificate)
+	secondRebind.RunID = "run-3"
+	secondRebind.Generation = 1
+	secondRebind.TaskID = "task-3"
+	secondRebind.AdmissionID = "admission-3"
+	secondRebind.BindingID = "00000000-0000-4000-8000-000000000026"
+	if _, err := store.RebindGoalSessionForResume(source.Key(), secondRebind); err != nil {
+		t.Fatalf("second RebindGoalSessionForResume() error = %v", err)
+	}
+	if _, err := store.PersistGoalSessionControlAttachment(source.Key(), source.ControlSessionID, secondRebind.BindingID, "00000000-0000-4000-8000-000000000029", false); err != nil {
+		t.Fatalf("PersistGoalSessionControlAttachment() for second rebind error = %v", err)
+	}
+	if _, err := store.MarkGoalSessionResumeStartAttempted(source.Key()); err != nil {
+		t.Fatalf("MarkGoalSessionResumeStartAttempted() for second rebind error = %v", err)
+	}
+	if _, err := store.MarkGoalSessionStoppedPending(source.Key()); err != nil {
+		t.Fatalf("MarkGoalSessionStoppedPending() for second rebind error = %v", err)
+	}
+	thirdCertificate := GoalSessionStopCertificate{
+		RunID: secondRebind.RunID, Generation: secondRebind.Generation, SessionID: source.ControlSessionID, LocalHandleID: source.LocalHandleID,
+		BindingID: secondRebind.BindingID, DeliveryDigest: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+		ReceiptID: "00000000-0000-4000-8000-000000000030",
+	}
+	if _, err := store.MarkGoalSessionAvailable(source.Key(), thirdCertificate); err != nil {
+		t.Fatalf("MarkGoalSessionAvailable() for second rebind error = %v", err)
+	}
+	for _, target := range []struct {
+		name   string
+		mutate func(*GoalSessionResumeRebind)
+	}{
+		{name: "historical Run", mutate: func(value *GoalSessionResumeRebind) { value.RunID = certificate.RunID }},
+		{name: "historical binding", mutate: func(value *GoalSessionResumeRebind) { value.BindingID = certificate.BindingID }},
+	} {
+		t.Run(target.name, func(t *testing.T) {
+			candidate := testGoalSessionResumeRebind(thirdCertificate)
+			target.mutate(&candidate)
+			if _, err := store.RebindGoalSessionForResume(source.Key(), candidate); !errors.Is(err, ErrGoalSessionConflict) {
+				t.Fatalf("historical resume target error = %v, want ErrGoalSessionConflict", err)
+			}
+		})
+	}
+	lateFirst, err := store.MarkGoalSessionAvailable(source.Key(), certificate)
+	if err != nil {
+		t.Fatalf("late first-cycle stop receipt after second rebind error = %v", err)
+	}
+	if lateFirst.RunID != secondRebind.RunID || lateFirst.Generation != secondRebind.Generation || lateFirst.BindingID != secondRebind.BindingID ||
+		lateFirst.SessionState != GoalSessionStateAvailable || lateFirst.ResumeStartPending || lateFirst.StopCertificate == nil || *lateFirst.StopCertificate != thirdCertificate {
+		t.Fatalf("late first-cycle receipt changed second rebind: %#v", lateFirst)
 	}
 }
 
@@ -1018,6 +1127,21 @@ func TestRebindGoalSessionForResumeRejectsStaleCertificateAndCompetingCAS(t *tes
 	}
 	if before.StopCertificate == nil || *before.StopCertificate != certificate || before.SessionState != GoalSessionStateAvailable {
 		t.Fatalf("stale rebind mutated source: %#v", before)
+	}
+	for _, target := range []struct {
+		name   string
+		mutate func(*GoalSessionResumeRebind)
+	}{
+		{name: "same Run", mutate: func(value *GoalSessionResumeRebind) { value.RunID = certificate.RunID }},
+		{name: "same binding", mutate: func(value *GoalSessionResumeRebind) { value.BindingID = certificate.BindingID }},
+	} {
+		t.Run(target.name, func(t *testing.T) {
+			candidate := rebind
+			target.mutate(&candidate)
+			if _, err := store.RebindGoalSessionForResume(source.Key(), candidate); !errors.Is(err, ErrGoalSessionConflict) {
+				t.Fatalf("predecessor-identical target error = %v, want ErrGoalSessionConflict", err)
+			}
+		})
 	}
 
 	competing := rebind
@@ -1050,7 +1174,7 @@ func TestRebindGoalSessionForResumeRequiresExactCompatibility(t *testing.T) {
 		mutate func(*GoalSessionCompatibility)
 	}{
 		{name: "machine", want: ErrGoalSessionOwnerMismatch, mutate: func(value *GoalSessionCompatibility) { value.MachineID = "machine-2" }},
-		{name: "runtime", want: ErrGoalSessionOwnerMismatch, mutate: func(value *GoalSessionCompatibility) { value.RuntimeEpoch++ }},
+		{name: "runtime", want: ErrGoalSessionOwnerMismatch, mutate: func(value *GoalSessionCompatibility) { value.RuntimeID = "runtime-2" }},
 		{name: "native version", want: ErrGoalSessionVersionMismatch, mutate: func(value *GoalSessionCompatibility) { value.HarnessVersion = "9.9.9" }},
 		{name: "adapter version", want: ErrGoalSessionVersionMismatch, mutate: func(value *GoalSessionCompatibility) { value.AdapterProtocolVersion++ }},
 		{name: "workspace fingerprint", want: ErrGoalSessionWorkspaceMismatch, mutate: func(value *GoalSessionCompatibility) { value.WorkspaceFingerprint = "sha256:workspace-two" }},
@@ -1068,6 +1192,34 @@ func TestRebindGoalSessionForResumeRequiresExactCompatibility(t *testing.T) {
 				t.Fatalf("RebindGoalSessionForResume() error = %v, want %v", err, test.want)
 			}
 		})
+	}
+}
+
+func TestRebindGoalSessionForResumeCannotBypassCurrentAttachmentBeforeAvailability(t *testing.T) {
+	store := mustStore(t)
+	source, certificate := mustAvailableRetainedGoalSession(t, store)
+	rebind := testGoalSessionResumeRebind(certificate)
+	if _, err := store.RebindGoalSessionForResume(source.Key(), rebind); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkGoalSessionResumeStartAttempted(source.Key()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetGoalSessionState(source.Key(), GoalSessionStateUnavailable); err != nil {
+		t.Fatalf("SetGoalSessionState(unavailable) error = %v", err)
+	}
+	forged := GoalSessionStopCertificate{
+		RunID: rebind.RunID, Generation: rebind.Generation, SessionID: source.ControlSessionID,
+		LocalHandleID: source.LocalHandleID, BindingID: rebind.BindingID,
+		DeliveryDigest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		ReceiptID:      "00000000-0000-4000-8000-000000000024",
+	}
+	if _, err := store.MarkGoalSessionAvailable(source.Key(), forged); !errors.Is(err, ErrGoalSessionCompatibilityIncomplete) {
+		t.Fatalf("MarkGoalSessionAvailable() without current attachment error = %v, want ErrGoalSessionCompatibilityIncomplete", err)
+	}
+	journal, err := store.LoadGoalSession(source.Key())
+	if err != nil || journal.StopCertificate != nil || journal.SessionState != GoalSessionStateUnavailable {
+		t.Fatalf("availability bypass changed journal = %#v, error = %v", journal, err)
 	}
 }
 
@@ -1111,6 +1263,346 @@ func TestRebindGoalSessionForResumeFailsClosedForLegacyOrAfterRestart(t *testing
 	}
 }
 
+func TestRebindGoalSessionForResumeSurvivesStoreRestart(t *testing.T) {
+	directory := t.TempDir()
+	store, err := New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, certificate := mustAvailableRetainedGoalSession(t, store)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	rebind := testGoalSessionResumeRebind(certificate)
+	rebind.Compatibility.RuntimeEpoch++
+	rebound, err := restarted.RebindGoalSessionForResume(source.Key(), rebind)
+	if err != nil {
+		t.Fatalf("RebindGoalSessionForResume() after restart error = %v", err)
+	}
+	if rebound.WorkspaceOwnerRunKey != source.WorkspaceOwnerRunKey || rebound.NativeSessionID != source.NativeSessionID ||
+		rebound.RunID != "run-2" || rebound.Generation != 1 || rebound.StopCertificate != nil {
+		t.Fatalf("rebound journal after restart = %#v", rebound)
+	}
+}
+
+func TestRebindGoalSessionPreStartPhaseSurvivesAttachmentReadbackAndRestart(t *testing.T) {
+	directory := t.TempDir()
+	store, err := New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, certificate := mustAvailableRetainedGoalSession(t, store)
+	rebind := testGoalSessionResumeRebind(certificate)
+	rebound, err := store.RebindGoalSessionForResume(source.Key(), rebind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rebound.ResumeStartPending {
+		t.Fatalf("rebind did not persist pre-start phase: %#v", rebound)
+	}
+	// This represents a recovery/readback that obtains the new Control attach
+	// receipt before pi.Start is permitted. It must not consume the pre-start
+	// recovery fact.
+	if _, err := store.PersistGoalSessionControlAttachment(source.Key(), source.ControlSessionID, rebind.BindingID, "00000000-0000-4000-8000-000000000028", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	pending, err := restarted.LoadGoalSession(source.Key())
+	if err != nil || !pending.ResumeStartPending || !pending.HasVerifiedControlAttachment() || pending.StopCertificate != nil {
+		t.Fatalf("pre-start phase after readback/restart = %#v, error = %v", pending, err)
+	}
+	attempted, err := restarted.MarkGoalSessionResumeStartAttempted(source.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempted.ResumeStartPending {
+		t.Fatalf("native Start boundary did not clear pre-start phase: %#v", attempted)
+	}
+}
+
+func TestRebindGoalSessionKnownNativeStopPrecedesCurrentAttachment(t *testing.T) {
+	directory := t.TempDir()
+	store, err := New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, predecessor := mustAvailableRetainedGoalSession(t, store)
+	rebind := testGoalSessionResumeRebind(predecessor)
+	if _, err := store.RebindGoalSessionForResume(source.Key(), rebind); err != nil {
+		t.Fatal(err)
+	}
+	stopped, err := store.MarkGoalSessionResumeNativeStopped(source.Key())
+	if err != nil {
+		t.Fatalf("MarkGoalSessionResumeNativeStopped() before attach error = %v", err)
+	}
+	if stopped.SessionState != GoalSessionStateUnavailable || stopped.ResumeStartPending || !stopped.HasKnownRetainedResumeNativeStop() ||
+		stopped.NativeSessionID != source.NativeSessionID || stopped.ControlSessionID != source.ControlSessionID || stopped.ControlAttachmentReceiptID != "" {
+		t.Fatalf("known native stop before attachment = %#v", stopped)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	persisted, err := restarted.LoadGoalSession(source.Key())
+	if err != nil || !persisted.HasKnownRetainedResumeNativeStop() || persisted.ResumeStartPending {
+		t.Fatalf("known native stop after restart = %#v, error = %v", persisted, err)
+	}
+	currentCertificate := GoalSessionStopCertificate{
+		RunID: rebind.RunID, Generation: rebind.Generation, SessionID: source.ControlSessionID, LocalHandleID: source.LocalHandleID,
+		BindingID: rebind.BindingID, DeliveryDigest: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+		ReceiptID: "00000000-0000-4000-8000-000000000031",
+	}
+	if _, err := restarted.MarkGoalSessionAvailable(source.Key(), currentCertificate); !errors.Is(err, ErrGoalSessionCompatibilityIncomplete) {
+		t.Fatalf("MarkGoalSessionAvailable() before current attach error = %v, want ErrGoalSessionCompatibilityIncomplete", err)
+	}
+	if _, err := restarted.PersistGoalSessionControlAttachment(source.Key(), source.ControlSessionID, rebind.BindingID, "00000000-0000-4000-8000-000000000032", false); err != nil {
+		t.Fatal(err)
+	}
+	available, err := restarted.MarkGoalSessionAvailable(source.Key(), currentCertificate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if available.HasKnownRetainedResumeNativeStop() || available.ResumeSourceStopCertificate != nil || available.StopCertificate == nil || *available.StopCertificate != currentCertificate {
+		t.Fatalf("current Control stop receipt did not resolve known native stop: %#v", available)
+	}
+}
+
+func TestMarkGoalSessionResumeRejectedSurvivesRestartAndStopDelivery(t *testing.T) {
+	directory := t.TempDir()
+	store, err := New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, predecessor := mustAvailableRetainedGoalSession(t, store)
+	rebind := testGoalSessionResumeRebind(predecessor)
+	if _, err := store.RebindGoalSessionForResume(source.Key(), rebind); err != nil {
+		t.Fatal(err)
+	}
+	rejected, err := store.MarkGoalSessionResumeRejected(source.Key())
+	if err != nil {
+		t.Fatalf("MarkGoalSessionResumeRejected() error = %v", err)
+	}
+	if rejected.SessionState != GoalSessionStateUnavailable || rejected.LaunchState != GoalSessionLaunchStateAttached ||
+		rejected.ResumeStartPending || !rejected.ResumeNativeStopKnown || rejected.ResumeTerminalReason != "resume_rejected" ||
+		!rejected.HasKnownRetainedResumeNativeStop() || rejected.StopCertificate != nil || rejected.ResumeSourceStopCertificate == nil {
+		t.Fatalf("rejected resume journal = %#v", rejected)
+	}
+	replayed, err := store.MarkGoalSessionResumeRejected(source.Key())
+	if err != nil {
+		t.Fatalf("idempotent MarkGoalSessionResumeRejected() error = %v", err)
+	}
+	if replayed.UpdatedAt != rejected.UpdatedAt || replayed.ResumeTerminalReason != rejected.ResumeTerminalReason ||
+		!replayed.HasKnownRetainedResumeNativeStop() || replayed.ResumeSourceStopCertificate == nil || rejected.ResumeSourceStopCertificate == nil ||
+		*replayed.ResumeSourceStopCertificate != *rejected.ResumeSourceStopCertificate {
+		t.Fatalf("idempotent rejected resume = %#v, want %#v", replayed, rejected)
+	}
+
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	persisted, err := restarted.LoadGoalSession(source.Key())
+	if err != nil {
+		t.Fatalf("LoadGoalSession() after rejected resume restart error = %v", err)
+	}
+	if persisted.ResumeTerminalReason != "resume_rejected" || !persisted.HasKnownRetainedResumeNativeStop() || persisted.ResumeStartPending {
+		t.Fatalf("rejected resume classification was not durable: %#v", persisted)
+	}
+	if _, err := restarted.MarkGoalSessionResumeNativeStopped(source.Key()); err != nil {
+		t.Fatalf("idempotent MarkGoalSessionResumeNativeStopped() error = %v", err)
+	}
+	persisted, err = restarted.LoadGoalSession(source.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.ResumeTerminalReason != "resume_rejected" {
+		t.Fatalf("native-stop replay cleared rejected classification: %#v", persisted)
+	}
+
+	if _, err := restarted.PersistGoalSessionControlAttachment(source.Key(), source.ControlSessionID, rebind.BindingID, "00000000-0000-4000-8000-000000000035", false); err != nil {
+		t.Fatal(err)
+	}
+	stopped, err := restarted.MarkGoalSessionStoppedPending(source.Key())
+	if err != nil {
+		t.Fatalf("MarkGoalSessionStoppedPending() after rejected resume error = %v", err)
+	}
+	if stopped.ResumeTerminalReason != "resume_rejected" || !stopped.HasKnownRetainedResumeNativeStop() {
+		t.Fatalf("generic stop accounting weakened rejected classification: %#v", stopped)
+	}
+
+	currentCertificate := GoalSessionStopCertificate{
+		RunID: rebind.RunID, Generation: rebind.Generation, SessionID: source.ControlSessionID, LocalHandleID: source.LocalHandleID,
+		BindingID: rebind.BindingID, DeliveryDigest: "abababababababababababababababababababababababababababababababab",
+		ReceiptID: "00000000-0000-4000-8000-000000000036",
+	}
+	available, err := restarted.MarkGoalSessionAvailable(source.Key(), currentCertificate)
+	if err != nil {
+		t.Fatalf("MarkGoalSessionAvailable() after rejected resume error = %v", err)
+	}
+	if available.ResumeTerminalReason != "" || available.ResumeNativeStopKnown || available.ResumeSourceStopCertificate != nil ||
+		available.StopCertificate == nil || *available.StopCertificate != currentCertificate {
+		t.Fatalf("current stop receipt did not clear rejected classification: %#v", available)
+	}
+}
+
+func TestMarkGoalSessionResumeRejectedUpgradesUnclassifiedKnownStop(t *testing.T) {
+	store := mustStore(t)
+	source, predecessor := mustAvailableRetainedGoalSession(t, store)
+	if _, err := store.RebindGoalSessionForResume(source.Key(), testGoalSessionResumeRebind(predecessor)); err != nil {
+		t.Fatal(err)
+	}
+	stopped, err := store.MarkGoalSessionResumeNativeStopped(source.Key())
+	if err != nil {
+		t.Fatalf("MarkGoalSessionResumeNativeStopped() error = %v", err)
+	}
+	if !stopped.HasKnownRetainedResumeNativeStop() || stopped.ResumeTerminalReason != "" {
+		t.Fatalf("unclassified known stop = %#v", stopped)
+	}
+	rejected, err := store.MarkGoalSessionResumeRejected(source.Key())
+	if err != nil {
+		t.Fatalf("MarkGoalSessionResumeRejected() upgrade error = %v", err)
+	}
+	if !rejected.HasKnownRetainedResumeNativeStop() || rejected.ResumeTerminalReason != "resume_rejected" {
+		t.Fatalf("known stop was not upgraded to rejected classification: %#v", rejected)
+	}
+}
+
+func TestGoalSessionResumeTerminalReasonJournalInvariant(t *testing.T) {
+	store := mustStore(t)
+	source, predecessor := mustAvailableRetainedGoalSession(t, store)
+	if _, err := store.RebindGoalSessionForResume(source.Key(), testGoalSessionResumeRebind(predecessor)); err != nil {
+		t.Fatal(err)
+	}
+	rejected, err := store.MarkGoalSessionResumeRejected(source.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name   string
+		mutate func(*GoalSessionJournal)
+	}{
+		{name: "unknown reason", mutate: func(journal *GoalSessionJournal) { journal.ResumeTerminalReason = "other" }},
+		{name: "without native stop witness", mutate: func(journal *GoalSessionJournal) { journal.ResumeNativeStopKnown = false }},
+		{name: "while busy", mutate: func(journal *GoalSessionJournal) { journal.SessionState = GoalSessionStateBusy }},
+		{name: "with stop certificate", mutate: func(journal *GoalSessionJournal) {
+			certificate := predecessor
+			journal.StopCertificate = &certificate
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			journal := rejected
+			test.mutate(&journal)
+			if err := validateGoalSessionJournal(journal); err == nil {
+				t.Fatal("validateGoalSessionJournal() accepted invalid rejected-resume classification")
+			}
+		})
+	}
+}
+
+func TestMarkGoalSessionResumeNativeStoppedWriteFailureLeavesPreStartState(t *testing.T) {
+	store := mustStore(t)
+	source, predecessor := mustAvailableRetainedGoalSession(t, store)
+	if _, err := store.RebindGoalSessionForResume(source.Key(), testGoalSessionResumeRebind(predecessor)); err != nil {
+		t.Fatal(err)
+	}
+	original := applyFileSecurity
+	applyFileSecurity = func(string) error { return errors.New("injected state write failure") }
+	t.Cleanup(func() { applyFileSecurity = original })
+	if _, err := store.MarkGoalSessionResumeNativeStopped(source.Key()); err == nil {
+		t.Fatal("MarkGoalSessionResumeNativeStopped() succeeded despite injected write failure")
+	}
+	journal, err := store.LoadGoalSession(source.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.SessionState != GoalSessionStateBusy || !journal.ResumeStartPending || journal.ResumeNativeStopKnown {
+		t.Fatalf("failed native-stop mutation changed journal: %#v", journal)
+	}
+}
+
+func TestLegacyResumeSourceWithoutHistoryPreservesLateAckAndPromotesHistory(t *testing.T) {
+	directory := t.TempDir()
+	store, err := New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, predecessor := mustAvailableRetainedGoalSession(t, store)
+	rebind := testGoalSessionResumeRebind(predecessor)
+	if _, err := store.RebindGoalSessionForResume(source.Key(), rebind); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PersistGoalSessionControlAttachment(source.Key(), source.ControlSessionID, rebind.BindingID, "00000000-0000-4000-8000-000000000033", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkGoalSessionResumeNativeStopped(source.Key()); err != nil {
+		t.Fatal(err)
+	}
+	path := store.goalSessionPath(source.Key())
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &raw); err != nil {
+		t.Fatal(err)
+	}
+	delete(raw, "consumed_stop_certificates")
+	legacy, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	if _, err := restarted.MarkGoalSessionAvailable(source.Key(), predecessor); err != nil {
+		t.Fatalf("legacy predecessor late ACK error = %v", err)
+	}
+	currentCertificate := GoalSessionStopCertificate{
+		RunID: rebind.RunID, Generation: rebind.Generation, SessionID: source.ControlSessionID, LocalHandleID: source.LocalHandleID,
+		BindingID: rebind.BindingID, DeliveryDigest: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+		ReceiptID: "00000000-0000-4000-8000-000000000034",
+	}
+	resolved, err := restarted.MarkGoalSessionAvailable(source.Key(), currentCertificate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.ConsumedStopCertificates == nil || !resolved.ConsumedStopCertificates.containsExact(predecessor) || resolved.ResumeSourceStopCertificate != nil {
+		t.Fatalf("legacy resume source did not promote consumed history: %#v", resolved)
+	}
+	if _, err := restarted.MarkGoalSessionAvailable(source.Key(), predecessor); err != nil {
+		t.Fatalf("promoted predecessor late ACK error = %v", err)
+	}
+}
+
 func mustAvailableRetainedGoalSession(t *testing.T, store *Store) (GoalSessionJournal, GoalSessionStopCertificate) {
 	t.Helper()
 	intent := testGoalSessionIntent()
@@ -1149,7 +1641,7 @@ func mustAvailableRetainedGoalSession(t *testing.T, store *Store) (GoalSessionJo
 
 func testGoalSessionResumeRebind(certificate GoalSessionStopCertificate) GoalSessionResumeRebind {
 	return GoalSessionResumeRebind{
-		RunID: "run-2", Generation: 2, TaskID: "task-2", AdmissionID: "admission-2",
+		RunID: "run-2", Generation: 1, TaskID: "task-2", AdmissionID: "admission-2",
 		BindingID: "00000000-0000-4000-8000-000000000020", ExactStopCertificate: certificate,
 		Compatibility: testGoalSessionCompatibility(),
 	}

@@ -160,6 +160,9 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 	}
 	args, err := piRPCArgs(request.Invocation.Args, resumeState)
 	if err != nil {
+		if resumeState != nil {
+			return nil, resumeRejected(err)
+		}
 		return nil, err
 	}
 	if adapter.startProcess == nil {
@@ -222,8 +225,8 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 	return session, nil
 }
 
-// piRPCArgs preserves profile flags while preventing a transport override or a
-// positional startup prompt before Open establishes a native session handle.
+// piRPCArgs preserves profile flags while preventing transport and retained
+// session overrides before Open establishes a native session handle.
 // A resume session path is daemon-owned and cannot be supplied by a profile.
 // execution.Runner launches argv directly, never through a command shell.
 func piRPCArgs(profileArgs []string, resumeState *SessionState) ([]string, error) {
@@ -295,7 +298,7 @@ func forbiddenFreshSessionArgument(argument string) bool {
 	}
 	return strings.HasPrefix(argument, "--continue=") || strings.HasPrefix(argument, "--resume=") ||
 		strings.HasPrefix(argument, "--session=") || strings.HasPrefix(argument, "--session-id=") ||
-		strings.HasPrefix(argument, "--fork=")
+		strings.HasPrefix(argument, "--fork=") || strings.HasPrefix(argument, "-c") || strings.HasPrefix(argument, "-r")
 }
 
 func isNilNativeProcess(process nativeProcess) bool {
