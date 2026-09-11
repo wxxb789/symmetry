@@ -101,6 +101,12 @@ func TestDecoderAndValidatorFailClosedForInvalidRecords(t *testing.T) {
 		want  error
 	}{
 		{name: "malformed", input: "{invalid}\n", want: ErrMalformedJSON},
+		{name: "duplicate terminal flag", input: `{"type":"result","subtype":"success","is_error":true,"is_error":false,"session_id":"s","result":"done"}` + "\n", want: ErrMalformedJSON},
+		{name: "escaped duplicate session", input: `{"type":"result","subtype":"success","is_error":false,"session_id":"first","session_\u0069d":"second","result":"done"}` + "\n", want: ErrMalformedJSON},
+		{name: "nested duplicate usage", input: `{"type":"result","subtype":"success","is_error":false,"session_id":"s","result":"done","usage":{"input_tokens":1,"input_tokens":2}}` + "\n", want: ErrMalformedJSON},
+		{name: "duplicate inside array", input: `{"type":"result","subtype":"success","is_error":false,"session_id":"s","result":"done","usage":{"tokens":[{"count":1,"count":2}]}}` + "\n", want: ErrMalformedJSON},
+		{name: "invalid UTF8", input: "{\"type\":\"system\",\"session_id\":\"\xff\"}\n", want: ErrMalformedJSON},
+		{name: "unpaired surrogate", input: `{"type":"system","session_id":"\ud800"}` + "\n", want: ErrMalformedJSON},
 		{name: "non object", input: "[]\n", want: ErrNonObjectRecord},
 		{name: "unknown type", input: "{\"type\":\"future\"}\n", want: ErrUnsupportedEvent},
 		{name: "invalid result", input: "{\"type\":\"result\",\"session_id\":\"s\"}\n", want: ErrInvalidResult},

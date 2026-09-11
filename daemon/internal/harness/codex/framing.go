@@ -3,6 +3,7 @@ package codex
 import (
 	"bytes"
 	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 
@@ -118,7 +119,7 @@ func (framer *Framer) Close() ([]Frame, error) {
 
 func decodeFrame(sequence uint64, line []byte) Frame {
 	trimmed := bytes.TrimSpace(line)
-	if !json.Valid(trimmed) {
+	if !jsontext.Value(trimmed).IsValid() {
 		return decodeDiagnosticFrame(sequence, trimmed, "malformed_json", "message is not valid JSON")
 	}
 	var object map[string]json.RawMessage

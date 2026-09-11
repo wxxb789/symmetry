@@ -48,6 +48,42 @@ func TestFramerMarksMalformedJSONWithoutPromotingItToSuccess(t *testing.T) {
 	}
 }
 
+func TestFramerRejectsAmbiguousOrInvalidUnicodeJSON(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		input string
+		valid bool
+	}{
+		{name: "duplicate RPC identity", input: `{"id":1,"id":2,"result":{}}`},
+		{name: "escaped duplicate identity", input: `{"id":1,"\u0069d":2,"result":{}}`},
+		{name: "nested native identity", input: `{"id":1,"result":{"thread":{"id":"first","id":"second"}}}`},
+		{name: "duplicate inside array", input: `{"method":"turn/completed","params":{"turn":{"items":[{"status":"failed","status":"completed"}]}}}`},
+		{name: "invalid UTF8", input: "{\"id\":1,\"result\":{\"value\":\"\xff\"}}"},
+		{name: "unpaired surrogate", input: `{"id":1,"result":{"value":"\ud800"}}`},
+		{name: "same key in separate objects", input: `{"id":1,"result":{"items":[{"id":"first"},{"id":"second"}]}}`, valid: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			frames, err := NewFramer(1024).Feed([]byte(test.input + "\n"))
+			if err != nil || len(frames) != 1 {
+				t.Fatalf("Feed() = (%#v, %v), want one retained frame", frames, err)
+			}
+			frame := frames[0]
+			if string(frame.Raw) != test.input || frame.Sequence != 1 {
+				t.Fatalf("frame lost its original bytes or sequence: %+v", frame)
+			}
+			if test.valid {
+				if frame.Kind != FrameResponse || frame.IsFramingError() {
+					t.Fatalf("valid sibling objects were rejected: %+v", frame)
+				}
+				return
+			}
+			if frame.Kind != FrameDiagnostic || frame.DiagnosticCode != "malformed_json" || !frame.IsFramingError() || len(frame.ID) != 0 {
+				t.Fatalf("ambiguous frame remained eligible for native RPC handling: %+v", frame)
+			}
+		})
+	}
+}
+
 func TestFramerRejectsIncompleteAndOversizedFrames(t *testing.T) {
 	framer := NewFramer(8)
 	if _, err := framer.Feed([]byte("123456789")); !errors.Is(err, ErrFrameTooLarge) {

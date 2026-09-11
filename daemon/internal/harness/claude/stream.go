@@ -6,6 +6,7 @@ package claude
 import (
 	"bytes"
 	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"strings"
@@ -145,7 +146,7 @@ func (decoder *Decoder) Close() ([]Event, error) {
 
 func decodeEvent(sequence uint64, line []byte) Event {
 	raw := append(json.RawMessage(nil), bytes.TrimSpace(line)...)
-	if !json.Valid(raw) {
+	if !jsontext.Value(raw).IsValid() {
 		return invalidEvent(sequence, raw, ErrMalformedJSON)
 	}
 	var object map[string]json.RawMessage
