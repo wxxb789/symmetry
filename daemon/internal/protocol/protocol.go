@@ -190,7 +190,7 @@ func (capabilities RuntimeCapabilities) Validate() error {
 	if err != nil {
 		return fmt.Errorf("encode runtime capabilities: %w", err)
 	}
-	if err := contractdto.Validate(contractdto.EnvelopeAdapterCapabilities, data); err != nil {
+	if err := contractdto.ValidateSchema(contractdto.EnvelopeAdapterCapabilities, data); err != nil {
 		return fmt.Errorf("validate runtime capabilities schema: %w", err)
 	}
 	if capabilities.Adapter == nil {
@@ -206,7 +206,8 @@ func (capabilities RuntimeCapabilities) Validate() error {
 // unknown field cannot disappear during unmarshalling. Empty and legacy
 // boolean-only capability maps remain schema-valid.
 func (capabilities *RuntimeCapabilities) UnmarshalJSON(data []byte) error {
-	if err := contractdto.Validate(contractdto.EnvelopeAdapterCapabilities, data); err != nil {
+	var schemaWire contractdto.SymmetryAdapterCapabilitiesV1
+	if err := contractdto.DecodeSchema(contractdto.EnvelopeAdapterCapabilities, data, &schemaWire); err != nil {
 		return fmt.Errorf("validate runtime capabilities schema: %w", err)
 	}
 	type wire RuntimeCapabilities

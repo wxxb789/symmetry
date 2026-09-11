@@ -2,7 +2,6 @@ package protocol
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -52,7 +51,7 @@ func TestGoalTransportParsesContractFixtures(t *testing.T) {
 				t.Fatalf("schema validity = %t, want %t: %v", got, want, schemaErr)
 			}
 
-			semanticErr := parseGoalContractFixture(fixture.Schema, data)
+			semanticErr := ValidateGoalEnvelope(contractdto.Envelope(fixture.Schema), data)
 			if got, want := semanticErr == nil, fixture.expectedSemanticValidity(); got != want {
 				t.Fatalf("semantic validity = %t, want %t: %v", got, want, semanticErr)
 			}
@@ -91,41 +90,6 @@ func (fixture goalContractFixture) expectedSemanticValidity() bool {
 
 func validateFixtureSchema(schema string, data []byte) error {
 	return contractdto.ValidateSchema(contractdto.Envelope(schema), data)
-}
-
-func parseGoalContractFixture(schema string, data []byte) error {
-	switch contractdto.Envelope(schema) {
-	case contractdto.EnvelopeAdapterCapabilities:
-		_, err := ParseAdapterCapabilities(data)
-		return err
-	case contractdto.EnvelopeAdmission:
-		_, err := ParseAdmission(data)
-		return err
-	case contractdto.EnvelopeContextSnapshot:
-		_, err := DecodeContextSnapshot(data)
-		return err
-	case contractdto.EnvelopeDecision:
-		_, err := DecodeDecision(data)
-		return err
-	case contractdto.EnvelopeEvidence:
-		_, err := ParseEvidence(data)
-		return err
-	case contractdto.EnvelopeGoalCommand:
-		return ValidateGoalCommand(data)
-	case contractdto.EnvelopeGoalCreate, contractdto.EnvelopePlanProposal:
-		return contractdto.Validate(contractdto.Envelope(schema), data)
-	case contractdto.EnvelopeGoalRevision:
-		_, err := DecodeGoalRevision(data)
-		return err
-	case contractdto.EnvelopeTaskResult:
-		_, err := ParseTaskResult(data)
-		return err
-	case contractdto.EnvelopeUsage:
-		_, err := ParseUsage(data)
-		return err
-	default:
-		return fmt.Errorf("unknown fixture schema %q", schema)
-	}
 }
 
 func contractRepositoryRoot(t *testing.T) string {

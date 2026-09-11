@@ -15,7 +15,7 @@ import (
 // from an explicitly supplied empty array; a generated Go struct cannot retain
 // that presence information after marshal due to omitempty tags.
 func decodeGoalEnvelope(data []byte, envelope contractdto.Envelope, wire, semantic any) error {
-	if err := contractdto.Decode(envelope, data, wire); err != nil {
+	if err := contractdto.DecodeSchema(envelope, data, wire); err != nil {
 		return err
 	}
 	if err := json.Unmarshal(data, semantic); err != nil {
@@ -29,13 +29,17 @@ func decodeGoalEnvelope(data []byte, envelope contractdto.Envelope, wire, semant
 // authenticated run fence and context receipt.
 func DecodeContextSnapshot(data []byte) (contractdto.SymmetryContextSnapshotV1, error) {
 	var snapshot contractdto.SymmetryContextSnapshotV1
-	if err := contractdto.Decode(contractdto.EnvelopeContextSnapshot, data, &snapshot); err != nil {
+	if err := contractdto.DecodeSchema(contractdto.EnvelopeContextSnapshot, data, &snapshot); err != nil {
 		return contractdto.SymmetryContextSnapshotV1{}, err
 	}
 	if err := validateContextSnapshotContentHash(data, snapshot.ContentHash); err != nil {
 		return contractdto.SymmetryContextSnapshotV1{}, err
 	}
-	if err := validateContextSnapshotPredicateIDs(data); err != nil {
+	value, err := decodeGoalContractObject(data)
+	if err != nil {
+		return contractdto.SymmetryContextSnapshotV1{}, err
+	}
+	if err := validateContextSnapshotPredicateIDs(value); err != nil {
 		return contractdto.SymmetryContextSnapshotV1{}, err
 	}
 	return snapshot, nil
@@ -68,10 +72,14 @@ func validateContextSnapshotContentHash(data []byte, contentHash string) error {
 // DecodeGoalRevision validates and decodes the canonical goal revision envelope.
 func DecodeGoalRevision(data []byte) (contractdto.SymmetryGoalRevisionV1, error) {
 	var revision contractdto.SymmetryGoalRevisionV1
-	if err := contractdto.Decode(contractdto.EnvelopeGoalRevision, data, &revision); err != nil {
+	if err := contractdto.DecodeSchema(contractdto.EnvelopeGoalRevision, data, &revision); err != nil {
 		return contractdto.SymmetryGoalRevisionV1{}, err
 	}
-	if err := validateGoalRevisionPredicateIDs(data); err != nil {
+	value, err := decodeGoalContractObject(data)
+	if err != nil {
+		return contractdto.SymmetryGoalRevisionV1{}, err
+	}
+	if err := validateGoalRevisionContractSemantics(value); err != nil {
 		return contractdto.SymmetryGoalRevisionV1{}, err
 	}
 	return revision, nil
@@ -83,8 +91,16 @@ func DecodeGoalRevision(data []byte) (contractdto.SymmetryGoalRevisionV1, error)
 // those fields independently typed, so this binding belongs at the semantic
 // boundary rather than in JSON Schema alone.
 func ValidateGoalCommand(data []byte) error {
-	if err := contractdto.Validate(contractdto.EnvelopeGoalCommand, data); err != nil {
+	var wire contractdto.SymmetryGoalCommandV1
+	if err := contractdto.DecodeSchema(contractdto.EnvelopeGoalCommand, data, &wire); err != nil {
 		return err
+	}
+	value, err := decodeGoalContractObject(data)
+	if err != nil {
+		return err
+	}
+	if err := validateGoalCommandPredicateIDs(value); err != nil {
+		return fmt.Errorf("validate goal-command contract: %w", err)
 	}
 	var command struct {
 		Kind    string          `json:"kind"`
@@ -109,28 +125,6 @@ func ValidateGoalCommand(data []byte) error {
 	return nil
 }
 
-func validateContextSnapshotPredicateIDs(data []byte) error {
-	var snapshot struct {
-		WorkContract struct {
-			Acceptance acceptanceContract `json:"acceptance"`
-		} `json:"work_contract"`
-	}
-	if err := json.Unmarshal(data, &snapshot); err != nil {
-		return fmt.Errorf("decode context snapshot acceptance contract: %w", err)
-	}
-	return snapshot.WorkContract.Acceptance.validatePredicateIDs()
-}
-
-func validateGoalRevisionPredicateIDs(data []byte) error {
-	var revision struct {
-		AcceptanceContract acceptanceContract `json:"acceptance_contract"`
-	}
-	if err := json.Unmarshal(data, &revision); err != nil {
-		return fmt.Errorf("decode goal revision acceptance contract: %w", err)
-	}
-	return revision.AcceptanceContract.validatePredicateIDs()
-}
-
 type acceptanceContract struct {
 	Predicates []struct {
 		ID string `json:"id"`
@@ -151,7 +145,7 @@ func (contract acceptanceContract) validatePredicateIDs() error {
 // DecodeDecision validates and decodes the canonical decision envelope.
 func DecodeDecision(data []byte) (contractdto.SymmetryDecisionV1, error) {
 	var decision contractdto.SymmetryDecisionV1
-	if err := contractdto.Decode(contractdto.EnvelopeDecision, data, &decision); err != nil {
+	if err := contractdto.DecodeSchema(contractdto.EnvelopeDecision, data, &decision); err != nil {
 		return contractdto.SymmetryDecisionV1{}, err
 	}
 	options := make(map[string]struct{}, len(decision.Options))
@@ -172,4 +166,78 @@ func DecodeDecision(data []byte) (contractdto.SymmetryDecisionV1, error) {
 		return contractdto.SymmetryDecisionV1{}, fmt.Errorf("unresolved decision must not contain a resolution")
 	}
 	return decision, nil
+}
+
+// ValidateGoalCreate validates the full GoalCreate envelope, including the
+// initial revision's cross-field acceptance contract.
+func ValidateGoalCreate(data []byte) error {
+	var wire contractdto.SymmetryGoalCreateV1
+	if err := contractdto.DecodeSchema(contractdto.EnvelopeGoalCreate, data, &wire); err != nil {
+		return err
+	}
+	value, err := decodeGoalContractObject(data)
+	if err != nil {
+		return err
+	}
+	if err := validateGoalCreatePredicateIDs(value); err != nil {
+		return fmt.Errorf("validate goal-create contract: %w", err)
+	}
+	return nil
+}
+
+// ValidatePlanProposal validates the full PlanProposal envelope, including
+// item acceptance contracts and provider change targets.
+func ValidatePlanProposal(data []byte) error {
+	var wire contractdto.SymmetryPlanProposalV1
+	if err := contractdto.DecodeSchema(contractdto.EnvelopePlanProposal, data, &wire); err != nil {
+		return err
+	}
+	value, err := decodeGoalContractObject(data)
+	if err != nil {
+		return err
+	}
+	if err := validatePlanProposalPredicateIDs(value); err != nil {
+		return fmt.Errorf("validate plan-proposal contract: %w", err)
+	}
+	return nil
+}
+
+// ValidateGoalEnvelope is the full semantic validation boundary for every
+// Goal 0006 wire envelope. Raw schema-only callers must use
+// contracts.ValidateSchema explicitly.
+func ValidateGoalEnvelope(envelope contractdto.Envelope, data []byte) error {
+	switch envelope {
+	case contractdto.EnvelopeAdapterCapabilities:
+		_, err := ParseAdapterCapabilities(data)
+		return err
+	case contractdto.EnvelopeAdmission:
+		_, err := ParseAdmission(data)
+		return err
+	case contractdto.EnvelopeContextSnapshot:
+		_, err := DecodeContextSnapshot(data)
+		return err
+	case contractdto.EnvelopeDecision:
+		_, err := DecodeDecision(data)
+		return err
+	case contractdto.EnvelopeEvidence:
+		_, err := ParseEvidence(data)
+		return err
+	case contractdto.EnvelopeGoalCommand:
+		return ValidateGoalCommand(data)
+	case contractdto.EnvelopeGoalCreate:
+		return ValidateGoalCreate(data)
+	case contractdto.EnvelopeGoalRevision:
+		_, err := DecodeGoalRevision(data)
+		return err
+	case contractdto.EnvelopePlanProposal:
+		return ValidatePlanProposal(data)
+	case contractdto.EnvelopeTaskResult:
+		_, err := ParseTaskResult(data)
+		return err
+	case contractdto.EnvelopeUsage:
+		_, err := ParseUsage(data)
+		return err
+	default:
+		return fmt.Errorf("unsupported Goal envelope schema %q", envelope)
+	}
 }

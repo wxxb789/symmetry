@@ -59,6 +59,15 @@ func TestRuntimeCapabilitiesUseTheCanonicalSchemaAtTheJSONBoundary(t *testing.T)
 	}
 }
 
+func TestRuntimeRegistrationRejectsInvalidCapabilitiesRawJSONBeforeConversion(t *testing.T) {
+	data := []byte(`{"runtime_key":"default","name":"Local Codex","capacity":1,"agent_profile":"codex","workspace":"primary","capabilities":{"structured_input":true,"provider_access":true,"adapter":{"kind":"codex","native_version":"\uD800","implementation_version":"symmetry-adapter-1","protocol_version":1,"operations":{"start":true,"events":true,"cancel":true,"resume":false,"handoff":false,"guidance":"next_turn","pause":"unsupported","approval_response":false,"usage":"unknown","hard_cost_limit":false}}}}`)
+	var registration RuntimeRegistration
+	err := json.Unmarshal(data, &registration)
+	if err == nil || !strings.Contains(err.Error(), "unpaired high surrogate") {
+		t.Fatalf("RuntimeRegistration accepted or normalized invalid capabilities JSON: %v", err)
+	}
+}
+
 func TestRuntimeRegistrationCarriesNativeAndGenericMetadata(t *testing.T) {
 	repositoryResourceID := "00000000-0000-4000-8000-000000000001"
 	operations := AdapterOperations{

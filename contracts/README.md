@@ -87,6 +87,14 @@ does not support the source schema's negative lookaheads. Recreate them with:
 pnpm contracts:generate
 ```
 
+## Go Boundary API
+
+`daemon/internal/contracts` owns generated DTOs and the embedded schema bundle.
+`contracts.ValidateSchema` is the structural Draft 7 oracle; `DecodeSchema`
+adds strict raw JSON checks before decoding a generated DTO. Full cross-field
+envelope validation belongs to `daemon/internal/protocol` and enters through
+`protocol.ValidateGoalEnvelope`.
+
 Validate every schema, fixture expectation and generated-file drift with:
 
 ```text

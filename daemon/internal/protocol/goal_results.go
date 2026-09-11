@@ -340,7 +340,7 @@ func (result TaskResult) Validate() error {
 		if result.Proposal == nil {
 			return fmt.Errorf("proposal is required when kind is %q", result.Kind)
 		}
-		if err := contractdto.Validate(contractdto.EnvelopePlanProposal, *result.Proposal); err != nil {
+		if err := ValidatePlanProposal(*result.Proposal); err != nil {
 			return fmt.Errorf("proposal: %w", err)
 		}
 	default:

@@ -1,7 +1,6 @@
 package contracts
 
 import (
-	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -24,7 +23,7 @@ func TestAllGoalSchemasCompileAndGeneratedTimestampsStayStrings(t *testing.T) {
 	}
 
 	var admission SymmetryAdmissionV1
-	if err := Decode(EnvelopeAdmission, readContractFixture(t, "valid/admission.basic.json"), &admission); err != nil {
+	if err := DecodeSchema(EnvelopeAdmission, readContractFixture(t, "valid/admission.basic.json"), &admission); err != nil {
 		t.Fatal(err)
 	}
 	if admission.Limits.DeadlineAt != "2026-09-09T00:00:00Z" {
@@ -34,7 +33,7 @@ func TestAllGoalSchemasCompileAndGeneratedTimestampsStayStrings(t *testing.T) {
 
 func TestDecodePreservesNullableMicrousdFields(t *testing.T) {
 	var revision SymmetryGoalRevisionV1
-	if err := Decode(
+	if err := DecodeSchema(
 		EnvelopeGoalRevision,
 		readContractFixture(t, "valid/goal-revision.automatic-soft-budget.json"),
 		&revision,
@@ -51,65 +50,9 @@ func TestDecodePreservesNullableMicrousdFields(t *testing.T) {
 	}
 }
 
-func TestGoalRevisionOperatorFenceOverridesDeterministicPredicateRestriction(t *testing.T) {
-	for name, test := range map[string]struct {
-		envelope Envelope
-		fixture  string
-		wantErr  bool
-	}{
-		"goal revision permits review when completion requires an operator": {
-			envelope: EnvelopeGoalRevision,
-			fixture:  "valid/goal-revision.deterministic-operator-override.json",
-		},
-		"goal create permits review when completion requires an operator": {
-			envelope: EnvelopeGoalCreate,
-			fixture:  "valid/goal-create.deterministic-operator-override.json",
-		},
-		"goal amendment permits review when completion requires an operator": {
-			envelope: EnvelopeGoalCommand,
-			fixture:  "valid/goal-command.amend-deterministic-operator-override.json",
-		},
-		"deterministic revision still rejects review without an operator fence": {
-			envelope: EnvelopeGoalRevision,
-			fixture:  "invalid/goal-revision.deterministic-review.json",
-			wantErr:  true,
-		},
-		"goal create still rejects review without an operator fence": {
-			envelope: EnvelopeGoalCreate,
-			fixture:  "invalid/goal-create.deterministic-review.json",
-			wantErr:  true,
-		},
-		"goal amendment still rejects review without an operator fence": {
-			envelope: EnvelopeGoalCommand,
-			fixture:  "invalid/goal-command.amend-deterministic-review.json",
-			wantErr:  true,
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			err := Validate(test.envelope, readContractFixture(t, test.fixture))
-			if test.wantErr && err == nil {
-				t.Fatal("Validate accepted a non-machine deterministic acceptance contract")
-			}
-			if !test.wantErr && err != nil {
-				t.Fatalf("Validate rejected an operator-fenced contract: %v", err)
-			}
-		})
-	}
-}
-
-func TestContextSnapshotRejectsDuplicateAcceptancePredicateIDs(t *testing.T) {
-	err := Validate(
-		EnvelopeContextSnapshot,
-		readContractFixture(t, "invalid/context-snapshot.duplicate-predicate-id.json"),
-	)
-	if err == nil || !strings.Contains(err.Error(), "duplicate acceptance predicate id") {
-		t.Fatalf("Validate accepted duplicate ContextSnapshot predicate IDs: %v", err)
-	}
-}
-
 func TestValidateRejectsTrailingJSON(t *testing.T) {
 	data := append(readContractFixture(t, "valid/admission.basic.json"), []byte(" null")...)
-	if err := Validate(EnvelopeAdmission, data); err == nil {
+	if err := ValidateSchema(EnvelopeAdmission, data); err == nil {
 		t.Fatal("multiple JSON values were accepted")
 	}
 }
@@ -121,7 +64,7 @@ func TestValidateRejectsExponentNumberBeforeSchemaValidation(t *testing.T) {
 		`"input_tokens": 1e0`,
 		1,
 	)
-	err := Validate(EnvelopeUsage, []byte(data))
+	err := ValidateSchema(EnvelopeUsage, []byte(data))
 	if err == nil || !strings.Contains(err.Error(), "fractional or exponent number is not canonical: 1e0") {
 		t.Fatalf("Validate accepted exponent-form safe integer: %v", err)
 	}
@@ -178,8 +121,8 @@ func TestDecodeNormalizesNumericNegativeZeroInGeneratedIntegerDTO(t *testing.T) 
 		1,
 	)
 	var usage SymmetryUsageV1
-	if err := Decode(EnvelopeUsage, []byte(data), &usage); err != nil {
-		t.Fatalf("Decode rejected numeric -0: %v", err)
+	if err := DecodeSchema(EnvelopeUsage, []byte(data), &usage); err != nil {
+		t.Fatalf("DecodeSchema rejected numeric -0: %v", err)
 	}
 	if usage.InputTokens == nil || *usage.InputTokens != 0 {
 		t.Fatalf("input_tokens = %#v, want 0", usage.InputTokens)
@@ -200,48 +143,10 @@ func TestCommitPathUsesBoundedECMAScriptValidation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := Validate(EnvelopeEvidence, data); err == nil {
+			if err := ValidateSchema(EnvelopeEvidence, data); err == nil {
 				t.Fatal("invalid CommitPath was accepted")
 			}
 		})
-	}
-}
-
-func TestAdmissionProviderScopeBindsOperationsToItsResources(t *testing.T) {
-	valid := readContractFixture(t, "valid/admission.provider-scope.json")
-	if err := Validate(EnvelopeAdmission, valid); err != nil {
-		t.Fatalf("valid provider scope rejected: %v", err)
-	}
-
-	var admission map[string]any
-	if err := json.Unmarshal(valid, &admission); err != nil {
-		t.Fatal(err)
-	}
-	scope := admission["provider_scope"].(map[string]any)
-	operations := scope["operations_by_resource"].(map[string]any)
-	operations["99999999-9999-4999-8999-999999999999"] =
-		operations["22222222-2222-4222-8222-222222222222"]
-	delete(operations, "22222222-2222-4222-8222-222222222222")
-	data, err := json.Marshal(admission)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := Validate(EnvelopeAdmission, data); err == nil || !strings.Contains(err.Error(), "is not a scoped resource") {
-		t.Fatalf("provider scope with an unbound resource was accepted: %v", err)
-	}
-}
-
-func TestCanonicalJSONPreservesWireStringBytes(t *testing.T) {
-	encoded, err := canonicalJSON(map[string]any{
-		"literal": `\u2028`,
-		"message": "<>&\u2028\u2029",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []byte("{\"literal\":\"\\\\u2028\",\"message\":\"<>&\u2028\u2029\"}")
-	if !bytes.Equal(encoded, want) {
-		t.Fatalf("canonical JSON = %q, want %q", encoded, want)
 	}
 }
 
@@ -260,13 +165,14 @@ func TestDecodeJSONRejectsInvalidUTF8AndUnpairedSurrogates(t *testing.T) {
 	}
 }
 
-func TestGoalCommandRejectsUnpairedSurrogatesAfterSchemaValidation(t *testing.T) {
+func TestDecodeSchemaRejectsUnpairedSurrogatesAfterSchemaValidation(t *testing.T) {
 	data := readContractFixture(t, "invalid/goal-command.unpaired-surrogate.json")
 	if err := ValidateSchema(EnvelopeGoalCommand, data); err != nil {
 		t.Fatalf("schema validation rejected escaped surrogate before semantic validation: %v", err)
 	}
-	if err := Validate(EnvelopeGoalCommand, data); err == nil || !strings.Contains(err.Error(), "unpaired high surrogate") {
-		t.Fatalf("strict Goal command validation accepted an unpaired surrogate: %v", err)
+	var command SymmetryGoalCommandV1
+	if err := DecodeSchema(EnvelopeGoalCommand, data, &command); err == nil || !strings.Contains(err.Error(), "unpaired high surrogate") {
+		t.Fatalf("DecodeSchema accepted an unpaired surrogate: %v", err)
 	}
 }
 
