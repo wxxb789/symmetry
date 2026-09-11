@@ -319,11 +319,11 @@ type Limits struct {
 // ResumeHandle is a daemon-local, validated resume reference. Native handles
 // remain opaque and are never accepted without a compatible adapter probe.
 type ResumeHandle struct {
-	LocalHandleID        string
-	NativeSessionID      string
+	LocalHandleID         string
+	NativeSessionID       string
 	NativeSessionFilename string
-	WorkspaceFingerprint string
-	NativeVersion        string
+	WorkspaceFingerprint  string
+	NativeVersion         string
 }
 
 // EventKind is the normalized event vocabulary. Native adapters may add
