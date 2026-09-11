@@ -44,6 +44,7 @@ type Registry struct {
 func NewRegistry() *Registry {
 	registry := &Registry{adapters: make(map[Kind]Adapter)}
 	_ = registry.Register(KindGeneric, NewGenericAdapter())
+	_ = registry.Register(KindCodex, NewCodexAdapter())
 	_ = registry.Register(KindClaude, NewClaudeAdapter())
 	_ = registry.Register(KindPi, NewPiAdapter())
 	_ = registry.Register(KindOpenCode, NewOpenCodeAdapter())

@@ -33,19 +33,43 @@ func TestRegistryRejectsUnknownAdapter(t *testing.T) {
 }
 
 func TestRegistryKeepsUnavailableCapabilitiesExplicit(t *testing.T) {
-	registry := NewRegistry()
-	capabilities, err := registry.Probe(context.Background(), KindClaude)
-	if err == nil {
-		t.Fatal("Probe() error = nil, want unavailable error")
-	}
-	if capabilities.Verified || capabilities.Start || capabilities.Events || capabilities.Cancel {
-		t.Fatalf("unavailable capabilities = %+v, want fail-closed operations", capabilities)
-	}
-	if capabilities.Guidance != GuidanceUnsupported || capabilities.Pause != PauseUnsupported || capabilities.Usage != UsageUnknown {
-		t.Fatalf("unavailable control capabilities = %+v, want explicit unsupported values", capabilities)
-	}
-	if capabilities.Unsupported[string(CapabilityPause)] == "" {
-		t.Fatalf("unsupported map = %#v, want pause reason", capabilities.Unsupported)
+	for _, test := range []struct {
+		name string
+		kind Kind
+	}{
+		{name: "codex", kind: KindCodex},
+		{name: "claude", kind: KindClaude},
+		{name: "pi", kind: KindPi},
+		{name: "opencode", kind: KindOpenCode},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			registry := NewRegistry()
+			capabilities, err := registry.Probe(context.Background(), test.kind)
+			if err == nil {
+				t.Fatal("Probe() error = nil, want unavailable error")
+			}
+			if errors.Is(err, ErrUnknownAdapter) {
+				t.Fatalf("Probe() error = %v, want known unsupported adapter", err)
+			}
+			if validateErr := capabilities.Validate(); validateErr != nil {
+				t.Fatalf("unavailable capabilities are invalid: %v; capabilities = %+v", validateErr, capabilities)
+			}
+			if capabilities.Kind != test.kind {
+				t.Fatalf("capability kind = %q, want %q", capabilities.Kind, test.kind)
+			}
+			if capabilities.Verified || capabilities.Start || capabilities.Events || capabilities.Cancel {
+				t.Fatalf("unavailable capabilities = %+v, want fail-closed operations", capabilities)
+			}
+			if capabilities.Guidance != GuidanceUnsupported || capabilities.Pause != PauseUnsupported || capabilities.Usage != UsageUnknown {
+				t.Fatalf("unavailable control capabilities = %+v, want explicit unsupported values", capabilities)
+			}
+			if capabilities.Unsupported[string(CapabilityPause)] == "" {
+				t.Fatalf("unsupported map = %#v, want pause reason", capabilities.Unsupported)
+			}
+			if requireErr := capabilities.Require(CapabilityStart); !errors.Is(requireErr, ErrUnsupportedCapability) {
+				t.Fatalf("Require(start) error = %v, want ErrUnsupportedCapability", requireErr)
+			}
+		})
 	}
 }
 

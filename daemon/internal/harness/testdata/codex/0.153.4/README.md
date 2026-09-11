@@ -15,10 +15,13 @@ but is not a raw capture.
 
 `app-server-start-smoke.jsonl` is a sanitized non-credentialed Windows
 observation from 2026-09-09 for Codex CLI 0.153.4. The installed server
-omitted the `jsonrpc` member from both responses and notifications, and it
-returned `sandbox.type=readOnly` after a `workspace-write` request. The strict
-adapter therefore rejects this wire as unverified and does not claim native
-support. Paths, identifiers, and installation metadata were redacted.
+omitted the `jsonrpc` member from both responses and notifications. The parser
+now accepts that omission for JSON-RPC-like framing, but this historical
+observation does not verify native method semantics. The server also returned
+`sandbox.type=readOnly` after a `workspace-write` request; that permission
+mismatch remains unsupported. The adapter therefore keeps the native
+capability projection unverified and does not claim native support. Paths,
+identifiers, and installation metadata were redacted.
 
 `schema-manifest.json` records SHA-256 hashes from the locally generated
 versioned schema bundle and the observed permission mismatch. These fixtures
