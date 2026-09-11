@@ -604,6 +604,56 @@ func TestNativeRepositoryTaskStandardEnvironmentDoesNotWriteModels(t *testing.T)
 	}
 }
 
+func TestNativeRepositoryTaskWindowsEnvironmentPreservesExecutableResolution(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows executable environment only")
+	}
+
+	parentLocalAppData := filepath.Join(t.TempDir(), "parent-localappdata")
+	configuredMiseData := filepath.Join(t.TempDir(), "mise-data")
+	t.Setenv("PATH", `C:\native-pi-test\bin`)
+	t.Setenv("LOCALAPPDATA", parentLocalAppData)
+	t.Setenv("MISE_DATA_DIR", configuredMiseData)
+	t.Setenv("OPENAI_API_KEY", "must-not-be-copied")
+
+	root := t.TempDir()
+	environment := nativePiRepositoryTaskEnvironment(t, root, "")
+	for name, want := range map[string]string{
+		"PATH":                 `C:\native-pi-test\bin`,
+		"MISE_DATA_DIR":        configuredMiseData,
+		"PI_SKIP_VERSION_CHECK": "1",
+		"USERPROFILE":           filepath.Join(root, "home"),
+		"APPDATA":               filepath.Join(root, "appdata"),
+		"LOCALAPPDATA":          filepath.Join(root, "localappdata"),
+	} {
+		if got := nativePiRepositoryTaskEnvironmentValue(environment, name); got != want {
+			t.Fatalf("isolated native Pi %s = %q, want %q", name, got, want)
+		}
+	}
+	for _, name := range []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "PI_CONFIG_DIR"} {
+		if got := nativePiRepositoryTaskEnvironmentValue(environment, name); got != "" {
+			t.Fatalf("isolated native Pi environment copied %s=%q", name, got)
+		}
+	}
+}
+
+func TestNativeRepositoryTaskWindowsEnvironmentDerivesMiseDataDirectory(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows executable environment only")
+	}
+
+	parentLocalAppData := filepath.Join(t.TempDir(), "parent-localappdata")
+	t.Setenv("PATH", `C:\native-pi-test\bin`)
+	t.Setenv("LOCALAPPDATA", parentLocalAppData)
+	t.Setenv("MISE_DATA_DIR", "")
+
+	environment := nativePiRepositoryTaskEnvironment(t, t.TempDir(), "")
+	want := filepath.Join(parentLocalAppData, "mise")
+	if got := nativePiRepositoryTaskEnvironmentValue(environment, "MISE_DATA_DIR"); got != want {
+		t.Fatalf("derived native Pi MISE_DATA_DIR = %q, want %q", got, want)
+	}
+}
+
 func nativePiRepositoryTaskAssertJSONKeys(t *testing.T, object map[string]json.RawMessage, expected ...string) {
 	t.Helper()
 	wanted := make(map[string]struct{}, len(expected))
@@ -745,10 +795,18 @@ func nativePiRepositoryTaskEnvironment(t *testing.T, root, credentialEnv string)
 		environment = append(environment, credentialEnv+"="+os.Getenv(credentialEnv))
 	}
 	if runtime.GOOS == "windows" {
+		miseDataDir := strings.TrimSpace(os.Getenv("MISE_DATA_DIR"))
+		if miseDataDir == "" {
+			miseDataDir = filepath.Join(nativePiRepositoryTaskRequiredEnv(t, "LOCALAPPDATA"), "mise")
+		}
 		environment = append(environment,
 			"USERPROFILE="+home,
 			"APPDATA="+appDataDir,
 			"LOCALAPPDATA="+localAppDataDir,
+			// The Windows mise shim needs its tool store after LOCALAPPDATA is
+			// isolated; this does not expose Pi's configuration directory.
+			"MISE_DATA_DIR="+miseDataDir,
+			"PI_SKIP_VERSION_CHECK=1",
 		)
 		for _, name := range []string{"SystemRoot", "WINDIR", "ComSpec", "PATHEXT"} {
 			value := nativePiRepositoryTaskRequiredEnv(t, name)
