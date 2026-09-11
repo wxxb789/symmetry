@@ -152,7 +152,7 @@ export type SymmetryAdmissionV1 = SymmetryAdmissionV1Base &
         session_mode: "handoff";
         requested_session_id: null;
         handoff_source_run_id: UUID;
-        purpose: "implement" | "validate" | "observe" | "chat";
+        purpose: "implement" | "validate";
         work_item_id: UUID;
       }
   );

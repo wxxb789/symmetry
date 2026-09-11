@@ -22,13 +22,9 @@
   },
   "validation_of_task_id": null,
   "provider_scope": {
-    "resource_ids": [
-      "22222222-2222-4222-8222-222222222222",
-      "99999999-9999-4999-8999-999999999999"
-    ],
+    "resource_ids": ["22222222-2222-4222-8222-222222222222"],
     "operations_by_resource": {
-      "22222222-2222-4222-8222-222222222222": ["resource.sync", "change.upsert"],
-      "99999999-9999-4999-8999-999999999999": ["resource.sync"]
+      "22222222-2222-4222-8222-222222222222": ["change.upsert", "change.update"]
     },
     "change_target": {
       "kind": "branches",

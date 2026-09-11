@@ -276,7 +276,7 @@
               "required": ["work_item_id", "purpose", "model_profile", "session_mode", "requested_session_id", "handoff_source_run_id", "validation_of_task_id"],
               "properties": {
                 "work_item_id": {"$ref": "common.schema.json#/definitions/UUID"},
-                "purpose": {"enum": ["implement", "validate", "observe", "chat"]},
+                "purpose": {"enum": ["implement", "validate"]},
                 "model_profile": {"$ref": "common.schema.json#/definitions/ShortIdentifier"},
                 "session_mode": {"const": "handoff"},
                 "requested_session_id": {"type": "null"},

@@ -6,14 +6,25 @@
   "work_item_id": "33333333-3333-4333-8333-333333333333",
   "kind": "review",
   "action_hash": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
-  "subject_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-  "state": "superseded",
-  "question": "Accept the review result?",
-  "options": [{"id": "accept", "label": "Accept", "consequence": "Settle the work item."}],
+  "subject_hash": null,
+  "state": "open",
+  "question": "Should the operator admit this plan?",
+  "options": [
+    {
+      "id": "accept",
+      "label": "Accept",
+      "consequence": "The work item may be settled."
+    },
+    {
+      "id": "reject",
+      "label": "Reject",
+      "consequence": "A repair task is required."
+    }
+  ],
   "resolution": null,
   "actor_ref": null,
   "expires_at": null,
-  "lock_version": 2,
+  "lock_version": 1,
   "created_at": "2026-09-08T00:03:00Z",
-  "updated_at": "2026-09-08T00:04:00Z"
+  "updated_at": "2026-09-08T00:03:00Z"
 }

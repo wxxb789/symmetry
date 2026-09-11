@@ -119,11 +119,8 @@
           "required": ["session_mode", "requested_session_id", "handoff_source_run_id"],
           "properties": {
             "session_mode": {"const": "handoff"},
-            "requested_session_id": {"type": "null"}
-          },
-          "not": {
-            "properties": {"purpose": {"const": "plan"}},
-            "required": ["purpose"]
+            "requested_session_id": {"type": "null"},
+            "purpose": {"enum": ["implement", "validate"]}
           }
         }
       ]

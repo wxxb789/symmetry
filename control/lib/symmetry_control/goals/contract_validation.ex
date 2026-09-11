@@ -553,7 +553,13 @@ defmodule SymmetryControl.Goals.ContractValidation do
          :ok <- ensure_equal(evidence["kind"], source_ref["kind"], :source_ref_kind),
          :ok <- validate_evidence_validator_profile(evidence),
          :ok <- validate_evidence_verdict(evidence),
-         :ok <- validate_evidence_kind_identity(evidence["kind"], source_ref, payload) do
+         :ok <-
+           validate_evidence_kind_identity(
+             evidence["kind"],
+             evidence["subject"],
+             source_ref,
+             payload
+           ) do
       :ok
     end
   end
@@ -580,7 +586,7 @@ defmodule SymmetryControl.Goals.ContractValidation do
     end
   end
 
-  defp validate_evidence_kind_identity("artifact", source_ref, payload) do
+  defp validate_evidence_kind_identity("artifact", subject, source_ref, payload) do
     with :ok <-
            ensure_equal(
              source_ref["resource_id"],
@@ -588,18 +594,26 @@ defmodule SymmetryControl.Goals.ContractValidation do
              :artifact_resource_id
            ),
          :ok <- ensure_equal(source_ref["commit"], payload["commit"], :artifact_commit),
-         :ok <- ensure_equal(source_ref["path"], payload["path"], :artifact_path) do
+         :ok <- ensure_equal(source_ref["path"], payload["path"], :artifact_path),
+         :ok <-
+           ensure_equal(
+             subject["resource_id"],
+             payload["resource_id"],
+             :artifact_subject_resource_id
+           ),
+         :ok <-
+           ensure_equal(subject["commit"], payload["commit"], :artifact_subject_commit) do
       :ok
     end
   end
 
-  defp validate_evidence_kind_identity("review", source_ref, payload),
+  defp validate_evidence_kind_identity("review", _subject, source_ref, payload),
     do: ensure_equal(source_ref["review_task_id"], payload["review_task_id"], :review_task_id)
 
-  defp validate_evidence_kind_identity("observation", source_ref, payload),
+  defp validate_evidence_kind_identity("observation", _subject, source_ref, payload),
     do: ensure_equal(source_ref["external_ref"], payload["external_ref"], :external_ref)
 
-  defp validate_evidence_kind_identity(_kind, _source_ref, _payload), do: :ok
+  defp validate_evidence_kind_identity(_kind, _subject, _source_ref, _payload), do: :ok
 
   defp validate_usage_semantics(%{"cost_basis" => cost_basis, "cost_microusd" => cost_microusd}) do
     case {cost_basis, cost_microusd} do

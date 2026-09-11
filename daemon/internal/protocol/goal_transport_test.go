@@ -215,7 +215,7 @@ func TestAdmissionSessionModeBindsRequestedSessionID(t *testing.T) {
 }
 
 func TestAdmissionProviderScopeIsFailClosedAndPreservesCanonicalGrants(t *testing.T) {
-	validAdmission := `{"schema_version":"symmetry.admission.v1","admission_id":"` + testUUID + `","goal_id":"` + testUUIDTwo + `","goal_revision":1,"work_item_id":"` + testUUID + `","purpose":"implement","context_snapshot_id":"` + testUUIDTwo + `","context_hash":"` + testTreeDigest + `","model_profile":"implementation-default","session_mode":"fresh","requested_session_id":null,"subject":{"resource_id":"` + testUUID + `","commit":"` + testCommit + `","tree_digest":"` + testTreeDigest + `"},"limits":{"max_turns":1,"deadline_at":"2026-09-09T12:00:00Z","max_cost_microusd":null},"validation_of_task_id":null,"provider_scope":{"resource_ids":["` + testUUID + `","` + testUUIDTwo + `"],"operations_by_resource":{"` + testUUID + `":["resource.sync","change.upsert"],"` + testUUIDTwo + `":["resource.sync"]},"change_target":{"kind":"branches","source_branch":"codex/goal-0006","target_branch":"main"}}}`
+	validAdmission := `{"schema_version":"symmetry.admission.v1","admission_id":"` + testUUID + `","goal_id":"` + testUUIDTwo + `","goal_revision":1,"work_item_id":"` + testUUID + `","purpose":"implement","context_snapshot_id":"` + testUUIDTwo + `","context_hash":"` + testTreeDigest + `","model_profile":"implementation-default","session_mode":"fresh","requested_session_id":null,"subject":{"resource_id":"` + testUUID + `","commit":"` + testCommit + `","tree_digest":"` + testTreeDigest + `"},"limits":{"max_turns":1,"deadline_at":"2026-09-09T12:00:00Z","max_cost_microusd":null},"validation_of_task_id":null,"provider_scope":{"resource_ids":["` + testUUID + `","` + testUUIDTwo + `"],"operations_by_resource":{"` + testUUID + `":["change.upsert","change.update"],"` + testUUIDTwo + `":["change.upsert"]},"change_target":{"kind":"branches","source_branch":"codex/goal-0006","target_branch":"main"}}}`
 	admission, err := ParseAdmission([]byte(validAdmission))
 	if err != nil {
 		t.Fatal(err)
@@ -232,14 +232,14 @@ func TestAdmissionProviderScopeIsFailClosedAndPreservesCanonicalGrants(t *testin
 		scope.ChangeTarget.SourceBranch == nil || *scope.ChangeTarget.SourceBranch != "codex/goal-0006" {
 		t.Fatalf("provider_scope = %#v", scope)
 	}
-	if got := scope.OperationsByResource[testUUID]; len(got) != 2 || got[0] != ProviderOperationResourceSync || got[1] != ProviderOperationChangeUpsert {
+	if got := scope.OperationsByResource[testUUID]; len(got) != 2 || got[0] != ProviderOperationChangeUpsert || got[1] != ProviderOperationChangeUpdate {
 		t.Fatalf("operations_by_resource[%q] = %#v", testUUID, got)
 	}
 
 	for name, mutated := range map[string]string{
-		"unscoped operation key": strings.Replace(validAdmission, `"`+testUUIDTwo+`":["resource.sync"]`, `"33333333-3333-4333-8333-333333333333":["resource.sync"]`, 1),
-		"duplicate operation":    strings.Replace(validAdmission, `"resource.sync","change.upsert"`, `"resource.sync","resource.sync"`, 1),
-		"invalid operation":      strings.Replace(validAdmission, `"resource.sync","change.upsert"`, `"resource.delete"`, 1),
+		"unscoped operation key": strings.Replace(validAdmission, `"`+testUUIDTwo+`":["change.upsert"]`, `"33333333-3333-4333-8333-333333333333":["change.upsert"]`, 1),
+		"duplicate operation":    strings.Replace(validAdmission, `"change.upsert","change.update"`, `"change.upsert","change.upsert"`, 1),
+		"invalid operation":      strings.Replace(validAdmission, `"change.upsert","change.update"`, `"resource.delete"`, 1),
 		"equal branch target":    strings.Replace(validAdmission, `"target_branch":"main"`, `"target_branch":"codex/goal-0006"`, 1),
 		"invalid branch target":  strings.Replace(validAdmission, `"target_branch":"main"`, `"target_branch":"main","pull_request_url":"https://example.test/pr/1"`, 1),
 		"unknown scope field":    strings.Replace(validAdmission, `"change_target":`, `"extra":true,"change_target":`, 1),

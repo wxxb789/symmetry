@@ -1150,6 +1150,184 @@
       "path": "invalid/goal-revision.automatic-unlimited-budget.json",
       "valid": false,
       "tags": ["automatic-execution", "total-budget-limit"]
+    },
+    {
+      "id": "decision.completion",
+      "schema": "decision",
+      "path": "valid/decision.completion.json",
+      "valid": true,
+      "tags": ["decision", "completion", "subject-binding"]
+    },
+    {
+      "id": "decision.scope-missing-work-item",
+      "schema": "decision",
+      "path": "invalid/decision.scope-missing-work-item.json",
+      "valid": false,
+      "tags": ["decision", "kind-binding", "wrong-identity"]
+    },
+    {
+      "id": "admission.handoff-observe",
+      "schema": "admission",
+      "path": "invalid/admission.handoff-observe.json",
+      "valid": false,
+      "tags": ["admission", "handoff-session", "purpose-discriminator"]
+    },
+    {
+      "id": "goal-command.admit-handoff-chat",
+      "schema": "goal-command",
+      "path": "invalid/goal-command.admit-handoff-chat.json",
+      "valid": false,
+      "tags": ["goal-command", "handoff-session", "purpose-discriminator"]
+    },
+    {
+      "id": "admission.provider-scope-null-target-change-upsert",
+      "schema": "admission",
+      "path": "invalid/admission.provider-scope-null-target-change-upsert.json",
+      "valid": false,
+      "tags": ["admission", "provider-scope", "least-authority", "change-target"]
+    },
+    {
+      "id": "admission.provider-scope-branches-resource-sync",
+      "schema": "admission",
+      "path": "invalid/admission.provider-scope-branches-resource-sync.json",
+      "valid": false,
+      "tags": ["admission", "provider-scope", "least-authority", "change-target"]
+    },
+    {
+      "id": "admission.provider-scope-pull-request-change-upsert",
+      "schema": "admission",
+      "path": "invalid/admission.provider-scope-pull-request-change-upsert.json",
+      "valid": false,
+      "tags": ["admission", "provider-scope", "least-authority", "change-target"]
+    },
+    {
+      "id": "evidence.artifact-subject-resource-mismatch",
+      "schema": "evidence",
+      "path": "invalid/evidence.artifact-subject-resource-mismatch.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "tags": ["evidence", "artifact", "subject-binding", "semantic-consistency"]
+    },
+    {
+      "id": "evidence.artifact-subject-commit-mismatch",
+      "schema": "evidence",
+      "path": "invalid/evidence.artifact-subject-commit-mismatch.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "tags": ["evidence", "artifact", "subject-binding", "semantic-consistency"]
+    },
+    {
+      "id": "admission.provider-scope-null-target-sync",
+      "schema": "admission",
+      "path": "valid/admission.provider-scope-null-target-sync.json",
+      "valid": true,
+      "tags": [
+        "provider-scope",
+        "provider-target-operation"
+      ]
+    },
+    {
+      "id": "admission.provider-scope-branches-upsert",
+      "schema": "admission",
+      "path": "valid/admission.provider-scope-branches-upsert.json",
+      "valid": true,
+      "tags": [
+        "provider-scope",
+        "provider-target-operation"
+      ]
+    },
+    {
+      "id": "admission.provider-scope-pull-request-update",
+      "schema": "admission",
+      "path": "valid/admission.provider-scope-pull-request-update.json",
+      "valid": true,
+      "tags": [
+        "provider-scope",
+        "provider-target-operation"
+      ]
+    },
+    {
+      "id": "admission.handoff-validate",
+      "schema": "admission",
+      "path": "valid/admission.handoff-validate.json",
+      "valid": true,
+      "tags": [
+        "handoff-purpose"
+      ]
+    },
+    {
+      "id": "goal-command.admit-handoff-validate",
+      "schema": "goal-command",
+      "path": "valid/goal-command.admit-handoff-validate.json",
+      "valid": true,
+      "tags": [
+        "handoff-purpose"
+      ]
+    },
+    {
+      "id": "decision.plan-work-item",
+      "schema": "decision",
+      "path": "invalid/decision.plan-work-item.json",
+      "valid": false,
+      "tags": [
+        "decision-kind-binding"
+      ]
+    },
+    {
+      "id": "decision.plan-subject",
+      "schema": "decision",
+      "path": "invalid/decision.plan-subject.json",
+      "valid": false,
+      "tags": [
+        "decision-kind-binding"
+      ]
+    },
+    {
+      "id": "decision.scope-subject",
+      "schema": "decision",
+      "path": "invalid/decision.scope-subject.json",
+      "valid": false,
+      "tags": [
+        "decision-kind-binding"
+      ]
+    },
+    {
+      "id": "decision.review-missing-work-item",
+      "schema": "decision",
+      "path": "invalid/decision.review-missing-work-item.json",
+      "valid": false,
+      "tags": [
+        "decision-kind-binding"
+      ]
+    },
+    {
+      "id": "decision.review-missing-subject",
+      "schema": "decision",
+      "path": "invalid/decision.review-missing-subject.json",
+      "valid": false,
+      "tags": [
+        "decision-kind-binding"
+      ]
+    },
+    {
+      "id": "decision.completion-work-item",
+      "schema": "decision",
+      "path": "invalid/decision.completion-work-item.json",
+      "valid": false,
+      "tags": [
+        "decision-kind-binding"
+      ]
+    },
+    {
+      "id": "decision.completion-missing-subject",
+      "schema": "decision",
+      "path": "invalid/decision.completion-missing-subject.json",
+      "valid": false,
+      "tags": [
+        "decision-kind-binding"
+      ]
     }
   ]
 }

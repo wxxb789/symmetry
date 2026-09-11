@@ -23,17 +23,13 @@
   "validation_of_task_id": null,
   "provider_scope": {
     "resource_ids": [
-      "22222222-2222-4222-8222-222222222222",
-      "99999999-9999-4999-8999-999999999999"
+      "22222222-2222-4222-8222-222222222222"
     ],
     "operations_by_resource": {
-      "22222222-2222-4222-8222-222222222222": ["change.upsert", "change.update"],
-      "99999999-9999-4999-8999-999999999999": ["change.upsert"]
+      "22222222-2222-4222-8222-222222222222": [
+        "resource.sync"
+      ]
     },
-    "change_target": {
-      "kind": "branches",
-      "source_branch": "main",
-      "target_branch": "main"
-    }
+    "change_target": null
   }
 }

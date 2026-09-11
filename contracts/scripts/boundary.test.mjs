@@ -77,7 +77,7 @@ test("typed boundaries reject unpaired surrogates in values and record keys", as
   const goal = await fixture("goal-create.basic");
   goal.title = "\ud800";
   const admission = await fixture("admission.provider-scope");
-  admission.provider_scope.operations_by_resource["\udfff"] = ["resource.sync"];
+  admission.provider_scope.operations_by_resource["\udfff"] = ["change.upsert"];
   for (const operation of [GoalCreate.decodeUnknown(goal), Admission.decodeUnknown(admission)]) {
     const result = await Effect.runPromise(Effect.either(operation));
     assert.ok(Either.isLeft(result));

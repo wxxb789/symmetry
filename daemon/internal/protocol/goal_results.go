@@ -953,6 +953,12 @@ func (evidence Evidence) Validate() error {
 			evidence.SourceRef.Path == nil || evidence.Payload.Path == nil || *evidence.SourceRef.Path != *evidence.Payload.Path {
 			return fmt.Errorf("artifact source_ref and payload identity must match")
 		}
+		if *evidence.Payload.ResourceID != evidence.Subject.ResourceID {
+			return fmt.Errorf("artifact payload.resource_id must match evidence.subject.resource_id")
+		}
+		if *evidence.Payload.Commit != evidence.Subject.Commit {
+			return fmt.Errorf("artifact payload.commit must match evidence.subject.commit")
+		}
 	case EvidenceReview:
 		if evidence.SourceRef.ReviewTaskID == nil || evidence.Payload.ReviewTaskID == nil || *evidence.SourceRef.ReviewTaskID != *evidence.Payload.ReviewTaskID {
 			return fmt.Errorf("review source_ref and payload identity must match")

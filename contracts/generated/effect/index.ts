@@ -454,11 +454,45 @@ export const DefinitionProviderChangeTargetGraph = S.suspend(() => exactOneOf(S.
   "pull_request_url": stringConstraints(S.String.pipe(S.pattern(_regularExpression9)), 1, 16384, undefined)
 })), undefined, undefined)));
 
-export const DefinitionProviderScopeGraph = S.suspend(() => withObjectPropertyBounds(strictObject(S.Struct({
-  "change_target": exactOneOf(S.Union(DefinitionProviderChangeTargetGraph, S.Null), DefinitionProviderChangeTargetGraph, S.Null),
-  "operations_by_resource": withObjectPropertyBounds(openObjectWithAdditionalProperties(S.Struct({}), [], arrayConstraints(S.Array(S.Literal("resource.sync", "change.upsert", "change.update")), 1, 3, true)), 1, 256),
+export const DefinitionProviderScopeGraph = S.suspend(() => exactOneOf(S.Union(withObjectPropertyBounds(strictObject(S.Struct({
+  "change_target": S.Null,
+  "operations_by_resource": withObjectPropertyBounds(openObjectWithAdditionalProperties(S.Struct({}), [], arrayConstraints(S.Array(S.Literal("resource.sync")), 1, 1, true)), 1, 256),
   "resource_ids": arrayConstraints(S.Array(DefinitionUUIDGraph), 1, 256, true)
-})), undefined, undefined));
+})), undefined, undefined), withObjectPropertyBounds(strictObject(S.Struct({
+  "change_target": withObjectPropertyBounds(strictObject(S.Struct({
+  "kind": S.Literal("branches"),
+  "source_branch": stringConstraints(S.String.pipe(S.pattern(_regularExpression8)), 1, 255, undefined),
+  "target_branch": stringConstraints(S.String.pipe(S.pattern(_regularExpression8)), 1, 255, undefined)
+})), undefined, undefined),
+  "operations_by_resource": withObjectPropertyBounds(openObjectWithAdditionalProperties(S.Struct({}), [], exactOneOf(S.Union(arrayConstraints(S.Array(S.Literal("change.upsert")), 1, 1, true), arrayConstraints(S.Array(S.Literal("change.upsert", "change.update")), 2, 2, true)), arrayConstraints(S.Array(S.Literal("change.upsert")), 1, 1, true), arrayConstraints(S.Array(S.Literal("change.upsert", "change.update")), 2, 2, true))), 1, 256),
+  "resource_ids": arrayConstraints(S.Array(DefinitionUUIDGraph), 1, 256, true)
+})), undefined, undefined), withObjectPropertyBounds(strictObject(S.Struct({
+  "change_target": withObjectPropertyBounds(strictObject(S.Struct({
+  "kind": S.Literal("pull_request"),
+  "pull_request_url": stringConstraints(S.String.pipe(S.pattern(_regularExpression9)), 1, 16384, undefined)
+})), undefined, undefined),
+  "operations_by_resource": withObjectPropertyBounds(openObjectWithAdditionalProperties(S.Struct({}), [], arrayConstraints(S.Array(S.Literal("change.update")), 1, 1, true)), 1, 256),
+  "resource_ids": arrayConstraints(S.Array(DefinitionUUIDGraph), 1, 256, true)
+})), undefined, undefined)), withObjectPropertyBounds(strictObject(S.Struct({
+  "change_target": S.Null,
+  "operations_by_resource": withObjectPropertyBounds(openObjectWithAdditionalProperties(S.Struct({}), [], arrayConstraints(S.Array(S.Literal("resource.sync")), 1, 1, true)), 1, 256),
+  "resource_ids": arrayConstraints(S.Array(DefinitionUUIDGraph), 1, 256, true)
+})), undefined, undefined), withObjectPropertyBounds(strictObject(S.Struct({
+  "change_target": withObjectPropertyBounds(strictObject(S.Struct({
+  "kind": S.Literal("branches"),
+  "source_branch": stringConstraints(S.String.pipe(S.pattern(_regularExpression8)), 1, 255, undefined),
+  "target_branch": stringConstraints(S.String.pipe(S.pattern(_regularExpression8)), 1, 255, undefined)
+})), undefined, undefined),
+  "operations_by_resource": withObjectPropertyBounds(openObjectWithAdditionalProperties(S.Struct({}), [], exactOneOf(S.Union(arrayConstraints(S.Array(S.Literal("change.upsert")), 1, 1, true), arrayConstraints(S.Array(S.Literal("change.upsert", "change.update")), 2, 2, true)), arrayConstraints(S.Array(S.Literal("change.upsert")), 1, 1, true), arrayConstraints(S.Array(S.Literal("change.upsert", "change.update")), 2, 2, true))), 1, 256),
+  "resource_ids": arrayConstraints(S.Array(DefinitionUUIDGraph), 1, 256, true)
+})), undefined, undefined), withObjectPropertyBounds(strictObject(S.Struct({
+  "change_target": withObjectPropertyBounds(strictObject(S.Struct({
+  "kind": S.Literal("pull_request"),
+  "pull_request_url": stringConstraints(S.String.pipe(S.pattern(_regularExpression9)), 1, 16384, undefined)
+})), undefined, undefined),
+  "operations_by_resource": withObjectPropertyBounds(openObjectWithAdditionalProperties(S.Struct({}), [], arrayConstraints(S.Array(S.Literal("change.update")), 1, 1, true)), 1, 256),
+  "resource_ids": arrayConstraints(S.Array(DefinitionUUIDGraph), 1, 256, true)
+})), undefined, undefined)));
 
 export const DefinitionAdapterOperationsGraph = S.suspend(() => withObjectPropertyBounds(strictObject(S.Struct({
   "approval_response": S.Boolean,
@@ -554,13 +588,12 @@ export const AdmissionGraph = S.suspend(() => allOf(withObjectPropertyBounds(str
   "session_mode": S.Literal("resume")
 })), undefined, undefined)), notSchema(conditionalObject(withObjectPropertyBounds(openObject(S.Struct({
   "handoff_source_run_id": S.Unknown
-})), undefined, undefined)))), allOf(conditionalObject(withObjectPropertyBounds(openObject(S.Struct({
+})), undefined, undefined)))), conditionalObject(withObjectPropertyBounds(openObject(S.Struct({
   "handoff_source_run_id": S.Unknown,
+  "purpose": S.optionalWith(S.Literal("implement", "validate"), { exact: true }),
   "requested_session_id": S.Null,
   "session_mode": S.Literal("handoff")
-})), undefined, undefined)), notSchema(conditionalObject(withObjectPropertyBounds(openObject(S.Struct({
-  "purpose": S.Literal("plan")
-})), undefined, undefined))))), allOf(conditionalObject(withObjectPropertyBounds(openObject(S.Struct({
+})), undefined, undefined))), allOf(conditionalObject(withObjectPropertyBounds(openObject(S.Struct({
   "requested_session_id": S.Null,
   "session_mode": S.Literal("fresh")
 })), undefined, undefined)), notSchema(conditionalObject(withObjectPropertyBounds(openObject(S.Struct({
@@ -570,13 +603,12 @@ export const AdmissionGraph = S.suspend(() => allOf(withObjectPropertyBounds(str
   "session_mode": S.Literal("resume")
 })), undefined, undefined)), notSchema(conditionalObject(withObjectPropertyBounds(openObject(S.Struct({
   "handoff_source_run_id": S.Unknown
-})), undefined, undefined)))), allOf(conditionalObject(withObjectPropertyBounds(openObject(S.Struct({
+})), undefined, undefined)))), conditionalObject(withObjectPropertyBounds(openObject(S.Struct({
   "handoff_source_run_id": S.Unknown,
+  "purpose": S.optionalWith(S.Literal("implement", "validate"), { exact: true }),
   "requested_session_id": S.Null,
   "session_mode": S.Literal("handoff")
-})), undefined, undefined)), notSchema(conditionalObject(withObjectPropertyBounds(openObject(S.Struct({
-  "purpose": S.Literal("plan")
-})), undefined, undefined))))), exactOneOf(S.Union(conditionalObject(withObjectPropertyBounds(openObject(S.Struct({
+})), undefined, undefined))), exactOneOf(S.Union(conditionalObject(withObjectPropertyBounds(openObject(S.Struct({
   "purpose": S.optionalWith(S.Literal("validate"), { exact: true }),
   "validation_of_task_id": S.optionalWith(DefinitionUUIDGraph, { exact: true })
 })), undefined, undefined)), conditionalObject(withObjectPropertyBounds(openObject(S.Struct({
@@ -662,7 +694,7 @@ const matchesContextSnapshot = S.is(ContextSnapshotGraph, strictOptions);
 export const isContextSnapshot = (value: unknown): value is SymmetryContextSnapshotV1 => matchesContextSnapshot(value);
 export const ContextSnapshotSchema: S.Schema<SymmetryContextSnapshotV1, unknown> = S.Unknown.pipe(S.filter(isContextSnapshot));
 
-export const DecisionGraph = S.suspend(() => withObjectPropertyBounds(strictObject(S.Struct({
+export const DecisionGraph = S.suspend(() => allOf(withObjectPropertyBounds(strictObject(S.Struct({
   "action_hash": DefinitionSha256Graph,
   "actor_ref": exactOneOf(S.Union(DefinitionShortIdentifierGraph, S.Null), DefinitionShortIdentifierGraph, S.Null),
   "created_at": DefinitionUtcTimestampGraph,
@@ -680,7 +712,43 @@ export const DecisionGraph = S.suspend(() => withObjectPropertyBounds(strictObje
   "subject_hash": exactOneOf(S.Union(DefinitionSha256Graph, S.Null), DefinitionSha256Graph, S.Null),
   "updated_at": DefinitionUtcTimestampGraph,
   "work_item_id": exactOneOf(S.Union(DefinitionUUIDGraph, S.Null), DefinitionUUIDGraph, S.Null)
-})), undefined, undefined));
+})), undefined, undefined), exactOneOf(S.Union(conditionalObject(withObjectPropertyBounds(openObject(S.Struct({
+  "kind": S.Literal("plan"),
+  "subject_hash": S.Null,
+  "work_item_id": S.Null
+})), undefined, undefined)), conditionalObject(withObjectPropertyBounds(openObject(S.Struct({
+  "kind": S.Literal("scope"),
+  "subject_hash": S.Null,
+  "work_item_id": DefinitionUUIDGraph
+})), undefined, undefined)), conditionalObject(withObjectPropertyBounds(openObject(S.Struct({
+  "kind": S.Literal("review"),
+  "subject_hash": DefinitionSha256Graph,
+  "work_item_id": DefinitionUUIDGraph
+})), undefined, undefined)), conditionalObject(withObjectPropertyBounds(openObject(S.Struct({
+  "kind": S.Literal("completion"),
+  "subject_hash": DefinitionSha256Graph,
+  "work_item_id": S.Null
+})), undefined, undefined)), conditionalObject(withObjectPropertyBounds(openObject(S.Struct({
+  "kind": S.Literal("budget", "external_action")
+})), undefined, undefined))), conditionalObject(withObjectPropertyBounds(openObject(S.Struct({
+  "kind": S.Literal("plan"),
+  "subject_hash": S.Null,
+  "work_item_id": S.Null
+})), undefined, undefined)), conditionalObject(withObjectPropertyBounds(openObject(S.Struct({
+  "kind": S.Literal("scope"),
+  "subject_hash": S.Null,
+  "work_item_id": DefinitionUUIDGraph
+})), undefined, undefined)), conditionalObject(withObjectPropertyBounds(openObject(S.Struct({
+  "kind": S.Literal("review"),
+  "subject_hash": DefinitionSha256Graph,
+  "work_item_id": DefinitionUUIDGraph
+})), undefined, undefined)), conditionalObject(withObjectPropertyBounds(openObject(S.Struct({
+  "kind": S.Literal("completion"),
+  "subject_hash": DefinitionSha256Graph,
+  "work_item_id": S.Null
+})), undefined, undefined)), conditionalObject(withObjectPropertyBounds(openObject(S.Struct({
+  "kind": S.Literal("budget", "external_action")
+})), undefined, undefined)))));
 
 const matchesDecision = S.is(DecisionGraph, strictOptions);
 export const isDecision = (value: unknown): value is SymmetryDecisionV1 => matchesDecision(value);
@@ -973,7 +1041,7 @@ export const GoalCommandGraph = S.suspend(() => exactOneOf(S.Union(withObjectPro
 })), undefined, undefined), withObjectPropertyBounds(strictObject(S.Struct({
   "handoff_source_run_id": DefinitionUUIDGraph,
   "model_profile": DefinitionShortIdentifierGraph,
-  "purpose": S.Literal("implement", "validate", "observe", "chat"),
+  "purpose": S.Literal("implement", "validate"),
   "requested_session_id": S.Null,
   "session_mode": S.Literal("handoff"),
   "validation_of_task_id": exactOneOf(S.Union(DefinitionUUIDGraph, S.Null), DefinitionUUIDGraph, S.Null),
@@ -995,7 +1063,7 @@ export const GoalCommandGraph = S.suspend(() => exactOneOf(S.Union(withObjectPro
 })), undefined, undefined), withObjectPropertyBounds(strictObject(S.Struct({
   "handoff_source_run_id": DefinitionUUIDGraph,
   "model_profile": DefinitionShortIdentifierGraph,
-  "purpose": S.Literal("implement", "validate", "observe", "chat"),
+  "purpose": S.Literal("implement", "validate"),
   "requested_session_id": S.Null,
   "session_mode": S.Literal("handoff"),
   "validation_of_task_id": exactOneOf(S.Union(DefinitionUUIDGraph, S.Null), DefinitionUUIDGraph, S.Null),
@@ -1194,7 +1262,7 @@ export const GoalCommandGraph = S.suspend(() => exactOneOf(S.Union(withObjectPro
 })), undefined, undefined), withObjectPropertyBounds(strictObject(S.Struct({
   "handoff_source_run_id": DefinitionUUIDGraph,
   "model_profile": DefinitionShortIdentifierGraph,
-  "purpose": S.Literal("implement", "validate", "observe", "chat"),
+  "purpose": S.Literal("implement", "validate"),
   "requested_session_id": S.Null,
   "session_mode": S.Literal("handoff"),
   "validation_of_task_id": exactOneOf(S.Union(DefinitionUUIDGraph, S.Null), DefinitionUUIDGraph, S.Null),
@@ -1216,7 +1284,7 @@ export const GoalCommandGraph = S.suspend(() => exactOneOf(S.Union(withObjectPro
 })), undefined, undefined), withObjectPropertyBounds(strictObject(S.Struct({
   "handoff_source_run_id": DefinitionUUIDGraph,
   "model_profile": DefinitionShortIdentifierGraph,
-  "purpose": S.Literal("implement", "validate", "observe", "chat"),
+  "purpose": S.Literal("implement", "validate"),
   "requested_session_id": S.Null,
   "session_mode": S.Literal("handoff"),
   "validation_of_task_id": exactOneOf(S.Union(DefinitionUUIDGraph, S.Null), DefinitionUUIDGraph, S.Null),

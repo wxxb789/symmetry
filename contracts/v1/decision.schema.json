@@ -71,5 +71,45 @@
     "lock_version": {"$ref": "common.schema.json#/definitions/PositiveInteger"},
     "created_at": {"$ref": "common.schema.json#/definitions/UtcTimestamp"},
     "updated_at": {"$ref": "common.schema.json#/definitions/UtcTimestamp"}
-  }
+  },
+  "oneOf": [
+    {
+      "required": ["kind", "work_item_id", "subject_hash"],
+      "properties": {
+        "kind": {"const": "plan"},
+        "work_item_id": {"type": "null"},
+        "subject_hash": {"type": "null"}
+      }
+    },
+    {
+      "required": ["kind", "work_item_id", "subject_hash"],
+      "properties": {
+        "kind": {"const": "scope"},
+        "work_item_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "subject_hash": {"type": "null"}
+      }
+    },
+    {
+      "required": ["kind", "work_item_id", "subject_hash"],
+      "properties": {
+        "kind": {"const": "review"},
+        "work_item_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "subject_hash": {"$ref": "common.schema.json#/definitions/Sha256"}
+      }
+    },
+    {
+      "required": ["kind", "work_item_id", "subject_hash"],
+      "properties": {
+        "kind": {"const": "completion"},
+        "work_item_id": {"type": "null"},
+        "subject_hash": {"$ref": "common.schema.json#/definitions/Sha256"}
+      }
+    },
+    {
+      "required": ["kind"],
+      "properties": {
+        "kind": {"enum": ["budget", "external_action"]}
+      }
+    }
+  ]
 }

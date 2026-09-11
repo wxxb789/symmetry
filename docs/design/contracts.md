@@ -135,7 +135,8 @@ The sole exception is an operator `request_plan` admission for a draft Goal: it
 uses `purpose: plan` and `work_item_id: null`, binds an approved repository
 Subject, has `provider_scope: null`, and may not be generated automatically.
 `fresh` and `handoff` require `requested_session_id: null`; `resume` requires
-the exact retained session UUID. Handoff is a request for a new native session
+the exact retained session UUID. Only `implement` and `validate` may select
+handoff. Handoff is a request for a new native session
 from the immutable snapshot and reachable authorized artifact, not a native-session
 attach or proprietary session transfer. The server derives goal revision, resource,
 snapshot, subject and limits from current approved state. A caller cannot override

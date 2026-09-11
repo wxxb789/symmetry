@@ -31,7 +31,7 @@ public `admit_task` selects only an admitted work item, purpose, model profile,
 and session; it cannot supply the server-derived Subject, execution limits,
 reservation, admission key, or provider scope. `request_plan` is the draft-Goal
 exception: it selects only the planning model, approved repository resource and
-complete Subject, plus a discriminated fresh/resume/handoff session selection.
+complete Subject, plus a discriminated fresh/resume session selection.
 The server derives the planning Admission, limits, reservation, context and
 provider scope; the command cannot carry those fields. A planning Admission and
 its ContextSnapshot have `purpose: "plan"` and `work_item_id: null`.
@@ -49,9 +49,12 @@ explicit `false` have the same approved authority and replay identity.
 
 An Admission includes a required nullable `provider_scope`. A non-null scope
 freezes `resource_ids`, independently bounded `operations_by_resource`, and a
-server-derived change target without connection or credential material. The Go
-boundary checks that the operation-map keys equal `resource_ids`; Control must
-enforce the same cross-field invariant before issuing an Admission. Execution
+server-derived change target without connection or credential material. The
+common schema limits every resource's exact operation set to `resource.sync`
+for a null target, `change.upsert` alone or together with `change.update` for
+branches, and `change.update` for a pull request. The Go boundary checks that
+the operation-map keys equal `resource_ids`; Control must enforce the same
+cross-field invariant before issuing an Admission. Execution
 policy carries the server-owned `per_run_cost_limit_microusd` and
 `hard_cost_limit_required`. Automatic execution requires a finite total
 `budget_limit_microusd`; strict policy additionally requires a non-null per-run
@@ -60,9 +63,9 @@ runtime's advertised enforcement capability.
 
 Admission session selection is also discriminated: `fresh` and `handoff` require
 `requested_session_id: null`, while `resume` requires the exact retained native
-session UUID. Handoff is a request to reconstruct a new native session from the
-immutable snapshot and reachable artifact; it never carries or transfers a raw
-native session handle.
+session UUID. Handoff is available only for `implement` and `validate` work. It
+reconstructs a new native session from the immutable snapshot and reachable
+artifact; it never carries or transfers a raw native session handle.
 
 `authority_policy.operator_required_for_completion` is a stricter fence than
 `execution_policy.final_acceptance`. When it is `true`, final acceptance is

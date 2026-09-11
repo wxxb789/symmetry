@@ -6,7 +6,7 @@
   "work_item_id": null,
   "kind": "completion",
   "action_hash": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
-  "subject_hash": null,
+  "subject_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
   "state": "open",
   "question": "Accept the verified candidate?",
   "options": [

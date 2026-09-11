@@ -169,12 +169,12 @@ type EvidenceReference struct {
 }
 
 type WorkContract struct {
-	Acceptance         WorkContractAcceptance     `json:"acceptance"`
-	ChangeTarget       *WorkContractChangeTarget  `json:"change_target"`
-	Description        string                     `json:"description"`
-	Purpose            SymmetryAdmissionV1Purpose `json:"purpose"`
-	Title              string                     `json:"title"`
-	ValidationBindings []ValidationBinding        `json:"validation_bindings"`
+	Acceptance         WorkContractAcceptance    `json:"acceptance"`
+	ChangeTarget       *WorkContractChangeTarget `json:"change_target"`
+	Description        string                    `json:"description"`
+	Purpose            WorkContractPurpose       `json:"purpose"`
+	Title              string                    `json:"title"`
+	ValidationBindings []ValidationBinding       `json:"validation_bindings"`
 }
 
 type WorkContractAcceptance struct {
@@ -766,11 +766,8 @@ const (
 type SymmetryAdmissionV1Purpose string
 
 const (
-	PurpleChat      SymmetryAdmissionV1Purpose = "chat"
 	PurpleImplement SymmetryAdmissionV1Purpose = "implement"
-	PurpleObserve   SymmetryAdmissionV1Purpose = "observe"
 	PurpleValidate  SymmetryAdmissionV1Purpose = "validate"
-	PurposePlan     SymmetryAdmissionV1Purpose = "plan"
 )
 
 type SymmetryAdmissionV1SchemaVersion string
@@ -867,6 +864,16 @@ type ChangeTargetKind string
 const (
 	Branches    ChangeTargetKind = "branches"
 	PullRequest ChangeTargetKind = "pull_request"
+)
+
+type WorkContractPurpose string
+
+const (
+	FluffyImplement WorkContractPurpose = "implement"
+	FluffyValidate  WorkContractPurpose = "validate"
+	PurpleChat      WorkContractPurpose = "chat"
+	PurpleObserve   WorkContractPurpose = "observe"
+	PurposePlan     WorkContractPurpose = "plan"
 )
 
 type ValidationBindingKind string
@@ -975,10 +982,10 @@ const (
 type PayloadPurpose string
 
 const (
-	FluffyChat      PayloadPurpose = "chat"
-	FluffyImplement PayloadPurpose = "implement"
-	FluffyObserve   PayloadPurpose = "observe"
-	FluffyValidate  PayloadPurpose = "validate"
+	FluffyChat         PayloadPurpose = "chat"
+	FluffyObserve      PayloadPurpose = "observe"
+	TentacledImplement PayloadPurpose = "implement"
+	TentacledValidate  PayloadPurpose = "validate"
 )
 
 type BudgetMode string

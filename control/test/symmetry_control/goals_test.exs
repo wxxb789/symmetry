@@ -5001,7 +5001,7 @@ defmodule SymmetryControl.GoalsTest do
     {goal, item, _task} = admitted_task_fixture()
     counts_before = handoff_admission_counts(goal.id)
 
-    assert {:error, :unsupported_capability} =
+    assert {:error, {:invalid_contract, _}} =
              command_current(
                goal.id,
                "admit_task",

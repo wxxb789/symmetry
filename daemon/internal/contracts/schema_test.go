@@ -219,12 +219,14 @@ func TestAdmissionProviderScopeBindsOperationsToItsResources(t *testing.T) {
 	}
 	scope := admission["provider_scope"].(map[string]any)
 	operations := scope["operations_by_resource"].(map[string]any)
-	delete(operations, "99999999-9999-4999-8999-999999999999")
+	operations["99999999-9999-4999-8999-999999999999"] =
+		operations["22222222-2222-4222-8222-222222222222"]
+	delete(operations, "22222222-2222-4222-8222-222222222222")
 	data, err := json.Marshal(admission)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Validate(EnvelopeAdmission, data); err == nil || !strings.Contains(err.Error(), "keys must equal resource_ids") {
+	if err := Validate(EnvelopeAdmission, data); err == nil || !strings.Contains(err.Error(), "is not a scoped resource") {
 		t.Fatalf("provider scope with an unbound resource was accepted: %v", err)
 	}
 }

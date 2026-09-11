@@ -811,36 +811,117 @@
       ]
     },
     "ProviderScope": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["resource_ids", "operations_by_resource", "change_target"],
-      "properties": {
-        "resource_ids": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 256,
-          "uniqueItems": true,
-          "items": {"$ref": "#/definitions/UUID"}
-        },
-        "operations_by_resource": {
+      "oneOf": [
+        {
           "type": "object",
-          "minProperties": 1,
-          "maxProperties": 256,
-          "additionalProperties": {
-            "type": "array",
-            "minItems": 1,
-            "maxItems": 3,
-            "uniqueItems": true,
-            "items": {"enum": ["resource.sync", "change.upsert", "change.update"]}
+          "additionalProperties": false,
+          "required": ["resource_ids", "operations_by_resource", "change_target"],
+          "properties": {
+            "resource_ids": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 256,
+              "uniqueItems": true,
+              "items": {"$ref": "#/definitions/UUID"}
+            },
+            "operations_by_resource": {
+              "type": "object",
+              "minProperties": 1,
+              "maxProperties": 256,
+              "additionalProperties": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 1,
+                "uniqueItems": true,
+                "items": {"const": "resource.sync"}
+              }
+            },
+            "change_target": {"type": "null"}
           }
         },
-        "change_target": {
-          "oneOf": [
-            {"$ref": "#/definitions/ProviderChangeTarget"},
-            {"type": "null"}
-          ]
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["resource_ids", "operations_by_resource", "change_target"],
+          "properties": {
+            "resource_ids": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 256,
+              "uniqueItems": true,
+              "items": {"$ref": "#/definitions/UUID"}
+            },
+            "operations_by_resource": {
+              "type": "object",
+              "minProperties": 1,
+              "maxProperties": 256,
+              "additionalProperties": {
+                "oneOf": [
+                  {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 1,
+                    "uniqueItems": true,
+                    "items": {"const": "change.upsert"}
+                  },
+                  {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "uniqueItems": true,
+                    "items": {"enum": ["change.upsert", "change.update"]}
+                  }
+                ]
+              }
+            },
+            "change_target": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "source_branch", "target_branch"],
+              "properties": {
+                "kind": {"const": "branches"},
+                "source_branch": {"type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[^\\s\\u0000]+$"},
+                "target_branch": {"type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[^\\s\\u0000]+$"}
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["resource_ids", "operations_by_resource", "change_target"],
+          "properties": {
+            "resource_ids": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 256,
+              "uniqueItems": true,
+              "items": {"$ref": "#/definitions/UUID"}
+            },
+            "operations_by_resource": {
+              "type": "object",
+              "minProperties": 1,
+              "maxProperties": 256,
+              "additionalProperties": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 1,
+                "uniqueItems": true,
+                "items": {"const": "change.update"}
+              }
+            },
+            "change_target": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "pull_request_url"],
+              "properties": {
+                "kind": {"const": "pull_request"},
+                "pull_request_url": {"type": "string", "minLength": 1, "maxLength": 16384, "pattern": "^\\S(?:.*\\S)?$"}
+              }
+            }
+          }
         }
-      }
+      ]
     },
     "AdapterOperations": {
       "type": "object",

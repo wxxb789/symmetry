@@ -1350,52 +1350,174 @@
         ]
       },
       "ProviderScope": {
-        "additionalProperties": false,
-        "properties": {
-          "change_target": {
-            "oneOf": [
-              {
-                "$ref": "#/definitions/ProviderChangeTarget"
-              },
-              {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
                 "type": "null"
-              }
-            ]
-          },
-          "operations_by_resource": {
-            "additionalProperties": {
-              "items": {
-                "enum": [
-                  "resource.sync",
-                  "change.upsert",
-                  "change.update"
-                ]
               },
-              "maxItems": 3,
-              "minItems": 1,
-              "type": "array",
-              "uniqueItems": true
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "items": {
+                    "const": "resource.sync"
+                  },
+                  "maxItems": 1,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
             },
-            "maxProperties": 256,
-            "minProperties": 1,
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
             "type": "object"
           },
-          "resource_ids": {
-            "items": {
-              "$ref": "#/definitions/UUID"
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "branches"
+                  },
+                  "source_branch": {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "pattern": "^[^\\s\\u0000]+$",
+                    "type": "string"
+                  },
+                  "target_branch": {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "pattern": "^[^\\s\\u0000]+$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "source_branch",
+                  "target_branch"
+                ],
+                "type": "object"
+              },
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "oneOf": [
+                    {
+                      "items": {
+                        "const": "change.upsert"
+                      },
+                      "maxItems": 1,
+                      "minItems": 1,
+                      "type": "array",
+                      "uniqueItems": true
+                    },
+                    {
+                      "items": {
+                        "enum": [
+                          "change.upsert",
+                          "change.update"
+                        ]
+                      },
+                      "maxItems": 2,
+                      "minItems": 2,
+                      "type": "array",
+                      "uniqueItems": true
+                    }
+                  ]
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
             },
-            "maxItems": 256,
-            "minItems": 1,
-            "type": "array",
-            "uniqueItems": true
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "pull_request"
+                  },
+                  "pull_request_url": {
+                    "maxLength": 16384,
+                    "minLength": 1,
+                    "pattern": "^\\S(?:.*\\S)?$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "pull_request_url"
+                ],
+                "type": "object"
+              },
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "items": {
+                    "const": "change.update"
+                  },
+                  "maxItems": 1,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "resource_ids",
-          "operations_by_resource",
-          "change_target"
-        ],
-        "type": "object"
+        ]
       },
       "ReviewFinding": {
         "additionalProperties": false,
@@ -1666,17 +1788,13 @@
             ]
           },
           {
-            "not": {
-              "properties": {
-                "purpose": {
-                  "const": "plan"
-                }
-              },
-              "required": [
-                "purpose"
-              ]
-            },
             "properties": {
+              "purpose": {
+                "enum": [
+                  "implement",
+                  "validate"
+                ]
+              },
               "requested_session_id": {
                 "type": "null"
               },
@@ -3069,52 +3187,174 @@
         ]
       },
       "ProviderScope": {
-        "additionalProperties": false,
-        "properties": {
-          "change_target": {
-            "oneOf": [
-              {
-                "$ref": "#/definitions/ProviderChangeTarget"
-              },
-              {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
                 "type": "null"
-              }
-            ]
-          },
-          "operations_by_resource": {
-            "additionalProperties": {
-              "items": {
-                "enum": [
-                  "resource.sync",
-                  "change.upsert",
-                  "change.update"
-                ]
               },
-              "maxItems": 3,
-              "minItems": 1,
-              "type": "array",
-              "uniqueItems": true
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "items": {
+                    "const": "resource.sync"
+                  },
+                  "maxItems": 1,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
             },
-            "maxProperties": 256,
-            "minProperties": 1,
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
             "type": "object"
           },
-          "resource_ids": {
-            "items": {
-              "$ref": "#/definitions/UUID"
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "branches"
+                  },
+                  "source_branch": {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "pattern": "^[^\\s\\u0000]+$",
+                    "type": "string"
+                  },
+                  "target_branch": {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "pattern": "^[^\\s\\u0000]+$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "source_branch",
+                  "target_branch"
+                ],
+                "type": "object"
+              },
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "oneOf": [
+                    {
+                      "items": {
+                        "const": "change.upsert"
+                      },
+                      "maxItems": 1,
+                      "minItems": 1,
+                      "type": "array",
+                      "uniqueItems": true
+                    },
+                    {
+                      "items": {
+                        "enum": [
+                          "change.upsert",
+                          "change.update"
+                        ]
+                      },
+                      "maxItems": 2,
+                      "minItems": 2,
+                      "type": "array",
+                      "uniqueItems": true
+                    }
+                  ]
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
             },
-            "maxItems": 256,
-            "minItems": 1,
-            "type": "array",
-            "uniqueItems": true
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "pull_request"
+                  },
+                  "pull_request_url": {
+                    "maxLength": 16384,
+                    "minLength": 1,
+                    "pattern": "^\\S(?:.*\\S)?$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "pull_request_url"
+                ],
+                "type": "object"
+              },
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "items": {
+                    "const": "change.update"
+                  },
+                  "maxItems": 1,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "resource_ids",
-          "operations_by_resource",
-          "change_target"
-        ],
-        "type": "object"
+        ]
       },
       "ReviewFinding": {
         "additionalProperties": false,
@@ -4848,52 +5088,174 @@
         ]
       },
       "ProviderScope": {
-        "additionalProperties": false,
-        "properties": {
-          "change_target": {
-            "oneOf": [
-              {
-                "$ref": "#/definitions/ProviderChangeTarget"
-              },
-              {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
                 "type": "null"
-              }
-            ]
-          },
-          "operations_by_resource": {
-            "additionalProperties": {
-              "items": {
-                "enum": [
-                  "resource.sync",
-                  "change.upsert",
-                  "change.update"
-                ]
               },
-              "maxItems": 3,
-              "minItems": 1,
-              "type": "array",
-              "uniqueItems": true
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "items": {
+                    "const": "resource.sync"
+                  },
+                  "maxItems": 1,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
             },
-            "maxProperties": 256,
-            "minProperties": 1,
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
             "type": "object"
           },
-          "resource_ids": {
-            "items": {
-              "$ref": "#/definitions/UUID"
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "branches"
+                  },
+                  "source_branch": {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "pattern": "^[^\\s\\u0000]+$",
+                    "type": "string"
+                  },
+                  "target_branch": {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "pattern": "^[^\\s\\u0000]+$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "source_branch",
+                  "target_branch"
+                ],
+                "type": "object"
+              },
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "oneOf": [
+                    {
+                      "items": {
+                        "const": "change.upsert"
+                      },
+                      "maxItems": 1,
+                      "minItems": 1,
+                      "type": "array",
+                      "uniqueItems": true
+                    },
+                    {
+                      "items": {
+                        "enum": [
+                          "change.upsert",
+                          "change.update"
+                        ]
+                      },
+                      "maxItems": 2,
+                      "minItems": 2,
+                      "type": "array",
+                      "uniqueItems": true
+                    }
+                  ]
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
             },
-            "maxItems": 256,
-            "minItems": 1,
-            "type": "array",
-            "uniqueItems": true
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "pull_request"
+                  },
+                  "pull_request_url": {
+                    "maxLength": 16384,
+                    "minLength": 1,
+                    "pattern": "^\\S(?:.*\\S)?$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "pull_request_url"
+                ],
+                "type": "object"
+              },
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "items": {
+                    "const": "change.update"
+                  },
+                  "maxItems": 1,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "resource_ids",
-          "operations_by_resource",
-          "change_target"
-        ],
-        "type": "object"
+        ]
       },
       "ReviewFinding": {
         "additionalProperties": false,
@@ -6594,52 +6956,174 @@
         ]
       },
       "ProviderScope": {
-        "additionalProperties": false,
-        "properties": {
-          "change_target": {
-            "oneOf": [
-              {
-                "$ref": "#/definitions/ProviderChangeTarget"
-              },
-              {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
                 "type": "null"
-              }
-            ]
-          },
-          "operations_by_resource": {
-            "additionalProperties": {
-              "items": {
-                "enum": [
-                  "resource.sync",
-                  "change.upsert",
-                  "change.update"
-                ]
               },
-              "maxItems": 3,
-              "minItems": 1,
-              "type": "array",
-              "uniqueItems": true
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "items": {
+                    "const": "resource.sync"
+                  },
+                  "maxItems": 1,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
             },
-            "maxProperties": 256,
-            "minProperties": 1,
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
             "type": "object"
           },
-          "resource_ids": {
-            "items": {
-              "$ref": "#/definitions/UUID"
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "branches"
+                  },
+                  "source_branch": {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "pattern": "^[^\\s\\u0000]+$",
+                    "type": "string"
+                  },
+                  "target_branch": {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "pattern": "^[^\\s\\u0000]+$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "source_branch",
+                  "target_branch"
+                ],
+                "type": "object"
+              },
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "oneOf": [
+                    {
+                      "items": {
+                        "const": "change.upsert"
+                      },
+                      "maxItems": 1,
+                      "minItems": 1,
+                      "type": "array",
+                      "uniqueItems": true
+                    },
+                    {
+                      "items": {
+                        "enum": [
+                          "change.upsert",
+                          "change.update"
+                        ]
+                      },
+                      "maxItems": 2,
+                      "minItems": 2,
+                      "type": "array",
+                      "uniqueItems": true
+                    }
+                  ]
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
             },
-            "maxItems": 256,
-            "minItems": 1,
-            "type": "array",
-            "uniqueItems": true
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "pull_request"
+                  },
+                  "pull_request_url": {
+                    "maxLength": 16384,
+                    "minLength": 1,
+                    "pattern": "^\\S(?:.*\\S)?$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "pull_request_url"
+                ],
+                "type": "object"
+              },
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "items": {
+                    "const": "change.update"
+                  },
+                  "maxItems": 1,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "resource_ids",
-          "operations_by_resource",
-          "change_target"
-        ],
-        "type": "object"
+        ]
       },
       "ReviewFinding": {
         "additionalProperties": false,
@@ -6844,6 +7328,93 @@
         "type": "object"
       }
     },
+    "oneOf": [
+      {
+        "properties": {
+          "kind": {
+            "const": "plan"
+          },
+          "subject_hash": {
+            "type": "null"
+          },
+          "work_item_id": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "kind",
+          "work_item_id",
+          "subject_hash"
+        ]
+      },
+      {
+        "properties": {
+          "kind": {
+            "const": "scope"
+          },
+          "subject_hash": {
+            "type": "null"
+          },
+          "work_item_id": {
+            "$ref": "#/definitions/UUID"
+          }
+        },
+        "required": [
+          "kind",
+          "work_item_id",
+          "subject_hash"
+        ]
+      },
+      {
+        "properties": {
+          "kind": {
+            "const": "review"
+          },
+          "subject_hash": {
+            "$ref": "#/definitions/Sha256"
+          },
+          "work_item_id": {
+            "$ref": "#/definitions/UUID"
+          }
+        },
+        "required": [
+          "kind",
+          "work_item_id",
+          "subject_hash"
+        ]
+      },
+      {
+        "properties": {
+          "kind": {
+            "const": "completion"
+          },
+          "subject_hash": {
+            "$ref": "#/definitions/Sha256"
+          },
+          "work_item_id": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "kind",
+          "work_item_id",
+          "subject_hash"
+        ]
+      },
+      {
+        "properties": {
+          "kind": {
+            "enum": [
+              "budget",
+              "external_action"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      }
+    ],
     "properties": {
       "action_hash": {
         "$ref": "#/definitions/Sha256"
@@ -8400,52 +8971,174 @@
         ]
       },
       "ProviderScope": {
-        "additionalProperties": false,
-        "properties": {
-          "change_target": {
-            "oneOf": [
-              {
-                "$ref": "#/definitions/ProviderChangeTarget"
-              },
-              {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
                 "type": "null"
-              }
-            ]
-          },
-          "operations_by_resource": {
-            "additionalProperties": {
-              "items": {
-                "enum": [
-                  "resource.sync",
-                  "change.upsert",
-                  "change.update"
-                ]
               },
-              "maxItems": 3,
-              "minItems": 1,
-              "type": "array",
-              "uniqueItems": true
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "items": {
+                    "const": "resource.sync"
+                  },
+                  "maxItems": 1,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
             },
-            "maxProperties": 256,
-            "minProperties": 1,
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
             "type": "object"
           },
-          "resource_ids": {
-            "items": {
-              "$ref": "#/definitions/UUID"
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "branches"
+                  },
+                  "source_branch": {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "pattern": "^[^\\s\\u0000]+$",
+                    "type": "string"
+                  },
+                  "target_branch": {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "pattern": "^[^\\s\\u0000]+$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "source_branch",
+                  "target_branch"
+                ],
+                "type": "object"
+              },
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "oneOf": [
+                    {
+                      "items": {
+                        "const": "change.upsert"
+                      },
+                      "maxItems": 1,
+                      "minItems": 1,
+                      "type": "array",
+                      "uniqueItems": true
+                    },
+                    {
+                      "items": {
+                        "enum": [
+                          "change.upsert",
+                          "change.update"
+                        ]
+                      },
+                      "maxItems": 2,
+                      "minItems": 2,
+                      "type": "array",
+                      "uniqueItems": true
+                    }
+                  ]
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
             },
-            "maxItems": 256,
-            "minItems": 1,
-            "type": "array",
-            "uniqueItems": true
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "pull_request"
+                  },
+                  "pull_request_url": {
+                    "maxLength": 16384,
+                    "minLength": 1,
+                    "pattern": "^\\S(?:.*\\S)?$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "pull_request_url"
+                ],
+                "type": "object"
+              },
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "items": {
+                    "const": "change.update"
+                  },
+                  "maxItems": 1,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "resource_ids",
-          "operations_by_resource",
-          "change_target"
-        ],
-        "type": "object"
+        ]
       },
       "ReviewFinding": {
         "additionalProperties": false,
@@ -10295,52 +10988,174 @@
         ]
       },
       "ProviderScope": {
-        "additionalProperties": false,
-        "properties": {
-          "change_target": {
-            "oneOf": [
-              {
-                "$ref": "#/definitions/ProviderChangeTarget"
-              },
-              {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
                 "type": "null"
-              }
-            ]
-          },
-          "operations_by_resource": {
-            "additionalProperties": {
-              "items": {
-                "enum": [
-                  "resource.sync",
-                  "change.upsert",
-                  "change.update"
-                ]
               },
-              "maxItems": 3,
-              "minItems": 1,
-              "type": "array",
-              "uniqueItems": true
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "items": {
+                    "const": "resource.sync"
+                  },
+                  "maxItems": 1,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
             },
-            "maxProperties": 256,
-            "minProperties": 1,
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
             "type": "object"
           },
-          "resource_ids": {
-            "items": {
-              "$ref": "#/definitions/UUID"
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "branches"
+                  },
+                  "source_branch": {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "pattern": "^[^\\s\\u0000]+$",
+                    "type": "string"
+                  },
+                  "target_branch": {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "pattern": "^[^\\s\\u0000]+$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "source_branch",
+                  "target_branch"
+                ],
+                "type": "object"
+              },
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "oneOf": [
+                    {
+                      "items": {
+                        "const": "change.upsert"
+                      },
+                      "maxItems": 1,
+                      "minItems": 1,
+                      "type": "array",
+                      "uniqueItems": true
+                    },
+                    {
+                      "items": {
+                        "enum": [
+                          "change.upsert",
+                          "change.update"
+                        ]
+                      },
+                      "maxItems": 2,
+                      "minItems": 2,
+                      "type": "array",
+                      "uniqueItems": true
+                    }
+                  ]
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
             },
-            "maxItems": 256,
-            "minItems": 1,
-            "type": "array",
-            "uniqueItems": true
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "pull_request"
+                  },
+                  "pull_request_url": {
+                    "maxLength": 16384,
+                    "minLength": 1,
+                    "pattern": "^\\S(?:.*\\S)?$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "pull_request_url"
+                ],
+                "type": "object"
+              },
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "items": {
+                    "const": "change.update"
+                  },
+                  "maxItems": 1,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "resource_ids",
-          "operations_by_resource",
-          "change_target"
-        ],
-        "type": "object"
+        ]
       },
       "ReviewFinding": {
         "additionalProperties": false,
@@ -11166,9 +11981,7 @@
                   "purpose": {
                     "enum": [
                       "implement",
-                      "validate",
-                      "observe",
-                      "chat"
+                      "validate"
                     ]
                   },
                   "requested_session_id": {
@@ -12689,52 +13502,174 @@
         ]
       },
       "ProviderScope": {
-        "additionalProperties": false,
-        "properties": {
-          "change_target": {
-            "oneOf": [
-              {
-                "$ref": "#/definitions/ProviderChangeTarget"
-              },
-              {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
                 "type": "null"
-              }
-            ]
-          },
-          "operations_by_resource": {
-            "additionalProperties": {
-              "items": {
-                "enum": [
-                  "resource.sync",
-                  "change.upsert",
-                  "change.update"
-                ]
               },
-              "maxItems": 3,
-              "minItems": 1,
-              "type": "array",
-              "uniqueItems": true
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "items": {
+                    "const": "resource.sync"
+                  },
+                  "maxItems": 1,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
             },
-            "maxProperties": 256,
-            "minProperties": 1,
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
             "type": "object"
           },
-          "resource_ids": {
-            "items": {
-              "$ref": "#/definitions/UUID"
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "branches"
+                  },
+                  "source_branch": {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "pattern": "^[^\\s\\u0000]+$",
+                    "type": "string"
+                  },
+                  "target_branch": {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "pattern": "^[^\\s\\u0000]+$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "source_branch",
+                  "target_branch"
+                ],
+                "type": "object"
+              },
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "oneOf": [
+                    {
+                      "items": {
+                        "const": "change.upsert"
+                      },
+                      "maxItems": 1,
+                      "minItems": 1,
+                      "type": "array",
+                      "uniqueItems": true
+                    },
+                    {
+                      "items": {
+                        "enum": [
+                          "change.upsert",
+                          "change.update"
+                        ]
+                      },
+                      "maxItems": 2,
+                      "minItems": 2,
+                      "type": "array",
+                      "uniqueItems": true
+                    }
+                  ]
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
             },
-            "maxItems": 256,
-            "minItems": 1,
-            "type": "array",
-            "uniqueItems": true
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "pull_request"
+                  },
+                  "pull_request_url": {
+                    "maxLength": 16384,
+                    "minLength": 1,
+                    "pattern": "^\\S(?:.*\\S)?$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "pull_request_url"
+                ],
+                "type": "object"
+              },
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "items": {
+                    "const": "change.update"
+                  },
+                  "maxItems": 1,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "resource_ids",
-          "operations_by_resource",
-          "change_target"
-        ],
-        "type": "object"
+        ]
       },
       "ReviewFinding": {
         "additionalProperties": false,
@@ -14313,52 +15248,174 @@
         ]
       },
       "ProviderScope": {
-        "additionalProperties": false,
-        "properties": {
-          "change_target": {
-            "oneOf": [
-              {
-                "$ref": "#/definitions/ProviderChangeTarget"
-              },
-              {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
                 "type": "null"
-              }
-            ]
-          },
-          "operations_by_resource": {
-            "additionalProperties": {
-              "items": {
-                "enum": [
-                  "resource.sync",
-                  "change.upsert",
-                  "change.update"
-                ]
               },
-              "maxItems": 3,
-              "minItems": 1,
-              "type": "array",
-              "uniqueItems": true
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "items": {
+                    "const": "resource.sync"
+                  },
+                  "maxItems": 1,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
             },
-            "maxProperties": 256,
-            "minProperties": 1,
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
             "type": "object"
           },
-          "resource_ids": {
-            "items": {
-              "$ref": "#/definitions/UUID"
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "branches"
+                  },
+                  "source_branch": {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "pattern": "^[^\\s\\u0000]+$",
+                    "type": "string"
+                  },
+                  "target_branch": {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "pattern": "^[^\\s\\u0000]+$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "source_branch",
+                  "target_branch"
+                ],
+                "type": "object"
+              },
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "oneOf": [
+                    {
+                      "items": {
+                        "const": "change.upsert"
+                      },
+                      "maxItems": 1,
+                      "minItems": 1,
+                      "type": "array",
+                      "uniqueItems": true
+                    },
+                    {
+                      "items": {
+                        "enum": [
+                          "change.upsert",
+                          "change.update"
+                        ]
+                      },
+                      "maxItems": 2,
+                      "minItems": 2,
+                      "type": "array",
+                      "uniqueItems": true
+                    }
+                  ]
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
             },
-            "maxItems": 256,
-            "minItems": 1,
-            "type": "array",
-            "uniqueItems": true
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "pull_request"
+                  },
+                  "pull_request_url": {
+                    "maxLength": 16384,
+                    "minLength": 1,
+                    "pattern": "^\\S(?:.*\\S)?$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "pull_request_url"
+                ],
+                "type": "object"
+              },
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "items": {
+                    "const": "change.update"
+                  },
+                  "maxItems": 1,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "resource_ids",
-          "operations_by_resource",
-          "change_target"
-        ],
-        "type": "object"
+        ]
       },
       "ReviewFinding": {
         "additionalProperties": false,
@@ -15973,52 +17030,174 @@
         ]
       },
       "ProviderScope": {
-        "additionalProperties": false,
-        "properties": {
-          "change_target": {
-            "oneOf": [
-              {
-                "$ref": "#/definitions/ProviderChangeTarget"
-              },
-              {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
                 "type": "null"
-              }
-            ]
-          },
-          "operations_by_resource": {
-            "additionalProperties": {
-              "items": {
-                "enum": [
-                  "resource.sync",
-                  "change.upsert",
-                  "change.update"
-                ]
               },
-              "maxItems": 3,
-              "minItems": 1,
-              "type": "array",
-              "uniqueItems": true
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "items": {
+                    "const": "resource.sync"
+                  },
+                  "maxItems": 1,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
             },
-            "maxProperties": 256,
-            "minProperties": 1,
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
             "type": "object"
           },
-          "resource_ids": {
-            "items": {
-              "$ref": "#/definitions/UUID"
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "branches"
+                  },
+                  "source_branch": {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "pattern": "^[^\\s\\u0000]+$",
+                    "type": "string"
+                  },
+                  "target_branch": {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "pattern": "^[^\\s\\u0000]+$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "source_branch",
+                  "target_branch"
+                ],
+                "type": "object"
+              },
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "oneOf": [
+                    {
+                      "items": {
+                        "const": "change.upsert"
+                      },
+                      "maxItems": 1,
+                      "minItems": 1,
+                      "type": "array",
+                      "uniqueItems": true
+                    },
+                    {
+                      "items": {
+                        "enum": [
+                          "change.upsert",
+                          "change.update"
+                        ]
+                      },
+                      "maxItems": 2,
+                      "minItems": 2,
+                      "type": "array",
+                      "uniqueItems": true
+                    }
+                  ]
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
             },
-            "maxItems": 256,
-            "minItems": 1,
-            "type": "array",
-            "uniqueItems": true
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "pull_request"
+                  },
+                  "pull_request_url": {
+                    "maxLength": 16384,
+                    "minLength": 1,
+                    "pattern": "^\\S(?:.*\\S)?$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "pull_request_url"
+                ],
+                "type": "object"
+              },
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "items": {
+                    "const": "change.update"
+                  },
+                  "maxItems": 1,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "resource_ids",
-          "operations_by_resource",
-          "change_target"
-        ],
-        "type": "object"
+        ]
       },
       "ReviewFinding": {
         "additionalProperties": false,
@@ -17576,52 +18755,174 @@
         ]
       },
       "ProviderScope": {
-        "additionalProperties": false,
-        "properties": {
-          "change_target": {
-            "oneOf": [
-              {
-                "$ref": "#/definitions/ProviderChangeTarget"
-              },
-              {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
                 "type": "null"
-              }
-            ]
-          },
-          "operations_by_resource": {
-            "additionalProperties": {
-              "items": {
-                "enum": [
-                  "resource.sync",
-                  "change.upsert",
-                  "change.update"
-                ]
               },
-              "maxItems": 3,
-              "minItems": 1,
-              "type": "array",
-              "uniqueItems": true
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "items": {
+                    "const": "resource.sync"
+                  },
+                  "maxItems": 1,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
             },
-            "maxProperties": 256,
-            "minProperties": 1,
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
             "type": "object"
           },
-          "resource_ids": {
-            "items": {
-              "$ref": "#/definitions/UUID"
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "branches"
+                  },
+                  "source_branch": {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "pattern": "^[^\\s\\u0000]+$",
+                    "type": "string"
+                  },
+                  "target_branch": {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "pattern": "^[^\\s\\u0000]+$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "source_branch",
+                  "target_branch"
+                ],
+                "type": "object"
+              },
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "oneOf": [
+                    {
+                      "items": {
+                        "const": "change.upsert"
+                      },
+                      "maxItems": 1,
+                      "minItems": 1,
+                      "type": "array",
+                      "uniqueItems": true
+                    },
+                    {
+                      "items": {
+                        "enum": [
+                          "change.upsert",
+                          "change.update"
+                        ]
+                      },
+                      "maxItems": 2,
+                      "minItems": 2,
+                      "type": "array",
+                      "uniqueItems": true
+                    }
+                  ]
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
             },
-            "maxItems": 256,
-            "minItems": 1,
-            "type": "array",
-            "uniqueItems": true
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "pull_request"
+                  },
+                  "pull_request_url": {
+                    "maxLength": 16384,
+                    "minLength": 1,
+                    "pattern": "^\\S(?:.*\\S)?$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "pull_request_url"
+                ],
+                "type": "object"
+              },
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "items": {
+                    "const": "change.update"
+                  },
+                  "maxItems": 1,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "resource_ids",
-          "operations_by_resource",
-          "change_target"
-        ],
-        "type": "object"
+        ]
       },
       "ReviewFinding": {
         "additionalProperties": false,
@@ -19352,52 +20653,174 @@
         ]
       },
       "ProviderScope": {
-        "additionalProperties": false,
-        "properties": {
-          "change_target": {
-            "oneOf": [
-              {
-                "$ref": "#/definitions/ProviderChangeTarget"
-              },
-              {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
                 "type": "null"
-              }
-            ]
-          },
-          "operations_by_resource": {
-            "additionalProperties": {
-              "items": {
-                "enum": [
-                  "resource.sync",
-                  "change.upsert",
-                  "change.update"
-                ]
               },
-              "maxItems": 3,
-              "minItems": 1,
-              "type": "array",
-              "uniqueItems": true
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "items": {
+                    "const": "resource.sync"
+                  },
+                  "maxItems": 1,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
             },
-            "maxProperties": 256,
-            "minProperties": 1,
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
             "type": "object"
           },
-          "resource_ids": {
-            "items": {
-              "$ref": "#/definitions/UUID"
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "branches"
+                  },
+                  "source_branch": {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "pattern": "^[^\\s\\u0000]+$",
+                    "type": "string"
+                  },
+                  "target_branch": {
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "pattern": "^[^\\s\\u0000]+$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "source_branch",
+                  "target_branch"
+                ],
+                "type": "object"
+              },
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "oneOf": [
+                    {
+                      "items": {
+                        "const": "change.upsert"
+                      },
+                      "maxItems": 1,
+                      "minItems": 1,
+                      "type": "array",
+                      "uniqueItems": true
+                    },
+                    {
+                      "items": {
+                        "enum": [
+                          "change.upsert",
+                          "change.update"
+                        ]
+                      },
+                      "maxItems": 2,
+                      "minItems": 2,
+                      "type": "array",
+                      "uniqueItems": true
+                    }
+                  ]
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
             },
-            "maxItems": 256,
-            "minItems": 1,
-            "type": "array",
-            "uniqueItems": true
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "change_target": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "pull_request"
+                  },
+                  "pull_request_url": {
+                    "maxLength": 16384,
+                    "minLength": 1,
+                    "pattern": "^\\S(?:.*\\S)?$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "pull_request_url"
+                ],
+                "type": "object"
+              },
+              "operations_by_resource": {
+                "additionalProperties": {
+                  "items": {
+                    "const": "change.update"
+                  },
+                  "maxItems": 1,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "maxProperties": 256,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "resource_ids": {
+                "items": {
+                  "$ref": "#/definitions/UUID"
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "resource_ids",
+              "operations_by_resource",
+              "change_target"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "resource_ids",
-          "operations_by_resource",
-          "change_target"
-        ],
-        "type": "object"
+        ]
       },
       "ReviewFinding": {
         "additionalProperties": false,

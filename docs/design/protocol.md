@@ -118,10 +118,10 @@ returns `resume_rejected`. A daemon without a verified cross-harness handoff
 adapter rejects handoff with `handoff_unsupported` before creating any local
 session journal or native process. The source is a same-Goal, same-revision,
 current-generation settled producer Run and can produce at most one handoff
-Task; it is immutable once consumed. Planning and external-observation Tasks
-do not hand off. A fresh fallback requires a new admission against the same
-preserved artifact and fresh snapshot. An in-flight Task is never silently
-switched to another model/harness.
+Task; it is immutable once consumed. Only `implement` and `validate` Tasks may
+hand off; `plan`, `observe` and `chat` Tasks may not. A fresh fallback requires
+a new admission against the same preserved artifact and fresh snapshot. An
+in-flight Task is never silently switched to another model/harness.
 
 Retained-session attachment uses a server-generated opaque `binding_id`. The
 scheduler rotates it while atomically reserving the exact retained session for

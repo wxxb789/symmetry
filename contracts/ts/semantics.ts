@@ -4,7 +4,6 @@
  */
 import type {
   SymmetryAdmissionV1,
-  ProviderChangeTarget as AdmissionProviderChangeTarget,
   Subject as AdmissionSubject,
 } from "../generated/ts/admission.js";
 import type { SymmetryContextSnapshotV1 } from "../generated/ts/context-snapshot.js";
@@ -82,7 +81,10 @@ type RevisionContract = Pick<
   SymmetryGoalRevisionV1,
   "acceptance_contract" | "authority_policy" | "execution_policy"
 >;
-type ProviderChangeTarget = AdmissionProviderChangeTarget;
+type ProviderChangeTarget = Exclude<
+  NonNullable<SymmetryAdmissionV1["provider_scope"]>["change_target"],
+  null
+>;
 
 const canonicalPlanProposal = (proposal: SymmetryPlanProposalV1): JsonObject => ({
   ...proposal,

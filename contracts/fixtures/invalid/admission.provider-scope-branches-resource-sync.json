@@ -15,25 +15,11 @@
     "commit": "0123456789abcdef0123456789abcdef01234567",
     "tree_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   },
-  "limits": {
-    "max_turns": 1,
-    "deadline_at": "2026-09-09T00:00:00Z",
-    "max_cost_microusd": "250000"
-  },
+  "limits": {"max_turns": 1, "deadline_at": "2026-09-09T00:00:00Z", "max_cost_microusd": "250000"},
   "validation_of_task_id": null,
   "provider_scope": {
-    "resource_ids": [
-      "22222222-2222-4222-8222-222222222222",
-      "99999999-9999-4999-8999-999999999999"
-    ],
-    "operations_by_resource": {
-      "22222222-2222-4222-8222-222222222222": ["change.upsert", "change.update"],
-      "99999999-9999-4999-8999-999999999999": ["change.upsert"]
-    },
-    "change_target": {
-      "kind": "branches",
-      "source_branch": "main",
-      "target_branch": "main"
-    }
+    "resource_ids": ["22222222-2222-4222-8222-222222222222"],
+    "operations_by_resource": {"22222222-2222-4222-8222-222222222222": ["resource.sync"]},
+    "change_target": {"kind": "branches", "source_branch": "codex/goal-0006", "target_branch": "main"}
   }
 }

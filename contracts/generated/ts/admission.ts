@@ -14,6 +14,7 @@ type SymmetryAdmissionV1Base = (
   | {
       session_mode: "handoff";
       requested_session_id: null;
+      purpose?: "implement" | "validate";
       [k: string]: unknown | undefined;
     }
 ) &
@@ -77,44 +78,61 @@ export type Commit = string;
 export type PositiveInteger = number;
 export type UtcTimestamp = string;
 export type Microusd = string;
-export type ProviderChangeTarget =
+export type ProviderScope =
   | {
-      kind: "branches";
-      source_branch: string;
-      target_branch: string;
+      /**
+       * @minItems 1
+       * @maxItems 256
+       */
+      resource_ids: [UUID, ...UUID[]];
+      operations_by_resource: {
+        /**
+         * @minItems 1
+         * @maxItems 1
+         */
+        [k: string]: ["resource.sync"] | undefined;
+      };
+      change_target: null;
     }
   | {
-      kind: "pull_request";
-      pull_request_url: string;
+      /**
+       * @minItems 1
+       * @maxItems 256
+       */
+      resource_ids: [UUID, ...UUID[]];
+      operations_by_resource: {
+        [k: string]:
+          ["change.upsert"] | ["change.upsert" | "change.update", "change.upsert" | "change.update"] | undefined;
+      };
+      change_target: {
+        kind: "branches";
+        source_branch: string;
+        target_branch: string;
+      };
+    }
+  | {
+      /**
+       * @minItems 1
+       * @maxItems 256
+       */
+      resource_ids: [UUID, ...UUID[]];
+      operations_by_resource: {
+        /**
+         * @minItems 1
+         * @maxItems 1
+         */
+        [k: string]: ["change.update"] | undefined;
+      };
+      change_target: {
+        kind: "pull_request";
+        pull_request_url: string;
+      };
     };
 
 export interface Subject {
   resource_id: UUID;
   commit: Commit;
   tree_digest: Sha256;
-}
-export interface ProviderScope {
-  /**
-   * @minItems 1
-   * @maxItems 256
-   */
-  resource_ids: [UUID, ...UUID[]];
-  operations_by_resource: {
-    /**
-     * @minItems 1
-     * @maxItems 3
-     */
-    [k: string]:
-      | ["resource.sync" | "change.upsert" | "change.update"]
-      | ["resource.sync" | "change.upsert" | "change.update", "resource.sync" | "change.upsert" | "change.update"]
-      | [
-          "resource.sync" | "change.upsert" | "change.update",
-          "resource.sync" | "change.upsert" | "change.update",
-          "resource.sync" | "change.upsert" | "change.update"
-        ]
-      | undefined;
-  };
-  change_target: ProviderChangeTarget | null;
 }
 
 export type SymmetryAdmissionV1 = SymmetryAdmissionV1Base &
@@ -133,7 +151,7 @@ export type SymmetryAdmissionV1 = SymmetryAdmissionV1Base &
         session_mode: "handoff";
         requested_session_id: null;
         handoff_source_run_id: UUID;
-        purpose: "implement" | "validate" | "observe" | "chat";
+        purpose: "implement" | "validate";
         work_item_id: UUID;
       }
   );

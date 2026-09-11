@@ -151,7 +151,7 @@ export type SymmetryGoalCommandV1 =
             }
           | {
               work_item_id: UUID;
-              purpose: "implement" | "validate" | "observe" | "chat";
+              purpose: "implement" | "validate";
               model_profile: ShortIdentifier;
               session_mode: "handoff";
               requested_session_id: null;

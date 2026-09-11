@@ -132,3 +132,42 @@ export function useAdmission(
   }
   return [];
 }
+
+export function useDecision(value: SymmetryDecisionV1) {
+  switch (value.kind) {
+    case "plan": {
+      const workItemID: null = value.work_item_id;
+      const subjectHash: null = value.subject_hash;
+      // @ts-expect-error plan decisions cannot bind a WorkItem.
+      const invalidWorkItemID: string = value.work_item_id;
+      return [workItemID, subjectHash, invalidWorkItemID];
+    }
+    case "scope": {
+      const workItemID: string = value.work_item_id;
+      const subjectHash: null = value.subject_hash;
+      // @ts-expect-error scope decisions cannot bind a Subject hash.
+      const invalidSubjectHash: string = value.subject_hash;
+      return [workItemID, subjectHash, invalidSubjectHash];
+    }
+    case "review": {
+      const workItemID: string = value.work_item_id;
+      const subjectHash: string = value.subject_hash;
+      // @ts-expect-error review decisions require a Subject hash.
+      const invalidSubjectHash: null = value.subject_hash;
+      return [workItemID, subjectHash, invalidSubjectHash];
+    }
+    case "completion": {
+      const workItemID: null = value.work_item_id;
+      const subjectHash: string = value.subject_hash;
+      // @ts-expect-error completion decisions cannot bind a WorkItem.
+      const invalidWorkItemID: string = value.work_item_id;
+      return [workItemID, subjectHash, invalidWorkItemID];
+    }
+    case "budget":
+    case "external_action": {
+      const workItemID: string | null = value.work_item_id;
+      const subjectHash: string | null = value.subject_hash;
+      return [workItemID, subjectHash];
+    }
+  }
+}
