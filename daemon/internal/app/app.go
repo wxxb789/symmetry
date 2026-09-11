@@ -204,6 +204,8 @@ type options struct {
 	queueGoalUsage                             func(state.RunKey, protocol.Usage) (state.RunJournal, error)
 	markGoalSessionAttachDeliveryReady         func(state.RunKey, string) (state.RunJournal, error)
 	discardUnreadyGoalSessionAttachDelivery    func(state.RunKey, string) (state.RunJournal, error)
+	abortGoalSessionLaunchBeforeNativeStart    func(state.GoalSessionKey) (state.GoalSessionJournal, error)
+	markGoalSessionUncertain                   func(state.GoalSessionKey, string) (state.GoalSessionJournal, error)
 	markCommandAcknowledgementsDelivered       func(state.RunKey, []string) (state.RunJournal, error)
 	queueCancelledTransitionAndAcknowledgement func(state.RunKey, protocol.StateTransitionRequest, protocol.CommandAcknowledgement, time.Time) (state.RunJournal, error)
 	retainWorkspace                            func(state.RunKey) (state.RunJournal, error)
@@ -3145,7 +3147,9 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 			Workspace: daemon.config.Runtime.Workspace, RepositoryResourceID: &admission.Subject.ResourceID,
 		}); err != nil {
 			if admission.SessionMode != protocol.SessionModeResume {
-				_, _ = daemon.store.AbortGoalSessionLaunchBeforeNativeStart(sessionKey)
+				if abortErr := daemon.abortGoalSessionLaunchBeforeNativeStart(sessionKey); abortErr != nil {
+					return fmt.Errorf("queue native Goal session attach intent: %w", errors.Join(err, fmt.Errorf("abort native Goal session launch intent: %w", abortErr)))
+				}
 			}
 			return fmt.Errorf("queue native Goal session attach intent: %w", err)
 		}
@@ -3226,7 +3230,13 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 		if _, discardErr := daemon.store.DiscardUnreadyGoalSessionAttachDelivery(key, localHandleID); discardErr != nil {
 			return fmt.Errorf("discard unsent native Goal session attach intent: %w", errors.Join(err, discardErr))
 		}
-		_, _ = daemon.store.MarkGoalSessionUncertain(sessionKey, "native transport start outcome is unknown: "+errorText(err))
+		uncertainErr := daemon.markGoalSessionUncertain(sessionKey, "native transport start outcome is unknown: "+errorText(err))
+		if uncertainErr != nil {
+			return taskResultFailure(protocol.TaskResultReasonUnknownOutcome, errors.Join(
+				fmt.Errorf("start native Goal session: %w", err),
+				fmt.Errorf("mark native Goal session uncertain: %w", uncertainErr),
+			))
+		}
 		return taskResultFailure(protocol.TaskResultReasonUnknownOutcome, fmt.Errorf("start native Goal session: %w", err))
 	}
 	staged, ok := session.(harness.StagedSession)
@@ -3488,6 +3498,24 @@ func (daemon *daemon) discardUnreadyGoalSessionAttachDelivery(key state.RunKey, 
 		discard = daemon.store.DiscardUnreadyGoalSessionAttachDelivery
 	}
 	_, err := discard(key, localHandleID)
+	return err
+}
+
+func (daemon *daemon) abortGoalSessionLaunchBeforeNativeStart(key state.GoalSessionKey) error {
+	abort := daemon.options.abortGoalSessionLaunchBeforeNativeStart
+	if abort == nil {
+		abort = daemon.store.AbortGoalSessionLaunchBeforeNativeStart
+	}
+	_, err := abort(key)
+	return err
+}
+
+func (daemon *daemon) markGoalSessionUncertain(key state.GoalSessionKey, reason string) error {
+	mark := daemon.options.markGoalSessionUncertain
+	if mark == nil {
+		mark = daemon.store.MarkGoalSessionUncertain
+	}
+	_, err := mark(key, reason)
 	return err
 }
 

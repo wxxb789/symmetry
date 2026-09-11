@@ -2464,6 +2464,103 @@ func TestFreshCodexGoalAdmissionRetiresUnreadyAttachAfterNativeStartFailure(t *t
 	}
 }
 
+func TestFreshCodexGoalAttachQueueFailureReportsAbortCompensationFailure(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	app, store, session, controlClient := nativeAdmissionDaemon(t, admission, validNativeTaskResult(t, admission), nil)
+	defer store.Close()
+	key := state.RunKey{RunID: "run-1", Generation: 1}
+	saveClaimedGoalRun(t, store, key)
+
+	abortFailure := errors.New("abort launch compensation failed")
+	app.options.abortGoalSessionLaunchBeforeNativeStart = func(state.GoalSessionKey) (state.GoalSessionJournal, error) {
+		return state.GoalSessionJournal{}, abortFailure
+	}
+	var conflictQueueErr error
+	err = app.startGoalAdmission(context.Background(), key, protocol.ClaimResponse{
+		RunID: key.RunID, Generation: key.Generation, TaskID: "task-1", Work: controlClient.work,
+	}, admission, func(workspace.Prepared) {
+		sessions, listErr := store.ListGoalSessions()
+		if listErr != nil {
+			t.Fatalf("ListGoalSessions() in workspace callback: %v", listErr)
+		}
+		if len(sessions) != 1 {
+			t.Fatalf("Goal sessions in workspace callback = %#v, want one", sessions)
+		}
+		resourceID := admission.Subject.ResourceID
+		_, conflictQueueErr = store.QueueGoalSessionAttach(key, state.GoalSessionAttachDelivery{
+			GoalID:               admission.GoalID,
+			LocalHandleID:        sessions[0].LocalHandleID,
+			ServerIssuedBinding:  true,
+			HarnessKind:          string(app.harnessCapabilities.Kind),
+			HarnessVersion:       app.harnessCapabilities.NativeVersion,
+			AdapterVersion:       app.harnessCapabilities.ImplementationVersion,
+			WorkspaceFingerprint: sessions[0].WorkspaceFingerprint,
+			Workspace:            "conflicting-workspace",
+			RepositoryResourceID: &resourceID,
+		})
+	})
+	if conflictQueueErr != nil {
+		t.Fatalf("workspace callback unexpectedly failed to queue conflicting attach: %v", conflictQueueErr)
+	}
+	if !errors.Is(err, state.ErrGoalDeliveryConflict) || !errors.Is(err, abortFailure) {
+		t.Fatalf("attach queue compensation error = %v, want both queue conflict and abort failure", err)
+	}
+	if len(session.calls) != 0 {
+		t.Fatalf("native adapter started after attach queue failure: %v", session.calls)
+	}
+	sessions, err := store.ListGoalSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].LaunchState != state.GoalSessionLaunchStateLaunching || !sessions[0].NeedsReconciliation() {
+		t.Fatalf("failed abort compensation erased launch barrier: %#v", sessions)
+	}
+}
+
+func TestFreshCodexNativeStartFailureReportsUncertainCompensationFailure(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	app, store, session, controlClient := nativeAdmissionDaemon(t, admission, validNativeTaskResult(t, admission), nil)
+	defer store.Close()
+	key := state.RunKey{RunID: "run-1", Generation: 1}
+	saveClaimedGoalRun(t, store, key)
+	startFailure := errors.New("native start failed before session creation")
+	uncertainFailure := errors.New("persist uncertain compensation failed")
+	session.startErr = startFailure
+	app.options.markGoalSessionUncertain = func(state.GoalSessionKey, string) (state.GoalSessionJournal, error) {
+		return state.GoalSessionJournal{}, uncertainFailure
+	}
+
+	err = app.startGoalAdmission(context.Background(), key, protocol.ClaimResponse{
+		RunID: key.RunID, Generation: 1, TaskID: "task-1", Work: controlClient.work,
+	}, admission, nil)
+	if !errors.Is(err, startFailure) || !errors.Is(err, uncertainFailure) {
+		t.Fatalf("native Start compensation error = %v, want both start and uncertainty failures", err)
+	}
+	if len(session.calls) != 1 || session.calls[0] != "start" {
+		t.Fatalf("native Start failure performed unexpected calls: %v", session.calls)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.HasPendingGoalDeliveries() || !journal.RetainWorkspace {
+		t.Fatalf("Start failure lost discard or workspace retention barrier: %#v", journal)
+	}
+	sessions, err := store.ListGoalSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].LaunchState != state.GoalSessionLaunchStateLaunching || !sessions[0].NeedsReconciliation() {
+		t.Fatalf("failed uncertainty compensation claimed a resolved session: %#v", sessions)
+	}
+}
+
 func TestNativeGoalDeadlineInterruptsThenClosesBeforeFailure(t *testing.T) {
 	admission, present, err := parseAdmissionInput(validAdmissionInput())
 	if err != nil || !present {

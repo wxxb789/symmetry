@@ -185,6 +185,311 @@ func TestStartRetainsProcessOwnerAfterPreReadyOutputFailure(t *testing.T) {
 	}
 }
 
+func TestOpenReturnsPromptlyWhenCleanProcessExitLeavesGetStateUnacknowledged(t *testing.T) {
+	process := newFakeNativeProcess()
+	written := make(chan struct{})
+	process.onWrite = func(request Request) {
+		if request.Type != CommandGetState {
+			t.Fatalf("request = %+v, want get_state", request)
+		}
+		close(written)
+		process.finish(execution.Result{PID: 42, ExitCode: 0})
+	}
+	sink := &recordingHarnessSink{}
+	session := startPiSession(t, fakePiAdapter(process), harness.StartRequest{Workspace: t.TempDir()}, sink)
+	done := make(chan error, 1)
+	go func() {
+		_, err := session.Open(context.Background())
+		done <- err
+	}()
+	<-written
+	select {
+	case err := <-done:
+		if err == nil || errors.Is(err, context.Canceled) {
+			t.Fatalf("Open() error = %v, want final process outcome", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Open() remained blocked after clean process exit")
+	}
+	if sink.has(harness.EventSessionStarted) {
+		t.Fatal("Open emitted session_started without get_state acknowledgement")
+	}
+}
+
+func TestOpenRejectsKnownCompletedProcessBeforeRegisteringRequest(t *testing.T) {
+	process := newFakeNativeProcess()
+	session := startPiSession(t, fakePiAdapter(process), harness.StartRequest{Workspace: t.TempDir()}, &recordingHarnessSink{})
+	process.finish(execution.Result{PID: 42, ExitCode: 0})
+	<-session.resultDone
+	if _, err := session.Open(context.Background()); err == nil || errors.Is(err, context.Canceled) {
+		t.Fatalf("Open() error = %v, want known completion cause", err)
+	}
+	if writes := process.requestTypes(); len(writes) != 0 {
+		t.Fatalf("requests after completion = %v, want none", writes)
+	}
+}
+
+func TestStartTurnReturnsPromptlyWhenCleanProcessExitLeavesPromptUnacknowledged(t *testing.T) {
+	process := newFakeNativeProcess()
+	process.onWrite = func(request Request) {
+		switch request.Type {
+		case CommandGetState:
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "get_state", "success": true, "data": map[string]any{"sessionId": "pi-1", "sessionFile": "C:/sessions/pi-1.jsonl"}})
+		case CommandPrompt:
+			process.finish(execution.Result{PID: 42, ExitCode: 0})
+		default:
+			t.Fatalf("request = %+v", request)
+		}
+	}
+	session := startPiSession(t, fakePiAdapter(process), harness.StartRequest{Workspace: t.TempDir()}, &recordingHarnessSink{})
+	_ = openPiSession(t, session)
+	done := make(chan error, 1)
+	go func() {
+		done <- session.StartTurn(context.Background(), harness.TurnRequest{Goal: "Make bounded progress.", Context: json.RawMessage(`{"snapshot":"canonical"}`)})
+	}()
+	select {
+	case err := <-done:
+		if err == nil || errors.Is(err, context.Canceled) {
+			t.Fatalf("StartTurn() error = %v, want final process outcome", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("StartTurn() remained blocked after clean process exit")
+	}
+	result, err := session.Wait(context.Background())
+	if err != nil || result.Kind != harness.ResultFailed || result.Reason == nil || *result.Reason != protocol.TaskResultReasonMissingResult {
+		t.Fatalf("Wait() = %+v, %v; want missing_result", result, err)
+	}
+}
+
+func TestPromptAcknowledgementWinsWhenResultCompletesConcurrently(t *testing.T) {
+	process := newFakeNativeProcess()
+	var session *nativeSession
+	process.onWrite = func(request Request) {
+		switch request.Type {
+		case CommandGetState:
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "get_state", "success": true, "data": map[string]any{"sessionId": "pi-1", "sessionFile": "C:/sessions/pi-1.jsonl"}})
+		case CommandPrompt:
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "prompt", "success": true})
+			process.finish(execution.Result{PID: 42, ExitCode: 0})
+			<-session.resultDone
+		default:
+			t.Fatalf("request = %+v", request)
+		}
+	}
+	session = startPiSession(t, fakePiAdapter(process), harness.StartRequest{Workspace: t.TempDir()}, &recordingHarnessSink{})
+	_ = openPiSession(t, session)
+	if err := session.StartTurn(context.Background(), harness.TurnRequest{Goal: "Make bounded progress.", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
+		t.Fatalf("StartTurn() error = %v, want prompt acknowledgement", err)
+	}
+}
+
+func TestGetStateAcknowledgementWinsWhenCallerCancellationIsReady(t *testing.T) {
+	process := newFakeNativeProcess()
+	written := make(chan struct{})
+	process.onWrite = func(request Request) {
+		if request.Type != CommandGetState {
+			t.Fatalf("request = %+v, want get_state", request)
+		}
+		close(written)
+	}
+	session := startPiSession(t, fakePiAdapter(process), harness.StartRequest{Workspace: t.TempDir()}, &recordingHarnessSink{})
+	expiring := make(chan struct{})
+	releaseExpiry := make(chan struct{})
+	session.beforeRequestExpiry = func() {
+		close(expiring)
+		<-releaseExpiry
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct {
+		handle harness.NativeSessionHandle
+		err    error
+	}, 1)
+	go func() {
+		handle, err := session.Open(ctx)
+		done <- struct {
+			handle harness.NativeSessionHandle
+			err    error
+		}{handle: handle, err: err}
+	}()
+	<-written
+	process.mutex.Lock()
+	request := process.writes[len(process.writes)-1]
+	process.mutex.Unlock()
+	cancel()
+	<-expiring
+	process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "get_state", "success": true, "data": map[string]any{"sessionId": "pi-1", "sessionFile": "C:/sessions/pi-1.jsonl"}})
+	close(releaseExpiry)
+	result := <-done
+	if result.err != nil || result.handle.ID != "pi-1" {
+		t.Fatalf("Open() = %+v, %v; want acknowledgement", result.handle, result.err)
+	}
+	session.mutex.Lock()
+	failure := session.failure
+	session.mutex.Unlock()
+	if failure != nil {
+		t.Fatalf("caller cancellation expired acknowledged request: %v", failure)
+	}
+}
+
+func TestGetStateAcknowledgementWinsAfterHandlerClaimsPendingRequest(t *testing.T) {
+	process := newFakeNativeProcess()
+	written := make(chan struct{})
+	process.onWrite = func(request Request) {
+		if request.Type != CommandGetState {
+			t.Fatalf("request = %+v, want get_state", request)
+		}
+		close(written)
+	}
+	session := startPiSession(t, fakePiAdapter(process), harness.StartRequest{Workspace: t.TempDir()}, &recordingHarnessSink{})
+	claimed := make(chan struct{})
+	releasePublish := make(chan struct{})
+	session.beforeResponsePublish = func() {
+		close(claimed)
+		<-releasePublish
+	}
+	expiring := make(chan struct{})
+	releaseExpiry := make(chan struct{})
+	session.beforeRequestExpiry = func() {
+		close(expiring)
+		<-releaseExpiry
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct {
+		handle harness.NativeSessionHandle
+		err    error
+	}, 1)
+	go func() {
+		handle, err := session.Open(ctx)
+		done <- struct {
+			handle harness.NativeSessionHandle
+			err    error
+		}{handle: handle, err: err}
+	}()
+	<-written
+	process.mutex.Lock()
+	request := process.writes[len(process.writes)-1]
+	process.mutex.Unlock()
+	delivered := make(chan struct{})
+	go func() {
+		process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "get_state", "success": true, "data": map[string]any{"sessionId": "pi-1", "sessionFile": "C:/sessions/pi-1.jsonl"}})
+		close(delivered)
+	}()
+	<-claimed
+	cancel()
+	<-expiring
+	close(releasePublish)
+	<-delivered
+	close(releaseExpiry)
+	result := <-done
+	if result.err != nil || result.handle.ID != "pi-1" {
+		t.Fatalf("Open() = %+v, %v; want acknowledgement", result.handle, result.err)
+	}
+	session.mutex.Lock()
+	failure := session.failure
+	session.mutex.Unlock()
+	if failure != nil {
+		t.Fatalf("expiry raced an acknowledged response: %v", failure)
+	}
+}
+
+func TestGetStateAcknowledgementWinsWhenSessionContextCancelsAfterHandlerClaims(t *testing.T) {
+	process := newFakeNativeProcess()
+	written := make(chan struct{})
+	process.onWrite = func(request Request) {
+		if request.Type != CommandGetState {
+			t.Fatalf("request = %+v, want get_state", request)
+		}
+		close(written)
+	}
+	session := startPiSession(t, fakePiAdapter(process), harness.StartRequest{Workspace: t.TempDir()}, &recordingHarnessSink{})
+	claimed := make(chan struct{})
+	releasePublish := make(chan struct{})
+	session.beforeResponsePublish = func() {
+		close(claimed)
+		<-releasePublish
+	}
+	getState, err := GetStateRequest("session-cancel-race")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct {
+		response Response
+		err      error
+	}, 1)
+	go func() {
+		response, err := session.call(context.Background(), getState)
+		done <- struct {
+			response Response
+			err      error
+		}{response: response, err: err}
+	}()
+	<-written
+	process.mutex.Lock()
+	writtenRequest := process.writes[len(process.writes)-1]
+	process.mutex.Unlock()
+	delivered := make(chan struct{})
+	go func() {
+		process.emitJSON(t, map[string]any{"type": "response", "id": writtenRequest.ID, "command": "get_state", "success": true, "data": map[string]any{"sessionId": "pi-1", "sessionFile": "C:/sessions/pi-1.jsonl"}})
+		close(delivered)
+	}()
+	<-claimed
+	session.cancel()
+	close(releasePublish)
+	<-delivered
+	result := <-done
+	if result.err != nil || result.response.ID != getState.ID {
+		t.Fatalf("call() = %+v, %v; want acknowledgement", result.response, result.err)
+	}
+	session.mutex.Lock()
+	failure := session.failure
+	session.mutex.Unlock()
+	if failure != nil {
+		t.Fatalf("session cancellation discarded acknowledged response: %v", failure)
+	}
+}
+
+func TestWaitTurnReturnsTerminalResultWhenSessionContextIsCancelled(t *testing.T) {
+	process := newFakeNativeProcess()
+	session := startPiSession(t, fakePiAdapter(process), harness.StartRequest{Workspace: t.TempDir()}, &recordingHarnessSink{})
+	session.completeTurn(harness.TaskResult{Kind: harness.ResultSucceeded}, nil, false)
+	session.cancel()
+	if err := session.WaitTurn(context.Background()); err != nil {
+		t.Fatalf("WaitTurn() error = %v, want terminal turn result", err)
+	}
+	process.finish(execution.Result{PID: 42, ExitCode: 0})
+	if _, err := session.Wait(context.Background()); err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+}
+
+func TestWaitTurnDoesNotTreatInFlightTerminalPublicationAsComplete(t *testing.T) {
+	process := newFakeNativeProcess()
+	publishing := make(chan struct{})
+	releasePublication := make(chan struct{})
+	sink := &blockingTaskResultSink{publishing: publishing, release: releasePublication}
+	session := startPiSession(t, fakePiAdapter(process), harness.StartRequest{Workspace: t.TempDir()}, sink)
+	completionReturned := make(chan struct{})
+	go func() {
+		defer close(completionReturned)
+		session.completeTurn(harness.TaskResult{Kind: harness.ResultSucceeded}, nil, true)
+	}()
+	defer func() {
+		close(releasePublication)
+		<-completionReturned
+		process.finish(execution.Result{PID: 42, ExitCode: 0})
+		if _, err := session.Wait(context.Background()); err != nil {
+			t.Errorf("Wait() error = %v", err)
+		}
+	}()
+	<-publishing
+	session.cancel()
+	if err := session.WaitTurn(context.Background()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("WaitTurn() error = %v, want session cancellation before turnDone", err)
+	}
+}
+
 func TestControlCancelSendsClearQueueBeforeAbortAndNeedsSettlement(t *testing.T) {
 	process := newFakeNativeProcess()
 	adapter := fakePiAdapter(process)
@@ -873,6 +1178,19 @@ type recordingHarnessSink struct {
 	mutex  sync.Mutex
 	events []harness.Event
 	err    error
+}
+
+type blockingTaskResultSink struct {
+	publishing chan struct{}
+	release    <-chan struct{}
+}
+
+func (sink *blockingTaskResultSink) Handle(_ context.Context, event harness.Event) error {
+	if event.Kind == harness.EventTaskResult {
+		close(sink.publishing)
+		<-sink.release
+	}
+	return nil
 }
 
 func (sink *recordingHarnessSink) Handle(_ context.Context, event harness.Event) error {

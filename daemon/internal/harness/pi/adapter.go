@@ -337,27 +337,29 @@ type nativeSession struct {
 	closeMutex  sync.Mutex
 	cancelMutex sync.Mutex
 
-	process              nativeProcess
-	cancelTimeout        time.Duration
-	processReady         bool
-	preReadyEvents       []execution.Event
-	preReadyBytes        int
-	validator            *Validator
-	pending              map[string]chan Response
-	nextRequestID        uint64
-	opened               bool
-	opening              bool
-	turnStarted          bool
-	turnFinal            bool
-	turnResult           *harness.TaskResult
-	turnErr              error
-	cancelApplied        bool
-	cancelInFlight       bool
-	closing              bool
-	failure              error
-	processResult        *execution.Result
-	closeNormalCandidate bool
-	resumeState          *SessionState
+	process               nativeProcess
+	cancelTimeout         time.Duration
+	processReady          bool
+	preReadyEvents        []execution.Event
+	preReadyBytes         int
+	validator             *Validator
+	pending               map[string]chan Response
+	nextRequestID         uint64
+	opened                bool
+	opening               bool
+	turnStarted           bool
+	turnFinal             bool
+	turnResult            *harness.TaskResult
+	turnErr               error
+	cancelApplied         bool
+	cancelInFlight        bool
+	closing               bool
+	failure               error
+	processResult         *execution.Result
+	closeNormalCandidate  bool
+	resumeState           *SessionState
+	beforeRequestExpiry   func()
+	beforeResponsePublish func()
 
 	turnDone   chan struct{}
 	turnOnce   sync.Once
@@ -637,6 +639,14 @@ func (session *nativeSession) WaitTurn(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-session.context.Done():
+		select {
+		case <-session.turnDone:
+			session.mutex.Lock()
+			err := session.turnErr
+			session.mutex.Unlock()
+			return err
+		default:
+		}
 		session.mutex.Lock()
 		err := session.sessionErrorLocked()
 		session.mutex.Unlock()
@@ -790,19 +800,71 @@ func (session *nativeSession) call(ctx context.Context, request Request) (Respon
 	select {
 	case value := <-response:
 		return value, nil
+	default:
+	}
+	select {
+	case value := <-response:
+		return value, nil
+	case <-session.resultDone:
+		// A response record deletes its waiter before sending it. Check the
+		// buffered acknowledgement again so an already-delivered ACK wins when
+		// process completion becomes ready at the same time.
+		select {
+		case value := <-response:
+			return value, nil
+		default:
+		}
+		session.mutex.Lock()
+		delete(session.pending, request.ID)
+		err := session.completedRequestErrorLocked()
+		session.mutex.Unlock()
+		return Response{}, err
 	case <-ctx.Done():
-		session.expireRequest(request.ID, ctx.Err())
+		select {
+		case value := <-response:
+			return value, nil
+		default:
+		}
+		if session.beforeRequestExpiry != nil {
+			session.beforeRequestExpiry()
+		}
+		if !session.expireRequest(request.ID, ctx.Err()) {
+			select {
+			case value := <-response:
+				return value, nil
+			default:
+			}
+			session.mutex.Lock()
+			err := session.sessionErrorLocked()
+			session.mutex.Unlock()
+			return Response{}, err
+		}
 		return Response{}, ctx.Err()
 	case <-session.context.Done():
+		select {
+		case value := <-response:
+			return value, nil
+		default:
+		}
 		session.mutex.Lock()
+		select {
+		case value := <-response:
+			session.mutex.Unlock()
+			return value, nil
+		default:
+		}
 		err := session.sessionErrorLocked()
 		session.mutex.Unlock()
 		return Response{}, err
 	}
 }
 
-func (session *nativeSession) expireRequest(id string, cause error) {
+func (session *nativeSession) expireRequest(id string, cause error) bool {
 	session.mutex.Lock()
+	if _, exists := session.pending[id]; !exists {
+		session.mutex.Unlock()
+		return false
+	}
 	delete(session.pending, id)
 	err := session.validator.Expire(id)
 	if err == nil {
@@ -810,6 +872,7 @@ func (session *nativeSession) expireRequest(id string, cause error) {
 	}
 	session.mutex.Unlock()
 	session.fail(err)
+	return true
 }
 
 func (session *nativeSession) requestIDLocked(prefix string) string {
@@ -884,13 +947,17 @@ func (session *nativeSession) handleRecord(ctx context.Context, processEvent exe
 		waiter = session.pending[record.Response.ID]
 		delete(session.pending, record.Response.ID)
 	}
-	session.mutex.Unlock()
 	if err != nil {
+		session.mutex.Unlock()
 		return err
 	}
 	if waiter != nil {
+		if session.beforeResponsePublish != nil {
+			session.beforeResponsePublish()
+		}
 		waiter <- *record.Response
 	}
+	session.mutex.Unlock()
 	if record.Event != nil && record.Event.Type == EventMessageUpdate {
 		// Deltas are journaled as native frames only. They are never assembled or
 		// searched for a semantic TaskResult.
@@ -1041,6 +1108,9 @@ func (session *nativeSession) usableLocked() error {
 	if session.failure != nil {
 		return session.failure
 	}
+	if session.result != nil {
+		return session.completedRequestErrorLocked()
+	}
 	if session.closing {
 		return errNativeSessionClosed
 	}
@@ -1051,6 +1121,30 @@ func (session *nativeSession) usableLocked() error {
 		return errors.New("pi native process is unavailable")
 	}
 	return nil
+}
+
+func (session *nativeSession) completedRequestErrorLocked() error {
+	if session.failure != nil {
+		return session.failure
+	}
+	if session.turnErr != nil {
+		return session.turnErr
+	}
+	if session.result != nil {
+		if session.result.Process.ContainmentError != nil {
+			return session.result.Process.ContainmentError
+		}
+		if session.result.Process.TerminationError != nil {
+			return session.result.Process.TerminationError
+		}
+		if session.result.Process.WaitError != nil {
+			return session.result.Process.WaitError
+		}
+		if session.result.Summary != "" {
+			return errors.New(session.result.Summary)
+		}
+	}
+	return errors.New("pi process completed before the native response")
 }
 
 func (session *nativeSession) sessionErrorLocked() error {

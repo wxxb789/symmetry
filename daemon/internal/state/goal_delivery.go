@@ -137,12 +137,63 @@ func (store *Store) MarkGoalSessionAttachDeliveryReady(key RunKey, localHandleID
 		for index := range journal.PendingGoalDeliveries {
 			delivery := &journal.PendingGoalDeliveries[index]
 			if delivery.Kind == GoalDeliverySessionAttach && delivery.DeliveryID == localHandleID {
+				if delivery.Ready {
+					return nil
+				}
+				if err := store.validateGoalSessionAttachDeliveryReadyLocked(*journal, *delivery, localHandleID); err != nil {
+					return err
+				}
 				delivery.Ready = true
 				return nil
 			}
 		}
 		return errors.New("Goal session attach delivery is not pending")
 	})
+}
+
+func (store *Store) validateGoalSessionAttachDeliveryReadyLocked(journal RunJournal, delivery GoalDelivery, localHandleID string) error {
+	payload := delivery.SessionAttach
+	if payload == nil || delivery.DeliveryID != localHandleID || payload.LocalHandleID != localHandleID || !validRequiredString(payload.GoalID, 4096) {
+		return ErrGoalDeliveryConflict
+	}
+	session, err := store.loadGoalSessionPathLocked(store.goalSessionPath(GoalSessionKey{GoalID: payload.GoalID, LocalHandleID: localHandleID}))
+	if err != nil {
+		return fmt.Errorf("load Goal session for attach delivery: %w", err)
+	}
+	if session.GoalID != payload.GoalID || session.LocalHandleID != localHandleID ||
+		session.RunID != journal.RunID || session.Generation != journal.Generation ||
+		session.RuntimeID != journal.RuntimeID || session.RuntimeEpoch != journal.ClaimedRuntimeEpoch ||
+		session.HarnessKind != payload.HarnessKind || session.HarnessVersion != payload.HarnessVersion ||
+		session.AdapterVersion != payload.AdapterVersion || session.WorkspaceFingerprint != payload.WorkspaceFingerprint ||
+		!sameGoalSessionAttachRepositoryResource(session.RepositoryResourceID, payload.RepositoryResourceID) {
+		return ErrGoalDeliveryConflict
+	}
+	if session.NeedsReconciliation() {
+		return ErrGoalSessionUncertain
+	}
+	if session.LaunchState != GoalSessionLaunchStateAttached || validateGoalSessionHandle(GoalSessionHandle{
+		NativeSessionID:       session.NativeSessionID,
+		NativeSessionFilename: session.NativeSessionFilename,
+	}) != nil {
+		return ErrGoalSessionNotAttached
+	}
+	if session.SessionMode == GoalSessionModeResume || !payload.ServerIssuedBinding {
+		if session.BindingID != payload.BindingID {
+			return ErrGoalDeliveryConflict
+		}
+		return nil
+	}
+	if session.BindingID != "" {
+		return ErrGoalDeliveryConflict
+	}
+	return nil
+}
+
+func sameGoalSessionAttachRepositoryResource(sessionResourceID string, deliveryResourceID *string) bool {
+	if deliveryResourceID == nil {
+		return sessionResourceID == ""
+	}
+	return sessionResourceID == *deliveryResourceID
 }
 
 // DiscardUnreadyGoalSessionAttachDelivery removes an attach intent only before

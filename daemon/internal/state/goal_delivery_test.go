@@ -20,6 +20,10 @@ func TestGoalSessionAttachDeliveryIsDurableBeforeLaunchAndReadyAfterHandle(t *te
 		t.Fatal(err)
 	}
 	payload := testGoalSessionAttachDelivery()
+	attached := saveAttachedGoalSessionForAttachDelivery(t, store, key, payload)
+	if attached.NativeSessionFilename != "" {
+		t.Fatalf("attached native filename = %q, want optional filename absent", attached.NativeSessionFilename)
+	}
 	queued, err := store.QueueGoalSessionAttach(key, payload)
 	if err != nil {
 		t.Fatalf("QueueGoalSessionAttach() error = %v", err)
@@ -279,6 +283,7 @@ func TestDeleteJournalIgnoresRetiredNonUsageDeliveries(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload := testGoalSessionAttachDelivery()
+	saveAttachedGoalSessionForAttachDelivery(t, store, key, payload)
 	queued, err := store.QueueGoalSessionAttach(key, payload)
 	if err != nil {
 		t.Fatal(err)
@@ -357,14 +362,215 @@ func TestKnownPreNativeAbortRetiresOnlyUnreadyAttachIntent(t *testing.T) {
 	if journal, err := store.LoadJournal(key); err != nil || journal.HasPendingGoalDeliveries() {
 		t.Fatalf("pre-native abort deliveries = %#v, error = %v", journal.PendingGoalDeliveries, err)
 	}
+	readyPayload := payload
+	readyPayload.LocalHandleID = "00000000-0000-4000-8000-000000000008"
+	saveAttachedGoalSessionForAttachDelivery(t, store, key, readyPayload)
+	if _, err := store.QueueGoalSessionAttach(key, readyPayload); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkGoalSessionAttachDeliveryReady(key, readyPayload.LocalHandleID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DiscardUnreadyGoalSessionAttachDelivery(key, readyPayload.LocalHandleID); !errors.Is(err, ErrGoalDeliveryConflict) {
+		t.Fatalf("discard ready attach error = %v, want ErrGoalDeliveryConflict", err)
+	}
+}
+
+func TestMarkGoalSessionAttachDeliveryReadyRejectsUnprovenOrMismatchedSession(t *testing.T) {
+	tests := []struct {
+		name    string
+		setup   func(*testing.T, *Store, RunKey, GoalSessionAttachDelivery)
+		matches func(error) bool
+	}{
+		{
+			name: "missing session",
+			matches: func(err error) bool {
+				return IsNotFound(err)
+			},
+		},
+		{
+			name: "intent only",
+			setup: func(t *testing.T, store *Store, key RunKey, payload GoalSessionAttachDelivery) {
+				saveGoalSessionIntentForAttachDelivery(t, store, key, payload, GoalSessionModeFresh)
+			},
+			matches: func(err error) bool {
+				return errors.Is(err, ErrGoalSessionNotAttached)
+			},
+		},
+		{
+			name: "launching",
+			setup: func(t *testing.T, store *Store, key RunKey, payload GoalSessionAttachDelivery) {
+				session := saveGoalSessionIntentForAttachDelivery(t, store, key, payload, GoalSessionModeFresh)
+				if _, err := store.MarkGoalSessionLaunchStarted(session.Key()); err != nil {
+					t.Fatal(err)
+				}
+			},
+			matches: func(err error) bool {
+				return errors.Is(err, ErrGoalSessionUncertain)
+			},
+		},
+		{
+			name: "uncertain",
+			setup: func(t *testing.T, store *Store, key RunKey, payload GoalSessionAttachDelivery) {
+				session := saveGoalSessionIntentForAttachDelivery(t, store, key, payload, GoalSessionModeFresh)
+				if _, err := store.MarkGoalSessionLaunchStarted(session.Key()); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := store.MarkGoalSessionUncertain(session.Key(), "native launch outcome is unknown"); err != nil {
+					t.Fatal(err)
+				}
+			},
+			matches: func(err error) bool {
+				return errors.Is(err, ErrGoalSessionUncertain)
+			},
+		},
+		{
+			name: "workspace mismatch",
+			setup: func(t *testing.T, store *Store, key RunKey, payload GoalSessionAttachDelivery) {
+				mismatched := payload
+				mismatched.WorkspaceFingerprint = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+				saveAttachedGoalSessionForAttachDelivery(t, store, key, mismatched)
+			},
+			matches: func(err error) bool {
+				return errors.Is(err, ErrGoalDeliveryConflict)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := mustStore(t)
+			key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
+			if err := store.SaveJournal(testGoalDeliveryJournal(key)); err != nil {
+				t.Fatal(err)
+			}
+			payload := testGoalSessionAttachDelivery()
+			if _, err := store.QueueGoalSessionAttach(key, payload); err != nil {
+				t.Fatal(err)
+			}
+			if test.setup != nil {
+				test.setup(t, store, key, payload)
+			}
+
+			_, err := store.MarkGoalSessionAttachDeliveryReady(key, payload.LocalHandleID)
+			if !test.matches(err) {
+				t.Fatalf("MarkGoalSessionAttachDeliveryReady() error = %v", err)
+			}
+			journal, err := store.LoadJournal(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(journal.PendingGoalDeliveries) != 1 || journal.PendingGoalDeliveries[0].Ready {
+				t.Fatalf("rejected attach delivery changed = %#v", journal.PendingGoalDeliveries)
+			}
+		})
+	}
+}
+
+func TestMarkGoalSessionAttachDeliveryReadyAllowsFreshServerIssuedBindingWithoutFilename(t *testing.T) {
+	store := mustStore(t)
+	key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
+	if err := store.SaveJournal(testGoalDeliveryJournal(key)); err != nil {
+		t.Fatal(err)
+	}
+	payload := testGoalSessionAttachDelivery()
+	payload.BindingID = ""
+	payload.ServerIssuedBinding = true
+	attached := saveAttachedGoalSessionForAttachDelivery(t, store, key, payload)
+	if attached.BindingID != "" || attached.NativeSessionFilename != "" {
+		t.Fatalf("fresh server-issued session = %#v, want empty binding and filename", attached)
+	}
 	if _, err := store.QueueGoalSessionAttach(key, payload); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.MarkGoalSessionAttachDeliveryReady(key, payload.LocalHandleID); err != nil {
+	ready, err := store.MarkGoalSessionAttachDeliveryReady(key, payload.LocalHandleID)
+	if err != nil {
+		t.Fatalf("MarkGoalSessionAttachDeliveryReady() error = %v", err)
+	}
+	if len(ready.PendingGoalDeliveries) != 1 || !ready.PendingGoalDeliveries[0].Ready {
+		t.Fatalf("server-issued attach delivery = %#v, want ready", ready.PendingGoalDeliveries)
+	}
+}
+
+func TestMarkGoalSessionAttachDeliveryReadyRejectsResumeOldBinding(t *testing.T) {
+	store := mustStore(t)
+	source, certificate := mustAvailableRetainedGoalSession(t, store)
+	rebind := testGoalSessionResumeRebind(certificate)
+	key := RunKey{RunID: rebind.RunID, Generation: rebind.Generation}
+	if err := store.SaveJournal(testGoalDeliveryJournalForSession(key, source)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DiscardUnreadyGoalSessionAttachDelivery(key, payload.LocalHandleID); !errors.Is(err, ErrGoalDeliveryConflict) {
-		t.Fatalf("discard ready attach error = %v, want ErrGoalDeliveryConflict", err)
+	if _, err := store.RebindGoalSessionForResume(source.Key(), rebind); err != nil {
+		t.Fatal(err)
+	}
+	payload := testGoalSessionAttachDeliveryForSession(source)
+	if _, err := store.QueueGoalSessionAttach(key, payload); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkGoalSessionAttachDeliveryReady(key, payload.LocalHandleID); !errors.Is(err, ErrGoalDeliveryConflict) {
+		t.Fatalf("MarkGoalSessionAttachDeliveryReady() with predecessor binding error = %v, want ErrGoalDeliveryConflict", err)
+	}
+}
+
+func TestMarkGoalSessionAttachDeliveryReadyPermitsQueuedResumeAfterRebindBeforeStart(t *testing.T) {
+	store := mustStore(t)
+	source, certificate := mustAvailableRetainedGoalSession(t, store)
+	rebind := testGoalSessionResumeRebind(certificate)
+	key := RunKey{RunID: rebind.RunID, Generation: rebind.Generation}
+	if err := store.SaveJournal(testGoalDeliveryJournalForSession(key, source)); err != nil {
+		t.Fatal(err)
+	}
+	payload := testGoalSessionAttachDeliveryForSession(source)
+	payload.BindingID = rebind.BindingID
+	if _, err := store.QueueGoalSessionAttach(key, payload); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkGoalSessionAttachDeliveryReady(key, payload.LocalHandleID); !errors.Is(err, ErrGoalDeliveryConflict) {
+		t.Fatalf("MarkGoalSessionAttachDeliveryReady() before rebind error = %v, want ErrGoalDeliveryConflict", err)
+	}
+	rebound, err := store.RebindGoalSessionForResume(source.Key(), rebind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rebound.ResumeStartPending {
+		t.Fatalf("rebound session = %#v, want pre-start resume", rebound)
+	}
+	ready, err := store.MarkGoalSessionAttachDeliveryReady(key, payload.LocalHandleID)
+	if err != nil {
+		t.Fatalf("MarkGoalSessionAttachDeliveryReady() after rebind error = %v", err)
+	}
+	if len(ready.PendingGoalDeliveries) != 1 || !ready.PendingGoalDeliveries[0].Ready {
+		t.Fatalf("rebound attach delivery = %#v, want ready before StartAttempted", ready.PendingGoalDeliveries)
+	}
+	if _, err := store.MarkGoalSessionResumeStartAttempted(source.Key()); err != nil {
+		t.Fatalf("MarkGoalSessionResumeStartAttempted() after ready error = %v", err)
+	}
+}
+
+func TestMarkGoalSessionAttachDeliveryReadyReplayDoesNotMutateAfterRebind(t *testing.T) {
+	store := mustStore(t)
+	source, certificate := mustAvailableRetainedGoalSession(t, store)
+	key := RunKey{RunID: source.RunID, Generation: source.Generation}
+	if err := store.SaveJournal(testGoalDeliveryJournalForSession(key, source)); err != nil {
+		t.Fatal(err)
+	}
+	payload := testGoalSessionAttachDeliveryForSession(source)
+	if _, err := store.QueueGoalSessionAttach(key, payload); err != nil {
+		t.Fatal(err)
+	}
+	ready, err := store.MarkGoalSessionAttachDeliveryReady(key, payload.LocalHandleID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RebindGoalSessionForResume(source.Key(), testGoalSessionResumeRebind(certificate)); err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := store.MarkGoalSessionAttachDeliveryReady(key, payload.LocalHandleID)
+	if err != nil {
+		t.Fatalf("replayed MarkGoalSessionAttachDeliveryReady() error = %v", err)
+	}
+	if !reflect.DeepEqual(replayed, ready) {
+		t.Fatalf("ready replay changed historical receipt: got %#v want %#v", replayed, ready)
 	}
 }
 
@@ -384,6 +590,90 @@ func testGoalSessionAttachDelivery() GoalSessionAttachDelivery {
 		HarnessKind: "codex", HarnessVersion: "0.153.4", AdapterVersion: "symmetry-daemon:test",
 		WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Workspace: `C:\worktree`, RepositoryResourceID: &repositoryID,
 	}
+}
+
+func saveAttachedGoalSessionForAttachDelivery(t *testing.T, store *Store, key RunKey, payload GoalSessionAttachDelivery) GoalSessionJournal {
+	t.Helper()
+	session := saveGoalSessionIntentForAttachDelivery(t, store, key, payload, GoalSessionModeFresh)
+	if _, err := store.MarkGoalSessionLaunchStarted(session.Key()); err != nil {
+		t.Fatal(err)
+	}
+	attached, err := store.PersistGoalSessionHandle(session.Key(), GoalSessionHandle{NativeSessionID: "native-private-id"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return attached
+}
+
+func saveGoalSessionIntentForAttachDelivery(t *testing.T, store *Store, key RunKey, payload GoalSessionAttachDelivery, mode string) GoalSessionJournal {
+	t.Helper()
+	run, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repositoryResourceID := ""
+	if payload.RepositoryResourceID != nil {
+		repositoryResourceID = *payload.RepositoryResourceID
+	}
+	intent := GoalSessionLaunchIntent{
+		LaunchIntentID:         "attach-intent-" + payload.LocalHandleID,
+		GoalID:                 payload.GoalID,
+		GoalRevision:           1,
+		WorkItemID:             "work-item-1",
+		TaskID:                 "task-1",
+		RunID:                  key.RunID,
+		Generation:             key.Generation,
+		AdmissionID:            "admission-1",
+		LocalHandleID:          payload.LocalHandleID,
+		OwnerID:                "owner-1",
+		MachineID:              "machine-1",
+		RuntimeID:              run.RuntimeID,
+		RuntimeEpoch:           run.ClaimedRuntimeEpoch,
+		DaemonInstanceID:       "daemon-1",
+		HarnessKind:            payload.HarnessKind,
+		HarnessVersion:         payload.HarnessVersion,
+		AdapterVersion:         payload.AdapterVersion,
+		AdapterProtocolVersion: 1,
+		WorkspaceFingerprint:   payload.WorkspaceFingerprint,
+		WorkspacePath:          payload.Workspace,
+		WorkspaceOwnerRunKey:   WorkspaceOwnerRunKey{RunID: key.RunID, Generation: key.Generation},
+		RepositoryResourceID:   repositoryResourceID,
+		BindingID:              payload.BindingID,
+		SessionMode:            mode,
+	}
+	if mode == GoalSessionModeHandoff {
+		intent.HandoffSourceRunID = "00000000-0000-4000-8000-000000000009"
+	}
+	session, err := store.SaveGoalSessionLaunchIntent(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return session
+}
+
+func testGoalDeliveryJournalForSession(key RunKey, session GoalSessionJournal) RunJournal {
+	journal := testGoalDeliveryJournal(key)
+	journal.RuntimeID = session.RuntimeID
+	journal.ClaimedRuntimeEpoch = session.RuntimeEpoch
+	return journal
+}
+
+func testGoalSessionAttachDeliveryForSession(session GoalSessionJournal) GoalSessionAttachDelivery {
+	payload := GoalSessionAttachDelivery{
+		GoalID:               session.GoalID,
+		LocalHandleID:        session.LocalHandleID,
+		BindingID:            session.BindingID,
+		HarnessKind:          session.HarnessKind,
+		HarnessVersion:       session.HarnessVersion,
+		AdapterVersion:       session.AdapterVersion,
+		WorkspaceFingerprint: session.WorkspaceFingerprint,
+		Workspace:            session.WorkspacePath,
+	}
+	if session.RepositoryResourceID != "" {
+		repositoryResourceID := session.RepositoryResourceID
+		payload.RepositoryResourceID = &repositoryResourceID
+	}
+	return payload
 }
 
 func testGoalUsage(runID string) protocol.Usage {

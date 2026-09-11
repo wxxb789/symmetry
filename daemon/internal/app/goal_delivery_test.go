@@ -691,6 +691,7 @@ func TestJournalFingerprintTracksGoalDeliveryState(t *testing.T) {
 		HarnessKind: "codex", HarnessVersion: "0.153.4", AdapterVersion: "symmetry-daemon:test",
 		WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Workspace: `C:\worktree`,
 	}
+	saveAttachedGoalSessionForDelivery(t, store, key, payload)
 	queued, err := store.QueueGoalSessionAttach(key, payload)
 	if err != nil {
 		t.Fatal(err)
@@ -1653,6 +1654,7 @@ func TestGoalDeliveryMalformedOrMismatchedReceiptRetainsExactIntent(t *testing.T
 			name: "attach malformed",
 			queue: func(store *state.Store, key state.RunKey) (state.RunJournal, state.GoalDeliveryKind, string, error) {
 				payload := state.GoalSessionAttachDelivery{GoalID: "00000000-0000-4000-8000-000000000002", LocalHandleID: "00000000-0000-4000-8000-000000000003", BindingID: "00000000-0000-4000-8000-000000000004", HarnessKind: "codex", HarnessVersion: "0.153.4", AdapterVersion: "symmetry-daemon:test", WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Workspace: `C:\worktree`}
+				saveAttachedGoalSessionForDelivery(t, store, key, payload)
 				journal, err := store.QueueGoalSessionAttach(key, payload)
 				if err == nil {
 					journal, err = store.MarkGoalSessionAttachDeliveryReady(key, payload.LocalHandleID)
@@ -1665,6 +1667,7 @@ func TestGoalDeliveryMalformedOrMismatchedReceiptRetainsExactIntent(t *testing.T
 			name: "attach mismatch",
 			queue: func(store *state.Store, key state.RunKey) (state.RunJournal, state.GoalDeliveryKind, string, error) {
 				payload := state.GoalSessionAttachDelivery{GoalID: "00000000-0000-4000-8000-000000000002", LocalHandleID: "00000000-0000-4000-8000-000000000003", BindingID: "00000000-0000-4000-8000-000000000004", HarnessKind: "codex", HarnessVersion: "0.153.4", AdapterVersion: "symmetry-daemon:test", WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Workspace: `C:\worktree`}
+				saveAttachedGoalSessionForDelivery(t, store, key, payload)
 				journal, err := store.QueueGoalSessionAttach(key, payload)
 				if err == nil {
 					journal, err = store.MarkGoalSessionAttachDeliveryReady(key, payload.LocalHandleID)
@@ -1852,6 +1855,47 @@ func claimedGoalDeliveryStore(t *testing.T) (*state.Store, state.RunKey) {
 	return store, key
 }
 
+func saveAttachedGoalSessionForDelivery(t *testing.T, store *state.Store, key state.RunKey, payload state.GoalSessionAttachDelivery) state.GoalSessionKey {
+	t.Helper()
+	repositoryResourceID := ""
+	if payload.RepositoryResourceID != nil {
+		repositoryResourceID = *payload.RepositoryResourceID
+	}
+	sessionKey := state.GoalSessionKey{GoalID: payload.GoalID, LocalHandleID: payload.LocalHandleID}
+	intent := state.GoalSessionLaunchIntent{
+		LaunchIntentID:         "delivery-intent-" + payload.LocalHandleID,
+		GoalID:                 payload.GoalID,
+		GoalRevision:           1,
+		WorkItemID:             "work-item-1",
+		TaskID:                 "task-1",
+		RunID:                  key.RunID,
+		Generation:             key.Generation,
+		AdmissionID:            "admission-1",
+		LocalHandleID:          payload.LocalHandleID,
+		BindingID:              payload.BindingID,
+		RuntimeID:              "runtime-1",
+		RuntimeEpoch:           1,
+		HarnessKind:            payload.HarnessKind,
+		HarnessVersion:         payload.HarnessVersion,
+		AdapterVersion:         payload.AdapterVersion,
+		AdapterProtocolVersion: 1,
+		WorkspaceFingerprint:   payload.WorkspaceFingerprint,
+		WorkspacePath:          payload.Workspace,
+		RepositoryResourceID:   repositoryResourceID,
+		SessionMode:            state.GoalSessionModeFresh,
+	}
+	if _, err := store.SaveGoalSessionLaunchIntent(intent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkGoalSessionLaunchStarted(sessionKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PersistGoalSessionHandle(sessionKey, state.GoalSessionHandle{NativeSessionID: "native-thread-1"}); err != nil {
+		t.Fatal(err)
+	}
+	return sessionKey
+}
+
 func saveRetainedGoalSession(t *testing.T, store *state.Store, key state.RunKey) (state.GoalSessionKey, string, string) {
 	t.Helper()
 	admission, present, err := parseAdmissionInput(validAdmissionInput())
@@ -1896,7 +1940,7 @@ func saveReadyAttachPendingGoalSession(t *testing.T, store *state.Store, key sta
 		WorkItemID: admissionWorkItemIDValue(admission.WorkItemID), TaskID: "task-1", RunID: key.RunID, Generation: key.Generation, AdmissionID: admission.AdmissionID,
 		LocalHandleID: sessionKey.LocalHandleID, BindingID: bindingID, MachineID: "machine-1", RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: "0.153.4",
 		AdapterVersion: "symmetry-daemon:test", AdapterProtocolVersion: 1, WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		WorkspacePath: `C:\worktree\retained`, SessionMode: state.GoalSessionModeFresh,
+		WorkspacePath: `C:\worktree\retained`, RepositoryResourceID: admission.Subject.ResourceID, SessionMode: state.GoalSessionModeFresh,
 	}
 	if _, err := store.SaveGoalSessionLaunchIntent(intent); err != nil {
 		t.Fatal(err)
