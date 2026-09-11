@@ -19,7 +19,7 @@ and rechecks the tuple/inode. Windows holds a process handle, checks its creatio
 identity and liveness, and matches the established four-tuple and owning PID
 from `GetExtendedTcpTable`; it rechecks process liveness before returning.
 
-The verifier sets a one-second observation deadline (or the shorter caller
+The verifier sets a five-second observation deadline (or the shorter caller
 deadline), with 10 ms intervals on the same connection. This accommodates Linux's
 connect/accept gap without sending a health request or redialing first. Native table and FD
 scans have bounded allocation and scan sizes. Kernel calls themselves are

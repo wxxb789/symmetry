@@ -7,9 +7,14 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/netip"
+	"os"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestReadLinuxTCPPeerInode(t *testing.T) {
@@ -72,4 +77,121 @@ func TestReadLinuxTCPPeerInodeBoundsTable(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "row limit") {
 		t.Fatalf("oversize table error = %v", err)
 	}
+}
+
+func TestVerifyLoopbackTCPPeerWaitsForDeferredAcceptWithoutWriting(t *testing.T) {
+	listener := listenWithDeferredAccept(t)
+	t.Cleanup(func() { _ = listener.Close() })
+	accepted := make(chan acceptResult, 1)
+	go func() {
+		connection, err := listener.Accept()
+		accepted <- acceptResult{connection: connection, err: err}
+	}()
+
+	client, err := net.Dial("tcp4", listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial deferred-accept listener: %v", err)
+	}
+	clientClosed := false
+	t.Cleanup(func() {
+		if !clientClosed {
+			_ = client.Close()
+		}
+	})
+
+	identity, err := ProcessIdentity(os.Getpid())
+	if err != nil {
+		t.Fatalf("ProcessIdentity() error = %v", err)
+	}
+	verifyContext, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	if err := VerifyLoopbackTCPPeer(verifyContext, client, os.Getpid(), identity); err != nil {
+		t.Fatalf("VerifyLoopbackTCPPeer() error = %v", err)
+	}
+
+	var server net.Conn
+	select {
+	case result := <-accepted:
+		if result.err != nil {
+			t.Fatalf("accept deferred connection: %v", result.err)
+		}
+		server = result.connection
+	case <-verifyContext.Done():
+		t.Fatal("server did not accept the connection after peer verification")
+	}
+	t.Cleanup(func() { _ = server.Close() })
+
+	if err := server.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
+		t.Fatalf("set server read deadline: %v", err)
+	}
+	buffer := make([]byte, 1)
+	count, readErr := server.Read(buffer)
+	var networkErr net.Error
+	if count != 0 || !errors.As(readErr, &networkErr) || !networkErr.Timeout() {
+		t.Fatalf("server read before client close = %d, %v; want timeout without bytes", count, readErr)
+	}
+	if err := server.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatalf("clear server read deadline: %v", err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("close client: %v", err)
+	}
+	clientClosed = true
+	if err := server.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("set server EOF deadline: %v", err)
+	}
+	count, readErr = server.Read(buffer)
+	if count != 0 || !errors.Is(readErr, io.EOF) {
+		t.Fatalf("server read after client close = %d, %v; want EOF", count, readErr)
+	}
+}
+
+func TestVerifyLoopbackTCPPeerDoesNotExtendCallerDeadlineDuringDeferredAccept(t *testing.T) {
+	listener := listenWithDeferredAccept(t)
+	t.Cleanup(func() { _ = listener.Close() })
+	client, err := net.Dial("tcp4", listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial deferred-accept listener: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	identity, err := ProcessIdentity(os.Getpid())
+	if err != nil {
+		t.Fatalf("ProcessIdentity() error = %v", err)
+	}
+	callerContext, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err = VerifyLoopbackTCPPeer(callerContext, client, os.Getpid(), identity)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("VerifyLoopbackTCPPeer() error = %v, want caller deadline", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("VerifyLoopbackTCPPeer() exceeded caller deadline: %v", elapsed)
+	}
+}
+
+type acceptResult struct {
+	connection net.Conn
+	err        error
+}
+
+func listenWithDeferredAccept(t *testing.T) net.Listener {
+	t.Helper()
+	config := net.ListenConfig{
+		Control: func(_ string, _ string, raw syscall.RawConn) error {
+			var socketErr error
+			if err := raw.Control(func(descriptor uintptr) {
+				socketErr = syscall.SetsockoptInt(int(descriptor), syscall.IPPROTO_TCP, syscall.TCP_DEFER_ACCEPT, 1)
+			}); err != nil {
+				return err
+			}
+			return socketErr
+		},
+	}
+	listener, err := config.Listen(context.Background(), "tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen with TCP_DEFER_ACCEPT: %v", err)
+	}
+	return listener
 }

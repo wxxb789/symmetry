@@ -40,7 +40,7 @@ func VerifyLoopbackTCPPeer(ctx context.Context, conn net.Conn, pid int, identity
 
 	// connect can finish before accept installs an FD in the server. Observe the
 	// same connection briefly, never redial or send a readiness request first.
-	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
