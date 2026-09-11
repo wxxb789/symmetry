@@ -17,6 +17,10 @@ fixtures or prove credentialed repository work.
 
 ## Opt-in repository task
 
+[Recorded repository-work evidence](native-repository-work.md) identifies the
+exact source revision and separate Windows/Linux outcomes. It does not replace
+the capability acceptance requirements below.
+
 `TestNativeRepositoryTask` exercises one native Pi turn through the configured
 provider or loopback gateway in an isolated temporary Git repository, using the
 production adapter. It is not a daemon/Control E2E

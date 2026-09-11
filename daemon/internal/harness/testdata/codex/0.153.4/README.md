@@ -75,6 +75,9 @@ and [request config loading](https://github.com/openai/codex/blob/rust-v0.153.4/
 
 ## Opt-in native transport check
 
+[Recorded native transport evidence](native-smoke.md) identifies the exact
+source revision, Linux pass and Windows permission-grant failure.
+
 Set `SYMMETRY_CODEX_NATIVE_SMOKE=1` and
 `SYMMETRY_CODEX_NATIVE_SMOKE_EXECUTABLE` to the absolute pinned executable, then
 run from `daemon/`:
