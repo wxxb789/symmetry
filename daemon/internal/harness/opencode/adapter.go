@@ -625,8 +625,9 @@ func retryableHealthError(err error) bool {
 	return !errors.Is(err, ErrPeerOwnership) && !errors.Is(err, ErrInvalidConfig) && !errors.Is(err, ErrUnexpectedStatus) && !errors.Is(err, ErrMalformedResponse) && !errors.Is(err, ErrInvalidHealth)
 }
 
-// StartTurn opens the per-session durable stream before it admits one prompt.
-// Admission is recorded as a native frame only; no output becomes a task result.
+// StartTurn admits one prompt, then replays its durable session stream from the
+// beginning. Admission is recorded as a native frame only; no output becomes a
+// task result.
 func (session *nativeSession) StartTurn(ctx context.Context, request harness.TurnRequest) (err error) {
 	if session == nil {
 		return errors.New("opencode native session is nil")
@@ -641,6 +642,11 @@ func (session *nativeSession) StartTurn(ctx context.Context, request harness.Tur
 		return err
 	}
 	session.mu.Lock()
+	if session.turnErr != nil {
+		err := session.turnErr
+		session.mu.Unlock()
+		return err
+	}
 	if session.closed {
 		session.mu.Unlock()
 		return errSessionClosed
@@ -653,17 +659,21 @@ func (session *nativeSession) StartTurn(ctx context.Context, request harness.Tur
 		session.mu.Unlock()
 		return errors.New("opencode native session already owns a turn")
 	}
-	if session.turnErr != nil {
-		err := session.turnErr
-		session.mu.Unlock()
-		return err
-	}
 	if session.sinkErr != nil {
 		err := session.sinkErr
 		session.mu.Unlock()
 		return err
 	}
-	turnContext, turnCancel := context.WithCancel(ctx)
+	// Prompt admission is both caller-cancellable and owned by the session's
+	// shutdown path. Once admitted, the replay stream must outlive the caller
+	// and is therefore rooted only in the session context.
+	promptContext, promptCancel := context.WithCancel(ctx)
+	streamContext, streamCancel := context.WithCancel(session.context)
+	stopPromptOnSessionClose := context.AfterFunc(session.context, promptCancel)
+	turnCancel := func() {
+		promptCancel()
+		streamCancel()
+	}
 	session.turnStarting = true
 	session.turnCancel = turnCancel
 	turnAttemptDone := make(chan struct{})
@@ -673,7 +683,11 @@ func (session *nativeSession) StartTurn(ctx context.Context, request harness.Tur
 
 	succeeded := false
 	defer func() {
-		turnCancel()
+		stopPromptOnSessionClose()
+		promptCancel()
+		if !succeeded {
+			turnCancel()
+		}
 		session.mu.Lock()
 		if !succeeded && session.turnErr == nil {
 			if err == nil {
@@ -681,7 +695,9 @@ func (session *nativeSession) StartTurn(ctx context.Context, request harness.Tur
 			}
 			session.turnErr = err
 		}
-		session.turnCancel = nil
+		if !succeeded {
+			session.turnCancel = nil
+		}
 		session.turnStarting = false
 		if session.turnAttemptDone == turnAttemptDone {
 			session.turnAttemptDone = nil
@@ -699,33 +715,30 @@ func (session *nativeSession) StartTurn(ctx context.Context, request harness.Tur
 		return err
 	}
 	promptID := randomID("msg_")
-	streamBody, err := session.client.OpenSessionEvents(turnContext, handle.ID, 0)
+	prompt := PromptRequest{ID: promptID, Text: buildPrompt(request.Goal, request.Context), Delivery: "steer", Resume: false}
+	admission, err := session.client.Prompt(promptContext, handle.ID, prompt)
+	if err != nil {
+		return fmt.Errorf("admit OpenCode prompt: %w", err)
+	}
+	if admission.ID != promptID || admission.SessionID != handle.ID {
+		return fmt.Errorf("admit OpenCode prompt: %w", ErrIdentityMismatch)
+	}
+	session.mu.Lock()
+	if session.closed {
+		session.mu.Unlock()
+		return errSessionClosed
+	}
+	if session.sinkErr != nil {
+		err := session.sinkErr
+		session.mu.Unlock()
+		return err
+	}
+	session.mu.Unlock()
+	streamBody, err := session.client.OpenSessionEvents(streamContext, handle.ID, 0)
 	if err != nil {
 		return fmt.Errorf("open OpenCode session events: %w", err)
 	}
 	stream := &streamHandle{body: streamBody}
-	session.mu.Lock()
-	if session.closed {
-		session.mu.Unlock()
-		stream.Close()
-		return errSessionClosed
-	}
-	session.stream = stream
-	session.streamDone = make(chan struct{})
-	streamDone := session.streamDone
-	session.mu.Unlock()
-	go session.watchSessionEvents(stream, streamDone, handle.ID, promptID)
-
-	prompt := PromptRequest{ID: promptID, Text: buildPrompt(request.Goal, request.Context), Delivery: "steer", Resume: false}
-	admission, err := session.client.Prompt(turnContext, handle.ID, prompt)
-	if err != nil {
-		stream.Close()
-		return fmt.Errorf("admit OpenCode prompt: %w", err)
-	}
-	if admission.ID != promptID || admission.SessionID != handle.ID {
-		stream.Close()
-		return fmt.Errorf("admit OpenCode prompt: %w", ErrIdentityMismatch)
-	}
 	session.mu.Lock()
 	if session.closed {
 		session.mu.Unlock()
@@ -737,6 +750,18 @@ func (session *nativeSession) StartTurn(ctx context.Context, request harness.Tur
 		session.mu.Unlock()
 		stream.Close()
 		return err
+	}
+	session.stream = stream
+	session.streamDone = make(chan struct{})
+	streamDone := session.streamDone
+	session.mu.Unlock()
+	go session.watchSessionEvents(stream, streamDone, handle.ID, promptID)
+
+	session.mu.Lock()
+	if session.closed {
+		session.mu.Unlock()
+		stream.Close()
+		return errSessionClosed
 	}
 	session.turnStarting = false
 	session.turnStarted = true
@@ -974,10 +999,17 @@ func (session *nativeSession) watchProcess(process nativeProcess) {
 }
 
 func (session *nativeSession) watchSessionEvents(stream *streamHandle, done chan struct{}, sessionID, messageID string) {
-	defer close(done)
+	var streamErr error
+	defer func() {
+		close(done)
+		if streamErr != nil {
+			session.failTurnAfterStreamError(streamErr)
+		}
+	}()
 	decoder := NewDecoder(defaultMaxFrameBytes)
 	validator, err := NewSessionEventValidator(sessionID, 0)
 	if err != nil {
+		streamErr = err
 		session.recordStreamError(err)
 		return
 	}
@@ -987,10 +1019,12 @@ func (session *nativeSession) watchSessionEvents(stream *streamHandle, done chan
 		if count > 0 {
 			frames, feedErr := decoder.Feed(buffer[:count])
 			if feedErr != nil {
+				streamErr = feedErr
 				session.recordStreamError(feedErr)
 				return
 			}
 			if err := session.observeSessionFrames(validator, frames, messageID); err != nil {
+				streamErr = err
 				session.recordStreamError(err)
 				return
 			}
@@ -999,21 +1033,43 @@ func (session *nativeSession) watchSessionEvents(stream *streamHandle, done chan
 			continue
 		}
 		if !errors.Is(readErr, io.EOF) {
+			streamErr = readErr
 			session.recordStreamError(readErr)
 			return
 		}
 		frames, err := decoder.Close()
 		if err != nil {
+			streamErr = err
 			session.recordStreamError(err)
 			return
 		}
 		if err := session.observeSessionFrames(validator, frames, messageID); err != nil {
+			streamErr = err
 			session.recordStreamError(err)
 			return
 		}
-		session.recordStreamError(errStreamEndedUnknown)
+		streamErr = errStreamEndedUnknown
+		session.recordStreamError(streamErr)
 		return
 	}
+}
+
+// failTurnAfterStreamError makes a committed admission fail closed when its
+// durable replay can no longer be observed. The stream read/publish barrier is
+// already closed, so the process watcher can join it during cleanup.
+func (session *nativeSession) failTurnAfterStreamError(err error) {
+	session.mu.Lock()
+	if session.closed {
+		session.mu.Unlock()
+		return
+	}
+	if session.turnErr == nil {
+		session.turnErr = err
+	}
+	session.mu.Unlock()
+	cleanupContext, cancel := context.WithTimeout(context.Background(), session.terminationGrace()*2)
+	_ = session.Close(cleanupContext)
+	cancel()
 }
 
 func (session *nativeSession) observeSessionFrames(validator *SessionEventValidator, frames []Frame, messageID string) error {

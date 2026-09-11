@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -177,6 +178,218 @@ func TestOpenStartTurnAndWaitStayFailClosed(t *testing.T) {
 	}
 	if err := session.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestStartTurnAdmitsPromptBeforeOpeningDurableReplay(t *testing.T) {
+	process := newFakeProcess()
+	stream := newBlockingReadCloser()
+	api := &fakeAPI{stream: stream}
+	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
+		return process, nil
+	}, api)
+	session, err := adapter.Start(context.Background(), startRequest(t), &recordingSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	staged := session.(harness.StagedSession)
+	if _, err := staged.Open(context.Background()); err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{}`)}); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	if got, want := api.callOrder(), []string{"prompt", "events"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("call order = %#v, want %#v", got, want)
+	}
+	if after := api.eventCursors(); len(after) != 1 || after[0] != 0 {
+		t.Fatalf("event cursors = %#v, want [0]", after)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestStartTurnKeepsDurableReplayOwnedBySession(t *testing.T) {
+	process := newFakeProcess()
+	var stream *contextBlockingReadCloser
+	api := &fakeAPI{streamFactory: func(ctx context.Context, _ string, _ uint64) io.ReadCloser {
+		stream = newContextBlockingReadCloser(ctx)
+		return stream
+	}}
+	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
+		return process, nil
+	}, api)
+	session, err := adapter.Start(context.Background(), startRequest(t), &recordingSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	staged := session.(harness.StagedSession)
+	if _, err := staged.Open(context.Background()); err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	callerContext, cancelCaller := context.WithCancel(context.Background())
+	defer cancelCaller()
+	if err := staged.StartTurn(callerContext, harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{}`)}); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	<-stream.readStarted
+	if stream.contextCancelled() {
+		t.Fatal("StartTurn() cancelled the successful durable replay stream")
+	}
+	cancelCaller()
+	if stream.contextCancelled() {
+		t.Fatal("caller turn context cancelled the session-owned durable replay stream")
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestStartTurnCancelsInFlightPromptWhenCallerCancels(t *testing.T) {
+	process := newFakeProcess()
+	promptStarted := make(chan struct{})
+	api := &fakeAPI{promptStarted: promptStarted}
+	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
+		return process, nil
+	}, api)
+	session, err := adapter.Start(context.Background(), startRequest(t), &recordingSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	staged := session.(harness.StagedSession)
+	if _, err := staged.Open(context.Background()); err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	callerContext, cancelCaller := context.WithCancel(context.Background())
+	turnDone := make(chan error, 1)
+	go func() {
+		turnDone <- staged.StartTurn(callerContext, harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{}`)})
+	}()
+	<-promptStarted
+	cancelCaller()
+	if err := <-turnDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("StartTurn() error = %v, want caller cancellation", err)
+	}
+	if api.openEventCalls != 0 || process.terminateCalls != 1 {
+		t.Fatalf("events=%d terminate=%d, want no replay and one cleanup", api.openEventCalls, process.terminateCalls)
+	}
+}
+
+func TestStartTurnKeepsReplayOpenWhenCallerCancelsAfterAdmission(t *testing.T) {
+	process := newFakeProcess()
+	openStarted := make(chan struct{})
+	openRelease := make(chan struct{})
+	stream := newBlockingReadCloser()
+	api := &fakeAPI{stream: stream, openEventStarted: openStarted, openEventRelease: openRelease}
+	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
+		return process, nil
+	}, api)
+	session, err := adapter.Start(context.Background(), startRequest(t), &recordingSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	staged := session.(harness.StagedSession)
+	if _, err := staged.Open(context.Background()); err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	callerContext, cancelCaller := context.WithCancel(context.Background())
+	defer cancelCaller()
+	turnDone := make(chan error, 1)
+	go func() {
+		turnDone <- staged.StartTurn(callerContext, harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{}`)})
+	}()
+	<-openStarted
+	cancelCaller()
+	if api.openEventContextCancelled() {
+		t.Fatal("caller cancellation interrupted durable replay opening after admission")
+	}
+	close(openRelease)
+	if err := <-turnDone; err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestStartTurnObservesPromptAdmissionFromDurableReplay(t *testing.T) {
+	process := newFakeProcess()
+	api := &fakeAPI{replayPromptAdmission: true}
+	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
+		return process, nil
+	}, api)
+	sink := &recordingSink{expectedCode: "opencode_session_event", expectedCodeSeen: make(chan struct{})}
+	session, err := adapter.Start(context.Background(), startRequest(t), sink)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	staged := session.(harness.StagedSession)
+	if _, err := staged.Open(context.Background()); err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{}`)}); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	<-sink.expectedCodeSeen
+	if !sink.hasCode("opencode_session_event") {
+		t.Fatalf("events = %+v, want replayed prompt admission native frame", sink.events)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestStartTurnClosesCommittedPromptWhenReplayCannotOpen(t *testing.T) {
+	process := newFakeProcess()
+	openErr := errors.New("durable replay unavailable")
+	api := &fakeAPI{openEventErr: openErr}
+	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
+		return process, nil
+	}, api)
+	session, err := adapter.Start(context.Background(), startRequest(t), &recordingSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	staged := session.(harness.StagedSession)
+	if _, err := staged.Open(context.Background()); err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	first := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{}`)})
+	if !errors.Is(first, openErr) {
+		t.Fatalf("StartTurn() error = %v, want durable replay failure", first)
+	}
+	second := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "again", Context: json.RawMessage(`{}`)})
+	if !errors.Is(second, openErr) || api.promptCalls != 1 || process.terminateCalls != 1 {
+		t.Fatalf("second StartTurn() error = %v promptCalls=%d terminate=%d; want sticky replay failure and one cleanup", second, api.promptCalls, process.terminateCalls)
+	}
+}
+
+func TestCloseCancelsInFlightDurableReplayOpenAfterPromptAdmission(t *testing.T) {
+	process := newFakeProcess()
+	openStarted := make(chan struct{})
+	api := &fakeAPI{openEventStarted: openStarted}
+	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
+		return process, nil
+	}, api)
+	session, err := adapter.Start(context.Background(), startRequest(t), &recordingSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	staged := session.(harness.StagedSession)
+	if _, err := staged.Open(context.Background()); err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	turnDone := make(chan error, 1)
+	go func() {
+		turnDone <- staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{}`)})
+	}()
+	<-openStarted
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := <-turnDone; err == nil || api.promptCalls != 1 || process.terminateCalls != 1 {
+		t.Fatalf("StartTurn() error = %v promptCalls=%d terminate=%d; want cancelled committed turn cleanup", err, api.promptCalls, process.terminateCalls)
 	}
 }
 
@@ -383,21 +596,31 @@ func (runner fixtureCommandRunner) Run(_ context.Context, _ string, args ...stri
 }
 
 type fakeAPI struct {
-	mu               sync.Mutex
-	healthCalls      int
-	createCalls      int
-	promptCalls      int
-	openEventCalls   int
-	interruptCalls   int
-	healthErr        error
-	createErr        error
-	promptErr        error
-	promptStarted    chan struct{}
-	promptRelease    <-chan struct{}
-	interruptErr     error
-	stream           io.ReadCloser
-	interruptStarted chan struct{}
-	interruptRelease <-chan struct{}
+	mu                    sync.Mutex
+	healthCalls           int
+	createCalls           int
+	promptCalls           int
+	openEventCalls        int
+	interruptCalls        int
+	callSequence          []string
+	eventAfter            []uint64
+	healthErr             error
+	createErr             error
+	promptErr             error
+	promptStarted         chan struct{}
+	promptRelease         <-chan struct{}
+	lastPrompt            PromptRequest
+	lastPromptSession     string
+	replayPromptAdmission bool
+	openEventErr          error
+	openEventStarted      chan struct{}
+	openEventRelease      <-chan struct{}
+	openEventContext      context.Context
+	streamFactory         func(context.Context, string, uint64) io.ReadCloser
+	interruptErr          error
+	stream                io.ReadCloser
+	interruptStarted      chan struct{}
+	interruptRelease      <-chan struct{}
 }
 
 func (api *fakeAPI) Health(context.Context) error {
@@ -420,6 +643,7 @@ func (api *fakeAPI) CreateSession(_ context.Context, request CreateSessionReques
 func (api *fakeAPI) Prompt(ctx context.Context, sessionID string, request PromptRequest) (PromptAdmission, error) {
 	api.mu.Lock()
 	api.promptCalls++
+	api.callSequence = append(api.callSequence, "prompt")
 	started, release, err := api.promptStarted, api.promptRelease, api.promptErr
 	api.mu.Unlock()
 	if started != nil {
@@ -438,6 +662,10 @@ func (api *fakeAPI) Prompt(ctx context.Context, sessionID string, request Prompt
 	if err != nil {
 		return PromptAdmission{}, err
 	}
+	api.mu.Lock()
+	api.lastPrompt = request
+	api.lastPromptSession = sessionID
+	api.mu.Unlock()
 	return PromptAdmission{AdmittedSeq: 1, ID: request.ID, SessionID: sessionID, Text: request.Text, Delivery: request.Delivery, TimeCreated: 1}, nil
 }
 
@@ -455,14 +683,82 @@ func (api *fakeAPI) Interrupt(context.Context, string) error {
 	return err
 }
 
-func (api *fakeAPI) OpenSessionEvents(context.Context, string, uint64) (io.ReadCloser, error) {
+func (api *fakeAPI) OpenSessionEvents(ctx context.Context, sessionID string, after uint64) (io.ReadCloser, error) {
 	api.mu.Lock()
-	defer api.mu.Unlock()
 	api.openEventCalls++
-	if api.stream == nil {
+	api.callSequence = append(api.callSequence, "events")
+	api.eventAfter = append(api.eventAfter, after)
+	started, release, err := api.openEventStarted, api.openEventRelease, api.openEventErr
+	stream, streamFactory := api.stream, api.streamFactory
+	replayPromptAdmission, prompt, promptSession := api.replayPromptAdmission, api.lastPrompt, api.lastPromptSession
+	api.openEventContext = ctx
+	api.mu.Unlock()
+	if started != nil {
+		close(started)
+	}
+	if release != nil {
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	} else if started != nil {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	if err != nil {
+		return nil, err
+	}
+	if streamFactory != nil {
+		return streamFactory(ctx, sessionID, after), nil
+	}
+	if replayPromptAdmission {
+		if promptSession != sessionID {
+			return nil, ErrIdentityMismatch
+		}
+		return promptAdmissionReplayStream(sessionID, prompt), nil
+	}
+	if stream == nil {
 		return io.NopCloser(strings.NewReader("")), nil
 	}
-	return api.stream, nil
+	return stream, nil
+}
+
+func (api *fakeAPI) openEventContextCancelled() bool {
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	return api.openEventContext == nil || api.openEventContext.Err() != nil
+}
+
+func (api *fakeAPI) callOrder() []string {
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	return append([]string(nil), api.callSequence...)
+}
+
+func (api *fakeAPI) eventCursors() []uint64 {
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	return append([]uint64(nil), api.eventAfter...)
+}
+
+func promptAdmissionReplayStream(sessionID string, prompt PromptRequest) *replayBlockingReadCloser {
+	payload, err := json.Marshal(map[string]any{
+		"id":      "evt_1",
+		"type":    "session.next.prompt.admitted",
+		"durable": map[string]any{"aggregateID": sessionID, "seq": 1, "version": 1},
+		"data": map[string]any{
+			"timestamp": 1,
+			"sessionID": sessionID,
+			"messageID": prompt.ID,
+			"prompt":    map[string]string{"text": prompt.Text},
+			"delivery":  prompt.Delivery,
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return newReplayBlockingReadCloser([]byte("data: " + string(payload) + "\n\n"))
 }
 
 type fakeProcess struct {
@@ -511,6 +807,64 @@ type blockingReadCloser struct {
 	closedOnce sync.Once
 }
 
+type contextBlockingReadCloser struct {
+	context     context.Context
+	readStarted chan struct{}
+	done        chan struct{}
+	closedOnce  sync.Once
+}
+
+func newContextBlockingReadCloser(ctx context.Context) *contextBlockingReadCloser {
+	return &contextBlockingReadCloser{context: ctx, readStarted: make(chan struct{}), done: make(chan struct{})}
+}
+
+func (reader *contextBlockingReadCloser) Read([]byte) (int, error) {
+	close(reader.readStarted)
+	select {
+	case <-reader.context.Done():
+		return 0, reader.context.Err()
+	case <-reader.done:
+		return 0, io.EOF
+	}
+}
+
+func (reader *contextBlockingReadCloser) Close() error {
+	reader.closedOnce.Do(func() { close(reader.done) })
+	return nil
+}
+
+func (reader *contextBlockingReadCloser) contextCancelled() bool { return reader.context.Err() != nil }
+
+type replayBlockingReadCloser struct {
+	mu         sync.Mutex
+	payload    []byte
+	delivered  bool
+	done       chan struct{}
+	closedOnce sync.Once
+}
+
+func newReplayBlockingReadCloser(payload []byte) *replayBlockingReadCloser {
+	return &replayBlockingReadCloser{payload: payload, done: make(chan struct{})}
+}
+
+func (reader *replayBlockingReadCloser) Read(data []byte) (int, error) {
+	reader.mu.Lock()
+	if !reader.delivered {
+		reader.delivered = true
+		count := copy(data, reader.payload)
+		reader.mu.Unlock()
+		return count, nil
+	}
+	reader.mu.Unlock()
+	<-reader.done
+	return 0, io.EOF
+}
+
+func (reader *replayBlockingReadCloser) Close() error {
+	reader.closedOnce.Do(func() { close(reader.done) })
+	return nil
+}
+
 func newBlockingReadCloser() *blockingReadCloser {
 	return &blockingReadCloser{done: make(chan struct{})}
 }
@@ -530,8 +884,11 @@ func (reader *blockingReadCloser) closed() bool {
 }
 
 type recordingSink struct {
-	mu     sync.Mutex
-	events []harness.Event
+	mu               sync.Mutex
+	events           []harness.Event
+	expectedCode     string
+	expectedCodeSeen chan struct{}
+	expectedCodeOnce sync.Once
 }
 
 type blockingEventSink struct {
@@ -556,8 +913,12 @@ func (sink *blockingEventSink) Handle(ctx context.Context, event harness.Event) 
 
 func (sink *recordingSink) Handle(_ context.Context, event harness.Event) error {
 	sink.mu.Lock()
-	defer sink.mu.Unlock()
 	sink.events = append(sink.events, event)
+	expectedCode, expectedCodeSeen := sink.expectedCode, sink.expectedCodeSeen
+	sink.mu.Unlock()
+	if expectedCodeSeen != nil && event.Code == expectedCode {
+		sink.expectedCodeOnce.Do(func() { close(expectedCodeSeen) })
+	}
 	return nil
 }
 
@@ -588,6 +949,17 @@ func (sink *recordingSink) hasDiagnostic(code string) bool {
 	defer sink.mu.Unlock()
 	for _, event := range sink.events {
 		if event.Kind == harness.EventDiagnostic && event.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
+func (sink *recordingSink) hasCode(code string) bool {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	for _, event := range sink.events {
+		if event.Code == code {
 			return true
 		}
 	}
