@@ -56,6 +56,7 @@ relaxed. The Windows test is a failure, not a skip or an expected-pass test.
 No repository mutation, model response, result/usage semantics, cancellation
 during work, retained resume, handoff or Control durability was tested. Linux
 transport success does not advertise native work support. Windows workspace
-write remains unavailable in the tested isolated configuration. Native UNC and
-case-sensitive SMB paths were not exercised; directory resolution remains a
-validation-time snapshot, not a TOCTOU guarantee. Goal 0006 remains incomplete.
+write remains unavailable in the tested isolated configuration. Windows symbolic
+links, native UNC and case-sensitive SMB paths were not exercised; directory
+resolution remains a validation-time snapshot, not a TOCTOU guarantee. Goal 0006
+remains incomplete.

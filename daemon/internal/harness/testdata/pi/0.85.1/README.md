@@ -78,11 +78,34 @@ and Control/PostgreSQL durability require separate evidence.
 
 The test observes `OutputTruncated=true` at the shared runner's explicit
 termination barrier after the acknowledged semantic result. This marker closes
-subsequent output delivery so termination cannot wait indefinitely on a sink;
-it is not evidence of a full output drain. `SinkError`, `OutputError`,
+subsequent output delivery and cancels the sink context. An in-flight sink must
+honor context cancellation; the marker does not prove that an uncooperative sink
+has returned or that output was fully drained. `SinkError`, `OutputError`,
 `ContainmentError`, and `TerminationError` remain rejected. Expected forced-close
 exit status and `WaitError` do not invalidate the already acknowledged semantic
 result.
+
+## Opt-in retained-session restart
+
+`TestNativeRepositoryTaskRetainedResume` uses the same opt-in configuration as
+the repository task above, but runs two native turns across two adapter/process
+instances in the same isolated workspace and environment:
+
+```text
+go test ./internal/harness/pi -run '^TestNativeRepositoryTaskRetainedResume$' -count=1 -v -timeout 5m
+```
+
+The first process must settle and stop before the second starts with the retained
+native ID and session file. The second turn must recover a token supplied only
+in the first prompt. Only the `write` tool is enabled; the token is not supplied
+in the second prompt, expected result or context. The test also distinguishes
+the two result identities and repository Subjects. The test fixture commits the
+first artifact between turns; that commit is not credited to Pi.
+
+This checks a settled-boundary retained restart after bounded process termination,
+not graceful native exit, interruption during work, daemon journal recovery,
+Control admission, fingerprint ownership, external-effect exactly-once behavior
+or power-loss durability. Capability admission remains unchanged.
 
 ## RPC profile argument boundary
 

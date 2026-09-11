@@ -63,9 +63,10 @@ path with `GetFinalPathNameByHandle`, resolving junctions as well as symlinks.
 The adapter compares these resolved paths exactly, with a directory-separator
 boundary for descendants; it does not infer identity through case folding.
 
-Windows junction behavior has local regression coverage. Native UNC and
-case-sensitive SMB behavior remain unverified. Resolution is a validation-time
-snapshot, not protection against a later filesystem replacement (TOCTOU).
+Windows junction behavior has local regression coverage. Windows symbolic-link,
+native UNC and case-sensitive SMB behavior remain unverified. Resolution is a
+validation-time snapshot, not protection against a later filesystem replacement
+(TOCTOU).
 
 The exact upstream contracts are in
 [core SandboxPolicy](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/protocol/src/protocol.rs),
