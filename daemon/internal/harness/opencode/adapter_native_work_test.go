@@ -5,6 +5,7 @@ package opencode
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -595,7 +596,7 @@ func nativeOpenCodeEvaluateResumeCapture(events []nativeOpenCodeEventMetadata, s
 			}
 			continue
 		}
-		if event.Cursor > cursor {
+		if event.Cursor > cursor && event.AggregateID == wantedSession {
 			capture.nonAdmissionObserved = true
 		}
 	}
@@ -727,13 +728,15 @@ func nativeOpenCodeRedactIdentity(value string) string {
 	value = strings.TrimSpace(value)
 	for _, prefix := range []string{"evt_", "ses_", "msg_"} {
 		if strings.HasPrefix(value, prefix) {
-			return prefix + "[redacted]"
+			digest := sha256.Sum256([]byte(value))
+			return fmt.Sprintf("%s[redacted:%x]", prefix, digest[:6])
 		}
 	}
 	if value == "" {
 		return ""
 	}
-	return "[redacted]"
+	digest := sha256.Sum256([]byte(value))
+	return fmt.Sprintf("[redacted:%x]", digest[:6])
 }
 
 func TestNativeOpenCodeResumeCaptureMetadataRedactsPayload(t *testing.T) {
@@ -785,6 +788,18 @@ func TestNativeOpenCodeResumeCaptureRejectsAdmissionOnly(t *testing.T) {
 	if !priorOnly.admissionObserved || priorOnly.nonAdmissionObserved || !errors.Is(priorOnly.err, errNativeOpenCodeResumeCaptureMissingNonAdmission) {
 		t.Fatalf("lower-cursor non-admission capture = %+v, want explicit progress failure", priorOnly)
 	}
+	wrongAggregateFrame := "data: {\"id\":\"evt_other\",\"type\":\"message.updated\",\"durable\":{\"aggregateID\":\"ses_other\",\"seq\":8,\"version\":1},\"data\":{\"sessionID\":\"ses_other\"}}\n\n"
+	wrongAggregate := nativeOpenCodeCaptureResumeEventMetadata(
+		context.Background(),
+		io.NopCloser(strings.NewReader(admissionFrame+wrongAggregateFrame)),
+		nativeOpenCodeEventCaptureMaximum,
+		"ses_capture",
+		"msg_capture",
+		7,
+	)
+	if !wrongAggregate.admissionObserved || wrongAggregate.nonAdmissionObserved || !errors.Is(wrongAggregate.err, errNativeOpenCodeResumeCaptureMissingNonAdmission) {
+		t.Fatalf("wrong-aggregate non-admission capture = %+v, want explicit progress failure", wrongAggregate)
+	}
 
 	nonAdmissionFrame := "data: {\"id\":\"evt_update\",\"type\":\"message.updated\",\"durable\":{\"aggregateID\":\"ses_capture\",\"seq\":8,\"version\":1},\"data\":{\"sessionID\":\"ses_capture\"}}\n\n"
 	complete := nativeOpenCodeCaptureResumeEventMetadata(
@@ -820,8 +835,8 @@ func TestNativeOpenCodeEndToEndHeadersDropHopByHopFields(t *testing.T) {
 	}
 }
 
-func TestNativeOpenCodeObserverRequestLimitAndCompletionSignal(t *testing.T) {
-	observer := &nativeOpenCodeRepositoryTaskObserver{requestDone: make(chan struct{})}
+func TestNativeOpenCodeObserverRequestLimitRejectsOversizedRequest(t *testing.T) {
+	observer := &nativeOpenCodeRepositoryTaskObserver{}
 	request := &http.Request{
 		Method:        http.MethodPost,
 		URL:           &url.URL{Scheme: "http", Host: "127.0.0.1:1", Path: "/v1/responses"},
@@ -853,8 +868,7 @@ func TestNativeOpenCodeObserverRejectsUpstreamRedirect(t *testing.T) {
 		t.Fatalf("parse upstream URL: %v", err)
 	}
 	observer := &nativeOpenCodeRepositoryTaskObserver{
-		upstream:    upstreamURL,
-		requestDone: make(chan struct{}),
+		upstream: upstreamURL,
 	}
 	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:1/v1/responses", strings.NewReader(`{"model":"gpt-5.6-terra","reasoning":{"effort":"high"}}`))
 	response := httptest.NewRecorder()
@@ -1562,7 +1576,6 @@ type nativeOpenCodeRepositoryTaskObserver struct {
 	baseURL  string
 
 	mu           sync.Mutex
-	requestCount int
 	sawModel     bool
 	sawReasoning bool
 	lastStatus   int
@@ -1858,7 +1871,6 @@ func (observer *nativeOpenCodeRepositoryTaskObserver) handle(response http.Respo
 		return
 	}
 	observer.mu.Lock()
-	observer.requestCount++
 	observer.lastStatus = upstreamResponse.StatusCode
 	observer.sawModel = true
 	observer.mu.Unlock()
@@ -1905,7 +1917,6 @@ func (observer *nativeOpenCodeRepositoryTaskObserver) waitForRequest(ctx context
 	for {
 		observer.mu.Lock()
 		err := observer.err
-		requestCount := observer.requestCount
 		sawModel := observer.sawModel
 		sawReasoning := observer.sawReasoning
 		status := observer.lastStatus
@@ -1914,7 +1925,7 @@ func (observer *nativeOpenCodeRepositoryTaskObserver) waitForRequest(ctx context
 		if err != nil {
 			return err
 		}
-		if requestCount > 0 && sawModel && sawReasoning && status >= 200 && status < 300 {
+		if sawModel && sawReasoning && status >= 200 && status < 300 {
 			return nil
 		}
 		if done == nil {
