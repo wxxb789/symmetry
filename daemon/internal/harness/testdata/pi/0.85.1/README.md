@@ -11,6 +11,10 @@ not prove authenticated native execution or advertise a supported adapter.
   cover compaction or queued-continuation runs.
 - `version.txt` records the observed local CLI version.
 
+Separate [native transport evidence](native-smoke.md) records real Windows and
+Linux `Open/get_state/Close` checks. It does not upgrade these synthetic stream
+fixtures or prove credentialed repository work.
+
 ## RPC profile argument boundary
 
 The argument contract was inspected against upstream `v0.85.1`, commit
