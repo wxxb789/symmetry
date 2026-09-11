@@ -47,3 +47,4 @@ compose.override.yml
 
 # Root contract tooling
 /node_modules/
+/contracts/node_modules/

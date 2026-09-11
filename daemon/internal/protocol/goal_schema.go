@@ -154,5 +154,22 @@ func DecodeDecision(data []byte) (contractdto.SymmetryDecisionV1, error) {
 	if err := contractdto.Decode(contractdto.EnvelopeDecision, data, &decision); err != nil {
 		return contractdto.SymmetryDecisionV1{}, err
 	}
+	options := make(map[string]struct{}, len(decision.Options))
+	for _, option := range decision.Options {
+		if _, duplicate := options[option.ID]; duplicate {
+			return contractdto.SymmetryDecisionV1{}, fmt.Errorf("decision contains duplicate option id %q", option.ID)
+		}
+		options[option.ID] = struct{}{}
+	}
+	if decision.State == contractdto.Resolved {
+		if decision.Resolution == nil {
+			return contractdto.SymmetryDecisionV1{}, fmt.Errorf("resolved decision requires a resolution")
+		}
+		if _, exists := options[decision.Resolution.OptionID]; !exists {
+			return contractdto.SymmetryDecisionV1{}, fmt.Errorf("decision resolution names an unknown option")
+		}
+	} else if decision.Resolution != nil {
+		return contractdto.SymmetryDecisionV1{}, fmt.Errorf("unresolved decision must not contain a resolution")
+	}
 	return decision, nil
 }

@@ -420,10 +420,16 @@ defmodule SymmetryControl.Goals.ContractValidation do
   defp validate_task_result_semantics(task_result) do
     with :ok <- validate_subject_hash(task_result),
          :ok <- validate_task_result_reason(task_result),
-         :ok <- validate_task_result_blocker(task_result) do
+         :ok <- validate_task_result_blocker(task_result),
+         :ok <- validate_task_result_proposal(task_result) do
       :ok
     end
   end
+
+  defp validate_task_result_proposal(%{"kind" => "plan_proposed", "proposal" => proposal}),
+    do: validate_semantics(:plan_proposal, proposal)
+
+  defp validate_task_result_proposal(_task_result), do: :ok
 
   defp validate_task_result_reason(%{"kind" => "failed", "reason" => reason})
        when reason in @task_result_terminal_failure_reasons,
@@ -546,10 +552,20 @@ defmodule SymmetryControl.Goals.ContractValidation do
            ),
          :ok <- ensure_equal(evidence["kind"], source_ref["kind"], :source_ref_kind),
          :ok <- validate_evidence_validator_profile(evidence),
+         :ok <- validate_evidence_verdict(evidence),
          :ok <- validate_evidence_kind_identity(evidence["kind"], source_ref, payload) do
       :ok
     end
   end
+
+  defp validate_evidence_verdict(%{
+         "kind" => "review",
+         "verdict" => verdict,
+         "payload" => payload
+       }),
+       do: ensure_equal(verdict, payload["verdict"], :review_verdict)
+
+  defp validate_evidence_verdict(_evidence), do: :ok
 
   defp validate_evidence_validator_profile(%{
          "validator_profile" => validator_profile,

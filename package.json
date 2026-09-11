@@ -5,12 +5,15 @@
   "packageManager": "pnpm@11.19.0",
   "scripts": {
     "contracts:generate": "node contracts/scripts/generate.mjs",
-    "contracts:check": "node contracts/scripts/check.mjs"
+    "contracts:check": "pnpm contracts:typecheck && pnpm contracts:test && node contracts/scripts/check.mjs && node contracts/scripts/check-effect.mjs",
+    "contracts:typecheck": "tsc --project contracts/tsconfig.json",
+    "contracts:test": "node --test contracts/scripts/*.test.mjs"
   },
   "devDependencies": {
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
     "json-schema-to-typescript": "16.0.0",
-    "quicktype-core": "26.0.0"
+    "quicktype-core": "26.0.0",
+    "typescript": "5.9.3"
   }
 }

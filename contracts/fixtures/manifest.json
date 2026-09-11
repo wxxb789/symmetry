@@ -13,7 +13,13 @@
       "schema": "context-snapshot",
       "path": "valid/context-snapshot.basic.json",
       "valid": true,
-      "tags": ["happy-path", "subject", "trusted-and-untrusted-sources", "context-self-hash", "stable-sections"]
+      "tags": [
+        "happy-path",
+        "subject",
+        "trusted-and-untrusted-sources",
+        "context-self-hash",
+        "stable-sections"
+      ]
     },
     {
       "id": "context-snapshot.plan",
@@ -76,14 +82,25 @@
       "schema": "task-result",
       "path": "valid/task-result.candidate.json",
       "valid": true,
-      "tags": ["happy-path", "candidate-not-acceptance", "candidate-subject", "task-result-subject-hash"]
+      "tags": [
+        "happy-path",
+        "candidate-not-acceptance",
+        "candidate-subject",
+        "task-result-subject-hash"
+      ]
     },
     {
       "id": "task-result.plan-proposed",
       "schema": "task-result",
       "path": "valid/task-result.plan-proposed.json",
       "valid": true,
-      "tags": ["task-result", "plan-proposed", "plan-proposal", "candidate-subject", "task-result-subject-hash"]
+      "tags": [
+        "task-result",
+        "plan-proposed",
+        "plan-proposal",
+        "candidate-subject",
+        "task-result-subject-hash"
+      ]
     },
     {
       "id": "task-result.failed",
@@ -596,7 +613,13 @@
       "schema": "goal-command",
       "path": "invalid/goal-command.request-plan-handoff.json",
       "valid": false,
-      "tags": ["goal-command", "request-plan", "planning", "handoff-session", "unsupported-capability"]
+      "tags": [
+        "goal-command",
+        "request-plan",
+        "planning",
+        "handoff-session",
+        "unsupported-capability"
+      ]
     },
     {
       "id": "goal-command.request-plan-decision",
@@ -645,7 +668,12 @@
       "schema": "goal-command",
       "path": "valid/goal-command.admit-validate-fresh.json",
       "valid": true,
-      "tags": ["goal-command", "server-derived-admission", "validation-task", "purpose-discriminator"]
+      "tags": [
+        "goal-command",
+        "server-derived-admission",
+        "validation-task",
+        "purpose-discriminator"
+      ]
     },
     {
       "id": "goal-command.admit-resume",
@@ -790,7 +818,13 @@
       "schema": "goal-command",
       "path": "invalid/goal-command.handoff-missing-source-run.json",
       "valid": false,
-      "tags": ["goal-command", "session-mode", "handoff-session", "handoff-source-run", "missing-control-field"]
+      "tags": [
+        "goal-command",
+        "session-mode",
+        "handoff-session",
+        "handoff-source-run",
+        "missing-control-field"
+      ]
     },
     {
       "id": "goal-command.fresh-source-run",
@@ -962,6 +996,153 @@
       "path": "invalid/goal-revision.strict-budget-without-hard-limit.json",
       "valid": false,
       "tags": ["strict-budget", "hard-cost-limit", "per-run-cost-limit"]
+    },
+    {
+      "id": "task-result.blocked",
+      "schema": "task-result",
+      "path": "valid/task-result.blocked.json",
+      "valid": true,
+      "tags": ["task-result", "blocker"]
+    },
+    {
+      "id": "task-result.missing-blocker",
+      "schema": "task-result",
+      "path": "invalid/task-result.missing-blocker.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "tags": ["task-result", "blocker", "semantic-consistency"]
+    },
+    {
+      "id": "task-result.unexpected-blocker",
+      "schema": "task-result",
+      "path": "invalid/task-result.unexpected-blocker.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "tags": ["task-result", "blocker", "semantic-consistency"]
+    },
+    {
+      "id": "task-result.proposal-duplicate-predicate",
+      "schema": "task-result",
+      "path": "invalid/task-result.proposal-duplicate-predicate.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "tags": ["task-result", "proposal", "predicate-id-unique", "semantic-consistency"]
+    },
+    {
+      "id": "evidence.review-verdict-mismatch",
+      "schema": "evidence",
+      "path": "invalid/evidence.review-verdict-mismatch.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "tags": ["review", "semantic-consistency"]
+    },
+    {
+      "id": "decision.resolved",
+      "schema": "decision",
+      "path": "valid/decision.resolved.json",
+      "valid": true,
+      "tags": ["decision", "resolution"]
+    },
+    {
+      "id": "decision.superseded",
+      "schema": "decision",
+      "path": "valid/decision.superseded.json",
+      "valid": true,
+      "tags": ["decision", "resolution"]
+    },
+    {
+      "id": "decision.superseded-with-resolution",
+      "schema": "decision",
+      "path": "invalid/decision.superseded-with-resolution.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "tags": ["decision", "semantic-consistency"]
+    },
+    {
+      "id": "decision.duplicate-option",
+      "schema": "decision",
+      "path": "invalid/decision.duplicate-option.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "tags": ["decision", "semantic-consistency"]
+    },
+    {
+      "id": "decision.missing-resolution",
+      "schema": "decision",
+      "path": "invalid/decision.missing-resolution.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "tags": ["decision", "semantic-consistency"]
+    },
+    {
+      "id": "decision.open-with-resolution",
+      "schema": "decision",
+      "path": "invalid/decision.open-with-resolution.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "tags": ["decision", "semantic-consistency"]
+    },
+    {
+      "id": "decision.unknown-option",
+      "schema": "decision",
+      "path": "invalid/decision.unknown-option.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "tags": ["decision", "semantic-consistency"]
+    },
+    {
+      "id": "plan-proposal.same-change-branch",
+      "schema": "plan-proposal",
+      "path": "invalid/plan-proposal.same-change-branch.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "tags": ["change-target", "semantic-consistency"]
+    },
+    {
+      "id": "task-result.proposal-same-change-branch",
+      "schema": "task-result",
+      "path": "invalid/task-result.proposal-same-change-branch.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "tags": ["change-target", "semantic-consistency"]
+    },
+    {
+      "id": "goal-command.plan-same-change-branch",
+      "schema": "goal-command",
+      "path": "invalid/goal-command.plan-same-change-branch.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "tags": ["change-target", "semantic-consistency"]
+    },
+    {
+      "id": "context-snapshot.same-change-branch",
+      "schema": "context-snapshot",
+      "path": "invalid/context-snapshot.same-change-branch.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "tags": ["change-target", "semantic-consistency"]
+    },
+    {
+      "id": "goal-command.decision-plan-same-change-branch",
+      "schema": "goal-command",
+      "path": "invalid/goal-command.decision-plan-same-change-branch.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "tags": ["change-target", "semantic-consistency"]
     },
     {
       "id": "goal-revision.automatic-unlimited-budget",

@@ -1,5 +1,13 @@
 {
   "name": "@symmetry/contracts",
   "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./ts/index.ts"
+  },
+  "dependencies": {
+    "ajv-formats": "3.0.1",
+    "effect": "3.22.1"
+  },
   "version": "0.0.0"
 }

@@ -3,17 +3,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { compile } from "json-schema-to-typescript";
-import {
-  FetchingJSONSchemaStore,
-  InputData,
-  JSONSchemaInput,
-  quicktype
-} from "quicktype-core";
+import { generateEffectSchemas } from "./generate-effect.mjs";
+import { FetchingJSONSchemaStore, InputData, JSONSchemaInput, quicktype } from "quicktype-core";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(SCRIPT_DIR, "../..");
 const V1_DIR = path.join(ROOT_DIR, "contracts", "v1");
 const GENERATED_TS_DIR = path.join(ROOT_DIR, "contracts", "generated", "ts");
+const GENERATED_EFFECT_DIR = path.join(ROOT_DIR, "contracts", "generated", "effect");
 const GENERATED_GO_DIR = path.join(ROOT_DIR, "daemon", "internal", "contracts");
 
 const toPascalCase = (value) =>
@@ -31,7 +28,11 @@ const rewriteCommonRefs = (value) => {
 
   const result = {};
   for (const [key, child] of Object.entries(value)) {
-    if (key === "$ref" && typeof child === "string" && child.startsWith("common.schema.json#/definitions/")) {
+    if (
+      key === "$ref" &&
+      typeof child === "string" &&
+      child.startsWith("common.schema.json#/definitions/")
+    ) {
       result[key] = `#/definitions/${child.slice("common.schema.json#/definitions/".length)}`;
     } else {
       result[key] = rewriteCommonRefs(child);
@@ -54,7 +55,7 @@ const loadSchemas = async () => {
     const schema = rewriteCommonRefs(await readJson(path.join(V1_DIR, file)));
     schema.definitions = {
       ...clone(common.definitions),
-      ...(schema.definitions ?? {})
+      ...(schema.definitions ?? {}),
     };
     schema.definitions = rewriteCommonRefs(schema.definitions);
     schemas.push({ file, key, name: toPascalCase(key), schema });
@@ -66,7 +67,7 @@ const expectedFiles = (schemas) => [
   "index.ts",
   ...schemas.map(({ key }) => `${key}.ts`),
   "generated.go",
-  "schema_bundle.json"
+  "schema_bundle.json",
 ];
 
 const normalizeGoImports = (contents) => {
@@ -76,11 +77,19 @@ const normalizeGoImports = (contents) => {
     if (/^import\s+"[^"]+"$/u.test(line.trim())) imports.push(line.trim());
     else body.push(line);
   }
-  if (imports.length === 0) return body.join("\n").replace(/\n{3,}/gu, "\n\n").trimEnd();
+  if (imports.length === 0)
+    return body
+      .join("\n")
+      .replace(/\n{3,}/gu, "\n\n")
+      .trimEnd();
   const packageIndex = body.findIndex((line) => line.startsWith("package "));
-  if (packageIndex < 0) throw new Error("quicktype Go output did not contain a package declaration");
+  if (packageIndex < 0)
+    throw new Error("quicktype Go output did not contain a package declaration");
   body.splice(packageIndex + 1, 0, "", ...imports, "");
-  return body.join("\n").replace(/\n{3,}/gu, "\n\n").trimEnd();
+  return body
+    .join("\n")
+    .replace(/\n{3,}/gu, "\n\n")
+    .trimEnd();
 };
 
 const formatGo = (contents) =>
@@ -105,9 +114,7 @@ const formatGo = (contents) =>
 // converts it to time.Time, which changes its JSON form on a marshal round-trip
 // and makes canonical hash verification depend on a parsed timestamp.
 const preserveGoWireTimestamps = (contents) =>
-  contents
-    .replace(/^import "time"\n\n/mu, "")
-    .replace(/\btime\.Time\b/gu, "string");
+  contents.replace(/^import "time"\n\n/mu, "").replace(/\btime\.Time\b/gu, "string");
 
 // Quicktype flattens the ExecutionPolicy oneOf branches and can lose the
 // top-level nullable Microusd alternatives. Keep those wire-nullable fields as
@@ -115,7 +122,7 @@ const preserveGoWireTimestamps = (contents) =>
 const preserveGoNullableMicrousd = (contents) =>
   contents.replace(
     /^(\s*)(BudgetLimitMicrousd|PerRunCostLimitMicrousd)(\s+)string(\s+`json:[^`]+`)/gmu,
-    "$1$2$3*string$4"
+    "$1$2$3*string$4",
   );
 
 // json-schema-to-typescript preserves the Draft 7 allOf validation shape for
@@ -159,7 +166,7 @@ const canonicalize = (value) => {
   return Object.fromEntries(
     Object.keys(value)
       .sort()
-      .map((key) => [key, canonicalize(value[key])])
+      .map((key) => [key, canonicalize(value[key])]),
   );
 };
 
@@ -186,8 +193,8 @@ const assertNoUnexpectedGeneratedFiles = async (schemas, check) => {
   const files = [
     ...(await fs.readdir(GENERATED_TS_DIR).catch(() => [])),
     ...(await fs.readdir(GENERATED_GO_DIR).catch(() => [])).filter(
-      (file) => file === "generated.go" || file === "schema_bundle.json"
-    )
+      (file) => file === "generated.go" || file === "schema_bundle.json",
+    ),
   ];
   const unexpected = files.filter((file) => !expected.has(file));
   if (unexpected.length > 0) {
@@ -201,13 +208,15 @@ const generate = async (check = false) => {
     throw new Error(`expected 11 v1 envelope schemas, found ${schemas.length}`);
   }
 
+  const effectFiles = generateEffectSchemas(schemas);
+
   const generatedTypes = [];
   for (const { key, name, schema } of schemas) {
     const types = await compile(schema, name, {
       bannerComment: "/* Code generated by contracts/scripts/generate.mjs; DO NOT EDIT. */",
       format: true,
       style: { bracketSpacing: true },
-      strictIndexSignatures: true
+      strictIndexSignatures: true,
     });
     const contents = key === "admission" ? preserveAdmissionSessionDiscriminator(types) : types;
     generatedTypes.push({ key, contents: contents.endsWith("\n") ? contents : `${contents}\n` });
@@ -216,7 +225,7 @@ const generate = async (check = false) => {
   const indexContents = [
     "/* Code generated by contracts/scripts/generate.mjs; DO NOT EDIT. */",
     ...schemas.map(({ key, name }) => `export type { Symmetry${name}V1 } from \"./${key}.js\";`),
-    ""
+    "",
   ].join("\n");
 
   const schemaInput = new JSONSchemaInput(new FetchingJSONSchemaStore());
@@ -230,36 +239,52 @@ const generate = async (check = false) => {
     lang: "go",
     rendererOptions: {
       package: "contracts",
-      "just-types-and-package": "true"
-    }
+      "just-types-and-package": "true",
+    },
   });
   const normalizedGo = preserveGoNullableMicrousd(
-    preserveGoWireTimestamps(normalizeGoImports(goResult.lines.join("\n")))
+    preserveGoWireTimestamps(normalizeGoImports(goResult.lines.join("\n"))),
   );
-  const goContents = await formatGo([
-    "// Code generated by contracts/scripts/generate.mjs; DO NOT EDIT.",
-    "",
-    normalizedGo,
-    ""
-  ].join("\n"));
+  const goContents = await formatGo(
+    [
+      "// Code generated by contracts/scripts/generate.mjs; DO NOT EDIT.",
+      "",
+      normalizedGo,
+      "",
+    ].join("\n"),
+  );
   const schemaBundleContents = `${JSON.stringify(
     Object.fromEntries(schemas.map(({ file, schema }) => [file, canonicalize(schema)])),
     null,
-    2
+    2,
   )}\n`;
 
   for (const { key, contents } of generatedTypes) {
     await writeOrCheck(path.join(GENERATED_TS_DIR, `${key}.ts`), contents, check);
   }
   await writeOrCheck(path.join(GENERATED_TS_DIR, "index.ts"), indexContents, check);
+  for (const { fileName, contents } of effectFiles) {
+    await writeOrCheck(path.join(GENERATED_EFFECT_DIR, fileName), contents, check);
+  }
+  const expectedEffect = new Set(effectFiles.map(({ fileName }) => fileName));
+  for (const file of await fs.readdir(GENERATED_EFFECT_DIR)) {
+    if (expectedEffect.has(file)) continue;
+    if (check) throw new Error(`unexpected generated Effect file: ${file}`);
+    if (file.endsWith(".ts")) await fs.unlink(path.join(GENERATED_EFFECT_DIR, file));
+  }
   await writeOrCheck(path.join(GENERATED_GO_DIR, "generated.go"), goContents, check);
-  await writeOrCheck(path.join(GENERATED_GO_DIR, "schema_bundle.json"), schemaBundleContents, check);
+  await writeOrCheck(
+    path.join(GENERATED_GO_DIR, "schema_bundle.json"),
+    schemaBundleContents,
+    check,
+  );
   await assertNoUnexpectedGeneratedFiles(schemas, check);
 
   if (!check) {
     const expectedTs = new Set(["index.ts", ...generatedTypes.map(({ key }) => `${key}.ts`)]);
     for (const file of await fs.readdir(GENERATED_TS_DIR)) {
-      if (file.endsWith(".ts") && !expectedTs.has(file)) await fs.unlink(path.join(GENERATED_TS_DIR, file));
+      if (file.endsWith(".ts") && !expectedTs.has(file))
+        await fs.unlink(path.join(GENERATED_TS_DIR, file));
     }
   }
 };

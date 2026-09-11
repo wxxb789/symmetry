@@ -457,7 +457,7 @@ func validateProviderScope(value any) error {
 			return fmt.Errorf("scoped resource %q has no operation set", resourceID)
 		}
 	}
-	return nil
+	return validateProviderChangeTarget(scope["change_target"])
 }
 
 func validateGoalCreatePredicateIDs(value any) error {
@@ -481,7 +481,10 @@ func validateContextSnapshotPredicateIDs(value any) error {
 	if !ok {
 		return fmt.Errorf("work_contract must be an object")
 	}
-	return validateAcceptancePredicateIDs(workContract["acceptance"])
+	if err := validateAcceptancePredicateIDs(workContract["acceptance"]); err != nil {
+		return err
+	}
+	return validateProviderChangeTarget(workContract["change_target"])
 }
 
 func validateGoalCommandPredicateIDs(value any) error {
@@ -543,6 +546,23 @@ func validatePlanProposalPredicateIDs(value any) error {
 		if err := validateAcceptancePredicateIDs(item["acceptance"]); err != nil {
 			return fmt.Errorf("plan item %d: %w", index, err)
 		}
+		if err := validateProviderChangeTarget(item["change_target"]); err != nil {
+			return fmt.Errorf("plan item %d: %w", index, err)
+		}
+	}
+	return nil
+}
+
+func validateProviderChangeTarget(value any) error {
+	if value == nil {
+		return nil
+	}
+	target, ok := value.(map[string]any)
+	if !ok {
+		return fmt.Errorf("provider change target must be an object")
+	}
+	if target["kind"] == "branches" && target["source_branch"] == target["target_branch"] {
+		return fmt.Errorf("provider change target source_branch and target_branch must differ")
 	}
 	return nil
 }

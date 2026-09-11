@@ -90,10 +90,62 @@ Validate every schema, fixture expectation and generated-file drift with:
 pnpm contracts:check
 ```
 
-The root `pnpm-lock.yaml` pins `ajv`, `ajv-formats`,
-`json-schema-to-typescript` and `quicktype-core`. These files describe only
+The root `pnpm-lock.yaml` pins `ajv`, `ajv-formats`, Effect 3,
+TypeScript, `json-schema-to-typescript` and `quicktype-core`. These files describe only
 the additive v1 envelopes; legacy protocol-v1 wire behavior remains owned by
 its existing clients and schemas.
+
+## Effect Boundary API
+
+`@symmetry/contracts` exposes reusable Effect 3 decoders from `ts/index.ts`.
+This package is independent of the frontend application. Its source entry point
+is usable by the future Vite build and by the Node 24 contract tooling.
+
+Each of the 11 envelope decoders has two entry points:
+
+```ts
+import { Effect } from "effect";
+import { Admission } from "@symmetry/contracts";
+
+// Decode the raw body before JSON parsing can round a numeric token.
+const bytes = new Uint8Array(await response.arrayBuffer());
+const admission = await Effect.runPromise(Admission.decodeJson(bytes));
+
+// For an already parsed JSON value, structural and semantic validation still apply.
+const checked = Admission.decodeUnknown(value);
+```
+
+`decodeJson` accepts a string or UTF-8 bytes and rejects malformed UTF-8,
+noncanonical numeric lexemes and invalid JSON. Both entry points reject invalid
+structure, unpaired surrogates, and inconsistent hashes or cross-field values.
+The error channel distinguishes `WireJsonError`, Effect `ParseError`, and
+`SemanticError`. A caller that already parsed a rounded number cannot recover
+its original lexeme; use `decodeJson` at an HTTP body boundary.
+
+`generated/effect/index.ts` is generated from the canonical schemas alongside
+the existing TS and Go DTOs. It contains native Effect Schema graphs, with
+explicit handling of strict/open objects, `allOf`, exclusive `oneOf`, `not`,
+array bounds, Unicode code-point lengths and local references. Unknown
+validation keywords stop generation. The date-time primitive reuses the same
+`ajv-formats` matcher as the fixture oracle; envelope decoding uses Effect.
+
+Generated named type guards connect each complete graph to its existing DTO.
+They provide a runtime-checked type boundary, not a compiler proof that the two
+representations are equivalent. Compile-time tests preserve the public DTO,
+tuple and discriminator behavior; runtime tests verify the narrowing constraints.
+The wire values are preserved, including nullable fields, omitted optional
+fields, timestamps and decimal-string money. Decoding never applies defaults or
+grants server authority.
+
+`ts/semantics.ts` and `ts/wire-json.ts` own the shared cross-field/hash and raw
+JSON rules. Both the AJV oracle and public Effect decoders use them. The fixture
+runner sends every manifest fixture through `decodeJson`, including fixtures
+rejected before ordinary JSON parsing, and separately checks structural results.
+
+`pnpm contracts:check` runs strict TypeScript checking, boundary/generator tests,
+both fixture runners and generated-file drift checks. The smaller checks are
+also available as `pnpm contracts:typecheck` and `pnpm contracts:test`. The
+existing CI contract job executes the combined gate.
 
 ## Elixir Boundary API
 
