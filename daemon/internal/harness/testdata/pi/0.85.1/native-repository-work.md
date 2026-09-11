@@ -1,30 +1,28 @@
 # Pi 0.85.1 native repository-work evidence
 
-Observed on 2026-09-11 at source revision
-`09b5eb32e99d8ff9e74c9874dfb400339db8a929`. The tracked source was clean during
-these native runs. The user's untracked mise configuration was not consumed by
-the isolated native process or included in this revision.
+**Receipt status: post-commit native receipt complete.** The source binding is
+the exact parent commit `8150d5b43cb6e5258cd15f6be7d42518e1504286`. Both Linux
+and Windows focused runs below used that source revision. This receipt remains
+bounded native evidence and does not complete Goal 0006.
+
+## Run Receipt
 
 Test: `daemon/internal/harness/pi/adapter_native_work_test.go`,
-`TestNativeRepositoryTask`. SHA-256 of the executed test-file bytes:
-`cf7f75aa7c26a2d17f83c7bc3294280e039b825a56810baaafedaf5df98507da`.
+`TestNativeRepositoryTask`.
 
-| Environment | Result | Test duration |
-| --- | --- | --- |
-| Windows amd64, mise Pi 0.85.1 standalone executable | PASS | 14.76s |
-| Linux amd64, Docker `golang:1.27.0-bookworm`, Pi 0.85.1 standalone executable | PASS | 8.08s |
+| Item | Value |
+| --- | --- |
+| Final source revision | `8150d5b43cb6e5258cd15f6be7d42518e1504286` |
+| Test-file SHA-256 at final revision | `e99001ea0fbb15c1db9c3d0da6e1364c48fd1edb142f236aef6604e633587194` |
+| Adapter-file SHA-256 | `aff3c3e72fd223b812dfc6df0c92c809f6b2c52bf15b8ca71a8053ead522032a` |
+| Windows test | PASS after final commit, 9.24s focused test (10.838s Go package total) |
+| Linux test | PASS after final commit, approximately 1.45s |
 
-Windows executable SHA-256:
-`2d4d351da30bfe23a473032e66a571b238763565aa93754e74f4a939de13f195`.
-Linux archive `pi-linux-x64.tar.gz` SHA-256:
-`494e498f47d74d21f40b3386f6a5e921a3d49531a169cab55bbdaca0ea1fe25a`.
-Linux image ID:
-`sha256:ded31c68586d2e49e760acc2e65a884b23d032e9bbbed0ae0c55abd3fcaf4452`.
+The test and adapter hashes are the exact source bytes at the final commit.
 
 ## Reproduction
 
-From `daemon/`, configure the opt-in and isolated loopback mode described in
-[README.md](README.md#opt-in-repository-task):
+From `daemon/`, configure the opt-in loopback mode:
 
 ```text
 SYMMETRY_PI_NATIVE_REPOSITORY_TASK=1
@@ -34,42 +32,64 @@ SYMMETRY_PI_NATIVE_REPOSITORY_TASK_MODEL=gpt-5.6-terra
 SYMMETRY_PI_NATIVE_REPOSITORY_TASK_BASE_URL=http://127.0.0.1:4141/v1
 ```
 
-Leave `SYMMETRY_PI_NATIVE_REPOSITORY_TASK_CREDENTIAL_ENV` unset, then run:
+Leave `SYMMETRY_PI_NATIVE_REPOSITORY_TASK_CREDENTIAL_ENV` unset. The focused
+command is:
 
 ```text
 go test ./internal/harness/pi -run '^TestNativeRepositoryTask$' -count=1 -v -timeout 150s
 ```
 
-Linux used a disposable container with the repository mounted at `/repo` and
-working directory `/repo/daemon`. A container-local loopback reverse proxy
-forwarded to `host.docker.internal:4141`; no host port was published. The proxy
-was stopped with the container. Its startup readiness probe retried an initial
-connection refusal before the test started; the test itself ran once.
+Windows used the real Pi 0.85.1 standalone executable. Linux used the upstream
+`v0.85.1` `pi-linux-x64.tar.gz` asset in a disposable `golang:1.27` container.
+The Linux container used `--init`, mounted the repository at `/repo`, and ran
+from `/repo/daemon`. The container built and started the deterministic
+`loopback-responses-gateway` from
+`.symmetry/native-linux-tools/loopback-responses-gateway.go`; it listened only
+on container-local `127.0.0.1:4141`. No host port was published, no
+`host.docker.internal` proxy was used, and the gateway makes no outbound or
+upstream requests.
 
-Both runs requested `gpt-5.6-terra` with `high` through `openai-responses`.
-Served model/effort, gateway upstream authentication and provider accounting
-were not independently attested. No user credential or global Pi configuration
-was copied or changed. The fixed dummy API key is not a credential.
+## Artifact Provenance
 
-## Proven Scope
+| Artifact | Provenance |
+| --- | --- |
+| Windows Pi executable | Pi 0.85.1 standalone executable, SHA-256 `2d4d351da30bfe23a473032e66a571b238763565aa93754e74f4a939de13f195` |
+| Linux Pi archive | Upstream release `v0.85.1`, asset `pi-linux-x64.tar.gz`, SHA-256 `494e498f47d74d21f40b3386f6a5e921a3d49531a169cab55bbdaca0ea1fe25a` |
+| Linux test image | `golang:1.27`, inspected image ID `sha256:512690a5660563b57d37ecc31129e7f136e831db2aed24a1dbeb8ad7380dc0fa` |
 
-The production adapter starts the real binary, records process and native
-session identities before the turn, observes decoded native frames, receives
-prompt acknowledgement and waits for native settlement. The test asserts one
-`session_started` event and one strict semantic result. Required empty result
-arrays survive cloning. The result's Subject binds the isolated repository's
-baseline; it is not an acceptance receipt for the Symmetry source revision.
+The reported runs requested provider `symmetry-native-loopback`, model
+`gpt-5.6-terra`, API `openai-responses`, and thinking level `high`. The
+loopback path writes a fixed dummy key into isolated Pi configuration; it does
+not copy a user credential or read the user's Pi configuration files. The
+gateway is deterministic and container-local, binds only to numeric loopback,
+and has outbound/upstream forwarding disabled.
 
-The native turn writes the exact requested artifact bytes. HEAD remains
-unchanged, and Git status including ignored paths contains only that artifact.
-The bounded `Close/Wait` reports termination without sink, output, containment
-or termination errors. `OutputTruncated=true` marks the runner's explicit
-termination barrier after semantic settlement, not a complete output drain.
+## Observed Contract
 
-## Limits
+The production adapter starts the real Pi binary, persists process and native
+session identity before exposing the session, performs `Open`, acknowledges one
+native prompt, waits for native settlement, and emits one strict semantic
+result. The task writes the exact requested artifact bytes into an isolated
+temporary repository. Pi leaves `HEAD` unchanged and the final Git status,
+including ignored paths, contains only that artifact. `Close/Wait` reaches the
+bounded termination barrier; `OutputTruncated=true` means the runner closed its
+delivery barrier after semantic settlement, not that an uncooperative sink was
+fully drained.
 
-This is one fresh native turn, not retained resume, crash recovery, cancellation
-during work, handoff, decision resolution, daemon/Control/PostgreSQL integration
-or accepted work. The isolated repository is not an OS security sandbox. These
-runs do not promote release capabilities or complete Goal 0006. The earlier
-[transport-only evidence](native-smoke.md) remains a separate historical record.
+The repository Subject binds the temporary repository baseline. It is not an
+acceptance receipt for this Symmetry source revision, and the progress result
+is not accepted work or an achieved Goal.
+
+## Explicit Non-Claims
+
+This receipt does **not** prove or promote:
+
+- the served model or effort, gateway upstream authentication, or provider accounting;
+- credentialed production-provider support or Pi release capabilities;
+- cancellation during work, crash or power-loss recovery, handoff, or external-effect exactly-once behavior;
+- daemon admission, workspace-fingerprint ownership, journal recovery, fencing, or Control/PostgreSQL durability;
+- a Control integration test or an end-to-end Goal 0006 acceptance;
+- completion of Goal 0006.
+
+The isolated repository is a test target, not an OS security sandbox. The
+separate retained-resume receipt is required for its distinct recovery claim.
