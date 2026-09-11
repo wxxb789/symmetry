@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -302,28 +303,48 @@ func TestClientRejectsNonSuccessAPIStatus(t *testing.T) {
 }
 
 func TestClientRejectsUnverifiedPeerBeforeWritingHTTPOrBasicAuth(t *testing.T) {
-	var requests atomic.Int32
-	server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
-		requests.Add(1)
-		writer.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(writer, `{"healthy":true}`)
-	})
+	cause := errors.New("peer identity unavailable")
+	assertRejectedConnectionHasNoBytes(t, func(context.Context, net.Conn) error { return cause }, cause)
+}
+
+func assertRejectedConnectionHasNoBytes(t *testing.T, verifier ConnectionVerifier, cause error) {
+	t.Helper()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	received := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			received <- err
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+		var bytes [1]byte
+		n, err := conn.Read(bytes[:])
+		if n != 0 || !errors.Is(err, io.EOF) {
+			received <- fmt.Errorf("rejected peer received %d bytes, read error %v; want zero bytes and EOF", n, err)
+			return
+		}
+		received <- nil
+	}()
 	client, err := NewClient(Config{
-		BaseURL:  server.URL,
-		Username: "opencode",
-		Password: "secret",
-		VerifyConnection: func(context.Context, net.Conn) error {
-			return errors.New("peer identity unavailable")
-		},
+		BaseURL:          "http://" + listener.Addr().String(),
+		Username:         "opencode",
+		Password:         "secret",
+		VerifyConnection: verifier,
 	})
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
-	if err := client.Health(context.Background()); !errors.Is(err, ErrPeerOwnership) {
-		t.Fatalf("Health() error = %v, want ErrPeerOwnership", err)
+	if err := client.Health(context.Background()); !errors.Is(err, ErrPeerOwnership) || cause != nil && !errors.Is(err, cause) {
+		t.Errorf("Health() error = %v, want ErrPeerOwnership and verifier cause", err)
 	}
-	if got := requests.Load(); got != 0 {
-		t.Fatalf("server received %d HTTP requests; verifier must fail before request bytes", got)
+	if err := <-received; err != nil {
+		t.Fatal(err)
 	}
 }
 

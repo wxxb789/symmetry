@@ -15,12 +15,19 @@ var getProcessTimes = kernel32.NewProc("GetProcessTimes")
 // ProcessIdentity returns a persistent identity made from a PID and the
 // creation FILETIME reported by Windows. A recycled PID has a new FILETIME.
 func ProcessIdentity(pid int) (string, error) {
-	process, err := syscall.OpenProcess(processQueryLimitedInformation, false, uint32(pid))
+	process, err := openProcessForIdentity(pid, 0)
 	if err != nil {
 		return "", fmt.Errorf("open process for creation time: %w", err)
 	}
 	defer syscall.CloseHandle(process)
+	return processIdentityFromHandle(pid, process)
+}
 
+func openProcessForIdentity(pid int, additionalAccess uint32) (syscall.Handle, error) {
+	return syscall.OpenProcess(processQueryLimitedInformation|additionalAccess, false, uint32(pid))
+}
+
+func processIdentityFromHandle(pid int, process syscall.Handle) (string, error) {
 	var creationTime syscall.Filetime
 	var exitTime syscall.Filetime
 	var kernelTime syscall.Filetime

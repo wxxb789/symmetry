@@ -71,7 +71,7 @@ func NewClient(config Config) (*Client, error) {
 			}
 			if err := config.VerifyConnection(ctx, connection); err != nil {
 				_ = connection.Close()
-				return nil, fmt.Errorf("%w: %v", ErrPeerOwnership, err)
+				return nil, fmt.Errorf("%w: %w", ErrPeerOwnership, err)
 			}
 			return connection, nil
 		}

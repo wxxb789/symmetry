@@ -20,6 +20,7 @@ import (
 
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
+	"github.com/wxxb789/symmetry/daemon/internal/platform"
 )
 
 const (
@@ -93,8 +94,10 @@ func newCredentials() (string, string, error) {
 
 type peerVerifierFactory func(pid int, identity string) ConnectionVerifier
 
-func unavailablePeerVerifier(int, string) ConnectionVerifier {
-	return func(context.Context, net.Conn) error { return ErrPeerOwnership }
+func ownedPeerVerifier(pid int, identity string) ConnectionVerifier {
+	return func(ctx context.Context, conn net.Conn) error {
+		return platform.VerifyLoopbackTCPPeer(ctx, conn, pid, identity)
+	}
 }
 
 // Adapter launches an owned, local OpenCode serve process. It is intentionally
@@ -118,7 +121,7 @@ func NewAdapter(executables ...string) *Adapter {
 	if len(executables) > 0 && strings.TrimSpace(executables[0]) != "" {
 		executable = executables[0]
 	}
-	return newAdapter(executable, nil, runnerProcessStarter, newAPI, newCredentials, unavailablePeerVerifier)
+	return newAdapter(executable, nil, runnerProcessStarter, newAPI, newCredentials, ownedPeerVerifier)
 }
 
 // NewAdapterWithRunner supplies deterministic executable probing while keeping
@@ -127,7 +130,7 @@ func NewAdapterWithRunner(executable string, runner CommandRunner) *Adapter {
 	if strings.TrimSpace(executable) == "" {
 		executable = DefaultExecutable
 	}
-	return newAdapter(executable, runner, runnerProcessStarter, newAPI, newCredentials, unavailablePeerVerifier)
+	return newAdapter(executable, runner, runnerProcessStarter, newAPI, newCredentials, ownedPeerVerifier)
 }
 
 func newAdapter(executable string, runner CommandRunner, start processStarter, apiFactory apiFactory, credentials credentialFactory, peerVerifier peerVerifierFactory) *Adapter {
@@ -617,7 +620,7 @@ func (session *nativeSession) waitForHealth(ctx context.Context, client api) err
 }
 
 func retryableHealthError(err error) bool {
-	return !errors.Is(err, ErrInvalidConfig) && !errors.Is(err, ErrUnexpectedStatus) && !errors.Is(err, ErrMalformedResponse) && !errors.Is(err, ErrInvalidHealth)
+	return !errors.Is(err, ErrPeerOwnership) && !errors.Is(err, ErrInvalidConfig) && !errors.Is(err, ErrUnexpectedStatus) && !errors.Is(err, ErrMalformedResponse) && !errors.Is(err, ErrInvalidHealth)
 }
 
 // StartTurn opens the per-session durable stream before it admits one prompt.

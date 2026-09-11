@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -164,6 +165,28 @@ func TestOpenFailureClosesAndBecomesSticky(t *testing.T) {
 	_, second := session.(harness.StagedSession).Open(context.Background())
 	if second == nil || api.createCalls != 0 || process.terminateCalls != 1 {
 		t.Fatalf("second Open() error = %v create=%d terminate=%d", second, api.createCalls, process.terminateCalls)
+	}
+}
+
+func TestOpenPeerOwnershipFailureDoesNotRetryHealth(t *testing.T) {
+	process := newFakeProcess()
+	api := &fakeAPI{healthErr: fmt.Errorf("verify socket: %w", ErrPeerOwnership)}
+	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
+		return process, nil
+	}, api)
+	session, err := adapter.Start(context.Background(), startRequest(t), &recordingSink{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err = session.(harness.StagedSession).Open(ctx)
+	if !errors.Is(err, ErrPeerOwnership) || ctx.Err() != nil || api.healthCalls != 1 || api.createCalls != 0 {
+		t.Fatalf("Open() = %v; context=%v health=%d create=%d", err, ctx.Err(), api.healthCalls, api.createCalls)
+	}
+	if process.terminateCalls != 1 {
+		t.Fatalf("ownership rejection terminated process %d times, want 1", process.terminateCalls)
 	}
 }
 
