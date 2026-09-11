@@ -97,6 +97,9 @@ func TestRetentionWriteFailureNeverPreventsCancellationOrLeaseFencing(t *testing
 				t.Fatalf("fencing failed: journal=%#v active=%#v terminations=%d retention attempts=%d", journal, active, process.terminations, retentionAttempts)
 			}
 			if scenario == "cancel" {
+				app.waitForRun(key)
+				app.flushCleanups(context.Background())
+				journal = supervisoryJournal(t, app, key)
 				if err := app.flushRun(context.Background(), journal); err != nil {
 					t.Fatal(err)
 				}

@@ -3405,6 +3405,7 @@ func TestOwnershipLossReleasesActiveSlotAfterProcessStops(t *testing.T) {
 	}
 	close(process.exit)
 	daemon.workers.Wait()
+	daemon.flushCleanups(context.Background())
 	if process.terminations != 1 {
 		t.Fatalf("Terminate calls = %d, want 1", process.terminations)
 	}
@@ -3823,13 +3824,10 @@ func TestRunRetriesReconcileWithBackoffWithoutNotifications(t *testing.T) {
 	if _, err := store.SetLocalState(key, "running"); err != nil {
 		t.Fatal(err)
 	}
-	persisted, err := store.LoadJournal(key)
+	persisted, err := store.SetProcessDetails(key, 99, "test:99", time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
-	persisted.PID = 99
-	persisted.ProcessIdentity = "test:99"
-	persisted.StartedAt = time.Now().UTC()
 	persisted.WorkspacePath = "C:\\workspace"
 	persisted.WorkspaceBindingKey = "local"
 	if err := store.SaveJournal(persisted); err != nil {
@@ -6092,6 +6090,7 @@ func TestCancelWinsCompletionAndFlushesAcknowledgement(t *testing.T) {
 		slots: slots,
 	}
 	daemon.waitForRun(key)
+	daemon.flushCleanups(context.Background())
 	journal, err := store.LoadJournal(key)
 	if err != nil {
 		t.Fatal(err)

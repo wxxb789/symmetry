@@ -64,10 +64,10 @@ type processStarter func(context.Context, execution.Invocation, execution.Sink) 
 
 func runnerProcessStarter(ctx context.Context, invocation execution.Invocation, sink execution.Sink) (nativeProcess, error) {
 	process, err := execution.NewRunner().Start(ctx, invocation, sink)
-	if err != nil {
+	if process == nil {
 		return nil, err
 	}
-	return process, nil
+	return process, err
 }
 
 type api interface {
@@ -265,21 +265,23 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 		PersistProcess: request.PersistProcess,
 	}
 	process, err := adapter.startProcess(sessionContext, invocation, execution.SinkFunc(session.handleProcessOutput))
-	if err != nil {
-		cancelEvents()
-		cancel()
-		return nil, fmt.Errorf("start OpenCode serve: %w", err)
-	}
 	if isNilNativeProcess(process) {
 		cancelEvents()
 		cancel()
+		if err != nil {
+			return nil, fmt.Errorf("start OpenCode serve: %w", err)
+		}
 		return nil, errNilNativeProcess
 	}
 	session.mu.Lock()
 	session.process = process
+	if err != nil {
+		err = fmt.Errorf("start OpenCode serve: %w", err)
+		session.openErr = err
+	}
 	session.mu.Unlock()
 	go session.watchProcess(process)
-	return session, nil
+	return session, err
 }
 
 func unsupportedCapability(capability harness.Capability, reason string) error {

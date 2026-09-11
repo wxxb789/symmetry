@@ -78,10 +78,10 @@ type processStarter func(context.Context, execution.Invocation, execution.Sink) 
 
 func runnerProcessStarter(ctx context.Context, invocation execution.Invocation, sink execution.Sink) (nativeProcess, error) {
 	process, err := execution.NewRunner().Start(ctx, invocation, sink)
-	if err != nil {
+	if process == nil {
 		return nil, err
 	}
-	return process, nil
+	return process, err
 }
 
 // Adapter is private integration work for pi RPC. Probe remains fail-closed;
@@ -183,12 +183,11 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 		PersistProcess: request.PersistProcess,
 	}
 	process, err := adapter.startProcess(processContext, invocation, execution.SinkFunc(session.handleProcessOutput))
-	if err != nil {
-		cancel()
-		return nil, err
-	}
 	if isNilNativeProcess(process) {
 		cancel()
+		if err != nil {
+			return nil, err
+		}
 		return nil, errNativeProcessNil
 	}
 
@@ -200,14 +199,18 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 	session.preReadyEvents = nil
 	session.preReadyBytes = 0
 	session.mutex.Unlock()
+	if err != nil {
+		session.outputMutex.Unlock()
+		session.fail(err)
+		go session.watchProcess()
+		return session, err
+	}
 	for _, event := range queued {
 		if err := session.handleProcessOutputLocked(processContext, event); err != nil {
 			session.outputMutex.Unlock()
-			cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), processCleanupTimeout)
-			_ = process.Terminate(cleanupContext, 0)
-			cleanupCancel()
-			cancel()
-			return nil, err
+			session.fail(err)
+			go session.watchProcess()
+			return session, err
 		}
 	}
 	session.outputMutex.Unlock()
@@ -215,11 +218,8 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 	startFailure := session.failure
 	session.mutex.Unlock()
 	if startFailure != nil {
-		cleanupContext, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), processCleanupTimeout)
-		_ = process.Terminate(cleanupContext, 0)
-		cleanupCancel()
-		cancel()
-		return nil, startFailure
+		go session.watchProcess()
+		return session, startFailure
 	}
 	go session.watchProcess()
 	return session, nil

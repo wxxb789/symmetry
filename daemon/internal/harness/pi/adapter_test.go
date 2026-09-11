@@ -97,6 +97,78 @@ func TestAdapterStagesPiRPCAndRequiresSettledExplicitTaskResult(t *testing.T) {
 	}
 }
 
+func TestStartRetainsProcessOwnerWhenRunnerReturnsError(t *testing.T) {
+	process := newFakeNativeProcess()
+	want := errors.New("persist process failed after commit")
+	adapter := &Adapter{
+		executable: "pi-test",
+		startProcess: func(_ context.Context, _ execution.Invocation, sink execution.Sink) (nativeProcess, error) {
+			process.sink = sink
+			return process, want
+		},
+	}
+	sink := &recordingHarnessSink{}
+	started, err := adapter.Start(context.Background(), harness.StartRequest{Workspace: t.TempDir()}, sink)
+	if !errors.Is(err, want) {
+		t.Fatalf("Start() error = %v, want runner failure", err)
+	}
+	session, ok := started.(*nativeSession)
+	if !ok {
+		t.Fatalf("Start() session = %T, want retained *nativeSession", started)
+	}
+	if pid, identity := session.ProcessDetails(); pid != 42 || identity != "test:42" {
+		t.Fatalf("ProcessDetails() = (%d, %q), want returned process identity", pid, identity)
+	}
+	if _, err := session.Open(context.Background()); !errors.Is(err, want) {
+		t.Fatalf("Open() error = %v, want retained start failure", err)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if _, err := session.Wait(context.Background()); err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+	if process.terminateCount() != 1 {
+		t.Fatalf("Terminate calls = %d, want one session-owned cleanup", process.terminateCount())
+	}
+	if len(sink.events) != 0 {
+		t.Fatalf("events = %#v, want no acknowledgement after failed start", sink.events)
+	}
+}
+
+func TestStartRetainsProcessOwnerAfterPreReadyOutputFailure(t *testing.T) {
+	process := newFakeNativeProcess()
+	want := errors.New("durable event sink unavailable")
+	adapter := &Adapter{
+		executable: "pi-test",
+		startProcess: func(_ context.Context, _ execution.Invocation, sink execution.Sink) (nativeProcess, error) {
+			process.sink = sink
+			if err := sink.Handle(context.Background(), execution.Event{Stream: execution.Stdout, Sequence: 1, Data: []byte(`{"type":"agent_start"}` + "\n")}); err != nil {
+				return nil, err
+			}
+			return process, nil
+		},
+	}
+	sink := &recordingHarnessSink{err: want}
+	started, err := adapter.Start(context.Background(), harness.StartRequest{Workspace: t.TempDir()}, sink)
+	if !errors.Is(err, want) {
+		t.Fatalf("Start() error = %v, want pre-ready sink failure", err)
+	}
+	session, ok := started.(*nativeSession)
+	if !ok {
+		t.Fatalf("Start() session = %T, want retained *nativeSession", started)
+	}
+	if _, err := session.Open(context.Background()); !errors.Is(err, want) {
+		t.Fatalf("Open() error = %v, want retained pre-ready failure", err)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if process.terminateCount() != 1 {
+		t.Fatalf("Terminate calls = %d, want one session-owned cleanup", process.terminateCount())
+	}
+}
+
 func TestControlCancelSendsClearQueueBeforeAbortAndNeedsSettlement(t *testing.T) {
 	process := newFakeNativeProcess()
 	adapter := fakePiAdapter(process)

@@ -63,11 +63,28 @@ func TestNativeCloseFailureRetainsProcessEvidenceAndBlocksCleanup(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := daemon.cleanupPending(context.Background(), terminal); err == nil {
-		t.Fatal("cleanupPending() deleted unresolved native recovery evidence")
+	if terminal.LocalState != "terminal_pending" || terminal.TerminalVerdict != state.TerminalVerdictOwnershipLost || !terminal.HasProcessDetails() {
+		t.Fatalf("terminal recovery barrier = %#v", terminal)
 	}
-	if _, err := store.LoadJournal(key); err != nil {
+	if err := daemon.cleanupPending(context.Background(), terminal); err != nil {
+		t.Fatalf("cleanupPending() error = %v, want no-op before cleanup eligibility", err)
+	}
+	if _, err := store.EnterCleanupPending(key); err == nil {
+		t.Fatal("EnterCleanupPending() accepted unresolved native recovery evidence")
+	}
+	journal, err = store.LoadJournal(key)
+	if err != nil {
 		t.Fatalf("run journal was deleted after unresolved native close: %v", err)
+	}
+	if !journal.RetainWorkspace || journal.LocalState != "terminal_pending" || journal.TerminalVerdict != state.TerminalVerdictOwnershipLost || !journal.HasProcessDetails() {
+		t.Fatalf("unresolved native close lost terminal recovery evidence: %#v", journal)
+	}
+	sessionJournal, err = store.LoadGoalSession(sessionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sessionJournal.IsUncertainLaunch() || sessionJournal.SessionState != state.GoalSessionStateUnavailable {
+		t.Fatalf("terminal recovery lost native session barrier: %#v", sessionJournal)
 	}
 }
 
@@ -599,6 +616,16 @@ func (session *closeFailureGoalSession) Wait(context.Context) (harness.TaskResul
 }
 
 func (session *closeFailureGoalSession) Close(context.Context) error { return session.err }
+func (*closeFailureGoalSession) ProcessDetails() (int, string)       { return 71, "native:71" }
+func (*closeFailureGoalSession) Open(context.Context) (harness.NativeSessionHandle, error) {
+	return harness.NativeSessionHandle{}, errors.New("unexpected native open")
+}
+func (*closeFailureGoalSession) StartTurn(context.Context, harness.TurnRequest) error {
+	return errors.New("unexpected native turn")
+}
+func (*closeFailureGoalSession) WaitTurn(context.Context) error {
+	return errors.New("unexpected native turn wait")
+}
 
 func TestGoalUsageOutboxRetriesExactBodyAndBlocksTerminalCleanup(t *testing.T) {
 	store, key := claimedGoalDeliveryStore(t)

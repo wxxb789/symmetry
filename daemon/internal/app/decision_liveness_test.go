@@ -161,6 +161,8 @@ func TestRequiredInvalidDecisionStopsRealBlockedChildBeforeAndAfterAttachment(t 
 					t.Fatal("invalid decision poisoned event outbox")
 				}
 			}
+			app.flushCleanups(ctx)
+			journal = supervisoryJournal(t, app, key)
 			if err := app.flushRun(context.Background(), journal); err != nil {
 				t.Fatal(err)
 			}

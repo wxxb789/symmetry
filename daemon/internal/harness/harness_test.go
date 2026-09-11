@@ -169,6 +169,38 @@ func TestGenericAdapterDoesNotInterpretFakeAgentJSON(t *testing.T) {
 	}
 }
 
+func TestGenericAdapterRetainsProcessOwnerWhenStartFails(t *testing.T) {
+	process := newFakeProcess()
+	want := errors.New("process identity persistence failed")
+	runner := &fakeRunner{process: process, startErr: want}
+	persisted := false
+	session, err := NewGenericAdapter(runner).Start(context.Background(), StartRequest{
+		PersistProcess: func(pid int, identity string) error {
+			persisted = pid == 7 && identity == "created:7"
+			return nil
+		},
+	}, nil)
+	if !errors.Is(err, want) {
+		t.Fatalf("Start() error = %v, want runner failure", err)
+	}
+	if session == nil {
+		t.Fatal("Start() discarded process owner with runner failure")
+	}
+	if runner.invocation.PersistProcess == nil {
+		t.Fatal("Start() did not forward top-level PersistProcess")
+	}
+	if err := runner.invocation.PersistProcess(7, "created:7"); err != nil || !persisted {
+		t.Fatalf("forwarded PersistProcess() = %v, persisted=%v", err, persisted)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	result, waitErr := session.Wait(context.Background())
+	if waitErr != nil || result.Kind != ResultCancelled || !process.wasTerminated() {
+		t.Fatalf("retained failed start result = %#v, error = %v, terminated = %v", result, waitErr, process.wasTerminated())
+	}
+}
+
 func TestGenericSessionCancellationLifecycle(t *testing.T) {
 	process := newFakeProcess()
 	runner := &fakeRunner{process: process}
@@ -293,15 +325,18 @@ func TestGenericAdapterRejectsProviderAccessBeforeProcessStart(t *testing.T) {
 }
 
 type fakeRunner struct {
-	process *fakeProcess
-	sink    execution.Sink
-	starts  int
+	process    *fakeProcess
+	sink       execution.Sink
+	invocation execution.Invocation
+	startErr   error
+	starts     int
 }
 
-func (runner *fakeRunner) Start(_ context.Context, _ execution.Invocation, sink execution.Sink) (ProcessHandle, error) {
+func (runner *fakeRunner) Start(_ context.Context, invocation execution.Invocation, sink execution.Sink) (ProcessHandle, error) {
 	runner.starts++
 	runner.sink = sink
-	return runner.process, nil
+	runner.invocation = invocation
+	return runner.process, runner.startErr
 }
 
 func (runner *fakeRunner) emit(event execution.Event) {

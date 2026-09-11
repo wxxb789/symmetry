@@ -79,11 +79,17 @@ type Invocation struct {
 }
 
 // Runner starts coding-agent process invocations.
-type Runner struct{}
+type Runner struct {
+	configureProcess func(*exec.Cmd) error
+	attachProcess    func(*os.Process) (platform.Containment, string, error)
+}
 
 // NewRunner creates a process runner.
 func NewRunner() Runner {
-	return Runner{}
+	return Runner{
+		configureProcess: platform.ConfigureProcess,
+		attachProcess:    platform.AttachProcess,
+	}
 }
 
 // Process is a running child process. Its fixed-size event queue decouples pipe
@@ -162,6 +168,8 @@ func (result Result) Success() bool {
 // separate readers for stdout and stderr before asynchronously waiting for the
 // command, and cancellation of ctx invokes the same tree termination path as
 // an explicit Terminate call.
+// After a successful OS launch, errors retain a non-nil Process. Callers must
+// keep that owner and consume its final Wait result even when Start fails.
 func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink) (*Process, error) {
 	if ctx == nil {
 		return nil, errors.New("execution context must not be nil")
@@ -203,37 +211,36 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 	command.Stdin = stdinRead
 	command.Stdout = stdoutWrite
 	command.Stderr = stderrWrite
-	platform.ConfigureProcess(command)
+	if err := runner.configure(command); err != nil {
+		closeFiles(stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite)
+		return nil, fmt.Errorf("configure process containment for %q: %w", program, err)
+	}
 
 	startedAt := time.Now().UTC()
 	if err := command.Start(); err != nil {
 		closeFiles(stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite)
 		return nil, fmt.Errorf("start %q: %w", invocation.Program, err)
 	}
-	containment, err := platform.AttachProcess(command.Process.Pid)
+	containment, identity, err := runner.attach(command.Process)
 	if err != nil {
-		closeFiles(stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite)
-		_ = command.Process.Kill()
-		_ = command.Wait()
-		return nil, fmt.Errorf("contain process tree for %q: %w", program, err)
-	}
-	identity, err := platform.ProcessIdentity(command.Process.Pid)
-	if err != nil {
-		_ = containment.Close()
-		closeFiles(stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite)
-		_ = command.Wait()
-		return nil, fmt.Errorf("capture process creation identity: %w", err)
+		attachErr := fmt.Errorf("contain process tree for %q: %w", program, err)
+		return cleanupFailedStart(
+			command,
+			stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
+			containment, identity, startedAt,
+			attachErr,
+			attachErr,
+		)
 	}
 	if invocation.PersistProcess != nil {
 		if persistErr := invocation.PersistProcess(command.Process.Pid, identity); persistErr != nil {
-			terminationErr := containment.Terminate(true)
-			if terminationErr != nil {
-				_ = command.Process.Kill()
-			}
-			_, _ = command.Process.Wait()
-			closeErr := containment.Close()
-			closeFiles(stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite)
-			return nil, errors.Join(fmt.Errorf("persist process identity: %w", persistErr), terminationErr, closeErr)
+			return cleanupFailedStart(
+				command,
+				stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
+				containment, identity, startedAt,
+				fmt.Errorf("persist process identity: %w", persistErr),
+				nil,
+			)
 		}
 	}
 
@@ -241,6 +248,50 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 	// essential: otherwise the readers would never observe EOF.
 	closeFiles(stdinRead, stdoutWrite, stderrWrite)
 
+	process := newProcess(command, sink, containment, identity, startedAt, stdinWrite)
+	process.start(stdoutRead, stderrRead, ctx)
+
+	if len(invocation.InitialInput) > 0 {
+		if err := process.WriteInputContext(ctx, invocation.InitialInput); err != nil {
+			return cleanupAfterInputSetupFailure(process, fmt.Errorf("write initial input: %w", err), "initial input")
+		}
+	}
+	if invocation.CloseInputAfterInitial {
+		if err := process.CloseInput(); err != nil {
+			return cleanupAfterInputSetupFailure(process, fmt.Errorf("close initial input: %w", err), "initial input close")
+		}
+	}
+	return process, nil
+}
+
+// cleanupAfterInputSetupFailure retains the post-start Process even when the
+// bounded termination completes, because PersistProcess may already have
+// committed a marker that its caller must compare-and-clear.
+func cleanupAfterInputSetupFailure(process *Process, inputErr error, operation string) (*Process, error) {
+	terminationContext, cancel := context.WithTimeout(context.Background(), defaultTerminationGrace)
+	terminationErr := process.Terminate(terminationContext, 0)
+	cancel()
+	if terminationErr != nil {
+		return process, errors.Join(inputErr, fmt.Errorf("terminate after %s failure: %w", operation, terminationErr))
+	}
+	return process, inputErr
+}
+
+func (runner Runner) configure(command *exec.Cmd) error {
+	if runner.configureProcess != nil {
+		return runner.configureProcess(command)
+	}
+	return platform.ConfigureProcess(command)
+}
+
+func (runner Runner) attach(process *os.Process) (platform.Containment, string, error) {
+	if runner.attachProcess != nil {
+		return runner.attachProcess(process)
+	}
+	return platform.AttachProcess(process)
+}
+
+func newProcess(command *exec.Cmd, sink Sink, containment platform.Containment, identity string, startedAt time.Time, stdin *os.File) *Process {
 	sinkContext, cancelSink := context.WithCancel(context.Background())
 	process := &Process{
 		PID:              command.Process.Pid,
@@ -250,7 +301,7 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 		containment:      containment,
 		sinkContext:      sinkContext,
 		cancelSink:       cancelSink,
-		stdin:            stdinWrite,
+		stdin:            stdin,
 		stdinWritePermit: make(chan struct{}, 1),
 		events:           make(chan Event, eventQueueCapacity),
 		deliveryDone:     make(chan struct{}),
@@ -264,39 +315,47 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 		},
 	}
 	process.stdinWritePermit <- struct{}{}
+	return process
+}
 
+func (process *Process) start(stdoutRead, stderrRead *os.File, ctx context.Context) {
 	process.readers.Add(2)
 	go process.readOutput(stdoutRead, Stdout)
 	go process.readOutput(stderrRead, Stderr)
 	go process.deliverOutput()
 	go process.waitForCompletion()
 	go process.terminateWhenContextCancels(ctx)
+}
 
-	if len(invocation.InitialInput) > 0 {
-		if err := process.WriteInputContext(ctx, invocation.InitialInput); err != nil {
-			terminationContext, cancel := context.WithTimeout(context.Background(), defaultTerminationGrace)
-			terminationErr := process.Terminate(terminationContext, 0)
-			cancel()
-			writeErr := fmt.Errorf("write initial input: %w", err)
-			if terminationErr != nil {
-				return process, errors.Join(writeErr, fmt.Errorf("terminate after initial input failure: %w", terminationErr))
-			}
-			return nil, writeErr
-		}
-	}
-	if invocation.CloseInputAfterInitial {
-		if err := process.CloseInput(); err != nil {
-			terminationContext, cancel := context.WithTimeout(context.Background(), defaultTerminationGrace)
-			terminationErr := process.Terminate(terminationContext, 0)
-			cancel()
-			closeErr := fmt.Errorf("close initial input: %w", err)
-			if terminationErr != nil {
-				return process, errors.Join(closeErr, fmt.Errorf("terminate after initial input close failure: %w", terminationErr))
-			}
-			return nil, closeErr
-		}
-	}
-	return process, nil
+// cleanupFailedStart hands physical cleanup to Process so an indeterminate
+// shutdown keeps its original process handle and is still reaped by one owner.
+func cleanupFailedStart(
+	command *exec.Cmd,
+	stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite *os.File,
+	containment platform.Containment,
+	identity string,
+	startedAt time.Time,
+	startErr error,
+	containmentErr error,
+) (*Process, error) {
+	// Do not expose pre-persistence output to the caller's sink. The cleanup
+	// Process still drains the pipes and owns the child wait.
+	closeFiles(stdinRead, stdoutWrite, stderrWrite)
+	process := newProcess(
+		command,
+		SinkFunc(func(context.Context, Event) error { return nil }),
+		containment,
+		identity,
+		startedAt,
+		stdinWrite,
+	)
+	process.recordContainmentError(containmentErr)
+	process.start(stdoutRead, stderrRead, context.Background())
+
+	cleanupContext, cancel := context.WithTimeout(context.Background(), defaultTerminationGrace+time.Second)
+	terminationErr := process.Terminate(cleanupContext, 0)
+	cancel()
+	return process, errors.Join(startErr, terminationErr)
 }
 
 // WriteInput appends human input to the agent's standard input. Concurrent
@@ -516,7 +575,7 @@ func (process *Process) waitForCompletion() {
 	_ = process.CloseInput()
 
 	if !process.terminationRequested() {
-		process.recordContainmentError(process.containment.Close())
+		process.closeContainment()
 	}
 
 	process.readers.Wait()
@@ -524,7 +583,7 @@ func (process *Process) waitForCompletion() {
 	<-process.deliveryDone
 	process.cancelSink()
 	if process.terminationRequested() {
-		process.recordContainmentError(process.containment.Close())
+		process.closeContainment()
 	}
 
 	process.terminationMutex.Lock()
@@ -558,7 +617,13 @@ func (process *Process) terminateWhenContextCancels(ctx context.Context) {
 
 func (process *Process) terminateTree(grace time.Duration) {
 	defer close(process.terminationDone)
-	softTerminationError := process.containment.Terminate(false)
+	var softTerminationError error
+	if process.containment != nil {
+		softTerminationError = process.containment.Terminate(false)
+		if softTerminationError != nil && !isUnsupportedOnly(softTerminationError) {
+			process.recordTerminationError(softTerminationError)
+		}
+	}
 
 	if grace > 0 {
 		timer := time.NewTimer(grace)
@@ -576,16 +641,50 @@ func (process *Process) terminateTree(grace time.Duration) {
 		}
 	}
 
+	if process.containment == nil {
+		if err := process.command.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			process.recordTerminationError(err)
+			return
+		}
+		<-process.resultDone
+		return
+	}
+
 	if err := process.containment.Terminate(true); err != nil {
 		// Containment is responsible for descendants, but it must not be the
 		// sole termination mechanism for the root process. Otherwise a failed
 		// job/task-kill leaves command.Wait blocked forever after a failed
 		// initial-input cleanup path.
 		killErr := process.command.Process.Kill()
-		process.recordTerminationError(errors.Join(softTerminationError, err, killErr))
+		if errors.Is(killErr, os.ErrProcessDone) {
+			killErr = nil
+		}
+		process.recordTerminationError(errors.Join(err, killErr))
 		return
 	}
 	<-process.resultDone
+}
+
+func isUnsupportedOnly(err error) bool {
+	if err == nil {
+		return false
+	}
+	type multiUnwrapper interface{ Unwrap() []error }
+	if wrapped, ok := err.(multiUnwrapper); ok {
+		wrappedErrors := wrapped.Unwrap()
+		return len(wrappedErrors) == 1 && isUnsupportedOnly(wrappedErrors[0])
+	}
+	type singleUnwrapper interface{ Unwrap() error }
+	if wrapped, ok := err.(singleUnwrapper); ok {
+		return isUnsupportedOnly(wrapped.Unwrap())
+	}
+	return errors.Is(err, errors.ErrUnsupported)
+}
+
+func (process *Process) closeContainment() {
+	if process.containment != nil {
+		process.recordContainmentError(process.containment.Close())
+	}
 }
 
 func (process *Process) stopOutputDelivery() {
@@ -646,9 +745,7 @@ func (process *Process) recordTerminationError(err error) {
 	}
 	process.terminationMutex.Lock()
 	defer process.terminationMutex.Unlock()
-	if process.terminationError == nil {
-		process.terminationError = err
-	}
+	process.terminationError = errors.Join(process.terminationError, err)
 }
 
 func validateInvocation(invocation Invocation) (string, error) {

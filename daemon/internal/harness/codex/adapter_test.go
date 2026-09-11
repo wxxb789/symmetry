@@ -255,6 +255,70 @@ func TestStartPersistsProcessIdentityBeforeReturningSession(t *testing.T) {
 	_ = process.Terminate(context.Background(), 0)
 }
 
+func TestStartRetainsProcessOwnerAfterRunnerError(t *testing.T) {
+	process := newFakeNativeProcess()
+	want := errors.New("persist process failed after commit")
+	var processSink execution.Sink
+	adapter := &Adapter{
+		executable: "codex-test",
+		startProcess: func(_ context.Context, _ execution.Invocation, sink execution.Sink) (nativeProcess, error) {
+			process.sink = sink
+			processSink = sink
+			raw := []byte(`{"jsonrpc":"2.0","id":"early","method":"future/request","params":{}}` + "\n")
+			if err := sink.Handle(context.Background(), execution.Event{Stream: execution.Stdout, Sequence: 1, At: time.Now().UTC(), Data: raw}); err != nil {
+				t.Fatalf("queue pre-ready output: %v", err)
+			}
+			return process, want
+		},
+	}
+	sink := &recordingHarnessSink{}
+	started, err := adapter.Start(context.Background(), harness.StartRequest{Workspace: t.TempDir()}, sink)
+	if !errors.Is(err, want) {
+		t.Fatalf("Start() error = %v, want runner failure", err)
+	}
+	session, ok := started.(*nativeSession)
+	if !ok {
+		t.Fatalf("Start() session = %T, want retained *nativeSession", started)
+	}
+	if pid, identity := session.ProcessDetails(); pid != 42 || identity != "test:42" {
+		t.Fatalf("ProcessDetails() = (%d, %q), want returned process identity", pid, identity)
+	}
+	if _, err := session.Open(context.Background()); !errors.Is(err, want) {
+		t.Fatalf("Open() error = %v, want retained start failure", err)
+	}
+	if err := session.StartTurn(context.Background(), harness.TurnRequest{
+		Goal:    "must be rejected",
+		Context: json.RawMessage(`{"snapshot":"canonical"}`),
+	}); !errors.Is(err, want) {
+		t.Fatalf("StartTurn() error = %v, want retained start failure", err)
+	}
+	if err := processSink.Handle(context.Background(), execution.Event{Stream: execution.Stdout, Sequence: 2, Data: []byte(`{"jsonrpc":"2.0","id":"late","method":"future/request","params":{}}` + "\n")}); !errors.Is(err, want) {
+		t.Fatalf("late process output error = %v, want retained start failure", err)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	result, err := session.Wait(context.Background())
+	if err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+	if result.Kind != harness.ResultFailed || result.Summary != want.Error() {
+		t.Fatalf("Wait() result = %+v, want failed result retaining start error", result)
+	}
+	if result.Reason == nil || *result.Reason != protocol.TaskResultReasonUnknownOutcome {
+		t.Fatalf("Wait() reason = %v, want unknown_outcome", result.Reason)
+	}
+	process.mutex.Lock()
+	terminationCalls := process.termination
+	process.mutex.Unlock()
+	if terminationCalls != 1 {
+		t.Fatalf("Terminate calls = %d, want one session-owned cleanup", terminationCalls)
+	}
+	if len(process.writes) != 0 || len(sink.events) != 0 {
+		t.Fatalf("failed start emitted output or acknowledgement: writes=%d events=%#v", len(process.writes), sink.events)
+	}
+}
+
 func TestStartQueuesEarlyStderrBehindEarlierStdout(t *testing.T) {
 	process := newFakeNativeProcess()
 	sink := &recordingHarnessSink{}
@@ -330,14 +394,92 @@ func TestPreReadyOutputOverflowFailsClosed(t *testing.T) {
 			return process, nil
 		},
 	}
-	if _, err := adapter.Start(context.Background(), harness.StartRequest{Workspace: t.TempDir()}, &recordingHarnessSink{}); !errors.Is(err, errProcessOutputBeforeReady) {
+	started, err := adapter.Start(context.Background(), harness.StartRequest{Workspace: t.TempDir()}, &recordingHarnessSink{})
+	if !errors.Is(err, errProcessOutputBeforeReady) {
 		t.Fatalf("Start() error = %v, want pre-ready overflow", err)
+	}
+	session, ok := started.(*nativeSession)
+	if !ok {
+		t.Fatalf("Start() session = %T, want retained *nativeSession", started)
+	}
+	if _, openErr := session.Open(context.Background()); !errors.Is(openErr, errProcessOutputBeforeReady) {
+		t.Fatalf("Open() error = %v, want retained pre-ready failure", openErr)
+	}
+	if turnErr := session.StartTurn(context.Background(), harness.TurnRequest{
+		Goal:    "must be rejected",
+		Context: json.RawMessage(`{"snapshot":"canonical"}`),
+	}); !errors.Is(turnErr, errProcessOutputBeforeReady) {
+		t.Fatalf("StartTurn() error = %v, want retained pre-ready failure", turnErr)
+	}
+	if closeErr := session.Close(context.Background()); closeErr != nil {
+		t.Fatalf("Close() error = %v", closeErr)
+	}
+	result, waitErr := session.Wait(context.Background())
+	if waitErr != nil || result.Kind != harness.ResultFailed || result.Summary != errProcessOutputBeforeReady.Error() {
+		t.Fatalf("Wait() = %+v, %v, want retained pre-ready failure", result, waitErr)
 	}
 	process.mutex.Lock()
 	terminated := process.terminated
 	process.mutex.Unlock()
 	if !terminated {
-		t.Fatal("pre-ready overflow did not terminate the process")
+		t.Fatal("pre-ready overflow cleanup did not terminate the process")
+	}
+}
+
+func TestStartRetainsProcessOwnerAfterPreReadyReplayFailure(t *testing.T) {
+	process := newFakeNativeProcess()
+	var processSink execution.Sink
+	adapter := &Adapter{
+		executable: "codex-test",
+		startProcess: func(_ context.Context, _ execution.Invocation, sink execution.Sink) (nativeProcess, error) {
+			process.sink = sink
+			processSink = sink
+			if err := sink.Handle(context.Background(), execution.Event{
+				Stream: execution.Stdout, Sequence: 1, At: time.Now().UTC(), Data: []byte("{\n"),
+			}); err != nil {
+				t.Fatalf("queue malformed pre-ready output: %v", err)
+			}
+			return process, nil
+		},
+	}
+	sink := &recordingHarnessSink{}
+	started, startErr := adapter.Start(context.Background(), harness.StartRequest{Workspace: t.TempDir()}, sink)
+	if startErr == nil || !strings.Contains(startErr.Error(), "message is not valid JSON") {
+		t.Fatalf("Start() error = %v, want original replay framing failure", startErr)
+	}
+	session, ok := started.(*nativeSession)
+	if !ok {
+		t.Fatalf("Start() session = %T, want retained *nativeSession", started)
+	}
+	if _, openErr := session.Open(context.Background()); !errors.Is(openErr, startErr) {
+		t.Fatalf("Open() error = %v, want retained replay failure", openErr)
+	}
+	if turnErr := session.StartTurn(context.Background(), harness.TurnRequest{
+		Goal:    "must be rejected",
+		Context: json.RawMessage(`{"snapshot":"canonical"}`),
+	}); !errors.Is(turnErr, startErr) {
+		t.Fatalf("StartTurn() error = %v, want retained replay failure", turnErr)
+	}
+	if err := processSink.Handle(context.Background(), execution.Event{
+		Stream: execution.Stdout, Sequence: 2, Data: []byte(`{"jsonrpc":"2.0","id":"late","method":"future/request","params":{}}` + "\n"),
+	}); !errors.Is(err, startErr) {
+		t.Fatalf("late process output error = %v, want retained replay failure", err)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	result, err := session.Wait(context.Background())
+	if err != nil || result.Kind != harness.ResultFailed || result.Summary != startErr.Error() {
+		t.Fatalf("Wait() = %+v, %v, want retained replay failure", result, err)
+	}
+	process.mutex.Lock()
+	terminationCalls := process.termination
+	process.mutex.Unlock()
+	if terminationCalls != 1 {
+		t.Fatalf("Terminate calls = %d, want one session-owned cleanup", terminationCalls)
+	}
+	if len(process.writes) != 0 || len(sink.events) != 0 {
+		t.Fatalf("failed replay emitted output or acknowledgement: writes=%d events=%#v", len(process.writes), sink.events)
 	}
 }
 

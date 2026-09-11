@@ -593,8 +593,8 @@ func TestReturnedProcessBlocksCleanupUntilWaitCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if journal.LocalState != "cleanup_pending" {
-		t.Fatalf("journal state = %q, want cleanup_pending", journal.LocalState)
+	if journal.LocalState != "terminal_pending" || journal.TerminalVerdict != state.TerminalVerdictAccepted {
+		t.Fatalf("journal state = %q, verdict = %q; want terminal_pending/accepted", journal.LocalState, journal.TerminalVerdict)
 	}
 	if len(daemon.slots) != 0 {
 		t.Fatal("terminal acceptance did not release the slot while process exit was pending")
@@ -610,6 +610,14 @@ func TestReturnedProcessBlocksCleanupUntilWaitCompletes(t *testing.T) {
 	}
 	close(process.waitRelease)
 	daemon.workers.Wait()
+	daemon.flushCleanups(context.Background())
+	journal, err = store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := daemon.flushRun(context.Background(), journal); err != nil {
+		t.Fatalf("flushRun() after returned process exit: %v", err)
+	}
 	if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
 		t.Fatalf("journal = %v, want deleted after process exit cleanup", err)
 	}
@@ -647,6 +655,7 @@ func TestProcessExitBeforeTerminalDeliveryReleasesCleanupOnce(t *testing.T) {
 		slots: slots,
 	}
 	daemon.waitForRun(key)
+	daemon.flushCleanups(context.Background())
 	journal, err := store.LoadJournal(key)
 	if err != nil {
 		t.Fatal(err)
@@ -723,8 +732,8 @@ func TestAttachedProcessFailureWaitsBeforeCleanup(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if journal.LocalState != "cleanup_pending" {
-				t.Fatalf("journal state = %q, want cleanup_pending", journal.LocalState)
+			if journal.LocalState != "terminal_pending" || journal.TerminalVerdict != state.TerminalVerdictAccepted {
+				t.Fatalf("journal state = %q, verdict = %q; want terminal_pending/accepted", journal.LocalState, journal.TerminalVerdict)
 			}
 			select {
 			case <-cleaned:
@@ -733,6 +742,14 @@ func TestAttachedProcessFailureWaitsBeforeCleanup(t *testing.T) {
 			}
 			close(test.process.waitRelease)
 			daemon.workers.Wait()
+			daemon.flushCleanups(context.Background())
+			journal, err = store.LoadJournal(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := daemon.flushRun(context.Background(), journal); err != nil {
+				t.Fatalf("flushRun() after returned process exit: %v", err)
+			}
 			if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
 				t.Fatalf("journal = %v, want deleted after returned process exit", err)
 			}

@@ -532,7 +532,7 @@ func TestVerifiedPiAndOpenCodeHandoffAdmissionsStartNewNativeSessions(t *testing
 				t.Fatal(err)
 			}
 
-			if got, want := session.calls, []string{"start", "details", "open", "start_turn", "wait_turn", "close", "wait"}; !sameStrings(got, want) {
+			if got, want := session.calls, []string{"start", "details", "open", "start_turn", "wait_turn", "details", "close", "wait", "wait"}; !sameStrings(got, want) {
 				t.Fatalf("native lifecycle = %#v, want %#v; journal=%#v", got, want, journal)
 			}
 			if session.request.Resume != nil {
@@ -1679,7 +1679,7 @@ func TestFreshCodexGoalAdmissionUsesDurableStagedNativeLifecycle(t *testing.T) {
 	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
 	app.workers.Wait()
 
-	if got, want := session.calls, []string{"start", "details", "open", "start_turn", "wait_turn", "close", "wait"}; !sameStrings(got, want) {
+	if got, want := session.calls, []string{"start", "details", "open", "start_turn", "wait_turn", "details", "close", "wait", "wait"}; !sameStrings(got, want) {
 		t.Fatalf("native lifecycle = %#v, want %#v", got, want)
 	}
 	if got, want := controlClient.calls, []string{"attach", "context"}; !sameStrings(got, want) {
@@ -1807,7 +1807,7 @@ func TestGoalReadyMarkerFailureDiscardsUnreadyAttachBeforeTerminalCleanup(t *tes
 	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
 	app.workers.Wait()
 
-	if got, want := session.calls, []string{"start", "details", "open", "close"}; !sameStrings(got, want) {
+	if got, want := session.calls, []string{"start", "details", "open", "details", "close", "wait"}; !sameStrings(got, want) {
 		t.Fatalf("native lifecycle = %#v, want %#v", got, want)
 	}
 	if len(controlClient.calls) != 0 {
@@ -1861,7 +1861,7 @@ func TestGoalReadyMarkerFailureRetriesUnreadyDiscardWithoutRestart(t *testing.T)
 	if journal.HasPendingGoalDeliveries() || discardCalls != 2 {
 		t.Fatalf("same-daemon discard retry = deliveries:%#v calls:%d", journal.PendingGoalDeliveries, discardCalls)
 	}
-	if got, want := session.calls, []string{"start", "details", "open", "close"}; !sameStrings(got, want) {
+	if got, want := session.calls, []string{"start", "details", "open", "details", "close", "wait"}; !sameStrings(got, want) {
 		t.Fatalf("native lifecycle = %#v, want %#v", got, want)
 	}
 	if len(controlClient.calls) != 0 {
@@ -1999,10 +1999,13 @@ func TestNativeCloseDurableWriteFailuresRetryWithoutLeakingRecoveryBarrier(t *te
 			store, key := claimedGoalDeliveryStore(t)
 			sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000022"}
 			saveAttachedGoalSession(t, store, key, admission, sessionKey)
+			// The persisted marker must identify the same native owner captured by
+			// closeNativeSessionWithStopProof; this test exercises durable-write
+			// retries, not an identity mismatch.
 			if _, err := store.SetProcessDetails(key, 71, "native:71", time.Now().UTC()); err != nil {
 				t.Fatal(err)
 			}
-			session := &fakeNativeGoalSession{turnStarted: make(chan struct{})}
+			session := &fakeNativeGoalSession{turnStarted: make(chan struct{}), processPID: 71, processIdentity: "native:71"}
 			active := &runningRun{nativeSession: session, goalSession: &sessionKey, slotHeld: true}
 			app := &daemon{
 				store:   store,
@@ -2133,11 +2136,14 @@ func TestNativeCloseRetrySuccessDoesNotLeaveStaleCloseErrorAsCleanupBarrier(t *t
 	retryPublished := make(chan struct{}, 1)
 	result := validNativeTaskResult(t, admission)
 	session := &fakeNativeGoalSession{
-		result:        harness.TaskResult{Kind: harness.ResultSucceeded, Summary: result.Summary, Semantic: &result},
-		finalWaitGate: finalGate,
-		turnStarted:   make(chan struct{}),
-		closeErr:      errors.New("first close failed"),
-		closeEntered:  closeEntered,
+		result:          harness.TaskResult{Kind: harness.ResultSucceeded, Summary: result.Summary, Semantic: &result},
+		finalWaitGate:   finalGate,
+		turnStarted:     make(chan struct{}),
+		waitEntered:     make(chan struct{}, 2),
+		processPID:      71,
+		processIdentity: "native:71",
+		closeErr:        errors.New("first close failed"),
+		closeEntered:    closeEntered,
 	}
 	active := &runningRun{
 		nativeSession:  session,
@@ -2173,12 +2179,40 @@ func TestNativeCloseRetrySuccessDoesNotLeaveStaleCloseErrorAsCleanupBarrier(t *t
 	if !active.nativeCloseRetryRequired || !active.cleanupBlocked {
 		t.Fatalf("initial native close failure did not publish recovery barrier: %#v", active)
 	}
+	select {
+	case <-session.waitEntered:
+	case <-time.After(time.Second):
+		t.Fatal("initial native final wait did not start")
+	}
 	session.closeErr = nil
-	app.retryBlockedNativeSessionCloses()
-	if active.nativeSession != nil || active.nativeCloseRetryRequired || active.cleanupBlocked {
-		t.Fatalf("successful close retry retained stale cleanup barrier: %#v", active)
+	retryDone := make(chan struct{})
+	go func() {
+		app.retryBlockedNativeSessionCloses()
+		close(retryDone)
+	}()
+	select {
+	case <-session.waitEntered:
+	case <-time.After(time.Second):
+		t.Fatal("close retry did not reach final native wait")
+	}
+	select {
+	case <-retryDone:
+		t.Fatal("close retry cleared its recovery barrier before final native wait completed")
+	default:
 	}
 	close(finalGate)
+	select {
+	case <-retryDone:
+	case <-time.After(time.Second):
+		t.Fatal("close retry did not finish after final native wait release")
+	}
+	app.mu.Lock()
+	sessionRetained := active.nativeSession != nil
+	closeRetryPending := active.nativeCloseRetryRequired
+	app.mu.Unlock()
+	if sessionRetained || closeRetryPending {
+		t.Fatalf("successful close retry retained native ownership: session=%t retry=%t", sessionRetained, closeRetryPending)
+	}
 	select {
 	case <-done:
 	case <-time.After(time.Second):
@@ -2463,7 +2497,7 @@ func TestNativeGoalDeadlineInterruptsThenClosesBeforeFailure(t *testing.T) {
 	}
 
 	app.waitForNativeRun(context.Background(), key, active, session)
-	if got, want := session.calls, []string{"wait_turn", "close", "wait"}; !sameStrings(got, want) {
+	if got, want := session.calls, []string{"wait_turn", "details", "close", "wait", "wait"}; !sameStrings(got, want) {
 		t.Fatalf("deadline lifecycle = %#v, want %#v", got, want)
 	}
 	journal, err := store.LoadJournal(key)
@@ -3300,22 +3334,25 @@ func (adapter *fakeNativeGoalAdapter) Start(_ context.Context, request harness.S
 }
 
 type fakeNativeGoalSession struct {
-	callsMu        sync.Mutex
-	calls          []string
-	request        harness.StartRequest
-	turnRequest    harness.TurnRequest
-	sink           harness.EventSink
-	handle         harness.NativeSessionHandle
-	result         harness.TaskResult
-	waitGate       <-chan struct{}
-	finalWaitGate  <-chan struct{}
-	turnReturnGate <-chan struct{}
-	turnStarted    chan struct{}
-	startErr       error
-	closeErr       error
-	closeEntered   chan struct{}
-	onControl      func()
-	waitTurnDone   bool
+	callsMu         sync.Mutex
+	calls           []string
+	request         harness.StartRequest
+	turnRequest     harness.TurnRequest
+	sink            harness.EventSink
+	handle          harness.NativeSessionHandle
+	result          harness.TaskResult
+	waitGate        <-chan struct{}
+	finalWaitGate   <-chan struct{}
+	turnReturnGate  <-chan struct{}
+	turnStarted     chan struct{}
+	waitEntered     chan struct{}
+	processPID      int
+	processIdentity string
+	startErr        error
+	closeErr        error
+	closeEntered    chan struct{}
+	onControl       func()
+	waitTurnDone    bool
 }
 
 func (session *fakeNativeGoalSession) recordCall(call string) {
@@ -3326,7 +3363,14 @@ func (session *fakeNativeGoalSession) recordCall(call string) {
 
 func (session *fakeNativeGoalSession) ProcessDetails() (int, string) {
 	session.recordCall("details")
-	return 41, "native:41"
+	pid, identity := session.processPID, session.processIdentity
+	if pid == 0 {
+		pid = 41
+	}
+	if identity == "" {
+		identity = "native:41"
+	}
+	return pid, identity
 }
 
 func (session *fakeNativeGoalSession) Open(context.Context) (harness.NativeSessionHandle, error) {
@@ -3376,6 +3420,9 @@ func (session *fakeNativeGoalSession) Control(_ context.Context, request harness
 
 func (session *fakeNativeGoalSession) Wait(ctx context.Context) (harness.TaskResult, error) {
 	session.recordCall("wait")
+	if session.waitEntered != nil {
+		session.waitEntered <- struct{}{}
+	}
 	session.callsMu.Lock()
 	waitTurnDone := session.waitTurnDone
 	session.callsMu.Unlock()

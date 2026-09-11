@@ -108,6 +108,41 @@ func TestStartUsesOwnedServeInvocationPersistsBeforeOutputAndWithholdsSecrets(t 
 	}
 }
 
+func TestStartRetainsProcessOwnerWhenRunnerReturnsError(t *testing.T) {
+	process := newFakeProcess()
+	want := errors.New("persist process failed after commit")
+	adapter := newAdapter(
+		"opencode-test",
+		nil,
+		func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
+			return process, want
+		},
+		func(Config) (api, error) { return &fakeAPI{}, nil },
+		func() (string, string, error) { return "opencode", "test-secret", nil },
+		func(int, string) ConnectionVerifier { return func(context.Context, net.Conn) error { return nil } },
+	)
+	started, err := adapter.Start(context.Background(), startRequest(t), &recordingSink{})
+	if !errors.Is(err, want) {
+		t.Fatalf("Start() error = %v, want runner failure", err)
+	}
+	session, ok := started.(*nativeSession)
+	if !ok {
+		t.Fatalf("Start() session = %T, want retained *nativeSession", started)
+	}
+	if pid, identity := session.ProcessDetails(); pid != 123 || identity != "created:123" {
+		t.Fatalf("ProcessDetails() = (%d, %q), want returned process identity", pid, identity)
+	}
+	if _, err := session.Open(context.Background()); !errors.Is(err, want) {
+		t.Fatalf("Open() error = %v, want retained start failure", err)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if process.terminateCalls != 1 {
+		t.Fatalf("Terminate calls = %d, want one session-owned cleanup", process.terminateCalls)
+	}
+}
+
 func TestOpenStartTurnAndWaitStayFailClosed(t *testing.T) {
 	process := newFakeProcess()
 	stream := newBlockingReadCloser()
@@ -562,11 +597,14 @@ func (sink *recordingSink) hasDiagnostic(code string) bool {
 func newTestAdapter(start processStarter, fake api) *Adapter {
 	readyStart := func(ctx context.Context, invocation execution.Invocation, sink execution.Sink) (nativeProcess, error) {
 		process, err := start(ctx, invocation, sink)
-		if err != nil {
+		if isNilNativeProcess(process) {
 			return nil, err
 		}
+		if err != nil {
+			return process, err
+		}
 		if err := sink.Handle(ctx, execution.Event{Stream: execution.Stdout, Sequence: 2, Data: []byte("opencode server listening on http://127.0.0.1:43123\n")}); err != nil {
-			return nil, err
+			return process, err
 		}
 		return process, nil
 	}

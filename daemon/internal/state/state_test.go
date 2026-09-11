@@ -595,7 +595,7 @@ func TestPrepareProvideInputCapturesEventSequenceBarrierAndValidatesIt(t *testin
 
 func TestTerminalTransitionSettlesUnresolvedInputBeforeCleanup(t *testing.T) {
 	store := mustStore(t)
-	journal := testJournal("run-input-terminal", 1)
+	journal := stoppedTestJournal("run-input-terminal", 1)
 	journal.LocalState = "waiting_for_input"
 	if err := store.SaveJournal(journal); err != nil {
 		t.Fatal(err)
@@ -628,7 +628,7 @@ func TestTerminalTransitionSettlesUnresolvedInputBeforeCleanup(t *testing.T) {
 
 func TestResolveTerminalForCleanupRetiresUndeliveredInputIntent(t *testing.T) {
 	store := mustStore(t)
-	journal := testJournal("run-input-cleanup", 1)
+	journal := stoppedTestJournal("run-input-cleanup", 1)
 	journal.LocalState = "waiting_for_input"
 	if err := store.SaveJournal(journal); err != nil {
 		t.Fatal(err)
@@ -772,7 +772,7 @@ func TestPendingOutboxRequiresPersistedClaimGrant(t *testing.T) {
 
 func TestSetProcessDetailsPersistsNonEmptyIdentity(t *testing.T) {
 	store := mustStore(t)
-	journal := testJournal("run-1", 1)
+	journal := stoppedTestJournal("run-1", 1)
 	if err := store.SaveJournal(journal); err != nil {
 		t.Fatalf("SaveJournal() error = %v", err)
 	}
@@ -833,7 +833,7 @@ func TestSetProcessDetailsRejectsInvalidIdentityWithoutMutation(t *testing.T) {
 
 func TestClearProcessDetailsUsesExpectedIdentityAndIsIdempotent(t *testing.T) {
 	store := mustStore(t)
-	journal := testJournal("run-1", 1)
+	journal := stoppedTestJournal("run-1", 1)
 	if err := store.SaveJournal(journal); err != nil {
 		t.Fatalf("SaveJournal() error = %v", err)
 	}
@@ -900,7 +900,7 @@ func TestCompletedTerminalTaskResultKindSurvivesDeliveryAndRestart(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	journal := testJournal("run-terminal-result", 1)
+	journal := stoppedTestJournal("run-terminal-result", 1)
 	if err := store.SaveJournal(journal); err != nil {
 		t.Fatal(err)
 	}
@@ -1069,7 +1069,7 @@ func TestSaveJournalCannotChangeOrClearTerminalTaskResultKind(t *testing.T) {
 
 func TestEnterCleanupPendingPreservesTerminalAuditAndControlsDelivery(t *testing.T) {
 	store := mustStore(t)
-	journal := testJournal("run-1", 1)
+	journal := stoppedTestJournal("run-1", 1)
 	if err := store.SaveJournal(journal); err != nil {
 		t.Fatal(err)
 	}
@@ -1107,7 +1107,7 @@ func TestEnterCleanupPendingPreservesTerminalAuditAndControlsDelivery(t *testing
 		t.Fatalf("EnterCleanupPending() was not idempotent: %v", err)
 	}
 
-	journal = testJournal("run-2", 1)
+	journal = stoppedTestJournal("run-2", 1)
 	if err := store.SaveJournal(journal); err != nil {
 		t.Fatal(err)
 	}
@@ -1136,7 +1136,7 @@ func TestCleanupPendingRoundTripsAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	journal := testJournal("run-1", 1)
+	journal := stoppedTestJournal("run-1", 1)
 	if err := store.SaveJournal(journal); err != nil {
 		t.Fatal(err)
 	}
@@ -1172,7 +1172,7 @@ func TestCleanupPendingRoundTripsAcrossRestart(t *testing.T) {
 
 func TestResolveTerminalForCleanupIsAtomicAndIdempotent(t *testing.T) {
 	store := mustStore(t)
-	journal := testJournal("run-atomic-cleanup", 1)
+	journal := stoppedTestJournal("run-atomic-cleanup", 1)
 	if err := store.SaveJournal(journal); err != nil {
 		t.Fatal(err)
 	}
@@ -1967,7 +1967,7 @@ func TestListJournalsRejectsCorruptAuthoritativeJournal(t *testing.T) {
 
 func TestDeleteJournalDeletesOnlyTarget(t *testing.T) {
 	store := mustStore(t)
-	first := testJournal("run-1", 1)
+	first := stoppedTestJournal("run-1", 1)
 	second := testJournal("run-1", 2)
 	for _, journal := range []RunJournal{first, second} {
 		if err := store.SaveJournal(journal); err != nil {
@@ -1999,7 +1999,8 @@ func TestConcurrentSavesLeaveWholeJSON(t *testing.T) {
 			defer group.Done()
 			copy := journal
 			copy.LocalState = "state"
-			copy.PID = 100 + index
+			copy.Work.Goal = strconv.Itoa(index)
+			copy.LastEventSequence = int64(index + 1)
 			if err := store.SaveJournal(copy); err != nil {
 				t.Errorf("SaveJournal() error = %v", err)
 			}
@@ -2014,6 +2015,10 @@ func TestConcurrentSavesLeaveWholeJSON(t *testing.T) {
 	var got RunJournal
 	if err := json.Unmarshal(bytes, &got); err != nil {
 		t.Fatalf("journal JSON is not whole JSON: %v", err)
+	}
+	writer, err := strconv.Atoi(got.Work.Goal)
+	if err != nil || writer < 0 || writer >= 32 || got.LastEventSequence != int64(writer+1) || got.PID != journal.PID || got.ProcessIdentity != journal.ProcessIdentity {
+		t.Fatalf("concurrent save mixed writers or changed process ownership: %+v", got)
 	}
 }
 
@@ -2038,6 +2043,12 @@ func testJournal(runID string, generation int64) RunJournal {
 		LocalState: "running", Work: protocol.Work{Goal: "implement", AgentProfile: "codex", Workspace: "isolated", Input: json.RawMessage(`{}`)},
 		WorkspacePath: `C:\work\run-1`, WorkspaceBindingKey: "binding-1", PID: 42, ProcessIdentity: "windows:42:created-at", StartedAt: time.Date(2026, 9, 3, 1, 2, 4, 0, time.UTC), LastEventSequence: 1,
 	}
+}
+
+func stoppedTestJournal(runID string, generation int64) RunJournal {
+	journal := testJournal(runID, generation)
+	journal.PID, journal.ProcessIdentity, journal.StartedAt = 0, "", time.Time{}
+	return journal
 }
 
 func transitionsForStates(journal RunJournal, states []string) []protocol.StateTransitionRequest {

@@ -58,6 +58,14 @@ func (daemon *daemon) cleanupWorkerActive() bool {
 }
 
 func (daemon *daemon) scheduleCleanup(ctx context.Context, journal state.RunJournal) error {
+	if journal.HasProcessDetails() {
+		// The terminal outbox may be accepted while its owning process remains
+		// unproven. Capacity is releasable, but cleanup and journal deletion are
+		// not until the exact persisted marker is cleared.
+		daemon.releaseSlotOnce(journal.Key())
+		daemon.enqueueCleanup(journal.Key())
+		return nil
+	}
 	if journal.NativeUsageRecoveryRequired {
 		return errors.New("native usage recovery remains pending")
 	}
@@ -76,20 +84,30 @@ func (daemon *daemon) scheduleCleanup(ctx context.Context, journal state.RunJour
 
 func (daemon *daemon) releaseCleanupIfReady(key state.RunKey) bool {
 	daemon.releaseSlotOnce(key)
-	daemon.mu.Lock()
-	active := daemon.running[key]
-	blocked := active != nil && active.cleanupBlocked
-	daemon.mu.Unlock()
-	if blocked {
+	if daemon.cleanupBlocked(key) {
 		return false
 	}
 	daemon.releaseRun(key)
 	return true
 }
 
+func (daemon *daemon) cleanupBlocked(key state.RunKey) bool {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	active := daemon.running[key]
+	return active != nil && active.cleanupBlocked
+}
+
 func (daemon *daemon) releaseCleanupAfterProcessExit(key state.RunKey) {
 	journal, err := daemon.store.LoadJournal(key)
-	if err != nil || journal.LocalState != "cleanup_pending" {
+	if err != nil || journal.HasProcessDetails() {
+		return
+	}
+	if journal.LocalState == "terminal_pending" {
+		daemon.signalOutboxFor(key)
+		return
+	}
+	if journal.LocalState != "cleanup_pending" {
 		return
 	}
 	if err := daemon.scheduleCleanup(context.Background(), journal); err != nil {
@@ -104,7 +122,7 @@ func (daemon *daemon) enqueueRecoveredCleanups() {
 		return
 	}
 	for _, journal := range journals {
-		if journal.LocalState == "cleanup_pending" || journal.LocalState == "stale" {
+		if journal.LocalState == "cleanup_pending" || journal.LocalState == "stale" || (!journal.GoalDeliveryEnabled && journal.LocalState == "terminal_pending" && journal.HasProcessDetails()) {
 			daemon.enqueueCleanup(journal.Key())
 		}
 	}
@@ -169,6 +187,7 @@ func (daemon *daemon) flushCleanups(ctx context.Context) {
 		}
 		journal, err := daemon.store.LoadJournal(key)
 		if state.IsNotFound(err) {
+			daemon.forgetRecoveredProcessStop(key)
 			daemon.forgetWorkspaceRetention(key)
 			daemon.completeCleanup(key)
 			continue
@@ -177,8 +196,55 @@ func (daemon *daemon) flushCleanups(ctx context.Context) {
 			daemon.retryCleanup(key)
 			continue
 		}
-		if journal.LocalState != "cleanup_pending" && journal.LocalState != "stale" {
+		if !journal.GoalDeliveryEnabled && journal.LocalState != "terminal_pending" && journal.LocalState != "cleanup_pending" && journal.LocalState != "stale" {
+			daemon.mu.Lock()
+			active := daemon.running[key]
+			staleStopped := active != nil && active.stale && active.processStopWitness != nil && active.processStopWitness == active.process
+			if staleStopped && journal.HasProcessDetails() {
+				staleStopped = active.processStopPID == journal.PID && active.processStopIdentity == journal.ProcessIdentity
+			}
+			daemon.mu.Unlock()
+			if staleStopped {
+				journal, err = daemon.store.SetLocalState(key, "stale")
+				if err != nil {
+					daemon.retryCleanup(key)
+					continue
+				}
+			}
+		}
+		if journal.LocalState != "terminal_pending" && journal.LocalState != "cleanup_pending" && journal.LocalState != "stale" {
 			daemon.completeCleanup(key)
+			continue
+		}
+		if !journal.GoalDeliveryEnabled {
+			ready, clearErr := daemon.resolveCleanupProcessMarker(ctx, journal)
+			if clearErr != nil {
+				if ctx.Err() == nil {
+					daemon.retryCleanup(key)
+				}
+				continue
+			}
+			if !ready {
+				daemon.retryCleanup(key)
+				continue
+			}
+			if journal, err = daemon.store.LoadJournal(key); err != nil {
+				if state.IsNotFound(err) {
+					daemon.forgetWorkspaceRetention(key)
+					daemon.completeCleanup(key)
+				} else {
+					daemon.retryCleanup(key)
+				}
+				continue
+			}
+		}
+		if journal.LocalState == "terminal_pending" {
+			daemon.signalOutboxFor(key)
+			daemon.completeCleanup(key)
+			continue
+		}
+		if !daemon.releaseCleanupIfReady(key) {
+			daemon.retryCleanup(key)
 			continue
 		}
 		if err := daemon.cleanupPending(ctx, journal); err != nil {
@@ -189,6 +255,75 @@ func (daemon *daemon) flushCleanups(ctx context.Context) {
 		}
 		daemon.completeCleanup(key)
 	}
+}
+
+// resolveCleanupProcessMarker clears a marker only after an exact in-memory
+// Wait witness or an identity-bound recovered process stop proves its exit.
+func (daemon *daemon) resolveCleanupProcessMarker(ctx context.Context, journal state.RunJournal) (bool, error) {
+	key := journal.Key()
+	daemon.mu.Lock()
+	active := daemon.running[key]
+	hasWitness := active != nil && active.processStopWitness != nil && active.processStopWitness == active.process
+	if hasWitness && journal.HasProcessDetails() {
+		hasWitness = active.processStopPID > 0 && active.processStopIdentity != "" && active.processStopPID == journal.PID && active.processStopIdentity == journal.ProcessIdentity
+	}
+	daemon.mu.Unlock()
+	if active != nil {
+		if !hasWitness {
+			return false, nil
+		}
+		if !journal.HasProcessDetails() {
+			daemon.clearCleanupBlockedAfterStop(key, active)
+			return true, nil
+		}
+		if _, err := daemon.clearPersistedProcessDetails(key, journal.PID, journal.ProcessIdentity); err != nil {
+			cleared, readErr := daemon.processMarkerCleared(key)
+			if readErr != nil {
+				return false, readErr
+			}
+			if !cleared {
+				return false, err
+			}
+		}
+		daemon.clearCleanupBlockedAfterStop(key, active)
+		return true, nil
+	}
+	if !journal.HasProcessDetails() {
+		return true, nil
+	}
+	if err := daemon.stopPersistedProcess(ctx, journal); err != nil {
+		return false, err
+	}
+	if _, err := daemon.clearPersistedProcessDetails(key, journal.PID, journal.ProcessIdentity); err != nil {
+		cleared, readErr := daemon.processMarkerCleared(key)
+		if readErr != nil {
+			return false, readErr
+		}
+		if !cleared {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+func (daemon *daemon) clearCleanupBlockedAfterStop(key state.RunKey, expected *runningRun) {
+	daemon.mu.Lock()
+	if daemon.running[key] == expected && expected.processStopWitness == expected.process {
+		expected.cleanupBlocked = false
+	}
+	daemon.mu.Unlock()
+}
+
+func (daemon *daemon) processMarkerCleared(key state.RunKey) (bool, error) {
+	journal, err := daemon.store.LoadJournal(key)
+	if err != nil {
+		return false, err
+	}
+	if journal.HasProcessDetails() {
+		return false, nil
+	}
+	daemon.forgetRecoveredProcessStop(key)
+	return true, nil
 }
 
 func (daemon *daemon) cleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -251,8 +386,8 @@ func (daemon *daemon) cleanupPending(ctx context.Context, journal state.RunJourn
 	} else if goalRecovery {
 		return errors.New("Goal native recovery evidence remains pending")
 	}
-	if journal.GoalDeliveryEnabled && (journal.PID > 0 || journal.ProcessIdentity != "" || !journal.StartedAt.IsZero()) {
-		return errors.New("Goal native process identity remains pending")
+	if journal.HasProcessDetails() {
+		return errors.New("process identity remains pending")
 	}
 	if err := daemon.cleanupRecoveredWorkspace(ctx, journal, journal.LocalState == "cleanup_pending" && journal.TerminalState == "completed"); err != nil {
 		daemon.log.Warn("cleanup_terminal_workspace_failed", "run_id", journal.RunID, "error", err)
@@ -262,6 +397,7 @@ func (daemon *daemon) cleanupPending(ctx context.Context, journal state.RunJourn
 		daemon.log.Warn("delete_terminal_journal_failed", "run_id", journal.RunID, "error", err)
 		return err
 	}
+	daemon.forgetRecoveredProcessStop(journal.Key())
 	daemon.forgetWorkspaceRetention(journal.Key())
 	daemon.clearCompletedCommandReceipts(journal.Key())
 	return nil

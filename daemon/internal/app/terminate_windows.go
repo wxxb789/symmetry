@@ -5,17 +5,12 @@ package app
 import (
 	"errors"
 	"fmt"
-	"os/exec"
-	"strconv"
 	"syscall"
 
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 )
 
-var (
-	readPersistedProcessIdentity = platform.ProcessIdentity
-	killPersistedProcessTree     = killProcessTree
-)
+var readPersistedProcessIdentity = platform.ProcessIdentity
 
 func terminatePersistedProcess(pid int, identity string) error {
 	if pid <= 0 || identity == "" {
@@ -23,21 +18,15 @@ func terminatePersistedProcess(pid int, identity string) error {
 	}
 	actual, err := readPersistedProcessIdentity(pid)
 	if errors.Is(err, syscall.Errno(87)) {
-		return nil
+		return fmt.Errorf("%w: persisted process leader is absent", errPersistedProcessStopUnproven)
 	}
 	if err != nil {
-		return fmt.Errorf("read persisted process identity: %w", err)
+		return fmt.Errorf("%w: read persisted process identity: %v", errPersistedProcessStopUnproven, err)
 	}
 	if actual != identity {
-		return nil
+		return fmt.Errorf("%w: persisted process identity changed", errPersistedProcessStopUnproven)
 	}
-	return killPersistedProcessTree(pid)
-}
-
-func killProcessTree(pid int) error {
-	output, err := exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F").CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("terminate persisted process tree %d: %w: %s", pid, err, output)
-	}
-	return nil
+	// A daemon restart cannot reopen its anonymous Job Object, so no PID-based
+	// command can prove that every original Job member has stopped.
+	return fmt.Errorf("%w: Windows Job Object membership cannot be read back after daemon restart", errPersistedProcessStopUnproven)
 }

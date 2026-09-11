@@ -165,6 +165,12 @@ func (journal RunJournal) Key() RunKey {
 	return RunKey{RunID: journal.RunID, Generation: journal.Generation}
 }
 
+// HasProcessDetails reports any retained process-ownership marker. A partial
+// marker is not evidence that its process has stopped.
+func (journal RunJournal) HasProcessDetails() bool {
+	return journal.PID != 0 || journal.ProcessIdentity != "" || !journal.StartedAt.IsZero()
+}
+
 // Fence returns the fencing data currently held by the journal.
 func (journal RunJournal) Fence() protocol.Fence {
 	return protocol.Fence{
@@ -466,6 +472,12 @@ func (store *Store) SaveJournal(journal RunJournal) error {
 		if current.TerminalTaskResultKind != journal.TerminalTaskResultKind {
 			return errors.New("terminal task result kind is immutable")
 		}
+		if current.PID != journal.PID || current.ProcessIdentity != journal.ProcessIdentity || !current.StartedAt.Equal(journal.StartedAt) {
+			return errors.New("process details require dedicated mutation")
+		}
+		if (current.LocalState == "cleanup_pending") != (journal.LocalState == "cleanup_pending") {
+			return errors.New("cleanup state requires dedicated transition")
+		}
 	} else if !IsNotFound(err) {
 		return err
 	}
@@ -562,6 +574,9 @@ func (store *Store) DeleteJournal(key RunKey) error {
 	if err != nil {
 		return err
 	}
+	if journal.HasProcessDetails() {
+		return errors.New("process stop evidence remains pending")
+	}
 	if journal.HasPendingGoalDeliveries() {
 		return errors.New("run journal has pending Goal delivery")
 	}
@@ -629,6 +644,9 @@ func (store *Store) SetLocalState(key RunKey, localState string) (RunJournal, er
 		return RunJournal{}, errors.New("local state is invalid")
 	}
 	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if (journal.LocalState == "cleanup_pending") != (localState == "cleanup_pending") {
+			return errors.New("cleanup state requires dedicated transition")
+		}
 		journal.LocalState = localState
 		return nil
 	})
@@ -643,6 +661,15 @@ func (store *Store) SetProcessDetails(key RunKey, pid int, identity string, star
 	return store.mutateJournal(key, func(journal *RunJournal) error {
 		if !journal.hasClaimGrant() {
 			return errors.New("journal has no claim grant")
+		}
+		if journal.LocalState == "cleanup_pending" {
+			return errors.New("cannot register process details during cleanup")
+		}
+		if journal.HasProcessDetails() {
+			if journal.PID != pid || journal.ProcessIdentity != identity {
+				return errors.New("process details cannot replace an uncleared owner")
+			}
+			return nil
 		}
 		journal.PID = pid
 		journal.ProcessIdentity = identity
@@ -661,7 +688,7 @@ func (store *Store) ClearProcessDetails(key RunKey, pid int, identity string) (R
 		return RunJournal{}, errors.New("process details are invalid")
 	}
 	return store.mutateJournal(key, func(journal *RunJournal) error {
-		if journal.PID == 0 && journal.ProcessIdentity == "" && journal.StartedAt.IsZero() {
+		if !journal.HasProcessDetails() {
 			return nil
 		}
 		if journal.PID != pid || journal.ProcessIdentity != identity {
@@ -1047,7 +1074,8 @@ func (store *Store) ResolveTerminal(key RunKey, verdict string, resolvedAt time.
 }
 
 // ResolveTerminalForCleanup atomically records a conclusive terminal rejection,
-// retires unreachable delivery state, and makes local cleanup eligible.
+// retires unreachable delivery state, and makes local cleanup eligible only
+// after the process-ownership marker has been cleared by a verified stop.
 func (store *Store) ResolveTerminalForCleanup(key RunKey, verdict string, resolvedAt time.Time) (RunJournal, error) {
 	if !validConclusiveTerminalVerdict(verdict) || resolvedAt.IsZero() {
 		return RunJournal{}, errors.New("terminal cleanup verdict is invalid")
@@ -1056,6 +1084,9 @@ func (store *Store) ResolveTerminalForCleanup(key RunKey, verdict string, resolv
 		if journal.LocalState == "cleanup_pending" {
 			if journal.TerminalVerdict != verdict {
 				return errors.New("terminal verdict conflicts with journal")
+			}
+			if journal.HasProcessDetails() {
+				journal.LocalState = "terminal_pending"
 			}
 			return nil
 		}
@@ -1086,7 +1117,9 @@ func (store *Store) ResolveTerminalForCleanup(key RunKey, verdict string, resolv
 		// state: their receiver has its own durable idempotency receipts.
 		journal.InputCommandIntent = nil
 		journal.ControlCommandIntents = nil
-		journal.LocalState = "cleanup_pending"
+		if !journal.HasProcessDetails() {
+			journal.LocalState = "cleanup_pending"
+		}
 		return nil
 	})
 }
@@ -1098,6 +1131,9 @@ func (store *Store) ResolveTerminalForCleanup(key RunKey, verdict string, resolv
 // work.
 func (store *Store) EnterCleanupPending(key RunKey) (RunJournal, error) {
 	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.HasProcessDetails() {
+			return errors.New("process stop evidence remains pending")
+		}
 		if journal.LocalState == "cleanup_pending" {
 			return nil
 		}

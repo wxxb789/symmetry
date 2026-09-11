@@ -243,6 +243,8 @@ func (capabilities Capabilities) Require(required ...Capability) error {
 // not leak through this interface.
 type Adapter interface {
 	Probe(context.Context) (Capabilities, error)
+	// A non-nil Session transfers cleanup ownership even when Start also
+	// returns an error. Failed sessions permit cleanup, not new native work.
 	Start(context.Context, StartRequest, EventSink) (Session, error)
 }
 
@@ -304,8 +306,8 @@ type StartRequest struct {
 	Invocation     execution.Invocation
 	// PersistProcess is called after the native process has started but before
 	// the adapter exposes the session or drains pre-ready output. A failure
-	// leaves the native launch outcome conservative; the adapter must attempt
-	// bounded process cleanup before returning the error.
+	// leaves the native launch outcome conservative. Any surviving cleanup
+	// owner must be returned alongside the error, without acknowledging output.
 	PersistProcess func(pid int, identity string) error
 }
 

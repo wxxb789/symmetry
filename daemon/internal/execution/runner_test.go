@@ -14,6 +14,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/wxxb789/symmetry/daemon/internal/platform"
 )
 
 func TestStartPassesArgumentsDirectlyWithoutShell(t *testing.T) {
@@ -149,13 +151,21 @@ func TestTerminateIsIdempotent(t *testing.T) {
 }
 
 func TestTerminateFallsBackToRootKillWhenForcedContainmentFails(t *testing.T) {
-	process := startHelper(t, &recordingSink{}, "wait")
 	forceFailure := errors.New("forced containment termination failed")
-	process.containment = &forceFailingContainment{forceErr: forceFailure}
+	runner := Runner{
+		configureProcess: func(*exec.Cmd) error { return nil },
+		attachProcess: func(*os.Process) (platform.Containment, string, error) {
+			return &forceFailingContainment{forceErr: forceFailure}, "bound:process", nil
+		},
+	}
+	process, err := runner.Start(context.Background(), helperInvocation("wait"), &recordingSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	err := process.Terminate(ctx, 0)
+	err = process.Terminate(ctx, 0)
 	if !errors.Is(err, forceFailure) {
 		t.Fatalf("Terminate() error = %v, want forced containment error", err)
 	}
@@ -239,19 +249,6 @@ func TestStartPersistsProcessIdentityBeforeStartingOutputReaders(t *testing.T) {
 	}
 	if result := waitForResult(t, process); result.ExitCode != 0 {
 		t.Fatalf("exit code = %d, wait error = %v", result.ExitCode, result.WaitError)
-	}
-}
-
-func TestStartPersistenceFailureTerminatesBeforeReturning(t *testing.T) {
-	want := errors.New("journal unavailable")
-	invocation := helperInvocation("wait")
-	invocation.PersistProcess = func(int, string) error { return want }
-	process, err := NewRunner().Start(context.Background(), invocation, &recordingSink{})
-	if process != nil {
-		t.Fatal("Start() returned a process after persistence failure")
-	}
-	if !errors.Is(err, want) {
-		t.Fatalf("Start() error = %v, want persistence failure", err)
 	}
 }
 
@@ -673,6 +670,9 @@ func TestHelperProcess(t *testing.T) {
 		writeRepeated(os.Stderr, 'e', count)
 	case "stdout":
 		writeRepeated(os.Stdout, 'o', helperCount(values))
+	case "stdout-then-wait":
+		_, _ = io.WriteString(os.Stdout, strings.Join(values, "\x1f"))
+		waitForever()
 	case "stdin-once":
 		count := helperCount(values)
 		input := make([]byte, count)

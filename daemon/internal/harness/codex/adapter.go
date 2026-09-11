@@ -109,10 +109,13 @@ type processStarter func(context.Context, execution.Invocation, execution.Sink) 
 
 func runnerProcessStarter(ctx context.Context, invocation execution.Invocation, sink execution.Sink) (nativeProcess, error) {
 	process, err := execution.NewRunner().Start(ctx, invocation, sink)
-	if err != nil {
+	// Check the concrete pointer before converting it to nativeProcess. A nil
+	// *execution.Process stored in the interface would otherwise look non-nil
+	// to callers and lose the launch failure's cleanup boundary.
+	if process == nil {
 		return nil, err
 	}
-	return process, nil
+	return process, err
 }
 
 // NewAdapter creates the Codex app-server adapter. Probe intentionally stays
@@ -195,18 +198,11 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 		PersistProcess: request.PersistProcess,
 	}
 	process, err := adapter.startProcess(processContext, invocation, execution.SinkFunc(session.handleProcessOutput))
-	if err != nil {
-		session.outputMutex.Lock()
-		session.mutex.Lock()
-		session.startFailed = true
-		session.preReadyEvents = nil
-		session.preReadyBytes = 0
-		session.mutex.Unlock()
-		session.outputMutex.Unlock()
-		cancel()
-		return nil, err
-	}
 	if isNilNativeProcess(process) {
+		if err != nil {
+			cancel()
+			return nil, err
+		}
 		session.outputMutex.Lock()
 		failure := session.failProcessOutputBeforeReady(execution.Event{
 			Stream:   execution.Stdout,
@@ -217,15 +213,19 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 		cancel()
 		return nil, failure
 	}
+	if err != nil {
+		session.retainStartFailure(process, err)
+		return session, err
+	}
 
 	session.outputMutex.Lock()
 	session.mutex.Lock()
 	session.process = process
-	session.processReady = true
 	preReadyEvents := append([]execution.Event(nil), session.preReadyEvents...)
 	session.preReadyEvents = nil
 	session.preReadyBytes = 0
 	outputFailure := session.outputFailure
+	session.processReady = outputFailure == nil
 	session.mutex.Unlock()
 	var outputErr error
 	if outputFailure == nil {
@@ -236,28 +236,22 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 			}
 		}
 	}
-	session.outputMutex.Unlock()
 	if outputErr != nil {
-		cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), processCleanupTimeout)
-		_ = process.Terminate(cleanupContext, 0)
-		cleanupCancel()
-		cancel()
-		return nil, outputErr
+		session.retainStartFailureLocked(process, outputErr)
+		session.outputMutex.Unlock()
+		session.cancel()
+		session.launchWatcher()
+		return session, outputErr
 	}
+	session.outputMutex.Unlock()
 	session.mutex.Lock()
 	outputFailure = session.outputFailure
 	session.mutex.Unlock()
 	if outputFailure != nil {
-		cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), processCleanupTimeout)
-		_ = process.Terminate(cleanupContext, 0)
-		cleanupCancel()
-		cancel()
-		return nil, outputFailure
+		session.retainStartFailure(process, outputFailure)
+		return session, outputFailure
 	}
-	session.mutex.Lock()
-	session.watchStarted = true
-	session.mutex.Unlock()
-	go session.watchProcess()
+	session.launchWatcher()
 	return session, nil
 }
 
@@ -338,6 +332,7 @@ type nativeSession struct {
 	processReady             bool
 	outputFailure            error
 	startFailed              bool
+	startError               error
 	pendingTurnEvents        []stagedNotification
 	pendingTurnBytes         int
 	eventCount               uint64
@@ -882,7 +877,34 @@ func (session *nativeSession) watchProcess() {
 	session.mutex.Lock()
 	processResult := result
 	session.processResult = &processResult
+	startError := session.startError
 	session.mutex.Unlock()
+	if startError != nil {
+		reason := protocol.TaskResultReasonUnknownOutcome
+		failure := harness.TaskResult{
+			Kind:         harness.ResultFailed,
+			Summary:      startError.Error(),
+			Reason:       &reason,
+			Process:      result,
+			Usage:        harness.Usage{State: harness.UsageUnknown},
+			EventCount:   atomic.LoadUint64(&session.eventCount),
+			LastSequence: atomic.LoadUint64(&session.lastSeq),
+		}
+		session.mutex.Lock()
+		if session.result == nil {
+			session.completeLocked(failure)
+		} else {
+			stored := cloneTaskResult(*session.result)
+			stored.Kind = failure.Kind
+			stored.Summary = failure.Summary
+			stored.Reason = failure.Reason
+			stored.Process = result
+			session.result = &stored
+		}
+		session.mutex.Unlock()
+		session.cancel()
+		return
+	}
 	session.outputMutex.Lock()
 	frames, closeErr := session.framer.Close()
 	for _, frame := range frames {
@@ -1011,6 +1033,48 @@ func (session *nativeSession) handleProcessOutputLocked(ctx context.Context, eve
 	return nil
 }
 
+func (session *nativeSession) launchWatcher() {
+	session.mutex.Lock()
+	if session.watchStarted {
+		session.mutex.Unlock()
+		return
+	}
+	session.watchStarted = true
+	session.mutex.Unlock()
+	go session.watchProcess()
+}
+
+// retainStartFailure binds the process owner before exposing a failed start.
+// Cleanup remains session-owned, while all later output is rejected without
+// interpreting or acknowledging a partially started native transport.
+func (session *nativeSession) retainStartFailure(process nativeProcess, cause error) {
+	if session == nil || cause == nil {
+		return
+	}
+	session.outputMutex.Lock()
+	session.retainStartFailureLocked(process, cause)
+	session.outputMutex.Unlock()
+	session.cancel()
+	session.launchWatcher()
+}
+
+// retainStartFailureLocked is called while outputMutex is held, preventing a
+// concurrent reader from processing another frame before failure is visible.
+func (session *nativeSession) retainStartFailureLocked(process nativeProcess, cause error) {
+	session.mutex.Lock()
+	if process != nil {
+		session.process = process
+	}
+	session.processReady = false
+	session.startFailed = true
+	if session.startError == nil {
+		session.startError = cause
+	}
+	session.preReadyEvents = nil
+	session.preReadyBytes = 0
+	session.mutex.Unlock()
+}
+
 func (session *nativeSession) isProcessReady() bool {
 	session.mutex.Lock()
 	defer session.mutex.Unlock()
@@ -1020,9 +1084,9 @@ func (session *nativeSession) isProcessReady() bool {
 func (session *nativeSession) queuePreReadyOutput(ctx context.Context, event execution.Event) error {
 	session.mutex.Lock()
 	if session.startFailed {
-		err := session.outputFailure
+		err := session.sessionErrorLocked()
 		if err == nil {
-			err = session.sessionErrorLocked()
+			err = session.outputFailure
 		}
 		session.mutex.Unlock()
 		return err
@@ -2508,6 +2572,9 @@ func (session *nativeSession) sessionError() error {
 }
 
 func (session *nativeSession) sessionErrorLocked() error {
+	if session.startError != nil {
+		return session.startError
+	}
 	if session.outputFailure != nil {
 		return session.outputFailure
 	}

@@ -4,34 +4,41 @@
 package platform
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
-	"strconv"
-	"strings"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
 const (
-	jobObjectExtendedLimitInformation = 9
-	jobObjectLimitKillOnJobClose      = 0x00002000
-	processTerminate                  = 0x0001
-	processSetQuota                   = 0x0100
+	containmentCloseDeadline            = 5 * time.Second
+	containmentCloseProbeInterval       = 10 * time.Millisecond
+	jobObjectBasicAccountingInformation = 1
+	jobObjectExtendedLimitInformation   = 9
+	jobObjectLimitKillOnJobClose        = 0x00002000
 )
 
 var (
-	kernel32                             = syscall.NewLazyDLL("kernel32.dll")
-	createJobObject                      = kernel32.NewProc("CreateJobObjectW")
-	setInformationJobObject              = kernel32.NewProc("SetInformationJobObject")
-	assignProcessToJobObject             = kernel32.NewProc("AssignProcessToJobObject")
-	terminateJobObject                   = kernel32.NewProc("TerminateJobObject")
-	terminateProcessTreeForAttachFailure = func(pid int) error { return terminateWithTaskkill(pid, true) }
+	kernel32                         = syscall.NewLazyDLL("kernel32.dll")
+	createJobObject                  = kernel32.NewProc("CreateJobObjectW")
+	setInformationJobObject          = kernel32.NewProc("SetInformationJobObject")
+	assignProcessToJobObject         = kernel32.NewProc("AssignProcessToJobObject")
+	terminateJobObject               = kernel32.NewProc("TerminateJobObject")
+	queryInformationJobObject        = kernel32.NewProc("QueryInformationJobObject")
+	terminateProcessForAttachFailure = terminateFailedAttachProcess
+	terminateJob                     = terminateOwnedJob
+	queryJobActiveProcesses          = queryOwnedJobActiveProcesses
+	closeJob                         = syscall.CloseHandle
+	waitForEmptyJob                  = waitForJobToEmpty
+	readProcessIdentityFromHandle    = processIdentityFromHandle
 )
 
-// Containment owns the platform mechanism that keeps all descendants under the
-// lifecycle of a launched process.
+// Containment owns a launched process's platform-specific termination boundary.
 type Containment interface {
 	Terminate(force bool) error
 	Close() error
@@ -47,6 +54,17 @@ type basicLimitInformation struct {
 	affinity                uintptr
 	priorityClass           uint32
 	schedulingClass         uint32
+}
+
+type basicAccountingInformation struct {
+	totalUserTime             int64
+	totalKernelTime           int64
+	thisPeriodTotalUserTime   int64
+	thisPeriodTotalKernelTime int64
+	totalPageFaultCount       uint32
+	totalProcesses            uint32
+	activeProcesses           uint32
+	totalTerminatedProcesses  uint32
 }
 
 type ioCounters struct {
@@ -68,27 +86,33 @@ type extendedLimitInformation struct {
 }
 
 type jobContainment struct {
-	mutex  sync.Mutex
-	handle syscall.Handle
-	pid    int
+	mutex        sync.Mutex
+	handle       syscall.Handle
+	closeStarted bool
+	closeErr     error
 }
 
 // ConfigureProcess leaves inherited Job Object handling to AttachProcess.
 // CREATE_BREAKAWAY_FROM_JOB fails before the child starts when an inherited
 // CI Job Object does not permit it, while AssignProcessToJobObject retains the
 // existing fail-closed containment path.
-func ConfigureProcess(_ *exec.Cmd) {}
+func ConfigureProcess(_ *exec.Cmd) error { return nil }
 
-// AttachProcess adds the root process to a fresh Job Object. The kill-on-close
-// limit makes descendants die even after the root exits or they are reparented.
-func AttachProcess(pid int) (Containment, error) {
+// AttachProcess adds the root process to a fresh Job Object. The job owns the
+// root and descendants assigned after this call; processes that escape before
+// post-Start assignment or deliberately break away are outside this boundary.
+func AttachProcess(process *os.Process) (Containment, string, error) {
+	if process == nil || process.Pid <= 0 {
+		return nil, "", errors.New("process handle is required for containment")
+	}
+
 	handle, _, callError := createJobObject.Call(0, 0)
 	if handle == 0 {
-		return cleanupFailedAttach(pid, 0, fmt.Errorf("create job object: %w", callError))
+		return cleanupFailedAttach(process, 0, fmt.Errorf("create job object: %w", callError))
 	}
 	job := syscall.Handle(handle)
-	cleanup := func(errorValue error) (Containment, error) {
-		return cleanupFailedAttach(pid, job, errorValue)
+	cleanup := func(errorValue error) (Containment, string, error) {
+		return cleanupFailedAttach(process, job, errorValue)
 	}
 
 	limits := extendedLimitInformation{}
@@ -103,82 +127,167 @@ func AttachProcess(pid int) (Containment, error) {
 		return cleanup(fmt.Errorf("configure job object: %w", callError))
 	}
 
-	process, err := syscall.OpenProcess(processSetQuota|processTerminate, false, uint32(pid))
-	if err != nil {
-		return cleanup(fmt.Errorf("open process for job assignment: %w", err))
+	contained := &jobContainment{handle: job}
+	var identity string
+	var callbackErr error
+	var assigned bool
+	if err := process.WithHandle(func(processHandle uintptr) {
+		result, _, callError = assignProcessToJobObject.Call(uintptr(job), processHandle)
+		if result == 0 {
+			callbackErr = fmt.Errorf("assign process to job object: %w", callError)
+			return
+		}
+		assigned = true
+		identity, callbackErr = readProcessIdentityFromHandle(process.Pid, syscall.Handle(processHandle))
+		if callbackErr != nil {
+			callbackErr = fmt.Errorf("capture process creation identity: %w", callbackErr)
+		}
+	}); err != nil {
+		return cleanup(fmt.Errorf("borrow process handle for job assignment: %w", err))
 	}
-	defer syscall.CloseHandle(process)
-
-	result, _, callError = assignProcessToJobObject.Call(uintptr(job), uintptr(process))
-	if result == 0 {
-		return cleanup(fmt.Errorf("assign process to job object: %w", callError))
+	if callbackErr != nil {
+		if assigned {
+			return contained, identity, callbackErr
+		}
+		return cleanup(callbackErr)
 	}
-	return &jobContainment{handle: job, pid: pid}, nil
+	return contained, identity, nil
 }
 
-func cleanupFailedAttach(pid int, job syscall.Handle, attachErr error) (Containment, error) {
-	terminateErr := terminateProcessTreeForAttachFailure(pid)
+func cleanupFailedAttach(process *os.Process, job syscall.Handle, attachErr error) (Containment, string, error) {
+	terminateErr := terminateProcessForAttachFailure(process)
+	var closeErr error
 	if job != 0 {
-		_ = syscall.CloseHandle(job)
+		if err := closeJob(job); err != nil {
+			closeErr = fmt.Errorf("close unassigned job object: %w", err)
+		}
 	}
-	if terminateErr != nil {
-		return nil, errors.Join(attachErr, fmt.Errorf("terminate process tree after containment setup failure: %w", terminateErr))
+	if terminateErr != nil || closeErr != nil {
+		cleanupErr := closeErr
+		if terminateErr != nil {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("terminate process after containment setup failure: %w", terminateErr))
+		}
+		return nil, "", errors.Join(attachErr, cleanupErr)
 	}
-	return nil, attachErr
+	return nil, "", attachErr
+}
+
+func terminateFailedAttachProcess(process *os.Process) error {
+	if process == nil {
+		return errors.New("process handle is required")
+	}
+	if err := process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return err
+	}
+	return nil
 }
 
 func (job *jobContainment) Terminate(force bool) error {
 	job.mutex.Lock()
 	defer job.mutex.Unlock()
+	if job.closeStarted {
+		return job.closeErr
+	}
 	handle := job.handle
-	pid := job.pid
 	if handle == 0 {
 		return nil
 	}
 	if force {
-		result, _, callError := terminateJobObject.Call(uintptr(handle), 1)
-		if result == 0 {
-			return fmt.Errorf("terminate job object: %w", callError)
+		if err := terminateJob(handle); err != nil {
+			return fmt.Errorf("terminate job object: %w", err)
 		}
 		return nil
 	}
-	return terminateWithTaskkill(pid, false)
+	return fmt.Errorf("%w: soft process-tree termination is unavailable on Windows", errors.ErrUnsupported)
 }
 
-// Close releases the final Job Object handle. KILL_ON_JOB_CLOSE then stops all
-// remaining descendants, including reparented processes.
+// Close terminates the owned Job Object and observes an empty Job before
+// releasing its final handle. If proof fails, it still best-effort releases the
+// handle to trigger KILL_ON_JOB_CLOSE. Later calls may retry only a failed
+// handle release; they preserve the original stop-proof error and never signal
+// the Job Object again.
 func (job *jobContainment) Close() error {
 	job.mutex.Lock()
+	defer job.mutex.Unlock()
+	if job.closeStarted {
+		_ = job.releaseHandleLocked()
+		return job.closeErr
+	}
+	job.closeStarted = true
+
 	handle := job.handle
-	job.handle = 0
-	job.mutex.Unlock()
 	if handle == 0 {
 		return nil
 	}
-	if err := syscall.CloseHandle(handle); err != nil {
-		return fmt.Errorf("close job object: %w", err)
+	deadline := time.Now().Add(containmentCloseDeadline)
+	var stopErr error
+	if err := terminateJob(handle); err != nil {
+		stopErr = fmt.Errorf("terminate job object during containment close: %w", err)
+	} else if err := waitForEmptyJob(handle, deadline, queryJobActiveProcesses); err != nil {
+		stopErr = err
+	}
+	job.closeErr = errors.Join(stopErr, job.releaseHandleLocked())
+	return job.closeErr
+}
+
+func (job *jobContainment) releaseHandleLocked() error {
+	handle := job.handle
+	if handle == 0 {
+		return nil
+	}
+	if err := closeJob(handle); err != nil {
+		return fmt.Errorf("close job object after containment close: %w", err)
+	}
+	job.handle = 0
+	return nil
+}
+
+func terminateOwnedJob(handle syscall.Handle) error {
+	result, _, callError := terminateJobObject.Call(uintptr(handle), 1)
+	if result == 0 {
+		return callError
 	}
 	return nil
 }
 
-// terminateWithTaskkill uses the Windows task manager utility directly. /T
-// includes descendants; /F is reserved for the post-grace forced attempt.
-func terminateWithTaskkill(pid int, force bool) error {
-	arguments := []string{"/PID", strconv.Itoa(pid), "/T"}
-	if force {
-		arguments = append(arguments, "/F")
+func queryOwnedJobActiveProcesses(handle syscall.Handle) (uint32, error) {
+	accounting := basicAccountingInformation{}
+	result, _, callError := queryInformationJobObject.Call(
+		uintptr(handle),
+		jobObjectBasicAccountingInformation,
+		uintptr(unsafe.Pointer(&accounting)),
+		uintptr(unsafe.Sizeof(accounting)),
+		0,
+	)
+	if result == 0 {
+		return 0, callError
 	}
-
-	output, err := exec.Command("taskkill", arguments...).CombinedOutput()
-	if err == nil || processIsAlreadyGone(string(output)) {
-		return nil
-	}
-	return fmt.Errorf("taskkill process tree %d: %w: %s", pid, err, strings.TrimSpace(string(output)))
+	return accounting.activeProcesses, nil
 }
 
-func processIsAlreadyGone(output string) bool {
-	normalized := strings.ToLower(output)
-	return strings.Contains(normalized, "not found") ||
-		strings.Contains(normalized, "no running instance") ||
-		strings.Contains(normalized, "does not exist")
+func waitForJobToEmpty(handle syscall.Handle, deadline time.Time, query func(syscall.Handle) (uint32, error)) error {
+	for {
+		active, err := query(handle)
+		if err != nil {
+			return fmt.Errorf("query job object after containment close: %w", err)
+		}
+		if active == 0 {
+			return nil
+		}
+
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return fmt.Errorf("job object remained non-empty after containment close deadline")
+		}
+		if remaining > containmentCloseProbeInterval {
+			remaining = containmentCloseProbeInterval
+		}
+		time.Sleep(remaining)
+	}
+}
+
+// TerminateProcessGroup is unavailable on Windows because Job Objects, not
+// process groups, provide the supported containment primitive here.
+func TerminateProcessGroup(context.Context, *os.Process, string) error {
+	return fmt.Errorf("%w: pidfd process-group termination is unavailable on Windows", errors.ErrUnsupported)
 }

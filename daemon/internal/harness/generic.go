@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 
@@ -31,7 +32,11 @@ type executionRunner struct {
 }
 
 func (runner executionRunner) Start(ctx context.Context, invocation execution.Invocation, sink execution.Sink) (ProcessHandle, error) {
-	return runner.runner.Start(ctx, invocation, sink)
+	process, err := runner.runner.Start(ctx, invocation, sink)
+	if process == nil {
+		return nil, err
+	}
+	return process, err
 }
 
 // GenericAdapter wraps the existing direct process runner. It deliberately
@@ -138,7 +143,9 @@ func (adapter *GenericAdapter) Start(ctx context.Context, request StartRequest, 
 	if sink == nil {
 		sink = EventSinkFunc(func(context.Context, Event) error { return nil })
 	}
-	process, err := adapter.runner.Start(ctx, request.Invocation, execution.SinkFunc(func(eventContext context.Context, event execution.Event) error {
+	invocation := request.Invocation
+	invocation.PersistProcess = request.PersistProcess
+	process, err := adapter.runner.Start(ctx, invocation, execution.SinkFunc(func(eventContext context.Context, event execution.Event) error {
 		return sink.Handle(eventContext, Event{
 			Kind:     EventOutput,
 			Stream:   string(event.Stream),
@@ -147,15 +154,31 @@ func (adapter *GenericAdapter) Start(ctx context.Context, request StartRequest, 
 			Data:     append([]byte(nil), event.Data...),
 		})
 	}))
-	if err != nil {
-		return nil, fmt.Errorf("start generic harness: %w", err)
-	}
-	if process == nil {
+	if isNilProcessHandle(process) {
+		if err != nil {
+			return nil, fmt.Errorf("start generic harness: %w", err)
+		}
 		return nil, errors.New("generic process runner returned a nil process")
 	}
 	session := &genericSession{process: process, resultDone: make(chan struct{})}
 	go session.await()
+	if err != nil {
+		return session, fmt.Errorf("start generic harness: %w", err)
+	}
 	return session, nil
+}
+
+func isNilProcessHandle(process ProcessHandle) bool {
+	if process == nil {
+		return true
+	}
+	value := reflect.ValueOf(process)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 type genericSession struct {

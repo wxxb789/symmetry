@@ -25,7 +25,7 @@ func TestConclusiveCleanupRetainsArtifactsBeforeRetiringSupervisoryIntent(t *tes
 		t.Fatal(err)
 	}
 	defer store.Close()
-	journal := testJournal("retention-fallback", 1)
+	journal := stoppedTestJournal("retention-fallback", 1)
 	if err := store.SaveJournal(journal); err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestControlCommandWaitingWinsAndPausedWaitingCannotResume(t *testing.T) {
 
 func TestControlCommandCancellationSettlesAndRetainsWorkspace(t *testing.T) {
 	store := mustStore(t)
-	journal := testJournal("control-cancel", 1)
+	journal := stoppedTestJournal("control-cancel", 1)
 	if err := store.SaveJournal(journal); err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestControlCommandCancellationSettlesAndRetainsWorkspace(t *testing.T) {
 
 func TestControlCommandConclusiveCleanupRetiresUndeliverableIntents(t *testing.T) {
 	store := mustStore(t)
-	journal := testJournal("control-retire", 1)
+	journal := stoppedTestJournal("control-retire", 1)
 	if err := store.SaveJournal(journal); err != nil {
 		t.Fatal(err)
 	}
