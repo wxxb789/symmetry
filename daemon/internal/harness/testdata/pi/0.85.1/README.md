@@ -87,6 +87,9 @@ result.
 
 ## Opt-in retained-session restart
 
+[Recorded retained-session evidence](native-retained-resume.md) binds the
+Windows and Linux race outcomes to the exact tested source revision.
+
 `TestNativeRepositoryTaskRetainedResume` uses the same opt-in configuration as
 the repository task above, but runs two native turns across two adapter/process
 instances in the same isolated workspace and environment:
