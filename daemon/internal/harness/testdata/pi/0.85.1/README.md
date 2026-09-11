@@ -15,6 +15,42 @@ Separate [native transport evidence](native-smoke.md) records real Windows and
 Linux `Open/get_state/Close` checks. It does not upgrade these synthetic stream
 fixtures or prove credentialed repository work.
 
+## Opt-in repository task
+
+`TestNativeRepositoryTask` exercises one model turn through the production Pi
+adapter in an isolated temporary Git repository. It is not a daemon/Control E2E
+test and does not exercise or establish runtime capability admission. No
+authenticated result has been recorded for this test yet; the release
+capabilities remain unverified.
+
+From `daemon/`, explicitly configure these environment variables:
+
+- `SYMMETRY_PI_NATIVE_REPOSITORY_TASK=1`
+- `SYMMETRY_PI_NATIVE_REPOSITORY_TASK_EXECUTABLE`: absolute Pi 0.85.1 executable
+- `SYMMETRY_PI_NATIVE_REPOSITORY_TASK_PROVIDER`: the authorized native provider
+- `SYMMETRY_PI_NATIVE_REPOSITORY_TASK_MODEL`: the authorized native model
+- `SYMMETRY_PI_NATIVE_REPOSITORY_TASK_CREDENTIAL_ENV`: optionally, the name of
+  one already configured credential environment variable, not its value
+
+```text
+go test ./internal/harness/pi -run '^TestNativeRepositoryTask$' -count=1 -timeout=3m -v
+```
+
+The test copies only the selected credential into its isolated native process;
+it does not read the user's Pi credential/configuration files. Optional extensions,
+skills, templates, themes and context files are disabled. The only model tool is
+`write`. The temporary repository is a test target, not an OS security sandbox.
+Missing configuration, authentication failures and timeouts fail an enabled test.
+With the opt-in unset, a skip proves only that the test compiles.
+Unsupported platforms outside Linux and Windows always skip, including when
+the opt-in is set.
+
+The intended evidence is the actual file mutation, expected worktree change and
+unchanged HEAD, schema-valid progress result bound to the repository baseline, and bounded
+`Start/Open/StartTurn/WaitTurn/Close/Wait`. A progress result is not accepted work
+or an achieved Goal. Cancellation, retained resume, handoff, provider accounting
+and Control/PostgreSQL durability require separate evidence.
+
 ## RPC profile argument boundary
 
 The argument contract was inspected against upstream `v0.85.1`, commit
