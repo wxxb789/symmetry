@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
@@ -33,6 +34,11 @@ const (
 	nativeRealRepositoryTaskEnabledEnv    = "SYMMETRY_OPENCODE_NATIVE_REPOSITORY_TASK"
 	nativeRealRepositoryTaskExecutableEnv = "SYMMETRY_OPENCODE_NATIVE_REPOSITORY_TASK_EXECUTABLE"
 	nativeRealRepositoryTaskBaseURLEnv    = "SYMMETRY_OPENCODE_NATIVE_REPOSITORY_TASK_BASE_URL"
+	nativeResumeCaptureEnabledEnv         = "SYMMETRY_OPENCODE_NATIVE_RESUME_CAPTURE"
+	nativeResumeCaptureExecutableEnv      = "SYMMETRY_OPENCODE_NATIVE_RESUME_CAPTURE_EXECUTABLE"
+	nativeResumeCaptureBaseURLEnv         = "SYMMETRY_OPENCODE_NATIVE_RESUME_CAPTURE_BASE_URL"
+	nativeOpenCodeObserverMaxRequestBytes = 8 << 20
+	nativeOpenCodeEventCaptureMaximum     = 16
 	nativeAdmissionReplayTimeout          = 45 * time.Second
 	nativeRepositoryTaskTimeout           = 2 * time.Minute
 	nativeRepositoryTaskCloseTimeout      = 30 * time.Second
@@ -360,6 +366,637 @@ func TestNativePromptAdmissionReplaysAfterPost(t *testing.T) {
 	}
 }
 
+// TestNativeResumeEventCapture is deliberately opt-in and is a capture scaffold,
+// not Goal evidence. Resume:true here is only OpenCode's raw prompt option; it
+// does not prove Symmetry native resume, terminal outcome, usage, handoff,
+// cancellation, or any capability. The test keeps the OpenCode child in a
+// fresh HOME/config/data/cache/temp tree, sends no parent credential into that
+// child, and logs only redacted event metadata. Its loopback observer forwards
+// the real /v1/responses request without supplying a gateway response.
+func TestNativeResumeEventCapture(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+		t.Skip("native OpenCode resume event capture supports Linux and Windows only")
+	}
+	if os.Getenv(nativeResumeCaptureEnabledEnv) != "1" {
+		t.Skip("set SYMMETRY_OPENCODE_NATIVE_RESUME_CAPTURE=1 to run the native OpenCode Resume:true event capture scaffold")
+	}
+	executable := strings.TrimSpace(os.Getenv(nativeResumeCaptureExecutableEnv))
+	if executable == "" || !filepath.IsAbs(executable) {
+		t.Fatalf("%s must name the absolute OpenCode %s executable", nativeResumeCaptureExecutableEnv, TestedVersion)
+	}
+	info, err := os.Stat(executable)
+	if err != nil || !info.Mode().IsRegular() {
+		t.Fatal("native OpenCode executable must be an existing regular file")
+	}
+	upstream := nativeOpenCodeRequiredLoopbackUpstream(t, nativeResumeCaptureBaseURLEnv)
+
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatalf("create isolated native OpenCode resume capture workspace: %v", err)
+	}
+	observer := newNativeOpenCodeRepositoryTaskObserver(t, upstream)
+	defer observer.Close()
+	environment := nativeOpenCodeRepositoryTaskEnvironmentWithConfig(t, root, nativeOpenCodeRepositoryTaskRealConfig(observer.baseURL), nativeRealAPIKeyEnv+"="+nativeRealAPIKey)
+	nativeOpenCodeRepositoryTaskCheckEnvironment(t, environment, observer.baseURL)
+	nativeOpenCodeResumeCaptureCheckIsolation(t, root, environment)
+	nativeOpenCodeRepositoryTaskCheckVersion(t, executable, workspace, environment)
+
+	startContext, startCancel := context.WithTimeout(context.Background(), nativeRepositoryTaskTimeout)
+	defer startCancel()
+	session, err := NewAdapter(executable).Start(startContext, harness.StartRequest{
+		Workspace:  workspace,
+		Invocation: execution.Invocation{Env: environment},
+		PersistProcess: func(pid int, identity string) error {
+			if pid <= 0 || strings.TrimSpace(identity) == "" {
+				return os.ErrInvalid
+			}
+			return nil
+		},
+	}, harness.EventSinkFunc(func(context.Context, harness.Event) error { return nil }))
+	if err != nil {
+		t.Fatalf("start native OpenCode Resume:true event capture: %v", err)
+	}
+	closed := false
+	t.Cleanup(func() {
+		if closed {
+			return
+		}
+		cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), nativeRepositoryTaskCloseTimeout)
+		defer cleanupCancel()
+		if err := session.Close(cleanupContext); err != nil {
+			t.Errorf("cleanup native OpenCode Resume:true event capture: %v", err)
+		}
+		if _, err := session.Wait(cleanupContext); err != nil {
+			t.Errorf("wait for native OpenCode Resume:true event capture cleanup: %v", err)
+		}
+	})
+
+	staged, ok := session.(harness.StagedSession)
+	if !ok {
+		t.Fatal("native OpenCode adapter did not return a staged session")
+	}
+	openContext, openCancel := context.WithTimeout(context.Background(), nativeRepositoryTaskTimeout)
+	defer openCancel()
+	handle, err := staged.Open(openContext)
+	if err != nil {
+		t.Fatalf("open native OpenCode Resume:true event capture session: %v", err)
+	}
+	if handle.ID == "" {
+		t.Fatal("native OpenCode Resume:true event capture session returned an empty identity")
+	}
+	native, ok := session.(*nativeSession)
+	if !ok {
+		t.Fatalf("native OpenCode session = %T, want *nativeSession", session)
+	}
+	native.mu.Lock()
+	client, ok := native.client.(*Client)
+	native.mu.Unlock()
+	if !ok || client == nil {
+		t.Fatal("native OpenCode session did not retain its verified production client after Open")
+	}
+
+	prompt := PromptRequest{
+		ID:       randomID("msg_"),
+		Text:     "Symmetry native Resume:true event capture probe " + randomID("probe_"),
+		Delivery: "steer",
+		Resume:   true,
+	}
+	promptContext, promptCancel := context.WithTimeout(context.Background(), nativeRepositoryTaskTimeout)
+	defer promptCancel()
+	admission, err := client.Prompt(promptContext, handle.ID, prompt)
+	if err != nil {
+		t.Fatalf("post native OpenCode Resume:true prompt: %v", err)
+	}
+	if admission.ID != prompt.ID || admission.SessionID != handle.ID || admission.Text != prompt.Text || admission.Delivery != prompt.Delivery || admission.AdmittedSeq == 0 {
+		t.Fatalf("native OpenCode Resume:true prompt admission = %+v, want request identity and a positive admitted sequence", admission)
+	}
+
+	// Keep the capture order explicit: admit Resume:true first, then replay the
+	// retained session stream from the beginning through the private client.
+	eventsContext, eventsCancel := context.WithTimeout(context.Background(), nativeRepositoryTaskTimeout)
+	eventStream, err := client.OpenSessionEvents(eventsContext, handle.ID, 0)
+	if err != nil {
+		eventsCancel()
+		t.Fatalf("open native OpenCode Resume:true event stream: %v", err)
+	}
+	captured := make(chan nativeOpenCodeEventCaptureResult, 1)
+	captureJoined := false
+	t.Cleanup(func() {
+		eventsCancel()
+		_ = eventStream.Close()
+		if captureJoined {
+			return
+		}
+		joinContext, joinCancel := context.WithTimeout(context.Background(), nativeRepositoryTaskCloseTimeout)
+		defer joinCancel()
+		select {
+		case <-captured:
+		case <-joinContext.Done():
+			t.Errorf("join native OpenCode Resume:true event capture cleanup: %v", joinContext.Err())
+		}
+	})
+	go func() {
+		capture := nativeOpenCodeCaptureResumeEventMetadata(eventsContext, eventStream, nativeOpenCodeEventCaptureMaximum, handle.ID, prompt.ID, admission.AdmittedSeq)
+		captured <- capture
+	}()
+	if err := observer.waitForRequest(promptContext); err != nil {
+		t.Fatal(err)
+	}
+
+	var capture nativeOpenCodeEventCaptureResult
+	select {
+	case capture = <-captured:
+		captureJoined = true
+	case <-eventsContext.Done():
+		t.Fatalf("capture native OpenCode Resume:true event metadata: %v", eventsContext.Err())
+	}
+	eventsCancel()
+	_ = eventStream.Close()
+	if capture.err != nil {
+		t.Fatalf("capture native OpenCode Resume:true event metadata: %v", capture.err)
+	}
+	if !capture.admissionObserved || !capture.nonAdmissionObserved {
+		t.Fatalf("native OpenCode Resume:true capture = %+v, want matched admission and observed non-admission event", capture)
+	}
+	for _, event := range capture.events {
+		t.Logf("native OpenCode Resume:true event metadata (not Goal evidence): type=%q cursor=%d version=%d event=%q aggregate=%q session=%q message=%q", event.Type, event.Cursor, event.Version, event.EventID, event.AggregateID, event.SessionID, event.MessageID)
+	}
+
+	closeContext, closeCancel := context.WithTimeout(context.Background(), nativeRepositoryTaskCloseTimeout)
+	defer closeCancel()
+	if err := staged.Close(closeContext); err != nil {
+		t.Fatalf("close native OpenCode Resume:true event capture: %v", err)
+	}
+	result, err := staged.Wait(closeContext)
+	if err != nil {
+		t.Fatalf("wait native OpenCode Resume:true event capture: %v", err)
+	}
+	closed = true
+	if result.Kind != harness.ResultUnknown || result.Semantic != nil || !result.Process.Terminated ||
+		result.Process.SinkError != nil || result.Process.OutputError != nil ||
+		result.Process.TerminationError != nil || result.Process.ContainmentError != nil || result.Process.WaitError != nil {
+		t.Fatalf("native OpenCode Resume:true event capture result = %+v, want unknown with bounded process stop", result)
+	}
+}
+
+type nativeOpenCodeEventCaptureResult struct {
+	events               []nativeOpenCodeEventMetadata
+	err                  error
+	admissionObserved    bool
+	nonAdmissionObserved bool
+}
+
+type nativeOpenCodeEventMetadata struct {
+	Type        string
+	EventID     string
+	Cursor      uint64
+	Version     uint64
+	AggregateID string
+	SessionID   string
+	MessageID   string
+}
+
+const nativeOpenCodeAdmissionEventType = "session.next.prompt.admitted"
+
+var (
+	errNativeOpenCodeResumeCaptureMissingAdmission    = errors.New("native OpenCode resume capture did not observe the matching admission event")
+	errNativeOpenCodeResumeCaptureMissingNonAdmission = errors.New("native OpenCode resume capture observed admission only")
+)
+
+func nativeOpenCodeCaptureSessionEventMetadata(ctx context.Context, stream io.ReadCloser, maximum int) ([]nativeOpenCodeEventMetadata, error) {
+	return nativeOpenCodeCaptureSessionEventMetadataUntil(ctx, stream, maximum, func(events []nativeOpenCodeEventMetadata) bool {
+		return len(events) >= maximum
+	})
+}
+
+func nativeOpenCodeCaptureResumeEventMetadata(ctx context.Context, stream io.ReadCloser, maximum int, sessionID, messageID string, cursor uint64) nativeOpenCodeEventCaptureResult {
+	events, err := nativeOpenCodeCaptureSessionEventMetadataUntil(ctx, stream, maximum, func(events []nativeOpenCodeEventMetadata) bool {
+		capture, _ := nativeOpenCodeEvaluateResumeCapture(events, sessionID, messageID, cursor)
+		return capture.admissionObserved && capture.nonAdmissionObserved
+	})
+	capture, validationErr := nativeOpenCodeEvaluateResumeCapture(events, sessionID, messageID, cursor)
+	if err != nil {
+		capture.err = err
+	} else if validationErr != nil {
+		capture.err = validationErr
+	}
+	return capture
+}
+
+func nativeOpenCodeEvaluateResumeCapture(events []nativeOpenCodeEventMetadata, sessionID, messageID string, cursor uint64) (nativeOpenCodeEventCaptureResult, error) {
+	capture := nativeOpenCodeEventCaptureResult{events: append([]nativeOpenCodeEventMetadata(nil), events...)}
+	wantedSession := nativeOpenCodeRedactIdentity(sessionID)
+	wantedMessage := nativeOpenCodeRedactIdentity(messageID)
+	for _, event := range events {
+		if event.Type == nativeOpenCodeAdmissionEventType {
+			if event.Cursor == cursor && event.AggregateID == wantedSession && event.SessionID == wantedSession && event.MessageID == wantedMessage {
+				capture.admissionObserved = true
+			}
+			continue
+		}
+		if event.Cursor > cursor {
+			capture.nonAdmissionObserved = true
+		}
+	}
+	if !capture.admissionObserved {
+		return capture, errNativeOpenCodeResumeCaptureMissingAdmission
+	}
+	if !capture.nonAdmissionObserved {
+		return capture, errNativeOpenCodeResumeCaptureMissingNonAdmission
+	}
+	return capture, nil
+}
+
+func nativeOpenCodeCaptureSessionEventMetadataUntil(ctx context.Context, stream io.ReadCloser, maximum int, complete func([]nativeOpenCodeEventMetadata) bool) ([]nativeOpenCodeEventMetadata, error) {
+	if ctx == nil {
+		return nil, errors.New("native OpenCode event capture context is nil")
+	}
+	if stream == nil {
+		return nil, errors.New("native OpenCode event capture stream is nil")
+	}
+	if maximum <= 0 {
+		return nil, errors.New("native OpenCode event capture maximum must be positive")
+	}
+	if complete == nil {
+		return nil, errors.New("native OpenCode event capture completion predicate is nil")
+	}
+	decoder := NewDecoder(defaultMaxFrameBytes)
+	bufferSize := streamReadChunkSize
+	if bufferSize <= 0 {
+		bufferSize = 32 * 1024
+	}
+	if err := ctx.Err(); err != nil {
+		_ = stream.Close()
+		return nil, err
+	}
+	stopOnCancel := context.AfterFunc(ctx, func() { _ = stream.Close() })
+	defer stopOnCancel()
+	events := make([]nativeOpenCodeEventMetadata, 0, maximum)
+	observe := func(frames []Frame) error {
+		for _, frame := range frames {
+			event, err := nativeOpenCodeDecodeEventMetadata(frame)
+			if err != nil {
+				return err
+			}
+			events = append(events, event)
+			if len(events) >= maximum || complete(events) {
+				return nil
+			}
+		}
+		return nil
+	}
+	for len(events) < maximum && !complete(events) {
+		buffer := make([]byte, bufferSize)
+		count, readErr := stream.Read(buffer)
+		if count > 0 {
+			frames, err := decoder.Feed(buffer[:count])
+			if err != nil {
+				return events, err
+			}
+			if err := observe(frames); err != nil {
+				return events, err
+			}
+			if complete(events) {
+				return events, nil
+			}
+		}
+		if readErr == nil {
+			continue
+		}
+		if ctx.Err() != nil {
+			return events, ctx.Err()
+		}
+		if !errors.Is(readErr, io.EOF) {
+			return events, readErr
+		}
+		frames, err := decoder.Close()
+		if err != nil {
+			return events, err
+		}
+		if err := observe(frames); err != nil {
+			return events, err
+		}
+		if complete(events) {
+			return events, nil
+		}
+		if len(events) == 0 {
+			return events, errStreamEndedUnknown
+		}
+		return events, nil
+	}
+	return events, nil
+}
+
+func nativeOpenCodeDecodeEventMetadata(frame Frame) (nativeOpenCodeEventMetadata, error) {
+	object, err := strictObject(frame.Data)
+	if err != nil {
+		return nativeOpenCodeEventMetadata{}, fmt.Errorf("decode native OpenCode event metadata: %w", err)
+	}
+	typeValue, ok := requiredString(object, "type")
+	if !ok || strings.TrimSpace(typeValue) == "" {
+		return nativeOpenCodeEventMetadata{}, errors.New("native OpenCode event capture observed an event without a type")
+	}
+	metadata := nativeOpenCodeEventMetadata{Type: strings.TrimSpace(typeValue)}
+	if value, ok := requiredString(object, "id"); ok {
+		metadata.EventID = nativeOpenCodeRedactIdentity(value)
+	}
+	if raw, exists := object["durable"]; exists {
+		cursor, err := decodeDurableCursor(raw)
+		if err != nil {
+			return nativeOpenCodeEventMetadata{}, fmt.Errorf("decode native OpenCode event cursor: %w", err)
+		}
+		metadata.Cursor = cursor.Seq
+		metadata.Version = cursor.Version
+		metadata.AggregateID = nativeOpenCodeRedactIdentity(cursor.AggregateID)
+	}
+	if raw, exists := object["data"]; exists {
+		if data, err := strictObject(raw); err == nil {
+			if value, ok := requiredString(data, "sessionID"); ok {
+				metadata.SessionID = nativeOpenCodeRedactIdentity(value)
+			}
+			if value, ok := requiredString(data, "messageID"); ok {
+				metadata.MessageID = nativeOpenCodeRedactIdentity(value)
+			}
+		}
+	}
+	return metadata, nil
+}
+
+func nativeOpenCodeRedactIdentity(value string) string {
+	value = strings.TrimSpace(value)
+	for _, prefix := range []string{"evt_", "ses_", "msg_"} {
+		if strings.HasPrefix(value, prefix) {
+			return prefix + "[redacted]"
+		}
+	}
+	if value == "" {
+		return ""
+	}
+	return "[redacted]"
+}
+
+func TestNativeOpenCodeResumeCaptureMetadataRedactsPayload(t *testing.T) {
+	stream := io.NopCloser(strings.NewReader("data: {\"id\":\"evt_private\",\"type\":\"session.next.prompt.admitted\",\"durable\":{\"aggregateID\":\"ses_private\",\"seq\":7,\"version\":2},\"data\":{\"sessionID\":\"ses_private\",\"messageID\":\"msg_private\",\"prompt\":{\"text\":\"do not record this\"}}}\n\n"))
+	events, err := nativeOpenCodeCaptureSessionEventMetadata(context.Background(), stream, 1)
+	if err != nil {
+		t.Fatalf("capture event metadata: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("captured %d events, want 1", len(events))
+	}
+	event := events[0]
+	if event.Type != "session.next.prompt.admitted" || event.Cursor != 7 || event.Version != 2 {
+		t.Fatalf("event metadata = %+v, want type/cursor/version", event)
+	}
+	for _, identity := range []string{event.EventID, event.AggregateID, event.SessionID, event.MessageID} {
+		if strings.Contains(identity, "private") {
+			t.Fatalf("event metadata leaked identity: %q", identity)
+		}
+	}
+	if strings.Contains(fmt.Sprintf("%+v", event), "do not record this") {
+		t.Fatal("event metadata leaked prompt text")
+	}
+}
+
+func TestNativeOpenCodeResumeCaptureRejectsAdmissionOnly(t *testing.T) {
+	admissionFrame := "data: {\"id\":\"evt_admission\",\"type\":\"session.next.prompt.admitted\",\"durable\":{\"aggregateID\":\"ses_capture\",\"seq\":7,\"version\":1},\"data\":{\"sessionID\":\"ses_capture\",\"messageID\":\"msg_capture\",\"prompt\":{\"text\":\"redacted\"}}}\n\n"
+	admissionOnly := nativeOpenCodeCaptureResumeEventMetadata(
+		context.Background(),
+		io.NopCloser(strings.NewReader(admissionFrame)),
+		nativeOpenCodeEventCaptureMaximum,
+		"ses_capture",
+		"msg_capture",
+		7,
+	)
+	if !admissionOnly.admissionObserved || admissionOnly.nonAdmissionObserved || !errors.Is(admissionOnly.err, errNativeOpenCodeResumeCaptureMissingNonAdmission) {
+		t.Fatalf("admission-only capture = %+v, want explicit non-admission failure", admissionOnly)
+	}
+
+	priorNonAdmissionFrame := "data: {\"id\":\"evt_prior_update\",\"type\":\"message.updated\",\"durable\":{\"aggregateID\":\"ses_capture\",\"seq\":6,\"version\":1},\"data\":{\"sessionID\":\"ses_capture\"}}\n\n"
+	priorOnly := nativeOpenCodeCaptureResumeEventMetadata(
+		context.Background(),
+		io.NopCloser(strings.NewReader(admissionFrame+priorNonAdmissionFrame)),
+		nativeOpenCodeEventCaptureMaximum,
+		"ses_capture",
+		"msg_capture",
+		7,
+	)
+	if !priorOnly.admissionObserved || priorOnly.nonAdmissionObserved || !errors.Is(priorOnly.err, errNativeOpenCodeResumeCaptureMissingNonAdmission) {
+		t.Fatalf("lower-cursor non-admission capture = %+v, want explicit progress failure", priorOnly)
+	}
+
+	nonAdmissionFrame := "data: {\"id\":\"evt_update\",\"type\":\"message.updated\",\"durable\":{\"aggregateID\":\"ses_capture\",\"seq\":8,\"version\":1},\"data\":{\"sessionID\":\"ses_capture\"}}\n\n"
+	complete := nativeOpenCodeCaptureResumeEventMetadata(
+		context.Background(),
+		io.NopCloser(strings.NewReader(admissionFrame+nonAdmissionFrame)),
+		nativeOpenCodeEventCaptureMaximum,
+		"ses_capture",
+		"msg_capture",
+		7,
+	)
+	if complete.err != nil || !complete.admissionObserved || !complete.nonAdmissionObserved {
+		t.Fatalf("admission plus non-admission capture = %+v, want success", complete)
+	}
+}
+
+func TestNativeOpenCodeEndToEndHeadersDropHopByHopFields(t *testing.T) {
+	source := make(http.Header)
+	source.Add("Connection", "keep-alive, X-Connection-Only")
+	source.Set("Keep-Alive", "timeout=5")
+	source.Set("X-Connection-Only", "drop")
+	source.Set("Authorization", "Bearer synthetic")
+	source.Set("Content-Type", "application/json")
+	source.Set("X-Trace", "preserve")
+
+	filtered := nativeOpenCodeEndToEndHeaders(source)
+	for _, name := range []string{"Connection", "Keep-Alive", "X-Connection-Only"} {
+		if value := filtered.Get(name); value != "" {
+			t.Fatalf("filtered %s = %q, want omitted", name, value)
+		}
+	}
+	if filtered.Get("Authorization") != "Bearer synthetic" || filtered.Get("Content-Type") != "application/json" || filtered.Get("X-Trace") != "preserve" {
+		t.Fatalf("filtered end-to-end headers = %#v, lost a permitted header", filtered)
+	}
+}
+
+func TestNativeOpenCodeObserverRequestLimitAndCompletionSignal(t *testing.T) {
+	observer := &nativeOpenCodeRepositoryTaskObserver{requestDone: make(chan struct{})}
+	request := &http.Request{
+		Method:        http.MethodPost,
+		URL:           &url.URL{Scheme: "http", Host: "127.0.0.1:1", Path: "/v1/responses"},
+		Body:          io.NopCloser(strings.NewReader("")),
+		ContentLength: nativeOpenCodeObserverMaxRequestBytes + 1,
+		Header:        make(http.Header),
+	}
+	response := httptest.NewRecorder()
+	observer.handle(response, request)
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized observer request status = %d, want %d", response.Code, http.StatusRequestEntityTooLarge)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := observer.waitForRequest(ctx); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("wait after oversized request = %v, want bounded observer error", err)
+	}
+}
+
+func TestNativeOpenCodeObserverRejectsUpstreamRedirect(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Location", "https://provider.invalid/redirect")
+		response.WriteHeader(http.StatusTemporaryRedirect)
+	}))
+	defer upstream.Close()
+	upstreamURL, err := url.Parse(upstream.URL + "/v1")
+	if err != nil {
+		t.Fatalf("parse upstream URL: %v", err)
+	}
+	observer := &nativeOpenCodeRepositoryTaskObserver{
+		upstream:    upstreamURL,
+		requestDone: make(chan struct{}),
+	}
+	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:1/v1/responses", strings.NewReader(`{"model":"gpt-5.6-terra","reasoning":{"effort":"high"}}`))
+	response := httptest.NewRecorder()
+	observer.handle(response, request)
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("upstream redirect status = %d, want %d", response.Code, http.StatusBadGateway)
+	}
+	if location := response.Header().Get("Location"); location != "" {
+		t.Fatalf("observer forwarded upstream Location header %q", location)
+	}
+}
+
+func TestNativeOpenCodeRealConfigUsesLoopbackObserverEndpoint(t *testing.T) {
+	requestPath := make(chan string, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requestPath <- request.URL.Path
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(response, `{"id":"offline-observer"}`)
+	}))
+	defer upstream.Close()
+	upstreamURL, err := url.Parse(upstream.URL + "/v1")
+	if err != nil {
+		t.Fatalf("parse upstream URL: %v", err)
+	}
+	observer := newNativeOpenCodeRepositoryTaskObserver(t, upstreamURL)
+	defer observer.Close()
+
+	configJSON := nativeOpenCodeRepositoryTaskRealConfig(observer.baseURL)
+	nativeOpenCodeAssertRealConfigLoopbackEndpoints(t, configJSON, observer.baseURL)
+
+	request, err := http.NewRequest(http.MethodPost, observer.baseURL+"/responses", strings.NewReader(`{"model":"gpt-5.6-terra","reasoning":{"effort":"high"}}`))
+	if err != nil {
+		t.Fatalf("create offline observer request: %v", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("send offline observer request: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("offline observer response status = %d, want %d", response.StatusCode, http.StatusOK)
+	}
+	select {
+	case path := <-requestPath:
+		if path != "/v1/responses" {
+			t.Fatalf("upstream request path = %q, want /v1/responses", path)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("offline observer did not receive the request")
+	}
+	waitContext, waitCancel := context.WithTimeout(context.Background(), time.Second)
+	defer waitCancel()
+	if err := observer.waitForRequest(waitContext); err != nil {
+		t.Fatalf("wait for offline observer request: %v", err)
+	}
+}
+
+func nativeOpenCodeAssertRealConfigLoopbackEndpoints(t *testing.T, configJSON, expectedBaseURL string) {
+	t.Helper()
+	if strings.Contains(configJSON, "api.openai.com") {
+		t.Fatal("native OpenCode real config contains the public OpenAI endpoint")
+	}
+	var config map[string]any
+	if err := json.Unmarshal([]byte(configJSON), &config); err != nil {
+		t.Fatalf("decode native OpenCode real config: %v", err)
+	}
+	providers, ok := config["provider"].(map[string]any)
+	if !ok {
+		t.Fatal("native OpenCode real config provider object is missing")
+	}
+	provider, ok := providers[nativeRealProvider].(map[string]any)
+	if !ok {
+		t.Fatalf("native OpenCode real config provider %q is missing", nativeRealProvider)
+	}
+	options, ok := provider["options"].(map[string]any)
+	if !ok {
+		t.Fatal("native OpenCode real config provider options are missing")
+	}
+	models, ok := provider["models"].(map[string]any)
+	if !ok {
+		t.Fatal("native OpenCode real config models are missing")
+	}
+	model, ok := models[nativeRealModel].(map[string]any)
+	if !ok {
+		t.Fatalf("native OpenCode real config model %q is missing", nativeRealModel)
+	}
+	nestedProvider, ok := model["provider"].(map[string]any)
+	if !ok {
+		t.Fatal("native OpenCode real config model provider is missing")
+	}
+	for field, value := range map[string]any{
+		"options.baseURL":    options["baseURL"],
+		"model.provider.api": nestedProvider["api"],
+	} {
+		got, ok := value.(string)
+		if !ok || got != expectedBaseURL {
+			t.Fatalf("native OpenCode real config %s = %v, want loopback %q", field, value, expectedBaseURL)
+		}
+		parsed, err := url.Parse(got)
+		if err != nil || parsed.Scheme != "http" || parsed.Hostname() != "127.0.0.1" || parsed.Path != "/v1" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+			t.Fatalf("native OpenCode real config %s is not a numeric loopback endpoint: %q", field, got)
+		}
+	}
+}
+
+func nativeOpenCodeResumeCaptureCheckIsolation(t *testing.T, root string, environment []string) {
+	t.Helper()
+	values := make(map[string]string, len(environment))
+	for _, entry := range environment {
+		name, value, found := strings.Cut(entry, "=")
+		if found {
+			values[name] = value
+		}
+	}
+	for name, want := range map[string]string{
+		"HOME":            filepath.Join(root, "home"),
+		"USERPROFILE":     filepath.Join(root, "home"),
+		"APPDATA":         filepath.Join(root, "appdata"),
+		"LOCALAPPDATA":    filepath.Join(root, "localappdata"),
+		"XDG_CONFIG_HOME": filepath.Join(root, "config"),
+		"XDG_CACHE_HOME":  filepath.Join(root, "cache"),
+		"XDG_DATA_HOME":   filepath.Join(root, "data"),
+		"XDG_STATE_HOME":  filepath.Join(root, "state"),
+		"TEMP":            filepath.Join(root, "tmp"),
+		"TMP":             filepath.Join(root, "tmp"),
+	} {
+		if got := values[name]; got != want {
+			t.Fatalf("native OpenCode Resume:true capture %s = %q, want isolated %q", name, got, want)
+		}
+	}
+	for name, value := range values {
+		upper := strings.ToUpper(name)
+		if !strings.Contains(upper, "KEY") && !strings.Contains(upper, "TOKEN") && !strings.Contains(upper, "SECRET") && !strings.Contains(upper, "CREDENTIAL") && !strings.Contains(upper, "AUTH") {
+			continue
+		}
+		if name != nativeRealAPIKeyEnv || value != nativeRealAPIKey {
+			t.Fatalf("native OpenCode Resume:true capture copied credential-like environment variable %s", name)
+		}
+	}
+}
+
 func nativeOpenCodeReadPromptAdmittedEvent(ctx context.Context, stream io.ReadCloser, sessionID string, prompt PromptRequest) (PromptAdmittedEvent, error) {
 	if ctx == nil {
 		return PromptAdmittedEvent{}, errors.New("native OpenCode admission stream context is nil")
@@ -376,28 +1013,15 @@ func nativeOpenCodeReadPromptAdmittedEvent(ctx context.Context, stream io.ReadCl
 	if bufferSize <= 0 {
 		bufferSize = 32 * 1024
 	}
+	if err := ctx.Err(); err != nil {
+		_ = stream.Close()
+		return PromptAdmittedEvent{}, err
+	}
+	stopOnCancel := context.AfterFunc(ctx, func() { _ = stream.Close() })
+	defer stopOnCancel()
 	for {
 		buffer := make([]byte, bufferSize)
-		readResult := make(chan struct {
-			count int
-			err   error
-		}, 1)
-		go func() {
-			count, readErr := stream.Read(buffer)
-			readResult <- struct {
-				count int
-				err   error
-			}{count: count, err: readErr}
-		}()
-		var count int
-		var readErr error
-		select {
-		case result := <-readResult:
-			count, readErr = result.count, result.err
-		case <-ctx.Done():
-			_ = stream.Close()
-			return PromptAdmittedEvent{}, ctx.Err()
-		}
+		count, readErr := stream.Read(buffer)
 
 		if count > 0 {
 			frames, feedErr := decoder.Feed(buffer[:count])
@@ -420,6 +1044,9 @@ func nativeOpenCodeReadPromptAdmittedEvent(ctx context.Context, stream io.ReadCl
 		}
 		if readErr == nil {
 			continue
+		}
+		if ctx.Err() != nil {
+			return PromptAdmittedEvent{}, ctx.Err()
 		}
 		if !errors.Is(readErr, io.EOF) {
 			return PromptAdmittedEvent{}, readErr
@@ -467,7 +1094,7 @@ func TestNativeRepositoryTask(t *testing.T) {
 	if err != nil || !info.Mode().IsRegular() {
 		t.Fatalf("native OpenCode executable must be an existing regular file")
 	}
-	upstream := nativeOpenCodeRepositoryTaskRequiredUpstream(t)
+	upstream := nativeOpenCodeRequiredLoopbackUpstream(t, nativeRealRepositoryTaskBaseURLEnv)
 
 	root := t.TempDir()
 	workspace := filepath.Join(root, "workspace")
@@ -758,7 +1385,7 @@ func nativeOpenCodeRepositoryTaskRealConfig(baseURL string) string {
 						},
 						"provider": map[string]any{
 							"npm": "@ai-sdk/openai",
-							"api": "https://api.openai.com/v1",
+							"api": baseURL,
 						},
 					},
 				},
@@ -783,19 +1410,19 @@ func nativeOpenCodeRepositoryTaskRealConfig(baseURL string) string {
 	return string(encoded)
 }
 
-func nativeOpenCodeRepositoryTaskRequiredUpstream(t *testing.T) *url.URL {
+func nativeOpenCodeRequiredLoopbackUpstream(t *testing.T, environmentName string) *url.URL {
 	t.Helper()
-	raw := strings.TrimSpace(os.Getenv(nativeRealRepositoryTaskBaseURLEnv))
+	raw := strings.TrimSpace(os.Getenv(environmentName))
 	if raw == "" {
-		t.Fatalf("%s must provide the fixed upstream base URL", nativeRealRepositoryTaskBaseURLEnv)
+		t.Fatalf("%s must provide the fixed upstream base URL", environmentName)
 	}
 	parsed, err := url.Parse(raw)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Path != "/v1" {
-		t.Fatalf("%s must be an http(s) numeric loopback URL ending in /v1", nativeRealRepositoryTaskBaseURLEnv)
+		t.Fatalf("%s must be an http(s) numeric loopback URL ending in /v1", environmentName)
 	}
 	host, port, err := net.SplitHostPort(parsed.Host)
 	if err != nil || host != "127.0.0.1" || net.ParseIP(host) == nil || port == "" {
-		t.Fatalf("%s must use numeric 127.0.0.1:<port>/v1: %q", nativeRealRepositoryTaskBaseURLEnv, raw)
+		t.Fatalf("%s must use numeric 127.0.0.1:<port>/v1: %q", environmentName, raw)
 	}
 	return parsed
 }
@@ -940,6 +1567,10 @@ type nativeOpenCodeRepositoryTaskObserver struct {
 	sawReasoning bool
 	lastStatus   int
 	err          error
+	requestDone  chan struct{}
+	doneOnce     sync.Once
+	serveDone    chan struct{}
+	closeOnce    sync.Once
 }
 
 type nativeOpenCodeRepositoryTaskSink struct {
@@ -1121,12 +1752,15 @@ func newNativeOpenCodeRepositoryTaskObserver(t *testing.T, upstream *url.URL) *n
 		t.Fatalf("listen real native OpenCode observer: %v", err)
 	}
 	observer := &nativeOpenCodeRepositoryTaskObserver{
-		listener: listener,
-		upstream: upstream,
-		baseURL:  "http://" + listener.Addr().String() + "/v1",
+		listener:    listener,
+		upstream:    upstream,
+		baseURL:     "http://" + listener.Addr().String() + "/v1",
+		requestDone: make(chan struct{}),
+		serveDone:   make(chan struct{}),
 	}
 	observer.server = &http.Server{Handler: http.HandlerFunc(observer.handle)}
 	go func() {
+		defer close(observer.serveDone)
 		if err := observer.server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			observer.recordError(err)
 		}
@@ -1140,10 +1774,20 @@ func (observer *nativeOpenCodeRepositoryTaskObserver) handle(response http.Respo
 		http.Error(response, "only /v1/responses is permitted", http.StatusNotFound)
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(request.Body, 8<<20))
+	if request.ContentLength > nativeOpenCodeObserverMaxRequestBytes {
+		observer.recordError(fmt.Errorf("real OpenCode observer request exceeds %d-byte limit", nativeOpenCodeObserverMaxRequestBytes))
+		http.Error(response, "request too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(request.Body, nativeOpenCodeObserverMaxRequestBytes+1))
 	if err != nil {
 		observer.recordError(fmt.Errorf("read real OpenCode observer request: %w", err))
 		http.Error(response, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if int64(len(body)) > nativeOpenCodeObserverMaxRequestBytes {
+		observer.recordError(fmt.Errorf("real OpenCode observer request exceeds %d-byte limit", nativeOpenCodeObserverMaxRequestBytes))
+		http.Error(response, "request too large", http.StatusRequestEntityTooLarge)
 		return
 	}
 	var envelope struct {
@@ -1187,9 +1831,10 @@ func (observer *nativeOpenCodeRepositoryTaskObserver) handle(response http.Respo
 		http.Error(response, "forwarding failed", http.StatusBadGateway)
 		return
 	}
-	for key, values := range request.Header {
-		forward.Header[key] = append([]string(nil), values...)
-	}
+	// This observer is a one-shot transparent forwarder: do not let the
+	// transport replay a buffered POST after a connection failure.
+	forward.GetBody = nil
+	forward.Header = nativeOpenCodeEndToEndHeaders(request.Header)
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
 	transport.DisableCompression = true
@@ -1207,15 +1852,21 @@ func (observer *nativeOpenCodeRepositoryTaskObserver) handle(response http.Respo
 		return
 	}
 	defer upstreamResponse.Body.Close()
+	if upstreamResponse.StatusCode >= http.StatusMultipleChoices && upstreamResponse.StatusCode < http.StatusBadRequest {
+		observer.recordError(fmt.Errorf("real OpenCode upstream returned redirect status %d", upstreamResponse.StatusCode))
+		http.Error(response, "upstream redirect rejected", http.StatusBadGateway)
+		return
+	}
 	observer.mu.Lock()
 	observer.requestCount++
 	observer.lastStatus = upstreamResponse.StatusCode
 	observer.sawModel = true
 	observer.mu.Unlock()
+	observer.signal()
 	if upstreamResponse.StatusCode < 200 || upstreamResponse.StatusCode >= 300 {
 		observer.recordError(fmt.Errorf("real OpenCode upstream status = %d", upstreamResponse.StatusCode))
 	}
-	for key, values := range upstreamResponse.Header {
+	for key, values := range nativeOpenCodeEndToEndHeaders(upstreamResponse.Header) {
 		response.Header()[key] = append([]string(nil), values...)
 	}
 	response.WriteHeader(upstreamResponse.StatusCode)
@@ -1225,6 +1876,7 @@ func (observer *nativeOpenCodeRepositoryTaskObserver) handle(response http.Respo
 		count, readErr := upstreamResponse.Body.Read(buffer)
 		if count > 0 {
 			if _, writeErr := response.Write(buffer[:count]); writeErr != nil {
+				observer.recordError(fmt.Errorf("write forwarded Responses response: %w", writeErr))
 				return
 			}
 			if flusher != nil {
@@ -1232,6 +1884,9 @@ func (observer *nativeOpenCodeRepositoryTaskObserver) handle(response http.Respo
 			}
 		}
 		if readErr != nil {
+			if !errors.Is(readErr, io.EOF) {
+				observer.recordError(fmt.Errorf("read forwarded Responses response: %w", readErr))
+			}
 			return
 		}
 	}
@@ -1239,15 +1894,14 @@ func (observer *nativeOpenCodeRepositoryTaskObserver) handle(response http.Respo
 
 func (observer *nativeOpenCodeRepositoryTaskObserver) recordError(err error) {
 	observer.mu.Lock()
-	defer observer.mu.Unlock()
-	if observer.err == nil {
+	if observer.err == nil && err != nil {
 		observer.err = err
 	}
+	observer.mu.Unlock()
+	observer.signal()
 }
 
 func (observer *nativeOpenCodeRepositoryTaskObserver) waitForRequest(ctx context.Context) error {
-	ticker := time.NewTicker(25 * time.Millisecond)
-	defer ticker.Stop()
 	for {
 		observer.mu.Lock()
 		err := observer.err
@@ -1255,6 +1909,7 @@ func (observer *nativeOpenCodeRepositoryTaskObserver) waitForRequest(ctx context
 		sawModel := observer.sawModel
 		sawReasoning := observer.sawReasoning
 		status := observer.lastStatus
+		done := observer.requestDone
 		observer.mu.Unlock()
 		if err != nil {
 			return err
@@ -1262,11 +1917,54 @@ func (observer *nativeOpenCodeRepositoryTaskObserver) waitForRequest(ctx context
 		if requestCount > 0 && sawModel && sawReasoning && status >= 200 && status < 300 {
 			return nil
 		}
+		if done == nil {
+			return errors.New("real OpenCode observer completion signal is unavailable")
+		}
 		select {
+		case <-done:
+			continue
 		case <-ctx.Done():
 			return fmt.Errorf("wait for real OpenCode Responses request: %w", ctx.Err())
-		case <-ticker.C:
 		}
+	}
+}
+
+func (observer *nativeOpenCodeRepositoryTaskObserver) signal() {
+	if observer == nil || observer.requestDone == nil {
+		return
+	}
+	observer.doneOnce.Do(func() { close(observer.requestDone) })
+}
+
+func nativeOpenCodeEndToEndHeaders(source http.Header) http.Header {
+	connectionTokens := make(map[string]struct{})
+	for _, value := range source.Values("Connection") {
+		for _, token := range strings.Split(value, ",") {
+			if canonical := http.CanonicalHeaderKey(strings.TrimSpace(token)); canonical != "" {
+				connectionTokens[canonical] = struct{}{}
+			}
+		}
+	}
+	endToEnd := make(http.Header)
+	for key, values := range source {
+		canonical := http.CanonicalHeaderKey(key)
+		if nativeOpenCodeIsHopByHopHeader(canonical) {
+			continue
+		}
+		if _, nominated := connectionTokens[canonical]; nominated {
+			continue
+		}
+		endToEnd[canonical] = append([]string(nil), values...)
+	}
+	return endToEnd
+}
+
+func nativeOpenCodeIsHopByHopHeader(header string) bool {
+	switch http.CanonicalHeaderKey(header) {
+	case "Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization", "Proxy-Connection", "TE", "Trailer", "Transfer-Encoding", "Upgrade":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -1274,9 +1972,24 @@ func (observer *nativeOpenCodeRepositoryTaskObserver) Close() {
 	if observer == nil || observer.server == nil {
 		return
 	}
-	contextValue, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_ = observer.server.Shutdown(contextValue)
+	observer.closeOnce.Do(func() {
+		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		shutdownErr := observer.server.Shutdown(shutdownContext)
+		shutdownCancel()
+		if shutdownErr != nil {
+			_ = observer.server.Close()
+		}
+		if observer.serveDone == nil {
+			return
+		}
+		joinContext, joinCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer joinCancel()
+		select {
+		case <-observer.serveDone:
+		case <-joinContext.Done():
+			_ = observer.server.Close()
+		}
+	})
 }
 
 func nativeOpenCodeRepositoryTaskWriteChatResponse(response http.ResponseWriter, stream bool, model, content, finishReason string, toolArguments []byte) {
