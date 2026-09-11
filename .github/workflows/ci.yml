@@ -65,6 +65,13 @@ jobs:
         env:
           SYMMETRY_PROVIDER_BROKER_E2E: "1"
         run: mix test test/symmetry_control/provider_broker_e2e_test.exs
+      - name: Verify committed Goal receipts over HTTP
+        timeout-minutes: 5
+        env:
+          SYMMETRY_GOAL_RECEIPT_E2E: "1"
+        run: |
+          export POSTGRES_DB="symmetry_receipt_e2e_$(openssl rand -hex 16)"
+          mix test test/symmetry_control_web/controllers/goal_machine_controller_test.exs --only goal_receipt_e2e
       - run: MIX_ENV=prod mix release --overwrite
 
   daemon:

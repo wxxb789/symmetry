@@ -4,13 +4,42 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
   import Ecto.Query
 
   alias SymmetryControl.Goals
-  alias SymmetryControl.Goals.HarnessSession
-  alias SymmetryControl.Orchestration.{Run, Runtime, Task}
+
+  alias SymmetryControl.Goals.{
+    Goal,
+    HarnessSession,
+    HarnessSessionAttachReceipt,
+    HarnessSessionStopReceipt
+  }
+
+  alias SymmetryControl.Orchestration
+  alias SymmetryControl.Orchestration.{Machine, Run, Runtime, Task}
   alias SymmetryControl.Repo
   alias SymmetryControl.RequestHash
   alias SymmetryControl.Workspaces
 
   @enrollment_token "test-enrollment-token"
+  @goal_receipt_listener_id :goal_receipt_e2e_listener
+
+  setup context do
+    if context[:goal_receipt_e2e] == true and System.get_env("SYMMETRY_GOAL_RECEIPT_E2E") == "1" do
+      assert_goal_receipt_database!()
+      daemon_dir = Path.expand("../../../../daemon", __DIR__)
+
+      build_dir =
+        Path.join(System.tmp_dir!(), "symmetry-goal-receipt-e2e-#{Ecto.UUID.generate()}")
+
+      File.mkdir!(build_dir)
+      on_exit(fn -> File.rm_rf!(build_dir) end)
+      File.chmod!(build_dir, 0o700)
+
+      driver = build_goal_receipt_driver!(daemon_dir, build_dir)
+
+      {:ok, daemon_dir: daemon_dir, driver: driver, build_dir: build_dir}
+    else
+      :ok
+    end
+  end
 
   test "machine registration persists an optional runtime repository affinity", %{conn: conn} do
     {machine_id, token} = enroll(conn, "runtime-affinity")
@@ -488,6 +517,172 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     assert_error(bearer(conn, owner_token) |> get(stale_path), 409, "ownership_lost")
   end
 
+  # This is a protocol fixture for committed HTTP acknowledgements. It does not
+  # prove native-process, scheduler, claim, or daemon-journal restart recovery.
+  @tag :goal_receipt_e2e
+  @tag timeout: 180_000
+  @tag skip: System.get_env("SYMMETRY_GOAL_RECEIPT_E2E") != "1"
+  test "committed harness session receipts recover through real Go HTTP after listener restarts",
+       %{
+         conn: conn,
+         daemon_dir: daemon_dir,
+         driver: driver,
+         build_dir: build_dir
+       } do
+    assert_goal_receipt_database!()
+    unboxed_e2e_run!(fn -> assert_goal_receipt_tables_empty!() end)
+
+    fixture = unboxed_e2e_run!(fn -> claimed_goal_run_fixture(conn) end)
+    attrs = session_attrs(fixture.item)
+    attach = fixture.fence |> Map.merge(attrs) |> stringify_keys()
+
+    listener = start_goal_receipt_listener!()
+
+    phase1 =
+      run_goal_receipt_driver!(
+        driver,
+        daemon_dir,
+        build_dir,
+        listener.url,
+        fixture.token,
+        fixture.run.id,
+        attach,
+        "attach_lost_ack",
+        nil,
+        nil
+      )
+
+    assert_goal_receipt_output!(phase1, "attach_lost_ack", 1, nil, nil)
+
+    attach_snapshot =
+      unboxed_e2e_run!(fn -> observe_attach_receipt!(fixture) end)
+
+    unless attach_snapshot.session_row.state == "busy" and
+             attach_snapshot.session_row.active_run_id == fixture.run.id do
+      flunk("attached session is not busy for its active run")
+    end
+
+    listener = restart_goal_receipt_listener!(listener)
+
+    phase2 =
+      run_goal_receipt_driver!(
+        driver,
+        daemon_dir,
+        build_dir,
+        listener.url,
+        fixture.token,
+        fixture.run.id,
+        attach,
+        "attach_recovery",
+        attach_snapshot.session,
+        nil
+      )
+
+    assert_goal_receipt_output!(
+      phase2,
+      "attach_recovery",
+      0,
+      attach_snapshot.session,
+      nil
+    )
+
+    attach_after_recovery =
+      unboxed_e2e_run!(fn -> observe_attach_receipt!(fixture) end)
+
+    assert_attach_receipt_unchanged!(attach_snapshot, attach_after_recovery)
+    assert_goal_receipt_session_unchanged!(attach_snapshot, attach_after_recovery)
+
+    terminal =
+      unboxed_e2e_run!(fn ->
+        assert {:ok, _terminal_run} =
+                 Orchestration.transition(
+                   fixture.run.id,
+                   fixture.fence,
+                   "failed",
+                   %{"stage" => "receipt_e2e"},
+                   Ecto.UUID.generate()
+                 )
+
+        assert {:ok, %{"settlement" => "failed"}} =
+                 Goals.settle_task(fixture.run.task_id, fixture.run.id, fixture.run.generation)
+
+        run = Repo.get!(Run, fixture.run.id)
+        task = Repo.get!(Task, fixture.run.task_id)
+        session = Repo.get!(HarnessSession, run.harness_session_id)
+        stop_receipt_count = Repo.aggregate(HarnessSessionStopReceipt, :count)
+
+        unless run.state == "failed" and task.state == "failed" and session.state == "unavailable" and
+                 is_nil(session.active_run_id) and stop_receipt_count == 0 do
+          flunk("terminal transition did not preserve the unavailable session barrier")
+        end
+
+        %{run: run, session: session}
+      end)
+
+    phase3 =
+      run_goal_receipt_driver!(
+        driver,
+        daemon_dir,
+        build_dir,
+        listener.url,
+        fixture.token,
+        fixture.run.id,
+        attach,
+        "stop_lost_ack",
+        attach_snapshot.session,
+        nil
+      )
+
+    assert_goal_receipt_output!(phase3, "stop_lost_ack", 1, nil, nil)
+
+    stop_snapshot =
+      unboxed_e2e_run!(fn ->
+        observe_stop_receipt!(fixture, attach_snapshot, terminal.session)
+      end)
+
+    listener = restart_goal_receipt_listener!(listener)
+
+    phase4 =
+      run_goal_receipt_driver!(
+        driver,
+        daemon_dir,
+        build_dir,
+        listener.url,
+        fixture.token,
+        fixture.run.id,
+        attach,
+        "stop_recovery",
+        attach_snapshot.session,
+        stop_snapshot.stopped
+      )
+
+    assert_goal_receipt_output!(
+      phase4,
+      "stop_recovery",
+      0,
+      attach_snapshot.session,
+      stop_snapshot.stopped
+    )
+
+    final =
+      unboxed_e2e_run!(fn ->
+        attach_final = observe_attach_receipt!(fixture)
+        stop_final = observe_stop_receipt!(fixture, attach_snapshot, terminal.session)
+        %{attach: attach_final, stop: stop_final}
+      end)
+
+    assert_attach_receipt_unchanged!(attach_snapshot, final.attach)
+    assert_stop_receipt_unchanged!(stop_snapshot, final.stop)
+
+    unless final.stop.session.lock_version == stop_snapshot.session.lock_version and
+             final.stop.session.state == "available" and
+             is_nil(final.stop.session.active_run_id) do
+      flunk("session lock version or availability changed during stop recovery")
+    end
+
+    assert Process.alive?(listener.pid)
+  end
+
   defp claimed_goal_run_fixture(conn, opts \\ []) do
     {machine_id, token} = enroll(conn, "owner")
     runtime = register_runtime(conn, machine_id, token)
@@ -927,6 +1122,324 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     )
 
     Repo.get!(Runtime, runtime["runtime_id"])
+  end
+
+  defp assert_goal_receipt_database! do
+    configured_database = Keyword.get(Repo.config(), :database)
+    environment_database = System.get_env("POSTGRES_DB")
+
+    valid? =
+      is_binary(environment_database) and configured_database == environment_database and
+        Regex.match?(~r/^symmetry_receipt_e2e_[0-9a-f]{32}$/, environment_database)
+
+    unless valid?,
+      do: flunk("goal receipt E2E requires its dedicated ephemeral PostgreSQL database")
+  end
+
+  defp assert_goal_receipt_tables_empty! do
+    for {name, schema} <- [
+          {"projects", Workspaces.Project},
+          {"project_resources", Workspaces.ProjectResource},
+          {"work_items", Workspaces.WorkItem},
+          {"goals", Goal},
+          {"machines", Machine},
+          {"runtimes", Runtime},
+          {"tasks", Task},
+          {"runs", Run},
+          {"harness_sessions", HarnessSession},
+          {"harness_session_attach_receipts", HarnessSessionAttachReceipt},
+          {"harness_session_stop_receipts", HarnessSessionStopReceipt}
+        ] do
+      unless Repo.aggregate(schema, :count) == 0,
+        do: flunk("goal receipt E2E requires an empty #{name} table")
+    end
+  end
+
+  defp unboxed_e2e_run!(fun) when is_function(fun, 0) do
+    Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+      first_txid = current_txid!()
+      second_txid = current_txid!()
+
+      unless first_txid != second_txid,
+        do: flunk("goal receipt E2E requires separate autocommit connections")
+
+      fun.()
+    end)
+  end
+
+  defp current_txid! do
+    %{rows: [[txid]]} = Repo.query!("SELECT txid_current()")
+    txid
+  end
+
+  defp start_goal_receipt_listener! do
+    listener =
+      start_supervised!(
+        {Bandit,
+         plug: {&goal_receipt_endpoint_plug/2, []},
+         scheme: :http,
+         ip: {127, 0, 0, 1},
+         port: 0,
+         startup_log: false},
+        id: @goal_receipt_listener_id
+      )
+
+    {:ok, {{127, 0, 0, 1}, port}} = ThousandIsland.listener_info(listener)
+
+    unless is_integer(port) and port > 0,
+      do: flunk("goal receipt E2E listener did not expose a port")
+
+    %{pid: listener, port: port, url: "http://127.0.0.1:#{port}/api"}
+  end
+
+  defp restart_goal_receipt_listener!(listener) do
+    stop_goal_receipt_listener!(listener)
+    restarted = start_goal_receipt_listener!()
+
+    unless restarted.pid != listener.pid and restarted.port > 0,
+      do: flunk("goal receipt E2E listener restart did not create a new listener")
+
+    restarted
+  end
+
+  defp stop_goal_receipt_listener!(%{pid: listener}) do
+    stop_supervised!(@goal_receipt_listener_id)
+    refute Process.alive?(listener)
+    :ok
+  end
+
+  defp goal_receipt_endpoint_plug(conn, _opts) do
+    unboxed_e2e_run!(fn ->
+      SymmetryControlWeb.Endpoint.call(conn, SymmetryControlWeb.Endpoint.init([]))
+    end)
+  end
+
+  defp build_goal_receipt_driver!(daemon_dir, build_dir) do
+    extension = if match?({:win32, _}, :os.type()), do: ".exe", else: ""
+    path = Path.join(build_dir, "symmetry-goal-receipt-driver#{extension}")
+
+    {_output, status} =
+      System.cmd("go", ["test", "-c", "-o", path, "./internal/control"],
+        cd: daemon_dir,
+        stderr_to_stdout: true
+      )
+
+    unless status == 0,
+      do: raise("go test -c ./internal/control failed with status #{status}")
+
+    path
+  end
+
+  defp run_goal_receipt_driver!(
+         driver,
+         daemon_dir,
+         build_dir,
+         url,
+         machine_token,
+         run_id,
+         attach,
+         phase,
+         expected_attachment,
+         expected_stop
+       ) do
+    input_path = Path.join(build_dir, "#{phase}-input.json")
+    output_path = Path.join(build_dir, "#{phase}-output.json")
+
+    File.write!(
+      input_path,
+      Jason.encode!(%{
+        url: url,
+        machine_token: machine_token,
+        run_id: run_id,
+        attach: attach,
+        phase: phase,
+        expected_attachment: expected_attachment,
+        expected_stop: expected_stop,
+        output_path: output_path
+      }),
+      [:exclusive]
+    )
+
+    File.chmod!(input_path, 0o600)
+    File.rm(output_path)
+
+    {_output, status} =
+      System.cmd(
+        driver,
+        ["-test.run=^TestGoalSessionReceiptHTTP$", "-test.timeout=30s"],
+        cd: daemon_dir,
+        env: [
+          {"SYMMETRY_GOAL_RECEIPT_E2E", "1"},
+          {"SYMMETRY_GOAL_RECEIPT_E2E_INPUT", input_path}
+        ],
+        stderr_to_stdout: true
+      )
+
+    unless status == 0,
+      do: flunk("Go receipt protocol driver failed in #{phase} phase")
+
+    case Jason.decode(File.read!(output_path)) do
+      {:ok, output} when is_map(output) -> output
+      _ -> flunk("Go receipt protocol driver did not write a valid output object")
+    end
+  end
+
+  defp assert_goal_receipt_output!(output, phase, dropped, expected_attachment, expected_stop) do
+    unless output["phase"] == phase, do: flunk("receipt protocol output phase mismatch")
+
+    unless output["dropped_responses"] == dropped,
+      do: flunk("receipt protocol drop count mismatch")
+
+    unless output["attachment"] == expected_attachment,
+      do: flunk("receipt protocol attachment output mismatch")
+
+    unless output["stopped"] == expected_stop,
+      do: flunk("receipt protocol stop output mismatch")
+
+    unless is_list(output["requests"]), do: flunk("receipt protocol request observations missing")
+  end
+
+  defp observe_attach_receipt!(fixture) do
+    run = Repo.get!(Run, fixture.run.id)
+    runtime = Repo.get!(Runtime, run.runtime_id)
+    attach_receipt_count = Repo.aggregate(HarnessSessionAttachReceipt, :count)
+    session_count = Repo.aggregate(HarnessSession, :count)
+
+    unless attach_receipt_count == 1 and session_count == 1,
+      do: flunk("expected exactly one attach receipt and harness session")
+
+    receipt =
+      Repo.one!(
+        from row in HarnessSessionAttachReceipt,
+          where: row.run_id == ^run.id
+      )
+
+    session = Repo.get!(HarnessSession, receipt.session_id)
+    session_response = get_in(receipt.response, ["session"])
+
+    unless receipt.run_id == run.id and receipt.session_id == session.id and
+             receipt.runtime_id == fixture.fence.runtime_id and
+             receipt.machine_id == runtime.machine_id and
+             receipt.runtime_epoch == fixture.fence.runtime_epoch and
+             receipt.generation == fixture.fence.generation and
+             receipt.claim_id == fixture.fence.claim_id and
+             receipt.lease_token == fixture.fence.lease_token and
+             run.harness_session_id == session.id and
+             run.harness_binding_id == session.binding_id do
+      flunk("attach receipt fence or run/session binding pairing mismatch")
+    end
+
+    unless is_binary(receipt.request_hash) and byte_size(receipt.request_hash) == 32,
+      do: flunk("attach receipt request hash is not a 32-byte digest")
+
+    unless is_map(receipt.response) and is_map(session_response),
+      do: flunk("attach receipt response is not a complete object")
+
+    unless session_response["id"] == session.id and
+             session_response["session_id"] == session.id and
+             session_response["run_id"] == run.id and
+             session_response["active_run_id"] == run.id and
+             session_response["binding_id"] == session.binding_id and
+             session_response["local_handle_id"] == session.local_handle_id and
+             session_response["state"] == "busy" do
+      flunk("attach receipt response does not preserve the committed busy session")
+    end
+
+    unless not is_nil(receipt.inserted_at),
+      do: flunk("attach receipt is missing its insertion timestamp")
+
+    %{
+      row: receipt,
+      response: receipt.response,
+      session: session_response,
+      inserted_at: receipt.inserted_at,
+      request_hash: receipt.request_hash,
+      session_row: session
+    }
+  end
+
+  defp observe_stop_receipt!(fixture, attach_snapshot, terminal_session) do
+    run = Repo.get!(Run, fixture.run.id)
+    runtime = Repo.get!(Runtime, run.runtime_id)
+    stop_receipt_count = Repo.aggregate(HarnessSessionStopReceipt, :count)
+    session_count = Repo.aggregate(HarnessSession, :count)
+
+    unless stop_receipt_count == 1 and session_count == 1,
+      do: flunk("expected exactly one stop receipt and harness session")
+
+    receipt =
+      Repo.one!(
+        from row in HarnessSessionStopReceipt,
+          where:
+            row.session_id == ^attach_snapshot.session["id"] and
+              row.binding_id == ^attach_snapshot.session["binding_id"]
+      )
+
+    session = Repo.get!(HarnessSession, receipt.session_id)
+    stopped = get_in(receipt.response, ["session_stopped"])
+    expected_lock_version = terminal_session.lock_version + 1
+
+    unless receipt.run_id == run.id and receipt.machine_id == runtime.machine_id and
+             receipt.session_id == attach_snapshot.session["id"] and
+             receipt.binding_id == attach_snapshot.session["binding_id"] and
+             run.harness_session_id == session.id and
+             run.harness_binding_id == session.binding_id do
+      flunk("stop receipt does not match the original run/session binding")
+    end
+
+    unless is_binary(receipt.request_hash) and byte_size(receipt.request_hash) == 32,
+      do: flunk("stop receipt request hash is not a 32-byte digest")
+
+    unless is_map(receipt.response) and is_map(stopped),
+      do: flunk("stop receipt response is not a complete object")
+
+    unless stopped["receipt_id"] == receipt.id and stopped["run_id"] == run.id and
+             stopped["session_id"] == session.id and
+             stopped["local_handle_id"] == session.local_handle_id and
+             stopped["binding_id"] == session.binding_id and
+             stopped["state"] == "available" and is_nil(stopped["active_run_id"]) and
+             stopped["lock_version"] == expected_lock_version do
+      flunk("stop receipt response does not preserve the committed available session")
+    end
+
+    unless session.state == "available" and is_nil(session.active_run_id) and
+             session.lock_version == expected_lock_version do
+      flunk("stopped session is not durably available at the expected lock version")
+    end
+
+    unless not is_nil(receipt.inserted_at),
+      do: flunk("stop receipt is missing its insertion timestamp")
+
+    %{
+      row: receipt,
+      response: receipt.response,
+      stopped: stopped,
+      inserted_at: receipt.inserted_at,
+      request_hash: receipt.request_hash,
+      session: session
+    }
+  end
+
+  defp assert_attach_receipt_unchanged!(before, after_snapshot) do
+    unless before.row == after_snapshot.row and before.response == after_snapshot.response and
+             before.inserted_at == after_snapshot.inserted_at and
+             before.request_hash == after_snapshot.request_hash do
+      flunk("immutable attach receipt changed during recovery")
+    end
+  end
+
+  defp assert_goal_receipt_session_unchanged!(before, after_snapshot) do
+    unless before.session_row == after_snapshot.session_row do
+      flunk("harness session changed during attach recovery")
+    end
+  end
+
+  defp assert_stop_receipt_unchanged!(before, after_snapshot) do
+    unless before.row == after_snapshot.row and before.response == after_snapshot.response and
+             before.inserted_at == after_snapshot.inserted_at and
+             before.request_hash == after_snapshot.request_hash do
+      flunk("immutable stop receipt changed during recovery")
+    end
   end
 
   defp stringify_keys(map), do: Map.new(map, fn {key, value} -> {to_string(key), value} end)
