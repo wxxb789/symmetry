@@ -214,10 +214,19 @@ defmodule SymmetryControl.Goals do
         {:error, reason} ->
           {:error, reason}
       end
+      |> maybe_wake_command(parsed.kind)
     end
   end
 
   def command(_, _, _, _), do: {:error, :invalid_request}
+
+  defp maybe_wake_command({:ok, _receipt, _disposition} = result, kind)
+       when kind in ["request_plan", "admit_task"] do
+    unless Repo.in_transaction?(), do: Scheduler.wake()
+    result
+  end
+
+  defp maybe_wake_command(result, _kind), do: result
 
   @doc false
   @spec accept_outcome(Ecto.UUID.t(), map(), keyword()) :: {:error, :outcome_derived}
@@ -5312,6 +5321,13 @@ defmodule SymmetryControl.Goals do
               )
 
             if parsed.kind in ["pause", "cancel", "amend"], do: enqueue_goal_control!(goal, event)
+
+            if parsed.kind in ["request_plan", "admit_task"] do
+              %{"goal_id" => goal.id}
+              |> WakeupWorker.new(unique: false)
+              |> Oban.insert!()
+            end
+
             goal = Repo.get!(Goal, goal.id)
             {:created, receipt!(goal, event, response)}
 

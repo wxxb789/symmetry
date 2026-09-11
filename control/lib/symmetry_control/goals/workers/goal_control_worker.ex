@@ -12,7 +12,8 @@ defmodule SymmetryControl.Goals.Workers.GoalControlWorker do
     ]
 
   alias Oban.Job
-  alias SymmetryControl.{Goals, Orchestration}
+  alias SymmetryControl.{Goals, Orchestration, Repo}
+  alias SymmetryControl.Orchestration.Notifier
 
   @impl Oban.Worker
   def perform(%Job{} = job), do: dispatch(job.args)
@@ -75,7 +76,8 @@ defmodule SymmetryControl.Goals.Workers.GoalControlWorker do
       {:ok, %{kind: "cancel", state: "applied", run_id: nil}, _disposition} ->
         settle_unstarted_task(task_id)
 
-      {:ok, _command, _disposition} ->
+      {:ok, command, _disposition} ->
+        unless Repo.in_transaction?(), do: Notifier.command_available(command)
         :ok
 
       {:error, :stale_revision} ->

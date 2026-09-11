@@ -1418,13 +1418,69 @@ defmodule SymmetryControl.GoalsReadModelTest do
     assert %{work_item_id: "required", depends_on_id: "required-prerequisite", revision: 1} in details
   end
 
-  test "runtime availability only considers the current active Task generation" do
+  test "projects known queued assignment constraints without a runtime blocker" do
+    projection =
+      ReadModel.project(
+        %{id: "goal-queued-assignment", state: "active", current_revision: 1},
+        %{
+          revisions: [%{revision: 1, execution_policy: %{}}],
+          work_items: [
+            %{
+              id: "item-1",
+              required: false,
+              admitted_revision: 1,
+              repository_resource_id: "repository-1"
+            }
+          ],
+          tasks: [
+            %{
+              id: "task-1",
+              work_item_id: "item-1",
+              goal_id: "goal-queued-assignment",
+              goal_revision: 1,
+              context_snapshot_id: "snapshot-1",
+              agent_profile: "codex",
+              workspace: "primary",
+              requested_session_id: "retained-session-1",
+              handoff_source_run_id: nil,
+              current_generation: 0,
+              state: "queued"
+            }
+          ]
+        }
+      )
+
+    execution = hd(projection.work_items).execution
+
+    assert execution.state == "queued"
+    refute execution.terminal?
+
+    assert execution.pending_assignment == %{
+             repository_resource_id: "repository-1",
+             agent_profile: "codex",
+             workspace: "primary",
+             requested_session_id: "retained-session-1",
+             handoff_source_run_id: nil,
+             machine_affinity: nil
+           }
+
+    refute "runtime_unavailable" in projection.blocker_reasons
+  end
+
+  test "queued retry preserves Task state over an old completed Run" do
     queued_retry =
       ReadModel.project(
         %{id: "goal-runtime", state: "active", current_revision: 1},
         %{
           revisions: [%{revision: 1, execution_policy: %{}}],
-          work_items: [%{id: "item-1", required: false, admitted_revision: 1}],
+          work_items: [
+            %{
+              id: "item-1",
+              required: false,
+              admitted_revision: 1,
+              repository_resource_id: "repository-1"
+            }
+          ],
           tasks: [
             %{
               id: "task-1",
@@ -1432,6 +1488,8 @@ defmodule SymmetryControl.GoalsReadModelTest do
               goal_id: "goal-runtime",
               goal_revision: 1,
               context_snapshot_id: "snapshot-1",
+              agent_profile: "codex",
+              workspace: "primary",
               current_generation: 2,
               state: "queued"
             }
@@ -1450,6 +1508,19 @@ defmodule SymmetryControl.GoalsReadModelTest do
       )
 
     refute "runtime_unavailable" in queued_retry.blocker_reasons
+
+    queued_execution = hd(queued_retry.work_items).execution
+    assert queued_execution.state == "queued"
+    refute queued_execution.terminal?
+
+    assert queued_execution.pending_assignment == %{
+             repository_resource_id: "repository-1",
+             agent_profile: "codex",
+             workspace: "primary",
+             requested_session_id: nil,
+             handoff_source_run_id: nil,
+             machine_affinity: nil
+           }
 
     assigned_current =
       ReadModel.project(
@@ -1520,6 +1591,45 @@ defmodule SymmetryControl.GoalsReadModelTest do
       )
 
     refute "runtime_unavailable" in missing_runtime.blocker_reasons
+  end
+
+  test "projects queued planning constraints from its admission subject" do
+    projection =
+      ReadModel.project(
+        %{id: "goal-plan-assignment", state: "draft", current_revision: 1},
+        %{
+          revisions: [%{revision: 1, execution_policy: %{}}],
+          tasks: [
+            %{
+              id: "plan-task",
+              goal_id: "goal-plan-assignment",
+              goal_revision: 1,
+              work_item_id: nil,
+              validation_of_task_id: nil,
+              purpose: "plan",
+              state: "queued",
+              current_generation: 0,
+              attempt_generation: 1,
+              agent_profile: "planner",
+              workspace: "planning",
+              requested_session_id: "retained-session-1",
+              input: %{"subject" => %{"resource_id" => "repository-plan"}}
+            }
+          ]
+        }
+      )
+
+    assert projection.planning.state == "queued"
+    refute projection.planning.terminal?
+
+    assert projection.planning.pending_assignment == %{
+             repository_resource_id: "repository-plan",
+             agent_profile: "planner",
+             workspace: "planning",
+             requested_session_id: "retained-session-1",
+             handoff_source_run_id: nil,
+             machine_affinity: nil
+           }
   end
 
   test "accepted current WorkItems do not retain external availability blockers" do

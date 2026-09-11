@@ -2284,21 +2284,58 @@ defmodule SymmetryControl.Goals.ReadModel do
       task = Map.get(latest_tasks, item_id)
       run = task && Map.get(latest_runs, map_value(task, :id))
       runtime = run && Map.get(runtime_by_id, map_value(run, :runtime_id))
-      {item_id, execution_projection(task, run, runtime)}
+      {item_id, execution_projection(task, run, runtime, item)}
     end)
   end
 
-  defp execution_projection(nil, nil, nil), do: nil
+  defp execution_projection(nil, nil, nil, _work_item), do: nil
 
-  defp execution_projection(task, run, runtime) do
+  defp execution_projection(task, run, runtime, work_item) do
+    state = execution_state(task, run)
+
     %{
       task: task && task_projection(task),
       run: run && run_projection(run),
       runtime: runtime && runtime_projection(runtime),
-      state: map_value(run, :state) || map_value(task, :state),
-      terminal?: terminal_execution?(run, task),
+      state: state,
+      terminal?: terminal_execution?(state),
+      pending_assignment: pending_assignment_projection(task, work_item),
       source: :task_run_records
     }
+  end
+
+  defp execution_state(task, run) do
+    case map_value(task, :state) do
+      "queued" -> "queued"
+      _ -> map_value(run, :state) || map_value(task, :state)
+    end
+  end
+
+  defp pending_assignment_projection(task, work_item) do
+    if map_value(task, :state) == "queued" do
+      %{
+        repository_resource_id: pending_assignment_repository_resource_id(task, work_item),
+        agent_profile: map_value(task, :agent_profile),
+        workspace: map_value(task, :workspace),
+        requested_session_id: map_value(task, :requested_session_id),
+        handoff_source_run_id: map_value(task, :handoff_source_run_id),
+        machine_affinity:
+          if(is_nil(map_value(task, :handoff_source_run_id)),
+            do: nil,
+            else: "handoff_source_machine"
+          )
+      }
+    end
+  end
+
+  defp pending_assignment_repository_resource_id(_task, work_item) when is_map(work_item),
+    do: map_value(work_item, :repository_resource_id)
+
+  defp pending_assignment_repository_resource_id(task, nil) do
+    task
+    |> map_value(:input, %{})
+    |> map_value(:subject, %{})
+    |> map_value(:resource_id)
   end
 
   defp goal_execution_projection(tasks, runs) do
@@ -2337,7 +2374,7 @@ defmodule SymmetryControl.Goals.ReadModel do
         Enum.find(runtimes, &(map_value(&1, :id) == map_value(run, :runtime_id)))
       end
 
-    execution_projection(task, run, runtime)
+    execution_projection(task, run, runtime, nil)
   end
 
   defp task_projection(task) do
@@ -2422,8 +2459,7 @@ defmodule SymmetryControl.Goals.ReadModel do
 
   defp failure_projection(_failure), do: nil
 
-  defp terminal_execution?(run, task) do
-    state = map_value(run, :state) || map_value(task, :state)
+  defp terminal_execution?(state) do
     state not in @nonterminal_task_states and not is_nil(state)
   end
 

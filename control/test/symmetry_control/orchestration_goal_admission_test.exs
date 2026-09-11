@@ -3,6 +3,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
   alias Oban.Job
   alias SymmetryControl.{Goals, RequestHash}
+  alias SymmetryControl.Goals.ReadModel
 
   alias SymmetryControl.Goals.{
     Goal,
@@ -1197,16 +1198,64 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
   end
 
   test "Goal handoff remains queued when only a different machine advertises handoff" do
-    {source_task, _goal_id} = insert_goal_task(max_run_attempts: 2)
+    {source_task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    source_item = Repo.get!(WorkItem, source_task.work_item_id)
     source_runtime = register_runtime("handoff-local-source", handoff?: false)
     source_run = complete_source_run!(source_task, source_runtime)
     target_task = insert_handoff_successor!(source_task, source_run)
+
+    Repo.update_all(
+      from(task in Task, where: task.id == ^target_task.id),
+      set: [inserted_at: DateTime.add(@now, 1, :second)]
+    )
 
     _different_machine = register_runtime("handoff-other-machine", handoff?: true)
 
     assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
     assert %{state: "queued", current_generation: 0} = Repo.get!(Task, target_task.id)
     assert 0 == Repo.aggregate(from(run in Run, where: run.task_id == ^target_task.id), :count)
+
+    assert {:ok, queued_projection} = ReadModel.fetch(goal_id)
+
+    queued_execution =
+      queued_projection.work_items
+      |> Enum.find(&(&1.id == target_task.work_item_id))
+      |> Map.fetch!(:execution)
+
+    assert queued_execution.state == "queued"
+    refute queued_execution.terminal?
+
+    assert queued_execution.pending_assignment == %{
+             repository_resource_id: source_item.repository_resource_id,
+             agent_profile: source_task.agent_profile,
+             workspace: source_task.workspace,
+             requested_session_id: nil,
+             handoff_source_run_id: source_run.id,
+             machine_affinity: "handoff_source_machine"
+           }
+
+    eligible_runtime =
+      register_runtime_on_machine(
+        "handoff-local-recovery",
+        source_runtime.machine_id,
+        handoff?: true,
+        repository_resource_id: source_item.repository_resource_id
+      )
+
+    assert {:ok, assigned_run} = Orchestration.assign_one(now: DateTime.add(@now, 1, :second))
+    assert assigned_run.task_id == target_task.id
+    assert assigned_run.runtime_id == eligible_runtime.id
+
+    assert {:ok, assigned_projection} = ReadModel.fetch(goal_id)
+
+    assigned_execution =
+      assigned_projection.work_items
+      |> Enum.find(&(&1.id == target_task.work_item_id))
+      |> Map.fetch!(:execution)
+
+    assert assigned_execution.state == "assigned"
+    refute assigned_execution.terminal?
+    assert assigned_execution.pending_assignment == nil
   end
 
   test "retained reservation rotates the binding before dispatch and an old stop replay cannot release it" do

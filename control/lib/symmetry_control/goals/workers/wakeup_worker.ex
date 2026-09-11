@@ -14,9 +14,20 @@ defmodule SymmetryControl.Goals.Workers.WakeupWorker do
   alias Oban.Job
   alias SymmetryControl.Goals
   alias SymmetryControl.Goals.Workers.GoalControlWorker
+  alias SymmetryControl.Orchestration.Scheduler
+  alias SymmetryControl.Repo
 
   @impl Oban.Worker
-  def perform(%Job{} = job), do: reconcile(job.args)
+  def perform(%Job{} = job) do
+    case reconcile(job.args) do
+      :ok ->
+        unless Repo.in_transaction?(), do: Scheduler.wake()
+        :ok
+
+      result ->
+        result
+    end
+  end
 
   @impl Oban.Worker
   def timeout(_job), do: :timer.seconds(30)
