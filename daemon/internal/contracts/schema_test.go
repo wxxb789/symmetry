@@ -15,8 +15,8 @@ func TestAllGoalSchemasCompileAndGeneratedTimestampsStayStrings(t *testing.T) {
 	if err := ensureSchemas(); err != nil {
 		t.Fatalf("schemas did not compile: %v", err)
 	}
-	if len(schemas) != 11 {
-		t.Fatalf("compiled schemas = %d, want 11", len(schemas))
+	if len(schemas) != 14 {
+		t.Fatalf("compiled schemas = %d, want 14", len(schemas))
 	}
 	if commitPath == nil || commitPath.MatchTimeout != 10*time.Millisecond {
 		t.Fatalf("CommitPath regex timeout = %v, want %v", commitPath.MatchTimeout, 10*time.Millisecond)
@@ -50,10 +50,120 @@ func TestDecodePreservesNullableMicrousdFields(t *testing.T) {
 	}
 }
 
+func TestEvidenceBatchDecodesNestedEvidenceUnderFence(t *testing.T) {
+	var batch SymmetryEvidenceBatchV1
+	if err := DecodeSchema(
+		EnvelopeEvidenceBatch,
+		readContractFixture(t, "valid/evidence-batch.basic.json"),
+		&batch,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if batch.SchemaVersion != SchemaVersionSymmetryEvidenceBatchV1 {
+		t.Fatalf("schema_version = %q, want %q", batch.SchemaVersion, SchemaVersionSymmetryEvidenceBatchV1)
+	}
+	if len(batch.Items) != 1 || batch.Items[0].RunID != batch.RunID {
+		t.Fatalf("nested evidence items = %#v, want one item bound to batch run", batch.Items)
+	}
+}
+
+func TestEvidenceBatchSchemaRejectsEmptyItemsAndUnknownFields(t *testing.T) {
+	for _, fixture := range []string{
+		"invalid/evidence-batch.empty-items.json",
+		"invalid/evidence-batch.extra-control-field.json",
+	} {
+		t.Run(fixture, func(t *testing.T) {
+			if err := ValidateSchema(EnvelopeEvidenceBatch, readContractFixture(t, fixture)); err == nil {
+				t.Fatal("invalid evidence batch was accepted")
+			}
+		})
+	}
+}
+
+func TestEvidenceBatchResponseAndConflictDetailsDecodeStrictly(t *testing.T) {
+	var response SymmetryEvidenceBatchResponseV1
+	if err := DecodeSchema(
+		EnvelopeEvidenceBatchResponse,
+		readContractFixture(t, "valid/evidence-batch-response.basic.json"),
+		&response,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.EvidenceBatch.Receipts) != 2 {
+		t.Fatalf("receipts = %d, want 2", len(response.EvidenceBatch.Receipts))
+	}
+	if response.EvidenceBatch.Receipts[0].Disposition != Created ||
+		response.EvidenceBatch.Receipts[1].Disposition != Replayed {
+		t.Fatalf("receipt dispositions = %#v, want created then replayed", response.EvidenceBatch.Receipts)
+	}
+
+	var details SymmetryEvidenceBatchConflictDetailsV1
+	if err := DecodeSchema(
+		EnvelopeEvidenceBatchConflictDetails,
+		readContractFixture(t, "valid/evidence-batch-conflict-details.basic.json"),
+		&details,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(details.Items) != 2 || details.Items[0].Index != 0 || details.Items[1].Index != 255 {
+		t.Fatalf("conflict details = %#v, want indexes 0 and 255", details.Items)
+	}
+}
+
+func TestEvidenceBatchResponseAndConflictDetailsRejectInvalidShapes(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		envelope Envelope
+		fixture  string
+	}{
+		{name: "response extra field", envelope: EnvelopeEvidenceBatchResponse, fixture: "invalid/evidence-batch-response.extra-field.json"},
+		{name: "response empty receipts", envelope: EnvelopeEvidenceBatchResponse, fixture: "invalid/evidence-batch-response.empty-receipts.json"},
+		{name: "response invalid disposition", envelope: EnvelopeEvidenceBatchResponse, fixture: "invalid/evidence-batch-response.invalid-disposition.json"},
+		{name: "conflict extra field", envelope: EnvelopeEvidenceBatchConflictDetails, fixture: "invalid/evidence-batch-conflict-details.extra-field.json"},
+		{name: "conflict empty items", envelope: EnvelopeEvidenceBatchConflictDetails, fixture: "invalid/evidence-batch-conflict-details.empty-items.json"},
+		{name: "conflict index out of range", envelope: EnvelopeEvidenceBatchConflictDetails, fixture: "invalid/evidence-batch-conflict-details.index-out-of-range.json"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := ValidateSchema(test.envelope, readContractFixture(t, test.fixture)); err == nil {
+				t.Fatal("invalid evidence batch response shape was accepted")
+			}
+		})
+	}
+}
+
 func TestValidateRejectsTrailingJSON(t *testing.T) {
 	data := append(readContractFixture(t, "valid/admission.basic.json"), []byte(" null")...)
 	if err := ValidateSchema(EnvelopeAdmission, data); err == nil {
 		t.Fatal("multiple JSON values were accepted")
+	}
+}
+
+func TestDecodeSchemaRejectsDuplicateObjectMembersRecursively(t *testing.T) {
+	base := string(readContractFixture(t, "valid/evidence-batch-response.basic.json"))
+	tests := map[string]string{
+		"top-level": strings.Replace(
+			base,
+			`"evidence_batch": {`,
+			`"evidence_batch": {}, "evidence_batch": {`,
+			1,
+		),
+		"escaped nested alias": strings.Replace(
+			base,
+			`"evidence_key": "tests:default",`,
+			`"evidence_key": "tests:default", "\u0065vidence_key": "tests:default",`,
+			1,
+		),
+		"nested array object": `{"items":[{"evidence_key":"tests:default","\u0065vidence_key":"tests:secondary"}]}`,
+	}
+
+	for name, data := range tests {
+		t.Run(name, func(t *testing.T) {
+			var target map[string]any
+			err := DecodeSchema(EnvelopeEvidenceBatchResponse, []byte(data), &target)
+			if err == nil || !strings.Contains(err.Error(), "duplicate JSON object member") {
+				t.Fatalf("DecodeSchema error = %v, want duplicate-member rejection", err)
+			}
+		})
 	}
 }
 

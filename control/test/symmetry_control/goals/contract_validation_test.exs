@@ -94,6 +94,12 @@ defmodule SymmetryControl.Goals.ContractValidationTest do
              )
 
     assert :ok ==
+             ContractValidation.validate_evidence_batch(
+               fixture(@valid_root, "evidence-batch.basic.json"),
+               opts
+             )
+
+    assert :ok ==
              ContractValidation.validate_decision(
                fixture(@valid_root, "decision.open.json"),
                opts
@@ -197,6 +203,35 @@ defmodule SymmetryControl.Goals.ContractValidationTest do
 
     assert {:error, {:validation_failed, _}} =
              ContractValidation.validate_decision(invalid_decision, opts)
+
+    assert {:error, :duplicate_evidence_key} =
+             ContractValidation.validate_evidence_batch(
+               fixture(@invalid_root, "evidence-batch.duplicate-key.json"),
+               opts
+             )
+
+    assert {:error, {:validation_failed, _}} =
+             ContractValidation.validate_evidence_batch(
+               fixture(@invalid_root, "evidence-batch.empty-items.json"),
+               opts
+             )
+
+    assert {:error, {:validation_failed, _}} =
+             ContractValidation.validate_evidence_batch(
+               fixture(@invalid_root, "evidence-batch.extra-control-field.json"),
+               opts
+             )
+  end
+
+  test "requires every batch item to use the outer batch run identity" do
+    opts = [schema_root: @schema_root]
+
+    invalid =
+      fixture(@valid_root, "evidence-batch.basic.json")
+      |> put_in(["items", Access.at(0), "run_id"], Ecto.UUID.generate())
+
+    assert {:error, :evidence_batch_run_id_mismatch} =
+             ContractValidation.validate_evidence_batch(invalid, opts)
   end
 
   test "validates pure decision and GoalRevision semantics after schema validation" do

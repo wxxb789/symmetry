@@ -1,0 +1,14 @@
+{
+  "items": [
+    {
+      "index": 0,
+      "evidence_key": "tests:default",
+      "disposition": "conflict"
+    },
+    {
+      "index": 255,
+      "evidence_key": "tests:secondary",
+      "disposition": "conflict"
+    }
+  ]
+}

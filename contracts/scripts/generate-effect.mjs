@@ -107,6 +107,12 @@ const arrayKeywords = new Set(["items", "maxItems", "minItems", "uniqueItems"]);
 
 const hasAny = (schema, keys) => [...keys].some((key) => Object.hasOwn(schema, key));
 
+const isEvidenceSchemaReference = (reference) =>
+  reference === "evidence.schema.json" ||
+  reference === "./evidence.schema.json" ||
+  reference === "evidence.schema.json#" ||
+  reference === "./evidence.schema.json#";
+
 const validateSchema = (schema, path, isRoot = false) => {
   assertObject(schema, path);
   for (const key of Object.keys(schema)) {
@@ -121,8 +127,14 @@ const validateSchema = (schema, path, isRoot = false) => {
   }
 
   if (Object.hasOwn(schema, "$ref")) {
-    if (typeof schema.$ref !== "string" || !schema.$ref.startsWith("#/definitions/")) {
-      fail(`${path}/$ref`, "only local #/definitions references are supported");
+    if (
+      typeof schema.$ref !== "string" ||
+      (!schema.$ref.startsWith("#/definitions/") && !isEvidenceSchemaReference(schema.$ref))
+    ) {
+      fail(
+        `${path}/$ref`,
+        "only local #/definitions or canonical evidence.schema.json references are supported",
+      );
     }
     const validationSiblings = Object.keys(schema).filter(
       (key) =>
@@ -264,8 +276,12 @@ const collectDefinitions = (schemas) => {
 
 const validateReferences = (schema, path, definitions) => {
   if (typeof schema.$ref === "string") {
-    const name = schema.$ref.slice("#/definitions/".length);
-    if (!definitions.has(name)) fail(`${path}/$ref`, `unknown definition ${JSON.stringify(name)}`);
+    if (schema.$ref.startsWith("#/definitions/")) {
+      const name = schema.$ref.slice("#/definitions/".length);
+      if (!definitions.has(name)) fail(`${path}/$ref`, `unknown definition ${JSON.stringify(name)}`);
+    } else if (!isEvidenceSchemaReference(schema.$ref)) {
+      fail(`${path}/$ref`, `unknown external reference ${JSON.stringify(schema.$ref)}`);
+    }
   }
   if (isObject(schema.definitions)) {
     for (const [name, definition] of Object.entries(schema.definitions)) {
@@ -351,7 +367,11 @@ const createRenderer = () => {
   const render = (schema, path) => {
     const parts = [];
     if (typeof schema.$ref === "string") {
-      parts.push(definitionSymbol(schema.$ref.slice("#/definitions/".length), `${path}/$ref`));
+      if (isEvidenceSchemaReference(schema.$ref)) {
+        parts.push("EvidenceGraph");
+      } else {
+        parts.push(definitionSymbol(schema.$ref.slice("#/definitions/".length), `${path}/$ref`));
+      }
     }
     if (Object.hasOwn(schema, "const")) parts.push(`S.Literal(${JSON.stringify(schema.const)})`);
     if (Object.hasOwn(schema, "enum"))

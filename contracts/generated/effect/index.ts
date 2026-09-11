@@ -9,6 +9,9 @@ import type {
   SymmetryAdmissionV1,
   SymmetryContextSnapshotV1,
   SymmetryDecisionV1,
+  SymmetryEvidenceBatchConflictDetailsV1,
+  SymmetryEvidenceBatchResponseV1,
+  SymmetryEvidenceBatchV1,
   SymmetryEvidenceV1,
   SymmetryGoalCommandV1,
   SymmetryGoalCreateV1,
@@ -515,6 +518,28 @@ export const DefinitionAdapterGraph = S.suspend(() => withObjectPropertyBounds(s
   "protocol_version": DefinitionPositiveIntegerGraph
 })), undefined, undefined));
 
+export const DefinitionConflictItemGraph = S.suspend(() => withObjectPropertyBounds(strictObject(S.Struct({
+  "disposition": S.Literal("conflict"),
+  "evidence_key": DefinitionShortIdentifierGraph,
+  "index": numberConstraints(S.Int, 0, 255)
+})), undefined, undefined));
+
+export const DefinitionEvidenceBatchGraph = S.suspend(() => withObjectPropertyBounds(strictObject(S.Struct({
+  "receipts": arrayConstraints(S.Array(DefinitionEvidenceReceiptGraph), 1, 256, undefined),
+  "run_id": DefinitionUUIDGraph
+})), undefined, undefined));
+
+export const DefinitionEvidenceReceiptGraph = S.suspend(() => withObjectPropertyBounds(strictObject(S.Struct({
+  "disposition": S.Literal("created", "replayed"),
+  "evidence_key": DefinitionShortIdentifierGraph,
+  "id": DefinitionUUIDGraph,
+  "kind": S.Literal("check", "artifact", "review", "observation"),
+  "observed_at": DefinitionUtcTimestampGraph,
+  "run_id": DefinitionUUIDGraph,
+  "subject_hash": DefinitionSha256Graph,
+  "verdict": S.Literal("passed", "failed", "unknown", "not_applicable")
+})), undefined, undefined));
+
 export const DefinitionCheckSourceRefGraph = S.suspend(() => withObjectPropertyBounds(strictObject(S.Struct({
   "kind": S.Literal("check"),
   "ref": DefinitionShortIdentifierGraph,
@@ -753,6 +778,32 @@ export const DecisionGraph = S.suspend(() => allOf(withObjectPropertyBounds(stri
 const matchesDecision = S.is(DecisionGraph, strictOptions);
 export const isDecision = (value: unknown): value is SymmetryDecisionV1 => matchesDecision(value);
 export const DecisionSchema: S.Schema<SymmetryDecisionV1, unknown> = S.Unknown.pipe(S.filter(isDecision));
+
+export const EvidenceBatchConflictDetailsGraph = S.suspend(() => withObjectPropertyBounds(strictObject(S.Struct({
+  "items": arrayConstraints(S.Array(DefinitionConflictItemGraph), 1, 256, undefined)
+})), undefined, undefined));
+
+const matchesEvidenceBatchConflictDetails = S.is(EvidenceBatchConflictDetailsGraph, strictOptions);
+export const isEvidenceBatchConflictDetails = (value: unknown): value is SymmetryEvidenceBatchConflictDetailsV1 => matchesEvidenceBatchConflictDetails(value);
+export const EvidenceBatchConflictDetailsSchema: S.Schema<SymmetryEvidenceBatchConflictDetailsV1, unknown> = S.Unknown.pipe(S.filter(isEvidenceBatchConflictDetails));
+
+export const EvidenceBatchResponseGraph = S.suspend(() => withObjectPropertyBounds(strictObject(S.Struct({
+  "evidence_batch": DefinitionEvidenceBatchGraph
+})), undefined, undefined));
+
+const matchesEvidenceBatchResponse = S.is(EvidenceBatchResponseGraph, strictOptions);
+export const isEvidenceBatchResponse = (value: unknown): value is SymmetryEvidenceBatchResponseV1 => matchesEvidenceBatchResponse(value);
+export const EvidenceBatchResponseSchema: S.Schema<SymmetryEvidenceBatchResponseV1, unknown> = S.Unknown.pipe(S.filter(isEvidenceBatchResponse));
+
+export const EvidenceBatchGraph = S.suspend(() => withObjectPropertyBounds(strictObject(S.Struct({
+  "items": arrayConstraints(S.Array(EvidenceGraph), 1, 256, true),
+  "run_id": DefinitionUUIDGraph,
+  "schema_version": S.Literal("symmetry.evidence_batch.v1")
+})), undefined, undefined));
+
+const matchesEvidenceBatch = S.is(EvidenceBatchGraph, strictOptions);
+export const isEvidenceBatch = (value: unknown): value is SymmetryEvidenceBatchV1 => matchesEvidenceBatch(value);
+export const EvidenceBatchSchema: S.Schema<SymmetryEvidenceBatchV1, unknown> = S.Unknown.pipe(S.filter(isEvidenceBatch));
 
 export const EvidenceGraph = S.suspend(() => exactOneOf(S.Union(withObjectPropertyBounds(strictObject(S.Struct({
   "evidence_id": DefinitionUUIDGraph,

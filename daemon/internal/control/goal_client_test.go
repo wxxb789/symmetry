@@ -19,6 +19,7 @@ const (
 	goalRunID                 = "33333333-3333-4333-8333-333333333333"
 	goalTaskID                = "44444444-4444-4444-8444-444444444444"
 	goalEvidenceID            = "55555555-5555-4555-8555-555555555555"
+	goalEvidenceIDTwo         = "55555555-5555-4555-8555-555555555556"
 	goalUsageID               = "66666666-6666-4666-8666-666666666666"
 	goalResourceID            = "77777777-7777-4777-8777-777777777777"
 	goalHash                  = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
@@ -170,6 +171,178 @@ func TestGoalMachineEndpointsPropagateFenceAndStrictlyDecodeReceipts(t *testing.
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestAppendEvidenceBatchPreservesRequestOrderAndStrictlyValidatesReceipts(t *testing.T) {
+	first := goalEvidence(t)
+	second := goalEvidence(t)
+	second.EvidenceID = goalEvidenceIDTwo
+	second.EvidenceKey = "tests:secondary"
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost || request.URL.Path != "/api/v1/runs/"+goalRunID+"/evidence" {
+			t.Fatalf("request = %s %s", request.Method, request.URL.Path)
+		}
+		body := readRequestBody(t, request)
+		assertJSONField(t, body, "runtime_id", goalRuntimeID)
+		assertJSONField(t, body, "run_id", goalRunID)
+		assertJSONField(t, body, "schema_version", "symmetry.evidence_batch.v1")
+		items, ok := body["items"].([]any)
+		if !ok || len(items) != 2 {
+			t.Fatalf("items = %#v, want two ordered items", body["items"])
+		}
+		firstItem, ok := items[0].(map[string]any)
+		if !ok {
+			t.Fatalf("first evidence item = %#v", items[0])
+		}
+		secondItem, ok := items[1].(map[string]any)
+		if !ok {
+			t.Fatalf("second evidence item = %#v", items[1])
+		}
+		assertJSONField(t, firstItem, "evidence_id", goalEvidenceID)
+		assertJSONField(t, firstItem, "evidence_key", "tests:default")
+		assertJSONField(t, secondItem, "evidence_id", goalEvidenceIDTwo)
+		assertJSONField(t, secondItem, "evidence_key", "tests:secondary")
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(writer, `{"evidence_batch":{"run_id":"`+goalRunID+`","receipts":[{"id":"`+goalEvidenceID+`","run_id":"`+goalRunID+`","evidence_key":"tests:default","kind":"check","subject_hash":"`+goalEvidenceHash+`","verdict":"passed","observed_at":"2026-09-11T12:00:00Z","disposition":"created"},{"id":"`+goalEvidenceIDTwo+`","run_id":"`+goalRunID+`","evidence_key":"tests:secondary","kind":"check","subject_hash":"`+goalEvidenceHash+`","verdict":"passed","observed_at":"2026-09-11T12:00:01Z","disposition":"replayed"}]}}`)
+	}))
+	defer server.Close()
+
+	receipt, err := mustMachineClient(t, server).AppendEvidenceBatch(context.Background(), goalRunID, goalFence(), []protocol.Evidence{first, second})
+	if err != nil {
+		t.Fatalf("AppendEvidenceBatch() error = %v", err)
+	}
+	if receipt.RunID != goalRunID || len(receipt.Receipts) != 2 {
+		t.Fatalf("receipt = %#v, want run and two receipts", receipt)
+	}
+	if got := receipt.Receipts[0]; got.EvidenceKey != first.EvidenceKey || got.Disposition != "created" || got.ObservedAt != "2026-09-11T12:00:00Z" {
+		t.Fatalf("first receipt = %#v, want first request item", got)
+	}
+	if got := receipt.Receipts[1]; got.EvidenceKey != second.EvidenceKey || got.Disposition != "replayed" || got.ObservedAt != "2026-09-11T12:00:01Z" {
+		t.Fatalf("second receipt = %#v, want second request item", got)
+	}
+}
+
+func TestAppendEvidenceBatchEnforcesHTTPDispositionSemantics(t *testing.T) {
+	evidence := goalEvidence(t)
+	response := func(disposition string) string {
+		return `{"evidence_batch":{"run_id":"` + goalRunID + `","receipts":[{"id":"` + goalEvidenceID + `","run_id":"` + goalRunID + `","evidence_key":"tests:default","kind":"check","subject_hash":"` + goalEvidenceHash + `","verdict":"passed","observed_at":"2026-09-11T12:00:00Z","disposition":"` + disposition + `"}]}}`
+	}
+
+	for _, test := range []struct {
+		name        string
+		status      int
+		disposition string
+		wantError   string
+	}{
+		{name: "all replayed returns 200", status: http.StatusOK, disposition: "replayed"},
+		{name: "created returns 201", status: http.StatusCreated, disposition: "created"},
+		{name: "created cannot return 200", status: http.StatusOK, disposition: "created", wantError: "expected HTTP 201"},
+		{name: "replayed cannot return 201", status: http.StatusCreated, disposition: "replayed", wantError: "expected HTTP 200"},
+		{name: "unknown disposition rejected", status: http.StatusCreated, disposition: "conflict", wantError: "validate evidence-batch-response"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := jsonServer(t, test.status, response(test.disposition), nil)
+			defer server.Close()
+			_, err := mustMachineClient(t, server).AppendEvidenceBatch(context.Background(), goalRunID, goalFence(), []protocol.Evidence{evidence})
+			if test.wantError == "" {
+				if err != nil {
+					t.Fatalf("AppendEvidenceBatch() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("error = %v, want containing %q", err, test.wantError)
+			}
+		})
+	}
+}
+
+func TestAppendEvidenceBatchRejectsInvalidRequestBoundsAndReceiptCorrelation(t *testing.T) {
+	base := goalEvidence(t)
+	newBatch := func(size int) []protocol.Evidence {
+		items := make([]protocol.Evidence, size)
+		for index := range items {
+			items[index] = base
+			items[index].EvidenceID = fmt.Sprintf("55555555-5555-4555-8555-%012d", index+1)
+			items[index].EvidenceKey = fmt.Sprintf("tests:%d", index)
+		}
+		return items
+	}
+
+	for _, test := range []struct {
+		name     string
+		evidence []protocol.Evidence
+		want     string
+	}{
+		{name: "empty", evidence: nil, want: "at least one"},
+		{name: "too many", evidence: newBatch(maxGoalEvidenceBatchItems + 1), want: "maximum is 256"},
+		{name: "duplicate key", evidence: []protocol.Evidence{base, base}, want: "duplicates evidence_id"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				t.Fatal("invalid batch request reached the server")
+			}))
+			client := mustMachineClient(t, server)
+			_, err := client.AppendEvidenceBatch(context.Background(), goalRunID, goalFence(), test.evidence)
+			server.Close()
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want containing %q", err, test.want)
+			}
+		})
+	}
+
+	server := jsonServer(t, http.StatusOK, `{"evidence_batch":{"run_id":"`+goalRunID+`","receipts":[{"id":"`+goalEvidenceID+`","run_id":"`+goalRunID+`","evidence_key":"wrong-key","kind":"check","subject_hash":"`+goalEvidenceHash+`","verdict":"passed","observed_at":"2026-09-11T12:00:00Z","disposition":"created"}]}}`, nil)
+	defer server.Close()
+	_, err := mustMachineClient(t, server).AppendEvidenceBatch(context.Background(), goalRunID, goalFence(), []protocol.Evidence{base})
+	if err == nil || !strings.Contains(err.Error(), "evidence_key does not match") {
+		t.Fatalf("error = %v, want receipt correlation rejection", err)
+	}
+}
+
+func TestAppendEvidencePreservesServerObservedAt(t *testing.T) {
+	server := jsonServer(t, http.StatusCreated, `{"evidence":{"id":"`+goalEvidenceID+`","run_id":"`+goalRunID+`","evidence_key":"tests:default","kind":"check","subject_hash":"`+goalEvidenceHash+`","verdict":"passed","observed_at":"2026-09-11T12:00:00Z"}}`, nil)
+	defer server.Close()
+
+	receipt, err := mustMachineClient(t, server).AppendEvidence(context.Background(), goalRunID, goalFence(), goalEvidence(t))
+	if err != nil {
+		t.Fatalf("AppendEvidence() error = %v", err)
+	}
+	if receipt.ObservedAt != "2026-09-11T12:00:00Z" {
+		t.Fatalf("ObservedAt = %q, want server timestamp", receipt.ObservedAt)
+	}
+}
+
+func TestAppendEvidenceBatchRejectsUnknownFieldsAndDecodesConflictDetails(t *testing.T) {
+	unknown := jsonServer(t, http.StatusOK, `{"evidence_batch":{"run_id":"`+goalRunID+`","receipts":[{"id":"`+goalEvidenceID+`","run_id":"`+goalRunID+`","evidence_key":"tests:default","kind":"check","subject_hash":"`+goalEvidenceHash+`","verdict":"passed","observed_at":"2026-09-11T12:00:00Z","disposition":"created","private":"secret"}]}}`, nil)
+	_, err := mustMachineClient(t, unknown).AppendEvidenceBatch(context.Background(), goalRunID, goalFence(), []protocol.Evidence{goalEvidence(t)})
+	unknown.Close()
+	if err == nil || !strings.Contains(err.Error(), "decode strict goal response") {
+		t.Fatalf("error = %v, want strict batch receipt rejection", err)
+	}
+
+	conflict := jsonServer(t, http.StatusConflict, `{"error":{"code":"idempotency_conflict","message":"evidence batch contains conflicting item","details":{"items":[{"index":0,"evidence_key":"tests:default","disposition":"conflict"}]}}}`, nil)
+	defer conflict.Close()
+	_, err = mustMachineClient(t, conflict).AppendEvidenceBatch(context.Background(), goalRunID, goalFence(), []protocol.Evidence{goalEvidence(t)})
+	var apiError *APIError
+	if !errors.As(err, &apiError) || apiError.Code != IdempotencyConflict {
+		t.Fatalf("error = %#v, want idempotency conflict APIError", err)
+	}
+	if apiError.EvidenceBatchConflictDetails == nil || len(apiError.EvidenceBatchConflictDetails.Items) != 1 {
+		t.Fatalf("typed conflict details = %#v, want one conflict item", apiError.EvidenceBatchConflictDetails)
+	}
+	item := apiError.EvidenceBatchConflictDetails.Items[0]
+	if item.Index != 0 || item.EvidenceKey != "tests:default" || string(item.Disposition) != "conflict" {
+		t.Fatalf("typed conflict item = %#v, want conflict item detail", item)
+	}
+
+	invalidDetails := jsonServer(t, http.StatusConflict, `{"error":{"code":"idempotency_conflict","message":"evidence batch contains conflicting item","details":{"items":[{"index":0,"evidence_key":"tests:default","disposition":"conflict","private":"secret"}]}}}`, nil)
+	defer invalidDetails.Close()
+	_, err = mustMachineClient(t, invalidDetails).AppendEvidenceBatch(context.Background(), goalRunID, goalFence(), []protocol.Evidence{goalEvidence(t)})
+	if err == nil || !strings.Contains(err.Error(), "decode evidence batch conflict details") {
+		t.Fatalf("error = %v, want generated conflict-details schema rejection", err)
 	}
 }
 

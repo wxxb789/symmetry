@@ -187,6 +187,27 @@
       "tags": ["observation-receipt", "nullable", "complete-subject"]
     },
     {
+      "id": "evidence-batch.basic",
+      "schema": "evidence-batch",
+      "path": "valid/evidence-batch.basic.json",
+      "valid": true,
+      "tags": ["happy-path", "evidence-batch", "run-id-binding", "nested-evidence"]
+    },
+    {
+      "id": "evidence-batch-response.basic",
+      "schema": "evidence-batch-response",
+      "path": "valid/evidence-batch-response.basic.json",
+      "valid": true,
+      "tags": ["evidence-batch-response", "receipts", "disposition"]
+    },
+    {
+      "id": "evidence-batch-conflict-details.basic",
+      "schema": "evidence-batch-conflict-details",
+      "path": "valid/evidence-batch-conflict-details.basic.json",
+      "valid": true,
+      "tags": ["evidence-batch-conflict-details", "conflict-disposition"]
+    },
+    {
       "id": "decision.open",
       "schema": "decision",
       "path": "valid/decision.open.json",
@@ -445,6 +466,72 @@
       "schema_valid": true,
       "semantic_valid": false,
       "tags": ["source-identity", "semantic-consistency"]
+    },
+    {
+      "id": "evidence-batch.extra-control-field",
+      "schema": "evidence-batch",
+      "path": "invalid/evidence-batch.extra-control-field.json",
+      "valid": false,
+      "tags": ["evidence-batch", "extra-control-field"]
+    },
+    {
+      "id": "evidence-batch.empty-items",
+      "schema": "evidence-batch",
+      "path": "invalid/evidence-batch.empty-items.json",
+      "valid": false,
+      "tags": ["evidence-batch", "missing-control-field"]
+    },
+    {
+      "id": "evidence-batch.duplicate-key",
+      "schema": "evidence-batch",
+      "path": "invalid/evidence-batch.duplicate-key.json",
+      "valid": false,
+      "schema_valid": true,
+      "semantic_valid": false,
+      "semantic_error": "duplicate_evidence_key",
+      "tags": ["evidence-batch", "semantic-consistency", "duplicate-evidence-key"]
+    },
+    {
+      "id": "evidence-batch-response.extra-field",
+      "schema": "evidence-batch-response",
+      "path": "invalid/evidence-batch-response.extra-field.json",
+      "valid": false,
+      "tags": ["evidence-batch-response", "extra-control-field"]
+    },
+    {
+      "id": "evidence-batch-response.empty-receipts",
+      "schema": "evidence-batch-response",
+      "path": "invalid/evidence-batch-response.empty-receipts.json",
+      "valid": false,
+      "tags": ["evidence-batch-response", "missing-control-field"]
+    },
+    {
+      "id": "evidence-batch-response.invalid-disposition",
+      "schema": "evidence-batch-response",
+      "path": "invalid/evidence-batch-response.invalid-disposition.json",
+      "valid": false,
+      "tags": ["evidence-batch-response", "unknown-enum"]
+    },
+    {
+      "id": "evidence-batch-conflict-details.extra-field",
+      "schema": "evidence-batch-conflict-details",
+      "path": "invalid/evidence-batch-conflict-details.extra-field.json",
+      "valid": false,
+      "tags": ["evidence-batch-conflict-details", "extra-control-field"]
+    },
+    {
+      "id": "evidence-batch-conflict-details.empty-items",
+      "schema": "evidence-batch-conflict-details",
+      "path": "invalid/evidence-batch-conflict-details.empty-items.json",
+      "valid": false,
+      "tags": ["evidence-batch-conflict-details", "missing-control-field"]
+    },
+    {
+      "id": "evidence-batch-conflict-details.index-out-of-range",
+      "schema": "evidence-batch-conflict-details",
+      "path": "invalid/evidence-batch-conflict-details.index-out-of-range.json",
+      "valid": false,
+      "tags": ["evidence-batch-conflict-details", "safe-integer-limit"]
     },
     {
       "id": "goal-revision.extra-field",

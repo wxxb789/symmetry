@@ -4,6 +4,9 @@ import type {
   SymmetryAdmissionV1,
   SymmetryContextSnapshotV1,
   SymmetryDecisionV1,
+  SymmetryEvidenceBatchConflictDetailsV1,
+  SymmetryEvidenceBatchResponseV1,
+  SymmetryEvidenceBatchV1,
   SymmetryEvidenceV1,
   SymmetryGoalCommandV1,
   SymmetryGoalCreateV1,
@@ -17,6 +20,9 @@ import type {
   Admission,
   ContextSnapshot,
   Decision,
+  EvidenceBatchConflictDetails,
+  EvidenceBatchResponse,
+  EvidenceBatch,
   Evidence,
   GoalCommand,
   GoalCreate,
@@ -52,7 +58,25 @@ export type DecoderOutputs = [
     Equal<Effect.Effect.Success<ReturnType<typeof Decision.decodeUnknown>>, SymmetryDecisionV1>
   >,
   Assert<
+    Equal<
+      Effect.Effect.Success<ReturnType<typeof EvidenceBatchConflictDetails.decodeUnknown>>,
+      SymmetryEvidenceBatchConflictDetailsV1
+    >
+  >,
+  Assert<
+    Equal<
+      Effect.Effect.Success<ReturnType<typeof EvidenceBatchResponse.decodeUnknown>>,
+      SymmetryEvidenceBatchResponseV1
+    >
+  >,
+  Assert<
     Equal<Effect.Effect.Success<ReturnType<typeof Evidence.decodeUnknown>>, SymmetryEvidenceV1>
+  >,
+  Assert<
+    Equal<
+      Effect.Effect.Success<ReturnType<typeof EvidenceBatch.decodeUnknown>>,
+      SymmetryEvidenceBatchV1
+    >
   >,
   Assert<
     Equal<

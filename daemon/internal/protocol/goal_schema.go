@@ -222,6 +222,15 @@ func ValidateGoalEnvelope(envelope contractdto.Envelope, data []byte) error {
 	case contractdto.EnvelopeEvidence:
 		_, err := ParseEvidence(data)
 		return err
+	case contractdto.EnvelopeEvidenceBatch:
+		_, err := ParseEvidenceBatch(data)
+		return err
+	case contractdto.EnvelopeEvidenceBatchResponse:
+		_, err := ParseEvidenceBatchResponse(data)
+		return err
+	case contractdto.EnvelopeEvidenceBatchConflictDetails:
+		_, err := ParseEvidenceBatchConflictDetails(data)
+		return err
 	case contractdto.EnvelopeGoalCommand:
 		return ValidateGoalCommand(data)
 	case contractdto.EnvelopeGoalCreate:

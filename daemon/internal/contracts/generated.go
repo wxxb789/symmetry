@@ -239,20 +239,40 @@ type DecisionResolution struct {
 	ResolvedAt string  `json:"resolved_at"`
 }
 
-type SymmetryEvidenceV1 struct {
-	EvidenceID       string                          `json:"evidence_id"`
-	EvidenceKey      string                          `json:"evidence_key"`
-	Kind             SymmetryEvidenceV1Kind          `json:"kind"`
-	ObservedAt       string                          `json:"observed_at"`
-	Payload          Receipt                         `json:"payload"`
-	RunID            string                          `json:"run_id"`
-	SchemaVersion    SymmetryEvidenceV1SchemaVersion `json:"schema_version"`
-	SourceRef        SourceRef                       `json:"source_ref"`
-	SourceRevision   string                          `json:"source_revision"`
-	Subject          SymmetryEvidenceV1Subject       `json:"subject"`
-	SubjectHash      string                          `json:"subject_hash"`
-	ValidatorProfile *string                         `json:"validator_profile"`
-	Verdict          Verdict                         `json:"verdict"`
+type SymmetryEvidenceBatchConflictDetailsV1 struct {
+	Items []ConflictItem `json:"items"`
+}
+
+type ConflictItem struct {
+	Disposition ItemDisposition `json:"disposition"`
+	EvidenceKey string          `json:"evidence_key"`
+	Index       int64           `json:"index"`
+}
+
+type SymmetryEvidenceBatchResponseV1 struct {
+	EvidenceBatch EvidenceBatch `json:"evidence_batch"`
+}
+
+type EvidenceBatch struct {
+	Receipts []EvidenceReceipt `json:"receipts"`
+	RunID    string            `json:"run_id"`
+}
+
+type EvidenceReceipt struct {
+	Disposition ReceiptDisposition     `json:"disposition"`
+	EvidenceKey string                 `json:"evidence_key"`
+	ID          string                 `json:"id"`
+	Kind        SymmetryEvidenceV1Kind `json:"kind"`
+	ObservedAt  string                 `json:"observed_at"`
+	RunID       string                 `json:"run_id"`
+	SubjectHash string                 `json:"subject_hash"`
+	Verdict     Verdict                `json:"verdict"`
+}
+
+type SymmetryEvidenceBatchV1 struct {
+	Items         []SymmetryEvidenceV1                 `json:"items"`
+	RunID         string                               `json:"run_id"`
+	SchemaVersion SymmetryEvidenceBatchV1SchemaVersion `json:"schema_version"`
 }
 
 type Receipt struct {
@@ -305,6 +325,22 @@ type SourceRef struct {
 	ResourceID       *string                `json:"resource_id,omitempty"`
 	ReviewTaskID     *string                `json:"review_task_id,omitempty"`
 	ExternalRef      *string                `json:"external_ref,omitempty"`
+}
+
+type SymmetryEvidenceV1 struct {
+	EvidenceID       string                          `json:"evidence_id"`
+	EvidenceKey      string                          `json:"evidence_key"`
+	Kind             SymmetryEvidenceV1Kind          `json:"kind"`
+	ObservedAt       string                          `json:"observed_at"`
+	Payload          Receipt                         `json:"payload"`
+	RunID            string                          `json:"run_id"`
+	SchemaVersion    SymmetryEvidenceV1SchemaVersion `json:"schema_version"`
+	SourceRef        SourceRef                       `json:"source_ref"`
+	SourceRevision   string                          `json:"source_revision"`
+	Subject          SymmetryEvidenceV1Subject       `json:"subject"`
+	SubjectHash      string                          `json:"subject_hash"`
+	ValidatorProfile *string                         `json:"validator_profile"`
+	Verdict          Verdict                         `json:"verdict"`
 }
 
 type SymmetryGoalCommandV1 struct {
@@ -900,6 +936,19 @@ const (
 	SchemaVersionSymmetryDecisionV1 SymmetryDecisionV1SchemaVersion = "symmetry.decision.v1"
 )
 
+type ItemDisposition string
+
+const (
+	Conflict ItemDisposition = "conflict"
+)
+
+type ReceiptDisposition string
+
+const (
+	Created  ReceiptDisposition = "created"
+	Replayed ReceiptDisposition = "replayed"
+)
+
 type SymmetryEvidenceV1Kind string
 
 const (
@@ -930,6 +979,12 @@ type SymmetryEvidenceV1SchemaVersion string
 
 const (
 	SchemaVersionSymmetryEvidenceV1 SymmetryEvidenceV1SchemaVersion = "symmetry.evidence.v1"
+)
+
+type SymmetryEvidenceBatchV1SchemaVersion string
+
+const (
+	SchemaVersionSymmetryEvidenceBatchV1 SymmetryEvidenceBatchV1SchemaVersion = "symmetry.evidence_batch.v1"
 )
 
 type SymmetryGoalCommandV1Kind string

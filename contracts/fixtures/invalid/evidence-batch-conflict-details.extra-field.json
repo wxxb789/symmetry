@@ -1,0 +1,10 @@
+{
+  "items": [
+    {
+      "index": 0,
+      "evidence_key": "tests:default",
+      "disposition": "conflict",
+      "message": "private detail"
+    }
+  ]
+}

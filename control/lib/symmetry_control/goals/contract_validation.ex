@@ -16,9 +16,12 @@ defmodule SymmetryControl.Goals.ContractValidation do
        validate_plan_proposal(data, schema_root: contracts_v1_path)
        validate_admission(data, schema_root: contracts_v1_path)
       validate_context_snapshot(data, schema_root: contracts_v1_path)
-      validate_task_result(data, schema_root: contracts_v1_path)
-      validate_evidence(data, schema_root: contracts_v1_path)
-      validate_decision(data, schema_root: contracts_v1_path)
+       validate_task_result(data, schema_root: contracts_v1_path)
+       validate_evidence(data, schema_root: contracts_v1_path)
+       validate_evidence_batch(data, schema_root: contracts_v1_path)
+       validate_evidence_batch_response(data, schema_root: contracts_v1_path)
+       validate_evidence_batch_conflict_details(data, schema_root: contracts_v1_path)
+       validate_decision(data, schema_root: contracts_v1_path)
       validate_usage(data, schema_root: contracts_v1_path)
       validate_adapter_capabilities(data, schema_root: contracts_v1_path)
 
@@ -42,6 +45,9 @@ defmodule SymmetryControl.Goals.ContractValidation do
     context_snapshot: "context-snapshot.schema.json",
     task_result: "task-result.schema.json",
     evidence: "evidence.schema.json",
+    evidence_batch: "evidence-batch.schema.json",
+    evidence_batch_response: "evidence-batch-response.schema.json",
+    evidence_batch_conflict_details: "evidence-batch-conflict-details.schema.json",
     decision: "decision.schema.json",
     usage: "usage.schema.json",
     adapter_capabilities: "adapter-capabilities.schema.json"
@@ -87,6 +93,29 @@ defmodule SymmetryControl.Goals.ContractValidation do
 
   @spec validate_evidence(map() | list(), keyword()) :: validation_result()
   def validate_evidence(data, opts \\ []), do: validate(:evidence, data, opts)
+
+  @spec validate_evidence_batch(map(), keyword()) :: validation_result()
+  def validate_evidence_batch(data, opts \\ [])
+
+  def validate_evidence_batch(data, opts) when is_list(opts) do
+    with :ok <- ensure_ex_json_schema(),
+         {:ok, schema_root} <- schema_root(opts),
+         {:ok, normalized} <- normalize_json_keys(data),
+         :ok <- validate_evidence_batch_schema(normalized, schema_root),
+         :ok <- validate_evidence_batch_semantics(normalized, schema_root) do
+      :ok
+    end
+  end
+
+  def validate_evidence_batch(_data, _opts), do: {:error, :invalid_options}
+
+  @spec validate_evidence_batch_response(map(), keyword()) :: validation_result()
+  def validate_evidence_batch_response(data, opts \\ []),
+    do: validate(:evidence_batch_response, data, opts)
+
+  @spec validate_evidence_batch_conflict_details(map(), keyword()) :: validation_result()
+  def validate_evidence_batch_conflict_details(data, opts \\ []),
+    do: validate(:evidence_batch_conflict_details, data, opts)
 
   @spec validate_decision(map() | list(), keyword()) :: validation_result()
   def validate_decision(data, opts \\ []), do: validate(:decision, data, opts)
@@ -197,9 +226,9 @@ defmodule SymmetryControl.Goals.ContractValidation do
          {:ok, envelope} <- read_schema(Path.join(schema_root, filename)),
          :ok <- ensure_draft7(common, "common.schema.json"),
          :ok <- ensure_draft7(envelope, filename) do
-      materialized = materialize_schema(envelope, common)
-
-      with :ok <- reject_external_refs(materialized, filename) do
+      with {:ok, materialized} <-
+             materialize_schema_for_kind(envelope, common, schema_root, kind),
+           :ok <- reject_external_refs(materialized, filename) do
         {:ok, materialized}
       end
     else
@@ -207,6 +236,47 @@ defmodule SymmetryControl.Goals.ContractValidation do
       {:error, _reason} = error -> error
     end
   end
+
+  defp materialize_schema_for_kind(envelope, common, schema_root, :evidence_batch) do
+    with {:ok, evidence} <-
+           read_schema(Path.join(schema_root, Map.fetch!(@schema_files, :evidence))),
+         :ok <- ensure_draft7(evidence, Map.fetch!(@schema_files, :evidence)) do
+      batch = materialize_schema(envelope, common)
+      evidence = materialize_schema(evidence, common)
+
+      {:ok, inline_evidence_schema(batch, evidence)}
+    end
+  end
+
+  defp materialize_schema_for_kind(envelope, common, _schema_root, _kind),
+    do: {:ok, materialize_schema(envelope, common)}
+
+  defp inline_evidence_schema(batch, evidence) do
+    definitions =
+      batch
+      |> Map.get("definitions", %{})
+      |> Map.merge(Map.get(evidence, "definitions", %{}))
+      |> Map.put(
+        "Evidence",
+        Map.drop(evidence, ["$schema", "$id", "title", "definitions"])
+      )
+
+    batch
+    |> Map.put("definitions", definitions)
+    |> rewrite_evidence_schema_ref()
+  end
+
+  defp rewrite_evidence_schema_ref(%{"$ref" => "evidence.schema.json#"} = value),
+    do: Map.put(value, "$ref", "#/definitions/Evidence")
+
+  defp rewrite_evidence_schema_ref(value) when is_map(value) do
+    Enum.into(value, %{}, fn {key, child} -> {key, rewrite_evidence_schema_ref(child)} end)
+  end
+
+  defp rewrite_evidence_schema_ref(value) when is_list(value),
+    do: Enum.map(value, &rewrite_evidence_schema_ref/1)
+
+  defp rewrite_evidence_schema_ref(value), do: value
 
   defp read_schema(path) do
     case File.read(path) do
@@ -415,7 +485,125 @@ defmodule SymmetryControl.Goals.ContractValidation do
   defp validate_semantics(:decision, decision),
     do: validate_decision_semantics(decision)
 
+  defp validate_semantics(:evidence_batch_response, response),
+    do: validate_evidence_batch_response_semantics(response)
+
   defp validate_semantics(_kind, _data), do: :ok
+
+  defp validate_evidence_batch_response_semantics(%{
+         "evidence_batch" => %{
+           "run_id" => run_id,
+           "receipts" => receipts
+         }
+       })
+       when is_binary(run_id) and is_list(receipts) do
+    case Enum.all?(receipts, &(Map.get(&1, "run_id") == run_id)) do
+      true -> :ok
+      false -> {:error, :evidence_batch_response_run_id_mismatch}
+    end
+  end
+
+  defp validate_evidence_batch_response_semantics(_response), do: :ok
+
+  # The batch schema is additive and may be installed alongside this control
+  # release. Keep the local envelope and item checks useful while that schema
+  # is absent, then defer to the canonical schema as soon as it is available.
+  defp validate_evidence_batch_schema(batch, schema_root) do
+    schema_path = Path.join(schema_root, Map.fetch!(@schema_files, :evidence_batch))
+
+    if File.regular?(schema_path) do
+      validate(:evidence_batch, batch, schema_root: schema_root)
+    else
+      :ok
+    end
+  end
+
+  defp validate_evidence_batch_semantics(batch, schema_root) when is_map(batch) do
+    case batch do
+      %{
+        "schema_version" => "symmetry.evidence_batch.v1",
+        "run_id" => run_id,
+        "items" => items
+      }
+      when is_binary(run_id) and is_list(items) and items != [] and length(items) <= 256 ->
+        with :ok <- validate_batch_envelope_keys(batch),
+             :ok <- validate_batch_uuid(run_id),
+             :ok <- validate_batch_keys(items),
+             :ok <- validate_batch_items(items, run_id, schema_root) do
+          :ok
+        end
+
+      _ ->
+        {:error, :invalid_evidence_batch}
+    end
+  end
+
+  defp validate_evidence_batch_semantics(_batch, _schema_root),
+    do: {:error, :invalid_evidence_batch}
+
+  defp validate_batch_uuid(value) do
+    case Ecto.UUID.cast(value) do
+      {:ok, _uuid} -> :ok
+      :error -> {:error, :invalid_evidence_batch_run_id}
+    end
+  end
+
+  defp validate_batch_keys(evidence) do
+    cond do
+      Enum.any?(evidence, &(not is_map(&1))) ->
+        {:error, :invalid_evidence_batch_item}
+
+      true ->
+        keys = Enum.map(evidence, &Map.get(&1, "evidence_key"))
+        ids = Enum.map(evidence, &Map.get(&1, "evidence_id"))
+
+        cond do
+          Enum.any?(keys, &(not is_binary(&1))) ->
+            {:error, :invalid_evidence_batch_item}
+
+          Enum.uniq(keys) != keys ->
+            {:error, :duplicate_evidence_key}
+
+          Enum.any?(ids, &(not is_binary(&1))) ->
+            {:error, :invalid_evidence_batch_item}
+
+          Enum.uniq(ids) != ids ->
+            {:error, :evidence_batch_duplicate_id}
+
+          true ->
+            :ok
+        end
+    end
+  end
+
+  defp validate_batch_envelope_keys(batch) do
+    Enum.all?(Map.keys(batch), fn
+      key when is_atom(key) or is_binary(key) ->
+        to_string(key) in ["schema_version", "run_id", "items"]
+
+      _ ->
+        false
+    end)
+    |> case do
+      true -> :ok
+      false -> {:error, :invalid_evidence_batch}
+    end
+  end
+
+  defp validate_batch_items(evidence, run_id, schema_root) do
+    Enum.reduce_while(evidence, :ok, fn item, :ok ->
+      cond do
+        Map.get(item, "run_id") != run_id ->
+          {:halt, {:error, :evidence_batch_run_id_mismatch}}
+
+        true ->
+          case validate_evidence(item, schema_root: schema_root) do
+            :ok -> {:cont, :ok}
+            {:error, reason} -> {:halt, {:error, {:evidence_batch_item_invalid, reason}}}
+          end
+      end
+    end)
+  end
 
   defp validate_task_result_semantics(task_result) do
     with :ok <- validate_subject_hash(task_result),

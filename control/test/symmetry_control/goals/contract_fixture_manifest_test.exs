@@ -13,6 +13,10 @@ defmodule SymmetryControl.Goals.ContractFixtureManifestTest do
     "context-snapshot" => &ContractValidation.validate_context_snapshot/2,
     "decision" => &ContractValidation.validate_decision/2,
     "evidence" => &ContractValidation.validate_evidence/2,
+    "evidence-batch" => &ContractValidation.validate_evidence_batch/2,
+    "evidence-batch-response" => &ContractValidation.validate_evidence_batch_response/2,
+    "evidence-batch-conflict-details" =>
+      &ContractValidation.validate_evidence_batch_conflict_details/2,
     "goal-command" => &ContractValidation.validate_goal_command/2,
     "goal-create" => &ContractValidation.validate_goal_create/2,
     "goal-revision" => &ContractValidation.validate_goal_revision/2,

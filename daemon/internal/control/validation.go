@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"net/http"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -808,6 +809,43 @@ func validateGoalEvidence(runID string, fence protocol.Fence, evidence protocol.
 	return nil
 }
 
+const maxGoalEvidenceBatchItems = 256
+
+func validateGoalEvidenceBatch(runID string, fence protocol.Fence, batch GoalEvidenceBatch) error {
+	if err := validateGoalFence(runID, fence); err != nil {
+		return err
+	}
+	if batch.SchemaVersion != "symmetry.evidence_batch.v1" {
+		return errors.New("evidence batch schema_version is not recognized")
+	}
+	if batch.RunID != runID {
+		return errors.New("evidence batch run_id does not match the path run ID")
+	}
+	if len(batch.Items) == 0 {
+		return errors.New("evidence batch must contain at least one item")
+	}
+	if len(batch.Items) > maxGoalEvidenceBatchItems {
+		return fmt.Errorf("evidence batch contains %d items; maximum is %d", len(batch.Items), maxGoalEvidenceBatchItems)
+	}
+
+	seenIDs := make(map[string]struct{}, len(batch.Items))
+	seenKeys := make(map[string]struct{}, len(batch.Items))
+	for index, evidence := range batch.Items {
+		if err := validateGoalEvidence(runID, fence, evidence); err != nil {
+			return fmt.Errorf("evidence batch item %d: %w", index, err)
+		}
+		if _, exists := seenIDs[evidence.EvidenceID]; exists {
+			return fmt.Errorf("evidence batch item %d duplicates evidence_id %q", index, evidence.EvidenceID)
+		}
+		if _, exists := seenKeys[evidence.EvidenceKey]; exists {
+			return fmt.Errorf("evidence batch item %d duplicates evidence_key %q", index, evidence.EvidenceKey)
+		}
+		seenIDs[evidence.EvidenceID] = struct{}{}
+		seenKeys[evidence.EvidenceKey] = struct{}{}
+	}
+	return nil
+}
+
 func validateGoalUsage(runID string, fence protocol.Fence, usage protocol.Usage) error {
 	if err := validateGoalFence(runID, fence); err != nil {
 		return err
@@ -969,6 +1007,58 @@ func validateGoalEvidenceReceipt(runID string, evidence protocol.Evidence, recei
 	}
 	if !validGoalDigest(receipt.SubjectHash) {
 		return invalidResponse("evidence", "subject_hash is invalid")
+	}
+	if receipt.ObservedAt != "" {
+		if err := validateGoalUTCTimestamp(receipt.ObservedAt, "evidence.observed_at"); err != nil {
+			return invalidResponse("evidence", err.Error())
+		}
+	}
+	if receipt.Disposition != "" {
+		return invalidResponse("evidence", "disposition is only valid in a batch receipt")
+	}
+	return nil
+}
+
+func validateGoalEvidenceBatchReceipt(statusCode int, runID string, evidence []protocol.Evidence, receipt GoalEvidenceBatchReceipt) error {
+	if err := validateGoalUUID(receipt.RunID, "evidence_batch.run_id"); err != nil {
+		return invalidResponse("evidence batch", err.Error())
+	}
+	if receipt.RunID != runID {
+		return invalidResponse("evidence batch", "run_id does not match the path run ID")
+	}
+	if len(receipt.Receipts) != len(evidence) {
+		return invalidResponse("evidence batch", "receipts must match the request item count")
+	}
+	created := false
+	for index, item := range receipt.Receipts {
+		switch item.Disposition {
+		case "created":
+			created = true
+		case "replayed":
+		default:
+			return invalidResponse("evidence batch", fmt.Sprintf("receipt %d disposition is not recognized", index))
+		}
+		if item.ObservedAt == "" {
+			return invalidResponse("evidence batch", fmt.Sprintf("receipt %d observed_at is required", index))
+		}
+		if err := validateGoalEvidenceReceipt(runID, evidence[index], GoalEvidenceReceipt{
+			ID:          item.ID,
+			RunID:       item.RunID,
+			EvidenceKey: item.EvidenceKey,
+			Kind:        item.Kind,
+			SubjectHash: item.SubjectHash,
+			Verdict:     item.Verdict,
+			ObservedAt:  item.ObservedAt,
+		}); err != nil {
+			return invalidResponse("evidence batch", fmt.Sprintf("receipt %d: %v", index, err))
+		}
+	}
+	expectedStatus := http.StatusOK
+	if created {
+		expectedStatus = http.StatusCreated
+	}
+	if statusCode != expectedStatus {
+		return invalidResponse("evidence batch", fmt.Sprintf("HTTP %d does not match receipt dispositions; expected HTTP %d", statusCode, expectedStatus))
 	}
 	return nil
 }

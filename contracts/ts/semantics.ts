@@ -8,6 +8,7 @@ import type {
 } from "../generated/ts/admission.js";
 import type { SymmetryContextSnapshotV1 } from "../generated/ts/context-snapshot.js";
 import type { SymmetryDecisionV1 } from "../generated/ts/decision.js";
+import type { SymmetryEvidenceBatchV1 } from "../generated/ts/evidence-batch.js";
 import type { SymmetryEvidenceV1 } from "../generated/ts/evidence.js";
 import type { SymmetryGoalCommandV1 } from "../generated/ts/goal-command.js";
 import type { SymmetryGoalCreateV1 } from "../generated/ts/goal-create.js";
@@ -178,6 +179,31 @@ export const validateEvidenceSemantics = async (evidence: SymmetryEvidenceV1): P
         evidence.payload.external_ref,
       );
       return;
+  }
+};
+
+export const validateEvidenceBatchSemantics = async (
+  batch: SymmetryEvidenceBatchV1,
+): Promise<void> => {
+  const evidenceKeys = new Set<string>();
+  const evidenceIDs = new Set<string>();
+  for (const evidence of batch.items) {
+    assertEqual("evidence.run_id", evidence.run_id, batch.run_id);
+    if (evidenceKeys.has(evidence.evidence_key)) {
+      throw new SemanticError(
+        "duplicate_evidence_key",
+        `duplicate evidence key ${evidence.evidence_key}`,
+      );
+    }
+    evidenceKeys.add(evidence.evidence_key);
+    if (evidenceIDs.has(evidence.evidence_id)) {
+      throw new SemanticError(
+        "duplicate_evidence_id",
+        `duplicate evidence id ${evidence.evidence_id}`,
+      );
+    }
+    evidenceIDs.add(evidence.evidence_id);
+    await validateEvidenceSemantics(evidence);
   }
 };
 

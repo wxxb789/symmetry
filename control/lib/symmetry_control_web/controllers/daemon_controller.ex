@@ -3,10 +3,12 @@ defmodule SymmetryControlWeb.DaemonController do
 
   alias SymmetryControl.Integrations.ProviderAccess
   alias SymmetryControl.Goals
+  alias SymmetryControl.Goals.ContractValidation
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.Scheduler
   alias SymmetryControl.Repo
   alias SymmetryControlWeb.Protocol
+  alias SymmetryControlWeb.Plugs.StrictEvidenceJSON
 
   def enroll(conn, _params) do
     with {:ok, idempotency_key} <- idempotency_key(conn),
@@ -327,14 +329,88 @@ defmodule SymmetryControlWeb.DaemonController do
     run_id = path_param(conn, "run_id")
 
     with :ok <- owns_run(conn, run_id),
-         {:ok, fence, evidence} <- fenced_body(body_params(conn), run_id, :required),
-         {:ok, receipt, disposition} <-
-           Goals.append_evidence(conn.assigns.machine.id, run_id, fence, evidence) do
-      receipt(conn, receipt, disposition)
+         {:ok, body} <- evidence_body(conn),
+         {:ok, fence, evidence} <- fenced_body(body, run_id, :required) do
+      case append_evidence_request(conn.assigns.machine.id, run_id, fence, evidence) do
+        {:ok, response, disposition} ->
+          if batch_evidence?(evidence) do
+            batch_success_response(conn, response, disposition)
+          else
+            receipt(conn, response, disposition)
+          end
+
+        {:error, {:idempotency_conflict, fields} = reason} ->
+          if batch_evidence?(evidence) and valid_batch_conflict_details?(fields) do
+            Protocol.error(conn, reason)
+          else
+            error = if(batch_evidence?(evidence), do: :invalid_request, else: reason)
+            Protocol.error(conn, error)
+          end
+
+        {:error, :idempotency_conflict} ->
+          if batch_evidence?(evidence),
+            do: Protocol.error(conn, :invalid_request),
+            else: Protocol.error(conn, :idempotency_conflict)
+
+        {:error, reason} ->
+          Protocol.error(conn, reason)
+      end
     else
       {:error, reason} -> Protocol.error(conn, reason)
     end
   end
+
+  defp batch_success_response(conn, response, disposition) do
+    case ContractValidation.validate_evidence_batch_response(
+           response,
+           schema_root: contract_schema_root()
+         ) do
+      :ok -> receipt(conn, response, disposition)
+      {:error, _reason} -> Protocol.error(conn, :invalid_request)
+    end
+  end
+
+  defp valid_batch_conflict_details?(%{details: details}),
+    do: valid_batch_conflict_details?(details)
+
+  defp valid_batch_conflict_details?(%{"details" => details}),
+    do: valid_batch_conflict_details?(details)
+
+  defp valid_batch_conflict_details?(details) when is_map(details) do
+    ContractValidation.validate_evidence_batch_conflict_details(
+      details,
+      schema_root: contract_schema_root()
+    ) == :ok
+  end
+
+  defp valid_batch_conflict_details?(_details), do: false
+
+  defp batch_evidence?(%{"schema_version" => "symmetry.evidence_batch.v1"}), do: true
+  defp batch_evidence?(_evidence), do: false
+
+  defp evidence_body(conn) do
+    case StrictEvidenceJSON.materialize(conn) do
+      {:ok, body} ->
+        {:ok, body}
+
+      {:error, :not_captured} ->
+        {:ok, body_params(conn)}
+
+      {:error, _reason} ->
+        {:error, :invalid_request}
+    end
+  end
+
+  defp append_evidence_request(
+         machine_id,
+         run_id,
+         fence,
+         %{"schema_version" => "symmetry.evidence_batch.v1"} = batch
+       ),
+       do: Goals.append_evidence_batch(machine_id, run_id, fence, batch)
+
+  defp append_evidence_request(machine_id, run_id, fence, evidence),
+    do: Goals.append_evidence(machine_id, run_id, fence, evidence)
 
   def record_usage(conn, _params) do
     run_id = path_param(conn, "run_id")
@@ -530,4 +606,11 @@ defmodule SymmetryControlWeb.DaemonController do
 
   defp config(key),
     do: Application.fetch_env!(:symmetry_control, :orchestration) |> Keyword.fetch!(key)
+
+  defp contract_schema_root do
+    :symmetry_control
+    |> Application.fetch_env!(:contracts)
+    |> Keyword.fetch!(:directory)
+    |> Path.join("v1")
+  end
 end

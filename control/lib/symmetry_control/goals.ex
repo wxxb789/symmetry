@@ -111,6 +111,7 @@ defmodule SymmetryControl.Goals do
   @default_attention_limit 100
   @max_plan_items 256
   @max_plan_dependencies_per_item 256
+  @max_evidence_batch_items 256
   @max_safe_integer 9_007_199_254_740_991
   @max_microusd 9_223_372_036_854_775_807
 
@@ -537,6 +538,161 @@ defmodule SymmetryControl.Goals do
   end
 
   def append_evidence(_, _, _, _, _), do: {:error, :invalid_request}
+
+  @spec append_evidence_batch(Ecto.UUID.t(), Ecto.UUID.t(), map(), map(), keyword()) ::
+          {:ok, map(), :created | :replayed} | {:error, term()}
+  def append_evidence_batch(machine_id, run_id, fence, batch, opts \\ [])
+
+  def append_evidence_batch(machine_id, run_id, fence, batch, opts)
+      when is_binary(machine_id) and is_binary(run_id) and is_map(fence) and is_map(batch) and
+             is_list(opts) do
+    with :ok <- valid_uuid(machine_id),
+         :ok <- valid_uuid(run_id),
+         :ok <- valid_fence(fence),
+         :ok <- safe_evidence_document(batch),
+         :ok <- validate_evidence_batch_contract(batch, opts),
+         {:ok, evidence_items} <- evidence_batch_attrs(batch, run_id) do
+      Repo.transaction(fn ->
+        {goal, task, item, run, runtime} =
+          lock_goal_run!(machine_id, run_id, fence, opts, :delivery_replay)
+
+        snapshot =
+          lock_context_snapshot(goal.id, task.context_snapshot_id || rollback(:not_found))
+
+        unless snapshot.goal_revision == task.goal_revision and
+                 snapshot.work_item_id == task.work_item_id do
+          rollback(:ownership_lost)
+        end
+
+        context_wire_envelope!(snapshot, goal, item, task)
+
+        evidence_items =
+          Enum.map(evidence_items, fn %{attrs: attrs} = item_data ->
+            %{
+              item_data
+              | attrs: ensure_evidence_identity!(task, item, run, runtime, snapshot, attrs)
+            }
+          end)
+
+        classify_and_insert_evidence_batch!(
+          goal,
+          task,
+          item,
+          run,
+          evidence_items
+        )
+      end)
+      |> machine_write_result()
+    end
+  end
+
+  def append_evidence_batch(_, _, _, _, _), do: {:error, :invalid_request}
+
+  defp classify_and_insert_evidence_batch!(goal, task, _item, run, evidence_items) do
+    keys = Enum.map(evidence_items, & &1.attrs.evidence_key)
+    ids = Enum.map(evidence_items, & &1.attrs.id)
+
+    existing_by_key =
+      Repo.all(
+        from(row in RunEvidence,
+          where: row.run_id == ^run.id and row.evidence_key in ^keys,
+          lock: "FOR UPDATE"
+        )
+      )
+      |> Map.new(&{&1.evidence_key, &1})
+
+    existing_by_id =
+      Repo.all(
+        from(row in RunEvidence,
+          where: row.id in ^ids,
+          lock: "FOR UPDATE"
+        )
+      )
+      |> Map.new(&{&1.id, &1})
+
+    classified =
+      Enum.map(evidence_items, fn %{index: index, attrs: attrs} ->
+        case Map.get(existing_by_key, attrs.evidence_key) do
+          %RunEvidence{} = row ->
+            if evidence_matches?(row, attrs) and row.id == attrs.id do
+              {:replayed, row}
+            else
+              evidence_batch_conflict!(index, attrs)
+            end
+
+          nil ->
+            case Map.get(existing_by_id, attrs.id) do
+              nil ->
+                if validation_evidence_closed?(goal, task, run, attrs) do
+                  rollback(:validation_evidence_closed)
+                end
+
+                {:created, index, attrs}
+
+              _row ->
+                evidence_batch_conflict!(index, attrs)
+            end
+        end
+      end)
+
+    outcomes =
+      Enum.map(classified, fn
+        {:replayed, row} ->
+          {:replayed, row}
+
+        {:created, index, attrs} ->
+          changeset =
+            %RunEvidence{id: attrs.id}
+            |> RunEvidence.changeset(Map.drop(attrs, [:id, :observed_at]))
+            |> stamp_insert(attrs.observed_at)
+
+          case Repo.insert(changeset) do
+            {:ok, row} ->
+              {:created, row}
+
+            {:error, _changeset} ->
+              evidence_batch_conflict!(index, attrs)
+          end
+      end)
+
+    disposition =
+      if Enum.any?(outcomes, fn {item_disposition, _row} -> item_disposition == :created end),
+        do: :created,
+        else: :replayed
+
+    response = %{
+      evidence_batch: %{
+        run_id: run.id,
+        receipts: Enum.map(outcomes, &evidence_batch_receipt/1)
+      }
+    }
+
+    {disposition, response}
+  end
+
+  defp evidence_batch_receipt({disposition, row}) do
+    row
+    |> evidence_receipt()
+    |> Map.fetch!(:evidence)
+    |> Map.put(:disposition, Atom.to_string(disposition))
+  end
+
+  defp evidence_batch_conflict!(index, attrs) do
+    rollback(
+      {:idempotency_conflict,
+       %{
+         details: %{
+           items: [
+             %{
+               index: index,
+               evidence_key: attrs.evidence_key,
+               disposition: "conflict"
+             }
+           ]
+         }
+       }}
+    )
+  end
 
   @spec record_usage(Ecto.UUID.t(), Ecto.UUID.t(), map(), map(), keyword()) ::
           {:ok, map(), :created | :replayed} | {:error, term()}
@@ -1174,6 +1330,36 @@ defmodule SymmetryControl.Goals do
          subject: subject,
          observed_at: observed_at
        }}
+    else
+      _ -> {:error, :invalid_request}
+    end
+  end
+
+  defp evidence_batch_attrs(batch, run_id) do
+    with true <- only_known_keys?(batch, ["schema_version", "run_id", "items"]),
+         "symmetry.evidence_batch.v1" <- value(batch, :schema_version),
+         ^run_id <- value(batch, :run_id),
+         items when is_list(items) <- value(batch, :items),
+         true <- items != [] and length(items) <= @max_evidence_batch_items do
+      items
+      |> Enum.with_index()
+      |> Enum.reduce_while({:ok, []}, fn {item, index}, {:ok, acc} ->
+        if is_map(item) do
+          case evidence_attrs(item, run_id) do
+            {:ok, attrs} ->
+              {:cont, {:ok, [%{index: index, attrs: attrs} | acc]}}
+
+            {:error, reason} ->
+              {:halt, {:error, reason}}
+          end
+        else
+          {:halt, {:error, :invalid_request}}
+        end
+      end)
+      |> case do
+        {:ok, attrs} -> {:ok, Enum.reverse(attrs)}
+        {:error, reason} -> {:error, reason}
+      end
     else
       _ -> {:error, :invalid_request}
     end
@@ -9083,6 +9269,9 @@ defmodule SymmetryControl.Goals do
       :evidence ->
         ContractValidation.validate_evidence(document, schema_root: schema_root)
 
+      :evidence_batch ->
+        ContractValidation.validate_evidence_batch(document, schema_root: schema_root)
+
       :usage ->
         ContractValidation.validate_usage(document, schema_root: schema_root)
 
@@ -9091,6 +9280,13 @@ defmodule SymmetryControl.Goals do
 
       :goal_revision ->
         ContractValidation.validate_goal_revision(document, schema_root: schema_root)
+    end
+  end
+
+  defp validate_evidence_batch_contract(batch, opts) do
+    case validate_contract(:evidence_batch, batch, opts) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:invalid_contract, reason}}
     end
   end
 

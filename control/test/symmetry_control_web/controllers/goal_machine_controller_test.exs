@@ -3,6 +3,7 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
 
   import Ecto.Query
 
+  alias SymmetryControl.Goals.ContractValidation
   alias SymmetryControl.Goals
 
   alias SymmetryControl.Goals.{
@@ -20,6 +21,8 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
 
   @enrollment_token "test-enrollment-token"
   @goal_receipt_listener_id :goal_receipt_e2e_listener
+  @contracts_root Path.expand("../../../../contracts", __DIR__)
+  @contracts_schema_root Path.expand("../../../../contracts/v1", __DIR__)
 
   setup context do
     if context[:goal_receipt_e2e] == true and System.get_env("SYMMETRY_GOAL_RECEIPT_E2E") == "1" do
@@ -410,6 +413,211 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
              bearer(conn, token)
              |> post("/api/v1/runs/#{run.id}/usage", Map.merge(fence, unknown_usage))
              |> json_response(201)
+  end
+
+  test "evidence batches preserve request order, replay item receipts, and rollback conflicts", %{
+    conn: conn
+  } do
+    %{token: token, run: run, fence: fence, subject: subject} = claimed_goal_run_fixture(conn)
+    first = evidence_attrs(run.id, subject)
+
+    second =
+      first
+      |> Map.put(:evidence_id, Ecto.UUID.generate())
+      |> Map.put(:evidence_key, "observation:remote")
+      |> put_in([:source_ref, :ref], "remote-observation")
+      |> put_in([:source_ref, :external_ref], "status:remote")
+      |> put_in([:payload, :external_ref], "status:remote")
+      |> put_in([:payload, :note], "remote observation")
+
+    batch = %{
+      schema_version: "symmetry.evidence_batch.v1",
+      run_id: run.id,
+      items: [first, second]
+    }
+
+    created =
+      bearer(conn, token)
+      |> post("/api/v1/runs/#{run.id}/evidence", Map.merge(fence, batch))
+      |> json_response(201)
+
+    assert %{
+             "evidence_batch" => %{
+               "run_id" => batch_run_id,
+               "receipts" => [
+                 %{
+                   "evidence_key" => "observation:unit",
+                   "disposition" => "created"
+                 },
+                 %{
+                   "evidence_key" => "observation:remote",
+                   "disposition" => "created"
+                 }
+               ]
+             }
+           } = created
+
+    assert batch_run_id == run.id
+
+    assert :ok ==
+             ContractValidation.validate_evidence_batch_response(
+               created,
+               schema_root: @contracts_schema_root
+             )
+
+    replayed =
+      bearer(conn, token)
+      |> post("/api/v1/runs/#{run.id}/evidence", Map.merge(fence, batch))
+      |> json_response(200)
+
+    assert get_in(replayed, ["evidence_batch", "run_id"]) == run.id
+
+    assert Enum.map(replayed["evidence_batch"]["receipts"], & &1["evidence_key"]) == [
+             "observation:unit",
+             "observation:remote"
+           ]
+
+    assert Enum.all?(replayed["evidence_batch"]["receipts"], &(&1["disposition"] == "replayed"))
+
+    third =
+      second
+      |> Map.put(:evidence_id, Ecto.UUID.generate())
+      |> Map.put(:evidence_key, "observation:third")
+      |> put_in([:source_ref, :ref], "third-observation")
+      |> put_in([:source_ref, :external_ref], "status:third")
+      |> put_in([:payload, :external_ref], "status:third")
+      |> put_in([:payload, :note], "third observation")
+
+    conflict = put_in(first, [:payload, :note], "changed observation")
+    count_before = Repo.aggregate(SymmetryControl.Goals.RunEvidence, :count)
+
+    conflict_response =
+      bearer(conn, token)
+      |> post(
+        "/api/v1/runs/#{run.id}/evidence",
+        Map.merge(fence, %{batch | items: [third, conflict]})
+      )
+      |> json_response(409)
+
+    assert %{
+             "error" => %{
+               "code" => "idempotency_conflict",
+               "details" => %{
+                 "items" => [
+                   %{
+                     "index" => 1,
+                     "evidence_key" => "observation:unit",
+                     "disposition" => "conflict"
+                   }
+                 ]
+               }
+             }
+           } = conflict_response
+
+    assert :ok ==
+             ContractValidation.validate_evidence_batch_conflict_details(
+               conflict_response["error"]["details"],
+               schema_root: @contracts_schema_root
+             )
+
+    assert Repo.aggregate(SymmetryControl.Goals.RunEvidence, :count) == count_before
+  end
+
+  test "raw duplicate evidence JSON is rejected after ownership without a write", %{conn: conn} do
+    %{token: owner_token, run: run, fence: fence, subject: subject} =
+      claimed_goal_run_fixture(conn)
+
+    evidence = evidence_attrs(run.id, subject)
+    body = Jason.encode!(Map.merge(fence, evidence))
+
+    duplicate_body =
+      String.replace(
+        body,
+        ~s("schema_version":"symmetry.evidence.v1"),
+        ~s("schema_version":"symmetry.evidence.v1","schema_version":"symmetry.evidence.v1"),
+        global: false
+      )
+
+    count_before = Repo.aggregate(SymmetryControl.Goals.RunEvidence, :count)
+
+    {_foreign_machine_id, foreign_token} = enroll(conn, "foreign-raw")
+
+    assert_error(
+      bearer(conn, foreign_token)
+      |> put_req_header("content-type", "application/json")
+      |> post("/api/v1/runs/#{run.id}/evidence", duplicate_body),
+      403,
+      "forbidden"
+    )
+
+    assert_error(
+      bearer(conn, owner_token)
+      |> put_req_header("content-type", "application/json")
+      |> post("/api/v1/runs/#{run.id}/evidence", duplicate_body),
+      400,
+      "invalid_request"
+    )
+
+    assert Repo.aggregate(SymmetryControl.Goals.RunEvidence, :count) == count_before
+  end
+
+  test "batch response validation blocks noncanonical success and conflict responses", %{
+    conn: conn
+  } do
+    %{token: token, run: run, fence: fence, subject: subject} = claimed_goal_run_fixture(conn)
+    evidence = evidence_attrs(run.id, subject)
+
+    batch = %{
+      schema_version: "symmetry.evidence_batch.v1",
+      run_id: run.id,
+      items: [evidence]
+    }
+
+    temporary_root =
+      Path.join(System.tmp_dir!(), "symmetry-invalid-batch-response-#{Ecto.UUID.generate()}")
+
+    File.cp_r!(@contracts_root, temporary_root)
+
+    on_exit(fn -> File.rm_rf!(temporary_root) end)
+
+    previous_contracts = Application.fetch_env!(:symmetry_control, :contracts)
+
+    on_exit(fn -> Application.put_env(:symmetry_control, :contracts, previous_contracts) end)
+
+    for filename <- [
+          "evidence-batch-response.schema.json",
+          "evidence-batch-conflict-details.schema.json"
+        ] do
+      path = Path.join([temporary_root, "v1", filename])
+
+      schema =
+        path
+        |> File.read!()
+        |> Jason.decode!()
+        |> Map.put("required", ["noncanonical_response"])
+
+      File.write!(path, Jason.encode!(schema))
+    end
+
+    Application.put_env(:symmetry_control, :contracts, directory: temporary_root)
+
+    assert_error(
+      bearer(conn, token) |> post("/api/v1/runs/#{run.id}/evidence", Map.merge(fence, batch)),
+      400,
+      "invalid_request"
+    )
+
+    conflict = put_in(evidence, [:payload, :note], "changed after response validation")
+
+    assert_error(
+      bearer(conn, token)
+      |> post(
+        "/api/v1/runs/#{run.id}/evidence",
+        Map.merge(fence, %{batch | items: [conflict]})
+      ),
+      400,
+      "invalid_request"
+    )
   end
 
   test "foreign machines cannot read or mutate a Goal run, and context is sanitized", %{

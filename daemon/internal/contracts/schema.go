@@ -23,17 +23,20 @@ const schemaBaseURL = "https://symmetry.invalid/contracts/v1/"
 type Envelope string
 
 const (
-	EnvelopeAdapterCapabilities Envelope = "adapter-capabilities"
-	EnvelopeAdmission           Envelope = "admission"
-	EnvelopeContextSnapshot     Envelope = "context-snapshot"
-	EnvelopeDecision            Envelope = "decision"
-	EnvelopeEvidence            Envelope = "evidence"
-	EnvelopeGoalCommand         Envelope = "goal-command"
-	EnvelopeGoalCreate          Envelope = "goal-create"
-	EnvelopeGoalRevision        Envelope = "goal-revision"
-	EnvelopePlanProposal        Envelope = "plan-proposal"
-	EnvelopeTaskResult          Envelope = "task-result"
-	EnvelopeUsage               Envelope = "usage"
+	EnvelopeAdapterCapabilities          Envelope = "adapter-capabilities"
+	EnvelopeAdmission                    Envelope = "admission"
+	EnvelopeContextSnapshot              Envelope = "context-snapshot"
+	EnvelopeDecision                     Envelope = "decision"
+	EnvelopeEvidence                     Envelope = "evidence"
+	EnvelopeEvidenceBatch                Envelope = "evidence-batch"
+	EnvelopeEvidenceBatchConflictDetails Envelope = "evidence-batch-conflict-details"
+	EnvelopeEvidenceBatchResponse        Envelope = "evidence-batch-response"
+	EnvelopeGoalCommand                  Envelope = "goal-command"
+	EnvelopeGoalCreate                   Envelope = "goal-create"
+	EnvelopeGoalRevision                 Envelope = "goal-revision"
+	EnvelopePlanProposal                 Envelope = "plan-proposal"
+	EnvelopeTaskResult                   Envelope = "task-result"
+	EnvelopeUsage                        Envelope = "usage"
 )
 
 //go:embed schema_bundle.json
@@ -142,13 +145,16 @@ func compileSchemas() (map[Envelope]*jsonschema.Schema, error) {
 		}
 	}
 
-	compiled := make(map[Envelope]*jsonschema.Schema, 11)
+	compiled := make(map[Envelope]*jsonschema.Schema, 14)
 	for _, envelope := range []Envelope{
 		EnvelopeAdapterCapabilities,
 		EnvelopeAdmission,
 		EnvelopeContextSnapshot,
 		EnvelopeDecision,
 		EnvelopeEvidence,
+		EnvelopeEvidenceBatch,
+		EnvelopeEvidenceBatchConflictDetails,
+		EnvelopeEvidenceBatchResponse,
 		EnvelopeGoalCommand,
 		EnvelopeGoalCreate,
 		EnvelopeGoalRevision,
@@ -232,6 +238,9 @@ func decodeSchemaJSON(data []byte) (any, error) {
 	if err := validateJSONNumberLexemes(data); err != nil {
 		return nil, err
 	}
+	if err := validateJSONDuplicateKeys(data); err != nil {
+		return nil, err
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	var value any
@@ -245,6 +254,92 @@ func decodeSchemaJSON(data []byte) (any, error) {
 		return nil, err
 	}
 	return value, nil
+}
+
+// validateJSONDuplicateKeys rejects duplicate object members before the
+// standard decoder can silently retain only the last value. Decoder.Token
+// returns object names after JSON escape decoding, so escaped aliases such as
+// "evidence_key" and "\u0065vidence_key" compare as the same member.
+func validateJSONDuplicateKeys(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := scanJSONValue(decoder); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("multiple JSON values")
+		}
+		return err
+	}
+	return nil
+}
+
+func scanJSONValue(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	return scanJSONToken(decoder, token)
+}
+
+func scanJSONToken(decoder *json.Decoder, token json.Token) error {
+	delimiter, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delimiter {
+	case '{':
+		return scanJSONObject(decoder)
+	case '[':
+		return scanJSONArray(decoder)
+	default:
+		return fmt.Errorf("unexpected JSON delimiter %q", delimiter)
+	}
+}
+
+func scanJSONObject(decoder *json.Decoder) error {
+	seen := make(map[string]struct{})
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		if delimiter, ok := token.(json.Delim); ok && delimiter == '}' {
+			return nil
+		}
+		key, ok := token.(string)
+		if !ok {
+			return fmt.Errorf("JSON object member name must be a string")
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return fmt.Errorf("duplicate JSON object member %q", key)
+		}
+		seen[key] = struct{}{}
+		if err := scanJSONValue(decoder); err != nil {
+			return err
+		}
+	}
+}
+
+func scanJSONArray(decoder *json.Decoder) error {
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		if delimiter, ok := token.(json.Delim); ok {
+			if delimiter == ']' {
+				return nil
+			}
+			if delimiter == '}' {
+				return fmt.Errorf("unexpected JSON delimiter %q", delimiter)
+			}
+		}
+		if err := scanJSONToken(decoder, token); err != nil {
+			return err
+		}
+	}
 }
 
 const maxJSONSafeIntegerLexeme = "9007199254740991"

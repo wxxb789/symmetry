@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/contracts"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
@@ -44,11 +45,16 @@ const (
 
 // APIError describes a non-success response returned by the control plane.
 type APIError struct {
-	StatusCode    int
-	Code          ErrorCode
-	Message       string
-	RetryAfter    time.Duration
-	retryAfterSet bool
+	StatusCode int
+	Code       ErrorCode
+	Message    string
+	// Details preserves the optional structured error details returned by the
+	// control plane, including per-item evidence batch conflict diagnostics.
+	Details                      json.RawMessage
+	EvidenceBatchConflictDetails *contracts.SymmetryEvidenceBatchConflictDetailsV1
+	RetryAfter                   time.Duration
+	retryAfterSet                bool
+	detailsDecodeErr             error
 }
 
 // ResponseError marks a malformed or unexpected successful control-plane response.
@@ -185,8 +191,9 @@ type GoalSessionStoppedReceipt struct {
 	LockVersion   int64   `json:"lock_version"`
 }
 
-// GoalEvidenceReceipt is the compact receipt returned after an evidence batch
-// is durably inserted or replayed.
+// GoalEvidenceReceipt is the compact receipt returned after an evidence item
+// is durably inserted or replayed. ObservedAt is supplied by the server and is
+// retained for both the legacy single-item and batch response shapes.
 type GoalEvidenceReceipt struct {
 	ID          string `json:"id"`
 	RunID       string `json:"run_id"`
@@ -194,6 +201,24 @@ type GoalEvidenceReceipt struct {
 	Kind        string `json:"kind"`
 	SubjectHash string `json:"subject_hash"`
 	Verdict     string `json:"verdict"`
+	ObservedAt  string `json:"observed_at,omitempty"`
+	Disposition string `json:"disposition,omitempty"`
+}
+
+// GoalEvidenceBatch is the local DTO for the additive evidence batch wire
+// shape. The contract package will own the generated version once the schema
+// migration lands; the client keeps this boundary explicit in the meantime.
+type GoalEvidenceBatch struct {
+	SchemaVersion string              `json:"schema_version"`
+	RunID         string              `json:"run_id"`
+	Items         []protocol.Evidence `json:"items"`
+}
+
+// GoalEvidenceBatchReceipt is the durable response for a batch append. The
+// receipt order is the request order and is validated before it is returned.
+type GoalEvidenceBatchReceipt struct {
+	RunID    string                `json:"run_id"`
+	Receipts []GoalEvidenceReceipt `json:"receipts"`
 }
 
 // GoalUsageReceipt is the compact receipt returned after usage accounting is
@@ -696,6 +721,66 @@ func (client *Client) AppendEvidence(ctx context.Context, runID string, fence pr
 	return wire.Evidence, nil
 }
 
+// AppendEvidenceBatch submits an ordered, fenced batch of normalized evidence
+// items. The server commits the batch atomically and returns receipts in the
+// same order as the request. This method is intentionally an additive client
+// capability; callers that require it should use an optional interface.
+func (client *Client) AppendEvidenceBatch(ctx context.Context, runID string, fence protocol.Fence, evidence []protocol.Evidence) (GoalEvidenceBatchReceipt, error) {
+	batch := GoalEvidenceBatch{
+		SchemaVersion: "symmetry.evidence_batch.v1",
+		RunID:         runID,
+		Items:         evidence,
+	}
+	if err := validateGoalEvidenceBatch(runID, fence, batch); err != nil {
+		return GoalEvidenceBatchReceipt{}, err
+	}
+
+	body := struct {
+		protocol.Fence
+		GoalEvidenceBatch
+	}{
+		Fence:             fence,
+		GoalEvidenceBatch: batch,
+	}
+	var wire contracts.SymmetryEvidenceBatchResponseV1
+	statusCode, err := client.requestGoalContractWithStatus(ctx, http.MethodPost, "v1/runs/"+runID+"/evidence", nil, "", body, contracts.EnvelopeEvidenceBatchResponse, &wire)
+	if err != nil {
+		var apiError *APIError
+		if errors.As(err, &apiError) && apiError.detailsDecodeErr != nil {
+			return GoalEvidenceBatchReceipt{}, responseErrorf("decode evidence batch conflict details: %w", apiError.detailsDecodeErr)
+		}
+		return GoalEvidenceBatchReceipt{}, err
+	}
+	if statusCode != http.StatusOK && statusCode != http.StatusCreated {
+		return GoalEvidenceBatchReceipt{}, responseErrorf("invalid evidence batch response: expected HTTP 200 or 201, got HTTP %d", statusCode)
+	}
+	localReceipt := goalEvidenceBatchReceiptFromContract(wire)
+	if err := validateGoalEvidenceBatchReceipt(statusCode, runID, evidence, localReceipt); err != nil {
+		return GoalEvidenceBatchReceipt{}, err
+	}
+	return localReceipt, nil
+}
+
+func goalEvidenceBatchReceiptFromContract(response contracts.SymmetryEvidenceBatchResponseV1) GoalEvidenceBatchReceipt {
+	receipt := GoalEvidenceBatchReceipt{
+		RunID:    response.EvidenceBatch.RunID,
+		Receipts: make([]GoalEvidenceReceipt, len(response.EvidenceBatch.Receipts)),
+	}
+	for index, item := range response.EvidenceBatch.Receipts {
+		receipt.Receipts[index] = GoalEvidenceReceipt{
+			ID:          item.ID,
+			RunID:       item.RunID,
+			EvidenceKey: item.EvidenceKey,
+			Kind:        string(item.Kind),
+			SubjectHash: item.SubjectHash,
+			Verdict:     string(item.Verdict),
+			ObservedAt:  item.ObservedAt,
+			Disposition: string(item.Disposition),
+		}
+	}
+	return receipt
+}
+
 // RecordUsage submits normalized usage under the current run fence. Late usage
 // remains accepted by the server only under its documented accounting rule.
 func (client *Client) RecordUsage(ctx context.Context, runID string, fence protocol.Fence, usage protocol.Usage) (GoalUsageReceipt, error) {
@@ -944,6 +1029,20 @@ func (client *Client) requestGoalWithStatus(ctx context.Context, method, endpoin
 	return statusCode, nil
 }
 
+func (client *Client) requestGoalContractWithStatus(ctx context.Context, method, endpoint string, query url.Values, idempotencyKey string, request any, envelope contracts.Envelope, response any) (int, error) {
+	statusCode, responseBody, oversized, err := client.perform(ctx, method, endpoint, query, client.machineToken, idempotencyKey, request)
+	if err != nil {
+		return 0, err
+	}
+	if oversized {
+		return 0, responseErrorf("response body exceeds %d bytes", client.maxResponseBytes)
+	}
+	if err := contracts.DecodeSchema(envelope, responseBody, response); err != nil {
+		return 0, responseErrorf("decode strict goal response: %w", err)
+	}
+	return statusCode, nil
+}
+
 func (client *OperatorClient) operatorRequest(ctx context.Context, method, endpoint string, query url.Values, idempotencyKey string, request, response any) error {
 	return client.request(ctx, method, endpoint, query, client.operatorToken, idempotencyKey, request, response)
 }
@@ -1078,14 +1177,51 @@ func decodeAPIError(statusCode int, header http.Header, body []byte) error {
 		RetryAfter:    retryDelay,
 		retryAfterSet: retryAfterSet,
 	}
-	var envelope protocol.ErrorEnvelope
+	var envelope struct {
+		Error struct {
+			Code    string          `json:"code"`
+			Message string          `json:"message"`
+			Details json.RawMessage `json:"details"`
+			Detail  json.RawMessage `json:"detail"`
+		} `json:"error"`
+	}
 	if err := decodeJSON(body, &envelope); err == nil {
 		if envelope.Error.Code != "" {
 			apiError.Code = ErrorCode(envelope.Error.Code)
 		}
 		apiError.Message = envelope.Error.Message
+		apiError.Details = append(apiError.Details, envelope.Error.Details...)
+		if len(apiError.Details) == 0 {
+			apiError.Details = append(apiError.Details, envelope.Error.Detail...)
+		}
+		if apiError.Code == IdempotencyConflict {
+			if details, err := decodeEvidenceBatchConflictDetails(apiError.Details); err != nil {
+				apiError.detailsDecodeErr = err
+			} else {
+				apiError.EvidenceBatchConflictDetails = details
+			}
+		}
 	}
 	return apiError
+}
+
+func decodeEvidenceBatchConflictDetails(data json.RawMessage) (*contracts.SymmetryEvidenceBatchConflictDetailsV1, error) {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &fields); err != nil {
+		return nil, nil
+	}
+	if _, present := fields["items"]; !present {
+		return nil, nil
+	}
+	var details contracts.SymmetryEvidenceBatchConflictDetailsV1
+	if err := contracts.DecodeSchema(contracts.EnvelopeEvidenceBatchConflictDetails, trimmed, &details); err != nil {
+		return nil, err
+	}
+	return &details, nil
 }
 
 func errorCodeForStatus(statusCode int) ErrorCode {

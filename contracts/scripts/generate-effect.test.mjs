@@ -230,3 +230,27 @@ test("allows rewritten root reference containers without validation siblings", (
     ]),
   );
 });
+
+test("allows an evidence batch to reference the canonical evidence root", () => {
+  const [{ contents }] = generateEffectSchemas([
+    {
+      file: "evidence-batch.schema.json",
+      key: "evidence-batch",
+      name: "EvidenceBatch",
+      schema: {
+        type: "object",
+        properties: {
+          items: { type: "array", items: { $ref: "evidence.schema.json#" } },
+        },
+      },
+    },
+    {
+      file: "evidence.schema.json",
+      key: "evidence",
+      name: "Evidence",
+      schema: { type: "object", properties: { evidence_id: { type: "string" } } },
+    },
+  ]);
+
+  assert.match(contents, /arrayConstraints\(S\.Array\(EvidenceGraph\)/u);
+});

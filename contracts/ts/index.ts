@@ -4,6 +4,9 @@ import {
   AdmissionSchema,
   ContextSnapshotSchema,
   DecisionSchema,
+  EvidenceBatchConflictDetailsSchema,
+  EvidenceBatchResponseSchema,
+  EvidenceBatchSchema,
   EvidenceSchema,
   GoalCommandSchema,
   GoalCreateSchema,
@@ -17,6 +20,7 @@ import {
   validateAdmissionSemantics,
   validateContextSnapshotSemantics,
   validateDecisionSemantics,
+  validateEvidenceBatchSemantics,
   validateEvidenceSemantics,
   validateGoalCommandSemantics,
   validateGoalCreateSemantics,
@@ -31,6 +35,9 @@ export {
   AdmissionSchema,
   ContextSnapshotSchema,
   DecisionSchema,
+  EvidenceBatchConflictDetailsSchema,
+  EvidenceBatchResponseSchema,
+  EvidenceBatchSchema,
   EvidenceSchema,
   GoalCommandSchema,
   GoalCreateSchema,
@@ -80,7 +87,10 @@ export const AdapterCapabilities = boundary(AdapterCapabilitiesSchema);
 export const Admission = boundary(AdmissionSchema, validateAdmissionSemantics);
 export const ContextSnapshot = boundary(ContextSnapshotSchema, validateContextSnapshotSemantics);
 export const Decision = boundary(DecisionSchema, validateDecisionSemantics);
+export const EvidenceBatchConflictDetails = boundary(EvidenceBatchConflictDetailsSchema);
+export const EvidenceBatchResponse = boundary(EvidenceBatchResponseSchema);
 export const Evidence = boundary(EvidenceSchema, validateEvidenceSemantics);
+export const EvidenceBatch = boundary(EvidenceBatchSchema, validateEvidenceBatchSemantics);
 export const GoalCommand = boundary(GoalCommandSchema, validateGoalCommandSemantics);
 export const GoalCreate = boundary(GoalCreateSchema, validateGoalCreateSemantics);
 export const GoalRevision = boundary(GoalRevisionSchema, validateGoalRevisionSemantics);

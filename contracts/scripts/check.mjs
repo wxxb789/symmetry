@@ -9,6 +9,7 @@ import {
   validateAdmissionSemantics,
   validateContextSnapshotSemantics,
   validateDecisionSemantics,
+  validateEvidenceBatchSemantics,
   validateEvidenceSemantics,
   validateGoalCommandSemantics,
   validateGoalCreateSemantics,
@@ -88,6 +89,7 @@ const semanticValidators = {
   admission: validateAdmissionSemantics,
   "context-snapshot": validateContextSnapshotSemantics,
   decision: validateDecisionSemantics,
+  "evidence-batch": validateEvidenceBatchSemantics,
   evidence: validateEvidenceSemantics,
   "goal-command": validateGoalCommandSemantics,
   "goal-create": validateGoalCreateSemantics,
@@ -102,8 +104,8 @@ const main = async () => {
     .filter((file) => file.endsWith(".schema.json") && file !== "common.schema.json")
     .sort();
 
-  if (schemaFiles.length !== 11)
-    throw new Error(`expected 11 v1 envelope schemas, found ${schemaFiles.length}`);
+  if (schemaFiles.length !== 14)
+    throw new Error(`expected 14 v1 envelope schemas, found ${schemaFiles.length}`);
   if (common.$schema !== "http://json-schema.org/draft-07/schema#")
     throw new Error("common schema must be Draft 7");
 
@@ -233,6 +235,13 @@ const main = async () => {
     "uuid-version",
     "uuid-variant",
     "predicate-id-unique",
+    "evidence-batch",
+    "nested-evidence",
+    "duplicate-evidence-key",
+    "evidence-batch-response",
+    "evidence-batch-conflict-details",
+    "disposition",
+    "conflict-disposition",
   ];
   const missingTags = requiredTags.filter((tag) => !tags.has(tag));
   if (missingTags.length > 0)

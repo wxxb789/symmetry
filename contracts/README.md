@@ -112,7 +112,7 @@ its existing clients and schemas.
 This package is independent of the frontend application. Its source entry point
 is usable by the future Vite build and by the Node 24 contract tooling.
 
-Each of the 11 envelope decoders has two entry points:
+Each of the 14 envelope decoders has two entry points:
 
 ```ts
 import { Effect } from "effect";
