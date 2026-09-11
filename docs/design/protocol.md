@@ -288,7 +288,11 @@ canonicalizes to zero. Preserve existing versioned RequestHash behavior for old
 commands; do not change it opportunistically to match snapshot hashing.
 
 Cross-harness handoff creates a new native session from this snapshot and an
-authorized reachable Git commit. Never transfer raw proprietary session formats.
+authorized reachable Git commit. That reachable commit is a necessary safety
+precondition, not a promise of cross-machine capability. Current verified
+scheduling is source-machine-local, so cross-machine handoff is unsupported
+unless a separately verified adapter and capability path is present. Never
+transfer raw proprietary session formats.
 Native session compression/KV cache remain harness-owned. Keep stable prompt
 prefixes free of fresh timestamps; observations live in the variable suffix.
 
