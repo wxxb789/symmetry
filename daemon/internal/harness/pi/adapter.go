@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -1201,8 +1202,8 @@ func cloneTaskResult(result harness.TaskResult) harness.TaskResult {
 	cloned := result
 	if result.Semantic != nil {
 		semantic := *result.Semantic
-		semantic.EvidenceRefs = append([]string(nil), semantic.EvidenceRefs...)
-		semantic.Diagnostics = append([]protocol.Diagnostic(nil), semantic.Diagnostics...)
+		semantic.EvidenceRefs = slices.Clone(semantic.EvidenceRefs)
+		semantic.Diagnostics = slices.Clone(semantic.Diagnostics)
 		cloned.Semantic = &semantic
 	}
 	if result.Reason != nil {

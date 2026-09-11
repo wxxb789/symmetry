@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
+	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
@@ -174,12 +174,13 @@ type initializeResponse struct {
 }
 
 type threadStartParams struct {
-	ApprovalPolicy    string `json:"approvalPolicy,omitempty"`
-	ApprovalsReviewer string `json:"approvalsReviewer,omitempty"`
-	CWD               string `json:"cwd"`
-	Ephemeral         *bool  `json:"ephemeral,omitempty"`
-	Model             string `json:"model,omitempty"`
-	Sandbox           string `json:"sandbox,omitempty"`
+	Config            map[string]any `json:"config,omitempty"`
+	ApprovalPolicy    string         `json:"approvalPolicy,omitempty"`
+	ApprovalsReviewer string         `json:"approvalsReviewer,omitempty"`
+	CWD               string         `json:"cwd"`
+	Ephemeral         *bool          `json:"ephemeral,omitempty"`
+	Model             string         `json:"model,omitempty"`
+	Sandbox           string         `json:"sandbox,omitempty"`
 }
 
 type nativeThread struct {
@@ -204,9 +205,11 @@ type threadStartResponse struct {
 // object. Keeping both sides explicit prevents a requested workspace-write
 // policy from being mistaken for an actually granted write-capable session.
 type nativeSandboxPolicy struct {
-	Type          string          `json:"type"`
-	NetworkAccess json.RawMessage `json:"networkAccess,omitempty"`
-	WritableRoots []string        `json:"writableRoots,omitempty"`
+	Type                string          `json:"type"`
+	NetworkAccess       json.RawMessage `json:"networkAccess,omitempty"`
+	WritableRoots       []string        `json:"writableRoots,omitempty"`
+	ExcludeTmpdirEnvVar *bool           `json:"excludeTmpdirEnvVar"`
+	ExcludeSlashTmp     *bool           `json:"excludeSlashTmp"`
 }
 
 func (response threadStartResponse) validate(expectedCWD string) error {
@@ -243,8 +246,14 @@ func (response threadStartResponse) validate(expectedCWD string) error {
 		return errors.New("thread/start response is missing sandbox.type")
 	}
 	if response.Sandbox.Type == "workspaceWrite" {
-		if len(response.Sandbox.WritableRoots) == 0 {
+		// Codex 0.153.4 treats cwd as an implicit writable root; this array
+		// contains only additional roots, so an explicit empty array is valid.
+		if response.Sandbox.WritableRoots == nil {
 			return errors.New("thread/start workspaceWrite response is missing writableRoots")
+		}
+		if response.Sandbox.ExcludeTmpdirEnvVar == nil || !*response.Sandbox.ExcludeTmpdirEnvVar ||
+			response.Sandbox.ExcludeSlashTmp == nil || !*response.Sandbox.ExcludeSlashTmp {
+			return errors.New("thread/start workspaceWrite response must exclude temporary write roots")
 		}
 		for _, root := range response.Sandbox.WritableRoots {
 			if strings.TrimSpace(root) == "" || !workspaceContains(expectedCWD, root) {
@@ -285,55 +294,23 @@ func optionalBool(raw json.RawMessage) (bool, error) {
 }
 
 func workspaceContains(workspace, candidate string) bool {
-	if !filepath.IsAbs(strings.TrimSpace(candidate)) {
-		return false
-	}
-	workspace, err := canonicalPath(workspace)
+	workspace, err := platform.ResolveExistingDirectory(workspace)
 	if err != nil {
 		return false
 	}
-	candidate, err = canonicalPath(candidate)
+	candidate, err = platform.ResolveExistingDirectory(candidate)
 	if err != nil {
 		return false
 	}
-	relative, err := filepath.Rel(workspace, candidate)
-	if err != nil || filepath.IsAbs(relative) {
-		return false
-	}
-	if relative == "." {
-		return true
-	}
-	parent := ".." + string(os.PathSeparator)
-	return relative != ".." && !strings.HasPrefix(relative, parent)
-}
-
-func canonicalPath(value string) (string, error) {
-	absolute, err := filepath.Abs(value)
-	if err != nil {
-		return "", err
-	}
-	if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
-		absolute = resolved
-	}
-	return filepath.Clean(absolute), nil
+	boundary := strings.TrimRight(workspace, string(os.PathSeparator)) + string(os.PathSeparator)
+	return candidate == workspace || strings.HasPrefix(candidate, boundary)
 }
 
 func sameWorkspaceDirectory(left, right string) bool {
-	left, leftErr := filepath.Abs(left)
-	right, rightErr := filepath.Abs(right)
+	left, leftErr := platform.ResolveExistingDirectory(left)
+	right, rightErr := platform.ResolveExistingDirectory(right)
 	if leftErr != nil || rightErr != nil {
 		return false
-	}
-	if resolved, err := filepath.EvalSymlinks(left); err == nil {
-		left = resolved
-	}
-	if resolved, err := filepath.EvalSymlinks(right); err == nil {
-		right = resolved
-	}
-	left = filepath.Clean(left)
-	right = filepath.Clean(right)
-	if os.PathSeparator == '\\' {
-		return strings.EqualFold(left, right)
 	}
 	return left == right
 }

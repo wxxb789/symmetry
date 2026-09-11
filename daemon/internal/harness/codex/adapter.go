@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -452,6 +453,12 @@ func (session *nativeSession) Open(ctx context.Context) (harness.NativeSessionHa
 		Ephemeral:         boolPointer(false),
 		Model:             session.configuredNativeModel,
 		Sandbox:           nativeEngineeringSandbox,
+		Config: map[string]any{
+			"sandbox_workspace_write.writable_roots":         []string{},
+			"sandbox_workspace_write.network_access":         false,
+			"sandbox_workspace_write.exclude_tmpdir_env_var": true,
+			"sandbox_workspace_write.exclude_slash_tmp":      true,
+		},
 	}, &started); err != nil {
 		return harness.NativeSessionHandle{}, fmt.Errorf("start Codex thread: %w", err)
 	}
@@ -2278,9 +2285,7 @@ func cloneTaskResult(result harness.TaskResult) harness.TaskResult {
 
 func cloneProtocolTaskResult(result protocol.TaskResult) protocol.TaskResult {
 	cloned := result
-	if result.EvidenceRefs != nil {
-		cloned.EvidenceRefs = append([]string(nil), result.EvidenceRefs...)
-	}
+	cloned.EvidenceRefs = slices.Clone(result.EvidenceRefs)
 	if result.Blocker != nil {
 		blocker := cloneBlocker(*result.Blocker)
 		cloned.Blocker = &blocker
@@ -2297,9 +2302,7 @@ func cloneProtocolTaskResult(result protocol.TaskResult) protocol.TaskResult {
 		reason := *result.Reason
 		cloned.Reason = &reason
 	}
-	if result.Diagnostics != nil {
-		cloned.Diagnostics = append([]protocol.Diagnostic(nil), result.Diagnostics...)
-	}
+	cloned.Diagnostics = slices.Clone(result.Diagnostics)
 	return cloned
 }
 

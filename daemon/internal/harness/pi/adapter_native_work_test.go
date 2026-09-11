@@ -3,15 +3,20 @@ package pi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/wxxb789/symmetry/daemon/internal/config"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
@@ -26,6 +31,7 @@ const (
 	nativeRepositoryTaskProviderEnv       = "SYMMETRY_PI_NATIVE_REPOSITORY_TASK_PROVIDER"
 	nativeRepositoryTaskModelEnv          = "SYMMETRY_PI_NATIVE_REPOSITORY_TASK_MODEL"
 	nativeRepositoryTaskCredentialEnv     = "SYMMETRY_PI_NATIVE_REPOSITORY_TASK_CREDENTIAL_ENV"
+	nativeRepositoryTaskBaseURLEnv        = "SYMMETRY_PI_NATIVE_REPOSITORY_TASK_BASE_URL"
 	nativeRepositoryTaskTimeout           = 90 * time.Second
 	nativeRepositoryTaskCloseTimeout      = 25 * time.Second
 	nativeRepositoryTaskGitTimeout        = 10 * time.Second
@@ -34,11 +40,18 @@ const (
 	nativeRepositoryTaskResultSummary     = "created native pi repository task evidence"
 	nativeRepositoryTaskResultID          = "00000000-0000-4000-8000-000000000106"
 	nativeRepositoryTaskSubjectResourceID = "00000000-0000-4000-8000-000000000107"
+	nativePiLoopbackProvider              = "symmetry-native-loopback"
+	nativePiLoopbackModel                 = "gpt-5.6-terra"
+	nativePiLoopbackThinking              = "high"
+	nativePiLoopbackAPI                   = "openai-responses"
+	nativePiLoopbackAPIKey                = "symmetry-native-loopback-test-key"
 )
 
-// TestNativeRepositoryTask is deliberately opt-in because it invokes a real
-// authenticated model. It proves one bounded repository mutation and the
-// native turn/result lifecycle; it does not advertise Pi capabilities or prove
+// TestNativeRepositoryTask is deliberately opt-in because it submits a real
+// native Pi turn to the configured provider or loopback gateway. It does not
+// attest the gateway's upstream authentication or served model. It proves one
+// bounded repository mutation and the native turn/result lifecycle; it does not
+// advertise Pi capabilities or prove
 // cancellation, recovery, Control durability, or provider accounting.
 func TestNativeRepositoryTask(t *testing.T) {
 	configuration := nativePiRepositoryTaskLoadConfiguration(t)
@@ -56,7 +69,12 @@ func TestNativeRepositoryTask(t *testing.T) {
 	baselineHead := strings.TrimSpace(nativePiRepositoryTaskGitOutput(t, gitContext, gitEnvironment, workspace, "rev-parse", "HEAD"))
 	subject := nativePiRepositoryTaskMaterializeSubject(t, gitContext, root, workspace, baselineHead)
 	gitCancel()
-	environment := nativePiRepositoryTaskEnvironment(t, root, configuration.credentialEnv)
+	var environment []string
+	if configuration.loopback {
+		environment = nativePiRepositoryTaskLoopbackEnvironment(t, root, configuration.baseURL)
+	} else {
+		environment = nativePiRepositoryTaskEnvironment(t, root, configuration.credentialEnv)
+	}
 
 	versionContext, versionCancel := context.WithTimeout(context.Background(), nativeRepositoryTaskTimeout)
 	defer versionCancel()
@@ -72,24 +90,29 @@ func TestNativeRepositoryTask(t *testing.T) {
 	}
 
 	var events nativePiRepositoryTaskEvents
+	arguments := []string{
+		"--no-extensions",
+		"--no-skills",
+		"--no-prompt-templates",
+		"--no-themes",
+		"--no-context-files",
+		"--no-approve",
+		"--session-dir", sessionDir,
+		"--provider", configuration.provider,
+		"--model", configuration.model,
+		"--tools", "write",
+	}
+	if configuration.loopback {
+		arguments = append(arguments, "--thinking", nativePiLoopbackThinking)
+		t.Logf("native Pi loopback request: provider=%s model=%s thinking=%s; served model/effort unknown", nativePiLoopbackProvider, nativePiLoopbackModel, nativePiLoopbackThinking)
+	}
 	turnContext, cancel := context.WithTimeout(context.Background(), nativeRepositoryTaskTimeout)
 	defer cancel()
 	session, err := NewAdapter(configuration.executable).Start(turnContext, harness.StartRequest{
 		Workspace: workspace,
 		Invocation: execution.Invocation{
-			Args: []string{
-				"--no-extensions",
-				"--no-skills",
-				"--no-prompt-templates",
-				"--no-themes",
-				"--no-context-files",
-				"--no-approve",
-				"--session-dir", sessionDir,
-				"--provider", configuration.provider,
-				"--model", configuration.model,
-				"--tools", "write",
-			},
-			Env: environment,
+			Args: arguments,
+			Env:  environment,
 		},
 		PersistProcess: func(pid int, identity string) error {
 			if pid <= 0 || strings.TrimSpace(identity) == "" {
@@ -198,11 +221,15 @@ func TestNativeRepositoryTask(t *testing.T) {
 	}
 	closed = true
 	if result.Kind != harness.ResultSucceeded || result.Semantic == nil || !reflect.DeepEqual(*result.Semantic, expected) {
-		t.Fatal("native Pi repository task did not return the expected semantic progress result")
+		t.Fatalf("native Pi repository task semantic mismatch: kind=%s reason=%v semantic_present=%t evidence_refs_nil=%t diagnostics_nil=%t",
+			result.Kind, result.Reason, result.Semantic != nil,
+			result.Semantic != nil && result.Semantic.EvidenceRefs == nil,
+			result.Semantic != nil && result.Semantic.Diagnostics == nil)
 	}
-	if !result.Process.Terminated || result.Process.SinkError != nil || result.Process.OutputError != nil || result.Process.TerminationError != nil || result.Process.ContainmentError != nil {
-		t.Fatal("native Pi repository task process did not complete a bounded clean close")
+	if !result.Process.Terminated || result.Process.SinkError != nil || result.Process.OutputError != nil || !result.Process.OutputTruncated || result.Process.TerminationError != nil || result.Process.ContainmentError != nil {
+		t.Fatal("native Pi repository task process did not complete a bounded termination barrier")
 	}
+	t.Logf("native Pi stop: output_truncated=%t after acknowledged semantic settlement; not a full output drain", result.Process.OutputTruncated)
 
 	artifact, err := os.ReadFile(filepath.Join(workspace, nativeRepositoryTaskArtifact))
 	if err != nil {
@@ -216,7 +243,7 @@ func TestNativeRepositoryTask(t *testing.T) {
 	if currentHead := strings.TrimSpace(nativePiRepositoryTaskGitOutput(t, verificationContext, gitEnvironment, workspace, "rev-parse", "HEAD")); currentHead != baselineHead {
 		t.Fatal("native Pi repository task changed the repository HEAD")
 	}
-	status := nativePiRepositoryTaskGitOutput(t, verificationContext, gitEnvironment, workspace, "status", "--porcelain=v1", "--untracked-files=all")
+	status := nativePiRepositoryTaskGitOutput(t, verificationContext, gitEnvironment, workspace, "status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching")
 	if status != "?? "+nativeRepositoryTaskArtifact+"\n" {
 		t.Fatalf("native Pi repository task changed unexpected repository paths: %q", status)
 	}
@@ -230,6 +257,8 @@ type nativePiRepositoryTaskConfiguration struct {
 	provider      string
 	model         string
 	credentialEnv string
+	baseURL       string
+	loopback      bool
 }
 
 func nativePiRepositoryTaskLoadConfiguration(t *testing.T) nativePiRepositoryTaskConfiguration {
@@ -240,10 +269,23 @@ func nativePiRepositoryTaskLoadConfiguration(t *testing.T) nativePiRepositoryTas
 	if os.Getenv(nativeRepositoryTaskEnabledEnv) != "1" {
 		t.Skip("set SYMMETRY_PI_NATIVE_REPOSITORY_TASK=1 to run the native Pi repository task test")
 	}
+	baseURL := os.Getenv(nativeRepositoryTaskBaseURLEnv)
 	configuration := nativePiRepositoryTaskConfiguration{
 		executable: nativePiRepositoryTaskRequiredEnv(t, nativeRepositoryTaskExecutableEnv),
 		provider:   nativePiRepositoryTaskRequiredEnv(t, nativeRepositoryTaskProviderEnv),
 		model:      nativePiRepositoryTaskRequiredEnv(t, nativeRepositoryTaskModelEnv),
+		baseURL:    baseURL,
+		loopback:   baseURL != "",
+	}
+	if configuration.loopback {
+		if err := nativePiRepositoryTaskValidateLoopbackConfiguration(
+			configuration.baseURL,
+			configuration.provider,
+			configuration.model,
+			strings.TrimSpace(os.Getenv(nativeRepositoryTaskCredentialEnv)),
+		); err != nil {
+			t.Fatalf("invalid native Pi loopback configuration: %v", err)
+		}
 	}
 	if !filepath.IsAbs(configuration.executable) {
 		t.Fatalf("%s must be absolute", nativeRepositoryTaskExecutableEnv)
@@ -258,13 +300,117 @@ func nativePiRepositoryTaskLoadConfiguration(t *testing.T) nativePiRepositoryTas
 	configuration.credentialEnv = strings.TrimSpace(os.Getenv(nativeRepositoryTaskCredentialEnv))
 	if configuration.credentialEnv != "" {
 		if !nativePiRepositoryTaskCredentialEnvironmentAllowed(configuration.credentialEnv) {
-			t.Fatalf("%s must name one non-reserved ASCII environment variable", nativeRepositoryTaskCredentialEnv)
+			t.Fatalf("%s must name a supported Pi provider credential variable", nativeRepositoryTaskCredentialEnv)
 		}
 		if value, ok := os.LookupEnv(configuration.credentialEnv); !ok || strings.TrimSpace(value) == "" {
 			t.Fatalf("selected credential environment variable %s is not configured", configuration.credentialEnv)
 		}
 	}
 	return configuration
+}
+
+func nativePiRepositoryTaskValidateLoopbackConfiguration(baseURL, provider, model, credentialEnv string) error {
+	if err := nativePiRepositoryTaskValidateLoopbackURL(baseURL); err != nil {
+		return err
+	}
+	if provider != nativePiLoopbackProvider {
+		return fmt.Errorf("provider must be %q, got %q", nativePiLoopbackProvider, provider)
+	}
+	if model != nativePiLoopbackModel {
+		return fmt.Errorf("model must be %q, got %q", nativePiLoopbackModel, model)
+	}
+	if credentialEnv != "" {
+		return fmt.Errorf("credential environment variable %q is not allowed with loopback mode", credentialEnv)
+	}
+	return nil
+}
+
+func nativePiRepositoryTaskValidateLoopbackURL(value string) error {
+	if value == "" {
+		return fmt.Errorf("base URL must not be empty")
+	}
+	for _, character := range value {
+		if unicode.IsSpace(character) {
+			return fmt.Errorf("base URL must not contain whitespace")
+		}
+	}
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return fmt.Errorf("parse base URL: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("base URL scheme must be http or https")
+	}
+	if parsed.Opaque != "" {
+		return fmt.Errorf("base URL must not be opaque")
+	}
+	if parsed.Host == "" {
+		return fmt.Errorf("base URL must include a host")
+	}
+	if parsed.User != nil {
+		return fmt.Errorf("base URL must not include userinfo")
+	}
+	if parsed.ForceQuery || parsed.RawQuery != "" || strings.Contains(value, "?") {
+		return fmt.Errorf("base URL must not include a query")
+	}
+	if strings.Contains(value, "#") {
+		return fmt.Errorf("base URL must not include a fragment")
+	}
+	hostname := parsed.Hostname()
+	if hostname == "" {
+		return fmt.Errorf("base URL must include a host")
+	}
+	if strings.Contains(hostname, "%") {
+		return fmt.Errorf("base URL must not include an IPv6 zone")
+	}
+	parsedIP := net.ParseIP(hostname)
+	if parsedIP == nil || !parsedIP.IsLoopback() {
+		return fmt.Errorf("base URL host must be a numeric loopback IP")
+	}
+	if strings.Contains(hostname, ":") && !strings.HasPrefix(parsed.Host, "[") {
+		return fmt.Errorf("IPv6 base URL hosts must use brackets")
+	}
+	return nativePiRepositoryTaskValidateLoopbackPort(parsed.Host)
+}
+
+func nativePiRepositoryTaskValidateLoopbackPort(host string) error {
+	port := ""
+	hasPort := false
+	if strings.HasPrefix(host, "[") {
+		closingBracket := strings.IndexByte(host, ']')
+		if closingBracket < 0 {
+			return fmt.Errorf("base URL has an invalid IPv6 host")
+		}
+		suffix := host[closingBracket+1:]
+		if suffix == "" {
+			return nil
+		}
+		if !strings.HasPrefix(suffix, ":") {
+			return fmt.Errorf("base URL has an invalid host suffix")
+		}
+		hasPort = true
+		port = suffix[1:]
+	} else {
+		separator := strings.LastIndexByte(host, ':')
+		if separator < 0 {
+			return nil
+		}
+		hasPort = true
+		port = host[separator+1:]
+	}
+	if !hasPort || port == "" {
+		return fmt.Errorf("base URL port must be numeric")
+	}
+	for _, digit := range port {
+		if digit < '0' || digit > '9' {
+			return fmt.Errorf("base URL port must be numeric")
+		}
+	}
+	parsedPort, err := strconv.Atoi(port)
+	if err != nil || parsedPort < 1 || parsedPort > 65535 {
+		return fmt.Errorf("base URL port must be between 1 and 65535")
+	}
+	return nil
 }
 
 func TestNativeRepositoryTaskCredentialEnvironmentRejectsInvalidOrReservedNames(t *testing.T) {
@@ -274,6 +420,16 @@ func TestNativeRepositoryTaskCredentialEnvironmentRejectsInvalidOrReservedNames(
 	}{
 		{name: "OPENAI_API_KEY", want: true},
 		{name: "ANTHROPIC_API_KEY", want: true},
+		{name: "HF_TOKEN", want: true},
+		{name: "AWS_BEARER_TOKEN_BEDROCK", want: true},
+		{name: "NODE_OPTIONS", want: false},
+		{name: "NODE_PATH", want: false},
+		{name: "LD_PRELOAD", want: false},
+		{name: "LD_LIBRARY_PATH", want: false},
+		{name: "DYLD_INSERT_LIBRARIES", want: false},
+		{name: "BASH_ENV", want: false},
+		{name: "GIT_CONFIG_GLOBAL", want: false},
+		{name: "UNKNOWN_API_KEY", want: false},
 		{name: "", want: false},
 		{name: "1API_KEY", want: false},
 		{name: "API-KEY", want: false},
@@ -290,6 +446,188 @@ func TestNativeRepositoryTaskCredentialEnvironmentRejectsInvalidOrReservedNames(
 			}
 		})
 	}
+}
+
+func TestNativeRepositoryTaskLoopbackURLValidation(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		value   string
+		wantErr bool
+	}{
+		{name: "ipv4 with path", value: "http://127.0.0.1:8787/v1"},
+		{name: "ipv6 with path", value: "https://[::1]:443/v1"},
+		{name: "ipv4 default port", value: "http://127.0.0.1/v1"},
+		{name: "empty", value: "", wantErr: true},
+		{name: "leading whitespace", value: " http://127.0.0.1:8787/v1", wantErr: true},
+		{name: "trailing whitespace", value: "http://127.0.0.1:8787/v1 ", wantErr: true},
+		{name: "non-http scheme", value: "ftp://127.0.0.1:8787/v1", wantErr: true},
+		{name: "userinfo", value: "http://user:pass@127.0.0.1:8787/v1", wantErr: true},
+		{name: "query", value: "http://127.0.0.1:8787/v1?token=1", wantErr: true},
+		{name: "empty query", value: "http://127.0.0.1:8787/v1?", wantErr: true},
+		{name: "fragment", value: "http://127.0.0.1:8787/v1#section", wantErr: true},
+		{name: "empty fragment", value: "http://127.0.0.1:8787/v1#", wantErr: true},
+		{name: "opaque", value: "http:127.0.0.1:8787/v1", wantErr: true},
+		{name: "missing host", value: "http:///v1", wantErr: true},
+		{name: "non-loopback", value: "http://192.0.2.1:8787/v1", wantErr: true},
+		{name: "ipv6 zone", value: "http://[::1%25lo0]:8787/v1", wantErr: true},
+		{name: "bad port", value: "http://127.0.0.1:port/v1", wantErr: true},
+		{name: "empty port", value: "http://127.0.0.1:/v1", wantErr: true},
+		{name: "zero port", value: "http://127.0.0.1:0/v1", wantErr: true},
+		{name: "out of range port", value: "http://127.0.0.1:65536/v1", wantErr: true},
+		{name: "signed port", value: "http://127.0.0.1:+1/v1", wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := nativePiRepositoryTaskValidateLoopbackURL(test.value)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("nativePiRepositoryTaskValidateLoopbackURL(%q) error = %v, wantErr %t", test.value, err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestNativeRepositoryTaskLoopbackConfigurationRequiresFixedProviderAndModel(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		provider   string
+		model      string
+		credential string
+		wantErr    bool
+	}{
+		{name: "valid", provider: nativePiLoopbackProvider, model: nativePiLoopbackModel},
+		{name: "provider alias", provider: "openai", model: nativePiLoopbackModel, wantErr: true},
+		{name: "model alias", provider: nativePiLoopbackProvider, model: "gpt-5.6-luna", wantErr: true},
+		{name: "credential environment", provider: nativePiLoopbackProvider, model: nativePiLoopbackModel, credential: "OPENAI_API_KEY", wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := nativePiRepositoryTaskValidateLoopbackConfiguration(
+				"http://127.0.0.1:8787/v1",
+				test.provider,
+				test.model,
+				test.credential,
+			)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("nativePiRepositoryTaskValidateLoopbackConfiguration() error = %v, wantErr %t", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestNativeRepositoryTaskLoopbackModelsJSONStructure(t *testing.T) {
+	root := t.TempDir()
+	baseURL := "http://127.0.0.1:8787/v1"
+	environment := nativePiRepositoryTaskLoopbackEnvironment(t, root, baseURL)
+	if got := nativePiRepositoryTaskEnvironmentValue(environment, "PI_CODING_AGENT_DIR"); got != filepath.Join(root, "agent") {
+		t.Fatalf("PI_CODING_AGENT_DIR = %q, want %q", got, filepath.Join(root, "agent"))
+	}
+	encoded, err := os.ReadFile(filepath.Join(root, "agent", "models.json"))
+	if err != nil {
+		t.Fatalf("read loopback models.json: %v", err)
+	}
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &document); err != nil {
+		t.Fatalf("decode loopback models.json: %v", err)
+	}
+	nativePiRepositoryTaskAssertJSONKeys(t, document, "providers")
+	var providers map[string]json.RawMessage
+	if err := json.Unmarshal(document["providers"], &providers); err != nil {
+		t.Fatalf("decode loopback providers: %v", err)
+	}
+	if len(providers) != 1 {
+		t.Fatalf("loopback provider count = %d, want 1", len(providers))
+	}
+	providerJSON, ok := providers[nativePiLoopbackProvider]
+	if !ok {
+		t.Fatalf("loopback provider %q was missing", nativePiLoopbackProvider)
+	}
+	var provider map[string]json.RawMessage
+	if err := json.Unmarshal(providerJSON, &provider); err != nil {
+		t.Fatalf("decode loopback provider: %v", err)
+	}
+	nativePiRepositoryTaskAssertJSONKeys(t, provider, "api", "apiKey", "baseUrl", "models")
+	var api, apiKey, configuredBaseURL string
+	for key, target := range map[string]*string{"api": &api, "apiKey": &apiKey, "baseUrl": &configuredBaseURL} {
+		if err := json.Unmarshal(provider[key], target); err != nil {
+			t.Fatalf("decode loopback provider %s: %v", key, err)
+		}
+	}
+	if api != nativePiLoopbackAPI || apiKey != nativePiLoopbackAPIKey || configuredBaseURL != baseURL {
+		t.Fatalf("loopback provider values = api:%q apiKey:%q baseUrl:%q", api, apiKey, configuredBaseURL)
+	}
+	if strings.HasPrefix(apiKey, "$") || strings.HasPrefix(apiKey, "!") {
+		t.Fatal("loopback apiKey must be a literal nonsecret dummy value")
+	}
+	var models []map[string]json.RawMessage
+	if err := json.Unmarshal(provider["models"], &models); err != nil {
+		t.Fatalf("decode loopback models: %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("loopback model count = %d, want 1", len(models))
+	}
+	nativePiRepositoryTaskAssertJSONKeys(t, models[0], "id", "reasoning", "thinkingLevelMap")
+	var modelID string
+	if err := json.Unmarshal(models[0]["id"], &modelID); err != nil {
+		t.Fatalf("decode loopback model id: %v", err)
+	}
+	if modelID != nativePiLoopbackModel {
+		t.Fatalf("loopback model id = %q, want %q", modelID, nativePiLoopbackModel)
+	}
+	var reasoning bool
+	if err := json.Unmarshal(models[0]["reasoning"], &reasoning); err != nil {
+		t.Fatalf("decode loopback reasoning: %v", err)
+	}
+	if !reasoning {
+		t.Fatal("loopback model reasoning = false, want true")
+	}
+	var thinkingLevelMap map[string]string
+	if err := json.Unmarshal(models[0]["thinkingLevelMap"], &thinkingLevelMap); err != nil {
+		t.Fatalf("decode loopback thinkingLevelMap: %v", err)
+	}
+	if !reflect.DeepEqual(thinkingLevelMap, map[string]string{nativePiLoopbackThinking: nativePiLoopbackThinking}) {
+		t.Fatalf("loopback thinkingLevelMap = %#v", thinkingLevelMap)
+	}
+}
+
+func TestNativeRepositoryTaskStandardEnvironmentDoesNotWriteModels(t *testing.T) {
+	root := t.TempDir()
+	credentialEnv := "OPENAI_API_KEY"
+	credentialValue := "nonsecret-test-value"
+	t.Setenv(credentialEnv, credentialValue)
+	environment := nativePiRepositoryTaskEnvironment(t, root, credentialEnv)
+	if got := nativePiRepositoryTaskEnvironmentValue(environment, credentialEnv); got != credentialValue {
+		t.Fatalf("standard credential environment value = %q, want %q", got, credentialValue)
+	}
+	if got := nativePiRepositoryTaskEnvironmentValue(environment, "PI_CODING_AGENT_DIR"); got != filepath.Join(root, "agent") {
+		t.Fatalf("standard PI_CODING_AGENT_DIR = %q, want %q", got, filepath.Join(root, "agent"))
+	}
+	if _, err := os.Stat(filepath.Join(root, "agent", "models.json")); !os.IsNotExist(err) {
+		t.Fatalf("standard environment models.json stat error = %v, want file absent", err)
+	}
+}
+
+func nativePiRepositoryTaskAssertJSONKeys(t *testing.T, object map[string]json.RawMessage, expected ...string) {
+	t.Helper()
+	wanted := make(map[string]struct{}, len(expected))
+	for _, key := range expected {
+		wanted[key] = struct{}{}
+	}
+	if len(object) != len(wanted) {
+		t.Fatalf("JSON keys = %#v, want exactly %#v", object, expected)
+	}
+	for key := range wanted {
+		if _, ok := object[key]; !ok {
+			t.Fatalf("JSON keys missing %q", key)
+		}
+	}
+}
+
+func nativePiRepositoryTaskEnvironmentValue(environment []string, name string) string {
+	prefix := name + "="
+	for _, entry := range environment {
+		if strings.HasPrefix(entry, prefix) {
+			return strings.TrimPrefix(entry, prefix)
+		}
+	}
+	return ""
 }
 
 func TestNativeRepositoryTaskSubjectUsesRepositoryBaseline(t *testing.T) {
@@ -328,48 +666,61 @@ func nativePiRepositoryTaskRequiredEnv(t *testing.T, name string) string {
 	return value
 }
 
-func nativePiRepositoryTaskEnvironmentName(name string) bool {
-	if name == "" {
-		return false
-	}
-	for index := range name {
-		character := name[index]
-		if (character >= 'A' && character <= 'Z') || (character >= 'a' && character <= 'z') || character == '_' || (index > 0 && character >= '0' && character <= '9') {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
 func nativePiRepositoryTaskCredentialEnvironmentAllowed(name string) bool {
-	if !nativePiRepositoryTaskEnvironmentName(name) {
+	// Credential names are pinned to Pi 0.85.1 docs/providers.md. Runtime and
+	// loader configuration must never enter the child as a selected credential.
+	switch name {
+	case "AI_GATEWAY_API_KEY", "ANTHROPIC_API_KEY", "ANT_LING_API_KEY", "AWS_BEARER_TOKEN_BEDROCK",
+		"AZURE_OPENAI_API_KEY", "BASETEN_API_KEY", "CEREBRAS_API_KEY", "CLOUDFLARE_API_KEY",
+		"DEEPSEEK_API_KEY", "FIREWORKS_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY", "HF_TOKEN",
+		"KIMI_API_KEY", "MINIMAX_API_KEY", "MINIMAX_CN_API_KEY", "MISTRAL_API_KEY", "NVIDIA_API_KEY",
+		"OPENAI_API_KEY", "OPENCODE_API_KEY", "OPENROUTER_API_KEY", "QWEN_TOKEN_PLAN_API_KEY",
+		"QWEN_TOKEN_PLAN_CN_API_KEY", "RADIUS_API_KEY", "TOGETHER_API_KEY", "XAI_API_KEY",
+		"XIAOMI_API_KEY", "XIAOMI_TOKEN_PLAN_AMS_API_KEY", "XIAOMI_TOKEN_PLAN_CN_API_KEY",
+		"XIAOMI_TOKEN_PLAN_SGP_API_KEY", "ZAI_API_KEY", "ZAI_CODING_CN_API_KEY":
+		return true
+	default:
 		return false
 	}
-	_, reserved := nativePiRepositoryTaskReservedEnvironment[strings.ToUpper(name)]
-	return !reserved
 }
 
-var nativePiRepositoryTaskReservedEnvironment = map[string]struct{}{
-	"APPDATA":             {},
-	"COMSPEC":             {},
-	"HOME":                {},
-	"LOCALAPPDATA":        {},
-	"PATH":                {},
-	"PI_CODING_AGENT_DIR": {},
-	"PATHEXT":             {},
-	"SYSTEMROOT":          {},
-	"TEMP":                {},
-	"TMP":                 {},
-	"USERPROFILE":         {},
-	"WINDIR":              {},
-	"XDG_CACHE_HOME":      {},
-	"XDG_CONFIG_HOME":     {},
-	"XDG_DATA_HOME":       {},
+func nativePiRepositoryTaskLoopbackEnvironment(t *testing.T, root, baseURL string) []string {
+	t.Helper()
+	if err := nativePiRepositoryTaskValidateLoopbackURL(baseURL); err != nil {
+		t.Fatalf("validate native Pi loopback base URL: %v", err)
+	}
+	environment := nativePiRepositoryTaskEnvironment(t, root, "")
+	modelsFilename := filepath.Join(root, "agent", "models.json")
+	if err := nativePiRepositoryTaskWriteJSON(modelsFilename, nativePiRepositoryTaskLoopbackModels(baseURL)); err != nil {
+		t.Fatalf("write native Pi loopback models.json: %v", err)
+	}
+	return environment
+}
+
+func nativePiRepositoryTaskLoopbackModels(baseURL string) map[string]any {
+	return map[string]any{
+		"providers": map[string]any{
+			nativePiLoopbackProvider: map[string]any{
+				"baseUrl": baseURL,
+				"api":     nativePiLoopbackAPI,
+				"apiKey":  nativePiLoopbackAPIKey,
+				"models": []any{
+					map[string]any{
+						"id":               nativePiLoopbackModel,
+						"reasoning":        true,
+						"thinkingLevelMap": map[string]string{nativePiLoopbackThinking: nativePiLoopbackThinking},
+					},
+				},
+			},
+		},
+	}
 }
 
 func nativePiRepositoryTaskEnvironment(t *testing.T, root, credentialEnv string) []string {
 	t.Helper()
+	if credentialEnv != "" && !nativePiRepositoryTaskCredentialEnvironmentAllowed(credentialEnv) {
+		t.Fatal("native Pi environment requires a supported provider credential variable")
+	}
 	home := filepath.Join(root, "home")
 	agentDir := filepath.Join(root, "agent")
 	cacheDir := filepath.Join(root, "cache")

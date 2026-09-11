@@ -17,11 +17,11 @@ fixtures or prove credentialed repository work.
 
 ## Opt-in repository task
 
-`TestNativeRepositoryTask` exercises one model turn through the production Pi
-adapter in an isolated temporary Git repository. It is not a daemon/Control E2E
-test and does not exercise or establish runtime capability admission. No
-authenticated result has been recorded for this test yet; the release
-capabilities remain unverified.
+`TestNativeRepositoryTask` exercises one native Pi turn through the configured
+provider or loopback gateway in an isolated temporary Git repository, using the
+production adapter. It is not a daemon/Control E2E
+test and does not exercise or establish runtime capability admission. Release
+capabilities remain unverified until their complete acceptance evidence exists.
 
 From `daemon/`, explicitly configure these environment variables:
 
@@ -29,15 +29,19 @@ From `daemon/`, explicitly configure these environment variables:
 - `SYMMETRY_PI_NATIVE_REPOSITORY_TASK_EXECUTABLE`: absolute Pi 0.85.1 executable
 - `SYMMETRY_PI_NATIVE_REPOSITORY_TASK_PROVIDER`: the authorized native provider
 - `SYMMETRY_PI_NATIVE_REPOSITORY_TASK_MODEL`: the authorized native model
-- `SYMMETRY_PI_NATIVE_REPOSITORY_TASK_CREDENTIAL_ENV`: optionally, the name of
-  one already configured credential environment variable, not its value
+- `SYMMETRY_PI_NATIVE_REPOSITORY_TASK_CREDENTIAL_ENV`: optionally, the exact name
+  of one already configured credential variable from Pi 0.85.1's documented
+  provider credential allowlist (such as `OPENAI_API_KEY`), not its value
+- `SYMMETRY_PI_NATIVE_REPOSITORY_TASK_BASE_URL`: optional numeric loopback
+  `http`/`https` endpoint, including its exact API base path
 
 ```text
 go test ./internal/harness/pi -run '^TestNativeRepositoryTask$' -count=1 -timeout=3m -v
 ```
 
-The test copies only the selected credential into its isolated native process;
-it does not read the user's Pi credential/configuration files. Optional extensions,
+The standard credential path copies only the selected allowlisted credential
+into its isolated native process; loopback mode copies no credential. Neither
+path reads the user's Pi credential/configuration files. Optional extensions,
 skills, templates, themes and context files are disabled. The only model tool is
 `write`. The temporary repository is a test target, not an OS security sandbox.
 Missing configuration, authentication failures and timeouts fail an enabled test.
@@ -45,11 +49,36 @@ With the opt-in unset, a skip proves only that the test compiles.
 Unsupported platforms outside Linux and Windows always skip, including when
 the opt-in is set.
 
-The intended evidence is the actual file mutation, expected worktree change and
-unchanged HEAD, schema-valid progress result bound to the repository baseline, and bounded
+When `SYMMETRY_PI_NATIVE_REPOSITORY_TASK_BASE_URL` is set, the test uses the
+fixed custom provider `symmetry-native-loopback` and model `gpt-5.6-terra`, and
+passes `--thinking high`. The provider is written to the isolated
+`PI_CODING_AGENT_DIR/models.json` with `api: "openai-responses"`, the exact
+configured base URL, a fixed nonsecret literal dummy key, one reasoning model,
+and `thinkingLevelMap.high: "high"`. This mode requires the provider and model
+environment variables to match those exact values and rejects
+`SYMMETRY_PI_NATIVE_REPOSITORY_TASK_CREDENTIAL_ENV`; it never copies a user
+credential or modifies global Pi configuration. Endpoint validation accepts only
+numeric loopback hosts and rejects userinfo, query strings, fragments, opaque or
+hostless URLs, IPv6 zones, whitespace, and invalid ports. With the endpoint
+unset, the existing provider/credential path is unchanged and no `models.json`
+is created. The evidence records the requested model/effort only; the served
+model/effort and gateway upstream authentication remain unattested, and this
+test does not promote native capabilities or provider accounting.
+
+The intended evidence is the actual file mutation, expected worktree change
+(including ignored paths) and unchanged HEAD, schema-valid progress result bound
+to the repository baseline, and bounded
 `Start/Open/StartTurn/WaitTurn/Close/Wait`. A progress result is not accepted work
 or an achieved Goal. Cancellation, retained resume, handoff, provider accounting
 and Control/PostgreSQL durability require separate evidence.
+
+The test observes `OutputTruncated=true` at the shared runner's explicit
+termination barrier after the acknowledged semantic result. This marker closes
+subsequent output delivery so termination cannot wait indefinitely on a sink;
+it is not evidence of a full output drain. `SinkError`, `OutputError`,
+`ContainmentError`, and `TerminationError` remain rejected. Expected forced-close
+exit status and `WaitError` do not invalidate the already acknowledged semantic
+result.
 
 ## RPC profile argument boundary
 

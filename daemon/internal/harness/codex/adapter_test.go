@@ -523,7 +523,7 @@ func TestOpenUsesOnlyExplicitNativeModelAndChecksReturnedIdentity(t *testing.T) 
 				"cwd":               thread.Params.CWD,
 				"model":             test.returned,
 				"modelProvider":     test.returnedProvider,
-				"sandbox":           map[string]any{"type": "workspaceWrite", "networkAccess": false, "writableRoots": []string{thread.Params.CWD}},
+				"sandbox":           map[string]any{"type": "workspaceWrite", "networkAccess": false, "writableRoots": []string{thread.Params.CWD}, "excludeTmpdirEnvVar": true, "excludeSlashTmp": true},
 				"thread":            map[string]any{"id": "thread-1", "cwd": thread.Params.CWD, "ephemeral": false},
 			})
 			err := <-opened
@@ -592,9 +592,11 @@ func TestThreadStartWorkspacePolicyCannotEscapeAdmission(t *testing.T) {
 		Model:             "gpt-6-astra",
 		ModelProvider:     "openai",
 		Sandbox: nativeSandboxPolicy{
-			Type:          "workspaceWrite",
-			NetworkAccess: json.RawMessage(`false`),
-			WritableRoots: []string{workspace},
+			Type:                "workspaceWrite",
+			NetworkAccess:       json.RawMessage(`false`),
+			WritableRoots:       []string{workspace},
+			ExcludeTmpdirEnvVar: boolPointer(true),
+			ExcludeSlashTmp:     boolPointer(true),
 		},
 		Thread:                nativeThread{ID: "thread-1", CWD: workspace, Ephemeral: &ephemeral},
 		RuntimeWorkspaceRoots: []string{workspace},
@@ -1106,7 +1108,7 @@ func TestThreadStartedBeforeStartResponseStaysBehindJournalBarrier(t *testing.T)
 		"cwd":               thread.Params.CWD,
 		"model":             "gpt-6-astra",
 		"modelProvider":     "openai",
-		"sandbox":           map[string]any{"type": "workspaceWrite", "networkAccess": false, "writableRoots": []string{thread.Params.CWD}},
+		"sandbox":           map[string]any{"type": "workspaceWrite", "networkAccess": false, "writableRoots": []string{thread.Params.CWD}, "excludeTmpdirEnvVar": true, "excludeSlashTmp": true},
 		"thread":            map[string]any{"id": "thread-1", "cwd": thread.Params.CWD, "ephemeral": false},
 	})
 	if err := <-errResult; err != nil {
@@ -1260,6 +1262,21 @@ func TestWaitReturnsStableProcessFinalResult(t *testing.T) {
 
 func reasonPointer(reason protocol.TaskResultReason) *protocol.TaskResultReason {
 	return &reason
+}
+
+func TestCloneTaskResultPreservesSchemaValidEmptyArrays(t *testing.T) {
+	semantic, err := protocol.ParseTaskResult([]byte(validTaskResultJSON(t, "progress")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cloned := cloneTaskResult(harness.TaskResult{Kind: harness.ResultSucceeded, Semantic: &semantic})
+	encoded, err := json.Marshal(cloned.Semantic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := protocol.ParseTaskResult(encoded); err != nil {
+		t.Fatalf("cloning a validated task result changed its wire validity: %v", err)
+	}
 }
 
 func TestCurrentResultDeepCopiesSemanticPayload(t *testing.T) {
@@ -2419,13 +2436,20 @@ func completeOpen(t *testing.T, process *fakeNativeProcess, session harness.Stag
 	if thread.Method != appServerMethodThreadStart || thread.Params.CWD == "" || thread.Params.Ephemeral || thread.Params.Sandbox != nativeEngineeringSandbox || thread.Params.ApprovalPolicy != nativeApprovalOnRequest {
 		t.Fatalf("thread/start request = %+v", thread)
 	}
+	if len(thread.Params.Config) != 4 ||
+		string(thread.Params.Config["sandbox_workspace_write.writable_roots"]) != "[]" ||
+		string(thread.Params.Config["sandbox_workspace_write.network_access"]) != "false" ||
+		string(thread.Params.Config["sandbox_workspace_write.exclude_tmpdir_env_var"]) != "true" ||
+		string(thread.Params.Config["sandbox_workspace_write.exclude_slash_tmp"]) != "true" {
+		t.Fatalf("thread/start did not request the exact workspace-only sandbox: %v", thread.Params.Config)
+	}
 	process.reply(t, thread.ID, map[string]any{
 		"approvalPolicy":    nativeApprovalOnRequest,
 		"approvalsReviewer": "user",
 		"cwd":               thread.Params.CWD,
 		"model":             "gpt-6-astra",
 		"modelProvider":     "openai",
-		"sandbox":           map[string]any{"type": "workspaceWrite", "networkAccess": false, "writableRoots": []string{thread.Params.CWD}},
+		"sandbox":           map[string]any{"type": "workspaceWrite", "networkAccess": false, "writableRoots": []string{}, "excludeTmpdirEnvVar": true, "excludeSlashTmp": true},
 		"thread":            map[string]any{"id": "thread-1", "cwd": thread.Params.CWD, "ephemeral": false},
 	})
 	if err := <-errResult; err != nil {
@@ -2576,6 +2600,7 @@ type parsedRequest struct {
 			Version string
 		}
 		ApprovalPolicy string
+		Config         map[string]json.RawMessage
 		CWD            string
 		Ephemeral      bool
 		Sandbox        string

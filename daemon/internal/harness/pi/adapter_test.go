@@ -13,7 +13,23 @@ import (
 
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
+	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
+
+func TestCloneTaskResultPreservesSchemaValidEmptyArrays(t *testing.T) {
+	semantic, err := protocol.ParseTaskResult([]byte(validTaskResultJSON(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cloned := cloneTaskResult(harness.TaskResult{Kind: harness.ResultSucceeded, Semantic: &semantic})
+	encoded, err := json.Marshal(cloned.Semantic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := protocol.ParseTaskResult(encoded); err != nil {
+		t.Fatalf("cloning a validated task result changed its wire validity: %v", err)
+	}
+}
 
 func TestAdapterStagesPiRPCAndRequiresSettledExplicitTaskResult(t *testing.T) {
 	process := newFakeNativeProcess()
