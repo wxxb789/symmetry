@@ -685,42 +685,72 @@ func TestPiResumeAdmissionRequiresVerifiedResumeCapabilityBeforeSideEffects(t *t
 	}
 }
 
-func TestPiFreshAndHandoffRejectInvalidRPCProfileBeforeNativeLaunch(t *testing.T) {
+func TestPiAdmissionsRejectInvalidRPCProfileBeforeNativeLaunch(t *testing.T) {
 	for _, test := range []struct {
-		name    string
-		mode    protocol.SessionMode
-		handoff bool
+		name string
+		mode protocol.SessionMode
 	}{
 		{name: "fresh", mode: protocol.SessionModeFresh},
-		{name: "handoff", mode: protocol.SessionModeHandoff, handoff: true},
+		{name: "resume", mode: protocol.SessionModeResume},
+		{name: "handoff", mode: protocol.SessionModeHandoff},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			admission, present, err := parseAdmissionInput(validAdmissionInput())
-			if err != nil || !present {
-				t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
-			}
-			admission.SessionMode = test.mode
-			if test.handoff {
-				sourceRunID := "00000000-0000-4000-8000-000000000099"
-				admission.HandoffSourceRunID = &sourceRunID
-			}
-			capabilities := verifiedNativeCapabilities(harness.KindPi)
-			capabilities.NativeVersion = pi.TestedVersion
-			capabilities.Handoff = test.handoff
-			app, store, session, controlClient := nativeAdmissionDaemonForHarness(t, admission, validNativeTaskResult(t, admission), nil, harness.KindPi, config.RuntimeHarnessPi, capabilities)
-			defer store.Close()
-			profile := app.config.AgentProfiles[app.config.Runtime.AgentProfile]
-			profile.Args = []string{"--session", "forbidden.jsonl"}
-			app.config.AgentProfiles[app.config.Runtime.AgentProfile] = profile
+			for _, profileTest := range []struct {
+				name string
+				args []string
+			}{
+				{name: "session override", args: []string{"--session", "forbidden.jsonl"}},
+				{name: "export command", args: []string{"--export", "retained.jsonl", "output.html"}},
+				{name: "positional input", args: []string{"--provider", "openai", "unadmitted prompt"}},
+				{name: "version as value", args: []string{"--model", "--version"}},
+				{name: "unknown option", args: []string{"--extension-command"}},
+			} {
+				t.Run(profileTest.name, func(t *testing.T) {
+					admission, present, err := parseAdmissionInput(validAdmissionInput())
+					if err != nil || !present {
+						t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+					}
+					admission.SessionMode = test.mode
+					if test.mode == protocol.SessionModeHandoff {
+						sourceRunID := "00000000-0000-4000-8000-000000000099"
+						admission.HandoffSourceRunID = &sourceRunID
+					}
+					if test.mode == protocol.SessionModeResume {
+						sessionID := "00000000-0000-4000-8000-000000000090"
+						admission.RequestedSessionID = &sessionID
+					}
+					capabilities := verifiedNativeCapabilities(harness.KindPi)
+					capabilities.NativeVersion = pi.TestedVersion
+					capabilities.Handoff = test.mode == protocol.SessionModeHandoff
+					capabilities.Resume = test.mode == protocol.SessionModeResume
+					app, store, session, controlClient := nativeAdmissionDaemonForHarness(t, admission, validNativeTaskResult(t, admission), nil, harness.KindPi, config.RuntimeHarnessPi, capabilities)
+					defer store.Close()
+					if test.mode == protocol.SessionModeResume {
+						bindingID := "00000000-0000-4000-8000-000000000091"
+						controlClient.harnessSessionID = admission.RequestedSessionID
+						controlClient.harnessBindingID = &bindingID
+					}
+					profile := app.config.AgentProfiles[app.config.Runtime.AgentProfile]
+					profile.Args = profileTest.args
+					app.config.AgentProfiles[app.config.Runtime.AgentProfile] = profile
 
-			app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
-			app.workers.Wait()
-			if len(session.calls) != 0 || len(controlClient.calls) != 0 || app.workspace.(*fakeWorkspace).prepareCalls != 0 {
-				t.Fatalf("invalid pi argv crossed a native/control/workspace boundary: native=%#v control=%#v workspace=%#v", session.calls, controlClient.calls, app.workspace)
-			}
-			sessions, err := store.ListGoalSessions()
-			if err != nil || len(sessions) != 0 {
-				t.Fatalf("invalid pi argv persisted a Goal session: %#v, error=%v", sessions, err)
+					app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
+					app.workers.Wait()
+					if len(session.calls) != 0 || len(controlClient.calls) != 0 || app.workspace.(*fakeWorkspace).prepareCalls != 0 || app.workspace.(*fakeWorkspace).recoverCalls != 0 {
+						t.Fatalf("invalid pi argv crossed a native/control/workspace boundary: native=%#v control=%#v workspace=%#v", session.calls, controlClient.calls, app.workspace)
+					}
+					sessions, err := store.ListGoalSessions()
+					if err != nil || len(sessions) != 0 {
+						t.Fatalf("invalid pi argv persisted a Goal session: %#v, error=%v", sessions, err)
+					}
+					journal, err := store.LoadJournal(state.RunKey{RunID: "run-1", Generation: 1})
+					if err != nil || len(journal.PendingTransitions) != 1 {
+						t.Fatalf("terminal transition count=%d, error=%v", len(journal.PendingTransitions), err)
+					}
+					if payload := journal.PendingTransitions[0].Payload; !strings.Contains(string(payload), "validate pi RPC invocation before native launch") {
+						t.Fatalf("admission did not reach the Pi argv guard: %s", payload)
+					}
+				})
 			}
 		})
 	}

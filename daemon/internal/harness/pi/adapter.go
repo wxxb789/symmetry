@@ -230,27 +230,47 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 // A resume session path is daemon-owned and cannot be supplied by a profile.
 // execution.Runner launches argv directly, never through a command shell.
 func piRPCArgs(profileArgs []string, resumeState *SessionState) ([]string, error) {
+	if err := ValidateRPCProfileArgs(profileArgs); err != nil {
+		return nil, err
+	}
 	args := make([]string, 0, len(profileArgs)+4)
 	args = append(args, "--mode", "rpc")
 	if resumeState != nil {
 		args = append(args, "--session", resumeState.SessionFile)
 	}
+	return append(args, profileArgs...), nil
+}
+
+// ValidateRPCProfileArgs limits profiles to Pi's audited configuration options.
+// Both admission and direct adapter callers use it before their side effects.
+// Option values are preserved, but cannot introduce commands or extension flags.
+func ValidateRPCProfileArgs(profileArgs []string) error {
 	for _, argument := range profileArgs {
 		if strings.IndexByte(argument, 0) >= 0 {
-			return nil, errors.New("pi invocation argument contains NUL")
+			return errors.New("pi invocation argument contains NUL")
 		}
-		if argument == "--" {
-			return nil, errors.New("pi invocation argument separator is not allowed for RPC transport")
-		}
-		if argument == "--mode" || strings.HasPrefix(argument, "--mode=") {
-			return nil, errors.New("pi invocation must not override required --mode rpc transport")
-		}
-		if forbiddenFreshSessionArgument(argument) {
-			return nil, fmt.Errorf("pi invocation argument %q is not allowed for a fresh or handoff RPC session", argument)
-		}
-		args = append(args, argument)
 	}
-	return args, nil
+	for index := 0; index < len(profileArgs); index++ {
+		argument := profileArgs[index]
+		if argument == "--mode" || strings.HasPrefix(argument, "--mode=") {
+			return errors.New("pi invocation must not override required --mode rpc transport")
+		}
+		switch argument {
+		case "--provider", "--model", "--models", "--thinking", "--session-dir",
+			"--tools", "-t", "--exclude-tools", "-xt", "--name", "-n":
+			if index+1 == len(profileArgs) || strings.TrimSpace(profileArgs[index+1]) == "" ||
+				strings.HasPrefix(profileArgs[index+1], "-") {
+				return fmt.Errorf("pi RPC configuration option at argument %d requires a non-option value", index+1)
+			}
+			index++
+		case "--no-tools", "-nt", "--no-builtin-tools", "-nbt", "--no-extensions", "-ne",
+			"--no-skills", "-ns", "--no-prompt-templates", "-np", "--no-themes",
+			"--no-context-files", "-nc", "--no-approve", "-na", "--offline", "--verbose":
+		default:
+			return fmt.Errorf("pi invocation argument %d is not allowed for RPC transport", index+1)
+		}
+	}
+	return nil
 }
 
 // piResumeState validates the daemon-local handle before pi is launched. pi
@@ -289,16 +309,6 @@ func piResumeState(resume *harness.ResumeHandle) (*SessionState, error) {
 		return nil, resumeRejected(fmt.Errorf("native version %q is not compatible with pi %s transport", resume.NativeVersion, TestedVersion))
 	}
 	return &SessionState{SessionID: resume.NativeSessionID, SessionFile: resume.NativeSessionFilename}, nil
-}
-
-func forbiddenFreshSessionArgument(argument string) bool {
-	switch argument {
-	case "--continue", "-c", "--resume", "-r", "--session", "--session-id", "--fork", "--no-session":
-		return true
-	}
-	return strings.HasPrefix(argument, "--continue=") || strings.HasPrefix(argument, "--resume=") ||
-		strings.HasPrefix(argument, "--session=") || strings.HasPrefix(argument, "--session-id=") ||
-		strings.HasPrefix(argument, "--fork=") || strings.HasPrefix(argument, "-c") || strings.HasPrefix(argument, "-r")
 }
 
 func isNilNativeProcess(process nativeProcess) bool {

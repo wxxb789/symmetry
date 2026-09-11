@@ -3158,7 +3158,7 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 		return err
 	}
 	if configuredKind == harness.KindPi {
-		if err := validatePiRPCProfileArgs(profile.Args); err != nil {
+		if err := pi.ValidateRPCProfileArgs(profile.Args); err != nil {
 			return fmt.Errorf("validate pi RPC invocation before native launch: %w", err)
 		}
 	}
@@ -3515,34 +3515,6 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 	}
 	if daemon.finishAttachedStart(key) {
 		daemon.signalOutbox()
-	}
-	return nil
-}
-
-// validatePiRPCProfileArgs mirrors pi's pre-process RPC transport guards at
-// the admission boundary. It runs before any Goal session journal is created,
-// so a configuration-only argv rejection cannot become an uncertain native
-// launch. The concrete adapter keeps the same validation as defense in depth.
-func validatePiRPCProfileArgs(args []string) error {
-	for _, argument := range args {
-		if strings.IndexByte(argument, 0) >= 0 {
-			return errors.New("pi invocation argument contains NUL")
-		}
-		if argument == "--" {
-			return errors.New("pi invocation argument separator is not allowed for RPC transport")
-		}
-		if argument == "--mode" || strings.HasPrefix(argument, "--mode=") {
-			return errors.New("pi invocation must not override required --mode rpc transport")
-		}
-		switch argument {
-		case "--continue", "-c", "--resume", "-r", "--session", "--session-id", "--fork", "--no-session":
-			return fmt.Errorf("pi invocation argument %q is not allowed for RPC transport", argument)
-		}
-		if strings.HasPrefix(argument, "--continue=") || strings.HasPrefix(argument, "--resume=") ||
-			strings.HasPrefix(argument, "--session=") || strings.HasPrefix(argument, "--session-id=") ||
-			strings.HasPrefix(argument, "--fork=") || strings.HasPrefix(argument, "-r") || strings.HasPrefix(argument, "-c") {
-			return fmt.Errorf("pi invocation argument %q is not allowed for RPC transport", argument)
-		}
 	}
 	return nil
 }
