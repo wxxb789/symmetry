@@ -75,7 +75,11 @@ func validateLongText(value, field string) error {
 }
 
 func validateCommitPath(value string) error {
-	if len(value) < 1 || len(value) > 1024 || value[0] == '/' || strings.ContainsRune(value, '\x00') || strings.ContainsRune(value, '\\') || strings.Contains(value, "//") {
+	if !utf8.ValidString(value) {
+		return fmt.Errorf("path is not a normalized relative commit path")
+	}
+	length := utf8.RuneCountInString(value)
+	if length < 1 || length > 1024 || value[0] == '/' || strings.ContainsRune(value, '\x00') || strings.ContainsRune(value, '\\') || strings.Contains(value, "//") {
 		return fmt.Errorf("path is not a normalized relative commit path")
 	}
 	parts := strings.Split(value, "/")

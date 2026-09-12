@@ -1256,7 +1256,11 @@ func validateGoalCommit(value, field string) error {
 }
 
 func validateGoalCommitPath(value, field string) error {
-	if len(value) < 1 || len(value) > 1024 || value[0] == '/' || strings.ContainsRune(value, '\x00') ||
+	if !utf8.ValidString(value) {
+		return fmt.Errorf("%s is not a normalized relative commit path", field)
+	}
+	length := utf8.RuneCountInString(value)
+	if length < 1 || length > 1024 || value[0] == '/' || strings.ContainsRune(value, '\x00') ||
 		strings.ContainsRune(value, '\\') || strings.Contains(value, "//") {
 		return fmt.Errorf("%s is not a normalized relative commit path", field)
 	}
