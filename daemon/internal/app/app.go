@@ -64,8 +64,27 @@ var (
 	errMissingResult                = errors.New("missing_result")
 	errGoalAttachmentPending        = errors.New("retained Goal session has no verified current attachment")
 	errPersistedProcessStopUnproven = errors.New("persisted process stop is unproven")
+	errAuthoritativeTerminal        = errors.New("authoritative terminal already durable")
 	workspaceFingerprint            = workspace.Fingerprint
 )
+
+// terminalTransitionConflictError preserves the first-terminal-wins barrier
+// for callers that attempted to queue a different terminal after another
+// terminal became durable. It unwraps to errAuthoritativeTerminal so existing
+// cancellation handling can still enqueue a rejected command acknowledgement.
+type terminalTransitionConflictError struct {
+	expectedState string
+	actualState   string
+}
+
+func (err *terminalTransitionConflictError) Error() string {
+	if err.actualState == "" {
+		return fmt.Sprintf("%s: terminal transition %q is already durable", errAuthoritativeTerminal, err.expectedState)
+	}
+	return fmt.Sprintf("%s: terminal transition %q conflicts with durable %q", errAuthoritativeTerminal, err.expectedState, err.actualState)
+}
+
+func (err *terminalTransitionConflictError) Unwrap() error { return errAuthoritativeTerminal }
 
 // taskResultReasonError keeps a canonical terminal reason through local
 // preflight failures without asking string matching to recover domain state.
@@ -721,11 +740,18 @@ func (daemon *daemon) dispatchQueuedCommand(ctx context.Context, queued *queuedC
 	}
 	if queued.command.Kind == "cancel" {
 		if active := daemon.running[key]; active != nil {
-			active.cancelled = true
-			if !active.claimed {
-				active.cancelCommandID = queued.command.CommandID
-				daemon.mu.Unlock()
-				return
+			if active.terminal || active.terminalizing > 0 {
+				// A terminal owner has reserved this run. Do not publish a local
+				// cancellation flag that could make the terminal owner fail its
+				// own durable write; the command remains replayable until the
+				// authoritative terminal is visible.
+			} else {
+				active.cancelled = true
+				if !active.claimed {
+					active.cancelCommandID = queued.command.CommandID
+					daemon.mu.Unlock()
+					return
+				}
 			}
 		}
 		daemon.commandWG.Add(1)
@@ -1723,6 +1749,14 @@ func (daemon *daemon) stopRecoveredJournal(journal state.RunJournal, reason stri
 		if hasUnclosedGoalSession {
 			daemon.retainUnknownGoalLaunchWorkspace(journal.Key())
 		}
+		latest, allowed := daemon.reloadRecoveredStopBeforeSideEffect(journal)
+		if !allowed {
+			if daemon.log != nil {
+				daemon.log.Warn("recovered_process_stop_blocked_by_terminal", "run_id", journal.RunID, "generation", journal.Generation)
+			}
+			return
+		}
+		journal = latest
 		if journal.PID <= 0 || strings.TrimSpace(journal.ProcessIdentity) == "" || daemon.options.terminatePersist == nil {
 			if daemon.log != nil {
 				daemon.log.Warn("stop_recovered_process_unavailable", "run_id", journal.RunID, "generation", journal.Generation)
@@ -1773,6 +1807,12 @@ func (daemon *daemon) cancelRecoveredJournal(ctx context.Context, journal state.
 	if journal.LocalState == "cleanup_pending" || (journal.LocalState == "terminal_pending" && journal.TerminalVerdict != "") {
 		return false
 	}
+	if durableTerminalPresent(journal) {
+		if commandID == "" || state.CommandAcknowledgementRetired(journal) {
+			return false
+		}
+		return daemon.queueCommandAcknowledgementWithContext(ctx, key, commandID, "rejected")
+	}
 	if err := daemon.retainUnknownGoalLaunchWorkspaceChecked(key); err != nil {
 		if daemon.log != nil {
 			daemon.log.Warn("retain_recovered_cancel_workspace_failed", "run_id", journal.RunID, "generation", journal.Generation, "error", err)
@@ -1793,6 +1833,17 @@ func (daemon *daemon) cancelRecoveredJournal(ctx context.Context, journal state.
 			}
 			return false
 		}
+		latest, allowed := daemon.reloadRecoveredStopBeforeSideEffect(journal)
+		if !allowed {
+			if daemon.log != nil {
+				daemon.log.Warn("recovered_cancel_process_stop_blocked_by_terminal", "run_id", journal.RunID, "generation", journal.Generation)
+			}
+			if durableTerminalPresent(latest) && commandID != "" {
+				return daemon.queueCommandAcknowledgementWithContext(ctx, key, commandID, "rejected")
+			}
+			return false
+		}
+		journal = latest
 		if err := daemon.stopPersistedProcess(ctx, journal); err != nil {
 			if daemon.log != nil {
 				daemon.log.Warn("stop_recovered_cancel_process_failed", "run_id", journal.RunID, "generation", journal.Generation, "error", err)
@@ -2721,6 +2772,19 @@ func isNilProcess(process Process) bool {
 	}
 }
 
+func isNilHarnessSession(session harness.Session) bool {
+	if session == nil {
+		return true
+	}
+	value := reflect.ValueOf(session)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
 func parseAdmissionInput(input json.RawMessage) (protocol.Admission, bool, error) {
 	trimmed := bytes.TrimSpace(input)
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) || trimmed[0] != '{' {
@@ -2949,8 +3013,31 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 			returnErr = taskResultFailure(protocol.TaskResultReasonUnknownOutcome, returnErr)
 		}
 	}()
+	if err := admission.Validate(); err != nil {
+		return fmt.Errorf("validate Goal admission: %w", err)
+	}
 	if admission.ModelProfile != daemon.config.Runtime.AgentProfile {
 		return fmt.Errorf("Goal admission model_profile %q does not match configured runtime agent_profile %q", admission.ModelProfile, daemon.config.Runtime.AgentProfile)
+	}
+	if strings.TrimSpace(daemon.config.Runtime.RepositoryResourceID) == "" {
+		return errors.New("Goal admission requires a configured runtime repository_resource_id")
+	}
+	if admission.Subject.ResourceID != daemon.config.Runtime.RepositoryResourceID {
+		return errors.New("Goal admission subject resource_id does not match the configured runtime repository_resource_id")
+	}
+	if admission.Purpose == protocol.AdmissionPurposeValidate {
+		deterministic, err := daemon.tryDeterministicArtifactValidation(ctx, key, claim, admission)
+		if err != nil {
+			// Control derives validation_failed from persisted failed validator
+			// evidence; a local read/integrity failure has no such receipt.
+			return err
+		}
+		if deterministic.Handled {
+			daemon.finishStarting(key, true)
+			daemon.scheduleTerminalSlotRelease(key, deterministic.Journal.TerminalPendingAt)
+			daemon.signalOutbox()
+			return nil
+		}
 	}
 	if err := admissionLaunchFailure(admission, daemon.harnessCapabilities, claim.ProviderAccess); err != nil {
 		return err
@@ -2958,9 +3045,6 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 	bindingID, err := goalSessionBindingID(admission, claim)
 	if err != nil {
 		return taskResultFailure(protocol.TaskResultReasonResumeRejected, err)
-	}
-	if admission.Subject.ResourceID != daemon.config.Runtime.RepositoryResourceID {
-		return errors.New("Goal admission subject resource_id does not match the configured runtime repository_resource_id")
 	}
 	configuredKind, err := configuredHarnessKind(daemon.config.Runtime.HarnessKind)
 	if err != nil {
@@ -4752,8 +4836,15 @@ func (daemon *daemon) queueTerminalTransitionWithRetry(ctx context.Context, key 
 			daemon.signalOutbox()
 			return nil
 		}
-		if existing, loadErr := daemon.store.LoadJournal(key); loadErr == nil && (existing.LocalState == "cleanup_pending" || (existing.LocalState == "terminal_pending" && existing.TerminalVerdict != "")) {
-			return nil
+		if existing, loadErr := daemon.store.LoadJournal(key); loadErr == nil {
+			if matches, present, actualState := terminalTransitionMatches(existing, transition); matches {
+				persisted = true
+				daemon.scheduleTerminalSlotRelease(key, existing.TerminalPendingAt)
+				daemon.signalOutbox()
+				return nil
+			} else if present {
+				return &terminalTransitionConflictError{expectedState: stateName, actualState: actualState}
+			}
 		}
 		if daemon.log != nil {
 			daemon.log.Warn("queue_terminal_transition_failed", "run_id", key.RunID, "generation", key.Generation, "state", stateName, "error", queueErr)
@@ -4807,6 +4898,16 @@ func (daemon *daemon) queueCancelledTerminalAndAcknowledgementWithContext(ctx co
 			daemon.scheduleTerminalSlotRelease(key, journal.TerminalPendingAt)
 			daemon.signalOutbox()
 			return nil
+		}
+		if existing, loadErr := daemon.store.LoadJournal(key); loadErr == nil {
+			if matches, conflict := cancelledReceiptMatches(existing, transition, acknowledgement); matches {
+				persisted = true
+				daemon.scheduleTerminalSlotRelease(key, existing.TerminalPendingAt)
+				daemon.signalOutbox()
+				return nil
+			} else if conflict {
+				return &terminalTransitionConflictError{expectedState: "cancelled", actualState: existing.TerminalState}
+			}
 		}
 		if daemon.commandAcknowledgementRetired(key) {
 			return errors.New("command acknowledgement is no longer deliverable")
@@ -6030,8 +6131,19 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 		}
 	}
 	if command.Kind == "cancel" {
-		daemon.rememberWorkspaceRetention(key)
-		defer daemon.persistWorkspaceRetention(key)
+		// A terminal transition is authoritative as soon as it is durable, even
+		// before Control has returned a verdict. Re-read immediately before
+		// touching the live process so a late cancellation cannot replace it.
+		journal, err = daemon.store.LoadJournal(key)
+		if err != nil {
+			return false
+		}
+		if durableTerminalPresent(journal) {
+			if state.CommandAcknowledgementRetired(journal) {
+				return false
+			}
+			return daemon.queueCommandAcknowledgementWithContext(ctx, key, command.CommandID, "rejected")
+		}
 		daemon.mu.Lock()
 		active := daemon.running[key]
 		if active == nil {
@@ -6040,6 +6152,18 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 				return daemon.queueCancellationReceipt(ctx, key, command.CommandID)
 			}
 			return daemon.queueCommandAcknowledgementWithContext(ctx, key, command.CommandID, "rejected")
+		}
+		if active.terminal || active.terminalizing > 0 {
+			daemon.mu.Unlock()
+			daemon.clearCancellationReservation(key, command.CommandID)
+			latest, loadErr := daemon.store.LoadJournal(key)
+			if loadErr == nil && durableTerminalPresent(latest) {
+				return daemon.rejectCancellationIfTerminalDurable(ctx, key, command.CommandID, latest)
+			}
+			// A terminal owner has a local reservation but has not published its
+			// transition yet. Do not mark this run cancelled or touch native
+			// state; Control will replay the command after the owner commits.
+			return false
 		}
 		if !active.claimed {
 			active.cancelled = true
@@ -6060,6 +6184,21 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 		if terminalReserved {
 			defer daemon.releaseTerminalReservation(key)
 		}
+		latest, allowed := daemon.reloadCancellationBeforeSideEffect(key, terminalReserved)
+		if allowed && latest.Fence() != journal.Fence() {
+			allowed = false
+		}
+		if !allowed {
+			daemon.clearCancellationReservation(key, command.CommandID)
+			if durableTerminalPresent(latest) {
+				return daemon.rejectCancellationIfTerminalDurable(ctx, key, command.CommandID, latest)
+			}
+			// The terminal owner is still responsible for completing its durable
+			// write. No cancellation acknowledgement is safe yet.
+			return false
+		}
+		daemon.rememberWorkspaceRetention(key)
+		defer daemon.persistWorkspaceRetention(key)
 		var terminateErr error
 		var finalResult harness.TaskResult
 		finalResultKnown := false
@@ -6249,8 +6388,81 @@ func activeRunAcceptsCommand(active *runningRun) bool {
 	return active != nil && active.process != nil && !active.starting && !active.cancelled && !active.stale && !active.terminal && active.terminalizing == 0
 }
 
+// reloadCancellationBeforeSideEffect is the last local authority check before
+// a cancel command touches a native session, process, or execution context.
+// Store I/O is deliberately outside daemon.mu; the in-memory reservation is
+// checked again after the read so a terminal owner can win without being
+// overwritten by a late cancellation flag.
+func (daemon *daemon) reloadCancellationBeforeSideEffect(key state.RunKey, ownTerminalReservation bool) (state.RunJournal, bool) {
+	journ, err := daemon.store.LoadJournal(key)
+	if err != nil {
+		return state.RunJournal{}, false
+	}
+	daemon.mu.Lock()
+	active := daemon.running[key]
+	terminalizing := 0
+	terminal := false
+	if active != nil {
+		terminalizing = active.terminalizing
+		terminal = active.terminal
+	}
+	daemon.mu.Unlock()
+	allowedTerminalizing := 0
+	if ownTerminalReservation {
+		allowedTerminalizing = 1
+	}
+	if terminal || terminalizing > allowedTerminalizing || durableTerminalPresent(journ) {
+		return journ, false
+	}
+	return journ, true
+}
+
+func (daemon *daemon) clearCancellationReservation(key state.RunKey, commandID string) {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	active := daemon.running[key]
+	if active == nil || active.cancelCommandID != commandID || active.terminal {
+		return
+	}
+	active.cancelled = false
+	active.cancelCommandID = ""
+}
+
+func (daemon *daemon) rejectCancellationIfTerminalDurable(ctx context.Context, key state.RunKey, commandID string, journal state.RunJournal) bool {
+	if !durableTerminalPresent(journal) || state.CommandAcknowledgementRetired(journal) {
+		return false
+	}
+	return daemon.queueCommandAcknowledgementWithContext(ctx, key, commandID, "rejected")
+}
+
+func (daemon *daemon) reloadRecoveredStopBeforeSideEffect(expected state.RunJournal) (state.RunJournal, bool) {
+	key := expected.Key()
+	journal, err := daemon.store.LoadJournal(key)
+	if err != nil {
+		return state.RunJournal{}, false
+	}
+	if journal.Key() != key || journal.Fence() != expected.Fence() {
+		return journal, false
+	}
+	daemon.mu.Lock()
+	active := daemon.running[key]
+	blocked := active != nil && (active.terminal || active.terminalizing > 0)
+	daemon.mu.Unlock()
+	if blocked || durableTerminalPresent(journal) {
+		return journal, false
+	}
+	return journal, true
+}
+
 func (daemon *daemon) queueCancellationReceipt(ctx context.Context, key state.RunKey, commandID string) bool {
 	if err := daemon.queueCancelledTerminalAndAcknowledgementWithContext(ctx, key, commandID); err != nil {
+		if errors.Is(err, errAuthoritativeTerminal) {
+			journal, loadErr := daemon.store.LoadJournal(key)
+			if loadErr == nil && state.CommandAcknowledgementRetired(journal) {
+				return false
+			}
+			return daemon.queueCommandAcknowledgementWithContext(ctx, key, commandID, "rejected")
+		}
 		if daemon.log != nil {
 			daemon.log.Error("queue_cancelled_transition_failed", "run_id", key.RunID, "generation", key.Generation, "error", err)
 		}
@@ -6999,6 +7211,25 @@ func (daemon *daemon) flushRun(ctx context.Context, journal state.RunJournal) (e
 				continue
 			}
 		}
+		if isTerminalTransition(journal.PendingTransitions[0].State) {
+			// A deterministic validator can atomically append evidence and a
+			// terminal while this loop is delivering earlier transitions. Reload
+			// and drain its immutable evidence prerequisite immediately before
+			// terminal delivery so the Control plane never observes terminal-first.
+			updated, loadErr := daemon.store.LoadJournal(key)
+			if loadErr != nil {
+				return loadErr
+			}
+			journal = updated
+			updated, _, flushErr := daemon.flushGoalDeliveries(ctx, journal)
+			if flushErr != nil {
+				return flushErr
+			}
+			journal = updated
+			if len(journal.PendingTransitions) == 0 {
+				continue
+			}
+		}
 		updated, err := daemon.store.MarkTransitionAttempted(key, journal.PendingTransitions[0].TransitionID)
 		if err != nil {
 			return err
@@ -7624,6 +7855,100 @@ func isTerminalTransition(stateName string) bool {
 	default:
 		return false
 	}
+}
+
+func durableTerminalPresent(journal state.RunJournal) bool {
+	for _, transition := range journal.PendingTransitions {
+		if isTerminalTransition(transition.State) {
+			return true
+		}
+	}
+	return isTerminalTransition(journal.TerminalState)
+}
+
+func durableTerminalTransition(journal state.RunJournal) (*protocol.StateTransitionRequest, bool) {
+	for index := range journal.PendingTransitions {
+		if isTerminalTransition(journal.PendingTransitions[index].State) {
+			return &journal.PendingTransitions[index], true
+		}
+	}
+	if isTerminalTransition(journal.TerminalState) {
+		// The original transition body is intentionally not retained after the
+		// control-plane acknowledgement. Such a terminal cannot be proven to be
+		// the caller's exact idempotent write.
+		return nil, true
+	}
+	return nil, false
+}
+
+func transitionWithJournalFence(transition protocol.StateTransitionRequest, journal state.RunJournal) protocol.StateTransitionRequest {
+	if transition.Fence == (protocol.Fence{}) {
+		transition.Fence = journal.Fence()
+	}
+	return transition
+}
+
+func sameStateTransitionRequest(left, right protocol.StateTransitionRequest) bool {
+	return left.Fence == right.Fence &&
+		left.TransitionID == right.TransitionID &&
+		left.State == right.State &&
+		bytes.Equal(left.Payload, right.Payload)
+}
+
+func terminalTransitionMatches(journal state.RunJournal, expected protocol.StateTransitionRequest) (bool, bool, string) {
+	actual, present := durableTerminalTransition(journal)
+	if !present {
+		return false, false, ""
+	}
+	if actual == nil {
+		return false, true, journal.TerminalState
+	}
+	expected = transitionWithJournalFence(expected, journal)
+	return sameStateTransitionRequest(*actual, expected), true, actual.State
+}
+
+func sameCommandAcknowledgement(left, right protocol.CommandAcknowledgement) bool {
+	return left.Fence == right.Fence &&
+		left.RunID == right.RunID &&
+		left.CommandID == right.CommandID &&
+		left.Outcome == right.Outcome &&
+		left.AckID == right.AckID
+}
+
+func cancelledReceiptMatches(journal state.RunJournal, transition protocol.StateTransitionRequest, acknowledgement protocol.CommandAcknowledgement) (bool, bool) {
+	transitionMatch, terminalPresent, _ := terminalTransitionMatches(journal, transition)
+	if terminalPresent && !transitionMatch {
+		return false, true
+	}
+	if !terminalPresent {
+		for _, pending := range journal.PendingCommandAcknowledgements {
+			if pending.CommandID != acknowledgement.CommandID && pending.AckID != acknowledgement.AckID {
+				continue
+			}
+			return false, !sameCommandAcknowledgement(pending, acknowledgementWithJournalFence(acknowledgement, journal))
+		}
+		return false, false
+	}
+	acknowledgement = acknowledgementWithJournalFence(acknowledgement, journal)
+	for _, pending := range journal.PendingCommandAcknowledgements {
+		if pending.CommandID != acknowledgement.CommandID && pending.AckID != acknowledgement.AckID {
+			continue
+		}
+		if sameCommandAcknowledgement(pending, acknowledgement) {
+			return true, false
+		}
+		return false, true
+	}
+	// A delivered or retired acknowledgement no longer carries enough local
+	// data to prove an exact replay. Keep the authority barrier fail-closed.
+	return false, true
+}
+
+func acknowledgementWithJournalFence(acknowledgement protocol.CommandAcknowledgement, journal state.RunJournal) protocol.CommandAcknowledgement {
+	if acknowledgement.Fence == (protocol.Fence{}) {
+		acknowledgement.Fence = journal.Fence()
+	}
+	return acknowledgement
 }
 
 func (daemon *daemon) retireOrdinaryTerminalOutbox(journal state.RunJournal) (state.RunJournal, error) {

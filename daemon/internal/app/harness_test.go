@@ -216,6 +216,80 @@ func TestStartupProbeRegistersUnavailableNativeProjections(t *testing.T) {
 	}
 }
 
+func TestConcreteNativeProbeRegistrationRemainsUnverified(t *testing.T) {
+	tests := []struct {
+		name          string
+		configKind    string
+		kind          harness.Kind
+		nativeVersion string
+		adapter       harness.Adapter
+	}{
+		{
+			name:          "pi",
+			configKind:    config.RuntimeHarnessPi,
+			kind:          harness.KindPi,
+			nativeVersion: pi.TestedVersion,
+			adapter: pi.NewAdapterWithRunner("pi-fixture", nativeProbeCommandFixtures{responses: map[string][]byte{
+				"--version": []byte(pi.TestedVersion + "\n"),
+				"--help":    []byte("--mode <mode> rpc"),
+			}}),
+		},
+		{
+			name:          "opencode",
+			configKind:    config.RuntimeHarnessOpenCode,
+			kind:          harness.KindOpenCode,
+			nativeVersion: opencode.TestedVersion,
+			adapter: opencode.NewAdapterWithRunner("opencode-fixture", nativeProbeCommandFixtures{responses: map[string][]byte{
+				"--version":    []byte(opencode.TestedVersion + "\n"),
+				"serve --help": []byte("opencode serve --hostname --port --pure"),
+			}}),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			value := testConfig(t)
+			value.Runtime.HarnessKind = test.configKind
+			value.Runtime.HarnessVersion = "legacy"
+			value.Runtime.AdapterVersion = "configured-adapter-9"
+			value.Runtime.AdapterProtocolVersion = 1
+
+			// Keep the application composition root in the path while replacing
+			// only the selected native adapter with its deterministic probe seam.
+			registry := newHarnessRegistry(config.AgentProfile{Command: "unused-native-executable"})
+			if err := registry.Register(test.kind, test.adapter); err != nil {
+				t.Fatal(err)
+			}
+			daemon := &daemon{config: value, harnessRegistry: registry}
+			if err := daemon.ensureHarnessProbe(context.Background()); err != nil {
+				t.Fatalf("ensureHarnessProbe() error = %v", err)
+			}
+
+			capabilities := daemon.harnessCapabilities
+			if !capabilities.VersionKnown || capabilities.NativeVersion != test.nativeVersion || !capabilities.TransportVerified || capabilities.Verified {
+				t.Fatalf("capabilities = %+v, want known transport with unverified lifecycle", capabilities)
+			}
+			if capabilities.Start || capabilities.Events || capabilities.Cancel || capabilities.Resume {
+				t.Fatalf("capabilities advertised unverified lifecycle operations: %+v", capabilities)
+			}
+
+			registration, metadata, err := buildRuntimeRegistration(daemon.config.Runtime, daemon.config.AgentProfiles[daemon.config.Runtime.AgentProfile], capabilities)
+			if err != nil {
+				t.Fatalf("buildRuntimeRegistration() error = %v", err)
+			}
+			if registration.HarnessVersion != test.nativeVersion || metadata.HarnessVersion != test.nativeVersion || registration.Capabilities.Adapter.NativeVersion != test.nativeVersion {
+				t.Fatalf("registration native metadata = registration:%q metadata:%q adapter:%q, want probe version %q", registration.HarnessVersion, metadata.HarnessVersion, registration.Capabilities.Adapter.NativeVersion, test.nativeVersion)
+			}
+			if registration.AdapterVersion != unavailableNativeMetadataVersion || metadata.AdapterVersion != unavailableNativeMetadataVersion || registration.Capabilities.Adapter.ImplementationVersion != unavailableNativeMetadataVersion {
+				t.Fatalf("registration retained configured adapter version: registration:%q metadata:%q adapter:%q", registration.AdapterVersion, metadata.AdapterVersion, registration.Capabilities.Adapter.ImplementationVersion)
+			}
+			operations := registration.Capabilities.Adapter.Operations
+			if operations.Start || operations.Events || operations.Cancel || operations.Resume {
+				t.Fatalf("registration advertised unverified lifecycle operations: %+v", operations)
+			}
+		})
+	}
+}
+
 func TestStartupProbeRejectsInvalidUnverifiedProjection(t *testing.T) {
 	value := testConfig(t)
 	value.Runtime.HarnessKind = config.RuntimeHarnessCodex
@@ -3590,6 +3664,19 @@ func (runner codexCommandFixtures) Run(_ context.Context, _ string, args ...stri
 		}
 		key += arg
 	}
+	response, ok := runner.responses[key]
+	if !ok {
+		return nil, errors.New("fixture command not found")
+	}
+	return response, nil
+}
+
+type nativeProbeCommandFixtures struct {
+	responses map[string][]byte
+}
+
+func (runner nativeProbeCommandFixtures) Run(_ context.Context, _ string, args ...string) ([]byte, error) {
+	key := strings.Join(args, " ")
 	response, ok := runner.responses[key]
 	if !ok {
 		return nil, errors.New("fixture command not found")

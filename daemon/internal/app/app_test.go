@@ -2157,14 +2157,9 @@ func TestCancelledCommandSignalsOutboxAfterAtomicReceipt(t *testing.T) {
 	}
 }
 
-func TestCancelledReceiptRetriesAtomicPersistenceWithStableIDs(t *testing.T) {
+func TestCancelledReceiptTreatsDurablePersistenceAsIdempotent(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
-	background, cancelBackground := context.WithCancel(context.Background())
-	defer cancelBackground()
-	cancelledContext, cancelRequest := context.WithCancel(context.Background())
-	cancelRequest()
-	retryTimer := &manualDeadlineTimer{channel: make(chan time.Time, 1)}
 	firstFailure := make(chan struct{}, 1)
 	type receiptIDs struct{ transition, acknowledgement string }
 	attempted := make([]receiptIDs, 0, 2)
@@ -2173,9 +2168,6 @@ func TestCancelledReceiptRetriesAtomicPersistenceWithStableIDs(t *testing.T) {
 		log:   slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		options: options{
 			newID: ids(),
-			newTimer: func(time.Duration) deadlineTimer {
-				return retryTimer
-			},
 			queueCancelledTransitionAndAcknowledgement: func(key state.RunKey, transition protocol.StateTransitionRequest, acknowledgement protocol.CommandAcknowledgement, enteredAt time.Time) (state.RunJournal, error) {
 				attempted = append(attempted, receiptIDs{transition: transition.TransitionID, acknowledgement: acknowledgement.AckID})
 				journal, err := store.QueueCancelledTransitionAndAcknowledgementAt(key, transition, acknowledgement, enteredAt)
@@ -2189,34 +2181,94 @@ func TestCancelledReceiptRetriesAtomicPersistenceWithStableIDs(t *testing.T) {
 				return journal, nil
 			},
 		},
-		background: background,
-		running:    map[state.RunKey]*runningRun{key: {}},
+		running: map[state.RunKey]*runningRun{key: {}},
 	}
 	done := make(chan error, 1)
 	go func() {
-		done <- daemon.queueCancelledTerminalAndAcknowledgementWithContext(cancelledContext, key, "cancel-1")
+		done <- daemon.queueCancelledTerminalAndAcknowledgementWithContext(context.Background(), key, "cancel-1")
 	}()
 	<-firstFailure
 	select {
 	case err := <-done:
-		t.Fatalf("atomic receipt stopped on cancelled request context: %v", err)
-	default:
-	}
-	retryTimer.channel <- time.Now()
-	select {
-	case err := <-done:
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("atomic receipt error = %v, want idempotent success", err)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("atomic receipt did not retry after a transient persistence failure")
+		t.Fatal("atomic receipt did not stop after durable persistence")
 	}
 	journal, err := store.LoadJournal(key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(attempted) != 2 || attempted[0] != attempted[1] || len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].State != "cancelled" || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].CommandID != "cancel-1" || journal.PendingCommandAcknowledgements[0].Outcome != "applied" {
+	if len(attempted) != 1 || len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].State != "cancelled" || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].CommandID != "cancel-1" || journal.PendingCommandAcknowledgements[0].Outcome != "applied" {
 		t.Fatalf("attempts = %#v, journal = %#v", attempted, journal)
+	}
+}
+
+func TestTerminalTransitionRetryRejectsConflictingDurableTerminal(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	if _, err := store.QueueTerminalTransition(key, protocol.StateTransitionRequest{
+		TransitionID: "completed-1",
+		State:        "completed",
+		Payload:      json.RawMessage(`{"result":"accepted"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	daemon := &daemon{
+		store:   store,
+		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		options: options{newID: ids()},
+		running: map[state.RunKey]*runningRun{key: {}},
+	}
+
+	err := daemon.queueTerminalTransitionWithRetry(context.Background(), key, "failed", map[string]any{"reason": "late failure"})
+	if err == nil || !errors.Is(err, errAuthoritativeTerminal) {
+		t.Fatalf("queueTerminalTransitionWithRetry() error = %v, want authoritative terminal conflict", err)
+	}
+	var conflict *terminalTransitionConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("error = %T %v, want terminalTransitionConflictError", err, err)
+	}
+	active := daemon.running[key]
+	if active == nil || active.terminal || active.terminalizing != 0 {
+		t.Fatalf("conflicting terminal changed local reservation: %#v", active)
+	}
+}
+
+func TestTerminalTransitionRetryTreatsExactDurableTerminalAsIdempotent(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	attempts := 0
+	daemon := &daemon{
+		store: store,
+		log:   slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		options: options{
+			newID: ids(),
+			queueTerminalTransition: func(key state.RunKey, transition protocol.StateTransitionRequest, pendingAt time.Time) (state.RunJournal, error) {
+				attempts++
+				journal, err := store.QueueTerminalTransitionAt(key, transition, pendingAt)
+				if err != nil {
+					return state.RunJournal{}, err
+				}
+				return journal, errors.New("injected uncertain terminal persistence result")
+			},
+		},
+		running: map[state.RunKey]*runningRun{key: {}},
+	}
+
+	if err := daemon.queueTerminalTransitionWithRetry(context.Background(), key, "failed", map[string]any{"reason": "known"}); err != nil {
+		t.Fatalf("queueTerminalTransitionWithRetry() error = %v, want idempotent success", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("terminal persistence attempts = %d, want one readback-resolved attempt", attempts)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.TerminalState != "failed" || len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].State != "failed" {
+		t.Fatalf("terminal journal = %#v", journal)
 	}
 }
 
@@ -2257,7 +2309,7 @@ func TestAtomicCancelledReceiptCannotBeDeletedBeforeAcknowledgement(t *testing.T
 	}
 }
 
-func TestStaleTerminalFailureDoesNotSuppressReplacementCancellation(t *testing.T) {
+func TestDurableTerminalRejectsConcurrentCancellation(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
 	now := time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC)
@@ -2280,8 +2332,15 @@ func TestStaleTerminalFailureDoesNotSuppressReplacementCancellation(t *testing.T
 		close(flushed)
 	}()
 	<-api.completedStarted
-	if err := daemon.queueCancelledTerminalAndAcknowledgement(key, "cancel-1"); err != nil {
+	if !daemon.queueCancellationReceipt(context.Background(), key, "cancel-1") {
+		t.Fatal("cancellation was not acknowledged as rejected")
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if journal.TerminalState != "completed" || len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].State != "completed" || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].Outcome != "rejected" {
+		t.Fatalf("concurrent cancellation changed the authoritative terminal: %#v", journal)
 	}
 	close(api.releaseCompleted)
 	select {
@@ -2290,11 +2349,11 @@ func TestStaleTerminalFailureDoesNotSuppressReplacementCancellation(t *testing.T
 		t.Fatal("outbox did not recover from stale terminal response")
 	}
 
-	if got, want := api.calls, []string{"transition:completed", "transition:cancelled", "ack:cancel-1"}; !sameStrings(got, want) {
-		t.Fatalf("replacement cancellation delivery = %#v, want %#v", got, want)
+	if got, want := api.calls, []string{"transition:completed", "ack:cancel-1"}; !sameStrings(got, want) {
+		t.Fatalf("terminal/cancellation delivery = %#v, want %#v", got, want)
 	}
 	if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
-		t.Fatalf("replacement cancellation journal = %v, want deleted", err)
+		t.Fatalf("terminal journal = %v, want deleted", err)
 	}
 }
 
@@ -2609,7 +2668,7 @@ func TestTerminalGraceReleasesSlotExactlyOnceWithoutVerdict(t *testing.T) {
 	}
 }
 
-func TestTerminalGraceUsesPersistedTerminalEntryTimeAfterReplacement(t *testing.T) {
+func TestTerminalGraceRejectsLaterTerminalReplacement(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
 	enteredAt := time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC)
@@ -2630,16 +2689,18 @@ func TestTerminalGraceUsesPersistedTerminalEntryTimeAfterReplacement(t *testing.
 		slots:      make(chan struct{}, 1),
 	}
 	daemon.slots <- struct{}{}
-	if err := daemon.queueTerminalTransition(key, "cancelled", map[string]any{}); err != nil {
-		t.Fatal(err)
+	if err := daemon.queueTerminalTransition(key, "cancelled", map[string]any{}); err == nil {
+		t.Fatal("later cancellation replaced the durable completed terminal")
 	}
-	timer := <-timers
-	if want := terminalGrace - time.Minute; timer.delay != want {
-		t.Fatalf("replacement terminal grace delay = %s, want %s", timer.delay, want)
+	select {
+	case timer := <-timers:
+		t.Fatalf("later terminal scheduled a new grace timer: %#v", timer)
+	default:
 	}
 	active := daemon.running[key]
-	active.terminalCancel()
-	daemon.terminalReleaseWG.Wait()
+	if active == nil || active.terminalizing != 0 || active.terminal {
+		t.Fatalf("rejected replacement changed active terminal state: %#v", active)
+	}
 }
 
 func TestRenewalThresholdFollowsGrantedLease(t *testing.T) {
@@ -3045,7 +3106,7 @@ func TestTerminalOutboxOwnershipLossDropsOrdinaryItemsAndDeliversTerminal(t *tes
 	}
 }
 
-func TestRecoveredTerminalCancelReplacesUnconfirmedTerminal(t *testing.T) {
+func TestRecoveredTerminalCancelRejectsUnconfirmedTerminal(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
 	enteredAt := time.Date(2026, 9, 3, 1, 2, 3, 0, time.UTC)
@@ -3053,17 +3114,19 @@ func TestRecoveredTerminalCancelReplacesUnconfirmedTerminal(t *testing.T) {
 		t.Fatal(err)
 	}
 	daemon := &daemon{store: store, options: options{newID: ids()}, log: slog.New(slog.NewJSONHandler(io.Discard, nil))}
-	daemon.handleCommand(context.Background(), protocol.Command{CommandID: "cancel-1", RunID: key.RunID, Generation: key.Generation, Kind: "cancel"})
+	if !daemon.handleCommand(context.Background(), protocol.Command{CommandID: "cancel-1", RunID: key.RunID, Generation: key.Generation, Kind: "cancel"}) {
+		t.Fatal("recovered cancellation was not acknowledged as rejected")
+	}
 	journal, err := store.LoadJournal(key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if journal.TerminalState != "cancelled" || !journal.TerminalPendingAt.Equal(enteredAt) || len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].State != "cancelled" || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].Outcome != "applied" {
-		t.Fatalf("recovered cancellation did not replace terminal state: %#v", journal)
+	if journal.TerminalState != "completed" || !journal.TerminalPendingAt.Equal(enteredAt) || len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].State != "completed" || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].Outcome != "rejected" {
+		t.Fatalf("recovered cancellation changed terminal state: %#v", journal)
 	}
 }
 
-func TestRecoveredTerminalCancelKeepsRetryingUntilRootStops(t *testing.T) {
+func TestRecoveredTerminalCancelRejectsResolvedTerminal(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
 	if _, err := store.QueueTerminalTransition(key, protocol.StateTransitionRequest{TransitionID: "completed-1", State: "completed", Payload: json.RawMessage(`{}`)}); err != nil {
@@ -3072,33 +3135,124 @@ func TestRecoveredTerminalCancelKeepsRetryingUntilRootStops(t *testing.T) {
 	if _, err := store.ResolveTerminal(key, state.TerminalVerdictAccepted, time.Date(2026, 9, 3, 1, 2, 4, 0, time.UTC)); err != nil {
 		t.Fatal(err)
 	}
-	timers := make(chan *manualDeadlineTimer, 1)
-	daemon := &daemon{store: store, options: options{newID: ids(), newTimer: func(time.Duration) deadlineTimer {
-		timer := &manualDeadlineTimer{channel: make(chan time.Time)}
-		timers <- timer
-		return timer
-	}}, log: slog.New(slog.NewJSONHandler(io.Discard, nil))}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan bool, 1)
-	go func() {
-		done <- daemon.handleCommand(ctx, protocol.Command{CommandID: "cancel-1", RunID: key.RunID, Generation: key.Generation, Kind: "cancel"})
-	}()
-	<-timers
-	cancel()
-	select {
-	case acknowledged := <-done:
-		if acknowledged {
-			t.Fatal("cancel command acknowledged despite an unpersisted terminal intent")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("cancel receipt retry did not stop with its root context")
+	daemon := &daemon{store: store, options: options{newID: ids()}, log: slog.New(slog.NewJSONHandler(io.Discard, nil))}
+	if !daemon.handleCommand(context.Background(), protocol.Command{CommandID: "cancel-1", RunID: key.RunID, Generation: key.Generation, Kind: "cancel"}) {
+		t.Fatal("cancel command was not acknowledged as rejected")
 	}
 	journal, err := store.LoadJournal(key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if journal.TerminalState != "completed" || len(journal.PendingCommandAcknowledgements) != 0 {
+	if journal.TerminalState != "completed" || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].Outcome != "rejected" {
 		t.Fatalf("recovered cancellation changed a resolved terminal journal: %#v", journal)
+	}
+}
+
+func TestCancelRecoveredJournalRejectsExistingTerminalWithoutStoppingProcess(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	if _, err := store.SetProcessDetails(key, 42, "test:42", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.QueueTerminalTransition(key, protocol.StateTransitionRequest{TransitionID: "completed-1", State: "completed", Payload: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminated := false
+	daemon := &daemon{
+		store: store,
+		options: options{
+			newID: ids(),
+			terminatePersist: func(int, string) error {
+				terminated = true
+				return nil
+			},
+		},
+		log: slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	}
+	if !daemon.cancelRecoveredJournal(context.Background(), journal, "cancel-1") {
+		t.Fatal("recovered cancellation was not acknowledged as rejected")
+	}
+	if terminated {
+		t.Fatal("recovered cancellation stopped a process after a durable terminal")
+	}
+	journal, err = store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.TerminalState != "completed" || len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].State != "completed" || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].Outcome != "rejected" {
+		t.Fatalf("recovered terminal cancellation journal = %#v", journal)
+	}
+}
+
+func TestActiveTerminalCancelDoesNotTerminateProcess(t *testing.T) {
+	for _, terminalState := range []string{"completed", "failed"} {
+		t.Run(terminalState, func(t *testing.T) {
+			store, key := claimedStore(t)
+			defer store.Close()
+			if _, err := store.QueueTerminalTransition(key, protocol.StateTransitionRequest{TransitionID: terminalState + "-1", State: terminalState, Payload: json.RawMessage(`{}`)}); err != nil {
+				t.Fatal(err)
+			}
+			process := &recordingProcess{}
+			daemon := &daemon{
+				store:   store,
+				options: options{newID: ids()},
+				running: map[state.RunKey]*runningRun{key: {process: process, claimed: true}},
+				log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
+			}
+			if !daemon.handleCommand(context.Background(), protocol.Command{CommandID: "cancel-1", RunID: key.RunID, Generation: key.Generation, Kind: "cancel"}) {
+				t.Fatal("active cancellation was not acknowledged as rejected")
+			}
+			if process.terminations != 0 {
+				t.Fatalf("active process was terminated after %s became durable: %d", terminalState, process.terminations)
+			}
+			journal, err := store.LoadJournal(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if journal.TerminalState != terminalState || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].Outcome != "rejected" {
+				t.Fatalf("active terminal cancellation journal = %#v", journal)
+			}
+		})
+	}
+}
+
+func TestCancelDuringTerminalReservationDoesNotPublishCancellation(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	process := &recordingProcess{}
+	cancelCalled := false
+	daemon := &daemon{
+		store:   store,
+		options: options{newID: ids()},
+		running: map[state.RunKey]*runningRun{key: {
+			claimed:       true,
+			process:       process,
+			cancel:        func() { cancelCalled = true },
+			terminalizing: 1,
+		}},
+		log: slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	}
+
+	if daemon.handleCommand(context.Background(), protocol.Command{CommandID: "cancel-1", RunID: key.RunID, Generation: key.Generation, Kind: "cancel"}) {
+		t.Fatal("cancel command was acknowledged before terminal reservation became durable")
+	}
+	if process.terminations != 0 || cancelCalled {
+		t.Fatalf("cancel side effects occurred during terminal reservation: process=%d cancel=%t", process.terminations, cancelCalled)
+	}
+	active := daemon.running[key]
+	if active == nil || active.cancelled || active.cancelCommandID != "" {
+		t.Fatalf("terminal reservation cancellation marker = %#v, want unchanged", active)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.PendingTransitions) != 0 || len(journal.PendingCommandAcknowledgements) != 0 {
+		t.Fatalf("terminal reservation published cancellation state: %#v", journal)
 	}
 }
 
@@ -5670,7 +5824,7 @@ func TestTerminalOutboxBackoffSuppressesPermanentFailuresAndResets(t *testing.T)
 		if api.transitionCalls != 1 {
 			t.Fatalf("permanent terminal calls = %d, want 1", api.transitionCalls)
 		}
-		if _, err := store.QueueTerminalTransitionAt(key, protocol.StateTransitionRequest{TransitionID: "cancelled-1", State: "cancelled", Payload: json.RawMessage(`{}`)}, now); err != nil {
+		if _, err := store.QueueCommandAcknowledgement(key, protocol.CommandAcknowledgement{CommandID: "journal-change", Outcome: "rejected", AckID: "journal-change-ack"}); err != nil {
 			t.Fatal(err)
 		}
 		loop.flushAll(context.Background())
@@ -6103,7 +6257,7 @@ func TestCancelWinsCompletionAndFlushesAcknowledgement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].State != "cancelled" || len(journal.PendingCommandAcknowledgements) != 1 {
+	if len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].State != "completed" || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].Outcome != "rejected" {
 		t.Fatalf("terminal journal = %#v", journal)
 	}
 	persistWorkspacePath(t, store, key, "C:\\workspace")
@@ -6119,9 +6273,12 @@ func TestCancelWinsCompletionAndFlushesAcknowledgement(t *testing.T) {
 		t.Fatal("slot was not released after cancelled terminal flush")
 	}
 	select {
-	case <-cleaned:
-		t.Fatal("cancelled workspace artifacts were not retained")
-	default:
+	case succeeded := <-cleaned:
+		if !succeeded {
+			t.Fatal("completed terminal cleanup used failure policy")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("completed terminal cleanup did not run")
 	}
 }
 
@@ -7357,6 +7514,7 @@ type staleTerminalFailureControl struct {
 	fakeControl
 	completedStarted chan struct{}
 	releaseCompleted chan struct{}
+	completedErr     error
 	calls            []string
 }
 
@@ -7386,7 +7544,7 @@ func (client *staleTerminalFailureControl) Transition(_ context.Context, _ strin
 	if request.State == "completed" {
 		close(client.completedStarted)
 		<-client.releaseCompleted
-		return &control.APIError{StatusCode: http.StatusUnprocessableEntity, Code: control.InvalidTransition}
+		return client.completedErr
 	}
 	return nil
 }
