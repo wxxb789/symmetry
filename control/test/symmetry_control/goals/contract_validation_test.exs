@@ -121,6 +121,57 @@ defmodule SymmetryControl.Goals.ContractValidationTest do
              )
   end
 
+  test "bounds CommitPath by valid UTF-8 code points across acceptance and evidence" do
+    opts = [schema_root: @schema_root]
+    composed = String.duplicate("\u00e9", 1024)
+    combining = String.duplicate("e\u0301", 512)
+    overlong_combining = combining <> "x"
+    current_combining = String.duplicate("e\u0301", 1024)
+
+    revision = fixture(@valid_root, "goal-revision.basic.json")
+
+    artifact_revision = fn path ->
+      put_in(
+        revision,
+        ["acceptance_contract", "predicates"],
+        [
+          %{
+            "id" => "artifact",
+            "kind" => "artifact",
+            "resource_id" => "22222222-2222-4222-8222-222222222222",
+            "path" => path
+          }
+        ]
+      )
+    end
+
+    assert :ok == ContractValidation.validate_goal_revision(artifact_revision.(composed), opts)
+    assert :ok == ContractValidation.validate_goal_revision(artifact_revision.(combining), opts)
+
+    assert {:error, :invalid_commit_path} =
+             ContractValidation.validate_goal_revision(
+               artifact_revision.(overlong_combining),
+               opts
+             )
+
+    assert {:error, :invalid_commit_path} =
+             ContractValidation.validate_goal_revision(
+               artifact_revision.(current_combining),
+               opts
+             )
+
+    artifact_evidence = fixture(@valid_root, "evidence.artifact.json")
+
+    for field <- ["source_ref", "payload"] do
+      invalid_evidence = put_in(artifact_evidence, [field, "path"], current_combining)
+
+      assert {:error, :invalid_commit_path} =
+               ContractValidation.validate_evidence(invalid_evidence, opts)
+    end
+
+    refute ContractValidation.valid_commit_path?(<<0xFF>>)
+  end
+
   test "rejects strict fields, unknown enums and unsafe fixture values" do
     opts = [schema_root: @schema_root]
 

@@ -131,6 +131,24 @@ defmodule SymmetryControl.Goals.ContractValidation do
   def validate_adapter(data, opts \\ []), do: validate_adapter_capabilities(data, opts)
 
   @doc """
+  Validate a repository-relative path addressed by a committed artifact.
+
+  CommitPath is bounded by Unicode code points rather than grapheme
+  clusters, and must remain valid UTF-8. The path is checked as supplied;
+  this function deliberately does not normalize it.
+  """
+  @spec valid_commit_path?(term()) :: boolean()
+  def valid_commit_path?(value) when is_binary(value) do
+    String.valid?(value) and
+      length(String.codepoints(value)) in 1..1024 and
+      not String.starts_with?(value, "/") and
+      not Enum.any?(["\\", "//", <<0>>], &String.contains?(value, &1)) and
+      Enum.all?(String.split(value, "/"), &(&1 != ".."))
+  end
+
+  def valid_commit_path?(_value), do: false
+
+  @doc """
   Resolve the effective final-acceptance authority for one immutable revision.
 
   A revision can require an exact operator completion Decision either directly
@@ -692,11 +710,15 @@ defmodule SymmetryControl.Goals.ContractValidation do
        when is_list(predicates) do
     predicates
     |> Enum.reduce_while({:ok, MapSet.new()}, fn
-      %{"id" => id}, {:ok, seen} when is_binary(id) ->
-        if MapSet.member?(seen, id) do
-          {:halt, {:error, {:duplicate_predicate_id, id}}}
+      %{"id" => id} = predicate, {:ok, seen} when is_binary(id) ->
+        with :ok <- validate_acceptance_predicate_semantics(predicate) do
+          if MapSet.member?(seen, id) do
+            {:halt, {:error, {:duplicate_predicate_id, id}}}
+          else
+            {:cont, {:ok, MapSet.put(seen, id)}}
+          end
         else
-          {:cont, {:ok, MapSet.put(seen, id)}}
+          {:error, _reason} = error -> {:halt, error}
         end
 
       _predicate, _result ->
@@ -709,6 +731,12 @@ defmodule SymmetryControl.Goals.ContractValidation do
   end
 
   defp validate_acceptance_predicate_ids(_acceptance), do: {:error, :invalid_acceptance_contract}
+
+  defp validate_acceptance_predicate_semantics(%{"kind" => "artifact", "path" => path}) do
+    if valid_commit_path?(path), do: :ok, else: {:error, :invalid_commit_path}
+  end
+
+  defp validate_acceptance_predicate_semantics(_predicate), do: :ok
 
   defp validate_subject_hash(document) do
     expected = canonical_sha256(document["subject"])
@@ -775,7 +803,9 @@ defmodule SymmetryControl.Goals.ContractValidation do
   end
 
   defp validate_evidence_kind_identity("artifact", subject, source_ref, payload) do
-    with :ok <-
+    with :ok <- validate_commit_path(source_ref["path"]),
+         :ok <- validate_commit_path(payload["path"]),
+         :ok <-
            ensure_equal(
              source_ref["resource_id"],
              payload["resource_id"],
@@ -802,6 +832,10 @@ defmodule SymmetryControl.Goals.ContractValidation do
     do: ensure_equal(source_ref["external_ref"], payload["external_ref"], :external_ref)
 
   defp validate_evidence_kind_identity(_kind, _subject, _source_ref, _payload), do: :ok
+
+  defp validate_commit_path(path) do
+    if valid_commit_path?(path), do: :ok, else: {:error, :invalid_commit_path}
+  end
 
   defp validate_usage_semantics(%{"cost_basis" => cost_basis, "cost_microusd" => cost_microusd}) do
     case {cost_basis, cost_microusd} do

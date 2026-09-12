@@ -9067,14 +9067,7 @@ defmodule SymmetryControl.Goals do
   defp valid_commit?(value),
     do: is_binary(value) and Regex.match?(~r/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/, value)
 
-  defp valid_commit_path?(value) when is_binary(value) do
-    String.length(value) in 1..1024 and
-      not String.starts_with?(value, "/") and
-      not Enum.any?(["\\", "//", <<0>>], &String.contains?(value, &1)) and
-      Enum.all?(String.split(value, "/"), &(&1 != ".."))
-  end
-
-  defp valid_commit_path?(_value), do: false
+  defp valid_commit_path?(value), do: ContractValidation.valid_commit_path?(value)
 
   defp required_sha256(map, key) do
     case value(map, key) do

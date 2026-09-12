@@ -461,6 +461,46 @@ defmodule SymmetryControl.GoalsTest do
     assert {:error, {:invalid_contract, _}} =
              Goals.create_goal(project.id, unsafe_artifact, "operator:test", now: @now)
 
+    overlong_artifact =
+      goal_attrs()
+      |> put_in([:initial_revision, :acceptance_contract], %{
+        "schema_version" => "symmetry.acceptance.v1",
+        "description" => "An approved artifact is required.",
+        "predicates" => [
+          %{
+            "id" => "artifact",
+            "kind" => "artifact",
+            "resource_id" => Ecto.UUID.generate(),
+            "path" => String.duplicate("e\u0301", 1024)
+          }
+        ]
+      })
+
+    assert {:error, {:invalid_contract, :invalid_commit_path}} =
+             Goals.create_goal(project.id, overlong_artifact, "operator:test", now: @now)
+
+    assert {:ok, created, :created} =
+             Goals.create_goal(project.id, goal_attrs(), "operator:test", now: @now)
+
+    overlong_amendment =
+      amended_revision_contract("Reject codepoint-overlong artifact paths.")
+      |> put_in([:acceptance_contract, "predicates"], [
+        %{
+          "id" => "artifact",
+          "kind" => "artifact",
+          "resource_id" => Ecto.UUID.generate(),
+          "path" => String.duplicate("e\u0301", 1024)
+        }
+      ])
+
+    assert {:error, {:invalid_contract, :invalid_commit_path}} =
+             command_current(created.goal.id, "amend", %{
+               revision_contract: overlong_amendment,
+               reason: "The path exceeds the codepoint bound."
+             })
+
+    assert fetch_goal!(created.goal.id).current_revision == 1
+
     unexpected_predicate_field =
       goal_attrs()
       |> put_in([:initial_revision, :acceptance_contract, "predicates"], [
