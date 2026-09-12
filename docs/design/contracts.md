@@ -44,17 +44,23 @@ Review profiles resolve independent validation tasks; model review cannot replac
 an operator_acceptance predicate. Required check-profile availability is checked
 before admission. Built-in Git artifact predicates use the bound resource/commit.
 
-Subject hash is SHA-256 of canonical Subject JSON. Validation checks out that
-exact subject into an isolated validation workspace; the worker's dirty directory
-is not accepted evidence. Builds may write temporary files there; they cannot
-modify the proposed artifact that is subsequently published. A new candidate
-commit is a new subject requiring relevant validation again.
+Subject hash is SHA-256 of canonical Subject JSON. Executable check and review
+validation checks out that exact subject into an isolated validation workspace;
+the worker's dirty directory is not accepted evidence. Built-in artifact
+validation instead reads the named artifact from the verified exact Git object
+database for the bound resource and commit, never from a mutable checkout.
+Builds may write temporary files in an isolated validation workspace; they
+cannot modify the proposed artifact that is subsequently published. A new
+candidate commit is a new subject requiring relevant validation again.
 
 Evidence payload maps `predicate_id` to verdict and concrete check/artifact/review
 receipt. Check receipt contains profile digest, command argv digest, exit code,
 subject_hash, start/finish times and bounded output reference. Artifact receipt
-contains resource, commit, normalized relative path and content digest. No path
-traversal or server-side arbitrary URL fetch. Review receipt contains subject,
+contains resource, commit, and the exact raw repository-relative Git tree path
+accepted by `CommitPath`, together with its content digest. The path is matched
+byte-for-byte in the committed tree; it is not normalized by the host filesystem
+or passed to Git as a pathspec. No path traversal or server-side arbitrary URL
+fetch. Review receipt contains subject,
 review task ID, findings and verdict. Only an authenticated configured validator
 can satisfy a validation predicate; an implementer narrative cannot.
 
