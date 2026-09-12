@@ -32,6 +32,7 @@ var (
 	ErrInvalidSSEField      = errors.New("opencode SSE frame contains an unsupported field")
 	ErrMalformedEvent       = errors.New("opencode SSE event is malformed")
 	ErrUnsupportedEvent     = errors.New("opencode SSE event type is unsupported")
+	ErrInvalidEventVersion  = errors.New("opencode SSE event durable version is invalid")
 	ErrInvalidDurableCursor = errors.New("opencode SSE durable cursor is invalid")
 	ErrCursorRegression     = errors.New("opencode SSE durable sequence is not strictly increasing")
 	ErrPeerOwnership        = errors.New("opencode loopback peer ownership is unverified")
@@ -109,8 +110,7 @@ type Event struct {
 	Durable *DurableCursor
 }
 
-// PromptAdmittedEvent is the only session event presently understood by this
-// protocol foundation. New event types require explicit mapping and tests.
+// PromptAdmittedEvent is OpenCode's durable input-admission event.
 type PromptAdmittedEvent struct {
 	Event
 	SessionID string
@@ -119,6 +119,172 @@ type PromptAdmittedEvent struct {
 	Delivery  string
 	Timestamp int64
 }
+
+// SessionEventKind identifies the locally decoded durable event shape. Unknown
+// native event types are intentionally represented, rather than treated as a
+// terminal transport error; callers may journal a bounded diagnostic and
+// continue replaying later events.
+type SessionEventKind string
+
+const (
+	SessionEventPromptAdmitted SessionEventKind = "prompt_admitted"
+	SessionEventStepStarted    SessionEventKind = "step_started"
+	SessionEventStepEnded      SessionEventKind = "step_ended"
+	SessionEventStepFailed     SessionEventKind = "step_failed"
+	SessionEventTextEnded      SessionEventKind = "text_ended"
+	SessionEventToolCalled     SessionEventKind = "tool_called"
+	SessionEventToolSuccess    SessionEventKind = "tool_success"
+	SessionEventToolFailed     SessionEventKind = "tool_failed"
+	SessionEventRetried        SessionEventKind = "retried"
+	SessionEventUnknown        SessionEventKind = "unknown"
+)
+
+// NativeModelRef is the source-derived subset of OpenCode's Model.Ref.
+type NativeModelRef struct {
+	ID         string
+	ProviderID string
+	Variant    *string
+}
+
+// NativeTokenUsage mirrors the durable step settlement token shape. Values are
+// intentionally retained as native finite numbers; they are not billable
+// Symmetry usage until a provider-specific unit contract is proven.
+type NativeTokenUsage struct {
+	Input     float64
+	Output    float64
+	Reasoning float64
+	Cache     NativeCacheUsage
+}
+
+type NativeCacheUsage struct {
+	Read  float64
+	Write float64
+}
+
+type NativeUnknownError struct {
+	Type    string
+	Message string
+}
+
+type NativeProviderExecution struct {
+	Executed bool
+	Metadata map[string]map[string]json.RawMessage
+}
+
+type NativeStepStartedEvent struct {
+	Event
+	SessionID          string
+	AssistantMessageID string
+	Agent              string
+	Model              NativeModelRef
+	Snapshot           *string
+	Timestamp          int64
+}
+
+type NativeStepEndedEvent struct {
+	Event
+	SessionID          string
+	AssistantMessageID string
+	Finish             string
+	Cost               float64
+	Tokens             NativeTokenUsage
+	Snapshot           *string
+	Files              []string
+	Timestamp          int64
+}
+
+type NativeStepFailedEvent struct {
+	Event
+	SessionID          string
+	AssistantMessageID string
+	Error              NativeUnknownError
+	Timestamp          int64
+}
+
+type NativeTextEndedEvent struct {
+	Event
+	SessionID          string
+	AssistantMessageID string
+	TextID             string
+	Text               string
+	Timestamp          int64
+}
+
+type NativeToolCalledEvent struct {
+	Event
+	SessionID          string
+	AssistantMessageID string
+	CallID             string
+	Tool               string
+	Input              map[string]json.RawMessage
+	Provider           NativeProviderExecution
+	Timestamp          int64
+}
+
+type NativeToolSuccessEvent struct {
+	Event
+	SessionID          string
+	AssistantMessageID string
+	CallID             string
+	Structured         map[string]json.RawMessage
+	Content            []json.RawMessage
+	OutputPaths        []string
+	Result             json.RawMessage
+	Provider           NativeProviderExecution
+	Timestamp          int64
+}
+
+type NativeToolFailedEvent struct {
+	Event
+	SessionID          string
+	AssistantMessageID string
+	CallID             string
+	Error              NativeUnknownError
+	Result             json.RawMessage
+	Provider           NativeProviderExecution
+	Timestamp          int64
+}
+
+type NativeRetryError struct {
+	Message         string
+	StatusCode      *float64
+	IsRetryable     bool
+	ResponseHeaders map[string]string
+	ResponseBody    *string
+	Metadata        map[string]string
+}
+
+type NativeRetriedEvent struct {
+	Event
+	SessionID string
+	Attempt   float64
+	Error     NativeRetryError
+	Timestamp int64
+}
+
+// DecodedSessionEvent is the strict, identity-bound result of decoding one
+// durable /api/session/{id}/event frame. Exactly one known payload pointer is
+// set for a known event; unknown native types retain only the bounded envelope
+// and raw data in Event and have Kind == SessionEventUnknown.
+type DecodedSessionEvent struct {
+	Event
+	Kind      SessionEventKind
+	SessionID string
+
+	PromptAdmitted *PromptAdmittedEvent
+	StepStarted    *NativeStepStartedEvent
+	StepEnded      *NativeStepEndedEvent
+	StepFailed     *NativeStepFailedEvent
+	TextEnded      *NativeTextEndedEvent
+	ToolCalled     *NativeToolCalledEvent
+	ToolSuccess    *NativeToolSuccessEvent
+	ToolFailed     *NativeToolFailedEvent
+	Retried        *NativeRetriedEvent
+}
+
+// SessionEvent is a concise public name for callers that do not need to
+// distinguish the implementation's decoded wrapper type.
+type SessionEvent = DecodedSessionEvent
 
 func (request CreateSessionRequest) validate() error {
 	if request.ID != "" && !isID(request.ID, "ses_") {

@@ -1074,14 +1074,21 @@ func (session *nativeSession) failTurnAfterStreamError(err error) {
 
 func (session *nativeSession) observeSessionFrames(validator *SessionEventValidator, frames []Frame, messageID string) error {
 	for _, frame := range frames {
-		event, err := validator.Observe(frame)
+		event, err := validator.ObserveEvent(frame)
 		if err != nil {
 			return err
 		}
-		if event.MessageID != messageID {
+		if event.Kind == SessionEventPromptAdmitted && (event.PromptAdmitted == nil || event.PromptAdmitted.MessageID != messageID) {
 			return fmt.Errorf("%w: expected message %q", ErrIdentityMismatch, messageID)
 		}
-		if err := session.emit(session.eventContext, harness.Event{Kind: harness.EventNativeFrame, Sequence: frame.Sequence, Code: "opencode_session_event", Message: "OpenCode durable session event observed"}); err != nil {
+		nativeEvent := harness.Event{Kind: harness.EventNativeFrame, Sequence: frame.Sequence, Code: "opencode_session_event", Message: "OpenCode durable session event observed"}
+		if event.Kind == SessionEventUnknown {
+			nativeEvent.Kind = harness.EventDiagnostic
+			nativeEvent.Diagnostic = true
+			nativeEvent.Code = "opencode_unknown_session_event"
+			nativeEvent.Message = "OpenCode durable session event is unknown and was not interpreted"
+		}
+		if err := session.emit(session.eventContext, nativeEvent); err != nil {
 			return err
 		}
 	}
@@ -1147,7 +1154,7 @@ func (session *nativeSession) recordStreamError(err error) {
 		session.streamErr = err
 	}
 	session.mu.Unlock()
-	_ = session.emit(session.eventContext, harness.Event{Kind: harness.EventDiagnostic, Diagnostic: true, Code: "opencode_stream_error", Message: err.Error()})
+	_ = session.emit(session.eventContext, harness.Event{Kind: harness.EventDiagnostic, Diagnostic: true, Code: "opencode_stream_error", Message: "OpenCode durable event stream failed; native identifiers withheld"})
 }
 
 func (session *nativeSession) emit(ctx context.Context, event harness.Event) error {

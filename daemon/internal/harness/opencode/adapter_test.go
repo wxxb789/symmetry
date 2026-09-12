@@ -521,8 +521,70 @@ func TestSessionWatcherRejectsUnexpectedAdmissionIdentityBeforePublishingFrame(t
 	done := make(chan struct{})
 	go session.watchSessionEvents(stream, done, "ses_native_1", "msg_expected")
 	<-done
+	sink.mu.Lock()
+	events := append([]harness.Event(nil), sink.events...)
+	sink.mu.Unlock()
 	if !sink.hasDiagnostic("opencode_stream_error") || sink.hasKind(harness.EventNativeFrame) {
 		t.Fatalf("events = %+v; want only stream failure diagnostic", sink.events)
+	}
+	for _, event := range events {
+		if event.Code == "opencode_stream_error" {
+			if event.Message != "OpenCode durable event stream failed; native identifiers withheld" {
+				t.Fatalf("stream diagnostic message = %q, want fixed redacted message", event.Message)
+			}
+			if strings.Contains(event.Message, "ses_native_1") || strings.Contains(event.Message, "msg_other") || strings.Contains(event.Message, "msg_expected") {
+				t.Fatalf("stream diagnostic leaked native identifier: %q", event.Message)
+			}
+		}
+	}
+}
+
+func TestSessionWatcherPublishesKnownLifecycleAndDiagnosesUnknownEvents(t *testing.T) {
+	sessionContext, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sink := &recordingSink{}
+	eventContext, cancelEvents := context.WithCancel(sessionContext)
+	defer cancelEvents()
+	session := newNativeSession(sessionContext, cancel, eventContext, cancelEvents, sink, t.TempDir(), func(Config) (api, error) { return &fakeAPI{}, nil }, "opencode", "secret", func(int, string) ConnectionVerifier { return func(context.Context, net.Conn) error { return nil } }, time.Millisecond, time.Second)
+	stream := &streamHandle{body: io.NopCloser(strings.NewReader(strings.Join([]string{
+		"data: {\"id\":\"evt_admission\",\"type\":\"session.next.prompt.admitted\",\"durable\":{\"aggregateID\":\"ses_native_1\",\"seq\":1,\"version\":1},\"data\":{\"timestamp\":1,\"sessionID\":\"ses_native_1\",\"messageID\":\"msg_expected\",\"prompt\":{\"text\":\"one\"},\"delivery\":\"steer\"}}\n\n",
+		"data: {\"id\":\"evt_step\",\"type\":\"session.next.step.started\",\"durable\":{\"aggregateID\":\"ses_native_1\",\"seq\":2,\"version\":1},\"data\":{\"timestamp\":2,\"sessionID\":\"ses_native_1\",\"assistantMessageID\":\"msg_assistant\",\"agent\":\"build\",\"model\":{\"id\":\"model\",\"providerID\":\"provider\"}}}\n\n",
+		"data: {\"id\":\"evt_tool\",\"type\":\"session.next.tool.called\",\"durable\":{\"aggregateID\":\"ses_native_1\",\"seq\":3,\"version\":1},\"data\":{\"timestamp\":3,\"sessionID\":\"ses_native_1\",\"assistantMessageID\":\"msg_assistant\",\"callID\":\"call_1\",\"tool\":\"read\",\"input\":{\"path\":\"README.md\"},\"provider\":{\"executed\":true}}}\n\n",
+		"data: {\"id\":\"evt_step_ended\",\"type\":\"session.next.step.ended\",\"durable\":{\"aggregateID\":\"ses_native_1\",\"seq\":4,\"version\":2},\"data\":{\"timestamp\":4,\"sessionID\":\"ses_native_1\",\"assistantMessageID\":\"msg_assistant\",\"finish\":\"stop\",\"cost\":0,\"tokens\":{\"input\":1,\"output\":1,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}}}}\n\n",
+		"data: {\"id\":\"evt_unknown\",\"type\":\"session.next.future\",\"durable\":{\"aggregateID\":\"ses_native_1\",\"seq\":5,\"version\":9},\"data\":{\"sessionID\":\"ses_native_1\"}}\n\n",
+	}, "")))}
+	done := make(chan struct{})
+	go session.watchSessionEvents(stream, done, "ses_native_1", "msg_expected")
+	<-done
+	sink.mu.Lock()
+	events := append([]harness.Event(nil), sink.events...)
+	sink.mu.Unlock()
+	var lifecycle []harness.Event
+	var unknown []harness.Event
+	for _, event := range events {
+		if event.Code == "opencode_session_event" {
+			lifecycle = append(lifecycle, event)
+		}
+		if event.Code == "opencode_unknown_session_event" {
+			unknown = append(unknown, event)
+		}
+	}
+	if len(lifecycle) != 4 {
+		t.Fatalf("lifecycle events = %+v; want all four known events retained", events)
+	}
+	for index, event := range lifecycle {
+		if event.Kind != harness.EventNativeFrame || event.Diagnostic || event.Sequence != uint64(index+1) {
+			t.Fatalf("lifecycle event[%d] = %+v; want native frame sequence %d", index, event, index+1)
+		}
+	}
+	if len(unknown) != 1 || unknown[0].Kind != harness.EventDiagnostic || !unknown[0].Diagnostic {
+		t.Fatalf("unknown events = %+v; want one diagnostic-only event", unknown)
+	}
+	session.mu.Lock()
+	streamErr := session.streamErr
+	session.mu.Unlock()
+	if !errors.Is(streamErr, errStreamEndedUnknown) {
+		t.Fatalf("stream error = %v, want only EOF without a terminal mapping", streamErr)
 	}
 }
 
