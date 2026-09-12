@@ -1811,7 +1811,7 @@ func (daemon *daemon) cancelRecoveredJournal(ctx context.Context, journal state.
 		if commandID == "" || state.CommandAcknowledgementRetired(journal) {
 			return false
 		}
-		return daemon.queueCommandAcknowledgementWithContext(ctx, key, commandID, "rejected")
+		return daemon.replayOrRejectCancellationAcknowledgement(ctx, key, commandID, journal)
 	}
 	if err := daemon.retainUnknownGoalLaunchWorkspaceChecked(key); err != nil {
 		if daemon.log != nil {
@@ -1839,7 +1839,7 @@ func (daemon *daemon) cancelRecoveredJournal(ctx context.Context, journal state.
 				daemon.log.Warn("recovered_cancel_process_stop_blocked_by_terminal", "run_id", journal.RunID, "generation", journal.Generation)
 			}
 			if durableTerminalPresent(latest) && commandID != "" {
-				return daemon.queueCommandAcknowledgementWithContext(ctx, key, commandID, "rejected")
+				return daemon.replayOrRejectCancellationAcknowledgement(ctx, key, commandID, latest)
 			}
 			return false
 		}
@@ -6142,7 +6142,7 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 			if state.CommandAcknowledgementRetired(journal) {
 				return false
 			}
-			return daemon.queueCommandAcknowledgementWithContext(ctx, key, command.CommandID, "rejected")
+			return daemon.replayOrRejectCancellationAcknowledgement(ctx, key, command.CommandID, journal)
 		}
 		daemon.mu.Lock()
 		active := daemon.running[key]
@@ -6432,6 +6432,29 @@ func (daemon *daemon) rejectCancellationIfTerminalDurable(ctx context.Context, k
 	if !durableTerminalPresent(journal) || state.CommandAcknowledgementRetired(journal) {
 		return false
 	}
+	return daemon.replayOrRejectCancellationAcknowledgement(ctx, key, commandID, journal)
+}
+
+func hasPendingCommandAcknowledgement(journal state.RunJournal, commandID string) bool {
+	if commandID == "" {
+		return false
+	}
+	for _, acknowledgement := range journal.PendingCommandAcknowledgements {
+		if acknowledgement.CommandID == commandID {
+			return true
+		}
+	}
+	return false
+}
+
+func (daemon *daemon) replayOrRejectCancellationAcknowledgement(ctx context.Context, key state.RunKey, commandID string, journal state.RunJournal) bool {
+	if commandID == "" || state.CommandAcknowledgementRetired(journal) {
+		return false
+	}
+	if hasPendingCommandAcknowledgement(journal, commandID) {
+		daemon.signalOutboxFor(key)
+		return true
+	}
 	return daemon.queueCommandAcknowledgementWithContext(ctx, key, commandID, "rejected")
 }
 
@@ -6460,6 +6483,9 @@ func (daemon *daemon) queueCancellationReceipt(ctx context.Context, key state.Ru
 			journal, loadErr := daemon.store.LoadJournal(key)
 			if loadErr == nil && state.CommandAcknowledgementRetired(journal) {
 				return false
+			}
+			if loadErr == nil {
+				return daemon.replayOrRejectCancellationAcknowledgement(ctx, key, commandID, journal)
 			}
 			return daemon.queueCommandAcknowledgementWithContext(ctx, key, commandID, "rejected")
 		}
@@ -6525,6 +6551,10 @@ func (daemon *daemon) queueCommandAcknowledgementWithContext(ctx context.Context
 		}
 		if daemon.commandAcknowledgementRetired(key) {
 			return false
+		}
+		if current, loadErr := daemon.store.LoadJournal(key); loadErr == nil && hasPendingCommandAcknowledgement(current, commandID) {
+			daemon.signalOutboxFor(key)
+			return true
 		}
 		if daemon.log != nil {
 			daemon.log.Warn("queue_command_acknowledgement_failed", "run_id", key.RunID, "generation", key.Generation, "command_id", commandID, "error", err)

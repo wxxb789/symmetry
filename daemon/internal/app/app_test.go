@@ -3148,6 +3148,47 @@ func TestRecoveredTerminalCancelRejectsResolvedTerminal(t *testing.T) {
 	}
 }
 
+func TestTerminalCancellationReplayPreservesPendingCommandAcknowledgement(t *testing.T) {
+	for _, path := range []string{"recovered", "receipt"} {
+		for _, outcome := range []string{"applied", "failed"} {
+			t.Run(path+"/"+outcome, func(t *testing.T) {
+				store, key := claimedStore(t)
+				defer store.Close()
+				if _, err := store.QueueTerminalTransition(key, protocol.StateTransitionRequest{TransitionID: "completed-1", State: "completed", Payload: json.RawMessage(`{}`)}); err != nil {
+					t.Fatal(err)
+				}
+				acknowledgement := protocol.CommandAcknowledgement{RunID: key.RunID, CommandID: "cancel-1", Outcome: outcome, AckID: "ack-" + outcome}
+				queued, err := store.QueueCommandAcknowledgement(key, acknowledgement)
+				if err != nil {
+					t.Fatal(err)
+				}
+				acknowledgement = queued.PendingCommandAcknowledgements[0]
+				journal, err := store.LoadJournal(key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				daemon := &daemon{store: store, options: options{newID: ids()}, log: slog.New(slog.NewJSONHandler(io.Discard, nil))}
+				var acknowledged bool
+				if path == "recovered" {
+					acknowledged = daemon.cancelRecoveredJournal(context.Background(), journal, acknowledgement.CommandID)
+				} else {
+					acknowledged = daemon.queueCancellationReceipt(context.Background(), key, acknowledgement.CommandID)
+				}
+				if !acknowledged {
+					t.Fatal("existing cancellation acknowledgement was not replayed")
+				}
+				loaded, err := store.LoadJournal(key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if loaded.TerminalState != "completed" || len(loaded.PendingTransitions) != 1 || loaded.PendingTransitions[0].State != "completed" || len(loaded.PendingCommandAcknowledgements) != 1 || loaded.PendingCommandAcknowledgements[0] != acknowledgement {
+					t.Fatalf("terminal cancellation replay changed durable receipt: %#v", loaded)
+				}
+			})
+		}
+	}
+}
+
 func TestCancelRecoveredJournalRejectsExistingTerminalWithoutStoppingProcess(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
