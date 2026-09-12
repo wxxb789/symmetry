@@ -143,7 +143,7 @@ func runGitRevParse(ctx context.Context, workspace, argument string) (string, er
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	command := exec.CommandContext(ctx, "git", "-C", workspace, "rev-parse", argument)
+	command := gitNoReplaceObjectsCommand(ctx, workspace, "rev-parse", argument)
 	output, err := command.Output()
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -156,6 +156,13 @@ func runGitRevParse(ctx context.Context, workspace, argument string) (string, er
 		return "", fmt.Errorf("git rev-parse %s returned invalid output", argument)
 	}
 	return value, nil
+}
+
+func gitNoReplaceObjectsCommand(ctx context.Context, workspace string, arguments ...string) *exec.Cmd {
+	commandArguments := make([]string, 0, len(arguments)+3)
+	commandArguments = append(commandArguments, "--no-replace-objects", "-C", workspace)
+	commandArguments = append(commandArguments, arguments...)
+	return exec.CommandContext(ctx, "git", commandArguments...)
 }
 
 func readFingerprintOwnership(ctx context.Context, path string, prepared Prepared, repository string) (ownership, error) {

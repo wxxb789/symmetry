@@ -255,10 +255,10 @@ func prepareExisting(bindingKey string, binding config.Workspace, run RunRef) (P
 }
 
 func (manager *Manager) prepareWorktree(ctx context.Context, bindingKey string, binding config.Workspace, run RunRef) (Prepared, error) {
-	return manager.prepareWorktreeAt(ctx, bindingKey, binding, run, binding.Ref)
+	return manager.prepareWorktreeAt(ctx, bindingKey, binding, run, binding.Ref, false)
 }
 
-func (manager *Manager) prepareWorktreeAt(ctx context.Context, bindingKey string, binding config.Workspace, run RunRef, ref string) (Prepared, error) {
+func (manager *Manager) prepareWorktreeAt(ctx context.Context, bindingKey string, binding config.Workspace, run RunRef, ref string, noReplaceObjects bool) (Prepared, error) {
 	repository, err := resolveDirectory(binding.Repository)
 	if err != nil {
 		return Prepared{}, fmt.Errorf("resolve workspace repository %q: %w", binding.Repository, err)
@@ -305,7 +305,12 @@ func (manager *Manager) prepareWorktreeAt(ctx context.Context, bindingKey string
 		return Prepared{}, fmt.Errorf("refusing foreign worktree target %q after creating reservation", target)
 	}
 
-	command := exec.CommandContext(ctx, "git", "-C", repository, "worktree", "add", "--detach", target, ref)
+	var command *exec.Cmd
+	if noReplaceObjects {
+		command = gitNoReplaceObjectsCommand(ctx, repository, "worktree", "add", "--detach", target, ref)
+	} else {
+		command = exec.CommandContext(ctx, "git", "-C", repository, "worktree", "add", "--detach", target, ref)
+	}
 	if output, err := command.CombinedOutput(); err != nil {
 		return manager.handleFailedAdd(ctx, err, output, prepared)
 	}

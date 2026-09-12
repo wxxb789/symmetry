@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"sort"
 	"strings"
@@ -26,6 +27,14 @@ const (
 	SubjectErrorWorkspaceBinding SubjectErrorCode = "workspace_binding"
 )
 
+const (
+	// These bounds protect the daemon from retaining untrusted Git output in
+	// memory. The values are deliberately local to the workspace boundary:
+	// artifact/tree sizes are not part of the wire contract or daemon config.
+	maxSubjectArtifactBlobBytes = 16 << 20
+	maxSubjectTreeOutputBytes   = 64 << 20
+)
+
 var (
 	// ErrSubjectUnreachable means that the admitted commit is not a usable
 	// commit object in the configured repository's object database.
@@ -36,6 +45,12 @@ var (
 	// ErrUnsupportedSubjectTree means that the committed tree contains an
 	// entry for which the manifest contract has no fixed safe representation.
 	ErrUnsupportedSubjectTree = errors.New("subject tree contains unsupported entry")
+	// ErrSubjectArtifactTooLarge means that a committed blob is too large for
+	// bounded in-memory workspace inspection.
+	ErrSubjectArtifactTooLarge = errors.New("subject artifact exceeds size limit")
+	// ErrSubjectTreeTooLarge means that the committed tree listing is too large
+	// for bounded in-memory workspace inspection.
+	ErrSubjectTreeTooLarge = errors.New("subject tree exceeds size limit")
 )
 
 // SubjectError is a typed, fail-closed error returned by subject-aware
@@ -171,7 +186,7 @@ func (manager *Manager) PrepareSubject(ctx context.Context, bindingKey string, r
 	if materialized != admitted {
 		return SubjectWorkspace{}, subjectMismatch(bindingKey, admitted.Commit, subjectDigestDescription(admitted), subjectDigestDescription(materialized))
 	}
-	prepared, err := manager.prepareWorktreeAt(ctx, bindingKey, binding, run, admitted.Commit)
+	prepared, err := manager.prepareWorktreeAt(ctx, bindingKey, binding, run, admitted.Commit, true)
 	if err != nil {
 		return SubjectWorkspace{}, err
 	}
@@ -396,7 +411,7 @@ func verifySubjectCommit(ctx context.Context, repository, commit string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	command := exec.CommandContext(ctx, "git", "-C", repository, "rev-parse", "--verify", commit+"^{commit}")
+	command := gitNoReplaceObjectsCommand(ctx, repository, "rev-parse", "--verify", commit+"^{commit}")
 	output, err := command.Output()
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -473,7 +488,7 @@ func verifySubjectWorktreeIdentity(ctx context.Context, prepared Prepared, repos
 }
 
 func subjectWorktreeDetached(ctx context.Context, path string) (bool, error) {
-	command := exec.CommandContext(ctx, "git", "-C", path, "symbolic-ref", "--quiet", "HEAD")
+	command := gitNoReplaceObjectsCommand(ctx, path, "symbolic-ref", "--quiet", "HEAD")
 	err := command.Run()
 	if err == nil {
 		return false, nil
@@ -499,8 +514,8 @@ func gitTreeDigest(ctx context.Context, repository, commit string) (string, erro
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	command := exec.CommandContext(ctx, "git", "-C", repository, "ls-tree", "--full-tree", "-r", "-z", commit)
-	output, err := command.Output()
+	command := gitNoReplaceObjectsCommand(ctx, repository, "ls-tree", "--full-tree", "-r", "-z", commit)
+	output, err := gitCommandOutputLimited(ctx, command, maxSubjectTreeOutputBytes, ErrSubjectTreeTooLarge)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return "", ctxErr
@@ -577,13 +592,69 @@ func parseTreeManifest(ctx context.Context, repository string, output []byte) ([
 }
 
 func gitBlobContent(ctx context.Context, repository, objectID string) ([]byte, error) {
-	command := exec.CommandContext(ctx, "git", "-C", repository, "cat-file", "blob", objectID)
-	output, err := command.Output()
+	command := gitNoReplaceObjectsCommand(ctx, repository, "cat-file", "blob", objectID)
+	output, err := gitCommandOutputLimited(ctx, command, maxSubjectArtifactBlobBytes, ErrSubjectArtifactTooLarge)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
 		return nil, err
+	}
+	return output, nil
+}
+
+// gitCommandOutputLimited runs a Git command while bounding the amount of
+// stdout retained by the daemon. The command is killed as soon as the bound
+// is crossed, and Wait is always called after Start so no child or pipe is
+// leaked. CommandContext remains the authority for cancellation.
+func gitCommandOutputLimited(ctx context.Context, command *exec.Cmd, maxBytes int, limitErr error) ([]byte, error) {
+	if ctx == nil {
+		return nil, errors.New("git command context is nil")
+	}
+	if command == nil {
+		return nil, errors.New("git command is nil")
+	}
+	if maxBytes <= 0 {
+		return nil, errors.New("git command output limit must be positive")
+	}
+	if limitErr == nil {
+		return nil, errors.New("git command output limit error is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := command.Start(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, err
+	}
+
+	output, readErr := io.ReadAll(io.LimitReader(stdout, int64(maxBytes)+1))
+	overLimit := readErr == nil && len(output) > maxBytes
+	if overLimit || readErr != nil {
+		// A reader error or an output limit can otherwise leave a child blocked
+		// on a full pipe. Process.Kill is best-effort; Wait below is mandatory.
+		_ = command.Process.Kill()
+	}
+	waitErr := command.Wait()
+
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
+	if overLimit {
+		return nil, fmt.Errorf("%w: output exceeded %d bytes", limitErr, maxBytes)
+	}
+	if readErr != nil {
+		return nil, readErr
+	}
+	if waitErr != nil {
+		return nil, waitErr
 	}
 	return output, nil
 }

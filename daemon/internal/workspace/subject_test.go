@@ -3,11 +3,14 @@ package workspace
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/config"
 )
@@ -62,6 +65,61 @@ func TestPrepareSubjectUsesAdmittedCommitAfterRefDrift(t *testing.T) {
 		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
 			t.Fatalf("inspect detached worktree HEAD: %v\n%s", err, output)
 		}
+	}
+}
+
+func TestMaterializeSubjectIgnoresGitReplaceRefs(t *testing.T) {
+	repository := newRepository(t)
+	originalCommit := gitOutput(t, repository, "rev-parse", "HEAD")
+	manager := New(map[string]config.Workspace{
+		"primary": {
+			Policy: config.WorkspacePolicyGitWorktree, Repository: repository, Root: filepath.Join(t.TempDir(), "worktrees"), Ref: "HEAD", Cleanup: config.CleanupAlways,
+		},
+	})
+	expected, err := manager.MaterializeSubject(context.Background(), "primary", subjectResourceID, originalCommit)
+	if err != nil {
+		t.Fatalf("MaterializeSubject() before replace refs error = %v", err)
+	}
+
+	installSubjectReplaceRefs(t, repository, originalCommit, "README.md", "replacement tree and blob\n")
+	actual, err := manager.MaterializeSubject(context.Background(), "primary", subjectResourceID, originalCommit)
+	if err != nil {
+		t.Fatalf("MaterializeSubject() with replace refs error = %v", err)
+	}
+	if actual != expected {
+		t.Fatalf("MaterializeSubject() = %#v, want original Subject %#v", actual, expected)
+	}
+}
+
+func TestPrepareSubjectIgnoresGitReplaceRefs(t *testing.T) {
+	repository := newRepository(t)
+	originalCommit := gitOutput(t, repository, "rev-parse", "HEAD")
+	manager := New(map[string]config.Workspace{
+		"primary": {
+			Policy: config.WorkspacePolicyGitWorktree, Repository: repository, Root: filepath.Join(t.TempDir(), "worktrees"), Ref: "HEAD", Cleanup: config.CleanupAlways,
+		},
+	})
+	subject, err := manager.MaterializeSubject(context.Background(), "primary", subjectResourceID, originalCommit)
+	if err != nil {
+		t.Fatalf("MaterializeSubject() error = %v", err)
+	}
+	installSubjectReplaceRefs(t, repository, originalCommit, "README.md", "replacement checkout bytes\n")
+
+	prepared, err := manager.PrepareSubject(context.Background(), "primary", RunRef{RunID: "subject-replace-refs", Generation: 1}, subject)
+	if err != nil {
+		t.Fatalf("PrepareSubject() with replace refs error = %v", err)
+	}
+	defer func() {
+		if err := manager.Cleanup(context.Background(), prepared.Prepared, true); err != nil {
+			t.Errorf("Cleanup() error = %v", err)
+		}
+	}()
+	content, err := os.ReadFile(filepath.Join(prepared.Prepared.Path, "README.md"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if string(content) != "test\n" {
+		t.Fatalf("prepared README.md = %q, want original bytes %q", content, "test\n")
 	}
 }
 
@@ -324,6 +382,36 @@ func gitOutput(t *testing.T, directory string, arguments ...string) string {
 	return strings.TrimSpace(runGitOutput(t, directory, arguments...))
 }
 
+func gitOutputNoReplace(t *testing.T, directory string, arguments ...string) string {
+	t.Helper()
+	command := exec.Command("git", append([]string{"--no-replace-objects", "-C", directory}, arguments...)...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git --no-replace-objects %s: %v\n%s", strings.Join(arguments, " "), err, output)
+	}
+	return strings.TrimSpace(string(output))
+}
+
+func installSubjectReplaceRefs(t *testing.T, repository, originalCommit, path, replacementContent string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(repository, path), []byte(replacementContent), 0o600); err != nil {
+		t.Fatalf("WriteFile() replacement error = %v", err)
+	}
+	runGit(t, repository, "add", path)
+	runGit(t, repository, "commit", "-m", "replacement object")
+	replacementCommit := gitOutput(t, repository, "rev-parse", "HEAD")
+	originalBlob := gitOutputNoReplace(t, repository, "rev-parse", originalCommit+":"+path)
+	replacementBlob := gitOutputNoReplace(t, repository, "rev-parse", replacementCommit+":"+path)
+	if originalBlob == replacementBlob {
+		t.Fatalf("replacement blob unexpectedly matches original %q", originalBlob)
+	}
+	runGit(t, repository, "replace", originalBlob, replacementBlob)
+	runGit(t, repository, "replace", originalCommit, replacementCommit)
+	if normal := gitOutput(t, repository, "show", originalCommit+":"+path); normal == gitOutputNoReplace(t, repository, "show", originalCommit+":"+path) {
+		t.Fatal("replace refs did not change the visible artifact")
+	}
+}
+
 func runGitOutput(t *testing.T, directory string, arguments ...string) string {
 	t.Helper()
 	command := exec.Command("git", append([]string{"-C", directory}, arguments...)...)
@@ -332,4 +420,89 @@ func runGitOutput(t *testing.T, directory string, arguments ...string) string {
 		t.Fatalf("git %s: %v\n%s", strings.Join(arguments, " "), err, output)
 	}
 	return string(output)
+}
+
+func TestGitCommandOutputLimitedRejectsOversizedBlobOutput(t *testing.T) {
+	limit := 64
+	command := workspaceOutputHelperCommand(t, context.Background(), "emit", limit+1)
+
+	_, err := gitCommandOutputLimited(context.Background(), command, limit, ErrSubjectArtifactTooLarge)
+	if err == nil || !errors.Is(err, ErrSubjectArtifactTooLarge) {
+		t.Fatalf("gitCommandOutputLimited() error = %v, want ErrSubjectArtifactTooLarge", err)
+	}
+}
+
+func TestGitCommandOutputLimitedRejectsOversizedTreeOutput(t *testing.T) {
+	limit := 96
+	command := workspaceOutputHelperCommand(t, context.Background(), "emit", limit+1)
+
+	_, err := gitCommandOutputLimited(context.Background(), command, limit, ErrSubjectTreeTooLarge)
+	if err == nil || !errors.Is(err, ErrSubjectTreeTooLarge) {
+		t.Fatalf("gitCommandOutputLimited() error = %v, want ErrSubjectTreeTooLarge", err)
+	}
+}
+
+func TestGitCommandOutputLimitedHonorsContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	command := workspaceOutputHelperCommand(t, ctx, "block", 0)
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := gitCommandOutputLimited(ctx, command, 64, ErrSubjectTreeTooLarge)
+		result <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("gitCommandOutputLimited() error = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("gitCommandOutputLimited() did not stop after context cancellation")
+	}
+}
+
+func workspaceOutputHelperCommand(t *testing.T, ctx context.Context, mode string, count int) *exec.Cmd {
+	t.Helper()
+	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestWorkspaceOutputHelper$", "--", mode, strconv.Itoa(count))
+	command.Env = append(os.Environ(), "SYMMETRY_WORKSPACE_OUTPUT_HELPER=1")
+	return command
+}
+
+func TestWorkspaceOutputHelper(t *testing.T) {
+	if os.Getenv("SYMMETRY_WORKSPACE_OUTPUT_HELPER") != "1" {
+		return
+	}
+	separator := -1
+	for index, argument := range os.Args {
+		if argument == "--" {
+			separator = index
+			break
+		}
+	}
+	if separator < 0 || separator+2 >= len(os.Args) {
+		fmt.Fprintln(os.Stderr, "invalid workspace output helper arguments")
+		os.Exit(2)
+	}
+	mode := os.Args[separator+1]
+	count, err := strconv.Atoi(os.Args[separator+2])
+	if err != nil || count < 0 {
+		fmt.Fprintln(os.Stderr, "invalid workspace output helper count")
+		os.Exit(2)
+	}
+	switch mode {
+	case "emit":
+		_, _ = os.Stdout.Write([]byte(strings.Repeat("x", count)))
+	case "block":
+		_, _ = os.Stdout.Write([]byte("ready"))
+		for {
+			time.Sleep(time.Second)
+		}
+	default:
+		fmt.Fprintln(os.Stderr, "invalid workspace output helper mode")
+		os.Exit(2)
+	}
 }
