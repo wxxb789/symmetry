@@ -1,0 +1,4 @@
+: source-derived synthetic fixture; not a live capability capture
+data: {"id":"evt_step_ended_4","type":"session.next.step.ended","durable":{"aggregateID":"ses_fixture_missing","seq":2,"version":2},"data":{"timestamp":1789052195000,"sessionID":"ses_fixture_missing","assistantMessageID":"msg_fixture_assistant","finish":"stop","cost":0,"tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}}}}
+
+data: {"id":"evt_text_ended_2","type":"session.next.text.ended","durable":{"aggregateID":"ses_fixture_missing","seq":3,"version":1},"data":{"timestamp":1789052196000,"sessionID":"ses_fixture_missing","assistantMessageID":"msg_fixture_assistant","textID":"part_fixture_text","text":"plain prose without a canonical task result"}}

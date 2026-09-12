@@ -1,0 +1,6 @@
+: source-derived synthetic fixture; not a live capability capture
+data: {"id":"evt_step_started_1","type":"session.next.step.started","durable":{"aggregateID":"ses_fixture_terminal","seq":2,"version":1},"data":{"timestamp":1789052191000,"sessionID":"ses_fixture_terminal","assistantMessageID":"msg_fixture_assistant","agent":"build","model":{"id":"model-fixture","providerID":"provider-fixture"}}}
+
+data: {"id":"evt_text_ended_1","type":"session.next.text.ended","durable":{"aggregateID":"ses_fixture_terminal","seq":3,"version":1},"data":{"timestamp":1789052192000,"sessionID":"ses_fixture_terminal","assistantMessageID":"msg_fixture_assistant","textID":"part_fixture_text","text":"{\"schema_version\":\"symmetry.task_result.v1\"}"}}
+
+data: {"id":"evt_step_ended_1","type":"session.next.step.ended","durable":{"aggregateID":"ses_fixture_terminal","seq":4,"version":2},"data":{"timestamp":1789052193000,"sessionID":"ses_fixture_terminal","assistantMessageID":"msg_fixture_assistant","finish":"stop","cost":0,"tokens":{"input":1,"output":2,"reasoning":0,"cache":{"read":0,"write":0}}}}

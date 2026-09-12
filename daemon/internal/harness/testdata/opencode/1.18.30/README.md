@@ -2,7 +2,14 @@
 
 These synthetic fixtures model the locally inspected OpenCode `serve` API at
 version `1.18.30` (upstream commit `3104c1428ec91f809e5ab86631300de41eb6952e`).
-They exercise HTTP identity and SSE framing/cursor validation only.
+They exercise HTTP identity, SSE framing/cursor validation, and strict
+source-derived durable event decoding only.
+
+The lifecycle fixtures (`lifecycle-terminal.sse`, `lifecycle-tool-retry.sse`,
+`unknown-then-terminal.sse`, and `missing-result.sse`) are synthetic sequences
+derived from the pinned upstream event definitions. They are not captures from
+a live model, do not prove terminal-result behavior, and must not promote any
+OpenCode capability.
 
 The fixture files do not capture provider credentials, model prompts, native
 lifecycle, terminal results, usage, resume, permissions, artifact recovery, or

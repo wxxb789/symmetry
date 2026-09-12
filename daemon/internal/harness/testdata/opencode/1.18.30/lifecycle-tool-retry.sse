@@ -1,0 +1,8 @@
+: source-derived synthetic fixture; not a live capability capture
+data: {"id":"evt_tool_called_1","type":"session.next.tool.called","durable":{"aggregateID":"ses_fixture_tool","seq":2,"version":1},"data":{"timestamp":1789052191000,"sessionID":"ses_fixture_tool","assistantMessageID":"msg_fixture_assistant","callID":"call_fixture_1","tool":"read","input":{"path":"README.md"},"provider":{"executed":true}}}
+
+data: {"id":"evt_tool_failed_1","type":"session.next.tool.failed","durable":{"aggregateID":"ses_fixture_tool","seq":3,"version":1},"data":{"timestamp":1789052192000,"sessionID":"ses_fixture_tool","assistantMessageID":"msg_fixture_assistant","callID":"call_fixture_1","error":{"type":"unknown","message":"temporary failure"},"provider":{"executed":false}}}
+
+data: {"id":"evt_retried_1","type":"session.next.retried","durable":{"aggregateID":"ses_fixture_tool","seq":4,"version":1},"data":{"timestamp":1789052193000,"sessionID":"ses_fixture_tool","attempt":1,"error":{"message":"temporary failure","isRetryable":true}}}
+
+data: {"id":"evt_step_ended_2","type":"session.next.step.ended","durable":{"aggregateID":"ses_fixture_tool","seq":5,"version":2},"data":{"timestamp":1789052194000,"sessionID":"ses_fixture_tool","assistantMessageID":"msg_fixture_assistant","finish":"stop","cost":0,"tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}}}}

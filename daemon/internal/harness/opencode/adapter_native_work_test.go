@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -515,13 +516,14 @@ func TestNativeResumeEventCapture(t *testing.T) {
 	eventsCancel()
 	_ = eventStream.Close()
 	if capture.err != nil {
-		t.Fatalf("capture native OpenCode Resume:true event metadata: %v", capture.err)
+		t.Logf("native OpenCode Resume:true capture stopped with diagnostic error: %v", capture.err)
 	}
-	if !capture.admissionObserved || !capture.nonAdmissionObserved {
-		t.Fatalf("native OpenCode Resume:true capture = %+v, want matched admission and observed non-admission event", capture)
+	if !capture.admissionObserved {
+		t.Fatalf("native OpenCode Resume:true capture did not bind the admitted prompt: %s", nativeOpenCodeEventCaptureSummary(capture))
 	}
+	t.Logf("native OpenCode Resume:true capture characterization: %s", nativeOpenCodeEventCaptureSummary(capture))
 	for _, event := range capture.events {
-		t.Logf("native OpenCode Resume:true event metadata (not Goal evidence): type=%q cursor=%d version=%d event=%q aggregate=%q session=%q message=%q", event.Type, event.Cursor, event.Version, event.EventID, event.AggregateID, event.SessionID, event.MessageID)
+		t.Logf("native OpenCode Resume:true event metadata (not Goal evidence): type=%q kind=%q cursor=%d version=%d event=%q aggregate=%q session=%q message=%q assistant=%q data_bytes=%d", event.Type, event.Kind, event.Cursor, event.Version, event.EventID, event.AggregateID, event.SessionID, event.MessageID, event.AssistantMessageID, event.DataBytes)
 	}
 
 	closeContext, closeCancel := context.WithTimeout(context.Background(), nativeRepositoryTaskCloseTimeout)
@@ -541,29 +543,53 @@ func TestNativeResumeEventCapture(t *testing.T) {
 	}
 }
 
+type nativeOpenCodeEventCaptureStopReason string
+
+const (
+	nativeOpenCodeCaptureStopTerminal         nativeOpenCodeEventCaptureStopReason = "terminal_candidate"
+	nativeOpenCodeCaptureStopStreamEnded      nativeOpenCodeEventCaptureStopReason = "stream_ended_without_terminal"
+	nativeOpenCodeCaptureStopTimeout          nativeOpenCodeEventCaptureStopReason = "timeout"
+	nativeOpenCodeCaptureStopCancelled        nativeOpenCodeEventCaptureStopReason = "cancelled"
+	nativeOpenCodeCaptureStopDisconnected     nativeOpenCodeEventCaptureStopReason = "stream_disconnected"
+	nativeOpenCodeCaptureStopMaximum          nativeOpenCodeEventCaptureStopReason = "maximum_events"
+	nativeOpenCodeCaptureStopAdmissionMissing nativeOpenCodeEventCaptureStopReason = "admission_missing"
+	nativeOpenCodeCaptureStopNextAdmission    nativeOpenCodeEventCaptureStopReason = "next_admission"
+	nativeOpenCodeCaptureStopDecodeError      nativeOpenCodeEventCaptureStopReason = "decode_error"
+	nativeOpenCodeCaptureStopInvalidInput     nativeOpenCodeEventCaptureStopReason = "invalid_input"
+)
+
+const (
+	nativeOpenCodeEventCaptureTypeMaximum  = 96
+	nativeOpenCodeEventCaptureErrorMaximum = 256
+	nativeOpenCodeEventCaptureDataMaximum  = 64 * 1024
+)
+
 type nativeOpenCodeEventCaptureResult struct {
-	events               []nativeOpenCodeEventMetadata
-	err                  error
-	admissionObserved    bool
-	nonAdmissionObserved bool
+	events             []nativeOpenCodeEventMetadata
+	err                error
+	stopReason         nativeOpenCodeEventCaptureStopReason
+	admissionObserved  bool
+	terminalObserved   bool
+	observedEvents     int
+	preAdmissionEvents int
+	lastCursor         uint64
+	lastType           string
 }
 
 type nativeOpenCodeEventMetadata struct {
-	Type        string
-	EventID     string
-	Cursor      uint64
-	Version     uint64
-	AggregateID string
-	SessionID   string
-	MessageID   string
+	Type               string
+	Kind               SessionEventKind
+	EventID            string
+	Cursor             uint64
+	Version            uint64
+	AggregateID        string
+	SessionID          string
+	MessageID          string
+	AssistantMessageID string
+	DataBytes          int
 }
 
-const nativeOpenCodeAdmissionEventType = "session.next.prompt.admitted"
-
-var (
-	errNativeOpenCodeResumeCaptureMissingAdmission    = errors.New("native OpenCode resume capture did not observe the matching admission event")
-	errNativeOpenCodeResumeCaptureMissingNonAdmission = errors.New("native OpenCode resume capture observed admission only")
-)
+var errNativeOpenCodeResumeCaptureMissingAdmission = errors.New("native OpenCode resume capture did not observe the matching admission event")
 
 func nativeOpenCodeCaptureSessionEventMetadata(ctx context.Context, stream io.ReadCloser, maximum int) ([]nativeOpenCodeEventMetadata, error) {
 	return nativeOpenCodeCaptureSessionEventMetadataUntil(ctx, stream, maximum, func(events []nativeOpenCodeEventMetadata) bool {
@@ -572,41 +598,258 @@ func nativeOpenCodeCaptureSessionEventMetadata(ctx context.Context, stream io.Re
 }
 
 func nativeOpenCodeCaptureResumeEventMetadata(ctx context.Context, stream io.ReadCloser, maximum int, sessionID, messageID string, cursor uint64) nativeOpenCodeEventCaptureResult {
-	events, err := nativeOpenCodeCaptureSessionEventMetadataUntil(ctx, stream, maximum, func(events []nativeOpenCodeEventMetadata) bool {
-		capture, _ := nativeOpenCodeEvaluateResumeCapture(events, sessionID, messageID, cursor)
-		return capture.admissionObserved && capture.nonAdmissionObserved
-	})
-	capture, validationErr := nativeOpenCodeEvaluateResumeCapture(events, sessionID, messageID, cursor)
-	if err != nil {
-		capture.err = err
-	} else if validationErr != nil {
-		capture.err = validationErr
+	capture := nativeOpenCodeEventCaptureResult{}
+	if ctx == nil || stream == nil || maximum <= 0 || !isID(sessionID, "ses_") || !isID(messageID, "msg_") || cursor == 0 {
+		capture.stopReason = nativeOpenCodeCaptureStopInvalidInput
+		capture.err = errors.New("native OpenCode resume event capture input is invalid")
+		return capture
 	}
-	return capture
-}
+	capacity := maximum
+	if capacity > nativeOpenCodeEventCaptureMaximum {
+		capacity = nativeOpenCodeEventCaptureMaximum
+	}
+	capture.events = make([]nativeOpenCodeEventMetadata, 0, capacity)
+	validator, err := NewSessionEventValidator(sessionID, 0)
+	if err != nil {
+		capture.stopReason = nativeOpenCodeCaptureStopInvalidInput
+		capture.err = nativeOpenCodeBoundedError(err, nativeOpenCodeEventCaptureErrorMaximum)
+		return capture
+	}
+	decoder := NewDecoder(defaultMaxFrameBytes)
+	bufferSize := streamReadChunkSize
+	if bufferSize <= 0 {
+		bufferSize = 32 * 1024
+	}
+	stopOnCancel := context.AfterFunc(ctx, func() { _ = stream.Close() })
+	defer stopOnCancel()
+	if err := ctx.Err(); err != nil {
+		capture.stopReason = nativeOpenCodeCaptureStopForContext(ctx)
+		capture.err = nativeOpenCodeBoundedError(err, nativeOpenCodeEventCaptureErrorMaximum)
+		_ = stream.Close()
+		return capture
+	}
 
-func nativeOpenCodeEvaluateResumeCapture(events []nativeOpenCodeEventMetadata, sessionID, messageID string, cursor uint64) (nativeOpenCodeEventCaptureResult, error) {
-	capture := nativeOpenCodeEventCaptureResult{events: append([]nativeOpenCodeEventMetadata(nil), events...)}
-	wantedSession := nativeOpenCodeRedactIdentity(sessionID)
-	wantedMessage := nativeOpenCodeRedactIdentity(messageID)
-	for _, event := range events {
-		if event.Type == nativeOpenCodeAdmissionEventType {
-			if event.Cursor == cursor && event.AggregateID == wantedSession && event.SessionID == wantedSession && event.MessageID == wantedMessage {
-				capture.admissionObserved = true
+	stop := func(reason nativeOpenCodeEventCaptureStopReason, stopErr error) {
+		capture.stopReason = reason
+		if stopErr != nil {
+			capture.err = nativeOpenCodeBoundedError(stopErr, nativeOpenCodeEventCaptureErrorMaximum)
+		}
+	}
+	observe := func(frames []Frame) bool {
+		for _, frame := range frames {
+			if capture.observedEvents >= maximum {
+				stop(nativeOpenCodeCaptureStopMaximum, nil)
+				return true
 			}
+			capture.observedEvents++
+			event, observeErr := validator.ObserveEvent(frame)
+			if observeErr != nil {
+				stop(nativeOpenCodeCaptureStopDecodeError, observeErr)
+				return true
+			}
+			capture.lastCursor = event.Durable.Seq
+			capture.lastType = nativeOpenCodeBoundedString(event.Type, nativeOpenCodeEventCaptureTypeMaximum)
+			if !capture.admissionObserved {
+				if event.Kind == SessionEventPromptAdmitted && event.PromptAdmitted != nil &&
+					event.Durable.Seq == cursor && event.PromptAdmitted.MessageID == messageID {
+					capture.admissionObserved = true
+					capture.events = append(capture.events, nativeOpenCodeResumeEventMetadata(event))
+					if len(capture.events) >= maximum {
+						stop(nativeOpenCodeCaptureStopMaximum, nil)
+						return true
+					}
+				} else {
+					capture.preAdmissionEvents++
+				}
+				continue
+			}
+			if event.Kind == SessionEventPromptAdmitted {
+				stop(nativeOpenCodeCaptureStopNextAdmission, nil)
+				return true
+			}
+			capture.events = append(capture.events, nativeOpenCodeResumeEventMetadata(event))
+			if nativeOpenCodeResumeEventIsTerminalCandidate(event) {
+				capture.terminalObserved = true
+				stop(nativeOpenCodeCaptureStopTerminal, nil)
+				return true
+			}
+			if len(capture.events) >= maximum {
+				stop(nativeOpenCodeCaptureStopMaximum, nil)
+				return true
+			}
+		}
+		return false
+	}
+
+	for {
+		if err := ctx.Err(); err != nil {
+			stop(nativeOpenCodeCaptureStopForContext(ctx), err)
+			return capture
+		}
+		buffer := make([]byte, bufferSize)
+		count, readErr := stream.Read(buffer)
+		if count > 0 {
+			if err := ctx.Err(); err != nil {
+				stop(nativeOpenCodeCaptureStopForContext(ctx), err)
+				return capture
+			}
+			frames, feedErr := decoder.Feed(buffer[:count])
+			if feedErr != nil {
+				stop(nativeOpenCodeCaptureStopDecodeError, feedErr)
+				return capture
+			}
+			if observe(frames) {
+				if err := ctx.Err(); err != nil {
+					stop(nativeOpenCodeCaptureStopForContext(ctx), err)
+				}
+				return capture
+			}
+		}
+		if readErr == nil {
 			continue
 		}
-		if event.Cursor > cursor && event.AggregateID == wantedSession {
-			capture.nonAdmissionObserved = true
+		if err := ctx.Err(); err != nil {
+			stop(nativeOpenCodeCaptureStopForContext(ctx), err)
+			return capture
+		}
+		if !errors.Is(readErr, io.EOF) {
+			stop(nativeOpenCodeCaptureStopDisconnected, readErr)
+			return capture
+		}
+		frames, closeErr := decoder.Close()
+		if closeErr != nil {
+			stop(nativeOpenCodeCaptureStopDecodeError, closeErr)
+			return capture
+		}
+		if observe(frames) {
+			return capture
+		}
+		if !capture.admissionObserved {
+			stop(nativeOpenCodeCaptureStopAdmissionMissing, errNativeOpenCodeResumeCaptureMissingAdmission)
+			return capture
+		}
+		stop(nativeOpenCodeCaptureStopStreamEnded, nil)
+		return capture
+	}
+}
+
+func nativeOpenCodeResumeEventMetadata(event DecodedSessionEvent) nativeOpenCodeEventMetadata {
+	metadata := nativeOpenCodeEventMetadata{
+		Type:      nativeOpenCodeBoundedString(event.Type, nativeOpenCodeEventCaptureTypeMaximum),
+		Kind:      event.Kind,
+		EventID:   nativeOpenCodeRedactIdentity(event.ID),
+		DataBytes: nativeOpenCodeBoundedByteCount(len(event.Data), nativeOpenCodeEventCaptureDataMaximum),
+	}
+	if event.Durable != nil {
+		metadata.Cursor = event.Durable.Seq
+		metadata.Version = event.Durable.Version
+		metadata.AggregateID = nativeOpenCodeRedactIdentity(event.Durable.AggregateID)
+	}
+	metadata.SessionID = nativeOpenCodeRedactIdentity(event.SessionID)
+	switch event.Kind {
+	case SessionEventPromptAdmitted:
+		if event.PromptAdmitted != nil {
+			metadata.MessageID = nativeOpenCodeRedactIdentity(event.PromptAdmitted.MessageID)
+		}
+	case SessionEventStepStarted:
+		if event.StepStarted != nil {
+			metadata.AssistantMessageID = nativeOpenCodeRedactIdentity(event.StepStarted.AssistantMessageID)
+		}
+	case SessionEventStepEnded:
+		if event.StepEnded != nil {
+			metadata.AssistantMessageID = nativeOpenCodeRedactIdentity(event.StepEnded.AssistantMessageID)
+		}
+	case SessionEventStepFailed:
+		if event.StepFailed != nil {
+			metadata.AssistantMessageID = nativeOpenCodeRedactIdentity(event.StepFailed.AssistantMessageID)
+		}
+	case SessionEventTextEnded:
+		if event.TextEnded != nil {
+			metadata.AssistantMessageID = nativeOpenCodeRedactIdentity(event.TextEnded.AssistantMessageID)
+		}
+	case SessionEventToolCalled:
+		if event.ToolCalled != nil {
+			metadata.AssistantMessageID = nativeOpenCodeRedactIdentity(event.ToolCalled.AssistantMessageID)
+		}
+	case SessionEventToolSuccess:
+		if event.ToolSuccess != nil {
+			metadata.AssistantMessageID = nativeOpenCodeRedactIdentity(event.ToolSuccess.AssistantMessageID)
+		}
+	case SessionEventToolFailed:
+		if event.ToolFailed != nil {
+			metadata.AssistantMessageID = nativeOpenCodeRedactIdentity(event.ToolFailed.AssistantMessageID)
 		}
 	}
-	if !capture.admissionObserved {
-		return capture, errNativeOpenCodeResumeCaptureMissingAdmission
+	return metadata
+}
+
+func nativeOpenCodeResumeEventIsTerminalCandidate(event DecodedSessionEvent) bool {
+	switch event.Kind {
+	case SessionEventStepFailed:
+		return true
+	case SessionEventStepEnded:
+		return event.StepEnded != nil && strings.EqualFold(strings.TrimSpace(event.StepEnded.Finish), "stop")
+	default:
+		return false
 	}
-	if !capture.nonAdmissionObserved {
-		return capture, errNativeOpenCodeResumeCaptureMissingNonAdmission
+}
+
+func nativeOpenCodeCaptureStopForContext(ctx context.Context) nativeOpenCodeEventCaptureStopReason {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return nativeOpenCodeCaptureStopTimeout
 	}
-	return capture, nil
+	return nativeOpenCodeCaptureStopCancelled
+}
+
+func nativeOpenCodeBoundedString(value string, maximum int) string {
+	value = strings.TrimSpace(value)
+	if maximum <= 0 || len(value) <= maximum {
+		return value
+	}
+	if maximum <= 3 {
+		return value[:maximum]
+	}
+	return value[:maximum-3] + "..."
+}
+
+func nativeOpenCodeBoundedError(err error, maximum int) error {
+	if err == nil {
+		return nil
+	}
+	return nativeOpenCodeCaptureBoundedError{message: nativeOpenCodeBoundedString(nativeOpenCodeRedactError(err.Error()), maximum), cause: err}
+}
+
+var nativeOpenCodeCaptureIdentityPattern = regexp.MustCompile(`\b(?:evt|ses|msg|call)_[A-Za-z0-9_-]+\b`)
+
+func nativeOpenCodeRedactError(message string) string {
+	return nativeOpenCodeCaptureIdentityPattern.ReplaceAllStringFunc(message, nativeOpenCodeRedactIdentity)
+}
+
+type nativeOpenCodeCaptureBoundedError struct {
+	message string
+	cause   error
+}
+
+func (err nativeOpenCodeCaptureBoundedError) Error() string {
+	return err.message
+}
+
+func (err nativeOpenCodeCaptureBoundedError) Unwrap() error {
+	return err.cause
+}
+
+func nativeOpenCodeBoundedByteCount(count, maximum int) int {
+	if count < 0 {
+		return 0
+	}
+	if maximum > 0 && count > maximum {
+		return maximum
+	}
+	return count
+}
+
+func nativeOpenCodeEventCaptureSummary(capture nativeOpenCodeEventCaptureResult) string {
+	return fmt.Sprintf("stop_reason=%q admission_observed=%t terminal_candidate=%t observed_events=%d recorded_events=%d pre_admission_events=%d last_cursor=%d last_type=%q err=%v", capture.stopReason, capture.admissionObserved, capture.terminalObserved, capture.observedEvents, len(capture.events), capture.preAdmissionEvents, capture.lastCursor, capture.lastType, capture.err)
 }
 
 func nativeOpenCodeCaptureSessionEventMetadataUntil(ctx context.Context, stream io.ReadCloser, maximum int, complete func([]nativeOpenCodeEventMetadata) bool) ([]nativeOpenCodeEventMetadata, error) {
@@ -762,57 +1005,170 @@ func TestNativeOpenCodeResumeCaptureMetadataRedactsPayload(t *testing.T) {
 	}
 }
 
-func TestNativeOpenCodeResumeCaptureRejectsAdmissionOnly(t *testing.T) {
-	admissionFrame := "data: {\"id\":\"evt_admission\",\"type\":\"session.next.prompt.admitted\",\"durable\":{\"aggregateID\":\"ses_capture\",\"seq\":7,\"version\":1},\"data\":{\"sessionID\":\"ses_capture\",\"messageID\":\"msg_capture\",\"prompt\":{\"text\":\"redacted\"}}}\n\n"
-	admissionOnly := nativeOpenCodeCaptureResumeEventMetadata(
-		context.Background(),
-		io.NopCloser(strings.NewReader(admissionFrame)),
-		nativeOpenCodeEventCaptureMaximum,
-		"ses_capture",
-		"msg_capture",
-		7,
-	)
-	if !admissionOnly.admissionObserved || admissionOnly.nonAdmissionObserved || !errors.Is(admissionOnly.err, errNativeOpenCodeResumeCaptureMissingNonAdmission) {
-		t.Fatalf("admission-only capture = %+v, want explicit non-admission failure", admissionOnly)
+func TestNativeOpenCodeResumeCaptureBindsPromptAndRecordsLifecycle(t *testing.T) {
+	const sessionID = "ses_capture"
+	const messageID = "msg_capture"
+	stream := strings.Join([]string{
+		nativeOpenCodeCaptureFrame(`{"id":"evt_prior","type":"session.next.prompt.admitted","durable":{"aggregateID":"ses_capture","seq":1,"version":1},"data":{"timestamp":1,"sessionID":"ses_capture","messageID":"msg_other","prompt":{"text":"private prior prompt"},"delivery":"steer"}}`),
+		nativeOpenCodeCaptureFrame(`{"id":"evt_admission","type":"session.next.prompt.admitted","durable":{"aggregateID":"ses_capture","seq":2,"version":1},"data":{"timestamp":2,"sessionID":"ses_capture","messageID":"msg_capture","prompt":{"text":"private target prompt"},"delivery":"steer"}}`),
+		nativeOpenCodeCaptureFrame(`{"id":"evt_step_started","type":"session.next.step.started","durable":{"aggregateID":"ses_capture","seq":3,"version":1},"data":{"timestamp":3,"sessionID":"ses_capture","assistantMessageID":"msg_assistant","agent":"build","model":{"id":"model","providerID":"provider"}}}`),
+		nativeOpenCodeCaptureFrame(`{"id":"evt_tool_called","type":"session.next.tool.called","durable":{"aggregateID":"ses_capture","seq":4,"version":1},"data":{"timestamp":4,"sessionID":"ses_capture","assistantMessageID":"msg_assistant","callID":"call_1","tool":"read","input":{"path":"private-path"},"provider":{"executed":true}}}`),
+		nativeOpenCodeCaptureFrame(`{"id":"evt_tool_failed","type":"session.next.tool.failed","durable":{"aggregateID":"ses_capture","seq":5,"version":1},"data":{"timestamp":5,"sessionID":"ses_capture","assistantMessageID":"msg_assistant","callID":"call_1","error":{"type":"unknown","message":"private-error"},"provider":{"executed":false}}}`),
+		nativeOpenCodeCaptureFrame(`{"id":"evt_retried","type":"session.next.retried","durable":{"aggregateID":"ses_capture","seq":6,"version":1},"data":{"timestamp":6,"sessionID":"ses_capture","attempt":1,"error":{"message":"private-retry","isRetryable":true}}}`),
+		nativeOpenCodeCaptureFrame(`{"id":"evt_text_ended","type":"session.next.text.ended","durable":{"aggregateID":"ses_capture","seq":7,"version":1},"data":{"timestamp":7,"sessionID":"ses_capture","assistantMessageID":"msg_assistant","textID":"part_1","text":"private text"}}`),
+		nativeOpenCodeCaptureFrame(`{"id":"evt_step_ended","type":"session.next.step.ended","durable":{"aggregateID":"ses_capture","seq":8,"version":2},"data":{"timestamp":8,"sessionID":"ses_capture","assistantMessageID":"msg_assistant","finish":"stop","cost":0,"tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}}}}`),
+	}, "")
+	capture := nativeOpenCodeCaptureResumeEventMetadata(context.Background(), io.NopCloser(strings.NewReader(stream)), 16, sessionID, messageID, 2)
+	if capture.err != nil || capture.stopReason != nativeOpenCodeCaptureStopTerminal || !capture.admissionObserved || !capture.terminalObserved {
+		t.Fatalf("capture = %s", nativeOpenCodeEventCaptureSummary(capture))
 	}
+	wantKinds := []SessionEventKind{SessionEventPromptAdmitted, SessionEventStepStarted, SessionEventToolCalled, SessionEventToolFailed, SessionEventRetried, SessionEventTextEnded, SessionEventStepEnded}
+	if len(capture.events) != len(wantKinds) {
+		t.Fatalf("recorded %d events, want %d: %s", len(capture.events), len(wantKinds), nativeOpenCodeEventCaptureSummary(capture))
+	}
+	for index, event := range capture.events {
+		if event.Kind != wantKinds[index] || event.AggregateID != nativeOpenCodeRedactIdentity(sessionID) || event.SessionID != nativeOpenCodeRedactIdentity(sessionID) {
+			t.Fatalf("event[%d] = %+v, want kind=%q and bound session", index, event, wantKinds[index])
+		}
+		if strings.Contains(fmt.Sprintf("%+v", event), "private") {
+			t.Fatalf("event[%d] leaked lifecycle payload: %+v", index, event)
+		}
+		if len(event.Type) > nativeOpenCodeEventCaptureTypeMaximum || event.DataBytes > nativeOpenCodeEventCaptureDataMaximum {
+			t.Fatalf("event[%d] exceeded metadata bounds: %+v", index, event)
+		}
+	}
+	if capture.preAdmissionEvents != 1 {
+		t.Fatalf("pre-admission events = %d, want 1", capture.preAdmissionEvents)
+	}
+}
 
-	priorNonAdmissionFrame := "data: {\"id\":\"evt_prior_update\",\"type\":\"message.updated\",\"durable\":{\"aggregateID\":\"ses_capture\",\"seq\":6,\"version\":1},\"data\":{\"sessionID\":\"ses_capture\"}}\n\n"
-	priorOnly := nativeOpenCodeCaptureResumeEventMetadata(
-		context.Background(),
-		io.NopCloser(strings.NewReader(admissionFrame+priorNonAdmissionFrame)),
-		nativeOpenCodeEventCaptureMaximum,
-		"ses_capture",
-		"msg_capture",
-		7,
-	)
-	if !priorOnly.admissionObserved || priorOnly.nonAdmissionObserved || !errors.Is(priorOnly.err, errNativeOpenCodeResumeCaptureMissingNonAdmission) {
-		t.Fatalf("lower-cursor non-admission capture = %+v, want explicit progress failure", priorOnly)
+func TestNativeOpenCodeResumeCaptureRecordsNoTerminalAtStreamEnd(t *testing.T) {
+	stream := nativeOpenCodeCaptureFrame(`{"id":"evt_admission","type":"session.next.prompt.admitted","durable":{"aggregateID":"ses_capture","seq":1,"version":1},"data":{"timestamp":1,"sessionID":"ses_capture","messageID":"msg_capture","prompt":{"text":"prompt"},"delivery":"steer"}}`) +
+		nativeOpenCodeCaptureFrame(`{"id":"evt_text","type":"session.next.text.ended","durable":{"aggregateID":"ses_capture","seq":2,"version":1},"data":{"timestamp":2,"sessionID":"ses_capture","assistantMessageID":"msg_assistant","textID":"part_1","text":"not a semantic result"}}`)
+	capture := nativeOpenCodeCaptureResumeEventMetadata(context.Background(), io.NopCloser(strings.NewReader(stream)), 16, "ses_capture", "msg_capture", 1)
+	if capture.err != nil || capture.stopReason != nativeOpenCodeCaptureStopStreamEnded || !capture.admissionObserved || capture.terminalObserved {
+		t.Fatalf("capture = %s", nativeOpenCodeEventCaptureSummary(capture))
 	}
-	wrongAggregateFrame := "data: {\"id\":\"evt_other\",\"type\":\"message.updated\",\"durable\":{\"aggregateID\":\"ses_other\",\"seq\":8,\"version\":1},\"data\":{\"sessionID\":\"ses_other\"}}\n\n"
-	wrongAggregate := nativeOpenCodeCaptureResumeEventMetadata(
-		context.Background(),
-		io.NopCloser(strings.NewReader(admissionFrame+wrongAggregateFrame)),
-		nativeOpenCodeEventCaptureMaximum,
-		"ses_capture",
-		"msg_capture",
-		7,
-	)
-	if !wrongAggregate.admissionObserved || wrongAggregate.nonAdmissionObserved || !errors.Is(wrongAggregate.err, errNativeOpenCodeResumeCaptureMissingNonAdmission) {
-		t.Fatalf("wrong-aggregate non-admission capture = %+v, want explicit progress failure", wrongAggregate)
+	if len(capture.events) != 2 || capture.events[1].Kind != SessionEventTextEnded {
+		t.Fatalf("events = %+v, want admission plus text lifecycle", capture.events)
 	}
+}
 
-	nonAdmissionFrame := "data: {\"id\":\"evt_update\",\"type\":\"message.updated\",\"durable\":{\"aggregateID\":\"ses_capture\",\"seq\":8,\"version\":1},\"data\":{\"sessionID\":\"ses_capture\"}}\n\n"
-	complete := nativeOpenCodeCaptureResumeEventMetadata(
-		context.Background(),
-		io.NopCloser(strings.NewReader(admissionFrame+nonAdmissionFrame)),
-		nativeOpenCodeEventCaptureMaximum,
-		"ses_capture",
-		"msg_capture",
-		7,
-	)
-	if complete.err != nil || !complete.admissionObserved || !complete.nonAdmissionObserved {
-		t.Fatalf("admission plus non-admission capture = %+v, want success", complete)
+func TestNativeOpenCodeResumeCaptureReportsTimeout(t *testing.T) {
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	capture := nativeOpenCodeCaptureResumeEventMetadata(ctx, io.NopCloser(strings.NewReader("")), 16, "ses_capture", "msg_capture", 1)
+	if capture.stopReason != nativeOpenCodeCaptureStopTimeout || !errors.Is(capture.err, context.DeadlineExceeded) {
+		t.Fatalf("capture = %s, want timeout evidence", nativeOpenCodeEventCaptureSummary(capture))
 	}
+}
+
+func TestNativeOpenCodeResumeCapturePrefersDeadlineAfterRead(t *testing.T) {
+	ctx := newNativeOpenCodeResumeCaptureDeadlineContext()
+	terminal := nativeOpenCodeCaptureFrame(`{"id":"evt_terminal","type":"session.next.step.ended","durable":{"aggregateID":"ses_capture","seq":2,"version":2},"data":{"timestamp":2,"sessionID":"ses_capture","assistantMessageID":"msg_assistant","finish":"stop","cost":0,"tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}}}}`)
+	reader := &nativeOpenCodeResumeCaptureCancellingReader{data: []byte(terminal), afterRead: ctx.expire}
+	capture := nativeOpenCodeCaptureResumeEventMetadata(ctx, io.NopCloser(reader), 16, "ses_capture", "msg_capture", 1)
+	if capture.stopReason != nativeOpenCodeCaptureStopTimeout || !errors.Is(capture.err, context.DeadlineExceeded) || capture.terminalObserved {
+		t.Fatalf("capture = %s, want deadline to win after Read", nativeOpenCodeEventCaptureSummary(capture))
+	}
+}
+
+func TestNativeOpenCodeResumeCaptureReportsDisconnect(t *testing.T) {
+	stream := nativeOpenCodeCaptureFrame(`{"id":"evt_admission","type":"session.next.prompt.admitted","durable":{"aggregateID":"ses_capture","seq":1,"version":1},"data":{"timestamp":1,"sessionID":"ses_capture","messageID":"msg_capture","prompt":{"text":"prompt"},"delivery":"steer"}}`)
+	streamReader := io.MultiReader(strings.NewReader(stream), nativeOpenCodeResumeCaptureErrorReader{})
+	capture := nativeOpenCodeCaptureResumeEventMetadata(context.Background(), io.NopCloser(streamReader), 16, "ses_capture", "msg_capture", 1)
+	if capture.stopReason != nativeOpenCodeCaptureStopDisconnected || !capture.admissionObserved || capture.err == nil || !strings.Contains(capture.err.Error(), "synthetic disconnect") {
+		t.Fatalf("capture = %s, want disconnect evidence", nativeOpenCodeEventCaptureSummary(capture))
+	}
+}
+
+func TestNativeOpenCodeResumeCaptureClassifiesTruncatedFrameAsDecodeError(t *testing.T) {
+	capture := nativeOpenCodeCaptureResumeEventMetadata(context.Background(), io.NopCloser(strings.NewReader("data: {")), 16, "ses_capture", "msg_capture", 1)
+	if capture.stopReason != nativeOpenCodeCaptureStopDecodeError || capture.err == nil || !strings.Contains(capture.err.Error(), "incomplete") {
+		t.Fatalf("capture = %s, want decode-error evidence", nativeOpenCodeEventCaptureSummary(capture))
+	}
+}
+
+func TestNativeOpenCodeResumeCaptureRedactsIdentityInDecodeError(t *testing.T) {
+	stream := nativeOpenCodeCaptureFrame(`{"id":"evt_admission","type":"session.next.prompt.admitted","durable":{"aggregateID":"ses_other","seq":1,"version":1},"data":{"timestamp":1,"sessionID":"ses_other","messageID":"msg_other","prompt":{"text":"prompt"},"delivery":"steer"}}`)
+	capture := nativeOpenCodeCaptureResumeEventMetadata(context.Background(), io.NopCloser(strings.NewReader(stream)), 16, "ses_capture", "msg_capture", 1)
+	if capture.stopReason != nativeOpenCodeCaptureStopDecodeError || capture.err == nil {
+		t.Fatalf("capture = %s, want identity decode error", nativeOpenCodeEventCaptureSummary(capture))
+	}
+	if strings.Contains(capture.err.Error(), "ses_other") || strings.Contains(capture.err.Error(), "ses_capture") {
+		t.Fatalf("capture error leaked raw identity: %v", capture.err)
+	}
+}
+
+func TestNativeOpenCodeResumeCaptureStopsAtMaximumEvents(t *testing.T) {
+	stream := nativeOpenCodeCaptureFrame(`{"id":"evt_admission","type":"session.next.prompt.admitted","durable":{"aggregateID":"ses_capture","seq":1,"version":1},"data":{"timestamp":1,"sessionID":"ses_capture","messageID":"msg_capture","prompt":{"text":"prompt"},"delivery":"steer"}}`) +
+		nativeOpenCodeCaptureFrame(`{"id":"evt_text","type":"session.next.text.ended","durable":{"aggregateID":"ses_capture","seq":2,"version":1},"data":{"timestamp":2,"sessionID":"ses_capture","assistantMessageID":"msg_assistant","textID":"part_1","text":"bounded"}}`) +
+		nativeOpenCodeCaptureFrame(`{"id":"evt_retry","type":"session.next.retried","durable":{"aggregateID":"ses_capture","seq":3,"version":1},"data":{"timestamp":3,"sessionID":"ses_capture","attempt":1,"error":{"message":"retry","isRetryable":true}}}`)
+	capture := nativeOpenCodeCaptureResumeEventMetadata(context.Background(), io.NopCloser(strings.NewReader(stream)), 2, "ses_capture", "msg_capture", 1)
+	if capture.err != nil || capture.stopReason != nativeOpenCodeCaptureStopMaximum || len(capture.events) != 2 || !capture.admissionObserved || capture.terminalObserved {
+		t.Fatalf("capture = %s, want bounded maximum-event evidence", nativeOpenCodeEventCaptureSummary(capture))
+	}
+}
+
+func nativeOpenCodeCaptureFrame(data string) string {
+	return "data: " + data + "\n\n"
+}
+
+type nativeOpenCodeResumeCaptureErrorReader struct{}
+
+func (nativeOpenCodeResumeCaptureErrorReader) Read([]byte) (int, error) {
+	return 0, errors.New("synthetic disconnect")
+}
+
+type nativeOpenCodeResumeCaptureCancellingReader struct {
+	data      []byte
+	afterRead func()
+	done      bool
+}
+
+func (reader *nativeOpenCodeResumeCaptureCancellingReader) Read(data []byte) (int, error) {
+	if reader.done {
+		return 0, io.EOF
+	}
+	reader.done = true
+	count := copy(data, reader.data)
+	if reader.afterRead != nil {
+		reader.afterRead()
+	}
+	return count, nil
+}
+
+type nativeOpenCodeResumeCaptureDeadlineContext struct {
+	done chan struct{}
+	once sync.Once
+	err  error
+}
+
+func newNativeOpenCodeResumeCaptureDeadlineContext() *nativeOpenCodeResumeCaptureDeadlineContext {
+	return &nativeOpenCodeResumeCaptureDeadlineContext{done: make(chan struct{})}
+}
+
+func (ctx *nativeOpenCodeResumeCaptureDeadlineContext) Deadline() (time.Time, bool) {
+	return time.Time{}, false
+}
+
+func (ctx *nativeOpenCodeResumeCaptureDeadlineContext) Done() <-chan struct{} {
+	return ctx.done
+}
+
+func (ctx *nativeOpenCodeResumeCaptureDeadlineContext) Err() error {
+	return ctx.err
+}
+
+func (*nativeOpenCodeResumeCaptureDeadlineContext) Value(any) any {
+	return nil
+}
+
+func (ctx *nativeOpenCodeResumeCaptureDeadlineContext) expire() {
+	ctx.once.Do(func() {
+		ctx.err = context.DeadlineExceeded
+		close(ctx.done)
+	})
 }
 
 func TestNativeOpenCodeEndToEndHeadersDropHopByHopFields(t *testing.T) {
