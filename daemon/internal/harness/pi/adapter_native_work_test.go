@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
@@ -45,6 +48,11 @@ const (
 	nativePiLoopbackThinking              = "high"
 	nativePiLoopbackAPI                   = "openai-responses"
 	nativePiLoopbackAPIKey                = "symmetry-native-loopback-test-key"
+	nativeCancellationEnabledEnv          = "SYMMETRY_PI_NATIVE_CANCELLATION"
+	nativeCancellationExecutableEnv       = "SYMMETRY_PI_NATIVE_CANCELLATION_EXECUTABLE"
+	nativeCancellationTimeout             = 90 * time.Second
+	nativeCancellationCloseTimeout        = 25 * time.Second
+	nativeCancellationMaxRequestBytes     = 8 << 20
 )
 
 // TestNativeRepositoryTask is deliberately opt-in because it submits a real
@@ -250,6 +258,408 @@ func TestNativeRepositoryTask(t *testing.T) {
 	if sessionStarted, taskResults := events.semanticCounts(); sessionStarted != 1 || taskResults != 1 {
 		t.Fatalf("native Pi repository task events = session_started:%d task_results:%d, want one acknowledged turn and semantic result", sessionStarted, taskResults)
 	}
+}
+
+// TestNativeCancellationDrainsInFlightLoopbackRequest is deliberately opt-in
+// because it starts the real Pi 0.85.1 binary on Windows. The local gateway
+// accepts the Responses request body and then waits for the HTTP request
+// context to be cancelled. This proves a native clear_queue/abort reaches an
+// actually in-flight provider operation without claiming semantic success or
+// provider usage.
+func TestNativeCancellationDrainsInFlightLoopbackRequest(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("native Pi cancellation evidence requires Windows process-tree behavior")
+	}
+	if os.Getenv(nativeCancellationEnabledEnv) != "1" {
+		t.Skip("set SYMMETRY_PI_NATIVE_CANCELLATION=1 to run native Pi cancellation evidence")
+	}
+	executable := strings.TrimSpace(os.Getenv(nativeCancellationExecutableEnv))
+	if executable == "" {
+		t.Fatalf("%s must name the absolute Pi 0.85.1 executable", nativeCancellationExecutableEnv)
+	}
+	if !filepath.IsAbs(executable) {
+		t.Fatalf("%s must be absolute", nativeCancellationExecutableEnv)
+	}
+	info, err := os.Stat(executable)
+	if err != nil {
+		t.Fatalf("stat native Pi cancellation executable: %v", err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatalf("%s must name a regular executable file", nativeCancellationExecutableEnv)
+	}
+
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	sessionDir := filepath.Join(root, "sessions")
+	processRecord := filepath.Join(root, "process-identity.json")
+	sessionRecord := filepath.Join(root, "session-identity.json")
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatalf("create native Pi cancellation workspace: %v", err)
+	}
+	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
+		t.Fatalf("create native Pi cancellation session directory: %v", err)
+	}
+
+	gateway := newNativePiCancellationGateway()
+	server := httptest.NewServer(gateway)
+	serverClosed := false
+	t.Cleanup(func() {
+		if !serverClosed {
+			server.Close()
+		}
+	})
+	baseURL := server.URL + "/v1"
+	if err := nativePiRepositoryTaskValidateLoopbackURL(baseURL); err != nil {
+		t.Fatalf("validate native Pi cancellation loopback URL: %v", err)
+	}
+	environment := nativePiRepositoryTaskLoopbackEnvironment(t, root, baseURL)
+	for _, credential := range []string{
+		"AI_GATEWAY_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "AWS_BEARER_TOKEN_BEDROCK",
+	} {
+		if value := nativePiRepositoryTaskEnvironmentValue(environment, credential); value != "" {
+			t.Fatalf("native Pi cancellation environment copied provider credential %s", credential)
+		}
+	}
+
+	versionContext, versionCancel := context.WithTimeout(context.Background(), nativeCancellationTimeout)
+	defer versionCancel()
+	versionCommand := exec.CommandContext(versionContext, executable, "--version")
+	versionCommand.Dir = workspace
+	versionCommand.Env = environment
+	versionOutput, err := versionCommand.Output()
+	if err != nil {
+		t.Fatalf("run native Pi cancellation version check: %v", err)
+	}
+	if strings.TrimSpace(string(versionOutput)) != TestedVersion {
+		t.Fatalf("native Pi cancellation version = %q, want %s", strings.TrimSpace(string(versionOutput)), TestedVersion)
+	}
+
+	var events nativePiRepositoryTaskEvents
+	startContext, startCancel := context.WithTimeout(context.Background(), nativeCancellationTimeout)
+	defer startCancel()
+	session, err := NewAdapter(executable).Start(startContext, harness.StartRequest{
+		Workspace: workspace,
+		Invocation: execution.Invocation{
+			Args: []string{
+				"--no-extensions",
+				"--no-skills",
+				"--no-prompt-templates",
+				"--no-themes",
+				"--no-context-files",
+				"--no-approve",
+				"--no-tools",
+				"--session-dir", sessionDir,
+				"--provider", nativePiLoopbackProvider,
+				"--model", nativePiLoopbackModel,
+				"--thinking", nativePiLoopbackThinking,
+			},
+			Env: environment,
+		},
+		PersistProcess: func(pid int, identity string) error {
+			if pid <= 0 || strings.TrimSpace(identity) == "" {
+				return os.ErrInvalid
+			}
+			return nativePiRepositoryTaskWriteJSON(processRecord, map[string]any{
+				"pid":      pid,
+				"identity": identity,
+			})
+		},
+	}, harness.EventSinkFunc(events.handle))
+	if err != nil {
+		if session != nil {
+			cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), nativeCancellationCloseTimeout)
+			_ = session.Close(cleanupContext)
+			_, _ = session.Wait(cleanupContext)
+			cleanupCancel()
+		}
+		t.Fatalf("start native Pi cancellation transport: %v", err)
+	}
+	closed := false
+	t.Cleanup(func() {
+		if closed {
+			return
+		}
+		cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), nativeCancellationCloseTimeout)
+		defer cleanupCancel()
+		if err := session.Close(cleanupContext); err != nil {
+			t.Errorf("cleanup native Pi cancellation session: %v", err)
+		}
+		waitContext, waitCancel := context.WithTimeout(context.Background(), nativeCancellationCloseTimeout)
+		defer waitCancel()
+		if _, err := session.Wait(waitContext); err != nil {
+			t.Errorf("wait for native Pi cancellation cleanup: %v", err)
+		}
+	})
+
+	staged, ok := session.(harness.StagedSession)
+	if !ok {
+		t.Fatal("native Pi cancellation adapter did not return a staged session")
+	}
+	processPID, processIdentity := staged.ProcessDetails()
+	var persistedProcess struct {
+		PID      int    `json:"pid"`
+		Identity string `json:"identity"`
+	}
+	nativePiRepositoryTaskReadJSON(t, processRecord, &persistedProcess)
+	if persistedProcess.PID != processPID || persistedProcess.Identity != processIdentity || processPID <= 0 || processIdentity == "" {
+		t.Fatal("native Pi cancellation process identity was not persisted before session exposure")
+	}
+
+	handle, err := staged.Open(startContext)
+	if err != nil {
+		t.Fatalf("open native Pi cancellation session: %v", err)
+	}
+	nativePiRetainedAssertHandleInSessionDirectory(t, handle, sessionDir)
+	if err := nativePiRepositoryTaskWriteJSON(sessionRecord, handle); err != nil {
+		t.Fatalf("persist native Pi cancellation session identity: %v", err)
+	}
+	var persistedHandle harness.NativeSessionHandle
+	nativePiRepositoryTaskReadJSON(t, sessionRecord, &persistedHandle)
+	if persistedHandle != handle {
+		t.Fatal("native Pi cancellation session identity was not persisted before StartTurn")
+	}
+	replayedHandle, err := staged.Open(startContext)
+	if err != nil {
+		t.Fatalf("reopen native Pi cancellation session: %v", err)
+	}
+	if replayedHandle != handle {
+		t.Fatal("native Pi cancellation Open replay changed the session identity")
+	}
+
+	turnContext, turnCancel := context.WithTimeout(context.Background(), nativeCancellationTimeout)
+	defer turnCancel()
+	turnDone := make(chan error, 1)
+	go func() {
+		turnDone <- staged.StartTurn(turnContext, harness.TurnRequest{
+			Goal:    "Remain in the active native turn until cancellation. Do not create or modify any workspace file.",
+			Context: json.RawMessage(`{"task":"native_pi_in_flight_cancellation","provider":"loopback"}`),
+		})
+	}()
+	var requestBody []byte
+	startTurnReturned := false
+	for !startTurnReturned || requestBody == nil {
+		select {
+		case err := <-turnDone:
+			if err != nil {
+				t.Fatalf("start native Pi cancellation turn: %v", err)
+			}
+			startTurnReturned = true
+		case requestBody = <-gateway.requestReceived:
+		case gatewayErr := <-gateway.errors:
+			t.Fatalf("native Pi cancellation gateway rejected request: %v", gatewayErr)
+		case <-turnContext.Done():
+			t.Fatalf("native Pi cancellation turn did not reach an in-flight request: %v", turnContext.Err())
+		}
+	}
+	if len(requestBody) == 0 {
+		t.Fatal("native Pi cancellation gateway received an empty request body")
+	}
+
+	controlContext, controlCancel := context.WithTimeout(context.Background(), nativeCancellationTimeout)
+	receipt, err := staged.Control(controlContext, harness.ControlRequest{
+		CommandID: "native-cancel-1",
+		Kind:      harness.ControlCancel,
+	})
+	controlCancel()
+	if err != nil {
+		t.Fatalf("native Pi cancellation ControlCancel: %v", err)
+	}
+	if receipt.CommandID != "native-cancel-1" || receipt.Kind != harness.ControlCancel ||
+		receipt.Outcome != harness.ControlApplied || receipt.Capability != harness.CapabilityCancel {
+		t.Fatalf("native Pi cancellation receipt = %+v, want applied cancel receipt", receipt)
+	}
+
+	select {
+	case <-gateway.requestCanceled:
+	case gatewayErr := <-gateway.errors:
+		t.Fatalf("native Pi cancellation gateway error after abort: %v", gatewayErr)
+	case <-turnContext.Done():
+		t.Fatalf("native Pi abort did not cancel the in-flight loopback request: %v", turnContext.Err())
+	}
+	select {
+	case <-gateway.requestReturned:
+	case <-turnContext.Done():
+		t.Fatalf("native Pi loopback request handler did not return after cancellation: %v", turnContext.Err())
+	}
+
+	waitTurnContext, waitTurnCancel := context.WithTimeout(context.Background(), nativeCancellationTimeout)
+	if err := staged.WaitTurn(waitTurnContext); err != nil {
+		waitTurnCancel()
+		t.Fatalf("native Pi cancellation WaitTurn: %v", err)
+	}
+	waitTurnCancel()
+
+	closeContext, closeCancel := context.WithTimeout(context.Background(), nativeCancellationCloseTimeout)
+	if err := staged.Close(closeContext); err != nil {
+		closeCancel()
+		t.Fatalf("close native Pi cancellation session: %v", err)
+	}
+	result, err := staged.Wait(closeContext)
+	closeCancel()
+	if err != nil {
+		t.Fatalf("wait for native Pi cancellation session: %v", err)
+	}
+	closed = true
+	if result.Kind != harness.ResultCancelled || result.Semantic != nil || result.Usage.State != harness.UsageUnknown {
+		t.Fatalf("native Pi cancellation result = kind:%s semantic:%t usage:%s summary:%q, want cancelled with unknown semantic/usage",
+			result.Kind, result.Semantic != nil, result.Usage.State, result.Summary)
+	}
+	if result.Process.PID != processPID || !result.Process.Terminated || result.Process.SinkError != nil ||
+		result.Process.OutputError != nil || result.Process.TerminationError != nil || result.Process.ContainmentError != nil {
+		t.Fatalf("native Pi cancellation process barrier = %+v, want terminated without drain/containment errors", result.Process)
+	}
+	if finalPID, finalIdentity := staged.ProcessDetails(); finalPID != processPID || finalIdentity != processIdentity {
+		t.Fatalf("native Pi cancellation ProcessDetails() after Wait = (%d, %q), want stable (%d, %q)", finalPID, finalIdentity, processPID, processIdentity)
+	}
+	if sessionStarted, taskResults := events.semanticCounts(); sessionStarted != 1 || taskResults != 0 {
+		t.Fatalf("native Pi cancellation semantic events = session_started:%d task_results:%d, want one started turn and no semantic result", sessionStarted, taskResults)
+	}
+	if events.nativeFrameCount() == 0 {
+		t.Fatal("native Pi cancellation observed no native frames")
+	}
+
+	processContext, processCancel := context.WithTimeout(context.Background(), nativeCancellationCloseTimeout)
+	defer processCancel()
+	exists, details, err := nativePiWindowsProcessExists(processContext, processPID)
+	if err != nil {
+		t.Fatalf("query native Pi cancellation process %d: %v", processPID, err)
+	}
+	if exists {
+		t.Fatalf("native Pi cancellation left process %d running; tasklist output: %q", processPID, details)
+	}
+	server.Close()
+	serverClosed = true
+	if responses, gatewayErr := gateway.state(); gatewayErr != nil || responses != 1 {
+		t.Fatalf("native Pi cancellation gateway state = responses:%d error:%v, want one clean in-flight request", responses, gatewayErr)
+	}
+}
+
+type nativePiCancellationGateway struct {
+	requestReceived chan []byte
+	requestCanceled chan struct{}
+	requestReturned chan struct{}
+	errors          chan error
+	receivedOnce    sync.Once
+	canceledOnce    sync.Once
+	returnedOnce    sync.Once
+	errorOnce       sync.Once
+	responses       int
+	firstError      error
+	mutex           sync.Mutex
+}
+
+func newNativePiCancellationGateway() *nativePiCancellationGateway {
+	return &nativePiCancellationGateway{
+		requestReceived: make(chan []byte, 1),
+		requestCanceled: make(chan struct{}),
+		requestReturned: make(chan struct{}),
+		errors:          make(chan error, 1),
+	}
+}
+
+func (gateway *nativePiCancellationGateway) ServeHTTP(response http.ResponseWriter, request *http.Request) {
+	if gateway == nil {
+		http.Error(response, "gateway unavailable", http.StatusInternalServerError)
+		return
+	}
+	if request.URL.RawQuery != "" || request.URL.Fragment != "" {
+		gateway.fail(fmt.Errorf("unexpected loopback query or fragment"))
+		http.NotFound(response, request)
+		return
+	}
+	switch {
+	case request.Method == http.MethodGet && request.URL.Path == "/v1/models":
+		writeNativePiCancellationJSON(response, http.StatusOK, map[string]any{
+			"object": "list",
+			"data":   []any{map[string]any{"id": nativePiLoopbackModel, "object": "model", "owned_by": "symmetry-loopback"}},
+		})
+	case request.Method == http.MethodPost && request.URL.Path == "/v1/responses":
+		gateway.handleResponses(response, request)
+	default:
+		gateway.fail(fmt.Errorf("unexpected loopback route %s %s", request.Method, request.URL.Path))
+		http.NotFound(response, request)
+	}
+}
+
+func (gateway *nativePiCancellationGateway) handleResponses(response http.ResponseWriter, request *http.Request) {
+	defer gateway.returnedOnce.Do(func() { close(gateway.requestReturned) })
+	if !strings.HasPrefix(strings.ToLower(request.Header.Get("Content-Type")), "application/json") {
+		gateway.fail(fmt.Errorf("responses request content type = %q", request.Header.Get("Content-Type")))
+		http.Error(response, "content type must be JSON", http.StatusUnsupportedMediaType)
+		return
+	}
+	gateway.mutex.Lock()
+	gateway.responses++
+	responseCount := gateway.responses
+	gateway.mutex.Unlock()
+	if responseCount != 1 {
+		gateway.fail(fmt.Errorf("responses request count = %d, want one", responseCount))
+		http.Error(response, "only one in-flight response is supported", http.StatusBadRequest)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(request.Body, nativeCancellationMaxRequestBytes+1))
+	if err != nil {
+		gateway.fail(fmt.Errorf("read responses request: %w", err))
+		return
+	}
+	if len(body) == 0 || len(body) > nativeCancellationMaxRequestBytes {
+		gateway.fail(fmt.Errorf("responses request body size = %d", len(body)))
+		return
+	}
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(body, &document); err != nil {
+		gateway.fail(fmt.Errorf("decode responses request: %w", err))
+		return
+	}
+	var model string
+	if err := json.Unmarshal(document["model"], &model); err != nil || model != nativePiLoopbackModel {
+		gateway.fail(fmt.Errorf("responses request model = %q, want %s", model, nativePiLoopbackModel))
+		return
+	}
+	var stream bool
+	if err := json.Unmarshal(document["stream"], &stream); err != nil || !stream {
+		gateway.fail(fmt.Errorf("responses request stream = %t, want true", stream))
+		return
+	}
+	gateway.receivedOnce.Do(func() { gateway.requestReceived <- append([]byte(nil), body...) })
+	<-request.Context().Done()
+	gateway.canceledOnce.Do(func() { close(gateway.requestCanceled) })
+}
+
+func (gateway *nativePiCancellationGateway) fail(err error) {
+	if err == nil {
+		return
+	}
+	gateway.mutex.Lock()
+	if gateway.firstError == nil {
+		gateway.firstError = err
+	}
+	gateway.mutex.Unlock()
+	gateway.errorOnce.Do(func() { gateway.errors <- err })
+}
+
+func (gateway *nativePiCancellationGateway) state() (int, error) {
+	gateway.mutex.Lock()
+	defer gateway.mutex.Unlock()
+	return gateway.responses, gateway.firstError
+}
+
+func writeNativePiCancellationJSON(response http.ResponseWriter, status int, value any) {
+	response.Header().Set("Content-Type", "application/json")
+	response.WriteHeader(status)
+	_ = json.NewEncoder(response).Encode(value)
+}
+
+func nativePiWindowsProcessExists(ctx context.Context, pid int) (bool, string, error) {
+	if pid <= 0 {
+		return false, "", fmt.Errorf("pid must be positive")
+	}
+	command := exec.CommandContext(ctx, "tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/FO", "CSV", "/NH")
+	output, err := command.Output()
+	if err != nil {
+		return false, string(output), err
+	}
+	return strings.Contains(string(output), fmt.Sprintf("\"%d\"", pid)), string(output), nil
 }
 
 type nativePiRepositoryTaskConfiguration struct {
@@ -619,8 +1029,8 @@ func TestNativeRepositoryTaskWindowsEnvironmentPreservesExecutableResolution(t *
 	root := t.TempDir()
 	environment := nativePiRepositoryTaskEnvironment(t, root, "")
 	for name, want := range map[string]string{
-		"PATH":                 `C:\native-pi-test\bin`,
-		"MISE_DATA_DIR":        configuredMiseData,
+		"PATH":                  `C:\native-pi-test\bin`,
+		"MISE_DATA_DIR":         configuredMiseData,
 		"PI_SKIP_VERSION_CHECK": "1",
 		"USERPROFILE":           filepath.Join(root, "home"),
 		"APPDATA":               filepath.Join(root, "appdata"),
