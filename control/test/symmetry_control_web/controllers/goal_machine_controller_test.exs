@@ -576,7 +576,9 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
     temporary_root =
       Path.join(System.tmp_dir!(), "symmetry-invalid-batch-response-#{Ecto.UUID.generate()}")
 
-    File.cp_r!(@contracts_root, temporary_root)
+    File.mkdir_p!(temporary_root)
+    temporary_v1 = Path.join(temporary_root, "v1")
+    File.cp_r!(Path.join(@contracts_root, "v1"), temporary_v1)
 
     on_exit(fn -> File.rm_rf!(temporary_root) end)
 

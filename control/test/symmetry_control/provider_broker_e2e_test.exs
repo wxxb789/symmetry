@@ -1,10 +1,15 @@
 defmodule SymmetryControl.ProviderBrokerE2ETest do
   use SymmetryControlWeb.ConnCase, async: false
 
+  import Ecto.Query
+
+  alias SymmetryControl.Goals
+  alias SymmetryControl.Goals.{Goal, GoalDecision, HarnessSession, RunEvidence, WorkOutcome}
   alias SymmetryControl.Integrations
   alias SymmetryControl.Integrations.HTTPStub
   alias SymmetryControl.Orchestration
-  alias SymmetryControl.Orchestration.Runtime
+  alias SymmetryControl.Orchestration.{Run, RunTransition, Runtime, Task}
+  alias SymmetryControl.RequestHash
   alias SymmetryControl.Repo
   alias SymmetryControl.Workspaces
   alias SymmetryControl.Workspaces.WorkItem
@@ -37,7 +42,9 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
     {:ok, daemon: daemon, agent: agent}
   end
 
-  setup %{daemon: daemon, agent: agent} do
+  setup context do
+    daemon = context.daemon
+    agent = context.agent
     previous_http = Application.get_env(:symmetry_control, :integration_http_client)
     previous_auth = Application.get_env(:symmetry_control, :integration_auth_provider)
     previous_providers = Application.get_env(:symmetry_control, :integration_providers)
@@ -76,20 +83,29 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
       Application.put_env(:symmetry_control, :orchestration, previous_orchestration)
     end)
 
+    ingress_recorder =
+      if context[:artifact_validation_e2e] do
+        start_supervised!({Agent, fn -> %{next_order: 0, events: []} end})
+      end
+
+    listener_plug =
+      if ingress_recorder do
+        {&recording_endpoint_plug/2, ingress_recorder}
+      else
+        SymmetryControlWeb.Endpoint
+      end
+
     listener =
       start_supervised!(
         {Bandit,
-         plug: SymmetryControlWeb.Endpoint,
-         scheme: :http,
-         ip: {127, 0, 0, 1},
-         port: 0,
-         startup_log: false}
+         plug: listener_plug, scheme: :http, ip: {127, 0, 0, 1}, port: 0, startup_log: false}
       )
 
     {:ok, {{127, 0, 0, 1}, port}} = ThousandIsland.listener_info(listener)
     runtime_key = "provider-e2e-#{Ecto.UUID.generate()}"
     profile = "provider-e2e"
     workspace = "provider-e2e"
+    artifact = if context[:artifact_validation_e2e], do: create_artifact_repository_fixture!()
     run_dir = Path.join(System.tmp_dir!(), "symmetry-provider-broker-run-#{Ecto.UUID.generate()}")
     state_dir = Path.join(run_dir, "state")
     workspace_path = Path.join(run_dir, "workspace")
@@ -97,6 +113,40 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
     File.mkdir_p!(workspace_path)
 
     config_path = Path.join(run_dir, "daemon.json")
+
+    workspace_config =
+      case artifact do
+        %{repository_path: repository_path, subject: %{"commit" => commit}} ->
+          %{
+            workspace => %{
+              policy: "git_worktree",
+              repository: repository_path,
+              root: workspace_path,
+              ref: commit,
+              cleanup: "never"
+            }
+          }
+
+        nil ->
+          %{workspace => %{policy: "existing_checkout", path: workspace_path, cleanup: "never"}}
+      end
+
+    runtime_config = %{
+      runtime_key: runtime_key,
+      name: "Provider broker E2E",
+      capacity: 1,
+      agent_profile: profile,
+      workspace: workspace
+    }
+
+    runtime_config =
+      case artifact do
+        %{repository_resource_id: repository_resource_id} ->
+          Map.put(runtime_config, :repository_resource_id, repository_resource_id)
+
+        nil ->
+          runtime_config
+      end
 
     File.write!(
       config_path,
@@ -116,20 +166,8 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
             env_allowlist: []
           }
         },
-        workspaces: %{
-          workspace => %{
-            policy: "existing_checkout",
-            path: workspace_path,
-            cleanup: "never"
-          }
-        },
-        runtime: %{
-          runtime_key: runtime_key,
-          name: "Provider broker E2E",
-          capacity: 1,
-          agent_profile: profile,
-          workspace: workspace
-        }
+        workspaces: workspace_config,
+        runtime: runtime_config
       })
     )
 
@@ -149,7 +187,13 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
       end
     end)
 
-    {:ok, daemon_port: daemon_port, profile: profile, workspace: workspace}
+    {:ok,
+     daemon_port: daemon_port,
+     profile: profile,
+     workspace: workspace,
+     runtime_key: runtime_key,
+     artifact: artifact,
+     ingress_recorder: ingress_recorder}
   end
 
   test "GitHub Issue reaches GitHub pull request, review, and Actions projection", context do
@@ -162,6 +206,147 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
 
   test "Azure Boards work item reaches Azure Repos, review, and Pipelines projection", context do
     run_provider_flow!(azure_devops_case(), context)
+  end
+
+  @tag artifact_validation_e2e: true
+  test "artifact-only Goal validation uses the fixed Git object without a native session",
+       context do
+    %{artifact: artifact} = context
+    runtime = Repo.get_by!(Runtime, runtime_key: context.runtime_key)
+    # These are fixture preconditions for this focused seam. The producer
+    # terminal is seeded in Control, and the runtime capability projection is
+    # artificial so Control can assign the Goal task; neither is native evidence.
+    install_artificial_runtime_projection_for_assignment!(runtime)
+
+    fixture = create_artifact_goal_fixture!(artifact, context.profile, runtime)
+
+    assert {:ok, producer_settlement} =
+             Goals.settle_task(
+               fixture.producer.id,
+               fixture.producer_run.id,
+               fixture.producer_run.generation
+             )
+
+    assert producer_settlement["settlement"] == "awaiting_validation"
+
+    assert {:ok, admission, :created} =
+             command_current(
+               fixture.goal.id,
+               "admit_task",
+               %{
+                 work_item_id: fixture.item.id,
+                 purpose: "validate",
+                 model_profile: context.profile,
+                 session_mode: "fresh",
+                 requested_session_id: nil,
+                 validation_of_task_id: fixture.producer.id
+               },
+               rollout_enabled: true
+             )
+
+    validation_task = Repo.get!(Task, admission.response["task"]["id"])
+    assert validation_task.input["subject"] == artifact.subject
+    assert validation_task.input["requested_session_id"] == nil
+    assert validation_task.input["provider_scope"] == nil
+
+    # Freeze the Subject first, then make the repository checkout dirty. The
+    # daemon must read proof.txt from the original Git object, not this file.
+    dirty_content = "uncommitted checkout bytes must not be accepted\n"
+    File.write!(Path.join(artifact.repository_path, "proof.txt"), dirty_content)
+    refute digest!(dirty_content) == artifact.content_digest
+
+    assert {:ok, _snapshot} = Orchestration.heartbeat(runtime.id, runtime.connection_epoch, [])
+    assert {:ok, validation_run} = Orchestration.assign_one()
+    assert validation_run.task_id == validation_task.id
+    assert validation_run.runtime_id == runtime.id
+    assert validation_run.generation == validation_task.attempt_generation
+
+    await!(context.daemon_port, "artifact-only validation terminal delivery", fn ->
+      case Repo.get(Task, validation_task.id) do
+        %Task{state: "completed"} -> :ok
+        _task -> :retry
+      end
+    end)
+
+    validation_task = Repo.get!(Task, validation_task.id)
+    validation_run = Repo.get!(Run, validation_run.id)
+    subject = artifact.subject
+    assert validation_run.provider_access_snapshot == %{"v" => 1, "kind" => "none"}
+
+    assert is_nil(validation_run.harness_session_id)
+    assert is_nil(validation_run.harness_binding_id)
+
+    assert %{
+             "schema_version" => "symmetry.task_result.v1",
+             "kind" => "candidate_completion",
+             "subject" => ^subject,
+             "subject_hash" => subject_hash,
+             "evidence_refs" => [evidence_id]
+           } = validation_task.result["task_result"]
+
+    assert subject_hash == subject_hash!(artifact.subject)
+
+    evidence = Repo.get!(RunEvidence, evidence_id)
+    assert evidence.run_id == validation_run.id
+    assert evidence.kind == "artifact"
+    assert evidence.evidence_key == artifact_evidence_key("proof")
+    assert evidence.validator_profile == "artifact"
+    assert evidence.verdict == "passed"
+    assert evidence.subject_hash == RequestHash.canonical(artifact.subject)
+
+    assert evidence.source_ref == %{
+             "kind" => "artifact",
+             "ref" => artifact_evidence_key("proof"),
+             "resource_id" => artifact.repository_resource_id,
+             "commit" => artifact.subject["commit"],
+             "path" => "proof.txt",
+             "subject_hash" => subject_hash
+           }
+
+    assert evidence.payload == %{
+             "predicate_id" => "proof",
+             "subject" => artifact.subject,
+             "subject_hash" => subject_hash,
+             "resource_id" => artifact.repository_resource_id,
+             "commit" => artifact.subject["commit"],
+             "path" => "proof.txt",
+             "content_digest" => artifact.content_digest
+           }
+
+    transition =
+      Repo.one!(
+        from transition in RunTransition,
+          where: transition.run_id == ^validation_run.id and transition.state == "completed"
+      )
+
+    assert DateTime.compare(evidence.inserted_at, transition.inserted_at) == :lt
+    assert_artifact_ingress_order!(context.ingress_recorder, validation_run.id)
+
+    assert {:ok, accepted} =
+             Goals.settle_task(validation_task.id, validation_run.id, validation_run.generation)
+
+    assert accepted["settlement"] == "accepted"
+    assert accepted["subject_hash"] == subject_hash
+    assert accepted["evidence_refs"] == [evidence_id]
+
+    outcome =
+      Repo.get_by!(WorkOutcome,
+        validation_task_id: validation_task.id,
+        work_item_id: fixture.item.id,
+        goal_revision: fixture.goal.current_revision
+      )
+
+    assert outcome.disposition == "accepted"
+    assert outcome.reason == "validation_passed"
+    assert outcome.candidate_subject == artifact.subject
+    assert outcome.subject_hash == RequestHash.canonical(artifact.subject)
+    assert outcome.evidence_ids == [evidence_id]
+    assert outcome.producing_task_id == fixture.producer.id
+    assert outcome.producing_run_id == fixture.producer_run.id
+
+    refute Repo.exists?(
+             from session in HarnessSession, where: session.active_run_id == ^validation_run.id
+           )
   end
 
   defp run_provider_flow!(provider_case, context) do
@@ -645,6 +830,476 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
 
     unless body == expected, do: raise("unexpected Azure pull request body: #{inspect(body)}")
   end
+
+  defp create_artifact_repository_fixture! do
+    suffix = Ecto.UUID.generate() |> String.replace("-", "")
+
+    repository_path =
+      Path.join(System.tmp_dir!(), "symmetry-provider-artifact-repository-#{suffix}")
+
+    File.rm_rf!(repository_path)
+    File.mkdir_p!(repository_path)
+    on_exit(fn -> File.rm_rf!(repository_path) end)
+
+    run_git!(repository_path, ["init", "--quiet"])
+    run_git!(repository_path, ["config", "user.email", "symmetry-e2e@example.test"])
+    run_git!(repository_path, ["config", "user.name", "Symmetry E2E"])
+
+    content = "artifact accepted from the immutable Git object\n"
+    File.write!(Path.join(repository_path, "proof.txt"), content)
+    run_git!(repository_path, ["add", "proof.txt"])
+    run_git!(repository_path, ["commit", "--quiet", "-m", "initial artifact subject"])
+
+    commit = git_output!(repository_path, ["rev-parse", "HEAD"]) |> String.trim()
+
+    {:ok, project} =
+      Workspaces.create_project(%{
+        name: "Artifact validation #{suffix}",
+        key: "A#{String.slice(suffix, 0, 7)}",
+        default_agent_profile: "provider-e2e",
+        default_workspace: "provider-e2e"
+      })
+
+    {:ok, repository} =
+      Workspaces.create_resource(project.id, %{
+        kind: "repository",
+        name: "Artifact repository #{suffix}"
+      })
+
+    subject = %{
+      "resource_id" => repository.id,
+      "commit" => commit,
+      "tree_digest" => git_tree_digest!(repository_path, commit)
+    }
+
+    %{
+      project_id: project.id,
+      repository_resource_id: repository.id,
+      repository_path: repository_path,
+      subject: subject,
+      content_digest: digest!(content)
+    }
+  end
+
+  defp create_artifact_goal_fixture!(artifact, profile, runtime) do
+    acceptance = artifact_acceptance_contract(artifact.repository_resource_id)
+
+    assert {:ok, created, :created} =
+             Goals.create_goal(
+               artifact.project_id,
+               artifact_goal_attrs(artifact.repository_resource_id, profile, acceptance),
+               "operator:test",
+               validation_profiles: []
+             )
+
+    goal_id = created.goal.id
+
+    proposal = %{
+      schema_version: "symmetry.plan.v1",
+      proposal_id: Ecto.UUID.generate(),
+      goal_id: goal_id,
+      expected_revision: 1,
+      items: [
+        %{
+          key: "implement",
+          title: "Produce artifact",
+          description: "Produce the candidate committed artifact.",
+          required: true,
+          integration: true,
+          repository_resource_id: artifact.repository_resource_id,
+          acceptance: acceptance,
+          depends_on_keys: [],
+          model_profile: profile,
+          change_target: nil,
+          baseline: %{kind: "subject", subject: artifact.subject}
+        }
+      ]
+    }
+
+    assert {:ok, decision, :created} =
+             command_current(goal_id, "request_decision", %{
+               kind: "plan",
+               work_item_id: nil,
+               subject_hash: nil,
+               proposal: proposal
+             })
+
+    decision_id = decision.response["decision"]["id"]
+    decision_version = Repo.get!(GoalDecision, decision_id).lock_version
+
+    assert {:ok, _resolved, :created} =
+             command_current(goal_id, "resolve_decision", %{
+               decision_id: decision_id,
+               expected_decision_version: decision_version,
+               option_id: "accept"
+             })
+
+    proposal_hash = "sha256:" <> Base.encode16(RequestHash.canonical(proposal), case: :lower)
+
+    assert {:ok, _planned, :created} =
+             command_current(
+               goal_id,
+               "accept_plan",
+               %{proposal: proposal, proposal_hash: proposal_hash, decision_id: decision_id},
+               rollout_enabled: true
+             )
+
+    assert {:ok, _active, :created} =
+             command_current(goal_id, "activate", %{approved_revision: 1})
+
+    assert {:ok, %{work_items: [item]}} = Goals.fetch_goal(goal_id)
+
+    assert {:ok, producer_receipt, :created} =
+             command_current(
+               goal_id,
+               "admit_task",
+               %{
+                 work_item_id: item.id,
+                 purpose: "implement",
+                 model_profile: profile,
+                 session_mode: "fresh",
+                 requested_session_id: nil,
+                 validation_of_task_id: nil
+               },
+               rollout_enabled: true
+             )
+
+    producer = Repo.get!(Task, producer_receipt.response["task"]["id"])
+    producer_result = candidate_completion_result(artifact.subject)
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    # The producer terminal is a Control-side fixture precondition for this
+    # validation seam; it is not claimed as live native execution evidence.
+    producer =
+      producer
+      |> Task.changeset(%{
+        state: "completed",
+        current_generation: 1,
+        result: %{"task_result" => producer_result}
+      })
+      |> Repo.update!()
+
+    producer_run =
+      %Run{}
+      |> Run.changeset(%{
+        task_id: producer.id,
+        runtime_id: runtime.id,
+        generation: 1,
+        state: "completed",
+        claimed_runtime_epoch: runtime.connection_epoch,
+        claim_id: Ecto.UUID.generate(),
+        lease_token: Ecto.UUID.generate(),
+        assigned_at: now,
+        assignment_expires_at: DateTime.add(now, 60, :second),
+        claimed_at: now,
+        lease_expires_at: DateTime.add(now, 60, :second),
+        result: %{"task_result" => producer_result}
+      })
+      |> Repo.insert!()
+
+    %{goal: Repo.get!(Goal, goal_id), item: item, producer: producer, producer_run: producer_run}
+  end
+
+  defp artifact_goal_attrs(repository_resource_id, profile, acceptance) do
+    %{
+      schema_version: "symmetry.goal_create.v1",
+      title: "Verify committed artifact #{System.unique_integer([:positive])}",
+      mutation_id: Ecto.UUID.generate(),
+      initial_revision: %{
+        objective: "Verify a candidate from an exact committed Git object.",
+        non_goals: [],
+        acceptance_contract: acceptance,
+        authority_policy: %{
+          "operator_required_for_scope_change" => true,
+          "operator_required_for_completion" => true,
+          "publication_allowed" => false,
+          "allowed_actions" => []
+        },
+        execution_policy: %{
+          "automatic_execution" => false,
+          "max_parallel_tasks" => 1,
+          "max_task_admissions" => 2,
+          "max_run_attempts_per_task" => 2,
+          "budget_limit_microusd" => nil,
+          "per_run_cost_limit_microusd" => nil,
+          "budget_mode" => "soft",
+          "hard_cost_limit_required" => false,
+          "allowed_runtime_ids" => [],
+          "allowed_resource_ids" => [repository_resource_id],
+          "allowed_model_profiles" => [profile],
+          "final_acceptance" => "operator",
+          "allowed_actions" => []
+        },
+        context_manifest: %{
+          "byte_budget" => 32_768,
+          "required_source_kinds" => ["approved_goal", "work_contract", "repository_subject"],
+          "include_advisory_recall" => false
+        },
+        reason: "Artifact validation E2E contract"
+      }
+    }
+  end
+
+  defp artifact_acceptance_contract(repository_resource_id) do
+    %{
+      "schema_version" => "symmetry.acceptance.v1",
+      "description" => "The committed proof artifact must be present.",
+      "predicates" => [
+        %{
+          "id" => "proof",
+          "kind" => "artifact",
+          "resource_id" => repository_resource_id,
+          "path" => "proof.txt"
+        }
+      ]
+    }
+  end
+
+  defp candidate_completion_result(subject) do
+    %{
+      "schema_version" => "symmetry.task_result.v1",
+      "result_id" => Ecto.UUID.generate(),
+      "kind" => "candidate_completion",
+      "summary" => "Candidate completion for the admitted artifact subject.",
+      "subject" => subject,
+      "subject_hash" => subject_hash!(subject),
+      "evidence_refs" => [],
+      "blocker" => nil,
+      "proposed_next_action" => nil,
+      "proposal" => nil,
+      "reason" => nil,
+      "diagnostics" => []
+    }
+  end
+
+  defp command_current(goal_id, kind, payload, opts \\ []) do
+    assert {:ok, goal} = Goals.fetch_goal(goal_id)
+
+    Goals.command(
+      goal_id,
+      %{
+        schema_version: "symmetry.goal_command.v1",
+        mutation_id: Ecto.UUID.generate(),
+        expected_version: goal.version,
+        expected_revision: goal.current_revision,
+        kind: kind,
+        payload: payload
+      },
+      "operator:test",
+      Keyword.merge([rollout_enabled: true], opts)
+    )
+  end
+
+  defp install_artificial_runtime_projection_for_assignment!(runtime) do
+    # Control's Goal scheduler requires a native-shaped capability projection
+    # even when the selected validation path must launch no native session.
+    # This test-only projection is an assignment precondition, not native
+    # capability evidence and is never used to start an adapter.
+    native_version = "artifact-e2e"
+
+    capabilities = %{
+      "structured_input" => true,
+      "provider_access" => false,
+      "interactive" => false,
+      "supervisory_control" => false,
+      "adapter" => %{
+        "kind" => "opencode",
+        "native_version" => native_version,
+        "implementation_version" => native_version,
+        "protocol_version" => 1,
+        "operations" => %{
+          "start" => true,
+          "events" => true,
+          "cancel" => true,
+          "resume" => false,
+          "handoff" => false,
+          "guidance" => "unsupported",
+          "pause" => "unsupported",
+          "approval_response" => false,
+          "usage" => "unknown",
+          "hard_cost_limit" => false
+        }
+      }
+    }
+
+    Repo.update_all(
+      from(runtime_row in Runtime, where: runtime_row.id == ^runtime.id),
+      set: [
+        harness_kind: "opencode",
+        harness_version: native_version,
+        adapter_version: native_version,
+        adapter_protocol_version: 1,
+        capabilities: capabilities
+      ]
+    )
+  end
+
+  defp recording_endpoint_plug(conn, recorder) do
+    ingress = record_request_ingress!(recorder, conn)
+
+    conn =
+      Plug.Conn.register_before_send(conn, fn response ->
+        record_request_response!(recorder, ingress, response)
+        response
+      end)
+
+    SymmetryControlWeb.Endpoint.call(conn, SymmetryControlWeb.Endpoint.init([]))
+  end
+
+  defp record_request_ingress!(recorder, conn) do
+    case recorder_request_kind(conn.method, conn.request_path) do
+      nil ->
+        nil
+
+      {kind, run_id} ->
+        evidence_present_at_ingress =
+          if kind == :transition do
+            Repo.exists?(from evidence in RunEvidence, where: evidence.run_id == ^run_id)
+          end
+
+        Agent.get_and_update(recorder, fn state ->
+          ingress_order = state.next_order + 1
+
+          event = %{
+            ingress_order: ingress_order,
+            kind: kind,
+            method: conn.method,
+            path: conn.request_path,
+            run_id: run_id,
+            status: nil,
+            completed: false,
+            evidence_present_at_ingress: evidence_present_at_ingress
+          }
+
+          {ingress_order, %{state | next_order: ingress_order, events: [event | state.events]}}
+        end)
+    end
+  end
+
+  defp record_request_response!(_recorder, nil, _conn), do: :ok
+
+  defp record_request_response!(recorder, ingress_order, conn) do
+    completed =
+      case conn.body_params do
+        params when is_map(params) -> Map.get(params, "state") == "completed"
+        _unparsed -> false
+      end
+
+    Agent.update(recorder, fn state ->
+      events =
+        Enum.map(state.events, fn event ->
+          if event.ingress_order == ingress_order,
+            do: %{event | status: conn.status, completed: completed},
+            else: event
+        end)
+
+      %{state | events: events}
+    end)
+  end
+
+  defp recorder_request_kind("POST", path) do
+    case Regex.run(~r{\A/api/v1/runs/([^/]+)/evidence\z}, path) do
+      [_, run_id] -> {:evidence, run_id}
+      _ -> nil
+    end
+  end
+
+  defp recorder_request_kind("PUT", path) do
+    case Regex.run(~r{\A/api/v1/runs/([^/]+)/transitions/[^/]+\z}, path) do
+      [_, run_id] -> {:transition, run_id}
+      _ -> nil
+    end
+  end
+
+  defp recorder_request_kind(_method, _path), do: nil
+
+  defp assert_artifact_ingress_order!(recorder, run_id) do
+    events = Agent.get(recorder, fn state -> Enum.reverse(state.events) end)
+
+    evidence_events =
+      Enum.filter(events, fn event ->
+        event.kind == :evidence and event.run_id == run_id
+      end)
+
+    terminal_events =
+      Enum.filter(events, fn event ->
+        event.kind == :transition and event.run_id == run_id and event.completed
+      end)
+
+    assert [%{method: "POST", path: evidence_path, status: evidence_status} = evidence_event] =
+             evidence_events
+
+    assert String.ends_with?(evidence_path, "/evidence")
+    assert evidence_status in [200, 201]
+
+    assert [
+             %{
+               method: "PUT",
+               path: terminal_path,
+               status: 200,
+               evidence_present_at_ingress: true
+             } = terminal_event
+           ] = terminal_events
+
+    assert String.contains?(terminal_path, "/transitions/")
+    assert evidence_event.ingress_order < terminal_event.ingress_order
+  end
+
+  defp subject_hash!(subject) do
+    "sha256:" <> Base.encode16(RequestHash.canonical(subject), case: :lower)
+  end
+
+  defp artifact_evidence_key(predicate_id) do
+    "artifact:" <> Base.encode16(:crypto.hash(:sha256, predicate_id), case: :lower)
+  end
+
+  defp digest!(content) do
+    "sha256:" <> Base.encode16(:crypto.hash(:sha256, content), case: :lower)
+  end
+
+  defp git_tree_digest!(repository_path, commit) do
+    entries =
+      repository_path
+      |> git_output_bytes!(["ls-tree", "--full-tree", "-r", "-z", commit])
+      |> :binary.split(<<0>>, [:global])
+      |> Enum.reject(&(&1 == <<>>))
+      |> Enum.map(fn record ->
+        [header, path] = :binary.split(record, <<9>>, [:global])
+        [mode, type, object_id] = :binary.split(header, <<32>>, [:global])
+        {path, mode, type, object_id}
+      end)
+      |> Enum.sort_by(&elem(&1, 0))
+
+    manifest =
+      entries
+      |> Enum.flat_map(fn {path, mode, type, object_id} ->
+        blob_digest =
+          repository_path
+          |> git_output_bytes!(["cat-file", "blob", object_id])
+          |> digest!()
+
+        [mode, <<0>>, type, <<0>>, path, <<0>>, blob_digest, <<0>>]
+      end)
+      |> IO.iodata_to_binary()
+
+    digest!(manifest)
+  end
+
+  defp run_git!(directory, args) do
+    case System.cmd("git", ["-C", directory | args], stderr_to_stdout: true) do
+      {_output, 0} -> :ok
+      {output, status} -> raise "git #{Enum.join(args, " ")} failed (#{status}): #{output}"
+    end
+  end
+
+  defp git_output!(directory, args) do
+    case System.cmd("git", ["-C", directory | args], stderr_to_stdout: true) do
+      {output, 0} -> output
+      {output, status} -> raise "git #{Enum.join(args, " ")} failed (#{status}): #{output}"
+    end
+  end
+
+  defp git_output_bytes!(directory, args), do: git_output!(directory, args)
 
   defp auth_type("github"), do: "gh_cli"
   defp auth_type("azure_devops"), do: "entra_id"
