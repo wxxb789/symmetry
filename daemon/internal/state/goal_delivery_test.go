@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -274,6 +276,255 @@ func TestNativeUsageRecoveryRequiresExactUsageBeforeClearOrJournalDeletion(t *te
 	if err := store.DeleteJournal(key); err != nil {
 		t.Fatalf("DeleteJournal() error = %v", err)
 	}
+}
+
+func TestQueueGoalEvidenceAndTerminalTransitionIsAtomicAndIdempotent(t *testing.T) {
+	store := mustStore(t)
+	key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
+	base := testGoalDeliveryJournal(key)
+	if err := store.SaveJournal(base); err != nil {
+		t.Fatal(err)
+	}
+	evidence := []protocol.Evidence{
+		testAtomicGoalEvidence(t, key.RunID, "00000000-0000-4000-8000-000000000011", "evidence-1"),
+		testAtomicGoalEvidence(t, key.RunID, "00000000-0000-4000-8000-000000000013", "evidence-2"),
+	}
+	refs := []string{evidence[0].EvidenceID, evidence[1].EvidenceID}
+	payload, err := json.Marshal(map[string]any{
+		"summary": "validated candidate",
+		"task_result": map[string]any{
+			"kind":          string(protocol.TaskResultCandidateCompletion),
+			"evidence_refs": refs,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transition := protocol.StateTransitionRequest{TransitionID: "completed-1", State: "completed", Payload: payload}
+	pendingAt := time.Date(2026, 9, 12, 1, 0, 0, 0, time.UTC)
+	queued, err := store.QueueGoalEvidenceAndTerminalTransition(key, evidence, transition, pendingAt)
+	if err != nil {
+		t.Fatalf("QueueGoalEvidenceAndTerminalTransition() error = %v", err)
+	}
+	if queued.LocalState != "terminal_pending" || queued.TerminalState != "completed" || !queued.TerminalPendingAt.Equal(pendingAt) || len(queued.PendingGoalDeliveries) != len(evidence) || len(queued.PendingTransitions) != 1 {
+		t.Fatalf("queued fixed evidence and terminal = %#v", queued)
+	}
+	if queued.PendingGoalDeliveries[0].Evidence == nil || queued.PendingGoalDeliveries[1].Evidence == nil {
+		t.Fatalf("queued evidence bodies missing: %#v", queued.PendingGoalDeliveries)
+	}
+
+	replayed, err := store.QueueGoalEvidenceAndTerminalTransition(key, evidence, transition, pendingAt.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("exact QueueGoalEvidenceAndTerminalTransition() replay error = %v", err)
+	}
+	if !reflect.DeepEqual(replayed, queued) {
+		t.Fatalf("exact replay changed durable receipt: got %#v want %#v", replayed, queued)
+	}
+
+	changedEvidence := append([]protocol.Evidence(nil), evidence...)
+	changedEvidence[0].EvidenceKey = "evidence-1-changed"
+	if _, err := store.QueueGoalEvidenceAndTerminalTransition(key, changedEvidence, transition, pendingAt); !errors.Is(err, ErrGoalDeliveryConflict) {
+		t.Fatalf("changed evidence body error = %v, want ErrGoalDeliveryConflict", err)
+	}
+	changedPayload := append(json.RawMessage(nil), payload...)
+	changedPayload = json.RawMessage(string(changedPayload) + " ")
+	changedTransition := transition
+	changedTransition.Payload = changedPayload
+	if _, err := store.QueueGoalEvidenceAndTerminalTransition(key, evidence, changedTransition, pendingAt); !errors.Is(err, ErrGoalDeliveryConflict) {
+		t.Fatalf("changed terminal body error = %v, want ErrGoalDeliveryConflict", err)
+	}
+	unchanged, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(unchanged, queued) {
+		t.Fatalf("conflicting replay mutated journal: got %#v want %#v", unchanged, queued)
+	}
+}
+
+func TestQueueGoalEvidenceAndTerminalTransitionWriteFailureLeavesNoPartialState(t *testing.T) {
+	store := mustStore(t)
+	key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
+	base := testGoalDeliveryJournal(key)
+	if err := store.SaveJournal(base); err != nil {
+		t.Fatal(err)
+	}
+	base, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := []protocol.Evidence{testAtomicGoalEvidence(t, key.RunID, "00000000-0000-4000-8000-000000000011", "evidence-1")}
+	payload, err := json.Marshal(map[string]any{"task_result": map[string]any{"kind": string(protocol.TaskResultCandidateCompletion), "evidence_refs": []string{evidence[0].EvidenceID}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transition := protocol.StateTransitionRequest{TransitionID: "completed-1", State: "completed", Payload: payload}
+	restore := store.SetAtomicWriterForTesting(func(string, []byte) error { return errors.New("injected journal write failure") })
+	t.Cleanup(restore)
+	if _, err := store.QueueGoalEvidenceAndTerminalTransition(key, evidence, transition, time.Date(2026, 9, 12, 1, 0, 0, 0, time.UTC)); err == nil {
+		t.Fatal("QueueGoalEvidenceAndTerminalTransition() succeeded despite injected write failure")
+	}
+	loaded, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded, base) {
+		t.Fatalf("failed atomic write left partial evidence or terminal: got %#v want %#v", loaded, base)
+	}
+}
+
+func TestQueueGoalEvidenceAndTerminalTransitionDoesNotAddEvidenceAfterCancellation(t *testing.T) {
+	store := mustStore(t)
+	key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
+	base := testGoalDeliveryJournal(key)
+	if err := store.SaveJournal(base); err != nil {
+		t.Fatal(err)
+	}
+	cancelled := protocol.StateTransitionRequest{TransitionID: "cancelled-1", State: "cancelled", Payload: json.RawMessage(`{"reason":"cancelled"}`)}
+	before, err := store.QueueTerminalTransitionAt(key, cancelled, time.Date(2026, 9, 12, 1, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := []protocol.Evidence{testAtomicGoalEvidence(t, key.RunID, "00000000-0000-4000-8000-000000000011", "evidence-1")}
+	payload, err := json.Marshal(map[string]any{"task_result": map[string]any{"kind": string(protocol.TaskResultCandidateCompletion), "evidence_refs": []string{evidence[0].EvidenceID}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := protocol.StateTransitionRequest{TransitionID: "completed-1", State: "completed", Payload: payload}
+	if _, err := store.QueueGoalEvidenceAndTerminalTransition(key, evidence, completed, time.Date(2026, 9, 12, 1, 1, 0, 0, time.UTC)); !errors.Is(err, ErrGoalDeliveryConflict) {
+		t.Fatalf("evidence after authoritative cancellation error = %v, want ErrGoalDeliveryConflict", err)
+	}
+	loaded, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded, before) || len(loaded.PendingGoalDeliveries) != 0 || len(loaded.PendingTransitions) != 1 || loaded.PendingTransitions[0].State != "cancelled" {
+		t.Fatalf("cancellation race mutated journal or added evidence: got %#v want %#v", loaded, before)
+	}
+}
+
+func TestGoalEvidenceTerminalCannotBeReplacedByCancellation(t *testing.T) {
+	store := mustStore(t)
+	key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
+	base := testGoalDeliveryJournal(key)
+	if err := store.SaveJournal(base); err != nil {
+		t.Fatal(err)
+	}
+	evidence := []protocol.Evidence{testAtomicGoalEvidence(t, key.RunID, "00000000-0000-4000-8000-000000000011", "evidence-1")}
+	payload, err := json.Marshal(map[string]any{"task_result": map[string]any{"kind": string(protocol.TaskResultCandidateCompletion), "evidence_refs": []string{evidence[0].EvidenceID}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := protocol.StateTransitionRequest{TransitionID: "completed-1", State: "completed", Payload: payload}
+	pendingAt := time.Date(2026, 9, 12, 2, 0, 0, 0, time.UTC)
+	queued, err := store.QueueGoalEvidenceAndTerminalTransition(key, evidence, completed, pendingAt)
+	if err != nil {
+		t.Fatalf("QueueGoalEvidenceAndTerminalTransition() error = %v", err)
+	}
+	cancelled := protocol.StateTransitionRequest{TransitionID: "cancelled-1", State: "cancelled", Payload: json.RawMessage(`{"reason":"cancelled"}`)}
+	if _, err := store.QueueTerminalTransitionAt(key, cancelled, pendingAt.Add(time.Second)); err == nil {
+		t.Fatal("QueueTerminalTransitionAt(cancelled) replaced completed evidence terminal")
+	}
+	loaded, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded, queued) || loaded.TerminalState != "completed" || len(loaded.PendingTransitions) != 1 || loaded.PendingTransitions[0].TransitionID != completed.TransitionID || len(loaded.PendingGoalDeliveries) != 1 || loaded.PendingGoalDeliveries[0].Evidence == nil || loaded.PendingGoalDeliveries[0].Evidence.EvidenceID != evidence[0].EvidenceID {
+		t.Fatalf("cancellation mutated completed evidence terminal: got %#v want %#v", loaded, queued)
+	}
+}
+
+func TestPersistedGoalDeliveryRequiresStablePayloadDigest(t *testing.T) {
+	t.Run("evidence", func(t *testing.T) {
+		store := mustStore(t)
+		key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
+		if err := store.SaveJournal(testGoalDeliveryJournal(key)); err != nil {
+			t.Fatal(err)
+		}
+		evidence := testAtomicGoalEvidence(t, key.RunID, "00000000-0000-4000-8000-000000000011", "evidence-1")
+		queued, err := store.QueueGoalEvidence(key, evidence)
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := queued.PendingGoalDeliveries[0].PayloadDigest
+		invalid := queued
+		invalid.PendingGoalDeliveries[0].PayloadDigest = ""
+		if err := store.SaveJournal(invalid); err == nil {
+			t.Fatal("SaveJournal() accepted an evidence delivery with an empty payload digest")
+		}
+		if replayed, err := store.QueueGoalEvidence(key, evidence); err != nil || len(replayed.PendingGoalDeliveries) != 1 || replayed.PendingGoalDeliveries[0].PayloadDigest != digest {
+			t.Fatalf("valid evidence replay = %#v, error = %v", replayed, err)
+		}
+		if _, err := store.MarkGoalDeliveryDelivered(key, GoalDeliveryEvidence, evidence.EvidenceKey, digest); err != nil {
+			t.Fatalf("valid evidence delivery after replay error = %v", err)
+		}
+	})
+
+	t.Run("usage", func(t *testing.T) {
+		store := mustStore(t)
+		key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
+		if err := store.SaveJournal(testGoalDeliveryJournal(key)); err != nil {
+			t.Fatal(err)
+		}
+		usage := testGoalUsage(key.RunID)
+		queued, err := store.QueueGoalUsage(key, usage)
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := queued.PendingGoalDeliveries[0].PayloadDigest
+		invalid := queued
+		invalid.PendingGoalDeliveries[0].PayloadDigest = ""
+		if err := store.SaveJournal(invalid); err == nil {
+			t.Fatal("SaveJournal() accepted a usage delivery with an empty payload digest")
+		}
+		if replayed, err := store.QueueGoalUsage(key, usage); err != nil || len(replayed.PendingGoalDeliveries) != 1 || replayed.PendingGoalDeliveries[0].PayloadDigest != digest {
+			t.Fatalf("valid usage replay = %#v, error = %v", replayed, err)
+		}
+		if _, err := store.MarkGoalDeliveryDelivered(key, GoalDeliveryUsage, usage.UsageKey, digest); err != nil {
+			t.Fatalf("valid usage delivery after replay error = %v", err)
+		}
+	})
+
+	t.Run("late usage ledger load", func(t *testing.T) {
+		store := mustStore(t)
+		key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
+		if err := store.SaveJournal(testGoalDeliveryJournal(key)); err != nil {
+			t.Fatal(err)
+		}
+		usage := testGoalUsage(key.RunID)
+		queued, err := store.QueueGoalUsage(key, usage)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.QueueTerminalTransitionAt(key, protocol.StateTransitionRequest{TransitionID: "failed-1", State: "failed", Payload: json.RawMessage(`{}`)}, time.Date(2026, 9, 12, 1, 0, 0, 0, time.UTC)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.ResolveTerminalForCleanup(key, TerminalVerdictOwnershipLost, time.Date(2026, 9, 12, 1, 1, 0, 0, time.UTC)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.MarkGoalDeliveryDelivered(key, GoalDeliveryUsage, usage.UsageKey, queued.PendingGoalDeliveries[0].PayloadDigest); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.DeleteJournal(key); err != nil {
+			t.Fatal(err)
+		}
+		ledger, err := store.LoadLateGoalUsage(key)
+		if err != nil || len(ledger.DeliveredDeliveries) != 1 {
+			t.Fatalf("valid late usage ledger = %#v, error = %v", ledger, err)
+		}
+		invalid := ledger
+		invalid.DeliveredDeliveries[0].PayloadDigest = ""
+		encoded, err := json.Marshal(invalid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(store.lateGoalUsagePath(key), encoded, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.LoadLateGoalUsage(key); err == nil {
+			t.Fatal("LoadLateGoalUsage() accepted a delivered usage with an empty payload digest")
+		}
+	})
 }
 
 func TestDeleteJournalIgnoresRetiredNonUsageDeliveries(t *testing.T) {
@@ -682,4 +933,19 @@ func testGoalUsage(runID string) protocol.Usage {
 		UsageKey: "late-usage", Provider: "openai", Model: "gpt-test", CostBasis: protocol.CostUnknown,
 		ObservedAt: "2026-09-09T01:00:00Z",
 	}
+}
+
+func testAtomicGoalEvidence(t *testing.T, runID, evidenceID, evidenceKey string) protocol.Evidence {
+	t.Helper()
+	subject := protocol.Subject{ResourceID: "00000000-0000-4000-8000-000000000012", Commit: "0000000000000000000000000000000000000000", TreeDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+	subjectHash, err := subject.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileHash := "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	evidence, err := protocol.ParseEvidence([]byte(fmt.Sprintf(`{"schema_version":"symmetry.evidence.v1","evidence_id":"%s","run_id":"%s","evidence_key":"%s","kind":"check","subject":{"resource_id":"%s","commit":"%s","tree_digest":"%s"},"subject_hash":"%s","source_ref":{"kind":"check","ref":"check-run","validator_profile":"default-checks","subject_hash":"%s"},"source_revision":"profile:default-checks","validator_profile":"default-checks","verdict":"passed","payload":{"predicate_id":"tests","subject":{"resource_id":"%s","commit":"%s","tree_digest":"%s"},"profile_digest":"%s","command_argv_digest":"%s","exit_code":0,"subject_hash":"%s","started_at":"2026-09-09T01:00:00Z","finished_at":"2026-09-09T01:01:00Z","output_ref":{"kind":"artifact","value":"artifact:check-output"}},"observed_at":"2026-09-09T01:01:00Z"}`, evidenceID, runID, evidenceKey, subject.ResourceID, subject.Commit, subject.TreeDigest, subjectHash, subjectHash, subject.ResourceID, subject.Commit, subject.TreeDigest, profileHash, profileHash, subjectHash)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return evidence
 }

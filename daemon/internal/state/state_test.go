@@ -950,7 +950,7 @@ func TestCompletedTerminalTaskResultKindSurvivesDeliveryAndRestart(t *testing.T)
 	}
 }
 
-func TestCancelledTerminalReplacementPreservesCompletedTaskResultKind(t *testing.T) {
+func TestCancelledTerminalCannotReplaceCompletedTaskResultKind(t *testing.T) {
 	store := mustStore(t)
 	journal := testJournal("run-terminal-cancel", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -964,14 +964,18 @@ func TestCancelledTerminalReplacementPreservesCompletedTaskResultKind(t *testing
 	}, pendingAt); err != nil {
 		t.Fatal(err)
 	}
-	updated, err := store.QueueCancelledTransitionAndAcknowledgementAt(journal.Key(), protocol.StateTransitionRequest{
+	_, err := store.QueueCancelledTransitionAndAcknowledgementAt(journal.Key(), protocol.StateTransitionRequest{
 		TransitionID: "cancelled-1", State: "cancelled", Payload: json.RawMessage(`{"reason":"cancelled"}`),
 	}, protocol.CommandAcknowledgement{CommandID: "cancel-1", Outcome: "applied", AckID: "ack-1"}, pendingAt.Add(time.Second))
+	if err == nil {
+		t.Fatal("cancellation replaced an authoritative completed terminal")
+	}
+	loaded, err := store.LoadJournal(journal.Key())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.TerminalState != "cancelled" || updated.TerminalTaskResultKind != protocol.TaskResultCandidateCompletion {
-		t.Fatalf("cancelled replacement = %#v", updated)
+	if loaded.TerminalState != "completed" || loaded.TerminalTaskResultKind != protocol.TaskResultCandidateCompletion || len(loaded.PendingTransitions) != 1 || loaded.PendingTransitions[0].State != "completed" || len(loaded.PendingCommandAcknowledgements) != 0 {
+		t.Fatalf("cancellation mutated authoritative completed terminal = %#v", loaded)
 	}
 }
 
@@ -1018,9 +1022,13 @@ func TestTerminalTaskResultKindNeverBackfillsAfterFirstTerminalTransition(t *tes
 			if _, err := store.QueueTerminalTransition(journal.Key(), test.first); err != nil {
 				t.Fatal(err)
 			}
-			updated, err := store.QueueTerminalTransition(journal.Key(), protocol.StateTransitionRequest{
+			_, err := store.QueueTerminalTransition(journal.Key(), protocol.StateTransitionRequest{
 				TransitionID: "completed-candidate", State: "completed", Payload: json.RawMessage(`{"task_result":{"kind":"candidate_completion"}}`),
 			})
+			if err == nil {
+				t.Fatal("later terminal transition was accepted")
+			}
+			updated, err := store.LoadJournal(journal.Key())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1292,29 +1300,40 @@ func TestQueueTerminalTransitionSelectsOneAuthoritativeTerminal(t *testing.T) {
 		name          string
 		pendingStates []string
 		incomingState string
+		wantErr       bool
 		wantStates    []string
 	}{
 		{
-			name:          "completed is replaced by cancelled",
+			name:          "completed rejects later cancelled",
 			pendingStates: []string{"completed"},
 			incomingState: "cancelled",
-			wantStates:    []string{"cancelled"},
-		},
-		{
-			name:          "cancelled keeps first terminal over completed",
-			pendingStates: []string{"cancelled"},
-			incomingState: "completed",
-			wantStates:    []string{"cancelled"},
-		},
-		{
-			name:          "completed keeps first terminal over failed",
-			pendingStates: []string{"completed"},
-			incomingState: "failed",
+			wantErr:       true,
 			wantStates:    []string{"completed"},
 		},
 		{
-			name:          "cancelled replaces running and completed",
+			name:          "cancelled rejects later completed",
+			pendingStates: []string{"cancelled"},
+			incomingState: "completed",
+			wantErr:       true,
+			wantStates:    []string{"cancelled"},
+		},
+		{
+			name:          "completed rejects later failed",
+			pendingStates: []string{"completed"},
+			incomingState: "failed",
+			wantErr:       true,
+			wantStates:    []string{"completed"},
+		},
+		{
+			name:          "completed rejects later cancelled after running",
 			pendingStates: []string{"running", "completed"},
+			incomingState: "cancelled",
+			wantErr:       true,
+			wantStates:    []string{"running", "completed"},
+		},
+		{
+			name:          "cancelled replaces nonterminal running",
+			pendingStates: []string{"running"},
 			incomingState: "cancelled",
 			wantStates:    []string{"cancelled"},
 		},
@@ -1335,6 +1354,12 @@ func TestQueueTerminalTransitionSelectsOneAuthoritativeTerminal(t *testing.T) {
 			}
 
 			queued, err := store.QueueTerminalTransition(journal.Key(), protocol.StateTransitionRequest{TransitionID: "incoming", State: test.incomingState, Payload: json.RawMessage(`{}`)})
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("QueueTerminalTransition() accepted a later terminal")
+				}
+				queued, err = store.LoadJournal(journal.Key())
+			}
 			if err != nil {
 				t.Fatalf("QueueTerminalTransition() error = %v", err)
 			}
@@ -1706,7 +1731,7 @@ func TestTerminalReplacementRemovesAttemptMarkers(t *testing.T) {
 	}
 }
 
-func TestTerminalPendingTimestampSurvivesRestartAndCancelReplacement(t *testing.T) {
+func TestTerminalPendingTimestampSurvivesRestartAndRejectsCancelReplacement(t *testing.T) {
 	store := mustStore(t)
 	journal := testJournal("run-1", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -1718,12 +1743,15 @@ func TestTerminalPendingTimestampSurvivesRestartAndCancelReplacement(t *testing.
 		t.Fatalf("QueueTerminalTransitionAt(completed) error = %v", err)
 	}
 	cancelledAt := enteredAt.Add(time.Minute)
-	queued, err = store.QueueTerminalTransitionAt(journal.Key(), protocol.StateTransitionRequest{TransitionID: "cancelled-1", State: "cancelled", Payload: json.RawMessage(`{}`)}, cancelledAt)
-	if err != nil {
-		t.Fatalf("QueueTerminalTransitionAt(cancelled) error = %v", err)
+	if _, err = store.QueueTerminalTransitionAt(journal.Key(), protocol.StateTransitionRequest{TransitionID: "cancelled-1", State: "cancelled", Payload: json.RawMessage(`{}`)}, cancelledAt); err == nil {
+		t.Fatal("QueueTerminalTransitionAt(cancelled) replaced the first terminal")
 	}
-	if queued.LocalState != "terminal_pending" || !queued.TerminalPendingAt.Equal(enteredAt) || queued.TerminalState != "cancelled" || queued.TerminalVerdict != "" || !queued.TerminalResolvedAt.IsZero() || !equalStrings(transitionStates(queued.PendingTransitions), []string{"cancelled"}) {
-		t.Fatalf("cancelled terminal journal = %#v", queued)
+	queued, err = store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued.LocalState != "terminal_pending" || !queued.TerminalPendingAt.Equal(enteredAt) || queued.TerminalState != "completed" || queued.TerminalVerdict != "" || !queued.TerminalResolvedAt.IsZero() || !equalStrings(transitionStates(queued.PendingTransitions), []string{"completed"}) {
+		t.Fatalf("terminal journal after rejected cancellation = %#v", queued)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -1737,7 +1765,7 @@ func TestTerminalPendingTimestampSurvivesRestartAndCancelReplacement(t *testing.
 	if err != nil {
 		t.Fatalf("LoadJournal() after restart error = %v", err)
 	}
-	if !loaded.TerminalPendingAt.Equal(enteredAt) || loaded.TerminalState != "cancelled" || loaded.TerminalVerdict != "" {
+	if !loaded.TerminalPendingAt.Equal(enteredAt) || loaded.TerminalState != "completed" || loaded.TerminalVerdict != "" {
 		t.Fatalf("terminal journal after restart = %#v", loaded)
 	}
 	resolvedAt := enteredAt.Add(2 * time.Minute)

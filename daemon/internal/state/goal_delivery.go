@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -238,6 +239,73 @@ func (store *Store) QueueGoalEvidence(key RunKey, evidence protocol.Evidence) (R
 	return RunJournal{}, err
 }
 
+// QueueGoalEvidenceAndTerminalTransition atomically records a non-empty,
+// fixed evidence set together with the terminal transition whose semantic
+// payload references exactly those evidence IDs. A terminal already present
+// in the journal may only be replayed with the exact same transition and
+// complete evidence bodies; it can never acquire new evidence.
+func (store *Store) QueueGoalEvidenceAndTerminalTransition(key RunKey, evidence []protocol.Evidence, transition protocol.StateTransitionRequest, pendingAt time.Time) (RunJournal, error) {
+	if len(evidence) == 0 {
+		return RunJournal{}, errors.New("Goal evidence set must not be empty")
+	}
+	if pendingAt.IsZero() {
+		return RunJournal{}, errors.New("terminal pending time is invalid")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		prepared, err := prepareTransition(journal, transition)
+		if err != nil {
+			return err
+		}
+		if !isTerminalTransitionState(prepared.State) {
+			return errors.New("terminal transition state is invalid")
+		}
+
+		// Resolve an existing terminal before validating or appending any new
+		// delivery. This preserves the first authoritative terminal and makes
+		// cancellation races fail closed without adding required evidence.
+		if existing, present := authoritativeTerminalTransition(journal); present {
+			if existing == nil || !sameStateTransition(*existing, prepared) {
+				return ErrGoalDeliveryConflict
+			}
+			refs, err := terminalEvidenceRefs(prepared.Payload)
+			if err != nil {
+				return err
+			}
+			preparedDeliveries, err := prepareGoalEvidenceDeliveries(journal, evidence)
+			if err != nil {
+				return err
+			}
+			if !sameEvidenceIDSet(refs, preparedDeliveries) {
+				return errors.New("terminal transition evidence references do not match deliveries")
+			}
+			for _, delivery := range preparedDeliveries {
+				if err := requireExactGoalEvidenceDelivery(*journal, delivery); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+
+		refs, err := terminalEvidenceRefs(prepared.Payload)
+		if err != nil {
+			return err
+		}
+		preparedDeliveries, err := prepareGoalEvidenceDeliveries(journal, evidence)
+		if err != nil {
+			return err
+		}
+		if !sameEvidenceIDSet(refs, preparedDeliveries) {
+			return errors.New("terminal transition evidence references do not match deliveries")
+		}
+		for _, delivery := range preparedDeliveries {
+			if err := queueGoalDeliveryOnJournal(journal, delivery); err != nil {
+				return err
+			}
+		}
+		return queueTerminalTransition(journal, prepared, pendingAt)
+	})
+}
+
 // QueueGoalUsage records caller-supplied normalized accounting. It remains
 // pending after terminal transitions so late accounting cannot be lost.
 func (store *Store) QueueGoalUsage(key RunKey, usage protocol.Usage) (RunJournal, error) {
@@ -312,39 +380,224 @@ func (store *Store) queueGoalDelivery(key RunKey, delivery GoalDelivery) (RunJou
 		return RunJournal{}, err
 	}
 	return store.mutateJournal(key, func(journal *RunJournal) error {
-		if !journal.hasClaimGrant() {
-			return errors.New("run journal has no claim grant")
+		return queueGoalDeliveryOnJournal(journal, delivery)
+	})
+}
+
+func queueGoalDeliveryOnJournal(journal *RunJournal, delivery GoalDelivery) error {
+	if !journal.hasClaimGrant() {
+		return errors.New("run journal has no claim grant")
+	}
+	delivery.Fence = journal.Fence()
+	if err := prepareGoalDelivery(journal.RunID, &delivery); err != nil {
+		return err
+	}
+	if err := rejectGoalEvidenceIdentityConflict(*journal, delivery); err != nil {
+		return err
+	}
+	for _, pending := range journal.PendingGoalDeliveries {
+		if pending.Kind != delivery.Kind || pending.DeliveryID != delivery.DeliveryID {
+			continue
 		}
-		delivery.Fence = journal.Fence()
-		if err := prepareGoalDelivery(journal.RunID, &delivery); err != nil {
-			return err
+		if pending.PayloadDigest == delivery.PayloadDigest && equalGoalDelivery(pending, delivery) {
+			return nil
 		}
-		for _, pending := range journal.PendingGoalDeliveries {
-			if pending.Kind != delivery.Kind || pending.DeliveryID != delivery.DeliveryID {
-				continue
-			}
-			if pending.PayloadDigest == delivery.PayloadDigest && equalGoalDelivery(pending, delivery) {
+		return ErrGoalDeliveryConflict
+	}
+	for _, retired := range journal.RetiredGoalDeliveries {
+		if retired.Delivery.Kind == delivery.Kind && retired.Delivery.DeliveryID == delivery.DeliveryID {
+			return ErrGoalDeliveryConflict
+		}
+	}
+	for _, delivered := range journal.DeliveredGoalDeliveries {
+		if delivered.Kind == delivery.Kind && delivered.DeliveryID == delivery.DeliveryID {
+			if delivered.PayloadDigest == delivery.PayloadDigest && equalGoalDelivery(delivered, delivery) {
 				return nil
 			}
 			return ErrGoalDeliveryConflict
 		}
-		for _, retired := range journal.RetiredGoalDeliveries {
-			if retired.Delivery.Kind == delivery.Kind && retired.Delivery.DeliveryID == delivery.DeliveryID {
-				return ErrGoalDeliveryConflict
-			}
+	}
+	journal.PendingGoalDeliveries = append(journal.PendingGoalDeliveries, delivery)
+	journal.GoalDeliveryEnabled = true
+	return nil
+}
+
+func authoritativeTerminalTransition(journal *RunJournal) (*protocol.StateTransitionRequest, bool) {
+	for index := range journal.PendingTransitions {
+		if isTerminalTransitionState(journal.PendingTransitions[index].State) {
+			return &journal.PendingTransitions[index], true
 		}
-		for _, delivered := range journal.DeliveredGoalDeliveries {
-			if delivered.Kind == delivery.Kind && delivered.DeliveryID == delivery.DeliveryID {
-				if delivered.PayloadDigest == delivery.PayloadDigest && equalGoalDelivery(delivered, delivery) {
-					return nil
-				}
-				return ErrGoalDeliveryConflict
-			}
+	}
+	if isTerminalTransitionState(journal.TerminalState) {
+		// Once the transition has been acknowledged, only TerminalState remains
+		// in the journal. Its original body is unavailable, so no new evidence
+		// can be attached to that authoritative terminal.
+		return nil, true
+	}
+	return nil, false
+}
+
+func sameStateTransition(left, right protocol.StateTransitionRequest) bool {
+	return left.Fence == right.Fence && left.TransitionID == right.TransitionID && left.State == right.State && bytes.Equal(left.Payload, right.Payload)
+}
+
+func prepareGoalEvidenceDeliveries(journal *RunJournal, evidence []protocol.Evidence) ([]GoalDelivery, error) {
+	if len(evidence) == 0 {
+		return nil, errors.New("Goal evidence set must not be empty")
+	}
+	seenKeys := make(map[string]struct{}, len(evidence))
+	seenIDs := make(map[string]struct{}, len(evidence))
+	deliveries := make([]GoalDelivery, 0, len(evidence))
+	for index := range evidence {
+		item := evidence[index]
+		if _, exists := seenKeys[item.EvidenceKey]; exists {
+			return nil, errors.New("Goal evidence set contains a duplicate evidence key")
 		}
-		journal.PendingGoalDeliveries = append(journal.PendingGoalDeliveries, delivery)
-		journal.GoalDeliveryEnabled = true
+		if _, exists := seenIDs[item.EvidenceID]; exists {
+			return nil, errors.New("Goal evidence set contains a duplicate evidence ID")
+		}
+		seenKeys[item.EvidenceKey] = struct{}{}
+		seenIDs[item.EvidenceID] = struct{}{}
+		delivery := GoalDelivery{Kind: GoalDeliveryEvidence, DeliveryID: item.EvidenceKey, Fence: journal.Fence(), Evidence: &item, Ready: true}
+		if err := prepareGoalDelivery(journal.RunID, &delivery); err != nil {
+			return nil, err
+		}
+		deliveries = append(deliveries, delivery)
+	}
+	return deliveries, nil
+}
+
+func sameEvidenceIDSet(refs []string, deliveries []GoalDelivery) bool {
+	if len(refs) != len(deliveries) {
+		return false
+	}
+	seen := make(map[string]struct{}, len(refs))
+	for _, ref := range refs {
+		if _, exists := seen[ref]; exists {
+			return false
+		}
+		seen[ref] = struct{}{}
+	}
+	for _, delivery := range deliveries {
+		if delivery.Evidence == nil {
+			return false
+		}
+		if _, exists := seen[delivery.Evidence.EvidenceID]; !exists {
+			return false
+		}
+		delete(seen, delivery.Evidence.EvidenceID)
+	}
+	return len(seen) == 0
+}
+
+func requireExactGoalEvidenceDelivery(journal RunJournal, candidate GoalDelivery) error {
+	for _, existing := range journal.PendingGoalDeliveries {
+		matched, err := compareGoalEvidenceDelivery(existing, candidate)
+		if err != nil {
+			return err
+		}
+		if matched {
+			return nil
+		}
+	}
+	for _, existing := range journal.DeliveredGoalDeliveries {
+		matched, err := compareGoalEvidenceDelivery(existing, candidate)
+		if err != nil {
+			return err
+		}
+		if matched {
+			return nil
+		}
+	}
+	for _, retired := range journal.RetiredGoalDeliveries {
+		matched, err := compareGoalEvidenceDelivery(retired.Delivery, candidate)
+		if err != nil {
+			return err
+		}
+		if matched {
+			return ErrGoalDeliveryConflict
+		}
+	}
+	return errors.New("required Goal evidence delivery is not durable")
+}
+
+func compareGoalEvidenceDelivery(existing, candidate GoalDelivery) (bool, error) {
+	if existing.Kind != GoalDeliveryEvidence || existing.Evidence == nil || candidate.Kind != GoalDeliveryEvidence || candidate.Evidence == nil {
+		return false, nil
+	}
+	if existing.DeliveryID != candidate.DeliveryID && existing.Evidence.EvidenceID != candidate.Evidence.EvidenceID {
+		return false, nil
+	}
+	if existing.PayloadDigest == candidate.PayloadDigest && equalGoalDelivery(existing, candidate) {
+		return true, nil
+	}
+	return false, ErrGoalDeliveryConflict
+}
+
+func rejectGoalEvidenceIdentityConflict(journal RunJournal, candidate GoalDelivery) error {
+	if candidate.Kind != GoalDeliveryEvidence || candidate.Evidence == nil {
 		return nil
-	})
+	}
+	for _, existing := range journal.PendingGoalDeliveries {
+		if _, err := compareGoalEvidenceDelivery(existing, candidate); err != nil {
+			return err
+		}
+	}
+	for _, existing := range journal.DeliveredGoalDeliveries {
+		if _, err := compareGoalEvidenceDelivery(existing, candidate); err != nil {
+			return err
+		}
+	}
+	for _, retired := range journal.RetiredGoalDeliveries {
+		if _, err := compareGoalEvidenceDelivery(retired.Delivery, candidate); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func terminalEvidenceRefs(payload json.RawMessage) ([]string, error) {
+	if len(payload) == 0 {
+		return nil, errors.New("terminal transition evidence references are missing")
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &envelope); err != nil || envelope == nil {
+		return nil, errors.New("terminal transition payload is invalid")
+	}
+	refs, direct := envelope["evidence_refs"]
+	taskResult, nested := envelope["task_result"]
+	if direct && nested {
+		return nil, errors.New("terminal transition evidence references are ambiguous")
+	}
+	if nested {
+		var task map[string]json.RawMessage
+		if err := json.Unmarshal(taskResult, &task); err != nil || task == nil {
+			return nil, errors.New("terminal task result is invalid")
+		}
+		var ok bool
+		refs, ok = task["evidence_refs"]
+		if !ok {
+			return nil, errors.New("terminal transition evidence references are missing")
+		}
+	}
+	if !direct && !nested {
+		return nil, errors.New("terminal transition evidence references are missing")
+	}
+	var values []string
+	if err := json.Unmarshal(refs, &values); err != nil || len(values) == 0 {
+		return nil, errors.New("terminal transition evidence references are invalid")
+	}
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if !validRequiredString(value, 4096) {
+			return nil, errors.New("terminal transition evidence reference is invalid")
+		}
+		if _, exists := seen[value]; exists {
+			return nil, errors.New("terminal transition evidence references are duplicated")
+		}
+		seen[value] = struct{}{}
+	}
+	return values, nil
 }
 
 // RetireGoalDelivery atomically records a conclusive HTTP rejection and lets
@@ -459,11 +712,12 @@ func prepareGoalDelivery(runID string, delivery *GoalDelivery) error {
 
 func validateGoalDeliveries(journal RunJournal) error {
 	seen := make(map[string]struct{}, len(journal.PendingGoalDeliveries))
-	for _, delivery := range journal.PendingGoalDeliveries {
+	for index := range journal.PendingGoalDeliveries {
+		delivery := &journal.PendingGoalDeliveries[index]
 		if !sameFence(delivery.Fence, journal.Fence()) {
 			return errors.New("Goal delivery fence does not match journal")
 		}
-		if err := prepareGoalDelivery(journal.RunID, &delivery); err != nil {
+		if err := validatePersistedGoalDelivery(journal.RunID, delivery); err != nil {
 			return err
 		}
 		identity := string(delivery.Kind) + "\x00" + delivery.DeliveryID
@@ -472,11 +726,12 @@ func validateGoalDeliveries(journal RunJournal) error {
 		}
 		seen[identity] = struct{}{}
 	}
-	for _, delivery := range journal.DeliveredGoalDeliveries {
+	for index := range journal.DeliveredGoalDeliveries {
+		delivery := &journal.DeliveredGoalDeliveries[index]
 		if !delivery.Ready || !sameFence(delivery.Fence, journal.Fence()) {
 			return errors.New("Goal delivered record is invalid")
 		}
-		if err := prepareGoalDelivery(journal.RunID, &delivery); err != nil {
+		if err := validatePersistedGoalDelivery(journal.RunID, delivery); err != nil {
 			return err
 		}
 		identity := string(delivery.Kind) + "\x00" + delivery.DeliveryID
@@ -485,7 +740,8 @@ func validateGoalDeliveries(journal RunJournal) error {
 		}
 		seen[identity] = struct{}{}
 	}
-	for _, retired := range journal.RetiredGoalDeliveries {
+	for index := range journal.RetiredGoalDeliveries {
+		retired := &journal.RetiredGoalDeliveries[index]
 		if err := validateGoalDeliveryRetirement(journal.RunID, journal.Fence(), retired); err != nil {
 			return err
 		}
@@ -501,11 +757,27 @@ func validateGoalDeliveries(journal RunJournal) error {
 	return nil
 }
 
-func validateGoalDeliveryRetirement(runID string, fence protocol.Fence, retired GoalDeliveryRetirement) error {
-	if retired.StatusCode < 400 || retired.StatusCode > 599 || !validRequiredString(retired.Code, 256) || !validRequiredString(retired.Message, 4096) || retired.RetiredAt.IsZero() || !sameFence(retired.Delivery.Fence, fence) {
+func validateGoalDeliveryRetirement(runID string, fence protocol.Fence, retired *GoalDeliveryRetirement) error {
+	if retired == nil || retired.StatusCode < 400 || retired.StatusCode > 599 || !validRequiredString(retired.Code, 256) || !validRequiredString(retired.Message, 4096) || retired.RetiredAt.IsZero() || !sameFence(retired.Delivery.Fence, fence) {
 		return errors.New("Goal delivery retirement is invalid")
 	}
-	return prepareGoalDelivery(runID, &retired.Delivery)
+	return validatePersistedGoalDelivery(runID, &retired.Delivery)
+}
+
+func validatePersistedGoalDelivery(runID string, delivery *GoalDelivery) error {
+	if delivery == nil || !validGoalDeliveryDigest(delivery.PayloadDigest) {
+		return errors.New("Goal delivery payload digest is invalid")
+	}
+	persistedDigest := delivery.PayloadDigest
+	prepared := *delivery
+	prepared.PayloadDigest = ""
+	if err := prepareGoalDelivery(runID, &prepared); err != nil {
+		return err
+	}
+	if prepared.PayloadDigest != persistedDigest {
+		return ErrGoalDeliveryConflict
+	}
+	return nil
 }
 
 // QueueLateGoalUsage records final accounting under a fence retained during
@@ -746,8 +1018,9 @@ func validateLateGoalUsageLedger(ledger LateGoalUsageLedger) error {
 		return errors.New("late Goal usage ledger is invalid")
 	}
 	seen := map[string]struct{}{}
-	for _, delivery := range ledger.PendingUsageDeliveries {
-		if delivery.Kind != GoalDeliveryUsage || !sameFence(delivery.Fence, ledger.Fence) || prepareGoalDelivery(ledger.RunID, &delivery) != nil {
+	for index := range ledger.PendingUsageDeliveries {
+		delivery := &ledger.PendingUsageDeliveries[index]
+		if delivery.Kind != GoalDeliveryUsage || !sameFence(delivery.Fence, ledger.Fence) || validatePersistedGoalDelivery(ledger.RunID, delivery) != nil {
 			return errors.New("late Goal usage delivery is invalid")
 		}
 		if _, duplicate := seen[delivery.DeliveryID]; duplicate {
@@ -755,8 +1028,9 @@ func validateLateGoalUsageLedger(ledger LateGoalUsageLedger) error {
 		}
 		seen[delivery.DeliveryID] = struct{}{}
 	}
-	for _, delivery := range ledger.DeliveredDeliveries {
-		if delivery.Kind != GoalDeliveryUsage || !delivery.Ready || !sameFence(delivery.Fence, ledger.Fence) || prepareGoalDelivery(ledger.RunID, &delivery) != nil {
+	for index := range ledger.DeliveredDeliveries {
+		delivery := &ledger.DeliveredDeliveries[index]
+		if delivery.Kind != GoalDeliveryUsage || !delivery.Ready || !sameFence(delivery.Fence, ledger.Fence) || validatePersistedGoalDelivery(ledger.RunID, delivery) != nil {
 			return errors.New("late Goal delivered usage is invalid")
 		}
 		if _, duplicate := seen[delivery.DeliveryID]; duplicate {
@@ -764,7 +1038,8 @@ func validateLateGoalUsageLedger(ledger LateGoalUsageLedger) error {
 		}
 		seen[delivery.DeliveryID] = struct{}{}
 	}
-	for _, retired := range ledger.RetiredDeliveries {
+	for index := range ledger.RetiredDeliveries {
+		retired := &ledger.RetiredDeliveries[index]
 		if err := validateGoalDeliveryRetirement(ledger.RunID, ledger.Fence, retired); err != nil || retired.Delivery.Kind != GoalDeliveryUsage {
 			return errors.New("late Goal usage retirement is invalid")
 		}

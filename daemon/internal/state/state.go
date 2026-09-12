@@ -1282,12 +1282,6 @@ func prepareTransition(journal *RunJournal, transition protocol.StateTransitionR
 }
 
 func queueTerminalTransition(journal *RunJournal, transition protocol.StateTransitionRequest, pendingAt time.Time) error {
-	if err := settleUnresolvedInputCommand(journal); err != nil {
-		return err
-	}
-	if err := settleUnresolvedControlCommands(journal); err != nil {
-		return err
-	}
 	if journal.TerminalVerdict != "" {
 		return errors.New("terminal verdict is already recorded")
 	}
@@ -1297,6 +1291,18 @@ func queueTerminalTransition(journal *RunJournal, transition protocol.StateTrans
 	}
 	if !isTerminalTransitionState(prepared.State) {
 		return errors.New("terminal transition state is invalid")
+	}
+	if existing, present := authoritativeTerminalTransition(journal); present {
+		if existing == nil || !sameStateTransition(*existing, prepared) {
+			return errors.New("terminal transition conflicts with journal")
+		}
+		return nil
+	}
+	if err := settleUnresolvedInputCommand(journal); err != nil {
+		return err
+	}
+	if err := settleUnresolvedControlCommands(journal); err != nil {
+		return err
 	}
 	if prepared.State == "cancelled" {
 		journal.RetainWorkspace = true
