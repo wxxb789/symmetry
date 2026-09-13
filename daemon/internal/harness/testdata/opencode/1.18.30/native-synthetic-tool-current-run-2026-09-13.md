@@ -12,10 +12,12 @@ not evidence of a real provider or model execution.
 | --- | --- |
 | OpenCode version | `1.18.30` |
 | Windows executable | `C:\Users\lhan\AppData\Local\mise\installs\opencode\1.18.30\opencode.exe` |
+| Windows executable SHA-256 | `C1BDBB18767048E1853AF4238311B3F7E16FF2F91B68FB4C7CED3C5175347EEA` |
 | Windows platform | Windows amd64 |
 | Linux archive | `opencode-linux-x64-baseline.tar.gz` |
 | Linux archive SHA-256 | `60c92147d0d86ca606dda8a77260d3c87e0ef959eb2d8dbffb34df6d8a64e063` |
 | Linux container | `golang:1.27`, Go `1.27.1`, `linux/amd64`, `--rm --init --network none` |
+| Linux container image digest | `sha256:512690a5660563b57d37ecc31129e7f136e831db2aed24a1dbeb8ad7380dc0fa` |
 | Source revision | `00a9e9b38075bfd7cfbb9fa684e75bdf7167f277` |
 
 The Windows run used the real installed OpenCode executable with isolated V2
