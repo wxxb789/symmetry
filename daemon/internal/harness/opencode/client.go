@@ -166,19 +166,14 @@ func (client *Client) Prompt(ctx context.Context, sessionID string, request Prom
 		ID       string `json:"id"`
 		Prompt   any    `json:"prompt"`
 		Delivery string `json:"delivery"`
-		Resume   *bool  `json:"resume,omitempty"`
+		Resume   bool   `json:"resume"`
 	}{
 		ID: request.ID,
 		Prompt: struct {
 			Text string `json:"text"`
 		}{Text: request.Text},
 		Delivery: request.Delivery,
-		Resume: func() *bool {
-			if !request.Resume {
-				return nil
-			}
-			return &request.Resume
-		}(),
+		Resume:   request.Resume,
 	}
 	body, err := client.do(ctx, http.MethodPost, "/api/session/"+url.PathEscape(sessionID)+"/prompt", payload, http.StatusOK)
 	if err != nil {

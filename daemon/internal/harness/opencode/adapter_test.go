@@ -199,6 +199,9 @@ func TestStartTurnAdmitsPromptBeforeOpeningDurableReplay(t *testing.T) {
 	if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{}`)}); err != nil {
 		t.Fatalf("StartTurn() error = %v", err)
 	}
+	if prompt := api.lastPromptRequest(); !prompt.Resume {
+		t.Fatalf("StartTurn() prompt = %+v, want explicit Resume:true work request", prompt)
+	}
 	if got, want := api.callOrder(), []string{"prompt", "events"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("call order = %#v, want %#v", got, want)
 	}
@@ -790,6 +793,12 @@ func (api *fakeAPI) openEventContextCancelled() bool {
 	api.mu.Lock()
 	defer api.mu.Unlock()
 	return api.openEventContext == nil || api.openEventContext.Err() != nil
+}
+
+func (api *fakeAPI) lastPromptRequest() PromptRequest {
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	return api.lastPrompt
 }
 
 func (api *fakeAPI) callOrder() []string {

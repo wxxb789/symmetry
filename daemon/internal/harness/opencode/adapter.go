@@ -715,7 +715,7 @@ func (session *nativeSession) StartTurn(ctx context.Context, request harness.Tur
 		return err
 	}
 	promptID := randomID("msg_")
-	prompt := PromptRequest{ID: promptID, Text: buildPrompt(request.Goal, request.Context), Delivery: "steer", Resume: false}
+	prompt := PromptRequest{ID: promptID, Text: buildPrompt(request.Goal, request.Context), Delivery: "steer", Resume: true}
 	admission, err := session.client.Prompt(promptContext, handle.ID, prompt)
 	if err != nil {
 		return fmt.Errorf("admit OpenCode prompt: %w", err)

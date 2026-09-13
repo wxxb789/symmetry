@@ -57,10 +57,11 @@ const (
 )
 
 // TestNativeSyntheticGatewayToolIntegration is deliberately opt-in and deferred.
-// Resume:false only records prompt admission and does not wake the native agent
-// loop, while StartTurn intentionally remains terminal fail-closed. The test
-// proves only a synthetic loopback tool interaction by the real OpenCode binary
-// in an isolated repository. It is not real-model or Goal evidence.
+// Direct Resume:false prompts only record admission; the production StartTurn
+// work path sends explicit Resume:true, while terminal semantics remain
+// fail-closed. The test proves only a synthetic loopback tool interaction by
+// the real OpenCode binary in an isolated repository. It is not native resume,
+// real-model, or Goal evidence.
 func TestNativeSyntheticGatewayToolIntegration(t *testing.T) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
 		t.Skip("native OpenCode synthetic tool integration supports Linux and Windows only")
@@ -185,12 +186,9 @@ func TestNativeSyntheticGatewayToolIntegration(t *testing.T) {
 		t.Fatalf("start native OpenCode prompt: %v", err)
 	}
 
-	artifactContext, artifactCancel := context.WithTimeout(context.Background(), 20*time.Second)
-	if err := nativeOpenCodeRepositoryTaskWaitForArtifact(artifactContext, target, []byte(nativeRepositoryTaskContent)); err != nil {
-		artifactCancel()
+	if err := nativeOpenCodeRepositoryTaskWaitForArtifact(turnContext, target, []byte(nativeRepositoryTaskContent)); err != nil {
 		t.Fatalf("wait for exact native OpenCode artifact: %v; gateway=%v", err, gateway.validate())
 	}
-	artifactCancel()
 	if err := gateway.waitForCompletion(turnContext); err != nil {
 		t.Fatalf("%v; gateway=%v", err, gateway.validate())
 	}
@@ -1443,15 +1441,15 @@ func nativeOpenCodeReadPromptAdmittedEvent(ctx context.Context, stream io.ReadCl
 }
 
 // TestNativeRepositoryTask is deliberately opt-in, deferred, and requires an
-// operator-supplied numeric-loopback upstream. Resume:false only records
-// admission, and later native events and terminal semantics remain unverified.
-// It must not be treated as green evidence until real-model lifecycle behavior
-// is independently captured and verified. It observes and transparently forwards
-// the real OpenCode Responses request to that upstream; it never injects a
-// model response or tool call. The served model identity, upstream auth and
-// provider accounting remain unattested. This still proves no terminal
-// semantics, usage, resume, handoff, cancellation, Control acceptance, or
-// capability promotion.
+// operator-supplied numeric-loopback upstream. StartTurn sends explicit
+// Resume:true to request work, but native resume capability and later native
+// terminal semantics remain unverified. It must not be treated as green
+// evidence until real-model lifecycle behavior is independently captured and
+// verified. It observes and transparently forwards the real OpenCode Responses
+// request to that upstream; it never injects a model response or tool call.
+// The served model identity, upstream auth and provider accounting remain
+// unattested. This still proves no terminal semantics, usage, handoff,
+// cancellation, Control acceptance, or capability promotion.
 func TestNativeRepositoryTask(t *testing.T) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
 		t.Skip("native OpenCode repository task supports Linux and Windows only")

@@ -129,7 +129,7 @@ func TestClientPromptValidatesAdmissionOnly(t *testing.T) {
 			t.Fatalf("request = %s %s", request.Method, request.URL.Path)
 		}
 		body, err := io.ReadAll(request.Body)
-		if err != nil || string(body) != `{"id":"msg_native_1","prompt":{"text":"protocol probe"},"delivery":"steer"}` {
+		if err != nil || string(body) != `{"id":"msg_native_1","prompt":{"text":"protocol probe"},"delivery":"steer","resume":false}` {
 			t.Fatalf("prompt body = %q, %v", body, err)
 		}
 		_, _ = io.WriteString(writer, `{"data":{"admittedSeq":1,"id":"msg_native_1","sessionID":"ses_native_1","prompt":{"text":"protocol probe"},"delivery":"steer","timeCreated":1789052190936,"promotedSeq":2}}`)
@@ -140,7 +140,7 @@ func TestClientPromptValidatesAdmissionOnly(t *testing.T) {
 	}
 }
 
-func TestClientPromptIncludesExperimentalResumeOnlyWhenRequested(t *testing.T) {
+func TestClientPromptSerializesResumeTrue(t *testing.T) {
 	server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
 		assertAuth(t, request)
 		body, err := io.ReadAll(request.Body)
