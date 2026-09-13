@@ -1,6 +1,6 @@
 # Pi 0.85.1 Windows current-run evidence
 
-Observed on 2026-09-12. This receipt records one Windows run of the real Pi
+Observed on 2026-09-13. This receipt records one Windows run of the real Pi
 standalone executable against daemon source revision
 `bab51bd4a918c563d526572590cb9aa4d5af64e5`. It is additional current-run
 evidence; historical receipts remain unchanged.
@@ -68,14 +68,13 @@ native `clear_queue`/abort path while a request was in flight. Three runs
 completed successfully:
 
 ```text
-go test ./internal/harness/pi -run '^TestNativeCancellationDrainsInFlightLoopbackRequest$' -count=1 -timeout=5m -v
-PASS (7.22s)
-PASS (7.48s)
-PASS (7.23s)
+go test ./internal/harness/pi -run '^TestNativeCancellationDrainsInFlightLoopbackRequest$' -count=3 -timeout=5m -v
+PASS (7.42s / 7.59s / 7.67s; 24.386s combined)
 ```
 
-Each run observed `ControlApplied`, a `WaitTurn` `ResultCancelled`, no
-semantic result, and `UsageUnknown`. The test also observed persisted native
+Each run observed `ControlApplied`; `WaitTurn` drained the native turn and the
+subsequent `Wait` returned `ResultCancelled` with no semantic result and
+`UsageUnknown`. The test also observed persisted native
 PID and identity before cancellation and verified tasklist cleanup after the
 native process terminated. The loopback endpoint was local and
 noncredentialed; no user credential or upstream provider request was used.
