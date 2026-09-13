@@ -210,6 +210,8 @@ type options struct {
 	enrollment                                 EnrollmentAPI
 	workspace                                  workspace.Service
 	start                                      StartProcess
+	harnessRegistry                            *harness.Registry
+	processObserver                            func(state.RunKey, int, string, time.Time)
 	notifications                              NotificationClient
 	logWriter                                  io.Writer
 	clock                                      func() time.Time
@@ -298,7 +300,7 @@ func Run(ctx context.Context, value config.Config, changes ...Options) error {
 		settings.logWriter = io.Discard
 	}
 	loop := &daemon{
-		config: value, options: settings,
+		config: value, options: settings, harnessRegistry: settings.harnessRegistry,
 		log:     slog.New(slog.NewJSONHandler(settings.logWriter, &slog.HandlerOptions{Level: slog.LevelInfo})),
 		running: make(map[state.RunKey]*runningRun),
 	}
@@ -3271,12 +3273,16 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 		ProviderAccess: providerAccess,
 		Invocation:     execution.Invocation{Program: profile.Command, Args: profile.Args, Dir: prepared.Path, Env: environment},
 		PersistProcess: func(pid int, identity string) error {
+			var persistErr error
 			if daemon.options.recordProcess != nil {
-				_, err := daemon.options.recordProcess(key, pid, identity, daemon.now())
-				return err
+				_, persistErr = daemon.options.recordProcess(key, pid, identity, daemon.now())
+			} else {
+				_, persistErr = daemon.store.SetProcessDetails(key, pid, identity, daemon.now())
 			}
-			_, err := daemon.store.SetProcessDetails(key, pid, identity, daemon.now())
-			return err
+			if persistErr == nil && daemon.options.processObserver != nil {
+				daemon.options.processObserver(key, pid, identity, daemon.now())
+			}
+			return persistErr
 		},
 	}, sink)
 	nativeLaunchAttempted = true
@@ -4132,7 +4138,7 @@ func (daemon *daemon) prepareNativeGoalUsage(key state.RunKey, result *harness.T
 		Provider:      provider,
 		Model:         model,
 		CostBasis:     protocol.CostUnknown,
-		ObservedAt:    observedAt.Format(time.RFC3339),
+		ObservedAt:    observedAt.Format(time.RFC3339Nano),
 	}
 	if hasSnapshot {
 		inputTokens := observed.InputTokens
