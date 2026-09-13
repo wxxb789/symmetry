@@ -333,11 +333,7 @@ defmodule SymmetryControlWeb.DaemonController do
          {:ok, fence, evidence} <- fenced_body(body, run_id, :required) do
       case append_evidence_request(conn.assigns.machine.id, run_id, fence, evidence) do
         {:ok, response, disposition} ->
-          if batch_evidence?(evidence) do
-            batch_success_response(conn, response, disposition)
-          else
-            receipt(conn, response, disposition)
-          end
+          receipt(conn, response, disposition)
 
         {:error, {:idempotency_conflict, fields} = reason} ->
           if batch_evidence?(evidence) and valid_batch_conflict_details?(fields) do
@@ -357,16 +353,6 @@ defmodule SymmetryControlWeb.DaemonController do
       end
     else
       {:error, reason} -> Protocol.error(conn, reason)
-    end
-  end
-
-  defp batch_success_response(conn, response, disposition) do
-    case ContractValidation.validate_evidence_batch_response(
-           response,
-           schema_root: contract_schema_root()
-         ) do
-      :ok -> receipt(conn, response, disposition)
-      {:error, _reason} -> Protocol.error(conn, :invalid_request)
     end
   end
 

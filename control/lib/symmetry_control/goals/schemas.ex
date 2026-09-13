@@ -772,6 +772,7 @@ defmodule SymmetryControl.Goals.RunEvidence do
     |> validate_map(:source_ref)
     |> validate_map(:payload)
     |> assoc_constraint(:run)
+    |> unique_constraint(:id, name: :run_evidence_pkey)
     |> unique_constraint([:run_id, :evidence_key])
     |> check_constraint(:kind, name: :run_evidence_kind_check)
     |> check_constraint(:verdict, name: :run_evidence_verdict_check)

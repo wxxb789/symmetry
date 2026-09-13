@@ -127,10 +127,8 @@ defmodule SymmetryControl.Goals do
 
     with :ok <- valid_uuid(project_id),
          :ok <- valid_actor(actor_ref),
-         :ok <- validate_goal_contract(:goal_create, attrs, opts),
-         {:ok, mutation_id} <- required_uuid(attrs, :mutation_id),
-         {:ok, title} <- required_string(attrs, :title),
-         {:ok, initial_revision} <- required_map(attrs, :initial_revision) do
+         {:ok, %{mutation_id: mutation_id, title: title, initial_revision: initial_revision}} <-
+           parse_create_envelope(attrs) do
       body = %{project_id: project_id, title: title, initial_revision: initial_revision}
 
       case replay_create(mutation_id, body) do
@@ -138,7 +136,8 @@ defmodule SymmetryControl.Goals do
           {:ok, receipt, :replayed}
 
         :missing ->
-          with :ok <- valid_initial_revision(initial_revision, opts) do
+          with :ok <- validate_goal_contract(:goal_create, attrs, opts),
+               :ok <- valid_initial_revision(initial_revision, opts) do
             create_new_goal(
               project_id,
               title,
@@ -209,6 +208,7 @@ defmodule SymmetryControl.Goals do
         {:error, :idempotency_conflict} ->
           case replay_command_after_conflict(goal_id, parsed.mutation_id, body) do
             {:ok, receipt} -> {:ok, receipt, :replayed}
+            {:error, :internal_error} -> {:error, :internal_error}
             _ -> {:error, :idempotency_conflict}
           end
 
@@ -472,24 +472,10 @@ defmodule SymmetryControl.Goals do
          :ok <- valid_uuid(run_id),
          :ok <- valid_fence(fence),
          :ok <- safe_evidence_document(evidence),
-         :ok <- validate_contract(:evidence, evidence, opts),
          {:ok, evidence_attrs} <- evidence_attrs(evidence, run_id) do
       Repo.transaction(fn ->
         {goal, task, item, run, runtime} =
           lock_goal_run!(machine_id, run_id, fence, opts, :delivery_replay)
-
-        snapshot =
-          lock_context_snapshot(goal.id, task.context_snapshot_id || rollback(:not_found))
-
-        unless snapshot.goal_revision == task.goal_revision and
-                 snapshot.work_item_id == task.work_item_id do
-          rollback(:ownership_lost)
-        end
-
-        context_wire_envelope!(snapshot, goal, item, task)
-
-        evidence_attrs =
-          ensure_evidence_identity!(task, item, run, runtime, snapshot, evidence_attrs)
 
         case Repo.one(
                from(row in RunEvidence,
@@ -499,6 +485,21 @@ defmodule SymmetryControl.Goals do
                )
              ) do
           nil ->
+            validate_evidence_contract!(evidence, opts)
+
+            snapshot =
+              lock_context_snapshot(goal.id, task.context_snapshot_id || rollback(:not_found))
+
+            unless snapshot.goal_revision == task.goal_revision and
+                     snapshot.work_item_id == task.work_item_id do
+              rollback(:ownership_lost)
+            end
+
+            context_wire_envelope!(snapshot, goal, item, task)
+
+            evidence_attrs =
+              ensure_evidence_identity!(task, item, run, runtime, snapshot, evidence_attrs)
+
             if validation_evidence_closed?(goal, task, run, evidence_attrs) do
               rollback(:validation_evidence_closed)
             end
@@ -550,36 +551,19 @@ defmodule SymmetryControl.Goals do
          :ok <- valid_uuid(run_id),
          :ok <- valid_fence(fence),
          :ok <- safe_evidence_document(batch),
-         :ok <- validate_evidence_batch_contract(batch, opts),
          {:ok, evidence_items} <- evidence_batch_attrs(batch, run_id) do
       Repo.transaction(fn ->
         {goal, task, item, run, runtime} =
           lock_goal_run!(machine_id, run_id, fence, opts, :delivery_replay)
-
-        snapshot =
-          lock_context_snapshot(goal.id, task.context_snapshot_id || rollback(:not_found))
-
-        unless snapshot.goal_revision == task.goal_revision and
-                 snapshot.work_item_id == task.work_item_id do
-          rollback(:ownership_lost)
-        end
-
-        context_wire_envelope!(snapshot, goal, item, task)
-
-        evidence_items =
-          Enum.map(evidence_items, fn %{attrs: attrs} = item_data ->
-            %{
-              item_data
-              | attrs: ensure_evidence_identity!(task, item, run, runtime, snapshot, attrs)
-            }
-          end)
 
         classify_and_insert_evidence_batch!(
           goal,
           task,
           item,
           run,
-          evidence_items
+          runtime,
+          evidence_items,
+          opts
         )
       end)
       |> machine_write_result()
@@ -588,15 +572,14 @@ defmodule SymmetryControl.Goals do
 
   def append_evidence_batch(_, _, _, _, _), do: {:error, :invalid_request}
 
-  defp classify_and_insert_evidence_batch!(goal, task, _item, run, evidence_items) do
+  defp classify_and_insert_evidence_batch!(goal, task, item, run, runtime, evidence_items, opts) do
     keys = Enum.map(evidence_items, & &1.attrs.evidence_key)
     ids = Enum.map(evidence_items, & &1.attrs.id)
 
     existing_by_key =
       Repo.all(
         from(row in RunEvidence,
-          where: row.run_id == ^run.id and row.evidence_key in ^keys,
-          lock: "FOR UPDATE"
+          where: row.run_id == ^run.id and row.evidence_key in ^keys
         )
       )
       |> Map.new(&{&1.evidence_key, &1})
@@ -604,18 +587,17 @@ defmodule SymmetryControl.Goals do
     existing_by_id =
       Repo.all(
         from(row in RunEvidence,
-          where: row.id in ^ids,
-          lock: "FOR UPDATE"
+          where: row.id in ^ids
         )
       )
       |> Map.new(&{&1.id, &1})
 
     classified =
-      Enum.map(evidence_items, fn %{index: index, attrs: attrs} ->
+      Enum.map(evidence_items, fn %{index: index, attrs: attrs} = item_data ->
         case Map.get(existing_by_key, attrs.evidence_key) do
           %RunEvidence{} = row ->
             if evidence_matches?(row, attrs) and row.id == attrs.id do
-              {:replayed, row}
+              {:replayed, index, row}
             else
               evidence_batch_conflict!(index, attrs)
             end
@@ -623,11 +605,7 @@ defmodule SymmetryControl.Goals do
           nil ->
             case Map.get(existing_by_id, attrs.id) do
               nil ->
-                if validation_evidence_closed?(goal, task, run, attrs) do
-                  rollback(:validation_evidence_closed)
-                end
-
-                {:created, index, attrs}
+                {:new, index, item_data}
 
               _row ->
                 evidence_batch_conflict!(index, attrs)
@@ -635,23 +613,76 @@ defmodule SymmetryControl.Goals do
         end
       end)
 
+    new_items =
+      Enum.flat_map(classified, fn
+        {:new, _index, item_data} -> [item_data]
+        _ -> []
+      end)
+
+    prepared_new_items =
+      case new_items do
+        [] ->
+          []
+
+        new_items ->
+          validate_new_evidence_batch!(run.id, new_items, opts)
+
+          snapshot =
+            lock_context_snapshot(goal.id, task.context_snapshot_id || rollback(:not_found))
+
+          unless snapshot.goal_revision == task.goal_revision and
+                   snapshot.work_item_id == task.work_item_id do
+            rollback(:ownership_lost)
+          end
+
+          context_wire_envelope!(snapshot, goal, item, task)
+
+          Enum.map(new_items, fn %{attrs: attrs} = item_data ->
+            %{
+              item_data
+              | attrs: ensure_evidence_identity!(task, item, run, runtime, snapshot, attrs)
+            }
+          end)
+      end
+
+    prepared_by_index = Map.new(prepared_new_items, &{&1.index, &1})
+
     outcomes =
       Enum.map(classified, fn
-        {:replayed, row} ->
+        {:replayed, _index, row} ->
           {:replayed, row}
 
-        {:created, index, attrs} ->
+        {:new, index, _item_data} ->
+          %{attrs: attrs} = Map.fetch!(prepared_by_index, index)
+
+          if validation_evidence_closed?(goal, task, run, attrs) do
+            rollback(:validation_evidence_closed)
+          end
+
           changeset =
             %RunEvidence{id: attrs.id}
             |> RunEvidence.changeset(Map.drop(attrs, [:id, :observed_at]))
             |> stamp_insert(attrs.observed_at)
 
-          case Repo.insert(changeset) do
-            {:ok, row} ->
-              {:created, row}
+          row_attrs = Map.put(changeset.changes, :id, attrs.id)
 
-            {:error, _changeset} ->
-              evidence_batch_conflict!(index, attrs)
+          case Repo.insert_all(RunEvidence, [row_attrs], on_conflict: :nothing) do
+            {1, _} ->
+              {:created, Repo.get!(RunEvidence, attrs.id)}
+
+            {0, _} ->
+              row =
+                Repo.one(
+                  from(row in RunEvidence,
+                    where: row.run_id == ^run.id and row.evidence_key == ^attrs.evidence_key
+                  )
+                )
+
+              if (row && evidence_matches?(row, attrs)) and row.id == attrs.id do
+                {:replayed, row}
+              else
+                evidence_batch_conflict!(index, attrs)
+              end
           end
       end)
 
@@ -667,7 +698,10 @@ defmodule SymmetryControl.Goals do
       }
     }
 
-    {disposition, response}
+    case validate_contract(:evidence_batch_response, response, opts) do
+      :ok -> {disposition, response}
+      {:error, _reason} -> rollback(:invalid_request)
+    end
   end
 
   defp evidence_batch_receipt({disposition, row}) do
@@ -1347,7 +1381,7 @@ defmodule SymmetryControl.Goals do
         if is_map(item) do
           case evidence_attrs(item, run_id) do
             {:ok, attrs} ->
-              {:cont, {:ok, [%{index: index, attrs: attrs} | acc]}}
+              {:cont, {:ok, [%{index: index, attrs: attrs, document: item} | acc]}}
 
             {:error, reason} ->
               {:halt, {:error, reason}}
@@ -1357,16 +1391,36 @@ defmodule SymmetryControl.Goals do
         end
       end)
       |> case do
-        {:ok, attrs} -> {:ok, Enum.reverse(attrs)}
-        {:error, reason} -> {:error, reason}
+        {:ok, attrs} ->
+          attrs = Enum.reverse(attrs)
+          keys = Enum.map(attrs, & &1.attrs.evidence_key)
+          ids = Enum.map(attrs, & &1.attrs.id)
+
+          cond do
+            length(keys) != MapSet.size(MapSet.new(keys)) ->
+              {:error, {:invalid_contract, :duplicate_evidence_key}}
+
+            length(ids) != MapSet.size(MapSet.new(ids)) ->
+              {:error, {:invalid_contract, :evidence_batch_duplicate_id}}
+
+            true ->
+              {:ok, attrs}
+          end
+
+        {:error, reason} ->
+          {:error, reason}
       end
     else
       _ -> {:error, :invalid_request}
     end
   end
 
+  # RunEvidence stores only the canonical Subject digest. Recompute it from
+  # the outer request Subject before treating an old row as an exact replay.
   defp evidence_matches?(row, attrs) do
     row.id == attrs.id and row.kind == attrs.kind and row.subject_hash == attrs.subject_hash and
+      row.subject_hash == RequestHash.canonical(attrs.subject) and
+      value(row.payload, "subject") == normalize_map(attrs.subject) and
       row.source_ref == attrs.source_ref and row.source_revision == attrs.source_revision and
       row.validator_profile == attrs.validator_profile and row.verdict == attrs.verdict and
       row.payload == attrs.payload and row.inserted_at == attrs.observed_at
@@ -5394,10 +5448,11 @@ defmodule SymmetryControl.Goals do
     current = now(opts)
 
     Repo.transaction(fn ->
-      lock_active_project!(project_id)
+      project = lock_project!(project_id)
 
       case Repo.one(from(event in GoalEvent, where: event.id == ^mutation_id, lock: "FOR UPDATE")) do
         nil ->
+          ensure_project_active!(project)
           goal_id = Ecto.UUID.generate()
 
           goal =
@@ -5441,7 +5496,7 @@ defmodule SymmetryControl.Goals do
             append_event!(goal, mutation_id, "goal_created", actor_ref, body, response, opts)
 
           goal = Repo.get!(Goal, goal.id)
-          {:created, receipt!(goal, event, response)}
+          {:created, receipt!(goal, event)}
 
         event ->
           case replay_event(event, body) do
@@ -5460,6 +5515,7 @@ defmodule SymmetryControl.Goals do
       {:error, :idempotency_conflict} ->
         case replay_create(mutation_id, body) do
           {:ok, receipt} -> {:ok, receipt, :replayed}
+          {:error, :internal_error} -> {:error, :internal_error}
           _ -> {:error, :idempotency_conflict}
         end
 
@@ -5476,46 +5532,63 @@ defmodule SymmetryControl.Goals do
         {:replayed, receipt}
 
       :missing ->
-        goal_id |> goal_project_id!() |> lock_active_project!()
-        goal = lock_goal(goal_id)
+        project = goal_id |> goal_project_id!() |> lock_project!()
 
-        case replay_command(goal.id, parsed.mutation_id, body) do
+        case replay_command(goal_id, parsed.mutation_id, body) do
           {:ok, receipt} ->
             {:replayed, receipt}
 
           :missing ->
-            ensure_preconditions!(goal, parsed)
+            ensure_project_active!(project)
+            goal = lock_command_goal(goal_id, parsed.mutation_id)
 
-            {goal, response} = apply_command!(goal, parsed, actor_ref, opts)
+            case replay_command(goal.id, parsed.mutation_id, body) do
+              {:ok, receipt} ->
+                {:replayed, receipt}
 
-            response =
-              if parsed.kind in ["pause", "cancel", "amend"] do
-                Map.put(response, "control_action_id", parsed.mutation_id)
-              else
-                response
-              end
+              :missing ->
+                case validate_goal_contract(:goal_command, parsed.document, opts) do
+                  :ok -> :ok
+                  {:error, reason} -> rollback(reason)
+                end
 
-            event =
-              append_event!(
-                goal,
-                parsed.mutation_id,
-                parsed.kind,
-                actor_ref,
-                body,
-                response,
-                opts
-              )
+                ensure_preconditions!(goal, parsed)
 
-            if parsed.kind in ["pause", "cancel", "amend"], do: enqueue_goal_control!(goal, event)
+                {goal, response} = apply_command!(goal, parsed, actor_ref, opts)
 
-            if parsed.kind in ["request_plan", "admit_task"] do
-              %{"goal_id" => goal.id}
-              |> WakeupWorker.new(unique: false)
-              |> Oban.insert!()
+                response =
+                  if parsed.kind in ["pause", "cancel", "amend"] do
+                    Map.put(response, "control_action_id", parsed.mutation_id)
+                  else
+                    response
+                  end
+
+                event =
+                  append_event!(
+                    goal,
+                    parsed.mutation_id,
+                    parsed.kind,
+                    actor_ref,
+                    body,
+                    response,
+                    opts
+                  )
+
+                if parsed.kind in ["pause", "cancel", "amend"],
+                  do: enqueue_goal_control!(goal, event)
+
+                if parsed.kind in ["request_plan", "admit_task"] do
+                  %{"goal_id" => goal.id}
+                  |> WakeupWorker.new(unique: false)
+                  |> Oban.insert!()
+                end
+
+                goal = Repo.get!(Goal, goal.id)
+                {:created, receipt!(goal, event)}
+
+              {:error, reason} ->
+                rollback(reason)
             end
-
-            goal = Repo.get!(Goal, goal.id)
-            {:created, receipt!(goal, event, response)}
 
           {:error, reason} ->
             rollback(reason)
@@ -7570,7 +7643,15 @@ defmodule SymmetryControl.Goals do
   defp replay_event(event, body) do
     if RequestHash.matches?(event.request_hash, event.request_hash_version, body) do
       goal = Repo.get(Goal, event.goal_id)
-      if goal, do: {:ok, receipt!(goal, event, event.response)}, else: {:error, :not_found}
+
+      if goal do
+        case decode_receipt_snapshot(event.response, goal, event) do
+          {:ok, receipt} -> {:ok, receipt}
+          :error -> {:error, :internal_error}
+        end
+      else
+        {:error, :not_found}
+      end
     else
       {:error, :idempotency_conflict}
     end
@@ -7664,10 +7745,10 @@ defmodule SymmetryControl.Goals do
     |> Oban.insert!()
   end
 
-  defp receipt!(goal, event, response) do
-    case decode_receipt_snapshot(event.response) do
+  defp receipt!(goal, event) do
+    case decode_receipt_snapshot(event.response, goal, event) do
       {:ok, receipt} -> receipt
-      :error -> current_receipt(goal, event, response)
+      :error -> rollback(:internal_error)
     end
   end
 
@@ -7701,66 +7782,107 @@ defmodule SymmetryControl.Goals do
     }
   end
 
-  defp current_receipt(goal, event, response) do
-    {:ok, projection} = ReadModel.fetch(goal)
-
-    %{
-      goal: projection,
-      event: %{id: event.id, sequence: event.sequence, kind: event.kind, revision: event.revision},
-      response: response,
-      goal_id: goal.id,
-      mutation_id: event.id
-    }
-  end
-
   defp encode_receipt_snapshot(receipt), do: normalize_map(receipt)
 
-  defp decode_receipt_snapshot(response) when is_map(response) do
+  defp decode_receipt_snapshot(response, %Goal{} = goal, %GoalEvent{} = event)
+       when is_map(response) do
+    response = normalize_map(response)
+    snapshot = value(response, "_receipt_v1")
+
     with %{
            "schema_version" => "symmetry.goal_receipt.v1",
-           "goal" => %{
-             "id" => goal_id,
-             "state" => state,
-             "version" => version,
-             "current_revision" => current_revision
-           },
-           "event" => %{
-             "id" => event_id,
-             "sequence" => sequence,
-             "kind" => kind,
-             "revision" => revision
-           },
+           "goal" => goal_snapshot,
+           "event" => event_snapshot,
            "response" => stored_response
-         } <- value(response, "_receipt_v1"),
+         } <- snapshot,
          true <-
-           is_binary(goal_id) and is_binary(state) and is_integer(version) and
-             is_integer(current_revision) and is_binary(event_id) and is_integer(sequence) and
-             is_binary(kind) and is_integer(revision) and is_map(stored_response),
-         %{
-           "next_wake_at" => next_wake_at,
-           "updated_at" => updated_at
-         } <- value(value(response, "_receipt_v1"), "goal", %{}) do
+           Map.keys(snapshot) |> Enum.sort() == ["event", "goal", "response", "schema_version"],
+         :ok <- validate_receipt_goal_snapshot(goal_snapshot, goal),
+         :ok <- validate_receipt_event_snapshot(event_snapshot, event),
+         true <- is_map(stored_response),
+         true <- stored_response == Map.delete(response, "_receipt_v1"),
+         {:ok, next_wake_at, updated_at} <- receipt_timestamps(goal_snapshot, event) do
       {:ok,
        %{
          goal: %{
-           id: goal_id,
-           state: state,
-           version: version,
-           current_revision: current_revision,
+           id: goal_snapshot["id"],
+           state: goal_snapshot["state"],
+           version: goal_snapshot["version"],
+           current_revision: goal_snapshot["current_revision"],
            next_wake_at: next_wake_at,
            updated_at: updated_at
          },
-         event: %{id: event_id, sequence: sequence, kind: kind, revision: revision},
+         event: %{
+           id: event_snapshot["id"],
+           sequence: event_snapshot["sequence"],
+           kind: event_snapshot["kind"],
+           revision: event_snapshot["revision"]
+         },
          response: stored_response,
-         goal_id: goal_id,
-         mutation_id: event_id
+         goal_id: goal_snapshot["id"],
+         mutation_id: event_snapshot["id"]
        }}
     else
       _ -> :error
     end
   end
 
-  defp decode_receipt_snapshot(_response), do: :error
+  defp decode_receipt_snapshot(_response, _goal, _event), do: :error
+
+  defp validate_receipt_goal_snapshot(snapshot, goal) when is_map(snapshot) do
+    with true <-
+           Map.keys(snapshot) |> Enum.sort() ==
+             ["current_revision", "id", "next_wake_at", "state", "updated_at", "version"],
+         true <- valid_uuid?(snapshot["id"]) and snapshot["id"] == goal.id,
+         true <- snapshot["state"] in ["draft", "active", "paused", "achieved", "cancelled"],
+         true <- is_integer(snapshot["version"]) and snapshot["version"] > 0,
+         true <- is_integer(snapshot["current_revision"]) and snapshot["current_revision"] > 0 do
+      :ok
+    else
+      _ -> :error
+    end
+  end
+
+  defp validate_receipt_goal_snapshot(_snapshot, _goal), do: :error
+
+  defp validate_receipt_event_snapshot(snapshot, event) when is_map(snapshot) do
+    with true <- Map.keys(snapshot) |> Enum.sort() == ["id", "kind", "revision", "sequence"],
+         true <- valid_uuid?(snapshot["id"]) and snapshot["id"] == event.id,
+         true <- is_integer(snapshot["sequence"]) and snapshot["sequence"] > 0,
+         true <- snapshot["sequence"] == event.sequence,
+         true <-
+           is_binary(snapshot["kind"]) and snapshot["kind"] != "" and
+             snapshot["kind"] == event.kind,
+         true <- is_integer(snapshot["revision"]) and snapshot["revision"] > 0,
+         true <- snapshot["revision"] == event.revision do
+      :ok
+    else
+      _ -> :error
+    end
+  end
+
+  defp validate_receipt_event_snapshot(_snapshot, _event), do: :error
+
+  defp receipt_timestamps(snapshot, event) do
+    with true <- valid_receipt_utc?(snapshot["updated_at"]),
+         true <-
+           is_nil(snapshot["next_wake_at"]) or valid_receipt_utc?(snapshot["next_wake_at"]),
+         true <- is_struct(event.inserted_at, DateTime),
+         true <- snapshot["updated_at"] == DateTime.to_iso8601(event.inserted_at) do
+      {:ok, snapshot["next_wake_at"], snapshot["updated_at"]}
+    else
+      _ -> :error
+    end
+  end
+
+  defp valid_receipt_utc?(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, _datetime, 0} -> String.ends_with?(value, "Z")
+      _ -> false
+    end
+  end
+
+  defp valid_receipt_utc?(_value), do: false
 
   defp nullable_datetime(nil), do: nil
   defp nullable_datetime(%DateTime{} = datetime), do: DateTime.to_iso8601(datetime)
@@ -7819,6 +7941,21 @@ defmodule SymmetryControl.Goals do
       rollback(:not_found)
   end
 
+  defp lock_command_goal(goal_id, mutation_id) do
+    command_goal_lock_telemetry(:attempt, goal_id, mutation_id)
+    goal = lock_goal(goal_id)
+    command_goal_lock_telemetry(:acquired, goal.id, mutation_id)
+    goal
+  end
+
+  defp command_goal_lock_telemetry(phase, goal_id, mutation_id) do
+    :telemetry.execute(
+      [:symmetry_control, :goals, :command, :goal_lock],
+      %{},
+      %{phase: phase, goal_id: goal_id, mutation_id: mutation_id}
+    )
+  end
+
   defp goal_project_id!(goal_id) do
     Repo.one(from(goal in Goal, where: goal.id == ^goal_id, select: goal.project_id)) ||
       rollback(:not_found)
@@ -7826,13 +7963,13 @@ defmodule SymmetryControl.Goals do
 
   # Archival takes FOR UPDATE. Acquire the compatible Project lock before a
   # command can authorize new Goal work or mutate Goal authority.
-  defp lock_active_project!(project_id) do
-    project =
-      Repo.one(from(project in Project, where: project.id == ^project_id, lock: "FOR SHARE")) ||
-        rollback(:not_found)
-
-    if project.status == "active", do: project, else: rollback(:state_conflict)
+  defp lock_project!(project_id) do
+    Repo.one(from(project in Project, where: project.id == ^project_id, lock: "FOR SHARE")) ||
+      rollback(:not_found)
   end
+
+  defp ensure_project_active!(%Project{status: "active"} = project), do: project
+  defp ensure_project_active!(_project), do: rollback(:state_conflict)
 
   defp try_lock_active_goal_project(goal_id) do
     with project_id when is_binary(project_id) <-
@@ -9081,19 +9218,43 @@ defmodule SymmetryControl.Goals do
     end
   end
 
-  defp parse_command(command, opts) do
+  defp parse_create_envelope(attrs) do
     with true <-
-           only_known_keys?(command, [
-             "schema_version",
-             "mutation_id",
-             "expected_version",
-             "expected_revision",
-             "kind",
-             "payload"
-           ]),
-         {:ok, command_kind} <- required_string(command, :kind),
-         true <- command_kind in @command_kinds,
-         :ok <- validate_goal_contract(:goal_command, command, opts),
+           only_known_keys?(attrs, ["schema_version", "mutation_id", "title", "initial_revision"]),
+         "symmetry.goal_create.v1" <- value(attrs, :schema_version),
+         {:ok, mutation_id} <- required_uuid(attrs, :mutation_id),
+         {:ok, title} <- required_string(attrs, :title),
+         {:ok, initial_revision} <- required_map(attrs, :initial_revision) do
+      {:ok, %{mutation_id: mutation_id, title: title, initial_revision: initial_revision}}
+    else
+      _ -> {:error, :invalid_request}
+    end
+  end
+
+  defp parse_command(command, opts) do
+    allowed = [
+      "schema_version",
+      "mutation_id",
+      "expected_version",
+      "expected_revision",
+      "kind",
+      "payload"
+    ]
+
+    cond do
+      not only_known_keys?(command, allowed) ->
+        {:error, :invalid_request}
+
+      match?({:ok, kind} when kind in @command_kinds, required_string(command, :kind)) ->
+        parse_known_command_envelope(command, opts)
+
+      true ->
+        {:error, :invalid_request}
+    end
+  end
+
+  defp parse_known_command_envelope(command, opts) do
+    with "symmetry.goal_command.v1" <- value(command, :schema_version),
          {:ok, mutation_id} <- required_uuid(command, :mutation_id),
          {:ok, expected_version} <- required_safe_nonnegative_integer(command, :expected_version),
          {:ok, expected_revision} <- required_safe_positive_integer(command, :expected_revision),
@@ -9108,11 +9269,15 @@ defmodule SymmetryControl.Goals do
          expected_version: expected_version,
          expected_revision: expected_revision,
          kind: kind,
-         payload: payload
+         payload: payload,
+         document: command
        }}
     else
-      {:error, {:invalid_contract, _reason}} = error -> error
-      _ -> {:error, :invalid_request}
+      _ ->
+        case validate_goal_contract(:goal_command, command, opts) do
+          :ok -> {:error, :invalid_request}
+          {:error, reason} -> {:error, reason}
+        end
     end
   end
 
@@ -9209,10 +9374,14 @@ defmodule SymmetryControl.Goals do
       if is_list(items),
         do:
           Enum.map(items, fn item ->
-            item
-            |> normalize_map()
-            |> Map.put_new("integration", false)
-            |> Map.put_new("change_target", nil)
+            if is_map(item) do
+              item
+              |> normalize_map()
+              |> Map.put_new("integration", false)
+              |> Map.put_new("change_target", nil)
+            else
+              item
+            end
           end),
         else: items
     end)
@@ -9265,6 +9434,9 @@ defmodule SymmetryControl.Goals do
       :evidence_batch ->
         ContractValidation.validate_evidence_batch(document, schema_root: schema_root)
 
+      :evidence_batch_response ->
+        ContractValidation.validate_evidence_batch_response(document, schema_root: schema_root)
+
       :usage ->
         ContractValidation.validate_usage(document, schema_root: schema_root)
 
@@ -9280,6 +9452,27 @@ defmodule SymmetryControl.Goals do
     case validate_contract(:evidence_batch, batch, opts) do
       :ok -> :ok
       {:error, reason} -> {:error, {:invalid_contract, reason}}
+    end
+  end
+
+  defp validate_evidence_contract!(evidence, opts) do
+    case validate_contract(:evidence, evidence, opts) do
+      :ok -> :ok
+      {:error, :invalid_commit_path} -> rollback({:invalid_contract, :invalid_commit_path})
+      {:error, reason} -> rollback(reason)
+    end
+  end
+
+  defp validate_new_evidence_batch!(run_id, evidence_items, opts) do
+    batch = %{
+      "schema_version" => "symmetry.evidence_batch.v1",
+      "run_id" => run_id,
+      "items" => Enum.map(evidence_items, & &1.document)
+    }
+
+    case validate_evidence_batch_contract(batch, opts) do
+      :ok -> :ok
+      {:error, reason} -> rollback(reason)
     end
   end
 

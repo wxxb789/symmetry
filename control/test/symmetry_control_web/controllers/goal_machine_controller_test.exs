@@ -603,11 +603,28 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
 
     Application.put_env(:symmetry_control, :contracts, directory: temporary_root)
 
+    count_before = Repo.aggregate(SymmetryControl.Goals.RunEvidence, :count)
+
     assert_error(
       bearer(conn, token) |> post("/api/v1/runs/#{run.id}/evidence", Map.merge(fence, batch)),
       400,
       "invalid_request"
     )
+
+    assert Repo.aggregate(SymmetryControl.Goals.RunEvidence, :count) == count_before
+
+    Application.put_env(:symmetry_control, :contracts, previous_contracts)
+
+    created =
+      bearer(conn, token)
+      |> post("/api/v1/runs/#{run.id}/evidence", Map.merge(fence, batch))
+      |> json_response(201)
+
+    assert :ok ==
+             ContractValidation.validate_evidence_batch_response(
+               created,
+               schema_root: @contracts_schema_root
+             )
 
     conflict = put_in(evidence, [:payload, :note], "changed after response validation")
 
@@ -617,8 +634,8 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
         "/api/v1/runs/#{run.id}/evidence",
         Map.merge(fence, %{batch | items: [conflict]})
       ),
-      400,
-      "invalid_request"
+      409,
+      "idempotency_conflict"
     )
   end
 

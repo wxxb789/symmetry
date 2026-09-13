@@ -968,9 +968,13 @@ defmodule SymmetryControl.Goals.ContractValidation do
       proposal,
       "items",
       Enum.map(items, fn item ->
-        item
-        |> Map.put_new("integration", false)
-        |> Map.put_new("change_target", nil)
+        if is_map(item) do
+          item
+          |> Map.put_new("integration", false)
+          |> Map.put_new("change_target", nil)
+        else
+          item
+        end
       end)
     )
   end

@@ -8,7 +8,8 @@ defmodule SymmetryControl.GoalsTest do
     GoalExternalWait,
     HarnessSession,
     HarnessSessionAttachReceipt,
-    HarnessSessionStopReceipt
+    HarnessSessionStopReceipt,
+    RunEvidence
   }
 
   alias SymmetryControl.Goals.Workers.{GoalControlWorker, SettleTaskWorker, WakeupWorker}
@@ -201,6 +202,264 @@ defmodule SymmetryControl.GoalsTest do
                kind: "completion",
                subject_hash: "sha256:" <> String.duplicate("a", 64)
              })
+  end
+
+  test "commands recheck exact replay after the Goal lock before semantic validation" do
+    project = project_fixture()
+    attrs = goal_attrs()
+
+    assert {:ok, created, :created} =
+             Goals.create_goal(project.id, attrs, "operator:test", now: @now)
+
+    command =
+      command(created.goal, "request_decision", %{
+        kind: "invalid",
+        work_item_id: nil,
+        subject_hash: nil
+      })
+
+    mutation_id = command.mutation_id
+    body = Map.take(command, [:expected_version, :expected_revision, :kind, :payload])
+    original_response = Repo.get!(SymmetryControl.Goals.GoalEvent, created.event.id).response
+
+    event_name = [:symmetry_control, :goals, :command, :goal_lock]
+    handler_id = {__MODULE__, :goal_lock_replay_race, make_ref()}
+    test_pid = self()
+
+    :telemetry.attach(
+      handler_id,
+      event_name,
+      fn
+        ^event_name, %{}, %{phase: :attempt, mutation_id: ^mutation_id}, _config ->
+          :ok
+
+        ^event_name, %{}, %{phase: :acquired, mutation_id: ^mutation_id}, _config ->
+          persist_goal_event!(
+            created.goal.id,
+            mutation_id,
+            created.event.sequence + 1,
+            "request_decision",
+            created.event.revision,
+            body,
+            original_response
+          )
+
+          send(test_pid, :goal_lock_event_inserted)
+
+        _event, _measurements, _metadata, _config ->
+          :ok
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    assert {:ok, replayed_receipt, :replayed} =
+             Goals.command(created.goal.id, command, "operator:test", now: @now)
+
+    assert_receive :goal_lock_event_inserted, 1_000
+    assert replayed_receipt.event.id == mutation_id
+
+    assert Repo.aggregate(
+             from(event in SymmetryControl.Goals.GoalEvent,
+               where: event.id == ^mutation_id
+             ),
+             :count
+           ) == 1
+  end
+
+  test "corrupt persisted goal receipts fail closed instead of rebuilding current state" do
+    project = project_fixture()
+    created_attrs = goal_attrs()
+
+    assert {:ok, created, :created} =
+             Goals.create_goal(project.id, created_attrs, "operator:test", now: @now)
+
+    original_response = Repo.get!(SymmetryControl.Goals.GoalEvent, created.event.id).response
+
+    corrupt_goal_id = Ecto.UUID.generate()
+    corrupt_goal_mutation_id = Ecto.UUID.generate()
+
+    corrupt_goal_response =
+      put_in(original_response, ["_receipt_v1", "goal", "id"], corrupt_goal_id)
+
+    corrupt_goal_attrs = Map.put(created_attrs, :mutation_id, corrupt_goal_mutation_id)
+
+    persist_goal_event!(
+      created.goal.id,
+      corrupt_goal_mutation_id,
+      created.event.sequence + 3,
+      "goal_created",
+      created.event.revision,
+      %{
+        project_id: project.id,
+        title: corrupt_goal_attrs.title,
+        initial_revision: corrupt_goal_attrs.initial_revision
+      },
+      corrupt_goal_response
+    )
+
+    assert {:error, :internal_error} =
+             Goals.create_goal(project.id, corrupt_goal_attrs, "operator:test", now: @now)
+
+    corrupt_response_mutation_id = Ecto.UUID.generate()
+
+    corrupt_response =
+      put_in(original_response, ["_receipt_v1", "response"], %{"goal_id" => "tampered"})
+
+    corrupt_response_attrs = Map.put(created_attrs, :mutation_id, corrupt_response_mutation_id)
+
+    persist_goal_event!(
+      created.goal.id,
+      corrupt_response_mutation_id,
+      created.event.sequence + 4,
+      "goal_created",
+      created.event.revision,
+      %{
+        project_id: project.id,
+        title: corrupt_response_attrs.title,
+        initial_revision: corrupt_response_attrs.initial_revision
+      },
+      corrupt_response
+    )
+
+    assert {:error, :internal_error} =
+             Goals.create_goal(project.id, corrupt_response_attrs, "operator:test", now: @now)
+  end
+
+  test "legacy create and command receipts replay before current semantic validation" do
+    project = project_fixture()
+    create_attrs = goal_attrs()
+
+    assert {:ok, created, :created} =
+             Goals.create_goal(project.id, create_attrs, "operator:test", now: @now)
+
+    legacy_path = String.duplicate("e\u0301", 513)
+    artifact_resource_id = Ecto.UUID.generate()
+    legacy_create_mutation_id = Ecto.UUID.generate()
+
+    legacy_create_attrs =
+      create_attrs
+      |> Map.put(:mutation_id, legacy_create_mutation_id)
+      |> put_in(
+        [:initial_revision, :acceptance_contract],
+        artifact_acceptance_contract(artifact_resource_id, legacy_path)
+      )
+
+    legacy_create_body = %{
+      project_id: project.id,
+      title: legacy_create_attrs.title,
+      initial_revision: legacy_create_attrs.initial_revision
+    }
+
+    persist_goal_event!(
+      created.goal.id,
+      legacy_create_mutation_id,
+      created.event.sequence + 3,
+      "goal_created",
+      created.event.revision,
+      legacy_create_body,
+      Repo.get!(SymmetryControl.Goals.GoalEvent, created.event.id).response
+    )
+
+    events_before = Repo.aggregate(SymmetryControl.Goals.GoalEvent, :count)
+
+    assert {:ok, replayed_create, :replayed} =
+             Goals.create_goal(project.id, legacy_create_attrs, "operator:test", now: @now)
+
+    assert replayed_create.goal == created.goal
+    assert replayed_create.response == created.response
+
+    assert replayed_create.event ==
+             %{
+               id: legacy_create_mutation_id,
+               sequence: created.event.sequence + 3,
+               kind: "goal_created",
+               revision: 1
+             }
+
+    assert Repo.aggregate(SymmetryControl.Goals.GoalEvent, :count) == events_before
+
+    changed_create_attrs =
+      put_in(
+        legacy_create_attrs,
+        [:initial_revision, :acceptance_contract, "predicates", Access.at(0), "path"],
+        "proof.txt"
+      )
+
+    assert {:error, :idempotency_conflict} =
+             Goals.create_goal(project.id, changed_create_attrs, "operator:test", now: @now)
+
+    valid_revision =
+      amended_revision_contract("Legacy amendment replay.")
+      |> put_in(
+        [:acceptance_contract],
+        artifact_acceptance_contract(artifact_resource_id, "proof.txt")
+      )
+
+    command_id = Ecto.UUID.generate()
+
+    amendment =
+      command(
+        created.goal,
+        "amend",
+        %{revision_contract: valid_revision, reason: "Legacy amendment replay."},
+        command_id
+      )
+
+    assert {:ok, amendment_receipt, :created} =
+             Goals.command(created.goal.id, amendment, "operator:test", now: @now)
+
+    legacy_revision =
+      put_in(
+        valid_revision,
+        [:acceptance_contract, "predicates", Access.at(0), "path"],
+        legacy_path
+      )
+
+    legacy_command_id = Ecto.UUID.generate()
+
+    legacy_command =
+      amendment
+      |> Map.put(:mutation_id, legacy_command_id)
+      |> put_in([:payload, :revision_contract], legacy_revision)
+
+    legacy_command_body = %{
+      expected_version: amendment.expected_version,
+      expected_revision: amendment.expected_revision,
+      kind: amendment.kind,
+      payload: legacy_command.payload
+    }
+
+    persist_goal_event!(
+      created.goal.id,
+      legacy_command_id,
+      created.event.sequence + 2,
+      "amend",
+      created.event.revision,
+      legacy_command_body,
+      Repo.get!(SymmetryControl.Goals.GoalEvent, command_id).response
+    )
+
+    events_before_replay = Repo.aggregate(SymmetryControl.Goals.GoalEvent, :count)
+
+    assert {:ok, replayed_command, :replayed} =
+             Goals.command(created.goal.id, legacy_command, "operator:test", now: @now)
+
+    assert replayed_command.response == amendment_receipt.response
+    assert replayed_command.event.id == legacy_command_id
+    assert replayed_command.event.kind == "amend"
+    assert Repo.aggregate(SymmetryControl.Goals.GoalEvent, :count) == events_before_replay
+
+    changed_command =
+      put_in(
+        legacy_command,
+        [:payload, :revision_contract, :acceptance_contract, "predicates", Access.at(0), "path"],
+        "proof-again.txt"
+      )
+
+    assert {:error, :idempotency_conflict} =
+             Goals.command(created.goal.id, changed_command, "operator:test", now: @now)
   end
 
   test "amendment appends immutable revision and supersedes open decisions" do
@@ -597,6 +856,35 @@ defmodule SymmetryControl.GoalsTest do
                options: [%{"id" => "accept", "label" => "Accept", "consequence" => "Proceed"}],
                proposal: List.last(malformed)
              })
+  end
+
+  test "plan command item type errors remain invalid contracts for both command kinds" do
+    project = project_fixture()
+
+    assert {:ok, created, :created} =
+             Goals.create_goal(project.id, goal_attrs(), "operator:test", now: @now)
+
+    malformed_proposal = %{items: [nil]}
+
+    assert {:error, {:invalid_contract, _}} =
+             command_current(created.goal.id, "request_decision", %{
+               kind: "plan",
+               question: "Accept this plan?",
+               options: [%{"id" => "accept", "label" => "Accept", "consequence" => "Proceed"}],
+               proposal: malformed_proposal
+             })
+
+    assert {:error, {:invalid_contract, _}} =
+             command_current(
+               created.goal.id,
+               "accept_plan",
+               %{
+                 proposal: malformed_proposal,
+                 proposal_hash: "sha256:" <> String.duplicate("0", 64),
+                 decision_id: Ecto.UUID.generate()
+               },
+               rollout_enabled: true
+             )
   end
 
   test "dependency changes require a scope decision bound to its operation and target" do
@@ -5719,6 +6007,100 @@ defmodule SymmetryControl.GoalsTest do
              Goals.append_evidence(runtime.machine_id, run.id, fence, observation, now: @now)
   end
 
+  test "legacy evidence replays before predicate validation and batch strictness" do
+    {_goal, item, _task, runtime, run, fence} = claimed_goal_run_fixture()
+    legacy_path = String.duplicate("e\u0301", 513)
+
+    legacy_artifact =
+      artifact_evidence_attrs(run.id, item)
+      |> put_in([:source_ref, :path], legacy_path)
+      |> put_in([:payload, :path], legacy_path)
+
+    persist_run_evidence!(legacy_artifact)
+
+    evidence_before = Repo.aggregate(RunEvidence, :count)
+
+    assert {:ok, %{evidence: %{evidence_key: "artifact:proof"}}, :replayed} =
+             Goals.append_evidence(runtime.machine_id, run.id, fence, legacy_artifact, now: @now)
+
+    assert Repo.aggregate(RunEvidence, :count) == evidence_before
+
+    changed_subject =
+      Map.put(legacy_artifact.subject, "commit", String.duplicate("b", 40))
+
+    assert {:error, :idempotency_conflict} =
+             Goals.append_evidence(
+               runtime.machine_id,
+               run.id,
+               fence,
+               %{legacy_artifact | subject: changed_subject},
+               now: @now
+             )
+
+    batch = %{
+      schema_version: "symmetry.evidence_batch.v1",
+      run_id: run.id,
+      items: [legacy_artifact]
+    }
+
+    assert {:ok, %{evidence_batch: %{receipts: [%{disposition: "replayed"}]}}, :replayed} =
+             Goals.append_evidence_batch(runtime.machine_id, run.id, fence, batch, now: @now)
+
+    new_invalid =
+      legacy_artifact
+      |> Map.put(:evidence_id, Ecto.UUID.generate())
+      |> Map.put(:evidence_key, "artifact:new-invalid")
+
+    assert {:error, {:invalid_contract, _}} =
+             Goals.append_evidence_batch(
+               runtime.machine_id,
+               run.id,
+               fence,
+               %{batch | items: [legacy_artifact, new_invalid]},
+               now: @now
+             )
+
+    assert Repo.aggregate(RunEvidence, :count) == evidence_before
+  end
+
+  test "evidence batch treats a cross-run primary-key collision as an indexed conflict" do
+    {_goal_a, item_a, _task_a, runtime_a, run_a, fence_a} = claimed_goal_run_fixture()
+    {_goal_b, item_b, _task_b, runtime_b, run_b, fence_b} = claimed_goal_run_fixture()
+
+    evidence_a = observation_evidence_attrs(run_a.id, item_a)
+
+    assert {:ok, _receipt, :created} =
+             Goals.append_evidence(runtime_a.machine_id, run_a.id, fence_a, evidence_a, now: @now)
+
+    evidence_b =
+      observation_evidence_attrs(run_b.id, item_b)
+      |> Map.put(:evidence_id, evidence_a.evidence_id)
+      |> Map.put(:evidence_key, "observation:cross-run-primary-key")
+      |> put_in([:source_ref, :external_ref], "status:cross-run")
+      |> put_in([:payload, :external_ref], "status:cross-run")
+
+    batch = %{
+      schema_version: "symmetry.evidence_batch.v1",
+      run_id: run_b.id,
+      items: [evidence_b]
+    }
+
+    assert {:error,
+            {:idempotency_conflict,
+             %{
+               details: %{items: [%{index: 0, evidence_key: "observation:cross-run-primary-key"}]}
+             }}} =
+             Goals.append_evidence_batch(
+               runtime_b.machine_id,
+               run_b.id,
+               fence_b,
+               batch,
+               now: @now
+             )
+
+    refute Repo.exists?(from row in RunEvidence, where: row.run_id == ^run_b.id)
+  end
+
   test "context manifest rejects missing sources and mandatory budget overflow before insertion" do
     {missing_goal, missing_item, _missing_task} =
       admitted_task_fixture(
@@ -7234,6 +7616,52 @@ defmodule SymmetryControl.GoalsTest do
     "sha256:" <> Base.encode16(SymmetryControl.RequestHash.canonical(subject), case: :lower)
   end
 
+  defp persist_run_evidence!(evidence) do
+    %RunEvidence{id: evidence.evidence_id}
+    |> RunEvidence.changeset(%{
+      run_id: evidence.run_id,
+      evidence_key: evidence.evidence_key,
+      kind: evidence.kind,
+      subject_hash: SymmetryControl.RequestHash.canonical(evidence.subject),
+      source_ref: evidence.source_ref,
+      source_revision: evidence.source_revision,
+      validator_profile: evidence.validator_profile,
+      verdict: evidence.verdict,
+      payload: evidence.payload
+    })
+    |> Ecto.Changeset.put_change(:inserted_at, @now)
+    |> Repo.insert!()
+  end
+
+  defp persist_goal_event!(goal_id, event_id, sequence, kind, revision, body, response) do
+    receipt_snapshot =
+      response
+      |> Map.fetch!("_receipt_v1")
+      |> Map.put("event", %{
+        "id" => event_id,
+        "sequence" => sequence,
+        "kind" => kind,
+        "revision" => revision
+      })
+
+    response = Map.put(response, "_receipt_v1", receipt_snapshot)
+
+    %SymmetryControl.Goals.GoalEvent{id: event_id}
+    |> SymmetryControl.Goals.GoalEvent.changeset(%{
+      goal_id: goal_id,
+      sequence: sequence,
+      kind: kind,
+      actor_ref: "operator:test",
+      request_hash: SymmetryControl.RequestHash.canonical(body),
+      request_hash_version: 2,
+      revision: revision,
+      payload: body,
+      response: response
+    })
+    |> Ecto.Changeset.put_change(:inserted_at, @now)
+    |> Repo.insert!()
+  end
+
   defp command_current(goal_id, kind, payload, opts \\ []) do
     assert {:ok, goal} = Goals.fetch_goal(goal_id)
     opts = Keyword.put_new(opts, :validation_profiles, validation_profiles())
@@ -7526,6 +7954,21 @@ defmodule SymmetryControl.GoalsTest do
       "schema_version" => "symmetry.acceptance.v1",
       "description" => "An independent check must pass.",
       "predicates" => [%{"id" => "check", "kind" => "check", "validator_profile" => "test"}]
+    }
+  end
+
+  defp artifact_acceptance_contract(resource_id, path) do
+    %{
+      "schema_version" => "symmetry.acceptance.v1",
+      "description" => "An approved artifact is required.",
+      "predicates" => [
+        %{
+          "id" => "artifact",
+          "kind" => "artifact",
+          "resource_id" => resource_id,
+          "path" => path
+        }
+      ]
     }
   end
 

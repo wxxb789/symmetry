@@ -14,6 +14,7 @@ defmodule SymmetryControlWeb.Protocol do
   @timeline_sources ["event", "transition", "command"]
 
   @error_statuses %{
+    internal_error: {500, "internal_error", "internal server error"},
     invalid_request: {400, "invalid_request", "request payload is invalid"},
     unauthenticated: {401, "unauthenticated", "credential is missing or invalid"},
     forbidden: {403, "forbidden", "credential does not own this resource"},

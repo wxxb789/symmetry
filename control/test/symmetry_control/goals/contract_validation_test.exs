@@ -598,6 +598,23 @@ defmodule SymmetryControl.Goals.ContractValidationTest do
     assert {:error, _reason} = ContractValidation.validate_goal_command(mismatch, opts)
   end
 
+  test "malformed plan items remain schema errors instead of crashing canonicalization" do
+    opts = [schema_root: @schema_root]
+
+    for filename <- [
+          "goal-command.accept-plan.json",
+          "goal-command.request-plan-decision.json"
+        ],
+        malformed_item <- [nil, "not-an-object", 42] do
+      malformed =
+        fixture(@valid_root, filename)
+        |> put_in(["payload", "proposal", "items"], [malformed_item])
+
+      assert {:error, {:validation_failed, _}} =
+               ContractValidation.validate_goal_command(malformed, opts)
+    end
+  end
+
   test "normalizes atom keys recursively but preserves atom values" do
     data = fixture(@valid_root, "admission.basic.json")
 
