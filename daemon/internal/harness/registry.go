@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"github.com/wxxb789/symmetry/daemon/internal/platform"
 )
 
 const (
@@ -25,7 +27,11 @@ type ClaudeCommandRunner interface {
 type osClaudeCommandRunner struct{}
 
 func (osClaudeCommandRunner) Run(ctx context.Context, executable string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, executable, args...).CombinedOutput()
+	command := exec.CommandContext(ctx, executable, args...)
+	if err := platform.ConfigureHeadlessProcess(command); err != nil {
+		return nil, err
+	}
+	return command.CombinedOutput()
 }
 
 // Registry is a concrete, process-local adapter registry. It is intentionally
@@ -297,7 +303,15 @@ func probeCodexExecutable(ctx context.Context) (Capabilities, error) {
 		capabilities := UnsupportedCapabilities(KindCodex, "codex executable is unavailable")
 		return capabilities, &AvailabilityError{Kind: KindCodex, Reason: err.Error()}
 	}
-	output, err := exec.CommandContext(ctx, path, "--version").Output()
+	versionCommand := exec.CommandContext(ctx, path, "--version")
+	if err := platform.ConfigureHeadlessProcess(versionCommand); err != nil {
+		capabilities := UnsupportedCapabilities(KindCodex, "codex version probe failed")
+		return capabilities, errors.Join(
+			fmt.Errorf("%w: codex version probe failed", ErrHarnessUnavailable),
+			fmt.Errorf("configure codex version probe process: %w", err),
+		)
+	}
+	output, err := versionCommand.Output()
 	if err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {
 			return Capabilities{}, contextErr
@@ -305,8 +319,8 @@ func probeCodexExecutable(ctx context.Context) (Capabilities, error) {
 		capabilities := UnsupportedCapabilities(KindCodex, "codex version probe failed")
 		return capabilities, fmt.Errorf("%w: codex --version: %v", ErrHarnessUnavailable, err)
 	}
-	version := parseCodexVersion(string(output))
 	capabilities := UnsupportedCapabilities(KindCodex, "Codex app-server native session behavior is unverified")
+	version := parseCodexVersion(string(output))
 	capabilities.NativeVersion = version
 	capabilities.VersionKnown = version != ""
 	if version != "0.153.4" {
@@ -315,7 +329,14 @@ func probeCodexExecutable(ctx context.Context) (Capabilities, error) {
 		}
 		return capabilities, fmt.Errorf("%w: codex %s is not in the tested version set", ErrUnsupportedVersion, version)
 	}
-	helpOutput, err := exec.CommandContext(ctx, path, "app-server", "--help").CombinedOutput()
+	helpCommand := exec.CommandContext(ctx, path, "app-server", "--help")
+	if err := platform.ConfigureHeadlessProcess(helpCommand); err != nil {
+		return capabilities, errors.Join(
+			fmt.Errorf("%w: codex app-server help probe failed", ErrNativeUnverified),
+			fmt.Errorf("configure codex help probe process: %w", err),
+		)
+	}
+	helpOutput, err := helpCommand.CombinedOutput()
 	if err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {
 			return capabilities, contextErr

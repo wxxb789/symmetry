@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
+	"github.com/wxxb789/symmetry/daemon/internal/platform"
 )
 
 const (
@@ -25,7 +26,11 @@ type CommandRunner interface {
 type osCommandRunner struct{}
 
 func (osCommandRunner) Run(ctx context.Context, executable string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, executable, args...).CombinedOutput()
+	command := exec.CommandContext(ctx, executable, args...)
+	if err := platform.ConfigureHeadlessProcess(command); err != nil {
+		return nil, err
+	}
+	return command.CombinedOutput()
 }
 
 // ProbeResult records only executable and documented transport evidence. It

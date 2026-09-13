@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
+	"github.com/wxxb789/symmetry/daemon/internal/platform"
 )
 
 const (
@@ -41,7 +42,11 @@ type SchemaRunner interface {
 type osCommandRunner struct{}
 
 func (osCommandRunner) Run(ctx context.Context, executable string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, executable, args...).CombinedOutput()
+	command := exec.CommandContext(ctx, executable, args...)
+	if err := platform.ConfigureHeadlessProcess(command); err != nil {
+		return nil, err
+	}
+	return command.CombinedOutput()
 }
 
 func (osCommandRunner) SchemaDigest(ctx context.Context, executable string) (string, error) {
@@ -50,7 +55,11 @@ func (osCommandRunner) SchemaDigest(ctx context.Context, executable string) (str
 		return "", fmt.Errorf("create Codex schema temp directory: %w", err)
 	}
 	defer os.RemoveAll(directory)
-	output, err := exec.CommandContext(ctx, executable, "app-server", "generate-json-schema", "--out", directory).CombinedOutput()
+	command := exec.CommandContext(ctx, executable, "app-server", "generate-json-schema", "--out", directory)
+	if err := platform.ConfigureHeadlessProcess(command); err != nil {
+		return "", fmt.Errorf("configure Codex schema process: %w", err)
+	}
+	output, err := command.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("generate Codex app-server schema: %w: %s", err, strings.TrimSpace(string(output)))
 	}

@@ -49,7 +49,11 @@ type CommandRunner interface {
 type osCommandRunner struct{}
 
 func (osCommandRunner) Run(ctx context.Context, executable string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, executable, args...).CombinedOutput()
+	command := exec.CommandContext(ctx, executable, args...)
+	if err := platform.ConfigureHeadlessProcess(command); err != nil {
+		return nil, err
+	}
+	return command.CombinedOutput()
 }
 
 // nativeProcess retains only the shared execution.Runner behavior this adapter
