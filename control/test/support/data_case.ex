@@ -36,8 +36,30 @@ defmodule SymmetryControl.DataCase do
   Sets up the sandbox based on the test tags.
   """
   def setup_sandbox(tags) do
-    pid = Ecto.Adapters.SQL.Sandbox.start_owner!(SymmetryControl.Repo, shared: not tags[:async])
+    pid =
+      Ecto.Adapters.SQL.Sandbox.start_owner!(
+        SymmetryControl.Repo,
+        sandbox_options(tags)
+      )
+
     on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(pid) end)
+  end
+
+  @doc false
+  def sandbox_options(tags) do
+    options = [shared: not tags[:async]]
+
+    case tags[:sandbox_ownership_timeout] do
+      nil ->
+        options
+
+      timeout when is_integer(timeout) and timeout > 0 and timeout <= 600_000 ->
+        Keyword.put(options, :ownership_timeout, timeout)
+
+      timeout ->
+        raise ArgumentError,
+              "sandbox_ownership_timeout must be a finite positive integer no greater than 600000, got: #{inspect(timeout)}"
+    end
   end
 
   @doc """

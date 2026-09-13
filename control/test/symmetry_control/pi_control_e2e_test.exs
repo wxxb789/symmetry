@@ -31,6 +31,9 @@ defmodule SymmetryControl.PiControlE2ETest do
 
   @moduletag :pi_control_e2e
   @moduletag timeout: 180_000
+  # Keep the owner alive through the test ceiling and bounded daemon teardown;
+  # the finite value still detects a stalled cleanup instead of masking it.
+  @moduletag sandbox_ownership_timeout: 240_000
   @moduletag skip: System.get_env("SYMMETRY_PI_CONTROL_E2E") != "1"
 
   @pi_version "0.85.1"
@@ -43,6 +46,17 @@ defmodule SymmetryControl.PiControlE2ETest do
   @artifact_path "pi-control-e2e-artifact.txt"
   @artifact_content "real Pi Control E2E artifact\n"
   @resume_artifact_path "pi-control-e2e-resumed-artifact.txt"
+  @journal_read_limit 4_194_304
+  @daemon_stop_timeout_ms 10_000
+  @daemon_kill_timeout_ms 5_000
+  @daemon_port_timeout_ms 5_000
+  @daemon_startup_identity_timeout_ms 5_000
+  @daemon_startup_identity_initial_backoff_ms 10
+  @daemon_startup_identity_max_backoff_ms 100
+  @daemon_startup_drain_timeout_ms 250
+  @daemon_startup_retry_timeout_ms 15_000
+  @daemon_startup_retry_initial_backoff_ms 25
+  @daemon_startup_retry_max_backoff_ms 100
 
   setup_all do
     daemon_dir = Path.expand("../../../daemon", __DIR__)
@@ -434,21 +448,11 @@ defmodule SymmetryControl.PiControlE2ETest do
                where: outcome.work_item_id == ^fixture.item.id
            )
 
-    await!(context.daemon_port, "empty local Goal outbox", fn ->
-      case journal_for_run(context.state_dir, run_key) do
-        {:ok, journal} ->
-          if Enum.empty?(journal["pending_goal_deliveries"] || []) and
-               Enum.empty?(journal["pending_transitions"] || []) and
-               Enum.empty?(journal["pending_events"] || []) do
-            :ok
-          else
-            :retry
-          end
-
-        :missing ->
-          :ok
-      end
-    end)
+    await_empty_goal_outbox!(
+      context.daemon_port,
+      context.state_dir,
+      run_key
+    )
 
     gateway = Agent.get(gateway_state, & &1)
     assert gateway.errors == []
@@ -524,7 +528,9 @@ defmodule SymmetryControl.PiControlE2ETest do
     assert first_journal["lease_token"] == first_claimed_run.lease_token
     assert first_journal["pid"] == first_process_marker["pid"]
     assert first_journal["process_identity"] == first_process_marker["process_identity"]
-    assert normalize_path(first_journal["workspace_path"]) == normalize_path(first_workspace_path)
+
+    assert normalize_path(first_journal["workspace_path"]) ==
+             normalize_path(first_workspace_path)
 
     release_gateway_response!(gateway_state, 2)
 
@@ -619,27 +625,53 @@ defmodule SymmetryControl.PiControlE2ETest do
                where: outcome.work_item_id == ^fixture.item.id
            )
 
-    await_empty_goal_outbox!(
-      context.daemon_port,
-      context.state_dir,
-      {first_run.id, first_run.generation}
-    )
-
+    await_empty_goal_outbox!(context.daemon_port, context.state_dir, run_key)
     first_session_journal = goal_session_journal_for_goal!(context.state_dir, fixture.goal.id)
     assert first_session_journal["session_state"] == "available"
     assert first_session_journal["session_mode"] == "fresh"
+
+    assert is_binary(first_session_journal["native_session_id"]) and
+             first_session_journal["native_session_id"] != ""
+
+    assert is_binary(first_session_journal["native_session_filename"]) and
+             first_session_journal["native_session_filename"] != ""
+
+    assert is_binary(first_session_journal["local_handle_id"]) and
+             first_session_journal["local_handle_id"] != ""
+
+    first_native_session_id = first_session_journal["native_session_id"]
+    first_native_session_filename = first_session_journal["native_session_filename"]
+    first_local_handle_id = first_session_journal["local_handle_id"]
     assert first_session_journal["stop_certificate"]["run_id"] == first_run.id
     assert first_session_journal["stop_certificate"]["binding_id"] == first_run.harness_binding_id
+    assert first_session_journal["control_session_id"] == first_run.harness_session_id
+    assert first_session_journal["control_attachment_receipt_id"] == first_attach_receipt.id
 
     assert first_session_journal["control_attachment_lineage"]["original"]["run_id"] ==
              first_run.id
 
+    assert first_session_journal["control_attachment_lineage"]["original"]["generation"] ==
+             first_run.generation
+
+    assert first_session_journal["control_attachment_lineage"]["original"]["session_id"] ==
+             first_run.harness_session_id
+
+    assert first_session_journal["control_attachment_lineage"]["original"]["binding_id"] ==
+             first_run.harness_binding_id
+
+    assert first_session_journal["control_attachment_lineage"]["original"]["receipt_id"] ==
+             first_attach_receipt.id
+
     assert first_session_journal["control_attachment_lineage"]["current"]["run_id"] ==
              first_run.id
 
+    assert first_session_journal["control_attachment_lineage"]["current"]["receipt_id"] ==
+             first_attach_receipt.id
+
+    stop_daemon!(context.daemon_process)
+
     first_runtime = Repo.get!(Runtime, runtime.id)
     first_epoch = first_runtime.connection_epoch
-    stop_daemon!(context.daemon_process)
 
     second_daemon = start_daemon!(context.daemon, context.config_path)
     on_exit(fn -> stop_daemon!(second_daemon) end)
@@ -712,6 +744,9 @@ defmodule SymmetryControl.PiControlE2ETest do
         second_run_key,
         "resumed native Pi process identity"
       )
+
+    assert second_process_marker["pid"] > 0
+    assert is_binary(second_process_marker["process_identity"])
 
     second_claimed_run = Repo.get_by!(Run, id: second_assigned.id)
     assert second_claimed_run.state in ["claimed", "running"]
@@ -861,6 +896,14 @@ defmodule SymmetryControl.PiControlE2ETest do
     second_session_journal = goal_session_journal_for_goal!(context.state_dir, fixture.goal.id)
     assert second_session_journal["session_state"] == "available"
     assert second_session_journal["session_mode"] == "resume"
+    assert second_session_journal["native_session_id"] == first_native_session_id
+
+    assert normalize_path(second_session_journal["native_session_filename"]) ==
+             normalize_path(first_native_session_filename)
+
+    assert second_session_journal["local_handle_id"] == first_local_handle_id
+    assert second_session_journal["control_session_id"] == first_run.harness_session_id
+    assert second_session_journal["control_attachment_receipt_id"] == second_attach_receipt.id
     assert second_session_journal["stop_certificate"]["run_id"] == second_run.id
 
     assert second_session_journal["stop_certificate"]["binding_id"] ==
@@ -869,19 +912,40 @@ defmodule SymmetryControl.PiControlE2ETest do
     assert second_session_journal["control_attachment_lineage"]["original"]["run_id"] ==
              first_run.id
 
+    assert second_session_journal["control_attachment_lineage"]["original"]["generation"] ==
+             first_run.generation
+
     assert second_session_journal["control_attachment_lineage"]["original"]["binding_id"] ==
              first_run.harness_binding_id
+
+    assert second_session_journal["control_attachment_lineage"]["original"]["session_id"] ==
+             first_run.harness_session_id
+
+    assert second_session_journal["control_attachment_lineage"]["original"]["receipt_id"] ==
+             first_attach_receipt.id
 
     assert second_session_journal["control_attachment_lineage"]["current"]["run_id"] ==
              second_run.id
 
+    assert second_session_journal["control_attachment_lineage"]["current"]["generation"] ==
+             second_run.generation
+
     assert second_session_journal["control_attachment_lineage"]["current"]["binding_id"] ==
              second_run.harness_binding_id
+
+    assert second_session_journal["control_attachment_lineage"]["current"]["session_id"] ==
+             second_run.harness_session_id
+
+    assert second_session_journal["control_attachment_lineage"]["current"]["receipt_id"] ==
+             second_attach_receipt.id
 
     consumed = get_in(second_session_journal, ["consumed_stop_certificates", "certificates"])
 
     assert Enum.any?(consumed || [], fn certificate ->
              certificate["run_id"] == first_run.id and
+               certificate["generation"] == first_run.generation and
+               certificate["session_id"] == first_run.harness_session_id and
+               certificate["local_handle_id"] == first_local_handle_id and
                certificate["binding_id"] == first_run.harness_binding_id and
                certificate["receipt_id"] == first_stop_receipt.id
            end)
@@ -1720,7 +1784,7 @@ defmodule SymmetryControl.PiControlE2ETest do
 
     path = Path.join([state_dir, "runs", "journal-#{digest}.json"])
 
-    case File.read(path) do
+    case read_bounded_file(path) do
       {:ok, contents} ->
         case Jason.decode(contents) do
           {:ok, %{"run_id" => ^run_id, "generation" => ^generation} = journal} ->
@@ -1743,7 +1807,7 @@ defmodule SymmetryControl.PiControlE2ETest do
       |> File.ls!()
       |> Enum.filter(&(String.starts_with?(&1, "session-") and String.ends_with?(&1, ".json")))
       |> Enum.find_value(fn filename ->
-        case File.read(Path.join(sessions_dir, filename)) do
+        case read_bounded_file(Path.join(sessions_dir, filename)) do
           {:ok, contents} ->
             case Jason.decode(contents) do
               {:ok, %{"goal_id" => ^goal_id} = value} -> value
@@ -1756,6 +1820,24 @@ defmodule SymmetryControl.PiControlE2ETest do
       end)
 
     journal || flunk("no daemon-local Goal session journal found for Goal #{goal_id}")
+  end
+
+  defp read_bounded_file(path) do
+    case File.open(path, [:read, :binary, :raw]) do
+      {:ok, io_device} ->
+        try do
+          case :file.read(io_device, @journal_read_limit) do
+            {:ok, contents} -> {:ok, contents}
+            :eof -> {:ok, <<>>}
+            {:error, reason} -> {:error, reason}
+          end
+        after
+          File.close(io_device)
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   defp git_status!(directory),
@@ -1831,26 +1913,74 @@ defmodule SymmetryControl.PiControlE2ETest do
   end
 
   defp start_daemon!(executable, config_path) do
+    start_daemon_with_retry!(
+      executable,
+      config_path,
+      System.monotonic_time(:millisecond) + @daemon_startup_retry_timeout_ms,
+      @daemon_startup_retry_initial_backoff_ms
+    )
+  end
+
+  defp start_daemon_with_retry!(executable, config_path, deadline, backoff_ms) do
+    start_daemon_attempt!(executable, config_path)
+  rescue
+    exception in RuntimeError ->
+      message = Exception.message(exception)
+      remaining = deadline - System.monotonic_time(:millisecond)
+
+      if remaining > 0 and String.contains?(message, "state directory is already in use") do
+        Process.sleep(min(backoff_ms, remaining))
+
+        start_daemon_with_retry!(
+          executable,
+          config_path,
+          deadline,
+          min(backoff_ms * 2, @daemon_startup_retry_max_backoff_ms)
+        )
+      else
+        reraise exception, __STACKTRACE__
+      end
+  end
+
+  defp start_daemon_attempt!(executable, config_path) do
     {spawn_executable, arguments} = daemon_command(executable, config_path)
+
+    port_options = [
+      :binary,
+      :exit_status,
+      :stderr_to_stdout,
+      args: arguments,
+      env: [
+        {~c"SYMMETRY_ENROLLMENT_TOKEN", ~c"test-enrollment-token"},
+        {~c"SYMMETRY_PI_CONTROL_E2E", ~c"1"}
+      ]
+    ]
+
+    port_options =
+      if match?({:win32, _}, :os.type()) do
+        # OTP's :hide option suppresses a new Windows console and is ignored on Unix.
+        [:hide | port_options]
+      else
+        port_options
+      end
 
     port =
       Port.open(
         {:spawn_executable, String.to_charlist(spawn_executable)},
-        [
-          :binary,
-          :exit_status,
-          :stderr_to_stdout,
-          args: arguments,
-          env: [
-            {~c"SYMMETRY_ENROLLMENT_TOKEN", ~c"test-enrollment-token"},
-            {~c"SYMMETRY_PI_CONTROL_E2E", ~c"1"}
-          ]
-        ]
+        port_options
       )
 
     case Port.info(port, :os_pid) do
-      {:os_pid, os_pid} when is_integer(os_pid) and os_pid > 0 -> %{port: port, os_pid: os_pid}
-      _ -> raise "test-only Pi witness daemon did not expose an OS process ID"
+      {:os_pid, os_pid} when is_integer(os_pid) and os_pid > 0 ->
+        %{
+          port: port,
+          os_pid: os_pid,
+          process_identity: await_startup_process_identity!(port, os_pid, spawn_executable),
+          stop_state: :atomics.new(1, signed: false)
+        }
+
+      _ ->
+        raise "test-only Pi witness daemon did not expose an OS process ID"
     end
   end
 
@@ -1867,31 +1997,534 @@ defmodule SymmetryControl.PiControlE2ETest do
     end
   end
 
-  defp stop_daemon!(%{port: port, os_pid: os_pid}) do
-    case :os.type() do
-      {:win32, _} ->
-        System.cmd("taskkill", ["/PID", Integer.to_string(os_pid), "/T", "/F"],
-          stderr_to_stdout: true
-        )
+  defp stop_daemon!(%{os_pid: os_pid, stop_state: stop_state} = daemon) do
+    case :atomics.compare_exchange(stop_state, 1, 0, 1) do
+      :ok ->
+        try do
+          stop_daemon_once!(daemon)
+          :atomics.put(stop_state, 1, 2)
+          :ok
+        rescue
+          exception ->
+            :atomics.put(stop_state, 1, 0)
+            reraise exception, __STACKTRACE__
+        catch
+          kind, reason ->
+            :atomics.put(stop_state, 1, 0)
+            :erlang.raise(kind, reason, __STACKTRACE__)
+        end
 
-      _ ->
-        System.cmd("kill", ["-TERM", "-#{os_pid}"], stderr_to_stdout: true)
+      1 ->
+        await_daemon_stopped!(daemon)
+
+      2 ->
+        :ok
+
+      state ->
+        raise "invalid Pi witness stop state #{inspect(state)} for OS PID #{os_pid}"
+    end
+  end
+
+  defp stop_daemon_once!(%{port: port, os_pid: os_pid, process_identity: process_identity}) do
+    case daemon_state(port, os_pid, process_identity) do
+      :stopped ->
+        :ok
+
+      :owned ->
+        terminate_daemon!(os_pid, :term)
+        await_process_exit_or_escalate!(port, os_pid, process_identity)
+
+      {:error, reason} ->
+        raise "refusing to terminate Pi witness OS PID #{os_pid}: #{reason}"
     end
 
-    await_port_closed(port, System.monotonic_time(:millisecond) + 10_000)
+    await_port_closed_or_raise!(port, os_pid)
+  end
+
+  defp await_daemon_stopped!(%{
+         port: port,
+         os_pid: os_pid,
+         process_identity: process_identity,
+         stop_state: stop_state
+       }) do
+    case daemon_state(port, os_pid, process_identity) do
+      :stopped ->
+        await_port_closed_or_raise!(port, os_pid)
+        :atomics.put(stop_state, 1, 2)
+        :ok
+
+      :owned ->
+        await_process_exit_or_escalate!(port, os_pid, process_identity)
+        await_port_closed_or_raise!(port, os_pid)
+        :atomics.put(stop_state, 1, 2)
+        :ok
+
+      {:error, reason} ->
+        raise "Pi witness stop is still in progress but ownership is no longer safe for OS PID #{os_pid}: #{reason}"
+    end
+  end
+
+  defp daemon_state(port, os_pid, process_identity) do
+    case daemon_port_os_pid(port) do
+      :closed ->
+        cond do
+          not os_process_alive?(os_pid) ->
+            :stopped
+
+          process_identity_matches?(os_pid, process_identity) ->
+            :owned
+
+          true ->
+            {:error, "the Port closed while the recorded process identity was not verified"}
+        end
+
+      {:ok, ^os_pid} ->
+        cond do
+          not os_process_alive?(os_pid) ->
+            :stopped
+
+          process_identity_matches?(os_pid, process_identity) ->
+            :owned
+
+          true ->
+            {:error, "the Port still refers to the recorded PID but its process identity changed"}
+        end
+
+      {:ok, actual_pid} ->
+        {:error, "the Port is owned by OS PID #{actual_pid}, not recorded PID #{os_pid}"}
+
+      {:error, reason} ->
+        {:error, "could not inspect Port ownership: #{reason}"}
+    end
+  end
+
+  defp daemon_port_os_pid(port) do
+    case Port.info(port, :os_pid) do
+      {:os_pid, os_pid} when is_integer(os_pid) and os_pid > 0 -> {:ok, os_pid}
+      nil -> :closed
+      other -> {:error, inspect(other)}
+    end
+  rescue
+    ArgumentError -> :closed
+  end
+
+  defp terminate_daemon!(os_pid, signal) do
+    result =
+      case :os.type() do
+        {:win32, _} ->
+          System.cmd("taskkill", ["/PID", Integer.to_string(os_pid), "/T", "/F"],
+            stderr_to_stdout: true
+          )
+
+        _ ->
+          System.cmd("kill", [unix_signal(signal), "-#{os_pid}"], stderr_to_stdout: true)
+      end
+
+    case result do
+      {_output, 0} ->
+        :ok
+
+      {output, status} ->
+        raise "failed to terminate Pi witness OS PID #{os_pid} with #{signal} (status #{status}): #{String.trim(output)}"
+    end
+  end
+
+  defp await_process_exit_or_escalate!(port, os_pid, process_identity) do
+    first_deadline = System.monotonic_time(:millisecond) + @daemon_stop_timeout_ms
+
+    case await_process_exit(os_pid, first_deadline) do
+      :ok ->
+        :ok
+
+      {:error, :timeout} ->
+        case :os.type() do
+          {:win32, _} ->
+            raise "Pi witness OS PID #{os_pid} did not terminate within #{@daemon_stop_timeout_ms}ms"
+
+          _ ->
+            case daemon_state(port, os_pid, process_identity) do
+              :stopped ->
+                :ok
+
+              :owned ->
+                terminate_daemon!(os_pid, :kill)
+
+                kill_deadline =
+                  System.monotonic_time(:millisecond) + @daemon_kill_timeout_ms
+
+                case await_process_exit(os_pid, kill_deadline) do
+                  :ok ->
+                    :ok
+
+                  {:error, :timeout} ->
+                    raise "Pi witness OS PID #{os_pid} did not terminate after bounded kill escalation"
+                end
+
+              {:error, reason} ->
+                raise "refusing kill escalation for Pi witness OS PID #{os_pid}: #{reason}"
+            end
+        end
+    end
+  end
+
+  defp await_process_exit(os_pid, deadline) do
+    cond do
+      not os_process_alive?(os_pid) ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        {:error, :timeout}
+
+      true ->
+        Process.sleep(25)
+        await_process_exit(os_pid, deadline)
+    end
+  end
+
+  defp await_port_closed_or_raise!(port, os_pid) do
+    deadline = System.monotonic_time(:millisecond) + @daemon_port_timeout_ms
+
+    case await_port_closed(port, deadline) do
+      :ok ->
+        :ok
+
+      {:error, :timeout} ->
+        case force_close_port(port) do
+          :ok ->
+            raise "Pi witness Port for OS PID #{os_pid} did not close within #{@daemon_port_timeout_ms}ms after the OS process stopped"
+
+          {:error, :timeout} ->
+            raise "Pi witness Port for OS PID #{os_pid} did not close within #{@daemon_port_timeout_ms}ms and remained open after force close"
+        end
+    end
   end
 
   defp await_port_closed(port, deadline) do
-    if Port.info(port) && System.monotonic_time(:millisecond) < deadline do
-      receive do
-        {^port, _message} -> await_port_closed(port, deadline)
-      after
-        100 -> await_port_closed(port, deadline)
-      end
-    else
-      :ok
+    cond do
+      not port_open?(port) ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        {:error, :timeout}
+
+      true ->
+        receive do
+          {^port, _message} -> await_port_closed(port, deadline)
+        after
+          min(100, max(deadline - System.monotonic_time(:millisecond), 0)) ->
+            await_port_closed(port, deadline)
+        end
     end
   end
+
+  defp port_open?(port) do
+    not is_nil(Port.info(port))
+  rescue
+    ArgumentError -> false
+  end
+
+  defp force_close_port(port) do
+    if port_open?(port) do
+      try do
+        Port.close(port)
+      rescue
+        ArgumentError -> :ok
+      end
+    end
+
+    await_port_closed(port, System.monotonic_time(:millisecond) + 1_000)
+  end
+
+  defp await_startup_process_identity!(port, os_pid, executable) do
+    deadline = System.monotonic_time(:millisecond) + @daemon_startup_identity_timeout_ms
+
+    await_startup_process_identity!(
+      port,
+      os_pid,
+      executable,
+      deadline,
+      @daemon_startup_identity_initial_backoff_ms,
+      "identity query has not completed"
+    )
+  end
+
+  defp await_startup_process_identity!(
+         port,
+         os_pid,
+         executable,
+         deadline,
+         backoff_ms,
+         last_reason
+       ) do
+    case daemon_port_os_pid(port) do
+      {:ok, ^os_pid} ->
+        case process_identity(os_pid, executable) do
+          {:ok, identity} ->
+            identity
+
+          {:error, reason} ->
+            retry_startup_process_identity!(
+              port,
+              os_pid,
+              executable,
+              deadline,
+              backoff_ms,
+              inspect(reason)
+            )
+        end
+
+      {:ok, actual_pid} ->
+        startup_identity_failure!(
+          port,
+          os_pid,
+          "Port reported OS PID #{actual_pid} instead of recorded PID #{os_pid}"
+        )
+
+      :closed ->
+        startup_identity_failure!(
+          port,
+          os_pid,
+          "Port closed before process identity was established; last identity result: #{last_reason}"
+        )
+
+      {:error, reason} ->
+        startup_identity_failure!(
+          port,
+          os_pid,
+          "could not inspect Port ownership: #{reason}; last identity result: #{last_reason}"
+        )
+    end
+  end
+
+  defp retry_startup_process_identity!(
+         port,
+         os_pid,
+         executable,
+         deadline,
+         backoff_ms,
+         last_reason
+       ) do
+    remaining = deadline - System.monotonic_time(:millisecond)
+
+    if remaining <= 0 do
+      startup_identity_failure!(
+        port,
+        os_pid,
+        "identity query did not become readable before the #{@daemon_startup_identity_timeout_ms}ms startup deadline: #{last_reason}"
+      )
+    else
+      Process.sleep(min(backoff_ms, remaining))
+
+      await_startup_process_identity!(
+        port,
+        os_pid,
+        executable,
+        deadline,
+        min(backoff_ms * 2, @daemon_startup_identity_max_backoff_ms),
+        last_reason
+      )
+    end
+  end
+
+  defp startup_identity_failure!(port, os_pid, reason) do
+    initial_output = drain_port_output(port)
+    cleanup_failed_startup_process!(port, os_pid)
+    output = initial_output <> drain_port_output(port)
+
+    raise "could not establish Pi witness process identity for OS PID #{os_pid}: #{reason}; daemon output: #{String.trim(output)}"
+  end
+
+  defp cleanup_failed_startup_process!(port, os_pid) do
+    case daemon_port_os_pid(port) do
+      {:ok, ^os_pid} ->
+        try do
+          terminate_daemon!(os_pid, :term)
+        rescue
+          _ -> :ok
+        end
+
+        _ = await_process_exit(os_pid, System.monotonic_time(:millisecond) + 1_000)
+        _ = force_close_port(port)
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp drain_port_output(port) do
+    drain_port_output(
+      port,
+      System.monotonic_time(:millisecond) + @daemon_startup_drain_timeout_ms,
+      []
+    )
+  end
+
+  defp drain_port_output(port, deadline, chunks) do
+    cond do
+      System.monotonic_time(:millisecond) >= deadline ->
+        IO.iodata_to_binary(Enum.reverse(chunks))
+
+      true ->
+        receive do
+          {^port, {:data, data}} ->
+            drain_port_output(port, deadline, [data | chunks])
+
+          {^port, {:exit_status, status}} ->
+            drain_port_output(port, deadline, ["[exit_status=#{status}]" | chunks])
+        after
+          min(25, max(deadline - System.monotonic_time(:millisecond), 0)) ->
+            if port_open?(port) do
+              drain_port_output(port, deadline, chunks)
+            else
+              IO.iodata_to_binary(Enum.reverse(chunks))
+            end
+        end
+    end
+  end
+
+  defp process_identity_matches?(os_pid, expected) do
+    case process_identity(os_pid, expected.executable) do
+      {:ok, actual} -> actual == expected
+      {:error, _reason} -> false
+    end
+  end
+
+  defp process_identity(os_pid, executable) do
+    case :os.type() do
+      {:win32, _} -> windows_process_identity(os_pid, executable)
+      _ -> unix_process_identity(os_pid)
+    end
+  rescue
+    exception -> {:error, Exception.message(exception)}
+  end
+
+  defp windows_process_identity(os_pid, executable) do
+    script =
+      "$process = Get-CimInstance Win32_Process -Filter 'ProcessId = #{os_pid}'; " <>
+        "if ($null -eq $process) { exit 2 }; " <>
+        "$process | Select-Object CreationDate,ExecutablePath | ConvertTo-Json -Compress"
+
+    # This direct System.cmd invocation uses the test runner's inherited console
+    # rather than cmd.exe; -NoProfile/-NonInteractive prevents shell startup or
+    # prompts, so it does not create a new visible console window. The daemon
+    # itself is launched through an OTP Port with :hide above.
+    case System.cmd(
+           "powershell",
+           ["-NoProfile", "-NonInteractive", "-Command", script],
+           stderr_to_stdout: true
+         ) do
+      {output, 0} ->
+        case Jason.decode(String.trim(output)) do
+          {:ok, %{"CreationDate" => creation, "ExecutablePath" => actual_path}}
+          when is_binary(creation) and is_binary(actual_path) ->
+            expected_path = normalize_process_path(executable)
+            actual_path = normalize_process_path(actual_path)
+
+            if actual_path == expected_path do
+              {:ok, %{value: "windows:#{creation}", executable: expected_path}}
+            else
+              {:error, "process executable changed to #{actual_path}"}
+            end
+
+          {:ok, value} ->
+            {:error, "unexpected Windows process identity: #{inspect(value)}"}
+
+          {:error, reason} ->
+            {:error, "decode Windows process identity: #{inspect(reason)}"}
+        end
+
+      {output, 2} ->
+        {:error,
+         {:not_ready,
+          "PowerShell process identity query has not observed OS PID #{os_pid}: #{String.trim(output)}"}}
+
+      {output, status} ->
+        {:error,
+         "PowerShell process identity query failed (status #{status}): #{String.trim(output)}"}
+    end
+  end
+
+  defp unix_process_identity(os_pid) do
+    with {:ok, boot_id} <- File.read("/proc/sys/kernel/random/boot_id"),
+         {:ok, stat} <- File.read("/proc/#{os_pid}/stat"),
+         {:ok, start_time} <- unix_process_start_time(stat) do
+      {:ok,
+       %{
+         value: "unix:#{String.trim(boot_id)}:#{os_pid}:#{start_time}",
+         executable: nil
+       }}
+    else
+      {:error, reason} -> {:error, inspect(reason)}
+    end
+  end
+
+  defp unix_process_start_time(stat) do
+    case Regex.run(~r/^\d+ \(.*\) (.+)$/s, stat, capture: :all_but_first) do
+      [fields] ->
+        case fields |> String.split() |> Enum.at(19) do
+          start_time when is_binary(start_time) ->
+            case Integer.parse(start_time) do
+              {_, ""} -> {:ok, start_time}
+              _ -> {:error, "invalid Unix process start time"}
+            end
+
+          _ ->
+            {:error, "missing Unix process start time"}
+        end
+
+      _ ->
+        {:error, "malformed Unix process stat"}
+    end
+  end
+
+  defp normalize_process_path(path) do
+    path = Path.expand(path)
+
+    case :os.type() do
+      {:win32, _} -> path |> String.replace("/", "\\") |> String.downcase()
+      _ -> path
+    end
+  end
+
+  defp os_process_alive?(os_pid) do
+    case :os.type() do
+      {:win32, _} ->
+        case System.cmd(
+               "tasklist",
+               ["/FI", "PID eq #{os_pid}", "/FO", "CSV", "/NH"],
+               stderr_to_stdout: true
+             ) do
+          {output, 0} ->
+            output
+            |> String.split(["\r\n", "\n"], trim: true)
+            |> Enum.any?(&Regex.match?(~r/^"[^"]*","#{os_pid}",/, &1))
+
+          {output, status} ->
+            raise "could not inspect Windows OS PID #{os_pid} (tasklist status #{status}): #{String.trim(output)}"
+        end
+
+      _ ->
+        if File.dir?("/proc"),
+          do: File.dir?("/proc/#{os_pid}"),
+          else: unix_process_alive?(os_pid)
+    end
+  end
+
+  defp unix_process_alive?(os_pid) do
+    case System.cmd("kill", ["-0", Integer.to_string(os_pid)], stderr_to_stdout: true) do
+      {_output, 0} ->
+        true
+
+      {_output, 1} ->
+        false
+
+      {output, status} ->
+        raise "could not inspect Unix OS PID #{os_pid} (kill -0 status #{status}): #{String.trim(output)}"
+    end
+  end
+
+  defp unix_signal(:term), do: "-TERM"
+  defp unix_signal(:kill), do: "-KILL"
 
   defp required_pi_executable! do
     value = String.trim(System.get_env("SYMMETRY_PI_CONTROL_E2E_EXECUTABLE") || "")
@@ -1954,5 +2587,31 @@ defmodule SymmetryControl.PiControlE2ETest do
   defp assert_supported_platform! do
     unless match?({:win32, _}, :os.type()),
       do: flunk("Pi Control E2E requires the verified Windows Pi 0.85.1 binary")
+  end
+end
+
+defmodule SymmetryControl.DataCaseSandboxOptionsTest do
+  use ExUnit.Case, async: true
+
+  test "preserves defaults and accepts a bounded module ownership timeout" do
+    assert SymmetryControl.DataCase.sandbox_options(%{async: false}) == [shared: true]
+    assert SymmetryControl.DataCase.sandbox_options(%{async: true}) == [shared: false]
+
+    assert SymmetryControl.DataCase.sandbox_options(%{
+             async: false,
+             sandbox_ownership_timeout: 240_000
+           })
+           |> Enum.sort() == [ownership_timeout: 240_000, shared: true]
+  end
+
+  test "rejects unbounded and invalid module ownership timeouts" do
+    for timeout <- [:infinity, 0, -1, 600_001, "240000"] do
+      assert_raise ArgumentError, ~r/sandbox_ownership_timeout/, fn ->
+        SymmetryControl.DataCase.sandbox_options(%{
+          async: false,
+          sandbox_ownership_timeout: timeout
+        })
+      end
+    end
   end
 end
