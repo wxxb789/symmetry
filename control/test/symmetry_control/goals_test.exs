@@ -5379,6 +5379,56 @@ defmodule SymmetryControl.GoalsTest do
              }
   end
 
+  test "resume admission rejects an unverified retained session before writing admission records" do
+    {goal, item, task} = admitted_task_fixture()
+    complete_task_and_release_reservation!(goal, task)
+    runtime = runtime_fixture()
+
+    Repo.update_all(
+      from(row in Runtime, where: row.id == ^runtime.id),
+      set: [capabilities: %{"adapter" => %{"operations" => %{"resume" => true}}}]
+    )
+
+    retained =
+      available_session_fixture(
+        runtime,
+        item,
+        session_attrs(item, "workspace-unverified"),
+        binding_verified: false
+      )
+
+    counts_before = %{
+      snapshots: Repo.aggregate(SymmetryControl.Goals.ContextSnapshot, :count),
+      tasks: Repo.aggregate(Task, :count),
+      reservations: Repo.aggregate(SymmetryControl.Goals.GoalBudgetReservation, :count),
+      events: Repo.aggregate(SymmetryControl.Goals.GoalEvent, :count)
+    }
+
+    assert {:error, :requested_session_unavailable} =
+             command_current(
+               goal.id,
+               "admit_task",
+               admission_payload(item, %{
+                 session_mode: "resume",
+                 requested_session_id: retained.id,
+                 admission_key: Ecto.UUID.generate(),
+                 reserved_microusd: 1
+               }),
+               rollout_enabled: true
+             )
+
+    assert counts_before ==
+             %{
+               snapshots: Repo.aggregate(SymmetryControl.Goals.ContextSnapshot, :count),
+               tasks: Repo.aggregate(Task, :count),
+               reservations: Repo.aggregate(SymmetryControl.Goals.GoalBudgetReservation, :count),
+               events: Repo.aggregate(SymmetryControl.Goals.GoalEvent, :count)
+             }
+
+    assert %{binding_verified: false, state: "available", active_run_id: nil} =
+             Repo.get!(HarnessSession, retained.id)
+  end
+
   test "admission freezes validation bindings and evidence ignores later registry changes" do
     {_goal, item, task, runtime, run, fence} = validation_goal_run_fixture()
     snapshot = Repo.get!(SymmetryControl.Goals.ContextSnapshot, task.context_snapshot_id)
@@ -7369,7 +7419,7 @@ defmodule SymmetryControl.GoalsTest do
     }
   end
 
-  defp available_session_fixture(runtime, item, attrs) do
+  defp available_session_fixture(runtime, item, attrs, opts \\ []) do
     %HarnessSession{}
     |> HarnessSession.changeset(%{
       machine_id: runtime.machine_id,
@@ -7377,7 +7427,7 @@ defmodule SymmetryControl.GoalsTest do
       repository_resource_id: item_repository_resource_id(item),
       local_handle_id: attrs.local_handle_id,
       binding_id: Ecto.UUID.generate(),
-      binding_verified: true,
+      binding_verified: Keyword.get(opts, :binding_verified, true),
       harness_kind: attrs.harness_kind,
       harness_version: attrs.harness_version,
       adapter_version: attrs.adapter_version,

@@ -8964,7 +8964,8 @@ defmodule SymmetryControl.Goals do
         )
       ) || rollback(:requested_session_not_found)
 
-    unless session.state == "available" and is_nil(session.active_run_id) and
+    unless session.state == "available" and session.binding_verified == true and
+             is_nil(session.active_run_id) and
              session.repository_resource_id == item.repository_resource_id and
              session.runtime_id == runtime.id and runtime.status == "online" and
              runtime.repository_resource_id == item.repository_resource_id and
@@ -8999,7 +9000,8 @@ defmodule SymmetryControl.Goals do
         )
       ) || rollback(:requested_session_not_found)
 
-    unless session.state == "available" and is_nil(session.active_run_id) and
+    unless session.state == "available" and session.binding_verified == true and
+             is_nil(session.active_run_id) and
              session.repository_resource_id == resource.id and session.runtime_id == runtime.id and
              runtime.status == "online" and runtime.repository_resource_id == resource.id and
              session.harness_kind == runtime.harness_kind and
