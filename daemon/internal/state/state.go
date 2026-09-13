@@ -1584,7 +1584,7 @@ func writeAtomic(path string, data []byte) (err error) {
 		return err
 	}
 	temporary = nil
-	if err := os.Rename(temporaryPath, path); err != nil {
+	if err := renameStateFile(temporaryPath, path); err != nil {
 		return err
 	}
 	temporaryPath = ""

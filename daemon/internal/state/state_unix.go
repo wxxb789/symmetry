@@ -70,3 +70,7 @@ func syncDirectory(path string) error {
 	defer directory.Close()
 	return directory.Sync()
 }
+
+func renameStateFile(source, destination string) error {
+	return os.Rename(source, destination)
+}

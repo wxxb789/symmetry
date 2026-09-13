@@ -10,7 +10,10 @@ import (
 	"os"
 	"runtime"
 	"syscall"
+	"time"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 const (
@@ -41,6 +44,16 @@ var (
 	procGetSecurityDACL    = advapi32.NewProc("GetSecurityDescriptorDacl")
 	procGetSecurityControl = advapi32.NewProc("GetSecurityDescriptorControl")
 	procGetACE             = advapi32.NewProc("GetAce")
+	// renameStateFileOS is a serial-test seam; callers must not mutate it from
+	// parallel tests while a writeAtomic operation is in flight.
+	renameStateFileOS = os.Rename
+)
+
+const (
+	stateRenameRetryWindow       = 250 * time.Millisecond
+	stateRenameInitialBackoff    = time.Millisecond
+	stateRenameMaximumBackoff    = 16 * time.Millisecond
+	stateWindowsSharingViolation = windows.ERROR_SHARING_VIOLATION
 )
 
 type windowsSecurityDescriptor struct {
@@ -290,6 +303,51 @@ func windowsCallError(callErr error) error {
 		return callErr
 	}
 	return errors.New("Windows API call failed")
+}
+
+func renameStateFile(source, destination string) error {
+	return renameStateFileWith(renameStateFileOS, source, destination)
+}
+
+func renameStateFileWith(rename func(string, string) error, source, destination string) error {
+	deadline := time.Now().Add(stateRenameRetryWindow)
+	backoff := stateRenameInitialBackoff
+	var firstErr error
+
+	for {
+		err := rename(source, destination)
+		if err == nil {
+			return nil
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+		if !isRetryableStateRenameError(err) {
+			return err
+		}
+
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return firstErr
+		}
+		if backoff > remaining {
+			backoff = remaining
+		}
+		time.Sleep(backoff)
+		if time.Until(deadline) <= 0 {
+			return firstErr
+		}
+		if backoff < stateRenameMaximumBackoff {
+			backoff *= 2
+			if backoff > stateRenameMaximumBackoff {
+				backoff = stateRenameMaximumBackoff
+			}
+		}
+	}
+}
+
+func isRetryableStateRenameError(err error) bool {
+	return errors.Is(err, syscall.ERROR_ACCESS_DENIED) || errors.Is(err, stateWindowsSharingViolation)
 }
 
 func syncDirectory(string) error {
