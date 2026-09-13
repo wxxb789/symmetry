@@ -57,6 +57,19 @@ func TestPIDFDGroupSupportProbeReleasesProcessHandle(t *testing.T) {
 	}
 }
 
+func TestConfigureHeadlessProcessIsNoOp(t *testing.T) {
+	command := exec.Command("sleep", "1")
+	if err := ConfigureHeadlessProcess(command); err != nil {
+		t.Fatalf("ConfigureHeadlessProcess() error = %v", err)
+	}
+	if command.SysProcAttr != nil {
+		t.Fatalf("ConfigureHeadlessProcess() changed SysProcAttr = %#v", command.SysProcAttr)
+	}
+	if err := ConfigureHeadlessProcess(nil); err != nil {
+		t.Fatalf("ConfigureHeadlessProcess(nil) error = %v, want nil", err)
+	}
+}
+
 func TestProcessGroupCloseStopsOwnedChildAfterLeaderExit(t *testing.T) {
 	command := exec.Command(os.Args[0], "-test.run=^TestProcessGroupContainmentHelper$", "--", "leader-exits-after-child")
 	command.Env = append(os.Environ(), "GO_WANT_PROCESS_GROUP_CONTAINMENT_HELPER=1")

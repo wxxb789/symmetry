@@ -17,6 +17,10 @@ type Containment interface {
 	Close() error
 }
 
+// ConfigureHeadlessProcess is a no-op where the platform does not expose a
+// console-window creation mode used by the daemon.
+func ConfigureHeadlessProcess(*exec.Cmd) error { return nil }
+
 // ConfigureProcess fails closed where native process containment is unsupported.
 func ConfigureProcess(*exec.Cmd) error {
 	return fmt.Errorf("%w: native process containment is unsupported on this platform", errors.ErrUnsupported)

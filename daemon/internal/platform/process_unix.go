@@ -35,6 +35,10 @@ type Containment interface {
 	Close() error
 }
 
+// ConfigureHeadlessProcess is a no-op on Unix because child console windows
+// are not created by the process-launch API used here.
+func ConfigureHeadlessProcess(*exec.Cmd) error { return nil }
+
 // ConfigureProcess verifies pidfd process-group signalling before making the
 // launched process the leader of a new process group. Containment owns only
 // processes that remain in that original group; descendants that create a

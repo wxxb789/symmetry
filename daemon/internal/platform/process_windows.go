@@ -21,6 +21,9 @@ const (
 	jobObjectBasicAccountingInformation = 1
 	jobObjectExtendedLimitInformation   = 9
 	jobObjectLimitKillOnJobClose        = 0x00002000
+	windowsCreateNoWindow               = 0x08000000
+	windowsCreateNewConsole             = 0x00000010
+	windowsDetachedProcess              = 0x00000008
 )
 
 var (
@@ -92,11 +95,38 @@ type jobContainment struct {
 	closeErr     error
 }
 
-// ConfigureProcess leaves inherited Job Object handling to AttachProcess.
-// CREATE_BREAKAWAY_FROM_JOB fails before the child starts when an inherited
-// CI Job Object does not permit it, while AssignProcessToJobObject retains the
-// existing fail-closed containment path.
-func ConfigureProcess(_ *exec.Cmd) error { return nil }
+// ConfigureHeadlessProcess starts console applications without creating a
+// console window. The standard library does not expose names for these Windows
+// creation flags, so keep the values local to this platform implementation.
+func ConfigureHeadlessProcess(command *exec.Cmd) error {
+	if command == nil {
+		return errors.New("process command is required")
+	}
+
+	attributes := command.SysProcAttr
+	if attributes != nil {
+		flags := attributes.CreationFlags
+		if flags&windowsCreateNewConsole != 0 {
+			return errors.New("headless process configuration conflicts with CREATE_NEW_CONSOLE")
+		}
+		if flags&windowsDetachedProcess != 0 {
+			return errors.New("headless process configuration conflicts with DETACHED_PROCESS")
+		}
+	}
+
+	if attributes == nil {
+		attributes = &syscall.SysProcAttr{}
+		command.SysProcAttr = attributes
+	}
+	attributes.CreationFlags |= windowsCreateNoWindow
+	return nil
+}
+
+// ConfigureProcess leaves inherited Job Object handling to AttachProcess and
+// reuses the headless process configuration before the process is started.
+func ConfigureProcess(command *exec.Cmd) error {
+	return ConfigureHeadlessProcess(command)
+}
 
 // AttachProcess adds the root process to a fresh Job Object. The job owns the
 // root and descendants assigned after this call; processes that escape before

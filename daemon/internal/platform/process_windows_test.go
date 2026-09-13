@@ -4,11 +4,13 @@ package platform
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"reflect"
 	"strconv"
 	"strings"
 	"syscall"
@@ -16,24 +18,131 @@ import (
 	"time"
 )
 
-func TestConfigureProcessDoesNotRequireBreakawayFromInheritedJob(t *testing.T) {
+func TestConfigureHeadlessProcessCreatesHeadlessSysProcAttr(t *testing.T) {
+	command := exec.Command("example.exe")
+	if err := ConfigureHeadlessProcess(command); err != nil {
+		t.Fatalf("ConfigureHeadlessProcess() error = %v", err)
+	}
+
+	if command.SysProcAttr == nil {
+		t.Fatal("ConfigureHeadlessProcess() left SysProcAttr nil")
+	}
+	if got, want := command.SysProcAttr.CreationFlags, uint32(windowsCreateNoWindow); got != want {
+		t.Fatalf("CreationFlags = %#x, want %#x", got, want)
+	}
+
+	attributes := command.SysProcAttr
+	if err := ConfigureHeadlessProcess(command); err != nil {
+		t.Fatalf("repeated ConfigureHeadlessProcess() error = %v", err)
+	}
+	if command.SysProcAttr != attributes || command.SysProcAttr.CreationFlags != windowsCreateNoWindow {
+		t.Fatalf("repeated ConfigureHeadlessProcess() changed attributes = %#v", command.SysProcAttr)
+	}
+}
+
+func TestConfigureHeadlessProcessPreservesExistingSysProcAttr(t *testing.T) {
+	attributes := &syscall.SysProcAttr{
+		HideWindow:                 true,
+		CmdLine:                    `example.exe "argument"`,
+		CreationFlags:              0x00000200,
+		Token:                      syscall.Token(7),
+		NoInheritHandles:           true,
+		AdditionalInheritedHandles: []syscall.Handle{11, 13},
+		ParentProcess:              syscall.Handle(17),
+	}
+	before := *attributes
+	command := exec.Command("example.exe")
+	command.SysProcAttr = attributes
+
+	if err := ConfigureHeadlessProcess(command); err != nil {
+		t.Fatalf("ConfigureHeadlessProcess() with attributes error = %v", err)
+	}
+	if command.SysProcAttr != attributes {
+		t.Fatalf("ConfigureHeadlessProcess() replaced existing SysProcAttr = %#v", command.SysProcAttr)
+	}
+	after := *attributes
+	after.CreationFlags = before.CreationFlags
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("ConfigureHeadlessProcess() changed fields: before=%#v after=%#v", before, after)
+	}
+	if got, want := attributes.CreationFlags, before.CreationFlags|uint32(windowsCreateNoWindow); got != want {
+		t.Fatalf("CreationFlags = %#x, want %#x", got, want)
+	}
+}
+
+func TestConfigureHeadlessProcessRejectsConflictingConsoleCreationFlags(t *testing.T) {
+	tests := []struct {
+		name string
+		flag uint32
+		text string
+	}{
+		{name: "new console", flag: windowsCreateNewConsole, text: "CREATE_NEW_CONSOLE"},
+		{name: "detached process", flag: windowsDetachedProcess, text: "DETACHED_PROCESS"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			attributes := &syscall.SysProcAttr{CreationFlags: test.flag | 0x00000200}
+			before := *attributes
+			command := exec.Command("example.exe")
+			command.SysProcAttr = attributes
+
+			err := ConfigureHeadlessProcess(command)
+			if err == nil || !strings.Contains(err.Error(), test.text) {
+				t.Fatalf("ConfigureHeadlessProcess() error = %v, want %s conflict", err, test.text)
+			}
+			if command.SysProcAttr != attributes || !reflect.DeepEqual(*attributes, before) {
+				t.Fatalf("conflicting ConfigureHeadlessProcess() mutated attributes = %#v, want %#v", attributes, before)
+			}
+		})
+	}
+}
+
+func TestConfigureHeadlessProcessRejectsNilCommand(t *testing.T) {
+	if err := ConfigureHeadlessProcess(nil); err == nil {
+		t.Fatal("ConfigureHeadlessProcess(nil) error = nil, want error")
+	}
+}
+
+func TestConfigureProcessReusesHeadlessConfiguration(t *testing.T) {
 	command := exec.Command("example.exe")
 	if err := ConfigureProcess(command); err != nil {
 		t.Fatalf("ConfigureProcess() error = %v", err)
 	}
+	if command.SysProcAttr == nil || command.SysProcAttr.CreationFlags&windowsCreateNoWindow == 0 {
+		t.Fatalf("ConfigureProcess() SysProcAttr = %#v, want CREATE_NO_WINDOW", command.SysProcAttr)
+	}
+}
 
-	if command.SysProcAttr != nil {
-		t.Fatalf("ConfigureProcess() changed SysProcAttr = %#v", command.SysProcAttr)
+func TestConfigureHeadlessProcessCreatesNoConsoleWindow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestHeadlessProcessHelper$", "--")
+	command.Env = append(os.Environ(), "GO_WANT_HEADLESS_PROCESS_HELPER=1")
+	if err := ConfigureHeadlessProcess(command); err != nil {
+		t.Fatalf("ConfigureHeadlessProcess() error = %v", err)
+	}
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("headless process error = %v, output = %q", err, output)
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("headless process context = %v", ctx.Err())
+	}
+	if !strings.Contains(string(output), "console=0") {
+		t.Fatalf("headless process output = %q, want console=0", output)
+	}
+}
+
+func TestHeadlessProcessHelper(t *testing.T) {
+	if os.Getenv("GO_WANT_HEADLESS_PROCESS_HELPER") != "1" {
+		return
 	}
 
-	attributes := &syscall.SysProcAttr{CreationFlags: 0x00000200}
-	command.SysProcAttr = attributes
-	if err := ConfigureProcess(command); err != nil {
-		t.Fatalf("ConfigureProcess() with attributes error = %v", err)
-	}
-	if command.SysProcAttr != attributes || command.SysProcAttr.CreationFlags != 0x00000200 {
-		t.Fatalf("ConfigureProcess() changed existing SysProcAttr = %#v", command.SysProcAttr)
-	}
+	getConsoleWindow := syscall.NewLazyDLL("kernel32.dll").NewProc("GetConsoleWindow")
+	consoleWindow, _, _ := getConsoleWindow.Call()
+	_, _ = fmt.Fprintf(os.Stdout, "console=%d\n", consoleWindow)
 }
 
 func TestCleanupFailedAttachTerminatesOriginalProcessHandle(t *testing.T) {
@@ -85,6 +194,9 @@ func TestSoftTerminateIsUnsupportedWithoutJobTermination(t *testing.T) {
 
 func TestAttachProcessReturnsPartialContainmentAfterIdentityFailure(t *testing.T) {
 	command := exec.Command("cmd", "/c", "ping", "-t", "127.0.0.1")
+	if err := ConfigureProcess(command); err != nil {
+		t.Fatalf("ConfigureProcess() error = %v", err)
+	}
 	if err := command.Start(); err != nil {
 		t.Fatalf("start helper: %v", err)
 	}
@@ -474,6 +586,10 @@ func TestJobContainmentHelper(t *testing.T) {
 			os.Exit(3)
 		}
 		child := exec.Command("cmd", "/c", "ping", "-t", "127.0.0.1")
+		if err := ConfigureProcess(child); err != nil {
+			fmt.Fprint(os.Stderr, err)
+			os.Exit(4)
+		}
 		if err := child.Start(); err != nil {
 			fmt.Fprint(os.Stderr, err)
 			os.Exit(4)
@@ -489,7 +605,11 @@ func TestJobContainmentHelper(t *testing.T) {
 }
 
 func windowsProcessExists(pid int) (bool, string) {
-	output, err := exec.Command("tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/FO", "CSV", "/NH").Output()
+	command := exec.Command("tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/FO", "CSV", "/NH")
+	if err := ConfigureProcess(command); err != nil {
+		return false, err.Error()
+	}
+	output, err := command.Output()
 	if err != nil {
 		return false, err.Error()
 	}
