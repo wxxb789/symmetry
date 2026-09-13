@@ -1164,6 +1164,38 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     assert 0 == Repo.aggregate(from(run in Run, where: run.task_id == ^task.id), :count)
   end
 
+  test "offline retained runtime does not assign a resumed Goal task or fall back" do
+    retained_runtime = register_runtime("resume-offline-retained", resume?: true)
+    {task, _goal_id} = insert_goal_task(max_run_attempts: 2, retained_runtime: retained_runtime)
+    retained_session = Repo.get!(HarnessSession, task.requested_session_id)
+    item = Repo.get!(WorkItem, task.work_item_id)
+
+    fallback_runtime =
+      register_runtime("resume-offline-fallback",
+        resume?: true,
+        repository_resource_id: item.repository_resource_id
+      )
+
+    original_binding_id = retained_session.binding_id
+
+    Repo.update_all(
+      from(runtime in Runtime, where: runtime.id == ^retained_runtime.id),
+      set: [status: "offline"]
+    )
+
+    assert Repo.get!(Runtime, fallback_runtime.id).status == "online"
+    assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
+    assert %{state: "queued", current_generation: 0} = Repo.get!(Task, task.id)
+    assert 0 == Repo.aggregate(from(run in Run, where: run.task_id == ^task.id), :count)
+
+    assert %{
+             state: "available",
+             active_run_id: nil,
+             binding_id: ^original_binding_id,
+             binding_verified: true
+           } = Repo.get!(HarnessSession, retained_session.id)
+  end
+
   test "Goal handoff selects a same-machine runtime with handoff support without reserving a session" do
     {source_task, _goal_id} = insert_goal_task(max_run_attempts: 2)
     source_item = Repo.get!(WorkItem, source_task.work_item_id)

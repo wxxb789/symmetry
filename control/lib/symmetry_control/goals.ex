@@ -8967,7 +8967,7 @@ defmodule SymmetryControl.Goals do
     unless session.state == "available" and session.binding_verified == true and
              is_nil(session.active_run_id) and
              session.repository_resource_id == item.repository_resource_id and
-             session.runtime_id == runtime.id and runtime.status == "online" and
+             session.runtime_id == runtime.id and
              runtime.repository_resource_id == item.repository_resource_id and
              session.harness_kind == runtime.harness_kind and
              session.harness_version == runtime.harness_version and
@@ -9003,7 +9003,7 @@ defmodule SymmetryControl.Goals do
     unless session.state == "available" and session.binding_verified == true and
              is_nil(session.active_run_id) and
              session.repository_resource_id == resource.id and session.runtime_id == runtime.id and
-             runtime.status == "online" and runtime.repository_resource_id == resource.id and
+             runtime.repository_resource_id == resource.id and
              session.harness_kind == runtime.harness_kind and
              session.harness_version == runtime.harness_version and
              session.adapter_version == runtime.adapter_version and

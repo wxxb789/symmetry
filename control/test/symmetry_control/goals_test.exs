@@ -5429,6 +5429,209 @@ defmodule SymmetryControl.GoalsTest do
              Repo.get!(HarnessSession, retained.id)
   end
 
+  test "resume admission accepts a verified available session while its runtime is offline" do
+    {goal, item, task} = admitted_task_fixture()
+    complete_task_and_release_reservation!(goal, task)
+    goal = fetch_goal!(goal.id)
+    runtime = runtime_fixture()
+
+    Repo.update_all(
+      from(row in Runtime, where: row.id == ^runtime.id),
+      set: [
+        status: "offline",
+        capabilities: %{"adapter" => %{"operations" => %{"resume" => true}}}
+      ]
+    )
+
+    retained = available_session_fixture(runtime, item, session_attrs(item, "workspace-offline"))
+    binding_id = retained.binding_id
+
+    request =
+      command(
+        goal,
+        "admit_task",
+        admission_payload(item, %{
+          session_mode: "resume",
+          requested_session_id: retained.id
+        })
+      )
+
+    counts_before = %{
+      snapshots: Repo.aggregate(SymmetryControl.Goals.ContextSnapshot, :count),
+      tasks: Repo.aggregate(Task, :count),
+      reservations: Repo.aggregate(SymmetryControl.Goals.GoalBudgetReservation, :count),
+      events: Repo.aggregate(SymmetryControl.Goals.GoalEvent, :count)
+    }
+
+    assert {:ok, admitted, :created} =
+             Goals.command(goal.id, request, "operator:test", now: @now, rollout_enabled: true)
+
+    admitted_task = Repo.get!(Task, admitted.response["task"]["id"])
+    assert admitted_task.state == "queued"
+    assert admitted_task.requested_session_id == retained.id
+    assert admitted_task.input["session_mode"] == "resume"
+    assert admitted_task.input["requested_session_id"] == retained.id
+
+    counts_after = %{
+      snapshots: Repo.aggregate(SymmetryControl.Goals.ContextSnapshot, :count),
+      tasks: Repo.aggregate(Task, :count),
+      reservations: Repo.aggregate(SymmetryControl.Goals.GoalBudgetReservation, :count),
+      events: Repo.aggregate(SymmetryControl.Goals.GoalEvent, :count)
+    }
+
+    assert counts_after == %{
+             snapshots: counts_before.snapshots + 1,
+             tasks: counts_before.tasks + 1,
+             reservations: counts_before.reservations + 1,
+             events: counts_before.events + 1
+           }
+
+    assert %{
+             binding_id: ^binding_id,
+             binding_verified: true,
+             state: "available",
+             active_run_id: nil
+           } =
+             Repo.get!(HarnessSession, retained.id)
+
+    assert {:ok, replayed, :replayed} =
+             Goals.command(goal.id, request, "operator:test", now: @now, rollout_enabled: true)
+
+    assert replayed == admitted
+
+    assert counts_after == %{
+             snapshots: Repo.aggregate(SymmetryControl.Goals.ContextSnapshot, :count),
+             tasks: Repo.aggregate(Task, :count),
+             reservations: Repo.aggregate(SymmetryControl.Goals.GoalBudgetReservation, :count),
+             events: Repo.aggregate(SymmetryControl.Goals.GoalEvent, :count)
+           }
+
+    assert %{binding_id: ^binding_id, state: "available", active_run_id: nil} =
+             Repo.get!(HarnessSession, retained.id)
+  end
+
+  test "request_plan resume admission accepts a verified available session while its runtime is offline" do
+    project = project_fixture()
+    repository = repository_fixture(project)
+
+    assert {:ok, created, :created} =
+             Goals.create_goal(
+               project.id,
+               goal_attrs(nil, %{"max_task_admissions" => 2}),
+               "operator:test",
+               now: @now
+             )
+
+    runtime = plan_runtime_fixture(repository)
+
+    Repo.update_all(
+      from(row in Runtime, where: row.id == ^runtime.id),
+      set: [
+        status: "offline",
+        capabilities: %{"adapter" => %{"operations" => %{"resume" => true}}}
+      ]
+    )
+
+    session_attrs = %{
+      local_handle_id: Ecto.UUID.generate(),
+      harness_kind: "codex",
+      harness_version: runtime.harness_version,
+      adapter_version: runtime.adapter_version,
+      workspace_fingerprint: "workspace-plan-offline",
+      workspace: "primary",
+      repository_resource_id: repository.id
+    }
+
+    retained =
+      %HarnessSession{}
+      |> HarnessSession.changeset(%{
+        machine_id: runtime.machine_id,
+        runtime_id: runtime.id,
+        repository_resource_id: repository.id,
+        local_handle_id: session_attrs.local_handle_id,
+        binding_id: Ecto.UUID.generate(),
+        binding_verified: true,
+        harness_kind: session_attrs.harness_kind,
+        harness_version: session_attrs.harness_version,
+        adapter_version: session_attrs.adapter_version,
+        workspace_fingerprint: session_attrs.workspace_fingerprint,
+        state: "available"
+      })
+      |> Repo.insert!()
+
+    binding_id = retained.binding_id
+    subject = baseline_subject(repository.id).subject
+
+    request =
+      command(created.goal, "request_plan", %{
+        model_profile: "codex",
+        repository_resource_id: repository.id,
+        subject: subject,
+        session_mode: "resume",
+        requested_session_id: retained.id
+      })
+
+    counts_before = %{
+      snapshots: Repo.aggregate(SymmetryControl.Goals.ContextSnapshot, :count),
+      tasks: Repo.aggregate(Task, :count),
+      reservations: Repo.aggregate(SymmetryControl.Goals.GoalBudgetReservation, :count),
+      events: Repo.aggregate(SymmetryControl.Goals.GoalEvent, :count)
+    }
+
+    assert {:ok, admitted, :created} =
+             Goals.command(created.goal.id, request, "operator:test",
+               now: @now,
+               rollout_enabled: true
+             )
+
+    admitted_task = Repo.get!(Task, admitted.response["task"]["id"])
+    assert admitted_task.state == "queued"
+    assert admitted_task.purpose == "plan"
+    assert admitted_task.requested_session_id == retained.id
+    assert admitted_task.input["session_mode"] == "resume"
+    assert admitted_task.input["requested_session_id"] == retained.id
+
+    counts_after = %{
+      snapshots: Repo.aggregate(SymmetryControl.Goals.ContextSnapshot, :count),
+      tasks: Repo.aggregate(Task, :count),
+      reservations: Repo.aggregate(SymmetryControl.Goals.GoalBudgetReservation, :count),
+      events: Repo.aggregate(SymmetryControl.Goals.GoalEvent, :count)
+    }
+
+    assert counts_after == %{
+             snapshots: counts_before.snapshots + 1,
+             tasks: counts_before.tasks + 1,
+             reservations: counts_before.reservations + 1,
+             events: counts_before.events + 1
+           }
+
+    assert %{
+             binding_id: ^binding_id,
+             binding_verified: true,
+             state: "available",
+             active_run_id: nil
+           } =
+             Repo.get!(HarnessSession, retained.id)
+
+    assert {:ok, replayed, :replayed} =
+             Goals.command(created.goal.id, request, "operator:test",
+               now: @now,
+               rollout_enabled: true
+             )
+
+    assert replayed == admitted
+
+    assert counts_after == %{
+             snapshots: Repo.aggregate(SymmetryControl.Goals.ContextSnapshot, :count),
+             tasks: Repo.aggregate(Task, :count),
+             reservations: Repo.aggregate(SymmetryControl.Goals.GoalBudgetReservation, :count),
+             events: Repo.aggregate(SymmetryControl.Goals.GoalEvent, :count)
+           }
+
+    assert %{binding_id: ^binding_id, state: "available", active_run_id: nil} =
+             Repo.get!(HarnessSession, retained.id)
+  end
+
   test "admission freezes validation bindings and evidence ignores later registry changes" do
     {_goal, item, task, runtime, run, fence} = validation_goal_run_fixture()
     snapshot = Repo.get!(SymmetryControl.Goals.ContextSnapshot, task.context_snapshot_id)
