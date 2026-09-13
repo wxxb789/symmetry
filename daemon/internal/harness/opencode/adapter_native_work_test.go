@@ -177,6 +177,20 @@ func TestNativeSyntheticGatewayToolIntegration(t *testing.T) {
 		t.Fatalf("replayed Open() = %+v, %v; want stable native identity", replayedHandle, err)
 	}
 
+	native, ok := session.(*nativeSession)
+	if !ok {
+		t.Fatalf("native OpenCode session = %T, want *nativeSession", session)
+	}
+	native.mu.Lock()
+	client, ok := native.client.(*Client)
+	native.mu.Unlock()
+	if !ok || client == nil {
+		t.Fatal("native OpenCode session did not retain its verified production client after Open")
+	}
+	catalogContext, catalogCancel := context.WithTimeout(context.Background(), nativeRepositoryTaskTimeout)
+	defer catalogCancel()
+	nativeOpenCodeAssertSyntheticProviderCatalog(t, catalogContext, client)
+
 	turnContext, turnCancel := context.WithTimeout(context.Background(), nativeRepositoryTaskTimeout)
 	defer turnCancel()
 	if err := staged.StartTurn(turnContext, harness.TurnRequest{
@@ -206,9 +220,11 @@ func TestNativeSyntheticGatewayToolIntegration(t *testing.T) {
 		t.Fatalf("wait native OpenCode repository task: %v", err)
 	}
 	closed = true
+	// Close intentionally terminates the server; a platform-specific non-zero
+	// WaitError is expected once Terminated is true and is not a cleanup fault.
 	if result.Kind != harness.ResultUnknown || result.Semantic != nil || !result.Process.Terminated ||
 		result.Process.SinkError != nil || result.Process.OutputError != nil ||
-		result.Process.TerminationError != nil || result.Process.ContainmentError != nil || result.Process.WaitError != nil {
+		result.Process.TerminationError != nil || result.Process.ContainmentError != nil {
 		t.Fatalf("native OpenCode repository task result = %+v; want unknown with clean bounded process stop", result)
 	}
 
@@ -539,7 +555,7 @@ func TestNativeResumeEventCapture(t *testing.T) {
 	closed = true
 	if result.Kind != harness.ResultUnknown || result.Semantic != nil || !result.Process.Terminated ||
 		result.Process.SinkError != nil || result.Process.OutputError != nil ||
-		result.Process.TerminationError != nil || result.Process.ContainmentError != nil || result.Process.WaitError != nil {
+		result.Process.TerminationError != nil || result.Process.ContainmentError != nil {
 		t.Fatalf("native OpenCode Resume:true event capture result = %+v, want unknown with bounded process stop", result)
 	}
 }
@@ -1590,9 +1606,11 @@ func TestNativeRepositoryTask(t *testing.T) {
 		t.Fatalf("wait real native OpenCode repository task: %v", err)
 	}
 	closed = true
+	// Close intentionally terminates the server; a platform-specific non-zero
+	// WaitError is expected once Terminated is true and is not a cleanup fault.
 	if result.Kind != harness.ResultUnknown || result.Semantic != nil || !result.Process.Terminated ||
 		result.Process.SinkError != nil || result.Process.OutputError != nil ||
-		result.Process.TerminationError != nil || result.Process.ContainmentError != nil || result.Process.WaitError != nil {
+		result.Process.TerminationError != nil || result.Process.ContainmentError != nil {
 		t.Fatalf("real native OpenCode repository task result = %+v; want unknown with clean bounded process stop", result)
 	}
 
@@ -1642,12 +1660,22 @@ func nativeOpenCodeRepositoryTaskEnvironmentWithConfig(t *testing.T, root, confi
 	if err := os.MkdirAll(configDir, 0o700); err != nil {
 		t.Fatalf("create native OpenCode config directory: %v", err)
 	}
+	// V2 Catalog initialization reads the isolated config directory from disk;
+	// OPENCODE_CONFIG_CONTENT alone is consumed by the legacy loader only.
+	configPath := filepath.Join(configDir, "opencode.json")
+	if !filepath.IsAbs(configPath) {
+		t.Fatalf("native OpenCode test config path is not absolute: %q", configPath)
+	}
+	if err := os.WriteFile(configPath, append([]byte(configJSON), '\n'), 0o600); err != nil {
+		t.Fatalf("write native OpenCode test config: %v", err)
+	}
 	managedConfigDir := filepath.Join(root, "test-managed-config")
 	if err := os.MkdirAll(managedConfigDir, 0o700); err != nil {
 		t.Fatalf("create test-managed OpenCode config directory: %v", err)
 	}
 	environment := nativeOpenCodeSmokeEnvironment(t, root)
 	environment = append(environment,
+		"OPENCODE_CONFIG="+configPath,
 		"OPENCODE_CONFIG_DIR="+configDir,
 		"OPENCODE_CONFIG_CONTENT="+configJSON,
 		"OPENCODE_TEST_MANAGED_CONFIG_DIR="+managedConfigDir,
@@ -1800,15 +1828,25 @@ func nativeOpenCodeRequiredLoopbackUpstream(t *testing.T, environmentName string
 
 func nativeOpenCodeRepositoryTaskCheckEnvironment(t *testing.T, environment []string, baseURL string) {
 	t.Helper()
+	configPath := ""
 	for _, entry := range environment {
-		key, _, found := strings.Cut(entry, "=")
+		key, value, found := strings.Cut(entry, "=")
 		if !found {
 			continue
 		}
 		switch strings.ToUpper(key) {
+		case "OPENCODE_CONFIG":
+			configPath = value
 		case "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY":
 			t.Fatalf("native OpenCode test environment contains credential variable %s", key)
 		}
+	}
+	if configPath == "" || !filepath.IsAbs(configPath) {
+		t.Fatalf("native OpenCode test environment must provide an absolute OPENCODE_CONFIG path, got %q", configPath)
+	}
+	configInfo, err := os.Stat(configPath)
+	if err != nil || !configInfo.Mode().IsRegular() {
+		t.Fatalf("native OpenCode test OPENCODE_CONFIG is not an existing regular file: %q (%v)", configPath, err)
 	}
 	if !strings.Contains(strings.Join(environment, "\n"), "OPENCODE_CONFIG_CONTENT=") {
 		t.Fatal("native OpenCode test environment is missing OPENCODE_CONFIG_CONTENT")
@@ -1816,6 +1854,60 @@ func nativeOpenCodeRepositoryTaskCheckEnvironment(t *testing.T, environment []st
 	if !strings.Contains(strings.Join(environment, "\n"), baseURL) {
 		t.Fatal("native OpenCode test environment is missing the configured loopback base URL")
 	}
+}
+
+func nativeOpenCodeAssertSyntheticProviderCatalog(t *testing.T, ctx context.Context, client *Client) {
+	t.Helper()
+	if ctx == nil {
+		t.Fatal("native OpenCode catalog assertion context is nil")
+	}
+	if client == nil {
+		t.Fatal("native OpenCode catalog assertion client is nil")
+	}
+	var providerResponse struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	providerBody, err := client.do(ctx, http.MethodGet, "/api/provider", nil, http.StatusOK)
+	if err != nil {
+		t.Fatalf("read native OpenCode provider catalog: %v", err)
+	}
+	if err := json.Unmarshal(providerBody, &providerResponse); err != nil {
+		t.Fatalf("decode native OpenCode provider catalog: %v; body=%s", err, string(providerBody))
+	}
+	providerSeen := false
+	providerIDs := make([]string, 0, len(providerResponse.Data))
+	for _, provider := range providerResponse.Data {
+		providerIDs = append(providerIDs, provider.ID)
+		if provider.ID == nativeSyntheticProvider {
+			providerSeen = true
+		}
+	}
+	if !providerSeen {
+		t.Fatalf("native OpenCode provider catalog omitted %q; provider IDs=%v body=%s", nativeSyntheticProvider, providerIDs, string(providerBody))
+	}
+
+	var modelResponse struct {
+		Data []struct {
+			ID         string `json:"id"`
+			ProviderID string `json:"providerID"`
+		} `json:"data"`
+	}
+	modelBody, err := client.do(ctx, http.MethodGet, "/api/model", nil, http.StatusOK)
+	if err != nil {
+		t.Fatalf("read native OpenCode model catalog: %v", err)
+	}
+	if err := json.Unmarshal(modelBody, &modelResponse); err != nil {
+		t.Fatalf("decode native OpenCode model catalog: %v; body=%s", err, string(modelBody))
+	}
+	for _, model := range modelResponse.Data {
+		if model.ID == nativeSyntheticModel && model.ProviderID == nativeSyntheticProvider {
+			t.Logf("native OpenCode V2 catalog exposes provider=%q model=%q", model.ProviderID, model.ID)
+			return
+		}
+	}
+	t.Fatalf("native OpenCode model catalog omitted %s/%s; body=%s", nativeSyntheticProvider, nativeSyntheticModel, string(modelBody))
 }
 
 func nativeOpenCodeRepositoryTaskCheckVersion(t *testing.T, executable, workspace string, environment []string) {
@@ -2056,7 +2148,7 @@ func (gateway *nativeOpenCodeRepositoryTaskGateway) handle(response http.Respons
 		gateway.toolSeen = true
 	}
 	gateway.mu.Unlock()
-	arguments, _ := json.Marshal(map[string]string{"content": nativeRepositoryTaskContent, "filePath": gateway.target})
+	arguments, _ := json.Marshal(map[string]string{"content": nativeRepositoryTaskContent, "path": gateway.target})
 	if hasToolResult {
 		nativeOpenCodeRepositoryTaskWriteChatResponse(response, envelope.Stream, nativeSyntheticModel, "done", "stop", nil)
 		return
