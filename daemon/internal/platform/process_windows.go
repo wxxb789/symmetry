@@ -99,6 +99,10 @@ type jobContainment struct {
 // console window. The standard library does not expose names for these Windows
 // creation flags, so keep the values local to this platform implementation.
 func ConfigureHeadlessProcess(command *exec.Cmd) error {
+	return configureHeadlessProcess(command)
+}
+
+func configureHeadlessProcess(command *exec.Cmd) error {
 	if command == nil {
 		return errors.New("process command is required")
 	}
@@ -125,7 +129,7 @@ func ConfigureHeadlessProcess(command *exec.Cmd) error {
 // ConfigureProcess leaves inherited Job Object handling to AttachProcess and
 // reuses the headless process configuration before the process is started.
 func ConfigureProcess(command *exec.Cmd) error {
-	return ConfigureHeadlessProcess(command)
+	return configureHeadlessProcess(command)
 }
 
 // AttachProcess adds the root process to a fresh Job Object. The job owns the
