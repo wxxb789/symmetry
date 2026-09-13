@@ -651,6 +651,79 @@ func TestTryDeterministicArtifactValidationUsesFinalTerminalPendingTime(t *testi
 	}
 }
 
+func TestTryDeterministicArtifactValidationFormatsObservedAtForControlMicroseconds(t *testing.T) {
+	content := []byte("committed proof at the admitted commit\n")
+	fixture := newDeterministicValidationFixture(t, []control.AcceptancePredicate{{
+		ID:         "artifact-proof",
+		Kind:       "artifact",
+		ResourceID: deterministicResourceID,
+		Path:       "proof.txt",
+	}})
+	fixture.workspace.artifacts["proof.txt"] = workspace.SubjectArtifact{
+		Path: "proof.txt", Content: content, ContentDigest: digestDeterministicArtifact(content),
+	}
+	observedAt := time.Date(2026, 9, 12, 12, 0, 0, 293_990_123, time.UTC)
+	fixture.daemon.options.clock = func() time.Time { return observedAt }
+
+	result, err := fixture.daemon.tryDeterministicArtifactValidation(context.Background(), fixture.key, fixture.claim, fixture.admission)
+	if err != nil || !result.Handled {
+		t.Fatalf("tryDeterministicArtifactValidation() = %#v, %v; want success", result, err)
+	}
+	if len(result.Evidence) != 1 {
+		t.Fatalf("evidence count = %d, want one", len(result.Evidence))
+	}
+
+	const wantObservedAt = "2026-09-12T12:00:00.293990Z"
+	if result.Evidence[0].ObservedAt != wantObservedAt {
+		t.Fatalf("evidence.ObservedAt = %q, want fixed six-digit UTC timestamp %q", result.Evidence[0].ObservedAt, wantObservedAt)
+	}
+	parsed, err := time.Parse(controlUTCTimestampLayout, result.Evidence[0].ObservedAt)
+	if err != nil {
+		t.Fatalf("Control-compatible timestamp parse failed: %v", err)
+	}
+	if !parsed.Equal(observedAt.Truncate(time.Microsecond)) {
+		t.Fatalf("parsed observed_at = %s, want %s", parsed, observedAt.Truncate(time.Microsecond))
+	}
+
+	var queuedEvidence *state.GoalDelivery
+	for index := range result.Journal.PendingGoalDeliveries {
+		delivery := &result.Journal.PendingGoalDeliveries[index]
+		if delivery.Kind == state.GoalDeliveryEvidence && delivery.Evidence != nil {
+			queuedEvidence = delivery
+			break
+		}
+	}
+	if queuedEvidence == nil {
+		t.Fatal("deterministic validation did not persist an evidence delivery")
+	}
+	replayed, err := fixture.store.QueueGoalEvidenceAndTerminalTransition(
+		fixture.key,
+		result.Evidence,
+		result.Transition,
+		observedAt.Add(time.Hour),
+	)
+	if err != nil {
+		t.Fatalf("replay QueueGoalEvidenceAndTerminalTransition() error = %v", err)
+	}
+	var replayedEvidence *state.GoalDelivery
+	for index := range replayed.PendingGoalDeliveries {
+		delivery := &replayed.PendingGoalDeliveries[index]
+		if delivery.Kind == state.GoalDeliveryEvidence && delivery.Evidence != nil {
+			replayedEvidence = delivery
+			break
+		}
+	}
+	if replayedEvidence == nil {
+		t.Fatal("replayed deterministic validation lost its evidence delivery")
+	}
+	if replayedEvidence.PayloadDigest != queuedEvidence.PayloadDigest {
+		t.Fatalf("replayed evidence payload digest = %q, want %q", replayedEvidence.PayloadDigest, queuedEvidence.PayloadDigest)
+	}
+	if replayedEvidence.Evidence.ObservedAt != queuedEvidence.Evidence.ObservedAt {
+		t.Fatalf("replayed evidence observed_at = %q, want %q", replayedEvidence.Evidence.ObservedAt, queuedEvidence.Evidence.ObservedAt)
+	}
+}
+
 const (
 	deterministicRunID       = "00000000-0000-4000-8000-000000000001"
 	deterministicTaskID      = "00000000-0000-4000-8000-000000000002"

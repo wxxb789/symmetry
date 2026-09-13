@@ -237,6 +237,79 @@ func TestNativeGoalUsageProducerQueuesNormalizedUnknownCost(t *testing.T) {
 	}
 }
 
+func TestNativeGoalUsageFormatsObservedAtForControlMicroseconds(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
+	observedAt := time.Date(2026, 9, 13, 6, 15, 12, 293_990_123, time.UTC)
+	app := &daemon{
+		config: testConfig(t),
+		store:  store,
+		options: options{clock: func() time.Time {
+			return observedAt
+		}},
+	}
+
+	usage, shouldQueue, err := app.prepareNativeGoalUsage(key, nil)
+	if err != nil || !shouldQueue {
+		t.Fatalf("prepareNativeGoalUsage() = usage:%#v shouldQueue:%t error:%v; want queued usage", usage, shouldQueue, err)
+	}
+
+	const wantObservedAt = "2026-09-13T06:15:12.293990Z"
+	if usage.ObservedAt != wantObservedAt {
+		t.Fatalf("usage.ObservedAt = %q, want fixed six-digit UTC timestamp %q", usage.ObservedAt, wantObservedAt)
+	}
+	parsed, err := time.Parse(controlUTCTimestampLayout, usage.ObservedAt)
+	if err != nil {
+		t.Fatalf("Control-compatible timestamp parse failed: %v", err)
+	}
+	if !parsed.Equal(observedAt.Truncate(time.Microsecond)) {
+		t.Fatalf("parsed observed_at = %s, want %s", parsed, observedAt.Truncate(time.Microsecond))
+	}
+	if err := usage.Validate(); err != nil {
+		t.Fatalf("normalized usage is invalid: %v", err)
+	}
+}
+
+func TestNativeGoalUsageObservedAtRemainsStableAcrossQueueReplay(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
+	observedAt := time.Date(2026, 9, 13, 14, 15, 16, 987_654_321, time.FixedZone("UTC+02", 2*60*60))
+	app := &daemon{
+		config: testConfig(t),
+		store:  store,
+		options: options{clock: func() time.Time {
+			return observedAt
+		}},
+	}
+
+	usage, shouldQueue, err := app.prepareNativeGoalUsage(key, nil)
+	if err != nil || !shouldQueue {
+		t.Fatalf("prepareNativeGoalUsage() = usage:%#v shouldQueue:%t error:%v; want queued usage", usage, shouldQueue, err)
+	}
+	const wantObservedAt = "2026-09-13T12:15:16.987654Z"
+	if usage.ObservedAt != wantObservedAt {
+		t.Fatalf("usage.ObservedAt = %q, want %q", usage.ObservedAt, wantObservedAt)
+	}
+
+	queued, err := store.QueueGoalUsage(key, usage)
+	if err != nil || len(queued.PendingGoalDeliveries) != 1 {
+		t.Fatalf("QueueGoalUsage() = journal:%#v error:%v; want one pending delivery", queued, err)
+	}
+	first := queued.PendingGoalDeliveries[0]
+	if first.Usage == nil || first.Usage.ObservedAt != wantObservedAt {
+		t.Fatalf("queued usage = %#v, want immutable formatted ObservedAt", first.Usage)
+	}
+
+	replayed, err := store.QueueGoalUsage(key, *first.Usage)
+	if err != nil || len(replayed.PendingGoalDeliveries) != 1 {
+		t.Fatalf("replayed QueueGoalUsage() = journal:%#v error:%v; want one pending delivery", replayed, err)
+	}
+	if replayed.PendingGoalDeliveries[0].PayloadDigest != first.PayloadDigest {
+		t.Fatalf("replayed payload digest = %q, want original %q", replayed.PendingGoalDeliveries[0].PayloadDigest, first.PayloadDigest)
+	}
+	if replayed.PendingGoalDeliveries[0].Usage == nil || replayed.PendingGoalDeliveries[0].Usage.ObservedAt != wantObservedAt {
+		t.Fatalf("replayed usage = %#v, want original formatted body", replayed.PendingGoalDeliveries[0].Usage)
+	}
+}
+
 func TestNativeUsageObservationPersistsOutsideEventOutboxAndIgnoresRegression(t *testing.T) {
 	store, key := claimedGoalDeliveryStore(t)
 	sessionKey := state.GoalSessionKey{GoalID: "00000000-0000-4000-8000-000000000002", LocalHandleID: "00000000-0000-4000-8000-000000000003"}

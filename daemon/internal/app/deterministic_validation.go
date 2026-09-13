@@ -256,7 +256,7 @@ func (daemon *daemon) tryDeterministicArtifactValidation(
 				Path:          &path,
 				ContentDigest: &contentDigest,
 			},
-			ObservedAt: now.Format(time.RFC3339Nano),
+			ObservedAt: formatControlUTCTimestamp(now),
 		}
 		if err := evidenceItem.Validate(); err != nil {
 			return deterministicArtifactValidationResult{}, deterministicValidationError(

@@ -54,6 +54,8 @@ const (
 	shutdownTerminateLimit = 2 * time.Second
 )
 
+const controlUTCTimestampLayout = "2006-01-02T15:04:05.000000Z07:00"
+
 var (
 	errAssignmentExpired            = errors.New("assignment expired")
 	errLeaseDeadlineReached         = errors.New("lease renewal deadline reached")
@@ -1325,6 +1327,14 @@ func (daemon *daemon) now() time.Time {
 		return daemon.options.clock()
 	}
 	return time.Now().UTC()
+}
+
+// formatControlUTCTimestamp matches Control's utc_datetime_usec boundary.
+// Sub-microsecond precision cannot be represented by that contract, so it is
+// truncated after normalizing to UTC; the fixed-width layout retains trailing
+// zeroes that RFC3339Nano would omit.
+func formatControlUTCTimestamp(value time.Time) string {
+	return value.UTC().Truncate(time.Microsecond).Format(controlUTCTimestampLayout)
 }
 
 func (daemon *daemon) timer(delay time.Duration) deadlineTimer {
@@ -4138,7 +4148,7 @@ func (daemon *daemon) prepareNativeGoalUsage(key state.RunKey, result *harness.T
 		Provider:      provider,
 		Model:         model,
 		CostBasis:     protocol.CostUnknown,
-		ObservedAt:    observedAt.Format(time.RFC3339Nano),
+		ObservedAt:    formatControlUTCTimestamp(observedAt),
 	}
 	if hasSnapshot {
 		inputTokens := observed.InputTokens
