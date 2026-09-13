@@ -185,11 +185,14 @@ func TestNativeSyntheticGatewayToolIntegration(t *testing.T) {
 		t.Fatalf("start native OpenCode prompt: %v", err)
 	}
 
-	if err := nativeOpenCodeRepositoryTaskWaitForArtifact(turnContext, target, []byte(nativeRepositoryTaskContent)); err != nil {
-		t.Fatalf("wait for exact native OpenCode artifact: %v", err)
+	artifactContext, artifactCancel := context.WithTimeout(context.Background(), 20*time.Second)
+	if err := nativeOpenCodeRepositoryTaskWaitForArtifact(artifactContext, target, []byte(nativeRepositoryTaskContent)); err != nil {
+		artifactCancel()
+		t.Fatalf("wait for exact native OpenCode artifact: %v; gateway=%v", err, gateway.validate())
 	}
+	artifactCancel()
 	if err := gateway.waitForCompletion(turnContext); err != nil {
-		t.Fatal(err)
+		t.Fatalf("%v; gateway=%v", err, gateway.validate())
 	}
 	if !sink.has(harness.EventSessionStarted) || !sink.has(harness.EventNativeFrame) {
 		t.Fatalf("events = %#v; want session_started and native-frame evidence", sink.snapshot())
