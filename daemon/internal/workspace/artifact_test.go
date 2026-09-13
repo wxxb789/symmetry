@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/wxxb789/symmetry/daemon/internal/config"
+	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
@@ -229,6 +230,9 @@ func gitObjectFromInput(t *testing.T, repository string, input []byte, arguments
 	t.Helper()
 	command := exec.Command("git", append([]string{"-C", repository}, arguments...)...)
 	command.Stdin = bytes.NewReader(input)
+	if err := platform.ConfigureHeadlessProcess(command); err != nil {
+		t.Fatalf("ConfigureHeadlessProcess() error = %v", err)
+	}
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %s: %v\n%s", strings.Join(arguments, " "), err, output)

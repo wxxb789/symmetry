@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/wxxb789/symmetry/daemon/internal/config"
+	"github.com/wxxb789/symmetry/daemon/internal/platform"
 )
 
 func TestPrepareExistingCheckoutResolvesAbsolutePath(t *testing.T) {
@@ -766,6 +767,9 @@ func newRepository(t *testing.T) string {
 func runGit(t *testing.T, directory string, arguments ...string) {
 	t.Helper()
 	command := exec.Command("git", append([]string{"-C", directory}, arguments...)...)
+	if err := platform.ConfigureHeadlessProcess(command); err != nil {
+		t.Fatalf("ConfigureHeadlessProcess() error = %v", err)
+	}
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git %s: %v\n%s", strings.Join(arguments, " "), err, output)
 	}

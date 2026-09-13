@@ -12,6 +12,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/wxxb789/symmetry/daemon/internal/platform"
 )
 
 const workspaceFingerprintSchemaVersion = 1
@@ -144,6 +146,9 @@ func runGitRevParse(ctx context.Context, workspace, argument string) (string, er
 		return "", err
 	}
 	command := gitNoReplaceObjectsCommand(ctx, workspace, "rev-parse", argument)
+	if err := platform.ConfigureHeadlessProcess(command); err != nil {
+		return "", fmt.Errorf("configure headless Git process: %w", err)
+	}
 	output, err := command.Output()
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {

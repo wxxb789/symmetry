@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/wxxb789/symmetry/daemon/internal/config"
+	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
@@ -412,6 +413,9 @@ func verifySubjectCommit(ctx context.Context, repository, commit string) error {
 		return err
 	}
 	command := gitNoReplaceObjectsCommand(ctx, repository, "rev-parse", "--verify", commit+"^{commit}")
+	if err := platform.ConfigureHeadlessProcess(command); err != nil {
+		return fmt.Errorf("configure headless Git process: %w", err)
+	}
 	output, err := command.Output()
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -489,6 +493,9 @@ func verifySubjectWorktreeIdentity(ctx context.Context, prepared Prepared, repos
 
 func subjectWorktreeDetached(ctx context.Context, path string) (bool, error) {
 	command := gitNoReplaceObjectsCommand(ctx, path, "symbolic-ref", "--quiet", "HEAD")
+	if err := platform.ConfigureHeadlessProcess(command); err != nil {
+		return false, fmt.Errorf("configure headless Git process: %w", err)
+	}
 	err := command.Run()
 	if err == nil {
 		return false, nil
@@ -622,6 +629,9 @@ func gitCommandOutputLimited(ctx context.Context, command *exec.Cmd, maxBytes in
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if err := platform.ConfigureHeadlessProcess(command); err != nil {
+		return nil, fmt.Errorf("configure headless Git process: %w", err)
 	}
 
 	stdout, err := command.StdoutPipe()

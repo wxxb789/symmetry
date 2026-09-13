@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/config"
+	"github.com/wxxb789/symmetry/daemon/internal/platform"
 )
 
 const (
@@ -237,6 +238,9 @@ func (manager *Manager) Cleanup(ctx context.Context, prepared Prepared, succeede
 	}
 
 	command := exec.CommandContext(ctx, "git", "-C", prepared.repository, "worktree", "remove", "--force", prepared.Path)
+	if err := platform.ConfigureHeadlessProcess(command); err != nil {
+		return fmt.Errorf("configure headless Git process: %w", err)
+	}
 	if output, err := command.CombinedOutput(); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -310,6 +314,12 @@ func (manager *Manager) prepareWorktreeAt(ctx context.Context, bindingKey string
 		command = gitNoReplaceObjectsCommand(ctx, repository, "worktree", "add", "--detach", target, ref)
 	} else {
 		command = exec.CommandContext(ctx, "git", "-C", repository, "worktree", "add", "--detach", target, ref)
+	}
+	if err := platform.ConfigureHeadlessProcess(command); err != nil {
+		if cleanupErr := manager.removeReservation(prepared); cleanupErr != nil {
+			return Prepared{}, fmt.Errorf("configure headless Git process: %w; remove reservation: %v", err, cleanupErr)
+		}
+		return Prepared{}, fmt.Errorf("configure headless Git process: %w", err)
 	}
 	if output, err := command.CombinedOutput(); err != nil {
 		return manager.handleFailedAdd(ctx, err, output, prepared)
@@ -576,6 +586,9 @@ func (manager *Manager) removeKnownWorktree(ctx context.Context, prepared Prepar
 		return err
 	}
 	command := exec.CommandContext(ctx, "git", "-C", prepared.repository, "worktree", "remove", "--force", prepared.Path)
+	if err := platform.ConfigureHeadlessProcess(command); err != nil {
+		return fmt.Errorf("configure headless Git process: %w", err)
+	}
 	if output, err := command.CombinedOutput(); err != nil {
 		return fmt.Errorf("remove git worktree %q: %w: %s", prepared.Path, err, strings.TrimSpace(string(output)))
 	}
@@ -764,6 +777,9 @@ func pathExists(path string) (bool, error) {
 
 func worktreeContains(ctx context.Context, repository, target string) (bool, error) {
 	command := exec.CommandContext(ctx, "git", "-C", repository, "worktree", "list", "--porcelain")
+	if err := platform.ConfigureHeadlessProcess(command); err != nil {
+		return false, fmt.Errorf("configure headless Git process: %w", err)
+	}
 	output, err := command.Output()
 	if err != nil {
 		if ctx.Err() != nil {

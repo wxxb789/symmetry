@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/config"
+	"github.com/wxxb789/symmetry/daemon/internal/platform"
 )
 
 const subjectResourceID = "00000000-0000-4000-8000-000000000001"
@@ -58,6 +59,9 @@ func TestPrepareSubjectUsesAdmittedCommitAfterRefDrift(t *testing.T) {
 		t.Fatalf("prepared HEAD = %q, want admitted commit %q (ref drifted to %q)", got, commitA, commitB)
 	}
 	command := exec.Command("git", "-C", bound.Prepared.Path, "symbolic-ref", "--quiet", "--short", "HEAD")
+	if err := platform.ConfigureHeadlessProcess(command); err != nil {
+		t.Fatalf("ConfigureHeadlessProcess() error = %v", err)
+	}
 	if output, err := command.CombinedOutput(); err == nil {
 		t.Fatalf("prepared worktree is attached to branch %q", strings.TrimSpace(string(output)))
 	} else {
@@ -385,6 +389,9 @@ func gitOutput(t *testing.T, directory string, arguments ...string) string {
 func gitOutputNoReplace(t *testing.T, directory string, arguments ...string) string {
 	t.Helper()
 	command := exec.Command("git", append([]string{"--no-replace-objects", "-C", directory}, arguments...)...)
+	if err := platform.ConfigureHeadlessProcess(command); err != nil {
+		t.Fatalf("ConfigureHeadlessProcess() error = %v", err)
+	}
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git --no-replace-objects %s: %v\n%s", strings.Join(arguments, " "), err, output)
@@ -415,6 +422,9 @@ func installSubjectReplaceRefs(t *testing.T, repository, originalCommit, path, r
 func runGitOutput(t *testing.T, directory string, arguments ...string) string {
 	t.Helper()
 	command := exec.Command("git", append([]string{"-C", directory}, arguments...)...)
+	if err := platform.ConfigureHeadlessProcess(command); err != nil {
+		t.Fatalf("ConfigureHeadlessProcess() error = %v", err)
+	}
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %s: %v\n%s", strings.Join(arguments, " "), err, output)
@@ -469,6 +479,9 @@ func workspaceOutputHelperCommand(t *testing.T, ctx context.Context, mode string
 	t.Helper()
 	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestWorkspaceOutputHelper$", "--", mode, strconv.Itoa(count))
 	command.Env = append(os.Environ(), "SYMMETRY_WORKSPACE_OUTPUT_HELPER=1")
+	if err := platform.ConfigureHeadlessProcess(command); err != nil {
+		t.Fatalf("ConfigureHeadlessProcess() error = %v", err)
+	}
 	return command
 }
 
