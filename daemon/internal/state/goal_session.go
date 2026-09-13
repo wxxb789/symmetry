@@ -822,6 +822,7 @@ func (store *Store) RebindGoalSessionForResume(key GoalSessionKey, rebind GoalSe
 	journal.TaskID = rebind.TaskID
 	journal.AdmissionID = rebind.AdmissionID
 	journal.BindingID = rebind.BindingID
+	journal.RuntimeEpoch = rebind.Compatibility.RuntimeEpoch
 	journal.SessionMode = GoalSessionModeResume
 	journal.HandoffSourceRunID = ""
 	journal.ControlAttachmentReceiptID = ""
@@ -1777,6 +1778,9 @@ func validateGoalSessionResumeRebind(rebind GoalSessionResumeRebind) error {
 		!validGoalSessionUUID(rebind.BindingID) || !validGoalSessionStopCertificate(rebind.ExactStopCertificate) {
 		return errors.New("goal session resume rebind is invalid")
 	}
+	if rebind.Compatibility.RuntimeEpoch <= 0 {
+		return ErrGoalSessionCompatibilityIncomplete
+	}
 	if !completeGoalSessionResumeCompatibility(rebind.Compatibility) {
 		return ErrGoalSessionCompatibilityIncomplete
 	}
@@ -1826,13 +1830,26 @@ func validateGoalSessionResumeSource(journal GoalSessionJournal, rebind GoalSess
 	if *journal.StopCertificate != rebind.ExactStopCertificate {
 		return ErrGoalSessionConflict
 	}
-	if err := compareGoalSessionResumeCompatibility(journal, rebind.Compatibility); err != nil {
+	if err := compareGoalSessionResumeCompatibilityFields(journal, rebind.Compatibility); err != nil {
 		return err
+	}
+	if rebind.Compatibility.RuntimeEpoch < journal.RuntimeEpoch {
+		return ErrGoalSessionOwnerMismatch
 	}
 	return nil
 }
 
 func compareGoalSessionResumeCompatibility(journal GoalSessionJournal, expected GoalSessionCompatibility) error {
+	if err := compareGoalSessionResumeCompatibilityFields(journal, expected); err != nil {
+		return err
+	}
+	if journal.RuntimeEpoch != expected.RuntimeEpoch {
+		return ErrGoalSessionOwnerMismatch
+	}
+	return nil
+}
+
+func compareGoalSessionResumeCompatibilityFields(journal GoalSessionJournal, expected GoalSessionCompatibility) error {
 	if !completeGoalSessionResumeCompatibility(expected) || !completeGoalSessionResumeCompatibility(journal.Compatibility()) {
 		return ErrGoalSessionCompatibilityIncomplete
 	}

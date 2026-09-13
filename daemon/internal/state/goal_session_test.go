@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -978,7 +979,7 @@ func TestRebindGoalSessionForResumeConsumesExactStoppedAttachment(t *testing.T) 
 		t.Fatalf("RebindGoalSessionForResume() error = %v", err)
 	}
 	if rebound.RunID != rebind.RunID || rebound.Generation != rebind.Generation || rebound.TaskID != rebind.TaskID ||
-		rebound.AdmissionID != rebind.AdmissionID || rebound.BindingID != rebind.BindingID || rebound.SessionMode != GoalSessionModeResume ||
+		rebound.AdmissionID != rebind.AdmissionID || rebound.BindingID != rebind.BindingID || rebound.RuntimeEpoch != rebind.Compatibility.RuntimeEpoch || rebound.SessionMode != GoalSessionModeResume ||
 		rebound.SessionState != GoalSessionStateBusy || rebound.StopCertificate != nil || rebound.ControlAttachmentReceiptID != "" {
 		t.Fatalf("rebound journal current execution = %#v", rebound)
 	}
@@ -1012,6 +1013,9 @@ func TestRebindGoalSessionForResumeConsumesExactStoppedAttachment(t *testing.T) 
 	if replayed.RunID != rebound.RunID || replayed.Generation != rebound.Generation || replayed.TaskID != rebound.TaskID ||
 		replayed.BindingID != rebound.BindingID || replayed.ResumeSourceStopCertificate == nil || *replayed.ResumeSourceStopCertificate != certificate {
 		t.Fatalf("exact rebind replay = %#v", replayed)
+	}
+	if !reflect.DeepEqual(replayed, rebound) {
+		t.Fatalf("exact rebind replay changed the durable journal: before=%#v after=%#v", rebound, replayed)
 	}
 	changedCompatibility := rebind
 	changedCompatibility.Compatibility.HarnessVersion = "9.9.9"
@@ -1279,14 +1283,123 @@ func TestRebindGoalSessionForResumeSurvivesStoreRestart(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = restarted.Close() })
 	rebind := testGoalSessionResumeRebind(certificate)
-	rebind.Compatibility.RuntimeEpoch++
+	targetEpoch := source.RuntimeEpoch + 1
+	rebind.Compatibility.RuntimeEpoch = targetEpoch
 	rebound, err := restarted.RebindGoalSessionForResume(source.Key(), rebind)
 	if err != nil {
 		t.Fatalf("RebindGoalSessionForResume() after restart error = %v", err)
 	}
 	if rebound.WorkspaceOwnerRunKey != source.WorkspaceOwnerRunKey || rebound.NativeSessionID != source.NativeSessionID ||
-		rebound.RunID != "run-2" || rebound.Generation != 1 || rebound.StopCertificate != nil {
+		rebound.RunID != "run-2" || rebound.Generation != 1 || rebound.RuntimeEpoch != targetEpoch || rebound.StopCertificate != nil {
 		t.Fatalf("rebound journal after restart = %#v", rebound)
+	}
+
+	// A resumed daemon must be able to persist the new fenced Control attach
+	// after reloading the retained journal, and subsequent compatibility checks
+	// must use the restarted runtime epoch rather than the predecessor epoch.
+	ready, err := restarted.PersistGoalSessionControlAttachment(source.Key(), source.ControlSessionID, rebind.BindingID, "00000000-0000-4000-8000-000000000037", false)
+	if err != nil {
+		t.Fatalf("PersistGoalSessionControlAttachment() after restart error = %v", err)
+	}
+	if ready.RuntimeEpoch != targetEpoch || !ready.HasVerifiedControlAttachment() || ready.BindingID != rebind.BindingID {
+		t.Fatalf("ready rebound journal = %#v", ready)
+	}
+	if err := restarted.CheckGoalSessionCompatibility(source.Key(), rebind.Compatibility); err != nil {
+		t.Fatalf("CheckGoalSessionCompatibility() for restarted epoch error = %v", err)
+	}
+	if projection := ready.ControlProjection(); projection.RuntimeEpoch != targetEpoch {
+		t.Fatalf("ready control projection fence = %#v", projection)
+	}
+}
+
+func TestRebindGoalSessionForResumeRejectsInvalidOrStaleRuntimeEpochWithoutMutation(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*GoalSessionResumeRebind, GoalSessionJournal)
+		want   error
+	}{
+		{name: "zero target", want: ErrGoalSessionCompatibilityIncomplete, mutate: func(rebind *GoalSessionResumeRebind, _ GoalSessionJournal) {
+			rebind.Compatibility.RuntimeEpoch = 0
+		}},
+		{name: "rollback before first consumption", want: ErrGoalSessionOwnerMismatch, mutate: func(rebind *GoalSessionResumeRebind, source GoalSessionJournal) {
+			rebind.Compatibility.RuntimeEpoch = source.RuntimeEpoch - 1
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := mustStore(t)
+			source, certificate := mustAvailableRetainedGoalSession(t, store)
+			before, err := store.LoadGoalSession(source.Key())
+			if err != nil {
+				t.Fatal(err)
+			}
+			rebind := testGoalSessionResumeRebind(certificate)
+			test.mutate(&rebind, source)
+			if _, err := store.RebindGoalSessionForResume(source.Key(), rebind); !errors.Is(err, test.want) {
+				t.Fatalf("RebindGoalSessionForResume() error = %v, want %v", err, test.want)
+			}
+			after, err := store.LoadGoalSession(source.Key())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(after, before) {
+				t.Fatalf("rejected runtime epoch changed journal: before=%#v after=%#v", before, after)
+			}
+		})
+	}
+}
+
+func TestRebindGoalSessionForResumeRejectsEpochRotationOnExactReplay(t *testing.T) {
+	store := mustStore(t)
+	source, certificate := mustAvailableRetainedGoalSession(t, store)
+	rebind := testGoalSessionResumeRebind(certificate)
+	rebind.Compatibility.RuntimeEpoch = source.RuntimeEpoch + 1
+	rebound, err := store.RebindGoalSessionForResume(source.Key(), rebind)
+	if err != nil {
+		t.Fatalf("initial RebindGoalSessionForResume() error = %v", err)
+	}
+	before, err := store.LoadGoalSession(source.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := rebind
+	changed.Compatibility.RuntimeEpoch++
+	if _, err := store.RebindGoalSessionForResume(source.Key(), changed); !errors.Is(err, ErrGoalSessionOwnerMismatch) {
+		t.Fatalf("exact replay with a different runtime epoch error = %v, want %v", err, ErrGoalSessionOwnerMismatch)
+	}
+	after, err := store.LoadGoalSession(source.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) || after.RuntimeEpoch != rebound.RuntimeEpoch || after.BindingID != rebound.BindingID {
+		t.Fatalf("different-epoch replay changed target fence: before=%#v after=%#v", before, after)
+	}
+}
+
+func TestRebindGoalSessionForResumeIgnoresPredecessorStopAndAttachReplay(t *testing.T) {
+	store := mustStore(t)
+	source, certificate := mustAvailableRetainedGoalSession(t, store)
+	rebind := testGoalSessionResumeRebind(certificate)
+	rebind.Compatibility.RuntimeEpoch = source.RuntimeEpoch + 1
+	rebound, err := store.RebindGoalSessionForResume(source.Key(), rebind)
+	if err != nil {
+		t.Fatalf("RebindGoalSessionForResume() error = %v", err)
+	}
+
+	if replayed, err := store.MarkGoalSessionAvailable(source.Key(), certificate); err != nil {
+		t.Fatalf("predecessor stop replay error = %v", err)
+	} else if !reflect.DeepEqual(replayed, rebound) {
+		t.Fatalf("predecessor stop replay changed current target: before=%#v after=%#v", rebound, replayed)
+	}
+	if _, err := store.PersistGoalSessionControlAttachment(source.Key(), source.ControlSessionID, certificate.BindingID, source.ControlAttachmentReceiptID, false); !errors.Is(err, ErrGoalSessionConflict) {
+		t.Fatalf("predecessor attach replay error = %v, want %v", err, ErrGoalSessionConflict)
+	}
+	after, err := store.LoadGoalSession(source.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, rebound) || after.RuntimeEpoch != rebind.Compatibility.RuntimeEpoch || after.BindingID != rebind.BindingID {
+		t.Fatalf("predecessor replay changed current binding or epoch: before=%#v after=%#v", rebound, after)
 	}
 }
 
