@@ -3,6 +3,7 @@ package pi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -261,14 +262,14 @@ func TestNativeRepositoryTask(t *testing.T) {
 }
 
 // TestNativeCancellationDrainsInFlightLoopbackRequest is deliberately opt-in
-// because it starts the real Pi 0.85.1 binary on Windows. The local gateway
-// accepts the Responses request body and then waits for the HTTP request
-// context to be cancelled. This proves a native clear_queue/abort reaches an
-// actually in-flight provider operation without claiming semantic success or
-// provider usage.
+// because it starts the real Pi 0.85.1 binary on Linux or Windows. The local
+// gateway accepts the Responses request body and then waits for the HTTP
+// request context to be cancelled. This proves a native clear_queue/abort
+// reaches an actually in-flight provider operation without claiming semantic
+// success or provider usage.
 func TestNativeCancellationDrainsInFlightLoopbackRequest(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("native Pi cancellation evidence requires Windows process-tree behavior")
+	if runtime.GOOS != "windows" && runtime.GOOS != "linux" {
+		t.Skip("native Pi cancellation evidence supports Linux and Windows only")
 	}
 	if os.Getenv(nativeCancellationEnabledEnv) != "1" {
 		t.Skip("set SYMMETRY_PI_NATIVE_CANCELLATION=1 to run native Pi cancellation evidence")
@@ -520,7 +521,7 @@ func TestNativeCancellationDrainsInFlightLoopbackRequest(t *testing.T) {
 
 	processContext, processCancel := context.WithTimeout(context.Background(), nativeCancellationCloseTimeout)
 	defer processCancel()
-	exists, details, err := nativePiWindowsProcessExists(processContext, processPID)
+	exists, details, err := nativePiProcessExists(processContext, processPID)
 	if err != nil {
 		t.Fatalf("query native Pi cancellation process %d: %v", processPID, err)
 	}
@@ -650,9 +651,22 @@ func writeNativePiCancellationJSON(response http.ResponseWriter, status int, val
 	_ = json.NewEncoder(response).Encode(value)
 }
 
-func nativePiWindowsProcessExists(ctx context.Context, pid int) (bool, string, error) {
+func nativePiProcessExists(ctx context.Context, pid int) (bool, string, error) {
 	if pid <= 0 {
 		return false, "", fmt.Errorf("pid must be positive")
+	}
+	if err := ctx.Err(); err != nil {
+		return false, "", err
+	}
+	if runtime.GOOS == "linux" {
+		_, err := os.Stat("/proc/" + strconv.Itoa(pid))
+		if errors.Is(err, os.ErrNotExist) {
+			return false, "", nil
+		}
+		if err != nil {
+			return false, "", err
+		}
+		return true, "/proc entry exists", nil
 	}
 	command := exec.CommandContext(ctx, "tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/FO", "CSV", "/NH")
 	output, err := command.Output()
