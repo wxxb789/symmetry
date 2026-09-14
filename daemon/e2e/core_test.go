@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1155,23 +1156,68 @@ func waitForJournalRetiredOrRetained(t *testing.T, stateDir string, key state.Ru
 	return state.RunJournal{}, false
 }
 
+const (
+	reconnectReclaimMinimum = 60 * time.Second
+	reconnectReclaimGrace   = 30 * time.Second
+	reconnectReclaimMaximum = 5 * time.Minute
+)
+
 func reconnectReclaimTimeout(t *testing.T, leaseExpiresAt time.Time) time.Duration {
 	t.Helper()
-	const (
-		minimum = 60 * time.Second
-		grace   = 30 * time.Second
-		maximum = 5 * time.Minute
-	)
-	timeout := minimum
-	if !leaseExpiresAt.IsZero() {
-		if remaining := time.Until(leaseExpiresAt); remaining+grace > timeout {
-			timeout = remaining + grace
-		}
-	}
-	if timeout > maximum {
-		t.Skipf("reconnect lease expiry exceeds the bounded witness window: timeout=%s lease_expires_at=%s", timeout.Round(time.Second), leaseExpiresAt.UTC().Format(time.RFC3339))
+	timeout, err := reconnectReclaimTimeoutAt(time.Now(), leaseExpiresAt)
+	if err != nil {
+		t.Fatalf("%v", err)
 	}
 	return timeout
+}
+
+func reconnectReclaimTimeoutAt(now, leaseExpiresAt time.Time) (time.Duration, error) {
+	timeout := reconnectReclaimMinimum
+	if !leaseExpiresAt.IsZero() {
+		if remaining := leaseExpiresAt.Sub(now); remaining+reconnectReclaimGrace > timeout {
+			timeout = remaining + reconnectReclaimGrace
+		}
+	}
+	if timeout > reconnectReclaimMaximum {
+		return 0, fmt.Errorf("reconnect lease expiry exceeds the bounded witness window: timeout=%s lease_expires_at=%s maximum=%s; configure the reconnect lease within the CI witness bound", timeout.Round(time.Second), leaseExpiresAt.UTC().Format(time.RFC3339), reconnectReclaimMaximum)
+	}
+	return timeout, nil
+}
+
+func TestReconnectReclaimTimeoutAtBounds(t *testing.T) {
+	now := time.Date(2026, time.September, 15, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name        string
+		lease       time.Time
+		want        time.Duration
+		wantFailure bool
+	}{
+		{name: "missing lease uses minimum", want: reconnectReclaimMinimum},
+		{name: "default lease keeps the two minute witness", lease: now.Add(90 * time.Second), want: 2 * time.Minute},
+		{name: "maximum is accepted", lease: now.Add(4*time.Minute + 30*time.Second), want: reconnectReclaimMaximum},
+		{name: "over maximum fails closed", lease: now.Add(4*time.Minute + 31*time.Second), wantFailure: true},
+		{name: "expired lease uses minimum", lease: now.Add(-time.Second), want: reconnectReclaimMinimum},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := reconnectReclaimTimeoutAt(now, test.lease)
+			if test.wantFailure {
+				if err == nil {
+					t.Fatalf("reconnectReclaimTimeoutAt() error = nil, want bounded witness failure")
+				}
+				if !strings.Contains(err.Error(), "bounded witness window") {
+					t.Fatalf("reconnectReclaimTimeoutAt() error = %v, want bounded witness error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("reconnectReclaimTimeoutAt() error = %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("reconnectReclaimTimeoutAt() = %s, want %s", got, test.want)
+			}
+		})
+	}
 }
 
 func assertRetainedRecoveryJournal(t *testing.T, journal, before state.RunJournal) {
@@ -1219,17 +1265,80 @@ func assertLivePersistedProcess(t *testing.T, journal state.RunJournal) {
 
 func assertRetiredProcessIdentity(t *testing.T, journal state.RunJournal) {
 	t.Helper()
+	if err := retiredProcessIdentityError(journal, platform.ProcessIdentity); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func retiredProcessIdentityError(journal state.RunJournal, read func(int) (string, error)) error {
 	if !journal.HasProcessDetails() {
-		return
+		return nil
 	}
-	identity, err := platform.ProcessIdentity(journal.PID)
-	if err == nil && identity == journal.ProcessIdentity {
-		t.Fatalf("retired journal still names the live process %d with identity %q", journal.PID, journal.ProcessIdentity)
-	}
+	identity, err := read(journal.PID)
 	if err != nil {
-		t.Logf("retired journal process identity is unavailable, accepting process retirement: %v", err)
-	} else {
-		t.Logf("retired journal process identity changed from %q to %q", journal.ProcessIdentity, identity)
+		if isProcessIdentityNotFoundError(err) {
+			return nil
+		}
+		return fmt.Errorf("inspect retired process %d identity: %w", journal.PID, err)
+	}
+	if identity == journal.ProcessIdentity {
+		return fmt.Errorf("retired journal still names the live process %d with identity %q", journal.PID, journal.ProcessIdentity)
+	}
+	return nil
+}
+
+func isProcessIdentityNotFoundError(err error) bool {
+	// Linux reports ENOENT for a missing /proc/<pid>/stat. Windows reports
+	// ERROR_INVALID_PARAMETER (87) when OpenProcess cannot find the PID.
+	return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.Errno(87))
+}
+
+func TestRetiredProcessIdentityErrorFailsClosed(t *testing.T) {
+	journal := state.RunJournal{
+		PID:             123,
+		ProcessIdentity: "linux:test:123:old",
+		StartedAt:       time.Date(2026, time.September, 15, 12, 0, 0, 0, time.UTC),
+	}
+	tests := []struct {
+		name        string
+		read        func(int) (string, error)
+		wantFailure bool
+	}{
+		{
+			name: "missing process is conclusive",
+			read: func(int) (string, error) { return "", os.ErrNotExist },
+		},
+		{
+			name: "wrapped Windows missing process is conclusive",
+			read: func(int) (string, error) { return "", fmt.Errorf("OpenProcess: %w", syscall.Errno(87)) },
+		},
+		{
+			name: "changed identity is conclusive",
+			read: func(int) (string, error) { return "linux:test:123:new", nil },
+		},
+		{
+			name:        "live identity fails",
+			read:        func(int) (string, error) { return journal.ProcessIdentity, nil },
+			wantFailure: true,
+		},
+		{
+			name:        "permission error fails closed",
+			read:        func(int) (string, error) { return "", errors.New("permission denied") },
+			wantFailure: true,
+		},
+		{
+			name:        "unknown error fails closed",
+			read:        func(int) (string, error) { return "", errors.New("identity lookup unavailable") },
+			wantFailure: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := retiredProcessIdentityError(journal, test.read)
+			if gotFailure := err != nil; gotFailure != test.wantFailure {
+				t.Fatalf("retiredProcessIdentityError() error = %v, want failure = %t", err, test.wantFailure)
+			}
+		})
 	}
 }
 
