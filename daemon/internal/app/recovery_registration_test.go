@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -157,6 +158,188 @@ func TestRestartInputRecoveryCompletesIndependentJournalButBlocksRegistration(t 
 		RuntimeID: "runtime-1", RuntimeEpoch: 1, Generation: completedKey.Generation,
 		ClaimID: "claim-" + completedKey.RunID, LeaseToken: "lease-" + completedKey.RunID,
 	})
+}
+
+func TestNativeRecoveryPersistenceFailuresBlockRegistration(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*daemon, *state.Store, state.RunKey) error
+		assert    func(*testing.T, *state.Store, state.RunKey, *restartRecoveryControl)
+	}{
+		{
+			name: "retention",
+			configure: func(daemon *daemon, _ *state.Store, _ state.RunKey) error {
+				failure := errors.New("injected retention persistence failure")
+				daemon.options.retainWorkspace = func(state.RunKey) (state.RunJournal, error) {
+					return state.RunJournal{}, failure
+				}
+				return failure
+			},
+			assert: func(t *testing.T, store *state.Store, key state.RunKey, control *restartRecoveryControl) {
+				journal, err := store.LoadJournal(key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if journal.RetainWorkspace || journal.TerminalState != "" || journal.NativeUsageRecoveryRequired || !journal.HasProcessDetails() {
+					t.Fatalf("retention failure changed recovery state: %#v", journal)
+				}
+				if containsString(control.callsSnapshot(), "register") {
+					t.Fatalf("retention failure allowed registration: %#v", control.callsSnapshot())
+				}
+			},
+		},
+		{
+			name: "usage",
+			configure: func(daemon *daemon, _ *state.Store, _ state.RunKey) error {
+				failure := errors.New("injected native usage persistence failure")
+				daemon.options.queueGoalUsage = func(state.RunKey, protocol.Usage) (state.RunJournal, error) {
+					return state.RunJournal{}, failure
+				}
+				return failure
+			},
+			assert: func(t *testing.T, store *state.Store, key state.RunKey, control *restartRecoveryControl) {
+				journal, err := store.LoadJournal(key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !journal.RetainWorkspace || !journal.NativeUsageRecoveryRequired || journal.TerminalState != "" || !journal.HasProcessDetails() {
+					t.Fatalf("usage failure did not retain the recovery barrier: %#v", journal)
+				}
+				if containsString(control.callsSnapshot(), "register") {
+					t.Fatalf("usage failure allowed registration: %#v", control.callsSnapshot())
+				}
+			},
+		},
+		{
+			name: "terminal",
+			configure: func(daemon *daemon, _ *state.Store, _ state.RunKey) error {
+				failure := errors.New("injected native terminal persistence failure")
+				daemon.options.queueTerminalTransition = func(state.RunKey, protocol.StateTransitionRequest, time.Time) (state.RunJournal, error) {
+					return state.RunJournal{}, failure
+				}
+				return failure
+			},
+			assert: func(t *testing.T, store *state.Store, key state.RunKey, control *restartRecoveryControl) {
+				journal, err := store.LoadJournal(key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !journal.RetainWorkspace || !journal.NativeUsageRecoveryRequired || journal.TerminalState != "" || len(journal.PendingGoalDeliveries) != 1 || !journal.HasProcessDetails() {
+					t.Fatalf("terminal failure did not retain usage before terminal retry: %#v", journal)
+				}
+				if containsString(control.callsSnapshot(), "register") {
+					t.Fatalf("terminal failure allowed registration: %#v", control.callsSnapshot())
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store, key, _ := nativeRecoveryRegistrationFixture(t)
+			control := &restartRecoveryControl{registeredEpoch: 2}
+			restarted := nativeRecoveryRegistrationDaemon(t, store, control, key)
+			injected := test.configure(restarted, store, key)
+			err := restarted.initialize(context.Background())
+			if err == nil || !errors.Is(err, injected) {
+				t.Fatalf("initialize error = %v, want injected recovery failure", err)
+			}
+			if errors.Is(err, errRecoveryRegistrationReady) {
+				t.Fatalf("persistence failure was classified as registration-ready: %v", err)
+			}
+			test.assert(t, store, key, control)
+		})
+	}
+}
+
+func TestNativeRecoveryDoesNotMixExistingDaemonRestartInputPayload(t *testing.T) {
+	store, key, _ := nativeRecoveryRegistrationFixture(t)
+	control := &restartRecoveryControl{registeredEpoch: 2}
+	restarted := nativeRecoveryRegistrationDaemon(t, store, control, key)
+	if _, err := store.SetLocalState(key, "waiting_for_input"); err != nil {
+		t.Fatal(err)
+	}
+	payload := json.RawMessage(`{"answer":"yes"}`)
+	digest, err := canonicalInputDigest(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := state.InputCommandIntent{CommandID: "input-mixed", PayloadDigest: digest, RunningTransitionID: "running-mixed", AckID: "ack-mixed"}
+	if _, created, err := store.PrepareProvideInput(key, intent); err != nil || !created {
+		t.Fatalf("PrepareProvideInput() created=%t error=%v", created, err)
+	}
+	if _, err := store.CompleteProvideInput(key, intent.CommandID, intent.PayloadDigest, "applied"); err != nil {
+		t.Fatal(err)
+	}
+	terminalPayload := json.RawMessage(`{"stage":"daemon_restart","reason":"unknown_outcome","summary":"input command recovery cannot safely replay stdin","error":"input command recovery cannot safely replay stdin"}`)
+	if _, err := store.QueueTerminalTransitionAt(key, protocol.StateTransitionRequest{TransitionID: "daemon-restart-terminal", State: "failed", Payload: terminalPayload}, time.Date(2026, time.September, 14, 2, 3, 4, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := restarted.initialize(context.Background()); err != nil {
+		t.Fatalf("initialize error = %v", err)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var daemonRestartTransition *protocol.StateTransitionRequest
+	for index := range journal.PendingTransitions {
+		if journal.PendingTransitions[index].State == "failed" {
+			daemonRestartTransition = &journal.PendingTransitions[index]
+			break
+		}
+	}
+	if daemonRestartTransition == nil || !bytes.Equal(daemonRestartTransition.Payload, terminalPayload) {
+		t.Fatalf("native recovery mixed the daemon_restart terminal payload: %#v", journal.PendingTransitions)
+	}
+	if journal.InputCommandIntent == nil || journal.InputCommandIntent.CommandID != intent.CommandID || journal.InputCommandIntent.Outcome != "applied" || journal.InputCommandIntent.AcknowledgementDelivered {
+		t.Fatalf("native recovery changed InputCommandIntent: %#v", journal.InputCommandIntent)
+	}
+	if !journal.HasProcessDetails() || !journal.NativeUsageRecoveryRequired || !containsString(control.callsSnapshot(), "register") {
+		t.Fatalf("mixed recovery registration/barrier state: journal=%#v calls=%#v", journal, control.callsSnapshot())
+	}
+}
+
+func nativeRecoveryRegistrationFixture(t *testing.T) (*state.Store, state.RunKey, state.GoalSessionKey) {
+	t.Helper()
+	store, key := claimedGoalDeliveryStore(t)
+	if err := store.SaveIdentity(state.MachineIdentity{MachineID: "machine-1", MachineToken: "machine-token"}); err != nil {
+		t.Fatal(err)
+	}
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000007"}
+	saveAttachedGoalSession(t, store, key, admission, sessionKey)
+	if _, err := store.SetProcessDetails(key, 91, "native:91", time.Date(2026, time.September, 14, 1, 2, 3, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	return store, key, sessionKey
+}
+
+func nativeRecoveryRegistrationDaemon(t *testing.T, store *state.Store, control *restartRecoveryControl, key state.RunKey) *daemon {
+	t.Helper()
+	return &daemon{
+		config: testConfig(t),
+		log:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		options: options{
+			store:     store,
+			control:   control,
+			workspace: &fakeWorkspace{},
+			start:     failStart,
+			clock:     func() time.Time { return time.Date(2026, time.September, 14, 1, 2, 3, 0, time.UTC) },
+			newID:     ids(),
+			terminatePersist: func(pid int, identity string) error {
+				if pid != 91 || identity != "native:91" {
+					t.Fatalf("recovered native process = (%d, %q)", pid, identity)
+				}
+				return errPersistedProcessStopUnproven
+			},
+		},
+		running: make(map[state.RunKey]*runningRun),
+	}
 }
 
 func restartInputRecoveryTerminalFixture(t *testing.T) (*state.Store, state.RunKey, state.InputCommandIntent, time.Time) {

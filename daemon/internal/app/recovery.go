@@ -14,6 +14,8 @@ import (
 )
 
 var errRecoveryPending = errors.New("local recovery remains pending")
+var errRecoveryRegistrationReady = errors.New("durable recovery is ready for registration")
+var errNativePhysicalRecoveryPending = errors.New("native physical stop reconciliation remains pending")
 
 // Windows installs the authenticated helper-release implementation from its
 // build-tagged termination file. Non-Windows authority records are test-only
@@ -219,6 +221,7 @@ func (daemon *daemon) recoverGoalSession(rootContext context.Context, session st
 	legacyAttachmentBarrier := legacyGoalSessionAttachmentBarrier(session, journal)
 	attachedStopRecovery := attachMappingPending || resumeAttachmentPending || resumePreStart || (session.HasVerifiedControlAttachment() && session.SessionState == state.GoalSessionStateBusy)
 	goalSessionUncertainPersisted := false
+	var stopErr error
 	if !stoppedWitness && !attachedStopRecovery && !legacyAttachmentBarrier && session.SessionState != state.GoalSessionStateClosed && session.LaunchState != state.GoalSessionLaunchStateUncertain {
 		if _, err := daemon.store.MarkGoalSessionUncertain(session.Key(), "native Goal session was left unclosed across daemon restart"); err != nil {
 			return fmt.Errorf("mark Goal session uncertain for %s/%d: %w", key.RunID, key.Generation, err)
@@ -226,23 +229,31 @@ func (daemon *daemon) recoverGoalSession(rootContext context.Context, session st
 		goalSessionUncertainPersisted = true
 	}
 	if !nativeStopWitness && journal.PID > 0 && strings.TrimSpace(journal.ProcessIdentity) != "" {
-		stopErr := daemon.stopPersistedProcess(rootContext, journal)
+		stopErr = daemon.stopPersistedProcess(rootContext, journal)
 		if stopErr != nil {
-			if errors.Is(stopErr, errPersistedProcessStopUnproven) && !goalSessionUncertainPersisted &&
+			if errors.Is(stopErr, context.Canceled) || errors.Is(stopErr, context.DeadlineExceeded) || state.IsNotFound(stopErr) {
+				return fmt.Errorf("stop recovered native process %s/%d: %w", key.RunID, key.Generation, stopErr)
+			}
+			// Physical stop and durable execution failure are separate decisions.
+			// Keep the exact marker/authority for a later reconciliation pass, but
+			// do not let an unproven stop erase the terminal accounting fallback.
+			if !goalSessionUncertainPersisted &&
 				session.SessionState != state.GoalSessionStateClosed && session.LaunchState != state.GoalSessionLaunchStateUncertain {
 				if _, uncertainErr := daemon.store.MarkGoalSessionUncertain(session.Key(), "native Goal session stop is unproven"); uncertainErr != nil {
-					stopErr = errors.Join(stopErr, fmt.Errorf("mark Goal session uncertain: %w", uncertainErr))
+					return fmt.Errorf("stop recovered native process %s/%d: %w", key.RunID, key.Generation, errors.Join(stopErr, fmt.Errorf("mark Goal session uncertain: %w", uncertainErr)))
+				}
+				goalSessionUncertainPersisted = true
+			}
+		}
+		if stopErr == nil {
+			if attachedStopRecovery || session.NeedsReconciliation() {
+				if err := daemon.recordStoppedGoalSession(key, session.Key()); err != nil {
+					return fmt.Errorf("record stopped recovered Goal session %s/%d: %w", key.RunID, key.Generation, err)
 				}
 			}
-			return fmt.Errorf("stop recovered native process %s/%d: %w", key.RunID, key.Generation, stopErr)
-		}
-		if attachedStopRecovery || session.NeedsReconciliation() {
-			if err := daemon.recordStoppedGoalSession(key, session.Key()); err != nil {
-				return fmt.Errorf("record stopped recovered Goal session %s/%d: %w", key.RunID, key.Generation, err)
+			if _, err := daemon.clearPersistedProcessDetails(key, journal.PID, journal.ProcessIdentity); err != nil {
+				return fmt.Errorf("record stopped native process %s/%d: %w", key.RunID, key.Generation, err)
 			}
-		}
-		if _, err := daemon.clearPersistedProcessDetails(key, journal.PID, journal.ProcessIdentity); err != nil {
-			return fmt.Errorf("record stopped native process %s/%d: %w", key.RunID, key.Generation, err)
 		}
 	}
 	if attachedStopRecovery && !stoppedWitness && !nativeStopWitness && (journal.PID <= 0 || strings.TrimSpace(journal.ProcessIdentity) == "") {
@@ -257,11 +268,22 @@ func (daemon *daemon) recoverGoalSession(rootContext context.Context, session st
 		// its local handle for explicit reconciliation rather than terminalize.
 		return nil
 	}
-	if err := daemon.queueNativeGoalUsage(rootContext, key, nil); err != nil {
-		return fmt.Errorf("queue recovered Goal usage for %s/%d: %w", key.RunID, key.Generation, err)
+	// Restart recovery has no native final-result boundary, even when the
+	// persisted process can be stopped successfully. Never promote the latest
+	// cumulative observation to a final total on this path.
+	if err := daemon.queueNativeUnknownUsageRecovery(key); err != nil {
+		return fmt.Errorf("queue unknown recovered Goal usage for %s/%d: %w", key.RunID, key.Generation, err)
 	}
 	if journal.LocalState == "terminal_pending" || journal.LocalState == "cleanup_pending" {
+		if stopErr != nil {
+			return errors.Join(errRecoveryRegistrationReady, errNativePhysicalRecoveryPending, stopErr)
+		}
 		return nil
+	}
+	if restartInputRecoveryRequired(journal) {
+		// Input recovery owns the daemon_restart payload. A native fallback must
+		// never settle that intent under a different stage/reason envelope.
+		return errors.New("daemon_restart input recovery remains pending")
 	}
 	reason := protocol.TaskResultReasonUnknownOutcome
 	summary := "native Goal session was not safely recoverable after daemon restart"
@@ -276,6 +298,9 @@ func (daemon *daemon) recoverGoalSession(rootContext context.Context, session st
 		"error":   summary,
 	}); err != nil {
 		return fmt.Errorf("queue unknown native outcome for %s/%d: %w", key.RunID, key.Generation, err)
+	}
+	if stopErr != nil {
+		return errors.Join(errRecoveryRegistrationReady, errNativePhysicalRecoveryPending, stopErr)
 	}
 	return nil
 }

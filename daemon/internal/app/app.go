@@ -1241,7 +1241,11 @@ func (daemon *daemon) initialize(ctx context.Context) error {
 		return fmt.Errorf("recover input command intents: %w", err)
 	}
 	if err := daemon.recoverUnclosedGoalSessions(ctx); err != nil {
-		if !errors.Is(err, errRecoveryPending) {
+		// A registration is an authority boundary. Physical reconciliation may
+		// remain pending after a durable unknown-outcome fallback, but retention,
+		// session uncertainty, usage, and terminal outbox persistence failures
+		// must stop registration rather than become an in-memory warning.
+		if !errors.Is(err, errRecoveryRegistrationReady) {
 			return fmt.Errorf("recover unclosed Goal sessions: %w", err)
 		}
 		if daemon.log != nil {
@@ -1483,6 +1487,7 @@ func (daemon *daemon) recoverUnclosedGoalSessions(ctx context.Context) error {
 	}
 	rootContext := daemon.rootContext(ctx)
 	var pending error
+	var blocked error
 	for _, session := range sessions {
 		if err := rootContext.Err(); err != nil {
 			return err
@@ -1491,14 +1496,21 @@ func (daemon *daemon) recoverUnclosedGoalSessions(ctx context.Context) error {
 		err := daemon.recoverGoalSession(entryContext, session)
 		cancel()
 		if err != nil {
-			pending = errors.Join(pending, err)
+			if errors.Is(err, errRecoveryRegistrationReady) {
+				pending = errors.Join(pending, err)
+			} else {
+				blocked = errors.Join(blocked, err)
+			}
 		}
 	}
 	if err := rootContext.Err(); err != nil {
 		return err
 	}
+	if blocked != nil {
+		return errors.Join(errRecoveryPending, blocked)
+	}
 	if pending != nil {
-		return errors.Join(errRecoveryPending, pending)
+		return errors.Join(errRecoveryPending, errRecoveryRegistrationReady, pending)
 	}
 	return nil
 }
@@ -4164,6 +4176,17 @@ func (daemon *daemon) queueNativeGoalUsage(ctx context.Context, key state.RunKey
 }
 
 func (daemon *daemon) prepareNativeGoalUsage(key state.RunKey, result *harness.TaskResult) (protocol.Usage, bool, error) {
+	return daemon.prepareNativeGoalUsageWithSnapshot(key, result, true)
+}
+
+// prepareNativeUnknownGoalUsage creates the conservative recovery receipt. A
+// cumulative usage observation is useful for ordinary finalization, but it is
+// not proof of the final total after an unproven native stop.
+func (daemon *daemon) prepareNativeUnknownGoalUsage(key state.RunKey) (protocol.Usage, bool, error) {
+	return daemon.prepareNativeGoalUsageWithSnapshot(key, nil, false)
+}
+
+func (daemon *daemon) prepareNativeGoalUsageWithSnapshot(key state.RunKey, result *harness.TaskResult, allowSnapshot bool) (protocol.Usage, bool, error) {
 	if !canonicalGoalRunID(key.RunID) {
 		// Legacy/unit fixtures may use descriptive run IDs. Goal transport IDs
 		// are UUIDs in production; do not let a compatibility fixture invent a
@@ -4198,7 +4221,7 @@ func (daemon *daemon) prepareNativeGoalUsage(key state.RunKey, result *harness.T
 	observedAt := daemon.now().UTC()
 	cachedInputTokens := int64(0)
 	hasCachedInputTokens := false
-	if journal.NativeUsageObservation != nil {
+	if allowSnapshot && journal.NativeUsageObservation != nil {
 		observation := *journal.NativeUsageObservation
 		observed = usageFromNativeObservation(observation)
 		cachedInputTokens = observation.CachedInputTokens
@@ -4207,7 +4230,7 @@ func (daemon *daemon) prepareNativeGoalUsage(key state.RunKey, result *harness.T
 		observedAt = observation.ObservedAt.UTC()
 	}
 	daemon.mu.Lock()
-	if !hasSnapshot {
+	if allowSnapshot && !hasSnapshot {
 		if active := daemon.running[key]; active != nil && active.goalUsageObservation != nil {
 			observation := *active.goalUsageObservation
 			observed = usageFromNativeObservation(observation)
@@ -4226,7 +4249,7 @@ func (daemon *daemon) prepareNativeGoalUsage(key state.RunKey, result *harness.T
 		}
 	}
 	daemon.mu.Unlock()
-	if result != nil && !hasSnapshot && result.Usage.State != "" {
+	if allowSnapshot && result != nil && !hasSnapshot && result.Usage.State != "" {
 		observed = result.Usage
 		hasSnapshot = result.Usage.State != harness.UsageUnknown
 	}
@@ -4276,6 +4299,31 @@ func (daemon *daemon) prepareNativeGoalUsage(key state.RunKey, result *harness.T
 		usage.UsageID = id
 	}
 	return usage, true, nil
+}
+
+// queueNativeUnknownUsageRecovery persists the accounting barrier together
+// with an immutable unknown usage body. The optional queue hook is retained for
+// focused tests; production uses the state store's atomic mutation.
+func (daemon *daemon) queueNativeUnknownUsageRecovery(key state.RunKey) error {
+	usage, shouldQueue, err := daemon.prepareNativeUnknownGoalUsage(key)
+	if err != nil || !shouldQueue {
+		return err
+	}
+	if queue := daemon.options.queueGoalUsage; queue != nil {
+		if _, err := daemon.store.MarkNativeUsageRecoveryRequired(key); err != nil {
+			return err
+		}
+		if _, err := queue(key, usage); err != nil {
+			return err
+		}
+		daemon.signalOutboxFor(key)
+		return nil
+	}
+	if _, err := daemon.store.QueueNativeUsageRecovery(key, usage); err != nil {
+		return err
+	}
+	daemon.signalOutboxFor(key)
+	return nil
 }
 
 func (daemon *daemon) queueNativeGoalUsageRecord(key state.RunKey, usage protocol.Usage) error {

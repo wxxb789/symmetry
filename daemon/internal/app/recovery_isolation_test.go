@@ -266,8 +266,11 @@ func TestRecoverAttachedGoalSessionClosesAfterUnprovenStopBecomesProven(t *testi
 	if firstJournal.PID != 91 || firstJournal.ProcessIdentity != "native:91" || !firstJournal.StartedAt.Equal(startedAt) || !firstJournal.RetainWorkspace {
 		t.Fatalf("first recovery lost process or workspace evidence: %#v", firstJournal)
 	}
-	if firstJournal.TerminalState != "" || len(firstJournal.PendingTransitions) != 0 || len(firstJournal.PendingGoalDeliveries) != 0 {
-		t.Fatalf("first recovery produced terminal or Goal effects: %#v", firstJournal)
+	if firstJournal.LocalState != "terminal_pending" || firstJournal.TerminalState != "failed" || len(firstJournal.PendingTransitions) != 1 || firstJournal.PendingTransitions[0].State != "failed" {
+		t.Fatalf("first recovery did not persist the unknown-outcome terminal fallback: %#v", firstJournal)
+	}
+	if !firstJournal.NativeUsageRecoveryRequired || len(firstJournal.PendingGoalDeliveries) != 1 || firstJournal.PendingGoalDeliveries[0].Kind != state.GoalDeliveryUsage || firstJournal.PendingGoalDeliveries[0].Usage == nil || firstJournal.PendingGoalDeliveries[0].Usage.CostBasis != protocol.CostUnknown || firstJournal.PendingGoalDeliveries[0].Usage.InputTokens != nil || firstJournal.PendingGoalDeliveries[0].Usage.OutputTokens != nil || firstJournal.PendingGoalDeliveries[0].Usage.CachedInputTokens != nil {
+		t.Fatalf("first recovery did not persist unknown native usage: %#v", firstJournal)
 	}
 
 	secondErr := app.recoverUnclosedGoalSessions(context.Background())
@@ -516,8 +519,8 @@ func TestRunContinuesAfterTypedRecoveryPending(t *testing.T) {
 		}
 		awaitReconcileCall(t, control.calls, 1)
 		request := <-control.requests
-		if !reconcileRequestContainsRun(request, key) {
-			t.Fatalf("native reconcile request = %#v", request)
+		if reconcileRequestContainsRun(request, key) {
+			t.Fatalf("native terminal fallback was incorrectly sent as an ordinary reconcile run: %#v", request)
 		}
 		for range 2 {
 			select {
