@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestClaudeProbeKnownVersionAndHelpFailsClosed(t *testing.T) {
@@ -81,6 +82,52 @@ func TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence(t *testing.T) {
 	}
 }
 
+func TestClaudeProbeBoundsHangingRunnerAndPreservesCallerCancellation(t *testing.T) {
+	for _, test := range []struct {
+		name             string
+		context          func() (context.Context, context.CancelFunc)
+		want             error
+		cancelAfterStart bool
+		waitWithin       time.Duration
+	}{
+		{name: "local timeout", context: func() (context.Context, context.CancelFunc) {
+			return context.Background(), func() {}
+		}, want: context.DeadlineExceeded, waitWithin: claudeProbeTimeout + time.Second},
+		{name: "caller cancellation", context: func() (context.Context, context.CancelFunc) {
+			return context.WithCancel(context.Background())
+		}, want: context.Canceled, cancelAfterStart: true, waitWithin: time.Second},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := test.context()
+			defer cancel()
+			runner := &claudeHangingRunner{started: make(chan struct{})}
+			done := make(chan error, 1)
+			go func() {
+				_, err := probeClaudeExecutable(ctx, "claude", runner)
+				done <- err
+			}()
+
+			select {
+			case <-runner.started:
+			case <-time.After(time.Second):
+				t.Fatal("probeClaudeExecutable() did not start the runner")
+			}
+			if test.cancelAfterStart {
+				cancel()
+			}
+
+			select {
+			case err := <-done:
+				if !errors.Is(err, test.want) {
+					t.Fatalf("probeClaudeExecutable() error = %v, want %v", err, test.want)
+				}
+			case <-time.After(test.waitWithin):
+				t.Fatalf("probeClaudeExecutable() did not return within %v", test.waitWithin)
+			}
+		})
+	}
+}
+
 type claudeFixtureRunner struct {
 	responses map[string][]byte
 	errors    map[string]error
@@ -103,6 +150,18 @@ func (runner *claudeFixtureRunner) Run(_ context.Context, _ string, args ...stri
 		return response, nil
 	}
 	return nil, errors.New("fixture command not found")
+}
+
+type claudeHangingRunner struct {
+	started chan struct{}
+}
+
+func (runner *claudeHangingRunner) Run(ctx context.Context, _ string, _ ...string) ([]byte, error) {
+	if runner.started != nil {
+		close(runner.started)
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
 }
 
 func sameStrings(got, want []string) bool {

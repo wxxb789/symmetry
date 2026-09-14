@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 )
@@ -15,6 +16,7 @@ import (
 const (
 	defaultClaudeExecutable = "claude"
 	testedClaudeVersion     = "2.1.259"
+	claudeProbeTimeout      = time.Second
 )
 
 // ClaudeCommandRunner is the narrow command boundary used by the Claude Code
@@ -165,6 +167,21 @@ func newClaudeAdapterWithRunner(executable string, runner ClaudeCommandRunner) *
 	return adapter
 }
 
+func runClaudeProbe(ctx context.Context, run func(context.Context) ([]byte, error)) ([]byte, error) {
+	probeContext, cancel := context.WithTimeout(ctx, claudeProbeTimeout)
+	defer cancel()
+	output, err := run(probeContext)
+	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, contextErr
+		}
+		if contextErr := probeContext.Err(); contextErr != nil {
+			return nil, contextErr
+		}
+	}
+	return output, err
+}
+
 func probeClaudeExecutable(ctx context.Context, executable string, runner ClaudeCommandRunner) (Capabilities, error) {
 	if ctx == nil {
 		return Capabilities{}, errors.New("harness probe context must not be nil")
@@ -180,8 +197,13 @@ func probeClaudeExecutable(ctx context.Context, executable string, runner Claude
 	}
 
 	capabilities := UnsupportedCapabilities(KindClaude, "Claude Code native session lifecycle is unverified")
-	versionOutput, err := runner.Run(ctx, executable, "--version")
+	versionOutput, err := runClaudeProbe(ctx, func(probeContext context.Context) ([]byte, error) {
+		return runner.Run(probeContext, executable, "--version")
+	})
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return Capabilities{}, err
+		}
 		if contextErr := ctx.Err(); contextErr != nil {
 			return Capabilities{}, contextErr
 		}
@@ -202,8 +224,13 @@ func probeClaudeExecutable(ctx context.Context, executable string, runner Claude
 		return capabilities, fmt.Errorf("%w: Claude Code %s is not in the tested version set", ErrUnsupportedVersion, version)
 	}
 
-	helpOutput, err := runner.Run(ctx, executable, "--help")
+	helpOutput, err := runClaudeProbe(ctx, func(probeContext context.Context) ([]byte, error) {
+		return runner.Run(probeContext, executable, "--help")
+	})
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return capabilities, err
+		}
 		if contextErr := ctx.Err(); contextErr != nil {
 			return capabilities, contextErr
 		}
