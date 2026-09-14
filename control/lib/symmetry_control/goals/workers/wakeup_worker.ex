@@ -61,10 +61,12 @@ defmodule SymmetryControl.Goals.Workers.WakeupWorker do
     case Goals.recover_pending_terminal_settlements(opts) do
       {:ok, settlements} when is_list(settlements) ->
         Enum.reduce_while(settlements, :ok, fn settlement, :ok ->
-          case Goals.settle_task(settlement.task_id, settlement.run_id, settlement.generation) do
+          case settle_terminal_descriptor(settlement) do
             {:ok, _receipt} -> {:cont, :ok}
             {:error, :stale_run} -> {:cont, :ok}
             {:error, :not_found} -> {:cont, :ok}
+            {:error, :validation_pending} -> {:cont, :ok}
+            {:error, :validation_reconciliation_not_pending} -> {:cont, :ok}
             {:error, reason} -> {:halt, {:error, reason}}
           end
         end)
@@ -75,6 +77,18 @@ defmodule SymmetryControl.Goals.Workers.WakeupWorker do
       result ->
         {:error, {:unexpected_terminal_settlement_recovery_result, result}}
     end
+  end
+
+  defp settle_terminal_descriptor(%{reconciliation: :validation_outcome} = settlement) do
+    Goals.reconcile_validation_outcome(
+      settlement.task_id,
+      settlement.run_id,
+      settlement.generation
+    )
+  end
+
+  defp settle_terminal_descriptor(settlement) do
+    Goals.settle_task(settlement.task_id, settlement.run_id, settlement.generation)
   end
 
   defp recover_unstarted_cancellations(opts) do

@@ -185,10 +185,9 @@ defmodule SymmetryControl.Orchestration do
               Enum.all?(specifications, &valid_runtime_specification?/1)) do
       {:error, :invalid_request}
     else
-      now = now(opts)
-
       Repo.transaction(fn ->
         _machine = lock_machine(machine_id)
+        now = now(opts)
 
         Enum.map(specifications, fn specification ->
           runtime_key = value(specification, :runtime_key)
@@ -268,10 +267,9 @@ defmodule SymmetryControl.Orchestration do
   def heartbeat(_, _, _, _), do: {:error, :invalid_request}
 
   defp heartbeat_runtime(runtime_id, runtime_epoch, opts) do
-    current = now(opts)
-
     Repo.transaction(fn ->
       runtime = lock_runtime(runtime_id)
+      current = now(opts)
 
       if runtime.connection_epoch != runtime_epoch do
         rollback(:ownership_lost)
@@ -1045,8 +1043,8 @@ defmodule SymmetryControl.Orchestration do
     assignment_duration_ms = Keyword.get(opts, :assignment_duration_ms, 30_000)
 
     result =
-      case assign_one_goal(current, assignment_duration_ms) do
-        {:error, :no_assignment} -> assign_one_legacy(current, assignment_duration_ms)
+      case assign_one_goal(current, assignment_duration_ms, opts) do
+        {:error, :no_assignment} -> assign_one_legacy(current, assignment_duration_ms, opts)
         result -> result
       end
 
@@ -1069,18 +1067,18 @@ defmodule SymmetryControl.Orchestration do
   # Goal candidates are scanned by a stable keyset. Each candidate gets its own
   # transaction so an unavailable or malformed frozen validation binding cannot
   # retain locks or starve a later eligible Goal task.
-  defp assign_one_goal(current, assignment_duration_ms),
-    do: assign_one_goal(current, assignment_duration_ms, nil)
+  defp assign_one_goal(current, assignment_duration_ms, opts),
+    do: assign_one_goal(current, assignment_duration_ms, opts, nil)
 
-  defp assign_one_goal(current, assignment_duration_ms, cursor) do
+  defp assign_one_goal(current, assignment_duration_ms, opts, cursor) do
     case next_goal_task_candidate_page(current, cursor) do
       [] ->
         {:error, :no_assignment}
 
       candidates ->
-        case assign_goal_candidate_page(candidates, current, assignment_duration_ms) do
+        case assign_goal_candidate_page(candidates, current, assignment_duration_ms, opts) do
           {:ok, run} -> {:ok, run}
-          :skip -> assign_one_goal(current, assignment_duration_ms, List.last(candidates))
+          :skip -> assign_one_goal(current, assignment_duration_ms, opts, List.last(candidates))
           error -> error
         end
     end
@@ -1129,20 +1127,21 @@ defmodule SymmetryControl.Orchestration do
     Repo.all(query)
   end
 
-  defp assign_goal_candidate_page([], _current, _assignment_duration_ms), do: :skip
+  defp assign_goal_candidate_page([], _current, _assignment_duration_ms, _opts), do: :skip
 
-  defp assign_goal_candidate_page([candidate | remaining], current, assignment_duration_ms) do
-    case try_assign_goal_candidate(candidate, current, assignment_duration_ms) do
+  defp assign_goal_candidate_page([candidate | remaining], current, assignment_duration_ms, opts) do
+    case try_assign_goal_candidate(candidate, current, assignment_duration_ms, opts) do
       {:ok, run} -> {:ok, run}
-      :skip -> assign_goal_candidate_page(remaining, current, assignment_duration_ms)
+      :skip -> assign_goal_candidate_page(remaining, current, assignment_duration_ms, opts)
       error -> error
     end
   end
 
-  defp try_assign_goal_candidate(candidate, current, assignment_duration_ms) do
+  defp try_assign_goal_candidate(candidate, _current, assignment_duration_ms, opts) do
     Repo.transaction(fn ->
       with {:ok, _project, goal, item, revision, task} <-
              try_lock_goal_assignment_chain(candidate),
+           current <- now(opts),
            true <- goal_task_assignable?(goal, task) and goal_work_item_owned?(goal, item, task),
            %Runtime{} = runtime <- next_goal_runtime(task, revision, item, current),
            true <- runtime_has_capacity?(runtime) do
@@ -1208,14 +1207,20 @@ defmodule SymmetryControl.Orchestration do
   defp try_lock_task(task_id),
     do: Repo.one(from task in Task, where: task.id == ^task_id, lock: "FOR UPDATE SKIP LOCKED")
 
-  defp assign_one_legacy(current, assignment_duration_ms) do
+  defp assign_one_legacy(current, assignment_duration_ms, opts) do
     Repo.transaction(fn ->
       case next_assignable_legacy_task_and_runtime(current) do
         nil ->
           rollback(:no_assignment)
 
         {task, runtime} ->
-          assign_task_to_runtime!(task, runtime, nil, current, assignment_duration_ms)
+          current = now(opts)
+
+          if runtime_available_at?(runtime, current) do
+            assign_task_to_runtime!(task, runtime, nil, current, assignment_duration_ms)
+          else
+            rollback(:no_assignment)
+          end
       end
     end)
   end
@@ -1256,6 +1261,15 @@ defmodule SymmetryControl.Orchestration do
       ),
       :count
     ) < runtime.capacity
+  end
+
+  defp runtime_available_at?(runtime, current) do
+    runtime.status == "online" and
+      not is_nil(runtime.last_heartbeat_at) and
+      DateTime.compare(
+        runtime.last_heartbeat_at,
+        DateTime.add(current, -3 * runtime.heartbeat_interval_ms, :millisecond)
+      ) == :gt
   end
 
   defp next_assignable_legacy_task_and_runtime(current) do
@@ -1791,11 +1805,10 @@ defmodule SymmetryControl.Orchestration do
   def claim_with_disposition(run_id, request, opts) when is_map(request) do
     with true <- valid_uuid?(run_id) and valid_claim_request?(request),
          {:ok, lease_duration_ms} <- lease_duration_ms(opts) do
-      current = now(opts)
-
       result =
         Repo.transaction(fn ->
           {task, run, runtime, goal, item} = lock_claim_chain(run_id)
+          current = now(opts)
           request_runtime_id = value(request, :runtime_id)
           request_epoch = value(request, :runtime_epoch)
           request_generation = value(request, :generation)
@@ -1893,17 +1906,21 @@ defmodule SymmetryControl.Orchestration do
   def renew_lease(run_id, fence, opts) when is_map(fence) do
     with true <- valid_uuid?(run_id) and valid_fence?(fence),
          {:ok, lease_duration_ms} <- lease_duration_ms(opts) do
-      current = now(opts)
-
       Repo.transaction(fn ->
         {task, run, runtime} = lock_execution_chain(run_id)
+        current = now(opts)
         if run.state == "cancelling", do: rollback(:ownership_lost)
         ensure_fence!(task, run, runtime, fence, current)
 
+        candidate_expiry = DateTime.add(current, lease_duration_ms, :millisecond)
+
+        lease_expires_at =
+          if DateTime.compare(run.lease_expires_at, candidate_expiry) == :lt,
+            do: candidate_expiry,
+            else: run.lease_expires_at
+
         run
-        |> Run.changeset(%{
-          lease_expires_at: DateTime.add(current, lease_duration_ms, :millisecond)
-        })
+        |> Run.changeset(%{lease_expires_at: lease_expires_at})
         |> stamp_update(current)
         |> Repo.update!()
       end)
@@ -1923,10 +1940,9 @@ defmodule SymmetryControl.Orchestration do
               Enum.all?(events, &valid_event?/1)) do
       {:error, :invalid_request}
     else
-      current = now(opts)
-
       Repo.transaction(fn ->
         {task, run, runtime, goal, item} = lock_goal_chain(run_id)
+        current = now(opts)
         ensure_fence!(task, run, runtime, fence, current)
 
         event_ids = Enum.map(events, &value(&1, :event_id))
@@ -2003,7 +2019,6 @@ defmodule SymmetryControl.Orchestration do
               jsonb_compatible?(payload)) do
       {:error, :invalid_request}
     else
-      current = now(opts)
       body = %{state: target_state, payload: payload}
       {body_hash, body_hash_version} = RequestHash.write(body)
       notify? = not Repo.in_transaction?()
@@ -2011,6 +2026,7 @@ defmodule SymmetryControl.Orchestration do
       result =
         Repo.transaction(fn ->
           {task, run, runtime, goal, item} = lock_transition_chain(run_id, target_state)
+          current = now(opts)
           ensure_transition_static_fence!(task, run, runtime, fence, target_state)
 
           case Repo.get_by(RunTransition, run_id: run.id, transition_id: transition_id) do
@@ -2078,11 +2094,11 @@ defmodule SymmetryControl.Orchestration do
     else
       normalized_payload = normalize_command_payload(kind, payload)
       command_hash = command_request_hash(kind, normalized_payload, opts)
-      current = now(opts)
       notify? = not Repo.in_transaction?()
 
       Repo.transaction(fn ->
         task = lock_task(task_id)
+        current = now(opts)
 
         if not is_nil(task.goal_id), do: rollback(:goal_authority_required)
 
@@ -2150,7 +2166,6 @@ defmodule SymmetryControl.Orchestration do
       {:error, :invalid_request}
     else
       command_hash = command_request_hash(kind, payload, opts)
-      current = now(opts)
 
       Repo.transaction(fn ->
         goal = lock_goal(goal_id)
@@ -2158,6 +2173,7 @@ defmodule SymmetryControl.Orchestration do
         untrusted_task = Repo.get(Task, task_id) || rollback(:not_found)
         item = if untrusted_task.work_item_id, do: lock_work_item(untrusted_task.work_item_id)
         task = lock_task(task_id)
+        current = now(opts)
 
         ensure_goal_work_item_ownership!(goal, item, task)
 
@@ -2193,11 +2209,11 @@ defmodule SymmetryControl.Orchestration do
   def request_cancel(_, _), do: {:error, :invalid_request}
 
   defp request_task_cancel(task_id, opts) do
-    current = now(opts)
     notify? = not Repo.in_transaction?()
 
     Repo.transaction(fn ->
       task = lock_task(task_id)
+      current = now(opts)
 
       if not is_nil(task.goal_id), do: rollback(:goal_authority_required)
 
@@ -2256,10 +2272,9 @@ defmodule SymmetryControl.Orchestration do
     if not (valid_uuid?(task_id) and valid_task_attrs?(task_attrs)) do
       {:error, :invalid_request}
     else
-      current = now(opts)
-
       Repo.transaction(fn ->
         task = lock_task(task_id)
+        current = now(opts)
 
         if not is_nil(task.goal_id), do: rollback(:goal_authority_required)
 
@@ -2294,6 +2309,8 @@ defmodule SymmetryControl.Orchestration do
                 if task.current_generation == task.attempt_generation,
                   do: lock_current_run(task),
                   else: nil
+
+              current = now(opts)
 
               command =
                 insert_command!(
@@ -2377,6 +2394,7 @@ defmodule SymmetryControl.Orchestration do
 
       "assigned" ->
         run = lock_current_run(task)
+        current = now(opts)
 
         command =
           insert_command!(
@@ -2410,6 +2428,7 @@ defmodule SymmetryControl.Orchestration do
 
       state when state in ["claimed", "running", "paused", "waiting_for_input"] ->
         run = lock_current_run(task)
+        current = now(opts)
         reject_pending_commands!(task, run.id, current)
 
         command =
@@ -2448,7 +2467,7 @@ defmodule SymmetryControl.Orchestration do
          payload,
          idempotency_key,
          command_hash,
-         current,
+         _current,
          opts
        ) do
     ensure_expected_generation!(task, Keyword.get(opts, :expected_generation))
@@ -2458,6 +2477,7 @@ defmodule SymmetryControl.Orchestration do
     end
 
     run = lock_current_run(task)
+    current = now(opts)
 
     if run.state != "waiting_for_input", do: rollback(:state_conflict)
 
@@ -2492,12 +2512,13 @@ defmodule SymmetryControl.Orchestration do
     end
   end
 
-  defp create_new_command!(task, kind, payload, idempotency_key, command_hash, current, opts)
+  defp create_new_command!(task, kind, payload, idempotency_key, command_hash, _current, opts)
        when kind in @supervisory_commands do
     ensure_expected_generation!(task, Keyword.get(opts, :expected_generation))
     if task.state not in ["running", "paused"], do: rollback(:state_conflict)
     run = lock_current_run(task)
     runtime = lock_runtime(run.runtime_id)
+    current = now(opts)
 
     unless legacy_supervisory_runtime?(runtime) and
              value(runtime.capabilities, :supervisory_control, false) == true,
@@ -2572,8 +2593,6 @@ defmodule SymmetryControl.Orchestration do
     if not (valid_uuid?(command_id) and valid_fence?(fence) and valid_uuid?(acknowledgement_id)) do
       {:error, :invalid_request}
     else
-      current = now(opts)
-
       Repo.transaction(fn ->
         run_id =
           Repo.one(
@@ -2585,6 +2604,8 @@ defmodule SymmetryControl.Orchestration do
 
         command =
           Repo.one!(from command in Command, where: command.id == ^command_id, lock: "FOR UPDATE")
+
+        current = now(opts)
 
         ensure_terminal_static_fence!(task, run, fence)
 
@@ -2671,10 +2692,9 @@ defmodule SymmetryControl.Orchestration do
   def work_snapshot(_, _, _), do: {:error, :invalid_request}
 
   defp daemon_runtime_snapshot(runtime_id, runtime_epoch, opts) do
-    current = now(opts)
-
     Repo.transaction(fn ->
       runtime = share_runtime(runtime_id)
+      current = now(opts)
       if runtime.connection_epoch != runtime_epoch, do: rollback(:ownership_lost)
       snapshot_for(runtime, current)
     end)
@@ -2693,10 +2713,9 @@ defmodule SymmetryControl.Orchestration do
   def reconcile(_, _, _, _), do: {:error, :invalid_request}
 
   defp reconcile_runtime(runtime_id, runtime_epoch, journals, opts) do
-    current = now(opts)
-
     Repo.transaction(fn ->
       runtime = share_runtime(runtime_id)
+      current = now(opts)
       if runtime.connection_epoch != runtime_epoch, do: rollback(:ownership_lost)
 
       run_ids = Enum.map(journals, &value(&1, :run_id))
@@ -2768,7 +2787,7 @@ defmodule SymmetryControl.Orchestration do
 
     expired_runs =
       Enum.count(run_ids, fn run_id ->
-        case expire_run(run_id, current) do
+        case expire_run(run_id, opts) do
           {:ok, {metadata, receipt}} ->
             emit([:run, :expired], metadata)
             notify_goal_task_terminal(receipt, opts, notify?)
@@ -2779,13 +2798,14 @@ defmodule SymmetryControl.Orchestration do
         end
       end)
 
-    offline_runtimes = expire_offline_runtimes(current)
+    offline_runtimes = expire_offline_runtimes(opts)
     %{expired_runs: expired_runs, offline_runtimes: offline_runtimes}
   end
 
-  defp expire_run(run_id, current) do
+  defp expire_run(run_id, opts) do
     case Repo.transaction(fn ->
            {task, run, _runtime} = lock_chain(run_id)
+           current = now(opts)
 
            expired? =
              (run.state == "assigned" and
@@ -2891,7 +2911,7 @@ defmodule SymmetryControl.Orchestration do
     end
   end
 
-  defp expire_offline_runtimes(current) do
+  defp expire_offline_runtimes(opts) do
     runtime_ids =
       Repo.all(
         from runtime in Runtime,
@@ -2902,6 +2922,7 @@ defmodule SymmetryControl.Orchestration do
     Enum.count(runtime_ids, fn runtime_id ->
       case Repo.transaction(fn ->
              runtime = lock_runtime(runtime_id)
+             current = now(opts)
              cutoff = DateTime.add(current, -3 * runtime.heartbeat_interval_ms, :millisecond)
 
              if runtime.status == "online" and
@@ -3637,20 +3658,38 @@ defmodule SymmetryControl.Orchestration do
   defp event_replay([], _existing_events), do: :missing
 
   defp event_replay(events, existing_events) do
-    {all_present?, conflict?, stored} =
-      Enum.reduce(events, {true, false, []}, fn event, {all_present?, conflict?, stored} ->
+    {all_present?, conflict?, stored, _request_hashes} =
+      Enum.reduce(events, {true, false, [], %{}}, fn event,
+                                                     {all_present?, conflict?, stored,
+                                                      request_hashes} ->
         event_id = value(event, :event_id)
         body = event_body(event)
+        request_hash = RequestHash.write(body)
+
+        batch_conflict? =
+          case Map.get(request_hashes, event_id) do
+            nil ->
+              false
+
+            ^request_hash ->
+              false
+
+            _ ->
+              true
+          end
+
+        request_hashes = Map.put_new(request_hashes, event_id, request_hash)
 
         case Map.get(existing_events, event_id) do
           nil ->
-            {false, conflict?, stored}
+            {false, conflict? or batch_conflict?, stored, request_hashes}
 
           existing ->
             matches? =
               RequestHash.matches?(existing.request_hash, existing.request_hash_version, body)
 
-            {all_present?, conflict? or not matches?, [existing | stored]}
+            {all_present?, conflict? or batch_conflict? or not matches?, [existing | stored],
+             request_hashes}
         end
       end)
 

@@ -957,7 +957,9 @@ defmodule SymmetryControl.GoalsTest do
                rollout_enabled: true
              )
 
-    [first, second] = fetch_goal!(created.goal.id).work_items
+    items_by_title = Map.new(fetch_goal!(created.goal.id).work_items, &{&1.title, &1})
+    first = Map.fetch!(items_by_title, "first work")
+    second = Map.fetch!(items_by_title, "second work")
 
     assert {:ok, scope_decision, :created} =
              command_current(created.goal.id, "request_decision", %{
@@ -2493,8 +2495,10 @@ defmodule SymmetryControl.GoalsTest do
                now: @now
              )
 
-    assert {:ok, %{"settlement" => "awaiting_validation"}} =
+    assert {:ok, original_settlement_receipt} =
              Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
+
+    assert original_settlement_receipt["settlement"] == "awaiting_validation"
 
     subject_hash = evidence_subject_hash(candidate_subject)
 
@@ -2519,7 +2523,7 @@ defmodule SymmetryControl.GoalsTest do
                now: DateTime.add(@now, 1, :second)
              )
 
-    assert {:ok, %{"settlement" => "awaiting_validation"}} =
+    assert {:ok, ^original_settlement_receipt} =
              Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
 
     assert {:error, {:invalid_contract, _}} =
@@ -2532,7 +2536,7 @@ defmodule SymmetryControl.GoalsTest do
                ]
              })
 
-    assert {:ok, %{"settlement" => "awaiting_validation"}} =
+    assert {:ok, ^original_settlement_receipt} =
              Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
 
     assert {:ok, wrong_subject_review, :created} =
@@ -2644,10 +2648,22 @@ defmodule SymmetryControl.GoalsTest do
     assert late_outcome_event.response["settlement"] == "accepted"
 
     assert {:ok, late_receipt} =
-             Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
+             Goals.reconcile_validation_outcome(validation.id, validation_run.id, 1, now: @now)
 
     assert late_receipt["settlement"] == "accepted"
     assert late_receipt["event_sequence"] == late_outcome_event.sequence
+    refute late_receipt["mutation_id"] == original_settlement_receipt["mutation_id"]
+
+    assert {:ok, original_replay} =
+             Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
+
+    assert original_replay == original_settlement_receipt
+
+    assert {:ok, late_replay} =
+             Goals.reconcile_validation_outcome(validation.id, validation_run.id, 1, now: @now)
+
+    assert late_replay == late_receipt
+    assert wakeup_job_count(goal.id) == 1
 
     assert {:ok, projection} = Goals.fetch_goal(goal.id)
     assert Enum.any?(projection.accepted_outcomes, &(&1.work_item_id == item.id))

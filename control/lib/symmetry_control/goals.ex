@@ -2623,27 +2623,7 @@ defmodule SymmetryControl.Goals do
 
             case replay_command(goal.id, mutation_id, body) do
               {:ok, receipt} ->
-                if plan_task?(task) do
-                  {:replayed, Map.put(receipt.response, "event_sequence", receipt.event.sequence)}
-                else
-                  case rederive_awaiting_validation_outcome!(
-                         goal,
-                         item,
-                         task,
-                         run,
-                         producer,
-                         producing_run,
-                         receipt.response,
-                         opts
-                       ) do
-                    nil ->
-                      {:replayed,
-                       Map.put(receipt.response, "event_sequence", receipt.event.sequence)}
-
-                    response ->
-                      {:created, response}
-                  end
-                end
+                {:replayed, Map.put(receipt.response, "event_sequence", receipt.event.sequence)}
 
               :missing ->
                 reconcile_reservation!(goal, task, opts)
@@ -2731,6 +2711,113 @@ defmodule SymmetryControl.Goals do
   end
 
   def settle_task(_, _, _, _), do: {:error, :invalid_request}
+
+  @doc """
+  Reconcile a terminal validation Task after a scoped operator review resolves.
+
+  This is a distinct mutation from `settle_task/4`: the original settlement
+  receipt remains immutable, while the late validation outcome gets its own
+  durable `validation_outcome_settled` receipt and event.
+  """
+  @spec reconcile_validation_outcome(Ecto.UUID.t(), Ecto.UUID.t(), non_neg_integer(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def reconcile_validation_outcome(task_id, run_id, generation, opts \\ [])
+
+  def reconcile_validation_outcome(task_id, run_id, generation, opts)
+      when is_binary(task_id) and is_binary(run_id) and is_integer(generation) and generation >= 0 and
+             is_list(opts) do
+    with :ok <- valid_uuid(task_id), :ok <- valid_uuid(run_id) do
+      Repo.transaction(fn ->
+        task_locator = Repo.get(Task, task_id)
+
+        cond do
+          is_nil(task_locator) or is_nil(task_locator.goal_id) ->
+            %{task_id: task_id, run_id: run_id, generation: generation}
+
+          true ->
+            goal = lock_goal(task_locator.goal_id)
+
+            item =
+              if task_locator.work_item_id,
+                do: lock_work_item(task_locator.work_item_id)
+
+            {task, producer} =
+              lock_settlement_tasks!(task_id, task_locator.validation_of_task_id)
+
+            unless settlement_task_owned_by_goal?(task, goal, item) and
+                     task.work_item_id == task_locator.work_item_id and
+                     task.validation_of_task_id == task_locator.validation_of_task_id,
+                   do: rollback(:stale_run)
+
+            {run, producing_run} = lock_settlement_runs!(run_id, task_id, producer)
+
+            if is_nil(run) or run.generation != generation or
+                 run.state not in @terminal_run_states or task.current_generation != generation or
+                 task.state not in @terminal_run_states do
+              rollback(:stale_run)
+            end
+
+            original_mutation_id = settlement_mutation_id(task.id, run.id, generation)
+
+            original_body = %{
+              task_id: task.id,
+              run_id: run.id,
+              generation: generation,
+              state: run.state,
+              goal_revision: task.goal_revision
+            }
+
+            original_receipt =
+              case replay_command(goal.id, original_mutation_id, original_body) do
+                {:ok, receipt} -> receipt
+                :missing -> rollback(:validation_reconciliation_not_pending)
+                {:error, reason} -> rollback(reason)
+              end
+
+            unless value(original_receipt.response, "settlement") == "awaiting_validation",
+              do: rollback(:validation_reconciliation_not_pending)
+
+            late_mutation_id =
+              late_validation_outcome_mutation_id(task.id, run.id, run.generation)
+
+            late_event =
+              Repo.one(
+                from(event in GoalEvent,
+                  where: event.id == ^late_mutation_id,
+                  lock: "FOR UPDATE"
+                )
+              )
+
+            outcome = existing_validation_outcome(task.id)
+
+            if late_event do
+              unless late_event.kind == "validation_outcome_settled" and outcome,
+                do: rollback(:internal_error)
+
+              late_validation_outcome_receipt!(goal, task, run, outcome, opts)
+            else
+              # Re-run the complete frozen Subject/revision/evidence validation
+              # before creating the independent reconciliation receipt. The
+              # existing outcome is only sufficient for exact replay.
+              terminal_settlement!(goal, item, task, run, producer, producing_run, opts)
+              outcome = existing_validation_outcome(task.id)
+
+              if outcome do
+                late_validation_outcome_receipt!(goal, task, run, outcome, opts)
+              else
+                rollback(:validation_pending)
+              end
+            end
+        end
+      end)
+      |> case do
+        {:ok, response} -> {:ok, response}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  def reconcile_validation_outcome(_, _, _, _), do: {:error, :invalid_request}
 
   # A terminal Run is durable execution history. A completed validation candidate
   # may derive accepted or rejected work from its frozen Subject and persisted
@@ -4774,9 +4861,9 @@ defmodule SymmetryControl.Goals do
 
   @doc """
   Finds current terminal Goal executions whose settlement still needs evaluation.
-  The periodic wakeup worker replays each descriptor through `settle_task/4`;
-  a closed validation attempt awaiting an operator predicate is reevaluated
-  against any subsequently resolved scoped review decision.
+  The periodic wakeup worker sends ordinary descriptors through `settle_task/4`;
+  a closed validation attempt awaiting an operator predicate uses the distinct
+  `reconcile_validation_outcome/4` mutation instead.
   """
   @spec recover_pending_terminal_settlements(keyword()) :: {:ok, [map()]} | {:error, term()}
   def recover_pending_terminal_settlements(opts \\ [])
@@ -4845,6 +4932,11 @@ defmodule SymmetryControl.Goals do
             ),
           else: unsettled
 
+      unsettled =
+        unsettled
+        |> Repo.all()
+        |> Enum.map(&Map.put(&1, :reconciliation, :settlement))
+
       awaiting_validation =
         from(task in Task,
           as: :task,
@@ -4910,8 +5002,13 @@ defmodule SymmetryControl.Goals do
           do: where(awaiting_validation, [task: task], task.goal_id in ^requested_goal_ids),
           else: awaiting_validation
 
+      awaiting_validation =
+        awaiting_validation
+        |> Repo.all()
+        |> Enum.map(&Map.put(&1, :reconciliation, :validation_outcome))
+
       pending =
-        (Repo.all(unsettled) ++ Repo.all(awaiting_validation))
+        (unsettled ++ awaiting_validation)
         |> Enum.uniq_by(&{&1.task_id, &1.run_id, &1.generation})
         |> Enum.sort_by(&{&1.task_id, &1.run_id})
         |> Enum.take(limit)
@@ -7353,26 +7450,6 @@ defmodule SymmetryControl.Goals do
 
       _ ->
         nil
-    end
-  end
-
-  defp rederive_awaiting_validation_outcome!(
-         goal,
-         item,
-         task,
-         run,
-         producer,
-         producing_run,
-         receipt,
-         opts
-       ) do
-    if value(receipt, "settlement") == "awaiting_validation" do
-      terminal_settlement!(goal, item, task, run, producer, producing_run, opts)
-      outcome = existing_validation_outcome(task.id)
-
-      if outcome do
-        late_validation_outcome_receipt!(goal, task, run, outcome, opts)
-      end
     end
   end
 

@@ -1,6 +1,7 @@
 defmodule SymmetryControl.OrchestrationTest do
   use SymmetryControl.DataCase, async: true
 
+  alias Ecto.Adapters.SQL.Sandbox
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.Machine
   alias SymmetryControl.Orchestration.{Command, RunEvent, RunTransition}
@@ -260,6 +261,34 @@ defmodule SymmetryControl.OrchestrationTest do
                  lease_duration_ms: invalid_duration
                )
     end
+  end
+
+  test "lease renewal never shortens an already longer durable lease" do
+    %{machine: machine} = enroll_machine()
+    runtime = register_runtime(machine, capacity: 2)
+
+    assert {:ok, _task, :created} =
+             Orchestration.submit_task(task_attrs(goal: "monotonic-lease"), "monotonic-lease",
+               now: @now
+             )
+
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+    existing_expiry = DateTime.add(@now, 90, :second)
+
+    assert {:ok, loaded_run} = Orchestration.fetch_run(run.id)
+
+    loaded_run
+    |> Ecto.Changeset.change(lease_expires_at: existing_expiry)
+    |> Repo.update!()
+
+    assert {:ok, renewed} =
+             Orchestration.renew_lease(run.id, fence,
+               now: DateTime.add(@now, 1, :second),
+               lease_duration_ms: 30_000
+             )
+
+    assert renewed.lease_expires_at == existing_expiry
   end
 
   test "fences reject stale epoch, generation, and lease" do
@@ -938,6 +967,105 @@ defmodule SymmetryControl.OrchestrationTest do
                "00000000-0000-0000-0000-000000000033",
                now: @now
              )
+
+    batch_event = %{
+      event_id: "00000000-0000-0000-0000-000000000034",
+      sequence: 2,
+      kind: "progress",
+      payload: %{"message" => "batch"},
+      occurred_at: @now
+    }
+
+    assert {:error, :idempotency_conflict} =
+             Orchestration.append_events(
+               run.id,
+               fence,
+               [batch_event, %{batch_event | payload: %{"message" => "changed"}}],
+               now: @now
+             )
+
+    assert {:ok, [first_batch_event, second_batch_event]} =
+             Orchestration.append_events(run.id, fence, [batch_event, batch_event], now: @now)
+
+    assert first_batch_event.id == second_batch_event.id
+
+    assert {:ok, [replayed_batch_event]} =
+             Orchestration.append_events(run.id, fence, [batch_event], now: @now)
+
+    assert replayed_batch_event.id == first_batch_event.id
+  end
+
+  test "fenced execution mutations serialize behind a concurrent run lock" do
+    %{machine: machine} = enroll_machine()
+    runtime = register_runtime(machine)
+    {:ok, task, :created} = Orchestration.submit_task(task_attrs(), "locked-run", now: @now)
+    {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+
+    event = %{
+      event_id: Ecto.UUID.generate(),
+      sequence: 1,
+      kind: "progress",
+      payload: %{},
+      occurred_at: @now
+    }
+
+    assert {:ok, [_]} =
+             run_after_locked_run(run.id, fn ->
+               Orchestration.append_events(run.id, fence, [event], now: @now)
+             end)
+
+    assert {:ok, %{state: "running"}} =
+             run_after_locked_run(run.id, fn ->
+               Orchestration.transition(
+                 run.id,
+                 fence,
+                 "running",
+                 %{},
+                 Ecto.UUID.generate(),
+                 now: @now
+               )
+             end)
+
+    assert {:ok, %{state: "waiting_for_input"}} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "waiting_for_input",
+               %{},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    assert {:ok, command, :created} =
+             Orchestration.create_command(
+               task.id,
+               "provide_input",
+               %{"answer" => "yes"},
+               "locked-run-input",
+               now: @now
+             )
+
+    assert {:ok, %{state: "running"}} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "running",
+               %{},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    assert {:ok, %{state: "acknowledged"}} =
+             run_after_locked_run(run.id, fn ->
+               Orchestration.acknowledge_command(
+                 command.id,
+                 fence,
+                 "applied",
+                 Ecto.UUID.generate(),
+                 now: @now
+               )
+             end)
   end
 
   test "events reject NUL in nested JSONB map keys and string values before persistence" do
@@ -2281,5 +2409,43 @@ defmodule SymmetryControl.OrchestrationTest do
     })
     |> Ecto.Changeset.change(inserted_at: inserted_at, updated_at: inserted_at)
     |> Repo.insert!()
+  end
+
+  defp run_after_locked_run(run_id, operation) do
+    parent = self()
+
+    lock_holder =
+      Task.async(fn ->
+        Repo.transaction(fn ->
+          Repo.one!(
+            from run in SymmetryControl.Orchestration.Run,
+              where: run.id == ^run_id,
+              lock: "FOR UPDATE"
+          )
+
+          send(parent, {:run_lock_held, self()})
+
+          receive do
+            :release_run_lock -> :ok
+          end
+        end)
+      end)
+
+    Sandbox.allow(Repo, self(), lock_holder.pid)
+    assert_receive {:run_lock_held, lock_holder_pid}, 1_000
+
+    requester =
+      Task.async(fn ->
+        send(parent, :run_lock_request_started)
+        operation.()
+      end)
+
+    Sandbox.allow(Repo, self(), requester.pid)
+    assert_receive :run_lock_request_started, 1_000
+    send(lock_holder_pid, :release_run_lock)
+
+    result = Task.await(requester)
+    assert {:ok, :ok} = Task.await(lock_holder)
+    result
   end
 end
