@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
@@ -23,6 +24,7 @@ const (
 	DefaultExecutable = "codex"
 	TestedVersion     = "0.153.4"
 	TestedSchemaHash  = "sha256:d3eace08be5dca386bfd1f1e8df650058b4113f1e10870a284d775d75517576a"
+	probeTimeout      = time.Second
 )
 
 // CommandRunner is injectable so version/help probing remains deterministic in
@@ -40,6 +42,38 @@ type SchemaRunner interface {
 }
 
 type osCommandRunner struct{}
+
+func runProbe(ctx context.Context, run func(context.Context) ([]byte, error)) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	probeContext, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	output, err := run(probeContext)
+	if contextErr := ctx.Err(); contextErr != nil {
+		return nil, contextErr
+	}
+	if contextErr := probeContext.Err(); contextErr != nil {
+		return nil, contextErr
+	}
+	return output, err
+}
+
+func runSchemaProbe(ctx context.Context, run func(context.Context) (string, error)) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	probeContext, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	digest, err := run(probeContext)
+	if contextErr := ctx.Err(); contextErr != nil {
+		return "", contextErr
+	}
+	if contextErr := probeContext.Err(); contextErr != nil {
+		return "", contextErr
+	}
+	return digest, err
+}
 
 func (osCommandRunner) Run(ctx context.Context, executable string, args ...string) ([]byte, error) {
 	command := exec.CommandContext(ctx, executable, args...)
@@ -111,10 +145,12 @@ func Probe(ctx context.Context, executable string, runners ...CommandRunner) (Pr
 			"Codex app-server native session behavior is unverified",
 		),
 	}
-	versionOutput, err := runner.Run(ctx, executable, "--version")
+	versionOutput, err := runProbe(ctx, func(probeContext context.Context) ([]byte, error) {
+		return runner.Run(probeContext, executable, "--version")
+	})
 	if err != nil {
-		if contextErr := ctx.Err(); contextErr != nil {
-			return result, contextErr
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return result, err
 		}
 		result.Capabilities.Unsupported[string(harness.CapabilityStart)] = "codex version probe failed"
 		return result, fmt.Errorf("%w: codex --version: %v", harness.ErrHarnessUnavailable, err)
@@ -130,10 +166,12 @@ func Probe(ctx context.Context, executable string, runners ...CommandRunner) (Pr
 		return result, fmt.Errorf("%w: codex %s is not in the tested version set", harness.ErrUnsupportedVersion, result.Version)
 	}
 
-	helpOutput, err := runner.Run(ctx, executable, "app-server", "--help")
+	helpOutput, err := runProbe(ctx, func(probeContext context.Context) ([]byte, error) {
+		return runner.Run(probeContext, executable, "app-server", "--help")
+	})
 	if err != nil {
-		if contextErr := ctx.Err(); contextErr != nil {
-			return result, contextErr
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return result, err
 		}
 		return result, fmt.Errorf("%w: codex app-server help probe failed: %v", harness.ErrNativeUnverified, err)
 	}
@@ -146,8 +184,13 @@ func Probe(ctx context.Context, executable string, runners ...CommandRunner) (Pr
 	if !ok {
 		return result, fmt.Errorf("%w: exact generated app-server schema was not captured", harness.ErrNativeUnverified)
 	}
-	digest, err := schemaRunner.SchemaDigest(ctx, executable)
+	digest, err := runSchemaProbe(ctx, func(probeContext context.Context) (string, error) {
+		return schemaRunner.SchemaDigest(probeContext, executable)
+	})
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return result, err
+		}
 		return result, fmt.Errorf("%w: Codex app-server schema probe failed: %v", harness.ErrNativeUnverified, err)
 	}
 	result.SchemaDigest = digest

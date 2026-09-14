@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
@@ -15,6 +16,7 @@ import (
 const (
 	DefaultExecutable = "pi"
 	TestedVersion     = "0.85.1"
+	probeTimeout      = time.Second
 )
 
 // CommandRunner permits deterministic version/help probe tests without a
@@ -24,6 +26,22 @@ type CommandRunner interface {
 }
 
 type osCommandRunner struct{}
+
+func runProbe(ctx context.Context, run func(context.Context) ([]byte, error)) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	probeContext, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	output, err := run(probeContext)
+	if contextErr := ctx.Err(); contextErr != nil {
+		return nil, contextErr
+	}
+	if contextErr := probeContext.Err(); contextErr != nil {
+		return nil, contextErr
+	}
+	return output, err
+}
 
 func (osCommandRunner) Run(ctx context.Context, executable string, args ...string) ([]byte, error) {
 	command := exec.CommandContext(ctx, executable, args...)
@@ -68,10 +86,12 @@ func Probe(ctx context.Context, executable string, runners ...CommandRunner) (Pr
 			"pi native RPC lifecycle behavior is unverified",
 		),
 	}
-	versionOutput, err := runner.Run(ctx, executable, "--version")
+	versionOutput, err := runProbe(ctx, func(probeContext context.Context) ([]byte, error) {
+		return runner.Run(probeContext, executable, "--version")
+	})
 	if err != nil {
-		if contextErr := ctx.Err(); contextErr != nil {
-			return result, contextErr
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return result, err
 		}
 		result.Capabilities.Unsupported[string(harness.CapabilityStart)] = "pi version probe failed"
 		return result, fmt.Errorf("%w: pi --version: %v", harness.ErrHarnessUnavailable, err)
@@ -86,10 +106,12 @@ func Probe(ctx context.Context, executable string, runners ...CommandRunner) (Pr
 	if result.Version != TestedVersion {
 		return result, fmt.Errorf("%w: pi %s is not in the tested version set", harness.ErrUnsupportedVersion, result.Version)
 	}
-	helpOutput, err := runner.Run(ctx, executable, "--help")
+	helpOutput, err := runProbe(ctx, func(probeContext context.Context) ([]byte, error) {
+		return runner.Run(probeContext, executable, "--help")
+	})
 	if err != nil {
-		if contextErr := ctx.Err(); contextErr != nil {
-			return result, contextErr
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return result, err
 		}
 		return result, fmt.Errorf("%w: pi help probe failed: %v", harness.ErrNativeUnverified, err)
 	}

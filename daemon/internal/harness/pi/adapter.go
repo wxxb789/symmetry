@@ -177,11 +177,15 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 	}
 	session := newNativeSession(processContext, cancel, sink, cancelTimeout, resumeState)
 	invocation := execution.Invocation{
-		Program:        adapter.executable,
-		Args:           args,
-		Dir:            request.Workspace,
-		Env:            append([]string(nil), request.Invocation.Env...),
-		PersistProcess: request.PersistProcess,
+		Program:                 adapter.executable,
+		Args:                    args,
+		Dir:                     request.Workspace,
+		Env:                     append([]string(nil), request.Invocation.Env...),
+		InitialLeaseDeadline:    request.Invocation.InitialLeaseDeadline,
+		InitialLeaseDeadlineAt:  request.Invocation.InitialLeaseDeadlineAt,
+		InitialLeaseSequence:    request.Invocation.InitialLeaseSequence,
+		PersistProcess:          request.PersistProcess,
+		PersistProcessAuthority: request.PersistProcessAuthority,
 	}
 	process, err := adapter.startProcess(processContext, invocation, execution.SinkFunc(session.handleProcessOutput))
 	if isNilNativeProcess(process) {
@@ -412,6 +416,33 @@ func (session *nativeSession) ProcessDetails() (int, string) {
 		return 0, ""
 	}
 	return session.process.ProcessDetails()
+}
+
+func (session *nativeSession) LeaseRenewalAvailable() bool {
+	if session == nil {
+		return false
+	}
+	session.mutex.Lock()
+	process := session.process
+	session.mutex.Unlock()
+	renewer, ok := process.(interface{ LeaseRenewalAvailable() bool })
+	return ok && renewer.LeaseRenewalAvailable()
+}
+
+func (session *nativeSession) RenewLease(deadline time.Duration, sequence uint64) error {
+	if session == nil {
+		return errors.ErrUnsupported
+	}
+	session.mutex.Lock()
+	process := session.process
+	session.mutex.Unlock()
+	renewer, ok := process.(interface {
+		RenewLease(time.Duration, uint64) error
+	})
+	if !ok {
+		return errors.ErrUnsupported
+	}
+	return renewer.RenewLease(deadline, sequence)
 }
 
 // Open establishes a retained native session by matching the get_state
@@ -927,7 +958,10 @@ func (session *nativeSession) handleProcessOutputLocked(ctx context.Context, eve
 
 func (session *nativeSession) handleRecord(ctx context.Context, processEvent execution.Event, record Record) error {
 	if record.DecodeError != nil {
-		_ = session.emit(harness.Event{Kind: harness.EventDiagnostic, Stream: string(processEvent.Stream), Sequence: record.Sequence, At: processEvent.At, Diagnostic: true, Code: "invalid_native_record", Message: record.DecodeError.Error()})
+		emitErr := session.emit(harness.Event{Kind: harness.EventDiagnostic, Stream: string(processEvent.Stream), Sequence: record.Sequence, At: processEvent.At, Diagnostic: true, Code: "invalid_native_record", Message: record.DecodeError.Error()})
+		if emitErr != nil {
+			return errors.Join(record.DecodeError, emitErr)
+		}
 		return record.DecodeError
 	}
 	if err := session.emit(harness.Event{Kind: harness.EventNativeFrame, Stream: string(processEvent.Stream), Sequence: record.Sequence, At: processEvent.At}); err != nil {

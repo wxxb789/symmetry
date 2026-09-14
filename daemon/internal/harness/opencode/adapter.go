@@ -28,6 +28,7 @@ const (
 	TestedVersion           = "1.18.30"
 	defaultHealthRetryDelay = 50 * time.Millisecond
 	defaultTerminationGrace = 5 * time.Second
+	probeTimeout            = time.Second
 	streamReadChunkSize     = 32 * 1024
 	maxReadinessLineBytes   = 4096
 )
@@ -47,6 +48,22 @@ type CommandRunner interface {
 }
 
 type osCommandRunner struct{}
+
+func runProbe(ctx context.Context, run func(context.Context) ([]byte, error)) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	probeContext, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	output, err := run(probeContext)
+	if contextErr := ctx.Err(); contextErr != nil {
+		return nil, contextErr
+	}
+	if contextErr := probeContext.Err(); contextErr != nil {
+		return nil, contextErr
+	}
+	return output, err
+}
 
 func (osCommandRunner) Run(ctx context.Context, executable string, args ...string) ([]byte, error) {
 	command := exec.CommandContext(ctx, executable, args...)
@@ -167,10 +184,12 @@ func (adapter *Adapter) Probe(ctx context.Context) (harness.Capabilities, error)
 	if runner == nil {
 		runner = osCommandRunner{}
 	}
-	versionOutput, err := runner.Run(ctx, adapter.executable, "--version")
+	versionOutput, err := runProbe(ctx, func(probeContext context.Context) ([]byte, error) {
+		return runner.Run(probeContext, adapter.executable, "--version")
+	})
 	if err != nil {
-		if contextErr := ctx.Err(); contextErr != nil {
-			return harness.Capabilities{}, contextErr
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return harness.Capabilities{}, err
 		}
 		capabilities.Unsupported[string(harness.CapabilityStart)] = "opencode version probe failed"
 		return capabilities, fmt.Errorf("%w: opencode --version: %v", harness.ErrHarnessUnavailable, err)
@@ -184,10 +203,12 @@ func (adapter *Adapter) Probe(ctx context.Context) (harness.Capabilities, error)
 	if version != TestedVersion {
 		return capabilities, fmt.Errorf("%w: OpenCode %s is not in the tested version set", harness.ErrUnsupportedVersion, version)
 	}
-	helpOutput, err := runner.Run(ctx, adapter.executable, "serve", "--help")
+	helpOutput, err := runProbe(ctx, func(probeContext context.Context) ([]byte, error) {
+		return runner.Run(probeContext, adapter.executable, "serve", "--help")
+	})
 	if err != nil {
-		if contextErr := ctx.Err(); contextErr != nil {
-			return harness.Capabilities{}, contextErr
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return harness.Capabilities{}, err
 		}
 		return capabilities, fmt.Errorf("%w: OpenCode serve help probe failed: %v", harness.ErrNativeUnverified, err)
 	}
@@ -262,11 +283,15 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 	eventContext, cancelEvents := context.WithCancel(ctx)
 	session := newNativeSession(sessionContext, cancel, eventContext, cancelEvents, sink, request.Workspace, adapter.newAPI, username, password, adapter.newPeerVerifier, adapter.healthRetryWait, adapter.terminationWait)
 	invocation := execution.Invocation{
-		Program:        adapter.executable,
-		Args:           []string{"serve", "--hostname", "127.0.0.1", "--port", "0", "--pure"},
-		Dir:            request.Workspace,
-		Env:            appendCredentialEnvironment(request.Invocation.Env, username, password),
-		PersistProcess: request.PersistProcess,
+		Program:                 adapter.executable,
+		Args:                    []string{"serve", "--hostname", "127.0.0.1", "--port", "0", "--pure"},
+		Dir:                     request.Workspace,
+		Env:                     appendCredentialEnvironment(request.Invocation.Env, username, password),
+		InitialLeaseDeadline:    request.Invocation.InitialLeaseDeadline,
+		InitialLeaseDeadlineAt:  request.Invocation.InitialLeaseDeadlineAt,
+		InitialLeaseSequence:    request.Invocation.InitialLeaseSequence,
+		PersistProcess:          request.PersistProcess,
+		PersistProcessAuthority: request.PersistProcessAuthority,
 	}
 	process, err := adapter.startProcess(sessionContext, invocation, execution.SinkFunc(session.handleProcessOutput))
 	if isNilNativeProcess(process) {
@@ -436,6 +461,33 @@ func (session *nativeSession) ProcessDetails() (int, string) {
 		return 0, ""
 	}
 	return process.ProcessDetails()
+}
+
+func (session *nativeSession) LeaseRenewalAvailable() bool {
+	if session == nil {
+		return false
+	}
+	session.mu.Lock()
+	process := session.process
+	session.mu.Unlock()
+	renewer, ok := process.(interface{ LeaseRenewalAvailable() bool })
+	return ok && renewer.LeaseRenewalAvailable()
+}
+
+func (session *nativeSession) RenewLease(deadline time.Duration, sequence uint64) error {
+	if session == nil {
+		return errors.ErrUnsupported
+	}
+	session.mu.Lock()
+	process := session.process
+	session.mu.Unlock()
+	renewer, ok := process.(interface {
+		RenewLease(time.Duration, uint64) error
+	})
+	if !ok {
+		return errors.ErrUnsupported
+	}
+	return renewer.RenewLease(deadline, sequence)
 }
 
 // Open establishes authenticated readiness and persists the server-returned
@@ -1013,8 +1065,7 @@ func (session *nativeSession) watchSessionEvents(stream *streamHandle, done chan
 	decoder := NewDecoder(defaultMaxFrameBytes)
 	validator, err := NewSessionEventValidator(sessionID, 0)
 	if err != nil {
-		streamErr = err
-		session.recordStreamError(err)
+		streamErr = session.recordStreamError(err)
 		return
 	}
 	buffer := make([]byte, streamReadChunkSize)
@@ -1023,13 +1074,11 @@ func (session *nativeSession) watchSessionEvents(stream *streamHandle, done chan
 		if count > 0 {
 			frames, feedErr := decoder.Feed(buffer[:count])
 			if feedErr != nil {
-				streamErr = feedErr
-				session.recordStreamError(feedErr)
+				streamErr = session.recordStreamError(feedErr)
 				return
 			}
 			if err := session.observeSessionFrames(validator, frames, messageID); err != nil {
-				streamErr = err
-				session.recordStreamError(err)
+				streamErr = session.recordStreamError(err)
 				return
 			}
 		}
@@ -1037,23 +1086,20 @@ func (session *nativeSession) watchSessionEvents(stream *streamHandle, done chan
 			continue
 		}
 		if !errors.Is(readErr, io.EOF) {
-			streamErr = readErr
-			session.recordStreamError(readErr)
+			streamErr = session.recordStreamError(readErr)
 			return
 		}
 		frames, err := decoder.Close()
 		if err != nil {
-			streamErr = err
-			session.recordStreamError(err)
+			streamErr = session.recordStreamError(err)
 			return
 		}
 		if err := session.observeSessionFrames(validator, frames, messageID); err != nil {
-			streamErr = err
-			session.recordStreamError(err)
+			streamErr = session.recordStreamError(err)
 			return
 		}
 		streamErr = errStreamEndedUnknown
-		session.recordStreamError(streamErr)
+		streamErr = session.recordStreamError(streamErr)
 		return
 	}
 }
@@ -1149,16 +1195,21 @@ func (session *nativeSession) finishReadiness(cause error) {
 	session.readinessOnce.Do(func() { close(session.readinessDone) })
 }
 
-func (session *nativeSession) recordStreamError(err error) {
+func (session *nativeSession) recordStreamError(err error) error {
 	if err == nil {
-		return
+		return nil
+	}
+	diagnosticErr := session.emit(session.eventContext, harness.Event{Kind: harness.EventDiagnostic, Diagnostic: true, Code: "opencode_stream_error", Message: "OpenCode durable event stream failed; native identifiers withheld"})
+	combinedErr := err
+	if diagnosticErr != nil {
+		combinedErr = errors.Join(err, diagnosticErr)
 	}
 	session.mu.Lock()
 	if session.streamErr == nil {
-		session.streamErr = err
+		session.streamErr = combinedErr
 	}
 	session.mu.Unlock()
-	_ = session.emit(session.eventContext, harness.Event{Kind: harness.EventDiagnostic, Diagnostic: true, Code: "opencode_stream_error", Message: "OpenCode durable event stream failed; native identifiers withheld"})
+	return combinedErr
 }
 
 func (session *nativeSession) emit(ctx context.Context, event harness.Event) error {

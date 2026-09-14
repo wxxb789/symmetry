@@ -809,6 +809,28 @@ func TestMalformedRecordAfterSemanticTurnInvalidatesFinalWaitResult(t *testing.T
 	}
 }
 
+func TestMalformedRecordPreservesDiagnosticDurabilityFailure(t *testing.T) {
+	decodeErr := errors.New("malformed pi record")
+	durabilityErr := errors.New("journal append failed")
+	session := newNativeSession(
+		context.Background(),
+		func() {},
+		harness.EventSinkFunc(func(_ context.Context, event harness.Event) error {
+			if event.Code == "invalid_native_record" {
+				return durabilityErr
+			}
+			return nil
+		}),
+		time.Second,
+		nil,
+	)
+
+	err := session.handleRecord(context.Background(), execution.Event{Stream: execution.Stdout}, Record{Sequence: 1, DecodeError: decodeErr})
+	if !errors.Is(err, decodeErr) || !errors.Is(err, durabilityErr) {
+		t.Fatalf("handleRecord() error = %v, want malformed and durability errors", err)
+	}
+}
+
 func TestProbeRemainsNativeUnverifiedWithAllExecutableCapabilitiesFalse(t *testing.T) {
 	runner := fakeCommandRunner{outputs: map[string][]byte{
 		"--version": []byte("0.85.1\n"),
@@ -823,6 +845,79 @@ func TestProbeRemainsNativeUnverifiedWithAllExecutableCapabilitiesFalse(t *testi
 	}
 	if err := result.Capabilities.Validate(); err != nil {
 		t.Fatalf("Capabilities.Validate() error = %v", err)
+	}
+}
+
+func TestProbeBoundsHangingRunnerAndPreservesCancellation(t *testing.T) {
+	for _, test := range []struct {
+		name             string
+		context          func() (context.Context, context.CancelFunc)
+		want             error
+		cancelAfterStart bool
+		waitWithin       time.Duration
+	}{
+		{name: "local timeout", context: func() (context.Context, context.CancelFunc) { return context.Background(), func() {} }, want: context.DeadlineExceeded, waitWithin: probeTimeout + time.Second},
+		{name: "caller earlier deadline", context: func() (context.Context, context.CancelFunc) {
+			return newProbeDeadlineContext()
+		}, want: context.DeadlineExceeded, cancelAfterStart: true, waitWithin: time.Second},
+		{name: "caller cancellation", context: func() (context.Context, context.CancelFunc) { return context.WithCancel(context.Background()) }, want: context.Canceled, cancelAfterStart: true, waitWithin: time.Second},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := test.context()
+			defer cancel()
+			runner := hangingCommandRunner{started: make(chan struct{})}
+			done := make(chan error, 1)
+			go func() {
+				_, err := Probe(ctx, "pi", runner)
+				done <- err
+			}()
+			select {
+			case <-runner.started:
+			case <-time.After(time.Second):
+				t.Fatal("Probe() did not start the runner")
+			}
+			if test.cancelAfterStart {
+				cancel()
+			}
+			var err error
+			select {
+			case err = <-done:
+			case <-time.After(test.waitWithin):
+				t.Fatalf("Probe() did not return within %v", test.waitWithin)
+			}
+			if !errors.Is(err, test.want) {
+				t.Fatalf("Probe() error = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
+func TestProbeRejectsSuccessfulRunnerResultAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runner := &cancellationSuccessRunner{started: make(chan struct{})}
+	done := make(chan error, 1)
+	go func() {
+		_, err := Probe(ctx, "pi", runner)
+		done <- err
+	}()
+	select {
+	case <-runner.started:
+	case <-time.After(time.Second):
+		t.Fatal("Probe() did not start the injected runner")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Probe() error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Probe() did not return after cancellation")
+	}
+	calls := runner.callsSnapshot()
+	if len(calls) != 1 || calls[0] != "--version" {
+		t.Fatalf("injected runner calls = %v, want only --version", calls)
 	}
 }
 
@@ -1214,6 +1309,83 @@ func (sink *recordingHarnessSink) has(kind harness.EventKind) bool {
 type fakeCommandRunner struct {
 	outputs map[string][]byte
 	err     error
+}
+
+type hangingCommandRunner struct {
+	started chan struct{}
+}
+
+func (runner hangingCommandRunner) Run(ctx context.Context, _ string, _ ...string) ([]byte, error) {
+	if runner.started != nil {
+		close(runner.started)
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+type cancellationSuccessRunner struct {
+	started     chan struct{}
+	startedOnce sync.Once
+	mutex       sync.Mutex
+	calls       []string
+}
+
+func (runner *cancellationSuccessRunner) Run(ctx context.Context, _ string, args ...string) ([]byte, error) {
+	key := strings.Join(args, " ")
+	runner.mutex.Lock()
+	runner.calls = append(runner.calls, key)
+	runner.mutex.Unlock()
+	if key == "--version" {
+		runner.startedOnce.Do(func() { close(runner.started) })
+		<-ctx.Done()
+		return []byte("0.85.1\n"), nil
+	}
+	return []byte("--mode <mode> rpc"), nil
+}
+
+func (runner *cancellationSuccessRunner) callsSnapshot() []string {
+	runner.mutex.Lock()
+	defer runner.mutex.Unlock()
+	return append([]string(nil), runner.calls...)
+}
+
+type probeDeadlineContext struct {
+	done chan struct{}
+	once sync.Once
+	mu   sync.Mutex
+	err  error
+}
+
+func newProbeDeadlineContext() (context.Context, context.CancelFunc) {
+	ctx := &probeDeadlineContext{done: make(chan struct{})}
+	return ctx, ctx.expire
+}
+
+func (ctx *probeDeadlineContext) Deadline() (time.Time, bool) {
+	return time.Unix(0, 0), true
+}
+
+func (ctx *probeDeadlineContext) Done() <-chan struct{} {
+	return ctx.done
+}
+
+func (ctx *probeDeadlineContext) Err() error {
+	ctx.mu.Lock()
+	defer ctx.mu.Unlock()
+	return ctx.err
+}
+
+func (*probeDeadlineContext) Value(any) any {
+	return nil
+}
+
+func (ctx *probeDeadlineContext) expire() {
+	ctx.once.Do(func() {
+		ctx.mu.Lock()
+		ctx.err = context.DeadlineExceeded
+		ctx.mu.Unlock()
+		close(ctx.done)
+	})
 }
 
 func (runner fakeCommandRunner) Run(_ context.Context, _ string, args ...string) ([]byte, error) {
