@@ -1336,6 +1336,8 @@ defmodule SymmetryControl.PiControlE2ETest do
     assert is_nil(target_session.active_run_id)
     refute source_session.local_handle_id == target_session.local_handle_id
 
+    await_empty_goal_outbox!(context.daemon_port, context.state_dir, target_run_key)
+
     session_journals =
       context.state_dir
       |> Path.join("sessions")
@@ -1362,8 +1364,6 @@ defmodule SymmetryControl.PiControlE2ETest do
     assert target_journal["stop_certificate"]["run_id"] == target_run.id
     refute target_journal["native_session_id"] == source_journal["native_session_id"]
     refute target_journal["local_handle_id"] == source_journal["local_handle_id"]
-
-    await_empty_goal_outbox!(context.daemon_port, context.state_dir, target_run_key)
 
     assert {:ok, %{"settlement" => "awaiting_validation"}} =
              Goals.settle_task(target_task.id, target_run.id, target_run.generation)
