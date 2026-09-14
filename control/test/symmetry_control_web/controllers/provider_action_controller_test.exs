@@ -2390,7 +2390,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
 
     Enum.each(Map.keys(state.jobs), fn pid ->
       reference = Process.monitor(pid)
-      assert_receive {:DOWN, ^reference, :process, ^pid, _reason}
+      assert_receive {:DOWN, ^reference, :process, ^pid, _reason}, 5_000
     end)
 
     :sys.get_state(SymmetryControl.Integrations.ProviderAccess)
