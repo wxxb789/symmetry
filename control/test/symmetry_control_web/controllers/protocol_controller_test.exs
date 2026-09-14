@@ -2,8 +2,10 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
   use SymmetryControlWeb.ConnCase, async: false
 
   alias SymmetryControl.Orchestration
+  alias SymmetryControl.Orchestration.{Run, Task}
   alias SymmetryControl.Orchestration.Scheduler
   alias SymmetryControl.Repo
+  alias SymmetryControlWeb.Protocol
 
   @enrollment_token "test-enrollment-token"
   @operator_token "test-operator-token"
@@ -31,6 +33,20 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
       assert response.status == status
       assert %{"error" => %{"code" => ^code}} = Jason.decode!(response.resp_body)
     end
+  end
+
+  test "keeps lease remaining metadata additive when response rendering is delayed" do
+    lease_expires_at = ~U[2026-09-14 00:00:30.000000Z]
+    run = %Run{lease_expires_at: lease_expires_at}
+    task = %Task{}
+    before_expiry = DateTime.add(lease_expires_at, -1, :millisecond)
+    after_expiry = DateTime.add(lease_expires_at, 1, :millisecond)
+
+    assert %{lease_remaining_ms: 1} = Protocol.claimed_run(run, task, nil, before_expiry)
+    refute Map.has_key?(Protocol.claimed_run(run, task, nil, after_expiry), :lease_remaining_ms)
+
+    assert %{lease_remaining_ms: 1} = Protocol.lease_heartbeat(run, [], before_expiry)
+    refute Map.has_key?(Protocol.lease_heartbeat(run, [], after_expiry), :lease_remaining_ms)
   end
 
   test "uses the resource-oriented machine, runtime, run, and acknowledgement routes", %{
@@ -103,10 +119,18 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
              )
              |> json_response(200)
 
-    assert %{"lease_expires_at" => _, "commands" => []} =
-             bearer(conn, machine_token)
-             |> patch("/api/v1/runs/#{run_id}/lease", Map.put(fence, "run_id", uuid()))
-             |> json_response(200)
+    heartbeat =
+      bearer(conn, machine_token)
+      |> patch("/api/v1/runs/#{run_id}/lease", Map.put(fence, "run_id", uuid()))
+      |> json_response(200)
+
+    assert %{
+             "lease_expires_at" => _,
+             "lease_remaining_ms" => lease_remaining_ms,
+             "commands" => []
+           } = heartbeat
+
+    assert is_integer(lease_remaining_ms) and lease_remaining_ms > 0
 
     command =
       bearer(conn, @operator_token)
@@ -539,6 +563,24 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
     assert_error(
       bearer(conn, machine_token)
       |> patch("/api/v1/runs/#{run_id}/lease", Map.update!(fence, "runtime_epoch", &(&1 + 1))),
+      409,
+      "ownership_lost"
+    )
+  end
+
+  test "an expired lease returns ownership_lost instead of a zero remaining lease", %{conn: conn} do
+    {machine_id, machine_token} = enroll(conn)
+    runtime_id = register(conn, machine_id, machine_token)
+    _task_id = submit_and_assign(conn)
+    {run_id, _generation, fence} = claim(conn, machine_token, runtime_id)
+
+    Repo.get!(Run, run_id)
+    |> Ecto.Changeset.change(lease_expires_at: DateTime.add(DateTime.utc_now(), -1, :second))
+    |> Repo.update!()
+
+    assert_error(
+      bearer(conn, machine_token)
+      |> patch("/api/v1/runs/#{run_id}/lease", Map.put(fence, "run_id", run_id)),
       409,
       "ownership_lost"
     )

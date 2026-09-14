@@ -195,24 +195,37 @@ defmodule SymmetryControlWeb.Protocol do
     }
   end
 
+  def lease_heartbeat(%Run{} = run, commands, %DateTime{} = server_time)
+      when is_list(commands) do
+    %{
+      lease_expires_at: iso8601(run.lease_expires_at),
+      commands: Enum.map(commands, &command/1)
+    }
+    |> put_positive_lease_remaining(run.lease_expires_at, server_time)
+  end
+
   def reconcile(snapshot) do
     snapshot
     |> snapshot()
     |> Map.put(:decisions, Enum.map(snapshot.decisions, &decision/1))
   end
 
-  def claimed_run(%Run{} = run, %Task{} = task, provider_access \\ nil) do
-    response = %{
-      run_id: run.id,
-      task_id: task.id,
-      generation: run.generation,
-      harness_session_id: run.harness_session_id,
-      harness_binding_id: run.harness_binding_id,
-      claim_id: run.claim_id,
-      lease_token: run.lease_token,
-      lease_expires_at: iso8601(run.lease_expires_at),
-      work: work(task)
-    }
+  def claimed_run(%Run{} = run, %Task{} = task, provider_access \\ nil, server_time \\ nil) do
+    server_time = server_time || DateTime.utc_now()
+
+    response =
+      %{
+        run_id: run.id,
+        task_id: task.id,
+        generation: run.generation,
+        harness_session_id: run.harness_session_id,
+        harness_binding_id: run.harness_binding_id,
+        claim_id: run.claim_id,
+        lease_token: run.lease_token,
+        lease_expires_at: iso8601(run.lease_expires_at),
+        work: work(task)
+      }
+      |> put_positive_lease_remaining(run.lease_expires_at, server_time)
 
     case provider_access do
       nil ->
@@ -453,6 +466,17 @@ defmodule SymmetryControlWeb.Protocol do
 
   defp iso8601(nil), do: nil
   defp iso8601(%DateTime{} = value), do: DateTime.to_iso8601(value)
+
+  defp put_positive_lease_remaining(
+         response,
+         %DateTime{} = lease_expires_at,
+         %DateTime{} = server_time
+       ) do
+    case DateTime.diff(lease_expires_at, server_time, :millisecond) do
+      remaining when remaining > 0 -> Map.put(response, :lease_remaining_ms, remaining)
+      _ -> response
+    end
+  end
 
   defp waiting(nil), do: nil
 
