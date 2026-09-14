@@ -113,7 +113,7 @@ defmodule SymmetryControlWeb.DaemonController do
 
     with :ok <- owns_run(conn, run_id),
          {:ok, {run, task, provider_access}} <- claim_with_provider_access(run_id, request) do
-      json(conn, Protocol.claimed_run(run, task, provider_access))
+      json(conn, Protocol.claimed_run(run, task, provider_access, DateTime.utc_now()))
     else
       {:error, reason} -> Protocol.error(conn, reason)
     end
@@ -200,10 +200,7 @@ defmodule SymmetryControlWeb.DaemonController do
            Orchestration.renew_lease(run_id, fence, lease_duration_ms: config(:lease_duration_ms)),
          {:ok, snapshot} <-
            Orchestration.work_snapshot(run.runtime_id, Map.fetch!(fence, "runtime_epoch")) do
-      json(conn, %{
-        lease_expires_at: DateTime.to_iso8601(run.lease_expires_at),
-        commands: Enum.map(snapshot.commands, &Protocol.command/1)
-      })
+      json(conn, Protocol.lease_heartbeat(run, snapshot.commands, snapshot.server_time))
     else
       {:error, reason} -> Protocol.error(conn, reason)
     end

@@ -78,7 +78,8 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
              "task_id" => ^task_id,
              "generation" => ^generation,
              "claim_id" => ^claim_id,
-             "lease_token" => lease_token
+             "lease_token" => lease_token,
+             "lease_remaining_ms" => lease_remaining_ms
            } =
              bearer(conn, machine_token)
              |> put("/api/v1/runs/#{run_id}/claims/#{claim_id}", %{
@@ -89,6 +90,8 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
                "generation" => generation
              })
              |> json_response(200)
+
+    assert is_integer(lease_remaining_ms) and lease_remaining_ms > 0
 
     fence = fence(runtime_id, generation, claim_id, lease_token)
     backlog = String.duplicate("x", 1_100_000)
