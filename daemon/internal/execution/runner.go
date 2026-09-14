@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 )
 
@@ -76,19 +77,78 @@ type Invocation struct {
 	// PersistProcess runs immediately after the OS process identity is
 	// captured, before output readers or the Process value are exposed.
 	PersistProcess func(pid int, identity string) error
+	// PersistProcessAuthority runs immediately after PersistProcess for a
+	// supervisor-backed containment owner. Legacy callers may leave it nil.
+	PersistProcessAuthority func(pid int, identity string, value *authority.Supervisor) error
+	// PersistContainmentStopReceipt runs after the process containment boundary
+	// proves an empty tree and before an independent supervisor is released.
+	// A failure retains that helper authority for retry or restart recovery.
+	PersistContainmentStopReceipt func(pid int, identity string, receipt authority.StopReceipt) error
+	// InitialLeaseDeadline arms an optional independent containment watchdog
+	// after local authority persistence and before initial input is written. A
+	// zero value leaves legacy/test containment unchanged. When
+	// InitialLeaseDeadlineAt is set, it is authoritative and this field is only
+	// retained as the relative-duration fallback for older callers.
+	InitialLeaseDeadline time.Duration
+	// InitialLeaseDeadlineAt is the local monotonic deadline established at the
+	// claim request start. The runner recomputes the remaining duration immediately
+	// before arming the watchdog so attach, helper handshakes and persistence can
+	// only consume lease time.
+	InitialLeaseDeadlineAt time.Time
+	InitialLeaseSequence   uint64
+}
+
+// LeaseRenewer is an optional process capability. The app uses a type
+// assertion so legacy and unsupported-platform process fakes do not acquire a
+// second required lifecycle method.
+type LeaseRenewer interface {
+	RenewLease(deadline time.Duration, sequence uint64) error
+	LeaseRenewalAvailable() bool
 }
 
 // Runner starts coding-agent process invocations.
 type Runner struct {
 	configureProcess func(*exec.Cmd) error
 	attachProcess    func(*os.Process) (platform.Containment, string, error)
+	launchProcess    processLauncher
+	now              func() time.Time
 }
+
+// startedProcess is the small lifecycle boundary shared by the standard
+// library launcher and the Windows native suspended launcher. The latter does
+// not have an exec.Cmd-compatible ProcessState, so the process lifecycle is
+// deliberately carried by functions instead of a second process abstraction.
+type startedProcess struct {
+	command                       *exec.Cmd
+	pid                           int
+	identity                      string
+	containment                   platform.Containment
+	persistAuthority              func(int, string, *authority.Supervisor) error
+	containmentAuthority          *authority.Supervisor
+	persistStopReceipt            func(int, string, authority.StopReceipt) error
+	stopReceiptRequired           bool
+	containmentAuthorityUncertain bool
+	wait                          func() (int, error)
+	kill                          func() error
+	close                         func() error
+	resume                        func() error
+}
+
+type processLauncher func(
+	command *exec.Cmd,
+	invocation Invocation,
+	stdinRead, stdoutWrite, stderrWrite *os.File,
+) (*startedProcess, error)
+
+var errNativeProcessLauncherUnavailable = errors.New("native suspended process launcher is unavailable")
 
 // NewRunner creates a process runner.
 func NewRunner() Runner {
 	return Runner{
 		configureProcess: platform.ConfigureProcess,
 		attachProcess:    platform.AttachProcess,
+		launchProcess:    defaultProcessLauncher,
+		now:              time.Now,
 	}
 }
 
@@ -103,11 +163,17 @@ type Process struct {
 	// daemon instance can reject a recycled PID after restart.
 	Identity string
 
-	command     *exec.Cmd
-	sink        Sink
-	containment platform.Containment
-	sinkContext context.Context
-	cancelSink  context.CancelFunc
+	command                       *exec.Cmd
+	backend                       *startedProcess
+	sink                          Sink
+	containment                   platform.Containment
+	persistAuthority              func(int, string, *authority.Supervisor) error
+	containmentAuthority          *authority.Supervisor
+	persistStopReceipt            func(int, string, authority.StopReceipt) error
+	stopReceiptRequired           bool
+	containmentAuthorityUncertain bool
+	sinkContext                   context.Context
+	cancelSink                    context.CancelFunc
 
 	stdinMutex       sync.Mutex
 	stdin            *os.File
@@ -127,6 +193,13 @@ type Process struct {
 	sinkError        error
 	outputError      error
 	containmentError error
+
+	containmentFinalizeMutex       sync.Mutex
+	containmentFinalized           bool
+	containmentFinalizationStarted bool
+	containmentCloseAttempted      bool
+	containmentInitialError        error
+	containmentReceiptSaved        bool
 
 	terminationMutex sync.Mutex
 	terminationDone  chan struct{}
@@ -217,38 +290,160 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 	}
 
 	startedAt := time.Now().UTC()
-	if err := command.Start(); err != nil {
-		closeFiles(stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite)
-		return nil, fmt.Errorf("start %q: %w", invocation.Program, err)
-	}
-	containment, identity, err := runner.attach(command.Process)
-	if err != nil {
-		attachErr := fmt.Errorf("contain process tree for %q: %w", program, err)
-		return cleanupFailedStart(
-			command,
-			stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
-			containment, identity, startedAt,
-			attachErr,
-			attachErr,
-		)
-	}
-	if invocation.PersistProcess != nil {
-		if persistErr := invocation.PersistProcess(command.Process.Pid, identity); persistErr != nil {
-			return cleanupFailedStart(
-				command,
+	var started *startedProcess
+	if runner.launchProcess != nil {
+		started, err = runner.launchProcess(command, invocation, stdinRead, stdoutWrite, stderrWrite)
+		if err != nil && !errors.Is(err, errNativeProcessLauncherUnavailable) {
+			if started == nil {
+				closeFiles(stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite)
+				return nil, fmt.Errorf("start %q: %w", invocation.Program, err)
+			}
+			return cleanupFailedStartStarted(
+				started,
 				stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
-				containment, identity, startedAt,
+				startedAt,
+				fmt.Errorf("start %q: %w", invocation.Program, err),
+				err,
+			)
+		}
+		if err == nil && started == nil {
+			closeFiles(stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite)
+			return nil, fmt.Errorf("start %q: native launcher returned no process", invocation.Program)
+		}
+	}
+	if started == nil {
+		if err := command.Start(); err != nil {
+			closeFiles(stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite)
+			return nil, fmt.Errorf("start %q: %w", invocation.Program, err)
+		}
+		containment, identity, attachErr := runner.attach(command.Process)
+		started = legacyStartedProcess(command, containment, identity)
+		if attachErr != nil {
+			wrappedErr := fmt.Errorf("contain process tree for %q: %w", program, attachErr)
+			return cleanupFailedStartStarted(
+				started,
+				stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
+				startedAt,
+				wrappedErr,
+				wrappedErr,
+			)
+		}
+	}
+	containment := started.containment
+	identity := started.identity
+	if invocation.PersistProcess != nil {
+		if persistErr := invocation.PersistProcess(started.pid, identity); persistErr != nil {
+			return cleanupFailedStartStarted(
+				started,
+				stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
+				startedAt,
 				fmt.Errorf("persist process identity: %w", persistErr),
 				nil,
 			)
 		}
 	}
+	if invocation.PersistProcessAuthority == nil {
+		started.persistStopReceipt = invocation.PersistContainmentStopReceipt
+		started.stopReceiptRequired = invocation.PersistContainmentStopReceipt != nil
+	}
+	if invocation.PersistProcessAuthority != nil {
+		started.persistStopReceipt = invocation.PersistContainmentStopReceipt
+		started.stopReceiptRequired = invocation.PersistContainmentStopReceipt != nil
+		if capability, ok := containment.(platform.ContainmentAuthorityCapability); ok && !capability.ContainmentAuthorityAvailable() {
+			// The Windows test binary deliberately uses the legacy in-process
+			// containment seam because it cannot dispatch the daemon helper mode.
+			// No authority is exposed, so recovery remains conservative.
+		} else if provider, ok := containment.(platform.ContainmentAuthorityProvider); ok {
+			value := provider.ContainmentAuthority()
+			// Freeze the post-authority cleanup contract before invoking the
+			// callback. The callback may return an error after its atomic rename;
+			// either outcome must retain the receipt/release fence and remain
+			// retryable without falling back to AbortContainment.
+			started.containmentAuthorityUncertain = true
+			if value == nil {
+				const message = "containment authority is unavailable after process marker persistence"
+				return cleanupFailedStartStarted(
+					started,
+					stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
+					startedAt,
+					errors.New(message),
+					errors.New(message),
+				)
+			}
+			authorityCopy := value.Clone()
+			started.persistAuthority = invocation.PersistProcessAuthority
+			started.containmentAuthority = &authorityCopy
+			callbackAuthority := authorityCopy.Clone()
+			if persistErr := invocation.PersistProcessAuthority(started.pid, identity, &callbackAuthority); persistErr != nil {
+				return cleanupFailedStartStarted(
+					started,
+					stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
+					startedAt,
+					fmt.Errorf("persist process containment authority: %w", persistErr),
+					nil,
+				)
+			}
+			started.containmentAuthorityUncertain = false
+		}
+	}
+	if capability, ok := containment.(platform.ContainmentAuthorityCapability); ok && !capability.ContainmentAuthorityAvailable() {
+		// A legacy/noop containment owner has no independently releasable
+		// authority. Its local Close still proves the owned tree stopped, but it
+		// cannot produce the durable supervisor receipt used by the real helper.
+		// Do not turn the absence of that optional authority into a process
+		// failure when the daemon supplies the receipt callback unconditionally.
+		started.persistStopReceipt = nil
+		started.stopReceiptRequired = false
+	}
+	initialLeaseDeadline, initialLeaseRequested, deadlineErr := runner.initialLeaseDeadline(invocation)
+	if deadlineErr != nil {
+		return cleanupFailedStartStarted(
+			started,
+			stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
+			startedAt,
+			deadlineErr,
+			nil,
+		)
+	}
+	if initialLeaseRequested {
+		if renewer, ok := containment.(platform.ContainmentLeaseRenewer); ok && renewer.LeaseRenewalAvailable() {
+			if invocation.InitialLeaseSequence == 0 {
+				return cleanupFailedStartStarted(
+					started,
+					stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
+					startedAt,
+					errors.New("initial containment lease sequence is missing"),
+					nil,
+				)
+			}
+			if err := renewer.RenewLease(initialLeaseDeadline, invocation.InitialLeaseSequence); err != nil {
+				return cleanupFailedStartStarted(
+					started,
+					stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
+					startedAt,
+					fmt.Errorf("arm initial containment lease: %w", err),
+					nil,
+				)
+			}
+		}
+	}
+	if started.resume != nil {
+		if err := started.resume(); err != nil {
+			return cleanupFailedStartStarted(
+				started,
+				stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
+				startedAt,
+				fmt.Errorf("resume process %q: %w", program, err),
+				nil,
+			)
+		}
+	}
 
-	// These ends belong only to the child after Start. Closing them here is
+	// These ends belong only to the child after launch. Closing them here is
 	// essential: otherwise the readers would never observe EOF.
 	closeFiles(stdinRead, stdoutWrite, stderrWrite)
 
-	process := newProcess(command, sink, containment, identity, startedAt, stdinWrite)
+	process := newProcessFromStarted(started, sink, startedAt, stdinWrite, nil)
 	process.start(stdoutRead, stderrRead, ctx)
 
 	if len(invocation.InitialInput) > 0 {
@@ -262,6 +457,29 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 		}
 	}
 	return process, nil
+}
+
+var errInitialLeaseDeadlineExpired = errors.New("initial containment lease deadline has elapsed")
+
+func (runner Runner) currentTime() time.Time {
+	if runner.now != nil {
+		return runner.now()
+	}
+	return time.Now()
+}
+
+func (runner Runner) initialLeaseDeadline(invocation Invocation) (time.Duration, bool, error) {
+	if !invocation.InitialLeaseDeadlineAt.IsZero() {
+		remaining := invocation.InitialLeaseDeadlineAt.Sub(runner.currentTime())
+		if remaining <= 0 {
+			return 0, true, errInitialLeaseDeadlineExpired
+		}
+		return remaining, true, nil
+	}
+	if invocation.InitialLeaseDeadline > 0 {
+		return invocation.InitialLeaseDeadline, true, nil
+	}
+	return 0, false, nil
 }
 
 // cleanupAfterInputSetupFailure retains the post-start Process even when the
@@ -291,26 +509,57 @@ func (runner Runner) attach(process *os.Process) (platform.Containment, string, 
 	return platform.AttachProcess(process)
 }
 
+func legacyStartedProcess(command *exec.Cmd, containment platform.Containment, identity string) *startedProcess {
+	return &startedProcess{
+		command:     command,
+		pid:         command.Process.Pid,
+		identity:    identity,
+		containment: containment,
+		wait: func() (int, error) {
+			err := command.Wait()
+			code := -1
+			if command.ProcessState != nil {
+				code = command.ProcessState.ExitCode()
+			}
+			return code, err
+		},
+		kill: command.Process.Kill,
+	}
+}
+
 func newProcess(command *exec.Cmd, sink Sink, containment platform.Containment, identity string, startedAt time.Time, stdin *os.File) *Process {
+	return newProcessFromStarted(legacyStartedProcess(command, containment, identity), sink, startedAt, stdin, nil)
+}
+
+func newProcessFromStarted(started *startedProcess, sink Sink, startedAt time.Time, stdin *os.File, persistStopReceipt func(int, string, authority.StopReceipt) error) *Process {
+	if persistStopReceipt == nil && started != nil {
+		persistStopReceipt = started.persistStopReceipt
+	}
 	sinkContext, cancelSink := context.WithCancel(context.Background())
 	process := &Process{
-		PID:              command.Process.Pid,
-		Identity:         identity,
-		command:          command,
-		sink:             sink,
-		containment:      containment,
-		sinkContext:      sinkContext,
-		cancelSink:       cancelSink,
-		stdin:            stdin,
-		stdinWritePermit: make(chan struct{}, 1),
-		events:           make(chan Event, eventQueueCapacity),
-		deliveryDone:     make(chan struct{}),
-		resultDone:       make(chan struct{}),
-		commandDone:      make(chan struct{}),
-		terminationDone:  make(chan struct{}),
-		outputStop:       make(chan struct{}),
+		PID:                           started.pid,
+		Identity:                      started.identity,
+		command:                       started.command,
+		backend:                       started,
+		sink:                          sink,
+		containment:                   started.containment,
+		persistAuthority:              started.persistAuthority,
+		containmentAuthority:          started.containmentAuthority,
+		persistStopReceipt:            persistStopReceipt,
+		stopReceiptRequired:           started.stopReceiptRequired,
+		containmentAuthorityUncertain: started.containmentAuthorityUncertain,
+		sinkContext:                   sinkContext,
+		cancelSink:                    cancelSink,
+		stdin:                         stdin,
+		stdinWritePermit:              make(chan struct{}, 1),
+		events:                        make(chan Event, eventQueueCapacity),
+		deliveryDone:                  make(chan struct{}),
+		resultDone:                    make(chan struct{}),
+		commandDone:                   make(chan struct{}),
+		terminationDone:               make(chan struct{}),
+		outputStop:                    make(chan struct{}),
 		result: Result{
-			PID:       command.Process.Pid,
+			PID:       started.pid,
 			StartedAt: startedAt,
 		},
 	}
@@ -327,13 +576,12 @@ func (process *Process) start(stdoutRead, stderrRead *os.File, ctx context.Conte
 	go process.terminateWhenContextCancels(ctx)
 }
 
-// cleanupFailedStart hands physical cleanup to Process so an indeterminate
-// shutdown keeps its original process handle and is still reaped by one owner.
-func cleanupFailedStart(
-	command *exec.Cmd,
+// cleanupFailedStartStarted hands physical cleanup to Process so an
+// indeterminate shutdown keeps its original process handle and is still reaped
+// by one owner.
+func cleanupFailedStartStarted(
+	started *startedProcess,
 	stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite *os.File,
-	containment platform.Containment,
-	identity string,
 	startedAt time.Time,
 	startErr error,
 	containmentErr error,
@@ -341,13 +589,12 @@ func cleanupFailedStart(
 	// Do not expose pre-persistence output to the caller's sink. The cleanup
 	// Process still drains the pipes and owns the child wait.
 	closeFiles(stdinRead, stdoutWrite, stderrWrite)
-	process := newProcess(
-		command,
+	process := newProcessFromStarted(
+		started,
 		SinkFunc(func(context.Context, Event) error { return nil }),
-		containment,
-		identity,
 		startedAt,
 		stdinWrite,
+		nil,
 	)
 	process.recordContainmentError(containmentErr)
 	process.start(stdoutRead, stderrRead, context.Background())
@@ -467,7 +714,11 @@ func writeAll(stdin *os.File, input []byte) error {
 // Wait concurrently.
 func (process *Process) Wait() Result {
 	<-process.resultDone
-	return process.result
+	process.errorMutex.Lock()
+	result := process.result
+	result.ContainmentError = process.containmentError
+	process.errorMutex.Unlock()
+	return result
 }
 
 // ProcessDetails returns the restart-safe identity recorded when this process
@@ -477,6 +728,30 @@ func (process *Process) ProcessDetails() (int, string) {
 		return 0, ""
 	}
 	return process.PID, process.Identity
+}
+
+// LeaseRenewalAvailable reports whether the process has an independent local
+// containment watchdog. Unsupported and legacy containment remains usable
+// without this optional capability.
+func (process *Process) LeaseRenewalAvailable() bool {
+	if process == nil || process.containment == nil {
+		return false
+	}
+	renewer, ok := process.containment.(platform.ContainmentLeaseRenewer)
+	return ok && renewer.LeaseRenewalAvailable()
+}
+
+// RenewLease arms the independent containment watchdog with a relative local
+// deadline. The caller owns the monotonic sequence for this process authority.
+func (process *Process) RenewLease(deadline time.Duration, sequence uint64) error {
+	if process == nil || process.containment == nil {
+		return fmt.Errorf("%w: process containment lease is unavailable", errors.ErrUnsupported)
+	}
+	renewer, ok := process.containment.(platform.ContainmentLeaseRenewer)
+	if !ok || !renewer.LeaseRenewalAvailable() {
+		return fmt.Errorf("%w: process containment lease is unavailable", errors.ErrUnsupported)
+	}
+	return renewer.RenewLease(deadline, sequence)
 }
 
 // Terminate requests graceful process-tree termination, waits grace, then
@@ -491,7 +766,7 @@ func (process *Process) Terminate(ctx context.Context, grace time.Duration) erro
 		select {
 		case <-process.resultDone:
 			process.terminationMutex.Unlock()
-			return nil
+			return process.closeContainment()
 		default:
 		}
 		process.terminationStart = true
@@ -505,10 +780,27 @@ func (process *Process) Terminate(ctx context.Context, grace time.Duration) erro
 	select {
 	case <-done:
 		process.terminationMutex.Lock()
-		defer process.terminationMutex.Unlock()
-		return process.terminationError
+		terminationError := process.terminationError
+		process.terminationMutex.Unlock()
+		return errors.Join(terminationError, process.containmentFailure())
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+// FinalizeContainment retries only the durable receipt/release phase after the
+// process result is already final. It never waits for the child and never
+// reissues physical termination. Callers that have not observed resultDone get
+// an immediate error rather than creating an unbounded cleanup wait.
+func (process *Process) FinalizeContainment() error {
+	if process == nil {
+		return errors.New("process is nil")
+	}
+	select {
+	case <-process.resultDone:
+		return process.closeContainment()
+	default:
+		return errors.New("process result is not complete")
 	}
 }
 
@@ -570,7 +862,13 @@ func (process *Process) deliverOutput() {
 }
 
 func (process *Process) waitForCompletion() {
-	waitError := process.command.Wait()
+	exitCode := -1
+	var waitError error
+	if process.backend == nil || process.backend.wait == nil {
+		waitError = errors.New("process wait backend is unavailable")
+	} else {
+		exitCode, waitError = process.backend.wait()
+	}
 	close(process.commandDone)
 	_ = process.CloseInput()
 
@@ -585,6 +883,9 @@ func (process *Process) waitForCompletion() {
 	if process.terminationRequested() {
 		process.closeContainment()
 	}
+	if process.backend != nil && process.backend.close != nil {
+		process.recordContainmentError(process.backend.close())
+	}
 
 	process.terminationMutex.Lock()
 	terminated := process.terminated
@@ -592,7 +893,7 @@ func (process *Process) waitForCompletion() {
 	process.terminationMutex.Unlock()
 
 	process.errorMutex.Lock()
-	process.result.ExitCode = process.command.ProcessState.ExitCode()
+	process.result.ExitCode = exitCode
 	process.result.FinishedAt = time.Now().UTC()
 	process.result.Terminated = terminated
 	process.result.WaitError = waitError
@@ -642,7 +943,7 @@ func (process *Process) terminateTree(grace time.Duration) {
 	}
 
 	if process.containment == nil {
-		if err := process.command.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		if err := process.killProcess(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 			process.recordTerminationError(err)
 			return
 		}
@@ -655,7 +956,7 @@ func (process *Process) terminateTree(grace time.Duration) {
 		// sole termination mechanism for the root process. Otherwise a failed
 		// job/task-kill leaves command.Wait blocked forever after a failed
 		// initial-input cleanup path.
-		killErr := process.command.Process.Kill()
+		killErr := process.killProcess()
 		if errors.Is(killErr, os.ErrProcessDone) {
 			killErr = nil
 		}
@@ -663,6 +964,19 @@ func (process *Process) terminateTree(grace time.Duration) {
 		return
 	}
 	<-process.resultDone
+}
+
+func (process *Process) killProcess() error {
+	if process == nil {
+		return errors.New("process is nil")
+	}
+	if process.backend != nil && process.backend.kill != nil {
+		return process.backend.kill()
+	}
+	if process.command == nil || process.command.Process == nil {
+		return errors.New("process kill backend is unavailable")
+	}
+	return process.command.Process.Kill()
 }
 
 func isUnsupportedOnly(err error) bool {
@@ -681,10 +995,140 @@ func isUnsupportedOnly(err error) bool {
 	return errors.Is(err, errors.ErrUnsupported)
 }
 
-func (process *Process) closeContainment() {
-	if process.containment != nil {
-		process.recordContainmentError(process.containment.Close())
+func (process *Process) closeContainment() error {
+	if process == nil || process.containment == nil {
+		return nil
 	}
+	process.containmentFinalizeMutex.Lock()
+	defer process.containmentFinalizeMutex.Unlock()
+	if !process.containmentFinalizationStarted {
+		process.containmentFinalizationStarted = true
+		process.containmentInitialError = process.containmentFailure()
+	}
+	if process.containmentFinalized {
+		return process.containmentFinalizeError()
+	}
+	provider, hasReceiptProvider := process.containment.(platform.ContainmentStopReceiptProvider)
+	if !hasReceiptProvider && process.stopReceiptRequired {
+		err := errors.New("containment stop receipt provider is missing")
+		process.setContainmentError(errors.Join(process.containmentInitialError, err))
+		return err
+	}
+	if !hasReceiptProvider && process.containmentAuthorityUncertain {
+		err := errors.New("containment authority persistence is uncertain")
+		process.setContainmentError(errors.Join(process.containmentInitialError, err))
+		return err
+	}
+
+	if !process.containmentCloseAttempted {
+		process.containmentCloseAttempted = true
+		if err := process.containment.Close(); err != nil {
+			process.setContainmentError(errors.Join(process.containmentInitialError, err))
+			return err
+		}
+	}
+
+	if !hasReceiptProvider {
+		process.containmentFinalized = true
+		process.setContainmentError(process.containmentInitialError)
+		return nil
+	}
+	receipt, available := provider.ContainmentStopReceipt()
+	if available {
+		if process.containmentAuthorityUncertain {
+			if process.persistAuthority == nil || process.containmentAuthority == nil {
+				err := errors.New("containment authority persistence callback is unavailable")
+				process.setContainmentError(errors.Join(process.containmentInitialError, err))
+				return err
+			}
+			authorityCopy := process.containmentAuthority.Clone()
+			callbackAuthority := authorityCopy.Clone()
+			if err := process.persistAuthority(process.PID, process.Identity, &callbackAuthority); err != nil {
+				process.setContainmentError(errors.Join(process.containmentInitialError, fmt.Errorf("retry process containment authority persistence: %w", err)))
+				return err
+			}
+			process.containmentAuthorityUncertain = false
+		}
+		if !process.containmentReceiptSaved {
+			if process.persistStopReceipt == nil {
+				if process.containmentAuthorityUncertain {
+					err := errors.New("containment authority persistence is uncertain")
+					process.setContainmentError(errors.Join(process.containmentInitialError, err))
+					return err
+				}
+				if !process.stopReceiptRequired {
+					if aborter, ok := process.containment.(platform.ContainmentStopReceiptAborter); ok {
+						if err := aborter.AbortContainment(); err != nil {
+							process.setContainmentError(errors.Join(process.containmentInitialError, err))
+							return err
+						}
+						process.containmentReceiptSaved = true
+					} else {
+						err := errors.New("pre-authority containment abort capability is missing")
+						process.setContainmentError(errors.Join(process.containmentInitialError, err))
+						return err
+					}
+				} else {
+					err := errors.New("durable containment stop receipt callback is missing")
+					process.setContainmentError(errors.Join(process.containmentInitialError, err))
+					return err
+				}
+			}
+			if process.persistStopReceipt != nil {
+				if err := process.persistStopReceipt(process.PID, process.Identity, receipt); err != nil {
+					process.setContainmentError(errors.Join(process.containmentInitialError, fmt.Errorf("persist containment stop receipt: %w", err)))
+					return err
+				}
+				process.containmentReceiptSaved = true
+			}
+		}
+		if process.persistStopReceipt == nil && !process.stopReceiptRequired {
+			if process.containmentAuthorityUncertain {
+				err := errors.New("containment authority persistence is uncertain")
+				process.setContainmentError(errors.Join(process.containmentInitialError, err))
+				return err
+			}
+			// AbortContainment already performed the release.
+			process.containmentFinalized = true
+			process.setContainmentError(process.containmentInitialError)
+			return nil
+		}
+		if releaser, ok := process.containment.(platform.ContainmentStopReceiptReleaser); ok {
+			if err := releaser.ReleaseContainment(); err != nil {
+				process.setContainmentError(errors.Join(process.containmentInitialError, fmt.Errorf("release containment authority: %w", err)))
+				return err
+			}
+		} else {
+			err := errors.New("containment stop receipt releaser is missing")
+			process.setContainmentError(errors.Join(process.containmentInitialError, err))
+			return err
+		}
+	} else if process.stopReceiptRequired || process.containmentAuthorityUncertain {
+		err := errors.New("containment stop receipt is unavailable")
+		process.setContainmentError(errors.Join(process.containmentInitialError, err))
+		return err
+	}
+	process.containmentFinalized = true
+	process.setContainmentError(process.containmentInitialError)
+	return nil
+}
+
+func (process *Process) containmentFailure() error {
+	process.errorMutex.Lock()
+	defer process.errorMutex.Unlock()
+	return process.containmentError
+}
+
+func (process *Process) containmentFinalizeError() error {
+	process.errorMutex.Lock()
+	defer process.errorMutex.Unlock()
+	return process.containmentError
+}
+
+func (process *Process) setContainmentError(err error) {
+	process.errorMutex.Lock()
+	process.containmentError = err
+	process.errorMutex.Unlock()
 }
 
 func (process *Process) stopOutputDelivery() {

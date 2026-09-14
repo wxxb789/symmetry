@@ -693,6 +693,15 @@ func TestHelperProcess(t *testing.T) {
 			os.Exit(2)
 		}
 		_, _ = io.WriteString(os.Stdout, os.Getenv(values[0]))
+	case "startup-marker":
+		marker := os.Getenv("GO_RUNNER_START_MARKER")
+		if marker == "" {
+			os.Exit(2)
+		}
+		if err := os.WriteFile(marker, []byte("started"), 0o600); err != nil {
+			fmt.Fprint(os.Stderr, err)
+			os.Exit(4)
+		}
 	case "tree-parent":
 		child := exec.Command(os.Args[0], "-test.run=^TestHelperProcess$", "--", "tree-child")
 		child.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")

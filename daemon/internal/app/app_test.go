@@ -29,6 +29,28 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/workspace"
 )
 
+func TestActiveRunCanRenewAllowsStartingButRejectsClosedStates(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*runningRun)
+		want   bool
+	}{
+		{name: "starting", mutate: func(active *runningRun) { active.starting = true }, want: true},
+		{name: "stale", mutate: func(active *runningRun) { active.stale = true }, want: false},
+		{name: "terminal", mutate: func(active *runningRun) { active.terminal = true }, want: false},
+		{name: "renewal closed", mutate: func(active *runningRun) { active.leaseRenewalClosed = true }, want: false},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			active := &runningRun{process: &fakeProcess{}}
+			test.mutate(active)
+			if got := activeRunCanRenew(active); got != test.want {
+				t.Fatalf("activeRunCanRenew() = %t, want %t for %s", got, test.want, test.name)
+			}
+		})
+	}
+}
+
 func TestRunEnrollsOnceAndReusesPersistedIdentity(t *testing.T) {
 	store, err := state.New(t.TempDir())
 	if err != nil {

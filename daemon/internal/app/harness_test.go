@@ -2,8 +2,10 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -578,12 +580,13 @@ func TestHandoffAdmissionWithoutVerifiedCapabilityFailsBeforeWorkspaceAndNativeS
 
 func TestVerifiedPiAndOpenCodeHandoffAdmissionsStartNewNativeSessions(t *testing.T) {
 	for _, test := range []struct {
-		name       string
-		kind       harness.Kind
-		configKind string
+		name          string
+		kind          harness.Kind
+		configKind    string
+		nativeVersion string
 	}{
-		{name: "pi", kind: harness.KindPi, configKind: config.RuntimeHarnessPi},
-		{name: "opencode", kind: harness.KindOpenCode, configKind: config.RuntimeHarnessOpenCode},
+		{name: "pi", kind: harness.KindPi, configKind: config.RuntimeHarnessPi, nativeVersion: pi.TestedVersion},
+		{name: "opencode", kind: harness.KindOpenCode, configKind: config.RuntimeHarnessOpenCode, nativeVersion: opencode.TestedVersion},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			admission, present, err := parseAdmissionInput(validAdmissionInput())
@@ -593,11 +596,20 @@ func TestVerifiedPiAndOpenCodeHandoffAdmissionsStartNewNativeSessions(t *testing
 			sourceRunID := "00000000-0000-4000-8000-000000000007"
 			admission.SessionMode = protocol.SessionModeHandoff
 			admission.HandoffSourceRunID = &sourceRunID
-			capabilities := verifiedNativeCapabilities(test.kind)
+			admission.Subject.Commit = strings.Repeat("a", 40)
+			admission.Subject.TreeDigest = "sha256:" + strings.Repeat("b", 64)
+			subjectHash := testAdmissionSubjectHash(t, admission)
+			contextSnapshot := handoffContextSnapshot(t, admission, sourceRunID)
+			admission.ContextHash = contextSnapshot.ContentHash
+			capabilities := testVerifiedNativeCapabilities(test.kind)
 			capabilities.Handoff = true
+			if capabilities.NativeVersion != test.nativeVersion {
+				t.Fatalf("%s test witness native version = %q, want tested version %q", test.kind, capabilities.NativeVersion, test.nativeVersion)
+			}
 			result := validNativeTaskResult(t, admission)
 			app, store, session, controlClient := nativeAdmissionDaemonForHarness(t, admission, result, nil, test.kind, test.configKind, capabilities)
 			defer store.Close()
+			controlClient.contextSnapshot = &contextSnapshot
 
 			app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
 			app.workers.Wait()
@@ -615,8 +627,64 @@ func TestVerifiedPiAndOpenCodeHandoffAdmissionsStartNewNativeSessions(t *testing
 			if session.request.LocalHandleID == "" || session.request.LocalHandleID == sourceRunID {
 				t.Fatalf("handoff local handle = %q, want new local native handle", session.request.LocalHandleID)
 			}
-			if session.turnRequest.Goal != controlClient.work.Goal || len(session.turnRequest.Context) == 0 || !strings.Contains(string(session.turnRequest.Context), admission.ContextSnapshotID) {
+			if session.turnRequest.Goal != controlClient.work.Goal || len(session.turnRequest.Context) == 0 {
 				t.Fatalf("handoff turn request = %#v, want canonical Goal and context", session.turnRequest)
+			}
+			var deliveredContext control.GoalContextSnapshot
+			if err := json.Unmarshal(session.turnRequest.Context, &deliveredContext); err != nil {
+				t.Fatalf("decode delivered handoff context: %v; payload=%s", err, session.turnRequest.Context)
+			}
+			if deliveredContext.SchemaVersion != "symmetry.context_snapshot.v1" ||
+				deliveredContext.SnapshotID != admission.ContextSnapshotID ||
+				deliveredContext.GoalID != admission.GoalID ||
+				deliveredContext.GoalRevision != admission.GoalRevision ||
+				!equalOptionalGoalString(deliveredContext.WorkItemID, admission.WorkItemID) ||
+				deliveredContext.ContentHash != admission.ContextHash ||
+				deliveredContext.Subject != admission.Subject ||
+				deliveredContext.WorkContract.Purpose != string(admission.Purpose) {
+				t.Fatalf("delivered handoff context identity = %#v, want snapshot=%q subject=%#v", deliveredContext, admission.ContextSnapshotID, admission.Subject)
+			}
+			if got := canonicalGoalContextHash(t, deliveredContext); got != deliveredContext.ContentHash {
+				t.Fatalf("delivered handoff context hash = %q, want canonical hash %q", deliveredContext.ContentHash, got)
+			}
+			if len(deliveredContext.Sources) != 2 {
+				t.Fatalf("delivered handoff sources = %#v, want exactly repository and retained-artifact sources", deliveredContext.Sources)
+			}
+			var handoffSource, repositorySubject *control.ContextSource
+			for index := range deliveredContext.Sources {
+				source := &deliveredContext.Sources[index]
+				switch source.SourceKind {
+				case "handoff_source":
+					handoffSource = source
+				case "repository_subject":
+					repositorySubject = source
+				}
+			}
+			if handoffSource == nil || handoffSource.ResourceID != admission.Subject.ResourceID ||
+				handoffSource.SourceRevision != "run:"+sourceRunID ||
+				handoffSource.ContentHash != handoffRetainedArtifactHash() ||
+				handoffSource.Trust != "advisory" || !handoffSource.Required ||
+				handoffSource.Content.Kind != "pointer" || handoffSource.Content.Value != "run:"+sourceRunID {
+				t.Fatalf("delivered handoff source = %#v, want immutable source Run pointer and retained artifact hash", handoffSource)
+			}
+			if repositorySubject == nil || repositorySubject.ResourceID != admission.Subject.ResourceID ||
+				repositorySubject.SourceRevision != admission.Subject.Commit ||
+				repositorySubject.ContentHash != admission.Subject.TreeDigest ||
+				repositorySubject.Trust != "repository_untrusted" || !repositorySubject.Required {
+				t.Fatalf("delivered repository Subject source = %#v, want artifact commit/tree identity", repositorySubject)
+			}
+			if len(deliveredContext.ValidatedEvidence) != 1 {
+				t.Fatalf("delivered handoff evidence = %#v, want exactly one retained Subject evidence", deliveredContext.ValidatedEvidence)
+			}
+			evidence := deliveredContext.ValidatedEvidence[0]
+			if evidence.EvidenceID != "00000000-0000-4000-8000-000000000008" ||
+				evidence.PredicateID != "artifact" ||
+				evidence.SubjectHash != subjectHash ||
+				evidence.Verdict != "passed" {
+				t.Fatalf("delivered handoff evidence = %#v, want exact retained Subject evidence", deliveredContext.ValidatedEvidence)
+			}
+			if session.result.Semantic == nil || session.result.Semantic.Subject != admission.Subject || session.result.Semantic.SubjectHash != subjectHash {
+				t.Fatalf("native task result Subject = %#v, want admission Subject and canonical hash", session.result.Semantic)
 			}
 			if workspace := app.workspace.(*fakeWorkspace); workspace.subject != admission.Subject {
 				t.Fatalf("handoff workspace subject = %#v, want %#v", workspace.subject, admission.Subject)
@@ -625,18 +693,55 @@ func TestVerifiedPiAndOpenCodeHandoffAdmissionsStartNewNativeSessions(t *testing
 			if err != nil || len(sessions) != 1 {
 				t.Fatalf("Goal session journals = %#v, error = %v", sessions, err)
 			}
-			if sessions[0].SessionMode != state.GoalSessionModeHandoff {
-				t.Fatalf("handoff session mode = %q, want %q", sessions[0].SessionMode, state.GoalSessionModeHandoff)
+			if sessions[0].SessionMode != state.GoalSessionModeHandoff ||
+				sessions[0].HarnessKind != string(test.kind) ||
+				sessions[0].HarnessVersion != test.nativeVersion ||
+				sessions[0].AdapterVersion != capabilities.ImplementationVersion ||
+				sessions[0].AdapterProtocolVersion != capabilities.ProtocolVersion ||
+				sessions[0].RepositoryResourceID != admission.Subject.ResourceID {
+				t.Fatalf("handoff session identity = %#v, want mode/harness metadata/repository bound to admission", sessions[0])
 			}
 			if sessions[0].HandoffSourceRunID != sourceRunID {
 				t.Fatalf("handoff source Run = %q, want %q", sessions[0].HandoffSourceRunID, sourceRunID)
 			}
+			if len(controlClient.fenceCalls) == 0 {
+				t.Fatal("handoff made no fenced Control calls")
+			}
+			requiredFenceKinds := map[string]bool{"attach": false, "context": false}
+			for _, call := range controlClient.fenceCalls {
+				if call.runID != "run-1" {
+					t.Fatalf("handoff Control call used source or unexpected Run ID: %#v", call)
+				}
+				if call.fence != journal.Fence() {
+					t.Fatalf("handoff Control call used stale fence: kind=%s fence=%#v want=%#v", call.kind, call.fence, journal.Fence())
+				}
+				if _, required := requiredFenceKinds[call.kind]; required {
+					requiredFenceKinds[call.kind] = true
+				}
+			}
+			for kind, seen := range requiredFenceKinds {
+				if !seen {
+					t.Fatalf("handoff omitted required fenced Control call kind %q: calls=%#v", kind, controlClient.fenceCalls)
+				}
+			}
 
 			firstLifecycle := append([]string(nil), session.calls...)
+			firstFenceCalls := append([]nativeAdmissionFenceCall(nil), controlClient.fenceCalls...)
+			firstJournal := journal
 			app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
 			app.workers.Wait()
 			if !sameStrings(session.calls, firstLifecycle) {
 				t.Fatalf("handoff assignment replay started another native session: before=%#v after=%#v", firstLifecycle, session.calls)
+			}
+			if !reflect.DeepEqual(controlClient.fenceCalls, firstFenceCalls) {
+				t.Fatalf("handoff assignment replay issued new fenced Control calls: before=%#v after=%#v", firstFenceCalls, controlClient.fenceCalls)
+			}
+			replayedJournal, err := store.LoadJournal(state.RunKey{RunID: "run-1", Generation: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(replayedJournal, firstJournal) {
+				t.Fatalf("handoff assignment replay changed durable journal: before=%#v after=%#v", firstJournal, replayedJournal)
 			}
 		})
 	}
@@ -650,7 +755,7 @@ func TestHandoffAdmissionRejectsMismatchedConfiguredAdapterBeforeWorkspace(t *te
 	sourceRunID := "00000000-0000-4000-8000-000000000007"
 	admission.SessionMode = protocol.SessionModeHandoff
 	admission.HandoffSourceRunID = &sourceRunID
-	capabilities := verifiedNativeCapabilities(harness.KindCodex)
+	capabilities := testVerifiedNativeCapabilities(harness.KindCodex)
 	capabilities.Handoff = true
 	app, store, session, controlClient := nativeAdmissionDaemonForHarness(t, admission, validNativeTaskResult(t, admission), nil, harness.KindCodex, config.RuntimeHarnessPi, capabilities)
 	defer store.Close()
@@ -738,7 +843,7 @@ func TestPiResumeAdmissionRequiresVerifiedResumeCapabilityBeforeSideEffects(t *t
 	resumeBindingID := "00000000-0000-4000-8000-000000000091"
 	admission.SessionMode = protocol.SessionModeResume
 	admission.RequestedSessionID = &controlSessionID
-	capabilities := verifiedNativeCapabilities(harness.KindPi)
+	capabilities := testVerifiedNativeCapabilities(harness.KindPi)
 	capabilities.NativeVersion = pi.TestedVersion
 	app, store, session, controlClient := nativeAdmissionDaemonForHarness(t, admission, validNativeTaskResult(t, admission), nil, harness.KindPi, config.RuntimeHarnessPi, capabilities)
 	defer store.Close()
@@ -793,7 +898,7 @@ func TestPiAdmissionsRejectInvalidRPCProfileBeforeNativeLaunch(t *testing.T) {
 						sessionID := "00000000-0000-4000-8000-000000000090"
 						admission.RequestedSessionID = &sessionID
 					}
-					capabilities := verifiedNativeCapabilities(harness.KindPi)
+					capabilities := testVerifiedNativeCapabilities(harness.KindPi)
 					capabilities.NativeVersion = pi.TestedVersion
 					capabilities.Handoff = test.mode == protocol.SessionModeHandoff
 					capabilities.Resume = test.mode == protocol.SessionModeResume
@@ -839,7 +944,7 @@ func TestPiResumeAdmissionReusesRetainedNativeSessionAndWorkspace(t *testing.T) 
 	resumeBindingID := "00000000-0000-4000-8000-000000000091"
 	admission.SessionMode = protocol.SessionModeResume
 	admission.RequestedSessionID = &controlSessionID
-	capabilities := verifiedNativeCapabilities(harness.KindPi)
+	capabilities := testVerifiedNativeCapabilities(harness.KindPi)
 	capabilities.NativeVersion = pi.TestedVersion
 	capabilities.Resume = true
 	app, store, session, controlClient := nativeAdmissionDaemonForHarness(t, admission, validNativeTaskResult(t, admission), nil, harness.KindPi, config.RuntimeHarnessPi, capabilities)
@@ -913,7 +1018,7 @@ func TestPiResumeAdmissionRejectsIncompatibleOrUnavailableRetainedSessionBeforeN
 			resumeBindingID := "00000000-0000-4000-8000-000000000091"
 			admission.SessionMode = protocol.SessionModeResume
 			admission.RequestedSessionID = &controlSessionID
-			capabilities := verifiedNativeCapabilities(harness.KindPi)
+			capabilities := testVerifiedNativeCapabilities(harness.KindPi)
 			capabilities.NativeVersion = pi.TestedVersion
 			capabilities.Resume = true
 			app, store, session, controlClient := nativeAdmissionDaemonForHarness(t, admission, validNativeTaskResult(t, admission), nil, harness.KindPi, config.RuntimeHarnessPi, capabilities)
@@ -957,7 +1062,7 @@ func TestRecoveryCompensatesReboundPiSessionBeforeNativeStart(t *testing.T) {
 	resumeBindingID := "00000000-0000-4000-8000-000000000091"
 	admission.SessionMode = protocol.SessionModeResume
 	admission.RequestedSessionID = &controlSessionID
-	capabilities := verifiedNativeCapabilities(harness.KindPi)
+	capabilities := testVerifiedNativeCapabilities(harness.KindPi)
 	capabilities.NativeVersion = pi.TestedVersion
 	capabilities.Resume = true
 	store, key := claimedStore(t)
@@ -1021,7 +1126,7 @@ func TestRecoveryCompletesPreStartPiCompensationAfterSecondCrash(t *testing.T) {
 	resumeBindingID := "00000000-0000-4000-8000-000000000091"
 	admission.SessionMode = protocol.SessionModeResume
 	admission.RequestedSessionID = &controlSessionID
-	capabilities := verifiedNativeCapabilities(harness.KindPi)
+	capabilities := testVerifiedNativeCapabilities(harness.KindPi)
 	capabilities.NativeVersion = pi.TestedVersion
 	capabilities.Resume = true
 	store, key := claimedStore(t)
@@ -1085,7 +1190,7 @@ func TestRecoveryPreservesPiResumeRejectedReasonAfterRestart(t *testing.T) {
 	resumeBindingID := "00000000-0000-4000-8000-000000000091"
 	admission.SessionMode = protocol.SessionModeResume
 	admission.RequestedSessionID = &controlSessionID
-	capabilities := verifiedNativeCapabilities(harness.KindPi)
+	capabilities := testVerifiedNativeCapabilities(harness.KindPi)
 	capabilities.NativeVersion = pi.TestedVersion
 	capabilities.Resume = true
 
@@ -1160,7 +1265,7 @@ func TestRecoveryDeliversReadyReboundPiAttachmentBeforeStoppingPersistedProcess(
 	resumeBindingID := "00000000-0000-4000-8000-000000000091"
 	admission.SessionMode = protocol.SessionModeResume
 	admission.RequestedSessionID = &controlSessionID
-	capabilities := verifiedNativeCapabilities(harness.KindPi)
+	capabilities := testVerifiedNativeCapabilities(harness.KindPi)
 	capabilities.NativeVersion = pi.TestedVersion
 	capabilities.Resume = true
 	store, key := claimedStore(t)
@@ -1233,7 +1338,7 @@ func TestRecoveryQuarantinesPreStartPiResumeAfterDefinitiveAttachRejection(t *te
 	resumeBindingID := "00000000-0000-4000-8000-000000000091"
 	admission.SessionMode = protocol.SessionModeResume
 	admission.RequestedSessionID = &controlSessionID
-	capabilities := verifiedNativeCapabilities(harness.KindPi)
+	capabilities := testVerifiedNativeCapabilities(harness.KindPi)
 	capabilities.NativeVersion = pi.TestedVersion
 	capabilities.Resume = true
 	store, key := claimedStore(t)
@@ -1294,7 +1399,7 @@ func TestPiResumeRejectedBeforeNativeStartReleasesExactNewBinding(t *testing.T) 
 	resumeBindingID := "00000000-0000-4000-8000-000000000091"
 	admission.SessionMode = protocol.SessionModeResume
 	admission.RequestedSessionID = &controlSessionID
-	capabilities := verifiedNativeCapabilities(harness.KindPi)
+	capabilities := testVerifiedNativeCapabilities(harness.KindPi)
 	capabilities.NativeVersion = pi.TestedVersion
 	capabilities.Resume = true
 	app, store, session, controlClient := nativeAdmissionDaemonForHarness(t, admission, validNativeTaskResult(t, admission), nil, harness.KindPi, config.RuntimeHarnessPi, capabilities)
@@ -1339,7 +1444,7 @@ func TestPiResumeUnknownStartRetainsReadyAttachmentBarrier(t *testing.T) {
 	resumeBindingID := "00000000-0000-4000-8000-000000000091"
 	admission.SessionMode = protocol.SessionModeResume
 	admission.RequestedSessionID = &controlSessionID
-	capabilities := verifiedNativeCapabilities(harness.KindPi)
+	capabilities := testVerifiedNativeCapabilities(harness.KindPi)
 	capabilities.NativeVersion = pi.TestedVersion
 	capabilities.Resume = true
 	app, store, session, controlClient := nativeAdmissionDaemonForHarness(t, admission, validNativeTaskResult(t, admission), nil, harness.KindPi, config.RuntimeHarnessPi, capabilities)
@@ -1381,7 +1486,7 @@ func TestPiResumeAttachTimeoutAfterKnownCloseRepairsThroughReadbackBarrier(t *te
 	resumeBindingID := "00000000-0000-4000-8000-000000000091"
 	admission.SessionMode = protocol.SessionModeResume
 	admission.RequestedSessionID = &controlSessionID
-	capabilities := verifiedNativeCapabilities(harness.KindPi)
+	capabilities := testVerifiedNativeCapabilities(harness.KindPi)
 	capabilities.NativeVersion = pi.TestedVersion
 	capabilities.Resume = true
 	app, store, session, controlClient := nativeAdmissionDaemonForHarness(t, admission, validNativeTaskResult(t, admission), nil, harness.KindPi, config.RuntimeHarnessPi, capabilities)
@@ -1436,7 +1541,7 @@ func TestPiResumeDefinitiveAttachRejectionAfterKnownCloseQuarantinesSession(t *t
 	resumeBindingID := "00000000-0000-4000-8000-000000000091"
 	admission.SessionMode = protocol.SessionModeResume
 	admission.RequestedSessionID = &controlSessionID
-	capabilities := verifiedNativeCapabilities(harness.KindPi)
+	capabilities := testVerifiedNativeCapabilities(harness.KindPi)
 	capabilities.NativeVersion = pi.TestedVersion
 	capabilities.Resume = true
 	app, store, session, controlClient := nativeAdmissionDaemonForHarness(t, admission, validNativeTaskResult(t, admission), nil, harness.KindPi, config.RuntimeHarnessPi, capabilities)
@@ -1488,7 +1593,7 @@ func TestRecoveryRetiresRejectedReadyPiResumeBeforeClosingWithoutPredecessorStop
 	resumeBindingID := "00000000-0000-4000-8000-000000000091"
 	admission.SessionMode = protocol.SessionModeResume
 	admission.RequestedSessionID = &controlSessionID
-	capabilities := verifiedNativeCapabilities(harness.KindPi)
+	capabilities := testVerifiedNativeCapabilities(harness.KindPi)
 	capabilities.NativeVersion = pi.TestedVersion
 	capabilities.Resume = true
 	store, key := claimedStore(t)
@@ -1594,7 +1699,7 @@ func TestHalfBoundPiResumeNeverQueuesStopForPredecessorBinding(t *testing.T) {
 	resumeBindingID := "00000000-0000-4000-8000-000000000091"
 	admission.SessionMode = protocol.SessionModeResume
 	admission.RequestedSessionID = &controlSessionID
-	capabilities := verifiedNativeCapabilities(harness.KindPi)
+	capabilities := testVerifiedNativeCapabilities(harness.KindPi)
 	capabilities.NativeVersion = pi.TestedVersion
 	capabilities.Resume = true
 	store, key := claimedStore(t)
@@ -1629,7 +1734,7 @@ func TestLatePredecessorStopReceiptAcknowledgesAfterPiRebindWithoutReleasingNewB
 	resumeBindingID := "00000000-0000-4000-8000-000000000091"
 	admission.SessionMode = protocol.SessionModeResume
 	admission.RequestedSessionID = &controlSessionID
-	capabilities := verifiedNativeCapabilities(harness.KindPi)
+	capabilities := testVerifiedNativeCapabilities(harness.KindPi)
 	capabilities.NativeVersion = pi.TestedVersion
 	capabilities.Resume = true
 	store, err := state.New(t.TempDir())
@@ -1678,7 +1783,7 @@ func TestRetainedPiWorkspaceOwnerBlocksSourceCleanupAfterRebind(t *testing.T) {
 	resumeBindingID := "00000000-0000-4000-8000-000000000091"
 	admission.SessionMode = protocol.SessionModeResume
 	admission.RequestedSessionID = &controlSessionID
-	capabilities := verifiedNativeCapabilities(harness.KindPi)
+	capabilities := testVerifiedNativeCapabilities(harness.KindPi)
 	capabilities.NativeVersion = pi.TestedVersion
 	capabilities.Resume = true
 	store, err := state.New(t.TempDir())
@@ -3359,14 +3464,32 @@ func nativeAdmissionDaemonForHarness(t *testing.T, admission protocol.Admission,
 }
 
 func verifiedCodexCapabilities() harness.Capabilities {
-	return verifiedNativeCapabilities(harness.KindCodex)
+	return testVerifiedNativeCapabilities(harness.KindCodex)
 }
 
-func verifiedNativeCapabilities(kind harness.Kind) harness.Capabilities {
+// testVerifiedNativeCapabilities is a fake, test-only witness for daemon
+// orchestration. It does not alter production capability probing or prove
+// credentialed native support.
+func testVerifiedNativeCapabilities(kind harness.Kind) harness.Capabilities {
+	var nativeVersion string
+	var adapterVersion string
+	switch kind {
+	case harness.KindCodex:
+		nativeVersion = codex.TestedVersion
+		adapterVersion = "symmetry-daemon:test-codex"
+	case harness.KindPi:
+		nativeVersion = pi.TestedVersion
+		adapterVersion = "symmetry-daemon:test-pi"
+	case harness.KindOpenCode:
+		nativeVersion = opencode.TestedVersion
+		adapterVersion = "symmetry-daemon:test-opencode"
+	default:
+		panic(fmt.Sprintf("unsupported test harness kind %q", kind))
+	}
 	return harness.Capabilities{
 		Kind:                  kind,
-		NativeVersion:         "0.153.4",
-		ImplementationVersion: "symmetry-daemon:test",
+		NativeVersion:         nativeVersion,
+		ImplementationVersion: adapterVersion,
 		ProtocolVersion:       1,
 		VersionKnown:          true,
 		TransportVerified:     true,
@@ -3380,12 +3503,23 @@ func verifiedNativeCapabilities(kind harness.Kind) harness.Capabilities {
 	}
 }
 
-func validNativeTaskResult(t *testing.T, admission protocol.Admission) protocol.TaskResult {
+func handoffRetainedArtifactHash() string {
+	const retainedArtifact = "retained handoff artifact\n"
+	return fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(retainedArtifact)))
+}
+
+func testAdmissionSubjectHash(t *testing.T, admission protocol.Admission) string {
 	t.Helper()
 	subjectHash, err := admission.Subject.Hash()
 	if err != nil {
 		t.Fatal(err)
 	}
+	return subjectHash
+}
+
+func validNativeTaskResult(t *testing.T, admission protocol.Admission) protocol.TaskResult {
+	t.Helper()
+	subjectHash := testAdmissionSubjectHash(t, admission)
 	return protocol.TaskResult{
 		SchemaVersion: protocol.TaskResultSchemaVersion,
 		ResultID:      "00000000-0000-4000-8000-000000000006",
@@ -3398,10 +3532,117 @@ func validNativeTaskResult(t *testing.T, admission protocol.Admission) protocol.
 	}
 }
 
+func handoffContextSnapshot(t *testing.T, admission protocol.Admission, sourceRunID string) control.GoalContextSnapshot {
+	t.Helper()
+	subjectHash := testAdmissionSubjectHash(t, admission)
+	snapshot := control.GoalContextSnapshot{
+		SchemaVersion: "symmetry.context_snapshot.v1",
+		SnapshotID:    admission.ContextSnapshotID,
+		GoalID:        admission.GoalID,
+		GoalRevision:  admission.GoalRevision,
+		WorkItemID:    admission.WorkItemID,
+		ContentHash:   admission.ContextHash,
+		CreatedAt:     "2026-09-13T00:00:00Z",
+		ApprovedGoal: control.ApprovedGoal{
+			GoalID:    admission.GoalID,
+			Revision:  admission.GoalRevision,
+			Objective: "Continue the approved repository work from the settled source.",
+			AuthorityPolicy: control.AuthorityPolicy{
+				OperatorRequiredForScopeChange: true,
+				OperatorRequiredForCompletion:  true,
+				AllowedActions:                 []string{"admit_task"},
+			},
+		},
+		WorkContract: control.WorkContract{
+			Title:       "Continue the admitted change",
+			Description: "Reconstruct context in a fresh native session.",
+			Purpose:     string(admission.Purpose),
+			Acceptance: control.AcceptanceContract{
+				SchemaVersion: "symmetry.acceptance.v1",
+				Description:   "The source artifact remains the immutable Subject.",
+				Predicates: []control.AcceptancePredicate{{
+					ID:         "artifact",
+					Kind:       "artifact",
+					ResourceID: admission.Subject.ResourceID,
+					Path:       "handoff-artifact.txt",
+				}},
+			},
+			ValidationBindings: []control.ValidationBinding{},
+		},
+		Subject: admission.Subject,
+		Sources: []control.ContextSource{
+			{
+				ResourceID:     admission.Subject.ResourceID,
+				SourceKind:     "repository_subject",
+				SourceRevision: admission.Subject.Commit,
+				ContentHash:    admission.Subject.TreeDigest,
+				ObservedAt:     "2026-09-13T00:00:00Z",
+				Trust:          "repository_untrusted",
+				Required:       true,
+				Content:        control.ContextContent{Kind: "pointer", Value: "repository:" + admission.Subject.ResourceID},
+			},
+			{
+				ResourceID:     admission.Subject.ResourceID,
+				SourceKind:     "handoff_source",
+				SourceRevision: "run:" + sourceRunID,
+				ContentHash:    handoffRetainedArtifactHash(),
+				ObservedAt:     "2026-09-13T00:00:00Z",
+				Trust:          "advisory",
+				Required:       true,
+				Content:        control.ContextContent{Kind: "pointer", Value: "run:" + sourceRunID},
+			},
+		},
+		CurrentDecisions: []control.DecisionReference{{
+			DecisionID: "00000000-0000-4000-8000-000000000009",
+			ActionHash: "sha256:" + strings.Repeat("d", 64),
+			State:      "resolved",
+		}},
+		ValidatedEvidence: []control.EvidenceReference{{
+			EvidenceID:  "00000000-0000-4000-8000-000000000008",
+			PredicateID: "artifact",
+			SubjectHash: subjectHash,
+			Verdict:     "passed",
+		}},
+		FailedAttempts: []control.FailedAttempt{},
+		AdvisoryRecall: []control.ContextSource{},
+		NextAction:     nil,
+		Size: control.ContextSize{
+			MandatoryBytes: 1024,
+			TotalBytes:     1024,
+			ByteBudget:     32 * 1024,
+		},
+	}
+	snapshot.ContentHash = canonicalGoalContextHash(t, snapshot)
+	return snapshot
+}
+
+func canonicalGoalContextHash(t *testing.T, snapshot control.GoalContextSnapshot) string {
+	t.Helper()
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	delete(envelope, "content_hash")
+	withoutHash, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := protocol.CanonicalizeJSON(withoutHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fmt.Sprintf("sha256:%x", sha256.Sum256(canonical))
+}
+
 type nativeAdmissionControl struct {
 	*fakeControl
 	work             protocol.Work
 	admission        protocol.Admission
+	contextSnapshot  *control.GoalContextSnapshot
 	providerAccess   *protocol.ProviderAccess
 	harnessSessionID *string
 	harnessBindingID *string
@@ -3409,6 +3650,17 @@ type nativeAdmissionControl struct {
 	attachErr        error
 	stopReceiptID    string
 	calls            []string
+	fenceCalls       []nativeAdmissionFenceCall
+}
+
+type nativeAdmissionFenceCall struct {
+	kind  string
+	runID string
+	fence protocol.Fence
+}
+
+func (client *nativeAdmissionControl) recordFenceCall(kind, runID string, fence protocol.Fence) {
+	client.fenceCalls = append(client.fenceCalls, nativeAdmissionFenceCall{kind: kind, runID: runID, fence: fence})
 }
 
 func (client *nativeAdmissionControl) Claim(_ context.Context, runID string, request protocol.ClaimRequest) (protocol.ClaimResponse, error) {
@@ -3417,6 +3669,7 @@ func (client *nativeAdmissionControl) Claim(_ context.Context, runID string, req
 }
 
 func (client *nativeAdmissionControl) AttachHarnessSession(_ context.Context, runID string, request control.GoalSessionAttachRequest) (control.GoalSessionReceipt, error) {
+	client.recordFenceCall("attach", runID, request.Fence)
 	client.calls = append(client.calls, "attach")
 	if client.attachErr != nil {
 		return control.GoalSessionReceipt{}, client.attachErr
@@ -3440,6 +3693,7 @@ func (client *nativeAdmissionControl) AttachHarnessSession(_ context.Context, ru
 }
 
 func (client *nativeAdmissionControl) MarkHarnessSessionStopped(_ context.Context, runID string, request control.GoalSessionStoppedRequest) (control.GoalSessionStoppedReceipt, error) {
+	client.recordFenceCall("stopped", runID, request.Fence)
 	client.calls = append(client.calls, "stopped")
 	receiptID := client.stopReceiptID
 	if receiptID == "" {
@@ -3453,29 +3707,55 @@ func (client *nativeAdmissionControl) MarkHarnessSessionStopped(_ context.Contex
 }
 
 func (client *nativeAdmissionControl) FetchRunContext(_ context.Context, runID string, fence protocol.Fence) (control.GoalRunContext, error) {
+	client.recordFenceCall("context", runID, fence)
 	client.calls = append(client.calls, "context")
 	sessionID := client.attachSessionID
 	if sessionID == "" {
 		sessionID = "00000000-0000-4000-8000-000000000010"
 	}
+	contextSnapshot := control.GoalContextSnapshot{
+		SnapshotID:   client.admission.ContextSnapshotID,
+		GoalID:       client.admission.GoalID,
+		GoalRevision: client.admission.GoalRevision,
+		WorkItemID:   client.admission.WorkItemID,
+		ContentHash:  client.admission.ContextHash,
+		Subject:      client.admission.Subject,
+		WorkContract: control.WorkContract{Purpose: string(client.admission.Purpose)},
+	}
+	if client.contextSnapshot != nil {
+		contextSnapshot = *client.contextSnapshot
+	}
 	return control.GoalRunContext{
 		GoalID: client.admission.GoalID, TaskID: "task-1", RunID: runID, Generation: fence.Generation, SessionID: &sessionID,
-		Context: control.GoalContextSnapshot{
-			SnapshotID: client.admission.ContextSnapshotID, GoalID: client.admission.GoalID, GoalRevision: client.admission.GoalRevision,
-			WorkItemID: client.admission.WorkItemID, ContentHash: client.admission.ContextHash, Subject: client.admission.Subject,
-			WorkContract: control.WorkContract{Purpose: string(client.admission.Purpose)},
-		},
+		Context: contextSnapshot,
 	}, nil
 }
 
-func (client *nativeAdmissionControl) AppendEvidence(_ context.Context, _ string, _ protocol.Fence, _ protocol.Evidence) (control.GoalEvidenceReceipt, error) {
+func (client *nativeAdmissionControl) AppendEvidence(_ context.Context, runID string, fence protocol.Fence, _ protocol.Evidence) (control.GoalEvidenceReceipt, error) {
+	client.recordFenceCall("evidence", runID, fence)
 	client.calls = append(client.calls, "evidence")
 	return control.GoalEvidenceReceipt{}, nil
 }
 
-func (client *nativeAdmissionControl) RecordUsage(_ context.Context, _ string, _ protocol.Fence, _ protocol.Usage) (control.GoalUsageReceipt, error) {
+func (client *nativeAdmissionControl) RecordUsage(_ context.Context, runID string, fence protocol.Fence, _ protocol.Usage) (control.GoalUsageReceipt, error) {
+	client.recordFenceCall("usage", runID, fence)
 	client.calls = append(client.calls, "usage")
 	return control.GoalUsageReceipt{}, nil
+}
+
+func (client *nativeAdmissionControl) RenewLease(ctx context.Context, runID string, request protocol.LeaseHeartbeatRequest) (protocol.LeaseHeartbeatResponse, error) {
+	client.recordFenceCall("renew", runID, request.Fence)
+	return client.fakeControl.RenewLease(ctx, runID, request)
+}
+
+func (client *nativeAdmissionControl) AppendEvents(ctx context.Context, runID string, request protocol.AppendEventsRequest) error {
+	client.recordFenceCall("events", runID, request.Fence)
+	return client.fakeControl.AppendEvents(ctx, runID, request)
+}
+
+func (client *nativeAdmissionControl) Transition(ctx context.Context, runID string, request protocol.StateTransitionRequest) error {
+	client.recordFenceCall("transition", runID, request.Fence)
+	return client.fakeControl.Transition(ctx, runID, request)
 }
 
 type fakeNativeGoalAdapter struct {

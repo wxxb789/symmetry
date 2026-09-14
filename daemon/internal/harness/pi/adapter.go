@@ -177,15 +177,16 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 	}
 	session := newNativeSession(processContext, cancel, sink, cancelTimeout, resumeState)
 	invocation := execution.Invocation{
-		Program:                 adapter.executable,
-		Args:                    args,
-		Dir:                     request.Workspace,
-		Env:                     append([]string(nil), request.Invocation.Env...),
-		InitialLeaseDeadline:    request.Invocation.InitialLeaseDeadline,
-		InitialLeaseDeadlineAt:  request.Invocation.InitialLeaseDeadlineAt,
-		InitialLeaseSequence:    request.Invocation.InitialLeaseSequence,
-		PersistProcess:          request.PersistProcess,
-		PersistProcessAuthority: request.PersistProcessAuthority,
+		Program:                       adapter.executable,
+		Args:                          args,
+		Dir:                           request.Workspace,
+		Env:                           append([]string(nil), request.Invocation.Env...),
+		InitialLeaseDeadline:          request.Invocation.InitialLeaseDeadline,
+		InitialLeaseDeadlineAt:        request.Invocation.InitialLeaseDeadlineAt,
+		InitialLeaseSequence:          request.Invocation.InitialLeaseSequence,
+		PersistProcess:                request.PersistProcess,
+		PersistProcessAuthority:       request.PersistProcessAuthority,
+		PersistContainmentStopReceipt: request.PersistContainmentStopReceipt,
 	}
 	process, err := adapter.startProcess(processContext, invocation, execution.SinkFunc(session.handleProcessOutput))
 	if isNilNativeProcess(process) {

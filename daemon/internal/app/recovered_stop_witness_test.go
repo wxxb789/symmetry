@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
@@ -326,6 +327,63 @@ func TestFreshDaemonDoesNotReuseLostRecoveredStopProof(t *testing.T) {
 	}
 	if secondStops != 1 || !journal.HasProcessDetails() || len(second.running) != 0 {
 		t.Fatalf("fresh daemon recovery = stops:%d journal:%#v running:%d, want fail-closed marker", secondStops, journal, len(second.running))
+	}
+}
+
+func TestRecoveredContainmentAuthorityUsesDurableStopReceiptWithoutRecontactingHelper(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	startedAt := time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC)
+	if _, err := store.SetProcessDetails(key, 76, "windows:76:0000000000000001", startedAt); err != nil {
+		t.Fatal(err)
+	}
+	value := authority.Supervisor{
+		Version:            authority.SupervisorVersion,
+		Secret:             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		TargetPID:          76,
+		TargetIdentity:     "windows:76:0000000000000001",
+		PipeToken:          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		JobID:              "cccccccccccccccccccccccccccccccc",
+		SupervisorPID:      77,
+		SupervisorIdentity: "windows:77:0000000000000002",
+	}
+	if _, err := store.SetContainmentAuthority(key, 76, value.TargetIdentity, value); err != nil {
+		t.Fatal(err)
+	}
+	receipt := authority.StopReceipt{
+		Version:            authority.SupervisorVersion,
+		Status:             "stopped",
+		TargetPID:          value.TargetPID,
+		TargetIdentity:     value.TargetIdentity,
+		PipeToken:          value.PipeToken,
+		JobID:              value.JobID,
+		SupervisorPID:      value.SupervisorPID,
+		SupervisorIdentity: value.SupervisorIdentity,
+	}
+	if _, err := store.RecordContainmentStopReceipt(key, 76, value.TargetIdentity, receipt); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contacted := false
+	app := &daemon{
+		store:   store,
+		running: make(map[state.RunKey]*runningRun),
+		options: options{terminatePersistAuthority: func(int, string, *authority.Supervisor) (authority.StopReceipt, error) {
+			contacted = true
+			return authority.StopReceipt{}, errors.New("helper must not be contacted after durable receipt")
+		}},
+	}
+	if err := app.stopPersistedProcess(context.Background(), journal); err != nil {
+		t.Fatalf("stopPersistedProcess() error = %v", err)
+	}
+	if contacted {
+		t.Fatal("durable containment receipt caused a helper recontact")
+	}
+	if _, err := store.ClearProcessDetails(key, 76, value.TargetIdentity); err != nil {
+		t.Fatal(err)
 	}
 }
 

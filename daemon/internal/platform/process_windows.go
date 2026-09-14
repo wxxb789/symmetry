@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"github.com/wxxb789/symmetry/daemon/internal/authority"
 )
 
 const (
@@ -91,8 +93,121 @@ type extendedLimitInformation struct {
 type jobContainment struct {
 	mutex        sync.Mutex
 	handle       syscall.Handle
+	supervisor   containmentSupervisorLease
+	stopReceipt  *authority.StopReceipt
 	closeStarted bool
 	closeErr     error
+}
+
+// ContainmentAuthority returns a copy of the helper binding, if this Job is
+// owned by the independent Windows supervisor. A nil result is deliberate for
+// partial/legacy containment and must remain fail-closed during recovery.
+func (job *jobContainment) ContainmentAuthority() *authority.Supervisor {
+	if job == nil || job.supervisor == nil {
+		return nil
+	}
+	provider, ok := job.supervisor.(containmentSupervisorAuthorityProvider)
+	if !ok {
+		return nil
+	}
+	value := provider.containmentAuthority()
+	if value == nil {
+		return nil
+	}
+	cloned := value.Clone()
+	return &cloned
+}
+
+func (job *jobContainment) ContainmentAuthorityAvailable() bool {
+	if job == nil || job.supervisor == nil {
+		return false
+	}
+	_, ok := job.supervisor.(containmentSupervisorAuthorityProvider)
+	return ok
+}
+
+// LeaseRenewalAvailable reports whether the independent supervisor can arm a
+// monotonic local lease deadline. Legacy/test containment remains available but
+// deliberately has no watchdog authority.
+func (job *jobContainment) LeaseRenewalAvailable() bool {
+	if job == nil || job.supervisor == nil {
+		return false
+	}
+	_, ok := job.supervisor.(ContainmentLeaseRenewer)
+	return ok
+}
+
+// RenewLease forwards a relative deadline to the independent supervisor while
+// serializing it with Close through the Job mutex.
+func (job *jobContainment) RenewLease(deadline time.Duration, sequence uint64) error {
+	if job == nil {
+		return errors.New("containment lease is missing")
+	}
+	job.mutex.Lock()
+	defer job.mutex.Unlock()
+	if job.closeStarted {
+		return errors.New("containment lease is stopped")
+	}
+	if job.supervisor == nil {
+		return fmt.Errorf("%w: containment supervisor lease is unavailable", errors.ErrUnsupported)
+	}
+	renewer, ok := job.supervisor.(ContainmentLeaseRenewer)
+	if !ok || !renewer.LeaseRenewalAvailable() {
+		return fmt.Errorf("%w: containment supervisor lease renewal is unavailable", errors.ErrUnsupported)
+	}
+	return renewer.RenewLease(deadline, sequence)
+}
+
+// ContainmentStopReceipt returns the cached positive stop witness. It is
+// intentionally separate from Close so callers can persist it before helper
+// release.
+func (job *jobContainment) ContainmentStopReceipt() (authority.StopReceipt, bool) {
+	if job == nil {
+		return authority.StopReceipt{}, false
+	}
+	job.mutex.Lock()
+	defer job.mutex.Unlock()
+	if job.stopReceipt == nil {
+		return authority.StopReceipt{}, false
+	}
+	return *job.stopReceipt, true
+}
+
+// ReleaseContainment performs the authenticated helper release after the
+// exact stop receipt has been durably recorded. Legacy/no-supervisor jobs do
+// not have a second authority and therefore have nothing to release.
+func (job *jobContainment) ReleaseContainment() error {
+	if job == nil {
+		return errors.New("containment job is missing")
+	}
+	job.mutex.Lock()
+	defer job.mutex.Unlock()
+	if job.supervisor == nil {
+		return nil
+	}
+	if job.stopReceipt == nil {
+		return errors.New("durable containment stop receipt is required before helper release")
+	}
+	if releaser, ok := job.supervisor.(containmentSupervisorStopLease); ok {
+		if err := releaser.release(time.Now().Add(containmentCloseDeadline)); err != nil {
+			return err
+		}
+		job.supervisor = nil
+		return nil
+	}
+	return errors.New("containment supervisor release capability is unavailable")
+}
+
+// AbortContainment is the pre-authority startup cleanup path. It is valid
+// only before the daemon has committed a supervisor authority to the journal.
+func (job *jobContainment) AbortContainment() error {
+	if job == nil {
+		return errors.New("containment job is missing")
+	}
+	if err := job.Close(); err != nil {
+		return err
+	}
+	return job.ReleaseContainment()
 }
 
 // ConfigureHeadlessProcess starts console applications without creating a
@@ -145,8 +260,13 @@ func AttachProcess(process *os.Process) (Containment, string, error) {
 		return cleanupFailedAttach(process, 0, fmt.Errorf("create job object: %w", callError))
 	}
 	job := syscall.Handle(handle)
+	var supervisor containmentSupervisorLease
 	cleanup := func(errorValue error) (Containment, string, error) {
-		return cleanupFailedAttach(process, job, errorValue)
+		var supervisorErr error
+		if supervisor != nil {
+			supervisorErr = supervisor.close(time.Now().Add(containmentCloseDeadline))
+		}
+		return cleanupFailedAttach(process, job, errors.Join(errorValue, supervisorErr))
 	}
 
 	limits := extendedLimitInformation{}
@@ -184,6 +304,67 @@ func AttachProcess(process *os.Process) (Containment, string, error) {
 			return contained, identity, callbackErr
 		}
 		return cleanup(callbackErr)
+	}
+	contained.supervisor, identity, callbackErr = launchContainmentSupervisor(job, process.Pid, identity)
+	supervisor = contained.supervisor
+	if callbackErr != nil {
+		return cleanup(fmt.Errorf("start containment supervisor: %w", callbackErr))
+	}
+	if contained.supervisor == nil {
+		return cleanup(errors.New("containment supervisor lease is missing"))
+	}
+	return contained, identity, nil
+}
+
+// AttachSuspendedProcess binds the Job created by LaunchSuspended to the same
+// containment owner used by the legacy path. The target remains suspended
+// throughout identity capture and supervisor setup. On success the Job handle
+// is transferred out of SuspendedProcess so exactly one owner closes it.
+func AttachSuspendedProcess(process *SuspendedProcess) (Containment, string, error) {
+	if process == nil {
+		return nil, "", errors.New("suspended process is required for containment")
+	}
+
+	process.mu.Lock()
+	if process.closed {
+		process.mu.Unlock()
+		return nil, "", errors.New("suspended process is already closed")
+	}
+	if process.closing {
+		process.mu.Unlock()
+		return nil, "", errors.New("suspended process is closing")
+	}
+	job := process.job
+	processHandle := process.process
+	pid := int(process.pid)
+	process.mu.Unlock()
+	if job == 0 || processHandle == 0 || pid <= 0 {
+		return nil, "", errors.New("suspended process handles are incomplete")
+	}
+
+	identity, err := readProcessIdentityFromHandle(pid, syscall.Handle(processHandle))
+	if err != nil {
+		return nil, "", fmt.Errorf("capture suspended process creation identity: %w", err)
+	}
+	supervisor, targetIdentity, supervisorErr := launchContainmentSupervisor(syscall.Handle(job), pid, identity)
+	if targetIdentity != "" {
+		identity = targetIdentity
+	}
+	if supervisor == nil && supervisorErr != nil {
+		return nil, identity, fmt.Errorf("start containment supervisor for suspended process: %w", supervisorErr)
+	}
+
+	contained := &jobContainment{handle: syscall.Handle(job), supervisor: supervisor}
+	process.mu.Lock()
+	if process.closed || process.closing || process.job != job {
+		process.mu.Unlock()
+		_ = contained.Close()
+		return nil, identity, errors.New("suspended process changed during containment attachment")
+	}
+	process.job = 0
+	process.mu.Unlock()
+	if supervisorErr != nil {
+		return contained, identity, fmt.Errorf("start containment supervisor for suspended process: %w", supervisorErr)
 	}
 	return contained, identity, nil
 }
@@ -235,23 +416,57 @@ func (job *jobContainment) Terminate(force bool) error {
 	return fmt.Errorf("%w: soft process-tree termination is unavailable on Windows", errors.ErrUnsupported)
 }
 
-// Close terminates the owned Job Object and observes an empty Job before
-// releasing its final handle. If proof fails, it still best-effort releases the
-// handle to trigger KILL_ON_JOB_CLOSE. Later calls may retry only a failed
-// handle release; they preserve the original stop-proof error and never signal
-// the Job Object again.
+// Close terminates the owned Job Object, observes an empty Job, and asks the
+// independent supervisor to release its duplicate handle before releasing the
+// daemon-side handle. If proof or supervisor release fails, it still performs
+// best-effort handle cleanup and preserves the error for later calls.
 func (job *jobContainment) Close() error {
 	job.mutex.Lock()
 	defer job.mutex.Unlock()
 	if job.closeStarted {
-		_ = job.releaseHandleLocked()
-		return job.closeErr
+		// A failed stop proof remains retryable. Once a receipt exists, Close is
+		// idempotent and the caller may retry callback persistence/release
+		// without re-signalling the Job.
+		_, retryableStop := job.supervisor.(containmentSupervisorStopLease)
+		_, durableAuthority := job.supervisor.(containmentSupervisorAuthorityProvider)
+		if !durableAuthority {
+			_ = job.releaseHandleLocked()
+			return job.closeErr
+		}
+		retryableStop = retryableStop && durableAuthority
+		if job.closeErr != nil && job.stopReceipt == nil && !retryableStop {
+			return job.closeErr
+		}
+		if job.stopReceipt != nil {
+			if err := job.releaseHandleLocked(); err != nil {
+				job.closeErr = err
+				return err
+			}
+			job.closeErr = nil
+			return nil
+		}
 	}
 	job.closeStarted = true
 
 	handle := job.handle
 	if handle == 0 {
-		return nil
+		if supervisor, ok := job.supervisor.(containmentSupervisorStopLease); ok {
+			if _, durableAuthority := job.supervisor.(containmentSupervisorAuthorityProvider); !durableAuthority {
+				job.closeErr = job.supervisor.close(time.Now().Add(containmentCloseDeadline))
+				return job.closeErr
+			}
+			receipt, err := supervisor.stop(time.Now().Add(containmentCloseDeadline))
+			if err != nil {
+				job.closeErr = err
+				return err
+			}
+			job.stopReceipt = &receipt
+			return nil
+		}
+		if job.supervisor != nil {
+			job.closeErr = job.supervisor.close(time.Now().Add(containmentCloseDeadline))
+		}
+		return job.closeErr
 	}
 	deadline := time.Now().Add(containmentCloseDeadline)
 	var stopErr error
@@ -260,8 +475,46 @@ func (job *jobContainment) Close() error {
 	} else if err := waitForEmptyJob(handle, deadline, queryJobActiveProcesses); err != nil {
 		stopErr = err
 	}
-	job.closeErr = errors.Join(stopErr, job.releaseHandleLocked())
+	var supervisorErr error
+	if supervisor, ok := job.supervisor.(containmentSupervisorStopLease); ok {
+		if _, durableAuthority := job.supervisor.(containmentSupervisorAuthorityProvider); !durableAuthority {
+			supervisorErr = job.supervisor.close(deadline)
+			if supervisorErr == nil {
+				job.closeErr = job.releaseHandleLocked()
+				return errors.Join(stopErr, supervisorErr, job.closeErr)
+			}
+			job.closeErr = errors.Join(stopErr, supervisorErr)
+			return job.closeErr
+		}
+		var receipt authority.StopReceipt
+		receipt, supervisorErr = supervisor.stop(deadline)
+		if supervisorErr == nil {
+			job.stopReceipt = &receipt
+		}
+	} else if job.supervisor != nil {
+		supervisorErr = job.supervisor.close(deadline)
+	}
+	if !durableAuthority(job.supervisor) {
+		job.closeErr = errors.Join(stopErr, supervisorErr, job.releaseHandleLocked())
+		return job.closeErr
+	}
+	if stopErr == nil && supervisorErr == nil {
+		// The daemon-side duplicate is no longer needed after the supervisor
+		// proved the Job empty. The independent helper remains retained until
+		// ReleaseContainment is called after durable receipt persistence.
+		job.closeErr = job.releaseHandleLocked()
+		return errors.Join(stopErr, supervisorErr, job.closeErr)
+	}
+	job.closeErr = errors.Join(stopErr, supervisorErr)
 	return job.closeErr
+}
+
+func durableAuthority(supervisor containmentSupervisorLease) bool {
+	if supervisor == nil {
+		return false
+	}
+	_, ok := supervisor.(containmentSupervisorAuthorityProvider)
+	return ok
 }
 
 func (job *jobContainment) releaseHandleLocked() error {

@@ -36,6 +36,7 @@ var (
 	errClaudeCandidateResultBeforeTurn = errors.New("Claude staged candidate observed a terminal result before StartTurn")
 	errClaudeCandidateMissingResult    = errors.New("Claude staged candidate process ended without a verified result")
 	errClaudeCandidateNoSemanticResult = errors.New("Claude staged candidate terminal result was not a valid Symmetry TaskResult")
+	errClaudeCandidateWatcherTimeout   = errors.New("Claude staged candidate process watcher did not settle after close")
 )
 
 // claudeCandidateProcess is the existing execution.Process seam required by
@@ -117,6 +118,9 @@ func (adapter *ClaudeCandidateAdapter) Start(ctx context.Context, request StartR
 	if request.ProviderAccess != nil {
 		return nil, &CapabilityError{Kind: KindClaude, Capability: CapabilityProviderAccess, Reason: "Claude staged candidate has no verified provider broker bridge"}
 	}
+	if strings.TrimSpace(request.ModelProfile) != "" {
+		return nil, &CapabilityError{Kind: KindClaude, Capability: CapabilityStart, Reason: "Claude staged candidate has no verified model profile mapping"}
+	}
 	if request.Limits.MaxCostMicrousd != nil {
 		return nil, &CapabilityError{Kind: KindClaude, Capability: CapabilityHardCostLimit, Reason: "Claude staged candidate has no verified provider-enforced hard cost limit"}
 	}
@@ -163,9 +167,14 @@ func (adapter *ClaudeCandidateAdapter) Start(ctx context.Context, request StartR
 			"--session-id",
 			sessionID,
 		},
-		Dir:            request.Workspace,
-		Env:            append([]string(nil), request.Invocation.Env...),
-		PersistProcess: request.PersistProcess,
+		Dir:                           request.Workspace,
+		Env:                           append([]string(nil), request.Invocation.Env...),
+		InitialLeaseDeadline:          request.Invocation.InitialLeaseDeadline,
+		InitialLeaseDeadlineAt:        request.Invocation.InitialLeaseDeadlineAt,
+		InitialLeaseSequence:          request.Invocation.InitialLeaseSequence,
+		PersistProcess:                request.PersistProcess,
+		PersistProcessAuthority:       request.PersistProcessAuthority,
+		PersistContainmentStopReceipt: request.PersistContainmentStopReceipt,
 	}
 	process, startErr := startProcess(processContext, invocation, execution.SinkFunc(session.handleProcessOutput))
 	if isNilClaudeCandidateProcess(process) {
@@ -318,6 +327,33 @@ func (session *claudeCandidateSession) ProcessDetails() (int, string) {
 	return session.process.ProcessDetails()
 }
 
+func (session *claudeCandidateSession) LeaseRenewalAvailable() bool {
+	if session == nil {
+		return false
+	}
+	session.mutex.Lock()
+	process := session.process
+	session.mutex.Unlock()
+	renewer, ok := process.(interface{ LeaseRenewalAvailable() bool })
+	return ok && renewer.LeaseRenewalAvailable()
+}
+
+func (session *claudeCandidateSession) RenewLease(deadline time.Duration, sequence uint64) error {
+	if session == nil {
+		return errors.ErrUnsupported
+	}
+	session.mutex.Lock()
+	process := session.process
+	session.mutex.Unlock()
+	renewer, ok := process.(interface {
+		RenewLease(time.Duration, uint64) error
+	})
+	if !ok {
+		return errors.ErrUnsupported
+	}
+	return renewer.RenewLease(deadline, sequence)
+}
+
 // Open never writes to stdin. It waits for the native system/init record to
 // report the exact UUID supplied on the fresh argv.
 func (session *claudeCandidateSession) Open(ctx context.Context) (NativeSessionHandle, error) {
@@ -383,9 +419,10 @@ func (session *claudeCandidateSession) Open(ctx context.Context) (NativeSessionH
 }
 
 func (session *claudeCandidateSession) stopAfterOpenFailure(cause error) error {
-	cleanupContext, cancel := context.WithTimeout(context.Background(), claudeCandidateCleanupTimeout)
-	closeErr := session.Close(cleanupContext)
-	cancel()
+	// Close owns its own bounded termination-plus-watcher budget. Passing a
+	// second deadline here would let the caller deadline expire while the
+	// shared close attempt is still finishing in the background.
+	closeErr := session.Close(context.Background())
 	if closeErr != nil {
 		return errors.Join(cause, fmt.Errorf("stop Claude process after Open failure: %w", closeErr))
 	}
@@ -648,19 +685,24 @@ func (session *claudeCandidateSession) Close(ctx context.Context) error {
 	session.closeMutex.Unlock()
 	session.requestClose()
 
-	cleanupContext, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), claudeCandidateCleanupTimeout)
+	cleanupContext, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), claudeCandidateCleanupTimeout+claudeCandidateTerminationGrace)
 	go func() {
-		err := session.closeOnce(cleanupContext)
+		err, retryable := session.closeOnce(cleanupContext)
 		cleanupCancel()
 		session.closeMutex.Lock()
 		attempt.err = err
 		if err == nil {
 			session.closeSucceeded = true
-		} else {
+		} else if !retryable {
 			// Process.Terminate is idempotent and retains its first failure.
 			// Preserve that observation instead of issuing another terminate
 			// call that could be mistaken for a fresh cleanup attempt.
 			session.closeError = err
+		} else {
+			// A watcher-only timeout is provisional: the native process can
+			// settle after this bounded attempt. Leave Close retryable so a
+			// later reconciliation can observe watchDone and prove cleanup.
+			session.closeError = nil
 		}
 		if session.closeAttempt == attempt {
 			session.closeAttempt = nil
@@ -689,7 +731,7 @@ func (session *claudeCandidateSession) requestClose() {
 	}
 }
 
-func (session *claudeCandidateSession) closeOnce(ctx context.Context) error {
+func (session *claudeCandidateSession) closeOnce(ctx context.Context) (error, bool) {
 	// Wait for an in-flight prompt write after the close fence has cancelled it.
 	// StartTurn cannot acquire this mutex and then successfully write once
 	// requestClose has marked the session closing.
@@ -700,18 +742,22 @@ func (session *claudeCandidateSession) closeOnce(ctx context.Context) error {
 	session.mutex.Unlock()
 	session.writeMutex.Unlock()
 	if process == nil {
-		return errors.New("Claude staged candidate process is unavailable")
+		return errors.New("Claude staged candidate process is unavailable"), false
 	}
 	session.cancel()
-	if err := process.Terminate(ctx, claudeCandidateTerminationGrace); err != nil {
-		return err
-	}
+	terminateErr := process.Terminate(ctx, claudeCandidateTerminationGrace)
+	var watcherErr error
+	watchContext, watchCancel := context.WithTimeout(ctx, claudeCandidateCleanupTimeout)
 	select {
 	case <-session.watchDone:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+	case <-watchContext.Done():
+		watcherErr = errClaudeCandidateWatcherTimeout
 	}
+	watchCancel()
+	if watcherErr != nil {
+		return errors.Join(terminateErr, watcherErr), terminateErr == nil
+	}
+	return terminateErr, false
 }
 
 func (session *claudeCandidateSession) handleProcessOutput(ctx context.Context, event execution.Event) error {
@@ -773,8 +819,8 @@ func (session *claudeCandidateSession) handleProcessOutputLocked(ctx context.Con
 
 func (session *claudeCandidateSession) handleClaudeRecord(_ context.Context, processEvent execution.Event, record claudeprotocol.Event) error {
 	if record.DecodeError != nil {
-		_ = session.emit(Event{Kind: EventDiagnostic, Stream: string(processEvent.Stream), Sequence: record.Sequence, At: processEvent.At, Payload: append(json.RawMessage(nil), record.Raw...), Diagnostic: true, Code: "invalid_native_record", Message: record.DecodeError.Error()})
-		return record.DecodeError
+		emitErr := session.emit(Event{Kind: EventDiagnostic, Stream: string(processEvent.Stream), Sequence: record.Sequence, At: processEvent.At, Payload: append(json.RawMessage(nil), record.Raw...), Diagnostic: true, Code: "invalid_native_record", Message: record.DecodeError.Error()})
+		return errors.Join(record.DecodeError, emitErr)
 	}
 	if err := session.emit(Event{Kind: EventNativeFrame, Stream: string(processEvent.Stream), Sequence: record.Sequence, At: processEvent.At, Payload: append(json.RawMessage(nil), record.Raw...)}); err != nil {
 		return err
@@ -819,14 +865,15 @@ func (session *claudeCandidateSession) handleClaudeRecord(_ context.Context, pro
 }
 
 func (session *claudeCandidateSession) completeClaudeCandidateTerminal(terminal claudeprotocol.Terminal) {
+	reason := protocol.TaskResultReasonMissingResult
 	var output string
 	if err := json.Unmarshal(terminal.Result.Output, &output); err != nil || strings.TrimSpace(output) == "" {
-		session.completeTurn(TaskResult{Kind: ResultUnknown, Summary: errClaudeCandidateNoSemanticResult.Error(), Usage: Usage{State: UsageUnknown}}, errClaudeCandidateNoSemanticResult, false)
+		session.completeTurn(TaskResult{Kind: ResultFailed, Summary: errClaudeCandidateNoSemanticResult.Error(), Reason: &reason, Usage: Usage{State: UsageUnknown}}, errClaudeCandidateNoSemanticResult, false)
 		return
 	}
 	semantic, err := protocol.ParseTaskResult([]byte(output))
 	if err != nil {
-		session.completeTurn(TaskResult{Kind: ResultUnknown, Summary: errClaudeCandidateNoSemanticResult.Error(), Usage: Usage{State: UsageUnknown}}, fmt.Errorf("parse Claude TaskResult: %w", err), false)
+		session.completeTurn(TaskResult{Kind: ResultFailed, Summary: errClaudeCandidateNoSemanticResult.Error(), Reason: &reason, Usage: Usage{State: UsageUnknown}}, fmt.Errorf("parse Claude TaskResult: %w", err), false)
 		return
 	}
 	resultKind := ResultSucceeded
@@ -908,17 +955,31 @@ func (session *claudeCandidateSession) watchProcess() {
 		processResult := process.Wait()
 		session.outputMutex.Lock()
 		trailing, closeErr := session.decoder.Close()
+		var trailingErr error
 		for _, record := range trailing {
-			_ = session.handleClaudeRecord(context.Background(), execution.Event{Stream: execution.Stdout, Sequence: record.Sequence, At: time.Now().UTC()}, record)
+			if err := session.handleClaudeRecord(context.Background(), execution.Event{Stream: execution.Stdout, Sequence: record.Sequence, At: time.Now().UTC()}, record); err != nil && trailingErr == nil {
+				trailingErr = err
+			}
 		}
 		session.outputMutex.Unlock()
-		if closeErr != nil {
-			session.fail(closeErr)
+		if trailingErr != nil || closeErr != nil {
+			session.fail(errors.Join(trailingErr, closeErr))
 		}
 
 		session.mutex.Lock()
 		session.processResult = &processResult
 		identityObserved := session.identityObserved
+		session.mutex.Unlock()
+		if !identityObserved {
+			session.mutex.Lock()
+			missingInit := session.failure == nil
+			session.mutex.Unlock()
+			if missingInit {
+				session.fail(errClaudeCandidateMissingInit)
+			}
+			session.openOnce.Do(func() { close(session.openDone) })
+		}
+		session.mutex.Lock()
 		turnStarted := session.turnStarted
 		turnFinal := session.turnFinal
 		cancelRequested := session.cancelRequested
@@ -927,12 +988,6 @@ func (session *claudeCandidateSession) watchProcess() {
 		turnResult := cloneClaudeCandidateTaskResultPointer(session.turnResult)
 		turnErr := session.turnErr
 		session.mutex.Unlock()
-		if !identityObserved {
-			if failure == nil {
-				session.fail(errClaudeCandidateMissingInit)
-			}
-			session.openOnce.Do(func() { close(session.openDone) })
-		}
 		if turnStarted && !turnFinal {
 			if cancelRequested {
 				turnResult = &TaskResult{Kind: ResultCancelled, Summary: "Claude process was cancelled", Usage: Usage{State: UsageUnknown}}
@@ -992,7 +1047,11 @@ func expectedClaudeCandidateNormalClose(result execution.Result, candidate bool)
 }
 
 func expectedClaudeCandidateCancelled(result execution.Result, requested bool) bool {
-	return requested && result.Terminated && result.WaitError == nil && result.SinkError == nil && result.OutputError == nil && result.TerminationError == nil && result.ContainmentError == nil
+	// Process.Terminate marks the result as Terminated before the graceful and
+	// forceful paths run. A forced stop can therefore legitimately preserve a
+	// non-zero exit and WaitError; transport, output, termination, and
+	// containment failures remain evidence against acknowledging cancellation.
+	return requested && result.Terminated && result.SinkError == nil && result.OutputError == nil && result.TerminationError == nil && result.ContainmentError == nil
 }
 
 func summarizeClaudeCandidateProcessFailure(result execution.Result) string {

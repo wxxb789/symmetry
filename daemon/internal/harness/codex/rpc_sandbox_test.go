@@ -3,12 +3,16 @@ package codex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/wxxb789/symmetry/daemon/internal/platform"
 )
 
 func TestThreadStartResponseRequiresWorkspaceOnlyPolicy(t *testing.T) {
@@ -126,17 +130,11 @@ func TestThreadStartResponseRejectsUnresolvableOrEscapingRoots(t *testing.T) {
 	outside := t.TempDir()
 	link := filepath.Join(workspace, "outside-link")
 	if runtime.GOOS == "windows" {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		command := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command",
-			"New-Item -ItemType Junction -Path $env:SYMMETRY_TEST_LINK -Target $env:SYMMETRY_TEST_TARGET -ErrorAction Stop | Out-Null")
-		command.Env = append(os.Environ(), "SYMMETRY_TEST_LINK="+link, "SYMMETRY_TEST_TARGET="+outside)
-		if output, err := command.CombinedOutput(); err != nil {
-			t.Fatalf("create test junction: %v: %s", err, output)
-		}
+		createTestJunction(t, link, outside)
 	} else if err := os.Symlink(outside, link); err != nil {
 		t.Fatalf("create test symlink: %v", err)
 	}
+	t.Cleanup(func() { _ = os.Remove(link) })
 	if _, err := os.Readlink(link); err != nil {
 		t.Fatalf("test link was not created: %v", err)
 	}
@@ -167,6 +165,54 @@ func TestThreadStartResponseRejectsUnresolvableOrEscapingRoots(t *testing.T) {
 			})
 		}
 	}
+}
+
+func createTestJunction(t *testing.T, link, target string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, "cmd.exe", "/d", "/c", "mklink", "/J", link, target)
+	if err := platform.ConfigureHeadlessProcess(command); err != nil {
+		t.Fatalf("ConfigureHeadlessProcess() for test junction: %v", err)
+	}
+	output, err := command.CombinedOutput()
+	if err == nil {
+		return
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("create test junction timed out: %v", ctx.Err())
+	}
+	diagnostic := strings.TrimSpace(string(output))
+	if diagnostic == "" {
+		diagnostic = "<no command output>"
+	}
+	if junctionCapabilityUnavailable(err, output) {
+		t.Skipf("directory junction capability unavailable: %v: %s", err, diagnostic)
+	}
+	t.Fatalf("create test junction: %v: %s", err, diagnostic)
+}
+
+func junctionCapabilityUnavailable(err error, output []byte) bool {
+	if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrPermission) {
+		return true
+	}
+	message := strings.ToLower(strings.TrimSpace(string(output)))
+	for _, marker := range []string{
+		"access is denied",
+		"a required privilege is not held",
+		"requested operation requires elevation",
+		"sufficient privilege",
+		"not supported",
+	} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	// Some headless Windows environments return only exit status 1 when
+	// mklink cannot create a junction, so preserve the skip contract even
+	// when cmd.exe provides no diagnostic text.
+	var exitErr *exec.ExitError
+	return runtime.GOOS == "windows" && message == "" && errors.As(err, &exitErr) && exitErr.ExitCode() == 1
 }
 
 func workspaceOnlyThreadResponse(workspace string) map[string]any {

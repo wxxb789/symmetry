@@ -173,6 +173,9 @@ func TestClaudeCandidateRejectsProseTerminalAsSuccess(t *testing.T) {
 	if result.Kind == ResultSucceeded || result.Semantic != nil {
 		t.Fatalf("prose terminal result = %+v, must not be successful semantic progress", result)
 	}
+	if result.Reason == nil || *result.Reason != protocol.TaskResultReasonMissingResult {
+		t.Fatalf("prose terminal reason = %v, want missing_result", result.Reason)
+	}
 }
 
 func TestClaudeCandidateAcceptsVerifiedTaskResultAndPublishesEvent(t *testing.T) {
@@ -385,6 +388,34 @@ func TestClaudeCandidateCloseFailureIsStableWithoutReterminating(t *testing.T) {
 	}
 }
 
+func TestClaudeCandidateWatcherTimeoutCanBeReconciled(t *testing.T) {
+	process := newClaudeCandidateFakeProcess()
+	process.holdTermination = true
+	ctx, cancel := context.WithCancel(context.Background())
+	session := newClaudeCandidateSession(ctx, cancel, &recordingClaudeCandidateSink{}, claudeCandidateTestSessionID)
+	session.mutex.Lock()
+	session.process = process
+	session.processReady = true
+	session.mutex.Unlock()
+	go session.watchProcess()
+	defer process.finish()
+
+	watchContext, watchCancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	err, retryable := session.closeOnce(watchContext)
+	watchCancel()
+	if !errors.Is(err, errClaudeCandidateWatcherTimeout) || !retryable {
+		t.Fatalf("closeOnce() = (%v, %t), want watcher timeout and retryable=true", err, retryable)
+	}
+
+	process.mu.Lock()
+	process.holdTermination = false
+	process.mu.Unlock()
+	err, retryable = session.closeOnce(context.Background())
+	if err != nil || retryable {
+		t.Fatalf("reconciled closeOnce() = (%v, %t), want nil and retryable=false", err, retryable)
+	}
+}
+
 func TestCloneClaudeCandidateTaskResultDeepCopiesNestedProtocolFields(t *testing.T) {
 	proposal := json.RawMessage(`{"steps":["inspect"]}`)
 	reason := protocol.TaskResultReasonUnknownOutcome
@@ -450,13 +481,13 @@ func TestClaudeCandidateCancellationUsesBoundedTerminate(t *testing.T) {
 	}
 }
 
-func TestClaudeCandidateCancelledResultRequiresCleanProcessTermination(t *testing.T) {
+func TestClaudeCandidateCancelledResultRequiresValidTerminationEvidence(t *testing.T) {
 	tests := []struct {
 		name          string
 		mutate        func(*execution.Result)
 		wantCancelled bool
 	}{
-		{name: "wait error", mutate: func(result *execution.Result) { result.WaitError = errors.New("wait failed") }},
+		{name: "wait error after explicit termination", mutate: func(result *execution.Result) { result.WaitError = errors.New("wait failed") }, wantCancelled: true},
 		{name: "sink error", mutate: func(result *execution.Result) { result.SinkError = errors.New("sink failed") }},
 		{name: "output error", mutate: func(result *execution.Result) { result.OutputError = errors.New("output failed") }},
 		{name: "termination error", mutate: func(result *execution.Result) { result.TerminationError = errors.New("termination failed") }},
@@ -623,6 +654,27 @@ func TestClaudeCandidateUnsupportedOperationsAndResumeFailClosed(t *testing.T) {
 	}
 }
 
+func TestClaudeCandidateRejectsUnmappedModelProfileBeforeStart(t *testing.T) {
+	process := newClaudeCandidateFakeProcess()
+	started := false
+	adapter := newClaudeCandidateTestAdapter(process, nil)
+	adapter.startProcess = func(context.Context, execution.Invocation, execution.Sink) (claudeCandidateProcess, error) {
+		started = true
+		return process, nil
+	}
+	request := claudeCandidateStartRequest(t)
+	request.ModelProfile = "gpt-5.6-luna"
+
+	session, err := adapter.Start(context.Background(), request, &recordingClaudeCandidateSink{})
+	var capabilityErr *CapabilityError
+	if session != nil || !errors.As(err, &capabilityErr) || capabilityErr.Capability != CapabilityStart {
+		t.Fatalf("Start() = session=%T error=%v, want unmapped model profile rejection", session, err)
+	}
+	if started {
+		t.Fatal("Start() launched Claude before rejecting the unmapped model profile")
+	}
+}
+
 func TestClaudeCandidateRetainsProcessOwnerWhenStartReportsError(t *testing.T) {
 	process := newClaudeCandidateFakeProcess()
 	want := errors.New("persist process failed")
@@ -770,6 +822,7 @@ type claudeCandidateFakeProcess struct {
 	terminateGrace  time.Duration
 	terminateError  error
 	terminateResult execution.Result
+	holdTermination bool
 	result          execution.Result
 	waitDone        chan struct{}
 	finishOnce      sync.Once
@@ -830,8 +883,11 @@ func (process *claudeCandidateFakeProcess) Terminate(_ context.Context, grace ti
 	} else {
 		process.result = execution.Result{PID: 42, ExitCode: -1, Terminated: true, FinishedAt: time.Now().UTC(), TerminationError: terminateErr}
 	}
+	holdTermination := process.holdTermination
 	process.mu.Unlock()
-	process.finish()
+	if !holdTermination {
+		process.finish()
+	}
 	return terminateErr
 }
 

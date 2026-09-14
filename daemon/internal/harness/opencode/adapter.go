@@ -283,15 +283,16 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 	eventContext, cancelEvents := context.WithCancel(ctx)
 	session := newNativeSession(sessionContext, cancel, eventContext, cancelEvents, sink, request.Workspace, adapter.newAPI, username, password, adapter.newPeerVerifier, adapter.healthRetryWait, adapter.terminationWait)
 	invocation := execution.Invocation{
-		Program:                 adapter.executable,
-		Args:                    []string{"serve", "--hostname", "127.0.0.1", "--port", "0", "--pure"},
-		Dir:                     request.Workspace,
-		Env:                     appendCredentialEnvironment(request.Invocation.Env, username, password),
-		InitialLeaseDeadline:    request.Invocation.InitialLeaseDeadline,
-		InitialLeaseDeadlineAt:  request.Invocation.InitialLeaseDeadlineAt,
-		InitialLeaseSequence:    request.Invocation.InitialLeaseSequence,
-		PersistProcess:          request.PersistProcess,
-		PersistProcessAuthority: request.PersistProcessAuthority,
+		Program:                       adapter.executable,
+		Args:                          []string{"serve", "--hostname", "127.0.0.1", "--port", "0", "--pure"},
+		Dir:                           request.Workspace,
+		Env:                           appendCredentialEnvironment(request.Invocation.Env, username, password),
+		InitialLeaseDeadline:          request.Invocation.InitialLeaseDeadline,
+		InitialLeaseDeadlineAt:        request.Invocation.InitialLeaseDeadlineAt,
+		InitialLeaseSequence:          request.Invocation.InitialLeaseSequence,
+		PersistProcess:                request.PersistProcess,
+		PersistProcessAuthority:       request.PersistProcessAuthority,
+		PersistContainmentStopReceipt: request.PersistContainmentStopReceipt,
 	}
 	process, err := adapter.startProcess(sessionContext, invocation, execution.SinkFunc(session.handleProcessOutput))
 	if isNilNativeProcess(process) {

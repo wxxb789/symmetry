@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 )
 
@@ -40,4 +41,8 @@ func terminatePersistedProcess(pid int, identity string) error {
 		return fmt.Errorf("%w: terminate persisted process group: %v", errPersistedProcessStopUnproven, err)
 	}
 	return nil
+}
+
+func terminatePersistedProcessWithAuthority(_ int, _ string, _ *authority.Supervisor) (authority.StopReceipt, error) {
+	return authority.StopReceipt{}, fmt.Errorf("%w: persisted containment authority is unsupported on Linux", errPersistedProcessStopUnproven)
 }

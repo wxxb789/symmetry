@@ -145,6 +145,8 @@ func (adapter *GenericAdapter) Start(ctx context.Context, request StartRequest, 
 	}
 	invocation := request.Invocation
 	invocation.PersistProcess = request.PersistProcess
+	invocation.PersistProcessAuthority = request.PersistProcessAuthority
+	invocation.PersistContainmentStopReceipt = request.PersistContainmentStopReceipt
 	process, err := adapter.runner.Start(ctx, invocation, execution.SinkFunc(func(eventContext context.Context, event execution.Event) error {
 		return sink.Handle(eventContext, Event{
 			Kind:     EventOutput,

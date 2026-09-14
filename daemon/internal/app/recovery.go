@@ -8,21 +8,36 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
 
 var errRecoveryPending = errors.New("local recovery remains pending")
 
+// Windows installs the authenticated helper-release implementation from its
+// build-tagged termination file. Non-Windows authority records are test-only
+// compatibility data and retain the existing no-op release boundary.
+var releasePersistedContainmentAuthority = func(int, string, *authority.Supervisor) error {
+	return nil
+}
+
 // A successful recovered stop survives local persistence retries, not restart.
 type recoveredProcessStop struct {
 	pid       int
 	identity  string
 	startedAt time.Time
+	authority *authority.Supervisor
 }
 
 func (stop recoveredProcessStop) matches(journal state.RunJournal) bool {
-	return stop.pid == journal.PID && stop.identity == journal.ProcessIdentity && stop.startedAt.Equal(journal.StartedAt)
+	if stop.pid != journal.PID || stop.identity != journal.ProcessIdentity || !stop.startedAt.Equal(journal.StartedAt) {
+		return false
+	}
+	if stop.authority == nil || journal.ContainmentAuthority == nil {
+		return stop.authority == nil && journal.ContainmentAuthority == nil
+	}
+	return stop.authority.Equal(*journal.ContainmentAuthority)
 }
 
 // Each entry keeps its existing ordering, while its caller owns retry scheduling.
@@ -203,16 +218,25 @@ func (daemon *daemon) recoverGoalSession(rootContext context.Context, session st
 	}
 	legacyAttachmentBarrier := legacyGoalSessionAttachmentBarrier(session, journal)
 	attachedStopRecovery := attachMappingPending || resumeAttachmentPending || resumePreStart || (session.HasVerifiedControlAttachment() && session.SessionState == state.GoalSessionStateBusy)
+	goalSessionUncertainPersisted := false
 	if !stoppedWitness && !attachedStopRecovery && !legacyAttachmentBarrier && session.SessionState != state.GoalSessionStateClosed && session.LaunchState != state.GoalSessionLaunchStateUncertain {
 		if _, err := daemon.store.MarkGoalSessionUncertain(session.Key(), "native Goal session was left unclosed across daemon restart"); err != nil {
 			return fmt.Errorf("mark Goal session uncertain for %s/%d: %w", key.RunID, key.Generation, err)
 		}
+		goalSessionUncertainPersisted = true
 	}
 	if !nativeStopWitness && journal.PID > 0 && strings.TrimSpace(journal.ProcessIdentity) != "" {
-		if err := daemon.stopPersistedProcess(rootContext, journal); err != nil {
-			return fmt.Errorf("stop recovered native process %s/%d: %w", key.RunID, key.Generation, err)
+		stopErr := daemon.stopPersistedProcess(rootContext, journal)
+		if stopErr != nil {
+			if errors.Is(stopErr, errPersistedProcessStopUnproven) && !goalSessionUncertainPersisted &&
+				session.SessionState != state.GoalSessionStateClosed && session.LaunchState != state.GoalSessionLaunchStateUncertain {
+				if _, uncertainErr := daemon.store.MarkGoalSessionUncertain(session.Key(), "native Goal session stop is unproven"); uncertainErr != nil {
+					stopErr = errors.Join(stopErr, fmt.Errorf("mark Goal session uncertain: %w", uncertainErr))
+				}
+			}
+			return fmt.Errorf("stop recovered native process %s/%d: %w", key.RunID, key.Generation, stopErr)
 		}
-		if attachedStopRecovery {
+		if attachedStopRecovery || session.NeedsReconciliation() {
 			if err := daemon.recordStoppedGoalSession(key, session.Key()); err != nil {
 				return fmt.Errorf("record stopped recovered Goal session %s/%d: %w", key.RunID, key.Generation, err)
 			}
@@ -260,7 +284,12 @@ func (daemon *daemon) stopPersistedProcess(ctx context.Context, journal state.Ru
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	stop := recoveredProcessStop{pid: journal.PID, identity: journal.ProcessIdentity, startedAt: journal.StartedAt}
+	var authorityCopy *authority.Supervisor
+	if journal.ContainmentAuthority != nil {
+		cloned := journal.ContainmentAuthority.Clone()
+		authorityCopy = &cloned
+	}
+	stop := recoveredProcessStop{pid: journal.PID, identity: journal.ProcessIdentity, startedAt: journal.StartedAt, authority: authorityCopy}
 	current, err := daemon.store.LoadJournal(journal.Key())
 	if err != nil {
 		if state.IsNotFound(err) {
@@ -280,13 +309,52 @@ func (daemon *daemon) stopPersistedProcess(ctx context.Context, journal state.Ru
 	}
 	daemon.mu.Unlock()
 	if proven {
+		if authorityCopy != nil && authorityCopy.StopReceipt != nil && authorityCopy.StopReceipt.ValidFor(*authorityCopy) {
+			if err := releasePersistedContainmentAuthority(journal.PID, journal.ProcessIdentity, authorityCopy); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
-	if daemon.options.terminatePersist == nil {
-		return errors.New("persisted process termination is unavailable")
+	if authorityCopy != nil && authorityCopy.StopReceipt != nil && authorityCopy.StopReceipt.ValidFor(*authorityCopy) {
+		if err := releasePersistedContainmentAuthority(journal.PID, journal.ProcessIdentity, authorityCopy); err != nil {
+			return err
+		}
+		stop.authority = authorityCopy
+		daemon.mu.Lock()
+		if daemon.recoveredStops == nil {
+			daemon.recoveredStops = make(map[state.RunKey]recoveredProcessStop)
+		}
+		daemon.recoveredStops[journal.Key()] = stop
+		daemon.mu.Unlock()
+		return nil
 	}
-	if err := daemon.options.terminatePersist(journal.PID, journal.ProcessIdentity); err != nil {
-		return err
+	if authorityCopy != nil {
+		if daemon.options.terminatePersistAuthority == nil {
+			return errors.New("persisted containment authority termination is unavailable")
+		}
+		receipt, terminateErr := daemon.options.terminatePersistAuthority(journal.PID, journal.ProcessIdentity, authorityCopy)
+		if terminateErr != nil {
+			return terminateErr
+		}
+		if !receipt.ValidFor(*authorityCopy) {
+			return fmt.Errorf("%w: containment supervisor returned an invalid stop receipt", errPersistedProcessStopUnproven)
+		}
+		if persistErr := daemon.persistContainmentStopReceipt(journal.Key(), journal.PID, journal.ProcessIdentity, receipt); persistErr != nil {
+			return fmt.Errorf("persist containment stop receipt: %w", persistErr)
+		}
+		authorityCopy.StopReceipt = &receipt
+		if err := releasePersistedContainmentAuthority(journal.PID, journal.ProcessIdentity, authorityCopy); err != nil {
+			return err
+		}
+		stop.authority = authorityCopy
+	} else {
+		if daemon.options.terminatePersist == nil {
+			return errors.New("persisted process termination is unavailable")
+		}
+		if err := daemon.options.terminatePersist(journal.PID, journal.ProcessIdentity); err != nil {
+			return err
+		}
 	}
 	daemon.mu.Lock()
 	if daemon.recoveredStops == nil {
@@ -295,6 +363,73 @@ func (daemon *daemon) stopPersistedProcess(ctx context.Context, journal state.Ru
 	daemon.recoveredStops[journal.Key()] = stop
 	daemon.mu.Unlock()
 	return nil
+}
+
+func (daemon *daemon) persistContainmentStopReceipt(key state.RunKey, pid int, identity string, receipt authority.StopReceipt) error {
+	if daemon.store == nil {
+		return errors.New("state store is unavailable")
+	}
+	if _, err := daemon.store.RecordContainmentStopReceipt(key, pid, identity, receipt); err == nil {
+		return nil
+	} else {
+		journal, readErr := daemon.store.LoadJournal(key)
+		if readErr == nil && journal.PID == pid && journal.ProcessIdentity == identity && journal.ContainmentAuthority != nil && journal.ContainmentAuthority.StopReceipt != nil && *journal.ContainmentAuthority.StopReceipt == receipt {
+			return nil
+		}
+		if readErr != nil {
+			return errors.Join(err, fmt.Errorf("read back containment stop receipt: %w", readErr))
+		}
+		return err
+	}
+}
+
+// persistProcessAuthority treats the journal write as a small CAS protocol.
+// A write error after rename is still indeterminate because the directory sync
+// may not have completed. Re-submit the same owner binding and require that
+// write to succeed; a readback alone cannot turn an indeterminate write into a
+// durable acknowledgement. A replacement owner is never overwritten, and a
+// matching existing receipt is preserved.
+func (daemon *daemon) persistProcessAuthority(key state.RunKey, pid int, identity string, value authority.Supervisor) error {
+	write := func() error {
+		candidate := value.Clone()
+		if daemon.options.recordProcessAuthority != nil {
+			_, err := daemon.options.recordProcessAuthority(key, pid, identity, candidate, daemon.now())
+			return err
+		}
+		_, err := daemon.store.SetContainmentAuthority(key, pid, identity, candidate)
+		return err
+	}
+	if err := write(); err == nil {
+		return nil
+	} else {
+		firstErr := err
+		if retryErr := write(); retryErr == nil {
+			return nil
+		} else {
+			return errors.Join(firstErr, retryErr)
+		}
+	}
+}
+
+func (daemon *daemon) processAuthorityMatches(key state.RunKey, pid int, identity string, value authority.Supervisor) (bool, error) {
+	if daemon.store == nil {
+		return false, errors.New("state store is unavailable")
+	}
+	journal, err := daemon.store.LoadJournal(key)
+	if err != nil {
+		return false, err
+	}
+	if journal.PID != pid || journal.ProcessIdentity != identity || journal.ContainmentAuthority == nil {
+		return false, nil
+	}
+	existing := journal.ContainmentAuthority.Clone()
+	candidate := value.Clone()
+	if existing.Equal(candidate) {
+		return true, nil
+	}
+	existing.StopReceipt = nil
+	candidate.StopReceipt = nil
+	return existing.Equal(candidate), nil
 }
 
 func (daemon *daemon) forgetRecoveredProcessStop(key state.RunKey) {

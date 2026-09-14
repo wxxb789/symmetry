@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
@@ -120,17 +121,21 @@ type RunJournal struct {
 	// TerminalTaskResultKind is the immutable semantic result kind carried by
 	// the first completed transition. It survives transition delivery so local
 	// cleanup can distinguish a candidate artifact from other successful work.
-	TerminalTaskResultKind         protocol.TaskResultKind           `json:"terminal_task_result_kind,omitempty"`
-	TerminalVerdict                string                            `json:"terminal_verdict,omitempty"`
-	TerminalResolvedAt             time.Time                         `json:"terminal_resolved_at,omitempty"`
-	Work                           protocol.Work                     `json:"work"`
-	WorkspacePath                  string                            `json:"workspace_path"`
-	WorkspaceRecoveryRequired      bool                              `json:"workspace_recovery_required,omitempty"`
-	RetainWorkspace                bool                              `json:"retain_workspace,omitempty"`
-	WorkspaceBindingKey            string                            `json:"workspace_binding_key"`
-	PID                            int                               `json:"pid"`
-	ProcessIdentity                string                            `json:"process_identity"`
-	StartedAt                      time.Time                         `json:"started_at"`
+	TerminalTaskResultKind    protocol.TaskResultKind `json:"terminal_task_result_kind,omitempty"`
+	TerminalVerdict           string                  `json:"terminal_verdict,omitempty"`
+	TerminalResolvedAt        time.Time               `json:"terminal_resolved_at,omitempty"`
+	Work                      protocol.Work           `json:"work"`
+	WorkspacePath             string                  `json:"workspace_path"`
+	WorkspaceRecoveryRequired bool                    `json:"workspace_recovery_required,omitempty"`
+	RetainWorkspace           bool                    `json:"retain_workspace,omitempty"`
+	WorkspaceBindingKey       string                  `json:"workspace_binding_key"`
+	PID                       int                     `json:"pid"`
+	ProcessIdentity           string                  `json:"process_identity"`
+	StartedAt                 time.Time               `json:"started_at"`
+	// ContainmentAuthority is optional for backwards compatibility with
+	// journals created before the independent Windows supervisor existed. A
+	// process marker without it remains intentionally unrecoverable on Windows.
+	ContainmentAuthority           *authority.Supervisor             `json:"containment_authority,omitempty"`
 	LastEventSequence              int64                             `json:"last_event_sequence"`
 	PendingEvents                  []protocol.RunEvent               `json:"pending_events"`
 	DroppedOutputChunks            int64                             `json:"dropped_output_chunks,omitempty"`
@@ -475,6 +480,9 @@ func (store *Store) SaveJournal(journal RunJournal) error {
 		if current.PID != journal.PID || current.ProcessIdentity != journal.ProcessIdentity || !current.StartedAt.Equal(journal.StartedAt) {
 			return errors.New("process details require dedicated mutation")
 		}
+		if !sameContainmentAuthority(current.ContainmentAuthority, journal.ContainmentAuthority) {
+			return errors.New("containment authority requires dedicated mutation")
+		}
 		if (current.LocalState == "cleanup_pending") != (journal.LocalState == "cleanup_pending") {
 			return errors.New("cleanup state requires dedicated transition")
 		}
@@ -678,6 +686,70 @@ func (store *Store) SetProcessDetails(key RunKey, pid int, identity string, star
 	})
 }
 
+// SetContainmentAuthority persists the typed binding for an already persisted
+// process marker. It never replaces an uncleared authority with a different
+// launch, so a stale callback cannot retarget recovery.
+func (store *Store) SetContainmentAuthority(key RunKey, pid int, identity string, value authority.Supervisor) (RunJournal, error) {
+	if pid <= 0 || strings.TrimSpace(identity) == "" {
+		return RunJournal{}, errors.New("process details are invalid")
+	}
+	if err := value.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if value.TargetPID != pid || value.TargetIdentity != identity {
+		return RunJournal{}, errors.New("containment authority target does not match process details")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.PID != pid || journal.ProcessIdentity != identity || journal.StartedAt.IsZero() {
+			return errors.New("containment authority requires a persisted process marker")
+		}
+		if journal.ContainmentAuthority != nil {
+			if journal.ContainmentAuthority.Equal(value) {
+				return nil
+			}
+			// A retry after a stop-receipt write must not erase the receipt by
+			// replaying the original authority without its terminal witness. The
+			// binding itself is still idempotent, so preserve the existing record
+			// when only its receipt differs.
+			existing := journal.ContainmentAuthority.Clone()
+			existing.StopReceipt = nil
+			candidate := value.Clone()
+			candidate.StopReceipt = nil
+			if existing.Equal(candidate) && journal.ContainmentAuthority.StopReceipt != nil && value.StopReceipt == nil {
+				return nil
+			}
+			return errors.New("containment authority cannot replace an uncleared owner")
+		}
+		cloned := value.Clone()
+		journal.ContainmentAuthority = &cloned
+		return nil
+	})
+}
+
+// RecordContainmentStopReceipt durably records the exact positive helper
+// witness before recovery is allowed to compare-and-clear the process marker.
+// It is idempotent for the same authority and receipt, and rejects any
+// replacement launch.
+func (store *Store) RecordContainmentStopReceipt(key RunKey, pid int, identity string, receipt authority.StopReceipt) (RunJournal, error) {
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.PID != pid || journal.ProcessIdentity != identity || journal.ContainmentAuthority == nil {
+			return errors.New("containment stop receipt has no matching authority")
+		}
+		if !receipt.ValidFor(*journal.ContainmentAuthority) {
+			return errors.New("containment stop receipt does not match containment authority")
+		}
+		if journal.ContainmentAuthority.StopReceipt != nil {
+			if *journal.ContainmentAuthority.StopReceipt == receipt {
+				return nil
+			}
+			return errors.New("containment stop receipt cannot replace an existing witness")
+		}
+		cloned := receipt
+		journal.ContainmentAuthority.StopReceipt = &cloned
+		return nil
+	})
+}
+
 // ClearProcessDetails records that the process identified by the expected PID
 // and identity has been stopped. The compare-and-clear guard prevents recovery
 // from erasing a newer process record if another owner replaced the process
@@ -697,6 +769,7 @@ func (store *Store) ClearProcessDetails(key RunKey, pid int, identity string) (R
 		journal.PID = 0
 		journal.ProcessIdentity = ""
 		journal.StartedAt = time.Time{}
+		journal.ContainmentAuthority = nil
 		return nil
 	})
 }
@@ -942,8 +1015,11 @@ func (store *Store) PrepareProvideInput(key RunKey, intent InputCommandIntent) (
 	created := false
 	journal, err := store.mutateJournal(key, func(journal *RunJournal) error {
 		if current := journal.InputCommandIntent; current != nil {
-			if current.CommandID == intent.CommandID && current.PayloadDigest == intent.PayloadDigest {
-				return nil
+			if current.CommandID == intent.CommandID {
+				if current.PayloadDigest == intent.PayloadDigest {
+					return nil
+				}
+				return errors.New("input command conflicts with journal")
 			}
 			if !current.AcknowledgementDelivered || journal.LocalState != "waiting_for_input" {
 				return errors.New("input command conflicts with journal")
@@ -1644,6 +1720,13 @@ func validateKey(key RunKey) error {
 	return nil
 }
 
+func sameContainmentAuthority(left, right *authority.Supervisor) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
 func validateJournal(journal RunJournal) error {
 	if err := validateKey(journal.Key()); err != nil {
 		return err
@@ -1651,11 +1734,18 @@ func validateJournal(journal RunJournal) error {
 	if !validRequiredString(journal.RuntimeKey, 4096) || !validRequiredString(journal.RuntimeID, 4096) || journal.ClaimedRuntimeEpoch <= 0 || !validRequiredString(journal.ClaimID, 4096) || !validRequiredString(journal.LocalState, 256) || len(journal.WorkspacePath) > 32768 || !validRequiredString(journal.WorkspaceBindingKey, 4096) || journal.PID < 0 || len(journal.ProcessIdentity) > 4096 || journal.LastEventSequence < 0 {
 		return errors.New("run journal is invalid")
 	}
-	if journal.PID == 0 && (!journal.StartedAt.IsZero() || journal.ProcessIdentity != "") {
+	if journal.PID == 0 && (!journal.StartedAt.IsZero() || journal.ProcessIdentity != "" || journal.ContainmentAuthority != nil) {
 		return errors.New("run journal process details are invalid")
 	}
 	if journal.PID > 0 && (journal.StartedAt.IsZero() || !validRequiredString(journal.ProcessIdentity, 4096)) {
 		return errors.New("run journal process details are invalid")
+	}
+	if journal.ContainmentAuthority != nil {
+		if err := journal.ContainmentAuthority.Validate(); err != nil ||
+			journal.ContainmentAuthority.TargetPID != journal.PID ||
+			journal.ContainmentAuthority.TargetIdentity != journal.ProcessIdentity {
+			return errors.New("run journal containment authority is invalid")
+		}
 	}
 	if (strings.TrimSpace(journal.LeaseToken) == "") != journal.LeaseExpiresAt.IsZero() || len(journal.LeaseToken) > 65536 || !validWork(journal.Work) {
 		return errors.New("run journal is invalid")

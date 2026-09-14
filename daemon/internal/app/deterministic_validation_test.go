@@ -308,6 +308,76 @@ func TestDeterministicArtifactValidationRejectsCancellationAfterArtifactRead(t *
 	assertDeterministicValidationUnchanged(t, fixture)
 }
 
+func TestDeterministicArtifactValidationRejectsPersistedStaleOrFenceChangeAfterArtifactRead(t *testing.T) {
+	content := []byte("committed proof at the admitted commit\n")
+	for _, test := range []struct {
+		name           string
+		mutate         func(*deterministicValidationFixture) error
+		wantError      string
+		wantState      string
+		wantLeaseToken string
+	}{
+		{
+			name:           "stale state",
+			wantError:      "no longer in a live claimed state",
+			wantState:      "stale",
+			wantLeaseToken: "lease-token",
+			mutate: func(fixture *deterministicValidationFixture) error {
+				_, err := fixture.store.SetLocalState(fixture.key, "stale")
+				return err
+			},
+		},
+		{
+			name:           "fence change",
+			wantError:      "fence changed before deterministic validation completed",
+			wantState:      "claimed",
+			wantLeaseToken: "rotated-lease-token",
+			mutate: func(fixture *deterministicValidationFixture) error {
+				claim := fixture.claim
+				claim.LeaseToken = "rotated-lease-token"
+				_, err := fixture.store.SaveClaimGrant(fixture.key, claim)
+				return err
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newDeterministicValidationFixture(t, []control.AcceptancePredicate{{
+				ID:         "artifact-proof",
+				Kind:       "artifact",
+				ResourceID: deterministicResourceID,
+				Path:       "proof.txt",
+			}})
+			fixture.workspace.artifacts["proof.txt"] = workspace.SubjectArtifact{
+				Path: "proof.txt", Content: content, ContentDigest: digestDeterministicArtifact(content),
+			}
+			var hookErr error
+			fixture.workspace.afterRead = func() { hookErr = test.mutate(fixture) }
+
+			result, err := fixture.daemon.tryDeterministicArtifactValidation(context.Background(), fixture.key, fixture.claim, fixture.admission)
+			if hookErr != nil {
+				t.Fatalf("afterRead mutation error = %v", hookErr)
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("tryDeterministicArtifactValidation() error = %v, want %q", err, test.wantError)
+			}
+			if result.Handled || len(result.Evidence) != 0 || !reflect.DeepEqual(result.Transition, protocol.StateTransitionRequest{}) {
+				t.Fatalf("stale/fenced validation result = %#v, want no durable result", result)
+			}
+			if fixture.workspace.readCalls != 1 {
+				t.Fatalf("artifact reads = %d, want one successful read before the mutation", fixture.workspace.readCalls)
+			}
+
+			journal, loadErr := fixture.store.LoadJournal(fixture.key)
+			if loadErr != nil {
+				t.Fatal(loadErr)
+			}
+			if journal.LocalState != test.wantState || journal.LeaseToken != test.wantLeaseToken || journal.TerminalState != "" || len(journal.PendingGoalDeliveries) != 0 || len(journal.PendingTransitions) != 0 {
+				t.Fatalf("stale/fenced validation journal = %#v, want only the afterRead mutation", journal)
+			}
+		})
+	}
+}
+
 func TestDeterministicArtifactValidationStopsGitReadOnContextCancellation(t *testing.T) {
 	content := []byte("committed proof at the admitted commit\n")
 	fixture := newDeterministicValidationFixture(t, []control.AcceptancePredicate{{

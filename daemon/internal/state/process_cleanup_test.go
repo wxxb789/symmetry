@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
@@ -19,6 +20,69 @@ func TestHasProcessDetailsIncludesPartialMarkers(t *testing.T) {
 	}
 	if (RunJournal{}).HasProcessDetails() {
 		t.Fatal("empty process marker was considered unresolved")
+	}
+}
+
+func TestContainmentAuthorityAndStopReceiptAreDurableAndCompareCleared(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("containment-authority", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	value := authority.Supervisor{
+		Version:            authority.SupervisorVersion,
+		Secret:             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		TargetPID:          journal.PID,
+		TargetIdentity:     journal.ProcessIdentity,
+		PipeToken:          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		JobID:              "cccccccccccccccccccccccccccccccc",
+		SupervisorPID:      99,
+		SupervisorIdentity: "windows:99:supervisor",
+	}
+	if _, err := store.SetContainmentAuthority(journal.Key(), journal.PID, journal.ProcessIdentity, value); err != nil {
+		t.Fatal(err)
+	}
+	receipt := authority.StopReceipt{
+		Version:            authority.SupervisorVersion,
+		Status:             "stopped",
+		TargetPID:          value.TargetPID,
+		TargetIdentity:     value.TargetIdentity,
+		PipeToken:          value.PipeToken,
+		JobID:              value.JobID,
+		SupervisorPID:      value.SupervisorPID,
+		SupervisorIdentity: value.SupervisorIdentity,
+	}
+	if _, err := store.RecordContainmentStopReceipt(journal.Key(), journal.PID, journal.ProcessIdentity, receipt); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.LoadJournal(journal.Key())
+	if err != nil || loaded.ContainmentAuthority == nil || loaded.ContainmentAuthority.StopReceipt == nil {
+		t.Fatalf("durable containment authority = %+v, err = %v", loaded.ContainmentAuthority, err)
+	}
+	if !loaded.ContainmentAuthority.StopReceipt.ValidFor(*loaded.ContainmentAuthority) {
+		t.Fatal("durable stop receipt did not match its authority")
+	}
+	cleared, err := store.ClearProcessDetails(journal.Key(), journal.PID, journal.ProcessIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared.ContainmentAuthority != nil || cleared.HasProcessDetails() {
+		t.Fatalf("clear retained process authority or marker: %+v", cleared)
+	}
+}
+
+func TestLegacyProcessMarkerHasNoImplicitContainmentAuthority(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("legacy-authority", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.ContainmentAuthority != nil {
+		t.Fatal("legacy process marker unexpectedly gained containment authority")
 	}
 }
 

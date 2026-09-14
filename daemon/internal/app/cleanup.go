@@ -11,7 +11,10 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/workspace"
 )
 
-const cleanupRetryMinimum = 30 * time.Second
+const (
+	cleanupRetryMinimum       = 30 * time.Second
+	processFinalizeRetryLimit = 3
+)
 
 func (daemon *daemon) runCleanup(ctx context.Context) {
 	for {
@@ -171,11 +174,27 @@ func (daemon *daemon) completeCleanup(key state.RunKey) {
 
 func (daemon *daemon) retryCleanup(key state.RunKey) {
 	daemon.mu.Lock()
+	active := daemon.running[key]
+	if active != nil && active.processExited && active.process != nil && active.processStopWitness == nil && active.processFinalizeExhausted {
+		// A failed finalizer is deliberately bounded per Process owner. Leave
+		// the durable marker for restart recovery, but stop waking this daemon
+		// forever on the same unresolved owner.
+		delete(daemon.cleanupQueued, key)
+		delete(daemon.cleanupRetry, key)
+		daemon.mu.Unlock()
+		return
+	}
 	if daemon.cleanupRetry == nil {
 		daemon.cleanupRetry = make(map[state.RunKey]time.Time)
 	}
 	if _, queued := daemon.cleanupQueued[key]; queued {
-		daemon.cleanupRetry[key] = daemon.now().Add(cleanupRetryMinimum)
+		delay := cleanupRetryMinimum
+		if active != nil && active.processExited && active.process != nil && active.processStopWitness == nil && active.processFinalizeAttempts > 1 {
+			for attempt := 1; attempt < active.processFinalizeAttempts; attempt++ {
+				delay *= 2
+			}
+		}
+		daemon.cleanupRetry[key] = daemon.now().Add(delay)
 	}
 	daemon.mu.Unlock()
 }
@@ -269,6 +288,13 @@ func (daemon *daemon) resolveCleanupProcessMarker(ctx context.Context, journal s
 	}
 	daemon.mu.Unlock()
 	if active != nil {
+		if !hasWitness && active.processExited && active.process != nil {
+			if finalized, finalizeErr := daemon.finalizeExitedProcess(key, journal, active); finalizeErr != nil {
+				return false, finalizeErr
+			} else if finalized {
+				hasWitness = true
+			}
+		}
 		if !hasWitness {
 			return false, nil
 		}
@@ -303,6 +329,71 @@ func (daemon *daemon) resolveCleanupProcessMarker(ctx context.Context, journal s
 			return false, err
 		}
 	}
+	return true, nil
+}
+
+// finalizeExitedProcess is the only same-daemon retry path for a Process that
+// already reported resultDone. It never calls Terminate and never waits for the
+// child; the Process implementation owns only receipt persistence/release at
+// this point. The owner identity is checked before and after the callback so a
+// replacement Process cannot inherit an old finalization result.
+func (daemon *daemon) finalizeExitedProcess(key state.RunKey, journal state.RunJournal, active *runningRun) (bool, error) {
+	daemon.mu.Lock()
+	if daemon.running[key] != active || active.process == nil || !active.processExited || active.processStopWitness != nil {
+		daemon.mu.Unlock()
+		return false, nil
+	}
+	process := active.process
+	if active.processFinalizeOwner != process {
+		active.processFinalizeOwner = process
+		active.processFinalizeAttempts = 0
+		active.processFinalizeExhausted = false
+	}
+	if active.processFinalizeExhausted {
+		daemon.mu.Unlock()
+		return false, errors.New("process containment finalization retry budget exhausted")
+	}
+	if active.processFinalizeAttempts >= processFinalizeRetryLimit {
+		active.processFinalizeExhausted = true
+		daemon.mu.Unlock()
+		return false, errors.New("process containment finalization retry budget exhausted")
+	}
+	active.processFinalizeAttempts++
+	daemon.mu.Unlock()
+
+	finalizer, ok := process.(ProcessFinalizer)
+	if !ok {
+		err := errors.New("process containment finalizer is unavailable")
+		daemon.mu.Lock()
+		if daemon.running[key] == active && active.process == process && active.processFinalizeAttempts >= processFinalizeRetryLimit {
+			active.processFinalizeExhausted = true
+		}
+		daemon.mu.Unlock()
+		return false, err
+	}
+	if err := finalizer.FinalizeContainment(); err != nil {
+		daemon.mu.Lock()
+		if daemon.running[key] == active && active.process == process && active.processFinalizeAttempts >= processFinalizeRetryLimit {
+			active.processFinalizeExhausted = true
+		}
+		daemon.mu.Unlock()
+		return false, err
+	}
+
+	pid, identity := process.ProcessDetails()
+	if pid != journal.PID || identity != journal.ProcessIdentity {
+		return false, errors.New("process finalization owner does not match persisted process marker")
+	}
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	if daemon.running[key] != active || active.process != process {
+		return false, nil
+	}
+	active.processStopWitness = process
+	active.processStopPID = pid
+	active.processStopIdentity = identity
+	active.cleanupBlocked = true
+	active.processFinalizeExhausted = false
 	return true, nil
 }
 

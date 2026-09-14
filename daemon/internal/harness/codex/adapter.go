@@ -192,11 +192,16 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 	session.configuredNativeModel = strings.TrimSpace(adapter.configuredNativeModel)
 	session.configuredNativeProvider = strings.TrimSpace(adapter.configuredNativeProvider)
 	invocation := execution.Invocation{
-		Program:        adapter.executable,
-		Args:           []string{"app-server", "--stdio"},
-		Dir:            request.Workspace,
-		Env:            append([]string(nil), request.Invocation.Env...),
-		PersistProcess: request.PersistProcess,
+		Program:                       adapter.executable,
+		Args:                          []string{"app-server", "--stdio"},
+		Dir:                           request.Workspace,
+		Env:                           append([]string(nil), request.Invocation.Env...),
+		InitialLeaseDeadline:          request.Invocation.InitialLeaseDeadline,
+		InitialLeaseDeadlineAt:        request.Invocation.InitialLeaseDeadlineAt,
+		InitialLeaseSequence:          request.Invocation.InitialLeaseSequence,
+		PersistProcess:                request.PersistProcess,
+		PersistProcessAuthority:       request.PersistProcessAuthority,
+		PersistContainmentStopReceipt: request.PersistContainmentStopReceipt,
 	}
 	process, err := adapter.startProcess(processContext, invocation, execution.SinkFunc(session.handleProcessOutput))
 	if isNilNativeProcess(process) {
@@ -385,6 +390,33 @@ func (session *nativeSession) processDetailsLocked() (int, string) {
 		return 0, ""
 	}
 	return session.process.ProcessDetails()
+}
+
+func (session *nativeSession) LeaseRenewalAvailable() bool {
+	if session == nil {
+		return false
+	}
+	session.mutex.Lock()
+	process := session.process
+	session.mutex.Unlock()
+	renewer, ok := process.(interface{ LeaseRenewalAvailable() bool })
+	return ok && renewer.LeaseRenewalAvailable()
+}
+
+func (session *nativeSession) RenewLease(deadline time.Duration, sequence uint64) error {
+	if session == nil {
+		return errors.ErrUnsupported
+	}
+	session.mutex.Lock()
+	process := session.process
+	session.mutex.Unlock()
+	renewer, ok := process.(interface {
+		RenewLease(time.Duration, uint64) error
+	})
+	if !ok {
+		return errors.ErrUnsupported
+	}
+	return renewer.RenewLease(deadline, sequence)
 }
 
 // Open performs the complete app-server initialization and opens an idle,

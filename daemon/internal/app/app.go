@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/config"
 	"github.com/wxxb789/symmetry/daemon/internal/control"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
@@ -182,6 +183,13 @@ type Process interface {
 	ProcessDetails() (int, string)
 }
 
+// ProcessFinalizer is an optional post-exit boundary. Implementations must
+// retry only durable containment receipt/release work and must return without
+// waiting when the process result is not already complete.
+type ProcessFinalizer interface {
+	FinalizeContainment() error
+}
+
 // StartProcess permits deterministic runner tests without exposing os/exec to
 // the control loop's callers.
 type StartProcess func(context.Context, execution.Invocation, execution.Sink) (Process, error)
@@ -217,12 +225,16 @@ type options struct {
 	notifications                              NotificationClient
 	logWriter                                  io.Writer
 	clock                                      func() time.Time
+	localClock                                 func() time.Time
 	newTimer                                   func(time.Duration) deadlineTimer
 	newID                                      func() (string, error)
 	newMachineToken                            func() (string, error)
 	terminatePersist                           func(pid int, identity string) error
+	terminatePersistAuthority                  func(pid int, identity string, value *authority.Supervisor) (authority.StopReceipt, error)
 	recordWorkspace                            func(state.RunKey, string) (state.RunJournal, error)
 	recordProcess                              func(state.RunKey, int, string, time.Time) (state.RunJournal, error)
+	recordProcessAuthority                     func(state.RunKey, int, string, authority.Supervisor, time.Time) (state.RunJournal, error)
+	recordContainmentStopReceipt               func(state.RunKey, int, string, authority.StopReceipt) (state.RunJournal, error)
 	queueTerminalTransition                    func(state.RunKey, protocol.StateTransitionRequest, time.Time) (state.RunJournal, error)
 	queueGoalUsage                             func(state.RunKey, protocol.Usage) (state.RunJournal, error)
 	markGoalSessionAttachDeliveryReady         func(state.RunKey, string) (state.RunJournal, error)
@@ -285,13 +297,15 @@ func Run(ctx context.Context, value config.Config, changes ...Options) error {
 		return fmt.Errorf("validate config: %w", err)
 	}
 	settings := options{
-		httpClient:       &http.Client{Timeout: 30 * time.Second},
-		logWriter:        os.Stderr,
-		clock:            func() time.Time { return time.Now().UTC() },
-		newTimer:         func(delay time.Duration) deadlineTimer { return systemTimer{timer: time.NewTimer(delay)} },
-		newID:            state.NewDaemonInstanceID,
-		newMachineToken:  state.NewMachineToken,
-		terminatePersist: terminatePersistedProcess,
+		httpClient:                &http.Client{Timeout: 30 * time.Second},
+		logWriter:                 os.Stderr,
+		clock:                     func() time.Time { return time.Now().UTC() },
+		localClock:                time.Now,
+		newTimer:                  func(delay time.Duration) deadlineTimer { return systemTimer{timer: time.NewTimer(delay)} },
+		newID:                     state.NewDaemonInstanceID,
+		newMachineToken:           state.NewMachineToken,
+		terminatePersist:          terminatePersistedProcess,
+		terminatePersistAuthority: terminatePersistedProcessWithAuthority,
 	}
 	for _, change := range changes {
 		if change != nil {
@@ -430,6 +444,10 @@ type runningRun struct {
 	processStopWitness       Process
 	processStopPID           int
 	processStopIdentity      string
+	processExited            bool
+	processFinalizeOwner     Process
+	processFinalizeAttempts  int
+	processFinalizeExhausted bool
 	startFailure             error
 	nativeCloseRetryRequired bool
 	nativeCloseRetrying      bool
@@ -452,6 +470,9 @@ type runningRun struct {
 	stopExecution                context.CancelCauseFunc
 	renewCancel                  context.CancelFunc
 	renewCancelID                uint64
+	localLeaseDeadlineAt         time.Time
+	leaseSequence                uint64
+	leaseRenewalClosed           bool
 	terminalCancel               context.CancelFunc
 }
 
@@ -1329,6 +1350,17 @@ func (daemon *daemon) now() time.Time {
 	return time.Now().UTC()
 }
 
+// localNow is intentionally separate from now. LeaseRemainingMS is a
+// relative Control measurement, so its local deadline must use the daemon's
+// monotonic-capable local clock rather than a wall-clock projection that may
+// be skewed from Control.
+func (daemon *daemon) localNow() time.Time {
+	if daemon.options.localClock != nil {
+		return daemon.options.localClock()
+	}
+	return time.Now()
+}
+
 // formatControlUTCTimestamp matches Control's utc_datetime_usec boundary.
 // Sub-microsecond precision cannot be represented by that contract, so it is
 // truncated after normalizing to UTC; the fixed-width layout retains trailing
@@ -1769,7 +1801,7 @@ func (daemon *daemon) stopRecoveredJournal(journal state.RunJournal, reason stri
 			return
 		}
 		journal = latest
-		if journal.PID <= 0 || strings.TrimSpace(journal.ProcessIdentity) == "" || daemon.options.terminatePersist == nil {
+		if journal.PID <= 0 || strings.TrimSpace(journal.ProcessIdentity) == "" || !daemon.canTerminatePersistedProcess(journal) {
 			if daemon.log != nil {
 				daemon.log.Warn("stop_recovered_process_unavailable", "run_id", journal.RunID, "generation", journal.Generation)
 			}
@@ -1810,6 +1842,13 @@ func recoveredProcessRecorded(journal state.RunJournal) bool {
 	return journal.PID > 0 || strings.TrimSpace(journal.ProcessIdentity) != "" || !journal.StartedAt.IsZero()
 }
 
+func (daemon *daemon) canTerminatePersistedProcess(journal state.RunJournal) bool {
+	if journal.ContainmentAuthority != nil {
+		return daemon.options.terminatePersistAuthority != nil
+	}
+	return daemon.options.terminatePersist != nil
+}
+
 // cancelRecoveredJournal has no in-memory owner to race against. It retains
 // artifacts before process control, records a stopped process durably, then
 // commits the cancellation and its matching command acknowledgement together.
@@ -1839,7 +1878,7 @@ func (daemon *daemon) cancelRecoveredJournal(ctx context.Context, journal state.
 		return false
 	}
 	if recoveredProcessRecorded(journal) {
-		if strings.TrimSpace(journal.ProcessIdentity) == "" || daemon.options.terminatePersist == nil {
+		if strings.TrimSpace(journal.ProcessIdentity) == "" || !daemon.canTerminatePersistedProcess(journal) {
 			if daemon.log != nil {
 				daemon.log.Warn("stop_recovered_cancel_process_unavailable", "run_id", journal.RunID, "generation", journal.Generation)
 			}
@@ -2338,6 +2377,7 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		daemon.log.Warn("load_claim_intent_failed", "run_id", assignment.RunID, "error", err)
 		return
 	}
+	claimStarted := daemon.localNow()
 	claim, err := daemon.claimWithRetryUntil(ctx, assignment.RunID, protocol.ClaimRequest{RuntimeID: daemon.runtimeID, RuntimeEpoch: daemon.runtimeEpoch, Generation: assignment.Generation, ClaimID: journal.ClaimID}, assignment.AssignmentExpiresAt, waitForRetry)
 	if err != nil {
 		if control.IsOwnershipLost(err) {
@@ -2346,6 +2386,8 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		daemon.log.Warn("claim_failed", "run_id", assignment.RunID, "error", err)
 		return
 	}
+	claim.RequestStartedAt = claimStarted
+	daemon.setLocalLeaseDeadline(key, leaseDeadlineAt(claim, claimStarted))
 	journal, err = daemon.store.SaveClaimGrant(key, claim)
 	if err != nil {
 		daemon.log.Error("save_claim_grant_failed", "run_id", assignment.RunID, "error", err)
@@ -2451,6 +2493,14 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		}
 		return err
 	})
+	initialLeaseDeadlineAt := leaseDeadlineAt(claim, claimStarted)
+	initialLeaseDeadline := remainingLeaseDeadlineAt(initialLeaseDeadlineAt, daemon.localNow())
+	if claim.LeaseRemainingMS > 0 && initialLeaseDeadline <= 0 {
+		if !daemon.isCancelled(key) {
+			daemon.queueFailure(ctx, key, "initial_lease_deadline", errors.New("server lease remaining time was consumed before process startup"))
+		}
+		return
+	}
 	process, err := daemon.start(executionContext, execution.Invocation{
 		Program:                profile.Command,
 		Args:                   profile.Args,
@@ -2458,12 +2508,29 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		Env:                    environment,
 		InitialInput:           input,
 		CloseInputAfterInitial: !profile.Interactive,
+		InitialLeaseDeadline:   initialLeaseDeadline,
+		InitialLeaseDeadlineAt: initialLeaseDeadlineAt,
+		InitialLeaseSequence:   1,
 		PersistProcess: func(pid int, identity string) error {
 			if daemon.options.recordProcess != nil {
 				_, recordErr := daemon.options.recordProcess(key, pid, identity, daemon.now())
 				return recordErr
 			}
 			_, recordErr := daemon.store.SetProcessDetails(key, pid, identity, daemon.now())
+			return recordErr
+		},
+		PersistProcessAuthority: func(pid int, identity string, value *authority.Supervisor) error {
+			if value == nil {
+				return errors.New("persisted containment authority is nil")
+			}
+			return daemon.persistProcessAuthority(key, pid, identity, value.Clone())
+		},
+		PersistContainmentStopReceipt: func(pid int, identity string, receipt authority.StopReceipt) error {
+			if daemon.options.recordContainmentStopReceipt != nil {
+				_, recordErr := daemon.options.recordContainmentStopReceipt(key, pid, identity, receipt)
+				return recordErr
+			}
+			_, recordErr := daemon.store.RecordContainmentStopReceipt(key, pid, identity, receipt)
 			return recordErr
 		},
 	}, sink)
@@ -2533,6 +2600,9 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 	active.prepared = prepared
 	active.output = output
 	active.stopExecution = stopExecution
+	if initialLeaseDeadline > 0 {
+		active.leaseSequence = 1
+	}
 	daemon.mu.Unlock()
 
 	pid, identity, detailsErr := processDetails(process)
@@ -2601,6 +2671,7 @@ func (daemon *daemon) releaseRun(key state.RunKey) {
 	terminalCancel := context.CancelFunc(nil)
 	if active != nil {
 		active.slotHeld = false
+		active.leaseRenewalClosed = true
 		renewCancel = active.renewCancel
 		active.renewCancel = nil
 		active.renewCancelID++
@@ -2735,6 +2806,7 @@ func (daemon *daemon) beginTerminal(key state.RunKey) func(bool) {
 		}
 		if entered {
 			active.terminal = true
+			active.leaseRenewalClosed = true
 		}
 	}
 }
@@ -3268,6 +3340,11 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 	sink := harness.EventSinkFunc(func(_ context.Context, event harness.Event) error {
 		return daemon.queueNativeEvent(key, event)
 	})
+	initialLeaseDeadlineAt := leaseDeadlineAt(claim, claim.RequestStartedAt)
+	initialLeaseDeadline := remainingLeaseDeadlineAt(initialLeaseDeadlineAt, daemon.localNow())
+	if claim.LeaseRemainingMS > 0 && initialLeaseDeadline <= 0 {
+		return errors.New("server lease remaining time was consumed before native process startup")
+	}
 	session, err := adapter.Start(ctx, harness.StartRequest{
 		AdmissionID:   admission.AdmissionID,
 		LocalHandleID: localHandleID,
@@ -3281,7 +3358,15 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 			MaxCostMicrousd: admission.Limits.MaxCostMicrousd,
 		},
 		ProviderAccess: providerAccess,
-		Invocation:     execution.Invocation{Program: profile.Command, Args: profile.Args, Dir: prepared.Path, Env: environment},
+		Invocation: execution.Invocation{
+			Program:                profile.Command,
+			Args:                   profile.Args,
+			Dir:                    prepared.Path,
+			Env:                    environment,
+			InitialLeaseDeadline:   initialLeaseDeadline,
+			InitialLeaseDeadlineAt: initialLeaseDeadlineAt,
+			InitialLeaseSequence:   1,
+		},
 		PersistProcess: func(pid int, identity string) error {
 			var persistErr error
 			if daemon.options.recordProcess != nil {
@@ -3292,6 +3377,20 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 			if persistErr == nil && daemon.options.processObserver != nil {
 				daemon.options.processObserver(key, pid, identity, daemon.now())
 			}
+			return persistErr
+		},
+		PersistProcessAuthority: func(pid int, identity string, value *authority.Supervisor) error {
+			if value == nil {
+				return errors.New("persisted containment authority is nil")
+			}
+			return daemon.persistProcessAuthority(key, pid, identity, value.Clone())
+		},
+		PersistContainmentStopReceipt: func(pid int, identity string, receipt authority.StopReceipt) error {
+			if daemon.options.recordContainmentStopReceipt != nil {
+				_, persistErr := daemon.options.recordContainmentStopReceipt(key, pid, identity, receipt)
+				return persistErr
+			}
+			_, persistErr := daemon.store.RecordContainmentStopReceipt(key, pid, identity, receipt)
 			return persistErr
 		},
 	}, sink)
@@ -4996,11 +5095,15 @@ func (daemon *daemon) waitForRunWithContext(ctx context.Context, key state.RunKe
 	stale := active.stale
 	startFailure := active.startFailure
 	daemon.mu.Unlock()
+	// Record the exact owner and its completed Wait result before any terminal
+	// delivery. A receipt/finalization fault must not make cleanup depend on a
+	// potentially slow or cancelled Control transition.
+	if !daemon.recordGenericProcessExit(key, active, process, processPID, processIdentity, processStopped) {
+		active.inputMu.Unlock()
+		return
+	}
 	if stale {
 		active.inputMu.Unlock()
-		if !daemon.recordGenericProcessExit(key, active, process, processPID, processIdentity, processStopped) {
-			return
-		}
 		_, err := daemon.store.SetLocalState(key, "stale")
 		daemon.releaseSlotOnce(key)
 		daemon.enqueueCleanup(key)
@@ -5036,9 +5139,6 @@ func (daemon *daemon) waitForRunWithContext(ctx context.Context, key state.RunKe
 		}
 	}
 	active.inputMu.Unlock()
-	if !daemon.recordGenericProcessExit(key, active, process, processPID, processIdentity, processStopped) {
-		return
-	}
 	daemon.enqueueCleanup(key)
 	daemon.releaseCleanupAfterProcessExit(key)
 }
@@ -5056,10 +5156,19 @@ func (daemon *daemon) recordGenericProcessExit(key state.RunKey, expected *runni
 		return false
 	}
 	expected.cleanupBlocked = true
+	expected.processExited = true
+	if expected.processFinalizeOwner != process {
+		expected.processFinalizeOwner = process
+		expected.processFinalizeAttempts = 0
+		expected.processFinalizeExhausted = false
+		delete(daemon.cleanupRetry, key)
+	}
 	if stopped {
 		expected.processStopWitness = process
 		expected.processStopPID = pid
 		expected.processStopIdentity = identity
+		expected.processFinalizeAttempts = 0
+		expected.processFinalizeExhausted = false
 		delete(daemon.cleanupRetry, key)
 	} else {
 		expected.processStopWitness = nil
@@ -5098,11 +5207,16 @@ func (daemon *daemon) watchFailedStartProcess(ctx context.Context, key state.Run
 	}()
 	select {
 	case <-ctx.Done():
+		// Shutdown must not wait on an indeterminate post-start Process, but
+		// cancellation must not discard its eventual resultDone/finalization
+		// path either. The detached watcher owns only this process's completion.
+		go func() {
+			<-done
+			daemon.waitForRunWithContext(context.Background(), key)
+		}()
 		return
 	case <-done:
-		if ctx.Err() == nil {
-			daemon.waitForRunWithContext(context.Background(), key)
-		}
+		daemon.waitForRunWithContext(context.Background(), key)
 	}
 }
 
@@ -6620,14 +6734,20 @@ func (daemon *daemon) renewLeases(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	now := daemon.now()
+	var now time.Time
 	type renewal struct {
-		journal   state.RunJournal
-		response  protocol.LeaseHeartbeatResponse
-		requestID uint64
-		err       error
+		journal         state.RunJournal
+		response        protocol.LeaseHeartbeatResponse
+		requestID       uint64
+		requestStarted  time.Time
+		elapsed         time.Duration
+		relative        bool
+		localDeadlineAt time.Time
+		err             error
 	}
 	candidates := make([]state.RunJournal, 0, len(journals))
+	relativeDeadlines := make(map[state.RunKey]time.Time, len(journals))
+	relativeLease := make(map[state.RunKey]bool, len(journals))
 	for _, journal := range journals {
 		if journal.LocalState == "terminal_pending" || journal.LeaseToken == "" {
 			continue
@@ -6636,13 +6756,26 @@ func (daemon *daemon) renewLeases(ctx context.Context) {
 			daemon.terminateForLease(journal, "lease fence is incomplete")
 			continue
 		}
-		remaining := journal.LeaseExpiresAt.Sub(now)
-		if remaining <= 0 {
-			daemon.terminateForLease(journal, "lease expired")
-			continue
-		}
-		if remaining <= leaseSafetyMargin {
-			continue
+		localDeadlineAt, hasRelativeLease := daemon.localLeaseDeadline(journal.Key())
+		var remaining time.Duration
+		if hasRelativeLease {
+			remaining = localDeadlineAt.Sub(daemon.localNow())
+			if remaining <= 0 {
+				daemon.terminateForLease(journal, "relative lease deadline elapsed")
+				continue
+			}
+		} else {
+			if now.IsZero() {
+				now = daemon.now()
+			}
+			remaining = journal.LeaseExpiresAt.Sub(now)
+			if remaining <= 0 {
+				daemon.terminateForLease(journal, "lease expired")
+				continue
+			}
+			if remaining <= leaseSafetyMargin {
+				continue
+			}
 		}
 		if !daemon.renewalEligible(journal) {
 			continue
@@ -6650,6 +6783,8 @@ func (daemon *daemon) renewLeases(ctx context.Context) {
 		if remaining > daemon.renewalThreshold() {
 			continue
 		}
+		relativeDeadlines[journal.Key()] = localDeadlineAt
+		relativeLease[journal.Key()] = hasRelativeLease
 		candidates = append(candidates, journal)
 	}
 	if len(candidates) == 0 {
@@ -6671,8 +6806,17 @@ func (daemon *daemon) renewLeases(ctx context.Context) {
 			defer group.Done()
 			for index := range jobs {
 				journal := candidates[index]
-				response, requestID, renewErr := daemon.renewLease(ctx, journal)
-				completed <- renewal{journal: journal, response: response, requestID: requestID, err: renewErr}
+				response, requestID, requestStarted, elapsed, renewErr := daemon.renewLeaseWithTimingAndStart(ctx, journal)
+				completed <- renewal{
+					journal:         journal,
+					response:        response,
+					requestID:       requestID,
+					requestStarted:  requestStarted,
+					elapsed:         elapsed,
+					relative:        relativeLease[journal.Key()],
+					localDeadlineAt: relativeDeadlines[journal.Key()],
+					err:             renewErr,
+				}
 			}
 		}()
 	}
@@ -6693,30 +6837,152 @@ func (daemon *daemon) renewLeases(ctx context.Context) {
 			daemon.finishCommandRequest(result.requestID)
 			continue
 		}
-		current := daemon.now()
-		if !current.Before(result.journal.LeaseExpiresAt) {
-			daemon.finishCommandRequest(result.requestID)
-			daemon.terminateForLease(result.journal, "lease expired during renewal")
-			continue
+		if result.relative || result.response.LeaseRemainingMS > 0 {
+			// A first relative response may upgrade a legacy in-memory run.
+			// Do not let the legacy wall-clock projection reject that response
+			// before its relative authority is evaluated below.
+			if result.relative && (result.localDeadlineAt.IsZero() || !daemon.localNow().Before(result.localDeadlineAt)) {
+				daemon.finishCommandRequest(result.requestID)
+				daemon.terminateForLease(result.journal, "relative lease deadline elapsed during renewal")
+				continue
+			}
+		} else {
+			current := daemon.now()
+			if !current.Before(result.journal.LeaseExpiresAt) {
+				daemon.finishCommandRequest(result.requestID)
+				daemon.terminateForLease(result.journal, "lease expired during renewal")
+				continue
+			}
 		}
 		if result.err != nil {
 			daemon.finishCommandRequest(result.requestID)
 			if errors.Is(result.err, context.Canceled) {
 				continue
 			}
-			if control.IsOwnershipLost(result.err) || result.journal.LeaseExpiresAt.Sub(current) <= leaseSafetyMargin {
-				daemon.terminateForLease(result.journal, "lease renewal failed")
+			if result.relative {
+				if control.IsOwnershipLost(result.err) || result.localDeadlineAt.IsZero() || !daemon.localNow().Before(result.localDeadlineAt) {
+					daemon.terminateForLease(result.journal, "lease renewal failed")
+				}
+			} else {
+				current := daemon.now()
+				if control.IsOwnershipLost(result.err) || result.journal.LeaseExpiresAt.Sub(current) <= leaseSafetyMargin {
+					daemon.terminateForLease(result.journal, "lease renewal failed")
+				}
 			}
 			continue
 		}
-		if !result.response.LeaseExpiresAt.After(current.Add(leaseSafetyMargin)) {
-			daemon.finishCommandRequest(result.requestID)
-			daemon.terminateForLease(result.journal, "renewed lease is already unsafe")
-			continue
+		if result.relative || result.response.LeaseRemainingMS > 0 {
+			if result.response.LeaseRemainingMS <= 0 {
+				// A legacy response cannot extend a lease whose authority was
+				// previously relative. Keep the existing local deadline and fail
+				// closed instead of falling back to its absolute expiry.
+				daemon.finishCommandRequest(result.requestID)
+				continue
+			}
+			deadlineAt := leaseDeadlineAtFromRemaining(result.response.LeaseRemainingMS, result.requestStarted)
+			localDeadline := time.Duration(result.response.LeaseRemainingMS)*time.Millisecond - result.elapsed - leaseSafetyMargin
+			if localDeadline <= 0 {
+				daemon.finishCommandRequest(result.requestID)
+				daemon.terminateForLease(result.journal, "renewed lease has no safe local deadline")
+				continue
+			}
+			if supported, renewErr := daemon.renewLocalLeaseDuration(result.journal.Key(), localDeadline, deadlineAt); renewErr != nil {
+				daemon.finishCommandRequest(result.requestID)
+				daemon.terminateForLease(result.journal, "local lease watchdog renewal failed")
+				continue
+			} else if !supported {
+				// Keep the daemon-side deadline even when this platform has no
+				// independent watchdog capability; it still constrains future
+				// renewal decisions.
+				daemon.setLocalLeaseDeadline(result.journal.Key(), deadlineAt)
+			}
+		} else {
+			// Do not persist the absolute field from a relative response: a
+			// replayed wall-clock expiry must not outlive this local authority.
+			current := daemon.now()
+			if !result.response.LeaseExpiresAt.After(current.Add(leaseSafetyMargin)) {
+				daemon.finishCommandRequest(result.requestID)
+				daemon.terminateForLease(result.journal, "renewed lease is already unsafe")
+				continue
+			}
+			if _, persistErr := daemon.store.AdvanceLeaseExpiry(result.journal.Key(), result.response.LeaseExpiresAt); persistErr != nil {
+				daemon.finishCommandRequest(result.requestID)
+				if daemon.log != nil {
+					daemon.log.Warn("advance_lease_expiry_failed", "run_id", result.journal.RunID, "error", persistErr)
+				}
+				continue
+			}
 		}
-		_, _ = daemon.store.AdvanceLeaseExpiry(result.journal.Key(), result.response.LeaseExpiresAt)
 		_, _ = daemon.enqueueSnapshotCommandsForRequest(result.requestID, result.response.Commands)
 	}
+}
+
+func (daemon *daemon) renewLocalLease(key state.RunKey, deadline time.Duration) (bool, error) {
+	if deadline <= 0 {
+		return false, errors.New("local lease deadline must be positive")
+	}
+	return daemon.renewLocalLeaseDuration(key, deadline, time.Time{})
+}
+
+func (daemon *daemon) renewLocalLeaseDuration(key state.RunKey, deadline time.Duration, deadlineAt time.Time) (bool, error) {
+	daemon.mu.Lock()
+	active := daemon.running[key]
+	if !activeRunCanRenew(active) {
+		daemon.mu.Unlock()
+		return false, nil
+	}
+	if !deadlineAt.IsZero() {
+		deadline = deadlineAt.Sub(daemon.localNow())
+		if deadline <= 0 {
+			daemon.mu.Unlock()
+			return false, errLeaseDeadlineReached
+		}
+	}
+	var renewer execution.LeaseRenewer
+	if active.process != nil {
+		renewer, _ = active.process.(execution.LeaseRenewer)
+	}
+	if renewer == nil && active.nativeSession != nil {
+		renewer, _ = active.nativeSession.(execution.LeaseRenewer)
+	}
+	if renewer == nil || !renewer.LeaseRenewalAvailable() {
+		daemon.mu.Unlock()
+		return false, nil
+	}
+	active.leaseSequence++
+	if active.leaseSequence == 0 {
+		active.leaseSequence = 1
+	}
+	sequence := active.leaseSequence
+	daemon.mu.Unlock()
+	if err := renewer.RenewLease(deadline, sequence); err != nil {
+		return true, err
+	}
+	if !deadlineAt.IsZero() {
+		daemon.setLocalLeaseDeadline(key, deadlineAt)
+	}
+	return true, nil
+}
+
+func (daemon *daemon) localLeaseDeadline(key state.RunKey) (time.Time, bool) {
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	active := daemon.running[key]
+	if active == nil || active.localLeaseDeadlineAt.IsZero() {
+		return time.Time{}, false
+	}
+	return active.localLeaseDeadlineAt, true
+}
+
+func (daemon *daemon) setLocalLeaseDeadline(key state.RunKey, deadlineAt time.Time) {
+	if deadlineAt.IsZero() {
+		return
+	}
+	daemon.mu.Lock()
+	if active := daemon.running[key]; active != nil {
+		active.localLeaseDeadlineAt = deadlineAt
+	}
+	daemon.mu.Unlock()
 }
 
 func (daemon *daemon) renewalThreshold() time.Duration {
@@ -6730,18 +6996,60 @@ func (daemon *daemon) renewalThreshold() time.Duration {
 	return threshold
 }
 
+// remainingLeaseDeadline converts Control's server-derived relative lease
+// budget into a conservative local duration. The budget is measured from the
+// claim/renewal request start, so workspace preparation, response latency and
+// journaling can only consume authority; they never mint extra time.
+func (daemon *daemon) remainingLeaseDeadline(claim protocol.ClaimResponse, requestStarted time.Time) time.Duration {
+	return remainingLeaseDeadlineAt(leaseDeadlineAt(claim, requestStarted), daemon.localNow())
+}
+
+func leaseDeadlineAt(claim protocol.ClaimResponse, requestStarted time.Time) time.Time {
+	return leaseDeadlineAtFromRemaining(claim.LeaseRemainingMS, requestStarted)
+}
+
+func leaseDeadlineAtFromRemaining(remainingMS int64, requestStarted time.Time) time.Time {
+	if remainingMS <= 0 || requestStarted.IsZero() {
+		return time.Time{}
+	}
+	return requestStarted.Add(time.Duration(remainingMS)*time.Millisecond - leaseSafetyMargin)
+}
+
+func remainingLeaseDeadlineAt(deadlineAt, now time.Time) time.Duration {
+	if deadlineAt.IsZero() || now.IsZero() {
+		return 0
+	}
+	return deadlineAt.Sub(now)
+}
+
 func (daemon *daemon) renewLease(ctx context.Context, journal state.RunJournal) (protocol.LeaseHeartbeatResponse, uint64, error) {
+	response, requestID, _, err := daemon.renewLeaseWithTiming(ctx, journal)
+	return response, requestID, err
+}
+
+func (daemon *daemon) renewLeaseWithTiming(ctx context.Context, journal state.RunJournal) (protocol.LeaseHeartbeatResponse, uint64, time.Duration, error) {
+	response, requestID, _, elapsed, err := daemon.renewLeaseWithTimingAndStart(ctx, journal)
+	return response, requestID, elapsed, err
+}
+
+func (daemon *daemon) renewLeaseWithTimingAndStart(ctx context.Context, journal state.RunJournal) (protocol.LeaseHeartbeatResponse, uint64, time.Time, time.Duration, error) {
+	requestStarted := daemon.localNow()
 	var renewalID uint64
 	daemon.mu.Lock()
 	active := daemon.running[journal.Key()]
 	if !activeRunCanRenew(active) {
 		daemon.mu.Unlock()
-		return protocol.LeaseHeartbeatResponse{}, 0, context.Canceled
+		return protocol.LeaseHeartbeatResponse{}, 0, requestStarted, 0, context.Canceled
 	}
-	requestLimit := journal.LeaseExpiresAt.Sub(daemon.now()) - leaseSafetyMargin
+	requestLimit := time.Duration(0)
+	if !active.localLeaseDeadlineAt.IsZero() {
+		requestLimit = active.localLeaseDeadlineAt.Sub(requestStarted)
+	} else {
+		requestLimit = journal.LeaseExpiresAt.Sub(daemon.now()) - leaseSafetyMargin
+	}
 	if requestLimit <= 0 {
 		daemon.mu.Unlock()
-		return protocol.LeaseHeartbeatResponse{}, 0, errLeaseDeadlineReached
+		return protocol.LeaseHeartbeatResponse{}, 0, requestStarted, 0, errLeaseDeadlineReached
 	}
 	if requestLimit > controlRequestLimit {
 		requestLimit = controlRequestLimit
@@ -6763,7 +7071,11 @@ func (daemon *daemon) renewLease(ctx context.Context, journal state.RunJournal) 
 		active.renewCancel = nil
 	}
 	daemon.mu.Unlock()
-	return response, requestID, err
+	elapsed := daemon.localNow().Sub(requestStarted)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	return response, requestID, requestStarted, elapsed, err
 }
 
 func (daemon *daemon) renewalEligible(snapshot state.RunJournal) bool {
@@ -6777,7 +7089,7 @@ func (daemon *daemon) renewalEligible(snapshot state.RunJournal) bool {
 
 func activeRunCanRenew(active *runningRun) bool {
 	return active != nil && (active.process != nil || active.nativeSession != nil) &&
-		!active.starting && !active.stale && !active.terminal && active.terminalizing == 0 && !active.nativeUsageRenewalBlocked
+		!active.stale && !active.terminal && active.terminalizing == 0 && !active.nativeUsageRenewalBlocked && !active.leaseRenewalClosed
 }
 
 func (daemon *daemon) renewalStillEligible(snapshot state.RunJournal) bool {

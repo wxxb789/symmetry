@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
@@ -309,6 +310,13 @@ type StartRequest struct {
 	// leaves the native launch outcome conservative. Any surviving cleanup
 	// owner must be returned alongside the error, without acknowledging output.
 	PersistProcess func(pid int, identity string) error
+	// PersistProcessAuthority runs after PersistProcess for supervisor-backed
+	// containment. The typed value is machine-local authority and must not be
+	// forwarded to native argv or environment.
+	PersistProcessAuthority func(pid int, identity string, value *authority.Supervisor) error
+	// PersistContainmentStopReceipt records the exact stop witness before the
+	// adapter's process-containment helper may be released.
+	PersistContainmentStopReceipt func(pid int, identity string, receipt authority.StopReceipt) error
 }
 
 // Limits bounds one admitted native turn.

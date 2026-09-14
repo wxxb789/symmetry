@@ -19,7 +19,7 @@ import (
 const subjectResourceID = "00000000-0000-4000-8000-000000000001"
 
 func TestPrepareSubjectUsesAdmittedCommitAfterRefDrift(t *testing.T) {
-	repository := newRepository(t)
+	repository := newSubjectRepository(t)
 	runGit(t, repository, "branch", "-M", "admitted")
 	commitA := gitOutput(t, repository, "rev-parse", "HEAD")
 	root := filepath.Join(t.TempDir(), "worktrees")
@@ -73,7 +73,7 @@ func TestPrepareSubjectUsesAdmittedCommitAfterRefDrift(t *testing.T) {
 }
 
 func TestMaterializeSubjectIgnoresGitReplaceRefs(t *testing.T) {
-	repository := newRepository(t)
+	repository := newSubjectRepository(t)
 	originalCommit := gitOutput(t, repository, "rev-parse", "HEAD")
 	manager := New(map[string]config.Workspace{
 		"primary": {
@@ -96,7 +96,7 @@ func TestMaterializeSubjectIgnoresGitReplaceRefs(t *testing.T) {
 }
 
 func TestPrepareSubjectIgnoresGitReplaceRefs(t *testing.T) {
-	repository := newRepository(t)
+	repository := newSubjectRepository(t)
 	originalCommit := gitOutput(t, repository, "rev-parse", "HEAD")
 	manager := New(map[string]config.Workspace{
 		"primary": {
@@ -122,13 +122,14 @@ func TestPrepareSubjectIgnoresGitReplaceRefs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
-	if string(content) != "test\n" {
-		t.Fatalf("prepared README.md = %q, want original bytes %q", content, "test\n")
+	normalized := strings.ReplaceAll(string(content), "\r\n", "\n")
+	if normalized != "test\n" {
+		t.Fatalf("prepared README.md = %q (normalized %q), want original semantic bytes %q", content, normalized, "test\n")
 	}
 }
 
 func TestPrepareSubjectRejectsMismatchedDigestBeforeCreatingWorkspace(t *testing.T) {
-	repository := newRepository(t)
+	repository := newSubjectRepository(t)
 	root := filepath.Join(t.TempDir(), "worktrees")
 	manager := New(map[string]config.Workspace{
 		"primary": {
@@ -156,7 +157,7 @@ func TestPrepareSubjectRejectsMismatchedDigestBeforeCreatingWorkspace(t *testing
 }
 
 func TestVerifySubjectIgnoresDirtyWorktreeForCommittedSubject(t *testing.T) {
-	repository := newRepository(t)
+	repository := newSubjectRepository(t)
 	root := filepath.Join(t.TempDir(), "worktrees")
 	manager := New(map[string]config.Workspace{
 		"primary": {
@@ -199,7 +200,7 @@ func TestVerifySubjectIgnoresDirtyWorktreeForCommittedSubject(t *testing.T) {
 }
 
 func TestDeriveSubjectReadsActualDetachedHeadAndCommittedTree(t *testing.T) {
-	repository := newRepository(t)
+	repository := newSubjectRepository(t)
 	root := filepath.Join(t.TempDir(), "worktrees")
 	manager := New(map[string]config.Workspace{
 		"primary": {
@@ -233,7 +234,7 @@ func TestDeriveSubjectReadsActualDetachedHeadAndCommittedTree(t *testing.T) {
 }
 
 func TestDeriveSubjectRejectsAttachedHead(t *testing.T) {
-	repository := newRepository(t)
+	repository := newSubjectRepository(t)
 	root := filepath.Join(t.TempDir(), "worktrees")
 	manager := New(map[string]config.Workspace{
 		"primary": {
@@ -266,7 +267,7 @@ func TestDeriveSubjectRejectsAttachedHead(t *testing.T) {
 }
 
 func TestRecoverSubjectRevalidatesCommitAfterJournalLoss(t *testing.T) {
-	repository := newRepository(t)
+	repository := newSubjectRepository(t)
 	root := filepath.Join(t.TempDir(), "worktrees")
 	bindings := map[string]config.Workspace{
 		"primary": {
@@ -300,7 +301,7 @@ func TestRecoverSubjectRevalidatesCommitAfterJournalLoss(t *testing.T) {
 }
 
 func TestMaterializeSubjectRejectsUnreachableCommit(t *testing.T) {
-	repository := newRepository(t)
+	repository := newSubjectRepository(t)
 	manager := New(map[string]config.Workspace{
 		"primary": {
 			Policy: config.WorkspacePolicyGitWorktree, Repository: repository, Root: filepath.Join(t.TempDir(), "worktrees"), Ref: "HEAD", Cleanup: config.CleanupAlways,
@@ -317,8 +318,8 @@ func TestMaterializeSubjectRejectsUnreachableCommit(t *testing.T) {
 }
 
 func TestMaterializeSubjectRejectsUnsupportedSubmoduleTreeEntry(t *testing.T) {
-	repository := newRepository(t)
-	child := newRepository(t)
+	repository := newSubjectRepository(t)
+	child := newSubjectRepository(t)
 	childCommit := gitOutput(t, child, "rev-parse", "HEAD")
 	runGit(t, repository, "update-index", "--add", "--cacheinfo", "160000,"+childCommit+",vendor/child")
 	runGit(t, repository, "commit", "-m", "add unsupported submodule entry")
@@ -343,8 +344,8 @@ func TestMaterializeSubjectRejectsUnsupportedSubmoduleTreeEntry(t *testing.T) {
 }
 
 func TestMaterializeSubjectTreeDigestIsIndependentOfGitInsertionOrder(t *testing.T) {
-	firstRepository := newRepository(t)
-	secondRepository := newRepository(t)
+	firstRepository := newSubjectRepository(t)
+	secondRepository := newSubjectRepository(t)
 	for _, repository := range []string{firstRepository, secondRepository} {
 		if err := os.WriteFile(filepath.Join(repository, "a.txt"), []byte("a\n"), 0o600); err != nil {
 			t.Fatal(err)
@@ -384,6 +385,14 @@ func TestMaterializeSubjectTreeDigestIsIndependentOfGitInsertionOrder(t *testing
 func gitOutput(t *testing.T, directory string, arguments ...string) string {
 	t.Helper()
 	return strings.TrimSpace(runGitOutput(t, directory, arguments...))
+}
+
+func newSubjectRepository(t *testing.T) string {
+	t.Helper()
+	repository := newRepository(t)
+	runGit(t, repository, "config", "core.autocrlf", "false")
+	runGit(t, repository, "config", "core.eol", "lf")
+	return repository
 }
 
 func gitOutputNoReplace(t *testing.T, directory string, arguments ...string) string {

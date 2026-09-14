@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -213,6 +214,112 @@ func TestRecoverUnclosedGoalSessionsProcessesUnrelatedSessionAfterUnprovenStop(t
 	}
 	if !secondRecovered.IsUncertainLaunch() || secondRecovered.SessionState != state.GoalSessionStateUnavailable {
 		t.Fatalf("independent second Goal session recovery = %#v", secondRecovered)
+	}
+}
+
+func TestRecoverAttachedGoalSessionClosesAfterUnprovenStopBecomesProven(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+
+	sessionKey, _, _ := saveRetainedGoalSession(t, store, key)
+	startedAt := time.Date(2026, 9, 13, 8, 0, 0, 0, time.UTC)
+	if _, err := store.SetProcessDetails(key, 91, "native:91", startedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	stopCalls := 0
+	app := &daemon{
+		config:  testConfig(t),
+		store:   store,
+		running: make(map[state.RunKey]*runningRun),
+		slots:   make(chan struct{}, 1),
+		options: options{newID: ids(), clock: func() time.Time { return startedAt }, terminatePersist: func(pid int, identity string) error {
+			stopCalls++
+			if pid != 91 || identity != "native:91" {
+				t.Fatalf("recovered native process = (%d, %q)", pid, identity)
+			}
+			if stopCalls == 1 {
+				return errPersistedProcessStopUnproven
+			}
+			return nil
+		}},
+	}
+
+	firstErr := app.recoverUnclosedGoalSessions(context.Background())
+	if !errors.Is(firstErr, errRecoveryPending) || !errors.Is(firstErr, errPersistedProcessStopUnproven) {
+		t.Fatalf("first recovery error = %v, want pending unproven stop", firstErr)
+	}
+	firstSession, err := store.LoadGoalSession(sessionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstSession.LaunchState != state.GoalSessionLaunchStateUncertain || firstSession.SessionState != state.GoalSessionStateUnavailable || !firstSession.RecoveryRequired || !firstSession.NeedsReconciliation() {
+		t.Fatalf("first recovery Goal session = %#v, want durable uncertainty barrier", firstSession)
+	}
+	if firstSession.UncertainReason != "native Goal session stop is unproven" {
+		t.Fatalf("first recovery uncertainty reason = %q", firstSession.UncertainReason)
+	}
+	firstJournal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstJournal.PID != 91 || firstJournal.ProcessIdentity != "native:91" || !firstJournal.StartedAt.Equal(startedAt) || !firstJournal.RetainWorkspace {
+		t.Fatalf("first recovery lost process or workspace evidence: %#v", firstJournal)
+	}
+	if firstJournal.TerminalState != "" || len(firstJournal.PendingTransitions) != 0 || len(firstJournal.PendingGoalDeliveries) != 0 {
+		t.Fatalf("first recovery produced terminal or Goal effects: %#v", firstJournal)
+	}
+
+	secondErr := app.recoverUnclosedGoalSessions(context.Background())
+	if secondErr != nil {
+		t.Fatalf("second recovery error = %v, want successful reconciliation", secondErr)
+	}
+	if stopCalls != 2 {
+		t.Fatalf("native stop attempts = %d, want one retry after the initial failure", stopCalls)
+	}
+	secondSession, err := store.LoadGoalSession(sessionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondSession.LaunchState != state.GoalSessionLaunchStateClosed || secondSession.SessionState != state.GoalSessionStateClosed || secondSession.RecoveryRequired || secondSession.NeedsReconciliation() || secondSession.NativeSessionID != "" || secondSession.ControlSessionID != "" {
+		t.Fatalf("second recovery did not close the uncertain Goal session without a handle: %#v", secondSession)
+	}
+	secondJournal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondJournal.HasProcessDetails() || !secondJournal.RetainWorkspace {
+		t.Fatalf("second recovery did not clear the exact process marker: %#v", secondJournal)
+	}
+	if secondJournal.TerminalState != "failed" || secondJournal.LocalState != "terminal_pending" || len(secondJournal.PendingTransitions) != 1 || len(secondJournal.PendingGoalDeliveries) != 1 || secondJournal.PendingGoalDeliveries[0].Kind != state.GoalDeliveryUsage || secondJournal.PendingGoalDeliveries[0].Usage == nil || secondJournal.PendingGoalDeliveries[0].Usage.CostBasis != protocol.CostUnknown {
+		t.Fatalf("second recovery did not preserve unknown outcome and usage effects: %#v", secondJournal)
+	}
+	if secondJournal.PendingTransitions[0].State != "failed" || !strings.Contains(string(secondJournal.PendingTransitions[0].Payload), string(protocol.TaskResultReasonUnknownOutcome)) {
+		t.Fatalf("second recovery terminal transition = %#v, want failed unknown_outcome", secondJournal.PendingTransitions[0])
+	}
+	for _, delivery := range append(append([]state.GoalDelivery{}, secondJournal.PendingGoalDeliveries...), secondJournal.DeliveredGoalDeliveries...) {
+		if delivery.Kind == state.GoalDeliverySessionStopped {
+			t.Fatalf("second recovery fabricated a session_stopped receipt: %#v", delivery)
+		}
+	}
+	if len(secondJournal.RetiredGoalDeliveries) != 0 {
+		for _, retired := range secondJournal.RetiredGoalDeliveries {
+			if retired.Delivery.Kind == state.GoalDeliverySessionStopped {
+				t.Fatalf("second recovery retired a fabricated session_stopped receipt: %#v", retired)
+			}
+		}
+	}
+
+	thirdErr := app.recoverUnclosedGoalSessions(context.Background())
+	if thirdErr != nil {
+		t.Fatalf("third recovery replay error = %v", thirdErr)
+	}
+	thirdJournal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(thirdJournal.PendingTransitions) != 1 || len(thirdJournal.PendingGoalDeliveries) != 1 || len(thirdJournal.DeliveredGoalDeliveries) != 0 {
+		t.Fatalf("third recovery duplicated terminal or usage effects: %#v", thirdJournal)
 	}
 }
 

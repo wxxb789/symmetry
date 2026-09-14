@@ -470,6 +470,7 @@ func TestTerminateAndCloseSerialize(t *testing.T) {
 }
 
 func TestCloseStopsOwnedChildAfterLeaderExit(t *testing.T) {
+	installContainmentSupervisorTestLauncher(t)
 	command := exec.Command(os.Args[0], "-test.run=^TestJobContainmentHelper$", "--", "leader-exits-after-child")
 	command.Env = append(os.Environ(), "GO_WANT_JOB_CONTAINMENT_HELPER=1")
 	stdin, err := command.StdinPipe()

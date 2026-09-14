@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 )
 
@@ -210,6 +211,209 @@ func TestStartUsesAttachmentIdentityFromOriginalProcess(t *testing.T) {
 	_ = waitForResult(t, process)
 }
 
+func TestStartPersistsTypedContainmentAuthorityAfterProcessMarker(t *testing.T) {
+	containment := &authorityContainment{
+		scriptedContainment: &scriptedContainment{},
+		value: &authority.Supervisor{
+			Version:            authority.SupervisorVersion,
+			Secret:             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			TargetPID:          0,
+			TargetIdentity:     "bound:process",
+			PipeToken:          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			JobID:              "cccccccccccccccccccccccccccccccc",
+			SupervisorPID:      99,
+			SupervisorIdentity: "helper:99",
+		},
+	}
+	var markerPersisted bool
+	var authorityPersisted bool
+	runner := Runner{
+		configureProcess: func(*exec.Cmd) error { return nil },
+		attachProcess: func(process *os.Process) (platform.Containment, string, error) {
+			containment.setDefaultForce(process.Kill)
+			containment.value.TargetPID = process.Pid
+			return containment, "bound:process", nil
+		},
+	}
+	invocation := helperInvocation("wait")
+	invocation.PersistProcess = func(pid int, identity string) error {
+		markerPersisted = pid > 0 && identity == "bound:process"
+		return nil
+	}
+	invocation.PersistProcessAuthority = func(pid int, identity string, value *authority.Supervisor) error {
+		if !markerPersisted {
+			t.Fatal("authority persisted before process marker")
+		}
+		authorityPersisted = pid > 0 && identity == "bound:process" && value != nil && value.Secret != ""
+		return nil
+	}
+	process, err := runner.Start(context.Background(), invocation, &recordingSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if !authorityPersisted {
+		t.Fatal("typed containment authority was not persisted")
+	}
+	if err := process.Terminate(context.Background(), 0); err != nil {
+		t.Fatalf("Terminate() error = %v", err)
+	}
+	_ = waitForResult(t, process)
+}
+
+func TestStartResumesOnlyAfterAuthorityAndInitialLeaseBarriers(t *testing.T) {
+	base := time.Now()
+	now := base
+	containment := &deadlineContainment{
+		scriptedContainment: &scriptedContainment{},
+		authority: &authority.Supervisor{
+			Version:            authority.SupervisorVersion,
+			Secret:             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			TargetIdentity:     "bound:process",
+			PipeToken:          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			JobID:              "cccccccccccccccccccccccccccccccc",
+			SupervisorPID:      99,
+			SupervisorIdentity: "helper:99",
+		},
+	}
+	markerPersisted := false
+	authorityPersisted := false
+	resumed := false
+	runner := Runner{
+		configureProcess: func(*exec.Cmd) error { return nil },
+		launchProcess: func(*exec.Cmd, Invocation, *os.File, *os.File, *os.File) (*startedProcess, error) {
+			return &startedProcess{
+				pid:         123,
+				identity:    "bound:process",
+				containment: containment,
+				wait:        func() (int, error) { return 0, nil },
+				kill:        func() error { return nil },
+				close:       func() error { return nil },
+				resume: func() error {
+					if !markerPersisted || !authorityPersisted || len(containment.renewals) != 1 {
+						return errors.New("resume barrier was incomplete")
+					}
+					resumed = true
+					return nil
+				},
+			}, nil
+		},
+		now: func() time.Time { return now },
+	}
+	invocation := Invocation{
+		Program:              os.Args[0],
+		InitialLeaseDeadline: 5 * time.Second,
+		InitialLeaseSequence: 1,
+		PersistProcess: func(int, string) error {
+			markerPersisted = true
+			return nil
+		},
+		PersistProcessAuthority: func(int, string, *authority.Supervisor) error {
+			authorityPersisted = markerPersisted
+			return nil
+		},
+	}
+
+	process, err := runner.Start(context.Background(), invocation, &recordingSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if !resumed {
+		t.Fatal("native process was not resumed")
+	}
+	if result := waitForResult(t, process); !result.Success() {
+		t.Fatalf("barrier result = %#v, want successful completion", result)
+	}
+}
+
+func TestStartArmsInitialLeaseFromAbsoluteDeadlineAfterStartupBarriers(t *testing.T) {
+	base := time.Now()
+	now := base
+	containment := &deadlineContainment{
+		scriptedContainment: &scriptedContainment{},
+		authority: &authority.Supervisor{
+			Version:            authority.SupervisorVersion,
+			Secret:             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			TargetIdentity:     "bound:process",
+			PipeToken:          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			JobID:              "cccccccccccccccccccccccccccccccc",
+			SupervisorPID:      99,
+			SupervisorIdentity: "helper:99",
+		},
+	}
+	runner := Runner{
+		configureProcess: func(*exec.Cmd) error { return nil },
+		attachProcess: func(process *os.Process) (platform.Containment, string, error) {
+			containment.setDefaultForce(process.Kill)
+			now = now.Add(time.Second)
+			return containment, "bound:process", nil
+		},
+		now: func() time.Time { return now },
+	}
+	invocation := helperInvocation("wait")
+	invocation.InitialLeaseDeadline = 30 * time.Second
+	invocation.InitialLeaseDeadlineAt = base.Add(5 * time.Second)
+	invocation.InitialLeaseSequence = 7
+	invocation.PersistProcess = func(int, string) error {
+		now = now.Add(500 * time.Millisecond)
+		return nil
+	}
+	invocation.PersistProcessAuthority = func(int, string, *authority.Supervisor) error {
+		now = now.Add(500 * time.Millisecond)
+		return nil
+	}
+
+	process, err := runner.Start(context.Background(), invocation, &recordingSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if len(containment.renewals) != 1 {
+		t.Fatalf("renewal calls = %d, want 1", len(containment.renewals))
+	}
+	if got, want := containment.renewals[0].deadline, 3*time.Second; got != want {
+		t.Fatalf("armed lease deadline = %s, want %s", got, want)
+	}
+	if got := containment.renewals[0].sequence; got != 7 {
+		t.Fatalf("armed lease sequence = %d, want 7", got)
+	}
+	if err := process.Terminate(context.Background(), 0); err != nil {
+		t.Fatalf("Terminate() error = %v", err)
+	}
+	_ = waitForResult(t, process)
+}
+
+func TestStartFailsClosedWhenInitialLeaseDeadlineExpiresBeforeArm(t *testing.T) {
+	base := time.Now()
+	now := base
+	containment := &deadlineContainment{scriptedContainment: &scriptedContainment{}}
+	runner := Runner{
+		configureProcess: func(*exec.Cmd) error { return nil },
+		attachProcess: func(process *os.Process) (platform.Containment, string, error) {
+			containment.setDefaultForce(process.Kill)
+			now = now.Add(2 * time.Second)
+			return containment, "bound:process", nil
+		},
+		now: func() time.Time { return now },
+	}
+	invocation := helperInvocation("wait")
+	invocation.InitialLeaseDeadlineAt = base.Add(2 * time.Second)
+	invocation.InitialLeaseSequence = 1
+
+	process, err := runner.Start(context.Background(), invocation, &recordingSink{})
+	if process == nil {
+		t.Fatal("Start() returned nil process after failed arm")
+	}
+	if !errors.Is(err, errInitialLeaseDeadlineExpired) {
+		t.Fatalf("Start() error = %v, want expired initial lease", err)
+	}
+	if len(containment.renewals) != 0 {
+		t.Fatalf("renewal calls = %d, want 0 after expiry", len(containment.renewals))
+	}
+	result := waitForResult(t, process)
+	if !result.Terminated || result.ContainmentError != nil {
+		t.Fatalf("cleanup result = %#v, want fail-closed termination with successful containment cleanup", result)
+	}
+}
+
 func TestTerminateFallsBackAfterUnsupportedSoftStopAndPreservesGrace(t *testing.T) {
 	containment := &scriptedContainment{softErr: fmt.Errorf("soft stop unavailable: %w", errors.ErrUnsupported)}
 	process := startWithTestContainment(t, containment)
@@ -273,6 +477,42 @@ type scriptedContainment struct {
 	soft     func() error
 	force    func() error
 	callsLog []string
+}
+
+type authorityContainment struct {
+	*scriptedContainment
+	value *authority.Supervisor
+}
+
+func (containment *authorityContainment) ContainmentAuthority() *authority.Supervisor {
+	cloned := containment.value.Clone()
+	return &cloned
+}
+
+type deadlineContainment struct {
+	*scriptedContainment
+	authority *authority.Supervisor
+	renewals  []leaseRenewal
+}
+
+type leaseRenewal struct {
+	deadline time.Duration
+	sequence uint64
+}
+
+func (containment *deadlineContainment) ContainmentAuthority() *authority.Supervisor {
+	if containment.authority == nil {
+		return nil
+	}
+	cloned := containment.authority.Clone()
+	return &cloned
+}
+
+func (*deadlineContainment) LeaseRenewalAvailable() bool { return true }
+
+func (containment *deadlineContainment) RenewLease(deadline time.Duration, sequence uint64) error {
+	containment.renewals = append(containment.renewals, leaseRenewal{deadline: deadline, sequence: sequence})
+	return nil
 }
 
 func (containment *scriptedContainment) Terminate(force bool) error {

@@ -4,10 +4,12 @@ package execution
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -63,21 +65,92 @@ func TestRunnerStartsWindowsChildWithoutConsoleWindow(t *testing.T) {
 	}
 }
 
+func TestNativeRunnerPersistsIdentityBeforeChildResume(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "child-started")
+	invocation := helperInvocation("startup-marker")
+	invocation.Env = append(invocation.Env, "GO_RUNNER_START_MARKER="+marker)
+	persisted := false
+	invocation.PersistProcess = func(pid int, identity string) error {
+		if pid <= 0 || identity == "" {
+			t.Fatalf("process identity = (%d, %q), want non-empty identity", pid, identity)
+		}
+		if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("child marker before PersistProcess = %v, want os.ErrNotExist", err)
+		}
+		persisted = true
+		return nil
+	}
+
+	process, err := NewRunner().Start(context.Background(), invocation, &recordingSink{})
+	if err != nil {
+		if process != nil {
+			cleanupRunnerTestProcess(t, process)
+		}
+		t.Fatalf("Start() error = %v", err)
+	}
+	result := waitForResult(t, process)
+	if !persisted {
+		t.Fatal("PersistProcess was not called")
+	}
+	if !result.Success() {
+		t.Fatalf("startup marker result = %#v, want successful completion", result)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("child start marker error = %v", err)
+	}
+}
+
+func TestNativeRunnerCleansUpWhenProcessPersistenceFails(t *testing.T) {
+	want := errors.New("persist process marker failed")
+	invocation := helperInvocation("wait")
+	invocation.PersistProcess = func(int, string) error { return want }
+
+	process, err := NewRunner().Start(context.Background(), invocation, &recordingSink{})
+	if process == nil {
+		t.Fatalf("Start() returned nil process after post-launch failure: %v", err)
+	}
+	if !errors.Is(err, want) {
+		t.Fatalf("Start() error = %v, want %v", err, want)
+	}
+	result := waitForResult(t, process)
+	if !result.Terminated {
+		t.Fatalf("cleanup result = %#v, want terminated process", result)
+	}
+}
+
 func cleanupRunnerTestProcess(t *testing.T, process *Process) {
 	t.Helper()
 	if process == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := process.Terminate(ctx, 0); err != nil {
-		t.Logf("cleanup process termination: %v", err)
+	const cleanupTimeout = 5 * time.Second
+
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	terminationErr := process.Terminate(ctx, 0)
+	cancel()
+	if terminationErr == nil {
+		return
 	}
+
+	// Terminate owns one shutdown operation and may outlive a caller whose
+	// context expired. Rejoin that operation once with a fresh bounded context
+	// before failing the test; never retry the operation indefinitely.
+	retryContext, retryCancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer retryCancel()
+	retryErr := process.Terminate(retryContext, 0)
 	select {
 	case <-process.resultDone:
-	case <-ctx.Done():
-		t.Logf("cleanup process did not finish before deadline: %v", ctx.Err())
+	case <-retryContext.Done():
+		select {
+		case <-process.resultDone:
+		default:
+			t.Fatalf(
+				"cleanup process did not finish before deadline: %v; termination error: %v; retry error: %v",
+				retryContext.Err(), terminationErr, retryErr,
+			)
+		}
 	}
+	t.Fatalf("cleanup process termination: %v; retry error: %v", terminationErr, retryErr)
 }
 
 func TestHeadlessRunnerChild(t *testing.T) {

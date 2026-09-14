@@ -18,6 +18,7 @@ import (
 
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
+	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
@@ -52,6 +53,9 @@ func TestNativeTransportOpenAndClose(t *testing.T) {
 	defer probeCancel()
 	version := exec.CommandContext(probeContext, executable, "--version")
 	version.Dir, version.Env = workspace, environment
+	if err := platform.ConfigureHeadlessProcess(version); err != nil {
+		t.Fatal("configure headless native Codex version probe failed")
+	}
 	versionOutput, err := version.Output()
 	if err != nil || parseVersion(string(versionOutput)) != TestedVersion {
 		t.Fatal("native Codex version did not equal the tested version")
@@ -59,6 +63,9 @@ func TestNativeTransportOpenAndClose(t *testing.T) {
 	schemaDirectory := filepath.Join(root, "schema")
 	schema := exec.CommandContext(probeContext, executable, "app-server", "generate-json-schema", "--out", schemaDirectory)
 	schema.Dir, schema.Env = workspace, environment
+	if err := platform.ConfigureHeadlessProcess(schema); err != nil {
+		t.Fatal("configure headless native Codex schema probe failed")
+	}
 	if err := schema.Run(); err != nil {
 		t.Fatal("generate isolated native Codex schema failed")
 	}
