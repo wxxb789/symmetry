@@ -3357,6 +3357,15 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 	if claim.LeaseRemainingMS > 0 && initialLeaseDeadline <= 0 {
 		return errors.New("server lease remaining time was consumed before native process startup")
 	}
+	if initialLeaseDeadline > 0 {
+		daemon.mu.Lock()
+		if active := daemon.running[key]; active != nil {
+			// Runner has already consumed sequence 1 while arming the native
+			// watchdog. The first daemon renewal must therefore use sequence 2.
+			active.leaseSequence = 1
+		}
+		daemon.mu.Unlock()
+	}
 	session, err := adapter.Start(ctx, harness.StartRequest{
 		AdmissionID:   admission.AdmissionID,
 		LocalHandleID: localHandleID,
@@ -3470,7 +3479,6 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 		abandonErr := daemon.abandonGoalSession(sessionKey, session, false, err)
 		return errors.Join(err, discardErr, abandonErr)
 	}
-
 	operationContext, operationCancel := context.WithDeadline(ctx, deadline)
 	defer operationCancel()
 	handle, err := staged.Open(operationContext)
@@ -6934,11 +6942,13 @@ func (daemon *daemon) renewLeases(ctx context.Context) {
 				daemon.terminateForLease(result.journal, "renewed lease has no safe local deadline")
 				continue
 			}
-			if supported, renewErr := daemon.renewLocalLeaseDuration(result.journal.Key(), localDeadline, deadlineAt); renewErr != nil {
+			supported, renewErr := daemon.renewLocalLeaseDuration(result.journal.Key(), localDeadline, deadlineAt)
+			if renewErr != nil {
 				daemon.finishCommandRequest(result.requestID)
 				daemon.terminateForLease(result.journal, "local lease watchdog renewal failed")
 				continue
-			} else if !supported {
+			}
+			if !supported {
 				// Keep the daemon-side deadline even when this platform has no
 				// independent watchdog capability; it still constrains future
 				// renewal decisions.

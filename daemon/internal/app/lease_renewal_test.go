@@ -50,6 +50,29 @@ func TestStartingRunLeaseRenewalPreservesLifecycleFences(t *testing.T) {
 	}
 }
 
+func TestInitialNativeLeaseArmAdvancesFirstRenewalSequence(t *testing.T) {
+	key := state.RunKey{RunID: "run-native", Generation: 1}
+	process := &leaseRenewalProcess{available: true}
+	daemon := &daemon{
+		running: map[state.RunKey]*runningRun{
+			// Native Runner consumed sequence 1 while arming its initial
+			// watchdog, so the daemon-side renewal starts at sequence 2.
+			key: {process: process, leaseSequence: 1},
+		},
+	}
+
+	supported, err := daemon.renewLocalLease(key, time.Second)
+	if err != nil {
+		t.Fatalf("renewLocalLease() error = %v", err)
+	}
+	if !supported {
+		t.Fatal("renewLocalLease() supported = false, want true")
+	}
+	if process.calls != 1 || process.sequence != 2 || process.deadline != time.Second {
+		t.Fatalf("renewal call = (%d, %d, %s), want (1, 2, 1s)", process.calls, process.sequence, process.deadline)
+	}
+}
+
 func TestRelativeLeaseRenewalUsesRequestElapsedTimeDespiteAbsoluteClockSkew(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()
