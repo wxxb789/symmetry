@@ -535,6 +535,11 @@ func newProcessFromStarted(started *startedProcess, sink Sink, startedAt time.Ti
 	if persistStopReceipt == nil && started != nil {
 		persistStopReceipt = started.persistStopReceipt
 	}
+	var containmentAuthority *authority.Supervisor
+	if started != nil && started.containmentAuthority != nil {
+		authorityCopy := started.containmentAuthority.Clone()
+		containmentAuthority = &authorityCopy
+	}
 	sinkContext, cancelSink := context.WithCancel(context.Background())
 	process := &Process{
 		PID:                           started.pid,
@@ -544,7 +549,7 @@ func newProcessFromStarted(started *startedProcess, sink Sink, startedAt time.Ti
 		sink:                          sink,
 		containment:                   started.containment,
 		persistAuthority:              started.persistAuthority,
-		containmentAuthority:          started.containmentAuthority,
+		containmentAuthority:          containmentAuthority,
 		persistStopReceipt:            persistStopReceipt,
 		stopReceiptRequired:           started.stopReceiptRequired,
 		containmentAuthorityUncertain: started.containmentAuthorityUncertain,
@@ -884,7 +889,12 @@ func (process *Process) waitForCompletion() {
 		process.closeContainment()
 	}
 	if process.backend != nil && process.backend.close != nil {
-		process.recordContainmentError(process.backend.close())
+		if err := process.backend.close(); err != nil {
+			// The containment receipt/release boundary is independent from local
+			// process-handle cleanup. Keep this failure observable without
+			// misreporting a successfully proven containment stop.
+			process.recordTerminationError(fmt.Errorf("close started process: %w", err))
+		}
 	}
 
 	process.terminationMutex.Lock()

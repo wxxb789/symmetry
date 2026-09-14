@@ -39,6 +39,8 @@ func TestAuthorityPersistenceFailureFreezesReceiptFence(t *testing.T) {
 
 func TestAuthorityPersistenceRetryPrecedesReceiptAndRelease(t *testing.T) {
 	containment := newP1AuthorityContainment()
+	authorityReceipt := containment.receipt
+	containment.authority.StopReceipt = &authorityReceipt
 	wantAuthorityErr := errors.New("initial authority write failed")
 	var events []string
 	var mutex sync.Mutex
@@ -52,8 +54,12 @@ func TestAuthorityPersistenceRetryPrecedesReceiptAndRelease(t *testing.T) {
 		if value.Secret != containment.authority.Secret {
 			t.Fatalf("authority retry secret = %q, want immutable fence", value.Secret)
 		}
+		if value.StopReceipt == nil || *value.StopReceipt != authorityReceipt {
+			t.Fatalf("authority retry stop receipt = %#v, want immutable fence %#v", value.StopReceipt, authorityReceipt)
+		}
 		if authorityAttempts == 1 {
 			value.Secret = "mutated-by-first-callback"
+			value.StopReceipt.Status = "mutated-by-first-callback"
 			return wantAuthorityErr
 		}
 		return nil
@@ -127,6 +133,44 @@ func TestResultDoneFinalizationRetriesReceiptWithoutRepeatingClose(t *testing.T)
 	}
 	if writeAttempts != 2 || containment.closeCalls != 1 || containment.releaseCalls != 1 {
 		t.Fatalf("finalization = writes:%d closes:%d releases:%d, want 2, 1, 1", writeAttempts, containment.closeCalls, containment.releaseCalls)
+	}
+}
+
+func TestResumeStartupFailureDoesNotBecomeContainmentErrorAfterRelease(t *testing.T) {
+	containment := newP1AuthorityContainment()
+	resumeErr := errors.New("resume failed")
+	backendCloseErr := errors.New("native close after resume failure")
+	runner := Runner{
+		configureProcess: func(*exec.Cmd) error { return nil },
+		launchProcess: func(*exec.Cmd, Invocation, *os.File, *os.File, *os.File) (*startedProcess, error) {
+			return &startedProcess{
+				pid:         123,
+				identity:    "bound:process",
+				containment: containment,
+				wait:        func() (int, error) { return 0, nil },
+				kill:        func() error { return nil },
+				close:       func() error { return backendCloseErr },
+				resume:      func() error { return resumeErr },
+			}, nil
+		},
+	}
+	invocation := helperInvocation("args")
+	invocation.PersistProcessAuthority = func(int, string, *authority.Supervisor) error { return nil }
+	invocation.PersistContainmentStopReceipt = func(int, string, authority.StopReceipt) error { return nil }
+
+	process, err := runner.Start(context.Background(), invocation, &recordingSink{})
+	if process == nil || !errors.Is(err, resumeErr) {
+		t.Fatalf("Start() = (%T, %v), want retained process and resume error", process, err)
+	}
+	result := waitForResult(t, process)
+	if result.ContainmentError != nil {
+		t.Fatalf("result containment error = %v, want nil after receipt/release", result.ContainmentError)
+	}
+	if !errors.Is(result.TerminationError, backendCloseErr) {
+		t.Fatalf("result termination error = %v, want backend close error", result.TerminationError)
+	}
+	if containment.releaseCalls != 1 {
+		t.Fatalf("containment release calls = %d, want one", containment.releaseCalls)
 	}
 }
 
