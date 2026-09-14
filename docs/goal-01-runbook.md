@@ -357,7 +357,9 @@ pwsh -NoLogo -NoProfile -File .\scripts\claude-code-local-transport-smoke.ps1 `
   -ProviderEndpoint http://localhost:4141/v1
 ```
 
-The Claude child receives these local-only environment values:
+The Claude child receives only Windows launch essentials plus these local-only
+environment values; it never inherits `SYMMETRY_*`, provider credentials, or
+other credential-like parent variables:
 
 ```text
 ANTHROPIC_BASE_URL=http://localhost:4141
@@ -366,6 +368,9 @@ ANTHROPIC_DEFAULT_SONNET_MODEL=gpt-5.6-luna
 ANTHROPIC_DEFAULT_OPUS_MODEL=gpt-5.6-luna
 ANTHROPIC_DEFAULT_HAIKU_MODEL=gpt-5.6-luna
 ANTHROPIC_SMALL_FAST_MODEL=gpt-5.6-luna
+CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+DISABLE_TELEMETRY=1
+DISABLE_ERROR_REPORTING=1
 ```
 
 The configured provider endpoint is `http://localhost:4141/v1`. Claude Code
