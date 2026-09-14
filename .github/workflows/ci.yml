@@ -461,7 +461,6 @@ jobs:
         working-directory: control
     env:
       POSTGRES_HOST: 127.0.0.1
-      POSTGRES_PORT: "5432"
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: symmetry_control_test
@@ -479,6 +478,23 @@ jobs:
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path $env:PI_E2E_TEMP | Out-Null
           Set-Content -LiteralPath $env:PI_E2E_LOG -Value ''
+          if ($env:POSTGRES_HOST -cne '127.0.0.1') {
+            throw "Windows Pi E2E PostgreSQL host must remain IPv4 loopback: $env:POSTGRES_HOST"
+          }
+          $portListener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+          try {
+            $portListener.Server.ExclusiveAddressUse = $true
+            $portListener.Start()
+            $postgresPort = [int]$portListener.LocalEndpoint.Port
+          }
+          finally {
+            if ($null -ne $portListener) { $portListener.Stop() }
+          }
+          if ($postgresPort -lt 1024 -or $postgresPort -gt 65535) {
+            throw "Selected PostgreSQL loopback port is invalid: $postgresPort"
+          }
+          $env:POSTGRES_PORT = [string]$postgresPort
+          "POSTGRES_PORT=$postgresPort" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           $runnerImage = [Environment]::GetEnvironmentVariable('ImageVersion')
           @(
             "source_revision=$env:GITHUB_SHA"
@@ -494,8 +510,12 @@ jobs:
             'process_visibility=Elixir Port.open :hide for Windows native children; cleanup is identity-gated taskkill /T /F'
             'upstream_scope=numeric IPv4 loopback only'
             'provider_credentials=none'
+            "postgres_host=$env:POSTGRES_HOST"
+            "postgres_port=$postgresPort"
+            'postgres_port_selection=IPv4 loopback TcpListener bound to port 0'
             'gate_status=initializing'
           ) | Set-Content -LiteralPath $env:PI_E2E_PROVENANCE
+          Add-Content -LiteralPath $env:PI_E2E_LOG -Value "postgres_port=$postgresPort (selected from IPv4 loopback TcpListener port 0)"
       - uses: erlef/setup-beam@v1
         with:
           elixir-version: 1.20.4
@@ -614,6 +634,13 @@ jobs:
               $pgCtl = $selected.PgCtl
               $initDb = $selected.InitDb
               $createDb = $selected.CreateDb
+              if ($env:POSTGRES_PORT -notmatch '^[0-9]+$') {
+                throw "POSTGRES_PORT is not a decimal port: $env:POSTGRES_PORT"
+              }
+              $postgresPort = [int]$env:POSTGRES_PORT
+              if ($postgresPort -lt 1024 -or $postgresPort -gt 65535) {
+                throw "POSTGRES_PORT is outside the valid TCP range: $postgresPort"
+              }
               $env:PI_E2E_POSTGRES_BIN = $selected.Bin
               $env:PI_E2E_POSTGRES_PGCTL = $selected.PgCtl
               "PI_E2E_POSTGRES_BIN=$($selected.Bin)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
@@ -643,7 +670,7 @@ jobs:
                 throw "initdb.exe failed with status $initStatus"
               }
 
-              $startOutput = & $pgCtl -D $env:PI_E2E_POSTGRES_DATA -o '-h 127.0.0.1 -p 5432' -l $env:PI_E2E_POSTGRES_LOG -w -t 30 start 2>&1
+              $startOutput = & $pgCtl -D $env:PI_E2E_POSTGRES_DATA -o "-h $env:POSTGRES_HOST -p $env:POSTGRES_PORT" -l $env:PI_E2E_POSTGRES_LOG -w -t 30 start 2>&1
               $startStatus = $LASTEXITCODE
               $startOutput | Tee-Object -FilePath $env:PI_E2E_LOG -Append | Out-Host
               if ($startStatus -ne 0) {
@@ -657,8 +684,8 @@ jobs:
                 throw "createdb.exe failed with status $createStatus"
               }
 
-              Add-Content -LiteralPath $env:PI_E2E_LOG -Value 'postgres_status=ready on 127.0.0.1:5432'
-              Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value 'postgres_status=ready on 127.0.0.1:5432'
+              Add-Content -LiteralPath $env:PI_E2E_LOG -Value "postgres_status=ready on $env:POSTGRES_HOST`:$env:POSTGRES_PORT"
+              Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "postgres_status=ready on $env:POSTGRES_HOST`:$env:POSTGRES_PORT"
               $ready = $true
             }
           }
@@ -866,6 +893,20 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
+          if ($env:POSTGRES_PORT -notmatch '^[0-9]+$') {
+            $message = "postgres_stop_status=failed: POSTGRES_PORT is not a decimal port: $env:POSTGRES_PORT"
+            Add-Content -LiteralPath $env:PI_E2E_LOG -Value $message
+            Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value $message
+            exit 1
+          }
+          $postgresPort = [int]$env:POSTGRES_PORT
+          if ($postgresPort -lt 1024 -or $postgresPort -gt 65535) {
+            $message = "postgres_stop_status=failed: POSTGRES_PORT is outside the valid TCP range: $postgresPort"
+            Add-Content -LiteralPath $env:PI_E2E_LOG -Value $message
+            Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value $message
+            exit 1
+          }
+          Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "postgres_stop_port=$env:POSTGRES_PORT"
           $pgCtlPath = $env:PI_E2E_POSTGRES_PGCTL
           if ([string]::IsNullOrWhiteSpace($pgCtlPath) -and -not [string]::IsNullOrWhiteSpace($env:PI_E2E_POSTGRES_BIN)) {
             $candidate = Join-Path $env:PI_E2E_POSTGRES_BIN 'pg_ctl.exe'
