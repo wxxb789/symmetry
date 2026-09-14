@@ -22,6 +22,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/config"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/pi"
+	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
 
@@ -31,6 +32,14 @@ const (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "-containment-supervisor" {
+		if err := platform.RunContainmentSupervisor(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "run containment supervisor: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if os.Getenv(controlE2EEnabledEnv) != "1" {
 		fatalf("%s=1 is required for the test-only daemon child", controlE2EEnabledEnv)
 	}
@@ -117,10 +126,12 @@ func newPiControlE2EWitness(executable string) *piControlE2EWitness {
 	capabilities.Events = true
 	capabilities.Cancel = true
 	capabilities.Resume = true
+	capabilities.Handoff = true
 	delete(capabilities.Unsupported, string(harness.CapabilityStart))
 	delete(capabilities.Unsupported, string(harness.CapabilityEvents))
 	delete(capabilities.Unsupported, string(harness.CapabilityCancel))
 	delete(capabilities.Unsupported, string(harness.CapabilityResume))
+	delete(capabilities.Unsupported, string(harness.CapabilityHandoff))
 
 	return &piControlE2EWitness{
 		delegate:     pi.NewAdapter(executable),
