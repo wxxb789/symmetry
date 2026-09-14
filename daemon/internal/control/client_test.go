@@ -79,7 +79,7 @@ func TestClientProtocolRequests(t *testing.T) {
 		{
 			name: "claim", method: http.MethodPut, path: "/api/v1/runs/run-1/claims/claim-1", wantAuth: "Bearer " + machineToken,
 			wantBody: `{"runtime_id":"runtime-1","runtime_epoch":3,"generation":2}`,
-			response: `{"run_id":"run-1","task_id":"task-1","generation":2,"claim_id":"claim-1","lease_token":"lease-1","lease_expires_at":"2026-09-02T00:00:30Z","work":{"goal":"work","agent_profile":"codex","workspace":"primary","input":{}}}`,
+			response: `{"run_id":"run-1","task_id":"task-1","generation":2,"claim_id":"claim-1","lease_token":"lease-1","lease_expires_at":"2026-09-02T00:00:30Z","lease_remaining_ms":30000,"work":{"goal":"work","agent_profile":"codex","workspace":"primary","input":{}}}`,
 			invoke: func(ctx context.Context, client *Client) error {
 				_, err := client.Claim(ctx, "run-1", protocol.ClaimRequest{RuntimeID: "runtime-1", RuntimeEpoch: 3, Generation: 2, ClaimID: "claim-1"})
 				return err
@@ -88,7 +88,7 @@ func TestClientProtocolRequests(t *testing.T) {
 		{
 			name: "renew lease", method: http.MethodPatch, path: "/api/v1/runs/run-1/lease", wantAuth: "Bearer " + machineToken,
 			wantBody: `{"runtime_id":"runtime-1","runtime_epoch":3,"generation":2,"claim_id":"claim-1","lease_token":"lease-1"}`,
-			response: `{"lease_expires_at":"2026-09-02T00:00:45Z","commands":[]}`,
+			response: `{"lease_expires_at":"2026-09-02T00:00:45Z","lease_remaining_ms":30000,"commands":[]}`,
 			invoke: func(ctx context.Context, client *Client) error {
 				_, err := client.RenewLease(ctx, "run-1", protocol.LeaseHeartbeatRequest{Fence: protocol.Fence{RuntimeID: "runtime-1", RuntimeEpoch: 3, Generation: 2, ClaimID: "claim-1", LeaseToken: "lease-1"}})
 				return err

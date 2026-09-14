@@ -395,7 +395,10 @@ type ProviderAccess struct {
 	Grants []ProviderGrant `json:"grants"`
 }
 
-// ClaimResponse returns a durable lease and its assigned work.
+// ClaimResponse returns a durable lease, server-derived remaining time, and its
+// assigned work. LeaseRemainingMS is measured by Control and is intentionally
+// separate from the absolute server wall-clock expiry: local watchdogs use it
+// as a relative duration after subtracting request elapsed time.
 type ClaimResponse struct {
 	RunID            string          `json:"run_id"`
 	TaskID           string          `json:"task_id"`
@@ -405,8 +408,11 @@ type ClaimResponse struct {
 	ClaimID          string          `json:"claim_id"`
 	LeaseToken       string          `json:"lease_token"`
 	LeaseExpiresAt   time.Time       `json:"lease_expires_at"`
+	LeaseRemainingMS int64           `json:"lease_remaining_ms"`
 	Work             Work            `json:"work"`
 	ProviderAccess   *ProviderAccess `json:"provider_access,omitempty"`
+	// RequestStartedAt is daemon-local timing metadata and is never serialized.
+	RequestStartedAt time.Time `json:"-"`
 	present          map[string]struct{}
 }
 
@@ -438,10 +444,36 @@ type LeaseHeartbeatRequest struct {
 	Fence
 }
 
-// LeaseHeartbeatResponse returns the extended lease and pending commands.
+// LeaseHeartbeatResponse returns the extended lease, server-derived remaining
+// time, and pending commands.
 type LeaseHeartbeatResponse struct {
-	LeaseExpiresAt time.Time `json:"lease_expires_at"`
-	Commands       []Command `json:"commands"`
+	LeaseExpiresAt   time.Time `json:"lease_expires_at"`
+	LeaseRemainingMS int64     `json:"lease_remaining_ms"`
+	Commands         []Command `json:"commands"`
+	present          map[string]struct{}
+}
+
+// UnmarshalJSON retains response-field presence so additive lease metadata can
+// distinguish a legacy response from an explicitly invalid value.
+func (response *LeaseHeartbeatResponse) UnmarshalJSON(value []byte) error {
+	type wire LeaseHeartbeatResponse
+	var decoded wire
+	if err := json.Unmarshal(value, &decoded); err != nil {
+		return err
+	}
+	present, err := presentFields(value)
+	if err != nil {
+		return err
+	}
+	*response = LeaseHeartbeatResponse(decoded)
+	response.present = present
+	return nil
+}
+
+// HasField reports whether a field was present when this value was decoded.
+func (response LeaseHeartbeatResponse) HasField(name string) bool {
+	_, ok := response.present[name]
+	return ok
 }
 
 // RunEvent is an append-only, idempotent execution event.

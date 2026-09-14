@@ -79,6 +79,9 @@ func validateClaimResponse(runID string, request protocol.ClaimRequest, response
 	if response.TaskID == "" || response.LeaseToken == "" || response.LeaseExpiresAt.IsZero() {
 		return invalidResponse("claim", "task_id, lease_token, and lease_expires_at are required")
 	}
+	if response.HasField("lease_remaining_ms") && response.LeaseRemainingMS <= 0 {
+		return invalidResponse("claim", "lease_remaining_ms must be positive when present")
+	}
 	if err := validateWork(response.Work); err != nil {
 		return invalidResponse("claim", err.Error())
 	}
@@ -212,6 +215,9 @@ func validateTransitionResponse(runID string, request protocol.StateTransitionRe
 func validateLeaseHeartbeatResponse(response protocol.LeaseHeartbeatResponse) error {
 	if response.LeaseExpiresAt.IsZero() || response.Commands == nil {
 		return invalidResponse("lease heartbeat", "lease_expires_at and commands are required")
+	}
+	if response.HasField("lease_remaining_ms") && response.LeaseRemainingMS <= 0 {
+		return invalidResponse("lease heartbeat", "lease_remaining_ms must be positive when present")
 	}
 	return validateCommands("lease heartbeat", response.Commands)
 }

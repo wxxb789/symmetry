@@ -31,6 +31,8 @@ func TestClaimRejectsUntrustedResponses(t *testing.T) {
 		{name: "missing task ID", response: claimResponse(`"task_id":""`)},
 		{name: "missing lease token", response: claimResponse(`"lease_token":""`)},
 		{name: "missing lease expiry", response: claimResponse(`"lease_expires_at":null`)},
+		{name: "negative lease remaining", response: claimResponse(`"lease_remaining_ms":-1`)},
+		{name: "zero lease remaining", response: claimResponse(`"lease_remaining_ms":0`)},
 		{name: "null provider access", response: claimResponse(`"provider_access":null`)},
 		{name: "invalid provider path", response: claimResponse(`"provider_access":{"path":"/api/v1/other","token":"provider-token","grants":[{"resource_id":"resource-1","provider":"github","kind":"repository","operations":["resource.sync"]}]}`)},
 		{name: "missing provider token", response: claimResponse(`"provider_access":{"path":"/api/v1/provider-actions","token":"","grants":[{"resource_id":"resource-1","provider":"github","kind":"repository","operations":["resource.sync"]}]}`)},
@@ -52,6 +54,65 @@ func TestClaimRejectsUntrustedResponses(t *testing.T) {
 			_, err := client.Claim(context.Background(), "run-1", protocol.ClaimRequest{RuntimeID: "runtime-1", RuntimeEpoch: 3, Generation: 2, ClaimID: "claim-1"})
 			if err == nil || !strings.Contains(err.Error(), "invalid claim response") {
 				t.Fatalf("error = %v, want invalid claim response", err)
+			}
+		})
+	}
+}
+
+func TestLeaseRemainingMSIsAdditiveForClaimAndRenew(t *testing.T) {
+	t.Run("claim accepts legacy response without lease remaining", func(t *testing.T) {
+		server := jsonServer(t, http.StatusOK, claimResponseWithoutLeaseRemaining(""), nil)
+		defer server.Close()
+		client := mustMachineClient(t, server)
+		response, err := client.Claim(context.Background(), "run-1", protocol.ClaimRequest{RuntimeID: "runtime-1", RuntimeEpoch: 3, Generation: 2, ClaimID: "claim-1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if response.LeaseRemainingMS != 0 {
+			t.Fatalf("lease_remaining_ms = %d, want legacy zero value", response.LeaseRemainingMS)
+		}
+	})
+
+	t.Run("renew accepts legacy response without lease remaining", func(t *testing.T) {
+		server := jsonServer(t, http.StatusOK, `{"lease_expires_at":"2026-09-02T00:00:45Z","commands":[]}`, nil)
+		defer server.Close()
+		client := mustMachineClient(t, server)
+		response, err := client.RenewLease(context.Background(), "run-1", protocol.LeaseHeartbeatRequest{Fence: fence()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if response.LeaseRemainingMS != 0 {
+			t.Fatalf("lease_remaining_ms = %d, want legacy zero value", response.LeaseRemainingMS)
+		}
+	})
+
+	for _, test := range []struct {
+		name string
+		body string
+		call func(*Client) error
+	}{
+		{
+			name: "claim rejects negative lease remaining",
+			body: claimResponse(`"lease_remaining_ms":-1`),
+			call: func(client *Client) error {
+				_, err := client.Claim(context.Background(), "run-1", protocol.ClaimRequest{RuntimeID: "runtime-1", RuntimeEpoch: 3, Generation: 2, ClaimID: "claim-1"})
+				return err
+			},
+		},
+		{
+			name: "renew rejects negative lease remaining",
+			body: `{"lease_expires_at":"2026-09-02T00:00:45Z","lease_remaining_ms":-1,"commands":[]}`,
+			call: func(client *Client) error {
+				_, err := client.RenewLease(context.Background(), "run-1", protocol.LeaseHeartbeatRequest{Fence: fence()})
+				return err
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := jsonServer(t, http.StatusOK, test.body, nil)
+			defer server.Close()
+			if err := test.call(mustMachineClient(t, server)); err == nil || !strings.Contains(err.Error(), "lease_remaining_ms must be positive when present") {
+				t.Fatalf("error = %v, want explicit lease_remaining_ms validation failure", err)
 			}
 		})
 	}
@@ -946,19 +1007,31 @@ func jsonServer(t *testing.T, status int, body string, beforeWrite any) *httptes
 }
 
 func claimResponse(replacement string) string {
+	return claimResponseWithLeaseRemaining(replacement, true)
+}
+
+func claimResponseWithoutLeaseRemaining(replacement string) string {
+	return claimResponseWithLeaseRemaining(replacement, false)
+}
+
+func claimResponseWithLeaseRemaining(replacement string, includeLeaseRemaining bool) string {
 	defaults := map[string]any{
-		"run_id":           "run-1",
-		"task_id":          "task-1",
-		"generation":       2,
-		"claim_id":         "claim-1",
-		"lease_token":      "lease-1",
-		"lease_expires_at": "2026-09-02T00:00:30Z",
+		"run_id":             "run-1",
+		"task_id":            "task-1",
+		"generation":         2,
+		"claim_id":           "claim-1",
+		"lease_token":        "lease-1",
+		"lease_expires_at":   "2026-09-02T00:00:30Z",
+		"lease_remaining_ms": 30000,
 		"work": map[string]any{
 			"goal":          "work",
 			"agent_profile": "codex",
 			"workspace":     "primary",
 			"input":         map[string]any{},
 		},
+	}
+	if !includeLeaseRemaining {
+		delete(defaults, "lease_remaining_ms")
 	}
 	var override map[string]json.RawMessage
 	if err := json.Unmarshal([]byte("{"+replacement+"}"), &override); err != nil {
