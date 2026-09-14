@@ -23,6 +23,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/config"
 	"github.com/wxxb789/symmetry/daemon/internal/control"
 	"github.com/wxxb789/symmetry/daemon/internal/notification"
+	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
@@ -318,7 +319,7 @@ func TestStaleRuntimeEpochCannotOverwriteNewGeneration(t *testing.T) {
 		t.Fatalf("stale transition error = %v, want ownership_lost", err)
 	}
 
-	newAssignment := waitForAssignment(t, machineClient, second, task.TaskID, 60*time.Second)
+	newAssignment := waitForAssignment(t, machineClient, second, task.TaskID, reconnectReclaimTimeout(t, claim.LeaseExpiresAt))
 	if newAssignment.Generation <= assignment.Generation {
 		t.Fatalf("new generation = %d, want greater than %d", newAssignment.Generation, assignment.Generation)
 	}
@@ -418,18 +419,19 @@ func TestDaemonReconnectReclaimsExpiredRunWithNewGeneration(t *testing.T) {
 	})
 	firstRunID := taskRunID(t, firstRun)
 	firstGeneration := taskGeneration(t, firstRun)
+	oldJournalKey := state.RunKey{RunID: firstRunID, Generation: firstGeneration}
+	// Capture a live pre-stop baseline. A plain running journal after reconnect
+	// is not recovery evidence; only stale or an explicit stop-unproven barrier
+	// may be retained below.
+	journalBefore := waitForJournalOnDisk(t, stateDir, oldJournalKey, 10*time.Second, func(journal state.RunJournal) bool {
+		return journal.LocalState == "running" && journal.HasProcessDetails()
+	})
+	assertLivePersistedProcess(t, journalBefore)
 
 	stopFirst()
 	waitForDaemon(t, firstDone)
 	firstStopped = true
 	identityBefore := loadIdentity(t, stateDir)
-	journalBefore := loadJournal(t, stateDir, state.RunKey{RunID: firstRunID, Generation: firstGeneration})
-	if journalBefore.LocalState != "running" {
-		t.Fatalf("recovered journal state = %q, want running", journalBefore.LocalState)
-	}
-	if journalBefore.PID <= 0 {
-		t.Fatalf("recovered journal PID = %d, want active process identity", journalBefore.PID)
-	}
 
 	// A persisted identity must let B start without an enrollment credential.
 	t.Setenv("SYMMETRY_ENROLLMENT_TOKEN", "")
@@ -443,23 +445,36 @@ func TestDaemonReconnectReclaimsExpiredRunWithNewGeneration(t *testing.T) {
 		}
 	})
 
-	secondRun := waitForTask(t, operator, task.TaskID, 60*time.Second, func(task protocol.Task) bool {
+	reclaimTimeout := reconnectReclaimTimeout(t, journalBefore.LeaseExpiresAt)
+	secondRun := waitForTask(t, operator, task.TaskID, reclaimTimeout, func(task protocol.Task) bool {
 		return task.State == "running" && taskGeneration(t, task) > firstGeneration
 	})
 	secondGeneration := taskGeneration(t, secondRun)
 	if secondGeneration <= firstGeneration {
 		t.Fatalf("reclaimed generation = %d, want greater than %d", secondGeneration, firstGeneration)
 	}
+	secondRunID := taskRunID(t, secondRun)
 
 	cancelTask(t, operator, task.TaskID)
-	waitForTask(t, operator, task.TaskID, 20*time.Second, func(task protocol.Task) bool {
+	cancelled := waitForTask(t, operator, task.TaskID, 20*time.Second, func(task protocol.Task) bool {
 		return task.State == "cancelled" && taskGeneration(t, task) == secondGeneration
 	})
+	oldJournal, retained := waitForJournalRetiredOrRetained(t, stateDir, oldJournalKey, 10*time.Second, func() {
+		assertRetiredOldRunByControl(t, cancelled, oldJournalKey, state.RunKey{RunID: secondRunID, Generation: secondGeneration})
+		assertRetiredProcessIdentity(t, journalBefore)
+	})
+	if retained {
+		assertRetainedRecoveryJournal(t, oldJournal, journalBefore)
+	}
 
 	stopSecond()
 	waitForDaemon(t, secondDone)
 	secondStopped = true
-	assertJournalMissing(t, stateDir, state.RunKey{RunID: firstRunID, Generation: firstGeneration})
+	if retained {
+		assertRetainedRecoveryJournalOnDisk(t, stateDir, oldJournalKey, journalBefore)
+	} else {
+		assertJournalRetired(t, stateDir, oldJournalKey)
+	}
 	identityAfter := loadIdentity(t, stateDir)
 	if identityAfter != identityBefore {
 		t.Fatalf("machine identity changed across reconnect")
@@ -1114,6 +1129,174 @@ func waitForJournalAbsentOnDisk(t *testing.T, stateDir string, key state.RunKey,
 	t.Fatalf("journal %s/%d remains after %s", key.RunID, key.Generation, timeout)
 }
 
+func waitForJournalRetiredOrRetained(t *testing.T, stateDir string, key state.RunKey, timeout time.Duration, retiredProof func()) (state.RunJournal, bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var last state.RunJournal
+	for time.Now().Before(deadline) {
+		journal, found, err := journalOnDisk(stateDir, key)
+		if err != nil {
+			t.Fatalf("read journal %s/%d: %v", key.RunID, key.Generation, err)
+		}
+		if !found {
+			if retiredProof == nil {
+				t.Fatalf("journal %s/%d disappeared without a retirement proof", key.RunID, key.Generation)
+			}
+			retiredProof()
+			return state.RunJournal{}, false
+		}
+		last = journal
+		if journal.LocalState == "stale" {
+			return journal, true
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("journal %s/%d did not reach durable cleanup or retained recovery state after %s: last=%#v", key.RunID, key.Generation, timeout, last)
+	return state.RunJournal{}, false
+}
+
+func reconnectReclaimTimeout(t *testing.T, leaseExpiresAt time.Time) time.Duration {
+	t.Helper()
+	const (
+		minimum = 60 * time.Second
+		grace   = 30 * time.Second
+		maximum = 5 * time.Minute
+	)
+	timeout := minimum
+	if !leaseExpiresAt.IsZero() {
+		if remaining := time.Until(leaseExpiresAt); remaining+grace > timeout {
+			timeout = remaining + grace
+		}
+	}
+	if timeout > maximum {
+		t.Skipf("reconnect lease expiry exceeds the bounded witness window: timeout=%s lease_expires_at=%s", timeout.Round(time.Second), leaseExpiresAt.UTC().Format(time.RFC3339))
+	}
+	return timeout
+}
+
+func assertRetainedRecoveryJournal(t *testing.T, journal, before state.RunJournal) {
+	t.Helper()
+	if journal.LocalState != "stale" {
+		t.Fatalf("retained journal is not an exact recovery barrier: before=%#v after=%#v", before, journal)
+	}
+	if journal.RuntimeID != before.RuntimeID || journal.ClaimedRuntimeEpoch != before.ClaimedRuntimeEpoch || journal.ClaimID != before.ClaimID || journal.LeaseToken != before.LeaseToken {
+		t.Fatalf("retained journal changed its execution fence: before=%#v after=%#v", before, journal)
+	}
+	if journal.HasProcessDetails() {
+		if journal.PID != before.PID || journal.ProcessIdentity != before.ProcessIdentity || !journal.StartedAt.Equal(before.StartedAt) {
+			t.Fatalf("retained journal changed process identity: before=%#v after=%#v", before, journal)
+		}
+	} else if before.HasProcessDetails() {
+		assertRetiredProcessIdentity(t, before)
+	}
+	if journal.WorkspacePath != before.WorkspacePath || journal.WorkspaceBindingKey != before.WorkspaceBindingKey {
+		t.Fatalf("retained journal changed workspace binding: before=%#v after=%#v", before, journal)
+	}
+	if journal.WorkspacePath != "" {
+		if _, err := os.Stat(journal.WorkspacePath); err != nil {
+			t.Fatalf("retained journal workspace %q is not available: %v", journal.WorkspacePath, err)
+		}
+	}
+	if !journal.WorkspaceRecoveryRequired && !journal.RetainWorkspace {
+		t.Fatalf("retained journal did not preserve workspace recovery: %#v", journal)
+	}
+	assertStoppedProcessOrRecoveryConstraint(t, journal)
+}
+
+func assertLivePersistedProcess(t *testing.T, journal state.RunJournal) {
+	t.Helper()
+	if journal.PID <= 0 || strings.TrimSpace(journal.ProcessIdentity) == "" || journal.StartedAt.IsZero() {
+		t.Fatalf("running journal has incomplete process identity: %#v", journal)
+	}
+	identity, err := platform.ProcessIdentity(journal.PID)
+	if err != nil {
+		t.Fatalf("inspect running process %d: %v", journal.PID, err)
+	}
+	if identity != journal.ProcessIdentity {
+		t.Fatalf("running journal process identity = %q, actual = %q", journal.ProcessIdentity, identity)
+	}
+}
+
+func assertRetiredProcessIdentity(t *testing.T, journal state.RunJournal) {
+	t.Helper()
+	if !journal.HasProcessDetails() {
+		return
+	}
+	identity, err := platform.ProcessIdentity(journal.PID)
+	if err == nil && identity == journal.ProcessIdentity {
+		t.Fatalf("retired journal still names the live process %d with identity %q", journal.PID, journal.ProcessIdentity)
+	}
+	if err != nil {
+		t.Logf("retired journal process identity is unavailable, accepting process retirement: %v", err)
+	} else {
+		t.Logf("retired journal process identity changed from %q to %q", journal.ProcessIdentity, identity)
+	}
+}
+
+func assertStoppedProcessOrRecoveryConstraint(t *testing.T, journal state.RunJournal) {
+	t.Helper()
+	if !journal.HasProcessDetails() {
+		return
+	}
+	identity, err := platform.ProcessIdentity(journal.PID)
+	if err == nil && identity != journal.ProcessIdentity {
+		return
+	}
+	if !journal.WorkspaceRecoveryRequired && !journal.RetainWorkspace {
+		t.Fatalf("retained process marker has no explicit stop-unproven recovery constraint: %#v (identity error: %v)", journal, err)
+	}
+	if err == nil {
+		t.Logf("retained stale journal still names process %d; accepting only explicit workspace recovery constraint", journal.PID)
+	} else {
+		t.Logf("retained stale journal process identity is unavailable; accepting explicit recovery constraint: %v", err)
+	}
+}
+
+func assertRetiredOldRunByControl(t *testing.T, task protocol.Task, oldKey, currentKey state.RunKey) {
+	t.Helper()
+	if task.State != "cancelled" {
+		t.Fatalf("Control retirement witness state = %q, want cancelled", task.State)
+	}
+	if task.RunID == nil || task.Generation == nil {
+		t.Fatalf("Control retirement witness has no current run identity: %#v", task)
+	}
+	if *task.RunID != currentKey.RunID || *task.Generation != currentKey.Generation {
+		t.Fatalf("Control retirement witness = (%s, %d), want (%s, %d)", *task.RunID, *task.Generation, currentKey.RunID, currentKey.Generation)
+	}
+	if currentKey.Generation <= oldKey.Generation || currentKey.RunID == oldKey.RunID {
+		t.Fatalf("Control retirement witness did not supersede old run (%s, %d): current=(%s, %d)", oldKey.RunID, oldKey.Generation, currentKey.RunID, currentKey.Generation)
+	}
+}
+
+func assertJournalRetired(t *testing.T, stateDir string, key state.RunKey) {
+	t.Helper()
+	store, err := state.New(stateDir)
+	if err != nil {
+		t.Fatalf("open state store to verify retired journal: %v", err)
+	}
+	defer store.Close()
+	if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
+		t.Fatalf("retired journal %s/%d is still loadable: %v", key.RunID, key.Generation, err)
+	}
+	if _, found, err := journalOnDisk(stateDir, key); err != nil {
+		t.Fatalf("inspect retired journal %s/%d on disk: %v", key.RunID, key.Generation, err)
+	} else if found {
+		t.Fatalf("retired journal %s/%d still exists on disk", key.RunID, key.Generation)
+	}
+}
+
+func assertRetainedRecoveryJournalOnDisk(t *testing.T, stateDir string, key state.RunKey, before state.RunJournal) {
+	t.Helper()
+	journal, found, err := journalOnDisk(stateDir, key)
+	if err != nil {
+		t.Fatalf("read retained journal %s/%d after daemon stop: %v", key.RunID, key.Generation, err)
+	}
+	if !found {
+		t.Fatalf("retained journal %s/%d disappeared after daemon stop", key.RunID, key.Generation)
+	}
+	assertRetainedRecoveryJournal(t, journal, before)
+}
+
 func journalOnDisk(stateDir string, key state.RunKey) (state.RunJournal, bool, error) {
 	entries, err := os.ReadDir(filepath.Join(stateDir, "runs"))
 	if err != nil {
@@ -1499,18 +1682,6 @@ func loadJournal(t *testing.T, stateDir string, key state.RunKey) state.RunJourn
 		t.Fatalf("load journal %s/%d: %v", key.RunID, key.Generation, err)
 	}
 	return journal
-}
-
-func assertJournalMissing(t *testing.T, stateDir string, key state.RunKey) {
-	t.Helper()
-	store, err := state.New(stateDir)
-	if err != nil {
-		t.Fatalf("open state store: %v", err)
-	}
-	defer store.Close()
-	if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
-		t.Fatalf("old journal %s/%d still exists or could not be read: %v", key.RunID, key.Generation, err)
-	}
 }
 
 func waitForDaemon(t *testing.T, done <-chan error) {
