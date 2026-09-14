@@ -189,7 +189,7 @@ jobs:
           log="$RUNNER_TEMP/pi-control-e2e-linux.log"
           SYMMETRY_PI_CONTROL_E2E=1 \
           SYMMETRY_PI_CONTROL_E2E_EXECUTABLE="$RUNNER_TEMP/pi-0.85.1/pi/pi" \
-            mix test test/symmetry_control/pi_control_e2e_test.exs --only pi_control_e2e 2>&1 |
+            mix test test/symmetry_control/pi_control_e2e_test.exs --include skip:true --only pi_control_e2e 2>&1 |
             tee -a "$log"
       - name: Cleanup orphaned Pi Control processes
         if: always()
@@ -737,7 +737,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
-          $testOutput = & mix test test/symmetry_control/pi_control_e2e_test.exs --only pi_control_e2e 2>&1
+          $testOutput = & mix test test/symmetry_control/pi_control_e2e_test.exs --include skip:true --only pi_control_e2e 2>&1
           $testStatus = $LASTEXITCODE
           $testOutput | Tee-Object -FilePath $env:PI_E2E_LOG -Append | Out-Host
           Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "e2e_exit_status=$testStatus"

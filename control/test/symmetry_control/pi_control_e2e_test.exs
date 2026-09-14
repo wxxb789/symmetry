@@ -35,7 +35,11 @@ defmodule SymmetryControl.PiControlE2ETest do
   # Keep the owner alive through the test ceiling and bounded daemon teardown;
   # the finite value still detects a stalled cleanup instead of masking it.
   @moduletag sandbox_ownership_timeout: 240_000
-  @moduletag skip: System.get_env("SYMMETRY_PI_CONTROL_E2E") != "1"
+  # Keep this skip literal. ExUnit prepares module filters before test setup,
+  # while a dynamic environment-based skip can be frozen in cached BEAM
+  # metadata. Running this module requires both the environment opt-in and an
+  # explicit `--include skip:true` filter.
+  @moduletag skip: true
 
   @pi_version "0.85.1"
   @pi_provider "symmetry-control-loopback"
@@ -86,6 +90,12 @@ defmodule SymmetryControl.PiControlE2ETest do
   end
 
   setup context do
+    unless System.get_env("SYMMETRY_PI_CONTROL_E2E") == "1" do
+      flunk(
+        "SYMMETRY_PI_CONTROL_E2E=1 is required when explicitly including the Pi Control E2E module"
+      )
+    end
+
     platform = assert_supported_platform!()
     executable = required_pi_executable!(platform)
     assert_pi_version!(executable)
@@ -710,26 +720,33 @@ defmodule SymmetryControl.PiControlE2ETest do
           :stopped ->
             {attach_receipt, stop_receipt} =
               await!(second_daemon.port, "single recovered session stop receipt", fn ->
-                attach = Repo.get_by(HarnessSessionAttachReceipt, run_id: recovered_run.id)
-                stop = Repo.get_by(HarnessSessionStopReceipt, run_id: recovered_run.id)
+                attach =
+                  Repo.get_by(HarnessSessionAttachReceipt,
+                    run_id: recovered_run.id,
+                    session_id: recovered_run.harness_session_id,
+                    generation: recovered_run.generation
+                  )
+
+                stop =
+                  Repo.get_by(HarnessSessionStopReceipt,
+                    run_id: recovered_run.id,
+                    session_id: recovered_run.harness_session_id,
+                    binding_id: recovered_run.harness_binding_id
+                  )
+
                 if attach && stop, do: {:ok, {attach, stop}}, else: :retry
               end)
 
-            assert attach_receipt.run_id == recovered_run.id
-            assert stop_receipt.run_id == recovered_run.id
-
-            assert Repo.aggregate(
-                     from(receipt in HarnessSessionStopReceipt,
-                       where: receipt.run_id == ^recovered_run.id
-                     ),
-                     :count
-                   ) == 1
-
             session = Repo.get!(HarnessSession, recovered_run.harness_session_id)
             session_journal = goal_session_journal_for_goal!(context.state_dir, fixture.goal.id)
-            assert session.state == "available"
-            assert is_nil(session.active_run_id)
-            assert session_journal["session_state"] == "available"
+
+            assert_crash_recovery_stop_receipt!(
+              recovered_run,
+              session,
+              session_journal,
+              attach_receipt,
+              stop_receipt
+            )
 
           :unproven ->
             assert Repo.aggregate(
@@ -764,19 +781,27 @@ defmodule SymmetryControl.PiControlE2ETest do
         end
 
       :missing ->
-        assert session.state == "available"
-        assert is_nil(session.active_run_id)
-        assert session_journal["session_state"] == "available"
+        attach_receipt =
+          Repo.get_by!(HarnessSessionAttachReceipt,
+            run_id: recovered_run.id,
+            session_id: recovered_run.harness_session_id,
+            generation: recovered_run.generation
+          )
 
-        assert Repo.aggregate(
-                 from(receipt in HarnessSessionStopReceipt,
-                   where: receipt.run_id == ^recovered_run.id
-                 ),
-                 :count
-               ) == 1
+        stop_receipt =
+          Repo.get_by!(HarnessSessionStopReceipt,
+            run_id: recovered_run.id,
+            session_id: recovered_run.harness_session_id,
+            binding_id: recovered_run.harness_binding_id
+          )
 
-        stop_receipt = Repo.get_by!(HarnessSessionStopReceipt, run_id: recovered_run.id)
-        assert stop_receipt.run_id == recovered_run.id
+        assert_crash_recovery_stop_receipt!(
+          recovered_run,
+          session,
+          session_journal,
+          attach_receipt,
+          stop_receipt
+        )
     end
 
     await_empty_goal_outbox!(second_daemon.port, context.state_dir, run_key)
@@ -2253,11 +2278,93 @@ defmodule SymmetryControl.PiControlE2ETest do
   end
 
   defp terminal_crash_recovery_stop_receipt_barrier?(run, session_journal) do
-    session_journal["session_state"] == "available" and
-      Repo.aggregate(
-        from(receipt in HarnessSessionStopReceipt, where: receipt.run_id == ^run.id),
-        :count
-      ) == 1
+    session_id = run.harness_session_id
+    binding_id = run.harness_binding_id
+    run_id = run.id
+    generation = run.generation
+
+    with true <- session_journal["session_state"] == "available",
+         %HarnessSession{
+           state: "available",
+           active_run_id: nil,
+           binding_verified: true,
+           local_handle_id: local_handle_id,
+           binding_id: ^binding_id
+         } <- Repo.get(HarnessSession, session_id),
+         true <- is_binary(local_handle_id) and local_handle_id != "",
+         %HarnessSessionStopReceipt{
+           id: receipt_id,
+           run_id: ^run_id,
+           session_id: ^session_id,
+           binding_id: ^binding_id
+         } <-
+           Repo.get_by(HarnessSessionStopReceipt,
+             run_id: run_id,
+             session_id: session_id,
+             binding_id: binding_id
+           ),
+         %{
+           "run_id" => ^run_id,
+           "generation" => ^generation,
+           "session_id" => ^session_id,
+           "local_handle_id" => ^local_handle_id,
+           "binding_id" => ^binding_id,
+           "receipt_id" => ^receipt_id
+         } <- session_journal["stop_certificate"],
+         true <- session_journal["control_session_id"] == session_id,
+         true <- session_journal["local_handle_id"] == local_handle_id do
+      true
+    else
+      _ -> false
+    end
+  end
+
+  defp assert_crash_recovery_stop_receipt!(
+         run,
+         session,
+         session_journal,
+         attach_receipt,
+         stop_receipt
+       ) do
+    session_id = run.harness_session_id
+    binding_id = run.harness_binding_id
+
+    assert attach_receipt.run_id == run.id
+    assert attach_receipt.session_id == session_id
+    assert attach_receipt.generation == run.generation
+    assert attach_receipt.response["session"]["session_id"] == session_id
+    assert attach_receipt.response["session"]["binding_id"] == binding_id
+
+    assert stop_receipt.run_id == run.id
+    assert stop_receipt.session_id == session_id
+    assert stop_receipt.binding_id == binding_id
+
+    stopped = stop_receipt.response["session_stopped"]
+    assert stopped["receipt_id"] == stop_receipt.id
+    assert stopped["run_id"] == run.id
+    assert stopped["session_id"] == session_id
+    assert stopped["local_handle_id"] == session.local_handle_id
+    assert stopped["binding_id"] == binding_id
+    assert stopped["state"] == "available"
+    assert is_nil(stopped["active_run_id"])
+
+    assert session.state == "available"
+    assert is_nil(session.active_run_id)
+    assert session.binding_verified
+    assert session.binding_id == binding_id
+    assert session_journal["session_state"] == "available"
+    assert session_journal["control_session_id"] == session_id
+    assert session_journal["local_handle_id"] == session.local_handle_id
+
+    certificate = session_journal["stop_certificate"]
+    assert certificate["run_id"] == run.id
+    assert certificate["generation"] == run.generation
+    assert certificate["session_id"] == session_id
+    assert certificate["local_handle_id"] == session.local_handle_id
+    assert certificate["binding_id"] == binding_id
+    assert certificate["receipt_id"] == stop_receipt.id
+    assert is_binary(certificate["delivery_digest"])
+    assert certificate["delivery_digest"] != ""
   end
 
   defp crash_recovery_diagnostic(
