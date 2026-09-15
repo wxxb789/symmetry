@@ -58,6 +58,101 @@ func TestProbeSchemaMismatchFailsClosedAsUnsupportedVersion(t *testing.T) {
 	}
 }
 
+func TestProbeMapsBoundedCommandErrorsToFailClosedResults(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		responses  map[string][]byte
+		runErrors  map[string]error
+		schemaErr  error
+		want       error
+		wantReason string
+	}{
+		{
+			name: "version output limit and cleanup",
+			runErrors: map[string]error{
+				"--version": errors.Join(execution.ErrOutputLimitExceeded, errors.New("cleanup failed")),
+			},
+			want:       harness.ErrHarnessUnavailable,
+			wantReason: "codex --version",
+		},
+		{
+			name: "help output limit",
+			responses: map[string][]byte{
+				"--version": []byte("codex-cli 0.153.4\n"),
+			},
+			runErrors: map[string]error{
+				"app-server --help": execution.ErrOutputLimitExceeded,
+			},
+			want:       harness.ErrNativeUnverified,
+			wantReason: "codex app-server help probe failed",
+		},
+		{
+			name: "schema output limit and cleanup",
+			responses: map[string][]byte{
+				"--version":         []byte("codex-cli 0.153.4\n"),
+				"app-server --help": []byte("app-server stdio\n"),
+			},
+			schemaErr:  errors.Join(execution.ErrOutputLimitExceeded, errors.New("cleanup failed")),
+			want:       harness.ErrNativeUnverified,
+			wantReason: "Codex app-server schema probe failed",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runner := boundedErrorRunner{
+				responses: test.responses,
+				runErrors: test.runErrors,
+				schemaErr: test.schemaErr,
+			}
+			result, err := Probe(context.Background(), "codex", runner)
+			if !errors.Is(err, test.want) || !strings.Contains(err.Error(), test.wantReason) {
+				t.Fatalf("Probe() error = %v, want %v with %q", err, test.want, test.wantReason)
+			}
+			if result.Capabilities.Start || result.Capabilities.Verified || result.SchemaKnown || result.NativeSessionVerified {
+				t.Fatalf("bounded probe failure advertised capability: %+v", result.Capabilities)
+			}
+		})
+	}
+}
+
+func TestOSCommandRunnerSchemaDigestUsesBoundedCommand(t *testing.T) {
+	wantErr := errors.New("bounded schema command failed")
+	var got execution.Invocation
+	var gotLimit int
+	runner := osCommandRunner{
+		boundedCommand: func(ctx context.Context, invocation execution.Invocation, maxOutputBytes int) ([]byte, error) {
+			if err := ctx.Err(); err != nil {
+				t.Errorf("bounded command context = %v, want active context", err)
+			}
+			got = invocation
+			gotLimit = maxOutputBytes
+			return nil, wantErr
+		},
+	}
+
+	_, err := runner.SchemaDigest(context.Background(), "codex")
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("SchemaDigest() error = %v, want bounded command error", err)
+	}
+	if got.Program != "codex" {
+		t.Fatalf("bounded command program = %q, want codex", got.Program)
+	}
+	wantArgs := []string{"app-server", "generate-json-schema", "--out"}
+	if len(got.Args) != len(wantArgs)+1 {
+		t.Fatalf("bounded command args = %#v, want schema command arguments", got.Args)
+	}
+	for index, want := range wantArgs {
+		if got.Args[index] != want {
+			t.Fatalf("bounded command args = %#v, want prefix %#v", got.Args, wantArgs)
+		}
+	}
+	if got.Args[len(got.Args)-1] == "" {
+		t.Fatal("bounded command schema output directory is empty")
+	}
+	if gotLimit != probeOutputLimitBytes {
+		t.Fatalf("bounded command output limit = %d, want %d", gotLimit, probeOutputLimitBytes)
+	}
+}
+
 func TestProbeUnknownVersionFailsClosed(t *testing.T) {
 	runner := &fixtureRunner{responses: map[string][]byte{"--version": []byte("codex-cli 0.154.0\n")}}
 	result, err := Probe(context.Background(), "codex", runner)
@@ -232,6 +327,31 @@ type fixtureRunner struct {
 	responses    map[string][]byte
 	calls        []string
 	schemaDigest string
+}
+
+type boundedErrorRunner struct {
+	responses map[string][]byte
+	runErrors map[string]error
+	schemaErr error
+}
+
+func (runner boundedErrorRunner) SchemaDigest(_ context.Context, _ string) (string, error) {
+	if runner.schemaErr != nil {
+		return "", runner.schemaErr
+	}
+	return TestedSchemaHash, nil
+}
+
+func (runner boundedErrorRunner) Run(_ context.Context, _ string, args ...string) ([]byte, error) {
+	key := strings.Join(args, " ")
+	if err, ok := runner.runErrors[key]; ok {
+		return nil, err
+	}
+	response, ok := runner.responses[key]
+	if !ok {
+		return nil, errors.New("fixture command not found")
+	}
+	return response, nil
 }
 
 func (runner *fixtureRunner) SchemaDigest(_ context.Context, _ string) (string, error) {

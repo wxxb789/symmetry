@@ -4,19 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
-	"github.com/wxxb789/symmetry/daemon/internal/platform"
 )
 
 const (
 	DefaultExecutable = "pi"
 	TestedVersion     = "0.85.1"
 	probeTimeout      = time.Second
+	probeOutputLimit  = 64 * 1024
 )
 
 // CommandRunner permits deterministic version/help probe tests without a
@@ -44,11 +44,15 @@ func runProbe(ctx context.Context, run func(context.Context) ([]byte, error)) ([
 }
 
 func (osCommandRunner) Run(ctx context.Context, executable string, args ...string) ([]byte, error) {
-	command := exec.CommandContext(ctx, executable, args...)
-	if err := platform.ConfigureHeadlessProcess(command); err != nil {
+	environment, err := execution.BuildEnvironment()
+	if err != nil {
 		return nil, err
 	}
-	return command.CombinedOutput()
+	return execution.RunBoundedCommand(ctx, execution.Invocation{
+		Program: executable,
+		Args:    args,
+		Env:     environment,
+	}, probeOutputLimit)
 }
 
 // ProbeResult records only executable and documented transport evidence. It

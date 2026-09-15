@@ -58,6 +58,47 @@ func TestProbeRejectsWrongVersionAndIncompleteHelp(t *testing.T) {
 	}
 }
 
+func TestProbeMapsBoundedCommandErrorsToFailClosedResults(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		responses  map[string][]byte
+		errors     map[string]error
+		want       error
+		wantReason string
+	}{
+		{
+			name: "version output limit",
+			errors: map[string]error{
+				"--version": errors.Join(execution.ErrOutputLimitExceeded, errors.New("cleanup failed")),
+			},
+			want:       harness.ErrHarnessUnavailable,
+			wantReason: "opencode --version",
+		},
+		{
+			name: "help output limit",
+			responses: map[string][]byte{
+				"--version": []byte(TestedVersion),
+			},
+			errors: map[string]error{
+				"serve --help": execution.ErrOutputLimitExceeded,
+			},
+			want:       harness.ErrNativeUnverified,
+			wantReason: "OpenCode serve help probe failed",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			adapter := NewAdapterWithRunner("opencode", errorCommandRunner{responses: test.responses, errors: test.errors})
+			capabilities, err := adapter.Probe(context.Background())
+			if !errors.Is(err, test.want) || !strings.Contains(err.Error(), test.wantReason) {
+				t.Fatalf("Probe() error = %v, want %v with %q", err, test.want, test.wantReason)
+			}
+			if capabilities.Start {
+				t.Fatalf("capabilities.Start = true after bounded probe failure: %+v", capabilities)
+			}
+		})
+	}
+}
+
 func TestProbeBoundsHangingRunnerAndPreservesCancellation(t *testing.T) {
 	for _, test := range []struct {
 		name             string
@@ -809,6 +850,19 @@ type fixtureCommandRunner struct{ responses map[string][]byte }
 
 func (runner fixtureCommandRunner) Run(_ context.Context, _ string, args ...string) ([]byte, error) {
 	return runner.responses[strings.Join(args, " ")], nil
+}
+
+type errorCommandRunner struct {
+	responses map[string][]byte
+	errors    map[string]error
+}
+
+func (runner errorCommandRunner) Run(_ context.Context, _ string, args ...string) ([]byte, error) {
+	key := strings.Join(args, " ")
+	if err := runner.errors[key]; err != nil {
+		return nil, err
+	}
+	return runner.responses[key], nil
 }
 
 type hangingCommandRunner struct {

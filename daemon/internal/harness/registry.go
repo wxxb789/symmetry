@@ -10,13 +10,18 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wxxb789/symmetry/daemon/internal/platform"
+	"github.com/wxxb789/symmetry/daemon/internal/execution"
 )
 
 const (
-	defaultClaudeExecutable = "claude"
-	testedClaudeVersion     = "2.1.259"
-	claudeProbeTimeout      = time.Second
+	defaultClaudeExecutable   = "claude"
+	testedClaudeVersion       = "2.1.259"
+	claudeProbeTimeout        = time.Second
+	claudeProbeMaxOutputBytes = 64 << 10
+	defaultCodexExecutable    = "codex"
+	testedCodexVersion        = "0.153.4"
+	codexProbeTimeout         = time.Second
+	codexProbeMaxOutputBytes  = 64 << 10
 )
 
 // ClaudeCommandRunner is the narrow command boundary used by the Claude Code
@@ -29,11 +34,36 @@ type ClaudeCommandRunner interface {
 type osClaudeCommandRunner struct{}
 
 func (osClaudeCommandRunner) Run(ctx context.Context, executable string, args ...string) ([]byte, error) {
-	command := exec.CommandContext(ctx, executable, args...)
-	if err := platform.ConfigureHeadlessProcess(command); err != nil {
+	environment, err := execution.BuildEnvironment()
+	if err != nil {
 		return nil, err
 	}
-	return command.CombinedOutput()
+	return execution.RunBoundedCommand(ctx, execution.Invocation{
+		Program: executable,
+		Args:    args,
+		Env:     environment,
+	}, claudeProbeMaxOutputBytes)
+}
+
+// CodexCommandRunner is the narrow command boundary used by the root Codex
+// capability probe. Keeping it injectable makes version/help evidence
+// deterministic without introducing a fake native session implementation.
+type CodexCommandRunner interface {
+	Run(context.Context, string, ...string) ([]byte, error)
+}
+
+type osCodexCommandRunner struct{}
+
+func (osCodexCommandRunner) Run(ctx context.Context, executable string, args ...string) ([]byte, error) {
+	environment, err := execution.BuildEnvironment()
+	if err != nil {
+		return nil, err
+	}
+	return execution.RunBoundedCommand(ctx, execution.Invocation{
+		Program: executable,
+		Args:    args,
+		Env:     environment,
+	}, codexProbeMaxOutputBytes)
 }
 
 // Registry is a concrete, process-local adapter registry. It is intentionally
@@ -167,19 +197,27 @@ func newClaudeAdapterWithRunner(executable string, runner ClaudeCommandRunner) *
 	return adapter
 }
 
-func runClaudeProbe(ctx context.Context, run func(context.Context) ([]byte, error)) ([]byte, error) {
-	probeContext, cancel := context.WithTimeout(ctx, claudeProbeTimeout)
+func runBoundedProbe(ctx context.Context, timeout time.Duration, run func(context.Context) ([]byte, error)) ([]byte, error) {
+	if ctx == nil {
+		return nil, errors.New("harness probe context must not be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	probeContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	output, err := run(probeContext)
-	if err != nil {
-		if contextErr := ctx.Err(); contextErr != nil {
-			return nil, contextErr
-		}
-		if contextErr := probeContext.Err(); contextErr != nil {
-			return nil, contextErr
-		}
+	if contextErr := ctx.Err(); contextErr != nil {
+		return nil, contextErr
+	}
+	if contextErr := probeContext.Err(); contextErr != nil {
+		return nil, contextErr
 	}
 	return output, err
+}
+
+func runClaudeProbe(ctx context.Context, run func(context.Context) ([]byte, error)) ([]byte, error) {
+	return runBoundedProbe(ctx, claudeProbeTimeout, run)
 }
 
 func probeClaudeExecutable(ctx context.Context, executable string, runner ClaudeCommandRunner) (Capabilities, error) {
@@ -316,55 +354,75 @@ func (adapter *UnavailableAdapter) reason() string {
 // Even the known 0.153.4 version remains unverified here: app-server help and
 // JSON framing do not prove native session lifecycle or control semantics.
 func NewCodexAdapter() *UnavailableAdapter {
+	return NewCodexAdapterWithRunner(defaultCodexExecutable, osCodexCommandRunner{})
+}
+
+// NewCodexAdapterWithRunner is the deterministic command-probe seam used by
+// tests and local callers that already own executable selection.
+func NewCodexAdapterWithRunner(executable string, runner CodexCommandRunner) *UnavailableAdapter {
 	adapter := newUnavailableAdapter(KindCodex, "Codex app-server native session behavior is unverified")
-	adapter.probe = probeCodexExecutable
+	adapter.probe = func(ctx context.Context) (Capabilities, error) {
+		return probeCodexExecutableWithRunner(ctx, executable, runner)
+	}
 	return adapter
 }
 
 func probeCodexExecutable(ctx context.Context) (Capabilities, error) {
+	return probeCodexExecutableWithRunner(ctx, defaultCodexExecutable, osCodexCommandRunner{})
+}
+
+func probeCodexExecutableWithRunner(ctx context.Context, executable string, runner CodexCommandRunner) (Capabilities, error) {
 	if ctx == nil {
 		return Capabilities{}, errors.New("harness probe context must not be nil")
 	}
-	path, err := exec.LookPath("codex")
-	if err != nil {
-		capabilities := UnsupportedCapabilities(KindCodex, "codex executable is unavailable")
-		return capabilities, &AvailabilityError{Kind: KindCodex, Reason: err.Error()}
+	if err := ctx.Err(); err != nil {
+		return Capabilities{}, err
 	}
-	versionCommand := exec.CommandContext(ctx, path, "--version")
-	if err := platform.ConfigureHeadlessProcess(versionCommand); err != nil {
-		capabilities := UnsupportedCapabilities(KindCodex, "codex version probe failed")
-		return capabilities, errors.Join(
-			fmt.Errorf("%w: codex version probe failed", ErrHarnessUnavailable),
-			fmt.Errorf("configure codex version probe process: %w", err),
-		)
+	if strings.TrimSpace(executable) == "" {
+		executable = defaultCodexExecutable
 	}
-	output, err := versionCommand.Output()
+	if runner == nil {
+		runner = osCodexCommandRunner{}
+	}
+	if _, productionRunner := runner.(osCodexCommandRunner); productionRunner {
+		path, err := exec.LookPath(executable)
+		if err != nil {
+			unavailable := UnsupportedCapabilities(KindCodex, "codex executable is unavailable")
+			return unavailable, &AvailabilityError{Kind: KindCodex, Reason: err.Error()}
+		}
+		executable = path
+	}
+
+	capabilities := UnsupportedCapabilities(KindCodex, "Codex app-server native session behavior is unverified")
+	output, err := runBoundedProbe(ctx, codexProbeTimeout, func(probeContext context.Context) ([]byte, error) {
+		return runner.Run(probeContext, executable, "--version")
+	})
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return Capabilities{}, err
+		}
 		if contextErr := ctx.Err(); contextErr != nil {
 			return Capabilities{}, contextErr
 		}
-		capabilities := UnsupportedCapabilities(KindCodex, "codex version probe failed")
+		capabilities.Unsupported[string(CapabilityStart)] = "codex version probe failed"
 		return capabilities, fmt.Errorf("%w: codex --version: %v", ErrHarnessUnavailable, err)
 	}
-	capabilities := UnsupportedCapabilities(KindCodex, "Codex app-server native session behavior is unverified")
 	version := parseCodexVersion(string(output))
 	capabilities.NativeVersion = version
 	capabilities.VersionKnown = version != ""
-	if version != "0.153.4" {
+	if version != testedCodexVersion {
 		if version == "" {
 			return capabilities, fmt.Errorf("%w: unable to parse codex version from %q", ErrUnsupportedVersion, strings.TrimSpace(string(output)))
 		}
 		return capabilities, fmt.Errorf("%w: codex %s is not in the tested version set", ErrUnsupportedVersion, version)
 	}
-	helpCommand := exec.CommandContext(ctx, path, "app-server", "--help")
-	if err := platform.ConfigureHeadlessProcess(helpCommand); err != nil {
-		return capabilities, errors.Join(
-			fmt.Errorf("%w: codex app-server help probe failed", ErrNativeUnverified),
-			fmt.Errorf("configure codex help probe process: %w", err),
-		)
-	}
-	helpOutput, err := helpCommand.CombinedOutput()
+	helpOutput, err := runBoundedProbe(ctx, codexProbeTimeout, func(probeContext context.Context) ([]byte, error) {
+		return runner.Run(probeContext, executable, "app-server", "--help")
+	})
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return capabilities, err
+		}
 		if contextErr := ctx.Err(); contextErr != nil {
 			return capabilities, contextErr
 		}

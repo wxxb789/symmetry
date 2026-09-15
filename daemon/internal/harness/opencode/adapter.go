@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -29,6 +28,7 @@ const (
 	defaultHealthRetryDelay = 50 * time.Millisecond
 	defaultTerminationGrace = 5 * time.Second
 	probeTimeout            = time.Second
+	probeOutputLimitBytes   = 64 << 10
 	streamReadChunkSize     = 32 * 1024
 	maxReadinessLineBytes   = 4096
 )
@@ -66,11 +66,15 @@ func runProbe(ctx context.Context, run func(context.Context) ([]byte, error)) ([
 }
 
 func (osCommandRunner) Run(ctx context.Context, executable string, args ...string) ([]byte, error) {
-	command := exec.CommandContext(ctx, executable, args...)
-	if err := platform.ConfigureHeadlessProcess(command); err != nil {
+	environment, err := execution.BuildEnvironment()
+	if err != nil {
 		return nil, err
 	}
-	return command.CombinedOutput()
+	return execution.RunBoundedCommand(ctx, execution.Invocation{
+		Program: executable,
+		Args:    args,
+		Env:     environment,
+	}, probeOutputLimitBytes)
 }
 
 // nativeProcess retains only the shared execution.Runner behavior this adapter

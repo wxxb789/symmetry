@@ -10,21 +10,21 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
-	"github.com/wxxb789/symmetry/daemon/internal/platform"
 )
 
 const (
-	DefaultExecutable = "codex"
-	TestedVersion     = "0.153.4"
-	TestedSchemaHash  = "sha256:d3eace08be5dca386bfd1f1e8df650058b4113f1e10870a284d775d75517576a"
-	probeTimeout      = time.Second
+	DefaultExecutable     = "codex"
+	TestedVersion         = "0.153.4"
+	TestedSchemaHash      = "sha256:d3eace08be5dca386bfd1f1e8df650058b4113f1e10870a284d775d75517576a"
+	probeTimeout          = time.Second
+	probeOutputLimitBytes = 64 << 10
 )
 
 // CommandRunner is injectable so version/help probing remains deterministic in
@@ -41,7 +41,20 @@ type SchemaRunner interface {
 	SchemaDigest(context.Context, string) (string, error)
 }
 
-type osCommandRunner struct{}
+// boundedCommand is optional so tests can inspect invocation construction
+// without launching a native executable; the zero value uses the shared runner.
+type boundedCommand func(context.Context, execution.Invocation, int) ([]byte, error)
+
+type osCommandRunner struct {
+	boundedCommand boundedCommand
+}
+
+func (runner osCommandRunner) runBoundedCommand(ctx context.Context, invocation execution.Invocation) ([]byte, error) {
+	if runner.boundedCommand != nil {
+		return runner.boundedCommand(ctx, invocation, probeOutputLimitBytes)
+	}
+	return execution.RunBoundedCommand(ctx, invocation, probeOutputLimitBytes)
+}
 
 func runProbe(ctx context.Context, run func(context.Context) ([]byte, error)) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
@@ -75,34 +88,70 @@ func runSchemaProbe(ctx context.Context, run func(context.Context) (string, erro
 	return digest, err
 }
 
-func (osCommandRunner) Run(ctx context.Context, executable string, args ...string) ([]byte, error) {
-	command := exec.CommandContext(ctx, executable, args...)
-	if err := platform.ConfigureHeadlessProcess(command); err != nil {
+func (runner osCommandRunner) Run(ctx context.Context, executable string, args ...string) ([]byte, error) {
+	environment, err := execution.BuildEnvironment()
+	if err != nil {
 		return nil, err
 	}
-	return command.CombinedOutput()
+	return runner.runBoundedCommand(ctx, execution.Invocation{
+		Program: executable,
+		Args:    args,
+		Env:     environment,
+	})
 }
 
-func (osCommandRunner) SchemaDigest(ctx context.Context, executable string) (string, error) {
+func (runner osCommandRunner) SchemaDigest(ctx context.Context, executable string) (digest string, resultErr error) {
+	if ctx == nil {
+		return "", errors.New("codex schema probe context must not be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	directory, err := os.MkdirTemp("", "symmetry-codex-schema-")
 	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return "", contextErr
+		}
 		return "", fmt.Errorf("create Codex schema temp directory: %w", err)
 	}
-	defer os.RemoveAll(directory)
-	command := exec.CommandContext(ctx, executable, "app-server", "generate-json-schema", "--out", directory)
-	if err := platform.ConfigureHeadlessProcess(command); err != nil {
-		return "", fmt.Errorf("configure Codex schema process: %w", err)
+	defer func() {
+		if cleanupErr := os.RemoveAll(directory); cleanupErr != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("remove Codex schema temp directory: %w", cleanupErr))
+		}
+	}()
+	environment, err := execution.BuildEnvironment()
+	if err != nil {
+		return "", err
 	}
-	output, err := command.CombinedOutput()
+	output, err := runner.runBoundedCommand(ctx, execution.Invocation{
+		Program: executable,
+		Args:    []string{"app-server", "generate-json-schema", "--out", directory},
+		Env:     environment,
+	})
+	if contextErr := ctx.Err(); contextErr != nil {
+		return "", contextErr
+	}
 	if err != nil {
 		return "", fmt.Errorf("generate Codex app-server schema: %w: %s", err, strings.TrimSpace(string(output)))
 	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	bundle, err := os.ReadFile(filepath.Join(directory, "codex_app_server_protocol.v2.schemas.json"))
+	if contextErr := ctx.Err(); contextErr != nil {
+		return "", contextErr
+	}
 	if err != nil {
 		return "", fmt.Errorf("read generated Codex v2 schema: %w", err)
 	}
-	digest := sha256.Sum256(bundle)
-	return "sha256:" + hex.EncodeToString(digest[:]), nil
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	digestBytes := sha256.Sum256(bundle)
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return "sha256:" + hex.EncodeToString(digestBytes[:]), nil
 }
 
 // ProbeResult records executable/version/help and generated-schema evidence.
@@ -155,6 +204,9 @@ func Probe(ctx context.Context, executable string, runners ...CommandRunner) (Pr
 		result.Capabilities.Unsupported[string(harness.CapabilityStart)] = "codex version probe failed"
 		return result, fmt.Errorf("%w: codex --version: %v", harness.ErrHarnessUnavailable, err)
 	}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	result.Version = parseVersion(string(versionOutput))
 	result.VersionKnown = result.Version != ""
 	result.Capabilities.NativeVersion = result.Version
@@ -175,6 +227,9 @@ func Probe(ctx context.Context, executable string, runners ...CommandRunner) (Pr
 		}
 		return result, fmt.Errorf("%w: codex app-server help probe failed: %v", harness.ErrNativeUnverified, err)
 	}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	result.TransportKnown = hasStdioAppServerHelp(string(helpOutput))
 	result.Capabilities.TransportVerified = result.TransportKnown
 	if !result.TransportKnown {
@@ -193,6 +248,9 @@ func Probe(ctx context.Context, executable string, runners ...CommandRunner) (Pr
 		}
 		return result, fmt.Errorf("%w: Codex app-server schema probe failed: %v", harness.ErrNativeUnverified, err)
 	}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	result.SchemaDigest = digest
 	result.SchemaKnown = digest == TestedSchemaHash
 	if !result.SchemaKnown {
@@ -201,6 +259,9 @@ func Probe(ctx context.Context, executable string, runners ...CommandRunner) (Pr
 	// The exact version and stdio framing are known, but no native lifecycle
 	// and control behavior is claimed. Start remains fail-closed until
 	// credentialed evidence.
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	return result, harness.ErrNativeUnverified
 }
 

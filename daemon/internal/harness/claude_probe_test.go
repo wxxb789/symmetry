@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/wxxb789/symmetry/daemon/internal/execution"
 )
 
 func TestClaudeProbeKnownVersionAndHelpFailsClosed(t *testing.T) {
@@ -128,10 +130,69 @@ func TestClaudeProbeBoundsHangingRunnerAndPreservesCallerCancellation(t *testing
 	}
 }
 
+func TestBoundedProbeRejectsSuccessAfterDeadline(t *testing.T) {
+	output, err := runBoundedProbe(context.Background(), time.Nanosecond, func(ctx context.Context) ([]byte, error) {
+		<-ctx.Done()
+		return []byte("valid capability output"), nil
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("runBoundedProbe() error = %v, want context.DeadlineExceeded", err)
+	}
+	if output != nil {
+		t.Fatalf("runBoundedProbe() output = %q, want nil after deadline", output)
+	}
+}
+
+func TestClaudeProbeRejectsSuccessAfterProbeDeadline(t *testing.T) {
+	capabilities, err := probeClaudeExecutable(context.Background(), "claude", claudeSuccessAfterDeadlineRunner{})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("probeClaudeExecutable() error = %v, want context.DeadlineExceeded", err)
+	}
+	if capabilities.VersionKnown || capabilities.NativeVersion != "" || capabilities.TransportVerified || capabilities.Verified {
+		t.Fatalf("capabilities = %+v, want no capability from success-after-deadline output", capabilities)
+	}
+}
+
+func TestClaudeProbeDoesNotParseFailedCommandOutput(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{name: "output limit", err: execution.ErrOutputLimitExceeded},
+		{name: "termination", err: errors.New("bounded process termination failed")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runner := &claudeFixtureRunner{results: map[string]claudeFixtureResult{
+				"--version": {output: []byte("2.1.259 (Claude Code)\n"), err: test.err},
+			}}
+			capabilities, err := probeClaudeExecutable(context.Background(), "claude", runner)
+			if err == nil {
+				t.Fatal("probeClaudeExecutable() error = nil, want bounded command failure")
+			}
+			if capabilities.VersionKnown || capabilities.NativeVersion != "" || capabilities.TransportVerified || capabilities.Verified {
+				t.Fatalf("capabilities = %+v, want no capability parsed from failed output", capabilities)
+			}
+		})
+	}
+}
+
 type claudeFixtureRunner struct {
 	responses map[string][]byte
 	errors    map[string]error
+	results   map[string]claudeFixtureResult
 	calls     []string
+}
+
+type claudeFixtureResult struct {
+	output []byte
+	err    error
+}
+
+type claudeSuccessAfterDeadlineRunner struct{}
+
+func (claudeSuccessAfterDeadlineRunner) Run(ctx context.Context, _ string, _ ...string) ([]byte, error) {
+	<-ctx.Done()
+	return []byte("2.1.259 (Claude Code)\n"), nil
 }
 
 func (runner *claudeFixtureRunner) Run(_ context.Context, _ string, args ...string) ([]byte, error) {
@@ -143,6 +204,9 @@ func (runner *claudeFixtureRunner) Run(_ context.Context, _ string, args ...stri
 		key += arg
 	}
 	runner.calls = append(runner.calls, key)
+	if result, ok := runner.results[key]; ok {
+		return result.output, result.err
+	}
 	if err, ok := runner.errors[key]; ok {
 		return nil, err
 	}
