@@ -8,13 +8,18 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/wxxb789/symmetry/daemon/internal/config"
 	"github.com/wxxb789/symmetry/daemon/internal/control"
+	"github.com/wxxb789/symmetry/daemon/internal/harness"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/pi"
+	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
+	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
 
 const (
@@ -385,5 +390,67 @@ func TestPiProviderBridgeExecutorDoesNotExposeCredentialInSafeResult(t *testing.
 	}
 	if strings.Contains(fmt.Sprintf("%#v", got), testPiProviderToken) {
 		t.Fatalf("unsafe result mapping leaked token: %#v", got)
+	}
+}
+
+func TestPreparePiProviderBridgeRunsBoundPeerAndPersistsAction(t *testing.T) {
+	directory := t.TempDir()
+	key := state.RunKey{RunID: "run-provider-app-bridge", Generation: 1}
+	store := newPiProviderActionStore(t, directory, key)
+	stub := &piProviderActionControlStub{fn: func(context.Context, protocol.ProviderAccess, string, string, string, json.RawMessage) (control.ProviderActionResponse, error) {
+		return testPiProviderSuccess(), nil
+	}}
+	daemon := &daemon{config: config.Config{StateDir: directory}, store: store, control: stub}
+	launch, err := daemon.preparePiProviderBridge(context.Background(), key, harness.KindPi, func() *protocol.ProviderAccess {
+		value := testPiProviderAccess()
+		return &value
+	}())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = launch.Lifecycle.Close(context.Background()) })
+	identity, err := platform.ProcessIdentity(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := launch.Lifecycle.BindProcess(os.Getpid(), identity); err != nil {
+		t.Fatal(err)
+	}
+	extension, err := os.ReadFile(launch.ExtensionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(extension), testPiProviderToken) || strings.Contains(string(extension), launch.Nonce) || strings.Contains(string(extension), launch.URL) {
+		t.Fatal("generated extension persisted a provider token or ephemeral bridge secret")
+	}
+
+	body := []byte(`{"resource_id":"` + testPiProviderResource + `","operation":"change.upsert","action_key":"tool-call-app","input":{"title":"change"}}`)
+	request, err := http.NewRequest(http.MethodPost, launch.URL, bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Symmetry-Bridge-Nonce", launch.Nonce)
+	response, err := (&http.Client{}).Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("provider bridge status = %d", response.StatusCode)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.ProviderActionIntents) != 1 || journal.ProviderActionIntents[0].Outcome != state.ProviderActionOutcomeSucceeded {
+		t.Fatalf("durable provider action = %#v", journal.ProviderActionIntents)
+	}
+	encoded, err := json.Marshal(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), testPiProviderToken) || strings.Contains(string(encoded), `"title":"change"`) {
+		t.Fatalf("provider token or action input leaked into journal: %s", encoded)
 	}
 }

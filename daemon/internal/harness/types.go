@@ -96,6 +96,7 @@ type Capabilities struct {
 	ApprovalResponse      bool               `json:"approval_response"`
 	Usage                 UsageCapability    `json:"usage"`
 	HardCostLimit         bool               `json:"hard_cost_limit"`
+	ProviderAccess        bool               `json:"provider_access"`
 	Unsupported           map[string]string  `json:"unsupported,omitempty"`
 }
 
@@ -122,6 +123,7 @@ func UnsupportedCapabilities(kind Kind, reason string) Capabilities {
 			string(CapabilityApprovalResponse): reason,
 			string(CapabilityUsage):            reason,
 			string(CapabilityHardCostLimit):    reason,
+			string(CapabilityProviderAccess):   reason,
 		},
 	}
 }
@@ -183,7 +185,7 @@ func (capabilities Capabilities) Validate() error {
 	}
 	if !capabilities.Verified {
 		if capabilities.Start || capabilities.Events || capabilities.Cancel || capabilities.Resume || capabilities.Handoff ||
-			capabilities.ApprovalResponse || capabilities.HardCostLimit ||
+			capabilities.ApprovalResponse || capabilities.HardCostLimit || capabilities.ProviderAccess ||
 			capabilities.Guidance != GuidanceUnsupported ||
 			capabilities.Pause != PauseUnsupported || capabilities.Usage != UsageUnknown {
 			return errors.New("unverified adapter cannot advertise executable capabilities")
@@ -218,6 +220,8 @@ func (capabilities Capabilities) Supports(capability Capability) bool {
 		return capabilities.Usage != UsageUnknown
 	case CapabilityHardCostLimit:
 		return capabilities.HardCostLimit
+	case CapabilityProviderAccess:
+		return capabilities.ProviderAccess
 	default:
 		return false
 	}

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -84,6 +85,34 @@ func TestNativeRegistrationDoesNotAdvertiseUnverifiedProviderAccess(t *testing.T
 	}
 	if registration.Capabilities.ProviderAccess {
 		t.Fatalf("native registration advertised unverified provider access: %#v", registration.Capabilities)
+	}
+}
+
+func TestNativeRegistrationAdvertisesOnlyVerifiedConfiguredProviderAccess(t *testing.T) {
+	value := testConfig(t)
+	value.Runtime.HarnessKind = config.RuntimeHarnessPi
+	value.Runtime.HarnessVersion = pi.TestedVersion
+	value.Runtime.AdapterVersion = "symmetry-daemon:test"
+	value.Runtime.AdapterProtocolVersion = 1
+	capabilities := testVerifiedNativeCapabilities(harness.KindPi)
+	capabilities.ProviderAccess = true
+
+	profile := value.AgentProfiles[value.Runtime.AgentProfile]
+	registration, _, err := buildRuntimeRegistration(value.Runtime, profile, capabilities)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if registration.Capabilities.ProviderAccess {
+		t.Fatal("native registration advertised provider access without profile opt-in")
+	}
+
+	profile.ProviderAccess = true
+	registration, _, err = buildRuntimeRegistration(value.Runtime, profile, capabilities)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !registration.Capabilities.ProviderAccess {
+		t.Fatal("native registration omitted verified configured provider access")
 	}
 }
 
@@ -3254,6 +3283,106 @@ func TestGoalAdmissionRejectsProviderAccessBeforeNativeLaunch(t *testing.T) {
 	}
 }
 
+func TestAdmissionLaunchAllowsOnlyVerifiedPiProviderAccess(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatal(err)
+	}
+	access := &protocol.ProviderAccess{Path: "/api/v1/provider-actions", Token: "provider-token", Grants: []protocol.ProviderGrant{{
+		ResourceID: admission.Subject.ResourceID,
+		Provider:   "github",
+		Kind:       "repository",
+		Operations: []string{"resource.sync"},
+	}}}
+	capabilities := testVerifiedNativeCapabilities(harness.KindPi)
+	capabilities.ProviderAccess = true
+	if err := admissionLaunchFailure(admission, capabilities, access); err != nil {
+		t.Fatalf("verified Pi provider access was rejected: %v", err)
+	}
+	capabilities.Kind = harness.KindCodex
+	if err := admissionLaunchFailure(admission, capabilities, access); err == nil {
+		t.Fatal("non-Pi provider access was accepted")
+	}
+}
+
+func TestGoalAdmissionBuildsPiProviderBridgeOnlyForVerifiedCapability(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatal(err)
+	}
+	admission.ProviderScope = &protocol.ProviderScope{
+		ResourceIDs: []string{admission.Subject.ResourceID},
+		OperationsByResource: map[string][]protocol.ProviderOperation{
+			admission.Subject.ResourceID: {protocol.ProviderOperationResourceSync},
+		},
+	}
+	result := validNativeTaskResult(t, admission)
+	gate := make(chan struct{})
+	capabilities := testVerifiedNativeCapabilities(harness.KindPi)
+	capabilities.ProviderAccess = true
+	app, store, session, controlClient := nativeAdmissionDaemonForHarness(t, admission, result, gate, harness.KindPi, config.RuntimeHarnessPi, capabilities)
+	defer store.Close()
+	profile := app.config.AgentProfiles[app.config.Runtime.AgentProfile]
+	profile.ProviderAccess = true
+	app.config.AgentProfiles[app.config.Runtime.AgentProfile] = profile
+	controlClient.providerAccess = &protocol.ProviderAccess{
+		Path:  "/api/v1/provider-actions",
+		Token: "provider-token-do-not-persist",
+		Grants: []protocol.ProviderGrant{{
+			ResourceID: admission.Subject.ResourceID,
+			Provider:   "github",
+			Kind:       "repository",
+			Operations: []string{"resource.sync"},
+		}},
+	}
+
+	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
+	select {
+	case <-session.turnStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("native Pi provider turn did not start")
+	}
+	request := session.request
+	if request.ProviderAccess == nil || request.ProviderAccess.Path != "/api/v1/provider-actions" || request.ProviderAccess.Token != controlClient.providerAccess.Token {
+		t.Fatalf("native provider access = %#v", request.ProviderAccess)
+	}
+	if request.ProviderBridge == nil || request.ProviderBridge.Lifecycle == nil || request.ProviderBridge.ExtensionPath == "" || request.ProviderBridge.ExtensionSHA256 == "" {
+		t.Fatalf("native provider bridge = %#v", request.ProviderBridge)
+	}
+	extension, err := os.ReadFile(request.ProviderBridge.ExtensionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(extension), controlClient.providerAccess.Token) || strings.Contains(strings.Join(request.Invocation.Env, "\n"), controlClient.providerAccess.Token) {
+		t.Fatal("provider token leaked to generated extension or native environment")
+	}
+
+	close(gate)
+	app.workers.Wait()
+	probe, err := http.NewRequest(http.MethodPost, request.ProviderBridge.URL, strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe.Header.Set("Content-Type", "application/json")
+	probe.Header.Set("X-Symmetry-Bridge-Nonce", request.ProviderBridge.Nonce)
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	if response, requestErr := client.Do(probe); requestErr == nil {
+		_ = response.Body.Close()
+		t.Fatalf("provider bridge remained reachable after native session close: status=%d", response.StatusCode)
+	}
+	journal, err := store.LoadJournal(state.RunKey{RunID: "run-1", Generation: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), controlClient.providerAccess.Token) {
+		t.Fatalf("provider token leaked into run journal: %s", encoded)
+	}
+}
+
 func TestLegacyClaimExpiryRejectsGoalBeforeWorkspaceOrAdapterStart(t *testing.T) {
 	admission, present, err := parseAdmissionInput(validAdmissionInput())
 	if err != nil || !present {
@@ -3692,6 +3821,10 @@ type nativeAdmissionControl struct {
 	fenceCalls          []nativeAdmissionFenceCall
 }
 
+func (client *nativeAdmissionControl) ExecuteProviderAction(context.Context, protocol.ProviderAccess, string, string, string, json.RawMessage) (control.ProviderActionResponse, error) {
+	return control.ProviderActionResponse{}, errors.New("test provider action was not expected")
+}
+
 type nativeAdmissionFenceCall struct {
 	kind  string
 	runID string
@@ -3829,6 +3962,14 @@ func (adapter *fakeNativeGoalAdapter) Start(_ context.Context, request harness.S
 			return nil, err
 		}
 	}
+	if request.ProviderBridge != nil {
+		pid, identity := adapter.session.ProcessDetails()
+		if err := request.ProviderBridge.Lifecycle.BindProcess(pid, identity); err != nil {
+			adapter.session.providerBridge = request.ProviderBridge.Lifecycle
+			return adapter.session, err
+		}
+		adapter.session.providerBridge = request.ProviderBridge.Lifecycle
+	}
 	adapter.session.request = request
 	adapter.session.sink = sink
 	return adapter.session, nil
@@ -3853,6 +3994,7 @@ type fakeNativeGoalSession struct {
 	startErr        error
 	closeErr        error
 	closeEntered    chan struct{}
+	providerBridge  harness.ProviderBridgeLifecycle
 	onControl       func()
 	waitTurnDone    bool
 }
@@ -3958,12 +4100,16 @@ func (session *fakeNativeGoalSession) WaitTurn(ctx context.Context) error {
 	return waitErr
 }
 
-func (session *fakeNativeGoalSession) Close(context.Context) error {
+func (session *fakeNativeGoalSession) Close(ctx context.Context) error {
 	session.recordCall("close")
 	if session.closeEntered != nil {
 		session.closeEntered <- struct{}{}
 	}
-	return session.closeErr
+	var bridgeErr error
+	if session.providerBridge != nil {
+		bridgeErr = session.providerBridge.Close(ctx)
+	}
+	return errors.Join(session.closeErr, bridgeErr)
 }
 
 func validAdmissionInput() json.RawMessage {

@@ -8,15 +8,20 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/control"
+	"github.com/wxxb789/symmetry/daemon/internal/harness"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/pi"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
+
+const piProviderBridgeCloseTimeout = 5 * time.Second
 
 const (
 	piProviderActionPath = "/api/v1/provider-actions"
@@ -139,6 +144,59 @@ var (
 	errPiProviderActionControlUnavailable = errors.New("provider action control client is unavailable")
 	errPiProviderActionStoreUnavailable   = errors.New("provider action state store is unavailable")
 )
+
+func (daemon *daemon) preparePiProviderBridge(ctx context.Context, key state.RunKey, kind harness.Kind, access *protocol.ProviderAccess) (*harness.ProviderBridgeLaunch, error) {
+	if access == nil {
+		return nil, nil
+	}
+	if daemon == nil || daemon.store == nil || kind != harness.KindPi {
+		return nil, errors.New("pi provider bridge prerequisites are unavailable")
+	}
+	if ctx == nil {
+		return nil, errors.New("pi provider bridge context is unavailable")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if _, err := daemon.store.RecoverProviderActions(key, "daemon_restart_unknown"); err != nil {
+		return nil, fmt.Errorf("recover pi provider actions: %w", err)
+	}
+	executor, err := newDurablePiProviderBridgeExecutor(daemon.control, daemon.store, key, *access)
+	if err != nil {
+		return nil, fmt.Errorf("create pi provider bridge executor: %w", err)
+	}
+	extensionRoot, err := filepath.Abs(filepath.Join(daemon.config.StateDir, "generated", "pi", pi.TestedVersion))
+	if err != nil {
+		return nil, errors.New("resolve pi provider bridge extension directory")
+	}
+	extension, err := pi.MaterializeProviderBridgeExtension(extensionRoot, access.Grants)
+	if err != nil {
+		return nil, fmt.Errorf("materialize pi provider bridge extension: %w", err)
+	}
+	bridge, err := pi.NewProviderBridge(pi.ProviderBridgeOptions{
+		RunID:               key.RunID,
+		Grants:              access.Grants,
+		Execute:             executor,
+		RequirePeerIdentity: true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create pi provider bridge: %w", err)
+	}
+	endpoint, err := bridge.Start(ctx)
+	if err != nil {
+		closeContext, closeCancel := context.WithTimeout(context.WithoutCancel(ctx), piProviderBridgeCloseTimeout)
+		closeErr := bridge.Close(closeContext)
+		closeCancel()
+		return nil, errors.Join(fmt.Errorf("start pi provider bridge: %w", err), closeErr)
+	}
+	return &harness.ProviderBridgeLaunch{
+		URL:             endpoint.URL,
+		Nonce:           endpoint.Nonce,
+		ExtensionPath:   extension.Path,
+		ExtensionSHA256: extension.SHA256,
+		Lifecycle:       bridge,
+	}, nil
+}
 
 // providerActionControlAPI is intentionally optional. Existing ControlAPI
 // implementations do not need to grow a provider-action method before the

@@ -1065,7 +1065,7 @@ func buildRuntimeRegistration(runtime config.Runtime, profile config.AgentProfil
 		RepositoryResourceID: optionalRuntimeRepositoryResourceID(runtime.RepositoryResourceID),
 		Capabilities: protocol.RuntimeCapabilities{
 			StructuredInput:    structuredInputForProfile(profile),
-			ProviderAccess:     legacyProviderAccessForRegistration(runtime, profile),
+			ProviderAccess:     legacyProviderAccessForRegistration(runtime, profile) || profile.ProviderAccess && capabilities.ProviderAccess,
 			Interactive:        profile.Interactive,
 			SupervisoryControl: profile.SupervisoryControl,
 		},
@@ -2964,10 +2964,15 @@ func admissionLaunchFailure(admission protocol.Admission, capabilities harness.C
 		return err
 	}
 	if providerAccess != nil {
-		return &harness.CapabilityError{
-			Kind:       capabilities.Kind,
-			Capability: harness.CapabilityProviderAccess,
-			Reason:     "native provider broker bridge is not verified",
+		if capabilities.Kind != harness.KindPi {
+			return &harness.CapabilityError{
+				Kind:       capabilities.Kind,
+				Capability: harness.CapabilityProviderAccess,
+				Reason:     "native provider broker bridge is implemented only for pi",
+			}
+		}
+		if err := capabilities.Require(harness.CapabilityProviderAccess); err != nil {
+			return err
 		}
 	}
 	if admission.Limits.MaxCostMicrousd != nil {
@@ -3196,7 +3201,7 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 		return fmt.Errorf("configured Goal adapter %q capability projection changed since runtime registration", configuredKind)
 	}
 	profile := daemon.config.AgentProfiles[daemon.config.Runtime.AgentProfile]
-	providerAccess, err := goalProviderAccess(profile, claim.ProviderAccess, daemon.config.ControlPlaneURL)
+	providerAccess, err := goalProviderAccess(profile, claim.ProviderAccess)
 	if err != nil {
 		return err
 	}
@@ -3204,11 +3209,32 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 		if err := pi.ValidateRPCProfileArgs(profile.Args); err != nil {
 			return fmt.Errorf("validate pi RPC invocation before native launch: %w", err)
 		}
+		if providerAccess != nil {
+			if err := pi.ValidateProviderBridgeProfileArgs(profile.Args); err != nil {
+				return fmt.Errorf("validate pi provider bridge invocation before native launch: %w", err)
+			}
+		}
 	}
 	environment, err := execution.BuildEnvironment(profile.EnvAllowlist...)
 	if err != nil {
 		return fmt.Errorf("build native environment: %w", err)
 	}
+	providerBridge, err := daemon.preparePiProviderBridge(ctx, key, configuredKind, providerAccess)
+	if err != nil {
+		return err
+	}
+	providerBridgeTransferred := false
+	defer func() {
+		if providerBridge == nil || providerBridgeTransferred {
+			return
+		}
+		closeContext, closeCancel := context.WithTimeout(context.WithoutCancel(ctx), piProviderBridgeCloseTimeout)
+		closeErr := providerBridge.Lifecycle.Close(closeContext)
+		closeCancel()
+		if closeErr != nil {
+			returnErr = errors.Join(returnErr, fmt.Errorf("close unowned pi provider bridge: %w", closeErr))
+		}
+	}()
 
 	var (
 		prepared      workspace.Prepared
@@ -3400,6 +3426,7 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 			MaxCostMicrousd: admission.Limits.MaxCostMicrousd,
 		},
 		ProviderAccess: providerAccess,
+		ProviderBridge: providerBridge,
 		Invocation: execution.Invocation{
 			Program:                     profile.Command,
 			Args:                        profile.Args,
@@ -3436,6 +3463,7 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 	}, sink)
 	nativeLaunchAttempted = true
 	if session != nil {
+		providerBridgeTransferred = true
 		daemon.attachPartialNativeSession(key, session, sessionKey, admission, prepared)
 	}
 	if err != nil {
@@ -3627,14 +3655,20 @@ func (daemon *daemon) attachPartialNativeSession(key state.RunKey, session harne
 // goalProviderAccess is intentionally separate from legacy initialInput: a
 // native harness must receive the broker capability out of band rather than
 // through a persisted prompt or process environment.
-func goalProviderAccess(profile config.AgentProfile, access *protocol.ProviderAccess, controlPlaneURL string) (*protocol.ProviderAccess, error) {
+func goalProviderAccess(profile config.AgentProfile, access *protocol.ProviderAccess) (*protocol.ProviderAccess, error) {
 	if access == nil {
 		return nil, nil
 	}
 	if !profile.ProviderAccess {
 		return nil, errors.New("agent profile does not allow provider access")
 	}
-	return resolveProviderAccess(controlPlaneURL, access)
+	copy := *access
+	copy.Grants = make([]protocol.ProviderGrant, len(access.Grants))
+	for index, grant := range access.Grants {
+		copy.Grants[index] = grant
+		copy.Grants[index].Operations = append([]string(nil), grant.Operations...)
+	}
+	return &copy, nil
 }
 
 func parseAdmissionDeadline(value string) time.Time {

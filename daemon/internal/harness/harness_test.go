@@ -57,7 +57,7 @@ func TestRegistryKeepsUnavailableCapabilitiesExplicit(t *testing.T) {
 			if capabilities.Kind != test.kind {
 				t.Fatalf("capability kind = %q, want %q", capabilities.Kind, test.kind)
 			}
-			if capabilities.Verified || capabilities.Start || capabilities.Events || capabilities.Cancel {
+			if capabilities.Verified || capabilities.Start || capabilities.Events || capabilities.Cancel || capabilities.ProviderAccess {
 				t.Fatalf("unavailable capabilities = %+v, want fail-closed operations", capabilities)
 			}
 			if capabilities.Guidance != GuidanceUnsupported || capabilities.Pause != PauseUnsupported || capabilities.Usage != UsageUnknown {
@@ -65,6 +65,9 @@ func TestRegistryKeepsUnavailableCapabilitiesExplicit(t *testing.T) {
 			}
 			if capabilities.Unsupported[string(CapabilityPause)] == "" {
 				t.Fatalf("unsupported map = %#v, want pause reason", capabilities.Unsupported)
+			}
+			if capabilities.Unsupported[string(CapabilityProviderAccess)] == "" {
+				t.Fatalf("unsupported map = %#v, want provider access reason", capabilities.Unsupported)
 			}
 			if requireErr := capabilities.Require(CapabilityStart); !errors.Is(requireErr, ErrUnsupportedCapability) {
 				t.Fatalf("Require(start) error = %v, want ErrUnsupportedCapability", requireErr)
@@ -107,6 +110,13 @@ func TestCapabilitiesRejectUnsafeVersionAndOperationClaims(t *testing.T) {
 		{name: "approval without start", mutate: func(value *Capabilities) { value.ApprovalResponse = true; value.Start = false }},
 		{name: "approval without events", mutate: func(value *Capabilities) { value.ApprovalResponse = true; value.Events = false }},
 		{name: "unverified executable start", mutate: func(value *Capabilities) { value.Verified = false }},
+		{name: "unverified provider access", mutate: func(value *Capabilities) {
+			value.Start = false
+			value.Events = false
+			value.Cancel = false
+			value.ProviderAccess = true
+			value.Verified = false
+		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			capabilities := verified
@@ -118,6 +128,31 @@ func TestCapabilitiesRejectUnsafeVersionAndOperationClaims(t *testing.T) {
 				t.Fatalf("Supports(start) accepted invalid capabilities: %+v", capabilities)
 			}
 		})
+	}
+}
+
+func TestVerifiedCapabilitiesCanAdvertiseProviderAccess(t *testing.T) {
+	capabilities := Capabilities{
+		Kind:                  KindPi,
+		NativeVersion:         "0.85.1",
+		ImplementationVersion: "adapter-v1",
+		ProtocolVersion:       1,
+		VersionKnown:          true,
+		TransportVerified:     true,
+		Verified:              true,
+		Start:                 true,
+		Events:                true,
+		Cancel:                true,
+		Guidance:              GuidanceUnsupported,
+		Pause:                 PauseUnsupported,
+		Usage:                 UsageUnknown,
+		ProviderAccess:        true,
+	}
+	if err := capabilities.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if !capabilities.Supports(CapabilityProviderAccess) {
+		t.Fatal("verified provider access capability was not supported")
 	}
 }
 

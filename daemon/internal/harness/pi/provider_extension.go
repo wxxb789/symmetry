@@ -232,10 +232,8 @@ func piRPCArgsWithProviderExtension(profileArgs []string, resumeState *SessionSt
 	if err != nil || !info.Mode().IsRegular() {
 		return nil, errors.New("pi provider bridge extension is unavailable")
 	}
-	for _, argument := range profileArgs {
-		if argument == "--no-tools" || argument == "-nt" || argument == "--tools" || argument == "-t" {
-			return nil, errors.New("pi provider bridge cannot use a profile tool override")
-		}
+	if err := ValidateProviderBridgeProfileArgs(profileArgs); err != nil {
+		return nil, err
 	}
 	base, err := piRPCArgs(profileArgs, resumeState)
 	if err != nil {
@@ -248,6 +246,17 @@ func piRPCArgsWithProviderExtension(profileArgs []string, resumeState *SessionSt
 		}
 	}
 	return append(filtered, "--no-extensions", "--extension", extensionPath), nil
+}
+
+// ValidateProviderBridgeProfileArgs rejects profile-owned tool selection when
+// the daemon must install the exact provider tools for this run.
+func ValidateProviderBridgeProfileArgs(profileArgs []string) error {
+	for _, argument := range profileArgs {
+		if argument == "--no-tools" || argument == "-nt" || argument == "--tools" || argument == "-t" {
+			return errors.New("pi provider bridge cannot use a profile tool override")
+		}
+	}
+	return nil
 }
 
 func validateProviderBridgeLaunch(access *protocol.ProviderAccess, launch *harness.ProviderBridgeLaunch) (*harness.ProviderBridgeLaunch, error) {
