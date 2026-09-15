@@ -95,17 +95,21 @@ func TestAuthorityPersistenceRetryPrecedesReceiptAndRelease(t *testing.T) {
 	}
 }
 
-func TestMissingStopReceiptProviderFailsClosedBeforeClose(t *testing.T) {
+func TestLinuxLegacyNoAuthorityContainmentIgnoresStopReceiptCallback(t *testing.T) {
 	containment := &p1PlainContainment{}
 	invocation := helperInvocation("args")
-	invocation.PersistContainmentStopReceipt = func(int, string, authority.StopReceipt) error { return nil }
+	receiptCalls := 0
+	invocation.PersistContainmentStopReceipt = func(int, string, authority.StopReceipt) error {
+		receiptCalls++
+		return errors.New("legacy containment must not persist a stop receipt")
+	}
 	process, err := p1PlainRunner(containment).Start(context.Background(), invocation, &recordingSink{})
 	if err != nil {
 		t.Fatalf("Start() error = %v, want process to start", err)
 	}
 	result := waitForResult(t, process)
-	if result.ContainmentError == nil || containment.closeCalls != 0 {
-		t.Fatalf("missing receipt provider result = %#v, close calls = %d", result, containment.closeCalls)
+	if result.ContainmentError != nil || receiptCalls != 0 || containment.closeCalls != 1 {
+		t.Fatalf("legacy no-authority finalization = result:%#v receipt calls:%d close calls:%d, want no containment error, no receipt callback, and one close", result, receiptCalls, containment.closeCalls)
 	}
 }
 

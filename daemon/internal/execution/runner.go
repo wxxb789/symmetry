@@ -342,13 +342,13 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 			)
 		}
 	}
-	if invocation.PersistProcessAuthority == nil {
+	_, hasStopReceiptProvider := containment.(platform.ContainmentStopReceiptProvider)
+	_, hasAuthorityProvider := containment.(platform.ContainmentAuthorityProvider)
+	if hasStopReceiptProvider || hasAuthorityProvider {
 		started.persistStopReceipt = invocation.PersistContainmentStopReceipt
 		started.stopReceiptRequired = invocation.PersistContainmentStopReceipt != nil
 	}
 	if invocation.PersistProcessAuthority != nil {
-		started.persistStopReceipt = invocation.PersistContainmentStopReceipt
-		started.stopReceiptRequired = invocation.PersistContainmentStopReceipt != nil
 		if capability, ok := containment.(platform.ContainmentAuthorityCapability); ok && !capability.ContainmentAuthorityAvailable() {
 			// The Windows test binary deliberately uses the legacy in-process
 			// containment seam because it cannot dispatch the daemon helper mode.
