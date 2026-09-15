@@ -16,6 +16,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/wxxb789/symmetry/daemon/internal/authority"
 )
 
 func TestConfigureHeadlessProcessCreatesHeadlessSysProcAttr(t *testing.T) {
@@ -603,6 +605,115 @@ func TestJobContainmentHelper(t *testing.T) {
 	default:
 		os.Exit(2)
 	}
+}
+
+func TestJobContainmentReleaseSynchronizesRenewalAndAuthorityAccess(t *testing.T) {
+	supervisor := &blockingContainmentSupervisor{
+		releaseEntered: make(chan struct{}),
+		allowRelease:   make(chan struct{}),
+	}
+	job := &jobContainment{
+		supervisor:  supervisor,
+		stopReceipt: &authority.StopReceipt{Status: "stopped"},
+	}
+
+	if job.ContainmentAuthority() == nil || !job.ContainmentAuthorityAvailable() || !job.LeaseRenewalAvailable() {
+		t.Fatal("supervisor-backed containment did not expose authority and renewal capabilities before release")
+	}
+
+	const readers = 2
+	start := make(chan struct{})
+	stop := make(chan struct{})
+	ready := make(chan struct{}, readers)
+	done := make(chan struct{}, readers)
+	readAccessPaths := func() {
+		_ = job.ContainmentAuthority()
+		_ = job.ContainmentAuthorityAvailable()
+		_ = job.LeaseRenewalAvailable()
+	}
+	for range readers {
+		go func() {
+			<-start
+			readAccessPaths()
+			ready <- struct{}{}
+			for {
+				select {
+				case <-stop:
+					done <- struct{}{}
+					return
+				default:
+					readAccessPaths()
+				}
+			}
+		}()
+	}
+	close(start)
+	for range readers {
+		<-ready
+	}
+
+	releaseResult := make(chan error, 1)
+	go func() { releaseResult <- job.ReleaseContainment() }()
+	<-supervisor.releaseEntered
+	close(supervisor.allowRelease)
+	if err := <-releaseResult; err != nil {
+		t.Fatalf("ReleaseContainment() error = %v", err)
+	}
+	close(stop)
+	for range readers {
+		<-done
+	}
+
+	if job.ContainmentAuthority() != nil {
+		t.Fatal("ContainmentAuthority() returned authority after release")
+	}
+	if job.ContainmentAuthorityAvailable() {
+		t.Fatal("ContainmentAuthorityAvailable() = true after release")
+	}
+	if job.LeaseRenewalAvailable() {
+		t.Fatal("LeaseRenewalAvailable() = true after release")
+	}
+	if err := job.RenewLease(time.Second, 1); !errors.Is(err, errors.ErrUnsupported) {
+		t.Fatalf("RenewLease() after release error = %v, want errors.ErrUnsupported", err)
+	}
+	if err := job.ReleaseContainment(); err != nil {
+		t.Fatalf("repeated ReleaseContainment() error = %v, want nil", err)
+	}
+}
+
+type blockingContainmentSupervisor struct {
+	releaseEntered chan struct{}
+	allowRelease   chan struct{}
+}
+
+func (*blockingContainmentSupervisor) close(time.Time) error {
+	return nil
+}
+
+func (*blockingContainmentSupervisor) renew(time.Duration, uint64) error {
+	return nil
+}
+
+func (*blockingContainmentSupervisor) stop(time.Time) (authority.StopReceipt, error) {
+	return authority.StopReceipt{Status: "stopped"}, nil
+}
+
+func (supervisor *blockingContainmentSupervisor) release(time.Time) error {
+	close(supervisor.releaseEntered)
+	<-supervisor.allowRelease
+	return nil
+}
+
+func (*blockingContainmentSupervisor) containmentAuthority() *authority.Supervisor {
+	return &authority.Supervisor{Version: authority.SupervisorVersion}
+}
+
+func (*blockingContainmentSupervisor) LeaseRenewalAvailable() bool {
+	return true
+}
+
+func (*blockingContainmentSupervisor) RenewLease(time.Duration, uint64) error {
+	return nil
 }
 
 func windowsProcessExists(pid int) (bool, string) {

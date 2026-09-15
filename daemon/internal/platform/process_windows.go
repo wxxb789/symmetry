@@ -103,10 +103,16 @@ type jobContainment struct {
 // owned by the independent Windows supervisor. A nil result is deliberate for
 // partial/legacy containment and must remain fail-closed during recovery.
 func (job *jobContainment) ContainmentAuthority() *authority.Supervisor {
-	if job == nil || job.supervisor == nil {
+	if job == nil {
 		return nil
 	}
-	provider, ok := job.supervisor.(containmentSupervisorAuthorityProvider)
+	job.mutex.Lock()
+	supervisor := job.supervisor
+	job.mutex.Unlock()
+	if supervisor == nil {
+		return nil
+	}
+	provider, ok := supervisor.(containmentSupervisorAuthorityProvider)
 	if !ok {
 		return nil
 	}
@@ -119,10 +125,16 @@ func (job *jobContainment) ContainmentAuthority() *authority.Supervisor {
 }
 
 func (job *jobContainment) ContainmentAuthorityAvailable() bool {
-	if job == nil || job.supervisor == nil {
+	if job == nil {
 		return false
 	}
-	_, ok := job.supervisor.(containmentSupervisorAuthorityProvider)
+	job.mutex.Lock()
+	supervisor := job.supervisor
+	job.mutex.Unlock()
+	if supervisor == nil {
+		return false
+	}
+	_, ok := supervisor.(containmentSupervisorAuthorityProvider)
 	return ok
 }
 
@@ -130,10 +142,16 @@ func (job *jobContainment) ContainmentAuthorityAvailable() bool {
 // monotonic local lease deadline. Legacy/test containment remains available but
 // deliberately has no watchdog authority.
 func (job *jobContainment) LeaseRenewalAvailable() bool {
-	if job == nil || job.supervisor == nil {
+	if job == nil {
 		return false
 	}
-	_, ok := job.supervisor.(ContainmentLeaseRenewer)
+	job.mutex.Lock()
+	supervisor := job.supervisor
+	job.mutex.Unlock()
+	if supervisor == nil {
+		return false
+	}
+	_, ok := supervisor.(ContainmentLeaseRenewer)
 	return ok
 }
 
