@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -462,6 +463,151 @@ func TestContainmentSupervisorLeaseStateIgnoresStaleTimerAfterRenewal(t *testing
 	callbacks.run(1)
 	if expired != 1 {
 		t.Fatalf("current expiry callback calls = %d, want 1", expired)
+	}
+}
+
+func TestContainmentSupervisorLeaseExpiryRetainsRecoveryAfterStopFailure(t *testing.T) {
+	callbacks := installContainmentSupervisorAfterFunc(t)
+	supervisorPID := os.Getpid()
+	supervisorIdentity, err := ProcessIdentity(supervisorPID)
+	if err != nil {
+		t.Fatalf("ProcessIdentity() error = %v", err)
+	}
+
+	endpoint, err := containmentEndpointForIdentity(71, "windows:71:0000000000000001")
+	if err != nil {
+		t.Fatalf("containmentEndpointForIdentity() error = %v", err)
+	}
+	endpoint.SupervisorPID = supervisorPID
+	endpoint.SupervisorIdentity = supervisorIdentity
+	if err := validateSupervisorEndpoint(endpoint, true); err != nil {
+		t.Fatalf("validateSupervisorEndpoint() error = %v", err)
+	}
+
+	bootstrap := containmentSupervisorBootstrap{
+		Version:            containmentSupervisorProtocol,
+		JobHandle:          uint64(syscall.Handle(1234)),
+		TargetPID:          endpoint.TargetPID,
+		TargetIdentity:     endpoint.TargetIdentity,
+		SupervisorPID:      endpoint.SupervisorPID,
+		SupervisorIdentity: endpoint.SupervisorIdentity,
+		PipeToken:          endpoint.Token,
+		JobID:              endpoint.JobID,
+		Secret:             endpoint.Secret,
+	}
+
+	firstStopErr := errors.New("first expiry stop failed")
+	var stopMu sync.Mutex
+	stopAttempts := 0
+	secondStopComplete := make(chan struct{})
+	var secondStopCompleteOnce sync.Once
+	releaseCalled := make(chan struct{})
+	var releaseOnce sync.Once
+	restoreJobCalls(t,
+		func(syscall.Handle) error {
+			stopMu.Lock()
+			stopAttempts++
+			attempt := stopAttempts
+			stopMu.Unlock()
+			if attempt == 1 {
+				return firstStopErr
+			}
+			return nil
+		},
+		func(syscall.Handle) (uint32, error) {
+			stopMu.Lock()
+			attempt := stopAttempts
+			stopMu.Unlock()
+			if attempt >= 2 {
+				secondStopCompleteOnce.Do(func() { close(secondStopComplete) })
+			}
+			return 0, nil
+		},
+		func(syscall.Handle) error {
+			releaseOnce.Do(func() { close(releaseCalled) })
+			return nil
+		},
+	)
+	restoreJobWait(t, func(syscall.Handle, time.Time, func(syscall.Handle) (uint32, error)) error {
+		return nil
+	})
+
+	runDone := make(chan error, 1)
+	runFinished := make(chan struct{})
+	go func() {
+		runErr := runContainmentSupervisor(containmentSupervisorArgs{}, bootstrap)
+		close(runFinished)
+		runDone <- runErr
+	}()
+	defer func() {
+		select {
+		case <-runFinished:
+			return
+		default:
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		_, _ = requestContainmentSupervisorPipe(endpoint, "recover", deadline)
+		_, _ = requestContainmentSupervisorPipe(endpoint, "release", deadline)
+		select {
+		case <-runFinished:
+		case <-time.After(5 * time.Second):
+			t.Errorf("containment supervisor did not finish during cleanup")
+		}
+	}()
+
+	if _, err := requestContainmentSupervisorPipe(endpoint, "hello", time.Now().Add(5*time.Second)); err != nil {
+		t.Fatalf("initial hello error = %v", err)
+	}
+	if _, err := requestContainmentSupervisorRenewPipe(endpoint, time.Second, 1, time.Now().Add(5*time.Second)); err != nil {
+		t.Fatalf("initial renewal error = %v", err)
+	}
+	if len(callbacks.callbacks) != 1 {
+		t.Fatalf("expiry callbacks = %d, want 1", len(callbacks.callbacks))
+	}
+
+	callbacks.run(0)
+	stopMu.Lock()
+	gotAttempts := stopAttempts
+	stopMu.Unlock()
+	if gotAttempts != 1 {
+		t.Fatalf("expiry stop attempts = %d, want 1", gotAttempts)
+	}
+
+	// Wake the named-pipe loop. A failed expiry stop must retain recovery so
+	// the loop schedules the second stop before an explicit recover request.
+	if _, err := requestContainmentSupervisorPipe(endpoint, "hello", time.Now().Add(5*time.Second)); err != nil {
+		t.Fatalf("post-expiry hello error = %v", err)
+	}
+	select {
+	case <-secondStopComplete:
+	case <-time.After(5 * time.Second):
+		t.Fatal("failed expiry stop was not retried by the supervisor loop")
+	}
+
+	stopMu.Lock()
+	gotAttempts = stopAttempts
+	stopMu.Unlock()
+	if gotAttempts != 2 {
+		t.Fatalf("retained stop attempts = %d, want 2", gotAttempts)
+	}
+	if _, err := requestContainmentSupervisorPipe(endpoint, "recover", time.Now().Add(5*time.Second)); err != nil {
+		t.Fatalf("recovery after retained stop error = %v", err)
+	}
+	if _, err := requestContainmentSupervisorPipe(endpoint, "release", time.Now().Add(5*time.Second)); err != nil {
+		t.Fatalf("release after retained stop = %v", err)
+	}
+	select {
+	case <-releaseCalled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("successful recovery did not release the supervisor Job")
+	}
+	select {
+	case runErr := <-runDone:
+		if runErr != nil {
+			t.Fatalf("runContainmentSupervisor() error = %v", runErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("containment supervisor did not complete after release")
 	}
 }
 

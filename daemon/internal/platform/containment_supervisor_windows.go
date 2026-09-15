@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -1459,16 +1460,14 @@ func runContainmentSupervisor(_ containmentSupervisorArgs, bootstrap containment
 		return nil
 	}
 	stopState := containmentSupervisorStopState{}
-	stopJobUntilEmpty := func() {
+	stopJobUntilEmpty := func() error {
 		// One stop call is already bounded by containmentCloseDeadline. Keep
 		// the named-pipe loop alive after an unproven attempt so an exact
 		// authenticated recovery can retry; never block the helper forever in
 		// a local retry loop.
-		_, _ = stopState.stop(job)
+		_, err := stopState.stop(job)
+		return err
 	}
-	leaseState := newContainmentSupervisorLeaseState(func() {
-		stopJobUntilEmpty()
-	})
 	supervisorPID := os.Getpid()
 	supervisorIdentity := bootstrap.SupervisorIdentity
 	actualSupervisor, err := ProcessIdentity(supervisorPID)
@@ -1496,7 +1495,15 @@ func runContainmentSupervisor(_ containmentSupervisorArgs, bootstrap containment
 
 	ownerLost := false
 	ownerLossAttempted := false
-	recoveryRetained := false
+	var recoveryRetained atomic.Bool
+	leaseState := newContainmentSupervisorLeaseState(func() {
+		if err := stopJobUntilEmpty(); err != nil {
+			// Lease expiry is an independent stop boundary. Preserve the helper
+			// and its Job authority when the first proof attempt fails so the
+			// main loop can retry before any authenticated recovery or release.
+			recoveryRetained.Store(true)
+		}
+	})
 	var stopRetryMutex sync.Mutex
 	stopRetryRunning := false
 	nextStopRetry := time.Time{}
@@ -1525,7 +1532,7 @@ func runContainmentSupervisor(_ containmentSupervisorArgs, bootstrap containment
 		// helper and its Job authority available for an authenticated recovery.
 		// A failed proof must not release the Job or destroy the witness.
 		leaseState.stop()
-		recoveryRetained = true
+		recoveryRetained.Store(true)
 		_, stopErr := stopState.stop(job)
 		if stopErr != nil {
 			scheduleRetainedStopRetry()
@@ -1544,7 +1551,7 @@ func runContainmentSupervisor(_ containmentSupervisorArgs, bootstrap containment
 	}
 	for {
 		refreshOwnerLoss()
-		if recoveryRetained && !stopState.stoppedSuccessfully() {
+		if recoveryRetained.Load() && !stopState.stoppedSuccessfully() {
 			scheduleRetainedStopRetry()
 		}
 		if ownerLost && !ownerLossAttempted {
@@ -1552,14 +1559,16 @@ func runContainmentSupervisor(_ containmentSupervisorArgs, bootstrap containment
 			// daemon can obtain and persist the exact stop receipt through recover.
 			leaseState.stop()
 			stopJobUntilEmpty()
-			recoveryRetained = true
+			recoveryRetained.Store(true)
 			ownerLossAttempted = true
 		}
 
 		pipe, err := createContainmentSupervisorPipe(endpoint.PipeName)
 		if err != nil {
-			if ownerLost || recoveryRetained || stopState.stoppedSuccessfully() {
-				recoveryRetained = recoveryRetained || stopState.stoppedSuccessfully()
+			if ownerLost || recoveryRetained.Load() || stopState.stoppedSuccessfully() {
+				if stopState.stoppedSuccessfully() {
+					recoveryRetained.Store(true)
+				}
 			} else {
 				_ = retainAfterStopAttempt()
 			}
@@ -1571,8 +1580,10 @@ func runContainmentSupervisor(_ containmentSupervisorArgs, bootstrap containment
 		if err != nil {
 			_ = pipe.Close()
 			refreshOwnerLoss()
-			if errors.Is(err, errContainmentSupervisorConnectionPoll) || ownerLost || recoveryRetained || stopState.stoppedSuccessfully() {
-				recoveryRetained = recoveryRetained || stopState.stoppedSuccessfully()
+			if errors.Is(err, errContainmentSupervisorConnectionPoll) || ownerLost || recoveryRetained.Load() || stopState.stoppedSuccessfully() {
+				if stopState.stoppedSuccessfully() {
+					recoveryRetained.Store(true)
+				}
 				continue
 			}
 			_ = retainAfterStopAttempt()
@@ -1582,7 +1593,7 @@ func runContainmentSupervisor(_ containmentSupervisorArgs, bootstrap containment
 		if readErr != nil {
 			_ = pipe.Close()
 			refreshOwnerLoss()
-			if ownerLost || recoveryRetained || stopState.stoppedSuccessfully() || !connected {
+			if ownerLost || recoveryRetained.Load() || stopState.stoppedSuccessfully() || !connected {
 				continue
 			}
 			_ = retainAfterStopAttempt()
@@ -1593,8 +1604,10 @@ func runContainmentSupervisor(_ containmentSupervisorArgs, bootstrap containment
 		decodeErr := decodeSupervisorJSON(requestLine, &request)
 		if decodeErr != nil {
 			_ = pipe.Close()
-			if ownerLost || recoveryRetained || stopState.stoppedSuccessfully() {
-				recoveryRetained = recoveryRetained || stopState.stoppedSuccessfully()
+			if ownerLost || recoveryRetained.Load() || stopState.stoppedSuccessfully() {
+				if stopState.stoppedSuccessfully() {
+					recoveryRetained.Store(true)
+				}
 				continue
 			}
 			_ = retainAfterStopAttempt()
@@ -1602,8 +1615,10 @@ func runContainmentSupervisor(_ containmentSupervisorArgs, bootstrap containment
 		}
 		if err := validateSupervisorRequest(endpoint, request); err != nil {
 			_ = pipe.Close()
-			if ownerLost || recoveryRetained || stopState.stoppedSuccessfully() {
-				recoveryRetained = recoveryRetained || stopState.stoppedSuccessfully()
+			if ownerLost || recoveryRetained.Load() || stopState.stoppedSuccessfully() {
+				if stopState.stoppedSuccessfully() {
+					recoveryRetained.Store(true)
+				}
 				continue
 			}
 			_ = retainAfterStopAttempt()
@@ -1635,16 +1650,20 @@ func runContainmentSupervisor(_ containmentSupervisorArgs, bootstrap containment
 			writeErr := writeSupervisorResponse(pipe, response, time.Now().Add(containmentSupervisorConnectionPoll))
 			_ = pipe.Close()
 			if writeErr != nil {
-				if ownerLost || recoveryRetained || stopState.stoppedSuccessfully() {
-					recoveryRetained = recoveryRetained || stopState.stoppedSuccessfully()
+				if ownerLost || recoveryRetained.Load() || stopState.stoppedSuccessfully() {
+					if stopState.stoppedSuccessfully() {
+						recoveryRetained.Store(true)
+					}
 					continue
 				}
 				_ = retainAfterStopAttempt()
 				continue
 			}
 			if response.Status == "error" {
-				if ownerLost || recoveryRetained || stopState.stoppedSuccessfully() {
-					recoveryRetained = recoveryRetained || stopState.stoppedSuccessfully()
+				if ownerLost || recoveryRetained.Load() || stopState.stoppedSuccessfully() {
+					if stopState.stoppedSuccessfully() {
+						recoveryRetained.Store(true)
+					}
 					continue
 				}
 				_ = retainAfterStopAttempt()
@@ -1718,7 +1737,7 @@ func runContainmentSupervisor(_ containmentSupervisorArgs, bootstrap containment
 				response.Error = errContainmentSupervisorStopReceiptUnavailable.Error()
 			} else {
 				if request.Operation == "recover" || wasAlreadyStopped {
-					recoveryRetained = true
+					recoveryRetained.Store(true)
 				}
 				response.ActiveProcesses = receipt.ActiveProcesses
 				if ownerWatchdog != nil {
@@ -1736,7 +1755,7 @@ func runContainmentSupervisor(_ containmentSupervisorArgs, bootstrap containment
 		if response.Status != "stopped" {
 			continue
 		}
-		if request.Operation == "close" || request.Operation == "recover" || recoveryRetained {
+		if request.Operation == "close" || request.Operation == "recover" || recoveryRetained.Load() {
 			continue
 		}
 		if releaseErr := release(); releaseErr != nil {
