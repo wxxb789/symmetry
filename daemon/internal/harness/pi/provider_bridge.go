@@ -19,6 +19,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
@@ -41,6 +42,7 @@ const (
 	providerBridgeWriteTimeout            = 15 * time.Second
 	providerBridgeIdleTimeout             = 30 * time.Second
 	providerBridgeMaxHeaderBytes          = 32 << 10
+	providerBridgePeerVerificationTimeout = 5 * time.Second
 )
 
 var (
@@ -54,6 +56,8 @@ var (
 	errProviderBridgeExecutionCapacity    = errors.New("provider bridge execution capacity is exhausted")
 	errProviderBridgeReplayWaiterCapacity = errors.New("provider bridge replay waiter capacity is exhausted")
 	errProviderBridgeExecutionUnproven    = errors.New("provider bridge execution shutdown is unproven")
+	errProviderBridgePeerNotBound         = errors.New("provider bridge process identity is not bound")
+	errProviderBridgePeerAlreadyBound     = errors.New("provider bridge process identity is already bound")
 )
 
 // ProviderBridgeOutcome is the executor's conclusive classification. Unknown
@@ -71,10 +75,11 @@ const (
 // This first slice deliberately has no token, Control URL, or provider
 // credential. It is not wired into Pi capability advertisement yet.
 type ProviderBridgeOptions struct {
-	RunID            string
-	Grants           []protocol.ProviderGrant
-	Execute          ExecuteProviderAction
-	ExecutionTimeout time.Duration
+	RunID               string
+	Grants              []protocol.ProviderGrant
+	Execute             ExecuteProviderAction
+	ExecutionTimeout    time.Duration
+	RequirePeerIdentity bool
 }
 
 // ExecuteProviderAction is the narrow local seam used by the bridge. The
@@ -116,16 +121,19 @@ type ProviderBridgeEndpoint struct {
 type ProviderBridge struct {
 	mu sync.Mutex
 
-	runID            string
-	grants           map[string]map[string]struct{}
-	execute          ExecuteProviderAction
-	replay           map[string]*providerBridgeReplayEntry
-	executionTimeout time.Duration
-	lifetimeCtx      context.Context
-	cancelLifetime   context.CancelFunc
-	activeExecutions int
-	executionDone    chan struct{}
-	replayWaiters    int
+	runID               string
+	grants              map[string]map[string]struct{}
+	execute             ExecuteProviderAction
+	replay              map[string]*providerBridgeReplayEntry
+	executionTimeout    time.Duration
+	lifetimeCtx         context.Context
+	cancelLifetime      context.CancelFunc
+	activeExecutions    int
+	executionDone       chan struct{}
+	replayWaiters       int
+	requirePeerIdentity bool
+	peerPID             int
+	peerIdentity        string
 	// onReplayWait is a package-local synchronization seam used only by the
 	// deterministic single-flight tests; production construction leaves it nil.
 	onReplayWait func()
@@ -170,16 +178,43 @@ func NewProviderBridge(options ProviderBridgeOptions) (*ProviderBridge, error) {
 	}
 
 	return &ProviderBridge{
-		runID:            options.RunID,
-		grants:           grants,
-		execute:          options.Execute,
-		executionTimeout: normalizedProviderBridgeExecutionTimeout(options.ExecutionTimeout),
-		lifetimeCtx:      lifetimeContext,
-		cancelLifetime:   cancelLifetime,
-		replay:           make(map[string]*providerBridgeReplayEntry),
-		executionDone:    closedProviderBridgeChannel(),
-		closeDone:        make(chan struct{}),
+		runID:               options.RunID,
+		grants:              grants,
+		execute:             options.Execute,
+		executionTimeout:    normalizedProviderBridgeExecutionTimeout(options.ExecutionTimeout),
+		lifetimeCtx:         lifetimeContext,
+		cancelLifetime:      cancelLifetime,
+		replay:              make(map[string]*providerBridgeReplayEntry),
+		executionDone:       closedProviderBridgeChannel(),
+		closeDone:           make(chan struct{}),
+		requirePeerIdentity: options.RequirePeerIdentity,
 	}, nil
+}
+
+// BindProcess authorizes the one native Pi process allowed to call a bridge
+// configured with RequirePeerIdentity. Exact replay is idempotent; replacing
+// the process identity is forbidden for the bridge lifetime.
+func (bridge *ProviderBridge) BindProcess(pid int, identity string) error {
+	if bridge == nil || pid <= 0 || validateBridgeString(identity, 4096, false) != nil {
+		return errors.New("provider bridge process identity is invalid")
+	}
+	bridge.mu.Lock()
+	defer bridge.mu.Unlock()
+	if bridge.closed {
+		return errProviderBridgeClosed
+	}
+	if !bridge.requirePeerIdentity {
+		return errors.New("provider bridge peer identity is not required")
+	}
+	if bridge.peerPID != 0 || bridge.peerIdentity != "" {
+		if bridge.peerPID == pid && bridge.peerIdentity == identity {
+			return nil
+		}
+		return errProviderBridgePeerAlreadyBound
+	}
+	bridge.peerPID = pid
+	bridge.peerIdentity = identity
+	return nil
 }
 
 func normalizedProviderBridgeExecutionTimeout(timeout time.Duration) time.Duration {
@@ -256,7 +291,10 @@ func (bridge *ProviderBridge) Start(ctx context.Context) (ProviderBridgeEndpoint
 	}
 
 	server := &http.Server{
-		Handler:           http.HandlerFunc(bridge.serveHTTP),
+		Handler: http.HandlerFunc(bridge.serveHTTP),
+		ConnContext: func(ctx context.Context, connection net.Conn) context.Context {
+			return context.WithValue(ctx, providerBridgeConnectionContextKey{}, connection)
+		},
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       providerBridgeReadTimeout,
 		WriteTimeout:      providerBridgeWriteTimeout,
@@ -443,6 +481,14 @@ func (bridge *ProviderBridge) serveHTTP(response http.ResponseWriter, request *h
 		writeProviderBridgeError(response, http.StatusUnauthorized, "invalid_bridge_nonce")
 		return
 	}
+	if err := bridge.verifyRequestPeer(request.Context()); err != nil {
+		if errors.Is(err, errProviderBridgePeerNotBound) {
+			writeProviderBridgeError(response, http.StatusServiceUnavailable, "bridge_peer_not_bound")
+			return
+		}
+		writeProviderBridgeError(response, http.StatusForbidden, "bridge_peer_not_authorized")
+		return
+	}
 	if request.ContentLength > providerBridgeMaxBodyBytes {
 		writeProviderBridgeError(response, http.StatusRequestEntityTooLarge, "body_too_large")
 		return
@@ -490,6 +536,29 @@ func (bridge *ProviderBridge) serveHTTP(response http.ResponseWriter, request *h
 		return
 	}
 	writeProviderBridgeResponse(response, actionID, result)
+}
+
+type providerBridgeConnectionContextKey struct{}
+
+func (bridge *ProviderBridge) verifyRequestPeer(ctx context.Context) error {
+	bridge.mu.Lock()
+	required := bridge.requirePeerIdentity
+	pid := bridge.peerPID
+	identity := bridge.peerIdentity
+	bridge.mu.Unlock()
+	if !required {
+		return nil
+	}
+	if pid <= 0 || identity == "" {
+		return errProviderBridgePeerNotBound
+	}
+	connection, ok := ctx.Value(providerBridgeConnectionContextKey{}).(net.Conn)
+	if !ok || connection == nil {
+		return errors.New("provider bridge connection identity is unavailable")
+	}
+	verificationContext, cancel := context.WithTimeout(ctx, providerBridgePeerVerificationTimeout)
+	defer cancel()
+	return platform.VerifyLoopbackTCPPeer(verificationContext, connection, pid, identity)
 }
 
 var errProviderBridgeConflict = errors.New("provider bridge idempotency conflict")
