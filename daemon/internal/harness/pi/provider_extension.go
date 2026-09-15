@@ -3,24 +3,30 @@ package pi
 import (
 	"bytes"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
+	"github.com/wxxb789/symmetry/daemon/internal/harness"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
 const (
-	ProviderBridgeURLEnvironment   = "SYMMETRY_PI_PROVIDER_BRIDGE_URL"
-	ProviderBridgeNonceEnvironment = "SYMMETRY_PI_PROVIDER_BRIDGE_NONCE"
-	providerBridgeExtensionPrefix  = "symmetry-pi-provider-bridge-"
-	providerBridgeExtensionSuffix  = ".ts"
+	ProviderBridgeURLEnvironment    = "SYMMETRY_PI_PROVIDER_BRIDGE_URL"
+	ProviderBridgeNonceEnvironment  = "SYMMETRY_PI_PROVIDER_BRIDGE_NONCE"
+	providerBridgeExtensionPrefix   = "symmetry-pi-provider-bridge-"
+	providerBridgeExtensionSuffix   = ".ts"
+	maxProviderBridgeExtensionBytes = 1 << 20
 )
 
 // ProviderBridgeExtension identifies one immutable generated Pi extension.
@@ -242,4 +248,92 @@ func piRPCArgsWithProviderExtension(profileArgs []string, resumeState *SessionSt
 		}
 	}
 	return append(filtered, "--no-extensions", "--extension", extensionPath), nil
+}
+
+func validateProviderBridgeLaunch(access *protocol.ProviderAccess, launch *harness.ProviderBridgeLaunch) (*harness.ProviderBridgeLaunch, error) {
+	if access == nil {
+		if launch != nil {
+			return nil, errors.New("pi provider bridge launch has no provider access")
+		}
+		return nil, nil
+	}
+	if launch == nil || isNilProviderBridgeLifecycle(launch.Lifecycle) {
+		return nil, unsupported(harness.CapabilityProviderAccess, "pi provider broker bridge is not verified")
+	}
+	if access.Path != "/api/v1/provider-actions" || strings.TrimSpace(access.Token) == "" || len(access.Grants) == 0 {
+		return nil, errors.New("pi provider access is invalid")
+	}
+	expectedSource, err := providerBridgeExtensionSource(access.Grants)
+	if err != nil {
+		return nil, errors.New("pi provider access grants are invalid")
+	}
+	expectedDigest := sha256.Sum256(expectedSource)
+	expectedDigestText := hex.EncodeToString(expectedDigest[:])
+	parsed, err := url.Parse(launch.URL)
+	if err != nil || parsed.Scheme != "http" || parsed.Hostname() != "127.0.0.1" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Path != providerBridgePath {
+		return nil, errors.New("pi provider bridge URL is invalid")
+	}
+	port, err := net.LookupPort("tcp", parsed.Port())
+	if err != nil || port <= 0 {
+		return nil, errors.New("pi provider bridge URL is invalid")
+	}
+	if len(launch.Nonce) != 64 || launch.Nonce != strings.ToLower(launch.Nonce) {
+		return nil, errors.New("pi provider bridge nonce is invalid")
+	}
+	if _, err := hex.DecodeString(launch.Nonce); err != nil {
+		return nil, errors.New("pi provider bridge nonce is invalid")
+	}
+	if len(launch.ExtensionSHA256) != sha256.Size*2 || launch.ExtensionSHA256 != strings.ToLower(launch.ExtensionSHA256) {
+		return nil, errors.New("pi provider bridge extension digest is invalid")
+	}
+	if _, err := hex.DecodeString(launch.ExtensionSHA256); err != nil {
+		return nil, errors.New("pi provider bridge extension digest is invalid")
+	}
+	if subtle.ConstantTimeCompare([]byte(expectedDigestText), []byte(launch.ExtensionSHA256)) != 1 {
+		return nil, errors.New("pi provider bridge extension does not match provider grants")
+	}
+	if !filepath.IsAbs(launch.ExtensionPath) || strings.IndexByte(launch.ExtensionPath, 0) >= 0 {
+		return nil, errors.New("pi provider bridge extension path is invalid")
+	}
+	info, err := os.Lstat(launch.ExtensionPath)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() <= 0 || info.Size() > maxProviderBridgeExtensionBytes {
+		return nil, errors.New("pi provider bridge extension is unavailable")
+	}
+	data, err := readProviderBridgeExtension(launch.ExtensionPath, int(info.Size()))
+	if err != nil || len(data) != int(info.Size()) {
+		return nil, errors.New("read pi provider bridge extension")
+	}
+	digest := sha256.Sum256(data)
+	if subtle.ConstantTimeCompare([]byte(hex.EncodeToString(digest[:])), []byte(launch.ExtensionSHA256)) != 1 {
+		return nil, errors.New("pi provider bridge extension digest does not match")
+	}
+	copy := *launch
+	return &copy, nil
+}
+
+func appendProviderBridgeEnvironment(environment []string, endpoint, nonce string) ([]string, error) {
+	for _, entry := range environment {
+		name, _, present := strings.Cut(entry, "=")
+		if !present {
+			continue
+		}
+		if strings.EqualFold(name, ProviderBridgeURLEnvironment) || strings.EqualFold(name, ProviderBridgeNonceEnvironment) {
+			return nil, errors.New("pi provider bridge environment is already defined")
+		}
+	}
+	result := append([]string(nil), environment...)
+	return append(result, ProviderBridgeURLEnvironment+"="+endpoint, ProviderBridgeNonceEnvironment+"="+nonce), nil
+}
+
+func isNilProviderBridgeLifecycle(value harness.ProviderBridgeLifecycle) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
 }

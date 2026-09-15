@@ -146,8 +146,9 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 	if sink == nil {
 		return nil, errors.New("pi event sink must not be nil")
 	}
-	if request.ProviderAccess != nil {
-		return nil, unsupported(harness.CapabilityProviderAccess, "pi provider broker bridge is not verified")
+	providerBridge, err := validateProviderBridgeLaunch(request.ProviderAccess, request.ProviderBridge)
+	if err != nil {
+		return nil, err
 	}
 	if request.Limits.MaxCostMicrousd != nil {
 		return nil, unsupported(harness.CapabilityHardCostLimit, "pi provider-enforced hard cost limits are not verified")
@@ -160,6 +161,9 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 		return nil, err
 	}
 	args, err := piRPCArgs(request.Invocation.Args, resumeState)
+	if providerBridge != nil {
+		args, err = piRPCArgsWithProviderExtension(request.Invocation.Args, resumeState, providerBridge.ExtensionPath)
+	}
 	if err != nil {
 		if resumeState != nil {
 			return nil, resumeRejected(err)
@@ -176,11 +180,22 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 		cancelTimeout = nativeCancelTimeout
 	}
 	session := newNativeSession(processContext, cancel, sink, cancelTimeout, resumeState)
+	if providerBridge != nil {
+		session.providerBridge = providerBridge.Lifecycle
+	}
+	environment := append([]string(nil), request.Invocation.Env...)
+	if providerBridge != nil {
+		environment, err = appendProviderBridgeEnvironment(environment, providerBridge.URL, providerBridge.Nonce)
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+	}
 	invocation := execution.Invocation{
 		Program:                       adapter.executable,
 		Args:                          args,
 		Dir:                           request.Workspace,
-		Env:                           append([]string(nil), request.Invocation.Env...),
+		Env:                           environment,
 		InitialLeaseDeadline:          request.Invocation.InitialLeaseDeadline,
 		InitialLeaseDeadlineAt:        request.Invocation.InitialLeaseDeadlineAt,
 		InitialLeaseSequence:          request.Invocation.InitialLeaseSequence,
@@ -192,6 +207,12 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 	process, err := adapter.startProcess(processContext, invocation, execution.SinkFunc(session.handleProcessOutput))
 	if isNilNativeProcess(process) {
 		cancel()
+		if providerBridge != nil {
+			closeContext, closeCancel := context.WithTimeout(context.WithoutCancel(ctx), processCleanupTimeout)
+			closeErr := providerBridge.Lifecycle.Close(closeContext)
+			closeCancel()
+			err = errors.Join(err, closeErr)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -201,7 +222,15 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 	session.outputMutex.Lock()
 	session.mutex.Lock()
 	session.process = process
-	session.processReady = true
+	session.mutex.Unlock()
+	if err == nil && providerBridge != nil {
+		pid, identity := process.ProcessDetails()
+		if bindErr := providerBridge.Lifecycle.BindProcess(pid, identity); bindErr != nil {
+			err = fmt.Errorf("bind pi provider bridge process identity: %w", bindErr)
+		}
+	}
+	session.mutex.Lock()
+	session.processReady = err == nil
 	queued := append([]execution.Event(nil), session.preReadyEvents...)
 	session.preReadyEvents = nil
 	session.preReadyBytes = 0
@@ -344,6 +373,7 @@ type nativeSession struct {
 	cancelMutex sync.Mutex
 
 	process               nativeProcess
+	providerBridge        harness.ProviderBridgeLifecycle
 	cancelTimeout         time.Duration
 	processReady          bool
 	preReadyEvents        []execution.Event
@@ -766,8 +796,13 @@ func (session *nativeSession) Close(ctx context.Context) error {
 func (session *nativeSession) closeOnce(ctx context.Context) error {
 	session.mutex.Lock()
 	process := session.process
+	providerBridge := session.providerBridge
 	active := session.turnStarted && !session.turnFinal && !session.validator.Settled()
 	session.mutex.Unlock()
+	var bridgeErr error
+	if providerBridge != nil {
+		bridgeErr = providerBridge.Close(ctx)
+	}
 	if active {
 		// A failed native cancel must remain visible in the turn result, but a
 		// later successful process-tree cleanup still satisfies Close itself.
@@ -780,7 +815,7 @@ func (session *nativeSession) closeOnce(ctx context.Context) error {
 	session.closing = true
 	session.mutex.Unlock()
 	if process == nil {
-		return nil
+		return bridgeErr
 	}
 	// The Runner stops output delivery on termination, but its sink context is
 	// distinct from the session-owned EventSink context. Cancel this context
@@ -788,13 +823,13 @@ func (session *nativeSession) closeOnce(ctx context.Context) error {
 	session.cancel()
 	terminateErr := process.Terminate(ctx, processTerminationGrace)
 	if terminateErr != nil {
-		return terminateErr
+		return errors.Join(bridgeErr, terminateErr)
 	}
 	select {
 	case <-session.watchDone:
-		return nil
+		return bridgeErr
 	case <-ctx.Done():
-		return ctx.Err()
+		return errors.Join(bridgeErr, ctx.Err())
 	}
 }
 

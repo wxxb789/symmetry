@@ -304,6 +304,7 @@ type StartRequest struct {
 	Limits         Limits
 	Resume         *ResumeHandle
 	ProviderAccess *protocol.ProviderAccess
+	ProviderBridge *ProviderBridgeLaunch
 	Invocation     execution.Invocation
 	// PersistProcess is called after the native process has started but before
 	// the adapter exposes the session or drains pre-ready output. A failure
@@ -317,6 +318,25 @@ type StartRequest struct {
 	// PersistContainmentStopReceipt records the exact stop witness before the
 	// adapter's process-containment helper may be released.
 	PersistContainmentStopReceipt func(pid int, identity string, receipt authority.StopReceipt) error
+}
+
+// ProviderBridgeLifecycle is the daemon-owned local broker boundary attached
+// to one native process. BindProcess establishes the exact PID identity before
+// the session is exposed; Close revokes the bridge before process cleanup.
+type ProviderBridgeLifecycle interface {
+	BindProcess(pid int, identity string) error
+	Close(context.Context) error
+}
+
+// ProviderBridgeLaunch carries only machine-local bridge configuration. The
+// provider token remains in the daemon's Control client and is never placed in
+// native argv, environment, or the generated extension file.
+type ProviderBridgeLaunch struct {
+	URL             string
+	Nonce           string
+	ExtensionPath   string
+	ExtensionSHA256 string
+	Lifecycle       ProviderBridgeLifecycle
 }
 
 // Limits bounds one admitted native turn.
