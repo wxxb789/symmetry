@@ -20,6 +20,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+Import-Module (Join-Path $PSScriptRoot "claude-code-local-transport-smoke.helpers.psm1") -Force
+
 # This smoke owns only the Claude child process. It neither starts nor stops
 # the already-running local endpoint or any Codex process.
 $providerUri = $null
@@ -85,58 +87,10 @@ $processStarted = $false
 $stdout = ""
 $stderr = ""
 $timedOut = $false
+$outputDrained = $false
+$processIdentity = $null
 $scriptError = $null
 $cleanupError = $null
-
-function Stop-ClaudeProcessTree {
-    param(
-        [Parameter(Mandatory = $true)]
-        [System.Diagnostics.Process]$Target
-    )
-
-    if ($Target.HasExited) {
-        return
-    }
-
-    try {
-        $Target.Kill($true)
-    }
-    catch {
-        if (-not $Target.HasExited) {
-            # .NET process-tree termination is the primary path. Use the
-            # Windows tree-aware fallback without creating a visible console.
-            $killInfo = [System.Diagnostics.ProcessStartInfo]::new()
-            $killInfo.FileName = "taskkill.exe"
-            $killInfo.UseShellExecute = $false
-            $killInfo.CreateNoWindow = $true
-            $killInfo.RedirectStandardOutput = $true
-            $killInfo.RedirectStandardError = $true
-            [void]$killInfo.ArgumentList.Add("/PID")
-            [void]$killInfo.ArgumentList.Add([string]$Target.Id)
-            [void]$killInfo.ArgumentList.Add("/T")
-            [void]$killInfo.ArgumentList.Add("/F")
-            $killer = [System.Diagnostics.Process]::new()
-            $killer.StartInfo = $killInfo
-            if (-not $killer.Start()) {
-                throw "Unable to start hidden taskkill fallback for Claude process $($Target.Id)."
-            }
-            if (-not $killer.WaitForExit(5000)) {
-                try { $killer.Kill($true) } catch { }
-                throw "taskkill fallback did not exit for Claude process $($Target.Id)."
-            }
-            $killError = $killer.StandardError.ReadToEnd().Trim()
-            $killExitCode = $killer.ExitCode
-            $killer.Dispose()
-            if ($killExitCode -ne 0 -and -not $Target.HasExited) {
-                throw "taskkill fallback failed for Claude process $($Target.Id): $killError"
-            }
-        }
-    }
-
-    if (-not $Target.WaitForExit(5000)) {
-        throw "Claude Code process did not exit after timeout termination."
-    }
-}
 
 try {
     $tempSettingsPath = Join-Path ([System.IO.Path]::GetTempPath()) (
@@ -226,16 +180,27 @@ try {
         throw "Unable to start Claude Code executable '$ClaudeExecutable'."
     }
     $processStarted = $true
+    $processIdentity = Get-ClaudeProcessIdentity -Target $process
 
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
     $stderrTask = $process.StandardError.ReadToEndAsync()
     if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
         $timedOut = $true
-        Stop-ClaudeProcessTree -Target $process
+        if ($null -eq $processIdentity) {
+            $stopResult = Stop-ClaudeProcessWithoutIdentity -Target $process
+        }
+        else {
+            $stopResult = Stop-ClaudeProcessTree -Target $process -ExpectedIdentity $processIdentity
+        }
+        if (-not $stopResult.CleanupProven) {
+            throw $stopResult.Reason
+        }
     }
 
-    $stdout = $stdoutTask.GetAwaiter().GetResult()
-    $stderr = $stderrTask.GetAwaiter().GetResult()
+    $output = Wait-ClaudeProcessOutput -StdoutTask $stdoutTask -StderrTask $stderrTask -TimeoutMilliseconds 5000
+    $stdout = $output.Stdout
+    $stderr = $output.Stderr
+    $outputDrained = $true
 
     if ($timedOut) {
         throw "Claude Code local transport smoke timed out after $TimeoutSeconds seconds."
@@ -275,8 +240,16 @@ catch {
 finally {
     if ($null -ne $process -and $processStarted) {
         try {
-            if (-not $process.HasExited) {
-                Stop-ClaudeProcessTree -Target $process
+            if (-not $outputDrained -or -not $process.HasExited) {
+                if ($null -eq $processIdentity) {
+                    $stopResult = Stop-ClaudeProcessWithoutIdentity -Target $process
+                }
+                else {
+                    $stopResult = Stop-ClaudeProcessTree -Target $process -ExpectedIdentity $processIdentity
+                }
+                if (-not $stopResult.CleanupProven) {
+                    $cleanupError = $stopResult.Reason
+                }
             }
         }
         catch {
