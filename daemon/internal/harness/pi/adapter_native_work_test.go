@@ -1107,12 +1107,20 @@ func nativePiRepositoryTaskEnvironmentValue(environment []string, name string) s
 func TestNativeRepositoryTaskSubjectUsesRepositoryBaseline(t *testing.T) {
 	root := t.TempDir()
 	gitEnvironment := nativePiRepositoryTaskGitEnvironment(t, root)
-	ctx, cancel := context.WithTimeout(context.Background(), nativeRepositoryTaskGitTimeout)
-	defer cancel()
 	repository := filepath.Join(root, "repository")
-	nativePiRepositoryTaskInitializeGit(t, ctx, gitEnvironment, repository)
-	baselineHead := strings.TrimSpace(nativePiRepositoryTaskGitOutput(t, ctx, gitEnvironment, repository, "rev-parse", "HEAD"))
-	baseline := nativePiRepositoryTaskMaterializeSubject(t, ctx, root, repository, baselineHead)
+	var baselineHead string
+	func() {
+		ctx, cancel := context.WithTimeout(context.Background(), nativeRepositoryTaskGitTimeout)
+		defer cancel()
+		nativePiRepositoryTaskInitializeGit(t, ctx, gitEnvironment, repository)
+		baselineHead = strings.TrimSpace(nativePiRepositoryTaskGitOutput(t, ctx, gitEnvironment, repository, "rev-parse", "HEAD"))
+	}()
+	var baseline protocol.Subject
+	func() {
+		ctx, cancel := context.WithTimeout(context.Background(), nativeRepositoryTaskGitTimeout)
+		defer cancel()
+		baseline = nativePiRepositoryTaskMaterializeSubject(t, ctx, root, repository, baselineHead)
+	}()
 	if baseline.ResourceID != nativeRepositoryTaskSubjectResourceID || baseline.Commit != baselineHead || baseline.TreeDigest == "" {
 		t.Fatalf("baseline subject = %#v, want actual baseline commit and tree digest", baseline)
 	}
@@ -1122,10 +1130,20 @@ func TestNativeRepositoryTaskSubjectUsesRepositoryBaseline(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repository, "README.md"), []byte("# Changed Native Pi repository task\n"), 0o600); err != nil {
 		t.Fatalf("rewrite subject fixture: %v", err)
 	}
-	nativePiRepositoryTaskGit(t, ctx, gitEnvironment, repository, "add", "README.md")
-	nativePiRepositoryTaskGit(t, ctx, gitEnvironment, repository, "commit", "-m", "Change native Pi repository task fixture")
-	changedHead := strings.TrimSpace(nativePiRepositoryTaskGitOutput(t, ctx, gitEnvironment, repository, "rev-parse", "HEAD"))
-	changed := nativePiRepositoryTaskMaterializeSubject(t, ctx, root, repository, changedHead)
+	var changedHead string
+	func() {
+		ctx, cancel := context.WithTimeout(context.Background(), nativeRepositoryTaskGitTimeout)
+		defer cancel()
+		nativePiRepositoryTaskGit(t, ctx, gitEnvironment, repository, "add", "README.md")
+		nativePiRepositoryTaskGit(t, ctx, gitEnvironment, repository, "commit", "-m", "Change native Pi repository task fixture")
+		changedHead = strings.TrimSpace(nativePiRepositoryTaskGitOutput(t, ctx, gitEnvironment, repository, "rev-parse", "HEAD"))
+	}()
+	var changed protocol.Subject
+	func() {
+		ctx, cancel := context.WithTimeout(context.Background(), nativeRepositoryTaskGitTimeout)
+		defer cancel()
+		changed = nativePiRepositoryTaskMaterializeSubject(t, ctx, root, repository, changedHead)
+	}()
 	if changedHead == baselineHead || changed.Commit != changedHead || changed.TreeDigest == baseline.TreeDigest {
 		t.Fatalf("changed subject = %#v, baseline = %#v; want distinct commit and tree digest", changed, baseline)
 	}
