@@ -99,7 +99,19 @@ func TestNativeTransportOpenAndClose(t *testing.T) {
 		},
 	}, sink)
 	if err != nil {
-		t.Fatal("start native OpenCode transport failed")
+		if session == nil {
+			t.Fatalf("start native OpenCode transport failed: %v; retained session is nil", err)
+		}
+		cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), nativeSmokeTimeout)
+		closeErr := session.Close(cleanupContext)
+		cleanupCancel()
+		waitContext, waitCancel := context.WithTimeout(context.Background(), nativeSmokeTimeout)
+		_, waitErr := session.Wait(waitContext)
+		waitCancel()
+		if closeErr != nil || waitErr != nil {
+			t.Fatalf("start native OpenCode transport failed: %v; retained session cleanup failed: close=%v wait=%v", err, closeErr, waitErr)
+		}
+		t.Fatalf("start native OpenCode transport failed: %v", err)
 	}
 	closed := false
 	t.Cleanup(func() {
