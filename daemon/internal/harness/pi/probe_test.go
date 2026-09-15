@@ -38,6 +38,23 @@ func TestProbeMapsBoundedHelpOutputFailureToNativeUnverified(t *testing.T) {
 	}
 }
 
+func TestProbeDoesNotAdvertiseProviderAccessWithoutReleaseEvidence(t *testing.T) {
+	runner := &fakeCommandRunner{outputs: map[string][]byte{
+		"--version": []byte(TestedVersion + "\n"),
+		"--help":    []byte("Usage: pi --mode <mode>\nModes: rpc\n"),
+	}}
+	result, err := Probe(context.Background(), "pi", runner)
+	if !errors.Is(err, harness.ErrNativeUnverified) {
+		t.Fatalf("Probe() error = %v, want ErrNativeUnverified", err)
+	}
+	if result.Capabilities.ProviderAccess || result.Capabilities.Supports(harness.CapabilityProviderAccess) {
+		t.Fatalf("Pi probe advertised provider access without release evidence: %+v", result.Capabilities)
+	}
+	if result.Capabilities.Unsupported[string(harness.CapabilityProviderAccess)] == "" {
+		t.Fatalf("Pi probe omitted provider access limitation: %#v", result.Capabilities.Unsupported)
+	}
+}
+
 type probeErrorRunner struct {
 	version []byte
 	err     error
