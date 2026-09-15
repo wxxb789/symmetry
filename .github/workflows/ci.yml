@@ -70,8 +70,61 @@ jobs:
         env:
           SYMMETRY_GOAL_RECEIPT_E2E: "1"
         run: |
+          set -Eeuo pipefail
           export POSTGRES_DB="symmetry_receipt_e2e_$(openssl rand -hex 16)"
-          mix test test/symmetry_control_web/controllers/goal_machine_controller_test.exs --only goal_receipt_e2e
+          test_output="$RUNNER_TEMP/goal-receipt-e2e.log"
+          set +e
+          mix test test/symmetry_control_web/controllers/goal_machine_controller_test.exs --only goal_receipt_e2e 2>&1 |
+            tee "$test_output"
+          pipeline_status=("${PIPESTATUS[@]}")
+          test_status=${pipeline_status[0]}
+          tee_status=${pipeline_status[1]}
+          set -e
+
+          summary_status=0
+          python3 - "$test_output" <<'PY' || summary_status=$?
+          import re
+          import sys
+
+          text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+          text = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text)
+          results = re.findall(r"(?m)^\s*Result:\s*(\d+)(?:/(\d+))?\s+passed\b([^\r\n]*)$", text)
+          reported_failures = re.findall(r"(?m)^\s*Failed:\s*(\d+)\s+tests?\b", text)
+          summaries = re.findall(r"(?m)^\s*(\d+)\s+tests?,\s*(\d+)\s+failures?\b", text)
+          if results:
+              passed_text, total_text, tail = results[-1]
+              passed = int(passed_text)
+              failed = re.search(r"(\d+)\s+failed\b", tail)
+              failures = (
+                  int(reported_failures[-1])
+                  if reported_failures
+                  else int(failed.group(1))
+                  if failed
+                  else int(total_text) - passed
+                  if total_text
+                  else 0
+              )
+              tests = int(total_text) if total_text else passed + failures
+          elif summaries:
+              tests, failures = map(int, summaries[-1])
+          else:
+              raise SystemExit("ExUnit summary was not found")
+          if tests <= 0 or failures != 0:
+              raise SystemExit(
+                  f"ExUnit selective gate expected tests>0 and failures=0; got tests={tests}, failures={failures}"
+              )
+          print(f"verified ExUnit summary: tests={tests}, failures={failures}")
+          PY
+
+          if (( test_status != 0 )); then
+            exit "$test_status"
+          fi
+          if (( tee_status != 0 )); then
+            exit "$tee_status"
+          fi
+          if (( summary_status != 0 )); then
+            exit "$summary_status"
+          fi
       - run: MIX_ENV=prod mix release --overwrite
 
   pi-control-e2e-linux:
@@ -187,10 +240,62 @@ jobs:
         run: |
           set -Eeuo pipefail
           log="$RUNNER_TEMP/pi-control-e2e-linux.log"
+          test_output="$RUNNER_TEMP/pi-control-e2e-linux-test.log"
+          : > "$test_output"
+          set +e
           SYMMETRY_PI_CONTROL_E2E=1 \
           SYMMETRY_PI_CONTROL_E2E_EXECUTABLE="$RUNNER_TEMP/pi-0.85.1/pi/pi" \
             mix test test/symmetry_control/pi_control_e2e_test.exs --include skip:true --only pi_control_e2e 2>&1 |
-            tee -a "$log"
+            tee -a "$log" "$test_output"
+          pipeline_status=("${PIPESTATUS[@]}")
+          test_status=${pipeline_status[0]}
+          tee_status=${pipeline_status[1]}
+          set -e
+
+          summary_status=0
+          python3 - "$test_output" <<'PY' || summary_status=$?
+          import re
+          import sys
+
+          text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+          text = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text)
+          results = re.findall(r"(?m)^\s*Result:\s*(\d+)(?:/(\d+))?\s+passed\b([^\r\n]*)$", text)
+          reported_failures = re.findall(r"(?m)^\s*Failed:\s*(\d+)\s+tests?\b", text)
+          summaries = re.findall(r"(?m)^\s*(\d+)\s+tests?,\s*(\d+)\s+failures?\b", text)
+          if results:
+              passed_text, total_text, tail = results[-1]
+              passed = int(passed_text)
+              failed = re.search(r"(\d+)\s+failed\b", tail)
+              failures = (
+                  int(reported_failures[-1])
+                  if reported_failures
+                  else int(failed.group(1))
+                  if failed
+                  else int(total_text) - passed
+                  if total_text
+                  else 0
+              )
+              tests = int(total_text) if total_text else passed + failures
+          elif summaries:
+              tests, failures = map(int, summaries[-1])
+          else:
+              raise SystemExit("ExUnit summary was not found")
+          if tests <= 0 or failures != 0:
+              raise SystemExit(
+                  f"ExUnit selective gate expected tests>0 and failures=0; got tests={tests}, failures={failures}"
+              )
+          print(f"verified ExUnit summary: tests={tests}, failures={failures}")
+          PY
+
+          if (( test_status != 0 )); then
+            exit "$test_status"
+          fi
+          if (( tee_status != 0 )); then
+            exit "$tee_status"
+          fi
+          if (( summary_status != 0 )); then
+            exit "$summary_status"
+          fi
       - name: Cleanup orphaned Pi Control processes
         if: always()
         shell: bash
@@ -768,6 +873,61 @@ jobs:
           $testStatus = $LASTEXITCODE
           $testOutput | Tee-Object -FilePath $env:PI_E2E_LOG -Append | Out-Host
           Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "e2e_exit_status=$testStatus"
+          $resultSummaries = @(
+            foreach ($line in $testOutput) {
+              $text = ([string]$line) -replace "`e\[[0-9;]*[A-Za-z]", ''
+              if ($text -match '^\s*Result:\s*(\d+)(?:/(\d+))?\s+passed\b(.*)$') {
+                $passedCount = [int]$Matches[1]
+                $totalCount = if ([string]::IsNullOrEmpty($Matches[2])) { $passedCount } else { [int]$Matches[2] }
+                $resultTail = $Matches[3]
+                $failureCount = $totalCount - $passedCount
+                if ($resultTail -match '(\d+)\s+failed\b') {
+                  $failureCount = [int]$Matches[1]
+                  $totalCount = $passedCount + $failureCount
+                }
+                [pscustomobject]@{
+                  Passed = $passedCount
+                  Tests = $totalCount
+                  Failures = $failureCount
+                }
+              }
+              elseif ($text -match '^\s*(\d+)\s+tests?,\s*(\d+)\s+failures?\b') {
+                [pscustomobject]@{
+                  Passed = [int]$Matches[1] - [int]$Matches[2]
+                  Tests = [int]$Matches[1]
+                  Failures = [int]$Matches[2]
+                }
+              }
+            }
+          )
+          $reportedFailures = @(
+            foreach ($line in $testOutput) {
+              $text = ([string]$line) -replace "`e\[[0-9;]*[A-Za-z]", ''
+              if ($text -match '^\s*Failed:\s*(\d+)\s+tests?\b') {
+                [int]$Matches[1]
+              }
+            }
+          )
+          if ($resultSummaries.Count -eq 0) {
+            Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value 'gate_status=failed: ExUnit summary was not found'
+            if ($testStatus -ne 0) { exit $testStatus }
+            exit 1
+          }
+          $summary = $resultSummaries[-1]
+          if ($reportedFailures.Count -gt 0) {
+            $failureCount = $reportedFailures[-1]
+            $summary = [pscustomobject]@{
+              Passed = $summary.Passed
+              Tests = [Math]::Max($summary.Tests, $summary.Passed + $failureCount)
+              Failures = $failureCount
+            }
+          }
+          Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "test_summary=tests=$($summary.Tests);failures=$($summary.Failures)"
+          if ($summary.Tests -le 0 -or $summary.Failures -ne 0) {
+            Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "gate_status=failed: invalid ExUnit summary tests=$($summary.Tests) failures=$($summary.Failures)"
+            if ($testStatus -ne 0) { exit $testStatus }
+            exit 1
+          }
           if ($testStatus -ne 0) { exit $testStatus }
           Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value 'gate_status=passed'
       - name: Record Windows Pi E2E prerequisite failure diagnostics
@@ -1010,8 +1170,57 @@ jobs:
           SYMMETRY_OPENCODE_NATIVE_SYNTHETIC_TOOL_EXECUTABLE: ${{ runner.temp }}/opencode-1.18.30/opencode
         run: |
           set -Eeuo pipefail
-          go test -count=1 -timeout 180s -v ./internal/harness/opencode \
-            -run '^TestNativeSyntheticGatewayToolIntegration$'
+          test_events="$RUNNER_TEMP/opencode-native-synthetic-test.json"
+          set +e
+          go test -count=1 -timeout 180s -json ./internal/harness/opencode \
+            -run '^TestNativeSyntheticGatewayToolIntegration$' > "$test_events" 2>&1
+          test_status=$?
+          set -e
+          cat "$test_events"
+
+          summary_status=0
+          python3 - "$test_events" TestNativeSyntheticGatewayToolIntegration <<'PY' || summary_status=$?
+          import json
+          import sys
+
+          expected = set(sys.argv[2:])
+          run = set()
+          passed = set()
+          failures = []
+          for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+              try:
+                  event = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              action = event.get("Action")
+              test = event.get("Test")
+              if action == "run" and test in expected:
+                  run.add(test)
+              elif action == "pass" and test in expected:
+                  passed.add(test)
+              elif action == "fail":
+                  failures.append(test or event.get("Package") or "<package>")
+          missing_run = expected - run
+          missing_pass = expected - passed
+          if missing_run or missing_pass or failures:
+              raise SystemExit(
+                  "Go selective gate failed: "
+                  f"missing run={sorted(missing_run)}, missing pass={sorted(missing_pass)}, "
+                  f"fail events={failures}"
+              )
+          print(f"verified Go events: run={sorted(run)}, pass={sorted(passed)}")
+          PY
+
+          printf 'e2e_exit_status=%s\n' "$test_status" >> "$RUNNER_TEMP/opencode-native-synthetic-provenance.txt"
+          if (( test_status != 0 )); then
+            printf 'gate_status=failed: go test exited with status %s\n' "$test_status" >> "$RUNNER_TEMP/opencode-native-synthetic-provenance.txt"
+            exit "$test_status"
+          fi
+          if (( summary_status != 0 )); then
+            printf 'gate_status=failed: selective witness validation exited with status %s\n' "$summary_status" >> "$RUNNER_TEMP/opencode-native-synthetic-provenance.txt"
+            exit "$summary_status"
+          fi
+          printf 'gate_status=passed\n' >> "$RUNNER_TEMP/opencode-native-synthetic-provenance.txt"
       - name: Upload OpenCode synthetic provenance
         if: always()
         uses: actions/upload-artifact@v4
@@ -1121,10 +1330,37 @@ jobs:
           SYMMETRY_OPENCODE_NATIVE_SYNTHETIC_TOOL_EXECUTABLE: ${{ runner.temp }}\opencode-1.18.30\opencode.exe
         run: |
           $ErrorActionPreference = 'Stop'
-          $testOutput = & go test -count=1 -timeout 180s -v ./internal/harness/opencode -run '^TestNativeSyntheticGatewayToolIntegration$' 2>&1
+          $testOutput = & go test -count=1 -timeout 180s -json ./internal/harness/opencode -run '^TestNativeSyntheticGatewayToolIntegration$' 2>&1
           $testStatus = $LASTEXITCODE
           $testOutput | Tee-Object -FilePath $env:OPENCODE_SYNTHETIC_LOG -Append | Out-Host
           Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_PROVENANCE -Value "e2e_exit_status=$testStatus"
+          $expected = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+          $expected.Add('TestNativeSyntheticGatewayToolIntegration') | Out-Null
+          $run = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+          $passed = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+          $failed = [System.Collections.Generic.List[string]]::new()
+          foreach ($line in $testOutput) {
+            try {
+              $event = ([string]$line | ConvertFrom-Json -ErrorAction Stop)
+            }
+            catch {
+              continue
+            }
+            $testName = [string]$event.Test
+            switch ([string]$event.Action) {
+              'run' { if ($expected.Contains($testName)) { $run.Add($testName) | Out-Null } }
+              'pass' { if ($expected.Contains($testName)) { $passed.Add($testName) | Out-Null } }
+              'fail' { $failed.Add($(if ([string]::IsNullOrEmpty($testName)) { [string]$event.Package } else { $testName })) | Out-Null }
+            }
+          }
+          $missingRun = @($expected | Where-Object { -not $run.Contains($_) })
+          $missingPass = @($expected | Where-Object { -not $passed.Contains($_) })
+          Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_PROVENANCE -Value "test_events=run:$($run.Count);pass:$($passed.Count);fail:$($failed.Count)"
+          if ($missingRun.Count -gt 0 -or $missingPass.Count -gt 0 -or $failed.Count -gt 0) {
+            Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_PROVENANCE -Value "gate_status=failed: missing_run=$($missingRun -join ',');missing_pass=$($missingPass -join ',');fail_events=$($failed -join ',')"
+            if ($testStatus -ne 0) { exit $testStatus }
+            exit 1
+          }
           if ($testStatus -ne 0) { exit $testStatus }
           Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_PROVENANCE -Value 'gate_status=passed'
       - name: Upload OpenCode synthetic Windows log and provenance
@@ -1161,7 +1397,39 @@ jobs:
       - name: Run production Windows containment witness
         env:
           SYMMETRY_PRODUCTION_CONTAINMENT_WITNESS: "1"
-        run: go test -count=1 -timeout 180s -v ./internal/platform -run '^TestProductionContainmentSupervisorReplaysReceiptAfterLostRecoverResponse$'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $testOutput = & go test -count=1 -timeout 180s -json ./internal/platform -run '^TestProductionContainmentSupervisorReplaysReceiptAfterLostRecoverResponse$' 2>&1
+          $testStatus = $LASTEXITCODE
+          $testOutput | Out-Host
+          $expected = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+          $expected.Add('TestProductionContainmentSupervisorReplaysReceiptAfterLostRecoverResponse') | Out-Null
+          $run = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+          $passed = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+          $failed = [System.Collections.Generic.List[string]]::new()
+          foreach ($line in $testOutput) {
+            try {
+              $event = ([string]$line | ConvertFrom-Json -ErrorAction Stop)
+            }
+            catch {
+              continue
+            }
+            $testName = [string]$event.Test
+            switch ([string]$event.Action) {
+              'run' { if ($expected.Contains($testName)) { $run.Add($testName) | Out-Null } }
+              'pass' { if ($expected.Contains($testName)) { $passed.Add($testName) | Out-Null } }
+              'fail' { $failed.Add($(if ([string]::IsNullOrEmpty($testName)) { [string]$event.Package } else { $testName })) | Out-Null }
+            }
+          }
+          $missingRun = @($expected | Where-Object { -not $run.Contains($_) })
+          $missingPass = @($expected | Where-Object { -not $passed.Contains($_) })
+          if ($missingRun.Count -gt 0 -or $missingPass.Count -gt 0 -or $failed.Count -gt 0) {
+            Write-Error "Go selective gate failed: missing_run=$($missingRun -join ',');missing_pass=$($missingPass -join ',');fail_events=$($failed -join ',')"
+            if ($testStatus -ne 0) { exit $testStatus }
+            exit 1
+          }
+          if ($testStatus -ne 0) { exit $testStatus }
 
   integration:
     runs-on: ubuntu-latest
@@ -1260,8 +1528,64 @@ jobs:
           SYMMETRY_E2E_URL: http://127.0.0.1:4000
           SYMMETRY_E2E_AGENT: /tmp/symmetry-fake-agent
         run: |
+          set -Eeuo pipefail
           go build -o /tmp/symmetry-fake-agent ./cmd/symmetry-fake-agent
-          go test -count=1 -timeout 180s -v ./e2e -run '^(TestCoreDaemonWorkflows|TestPollingFallbackDispatchesWithoutNotifications|TestStaleRuntimeEpochCannotOverwriteNewGeneration|TestDaemonReregistersAfterRestart|TestDaemonReconnectReclaimsExpiredRunWithNewGeneration|TestTaskInputDistinguishesOmissionFromEmptyObject|TestGitWorktreeCleanupRemovesOwnedArtifacts|TestTerminalTransitionRetriesAfterLeaseExpiry)$'
+          test_events="$RUNNER_TEMP/integration-selective-tests.json"
+          set +e
+          go test -count=1 -timeout 180s -json ./e2e -run '^(TestCoreDaemonWorkflows|TestPollingFallbackDispatchesWithoutNotifications|TestStaleRuntimeEpochCannotOverwriteNewGeneration|TestDaemonReregistersAfterRestart|TestDaemonReconnectReclaimsExpiredRunWithNewGeneration|TestTaskInputDistinguishesOmissionFromEmptyObject|TestGitWorktreeCleanupRemovesOwnedArtifacts|TestTerminalTransitionRetriesAfterLeaseExpiry)$' > "$test_events" 2>&1
+          test_status=$?
+          set -e
+          cat "$test_events"
+
+          summary_status=0
+          python3 - "$test_events" \
+            TestCoreDaemonWorkflows \
+            TestPollingFallbackDispatchesWithoutNotifications \
+            TestStaleRuntimeEpochCannotOverwriteNewGeneration \
+            TestDaemonReregistersAfterRestart \
+            TestDaemonReconnectReclaimsExpiredRunWithNewGeneration \
+            TestTaskInputDistinguishesOmissionFromEmptyObject \
+            TestGitWorktreeCleanupRemovesOwnedArtifacts \
+            TestTerminalTransitionRetriesAfterLeaseExpiry <<'PY' || summary_status=$?
+          import json
+          import sys
+
+          expected = set(sys.argv[2:])
+          if len(expected) != 8:
+              raise SystemExit(f"expected exactly 8 selective tests, got {len(expected)}")
+          run = set()
+          passed = set()
+          failures = []
+          for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+              try:
+                  event = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              action = event.get("Action")
+              test = event.get("Test")
+              if action == "run" and test in expected:
+                  run.add(test)
+              elif action == "pass" and test in expected:
+                  passed.add(test)
+              elif action == "fail":
+                  failures.append(test or event.get("Package") or "<package>")
+          missing_run = expected - run
+          missing_pass = expected - passed
+          if missing_run or missing_pass or failures:
+              raise SystemExit(
+                  "Go selective gate failed: "
+                  f"missing run={sorted(missing_run)}, missing pass={sorted(missing_pass)}, "
+                  f"fail events={failures}"
+              )
+          print(f"verified 8 Go events: run={sorted(run)}, pass={sorted(passed)}")
+          PY
+
+          if (( test_status != 0 )); then
+            exit "$test_status"
+          fi
+          if (( summary_status != 0 )); then
+            exit "$summary_status"
+          fi
       - name: Run production daemon crash response-loss witness
         working-directory: daemon
         env:
@@ -1271,7 +1595,52 @@ jobs:
           SYMMETRY_E2E_AGENT: /tmp/symmetry-fake-agent
         run: |
           set -Eeuo pipefail
-          go test -count=1 -timeout 240s -v ./e2e -run '^TestProductionDaemonCrashResponseLossAndReconnect$'
+          test_events="$RUNNER_TEMP/daemon-crash-response-loss.json"
+          set +e
+          go test -count=1 -timeout 240s -json ./e2e -run '^TestProductionDaemonCrashResponseLossAndReconnect$' > "$test_events" 2>&1
+          test_status=$?
+          set -e
+          cat "$test_events"
+
+          summary_status=0
+          python3 - "$test_events" TestProductionDaemonCrashResponseLossAndReconnect <<'PY' || summary_status=$?
+          import json
+          import sys
+
+          expected = set(sys.argv[2:])
+          run = set()
+          passed = set()
+          failures = []
+          for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+              try:
+                  event = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              action = event.get("Action")
+              test = event.get("Test")
+              if action == "run" and test in expected:
+                  run.add(test)
+              elif action == "pass" and test in expected:
+                  passed.add(test)
+              elif action == "fail":
+                  failures.append(test or event.get("Package") or "<package>")
+          missing_run = expected - run
+          missing_pass = expected - passed
+          if missing_run or missing_pass or failures:
+              raise SystemExit(
+                  "Go selective gate failed: "
+                  f"missing run={sorted(missing_run)}, missing pass={sorted(missing_pass)}, "
+                  f"fail events={failures}"
+              )
+          print(f"verified Go events: run={sorted(run)}, pass={sorted(passed)}")
+          PY
+
+          if (( test_status != 0 )); then
+            exit "$test_status"
+          fi
+          if (( summary_status != 0 )); then
+            exit "$summary_status"
+          fi
       - name: Verify daemon recovers a live run after control restart
         working-directory: daemon
         shell: bash
@@ -1348,9 +1717,61 @@ jobs:
 
           restart_control &
           restarter_pid=$!
-          go test -count=1 -timeout 150s -v ./e2e -run '^TestDaemonSurvivesControlRestart$'
+          test_events="$RUNNER_TEMP/daemon-control-restart.json"
+          set +e
+          go test -count=1 -timeout 150s -json ./e2e -run '^TestDaemonSurvivesControlRestart$' > "$test_events" 2>&1
+          test_status=$?
+          set -e
+          cat "$test_events"
+
+          summary_status=0
+          python3 - "$test_events" TestDaemonSurvivesControlRestart <<'PY' || summary_status=$?
+          import json
+          import sys
+
+          expected = set(sys.argv[2:])
+          run = set()
+          passed = set()
+          failures = []
+          for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+              try:
+                  event = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              action = event.get("Action")
+              test = event.get("Test")
+              if action == "run" and test in expected:
+                  run.add(test)
+              elif action == "pass" and test in expected:
+                  passed.add(test)
+              elif action == "fail":
+                  failures.append(test or event.get("Package") or "<package>")
+          missing_run = expected - run
+          missing_pass = expected - passed
+          if missing_run or missing_pass or failures:
+              raise SystemExit(
+                  "Go selective gate failed: "
+                  f"missing run={sorted(missing_run)}, missing pass={sorted(missing_pass)}, "
+                  f"fail events={failures}"
+              )
+          print(f"verified Go events: run={sorted(run)}, pass={sorted(passed)}")
+          PY
+
+          set +e
           wait "$restarter_pid"
+          restart_status=$?
+          set -e
           restarter_pid=
+
+          if (( test_status != 0 )); then
+            exit "$test_status"
+          fi
+          if (( summary_status != 0 )); then
+            exit "$summary_status"
+          fi
+          if (( restart_status != 0 )); then
+            exit "$restart_status"
+          fi
 
   compose:
     runs-on: ubuntu-latest
