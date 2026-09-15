@@ -228,6 +228,70 @@ jobs:
 
           printf 'verified Pi %s (%s) at %s\n' "$actual_pi_version" "$actual_executable_sha256" "$executable" |
             tee -a "$log"
+      - name: Run Linux Pi provider bridge smoke
+        working-directory: daemon
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          log="$RUNNER_TEMP/pi-control-e2e-linux.log"
+          test_output="$RUNNER_TEMP/pi-provider-bridge-linux.json"
+          : > "$test_output"
+          set +e
+          SYMMETRY_PI_PROVIDER_ACTION_SMOKE=1 \
+          SYMMETRY_PI_NATIVE_SMOKE_EXECUTABLE="$RUNNER_TEMP/pi-0.85.1/pi/pi" \
+            go test -json -count=1 -timeout 90s ./internal/harness/pi \
+              -run '^TestNativePiProviderBridgeAction$' 2>&1 |
+            tee -a "$log" "$test_output"
+          pipeline_status=("${PIPESTATUS[@]}")
+          test_status=${pipeline_status[0]}
+          tee_status=${pipeline_status[1]}
+          set -e
+
+          summary_status=0
+          python3 - "$test_output" <<'PY' || summary_status=$?
+          import json
+          import sys
+
+          expected = "TestNativePiProviderBridgeAction"
+          runs = set()
+          passes = set()
+          failures = set()
+          with open(sys.argv[1], encoding="utf-8", errors="strict") as stream:
+              for number, line in enumerate(stream, 1):
+                  if not line.strip():
+                      continue
+                  try:
+                      event = json.loads(line)
+                  except json.JSONDecodeError as error:
+                      raise SystemExit(f"invalid go test -json line {number}: {error}")
+                  test = event.get("Test")
+                  action = event.get("Action")
+                  if test == expected and action == "run":
+                      runs.add(test)
+                  elif test == expected and action == "pass":
+                      passes.add(test)
+                  elif test == expected and action == "fail":
+                      failures.add(test)
+          if expected not in runs or expected not in passes or failures:
+              raise SystemExit(
+                  f"Pi provider bridge selective gate failed: run={sorted(runs)} pass={sorted(passes)} fail={sorted(failures)}"
+              )
+          PY
+
+          printf 'provider_bridge_smoke_exit_status=%s\n' "$test_status" >> "$RUNNER_TEMP/pi-control-e2e-linux-provenance.txt"
+          if [ "$tee_status" -ne 0 ]; then
+            printf 'provider_bridge_smoke_status=failed: tee exited with status %s\n' "$tee_status" >> "$RUNNER_TEMP/pi-control-e2e-linux-provenance.txt"
+            exit "$tee_status"
+          fi
+          if [ "$test_status" -ne 0 ]; then
+            printf 'provider_bridge_smoke_status=failed: go test exited with status %s\n' "$test_status" >> "$RUNNER_TEMP/pi-control-e2e-linux-provenance.txt"
+            exit "$test_status"
+          fi
+          if [ "$summary_status" -ne 0 ]; then
+            printf 'provider_bridge_smoke_status=failed: selective witness validation exited with status %s\n' "$summary_status" >> "$RUNNER_TEMP/pi-control-e2e-linux-provenance.txt"
+            exit "$summary_status"
+          fi
+          printf 'provider_bridge_smoke_status=passed\n' >> "$RUNNER_TEMP/pi-control-e2e-linux-provenance.txt"
       - name: Run control format and compile
         shell: bash
         run: |
@@ -844,6 +908,47 @@ jobs:
           Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "pi_executable_sha256_actual=$actualExecutableSha256"
           Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "pi_version_actual=$actualPiVersion"
           Add-Content -LiteralPath $env:PI_E2E_LOG -Value "verified Pi $actualPiVersion ($actualExecutableSha256) at $env:PI_E2E_EXECUTABLE"
+      - name: Run Windows Pi provider bridge smoke
+        working-directory: daemon
+        shell: pwsh
+        env:
+          SYMMETRY_PI_PROVIDER_ACTION_SMOKE: "1"
+          SYMMETRY_PI_NATIVE_SMOKE_EXECUTABLE: ${{ runner.temp }}\pi-0.85.1\pi.exe
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $testOutput = & go test -json -count=1 -timeout 90s ./internal/harness/pi -run '^TestNativePiProviderBridgeAction$' 2>&1
+          $testStatus = $LASTEXITCODE
+          $testOutput | Tee-Object -FilePath $env:PI_E2E_LOG -Append | Out-Host
+          Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "provider_bridge_smoke_exit_status=$testStatus"
+
+          $runs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+          $passes = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+          $failures = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+          foreach ($line in $testOutput) {
+            $text = [string]$line
+            if ([string]::IsNullOrWhiteSpace($text)) { continue }
+            try {
+              $event = $text | ConvertFrom-Json -ErrorAction Stop
+            }
+            catch {
+              Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value 'provider_bridge_smoke_status=failed: invalid go test JSON'
+              throw "Pi provider bridge emitted invalid go test JSON"
+            }
+            if ($event.Test -ceq 'TestNativePiProviderBridgeAction') {
+              if ($event.Action -ceq 'run') { [void]$runs.Add($event.Test) }
+              elseif ($event.Action -ceq 'pass') { [void]$passes.Add($event.Test) }
+              elseif ($event.Action -ceq 'fail') { [void]$failures.Add($event.Test) }
+            }
+          }
+          if ($testStatus -ne 0) {
+            Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "provider_bridge_smoke_status=failed: go test exited with status $testStatus"
+            exit $testStatus
+          }
+          if (-not $runs.Contains('TestNativePiProviderBridgeAction') -or -not $passes.Contains('TestNativePiProviderBridgeAction') -or $failures.Count -ne 0) {
+            Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value 'provider_bridge_smoke_status=failed: selective witness missing run/pass or reported fail'
+            throw "Pi provider bridge selective gate failed: run=$($runs -join ',') pass=$($passes -join ',') fail=$($failures -join ',')"
+          }
+          Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value 'provider_bridge_smoke_status=passed'
       - name: Run control format and compile
         shell: pwsh
         run: |
