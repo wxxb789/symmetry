@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	claudeprotocol "github.com/wxxb789/symmetry/daemon/internal/harness/claude"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
@@ -86,6 +87,39 @@ func TestClaudeCandidateStagesFreshTransportAndBarriers(t *testing.T) {
 	}
 	if frame.Type != "user" || frame.Message.Role != "user" || !strings.Contains(frame.Message.Content, "Make bounded progress.") || !strings.Contains(frame.Message.Content, `{"snapshot":"canonical"}`) {
 		t.Fatalf("user frame = %+v, want exact user envelope with goal and context", frame)
+	}
+}
+
+func TestClaudeCandidateStartForwardsPersistProcessWithAuthority(t *testing.T) {
+	process := newClaudeCandidateFakeProcess()
+	var invocation execution.Invocation
+	var called bool
+	var gotPID int
+	var gotIdentity string
+	adapter := newClaudeCandidateTestAdapter(process, &invocation)
+	request := claudeCandidateStartRequest(t)
+	request.Invocation.PersistProcessWithAuthority = func(pid int, identity string, value *authority.Supervisor) error {
+		if value != nil {
+			t.Fatalf("authority = %p, want nil", value)
+		}
+		called = true
+		gotPID = pid
+		gotIdentity = identity
+		return nil
+	}
+	session, err := adapter.Start(context.Background(), request, &recordingClaudeCandidateSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	cleanupClaudeCandidateSession(t, session)
+	if invocation.PersistProcessWithAuthority == nil {
+		t.Fatal("Start() did not forward PersistProcessWithAuthority")
+	}
+	if err := invocation.PersistProcessWithAuthority(42, "test:42", nil); err != nil {
+		t.Fatalf("forwarded PersistProcessWithAuthority() error = %v", err)
+	}
+	if !called || gotPID != 42 || gotIdentity != "test:42" {
+		t.Fatalf("callback = called:%t pid:%d identity:%q, want called with (42, test:42)", called, gotPID, gotIdentity)
 	}
 }
 

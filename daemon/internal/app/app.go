@@ -1354,6 +1354,26 @@ func (daemon *daemon) now() time.Time {
 	return time.Now().UTC()
 }
 
+// persistProcessWithAuthorityCallback is the combined process/authority
+// callback supplied to Runner. The marker-only recordProcess override belongs
+// only to the plain no-authority callback and is never called here.
+func (daemon *daemon) persistProcessWithAuthorityCallback(key state.RunKey) func(int, string, *authority.Supervisor) error {
+	return daemon.persistProcessAuthorityCallback(key)
+}
+
+func (daemon *daemon) persistProcessAuthorityCallback(key state.RunKey) func(int, string, *authority.Supervisor) error {
+	return func(pid int, identity string, value *authority.Supervisor) error {
+		if value == nil {
+			return errors.New("persisted containment authority is nil")
+		}
+		persistErr := daemon.persistProcessAuthority(key, pid, identity, value.Clone())
+		if persistErr == nil && daemon.options.processObserver != nil {
+			daemon.options.processObserver(key, pid, identity, daemon.now())
+		}
+		return persistErr
+	}
+}
+
 // localNow is intentionally separate from now. LeaseRemainingMS is a
 // relative Control measurement, so its local deadline must use the daemon's
 // monotonic-capable local clock rather than a wall-clock projection that may
@@ -2518,15 +2538,16 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		return
 	}
 	process, err := daemon.start(executionContext, execution.Invocation{
-		Program:                profile.Command,
-		Args:                   profile.Args,
-		Dir:                    prepared.Path,
-		Env:                    environment,
-		InitialInput:           input,
-		CloseInputAfterInitial: !profile.Interactive,
-		InitialLeaseDeadline:   initialLeaseDeadline,
-		InitialLeaseDeadlineAt: initialLeaseDeadlineAt,
-		InitialLeaseSequence:   1,
+		Program:                     profile.Command,
+		Args:                        profile.Args,
+		Dir:                         prepared.Path,
+		Env:                         environment,
+		InitialInput:                input,
+		CloseInputAfterInitial:      !profile.Interactive,
+		InitialLeaseDeadline:        initialLeaseDeadline,
+		InitialLeaseDeadlineAt:      initialLeaseDeadlineAt,
+		InitialLeaseSequence:        1,
+		PersistProcessWithAuthority: daemon.persistProcessWithAuthorityCallback(key),
 		PersistProcess: func(pid int, identity string) error {
 			if daemon.options.recordProcess != nil {
 				_, recordErr := daemon.options.recordProcess(key, pid, identity, daemon.now())
@@ -2536,10 +2557,7 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 			return recordErr
 		},
 		PersistProcessAuthority: func(pid int, identity string, value *authority.Supervisor) error {
-			if value == nil {
-				return errors.New("persisted containment authority is nil")
-			}
-			return daemon.persistProcessAuthority(key, pid, identity, value.Clone())
+			return daemon.persistProcessAuthorityCallback(key)(pid, identity, value)
 		},
 		PersistContainmentStopReceipt: func(pid int, identity string, receipt authority.StopReceipt) error {
 			if daemon.options.recordContainmentStopReceipt != nil {
@@ -2574,15 +2592,11 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 				daemon.terminateProcessBounded(process, 0)
 				return
 			}
-			if pid, identity, detailsErr := processDetails(process); detailsErr != nil {
+			if _, _, detailsErr := processDetails(process); detailsErr != nil {
 				err = errors.Join(err, fmt.Errorf("read process identity after start failure: %w", detailsErr))
-			} else if daemon.options.recordProcess != nil {
-				if _, recordErr := daemon.options.recordProcess(key, pid, identity, daemon.now()); recordErr != nil {
-					err = errors.Join(err, fmt.Errorf("record process after start failure: %w", recordErr))
-				}
-			} else if _, recordErr := daemon.store.SetProcessDetails(key, pid, identity, daemon.now()); recordErr != nil {
-				err = errors.Join(err, fmt.Errorf("record process after start failure: %w", recordErr))
 			}
+			// Runner owns launch persistence. In particular, do not create a
+			// marker-only record after an atomic process/authority write fails.
 			daemon.mu.Lock()
 			if active := daemon.running[key]; active != nil && active.process == process {
 				active.startFailure = err
@@ -3387,13 +3401,14 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 		},
 		ProviderAccess: providerAccess,
 		Invocation: execution.Invocation{
-			Program:                profile.Command,
-			Args:                   profile.Args,
-			Dir:                    prepared.Path,
-			Env:                    environment,
-			InitialLeaseDeadline:   initialLeaseDeadline,
-			InitialLeaseDeadlineAt: initialLeaseDeadlineAt,
-			InitialLeaseSequence:   1,
+			Program:                     profile.Command,
+			Args:                        profile.Args,
+			Dir:                         prepared.Path,
+			Env:                         environment,
+			InitialLeaseDeadline:        initialLeaseDeadline,
+			InitialLeaseDeadlineAt:      initialLeaseDeadlineAt,
+			InitialLeaseSequence:        1,
+			PersistProcessWithAuthority: daemon.persistProcessWithAuthorityCallback(key),
 		},
 		PersistProcess: func(pid int, identity string) error {
 			var persistErr error
@@ -3408,10 +3423,7 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 			return persistErr
 		},
 		PersistProcessAuthority: func(pid int, identity string, value *authority.Supervisor) error {
-			if value == nil {
-				return errors.New("persisted containment authority is nil")
-			}
-			return daemon.persistProcessAuthority(key, pid, identity, value.Clone())
+			return daemon.persistProcessAuthorityCallback(key)(pid, identity, value)
 		},
 		PersistContainmentStopReceipt: func(pid int, identity string, receipt authority.StopReceipt) error {
 			if daemon.options.recordContainmentStopReceipt != nil {

@@ -63,6 +63,31 @@ func TestStopPersistedProcessDurableReceiptPrecedesHelperRelease(t *testing.T) {
 	}
 }
 
+func TestPersistProcessAuthorityCommitsCompleteProcessPair(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	now := time.Date(2026, 9, 15, 8, 0, 0, 0, time.UTC)
+	value := testRecoverySupervisorAuthority()
+	daemon := &daemon{
+		store:   store,
+		options: options{clock: func() time.Time { return now }},
+	}
+
+	if err := daemon.persistProcessAuthority(key, value.TargetPID, value.TargetIdentity, value); err != nil {
+		t.Fatalf("persistProcessAuthority() error = %v", err)
+	}
+	journ, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journ.PID != value.TargetPID || journ.ProcessIdentity != value.TargetIdentity || !journ.StartedAt.Equal(now) {
+		t.Fatalf("process details = (%d, %q, %s), want atomic process pair at %s", journ.PID, journ.ProcessIdentity, journ.StartedAt, now)
+	}
+	if journ.ContainmentAuthority == nil || !journ.ContainmentAuthority.Equal(value) {
+		t.Fatalf("containment authority = %#v, want %#v", journ.ContainmentAuthority, value)
+	}
+}
+
 func TestStopPersistedProcessRejectsReceiptMismatchBeforeHelperRelease(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()

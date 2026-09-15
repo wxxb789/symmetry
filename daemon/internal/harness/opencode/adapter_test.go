@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
 )
@@ -179,6 +180,48 @@ func TestStartUsesOwnedServeInvocationPersistsBeforeOutputAndWithholdsSecrets(t 
 	}
 	if err := session.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestStartForwardsPersistProcessWithAuthority(t *testing.T) {
+	process := newFakeProcess()
+	api := &fakeAPI{}
+	var invocation execution.Invocation
+	var called bool
+	var gotPID int
+	var gotIdentity string
+	starter := func(_ context.Context, got execution.Invocation, _ execution.Sink) (nativeProcess, error) {
+		invocation = got
+		return process, nil
+	}
+	adapter := newTestAdapter(starter, api)
+	request := startRequest(t)
+	request.Invocation.PersistProcessWithAuthority = func(pid int, identity string, value *authority.Supervisor) error {
+		if value != nil {
+			t.Fatalf("authority = %p, want nil", value)
+		}
+		called = true
+		gotPID = pid
+		gotIdentity = identity
+		return nil
+	}
+	session, err := adapter.Start(context.Background(), request, &recordingSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := session.Close(context.Background()); err != nil {
+			t.Errorf("cleanup Close() error = %v", err)
+		}
+	})
+	if invocation.PersistProcessWithAuthority == nil {
+		t.Fatal("Start() did not forward PersistProcessWithAuthority")
+	}
+	if err := invocation.PersistProcessWithAuthority(123, "created:123", nil); err != nil {
+		t.Fatalf("forwarded PersistProcessWithAuthority() error = %v", err)
+	}
+	if !called || gotPID != 123 || gotIdentity != "created:123" {
+		t.Fatalf("callback = called:%t pid:%d identity:%q, want called with (123, created:123)", called, gotPID, gotIdentity)
 	}
 }
 

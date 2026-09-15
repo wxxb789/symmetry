@@ -77,6 +77,12 @@ type Invocation struct {
 	// PersistProcess runs immediately after the OS process identity is
 	// captured, before output readers or the Process value are exposed.
 	PersistProcess func(pid int, identity string) error
+	// PersistProcessWithAuthority atomically persists the process marker and its
+	// independently releasable containment authority. When supplied for an
+	// authority-capable containment owner, Runner uses it instead of the two
+	// legacy persistence callbacks so recovery cannot observe a marker without
+	// the authority required to release that process.
+	PersistProcessWithAuthority func(pid int, identity string, value *authority.Supervisor) error
 	// PersistProcessAuthority runs immediately after PersistProcess for a
 	// supervisor-backed containment owner. Legacy callers may leave it nil.
 	PersistProcessAuthority func(pid int, identity string, value *authority.Supervisor) error
@@ -123,6 +129,7 @@ type startedProcess struct {
 	pid                           int
 	identity                      string
 	containment                   platform.Containment
+	persistProcessWithAuthority   func(int, string, *authority.Supervisor) error
 	persistAuthority              func(int, string, *authority.Supervisor) error
 	containmentAuthority          *authority.Supervisor
 	persistStopReceipt            func(int, string, authority.StopReceipt) error
@@ -167,6 +174,7 @@ type Process struct {
 	backend                       *startedProcess
 	sink                          Sink
 	containment                   platform.Containment
+	persistProcessWithAuthority   func(int, string, *authority.Supervisor) error
 	persistAuthority              func(int, string, *authority.Supervisor) error
 	containmentAuthority          *authority.Supervisor
 	persistStopReceipt            func(int, string, authority.StopReceipt) error
@@ -331,34 +339,69 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 	}
 	containment := started.containment
 	identity := started.identity
-	if invocation.PersistProcess != nil {
-		if persistErr := invocation.PersistProcess(started.pid, identity); persistErr != nil {
+	_, hasStopReceiptProvider := containment.(platform.ContainmentStopReceiptProvider)
+	provider, hasAuthorityProvider := containment.(platform.ContainmentAuthorityProvider)
+	setStopReceiptPersistence := func() {
+		if hasStopReceiptProvider || hasAuthorityProvider {
+			started.persistStopReceipt = invocation.PersistContainmentStopReceipt
+			started.stopReceiptRequired = invocation.PersistContainmentStopReceipt != nil
+		}
+	}
+	authorityCapable := hasAuthorityProvider
+	if capability, ok := containment.(platform.ContainmentAuthorityCapability); ok && !capability.ContainmentAuthorityAvailable() {
+		authorityCapable = false
+	}
+	atomicPersist := invocation.PersistProcessWithAuthority
+	if authorityCapable && atomicPersist != nil {
+		value := provider.ContainmentAuthority()
+		setStopReceiptPersistence()
+		if value == nil {
+			const message = "containment authority is unavailable after process launch"
+			started.containmentAuthorityUncertain = true
 			return cleanupFailedStartStarted(
 				started,
 				stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
 				startedAt,
-				fmt.Errorf("persist process identity: %w", persistErr),
+				errors.New(message),
+				errors.New(message),
+			)
+		}
+		// Freeze the post-authority cleanup contract before invoking the atomic
+		// callback. It may return an error after its durable rename; either
+		// outcome must retain the receipt/release fence and remain retryable.
+		cloned := value.Clone()
+		started.containmentAuthorityUncertain = true
+		started.containmentAuthority = &cloned
+		started.persistProcessWithAuthority = atomicPersist
+		callbackAuthority := cloned.Clone()
+		if persistErr := atomicPersist(started.pid, identity, &callbackAuthority); persistErr != nil {
+			return cleanupFailedStartStarted(
+				started,
+				stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
+				startedAt,
+				fmt.Errorf("persist process and containment authority: %w", persistErr),
 				nil,
 			)
 		}
-	}
-	_, hasStopReceiptProvider := containment.(platform.ContainmentStopReceiptProvider)
-	_, hasAuthorityProvider := containment.(platform.ContainmentAuthorityProvider)
-	if hasStopReceiptProvider || hasAuthorityProvider {
-		started.persistStopReceipt = invocation.PersistContainmentStopReceipt
-		started.stopReceiptRequired = invocation.PersistContainmentStopReceipt != nil
-	}
-	if invocation.PersistProcessAuthority != nil {
-		if capability, ok := containment.(platform.ContainmentAuthorityCapability); ok && !capability.ContainmentAuthorityAvailable() {
-			// The Windows test binary deliberately uses the legacy in-process
-			// containment seam because it cannot dispatch the daemon helper mode.
-			// No authority is exposed, so recovery remains conservative.
-		} else if provider, ok := containment.(platform.ContainmentAuthorityProvider); ok {
+		started.containmentAuthorityUncertain = false
+	} else {
+		if invocation.PersistProcess != nil {
+			if persistErr := invocation.PersistProcess(started.pid, identity); persistErr != nil {
+				return cleanupFailedStartStarted(
+					started,
+					stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
+					startedAt,
+					fmt.Errorf("persist process identity: %w", persistErr),
+					nil,
+				)
+			}
+		}
+		setStopReceiptPersistence()
+		if authorityCapable && invocation.PersistProcessAuthority != nil {
 			value := provider.ContainmentAuthority()
 			// Freeze the post-authority cleanup contract before invoking the
-			// callback. The callback may return an error after its atomic rename;
-			// either outcome must retain the receipt/release fence and remain
-			// retryable without falling back to AbortContainment.
+			// legacy callback. The callback may return an error after its atomic
+			// rename; either outcome must retain the receipt/release fence.
 			started.containmentAuthorityUncertain = true
 			if value == nil {
 				const message = "containment authority is unavailable after process marker persistence"
@@ -548,6 +591,7 @@ func newProcessFromStarted(started *startedProcess, sink Sink, startedAt time.Ti
 		backend:                       started,
 		sink:                          sink,
 		containment:                   started.containment,
+		persistProcessWithAuthority:   started.persistProcessWithAuthority,
 		persistAuthority:              started.persistAuthority,
 		containmentAuthority:          containmentAuthority,
 		persistStopReceipt:            persistStopReceipt,
@@ -1046,16 +1090,22 @@ func (process *Process) closeContainment() error {
 	receipt, available := provider.ContainmentStopReceipt()
 	if available {
 		if process.containmentAuthorityUncertain {
-			if process.persistAuthority == nil || process.containmentAuthority == nil {
+			if (process.persistProcessWithAuthority == nil && process.persistAuthority == nil) || process.containmentAuthority == nil {
 				err := errors.New("containment authority persistence callback is unavailable")
 				process.setContainmentError(errors.Join(process.containmentInitialError, err))
 				return err
 			}
 			authorityCopy := process.containmentAuthority.Clone()
 			callbackAuthority := authorityCopy.Clone()
-			if err := process.persistAuthority(process.PID, process.Identity, &callbackAuthority); err != nil {
-				process.setContainmentError(errors.Join(process.containmentInitialError, fmt.Errorf("retry process containment authority persistence: %w", err)))
-				return err
+			var persistErr error
+			if process.persistProcessWithAuthority != nil {
+				persistErr = process.persistProcessWithAuthority(process.PID, process.Identity, &callbackAuthority)
+			} else {
+				persistErr = process.persistAuthority(process.PID, process.Identity, &callbackAuthority)
+			}
+			if persistErr != nil {
+				process.setContainmentError(errors.Join(process.containmentInitialError, fmt.Errorf("retry process containment authority persistence: %w", persistErr)))
+				return persistErr
 			}
 			process.containmentAuthorityUncertain = false
 		}
@@ -1063,6 +1113,11 @@ func (process *Process) closeContainment() error {
 			if process.persistStopReceipt == nil {
 				if process.containmentAuthorityUncertain {
 					err := errors.New("containment authority persistence is uncertain")
+					process.setContainmentError(errors.Join(process.containmentInitialError, err))
+					return err
+				}
+				if process.containmentAuthority != nil {
+					err := errors.New("durable containment stop receipt callback is missing")
 					process.setContainmentError(errors.Join(process.containmentInitialError, err))
 					return err
 				}

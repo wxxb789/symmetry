@@ -211,7 +211,7 @@ func TestStartUsesAttachmentIdentityFromOriginalProcess(t *testing.T) {
 	_ = waitForResult(t, process)
 }
 
-func TestStartPersistsTypedContainmentAuthorityAfterProcessMarker(t *testing.T) {
+func TestStartPersistsTypedContainmentAuthorityWithoutMarkerOnlyCommit(t *testing.T) {
 	containment := &authorityContainment{
 		scriptedContainment: &scriptedContainment{},
 		value: &authority.Supervisor{
@@ -225,8 +225,8 @@ func TestStartPersistsTypedContainmentAuthorityAfterProcessMarker(t *testing.T) 
 			SupervisorIdentity: "helper:99",
 		},
 	}
-	var markerPersisted bool
-	var authorityPersisted bool
+	markerCalls := 0
+	authorityCalls := 0
 	runner := Runner{
 		configureProcess: func(*exec.Cmd) error { return nil },
 		attachProcess: func(process *os.Process) (platform.Containment, string, error) {
@@ -237,22 +237,86 @@ func TestStartPersistsTypedContainmentAuthorityAfterProcessMarker(t *testing.T) 
 	}
 	invocation := helperInvocation("wait")
 	invocation.PersistProcess = func(pid int, identity string) error {
-		markerPersisted = pid > 0 && identity == "bound:process"
+		markerCalls++
+		if pid <= 0 || identity != "bound:process" {
+			t.Fatalf("marker persistence identity = (%d, %q), want bound process", pid, identity)
+		}
 		return nil
 	}
-	invocation.PersistProcessAuthority = func(pid int, identity string, value *authority.Supervisor) error {
-		if !markerPersisted {
-			t.Fatal("authority persisted before process marker")
+	invocation.PersistProcessWithAuthority = func(pid int, identity string, value *authority.Supervisor) error {
+		if markerCalls != 0 {
+			t.Fatal("atomic process-authority persistence ran after the legacy marker callback")
 		}
-		authorityPersisted = pid > 0 && identity == "bound:process" && value != nil && value.Secret != ""
+		authorityCalls++
+		if pid <= 0 || identity != "bound:process" || value == nil || value.Secret == "" {
+			t.Fatalf("authority persistence = (%d, %q, %#v), want complete authority pair", pid, identity, value)
+		}
 		return nil
 	}
 	process, err := runner.Start(context.Background(), invocation, &recordingSink{})
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	if !authorityPersisted {
-		t.Fatal("typed containment authority was not persisted")
+	if markerCalls != 0 {
+		t.Fatalf("PersistProcess calls = %d, want 0 for supervisor-backed launch", markerCalls)
+	}
+	if authorityCalls != 1 {
+		t.Fatalf("PersistProcessWithAuthority calls = %d, want 1", authorityCalls)
+	}
+	if err := process.Terminate(context.Background(), 0); err != nil {
+		t.Fatalf("Terminate() error = %v", err)
+	}
+	_ = waitForResult(t, process)
+}
+
+func TestStartUsesAtomicProcessAuthorityBeforeLegacyCallbacks(t *testing.T) {
+	containment := &authorityContainment{
+		scriptedContainment: &scriptedContainment{},
+		value: &authority.Supervisor{
+			Version:            authority.SupervisorVersion,
+			Secret:             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			TargetIdentity:     "bound:process",
+			PipeToken:          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			JobID:              "cccccccccccccccccccccccccccccccc",
+			SupervisorPID:      99,
+			SupervisorIdentity: "helper:99",
+		},
+	}
+	var events []string
+	runner := Runner{
+		configureProcess: func(*exec.Cmd) error { return nil },
+		attachProcess: func(process *os.Process) (platform.Containment, string, error) {
+			containment.setDefaultForce(process.Kill)
+			containment.value.TargetPID = process.Pid
+			return containment, "bound:process", nil
+		},
+	}
+	invocation := helperInvocation("wait")
+	invocation.PersistProcess = func(int, string) error {
+		events = append(events, "marker")
+		return nil
+	}
+	invocation.PersistProcessAuthority = func(pid int, identity string, value *authority.Supervisor) error {
+		if pid <= 0 || identity != "bound:process" || value == nil || value.Secret == "" {
+			t.Fatalf("authority persistence = (%d, %q, %#v), want complete authority pair", pid, identity, value)
+		}
+		events = append(events, "authority")
+		return nil
+	}
+	invocation.PersistProcessWithAuthority = func(pid int, identity string, value *authority.Supervisor) error {
+		if pid <= 0 || identity != "bound:process" || value == nil || value.Secret == "" {
+			t.Fatalf("atomic persistence = (%d, %q, %#v), want complete authority pair", pid, identity, value)
+		}
+		events = append(events, "atomic")
+		return nil
+	}
+
+	process, err := runner.Start(context.Background(), invocation, &recordingSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if len(events) != 1 || events[0] != "atomic" {
+		t.Fatalf("persistence callbacks = %#v, want only atomic callback", events)
 	}
 	if err := process.Terminate(context.Background(), 0); err != nil {
 		t.Fatalf("Terminate() error = %v", err)
@@ -289,7 +353,7 @@ func TestStartResumesOnlyAfterAuthorityAndInitialLeaseBarriers(t *testing.T) {
 				kill:        func() error { return nil },
 				close:       func() error { return nil },
 				resume: func() error {
-					if !markerPersisted || !authorityPersisted || len(containment.renewals) != 1 {
+					if markerPersisted || !authorityPersisted || len(containment.renewals) != 1 {
 						return errors.New("resume barrier was incomplete")
 					}
 					resumed = true
@@ -307,8 +371,12 @@ func TestStartResumesOnlyAfterAuthorityAndInitialLeaseBarriers(t *testing.T) {
 			markerPersisted = true
 			return nil
 		},
-		PersistProcessAuthority: func(int, string, *authority.Supervisor) error {
-			authorityPersisted = markerPersisted
+		PersistProcessAuthority: func(pid int, identity string, value *authority.Supervisor) error {
+			t.Fatal("legacy authority callback was called when atomic persistence is available")
+			return nil
+		},
+		PersistProcessWithAuthority: func(pid int, identity string, value *authority.Supervisor) error {
+			authorityPersisted = pid == 123 && identity == "bound:process" && value != nil && value.Secret != ""
 			return nil
 		},
 	}
@@ -319,6 +387,12 @@ func TestStartResumesOnlyAfterAuthorityAndInitialLeaseBarriers(t *testing.T) {
 	}
 	if !resumed {
 		t.Fatal("native process was not resumed")
+	}
+	if markerPersisted {
+		t.Fatal("PersistProcess was called for authority-capable launch")
+	}
+	if !authorityPersisted {
+		t.Fatalf("PersistProcessWithAuthority persisted:%t, want one complete authority persistence", authorityPersisted)
 	}
 	if result := waitForResult(t, process); !result.Success() {
 		t.Fatalf("barrier result = %#v, want successful completion", result)
@@ -353,11 +427,22 @@ func TestStartArmsInitialLeaseFromAbsoluteDeadlineAfterStartupBarriers(t *testin
 	invocation.InitialLeaseDeadline = 30 * time.Second
 	invocation.InitialLeaseDeadlineAt = base.Add(5 * time.Second)
 	invocation.InitialLeaseSequence = 7
+	markerCalls := 0
 	invocation.PersistProcess = func(int, string) error {
-		now = now.Add(500 * time.Millisecond)
+		markerCalls++
 		return nil
 	}
 	invocation.PersistProcessAuthority = func(int, string, *authority.Supervisor) error {
+		t.Fatal("legacy authority callback was called when atomic persistence is available")
+		return nil
+	}
+	invocation.PersistProcessWithAuthority = func(pid int, identity string, value *authority.Supervisor) error {
+		if markerCalls != 0 {
+			t.Fatal("atomic process-authority persistence ran after the legacy marker callback")
+		}
+		if pid <= 0 || identity != "bound:process" || value == nil || value.Secret == "" {
+			t.Fatalf("authority persistence = (%d, %q, %#v), want complete authority pair", pid, identity, value)
+		}
 		now = now.Add(500 * time.Millisecond)
 		return nil
 	}
@@ -366,10 +451,13 @@ func TestStartArmsInitialLeaseFromAbsoluteDeadlineAfterStartupBarriers(t *testin
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
+	if markerCalls != 0 {
+		t.Fatalf("PersistProcess calls = %d, want 0 for supervisor-backed launch", markerCalls)
+	}
 	if len(containment.renewals) != 1 {
 		t.Fatalf("renewal calls = %d, want 1", len(containment.renewals))
 	}
-	if got, want := containment.renewals[0].deadline, 3*time.Second; got != want {
+	if got, want := containment.renewals[0].deadline, 3500*time.Millisecond; got != want {
 		t.Fatalf("armed lease deadline = %s, want %s", got, want)
 	}
 	if got := containment.renewals[0].sequence; got != 7 {
@@ -493,6 +581,10 @@ type deadlineContainment struct {
 	*scriptedContainment
 	authority *authority.Supervisor
 	renewals  []leaseRenewal
+}
+
+func (containment *deadlineContainment) ContainmentAuthorityAvailable() bool {
+	return containment.authority != nil
 }
 
 type leaseRenewal struct {

@@ -17,7 +17,7 @@ func TestAuthorityPersistenceFailureFreezesReceiptFence(t *testing.T) {
 	containment := newP1AuthorityContainment()
 	wantAuthorityErr := errors.New("authority CAS write failed")
 	invocation := helperInvocation("args")
-	invocation.PersistProcessAuthority = func(_ int, _ string, value *authority.Supervisor) error {
+	invocation.PersistProcessWithAuthority = func(_ int, _ string, value *authority.Supervisor) error {
 		value.Secret = "mutated-by-callback"
 		return wantAuthorityErr
 	}
@@ -46,11 +46,11 @@ func TestAuthorityPersistenceRetryPrecedesReceiptAndRelease(t *testing.T) {
 	var mutex sync.Mutex
 	authorityAttempts := 0
 	invocation := helperInvocation("args")
-	invocation.PersistProcessAuthority = func(_ int, _ string, value *authority.Supervisor) error {
+	invocation.PersistProcessWithAuthority = func(_ int, _ string, value *authority.Supervisor) error {
 		mutex.Lock()
 		defer mutex.Unlock()
 		authorityAttempts++
-		events = append(events, "authority")
+		events = append(events, "atomic")
 		if value.Secret != containment.authority.Secret {
 			t.Fatalf("authority retry secret = %q, want immutable fence", value.Secret)
 		}
@@ -87,11 +87,109 @@ func TestAuthorityPersistenceRetryPrecedesReceiptAndRelease(t *testing.T) {
 	mutex.Lock()
 	gotEvents := append([]string(nil), events...)
 	mutex.Unlock()
-	if !slices.Equal(gotEvents, []string{"authority", "authority", "receipt", "release"}) {
+	if !slices.Equal(gotEvents, []string{"atomic", "atomic", "receipt", "release"}) {
 		t.Fatalf("finalization order = %#v, want authority retry before receipt/release", gotEvents)
 	}
 	if containment.abortCalls != 0 || containment.releaseCalls != 1 {
 		t.Fatalf("authority retry cleanup = abort:%d release:%d, want 0, 1", containment.abortCalls, containment.releaseCalls)
+	}
+}
+
+func TestAuthorityProviderWithoutAtomicCallbackPreservesLegacyCallbacks(t *testing.T) {
+	containment := newP1AuthorityContainment()
+	var events []string
+	invocation := helperInvocation("args")
+	invocation.PersistProcess = func(int, string) error {
+		events = append(events, "marker")
+		return nil
+	}
+	invocation.PersistProcessAuthority = func(int, string, *authority.Supervisor) error {
+		events = append(events, "authority")
+		return nil
+	}
+	process, err := p1ReceiptRunner(containment).Start(context.Background(), invocation, &recordingSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if !slices.Equal(events, []string{"marker", "authority"}) {
+		t.Fatalf("legacy persistence callbacks = %#v, want [marker authority]", events)
+	}
+	_ = waitForResult(t, process)
+}
+
+func TestPersistedAuthorityWithoutReceiptCallbackFailsClosed(t *testing.T) {
+	containment := newP1AuthorityContainment()
+	invocation := helperInvocation("args")
+	invocation.PersistProcessWithAuthority = func(int, string, *authority.Supervisor) error {
+		return nil
+	}
+
+	process, err := p1ReceiptRunner(containment).Start(context.Background(), invocation, &recordingSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	result := waitForResult(t, process)
+	if result.ContainmentError == nil {
+		t.Fatal("result omitted missing durable receipt callback")
+	}
+	if containment.abortCalls != 0 || containment.releaseCalls != 0 {
+		t.Fatalf("missing receipt cleanup = abort:%d release:%d, want both zero", containment.abortCalls, containment.releaseCalls)
+	}
+}
+
+func TestAtomicAuthorityPersistenceUnknownOutcomeRetriesBeforeReceiptAndRelease(t *testing.T) {
+	containment := newP1AuthorityContainment()
+	authorityReceipt := containment.receipt
+	containment.authority.StopReceipt = &authorityReceipt
+	wantAuthorityErr := errors.New("atomic authority write outcome unknown")
+	var events []string
+	var mutex sync.Mutex
+	attempts := 0
+	invocation := helperInvocation("args")
+	invocation.PersistProcessWithAuthority = func(_ int, _ string, value *authority.Supervisor) error {
+		mutex.Lock()
+		defer mutex.Unlock()
+		attempts++
+		events = append(events, "atomic")
+		if value == nil || value.StopReceipt == nil || *value.StopReceipt != authorityReceipt {
+			t.Fatalf("atomic authority attempt = %#v, want immutable authority receipt", value)
+		}
+		if attempts == 1 {
+			// Model an atomic rename followed by an acknowledgement loss. The
+			// runner must retain the frozen authority fence and retry this same
+			// operation before receipt persistence or helper release.
+			return wantAuthorityErr
+		}
+		return nil
+	}
+	invocation.PersistContainmentStopReceipt = func(int, string, authority.StopReceipt) error {
+		mutex.Lock()
+		events = append(events, "receipt")
+		mutex.Unlock()
+		return nil
+	}
+	containment.onRelease = func() {
+		mutex.Lock()
+		events = append(events, "release")
+		mutex.Unlock()
+	}
+
+	process, err := p1ReceiptRunner(containment).Start(context.Background(), invocation, &recordingSink{})
+	if process == nil || !errors.Is(err, wantAuthorityErr) {
+		t.Fatalf("Start() = (%T, %v), want retained process and atomic persistence error", process, err)
+	}
+	result := waitForResult(t, process)
+	if result.ContainmentError != nil {
+		t.Fatalf("result containment error = %v, want nil after atomic retry", result.ContainmentError)
+	}
+	mutex.Lock()
+	gotEvents := append([]string(nil), events...)
+	mutex.Unlock()
+	if !slices.Equal(gotEvents, []string{"atomic", "atomic", "receipt", "release"}) {
+		t.Fatalf("finalization order = %#v, want authority retry before receipt/release", gotEvents)
+	}
+	if containment.abortCalls != 0 || containment.releaseCalls != 1 {
+		t.Fatalf("atomic retry cleanup = abort:%d release:%d, want 0, 1", containment.abortCalls, containment.releaseCalls)
 	}
 }
 
@@ -117,6 +215,9 @@ func TestResultDoneFinalizationRetriesReceiptWithoutRepeatingClose(t *testing.T)
 	containment := newP1AuthorityContainment()
 	writeAttempts := 0
 	invocation := helperInvocation("args")
+	invocation.PersistProcessAuthority = func(int, string, *authority.Supervisor) error {
+		return nil
+	}
 	invocation.PersistContainmentStopReceipt = func(int, string, authority.StopReceipt) error {
 		writeAttempts++
 		if writeAttempts == 1 {

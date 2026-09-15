@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
@@ -110,6 +111,53 @@ func TestAdapterStagesPiRPCAndRequiresSettledExplicitTaskResult(t *testing.T) {
 	}
 	if result.Kind != harness.ResultSucceeded || result.Semantic == nil || result.Semantic.Summary != "made bounded progress" {
 		t.Fatalf("result = %+v, want semantic success", result)
+	}
+}
+
+func TestAdapterStartForwardsPersistProcessWithAuthority(t *testing.T) {
+	process := newFakeNativeProcess()
+	var invocation execution.Invocation
+	var called bool
+	var gotPID int
+	var gotIdentity string
+	adapter := &Adapter{
+		executable: "pi-test",
+		startProcess: func(_ context.Context, got execution.Invocation, sink execution.Sink) (nativeProcess, error) {
+			invocation = got
+			process.sink = sink
+			return process, nil
+		},
+	}
+	request := harness.StartRequest{
+		Workspace: t.TempDir(),
+		Invocation: execution.Invocation{
+			PersistProcessWithAuthority: func(pid int, identity string, value *authority.Supervisor) error {
+				if value != nil {
+					t.Fatalf("authority = %p, want nil", value)
+				}
+				called = true
+				gotPID = pid
+				gotIdentity = identity
+				return nil
+			},
+		},
+	}
+	started, err := adapter.Start(context.Background(), request, &recordingHarnessSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = process.Terminate(context.Background(), 0)
+		_, _ = started.Wait(context.Background())
+	})
+	if invocation.PersistProcessWithAuthority == nil {
+		t.Fatal("Start() did not forward PersistProcessWithAuthority")
+	}
+	if err := invocation.PersistProcessWithAuthority(42, "test:42", nil); err != nil {
+		t.Fatalf("forwarded PersistProcessWithAuthority() error = %v", err)
+	}
+	if !called || gotPID != 42 || gotIdentity != "test:42" {
+		t.Fatalf("callback = called:%t pid:%d identity:%q, want called with (42, test:42)", called, gotPID, gotIdentity)
 	}
 }
 

@@ -421,7 +421,7 @@ func (daemon *daemon) persistProcessAuthority(key state.RunKey, pid int, identit
 			_, err := daemon.options.recordProcessAuthority(key, pid, identity, candidate, daemon.now())
 			return err
 		}
-		_, err := daemon.store.SetContainmentAuthority(key, pid, identity, candidate)
+		_, err := daemon.store.SetProcessDetailsWithAuthority(key, pid, identity, daemon.now(), candidate)
 		return err
 	}
 	if err := write(); err == nil {

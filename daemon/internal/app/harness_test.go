@@ -3816,7 +3816,14 @@ func (adapter *fakeNativeGoalAdapter) Start(_ context.Context, request harness.S
 	if adapter.session.startErr != nil {
 		return nil, adapter.session.startErr
 	}
-	if request.PersistProcess != nil {
+	if adapter.session.persistAtomic && request.Invocation.PersistProcessWithAuthority != nil {
+		adapter.session.recordCall("atomic")
+		pid, identity := adapter.session.ProcessDetails()
+		authorityValue := testProcessPersistenceAuthority(pid, identity)
+		if err := request.Invocation.PersistProcessWithAuthority(pid, identity, &authorityValue); err != nil {
+			return nil, err
+		}
+	} else if request.PersistProcess != nil {
 		pid, identity := adapter.session.ProcessDetails()
 		if err := request.PersistProcess(pid, identity); err != nil {
 			return nil, err
@@ -3842,6 +3849,7 @@ type fakeNativeGoalSession struct {
 	waitEntered     chan struct{}
 	processPID      int
 	processIdentity string
+	persistAtomic   bool
 	startErr        error
 	closeErr        error
 	closeEntered    chan struct{}

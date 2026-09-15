@@ -8665,17 +8665,22 @@ func TestRunShutdownDoesNotWaitForUnresolvedProcessReturnedWithStartError(t *tes
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, value, WithStore(store), WithControl(control), WithWorkspace(&fakeWorkspace{}), WithStartProcess(func(context.Context, execution.Invocation, execution.Sink) (Process, error) {
+		done <- Run(ctx, value, WithStore(store), WithControl(control), WithWorkspace(&fakeWorkspace{}), WithStartProcess(func(_ context.Context, invocation execution.Invocation, _ execution.Sink) (Process, error) {
 			startOnce.Do(func() { close(started) })
+			if invocation.PersistProcessWithAuthority == nil {
+				return nil, errors.New("atomic process persistence callback is missing")
+			}
+			authorityValue := testRecoverySupervisorAuthority()
+			authorityValue.TargetPID = 42
+			authorityValue.TargetIdentity = "test:42"
+			if persistErr := invocation.PersistProcessWithAuthority(42, "test:42", &authorityValue); persistErr != nil {
+				return nil, persistErr
+			}
 			return process, errors.New("initial input cleanup could not terminate process")
 		}), WithLogWriter(io.Discard), func(settings *options) {
 			settings.newID = ids()
-			settings.recordProcess = func(key state.RunKey, pid int, identity string, startedAt time.Time) (state.RunJournal, error) {
-				journal, recordErr := store.SetProcessDetails(key, pid, identity, startedAt)
-				if recordErr == nil {
-					recordOnce.Do(func() { close(recorded) })
-				}
-				return journal, recordErr
+			settings.processObserver = func(state.RunKey, int, string, time.Time) {
+				recordOnce.Do(func() { close(recorded) })
 			}
 		})
 	}()

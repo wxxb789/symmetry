@@ -172,6 +172,7 @@ func (adapter *ClaudeCandidateAdapter) Start(ctx context.Context, request StartR
 		InitialLeaseDeadline:          request.Invocation.InitialLeaseDeadline,
 		InitialLeaseDeadlineAt:        request.Invocation.InitialLeaseDeadlineAt,
 		InitialLeaseSequence:          request.Invocation.InitialLeaseSequence,
+		PersistProcessWithAuthority:   request.Invocation.PersistProcessWithAuthority,
 		PersistProcess:                request.PersistProcess,
 		PersistProcessAuthority:       request.PersistProcessAuthority,
 		PersistContainmentStopReceipt: request.PersistContainmentStopReceipt,
