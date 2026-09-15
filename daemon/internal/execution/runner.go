@@ -207,6 +207,7 @@ type Process struct {
 	containmentFinalizationStarted bool
 	containmentCloseAttempted      bool
 	containmentInitialError        error
+	containmentStableError         error
 	containmentReceiptSaved        bool
 
 	terminationMutex sync.Mutex
@@ -1065,18 +1066,29 @@ func (process *Process) closeContainment() error {
 	provider, hasReceiptProvider := process.containment.(platform.ContainmentStopReceiptProvider)
 	if !hasReceiptProvider && process.stopReceiptRequired {
 		err := errors.New("containment stop receipt provider is missing")
-		process.setContainmentError(errors.Join(process.containmentInitialError, err))
+		process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), err))
 		return err
 	}
 	if !hasReceiptProvider && process.containmentAuthorityUncertain {
 		err := errors.New("containment authority persistence is uncertain")
-		process.setContainmentError(errors.Join(process.containmentInitialError, err))
+		process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), err))
 		return err
 	}
 
-	if !process.containmentCloseAttempted {
+	closeRetryable := false
+	if retryer, ok := process.containment.(platform.ContainmentCloseRetryer); ok {
+		closeRetryable = retryer.ContainmentCloseRetryable()
+	}
+	if !process.containmentCloseAttempted || closeRetryable {
 		process.containmentCloseAttempted = true
 		if err := process.containment.Close(); err != nil {
+			retryableAfterFailure := false
+			if retryer, ok := process.containment.(platform.ContainmentCloseRetryer); ok {
+				retryableAfterFailure = retryer.ContainmentCloseRetryable()
+			}
+			if !retryableAfterFailure {
+				process.containmentStableError = errors.Join(process.containmentStableError, err)
+			}
 			process.setContainmentError(errors.Join(process.containmentInitialError, err))
 			return err
 		}
@@ -1084,15 +1096,16 @@ func (process *Process) closeContainment() error {
 
 	if !hasReceiptProvider {
 		process.containmentFinalized = true
-		process.setContainmentError(process.containmentInitialError)
-		return nil
+		finalErr := process.containmentFinalizationBaseError()
+		process.setContainmentError(finalErr)
+		return finalErr
 	}
 	receipt, available := provider.ContainmentStopReceipt()
 	if available {
 		if process.containmentAuthorityUncertain {
 			if (process.persistProcessWithAuthority == nil && process.persistAuthority == nil) || process.containmentAuthority == nil {
 				err := errors.New("containment authority persistence callback is unavailable")
-				process.setContainmentError(errors.Join(process.containmentInitialError, err))
+				process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), err))
 				return err
 			}
 			authorityCopy := process.containmentAuthority.Clone()
@@ -1104,7 +1117,7 @@ func (process *Process) closeContainment() error {
 				persistErr = process.persistAuthority(process.PID, process.Identity, &callbackAuthority)
 			}
 			if persistErr != nil {
-				process.setContainmentError(errors.Join(process.containmentInitialError, fmt.Errorf("retry process containment authority persistence: %w", persistErr)))
+				process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), fmt.Errorf("retry process containment authority persistence: %w", persistErr)))
 				return persistErr
 			}
 			process.containmentAuthorityUncertain = false
@@ -1113,35 +1126,35 @@ func (process *Process) closeContainment() error {
 			if process.persistStopReceipt == nil {
 				if process.containmentAuthorityUncertain {
 					err := errors.New("containment authority persistence is uncertain")
-					process.setContainmentError(errors.Join(process.containmentInitialError, err))
+					process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), err))
 					return err
 				}
 				if process.containmentAuthority != nil {
 					err := errors.New("durable containment stop receipt callback is missing")
-					process.setContainmentError(errors.Join(process.containmentInitialError, err))
+					process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), err))
 					return err
 				}
 				if !process.stopReceiptRequired {
 					if aborter, ok := process.containment.(platform.ContainmentStopReceiptAborter); ok {
 						if err := aborter.AbortContainment(); err != nil {
-							process.setContainmentError(errors.Join(process.containmentInitialError, err))
+							process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), err))
 							return err
 						}
 						process.containmentReceiptSaved = true
 					} else {
 						err := errors.New("pre-authority containment abort capability is missing")
-						process.setContainmentError(errors.Join(process.containmentInitialError, err))
+						process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), err))
 						return err
 					}
 				} else {
 					err := errors.New("durable containment stop receipt callback is missing")
-					process.setContainmentError(errors.Join(process.containmentInitialError, err))
+					process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), err))
 					return err
 				}
 			}
 			if process.persistStopReceipt != nil {
 				if err := process.persistStopReceipt(process.PID, process.Identity, receipt); err != nil {
-					process.setContainmentError(errors.Join(process.containmentInitialError, fmt.Errorf("persist containment stop receipt: %w", err)))
+					process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), fmt.Errorf("persist containment stop receipt: %w", err)))
 					return err
 				}
 				process.containmentReceiptSaved = true
@@ -1150,38 +1163,44 @@ func (process *Process) closeContainment() error {
 		if process.persistStopReceipt == nil && !process.stopReceiptRequired {
 			if process.containmentAuthorityUncertain {
 				err := errors.New("containment authority persistence is uncertain")
-				process.setContainmentError(errors.Join(process.containmentInitialError, err))
+				process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), err))
 				return err
 			}
 			// AbortContainment already performed the release.
 			process.containmentFinalized = true
-			process.setContainmentError(process.containmentInitialError)
-			return nil
+			finalErr := process.containmentFinalizationBaseError()
+			process.setContainmentError(finalErr)
+			return finalErr
 		}
 		if releaser, ok := process.containment.(platform.ContainmentStopReceiptReleaser); ok {
 			if err := releaser.ReleaseContainment(); err != nil {
-				process.setContainmentError(errors.Join(process.containmentInitialError, fmt.Errorf("release containment authority: %w", err)))
+				process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), fmt.Errorf("release containment authority: %w", err)))
 				return err
 			}
 		} else {
 			err := errors.New("containment stop receipt releaser is missing")
-			process.setContainmentError(errors.Join(process.containmentInitialError, err))
+			process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), err))
 			return err
 		}
 	} else if process.stopReceiptRequired || process.containmentAuthorityUncertain {
 		err := errors.New("containment stop receipt is unavailable")
-		process.setContainmentError(errors.Join(process.containmentInitialError, err))
+		process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), err))
 		return err
 	}
 	process.containmentFinalized = true
-	process.setContainmentError(process.containmentInitialError)
-	return nil
+	finalErr := process.containmentFinalizationBaseError()
+	process.setContainmentError(finalErr)
+	return finalErr
 }
 
 func (process *Process) containmentFailure() error {
 	process.errorMutex.Lock()
 	defer process.errorMutex.Unlock()
 	return process.containmentError
+}
+
+func (process *Process) containmentFinalizationBaseError() error {
+	return errors.Join(process.containmentInitialError, process.containmentStableError)
 }
 
 func (process *Process) containmentFinalizeError() error {

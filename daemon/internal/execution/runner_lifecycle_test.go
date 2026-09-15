@@ -172,6 +172,138 @@ func TestStartRetainsPartialAttachmentForOwnedCleanup(t *testing.T) {
 	}
 }
 
+func TestFinalizeContainmentRetriesPartialHelperCleanup(t *testing.T) {
+	want := errors.New("partial helper cleanup failed")
+	containment := &retryablePartialContainment{
+		scriptedContainment: &scriptedContainment{},
+		firstErr:            want,
+		retryable:           true,
+	}
+	runner := Runner{
+		configureProcess: func(*exec.Cmd) error { return nil },
+		attachProcess: func(process *os.Process) (platform.Containment, string, error) {
+			containment.setDefaultForce(process.Kill)
+			return containment, "bound:process", nil
+		},
+	}
+	process, err := runner.Start(context.Background(), helperInvocation("wait"), &recordingSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := process.Terminate(ctx, 0); !errors.Is(err, want) {
+		t.Fatalf("Terminate() error = %v, want partial helper error %v", err, want)
+	}
+	first := waitForResult(t, process)
+	if !errors.Is(first.ContainmentError, want) {
+		t.Fatalf("first process result containment error = %v, want %v", first.ContainmentError, want)
+	}
+	if containment.closeCount() != 1 {
+		t.Fatalf("first finalization close calls = %d, want 1", containment.closeCount())
+	}
+	if err := process.FinalizeContainment(); err != nil {
+		t.Fatalf("FinalizeContainment() retry error = %v", err)
+	}
+	second := process.Wait()
+	if second.ContainmentError != nil {
+		t.Fatalf("second process result containment error = %v, want nil", second.ContainmentError)
+	}
+	if err := process.FinalizeContainment(); err != nil {
+		t.Fatalf("repeated FinalizeContainment() error = %v", err)
+	}
+	if containment.closeCount() != 2 {
+		t.Fatalf("finalization close calls = %d, want exactly 2", containment.closeCount())
+	}
+}
+
+func TestFinalizeContainmentRetryRetainsPartialBaseError(t *testing.T) {
+	helperErr := errors.New("partial helper cleanup failed")
+	baseErr := errors.New("base containment stop failed")
+	containment := &retryablePartialContainment{
+		scriptedContainment: &scriptedContainment{},
+		firstErr:            helperErr,
+		secondErr:           baseErr,
+		retryable:           true,
+	}
+	runner := Runner{
+		configureProcess: func(*exec.Cmd) error { return nil },
+		attachProcess: func(process *os.Process) (platform.Containment, string, error) {
+			containment.setDefaultForce(process.Kill)
+			return containment, "bound:process", nil
+		},
+	}
+	process, err := runner.Start(context.Background(), helperInvocation("wait"), &recordingSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := process.Terminate(ctx, 0); !errors.Is(err, helperErr) {
+		t.Fatalf("Terminate() error = %v, want helper error %v", err, helperErr)
+	}
+	first := waitForResult(t, process)
+	if !errors.Is(first.ContainmentError, helperErr) {
+		t.Fatalf("first process result containment error = %v, want %v", first.ContainmentError, helperErr)
+	}
+	if err := process.FinalizeContainment(); !errors.Is(err, baseErr) {
+		t.Fatalf("FinalizeContainment() error = %v, want retained base error %v", err, baseErr)
+	}
+	second := process.Wait()
+	if !errors.Is(second.ContainmentError, baseErr) || errors.Is(second.ContainmentError, helperErr) {
+		t.Fatalf("second process result containment error = %v, want base only %v", second.ContainmentError, baseErr)
+	}
+	if err := process.FinalizeContainment(); !errors.Is(err, baseErr) {
+		t.Fatalf("repeated FinalizeContainment() error = %v, want retained base error %v", err, baseErr)
+	}
+	if containment.closeCount() != 2 {
+		t.Fatalf("finalization close calls = %d, want exactly 2", containment.closeCount())
+	}
+}
+
+func TestFinalizeContainmentRetriesPartialHandleReleaseAfterHelperSuccess(t *testing.T) {
+	releaseErr := errors.New("job handle release failed")
+	containment := &retryablePartialContainment{
+		scriptedContainment: &scriptedContainment{},
+		firstErr:            releaseErr,
+		secondErr:           releaseErr,
+		retryable:           true,
+	}
+	runner := Runner{
+		configureProcess: func(*exec.Cmd) error { return nil },
+		attachProcess: func(process *os.Process) (platform.Containment, string, error) {
+			containment.setDefaultForce(process.Kill)
+			return containment, "bound:process", nil
+		},
+	}
+	process, err := runner.Start(context.Background(), helperInvocation("wait"), &recordingSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := process.Terminate(ctx, 0); !errors.Is(err, releaseErr) {
+		t.Fatalf("Terminate() error = %v, want release error %v", err, releaseErr)
+	}
+	first := waitForResult(t, process)
+	if !errors.Is(first.ContainmentError, releaseErr) {
+		t.Fatalf("first process result containment error = %v, want %v", first.ContainmentError, releaseErr)
+	}
+	if err := process.FinalizeContainment(); !errors.Is(err, releaseErr) {
+		t.Fatalf("FinalizeContainment() error = %v, want stable release error %v", err, releaseErr)
+	}
+	second := process.Wait()
+	if !errors.Is(second.ContainmentError, releaseErr) {
+		t.Fatalf("second process result containment error = %v, want %v", second.ContainmentError, releaseErr)
+	}
+	if err := process.FinalizeContainment(); !errors.Is(err, releaseErr) {
+		t.Fatalf("repeated FinalizeContainment() error = %v, want stable release error %v", err, releaseErr)
+	}
+	if containment.closeCount() != 2 {
+		t.Fatalf("finalization close calls = %d, want exactly 2", containment.closeCount())
+	}
+}
+
 func TestStartUsesAttachmentIdentityFromOriginalProcess(t *testing.T) {
 	containment := &scriptedContainment{}
 	var attached *os.Process
@@ -565,6 +697,38 @@ type scriptedContainment struct {
 	soft     func() error
 	force    func() error
 	callsLog []string
+}
+
+type retryablePartialContainment struct {
+	*scriptedContainment
+	closeMutex sync.Mutex
+	closeCalls int
+	firstErr   error
+	secondErr  error
+	retryable  bool
+}
+
+func (containment *retryablePartialContainment) Close() error {
+	containment.closeMutex.Lock()
+	defer containment.closeMutex.Unlock()
+	containment.closeCalls++
+	if containment.closeCalls == 1 {
+		return containment.firstErr
+	}
+	containment.retryable = false
+	return containment.secondErr
+}
+
+func (containment *retryablePartialContainment) ContainmentCloseRetryable() bool {
+	containment.closeMutex.Lock()
+	defer containment.closeMutex.Unlock()
+	return containment.retryable
+}
+
+func (containment *retryablePartialContainment) closeCount() int {
+	containment.closeMutex.Lock()
+	defer containment.closeMutex.Unlock()
+	return containment.closeCalls
 }
 
 type authorityContainment struct {

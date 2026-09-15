@@ -53,3 +53,11 @@ type ContainmentLeaseRenewer interface {
 	RenewLease(deadline time.Duration, sequence uint64) error
 	LeaseRenewalAvailable() bool
 }
+
+// ContainmentCloseRetryer marks a containment owner whose Close operation may
+// retry a local cleanup step without replaying a durable stop/release effect.
+// The capability is intentionally separate from Containment so durable receipt
+// owners do not acquire an implicit second stop attempt.
+type ContainmentCloseRetryer interface {
+	ContainmentCloseRetryable() bool
+}

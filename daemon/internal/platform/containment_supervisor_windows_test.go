@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"syscall"
@@ -73,6 +74,201 @@ func TestJobContainmentCloseReleasesIndependentSupervisor(t *testing.T) {
 	}
 	if supervisor.calls != 1 {
 		t.Fatalf("repeated supervisor close calls = %d, want 1", supervisor.calls)
+	}
+}
+
+func TestPartialContainmentSupervisorLeaseDoesNotExposeDurableAuthority(t *testing.T) {
+	partial := newPartialContainmentSupervisorLease(&processContainmentSupervisorLease{})
+	if partial == nil {
+		t.Fatal("newPartialContainmentSupervisorLease() returned nil")
+	}
+	if _, ok := partial.(containmentSupervisorAuthorityProvider); ok {
+		t.Fatal("partial containment supervisor lease exposed durable authority")
+	}
+	if _, ok := partial.(containmentSupervisorStopLease); ok {
+		t.Fatal("partial containment supervisor lease exposed stop/release authority")
+	}
+	if _, ok := partial.(ContainmentLeaseRenewer); ok {
+		t.Fatal("partial containment supervisor lease exposed lease renewal capability")
+	}
+
+	job := &jobContainment{supervisor: partial}
+	if job.ContainmentAuthority() != nil {
+		t.Fatal("partial containment returned durable authority")
+	}
+	if job.ContainmentAuthorityAvailable() {
+		t.Fatal("partial containment reported durable authority capability")
+	}
+}
+
+func TestPartialContainmentCloseReleasesDaemonJobAfterSupervisorFailure(t *testing.T) {
+	want := errors.New("helper termination failed")
+	previousKill := killContainmentSupervisor
+	killContainmentSupervisor = func(*supervisorProcessWait, time.Time) error { return want }
+	t.Cleanup(func() { killContainmentSupervisor = previousKill })
+
+	closed := 0
+	restoreJobCalls(t,
+		func(syscall.Handle) error { return nil },
+		func(syscall.Handle) (uint32, error) { return 0, nil },
+		func(syscall.Handle) error {
+			closed++
+			return nil
+		},
+	)
+
+	partial := newPartialContainmentSupervisorLease(&processContainmentSupervisorLease{
+		waiter: &supervisorProcessWait{process: &os.Process{}},
+	})
+	job := &jobContainment{handle: syscall.Handle(1234), supervisor: partial}
+	if err := job.Close(); !errors.Is(err, want) {
+		t.Fatalf("partial containment Close() error = %v, want %v", err, want)
+	}
+	if closed != 1 || job.handle != 0 {
+		t.Fatalf("partial containment release = close:%d handle:%d, want 1 and 0", closed, job.handle)
+	}
+}
+
+func TestPartialContainmentSupervisorCloseRetriesHelperCleanup(t *testing.T) {
+	firstErr := errors.New("helper termination still pending")
+	attempts := 0
+	previousKill := killContainmentSupervisor
+	killContainmentSupervisor = func(*supervisorProcessWait, time.Time) error {
+		attempts++
+		if attempts == 1 {
+			return firstErr
+		}
+		return nil
+	}
+	t.Cleanup(func() { killContainmentSupervisor = previousKill })
+
+	partial := newPartialContainmentSupervisorLease(&processContainmentSupervisorLease{
+		waiter: &supervisorProcessWait{process: &os.Process{}},
+	})
+	if err := partial.close(time.Now().Add(time.Second)); !errors.Is(err, firstErr) {
+		t.Fatalf("first partial cleanup error = %v, want %v", err, firstErr)
+	}
+	if err := partial.close(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("retry partial cleanup error = %v", err)
+	}
+	if err := partial.close(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("repeated partial cleanup error = %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("partial helper cleanup attempts = %d, want 2", attempts)
+	}
+}
+
+func TestLaunchContainmentSupervisorPostStartFailuresReturnNonDurablePartialLeases(t *testing.T) {
+	comspec := os.Getenv("ComSpec")
+	if comspec == "" {
+		t.Fatal("ComSpec is unavailable")
+	}
+	previousArg0 := os.Args[0]
+	previousStart := startContainmentSupervisor
+	previousSetHandleInformation := setContainmentHandleInformation
+	previousIdentity := readSupervisorProcessIdentity
+	previousSecret := generateContainmentSupervisorSecret
+	previousBootstrap := writeContainmentSupervisorBootstrap
+	t.Cleanup(func() {
+		os.Args[0] = previousArg0
+		startContainmentSupervisor = previousStart
+		setContainmentHandleInformation = previousSetHandleInformation
+		readSupervisorProcessIdentity = previousIdentity
+		generateContainmentSupervisorSecret = previousSecret
+		writeContainmentSupervisorBootstrap = previousBootstrap
+	})
+
+	os.Args[0] = comspec
+	startContainmentSupervisor = func(command *exec.Cmd) error {
+		command.Path = comspec
+		command.Args = []string{comspec, "/c", "timeout /t 30 /nobreak >nul"}
+		return command.Start()
+	}
+
+	targetIdentity := fmt.Sprintf("windows:%d:%016x", os.Getpid(), uint64(1))
+	wantFailure := errors.New("injected post-start supervisor setup failure")
+	tests := []struct {
+		name  string
+		setup func()
+	}{
+		{
+			name: "clear job inheritance",
+			setup: func() {
+				calls := 0
+				setContainmentHandleInformation = func(handle syscall.Handle, mask, flags uint32) error {
+					calls++
+					if calls == 5 {
+						return wantFailure
+					}
+					return syscall.SetHandleInformation(handle, mask, flags)
+				}
+			},
+		},
+		{
+			name: "capture supervisor identity",
+			setup: func() {
+				readSupervisorProcessIdentity = func(int) (string, error) {
+					return "", wantFailure
+				}
+			},
+		},
+		{
+			name: "generate supervisor secret",
+			setup: func() {
+				generateContainmentSupervisorSecret = func() (string, error) {
+					return "", wantFailure
+				}
+			},
+		},
+		{
+			name: "send bootstrap",
+			setup: func() {
+				writeContainmentSupervisorBootstrap = func(*os.File, containmentSupervisorBootstrap, time.Time) error {
+					return wantFailure
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			jobValue, _, callErr := createJobObject.Call(0, 0)
+			if jobValue == 0 {
+				t.Fatalf("CreateJobObjectW() = (%d, %v)", jobValue, callErr)
+			}
+			job := syscall.Handle(jobValue)
+			t.Cleanup(func() { _ = syscall.CloseHandle(job) })
+
+			setContainmentHandleInformation = previousSetHandleInformation
+			readSupervisorProcessIdentity = previousIdentity
+			generateContainmentSupervisorSecret = previousSecret
+			writeContainmentSupervisorBootstrap = previousBootstrap
+			test.setup()
+
+			lease, identity, err := launchContainmentSupervisorProcess(job, os.Getpid(), targetIdentity)
+			if err == nil || !errors.Is(err, wantFailure) {
+				t.Fatalf("launchContainmentSupervisorProcess() error = %v, want injected failure", err)
+			}
+			if identity != targetIdentity {
+				t.Fatalf("launchContainmentSupervisorProcess() identity = %q, want %q", identity, targetIdentity)
+			}
+			if lease == nil {
+				t.Fatal("launchContainmentSupervisorProcess() returned nil partial lease")
+			}
+			if _, ok := lease.(containmentSupervisorAuthorityProvider); ok {
+				t.Fatal("post-start partial lease exposed durable authority")
+			}
+			if _, ok := lease.(containmentSupervisorStopLease); ok {
+				t.Fatal("post-start partial lease exposed stop/release authority")
+			}
+			if _, ok := lease.(ContainmentLeaseRenewer); ok {
+				t.Fatal("post-start partial lease exposed lease renewal capability")
+			}
+			if err := lease.close(time.Now().Add(5 * time.Second)); err != nil {
+				t.Fatalf("partial helper cleanup error = %v", err)
+			}
+		})
 	}
 }
 

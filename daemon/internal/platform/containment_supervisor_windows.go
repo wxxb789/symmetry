@@ -102,6 +102,12 @@ type containmentSupervisorLease interface {
 	renew(deadline time.Duration, sequence uint64) error
 }
 
+type containmentSupervisorPartialLease interface {
+	containmentSupervisorLease
+	closePartial(deadline time.Time) error
+	partialContainmentSupervisorLease()
+}
+
 // containmentSupervisorStopLease separates stop proof from authenticated
 // helper release. The helper remains reachable after a successful close until
 // the daemon persists the exact receipt and explicitly calls release.
@@ -184,11 +190,18 @@ type containmentSupervisorAuthorityProvider interface {
 }
 
 var (
-	launchContainmentSupervisor       = launchContainmentSupervisorProcess
-	requestContainmentSupervisor      = requestContainmentSupervisorPipe
-	requestContainmentSupervisorRenew = requestContainmentSupervisorRenewPipe
-	readSupervisorProcessIdentity     = ProcessIdentity
-	containmentSupervisorAfterFunc    = time.AfterFunc
+	launchContainmentSupervisor         = launchContainmentSupervisorProcess
+	requestContainmentSupervisor        = requestContainmentSupervisorPipe
+	requestContainmentSupervisorRenew   = requestContainmentSupervisorRenewPipe
+	readSupervisorProcessIdentity       = ProcessIdentity
+	containmentSupervisorAfterFunc      = time.AfterFunc
+	setContainmentHandleInformation     = syscall.SetHandleInformation
+	startContainmentSupervisor          = func(command *exec.Cmd) error { return command.Start() }
+	generateContainmentSupervisorSecret = randomContainmentSecret
+	writeContainmentSupervisorBootstrap = writeBootstrapPayload
+	killContainmentSupervisor           = func(waiter *supervisorProcessWait, deadline time.Time) error {
+		return waiter.killAndWait(deadline)
+	}
 )
 
 // TargetProcessIdentity validates the existing plain Windows process identity.
@@ -333,23 +346,23 @@ func launchContainmentSupervisorProcess(job syscall.Handle, targetPID int, targe
 		_ = ownerRead.Close()
 		_ = ownerWrite.Close()
 	}
-	if err := syscall.SetHandleInformation(syscall.Handle(bootstrapRead.Fd()), syscall.HANDLE_FLAG_INHERIT, syscall.HANDLE_FLAG_INHERIT); err != nil {
+	if err := setContainmentHandleInformation(syscall.Handle(bootstrapRead.Fd()), syscall.HANDLE_FLAG_INHERIT, syscall.HANDLE_FLAG_INHERIT); err != nil {
 		closeBootstrap()
 		closeOwner()
 		return nil, "", fmt.Errorf("make containment supervisor bootstrap handle inheritable: %w", err)
 	}
-	if err := syscall.SetHandleInformation(syscall.Handle(ownerRead.Fd()), syscall.HANDLE_FLAG_INHERIT, syscall.HANDLE_FLAG_INHERIT); err != nil {
+	if err := setContainmentHandleInformation(syscall.Handle(ownerRead.Fd()), syscall.HANDLE_FLAG_INHERIT, syscall.HANDLE_FLAG_INHERIT); err != nil {
 		closeBootstrap()
 		closeOwner()
 		return nil, "", fmt.Errorf("make containment supervisor owner handle inheritable: %w", err)
 	}
-	if err := syscall.SetHandleInformation(syscall.Handle(ownerWrite.Fd()), syscall.HANDLE_FLAG_INHERIT, 0); err != nil {
+	if err := setContainmentHandleInformation(syscall.Handle(ownerWrite.Fd()), syscall.HANDLE_FLAG_INHERIT, 0); err != nil {
 		closeBootstrap()
 		closeOwner()
 		return nil, "", fmt.Errorf("make containment supervisor owner writer non-inheritable: %w", err)
 	}
 
-	if err := syscall.SetHandleInformation(job, syscall.HANDLE_FLAG_INHERIT, syscall.HANDLE_FLAG_INHERIT); err != nil {
+	if err := setContainmentHandleInformation(job, syscall.HANDLE_FLAG_INHERIT, syscall.HANDLE_FLAG_INHERIT); err != nil {
 		closeBootstrap()
 		closeOwner()
 		return nil, "", fmt.Errorf("make containment Job handle inheritable: %w", err)
@@ -357,7 +370,7 @@ func launchContainmentSupervisorProcess(job syscall.Handle, targetPID int, targe
 	clearInheritance := true
 	defer func() {
 		if clearInheritance {
-			_ = syscall.SetHandleInformation(job, syscall.HANDLE_FLAG_INHERIT, 0)
+			_ = setContainmentHandleInformation(job, syscall.HANDLE_FLAG_INHERIT, 0)
 		}
 	}()
 
@@ -380,7 +393,7 @@ func launchContainmentSupervisorProcess(job syscall.Handle, targetPID int, targe
 		syscall.Handle(bootstrapRead.Fd()),
 		syscall.Handle(ownerRead.Fd()),
 	}
-	if err := command.Start(); err != nil {
+	if err := startContainmentSupervisor(command); err != nil {
 		closeBootstrap()
 		closeOwner()
 		return nil, "", fmt.Errorf("start containment supervisor: %w", err)
@@ -391,10 +404,10 @@ func launchContainmentSupervisorProcess(job syscall.Handle, targetPID int, targe
 	endpoint.SupervisorPID = command.Process.Pid
 	partialLease := &processContainmentSupervisorLease{endpoint: endpoint, waiter: waiter, ownerWrite: ownerWrite}
 	clearInheritance = true
-	if err := syscall.SetHandleInformation(job, syscall.HANDLE_FLAG_INHERIT, 0); err != nil {
+	if err := setContainmentHandleInformation(job, syscall.HANDLE_FLAG_INHERIT, 0); err != nil {
 		_ = bootstrapWrite.Close()
 		_ = ownerWrite.Close()
-		return partialLease, targetIdentity, fmt.Errorf("clear containment Job inheritance: %w", err)
+		return newPartialContainmentSupervisorLease(partialLease), targetIdentity, fmt.Errorf("clear containment Job inheritance: %w", err)
 	}
 	clearInheritance = false
 
@@ -403,14 +416,14 @@ func launchContainmentSupervisorProcess(job syscall.Handle, targetPID int, targe
 		_ = bootstrapWrite.Close()
 		_ = ownerWrite.Close()
 		partialLease.endpoint = endpoint
-		return partialLease, targetIdentity, fmt.Errorf("capture containment supervisor identity: %w", err)
+		return newPartialContainmentSupervisorLease(partialLease), targetIdentity, fmt.Errorf("capture containment supervisor identity: %w", err)
 	}
-	endpoint.Secret, err = randomContainmentSecret()
+	endpoint.Secret, err = generateContainmentSupervisorSecret()
 	if err != nil {
 		_ = bootstrapWrite.Close()
 		_ = ownerWrite.Close()
 		partialLease.endpoint = endpoint
-		return partialLease, targetIdentity, fmt.Errorf("generate containment supervisor authority: %w", err)
+		return newPartialContainmentSupervisorLease(partialLease), targetIdentity, fmt.Errorf("generate containment supervisor authority: %w", err)
 	}
 	bootstrap := containmentSupervisorBootstrap{
 		Version:            containmentSupervisorProtocol,
@@ -423,11 +436,11 @@ func launchContainmentSupervisorProcess(job syscall.Handle, targetPID int, targe
 		JobID:              endpoint.JobID,
 		Secret:             endpoint.Secret,
 	}
-	if err := writeBootstrapPayload(bootstrapWrite, bootstrap, time.Now().Add(containmentSupervisorConnect)); err != nil {
+	if err := writeContainmentSupervisorBootstrap(bootstrapWrite, bootstrap, time.Now().Add(containmentSupervisorConnect)); err != nil {
 		_ = bootstrapWrite.Close()
 		_ = ownerWrite.Close()
 		partialLease.endpoint = endpoint
-		return partialLease, targetIdentity, fmt.Errorf("send containment supervisor bootstrap: %w", err)
+		return newPartialContainmentSupervisorLease(partialLease), targetIdentity, fmt.Errorf("send containment supervisor bootstrap: %w", err)
 	}
 	_ = bootstrapWrite.Close()
 	partialLease.endpoint = endpoint
@@ -487,6 +500,75 @@ type processContainmentSupervisorLease struct {
 	released   bool
 	receipt    *authority.StopReceipt
 	closeErr   error
+}
+
+// processContainmentSupervisorPartialLease owns only pre-authority cleanup.
+// AttachSuspendedProcess may return this lease together with an error after the
+// child has inherited the Job handle, so it must not advertise the durable
+// authority or stop/release capabilities. jobContainment.Close then retains
+// the helper cleanup attempt but still releases the daemon-side Job handle when
+// that attempt is unproven.
+type processContainmentSupervisorPartialLease struct {
+	lease *processContainmentSupervisorLease
+}
+
+func newPartialContainmentSupervisorLease(lease *processContainmentSupervisorLease) containmentSupervisorLease {
+	if lease == nil {
+		return nil
+	}
+	return &processContainmentSupervisorPartialLease{lease: lease}
+}
+
+func (lease *processContainmentSupervisorPartialLease) close(deadline time.Time) error {
+	if lease == nil || lease.lease == nil {
+		return errors.New("containment supervisor lease is missing")
+	}
+	return lease.lease.closePartial(deadline)
+}
+
+func (lease *processContainmentSupervisorPartialLease) closePartial(deadline time.Time) error {
+	if lease == nil || lease.lease == nil {
+		return errors.New("containment supervisor lease is missing")
+	}
+	return lease.lease.closePartial(deadline)
+}
+
+func (*processContainmentSupervisorPartialLease) partialContainmentSupervisorLease() {}
+
+func (lease *processContainmentSupervisorPartialLease) renew(deadline time.Duration, sequence uint64) error {
+	if lease == nil || lease.lease == nil {
+		return errors.New("containment supervisor lease is missing")
+	}
+	return lease.lease.renew(deadline, sequence)
+}
+
+// closePartial only owns pre-authority cleanup. It deliberately does not send
+// a stop/release request with an incomplete endpoint; it closes the owner
+// channel and retries killing/reaping the helper until that local cleanup is
+// proven. The daemon-side Job remains owned by jobContainment and is released
+// independently even when this helper cleanup is still unproven.
+func (lease *processContainmentSupervisorLease) closePartial(deadline time.Time) error {
+	if lease == nil {
+		return errors.New("containment supervisor lease is missing")
+	}
+	lease.mutex.Lock()
+	if lease.released {
+		lease.mutex.Unlock()
+		return nil
+	}
+	lease.closeOwnerWriterLocked()
+	waiter := lease.waiter
+	lease.mutex.Unlock()
+	if waiter == nil || waiter.process == nil {
+		return errors.New("containment supervisor process handle is missing")
+	}
+	if err := killContainmentSupervisor(waiter, deadline); err != nil {
+		return fmt.Errorf("terminate partial containment supervisor: %w", err)
+	}
+	lease.mutex.Lock()
+	lease.released = true
+	lease.mutex.Unlock()
+	return nil
 }
 
 func (lease *processContainmentSupervisorLease) LeaseRenewalAvailable() bool {

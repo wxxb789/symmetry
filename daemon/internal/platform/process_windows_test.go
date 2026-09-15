@@ -300,6 +300,270 @@ func TestCloseReleasesJobAfterTerminateFailureAndCachesError(t *testing.T) {
 	}
 }
 
+func TestPartialJobCloseRetriesHelperAfterBaseSuccess(t *testing.T) {
+	wantHelper := errors.New("helper termination still pending")
+	attempts := 0
+	closed := 0
+	previousKill := killContainmentSupervisor
+	killContainmentSupervisor = func(*supervisorProcessWait, time.Time) error {
+		attempts++
+		if attempts == 1 {
+			return wantHelper
+		}
+		return nil
+	}
+	t.Cleanup(func() { killContainmentSupervisor = previousKill })
+	restoreJobCalls(t,
+		func(syscall.Handle) error { return nil },
+		func(syscall.Handle) (uint32, error) { return 0, nil },
+		func(syscall.Handle) error {
+			closed++
+			return nil
+		},
+	)
+
+	partial := newPartialContainmentSupervisorLease(&processContainmentSupervisorLease{
+		waiter: &supervisorProcessWait{process: &os.Process{}},
+	})
+	job := &jobContainment{handle: syscall.Handle(1234), supervisor: partial}
+	first := job.Close()
+	if !errors.Is(first, wantHelper) {
+		t.Fatalf("first Close() = %v, want helper failure %v", first, wantHelper)
+	}
+	if closed != 1 || job.handle != 0 {
+		t.Fatalf("first partial close = close:%d handle:%d, want 1 and 0", closed, job.handle)
+	}
+	second := job.Close()
+	if second != nil {
+		t.Fatalf("second Close() = %v, want helper retry success", second)
+	}
+	third := job.Close()
+	if third != nil {
+		t.Fatalf("third Close() = %v, want idempotent success", third)
+	}
+	if attempts != 2 || closed != 1 {
+		t.Fatalf("partial close retries = helper:%d close:%d, want 2 and 1", attempts, closed)
+	}
+}
+
+func TestPartialJobCloseRetriesHandleReleaseAfterHelperSuccess(t *testing.T) {
+	wantRelease := errors.New("job handle release failed")
+	helperCalls := 0
+	previousKill := killContainmentSupervisor
+	killContainmentSupervisor = func(*supervisorProcessWait, time.Time) error {
+		helperCalls++
+		return nil
+	}
+	t.Cleanup(func() { killContainmentSupervisor = previousKill })
+	closed := 0
+	restoreJobCalls(t,
+		func(syscall.Handle) error { return nil },
+		func(syscall.Handle) (uint32, error) { return 0, nil },
+		func(syscall.Handle) error {
+			closed++
+			if closed == 1 {
+				return wantRelease
+			}
+			return nil
+		},
+	)
+
+	partial := newPartialContainmentSupervisorLease(&processContainmentSupervisorLease{
+		waiter: &supervisorProcessWait{process: &os.Process{}},
+	})
+	job := &jobContainment{handle: syscall.Handle(1234), supervisor: partial}
+	first := job.Close()
+	if !errors.Is(first, wantRelease) || job.handle == 0 {
+		t.Fatalf("first partial Close() = %v handle:%d, want release error and retained handle", first, job.handle)
+	}
+	if !job.ContainmentCloseRetryable() {
+		t.Fatal("partial Close() did not retain retry capability for the daemon Job handle")
+	}
+	second := job.Close()
+	if !errors.Is(second, wantRelease) || job.handle != 0 {
+		t.Fatalf("second partial Close() = %v handle:%d, want retained error and released handle", second, job.handle)
+	}
+	if job.ContainmentCloseRetryable() {
+		t.Fatal("partial Close() retained retry capability after handle release")
+	}
+	third := job.Close()
+	if !errors.Is(third, wantRelease) {
+		t.Fatalf("third partial Close() = %v, want retained release error", third)
+	}
+	if helperCalls != 1 || closed != 2 {
+		t.Fatalf("partial handle retry calls = helper:%d close:%d, want 1 and 2", helperCalls, closed)
+	}
+}
+
+func TestFullSupervisorLeaseUsesDurableStopReceiptAndReleasePath(t *testing.T) {
+	endpoint := containmentSupervisorEndpoint{
+		TargetPID:          71,
+		TargetIdentity:     "windows:71:0000000000000001",
+		SupervisorPID:      72,
+		SupervisorIdentity: "windows:72:0000000000000002",
+		Token:              strings.Repeat("a", authority.TokenBytes*2),
+		JobID:              strings.Repeat("b", authority.TokenBytes*2),
+		Secret:             strings.Repeat("c", authority.SecretBytes*2),
+	}
+	lease := &processContainmentSupervisorLease{
+		endpoint: endpoint,
+		waiter:   &supervisorProcessWait{process: &os.Process{}},
+	}
+	if _, ok := containmentSupervisorLease(lease).(containmentSupervisorPartialLease); ok {
+		t.Fatal("full durable supervisor lease was classified as partial")
+	}
+
+	closeRequests := 0
+	releaseRequests := 0
+	previousRequest := requestContainmentSupervisor
+	requestContainmentSupervisor = func(actual containmentSupervisorEndpoint, operation string, _ time.Time) (containmentSupervisorResponse, error) {
+		if actual != endpoint {
+			t.Fatalf("supervisor endpoint = %#v, want %#v", actual, endpoint)
+		}
+		status := "stopped"
+		if operation == "close" {
+			closeRequests++
+		} else if operation == "release" {
+			releaseRequests++
+			status = "released"
+		} else {
+			t.Fatalf("unexpected supervisor operation %q", operation)
+		}
+		return containmentSupervisorResponse{
+			Version:            containmentSupervisorProtocol,
+			Operation:          operation,
+			Status:             status,
+			TargetPID:          actual.TargetPID,
+			TargetIdentity:     actual.TargetIdentity,
+			SupervisorPID:      actual.SupervisorPID,
+			SupervisorIdentity: actual.SupervisorIdentity,
+			Token:              actual.Token,
+			JobID:              actual.JobID,
+			ActiveProcesses:    0,
+		}, nil
+	}
+	t.Cleanup(func() { requestContainmentSupervisor = previousRequest })
+	restoreJobCalls(t,
+		func(syscall.Handle) error { return nil },
+		func(syscall.Handle) (uint32, error) { return 0, nil },
+		func(syscall.Handle) error { return nil },
+	)
+
+	job := &jobContainment{handle: syscall.Handle(1234), supervisor: lease}
+	if err := job.Close(); err != nil {
+		t.Fatalf("full durable supervisor Close() error = %v", err)
+	}
+	if closeRequests != 1 || job.stopReceipt == nil {
+		t.Fatalf("durable close = requests:%d receipt:%#v, want one close and receipt", closeRequests, job.stopReceipt)
+	}
+	if releaseRequests != 0 {
+		t.Fatalf("durable close released helper before receipt acknowledgement: %d", releaseRequests)
+	}
+	if err := job.ReleaseContainment(); err != nil {
+		t.Fatalf("ReleaseContainment() error = %v", err)
+	}
+	if releaseRequests != 1 || job.supervisor != nil {
+		t.Fatalf("durable release = requests:%d supervisor:%#v, want one and nil", releaseRequests, job.supervisor)
+	}
+}
+
+func TestPartialJobCloseRetainsBaseErrorAcrossHelperRetry(t *testing.T) {
+	terminationErr := errors.New("job termination failed")
+	waitErr := errors.New("job observation failed")
+	releaseErr := errors.New("job handle release failed")
+	tests := []struct {
+		name      string
+		terminate func(syscall.Handle) error
+		query     func(syscall.Handle) (uint32, error)
+		base      error
+		wantClose int
+	}{
+		{
+			name: "termination",
+			terminate: func(syscall.Handle) error {
+				return terminationErr
+			},
+			query: func(syscall.Handle) (uint32, error) {
+				t.Fatal("query ran after Job termination failure")
+				return 0, nil
+			},
+			base: terminationErr,
+		},
+		{
+			name:      "wait",
+			terminate: func(syscall.Handle) error { return nil },
+			query: func(syscall.Handle) (uint32, error) {
+				return 0, waitErr
+			},
+			base: waitErr,
+		},
+		{
+			name:      "handle release",
+			terminate: func(syscall.Handle) error { return nil },
+			query:     func(syscall.Handle) (uint32, error) { return 0, nil },
+			base:      releaseErr,
+			wantClose: 2,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			wantHelper := errors.New("helper termination still pending")
+			attempts := 0
+			previousKill := killContainmentSupervisor
+			killContainmentSupervisor = func(*supervisorProcessWait, time.Time) error {
+				attempts++
+				if attempts == 1 {
+					return wantHelper
+				}
+				return nil
+			}
+			t.Cleanup(func() { killContainmentSupervisor = previousKill })
+
+			closed := 0
+			baseErr := test.base
+			restoreJobCalls(t,
+				test.terminate,
+				test.query,
+				func(handle syscall.Handle) error {
+					closed++
+					if test.name == "handle release" && closed == 1 {
+						return baseErr
+					}
+					return nil
+				},
+			)
+
+			partial := newPartialContainmentSupervisorLease(&processContainmentSupervisorLease{
+				waiter: &supervisorProcessWait{process: &os.Process{}},
+			})
+			job := &jobContainment{handle: syscall.Handle(1234), supervisor: partial}
+			first := job.Close()
+			if !errors.Is(first, baseErr) || !errors.Is(first, wantHelper) {
+				t.Fatalf("first Close() = %v, want base %v and helper %v", first, baseErr, wantHelper)
+			}
+			second := job.Close()
+			if !errors.Is(second, baseErr) || errors.Is(second, wantHelper) {
+				t.Fatalf("second Close() = %v, want retained base only %v", second, baseErr)
+			}
+			third := job.Close()
+			if !errors.Is(third, baseErr) || errors.Is(third, wantHelper) {
+				t.Fatalf("third Close() = %v, want idempotent retained base %v", third, baseErr)
+			}
+			if attempts != 2 {
+				t.Fatalf("helper cleanup attempts = %d, want 2", attempts)
+			}
+			wantClose := test.wantClose
+			if wantClose == 0 {
+				wantClose = 1
+			}
+			if closed != wantClose {
+				t.Fatalf("Job handle close calls = %d, want %d", closed, wantClose)
+			}
+		})
+	}
+}
+
 func TestCloseReleasesJobAfterQueryFailureAndCachesError(t *testing.T) {
 	want := errors.New("query failed")
 	terminated := 0

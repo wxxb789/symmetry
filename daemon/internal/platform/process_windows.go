@@ -91,12 +91,14 @@ type extendedLimitInformation struct {
 }
 
 type jobContainment struct {
-	mutex        sync.Mutex
-	handle       syscall.Handle
-	supervisor   containmentSupervisorLease
-	stopReceipt  *authority.StopReceipt
-	closeStarted bool
-	closeErr     error
+	mutex                          sync.Mutex
+	handle                         syscall.Handle
+	supervisor                     containmentSupervisorLease
+	stopReceipt                    *authority.StopReceipt
+	closeStarted                   bool
+	closeErr                       error
+	partialCleanupPending          bool
+	partialContainmentBaseCloseErr error
 }
 
 // ContainmentAuthority returns a copy of the helper binding, if this Job is
@@ -153,6 +155,21 @@ func (job *jobContainment) LeaseRenewalAvailable() bool {
 	}
 	_, ok := supervisor.(ContainmentLeaseRenewer)
 	return ok
+}
+
+// ContainmentCloseRetryable reports whether only a partial supervisor cleanup
+// remains retryable. A durable supervisor close error never opts into a second
+// physical stop/release attempt from the Process finalizer.
+func (job *jobContainment) ContainmentCloseRetryable() bool {
+	if job == nil {
+		return false
+	}
+	job.mutex.Lock()
+	defer job.mutex.Unlock()
+	if _, partial := job.supervisor.(containmentSupervisorPartialLease); !partial {
+		return false
+	}
+	return job.partialCleanupPending || job.handle != 0
 }
 
 // RenewLease forwards a relative deadline to the independent supervisor while
@@ -447,6 +464,9 @@ func (job *jobContainment) Close() error {
 		// without re-signalling the Job.
 		_, retryableStop := job.supervisor.(containmentSupervisorStopLease)
 		_, durableAuthority := job.supervisor.(containmentSupervisorAuthorityProvider)
+		if partial, ok := job.supervisor.(containmentSupervisorPartialLease); ok && job.partialCleanupPending {
+			return job.closePartialSupervisorLocked(partial, nil)
+		}
 		if !durableAuthority {
 			_ = job.releaseHandleLocked()
 			return job.closeErr
@@ -468,6 +488,9 @@ func (job *jobContainment) Close() error {
 
 	handle := job.handle
 	if handle == 0 {
+		if partial, ok := job.supervisor.(containmentSupervisorPartialLease); ok {
+			return job.closePartialSupervisorLocked(partial, nil)
+		}
 		if supervisor, ok := job.supervisor.(containmentSupervisorStopLease); ok {
 			if _, durableAuthority := job.supervisor.(containmentSupervisorAuthorityProvider); !durableAuthority {
 				job.closeErr = job.supervisor.close(time.Now().Add(containmentCloseDeadline))
@@ -492,6 +515,9 @@ func (job *jobContainment) Close() error {
 		stopErr = fmt.Errorf("terminate job object during containment close: %w", err)
 	} else if err := waitForEmptyJob(handle, deadline, queryJobActiveProcesses); err != nil {
 		stopErr = err
+	}
+	if partial, ok := job.supervisor.(containmentSupervisorPartialLease); ok {
+		return job.closePartialSupervisorLocked(partial, stopErr)
 	}
 	var supervisorErr error
 	if supervisor, ok := job.supervisor.(containmentSupervisorStopLease); ok {
@@ -533,6 +559,19 @@ func durableAuthority(supervisor containmentSupervisorLease) bool {
 	}
 	_, ok := supervisor.(containmentSupervisorAuthorityProvider)
 	return ok
+}
+
+func (job *jobContainment) closePartialSupervisorLocked(partial containmentSupervisorPartialLease, baseErr error) error {
+	if job.partialContainmentBaseCloseErr == nil {
+		releaseErr := job.releaseHandleLocked()
+		job.partialContainmentBaseCloseErr = errors.Join(baseErr, releaseErr)
+	} else {
+		_ = job.releaseHandleLocked()
+	}
+	helperErr := partial.closePartial(time.Now().Add(containmentCloseDeadline))
+	job.partialCleanupPending = helperErr != nil
+	job.closeErr = errors.Join(job.partialContainmentBaseCloseErr, helperErr)
+	return job.closeErr
 }
 
 func (job *jobContainment) releaseHandleLocked() error {
