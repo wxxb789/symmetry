@@ -5,6 +5,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
 const (
@@ -74,7 +77,7 @@ func TestProviderActionIntentRejectsChangedRequestAndCompletion(t *testing.T) {
 	}
 }
 
-func TestProviderActionUnknownReopensOnlyForExactRequest(t *testing.T) {
+func TestProviderActionUnknownReplaysWithoutRedispatch(t *testing.T) {
 	store := mustStore(t)
 	journal := testJournal("run-provider-unknown", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -91,13 +94,42 @@ func TestProviderActionUnknownReopensOnlyForExactRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reopened, dispatch, err := store.PrepareProviderAction(journal.Key(), intent)
-	if err != nil || !dispatch {
-		t.Fatalf("unknown reopen dispatch=%t error=%v", dispatch, err)
+	replayed, dispatch, err := store.PrepareProviderAction(journal.Key(), intent)
+	if err != nil || dispatch {
+		t.Fatalf("unknown replay dispatch=%t error=%v", dispatch, err)
 	}
-	got := reopened.ProviderActionIntents[0]
-	if got.Outcome != "" || got.FailureCode != "" || len(got.Result) != 0 {
-		t.Fatalf("reopened provider action = %#v", got)
+	got := replayed.ProviderActionIntents[0]
+	if !sameProviderActionIntent(got, unknown) {
+		t.Fatalf("replayed provider action = %#v, want %#v", got, unknown)
+	}
+}
+
+func TestRecoverProviderActionSettlesOnlyMatchingUnfinishedDispatch(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-provider-targeted-recovery", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	first := testProviderActionIntent()
+	second := first
+	second.ActionID = "00000000-0000-4000-8000-000000000003"
+	second.ActionKey = "tool-call-2"
+	second.RequestDigest = strings.Repeat("b", 64)
+	for _, intent := range []ProviderActionIntent{first, second} {
+		if _, _, err := store.PrepareProviderAction(journal.Key(), intent); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	recovered, err := store.RecoverProviderAction(journal.Key(), first.ActionID, first.RequestDigest, "local_persistence_unknown")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.ProviderActionIntents[0].Outcome != ProviderActionOutcomeUnknown || recovered.ProviderActionIntents[1].Outcome != "" {
+		t.Fatalf("targeted recovery = %#v", recovered.ProviderActionIntents)
+	}
+	if _, err := store.RecoverProviderAction(journal.Key(), first.ActionID, strings.Repeat("c", 64), "local_persistence_unknown"); err == nil {
+		t.Fatal("targeted recovery accepted a changed request digest")
 	}
 }
 
@@ -163,6 +195,34 @@ func TestProviderActionPrepareRecoversAfterCommitAcknowledgementLoss(t *testing.
 	replayed, dispatch, err := store.PrepareProviderAction(journal.Key(), intent)
 	if err != nil || dispatch || len(replayed.ProviderActionIntents) != 1 {
 		t.Fatalf("prepare replay dispatch=%t intents=%#v error=%v", dispatch, replayed.ProviderActionIntents, err)
+	}
+}
+
+func TestTerminalTransitionSettlesUnfinishedProviderActionAtomically(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-provider-terminal", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	intent := testProviderActionIntent()
+	if _, _, err := store.PrepareProviderAction(journal.Key(), intent); err != nil {
+		t.Fatal(err)
+	}
+	terminal, err := store.QueueTerminalTransitionAt(journal.Key(), protocol.StateTransitionRequest{
+		TransitionID: "failed-provider-action",
+		State:        "failed",
+		Payload:      json.RawMessage(`{"stage":"provider_action"}`),
+	}, time.Date(2026, 9, 15, 1, 2, 3, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := terminal.ProviderActionIntents[0]
+	if got.Outcome != ProviderActionOutcomeUnknown || got.FailureCode != providerActionFailureTerminal {
+		t.Fatalf("terminal provider action = %#v", got)
+	}
+	loaded, err := store.LoadJournal(journal.Key())
+	if err != nil || !sameProviderActionIntent(loaded.ProviderActionIntents[0], got) {
+		t.Fatalf("durable terminal provider action = %#v, error=%v", loaded.ProviderActionIntents, err)
 	}
 }
 

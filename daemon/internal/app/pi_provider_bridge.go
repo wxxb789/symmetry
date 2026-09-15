@@ -3,8 +3,10 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"reflect"
 	"strconv"
@@ -13,6 +15,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/control"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/pi"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
+	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
 
 const (
@@ -26,12 +29,115 @@ const (
 	piProviderActionFailureControlPanic     = "control_action_panic"
 	piProviderActionFailureControlResult    = "control_result_unsafe"
 	piProviderActionFailureControlInvalid   = "control_action_invalid"
+	piProviderActionFailureLocalConflict    = "local_idempotency_conflict"
+	piProviderActionFailureLocalPersistence = "local_persistence_unknown"
 	piProviderActionMaxResultBytes          = 64 << 10
 )
+
+// newDurablePiProviderBridgeExecutor surrounds the Control mapper with the
+// run-journal commit/ack boundary required before a native bridge can use it.
+// Provider input is represented only by a SHA-256 digest in local state.
+func newDurablePiProviderBridgeExecutor(controlAPI ControlAPI, store *state.Store, key state.RunKey, access protocol.ProviderAccess) (pi.ExecuteProviderAction, error) {
+	if store == nil || strings.TrimSpace(key.RunID) == "" || key.Generation <= 0 {
+		return nil, errPiProviderActionStoreUnavailable
+	}
+	mapped, err := newPiProviderBridgeExecutor(controlAPI, access)
+	if err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, actionID string, request pi.ProviderBridgeRequest) (pi.ProviderBridgeResponse, error) {
+		intent, err := piProviderActionIntent(actionID, request)
+		if err != nil {
+			return piProviderActionUnknown(piProviderActionFailureControlInvalid), nil
+		}
+		journal, dispatch, err := store.PrepareProviderAction(key, intent)
+		if err != nil {
+			if errors.Is(err, state.ErrProviderActionConflict) {
+				return pi.ProviderBridgeResponse{Outcome: pi.ProviderBridgeOutcomeFailed, FailureCode: piProviderActionFailureLocalConflict}, nil
+			}
+			_, _ = store.RecoverProviderAction(key, intent.ActionID, intent.RequestDigest, piProviderActionFailureLocalPersistence)
+			return piProviderActionUnknown(piProviderActionFailureLocalPersistence), nil
+		}
+		if !dispatch {
+			stored, ok := findPiProviderActionIntent(journal, intent.ActionID)
+			if !ok || stored.Outcome == "" {
+				_, _ = store.RecoverProviderAction(key, intent.ActionID, intent.RequestDigest, piProviderActionFailureLocalPersistence)
+				return piProviderActionUnknown(piProviderActionFailureLocalPersistence), nil
+			}
+			return piProviderActionResponseFromIntent(stored), nil
+		}
+
+		response, err := mapped(ctx, actionID, request)
+		if err != nil {
+			response = piProviderActionUnknown(piProviderActionFailureControlUnknown)
+		}
+		completed := intent
+		completed.Outcome = string(response.Outcome)
+		completed.Result = append(json.RawMessage(nil), response.Result...)
+		completed.FailureCode = response.FailureCode
+		if _, persistErr := store.CompleteProviderAction(key, completed); persistErr != nil {
+			_, _ = store.RecoverProviderAction(key, intent.ActionID, intent.RequestDigest, piProviderActionFailureLocalPersistence)
+			return piProviderActionUnknown(piProviderActionFailureLocalPersistence), nil
+		}
+		return response, nil
+	}, nil
+}
+
+func piProviderActionIntent(actionID string, request pi.ProviderBridgeRequest) (state.ProviderActionIntent, error) {
+	encoded, err := json.Marshal(struct {
+		ResourceID string          `json:"resource_id"`
+		Operation  string          `json:"operation"`
+		ActionKey  string          `json:"action_key"`
+		Input      json.RawMessage `json:"input"`
+	}{
+		ResourceID: request.ResourceID,
+		Operation:  request.Operation,
+		ActionKey:  request.ActionKey,
+		Input:      request.Input,
+	})
+	if err != nil {
+		return state.ProviderActionIntent{}, err
+	}
+	canonical, err := protocol.CanonicalizeJSON(encoded)
+	if err != nil {
+		return state.ProviderActionIntent{}, err
+	}
+	digest := sha256.Sum256(canonical)
+	return state.ProviderActionIntent{
+		ActionID:      actionID,
+		ActionKey:     request.ActionKey,
+		RequestDigest: fmt.Sprintf("%x", digest),
+		ResourceID:    request.ResourceID,
+		Operation:     request.Operation,
+	}, nil
+}
+
+func findPiProviderActionIntent(journal state.RunJournal, actionID string) (state.ProviderActionIntent, bool) {
+	for _, intent := range journal.ProviderActionIntents {
+		if intent.ActionID == actionID {
+			return intent, true
+		}
+	}
+	return state.ProviderActionIntent{}, false
+}
+
+func piProviderActionResponseFromIntent(intent state.ProviderActionIntent) pi.ProviderBridgeResponse {
+	switch intent.Outcome {
+	case state.ProviderActionOutcomeSucceeded:
+		return pi.ProviderBridgeResponse{Outcome: pi.ProviderBridgeOutcomeSucceeded, Result: append(json.RawMessage(nil), intent.Result...)}
+	case state.ProviderActionOutcomeFailed:
+		return pi.ProviderBridgeResponse{Outcome: pi.ProviderBridgeOutcomeFailed, FailureCode: intent.FailureCode}
+	case state.ProviderActionOutcomeUnknown:
+		return pi.ProviderBridgeResponse{Outcome: pi.ProviderBridgeOutcomeUnknown, Result: append(json.RawMessage(nil), intent.Result...), FailureCode: intent.FailureCode}
+	default:
+		return piProviderActionUnknown(piProviderActionFailureLocalPersistence)
+	}
+}
 
 var (
 	errPiProviderActionAccessInvalid      = errors.New("provider access is invalid")
 	errPiProviderActionControlUnavailable = errors.New("provider action control client is unavailable")
+	errPiProviderActionStoreUnavailable   = errors.New("provider action state store is unavailable")
 )
 
 // providerActionControlAPI is intentionally optional. Existing ControlAPI

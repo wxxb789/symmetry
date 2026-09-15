@@ -1231,6 +1231,7 @@ func (store *Store) ResolveTerminalForCleanup(key RunKey, verdict string, resolv
 			journal.TerminalVerdict = verdict
 			journal.TerminalResolvedAt = resolvedAt
 		}
+		settleUnresolvedProviderActions(journal, providerActionFailureTerminal)
 		// Retention may have failed before mandatory fencing. Preserve the
 		// durable supervisory evidence before retiring unreachable intents.
 		if journal.TerminalState != "completed" && len(journal.ControlCommandIntents) != 0 {
@@ -1432,6 +1433,7 @@ func queueTerminalTransition(journal *RunJournal, transition protocol.StateTrans
 	if err := settleUnresolvedControlCommands(journal); err != nil {
 		return err
 	}
+	settleUnresolvedProviderActions(journal, providerActionFailureTerminal)
 	if prepared.State == "cancelled" {
 		journal.RetainWorkspace = true
 		journal.PendingTransitions = []protocol.StateTransitionRequest{prepared}

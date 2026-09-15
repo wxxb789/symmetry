@@ -13,6 +13,7 @@ const (
 	ProviderActionOutcomeSucceeded = "succeeded"
 	ProviderActionOutcomeFailed    = "failed"
 	ProviderActionOutcomeUnknown   = "unknown"
+	providerActionFailureTerminal  = "run_terminal_unknown"
 
 	maxProviderActionIntents     = 256
 	maxProviderActionIDBytes     = 256
@@ -20,6 +21,11 @@ const (
 	maxProviderResourceIDBytes   = 256
 	maxProviderFailureCodeBytes  = 256
 	maxProviderActionResultBytes = 64 << 10
+)
+
+var (
+	ErrProviderActionConflict = errors.New("provider action conflicts with journal")
+	errProviderActionCapacity = errors.New("provider action capacity is exhausted")
 )
 
 // ProviderActionIntent is the credential-free local recovery record for one
@@ -36,10 +42,10 @@ type ProviderActionIntent struct {
 	FailureCode   string          `json:"failure_code,omitempty"`
 }
 
-// PrepareProviderAction commits action identity before dispatch. Exact
-// succeeded or failed actions replay without dispatch. An explicit unknown is
-// reopened only by another exact request, preserving Control's same-action
-// reconciliation contract.
+// PrepareProviderAction commits action identity before dispatch. Every exact
+// existing action replays without dispatch, including an unknown outcome. The
+// current native bridge deliberately does not opt into Control's explicit
+// unknown-action reconciliation until its lifecycle and fence are verified.
 func (store *Store) PrepareProviderAction(key RunKey, intent ProviderActionIntent) (RunJournal, bool, error) {
 	if !validPreparedProviderAction(intent) {
 		return RunJournal{}, false, errors.New("provider action intent is invalid")
@@ -55,18 +61,12 @@ func (store *Store) PrepareProviderAction(key RunKey, intent ProviderActionInten
 				continue
 			}
 			if !sameProviderActionIdentity(*current, intent) {
-				return errors.New("provider action conflicts with journal")
-			}
-			if current.Outcome == ProviderActionOutcomeUnknown {
-				current.Outcome = ""
-				current.Result = nil
-				current.FailureCode = ""
-				dispatch = true
+				return ErrProviderActionConflict
 			}
 			return nil
 		}
 		if len(journal.ProviderActionIntents) >= maxProviderActionIntents {
-			return errors.New("provider action capacity is exhausted")
+			return errProviderActionCapacity
 		}
 		journal.ProviderActionIntents = append(journal.ProviderActionIntents, cloneProviderActionIntent(intent))
 		dispatch = true
@@ -88,11 +88,11 @@ func (store *Store) CompleteProviderAction(key RunKey, completed ProviderActionI
 				continue
 			}
 			if !sameProviderActionIdentity(*current, completed) {
-				return errors.New("provider action completion conflicts with journal")
+				return ErrProviderActionConflict
 			}
 			if current.Outcome != "" {
 				if !sameProviderActionIntent(*current, completed) {
-					return errors.New("provider action completion conflicts with journal")
+					return ErrProviderActionConflict
 				}
 				return nil
 			}
@@ -110,16 +110,35 @@ func (store *Store) RecoverProviderActions(key RunKey, failureCode string) (RunJ
 		return RunJournal{}, errors.New("provider action recovery code is invalid")
 	}
 	return store.mutateJournal(key, func(journal *RunJournal) error {
+		settleUnresolvedProviderActions(journal, failureCode)
+		return nil
+	})
+}
+
+// RecoverProviderAction conservatively settles one possibly committed dispatch
+// after a local persistence acknowledgement failure. A terminal outcome is
+// immutable and therefore survives an exact recovery retry.
+func (store *Store) RecoverProviderAction(key RunKey, actionID, requestDigest, failureCode string) (RunJournal, error) {
+	if !validRequiredString(actionID, maxProviderActionIDBytes) || len(requestDigest) != sha256.Size*2 || !validHex(requestDigest) || !validRequiredString(failureCode, maxProviderFailureCodeBytes) {
+		return RunJournal{}, errors.New("provider action recovery identity is invalid")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
 		for index := range journal.ProviderActionIntents {
 			intent := &journal.ProviderActionIntents[index]
-			if intent.Outcome != "" {
+			if intent.ActionID != actionID {
 				continue
 			}
-			intent.Outcome = ProviderActionOutcomeUnknown
-			intent.Result = nil
-			intent.FailureCode = failureCode
+			if intent.RequestDigest != requestDigest {
+				return ErrProviderActionConflict
+			}
+			if intent.Outcome == "" {
+				intent.Outcome = ProviderActionOutcomeUnknown
+				intent.Result = nil
+				intent.FailureCode = failureCode
+			}
+			return nil
 		}
-		return nil
+		return errors.New("provider action intent does not match journal")
 	})
 }
 
@@ -208,6 +227,21 @@ func validateProviderActionIntents(journal RunJournal) error {
 		}
 		seenKeys[intent.ActionKey] = struct{}{}
 		seenIDs[intent.ActionID] = struct{}{}
+		if (journal.LocalState == "terminal_pending" || journal.LocalState == "cleanup_pending") && intent.Outcome == "" {
+			return errors.New("terminal run journal has an unresolved provider action")
+		}
 	}
 	return nil
+}
+
+func settleUnresolvedProviderActions(journal *RunJournal, failureCode string) {
+	for index := range journal.ProviderActionIntents {
+		intent := &journal.ProviderActionIntents[index]
+		if intent.Outcome != "" {
+			continue
+		}
+		intent.Outcome = ProviderActionOutcomeUnknown
+		intent.Result = nil
+		intent.FailureCode = failureCode
+	}
 }
