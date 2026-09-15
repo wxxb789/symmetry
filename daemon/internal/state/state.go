@@ -151,6 +151,7 @@ type RunJournal struct {
 	NativeUsageRecoveryRequired    bool                              `json:"native_usage_recovery_required,omitempty"`
 	InputCommandIntent             *InputCommandIntent               `json:"input_command_intent,omitempty"`
 	ControlCommandIntents          []ControlCommandIntent            `json:"control_command_intents,omitempty"`
+	ProviderActionIntents          []ProviderActionIntent            `json:"provider_action_intents,omitempty"`
 }
 
 // InputCommandIntent is the durable at-most-once record for one provide_input
@@ -1862,6 +1863,9 @@ func validateJournal(journal RunJournal) error {
 		}
 	}
 	if err := validateControlCommandIntents(journal); err != nil {
+		return err
+	}
+	if err := validateProviderActionIntents(journal); err != nil {
 		return err
 	}
 	return nil
