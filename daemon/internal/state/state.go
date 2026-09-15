@@ -686,6 +686,57 @@ func (store *Store) SetProcessDetails(key RunKey, pid int, identity string, star
 	})
 }
 
+// SetProcessDetailsWithAuthority atomically persists the process marker and
+// its independently releasable containment authority. The single journal
+// mutation prevents recovery from observing a marker without the authority
+// required to verify and release that process.
+func (store *Store) SetProcessDetailsWithAuthority(key RunKey, pid int, identity string, startedAt time.Time, value authority.Supervisor) (RunJournal, error) {
+	if pid <= 0 || !validRequiredString(identity, 4096) || startedAt.IsZero() {
+		return RunJournal{}, errors.New("process details are invalid")
+	}
+	if err := value.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if value.TargetPID != pid || value.TargetIdentity != identity {
+		return RunJournal{}, errors.New("containment authority target does not match process details")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if !journal.hasClaimGrant() {
+			return errors.New("journal has no claim grant")
+		}
+		if journal.LocalState == "cleanup_pending" {
+			return errors.New("cannot register process details during cleanup")
+		}
+		if journal.HasProcessDetails() {
+			if journal.PID != pid || journal.ProcessIdentity != identity {
+				return errors.New("process details cannot replace an uncleared owner")
+			}
+		} else {
+			journal.PID = pid
+			journal.ProcessIdentity = identity
+			journal.StartedAt = startedAt
+		}
+		if journal.ContainmentAuthority != nil {
+			if journal.ContainmentAuthority.Equal(value) {
+				return nil
+			}
+			// A retry after a stop-receipt write must not erase the receipt by
+			// replaying the original authority without its terminal witness.
+			existing := journal.ContainmentAuthority.Clone()
+			existing.StopReceipt = nil
+			candidate := value.Clone()
+			candidate.StopReceipt = nil
+			if existing.Equal(candidate) && journal.ContainmentAuthority.StopReceipt != nil && value.StopReceipt == nil {
+				return nil
+			}
+			return errors.New("containment authority cannot replace an uncleared owner")
+		}
+		cloned := value.Clone()
+		journal.ContainmentAuthority = &cloned
+		return nil
+	})
+}
+
 // SetContainmentAuthority persists the typed binding for an already persisted
 // process marker. It never replaces an uncleared authority with a different
 // launch, so a stale callback cannot retarget recovery.

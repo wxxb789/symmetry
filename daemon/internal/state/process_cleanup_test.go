@@ -3,6 +3,7 @@ package state
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,234 @@ func TestHasProcessDetailsIncludesPartialMarkers(t *testing.T) {
 	}
 	if (RunJournal{}).HasProcessDetails() {
 		t.Fatal("empty process marker was considered unresolved")
+	}
+}
+
+func TestSetProcessDetailsWithAuthorityPersistsCompletePair(t *testing.T) {
+	store := mustStore(t)
+	journal := stoppedTestJournal("atomic-process-authority", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	startedAt := time.Date(2026, 9, 15, 1, 2, 3, 0, time.UTC)
+	authorityValue := testContainmentAuthority(99, "windows:99:created-at")
+
+	updated, err := store.SetProcessDetailsWithAuthority(journal.Key(), authorityValue.TargetPID, authorityValue.TargetIdentity, startedAt, authorityValue)
+	if err != nil {
+		t.Fatalf("SetProcessDetailsWithAuthority() error = %v", err)
+	}
+	if updated.PID != authorityValue.TargetPID || updated.ProcessIdentity != authorityValue.TargetIdentity || !updated.StartedAt.Equal(startedAt) || updated.ContainmentAuthority == nil || !updated.ContainmentAuthority.Equal(authorityValue) {
+		t.Fatalf("updated journal = %#v, want complete process-authority pair", updated)
+	}
+
+	loaded, err := store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatalf("LoadJournal() error = %v", err)
+	}
+	if loaded.PID != authorityValue.TargetPID || loaded.ProcessIdentity != authorityValue.TargetIdentity || !loaded.StartedAt.Equal(startedAt) || loaded.ContainmentAuthority == nil || !loaded.ContainmentAuthority.Equal(authorityValue) {
+		t.Fatalf("loaded journal = %#v, observed marker-only or incomplete authority state", loaded)
+	}
+}
+
+func TestSetProcessDetailsWithAuthorityPreWriteFailurePreservesOldState(t *testing.T) {
+	store := mustStore(t)
+	journal := stoppedTestJournal("atomic-process-authority-prewrite", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	startedAt := time.Date(2026, 9, 15, 2, 2, 3, 0, time.UTC)
+	authorityValue := testContainmentAuthority(100, "windows:100:created-at")
+	restore := store.SetAtomicWriterForTesting(func(string, []byte) error { return errors.New("injected pre-write failure") })
+	_, err := store.SetProcessDetailsWithAuthority(journal.Key(), authorityValue.TargetPID, authorityValue.TargetIdentity, startedAt, authorityValue)
+	restore()
+	if err == nil {
+		t.Fatal("SetProcessDetailsWithAuthority() ignored the pre-write failure")
+	}
+
+	loaded, err := store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatalf("LoadJournal() error = %v", err)
+	}
+	if loaded.PID != 0 || loaded.ProcessIdentity != "" || !loaded.StartedAt.IsZero() || loaded.ContainmentAuthority != nil {
+		t.Fatalf("pre-write failure changed old journal state: %#v", loaded)
+	}
+}
+
+func TestSetProcessDetailsWithAuthorityRetriesPostRenameUnknownOutcomeAsCompletePair(t *testing.T) {
+	store := mustStore(t)
+	journal := stoppedTestJournal("atomic-process-authority-postrename", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	startedAt := time.Date(2026, 9, 15, 3, 2, 3, 0, time.UTC)
+	authorityValue := testContainmentAuthority(101, "windows:101:created-at")
+	restore := store.SetAtomicWriterForTesting(func(path string, data []byte) error {
+		if err := writeAtomic(path, data); err != nil {
+			return err
+		}
+		return errors.New("injected post-rename unknown outcome")
+	})
+	_, err := store.SetProcessDetailsWithAuthority(journal.Key(), authorityValue.TargetPID, authorityValue.TargetIdentity, startedAt, authorityValue)
+	restore()
+	if err == nil {
+		t.Fatal("SetProcessDetailsWithAuthority() hid the post-rename unknown outcome")
+	}
+
+	unknown, err := store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatalf("LoadJournal() after unknown outcome = %v", err)
+	}
+	if unknown.PID != authorityValue.TargetPID || unknown.ProcessIdentity != authorityValue.TargetIdentity || !unknown.StartedAt.Equal(startedAt) || unknown.ContainmentAuthority == nil || !unknown.ContainmentAuthority.Equal(authorityValue) {
+		t.Fatalf("post-rename journal = %#v, want complete pair", unknown)
+	}
+
+	replayed, err := store.SetProcessDetailsWithAuthority(journal.Key(), authorityValue.TargetPID, authorityValue.TargetIdentity, startedAt.Add(time.Minute), authorityValue)
+	if err != nil {
+		t.Fatalf("replayed SetProcessDetailsWithAuthority() error = %v", err)
+	}
+	if replayed.PID != authorityValue.TargetPID || replayed.ProcessIdentity != authorityValue.TargetIdentity || !replayed.StartedAt.Equal(startedAt) || replayed.ContainmentAuthority == nil || !replayed.ContainmentAuthority.Equal(authorityValue) {
+		t.Fatalf("replayed journal = %#v, want original complete pair", replayed)
+	}
+}
+
+func TestSetProcessDetailsWithAuthorityFailsClosedForMismatchesAndCleanup(t *testing.T) {
+	tests := []struct {
+		name      string
+		journal   RunJournal
+		pid       int
+		identity  string
+		mutate    func(*authority.Supervisor)
+		wantState func(RunJournal) bool
+	}{
+		{
+			name:     "authority target pid mismatch",
+			journal:  stoppedTestJournal("atomic-process-authority-mismatch-pid", 1),
+			pid:      102,
+			identity: "windows:102:created-at",
+			mutate:   func(value *authority.Supervisor) { value.TargetPID++ },
+			wantState: func(journal RunJournal) bool {
+				return journal.PID == 0 && journal.ProcessIdentity == "" && journal.StartedAt.IsZero() && journal.ContainmentAuthority == nil
+			},
+		},
+		{
+			name:     "authority target identity mismatch",
+			journal:  stoppedTestJournal("atomic-process-authority-mismatch-identity", 1),
+			pid:      103,
+			identity: "windows:103:created-at",
+			mutate:   func(value *authority.Supervisor) { value.TargetIdentity = "windows:other" },
+			wantState: func(journal RunJournal) bool {
+				return journal.PID == 0 && journal.ProcessIdentity == "" && journal.StartedAt.IsZero() && journal.ContainmentAuthority == nil
+			},
+		},
+		{
+			name:     "existing owner mismatch",
+			journal:  testJournal("atomic-process-authority-existing-owner", 1),
+			pid:      106,
+			identity: "windows:106:created-at",
+			wantState: func(journal RunJournal) bool {
+				return journal.PID == 42 && journal.ProcessIdentity == "windows:42:created-at" && !journal.StartedAt.IsZero() && journal.ContainmentAuthority == nil
+			},
+		},
+		{
+			name: "missing claim",
+			journal: func() RunJournal {
+				journal := stoppedTestJournal("atomic-process-authority-no-claim", 1)
+				journal.LeaseToken = ""
+				journal.LeaseExpiresAt = time.Time{}
+				return journal
+			}(),
+			pid:      104,
+			identity: "windows:104:created-at",
+			wantState: func(journal RunJournal) bool {
+				return journal.PID == 0 && journal.ProcessIdentity == "" && journal.StartedAt.IsZero() && journal.ContainmentAuthority == nil
+			},
+		},
+		{
+			name: "cleanup pending",
+			journal: func() RunJournal {
+				journal := stoppedTestJournal("atomic-process-authority-cleanup", 1)
+				journal.LocalState = "cleanup_pending"
+				journal.TerminalState = "completed"
+				journal.TerminalPendingAt = time.Date(2026, 9, 15, 4, 2, 3, 0, time.UTC)
+				journal.TerminalVerdict = TerminalVerdictAccepted
+				journal.TerminalResolvedAt = journal.TerminalPendingAt
+				return journal
+			}(),
+			pid:      105,
+			identity: "windows:105:created-at",
+			wantState: func(journal RunJournal) bool {
+				return journal.PID == 0 && journal.ProcessIdentity == "" && journal.StartedAt.IsZero() && journal.ContainmentAuthority == nil
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := mustStore(t)
+			if err := store.SaveJournal(test.journal); err != nil {
+				t.Fatal(err)
+			}
+			value := testContainmentAuthority(test.pid, test.identity)
+			if test.mutate != nil {
+				test.mutate(&value)
+			}
+			if _, err := store.SetProcessDetailsWithAuthority(test.journal.Key(), test.pid, test.identity, time.Date(2026, 9, 15, 5, 2, 3, 0, time.UTC), value); err == nil {
+				t.Fatal("SetProcessDetailsWithAuthority() accepted an invalid mutation")
+			}
+			loaded, err := store.LoadJournal(test.journal.Key())
+			if err != nil {
+				t.Fatalf("LoadJournal() error = %v", err)
+			}
+			if !test.wantState(loaded) {
+				t.Fatalf("failed mutation changed journal: %#v", loaded)
+			}
+		})
+	}
+}
+
+func TestSetProcessDetailsWithAuthorityPreservesValidStopReceiptOnReplay(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("atomic-process-authority-receipt", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	authorityValue := testContainmentAuthority(journal.PID, journal.ProcessIdentity)
+	if _, err := store.SetContainmentAuthority(journal.Key(), journal.PID, journal.ProcessIdentity, authorityValue); err != nil {
+		t.Fatal(err)
+	}
+	receipt := authority.StopReceipt{
+		Version:            authority.SupervisorVersion,
+		Status:             "stopped",
+		TargetPID:          authorityValue.TargetPID,
+		TargetIdentity:     authorityValue.TargetIdentity,
+		PipeToken:          authorityValue.PipeToken,
+		JobID:              authorityValue.JobID,
+		SupervisorPID:      authorityValue.SupervisorPID,
+		SupervisorIdentity: authorityValue.SupervisorIdentity,
+	}
+	if _, err := store.RecordContainmentStopReceipt(journal.Key(), journal.PID, journal.ProcessIdentity, receipt); err != nil {
+		t.Fatal(err)
+	}
+
+	replayed, err := store.SetProcessDetailsWithAuthority(journal.Key(), journal.PID, journal.ProcessIdentity, journal.StartedAt.Add(time.Minute), authorityValue)
+	if err != nil {
+		t.Fatalf("SetProcessDetailsWithAuthority() replay error = %v", err)
+	}
+	if replayed.ContainmentAuthority == nil || replayed.ContainmentAuthority.StopReceipt == nil || *replayed.ContainmentAuthority.StopReceipt != receipt {
+		t.Fatalf("replay replaced valid stop receipt: %#v", replayed.ContainmentAuthority)
+	}
+}
+
+func testContainmentAuthority(pid int, identity string) authority.Supervisor {
+	return authority.Supervisor{
+		Version:            authority.SupervisorVersion,
+		Secret:             strings.Repeat("a", authority.SecretBytes*2),
+		TargetPID:          pid,
+		TargetIdentity:     identity,
+		PipeToken:          strings.Repeat("b", authority.TokenBytes*2),
+		JobID:              strings.Repeat("c", authority.TokenBytes*2),
+		SupervisorPID:      999,
+		SupervisorIdentity: "windows:999:supervisor",
 	}
 }
 
