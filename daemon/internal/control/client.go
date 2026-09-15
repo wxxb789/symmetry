@@ -431,6 +431,33 @@ type GoalRunContext struct {
 	Context    GoalContextSnapshot `json:"context"`
 }
 
+// ProviderActionOutcome is the control-plane result classification. Control
+// returns ordinary successful action results without an outcome field; an
+// explicit unknown outcome is returned only after the durable broker has
+// retained an unresolved external effect.
+type ProviderActionOutcome string
+
+const (
+	ProviderActionSucceeded ProviderActionOutcome = "succeeded"
+	ProviderActionUnknown   ProviderActionOutcome = "unknown"
+)
+
+// ProviderActionResponse preserves the exact Control result while exposing
+// only the fields whose shape is part of the provider-action contract. Nested
+// provider-owned payloads remain opaque JSON and are never interpreted here.
+type ProviderActionResponse struct {
+	Outcome        ProviderActionOutcome
+	Result         json.RawMessage
+	Operation      string
+	ResourceID     string
+	WorkItemID     string
+	Projected      bool
+	Delivery       json.RawMessage
+	Resource       json.RawMessage
+	ReadbackStatus string
+	Readback       json.RawMessage
+}
+
 // NewClient creates a machine-authenticated client. baseURL is the API prefix,
 // for example https://control.example.test/api.
 func NewClient(baseURL, machineToken string, httpClient *http.Client, options ...Option) (*Client, error) {
@@ -599,6 +626,54 @@ func (client *Client) Claim(ctx context.Context, runID string, request protocol.
 	}
 	if err := validateClaimResponse(runID, request, response); err != nil {
 		return protocol.ClaimResponse{}, err
+	}
+	return response, nil
+}
+
+// ExecuteProviderAction sends exactly one claim-scoped provider action to
+// Control. The provider token is used only for this request; the machine
+// token and Idempotency-Key are deliberately not sent. Transport failures and
+// 5xx API errors remain errors for the caller to classify as unknown because
+// the external effect may have occurred.
+func (client *Client) ExecuteProviderAction(
+	ctx context.Context,
+	access protocol.ProviderAccess,
+	actionID string,
+	resourceID string,
+	operation string,
+	input json.RawMessage,
+) (ProviderActionResponse, error) {
+	endpoint, err := validateProviderActionRequest(access, actionID, resourceID, operation, input)
+	if err != nil {
+		return ProviderActionResponse{}, err
+	}
+
+	body := struct {
+		ActionID   string          `json:"action_id"`
+		ResourceID string          `json:"resource_id"`
+		Operation  string          `json:"operation"`
+		Input      json.RawMessage `json:"input"`
+	}{
+		ActionID:   actionID,
+		ResourceID: resourceID,
+		Operation:  operation,
+		Input:      append(json.RawMessage(nil), bytes.TrimSpace(input)...),
+	}
+
+	statusCode, responseBody, oversized, requestErr := client.perform(ctx, http.MethodPost, endpoint, nil, access.Token, "", body)
+	if requestErr != nil {
+		return ProviderActionResponse{}, redactProviderActionError(requestErr, access.Token)
+	}
+	if oversized {
+		return ProviderActionResponse{}, responseErrorf("provider action response body exceeds %d bytes", client.maxResponseBytes)
+	}
+	if statusCode != http.StatusOK {
+		return ProviderActionResponse{}, responseErrorf("invalid provider action response: expected HTTP 200 OK, got HTTP %d", statusCode)
+	}
+
+	response, decodeErr := decodeProviderActionResponse(responseBody, actionID, resourceID, operation)
+	if decodeErr != nil {
+		return ProviderActionResponse{}, responseErrorf("decode strict provider action response: %w", decodeErr)
 	}
 	return response, nil
 }
@@ -1268,6 +1343,369 @@ func retryAfter(value string) (time.Duration, bool) {
 		return remaining, true
 	}
 	return 0, false
+}
+
+const providerActionPath = "/api/v1/provider-actions"
+
+const providerActionMaxInputBytes = 1 << 20
+
+type providerActionResponseWire struct {
+	Operation      string          `json:"operation"`
+	ResourceID     string          `json:"resource_id"`
+	WorkItemID     string          `json:"work_item_id"`
+	Projected      *bool           `json:"projected"`
+	Delivery       json.RawMessage `json:"delivery"`
+	Resource       json.RawMessage `json:"resource"`
+	Outcome        *string         `json:"outcome"`
+	ReadbackStatus *string         `json:"readback_status"`
+	Readback       json.RawMessage `json:"readback"`
+}
+
+func validateProviderActionRequest(access protocol.ProviderAccess, actionID, resourceID, operation string, input json.RawMessage) (string, error) {
+	if err := validateProviderAccess(access); err != nil {
+		return "", fmt.Errorf("provider access %w", err)
+	}
+	if access.Path != providerActionPath {
+		return "", errors.New("provider access path must be the documented relative provider-actions path")
+	}
+	if err := validateProviderActionUUID(actionID, "provider action action_id"); err != nil {
+		return "", err
+	}
+	if err := validateProviderActionUUID(resourceID, "provider action resource_id"); err != nil {
+		return "", err
+	}
+	switch operation {
+	case "resource.sync", "change.upsert", "change.update":
+	default:
+		return "", errors.New("provider action operation is not recognized")
+	}
+
+	trimmedInput := bytes.TrimSpace(input)
+	if len(trimmedInput) == 0 || int64(len(trimmedInput)) > providerActionMaxInputBytes {
+		return "", errors.New("provider action input must be a bounded JSON object")
+	}
+	if err := validateJSONObject(trimmedInput); err != nil {
+		return "", fmt.Errorf("provider action input %w", err)
+	}
+	if operation == "resource.sync" {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(trimmedInput, &fields); err != nil {
+			return "", errors.New("provider action input must be a JSON object")
+		}
+		if len(fields) != 0 {
+			return "", errors.New("resource.sync provider action input must be an empty JSON object")
+		}
+	}
+
+	seenResources := make(map[string]struct{}, len(access.Grants))
+	granted := false
+	for _, grant := range access.Grants {
+		if _, duplicate := seenResources[grant.ResourceID]; duplicate {
+			return "", errors.New("provider access grants contain a duplicate resource_id")
+		}
+		seenResources[grant.ResourceID] = struct{}{}
+		if err := validateProviderActionUUID(grant.ResourceID, "provider access grant resource_id"); err != nil {
+			return "", err
+		}
+		if grant.ResourceID != resourceID {
+			continue
+		}
+		for _, grantedOperation := range grant.Operations {
+			if grantedOperation == operation {
+				granted = true
+				break
+			}
+		}
+	}
+	if !granted {
+		return "", errors.New("provider action resource_id and operation are not granted")
+	}
+
+	return strings.TrimPrefix(strings.TrimPrefix(providerActionPath, "/api"), "/"), nil
+}
+
+func validateProviderActionUUID(value, field string) error {
+	if len(value) != 36 {
+		return fmt.Errorf("%s must be a canonical UUID", field)
+	}
+	for index := 0; index < len(value); index++ {
+		if index == 8 || index == 13 || index == 18 || index == 23 {
+			if value[index] != '-' {
+				return fmt.Errorf("%s must be a canonical UUID", field)
+			}
+			continue
+		}
+		character := value[index]
+		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
+			return fmt.Errorf("%s must use lowercase hexadecimal UUID digits", field)
+		}
+	}
+	return nil
+}
+
+func decodeProviderActionResponse(data []byte, expectedActionID, expectedResourceID, expectedOperation string) (ProviderActionResponse, error) {
+	var wire providerActionResponseWire
+	if err := decodeProviderActionObjectJSON(data, &wire, "operation", "resource_id", "projected"); err != nil {
+		return ProviderActionResponse{}, err
+	}
+	fields, err := objectFields(data)
+	if err != nil {
+		return ProviderActionResponse{}, err
+	}
+	if wire.Projected == nil {
+		return ProviderActionResponse{}, errors.New("projected must be a non-null boolean")
+	}
+	if wire.Operation != expectedOperation {
+		return ProviderActionResponse{}, errors.New("operation does not match the request")
+	}
+	if err := validateProviderActionUUID(wire.ResourceID, "provider action response resource_id"); err != nil {
+		return ProviderActionResponse{}, err
+	}
+	if wire.ResourceID != expectedResourceID {
+		return ProviderActionResponse{}, errors.New("resource_id does not match the request")
+	}
+	if expectedActionID == "" {
+		return ProviderActionResponse{}, errors.New("action_id is required")
+	}
+
+	if outcomePresent := hasJSONField(fields, "outcome"); outcomePresent {
+		if wire.Outcome == nil || *wire.Outcome != string(ProviderActionUnknown) {
+			return ProviderActionResponse{}, errors.New("outcome must be unknown when present")
+		}
+		if *wire.Projected {
+			return ProviderActionResponse{}, errors.New("unknown provider action response must not be projected")
+		}
+		if !hasJSONField(fields, "readback_status") || wire.ReadbackStatus == nil || *wire.ReadbackStatus != "unconfirmed" {
+			return ProviderActionResponse{}, errors.New("unknown provider action response requires readback_status=unconfirmed")
+		}
+		if !hasJSONField(fields, "readback") {
+			return ProviderActionResponse{}, errors.New("unknown provider action response requires readback")
+		}
+		if err := validateProviderJSONMap(wire.Readback, "readback"); err != nil {
+			return ProviderActionResponse{}, err
+		}
+		for _, field := range []string{"work_item_id", "delivery", "resource"} {
+			if hasJSONField(fields, field) {
+				return ProviderActionResponse{}, fmt.Errorf("unknown provider action response must not include %s", field)
+			}
+		}
+		return ProviderActionResponse{
+			Outcome:        ProviderActionUnknown,
+			Result:         append(json.RawMessage(nil), data...),
+			Operation:      wire.Operation,
+			ResourceID:     wire.ResourceID,
+			Projected:      *wire.Projected,
+			ReadbackStatus: *wire.ReadbackStatus,
+			Readback:       cloneJSON(wire.Readback),
+		}, nil
+	}
+
+	if hasJSONField(fields, "readback_status") {
+		return ProviderActionResponse{}, errors.New("successful provider action response must not include readback_status")
+	}
+	if hasJSONField(fields, "outcome") {
+		return ProviderActionResponse{}, errors.New("successful provider action response must omit outcome")
+	}
+
+	response := ProviderActionResponse{
+		Outcome:    ProviderActionSucceeded,
+		Result:     append(json.RawMessage(nil), data...),
+		Operation:  wire.Operation,
+		ResourceID: wire.ResourceID,
+		Projected:  *wire.Projected,
+	}
+	if expectedOperation == "resource.sync" {
+		if !hasJSONField(fields, "resource") {
+			return ProviderActionResponse{}, errors.New("resource.sync provider action response requires resource")
+		}
+		if err := validateProviderJSONMap(wire.Resource, "resource"); err != nil {
+			return ProviderActionResponse{}, err
+		}
+		if hasJSONField(fields, "work_item_id") || hasJSONField(fields, "delivery") {
+			return ProviderActionResponse{}, errors.New("resource.sync provider action response has contradictory change fields")
+		}
+		if hasJSONField(fields, "readback") {
+			if err := validateProviderSyncReadback(wire.Readback); err != nil {
+				return ProviderActionResponse{}, err
+			}
+			response.Readback = cloneJSON(wire.Readback)
+		}
+		response.Resource = cloneJSON(wire.Resource)
+		return response, nil
+	}
+
+	if !hasJSONField(fields, "work_item_id") || wire.WorkItemID == "" {
+		return ProviderActionResponse{}, errors.New("change provider action response requires work_item_id")
+	}
+	if err := validateProviderActionUUID(wire.WorkItemID, "provider action response work_item_id"); err != nil {
+		return ProviderActionResponse{}, err
+	}
+	if !hasJSONField(fields, "delivery") {
+		return ProviderActionResponse{}, errors.New("change provider action response requires delivery")
+	}
+	if err := validateProviderJSONMap(wire.Delivery, "delivery"); err != nil {
+		return ProviderActionResponse{}, err
+	}
+	if hasJSONField(fields, "resource") || hasJSONField(fields, "readback") {
+		return ProviderActionResponse{}, errors.New("change provider action response has contradictory provider-owned fields")
+	}
+	response.WorkItemID = wire.WorkItemID
+	response.Delivery = cloneJSON(wire.Delivery)
+	return response, nil
+}
+
+func objectFields(data []byte) (map[string]json.RawMessage, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(bytes.TrimSpace(data), &fields); err != nil || fields == nil {
+		if err != nil {
+			return nil, err
+		}
+		return nil, errors.New("response must be a JSON object")
+	}
+	return fields, nil
+}
+
+// decodeProviderActionObjectJSON preserves protocol-v1 additive response
+// compatibility. The outer object and required fields remain strict, while
+// unknown top-level fields are intentionally ignored by the legacy endpoint.
+func decodeProviderActionObjectJSON(value []byte, target any, required ...string) error {
+	trimmed := bytes.TrimSpace(value)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return errors.New("response must be a JSON object")
+	}
+	fields, err := objectFields(trimmed)
+	if err != nil {
+		return err
+	}
+	for _, field := range required {
+		if _, present := fields[field]; !present {
+			return fmt.Errorf("missing required field %q", field)
+		}
+	}
+	return decodeJSON(trimmed, target)
+}
+
+func hasJSONField(fields map[string]json.RawMessage, name string) bool {
+	_, ok := fields[name]
+	return ok
+}
+
+func validateProviderJSONMap(value json.RawMessage, field string) error {
+	trimmed := bytes.TrimSpace(value)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return fmt.Errorf("%s must be a non-null JSON object", field)
+	}
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &decoded); err != nil || decoded == nil {
+		return fmt.Errorf("%s must be a JSON object", field)
+	}
+	return nil
+}
+
+func validateProviderSyncReadback(value json.RawMessage) error {
+	var status string
+	if err := json.Unmarshal(bytes.TrimSpace(value), &status); err != nil {
+		return errors.New("resource.sync readback must be a string status")
+	}
+	switch status {
+	case "applied", "unconfirmed", "not_applied":
+		return nil
+	default:
+		return errors.New("resource.sync readback status is not recognized")
+	}
+}
+
+func cloneJSON(value json.RawMessage) json.RawMessage {
+	return append(json.RawMessage(nil), value...)
+}
+
+type providerActionRedactedError struct {
+	cause   error
+	message string
+}
+
+func (err *providerActionRedactedError) Error() string { return err.message }
+
+func (err *providerActionRedactedError) Unwrap() error { return err.cause }
+
+func redactProviderActionError(err error, token string) error {
+	if err == nil || token == "" {
+		return err
+	}
+	var apiError *APIError
+	if errors.As(err, &apiError) {
+		return redactProviderActionAPIError(apiError, token)
+	}
+	if strings.Contains(err.Error(), token) {
+		return &providerActionRedactedError{
+			cause:   err,
+			message: strings.ReplaceAll(err.Error(), token, "[REDACTED]"),
+		}
+	}
+	return err
+}
+
+func redactProviderActionAPIError(apiError *APIError, token string) *APIError {
+	redacted := *apiError
+	redacted.Message = strings.ReplaceAll(redacted.Message, token, "[REDACTED]")
+	if strings.Contains(string(redacted.Code), token) {
+		redacted.Code = errorCodeForStatus(redacted.StatusCode)
+		if strings.Contains(string(redacted.Code), token) {
+			redacted.Code = ErrorCode("redacted_error")
+		}
+	}
+
+	redacted.Details = nil
+	if trimmed := bytes.TrimSpace(apiError.Details); len(trimmed) > 0 {
+		if details, ok := redactProviderJSONDetails(trimmed, token); ok {
+			redacted.Details = details
+		}
+	}
+	// A parsed cache may retain the original structured value even when the raw
+	// details were redacted. Provider actions do not need this evidence-batch
+	// projection, so discard it at the credential boundary.
+	redacted.EvidenceBatchConflictDetails = nil
+	redacted.detailsDecodeErr = nil
+	return &redacted
+}
+
+func redactProviderJSONDetails(data []byte, token string) (json.RawMessage, bool) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, false
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return nil, false
+	}
+	encoded, err := json.Marshal(redactProviderJSONValue(value, token))
+	if err != nil || bytes.Contains(encoded, []byte(token)) {
+		return nil, false
+	}
+	return encoded, true
+}
+
+func redactProviderJSONValue(value any, token string) any {
+	switch value := value.(type) {
+	case string:
+		return strings.ReplaceAll(value, token, "[REDACTED]")
+	case []any:
+		for index := range value {
+			value[index] = redactProviderJSONValue(value[index], token)
+		}
+		return value
+	case map[string]any:
+		redacted := make(map[string]any, len(value))
+		for key, nested := range value {
+			redactedKey := strings.ReplaceAll(key, token, "[REDACTED]")
+			redacted[redactedKey] = redactProviderJSONValue(nested, token)
+		}
+		return redacted
+	default:
+		return value
+	}
 }
 
 func validatePathID(field, value string) error {
