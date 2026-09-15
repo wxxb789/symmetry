@@ -467,6 +467,204 @@ func TestFullSupervisorLeaseUsesDurableStopReceiptAndReleasePath(t *testing.T) {
 	}
 }
 
+func TestFullSupervisorLeaseRetriesHandleReleaseWithoutReplayingStop(t *testing.T) {
+	wantRelease := errors.New("job handle release failed")
+	endpoint := containmentSupervisorEndpoint{
+		TargetPID:          71,
+		TargetIdentity:     "windows:71:0000000000000001",
+		SupervisorPID:      72,
+		SupervisorIdentity: "windows:72:0000000000000002",
+		Token:              strings.Repeat("a", authority.TokenBytes*2),
+		JobID:              strings.Repeat("b", authority.TokenBytes*2),
+		Secret:             strings.Repeat("c", authority.SecretBytes*2),
+	}
+	lease := &processContainmentSupervisorLease{
+		endpoint: endpoint,
+		waiter:   &supervisorProcessWait{process: &os.Process{}},
+	}
+	stopRequests := 0
+	releaseRequests := 0
+	previousRequest := requestContainmentSupervisor
+	requestContainmentSupervisor = func(actual containmentSupervisorEndpoint, operation string, _ time.Time) (containmentSupervisorResponse, error) {
+		if actual != endpoint {
+			t.Fatalf("supervisor endpoint = %#v, want %#v", actual, endpoint)
+		}
+		status := "stopped"
+		switch operation {
+		case "close":
+			stopRequests++
+		case "release":
+			releaseRequests++
+			status = "released"
+		default:
+			t.Fatalf("unexpected supervisor operation %q", operation)
+		}
+		return containmentSupervisorResponse{
+			Version:            containmentSupervisorProtocol,
+			Operation:          operation,
+			Status:             status,
+			TargetPID:          actual.TargetPID,
+			TargetIdentity:     actual.TargetIdentity,
+			SupervisorPID:      actual.SupervisorPID,
+			SupervisorIdentity: actual.SupervisorIdentity,
+			Token:              actual.Token,
+			JobID:              actual.JobID,
+			ActiveProcesses:    0,
+		}, nil
+	}
+	t.Cleanup(func() { requestContainmentSupervisor = previousRequest })
+
+	terminated := 0
+	queried := 0
+	closed := 0
+	restoreJobCalls(t,
+		func(syscall.Handle) error {
+			terminated++
+			return nil
+		},
+		func(syscall.Handle) (uint32, error) {
+			queried++
+			return 0, nil
+		},
+		func(syscall.Handle) error {
+			closed++
+			if closed == 1 {
+				return wantRelease
+			}
+			return nil
+		},
+	)
+
+	job := &jobContainment{handle: syscall.Handle(1234), supervisor: lease}
+	first := job.Close()
+	if !errors.Is(first, wantRelease) {
+		t.Fatalf("first Close() = %v, want handle release error %v", first, wantRelease)
+	}
+	if stopRequests != 1 || releaseRequests != 0 || terminated != 1 || queried != 1 || closed != 1 {
+		t.Fatalf("first durable close = stop:%d release:%d terminate:%d query:%d handleClose:%d, want 1, 0, 1, 1, 1", stopRequests, releaseRequests, terminated, queried, closed)
+	}
+	if job.stopReceipt == nil || job.handle == 0 || !job.ContainmentCloseRetryable() {
+		t.Fatalf("first durable close state = receipt:%#v handle:%d retryable:%t, want receipt, retained handle, retryable", job.stopReceipt, job.handle, job.ContainmentCloseRetryable())
+	}
+
+	second := job.Close()
+	if second != nil {
+		t.Fatalf("second Close() = %v, want local handle release success", second)
+	}
+	if stopRequests != 1 || releaseRequests != 0 || terminated != 1 || queried != 1 || closed != 2 || job.handle != 0 {
+		t.Fatalf("second durable close = stop:%d release:%d terminate:%d query:%d handleClose:%d handle:%d, want 1, 0, 1, 1, 2, 0", stopRequests, releaseRequests, terminated, queried, closed, job.handle)
+	}
+	if job.ContainmentCloseRetryable() {
+		t.Fatal("successful local handle release retained retry capability")
+	}
+
+	third := job.Close()
+	if third != nil {
+		t.Fatalf("third Close() = %v, want idempotent success", third)
+	}
+	if stopRequests != 1 || releaseRequests != 0 || terminated != 1 || queried != 1 || closed != 2 {
+		t.Fatalf("third durable close repeated physical work = stop:%d release:%d terminate:%d query:%d handleClose:%d, want 1, 0, 1, 1, 2", stopRequests, releaseRequests, terminated, queried, closed)
+	}
+}
+
+func TestFullSupervisorLeaseRetainsBaseContainmentErrorsWithoutHandleRetry(t *testing.T) {
+	terminationErr := errors.New("job termination failed")
+	waitErr := errors.New("job observation failed")
+	for _, test := range []struct {
+		name      string
+		terminate func(syscall.Handle) error
+		query     func(syscall.Handle) (uint32, error)
+		wait      error
+		want      error
+	}{
+		{
+			name: "termination",
+			terminate: func(syscall.Handle) error {
+				return terminationErr
+			},
+			query: func(syscall.Handle) (uint32, error) {
+				t.Fatal("query ran after Job termination failure")
+				return 0, nil
+			},
+			want: terminationErr,
+		},
+		{
+			name:      "wait",
+			terminate: func(syscall.Handle) error { return nil },
+			query: func(syscall.Handle) (uint32, error) {
+				t.Fatal("query ran through the injected wait failure")
+				return 0, nil
+			},
+			wait: waitErr,
+			want: waitErr,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			endpoint := containmentSupervisorEndpoint{
+				TargetPID:          71,
+				TargetIdentity:     "windows:71:0000000000000001",
+				SupervisorPID:      72,
+				SupervisorIdentity: "windows:72:0000000000000002",
+				Token:              strings.Repeat("a", authority.TokenBytes*2),
+				JobID:              strings.Repeat("b", authority.TokenBytes*2),
+				Secret:             strings.Repeat("c", authority.SecretBytes*2),
+			}
+			lease := &processContainmentSupervisorLease{
+				endpoint: endpoint,
+				waiter:   &supervisorProcessWait{process: &os.Process{}},
+			}
+			stopRequests := 0
+			previousRequest := requestContainmentSupervisor
+			requestContainmentSupervisor = func(actual containmentSupervisorEndpoint, operation string, _ time.Time) (containmentSupervisorResponse, error) {
+				if operation != "close" {
+					t.Fatalf("unexpected supervisor operation %q", operation)
+				}
+				stopRequests++
+				return containmentSupervisorResponse{
+					Version:            containmentSupervisorProtocol,
+					Operation:          operation,
+					Status:             "stopped",
+					TargetPID:          actual.TargetPID,
+					TargetIdentity:     actual.TargetIdentity,
+					SupervisorPID:      actual.SupervisorPID,
+					SupervisorIdentity: actual.SupervisorIdentity,
+					Token:              actual.Token,
+					JobID:              actual.JobID,
+					ActiveProcesses:    0,
+				}, nil
+			}
+			t.Cleanup(func() { requestContainmentSupervisor = previousRequest })
+
+			closed := 0
+			restoreJobCalls(t, test.terminate, test.query, func(syscall.Handle) error {
+				closed++
+				return nil
+			})
+			if test.wait != nil {
+				restoreJobWait(t, func(syscall.Handle, time.Time, func(syscall.Handle) (uint32, error)) error {
+					return test.wait
+				})
+			}
+
+			job := &jobContainment{handle: syscall.Handle(1234), supervisor: lease}
+			first := job.Close()
+			if !errors.Is(first, test.want) {
+				t.Fatalf("first Close() = %v, want base error %v", first, test.want)
+			}
+			if job.stopReceipt == nil || job.ContainmentCloseRetryable() {
+				t.Fatalf("base-error state = receipt:%#v retryable:%t, want receipt and no retry", job.stopReceipt, job.ContainmentCloseRetryable())
+			}
+			second := job.Close()
+			if !errors.Is(second, test.want) {
+				t.Fatalf("second Close() = %v, want retained base error %v", second, test.want)
+			}
+			if stopRequests != 1 || closed != 0 || job.handle == 0 {
+				t.Fatalf("base-error retry state = stop:%d handleClose:%d handle:%d, want 1, 0, retained handle", stopRequests, closed, job.handle)
+			}
+		})
+	}
+}
+
 func TestPartialJobCloseRetainsBaseErrorAcrossHelperRetry(t *testing.T) {
 	terminationErr := errors.New("job termination failed")
 	waitErr := errors.New("job observation failed")

@@ -91,12 +91,15 @@ type extendedLimitInformation struct {
 }
 
 type jobContainment struct {
-	mutex                          sync.Mutex
-	handle                         syscall.Handle
-	supervisor                     containmentSupervisorLease
-	stopReceipt                    *authority.StopReceipt
-	closeStarted                   bool
-	closeErr                       error
+	mutex        sync.Mutex
+	handle       syscall.Handle
+	supervisor   containmentSupervisorLease
+	stopReceipt  *authority.StopReceipt
+	closeStarted bool
+	closeErr     error
+	// Set only when stop proof succeeded and the daemon-side handle close was
+	// the sole failed local cleanup step.
+	handleReleaseRetryable         bool
 	partialCleanupPending          bool
 	partialContainmentBaseCloseErr error
 }
@@ -157,19 +160,21 @@ func (job *jobContainment) LeaseRenewalAvailable() bool {
 	return ok
 }
 
-// ContainmentCloseRetryable reports whether only a partial supervisor cleanup
-// remains retryable. A durable supervisor close error never opts into a second
-// physical stop/release attempt from the Process finalizer.
+// ContainmentCloseRetryable reports whether Close may retry only a local
+// cleanup step. Partial supervisor cleanup and a daemon-side Job handle close
+// failure after a durable stop receipt are retryable; neither case replays a
+// physical stop or helper release.
 func (job *jobContainment) ContainmentCloseRetryable() bool {
 	if job == nil {
 		return false
 	}
 	job.mutex.Lock()
 	defer job.mutex.Unlock()
-	if _, partial := job.supervisor.(containmentSupervisorPartialLease); !partial {
-		return false
+	if _, partial := job.supervisor.(containmentSupervisorPartialLease); partial {
+		return job.partialCleanupPending || job.handle != 0
 	}
-	return job.partialCleanupPending || job.handle != 0
+	_, durable := job.supervisor.(containmentSupervisorAuthorityProvider)
+	return durable && job.stopReceipt != nil && job.handleReleaseRetryable && job.handle != 0
 }
 
 // RenewLease forwards a relative deadline to the independent supervisor while
@@ -476,10 +481,15 @@ func (job *jobContainment) Close() error {
 			return job.closeErr
 		}
 		if job.stopReceipt != nil {
+			if job.closeErr != nil && !job.handleReleaseRetryable {
+				return job.closeErr
+			}
 			if err := job.releaseHandleLocked(); err != nil {
+				job.handleReleaseRetryable = true
 				job.closeErr = err
 				return err
 			}
+			job.handleReleaseRetryable = false
 			job.closeErr = nil
 			return nil
 		}
@@ -547,8 +557,10 @@ func (job *jobContainment) Close() error {
 		// proved the Job empty. The independent helper remains retained until
 		// ReleaseContainment is called after durable receipt persistence.
 		job.closeErr = job.releaseHandleLocked()
+		job.handleReleaseRetryable = job.stopReceipt != nil && job.handle != 0 && job.closeErr != nil
 		return errors.Join(stopErr, supervisorErr, job.closeErr)
 	}
+	job.handleReleaseRetryable = false
 	job.closeErr = errors.Join(stopErr, supervisorErr)
 	return job.closeErr
 }
