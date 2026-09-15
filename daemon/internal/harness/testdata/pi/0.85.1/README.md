@@ -137,3 +137,25 @@ alternate option syntax are rejected before local launch side effects. The app
 and adapter use the same validator. Credentials remain in the existing local
 environment/configuration path; this guard does not verify extension behavior
 loaded through those configurations or advertise native support.
+
+## Opt-in provider bridge tool
+
+`TestNativePiProviderBridgeAction` loads the daemon-generated extension into the
+installed Pi 0.85.1 binary, uses a synthetic numeric-loopback Responses gateway
+to issue one `symmetry_resource_sync` tool call, and verifies that the extension
+reaches the nonce-protected bridge from the exact bound Pi process. The bridge
+derives one stable action ID from Pi's native `call_id|item_id` tool identity and
+does not expose the provider token through argv, environment, or extension source.
+
+Run it explicitly from `daemon/`:
+
+```text
+SYMMETRY_PI_PROVIDER_ACTION_SMOKE=1 \
+SYMMETRY_PI_NATIVE_SMOKE_EXECUTABLE=/absolute/path/to/pi \
+go test -run '^TestNativePiProviderBridgeAction$' -count=1 -timeout=90s -v ./internal/harness/pi
+```
+
+This is deterministic transport and tool-lifecycle evidence only. It uses no
+provider credential and does not prove the Control broker's live GitHub/Azure
+operation, provider accounting, or permission revocation. Production Pi probing
+therefore continues to advertise `provider_access: false`.
