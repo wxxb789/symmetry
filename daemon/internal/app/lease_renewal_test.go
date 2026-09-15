@@ -210,6 +210,31 @@ func TestRelativeLeaseDeadlineIgnoresAbsoluteExpiry(t *testing.T) {
 	}
 }
 
+func TestClaimStartLeaseValidationAcceptsSafeLegacyExpiryOnly(t *testing.T) {
+	now := time.Date(2026, 9, 15, 1, 2, 3, 0, time.UTC)
+	daemon := &daemon{options: options{
+		clock:      func() time.Time { return now },
+		localClock: func() time.Time { return now },
+	}}
+
+	if err := daemon.validateClaimLeaseForStart(protocol.ClaimResponse{
+		LeaseExpiresAt: now.Add(leaseSafetyMargin + time.Second),
+	}, now, "process"); err != nil {
+		t.Fatalf("safe legacy expiry rejected: %v", err)
+	}
+	for _, expiry := range []time.Time{now.Add(leaseSafetyMargin), now.Add(-time.Second)} {
+		if err := daemon.validateClaimLeaseForStart(protocol.ClaimResponse{LeaseExpiresAt: expiry}, now, "process"); err == nil {
+			t.Fatalf("unsafe legacy expiry %s accepted", expiry)
+		}
+	}
+	if err := daemon.validateClaimLeaseForStart(protocol.ClaimResponse{
+		LeaseExpiresAt:   now.Add(-time.Hour),
+		LeaseRemainingMS: 30_000,
+	}, now, "process"); err != nil {
+		t.Fatalf("positive relative lease was rejected by stale absolute expiry: %v", err)
+	}
+}
+
 type leaseTestClock struct {
 	now time.Time
 }

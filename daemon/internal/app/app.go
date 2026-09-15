@@ -2451,6 +2451,10 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		daemon.queueFailure(ctx, key, "queue_running", err)
 		return
 	}
+	if leaseErr := daemon.validateClaimLeaseForStart(claim, claimStarted, "process"); leaseErr != nil {
+		daemon.queueFailure(ctx, key, "initial_lease_deadline", leaseErr)
+		return
+	}
 	daemon.signalOutboxFor(key)
 	if _, err := daemon.store.MarkWorkspaceRecoveryRequired(key); err != nil {
 		daemon.log.Error("mark_workspace_recovery_required_failed", "run_id", assignment.RunID, "error", err)
@@ -2507,9 +2511,9 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 	})
 	initialLeaseDeadlineAt := leaseDeadlineAt(claim, claimStarted)
 	initialLeaseDeadline := remainingLeaseDeadlineAt(initialLeaseDeadlineAt, daemon.localNow())
-	if claim.LeaseRemainingMS > 0 && initialLeaseDeadline <= 0 {
+	if leaseErr := daemon.validateClaimLeaseForStart(claim, claimStarted, "process"); leaseErr != nil {
 		if !daemon.isCancelled(key) {
-			daemon.queueFailure(ctx, key, "initial_lease_deadline", errors.New("server lease remaining time was consumed before process startup"))
+			daemon.queueFailure(ctx, key, "initial_lease_deadline", leaseErr)
 		}
 		return
 	}
@@ -3109,6 +3113,9 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 			returnErr = taskResultFailure(protocol.TaskResultReasonUnknownOutcome, returnErr)
 		}
 	}()
+	if err := daemon.validateClaimLeaseForStart(claim, claim.RequestStartedAt, "native process"); err != nil {
+		return err
+	}
 	if err := admission.Validate(); err != nil {
 		return fmt.Errorf("validate Goal admission: %w", err)
 	}
@@ -3354,8 +3361,8 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 	})
 	initialLeaseDeadlineAt := leaseDeadlineAt(claim, claim.RequestStartedAt)
 	initialLeaseDeadline := remainingLeaseDeadlineAt(initialLeaseDeadlineAt, daemon.localNow())
-	if claim.LeaseRemainingMS > 0 && initialLeaseDeadline <= 0 {
-		return errors.New("server lease remaining time was consumed before native process startup")
+	if err := daemon.validateClaimLeaseForStart(claim, claim.RequestStartedAt, "native process"); err != nil {
+		return err
 	}
 	if initialLeaseDeadline > 0 {
 		daemon.mu.Lock()
@@ -7060,6 +7067,30 @@ func (daemon *daemon) renewalThreshold() time.Duration {
 // journaling can only consume authority; they never mint extra time.
 func (daemon *daemon) remainingLeaseDeadline(claim protocol.ClaimResponse, requestStarted time.Time) time.Duration {
 	return remainingLeaseDeadlineAt(leaseDeadlineAt(claim, requestStarted), daemon.localNow())
+}
+
+// validateClaimLeaseForStart keeps replayed claims from crossing a local
+// process or native-session boundary after their server lease is already
+// unsafe. Relative responses remain authoritative when present; legacy
+// responses must prove enough absolute wall-clock time for the safety margin.
+func (daemon *daemon) validateClaimLeaseForStart(claim protocol.ClaimResponse, requestStarted time.Time, subject string) error {
+	if claim.LeaseRemainingMS > 0 {
+		if remainingLeaseDeadlineAt(leaseDeadlineAt(claim, requestStarted), daemon.localNow()) <= 0 {
+			return fmt.Errorf("server lease remaining time was consumed before %s startup", subject)
+		}
+		return nil
+	}
+	// Control validation rejects a missing absolute expiry before a real claim
+	// reaches this boundary. Keep lower-level callers compatible when they
+	// intentionally omit the legacy field, but never accept an unsafe value
+	// when it is present.
+	if claim.LeaseExpiresAt.IsZero() {
+		return nil
+	}
+	if !claim.LeaseExpiresAt.After(daemon.now().Add(leaseSafetyMargin)) {
+		return fmt.Errorf("server lease expiry was consumed before %s startup", subject)
+	}
+	return nil
 }
 
 func leaseDeadlineAt(claim protocol.ClaimResponse, requestStarted time.Time) time.Time {

@@ -716,6 +716,59 @@ func TestClaimRetryReusesPersistedClaimID(t *testing.T) {
 	}
 }
 
+func TestLegacyClaimExpiryRejectsProcessBeforeWorkspaceOrProcessStart(t *testing.T) {
+	store, err := state.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	now := time.Date(2026, 9, 15, 1, 2, 3, 0, time.UTC)
+	workspaceService := &countingWorkspace{}
+	startCalls := 0
+	control := &fixedClaimControl{
+		fakeControl: &fakeControl{},
+		response: protocol.ClaimResponse{
+			LeaseExpiresAt: now.Add(leaseSafetyMargin),
+			Work:           protocol.Work{Goal: "work"},
+		},
+	}
+	daemon := &daemon{
+		config:    testConfig(t),
+		store:     store,
+		control:   control,
+		workspace: workspaceService,
+		log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		start: func(context.Context, execution.Invocation, execution.Sink) (Process, error) {
+			startCalls++
+			return fakeProcess{result: execution.Result{}}, nil
+		},
+		options: options{
+			newID:      ids(),
+			clock:      func() time.Time { return now },
+			localClock: func() time.Time { return now },
+		},
+		runtimeID:    "runtime-1",
+		runtimeEpoch: 1,
+		running:      make(map[state.RunKey]*runningRun),
+		slots:        make(chan struct{}, 1),
+	}
+
+	daemon.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: control.response.Work})
+	daemon.workers.Wait()
+
+	if workspaceService.prepareCalls != 0 || startCalls != 0 {
+		t.Fatalf("unsafe legacy claim caused side effects: workspace prepares=%d process starts=%d", workspaceService.prepareCalls, startCalls)
+	}
+	journal, err := store.LoadJournal(state.RunKey{RunID: "run-1", Generation: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.TerminalState != "failed" || len(journal.PendingTransitions) == 0 || journal.PendingTransitions[len(journal.PendingTransitions)-1].State != "failed" {
+		t.Fatalf("journal = %#v, want a durable failed transition", journal)
+	}
+}
+
 func TestCommandAcknowledgementIsIdempotentAndUsesAllowedOutcomes(t *testing.T) {
 	store, key := claimedStore(t)
 	if _, err := store.SetLocalState(key, "waiting_for_input"); err != nil {
@@ -7155,6 +7208,26 @@ type fakeControl struct {
 	providerAccess    *protocol.ProviderAccess
 }
 
+type fixedClaimControl struct {
+	*fakeControl
+	response protocol.ClaimResponse
+}
+
+func (client *fixedClaimControl) Claim(_ context.Context, runID string, request protocol.ClaimRequest) (protocol.ClaimResponse, error) {
+	client.claimCalls++
+	response := client.response
+	response.RunID = runID
+	response.Generation = request.Generation
+	response.ClaimID = request.ClaimID
+	if response.TaskID == "" {
+		response.TaskID = "task-1"
+	}
+	if response.LeaseToken == "" {
+		response.LeaseToken = "lease"
+	}
+	return response, nil
+}
+
 type restartRecoveryControl struct {
 	mutex                sync.Mutex
 	calls                []string
@@ -8335,6 +8408,21 @@ type fakeWorkspace struct {
 	recoveredRun   workspace.RunRef
 	recoveredPath  string
 }
+
+type countingWorkspace struct {
+	prepareCalls int
+}
+
+func (service *countingWorkspace) Prepare(_ context.Context, key string, run workspace.RunRef) (workspace.Prepared, error) {
+	service.prepareCalls++
+	return workspace.Prepared{Path: "C:\\workspace", BindingKey: key, Run: run}, nil
+}
+
+func (*countingWorkspace) Recover(_ context.Context, key string, run workspace.RunRef, path string) (workspace.Prepared, error) {
+	return workspace.Prepared{Path: path, BindingKey: key, Run: run}, nil
+}
+
+func (*countingWorkspace) Cleanup(context.Context, workspace.Prepared, bool) error { return nil }
 
 func (*fakeWorkspace) Prepare(_ context.Context, key string, run workspace.RunRef) (workspace.Prepared, error) {
 	return workspace.Prepared{Path: "C:\\workspace", BindingKey: key, Run: run}, nil

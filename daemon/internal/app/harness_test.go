@@ -3254,6 +3254,44 @@ func TestGoalAdmissionRejectsProviderAccessBeforeNativeLaunch(t *testing.T) {
 	}
 }
 
+func TestLegacyClaimExpiryRejectsGoalBeforeWorkspaceOrAdapterStart(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	now := time.Date(2026, 9, 15, 1, 2, 3, 0, time.UTC)
+	app, store, session, controlClient := nativeAdmissionDaemon(t, admission, validNativeTaskResult(t, admission), nil)
+	defer store.Close()
+	app.options.clock = func() time.Time { return now }
+	app.options.localClock = func() time.Time { return now }
+	controlClient.claimLeaseExpiresAt = now.Add(leaseSafetyMargin)
+
+	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
+	app.workers.Wait()
+
+	if len(session.calls) != 0 {
+		t.Fatalf("unsafe legacy claim started native adapter: %#v", session.calls)
+	}
+	workspaceService := app.workspace.(*fakeWorkspace)
+	if workspaceService.prepareCalls != 0 || workspaceService.recoverCalls != 0 {
+		t.Fatalf("unsafe legacy claim caused workspace side effects: prepare=%d recover=%d", workspaceService.prepareCalls, workspaceService.recoverCalls)
+	}
+	sessions, err := store.ListGoalSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("unsafe legacy claim persisted Goal sessions: %#v", sessions)
+	}
+	journal, err := store.LoadJournal(state.RunKey{RunID: "run-1", Generation: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.TerminalState != "failed" || len(journal.PendingTransitions) != 1 {
+		t.Fatalf("journal = %#v, want one durable failed transition", journal)
+	}
+}
+
 func TestGoalAdmissionLeavesProviderAccessNilForNativeHarness(t *testing.T) {
 	admission, present, err := parseAdmissionInput(validAdmissionInput())
 	if err != nil || !present {
@@ -3640,17 +3678,18 @@ func canonicalGoalContextHash(t *testing.T, snapshot control.GoalContextSnapshot
 
 type nativeAdmissionControl struct {
 	*fakeControl
-	work             protocol.Work
-	admission        protocol.Admission
-	contextSnapshot  *control.GoalContextSnapshot
-	providerAccess   *protocol.ProviderAccess
-	harnessSessionID *string
-	harnessBindingID *string
-	attachSessionID  string
-	attachErr        error
-	stopReceiptID    string
-	calls            []string
-	fenceCalls       []nativeAdmissionFenceCall
+	work                protocol.Work
+	admission           protocol.Admission
+	contextSnapshot     *control.GoalContextSnapshot
+	providerAccess      *protocol.ProviderAccess
+	claimLeaseExpiresAt time.Time
+	harnessSessionID    *string
+	harnessBindingID    *string
+	attachSessionID     string
+	attachErr           error
+	stopReceiptID       string
+	calls               []string
+	fenceCalls          []nativeAdmissionFenceCall
 }
 
 type nativeAdmissionFenceCall struct {
@@ -3665,7 +3704,11 @@ func (client *nativeAdmissionControl) recordFenceCall(kind, runID string, fence 
 
 func (client *nativeAdmissionControl) Claim(_ context.Context, runID string, request protocol.ClaimRequest) (protocol.ClaimResponse, error) {
 	client.claimCalls++
-	return protocol.ClaimResponse{RunID: runID, TaskID: "task-1", Generation: request.Generation, ClaimID: request.ClaimID, LeaseToken: "lease", LeaseExpiresAt: time.Now().Add(time.Minute), Work: client.work, ProviderAccess: client.providerAccess, HarnessSessionID: client.harnessSessionID, HarnessBindingID: client.harnessBindingID}, nil
+	leaseExpiresAt := client.claimLeaseExpiresAt
+	if leaseExpiresAt.IsZero() {
+		leaseExpiresAt = time.Now().Add(time.Minute)
+	}
+	return protocol.ClaimResponse{RunID: runID, TaskID: "task-1", Generation: request.Generation, ClaimID: request.ClaimID, LeaseToken: "lease", LeaseExpiresAt: leaseExpiresAt, Work: client.work, ProviderAccess: client.providerAccess, HarnessSessionID: client.harnessSessionID, HarnessBindingID: client.harnessBindingID}, nil
 }
 
 func (client *nativeAdmissionControl) AttachHarnessSession(_ context.Context, runID string, request control.GoalSessionAttachRequest) (control.GoalSessionReceipt, error) {
