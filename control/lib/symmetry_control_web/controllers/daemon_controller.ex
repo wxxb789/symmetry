@@ -113,9 +113,25 @@ defmodule SymmetryControlWeb.DaemonController do
 
     with :ok <- owns_run(conn, run_id),
          {:ok, {run, task, provider_access}} <- claim_with_provider_access(run_id, request) do
-      json(conn, Protocol.claimed_run(run, task, provider_access, DateTime.utc_now()))
+      response =
+        Protocol.claimed_run(run, task, provider_access, claim_response_time(conn))
+
+      case response do
+        %{lease_remaining_ms: remaining} when is_integer(remaining) and remaining > 0 ->
+          json(conn, response)
+
+        _ ->
+          Protocol.error(conn, :ownership_lost)
+      end
     else
       {:error, reason} -> Protocol.error(conn, reason)
+    end
+  end
+
+  defp claim_response_time(conn) do
+    case Map.get(conn.private, :claim_server_time) do
+      %DateTime{} = server_time -> server_time
+      _ -> DateTime.utc_now()
     end
   end
 

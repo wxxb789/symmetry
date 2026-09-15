@@ -589,6 +589,40 @@ defmodule SymmetryControlWeb.ProtocolControllerTest do
     )
   end
 
+  test "claim replay returns ownership_lost when its response render observes an expired lease",
+       %{
+         conn: conn
+       } do
+    {machine_id, machine_token} = enroll(conn)
+    runtime_id = register(conn, machine_id, machine_token)
+    _task_id = submit_and_assign(conn)
+    {run_id, generation, fence} = claim(conn, machine_token, runtime_id)
+    run = Repo.get!(Run, run_id)
+
+    replay =
+      bearer(conn, machine_token)
+      |> put("/api/v1/runs/#{run_id}/claims/#{fence["claim_id"]}", %{
+        "runtime_id" => runtime_id,
+        "runtime_epoch" => 1,
+        "generation" => generation
+      })
+      |> json_response(200)
+
+    assert is_integer(replay["lease_remaining_ms"]) and replay["lease_remaining_ms"] > 0
+
+    assert_error(
+      bearer(conn, machine_token)
+      |> put_private(:claim_server_time, DateTime.add(run.lease_expires_at, 1, :millisecond))
+      |> put("/api/v1/runs/#{run_id}/claims/#{fence["claim_id"]}", %{
+        "runtime_id" => runtime_id,
+        "runtime_epoch" => 1,
+        "generation" => generation
+      }),
+      409,
+      "ownership_lost"
+    )
+  end
+
   test "task commands are exact, idempotent command resources", %{conn: conn} do
     task_id = submit_task(conn)
     key = "cancel-#{System.unique_integer([:positive])}"
