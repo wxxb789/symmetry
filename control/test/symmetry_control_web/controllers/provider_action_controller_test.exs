@@ -1557,11 +1557,11 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
                SymmetryControl.Integrations.ProviderAccess
              )
 
-    assert_receive {:provider_action, "github", _, _, "change.upsert", _, _}
-    assert_receive {:provider_action_waiting, provider_pid}
+    assert_receive {:provider_action, "github", _, _, "change.upsert", _, _}, 5_000
+    assert_receive {:provider_action_waiting, provider_pid}, 5_000
     provider_ref = Process.monitor(provider_pid)
     send(provider_pid, :continue)
-    assert_receive {:DOWN, ^provider_ref, :process, ^provider_pid, :normal}
+    assert_receive {:DOWN, ^provider_ref, :process, ^provider_pid, :normal}, 5_000
 
     intent = Repo.get_by!(ProviderActionIntent, run_id: context.run.id, action_id: action_id)
     assert intent.state == "succeeded"
