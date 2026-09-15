@@ -28,6 +28,7 @@ const (
 
 	piProviderActionFailureControlCanceled  = "control_action_canceled"
 	piProviderActionFailureControlResponse  = "control_response_invalid"
+	piProviderActionFailureControlInFlight  = "control_action_in_flight"
 	piProviderActionFailureControlUnknown   = "control_action_unknown"
 	piProviderActionFailureControlServer    = "control_server_unknown"
 	piProviderActionFailureControlTransport = "control_transport_unknown"
@@ -371,6 +372,8 @@ func mapPiProviderActionError(err error) pi.ProviderBridgeResponse {
 	var apiError *control.APIError
 	if errors.As(err, &apiError) && apiError != nil {
 		switch {
+		case apiError.Code == control.StateConflict:
+			return piProviderActionUnknown(piProviderActionFailureControlInFlight)
 		case apiError.StatusCode >= http.StatusBadRequest && apiError.StatusCode < http.StatusInternalServerError:
 			return pi.ProviderBridgeResponse{
 				Outcome:     pi.ProviderBridgeOutcomeFailed,

@@ -187,6 +187,9 @@ func TestPiProviderBridgeExecutorMapsExplicitUnknownAndPreservesSafeResult(t *te
 
 func TestPiProviderBridgeExecutorMapsAllDefiniteHTTP4xxToFailed(t *testing.T) {
 	for status := http.StatusBadRequest; status < http.StatusInternalServerError; status++ {
+		if status == http.StatusConflict {
+			continue
+		}
 		t.Run(fmt.Sprintf("status_%d", status), func(t *testing.T) {
 			stub := &piProviderActionControlStub{
 				fn: func(context.Context, protocol.ProviderAccess, string, string, string, json.RawMessage) (control.ProviderActionResponse, error) {
@@ -208,6 +211,43 @@ func TestPiProviderBridgeExecutorMapsAllDefiniteHTTP4xxToFailed(t *testing.T) {
 			}
 			if stub.callCount() != 1 {
 				t.Fatalf("status %d call count = %d, want one call and no retry", status, stub.callCount())
+			}
+		})
+	}
+}
+
+func TestPiProviderBridgeExecutorMapsActiveControlIntentToUnknown(t *testing.T) {
+	stub := &piProviderActionControlStub{
+		fn: func(context.Context, protocol.ProviderAccess, string, string, string, json.RawMessage) (control.ProviderActionResponse, error) {
+			return control.ProviderActionResponse{}, &control.APIError{
+				StatusCode: http.StatusConflict,
+				Code:       control.StateConflict,
+				Message:    "active provider dispatch " + testPiProviderToken,
+			}
+		},
+	}
+	executor := newPiProviderActionTestExecutor(t, stub, testPiProviderAccess())
+	got := callPiProviderActionExecutor(t, executor, context.Background(), testPiProviderActionID, testPiProviderRequest())
+	if got.Outcome != pi.ProviderBridgeOutcomeUnknown || got.FailureCode != piProviderActionFailureControlInFlight || len(got.Result) != 0 {
+		t.Fatalf("state_conflict mapping = %#v", got)
+	}
+	if stub.callCount() != 1 || strings.Contains(fmt.Sprintf("%#v", got), testPiProviderToken) {
+		t.Fatalf("state_conflict call/result = calls:%d result:%#v", stub.callCount(), got)
+	}
+}
+
+func TestPiProviderBridgeExecutorMapsDefinitiveConflictToFailed(t *testing.T) {
+	for _, code := range []control.ErrorCode{control.IdempotencyConflict, control.OwnershipLost} {
+		t.Run(string(code), func(t *testing.T) {
+			stub := &piProviderActionControlStub{
+				fn: func(context.Context, protocol.ProviderAccess, string, string, string, json.RawMessage) (control.ProviderActionResponse, error) {
+					return control.ProviderActionResponse{}, &control.APIError{StatusCode: http.StatusConflict, Code: code}
+				},
+			}
+			executor := newPiProviderActionTestExecutor(t, stub, testPiProviderAccess())
+			got := callPiProviderActionExecutor(t, executor, context.Background(), testPiProviderActionID, testPiProviderRequest())
+			if got.Outcome != pi.ProviderBridgeOutcomeFailed || got.FailureCode != "control_rejected_409" {
+				t.Fatalf("%s mapping = %#v", code, got)
 			}
 		})
 	}
