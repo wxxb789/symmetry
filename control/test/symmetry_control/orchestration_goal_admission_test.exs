@@ -1290,6 +1290,76 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     assert assigned_execution.pending_assignment == nil
   end
 
+  test "Goal handoff claim rejects an assigned Run on a different machine without advancing authority" do
+    {source_task, _goal_id} = insert_goal_task(max_run_attempts: 2)
+    source_item = Repo.get!(WorkItem, source_task.work_item_id)
+
+    source_runtime =
+      register_runtime("handoff-claim-source",
+        handoff?: true,
+        repository_resource_id: source_item.repository_resource_id
+      )
+
+    source_run = complete_source_run!(source_task, source_runtime)
+    target_task = insert_handoff_successor!(source_task, source_run)
+
+    target_runtime =
+      register_runtime("handoff-claim-other-machine",
+        handoff?: true,
+        repository_resource_id: source_item.repository_resource_id
+      )
+
+    assert target_runtime.machine_id != source_runtime.machine_id
+    assert target_runtime.repository_resource_id == source_runtime.repository_resource_id
+    assert target_runtime.agent_profile == source_runtime.agent_profile
+    assert target_runtime.workspace == source_runtime.workspace
+    assert target_runtime.capabilities == source_runtime.capabilities
+
+    target_run = insert_assigned_run!(target_task, target_runtime)
+    target_task_before = Repo.get!(Task, target_task.id)
+    target_run_before = Repo.get!(Run, target_run.id)
+
+    harness_sessions_before =
+      Repo.all(
+        from session in HarnessSession,
+          order_by: [asc: session.id],
+          select: {session.id, session.state, session.active_run_id, session.binding_id}
+      )
+
+    claim_request = %{
+      runtime_id: target_runtime.id,
+      runtime_epoch: target_runtime.connection_epoch,
+      generation: target_run.generation,
+      claim_id: Ecto.UUID.generate()
+    }
+
+    assert {:error, :ownership_lost} =
+             Orchestration.claim(target_run.id, claim_request, now: @now)
+
+    target_task_after = Repo.get!(Task, target_task.id)
+    target_run_after = Repo.get!(Run, target_run.id)
+
+    assert target_task_after.state == target_task_before.state
+    assert target_task_after.current_generation == target_task_before.current_generation
+    assert target_task_after.attempt_generation == target_task_before.attempt_generation
+    assert target_run_after.state == target_run_before.state
+    assert target_run_after.generation == target_run_before.generation
+    assert target_run_after.claimed_runtime_epoch == target_run_before.claimed_runtime_epoch
+    assert target_run_after.claim_id == target_run_before.claim_id
+    assert target_run_after.lease_token == target_run_before.lease_token
+    assert target_run_after.claimed_at == target_run_before.claimed_at
+    assert target_run_after.lease_expires_at == target_run_before.lease_expires_at
+    assert is_nil(target_run_after.harness_session_id)
+    assert is_nil(target_run_after.harness_binding_id)
+
+    assert harness_sessions_before ==
+             Repo.all(
+               from session in HarnessSession,
+                 order_by: [asc: session.id],
+                 select: {session.id, session.state, session.active_run_id, session.binding_id}
+             )
+  end
+
   test "retained reservation rotates the binding before dispatch and an old stop replay cannot release it" do
     retained_runtime = register_runtime("exclusive-retained", resume?: true, capacity: 2)
 
