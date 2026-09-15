@@ -2332,13 +2332,18 @@ defmodule SymmetryControl.GoalsTest do
     })
     |> Repo.insert!()
 
+    achieve_payload = %{
+      subject: evidence.subject,
+      integration_work_item_id: item.id,
+      evidence_ids: [stored_evidence.id],
+      decision_id: decision_id
+    }
+
+    achieve_goal = fetch_goal!(goal.id)
+    achieve_command = command(achieve_goal, "achieve", achieve_payload)
+
     assert {:ok, achieved, :created} =
-             command_current(goal.id, "achieve", %{
-               subject: evidence.subject,
-               integration_work_item_id: item.id,
-               evidence_ids: [stored_evidence.id],
-               decision_id: decision_id
-             })
+             Goals.command(goal.id, achieve_command, "operator:test", now: @now)
 
     assert achieved.goal.state == "achieved"
 
@@ -2347,6 +2352,112 @@ defmodule SymmetryControl.GoalsTest do
                where: outcome.id == ^accepted_outcome.id
              )
            )
+
+    achieve_event_count =
+      Repo.aggregate(
+        from(event in SymmetryControl.Goals.GoalEvent,
+          where: event.goal_id == ^goal.id and event.kind == "achieve"
+        ),
+        :count
+      )
+
+    assert achieve_event_count == 1
+
+    assert {:ok, replayed, :replayed} =
+             Goals.command(goal.id, achieve_command, "operator:test", now: @now)
+
+    assert replayed == achieved
+
+    assert Repo.aggregate(
+             from(event in SymmetryControl.Goals.GoalEvent,
+               where: event.goal_id == ^goal.id and event.kind == "achieve"
+             ),
+             :count
+           ) == achieve_event_count
+
+    conflicting_achieve_command =
+      put_in(achieve_command, [:payload, :evidence_ids], [])
+
+    assert {:error, :idempotency_conflict} =
+             Goals.command(goal.id, conflicting_achieve_command, "operator:test", now: @now)
+
+    assert Repo.aggregate(
+             from(event in SymmetryControl.Goals.GoalEvent,
+               where: event.goal_id == ^goal.id and event.kind == "achieve"
+             ),
+             :count
+           ) == achieve_event_count
+  end
+
+  test "deterministic final acceptance closes the Goal loop without a completion Decision" do
+    {goal, item, _producer, _producer_run, validation, validation_run, validation_runtime,
+     validation_fence, candidate_subject} =
+      independent_validation_attempt_fixture(check_contract(), %{
+        execution_policy: %{"final_acceptance" => "deterministic"},
+        authority_policy: %{"operator_required_for_completion" => false}
+      })
+
+    evidence = evidence_attrs(validation_run.id, item, candidate_subject)
+
+    assert {:ok, %{evidence: stored_evidence}, :created} =
+             Goals.append_evidence(
+               validation_runtime.machine_id,
+               validation_run.id,
+               validation_fence,
+               evidence,
+               now: @now
+             )
+
+    assert {:ok, %{"settlement" => "accepted", "reason" => "validation_passed"}} =
+             Goals.settle_task(validation.id, validation_run.id, 1, now: @now)
+
+    [accepted_outcome] =
+      Repo.all(
+        from(outcome in SymmetryControl.Goals.WorkOutcome,
+          where:
+            outcome.goal_id == ^goal.id and outcome.work_item_id == ^item.id and
+              outcome.validation_task_id == ^validation.id and outcome.disposition == "accepted"
+        )
+      )
+
+    assert accepted_outcome.decision_id == nil
+
+    refute Repo.exists?(
+             from(decision in SymmetryControl.Goals.GoalDecision,
+               where:
+                 decision.goal_id == ^goal.id and
+                   decision.goal_revision == ^goal.current_revision and
+                   decision.kind == "completion"
+             )
+           )
+
+    assert {:ok, achieved, :created} =
+             command_current(goal.id, "achieve", %{
+               subject: evidence.subject,
+               integration_work_item_id: item.id,
+               evidence_ids: [stored_evidence.id],
+               decision_id: nil
+             })
+
+    assert achieved.goal.state == "achieved"
+  end
+
+  test "deterministic final acceptance rejects an operator-only predicate" do
+    project = project_fixture()
+
+    attrs =
+      goal_attrs(nil, %{"final_acceptance" => "deterministic"})
+      |> put_in(
+        [:initial_revision, :authority_policy, "operator_required_for_completion"],
+        false
+      )
+      |> put_in(
+        [:initial_revision, :acceptance_contract],
+        check_and_operator_acceptance_contract()
+      )
+
+    assert {:error, {:invalid_contract, :deterministic_acceptance_contract}} =
+             Goals.create_goal(project.id, attrs, "operator:test", now: @now)
   end
 
   test "accept_outcome is retired and cannot bypass terminal settlement" do
@@ -7233,10 +7344,22 @@ defmodule SymmetryControl.GoalsTest do
 
     context_manifest = Map.get(revision_overrides, :context_manifest, %{})
 
+    authority_policy =
+      revision_overrides
+      |> Map.get(:authority_policy, %{})
+      |> Map.new(fn {key, value} -> {to_string(key), value} end)
+
+    attrs =
+      goal_attrs(nil, execution_policy, context_manifest)
+      |> update_in(
+        [:initial_revision, :authority_policy],
+        &Map.merge(&1, authority_policy)
+      )
+
     assert {:ok, created, :created} =
              Goals.create_goal(
                project.id,
-               goal_attrs(nil, execution_policy, context_manifest),
+               attrs,
                "operator:test",
                now: @now
              )
@@ -7513,11 +7636,24 @@ defmodule SymmetryControl.GoalsTest do
     |> Repo.insert!()
   end
 
-  defp independent_validation_attempt_fixture(acceptance_contract \\ check_contract()) do
+  defp independent_validation_attempt_fixture(
+         acceptance_contract \\ check_contract(),
+         revision_overrides \\ %{}
+       ) do
+    revision_overrides =
+      Map.update(
+        revision_overrides,
+        :execution_policy,
+        %{"max_task_admissions" => 4},
+        fn policy ->
+          policy
+          |> Map.new(fn {key, value} -> {to_string(key), value} end)
+          |> Map.put_new("max_task_admissions", 4)
+        end
+      )
+
     {goal, item, producer} =
-      admitted_task_fixture("primary", acceptance_contract, %{
-        execution_policy: %{"max_task_admissions" => 4}
-      })
+      admitted_task_fixture("primary", acceptance_contract, revision_overrides)
 
     candidate_subject = %{
       "resource_id" => item_repository_resource_id(item),
