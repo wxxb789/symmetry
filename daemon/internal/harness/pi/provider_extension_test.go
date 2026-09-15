@@ -248,6 +248,11 @@ func TestAdapterRejectsInvalidProviderBridgeBeforeProcessStart(t *testing.T) {
 			return &value
 		}()},
 		{name: "changed grants", access: &protocol.ProviderAccess{Path: validAccess.Path, Token: validAccess.Token, Grants: []protocol.ProviderGrant{{ResourceID: testProviderResourceID, Provider: "github", Kind: "repository", Operations: []string{"resource.sync"}}}}, launch: &validLaunch},
+		{name: "named port", access: validAccess, launch: func() *harness.ProviderBridgeLaunch {
+			value := validLaunch
+			value.URL = "http://127.0.0.1:http/v1/actions"
+			return &value
+		}()},
 		{name: "reserved environment", access: validAccess, launch: &validLaunch, env: []string{ProviderBridgeNonceEnvironment + "=caller-value"}},
 	}
 	for _, test := range tests {

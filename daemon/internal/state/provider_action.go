@@ -15,7 +15,9 @@ const (
 	ProviderActionOutcomeUnknown   = "unknown"
 	providerActionFailureTerminal  = "run_terminal_unknown"
 
-	maxProviderActionIntents     = 256
+	// Keep worst-case retained results below half of the 4 MiB run-journal
+	// limit, leaving room for work, events, transitions, and cleanup evidence.
+	maxProviderActionIntents     = 32
 	maxProviderActionIDBytes     = 256
 	maxProviderActionKeyBytes    = 256
 	maxProviderResourceIDBytes   = 256

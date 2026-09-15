@@ -3,6 +3,8 @@ package state
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -223,6 +225,30 @@ func TestTerminalTransitionSettlesUnfinishedProviderActionAtomically(t *testing.
 	loaded, err := store.LoadJournal(journal.Key())
 	if err != nil || !sameProviderActionIntent(loaded.ProviderActionIntents[0], got) {
 		t.Fatalf("durable terminal provider action = %#v, error=%v", loaded.ProviderActionIntents, err)
+	}
+}
+
+func TestProviderActionCapacityFailsBeforeDispatch(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-provider-capacity", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < maxProviderActionIntents; index++ {
+		intent := testProviderActionIntent()
+		intent.ActionID = "action-" + strconv.Itoa(index)
+		intent.ActionKey = "tool-call-" + strconv.Itoa(index)
+		intent.RequestDigest = fmt.Sprintf("%064x", index+1)
+		if _, dispatch, err := store.PrepareProviderAction(journal.Key(), intent); err != nil || !dispatch {
+			t.Fatalf("prepare %d dispatch=%t error=%v", index, dispatch, err)
+		}
+	}
+	overflow := testProviderActionIntent()
+	overflow.ActionID = "action-overflow"
+	overflow.ActionKey = "tool-call-overflow"
+	overflow.RequestDigest = strings.Repeat("f", 64)
+	if _, dispatch, err := store.PrepareProviderAction(journal.Key(), overflow); !errors.Is(err, errProviderActionCapacity) || dispatch {
+		t.Fatalf("overflow dispatch=%t error=%v, want capacity rejection", dispatch, err)
 	}
 }
 

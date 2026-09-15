@@ -174,6 +174,9 @@ func (capabilities Capabilities) Validate() error {
 	if capabilities.ApprovalResponse && (!capabilities.Start || !capabilities.Events) {
 		return errors.New("approval response capability requires start and events capabilities")
 	}
+	if capabilities.ProviderAccess && (!capabilities.Start || !capabilities.Events || !capabilities.Cancel) {
+		return errors.New("provider access capability requires start, events, and cancel capabilities")
+	}
 	if capabilities.Guidance == GuidanceNativeSteer && !capabilities.Start {
 		return errors.New("native guidance capability requires start capability")
 	}

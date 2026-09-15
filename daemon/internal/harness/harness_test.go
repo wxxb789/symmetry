@@ -109,6 +109,9 @@ func TestCapabilitiesRejectUnsafeVersionAndOperationClaims(t *testing.T) {
 		{name: "unverified handoff", mutate: func(value *Capabilities) { value.Handoff = true; value.Verified = false }},
 		{name: "approval without start", mutate: func(value *Capabilities) { value.ApprovalResponse = true; value.Start = false }},
 		{name: "approval without events", mutate: func(value *Capabilities) { value.ApprovalResponse = true; value.Events = false }},
+		{name: "provider access without start", mutate: func(value *Capabilities) { value.ProviderAccess = true; value.Start = false }},
+		{name: "provider access without events", mutate: func(value *Capabilities) { value.ProviderAccess = true; value.Events = false }},
+		{name: "provider access without cancel", mutate: func(value *Capabilities) { value.ProviderAccess = true; value.Cancel = false }},
 		{name: "unverified executable start", mutate: func(value *Capabilities) { value.Verified = false }},
 		{name: "unverified provider access", mutate: func(value *Capabilities) {
 			value.Start = false

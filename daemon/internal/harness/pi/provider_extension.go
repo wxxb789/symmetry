@@ -9,12 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
@@ -282,8 +282,8 @@ func validateProviderBridgeLaunch(access *protocol.ProviderAccess, launch *harne
 	if err != nil || parsed.Scheme != "http" || parsed.Hostname() != "127.0.0.1" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Path != providerBridgePath {
 		return nil, errors.New("pi provider bridge URL is invalid")
 	}
-	port, err := net.LookupPort("tcp", parsed.Port())
-	if err != nil || port <= 0 {
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil || port <= 0 || port > 65535 {
 		return nil, errors.New("pi provider bridge URL is invalid")
 	}
 	if len(launch.Nonce) != 64 || launch.Nonce != strings.ToLower(launch.Nonce) {
