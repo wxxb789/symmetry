@@ -1,7 +1,6 @@
 defmodule SymmetryControl.OrchestrationTest do
-  use SymmetryControl.DataCase, async: true
+  use SymmetryControl.DataCase, async: false
 
-  alias Ecto.Adapters.SQL.Sandbox
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.Machine
   alias SymmetryControl.Orchestration.{Command, RunEvent, RunTransition}
@@ -996,76 +995,116 @@ defmodule SymmetryControl.OrchestrationTest do
   end
 
   test "fenced execution mutations serialize behind a concurrent run lock" do
-    %{machine: machine} = enroll_machine()
-    runtime = register_runtime(machine)
-    {:ok, task, :created} = Orchestration.submit_task(task_attrs(), "locked-run", now: @now)
-    {:ok, run} = Orchestration.assign_one(now: @now)
-    fence = claim(run, runtime)
+    with_dedicated_orchestration_repo(fn ->
+      {:ok, %{machine: machine, runtime: runtime, task: task, run: run, fence: fence}} =
+        Repo.transaction(fn ->
+          %{machine: machine} = enroll_machine()
+          runtime = register_runtime(machine)
 
-    event = %{
-      event_id: Ecto.UUID.generate(),
-      sequence: 1,
-      kind: "progress",
-      payload: %{},
-      occurred_at: @now
-    }
+          {:ok, task, :created} =
+            Orchestration.submit_task(
+              task_attrs(),
+              "locked-run-#{Ecto.UUID.generate()}",
+              now: @now
+            )
 
-    assert {:ok, [_]} =
-             run_after_locked_run(run.id, fn ->
-               Orchestration.append_events(run.id, fence, [event], now: @now)
-             end)
+          {:ok, run} = Orchestration.assign_one(now: @now)
+          fence = claim(run, runtime)
 
-    assert {:ok, %{state: "running"}} =
-             run_after_locked_run(run.id, fn ->
-               Orchestration.transition(
-                 run.id,
-                 fence,
-                 "running",
-                 %{},
-                 Ecto.UUID.generate(),
-                 now: @now
-               )
-             end)
+          %{machine: machine, runtime: runtime, task: task, run: run, fence: fence}
+        end)
 
-    assert {:ok, %{state: "waiting_for_input"}} =
-             Orchestration.transition(
-               run.id,
-               fence,
-               "waiting_for_input",
-               %{},
-               Ecto.UUID.generate(),
-               now: @now
-             )
+      fixture = %{
+        machine_id: machine.id,
+        runtime_id: runtime.id,
+        task_id: task.id,
+        run_id: run.id
+      }
 
-    assert {:ok, command, :created} =
-             Orchestration.create_command(
-               task.id,
-               "provide_input",
-               %{"answer" => "yes"},
-               "locked-run-input",
-               now: @now
-             )
+      try do
+        event = %{
+          event_id: Ecto.UUID.generate(),
+          sequence: 1,
+          kind: "progress",
+          payload: %{},
+          occurred_at: @now
+        }
 
-    assert {:ok, %{state: "running"}} =
-             Orchestration.transition(
-               run.id,
-               fence,
-               "running",
-               %{},
-               Ecto.UUID.generate(),
-               now: @now
-             )
+        assert_run_lock_timeout(run.id, fn ->
+          Orchestration.append_events(run.id, fence, [event], now: @now)
+        end)
 
-    assert {:ok, %{state: "acknowledged"}} =
-             run_after_locked_run(run.id, fn ->
-               Orchestration.acknowledge_command(
-                 command.id,
-                 fence,
-                 "applied",
-                 Ecto.UUID.generate(),
-                 now: @now
-               )
-             end)
+        assert {:ok, [_]} = Orchestration.append_events(run.id, fence, [event], now: @now)
+
+        transition_id = Ecto.UUID.generate()
+
+        assert_run_lock_timeout(run.id, fn ->
+          Orchestration.transition(
+            run.id,
+            fence,
+            "running",
+            %{},
+            transition_id,
+            now: @now
+          )
+        end)
+
+        assert {:ok, %{state: "running"}} =
+                 Orchestration.transition(run.id, fence, "running", %{}, transition_id, now: @now)
+
+        assert {:ok, %{state: "waiting_for_input"}} =
+                 Orchestration.transition(
+                   run.id,
+                   fence,
+                   "waiting_for_input",
+                   %{},
+                   Ecto.UUID.generate(),
+                   now: @now
+                 )
+
+        assert {:ok, command, :created} =
+                 Orchestration.create_command(
+                   task.id,
+                   "provide_input",
+                   %{"answer" => "yes"},
+                   "locked-run-input-#{Ecto.UUID.generate()}",
+                   now: @now
+                 )
+
+        assert {:ok, %{state: "running"}} =
+                 Orchestration.transition(
+                   run.id,
+                   fence,
+                   "running",
+                   %{},
+                   Ecto.UUID.generate(),
+                   now: @now
+                 )
+
+        acknowledgement_id = Ecto.UUID.generate()
+
+        assert_run_lock_timeout(run.id, fn ->
+          Orchestration.acknowledge_command(
+            command.id,
+            fence,
+            "applied",
+            acknowledgement_id,
+            now: @now
+          )
+        end)
+
+        assert {:ok, %{state: "acknowledged"}} =
+                 Orchestration.acknowledge_command(
+                   command.id,
+                   fence,
+                   "applied",
+                   acknowledgement_id,
+                   now: @now
+                 )
+      after
+        cleanup_dedicated_orchestration_fixture(fixture)
+      end
+    end)
   end
 
   test "events reject NUL in nested JSONB map keys and string values before persistence" do
@@ -2411,41 +2450,177 @@ defmodule SymmetryControl.OrchestrationTest do
     |> Repo.insert!()
   end
 
-  defp run_after_locked_run(run_id, operation) do
+  defp with_dedicated_orchestration_repo(test) do
+    config =
+      Application.fetch_env!(:symmetry_control, Repo)
+      |> Keyword.merge(name: nil, pool: DBConnection.ConnectionPool, pool_size: 3)
+
+    {:ok, repo} = Repo.start_link(config)
+    previous_dynamic_repo = Repo.put_dynamic_repo(repo)
+
+    try do
+      test.()
+    after
+      Repo.put_dynamic_repo(previous_dynamic_repo)
+      GenServer.stop(repo)
+    end
+  end
+
+  defp cleanup_dedicated_orchestration_fixture(fixture) do
+    run_id = Ecto.UUID.dump!(fixture.run_id)
+    task_id = Ecto.UUID.dump!(fixture.task_id)
+    runtime_id = Ecto.UUID.dump!(fixture.runtime_id)
+    machine_id = Ecto.UUID.dump!(fixture.machine_id)
+
+    Repo.query!("DELETE FROM run_events WHERE run_id = $1", [run_id])
+    Repo.query!("DELETE FROM run_transitions WHERE run_id = $1", [run_id])
+
+    Repo.query!(
+      "DELETE FROM commands WHERE run_id = $1 OR task_id = $2",
+      [run_id, task_id]
+    )
+
+    Repo.query!("DELETE FROM runs WHERE id = $1", [run_id])
+    Repo.query!("DELETE FROM tasks WHERE id = $1", [task_id])
+    Repo.query!("DELETE FROM runtimes WHERE id = $1", [runtime_id])
+    Repo.query!("DELETE FROM machines WHERE id = $1", [machine_id])
+  end
+
+  defp with_dynamic_repo(repo, fun) do
+    previous_dynamic_repo = Repo.put_dynamic_repo(repo)
+
+    try do
+      fun.()
+    after
+      Repo.put_dynamic_repo(previous_dynamic_repo)
+    end
+  end
+
+  defp assert_run_lock_timeout(run_id, operation) do
     parent = self()
+    repo = Repo.get_dynamic_repo()
 
     lock_holder =
       Task.async(fn ->
-        Repo.transaction(fn ->
-          Repo.one!(
-            from run in SymmetryControl.Orchestration.Run,
-              where: run.id == ^run_id,
-              lock: "FOR UPDATE"
-          )
+        task_boundary(fn ->
+          with_dynamic_repo(repo, fn ->
+            Repo.transaction(fn ->
+              Repo.one!(
+                from run in SymmetryControl.Orchestration.Run,
+                  where: run.id == ^run_id,
+                  lock: "FOR UPDATE"
+              )
 
-          send(parent, {:run_lock_held, self()})
+              send(parent, {:run_lock_held, self()})
 
+              receive do
+                :release_run_lock -> :ok
+              end
+            end)
+          end)
+        end)
+      end)
+
+    requester =
+      Task.async(fn ->
+        task_boundary(fn ->
           receive do
-            :release_run_lock -> :ok
+            :start_run_lock_request ->
+              with_dynamic_repo(repo, fn ->
+                try do
+                  Repo.transaction(fn ->
+                    Repo.query!("SET LOCAL lock_timeout = '1s'")
+                    send(parent, :run_lock_request_started)
+                    operation.()
+                  end)
+                rescue
+                  error in Postgrex.Error -> {:raised, error}
+                end
+              end)
+          after
+            15_000 -> {:task_timeout, :request_gate}
           end
         end)
       end)
 
-    Sandbox.allow(Repo, self(), lock_holder.pid)
-    assert_receive {:run_lock_held, lock_holder_pid}, 1_000
+    lock_holder_pid = lock_holder.pid
+    state_key = make_ref()
+    Process.put(state_key, %{holder_done: false, requester_done: false})
 
-    requester =
-      Task.async(fn ->
-        send(parent, :run_lock_request_started)
-        operation.()
-      end)
+    try do
+      assert_receive {:run_lock_held, ^lock_holder_pid}, 15_000
+      send(requester.pid, :start_run_lock_request)
+      assert_receive :run_lock_request_started, 15_000
 
-    Sandbox.allow(Repo, self(), requester.pid)
-    assert_receive :run_lock_request_started, 1_000
-    send(lock_holder_pid, :release_run_lock)
+      requester_result = Task.yield(requester, 15_000)
+      if match?({:ok, _}, requester_result), do: mark_task_done(state_key, :requester_done)
 
-    result = Task.await(requester)
-    assert {:ok, :ok} = Task.await(lock_holder)
-    result
+      assert {:ok, {:raised, %Postgrex.Error{postgres: %{code: :lock_not_available}}}} =
+               requester_result
+
+      send(lock_holder.pid, :release_run_lock)
+      holder_result = Task.yield(lock_holder, 15_000)
+      if match?({:ok, _}, holder_result), do: mark_task_done(state_key, :holder_done)
+
+      assert {:ok, {:ok, :ok}} = holder_result
+    after
+      state = Process.get(state_key, %{holder_done: false, requester_done: false})
+
+      unless state.requester_done do
+        drain_task(requester)
+      end
+
+      unless state.holder_done do
+        send(lock_holder.pid, :release_run_lock)
+
+        case drain_task(lock_holder) do
+          {:completed, result} ->
+            assert {:ok, :ok} = result
+
+          {:terminated, _reason} ->
+            :ok
+
+          _unfinished ->
+            :ok
+        end
+      end
+
+      Process.delete(state_key)
+    end
+  end
+
+  defp mark_task_done(state_key, task_key) do
+    state = Process.get(state_key)
+    Process.put(state_key, Map.put(state, task_key, true))
+  end
+
+  defp task_boundary(fun) do
+    try do
+      fun.()
+    rescue
+      error -> {:task_error, error}
+    catch
+      kind, reason -> {:task_exit, kind, reason}
+    end
+  end
+
+  defp drain_task(task) do
+    try do
+      case Task.yield(task, 1_000) do
+        {:ok, result} ->
+          {:completed, result}
+
+        {:exit, reason} ->
+          {:terminated, reason}
+
+        nil ->
+          case Task.shutdown(task, :brutal_kill) do
+            {:ok, result} -> {:completed, result}
+            _ -> :unfinished
+          end
+      end
+    catch
+      :exit, _reason -> :unfinished
+    end
   end
 end
