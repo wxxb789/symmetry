@@ -104,6 +104,42 @@ func TestWaitReportsNonZeroExit(t *testing.T) {
 	}
 }
 
+func TestResultDoneClosesAfterTerminationAndWaitIsReusable(t *testing.T) {
+	t.Parallel()
+
+	process := startHelper(t, &recordingSink{}, "wait")
+	resultDone := process.ResultDone()
+	select {
+	case <-resultDone:
+		t.Fatal("ResultDone() closed before process completion")
+	default:
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := process.Terminate(ctx, 100*time.Millisecond); err != nil {
+		t.Fatalf("Terminate() error = %v", err)
+	}
+
+	select {
+	case <-resultDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("ResultDone() did not close after process termination")
+	}
+	first := process.Wait()
+	second := process.Wait()
+	if first != second {
+		t.Fatalf("repeated Wait() results differ: first = %#v, second = %#v", first, second)
+	}
+}
+
+func TestResultDoneNilReceiver(t *testing.T) {
+	var process *Process
+	if resultDone := process.ResultDone(); resultDone != nil {
+		t.Fatalf("ResultDone() = %v, want nil", resultDone)
+	}
+}
+
 func TestContextCancellationTerminatesTheProcessTree(t *testing.T) {
 	t.Parallel()
 

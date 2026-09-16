@@ -771,6 +771,15 @@ func (process *Process) Wait() Result {
 	return result
 }
 
+// ResultDone returns the completion barrier that closes after the process
+// result has been finalized. A nil receiver returns a nil channel.
+func (process *Process) ResultDone() <-chan struct{} {
+	if process == nil {
+		return nil
+	}
+	return process.resultDone
+}
+
 // ProcessDetails returns the restart-safe identity recorded when this process
 // was started. Both values remain stable for the Process lifetime.
 func (process *Process) ProcessDetails() (int, string) {
