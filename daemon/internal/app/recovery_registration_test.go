@@ -7,6 +7,8 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -88,8 +90,8 @@ func TestRestartInputRecoveryDoesNotRegisterAfterPermanentTerminalQueueFailure(t
 	if errors.Is(err, errRecoveryPending) {
 		t.Fatalf("initialize error = %v, must not be recovery pending", err)
 	}
-	if queueCalls != 1 {
-		t.Fatalf("terminal queue calls = %d, want 1", queueCalls)
+	if queueCalls != 2 {
+		t.Fatalf("terminal queue calls = %d, want one immediate retry", queueCalls)
 	}
 	assertRestartInputTerminalBarrier(t, store, key, intent, api, 1)
 	assertRestartInputTerminalRegistersOnNextInitialize(t, store, key, intent, now, api)
@@ -147,8 +149,8 @@ func TestRestartInputRecoveryCompletesIndependentJournalButBlocksRegistration(t 
 	if startCalls != 0 {
 		t.Fatalf("agent starts = %d, want 0", startCalls)
 	}
-	if queueCalls[blockedKey] != 1 || queueCalls[completedKey] != 1 {
-		t.Fatalf("terminal queue calls = %#v, want one for each journal", queueCalls)
+	if queueCalls[blockedKey] != 2 || queueCalls[completedKey] != 1 {
+		t.Fatalf("terminal queue calls = %#v, want one immediate retry for the blocked journal", queueCalls)
 	}
 	if got := api.callsSnapshot(); containsString(got, "register") {
 		t.Fatalf("recovery calls = %#v, must not register after a blocking entry failure", got)
@@ -158,6 +160,173 @@ func TestRestartInputRecoveryCompletesIndependentJournalButBlocksRegistration(t 
 		RuntimeID: "runtime-1", RuntimeEpoch: 1, Generation: completedKey.Generation,
 		ClaimID: "claim-" + completedKey.RunID, LeaseToken: "lease-" + completedKey.RunID,
 	})
+}
+
+func TestRecoveryTerminalQueueRetriesExactStoreWriteAfterPostRenameError(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+
+	pendingAt := time.Date(2026, time.September, 17, 5, 6, 7, 0, time.UTC)
+	postRenameErr := errors.New("injected post-rename terminal write error")
+	writes := make([]state.RunJournal, 0, 2)
+	writeCalls := 0
+	restore := store.SetAtomicWriterForTesting(func(path string, data []byte) error {
+		writeCalls++
+		var journal state.RunJournal
+		if err := json.Unmarshal(data, &journal); err != nil {
+			t.Fatalf("decode journal write: %v", err)
+		}
+		writes = append(writes, journal)
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			return err
+		}
+		if writeCalls == 1 {
+			return postRenameErr
+		}
+		return nil
+	})
+	defer restore()
+
+	idCalls := 0
+	app := &daemon{
+		store: store,
+		options: options{
+			clock: func() time.Time { return pendingAt },
+			newID: func() (string, error) {
+				idCalls++
+				return "recovery-terminal-1", nil
+			},
+		},
+		running: map[state.RunKey]*runningRun{key: {}},
+	}
+	payload := map[string]any{"z": 2, "a": "unknown"}
+	if err := app.queueRecoveryTerminalTransition(context.Background(), key, "failed", payload); err != nil {
+		t.Fatalf("queueRecoveryTerminalTransition() error = %v", err)
+	}
+	if idCalls != 1 {
+		t.Fatalf("new ID calls = %d, want one ID for both exact writes", idCalls)
+	}
+	if writeCalls != 2 || len(writes) != 2 {
+		t.Fatalf("journal writes = %d/%d, want two exact writes", writeCalls, len(writes))
+	}
+	first, second := writes[0], writes[1]
+	if len(first.PendingTransitions) != 1 || len(second.PendingTransitions) != 1 {
+		t.Fatalf("pending transitions after retry = %#v / %#v", first.PendingTransitions, second.PendingTransitions)
+	}
+	if first.PendingTransitions[0].TransitionID != "recovery-terminal-1" || second.PendingTransitions[0].TransitionID != "recovery-terminal-1" {
+		t.Fatalf("transition IDs = %q / %q, want the same generated ID", first.PendingTransitions[0].TransitionID, second.PendingTransitions[0].TransitionID)
+	}
+	if !first.TerminalPendingAt.Equal(pendingAt) || !second.TerminalPendingAt.Equal(pendingAt) {
+		t.Fatalf("terminal pending times = %s / %s, want %s", first.TerminalPendingAt, second.TerminalPendingAt, pendingAt)
+	}
+	loaded, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.PendingTransitions) != 1 || loaded.PendingTransitions[0].TransitionID != "recovery-terminal-1" || !loaded.TerminalPendingAt.Equal(pendingAt) {
+		t.Fatalf("durable recovery terminal = %#v, want exact retry identity and time", loaded)
+	}
+}
+
+func TestRecoveryTerminalQueueReusesCanonicalPendingTerminalIdentity(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+
+	pendingAt := time.Date(2026, time.September, 17, 6, 7, 8, 0, time.UTC)
+	initialPayload := json.RawMessage(`{ "z": 2, "a": 1 }`)
+	if _, err := store.QueueTerminalTransitionAt(key, protocol.StateTransitionRequest{
+		TransitionID: "existing-recovery-terminal",
+		State:        "failed",
+		Payload:      initialPayload,
+	}, pendingAt); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	idCalls := 0
+	app := &daemon{
+		store: store,
+		options: options{newID: func() (string, error) {
+			idCalls++
+			return "unexpected-new-id", nil
+		}},
+		running: map[state.RunKey]*runningRun{key: {}},
+	}
+	if err := app.queueRecoveryTerminalTransition(context.Background(), key, "failed", map[string]int{"a": 1, "z": 2}); err != nil {
+		t.Fatalf("queueRecoveryTerminalTransition() exact replay error = %v", err)
+	}
+	if idCalls != 0 {
+		t.Fatalf("new ID calls = %d, want no new ID for an existing matching terminal", idCalls)
+	}
+	loaded, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded, before) {
+		t.Fatalf("replayed terminal = %#v, want existing identity, time, and body", loaded)
+	}
+}
+
+func TestRecoveryTerminalQueueConflictsWithoutMutation(t *testing.T) {
+	tests := []struct {
+		name        string
+		stateName   string
+		payload     any
+		acknowledge bool
+	}{
+		{name: "different payload", stateName: "failed", payload: map[string]string{"reason": "different"}},
+		{name: "different state", stateName: "completed", payload: map[string]string{"reason": "original"}},
+		{name: "acknowledged body unavailable", stateName: "failed", payload: map[string]string{"reason": "original"}, acknowledge: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store, key := claimedStore(t)
+			defer store.Close()
+			pendingAt := time.Date(2026, time.September, 17, 7, 8, 9, 0, time.UTC)
+			if _, err := store.QueueTerminalTransitionAt(key, protocol.StateTransitionRequest{
+				TransitionID: "authoritative-terminal",
+				State:        "failed",
+				Payload:      json.RawMessage(`{"reason":"original"}`),
+			}, pendingAt); err != nil {
+				t.Fatal(err)
+			}
+			if test.acknowledge {
+				if _, err := store.MarkTransitionsDelivered(key, []string{"authoritative-terminal"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, err := store.LoadJournal(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			idCalls := 0
+			app := &daemon{
+				store: store,
+				options: options{newID: func() (string, error) {
+					idCalls++
+					return "must-not-be-created", nil
+				}},
+				running: map[state.RunKey]*runningRun{key: {}},
+			}
+			err = app.queueRecoveryTerminalTransition(context.Background(), key, test.stateName, test.payload)
+			if err == nil || !errors.Is(err, errAuthoritativeTerminal) {
+				t.Fatalf("queueRecoveryTerminalTransition() error = %v, want authoritative terminal conflict", err)
+			}
+			if idCalls != 0 {
+				t.Fatalf("new ID calls = %d, want zero on conflict", idCalls)
+			}
+			after, err := store.LoadJournal(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(after, before) {
+				t.Fatalf("conflicting recovery mutated journal:\nbefore=%#v\nafter=%#v", before, after)
+			}
+		})
+	}
 }
 
 func TestNativeRecoveryPersistenceFailuresBlockRegistration(t *testing.T) {

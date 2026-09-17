@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -469,26 +470,83 @@ func (daemon *daemon) queueRecoveryTerminalTransition(ctx context.Context, key s
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if daemon.store == nil {
+		return errors.New("state store is unavailable")
+	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
-	id, err := daemon.options.newID()
+	encoded, err = protocol.CanonicalizeJSON(encoded)
 	if err != nil {
 		return err
 	}
+
+	current, err := daemon.store.LoadJournal(key)
+	if err != nil {
+		return err
+	}
+	currentFence := current.Fence()
+	var (
+		transition protocol.StateTransitionRequest
+		pendingAt  time.Time
+	)
+	if existing, present := durableTerminalTransition(current); present {
+		if existing == nil || existing.State != stateName || existing.Fence != currentFence || !canonicalJSONEqual(existing.Payload, encoded) {
+			actualState := current.TerminalState
+			if existing != nil {
+				actualState = existing.State
+			}
+			return &terminalTransitionConflictError{expectedState: stateName, actualState: actualState}
+		}
+		if current.TerminalPendingAt.IsZero() {
+			return errors.New("existing terminal transition has no pending time")
+		}
+		// Re-submit the exact durable body and identity. The canonical comparison
+		// above only establishes that this is the same recovery request; replay
+		// must preserve the bytes already owned by the journal.
+		transition = *existing
+		pendingAt = current.TerminalPendingAt
+	} else {
+		id, idErr := daemon.options.newID()
+		if idErr != nil {
+			return idErr
+		}
+		pendingAt = daemon.now()
+		transition = protocol.StateTransitionRequest{
+			Fence:        currentFence,
+			TransitionID: id,
+			State:        stateName,
+			Payload:      encoded,
+		}
+	}
+
 	finishTerminal := daemon.beginTerminal(key)
 	persisted := false
 	defer func() { finishTerminal(persisted) }()
-	transition := protocol.StateTransitionRequest{TransitionID: id, State: stateName, Payload: encoded}
-	var journal state.RunJournal
-	if daemon.options.queueTerminalTransition != nil {
-		journal, err = daemon.options.queueTerminalTransition(key, transition, daemon.now())
-	} else {
-		journal, err = daemon.store.QueueTerminalTransitionAt(key, transition, daemon.now())
+	queue := func() (state.RunJournal, error) {
+		if daemon.options.queueTerminalTransition != nil {
+			return daemon.options.queueTerminalTransition(key, transition, pendingAt)
+		}
+		return daemon.store.QueueTerminalTransitionAt(key, transition, pendingAt)
 	}
-	if err != nil {
-		return err
+	journal, queueErr := queue()
+	if queueErr != nil {
+		firstErr := queueErr
+		journal, queueErr = queue()
+		if queueErr != nil {
+			if latest, loadErr := daemon.store.LoadJournal(key); loadErr == nil {
+				actual, present := durableTerminalTransition(latest)
+				if present && (actual == nil || !sameStateTransitionRequest(*actual, transition)) {
+					actualState := latest.TerminalState
+					if actual != nil {
+						actualState = actual.State
+					}
+					return &terminalTransitionConflictError{expectedState: stateName, actualState: actualState}
+				}
+			}
+			return errors.Join(firstErr, queueErr)
+		}
 	}
 	persisted = true
 	daemon.scheduleTerminalSlotRelease(key, journal.TerminalPendingAt)
@@ -497,4 +555,9 @@ func (daemon *daemon) queueRecoveryTerminalTransition(ctx context.Context, key s
 	}
 	daemon.signalOutbox()
 	return nil
+}
+
+func canonicalJSONEqual(value, canonical []byte) bool {
+	encoded, err := protocol.CanonicalizeJSON(value)
+	return err == nil && bytes.Equal(encoded, canonical)
 }
