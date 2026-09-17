@@ -2,9 +2,13 @@ package harness
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -19,7 +23,7 @@ const (
 	claudeProbeTimeout        = time.Second
 	claudeProbeMaxOutputBytes = 64 << 10
 	defaultCodexExecutable    = "codex"
-	testedCodexVersion        = "0.153.4"
+	testedCodexVersion        = CodexTestedVersion
 	codexProbeTimeout         = time.Second
 	codexProbeMaxOutputBytes  = 64 << 10
 )
@@ -64,6 +68,60 @@ func (osCodexCommandRunner) Run(ctx context.Context, executable string, args ...
 		Args:    args,
 		Env:     environment,
 	}, codexProbeMaxOutputBytes)
+}
+
+func (osCodexCommandRunner) SchemaDigest(ctx context.Context, executable string) (digest string, resultErr error) {
+	if ctx == nil {
+		return "", errors.New("codex schema probe context must not be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	directory, err := os.MkdirTemp("", "symmetry-codex-schema-")
+	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return "", contextErr
+		}
+		return "", fmt.Errorf("create Codex schema temp directory: %w", err)
+	}
+	defer func() {
+		if cleanupErr := os.RemoveAll(directory); cleanupErr != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("remove Codex schema temp directory: %w", cleanupErr))
+		}
+	}()
+	environment, err := execution.BuildEnvironment()
+	if err != nil {
+		return "", err
+	}
+	output, err := execution.RunBoundedCommand(ctx, execution.Invocation{
+		Program: executable,
+		Args:    []string{"app-server", "generate-json-schema", "--out", directory},
+		Env:     environment,
+	}, codexProbeMaxOutputBytes)
+	if contextErr := ctx.Err(); contextErr != nil {
+		return "", contextErr
+	}
+	if err != nil {
+		return "", fmt.Errorf("generate Codex app-server schema: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	bundle, err := os.ReadFile(filepath.Join(directory, "codex_app_server_protocol.v2.schemas.json"))
+	if contextErr := ctx.Err(); contextErr != nil {
+		return "", contextErr
+	}
+	if err != nil {
+		return "", fmt.Errorf("read generated Codex v2 schema: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	digestBytes := sha256.Sum256(bundle)
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return "sha256:" + hex.EncodeToString(digestBytes[:]), nil
 }
 
 // Registry is a concrete, process-local adapter registry. It is intentionally
@@ -214,6 +272,25 @@ func runBoundedProbe(ctx context.Context, timeout time.Duration, run func(contex
 		return nil, contextErr
 	}
 	return output, err
+}
+
+func runBoundedSchemaProbe(ctx context.Context, timeout time.Duration, run func(context.Context) (string, error)) (string, error) {
+	if ctx == nil {
+		return "", errors.New("harness probe context must not be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	probeContext, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	digest, err := run(probeContext)
+	if contextErr := ctx.Err(); contextErr != nil {
+		return "", contextErr
+	}
+	if contextErr := probeContext.Err(); contextErr != nil {
+		return "", contextErr
+	}
+	return digest, err
 }
 
 func runClaudeProbe(ctx context.Context, run func(context.Context) ([]byte, error)) ([]byte, error) {
@@ -407,14 +484,11 @@ func probeCodexExecutableWithRunner(ctx context.Context, executable string, runn
 		capabilities.Unsupported[string(CapabilityStart)] = "codex version probe failed"
 		return capabilities, fmt.Errorf("%w: codex --version: %v", ErrHarnessUnavailable, err)
 	}
-	version := parseCodexVersion(string(output))
+	version, versionErr := ValidateCodexVersionOutput(string(output))
 	capabilities.NativeVersion = version
 	capabilities.VersionKnown = version != ""
-	if version != testedCodexVersion {
-		if version == "" {
-			return capabilities, fmt.Errorf("%w: unable to parse codex version from %q", ErrUnsupportedVersion, strings.TrimSpace(string(output)))
-		}
-		return capabilities, fmt.Errorf("%w: codex %s is not in the tested version set", ErrUnsupportedVersion, version)
+	if versionErr != nil {
+		return capabilities, versionErr
 	}
 	helpOutput, err := runBoundedProbe(ctx, codexProbeTimeout, func(probeContext context.Context) ([]byte, error) {
 		return runner.Run(probeContext, executable, "app-server", "--help")
@@ -428,22 +502,39 @@ func probeCodexExecutableWithRunner(ctx context.Context, executable string, runn
 		}
 		return capabilities, fmt.Errorf("%w: codex app-server help probe failed: %v", ErrNativeUnverified, err)
 	}
-	if !strings.Contains(strings.ToLower(string(helpOutput)), "app-server") ||
-		!strings.Contains(strings.ToLower(string(helpOutput)), "stdio") {
-		return capabilities, fmt.Errorf("%w: app-server help did not advertise stdio transport", ErrNativeUnverified)
+	if err := ValidateCodexHelpOutput(string(helpOutput)); err != nil {
+		return capabilities, err
 	}
 	capabilities.TransportVerified = true
-	return capabilities, ErrNativeUnverified
+
+	schemaRunner, schemaCaptured := runner.(interface {
+		SchemaDigest(context.Context, string) (string, error)
+	})
+	schemaDigest := ""
+	if schemaCaptured {
+		schemaDigest, err = runBoundedSchemaProbe(ctx, codexProbeTimeout, func(probeContext context.Context) (string, error) {
+			return schemaRunner.SchemaDigest(probeContext, executable)
+		})
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return capabilities, err
+			}
+			if contextErr := ctx.Err(); contextErr != nil {
+				return capabilities, contextErr
+			}
+			return capabilities, fmt.Errorf("%w: Codex app-server schema probe failed: %v", ErrNativeUnverified, err)
+		}
+	}
+
+	evidence, verifyErr := ValidateCodexProbeEvidence(string(output), string(helpOutput), schemaDigest, schemaCaptured)
+	capabilities.NativeVersion = evidence.Version
+	capabilities.VersionKnown = evidence.VersionKnown
+	capabilities.TransportVerified = evidence.TransportVerified
+	return capabilities, verifyErr
 }
 
-var codexVersionPattern = regexp.MustCompile(`(?m)codex-cli\s+([0-9]+\.[0-9]+\.[0-9]+)\b`)
-
 func parseCodexVersion(output string) string {
-	match := codexVersionPattern.FindStringSubmatch(output)
-	if len(match) == 2 {
-		return match[1]
-	}
-	return ""
+	return ParseCodexVersion(output)
 }
 
 // AvailabilityError distinguishes an absent/unverified native adapter from a

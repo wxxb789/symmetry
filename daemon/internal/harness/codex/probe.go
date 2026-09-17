@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -21,8 +20,8 @@ import (
 
 const (
 	DefaultExecutable     = "codex"
-	TestedVersion         = "0.153.4"
-	TestedSchemaHash      = "sha256:d3eace08be5dca386bfd1f1e8df650058b4113f1e10870a284d775d75517576a"
+	TestedVersion         = harness.CodexTestedVersion
+	TestedSchemaHash      = harness.CodexTestedSchemaHash
 	probeTimeout          = time.Second
 	probeOutputLimitBytes = 64 << 10
 )
@@ -207,17 +206,14 @@ func Probe(ctx context.Context, executable string, runners ...CommandRunner) (Pr
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	result.Version = parseVersion(string(versionOutput))
-	result.VersionKnown = result.Version != ""
-	result.Capabilities.NativeVersion = result.Version
+	version, versionErr := harness.ValidateCodexVersionOutput(string(versionOutput))
+	result.Version = version
+	result.VersionKnown = version != ""
+	result.Capabilities.NativeVersion = version
 	result.Capabilities.VersionKnown = result.VersionKnown
-	if !result.VersionKnown {
-		return result, fmt.Errorf("%w: unable to parse codex version from %q", harness.ErrUnsupportedVersion, strings.TrimSpace(string(versionOutput)))
+	if versionErr != nil {
+		return result, versionErr
 	}
-	if result.Version != TestedVersion {
-		return result, fmt.Errorf("%w: codex %s is not in the tested version set", harness.ErrUnsupportedVersion, result.Version)
-	}
-
 	helpOutput, err := runProbe(ctx, func(probeContext context.Context) ([]byte, error) {
 		return runner.Run(probeContext, executable, "app-server", "--help")
 	})
@@ -230,31 +226,35 @@ func Probe(ctx context.Context, executable string, runners ...CommandRunner) (Pr
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	result.TransportKnown = hasStdioAppServerHelp(string(helpOutput))
-	result.Capabilities.TransportVerified = result.TransportKnown
-	if !result.TransportKnown {
-		return result, fmt.Errorf("%w: app-server help did not advertise stdio transport", harness.ErrNativeUnverified)
-	}
-	schemaRunner, ok := runner.(SchemaRunner)
-	if !ok {
-		return result, fmt.Errorf("%w: exact generated app-server schema was not captured", harness.ErrNativeUnverified)
-	}
-	digest, err := runSchemaProbe(ctx, func(probeContext context.Context) (string, error) {
-		return schemaRunner.SchemaDigest(probeContext, executable)
-	})
-	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return result, err
-		}
-		return result, fmt.Errorf("%w: Codex app-server schema probe failed: %v", harness.ErrNativeUnverified, err)
-	}
-	if err := ctx.Err(); err != nil {
+	if err := harness.ValidateCodexHelpOutput(string(helpOutput)); err != nil {
 		return result, err
 	}
-	result.SchemaDigest = digest
-	result.SchemaKnown = digest == TestedSchemaHash
-	if !result.SchemaKnown {
-		return result, fmt.Errorf("%w: generated Codex app-server schema %s is not the tested %s", harness.ErrUnsupportedVersion, digest, TestedSchemaHash)
+	result.TransportKnown = true
+	result.Capabilities.TransportVerified = true
+	schemaRunner, schemaCaptured := runner.(SchemaRunner)
+	digest := ""
+	if schemaCaptured {
+		digest, err = runSchemaProbe(ctx, func(probeContext context.Context) (string, error) {
+			return schemaRunner.SchemaDigest(probeContext, executable)
+		})
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return result, err
+			}
+			return result, fmt.Errorf("%w: Codex app-server schema probe failed: %v", harness.ErrNativeUnverified, err)
+		}
+	}
+	evidence, verifyErr := harness.ValidateCodexProbeEvidence(string(versionOutput), string(helpOutput), digest, schemaCaptured)
+	result.Version = evidence.Version
+	result.VersionKnown = evidence.VersionKnown
+	result.Capabilities.NativeVersion = evidence.Version
+	result.Capabilities.VersionKnown = evidence.VersionKnown
+	result.TransportKnown = evidence.TransportVerified
+	result.Capabilities.TransportVerified = evidence.TransportVerified
+	result.SchemaDigest = evidence.SchemaDigest
+	result.SchemaKnown = evidence.SchemaKnown
+	if verifyErr != nil {
+		return result, verifyErr
 	}
 	// The exact version and stdio framing are known, but no native lifecycle
 	// and control behavior is claimed. Start remains fail-closed until
@@ -265,19 +265,12 @@ func Probe(ctx context.Context, executable string, runners ...CommandRunner) (Pr
 	return result, harness.ErrNativeUnverified
 }
 
-var versionPattern = regexp.MustCompile(`(?m)codex-cli\s+([0-9]+\.[0-9]+\.[0-9]+)\b`)
-
 func parseVersion(output string) string {
-	match := versionPattern.FindStringSubmatch(output)
-	if len(match) == 2 {
-		return match[1]
-	}
-	return ""
+	return harness.ParseCodexVersion(output)
 }
 
 func hasStdioAppServerHelp(output string) bool {
-	value := strings.ToLower(output)
-	return strings.Contains(value, "app-server") && strings.Contains(value, "stdio")
+	return harness.HasCodexStdioAppServerHelp(output)
 }
 
 // Adapter is a root-seam adapter that exposes probe evidence but refuses to

@@ -8,11 +8,11 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 )
 
-func TestCodexProbeKnownVersionAndHelpFailsClosed(t *testing.T) {
+func TestCodexProbeKnownVersionHelpAndSchemaFailsClosed(t *testing.T) {
 	runner := &codexFixtureRunner{responses: map[string][]byte{
 		"--version":         []byte("codex-cli 0.153.4\n"),
 		"app-server --help": []byte("codex app-server stdio transport\n"),
-	}}
+	}, schemaDigest: CodexTestedSchemaHash}
 
 	capabilities, err := probeCodexExecutableWithRunner(context.Background(), "codex", runner)
 	if !errors.Is(err, ErrNativeUnverified) {
@@ -26,6 +26,45 @@ func TestCodexProbeKnownVersionAndHelpFailsClosed(t *testing.T) {
 	}
 	if got, want := runner.calls, []string{"--version", "app-server --help"}; !sameStrings(got, want) {
 		t.Fatalf("runner calls = %#v, want %#v", got, want)
+	}
+}
+
+func TestCodexProbeRejectsNonExactVersionOutput(t *testing.T) {
+	for _, versionOutput := range []string{
+		"codex-cli 0.153.4-alpha.1\n",
+		"codex-cli 0.153.4+build.1\n",
+		"codex-cli 0.153.4 trailing-token\n",
+	} {
+		t.Run(versionOutput, func(t *testing.T) {
+			runner := &codexFixtureRunner{responses: map[string][]byte{"--version": []byte(versionOutput)}}
+			capabilities, err := probeCodexExecutableWithRunner(context.Background(), "codex", runner)
+			if !errors.Is(err, ErrUnsupportedVersion) {
+				t.Fatalf("probe error = %v, want ErrUnsupportedVersion", err)
+			}
+			if capabilities.VersionKnown || capabilities.NativeVersion != "" || capabilities.TransportVerified {
+				t.Fatalf("capabilities = %+v, want no version or transport evidence", capabilities)
+			}
+			if got, want := runner.calls, []string{"--version"}; !sameStrings(got, want) {
+				t.Fatalf("runner calls = %#v, want %#v", got, want)
+			}
+		})
+	}
+}
+
+func TestCodexProbeSchemaMismatchFailsClosed(t *testing.T) {
+	runner := &codexFixtureRunner{
+		responses: map[string][]byte{
+			"--version":         []byte("codex-cli 0.153.4\n"),
+			"app-server --help": []byte("codex app-server stdio transport\n"),
+		},
+		schemaDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	capabilities, err := probeCodexExecutableWithRunner(context.Background(), "codex", runner)
+	if !errors.Is(err, ErrUnsupportedVersion) {
+		t.Fatalf("probe error = %v, want ErrUnsupportedVersion", err)
+	}
+	if !capabilities.VersionKnown || !capabilities.TransportVerified || capabilities.Verified || capabilities.Start {
+		t.Fatalf("capabilities = %+v, want known transport but no native operations", capabilities)
 	}
 }
 
@@ -68,14 +107,22 @@ func TestCodexProbeDoesNotParseFailedCommandOutput(t *testing.T) {
 }
 
 type codexFixtureRunner struct {
-	responses map[string][]byte
-	results   map[string]codexFixtureResult
-	calls     []string
+	responses    map[string][]byte
+	results      map[string]codexFixtureResult
+	calls        []string
+	schemaDigest string
 }
 
 type codexFixtureResult struct {
 	output []byte
 	err    error
+}
+
+func (runner *codexFixtureRunner) SchemaDigest(_ context.Context, _ string) (string, error) {
+	if runner.schemaDigest == "" {
+		return "", errors.New("fixture schema digest not configured")
+	}
+	return runner.schemaDigest, nil
 }
 
 func (runner *codexFixtureRunner) Run(_ context.Context, _ string, args ...string) ([]byte, error) {

@@ -167,6 +167,28 @@ func TestProbeUnknownVersionFailsClosed(t *testing.T) {
 	}
 }
 
+func TestProbeRejectsNonExactVersionOutput(t *testing.T) {
+	for _, versionOutput := range []string{
+		"codex-cli 0.153.4-alpha.1\n",
+		"codex-cli 0.153.4+build.1\n",
+		"codex-cli 0.153.4 trailing-token\n",
+	} {
+		t.Run(versionOutput, func(t *testing.T) {
+			runner := &fixtureRunner{responses: map[string][]byte{"--version": []byte(versionOutput)}}
+			result, err := Probe(context.Background(), "codex", runner)
+			if !errors.Is(err, harness.ErrUnsupportedVersion) {
+				t.Fatalf("Probe() error = %v, want ErrUnsupportedVersion", err)
+			}
+			if result.VersionKnown || result.Version != "" || result.Capabilities.TransportVerified {
+				t.Fatalf("probe result = %+v, want no version or transport evidence", result)
+			}
+			if len(runner.calls) != 1 || runner.calls[0] != "--version" {
+				t.Fatalf("injected runner calls = %v, want only --version", runner.calls)
+			}
+		})
+	}
+}
+
 func TestProbeBoundsHangingRunnerAndPreservesCancellation(t *testing.T) {
 	for _, test := range []struct {
 		name             string
