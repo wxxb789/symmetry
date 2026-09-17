@@ -7,6 +7,10 @@ import (
 	"errors"
 	"os"
 	"testing"
+	"time"
+
+	"github.com/wxxb789/symmetry/daemon/internal/platform"
+	"golang.org/x/sys/unix"
 )
 
 func TestTerminatePersistedProcessUsesIdentityBoundPlatformTerminator(t *testing.T) {
@@ -37,12 +41,117 @@ func TestTerminatePersistedProcessUsesIdentityBoundPlatformTerminator(t *testing
 	}
 }
 
-func TestTerminatePersistedProcessRejectsAbsentOrChangedIdentity(t *testing.T) {
+func TestTerminatePersistedProcessProvesAbsentLeaderWithoutProcessSideEffects(t *testing.T) {
+	originalIdentity := readPersistedProcessIdentity
+	originalFind := findPersistedProcess
+	originalTerminate := terminatePersistedProcessGroup
+	originalProof := provePersistedProcessGroupAbsent
+	t.Cleanup(func() {
+		readPersistedProcessIdentity = originalIdentity
+		findPersistedProcess = originalFind
+		terminatePersistedProcessGroup = originalTerminate
+		provePersistedProcessGroupAbsent = originalProof
+	})
+	readPersistedProcessIdentity = func(pid int) (string, error) {
+		if pid != 99 {
+			t.Fatalf("identity pid = %d, want 99", pid)
+		}
+		return "", os.ErrNotExist
+	}
+	findPersistedProcess = func(int) (*os.Process, error) {
+		t.Fatal("proven absent process group must not find a process handle")
+		return nil, nil
+	}
+	terminatePersistedProcessGroup = func(context.Context, *os.Process, string) error {
+		t.Fatal("proven absent process group must not signal")
+		return nil
+	}
+	proofCalled := false
+	provePersistedProcessGroupAbsent = func(ctx context.Context, pid int, identity string) error {
+		proofCalled = true
+		if ctx == nil || pid != 99 || identity != "linux:v2:expected" {
+			t.Fatalf("absence proof input = ctx:%v pid:%d identity:%q", ctx, pid, identity)
+		}
+		return nil
+	}
+
+	if err := terminatePersistedProcessWithContext(context.Background(), 99, "linux:v2:expected"); err != nil {
+		t.Fatalf("terminatePersistedProcessWithContext() error = %v", err)
+	}
+	if !proofCalled {
+		t.Fatal("absent process leader did not invoke process-group absence proof")
+	}
+}
+
+func TestTerminatePersistedProcessMapsAbsentProofFailuresAndAvoidsSideEffects(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{name: "group exists", err: platform.ErrPersistedProcessGroupUnproven},
+		{name: "other errno", err: unix.EPERM},
+		{name: "context canceled", err: context.Canceled},
+		{name: "context deadline", err: context.DeadlineExceeded},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			originalIdentity := readPersistedProcessIdentity
+			originalFind := findPersistedProcess
+			originalTerminate := terminatePersistedProcessGroup
+			originalProof := provePersistedProcessGroupAbsent
+			t.Cleanup(func() {
+				readPersistedProcessIdentity = originalIdentity
+				findPersistedProcess = originalFind
+				terminatePersistedProcessGroup = originalTerminate
+				provePersistedProcessGroupAbsent = originalProof
+			})
+			readPersistedProcessIdentity = func(int) (string, error) { return "", os.ErrNotExist }
+			findPersistedProcess = func(int) (*os.Process, error) {
+				t.Fatal("unproven absence must not find a process handle")
+				return nil, nil
+			}
+			terminatePersistedProcessGroup = func(context.Context, *os.Process, string) error {
+				t.Fatal("unproven absence must not signal")
+				return nil
+			}
+			proofContext := context.Background()
+			proofErr := test.err
+			if errors.Is(test.err, context.Canceled) {
+				var cancel context.CancelFunc
+				proofContext, cancel = context.WithCancel(context.Background())
+				cancel()
+				proofErr = proofContext.Err()
+			} else if errors.Is(test.err, context.DeadlineExceeded) {
+				var cancel context.CancelFunc
+				proofContext, cancel = context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+				defer cancel()
+				proofErr = proofContext.Err()
+			}
+			provePersistedProcessGroupAbsent = func(ctx context.Context, pid int, identity string) error {
+				if ctx != proofContext {
+					t.Fatalf("proof context = %p, want %p", ctx, proofContext)
+				}
+				if pid != 99 || identity != "linux:v2:expected" {
+					t.Fatalf("absence proof input = pid:%d identity:%q", pid, identity)
+				}
+				return proofErr
+			}
+
+			err := terminatePersistedProcessWithContext(proofContext, 99, "linux:v2:expected")
+			if !errors.Is(err, errPersistedProcessStopUnproven) {
+				t.Fatalf("terminatePersistedProcessWithContext() error = %v, want unproven stop", err)
+			}
+			if !errors.Is(err, test.err) {
+				t.Fatalf("terminatePersistedProcessWithContext() error = %v, want underlying %v", err, test.err)
+			}
+		})
+	}
+}
+
+func TestTerminatePersistedProcessRejectsChangedIdentity(t *testing.T) {
 	for _, test := range []struct {
 		name string
 		read func(int) (string, error)
 	}{
-		{name: "absent", read: func(int) (string, error) { return "", os.ErrNotExist }},
 		{name: "changed", read: func(int) (string, error) { return "linux:99:new", nil }},
 	} {
 		t.Run(test.name, func(t *testing.T) {

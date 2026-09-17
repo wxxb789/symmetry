@@ -13,32 +13,40 @@ import (
 )
 
 var (
-	readPersistedProcessIdentity   = platform.ProcessIdentity
-	findPersistedProcess           = os.FindProcess
-	terminatePersistedProcessGroup = platform.TerminateProcessGroup
+	readPersistedProcessIdentity     = platform.ProcessIdentity
+	findPersistedProcess             = os.FindProcess
+	terminatePersistedProcessGroup   = platform.TerminateProcessGroup
+	provePersistedProcessGroupAbsent = platform.ProvePersistedProcessGroupAbsent
 )
 
 func terminatePersistedProcess(pid int, identity string) error {
+	return terminatePersistedProcessWithContext(context.Background(), pid, identity)
+}
+
+func terminatePersistedProcessWithContext(ctx context.Context, pid int, identity string) error {
 	if pid <= 0 || identity == "" {
 		return errors.New("persisted process identity is required")
 	}
 	actual, err := readPersistedProcessIdentity(pid)
 	if errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("%w: persisted process leader is absent", errPersistedProcessStopUnproven)
+		if proofErr := provePersistedProcessGroupAbsent(ctx, pid, identity); proofErr != nil {
+			return fmt.Errorf("%w: prove persisted process group absence: %w", errPersistedProcessStopUnproven, proofErr)
+		}
+		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("%w: read persisted process identity: %v", errPersistedProcessStopUnproven, err)
+		return fmt.Errorf("%w: read persisted process identity: %w", errPersistedProcessStopUnproven, err)
 	}
 	if actual != identity {
 		return fmt.Errorf("%w: persisted process identity changed", errPersistedProcessStopUnproven)
 	}
 	process, err := findPersistedProcess(pid)
 	if err != nil {
-		return fmt.Errorf("%w: find persisted process: %v", errPersistedProcessStopUnproven, err)
+		return fmt.Errorf("%w: find persisted process: %w", errPersistedProcessStopUnproven, err)
 	}
 	defer process.Release()
-	if err := terminatePersistedProcessGroup(context.Background(), process, identity); err != nil {
-		return fmt.Errorf("%w: terminate persisted process group: %v", errPersistedProcessStopUnproven, err)
+	if err := terminatePersistedProcessGroup(ctx, process, identity); err != nil {
+		return fmt.Errorf("%w: terminate persisted process group: %w", errPersistedProcessStopUnproven, err)
 	}
 	return nil
 }
