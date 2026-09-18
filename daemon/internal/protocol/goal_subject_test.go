@@ -74,6 +74,15 @@ func TestCanonicalizeJSONStringEscapingAndUnicodeCoverage(t *testing.T) {
 	}
 }
 
+func TestDecodeStrictObjectRejectsEscapedDuplicateMembers(t *testing.T) {
+	var target struct {
+		Value int `json:"value"`
+	}
+	if err := decodeStrictObject([]byte(`{"value":1,"\u0076alue":2}`), &target, "value"); err == nil {
+		t.Fatalf("decodeStrictObject accepted escaped duplicate member: %+v", target)
+	}
+}
+
 func TestCanonicalizeJSONNormalizesNumericNegativeZeroOnly(t *testing.T) {
 	negativeZero, err := CanonicalizeJSON([]byte(`{"value":-0}`))
 	if err != nil {

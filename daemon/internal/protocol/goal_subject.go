@@ -253,6 +253,9 @@ func decodeStrictObject(data []byte, target any, required ...string) error {
 	if len(trimmed) == 0 || trimmed[0] != '{' {
 		return errors.New("JSON value must be an object")
 	}
+	if err := RejectDuplicateJSONMembers(trimmed); err != nil {
+		return err
+	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(trimmed, &fields); err != nil {
 		return fmt.Errorf("decode object fields: %w", err)
