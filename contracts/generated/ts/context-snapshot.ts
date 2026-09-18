@@ -39,17 +39,13 @@ export type SymmetryContextSnapshotV1 = {
       work_item_id?: null;
       work_contract?: {
         purpose?: "plan";
-        [k: string]: unknown | undefined;
       };
-      [k: string]: unknown | undefined;
     }
   | {
       work_item_id?: UUID;
       work_contract?: {
         purpose?: "implement" | "validate" | "observe" | "chat";
-        [k: string]: unknown | undefined;
       };
-      [k: string]: unknown | undefined;
     }
 );
 export type UUID = string;

@@ -124,12 +124,10 @@ export type SymmetryGoalCommandV1 =
         | {
             purpose?: "validate";
             validation_of_task_id?: UUID;
-            [k: string]: unknown | undefined;
           }
         | {
             purpose?: "implement" | "observe" | "chat";
             validation_of_task_id?: null;
-            [k: string]: unknown | undefined;
           }
       ) &
         (
@@ -250,20 +248,17 @@ export type ExecutionPolicy1 =
   | {
       automatic_execution?: false;
       budget_mode?: "soft";
-      [k: string]: unknown | undefined;
     }
   | {
       automatic_execution?: false;
       budget_mode?: "strict";
       per_run_cost_limit_microusd?: Microusd;
       hard_cost_limit_required?: true;
-      [k: string]: unknown | undefined;
     }
   | {
       automatic_execution?: true;
       budget_mode?: "soft";
       budget_limit_microusd?: Microusd;
-      [k: string]: unknown | undefined;
     }
   | {
       automatic_execution?: true;
@@ -271,7 +266,6 @@ export type ExecutionPolicy1 =
       budget_limit_microusd?: Microusd;
       per_run_cost_limit_microusd?: Microusd;
       hard_cost_limit_required?: true;
-      [k: string]: unknown | undefined;
     };
 export type PlanBaseline =
   | {

@@ -195,3 +195,57 @@ export function useDecision(value: SymmetryDecisionV1) {
     }
   }
 }
+
+declare const usageForExactnessTest: SymmetryUsageV1;
+
+export const rootExtraFieldIsRejected: SymmetryUsageV1 = {
+  ...usageForExactnessTest,
+  // @ts-expect-error closed root DTOs must not expose a catch-all index signature.
+  unexpected_root_field: true,
+};
+
+declare const goalCreateForExactnessTest: SymmetryGoalCreateV1;
+
+export const nestedExtraFieldIsRejected: SymmetryGoalCreateV1 = {
+  ...goalCreateForExactnessTest,
+  initial_revision: {
+    ...goalCreateForExactnessTest.initial_revision,
+    execution_policy: {
+      ...goalCreateForExactnessTest.initial_revision.execution_policy,
+      automatic_execution: false,
+      budget_mode: "soft",
+      // @ts-expect-error closed nested objects must reject unknown fields.
+      unexpected_nested_field: true,
+    },
+  },
+};
+
+declare const admitTaskForExactnessTest: Extract<
+  SymmetryGoalCommandV1,
+  { kind: "admit_task" }
+>;
+
+export const unionPayloadExtraFieldIsRejected: Extract<
+  SymmetryGoalCommandV1,
+  { kind: "admit_task" }
+> = {
+  ...admitTaskForExactnessTest,
+  payload: {
+    work_item_id: "resource-id",
+    purpose: "implement",
+    model_profile: "model",
+    session_mode: "fresh",
+    requested_session_id: null,
+    validation_of_task_id: null,
+    // @ts-expect-error union payloads must reject unknown fields.
+    unexpected_payload_field: true,
+  },
+};
+
+export const typedMapAllowsResourceKeys: NonNullable<SymmetryAdmissionV1["provider_scope"]> = {
+  resource_ids: ["resource-id"],
+  operations_by_resource: {
+    "resource-id": ["resource.sync"],
+  },
+  change_target: null,
+};

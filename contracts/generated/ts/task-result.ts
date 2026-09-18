@@ -48,13 +48,11 @@ export type SymmetryTaskResultV1 = {
       kind?: "plan_proposed";
       proposal?: PlanProposal;
       reason?: null;
-      [k: string]: unknown | undefined;
     }
   | {
       kind?: "progress" | "candidate_completion" | "blocked" | "repair_required" | "replan_required";
       proposal?: null;
       reason?: null;
-      [k: string]: unknown | undefined;
     }
   | {
       kind?: "failed";
@@ -72,7 +70,6 @@ export type SymmetryTaskResultV1 = {
         | "process_failure"
         | "cancelled"
         | "unknown_outcome";
-      [k: string]: unknown | undefined;
     }
 );
 export type UUID = string;

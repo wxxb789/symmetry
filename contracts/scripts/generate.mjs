@@ -238,6 +238,10 @@ const generate = async (check = false) => {
       cwd: V1_DIR,
       format: true,
       style: { bracketSpacing: true },
+      // json-schema-to-typescript treats omitted additionalProperties as open,
+      // but these fragments are discriminator constraints inside explicitly
+      // closed root objects. Typed additionalProperties values remain maps.
+      additionalProperties: false,
       strictIndexSignatures: true,
     });
     const contents = key === "admission" ? preserveAdmissionSessionDiscriminator(types) : types;

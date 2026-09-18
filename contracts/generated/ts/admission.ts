@@ -4,30 +4,25 @@ type SymmetryAdmissionV1Base = (
   | {
       session_mode: "fresh";
       requested_session_id: null;
-      [k: string]: unknown | undefined;
     }
   | {
       session_mode: "resume";
       requested_session_id: UUID;
-      [k: string]: unknown | undefined;
     }
   | {
       session_mode: "handoff";
       requested_session_id: null;
       purpose?: "implement" | "validate";
-      [k: string]: unknown | undefined;
     }
 ) &
   (
     | {
         purpose?: "validate";
         validation_of_task_id?: UUID;
-        [k: string]: unknown | undefined;
       }
     | {
         purpose?: "implement" | "plan" | "observe" | "chat";
         validation_of_task_id?: null;
-        [k: string]: unknown | undefined;
       }
   ) & {
     schema_version: "symmetry.admission.v1";
@@ -54,20 +49,17 @@ type SymmetryAdmissionV1Base = (
     | {
         purpose?: "implement";
         work_item_id?: UUID;
-        [k: string]: unknown | undefined;
       }
     | {
         purpose?: "validate" | "observe" | "chat";
         work_item_id?: UUID;
         provider_scope?: null;
-        [k: string]: unknown | undefined;
       }
     | {
         purpose?: "plan";
         work_item_id?: null;
         validation_of_task_id?: null;
         provider_scope?: null;
-        [k: string]: unknown | undefined;
       }
   );
 export type UUID = string;

@@ -27,29 +27,24 @@ export type SymmetryDecisionV1 = {
       kind: "plan";
       work_item_id: null;
       subject_hash: null;
-      [k: string]: unknown | undefined;
     }
   | {
       kind: "scope";
       work_item_id: UUID;
       subject_hash: null;
-      [k: string]: unknown | undefined;
     }
   | {
       kind: "review";
       work_item_id: UUID;
       subject_hash: Sha256;
-      [k: string]: unknown | undefined;
     }
   | {
       kind: "completion";
       work_item_id: null;
       subject_hash: Sha256;
-      [k: string]: unknown | undefined;
     }
   | {
       kind: "budget" | "external_action";
-      [k: string]: unknown | undefined;
     }
 );
 export type UUID = string;

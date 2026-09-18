@@ -19,12 +19,10 @@ export type SymmetryUsageV1 = {
   | {
       cost_basis?: "unknown";
       cost_microusd?: null;
-      [k: string]: unknown | undefined;
     }
   | {
       cost_basis?: "reported" | "estimated";
       cost_microusd?: Microusd;
-      [k: string]: unknown | undefined;
     }
 );
 export type UUID = string;
