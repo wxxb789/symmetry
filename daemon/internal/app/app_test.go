@@ -769,6 +769,328 @@ func TestLegacyClaimExpiryRejectsProcessBeforeWorkspaceOrProcessStart(t *testing
 	}
 }
 
+func TestClaimAdmissionInputFailsClosedBeforeWorkspaceOrProcessStart(t *testing.T) {
+	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	newClient := func(t *testing.T, template protocol.ClaimResponse) (*control.Client, <-chan string, <-chan protocol.StateTransitionRequest) {
+		t.Helper()
+		requests := make(chan string, 16)
+		transitions := make(chan protocol.StateTransitionRequest, 4)
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			requests <- request.URL.Path
+			if request.Method != http.MethodPut {
+				writer.WriteHeader(http.StatusNotFound)
+				return
+			}
+			writer.Header().Set("Content-Type", "application/json")
+			switch {
+			case strings.HasPrefix(request.URL.Path, "/api/v1/runs/run-1/claims/"):
+				claimID := request.URL.Path[strings.LastIndexByte(request.URL.Path, '/')+1:]
+				response := template
+				response.RunID = "run-1"
+				response.TaskID = "task-1"
+				response.Generation = 1
+				response.ClaimID = claimID
+				response.LeaseToken = "lease-1"
+				response.LeaseExpiresAt = now.Add(time.Minute)
+				response.LeaseRemainingMS = 60_000
+				if err := json.NewEncoder(writer).Encode(response); err != nil {
+					t.Errorf("encode claim response: %v", err)
+				}
+			case strings.HasPrefix(request.URL.Path, "/api/v1/runs/run-1/transitions/"):
+				var body struct {
+					protocol.Fence
+					State   string          `json:"state"`
+					Payload json.RawMessage `json:"payload"`
+				}
+				if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+					writer.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				transition := protocol.StateTransitionRequest{
+					Fence:        body.Fence,
+					TransitionID: request.URL.Path[strings.LastIndexByte(request.URL.Path, '/')+1:],
+					State:        body.State,
+					Payload:      body.Payload,
+				}
+				transitions <- transition
+				response := protocol.Run{
+					RunID: "run-1", TaskID: "task-1", RuntimeID: body.RuntimeID, Generation: body.Generation,
+					State: body.State, ClaimID: body.ClaimID, LeaseToken: body.LeaseToken, LeaseExpiresAt: now.Add(time.Minute),
+					Result: json.RawMessage(`null`), Failure: body.Payload,
+				}
+				if err := json.NewEncoder(writer).Encode(response); err != nil {
+					t.Errorf("encode transition response: %v", err)
+				}
+			default:
+				writer.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		t.Cleanup(server.Close)
+		client, err := control.NewClient(server.URL+"/api", "machine-token", server.Client())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return client, requests, transitions
+	}
+	newDaemon := func(t *testing.T, store *state.Store, client ControlAPI, stateDirectory string, workspaceService *countingWorkspace, startCalls *int) *daemon {
+		t.Helper()
+		value := testConfig(t)
+		value.StateDir = stateDirectory
+		value.Runtime.RepositoryResourceID = "00000000-0000-4000-8000-000000000005"
+		return &daemon{
+			config:    value,
+			store:     store,
+			control:   client,
+			workspace: workspaceService,
+			log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
+			start: func(context.Context, execution.Invocation, execution.Sink) (Process, error) {
+				(*startCalls)++
+				return fakeProcess{result: execution.Result{}}, nil
+			},
+			options: options{
+				newID:      ids(),
+				clock:      func() time.Time { return now },
+				localClock: func() time.Time { return now },
+			},
+			runtimeID:    "runtime-1",
+			runtimeEpoch: 1,
+			running:      make(map[state.RunKey]*runningRun),
+			slots:        make(chan struct{}, 1),
+		}
+
+	}
+	start := func(t *testing.T, daemon *daemon, work protocol.Work) state.RunJournal {
+		t.Helper()
+		key := state.RunKey{RunID: "run-1", Generation: 1}
+		daemon.startAssignment(context.Background(), protocol.Assignment{RunID: key.RunID, Generation: key.Generation, Work: work})
+		daemon.workers.Wait()
+		journal, err := daemon.store.LoadJournal(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return journal
+	}
+	assertNoEffects := func(t *testing.T, store *state.Store, journal state.RunJournal, workspaceService *countingWorkspace, startCalls int, stateDirectory string) {
+		t.Helper()
+		if workspaceService.prepareCalls != 0 || startCalls != 0 {
+			t.Fatalf("admission boundary caused side effects: workspace prepares=%d process starts=%d", workspaceService.prepareCalls, startCalls)
+		}
+		if journal.WorkspaceRecoveryRequired || journal.WorkspacePath != "" || journal.PID != 0 || journal.ProcessIdentity != "" {
+			t.Fatalf("admission boundary persisted workspace/process ownership: %#v", journal)
+		}
+		if sessions, err := store.ListGoalSessions(); err != nil || len(sessions) != 0 {
+			t.Fatalf("admission boundary persisted native sessions: %#v, error=%v", sessions, err)
+		}
+		if _, err := os.Stat(filepath.Join(stateDirectory, "generated")); err == nil || !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("admission boundary materialized provider bridge files: %v", err)
+		}
+	}
+	providerAccess := &protocol.ProviderAccess{
+		Path: "/api/v1/provider-actions", Token: "provider-token",
+		Grants: []protocol.ProviderGrant{{
+			ResourceID: "00000000-0000-4000-8000-000000000005",
+			Provider:   "github", Kind: "repository", Operations: []string{"resource.sync"},
+		}},
+	}
+
+	for _, test := range []struct {
+		name    string
+		input   json.RawMessage
+		restart bool
+	}{
+		{name: "mixed null marker survives replay and restart", input: json.RawMessage(`{"admission_id":"legacy","goal_admission":null}`), restart: true},
+		{name: "mixed object marker", input: json.RawMessage(`{"admission_id":"legacy","goal_admission":{}}`)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			storeDirectory := filepath.Join(root, "store")
+			stateDirectory := filepath.Join(root, "daemon")
+			store, err := state.New(storeDirectory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			work := protocol.Work{Goal: "work", AgentProfile: "local", Workspace: "local", Input: test.input}
+			client, requests, transitions := newClient(t, protocol.ClaimResponse{Work: work, ProviderAccess: providerAccess})
+			workspaceService := &countingWorkspace{}
+			startCalls := 0
+			app := newDaemon(t, store, client, stateDirectory, workspaceService, &startCalls)
+
+			journal := start(t, app, work)
+			wantFence := protocol.Fence{RuntimeID: "runtime-1", RuntimeEpoch: 1, Generation: 1, ClaimID: "id-1", LeaseToken: "lease-1"}
+			if journal.Fence() != wantFence || len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].Fence != wantFence {
+				t.Fatalf("invalid admission journal/fence = %#v, want exactly one transition with %#v", journal, wantFence)
+			}
+			if journal.LocalState != "terminal_pending" || journal.Work.AgentProfile != "local" || journal.Work.Workspace != "local" || !bytes.Equal(journal.Work.Input, test.input) {
+				t.Fatalf("invalid admission was not classified from the durable claim grant: %#v", journal)
+			}
+			var failure map[string]any
+			if err := json.Unmarshal(journal.PendingTransitions[0].Payload, &failure); err != nil {
+				t.Fatal(err)
+			}
+			if journal.TerminalState != "failed" || failure["stage"] != "invalid_admission" {
+				t.Fatalf("mixed admission failure = %#v, journal=%#v", failure, journal)
+			}
+			assertNoEffects(t, store, journal, workspaceService, startCalls, stateDirectory)
+			if got := len(requests); got != 1 {
+				t.Fatalf("control requests = %d, want claim only", got)
+			}
+
+			app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: work})
+			app.workers.Wait()
+			if got := len(requests); got != 1 {
+				t.Fatalf("same-process replay repeated claim: %d requests", got)
+			}
+			if replayed, err := store.LoadJournal(state.RunKey{RunID: "run-1", Generation: 1}); err != nil || len(replayed.PendingTransitions) != 1 {
+				t.Fatalf("same-process replay journal = %#v, error=%v", replayed, err)
+			}
+
+			if test.restart {
+				if err := store.Close(); err != nil {
+					t.Fatal(err)
+				}
+				reopened, err := state.New(storeDirectory)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer reopened.Close()
+				restarted := newDaemon(t, reopened, client, stateDirectory, workspaceService, &startCalls)
+				restarted.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: work})
+				restarted.workers.Wait()
+				replayed, err := reopened.LoadJournal(state.RunKey{RunID: "run-1", Generation: 1})
+				if err != nil || len(replayed.PendingTransitions) != 1 || replayed.Fence() != wantFence || len(requests) != 1 {
+					t.Fatalf("restart replay journal=%#v requests=%d error=%v", replayed, len(requests), err)
+				}
+				assertNoEffects(t, reopened, replayed, workspaceService, startCalls, stateDirectory)
+				key := state.RunKey{RunID: "run-1", Generation: 1}
+				restarted.running[key] = &runningRun{cleanupBlocked: true}
+				if err := restarted.flushRun(context.Background(), replayed); err != nil {
+					t.Fatalf("flush durable invalid admission: %v", err)
+				}
+				delivered, err := reopened.LoadJournal(key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(delivered.PendingTransitions) != 0 || delivered.TerminalVerdict != state.TerminalVerdictAccepted || len(requests) != 2 || len(transitions) != 1 {
+					t.Fatalf("delivered invalid admission journal=%#v requests=%d transitions=%d", delivered, len(requests), len(transitions))
+				}
+				transition := <-transitions
+				if transition.TransitionID != replayed.PendingTransitions[0].TransitionID || transition.Fence != wantFence || !bytes.Equal(transition.Payload, replayed.PendingTransitions[0].Payload) {
+					t.Fatalf("replayed transition=%#v want=%#v", transition, replayed.PendingTransitions[0])
+				}
+				if err := restarted.flushRun(context.Background(), delivered); err != nil || len(requests) != 2 {
+					t.Fatalf("delivered replay repeated transition: requests=%d error=%v", len(requests), err)
+				}
+			}
+		})
+	}
+
+	t.Run("claim grant write failure stops before parsing and effects", func(t *testing.T) {
+		root := t.TempDir()
+		store, err := state.New(filepath.Join(root, "store"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		work := protocol.Work{Goal: "work", AgentProfile: "local", Workspace: "local", Input: json.RawMessage(`{"admission_id":"legacy","goal_admission":null}`)}
+		if _, err := store.SaveClaimIntent(state.ClaimIntent{
+			Key: state.RunKey{RunID: "run-1", Generation: 1}, RuntimeKey: "default", RuntimeID: "runtime-1", RuntimeEpoch: 1,
+			ClaimID: "claim-fixed", LocalState: "claiming", Work: work, WorkspaceBindingKey: "local",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		client, requests, _ := newClient(t, protocol.ClaimResponse{Work: work, ProviderAccess: providerAccess})
+		workspaceService := &countingWorkspace{}
+		startCalls := 0
+		writeAttempts := 0
+		restore := store.SetAtomicWriterForTesting(func(string, []byte) error {
+			writeAttempts++
+			return errors.New("injected claim grant write failure")
+		})
+		app := newDaemon(t, store, client, filepath.Join(root, "daemon"), workspaceService, &startCalls)
+		app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: work})
+		app.workers.Wait()
+		restore()
+		journal, err := store.LoadJournal(state.RunKey{RunID: "run-1", Generation: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if writeAttempts != 1 || journal.LocalState != "claiming" || journal.LeaseToken != "" || len(journal.PendingTransitions) != 0 {
+			t.Fatalf("claim grant failure journal=%#v write attempts=%d", journal, writeAttempts)
+		}
+		if workspaceService.prepareCalls != 0 || startCalls != 0 || len(requests) != 1 {
+			t.Fatalf("claim grant failure effects: prepares=%d starts=%d requests=%d", workspaceService.prepareCalls, startCalls, len(requests))
+		}
+	})
+
+	t.Run("bad resume reservation fails before deterministic validation", func(t *testing.T) {
+		admission, present, err := parseAdmissionInput(validAdmissionInput())
+		if err != nil || !present {
+			t.Fatalf("parse admission: present=%t error=%v", present, err)
+		}
+		validationTaskID := "00000000-0000-4000-8000-000000000006"
+		requestedSessionID := "00000000-0000-4000-8000-000000000007"
+		reservedSessionID := "00000000-0000-4000-8000-000000000008"
+		bindingID := "00000000-0000-4000-8000-000000000009"
+		admission.Purpose = protocol.AdmissionPurposeValidate
+		admission.ValidationOfTaskID = &validationTaskID
+		admission.SessionMode = protocol.SessionModeResume
+		admission.RequestedSessionID = &requestedSessionID
+		input, err := json.Marshal(admission)
+		if err != nil {
+			t.Fatal(err)
+		}
+		work := protocol.Work{Goal: "validate", AgentProfile: "local", Workspace: "local", Input: input}
+		client, requests, _ := newClient(t, protocol.ClaimResponse{Work: work, HarnessSessionID: &reservedSessionID, HarnessBindingID: &bindingID})
+		root := t.TempDir()
+		store, err := state.New(filepath.Join(root, "store"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		workspaceService := &countingWorkspace{}
+		startCalls := 0
+		app := newDaemon(t, store, client, filepath.Join(root, "daemon"), workspaceService, &startCalls)
+		journal := start(t, app, work)
+		if len(journal.PendingTransitions) != 1 {
+			t.Fatalf("bad reservation transitions = %#v", journal.PendingTransitions)
+		}
+		var failure map[string]string
+		if err := json.Unmarshal(journal.PendingTransitions[0].Payload, &failure); err != nil {
+			t.Fatal(err)
+		}
+		if failure["stage"] != "goal_admission" || failure["reason"] != string(protocol.TaskResultReasonResumeRejected) || !strings.Contains(failure["error"], "same harness session") || strings.Contains(failure["error"], "deterministic artifact validation") {
+			t.Fatalf("bad reservation failure = %#v", failure)
+		}
+		if workspaceService.prepareCalls != 0 || startCalls != 0 || len(requests) != 1 {
+			t.Fatalf("bad reservation effects: prepares=%d starts=%d requests=%d", workspaceService.prepareCalls, startCalls, len(requests))
+		}
+	})
+
+	t.Run("legacy marker keeps legacy process path", func(t *testing.T) {
+		work := protocol.Work{Goal: "legacy", AgentProfile: "local", Workspace: "local", Input: json.RawMessage(`{"goal_admission":["legacy"]}`)}
+		client, requests, _ := newClient(t, protocol.ClaimResponse{Work: work})
+		root := t.TempDir()
+		store, err := state.New(filepath.Join(root, "store"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		workspaceService := &countingWorkspace{}
+		startCalls := 0
+		app := newDaemon(t, store, client, filepath.Join(root, "daemon"), workspaceService, &startCalls)
+		journal := start(t, app, work)
+		if workspaceService.prepareCalls != 1 || startCalls != 1 || len(requests) != 1 {
+			t.Fatalf("legacy path effects: prepares=%d starts=%d requests=%d", workspaceService.prepareCalls, startCalls, len(requests))
+		}
+		for _, transition := range journal.PendingTransitions {
+			if strings.Contains(string(transition.Payload), `"stage":"invalid_admission"`) {
+				t.Fatalf("legacy marker was rejected as admission: %#v", journal)
+			}
+		}
+	})
+}
+
 func TestCommandAcknowledgementIsIdempotentAndUsesAllowedOutcomes(t *testing.T) {
 	store, key := claimedStore(t)
 	if _, err := store.SetLocalState(key, "waiting_for_input"); err != nil {

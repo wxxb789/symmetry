@@ -2900,47 +2900,11 @@ func isNilHarnessSession(session harness.Session) bool {
 }
 
 func parseAdmissionInput(input json.RawMessage) (protocol.Admission, bool, error) {
-	trimmed := bytes.TrimSpace(input)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) || trimmed[0] != '{' {
-		return protocol.Admission{}, false, nil
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(trimmed, &fields); err != nil {
-		return protocol.Admission{}, true, fmt.Errorf("%w: %v", errInvalidAdmission, err)
-	}
-	if nested, present := fields["goal_admission"]; present {
-		if len(bytes.TrimSpace(nested)) == 0 || bytes.Equal(bytes.TrimSpace(nested), []byte("null")) {
-			return protocol.Admission{}, false, nil
-		}
-		admission, err := protocol.ParseAdmission(nested)
-		if err == nil {
-			return admission, true, nil
-		}
-		if admissionSchemaVersion(nested) == protocol.AdmissionSchemaVersion {
-			return protocol.Admission{}, true, fmt.Errorf("%w: %v", errInvalidAdmission, err)
-		}
-		return protocol.Admission{}, false, nil
-	}
-	if admissionSchemaVersion(trimmed) != protocol.AdmissionSchemaVersion {
-		return protocol.Admission{}, false, nil
-	}
-	admission, err := protocol.ParseAdmission(trimmed)
+	admission, present, err := protocol.ParseAdmissionInput(input)
 	if err != nil {
-		return protocol.Admission{}, true, fmt.Errorf("%w: %v", errInvalidAdmission, err)
+		return protocol.Admission{}, present, fmt.Errorf("%w: %v", errInvalidAdmission, err)
 	}
-	return admission, true, nil
-}
-
-func admissionSchemaVersion(input json.RawMessage) string {
-	var object map[string]json.RawMessage
-	if err := json.Unmarshal(input, &object); err != nil {
-		return ""
-	}
-	var schemaVersion string
-	if err := json.Unmarshal(object["schema_version"], &schemaVersion); err != nil {
-		return ""
-	}
-	return schemaVersion
+	return admission, present, nil
 }
 
 func admissionLaunchFailure(admission protocol.Admission, capabilities harness.Capabilities, providerAccess *protocol.ProviderAccess) error {
@@ -3018,6 +2982,9 @@ func goalSessionBindingID(admission protocol.Admission, claim protocol.ClaimResp
 		if claim.HarnessSessionID == nil || claim.HarnessBindingID == nil || strings.TrimSpace(*claim.HarnessSessionID) == "" || strings.TrimSpace(*claim.HarnessBindingID) == "" {
 			return "", errors.New("resume Goal claim is missing a harness session or binding ID")
 		}
+		if admission.RequestedSessionID == nil || *admission.RequestedSessionID != *claim.HarnessSessionID {
+			return "", errors.New("resume admission and claim do not name the same harness session")
+		}
 		return *claim.HarnessBindingID, nil
 	default:
 		return "", errors.New("Goal claim has an invalid session mode")
@@ -3040,7 +3007,7 @@ func (daemon *daemon) recoverPiGoalSessionForResume(ctx context.Context, claim p
 	if admission.RequestedSessionID == nil || claim.HarnessSessionID == nil || *admission.RequestedSessionID != *claim.HarnessSessionID {
 		return resumedGoalSession{}, errors.New("resume admission and claim do not name the same harness session")
 	}
-	session, err := daemon.store.LoadGoalSessionByControlSessionID(*claim.HarnessSessionID)
+	session, err := daemon.store.LoadGoalSessionByControlSessionID(*admission.RequestedSessionID)
 	if err != nil {
 		return resumedGoalSession{}, fmt.Errorf("load retained pi session: %w", err)
 	}
@@ -3147,6 +3114,10 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 	if admission.Subject.ResourceID != daemon.config.Runtime.RepositoryResourceID {
 		return errors.New("Goal admission subject resource_id does not match the configured runtime repository_resource_id")
 	}
+	bindingID, err := goalSessionBindingID(admission, claim)
+	if err != nil {
+		return taskResultFailure(protocol.TaskResultReasonResumeRejected, err)
+	}
 	if admission.Purpose == protocol.AdmissionPurposeValidate {
 		deterministic, err := daemon.tryDeterministicArtifactValidation(ctx, key, claim, admission)
 		if err != nil {
@@ -3163,10 +3134,6 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 	}
 	if err := admissionLaunchFailure(admission, daemon.harnessCapabilities, claim.ProviderAccess); err != nil {
 		return err
-	}
-	bindingID, err := goalSessionBindingID(admission, claim)
-	if err != nil {
-		return taskResultFailure(protocol.TaskResultReasonResumeRejected, err)
 	}
 	configuredKind, err := configuredHarnessKind(daemon.config.Runtime.HarnessKind)
 	if err != nil {

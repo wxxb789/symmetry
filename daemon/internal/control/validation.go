@@ -103,38 +103,7 @@ func validateClaimResponse(runID string, request protocol.ClaimRequest, response
 			return invalidResponse("claim", err.Error())
 		}
 	}
-	if mode, goalAdmission := claimGoalAdmissionSessionMode(response.Work); goalAdmission {
-		switch mode {
-		case protocol.SessionModeResume:
-			if !response.HasField("harness_session_id") || !response.HasField("harness_binding_id") || response.HarnessSessionID == nil || response.HarnessBindingID == nil {
-				return invalidResponse("claim", "resume Goal claim requires harness_session_id and harness_binding_id")
-			}
-		case protocol.SessionModeFresh, protocol.SessionModeHandoff:
-			if response.HarnessSessionID != nil || response.HarnessBindingID != nil {
-				return invalidResponse("claim", "fresh and handoff Goal claims must not reserve a harness session")
-			}
-		}
-	}
 	return nil
-}
-
-func claimGoalAdmissionSessionMode(work protocol.Work) (protocol.SessionMode, bool) {
-	input := bytes.TrimSpace(work.Input)
-	if len(input) == 0 || input[0] != '{' {
-		return "", false
-	}
-	var envelope map[string]json.RawMessage
-	if err := json.Unmarshal(input, &envelope); err != nil {
-		return "", false
-	}
-	if nested, present := envelope["goal_admission"]; present {
-		input = bytes.TrimSpace(nested)
-	}
-	admission, err := protocol.ParseAdmission(input)
-	if err != nil {
-		return "", false
-	}
-	return admission.SessionMode, true
 }
 
 func validateProviderAccess(access protocol.ProviderAccess) error {

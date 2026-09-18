@@ -1922,23 +1922,29 @@ func TestFreshCodexGoalAdmissionUsesDurableStagedNativeLifecycle(t *testing.T) {
 
 func TestGoalSessionBindingIDUsesServerReservationOnlyForResume(t *testing.T) {
 	resumeSessionID := "00000000-0000-4000-8000-000000000007"
+	otherSessionID := "00000000-0000-4000-8000-000000000009"
 	resumeBindingID := "00000000-0000-4000-8000-000000000008"
 	tests := []struct {
-		name      string
-		mode      protocol.SessionMode
-		claim     protocol.ClaimResponse
-		want      string
-		wantError bool
+		name               string
+		mode               protocol.SessionMode
+		requestedSessionID *string
+		claim              protocol.ClaimResponse
+		want               string
+		wantError          bool
 	}{
 		{name: "fresh defers binding to Control attach", mode: protocol.SessionModeFresh},
 		{name: "handoff defers binding to Control attach", mode: protocol.SessionModeHandoff},
-		{name: "resume uses server binding", mode: protocol.SessionModeResume, claim: protocol.ClaimResponse{HarnessSessionID: &resumeSessionID, HarnessBindingID: &resumeBindingID}, want: resumeBindingID},
-		{name: "resume requires both server values", mode: protocol.SessionModeResume, claim: protocol.ClaimResponse{HarnessSessionID: &resumeSessionID}, wantError: true},
+		{name: "resume uses exact server binding", mode: protocol.SessionModeResume, requestedSessionID: &resumeSessionID, claim: protocol.ClaimResponse{HarnessSessionID: &resumeSessionID, HarnessBindingID: &resumeBindingID}, want: resumeBindingID},
+		{name: "resume requires requested session", mode: protocol.SessionModeResume, claim: protocol.ClaimResponse{HarnessSessionID: &resumeSessionID, HarnessBindingID: &resumeBindingID}, wantError: true},
+		{name: "resume requires both server values", mode: protocol.SessionModeResume, requestedSessionID: &resumeSessionID, claim: protocol.ClaimResponse{HarnessSessionID: &resumeSessionID}, wantError: true},
+		{name: "resume rejects mismatched server session", mode: protocol.SessionModeResume, requestedSessionID: &resumeSessionID, claim: protocol.ClaimResponse{HarnessSessionID: &otherSessionID, HarnessBindingID: &resumeBindingID}, wantError: true},
+		{name: "fresh rejects server session", mode: protocol.SessionModeFresh, claim: protocol.ClaimResponse{HarnessSessionID: &resumeSessionID}, wantError: true},
 		{name: "fresh rejects server reservation", mode: protocol.SessionModeFresh, claim: protocol.ClaimResponse{HarnessBindingID: &resumeBindingID}, wantError: true},
+		{name: "handoff rejects server reservation", mode: protocol.SessionModeHandoff, claim: protocol.ClaimResponse{HarnessSessionID: &resumeSessionID, HarnessBindingID: &resumeBindingID}, wantError: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			bindingID, err := goalSessionBindingID(protocol.Admission{SessionMode: test.mode}, test.claim)
+			bindingID, err := goalSessionBindingID(protocol.Admission{SessionMode: test.mode, RequestedSessionID: test.requestedSessionID}, test.claim)
 			if test.wantError {
 				if err == nil {
 					t.Fatal("goalSessionBindingID() succeeded")

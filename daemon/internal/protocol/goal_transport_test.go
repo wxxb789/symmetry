@@ -179,6 +179,11 @@ func TestAdmissionSessionModeBindsRequestedSessionID(t *testing.T) {
 	if !strings.Contains(string(encoded), `"handoff_source_run_id":"`+testUUIDTwo+`"`) {
 		t.Fatalf("handoff admission lost source run identity: %s", encoded)
 	}
+	unsupportedHandoffPurpose := handoff
+	unsupportedHandoffPurpose.Purpose = AdmissionPurposeObserve
+	if err := unsupportedHandoffPurpose.Validate(); err == nil || !strings.Contains(err.Error(), "handoff") {
+		t.Fatalf("observe handoff validation error = %v, want handoff purpose rejection", err)
+	}
 
 	resumeWithoutSession := strings.Replace(base, `"session_mode":"fresh"`, `"session_mode":"resume"`, 1)
 	if _, err := ParseAdmission([]byte(resumeWithoutSession)); err == nil {
@@ -211,6 +216,38 @@ func TestAdmissionSessionModeBindsRequestedSessionID(t *testing.T) {
 	resumeWithSource := strings.Replace(resumeJSON, `"requested_session_id":"`+testUUIDTwo+`"`, `"requested_session_id":"`+testUUIDTwo+`","handoff_source_run_id":"`+testUUID+`"`, 1)
 	if _, err := ParseAdmission([]byte(resumeWithSource)); err == nil {
 		t.Fatal("resume admission with handoff_source_run_id was accepted")
+	}
+}
+
+func TestAdmissionDirectUnmarshalTracksHandoffSourceRunIDPresence(t *testing.T) {
+	base := `{"schema_version":"symmetry.admission.v1","admission_id":"` + testUUID + `","goal_id":"` + testUUIDTwo + `","goal_revision":1,"work_item_id":"` + testUUID + `","purpose":"implement","context_snapshot_id":"` + testUUIDTwo + `","context_hash":"` + testTreeDigest + `","model_profile":"implementation-default","session_mode":"fresh","requested_session_id":null,"subject":{"resource_id":"` + testUUID + `","commit":"` + testCommit + `","tree_digest":"` + testTreeDigest + `"},"limits":{"max_turns":1,"deadline_at":"2026-09-09T12:00:00Z","max_cost_microusd":null},"validation_of_task_id":null,"provider_scope":null}`
+	resume := strings.Replace(base, `"session_mode":"fresh"`, `"session_mode":"resume"`, 1)
+	resume = strings.Replace(resume, `"requested_session_id":null`, `"requested_session_id":"`+testUUIDTwo+`"`, 1)
+	handoff := strings.Replace(base, `"session_mode":"fresh"`, `"session_mode":"handoff"`, 1)
+	handoff = strings.Replace(handoff, `"requested_session_id":null`, `"requested_session_id":null,"handoff_source_run_id":"`+testUUIDTwo+`"`, 1)
+
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{name: "fresh omitted", input: base},
+		{name: "fresh explicit null", input: strings.Replace(base, `"requested_session_id":null`, `"requested_session_id":null,"handoff_source_run_id":null`, 1), wantErr: true},
+		{name: "resume omitted", input: resume},
+		{name: "resume explicit null", input: strings.Replace(resume, `"requested_session_id":"`+testUUIDTwo+`"`, `"requested_session_id":"`+testUUIDTwo+`","handoff_source_run_id":null`, 1), wantErr: true},
+		{name: "handoff valid UUID", input: handoff},
+		{name: "handoff omitted", input: strings.Replace(handoff, `,"handoff_source_run_id":"`+testUUIDTwo+`"`, "", 1), wantErr: true},
+		{name: "handoff explicit null", input: strings.Replace(handoff, `"handoff_source_run_id":"`+testUUIDTwo+`"`, `"handoff_source_run_id":null`, 1), wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var admission Admission
+			err := json.Unmarshal([]byte(test.input), &admission)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("json.Unmarshal() error = %v, wantErr=%t", err, test.wantErr)
+			}
+		})
 	}
 }
 

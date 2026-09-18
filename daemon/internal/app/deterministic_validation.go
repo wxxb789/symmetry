@@ -491,12 +491,6 @@ func validateDeterministicArtifactAdmission(claim protocol.ClaimResponse, admiss
 	if admission.SessionMode != protocol.SessionModeFresh || admission.RequestedSessionID != nil || admission.HandoffSourceRunID != nil {
 		return deterministicValidationError("admission", errors.New("deterministic artifact validation requires a fresh admission without a native session"))
 	}
-	if (claim.HarnessSessionID == nil) != (claim.HarnessBindingID == nil) {
-		return deterministicValidationError("claim", errors.New("claim harness session and binding must be present together or both absent"))
-	}
-	if claim.HarnessSessionID != nil || claim.HarnessBindingID != nil {
-		return deterministicValidationError("claim", errors.New("deterministic artifact validation must not use a native harness session"))
-	}
 	if runContext.SessionID != nil {
 		return deterministicValidationError("context", errors.New("deterministic artifact validation context must not contain a session_id"))
 	}

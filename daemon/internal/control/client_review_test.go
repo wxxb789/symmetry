@@ -44,6 +44,8 @@ func TestClaimRejectsUntrustedResponses(t *testing.T) {
 		{name: "unknown grant operation", response: claimResponse(`"provider_access":{"path":"/api/v1/provider-actions","token":"provider-token","grants":[{"resource_id":"resource-1","provider":"github","kind":"repository","operations":["repository.delete"]}]}`)},
 		{name: "change operation on CI grant", response: claimResponse(`"provider_access":{"path":"/api/v1/provider-actions","token":"provider-token","grants":[{"resource_id":"resource-1","provider":"azure_devops","kind":"ci","operations":["change.update"]}]}`)},
 		{name: "duplicate grant operation", response: claimResponse(`"provider_access":{"path":"/api/v1/provider-actions","token":"provider-token","grants":[{"resource_id":"resource-1","provider":"github","kind":"repository","operations":["resource.sync","resource.sync"]}]}`)},
+		{name: "invalid harness session ID", response: claimResponse(`"harness_session_id":"not-a-uuid"`)},
+		{name: "invalid harness binding ID", response: claimResponse(`"harness_binding_id":"not-a-uuid"`)},
 	}
 
 	for _, test := range tests {
@@ -54,6 +56,50 @@ func TestClaimRejectsUntrustedResponses(t *testing.T) {
 			_, err := client.Claim(context.Background(), "run-1", protocol.ClaimRequest{RuntimeID: "runtime-1", RuntimeEpoch: 3, Generation: 2, ClaimID: "claim-1"})
 			if err == nil || !strings.Contains(err.Error(), "invalid claim response") {
 				t.Fatalf("error = %v, want invalid claim response", err)
+			}
+		})
+	}
+}
+
+func TestClaimLeavesAdmissionAndReservationSemanticsToApp(t *testing.T) {
+	const validFreshAdmission = `{"schema_version":"symmetry.admission.v1","admission_id":"11111111-1111-4111-8111-111111111111","goal_id":"22222222-2222-4222-8222-222222222222","goal_revision":1,"work_item_id":"33333333-3333-4333-8333-333333333333","purpose":"implement","context_snapshot_id":"44444444-4444-4444-8444-444444444444","context_hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000","model_profile":"implementation-default","session_mode":"fresh","requested_session_id":null,"subject":{"resource_id":"55555555-5555-4555-8555-555555555555","commit":"0000000000000000000000000000000000000000","tree_digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"limits":{"max_turns":1,"deadline_at":"2026-12-31T00:00:00Z","max_cost_microusd":null},"validation_of_task_id":null,"provider_scope":null}`
+	validResumeAdmission := strings.Replace(
+		strings.Replace(validFreshAdmission, `"session_mode":"fresh"`, `"session_mode":"resume"`, 1),
+		`"requested_session_id":null`, `"requested_session_id":"66666666-6666-4666-8666-666666666666"`, 1,
+	)
+	claim := func(t *testing.T, input, reservation string) error {
+		t.Helper()
+		replacement := `"work":{"goal":"work","agent_profile":"codex","workspace":"primary","input":` + input + `}`
+		if reservation != "" {
+			replacement += `,` + reservation
+		}
+		body := claimResponse(replacement)
+		server := jsonServer(t, http.StatusOK, body, nil)
+		defer server.Close()
+		_, err := mustMachineClient(t, server).Claim(context.Background(), "run-1", protocol.ClaimRequest{
+			RuntimeID: "runtime-1", RuntimeEpoch: 3, Generation: 2, ClaimID: "claim-1",
+		})
+		return err
+	}
+
+	for _, test := range []struct {
+		name        string
+		input       string
+		reservation string
+	}{
+		{name: "mixed null marker", input: `{"admission_id":"legacy","goal_admission":null}`},
+		{name: "mixed object marker", input: `{"admission_id":"legacy","goal_admission":{}}`},
+		{name: "resume without reservation", input: validResumeAdmission},
+		{
+			name:        "fresh with reservation",
+			input:       validFreshAdmission,
+			reservation: `"harness_session_id":"66666666-6666-4666-8666-666666666666","harness_binding_id":"77777777-7777-4777-8777-777777777777"`,
+		},
+		{name: "legacy array marker", input: `{"goal_admission":["legacy"]}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := claim(t, test.input, test.reservation); err != nil {
+				t.Fatalf("Claim() classified app-owned admission semantics: %v", err)
 			}
 		})
 	}

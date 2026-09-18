@@ -1,8 +1,10 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"unicode/utf8"
 
 	contractdto "github.com/wxxb789/symmetry/daemon/internal/contracts"
@@ -104,6 +106,11 @@ func (scope ProviderScope) Validate() error {
 	if len(resourceIDs) != len(scope.OperationsByResource) {
 		return fmt.Errorf("provider_scope.operations_by_resource keys must equal provider_scope.resource_ids")
 	}
+	if scope.ChangeTarget != nil {
+		if err := scope.ChangeTarget.Validate(); err != nil {
+			return err
+		}
+	}
 	for resourceID, operations := range scope.OperationsByResource {
 		if _, granted := resourceIDs[resourceID]; !granted {
 			return fmt.Errorf("provider_scope.operations_by_resource key %q is not a scoped resource", resourceID)
@@ -111,14 +118,14 @@ func (scope ProviderScope) Validate() error {
 		if err := validateProviderOperations(operations, resourceID); err != nil {
 			return err
 		}
+		if err := validateProviderOperationsForTarget(operations, scope.ChangeTarget, resourceID); err != nil {
+			return err
+		}
 	}
 	for resourceID := range resourceIDs {
 		if _, present := scope.OperationsByResource[resourceID]; !present {
 			return fmt.Errorf("provider_scope scoped resource %q has no operation set", resourceID)
 		}
-	}
-	if scope.ChangeTarget != nil {
-		return scope.ChangeTarget.Validate()
 	}
 	return nil
 }
@@ -157,6 +164,31 @@ func validateProviderOperations(operations []ProviderOperation, resourceID strin
 	return nil
 }
 
+func validateProviderOperationsForTarget(operations []ProviderOperation, target *ProviderChangeTarget, resourceID string) error {
+	has := func(want ProviderOperation) bool {
+		for _, operation := range operations {
+			if operation == want {
+				return true
+			}
+		}
+		return false
+	}
+	valid := false
+	switch {
+	case target == nil:
+		valid = len(operations) == 1 && has(ProviderOperationResourceSync)
+	case target.Kind == ProviderChangeTargetBranches:
+		valid = !has(ProviderOperationResourceSync) && has(ProviderOperationChangeUpsert) &&
+			(len(operations) == 1 || len(operations) == 2 && has(ProviderOperationChangeUpdate))
+	case target.Kind == ProviderChangeTargetPullRequest:
+		valid = len(operations) == 1 && has(ProviderOperationChangeUpdate)
+	}
+	if !valid {
+		return fmt.Errorf("provider_scope.operations_by_resource[%q] does not match provider_scope.change_target", resourceID)
+	}
+	return nil
+}
+
 // ProviderChangeTarget identifies the one allowed branch or pull request
 // target for provider-side change operations. It is nullable at the scope
 // level because read-only scopes have no change target.
@@ -191,7 +223,7 @@ func (target ProviderChangeTarget) Validate() error {
 		if target.PullRequestURL == nil || target.SourceBranch != nil || target.TargetBranch != nil {
 			return errorsProviderChangeTargetShape(target.Kind)
 		}
-		return validateLongText(*target.PullRequestURL, "provider_scope.change_target.pull_request_url")
+		return validateProviderPullRequestURL(*target.PullRequestURL, "provider_scope.change_target.pull_request_url")
 	default:
 		return fmt.Errorf("provider_scope.change_target.kind %q is invalid", target.Kind)
 	}
@@ -247,7 +279,40 @@ func validateProviderTargetString(value, field string, maximum int) error {
 	if length < 1 || length > maximum {
 		return fmt.Errorf("%s must contain 1..%d characters", field, maximum)
 	}
+	for _, character := range value {
+		if character == 0 || isProviderTargetWhitespace(character) {
+			return fmt.Errorf("%s must not contain whitespace or NUL", field)
+		}
+	}
 	return nil
+}
+
+func validateProviderPullRequestURL(value, field string) error {
+	if err := validateLongText(value, field); err != nil {
+		return err
+	}
+	if strings.ContainsAny(value, "\r\n\u2028\u2029") {
+		return fmt.Errorf("%s must not contain ECMAScript line terminators", field)
+	}
+	if strings.TrimFunc(value, isProviderTargetWhitespace) != value {
+		return fmt.Errorf("%s must not begin or end with whitespace", field)
+	}
+	return nil
+}
+
+func isProviderTargetWhitespace(character rune) bool {
+	// Match ECMAScript's \s set used by the canonical schema patterns. U+0085
+	// is intentionally absent: JavaScript treats it as a non-whitespace code
+	// point even though unicode.IsSpace reports it as whitespace.
+	switch character {
+	case '\t', '\n', '\v', '\f', '\r', ' ',
+		'\u00a0', '\u1680',
+		'\u2000', '\u2001', '\u2002', '\u2003', '\u2004', '\u2005', '\u2006', '\u2007', '\u2008', '\u2009', '\u200a',
+		'\u2028', '\u2029', '\u202f', '\u205f', '\u3000', '\ufeff':
+		return true
+	default:
+		return false
+	}
 }
 
 // Admission is the server-to-daemon Goal 0006 transport envelope. It is
@@ -332,6 +397,9 @@ func (admission Admission) Validate() error {
 			return fmt.Errorf("handoff_source_run_id must be null for session_mode %q", admission.SessionMode)
 		}
 	case SessionModeHandoff:
+		if admission.Purpose != AdmissionPurposeImplement && admission.Purpose != AdmissionPurposeValidate {
+			return fmt.Errorf("purpose %q is invalid for session_mode %q", admission.Purpose, admission.SessionMode)
+		}
 		if admission.RequestedSessionID != nil {
 			return fmt.Errorf("requested_session_id must be null for session_mode %q", admission.SessionMode)
 		}
@@ -376,7 +444,22 @@ func (admission *Admission) UnmarshalJSON(data []byte) error {
 		"requested_session_id", "subject", "limits", "validation_of_task_id", "provider_scope"); err != nil {
 		return err
 	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(bytes.TrimSpace(data), &fields); err != nil {
+		return fmt.Errorf("decode admission field presence: %w", err)
+	}
 	value := Admission(decoded)
+	_, handoffSourceRunIDPresent := fields["handoff_source_run_id"]
+	switch value.SessionMode {
+	case SessionModeFresh, SessionModeResume:
+		if handoffSourceRunIDPresent {
+			return fmt.Errorf("handoff_source_run_id must be omitted for session_mode %q", value.SessionMode)
+		}
+	case SessionModeHandoff:
+		if !handoffSourceRunIDPresent {
+			return fmt.Errorf("handoff_source_run_id must be present for session_mode %q", value.SessionMode)
+		}
+	}
 	if err := value.Validate(); err != nil {
 		return err
 	}
@@ -394,6 +477,129 @@ func ParseAdmission(data []byte) (Admission, error) {
 		return Admission{}, err
 	}
 	return admission, nil
+}
+
+// ParseAdmissionInput recognizes the additive Goal admission shape inside a
+// legacy Work.Input object. Non-object nested markers and schema-less
+// non-admission-shaped objects remain legacy-compatible; an explicit current
+// or unsupported Goal schema, or an admission-shaped envelope, fails closed.
+func ParseAdmissionInput(input json.RawMessage) (Admission, bool, error) {
+	trimmed := bytes.TrimSpace(input)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) || trimmed[0] != '{' {
+		return Admission{}, false, nil
+	}
+	if err := RejectDuplicateTopLevelJSONMembers(trimmed, "goal_admission", "schema_version"); err != nil {
+		return Admission{}, true, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &fields); err != nil {
+		return Admission{}, true, err
+	}
+	outerSchema, outerSchemaPresent, outerSchemaErr := admissionInputSchemaVersion(fields)
+	if outerSchemaErr != nil {
+		return Admission{}, true, outerSchemaErr
+	}
+	if nested, present := fields["goal_admission"]; present {
+		if outerSchemaPresent && outerSchema == AdmissionSchemaVersion {
+			return Admission{}, true, fmt.Errorf("current admission envelope must not contain goal_admission")
+		}
+		if isUnsupportedAdmissionSchema(outerSchema) {
+			return Admission{}, true, unsupportedAdmissionSchemaError(outerSchema)
+		}
+		if isAdmissionShapedInput(fields) {
+			if outerSchemaPresent {
+				return Admission{}, true, unsupportedAdmissionSchemaError(outerSchema)
+			}
+			return Admission{}, true, missingAdmissionSchemaError()
+		}
+		nested = bytes.TrimSpace(nested)
+		if len(nested) == 0 || bytes.Equal(nested, []byte("null")) || nested[0] != '{' {
+			return Admission{}, false, nil
+		}
+		if err := RejectDuplicateTopLevelJSONMembers(nested, "schema_version"); err != nil {
+			return Admission{}, true, err
+		}
+		var nestedFields map[string]json.RawMessage
+		if err := json.Unmarshal(nested, &nestedFields); err != nil {
+			return Admission{}, true, err
+		}
+		nestedSchema, nestedSchemaPresent, nestedSchemaErr := admissionInputSchemaVersion(nestedFields)
+		if nestedSchemaErr != nil {
+			return Admission{}, true, nestedSchemaErr
+		}
+		if !nestedSchemaPresent {
+			if isAdmissionShapedInput(nestedFields) {
+				return Admission{}, true, missingAdmissionSchemaError()
+			}
+			return Admission{}, false, nil
+		}
+		if nestedSchema != AdmissionSchemaVersion {
+			return Admission{}, true, fmt.Errorf("unsupported admission schema_version %q", nestedSchema)
+		}
+		admission, err := ParseAdmission(nested)
+		if err != nil {
+			return Admission{}, true, err
+		}
+		return admission, true, nil
+	}
+	if !outerSchemaPresent {
+		if isAdmissionShapedInput(fields) {
+			return Admission{}, true, missingAdmissionSchemaError()
+		}
+		return Admission{}, false, nil
+	}
+	if outerSchema != AdmissionSchemaVersion {
+		if isUnsupportedAdmissionSchema(outerSchema) || isAdmissionShapedInput(fields) {
+			return Admission{}, true, unsupportedAdmissionSchemaError(outerSchema)
+		}
+		return Admission{}, false, nil
+	}
+	admission, err := ParseAdmission(trimmed)
+	if err != nil {
+		return Admission{}, true, err
+	}
+	return admission, true, nil
+}
+
+func admissionInputSchemaVersion(fields map[string]json.RawMessage) (string, bool, error) {
+	raw, present := fields["schema_version"]
+	if !present {
+		return "", false, nil
+	}
+	var schemaVersion string
+	if err := json.Unmarshal(raw, &schemaVersion); err != nil || schemaVersion == "" {
+		return "", true, fmt.Errorf("admission schema_version must be a non-empty string")
+	}
+	return schemaVersion, true, nil
+}
+
+func isUnsupportedAdmissionSchema(schemaVersion string) bool {
+	trimmed := strings.TrimSpace(schemaVersion)
+	return schemaVersion != AdmissionSchemaVersion &&
+		(trimmed == "symmetry.admission" || strings.HasPrefix(trimmed, "symmetry.admission."))
+}
+
+func unsupportedAdmissionSchemaError(schemaVersion string) error {
+	if schemaVersion == "" {
+		return missingAdmissionSchemaError()
+	}
+	return fmt.Errorf("unsupported admission schema_version %q", schemaVersion)
+}
+
+func missingAdmissionSchemaError() error {
+	return fmt.Errorf("admission-shaped input requires schema_version %q", AdmissionSchemaVersion)
+}
+
+func isAdmissionShapedInput(fields map[string]json.RawMessage) bool {
+	for field := range fields {
+		switch field {
+		case "admission_id", "context_snapshot_id", "context_hash", "session_mode",
+			"requested_session_id", "handoff_source_run_id", "limits", "validation_of_task_id",
+			"provider_scope":
+			return true
+		}
+	}
+	return false
 }
 
 func validAdmissionPurpose(value AdmissionPurpose) bool {
@@ -481,6 +687,12 @@ func (operations AdapterOperations) Validate() error {
 	}
 	if operations.Events && !operations.Start {
 		return fmt.Errorf("operations.events requires operations.start")
+	}
+	if operations.Cancel && (!operations.Start || !operations.Events) {
+		return fmt.Errorf("operations.cancel requires operations.start and operations.events")
+	}
+	if operations.ApprovalResponse && (!operations.Start || !operations.Events) {
+		return fmt.Errorf("operations.approval_response requires operations.start and operations.events")
 	}
 	if operations.Guidance == GuidanceNativeSteer && !operations.Start {
 		return fmt.Errorf("operations.guidance native_steer requires operations.start")
