@@ -33,6 +33,22 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSONTest do
     assert {:ok, "", _conn} = read_body(conn)
   end
 
+  test "captures evidence JSON for a trailing slash and an escaped route segment" do
+    for path <- ["/api/v1/runs/run-1/evidence/", "/api/v1/runs/run-1/%65vidence"] do
+      body = ~s({"value":1})
+
+      conn =
+        :post
+        |> conn(path, body)
+        |> put_req_header("content-type", "application/json")
+        |> StrictEvidenceJSON.call(@parser_options)
+
+      assert conn.body_params == %{}
+      assert conn.private[StrictEvidenceJSON.raw_body_private_key()] == body
+      assert {:ok, %{"value" => 1}} = StrictEvidenceJSON.materialize(conn)
+    end
+  end
+
   test "rejects duplicate decoded keys recursively, including escaped aliases" do
     body = ~S({"items":[{"name":1,"\u006eame":2}]})
 
@@ -43,6 +59,58 @@ defmodule SymmetryControlWeb.Plugs.StrictEvidenceJSONTest do
       |> StrictEvidenceJSON.call(@parser_options)
 
     assert {:error, :duplicate_json_key} = StrictEvidenceJSON.materialize(conn)
+  end
+
+  test "rejects duplicate JSON members on protocol v1 mutation routes before parsing" do
+    conn =
+      :post
+      |> conn("/%61pi/v1/projects/project-1/goals", ~S({"items":[{"name":1,"\u006eame":2}]}))
+      |> put_req_header("content-type", "application/json")
+      |> StrictEvidenceJSON.call(@parser_options)
+
+    assert conn.halted
+    assert conn.status == 400
+    assert %{"error" => %{"code" => "invalid_request"}} = Jason.decode!(conn.resp_body)
+  end
+
+  test "rejects duplicate JSON members on portal API mutation routes before parsing" do
+    conn =
+      :post
+      |> conn(
+        "/portal/%61pi/projects/project-1/goals",
+        ~S({"title":"first","\u0074itle":"second"})
+      )
+      |> put_req_header("content-type", "application/vnd.symmetry+json")
+      |> StrictEvidenceJSON.call(@parser_options)
+
+    assert conn.halted
+    assert conn.status == 400
+    assert %{"error" => %{"code" => "invalid_request"}} = Jason.decode!(conn.resp_body)
+  end
+
+  test "allows equal member names in distinct JSON objects on protocol mutation routes" do
+    body = ~s({"left":{"name":1},"right":{"name":2}})
+
+    conn =
+      :post
+      |> conn("/api/v1/runs/run-1/usage", body)
+      |> put_req_header("content-type", "application/json")
+      |> StrictEvidenceJSON.call(@parser_options)
+
+    assert conn.body_params == %{"left" => %{"name" => 1}, "right" => %{"name" => 2}}
+    refute conn.halted
+    refute Map.has_key?(conn.private, StrictEvidenceJSON.raw_body_private_key())
+  end
+
+  test "does not inspect JSON bodies on GET requests" do
+    conn =
+      :get
+      |> conn("/api/v1/runs/run-1/usage", ~S({"name":1,"name":2}))
+      |> put_req_header("content-type", "application/json")
+      |> StrictEvidenceJSON.call(@parser_options)
+
+    assert conn.body_params == %{}
+    refute conn.halted
   end
 
   test "returns safe errors for malformed JSON and non-object JSON" do

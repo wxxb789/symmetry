@@ -13,6 +13,7 @@ import {
   SemanticError,
   WireJsonError,
 } from "../ts/index.ts";
+import { parseWireJson } from "../ts/wire-json.ts";
 import {
   allOf,
   arrayConstraints,
@@ -55,6 +56,46 @@ test("raw decoding classifies malformed JSON before schema validation", async ()
     assert.ok(result.left instanceof WireJsonError);
     assert.equal(result.left.code, "invalid_json");
   }
+});
+
+test("raw JSON parsing rejects duplicate top-level members", () => {
+  assert.throws(
+    () => parseWireJson('{"goal_revision":1,"goal_revision":1}'),
+    (error) => error instanceof WireJsonError && error.code === "duplicate_json_member",
+  );
+});
+
+test("raw JSON parsing rejects duplicate nested members", () => {
+  assert.throws(
+    () => parseWireJson('{"items":[{"id":"first","id":"second"}]}'),
+    (error) => error instanceof WireJsonError && error.code === "duplicate_json_member",
+  );
+});
+
+test("raw JSON parsing treats escaped member names as aliases", () => {
+  assert.throws(
+    () => parseWireJson(String.raw`{"payload":"first","\u0070ayload":"second"}`),
+    (error) => error instanceof WireJsonError && error.code === "duplicate_json_member",
+  );
+});
+
+test("GoalCreate public boundary rejects duplicate JSON members", async () => {
+  const goal = await fixture("goal-create.basic");
+  const source = JSON.stringify(goal).replace(
+    `"title":${JSON.stringify(goal.title)}`,
+    String.raw`"title":"first","\u0074itle":"second"`,
+  );
+  const result = await Effect.runPromise(Effect.either(GoalCreate.decodeJson(source)));
+  assert.ok(Either.isLeft(result));
+  assert.ok(result.left instanceof WireJsonError);
+  assert.equal(result.left.code, "duplicate_json_member");
+});
+
+test("raw JSON parsing allows the same member name in different objects", () => {
+  assert.deepEqual(
+    parseWireJson('{"left":{"value":1},"right":{"value":2}}'),
+    { left: { value: 1 }, right: { value: 2 } },
+  );
 });
 
 test("raw decoding preserves numeric-looking lexemes inside escaped strings", async () => {

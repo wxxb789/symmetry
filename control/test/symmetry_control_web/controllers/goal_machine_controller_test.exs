@@ -542,21 +542,26 @@ defmodule SymmetryControlWeb.GoalMachineControllerTest do
 
     {_foreign_machine_id, foreign_token} = enroll(conn, "foreign-raw")
 
-    assert_error(
-      bearer(conn, foreign_token)
-      |> put_req_header("content-type", "application/json")
-      |> post("/api/v1/runs/#{run.id}/evidence", duplicate_body),
-      403,
-      "forbidden"
-    )
+    for path <- [
+          "/api/v1/runs/#{run.id}/evidence/",
+          "/api/v1/runs/#{run.id}/%65vidence"
+        ] do
+      assert_error(
+        bearer(conn, foreign_token)
+        |> put_req_header("content-type", "application/json")
+        |> post(path, duplicate_body),
+        403,
+        "forbidden"
+      )
 
-    assert_error(
-      bearer(conn, owner_token)
-      |> put_req_header("content-type", "application/json")
-      |> post("/api/v1/runs/#{run.id}/evidence", duplicate_body),
-      400,
-      "invalid_request"
-    )
+      assert_error(
+        bearer(conn, owner_token)
+        |> put_req_header("content-type", "application/json")
+        |> post(path, duplicate_body),
+        400,
+        "invalid_request"
+      )
+    end
 
     assert Repo.aggregate(SymmetryControl.Goals.RunEvidence, :count) == count_before
   end
