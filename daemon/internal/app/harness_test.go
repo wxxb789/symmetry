@@ -3162,8 +3162,9 @@ func TestFreshCodexGoalCancellationUsesNativeControlBeforeReceipt(t *testing.T) 
 	if !app.handleCommand(context.Background(), command) {
 		t.Fatal("native cancellation was not accepted")
 	}
-	if len(session.calls) < 5 || !sameStrings(session.calls[:5], []string{"start", "details", "open", "start_turn", "control:cancel"}) {
-		t.Fatalf("native cancellation order = %#v", session.calls)
+	calls := session.callsSnapshot()
+	if len(calls) < 5 || !sameStrings(calls[:5], []string{"start", "details", "open", "start_turn", "control:cancel"}) {
+		t.Fatalf("native cancellation order = %#v", calls)
 	}
 	close(turnReturn)
 	app.workers.Wait()
@@ -4003,6 +4004,12 @@ func (session *fakeNativeGoalSession) recordCall(call string) {
 	session.callsMu.Lock()
 	session.calls = append(session.calls, call)
 	session.callsMu.Unlock()
+}
+
+func (session *fakeNativeGoalSession) callsSnapshot() []string {
+	session.callsMu.Lock()
+	defer session.callsMu.Unlock()
+	return append([]string(nil), session.calls...)
 }
 
 func (session *fakeNativeGoalSession) ProcessDetails() (int, string) {

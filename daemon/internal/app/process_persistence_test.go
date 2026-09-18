@@ -137,8 +137,9 @@ func TestGoalNativeStartUsesAtomicProcessPersistenceBeforeObserver(t *testing.T)
 	if len(events) != 1 || events[0] != "observer" {
 		t.Fatalf("native process persistence events = %#v, want [observer]", events)
 	}
-	if atomic, opened := callIndex(session.calls, "atomic"), callIndex(session.calls, "open"); atomic < 0 || opened < 0 || atomic > opened {
-		t.Fatalf("native session calls = %#v, want atomic persistence before open", session.calls)
+	calls := session.callsSnapshot()
+	if atomic, opened := callIndex(calls, "atomic"), callIndex(calls, "open"); atomic < 0 || opened < 0 || atomic > opened {
+		t.Fatalf("native session calls = %#v, want atomic persistence before open", calls)
 	}
 	close(gate)
 	app.workers.Wait()
