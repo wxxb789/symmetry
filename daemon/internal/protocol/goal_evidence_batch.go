@@ -80,7 +80,7 @@ func (batch *EvidenceBatch) UnmarshalJSON(data []byte) error {
 // ParseEvidenceBatch validates the canonical batch schema and all item-level
 // evidence semantics, then applies the batch-only identity invariants.
 func ParseEvidenceBatch(data []byte) (EvidenceBatch, error) {
-	if err := rejectDuplicateJSONMembers(data); err != nil {
+	if err := RejectDuplicateJSONMembers(data); err != nil {
 		return EvidenceBatch{}, fmt.Errorf("decode evidence-batch JSON: %w", err)
 	}
 	var wire contractdto.SymmetryEvidenceBatchV1
@@ -91,10 +91,10 @@ func ParseEvidenceBatch(data []byte) (EvidenceBatch, error) {
 	return batch, nil
 }
 
-// rejectDuplicateJSONMembers rejects duplicate keys before any Go object
+// RejectDuplicateJSONMembers rejects duplicate keys before any Go object
 // decoder can apply its last-wins behavior. The scan is recursive so it also
 // covers every object nested inside a batch item.
-func rejectDuplicateJSONMembers(data []byte) error {
+func RejectDuplicateJSONMembers(data []byte) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	if err := scanJSONValue(decoder, "$"); err != nil {

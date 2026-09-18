@@ -1229,7 +1229,22 @@ func readBounded(reader io.Reader, limit int64) ([]byte, bool, error) {
 	return value, false, nil
 }
 
+func rejectDuplicateJSONMembersOnly(value []byte) error {
+	err := protocol.RejectDuplicateJSONMembers(value)
+	if err == nil || !strings.Contains(err.Error(), "duplicate JSON object member") {
+		return nil
+	}
+	return err
+}
+
 func decodeJSON(value []byte, target any) error {
+	if err := rejectDuplicateJSONMembersOnly(value); err != nil {
+		return err
+	}
+	return decodeJSONUnchecked(value, target)
+}
+
+func decodeJSONUnchecked(value []byte, target any) error {
 	decoder := json.NewDecoder(bytes.NewReader(value))
 	if err := decoder.Decode(target); err != nil {
 		return err
@@ -1359,6 +1374,18 @@ type providerActionResponseWire struct {
 	Outcome        *string         `json:"outcome"`
 	ReadbackStatus *string         `json:"readback_status"`
 	Readback       json.RawMessage `json:"readback"`
+}
+
+var providerActionResponseWireJSONTags = [...]string{
+	"operation",
+	"resource_id",
+	"work_item_id",
+	"projected",
+	"delivery",
+	"resource",
+	"outcome",
+	"readback_status",
+	"readback",
 }
 
 func validateProviderActionRequest(access protocol.ProviderAccess, actionID, resourceID, operation string, input json.RawMessage) (string, error) {
@@ -1554,6 +1581,67 @@ func decodeProviderActionResponse(data []byte, expectedActionID, expectedResourc
 	return response, nil
 }
 
+// NormalizeProviderActionResponse validates a typed response returned by an
+// alternate ControlAPI implementation against the same wire contract used by
+// ExecuteProviderAction. Result remains the exact raw response; typed fields
+// are checked against the decoded Result and the returned value is normalized
+// from that authoritative payload.
+func NormalizeProviderActionResponse(response ProviderActionResponse, expectedActionID, expectedResourceID, expectedOperation string) (ProviderActionResponse, error) {
+	normalized, err := decodeProviderActionResponse(response.Result, expectedActionID, expectedResourceID, expectedOperation)
+	if err != nil {
+		return ProviderActionResponse{}, err
+	}
+	if response.Outcome != normalized.Outcome {
+		return ProviderActionResponse{}, errors.New("typed provider action response outcome does not match result")
+	}
+	if response.Operation != normalized.Operation {
+		return ProviderActionResponse{}, errors.New("typed provider action response operation does not match result")
+	}
+	if response.ResourceID != normalized.ResourceID {
+		return ProviderActionResponse{}, errors.New("typed provider action response resource_id does not match result")
+	}
+	if response.WorkItemID != normalized.WorkItemID {
+		return ProviderActionResponse{}, errors.New("typed provider action response work_item_id does not match result")
+	}
+	if response.Projected != normalized.Projected {
+		return ProviderActionResponse{}, errors.New("typed provider action response projected does not match result")
+	}
+	if !equalProviderActionJSON(response.Delivery, normalized.Delivery) {
+		return ProviderActionResponse{}, errors.New("typed provider action response delivery does not match result")
+	}
+	if !equalProviderActionJSON(response.Resource, normalized.Resource) {
+		return ProviderActionResponse{}, errors.New("typed provider action response resource does not match result")
+	}
+	if response.ReadbackStatus != normalized.ReadbackStatus {
+		return ProviderActionResponse{}, errors.New("typed provider action response readback_status does not match result")
+	}
+	if !equalProviderActionJSON(response.Readback, normalized.Readback) {
+		return ProviderActionResponse{}, errors.New("typed provider action response readback does not match result")
+	}
+	return normalized, nil
+}
+
+func equalProviderActionJSON(left, right json.RawMessage) bool {
+	if len(left) == 0 || len(right) == 0 {
+		return len(left) == len(right)
+	}
+	if err := rejectDuplicateJSONMembersOnly(left); err != nil {
+		return false
+	}
+	if err := rejectDuplicateJSONMembersOnly(right); err != nil {
+		return false
+	}
+	leftCanonical, err := protocol.CanonicalizeJSON(left)
+	if err != nil {
+		return false
+	}
+	rightCanonical, err := protocol.CanonicalizeJSON(right)
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(leftCanonical, rightCanonical)
+}
+
 func objectFields(data []byte) (map[string]json.RawMessage, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(bytes.TrimSpace(data), &fields); err != nil || fields == nil {
@@ -1573,6 +1661,12 @@ func decodeProviderActionObjectJSON(value []byte, target any, required ...string
 	if len(trimmed) == 0 || trimmed[0] != '{' {
 		return errors.New("response must be a JSON object")
 	}
+	if err := rejectDuplicateJSONMembersOnly(trimmed); err != nil {
+		return err
+	}
+	if err := rejectProviderActionResponseTagAliases(trimmed); err != nil {
+		return err
+	}
 	fields, err := objectFields(trimmed)
 	if err != nil {
 		return err
@@ -1582,7 +1676,56 @@ func decodeProviderActionObjectJSON(value []byte, target any, required ...string
 			return fmt.Errorf("missing required field %q", field)
 		}
 	}
-	return decodeJSON(trimmed, target)
+	return decodeJSONUnchecked(trimmed, target)
+}
+
+// rejectProviderActionResponseTagAliases enforces exact case for the typed
+// fields at the outer Control response boundary. RawMessage provider-owned
+// fields are consumed as opaque values, so their nested schemas remain open.
+func rejectProviderActionResponseTagAliases(value []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(value))
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	opening, ok := token.(json.Delim)
+	if !ok || opening != '{' {
+		return errors.New("response must be a JSON object")
+	}
+	for decoder.More() {
+		member, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		name, ok := member.(string)
+		if !ok {
+			return errors.New("response object member name must be a string")
+		}
+		for _, tag := range providerActionResponseWireJSONTags {
+			if name != tag && strings.EqualFold(name, tag) {
+				return fmt.Errorf("JSON member %q aliases exact tag %q", name, tag)
+			}
+		}
+		var raw json.RawMessage
+		if err := decoder.Decode(&raw); err != nil {
+			return err
+		}
+	}
+	closing, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	if delimiter, ok := closing.(json.Delim); !ok || delimiter != '}' {
+		return errors.New("response must be a JSON object")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return errors.New("response must contain one JSON value")
+		}
+		return err
+	}
+	return nil
 }
 
 func hasJSONField(fields map[string]json.RawMessage, name string) bool {

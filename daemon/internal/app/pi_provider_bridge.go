@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"path/filepath"
 	"reflect"
@@ -36,6 +37,7 @@ const (
 	piProviderActionFailureControlResult    = "control_result_unsafe"
 	piProviderActionFailureControlInvalid   = "control_action_invalid"
 	piProviderActionFailureLocalConflict    = "local_idempotency_conflict"
+	piProviderActionFailureLocalRejected    = "local_action_rejected"
 	piProviderActionFailureLocalPersistence = "local_persistence_unknown"
 	piProviderActionMaxResultBytes          = 64 << 10
 )
@@ -61,6 +63,9 @@ func newDurablePiProviderBridgeExecutor(controlAPI ControlAPI, store *state.Stor
 			if errors.Is(err, state.ErrProviderActionConflict) {
 				return pi.ProviderBridgeResponse{Outcome: pi.ProviderBridgeOutcomeFailed, FailureCode: piProviderActionFailureLocalConflict}, nil
 			}
+			if errors.Is(err, state.ErrProviderActionNotAllowed) || errors.Is(err, state.ErrProviderActionCapacity) {
+				return pi.ProviderBridgeResponse{Outcome: pi.ProviderBridgeOutcomeFailed, FailureCode: piProviderActionFailureLocalRejected}, nil
+			}
 			_, _ = store.RecoverProviderAction(key, intent.ActionID, intent.RequestDigest, piProviderActionFailureLocalPersistence)
 			return piProviderActionUnknown(piProviderActionFailureLocalPersistence), nil
 		}
@@ -70,12 +75,18 @@ func newDurablePiProviderBridgeExecutor(controlAPI ControlAPI, store *state.Stor
 				_, _ = store.RecoverProviderAction(key, intent.ActionID, intent.RequestDigest, piProviderActionFailureLocalPersistence)
 				return piProviderActionUnknown(piProviderActionFailureLocalPersistence), nil
 			}
-			return piProviderActionResponseFromIntent(stored), nil
+			return piProviderActionResponseFromIntent(stored, access.Token), nil
 		}
 
 		response, err := mapped(ctx, actionID, request)
 		if err != nil {
 			response = piProviderActionUnknown(piProviderActionFailureControlUnknown)
+		}
+		if response.Outcome == pi.ProviderBridgeOutcomeSucceeded ||
+			(response.Outcome == pi.ProviderBridgeOutcomeUnknown && len(response.Result) > 0) {
+			if state.ValidateNewProviderActionResult(response.Result) != nil {
+				response = piProviderActionUnknown(piProviderActionFailureControlResult)
+			}
 		}
 		completed := intent
 		completed.Outcome = string(response.Outcome)
@@ -127,14 +138,29 @@ func findPiProviderActionIntent(journal state.RunJournal, actionID string) (stat
 	return state.ProviderActionIntent{}, false
 }
 
-func piProviderActionResponseFromIntent(intent state.ProviderActionIntent) pi.ProviderBridgeResponse {
+func piProviderActionResponseFromIntent(intent state.ProviderActionIntent, token string) pi.ProviderBridgeResponse {
+	if token != "" && strings.Contains(intent.FailureCode, token) {
+		return piProviderActionUnknown(piProviderActionFailureControlResult)
+	}
 	switch intent.Outcome {
 	case state.ProviderActionOutcomeSucceeded:
-		return pi.ProviderBridgeResponse{Outcome: pi.ProviderBridgeOutcomeSucceeded, Result: append(json.RawMessage(nil), intent.Result...)}
+		result, safe := cloneSafePiProviderActionResult(intent.Result, token)
+		if !safe {
+			return piProviderActionUnknown(piProviderActionFailureControlResult)
+		}
+		return pi.ProviderBridgeResponse{Outcome: pi.ProviderBridgeOutcomeSucceeded, Result: result}
 	case state.ProviderActionOutcomeFailed:
 		return pi.ProviderBridgeResponse{Outcome: pi.ProviderBridgeOutcomeFailed, FailureCode: intent.FailureCode}
 	case state.ProviderActionOutcomeUnknown:
-		return pi.ProviderBridgeResponse{Outcome: pi.ProviderBridgeOutcomeUnknown, Result: append(json.RawMessage(nil), intent.Result...), FailureCode: intent.FailureCode}
+		var result json.RawMessage
+		if len(intent.Result) > 0 {
+			var safe bool
+			result, safe = cloneSafePiProviderActionResult(intent.Result, token)
+			if !safe {
+				return piProviderActionUnknown(piProviderActionFailureControlResult)
+			}
+		}
+		return pi.ProviderBridgeResponse{Outcome: pi.ProviderBridgeOutcomeUnknown, Result: result, FailureCode: intent.FailureCode}
 	default:
 		return piProviderActionUnknown(piProviderActionFailureLocalPersistence)
 	}
@@ -262,7 +288,11 @@ func newPiProviderBridgeExecutor(controlAPI ControlAPI, access protocol.Provider
 		if err != nil {
 			return mapPiProviderActionError(err), nil
 		}
-		return mapPiProviderActionResponse(response, immutableAccess.Token), nil
+		normalized, normalizeErr := control.NormalizeProviderActionResponse(response, actionID, request.ResourceID, request.Operation)
+		if normalizeErr != nil {
+			return piProviderActionUnknown(piProviderActionFailureControlResult), nil
+		}
+		return mapPiProviderActionResponse(normalized, immutableAccess.Token), nil
 	}, nil
 }
 
@@ -297,7 +327,7 @@ func isNilProviderActionControl(value providerActionControlAPI) bool {
 }
 
 func mapPiProviderActionResponse(response control.ProviderActionResponse, token string) pi.ProviderBridgeResponse {
-	safeResult, safe := cloneSafePiProviderActionResult(response.Result, token)
+	safeResult, safe := cloneSafeNewPiProviderActionResult(response.Result, token)
 	switch response.Outcome {
 	case control.ProviderActionSucceeded:
 		if !safe {
@@ -322,9 +352,24 @@ func mapPiProviderActionResponse(response control.ProviderActionResponse, token 
 }
 
 func cloneSafePiProviderActionResult(result json.RawMessage, token string) (json.RawMessage, bool) {
-	if len(result) == 0 || len(result) > piProviderActionMaxResultBytes || !json.Valid(result) {
+	if len(result) == 0 {
 		return nil, false
 	}
+	semantic, err := state.NormalizeProviderActionResult(result)
+	if err != nil || len(semantic) > piProviderActionMaxResultBytes {
+		return nil, false
+	}
+	return cloneSafePiProviderActionResultAfterValidation(result, token)
+}
+
+func cloneSafeNewPiProviderActionResult(result json.RawMessage, token string) (json.RawMessage, bool) {
+	if len(result) == 0 || state.ValidateNewProviderActionResult(result) != nil {
+		return nil, false
+	}
+	return cloneSafePiProviderActionResultAfterValidation(result, token)
+}
+
+func cloneSafePiProviderActionResultAfterValidation(result json.RawMessage, token string) (json.RawMessage, bool) {
 	trimmed := bytes.TrimSpace(result)
 	var object map[string]json.RawMessage
 	if err := json.Unmarshal(trimmed, &object); err != nil || object == nil {
@@ -337,9 +382,15 @@ func cloneSafePiProviderActionResult(result json.RawMessage, token string) (json
 }
 
 func jsonResultContainsToken(result []byte, token string) bool {
+	decoder := json.NewDecoder(bytes.NewReader(result))
+	decoder.UseNumber()
 	var value any
-	if err := json.Unmarshal(result, &value); err != nil {
-		return false
+	if err := decoder.Decode(&value); err != nil {
+		return true
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return true
 	}
 	return jsonValueContainsToken(value, token)
 }

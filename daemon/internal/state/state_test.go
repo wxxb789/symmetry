@@ -361,6 +361,100 @@ func TestClaimIntentGrantAndPendingOutboxSurviveRestart(t *testing.T) {
 	}
 }
 
+func TestStateRawMessagesRejectDuplicateMembersBeforePersistence(t *testing.T) {
+	duplicates := []struct {
+		name    string
+		payload json.RawMessage
+	}{
+		{name: "top-level", payload: json.RawMessage(`{"legacy":"first","legacy":"second"}`)},
+		{name: "nested", payload: json.RawMessage(`{"legacy":{"value":1,"value":2}}`)},
+		{name: "escaped", payload: json.RawMessage(`{"\u006cegacy":"first","legacy":"second"}`)},
+	}
+
+	for _, test := range duplicates {
+		t.Run("SaveJournal Work.Input rejects "+test.name, func(t *testing.T) {
+			store := mustStore(t)
+			journal := testJournal("run-raw-work-"+test.name, 1)
+			journal.Work.Input = test.payload
+			if err := store.SaveJournal(journal); err == nil {
+				t.Fatal("SaveJournal() accepted duplicate Work.Input members")
+			}
+		})
+
+		t.Run("QueueEvent rejects "+test.name, func(t *testing.T) {
+			store := mustStore(t)
+			journal := testJournal("run-raw-event-"+test.name, 1)
+			if err := store.SaveJournal(journal); err != nil {
+				t.Fatal(err)
+			}
+			_, err := store.QueueEvent(journal.Key(), protocol.RunEvent{
+				EventID: "event-raw-" + test.name, Sequence: journal.LastEventSequence + 1, Kind: "diagnostic",
+				OccurredAt: time.Date(2026, 9, 16, 1, 2, 3, 0, time.UTC), Payload: test.payload,
+			})
+			if err == nil {
+				t.Fatal("QueueEvent() accepted duplicate payload members")
+			}
+		})
+
+		t.Run("QueueTransition rejects "+test.name, func(t *testing.T) {
+			store := mustStore(t)
+			journal := testJournal("run-raw-transition-"+test.name, 1)
+			if err := store.SaveJournal(journal); err != nil {
+				t.Fatal(err)
+			}
+			_, err := store.QueueTransition(journal.Key(), protocol.StateTransitionRequest{
+				TransitionID: "transition-raw-" + test.name, State: "active", Payload: test.payload,
+			})
+			if err == nil {
+				t.Fatal("QueueTransition() accepted duplicate payload members")
+			}
+		})
+	}
+
+	t.Run("legacy unknown Work.Input fields remain allowed", func(t *testing.T) {
+		store := mustStore(t)
+		journal := testJournal("run-raw-legacy-unknown", 1)
+		journal.Work.Input = json.RawMessage(`{"legacy_unknown":{"nested":true}}`)
+		if err := store.SaveJournal(journal); err != nil {
+			t.Fatalf("SaveJournal() rejected ordinary unknown Work.Input field: %v", err)
+		}
+	})
+}
+
+func TestControlCommandReceiptRejectsDuplicateRawPayloadMembers(t *testing.T) {
+	duplicates := []struct {
+		name    string
+		payload json.RawMessage
+	}{
+		{name: "top-level", payload: json.RawMessage(`{"command_id":"pause-raw","command_id":"pause-raw","kind":"pause","outcome":"applied"}`)},
+		{name: "nested", payload: json.RawMessage(`{"command_id":"pause-raw","kind":"pause","outcome":"applied","metadata":{"source":"first","source":"second"}}`)},
+		{name: "escaped", payload: json.RawMessage(`{"command_id":"pause-raw","\u006bind":"pause","kind":"pause","outcome":"applied"}`)},
+	}
+
+	for _, test := range duplicates {
+		t.Run(test.name, func(t *testing.T) {
+			store := mustStore(t)
+			journal := testJournal("run-raw-command-"+test.name, 1)
+			if err := store.SaveJournal(journal); err != nil {
+				t.Fatal(err)
+			}
+			intent := ControlCommandIntent{
+				CommandID: "pause-raw", Kind: "pause", PayloadDigest: strings.Repeat("a", 64),
+				TransitionID: "transition-pause-raw", AckID: "ack-pause-raw",
+			}
+			if _, _, err := store.PrepareControlCommand(journal.Key(), intent); err != nil {
+				t.Fatal(err)
+			}
+			_, err := store.CompleteControlCommand(journal.Key(), intent.CommandID, intent.Kind, "applied", protocol.RunEvent{
+				EventID: "event-pause-raw", Kind: "command_applied", OccurredAt: time.Date(2026, 9, 16, 1, 2, 4, 0, time.UTC), Payload: test.payload,
+			})
+			if err == nil {
+				t.Fatal("CompleteControlCommand() accepted duplicate receipt payload members")
+			}
+		})
+	}
+}
+
 func TestQueueOutputEventBoundsPendingPayloadAndQueuesMarker(t *testing.T) {
 	store := mustStore(t)
 	defer store.Close()
@@ -415,6 +509,33 @@ func TestQueueOutputEventBoundsPendingPayloadAndQueuesMarker(t *testing.T) {
 	loaded, err := restarted.LoadJournal(journal.Key())
 	if err != nil || loaded.DroppedOutputChunks != 0 || loaded.DroppedOutputBytes != 0 || loaded.LastEventSequence != 3 {
 		t.Fatalf("journal after restart = %#v, err=%v", loaded, err)
+	}
+}
+
+func TestQueueOutputEventDropFailureDoesNotClaimOrPersistDrop(t *testing.T) {
+	store := mustStore(t)
+	defer store.Close()
+	journal := testJournal("run-output-drop-write-failure", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	restore := store.SetAtomicWriterForTesting(func(string, []byte) error {
+		return errors.New("injected output drop write failure")
+	})
+	defer restore()
+
+	queued, dropped, err := store.QueueOutputEvent(journal.Key(), protocol.RunEvent{
+		EventID: "output-drop-failure", Kind: "output", OccurredAt: time.Date(2026, 9, 17, 1, 2, 3, 0, time.UTC), Payload: json.RawMessage(`{"chunk":"dropped"}`),
+	}, 0)
+	if err == nil || dropped || queued.RunID != "" || len(queued.PendingEvents) != 0 {
+		t.Fatalf("QueueOutputEvent() = %#v, dropped=%t, err=%v; want failed atomic drop", queued, dropped, err)
+	}
+	loaded, err := store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.DroppedOutputChunks != 0 || loaded.DroppedOutputBytes != 0 || len(loaded.PendingEvents) != 0 || loaded.LastEventSequence != journal.LastEventSequence {
+		t.Fatalf("journal after failed drop = %#v, want unchanged counters/events", loaded)
 	}
 }
 

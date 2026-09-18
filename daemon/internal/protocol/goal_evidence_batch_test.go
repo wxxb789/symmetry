@@ -92,6 +92,13 @@ func TestParseEvidenceBatchRejectsDuplicateJSONObjectMembers(t *testing.T) {
 	}
 }
 
+func TestRejectDuplicateJSONMembersCanonicalizesEscapedNames(t *testing.T) {
+	data := []byte(`{"payload":"provider-token-do-not-leak","\u0070ayload":"safe"}`)
+	if err := RejectDuplicateJSONMembers(data); err == nil || !strings.Contains(err.Error(), "duplicate JSON object member") {
+		t.Fatalf("escaped duplicate member error = %v", err)
+	}
+}
+
 func readEvidenceBatchFixture(t *testing.T, relative string) []byte {
 	t.Helper()
 	root := contractRepositoryRoot(t)

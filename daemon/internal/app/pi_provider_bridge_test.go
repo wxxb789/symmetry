@@ -133,8 +133,13 @@ func TestPiProviderBridgeExecutorForwardsActionAndReturnsExactSuccess(t *testing
 			t.Fatalf("control access token = %q, want original token", received.Token)
 		}
 		return control.ProviderActionResponse{
-			Outcome: control.ProviderActionSucceeded,
-			Result:  json.RawMessage(`{"operation":"change.upsert","resource_id":"` + testPiProviderResource + `","projected":true,"work_item_id":"00000000-0000-4000-8000-000000000003","delivery":{"url":"https://example.test/change"}}`),
+			Outcome:    control.ProviderActionSucceeded,
+			Result:     json.RawMessage(`{"operation":"change.upsert","resource_id":"` + testPiProviderResource + `","projected":true,"work_item_id":"00000000-0000-4000-8000-000000000003","delivery":{"url":"https://example.test/change"}}`),
+			Operation:  "change.upsert",
+			ResourceID: testPiProviderResource,
+			WorkItemID: "00000000-0000-4000-8000-000000000003",
+			Projected:  true,
+			Delivery:   json.RawMessage(`{"url":"https://example.test/change"}`),
 		}, nil
 	}
 
@@ -170,8 +175,13 @@ func TestPiProviderBridgeExecutorMapsExplicitUnknownAndPreservesSafeResult(t *te
 	stub := &piProviderActionControlStub{
 		fn: func(context.Context, protocol.ProviderAccess, string, string, string, json.RawMessage) (control.ProviderActionResponse, error) {
 			return control.ProviderActionResponse{
-				Outcome: control.ProviderActionUnknown,
-				Result:  json.RawMessage(`{"operation":"change.upsert","resource_id":"` + testPiProviderResource + `","outcome":"unknown","projected":false,"readback_status":"unconfirmed","readback":{"status":"pending"}}`),
+				Outcome:        control.ProviderActionUnknown,
+				Result:         json.RawMessage(`{"operation":"change.upsert","resource_id":"` + testPiProviderResource + `","outcome":"unknown","projected":false,"readback_status":"unconfirmed","readback":{"status":"pending"}}`),
+				Operation:      "change.upsert",
+				ResourceID:     testPiProviderResource,
+				Projected:      false,
+				ReadbackStatus: "unconfirmed",
+				Readback:       json.RawMessage(`{"status":"pending"}`),
 			}, nil
 		},
 	}
@@ -182,6 +192,81 @@ func TestPiProviderBridgeExecutorMapsExplicitUnknownAndPreservesSafeResult(t *te
 	}
 	if len(got.Result) == 0 || !json.Valid(got.Result) || !bytes.Contains(got.Result, []byte(`"outcome":"unknown"`)) {
 		t.Fatalf("unknown result = %s, want exact safe Control result", got.Result)
+	}
+}
+
+func TestCloneSafePiProviderActionResultUsesSemanticSizeForLegacyEscapes(t *testing.T) {
+	semanticPayloadBytes := piProviderActionMaxResultBytes - len(`{"payload":""}`)
+	legacy := json.RawMessage(`{"payload":"` + strings.Repeat(`\u003c`, semanticPayloadBytes) + `"}`)
+	if len(legacy) <= piProviderActionMaxResultBytes {
+		t.Fatalf("legacy result bytes = %d, want escaped representation over raw limit", len(legacy))
+	}
+	cloned, safe := cloneSafePiProviderActionResult(legacy, "")
+	if !safe || string(cloned) != string(legacy) {
+		t.Fatalf("legacy semantic result safe=%t cloned bytes=%d, want original escaped result", safe, len(cloned))
+	}
+}
+
+func TestPiProviderBridgeExecutorValidatesTypedControlResponses(t *testing.T) {
+	validSuccess := testPiProviderSuccess()
+	validUnknown := control.ProviderActionResponse{
+		Outcome:        control.ProviderActionUnknown,
+		Result:         json.RawMessage(`{"operation":"change.upsert","resource_id":"` + testPiProviderResource + `","outcome":"unknown","projected":false,"readback_status":"unconfirmed","readback":{"status":"pending"}}`),
+		Operation:      "change.upsert",
+		ResourceID:     testPiProviderResource,
+		Projected:      false,
+		ReadbackStatus: "unconfirmed",
+		Readback:       json.RawMessage(`{"status":"pending"}`),
+	}
+	tests := []struct {
+		name     string
+		response control.ProviderActionResponse
+		want     pi.ProviderBridgeOutcome
+		failure  string
+	}{
+		{name: "valid success", response: validSuccess, want: pi.ProviderBridgeOutcomeSucceeded},
+		{name: "valid unknown", response: validUnknown, want: pi.ProviderBridgeOutcomeUnknown, failure: piProviderActionFailureControlUnknown},
+		{name: "succeeded empty object", response: control.ProviderActionResponse{Outcome: control.ProviderActionSucceeded, Result: json.RawMessage(`{}`)}, want: pi.ProviderBridgeOutcomeUnknown, failure: piProviderActionFailureControlResult},
+		{name: "mismatched operation", response: func() control.ProviderActionResponse {
+			value := validSuccess
+			value.Operation = "change.update"
+			return value
+		}(), want: pi.ProviderBridgeOutcomeUnknown, failure: piProviderActionFailureControlResult},
+		{name: "mismatched resource", response: func() control.ProviderActionResponse {
+			value := validSuccess
+			value.ResourceID = "00000000-0000-4000-8000-000000000099"
+			return value
+		}(), want: pi.ProviderBridgeOutcomeUnknown, failure: piProviderActionFailureControlResult},
+		{name: "contradictory typed outcome", response: func() control.ProviderActionResponse {
+			value := validSuccess
+			value.Outcome = control.ProviderActionUnknown
+			return value
+		}(), want: pi.ProviderBridgeOutcomeUnknown, failure: piProviderActionFailureControlResult},
+		{name: "invalid unknown", response: control.ProviderActionResponse{
+			Outcome:        control.ProviderActionUnknown,
+			Result:         json.RawMessage(`{"operation":"change.upsert","resource_id":"` + testPiProviderResource + `","outcome":"unknown","projected":true,"readback_status":"unconfirmed","readback":{}}`),
+			Operation:      "change.upsert",
+			ResourceID:     testPiProviderResource,
+			Projected:      true,
+			ReadbackStatus: "unconfirmed",
+			Readback:       json.RawMessage(`{}`),
+		}, want: pi.ProviderBridgeOutcomeUnknown, failure: piProviderActionFailureControlResult},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stub := &piProviderActionControlStub{fn: func(context.Context, protocol.ProviderAccess, string, string, string, json.RawMessage) (control.ProviderActionResponse, error) {
+				return test.response, nil
+			}}
+			executor := newPiProviderActionTestExecutor(t, stub, testPiProviderAccess())
+			got := callPiProviderActionExecutor(t, executor, context.Background(), testPiProviderActionID, testPiProviderRequest())
+			if got.Outcome != test.want || got.FailureCode != test.failure {
+				t.Fatalf("mapping = %#v, want %s/%q", got, test.want, test.failure)
+			}
+			if test.failure == piProviderActionFailureControlResult && len(got.Result) != 0 {
+				t.Fatalf("unsafe mapping retained result: %s", got.Result)
+			}
+		})
 	}
 }
 
@@ -430,6 +515,72 @@ func TestPiProviderBridgeExecutorDoesNotExposeCredentialInSafeResult(t *testing.
 	}
 	if strings.Contains(fmt.Sprintf("%#v", got), testPiProviderToken) {
 		t.Fatalf("unsafe result mapping leaked token: %#v", got)
+	}
+}
+
+func TestJSONResultContainsTokenFailsClosedForLargeNumbersAndTrailingData(t *testing.T) {
+	token := testPiProviderToken
+	for _, test := range []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{name: "large number with escaped token", value: `{"big":1e10000,"credential":"\u0070rovider-token-do-not-leak"}`, want: true},
+		{name: "safe large number", value: `{"big":1e10000,"safe":true}`, want: false},
+		{name: "malformed value", value: `{"credential":"unterminated`, want: true},
+		{name: "malformed trailing data", value: `{"safe":true} trailing`, want: true},
+		{name: "second JSON value", value: `{"safe":true}{"other":true}`, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := jsonResultContainsToken([]byte(test.value), token); got != test.want {
+				t.Fatalf("jsonResultContainsToken() = %t, want %t for %s", got, test.want, test.value)
+			}
+		})
+	}
+}
+
+func TestPiProviderBridgeExecutorRedactsEscapedTokenWithLargeNumber(t *testing.T) {
+	unsafeResult := json.RawMessage(`{"operation":"change.upsert","resource_id":"` + testPiProviderResource + `","projected":true,"work_item_id":"00000000-0000-4000-8000-000000000003","delivery":{"url":"https://example.test/change"},"big":1e10000,"credential":"\u0070rovider-token-do-not-leak"}`)
+	if bytes.Contains(unsafeResult, []byte(testPiProviderToken)) {
+		t.Fatal("unsafe result contains the raw token and does not require semantic scanning")
+	}
+	var legacy any
+	if err := json.Unmarshal(unsafeResult, &legacy); err == nil {
+		t.Fatal("unsafe result does not distinguish number-preserving scanning from default JSON decoding")
+	}
+	stub := &piProviderActionControlStub{
+		fn: func(context.Context, protocol.ProviderAccess, string, string, string, json.RawMessage) (control.ProviderActionResponse, error) {
+			response := testPiProviderSuccess()
+			response.Result = unsafeResult
+			return response, nil
+		},
+	}
+	executor := newPiProviderActionTestExecutor(t, stub, testPiProviderAccess())
+	got := callPiProviderActionExecutor(t, executor, context.Background(), testPiProviderActionID, testPiProviderRequest())
+	if got.Outcome != pi.ProviderBridgeOutcomeUnknown || got.FailureCode != piProviderActionFailureControlResult || len(got.Result) != 0 {
+		t.Fatalf("large-number escaped-token mapping = %#v, want redacted unknown", got)
+	}
+	if strings.Contains(fmt.Sprintf("%#v", got), testPiProviderToken) {
+		t.Fatalf("large-number escaped-token mapping leaked token: %#v", got)
+	}
+}
+
+func TestPiProviderBridgeExecutorRejectsEscapedDuplicateResultMembers(t *testing.T) {
+	stub := &piProviderActionControlStub{
+		fn: func(context.Context, protocol.ProviderAccess, string, string, string, json.RawMessage) (control.ProviderActionResponse, error) {
+			return control.ProviderActionResponse{
+				Outcome: control.ProviderActionSucceeded,
+				Result:  json.RawMessage(`{"payload":"\u0070rovider-token-do-not-leak","\u0070ayload":"safe"}`),
+			}, nil
+		},
+	}
+	executor := newPiProviderActionTestExecutor(t, stub, testPiProviderAccess())
+	got := callPiProviderActionExecutor(t, executor, context.Background(), testPiProviderActionID, testPiProviderRequest())
+	if got.Outcome != pi.ProviderBridgeOutcomeUnknown || got.FailureCode != piProviderActionFailureControlResult || len(got.Result) != 0 {
+		t.Fatalf("escaped duplicate result mapping = %#v, want redacted unknown", got)
+	}
+	if strings.Contains(fmt.Sprintf("%#v", got), testPiProviderToken) {
+		t.Fatalf("escaped duplicate result leaked provider token: %#v", got)
 	}
 }
 

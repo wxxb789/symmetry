@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -414,7 +415,7 @@ func (store *Store) SaveClaimIntent(intent ClaimIntent) (RunJournal, error) {
 	if !IsNotFound(err) {
 		return RunJournal{}, err
 	}
-	if err := store.saveJournalLocked(journal); err != nil {
+	if err := store.saveJournalWithCapacityGuardLocked(journal); err != nil {
 		return RunJournal{}, err
 	}
 	return journal, nil
@@ -443,7 +444,7 @@ func (store *Store) SaveClaimGrant(key RunKey, grant protocol.ClaimResponse) (Ru
 	journal.LeaseExpiresAt = grant.LeaseExpiresAt
 	journal.Work = grant.Work
 	journal.LocalState = "claimed"
-	if err := store.saveJournalLocked(journal); err != nil {
+	if err := store.saveJournalWithCapacityGuardLocked(journal); err != nil {
 		return RunJournal{}, err
 	}
 	return journal, nil
@@ -586,6 +587,9 @@ func (store *Store) DeleteJournal(key RunKey) error {
 	if journal.HasProcessDetails() {
 		return errors.New("process stop evidence remains pending")
 	}
+	if hasUnresolvedProviderActions(journal) {
+		return errors.New("provider action outcome remains pending")
+	}
 	if journal.HasPendingGoalDeliveries() {
 		return errors.New("run journal has pending Goal delivery")
 	}
@@ -627,7 +631,7 @@ func (store *Store) ListJournals() ([]RunJournal, error) {
 			continue
 		}
 		var journal RunJournal
-		if err := store.readJSONWithLimit(filepath.Join(store.runsDir(), entry.Name()), "run journal", &journal, maxJournalFileBytes); err != nil {
+		if err := store.readRunJournalJSONWithLimit(filepath.Join(store.runsDir(), entry.Name()), &journal, maxJournalFileBytes); err != nil {
 			return nil, err
 		}
 		if err := validateJournal(journal); err != nil {
@@ -903,6 +907,12 @@ func (store *Store) QueueOutputEvent(key RunKey, event protocol.RunEvent, budget
 		event.Sequence = journal.LastEventSequence + 1
 		return appendEvent(journal, event, "event is invalid")
 	})
+	if err != nil {
+		// The mutation is only a persisted drop after the atomic journal write
+		// succeeds. In particular, do not report a drop when a capacity or write
+		// failure rejected the counter update.
+		dropped = false
+	}
 	return journal, dropped, err
 }
 
@@ -1379,8 +1389,33 @@ func (store *Store) mutateJournal(key RunKey, mutate func(*RunJournal) error) (R
 	if err := mutate(&journal); err != nil {
 		return RunJournal{}, err
 	}
-	if err := store.saveJournalLocked(journal); err != nil {
+	if err := store.saveJournalWithCapacityGuardLocked(journal); err != nil {
 		return RunJournal{}, err
+	}
+	return journal, nil
+}
+
+func (store *Store) mutateJournalIfChanged(key RunKey, mutate func(*RunJournal) (bool, error)) (RunJournal, error) {
+	if err := validateKey(key); err != nil {
+		return RunJournal{}, err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.ensureOpenLocked(); err != nil {
+		return RunJournal{}, err
+	}
+	journal, err := store.loadJournalLocked(key)
+	if err != nil {
+		return RunJournal{}, err
+	}
+	changed, err := mutate(&journal)
+	if err != nil {
+		return RunJournal{}, err
+	}
+	if changed {
+		if err := store.saveJournalWithCapacityGuardLocked(journal); err != nil {
+			return RunJournal{}, err
+		}
 	}
 	return journal, nil
 }
@@ -1545,7 +1580,7 @@ func pendingTerminalState(transitions []protocol.StateTransitionRequest) string 
 
 func (store *Store) loadJournalLocked(key RunKey) (RunJournal, error) {
 	var journal RunJournal
-	if err := store.readJSONWithLimit(store.journalPath(key), "run journal", &journal, maxJournalFileBytes); err != nil {
+	if err := store.readRunJournalJSONWithLimit(store.journalPath(key), &journal, maxJournalFileBytes); err != nil {
 		return RunJournal{}, err
 	}
 	if err := validateJournal(journal); err != nil {
@@ -1572,7 +1607,25 @@ func (store *Store) saveJournalLocked(journal RunJournal) error {
 	if err := validateJournal(journal); err != nil {
 		return err
 	}
-	return store.writeJSONWithLimit(store.journalPath(journal.Key()), journal, "run journal", maxJournalFileBytes)
+	data, err := serializeRunJournal(journal)
+	if err != nil || len(data) > maxJournalFileBytes {
+		return ErrProviderActionCapacity
+	}
+	writer := store.atomicWrite
+	if writer == nil {
+		writer = writeAtomic
+	}
+	if err := writer(store.journalPath(journal.Key()), data); err != nil {
+		return errors.New("write run journal")
+	}
+	return nil
+}
+
+func (store *Store) saveJournalWithCapacityGuardLocked(journal RunJournal) error {
+	if err := validateJournalSaveCapacity(journal); err != nil {
+		return err
+	}
+	return store.saveJournalLocked(journal)
 }
 
 func (store *Store) readJSON(path string, resource string, destination any) error {
@@ -1580,12 +1633,26 @@ func (store *Store) readJSON(path string, resource string, destination any) erro
 }
 
 func (store *Store) readJSONWithLimit(path string, resource string, destination any, limit int) error {
+	return store.readJSONWithLimitAndTags(path, resource, destination, limit, nil)
+}
+
+func (store *Store) readRunJournalJSONWithLimit(path string, destination any, limit int) error {
+	return store.readJSONWithLimitAndTags(path, "run journal", destination, limit, reflect.TypeOf(RunJournal{}))
+}
+
+func (store *Store) readJSONWithLimitAndTags(path string, resource string, destination any, limit int, rootType reflect.Type) error {
 	data, err := readLimited(path, limit)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return &NotFoundError{Resource: resource}
 		}
 		return errors.New("read " + resource)
+	}
+	if err := protocol.RejectDuplicateJSONMembers(data); err != nil {
+		return errors.New("decode " + resource)
+	}
+	if rootType != nil && rejectCaseInsensitiveJSONTagAliases(data, rootType) != nil {
+		return errors.New("decode " + resource)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -1597,6 +1664,109 @@ func (store *Store) readJSONWithLimit(path string, resource string, destination 
 		return errors.New("decode " + resource)
 	}
 	return nil
+}
+
+// rejectCaseInsensitiveJSONTagAliases closes encoding/json's compatibility
+// behavior at the durable journal boundary. encoding/json accepts keys such as
+// "PROVIDER_ACTION_INTENTS" for the exact "provider_action_intents" tag;
+// durable authority must not let such an alias silently win over a later
+// field. Unknown exact members remain the responsibility of
+// Decoder.DisallowUnknownFields, while RawMessage and map fields stay open by
+// design.
+func rejectCaseInsensitiveJSONTagAliases(data []byte, rootType reflect.Type) error {
+	var value json.RawMessage
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if err := decoder.Decode(&value); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return errors.New("trailing JSON data")
+	}
+	return rejectJSONTagAliases(value, rootType)
+}
+
+func rejectJSONTagAliases(value json.RawMessage, valueType reflect.Type) error {
+	valueType = dereferenceJSONTagType(valueType)
+	if valueType == nil || valueType == reflect.TypeOf(json.RawMessage(nil)) {
+		return nil
+	}
+	switch valueType.Kind() {
+	case reflect.Array, reflect.Slice:
+		var items []json.RawMessage
+		if err := json.Unmarshal(value, &items); err != nil {
+			return nil
+		}
+		for _, item := range items {
+			if err := rejectJSONTagAliases(item, valueType.Elem()); err != nil {
+				return err
+			}
+		}
+	case reflect.Struct:
+		fields := exactJSONTagFields(valueType)
+		if len(fields) == 0 {
+			return nil
+		}
+		var members map[string]json.RawMessage
+		if err := json.Unmarshal(value, &members); err != nil {
+			return nil
+		}
+		for member, child := range members {
+			fieldType, exact := fields[member]
+			if !exact {
+				for tag := range fields {
+					if strings.EqualFold(member, tag) {
+						return fmt.Errorf("JSON member %q aliases exact tag %q", member, tag)
+					}
+				}
+				continue
+			}
+			if err := rejectJSONTagAliases(child, fieldType); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func dereferenceJSONTagType(valueType reflect.Type) reflect.Type {
+	for valueType != nil && (valueType.Kind() == reflect.Pointer || valueType.Kind() == reflect.Interface) {
+		valueType = valueType.Elem()
+	}
+	return valueType
+}
+
+func exactJSONTagFields(valueType reflect.Type) map[string]reflect.Type {
+	valueType = dereferenceJSONTagType(valueType)
+	if valueType == nil || valueType.Kind() != reflect.Struct {
+		return nil
+	}
+	fields := make(map[string]reflect.Type)
+	for index := 0; index < valueType.NumField(); index++ {
+		field := valueType.Field(index)
+		if field.PkgPath != "" {
+			continue
+		}
+		tag := field.Tag.Get("json")
+		name, _, _ := strings.Cut(tag, ",")
+		if name == "-" {
+			continue
+		}
+		if name == "" && field.Anonymous {
+			nested := exactJSONTagFields(field.Type)
+			if len(nested) != 0 {
+				for nestedName, nestedType := range nested {
+					fields[nestedName] = nestedType
+				}
+				continue
+			}
+		}
+		if name == "" {
+			name = field.Name
+		}
+		fields[name] = field.Type
+	}
+	return fields
 }
 
 func (store *Store) writeJSON(path string, value any, resource string) error {
@@ -1616,6 +1786,23 @@ func (store *Store) writeJSONWithLimit(path string, value any, resource string, 
 		return errors.New("write " + resource)
 	}
 	return nil
+}
+
+// serializeRunJournal is the sole durable representation used for run journal
+// writes and byte-capacity checks. Other state files intentionally retain the
+// default json.Marshal representation.
+func serializeRunJournal(journal RunJournal) ([]byte, error) {
+	return serializeJSONWithoutHTMLEscaping(journal)
+}
+
+func serializeJSONWithoutHTMLEscaping(value any) ([]byte, error) {
+	var output bytes.Buffer
+	encoder := json.NewEncoder(&output)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(output.Bytes(), []byte{'\n'}), nil
 }
 
 func (store *Store) removeOwnedTempsLocked(entries []os.DirEntry) error {
@@ -1985,7 +2172,7 @@ func validAcknowledgement(acknowledgement protocol.CommandAcknowledgement, journ
 }
 
 func validRawMessage(message json.RawMessage) bool {
-	return len(message) == 0 || json.Valid(message)
+	return len(message) == 0 || (json.Valid(message) && protocol.RejectDuplicateJSONMembers(message) == nil)
 }
 
 func isZeroFence(fence protocol.Fence) bool {

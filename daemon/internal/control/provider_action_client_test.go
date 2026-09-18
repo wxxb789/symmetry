@@ -153,6 +153,162 @@ func TestClientExecuteProviderActionPreservesSuccessfulAndUnknownResults(t *test
 	}
 }
 
+func TestNormalizeProviderActionResponseReusesWireContractAndTypedFields(t *testing.T) {
+	success := ProviderActionResponse{
+		Outcome:    ProviderActionSucceeded,
+		Result:     json.RawMessage(providerActionSuccessJSON()),
+		Operation:  "change.upsert",
+		ResourceID: providerActionResourceID,
+		WorkItemID: providerActionWorkItemID,
+		Projected:  true,
+		Delivery:   json.RawMessage(`{"pull_request_url":"https://github.com/acme/symmetry/pull/42"}`),
+	}
+	unknown := ProviderActionResponse{
+		Outcome:        ProviderActionUnknown,
+		Result:         json.RawMessage(fmt.Sprintf(`{"operation":"change.upsert","resource_id":%q,"outcome":"unknown","projected":false,"readback_status":"unconfirmed","readback":{"status":"pending"}}`, providerActionResourceID)),
+		Operation:      "change.upsert",
+		ResourceID:     providerActionResourceID,
+		Projected:      false,
+		ReadbackStatus: "unconfirmed",
+		Readback:       json.RawMessage(`{"status":"pending"}`),
+	}
+
+	valid := []struct {
+		name     string
+		response ProviderActionResponse
+		want     ProviderActionOutcome
+	}{
+		{name: "success", response: success, want: ProviderActionSucceeded},
+		{name: "unknown", response: unknown, want: ProviderActionUnknown},
+	}
+	for _, test := range valid {
+		t.Run("valid/"+test.name, func(t *testing.T) {
+			got, err := NormalizeProviderActionResponse(test.response, providerActionID, providerActionResourceID, "change.upsert")
+			if err != nil {
+				t.Fatalf("NormalizeProviderActionResponse() error = %v", err)
+			}
+			if got.Outcome != test.want || string(got.Result) != string(test.response.Result) {
+				t.Fatalf("normalized response = %#v, want outcome %q and exact result", got, test.want)
+			}
+		})
+	}
+
+	invalid := []struct {
+		name              string
+		response          ProviderActionResponse
+		expectedResource  string
+		expectedOperation string
+	}{
+		{name: "succeeded empty object", response: ProviderActionResponse{Outcome: ProviderActionSucceeded, Result: json.RawMessage(`{}`)}, expectedResource: providerActionResourceID, expectedOperation: "change.upsert"},
+		{name: "mismatched operation", response: func() ProviderActionResponse { value := success; value.Operation = "change.update"; return value }(), expectedResource: providerActionResourceID, expectedOperation: "change.upsert"},
+		{name: "mismatched resource", response: func() ProviderActionResponse {
+			value := success
+			value.ResourceID = "11111111-1111-4111-8111-111111111112"
+			return value
+		}(), expectedResource: providerActionResourceID, expectedOperation: "change.upsert"},
+		{name: "contradictory outcome", response: func() ProviderActionResponse { value := success; value.Outcome = ProviderActionUnknown; return value }(), expectedResource: providerActionResourceID, expectedOperation: "change.upsert"},
+		{name: "invalid unknown", response: func() ProviderActionResponse { value := unknown; value.Projected = true; return value }(), expectedResource: providerActionResourceID, expectedOperation: "change.upsert"},
+		{name: "expected operation mismatch", response: success, expectedResource: providerActionResourceID, expectedOperation: "change.update"},
+		{name: "expected resource mismatch", response: success, expectedResource: "11111111-1111-4111-8111-111111111112", expectedOperation: "change.upsert"},
+	}
+	for _, test := range invalid {
+		t.Run("invalid/"+test.name, func(t *testing.T) {
+			if _, err := NormalizeProviderActionResponse(test.response, providerActionID, test.expectedResource, test.expectedOperation); err == nil {
+				t.Fatal("NormalizeProviderActionResponse() error = nil")
+			}
+		})
+	}
+}
+
+func TestClientExecuteProviderActionRejectsTypedFieldCaseAliases(t *testing.T) {
+	base := providerActionSuccessJSON()
+	baseWithoutClose := strings.TrimSuffix(base, "}")
+	cases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "required alias only",
+			body: fmt.Sprintf(`{"OPERATION":"change.upsert","resource_id":%q,"work_item_id":%q,"projected":true,"delivery":{}}`, providerActionResourceID, providerActionWorkItemID),
+		},
+		{
+			name: "required alias only resource id",
+			body: fmt.Sprintf(`{"operation":"change.upsert","RESOURCE_ID":%q,"work_item_id":%q,"projected":true,"delivery":{}}`, providerActionResourceID, providerActionWorkItemID),
+		},
+		{
+			name: "canonical then alias",
+			body: baseWithoutClose + `,"PROJECTED":false}`,
+		},
+		{
+			name: "alias then canonical",
+			body: `{"PROJECTED":false,` + strings.TrimPrefix(base, "{"),
+		},
+		{
+			name: "escaped alias",
+			body: baseWithoutClose + `,"\u0050ROJECTED":false}`,
+		},
+		{
+			name: "optional outcome alias",
+			body: baseWithoutClose + `,"OUTCOME":"unknown"}`,
+		},
+		{
+			name: "optional readback status alias",
+			body: baseWithoutClose + `,"READBACK_STATUS":"unconfirmed"}`,
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				_, _ = io.WriteString(writer, test.body)
+			}))
+			defer server.Close()
+			client, err := NewClient(server.URL+"/api", "machine-secret", server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = client.ExecuteProviderAction(context.Background(), validProviderActionAccess("provider-secret", "change.upsert"), providerActionID, providerActionResourceID, "change.upsert", json.RawMessage(`{"title":"x"}`))
+			if err == nil || !strings.Contains(err.Error(), "aliases exact tag") {
+				t.Fatalf("error = %v, want typed-field alias rejection", err)
+			}
+		})
+	}
+}
+
+func TestClientExecuteProviderActionAllowsUnknownFieldsAndNestedProviderKeys(t *testing.T) {
+	body := `{"operation":"change.upsert","resource_id":"` + providerActionResourceID + `","work_item_id":"` + providerActionWorkItemID + `","projected":true,"delivery":{"PROJECTED":{"provider_owned":true}},"future_field":{"OUTCOME":"opaque"}}`
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = io.WriteString(writer, body)
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL+"/api", "machine-secret", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.ExecuteProviderAction(context.Background(), validProviderActionAccess("provider-secret", "change.upsert"), providerActionID, providerActionResourceID, "change.upsert", json.RawMessage(`{"title":"x"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(response.Result) != body {
+		t.Fatalf("result = %s, want exact additive response %s", response.Result, body)
+	}
+}
+
+func TestNormalizeProviderActionResponseRejectsTypedFieldCaseAliases(t *testing.T) {
+	result := json.RawMessage(`{"operation":"change.upsert","resource_id":"` + providerActionResourceID + `","work_item_id":"` + providerActionWorkItemID + `","projected":true,"PROJECTED":false,"delivery":{}}`)
+	response := ProviderActionResponse{
+		Outcome:    ProviderActionSucceeded,
+		Result:     result,
+		Operation:  "change.upsert",
+		ResourceID: providerActionResourceID,
+		WorkItemID: providerActionWorkItemID,
+		Projected:  true,
+		Delivery:   json.RawMessage(`{}`),
+	}
+	if _, err := NormalizeProviderActionResponse(response, providerActionID, providerActionResourceID, "change.upsert"); err == nil || !strings.Contains(err.Error(), "aliases exact tag") {
+		t.Fatalf("NormalizeProviderActionResponse() error = %v, want typed-field alias rejection", err)
+	}
+}
+
 func TestClientExecuteProviderActionPreservesExactReplayResponse(t *testing.T) {
 	const body = `{"operation":"change.upsert","resource_id":"11111111-1111-4111-8111-111111111111","work_item_id":"22222222-2222-4222-8222-222222222222","projected":false,"delivery":{"pull_request_url":"https://github.com/acme/symmetry/pull/42","provider_data":{"opaque":true}}}`
 	var calls atomic.Int32

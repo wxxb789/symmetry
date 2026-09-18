@@ -237,7 +237,7 @@ func (item EvidenceBatchConflictItem) Validate() error {
 // ParseEvidenceBatchResponse validates the canonical response schema and its
 // response-only run, identity and disposition semantics.
 func ParseEvidenceBatchResponse(data []byte) (EvidenceBatchResponse, error) {
-	if err := rejectDuplicateJSONMembers(data); err != nil {
+	if err := RejectDuplicateJSONMembers(data); err != nil {
 		return EvidenceBatchResponse{}, fmt.Errorf("decode evidence-batch-response JSON: %w", err)
 	}
 	var wire contractdto.SymmetryEvidenceBatchResponseV1
@@ -251,7 +251,7 @@ func ParseEvidenceBatchResponse(data []byte) (EvidenceBatchResponse, error) {
 // ParseEvidenceBatchConflictDetails validates the canonical conflict-details
 // schema and its bounded index, key and disposition semantics.
 func ParseEvidenceBatchConflictDetails(data []byte) (EvidenceBatchConflictDetails, error) {
-	if err := rejectDuplicateJSONMembers(data); err != nil {
+	if err := RejectDuplicateJSONMembers(data); err != nil {
 		return EvidenceBatchConflictDetails{}, fmt.Errorf("decode evidence-batch-conflict-details JSON: %w", err)
 	}
 	var wire contractdto.SymmetryEvidenceBatchConflictDetailsV1
