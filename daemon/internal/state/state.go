@@ -136,7 +136,11 @@ type RunJournal struct {
 	// ContainmentAuthority is optional for backwards compatibility with
 	// journals created before the independent Windows supervisor existed. A
 	// process marker without it remains intentionally unrecoverable on Windows.
-	ContainmentAuthority           *authority.Supervisor             `json:"containment_authority,omitempty"`
+	ContainmentAuthority *authority.Supervisor `json:"containment_authority,omitempty"`
+	// ContainmentHandoff is the durable pre-authority launch fence. It is
+	// mutually exclusive with ContainmentAuthority and is cleared only by the
+	// dedicated commit or release-proof mutations.
+	ContainmentHandoff             *authority.SupervisorHandoff      `json:"containment_handoff,omitempty"`
 	LastEventSequence              int64                             `json:"last_event_sequence"`
 	PendingEvents                  []protocol.RunEvent               `json:"pending_events"`
 	DroppedOutputChunks            int64                             `json:"dropped_output_chunks,omitempty"`
@@ -176,6 +180,13 @@ func (journal RunJournal) Key() RunKey {
 // marker is not evidence that its process has stopped.
 func (journal RunJournal) HasProcessDetails() bool {
 	return journal.PID != 0 || journal.ProcessIdentity != "" || !journal.StartedAt.IsZero()
+}
+
+// HasPendingContainment reports a durable containment authority or an
+// unresolved pre-authority handoff. It intentionally does not include the
+// legacy process marker so HasProcessDetails retains its existing meaning.
+func (journal RunJournal) HasPendingContainment() bool {
+	return journal.ContainmentAuthority != nil || journal.ContainmentHandoff != nil
 }
 
 // Fence returns the fencing data currently held by the journal.
@@ -485,12 +496,26 @@ func (store *Store) SaveJournal(journal RunJournal) error {
 		if !sameContainmentAuthority(current.ContainmentAuthority, journal.ContainmentAuthority) {
 			return errors.New("containment authority requires dedicated mutation")
 		}
+		if !sameContainmentHandoff(current.ContainmentHandoff, journal.ContainmentHandoff) {
+			return errors.New("containment handoff requires dedicated mutation")
+		}
 		if (current.LocalState == "cleanup_pending") != (journal.LocalState == "cleanup_pending") {
 			return errors.New("cleanup state requires dedicated transition")
 		}
-	} else if !IsNotFound(err) {
+	} else if IsNotFound(err) {
+		if journal.ContainmentAuthority != nil {
+			return errors.New("containment authority requires dedicated mutation")
+		}
+		if journal.ContainmentHandoff != nil {
+			return errors.New("containment handoff requires dedicated mutation")
+		}
+	} else {
 		return err
 	}
+	// SaveJournal is the explicit recovery/import replacement seam. Normal
+	// lossless mutations use saveJournalWithCapacityGuardLocked below; this
+	// seam must remain able to import an already-existing unresolved journal so
+	// recovery can classify it before ordinary mutations resume.
 	return store.saveJournalLocked(journal)
 }
 
@@ -587,14 +612,17 @@ func (store *Store) DeleteJournal(key RunKey) error {
 	if journal.HasProcessDetails() {
 		return errors.New("process stop evidence remains pending")
 	}
-	if hasUnresolvedProviderActions(journal) {
-		return errors.New("provider action outcome remains pending")
+	if journal.HasPendingContainment() {
+		return errors.New("containment state remains pending")
 	}
 	if journal.HasPendingGoalDeliveries() {
 		return errors.New("run journal has pending Goal delivery")
 	}
 	if journal.NativeUsageRecoveryRequired {
 		return errors.New("native usage recovery remains pending")
+	}
+	if hasUnresolvedProviderActions(journal) {
+		return errors.New("provider action outcome remains pending")
 	}
 	if journal.GoalDeliveryEnabled {
 		if err := store.archiveLateGoalUsageLocked(journal); err != nil {
@@ -675,6 +703,9 @@ func (store *Store) SetProcessDetails(key RunKey, pid int, identity string, star
 		if !journal.hasClaimGrant() {
 			return errors.New("journal has no claim grant")
 		}
+		if journal.ContainmentHandoff != nil {
+			return errors.New("process details require supervisor handoff mutation")
+		}
 		if journal.LocalState == "cleanup_pending" {
 			return errors.New("cannot register process details during cleanup")
 		}
@@ -708,6 +739,9 @@ func (store *Store) SetProcessDetailsWithAuthority(key RunKey, pid int, identity
 	return store.mutateJournal(key, func(journal *RunJournal) error {
 		if !journal.hasClaimGrant() {
 			return errors.New("journal has no claim grant")
+		}
+		if journal.ContainmentHandoff != nil {
+			return errors.New("process details require supervisor handoff mutation")
 		}
 		if journal.LocalState == "cleanup_pending" {
 			return errors.New("cannot register process details during cleanup")
@@ -756,6 +790,9 @@ func (store *Store) SetContainmentAuthority(key RunKey, pid int, identity string
 		return RunJournal{}, errors.New("containment authority target does not match process details")
 	}
 	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.ContainmentHandoff != nil {
+			return errors.New("containment authority requires supervisor handoff mutation")
+		}
 		if journal.PID != pid || journal.ProcessIdentity != identity || journal.StartedAt.IsZero() {
 			return errors.New("containment authority requires a persisted process marker")
 		}
@@ -782,12 +819,300 @@ func (store *Store) SetContainmentAuthority(key RunKey, pid int, identity string
 	})
 }
 
+// PrepareSupervisorHandoff durably records the immutable launch binding before
+// an independently running helper can outlive the daemon. Replaying the same
+// launch preserves the record and performs a fresh persistence barrier so an
+// unknown prior write is not upgraded by readback alone. A different launch
+// cannot replace an unresolved record. Helper identity and stop receipt are
+// advanced only by their dedicated CAS mutations.
+func (store *Store) PrepareSupervisorHandoff(key RunKey, handoff authority.SupervisorHandoff) (RunJournal, error) {
+	if err := handoff.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if handoff.StopReceipt != nil {
+		return RunJournal{}, errors.New("supervisor handoff stop receipt requires dedicated mutation")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if !journal.hasClaimGrant() {
+			return errors.New("journal has no claim grant")
+		}
+		if journal.LocalState == "cleanup_pending" {
+			return errors.New("cannot prepare supervisor handoff during cleanup")
+		}
+		if journal.HasProcessDetails() || journal.ContainmentAuthority != nil {
+			return errors.New("supervisor handoff conflicts with committed containment")
+		}
+		if journal.ContainmentHandoff == nil {
+			cloned := handoff.Clone()
+			journal.ContainmentHandoff = &cloned
+			return nil
+		}
+		current := journal.ContainmentHandoff
+		if !current.SameLaunch(handoff) {
+			return errors.New("supervisor handoff conflicts with journal")
+		}
+		if current.SupervisorPID != 0 && handoff.SupervisorPID != 0 &&
+			(current.SupervisorPID != handoff.SupervisorPID || current.SupervisorIdentity != handoff.SupervisorIdentity) {
+			return errors.New("supervisor handoff helper identity conflicts with journal")
+		}
+		if current.SupervisorPID == 0 && handoff.SupervisorPID != 0 {
+			return errors.New("supervisor handoff helper identity requires dedicated bind")
+		}
+		// Replaying the pre-helper form must not erase a helper identity or a
+		// receipt that a later phase durably recorded.
+		return nil
+	})
+}
+
+// BindSupervisorHandoff adds the exact helper PID/creation identity to a
+// prepared handoff. The expected handoff is an exact CAS value, so a stale
+// writer cannot retarget a retained helper. Exact replays perform a fresh
+// persistence barrier after readback of an unknown prior write.
+func (store *Store) BindSupervisorHandoff(key RunKey, expected authority.SupervisorHandoff, pid int, identity string) (RunJournal, error) {
+	if err := expected.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if pid <= 0 || !validRequiredString(identity, 4096) {
+		return RunJournal{}, errors.New("supervisor handoff helper identity is invalid")
+	}
+	if expected.StopReceipt != nil {
+		return RunJournal{}, errors.New("supervisor handoff helper cannot be rebound after stop receipt")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.ContainmentHandoff == nil {
+			return errors.New("supervisor handoff is not pending")
+		}
+		current := journal.ContainmentHandoff
+		if !current.Equal(expected) {
+			// A write error after rename leaves the helper binding durable while
+			// the caller still holds the pre-bind expected value. Replaying the
+			// same binding is safe and must not be mistaken for retargeting.
+			if expected.SupervisorPID == 0 && expected.SupervisorIdentity == "" && expected.StopReceipt == nil &&
+				current.SameLaunch(expected) && current.SupervisorPID == pid && current.SupervisorIdentity == identity && current.StopReceipt == nil {
+				return nil
+			}
+			return errors.New("supervisor handoff compare-and-set mismatch")
+		}
+		if current.SupervisorPID != 0 || current.SupervisorIdentity != "" {
+			if current.SupervisorPID == pid && current.SupervisorIdentity == identity {
+				return nil
+			}
+			return errors.New("supervisor handoff helper identity conflicts with journal")
+		}
+		current.SupervisorPID = pid
+		current.SupervisorIdentity = identity
+		return nil
+	})
+}
+
+// CommitSupervisorHandoff atomically promotes an exact prepared handoff into
+// the existing process marker plus Supervisor authority. The handoff is
+// cleared in the same journal replacement, so recovery observes either the
+// old pending record or the complete committed pair. Exact replays perform a
+// fresh persistence barrier after readback of an unknown prior write.
+func (store *Store) CommitSupervisorHandoff(key RunKey, expected authority.SupervisorHandoff, startedAt time.Time) (RunJournal, error) {
+	if err := expected.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if expected.StopReceipt != nil {
+		return RunJournal{}, errors.New("supervisor handoff stop receipt cannot commit")
+	}
+	if startedAt.IsZero() {
+		return RunJournal{}, errors.New("supervisor handoff start time is invalid")
+	}
+	value, err := expected.ToSupervisor()
+	if err != nil {
+		return RunJournal{}, err
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.ContainmentHandoff == nil {
+			if journal.PID == value.TargetPID && journal.ProcessIdentity == value.TargetIdentity &&
+				!journal.StartedAt.IsZero() && journal.ContainmentAuthority != nil {
+				existing := journal.ContainmentAuthority.Clone()
+				existing.StopReceipt = nil
+				candidate := value.Clone()
+				candidate.StopReceipt = nil
+				if existing.Equal(candidate) {
+					return nil
+				}
+			}
+			return errors.New("supervisor handoff is not pending")
+		}
+		if !journal.ContainmentHandoff.Equal(expected) {
+			return errors.New("supervisor handoff compare-and-set mismatch")
+		}
+		if journal.HasProcessDetails() || journal.ContainmentAuthority != nil {
+			return errors.New("supervisor handoff conflicts with committed containment")
+		}
+		if !journal.hasClaimGrant() {
+			return errors.New("journal has no claim grant")
+		}
+		if journal.LocalState == "cleanup_pending" {
+			return errors.New("cannot commit supervisor handoff during cleanup")
+		}
+		journal.PID = value.TargetPID
+		journal.ProcessIdentity = value.TargetIdentity
+		journal.StartedAt = startedAt
+		cloned := value.Clone()
+		journal.ContainmentAuthority = &cloned
+		journal.ContainmentHandoff = nil
+		return nil
+	})
+}
+
+// RecordSupervisorHandoffStopReceipt records an exact positive stop witness
+// while the handoff is pending. It also accepts the commit-unknown replay
+// state, where the handoff rename succeeded before the caller observed an
+// error, and records the witness on the committed authority instead. Every
+// accepted replay performs a fresh journal write so a prior unknown result is
+// never upgraded by readback alone.
+func (store *Store) RecordSupervisorHandoffStopReceipt(key RunKey, expected authority.SupervisorHandoff, receipt authority.StopReceipt) (RunJournal, error) {
+	if err := expected.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if !receipt.ValidForHandoff(expected) {
+		return RunJournal{}, errors.New("supervisor handoff stop receipt does not match handoff")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.ContainmentHandoff != nil {
+			current := journal.ContainmentHandoff
+			if !current.Equal(expected) {
+				if !current.SameLaunch(expected) || current.SupervisorPID != expected.SupervisorPID || current.SupervisorIdentity != expected.SupervisorIdentity || current.StopReceipt == nil || *current.StopReceipt != receipt {
+					return errors.New("supervisor handoff compare-and-set mismatch")
+				}
+				return nil
+			}
+			if current.StopReceipt != nil {
+				if *current.StopReceipt == receipt {
+					return nil
+				}
+				return errors.New("supervisor handoff stop receipt cannot replace an existing witness")
+			}
+			cloned := receipt
+			current.StopReceipt = &cloned
+			return nil
+		}
+		value, err := expected.ToSupervisor()
+		if err != nil {
+			return err
+		}
+		if journal.ContainmentAuthority == nil || journal.PID != value.TargetPID || journal.ProcessIdentity != value.TargetIdentity {
+			return errors.New("supervisor handoff is not pending or committed")
+		}
+		existing := journal.ContainmentAuthority.Clone()
+		existing.StopReceipt = nil
+		candidate := value.Clone()
+		candidate.StopReceipt = nil
+		if !existing.Equal(candidate) {
+			return errors.New("supervisor handoff committed authority conflicts with handoff")
+		}
+		if journal.ContainmentAuthority.StopReceipt != nil {
+			if *journal.ContainmentAuthority.StopReceipt == receipt {
+				return nil
+			}
+			return errors.New("containment stop receipt cannot replace an existing witness")
+		}
+		cloned := receipt
+		journal.ContainmentAuthority.StopReceipt = &cloned
+		return nil
+	})
+}
+
+// ClearSupervisorHandoff removes a pending handoff only after the caller has
+// supplied both an exact durable stop receipt and an exact platform release
+// proof. A release proof without a receipt belongs to the separate abort path.
+func (store *Store) ClearSupervisorHandoff(key RunKey, expected authority.SupervisorHandoff, proof authority.SupervisorHandoffReleaseProof) (RunJournal, error) {
+	if err := expected.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if expected.StopReceipt == nil {
+		return RunJournal{}, errors.New("supervisor handoff stop receipt is required before release")
+	}
+	if err := proof.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if !proof.ValidFor(expected) {
+		return RunJournal{}, errors.New("supervisor handoff release proof does not match handoff")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.ContainmentHandoff == nil {
+			if journal.ContainmentAuthority == nil && !journal.HasProcessDetails() {
+				return nil
+			}
+			return errors.New("supervisor handoff is not pending")
+		}
+		if !journal.ContainmentHandoff.Equal(expected) {
+			return errors.New("supervisor handoff compare-and-set mismatch")
+		}
+		current := journal.ContainmentHandoff
+		if !proof.ValidFor(*current) {
+			return errors.New("supervisor handoff release proof does not match journal")
+		}
+		if current.StopReceipt == nil {
+			return errors.New("supervisor handoff stop receipt is required before release")
+		}
+		if !current.StopReceipt.ValidForHandoff(*current) || *current.StopReceipt != *expected.StopReceipt {
+			return errors.New("supervisor handoff stop receipt is invalid")
+		}
+		journal.ContainmentHandoff = nil
+		return nil
+	})
+}
+
+// ClearSupervisorHandoffAfterAbort clears a prepared handoff only when the
+// exact current record is still pending and an independent platform proof
+// identifies a definitive pre-authority abort. This path is intentionally
+// separate from receipt/release cleanup: an abort proof is not a StopReceipt.
+//
+// Production callers may use this only while the app owns the Store lifetime
+// lock, the old writer is quiesced, and the platform has proved the named Job
+// and every exact target/helper process identity are absent. A caller boolean
+// or a missing response is not an abort proof and must not be converted into
+// one.
+func (store *Store) ClearSupervisorHandoffAfterAbort(key RunKey, expected authority.SupervisorHandoff, proof authority.SupervisorHandoffAbortProof) (RunJournal, error) {
+	if err := expected.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if expected.StopReceipt != nil {
+		return RunJournal{}, errors.New("supervisor handoff abort cannot carry a stop receipt")
+	}
+	if err := proof.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if !proof.ValidFor(expected) {
+		return RunJournal{}, errors.New("supervisor handoff abort proof does not match handoff")
+	}
+	return store.mutateJournalIfChanged(key, func(journal *RunJournal) (bool, error) {
+		if journal.ContainmentHandoff == nil {
+			return false, errors.New("supervisor handoff is not pending")
+		}
+		if !journal.ContainmentHandoff.Equal(expected) {
+			return false, errors.New("supervisor handoff compare-and-set mismatch")
+		}
+		current := journal.ContainmentHandoff
+		if current.StopReceipt != nil {
+			return false, errors.New("supervisor handoff abort cannot clear a durable stop receipt")
+		}
+		if journal.ContainmentAuthority != nil || journal.HasProcessDetails() {
+			return false, errors.New("supervisor handoff abort conflicts with committed containment")
+		}
+		if !proof.ValidFor(*current) {
+			return false, errors.New("supervisor handoff abort proof does not match journal")
+		}
+		journal.ContainmentHandoff = nil
+		return true, nil
+	})
+}
+
 // RecordContainmentStopReceipt durably records the exact positive helper
 // witness before recovery is allowed to compare-and-clear the process marker.
 // It is idempotent for the same authority and receipt, and rejects any
 // replacement launch.
 func (store *Store) RecordContainmentStopReceipt(key RunKey, pid int, identity string, receipt authority.StopReceipt) (RunJournal, error) {
 	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.ContainmentHandoff != nil {
+			return errors.New("containment stop receipt requires supervisor handoff mutation")
+		}
 		if journal.PID != pid || journal.ProcessIdentity != identity || journal.ContainmentAuthority == nil {
 			return errors.New("containment stop receipt has no matching authority")
 		}
@@ -816,6 +1141,9 @@ func (store *Store) ClearProcessDetails(key RunKey, pid int, identity string) (R
 		return RunJournal{}, errors.New("process details are invalid")
 	}
 	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.ContainmentHandoff != nil {
+			return errors.New("process details require supervisor handoff mutation")
+		}
 		if !journal.HasProcessDetails() {
 			return nil
 		}
@@ -1223,7 +1551,7 @@ func (store *Store) ResolveTerminalForCleanup(key RunKey, verdict string, resolv
 			if journal.TerminalVerdict != verdict {
 				return errors.New("terminal verdict conflicts with journal")
 			}
-			if journal.HasProcessDetails() {
+			if journal.HasProcessDetails() || journal.HasPendingContainment() {
 				journal.LocalState = "terminal_pending"
 			}
 			return nil
@@ -1256,7 +1584,7 @@ func (store *Store) ResolveTerminalForCleanup(key RunKey, verdict string, resolv
 		// state: their receiver has its own durable idempotency receipts.
 		journal.InputCommandIntent = nil
 		journal.ControlCommandIntents = nil
-		if !journal.HasProcessDetails() {
+		if !journal.HasProcessDetails() && !journal.HasPendingContainment() {
 			journal.LocalState = "cleanup_pending"
 		}
 		return nil
@@ -1270,7 +1598,7 @@ func (store *Store) ResolveTerminalForCleanup(key RunKey, verdict string, resolv
 // work.
 func (store *Store) EnterCleanupPending(key RunKey) (RunJournal, error) {
 	return store.mutateJournal(key, func(journal *RunJournal) error {
-		if journal.HasProcessDetails() {
+		if journal.HasProcessDetails() || journal.HasPendingContainment() {
 			return errors.New("process stop evidence remains pending")
 		}
 		if journal.LocalState == "cleanup_pending" {
@@ -1968,6 +2296,13 @@ func sameContainmentAuthority(left, right *authority.Supervisor) bool {
 	return left.Equal(*right)
 }
 
+func sameContainmentHandoff(left, right *authority.SupervisorHandoff) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
 func validateJournal(journal RunJournal) error {
 	if err := validateKey(journal.Key()); err != nil {
 		return err
@@ -1986,6 +2321,14 @@ func validateJournal(journal RunJournal) error {
 			journal.ContainmentAuthority.TargetPID != journal.PID ||
 			journal.ContainmentAuthority.TargetIdentity != journal.ProcessIdentity {
 			return errors.New("run journal containment authority is invalid")
+		}
+	}
+	if journal.ContainmentHandoff != nil {
+		if journal.ContainmentAuthority != nil || journal.HasProcessDetails() || !journal.hasClaimGrant() {
+			return errors.New("run journal containment handoff is invalid")
+		}
+		if err := journal.ContainmentHandoff.Validate(); err != nil {
+			return errors.New("run journal containment handoff is invalid")
 		}
 	}
 	if (strings.TrimSpace(journal.LeaseToken) == "") != journal.LeaseExpiresAt.IsZero() || len(journal.LeaseToken) > 65536 || !validWork(journal.Work) {
