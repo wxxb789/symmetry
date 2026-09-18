@@ -3,6 +3,19 @@
 Thumbs.db
 .idea/
 .vscode/
+*.swp
+*.swo
+*~
+
+# Python caches and bytecode
+__pycache__/
+*.py[cod]
+
+# Temporary scratch files
+*.tmp
+*.temp
+*.bak
+.tmp-*
 
 # Local environment and secrets
 .env
@@ -33,8 +46,12 @@ Thumbs.db
 
 # Go
 /daemon/bin/
+/daemon/*.exe
 /daemon/coverage.out
 /daemon/*.test
+
+# Accidental root archive output
+/-
 
 # Docker overrides
 compose.override.yaml
