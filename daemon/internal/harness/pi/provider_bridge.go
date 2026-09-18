@@ -150,6 +150,10 @@ type ProviderBridge struct {
 
 	closeDone chan struct{}
 	closeErr  error
+	// closeFinalErr is the non-execution portion retained while a bounded close
+	// waits for an executor to finish.
+	closeFinalErr          error
+	closeExecutionUnproven bool
 }
 
 type providerBridgeReplayEntry struct {
@@ -341,8 +345,9 @@ func (bridge *ProviderBridge) Start(ctx context.Context) (ProviderBridgeEndpoint
 }
 
 // Close stops accepting requests and bounds server shutdown. Repeated calls
-// replay the first shutdown result; a caller with a canceled context may stop
-// waiting without creating a second shutdown owner.
+// replay the completed shutdown result; an execution-unproven result is
+// provisional until all executor goroutines have exited. A caller with a
+// canceled context may stop waiting without creating a second shutdown owner.
 func (bridge *ProviderBridge) Close(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -357,6 +362,8 @@ func (bridge *ProviderBridge) Close(ctx context.Context) error {
 		if server == nil {
 			cancelLifetime()
 			bridge.closeErr = nil
+			bridge.closeFinalErr = nil
+			bridge.closeExecutionUnproven = false
 			close(bridge.closeDone)
 			bridge.mu.Unlock()
 			return nil
@@ -364,12 +371,19 @@ func (bridge *ProviderBridge) Close(ctx context.Context) error {
 		bridge.mu.Unlock()
 
 		cancelLifetime()
-		shutdownErr := bridge.shutdownServer(ctx, server, serveDone)
+		shutdownErr, executionUnproven := bridge.shutdownServer(ctx, server, serveDone)
+		firstCloseErr := shutdownErr
+		if executionUnproven {
+			firstCloseErr = errors.Join(firstCloseErr, errProviderBridgeExecutionUnproven)
+		}
 		bridge.mu.Lock()
-		bridge.closeErr = shutdownErr
+		bridge.closeFinalErr = shutdownErr
+		bridge.closeErr = firstCloseErr
+		bridge.closeExecutionUnproven = executionUnproven
+		bridge.refreshProviderBridgeCloseResultLocked()
 		close(bridge.closeDone)
 		bridge.mu.Unlock()
-		return shutdownErr
+		return firstCloseErr
 	}
 	done := bridge.closeDone
 	bridge.mu.Unlock()
@@ -377,6 +391,7 @@ func (bridge *ProviderBridge) Close(ctx context.Context) error {
 	select {
 	case <-done:
 		bridge.mu.Lock()
+		bridge.refreshProviderBridgeCloseResultLocked()
 		err := bridge.closeErr
 		bridge.mu.Unlock()
 		return err
@@ -385,11 +400,12 @@ func (bridge *ProviderBridge) Close(ctx context.Context) error {
 	}
 }
 
-func (bridge *ProviderBridge) shutdownServer(ctx context.Context, server *http.Server, serveDone <-chan struct{}) error {
+func (bridge *ProviderBridge) shutdownServer(ctx context.Context, server *http.Server, serveDone <-chan struct{}) (error, bool) {
 	shutdownContext, cancel := providerBridgeCloseContext(ctx)
 	defer cancel()
 
 	var shutdownErrors []error
+	executionUnproven := false
 	if err := server.Shutdown(shutdownContext); err != nil {
 		shutdownErrors = append(shutdownErrors, err)
 		_ = server.Close()
@@ -403,7 +419,11 @@ func (bridge *ProviderBridge) shutdownServer(ctx context.Context, server *http.S
 		}
 	}
 	if err := bridge.waitForExecutions(shutdownContext); err != nil {
-		shutdownErrors = append(shutdownErrors, err)
+		if errors.Is(err, errProviderBridgeExecutionUnproven) {
+			executionUnproven = true
+		} else {
+			shutdownErrors = append(shutdownErrors, err)
+		}
 	}
 
 	bridge.mu.Lock()
@@ -412,7 +432,14 @@ func (bridge *ProviderBridge) shutdownServer(ctx context.Context, server *http.S
 	if serveErr != nil {
 		shutdownErrors = append(shutdownErrors, serveErr)
 	}
-	return errors.Join(shutdownErrors...)
+	return errors.Join(shutdownErrors...), executionUnproven
+}
+
+func (bridge *ProviderBridge) refreshProviderBridgeCloseResultLocked() {
+	if bridge.closeExecutionUnproven && bridge.activeExecutions == 0 {
+		bridge.closeErr = bridge.closeFinalErr
+		bridge.closeExecutionUnproven = false
+	}
 }
 
 func providerBridgeCloseContext(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -535,7 +562,7 @@ func (bridge *ProviderBridge) serveHTTP(response http.ResponseWriter, request *h
 		writeProviderBridgeError(response, http.StatusInternalServerError, "bridge_execution_failed")
 		return
 	}
-	writeProviderBridgeResponse(response, actionID, result)
+	writeProviderBridgeResponse(response, actionID, parsed.ActionKey, result)
 }
 
 type providerBridgeConnectionContextKey struct{}
@@ -741,6 +768,9 @@ func (bridge *ProviderBridge) executeRequest(ctx context.Context, request Provid
 		return ProviderBridgeResponse{}, err
 	}
 	result, executeErr := executeProviderBridgeAction(ctx, lifetimeContext, executionTimeout, execute, actionID, request)
+	if executeErr == nil {
+		result = normalizeProviderBridgeSerializedResponse(actionID, request.ActionKey, result)
+	}
 	bridge.finishProviderBridgeExecution(entry, result, executeErr)
 	return result, executeErr
 }
@@ -768,6 +798,7 @@ func (bridge *ProviderBridge) finishProviderBridgeExecution(entry *providerBridg
 	bridge.activeExecutions--
 	if bridge.activeExecutions == 0 {
 		close(bridge.executionDone)
+		bridge.refreshProviderBridgeCloseResultLocked()
 	}
 	bridge.mu.Unlock()
 }
@@ -1045,16 +1076,39 @@ func cloneProviderBridgeResponse(response ProviderBridgeResponse) ProviderBridge
 
 type providerBridgeHTTPResponse struct {
 	ActionID    string                `json:"action_id"`
+	ActionKey   string                `json:"action_key"`
 	Outcome     ProviderBridgeOutcome `json:"outcome"`
 	Result      json.RawMessage       `json:"result,omitempty"`
 	FailureCode string                `json:"failure_code,omitempty"`
 }
 
-func writeProviderBridgeResponse(writer http.ResponseWriter, actionID string, response ProviderBridgeResponse) {
-	writer.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(writer).Encode(providerBridgeHTTPResponse{
-		ActionID: actionID, Outcome: response.Outcome, Result: response.Result, FailureCode: response.FailureCode,
+func normalizeProviderBridgeSerializedResponse(actionID, actionKey string, response ProviderBridgeResponse) ProviderBridgeResponse {
+	serialized, err := marshalProviderBridgeResponse(actionID, actionKey, response)
+	if err == nil && len(serialized) <= providerBridgeMaxResponseBytes {
+		return cloneProviderBridgeResponse(response)
+	}
+	return providerBridgeUnknownResponse("result_too_large")
+}
+
+func marshalProviderBridgeResponse(actionID, actionKey string, response ProviderBridgeResponse) ([]byte, error) {
+	serialized, err := json.Marshal(providerBridgeHTTPResponse{
+		ActionID: actionID, ActionKey: actionKey, Outcome: response.Outcome, Result: response.Result, FailureCode: response.FailureCode,
 	})
+	if err != nil {
+		return nil, err
+	}
+	return append(serialized, '\n'), nil
+}
+
+func writeProviderBridgeResponse(writer http.ResponseWriter, actionID, actionKey string, response ProviderBridgeResponse) {
+	response = normalizeProviderBridgeSerializedResponse(actionID, actionKey, response)
+	serialized, err := marshalProviderBridgeResponse(actionID, actionKey, response)
+	if err != nil || len(serialized) > providerBridgeMaxResponseBytes {
+		response = providerBridgeUnknownResponse("result_too_large")
+		serialized, _ = marshalProviderBridgeResponse(actionID, actionKey, response)
+	}
+	writer.WriteHeader(http.StatusOK)
+	_, _ = writer.Write(serialized)
 }
 
 func writeProviderBridgeError(writer http.ResponseWriter, status int, code string) {

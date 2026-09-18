@@ -216,6 +216,9 @@ func TestProviderBridgeDerivesStableActionIDAndReplaysExactBody(t *testing.T) {
 	if actionID == "" || firstPayload.ActionID != actionID || secondPayload.ActionID != actionID {
 		t.Fatalf("action IDs = executor %q, first %q, second %q", actionID, firstPayload.ActionID, secondPayload.ActionID)
 	}
+	if firstPayload.ActionKey != received.ActionKey || secondPayload.ActionKey != received.ActionKey {
+		t.Fatalf("action keys = first %q, second %q, want %q", firstPayload.ActionKey, secondPayload.ActionKey, received.ActionKey)
+	}
 	wantID := expectedProviderBridgeActionID("run-1", received)
 	if actionID != wantID {
 		t.Fatalf("action ID = %q, want %q", actionID, wantID)
@@ -666,6 +669,54 @@ func TestProviderBridgeInvalidResultBecomesReplayedUnknown(t *testing.T) {
 	}
 }
 
+func TestProviderBridgeBoundsSerializedResponseEnvelope(t *testing.T) {
+	var executions atomic.Int32
+	bridge := newTestProviderBridge(t, func(_ context.Context, _ string, _ ProviderBridgeRequest) (ProviderBridgeResponse, error) {
+		executions.Add(1)
+		result, err := json.Marshal(strings.Repeat("x", providerBridgeMaxResponseBytes-32))
+		if err != nil {
+			t.Fatalf("marshal oversized envelope result: %v", err)
+		}
+		if len(result) >= providerBridgeMaxResponseBytes {
+			t.Fatalf("raw result = %d bytes, want below %d", len(result), providerBridgeMaxResponseBytes)
+		}
+		return ProviderBridgeResponse{Outcome: ProviderBridgeOutcomeSucceeded, Result: result}, nil
+	})
+	endpoint := startTestProviderBridge(t, bridge)
+	actionKey := strings.Repeat("k", providerBridgeMaxActionKeyBytes)
+	requestBody, err := json.Marshal(ProviderBridgeRequest{
+		ResourceID: testProviderResourceID,
+		Operation:  "change.upsert",
+		ActionKey:  actionKey,
+		Input:      json.RawMessage(`{"title":"same"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := doProviderBridgeRequest(t, newProviderBridgeRequest(t, endpoint, http.MethodPost, endpoint.URL, requestBody))
+	defer response.Body.Close()
+	wire, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", response.StatusCode, http.StatusOK, wire)
+	}
+	if len(wire) > providerBridgeMaxResponseBytes {
+		t.Fatalf("serialized response = %d bytes, want <= %d", len(wire), providerBridgeMaxResponseBytes)
+	}
+	var payload providerBridgePayload
+	if err := json.Unmarshal(wire, &payload); err != nil {
+		t.Fatalf("decode bounded response: %v", err)
+	}
+	if payload.ActionKey != actionKey || payload.Outcome != ProviderBridgeOutcomeUnknown || payload.FailureCode != "result_too_large" || len(payload.Result) != 0 {
+		t.Fatalf("bounded response = %+v, want unknown result_too_large with same action key", payload)
+	}
+	if got := executions.Load(); got != 1 {
+		t.Fatalf("executor calls = %d, want 1", got)
+	}
+}
+
 func TestProviderBridgeResponseInvariantsBecomeReplayedUnknown(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -887,6 +938,64 @@ func TestProviderBridgeCloseReportsIgnoringExecutorAsUnproven(t *testing.T) {
 	}
 }
 
+func TestProviderBridgeCloseRetryClearsUnprovenAfterExecutorExits(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var executions atomic.Int32
+	bridge := newTestProviderBridge(t, func(_ context.Context, _ string, _ ProviderBridgeRequest) (ProviderBridgeResponse, error) {
+		executions.Add(1)
+		close(started)
+		<-release
+		return ProviderBridgeResponse{Outcome: ProviderBridgeOutcomeSucceeded}, nil
+	})
+	startTestProviderBridge(t, bridge)
+	request := ProviderBridgeRequest{ResourceID: testProviderResourceID, Operation: "change.upsert", ActionKey: "close-retry", Input: json.RawMessage(`{"title":"same"}`)}
+	type executionResult struct {
+		response ProviderBridgeResponse
+		err      error
+	}
+	ownerDone := make(chan executionResult, 1)
+	go func() {
+		response, err := bridge.executeRequest(context.Background(), request, []byte(`{"action_key":"close-retry"}`), "close-retry-action")
+		ownerDone <- executionResult{response: response, err: err}
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("uncooperative executor did not start")
+	}
+
+	closeContext, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	firstErr := bridge.Close(closeContext)
+	cancel()
+	if !errors.Is(firstErr, errProviderBridgeExecutionUnproven) {
+		t.Fatalf("first Close error = %v, want execution unproven", firstErr)
+	}
+
+	close(release)
+	select {
+	case result := <-ownerDone:
+		if result.err != nil {
+			t.Fatalf("uncooperative owner executeRequest error = %v", result.err)
+		}
+		if result.response.Outcome != ProviderBridgeOutcomeUnknown || result.response.FailureCode != "execution_canceled" {
+			t.Fatalf("late executor result = %+v, want retained execution_canceled unknown", result.response)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("uncooperative owner did not finish after release")
+	}
+
+	if err := bridge.Close(context.Background()); err != nil {
+		t.Fatalf("second Close error = %v, want final cleanup result", err)
+	}
+	if err := bridge.Close(context.Background()); err != nil {
+		t.Fatalf("third Close error = %v, want stable final cleanup result", err)
+	}
+	if got := executions.Load(); got != 1 {
+		t.Fatalf("executor calls = %d, want exactly one", got)
+	}
+}
+
 func TestProviderBridgeDoesNotExposeCredentialMaterial(t *testing.T) {
 	bridge := newTestProviderBridge(t, func(_ context.Context, _ string, _ ProviderBridgeRequest) (ProviderBridgeResponse, error) {
 		return ProviderBridgeResponse{Outcome: ProviderBridgeOutcomeSucceeded}, nil
@@ -1028,6 +1137,7 @@ func closeResponseBody(t *testing.T, response *http.Response) {
 
 type providerBridgePayload struct {
 	ActionID    string                `json:"action_id"`
+	ActionKey   string                `json:"action_key"`
 	Outcome     ProviderBridgeOutcome `json:"outcome"`
 	Result      json.RawMessage       `json:"result"`
 	FailureCode string                `json:"failure_code"`
