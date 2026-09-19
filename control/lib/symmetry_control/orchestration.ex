@@ -2269,24 +2269,43 @@ defmodule SymmetryControl.Orchestration do
         opts
       )
       when is_binary(goal_id) and is_integer(revision) and revision > 0 and is_binary(action_id) and
-             is_binary(task_id) and kind in ["pause", "cancel"] and is_map(payload) and
+             is_binary(task_id) and is_binary(kind) and is_map(payload) and
              is_binary(idempotency_key) and byte_size(idempotency_key) > 0 and is_list(opts) do
-    if not (valid_uuid?(goal_id) and valid_uuid?(action_id) and valid_uuid?(task_id) and
-              valid_command_request?(kind, payload) and
-              idempotency_key == goal_control_idempotency_key(action_id, kind, task_id)) do
-      {:error, :invalid_request}
-    else
-      command_hash = command_request_hash(kind, payload, opts)
+    {:error, :goal_authority_required}
+  end
 
-      Repo.transaction(fn ->
-        goal = lock_goal(goal_id)
-        ensure_current_goal_control_action!(goal, revision, action_id, kind)
+  def create_goal_control_command(_, _, _, _, _, _, _, _), do: {:error, :invalid_request}
+
+  @doc false
+  @spec create_goal_control_command_in_transaction(map(), map(), keyword()) ::
+          {Command.t(), :created | :replayed, map() | nil} | {:error, term()}
+  def create_goal_control_command_in_transaction(authorization, envelope, opts \\ [])
+
+  def create_goal_control_command_in_transaction(
+        %{
+          goal_id: goal_id,
+          revision: revision,
+          action_id: action_id,
+          kind: kind
+        },
+        %{task_id: task_id, payload: payload, idempotency_key: idempotency_key} = envelope,
+        opts
+      )
+      when is_integer(revision) and revision > 0 and is_binary(kind) and is_binary(task_id) and
+             is_map(payload) and is_binary(idempotency_key) and byte_size(idempotency_key) > 0 and
+             is_list(opts) do
+    if valid_uuid?(goal_id) and valid_uuid?(action_id) and valid_uuid?(task_id) and
+         kind in ["pause", "cancel"] and valid_command_request?(kind, payload) and
+         idempotency_key == goal_control_idempotency_key(action_id, kind, task_id) do
+      if Repo.in_transaction?() do
+        command_hash = command_request_hash(kind, payload, opts)
         untrusted_task = Repo.get(Task, task_id) || rollback(:not_found)
         item = if untrusted_task.work_item_id, do: lock_work_item(untrusted_task.work_item_id)
         task = lock_task(task_id)
         current = now(opts)
 
-        ensure_goal_work_item_ownership!(goal, item, task)
+        ensure_goal_control_task_ownership!(goal_id, item, task)
+        ensure_goal_control_run_envelope!(task, envelope)
 
         create_or_replay_locked_command!(
           task,
@@ -2297,15 +2316,15 @@ defmodule SymmetryControl.Orchestration do
           current,
           opts
         )
-      end)
-      |> case do
-        {:ok, {command, disposition, _receipt}} -> {:ok, command, disposition}
-        {:error, reason} -> {:error, reason}
+      else
+        {:error, :transaction_required}
       end
+    else
+      {:error, :invalid_request}
     end
   end
 
-  def create_goal_control_command(_, _, _, _, _, _, _, _), do: {:error, :invalid_request}
+  def create_goal_control_command_in_transaction(_, _, _), do: {:error, :invalid_request}
 
   @spec request_cancel(Ecto.UUID.t(), keyword()) ::
           {:ok, Task.t(), Command.t() | nil} | {:error, atom()}
@@ -3816,6 +3835,38 @@ defmodule SymmetryControl.Orchestration do
       Repo.one(from item in WorkItem, where: item.id == ^work_item_id, lock: "FOR UPDATE") ||
         rollback(:not_found)
 
+  defp ensure_goal_control_task_ownership!(goal_id, item, task) do
+    owned? =
+      task.goal_id == goal_id and
+        case task.work_item_id do
+          nil -> is_nil(item)
+          work_item_id -> (item && item.id == work_item_id) and item.goal_id == goal_id
+        end
+
+    unless owned?, do: rollback(:ownership_lost)
+  end
+
+  defp ensure_goal_control_run_envelope!(task, envelope) do
+    run_id = value(envelope, :run_id)
+    generation = value(envelope, :generation)
+
+    case {run_id, generation} do
+      {nil, nil} ->
+        :ok
+
+      {run_id, generation} when is_binary(run_id) and is_integer(generation) and generation > 0 ->
+        run = lock_current_run(task)
+
+        unless run.id == run_id and run.generation == generation,
+          do: rollback(:ownership_lost)
+
+      _ ->
+        rollback(:invalid_request)
+    end
+  end
+
+  # Pause application remains an Orchestration-owned transition until the
+  # separate Goal pause authority slice moves that boundary.
   defp ensure_current_goal_control_action!(goal, revision, action_id, command_kind) do
     action =
       Repo.one(

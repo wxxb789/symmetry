@@ -9,6 +9,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     Goal,
     GoalBudgetReservation,
     GoalEvent,
+    GoalRevision,
     HarnessSession
   }
 
@@ -1270,6 +1271,291 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     assert task_id == task.id
   end
 
+  test "legacy Goal control facade fails closed before writing a command" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    action_id = Ecto.UUID.generate()
+
+    assert {:error, :goal_authority_required} =
+             Orchestration.create_goal_control_command(
+               goal_id,
+               1,
+               action_id,
+               task.id,
+               "cancel",
+               %{},
+               "goal-control:#{action_id}:cancel:#{task.id}",
+               now: @now
+             )
+
+    refute Repo.exists?(from(command in Command, where: command.task_id == ^task.id))
+  end
+
+  test "Goal control dispatch rejects a superseded lifecycle action" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    pause_action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, pause_action_id, 1, "pause")
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "paused", event_sequence: 1]
+    )
+
+    resume_action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, resume_action_id, 2, "resume")
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "active", event_sequence: 2]
+    )
+
+    assert {:ok, :superseded} =
+             Goals.dispatch_goal_control_command(
+               goal_id,
+               1,
+               pause_action_id,
+               task.id,
+               "pause",
+               %{},
+               "goal-control:#{pause_action_id}:pause:#{task.id}",
+               now: @now
+             )
+
+    refute Repo.exists?(from(command in Command, where: command.task_id == ^task.id))
+  end
+
+  test "Goal control dispatch creates and exactly replays one command" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, action_id, 1, "cancel")
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "cancelled", event_sequence: 1]
+    )
+
+    args = [
+      goal_id,
+      1,
+      action_id,
+      task.id,
+      "cancel",
+      %{},
+      "goal-control:#{action_id}:cancel:#{task.id}",
+      [now: @now]
+    ]
+
+    assert {:ok, first, :created} = apply(Goals, :dispatch_goal_control_command, args)
+    assert {:ok, replayed, :replayed} = apply(Goals, :dispatch_goal_control_command, args)
+    assert replayed == first
+
+    assert 1 ==
+             Repo.aggregate(from(command in Command, where: command.task_id == ^task.id), :count)
+  end
+
+  test "Goal control replay trusts the stored command after Goal and Task advancement" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    action_id = Ecto.UUID.generate()
+    insert_goal_revision(goal_id, 2)
+    insert_goal_event(goal_id, action_id, 1, "amend", 2)
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "paused", current_revision: 2, event_sequence: 1]
+    )
+
+    idempotency_key = "goal-control:#{action_id}:cancel:#{task.id}"
+
+    assert {:ok, first, :created} =
+             Goals.dispatch_goal_control_command(
+               goal_id,
+               2,
+               action_id,
+               task.id,
+               "cancel",
+               %{},
+               idempotency_key,
+               now: @now
+             )
+
+    assert Repo.get!(Task, task.id).state == "cancelled"
+
+    resume_action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, resume_action_id, 2, "resume", 2)
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "active", event_sequence: 2]
+    )
+
+    assert {:ok, replayed, :replayed} =
+             Goals.dispatch_goal_control_command(
+               goal_id,
+               2,
+               action_id,
+               task.id,
+               "cancel",
+               %{},
+               idempotency_key,
+               now: @now
+             )
+
+    assert replayed == first
+  end
+
+  test "exact Goal control replay remains available after Project archival" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    goal = Repo.get!(Goal, goal_id)
+    action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, action_id, 1, "cancel")
+
+    Repo.update_all(
+      from(goal_row in Goal, where: goal_row.id == ^goal_id),
+      set: [state: "cancelled", event_sequence: 1]
+    )
+
+    idempotency_key = "goal-control:#{action_id}:cancel:#{task.id}"
+
+    assert {:ok, first, :created} =
+             Goals.dispatch_goal_control_command(
+               goal_id,
+               1,
+               action_id,
+               task.id,
+               "cancel",
+               %{},
+               idempotency_key,
+               now: @now
+             )
+
+    Repo.update_all(
+      from(project in Project, where: project.id == ^goal.project_id),
+      set: [status: "archived"]
+    )
+
+    assert {:ok, replayed, :replayed} =
+             Goals.dispatch_goal_control_command(
+               goal_id,
+               1,
+               action_id,
+               task.id,
+               "cancel",
+               %{},
+               idempotency_key,
+               now: @now
+             )
+
+    assert replayed == first
+  end
+
+  test "new Goal control command rejects an archived Project" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    goal = Repo.get!(Goal, goal_id)
+    action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, action_id, 1, "cancel")
+
+    Repo.update_all(
+      from(goal_row in Goal, where: goal_row.id == ^goal_id),
+      set: [state: "cancelled", event_sequence: 1]
+    )
+
+    Repo.update_all(
+      from(project in Project, where: project.id == ^goal.project_id),
+      set: [status: "archived"]
+    )
+
+    assert {:error, :state_conflict} =
+             Goals.dispatch_goal_control_command(
+               goal_id,
+               1,
+               action_id,
+               task.id,
+               "cancel",
+               %{},
+               "goal-control:#{action_id}:cancel:#{task.id}",
+               now: @now
+             )
+
+    refute Repo.exists?(from(command in Command, where: command.task_id == ^task.id))
+  end
+
+  test "Goal control command transaction rejects calls outside an enclosing transaction" do
+    goal_id = Ecto.UUID.generate()
+    action_id = Ecto.UUID.generate()
+    task_id = Ecto.UUID.generate()
+    idempotency_key = "goal-control:#{action_id}:cancel:#{task_id}"
+
+    assert {:error, :transaction_required} =
+             Orchestration.create_goal_control_command_in_transaction(
+               %{goal_id: goal_id, revision: 1, action_id: action_id, kind: "cancel"},
+               %{task_id: task_id, payload: %{}, idempotency_key: idempotency_key},
+               now: @now
+             )
+  end
+
+  test "Goal control dispatch rolls back command and Task state with its outer transaction" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, action_id, 1, "cancel")
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "cancelled", event_sequence: 1]
+    )
+
+    assert {:error, :dispatch_rollback} =
+             Repo.transaction(fn ->
+               assert {:ok, _command, :created} =
+                        Goals.dispatch_goal_control_command(
+                          goal_id,
+                          1,
+                          action_id,
+                          task.id,
+                          "cancel",
+                          %{},
+                          "goal-control:#{action_id}:cancel:#{task.id}",
+                          now: @now
+                        )
+
+               Repo.rollback(:dispatch_rollback)
+             end)
+
+    assert Repo.get!(Task, task.id).state == "queued"
+    refute Repo.exists?(from(command in Command, where: command.task_id == ^task.id))
+  end
+
+  test "Goal resume durably rejects pending controls from the superseded pause action" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    runtime = register_runtime("revoke-superseded-pause")
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    _fence = claim(run, runtime)
+
+    pause_action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, pause_action_id, 1, "pause")
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "paused", event_sequence: 1]
+    )
+
+    command = insert_goal_pause_command(task, run, pause_action_id)
+    goal = Repo.get!(Goal, goal_id)
+
+    resume = %{
+      schema_version: "symmetry.goal_command.v1",
+      mutation_id: Ecto.UUID.generate(),
+      expected_version: goal.lock_version,
+      expected_revision: goal.current_revision,
+      kind: "resume",
+      payload: %{reason: "resume after pause"}
+    }
+
+    assert {:ok, _receipt, :created} =
+             Goals.command(goal_id, resume, "operator:test", now: @now)
+
+    assert %{state: "acknowledged", acknowledgement_outcome: "rejected"} =
+             Repo.get!(Command, command.id)
+  end
+
   test "runtime registration accepts only existing repository resources" do
     machine = enroll_machine("runtime-resource-validation")
 
@@ -1962,8 +2248,8 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
       set: [state: "active", event_sequence: 2]
     )
 
-    assert {:error, :stale_revision} =
-             Orchestration.create_goal_control_command(
+    assert {:ok, :superseded} =
+             Goals.dispatch_goal_control_command(
                goal_id,
                1,
                pause_action_id,
@@ -2099,7 +2385,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     )
 
     assert {:ok, command, :created} =
-             Orchestration.create_goal_control_command(
+             Goals.dispatch_goal_control_command(
                goal_id,
                1,
                action_id,
@@ -2941,7 +3227,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     )
   end
 
-  defp insert_goal_event(goal_id, event_id, sequence, kind) do
+  defp insert_goal_event(goal_id, event_id, sequence, kind, revision \\ 1) do
     Repo.insert!(%GoalEvent{
       id: event_id,
       goal_id: goal_id,
@@ -2950,10 +3236,27 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
       actor_ref: "operator:test",
       request_hash: :crypto.hash(:sha256, "#{event_id}:#{kind}"),
       request_hash_version: 2,
-      revision: 1,
+      revision: revision,
       payload: %{},
       response: %{}
     })
+  end
+
+  defp insert_goal_revision(goal_id, revision) do
+    %GoalRevision{
+      goal_id: goal_id,
+      revision: revision,
+      objective: "Goal admission amendment",
+      non_goals: [],
+      acceptance_contract: %{},
+      authority_policy: %{},
+      execution_policy: execution_policy(2),
+      context_manifest: %{},
+      reason: "test amendment",
+      actor_ref: "operator:test"
+    }
+    |> Ecto.Changeset.change(inserted_at: @now)
+    |> Repo.insert!()
   end
 
   defp insert_goal_pause_command(task, run, action_id) do

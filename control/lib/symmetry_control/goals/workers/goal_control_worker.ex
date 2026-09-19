@@ -12,7 +12,7 @@ defmodule SymmetryControl.Goals.Workers.GoalControlWorker do
     ]
 
   alias Oban.Job
-  alias SymmetryControl.{Goals, Orchestration, Repo}
+  alias SymmetryControl.{Goals, Repo}
   alias SymmetryControl.Orchestration.Notifier
 
   @impl Oban.Worker
@@ -64,7 +64,7 @@ defmodule SymmetryControl.Goals.Workers.GoalControlWorker do
        when is_binary(goal_id) and is_integer(revision) and revision > 0 and is_binary(action_id) and
               is_binary(task_id) and kind in ["pause", "cancel"] and is_map(payload) and
               payload == %{} and is_binary(idempotency_key) and byte_size(idempotency_key) > 0 do
-    case Orchestration.create_goal_control_command(
+    case Goals.dispatch_goal_control_command(
            goal_id,
            revision,
            action_id,
@@ -73,6 +73,9 @@ defmodule SymmetryControl.Goals.Workers.GoalControlWorker do
            payload,
            idempotency_key
          ) do
+      {:ok, :superseded} ->
+        :ok
+
       {:ok, %{kind: "cancel", state: "applied", run_id: nil}, _disposition} ->
         settle_unstarted_task(task_id)
 

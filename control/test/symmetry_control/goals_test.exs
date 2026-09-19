@@ -3667,7 +3667,7 @@ defmodule SymmetryControl.GoalsTest do
     idempotency_key = "goal-control:#{action_id}:cancel:#{task.id}"
 
     assert {:ok, command, :created} =
-             Orchestration.create_goal_control_command(
+             Goals.dispatch_goal_control_command(
                goal.id,
                goal.current_revision,
                action_id,
@@ -3747,7 +3747,7 @@ defmodule SymmetryControl.GoalsTest do
     assert {:error, :state_conflict} = command_current(goal.id, "resume", %{reason: "continue"})
 
     assert {:ok, command, :created} =
-             Orchestration.create_goal_control_command(
+             Goals.dispatch_goal_control_command(
                goal.id,
                revision,
                action_id,
@@ -3802,7 +3802,7 @@ defmodule SymmetryControl.GoalsTest do
     first_action_id = first_amendment.response["control_action_id"]
 
     assert {:ok, _command, :created} =
-             Orchestration.create_goal_control_command(
+             Goals.dispatch_goal_control_command(
                goal.id,
                first_amendment.goal.current_revision,
                first_action_id,

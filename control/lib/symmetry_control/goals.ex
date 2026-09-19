@@ -37,6 +37,7 @@ defmodule SymmetryControl.Goals do
 
   alias SymmetryControl.Integrations.{ChangeAction, Connection}
   alias SymmetryControl.Integrations.Providers.{AzureDevOps, GitHub}
+  alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.Scheduler
   alias SymmetryControl.Orchestration.{Command, Run, Runtime, Task}
   alias SymmetryControl.Repo
@@ -4886,8 +4887,9 @@ defmodule SymmetryControl.Goals do
   @doc """
   Produces durable pause/cancel control descriptors from one Goal audit action.
 
-  The GoalControlWorker owns dispatch after commit.  This function never calls
-  Orchestration and never infers work from an in-memory scheduler.
+  The GoalControlWorker owns dispatch after commit. This function only enumerates
+  descriptors; `dispatch_goal_control_command/8` rechecks the same authority
+  while creating or replaying each command.
   """
   @spec control_dispatch_plan(Ecto.UUID.t(), pos_integer(), Ecto.UUID.t(), keyword()) ::
           {:ok, :superseded | [map()]} | {:error, term()}
@@ -4897,26 +4899,17 @@ defmodule SymmetryControl.Goals do
       when is_binary(goal_id) and is_integer(revision) and revision > 0 and is_binary(action_id) do
     with :ok <- valid_uuid(goal_id), :ok <- valid_uuid(action_id) do
       Repo.transaction(fn ->
+        project_id =
+          Repo.one(from(goal in Goal, where: goal.id == ^goal_id, select: goal.project_id)) ||
+            rollback(:not_found)
+
+        project = lock_project!(project_id)
+        ensure_project_active!(project)
         goal = lock_goal(goal_id)
 
-        event =
-          Repo.one(
-            from(event in GoalEvent,
-              where: event.id == ^action_id and event.goal_id == ^goal.id,
-              lock: "FOR UPDATE"
-            )
-          )
-
-        valid_lifecycle? =
-          event &&
-            ((event.kind in ["pause", "amend"] and goal.state == "paused") or
-               (event.kind == "cancel" and goal.state == "cancelled"))
-
-        if is_nil(event) or event.revision != revision or goal.current_revision != revision or
-             event.kind not in ["pause", "cancel", "amend"] or not valid_lifecycle? do
-          :superseded
-        else
-          control_descriptors(goal, event.kind, action_id)
+        case lock_current_goal_control_action(goal, revision, action_id, nil) do
+          {:ok, event} -> control_descriptors(goal, event.kind, action_id)
+          :superseded -> :superseded
         end
       end)
       |> case do
@@ -4928,6 +4921,245 @@ defmodule SymmetryControl.Goals do
   end
 
   def control_dispatch_plan(_, _, _, _), do: {:error, :invalid_request}
+
+  @doc """
+  Atomically authorizes and dispatches one Goal control descriptor.
+
+  The Goal row and current lifecycle event are locked in the same transaction as
+  the Task/Run command write. The descriptor is accepted only for the current
+  action; an existing exact command may replay after its Task state has advanced.
+  """
+  @spec dispatch_goal_control_command(
+          Ecto.UUID.t(),
+          pos_integer(),
+          Ecto.UUID.t(),
+          Ecto.UUID.t(),
+          String.t(),
+          map(),
+          String.t(),
+          keyword()
+        ) ::
+          {:ok, Command.t(), :created | :replayed}
+          | {:ok, :superseded}
+          | {:error, term()}
+  def dispatch_goal_control_command(
+        goal_id,
+        revision,
+        action_id,
+        task_id,
+        kind,
+        payload,
+        idempotency_key,
+        opts \\ []
+      )
+
+  def dispatch_goal_control_command(
+        goal_id,
+        revision,
+        action_id,
+        task_id,
+        kind,
+        payload,
+        idempotency_key,
+        opts
+      )
+      when is_binary(goal_id) and is_integer(revision) and revision > 0 and is_binary(action_id) and
+             is_binary(task_id) and is_binary(kind) and is_map(payload) and
+             is_binary(idempotency_key) and byte_size(idempotency_key) > 0 and is_list(opts) do
+    with :ok <- valid_uuid(goal_id),
+         :ok <- valid_uuid(action_id),
+         :ok <- valid_uuid(task_id),
+         true <- kind in ["pause", "cancel"],
+         true <- valid_control_command_payload?(kind, payload),
+         true <- idempotency_key == goal_control_idempotency_key(action_id, kind, task_id) do
+      Repo.transaction(fn ->
+        if goal_control_command_exists?(task_id, idempotency_key) do
+          goal = Repo.get(Goal, goal_id) || rollback(:not_found)
+
+          dispatch_authorized_goal_control_command!(
+            goal,
+            revision,
+            action_id,
+            task_id,
+            kind,
+            payload,
+            idempotency_key,
+            opts
+          )
+        else
+          project_id =
+            Repo.one(from(goal in Goal, where: goal.id == ^goal_id, select: goal.project_id)) ||
+              rollback(:not_found)
+
+          project = lock_project!(project_id)
+          ensure_project_active!(project)
+          goal = lock_goal(goal_id)
+
+          case lock_current_goal_control_action(goal, revision, action_id, kind) do
+            :superseded ->
+              :superseded
+
+            {:ok, event} ->
+              if control_descriptor_authorized?(
+                   goal,
+                   event,
+                   task_id,
+                   kind,
+                   payload,
+                   idempotency_key
+                 ) do
+                dispatch_authorized_goal_control_command!(
+                  goal,
+                  event.revision,
+                  event.id,
+                  task_id,
+                  kind,
+                  payload,
+                  idempotency_key,
+                  opts
+                )
+              else
+                :superseded
+              end
+          end
+        end
+      end)
+      |> case do
+        {:ok, :superseded} -> {:ok, :superseded}
+        {:ok, {command, disposition}} -> {:ok, command, disposition}
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      _ -> {:error, :invalid_request}
+    end
+  end
+
+  def dispatch_goal_control_command(_, _, _, _, _, _, _, _), do: {:error, :invalid_request}
+
+  defp dispatch_authorized_goal_control_command!(
+         goal,
+         revision,
+         action_id,
+         task_id,
+         kind,
+         payload,
+         idempotency_key,
+         opts
+       ) do
+    authorization = %{
+      goal_id: goal.id,
+      revision: revision,
+      action_id: action_id,
+      kind: kind
+    }
+
+    envelope = %{
+      task_id: task_id,
+      payload: payload,
+      idempotency_key: idempotency_key,
+      run_id: Keyword.get(opts, :run_id),
+      generation: Keyword.get(opts, :generation)
+    }
+
+    case Orchestration.create_goal_control_command_in_transaction(authorization, envelope, opts) do
+      {command, disposition, _receipt} ->
+        {command, disposition}
+
+      {:error, reason} ->
+        rollback(reason)
+    end
+  end
+
+  defp lock_current_goal_control_action(goal, revision, action_id, command_kind) do
+    action =
+      Repo.one(
+        from(event in GoalEvent,
+          where: event.id == ^action_id and event.goal_id == ^goal.id,
+          lock: "FOR UPDATE"
+        )
+      )
+
+    latest_lifecycle_action =
+      Repo.one(
+        from(event in GoalEvent,
+          where:
+            event.goal_id == ^goal.id and event.kind in ["pause", "resume", "cancel", "amend"],
+          order_by: [desc: event.sequence],
+          limit: 1,
+          lock: "FOR UPDATE"
+        )
+      )
+
+    current_lifecycle? =
+      case {action && action.kind, command_kind, goal.state} do
+        {"pause", nil, "paused"} -> true
+        {"cancel", nil, "cancelled"} -> true
+        {"amend", nil, "paused"} -> true
+        {"pause", "pause", "paused"} -> true
+        {"cancel", "cancel", "cancelled"} -> true
+        {"amend", kind, "paused"} when kind in ["pause", "cancel"] -> true
+        _ -> false
+      end
+
+    if not is_nil(action) and not is_nil(latest_lifecycle_action) and
+         action.revision == revision and goal.current_revision == revision and
+         latest_lifecycle_action.id == action_id and
+         action.kind in ["pause", "cancel", "amend"] and current_lifecycle? do
+      {:ok, action}
+    else
+      :superseded
+    end
+  end
+
+  defp control_descriptor_authorized?(goal, event, task_id, kind, payload, idempotency_key) do
+    descriptor = %{
+      task_id: task_id,
+      kind: kind,
+      payload: payload,
+      idempotency_key: idempotency_key
+    }
+
+    Enum.any?(control_descriptors(goal, event.kind, event.id), &(&1 == descriptor)) or
+      Repo.exists?(
+        from(command in Command,
+          where:
+            command.task_id == ^task_id and command.kind == ^kind and
+              command.idempotency_key == ^idempotency_key
+        )
+      )
+  end
+
+  defp valid_control_command_payload?(kind, payload),
+    do: kind in ["pause", "cancel"] and payload == %{}
+
+  defp goal_control_command_exists?(task_id, idempotency_key) do
+    Repo.exists?(
+      from(command in Command,
+        where: command.task_id == ^task_id and command.idempotency_key == ^idempotency_key
+      )
+    )
+  end
+
+  defp goal_control_idempotency_key(action_id, kind, task_id),
+    do: "goal-control:#{action_id}:#{kind}:#{task_id}"
+
+  defp reject_pending_goal_control_commands!(goal_id, current) do
+    Repo.update_all(
+      from(command in Command,
+        join: task in Task,
+        on: task.id == command.task_id,
+        where:
+          task.goal_id == ^goal_id and command.kind in ["pause", "cancel"] and
+            command.state == "pending" and like(command.idempotency_key, "goal-control:%")
+      ),
+      set: [
+        state: "acknowledged",
+        acknowledgement_outcome: "rejected",
+        acknowledged_at: current,
+        updated_at: current
+      ]
+    )
+  end
 
   @doc """
   Finds every historical Goal-authorized runless cancellation that still holds
@@ -5805,6 +6037,10 @@ defmodule SymmetryControl.Goals do
                 ensure_preconditions!(goal, parsed)
 
                 {goal, response} = apply_command!(goal, parsed, actor_ref, opts)
+
+                if parsed.kind in ["pause", "resume", "cancel", "amend"] do
+                  reject_pending_goal_control_commands!(goal.id, now(opts))
+                end
 
                 response =
                   if parsed.kind in ["pause", "cancel", "amend"] do
