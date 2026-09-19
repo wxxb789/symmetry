@@ -1739,6 +1739,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
           {:ok,
            %{
              operation: context.intent.operation,
+             resource_id: context.resource.id,
              outcome: "unknown",
              readback_status: "unconfirmed",
              projected: false,

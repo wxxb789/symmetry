@@ -729,9 +729,11 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
 
     :ets.insert(:provider_action_test_state, {{:readback_target, context.repository.id}, true})
     set_readback(context.repository.id, :applied)
+    repository_id = context.repository.id
 
     assert %{
              "operation" => "change.upsert",
+             "resource_id" => ^repository_id,
              "outcome" => "unknown",
              "readback_status" => "unconfirmed",
              "projected" => false,
@@ -765,9 +767,11 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     mark_intent_unknown(intent)
 
     set_readback(context.repository.id, :unconfirmed)
+    repository_id = context.repository.id
 
     assert %{
              "operation" => "change.upsert",
+             "resource_id" => ^repository_id,
              "outcome" => "unknown",
              "readback_status" => "unconfirmed"
            } =
