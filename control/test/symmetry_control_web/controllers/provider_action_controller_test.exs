@@ -79,10 +79,7 @@ defmodule SymmetryControl.Integrations.ProviderActionTestStub do
 
       input["title"] == "Fail once after resource race" and
           :ets.insert_new(:provider_action_test_state, {{:failed, work_item.id}, true}) ->
-        send(
-          Application.fetch_env!(:symmetry_control, :provider_action_test_controller),
-          {:provider_action_health_write_race_ready, self(), resource.id}
-        )
+        notify_provider_readiness(resource, work_item, :health_write)
 
         receive do
           :continue_health_write_race -> {:error, {:transport, :retryable}}
@@ -112,10 +109,7 @@ defmodule SymmetryControl.Integrations.ProviderActionTestStub do
         delivery(%{"authorization" => "Bearer provider-secret"})
 
       input["title"] == "Advance projection" ->
-        send(
-          Application.fetch_env!(:symmetry_control, :provider_action_test_controller),
-          {:provider_action_projection_race_ready, self(), work_item.id}
-        )
+        notify_provider_readiness(resource, work_item, :projection)
 
         receive do
           :continue_projection_race -> delivery(%{"head_sha" => "abc123"})
@@ -124,10 +118,7 @@ defmodule SymmetryControl.Integrations.ProviderActionTestStub do
         end
 
       input["title"] == "Wait for cancel" ->
-        send(
-          Application.fetch_env!(:symmetry_control, :provider_action_test_controller),
-          {:provider_action_waiting, self()}
-        )
+        notify_provider_readiness(resource, work_item, :waiting)
 
         receive do
           :continue -> delivery(%{"head_sha" => "abc123"})
@@ -150,6 +141,13 @@ defmodule SymmetryControl.Integrations.ProviderActionTestStub do
          updated_at: ~U[2026-09-06 08:05:00.000000Z],
          provider_data: provider_data
        }}
+
+  defp notify_provider_readiness(resource, work_item, barrier) do
+    send(
+      Application.fetch_env!(:symmetry_control, :provider_action_test_controller),
+      {:provider_action_ready, self(), resource.id, work_item.id, barrier}
+    )
+  end
 
   defp notify_readback(connection, resource) do
     if :ets.lookup(:provider_action_test_state, {:readback, resource.id}) != [] do
@@ -1421,8 +1419,10 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), requester.pid)
     send(requester.pid, :start_projection_race)
 
-    assert_receive {:provider_action, "github", _, work_item_id, "change.upsert", _, _}
-    assert_receive {:provider_action_projection_race_ready, provider_pid, ^work_item_id}
+    readiness = await_provider_readiness(requester, context, action_id, :projection)
+    provider_pid = readiness.worker
+    work_item_id = readiness.work_item_id
+
     assert work_item_id == context.item.id
 
     Repo.update_all(from(item in WorkItem, where: item.id == ^work_item_id),
@@ -1460,6 +1460,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     resource = Repo.get!(ProjectResource, context.repository.id)
     assert resource.status == "healthy"
     assert resource.sync_status == "synced"
+    assert_timer_cancelled(readiness.timeout_ref)
   end
 
   test "an unknown change outcome retries the same action and then replays success", context do
@@ -1557,11 +1558,12 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
                SymmetryControl.Integrations.ProviderAccess
              )
 
-    assert_receive {:provider_action, "github", _, _, "change.upsert", _, _}, 5_000
-    assert_receive {:provider_action_waiting, provider_pid}, 5_000
+    readiness = await_provider_readiness(nil, context, action_id, :waiting)
+    provider_pid = readiness.worker
     provider_ref = Process.monitor(provider_pid)
     send(provider_pid, :continue)
     assert_receive {:DOWN, ^provider_ref, :process, ^provider_pid, :normal}, 5_000
+    assert_timer_cancelled(readiness.timeout_ref)
 
     intent = Repo.get_by!(ProviderActionIntent, run_id: context.run.id, action_id: action_id)
     assert intent.state == "succeeded"
@@ -1580,32 +1582,23 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
         end
       end)
 
-    assert_receive {:provider_action, "github", _, _, "change.upsert", _, _}
-    assert_receive {:provider_action_waiting, provider_pid}
+    readiness = await_provider_readiness(requester, context, action_id, :waiting)
+    provider_pid = readiness.worker
     provider_ref = Process.monitor(provider_pid)
 
     Elixir.Task.shutdown(requester, :brutal_kill)
     assert Process.alive?(provider_pid)
 
     send(provider_pid, :continue)
-    assert_receive {:DOWN, ^provider_ref, :process, ^provider_pid, :normal}
+    await_worker_exit(provider_ref, provider_pid, :normal)
 
     intent = Repo.get_by!(ProviderActionIntent, run_id: context.run.id, action_id: action_id)
     assert intent.state == "succeeded"
     assert intent.dispatch_token == nil
+    assert_timer_cancelled(readiness.timeout_ref)
   end
 
   test "the broker kills a hung dispatch before exposing an unknown outcome", context do
-    integrations = Application.fetch_env!(:symmetry_control, :integrations)
-
-    Application.put_env(
-      :symmetry_control,
-      :integrations,
-      Keyword.put(integrations, :provider_action_timeout_ms, 500)
-    )
-
-    on_exit(fn -> Application.put_env(:symmetry_control, :integrations, integrations) end)
-
     action_id = uuid()
     input = %{"title" => "Wait for cancel"}
 
@@ -1620,9 +1613,10 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), requester.pid)
     send(requester.pid, :start_health_write_race)
 
-    assert_receive {:provider_action, "github", _, _, "change.upsert", _, _}
-    assert_receive {:provider_action_waiting, provider_pid}
+    readiness = await_provider_readiness(requester, context, action_id, :waiting)
+    provider_pid = readiness.worker
     provider_ref = Process.monitor(provider_pid)
+    send(ProviderAccess, {:dispatch_timeout, provider_pid})
     assert_receive {:DOWN, ^provider_ref, :process, ^provider_pid, :killed}, 2_000
 
     assert_error(Elixir.Task.await(requester, 2_000), 502, "provider_failure")
@@ -1630,7 +1624,49 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
 
     intent = Repo.get_by!(ProviderActionIntent, run_id: context.run.id, action_id: action_id)
     assert intent.state == "unknown"
+    assert_timer_cancelled(readiness.timeout_ref)
     refute_receive {:provider_action, _, _, _, _, _, _}, 50
+  end
+
+  test "the provider dispatch timer delivers to the broker and observes worker exit", context do
+    integrations = Application.fetch_env!(:symmetry_control, :integrations)
+
+    Application.put_env(
+      :symmetry_control,
+      :integrations,
+      Keyword.put(integrations, :provider_action_timeout_ms, 1_000)
+    )
+
+    action_id = uuid()
+    input = %{"title" => "Wait for cancel"}
+    observer_id = install_provider_timer_observer()
+
+    requester =
+      Elixir.Task.async(fn ->
+        provider_request(context, context.repository.id, "change.upsert", input, action_id)
+      end)
+
+    requester_pid = requester.pid
+    Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), requester_pid)
+
+    try do
+      readiness = await_provider_readiness(requester, context, action_id, :waiting)
+      worker = readiness.worker
+
+      assert_receive {:provider_job_registered, ^worker, registered_job}, 2_000
+      assert {^requester_pid, _tag} = registered_job.from
+      assert registered_job.timeout_ref == readiness.timeout_ref
+
+      assert_receive {:provider_dispatch_timeout, ^worker}, 3_000
+      assert_receive {:provider_worker_exit, ^worker, :killed}, 3_000
+
+      assert_error(Elixir.Task.await(requester, 2_000), 502, "provider_failure")
+      recover_pending_and_wait()
+      assert_timer_cancelled(readiness.timeout_ref)
+    after
+      :sys.remove(ProviderAccess, observer_id)
+      Application.put_env(:symmetry_control, :integrations, integrations)
+    end
   end
 
   test "a broker restart fences an interrupted dispatch and permits only same-ID retry",
@@ -1647,8 +1683,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
         end
       end)
 
-    assert_receive {:provider_action, "github", _, _, "change.upsert", _, _}
-    assert_receive {:provider_action_waiting, first_provider_pid}
+    first_readiness = await_provider_readiness(requester, context, action_id, :waiting)
+    first_provider_pid = first_readiness.worker
     provider_ref = Process.monitor(first_provider_pid)
 
     assert :ok =
@@ -1658,6 +1694,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
              )
 
     assert_receive {:DOWN, ^provider_ref, :process, ^first_provider_pid, :killed}
+    assert_timer_cancelled(first_readiness.timeout_ref)
 
     assert {:ok, _pid} =
              Supervisor.restart_child(
@@ -1681,8 +1718,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
         provider_request(context, context.repository.id, "change.upsert", input, action_id)
       end)
 
-    assert_receive {:provider_action, "github", _, _, "change.upsert", _, _}
-    assert_receive {:provider_action_waiting, second_provider_pid}
+    second_readiness = await_provider_readiness(retry, context, action_id, :waiting)
+    second_provider_pid = second_readiness.worker
     refute second_provider_pid == first_provider_pid
     send(second_provider_pid, :continue)
 
@@ -1690,6 +1727,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
 
     assert Repo.get_by!(ProviderActionIntent, run_id: context.run.id, action_id: action_id).state ==
              "succeeded"
+
+    assert_timer_cancelled(second_readiness.timeout_ref)
 
     _ = Elixir.Task.yield(requester, 0)
   end
@@ -1770,8 +1809,10 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), requester.pid)
     send(requester.pid, :start_health_write_race)
 
-    assert_receive {:provider_action, "github", _, _, "change.upsert", _, _}
-    assert_receive {:provider_action_health_write_race_ready, provider_pid, resource_id}
+    readiness = await_provider_readiness(requester, context, action_id, :health_write)
+    provider_pid = readiness.worker
+    resource_id = readiness.resource_id
+
     assert resource_id == context.repository.id
 
     Repo.update_all(from(resource in ProjectResource, where: resource.id == ^resource_id),
@@ -1794,6 +1835,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
              |> json_response(200)
 
     assert_received {:provider_action, "github", _, _, "change.upsert", _, _}
+    assert_timer_cancelled(readiness.timeout_ref)
   end
 
   test "a definitive action failure replays without redispatch", context do
@@ -1921,8 +1963,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), requester.pid)
     send(requester.pid, :start)
 
-    assert_receive {:provider_action, "github", _, _, "change.upsert", _, _}
-    assert_receive {:provider_action_waiting, provider_pid}
+    readiness = await_provider_readiness(requester, context, action_id, :waiting)
+    provider_pid = readiness.worker
 
     assert_error(
       provider_request(context, context.repository.id, "change.upsert", input, action_id),
@@ -1933,24 +1975,26 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     refute_receive {:provider_action, _, _, _, _, _, _}, 50
     send(provider_pid, :continue)
     assert requester |> Elixir.Task.await(5_000) |> json_response(200)
+    assert_timer_cancelled(readiness.timeout_ref)
   end
 
   test "concurrent action IDs for one resource dispatch only once", context do
+    action_id = uuid()
     input = %{"title" => "Wait for cancel"}
 
     requester =
       Elixir.Task.async(fn ->
         receive do
           :start ->
-            provider_request(context, context.repository.id, "change.upsert", input, uuid())
+            provider_request(context, context.repository.id, "change.upsert", input, action_id)
         end
       end)
 
     Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), requester.pid)
     send(requester.pid, :start)
 
-    assert_receive {:provider_action, "github", _, _, "change.upsert", _, _}
-    assert_receive {:provider_action_waiting, provider_pid}
+    readiness = await_provider_readiness(requester, context, action_id, :waiting)
+    provider_pid = readiness.worker
 
     assert_error(
       provider_request(context, context.repository.id, "change.upsert", input, uuid()),
@@ -1961,6 +2005,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     refute_receive {:provider_action, _, _, _, _, _, _}, 50
     send(provider_pid, :continue)
     assert requester |> Elixir.Task.await(5_000) |> json_response(200)
+    assert_timer_cancelled(readiness.timeout_ref)
   end
 
   test "rejects caller-controlled change scope and injects task scope", context do
@@ -2219,8 +2264,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), requester.pid)
     send(requester.pid, :start)
 
-    assert_receive {:provider_action, "github", _, _, "change.upsert", _, _}
-    assert_receive {:provider_action_waiting, provider_pid}
+    readiness = await_provider_readiness(requester, context, action_id, :waiting)
+    provider_pid = readiness.worker
 
     cancel_execution(context)
 
@@ -2234,6 +2279,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     send(provider_pid, :continue)
 
     first = requester |> Elixir.Task.await(5_000) |> json_response(200)
+    assert_timer_cancelled(readiness.timeout_ref)
 
     assert first["operation"] == "change.upsert"
 
@@ -2288,6 +2334,116 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     intent = Repo.get_by!(ProviderActionIntent, run_id: context.run.id)
     assert intent.failure == %{"code" => "provider_failure"}
     refute inspect(intent) =~ "provider-secret"
+  end
+
+  defp await_provider_readiness(requester, context, action_id, barrier) do
+    requester_pid = requester_pid(requester)
+    requester_ref = if requester_pid, do: Process.monitor(requester_pid)
+    resource_id = context.repository.id
+    work_item_id = context.item.id
+
+    try do
+      receive do
+        {:provider_action, "github", ^resource_id, ^work_item_id, "change.upsert", _, _} ->
+          :ok
+
+        {:DOWN, ref, :process, pid, reason}
+        when ref == requester_ref and pid == requester_pid ->
+          flunk("requester exited before provider dispatch: #{inspect(reason)}")
+      end
+
+      receive do
+        {:provider_action_ready, worker, ^resource_id, ^work_item_id, ^barrier} ->
+          intent =
+            Repo.get_by!(ProviderActionIntent, run_id: context.run.id, action_id: action_id)
+
+          state = :sys.get_state(ProviderAccess)
+          job = Map.fetch!(state.jobs, worker)
+
+          assert job.lock_key == advisory_key(intent.id)
+          assert is_reference(job.timeout_ref)
+          assert is_integer(Process.read_timer(job.timeout_ref))
+
+          case requester_pid do
+            nil ->
+              assert job.from == nil
+
+            pid ->
+              assert {^pid, _tag} = job.from
+          end
+
+          %{
+            worker: worker,
+            requester: requester_pid,
+            resource_id: resource_id,
+            work_item_id: work_item_id,
+            barrier: barrier,
+            intent_id: intent.id,
+            timeout_ref: job.timeout_ref
+          }
+
+        {:DOWN, ref, :process, pid, reason}
+        when ref == requester_ref and pid == requester_pid ->
+          flunk("requester exited before provider readiness: #{inspect(reason)}")
+      end
+    after
+      if requester_ref, do: Process.demonitor(requester_ref, [:flush])
+    end
+  end
+
+  defp requester_pid(%Elixir.Task{pid: pid}), do: pid
+  defp requester_pid(nil), do: nil
+
+  defp assert_timer_cancelled(timeout_ref) do
+    assert Process.read_timer(timeout_ref) == false
+  end
+
+  defp await_worker_exit(reference, pid, reason) do
+    try do
+      receive do
+        {:DOWN, ^reference, :process, ^pid, ^reason} -> :ok
+      end
+    after
+      Process.demonitor(reference, [:flush])
+    end
+  end
+
+  defp install_provider_timer_observer do
+    owner = self()
+    observer_id = {:provider_action_timer_test, make_ref()}
+
+    observer = fn %{registered: registered} = state, event, _name ->
+      case event do
+        {:noreply, %{jobs: jobs}} ->
+          Enum.reduce(jobs, state, fn {worker, job}, current ->
+            if MapSet.member?(registered, worker) do
+              current
+            else
+              send(owner, {:provider_job_registered, worker, job})
+              %{current | registered: MapSet.put(registered, worker)}
+            end
+          end)
+
+        {:in, {:dispatch_timeout, worker}} ->
+          send(owner, {:provider_dispatch_timeout, worker})
+          state
+
+        {:in, {:EXIT, worker, reason}} ->
+          send(owner, {:provider_worker_exit, worker, reason})
+          state
+
+        _other ->
+          state
+      end
+    end
+
+    assert :ok =
+             :sys.install(
+               ProviderAccess,
+               {observer_id, observer, %{registered: MapSet.new()}}
+             )
+
+    observer_id
   end
 
   defp provider_request(context, resource_id, operation, input, action_id \\ nil) do
