@@ -362,6 +362,20 @@ func TestGenericAdapterRejectsProviderAccessBeforeProcessStart(t *testing.T) {
 	}
 }
 
+func TestGenericAdapterRejectsProviderBridgeBeforeProcessStart(t *testing.T) {
+	runner := &fakeRunner{}
+	_, err := NewGenericAdapter(runner).Start(context.Background(), StartRequest{
+		ProviderBridge: &ProviderBridgeLaunch{},
+	}, nil)
+	var capabilityErr *CapabilityError
+	if !errors.As(err, &capabilityErr) || capabilityErr.Capability != CapabilityProviderAccess {
+		t.Fatalf("Start() error = %v, want provider-access capability rejection", err)
+	}
+	if runner.starts != 0 {
+		t.Fatalf("generic runner starts = %d, want none for provider bridge", runner.starts)
+	}
+}
+
 type fakeRunner struct {
 	process    *fakeProcess
 	sink       execution.Sink

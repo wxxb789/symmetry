@@ -119,7 +119,7 @@ func (adapter *GenericAdapter) Start(ctx context.Context, request StartRequest, 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if request.ProviderAccess != nil {
+	if request.ProviderAccess != nil || request.ProviderBridge != nil {
 		return nil, &CapabilityError{
 			Kind:       KindGeneric,
 			Capability: CapabilityProviderAccess,
