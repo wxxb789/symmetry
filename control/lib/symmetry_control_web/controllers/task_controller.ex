@@ -1,6 +1,7 @@
 defmodule SymmetryControlWeb.TaskController do
   use SymmetryControlWeb, :controller
 
+  alias SymmetryControl.Goals
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.{Notifier, Scheduler}
   alias SymmetryControlWeb.Protocol
@@ -39,7 +40,8 @@ defmodule SymmetryControlWeb.TaskController do
   def command(conn, _params) do
     task_id = Map.fetch!(conn.path_params, "task_id")
 
-    with {:ok, idempotency_key} <- idempotency_key(conn),
+    with true <- Goals.legacy_task_command_allowed?(task_id),
+         {:ok, idempotency_key} <- idempotency_key(conn),
          {:ok, kind, payload, opts} <- command_request(body_params(conn)),
          {:ok, command, disposition} <-
            Orchestration.create_command(task_id, kind, payload, idempotency_key, opts) do
@@ -51,6 +53,7 @@ defmodule SymmetryControlWeb.TaskController do
       status = if disposition == :created, do: :created, else: :ok
       conn |> put_status(status) |> json(Protocol.command(command))
     else
+      false -> Protocol.error(conn, :goal_authority_required)
       {:error, reason} -> Protocol.error(conn, reason)
     end
   end

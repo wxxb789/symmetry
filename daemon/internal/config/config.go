@@ -33,12 +33,34 @@ type Config struct {
 
 // Runtime declares the execution environment available on this machine.
 type Runtime struct {
-	RuntimeKey   string `json:"runtime_key"`
-	Name         string `json:"name"`
-	Capacity     int    `json:"capacity"`
-	AgentProfile string `json:"agent_profile"`
-	Workspace    string `json:"workspace"`
+	RuntimeKey             string `json:"runtime_key"`
+	Name                   string `json:"name"`
+	Capacity               int    `json:"capacity"`
+	AgentProfile           string `json:"agent_profile"`
+	Workspace              string `json:"workspace"`
+	RepositoryResourceID   string `json:"repository_resource_id,omitempty"`
+	HarnessKind            string `json:"harness_kind,omitempty"`
+	HarnessVersion         string `json:"harness_version,omitempty"`
+	AdapterVersion         string `json:"adapter_version,omitempty"`
+	AdapterProtocolVersion int    `json:"adapter_protocol_version,omitempty"`
 }
+
+const (
+	// RuntimeHarnessGeneric is the legacy direct-process adapter.
+	RuntimeHarnessGeneric = "generic"
+	// RuntimeHarnessCodex identifies the Codex app-server adapter.
+	RuntimeHarnessCodex = "codex"
+	// RuntimeHarnessClaudeCode identifies the Claude Code adapter.
+	RuntimeHarnessClaudeCode = "claude_code"
+	// RuntimeHarnessPi identifies the pi RPC adapter.
+	RuntimeHarnessPi = "pi"
+	// RuntimeHarnessOpenCode identifies the OpenCode server adapter.
+	RuntimeHarnessOpenCode = "opencode"
+
+	defaultHarnessVersion         = "legacy"
+	defaultAdapterVersion         = "legacy"
+	defaultAdapterProtocolVersion = 1
+)
 
 // InputMode specifies the local CLI input representation.
 type InputMode string
@@ -52,14 +74,16 @@ const (
 
 // AgentProfile is a machine-local coding agent command binding.
 type AgentProfile struct {
-	Command            string      `json:"command"`
-	Args               []string    `json:"args"`
-	InputMode          InputMode   `json:"input_mode"`
-	ProviderAccess     bool        `json:"provider_access"`
-	Interactive        bool        `json:"interactive"`
-	SupervisoryControl bool        `json:"supervisory_control"`
-	EventFormat        EventFormat `json:"event_format"`
-	EnvAllowlist       []string    `json:"env_allowlist"`
+	Command             string      `json:"command"`
+	Args                []string    `json:"args"`
+	NativeModel         string      `json:"native_model,omitempty"`
+	NativeModelProvider string      `json:"native_model_provider,omitempty"`
+	InputMode           InputMode   `json:"input_mode"`
+	ProviderAccess      bool        `json:"provider_access"`
+	Interactive         bool        `json:"interactive"`
+	SupervisoryControl  bool        `json:"supervisory_control"`
+	EventFormat         EventFormat `json:"event_format"`
+	EnvAllowlist        []string    `json:"env_allowlist"`
 }
 
 // EventFormat specifies how the local agent represents events on stdout.
@@ -170,6 +194,18 @@ func (value *Config) Validate() error {
 	if err := requireNotEmpty("runtime.workspace", value.Runtime.Workspace); err != nil {
 		return err
 	}
+	if err := normalizeRuntimeAdapterMetadata(&value.Runtime); err != nil {
+		return err
+	}
+	if value.Runtime.HarnessKind != RuntimeHarnessGeneric {
+		if err := validateCanonicalUUID(value.Runtime.RepositoryResourceID, "runtime.repository_resource_id"); err != nil {
+			return err
+		}
+	} else if value.Runtime.RepositoryResourceID != "" {
+		if err := validateCanonicalUUID(value.Runtime.RepositoryResourceID, "runtime.repository_resource_id"); err != nil {
+			return err
+		}
+	}
 
 	if value.Runtime.Capacity <= 0 {
 		return fmt.Errorf("runtime.capacity must be greater than zero")
@@ -181,15 +217,100 @@ func (value *Config) Validate() error {
 	if err := validateWorkspaces(value.Workspaces); err != nil {
 		return err
 	}
-	if _, ok := value.AgentProfiles[value.Runtime.AgentProfile]; !ok {
+	profile, ok := value.AgentProfiles[value.Runtime.AgentProfile]
+	if !ok {
 		return fmt.Errorf("runtime.agent_profile %q is not configured", value.Runtime.AgentProfile)
+	}
+	if value.Runtime.HarnessKind == RuntimeHarnessCodex && profile.NativeModel == "" {
+		return fmt.Errorf("agent_profiles.%s.native_model must be configured for a Codex runtime", value.Runtime.AgentProfile)
+	}
+	if value.Runtime.HarnessKind == RuntimeHarnessCodex && profile.NativeModelProvider == "" {
+		return fmt.Errorf("agent_profiles.%s.native_model_provider must be configured for a Codex runtime", value.Runtime.AgentProfile)
 	}
 	workspace, ok := value.Workspaces[value.Runtime.Workspace]
 	if !ok {
 		return fmt.Errorf("runtime.workspace %q is not configured", value.Runtime.Workspace)
 	}
+	if value.Runtime.HarnessKind != RuntimeHarnessGeneric && workspace.Policy != WorkspacePolicyGitWorktree {
+		return fmt.Errorf("runtime.workspace must use git_worktree for a native Goal-capable runtime")
+	}
 	if workspace.Policy == WorkspacePolicyExistingCheckout && value.Runtime.Capacity > 1 {
 		return fmt.Errorf("runtime.capacity must be 1 when runtime.workspace uses existing_checkout")
+	}
+	return nil
+}
+
+func validateNativeModel(value, field string) error {
+	if len(value) < 1 || len(value) > 128 {
+		return fmt.Errorf("%s must contain 1..128 characters", field)
+	}
+	for index, character := range value {
+		if index == 0 {
+			if !isASCIIAlphaNumeric(character) {
+				return fmt.Errorf("%s has an invalid identifier", field)
+			}
+			continue
+		}
+		if !isASCIIAlphaNumeric(character) && !strings.ContainsRune("._:-", character) {
+			return fmt.Errorf("%s has an invalid identifier", field)
+		}
+	}
+	return nil
+}
+
+func isASCIIAlphaNumeric(value rune) bool {
+	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= '0' && value <= '9'
+}
+
+func validateCanonicalUUID(value, field string) error {
+	if len(value) != 36 {
+		return fmt.Errorf("%s must be a canonical UUID", field)
+	}
+	for index, character := range value {
+		if index == 8 || index == 13 || index == 18 || index == 23 {
+			if character != '-' {
+				return fmt.Errorf("%s must be a canonical UUID", field)
+			}
+			continue
+		}
+		if character >= 'A' && character <= 'F' || !(character >= '0' && character <= '9' || character >= 'a' && character <= 'f') {
+			return fmt.Errorf("%s must be a canonical UUID", field)
+		}
+	}
+	if value[14] < '1' || value[14] > '5' || !strings.ContainsRune("89ab", rune(value[19])) {
+		return fmt.Errorf("%s must be a canonical UUID", field)
+	}
+	return nil
+}
+
+func normalizeRuntimeAdapterMetadata(runtime *Runtime) error {
+	if runtime == nil {
+		return fmt.Errorf("runtime must not be nil")
+	}
+	if runtime.HarnessKind == "" && runtime.HarnessVersion == "" && runtime.AdapterVersion == "" && runtime.AdapterProtocolVersion == 0 {
+		runtime.HarnessKind = RuntimeHarnessGeneric
+		runtime.HarnessVersion = defaultHarnessVersion
+		runtime.AdapterVersion = defaultAdapterVersion
+		runtime.AdapterProtocolVersion = defaultAdapterProtocolVersion
+		return nil
+	}
+	if strings.TrimSpace(runtime.HarnessKind) == "" || strings.TrimSpace(runtime.HarnessVersion) == "" ||
+		strings.TrimSpace(runtime.AdapterVersion) == "" || runtime.AdapterProtocolVersion <= 0 {
+		return fmt.Errorf("runtime adapter metadata must include harness_kind, harness_version, adapter_version, and adapter_protocol_version")
+	}
+	switch runtime.HarnessKind {
+	case RuntimeHarnessGeneric, RuntimeHarnessCodex, RuntimeHarnessClaudeCode, RuntimeHarnessPi, RuntimeHarnessOpenCode:
+	default:
+		return fmt.Errorf("runtime.harness_kind %q is unsupported", runtime.HarnessKind)
+	}
+	if runtime.HarnessKind != RuntimeHarnessGeneric && (runtime.HarnessVersion == defaultHarnessVersion || runtime.AdapterVersion == defaultAdapterVersion) {
+		return fmt.Errorf("native runtime adapter metadata must not use legacy versions")
+	}
+	if len(runtime.HarnessVersion) > 240 {
+		return fmt.Errorf("runtime.harness_version must be at most 240 characters")
+	}
+	if len(runtime.AdapterVersion) > 240 {
+		return fmt.Errorf("runtime.adapter_version must be at most 240 characters")
 	}
 	return nil
 }
@@ -213,6 +334,16 @@ func validateAgentProfiles(profiles map[string]AgentProfile) error {
 		}
 		if err := requireNotEmpty(field+".command", profile.Command); err != nil {
 			return err
+		}
+		if profile.NativeModel != "" {
+			if err := validateNativeModel(profile.NativeModel, field+".native_model"); err != nil {
+				return err
+			}
+		}
+		if profile.NativeModelProvider != "" {
+			if err := validateNativeModel(profile.NativeModelProvider, field+".native_model_provider"); err != nil {
+				return err
+			}
 		}
 		switch profile.InputMode {
 		case InputModeGoal, InputModeJSON:

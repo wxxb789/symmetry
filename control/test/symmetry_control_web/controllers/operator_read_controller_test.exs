@@ -627,6 +627,7 @@ defmodule SymmetryControlWeb.OperatorReadControllerTest do
              "reserved_capacity" => 1,
              "agent_profile" => "codex",
              "workspace" => "primary",
+             "repository_resource_id" => nil,
              "capabilities" => %{},
              "active_runs" => [active_run]
            } = snapshot

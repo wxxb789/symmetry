@@ -1,0 +1,3621 @@
+defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
+  use SymmetryControl.DataCase, async: false
+
+  alias Oban.Job
+  alias SymmetryControl.{Goals, RequestHash}
+  alias SymmetryControl.Goals.ReadModel
+
+  alias SymmetryControl.Goals.{
+    Goal,
+    GoalBudgetReservation,
+    GoalEvent,
+    GoalRevision,
+    HarnessSession
+  }
+
+  alias SymmetryControl.Goals.Workers.SettleTaskWorker
+  alias SymmetryControl.Orchestration
+  alias SymmetryControl.Orchestration.{Command, Run, Runtime, Task}
+  alias SymmetryControl.Repo
+  alias SymmetryControl.Workspaces
+  alias SymmetryControl.Workspaces.{Project, ProjectResource, WorkItem}
+
+  @now ~U[2026-09-09 09:00:00.000000Z]
+
+  test "legacy submit_task preserves its request hash and creates no Goal settlement" do
+    attrs = %{
+      goal: "Legacy task",
+      agent_profile: "codex",
+      workspace: "primary",
+      input: %{}
+    }
+
+    assert {:ok, task, :created} =
+             Orchestration.submit_task(attrs, Ecto.UUID.generate(), now: @now)
+
+    assert task.goal_id == nil
+    assert task.request_hash == RequestHash.legacy(Map.put(attrs, :required_capabilities, %{}))
+    assert task.request_hash_version == 1
+
+    assert [] ==
+             Repo.all(
+               from job in Job,
+                 where:
+                   job.worker == "SymmetryControl.Goals.Workers.SettleTaskWorker" and
+                     fragment("? ->> 'task_id' = ?", job.args, ^task.id)
+             )
+  end
+
+  test "legacy command entry points cannot mutate a Goal task or its reservation" do
+    {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
+
+    assert {:error, :goal_authority_required} =
+             Orchestration.create_command(task.id, "cancel", %{}, "legacy-goal-cancel", now: @now)
+
+    assert {:error, :goal_authority_required} = Orchestration.request_cancel(task.id, now: @now)
+
+    assert {:error, :goal_authority_required} =
+             Orchestration.provide_input(task.id, %{"answer" => "legacy"}, "legacy-goal-input",
+               now: @now
+             )
+
+    assert {:error, :goal_authority_required} =
+             Orchestration.retry_task(
+               task.id,
+               legacy_task_attrs(),
+               "legacy-goal-retry",
+               expected_generation: 1,
+               now: @now
+             )
+
+    assert {:ok, persisted_task} = Orchestration.fetch_task(task.id)
+    assert persisted_task.state == "queued"
+
+    assert "held" ==
+             Repo.one!(
+               from reservation in GoalBudgetReservation,
+                 where: reservation.task_id == ^task.id,
+                 select: reservation.state
+             )
+  end
+
+  test "legacy runtime registration replays without adapter metadata" do
+    machine = enroll_machine("legacy-runtime")
+    specification = runtime_spec("legacy-runtime")
+    daemon_instance_id = Ecto.UUID.generate()
+
+    assert {:ok, [first]} =
+             Orchestration.register_runtimes(machine.id, daemon_instance_id, [specification],
+               now: @now
+             )
+
+    assert first.harness_kind == nil
+    assert first.harness_version == nil
+    assert first.adapter_version == nil
+    assert first.adapter_protocol_version == nil
+
+    assert {:ok, [replayed]} =
+             Orchestration.register_runtimes(machine.id, daemon_instance_id, [specification],
+               now: @now
+             )
+
+    assert replayed.id == first.id
+    assert replayed.connection_epoch == first.connection_epoch
+    assert replayed.harness_kind == nil
+  end
+
+  test "disabled Goal rollout accepts legacy registration without contracts but rejects adapter metadata" do
+    previous_contracts = Application.fetch_env!(:symmetry_control, :contracts)
+    previous_goals = Application.fetch_env!(:symmetry_control, :goals)
+
+    missing_contracts_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "symmetry-contracts-missing-#{System.unique_integer([:positive])}"
+      )
+
+    Application.put_env(:symmetry_control, :contracts, directory: missing_contracts_dir)
+
+    Application.put_env(
+      :symmetry_control,
+      :goals,
+      Keyword.put(previous_goals, :rollout_enabled, false)
+    )
+
+    on_exit(fn ->
+      Application.put_env(:symmetry_control, :contracts, previous_contracts)
+      Application.put_env(:symmetry_control, :goals, previous_goals)
+    end)
+
+    legacy_machine = enroll_machine("contractless-legacy-runtime")
+
+    assert {:ok, [legacy_runtime]} =
+             Orchestration.register_runtimes(
+               legacy_machine.id,
+               Ecto.UUID.generate(),
+               [runtime_spec("contractless-legacy-runtime")],
+               now: @now
+             )
+
+    assert legacy_runtime.capabilities == %{}
+
+    unknown_capability_machine = enroll_machine("contractless-unknown-capability")
+
+    assert {:error, :invalid_request} =
+             Orchestration.register_runtimes(
+               unknown_capability_machine.id,
+               Ecto.UUID.generate(),
+               [
+                 runtime_spec("contractless-unknown-capability", %{
+                   capabilities: %{"future_capability" => true}
+                 })
+               ],
+               now: @now
+             )
+
+    native_machine = enroll_machine("contractless-native-runtime")
+
+    native_specification =
+      runtime_spec("contractless-native-runtime", %{
+        harness_kind: "codex",
+        harness_version: "0.153.4",
+        adapter_version: "symmetry-codex-1",
+        adapter_protocol_version: 1,
+        capabilities: %{
+          "structured_input" => true,
+          "interactive" => true,
+          "adapter" => native_adapter("codex", "0.153.4", "symmetry-codex-1", 1)
+        }
+      })
+
+    assert {:error, :invalid_request} =
+             Orchestration.register_runtimes(
+               native_machine.id,
+               Ecto.UUID.generate(),
+               [native_specification],
+               now: @now
+             )
+  end
+
+  test "legacy generic runtime accepts supervisory controls alongside metadata" do
+    machine = enroll_machine("generic-supervisory")
+    daemon_instance_id = Ecto.UUID.generate()
+
+    specification =
+      runtime_spec("generic-supervisory", %{
+        harness_kind: "generic",
+        harness_version: "generic-v1",
+        adapter_version: "symmetry-generic-1",
+        adapter_protocol_version: 1,
+        capabilities: %{
+          "structured_input" => true,
+          "interactive" => true,
+          "supervisory_control" => true,
+          "adapter" => generic_adapter()
+        }
+      })
+
+    assert {:ok, [registered]} =
+             Orchestration.register_runtimes(machine.id, daemon_instance_id, [specification],
+               now: @now
+             )
+
+    assert {:ok, [replayed]} =
+             Orchestration.register_runtimes(machine.id, daemon_instance_id, [specification],
+               now: @now
+             )
+
+    assert replayed.id == registered.id
+    assert replayed.connection_epoch == registered.connection_epoch
+    assert replayed.capabilities["supervisory_control"] == true
+  end
+
+  test "generic and native registrations persist additive adapter metadata" do
+    generic_machine = enroll_machine("generic-runtime")
+
+    generic =
+      runtime_spec("generic-runtime", %{
+        harness_kind: "generic",
+        harness_version: "generic-v1",
+        adapter_version: "symmetry-generic-1",
+        adapter_protocol_version: 1
+      })
+
+    assert {:ok, [generic_runtime]} =
+             Orchestration.register_runtimes(
+               generic_machine.id,
+               Ecto.UUID.generate(),
+               [generic],
+               now: @now
+             )
+
+    assert generic_runtime.harness_kind == "generic"
+    assert generic_runtime.harness_version == "generic-v1"
+    assert generic_runtime.adapter_version == "symmetry-generic-1"
+    assert generic_runtime.adapter_protocol_version == 1
+    assert generic_runtime.capabilities == %{}
+
+    generic_runtime = Repo.get!(Runtime, generic_runtime.id)
+    assert generic_runtime.harness_kind == "generic"
+    assert generic_runtime.harness_version == "generic-v1"
+    assert generic_runtime.adapter_version == "symmetry-generic-1"
+    assert generic_runtime.adapter_protocol_version == 1
+
+    metadata_only_machine = enroll_machine("native-metadata-only")
+
+    metadata_only_native =
+      runtime_spec("native-metadata-only", %{
+        harness_kind: "pi",
+        harness_version: "0.51.0",
+        adapter_version: "symmetry-pi-1",
+        adapter_protocol_version: 1
+      })
+
+    assert {:ok, [metadata_only_runtime]} =
+             Orchestration.register_runtimes(
+               metadata_only_machine.id,
+               Ecto.UUID.generate(),
+               [metadata_only_native],
+               now: @now
+             )
+
+    assert metadata_only_runtime.harness_kind == "pi"
+    assert metadata_only_runtime.harness_version == "0.51.0"
+    assert metadata_only_runtime.capabilities == %{}
+
+    native_machine = enroll_machine("native-runtime")
+    adapter = native_adapter("codex", "0.153.4", "symmetry-codex-1", 1)
+
+    native =
+      runtime_spec("native-runtime", %{
+        harness_kind: "codex",
+        harness_version: "0.153.4",
+        adapter_version: "symmetry-codex-1",
+        adapter_protocol_version: 1,
+        capabilities: %{
+          "structured_input" => true,
+          "interactive" => true,
+          "adapter" => adapter
+        }
+      })
+
+    assert {:ok, [native_runtime]} =
+             Orchestration.register_runtimes(
+               native_machine.id,
+               Ecto.UUID.generate(),
+               [native],
+               now: @now
+             )
+
+    assert native_runtime.harness_kind == "codex"
+    assert native_runtime.harness_version == "0.153.4"
+    assert native_runtime.adapter_version == "symmetry-codex-1"
+    assert native_runtime.adapter_protocol_version == 1
+    assert native_runtime.capabilities["adapter"] == adapter
+
+    native_runtime = Repo.get!(Runtime, native_runtime.id)
+    assert native_runtime.harness_kind == "codex"
+    assert native_runtime.harness_version == "0.153.4"
+    assert native_runtime.adapter_version == "symmetry-codex-1"
+    assert native_runtime.adapter_protocol_version == 1
+    assert native_runtime.capabilities["adapter"] == adapter
+  end
+
+  test "runtime registration rejects incomplete or incompatible adapter declarations" do
+    machine = enroll_machine("invalid-adapter")
+
+    cases = [
+      runtime_spec("partial", %{harness_kind: "codex"}),
+      runtime_spec("unbound-adapter", %{
+        capabilities: %{"adapter" => native_adapter("codex", "0.153.4", "symmetry-codex-1", 1)}
+      }),
+      runtime_spec("mismatched-kind", %{
+        harness_kind: "codex",
+        harness_version: "0.153.4",
+        adapter_version: "symmetry-codex-1",
+        adapter_protocol_version: 1,
+        capabilities: %{"adapter" => native_adapter("pi", "0.153.4", "symmetry-codex-1", 1)}
+      }),
+      runtime_spec("unknown-operation", %{
+        harness_kind: "codex",
+        harness_version: "0.153.4",
+        adapter_version: "symmetry-codex-1",
+        adapter_protocol_version: 1,
+        capabilities: %{
+          "adapter" =>
+            put_in(
+              native_adapter("codex", "0.153.4", "symmetry-codex-1", 1),
+              ["operations", "guidance"],
+              "unsupported-value"
+            )
+        }
+      }),
+      runtime_spec("extra-operation", %{
+        harness_kind: "codex",
+        harness_version: "0.153.4",
+        adapter_version: "symmetry-codex-1",
+        adapter_protocol_version: 1,
+        capabilities: %{
+          "adapter" =>
+            update_in(
+              native_adapter("codex", "0.153.4", "symmetry-codex-1", 1),
+              ["operations"],
+              &Map.put(&1, "future_operation", false)
+            )
+        }
+      }),
+      runtime_spec("extra-adapter-field", %{
+        harness_kind: "codex",
+        harness_version: "0.153.4",
+        adapter_version: "symmetry-codex-1",
+        adapter_protocol_version: 1,
+        capabilities: %{
+          "adapter" =>
+            Map.put(
+              native_adapter("codex", "0.153.4", "symmetry-codex-1", 1),
+              "future_field",
+              false
+            )
+        }
+      }),
+      runtime_spec("cancel-without-events", %{
+        harness_kind: "codex",
+        harness_version: "0.153.4",
+        adapter_version: "symmetry-codex-1",
+        adapter_protocol_version: 1,
+        capabilities: %{
+          "adapter" =>
+            put_in(
+              native_adapter("codex", "0.153.4", "symmetry-codex-1", 1),
+              ["operations", "events"],
+              false
+            )
+        }
+      }),
+      runtime_spec("approval-without-events", %{
+        harness_kind: "codex",
+        harness_version: "0.153.4",
+        adapter_version: "symmetry-codex-1",
+        adapter_protocol_version: 1,
+        capabilities: %{
+          "adapter" =>
+            native_adapter("codex", "0.153.4", "symmetry-codex-1", 1)
+            |> put_in(["operations", "events"], false)
+            |> put_in(["operations", "approval_response"], true)
+        }
+      }),
+      runtime_spec("incompatible-supervision", %{
+        harness_kind: "codex",
+        harness_version: "0.153.4",
+        adapter_version: "symmetry-codex-1",
+        adapter_protocol_version: 1,
+        capabilities: %{
+          "structured_input" => true,
+          "interactive" => true,
+          "supervisory_control" => true,
+          "adapter" =>
+            put_in(
+              native_adapter("codex", "0.153.4", "symmetry-codex-1", 1),
+              ["operations", "pause"],
+              "unsupported"
+            )
+        }
+      }),
+      runtime_spec("generic-overclaim", %{
+        harness_kind: "generic",
+        harness_version: "generic-v1",
+        adapter_version: "symmetry-generic-1",
+        adapter_protocol_version: 1,
+        capabilities: %{
+          "adapter" =>
+            put_in(
+              native_adapter("generic", "generic-v1", "symmetry-generic-1", 1),
+              ["operations", "resume"],
+              true
+            )
+        }
+      })
+    ]
+
+    for specification <- cases do
+      assert {:error, :invalid_request} =
+               Orchestration.register_runtimes(
+                 machine.id,
+                 Ecto.UUID.generate(),
+                 [specification],
+                 now: @now
+               )
+    end
+  end
+
+  test "native registrations cannot advertise an unimplemented safe pause" do
+    machine = enroll_machine("safe-pause")
+
+    adapter =
+      native_adapter("codex", "0.153.4", "symmetry-codex-1", 1)
+      |> put_in(["operations", "resume"], true)
+      |> put_in(["operations", "pause"], "safe_boundary")
+
+    specification =
+      runtime_spec("safe-pause", %{
+        harness_kind: "codex",
+        harness_version: "0.153.4",
+        adapter_version: "symmetry-codex-1",
+        adapter_protocol_version: 1,
+        capabilities: %{"adapter" => adapter}
+      })
+
+    assert {:error, :invalid_request} =
+             Orchestration.register_runtimes(machine.id, Ecto.UUID.generate(), [specification],
+               now: @now
+             )
+  end
+
+  test "paused Goal tasks are not assigned until the Goal resumes, without blocking legacy tasks" do
+    {goal_task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    runtime = register_runtime("goal-pause")
+
+    Repo.update_all(from(goal in Goal, where: goal.id == ^goal_id), set: [state: "paused"])
+
+    assert {:ok, legacy_task, :created} =
+             Orchestration.submit_task(legacy_task_attrs(), "legacy-while-goal-paused", now: @now)
+
+    assert {:ok, legacy_run} = Orchestration.assign_one(now: @now)
+    assert legacy_run.task_id == legacy_task.id
+
+    resumed_at = DateTime.add(@now, 31, :second)
+    assert %{expired_runs: 1} = Orchestration.expire(now: DateTime.add(@now, 30, :second))
+
+    assert {:ok, _snapshot} =
+             Orchestration.heartbeat(runtime.id, runtime.connection_epoch, [], now: resumed_at)
+
+    Repo.update_all(from(goal in Goal, where: goal.id == ^goal_id), set: [state: "active"])
+
+    assert {:ok, resumed_run} = Orchestration.assign_one(now: resumed_at)
+    assert resumed_run.task_id == goal_task.id
+  end
+
+  test "Goal assignment and claim require a current native runtime allowed by the Goal" do
+    generic_machine = enroll_machine("goal-generic")
+
+    assert {:ok, [generic_runtime]} =
+             Orchestration.register_runtimes(
+               generic_machine.id,
+               Ecto.UUID.generate(),
+               [
+                 runtime_spec("goal-generic", %{
+                   harness_kind: "generic",
+                   harness_version: "generic-v1",
+                   adapter_version: "symmetry-generic-1",
+                   adapter_protocol_version: 1,
+                   capabilities: %{
+                     "structured_input" => true,
+                     "interactive" => true,
+                     "supervisory_control" => true,
+                     "adapter" => generic_adapter()
+                   }
+                 })
+               ],
+               now: @now
+             )
+
+    disallowed = register_runtime("goal-disallowed")
+    allowed = register_runtime("goal-allowed")
+
+    {task, goal_id} =
+      insert_goal_task(
+        max_run_attempts: 2,
+        execution_policy: Map.put(execution_policy(2), "allowed_runtime_ids", [allowed.id])
+      )
+
+    repository_resource_id = Repo.get!(WorkItem, task.work_item_id).repository_resource_id
+
+    Repo.update_all(
+      from(runtime in Runtime, where: runtime.id == ^generic_runtime.id),
+      set: [repository_resource_id: repository_resource_id]
+    )
+
+    assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
+
+    Repo.update_all(
+      from(runtime in Runtime, where: runtime.id in ^[allowed.id, disallowed.id]),
+      set: [repository_resource_id: repository_resource_id]
+    )
+
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    assert run.task_id == task.id
+    assert run.runtime_id == allowed.id
+
+    Repo.update_all(from(goal in Goal, where: goal.id == ^goal_id), set: [state: "paused"])
+
+    assert {:error, :ownership_lost} =
+             Goals.claim(
+               run.id,
+               %{
+                 runtime_id: allowed.id,
+                 runtime_epoch: allowed.connection_epoch,
+                 generation: run.generation,
+                 claim_id: Ecto.UUID.generate()
+               },
+               now: @now
+             )
+
+    assert {:ok, assigned} = Orchestration.fetch_run(run.id)
+    assert assigned.state == "assigned"
+  end
+
+  test "Goal assignment deterministically chooses one eligible native runtime" do
+    {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
+    first = register_runtime("goal-runtime-first")
+    second = register_runtime("goal-runtime-second")
+    expected_runtime = Enum.min_by([first, second], & &1.id)
+
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    assert run.task_id == task.id
+    assert run.runtime_id == expected_runtime.id
+  end
+
+  test "assignment and exact claim replay use the frozen Task runtime snapshot" do
+    allowed = register_runtime("snapshot-allowed")
+    disallowed = register_runtime("snapshot-disallowed")
+
+    {task, goal_id} =
+      insert_goal_task(
+        max_run_attempts: 2,
+        execution_policy: Map.put(execution_policy(2), "allowed_runtime_ids", [allowed.id])
+      )
+
+    repository_resource_id = Repo.get!(WorkItem, task.work_item_id).repository_resource_id
+
+    Repo.update_all(
+      from(runtime in Runtime, where: runtime.id in ^[allowed.id, disallowed.id]),
+      set: [repository_resource_id: repository_resource_id]
+    )
+
+    update_live_goal_runtime_policy!(goal_id, [disallowed.id])
+
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    assert run.runtime_id == allowed.id
+
+    request = %{
+      runtime_id: allowed.id,
+      runtime_epoch: allowed.connection_epoch,
+      generation: run.generation,
+      claim_id: Ecto.UUID.generate()
+    }
+
+    assert {:ok, claimed} = Goals.claim(run.id, request, now: @now)
+    assert {:ok, replayed} = Goals.claim(run.id, request, now: @now)
+    assert replayed.lease_token == claimed.lease_token
+  end
+
+  test "a new claim rejects an assigned runtime outside the Task snapshot" do
+    allowed = register_runtime("snapshot-new-claim-allowed")
+    disallowed = register_runtime("snapshot-new-claim-disallowed")
+
+    {task, goal_id} =
+      insert_goal_task(
+        max_run_attempts: 2,
+        execution_policy: Map.put(execution_policy(2), "allowed_runtime_ids", [allowed.id])
+      )
+
+    repository_resource_id = Repo.get!(WorkItem, task.work_item_id).repository_resource_id
+
+    Repo.update_all(
+      from(runtime in Runtime, where: runtime.id in ^[allowed.id, disallowed.id]),
+      set: [repository_resource_id: repository_resource_id]
+    )
+
+    update_live_goal_runtime_policy!(goal_id, [disallowed.id])
+    run = insert_assigned_run!(task, disallowed)
+
+    assert {:error, :ownership_lost} =
+             Goals.claim(
+               run.id,
+               %{
+                 runtime_id: disallowed.id,
+                 runtime_epoch: disallowed.connection_epoch,
+                 generation: run.generation,
+                 claim_id: Ecto.UUID.generate()
+               },
+               now: @now
+             )
+  end
+
+  test "Goal assignment requires the runtime repository affinity" do
+    {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
+    item = Repo.get!(WorkItem, task.work_item_id)
+
+    assert {:ok, other_repository} =
+             Workspaces.create_resource(item.project_id, %{
+               kind: "repository",
+               name: "Other runtime repository #{System.unique_integer([:positive])}"
+             })
+
+    _mismatched =
+      register_runtime("goal-resource-mismatch", repository_resource_id: other_repository.id)
+
+    matching = register_runtime("goal-resource-match")
+
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    assert run.runtime_id == matching.id
+  end
+
+  test "strict-budget Goal assignment and new claim require native hard cost limit support" do
+    {task, _goal_id} =
+      insert_goal_task(
+        max_run_attempts: 2,
+        execution_policy:
+          execution_policy(2)
+          |> Map.put("budget_mode", "strict")
+          |> Map.put("per_run_cost_limit_microusd", 1)
+          |> Map.put("hard_cost_limit_required", true)
+      )
+
+    _without_hard_limit = register_runtime("strict-budget-without-hard-limit")
+    assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
+
+    hard_limit_runtime = register_runtime("strict-budget-with-hard-limit", hard_cost_limit?: true)
+
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    assert run.task_id == task.id
+    assert run.runtime_id == hard_limit_runtime.id
+
+    Repo.update_all(
+      from(runtime in Runtime, where: runtime.id == ^hard_limit_runtime.id),
+      set: [
+        capabilities:
+          put_in(
+            hard_limit_runtime.capabilities,
+            ["adapter", "operations", "hard_cost_limit"],
+            false
+          )
+      ]
+    )
+
+    assert {:error, :ownership_lost} =
+             Goals.claim(
+               run.id,
+               %{
+                 runtime_id: hard_limit_runtime.id,
+                 runtime_epoch: hard_limit_runtime.connection_epoch,
+                 generation: run.generation,
+                 claim_id: Ecto.UUID.generate()
+               },
+               now: @now
+             )
+
+    Repo.update_all(
+      from(runtime in Runtime, where: runtime.id == ^hard_limit_runtime.id),
+      set: [capabilities: hard_limit_runtime.capabilities]
+    )
+
+    claim_request = %{
+      runtime_id: hard_limit_runtime.id,
+      runtime_epoch: hard_limit_runtime.connection_epoch,
+      generation: run.generation,
+      claim_id: Ecto.UUID.generate()
+    }
+
+    assert {:ok, claimed} = Goals.claim(run.id, claim_request, now: @now)
+
+    Repo.update_all(
+      from(runtime in Runtime, where: runtime.id == ^hard_limit_runtime.id),
+      set: [
+        capabilities:
+          put_in(
+            hard_limit_runtime.capabilities,
+            ["adapter", "operations", "hard_cost_limit"],
+            false
+          )
+      ]
+    )
+
+    assert {:ok, replayed} = Goals.claim(run.id, claim_request, now: @now)
+    assert replayed.lease_token == claimed.lease_token
+  end
+
+  test "runtime re-registration permits a same-affinity refresh but rejects a change during a Goal run" do
+    {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
+    runtime = register_runtime("active-affinity-registration")
+    assert {:ok, _run} = Orchestration.assign_one(now: @now)
+    item = Repo.get!(WorkItem, task.work_item_id)
+
+    assert {:ok, [refreshed]} =
+             Orchestration.register_runtimes(
+               runtime.machine_id,
+               runtime.daemon_instance_id,
+               [runtime_registration_spec(runtime)],
+               now: DateTime.add(@now, 1, :second)
+             )
+
+    assert refreshed.repository_resource_id == item.repository_resource_id
+
+    assert {:ok, other_repository} =
+             Workspaces.create_resource(item.project_id, %{
+               kind: "repository",
+               name: "Active runtime replacement #{System.unique_integer([:positive])}"
+             })
+
+    assert {:error, :state_conflict} =
+             Orchestration.register_runtimes(
+               runtime.machine_id,
+               runtime.daemon_instance_id,
+               [
+                 runtime_registration_spec(runtime, %{repository_resource_id: other_repository.id})
+               ],
+               now: DateTime.add(@now, 2, :second)
+             )
+
+    assert Repo.get!(Runtime, runtime.id).repository_resource_id == item.repository_resource_id
+  end
+
+  test "runtime re-registration rejects an affinity change while a harness session is retained" do
+    runtime = register_runtime("retained-affinity-registration", resume?: true)
+    {task, _goal_id} = insert_goal_task(max_run_attempts: 2, retained_runtime: runtime)
+    session = Repo.get!(HarnessSession, task.requested_session_id)
+    runtime = Repo.get!(Runtime, runtime.id)
+    item = Repo.get!(WorkItem, task.work_item_id)
+
+    assert {:ok, other_repository} =
+             Workspaces.create_resource(item.project_id, %{
+               kind: "repository",
+               name: "Retained runtime replacement #{System.unique_integer([:positive])}"
+             })
+
+    assert {:error, :state_conflict} =
+             Orchestration.register_runtimes(
+               runtime.machine_id,
+               runtime.daemon_instance_id,
+               [
+                 runtime_registration_spec(runtime, %{repository_resource_id: other_repository.id})
+               ],
+               now: @now
+             )
+
+    assert Repo.get!(Runtime, runtime.id).repository_resource_id == session.repository_resource_id
+    assert session.repository_resource_id == Repo.get!(WorkItem, item.id).repository_resource_id
+  end
+
+  test "pre-affinity native runtimes remain registerable but are ineligible for Goal work" do
+    {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
+    machine = enroll_machine("unbound-native")
+
+    assert {:ok, [runtime]} =
+             Orchestration.register_runtimes(
+               machine.id,
+               Ecto.UUID.generate(),
+               [
+                 runtime_spec("unbound-native", %{
+                   harness_kind: "codex",
+                   harness_version: "0.153.4",
+                   adapter_version: "symmetry-codex-1",
+                   adapter_protocol_version: 1,
+                   capabilities: %{
+                     "structured_input" => true,
+                     "interactive" => true,
+                     "adapter" => native_adapter("codex", "0.153.4", "symmetry-codex-1", 1)
+                   }
+                 })
+               ],
+               now: @now
+             )
+
+    assert runtime.repository_resource_id == nil
+    assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
+    assert %{state: "queued"} = Repo.get!(Task, task.id)
+
+    assert {:ok, [explicitly_unbound]} =
+             Orchestration.register_runtimes(
+               machine.id,
+               Ecto.UUID.generate(),
+               [
+                 runtime_spec("explicitly-unbound-native", %{
+                   repository_resource_id: nil,
+                   harness_kind: "codex",
+                   harness_version: "0.153.4",
+                   adapter_version: "symmetry-codex-1",
+                   adapter_protocol_version: 1,
+                   capabilities: %{
+                     "structured_input" => true,
+                     "interactive" => true,
+                     "adapter" => native_adapter("codex", "0.153.4", "symmetry-codex-1", 1)
+                   }
+                 })
+               ],
+               now: @now
+             )
+
+    assert explicitly_unbound.repository_resource_id == nil
+    assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
+  end
+
+  test "Goal claim rechecks repository affinity after assignment" do
+    {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
+    runtime = register_runtime("claim-resource-affinity")
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    item = Repo.get!(WorkItem, task.work_item_id)
+
+    assert {:ok, other_repository} =
+             Workspaces.create_resource(item.project_id, %{
+               kind: "repository",
+               name: "Claim mismatch repository #{System.unique_integer([:positive])}"
+             })
+
+    Repo.update_all(
+      from(runtime_row in Runtime, where: runtime_row.id == ^runtime.id),
+      set: [repository_resource_id: other_repository.id]
+    )
+
+    assert {:error, :ownership_lost} =
+             Goals.claim(
+               run.id,
+               %{
+                 runtime_id: runtime.id,
+                 runtime_epoch: runtime.connection_epoch,
+                 generation: run.generation,
+                 claim_id: Ecto.UUID.generate()
+               },
+               now: @now
+             )
+  end
+
+  test "validation assignment requires every frozen binding to allow the runtime" do
+    {project, repository} = project_repository_fixture("validation-assignment")
+    first = register_runtime("validation-first", repository_resource_id: repository.id)
+    second = register_runtime("validation-second", repository_resource_id: repository.id)
+    outside = register_runtime("validation-outside", repository_resource_id: repository.id)
+
+    {task, _goal_id} =
+      insert_goal_task(
+        max_run_attempts: 2,
+        purpose: "validate",
+        project_id: project.id,
+        repository_id: repository.id,
+        validation_bindings: [
+          validation_binding("checks", "check", [first.id, second.id]),
+          validation_binding("review", "review", [second.id])
+        ]
+      )
+
+    assert task.purpose == "validate"
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    assert run.runtime_id == second.id
+    refute run.runtime_id == outside.id
+  end
+
+  test "validation assignment fails closed when frozen bindings have no common runtime" do
+    {project, repository} = project_repository_fixture("validation-no-common-runtime")
+    first = register_runtime("validation-empty-first", repository_resource_id: repository.id)
+    second = register_runtime("validation-empty-second", repository_resource_id: repository.id)
+
+    {task, _goal_id} =
+      insert_goal_task(
+        max_run_attempts: 2,
+        purpose: "validate",
+        project_id: project.id,
+        repository_id: repository.id,
+        validation_bindings: [
+          validation_binding("checks", "check", [first.id]),
+          validation_binding("review", "review", [second.id])
+        ]
+      )
+
+    assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
+    assert %{state: "queued"} = Repo.get!(Task, task.id)
+  end
+
+  test "empty validation bindings add no runtime restriction while malformed bindings fail closed" do
+    {unrestricted_task, _goal_id} =
+      insert_goal_task(max_run_attempts: 2, purpose: "validate", validation_bindings: [])
+
+    unrestricted_item = Repo.get!(WorkItem, unrestricted_task.work_item_id)
+
+    unrestricted_runtime =
+      register_runtime("validation-unrestricted",
+        repository_resource_id: unrestricted_item.repository_resource_id
+      )
+
+    assert {:ok, unrestricted_run} = Orchestration.assign_one(now: @now)
+    assert unrestricted_run.runtime_id == unrestricted_runtime.id
+
+    {task, _goal_id} =
+      insert_goal_task(
+        max_run_attempts: 2,
+        purpose: "validate",
+        validation_bindings: [validation_binding("checks", "check", [])]
+      )
+
+    item = Repo.get!(WorkItem, task.work_item_id)
+
+    _runtime =
+      register_runtime("validation-malformed",
+        repository_resource_id: item.repository_resource_id
+      )
+
+    assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
+
+    {malformed_task, _goal_id} =
+      insert_goal_task(
+        max_run_attempts: 2,
+        purpose: "validate",
+        project_id: item.project_id,
+        repository_id: item.repository_resource_id,
+        validation_bindings: [%{"profile_name" => "checks", "kind" => "check"}]
+      )
+
+    assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
+    assert %{state: "queued"} = Repo.get!(Task, malformed_task.id)
+
+    {invalid_runtime_task, _goal_id} =
+      insert_goal_task(
+        max_run_attempts: 2,
+        purpose: "validate",
+        project_id: item.project_id,
+        repository_id: item.repository_resource_id,
+        validation_bindings: [validation_binding("checks", "check", ["not-a-runtime-id"])]
+      )
+
+    assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
+    assert %{state: "queued"} = Repo.get!(Task, invalid_runtime_task.id)
+  end
+
+  test "an unschedulable validation task does not starve a later eligible Goal task" do
+    {blocked_task, _goal_id} =
+      insert_goal_task(
+        max_run_attempts: 2,
+        purpose: "validate",
+        validation_bindings: [validation_binding("checks", "check", [])]
+      )
+
+    blocked_item = Repo.get!(WorkItem, blocked_task.work_item_id)
+
+    _blocked_runtime =
+      register_runtime("validation-starved",
+        repository_resource_id: blocked_item.repository_resource_id
+      )
+
+    Repo.update_all(
+      from(task_row in Task, where: task_row.id == ^blocked_task.id),
+      set: [inserted_at: DateTime.add(@now, -1, :second)]
+    )
+
+    {ready_task, _goal_id} = insert_goal_task(max_run_attempts: 2)
+    ready_item = Repo.get!(WorkItem, ready_task.work_item_id)
+
+    ready_runtime =
+      register_runtime("validation-ready",
+        repository_resource_id: ready_item.repository_resource_id
+      )
+
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    assert run.task_id == ready_task.id
+    assert run.runtime_id == ready_runtime.id
+  end
+
+  test "keyset scanning advances beyond a full page of unschedulable Goal tasks" do
+    Enum.each(1..32, fn _ ->
+      {task, _goal_id} =
+        insert_goal_task(
+          max_run_attempts: 2,
+          purpose: "validate",
+          validation_bindings: [validation_binding("checks", "check", [])]
+        )
+
+      Repo.update_all(
+        from(task_row in Task, where: task_row.id == ^task.id),
+        set: [inserted_at: DateTime.add(@now, -1, :second)]
+      )
+    end)
+
+    {ready_task, _goal_id} = insert_goal_task(max_run_attempts: 2)
+    ready_item = Repo.get!(WorkItem, ready_task.work_item_id)
+
+    ready_runtime =
+      register_runtime("validation-page-ready",
+        repository_resource_id: ready_item.repository_resource_id
+      )
+
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    assert run.task_id == ready_task.id
+    assert run.runtime_id == ready_runtime.id
+  end
+
+  test "validation binding mismatch blocks a new claim but preserves an exact claim replay" do
+    {project, repository} = project_repository_fixture("validation-claim")
+
+    assigned_runtime =
+      register_runtime("validation-claim-assigned", repository_resource_id: repository.id)
+
+    rejected_runtime =
+      register_runtime("validation-claim-rejected", repository_resource_id: repository.id)
+
+    {assigned_task, _goal_id} =
+      insert_goal_task(
+        max_run_attempts: 2,
+        purpose: "validate",
+        project_id: project.id,
+        repository_id: repository.id,
+        validation_bindings: [validation_binding("checks", "check", [rejected_runtime.id])]
+      )
+
+    assigned_run = insert_assigned_run!(assigned_task, assigned_runtime)
+
+    assert {:error, :ownership_lost} =
+             Goals.claim(
+               assigned_run.id,
+               %{
+                 runtime_id: assigned_runtime.id,
+                 runtime_epoch: assigned_runtime.connection_epoch,
+                 generation: assigned_run.generation,
+                 claim_id: Ecto.UUID.generate()
+               },
+               now: @now
+             )
+
+    replay_runtime =
+      register_runtime("validation-claim-replay", repository_resource_id: repository.id)
+
+    {replay_task, _replay_goal_id} =
+      insert_goal_task(
+        max_run_attempts: 2,
+        purpose: "validate",
+        project_id: project.id,
+        repository_id: repository.id,
+        validation_bindings: [validation_binding("checks", "check", [replay_runtime.id])]
+      )
+
+    assert {:ok, replay_run} = Orchestration.assign_one(now: DateTime.add(@now, 1, :second))
+
+    replay_request = %{
+      runtime_id: replay_runtime.id,
+      runtime_epoch: replay_runtime.connection_epoch,
+      generation: replay_run.generation,
+      claim_id: Ecto.UUID.generate()
+    }
+
+    assert {:ok, claimed} =
+             Goals.claim(replay_run.id, replay_request, now: DateTime.add(@now, 1, :second))
+
+    assert {:ok, replayed} =
+             Goals.claim(replay_run.id, replay_request, now: DateTime.add(@now, 1, :second))
+
+    assert replayed.lease_token == claimed.lease_token
+  end
+
+  test "direct Goal claim rejects an archived Project" do
+    {project, repository} = project_repository_fixture("archived-project-claim")
+    runtime = register_runtime("archived-project-claim", repository_resource_id: repository.id)
+
+    {task, _goal_id} =
+      insert_goal_task(
+        max_run_attempts: 2,
+        project_id: project.id,
+        repository_id: repository.id
+      )
+
+    run = insert_assigned_run!(task, runtime)
+
+    Repo.update_all(
+      from(project_row in Project, where: project_row.id == ^project.id),
+      set: [status: "archived"]
+    )
+
+    assert {:error, :state_conflict} =
+             Goals.claim(
+               run.id,
+               %{
+                 runtime_id: runtime.id,
+                 runtime_epoch: runtime.connection_epoch,
+                 generation: run.generation,
+                 claim_id: Ecto.UUID.generate(),
+                 provider_scope: nil
+               },
+               now: @now
+             )
+  end
+
+  test "exact Goal claim replay remains allowed after its Project is archived" do
+    {project, repository} = project_repository_fixture("archived-project-replay")
+    runtime = register_runtime("archived-project-replay", repository_resource_id: repository.id)
+
+    {task, _goal_id} =
+      insert_goal_task(
+        max_run_attempts: 2,
+        project_id: project.id,
+        repository_id: repository.id
+      )
+
+    run = insert_assigned_run!(task, runtime)
+
+    claim_request = %{
+      runtime_id: runtime.id,
+      runtime_epoch: runtime.connection_epoch,
+      generation: run.generation,
+      claim_id: Ecto.UUID.generate(),
+      provider_scope: nil
+    }
+
+    assert {:ok, claimed} = Goals.claim(run.id, claim_request, now: @now)
+
+    Repo.update_all(
+      from(project_row in Project, where: project_row.id == ^project.id),
+      set: [status: "archived"]
+    )
+
+    assert {:ok, replayed} = Goals.claim(run.id, claim_request, now: @now)
+    assert replayed.lease_token == claimed.lease_token
+  end
+
+  test "lost claim acknowledgement replays after a runtime affinity change" do
+    {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
+    runtime = register_runtime("claim-affinity-replay")
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+
+    request = %{
+      runtime_id: runtime.id,
+      runtime_epoch: runtime.connection_epoch,
+      generation: run.generation,
+      claim_id: Ecto.UUID.generate()
+    }
+
+    assert {:ok, claimed} = Goals.claim(run.id, request, now: @now)
+    item = Repo.get!(WorkItem, task.work_item_id)
+
+    assert {:ok, other_repository} =
+             Workspaces.create_resource(item.project_id, %{
+               kind: "repository",
+               name: "Replay mismatch repository #{System.unique_integer([:positive])}"
+             })
+
+    Repo.update_all(
+      from(runtime_row in Runtime, where: runtime_row.id == ^runtime.id),
+      set: [repository_resource_id: other_repository.id]
+    )
+
+    assert {:ok, replayed} = Goals.claim(run.id, request, now: @now)
+    assert replayed.lease_token == claimed.lease_token
+    assert replayed.claim_id == claimed.claim_id
+  end
+
+  test "legacy Orchestration claim entry fails closed for a Goal-owned Run" do
+    {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
+    runtime = register_runtime("goal-claim-fail-closed")
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    assert run.task_id == task.id
+
+    assert {:error, :goal_authority_required} =
+             Orchestration.claim(
+               run.id,
+               %{
+                 runtime_id: runtime.id,
+                 runtime_epoch: runtime.connection_epoch,
+                 generation: run.generation,
+                 claim_id: Ecto.UUID.generate()
+               },
+               now: @now
+             )
+
+    assert %{state: "assigned"} = Repo.get!(Task, task.id)
+    assert %{state: "assigned", claim_id: nil} = Repo.get!(Run, run.id)
+  end
+
+  test "claim fails closed when Run identity changes after its Task lock" do
+    {goal_task, _goal_id} = insert_goal_task(max_run_attempts: 2)
+
+    assert {:ok, legacy_task, :created} =
+             Orchestration.submit_task(
+               %{
+                 goal: "Legacy claim routing race",
+                 agent_profile: "codex",
+                 workspace: "primary",
+                 input: %{}
+               },
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    runtime = register_runtime("legacy-claim-routing-race")
+    run = insert_assigned_run!(legacy_task, runtime)
+
+    assert {:error, :ownership_lost} =
+             Orchestration.claim(
+               run.id,
+               %{
+                 runtime_id: runtime.id,
+                 runtime_epoch: runtime.connection_epoch,
+                 generation: run.generation,
+                 claim_id: Ecto.UUID.generate()
+               },
+               now: @now,
+               on_claim_task_locked: fn locked_task ->
+                 assert locked_task.id == legacy_task.id
+
+                 Repo.update_all(
+                   from(run_row in Run, where: run_row.id == ^run.id),
+                   set: [task_id: goal_task.id]
+                 )
+               end
+             )
+
+    assert %{state: "assigned", claim_id: nil} = Repo.get!(Run, run.id)
+  end
+
+  test "Goal claim rejects a Run identity change after authority routing" do
+    {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
+    {other_task, _other_goal_id} = insert_goal_task(max_run_attempts: 2)
+    runtime = register_runtime("goal-claim-identity-race")
+    run = insert_assigned_run!(task, runtime)
+
+    assert {:error, :ownership_lost} =
+             Goals.claim(
+               run.id,
+               %{
+                 runtime_id: runtime.id,
+                 runtime_epoch: runtime.connection_epoch,
+                 generation: run.generation,
+                 claim_id: Ecto.UUID.generate()
+               },
+               now: @now,
+               on_goal_claim_routed: fn ownership ->
+                 assert ownership.task_id == task.id
+
+                 Repo.update_all(
+                   from(run_row in Run, where: run_row.id == ^run.id),
+                   set: [task_id: other_task.id]
+                 )
+               end
+             )
+
+    assert %{task_id: task_id, state: "assigned", claim_id: nil} = Repo.get!(Run, run.id)
+    assert task_id == task.id
+  end
+
+  test "legacy Goal control facade fails closed before writing a command" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    action_id = Ecto.UUID.generate()
+
+    assert {:error, :goal_authority_required} =
+             Orchestration.create_goal_control_command(
+               goal_id,
+               1,
+               action_id,
+               task.id,
+               "cancel",
+               %{},
+               "goal-control:#{action_id}:cancel:#{task.id}",
+               now: @now
+             )
+
+    refute Repo.exists?(from(command in Command, where: command.task_id == ^task.id))
+  end
+
+  test "legacy pause transition facade fails closed for a Goal-owned Run" do
+    {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
+    runtime = register_runtime("goal-pause-fail-closed")
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+
+    assert {:ok, %{state: "running"}} =
+             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
+               now: @now
+             )
+
+    assert {:error, :goal_authority_required} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "paused",
+               %{"command_id" => Ecto.UUID.generate()},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    assert task.id == run.task_id
+    assert %{state: "running"} = Repo.get!(Run, run.id)
+  end
+
+  test "Goal control dispatch rejects a superseded lifecycle action" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    pause_action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, pause_action_id, 1, "pause")
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "paused", event_sequence: 1]
+    )
+
+    resume_action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, resume_action_id, 2, "resume")
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "active", event_sequence: 2]
+    )
+
+    assert {:ok, :superseded} =
+             Goals.dispatch_goal_control_command(
+               goal_id,
+               1,
+               pause_action_id,
+               task.id,
+               "pause",
+               %{},
+               "goal-control:#{pause_action_id}:pause:#{task.id}",
+               now: @now
+             )
+
+    refute Repo.exists?(from(command in Command, where: command.task_id == ^task.id))
+  end
+
+  test "Goal control dispatch creates and exactly replays one command" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, action_id, 1, "cancel")
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "cancelled", event_sequence: 1]
+    )
+
+    args = [
+      goal_id,
+      1,
+      action_id,
+      task.id,
+      "cancel",
+      %{},
+      "goal-control:#{action_id}:cancel:#{task.id}",
+      [now: @now]
+    ]
+
+    assert {:ok, first, :created} = apply(Goals, :dispatch_goal_control_command, args)
+    assert {:ok, replayed, :replayed} = apply(Goals, :dispatch_goal_control_command, args)
+    assert replayed == first
+
+    assert 1 ==
+             Repo.aggregate(from(command in Command, where: command.task_id == ^task.id), :count)
+  end
+
+  test "Goal control replay trusts the stored command after Goal and Task advancement" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    action_id = Ecto.UUID.generate()
+    insert_goal_revision(goal_id, 2)
+    insert_goal_event(goal_id, action_id, 1, "amend", 2)
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "paused", current_revision: 2, event_sequence: 1]
+    )
+
+    idempotency_key = "goal-control:#{action_id}:cancel:#{task.id}"
+
+    assert {:ok, first, :created} =
+             Goals.dispatch_goal_control_command(
+               goal_id,
+               2,
+               action_id,
+               task.id,
+               "cancel",
+               %{},
+               idempotency_key,
+               now: @now
+             )
+
+    assert Repo.get!(Task, task.id).state == "cancelled"
+
+    resume_action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, resume_action_id, 2, "resume", 2)
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "active", event_sequence: 2]
+    )
+
+    assert {:ok, replayed, :replayed} =
+             Goals.dispatch_goal_control_command(
+               goal_id,
+               2,
+               action_id,
+               task.id,
+               "cancel",
+               %{},
+               idempotency_key,
+               now: @now
+             )
+
+    assert replayed == first
+  end
+
+  test "exact Goal control replay remains available after Project archival" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    goal = Repo.get!(Goal, goal_id)
+    action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, action_id, 1, "cancel")
+
+    Repo.update_all(
+      from(goal_row in Goal, where: goal_row.id == ^goal_id),
+      set: [state: "cancelled", event_sequence: 1]
+    )
+
+    idempotency_key = "goal-control:#{action_id}:cancel:#{task.id}"
+
+    assert {:ok, first, :created} =
+             Goals.dispatch_goal_control_command(
+               goal_id,
+               1,
+               action_id,
+               task.id,
+               "cancel",
+               %{},
+               idempotency_key,
+               now: @now
+             )
+
+    Repo.update_all(
+      from(project in Project, where: project.id == ^goal.project_id),
+      set: [status: "archived"]
+    )
+
+    assert {:ok, replayed, :replayed} =
+             Goals.dispatch_goal_control_command(
+               goal_id,
+               1,
+               action_id,
+               task.id,
+               "cancel",
+               %{},
+               idempotency_key,
+               now: @now
+             )
+
+    assert replayed == first
+  end
+
+  test "new Goal control command rejects an archived Project" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    goal = Repo.get!(Goal, goal_id)
+    action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, action_id, 1, "cancel")
+
+    Repo.update_all(
+      from(goal_row in Goal, where: goal_row.id == ^goal_id),
+      set: [state: "cancelled", event_sequence: 1]
+    )
+
+    Repo.update_all(
+      from(project in Project, where: project.id == ^goal.project_id),
+      set: [status: "archived"]
+    )
+
+    assert {:error, :state_conflict} =
+             Goals.dispatch_goal_control_command(
+               goal_id,
+               1,
+               action_id,
+               task.id,
+               "cancel",
+               %{},
+               "goal-control:#{action_id}:cancel:#{task.id}",
+               now: @now
+             )
+
+    refute Repo.exists?(from(command in Command, where: command.task_id == ^task.id))
+  end
+
+  test "Goal control command transaction rejects calls outside an enclosing transaction" do
+    goal_id = Ecto.UUID.generate()
+    action_id = Ecto.UUID.generate()
+    task_id = Ecto.UUID.generate()
+    idempotency_key = "goal-control:#{action_id}:cancel:#{task_id}"
+
+    assert {:error, :transaction_required} =
+             Orchestration.create_goal_control_command_in_transaction(
+               %{goal_id: goal_id, revision: 1, action_id: action_id, kind: "cancel"},
+               %{task_id: task_id, payload: %{}, idempotency_key: idempotency_key},
+               now: @now
+             )
+  end
+
+  test "Goal control dispatch rolls back command and Task state with its outer transaction" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, action_id, 1, "cancel")
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "cancelled", event_sequence: 1]
+    )
+
+    assert {:error, :dispatch_rollback} =
+             Repo.transaction(fn ->
+               assert {:ok, _command, :created} =
+                        Goals.dispatch_goal_control_command(
+                          goal_id,
+                          1,
+                          action_id,
+                          task.id,
+                          "cancel",
+                          %{},
+                          "goal-control:#{action_id}:cancel:#{task.id}",
+                          now: @now
+                        )
+
+               Repo.rollback(:dispatch_rollback)
+             end)
+
+    assert Repo.get!(Task, task.id).state == "queued"
+    refute Repo.exists?(from(command in Command, where: command.task_id == ^task.id))
+  end
+
+  test "Goal resume durably rejects pending controls from the superseded pause action" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    runtime = register_runtime("revoke-superseded-pause")
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    _fence = claim(run, runtime)
+
+    pause_action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, pause_action_id, 1, "pause")
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "paused", event_sequence: 1]
+    )
+
+    command = insert_goal_pause_command(task, run, pause_action_id)
+    goal = Repo.get!(Goal, goal_id)
+
+    resume = %{
+      schema_version: "symmetry.goal_command.v1",
+      mutation_id: Ecto.UUID.generate(),
+      expected_version: goal.lock_version,
+      expected_revision: goal.current_revision,
+      kind: "resume",
+      payload: %{reason: "resume after pause"}
+    }
+
+    assert {:ok, _receipt, :created} =
+             Goals.command(goal_id, resume, "operator:test", now: @now)
+
+    assert %{state: "acknowledged", acknowledgement_outcome: "rejected"} =
+             Repo.get!(Command, command.id)
+  end
+
+  test "runtime registration accepts only existing repository resources" do
+    machine = enroll_machine("runtime-resource-validation")
+
+    assert {:ok, project} =
+             Workspaces.create_project(%{name: "Runtime resource project", key: project_key()})
+
+    assert {:ok, ci_resource} =
+             Workspaces.create_resource(project.id, %{
+               kind: "ci",
+               name: "Runtime CI resource #{System.unique_integer([:positive])}"
+             })
+
+    for repository_resource_id <- [Ecto.UUID.generate(), ci_resource.id, 1, true, %{}] do
+      assert {:error, :invalid_request} =
+               Orchestration.register_runtimes(
+                 machine.id,
+                 Ecto.UUID.generate(),
+                 [
+                   runtime_spec("invalid-resource-#{System.unique_integer([:positive])}", %{
+                     repository_resource_id: repository_resource_id
+                   })
+                 ],
+                 now: @now
+               )
+    end
+  end
+
+  test "Goal resume assignment is pinned to its retained compatible runtime" do
+    _other = register_runtime("resume-other")
+    retained_runtime = register_runtime("resume-retained", resume?: true)
+    {task, _goal_id} = insert_goal_task(max_run_attempts: 2, retained_runtime: retained_runtime)
+    retained_session = Repo.get!(HarnessSession, task.requested_session_id)
+
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    assert run.task_id == task.id
+    assert run.runtime_id == retained_runtime.id
+    assert run.harness_session_id == retained_session.id
+    assert retained_session.runtime_id == retained_runtime.id
+
+    reserved_session = Repo.get!(HarnessSession, retained_session.id)
+    assert run.harness_binding_id == reserved_session.binding_id
+
+    fence = claim(run, retained_runtime)
+
+    assert {:ok, %{session: %{id: session_id, state: "busy"}}, :created} =
+             Goals.attach_harness_session(
+               retained_runtime.machine_id,
+               run.id,
+               fence,
+               %{
+                 local_handle_id: retained_session.local_handle_id,
+                 binding_id: run.harness_binding_id,
+                 harness_kind: retained_session.harness_kind,
+                 harness_version: retained_session.harness_version,
+                 adapter_version: retained_session.adapter_version,
+                 workspace_fingerprint: retained_session.workspace_fingerprint,
+                 workspace: "primary",
+                 repository_resource_id: retained_session.repository_resource_id
+               },
+               now: @now
+             )
+
+    assert session_id == retained_session.id
+
+    assert {:ok, %{state: "failed"}} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "failed",
+               %{"reason" => "terminal session state is not a stop receipt"},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    assert %{state: "unavailable", active_run_id: nil} = Repo.get!(HarnessSession, session_id)
+  end
+
+  test "Goal resume with no viable retained runtime remains queued without fallback" do
+    _other = register_runtime("resume-fallback")
+    retained_runtime = register_runtime("resume-unavailable", resume?: true)
+
+    {task, _goal_id} =
+      insert_goal_task(
+        max_run_attempts: 2,
+        retained_runtime: retained_runtime,
+        retained_session_state: "unavailable"
+      )
+
+    retained_session = Repo.get!(HarnessSession, task.requested_session_id)
+
+    assert retained_session.state == "unavailable"
+    assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
+    assert %{state: "queued", current_generation: 0} = Repo.get!(Task, task.id)
+    assert 0 == Repo.aggregate(from(run in Run, where: run.task_id == ^task.id), :count)
+  end
+
+  test "Goal resume ignores a legacy session without verified binding provenance" do
+    retained_runtime = register_runtime("resume-unverified", resume?: true)
+
+    {task, _goal_id} =
+      insert_goal_task(
+        max_run_attempts: 2,
+        retained_runtime: retained_runtime,
+        retained_session_binding_verified: false
+      )
+
+    assert %{binding_verified: false, state: "available"} =
+             Repo.get!(HarnessSession, task.requested_session_id)
+
+    assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
+    assert %{state: "queued", current_generation: 0} = Repo.get!(Task, task.id)
+    assert 0 == Repo.aggregate(from(run in Run, where: run.task_id == ^task.id), :count)
+  end
+
+  test "offline retained runtime does not assign a resumed Goal task or fall back" do
+    retained_runtime = register_runtime("resume-offline-retained", resume?: true)
+    {task, _goal_id} = insert_goal_task(max_run_attempts: 2, retained_runtime: retained_runtime)
+    retained_session = Repo.get!(HarnessSession, task.requested_session_id)
+    item = Repo.get!(WorkItem, task.work_item_id)
+
+    fallback_runtime =
+      register_runtime("resume-offline-fallback",
+        resume?: true,
+        repository_resource_id: item.repository_resource_id
+      )
+
+    original_binding_id = retained_session.binding_id
+
+    Repo.update_all(
+      from(runtime in Runtime, where: runtime.id == ^retained_runtime.id),
+      set: [status: "offline"]
+    )
+
+    assert Repo.get!(Runtime, fallback_runtime.id).status == "online"
+    assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
+    assert %{state: "queued", current_generation: 0} = Repo.get!(Task, task.id)
+    assert 0 == Repo.aggregate(from(run in Run, where: run.task_id == ^task.id), :count)
+
+    assert %{
+             state: "available",
+             active_run_id: nil,
+             binding_id: ^original_binding_id,
+             binding_verified: true
+           } = Repo.get!(HarnessSession, retained_session.id)
+  end
+
+  test "Goal handoff selects a same-machine runtime with handoff support without reserving a session" do
+    {source_task, _goal_id} = insert_goal_task(max_run_attempts: 2)
+    source_item = Repo.get!(WorkItem, source_task.work_item_id)
+
+    unsupported_source_runtime =
+      register_runtime("handoff-source",
+        handoff?: false,
+        repository_resource_id: source_item.repository_resource_id
+      )
+
+    source_run = complete_source_run!(source_task, unsupported_source_runtime)
+    target_task = insert_handoff_successor!(source_task, source_run)
+
+    _same_machine_without_handoff =
+      register_runtime_on_machine(
+        "handoff-without-support",
+        unsupported_source_runtime.machine_id,
+        handoff?: false,
+        repository_resource_id: source_item.repository_resource_id
+      )
+
+    eligible_runtime =
+      register_runtime_on_machine("handoff-eligible", unsupported_source_runtime.machine_id,
+        handoff?: true,
+        repository_resource_id: source_item.repository_resource_id
+      )
+
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    assert run.task_id == target_task.id
+    assert run.runtime_id == eligible_runtime.id
+    assert run.harness_session_id == nil
+  end
+
+  test "Goal handoff remains queued when only a different machine advertises handoff" do
+    {source_task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    source_item = Repo.get!(WorkItem, source_task.work_item_id)
+    source_runtime = register_runtime("handoff-local-source", handoff?: false)
+    source_run = complete_source_run!(source_task, source_runtime)
+    target_task = insert_handoff_successor!(source_task, source_run)
+
+    Repo.update_all(
+      from(task in Task, where: task.id == ^target_task.id),
+      set: [inserted_at: DateTime.add(@now, 1, :second)]
+    )
+
+    _different_machine = register_runtime("handoff-other-machine", handoff?: true)
+
+    assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
+    assert %{state: "queued", current_generation: 0} = Repo.get!(Task, target_task.id)
+    assert 0 == Repo.aggregate(from(run in Run, where: run.task_id == ^target_task.id), :count)
+
+    assert {:ok, queued_projection} = ReadModel.fetch(goal_id)
+
+    queued_execution =
+      queued_projection.work_items
+      |> Enum.find(&(&1.id == target_task.work_item_id))
+      |> Map.fetch!(:execution)
+
+    assert queued_execution.state == "queued"
+    refute queued_execution.terminal?
+
+    assert queued_execution.pending_assignment == %{
+             repository_resource_id: source_item.repository_resource_id,
+             agent_profile: source_task.agent_profile,
+             workspace: source_task.workspace,
+             requested_session_id: nil,
+             handoff_source_run_id: source_run.id,
+             machine_affinity: "handoff_source_machine"
+           }
+
+    eligible_runtime =
+      register_runtime_on_machine(
+        "handoff-local-recovery",
+        source_runtime.machine_id,
+        handoff?: true,
+        repository_resource_id: source_item.repository_resource_id
+      )
+
+    assert {:ok, assigned_run} = Orchestration.assign_one(now: DateTime.add(@now, 1, :second))
+    assert assigned_run.task_id == target_task.id
+    assert assigned_run.runtime_id == eligible_runtime.id
+
+    assert {:ok, assigned_projection} = ReadModel.fetch(goal_id)
+
+    assigned_execution =
+      assigned_projection.work_items
+      |> Enum.find(&(&1.id == target_task.work_item_id))
+      |> Map.fetch!(:execution)
+
+    assert assigned_execution.state == "assigned"
+    refute assigned_execution.terminal?
+    assert assigned_execution.pending_assignment == nil
+  end
+
+  test "Goal handoff claim rejects an assigned Run on a different machine without advancing authority" do
+    {source_task, _goal_id} = insert_goal_task(max_run_attempts: 2)
+    source_item = Repo.get!(WorkItem, source_task.work_item_id)
+
+    source_runtime =
+      register_runtime("handoff-claim-source",
+        handoff?: true,
+        repository_resource_id: source_item.repository_resource_id
+      )
+
+    source_run = complete_source_run!(source_task, source_runtime)
+    target_task = insert_handoff_successor!(source_task, source_run)
+
+    target_runtime =
+      register_runtime("handoff-claim-other-machine",
+        handoff?: true,
+        repository_resource_id: source_item.repository_resource_id
+      )
+
+    assert target_runtime.machine_id != source_runtime.machine_id
+    assert target_runtime.repository_resource_id == source_runtime.repository_resource_id
+    assert target_runtime.agent_profile == source_runtime.agent_profile
+    assert target_runtime.workspace == source_runtime.workspace
+    assert target_runtime.capabilities == source_runtime.capabilities
+
+    target_run = insert_assigned_run!(target_task, target_runtime)
+    target_task_before = Repo.get!(Task, target_task.id)
+    target_run_before = Repo.get!(Run, target_run.id)
+
+    harness_sessions_before =
+      Repo.all(
+        from session in HarnessSession,
+          order_by: [asc: session.id],
+          select: {session.id, session.state, session.active_run_id, session.binding_id}
+      )
+
+    claim_request = %{
+      runtime_id: target_runtime.id,
+      runtime_epoch: target_runtime.connection_epoch,
+      generation: target_run.generation,
+      claim_id: Ecto.UUID.generate()
+    }
+
+    assert {:error, :ownership_lost} =
+             Goals.claim(target_run.id, claim_request, now: @now)
+
+    target_task_after = Repo.get!(Task, target_task.id)
+    target_run_after = Repo.get!(Run, target_run.id)
+
+    assert target_task_after.state == target_task_before.state
+    assert target_task_after.current_generation == target_task_before.current_generation
+    assert target_task_after.attempt_generation == target_task_before.attempt_generation
+    assert target_run_after.state == target_run_before.state
+    assert target_run_after.generation == target_run_before.generation
+    assert target_run_after.claimed_runtime_epoch == target_run_before.claimed_runtime_epoch
+    assert target_run_after.claim_id == target_run_before.claim_id
+    assert target_run_after.lease_token == target_run_before.lease_token
+    assert target_run_after.claimed_at == target_run_before.claimed_at
+    assert target_run_after.lease_expires_at == target_run_before.lease_expires_at
+    assert is_nil(target_run_after.harness_session_id)
+    assert is_nil(target_run_after.harness_binding_id)
+
+    assert harness_sessions_before ==
+             Repo.all(
+               from session in HarnessSession,
+                 order_by: [asc: session.id],
+                 select: {session.id, session.state, session.active_run_id, session.binding_id}
+             )
+  end
+
+  test "retained reservation rotates the binding before dispatch and an old stop replay cannot release it" do
+    retained_runtime = register_runtime("exclusive-retained", resume?: true, capacity: 2)
+
+    {first_task, _first_goal_id} =
+      insert_goal_task(max_run_attempts: 2, retained_runtime: retained_runtime)
+
+    session = Repo.get!(HarnessSession, first_task.requested_session_id)
+    original_binding_id = session.binding_id
+    first_item = Repo.get!(WorkItem, first_task.work_item_id)
+
+    {second_task, _second_goal_id} =
+      insert_goal_task(
+        max_run_attempts: 2,
+        project_id: first_item.project_id,
+        repository_id: first_item.repository_resource_id,
+        requested_session_id: session.id,
+        inserted_at: DateTime.add(@now, 1, :second)
+      )
+
+    assert {:ok, first_run} = Orchestration.assign_one(now: @now)
+    assert first_run.task_id == first_task.id
+    assert first_run.harness_session_id == session.id
+    assert is_binary(first_run.harness_binding_id)
+    refute first_run.harness_binding_id == original_binding_id
+
+    assert %{state: "busy", active_run_id: active_run_id, binding_id: first_binding_id} =
+             Repo.get!(HarnessSession, session.id)
+
+    assert active_run_id == first_run.id
+    assert first_binding_id == first_run.harness_binding_id
+
+    assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
+    assert %{state: "queued", current_generation: 0} = Repo.get!(Task, second_task.id)
+    assert 0 == Repo.aggregate(from(run in Run, where: run.task_id == ^second_task.id), :count)
+
+    first_fence = claim(first_run, retained_runtime)
+
+    assert {:ok, %{session: first_attachment}, :created} =
+             Goals.attach_harness_session(
+               retained_runtime.machine_id,
+               first_run.id,
+               first_fence,
+               %{
+                 local_handle_id: session.local_handle_id,
+                 binding_id: first_binding_id,
+                 harness_kind: session.harness_kind,
+                 harness_version: session.harness_version,
+                 adapter_version: session.adapter_version,
+                 workspace_fingerprint: session.workspace_fingerprint,
+                 workspace: "primary",
+                 repository_resource_id: session.repository_resource_id
+               },
+               now: @now
+             )
+
+    assert {:ok, %{state: "failed"}} =
+             Orchestration.transition(
+               first_run.id,
+               first_fence,
+               "failed",
+               %{"reason" => "native turn stopped before the next retained reservation"},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    assert %{state: "unavailable", active_run_id: nil, binding_id: ^first_binding_id} =
+             Repo.get!(HarnessSession, session.id)
+
+    stop = %{
+      session_id: session.id,
+      local_handle_id: session.local_handle_id,
+      binding_id: first_binding_id
+    }
+
+    assert {:ok, stop_receipt, :created} =
+             Goals.mark_harness_session_stopped(
+               retained_runtime.machine_id,
+               first_run.id,
+               first_fence,
+               stop,
+               now: @now
+             )
+
+    assert %{state: "available", active_run_id: nil} = Repo.get!(HarnessSession, session.id)
+
+    assert {:ok, second_run} = Orchestration.assign_one(now: DateTime.add(@now, 1, :second))
+    assert second_run.task_id == second_task.id
+    refute second_run.harness_binding_id == first_binding_id
+
+    assert %{state: "busy", active_run_id: active_run_id, binding_id: second_binding_id} =
+             Repo.get!(HarnessSession, session.id)
+
+    assert active_run_id == second_run.id
+    assert second_binding_id == second_run.harness_binding_id
+
+    assert {:ok, ^stop_receipt, :replayed} =
+             Goals.mark_harness_session_stopped(
+               retained_runtime.machine_id,
+               first_run.id,
+               first_fence,
+               stop,
+               now: DateTime.add(@now, 1, :second)
+             )
+
+    assert %{state: "busy", active_run_id: ^active_run_id, binding_id: ^second_binding_id} =
+             Repo.get!(HarnessSession, session.id)
+
+    assert {:ok, %{session: ^first_attachment}} =
+             Goals.fetch_harness_session_attachment(
+               retained_runtime.machine_id,
+               first_run.id,
+               first_fence
+             )
+
+    assert first_attachment.binding_id == first_binding_id
+    assert first_attachment.state == "busy"
+  end
+
+  test "lease expiry keeps a retained session unavailable until a fenced stop receipt arrives" do
+    retained_runtime = register_runtime("retained-expiry", resume?: true)
+    {task, _goal_id} = insert_goal_task(max_run_attempts: 2, retained_runtime: retained_runtime)
+    session = Repo.get!(HarnessSession, task.requested_session_id)
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, retained_runtime)
+    expired_at = DateTime.add(@now, 30, :second)
+
+    assert %{expired_runs: 1} = Orchestration.expire(now: expired_at)
+    assert %{state: "unavailable", active_run_id: nil} = Repo.get!(HarnessSession, session.id)
+
+    assert {:error, :no_assignment} =
+             Orchestration.assign_one(now: DateTime.add(expired_at, 1, :second))
+
+    assert {:ok, %{state: "failed"}} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "failed",
+               %{"reason" => "terminal receipt without durable session stop"},
+               Ecto.UUID.generate(),
+               now: DateTime.add(expired_at, 1, :second)
+             )
+
+    assert %{state: "unavailable", active_run_id: nil} = Repo.get!(HarnessSession, session.id)
+
+    assert {:ok, %{"session_stopped" => %{"state" => "available"}}, :created} =
+             Goals.mark_harness_session_stopped(
+               retained_runtime.machine_id,
+               run.id,
+               fence,
+               %{
+                 session_id: session.id,
+                 local_handle_id: session.local_handle_id,
+                 binding_id: run.harness_binding_id
+               },
+               now: DateTime.add(expired_at, 1, :second)
+             )
+
+    assert %{state: "available", active_run_id: nil} = Repo.get!(HarnessSession, session.id)
+  end
+
+  test "Goal machine retries an exact committed claim after pause but rejects a new claimant" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    runtime = register_runtime("lost-ack-claim")
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+
+    claim_request = %{
+      runtime_id: runtime.id,
+      runtime_epoch: runtime.connection_epoch,
+      generation: run.generation,
+      claim_id: Ecto.UUID.generate()
+    }
+
+    assert {:ok, claimed} = Goals.claim(run.id, claim_request, now: @now)
+    pause_goal!(goal_id)
+
+    assert {:ok, replayed_claim} = Goals.claim(run.id, claim_request, now: @now)
+    assert replayed_claim.lease_token == claimed.lease_token
+
+    assert {:error, :ownership_lost} =
+             Goals.claim(run.id, %{claim_request | claim_id: Ecto.UUID.generate()}, now: @now)
+
+    assert task.id == run.task_id
+  end
+
+  test "Goal machine retries committed events and transitions but rejects changed or new writes after pause" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    runtime = register_runtime("lost-ack-authority")
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+
+    claim_request = %{
+      runtime_id: runtime.id,
+      runtime_epoch: runtime.connection_epoch,
+      generation: run.generation,
+      claim_id: Ecto.UUID.generate()
+    }
+
+    assert {:ok, claimed} = Goals.claim(run.id, claim_request, now: @now)
+
+    fence = %{
+      runtime_id: runtime.id,
+      runtime_epoch: runtime.connection_epoch,
+      generation: run.generation,
+      claim_id: claimed.claim_id,
+      lease_token: claimed.lease_token
+    }
+
+    event = %{
+      event_id: Ecto.UUID.generate(),
+      sequence: 1,
+      kind: "message",
+      payload: %{"text" => "committed before pause"},
+      occurred_at: @now
+    }
+
+    assert {:ok, [_]} = Orchestration.append_events(run.id, fence, [event], now: @now)
+
+    transition_id = Ecto.UUID.generate()
+
+    assert {:ok, %{state: "running"}} =
+             Orchestration.transition(run.id, fence, "running", %{}, transition_id, now: @now)
+
+    pause_goal!(goal_id)
+
+    assert {:ok, [_]} = Orchestration.append_events(run.id, fence, [event], now: @now)
+
+    assert {:ok, %{state: "running"}} =
+             Orchestration.transition(run.id, fence, "running", %{}, transition_id, now: @now)
+
+    assert {:error, :idempotency_conflict} =
+             Orchestration.append_events(
+               run.id,
+               fence,
+               [%{event | payload: %{"text" => "changed replay"}}],
+               now: @now
+             )
+
+    assert {:error, :ownership_lost} =
+             Orchestration.append_events(
+               run.id,
+               fence,
+               [%{event | event_id: Ecto.UUID.generate()}],
+               now: @now
+             )
+
+    assert {:error, :idempotency_conflict} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "running",
+               %{"changed" => true},
+               transition_id,
+               now: @now
+             )
+
+    assert {:error, :ownership_lost} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "waiting_for_input",
+               %{},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    assert 1 ==
+             Repo.aggregate(
+               from(event_row in SymmetryControl.Orchestration.RunEvent,
+                 where: event_row.run_id == ^run.id
+               ),
+               :count
+             )
+
+    assert %{state: "running"} = Repo.get!(Run, run.id)
+  end
+
+  test "Goal pause revokes nonterminal execution writes before its control worker runs" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    runtime = register_runtime("post-command-authority")
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+
+    assert {:ok, %{state: "running"}} =
+             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
+               now: @now
+             )
+
+    goal = Repo.get!(Goal, goal_id)
+
+    assert {:ok, %{goal: %{state: "paused"}}, :created} =
+             Goals.command(
+               goal_id,
+               %{
+                 schema_version: "symmetry.goal_command.v1",
+                 mutation_id: Ecto.UUID.generate(),
+                 expected_version: goal.lock_version,
+                 expected_revision: goal.current_revision,
+                 kind: "pause",
+                 payload: %{reason: "Stop new execution before control delivery."}
+               },
+               "operator:test",
+               now: @now
+             )
+
+    assert {:error, :ownership_lost} = Orchestration.renew_lease(run.id, fence, now: @now)
+
+    assert {:error, :ownership_lost} =
+             Orchestration.append_events(
+               run.id,
+               fence,
+               [
+                 %{
+                   event_id: Ecto.UUID.generate(),
+                   sequence: 1,
+                   kind: "message",
+                   payload: %{},
+                   occurred_at: @now
+                 }
+               ],
+               now: @now
+             )
+
+    assert {:error, :ownership_lost} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "waiting_for_input",
+               %{"question" => "Continue?"},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    assert {:ok, %{state: "failed"}} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "failed",
+               %{"reason" => "terminal delivery remains historical"},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+  end
+
+  test "Goal assignment rejects a queued task whose current attempt is already consumed" do
+    {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
+    _runtime = register_runtime("goal-current-attempt")
+
+    Repo.update_all(
+      from(task_row in Task, where: task_row.id == ^task.id),
+      set: [current_generation: task.attempt_generation]
+    )
+
+    assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
+  end
+
+  test "Goal control command rejects a superseded lifecycle action" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    runtime = register_runtime("stale-control")
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+
+    assert {:ok, %{state: "running"}} =
+             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
+               now: @now
+             )
+
+    pause_action_id = Ecto.UUID.generate()
+
+    insert_goal_event(goal_id, pause_action_id, 1, "pause")
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "paused", event_sequence: 1]
+    )
+
+    resume_action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, resume_action_id, 2, "resume")
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "active", event_sequence: 2]
+    )
+
+    assert {:ok, :superseded} =
+             Goals.dispatch_goal_control_command(
+               goal_id,
+               1,
+               pause_action_id,
+               task.id,
+               "pause",
+               %{},
+               "goal-control:#{pause_action_id}:pause:#{task.id}",
+               now: @now
+             )
+
+    assert 0 ==
+             Repo.aggregate(from(command in Command, where: command.task_id == ^task.id), :count)
+  end
+
+  test "Goal pause transition rejects a pause command superseded by resume" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    runtime = register_runtime("stale-pause-transition")
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+
+    assert {:ok, %{state: "running"}} =
+             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
+               now: @now
+             )
+
+    pause_action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, pause_action_id, 1, "pause")
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "paused", event_sequence: 1]
+    )
+
+    command = insert_goal_pause_command(task, run, pause_action_id)
+
+    resume_action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, resume_action_id, 2, "resume")
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "active", event_sequence: 2]
+    )
+
+    assert {:error, :stale_revision} =
+             Goals.apply_goal_pause_transition(
+               run.id,
+               fence,
+               %{"command_id" => command.id},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    assert Repo.get!(Command, command.id).state == "pending"
+    assert {:ok, running} = Orchestration.fetch_run(run.id)
+    assert running.state == "running"
+  end
+
+  test "Goal pause transition rejects a pause command superseded by amend" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    runtime = register_runtime("stale-pause-amend-transition")
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+
+    assert {:ok, %{state: "running"}} =
+             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
+               now: @now
+             )
+
+    pause_action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, pause_action_id, 1, "pause")
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "paused", event_sequence: 1]
+    )
+
+    command = insert_goal_pause_command(task, run, pause_action_id)
+
+    amend_action_id = Ecto.UUID.generate()
+    insert_goal_revision(goal_id, 2)
+    insert_goal_event(goal_id, amend_action_id, 2, "amend", 2)
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "paused", current_revision: 2, event_sequence: 2]
+    )
+
+    assert {:error, :stale_revision} =
+             Goals.apply_goal_pause_transition(
+               run.id,
+               fence,
+               %{"command_id" => command.id},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    assert Repo.get!(Command, command.id).state == "pending"
+    assert {:ok, running} = Orchestration.fetch_run(run.id)
+    assert running.state == "running"
+  end
+
+  test "Goal pause transition creates once and replays after Goal advancement" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    runtime = register_runtime("goal-pause-replay")
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+
+    assert {:ok, %{state: "running"}} =
+             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
+               now: @now
+             )
+
+    action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, action_id, 1, "pause")
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "paused", event_sequence: 1]
+    )
+
+    command = insert_goal_pause_command(task, run, action_id)
+    transition_id = Ecto.UUID.generate()
+    payload = %{"command_id" => command.id}
+
+    assert {:ok, %{state: "paused"} = paused, :created, nil} =
+             Goals.apply_goal_pause_transition(run.id, fence, payload, transition_id, now: @now)
+
+    resume_action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, resume_action_id, 2, "resume")
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "active", event_sequence: 2]
+    )
+
+    assert {:ok, replayed, :replayed} =
+             Goals.apply_goal_pause_transition(run.id, fence, payload, transition_id, now: @now)
+
+    assert replayed.state == paused.state
+
+    assert {:error, :idempotency_conflict} =
+             Goals.apply_goal_pause_transition(
+               run.id,
+               fence,
+               Map.put(payload, "generation", run.generation + 1),
+               transition_id,
+               now: @now
+             )
+
+    assert 1 ==
+             Repo.aggregate(
+               from(transition in SymmetryControl.Orchestration.RunTransition,
+                 where:
+                   transition.run_id == ^run.id and
+                     transition.transition_id == ^transition_id
+               ),
+               :count
+             )
+  end
+
+  test "daemon Goal pause route emits telemetry only for the committed creation" do
+    ref =
+      :telemetry_test.attach_event_handlers(self(), [
+        [:symmetry_control, :orchestration, :run, :transition]
+      ])
+
+    on_exit(fn -> :telemetry.detach(ref) end)
+
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    runtime = register_runtime("goal-pause-controller")
+    machine = Repo.get!(SymmetryControl.Orchestration.Machine, runtime.machine_id)
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+
+    assert {:ok, %{state: "running"}} =
+             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
+               now: @now
+             )
+
+    Repo.update_all(
+      from(stored in Run, where: stored.id == ^run.id),
+      set: [lease_expires_at: DateTime.add(DateTime.utc_now(), 60, :second)]
+    )
+
+    assert_receive {[:symmetry_control, :orchestration, :run, :transition], ^ref, %{count: 1},
+                    %{run_id: run_id, state: "running"}}
+
+    assert run_id == run.id
+
+    action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, action_id, 1, "pause")
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "paused", event_sequence: 1]
+    )
+
+    command = insert_goal_pause_command(task, run, action_id)
+    transition_id = Ecto.UUID.generate()
+
+    body =
+      fence
+      |> Map.new(fn {key, value} -> {Atom.to_string(key), value} end)
+      |> Map.merge(%{"state" => "paused", "payload" => %{"command_id" => command.id}})
+
+    build_conn = fn ->
+      Phoenix.ConnTest.build_conn()
+      |> Plug.Conn.assign(:machine, machine)
+      |> Map.put(:path_params, %{"run_id" => run.id, "transition_id" => transition_id})
+      |> Map.put(:body_params, body)
+    end
+
+    first = SymmetryControlWeb.DaemonController.transition(build_conn.(), %{})
+    assert first.status == 200, first.resp_body
+    assert %{"state" => "paused"} = Jason.decode!(first.resp_body)
+
+    assert_receive {[:symmetry_control, :orchestration, :run, :transition], ^ref, %{count: 1},
+                    %{run_id: paused_run_id, generation: generation, state: "paused"}}
+
+    assert paused_run_id == run.id
+    assert generation == run.generation
+
+    replay = SymmetryControlWeb.DaemonController.transition(build_conn.(), %{})
+    assert replay.status == 200
+    assert %{"state" => "paused"} = Jason.decode!(replay.resp_body)
+
+    refute_receive {[:symmetry_control, :orchestration, :run, :transition], ^ref, _, _}
+  end
+
+  test "Goal pause transition rolls back with an outer transaction" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    runtime = register_runtime("goal-pause-rollback")
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+
+    assert {:ok, %{state: "running"}} =
+             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
+               now: @now
+             )
+
+    action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, action_id, 1, "pause")
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "paused", event_sequence: 1]
+    )
+
+    command = insert_goal_pause_command(task, run, action_id)
+    transition_id = Ecto.UUID.generate()
+
+    assert {:error, :later_failure} =
+             Repo.transaction(fn ->
+               assert {:ok, %{state: "paused"}, :created, nil} =
+                        Goals.apply_goal_pause_transition(
+                          run.id,
+                          fence,
+                          %{"command_id" => command.id},
+                          transition_id,
+                          now: @now
+                        )
+
+               Repo.rollback(:later_failure)
+             end)
+
+    assert %{state: "running"} = Repo.get!(Run, run.id)
+
+    refute Repo.exists?(
+             from(transition in SymmetryControl.Orchestration.RunTransition,
+               where: transition.run_id == ^run.id and transition.transition_id == ^transition_id
+             )
+           )
+  end
+
+  test "Goal pause transition rejects mismatched command and fence identity" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    runtime = register_runtime("goal-pause-identity")
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+
+    assert {:ok, %{state: "running"}} =
+             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
+               now: @now
+             )
+
+    action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, action_id, 1, "pause")
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "paused", event_sequence: 1]
+    )
+
+    {other_task, _other_goal_id} = insert_goal_task(max_run_attempts: 2)
+    other_command = insert_goal_pause_command(other_task, run, action_id)
+
+    assert {:error, :state_conflict} =
+             Goals.apply_goal_pause_transition(
+               run.id,
+               fence,
+               %{"command_id" => other_command.id},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    Repo.delete!(other_command)
+    command = insert_goal_pause_command(task, run, action_id)
+
+    assert {:error, :ownership_lost} =
+             Goals.apply_goal_pause_transition(
+               run.id,
+               fence,
+               %{"command_id" => command.id, "run_id" => Ecto.UUID.generate()},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    assert {:error, :ownership_lost} =
+             Goals.apply_goal_pause_transition(
+               run.id,
+               fence,
+               %{"command_id" => command.id, "generation" => run.generation + 1},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    assert {:error, :ownership_lost} =
+             Goals.apply_goal_pause_transition(
+               run.id,
+               Map.put(fence, :claim_id, Ecto.UUID.generate()),
+               %{"command_id" => command.id},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    Repo.update_all(
+      from(stored in Command, where: stored.id == ^command.id),
+      set: [run_id: nil, generation: nil]
+    )
+
+    assert {:error, :ownership_lost} =
+             Goals.apply_goal_pause_transition(
+               run.id,
+               fence,
+               %{"command_id" => command.id},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    Repo.update_all(
+      from(stored in Command, where: stored.id == ^command.id),
+      set: [run_id: run.id, generation: run.generation + 1]
+    )
+
+    assert {:error, :ownership_lost} =
+             Goals.apply_goal_pause_transition(
+               run.id,
+               fence,
+               %{"command_id" => command.id},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    assert %{state: "running"} = Repo.get!(Run, run.id)
+  end
+
+  test "Goal pause does not create an unimplemented native pause descriptor" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    runtime = register_runtime("goal-pause-no-native")
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+
+    assert {:ok, %{state: "running"}} =
+             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
+               now: @now
+             )
+
+    action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, action_id, 1, "pause")
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "paused", event_sequence: 1]
+    )
+
+    assert {:ok, []} = Goals.control_dispatch_plan(goal_id, 1, action_id)
+    assert {:ok, persisted_run} = Orchestration.fetch_run(run.id)
+    assert persisted_run.state == "running"
+    assert task.id == run.task_id
+  end
+
+  test "a draft planning Task assigns, claims, and emits one terminal settlement job by Subject resource" do
+    {task, _goal_id} = insert_goal_task(max_run_attempts: 2, purpose: "plan")
+    repository_resource_id = task.input["subject"]["resource_id"]
+    runtime = register_runtime("planning-task", repository_resource_id: repository_resource_id)
+
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    assert run.task_id == task.id
+    assert run.runtime_id == runtime.id
+
+    fence = claim(run, runtime)
+
+    assert {:ok, %{state: "running"}} =
+             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
+               now: @now
+             )
+
+    assert {:ok, %{state: "completed"}} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "completed",
+               %{"summary" => "planning result persisted for Goal settlement"},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    assert [_job] = settlement_jobs(task.id, run.id, run.generation)
+  end
+
+  test "a planning Task cannot start after its draft Goal becomes active" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2, purpose: "plan")
+    repository_resource_id = task.input["subject"]["resource_id"]
+
+    _runtime =
+      register_runtime("planning-task-active", repository_resource_id: repository_resource_id)
+
+    Repo.update_all(from(goal in Goal, where: goal.id == ^goal_id), set: [state: "active"])
+
+    assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
+  end
+
+  test "Goal cancellation can settle a queued planning Task without a WorkItem" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2, purpose: "plan")
+    action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, action_id, 1, "cancel")
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "cancelled", event_sequence: 1]
+    )
+
+    assert {:ok, command, :created} =
+             Goals.dispatch_goal_control_command(
+               goal_id,
+               1,
+               action_id,
+               task.id,
+               "cancel",
+               %{},
+               "goal-control:#{action_id}:cancel:#{task.id}",
+               now: @now
+             )
+
+    assert command.state == "applied"
+    assert {:ok, receipt} = Goals.settle_unstarted_task(task.id, "cancelled", now: @now)
+    assert receipt["settlement"] == "released_without_run"
+  end
+
+  test "lease expiry consumes the admitted final run attempt and persists one settlement job" do
+    {task, _goal} = insert_goal_task(max_run_attempts: 1)
+    runtime = register_runtime("expiry")
+
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    assert run.task_id == task.id
+    _fence = claim(run, runtime)
+
+    assert %{expired_runs: 1} = Orchestration.expire(now: DateTime.add(@now, 30, :second))
+
+    assert {:ok, exhausted} = Orchestration.fetch_task(task.id)
+    assert exhausted.state == "failed"
+    assert exhausted.attempt_generation == 1
+
+    assert {:error, :no_assignment} =
+             Orchestration.assign_one(now: DateTime.add(@now, 31, :second))
+
+    assert [job] = settlement_jobs(task.id, run.id, run.generation)
+    assert job.args == %{"task_id" => task.id, "run_id" => run.id, "generation" => run.generation}
+    assert job.scheduled_at == DateTime.add(@now, 510, :second)
+
+    assert {:ok, fetched_run} = Orchestration.fetch_run(run.id)
+    assert fetched_run.state == "failed"
+    assert fetched_run.failure["reason"] == "lease_expired"
+    assert runtime.id != nil
+
+    enable_goal_rollout()
+    assert :ok = SettleTaskWorker.perform(job)
+
+    assert "unknown" ==
+             Repo.one!(
+               from reservation in GoalBudgetReservation,
+                 where: reservation.task_id == ^task.id,
+                 select: reservation.state
+             )
+  end
+
+  test "manual retry cannot create a run beyond the admitted attempt limit" do
+    {task, _goal} = insert_goal_task(max_run_attempts: 1)
+    runtime = register_runtime("retry")
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+
+    assert {:ok, %{state: "failed"}} =
+             Orchestration.transition(run.id, fence, "failed", %{"stage" => "test"}, uuid(1),
+               now: @now
+             )
+
+    assert {:error, :goal_authority_required} =
+             Orchestration.retry_task(
+               task.id,
+               legacy_task_attrs(),
+               "retry-attempt-limit",
+               expected_generation: 1,
+               now: @now
+             )
+
+    assert {:ok, exhausted} = Orchestration.fetch_task(task.id)
+    assert exhausted.state == "failed"
+
+    assert Repo.aggregate(from(command in Command, where: command.task_id == ^task.id), :count) ==
+             0
+
+    assert settlement_jobs(task.id, run.id, 1) |> length() == 1
+  end
+
+  test "final-attempt lease expiry retains terminal grace behind one delayed settlement job" do
+    {task, _goal} = insert_goal_task(max_run_attempts: 1)
+    runtime = register_runtime("final-grace")
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+
+    expiry = DateTime.add(@now, 30, :second)
+    assert %{expired_runs: 1} = Orchestration.expire(now: expiry)
+
+    assert {:ok, %{state: "completed"}} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "completed",
+               %{"summary" => "late but within terminal grace"},
+               uuid(2),
+               now: DateTime.add(expiry, 1, :second)
+             )
+
+    assert {:ok, %{state: "completed", attempt_generation: 1}} = Orchestration.fetch_task(task.id)
+    assert {:ok, %{state: "completed", failure: nil}} = Orchestration.fetch_run(run.id)
+    assert [_job] = settlement_jobs(task.id, run.id, 1)
+  end
+
+  test "stale delivery after automatic retry cannot create another settlement job" do
+    {task, _goal} = insert_goal_task(max_run_attempts: 2)
+    runtime = register_runtime("stale")
+    assert {:ok, first_run} = Orchestration.assign_one(now: @now)
+    fence = claim(first_run, runtime)
+
+    expiry = DateTime.add(@now, 30, :second)
+    assert %{expired_runs: 1} = Orchestration.expire(now: expiry)
+
+    assert {:ok, _snapshot} =
+             Orchestration.heartbeat(runtime.id, runtime.connection_epoch, [], now: expiry)
+
+    assert {:ok, replacement} = Orchestration.assign_one(now: expiry)
+    assert replacement.generation == 2
+
+    assert {:error, :ownership_lost} =
+             Orchestration.transition(
+               first_run.id,
+               fence,
+               "completed",
+               %{"summary" => "stale"},
+               uuid(2),
+               now: DateTime.add(expiry, 1, :second)
+             )
+
+    assert [] == settlement_jobs(task.id, first_run.id, 1)
+    assert [] == settlement_jobs(task.id, replacement.id, 2)
+  end
+
+  test "terminal transition writes one durable job and notifies only after the committing call" do
+    {task, _goal} = insert_goal_task(max_run_attempts: 2)
+    runtime = register_runtime("terminal")
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+
+    assert {:ok, %{state: "running"}} =
+             Orchestration.transition(run.id, fence, "running", %{}, uuid(3), now: @now)
+
+    transition_id = uuid(4)
+    hook = fn receipt -> send(self(), {:goal_task_terminal, receipt}) end
+
+    assert {:ok, %{state: "completed"}} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "completed",
+               %{"summary" => "done"},
+               transition_id,
+               now: @now,
+               on_goal_task_terminal: hook
+             )
+
+    assert_receive {:goal_task_terminal,
+                    %{task_id: task_id, run_id: run_id, generation: generation}}
+
+    assert task_id == task.id
+    assert run_id == run.id
+    assert generation == 1
+    assert settlement_jobs(task.id, run.id, 1) |> length() == 1
+
+    assert {:ok, %{state: "completed"}} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "completed",
+               %{"summary" => "done"},
+               transition_id,
+               now: @now,
+               on_goal_task_terminal: hook
+             )
+
+    refute_receive {:goal_task_terminal, _}
+    assert settlement_jobs(task.id, run.id, 1) |> length() == 1
+
+    {rolled_back_task, _goal} = insert_goal_task(max_run_attempts: 2)
+    second_item = Repo.get!(WorkItem, rolled_back_task.work_item_id)
+
+    Repo.update_all(
+      from(runtime_row in Runtime, where: runtime_row.id == ^runtime.id),
+      set: [repository_resource_id: second_item.repository_resource_id]
+    )
+
+    assert {:ok, rolled_back_run} = Orchestration.assign_one(now: @now)
+    rolled_back_fence = claim(rolled_back_run, runtime)
+
+    assert {:ok, %{state: "running"}} =
+             Orchestration.transition(
+               rolled_back_run.id,
+               rolled_back_fence,
+               "running",
+               %{},
+               uuid(5),
+               now: @now
+             )
+
+    assert {:error, :rollback} =
+             Repo.transaction(fn ->
+               assert {:ok, _} =
+                        Orchestration.transition(
+                          rolled_back_run.id,
+                          rolled_back_fence,
+                          "completed",
+                          %{"summary" => "rolled back"},
+                          uuid(6),
+                          now: @now,
+                          on_goal_task_terminal: hook
+                        )
+
+               Repo.rollback(:rollback)
+             end)
+
+    refute_receive {:goal_task_terminal, _}
+    assert settlement_jobs(task.id, run.id, 1) |> length() == 1
+    assert [] == settlement_jobs(rolled_back_task.id, rolled_back_run.id, 1)
+  end
+
+  defp insert_goal_task(opts) do
+    max_run_attempts = Keyword.fetch!(opts, :max_run_attempts)
+    purpose = Keyword.get(opts, :purpose, "implement")
+    planning? = purpose == "plan"
+    project_id = Keyword.get(opts, :project_id) || Ecto.UUID.generate()
+    create_project? = is_nil(Keyword.get(opts, :project_id))
+    goal_id = Ecto.UUID.generate()
+    work_item_id = if planning?, do: nil, else: Ecto.UUID.generate()
+    snapshot_id = Ecto.UUID.generate()
+    task_id = Ecto.UUID.generate()
+    admission_key = Ecto.UUID.generate()
+    reservation_id = Ecto.UUID.generate()
+    repository_id = Keyword.get(opts, :repository_id, Ecto.UUID.generate())
+    validation_of_task_id = if purpose == "validate", do: Ecto.UUID.generate(), else: nil
+    validation_bindings = Keyword.get(opts, :validation_bindings, [])
+    policy = Keyword.get(opts, :execution_policy, execution_policy(max_run_attempts))
+    allowed_runtime_ids = Map.get(policy, "allowed_runtime_ids", [])
+    strict_budget? = Map.get(policy, "budget_mode", "soft") == "strict"
+    retained_runtime = Keyword.get(opts, :retained_runtime)
+
+    requested_session_id =
+      Keyword.get(opts, :requested_session_id) || if(retained_runtime, do: Ecto.UUID.generate())
+
+    task_inserted_at = Keyword.get(opts, :inserted_at, @now)
+
+    task_input =
+      %{
+        "subject" => %{
+          "resource_id" => repository_id,
+          "commit" => String.duplicate("a", 40),
+          "tree_digest" => "sha256:" <> String.duplicate("b", 64)
+        }
+      }
+      |> then(fn input ->
+        if requested_session_id do
+          input
+          |> Map.put("session_mode", "resume")
+          |> Map.put("requested_session_id", requested_session_id)
+        else
+          input
+        end
+      end)
+
+    task_input =
+      Map.put(task_input, "limits", %{
+        "max_turns" => 1,
+        "deadline_at" => DateTime.to_iso8601(DateTime.add(@now, 15 * 60, :second)),
+        "max_cost_microusd" =>
+          if(strict_budget?,
+            do: Integer.to_string(Map.fetch!(policy, "per_run_cost_limit_microusd"))
+          )
+      })
+
+    assert {:ok, {task, goal_id}} =
+             Repo.transaction(fn ->
+               if create_project? do
+                 Repo.query!(
+                   """
+                   INSERT INTO projects (
+                     id, name, key, status, default_agent_profile, default_workspace, inserted_at, updated_at
+                   ) VALUES ($1, $2, $3, 'active', 'codex', 'primary', $4, $4)
+                   """,
+                   [db_uuid(project_id), "Goal admission project", project_key(), @now]
+                 )
+               end
+
+               unless Repo.exists?(
+                        from(resource in ProjectResource, where: resource.id == ^repository_id)
+                      ) do
+                 Repo.query!(
+                   """
+                   INSERT INTO project_resources (
+                     id, project_id, kind, name, status, sync_status, metadata, lock_version, inserted_at, updated_at
+                   ) VALUES ($1, $2, 'repository', $3, 'unknown', 'unknown', '{}'::jsonb, 1, $4, $4)
+                   """,
+                   [
+                     db_uuid(repository_id),
+                     db_uuid(project_id),
+                     "Goal admission repository #{System.unique_integer([:positive])}",
+                     @now
+                   ]
+                 )
+               end
+
+               Repo.query!(
+                 """
+                 INSERT INTO goals (
+                  id, project_id, title, state, current_revision, event_sequence, inserted_at, updated_at
+                 ) VALUES ($1, $2, 'Goal admission', $3, 1, 0, $4, $4)
+                 """,
+                 [
+                   db_uuid(goal_id),
+                   db_uuid(project_id),
+                   if(planning?, do: "draft", else: "active"),
+                   @now
+                 ]
+               )
+
+               Repo.query!(
+                 """
+                 INSERT INTO goal_revisions (
+                   goal_id, revision, objective, non_goals, acceptance_contract, authority_policy,
+                   execution_policy, context_manifest, reason, actor_ref, inserted_at
+                 ) VALUES ($1, 1, 'Exercise orchestration admission', '[]'::jsonb, '{}'::jsonb,
+                   '{}'::jsonb, $2::text::jsonb, '{}'::jsonb, 'initial', 'operator:test', $3)
+                 """,
+                 [db_uuid(goal_id), Jason.encode!(policy), @now]
+               )
+
+               unless planning? do
+                 Repo.query!(
+                   """
+                   INSERT INTO work_items (
+                      id, project_id, title, status, priority, position, assignee_type, blocked,
+                       goal_id, admitted_revision, acceptance_contract, integration, repository_resource_id,
+                       baseline_subject, inserted_at, updated_at
+                     ) VALUES ($1, $2, 'Goal admission work item', 'ready', 'no_priority', 0, 'unassigned',
+                       FALSE, $3, 1, '{}'::jsonb, TRUE, $4, $5::text::jsonb, $6, $6)
+                   """,
+                   [
+                     db_uuid(work_item_id),
+                     db_uuid(project_id),
+                     db_uuid(goal_id),
+                     db_uuid(repository_id),
+                     Jason.encode!(%{
+                       "resource_id" => repository_id,
+                       "commit" => String.duplicate("a", 40),
+                       "tree_digest" => "sha256:" <> String.duplicate("b", 64)
+                     }),
+                     @now
+                   ]
+                 )
+               end
+
+               if retained_runtime do
+                 Repo.update_all(
+                   from(runtime_row in Runtime, where: runtime_row.id == ^retained_runtime.id),
+                   set: [repository_resource_id: repository_id]
+                 )
+
+                 %HarnessSession{id: requested_session_id}
+                 |> HarnessSession.changeset(%{
+                   machine_id: retained_runtime.machine_id,
+                   runtime_id: retained_runtime.id,
+                   repository_resource_id: repository_id,
+                   harness_kind: retained_runtime.harness_kind,
+                   harness_version: retained_runtime.harness_version,
+                   adapter_version: retained_runtime.adapter_version,
+                   local_handle_id: Ecto.UUID.generate(),
+                   binding_id: Ecto.UUID.generate(),
+                   binding_verified: Keyword.get(opts, :retained_session_binding_verified, true),
+                   workspace_fingerprint: "workspace:#{retained_runtime.id}",
+                   state: Keyword.get(opts, :retained_session_state, "available")
+                 })
+                 |> Repo.insert!()
+               end
+
+               Repo.query!(
+                 """
+                 INSERT INTO context_snapshots (
+                   id, goal_id, goal_revision, work_item_id, schema_version, content_hash, payload, inserted_at
+                 ) VALUES ($1, $2, 1, $3, 1, $4, $5::text::jsonb, $6)
+                 """,
+                 [
+                   db_uuid(snapshot_id),
+                   db_uuid(goal_id),
+                   maybe_db_uuid(work_item_id),
+                   :crypto.hash(:sha256, "goal-context"),
+                   Jason.encode!(%{
+                     "work_contract" => %{
+                       "purpose" => purpose,
+                       "validation_bindings" => validation_bindings
+                     }
+                   }),
+                   @now
+                 ]
+               )
+
+               if purpose == "validate" do
+                 Repo.query!(
+                   """
+                   INSERT INTO tasks (
+                     id, idempotency_key, request_hash, request_hash_version, goal, agent_profile, workspace,
+                     input, required_capabilities, state, current_generation, attempt_generation, work_item_id,
+                     goal_id, goal_revision, context_snapshot_id, purpose, validation_of_task_id, admission_key,
+                     allowed_runtime_ids, max_run_attempts,
+                     inserted_at, updated_at
+                   ) VALUES ($1, $2, $3, 1, 'Goal admission producer', 'codex', 'primary', '{}'::jsonb,
+                     '{}'::jsonb, 'completed', 1, 1, $4, $5, 1, $6, 'implement', NULL, $7,
+                     ARRAY(SELECT value::uuid FROM jsonb_array_elements_text($8::text::jsonb) AS value), $9, $10, $10)
+                   """,
+                   [
+                     db_uuid(validation_of_task_id),
+                     "goal-admission-producer-#{System.unique_integer([:positive])}",
+                     :crypto.hash(:sha256, "goal-admission-producer"),
+                     maybe_db_uuid(work_item_id),
+                     db_uuid(goal_id),
+                     db_uuid(snapshot_id),
+                     db_uuid(Ecto.UUID.generate()),
+                     Jason.encode!(allowed_runtime_ids),
+                     max_run_attempts,
+                     @now
+                   ]
+                 )
+               end
+
+               Repo.query!(
+                 """
+                 INSERT INTO tasks (
+                 id, idempotency_key, request_hash, request_hash_version, goal, agent_profile, workspace,
+                 input, required_capabilities, state, current_generation, attempt_generation, work_item_id,
+                 goal_id, goal_revision, context_snapshot_id, purpose, validation_of_task_id, admission_key,
+                 allowed_runtime_ids, max_run_attempts, requested_session_id, inserted_at, updated_at
+                 ) VALUES ($1, $2, $3, 1, 'Goal admission task', 'codex', 'primary', $4::text::jsonb,
+                 '{}'::jsonb, 'queued', 0, 1, $5, $6, 1, $7, $8, $9, $10,
+                 ARRAY(SELECT value::uuid FROM jsonb_array_elements_text($11::text::jsonb) AS value),
+                 $12, $13, $14, $14)
+                 """,
+                 [
+                   db_uuid(task_id),
+                   "goal-admission-task-#{System.unique_integer([:positive])}",
+                   :crypto.hash(:sha256, "goal-admission-task"),
+                   Jason.encode!(task_input),
+                   maybe_db_uuid(work_item_id),
+                   db_uuid(goal_id),
+                   db_uuid(snapshot_id),
+                   purpose,
+                   maybe_db_uuid(validation_of_task_id),
+                   db_uuid(admission_key),
+                   Jason.encode!(allowed_runtime_ids),
+                   max_run_attempts,
+                   maybe_db_uuid(requested_session_id),
+                   task_inserted_at
+                 ]
+               )
+
+               Repo.query!(
+                 """
+                 INSERT INTO goal_budget_reservations (
+                   id, goal_id, goal_revision, task_id, admission_key, reserved_microusd, state,
+                   lock_version, inserted_at, updated_at
+                 ) VALUES ($1, $2, 1, $3, $4, 1, 'held', 1, $5, $5)
+                 """,
+                 [
+                   db_uuid(reservation_id),
+                   db_uuid(goal_id),
+                   db_uuid(task_id),
+                   db_uuid(admission_key),
+                   @now
+                 ]
+               )
+
+               {Repo.get!(Task, task_id), goal_id}
+             end)
+
+    {task, goal_id}
+  end
+
+  defp db_uuid(uuid), do: Ecto.UUID.dump!(uuid)
+  defp maybe_db_uuid(nil), do: nil
+  defp maybe_db_uuid(uuid), do: db_uuid(uuid)
+
+  defp validation_binding(profile_name, kind, allowed_runtime_ids) do
+    %{
+      "profile_name" => profile_name,
+      "kind" => kind,
+      "profile_digest" => "sha256:" <> String.duplicate("a", 64),
+      "allowed_runtime_ids" => allowed_runtime_ids
+    }
+  end
+
+  defp project_repository_fixture(label) do
+    assert {:ok, project} =
+             Workspaces.create_project(%{
+               name: "Goal admission #{label}",
+               key: project_key()
+             })
+
+    assert {:ok, repository} =
+             Workspaces.create_resource(project.id, %{
+               kind: "repository",
+               name: "Goal admission repository #{label}"
+             })
+
+    {project, repository}
+  end
+
+  defp enroll_machine(label) do
+    token = "goal-admission-#{label}-#{System.unique_integer([:positive])}"
+
+    assert {:ok, %{machine: machine}, :created} =
+             Orchestration.enroll_machine(
+               %{name: "Goal admission #{label}", machine_token: token},
+               Ecto.UUID.generate(),
+               enrollment_token: "test-enrollment-token",
+               expected_enrollment_token: "test-enrollment-token",
+               now: @now
+             )
+
+    machine
+  end
+
+  defp runtime_spec(runtime_key, overrides \\ %{}) do
+    Map.merge(
+      %{
+        runtime_key: runtime_key,
+        name: runtime_key,
+        capacity: 1,
+        agent_profile: "codex",
+        workspace: "primary",
+        capabilities: %{}
+      },
+      overrides
+    )
+  end
+
+  defp native_adapter(kind, native_version, implementation_version, protocol_version) do
+    %{
+      "kind" => kind,
+      "native_version" => native_version,
+      "implementation_version" => implementation_version,
+      "protocol_version" => protocol_version,
+      "operations" => %{
+        "start" => true,
+        "events" => true,
+        "cancel" => true,
+        "resume" => false,
+        "handoff" => false,
+        "guidance" => "next_turn",
+        "pause" => "unsupported",
+        "approval_response" => false,
+        "usage" => "reported",
+        "hard_cost_limit" => false
+      }
+    }
+  end
+
+  defp generic_adapter do
+    %{
+      "kind" => "generic",
+      "native_version" => "generic-v1",
+      "implementation_version" => "symmetry-generic-1",
+      "protocol_version" => 1,
+      "operations" => %{
+        "start" => true,
+        "events" => true,
+        "cancel" => true,
+        "resume" => false,
+        "handoff" => false,
+        "guidance" => "unsupported",
+        "pause" => "unsupported",
+        "approval_response" => false,
+        "usage" => "unknown",
+        "hard_cost_limit" => false
+      }
+    }
+  end
+
+  defp execution_policy(max_run_attempts) do
+    %{
+      "automatic_execution" => true,
+      "max_parallel_tasks" => 1,
+      "max_task_admissions" => 1,
+      "max_run_attempts_per_task" => max_run_attempts,
+      "budget_limit_microusd" => 1_000_000,
+      "per_run_cost_limit_microusd" => nil,
+      "budget_mode" => "soft",
+      "hard_cost_limit_required" => false,
+      "allowed_runtime_ids" => [],
+      "allowed_model_profiles" => ["codex"],
+      "final_acceptance" => "operator",
+      "allowed_actions" => [],
+      "allowed_resource_ids" => []
+    }
+  end
+
+  defp update_live_goal_runtime_policy!(goal_id, runtime_ids) do
+    Repo.query!("ALTER TABLE goal_revisions DISABLE TRIGGER USER")
+
+    try do
+      Repo.query!(
+        "UPDATE goal_revisions SET execution_policy = $1::text::jsonb WHERE goal_id = $2",
+        [
+          Jason.encode!(Map.put(execution_policy(2), "allowed_runtime_ids", runtime_ids)),
+          db_uuid(goal_id)
+        ]
+      )
+    after
+      Repo.query!("ALTER TABLE goal_revisions ENABLE TRIGGER USER")
+    end
+  end
+
+  defp enable_goal_rollout do
+    previous = Application.fetch_env!(:symmetry_control, :goals)
+    Application.put_env(:symmetry_control, :goals, Keyword.put(previous, :rollout_enabled, true))
+    on_exit(fn -> Application.put_env(:symmetry_control, :goals, previous) end)
+  end
+
+  defp register_runtime(label, opts \\ []) do
+    machine_token = "goal-admission-machine-#{label}-#{System.unique_integer([:positive])}"
+
+    machine = enroll_machine(label, machine_token)
+    register_runtime_on_machine(label, machine.id, opts)
+  end
+
+  defp register_runtime_on_machine(label, machine_id, opts) do
+    resume? = Keyword.get(opts, :resume?, false)
+    handoff? = Keyword.get(opts, :handoff?, false)
+    hard_cost_limit? = Keyword.get(opts, :hard_cost_limit?, false)
+    capacity = Keyword.get(opts, :capacity, 1)
+
+    repository_resource_id =
+      Keyword.get_lazy(opts, :repository_resource_id, fn ->
+        Repo.one(
+          from item in WorkItem,
+            where: not is_nil(item.goal_id) and not is_nil(item.repository_resource_id),
+            order_by: [desc: item.inserted_at, desc: item.id],
+            limit: 1,
+            select: item.repository_resource_id
+        )
+      end)
+
+    adapter =
+      native_adapter("codex", "0.153.4", "symmetry-codex-1", 1)
+      |> put_in(["operations", "resume"], resume?)
+      |> put_in(["operations", "handoff"], handoff?)
+      |> put_in(["operations", "hard_cost_limit"], hard_cost_limit?)
+
+    assert {:ok, [runtime]} =
+             Orchestration.register_runtimes(
+               machine_id,
+               Ecto.UUID.generate(),
+               [
+                 %{
+                   runtime_key: "goal-admission-#{label}",
+                   name: "Goal admission #{label}",
+                   capacity: capacity,
+                   agent_profile: "codex",
+                   workspace: "primary",
+                   harness_kind: "codex",
+                   harness_version: "0.153.4",
+                   adapter_version: "symmetry-codex-1",
+                   adapter_protocol_version: 1,
+                   capabilities: %{
+                     "structured_input" => true,
+                     "interactive" => true,
+                     "adapter" => adapter
+                   }
+                 }
+                 |> then(fn specification ->
+                   if is_nil(repository_resource_id),
+                     do: specification,
+                     else: Map.put(specification, :repository_resource_id, repository_resource_id)
+                 end)
+               ],
+               now: @now
+             )
+
+    runtime
+  end
+
+  defp enroll_machine(label, machine_token) do
+    assert {:ok, %{machine: machine}, :created} =
+             Orchestration.enroll_machine(
+               %{name: "Goal admission #{label}", machine_token: machine_token},
+               Ecto.UUID.generate(),
+               enrollment_token: "test-enrollment-token",
+               expected_enrollment_token: "test-enrollment-token",
+               now: @now
+             )
+
+    machine
+  end
+
+  defp complete_source_run!(task, runtime) do
+    Repo.update_all(
+      from(task_row in Task, where: task_row.id == ^task.id),
+      set: [state: "completed", current_generation: 1]
+    )
+
+    %Run{}
+    |> Run.changeset(%{
+      task_id: task.id,
+      runtime_id: runtime.id,
+      generation: 1,
+      state: "completed",
+      assigned_at: @now,
+      assignment_expires_at: DateTime.add(@now, 60, :second)
+    })
+    |> Repo.insert!()
+  end
+
+  defp insert_assigned_run!(task, runtime) do
+    Repo.update_all(
+      from(task_row in Task, where: task_row.id == ^task.id),
+      set: [state: "assigned", current_generation: task.attempt_generation]
+    )
+
+    %Run{}
+    |> Run.changeset(%{
+      task_id: task.id,
+      runtime_id: runtime.id,
+      generation: task.attempt_generation,
+      state: "assigned",
+      assigned_at: @now,
+      assignment_expires_at: DateTime.add(@now, 60, :second)
+    })
+    |> Repo.insert!()
+  end
+
+  defp insert_handoff_successor!(source_task, source_run) do
+    source_task = Repo.get!(Task, source_task.id)
+
+    input =
+      source_task.input
+      |> Map.put("session_mode", "handoff")
+      |> Map.put("requested_session_id", nil)
+      |> Map.put("handoff_source_run_id", source_run.id)
+
+    %Task{}
+    |> Task.changeset(%{
+      idempotency_key: "handoff-successor:#{Ecto.UUID.generate()}",
+      request_hash: :crypto.hash(:sha256, Ecto.UUID.generate()),
+      request_hash_version: 2,
+      goal: source_task.goal,
+      agent_profile: source_task.agent_profile,
+      workspace: source_task.workspace,
+      input: input,
+      required_capabilities: source_task.required_capabilities,
+      state: "queued",
+      current_generation: 0,
+      attempt_generation: 1,
+      work_item_id: source_task.work_item_id,
+      goal_id: source_task.goal_id,
+      goal_revision: source_task.goal_revision,
+      context_snapshot_id: source_task.context_snapshot_id,
+      purpose: source_task.purpose,
+      validation_of_task_id: source_task.validation_of_task_id,
+      admission_key: Ecto.UUID.generate(),
+      allowed_runtime_ids: source_task.allowed_runtime_ids,
+      max_run_attempts: source_task.max_run_attempts,
+      requested_session_id: nil,
+      handoff_source_run_id: source_run.id
+    })
+    |> Ecto.Changeset.change(inserted_at: @now, updated_at: @now)
+    |> Repo.insert!()
+  end
+
+  defp runtime_registration_spec(runtime, overrides \\ %{}) do
+    Map.merge(
+      %{
+        runtime_key: runtime.runtime_key,
+        name: runtime.name,
+        capacity: runtime.capacity,
+        agent_profile: runtime.agent_profile,
+        workspace: runtime.workspace,
+        repository_resource_id: runtime.repository_resource_id,
+        capabilities: runtime.capabilities,
+        harness_kind: runtime.harness_kind,
+        harness_version: runtime.harness_version,
+        adapter_version: runtime.adapter_version,
+        adapter_protocol_version: runtime.adapter_protocol_version,
+        heartbeat_interval_ms: runtime.heartbeat_interval_ms
+      },
+      overrides
+    )
+  end
+
+  defp pause_goal!(goal_id) do
+    goal = Repo.get!(Goal, goal_id)
+
+    assert {:ok, %{goal: %{state: "paused"}}, :created} =
+             Goals.command(
+               goal_id,
+               %{
+                 schema_version: "symmetry.goal_command.v1",
+                 mutation_id: Ecto.UUID.generate(),
+                 expected_version: goal.lock_version,
+                 expected_revision: goal.current_revision,
+                 kind: "pause",
+                 payload: %{reason: "Stop new execution before control delivery."}
+               },
+               "operator:test",
+               now: @now
+             )
+  end
+
+  defp claim(run, runtime) do
+    claim_id = Ecto.UUID.generate()
+
+    assert {:ok, claimed} =
+             Goals.claim(
+               run.id,
+               %{
+                 runtime_id: runtime.id,
+                 runtime_epoch: runtime.connection_epoch,
+                 generation: run.generation,
+                 claim_id: claim_id
+               },
+               now: @now
+             )
+
+    %{
+      runtime_id: runtime.id,
+      runtime_epoch: runtime.connection_epoch,
+      generation: run.generation,
+      claim_id: claimed.claim_id,
+      lease_token: claimed.lease_token
+    }
+  end
+
+  defp settlement_jobs(task_id, run_id, generation) do
+    Repo.all(
+      from job in Job,
+        where:
+          job.worker == "SymmetryControl.Goals.Workers.SettleTaskWorker" and
+            job.args == ^%{"task_id" => task_id, "run_id" => run_id, "generation" => generation}
+    )
+  end
+
+  defp insert_goal_event(goal_id, event_id, sequence, kind, revision \\ 1) do
+    Repo.insert!(%GoalEvent{
+      id: event_id,
+      goal_id: goal_id,
+      sequence: sequence,
+      kind: kind,
+      actor_ref: "operator:test",
+      request_hash: :crypto.hash(:sha256, "#{event_id}:#{kind}"),
+      request_hash_version: 2,
+      revision: revision,
+      payload: %{},
+      response: %{}
+    })
+  end
+
+  defp insert_goal_revision(goal_id, revision) do
+    %GoalRevision{
+      goal_id: goal_id,
+      revision: revision,
+      objective: "Goal admission amendment",
+      non_goals: [],
+      acceptance_contract: %{},
+      authority_policy: %{},
+      execution_policy: execution_policy(2),
+      context_manifest: %{},
+      reason: "test amendment",
+      actor_ref: "operator:test"
+    }
+    |> Ecto.Changeset.change(inserted_at: @now)
+    |> Repo.insert!()
+  end
+
+  defp insert_goal_pause_command(task, run, action_id) do
+    {request_hash, request_hash_version} = RequestHash.write(%{kind: "pause", payload: %{}})
+
+    Repo.insert!(%Command{
+      task_id: task.id,
+      run_id: run.id,
+      generation: run.generation,
+      kind: "pause",
+      payload: %{},
+      idempotency_key: "goal-control:#{action_id}:pause:#{task.id}",
+      request_hash: request_hash,
+      request_hash_version: request_hash_version,
+      state: "pending"
+    })
+  end
+
+  defp legacy_task_attrs do
+    %{goal: "Retry legacy body", agent_profile: "codex", workspace: "primary", input: %{}}
+  end
+
+  defp project_key do
+    "P" <> Integer.to_string(rem(System.unique_integer([:positive]), 9_999_999))
+  end
+
+  defp uuid(number),
+    do: "00000000-0000-0000-0000-" <> String.pad_leading(Integer.to_string(number), 12, "0")
+end

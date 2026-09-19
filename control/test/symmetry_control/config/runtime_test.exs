@@ -15,7 +15,12 @@ defmodule SymmetryControl.Config.RuntimeTest do
     "SYMMETRY_ASSIGNMENT_DURATION_MS",
     "SYMMETRY_REAPER_INTERVAL_MS",
     "SYMMETRY_PORTAL_SESSION_MAX_AGE_SECONDS",
-    "SYMMETRY_REQUEST_HASH_WRITE_MODE"
+    "SYMMETRY_REQUEST_HASH_WRITE_MODE",
+    "SYMMETRY_GOALS_ROLLOUT_ENABLED",
+    "SYMMETRY_CONTRACTS_DIR",
+    "DATABASE_URL",
+    "SECRET_KEY_BASE",
+    "PHX_HOST"
   ]
 
   setup do
@@ -44,6 +49,141 @@ defmodule SymmetryControl.Config.RuntimeTest do
     config = Config.Reader.read!(@base_config, env: :dev)
 
     assert 120_000 == config[:symmetry_control][:orchestration][:lease_duration_ms]
+    refute config[:symmetry_control][:goals][:rollout_enabled]
+  end
+
+  test "base configuration uses an absolute canonical contracts directory" do
+    config = Config.Reader.read!(@base_config, env: :dev)
+    directory = config[:symmetry_control][:contracts][:directory]
+
+    assert Path.type(directory) == :absolute
+    assert File.dir?(directory)
+  end
+
+  test "runtime configuration accepts an absolute contracts directory override" do
+    System.delete_env("SYMMETRY_CONTRACTS_DIR")
+
+    assert Config.Reader.read!(@runtime_config, env: :dev)[:symmetry_control][:contracts][
+             :directory
+           ] == contracts_dir()
+
+    System.put_env("SYMMETRY_CONTRACTS_DIR", contracts_dir())
+
+    assert Config.Reader.read!(@runtime_config, env: :dev)[:symmetry_control][:contracts][
+             :directory
+           ] == contracts_dir()
+  end
+
+  test "runtime configuration rejects a relative or missing contracts directory" do
+    System.put_env("SYMMETRY_CONTRACTS_DIR", "contracts")
+
+    assert_raise RuntimeError, "SYMMETRY_CONTRACTS_DIR must be an absolute path", fn ->
+      Config.Reader.read!(@runtime_config, env: :dev)
+    end
+
+    System.put_env("SYMMETRY_CONTRACTS_DIR", Path.join(contracts_dir(), "missing"))
+
+    assert_raise RuntimeError,
+                 "SYMMETRY_CONTRACTS_DIR must name an existing directory",
+                 fn -> Config.Reader.read!(@runtime_config, env: :dev) end
+  end
+
+  test "disabled production Goal rollout permits an omitted contracts directory" do
+    configure_production_runtime()
+    System.delete_env("SYMMETRY_CONTRACTS_DIR")
+    System.put_env("SYMMETRY_GOALS_ROLLOUT_ENABLED", "false")
+
+    config = Config.Reader.read!(@runtime_config, env: :prod)
+
+    assert config[:symmetry_control][:contracts][:directory] == "/app/contracts"
+    refute config[:symmetry_control][:goals][:rollout_enabled]
+  end
+
+  test "enabled production Goal rollout requires its contracts directory" do
+    configure_production_runtime()
+
+    System.put_env(
+      "SYMMETRY_CONTRACTS_DIR",
+      Path.join(
+        System.tmp_dir!(),
+        "symmetry-contracts-missing-#{System.unique_integer([:positive])}"
+      )
+    )
+
+    System.put_env("SYMMETRY_GOALS_ROLLOUT_ENABLED", "true")
+
+    assert_raise RuntimeError,
+                 "SYMMETRY_CONTRACTS_DIR must name an existing directory",
+                 fn -> Config.Reader.read!(@runtime_config, env: :prod) end
+  end
+
+  test "runtime configuration keeps Goal rollout disabled until explicitly enabled" do
+    System.delete_env("SYMMETRY_GOALS_ROLLOUT_ENABLED")
+
+    refute Config.Reader.read!(@runtime_config, env: :dev)[:symmetry_control][:goals][
+             :rollout_enabled
+           ]
+
+    System.put_env("SYMMETRY_GOALS_ROLLOUT_ENABLED", "true")
+
+    assert Config.Reader.read!(@runtime_config, env: :dev)[:symmetry_control][:goals][
+             :rollout_enabled
+           ]
+  end
+
+  test "runtime configuration rejects invalid Goal rollout values" do
+    System.put_env("SYMMETRY_GOALS_ROLLOUT_ENABLED", "yes")
+
+    assert_raise RuntimeError,
+                 "SYMMETRY_GOALS_ROLLOUT_ENABLED must be true or false",
+                 fn -> Config.Reader.read!(@runtime_config, env: :dev) end
+  end
+
+  test "production runtime preserves named validation profiles while overriding Goal rollout" do
+    suffix = Integer.to_string(System.unique_integer([:positive]))
+
+    profiles = [
+      "release-check": [
+        kind: :check,
+        profile_digest: "sha256:" <> String.duplicate("a", 64),
+        enabled: true,
+        allowed_runtime_ids: ["00000000-0000-4000-8000-000000000001"]
+      ]
+    ]
+
+    previous_goals = Application.get_env(:symmetry_control, :goals)
+
+    on_exit(fn ->
+      Application.put_env(:symmetry_control, :goals, previous_goals)
+    end)
+
+    Application.put_env(:symmetry_control, :goals,
+      rollout_enabled: false,
+      validation_profiles: profiles
+    )
+
+    System.put_env("DATABASE_URL", "ecto://runtime-#{suffix}:runtime-#{suffix}@localhost/runtime")
+    System.put_env("SECRET_KEY_BASE", "runtime-secret-#{suffix}")
+    System.put_env("PHX_HOST", "localhost")
+    System.put_env("SYMMETRY_ENROLLMENT_TOKEN", "runtime-enrollment-#{suffix}")
+    System.put_env("SYMMETRY_OPERATOR_TOKEN", "runtime-operator-#{suffix}")
+    System.put_env("SYMMETRY_CONTRACTS_DIR", contracts_dir())
+
+    System.put_env("SYMMETRY_GOALS_ROLLOUT_ENABLED", "true")
+
+    enabled_config =
+      Config.Reader.read!(@runtime_config, env: :prod)[:symmetry_control][:goals]
+
+    assert enabled_config[:validation_profiles] == profiles
+    assert enabled_config[:rollout_enabled]
+
+    System.put_env("SYMMETRY_GOALS_ROLLOUT_ENABLED", "false")
+
+    disabled_config =
+      Config.Reader.read!(@runtime_config, env: :prod)[:symmetry_control][:goals]
+
+    assert disabled_config[:validation_profiles] == profiles
+    refute disabled_config[:rollout_enabled]
   end
 
   test "base configuration filters provider credential parameters" do
@@ -92,6 +232,12 @@ defmodule SymmetryControl.Config.RuntimeTest do
 
     assert 30_000 == config[:symmetry_control][:orchestration][:lease_duration_ms]
     assert :legacy == config[:symmetry_control][:orchestration][:request_hash_write_mode]
+  end
+
+  test "test configuration uses the canonical contracts directory" do
+    config = Config.Reader.read!(@test_config, env: :test)
+
+    assert config[:symmetry_control][:contracts][:directory] == contracts_dir()
   end
 
   test "runtime configuration keeps legacy request hashes until canonical cutover is explicit" do
@@ -177,5 +323,19 @@ defmodule SymmetryControl.Config.RuntimeTest do
     Enum.each(overrides, fn {_variable, key} ->
       assert config[:symmetry_control][:orchestration][key] == 1_500
     end)
+  end
+
+  defp contracts_dir do
+    Path.expand("../../contracts", Path.dirname(@base_config))
+  end
+
+  defp configure_production_runtime do
+    suffix = Integer.to_string(System.unique_integer([:positive]))
+
+    System.put_env("DATABASE_URL", "ecto://runtime-#{suffix}:runtime-#{suffix}@localhost/runtime")
+    System.put_env("SECRET_KEY_BASE", "runtime-secret-#{suffix}")
+    System.put_env("PHX_HOST", "localhost")
+    System.put_env("SYMMETRY_ENROLLMENT_TOKEN", "runtime-enrollment-#{suffix}")
+    System.put_env("SYMMETRY_OPERATOR_TOKEN", "runtime-operator-#{suffix}")
   end
 end

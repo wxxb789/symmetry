@@ -10,6 +10,13 @@ import Config
 config :symmetry_control,
   ecto_repos: [SymmetryControl.Repo],
   generators: [timestamp_type: :utc_datetime, binary_id: true],
+  contracts: [directory: Path.expand("../../contracts", __DIR__)],
+  goals: [
+    rollout_enabled: false,
+    # Validation authority is an operator-owned configuration boundary. Keep the
+    # default empty so check and review predicates fail closed until configured.
+    validation_profiles: []
+  ],
   orchestration: [
     enrollment_token: "development-enrollment-token",
     operator_token: "development-operator-token",
@@ -21,6 +28,16 @@ config :symmetry_control,
     portal_session_max_age_seconds: 28_800,
     reaper_enabled: true,
     scheduler_enabled: true
+  ]
+
+config :symmetry_control, Oban,
+  repo: SymmetryControl.Repo,
+  queues: [goal_wakeup: 2, goal_settlement: 4, goal_control: 2],
+  plugins: [
+    {Oban.Plugins.Cron,
+     crontab: [
+       {"* * * * *", SymmetryControl.Goals.Workers.WakeupWorker}
+     ]}
   ]
 
 config :symmetry_control, :portal_session_secure, false

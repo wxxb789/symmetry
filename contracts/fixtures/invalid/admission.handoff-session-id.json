@@ -1,0 +1,21 @@
+{
+  "schema_version": "symmetry.admission.v1",
+  "admission_id": "55555555-5555-4555-8555-555555555555",
+  "goal_id": "11111111-1111-4111-8111-111111111111",
+  "goal_revision": 1,
+  "work_item_id": "33333333-3333-4333-8333-333333333333",
+  "purpose": "implement",
+  "context_snapshot_id": "44444444-4444-4444-8444-444444444444",
+  "context_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "model_profile": "implementation-default",
+  "session_mode": "handoff",
+  "requested_session_id": "66666666-6666-4666-8666-666666666666",
+  "subject": {
+    "resource_id": "22222222-2222-4222-8222-222222222222",
+    "commit": "0123456789abcdef0123456789abcdef01234567",
+    "tree_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "limits": {"max_turns": 1, "deadline_at": "2026-09-09T00:00:00Z", "max_cost_microusd": null},
+  "validation_of_task_id": null,
+  "provider_scope": null
+}

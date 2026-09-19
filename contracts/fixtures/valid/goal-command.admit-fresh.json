@@ -1,0 +1,15 @@
+{
+  "schema_version": "symmetry.goal_command.v1",
+  "mutation_id": "07070707-0707-4707-8707-070707070707",
+  "expected_version": 5,
+  "expected_revision": 1,
+  "kind": "admit_task",
+  "payload": {
+    "work_item_id": "33333333-3333-4333-8333-333333333333",
+    "purpose": "implement",
+    "model_profile": "implementation-default",
+    "session_mode": "fresh",
+    "requested_session_id": null,
+    "validation_of_task_id": null
+  }
+}

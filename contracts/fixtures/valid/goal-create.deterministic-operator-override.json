@@ -1,0 +1,44 @@
+{
+  "schema_version": "symmetry.goal_create.v1",
+  "mutation_id": "41414141-4141-4141-8141-414141414141",
+  "title": "Deliver a verified change to the repository.",
+  "initial_revision": {
+    "objective": "Deliver a verified change to the repository.",
+    "non_goals": [],
+    "acceptance_contract": {
+      "schema_version": "symmetry.acceptance.v1",
+      "description": "The candidate receives an independent review before operator acceptance.",
+      "predicates": [
+        {"id": "review", "kind": "review", "reviewer_profile": "independent-review"},
+        {"id": "operator", "kind": "operator_acceptance"}
+      ]
+    },
+    "authority_policy": {
+      "operator_required_for_scope_change": true,
+      "operator_required_for_completion": true,
+      "publication_allowed": false,
+      "allowed_actions": ["activate", "admit_task", "achieve"]
+    },
+    "execution_policy": {
+      "automatic_execution": false,
+      "max_parallel_tasks": 1,
+      "max_task_admissions": 4,
+      "max_run_attempts_per_task": 2,
+      "budget_limit_microusd": null,
+      "per_run_cost_limit_microusd": null,
+      "budget_mode": "soft",
+      "hard_cost_limit_required": false,
+      "allowed_runtime_ids": ["22222222-2222-4222-8222-222222222222"],
+      "allowed_model_profiles": ["implementation-default"],
+      "final_acceptance": "deterministic",
+      "allowed_actions": ["activate", "admit_task", "achieve"],
+      "allowed_resource_ids": ["22222222-2222-4222-8222-222222222222"]
+    },
+    "context_manifest": {
+      "byte_budget": 65536,
+      "required_source_kinds": ["approved_goal", "work_contract", "repository_subject"],
+      "include_advisory_recall": true
+    },
+    "reason": "initial approval"
+  }
+}

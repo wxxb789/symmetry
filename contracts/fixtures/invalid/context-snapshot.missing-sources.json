@@ -1,0 +1,56 @@
+{
+  "schema_version": "symmetry.context_snapshot.v1",
+  "snapshot_id": "44444444-4444-4444-8444-444444444444",
+  "goal_id": "11111111-1111-4111-8111-111111111111",
+  "goal_revision": 1,
+  "work_item_id": "33333333-3333-4333-8333-333333333333",
+  "content_hash": "sha256:de5ab507057111fafaad0c9cc4b7cafc3a92cda2e1f7872367f3d593a6e9f0f4",
+  "created_at": "2026-09-08T00:00:01Z",
+  "approved_goal": {
+    "goal_id": "11111111-1111-4111-8111-111111111111",
+    "revision": 1,
+    "objective": "Deliver a verified change to the repository.",
+    "authority_policy": {
+      "operator_required_for_scope_change": true,
+      "operator_required_for_completion": true,
+      "publication_allowed": false,
+      "allowed_actions": ["activate", "admit_task", "achieve"]
+    }
+  },
+  "work_contract": {
+    "title": "Implement the bounded change",
+    "description": "Change only the approved repository scope and produce checkable evidence.",
+    "purpose": "implement",
+    "change_target": null,
+    "acceptance": {
+      "schema_version": "symmetry.acceptance.v1",
+      "description": "The required check passes.",
+      "predicates": [{"id": "tests", "kind": "check", "validator_profile": "default-checks"}]
+    },
+    "validation_bindings": [
+      {
+        "profile_name": "default-checks",
+        "kind": "check",
+        "profile_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+        "allowed_runtime_ids": ["66666666-6666-4666-8666-666666666666"]
+      }
+    ]
+  },
+  "subject": {
+    "resource_id": "22222222-2222-4222-8222-222222222222",
+    "commit": "0123456789abcdef0123456789abcdef01234567",
+    "tree_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "current_decisions": [],
+  "validated_evidence": [],
+  "failed_attempts": [],
+  "advisory_recall": [],
+  "next_action": null,
+  "size": {
+    "mandatory_bytes": 1024,
+    "optional_bytes": 0,
+    "total_bytes": 1024,
+    "byte_budget": 65536,
+    "token_estimate": null
+  }
+}

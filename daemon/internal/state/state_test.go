@@ -361,6 +361,100 @@ func TestClaimIntentGrantAndPendingOutboxSurviveRestart(t *testing.T) {
 	}
 }
 
+func TestStateRawMessagesRejectDuplicateMembersBeforePersistence(t *testing.T) {
+	duplicates := []struct {
+		name    string
+		payload json.RawMessage
+	}{
+		{name: "top-level", payload: json.RawMessage(`{"legacy":"first","legacy":"second"}`)},
+		{name: "nested", payload: json.RawMessage(`{"legacy":{"value":1,"value":2}}`)},
+		{name: "escaped", payload: json.RawMessage(`{"\u006cegacy":"first","legacy":"second"}`)},
+	}
+
+	for _, test := range duplicates {
+		t.Run("SaveJournal Work.Input rejects "+test.name, func(t *testing.T) {
+			store := mustStore(t)
+			journal := testJournal("run-raw-work-"+test.name, 1)
+			journal.Work.Input = test.payload
+			if err := store.SaveJournal(journal); err == nil {
+				t.Fatal("SaveJournal() accepted duplicate Work.Input members")
+			}
+		})
+
+		t.Run("QueueEvent rejects "+test.name, func(t *testing.T) {
+			store := mustStore(t)
+			journal := testJournal("run-raw-event-"+test.name, 1)
+			if err := store.SaveJournal(journal); err != nil {
+				t.Fatal(err)
+			}
+			_, err := store.QueueEvent(journal.Key(), protocol.RunEvent{
+				EventID: "event-raw-" + test.name, Sequence: journal.LastEventSequence + 1, Kind: "diagnostic",
+				OccurredAt: time.Date(2026, 9, 16, 1, 2, 3, 0, time.UTC), Payload: test.payload,
+			})
+			if err == nil {
+				t.Fatal("QueueEvent() accepted duplicate payload members")
+			}
+		})
+
+		t.Run("QueueTransition rejects "+test.name, func(t *testing.T) {
+			store := mustStore(t)
+			journal := testJournal("run-raw-transition-"+test.name, 1)
+			if err := store.SaveJournal(journal); err != nil {
+				t.Fatal(err)
+			}
+			_, err := store.QueueTransition(journal.Key(), protocol.StateTransitionRequest{
+				TransitionID: "transition-raw-" + test.name, State: "active", Payload: test.payload,
+			})
+			if err == nil {
+				t.Fatal("QueueTransition() accepted duplicate payload members")
+			}
+		})
+	}
+
+	t.Run("legacy unknown Work.Input fields remain allowed", func(t *testing.T) {
+		store := mustStore(t)
+		journal := testJournal("run-raw-legacy-unknown", 1)
+		journal.Work.Input = json.RawMessage(`{"legacy_unknown":{"nested":true}}`)
+		if err := store.SaveJournal(journal); err != nil {
+			t.Fatalf("SaveJournal() rejected ordinary unknown Work.Input field: %v", err)
+		}
+	})
+}
+
+func TestControlCommandReceiptRejectsDuplicateRawPayloadMembers(t *testing.T) {
+	duplicates := []struct {
+		name    string
+		payload json.RawMessage
+	}{
+		{name: "top-level", payload: json.RawMessage(`{"command_id":"pause-raw","command_id":"pause-raw","kind":"pause","outcome":"applied"}`)},
+		{name: "nested", payload: json.RawMessage(`{"command_id":"pause-raw","kind":"pause","outcome":"applied","metadata":{"source":"first","source":"second"}}`)},
+		{name: "escaped", payload: json.RawMessage(`{"command_id":"pause-raw","\u006bind":"pause","kind":"pause","outcome":"applied"}`)},
+	}
+
+	for _, test := range duplicates {
+		t.Run(test.name, func(t *testing.T) {
+			store := mustStore(t)
+			journal := testJournal("run-raw-command-"+test.name, 1)
+			if err := store.SaveJournal(journal); err != nil {
+				t.Fatal(err)
+			}
+			intent := ControlCommandIntent{
+				CommandID: "pause-raw", Kind: "pause", PayloadDigest: strings.Repeat("a", 64),
+				TransitionID: "transition-pause-raw", AckID: "ack-pause-raw",
+			}
+			if _, _, err := store.PrepareControlCommand(journal.Key(), intent); err != nil {
+				t.Fatal(err)
+			}
+			_, err := store.CompleteControlCommand(journal.Key(), intent.CommandID, intent.Kind, "applied", protocol.RunEvent{
+				EventID: "event-pause-raw", Kind: "command_applied", OccurredAt: time.Date(2026, 9, 16, 1, 2, 4, 0, time.UTC), Payload: test.payload,
+			})
+			if err == nil {
+				t.Fatal("CompleteControlCommand() accepted duplicate receipt payload members")
+			}
+		})
+	}
+}
+
 func TestQueueOutputEventBoundsPendingPayloadAndQueuesMarker(t *testing.T) {
 	store := mustStore(t)
 	defer store.Close()
@@ -415,6 +509,33 @@ func TestQueueOutputEventBoundsPendingPayloadAndQueuesMarker(t *testing.T) {
 	loaded, err := restarted.LoadJournal(journal.Key())
 	if err != nil || loaded.DroppedOutputChunks != 0 || loaded.DroppedOutputBytes != 0 || loaded.LastEventSequence != 3 {
 		t.Fatalf("journal after restart = %#v, err=%v", loaded, err)
+	}
+}
+
+func TestQueueOutputEventDropFailureDoesNotClaimOrPersistDrop(t *testing.T) {
+	store := mustStore(t)
+	defer store.Close()
+	journal := testJournal("run-output-drop-write-failure", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	restore := store.SetAtomicWriterForTesting(func(string, []byte) error {
+		return errors.New("injected output drop write failure")
+	})
+	defer restore()
+
+	queued, dropped, err := store.QueueOutputEvent(journal.Key(), protocol.RunEvent{
+		EventID: "output-drop-failure", Kind: "output", OccurredAt: time.Date(2026, 9, 17, 1, 2, 3, 0, time.UTC), Payload: json.RawMessage(`{"chunk":"dropped"}`),
+	}, 0)
+	if err == nil || dropped || queued.RunID != "" || len(queued.PendingEvents) != 0 {
+		t.Fatalf("QueueOutputEvent() = %#v, dropped=%t, err=%v; want failed atomic drop", queued, dropped, err)
+	}
+	loaded, err := store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.DroppedOutputChunks != 0 || loaded.DroppedOutputBytes != 0 || len(loaded.PendingEvents) != 0 || loaded.LastEventSequence != journal.LastEventSequence {
+		t.Fatalf("journal after failed drop = %#v, want unchanged counters/events", loaded)
 	}
 }
 
@@ -595,7 +716,7 @@ func TestPrepareProvideInputCapturesEventSequenceBarrierAndValidatesIt(t *testin
 
 func TestTerminalTransitionSettlesUnresolvedInputBeforeCleanup(t *testing.T) {
 	store := mustStore(t)
-	journal := testJournal("run-input-terminal", 1)
+	journal := stoppedTestJournal("run-input-terminal", 1)
 	journal.LocalState = "waiting_for_input"
 	if err := store.SaveJournal(journal); err != nil {
 		t.Fatal(err)
@@ -628,7 +749,7 @@ func TestTerminalTransitionSettlesUnresolvedInputBeforeCleanup(t *testing.T) {
 
 func TestResolveTerminalForCleanupRetiresUndeliveredInputIntent(t *testing.T) {
 	store := mustStore(t)
-	journal := testJournal("run-input-cleanup", 1)
+	journal := stoppedTestJournal("run-input-cleanup", 1)
 	journal.LocalState = "waiting_for_input"
 	if err := store.SaveJournal(journal); err != nil {
 		t.Fatal(err)
@@ -772,7 +893,7 @@ func TestPendingOutboxRequiresPersistedClaimGrant(t *testing.T) {
 
 func TestSetProcessDetailsPersistsNonEmptyIdentity(t *testing.T) {
 	store := mustStore(t)
-	journal := testJournal("run-1", 1)
+	journal := stoppedTestJournal("run-1", 1)
 	if err := store.SaveJournal(journal); err != nil {
 		t.Fatalf("SaveJournal() error = %v", err)
 	}
@@ -831,6 +952,42 @@ func TestSetProcessDetailsRejectsInvalidIdentityWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestClearProcessDetailsUsesExpectedIdentityAndIsIdempotent(t *testing.T) {
+	store := mustStore(t)
+	journal := stoppedTestJournal("run-1", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatalf("SaveJournal() error = %v", err)
+	}
+	key := journal.Key()
+	startedAt := time.Date(2026, 9, 9, 1, 2, 5, 0, time.UTC)
+	if _, err := store.SetProcessDetails(key, 99, "linux:99:created-at", startedAt); err != nil {
+		t.Fatalf("SetProcessDetails() error = %v", err)
+	}
+	cleared, err := store.ClearProcessDetails(key, 99, "linux:99:created-at")
+	if err != nil {
+		t.Fatalf("ClearProcessDetails() error = %v", err)
+	}
+	if cleared.PID != 0 || cleared.ProcessIdentity != "" || !cleared.StartedAt.IsZero() {
+		t.Fatalf("cleared process details = %#v", cleared)
+	}
+	if _, err := store.ClearProcessDetails(key, 99, "linux:99:created-at"); err != nil {
+		t.Fatalf("replayed ClearProcessDetails() error = %v", err)
+	}
+	if _, err := store.SetProcessDetails(key, 100, "linux:100:created-at", startedAt); err != nil {
+		t.Fatalf("replacement SetProcessDetails() error = %v", err)
+	}
+	if _, err := store.ClearProcessDetails(key, 99, "linux:99:created-at"); err == nil {
+		t.Fatal("ClearProcessDetails() erased a changed process identity")
+	}
+	current, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatalf("LoadJournal() error = %v", err)
+	}
+	if current.PID != 100 || current.ProcessIdentity != "linux:100:created-at" || !current.StartedAt.Equal(startedAt) {
+		t.Fatalf("changed process details = %#v", current)
+	}
+}
+
 func TestQueueTerminalTransitionIsAtomic(t *testing.T) {
 	store := mustStore(t)
 	journal := testJournal("run-1", 1)
@@ -858,9 +1015,190 @@ func TestQueueTerminalTransitionIsAtomic(t *testing.T) {
 	}
 }
 
+func TestCompletedTerminalTaskResultKindSurvivesDeliveryAndRestart(t *testing.T) {
+	directory := t.TempDir()
+	store, err := New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal := stoppedTestJournal("run-terminal-result", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	pendingAt := time.Date(2026, 9, 10, 1, 2, 3, 0, time.UTC)
+	transition := protocol.StateTransitionRequest{
+		TransitionID: "completed-candidate",
+		State:        "completed",
+		Payload:      json.RawMessage(`{"task_result":{"kind":"candidate_completion"}}`),
+	}
+	queued, err := store.QueueTerminalTransitionAt(journal.Key(), transition, pendingAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued.TerminalTaskResultKind != protocol.TaskResultCandidateCompletion {
+		t.Fatalf("queued terminal task result kind = %q, want candidate_completion", queued.TerminalTaskResultKind)
+	}
+	replayed, err := store.QueueTerminalTransitionAt(journal.Key(), transition, pendingAt.Add(time.Second))
+	if err != nil {
+		t.Fatalf("replayed QueueTerminalTransitionAt() error = %v", err)
+	}
+	if replayed.TerminalTaskResultKind != protocol.TaskResultCandidateCompletion || replayed.TerminalState != "completed" {
+		t.Fatalf("replayed completed terminal transition changed metadata: %#v", replayed)
+	}
+	if _, err := store.ResolveTerminal(journal.Key(), TerminalVerdictAccepted, pendingAt.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkTransitionsDelivered(journal.Key(), []string{transition.TransitionID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.EnterCleanupPending(journal.Key()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := New(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	loaded, err := restarted.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.TerminalTaskResultKind != protocol.TaskResultCandidateCompletion {
+		t.Fatalf("restarted terminal task result kind = %q, want candidate_completion", loaded.TerminalTaskResultKind)
+	}
+}
+
+func TestCancelledTerminalCannotReplaceCompletedTaskResultKind(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-terminal-cancel", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	pendingAt := time.Date(2026, 9, 10, 1, 2, 3, 0, time.UTC)
+	if _, err := store.QueueTerminalTransitionAt(journal.Key(), protocol.StateTransitionRequest{
+		TransitionID: "completed-candidate",
+		State:        "completed",
+		Payload:      json.RawMessage(`{"task_result":{"kind":"candidate_completion"}}`),
+	}, pendingAt); err != nil {
+		t.Fatal(err)
+	}
+	_, err := store.QueueCancelledTransitionAndAcknowledgementAt(journal.Key(), protocol.StateTransitionRequest{
+		TransitionID: "cancelled-1", State: "cancelled", Payload: json.RawMessage(`{"reason":"cancelled"}`),
+	}, protocol.CommandAcknowledgement{CommandID: "cancel-1", Outcome: "applied", AckID: "ack-1"}, pendingAt.Add(time.Second))
+	if err == nil {
+		t.Fatal("cancellation replaced an authoritative completed terminal")
+	}
+	loaded, err := store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.TerminalState != "completed" || loaded.TerminalTaskResultKind != protocol.TaskResultCandidateCompletion || len(loaded.PendingTransitions) != 1 || loaded.PendingTransitions[0].State != "completed" || len(loaded.PendingCommandAcknowledgements) != 0 {
+		t.Fatalf("cancellation mutated authoritative completed terminal = %#v", loaded)
+	}
+}
+
+func TestCompletedTerminalTaskResultKindRejectsInvalidAtomicWrite(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-terminal-invalid", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.QueueTerminalTransition(journal.Key(), protocol.StateTransitionRequest{
+		TransitionID: "completed-invalid", State: "completed", Payload: json.RawMessage(`{"task_result":{"kind":"invalid"}}`),
+	}); err == nil {
+		t.Fatal("QueueTerminalTransition() accepted an invalid task result kind")
+	}
+	loaded, err := store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.TerminalState != "" || loaded.TerminalTaskResultKind != "" || len(loaded.PendingTransitions) != 0 {
+		t.Fatalf("invalid completed transition partially updated journal: %#v", loaded)
+	}
+}
+
+func TestTerminalTaskResultKindNeverBackfillsAfterFirstTerminalTransition(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		first protocol.StateTransitionRequest
+	}{
+		{
+			name:  "failed before completed candidate",
+			first: protocol.StateTransitionRequest{TransitionID: "failed-first", State: "failed", Payload: json.RawMessage(`{"reason":"process_failure"}`)},
+		},
+		{
+			name:  "completed without task result",
+			first: protocol.StateTransitionRequest{TransitionID: "completed-without-result", State: "completed", Payload: json.RawMessage(`{}`)},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := mustStore(t)
+			journal := testJournal("run-no-backfill", 1)
+			if err := store.SaveJournal(journal); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.QueueTerminalTransition(journal.Key(), test.first); err != nil {
+				t.Fatal(err)
+			}
+			_, err := store.QueueTerminalTransition(journal.Key(), protocol.StateTransitionRequest{
+				TransitionID: "completed-candidate", State: "completed", Payload: json.RawMessage(`{"task_result":{"kind":"candidate_completion"}}`),
+			})
+			if err == nil {
+				t.Fatal("later terminal transition was accepted")
+			}
+			updated, err := store.LoadJournal(journal.Key())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if updated.TerminalTaskResultKind != "" || len(updated.PendingTransitions) != 1 || updated.PendingTransitions[0].TransitionID != test.first.TransitionID {
+				t.Fatalf("later completed transition backfilled terminal metadata: %#v", updated)
+			}
+		})
+	}
+}
+
+func TestSaveJournalCannotChangeOrClearTerminalTaskResultKind(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-terminal-immutable", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.QueueTerminalTransition(journal.Key(), protocol.StateTransitionRequest{
+		TransitionID: "completed-candidate",
+		State:        "completed",
+		Payload:      json.RawMessage(`{"task_result":{"kind":"candidate_completion"}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleared := loaded
+	cleared.TerminalTaskResultKind = ""
+	if err := store.SaveJournal(cleared); err == nil {
+		t.Fatal("SaveJournal() cleared immutable terminal task result kind")
+	}
+	changed := loaded
+	changed.TerminalTaskResultKind = protocol.TaskResultProgress
+	if err := store.SaveJournal(changed); err == nil {
+		t.Fatal("SaveJournal() changed immutable terminal task result kind")
+	}
+	loaded, err = store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.TerminalTaskResultKind != protocol.TaskResultCandidateCompletion {
+		t.Fatalf("terminal task result kind changed after rejected saves: %#v", loaded)
+	}
+}
+
 func TestEnterCleanupPendingPreservesTerminalAuditAndControlsDelivery(t *testing.T) {
 	store := mustStore(t)
-	journal := testJournal("run-1", 1)
+	journal := stoppedTestJournal("run-1", 1)
 	if err := store.SaveJournal(journal); err != nil {
 		t.Fatal(err)
 	}
@@ -898,7 +1236,7 @@ func TestEnterCleanupPendingPreservesTerminalAuditAndControlsDelivery(t *testing
 		t.Fatalf("EnterCleanupPending() was not idempotent: %v", err)
 	}
 
-	journal = testJournal("run-2", 1)
+	journal = stoppedTestJournal("run-2", 1)
 	if err := store.SaveJournal(journal); err != nil {
 		t.Fatal(err)
 	}
@@ -927,7 +1265,7 @@ func TestCleanupPendingRoundTripsAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	journal := testJournal("run-1", 1)
+	journal := stoppedTestJournal("run-1", 1)
 	if err := store.SaveJournal(journal); err != nil {
 		t.Fatal(err)
 	}
@@ -963,7 +1301,7 @@ func TestCleanupPendingRoundTripsAcrossRestart(t *testing.T) {
 
 func TestResolveTerminalForCleanupIsAtomicAndIdempotent(t *testing.T) {
 	store := mustStore(t)
-	journal := testJournal("run-atomic-cleanup", 1)
+	journal := stoppedTestJournal("run-atomic-cleanup", 1)
 	if err := store.SaveJournal(journal); err != nil {
 		t.Fatal(err)
 	}
@@ -1083,29 +1421,40 @@ func TestQueueTerminalTransitionSelectsOneAuthoritativeTerminal(t *testing.T) {
 		name          string
 		pendingStates []string
 		incomingState string
+		wantErr       bool
 		wantStates    []string
 	}{
 		{
-			name:          "completed is replaced by cancelled",
+			name:          "completed rejects later cancelled",
 			pendingStates: []string{"completed"},
 			incomingState: "cancelled",
-			wantStates:    []string{"cancelled"},
-		},
-		{
-			name:          "cancelled keeps first terminal over completed",
-			pendingStates: []string{"cancelled"},
-			incomingState: "completed",
-			wantStates:    []string{"cancelled"},
-		},
-		{
-			name:          "completed keeps first terminal over failed",
-			pendingStates: []string{"completed"},
-			incomingState: "failed",
+			wantErr:       true,
 			wantStates:    []string{"completed"},
 		},
 		{
-			name:          "cancelled replaces running and completed",
+			name:          "cancelled rejects later completed",
+			pendingStates: []string{"cancelled"},
+			incomingState: "completed",
+			wantErr:       true,
+			wantStates:    []string{"cancelled"},
+		},
+		{
+			name:          "completed rejects later failed",
+			pendingStates: []string{"completed"},
+			incomingState: "failed",
+			wantErr:       true,
+			wantStates:    []string{"completed"},
+		},
+		{
+			name:          "completed rejects later cancelled after running",
 			pendingStates: []string{"running", "completed"},
+			incomingState: "cancelled",
+			wantErr:       true,
+			wantStates:    []string{"running", "completed"},
+		},
+		{
+			name:          "cancelled replaces nonterminal running",
+			pendingStates: []string{"running"},
 			incomingState: "cancelled",
 			wantStates:    []string{"cancelled"},
 		},
@@ -1126,6 +1475,12 @@ func TestQueueTerminalTransitionSelectsOneAuthoritativeTerminal(t *testing.T) {
 			}
 
 			queued, err := store.QueueTerminalTransition(journal.Key(), protocol.StateTransitionRequest{TransitionID: "incoming", State: test.incomingState, Payload: json.RawMessage(`{}`)})
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("QueueTerminalTransition() accepted a later terminal")
+				}
+				queued, err = store.LoadJournal(journal.Key())
+			}
 			if err != nil {
 				t.Fatalf("QueueTerminalTransition() error = %v", err)
 			}
@@ -1497,7 +1852,7 @@ func TestTerminalReplacementRemovesAttemptMarkers(t *testing.T) {
 	}
 }
 
-func TestTerminalPendingTimestampSurvivesRestartAndCancelReplacement(t *testing.T) {
+func TestTerminalPendingTimestampSurvivesRestartAndRejectsCancelReplacement(t *testing.T) {
 	store := mustStore(t)
 	journal := testJournal("run-1", 1)
 	if err := store.SaveJournal(journal); err != nil {
@@ -1509,12 +1864,15 @@ func TestTerminalPendingTimestampSurvivesRestartAndCancelReplacement(t *testing.
 		t.Fatalf("QueueTerminalTransitionAt(completed) error = %v", err)
 	}
 	cancelledAt := enteredAt.Add(time.Minute)
-	queued, err = store.QueueTerminalTransitionAt(journal.Key(), protocol.StateTransitionRequest{TransitionID: "cancelled-1", State: "cancelled", Payload: json.RawMessage(`{}`)}, cancelledAt)
-	if err != nil {
-		t.Fatalf("QueueTerminalTransitionAt(cancelled) error = %v", err)
+	if _, err = store.QueueTerminalTransitionAt(journal.Key(), protocol.StateTransitionRequest{TransitionID: "cancelled-1", State: "cancelled", Payload: json.RawMessage(`{}`)}, cancelledAt); err == nil {
+		t.Fatal("QueueTerminalTransitionAt(cancelled) replaced the first terminal")
 	}
-	if queued.LocalState != "terminal_pending" || !queued.TerminalPendingAt.Equal(enteredAt) || queued.TerminalState != "cancelled" || queued.TerminalVerdict != "" || !queued.TerminalResolvedAt.IsZero() || !equalStrings(transitionStates(queued.PendingTransitions), []string{"cancelled"}) {
-		t.Fatalf("cancelled terminal journal = %#v", queued)
+	queued, err = store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued.LocalState != "terminal_pending" || !queued.TerminalPendingAt.Equal(enteredAt) || queued.TerminalState != "completed" || queued.TerminalVerdict != "" || !queued.TerminalResolvedAt.IsZero() || !equalStrings(transitionStates(queued.PendingTransitions), []string{"completed"}) {
+		t.Fatalf("terminal journal after rejected cancellation = %#v", queued)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -1528,7 +1886,7 @@ func TestTerminalPendingTimestampSurvivesRestartAndCancelReplacement(t *testing.
 	if err != nil {
 		t.Fatalf("LoadJournal() after restart error = %v", err)
 	}
-	if !loaded.TerminalPendingAt.Equal(enteredAt) || loaded.TerminalState != "cancelled" || loaded.TerminalVerdict != "" {
+	if !loaded.TerminalPendingAt.Equal(enteredAt) || loaded.TerminalState != "completed" || loaded.TerminalVerdict != "" {
 		t.Fatalf("terminal journal after restart = %#v", loaded)
 	}
 	resolvedAt := enteredAt.Add(2 * time.Minute)
@@ -1758,7 +2116,7 @@ func TestListJournalsRejectsCorruptAuthoritativeJournal(t *testing.T) {
 
 func TestDeleteJournalDeletesOnlyTarget(t *testing.T) {
 	store := mustStore(t)
-	first := testJournal("run-1", 1)
+	first := stoppedTestJournal("run-1", 1)
 	second := testJournal("run-1", 2)
 	for _, journal := range []RunJournal{first, second} {
 		if err := store.SaveJournal(journal); err != nil {
@@ -1790,7 +2148,8 @@ func TestConcurrentSavesLeaveWholeJSON(t *testing.T) {
 			defer group.Done()
 			copy := journal
 			copy.LocalState = "state"
-			copy.PID = 100 + index
+			copy.Work.Goal = strconv.Itoa(index)
+			copy.LastEventSequence = int64(index + 1)
 			if err := store.SaveJournal(copy); err != nil {
 				t.Errorf("SaveJournal() error = %v", err)
 			}
@@ -1805,6 +2164,10 @@ func TestConcurrentSavesLeaveWholeJSON(t *testing.T) {
 	var got RunJournal
 	if err := json.Unmarshal(bytes, &got); err != nil {
 		t.Fatalf("journal JSON is not whole JSON: %v", err)
+	}
+	writer, err := strconv.Atoi(got.Work.Goal)
+	if err != nil || writer < 0 || writer >= 32 || got.LastEventSequence != int64(writer+1) || got.PID != journal.PID || got.ProcessIdentity != journal.ProcessIdentity {
+		t.Fatalf("concurrent save mixed writers or changed process ownership: %+v", got)
 	}
 }
 
@@ -1829,6 +2192,12 @@ func testJournal(runID string, generation int64) RunJournal {
 		LocalState: "running", Work: protocol.Work{Goal: "implement", AgentProfile: "codex", Workspace: "isolated", Input: json.RawMessage(`{}`)},
 		WorkspacePath: `C:\work\run-1`, WorkspaceBindingKey: "binding-1", PID: 42, ProcessIdentity: "windows:42:created-at", StartedAt: time.Date(2026, 9, 3, 1, 2, 4, 0, time.UTC), LastEventSequence: 1,
 	}
+}
+
+func stoppedTestJournal(runID string, generation int64) RunJournal {
+	journal := testJournal(runID, generation)
+	journal.PID, journal.ProcessIdentity, journal.StartedAt = 0, "", time.Time{}
+	return journal
 }
 
 func transitionsForStates(journal RunJournal, states []string) []protocol.StateTransitionRequest {

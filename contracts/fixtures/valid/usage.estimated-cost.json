@@ -1,0 +1,16 @@
+{
+  "schema_version": "symmetry.usage.v1",
+  "usage_id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+  "run_id": "99999999-9999-4999-8999-999999999999",
+  "usage_key": "estimated-cost",
+  "provider": "codex",
+  "model": "implementation-default",
+  "input_tokens": 128,
+  "output_tokens": 64,
+  "cached_input_tokens": 32,
+  "cost_microusd": "123456",
+  "cost_basis": "estimated",
+  "price_version": "price-1",
+  "supersedes_id": null,
+  "observed_at": "2026-09-09T00:04:07Z"
+}

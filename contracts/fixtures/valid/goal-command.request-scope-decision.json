@@ -1,0 +1,16 @@
+{
+  "schema_version": "symmetry.goal_command.v1",
+  "mutation_id": "27272727-2727-4727-8727-272727272727",
+  "expected_version": 3,
+  "expected_revision": 1,
+  "kind": "request_decision",
+  "payload": {
+    "kind": "scope",
+    "work_item_id": "33333333-3333-4333-8333-333333333333",
+    "subject_hash": null,
+    "proposal": {
+      "kind": "add_dependency",
+      "depends_on_id": "44444444-4444-4444-8444-444444444444"
+    }
+  }
+}

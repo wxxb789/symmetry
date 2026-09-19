@@ -1,9 +1,10 @@
 # Symmetry next-stage design
 
-Status: **normative implementation target**, proposed for acceptance through this
-PR. Baseline: `36da0e253c1796c1a041e319c849fe68f23780ae`, inspected 2026-09-08.
-This PR adds design and contributor material only; no runtime capability,
-migration, adapter compatibility, or model-quality result is claimed delivered.
+Status: **normative implementation target**. Design baseline:
+`36da0e253c1796c1a041e319c849fe68f23780ae`, inspected 2026-09-08.
+Implementation is delivered incrementally through the linked goals. This index
+does not certify runtime capabilities, adapter compatibility or goal completion;
+those require the executable evidence specified by each goal and the quality policy.
 
 The owner requested fixed core design before local Codex implementation. The
 following choices are fixed; implementation can choose local names/algorithms

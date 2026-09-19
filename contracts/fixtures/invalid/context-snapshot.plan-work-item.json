@@ -1,0 +1,63 @@
+{
+  "schema_version": "symmetry.context_snapshot.v1",
+  "snapshot_id": "45454545-4545-4454-8454-454545454545",
+  "goal_id": "11111111-1111-4111-8111-111111111111",
+  "goal_revision": 1,
+  "work_item_id": "33333333-3333-4333-8333-333333333333",
+  "content_hash": "sha256:96e59c880792a715e0c5843f852c88b6ec563029e5fd0b9dd1323f2bc5d614e9",
+  "created_at": "2026-09-10T00:00:01Z",
+  "approved_goal": {
+    "goal_id": "11111111-1111-4111-8111-111111111111",
+    "revision": 1,
+    "objective": "Produce a bounded implementation plan.",
+    "authority_policy": {
+      "operator_required_for_scope_change": true,
+      "operator_required_for_completion": true,
+      "publication_allowed": false,
+      "allowed_actions": ["request_plan"]
+    }
+  },
+  "work_contract": {
+    "title": "Plan the approved change",
+    "description": "Propose bounded WorkItems under the approved repository Subject.",
+    "purpose": "plan",
+    "change_target": null,
+    "acceptance": {
+      "schema_version": "symmetry.acceptance.v1",
+      "description": "The proposal is ready for operator review.",
+      "predicates": [
+        {"id": "proposal", "kind": "operator_acceptance"}
+      ]
+    },
+    "validation_bindings": []
+  },
+  "subject": {
+    "resource_id": "22222222-2222-4222-8222-222222222222",
+    "commit": "0123456789abcdef0123456789abcdef01234567",
+    "tree_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "sources": [
+    {
+      "resource_id": "22222222-2222-4222-8222-222222222222",
+      "source_kind": "approved_goal",
+      "source_revision": "goal-revision:1",
+      "content_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "observed_at": "2026-09-10T00:00:00Z",
+      "trust": "trusted_policy",
+      "required": true,
+      "content": {"kind": "excerpt", "value": "The approved objective and authority policy."}
+    }
+  ],
+  "current_decisions": [],
+  "validated_evidence": [],
+  "failed_attempts": [],
+  "advisory_recall": [],
+  "next_action": null,
+  "size": {
+    "mandatory_bytes": 512,
+    "optional_bytes": 0,
+    "total_bytes": 512,
+    "byte_budget": 65536,
+    "token_estimate": null
+  }
+}

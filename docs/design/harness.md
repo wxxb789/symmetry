@@ -78,8 +78,12 @@ or harness is an explicit new admission, with lineage preserved.
 Default goal-managed workspaces use existing git_worktree policy. A failed run's
 only artifact cannot be cleaned up under cleanup=always; retention reason is
 durable. Cross-machine handoff requires an artifact published to an authorized
-Git location by a separately allowed action. A local commit is not globally
-reachable just because its SHA is known.
+Git location by a separately allowed action. A reachable authorized Git commit
+is a necessary safety precondition, not a promise that cross-machine handoff
+is available. The current verified scheduling path is source-machine-local;
+cross-machine handoff remains unsupported unless a separately verified adapter
+and capability path is present. A local commit is not globally reachable just
+because its SHA is known.
 
 ## Controls and permissions
 

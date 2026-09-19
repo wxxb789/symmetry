@@ -17,7 +17,7 @@ defmodule SymmetryControl.Application do
         SymmetryControl.Integrations.ProviderAccess,
         SymmetryControl.Orchestration.Scheduler,
         SymmetryControl.Orchestration.Reconciler
-      ] ++ integration_children() ++ [SymmetryControlWeb.Endpoint]
+      ] ++ goal_wakeup_children() ++ integration_children() ++ [SymmetryControlWeb.Endpoint]
 
     # See https://elixir.hexdocs.pm/Supervisor.html
     # for other strategies and supported options
@@ -29,6 +29,11 @@ defmodule SymmetryControl.Application do
     if Application.get_env(:symmetry_control, :integrations, [])[:syncer_enabled],
       do: [SymmetryControl.Integrations.Syncer],
       else: []
+  end
+
+  defp goal_wakeup_children do
+    oban = Application.fetch_env!(:symmetry_control, Oban)
+    [{Oban, oban}]
   end
 
   # Tell Phoenix to update the endpoint configuration

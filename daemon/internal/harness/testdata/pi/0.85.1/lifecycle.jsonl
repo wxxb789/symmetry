@@ -1,0 +1,10 @@
+{"type":"response","id":"state-1","command":"get_state","success":true,"data":{"sessionId":"pi-session-1","sessionFile":"C:/sessions/pi-session-1.jsonl","isStreaming":false}}
+{"type":"response","id":"prompt-1","command":"prompt","success":true}
+{"type":"agent_start"}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"working"}],"stopReason":"toolUse"}}
+{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"working"}],"stopReason":"toolUse"}],"willRetry":true}
+{"type":"auto_retry_start"}
+{"type":"agent_start"}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"{\"not\":\"a task result\"}"}],"stopReason":"stop"}}
+{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"{\"not\":\"a task result\"}"}],"stopReason":"stop"}],"willRetry":false}
+{"type":"agent_settled"}

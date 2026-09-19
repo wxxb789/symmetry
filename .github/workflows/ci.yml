@@ -8,6 +8,20 @@ permissions:
   contents: read
 
 jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm contracts:check
+
   control:
     runs-on: ubuntu-latest
     services:
@@ -51,7 +65,1136 @@ jobs:
         env:
           SYMMETRY_PROVIDER_BROKER_E2E: "1"
         run: mix test test/symmetry_control/provider_broker_e2e_test.exs
+      - name: Verify committed Goal receipts over HTTP
+        timeout-minutes: 5
+        env:
+          SYMMETRY_GOAL_RECEIPT_E2E: "1"
+        run: |
+          set -Eeuo pipefail
+          export POSTGRES_DB="symmetry_receipt_e2e_$(openssl rand -hex 16)"
+          test_output="$RUNNER_TEMP/goal-receipt-e2e.log"
+          set +e
+          mix test test/symmetry_control_web/controllers/goal_machine_controller_test.exs --only goal_receipt_e2e 2>&1 |
+            tee "$test_output"
+          pipeline_status=("${PIPESTATUS[@]}")
+          test_status=${pipeline_status[0]}
+          tee_status=${pipeline_status[1]}
+          set -e
+
+          summary_status=0
+          python3 - "$test_output" <<'PY' || summary_status=$?
+          import re
+          import sys
+
+          text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+          text = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text)
+          results = re.findall(r"(?m)^\s*Result:\s*(\d+)(?:/(\d+))?\s+passed\b([^\r\n]*)$", text)
+          reported_failures = re.findall(r"(?m)^\s*Failed:\s*(\d+)\s+tests?\b", text)
+          summaries = re.findall(r"(?m)^\s*(\d+)\s+tests?,\s*(\d+)\s+failures?\b", text)
+          if results:
+              passed_text, total_text, tail = results[-1]
+              passed = int(passed_text)
+              failed = re.search(r"(\d+)\s+failed\b", tail)
+              failures = (
+                  int(reported_failures[-1])
+                  if reported_failures
+                  else int(failed.group(1))
+                  if failed
+                  else int(total_text) - passed
+                  if total_text
+                  else 0
+              )
+              tests = int(total_text) if total_text else passed + failures
+          elif summaries:
+              tests, failures = map(int, summaries[-1])
+          else:
+              raise SystemExit("ExUnit summary was not found")
+          if tests <= 0 or failures != 0:
+              raise SystemExit(
+                  f"ExUnit selective gate expected tests>0 and failures=0; got tests={tests}, failures={failures}"
+              )
+          print(f"verified ExUnit summary: tests={tests}, failures={failures}")
+          PY
+
+          if (( test_status != 0 )); then
+            exit "$test_status"
+          fi
+          if (( tee_status != 0 )); then
+            exit "$tee_status"
+          fi
+          if (( summary_status != 0 )); then
+            exit "$summary_status"
+          fi
       - run: MIX_ENV=prod mix release --overwrite
+
+  pi-control-e2e-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:18.6-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: symmetry_control_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d symmetry_control_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    defaults:
+      run:
+        working-directory: control
+    env:
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: symmetry_control_test
+      TMPDIR: ${{ runner.temp }}/symmetry-pi-control-tmp
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize Linux Pi E2E workspace
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$TMPDIR"
+          : > "$RUNNER_TEMP/pi-control-e2e-linux.log"
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: 1.20.4
+          otp-version: 29.0.6
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.27.0
+          cache-dependency-path: daemon/go.sum
+      - run: mix deps.get
+      - name: Prepare pinned Linux Pi release
+        working-directory: ${{ runner.temp }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          release_url='https://github.com/earendil-works/pi/releases/download/v0.85.1/pi-linux-x64.tar.gz'
+          archive="$RUNNER_TEMP/pi-linux-x64.tar.gz"
+          release_dir="$RUNNER_TEMP/pi-0.85.1"
+          executable="$release_dir/pi/pi"
+          log="$RUNNER_TEMP/pi-control-e2e-linux.log"
+          provenance="$RUNNER_TEMP/pi-control-e2e-linux-provenance.txt"
+          archive_sha256='494e498f47d74d21f40b3386f6a5e921a3d49531a169cab55bbdaca0ea1fe25a'
+          executable_sha256='443bd83f30e4dbc7bac2eed9c6aa2461b9a15016fd555f48c92a0591d028c403'
+          pi_version='0.85.1'
+
+          : > "$log"
+          rm -rf "$release_dir"
+          mkdir -p "$release_dir"
+
+          {
+            printf 'source_revision=%s\n' "$GITHUB_SHA"
+            printf 'runner_os=%s\n' "$RUNNER_OS"
+            printf 'runner_arch=%s\n' "$RUNNER_ARCH"
+            printf 'pi_target=x86_64-pc-linux-gnu\n'
+            printf 'pi_release_url=%s\n' "$release_url"
+            printf 'pi_version_expected=%s\n' "$pi_version"
+            printf 'pi_archive_sha256_expected=%s\n' "$archive_sha256"
+            printf 'pi_executable_path=%s\n' "$executable"
+            printf 'pi_executable_sha256_expected=%s\n' "$executable_sha256"
+            printf 'provider_credentials=none\n'
+            printf 'upstream_scope=numeric IPv4 loopback only\n'
+            printf 'witness_scope=test-only\n'
+          } > "$provenance"
+
+          curl --fail --silent --show-error --location \
+            --retry 5 --retry-delay 2 --retry-max-time 120 --retry-all-errors \
+            "$release_url" --output "$archive" 2>&1 | tee -a "$log"
+
+          printf '%s  %s\n' "$archive_sha256" "$archive" |
+            sha256sum --check --strict 2>&1 | tee -a "$log"
+
+          tar --extract --file "$archive" --directory "$release_dir"
+          test -x "$executable"
+
+          actual_executable_sha256=$(sha256sum "$executable" | awk '{print $1}')
+          actual_pi_version=$(timeout 30s "$executable" --version)
+          test "$actual_executable_sha256" = "$executable_sha256"
+          test "$actual_pi_version" = "$pi_version"
+
+          {
+            printf 'pi_archive_sha256_actual=%s\n' "$(sha256sum "$archive" | awk '{print $1}')"
+            printf 'pi_executable_sha256_actual=%s\n' "$actual_executable_sha256"
+            printf 'pi_version_actual=%s\n' "$actual_pi_version"
+          } >> "$provenance"
+
+          printf 'verified Pi %s (%s) at %s\n' "$actual_pi_version" "$actual_executable_sha256" "$executable" |
+            tee -a "$log"
+      - name: Run Linux Pi provider bridge smoke
+        working-directory: daemon
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          log="$RUNNER_TEMP/pi-control-e2e-linux.log"
+          test_output="$RUNNER_TEMP/pi-provider-bridge-linux.json"
+          : > "$test_output"
+          set +e
+          SYMMETRY_PI_PROVIDER_ACTION_SMOKE=1 \
+          SYMMETRY_PI_NATIVE_SMOKE_EXECUTABLE="$RUNNER_TEMP/pi-0.85.1/pi/pi" \
+            go test -json -count=1 -timeout 90s ./internal/harness/pi \
+              -run '^TestNativePiProviderBridgeAction$' 2>&1 |
+            tee -a "$log" "$test_output"
+          pipeline_status=("${PIPESTATUS[@]}")
+          test_status=${pipeline_status[0]}
+          tee_status=${pipeline_status[1]}
+          set -e
+
+          summary_status=0
+          python3 - "$test_output" <<'PY' || summary_status=$?
+          import json
+          import sys
+
+          expected = "TestNativePiProviderBridgeAction"
+          runs = set()
+          passes = set()
+          failures = set()
+          with open(sys.argv[1], encoding="utf-8", errors="strict") as stream:
+              for number, line in enumerate(stream, 1):
+                  if not line.strip():
+                      continue
+                  try:
+                      event = json.loads(line)
+                  except json.JSONDecodeError as error:
+                      raise SystemExit(f"invalid go test -json line {number}: {error}")
+                  test = event.get("Test")
+                  action = event.get("Action")
+                  if test == expected and action == "run":
+                      runs.add(test)
+                  elif test == expected and action == "pass":
+                      passes.add(test)
+                  elif test == expected and action == "fail":
+                      failures.add(test)
+          if expected not in runs or expected not in passes or failures:
+              raise SystemExit(
+                  f"Pi provider bridge selective gate failed: run={sorted(runs)} pass={sorted(passes)} fail={sorted(failures)}"
+              )
+          PY
+
+          printf 'provider_bridge_smoke_exit_status=%s\n' "$test_status" >> "$RUNNER_TEMP/pi-control-e2e-linux-provenance.txt"
+          if [ "$tee_status" -ne 0 ]; then
+            printf 'provider_bridge_smoke_status=failed: tee exited with status %s\n' "$tee_status" >> "$RUNNER_TEMP/pi-control-e2e-linux-provenance.txt"
+            exit "$tee_status"
+          fi
+          if [ "$test_status" -ne 0 ]; then
+            printf 'provider_bridge_smoke_status=failed: go test exited with status %s\n' "$test_status" >> "$RUNNER_TEMP/pi-control-e2e-linux-provenance.txt"
+            exit "$test_status"
+          fi
+          if [ "$summary_status" -ne 0 ]; then
+            printf 'provider_bridge_smoke_status=failed: selective witness validation exited with status %s\n' "$summary_status" >> "$RUNNER_TEMP/pi-control-e2e-linux-provenance.txt"
+            exit "$summary_status"
+          fi
+          printf 'provider_bridge_smoke_status=passed\n' >> "$RUNNER_TEMP/pi-control-e2e-linux-provenance.txt"
+      - name: Run control format and compile
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          log="$RUNNER_TEMP/pi-control-e2e-linux.log"
+          mix format --check-formatted 2>&1 | tee -a "$log"
+          mix compile --warnings-as-errors 2>&1 | tee -a "$log"
+      - name: Run Linux Pi Control E2E
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          log="$RUNNER_TEMP/pi-control-e2e-linux.log"
+          test_output="$RUNNER_TEMP/pi-control-e2e-linux-test.log"
+          : > "$test_output"
+          set +e
+          SYMMETRY_PI_CONTROL_E2E=1 \
+          SYMMETRY_PI_CONTROL_E2E_EXECUTABLE="$RUNNER_TEMP/pi-0.85.1/pi/pi" \
+            mix test test/symmetry_control/pi_control_e2e_test.exs --include skip:true --only pi_control_e2e 2>&1 |
+            tee -a "$log" "$test_output"
+          pipeline_status=("${PIPESTATUS[@]}")
+          test_status=${pipeline_status[0]}
+          tee_status=${pipeline_status[1]}
+          set -e
+
+          summary_status=0
+          python3 - "$test_output" <<'PY' || summary_status=$?
+          import re
+          import sys
+
+          text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+          text = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text)
+          results = re.findall(r"(?m)^\s*Result:\s*(\d+)(?:/(\d+))?\s+passed\b([^\r\n]*)$", text)
+          reported_failures = re.findall(r"(?m)^\s*Failed:\s*(\d+)\s+tests?\b", text)
+          summaries = re.findall(r"(?m)^\s*(\d+)\s+tests?,\s*(\d+)\s+failures?\b", text)
+          if results:
+              passed_text, total_text, tail = results[-1]
+              passed = int(passed_text)
+              failed = re.search(r"(\d+)\s+failed\b", tail)
+              failures = (
+                  int(reported_failures[-1])
+                  if reported_failures
+                  else int(failed.group(1))
+                  if failed
+                  else int(total_text) - passed
+                  if total_text
+                  else 0
+              )
+              tests = int(total_text) if total_text else passed + failures
+          elif summaries:
+              tests, failures = map(int, summaries[-1])
+          else:
+              raise SystemExit("ExUnit summary was not found")
+          if tests <= 0 or failures != 0:
+              raise SystemExit(
+                  f"ExUnit selective gate expected tests>0 and failures=0; got tests={tests}, failures={failures}"
+              )
+          print(f"verified ExUnit summary: tests={tests}, failures={failures}")
+          PY
+
+          if (( test_status != 0 )); then
+            exit "$test_status"
+          fi
+          if (( tee_status != 0 )); then
+            exit "$tee_status"
+          fi
+          if (( summary_status != 0 )); then
+            exit "$summary_status"
+          fi
+      - name: Cleanup orphaned Pi Control processes
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          log="$RUNNER_TEMP/pi-control-e2e-linux.log"
+          if ! mkdir -p "$TMPDIR" || ! : >> "$log"; then
+            printf 'cleanup could not initialize TMPDIR or log\n' >&2
+            exit 1
+          fi
+          if ! cleanup_process_group=$(ps -o pgid= -p "$$" | awk '{$1=$1; print}') || ! [[ "$cleanup_process_group" =~ ^[0-9]+$ ]]; then
+            printf 'cleanup could not determine its own process group\n' | tee -a "$log"
+            exit 1
+          fi
+          cleanup_failed=0
+
+          # A group can outlive its leader, and zombie entries can outlive the
+          # work they represent. Observe every member and count only runnable
+          # members before declaring the owned group stopped.
+          process_group_members() {
+            local process_group="$1"
+            local process_list
+
+            if ! process_list=$(ps -eo pid=,pgid=,stat=); then
+              return 2
+            fi
+
+            awk -v process_group="$process_group" \
+              '$2 == process_group { print $1 "\t" $3 }' <<< "$process_list"
+          }
+
+          group_has_live_members() {
+            local process_group="$1"
+            local members member_pid member_state
+
+            if ! members=$(process_group_members "$process_group"); then
+              return 2
+            fi
+
+            while IFS=$'\t' read -r member_pid member_state; do
+              [ -n "$member_pid" ] || continue
+              if ! [[ "$member_pid" =~ ^[0-9]+$ ]] || [ -z "$member_state" ]; then
+                return 2
+              fi
+              case "$member_state" in
+                Z*|X*)
+                  ;;
+                *)
+                  return 0
+                  ;;
+              esac
+            done <<< "$members"
+
+            return 1
+          }
+
+          wait_for_group_exit() {
+            local process_group="$1"
+            local attempts=0
+            local status
+
+            while [ "$attempts" -lt 100 ]; do
+              group_has_live_members "$process_group"
+              status=$?
+              case "$status" in
+                0)
+                  ;;
+                1)
+                  return 0
+                  ;;
+                *)
+                  return 2
+                  ;;
+              esac
+              sleep 0.05
+              attempts=$((attempts + 1))
+            done
+
+            return 1
+          }
+
+          read_linux_process_stat() {
+            local proc_stat="$1"
+
+            python3 - "$proc_stat" <<'PY'
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          try:
+              contents = path.read_text()
+              _prefix, fields = contents.rsplit(") ", 1)
+              values = fields.split()
+              if len(values) < 20:
+                  raise ValueError("/proc stat has too few fields")
+              print(f"{values[0]}\t{values[2]}\t{values[19]}")
+          except Exception as exc:
+              print(f"error={exc}")
+              raise SystemExit(2)
+          PY
+          }
+
+          for marker in "$TMPDIR"/symmetry-pi-control-run-*/process-marker.json; do
+            [ -f "$marker" ] || continue
+            printf 'cleanup marker=%s\n' "$marker" | tee -a "$log"
+
+            if ! marker_contents=$(<"$marker"); then
+              printf 'cleanup failed to read marker=%s\n' "$marker" | tee -a "$log"
+              cleanup_failed=1
+              continue
+            fi
+            marker_state=$(printf '%s' "$marker_contents" | tr -d '[:space:]')
+            case "$marker_state" in
+              not_started)
+                printf 'cleanup marker=%s has no native process\n' "$marker" | tee -a "$log"
+                continue
+                ;;
+              starting)
+                printf 'cleanup cannot prove native process state from marker=%s\n' "$marker" | tee -a "$log"
+                cleanup_failed=1
+                continue
+                ;;
+            esac
+
+            marker_data=$(python3 - "$marker" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          try:
+              value = json.loads(path.read_text())
+          except Exception as exc:
+              print(f"error={exc}")
+              raise SystemExit(2)
+          pid = value.get("pid")
+          identity = value.get("process_identity")
+          if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0 or not isinstance(identity, str) or not identity:
+              print("error=marker must contain a positive integer pid and non-empty process_identity")
+              raise SystemExit(2)
+          print(f"{pid}\t{identity}")
+          PY
+            )
+            if [ $? -ne 0 ]; then
+              printf 'cleanup failed to parse marker=%s\n' "$marker" | tee -a "$log"
+              cleanup_failed=1
+              continue
+            fi
+
+            IFS=$'\t' read -r pid identity <<< "$marker_data"
+            if [[ "$identity" =~ ^linux:([^:[:space:]]+):([0-9]+):([0-9]+)$ ]]; then
+              identity_boot="${BASH_REMATCH[1]}"
+              identity_pid="${BASH_REMATCH[2]}"
+              identity_start="${BASH_REMATCH[3]}"
+            else
+              printf 'cleanup refused marker=%s identity=%s\n' "$marker" "$identity" | tee -a "$log"
+              cleanup_failed=1
+              continue
+            fi
+            if [ "$identity_pid" != "$pid" ]; then
+              printf 'cleanup refused marker=%s identity=%s\n' "$marker" "$identity" | tee -a "$log"
+              cleanup_failed=1
+              continue
+            fi
+
+            proc_stat="/proc/$pid/stat"
+            leader_present=0
+            if [ -r "$proc_stat" ]; then
+              if proc_data=$(read_linux_process_stat "$proc_stat"); then
+                IFS=$'\t' read -r leader_state leader_group leader_start <<< "$proc_data"
+                if ! [[ "$leader_group" =~ ^[0-9]+$ ]] || ! [[ "$leader_start" =~ ^[0-9]+$ ]] || [ -z "$leader_state" ]; then
+                  printf 'cleanup failed to inspect leader pid=%s\n' "$pid" | tee -a "$log"
+                  cleanup_failed=1
+                  continue
+                fi
+                leader_present=1
+              elif [ -r "$proc_stat" ]; then
+                printf 'cleanup failed to inspect leader pid=%s\n' "$pid" | tee -a "$log"
+                cleanup_failed=1
+                continue
+              fi
+            elif kill -0 "$pid" 2>/dev/null; then
+              printf 'cleanup failed to inspect live leader pid=%s\n' "$pid" | tee -a "$log"
+              cleanup_failed=1
+              continue
+            fi
+            if [ "$leader_present" -eq 1 ]; then
+              if ! actual_boot=$(< /proc/sys/kernel/random/boot_id); then
+                printf 'cleanup failed to read Linux boot ID for pid=%s\n' "$pid" | tee -a "$log"
+                cleanup_failed=1
+                continue
+              fi
+              if [ "$actual_boot" != "$identity_boot" ] || [ "$leader_start" != "$identity_start" ] || [ "$leader_group" != "$pid" ]; then
+                printf 'cleanup refused pid=%s due to identity mismatch\n' "$pid" | tee -a "$log"
+                cleanup_failed=1
+                continue
+              fi
+            else
+              printf 'cleanup leader pid=%s already exited; inspecting process group\n' "$pid" | tee -a "$log"
+            fi
+            if [ "$pid" = "$cleanup_process_group" ]; then
+              printf 'cleanup refused process group=%s because it owns the cleanup shell\n' "$pid" | tee -a "$log"
+              cleanup_failed=1
+              continue
+            fi
+
+            group_has_live_members "$pid"
+            group_status=$?
+            case "$group_status" in
+              0)
+                ;;
+              1)
+                printf 'cleanup group=%s has no live members (zombie/dead members ignored)\n' "$pid" | tee -a "$log"
+                continue
+                ;;
+              *)
+                printf 'cleanup failed to inspect process group=%s\n' "$pid" | tee -a "$log"
+                cleanup_failed=1
+                continue
+                ;;
+            esac
+
+            kill -TERM -- "-$pid" 2>&1 | tee -a "$log" || true
+            wait_for_group_exit "$pid"
+            wait_status=$?
+            if [ "$wait_status" -ne 0 ]; then
+              if [ "$wait_status" -eq 2 ]; then
+                printf 'cleanup could not prove process group=%s after TERM\n' "$pid" | tee -a "$log"
+                cleanup_failed=1
+              else
+                printf 'cleanup escalating process group=%s after TERM timeout\n' "$pid" | tee -a "$log"
+              fi
+              kill -KILL -- "-$pid" 2>&1 | tee -a "$log" || true
+              wait_for_group_exit "$pid"
+              kill_wait_status=$?
+            else
+              kill_wait_status=0
+            fi
+
+            if [ "$kill_wait_status" -eq 0 ]; then
+              printf 'cleanup stopped process group=%s\n' "$pid" | tee -a "$log"
+            elif [ "$kill_wait_status" -eq 2 ]; then
+              printf 'cleanup could not prove process group=%s stopped\n' "$pid" | tee -a "$log"
+              cleanup_failed=1
+            else
+              printf 'cleanup left live process-group members for group=%s\n' "$pid" | tee -a "$log"
+              cleanup_failed=1
+            fi
+          done
+
+          exit "$cleanup_failed"
+      - name: Upload Linux Pi E2E log and provenance
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-control-e2e-linux-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/pi-control-e2e-linux.log
+            ${{ runner.temp }}/pi-control-e2e-linux-provenance.txt
+
+  pi-control-e2e-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: control
+    env:
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: symmetry_control_test
+      PI_E2E_TEMP: ${{ runner.temp }}\symmetry-pi-control-tmp
+      PI_E2E_LOG: ${{ runner.temp }}\pi-control-e2e-windows.log
+      PI_E2E_PROVENANCE: ${{ runner.temp }}\pi-control-e2e-windows-provenance.txt
+      PI_E2E_POSTGRES_DATA: ${{ runner.temp }}\symmetry-pi-control-postgres
+      PI_E2E_POSTGRES_LOG: ${{ runner.temp }}\symmetry-pi-control-postgres.log
+      PI_E2E_EXECUTABLE: ${{ runner.temp }}\pi-0.85.1\pi.exe
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize Windows Pi E2E workspace
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path $env:PI_E2E_TEMP | Out-Null
+          Set-Content -LiteralPath $env:PI_E2E_LOG -Value ''
+          if ($env:POSTGRES_HOST -cne '127.0.0.1') {
+            throw "Windows Pi E2E PostgreSQL host must remain IPv4 loopback: $env:POSTGRES_HOST"
+          }
+          $portListener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+          try {
+            $portListener.Server.ExclusiveAddressUse = $true
+            $portListener.Start()
+            $postgresPort = [int]$portListener.LocalEndpoint.Port
+          }
+          finally {
+            if ($null -ne $portListener) { $portListener.Stop() }
+          }
+          if ($postgresPort -lt 1024 -or $postgresPort -gt 65535) {
+            throw "Selected PostgreSQL loopback port is invalid: $postgresPort"
+          }
+          $env:POSTGRES_PORT = [string]$postgresPort
+          "POSTGRES_PORT=$postgresPort" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $runnerImage = [Environment]::GetEnvironmentVariable('ImageVersion')
+          @(
+            "source_revision=$env:GITHUB_SHA"
+            "runner_os=$env:RUNNER_OS"
+            "runner_arch=$env:RUNNER_ARCH"
+            "runner_image=$runnerImage"
+            'pi_target=x86_64-pc-windows'
+            'pi_version_expected=0.85.1'
+            'pi_release_url=https://github.com/earendil-works/pi/releases/download/v0.85.1/pi-windows-x64.zip'
+            'pi_archive_sha256_expected=002fa95b90d521245b9985d8f168caebc237ad56e7e30b319807dee1b2e17e1c'
+            "pi_executable_path=$env:PI_E2E_EXECUTABLE"
+            'pi_executable_sha256_expected=2d4d351da30bfe23a473032e66a571b238763565aa93754e74f4a939de13f195'
+            'process_visibility=Elixir Port.open :hide for Windows native children; backup cleanup is verification-only and never invokes numeric process termination'
+            'upstream_scope=numeric IPv4 loopback only'
+            'provider_credentials=none'
+            "postgres_host=$env:POSTGRES_HOST"
+            "postgres_port=$postgresPort"
+            'postgres_port_selection=IPv4 loopback TcpListener bound to port 0'
+            'gate_status=initializing'
+          ) | Set-Content -LiteralPath $env:PI_E2E_PROVENANCE
+          Add-Content -LiteralPath $env:PI_E2E_LOG -Value "postgres_port=$postgresPort (selected from IPv4 loopback TcpListener port 0)"
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: 1.20.4
+          otp-version: 29.0.6
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.27.0
+          cache-dependency-path: daemon/go.sum
+      - name: Start isolated PostgreSQL loopback
+        id: windows_postgres
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ready = $false
+
+          try {
+            function Add-PostgresCandidate(
+              [System.Collections.Generic.List[object]] $Candidates,
+              [System.Collections.Generic.HashSet[string]] $Seen,
+              [string] $Path,
+              [string] $Source
+            ) {
+              if ([string]::IsNullOrWhiteSpace($Path)) { return }
+
+              try {
+                $normalized = [System.IO.Path]::GetFullPath($Path.Trim().Trim('"')).TrimEnd('\')
+              }
+              catch {
+                return
+              }
+
+              if (-not (Test-Path -LiteralPath $normalized -PathType Container)) { return }
+              if ($Seen.Add($normalized)) {
+                $Candidates.Add([pscustomobject]@{ Path = $normalized; Source = $Source }) | Out-Null
+              }
+            }
+
+            $candidates = [System.Collections.Generic.List[object]]::new()
+            $seenCandidates = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
+            Add-PostgresCandidate $candidates $seenCandidates $env:PGBIN 'PGBIN'
+
+            foreach ($toolName in @('pg_ctl', 'initdb', 'createdb')) {
+              foreach ($command in @(Get-Command "$toolName.exe" -All -ErrorAction SilentlyContinue)) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$command.Source)) {
+                  Add-PostgresCandidate $candidates $seenCandidates ([System.IO.Path]::GetDirectoryName($command.Source)) "PATH:$toolName"
+                }
+              }
+            }
+
+            foreach ($registryPattern in @(
+              'HKLM:\SOFTWARE\PostgreSQL\Installations\*'
+              'HKLM:\SOFTWARE\WOW6432Node\PostgreSQL\Installations\*'
+              'HKCU:\SOFTWARE\PostgreSQL\Installations\*'
+              'HKCU:\SOFTWARE\WOW6432Node\PostgreSQL\Installations\*'
+            )) {
+              foreach ($registryKey in @(Get-Item -Path $registryPattern -ErrorAction SilentlyContinue)) {
+                $properties = Get-ItemProperty -LiteralPath $registryKey.PSPath -ErrorAction SilentlyContinue
+                if ($null -ne $properties -and -not [string]::IsNullOrWhiteSpace([string]$properties.'Base Directory')) {
+                  Add-PostgresCandidate $candidates $seenCandidates (Join-Path ([string]$properties.'Base Directory') 'bin') "registry:$registryPattern"
+                }
+              }
+            }
+
+            foreach ($programFiles in @(
+              [Environment]::GetEnvironmentVariable('ProgramFiles')
+              [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+              [Environment]::GetEnvironmentVariable('ProgramW6432')
+            )) {
+              if ([string]::IsNullOrWhiteSpace($programFiles)) { continue }
+
+              $postgresRoot = Join-Path $programFiles 'PostgreSQL'
+              foreach ($versionDirectory in @(Get-ChildItem -LiteralPath $postgresRoot -Directory -ErrorAction SilentlyContinue | Sort-Object -Property Name -Descending)) {
+                Add-PostgresCandidate $candidates $seenCandidates (Join-Path $versionDirectory.FullName 'bin') "program-files:$postgresRoot"
+              }
+            }
+
+            $selected = $null
+            $candidateRecords = [System.Collections.Generic.List[string]]::new()
+            foreach ($candidate in $candidates) {
+              $candidateTools = @{
+                pg_ctl = Join-Path $candidate.Path 'pg_ctl.exe'
+                initdb = Join-Path $candidate.Path 'initdb.exe'
+                createdb = Join-Path $candidate.Path 'createdb.exe'
+              }
+              $missing = @(
+                foreach ($toolName in @('pg_ctl', 'initdb', 'createdb')) {
+                  if (-not (Test-Path -LiteralPath $candidateTools[$toolName] -PathType Leaf)) {
+                    "$toolName.exe"
+                  }
+                }
+              )
+              $candidateRecords.Add("$($candidate.Path);source=$($candidate.Source);missing=$($missing -join ',')") | Out-Null
+              if ($null -eq $selected -and $missing.Count -eq 0) {
+                $selected = [pscustomobject]@{
+                  Bin = $candidate.Path
+                  Source = $candidate.Source
+                  PgCtl = $candidateTools.pg_ctl
+                  InitDb = $candidateTools.initdb
+                  CreateDb = $candidateTools.createdb
+                }
+              }
+            }
+
+            $candidateSummary = if ($candidateRecords.Count -gt 0) { $candidateRecords -join ' | ' } else { 'none' }
+            Add-Content -LiteralPath $env:PI_E2E_LOG -Value "postgres_candidate_bins=$candidateSummary"
+            Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "postgres_candidate_bins=$candidateSummary"
+
+            if ($null -eq $selected) {
+              $message = 'Windows runner lacks a complete PostgreSQL toolset (pg_ctl.exe, initdb.exe, createdb.exe) in one discovered bin directory'
+              Add-Content -LiteralPath $env:PI_E2E_LOG -Value "postgres_status=unavailable; $message"
+              Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "postgres_status=unavailable; $message"
+              throw $message
+            }
+            else {
+              $pgCtl = $selected.PgCtl
+              $initDb = $selected.InitDb
+              $createDb = $selected.CreateDb
+              if ($env:POSTGRES_PORT -notmatch '^[0-9]+$') {
+                throw "POSTGRES_PORT is not a decimal port: $env:POSTGRES_PORT"
+              }
+              $postgresPort = [int]$env:POSTGRES_PORT
+              if ($postgresPort -lt 1024 -or $postgresPort -gt 65535) {
+                throw "POSTGRES_PORT is outside the valid TCP range: $postgresPort"
+              }
+              $env:PI_E2E_POSTGRES_BIN = $selected.Bin
+              $env:PI_E2E_POSTGRES_PGCTL = $selected.PgCtl
+              "PI_E2E_POSTGRES_BIN=$($selected.Bin)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+              "PI_E2E_POSTGRES_PGCTL=$($selected.PgCtl)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+              Add-Content -LiteralPath $env:PI_E2E_LOG -Value "postgres_bin=$($selected.Bin);source=$($selected.Source)"
+              Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "postgres_bin=$($selected.Bin);source=$($selected.Source)"
+              Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "postgres_pg_ctl=$($selected.PgCtl)"
+              Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "postgres_initdb=$($selected.InitDb)"
+              Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "postgres_createdb=$($selected.CreateDb)"
+
+              $versionOutput = & $pgCtl --version 2>&1
+              $versionStatus = $LASTEXITCODE
+              $version = ($versionOutput -join "`n").Trim()
+              if ($versionStatus -ne 0 -or [string]::IsNullOrWhiteSpace($version)) {
+                throw "pg_ctl.exe --version failed with status $versionStatus"
+              }
+              Add-Content -LiteralPath $env:PI_E2E_LOG -Value "postgres_version=$version"
+              Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "postgres_version=$version"
+
+              New-Item -ItemType Directory -Force -Path $env:PI_E2E_POSTGRES_DATA | Out-Null
+              $env:PGPASSWORD = $env:POSTGRES_PASSWORD
+
+              $initOutput = & $initDb -D $env:PI_E2E_POSTGRES_DATA -U $env:POSTGRES_USER --auth=trust --no-locale --encoding=UTF8 2>&1
+              $initStatus = $LASTEXITCODE
+              $initOutput | Tee-Object -FilePath $env:PI_E2E_LOG -Append | Out-Host
+              if ($initStatus -ne 0) {
+                throw "initdb.exe failed with status $initStatus"
+              }
+
+              $startOutput = & $pgCtl -D $env:PI_E2E_POSTGRES_DATA -o "-h $env:POSTGRES_HOST -p $env:POSTGRES_PORT" -l $env:PI_E2E_POSTGRES_LOG -w -t 30 start 2>&1
+              $startStatus = $LASTEXITCODE
+              $startOutput | Tee-Object -FilePath $env:PI_E2E_LOG -Append | Out-Host
+              if ($startStatus -ne 0) {
+                throw "pg_ctl.exe start failed with status $startStatus"
+              }
+
+              $createOutput = & $createDb -h $env:POSTGRES_HOST -p $env:POSTGRES_PORT -U $env:POSTGRES_USER $env:POSTGRES_DB 2>&1
+              $createStatus = $LASTEXITCODE
+              $createOutput | Tee-Object -FilePath $env:PI_E2E_LOG -Append | Out-Host
+              if ($createStatus -ne 0) {
+                throw "createdb.exe failed with status $createStatus"
+              }
+
+              Add-Content -LiteralPath $env:PI_E2E_LOG -Value "postgres_status=ready on $env:POSTGRES_HOST`:$env:POSTGRES_PORT"
+              Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "postgres_status=ready on $env:POSTGRES_HOST`:$env:POSTGRES_PORT"
+              $ready = $true
+            }
+          }
+          catch {
+            $message = "Windows PostgreSQL preflight failed: $($_.Exception.Message)"
+            Add-Content -LiteralPath $env:PI_E2E_LOG -Value $message
+            Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "postgres_status=unavailable; $message"
+            Write-Output "::error::$message; Pi Control E2E acceptance gate failed"
+            throw
+          }
+
+          "ready=$($ready.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+      - run: mix deps.get
+      - name: Prepare pinned Windows Pi release
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $releaseUrl = 'https://github.com/earendil-works/pi/releases/download/v0.85.1/pi-windows-x64.zip'
+          $archive = Join-Path $env:RUNNER_TEMP 'pi-windows-x64.zip'
+          $releaseDir = Split-Path -Parent $env:PI_E2E_EXECUTABLE
+          $archiveSha256 = '002fa95b90d521245b9985d8f168caebc237ad56e7e30b319807dee1b2e17e1c'
+          $executableSha256 = '2d4d351da30bfe23a473032e66a571b238763565aa93754e74f4a939de13f195'
+
+          Add-Content -LiteralPath $env:PI_E2E_LOG -Value "download_url=$releaseUrl"
+          Invoke-WebRequest -UseBasicParsing -TimeoutSec 120 -Headers @{ 'User-Agent' = 'symmetry-ci' } -Uri $releaseUrl -OutFile $archive
+
+          $actualArchiveSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+          Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "pi_archive_sha256_actual=$actualArchiveSha256"
+          if ($actualArchiveSha256 -ne $archiveSha256) {
+            throw "Pi archive SHA-256 did not equal $archiveSha256; got $actualArchiveSha256"
+          }
+
+          New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
+          Expand-Archive -LiteralPath $archive -DestinationPath $releaseDir -Force
+          if (-not (Test-Path -LiteralPath $env:PI_E2E_EXECUTABLE -PathType Leaf)) {
+            throw "Pi executable was not found at $env:PI_E2E_EXECUTABLE"
+          }
+
+          $actualExecutableSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $env:PI_E2E_EXECUTABLE).Hash.ToLowerInvariant()
+          if ($actualExecutableSha256 -ne $executableSha256) {
+            throw "Pi executable SHA-256 did not equal $executableSha256; got $actualExecutableSha256"
+          }
+
+          $versionOutput = & $env:PI_E2E_EXECUTABLE --version 2>&1
+          $versionStatus = $LASTEXITCODE
+          $actualPiVersion = ($versionOutput -join "`n").Trim()
+          if ($versionStatus -ne 0 -or $actualPiVersion -ne '0.85.1') {
+            throw "Pi --version did not equal 0.85.1; status=$versionStatus output=$actualPiVersion"
+          }
+
+          Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "pi_executable_sha256_actual=$actualExecutableSha256"
+          Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "pi_version_actual=$actualPiVersion"
+          Add-Content -LiteralPath $env:PI_E2E_LOG -Value "verified Pi $actualPiVersion ($actualExecutableSha256) at $env:PI_E2E_EXECUTABLE"
+      - name: Run Windows Pi provider bridge smoke
+        working-directory: daemon
+        shell: pwsh
+        env:
+          SYMMETRY_PI_PROVIDER_ACTION_SMOKE: "1"
+          SYMMETRY_PI_NATIVE_SMOKE_EXECUTABLE: ${{ runner.temp }}\pi-0.85.1\pi.exe
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $testOutput = & go test -json -count=1 -timeout 90s ./internal/harness/pi -run '^TestNativePiProviderBridgeAction$' 2>&1
+          $testStatus = $LASTEXITCODE
+          $testOutput | Tee-Object -FilePath $env:PI_E2E_LOG -Append | Out-Host
+          Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "provider_bridge_smoke_exit_status=$testStatus"
+
+          $runs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+          $passes = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+          $failures = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+          foreach ($line in $testOutput) {
+            $text = [string]$line
+            if ([string]::IsNullOrWhiteSpace($text)) { continue }
+            try {
+              $event = $text | ConvertFrom-Json -ErrorAction Stop
+            }
+            catch {
+              Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value 'provider_bridge_smoke_status=failed: invalid go test JSON'
+              throw "Pi provider bridge emitted invalid go test JSON"
+            }
+            if ($event.Test -ceq 'TestNativePiProviderBridgeAction') {
+              if ($event.Action -ceq 'run') { [void]$runs.Add($event.Test) }
+              elseif ($event.Action -ceq 'pass') { [void]$passes.Add($event.Test) }
+              elseif ($event.Action -ceq 'fail') { [void]$failures.Add($event.Test) }
+            }
+          }
+          if ($testStatus -ne 0) {
+            Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "provider_bridge_smoke_status=failed: go test exited with status $testStatus"
+            exit $testStatus
+          }
+          if (-not $runs.Contains('TestNativePiProviderBridgeAction') -or -not $passes.Contains('TestNativePiProviderBridgeAction') -or $failures.Count -ne 0) {
+            Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value 'provider_bridge_smoke_status=failed: selective witness missing run/pass or reported fail'
+            throw "Pi provider bridge selective gate failed: run=$($runs -join ',') pass=$($passes -join ',') fail=$($failures -join ',')"
+          }
+          Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value 'provider_bridge_smoke_status=passed'
+      - name: Run control format and compile
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $formatOutput = & mix format --check-formatted 2>&1
+          $formatStatus = $LASTEXITCODE
+          $formatOutput | Tee-Object -FilePath $env:PI_E2E_LOG -Append | Out-Host
+          if ($formatStatus -ne 0) { exit $formatStatus }
+
+          $compileOutput = & mix compile --warnings-as-errors 2>&1
+          $compileStatus = $LASTEXITCODE
+          $compileOutput | Tee-Object -FilePath $env:PI_E2E_LOG -Append | Out-Host
+          if ($compileStatus -ne 0) { exit $compileStatus }
+      - name: Run Windows Pi Control E2E
+        id: windows_pi_e2e
+        if: steps.windows_postgres.outputs.ready == 'true'
+        shell: pwsh
+        env:
+          SYMMETRY_PI_CONTROL_E2E: "1"
+          SYMMETRY_PI_CONTROL_E2E_EXECUTABLE: ${{ runner.temp }}\pi-0.85.1\pi.exe
+          TEMP: ${{ runner.temp }}\symmetry-pi-control-tmp
+          TMP: ${{ runner.temp }}\symmetry-pi-control-tmp
+          TMPDIR: ${{ runner.temp }}\symmetry-pi-control-tmp
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
+          $testOutput = & mix test test/symmetry_control/pi_control_e2e_test.exs --include skip:true --only pi_control_e2e 2>&1
+          $testStatus = $LASTEXITCODE
+          $testOutput | Tee-Object -FilePath $env:PI_E2E_LOG -Append | Out-Host
+          Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "e2e_exit_status=$testStatus"
+          $resultSummaries = @(
+            foreach ($line in $testOutput) {
+              $text = ([string]$line) -replace "`e\[[0-9;]*[A-Za-z]", ''
+              if ($text -match '^\s*Result:\s*(\d+)(?:/(\d+))?\s+passed\b(.*)$') {
+                $passedCount = [int]$Matches[1]
+                $totalCount = if ([string]::IsNullOrEmpty($Matches[2])) { $passedCount } else { [int]$Matches[2] }
+                $resultTail = $Matches[3]
+                $failureCount = $totalCount - $passedCount
+                if ($resultTail -match '(\d+)\s+failed\b') {
+                  $failureCount = [int]$Matches[1]
+                  $totalCount = $passedCount + $failureCount
+                }
+                [pscustomobject]@{
+                  Passed = $passedCount
+                  Tests = $totalCount
+                  Failures = $failureCount
+                }
+              }
+              elseif ($text -match '^\s*(\d+)\s+tests?,\s*(\d+)\s+failures?\b') {
+                [pscustomobject]@{
+                  Passed = [int]$Matches[1] - [int]$Matches[2]
+                  Tests = [int]$Matches[1]
+                  Failures = [int]$Matches[2]
+                }
+              }
+            }
+          )
+          $reportedFailures = @(
+            foreach ($line in $testOutput) {
+              $text = ([string]$line) -replace "`e\[[0-9;]*[A-Za-z]", ''
+              if ($text -match '^\s*Failed:\s*(\d+)\s+tests?\b') {
+                [int]$Matches[1]
+              }
+            }
+          )
+          if ($resultSummaries.Count -eq 0) {
+            Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value 'gate_status=failed: ExUnit summary was not found'
+            if ($testStatus -ne 0) { exit $testStatus }
+            exit 1
+          }
+          $summary = $resultSummaries[-1]
+          if ($reportedFailures.Count -gt 0) {
+            $failureCount = $reportedFailures[-1]
+            $summary = [pscustomobject]@{
+              Passed = $summary.Passed
+              Tests = [Math]::Max($summary.Tests, $summary.Passed + $failureCount)
+              Failures = $failureCount
+            }
+          }
+          Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "test_summary=tests=$($summary.Tests);failures=$($summary.Failures)"
+          if ($summary.Tests -le 0 -or $summary.Failures -ne 0) {
+            Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "gate_status=failed: invalid ExUnit summary tests=$($summary.Tests) failures=$($summary.Failures)"
+            if ($testStatus -ne 0) { exit $testStatus }
+            exit 1
+          }
+          if ($testStatus -ne 0) { exit $testStatus }
+          Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value 'gate_status=passed'
+      - name: Record Windows Pi E2E prerequisite failure diagnostics
+        if: always() && steps.windows_postgres.outcome == 'failure'
+        shell: pwsh
+        run: |
+          Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value 'gate_status=failed: PostgreSQL loopback prerequisite unavailable'
+          Add-Content -LiteralPath $env:PI_E2E_LOG -Value 'gate_status=failed: PostgreSQL loopback prerequisite unavailable'
+      - name: Verify Windows Pi Control cleanup evidence
+        if: always()
+        shell: pwsh
+        env:
+          PI_E2E_OUTCOME: ${{ steps.windows_pi_e2e.outcome }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $cleanupFailed = $false
+
+          function Write-CleanupLog([string] $Message) {
+            Add-Content -LiteralPath $env:PI_E2E_LOG -Value $Message
+            Write-Output $Message
+          }
+
+          $e2eOutcome = [string]$env:PI_E2E_OUTCOME
+          Write-CleanupLog "cleanup verification e2e_outcome=$e2eOutcome"
+          if ($e2eOutcome -ne 'success') {
+            if ([string]::IsNullOrWhiteSpace($e2eOutcome)) {
+              Write-CleanupLog 'cleanup verification failed: Windows Pi E2E outcome was unavailable'
+            }
+            else {
+              Write-CleanupLog "cleanup verification failed: Windows Pi E2E outcome was $e2eOutcome"
+            }
+            $cleanupFailed = $true
+          }
+
+          $markerPattern = Join-Path $env:PI_E2E_TEMP 'symmetry-pi-control-run-*\process-marker.json'
+          $markers = $null
+          try {
+            $markers = @(Get-ChildItem -Path $markerPattern -File -ErrorAction Stop)
+          }
+          catch {
+            Write-CleanupLog "cleanup verification could not enumerate markers: $($_.Exception.Message)"
+            $cleanupFailed = $true
+          }
+
+          if ($null -ne $markers) {
+            foreach ($marker in $markers) {
+              $markerState = 'unreadable'
+              $markerLength = 'unknown'
+              try {
+                $contents = (Get-Content -LiteralPath $marker.FullName -Raw -ErrorAction Stop).Trim()
+                $markerLength = $contents.Length
+              }
+              catch {
+                Write-CleanupLog "cleanup verification residual marker path=$($marker.FullName) chars=$markerLength state=$markerState"
+                $cleanupFailed = $true
+                continue
+              }
+
+              if ($contents -eq 'not_started') {
+                $markerState = 'not_started'
+              }
+              elseif ($contents -eq 'starting') {
+                $markerState = 'starting'
+              }
+              else {
+                try {
+                  $record = $contents | ConvertFrom-Json -ErrorAction Stop
+                  $pidProperty = $record.PSObject.Properties['pid']
+                  $identityProperty = $record.PSObject.Properties['process_identity']
+                  $pidValue = if ($null -eq $pidProperty) { $null } else { $pidProperty.Value }
+                  $identityValue = if ($null -eq $identityProperty) { $null } else { $identityProperty.Value }
+                  if (($pidValue -is [int] -or $pidValue -is [long]) -and
+                    [int64]$pidValue -gt 0 -and [int64]$pidValue -le [int]::MaxValue -and
+                    $identityValue -is [string] -and
+                    ([string]$identityValue -match ("^windows:{0}:[0-9a-fA-F]{{16}}$" -f [int64]$pidValue))) {
+                    $markerState = 'json_valid'
+                    $validatedPid = [int64]$pidValue
+                    $validatedIdentity = [string]$identityValue
+                  }
+                  else {
+                    $markerState = 'json_invalid'
+                  }
+                }
+                catch {
+                  $markerState = 'json_invalid'
+                }
+              }
+              Write-CleanupLog "cleanup verification residual marker path=$($marker.FullName) chars=$markerLength state=$markerState"
+              if ($markerState -eq 'json_valid') {
+                Write-CleanupLog "cleanup verification residual marker validated pid=$validatedPid process_identity=$validatedIdentity"
+              }
+              $cleanupFailed = $true
+            }
+
+            if ($e2eOutcome -eq 'success' -and $markers.Count -eq 0) {
+              Write-CleanupLog 'cleanup verification accepted: successful Windows Pi E2E suite-level test/on_exit containment cleanup and applicable stop-receipt assertions removed every run root; no process markers remain'
+            }
+            elseif ($markers.Count -gt 0) {
+              Write-CleanupLog "cleanup verification failed: $($markers.Count) residual process marker(s) remain"
+            }
+          }
+
+          $markerCount = if ($null -eq $markers) { 'unknown' } else { [string]$markers.Count }
+          Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value 'orphan_cleanup_verification_mode=successful_e2e_outcome_and_zero_markers;numeric_termination=disabled'
+          Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "orphan_cleanup_e2e_outcome=$e2eOutcome"
+          Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "orphan_cleanup_marker_count=$markerCount"
+          Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "orphan_cleanup_status=$(if ($cleanupFailed) { 'failed' } else { 'passed' })"
+          if ($cleanupFailed) { exit 1 }
+      - name: Stop isolated PostgreSQL
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          if ($env:POSTGRES_PORT -notmatch '^[0-9]+$') {
+            $message = "postgres_stop_status=failed: POSTGRES_PORT is not a decimal port: $env:POSTGRES_PORT"
+            Add-Content -LiteralPath $env:PI_E2E_LOG -Value $message
+            Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value $message
+            exit 1
+          }
+          $postgresPort = [int]$env:POSTGRES_PORT
+          if ($postgresPort -lt 1024 -or $postgresPort -gt 65535) {
+            $message = "postgres_stop_status=failed: POSTGRES_PORT is outside the valid TCP range: $postgresPort"
+            Add-Content -LiteralPath $env:PI_E2E_LOG -Value $message
+            Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value $message
+            exit 1
+          }
+          Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "postgres_stop_port=$env:POSTGRES_PORT"
+          $pgCtlPath = $env:PI_E2E_POSTGRES_PGCTL
+          if ([string]::IsNullOrWhiteSpace($pgCtlPath) -and -not [string]::IsNullOrWhiteSpace($env:PI_E2E_POSTGRES_BIN)) {
+            $candidate = Join-Path $env:PI_E2E_POSTGRES_BIN 'pg_ctl.exe'
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) { $pgCtlPath = $candidate }
+          }
+          $pidFile = Join-Path $env:PI_E2E_POSTGRES_DATA 'postmaster.pid'
+          if (Test-Path -LiteralPath $pidFile) {
+            if ([string]::IsNullOrWhiteSpace($pgCtlPath) -or -not (Test-Path -LiteralPath $pgCtlPath -PathType Leaf)) {
+              $message = 'postgres_stop_status=failed: postmaster.pid exists but the selected pg_ctl.exe path is unavailable'
+              Add-Content -LiteralPath $env:PI_E2E_LOG -Value $message
+              Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value $message
+              exit 1
+            }
+            $stopOutput = & $pgCtlPath -D $env:PI_E2E_POSTGRES_DATA -m fast -w -t 10 stop 2>&1
+            $stopStatus = $LASTEXITCODE
+            $stopOutput | Tee-Object -FilePath $env:PI_E2E_LOG -Append | Out-Host
+            Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "postgres_stop_status=$stopStatus"
+            if ($stopStatus -ne 0) { exit $stopStatus }
+          }
+          else {
+            Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value 'postgres_stop_status=not_running'
+          }
+      - name: Upload Windows Pi E2E log, provenance, and markers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-control-e2e-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/pi-control-e2e-windows.log
+            ${{ runner.temp }}/pi-control-e2e-windows-provenance.txt
+            ${{ runner.temp }}/symmetry-pi-control-postgres.log
+            ${{ runner.temp }}/symmetry-pi-control-tmp/symmetry-pi-control-run-*/process-marker*.json
 
   daemon:
     runs-on: ubuntu-latest
@@ -70,6 +1213,261 @@ jobs:
       - run: go test -race -count=1 -timeout 600s ./...
       - run: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...
 
+  opencode-native-synthetic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.27.0
+          cache-dependency-path: daemon/go.sum
+      - name: Prepare pinned OpenCode release
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          release_url='https://github.com/anomalyco/opencode/releases/download/v1.18.30/opencode-linux-x64-baseline.tar.gz'
+          archive="$RUNNER_TEMP/opencode-linux-x64-baseline.tar.gz"
+          release_dir="$RUNNER_TEMP/opencode-1.18.30"
+          executable="$release_dir/opencode"
+          provenance="$RUNNER_TEMP/opencode-native-synthetic-provenance.txt"
+          archive_sha256='60c92147d0d86ca606dda8a77260d3c87e0ef959eb2d8dbffb34df6d8a64e063'
+
+          rm -rf "$release_dir"
+          mkdir -p "$release_dir"
+          {
+            printf 'source_revision=%s\n' "$GITHUB_SHA"
+            printf 'release_url=%s\n' "$release_url"
+            printf 'version_expected=1.18.30\n'
+            printf 'archive_sha256_expected=%s\n' "$archive_sha256"
+            printf 'provider_credentials=none\n'
+            printf 'upstream_scope=synthetic numeric loopback only\n'
+          } > "$provenance"
+
+          curl --fail --silent --show-error --location \
+            --retry 5 --retry-delay 2 --retry-max-time 120 --retry-all-errors \
+            "$release_url" --output "$archive"
+          printf '%s  %s\n' "$archive_sha256" "$archive" | sha256sum --check --strict
+          tar --extract --file "$archive" --directory "$release_dir"
+          test -x "$executable"
+          actual_version=$(timeout 30s "$executable" --version)
+          test "$actual_version" = '1.18.30'
+          {
+            printf 'archive_sha256_actual=%s\n' "$(sha256sum "$archive" | awk '{print $1}')"
+            printf 'version_actual=%s\n' "$actual_version"
+            printf 'executable=%s\n' "$executable"
+          } >> "$provenance"
+      - name: Run bounded synthetic native tool integration
+        working-directory: daemon
+        env:
+          SYMMETRY_OPENCODE_NATIVE_SYNTHETIC_TOOL: "1"
+          SYMMETRY_OPENCODE_NATIVE_SYNTHETIC_TOOL_EXECUTABLE: ${{ runner.temp }}/opencode-1.18.30/opencode
+        run: |
+          set -Eeuo pipefail
+          test_events="$RUNNER_TEMP/opencode-native-synthetic-test.json"
+          set +e
+          go test -count=1 -timeout 180s -json ./internal/harness/opencode \
+            -run '^TestNativeSyntheticGatewayToolIntegration$' > "$test_events" 2>&1
+          test_status=$?
+          set -e
+          cat "$test_events"
+
+          summary_status=0
+          python3 - "$test_events" TestNativeSyntheticGatewayToolIntegration <<'PY' || summary_status=$?
+          import json
+          import sys
+
+          expected = set(sys.argv[2:])
+          run = set()
+          passed = set()
+          failures = []
+          for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+              try:
+                  event = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              action = event.get("Action")
+              test = event.get("Test")
+              if action == "run" and test in expected:
+                  run.add(test)
+              elif action == "pass" and test in expected:
+                  passed.add(test)
+              elif action == "fail":
+                  failures.append(test or event.get("Package") or "<package>")
+          missing_run = expected - run
+          missing_pass = expected - passed
+          if missing_run or missing_pass or failures:
+              raise SystemExit(
+                  "Go selective gate failed: "
+                  f"missing run={sorted(missing_run)}, missing pass={sorted(missing_pass)}, "
+                  f"fail events={failures}"
+              )
+          print(f"verified Go events: run={sorted(run)}, pass={sorted(passed)}")
+          PY
+
+          printf 'e2e_exit_status=%s\n' "$test_status" >> "$RUNNER_TEMP/opencode-native-synthetic-provenance.txt"
+          if (( test_status != 0 )); then
+            printf 'gate_status=failed: go test exited with status %s\n' "$test_status" >> "$RUNNER_TEMP/opencode-native-synthetic-provenance.txt"
+            exit "$test_status"
+          fi
+          if (( summary_status != 0 )); then
+            printf 'gate_status=failed: selective witness validation exited with status %s\n' "$summary_status" >> "$RUNNER_TEMP/opencode-native-synthetic-provenance.txt"
+            exit "$summary_status"
+          fi
+          printf 'gate_status=passed\n' >> "$RUNNER_TEMP/opencode-native-synthetic-provenance.txt"
+      - name: Upload OpenCode synthetic provenance
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencode-native-synthetic-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 14
+          path: ${{ runner.temp }}/opencode-native-synthetic-provenance.txt
+
+  opencode-native-synthetic-windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      OPENCODE_SYNTHETIC_LOG: ${{ runner.temp }}\opencode-native-synthetic-windows.log
+      OPENCODE_SYNTHETIC_PROVENANCE: ${{ runner.temp }}\opencode-native-synthetic-windows-provenance.txt
+      OPENCODE_SYNTHETIC_EXECUTABLE: ${{ runner.temp }}\opencode-1.18.30\opencode.exe
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize OpenCode synthetic evidence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-Content -LiteralPath $env:OPENCODE_SYNTHETIC_LOG -Value ''
+          $runnerImage = [Environment]::GetEnvironmentVariable('ImageVersion')
+          @(
+            "source_revision=$env:GITHUB_SHA"
+            "runner_os=$env:RUNNER_OS"
+            "runner_arch=$env:RUNNER_ARCH"
+            "runner_image=$runnerImage"
+            'release_url=https://github.com/anomalyco/opencode/releases/download/v1.18.30/opencode-windows-x64-baseline.zip'
+            'version_expected=1.18.30'
+            'archive_sha256_expected=8c34c5767a688e8d6c4640b4893d34f08f08b071ed0043c940dc5be17a3b9233'
+            'executable_sha256_expected=17aea6d895c750ad5008df2395c5ae85353bd03a62ffc698ec040ef6dfea4115'
+            'provider_credentials=none'
+            'upstream_scope=synthetic numeric loopback only'
+            'witness_scope=test-only'
+            'gate_status=initializing'
+          ) | Set-Content -LiteralPath $env:OPENCODE_SYNTHETIC_PROVENANCE
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.27.0
+          cache-dependency-path: daemon/go.sum
+      - name: Prepare pinned OpenCode release
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $releaseUrl = 'https://github.com/anomalyco/opencode/releases/download/v1.18.30/opencode-windows-x64-baseline.zip'
+          $archive = Join-Path $env:RUNNER_TEMP 'opencode-windows-x64-baseline.zip'
+          $releaseDir = Join-Path $env:RUNNER_TEMP 'opencode-1.18.30'
+          $archiveSha256 = '8c34c5767a688e8d6c4640b4893d34f08f08b071ed0043c940dc5be17a3b9233'
+          $executableSha256 = '17aea6d895c750ad5008df2395c5ae85353bd03a62ffc698ec040ef6dfea4115'
+
+          Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_LOG -Value "download_url=$releaseUrl"
+          Invoke-WebRequest -UseBasicParsing -TimeoutSec 120 -Headers @{ 'User-Agent' = 'symmetry-ci' } -Uri $releaseUrl -OutFile $archive
+
+          $actualArchiveSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+          Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_LOG -Value "archive_sha256_actual=$actualArchiveSha256"
+          Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_PROVENANCE -Value "archive_sha256_actual=$actualArchiveSha256"
+          if ($actualArchiveSha256 -ne $archiveSha256) {
+            throw "OpenCode archive SHA-256 did not equal $archiveSha256; got $actualArchiveSha256"
+          }
+
+          Remove-Item -LiteralPath $releaseDir -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
+          Expand-Archive -LiteralPath $archive -DestinationPath $releaseDir -Force
+          if (-not (Test-Path -LiteralPath $env:OPENCODE_SYNTHETIC_EXECUTABLE -PathType Leaf)) {
+            throw "OpenCode executable was not found at $env:OPENCODE_SYNTHETIC_EXECUTABLE"
+          }
+
+          $actualExecutableSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $env:OPENCODE_SYNTHETIC_EXECUTABLE).Hash.ToLowerInvariant()
+          Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_LOG -Value "executable_sha256_actual=$actualExecutableSha256"
+          Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_PROVENANCE -Value "executable_sha256_actual=$actualExecutableSha256"
+          if ($actualExecutableSha256 -ne $executableSha256) {
+            throw "OpenCode executable SHA-256 did not equal $executableSha256; got $actualExecutableSha256"
+          }
+
+          $versionOutput = & $env:OPENCODE_SYNTHETIC_EXECUTABLE --version 2>&1
+          $versionStatus = $LASTEXITCODE
+          $actualVersion = ($versionOutput -join "`n").Trim()
+          $versionOutput | Tee-Object -FilePath $env:OPENCODE_SYNTHETIC_LOG -Append | Out-Host
+          if ($versionStatus -ne 0 -or $actualVersion -ne '1.18.30') {
+            throw "OpenCode --version did not equal 1.18.30; status=$versionStatus output=$actualVersion"
+          }
+
+          $helpOutput = & $env:OPENCODE_SYNTHETIC_EXECUTABLE serve --help 2>&1
+          $helpStatus = $LASTEXITCODE
+          $helpText = ($helpOutput -join "`n")
+          $helpOutput | Tee-Object -FilePath $env:OPENCODE_SYNTHETIC_LOG -Append | Out-Host
+          if ($helpStatus -ne 0) {
+            throw "OpenCode serve --help failed with status $helpStatus"
+          }
+          foreach ($requiredOption in @('--hostname', '--port', '--pure')) {
+            if ($helpText -notmatch [regex]::Escape($requiredOption)) {
+              throw "OpenCode serve --help did not advertise $requiredOption"
+            }
+          }
+
+          Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_LOG -Value "version_actual=$actualVersion"
+          Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_LOG -Value 'serve_help_required_options=--hostname,--port,--pure'
+          Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_PROVENANCE -Value "version_actual=$actualVersion"
+          Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_PROVENANCE -Value 'serve_help_required_options=--hostname,--port,--pure'
+      - name: Run bounded synthetic native tool integration
+        working-directory: daemon
+        shell: pwsh
+        env:
+          SYMMETRY_OPENCODE_NATIVE_SYNTHETIC_TOOL: '1'
+          SYMMETRY_OPENCODE_NATIVE_SYNTHETIC_TOOL_EXECUTABLE: ${{ runner.temp }}\opencode-1.18.30\opencode.exe
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $testOutput = & go test -count=1 -timeout 180s -json ./internal/harness/opencode -run '^TestNativeSyntheticGatewayToolIntegration$' 2>&1
+          $testStatus = $LASTEXITCODE
+          $testOutput | Tee-Object -FilePath $env:OPENCODE_SYNTHETIC_LOG -Append | Out-Host
+          Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_PROVENANCE -Value "e2e_exit_status=$testStatus"
+          $expected = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+          $expected.Add('TestNativeSyntheticGatewayToolIntegration') | Out-Null
+          $run = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+          $passed = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+          $failed = [System.Collections.Generic.List[string]]::new()
+          foreach ($line in $testOutput) {
+            try {
+              $event = ([string]$line | ConvertFrom-Json -ErrorAction Stop)
+            }
+            catch {
+              continue
+            }
+            $testName = [string]$event.Test
+            switch ([string]$event.Action) {
+              'run' { if ($expected.Contains($testName)) { $run.Add($testName) | Out-Null } }
+              'pass' { if ($expected.Contains($testName)) { $passed.Add($testName) | Out-Null } }
+              'fail' { $failed.Add($(if ([string]::IsNullOrEmpty($testName)) { [string]$event.Package } else { $testName })) | Out-Null }
+            }
+          }
+          $missingRun = @($expected | Where-Object { -not $run.Contains($_) })
+          $missingPass = @($expected | Where-Object { -not $passed.Contains($_) })
+          Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_PROVENANCE -Value "test_events=run:$($run.Count);pass:$($passed.Count);fail:$($failed.Count)"
+          if ($missingRun.Count -gt 0 -or $missingPass.Count -gt 0 -or $failed.Count -gt 0) {
+            Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_PROVENANCE -Value "gate_status=failed: missing_run=$($missingRun -join ',');missing_pass=$($missingPass -join ',');fail_events=$($failed -join ',')"
+            if ($testStatus -ne 0) { exit $testStatus }
+            exit 1
+          }
+          if ($testStatus -ne 0) { exit $testStatus }
+          Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_PROVENANCE -Value 'gate_status=passed'
+      - name: Upload OpenCode synthetic Windows log and provenance
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencode-native-synthetic-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/opencode-native-synthetic-windows.log
+            ${{ runner.temp }}/opencode-native-synthetic-windows-provenance.txt
+
   legacy-route-audit:
     runs-on: ubuntu-latest
     steps:
@@ -78,6 +1476,7 @@ jobs:
 
   daemon-windows:
     runs-on: windows-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: daemon
@@ -89,6 +1488,42 @@ jobs:
           cache-dependency-path: daemon/go.sum
       - run: go test -count=1 -timeout 180s ./...
       - run: go build ./cmd/symmetry-daemon ./cmd/symmetry-fake-agent
+      - name: Run production Windows containment witness
+        env:
+          SYMMETRY_PRODUCTION_CONTAINMENT_WITNESS: "1"
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $testOutput = & go test -count=1 -timeout 180s -json ./internal/platform -run '^TestProductionContainmentSupervisorReplaysReceiptAfterLostRecoverResponse$' 2>&1
+          $testStatus = $LASTEXITCODE
+          $testOutput | Out-Host
+          $expected = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+          $expected.Add('TestProductionContainmentSupervisorReplaysReceiptAfterLostRecoverResponse') | Out-Null
+          $run = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+          $passed = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+          $failed = [System.Collections.Generic.List[string]]::new()
+          foreach ($line in $testOutput) {
+            try {
+              $event = ([string]$line | ConvertFrom-Json -ErrorAction Stop)
+            }
+            catch {
+              continue
+            }
+            $testName = [string]$event.Test
+            switch ([string]$event.Action) {
+              'run' { if ($expected.Contains($testName)) { $run.Add($testName) | Out-Null } }
+              'pass' { if ($expected.Contains($testName)) { $passed.Add($testName) | Out-Null } }
+              'fail' { $failed.Add($(if ([string]::IsNullOrEmpty($testName)) { [string]$event.Package } else { $testName })) | Out-Null }
+            }
+          }
+          $missingRun = @($expected | Where-Object { -not $run.Contains($_) })
+          $missingPass = @($expected | Where-Object { -not $passed.Contains($_) })
+          if ($missingRun.Count -gt 0 -or $missingPass.Count -gt 0 -or $failed.Count -gt 0) {
+            Write-Error "Go selective gate failed: missing_run=$($missingRun -join ',');missing_pass=$($missingPass -join ',');fail_events=$($failed -join ',')"
+            if ($testStatus -ne 0) { exit $testStatus }
+            exit 1
+          }
+          if ($testStatus -ne 0) { exit $testStatus }
 
   integration:
     runs-on: ubuntu-latest
@@ -119,6 +1554,8 @@ jobs:
       SYMMETRY_LEASE_DURATION_MS: "30000"
       SYMMETRY_ASSIGNMENT_DURATION_MS: "5000"
       SYMMETRY_REAPER_INTERVAL_MS: "500"
+      SYMMETRY_CONTRACTS_DIR: ${{ github.workspace }}/contracts
+      SYMMETRY_GOALS_ROLLOUT_ENABLED: "true"
     steps:
       - uses: actions/checkout@v4
       - uses: erlef/setup-beam@v1
@@ -138,6 +1575,46 @@ jobs:
           _build/prod/rel/symmetry_control/bin/symmetry_control start > /tmp/symmetry-control.log 2>&1 &
           echo "$!" > /tmp/symmetry-control.pid
           curl --fail --retry 30 --retry-delay 1 --retry-connrefused http://127.0.0.1:4000/healthz
+      - name: Verify Goal rollout and Oban worker execution
+        working-directory: control
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          control_bin=_build/prod/rel/symmetry_control/bin/symmetry_control
+          smoke_expr='
+          if Application.get_env(:symmetry_control, :goals, [])[:rollout_enabled] != true do
+            raise "Goal rollout is disabled"
+          end
+
+          unless is_pid(Oban.whereis(Oban)) do
+            raise "Oban supervisor is not running"
+          end
+
+          job = SymmetryControl.Goals.Workers.WakeupWorker.new(%{}) |> Oban.insert!()
+
+          result =
+            Enum.reduce_while(1..60, nil, fn _, _ ->
+              case SymmetryControl.Repo.get!(Oban.Job, job.id).state do
+                "completed" ->
+                  {:halt, :completed}
+
+                state when state in ["cancelled", "discarded"] ->
+                  raise "Goal Oban smoke job ended in #{state}"
+
+                _ ->
+                  Process.sleep(1000)
+                  {:cont, nil}
+              end
+            end)
+
+          unless result == :completed do
+            raise "Goal Oban smoke job did not complete"
+          end
+
+          IO.puts("goal_oban_smoke=completed")
+          '
+          "$control_bin" rpc "$smoke_expr"
       - name: Run live daemon scenarios
         working-directory: daemon
         env:
@@ -145,8 +1622,119 @@ jobs:
           SYMMETRY_E2E_URL: http://127.0.0.1:4000
           SYMMETRY_E2E_AGENT: /tmp/symmetry-fake-agent
         run: |
+          set -Eeuo pipefail
           go build -o /tmp/symmetry-fake-agent ./cmd/symmetry-fake-agent
-          go test -count=1 -timeout 180s -v ./e2e -run '^(TestCoreDaemonWorkflows|TestPollingFallbackDispatchesWithoutNotifications|TestStaleRuntimeEpochCannotOverwriteNewGeneration|TestDaemonReregistersAfterRestart|TestDaemonReconnectReclaimsExpiredRunWithNewGeneration|TestTaskInputDistinguishesOmissionFromEmptyObject|TestGitWorktreeCleanupRemovesOwnedArtifacts|TestTerminalTransitionRetriesAfterLeaseExpiry)$'
+          test_events="$RUNNER_TEMP/integration-selective-tests.json"
+          set +e
+          go test -count=1 -timeout 180s -json ./e2e -run '^(TestCoreDaemonWorkflows|TestPollingFallbackDispatchesWithoutNotifications|TestStaleRuntimeEpochCannotOverwriteNewGeneration|TestDaemonReregistersAfterRestart|TestDaemonReconnectReclaimsExpiredRunWithNewGeneration|TestTaskInputDistinguishesOmissionFromEmptyObject|TestGitWorktreeCleanupRemovesOwnedArtifacts|TestTerminalTransitionRetriesAfterLeaseExpiry)$' > "$test_events" 2>&1
+          test_status=$?
+          set -e
+          cat "$test_events"
+
+          summary_status=0
+          python3 - "$test_events" \
+            TestCoreDaemonWorkflows \
+            TestPollingFallbackDispatchesWithoutNotifications \
+            TestStaleRuntimeEpochCannotOverwriteNewGeneration \
+            TestDaemonReregistersAfterRestart \
+            TestDaemonReconnectReclaimsExpiredRunWithNewGeneration \
+            TestTaskInputDistinguishesOmissionFromEmptyObject \
+            TestGitWorktreeCleanupRemovesOwnedArtifacts \
+            TestTerminalTransitionRetriesAfterLeaseExpiry <<'PY' || summary_status=$?
+          import json
+          import sys
+
+          expected = set(sys.argv[2:])
+          if len(expected) != 8:
+              raise SystemExit(f"expected exactly 8 selective tests, got {len(expected)}")
+          run = set()
+          passed = set()
+          failures = []
+          for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+              try:
+                  event = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              action = event.get("Action")
+              test = event.get("Test")
+              if action == "run" and test in expected:
+                  run.add(test)
+              elif action == "pass" and test in expected:
+                  passed.add(test)
+              elif action == "fail":
+                  failures.append(test or event.get("Package") or "<package>")
+          missing_run = expected - run
+          missing_pass = expected - passed
+          if missing_run or missing_pass or failures:
+              raise SystemExit(
+                  "Go selective gate failed: "
+                  f"missing run={sorted(missing_run)}, missing pass={sorted(missing_pass)}, "
+                  f"fail events={failures}"
+              )
+          print(f"verified 8 Go events: run={sorted(run)}, pass={sorted(passed)}")
+          PY
+
+          if (( test_status != 0 )); then
+            exit "$test_status"
+          fi
+          if (( summary_status != 0 )); then
+            exit "$summary_status"
+          fi
+      - name: Run production daemon crash response-loss witness
+        working-directory: daemon
+        env:
+          SYMMETRY_E2E_DAEMON_CRASH_WITNESS: "1"
+          SYMMETRY_E2E: "1"
+          SYMMETRY_E2E_URL: http://127.0.0.1:4000
+          SYMMETRY_E2E_AGENT: /tmp/symmetry-fake-agent
+        run: |
+          set -Eeuo pipefail
+          test_events="$RUNNER_TEMP/daemon-crash-response-loss.json"
+          set +e
+          go test -count=1 -timeout 240s -json ./e2e -run '^TestProductionDaemonCrashResponseLossAndReconnect$' > "$test_events" 2>&1
+          test_status=$?
+          set -e
+          cat "$test_events"
+
+          summary_status=0
+          python3 - "$test_events" TestProductionDaemonCrashResponseLossAndReconnect <<'PY' || summary_status=$?
+          import json
+          import sys
+
+          expected = set(sys.argv[2:])
+          run = set()
+          passed = set()
+          failures = []
+          for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+              try:
+                  event = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              action = event.get("Action")
+              test = event.get("Test")
+              if action == "run" and test in expected:
+                  run.add(test)
+              elif action == "pass" and test in expected:
+                  passed.add(test)
+              elif action == "fail":
+                  failures.append(test or event.get("Package") or "<package>")
+          missing_run = expected - run
+          missing_pass = expected - passed
+          if missing_run or missing_pass or failures:
+              raise SystemExit(
+                  "Go selective gate failed: "
+                  f"missing run={sorted(missing_run)}, missing pass={sorted(missing_pass)}, "
+                  f"fail events={failures}"
+              )
+          print(f"verified Go events: run={sorted(run)}, pass={sorted(passed)}")
+          PY
+
+          if (( test_status != 0 )); then
+            exit "$test_status"
+          fi
+          if (( summary_status != 0 )); then
+            exit "$summary_status"
+          fi
       - name: Verify daemon recovers a live run after control restart
         working-directory: daemon
         shell: bash
@@ -223,9 +1811,61 @@ jobs:
 
           restart_control &
           restarter_pid=$!
-          go test -count=1 -timeout 150s -v ./e2e -run '^TestDaemonSurvivesControlRestart$'
+          test_events="$RUNNER_TEMP/daemon-control-restart.json"
+          set +e
+          go test -count=1 -timeout 150s -json ./e2e -run '^TestDaemonSurvivesControlRestart$' > "$test_events" 2>&1
+          test_status=$?
+          set -e
+          cat "$test_events"
+
+          summary_status=0
+          python3 - "$test_events" TestDaemonSurvivesControlRestart <<'PY' || summary_status=$?
+          import json
+          import sys
+
+          expected = set(sys.argv[2:])
+          run = set()
+          passed = set()
+          failures = []
+          for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+              try:
+                  event = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              action = event.get("Action")
+              test = event.get("Test")
+              if action == "run" and test in expected:
+                  run.add(test)
+              elif action == "pass" and test in expected:
+                  passed.add(test)
+              elif action == "fail":
+                  failures.append(test or event.get("Package") or "<package>")
+          missing_run = expected - run
+          missing_pass = expected - passed
+          if missing_run or missing_pass or failures:
+              raise SystemExit(
+                  "Go selective gate failed: "
+                  f"missing run={sorted(missing_run)}, missing pass={sorted(missing_pass)}, "
+                  f"fail events={failures}"
+              )
+          print(f"verified Go events: run={sorted(run)}, pass={sorted(passed)}")
+          PY
+
+          set +e
           wait "$restarter_pid"
+          restart_status=$?
+          set -e
           restarter_pid=
+
+          if (( test_status != 0 )); then
+            exit "$test_status"
+          fi
+          if (( summary_status != 0 )); then
+            exit "$summary_status"
+          fi
+          if (( restart_status != 0 )); then
+            exit "$restart_status"
+          fi
 
   compose:
     runs-on: ubuntu-latest

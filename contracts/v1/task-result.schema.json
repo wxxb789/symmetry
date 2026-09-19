@@ -1,0 +1,104 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "contracts/v1/task-result.schema.json",
+  "title": "Symmetry TaskResult v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "result_id",
+    "kind",
+    "summary",
+    "subject",
+    "subject_hash",
+    "evidence_refs",
+    "blocker",
+    "proposed_next_action",
+    "proposal",
+    "reason",
+    "diagnostics"
+  ],
+  "properties": {
+    "schema_version": {"const": "symmetry.task_result.v1"},
+    "result_id": {"$ref": "common.schema.json#/definitions/UUID"},
+    "kind": {"enum": ["progress", "candidate_completion", "blocked", "repair_required", "replan_required", "failed", "plan_proposed"]},
+    "summary": {"$ref": "common.schema.json#/definitions/LongText"},
+    "subject": {"$ref": "common.schema.json#/definitions/Subject"},
+    "subject_hash": {"$ref": "common.schema.json#/definitions/Sha256"},
+    "evidence_refs": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 1024,
+      "items": {"$ref": "common.schema.json#/definitions/UUID"}
+    },
+    "blocker": {
+      "oneOf": [
+        {"$ref": "common.schema.json#/definitions/Blocker"},
+        {"type": "null"}
+      ]
+    },
+    "proposed_next_action": {
+      "oneOf": [
+        {"$ref": "common.schema.json#/definitions/NextAction"},
+        {"type": "null"}
+      ]
+    },
+    "proposal": {
+      "oneOf": [
+        {"$ref": "common.schema.json#/definitions/PlanProposal"},
+        {"type": "null"}
+      ]
+    },
+    "reason": {
+      "oneOf": [
+        {"enum": ["auth", "quota", "rate_limit", "network", "unsupported_version", "resume_rejected", "handoff_unsupported", "context_overflow", "missing_result", "process_failure", "cancelled", "unknown_outcome", "no_verified_progress", "validation_failed"]},
+        {"type": "null"}
+      ]
+    },
+    "diagnostics": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {"$ref": "common.schema.json#/definitions/Diagnostic"}
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "kind": {"const": "plan_proposed"},
+        "proposal": {"$ref": "common.schema.json#/definitions/PlanProposal"},
+        "reason": {"type": "null"}
+      }
+    },
+    {
+      "properties": {
+        "kind": {
+          "enum": ["progress", "candidate_completion", "blocked", "repair_required", "replan_required"]
+        },
+        "proposal": {"type": "null"},
+        "reason": {"type": "null"}
+      }
+    },
+    {
+      "properties": {
+        "kind": {"const": "failed"},
+        "proposal": {"type": "null"},
+        "reason": {
+          "enum": [
+            "auth",
+            "quota",
+            "rate_limit",
+            "network",
+            "unsupported_version",
+            "resume_rejected",
+            "handoff_unsupported",
+            "context_overflow",
+            "missing_result",
+            "process_failure",
+            "cancelled",
+            "unknown_outcome"
+          ]
+        }
+      }
+    }
+  ]
+}

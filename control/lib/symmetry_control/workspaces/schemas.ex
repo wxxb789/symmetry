@@ -126,6 +126,9 @@ defmodule SymmetryControl.Workspaces.ProjectResource do
     has_many :provider_action_intents, SymmetryControl.Integrations.ProviderActionIntent,
       foreign_key: :resource_id
 
+    has_many :runtimes, SymmetryControl.Orchestration.Runtime,
+      foreign_key: :repository_resource_id
+
     timestamps(type: :utc_datetime_usec)
   end
 
@@ -200,6 +203,7 @@ defmodule SymmetryControl.Workspaces.ProjectResource do
     resource
     |> change()
     |> no_assoc_constraint(:provider_action_intents)
+    |> no_assoc_constraint(:runtimes)
     |> optimistic_lock(:lock_version)
   end
 
@@ -292,6 +296,8 @@ defmodule SymmetryControl.Workspaces.WorkItem do
     field :number, :integer, read_after_writes: true
     belongs_to :project, Project
     belongs_to :orchestration_task, Task
+    belongs_to :goal, SymmetryControl.Goals.Goal
+    belongs_to :baseline_dependency, __MODULE__
     belongs_to :repository_resource, ProjectResource
     belongs_to :ci_resource, ProjectResource
     belongs_to :external_work_item_resource, ProjectResource
@@ -328,6 +334,12 @@ defmodule SymmetryControl.Workspaces.WorkItem do
     field :external_ci_updated_at, :utc_datetime_usec
     field :external_change_data, :map, default: %{}
     field :external_ci_data, :map, default: %{}
+    field :admitted_revision, :integer
+    field :required, :boolean, default: true
+    field :integration, :boolean, default: false
+    field :acceptance_contract, :map
+    field :baseline_subject, :map
+    field :change_target, :map
     field :lock_version, :integer, default: 1
     timestamps(type: :utc_datetime_usec)
   end
@@ -396,7 +408,36 @@ defmodule SymmetryControl.Workspaces.WorkItem do
     |> validate_required([:status, :position])
     |> validate_number(:position, greater_than_or_equal_to: 0)
     |> validate_inclusion(:status, @statuses)
+    |> reject_goal_done_move()
     |> optimistic_lock(:lock_version)
+  end
+
+  def goal_membership_changeset(work_item, attrs) do
+    work_item
+    |> cast(attrs, [
+      :goal_id,
+      :admitted_revision,
+      :required,
+      :integration,
+      :acceptance_contract,
+      :baseline_subject,
+      :baseline_dependency_id,
+      :change_target
+    ])
+    |> validate_goal_membership()
+    |> reject_goal_membership_change()
+    |> foreign_key_constraint(:goal_id, name: :work_items_goal_project_ownership_fkey)
+    |> foreign_key_constraint(:admitted_revision, name: :work_items_goal_revision_fkey)
+    |> foreign_key_constraint(:baseline_dependency_id,
+      name: :work_items_baseline_dependency_identity_fkey
+    )
+    |> check_constraint(:goal_id, name: :work_items_goal_fields_all_or_none)
+    |> check_constraint(:admitted_revision, name: :work_items_admitted_revision_positive)
+    |> check_constraint(:integration, name: :work_items_integration_requires_goal_ownership)
+    |> check_constraint(:baseline_subject, name: :work_items_baseline_fields_check)
+    |> check_constraint(:baseline_dependency_id, name: :work_items_baseline_fields_check)
+    |> check_constraint(:change_target, name: :work_items_change_target_requires_goal_ownership)
+    |> check_constraint(:change_target, name: :work_items_change_target_shape_check)
   end
 
   defp validate_work_item(changeset), do: validate_work_item(changeset, 240, 20_000)
@@ -598,6 +639,106 @@ defmodule SymmetryControl.Workspaces.WorkItem do
   defp validate_blocker(changeset) do
     if get_field(changeset, :blocked) and blank?(get_field(changeset, :blocker)) do
       add_error(changeset, :blocker, "must be present when blocked")
+    else
+      changeset
+    end
+  end
+
+  defp validate_goal_membership(changeset) do
+    fields = [:goal_id, :admitted_revision, :acceptance_contract]
+    values = Enum.map(fields, &get_field(changeset, &1))
+    integration = get_field(changeset, :integration)
+
+    baseline_present? =
+      not is_nil(get_field(changeset, :baseline_subject)) or
+        not is_nil(get_field(changeset, :baseline_dependency_id))
+
+    change_target = get_field(changeset, :change_target)
+
+    cond do
+      Enum.all?(values, &is_nil/1) and integration == false and not baseline_present? and
+          is_nil(change_target) ->
+        changeset
+
+      Enum.all?(values, &is_nil/1) and integration != false ->
+        add_error(changeset, :integration, "requires Goal ownership")
+
+      Enum.all?(values, &is_nil/1) and baseline_present? ->
+        add_error(changeset, :baseline_subject, "requires Goal ownership")
+
+      Enum.all?(values, &is_nil/1) and not is_nil(change_target) ->
+        add_error(changeset, :change_target, "requires Goal ownership")
+
+      Enum.all?(values, &(not is_nil(&1))) ->
+        baseline_required? = is_nil(changeset.data.goal_id)
+
+        changeset
+        |> validate_number(:admitted_revision, greater_than: 0)
+        |> validate_change(:acceptance_contract, fn :acceptance_contract, value ->
+          if is_map(value), do: [], else: [acceptance_contract: "must be an object"]
+        end)
+        |> validate_change(:change_target, fn :change_target, value ->
+          if is_nil(value) or is_map(value),
+            do: [],
+            else: [change_target: "must be an object or null"]
+        end)
+        |> validate_baseline_source(baseline_required?)
+
+      true ->
+        Enum.reduce(fields, changeset, fn field, acc ->
+          if is_nil(get_field(acc, field)),
+            do: add_error(acc, field, "must be present for a Goal WorkItem"),
+            else: acc
+        end)
+    end
+  end
+
+  defp validate_baseline_source(changeset, baseline_required?) do
+    subject = get_field(changeset, :baseline_subject)
+    dependency_id = get_field(changeset, :baseline_dependency_id)
+
+    cond do
+      baseline_required? and is_nil(subject) and is_nil(dependency_id) ->
+        add_error(changeset, :baseline_subject, "requires exactly one baseline source")
+
+      not is_nil(subject) and not is_nil(dependency_id) ->
+        add_error(changeset, :baseline_subject, "cannot be combined with a dependency baseline")
+
+      not is_nil(subject) and not is_map(subject) ->
+        add_error(changeset, :baseline_subject, "must be a Subject object")
+
+      true ->
+        changeset
+    end
+  end
+
+  defp reject_goal_membership_change(changeset) do
+    fields = [
+      :goal_id,
+      :admitted_revision,
+      :required,
+      :integration,
+      :acceptance_contract,
+      :baseline_subject,
+      :baseline_dependency_id,
+      :change_target
+    ]
+
+    if not is_nil(changeset.data.goal_id) and
+         Enum.any?(fields, &Map.has_key?(changeset.changes, &1)) do
+      Enum.reduce(fields, changeset, fn field, acc ->
+        if Map.has_key?(acc.changes, field),
+          do: add_error(acc, field, "cannot be changed after Goal admission"),
+          else: acc
+      end)
+    else
+      changeset
+    end
+  end
+
+  defp reject_goal_done_move(changeset) do
+    if not is_nil(changeset.data.goal_id) and get_field(changeset, :status) == "done" do
+      add_error(changeset, :status, "is derived from an accepted Goal outcome")
     else
       changeset
     end

@@ -1,0 +1,317 @@
+// Package codex contains conservative Codex app-server boundary helpers.
+// Version/help inspection and JSON framing are not evidence that a native
+// session or control method is supported.
+package codex
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/wxxb789/symmetry/daemon/internal/execution"
+	"github.com/wxxb789/symmetry/daemon/internal/harness"
+)
+
+const (
+	DefaultExecutable     = "codex"
+	TestedVersion         = harness.CodexTestedVersion
+	TestedSchemaHash      = harness.CodexTestedSchemaHash
+	probeTimeout          = time.Second
+	probeOutputLimitBytes = 64 << 10
+)
+
+// CommandRunner is injectable so version/help probing remains deterministic in
+// unit tests and never needs a fake native event protocol.
+type CommandRunner interface {
+	Run(context.Context, string, ...string) ([]byte, error)
+}
+
+// SchemaRunner is implemented by the production command runner and by tests
+// that provide a separately captured generated schema hash. Keeping schema
+// generation out of CommandRunner prevents a directory-writing command from
+// being reduced to misleading stdout fixture bytes.
+type SchemaRunner interface {
+	SchemaDigest(context.Context, string) (string, error)
+}
+
+// boundedCommand is optional so tests can inspect invocation construction
+// without launching a native executable; the zero value uses the shared runner.
+type boundedCommand func(context.Context, execution.Invocation, int) ([]byte, error)
+
+type osCommandRunner struct {
+	boundedCommand boundedCommand
+}
+
+func (runner osCommandRunner) runBoundedCommand(ctx context.Context, invocation execution.Invocation) ([]byte, error) {
+	if runner.boundedCommand != nil {
+		return runner.boundedCommand(ctx, invocation, probeOutputLimitBytes)
+	}
+	return execution.RunBoundedCommand(ctx, invocation, probeOutputLimitBytes)
+}
+
+func runProbe(ctx context.Context, run func(context.Context) ([]byte, error)) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	probeContext, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	output, err := run(probeContext)
+	if contextErr := ctx.Err(); contextErr != nil {
+		return nil, contextErr
+	}
+	if contextErr := probeContext.Err(); contextErr != nil {
+		return nil, contextErr
+	}
+	return output, err
+}
+
+func runSchemaProbe(ctx context.Context, run func(context.Context) (string, error)) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	probeContext, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	digest, err := run(probeContext)
+	if contextErr := ctx.Err(); contextErr != nil {
+		return "", contextErr
+	}
+	if contextErr := probeContext.Err(); contextErr != nil {
+		return "", contextErr
+	}
+	return digest, err
+}
+
+func (runner osCommandRunner) Run(ctx context.Context, executable string, args ...string) ([]byte, error) {
+	environment, err := execution.BuildEnvironment()
+	if err != nil {
+		return nil, err
+	}
+	return runner.runBoundedCommand(ctx, execution.Invocation{
+		Program: executable,
+		Args:    args,
+		Env:     environment,
+	})
+}
+
+func (runner osCommandRunner) SchemaDigest(ctx context.Context, executable string) (digest string, resultErr error) {
+	if ctx == nil {
+		return "", errors.New("codex schema probe context must not be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	directory, err := os.MkdirTemp("", "symmetry-codex-schema-")
+	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return "", contextErr
+		}
+		return "", fmt.Errorf("create Codex schema temp directory: %w", err)
+	}
+	defer func() {
+		if cleanupErr := os.RemoveAll(directory); cleanupErr != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("remove Codex schema temp directory: %w", cleanupErr))
+		}
+	}()
+	environment, err := execution.BuildEnvironment()
+	if err != nil {
+		return "", err
+	}
+	output, err := runner.runBoundedCommand(ctx, execution.Invocation{
+		Program: executable,
+		Args:    []string{"app-server", "generate-json-schema", "--out", directory},
+		Env:     environment,
+	})
+	if contextErr := ctx.Err(); contextErr != nil {
+		return "", contextErr
+	}
+	if err != nil {
+		return "", fmt.Errorf("generate Codex app-server schema: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	bundle, err := os.ReadFile(filepath.Join(directory, "codex_app_server_protocol.v2.schemas.json"))
+	if contextErr := ctx.Err(); contextErr != nil {
+		return "", contextErr
+	}
+	if err != nil {
+		return "", fmt.Errorf("read generated Codex v2 schema: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	digestBytes := sha256.Sum256(bundle)
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return "sha256:" + hex.EncodeToString(digestBytes[:]), nil
+}
+
+// ProbeResult records executable/version/help and generated-schema evidence.
+// NativeSessionVerified is intentionally always false until a real credentialed
+// lifecycle test proves the exact version's methods and controls.
+type ProbeResult struct {
+	Capabilities          harness.Capabilities
+	Executable            string
+	Version               string
+	VersionKnown          bool
+	TransportKnown        bool
+	SchemaDigest          string
+	SchemaKnown           bool
+	NativeSessionVerified bool
+}
+
+// Probe inspects `codex --version`, `codex app-server --help`, and the exact
+// generated v2 schema bundle. It does not start app-server or assume that
+// help/schema output proves native lifecycle behavior. The optional runner is
+// useful for deterministic tests; the first runner is used when supplied.
+func Probe(ctx context.Context, executable string, runners ...CommandRunner) (ProbeResult, error) {
+	if ctx == nil {
+		return ProbeResult{}, errors.New("codex probe context must not be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return ProbeResult{}, err
+	}
+	if strings.TrimSpace(executable) == "" {
+		executable = DefaultExecutable
+	}
+	var runner CommandRunner = osCommandRunner{}
+	if len(runners) > 0 && runners[0] != nil {
+		runner = runners[0]
+	}
+
+	result := ProbeResult{
+		Executable: executable,
+		Capabilities: harness.UnsupportedCapabilities(
+			harness.KindCodex,
+			"Codex app-server native session behavior is unverified",
+		),
+	}
+	versionOutput, err := runProbe(ctx, func(probeContext context.Context) ([]byte, error) {
+		return runner.Run(probeContext, executable, "--version")
+	})
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return result, err
+		}
+		result.Capabilities.Unsupported[string(harness.CapabilityStart)] = "codex version probe failed"
+		return result, fmt.Errorf("%w: codex --version: %v", harness.ErrHarnessUnavailable, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	version, versionErr := harness.ValidateCodexVersionOutput(string(versionOutput))
+	result.Version = version
+	result.VersionKnown = version != ""
+	result.Capabilities.NativeVersion = version
+	result.Capabilities.VersionKnown = result.VersionKnown
+	if versionErr != nil {
+		return result, versionErr
+	}
+	helpOutput, err := runProbe(ctx, func(probeContext context.Context) ([]byte, error) {
+		return runner.Run(probeContext, executable, "app-server", "--help")
+	})
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return result, err
+		}
+		return result, fmt.Errorf("%w: codex app-server help probe failed: %v", harness.ErrNativeUnverified, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	if err := harness.ValidateCodexHelpOutput(string(helpOutput)); err != nil {
+		return result, err
+	}
+	result.TransportKnown = true
+	result.Capabilities.TransportVerified = true
+	schemaRunner, schemaCaptured := runner.(SchemaRunner)
+	digest := ""
+	if schemaCaptured {
+		digest, err = runSchemaProbe(ctx, func(probeContext context.Context) (string, error) {
+			return schemaRunner.SchemaDigest(probeContext, executable)
+		})
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return result, err
+			}
+			return result, fmt.Errorf("%w: Codex app-server schema probe failed: %v", harness.ErrNativeUnverified, err)
+		}
+	}
+	evidence, verifyErr := harness.ValidateCodexProbeEvidence(string(versionOutput), string(helpOutput), digest, schemaCaptured)
+	result.Version = evidence.Version
+	result.VersionKnown = evidence.VersionKnown
+	result.Capabilities.NativeVersion = evidence.Version
+	result.Capabilities.VersionKnown = evidence.VersionKnown
+	result.TransportKnown = evidence.TransportVerified
+	result.Capabilities.TransportVerified = evidence.TransportVerified
+	result.SchemaDigest = evidence.SchemaDigest
+	result.SchemaKnown = evidence.SchemaKnown
+	if verifyErr != nil {
+		return result, verifyErr
+	}
+	// The exact version and stdio framing are known, but no native lifecycle
+	// and control behavior is claimed. Start remains fail-closed until
+	// credentialed evidence.
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	return result, harness.ErrNativeUnverified
+}
+
+func parseVersion(output string) string {
+	return harness.ParseCodexVersion(output)
+}
+
+func hasStdioAppServerHelp(output string) bool {
+	return harness.HasCodexStdioAppServerHelp(output)
+}
+
+// Adapter is a root-seam adapter that exposes probe evidence but refuses to
+// create a native session. It exists so registry callers can use this package
+// without mistaking transport fixtures for native support.
+type Adapter struct {
+	executable               string
+	runner                   CommandRunner
+	startProcess             processStarter
+	configuredNativeModel    string
+	configuredNativeProvider string
+}
+
+// NewAdapterWithNativeModel creates an adapter with an optional explicitly
+// configured native model identity. Admission model profiles are Symmetry
+// aliases and are intentionally not forwarded as Codex model IDs; this value
+// is only for deployments that already resolved such an identity locally.
+func NewAdapterWithNativeModel(executable, nativeModel string) *Adapter {
+	return NewAdapterWithNativeIdentity(executable, nativeModel, "")
+}
+
+// NewAdapterWithNativeIdentity creates an adapter with optional exact native
+// model/provider identity resolved by local configuration. Empty values do not
+// claim a binding and preserve the default constructor behavior.
+func NewAdapterWithNativeIdentity(executable, nativeModel, nativeProvider string) *Adapter {
+	adapter := NewAdapter(executable)
+	adapter.configuredNativeModel = strings.TrimSpace(nativeModel)
+	adapter.configuredNativeProvider = strings.TrimSpace(nativeProvider)
+	return adapter
+}
+
+func (adapter *Adapter) Probe(ctx context.Context) (harness.Capabilities, error) {
+	var result ProbeResult
+	var err error
+	if adapter == nil {
+		return harness.Capabilities{}, errors.New("codex adapter is nil")
+	}
+	if adapter.runner == nil {
+		result, err = Probe(ctx, adapter.executable)
+	} else {
+		result, err = Probe(ctx, adapter.executable, adapter.runner)
+	}
+	return result.Capabilities, err
+}

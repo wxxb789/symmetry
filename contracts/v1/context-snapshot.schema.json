@@ -1,0 +1,99 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "contracts/v1/context-snapshot.schema.json",
+  "title": "Symmetry ContextSnapshot v1",
+  "$comment": "content_hash is sha256:<64 lowercase hex> over canonical UTF-8 JSON of this schema-valid snapshot with the top-level content_hash field omitted; arrays preserve order, object keys sort recursively, strings use no Unicode normalization and keep U+2028/U+2029 raw, and integers remain exact with -0 normalized to 0.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "snapshot_id",
+    "goal_id",
+    "goal_revision",
+    "work_item_id",
+    "content_hash",
+    "created_at",
+    "approved_goal",
+    "work_contract",
+    "subject",
+    "sources",
+    "current_decisions",
+    "validated_evidence",
+    "failed_attempts",
+    "advisory_recall",
+    "next_action",
+    "size"
+  ],
+  "properties": {
+    "schema_version": {"const": "symmetry.context_snapshot.v1"},
+    "snapshot_id": {"$ref": "common.schema.json#/definitions/UUID"},
+    "goal_id": {"$ref": "common.schema.json#/definitions/UUID"},
+    "goal_revision": {"$ref": "common.schema.json#/definitions/Revision"},
+    "work_item_id": {
+      "oneOf": [
+        {"$ref": "common.schema.json#/definitions/UUID"},
+        {"type": "null"}
+      ]
+    },
+    "content_hash": {"$ref": "common.schema.json#/definitions/Sha256"},
+    "created_at": {"$ref": "common.schema.json#/definitions/UtcTimestamp"},
+    "approved_goal": {"$ref": "common.schema.json#/definitions/ApprovedGoal"},
+    "work_contract": {"$ref": "common.schema.json#/definitions/WorkContract"},
+    "subject": {"$ref": "common.schema.json#/definitions/Subject"},
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 512,
+      "items": {"$ref": "common.schema.json#/definitions/ContextSource"}
+    },
+    "current_decisions": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {"$ref": "common.schema.json#/definitions/DecisionReference"}
+    },
+    "validated_evidence": {
+      "type": "array",
+      "maxItems": 1024,
+      "items": {"$ref": "common.schema.json#/definitions/EvidenceReference"}
+    },
+    "failed_attempts": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {"$ref": "common.schema.json#/definitions/FailedAttempt"}
+    },
+    "advisory_recall": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {"$ref": "common.schema.json#/definitions/ContextSource"}
+    },
+    "next_action": {
+      "oneOf": [
+        {"$ref": "common.schema.json#/definitions/NextAction"},
+        {"type": "null"}
+      ]
+    },
+    "size": {"$ref": "common.schema.json#/definitions/ContextSize"}
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "work_item_id": {"type": "null"},
+        "work_contract": {
+          "properties": {
+            "purpose": {"const": "plan"}
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "work_item_id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "work_contract": {
+          "properties": {
+            "purpose": {"enum": ["implement", "validate", "observe", "chat"]}
+          }
+        }
+      }
+    }
+  ]
+}

@@ -11,9 +11,18 @@ import (
 
 	"github.com/wxxb789/symmetry/daemon/internal/app"
 	"github.com/wxxb789/symmetry/daemon/internal/config"
+	"github.com/wxxb789/symmetry/daemon/internal/platform"
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "-containment-supervisor" {
+		if err := platform.RunContainmentSupervisor(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "run containment supervisor: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	configPath := flag.String("config", "", "path to the daemon JSON configuration")
 	flag.Parse()
 

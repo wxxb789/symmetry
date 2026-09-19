@@ -1,0 +1,15 @@
+{
+  "schema_version": "symmetry.evidence.v1",
+  "evidence_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+  "run_id": "99999999-9999-4999-8999-999999999999",
+  "evidence_key": "artifact:subject-resource-mismatch",
+  "kind": "artifact",
+  "subject": {"resource_id": "22222222-2222-4222-8222-222222222222", "commit": "0123456789abcdef0123456789abcdef01234567", "tree_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"},
+  "subject_hash": "sha256:88c59dff7c5897758b4315961f687117819b744faf505eed29babc2437828dd0",
+  "source_ref": {"kind": "artifact", "ref": "artifact-readme-1", "resource_id": "55555555-5555-4555-8555-555555555555", "commit": "0123456789abcdef0123456789abcdef01234567", "path": "README.md", "subject_hash": "sha256:88c59dff7c5897758b4315961f687117819b744faf505eed29babc2437828dd0"},
+  "source_revision": "commit:0123456789abcdef0123456789abcdef01234567",
+  "validator_profile": "artifact-validator",
+  "verdict": "passed",
+  "payload": {"predicate_id": "artifact-readme", "subject": {"resource_id": "22222222-2222-4222-8222-222222222222", "commit": "0123456789abcdef0123456789abcdef01234567", "tree_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"}, "subject_hash": "sha256:88c59dff7c5897758b4315961f687117819b744faf505eed29babc2437828dd0", "resource_id": "55555555-5555-4555-8555-555555555555", "commit": "0123456789abcdef0123456789abcdef01234567", "path": "README.md", "content_digest": "sha256:9999999999999999999999999999999999999999999999999999999999999999"},
+  "observed_at": "2026-09-08T00:05:00Z"
+}

@@ -1,0 +1,13 @@
+{
+  "schema_version": "symmetry.goal_command.v1",
+  "mutation_id": "30303030-3030-4030-8030-303030303030",
+  "expected_version": 3,
+  "expected_revision": 1,
+  "kind": "request_decision",
+  "payload": {
+    "kind": "budget",
+    "work_item_id": null,
+    "subject_hash": null,
+    "proposal": null
+  }
+}

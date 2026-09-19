@@ -63,6 +63,13 @@ runtime calls remain one attempt per cadence. Ordinary outbox delivery makes one
 attempt per cadence or local wakeup when new durable work is queued.
 Claim retries stop at `assignment_expires_at`, release their local slot, and
 wait for a later snapshot instead of pinning expired work during an outage.
+Claim and renewal responses may include additive `lease_remaining_ms`, sampled
+by Control. When present, it is strictly positive; exhausted leases and legacy
+compatible responses omit the field. A daemon subtracts request elapsed time
+and the lease safety margin before arming or extending the Windows containment
+helper; it never derives a local watchdog deadline from response receipt wall
+time. The helper rejects stale sequences and stops an armed Job when the last
+accepted deadline expires, even while the daemon owner pipe remains open.
 
 Build, migrate, and start a release:
 
@@ -331,6 +338,58 @@ go test -v ./e2e -run '^TestRealCodingAgentSmoke$'
 for the marker, restart the complete control release against the same database,
 and let the test verify that the live run keeps its generation and remains
 cancellable.
+
+### Claude Code Local Transport Smoke (Opt-In)
+
+The repository includes an opt-in Windows smoke check for Claude Code `2.1.259`:
+
+```powershell
+pwsh -NoLogo -NoProfile -File .\scripts\claude-code-local-transport-smoke.ps1 -ClaudeExecutable claude.exe
+```
+
+The provider endpoint is pinned by default to `http://localhost:4141/v1`;
+override it only with another absolute loopback `http(s)` URL whose path is
+exactly `/v1`:
+
+```powershell
+pwsh -NoLogo -NoProfile -File .\scripts\claude-code-local-transport-smoke.ps1 `
+  -ClaudeExecutable C:\Users\lhan\.local\bin\claude.exe `
+  -ProviderEndpoint http://localhost:4141/v1
+```
+
+The Claude child receives only Windows launch essentials plus these local-only
+environment values; it never inherits `SYMMETRY_*`, provider credentials, or
+other credential-like parent variables:
+
+```text
+ANTHROPIC_BASE_URL=http://localhost:4141
+ANTHROPIC_AUTH_TOKEN=<any non-empty dummy token>
+ANTHROPIC_DEFAULT_SONNET_MODEL=gpt-5.6-luna
+ANTHROPIC_DEFAULT_OPUS_MODEL=gpt-5.6-luna
+ANTHROPIC_DEFAULT_HAIKU_MODEL=gpt-5.6-luna
+ANTHROPIC_SMALL_FAST_MODEL=gpt-5.6-luna
+CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+DISABLE_TELEMETRY=1
+DISABLE_ERROR_REPORTING=1
+```
+
+The configured provider endpoint is `http://localhost:4141/v1`. Claude Code
+itself receives `ANTHROPIC_BASE_URL=http://localhost:4141` because it appends
+`/v1/messages` to that base URL. The endpoint must already be running. The
+script starts only the Claude child, uses a temporary settings file, applies a
+bounded 30-second timeout, kills the entire child process tree through a hidden
+tree-aware fallback when needed, and removes the settings file in `finally`. It
+does not start, stop, or reconfigure an existing endpoint or Codex process.
+
+The command requires Claude Code `2.1.259` and a loopback provider endpoint,
+then uses Claude's `--bare --settings ... --tools "" --permission-mode dontAsk
+--permission-prompts none --no-session-persistence --print --output-format json
+--model sonnet` invocation. Passing means only that the child exited with code
+`0` and its parsed JSON `result` field is exactly `OK`.
+This is transport-only evidence: it does not prove native session lifecycle,
+resume, cancellation, permissions, usage, provider access, or repository work.
+It must not change `ClaudeCandidateAdapter`'s `ErrNativeUnverified` result or
+the default harness registry.
 
 ## Docker Compose
 

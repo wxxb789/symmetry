@@ -1,5 +1,5 @@
 defmodule SymmetryControl.OrchestrationTest do
-  use SymmetryControl.DataCase, async: true
+  use SymmetryControl.DataCase, async: false
 
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.Machine
@@ -260,6 +260,34 @@ defmodule SymmetryControl.OrchestrationTest do
                  lease_duration_ms: invalid_duration
                )
     end
+  end
+
+  test "lease renewal never shortens an already longer durable lease" do
+    %{machine: machine} = enroll_machine()
+    runtime = register_runtime(machine, capacity: 2)
+
+    assert {:ok, _task, :created} =
+             Orchestration.submit_task(task_attrs(goal: "monotonic-lease"), "monotonic-lease",
+               now: @now
+             )
+
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+    existing_expiry = DateTime.add(@now, 90, :second)
+
+    assert {:ok, loaded_run} = Orchestration.fetch_run(run.id)
+
+    loaded_run
+    |> Ecto.Changeset.change(lease_expires_at: existing_expiry)
+    |> Repo.update!()
+
+    assert {:ok, renewed} =
+             Orchestration.renew_lease(run.id, fence,
+               now: DateTime.add(@now, 1, :second),
+               lease_duration_ms: 30_000
+             )
+
+    assert renewed.lease_expires_at == existing_expiry
   end
 
   test "fences reject stale epoch, generation, and lease" do
@@ -938,6 +966,145 @@ defmodule SymmetryControl.OrchestrationTest do
                "00000000-0000-0000-0000-000000000033",
                now: @now
              )
+
+    batch_event = %{
+      event_id: "00000000-0000-0000-0000-000000000034",
+      sequence: 2,
+      kind: "progress",
+      payload: %{"message" => "batch"},
+      occurred_at: @now
+    }
+
+    assert {:error, :idempotency_conflict} =
+             Orchestration.append_events(
+               run.id,
+               fence,
+               [batch_event, %{batch_event | payload: %{"message" => "changed"}}],
+               now: @now
+             )
+
+    assert {:ok, [first_batch_event, second_batch_event]} =
+             Orchestration.append_events(run.id, fence, [batch_event, batch_event], now: @now)
+
+    assert first_batch_event.id == second_batch_event.id
+
+    assert {:ok, [replayed_batch_event]} =
+             Orchestration.append_events(run.id, fence, [batch_event], now: @now)
+
+    assert replayed_batch_event.id == first_batch_event.id
+  end
+
+  test "fenced execution mutations serialize behind a concurrent run lock" do
+    with_dedicated_orchestration_repo(fn ->
+      {:ok, %{machine: machine, runtime: runtime, task: task, run: run, fence: fence}} =
+        Repo.transaction(fn ->
+          %{machine: machine} = enroll_machine()
+          runtime = register_runtime(machine)
+
+          {:ok, task, :created} =
+            Orchestration.submit_task(
+              task_attrs(),
+              "locked-run-#{Ecto.UUID.generate()}",
+              now: @now
+            )
+
+          {:ok, run} = Orchestration.assign_one(now: @now)
+          fence = claim(run, runtime)
+
+          %{machine: machine, runtime: runtime, task: task, run: run, fence: fence}
+        end)
+
+      fixture = %{
+        machine_id: machine.id,
+        runtime_id: runtime.id,
+        task_id: task.id,
+        run_id: run.id
+      }
+
+      try do
+        event = %{
+          event_id: Ecto.UUID.generate(),
+          sequence: 1,
+          kind: "progress",
+          payload: %{},
+          occurred_at: @now
+        }
+
+        assert_run_lock_timeout(run.id, fn ->
+          Orchestration.append_events(run.id, fence, [event], now: @now)
+        end)
+
+        assert {:ok, [_]} = Orchestration.append_events(run.id, fence, [event], now: @now)
+
+        transition_id = Ecto.UUID.generate()
+
+        assert_run_lock_timeout(run.id, fn ->
+          Orchestration.transition(
+            run.id,
+            fence,
+            "running",
+            %{},
+            transition_id,
+            now: @now
+          )
+        end)
+
+        assert {:ok, %{state: "running"}} =
+                 Orchestration.transition(run.id, fence, "running", %{}, transition_id, now: @now)
+
+        assert {:ok, %{state: "waiting_for_input"}} =
+                 Orchestration.transition(
+                   run.id,
+                   fence,
+                   "waiting_for_input",
+                   %{},
+                   Ecto.UUID.generate(),
+                   now: @now
+                 )
+
+        assert {:ok, command, :created} =
+                 Orchestration.create_command(
+                   task.id,
+                   "provide_input",
+                   %{"answer" => "yes"},
+                   "locked-run-input-#{Ecto.UUID.generate()}",
+                   now: @now
+                 )
+
+        assert {:ok, %{state: "running"}} =
+                 Orchestration.transition(
+                   run.id,
+                   fence,
+                   "running",
+                   %{},
+                   Ecto.UUID.generate(),
+                   now: @now
+                 )
+
+        acknowledgement_id = Ecto.UUID.generate()
+
+        assert_run_lock_timeout(run.id, fn ->
+          Orchestration.acknowledge_command(
+            command.id,
+            fence,
+            "applied",
+            acknowledgement_id,
+            now: @now
+          )
+        end)
+
+        assert {:ok, %{state: "acknowledged"}} =
+                 Orchestration.acknowledge_command(
+                   command.id,
+                   fence,
+                   "applied",
+                   acknowledgement_id,
+                   now: @now
+                 )
+      after
+        cleanup_dedicated_orchestration_fixture(fixture)
+      end
+    end)
   end
 
   test "events reject NUL in nested JSONB map keys and string values before persistence" do
@@ -1051,6 +1218,31 @@ defmodule SymmetryControl.OrchestrationTest do
     assert {:ok, current_run} = Orchestration.fetch_run(run.id)
     assert current_run.state == "waiting_for_input"
     assert Repo.aggregate(SymmetryControl.Orchestration.RunTransition, :count) == 2
+  end
+
+  test "runtime registration validates capabilities with the canonical schema" do
+    %{machine: machine} = enroll_machine()
+
+    assert {:error, :invalid_request} =
+             Orchestration.register_runtimes(
+               machine.id,
+               "00000000-0000-0000-0000-000000000064",
+               [
+                 %{
+                   runtime_key: "unknown-capability",
+                   name: "Unknown capability",
+                   capacity: 1,
+                   agent_profile: "codex",
+                   workspace: "primary",
+                   capabilities: %{
+                     "structured_input" => true,
+                     "provider_access" => true,
+                     "future_capability" => true
+                   }
+                 }
+               ],
+               now: @now
+             )
   end
 
   test "unknown targets and illegal lifecycle edges are invalid transitions" do
@@ -2256,5 +2448,179 @@ defmodule SymmetryControl.OrchestrationTest do
     })
     |> Ecto.Changeset.change(inserted_at: inserted_at, updated_at: inserted_at)
     |> Repo.insert!()
+  end
+
+  defp with_dedicated_orchestration_repo(test) do
+    config =
+      Application.fetch_env!(:symmetry_control, Repo)
+      |> Keyword.merge(name: nil, pool: DBConnection.ConnectionPool, pool_size: 3)
+
+    {:ok, repo} = Repo.start_link(config)
+    previous_dynamic_repo = Repo.put_dynamic_repo(repo)
+
+    try do
+      test.()
+    after
+      Repo.put_dynamic_repo(previous_dynamic_repo)
+      GenServer.stop(repo)
+    end
+  end
+
+  defp cleanup_dedicated_orchestration_fixture(fixture) do
+    run_id = Ecto.UUID.dump!(fixture.run_id)
+    task_id = Ecto.UUID.dump!(fixture.task_id)
+    runtime_id = Ecto.UUID.dump!(fixture.runtime_id)
+    machine_id = Ecto.UUID.dump!(fixture.machine_id)
+
+    Repo.query!("DELETE FROM run_events WHERE run_id = $1", [run_id])
+    Repo.query!("DELETE FROM run_transitions WHERE run_id = $1", [run_id])
+
+    Repo.query!(
+      "DELETE FROM commands WHERE run_id = $1 OR task_id = $2",
+      [run_id, task_id]
+    )
+
+    Repo.query!("DELETE FROM runs WHERE id = $1", [run_id])
+    Repo.query!("DELETE FROM tasks WHERE id = $1", [task_id])
+    Repo.query!("DELETE FROM runtimes WHERE id = $1", [runtime_id])
+    Repo.query!("DELETE FROM machines WHERE id = $1", [machine_id])
+  end
+
+  defp with_dynamic_repo(repo, fun) do
+    previous_dynamic_repo = Repo.put_dynamic_repo(repo)
+
+    try do
+      fun.()
+    after
+      Repo.put_dynamic_repo(previous_dynamic_repo)
+    end
+  end
+
+  defp assert_run_lock_timeout(run_id, operation) do
+    parent = self()
+    repo = Repo.get_dynamic_repo()
+
+    lock_holder =
+      Task.async(fn ->
+        task_boundary(fn ->
+          with_dynamic_repo(repo, fn ->
+            Repo.transaction(fn ->
+              Repo.one!(
+                from run in SymmetryControl.Orchestration.Run,
+                  where: run.id == ^run_id,
+                  lock: "FOR UPDATE"
+              )
+
+              send(parent, {:run_lock_held, self()})
+
+              receive do
+                :release_run_lock -> :ok
+              end
+            end)
+          end)
+        end)
+      end)
+
+    requester =
+      Task.async(fn ->
+        task_boundary(fn ->
+          receive do
+            :start_run_lock_request ->
+              with_dynamic_repo(repo, fn ->
+                try do
+                  Repo.transaction(fn ->
+                    Repo.query!("SET LOCAL lock_timeout = '1s'")
+                    send(parent, :run_lock_request_started)
+                    operation.()
+                  end)
+                rescue
+                  error in Postgrex.Error -> {:raised, error}
+                end
+              end)
+          after
+            15_000 -> {:task_timeout, :request_gate}
+          end
+        end)
+      end)
+
+    lock_holder_pid = lock_holder.pid
+    state_key = make_ref()
+    Process.put(state_key, %{holder_done: false, requester_done: false})
+
+    try do
+      assert_receive {:run_lock_held, ^lock_holder_pid}, 15_000
+      send(requester.pid, :start_run_lock_request)
+      assert_receive :run_lock_request_started, 15_000
+
+      requester_result = Task.yield(requester, 15_000)
+      if match?({:ok, _}, requester_result), do: mark_task_done(state_key, :requester_done)
+
+      assert {:ok, {:raised, %Postgrex.Error{postgres: %{code: :lock_not_available}}}} =
+               requester_result
+
+      send(lock_holder.pid, :release_run_lock)
+      holder_result = Task.yield(lock_holder, 15_000)
+      if match?({:ok, _}, holder_result), do: mark_task_done(state_key, :holder_done)
+
+      assert {:ok, {:ok, :ok}} = holder_result
+    after
+      state = Process.get(state_key, %{holder_done: false, requester_done: false})
+
+      unless state.requester_done do
+        drain_task(requester)
+      end
+
+      unless state.holder_done do
+        send(lock_holder.pid, :release_run_lock)
+
+        case drain_task(lock_holder) do
+          {:completed, result} ->
+            assert {:ok, :ok} = result
+
+          {:terminated, _reason} ->
+            :ok
+
+          _unfinished ->
+            :ok
+        end
+      end
+
+      Process.delete(state_key)
+    end
+  end
+
+  defp mark_task_done(state_key, task_key) do
+    state = Process.get(state_key)
+    Process.put(state_key, Map.put(state, task_key, true))
+  end
+
+  defp task_boundary(fun) do
+    try do
+      fun.()
+    rescue
+      error -> {:task_error, error}
+    catch
+      kind, reason -> {:task_exit, kind, reason}
+    end
+  end
+
+  defp drain_task(task) do
+    try do
+      case Task.yield(task, 1_000) do
+        {:ok, result} ->
+          {:completed, result}
+
+        {:exit, reason} ->
+          {:terminated, reason}
+
+        nil ->
+          case Task.shutdown(task, :brutal_kill) do
+            {:ok, result} -> {:completed, result}
+            _ -> :unfinished
+          end
+      end
+    catch
+      :exit, _reason -> :unfinished
+    end
   end
 end

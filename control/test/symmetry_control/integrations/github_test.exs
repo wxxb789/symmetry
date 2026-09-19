@@ -34,6 +34,31 @@ defmodule SymmetryControl.Integrations.GitHubTest do
     :ok
   end
 
+  test "validates a pull request URL against the exact repository without network access" do
+    resource = %{kind: "repository", external_ref: "acme/symmetry"}
+
+    assert :ok ==
+             GitHub.validate_pull_request_url(
+               nil,
+               resource,
+               "https://github.com/acme/symmetry/pull/42"
+             )
+
+    assert {:error, :invalid_pull_request_url} =
+             GitHub.validate_pull_request_url(
+               nil,
+               resource,
+               "https://github.com/acme/other/pull/42"
+             )
+
+    assert {:error, :invalid_pull_request_url} =
+             GitHub.validate_pull_request_url(
+               nil,
+               resource,
+               "https://github.com/acme/symmetry/pull/0"
+             )
+  end
+
   test "checks identity and normalizes GitHub Issues without importing pull requests" do
     HTTPStub.expect([
       %{

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/contracts"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
@@ -44,11 +45,16 @@ const (
 
 // APIError describes a non-success response returned by the control plane.
 type APIError struct {
-	StatusCode    int
-	Code          ErrorCode
-	Message       string
-	RetryAfter    time.Duration
-	retryAfterSet bool
+	StatusCode int
+	Code       ErrorCode
+	Message    string
+	// Details preserves the optional structured error details returned by the
+	// control plane, including per-item evidence batch conflict diagnostics.
+	Details                      json.RawMessage
+	EvidenceBatchConflictDetails *contracts.SymmetryEvidenceBatchConflictDetailsV1
+	RetryAfter                   time.Duration
+	retryAfterSet                bool
+	detailsDecodeErr             error
 }
 
 // ResponseError marks a malformed or unexpected successful control-plane response.
@@ -119,6 +125,337 @@ type EnrollmentClient struct {
 type OperatorClient struct {
 	*transport
 	operatorToken string
+}
+
+// GoalSessionAttachRequest is the flat request body accepted by the fenced
+// machine-only session endpoint. The run ID remains authoritative in the URL;
+// it is intentionally not duplicated in this body.
+type GoalSessionAttachRequest struct {
+	protocol.Fence
+	LocalHandleID        string  `json:"local_handle_id"`
+	BindingID            *string `json:"binding_id,omitempty"`
+	HarnessKind          string  `json:"harness_kind"`
+	HarnessVersion       string  `json:"harness_version"`
+	AdapterVersion       string  `json:"adapter_version"`
+	WorkspaceFingerprint string  `json:"workspace_fingerprint"`
+	Workspace            string  `json:"workspace"`
+	RepositoryResourceID *string `json:"repository_resource_id,omitempty"`
+}
+
+// GoalSessionReceipt is the durable session identity returned by attach. The
+// endpoint may omit optional projection fields, but never private native
+// session payloads or credentials.
+type GoalSessionReceipt struct {
+	ID                   string `json:"id"`
+	SessionID            string `json:"session_id,omitempty"`
+	AttachmentReceiptID  string `json:"attachment_receipt_id,omitempty"`
+	GoalID               string `json:"goal_id,omitempty"`
+	TaskID               string `json:"task_id,omitempty"`
+	RunID                string `json:"run_id"`
+	MachineID            string `json:"machine_id,omitempty"`
+	RuntimeID            string `json:"runtime_id,omitempty"`
+	RepositoryResourceID string `json:"repository_resource_id,omitempty"`
+	ActiveRunID          string `json:"active_run_id,omitempty"`
+	HarnessKind          string `json:"harness_kind,omitempty"`
+	HarnessVersion       string `json:"harness_version,omitempty"`
+	AdapterVersion       string `json:"adapter_version,omitempty"`
+	LocalHandleID        string `json:"local_handle_id,omitempty"`
+	BindingID            string `json:"binding_id,omitempty"`
+	WorkspaceFingerprint string `json:"workspace_fingerprint,omitempty"`
+	Workspace            string `json:"workspace,omitempty"`
+	State                string `json:"state,omitempty"`
+	LockVersion          int64  `json:"lock_version,omitempty"`
+	InsertedAt           string `json:"inserted_at,omitempty"`
+	UpdatedAt            string `json:"updated_at,omitempty"`
+}
+
+// GoalSessionStoppedRequest is the exact durable proof that one native
+// attachment stopped. The run ID is authoritative in the endpoint path.
+type GoalSessionStoppedRequest struct {
+	protocol.Fence
+	SessionID     string `json:"session_id"`
+	LocalHandleID string `json:"local_handle_id"`
+	BindingID     string `json:"binding_id"`
+}
+
+// GoalSessionStoppedReceipt is the immutable control-plane receipt for a
+// released retained session. It never includes native private identity.
+type GoalSessionStoppedReceipt struct {
+	ReceiptID     string  `json:"receipt_id"`
+	RunID         string  `json:"run_id"`
+	SessionID     string  `json:"session_id"`
+	LocalHandleID string  `json:"local_handle_id"`
+	BindingID     string  `json:"binding_id"`
+	State         string  `json:"state"`
+	ActiveRunID   *string `json:"active_run_id"`
+	LockVersion   int64   `json:"lock_version"`
+}
+
+// GoalEvidenceReceipt is the compact receipt returned after an evidence item
+// is durably inserted or replayed. ObservedAt is supplied by the server and is
+// retained for both the legacy single-item and batch response shapes.
+type GoalEvidenceReceipt struct {
+	ID          string `json:"id"`
+	RunID       string `json:"run_id"`
+	EvidenceKey string `json:"evidence_key"`
+	Kind        string `json:"kind"`
+	SubjectHash string `json:"subject_hash"`
+	Verdict     string `json:"verdict"`
+	ObservedAt  string `json:"observed_at,omitempty"`
+	Disposition string `json:"disposition,omitempty"`
+}
+
+// GoalEvidenceBatch is the local DTO for the additive evidence batch wire
+// shape. The contract package will own the generated version once the schema
+// migration lands; the client keeps this boundary explicit in the meantime.
+type GoalEvidenceBatch struct {
+	SchemaVersion string              `json:"schema_version"`
+	RunID         string              `json:"run_id"`
+	Items         []protocol.Evidence `json:"items"`
+}
+
+// GoalEvidenceBatchReceipt is the durable response for a batch append. The
+// receipt order is the request order and is validated before it is returned.
+type GoalEvidenceBatchReceipt struct {
+	RunID    string                `json:"run_id"`
+	Receipts []GoalEvidenceReceipt `json:"receipts"`
+}
+
+// GoalUsageReceipt is the compact receipt returned after usage accounting is
+// durably inserted or replayed. cost_microusd follows the wire decimal-string
+// convention and may be null when cost_basis is unknown.
+type GoalUsageReceipt struct {
+	ID           string  `json:"id"`
+	RunID        string  `json:"run_id"`
+	UsageKey     string  `json:"usage_key"`
+	CostMicrousd *string `json:"cost_microusd"`
+	CostBasis    string  `json:"cost_basis"`
+}
+
+// UnmarshalJSON accepts only the documented decimal-string form or null.
+// Unknown fields remain rejected.
+func (receipt *GoalUsageReceipt) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		ID           string          `json:"id"`
+		RunID        string          `json:"run_id"`
+		UsageKey     string          `json:"usage_key"`
+		CostMicrousd json.RawMessage `json:"cost_microusd"`
+		CostBasis    string          `json:"cost_basis"`
+	}
+	if err := decodeStrictObjectJSON(data, &wire, "id", "run_id", "usage_key", "cost_microusd", "cost_basis"); err != nil {
+		return err
+	}
+	var cost *string
+	trimmed := bytes.TrimSpace(wire.CostMicrousd)
+	if !bytes.Equal(trimmed, []byte("null")) {
+		var text string
+		if err := json.Unmarshal(trimmed, &text); err != nil {
+			return errors.New("cost_microusd must be a decimal string or null")
+		}
+		if err := protocol.ValidateMicroUSD(text); err != nil {
+			return err
+		}
+		cost = &text
+	}
+	*receipt = GoalUsageReceipt{ID: wire.ID, RunID: wire.RunID, UsageKey: wire.UsageKey, CostMicrousd: cost, CostBasis: wire.CostBasis}
+	return nil
+}
+
+// ApprovedGoal is the authority-bearing portion of a canonical context
+// snapshot. It contains policy data, but no executable command or credential.
+type ApprovedGoal struct {
+	GoalID          string          `json:"goal_id"`
+	Revision        int64           `json:"revision"`
+	Objective       string          `json:"objective"`
+	AuthorityPolicy AuthorityPolicy `json:"authority_policy"`
+}
+
+// AuthorityPolicy describes the operator boundaries carried by an approved
+// goal. It is descriptive context; it never grants authority to the daemon.
+type AuthorityPolicy struct {
+	OperatorRequiredForScopeChange bool     `json:"operator_required_for_scope_change"`
+	OperatorRequiredForCompletion  bool     `json:"operator_required_for_completion"`
+	PublicationAllowed             bool     `json:"publication_allowed"`
+	AllowedActions                 []string `json:"allowed_actions"`
+}
+
+// AcceptancePredicate is one typed acceptance condition in a work contract.
+// The populated identity fields depend on Kind.
+type AcceptancePredicate struct {
+	ID               string `json:"id"`
+	Kind             string `json:"kind"`
+	ValidatorProfile string `json:"validator_profile,omitempty"`
+	ResourceID       string `json:"resource_id,omitempty"`
+	Path             string `json:"path,omitempty"`
+	ReviewerProfile  string `json:"reviewer_profile,omitempty"`
+	present          map[string]struct{}
+}
+
+// AcceptanceContract is the versioned predicate contract embedded in a work
+// contract.
+type AcceptanceContract struct {
+	SchemaVersion string                `json:"schema_version"`
+	Description   string                `json:"description"`
+	Predicates    []AcceptancePredicate `json:"predicates"`
+}
+
+// WorkContract identifies the bounded work and its acceptance rules.
+type WorkContract struct {
+	Title              string                         `json:"title"`
+	Description        string                         `json:"description"`
+	Purpose            string                         `json:"purpose"`
+	ChangeTarget       *protocol.ProviderChangeTarget `json:"change_target"`
+	Acceptance         AcceptanceContract             `json:"acceptance"`
+	ValidationBindings []ValidationBinding            `json:"validation_bindings"`
+}
+
+// ValidationBinding freezes one server-resolved validation profile and the
+// runtimes authorized to produce its evidence for this context snapshot.
+type ValidationBinding struct {
+	ProfileName       string   `json:"profile_name"`
+	Kind              string   `json:"kind"`
+	ProfileDigest     string   `json:"profile_digest"`
+	AllowedRuntimeIDs []string `json:"allowed_runtime_ids"`
+}
+
+// ContextContent is the safe, typed content carried by a context source.
+type ContextContent struct {
+	Kind  string `json:"kind"`
+	Value string `json:"value"`
+}
+
+// ContextSource identifies one bounded source included in a snapshot.
+type ContextSource struct {
+	ResourceID     string         `json:"resource_id"`
+	SourceKind     string         `json:"source_kind"`
+	SourceRevision string         `json:"source_revision"`
+	ContentHash    string         `json:"content_hash"`
+	ObservedAt     string         `json:"observed_at"`
+	Trust          string         `json:"trust"`
+	Required       bool           `json:"required"`
+	Content        ContextContent `json:"content"`
+	Stale          *bool          `json:"stale,omitempty"`
+	present        map[string]struct{}
+}
+
+// DecisionReference is a compact reference to a durable decision.
+type DecisionReference struct {
+	DecisionID string `json:"decision_id"`
+	ActionHash string `json:"action_hash"`
+	State      string `json:"state"`
+}
+
+// EvidenceReference is a compact reference to validated evidence.
+type EvidenceReference struct {
+	EvidenceID  string `json:"evidence_id"`
+	PredicateID string `json:"predicate_id"`
+	SubjectHash string `json:"subject_hash"`
+	Verdict     string `json:"verdict"`
+}
+
+// FailedAttempt records a prior execution attempt without exposing native
+// transcripts or local session identifiers.
+type FailedAttempt struct {
+	TaskID     string  `json:"task_id"`
+	RunID      *string `json:"run_id"`
+	Reason     string  `json:"reason"`
+	ObservedAt string  `json:"observed_at"`
+}
+
+// Blocker is the typed blocker used by a wait next action.
+type Blocker struct {
+	Kind        string   `json:"kind"`
+	DecisionID  string   `json:"decision_id,omitempty"`
+	ResourceID  string   `json:"resource_id,omitempty"`
+	ExternalRef string   `json:"external_ref,omitempty"`
+	NextCheckAt string   `json:"next_check_at,omitempty"`
+	WorkItemIDs []string `json:"work_item_ids,omitempty"`
+	Code        string   `json:"code,omitempty"`
+	Detail      string   `json:"detail,omitempty"`
+	present     map[string]struct{}
+}
+
+// NextAction is a typed, non-authoritative follow-up proposal.
+type NextAction struct {
+	Kind            string   `json:"kind"`
+	ProducingTaskID string   `json:"producing_task_id,omitempty"`
+	WorkItemID      string   `json:"work_item_id,omitempty"`
+	Reason          string   `json:"reason,omitempty"`
+	ResourceID      string   `json:"resource_id,omitempty"`
+	ExternalRef     string   `json:"external_ref,omitempty"`
+	Blocker         *Blocker `json:"blocker,omitempty"`
+	present         map[string]struct{}
+}
+
+// ContextSize reports the bounded size accounting for a canonical snapshot.
+type ContextSize struct {
+	MandatoryBytes int64  `json:"mandatory_bytes"`
+	OptionalBytes  int64  `json:"optional_bytes"`
+	TotalBytes     int64  `json:"total_bytes"`
+	ByteBudget     int64  `json:"byte_budget"`
+	TokenEstimate  *int64 `json:"token_estimate"`
+}
+
+// GoalContextSnapshot is the canonical symmetry.context_snapshot.v1 payload
+// returned to the owning machine. It is deliberately modeled as typed data so
+// additive or legacy DB projections cannot be mistaken for canonical context.
+type GoalContextSnapshot struct {
+	SchemaVersion string `json:"schema_version"`
+	SnapshotID    string `json:"snapshot_id"`
+	GoalID        string `json:"goal_id"`
+	GoalRevision  int64  `json:"goal_revision"`
+	// WorkItemID is nil only for a planning context. Keep the nullable wire
+	// identity explicit instead of treating an empty string as absence.
+	WorkItemID        *string             `json:"work_item_id"`
+	ContentHash       string              `json:"content_hash"`
+	CreatedAt         string              `json:"created_at"`
+	ApprovedGoal      ApprovedGoal        `json:"approved_goal"`
+	WorkContract      WorkContract        `json:"work_contract"`
+	Subject           protocol.Subject    `json:"subject"`
+	Sources           []ContextSource     `json:"sources"`
+	CurrentDecisions  []DecisionReference `json:"current_decisions"`
+	ValidatedEvidence []EvidenceReference `json:"validated_evidence"`
+	FailedAttempts    []FailedAttempt     `json:"failed_attempts"`
+	AdvisoryRecall    []ContextSource     `json:"advisory_recall"`
+	NextAction        *NextAction         `json:"next_action"`
+	Size              ContextSize         `json:"size"`
+}
+
+// GoalRunContext binds the sanitized context to the current run/session.
+type GoalRunContext struct {
+	GoalID     string              `json:"goal_id"`
+	TaskID     string              `json:"task_id"`
+	RunID      string              `json:"run_id"`
+	Generation int64               `json:"generation"`
+	SessionID  *string             `json:"session_id"`
+	Context    GoalContextSnapshot `json:"context"`
+}
+
+// ProviderActionOutcome is the control-plane result classification. Control
+// returns ordinary successful action results without an outcome field; an
+// explicit unknown outcome is returned only after the durable broker has
+// retained an unresolved external effect.
+type ProviderActionOutcome string
+
+const (
+	ProviderActionSucceeded ProviderActionOutcome = "succeeded"
+	ProviderActionUnknown   ProviderActionOutcome = "unknown"
+)
+
+// ProviderActionResponse preserves the exact Control result while exposing
+// only the fields whose shape is part of the provider-action contract. Nested
+// provider-owned payloads remain opaque JSON and are never interpreted here.
+type ProviderActionResponse struct {
+	Outcome        ProviderActionOutcome
+	Result         json.RawMessage
+	Operation      string
+	ResourceID     string
+	WorkItemID     string
+	Projected      bool
+	Delivery       json.RawMessage
+	Resource       json.RawMessage
+	ReadbackStatus string
+	Readback       json.RawMessage
 }
 
 // NewClient creates a machine-authenticated client. baseURL is the API prefix,
@@ -224,6 +561,9 @@ func (client *Client) RegisterSession(ctx context.Context, machineID, daemonInst
 	if err := validatePathID("daemon instance ID", daemonInstanceID); err != nil {
 		return protocol.SessionRegistrationResponse{}, err
 	}
+	if err := request.Validate(); err != nil {
+		return protocol.SessionRegistrationResponse{}, fmt.Errorf("validate session registration: %w", err)
+	}
 	var response protocol.SessionRegistrationResponse
 	endpoint := "v1/machines/" + machineID + "/sessions/" + daemonInstanceID
 	if err := client.machineRequest(ctx, http.MethodPut, endpoint, nil, "", request, &response); err != nil {
@@ -290,6 +630,54 @@ func (client *Client) Claim(ctx context.Context, runID string, request protocol.
 	return response, nil
 }
 
+// ExecuteProviderAction sends exactly one claim-scoped provider action to
+// Control. The provider token is used only for this request; the machine
+// token and Idempotency-Key are deliberately not sent. Transport failures and
+// 5xx API errors remain errors for the caller to classify as unknown because
+// the external effect may have occurred.
+func (client *Client) ExecuteProviderAction(
+	ctx context.Context,
+	access protocol.ProviderAccess,
+	actionID string,
+	resourceID string,
+	operation string,
+	input json.RawMessage,
+) (ProviderActionResponse, error) {
+	endpoint, err := validateProviderActionRequest(access, actionID, resourceID, operation, input)
+	if err != nil {
+		return ProviderActionResponse{}, err
+	}
+
+	body := struct {
+		ActionID   string          `json:"action_id"`
+		ResourceID string          `json:"resource_id"`
+		Operation  string          `json:"operation"`
+		Input      json.RawMessage `json:"input"`
+	}{
+		ActionID:   actionID,
+		ResourceID: resourceID,
+		Operation:  operation,
+		Input:      append(json.RawMessage(nil), bytes.TrimSpace(input)...),
+	}
+
+	statusCode, responseBody, oversized, requestErr := client.perform(ctx, http.MethodPost, endpoint, nil, access.Token, "", body)
+	if requestErr != nil {
+		return ProviderActionResponse{}, redactProviderActionError(requestErr, access.Token)
+	}
+	if oversized {
+		return ProviderActionResponse{}, responseErrorf("provider action response body exceeds %d bytes", client.maxResponseBytes)
+	}
+	if statusCode != http.StatusOK {
+		return ProviderActionResponse{}, responseErrorf("invalid provider action response: expected HTTP 200 OK, got HTTP %d", statusCode)
+	}
+
+	response, decodeErr := decodeProviderActionResponse(responseBody, actionID, resourceID, operation)
+	if decodeErr != nil {
+		return ProviderActionResponse{}, responseErrorf("decode strict provider action response: %w", decodeErr)
+	}
+	return response, nil
+}
+
 // RenewLease extends an unexpired lease with the caller-supplied fence.
 func (client *Client) RenewLease(ctx context.Context, runID string, request protocol.LeaseHeartbeatRequest) (protocol.LeaseHeartbeatResponse, error) {
 	if err := validatePathID("run ID", runID); err != nil {
@@ -311,6 +699,214 @@ func (client *Client) AppendEvents(ctx context.Context, runID string, request pr
 		return err
 	}
 	return client.requestNoContent(ctx, http.MethodPost, "v1/runs/"+runID+"/events", nil, client.machineToken, "", request)
+}
+
+// AttachHarnessSession attaches a daemon-local native session to a fenced run.
+// The response is decoded with the Goal strict decoder; legacy endpoint
+// decoders remain tolerant of additive fields.
+func (client *Client) AttachHarnessSession(ctx context.Context, runID string, request GoalSessionAttachRequest) (GoalSessionReceipt, error) {
+	if err := validateGoalSessionAttach(runID, request); err != nil {
+		return GoalSessionReceipt{}, err
+	}
+	body := request
+	var wire struct {
+		Session GoalSessionReceipt `json:"session"`
+	}
+	statusCode, err := client.requestGoalWithStatus(ctx, http.MethodPut, "v1/runs/"+runID+"/session", nil, "", body, &wire)
+	if err != nil {
+		return GoalSessionReceipt{}, err
+	}
+	if statusCode != http.StatusOK && statusCode != http.StatusCreated {
+		return GoalSessionReceipt{}, responseErrorf("invalid attach session response: expected HTTP 200 or 201, got HTTP %d", statusCode)
+	}
+	if err := validateGoalSessionReceipt(runID, request, wire.Session); err != nil {
+		return GoalSessionReceipt{}, err
+	}
+	return wire.Session, nil
+}
+
+// FetchHarnessSessionAttachment returns the immutable attach receipt for the
+// current fenced run. It is used to recover an attach request whose response
+// was lost after Control committed it.
+func (client *Client) FetchHarnessSessionAttachment(ctx context.Context, runID string, fence protocol.Fence) (GoalSessionReceipt, error) {
+	if err := validateGoalFence(runID, fence); err != nil {
+		return GoalSessionReceipt{}, err
+	}
+	var wire struct {
+		Session GoalSessionReceipt `json:"session"`
+	}
+	statusCode, err := client.requestGoalWithStatus(ctx, http.MethodGet, "v1/runs/"+runID+"/session", goalFenceQuery(fence), "", nil, &wire)
+	if err != nil {
+		return GoalSessionReceipt{}, err
+	}
+	if statusCode != http.StatusOK {
+		return GoalSessionReceipt{}, responseErrorf("invalid fetch session attachment response: expected HTTP 200, got HTTP %d", statusCode)
+	}
+	if err := validateGoalSessionAttachmentReadback(runID, fence, wire.Session); err != nil {
+		return GoalSessionReceipt{}, err
+	}
+	return wire.Session, nil
+}
+
+// MarkHarnessSessionStopped releases a retained native attachment only after
+// the control plane has accepted the run's terminal transition.
+func (client *Client) MarkHarnessSessionStopped(ctx context.Context, runID string, request GoalSessionStoppedRequest) (GoalSessionStoppedReceipt, error) {
+	if err := validateGoalSessionStopped(runID, request); err != nil {
+		return GoalSessionStoppedReceipt{}, err
+	}
+	var wire struct {
+		SessionStopped GoalSessionStoppedReceipt `json:"session_stopped"`
+	}
+	statusCode, err := client.requestGoalWithStatus(ctx, http.MethodPut, "v1/runs/"+runID+"/session/stopped", nil, "", request, &wire)
+	if err != nil {
+		return GoalSessionStoppedReceipt{}, err
+	}
+	if statusCode != http.StatusOK && statusCode != http.StatusCreated {
+		return GoalSessionStoppedReceipt{}, responseErrorf("invalid session stopped response: expected HTTP 200 or 201, got HTTP %d", statusCode)
+	}
+	if err := validateGoalSessionStoppedReceipt(runID, request, wire.SessionStopped); err != nil {
+		return GoalSessionStoppedReceipt{}, err
+	}
+	return wire.SessionStopped, nil
+}
+
+// AppendEvidence submits one normalized evidence receipt under the current
+// run fence. The request's run_id must match the path run ID.
+func (client *Client) AppendEvidence(ctx context.Context, runID string, fence protocol.Fence, evidence protocol.Evidence) (GoalEvidenceReceipt, error) {
+	if err := validateGoalEvidence(runID, fence, evidence); err != nil {
+		return GoalEvidenceReceipt{}, err
+	}
+	body := struct {
+		protocol.Fence
+		protocol.Evidence
+	}{Fence: fence, Evidence: evidence}
+	var wire struct {
+		Evidence GoalEvidenceReceipt `json:"evidence"`
+	}
+	statusCode, err := client.requestGoalWithStatus(ctx, http.MethodPost, "v1/runs/"+runID+"/evidence", nil, "", body, &wire)
+	if err != nil {
+		return GoalEvidenceReceipt{}, err
+	}
+	if statusCode != http.StatusOK && statusCode != http.StatusCreated {
+		return GoalEvidenceReceipt{}, responseErrorf("invalid evidence response: expected HTTP 200 or 201, got HTTP %d", statusCode)
+	}
+	if err := validateGoalEvidenceReceipt(runID, evidence, wire.Evidence); err != nil {
+		return GoalEvidenceReceipt{}, err
+	}
+	return wire.Evidence, nil
+}
+
+// AppendEvidenceBatch submits an ordered, fenced batch of normalized evidence
+// items. The server commits the batch atomically and returns receipts in the
+// same order as the request. This method is intentionally an additive client
+// capability; callers that require it should use an optional interface.
+func (client *Client) AppendEvidenceBatch(ctx context.Context, runID string, fence protocol.Fence, evidence []protocol.Evidence) (GoalEvidenceBatchReceipt, error) {
+	batch := GoalEvidenceBatch{
+		SchemaVersion: "symmetry.evidence_batch.v1",
+		RunID:         runID,
+		Items:         evidence,
+	}
+	if err := validateGoalEvidenceBatch(runID, fence, batch); err != nil {
+		return GoalEvidenceBatchReceipt{}, err
+	}
+
+	body := struct {
+		protocol.Fence
+		GoalEvidenceBatch
+	}{
+		Fence:             fence,
+		GoalEvidenceBatch: batch,
+	}
+	var wire contracts.SymmetryEvidenceBatchResponseV1
+	statusCode, err := client.requestGoalContractWithStatus(ctx, http.MethodPost, "v1/runs/"+runID+"/evidence", nil, "", body, contracts.EnvelopeEvidenceBatchResponse, &wire)
+	if err != nil {
+		var apiError *APIError
+		if errors.As(err, &apiError) && apiError.detailsDecodeErr != nil {
+			return GoalEvidenceBatchReceipt{}, responseErrorf("decode evidence batch conflict details: %w", apiError.detailsDecodeErr)
+		}
+		return GoalEvidenceBatchReceipt{}, err
+	}
+	if statusCode != http.StatusOK && statusCode != http.StatusCreated {
+		return GoalEvidenceBatchReceipt{}, responseErrorf("invalid evidence batch response: expected HTTP 200 or 201, got HTTP %d", statusCode)
+	}
+	localReceipt := goalEvidenceBatchReceiptFromContract(wire)
+	if err := validateGoalEvidenceBatchReceipt(statusCode, runID, evidence, localReceipt); err != nil {
+		return GoalEvidenceBatchReceipt{}, err
+	}
+	return localReceipt, nil
+}
+
+func goalEvidenceBatchReceiptFromContract(response contracts.SymmetryEvidenceBatchResponseV1) GoalEvidenceBatchReceipt {
+	receipt := GoalEvidenceBatchReceipt{
+		RunID:    response.EvidenceBatch.RunID,
+		Receipts: make([]GoalEvidenceReceipt, len(response.EvidenceBatch.Receipts)),
+	}
+	for index, item := range response.EvidenceBatch.Receipts {
+		receipt.Receipts[index] = GoalEvidenceReceipt{
+			ID:          item.ID,
+			RunID:       item.RunID,
+			EvidenceKey: item.EvidenceKey,
+			Kind:        string(item.Kind),
+			SubjectHash: item.SubjectHash,
+			Verdict:     string(item.Verdict),
+			ObservedAt:  item.ObservedAt,
+			Disposition: string(item.Disposition),
+		}
+	}
+	return receipt
+}
+
+// RecordUsage submits normalized usage under the current run fence. Late usage
+// remains accepted by the server only under its documented accounting rule.
+func (client *Client) RecordUsage(ctx context.Context, runID string, fence protocol.Fence, usage protocol.Usage) (GoalUsageReceipt, error) {
+	if err := validateGoalUsage(runID, fence, usage); err != nil {
+		return GoalUsageReceipt{}, err
+	}
+	body := struct {
+		protocol.Fence
+		protocol.Usage
+	}{Fence: fence, Usage: usage}
+	var wire struct {
+		Usage GoalUsageReceipt `json:"usage"`
+	}
+	statusCode, err := client.requestGoalWithStatus(ctx, http.MethodPost, "v1/runs/"+runID+"/usage", nil, "", body, &wire)
+	if err != nil {
+		return GoalUsageReceipt{}, err
+	}
+	if statusCode != http.StatusOK && statusCode != http.StatusCreated {
+		return GoalUsageReceipt{}, responseErrorf("invalid usage response: expected HTTP 200 or 201, got HTTP %d", statusCode)
+	}
+	if err := validateGoalUsageReceipt(runID, usage, wire.Usage); err != nil {
+		return GoalUsageReceipt{}, err
+	}
+	return wire.Usage, nil
+}
+
+// FetchRunContext returns the current sanitized context for a claimed run.
+// Fence values are query parameters because the endpoint has no request body.
+func (client *Client) FetchRunContext(ctx context.Context, runID string, fence protocol.Fence) (GoalRunContext, error) {
+	if err := validateGoalFence(runID, fence); err != nil {
+		return GoalRunContext{}, err
+	}
+	query := goalFenceQuery(fence)
+	var response GoalRunContext
+	if err := client.requestGoal(ctx, http.MethodGet, "v1/runs/"+runID+"/context", query, "", nil, &response); err != nil {
+		return GoalRunContext{}, err
+	}
+	if err := validateGoalRunContext(runID, fence, response); err != nil {
+		return GoalRunContext{}, err
+	}
+	return response, nil
+}
+
+func goalFenceQuery(fence protocol.Fence) url.Values {
+	return url.Values{
+		"runtime_id":    []string{fence.RuntimeID},
+		"runtime_epoch": []string{strconv.FormatInt(fence.RuntimeEpoch, 10)},
+		"generation":    []string{strconv.FormatInt(fence.Generation, 10)},
+		"claim_id":      []string{fence.ClaimID},
+		"lease_token":   []string{fence.LeaseToken},
+	}
 }
 
 // Transition applies a caller-identified lifecycle transition without a retry policy.
@@ -486,6 +1082,42 @@ func (client *Client) machineRequest(ctx context.Context, method, endpoint strin
 	return client.request(ctx, method, endpoint, query, client.machineToken, idempotencyKey, request, response)
 }
 
+func (client *Client) requestGoal(ctx context.Context, method, endpoint string, query url.Values, idempotencyKey string, request, response any) error {
+	_, err := client.requestGoalWithStatus(ctx, method, endpoint, query, idempotencyKey, request, response)
+	return err
+}
+
+func (client *Client) requestGoalWithStatus(ctx context.Context, method, endpoint string, query url.Values, idempotencyKey string, request, response any) (int, error) {
+	statusCode, responseBody, oversized, err := client.perform(ctx, method, endpoint, query, client.machineToken, idempotencyKey, request)
+	if err != nil {
+		return 0, err
+	}
+	if oversized {
+		return 0, responseErrorf("response body exceeds %d bytes", client.maxResponseBytes)
+	}
+	if response == nil {
+		return statusCode, nil
+	}
+	if err := decodeStrictJSON(responseBody, response); err != nil {
+		return 0, responseErrorf("decode strict goal response: %w", err)
+	}
+	return statusCode, nil
+}
+
+func (client *Client) requestGoalContractWithStatus(ctx context.Context, method, endpoint string, query url.Values, idempotencyKey string, request any, envelope contracts.Envelope, response any) (int, error) {
+	statusCode, responseBody, oversized, err := client.perform(ctx, method, endpoint, query, client.machineToken, idempotencyKey, request)
+	if err != nil {
+		return 0, err
+	}
+	if oversized {
+		return 0, responseErrorf("response body exceeds %d bytes", client.maxResponseBytes)
+	}
+	if err := contracts.DecodeSchema(envelope, responseBody, response); err != nil {
+		return 0, responseErrorf("decode strict goal response: %w", err)
+	}
+	return statusCode, nil
+}
+
 func (client *OperatorClient) operatorRequest(ctx context.Context, method, endpoint string, query url.Values, idempotencyKey string, request, response any) error {
 	return client.request(ctx, method, endpoint, query, client.operatorToken, idempotencyKey, request, response)
 }
@@ -597,7 +1229,22 @@ func readBounded(reader io.Reader, limit int64) ([]byte, bool, error) {
 	return value, false, nil
 }
 
+func rejectDuplicateJSONMembersOnly(value []byte) error {
+	err := protocol.RejectDuplicateJSONMembers(value)
+	if err == nil || !strings.Contains(err.Error(), "duplicate JSON object member") {
+		return nil
+	}
+	return err
+}
+
 func decodeJSON(value []byte, target any) error {
+	if err := rejectDuplicateJSONMembersOnly(value); err != nil {
+		return err
+	}
+	return decodeJSONUnchecked(value, target)
+}
+
+func decodeJSONUnchecked(value []byte, target any) error {
 	decoder := json.NewDecoder(bytes.NewReader(value))
 	if err := decoder.Decode(target); err != nil {
 		return err
@@ -620,14 +1267,51 @@ func decodeAPIError(statusCode int, header http.Header, body []byte) error {
 		RetryAfter:    retryDelay,
 		retryAfterSet: retryAfterSet,
 	}
-	var envelope protocol.ErrorEnvelope
+	var envelope struct {
+		Error struct {
+			Code    string          `json:"code"`
+			Message string          `json:"message"`
+			Details json.RawMessage `json:"details"`
+			Detail  json.RawMessage `json:"detail"`
+		} `json:"error"`
+	}
 	if err := decodeJSON(body, &envelope); err == nil {
 		if envelope.Error.Code != "" {
 			apiError.Code = ErrorCode(envelope.Error.Code)
 		}
 		apiError.Message = envelope.Error.Message
+		apiError.Details = append(apiError.Details, envelope.Error.Details...)
+		if len(apiError.Details) == 0 {
+			apiError.Details = append(apiError.Details, envelope.Error.Detail...)
+		}
+		if apiError.Code == IdempotencyConflict {
+			if details, err := decodeEvidenceBatchConflictDetails(apiError.Details); err != nil {
+				apiError.detailsDecodeErr = err
+			} else {
+				apiError.EvidenceBatchConflictDetails = details
+			}
+		}
 	}
 	return apiError
+}
+
+func decodeEvidenceBatchConflictDetails(data json.RawMessage) (*contracts.SymmetryEvidenceBatchConflictDetailsV1, error) {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &fields); err != nil {
+		return nil, nil
+	}
+	if _, present := fields["items"]; !present {
+		return nil, nil
+	}
+	var details contracts.SymmetryEvidenceBatchConflictDetailsV1
+	if err := contracts.DecodeSchema(contracts.EnvelopeEvidenceBatchConflictDetails, trimmed, &details); err != nil {
+		return nil, err
+	}
+	return &details, nil
 }
 
 func errorCodeForStatus(statusCode int) ErrorCode {
@@ -674,6 +1358,497 @@ func retryAfter(value string) (time.Duration, bool) {
 		return remaining, true
 	}
 	return 0, false
+}
+
+const providerActionPath = "/api/v1/provider-actions"
+
+const providerActionMaxInputBytes = 1 << 20
+
+type providerActionResponseWire struct {
+	Operation      string          `json:"operation"`
+	ResourceID     string          `json:"resource_id"`
+	WorkItemID     string          `json:"work_item_id"`
+	Projected      *bool           `json:"projected"`
+	Delivery       json.RawMessage `json:"delivery"`
+	Resource       json.RawMessage `json:"resource"`
+	Outcome        *string         `json:"outcome"`
+	ReadbackStatus *string         `json:"readback_status"`
+	Readback       json.RawMessage `json:"readback"`
+}
+
+var providerActionResponseWireJSONTags = [...]string{
+	"operation",
+	"resource_id",
+	"work_item_id",
+	"projected",
+	"delivery",
+	"resource",
+	"outcome",
+	"readback_status",
+	"readback",
+}
+
+func validateProviderActionRequest(access protocol.ProviderAccess, actionID, resourceID, operation string, input json.RawMessage) (string, error) {
+	if err := validateProviderAccess(access); err != nil {
+		return "", fmt.Errorf("provider access %w", err)
+	}
+	if access.Path != providerActionPath {
+		return "", errors.New("provider access path must be the documented relative provider-actions path")
+	}
+	if err := validateProviderActionUUID(actionID, "provider action action_id"); err != nil {
+		return "", err
+	}
+	if err := validateProviderActionUUID(resourceID, "provider action resource_id"); err != nil {
+		return "", err
+	}
+	switch operation {
+	case "resource.sync", "change.upsert", "change.update":
+	default:
+		return "", errors.New("provider action operation is not recognized")
+	}
+
+	trimmedInput := bytes.TrimSpace(input)
+	if len(trimmedInput) == 0 || int64(len(trimmedInput)) > providerActionMaxInputBytes {
+		return "", errors.New("provider action input must be a bounded JSON object")
+	}
+	if err := validateJSONObject(trimmedInput); err != nil {
+		return "", fmt.Errorf("provider action input %w", err)
+	}
+	if operation == "resource.sync" {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(trimmedInput, &fields); err != nil {
+			return "", errors.New("provider action input must be a JSON object")
+		}
+		if len(fields) != 0 {
+			return "", errors.New("resource.sync provider action input must be an empty JSON object")
+		}
+	}
+
+	seenResources := make(map[string]struct{}, len(access.Grants))
+	granted := false
+	for _, grant := range access.Grants {
+		if _, duplicate := seenResources[grant.ResourceID]; duplicate {
+			return "", errors.New("provider access grants contain a duplicate resource_id")
+		}
+		seenResources[grant.ResourceID] = struct{}{}
+		if err := validateProviderActionUUID(grant.ResourceID, "provider access grant resource_id"); err != nil {
+			return "", err
+		}
+		if grant.ResourceID != resourceID {
+			continue
+		}
+		for _, grantedOperation := range grant.Operations {
+			if grantedOperation == operation {
+				granted = true
+				break
+			}
+		}
+	}
+	if !granted {
+		return "", errors.New("provider action resource_id and operation are not granted")
+	}
+
+	return strings.TrimPrefix(strings.TrimPrefix(providerActionPath, "/api"), "/"), nil
+}
+
+func validateProviderActionUUID(value, field string) error {
+	if len(value) != 36 {
+		return fmt.Errorf("%s must be a canonical UUID", field)
+	}
+	for index := 0; index < len(value); index++ {
+		if index == 8 || index == 13 || index == 18 || index == 23 {
+			if value[index] != '-' {
+				return fmt.Errorf("%s must be a canonical UUID", field)
+			}
+			continue
+		}
+		character := value[index]
+		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
+			return fmt.Errorf("%s must use lowercase hexadecimal UUID digits", field)
+		}
+	}
+	return nil
+}
+
+func decodeProviderActionResponse(data []byte, expectedActionID, expectedResourceID, expectedOperation string) (ProviderActionResponse, error) {
+	var wire providerActionResponseWire
+	if err := decodeProviderActionObjectJSON(data, &wire, "operation", "resource_id", "projected"); err != nil {
+		return ProviderActionResponse{}, err
+	}
+	fields, err := objectFields(data)
+	if err != nil {
+		return ProviderActionResponse{}, err
+	}
+	if wire.Projected == nil {
+		return ProviderActionResponse{}, errors.New("projected must be a non-null boolean")
+	}
+	if wire.Operation != expectedOperation {
+		return ProviderActionResponse{}, errors.New("operation does not match the request")
+	}
+	if err := validateProviderActionUUID(wire.ResourceID, "provider action response resource_id"); err != nil {
+		return ProviderActionResponse{}, err
+	}
+	if wire.ResourceID != expectedResourceID {
+		return ProviderActionResponse{}, errors.New("resource_id does not match the request")
+	}
+	if expectedActionID == "" {
+		return ProviderActionResponse{}, errors.New("action_id is required")
+	}
+
+	if outcomePresent := hasJSONField(fields, "outcome"); outcomePresent {
+		if wire.Outcome == nil || *wire.Outcome != string(ProviderActionUnknown) {
+			return ProviderActionResponse{}, errors.New("outcome must be unknown when present")
+		}
+		if *wire.Projected {
+			return ProviderActionResponse{}, errors.New("unknown provider action response must not be projected")
+		}
+		if !hasJSONField(fields, "readback_status") || wire.ReadbackStatus == nil || *wire.ReadbackStatus != "unconfirmed" {
+			return ProviderActionResponse{}, errors.New("unknown provider action response requires readback_status=unconfirmed")
+		}
+		if !hasJSONField(fields, "readback") {
+			return ProviderActionResponse{}, errors.New("unknown provider action response requires readback")
+		}
+		if err := validateProviderJSONMap(wire.Readback, "readback"); err != nil {
+			return ProviderActionResponse{}, err
+		}
+		for _, field := range []string{"work_item_id", "delivery", "resource"} {
+			if hasJSONField(fields, field) {
+				return ProviderActionResponse{}, fmt.Errorf("unknown provider action response must not include %s", field)
+			}
+		}
+		return ProviderActionResponse{
+			Outcome:        ProviderActionUnknown,
+			Result:         append(json.RawMessage(nil), data...),
+			Operation:      wire.Operation,
+			ResourceID:     wire.ResourceID,
+			Projected:      *wire.Projected,
+			ReadbackStatus: *wire.ReadbackStatus,
+			Readback:       cloneJSON(wire.Readback),
+		}, nil
+	}
+
+	if hasJSONField(fields, "readback_status") {
+		return ProviderActionResponse{}, errors.New("successful provider action response must not include readback_status")
+	}
+	if hasJSONField(fields, "outcome") {
+		return ProviderActionResponse{}, errors.New("successful provider action response must omit outcome")
+	}
+
+	response := ProviderActionResponse{
+		Outcome:    ProviderActionSucceeded,
+		Result:     append(json.RawMessage(nil), data...),
+		Operation:  wire.Operation,
+		ResourceID: wire.ResourceID,
+		Projected:  *wire.Projected,
+	}
+	if expectedOperation == "resource.sync" {
+		if !hasJSONField(fields, "resource") {
+			return ProviderActionResponse{}, errors.New("resource.sync provider action response requires resource")
+		}
+		if err := validateProviderJSONMap(wire.Resource, "resource"); err != nil {
+			return ProviderActionResponse{}, err
+		}
+		if hasJSONField(fields, "work_item_id") || hasJSONField(fields, "delivery") {
+			return ProviderActionResponse{}, errors.New("resource.sync provider action response has contradictory change fields")
+		}
+		if hasJSONField(fields, "readback") {
+			if err := validateProviderSyncReadback(wire.Readback); err != nil {
+				return ProviderActionResponse{}, err
+			}
+			response.Readback = cloneJSON(wire.Readback)
+		}
+		response.Resource = cloneJSON(wire.Resource)
+		return response, nil
+	}
+
+	if !hasJSONField(fields, "work_item_id") || wire.WorkItemID == "" {
+		return ProviderActionResponse{}, errors.New("change provider action response requires work_item_id")
+	}
+	if err := validateProviderActionUUID(wire.WorkItemID, "provider action response work_item_id"); err != nil {
+		return ProviderActionResponse{}, err
+	}
+	if !hasJSONField(fields, "delivery") {
+		return ProviderActionResponse{}, errors.New("change provider action response requires delivery")
+	}
+	if err := validateProviderJSONMap(wire.Delivery, "delivery"); err != nil {
+		return ProviderActionResponse{}, err
+	}
+	if hasJSONField(fields, "resource") || hasJSONField(fields, "readback") {
+		return ProviderActionResponse{}, errors.New("change provider action response has contradictory provider-owned fields")
+	}
+	response.WorkItemID = wire.WorkItemID
+	response.Delivery = cloneJSON(wire.Delivery)
+	return response, nil
+}
+
+// NormalizeProviderActionResponse validates a typed response returned by an
+// alternate ControlAPI implementation against the same wire contract used by
+// ExecuteProviderAction. Result remains the exact raw response; typed fields
+// are checked against the decoded Result and the returned value is normalized
+// from that authoritative payload.
+func NormalizeProviderActionResponse(response ProviderActionResponse, expectedActionID, expectedResourceID, expectedOperation string) (ProviderActionResponse, error) {
+	normalized, err := decodeProviderActionResponse(response.Result, expectedActionID, expectedResourceID, expectedOperation)
+	if err != nil {
+		return ProviderActionResponse{}, err
+	}
+	if response.Outcome != normalized.Outcome {
+		return ProviderActionResponse{}, errors.New("typed provider action response outcome does not match result")
+	}
+	if response.Operation != normalized.Operation {
+		return ProviderActionResponse{}, errors.New("typed provider action response operation does not match result")
+	}
+	if response.ResourceID != normalized.ResourceID {
+		return ProviderActionResponse{}, errors.New("typed provider action response resource_id does not match result")
+	}
+	if response.WorkItemID != normalized.WorkItemID {
+		return ProviderActionResponse{}, errors.New("typed provider action response work_item_id does not match result")
+	}
+	if response.Projected != normalized.Projected {
+		return ProviderActionResponse{}, errors.New("typed provider action response projected does not match result")
+	}
+	if !equalProviderActionJSON(response.Delivery, normalized.Delivery) {
+		return ProviderActionResponse{}, errors.New("typed provider action response delivery does not match result")
+	}
+	if !equalProviderActionJSON(response.Resource, normalized.Resource) {
+		return ProviderActionResponse{}, errors.New("typed provider action response resource does not match result")
+	}
+	if response.ReadbackStatus != normalized.ReadbackStatus {
+		return ProviderActionResponse{}, errors.New("typed provider action response readback_status does not match result")
+	}
+	if !equalProviderActionJSON(response.Readback, normalized.Readback) {
+		return ProviderActionResponse{}, errors.New("typed provider action response readback does not match result")
+	}
+	return normalized, nil
+}
+
+func equalProviderActionJSON(left, right json.RawMessage) bool {
+	if len(left) == 0 || len(right) == 0 {
+		return len(left) == len(right)
+	}
+	if err := rejectDuplicateJSONMembersOnly(left); err != nil {
+		return false
+	}
+	if err := rejectDuplicateJSONMembersOnly(right); err != nil {
+		return false
+	}
+	leftCanonical, err := protocol.CanonicalizeJSON(left)
+	if err != nil {
+		return false
+	}
+	rightCanonical, err := protocol.CanonicalizeJSON(right)
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(leftCanonical, rightCanonical)
+}
+
+func objectFields(data []byte) (map[string]json.RawMessage, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(bytes.TrimSpace(data), &fields); err != nil || fields == nil {
+		if err != nil {
+			return nil, err
+		}
+		return nil, errors.New("response must be a JSON object")
+	}
+	return fields, nil
+}
+
+// decodeProviderActionObjectJSON preserves protocol-v1 additive response
+// compatibility. The outer object and required fields remain strict, while
+// unknown top-level fields are intentionally ignored by the legacy endpoint.
+func decodeProviderActionObjectJSON(value []byte, target any, required ...string) error {
+	trimmed := bytes.TrimSpace(value)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return errors.New("response must be a JSON object")
+	}
+	if err := rejectDuplicateJSONMembersOnly(trimmed); err != nil {
+		return err
+	}
+	if err := rejectProviderActionResponseTagAliases(trimmed); err != nil {
+		return err
+	}
+	fields, err := objectFields(trimmed)
+	if err != nil {
+		return err
+	}
+	for _, field := range required {
+		if _, present := fields[field]; !present {
+			return fmt.Errorf("missing required field %q", field)
+		}
+	}
+	return decodeJSONUnchecked(trimmed, target)
+}
+
+// rejectProviderActionResponseTagAliases enforces exact case for the typed
+// fields at the outer Control response boundary. RawMessage provider-owned
+// fields are consumed as opaque values, so their nested schemas remain open.
+func rejectProviderActionResponseTagAliases(value []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(value))
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	opening, ok := token.(json.Delim)
+	if !ok || opening != '{' {
+		return errors.New("response must be a JSON object")
+	}
+	for decoder.More() {
+		member, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		name, ok := member.(string)
+		if !ok {
+			return errors.New("response object member name must be a string")
+		}
+		for _, tag := range providerActionResponseWireJSONTags {
+			if name != tag && strings.EqualFold(name, tag) {
+				return fmt.Errorf("JSON member %q aliases exact tag %q", name, tag)
+			}
+		}
+		var raw json.RawMessage
+		if err := decoder.Decode(&raw); err != nil {
+			return err
+		}
+	}
+	closing, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	if delimiter, ok := closing.(json.Delim); !ok || delimiter != '}' {
+		return errors.New("response must be a JSON object")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return errors.New("response must contain one JSON value")
+		}
+		return err
+	}
+	return nil
+}
+
+func hasJSONField(fields map[string]json.RawMessage, name string) bool {
+	_, ok := fields[name]
+	return ok
+}
+
+func validateProviderJSONMap(value json.RawMessage, field string) error {
+	trimmed := bytes.TrimSpace(value)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return fmt.Errorf("%s must be a non-null JSON object", field)
+	}
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &decoded); err != nil || decoded == nil {
+		return fmt.Errorf("%s must be a JSON object", field)
+	}
+	return nil
+}
+
+func validateProviderSyncReadback(value json.RawMessage) error {
+	var status string
+	if err := json.Unmarshal(bytes.TrimSpace(value), &status); err != nil {
+		return errors.New("resource.sync readback must be a string status")
+	}
+	switch status {
+	case "applied", "unconfirmed", "not_applied":
+		return nil
+	default:
+		return errors.New("resource.sync readback status is not recognized")
+	}
+}
+
+func cloneJSON(value json.RawMessage) json.RawMessage {
+	return append(json.RawMessage(nil), value...)
+}
+
+type providerActionRedactedError struct {
+	cause   error
+	message string
+}
+
+func (err *providerActionRedactedError) Error() string { return err.message }
+
+func (err *providerActionRedactedError) Unwrap() error { return err.cause }
+
+func redactProviderActionError(err error, token string) error {
+	if err == nil || token == "" {
+		return err
+	}
+	var apiError *APIError
+	if errors.As(err, &apiError) {
+		return redactProviderActionAPIError(apiError, token)
+	}
+	if strings.Contains(err.Error(), token) {
+		return &providerActionRedactedError{
+			cause:   err,
+			message: strings.ReplaceAll(err.Error(), token, "[REDACTED]"),
+		}
+	}
+	return err
+}
+
+func redactProviderActionAPIError(apiError *APIError, token string) *APIError {
+	redacted := *apiError
+	redacted.Message = strings.ReplaceAll(redacted.Message, token, "[REDACTED]")
+	if strings.Contains(string(redacted.Code), token) {
+		redacted.Code = errorCodeForStatus(redacted.StatusCode)
+		if strings.Contains(string(redacted.Code), token) {
+			redacted.Code = ErrorCode("redacted_error")
+		}
+	}
+
+	redacted.Details = nil
+	if trimmed := bytes.TrimSpace(apiError.Details); len(trimmed) > 0 {
+		if details, ok := redactProviderJSONDetails(trimmed, token); ok {
+			redacted.Details = details
+		}
+	}
+	// A parsed cache may retain the original structured value even when the raw
+	// details were redacted. Provider actions do not need this evidence-batch
+	// projection, so discard it at the credential boundary.
+	redacted.EvidenceBatchConflictDetails = nil
+	redacted.detailsDecodeErr = nil
+	return &redacted
+}
+
+func redactProviderJSONDetails(data []byte, token string) (json.RawMessage, bool) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, false
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return nil, false
+	}
+	encoded, err := json.Marshal(redactProviderJSONValue(value, token))
+	if err != nil || bytes.Contains(encoded, []byte(token)) {
+		return nil, false
+	}
+	return encoded, true
+}
+
+func redactProviderJSONValue(value any, token string) any {
+	switch value := value.(type) {
+	case string:
+		return strings.ReplaceAll(value, token, "[REDACTED]")
+	case []any:
+		for index := range value {
+			value[index] = redactProviderJSONValue(value[index], token)
+		}
+		return value
+	case map[string]any:
+		redacted := make(map[string]any, len(value))
+		for key, nested := range value {
+			redactedKey := strings.ReplaceAll(key, token, "[REDACTED]")
+			redacted[redactedKey] = redactProviderJSONValue(nested, token)
+		}
+		return redacted
+	default:
+		return value
+	}
 }
 
 func validatePathID(field, value string) error {

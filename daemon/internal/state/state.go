@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -20,19 +21,21 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
 const (
-	maxStateFileBytes   = 1 << 20
-	maxJournalFileBytes = 4 << 20
-	identityFileName    = "identity.json"
-	enrollmentFileName  = "enrollment.json"
-	runsDirectoryName   = "runs"
-	lockFileName        = ".symmetry-daemon.lock"
-	journalFilePrefix   = "journal-"
-	journalFileSuffix   = ".json"
-	atomicTempPrefix    = ".symmetry-state-"
+	maxStateFileBytes      = 1 << 20
+	maxJournalFileBytes    = 4 << 20
+	identityFileName       = "identity.json"
+	enrollmentFileName     = "enrollment.json"
+	runsDirectoryName      = "runs"
+	goalUsageDirectoryName = "goal-usage"
+	lockFileName           = ".symmetry-daemon.lock"
+	journalFilePrefix      = "journal-"
+	journalFileSuffix      = ".json"
+	atomicTempPrefix       = ".symmetry-state-"
 )
 
 const (
@@ -60,10 +63,11 @@ var (
 // Its methods are serialized so related read-modify-write operations cannot
 // overwrite each other within a daemon process.
 type Store struct {
-	dir    string
-	mu     sync.Mutex
-	lock   *os.File
-	closed bool
+	dir         string
+	mu          sync.Mutex
+	lock        *os.File
+	closed      bool
+	atomicWrite func(string, []byte) error
 }
 
 // MachineIdentity is the durable result of machine enrollment.
@@ -104,27 +108,39 @@ type ClaimIntent struct {
 // generation. It contains only opaque protocol state and machine-local process
 // information; coding-agent and repository credentials never belong here.
 type RunJournal struct {
-	RunID                          string                            `json:"run_id"`
-	Generation                     int64                             `json:"generation"`
-	RuntimeKey                     string                            `json:"runtime_key"`
-	RuntimeID                      string                            `json:"runtime_id"`
-	ClaimedRuntimeEpoch            int64                             `json:"claimed_runtime_epoch"`
-	ClaimID                        string                            `json:"claim_id"`
-	LeaseToken                     string                            `json:"lease_token"`
-	LeaseExpiresAt                 time.Time                         `json:"lease_expires_at"`
-	LocalState                     string                            `json:"local_state"`
-	TerminalPendingAt              time.Time                         `json:"terminal_pending_at,omitempty"`
-	TerminalState                  string                            `json:"terminal_state,omitempty"`
-	TerminalVerdict                string                            `json:"terminal_verdict,omitempty"`
-	TerminalResolvedAt             time.Time                         `json:"terminal_resolved_at,omitempty"`
-	Work                           protocol.Work                     `json:"work"`
-	WorkspacePath                  string                            `json:"workspace_path"`
-	WorkspaceRecoveryRequired      bool                              `json:"workspace_recovery_required,omitempty"`
-	RetainWorkspace                bool                              `json:"retain_workspace,omitempty"`
-	WorkspaceBindingKey            string                            `json:"workspace_binding_key"`
-	PID                            int                               `json:"pid"`
-	ProcessIdentity                string                            `json:"process_identity"`
-	StartedAt                      time.Time                         `json:"started_at"`
+	RunID               string    `json:"run_id"`
+	Generation          int64     `json:"generation"`
+	RuntimeKey          string    `json:"runtime_key"`
+	RuntimeID           string    `json:"runtime_id"`
+	ClaimedRuntimeEpoch int64     `json:"claimed_runtime_epoch"`
+	ClaimID             string    `json:"claim_id"`
+	LeaseToken          string    `json:"lease_token"`
+	LeaseExpiresAt      time.Time `json:"lease_expires_at"`
+	LocalState          string    `json:"local_state"`
+	TerminalPendingAt   time.Time `json:"terminal_pending_at,omitempty"`
+	TerminalState       string    `json:"terminal_state,omitempty"`
+	// TerminalTaskResultKind is the immutable semantic result kind carried by
+	// the first completed transition. It survives transition delivery so local
+	// cleanup can distinguish a candidate artifact from other successful work.
+	TerminalTaskResultKind    protocol.TaskResultKind `json:"terminal_task_result_kind,omitempty"`
+	TerminalVerdict           string                  `json:"terminal_verdict,omitempty"`
+	TerminalResolvedAt        time.Time               `json:"terminal_resolved_at,omitempty"`
+	Work                      protocol.Work           `json:"work"`
+	WorkspacePath             string                  `json:"workspace_path"`
+	WorkspaceRecoveryRequired bool                    `json:"workspace_recovery_required,omitempty"`
+	RetainWorkspace           bool                    `json:"retain_workspace,omitempty"`
+	WorkspaceBindingKey       string                  `json:"workspace_binding_key"`
+	PID                       int                     `json:"pid"`
+	ProcessIdentity           string                  `json:"process_identity"`
+	StartedAt                 time.Time               `json:"started_at"`
+	// ContainmentAuthority is optional for backwards compatibility with
+	// journals created before the independent Windows supervisor existed. A
+	// process marker without it remains intentionally unrecoverable on Windows.
+	ContainmentAuthority *authority.Supervisor `json:"containment_authority,omitempty"`
+	// ContainmentHandoff is the durable pre-authority launch fence. It is
+	// mutually exclusive with ContainmentAuthority and is cleared only by the
+	// dedicated commit or release-proof mutations.
+	ContainmentHandoff             *authority.SupervisorHandoff      `json:"containment_handoff,omitempty"`
 	LastEventSequence              int64                             `json:"last_event_sequence"`
 	PendingEvents                  []protocol.RunEvent               `json:"pending_events"`
 	DroppedOutputChunks            int64                             `json:"dropped_output_chunks,omitempty"`
@@ -132,8 +148,15 @@ type RunJournal struct {
 	PendingTransitions             []protocol.StateTransitionRequest `json:"pending_transitions"`
 	AttemptedTransitionIDs         []string                          `json:"attempted_transition_ids,omitempty"`
 	PendingCommandAcknowledgements []protocol.CommandAcknowledgement `json:"pending_command_acknowledgements"`
+	PendingGoalDeliveries          []GoalDelivery                    `json:"pending_goal_deliveries,omitempty"`
+	DeliveredGoalDeliveries        []GoalDelivery                    `json:"delivered_goal_deliveries,omitempty"`
+	RetiredGoalDeliveries          []GoalDeliveryRetirement          `json:"retired_goal_deliveries,omitempty"`
+	GoalDeliveryEnabled            bool                              `json:"goal_delivery_enabled,omitempty"`
+	NativeUsageObservation         *NativeUsageObservation           `json:"native_usage_observation,omitempty"`
+	NativeUsageRecoveryRequired    bool                              `json:"native_usage_recovery_required,omitempty"`
 	InputCommandIntent             *InputCommandIntent               `json:"input_command_intent,omitempty"`
 	ControlCommandIntents          []ControlCommandIntent            `json:"control_command_intents,omitempty"`
+	ProviderActionIntents          []ProviderActionIntent            `json:"provider_action_intents,omitempty"`
 }
 
 // InputCommandIntent is the durable at-most-once record for one provide_input
@@ -151,6 +174,19 @@ type InputCommandIntent struct {
 // Key returns the journal's durable identity.
 func (journal RunJournal) Key() RunKey {
 	return RunKey{RunID: journal.RunID, Generation: journal.Generation}
+}
+
+// HasProcessDetails reports any retained process-ownership marker. A partial
+// marker is not evidence that its process has stopped.
+func (journal RunJournal) HasProcessDetails() bool {
+	return journal.PID != 0 || journal.ProcessIdentity != "" || !journal.StartedAt.IsZero()
+}
+
+// HasPendingContainment reports a durable containment authority or an
+// unresolved pre-authority handoff. It intentionally does not include the
+// legacy process marker so HasProcessDetails retains its existing meaning.
+func (journal RunJournal) HasPendingContainment() bool {
+	return journal.ContainmentAuthority != nil || journal.ContainmentHandoff != nil
 }
 
 // Fence returns the fencing data currently held by the journal.
@@ -202,12 +238,29 @@ func New(directory string) (*Store, error) {
 		_ = releaseStoreLock(lock)
 		return nil, fmt.Errorf("secure state lock: %w", err)
 	}
-	store := &Store{dir: directory, lock: lock}
+	store := &Store{dir: directory, lock: lock, atomicWrite: writeAtomic}
 	if err := ensurePrivateDirectory(store.runsDir()); err != nil {
 		_ = releaseStoreLock(lock)
 		return nil, fmt.Errorf("create run journal directory: %w", err)
 	}
 	return store, nil
+}
+
+// SetAtomicWriterForTesting replaces the final journal-write primitive for a
+// focused fault-injection test. Production callers must not use this seam.
+func (store *Store) SetAtomicWriterForTesting(writer func(string, []byte) error) func() {
+	store.mu.Lock()
+	previous := store.atomicWrite
+	if writer == nil {
+		writer = writeAtomic
+	}
+	store.atomicWrite = writer
+	store.mu.Unlock()
+	return func() {
+		store.mu.Lock()
+		store.atomicWrite = previous
+		store.mu.Unlock()
+	}
 }
 
 // Close releases the state directory's cross-process exclusive lock. It is
@@ -373,7 +426,7 @@ func (store *Store) SaveClaimIntent(intent ClaimIntent) (RunJournal, error) {
 	if !IsNotFound(err) {
 		return RunJournal{}, err
 	}
-	if err := store.saveJournalLocked(journal); err != nil {
+	if err := store.saveJournalWithCapacityGuardLocked(journal); err != nil {
 		return RunJournal{}, err
 	}
 	return journal, nil
@@ -402,7 +455,7 @@ func (store *Store) SaveClaimGrant(key RunKey, grant protocol.ClaimResponse) (Ru
 	journal.LeaseExpiresAt = grant.LeaseExpiresAt
 	journal.Work = grant.Work
 	journal.LocalState = "claimed"
-	if err := store.saveJournalLocked(journal); err != nil {
+	if err := store.saveJournalWithCapacityGuardLocked(journal); err != nil {
 		return RunJournal{}, err
 	}
 	return journal, nil
@@ -433,6 +486,36 @@ func (store *Store) SaveJournal(journal RunJournal) error {
 	if err := store.ensureOpenLocked(); err != nil {
 		return err
 	}
+	if current, err := store.loadJournalLocked(journal.Key()); err == nil {
+		if current.TerminalTaskResultKind != journal.TerminalTaskResultKind {
+			return errors.New("terminal task result kind is immutable")
+		}
+		if current.PID != journal.PID || current.ProcessIdentity != journal.ProcessIdentity || !current.StartedAt.Equal(journal.StartedAt) {
+			return errors.New("process details require dedicated mutation")
+		}
+		if !sameContainmentAuthority(current.ContainmentAuthority, journal.ContainmentAuthority) {
+			return errors.New("containment authority requires dedicated mutation")
+		}
+		if !sameContainmentHandoff(current.ContainmentHandoff, journal.ContainmentHandoff) {
+			return errors.New("containment handoff requires dedicated mutation")
+		}
+		if (current.LocalState == "cleanup_pending") != (journal.LocalState == "cleanup_pending") {
+			return errors.New("cleanup state requires dedicated transition")
+		}
+	} else if IsNotFound(err) {
+		if journal.ContainmentAuthority != nil {
+			return errors.New("containment authority requires dedicated mutation")
+		}
+		if journal.ContainmentHandoff != nil {
+			return errors.New("containment handoff requires dedicated mutation")
+		}
+	} else {
+		return err
+	}
+	// SaveJournal is the explicit recovery/import replacement seam. Normal
+	// lossless mutations use saveJournalWithCapacityGuardLocked below; this
+	// seam must remain able to import an already-existing unresolved journal so
+	// recovery can classify it before ordinary mutations resume.
 	return store.saveJournalLocked(journal)
 }
 
@@ -443,6 +526,61 @@ func (store *Store) MarkWorkspaceRecoveryRequired(key RunKey) (RunJournal, error
 		journal.WorkspaceRecoveryRequired = true
 		return nil
 	})
+}
+
+// MarkNativeUsageRecoveryRequired records that a native run reached a final
+// outcome but its accounting delivery could not yet be made durable. The flag
+// keeps stale local state from being treated as ordinary lease recovery; the
+// outbox must persist a conservative terminal path before cleanup is allowed.
+func (store *Store) MarkNativeUsageRecoveryRequired(key RunKey) (RunJournal, error) {
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		journal.NativeUsageRecoveryRequired = true
+		return nil
+	})
+}
+
+// ClearNativeUsageRecoveryRequired releases the accounting recovery barrier
+// only after the exact native usage body is durable in delivery history.
+func (store *Store) ClearNativeUsageRecoveryRequired(key RunKey, usage protocol.Usage) (RunJournal, error) {
+	if err := usage.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if usage.RunID != key.RunID {
+		return RunJournal{}, errors.New("native usage recovery run ID does not match journal")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if !journal.NativeUsageRecoveryRequired {
+			return nil
+		}
+		if !hasExactUsageDelivery(*journal, usage) {
+			return errors.New("native usage recovery delivery is not durable")
+		}
+		journal.NativeUsageRecoveryRequired = false
+		return nil
+	})
+}
+
+func hasExactUsageDelivery(journal RunJournal, usage protocol.Usage) bool {
+	delivery := GoalDelivery{Kind: GoalDeliveryUsage, DeliveryID: usage.UsageKey, Fence: journal.Fence(), Usage: &usage, Ready: true}
+	if err := prepareGoalDelivery(journal.RunID, &delivery); err != nil {
+		return false
+	}
+	for _, candidate := range journal.PendingGoalDeliveries {
+		if candidate.PayloadDigest == delivery.PayloadDigest && equalGoalDelivery(candidate, delivery) {
+			return true
+		}
+	}
+	for _, candidate := range journal.DeliveredGoalDeliveries {
+		if candidate.PayloadDigest == delivery.PayloadDigest && equalGoalDelivery(candidate, delivery) {
+			return true
+		}
+	}
+	for _, candidate := range journal.RetiredGoalDeliveries {
+		if candidate.Delivery.PayloadDigest == delivery.PayloadDigest && equalGoalDelivery(candidate.Delivery, delivery) {
+			return true
+		}
+	}
+	return false
 }
 
 // SetWorkspacePath atomically records a prepared workspace path without
@@ -466,6 +604,30 @@ func (store *Store) DeleteJournal(key RunKey) error {
 	defer store.mu.Unlock()
 	if err := store.ensureOpenLocked(); err != nil {
 		return err
+	}
+	journal, err := store.loadJournalLocked(key)
+	if err != nil {
+		return err
+	}
+	if journal.HasProcessDetails() {
+		return errors.New("process stop evidence remains pending")
+	}
+	if journal.HasPendingContainment() {
+		return errors.New("containment state remains pending")
+	}
+	if journal.HasPendingGoalDeliveries() {
+		return errors.New("run journal has pending Goal delivery")
+	}
+	if journal.NativeUsageRecoveryRequired {
+		return errors.New("native usage recovery remains pending")
+	}
+	if hasUnresolvedProviderActions(journal) {
+		return errors.New("provider action outcome remains pending")
+	}
+	if journal.GoalDeliveryEnabled {
+		if err := store.archiveLateGoalUsageLocked(journal); err != nil {
+			return err
+		}
 	}
 	if err := os.Remove(store.journalPath(key)); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -497,7 +659,7 @@ func (store *Store) ListJournals() ([]RunJournal, error) {
 			continue
 		}
 		var journal RunJournal
-		if err := store.readJSONWithLimit(filepath.Join(store.runsDir(), entry.Name()), "run journal", &journal, maxJournalFileBytes); err != nil {
+		if err := store.readRunJournalJSONWithLimit(filepath.Join(store.runsDir(), entry.Name()), &journal, maxJournalFileBytes); err != nil {
 			return nil, err
 		}
 		if err := validateJournal(journal); err != nil {
@@ -523,6 +685,9 @@ func (store *Store) SetLocalState(key RunKey, localState string) (RunJournal, er
 		return RunJournal{}, errors.New("local state is invalid")
 	}
 	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if (journal.LocalState == "cleanup_pending") != (localState == "cleanup_pending") {
+			return errors.New("cleanup state requires dedicated transition")
+		}
 		journal.LocalState = localState
 		return nil
 	})
@@ -538,9 +703,457 @@ func (store *Store) SetProcessDetails(key RunKey, pid int, identity string, star
 		if !journal.hasClaimGrant() {
 			return errors.New("journal has no claim grant")
 		}
+		if journal.ContainmentHandoff != nil {
+			return errors.New("process details require supervisor handoff mutation")
+		}
+		if journal.LocalState == "cleanup_pending" {
+			return errors.New("cannot register process details during cleanup")
+		}
+		if journal.HasProcessDetails() {
+			if journal.PID != pid || journal.ProcessIdentity != identity {
+				return errors.New("process details cannot replace an uncleared owner")
+			}
+			return nil
+		}
 		journal.PID = pid
 		journal.ProcessIdentity = identity
 		journal.StartedAt = startedAt
+		return nil
+	})
+}
+
+// SetProcessDetailsWithAuthority atomically persists the process marker and
+// its independently releasable containment authority. The single journal
+// mutation prevents recovery from observing a marker without the authority
+// required to verify and release that process.
+func (store *Store) SetProcessDetailsWithAuthority(key RunKey, pid int, identity string, startedAt time.Time, value authority.Supervisor) (RunJournal, error) {
+	if pid <= 0 || !validRequiredString(identity, 4096) || startedAt.IsZero() {
+		return RunJournal{}, errors.New("process details are invalid")
+	}
+	if err := value.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if value.TargetPID != pid || value.TargetIdentity != identity {
+		return RunJournal{}, errors.New("containment authority target does not match process details")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if !journal.hasClaimGrant() {
+			return errors.New("journal has no claim grant")
+		}
+		if journal.ContainmentHandoff != nil {
+			return errors.New("process details require supervisor handoff mutation")
+		}
+		if journal.LocalState == "cleanup_pending" {
+			return errors.New("cannot register process details during cleanup")
+		}
+		if journal.HasProcessDetails() {
+			if journal.PID != pid || journal.ProcessIdentity != identity {
+				return errors.New("process details cannot replace an uncleared owner")
+			}
+		} else {
+			journal.PID = pid
+			journal.ProcessIdentity = identity
+			journal.StartedAt = startedAt
+		}
+		if journal.ContainmentAuthority != nil {
+			if journal.ContainmentAuthority.Equal(value) {
+				return nil
+			}
+			// A retry after a stop-receipt write must not erase the receipt by
+			// replaying the original authority without its terminal witness.
+			existing := journal.ContainmentAuthority.Clone()
+			existing.StopReceipt = nil
+			candidate := value.Clone()
+			candidate.StopReceipt = nil
+			if existing.Equal(candidate) && journal.ContainmentAuthority.StopReceipt != nil && value.StopReceipt == nil {
+				return nil
+			}
+			return errors.New("containment authority cannot replace an uncleared owner")
+		}
+		cloned := value.Clone()
+		journal.ContainmentAuthority = &cloned
+		return nil
+	})
+}
+
+// SetContainmentAuthority persists the typed binding for an already persisted
+// process marker. It never replaces an uncleared authority with a different
+// launch, so a stale callback cannot retarget recovery.
+func (store *Store) SetContainmentAuthority(key RunKey, pid int, identity string, value authority.Supervisor) (RunJournal, error) {
+	if pid <= 0 || strings.TrimSpace(identity) == "" {
+		return RunJournal{}, errors.New("process details are invalid")
+	}
+	if err := value.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if value.TargetPID != pid || value.TargetIdentity != identity {
+		return RunJournal{}, errors.New("containment authority target does not match process details")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.ContainmentHandoff != nil {
+			return errors.New("containment authority requires supervisor handoff mutation")
+		}
+		if journal.PID != pid || journal.ProcessIdentity != identity || journal.StartedAt.IsZero() {
+			return errors.New("containment authority requires a persisted process marker")
+		}
+		if journal.ContainmentAuthority != nil {
+			if journal.ContainmentAuthority.Equal(value) {
+				return nil
+			}
+			// A retry after a stop-receipt write must not erase the receipt by
+			// replaying the original authority without its terminal witness. The
+			// binding itself is still idempotent, so preserve the existing record
+			// when only its receipt differs.
+			existing := journal.ContainmentAuthority.Clone()
+			existing.StopReceipt = nil
+			candidate := value.Clone()
+			candidate.StopReceipt = nil
+			if existing.Equal(candidate) && journal.ContainmentAuthority.StopReceipt != nil && value.StopReceipt == nil {
+				return nil
+			}
+			return errors.New("containment authority cannot replace an uncleared owner")
+		}
+		cloned := value.Clone()
+		journal.ContainmentAuthority = &cloned
+		return nil
+	})
+}
+
+// PrepareSupervisorHandoff durably records the immutable launch binding before
+// an independently running helper can outlive the daemon. Replaying the same
+// launch preserves the record and performs a fresh persistence barrier so an
+// unknown prior write is not upgraded by readback alone. A different launch
+// cannot replace an unresolved record. Helper identity and stop receipt are
+// advanced only by their dedicated CAS mutations.
+func (store *Store) PrepareSupervisorHandoff(key RunKey, handoff authority.SupervisorHandoff) (RunJournal, error) {
+	if err := handoff.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if handoff.StopReceipt != nil {
+		return RunJournal{}, errors.New("supervisor handoff stop receipt requires dedicated mutation")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if !journal.hasClaimGrant() {
+			return errors.New("journal has no claim grant")
+		}
+		if journal.LocalState == "cleanup_pending" {
+			return errors.New("cannot prepare supervisor handoff during cleanup")
+		}
+		if journal.HasProcessDetails() || journal.ContainmentAuthority != nil {
+			return errors.New("supervisor handoff conflicts with committed containment")
+		}
+		if journal.ContainmentHandoff == nil {
+			cloned := handoff.Clone()
+			journal.ContainmentHandoff = &cloned
+			return nil
+		}
+		current := journal.ContainmentHandoff
+		if !current.SameLaunch(handoff) {
+			return errors.New("supervisor handoff conflicts with journal")
+		}
+		if current.SupervisorPID != 0 && handoff.SupervisorPID != 0 &&
+			(current.SupervisorPID != handoff.SupervisorPID || current.SupervisorIdentity != handoff.SupervisorIdentity) {
+			return errors.New("supervisor handoff helper identity conflicts with journal")
+		}
+		if current.SupervisorPID == 0 && handoff.SupervisorPID != 0 {
+			return errors.New("supervisor handoff helper identity requires dedicated bind")
+		}
+		// Replaying the pre-helper form must not erase a helper identity or a
+		// receipt that a later phase durably recorded.
+		return nil
+	})
+}
+
+// BindSupervisorHandoff adds the exact helper PID/creation identity to a
+// prepared handoff. The expected handoff is an exact CAS value, so a stale
+// writer cannot retarget a retained helper. Exact replays perform a fresh
+// persistence barrier after readback of an unknown prior write.
+func (store *Store) BindSupervisorHandoff(key RunKey, expected authority.SupervisorHandoff, pid int, identity string) (RunJournal, error) {
+	if err := expected.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if pid <= 0 || !validRequiredString(identity, 4096) {
+		return RunJournal{}, errors.New("supervisor handoff helper identity is invalid")
+	}
+	if expected.StopReceipt != nil {
+		return RunJournal{}, errors.New("supervisor handoff helper cannot be rebound after stop receipt")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.ContainmentHandoff == nil {
+			return errors.New("supervisor handoff is not pending")
+		}
+		current := journal.ContainmentHandoff
+		if !current.Equal(expected) {
+			// A write error after rename leaves the helper binding durable while
+			// the caller still holds the pre-bind expected value. Replaying the
+			// same binding is safe and must not be mistaken for retargeting.
+			if expected.SupervisorPID == 0 && expected.SupervisorIdentity == "" && expected.StopReceipt == nil &&
+				current.SameLaunch(expected) && current.SupervisorPID == pid && current.SupervisorIdentity == identity && current.StopReceipt == nil {
+				return nil
+			}
+			return errors.New("supervisor handoff compare-and-set mismatch")
+		}
+		if current.SupervisorPID != 0 || current.SupervisorIdentity != "" {
+			if current.SupervisorPID == pid && current.SupervisorIdentity == identity {
+				return nil
+			}
+			return errors.New("supervisor handoff helper identity conflicts with journal")
+		}
+		current.SupervisorPID = pid
+		current.SupervisorIdentity = identity
+		return nil
+	})
+}
+
+// CommitSupervisorHandoff atomically promotes an exact prepared handoff into
+// the existing process marker plus Supervisor authority. The handoff is
+// cleared in the same journal replacement, so recovery observes either the
+// old pending record or the complete committed pair. Exact replays perform a
+// fresh persistence barrier after readback of an unknown prior write.
+func (store *Store) CommitSupervisorHandoff(key RunKey, expected authority.SupervisorHandoff, startedAt time.Time) (RunJournal, error) {
+	if err := expected.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if expected.StopReceipt != nil {
+		return RunJournal{}, errors.New("supervisor handoff stop receipt cannot commit")
+	}
+	if startedAt.IsZero() {
+		return RunJournal{}, errors.New("supervisor handoff start time is invalid")
+	}
+	value, err := expected.ToSupervisor()
+	if err != nil {
+		return RunJournal{}, err
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.ContainmentHandoff == nil {
+			if journal.PID == value.TargetPID && journal.ProcessIdentity == value.TargetIdentity &&
+				!journal.StartedAt.IsZero() && journal.ContainmentAuthority != nil {
+				existing := journal.ContainmentAuthority.Clone()
+				existing.StopReceipt = nil
+				candidate := value.Clone()
+				candidate.StopReceipt = nil
+				if existing.Equal(candidate) {
+					return nil
+				}
+			}
+			return errors.New("supervisor handoff is not pending")
+		}
+		if !journal.ContainmentHandoff.Equal(expected) {
+			return errors.New("supervisor handoff compare-and-set mismatch")
+		}
+		if journal.HasProcessDetails() || journal.ContainmentAuthority != nil {
+			return errors.New("supervisor handoff conflicts with committed containment")
+		}
+		if !journal.hasClaimGrant() {
+			return errors.New("journal has no claim grant")
+		}
+		if journal.LocalState == "cleanup_pending" {
+			return errors.New("cannot commit supervisor handoff during cleanup")
+		}
+		journal.PID = value.TargetPID
+		journal.ProcessIdentity = value.TargetIdentity
+		journal.StartedAt = startedAt
+		cloned := value.Clone()
+		journal.ContainmentAuthority = &cloned
+		journal.ContainmentHandoff = nil
+		return nil
+	})
+}
+
+// RecordSupervisorHandoffStopReceipt records an exact positive stop witness
+// while the handoff is pending. It also accepts the commit-unknown replay
+// state, where the handoff rename succeeded before the caller observed an
+// error, and records the witness on the committed authority instead. Every
+// accepted replay performs a fresh journal write so a prior unknown result is
+// never upgraded by readback alone.
+func (store *Store) RecordSupervisorHandoffStopReceipt(key RunKey, expected authority.SupervisorHandoff, receipt authority.StopReceipt) (RunJournal, error) {
+	if err := expected.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if !receipt.ValidForHandoff(expected) {
+		return RunJournal{}, errors.New("supervisor handoff stop receipt does not match handoff")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.ContainmentHandoff != nil {
+			current := journal.ContainmentHandoff
+			if !current.Equal(expected) {
+				if !current.SameLaunch(expected) || current.SupervisorPID != expected.SupervisorPID || current.SupervisorIdentity != expected.SupervisorIdentity || current.StopReceipt == nil || *current.StopReceipt != receipt {
+					return errors.New("supervisor handoff compare-and-set mismatch")
+				}
+				return nil
+			}
+			if current.StopReceipt != nil {
+				if *current.StopReceipt == receipt {
+					return nil
+				}
+				return errors.New("supervisor handoff stop receipt cannot replace an existing witness")
+			}
+			cloned := receipt
+			current.StopReceipt = &cloned
+			return nil
+		}
+		value, err := expected.ToSupervisor()
+		if err != nil {
+			return err
+		}
+		if journal.ContainmentAuthority == nil || journal.PID != value.TargetPID || journal.ProcessIdentity != value.TargetIdentity {
+			return errors.New("supervisor handoff is not pending or committed")
+		}
+		existing := journal.ContainmentAuthority.Clone()
+		existing.StopReceipt = nil
+		candidate := value.Clone()
+		candidate.StopReceipt = nil
+		if !existing.Equal(candidate) {
+			return errors.New("supervisor handoff committed authority conflicts with handoff")
+		}
+		if journal.ContainmentAuthority.StopReceipt != nil {
+			if *journal.ContainmentAuthority.StopReceipt == receipt {
+				return nil
+			}
+			return errors.New("containment stop receipt cannot replace an existing witness")
+		}
+		cloned := receipt
+		journal.ContainmentAuthority.StopReceipt = &cloned
+		return nil
+	})
+}
+
+// ClearSupervisorHandoff removes a pending handoff only after the caller has
+// supplied both an exact durable stop receipt and an exact platform release
+// proof. A release proof without a receipt belongs to the separate abort path.
+func (store *Store) ClearSupervisorHandoff(key RunKey, expected authority.SupervisorHandoff, proof authority.SupervisorHandoffReleaseProof) (RunJournal, error) {
+	if err := expected.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if expected.StopReceipt == nil {
+		return RunJournal{}, errors.New("supervisor handoff stop receipt is required before release")
+	}
+	if err := proof.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if !proof.ValidFor(expected) {
+		return RunJournal{}, errors.New("supervisor handoff release proof does not match handoff")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.ContainmentHandoff == nil {
+			if journal.ContainmentAuthority == nil && !journal.HasProcessDetails() {
+				return nil
+			}
+			return errors.New("supervisor handoff is not pending")
+		}
+		if !journal.ContainmentHandoff.Equal(expected) {
+			return errors.New("supervisor handoff compare-and-set mismatch")
+		}
+		current := journal.ContainmentHandoff
+		if !proof.ValidFor(*current) {
+			return errors.New("supervisor handoff release proof does not match journal")
+		}
+		if current.StopReceipt == nil {
+			return errors.New("supervisor handoff stop receipt is required before release")
+		}
+		if !current.StopReceipt.ValidForHandoff(*current) || *current.StopReceipt != *expected.StopReceipt {
+			return errors.New("supervisor handoff stop receipt is invalid")
+		}
+		journal.ContainmentHandoff = nil
+		return nil
+	})
+}
+
+// ClearSupervisorHandoffAfterAbort clears a prepared handoff only when the
+// exact current record is still pending and an independent platform proof
+// identifies a definitive pre-authority abort. This path is intentionally
+// separate from receipt/release cleanup: an abort proof is not a StopReceipt.
+//
+// Production callers may use this only while the app owns the Store lifetime
+// lock, the old writer is quiesced, and the platform has proved the named Job
+// and every exact target/helper process identity are absent. A caller boolean
+// or a missing response is not an abort proof and must not be converted into
+// one.
+func (store *Store) ClearSupervisorHandoffAfterAbort(key RunKey, expected authority.SupervisorHandoff, proof authority.SupervisorHandoffAbortProof) (RunJournal, error) {
+	if err := expected.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if expected.StopReceipt != nil {
+		return RunJournal{}, errors.New("supervisor handoff abort cannot carry a stop receipt")
+	}
+	if err := proof.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if !proof.ValidFor(expected) {
+		return RunJournal{}, errors.New("supervisor handoff abort proof does not match handoff")
+	}
+	return store.mutateJournalIfChanged(key, func(journal *RunJournal) (bool, error) {
+		if journal.ContainmentHandoff == nil {
+			return false, errors.New("supervisor handoff is not pending")
+		}
+		if !journal.ContainmentHandoff.Equal(expected) {
+			return false, errors.New("supervisor handoff compare-and-set mismatch")
+		}
+		current := journal.ContainmentHandoff
+		if current.StopReceipt != nil {
+			return false, errors.New("supervisor handoff abort cannot clear a durable stop receipt")
+		}
+		if journal.ContainmentAuthority != nil || journal.HasProcessDetails() {
+			return false, errors.New("supervisor handoff abort conflicts with committed containment")
+		}
+		if !proof.ValidFor(*current) {
+			return false, errors.New("supervisor handoff abort proof does not match journal")
+		}
+		journal.ContainmentHandoff = nil
+		return true, nil
+	})
+}
+
+// RecordContainmentStopReceipt durably records the exact positive helper
+// witness before recovery is allowed to compare-and-clear the process marker.
+// It is idempotent for the same authority and receipt, and rejects any
+// replacement launch.
+func (store *Store) RecordContainmentStopReceipt(key RunKey, pid int, identity string, receipt authority.StopReceipt) (RunJournal, error) {
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.ContainmentHandoff != nil {
+			return errors.New("containment stop receipt requires supervisor handoff mutation")
+		}
+		if journal.PID != pid || journal.ProcessIdentity != identity || journal.ContainmentAuthority == nil {
+			return errors.New("containment stop receipt has no matching authority")
+		}
+		if !receipt.ValidFor(*journal.ContainmentAuthority) {
+			return errors.New("containment stop receipt does not match containment authority")
+		}
+		if journal.ContainmentAuthority.StopReceipt != nil {
+			if *journal.ContainmentAuthority.StopReceipt == receipt {
+				return nil
+			}
+			return errors.New("containment stop receipt cannot replace an existing witness")
+		}
+		cloned := receipt
+		journal.ContainmentAuthority.StopReceipt = &cloned
+		return nil
+	})
+}
+
+// ClearProcessDetails records that the process identified by the expected PID
+// and identity has been stopped. The compare-and-clear guard prevents recovery
+// from erasing a newer process record if another owner replaced the process
+// between termination and durable marker persistence. Replaying the same
+// clear after the marker is already persisted is idempotent.
+func (store *Store) ClearProcessDetails(key RunKey, pid int, identity string) (RunJournal, error) {
+	if pid <= 0 || !validRequiredString(identity, 4096) {
+		return RunJournal{}, errors.New("process details are invalid")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.ContainmentHandoff != nil {
+			return errors.New("process details require supervisor handoff mutation")
+		}
+		if !journal.HasProcessDetails() {
+			return nil
+		}
+		if journal.PID != pid || journal.ProcessIdentity != identity {
+			return errors.New("persisted process details changed during termination")
+		}
+		journal.PID = 0
+		journal.ProcessIdentity = ""
+		journal.StartedAt = time.Time{}
+		journal.ContainmentAuthority = nil
 		return nil
 	})
 }
@@ -622,6 +1235,12 @@ func (store *Store) QueueOutputEvent(key RunKey, event protocol.RunEvent, budget
 		event.Sequence = journal.LastEventSequence + 1
 		return appendEvent(journal, event, "event is invalid")
 	})
+	if err != nil {
+		// The mutation is only a persisted drop after the atomic journal write
+		// succeeds. In particular, do not report a drop when a capacity or write
+		// failure rejected the counter update.
+		dropped = false
+	}
 	return journal, dropped, err
 }
 
@@ -786,8 +1405,11 @@ func (store *Store) PrepareProvideInput(key RunKey, intent InputCommandIntent) (
 	created := false
 	journal, err := store.mutateJournal(key, func(journal *RunJournal) error {
 		if current := journal.InputCommandIntent; current != nil {
-			if current.CommandID == intent.CommandID && current.PayloadDigest == intent.PayloadDigest {
-				return nil
+			if current.CommandID == intent.CommandID {
+				if current.PayloadDigest == intent.PayloadDigest {
+					return nil
+				}
+				return errors.New("input command conflicts with journal")
 			}
 			if !current.AcknowledgementDelivered || journal.LocalState != "waiting_for_input" {
 				return errors.New("input command conflicts with journal")
@@ -918,7 +1540,8 @@ func (store *Store) ResolveTerminal(key RunKey, verdict string, resolvedAt time.
 }
 
 // ResolveTerminalForCleanup atomically records a conclusive terminal rejection,
-// retires unreachable delivery state, and makes local cleanup eligible.
+// retires unreachable delivery state, and makes local cleanup eligible only
+// after the process-ownership marker has been cleared by a verified stop.
 func (store *Store) ResolveTerminalForCleanup(key RunKey, verdict string, resolvedAt time.Time) (RunJournal, error) {
 	if !validConclusiveTerminalVerdict(verdict) || resolvedAt.IsZero() {
 		return RunJournal{}, errors.New("terminal cleanup verdict is invalid")
@@ -927,6 +1550,9 @@ func (store *Store) ResolveTerminalForCleanup(key RunKey, verdict string, resolv
 		if journal.LocalState == "cleanup_pending" {
 			if journal.TerminalVerdict != verdict {
 				return errors.New("terminal verdict conflicts with journal")
+			}
+			if journal.HasProcessDetails() || journal.HasPendingContainment() {
+				journal.LocalState = "terminal_pending"
 			}
 			return nil
 		}
@@ -943,6 +1569,7 @@ func (store *Store) ResolveTerminalForCleanup(key RunKey, verdict string, resolv
 			journal.TerminalVerdict = verdict
 			journal.TerminalResolvedAt = resolvedAt
 		}
+		settleUnresolvedProviderActions(journal, providerActionFailureTerminal)
 		// Retention may have failed before mandatory fencing. Preserve the
 		// durable supervisory evidence before retiring unreachable intents.
 		if journal.TerminalState != "completed" && len(journal.ControlCommandIntents) != 0 {
@@ -952,9 +1579,14 @@ func (store *Store) ResolveTerminalForCleanup(key RunKey, verdict string, resolv
 		journal.PendingTransitions = nil
 		journal.AttemptedTransitionIDs = nil
 		journal.PendingCommandAcknowledgements = nil
+		// Goal evidence and usage remain deliverable under their original fence
+		// after a terminal verdict. Do not retire them with ordinary v1 outbox
+		// state: their receiver has its own durable idempotency receipts.
 		journal.InputCommandIntent = nil
 		journal.ControlCommandIntents = nil
-		journal.LocalState = "cleanup_pending"
+		if !journal.HasProcessDetails() && !journal.HasPendingContainment() {
+			journal.LocalState = "cleanup_pending"
+		}
 		return nil
 	})
 }
@@ -966,11 +1598,17 @@ func (store *Store) ResolveTerminalForCleanup(key RunKey, verdict string, resolv
 // work.
 func (store *Store) EnterCleanupPending(key RunKey) (RunJournal, error) {
 	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.HasProcessDetails() || journal.HasPendingContainment() {
+			return errors.New("process stop evidence remains pending")
+		}
 		if journal.LocalState == "cleanup_pending" {
 			return nil
 		}
 		if journal.LocalState != "terminal_pending" || !validTerminalVerdict(journal.TerminalVerdict) {
 			return errors.New("journal is not cleanup eligible")
+		}
+		if journal.NativeUsageRecoveryRequired {
+			return errors.New("native usage recovery remains pending")
 		}
 		if journal.InputCommandIntent != nil && (journal.InputCommandIntent.Outcome == "" || !journal.InputCommandIntent.AcknowledgementDelivered) {
 			return errors.New("input command receipt is not delivered")
@@ -981,7 +1619,7 @@ func (store *Store) EnterCleanupPending(key RunKey) (RunJournal, error) {
 					return errors.New("control command receipt is not delivered")
 				}
 			}
-			if len(journal.PendingTransitions) != 0 || len(journal.PendingCommandAcknowledgements) != 0 {
+			if len(journal.PendingTransitions) != 0 || len(journal.PendingCommandAcknowledgements) != 0 || len(journal.PendingGoalDeliveries) != 0 {
 				return errors.New("accepted terminal delivery is incomplete")
 			}
 		} else {
@@ -1079,8 +1717,33 @@ func (store *Store) mutateJournal(key RunKey, mutate func(*RunJournal) error) (R
 	if err := mutate(&journal); err != nil {
 		return RunJournal{}, err
 	}
-	if err := store.saveJournalLocked(journal); err != nil {
+	if err := store.saveJournalWithCapacityGuardLocked(journal); err != nil {
 		return RunJournal{}, err
+	}
+	return journal, nil
+}
+
+func (store *Store) mutateJournalIfChanged(key RunKey, mutate func(*RunJournal) (bool, error)) (RunJournal, error) {
+	if err := validateKey(key); err != nil {
+		return RunJournal{}, err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.ensureOpenLocked(); err != nil {
+		return RunJournal{}, err
+	}
+	journal, err := store.loadJournalLocked(key)
+	if err != nil {
+		return RunJournal{}, err
+	}
+	changed, err := mutate(&journal)
+	if err != nil {
+		return RunJournal{}, err
+	}
+	if changed {
+		if err := store.saveJournalWithCapacityGuardLocked(journal); err != nil {
+			return RunJournal{}, err
+		}
 	}
 	return journal, nil
 }
@@ -1111,12 +1774,6 @@ func prepareTransition(journal *RunJournal, transition protocol.StateTransitionR
 }
 
 func queueTerminalTransition(journal *RunJournal, transition protocol.StateTransitionRequest, pendingAt time.Time) error {
-	if err := settleUnresolvedInputCommand(journal); err != nil {
-		return err
-	}
-	if err := settleUnresolvedControlCommands(journal); err != nil {
-		return err
-	}
 	if journal.TerminalVerdict != "" {
 		return errors.New("terminal verdict is already recorded")
 	}
@@ -1127,6 +1784,19 @@ func queueTerminalTransition(journal *RunJournal, transition protocol.StateTrans
 	if !isTerminalTransitionState(prepared.State) {
 		return errors.New("terminal transition state is invalid")
 	}
+	if existing, present := authoritativeTerminalTransition(journal); present {
+		if existing == nil || !sameStateTransition(*existing, prepared) {
+			return errors.New("terminal transition conflicts with journal")
+		}
+		return nil
+	}
+	if err := settleUnresolvedInputCommand(journal); err != nil {
+		return err
+	}
+	if err := settleUnresolvedControlCommands(journal); err != nil {
+		return err
+	}
+	settleUnresolvedProviderActions(journal, providerActionFailureTerminal)
 	if prepared.State == "cancelled" {
 		journal.RetainWorkspace = true
 		journal.PendingTransitions = []protocol.StateTransitionRequest{prepared}
@@ -1137,6 +1807,13 @@ func queueTerminalTransition(journal *RunJournal, transition protocol.StateTrans
 	if terminalState := pendingTerminalState(journal.PendingTransitions); terminalState != "" {
 		setTerminalPending(journal, pendingAt, terminalState)
 		return nil
+	}
+	if prepared.State == "completed" {
+		kind, err := terminalTaskResultKind(prepared.Payload)
+		if err != nil {
+			return err
+		}
+		journal.TerminalTaskResultKind = kind
 	}
 	journal.PendingTransitions = append(journal.PendingTransitions, prepared)
 	setTerminalPending(journal, pendingAt, prepared.State)
@@ -1231,7 +1908,7 @@ func pendingTerminalState(transitions []protocol.StateTransitionRequest) string 
 
 func (store *Store) loadJournalLocked(key RunKey) (RunJournal, error) {
 	var journal RunJournal
-	if err := store.readJSONWithLimit(store.journalPath(key), "run journal", &journal, maxJournalFileBytes); err != nil {
+	if err := store.readRunJournalJSONWithLimit(store.journalPath(key), &journal, maxJournalFileBytes); err != nil {
 		return RunJournal{}, err
 	}
 	if err := validateJournal(journal); err != nil {
@@ -1258,7 +1935,25 @@ func (store *Store) saveJournalLocked(journal RunJournal) error {
 	if err := validateJournal(journal); err != nil {
 		return err
 	}
-	return store.writeJSONWithLimit(store.journalPath(journal.Key()), journal, "run journal", maxJournalFileBytes)
+	data, err := serializeRunJournal(journal)
+	if err != nil || len(data) > maxJournalFileBytes {
+		return ErrProviderActionCapacity
+	}
+	writer := store.atomicWrite
+	if writer == nil {
+		writer = writeAtomic
+	}
+	if err := writer(store.journalPath(journal.Key()), data); err != nil {
+		return errors.New("write run journal")
+	}
+	return nil
+}
+
+func (store *Store) saveJournalWithCapacityGuardLocked(journal RunJournal) error {
+	if err := validateJournalSaveCapacity(journal); err != nil {
+		return err
+	}
+	return store.saveJournalLocked(journal)
 }
 
 func (store *Store) readJSON(path string, resource string, destination any) error {
@@ -1266,12 +1961,26 @@ func (store *Store) readJSON(path string, resource string, destination any) erro
 }
 
 func (store *Store) readJSONWithLimit(path string, resource string, destination any, limit int) error {
+	return store.readJSONWithLimitAndTags(path, resource, destination, limit, nil)
+}
+
+func (store *Store) readRunJournalJSONWithLimit(path string, destination any, limit int) error {
+	return store.readJSONWithLimitAndTags(path, "run journal", destination, limit, reflect.TypeOf(RunJournal{}))
+}
+
+func (store *Store) readJSONWithLimitAndTags(path string, resource string, destination any, limit int, rootType reflect.Type) error {
 	data, err := readLimited(path, limit)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return &NotFoundError{Resource: resource}
 		}
 		return errors.New("read " + resource)
+	}
+	if err := protocol.RejectDuplicateJSONMembers(data); err != nil {
+		return errors.New("decode " + resource)
+	}
+	if rootType != nil && rejectCaseInsensitiveJSONTagAliases(data, rootType) != nil {
+		return errors.New("decode " + resource)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -1285,6 +1994,109 @@ func (store *Store) readJSONWithLimit(path string, resource string, destination 
 	return nil
 }
 
+// rejectCaseInsensitiveJSONTagAliases closes encoding/json's compatibility
+// behavior at the durable journal boundary. encoding/json accepts keys such as
+// "PROVIDER_ACTION_INTENTS" for the exact "provider_action_intents" tag;
+// durable authority must not let such an alias silently win over a later
+// field. Unknown exact members remain the responsibility of
+// Decoder.DisallowUnknownFields, while RawMessage and map fields stay open by
+// design.
+func rejectCaseInsensitiveJSONTagAliases(data []byte, rootType reflect.Type) error {
+	var value json.RawMessage
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if err := decoder.Decode(&value); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return errors.New("trailing JSON data")
+	}
+	return rejectJSONTagAliases(value, rootType)
+}
+
+func rejectJSONTagAliases(value json.RawMessage, valueType reflect.Type) error {
+	valueType = dereferenceJSONTagType(valueType)
+	if valueType == nil || valueType == reflect.TypeOf(json.RawMessage(nil)) {
+		return nil
+	}
+	switch valueType.Kind() {
+	case reflect.Array, reflect.Slice:
+		var items []json.RawMessage
+		if err := json.Unmarshal(value, &items); err != nil {
+			return nil
+		}
+		for _, item := range items {
+			if err := rejectJSONTagAliases(item, valueType.Elem()); err != nil {
+				return err
+			}
+		}
+	case reflect.Struct:
+		fields := exactJSONTagFields(valueType)
+		if len(fields) == 0 {
+			return nil
+		}
+		var members map[string]json.RawMessage
+		if err := json.Unmarshal(value, &members); err != nil {
+			return nil
+		}
+		for member, child := range members {
+			fieldType, exact := fields[member]
+			if !exact {
+				for tag := range fields {
+					if strings.EqualFold(member, tag) {
+						return fmt.Errorf("JSON member %q aliases exact tag %q", member, tag)
+					}
+				}
+				continue
+			}
+			if err := rejectJSONTagAliases(child, fieldType); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func dereferenceJSONTagType(valueType reflect.Type) reflect.Type {
+	for valueType != nil && (valueType.Kind() == reflect.Pointer || valueType.Kind() == reflect.Interface) {
+		valueType = valueType.Elem()
+	}
+	return valueType
+}
+
+func exactJSONTagFields(valueType reflect.Type) map[string]reflect.Type {
+	valueType = dereferenceJSONTagType(valueType)
+	if valueType == nil || valueType.Kind() != reflect.Struct {
+		return nil
+	}
+	fields := make(map[string]reflect.Type)
+	for index := 0; index < valueType.NumField(); index++ {
+		field := valueType.Field(index)
+		if field.PkgPath != "" {
+			continue
+		}
+		tag := field.Tag.Get("json")
+		name, _, _ := strings.Cut(tag, ",")
+		if name == "-" {
+			continue
+		}
+		if name == "" && field.Anonymous {
+			nested := exactJSONTagFields(field.Type)
+			if len(nested) != 0 {
+				for nestedName, nestedType := range nested {
+					fields[nestedName] = nestedType
+				}
+				continue
+			}
+		}
+		if name == "" {
+			name = field.Name
+		}
+		fields[name] = field.Type
+	}
+	return fields
+}
+
 func (store *Store) writeJSON(path string, value any, resource string) error {
 	return store.writeJSONWithLimit(path, value, resource, maxStateFileBytes)
 }
@@ -1294,10 +2106,31 @@ func (store *Store) writeJSONWithLimit(path string, value any, resource string, 
 	if err != nil || len(data) > limit {
 		return errors.New("encode " + resource)
 	}
-	if err := writeAtomic(path, data); err != nil {
+	writer := store.atomicWrite
+	if writer == nil {
+		writer = writeAtomic
+	}
+	if err := writer(path, data); err != nil {
 		return errors.New("write " + resource)
 	}
 	return nil
+}
+
+// serializeRunJournal is the sole durable representation used for run journal
+// writes and byte-capacity checks. Other state files intentionally retain the
+// default json.Marshal representation.
+func serializeRunJournal(journal RunJournal) ([]byte, error) {
+	return serializeJSONWithoutHTMLEscaping(journal)
+}
+
+func serializeJSONWithoutHTMLEscaping(value any) ([]byte, error) {
+	var output bytes.Buffer
+	encoder := json.NewEncoder(&output)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(output.Bytes(), []byte{'\n'}), nil
 }
 
 func (store *Store) removeOwnedTempsLocked(entries []os.DirEntry) error {
@@ -1396,7 +2229,7 @@ func writeAtomic(path string, data []byte) (err error) {
 		return err
 	}
 	temporary = nil
-	if err := os.Rename(temporaryPath, path); err != nil {
+	if err := renameStateFile(temporaryPath, path); err != nil {
 		return err
 	}
 	temporaryPath = ""
@@ -1456,6 +2289,20 @@ func validateKey(key RunKey) error {
 	return nil
 }
 
+func sameContainmentAuthority(left, right *authority.Supervisor) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
+func sameContainmentHandoff(left, right *authority.SupervisorHandoff) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
 func validateJournal(journal RunJournal) error {
 	if err := validateKey(journal.Key()); err != nil {
 		return err
@@ -1463,11 +2310,26 @@ func validateJournal(journal RunJournal) error {
 	if !validRequiredString(journal.RuntimeKey, 4096) || !validRequiredString(journal.RuntimeID, 4096) || journal.ClaimedRuntimeEpoch <= 0 || !validRequiredString(journal.ClaimID, 4096) || !validRequiredString(journal.LocalState, 256) || len(journal.WorkspacePath) > 32768 || !validRequiredString(journal.WorkspaceBindingKey, 4096) || journal.PID < 0 || len(journal.ProcessIdentity) > 4096 || journal.LastEventSequence < 0 {
 		return errors.New("run journal is invalid")
 	}
-	if journal.PID == 0 && (!journal.StartedAt.IsZero() || journal.ProcessIdentity != "") {
+	if journal.PID == 0 && (!journal.StartedAt.IsZero() || journal.ProcessIdentity != "" || journal.ContainmentAuthority != nil) {
 		return errors.New("run journal process details are invalid")
 	}
 	if journal.PID > 0 && (journal.StartedAt.IsZero() || !validRequiredString(journal.ProcessIdentity, 4096)) {
 		return errors.New("run journal process details are invalid")
+	}
+	if journal.ContainmentAuthority != nil {
+		if err := journal.ContainmentAuthority.Validate(); err != nil ||
+			journal.ContainmentAuthority.TargetPID != journal.PID ||
+			journal.ContainmentAuthority.TargetIdentity != journal.ProcessIdentity {
+			return errors.New("run journal containment authority is invalid")
+		}
+	}
+	if journal.ContainmentHandoff != nil {
+		if journal.ContainmentAuthority != nil || journal.HasProcessDetails() || !journal.hasClaimGrant() {
+			return errors.New("run journal containment handoff is invalid")
+		}
+		if err := journal.ContainmentHandoff.Validate(); err != nil {
+			return errors.New("run journal containment handoff is invalid")
+		}
 	}
 	if (strings.TrimSpace(journal.LeaseToken) == "") != journal.LeaseExpiresAt.IsZero() || len(journal.LeaseToken) > 65536 || !validWork(journal.Work) {
 		return errors.New("run journal is invalid")
@@ -1506,6 +2368,14 @@ func validateJournal(journal RunJournal) error {
 		}
 		commandIDs[acknowledgement.CommandID] = struct{}{}
 	}
+	if err := validateGoalDeliveries(journal); err != nil {
+		return err
+	}
+	if journal.NativeUsageObservation != nil {
+		if err := journal.NativeUsageObservation.Validate(); err != nil {
+			return err
+		}
+	}
 	if intent := journal.InputCommandIntent; intent != nil {
 		if !validInputCommandIntent(*intent) || intent.EventSequenceBarrier > journal.LastEventSequence {
 			return errors.New("run journal input command intent is invalid")
@@ -1525,6 +2395,9 @@ func validateJournal(journal RunJournal) error {
 		}
 	}
 	if err := validateControlCommandIntents(journal); err != nil {
+		return err
+	}
+	if err := validateProviderActionIntents(journal); err != nil {
 		return err
 	}
 	return nil
@@ -1548,21 +2421,59 @@ func validTransition(transition protocol.StateTransitionRequest) bool {
 
 func validTerminalState(journal RunJournal) bool {
 	if journal.LocalState != "terminal_pending" && journal.LocalState != "cleanup_pending" {
-		return !hasPendingTerminalTransition(journal.PendingTransitions) && journal.TerminalPendingAt.IsZero() && journal.TerminalState == "" && journal.TerminalVerdict == "" && journal.TerminalResolvedAt.IsZero()
+		return !hasPendingTerminalTransition(journal.PendingTransitions) && journal.TerminalPendingAt.IsZero() && journal.TerminalState == "" && journal.TerminalTaskResultKind == "" && journal.TerminalVerdict == "" && journal.TerminalResolvedAt.IsZero()
 	}
 	if journal.TerminalPendingAt.IsZero() || !isTerminalTransitionState(journal.TerminalState) {
+		return false
+	}
+	if journal.TerminalTaskResultKind != "" && !validTaskResultKind(journal.TerminalTaskResultKind) {
 		return false
 	}
 	if journal.LocalState == "cleanup_pending" {
 		if !validTerminalVerdict(journal.TerminalVerdict) || journal.TerminalResolvedAt.IsZero() {
 			return false
 		}
+		// Conclusive v1 terminal delivery may retire ordinary items while late
+		// Goal usage/evidence remains retriable under its original fence.
 		return len(journal.PendingEvents) == 0 && len(journal.PendingTransitions) == 0 && len(journal.PendingCommandAcknowledgements) == 0 && len(journal.AttemptedTransitionIDs) == 0
 	}
 	if journal.TerminalVerdict == "" {
 		return journal.TerminalResolvedAt.IsZero()
 	}
 	return validTerminalVerdict(journal.TerminalVerdict) && !journal.TerminalResolvedAt.IsZero()
+}
+
+func terminalTaskResultKind(payload json.RawMessage) (protocol.TaskResultKind, error) {
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return "", errors.New("completed terminal payload is invalid")
+	}
+	rawResult, present := envelope["task_result"]
+	if !present {
+		return "", nil
+	}
+	var result struct {
+		Kind protocol.TaskResultKind `json:"kind"`
+	}
+	if err := json.Unmarshal(rawResult, &result); err != nil || !validTaskResultKind(result.Kind) {
+		return "", errors.New("completed terminal task result kind is invalid")
+	}
+	return result.Kind, nil
+}
+
+func validTaskResultKind(kind protocol.TaskResultKind) bool {
+	switch kind {
+	case protocol.TaskResultProgress,
+		protocol.TaskResultCandidateCompletion,
+		protocol.TaskResultBlocked,
+		protocol.TaskResultRepairRequired,
+		protocol.TaskResultReplanRequired,
+		protocol.TaskResultFailed,
+		protocol.TaskResultPlanProposed:
+		return true
+	default:
+		return false
+	}
 }
 
 func validTerminalVerdict(verdict string) bool {
@@ -1604,7 +2515,7 @@ func validAcknowledgement(acknowledgement protocol.CommandAcknowledgement, journ
 }
 
 func validRawMessage(message json.RawMessage) bool {
-	return len(message) == 0 || json.Valid(message)
+	return len(message) == 0 || (json.Valid(message) && protocol.RejectDuplicateJSONMembers(message) == nil)
 }
 
 func isZeroFence(fence protocol.Fence) bool {

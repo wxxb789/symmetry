@@ -337,6 +337,7 @@ reserved when the control plane assigns work, rather than rechecked at claim:
   "claim_id": "uuid",
   "lease_token": "uuid",
   "lease_expires_at": "2026-09-02T00:00:30Z",
+  "lease_remaining_ms": 30000,
   "work": {
     "goal": "Run the configured agent",
     "agent_profile": "codex",
@@ -357,6 +358,14 @@ reserved when the control plane assigns work, rather than rechecked at claim:
   }
 }
 ```
+
+`lease_remaining_ms` is sampled by Control after the claim transaction and is
+relative authority for the response that carried it. A daemon subtracts the
+request's elapsed monotonic time and its safety margin before arming local
+containment; it must not reconstruct a deadline from response receipt time.
+When present, the value is strictly positive. Control omits it once no positive
+remaining duration can be reported, and older compatible Control releases may
+omit it entirely.
 
 Repeating the same `claim_id` returns the same lease only while the run remains
 `claimed` or `cancelling` and that lease is unexpired. After the run has entered
@@ -405,9 +414,17 @@ never revives an expired or terminal run:
 ```json
 {
   "lease_expires_at": "2026-09-02T00:00:45Z",
+  "lease_remaining_ms": 24000,
   "commands": []
 }
 ```
+
+`lease_remaining_ms` is an additive v1 response field. The remaining duration
+is computed by Control from its server clock; when present it is strictly
+positive. Control omits the field when the lease is exhausted, and older
+compatible releases may omit it entirely. Clients that do not use it may ignore
+it. A daemon may use the value as a conservative input when arming a local
+lease watchdog.
 
 ### Execute A Provider Action
 
@@ -600,6 +617,15 @@ acceptance deadline at `lease_expires_at + 8 minutes`; terminal retries are
 paced to reach the earlier remote deadline when necessary. Local expiry releases
 capacity only: the durable journal remains until the control plane accepts or
 conclusively rejects terminal delivery and workspace cleanup succeeds.
+
+A terminal verdict is not local process-stop evidence. While a persisted process
+marker remains unresolved, the daemon keeps `terminal_pending` and the original
+verdict, even after releasing the slot. It may continue delivering independently
+authorized Goal receipts, but may not delete the workspace or run journal. Only
+stop evidence for the same owned execution followed by a durable compare-and-clear
+of its process identity permits `cleanup_pending`. Complete journal replacement
+cannot clear or replace that marker or bypass the dedicated cleanup transition.
+Unproven recovery remains explicit rather than being treated as successful stop.
 
 ### Reconcile After Start Or Reconnect
 
@@ -1049,19 +1075,33 @@ execution and retains artifacts for an explicit recovery decision instead.
 
 `provide_input` delivery is at-most-once. If a daemon restart finds a durable
 `InputCommandIntent` on a non-terminal journal without a live in-memory run,
-it first terminates the recorded agent PID and never reattaches to that process
-or replays stdin. Before registering its new `daemon_instance_id` and runtime
+it first attempts bounded, identity-bound process termination and never
+reattaches to that process or replays stdin. Before registering its new
+`daemon_instance_id` and runtime
 epoch, it drains the old fence's durable ordinary events, transitions, and
 input acknowledgement in normal event-sequence-barrier order. Retries retain
 the original event, transition, and acknowledgement IDs.
+
+Physical stop is not a prerequisite for recording the restart failure. If stop
+or durable marker clear remains unproven, the daemon durably retains the
+workspace and leaves the exact process marker intact while draining the old
+outbox. This narrows the earlier stop-before-fallback ordering: one unproven
+process must not prevent recording a failed execution or recovering other runs.
+It does not allow registration to bypass the durable fallback. A retention,
+old-outbox drain, or terminal-journal error blocks registration after the other
+recovery entries have been attempted; a timeout is not authority loss.
 
 Once that old-epoch drain has completed, or ordinary authority is conclusively
 lost, the daemon durably queues `failed` with
 `{"stage":"daemon_restart","error":"input command recovery cannot safely replay stdin"}`.
 The new daemon session then uses the original fence's terminal-only grace path
 to report that failure and deliver any still-permitted command acknowledgement.
-An `ownership_lost` or `terminal_grace_expired` result is conclusive cleanup,
-not permission to mark the pre-fallback journal stale or to replay input.
+The existing cleanup worker retries a generic terminal journal's unresolved
+process marker independently of terminal HTTP delivery. An `ownership_lost` or
+`terminal_grace_expired` result concludes authority, not physical stop; it may
+retire unreachable ordinary outbox entries after the fallback is durable, but
+cannot authorize process-marker removal or workspace cleanup. It is not
+permission to mark the pre-fallback journal stale or to replay input.
 
 ## Phoenix Channel Notifications
 

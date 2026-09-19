@@ -1,0 +1,16 @@
+{
+  "schema_version": "symmetry.usage.v1",
+  "usage_id": "abababab-abab-4bab-8bab-abababababab",
+  "run_id": "99999999-9999-4999-8999-999999999999",
+  "usage_key": "max-int64-cost",
+  "provider": "codex",
+  "model": "implementation-default",
+  "input_tokens": null,
+  "output_tokens": null,
+  "cached_input_tokens": null,
+  "cost_microusd": "9223372036854775807",
+  "cost_basis": "reported",
+  "price_version": "price-max-int64",
+  "supersedes_id": null,
+  "observed_at": "2026-09-08T00:04:02Z"
+}

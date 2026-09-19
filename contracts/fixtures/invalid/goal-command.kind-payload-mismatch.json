@@ -1,0 +1,8 @@
+{
+  "schema_version": "symmetry.goal_command.v1",
+  "mutation_id": "13131313-1313-4313-8313-131313131313",
+  "expected_version": 0,
+  "expected_revision": 1,
+  "kind": "activate",
+  "payload": {"reason": "This payload belongs to a control command."}
+}

@@ -346,6 +346,71 @@ defmodule SymmetryControl.WorkspacesCompletionTest do
     assert {:ok, _deleted} = Workspaces.delete_resource(repository.id, repository.lock_version)
   end
 
+  test "runtime repository affinity prevents resource identity changes and deletion" do
+    project = project_fixture()
+
+    assert {:ok, repository} =
+             Workspaces.create_resource(project.id, %{
+               kind: "repository",
+               name: "runtime-bound-repository",
+               status: "healthy",
+               sync_status: "synced"
+             })
+
+    %{machine: machine} = enroll_machine("runtime-affinity-resource-machine")
+
+    assert {:ok, [runtime]} =
+             Orchestration.register_runtimes(
+               machine.id,
+               Ecto.UUID.generate(),
+               [
+                 %{
+                   runtime_key: "runtime-affinity-resource",
+                   name: "Runtime affinity resource",
+                   capacity: 1,
+                   agent_profile: "codex",
+                   workspace: "primary",
+                   repository_resource_id: repository.id,
+                   capabilities: %{}
+                 }
+               ],
+               now: ~U[2026-09-04 08:00:00.000000Z]
+             )
+
+    assert runtime.repository_resource_id == repository.id
+
+    assert {:error, :state_conflict} =
+             Workspaces.update_resource(repository.id, %{
+               version: repository.lock_version,
+               provider: "github"
+             })
+
+    assert {:ok, repository} =
+             Workspaces.update_resource(repository.id, %{
+               version: repository.lock_version,
+               name: "runtime-bound-repository-renamed",
+               status: "unknown"
+             })
+
+    assert repository.name == "runtime-bound-repository-renamed"
+    assert repository.status == "unknown"
+
+    assert {:error, :state_conflict} =
+             Workspaces.update_resource(repository.id, %{
+               version: repository.lock_version,
+               kind: "ci"
+             })
+
+    assert {:error, :state_conflict} =
+             Workspaces.update_resource(repository.id, %{
+               version: repository.lock_version,
+               external_ref: "acme/other"
+             })
+
+    assert {:error, :state_conflict} =
+             Workspaces.delete_resource(repository.id, repository.lock_version)
+  end
+
   test "active execution freezes intent fields and prevents project archive" do
     project = project_fixture()
 

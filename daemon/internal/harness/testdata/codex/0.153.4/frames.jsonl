@@ -1,0 +1,4 @@
+{"jsonrpc":"2.0","method":"unverified/example","params":{"fixture":true}}
+{"type":"future_native_event","payload":{"fixture":true}}
+{"jsonrpc":"2.0","id":1,"result":{"fixture":true}}
+{malformed-json

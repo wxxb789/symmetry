@@ -4,8 +4,10 @@ defmodule SymmetryControl.Integrations.CommandTest do
   alias SymmetryControl.Integrations.Command
 
   test "provider CLI commands time out" do
-    assert {:error, {:command_timeout, "sh"}} =
-             Command.run("sh", ["-c", "sleep 1"], timeout: 10)
+    {executable, arguments} = shell_command("sleep 1", "Start-Sleep -Seconds 1")
+
+    assert {:error, {:command_timeout, ^executable}} =
+             Command.run(executable, arguments, timeout: 10)
   end
 
   test "missing provider CLI commands return an error" do
@@ -14,11 +16,24 @@ defmodule SymmetryControl.Integrations.CommandTest do
   end
 
   test "provider token commands can keep stderr diagnostics out of stdout" do
+    {executable, arguments} =
+      shell_command(
+        "printf 'warning\\n' >&2; printf 'runtime-token\\n'",
+        "[Console]::Error.WriteLine('warning'); [Console]::Out.WriteLine('runtime-token')"
+      )
+
     assert {:ok, "runtime-token"} =
              Command.run(
-               "sh",
-               ["-c", "printf 'warning\\n' >&2; printf 'runtime-token\\n'"],
+               executable,
+               arguments,
                stderr_to_stdout: false
              )
+  end
+
+  defp shell_command(unix_script, windows_script) do
+    case :os.type() do
+      {:win32, _} -> {"pwsh", ["-NoProfile", "-Command", windows_script]}
+      _ -> {"sh", ["-c", unix_script]}
+    end
   end
 end

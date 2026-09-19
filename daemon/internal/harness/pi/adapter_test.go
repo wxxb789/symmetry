@@ -1,0 +1,1444 @@
+package pi
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/wxxb789/symmetry/daemon/internal/authority"
+	"github.com/wxxb789/symmetry/daemon/internal/execution"
+	"github.com/wxxb789/symmetry/daemon/internal/harness"
+	"github.com/wxxb789/symmetry/daemon/internal/protocol"
+)
+
+func TestCloneTaskResultPreservesSchemaValidEmptyArrays(t *testing.T) {
+	semantic, err := protocol.ParseTaskResult([]byte(validTaskResultJSON(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cloned := cloneTaskResult(harness.TaskResult{Kind: harness.ResultSucceeded, Semantic: &semantic})
+	encoded, err := json.Marshal(cloned.Semantic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := protocol.ParseTaskResult(encoded); err != nil {
+		t.Fatalf("cloning a validated task result changed its wire validity: %v", err)
+	}
+}
+
+func TestAdapterStagesPiRPCAndRequiresSettledExplicitTaskResult(t *testing.T) {
+	process := newFakeNativeProcess()
+	var invocation execution.Invocation
+	adapter := &Adapter{
+		executable: "pi-test",
+		startProcess: func(_ context.Context, got execution.Invocation, sink execution.Sink) (nativeProcess, error) {
+			invocation = got
+			process.sink = sink
+			if got.PersistProcess != nil {
+				pid, identity := process.ProcessDetails()
+				if err := got.PersistProcess(pid, identity); err != nil {
+					return nil, err
+				}
+			}
+			return process, nil
+		},
+	}
+	process.onWrite = func(request Request) {
+		switch request.Type {
+		case CommandGetState:
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "get_state", "success": true, "data": map[string]any{"sessionId": "pi-1", "sessionFile": "C:/sessions/pi-1.jsonl"}})
+		case CommandPrompt:
+			// Native events may arrive before prompt acceptance. Settlement alone
+			// remains pending until the matching response is observed.
+			process.emitJSON(t, map[string]any{"type": "agent_start"})
+			process.emitJSON(t, map[string]any{"type": "message_end", "message": assistantTaskResultMessage(t)})
+			process.emitJSON(t, map[string]any{"type": "agent_end", "messages": []any{}, "willRetry": false})
+			process.emitJSON(t, map[string]any{"type": "agent_settled"})
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "prompt", "success": true})
+		default:
+			t.Fatalf("unexpected request: %+v", request)
+		}
+	}
+	sink := &recordingHarnessSink{}
+	var persistedPID int
+	var persistedIdentity string
+	session := startPiSession(t, adapter, harness.StartRequest{
+		Workspace: t.TempDir(),
+		Invocation: execution.Invocation{Args: []string{
+			"--provider", "openai", "--model", "gpt-5.6", "--session-dir", "C:/sessions",
+		}},
+		PersistProcess: func(pid int, identity string) error {
+			persistedPID, persistedIdentity = pid, identity
+			return nil
+		},
+	}, sink)
+	if got, want := strings.Join(invocation.Args, " "), "--mode rpc --provider openai --model gpt-5.6 --session-dir C:/sessions"; got != want {
+		t.Fatalf("args = %q, want %q", got, want)
+	}
+	if invocation.InitialInput != nil || invocation.CloseInputAfterInitial {
+		t.Fatalf("invocation received legacy input: %+v", invocation)
+	}
+	if persistedPID != 42 || persistedIdentity != "test:42" {
+		t.Fatalf("persisted process = (%d, %q)", persistedPID, persistedIdentity)
+	}
+
+	handle := openPiSession(t, session)
+	if handle.ID != "pi-1" || handle.Filename != "C:/sessions/pi-1.jsonl" {
+		t.Fatalf("Open() handle = %+v", handle)
+	}
+	if sink.has(harness.EventSessionStarted) {
+		t.Fatal("Open emitted session_started before handle persistence barrier")
+	}
+	if err := session.StartTurn(context.Background(), harness.TurnRequest{Goal: "Make bounded progress.", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	if err := session.WaitTurn(context.Background()); err != nil {
+		t.Fatalf("WaitTurn() error = %v", err)
+	}
+	if !sink.has(harness.EventSessionStarted) || !sink.has(harness.EventTaskResult) {
+		t.Fatalf("events = %#v, want session_started and task_result", sink.events)
+	}
+	process.finish(execution.Result{PID: 42, ExitCode: 0})
+	result, err := session.Wait(context.Background())
+	if err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+	if result.Kind != harness.ResultSucceeded || result.Semantic == nil || result.Semantic.Summary != "made bounded progress" {
+		t.Fatalf("result = %+v, want semantic success", result)
+	}
+}
+
+func TestAdapterStartForwardsPersistProcessWithAuthority(t *testing.T) {
+	process := newFakeNativeProcess()
+	var invocation execution.Invocation
+	var called bool
+	var gotPID int
+	var gotIdentity string
+	adapter := &Adapter{
+		executable: "pi-test",
+		startProcess: func(_ context.Context, got execution.Invocation, sink execution.Sink) (nativeProcess, error) {
+			invocation = got
+			process.sink = sink
+			return process, nil
+		},
+	}
+	request := harness.StartRequest{
+		Workspace: t.TempDir(),
+		Invocation: execution.Invocation{
+			PersistProcessWithAuthority: func(pid int, identity string, value *authority.Supervisor) error {
+				if value != nil {
+					t.Fatalf("authority = %p, want nil", value)
+				}
+				called = true
+				gotPID = pid
+				gotIdentity = identity
+				return nil
+			},
+		},
+	}
+	started, err := adapter.Start(context.Background(), request, &recordingHarnessSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = process.Terminate(context.Background(), 0)
+		_, _ = started.Wait(context.Background())
+	})
+	if invocation.PersistProcessWithAuthority == nil {
+		t.Fatal("Start() did not forward PersistProcessWithAuthority")
+	}
+	if err := invocation.PersistProcessWithAuthority(42, "test:42", nil); err != nil {
+		t.Fatalf("forwarded PersistProcessWithAuthority() error = %v", err)
+	}
+	if !called || gotPID != 42 || gotIdentity != "test:42" {
+		t.Fatalf("callback = called:%t pid:%d identity:%q, want called with (42, test:42)", called, gotPID, gotIdentity)
+	}
+}
+
+func TestStartRetainsProcessOwnerWhenRunnerReturnsError(t *testing.T) {
+	process := newFakeNativeProcess()
+	want := errors.New("persist process failed after commit")
+	adapter := &Adapter{
+		executable: "pi-test",
+		startProcess: func(_ context.Context, _ execution.Invocation, sink execution.Sink) (nativeProcess, error) {
+			process.sink = sink
+			return process, want
+		},
+	}
+	sink := &recordingHarnessSink{}
+	started, err := adapter.Start(context.Background(), harness.StartRequest{Workspace: t.TempDir()}, sink)
+	if !errors.Is(err, want) {
+		t.Fatalf("Start() error = %v, want runner failure", err)
+	}
+	session, ok := started.(*nativeSession)
+	if !ok {
+		t.Fatalf("Start() session = %T, want retained *nativeSession", started)
+	}
+	if pid, identity := session.ProcessDetails(); pid != 42 || identity != "test:42" {
+		t.Fatalf("ProcessDetails() = (%d, %q), want returned process identity", pid, identity)
+	}
+	if _, err := session.Open(context.Background()); !errors.Is(err, want) {
+		t.Fatalf("Open() error = %v, want retained start failure", err)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if _, err := session.Wait(context.Background()); err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+	if process.terminateCount() != 1 {
+		t.Fatalf("Terminate calls = %d, want one session-owned cleanup", process.terminateCount())
+	}
+	if len(sink.events) != 0 {
+		t.Fatalf("events = %#v, want no acknowledgement after failed start", sink.events)
+	}
+}
+
+func TestStartRetainsProcessOwnerAfterPreReadyOutputFailure(t *testing.T) {
+	process := newFakeNativeProcess()
+	want := errors.New("durable event sink unavailable")
+	adapter := &Adapter{
+		executable: "pi-test",
+		startProcess: func(_ context.Context, _ execution.Invocation, sink execution.Sink) (nativeProcess, error) {
+			process.sink = sink
+			if err := sink.Handle(context.Background(), execution.Event{Stream: execution.Stdout, Sequence: 1, Data: []byte(`{"type":"agent_start"}` + "\n")}); err != nil {
+				return nil, err
+			}
+			return process, nil
+		},
+	}
+	sink := &recordingHarnessSink{err: want}
+	started, err := adapter.Start(context.Background(), harness.StartRequest{Workspace: t.TempDir()}, sink)
+	if !errors.Is(err, want) {
+		t.Fatalf("Start() error = %v, want pre-ready sink failure", err)
+	}
+	session, ok := started.(*nativeSession)
+	if !ok {
+		t.Fatalf("Start() session = %T, want retained *nativeSession", started)
+	}
+	if _, err := session.Open(context.Background()); !errors.Is(err, want) {
+		t.Fatalf("Open() error = %v, want retained pre-ready failure", err)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if process.terminateCount() != 1 {
+		t.Fatalf("Terminate calls = %d, want one session-owned cleanup", process.terminateCount())
+	}
+}
+
+func TestOpenReturnsPromptlyWhenCleanProcessExitLeavesGetStateUnacknowledged(t *testing.T) {
+	process := newFakeNativeProcess()
+	written := make(chan struct{})
+	process.onWrite = func(request Request) {
+		if request.Type != CommandGetState {
+			t.Fatalf("request = %+v, want get_state", request)
+		}
+		close(written)
+		process.finish(execution.Result{PID: 42, ExitCode: 0})
+	}
+	sink := &recordingHarnessSink{}
+	session := startPiSession(t, fakePiAdapter(process), harness.StartRequest{Workspace: t.TempDir()}, sink)
+	done := make(chan error, 1)
+	go func() {
+		_, err := session.Open(context.Background())
+		done <- err
+	}()
+	<-written
+	select {
+	case err := <-done:
+		if err == nil || errors.Is(err, context.Canceled) {
+			t.Fatalf("Open() error = %v, want final process outcome", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Open() remained blocked after clean process exit")
+	}
+	if sink.has(harness.EventSessionStarted) {
+		t.Fatal("Open emitted session_started without get_state acknowledgement")
+	}
+}
+
+func TestOpenRejectsKnownCompletedProcessBeforeRegisteringRequest(t *testing.T) {
+	process := newFakeNativeProcess()
+	session := startPiSession(t, fakePiAdapter(process), harness.StartRequest{Workspace: t.TempDir()}, &recordingHarnessSink{})
+	process.finish(execution.Result{PID: 42, ExitCode: 0})
+	<-session.resultDone
+	if _, err := session.Open(context.Background()); err == nil || errors.Is(err, context.Canceled) {
+		t.Fatalf("Open() error = %v, want known completion cause", err)
+	}
+	if writes := process.requestTypes(); len(writes) != 0 {
+		t.Fatalf("requests after completion = %v, want none", writes)
+	}
+}
+
+func TestStartTurnReturnsPromptlyWhenCleanProcessExitLeavesPromptUnacknowledged(t *testing.T) {
+	process := newFakeNativeProcess()
+	process.onWrite = func(request Request) {
+		switch request.Type {
+		case CommandGetState:
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "get_state", "success": true, "data": map[string]any{"sessionId": "pi-1", "sessionFile": "C:/sessions/pi-1.jsonl"}})
+		case CommandPrompt:
+			process.finish(execution.Result{PID: 42, ExitCode: 0})
+		default:
+			t.Fatalf("request = %+v", request)
+		}
+	}
+	session := startPiSession(t, fakePiAdapter(process), harness.StartRequest{Workspace: t.TempDir()}, &recordingHarnessSink{})
+	_ = openPiSession(t, session)
+	done := make(chan error, 1)
+	go func() {
+		done <- session.StartTurn(context.Background(), harness.TurnRequest{Goal: "Make bounded progress.", Context: json.RawMessage(`{"snapshot":"canonical"}`)})
+	}()
+	select {
+	case err := <-done:
+		if err == nil || errors.Is(err, context.Canceled) {
+			t.Fatalf("StartTurn() error = %v, want final process outcome", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("StartTurn() remained blocked after clean process exit")
+	}
+	result, err := session.Wait(context.Background())
+	if err != nil || result.Kind != harness.ResultFailed || result.Reason == nil || *result.Reason != protocol.TaskResultReasonMissingResult {
+		t.Fatalf("Wait() = %+v, %v; want missing_result", result, err)
+	}
+}
+
+func TestPromptAcknowledgementWinsWhenResultCompletesConcurrently(t *testing.T) {
+	process := newFakeNativeProcess()
+	var session *nativeSession
+	process.onWrite = func(request Request) {
+		switch request.Type {
+		case CommandGetState:
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "get_state", "success": true, "data": map[string]any{"sessionId": "pi-1", "sessionFile": "C:/sessions/pi-1.jsonl"}})
+		case CommandPrompt:
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "prompt", "success": true})
+			process.finish(execution.Result{PID: 42, ExitCode: 0})
+			<-session.resultDone
+		default:
+			t.Fatalf("request = %+v", request)
+		}
+	}
+	session = startPiSession(t, fakePiAdapter(process), harness.StartRequest{Workspace: t.TempDir()}, &recordingHarnessSink{})
+	_ = openPiSession(t, session)
+	if err := session.StartTurn(context.Background(), harness.TurnRequest{Goal: "Make bounded progress.", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
+		t.Fatalf("StartTurn() error = %v, want prompt acknowledgement", err)
+	}
+}
+
+func TestGetStateAcknowledgementWinsWhenCallerCancellationIsReady(t *testing.T) {
+	process := newFakeNativeProcess()
+	written := make(chan struct{})
+	process.onWrite = func(request Request) {
+		if request.Type != CommandGetState {
+			t.Fatalf("request = %+v, want get_state", request)
+		}
+		close(written)
+	}
+	session := startPiSession(t, fakePiAdapter(process), harness.StartRequest{Workspace: t.TempDir()}, &recordingHarnessSink{})
+	expiring := make(chan struct{})
+	releaseExpiry := make(chan struct{})
+	session.beforeRequestExpiry = func() {
+		close(expiring)
+		<-releaseExpiry
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct {
+		handle harness.NativeSessionHandle
+		err    error
+	}, 1)
+	go func() {
+		handle, err := session.Open(ctx)
+		done <- struct {
+			handle harness.NativeSessionHandle
+			err    error
+		}{handle: handle, err: err}
+	}()
+	<-written
+	process.mutex.Lock()
+	request := process.writes[len(process.writes)-1]
+	process.mutex.Unlock()
+	cancel()
+	<-expiring
+	process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "get_state", "success": true, "data": map[string]any{"sessionId": "pi-1", "sessionFile": "C:/sessions/pi-1.jsonl"}})
+	close(releaseExpiry)
+	result := <-done
+	if result.err != nil || result.handle.ID != "pi-1" {
+		t.Fatalf("Open() = %+v, %v; want acknowledgement", result.handle, result.err)
+	}
+	session.mutex.Lock()
+	failure := session.failure
+	session.mutex.Unlock()
+	if failure != nil {
+		t.Fatalf("caller cancellation expired acknowledged request: %v", failure)
+	}
+}
+
+func TestGetStateAcknowledgementWinsAfterHandlerClaimsPendingRequest(t *testing.T) {
+	process := newFakeNativeProcess()
+	written := make(chan struct{})
+	process.onWrite = func(request Request) {
+		if request.Type != CommandGetState {
+			t.Fatalf("request = %+v, want get_state", request)
+		}
+		close(written)
+	}
+	session := startPiSession(t, fakePiAdapter(process), harness.StartRequest{Workspace: t.TempDir()}, &recordingHarnessSink{})
+	claimed := make(chan struct{})
+	releasePublish := make(chan struct{})
+	session.beforeResponsePublish = func() {
+		close(claimed)
+		<-releasePublish
+	}
+	expiring := make(chan struct{})
+	releaseExpiry := make(chan struct{})
+	session.beforeRequestExpiry = func() {
+		close(expiring)
+		<-releaseExpiry
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct {
+		handle harness.NativeSessionHandle
+		err    error
+	}, 1)
+	go func() {
+		handle, err := session.Open(ctx)
+		done <- struct {
+			handle harness.NativeSessionHandle
+			err    error
+		}{handle: handle, err: err}
+	}()
+	<-written
+	process.mutex.Lock()
+	request := process.writes[len(process.writes)-1]
+	process.mutex.Unlock()
+	delivered := make(chan struct{})
+	go func() {
+		process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "get_state", "success": true, "data": map[string]any{"sessionId": "pi-1", "sessionFile": "C:/sessions/pi-1.jsonl"}})
+		close(delivered)
+	}()
+	<-claimed
+	cancel()
+	<-expiring
+	close(releasePublish)
+	<-delivered
+	close(releaseExpiry)
+	result := <-done
+	if result.err != nil || result.handle.ID != "pi-1" {
+		t.Fatalf("Open() = %+v, %v; want acknowledgement", result.handle, result.err)
+	}
+	session.mutex.Lock()
+	failure := session.failure
+	session.mutex.Unlock()
+	if failure != nil {
+		t.Fatalf("expiry raced an acknowledged response: %v", failure)
+	}
+}
+
+func TestGetStateAcknowledgementWinsWhenSessionContextCancelsAfterHandlerClaims(t *testing.T) {
+	process := newFakeNativeProcess()
+	written := make(chan struct{})
+	process.onWrite = func(request Request) {
+		if request.Type != CommandGetState {
+			t.Fatalf("request = %+v, want get_state", request)
+		}
+		close(written)
+	}
+	session := startPiSession(t, fakePiAdapter(process), harness.StartRequest{Workspace: t.TempDir()}, &recordingHarnessSink{})
+	claimed := make(chan struct{})
+	releasePublish := make(chan struct{})
+	session.beforeResponsePublish = func() {
+		close(claimed)
+		<-releasePublish
+	}
+	getState, err := GetStateRequest("session-cancel-race")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct {
+		response Response
+		err      error
+	}, 1)
+	go func() {
+		response, err := session.call(context.Background(), getState)
+		done <- struct {
+			response Response
+			err      error
+		}{response: response, err: err}
+	}()
+	<-written
+	process.mutex.Lock()
+	writtenRequest := process.writes[len(process.writes)-1]
+	process.mutex.Unlock()
+	delivered := make(chan struct{})
+	go func() {
+		process.emitJSON(t, map[string]any{"type": "response", "id": writtenRequest.ID, "command": "get_state", "success": true, "data": map[string]any{"sessionId": "pi-1", "sessionFile": "C:/sessions/pi-1.jsonl"}})
+		close(delivered)
+	}()
+	<-claimed
+	session.cancel()
+	close(releasePublish)
+	<-delivered
+	result := <-done
+	if result.err != nil || result.response.ID != getState.ID {
+		t.Fatalf("call() = %+v, %v; want acknowledgement", result.response, result.err)
+	}
+	session.mutex.Lock()
+	failure := session.failure
+	session.mutex.Unlock()
+	if failure != nil {
+		t.Fatalf("session cancellation discarded acknowledged response: %v", failure)
+	}
+}
+
+func TestWaitTurnReturnsTerminalResultWhenSessionContextIsCancelled(t *testing.T) {
+	process := newFakeNativeProcess()
+	session := startPiSession(t, fakePiAdapter(process), harness.StartRequest{Workspace: t.TempDir()}, &recordingHarnessSink{})
+	session.completeTurn(harness.TaskResult{Kind: harness.ResultSucceeded}, nil, false)
+	session.cancel()
+	if err := session.WaitTurn(context.Background()); err != nil {
+		t.Fatalf("WaitTurn() error = %v, want terminal turn result", err)
+	}
+	process.finish(execution.Result{PID: 42, ExitCode: 0})
+	if _, err := session.Wait(context.Background()); err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+}
+
+func TestWaitTurnDoesNotTreatInFlightTerminalPublicationAsComplete(t *testing.T) {
+	process := newFakeNativeProcess()
+	publishing := make(chan struct{})
+	releasePublication := make(chan struct{})
+	sink := &blockingTaskResultSink{publishing: publishing, release: releasePublication}
+	session := startPiSession(t, fakePiAdapter(process), harness.StartRequest{Workspace: t.TempDir()}, sink)
+	completionReturned := make(chan struct{})
+	go func() {
+		defer close(completionReturned)
+		session.completeTurn(harness.TaskResult{Kind: harness.ResultSucceeded}, nil, true)
+	}()
+	defer func() {
+		close(releasePublication)
+		<-completionReturned
+		process.finish(execution.Result{PID: 42, ExitCode: 0})
+		if _, err := session.Wait(context.Background()); err != nil {
+			t.Errorf("Wait() error = %v", err)
+		}
+	}()
+	<-publishing
+	session.cancel()
+	if err := session.WaitTurn(context.Background()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("WaitTurn() error = %v, want session cancellation before turnDone", err)
+	}
+}
+
+func TestControlCancelSendsClearQueueBeforeAbortAndNeedsSettlement(t *testing.T) {
+	process := newFakeNativeProcess()
+	adapter := fakePiAdapter(process)
+	process.onWrite = func(request Request) {
+		switch request.Type {
+		case CommandGetState:
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "get_state", "success": true, "data": map[string]any{"sessionId": "pi-1", "sessionFile": "C:/sessions/pi-1.jsonl"}})
+		case CommandPrompt:
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "prompt", "success": true})
+			process.emitJSON(t, map[string]any{"type": "agent_start"})
+		case CommandClearQueue:
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "clear_queue", "success": true, "data": map[string]any{"steering": []any{}, "followUp": []any{}}})
+		case CommandAbort:
+			// Abort's response may be delayed until after native settlement.
+			process.emitJSON(t, map[string]any{"type": "agent_end", "messages": []any{}, "willRetry": false})
+			process.emitJSON(t, map[string]any{"type": "agent_settled"})
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "abort", "success": true})
+		}
+	}
+	session := startPiSession(t, adapter, harness.StartRequest{Workspace: t.TempDir()}, &recordingHarnessSink{})
+	_ = openPiSession(t, session)
+	if err := session.StartTurn(context.Background(), harness.TurnRequest{Goal: "Make bounded progress.", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	receipt, err := session.Control(context.Background(), harness.ControlRequest{CommandID: "cancel-1", Kind: harness.ControlCancel})
+	if err != nil || receipt.Outcome != harness.ControlApplied {
+		t.Fatalf("Control(cancel) = %+v, %v", receipt, err)
+	}
+	if err := session.WaitTurn(context.Background()); err != nil {
+		t.Fatalf("WaitTurn() error = %v", err)
+	}
+	if writes := process.requestTypes(); strings.Join(writes, ",") != "get_state,prompt,clear_queue,abort" {
+		t.Fatalf("request order = %v, want get_state,prompt,clear_queue,abort", writes)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	result, err := session.Wait(context.Background())
+	if err != nil || result.Kind != harness.ResultCancelled {
+		t.Fatalf("Wait() = %+v, %v; want cancelled", result, err)
+	}
+}
+
+func TestWaitTurnRejectsMalformedOrNonStructuredFinalContent(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		message map[string]any
+	}{
+		{name: "plain text", message: map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "text", "text": "made progress"}}, "stopReason": "stop"}},
+		{name: "fenced json", message: map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "text", "text": "```json\n{}\n```"}}, "stopReason": "stop"}},
+		{name: "multiple blocks", message: map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "text", "text": validTaskResultJSON(t)}, map[string]any{"type": "text", "text": "extra"}}, "stopReason": "stop"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			process := newFakeNativeProcess()
+			process.onWrite = func(request Request) {
+				switch request.Type {
+				case CommandGetState:
+					process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "get_state", "success": true, "data": map[string]any{"sessionId": "pi-1", "sessionFile": "C:/sessions/pi-1.jsonl"}})
+				case CommandPrompt:
+					process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "prompt", "success": true})
+					process.emitJSON(t, map[string]any{"type": "agent_start"})
+					process.emitJSON(t, map[string]any{"type": "message_end", "message": test.message})
+					process.emitJSON(t, map[string]any{"type": "agent_end", "messages": []any{}, "willRetry": false})
+					process.emitJSON(t, map[string]any{"type": "agent_settled"})
+				}
+			}
+			session := startPiSession(t, fakePiAdapter(process), harness.StartRequest{Workspace: t.TempDir()}, &recordingHarnessSink{})
+			_ = openPiSession(t, session)
+			if err := session.StartTurn(context.Background(), harness.TurnRequest{Goal: "Make bounded progress.", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
+				t.Fatalf("StartTurn() error = %v", err)
+			}
+			if err := session.WaitTurn(context.Background()); !errors.Is(err, ErrInvalidTaskResult) {
+				t.Fatalf("WaitTurn() error = %v, want ErrInvalidTaskResult", err)
+			}
+			process.finish(execution.Result{PID: 42, ExitCode: 0})
+			result, err := session.Wait(context.Background())
+			if err != nil || result.Kind != harness.ResultFailed || result.Reason == nil || *result.Reason != "missing_result" {
+				t.Fatalf("Wait() = %+v, %v; want missing_result failure", result, err)
+			}
+		})
+	}
+}
+
+func TestCloseRetriesAfterTerminationFailure(t *testing.T) {
+	process := newFakeNativeProcess()
+	process.terminateErrors = []error{errors.New("temporary termination failure"), nil}
+	session := startPiSession(t, fakePiAdapter(process), harness.StartRequest{Workspace: t.TempDir()}, &recordingHarnessSink{})
+	if err := session.Close(context.Background()); err == nil {
+		t.Fatal("first Close() error = nil, want termination failure")
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("second Close() error = %v", err)
+	}
+	if got := process.terminateCount(); got != 2 {
+		t.Fatalf("Terminate calls = %d, want 2", got)
+	}
+}
+
+func TestStartRejectsRPCTransportOverrideBeforeLaunchingProcess(t *testing.T) {
+	called := false
+	adapter := &Adapter{
+		executable: "pi-test",
+		startProcess: func(_ context.Context, _ execution.Invocation, _ execution.Sink) (nativeProcess, error) {
+			called = true
+			return newFakeNativeProcess(), nil
+		},
+	}
+	_, err := adapter.Start(context.Background(), harness.StartRequest{
+		Workspace:  t.TempDir(),
+		Invocation: execution.Invocation{Args: []string{"--mode=text"}},
+	}, &recordingHarnessSink{})
+	if err == nil || !strings.Contains(err.Error(), "must not override") {
+		t.Fatalf("Start() error = %v, want mode override rejection", err)
+	}
+	if called {
+		t.Fatal("Start() launched a process despite a mode override")
+	}
+}
+
+func TestStartRejectsHistoryMutatingArgumentsBeforeLaunchingProcess(t *testing.T) {
+	for _, argument := range []string{
+		"--continue", "--continue=latest", "-c",
+		"--resume", "--resume=session-1", "-r",
+		"--session", "--session=session-1",
+		"--session-id", "--session-id=session-1",
+		"--fork", "--fork=session-1",
+		"--no-session",
+	} {
+		t.Run(argument, func(t *testing.T) {
+			called := false
+			adapter := &Adapter{
+				executable: "pi-test",
+				startProcess: func(_ context.Context, _ execution.Invocation, _ execution.Sink) (nativeProcess, error) {
+					called = true
+					return newFakeNativeProcess(), nil
+				},
+			}
+			_, err := adapter.Start(context.Background(), harness.StartRequest{
+				Workspace:  t.TempDir(),
+				Invocation: execution.Invocation{Args: []string{argument}},
+			}, &recordingHarnessSink{})
+			if err == nil || !strings.Contains(err.Error(), "not allowed") {
+				t.Fatalf("Start() error = %v, want history/session flag rejection", err)
+			}
+			if called {
+				t.Fatal("Start() launched a process despite a prohibited history/session flag")
+			}
+		})
+	}
+}
+
+func TestCloseBoundsMissingClearQueueAcknowledgementThenTerminates(t *testing.T) {
+	process := newFakeNativeProcess()
+	adapter := fakePiAdapter(process)
+	adapter.cancelTimeout = 10 * time.Millisecond
+	process.onWrite = func(request Request) {
+		switch request.Type {
+		case CommandGetState:
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "get_state", "success": true, "data": map[string]any{"sessionId": "pi-1", "sessionFile": "C:/sessions/pi-1.jsonl"}})
+		case CommandPrompt:
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "prompt", "success": true})
+			process.emitJSON(t, map[string]any{"type": "agent_start"})
+		case CommandClearQueue:
+			// The missing acknowledgement must not block Close forever or allow
+			// abort to be written out of the documented clear_queue ordering.
+		}
+	}
+	session := startPiSession(t, adapter, harness.StartRequest{Workspace: t.TempDir()}, &recordingHarnessSink{})
+	_ = openPiSession(t, session)
+	if err := session.StartTurn(context.Background(), harness.TurnRequest{Goal: "Make bounded progress.", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v, want process cleanup despite missing native ACK", err)
+	}
+	if writes := process.requestTypes(); strings.Join(writes, ",") != "get_state,prompt,clear_queue" {
+		t.Fatalf("request order = %v, want clear_queue only before fallback", writes)
+	}
+	if got := process.terminateCount(); got != 1 {
+		t.Fatalf("Terminate calls = %d, want one fallback cleanup", got)
+	}
+	result, err := session.Wait(context.Background())
+	if err != nil || result.Kind != harness.ResultFailed {
+		t.Fatalf("Wait() = %+v, %v; want failed unknown outcome after unacknowledged cancel", result, err)
+	}
+}
+
+func TestCloseHonorsCallerCancellationWhileBoundedCleanupContinues(t *testing.T) {
+	process := newFakeNativeProcess()
+	adapter := fakePiAdapter(process)
+	adapter.cancelTimeout = 10 * time.Millisecond
+	clearWritten := make(chan struct{})
+	process.onWrite = func(request Request) {
+		switch request.Type {
+		case CommandGetState:
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "get_state", "success": true, "data": map[string]any{"sessionId": "pi-1", "sessionFile": "C:/sessions/pi-1.jsonl"}})
+		case CommandPrompt:
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "prompt", "success": true})
+			process.emitJSON(t, map[string]any{"type": "agent_start"})
+		case CommandClearQueue:
+			close(clearWritten)
+		}
+	}
+	session := startPiSession(t, adapter, harness.StartRequest{Workspace: t.TempDir()}, &recordingHarnessSink{})
+	_ = openPiSession(t, session)
+	if err := session.StartTurn(context.Background(), harness.TurnRequest{Goal: "Make bounded progress.", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	closeResult := make(chan error, 1)
+	go func() { closeResult <- session.Close(ctx) }()
+	<-clearWritten
+	cancel()
+	if err := <-closeResult; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Close() error = %v, want caller cancellation", err)
+	}
+	result, err := session.Wait(context.Background())
+	if err != nil || result.Kind != harness.ResultFailed {
+		t.Fatalf("Wait() = %+v, %v; want bounded cleanup failure", result, err)
+	}
+	if got := process.terminateCount(); got != 1 {
+		t.Fatalf("Terminate calls = %d, want bounded cleanup fallback", got)
+	}
+}
+
+func TestAcceptedAbortWithProcessExitBeforeSettlementRemainsCancelled(t *testing.T) {
+	process := newFakeNativeProcess()
+	process.onWrite = func(request Request) {
+		switch request.Type {
+		case CommandGetState:
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "get_state", "success": true, "data": map[string]any{"sessionId": "pi-1", "sessionFile": "C:/sessions/pi-1.jsonl"}})
+		case CommandPrompt:
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "prompt", "success": true})
+			process.emitJSON(t, map[string]any{"type": "agent_start"})
+		case CommandClearQueue:
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "clear_queue", "success": true, "data": map[string]any{"steering": []any{}, "followUp": []any{}}})
+		case CommandAbort:
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "abort", "success": true})
+			process.finish(execution.Result{PID: 42, Terminated: true, OutputTruncated: true})
+		}
+	}
+	session := startPiSession(t, fakePiAdapter(process), harness.StartRequest{Workspace: t.TempDir()}, &recordingHarnessSink{})
+	_ = openPiSession(t, session)
+	if err := session.StartTurn(context.Background(), harness.TurnRequest{Goal: "Make bounded progress.", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	if receipt, err := session.Control(context.Background(), harness.ControlRequest{CommandID: "cancel-1", Kind: harness.ControlCancel}); err != nil || receipt.Outcome != harness.ControlApplied {
+		t.Fatalf("Control(cancel) = %+v, %v", receipt, err)
+	}
+	if err := session.WaitTurn(context.Background()); err != nil {
+		t.Fatalf("WaitTurn() error = %v, want accepted cancellation", err)
+	}
+	result, err := session.Wait(context.Background())
+	if err != nil || result.Kind != harness.ResultCancelled {
+		t.Fatalf("Wait() = %+v, %v; want cancelled rather than process failure", result, err)
+	}
+}
+
+func TestDeliberateCloseAfterSettledTurnDoesNotDowngradeValidResult(t *testing.T) {
+	process := newFakeNativeProcess()
+	process.onWrite = func(request Request) {
+		switch request.Type {
+		case CommandGetState:
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "get_state", "success": true, "data": map[string]any{"sessionId": "pi-1", "sessionFile": "C:/sessions/pi-1.jsonl"}})
+		case CommandPrompt:
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "prompt", "success": true})
+			process.emitJSON(t, map[string]any{"type": "agent_start"})
+			process.emitJSON(t, map[string]any{"type": "message_end", "message": assistantTaskResultMessage(t)})
+			process.emitJSON(t, map[string]any{"type": "agent_end", "messages": []any{}, "willRetry": false})
+			process.emitJSON(t, map[string]any{"type": "agent_settled"})
+		}
+	}
+	session := startPiSession(t, fakePiAdapter(process), harness.StartRequest{Workspace: t.TempDir()}, &recordingHarnessSink{})
+	_ = openPiSession(t, session)
+	if err := session.StartTurn(context.Background(), harness.TurnRequest{Goal: "Make bounded progress.", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	if err := session.WaitTurn(context.Background()); err != nil {
+		t.Fatalf("WaitTurn() error = %v", err)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	result, err := session.Wait(context.Background())
+	if err != nil || result.Kind != harness.ResultSucceeded || result.Semantic == nil {
+		t.Fatalf("Wait() = %+v, %v; want retained valid result", result, err)
+	}
+}
+
+func TestMalformedRecordAfterSemanticTurnInvalidatesFinalWaitResult(t *testing.T) {
+	process := newFakeNativeProcess()
+	process.onWrite = func(request Request) {
+		switch request.Type {
+		case CommandGetState:
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "get_state", "success": true, "data": map[string]any{"sessionId": "pi-1", "sessionFile": "C:/sessions/pi-1.jsonl"}})
+		case CommandPrompt:
+			process.emitJSON(t, map[string]any{"type": "response", "id": request.ID, "command": "prompt", "success": true})
+			process.emitJSON(t, map[string]any{"type": "agent_start"})
+			process.emitJSON(t, map[string]any{"type": "message_end", "message": assistantTaskResultMessage(t)})
+			process.emitJSON(t, map[string]any{"type": "agent_end", "messages": []any{}, "willRetry": false})
+			process.emitJSON(t, map[string]any{"type": "agent_settled"})
+		}
+	}
+	session := startPiSession(t, fakePiAdapter(process), harness.StartRequest{Workspace: t.TempDir()}, &recordingHarnessSink{})
+	_ = openPiSession(t, session)
+	if err := session.StartTurn(context.Background(), harness.TurnRequest{Goal: "Make bounded progress.", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	if err := session.WaitTurn(context.Background()); err != nil {
+		t.Fatalf("WaitTurn() error = %v", err)
+	}
+	process.emitRaw(t, []byte("{malformed}\n"))
+	process.finish(execution.Result{PID: 42, ExitCode: 0})
+	result, err := session.Wait(context.Background())
+	if err != nil || result.Kind != harness.ResultFailed || result.Semantic != nil {
+		t.Fatalf("Wait() = %+v, %v; want final failure after malformed record", result, err)
+	}
+}
+
+func TestMalformedRecordPreservesDiagnosticDurabilityFailure(t *testing.T) {
+	decodeErr := errors.New("malformed pi record")
+	durabilityErr := errors.New("journal append failed")
+	session := newNativeSession(
+		context.Background(),
+		func() {},
+		harness.EventSinkFunc(func(_ context.Context, event harness.Event) error {
+			if event.Code == "invalid_native_record" {
+				return durabilityErr
+			}
+			return nil
+		}),
+		time.Second,
+		nil,
+	)
+
+	err := session.handleRecord(context.Background(), execution.Event{Stream: execution.Stdout}, Record{Sequence: 1, DecodeError: decodeErr})
+	if !errors.Is(err, decodeErr) || !errors.Is(err, durabilityErr) {
+		t.Fatalf("handleRecord() error = %v, want malformed and durability errors", err)
+	}
+}
+
+func TestProbeRemainsNativeUnverifiedWithAllExecutableCapabilitiesFalse(t *testing.T) {
+	runner := fakeCommandRunner{outputs: map[string][]byte{
+		"--version": []byte("0.85.1\n"),
+		"--help":    []byte("Options:\n  --mode <mode> Output mode: text, json, or rpc\n"),
+	}}
+	result, err := Probe(context.Background(), "pi-test", runner)
+	if !errors.Is(err, harness.ErrNativeUnverified) {
+		t.Fatalf("Probe() error = %v, want ErrNativeUnverified", err)
+	}
+	if !result.VersionKnown || !result.TransportKnown || result.Capabilities.Verified || result.Capabilities.Start || result.Capabilities.Events || result.Capabilities.Cancel || result.Capabilities.Resume || result.Capabilities.Usage != harness.UsageUnknown {
+		t.Fatalf("capabilities = %+v, want fully executable-false projection", result.Capabilities)
+	}
+	if err := result.Capabilities.Validate(); err != nil {
+		t.Fatalf("Capabilities.Validate() error = %v", err)
+	}
+}
+
+func TestProbeBoundsHangingRunnerAndPreservesCancellation(t *testing.T) {
+	for _, test := range []struct {
+		name             string
+		context          func() (context.Context, context.CancelFunc)
+		want             error
+		cancelAfterStart bool
+		waitWithin       time.Duration
+	}{
+		{name: "local timeout", context: func() (context.Context, context.CancelFunc) { return context.Background(), func() {} }, want: context.DeadlineExceeded, waitWithin: probeTimeout + time.Second},
+		{name: "caller earlier deadline", context: func() (context.Context, context.CancelFunc) {
+			return newProbeDeadlineContext()
+		}, want: context.DeadlineExceeded, cancelAfterStart: true, waitWithin: time.Second},
+		{name: "caller cancellation", context: func() (context.Context, context.CancelFunc) { return context.WithCancel(context.Background()) }, want: context.Canceled, cancelAfterStart: true, waitWithin: time.Second},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := test.context()
+			defer cancel()
+			runner := hangingCommandRunner{started: make(chan struct{})}
+			done := make(chan error, 1)
+			go func() {
+				_, err := Probe(ctx, "pi", runner)
+				done <- err
+			}()
+			select {
+			case <-runner.started:
+			case <-time.After(time.Second):
+				t.Fatal("Probe() did not start the runner")
+			}
+			if test.cancelAfterStart {
+				cancel()
+			}
+			var err error
+			select {
+			case err = <-done:
+			case <-time.After(test.waitWithin):
+				t.Fatalf("Probe() did not return within %v", test.waitWithin)
+			}
+			if !errors.Is(err, test.want) {
+				t.Fatalf("Probe() error = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
+func TestProbeRejectsSuccessfulRunnerResultAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runner := &cancellationSuccessRunner{started: make(chan struct{})}
+	done := make(chan error, 1)
+	go func() {
+		_, err := Probe(ctx, "pi", runner)
+		done <- err
+	}()
+	select {
+	case <-runner.started:
+	case <-time.After(time.Second):
+		t.Fatal("Probe() did not start the injected runner")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Probe() error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Probe() did not return after cancellation")
+	}
+	calls := runner.callsSnapshot()
+	if len(calls) != 1 || calls[0] != "--version" {
+		t.Fatalf("injected runner calls = %v, want only --version", calls)
+	}
+}
+
+func TestAdapterResumesExactPiSessionAtAnIdleBoundary(t *testing.T) {
+	process := newFakeNativeProcess()
+	var invocation execution.Invocation
+	adapter := &Adapter{
+		executable: "pi-test",
+		startProcess: func(_ context.Context, got execution.Invocation, sink execution.Sink) (nativeProcess, error) {
+			invocation = got
+			process.sink = sink
+			return process, nil
+		},
+	}
+	resume := piResumeHandle(t)
+	process.onWrite = func(request Request) {
+		if request.Type != CommandGetState {
+			t.Fatalf("resume request = %+v, want get_state before a prompt", request)
+		}
+		process.emitJSON(t, map[string]any{
+			"type": "response", "id": request.ID, "command": "get_state", "success": true,
+			"data": map[string]any{
+				"sessionId": resume.NativeSessionID, "sessionFile": resume.NativeSessionFilename,
+				"isStreaming": false, "isCompacting": false, "pendingMessageCount": 0,
+			},
+		})
+	}
+	session := startPiSession(t, adapter, harness.StartRequest{
+		Workspace: t.TempDir(), Resume: resume,
+		Invocation: execution.Invocation{Args: []string{"--provider", "openai", "--model", "gpt-5.6"}},
+	}, &recordingHarnessSink{})
+	defer closePiSession(t, session)
+	if got, want := strings.Join(invocation.Args, "\x00"), strings.Join([]string{"--mode", "rpc", "--session", resume.NativeSessionFilename, "--provider", "openai", "--model", "gpt-5.6"}, "\x00"); got != want {
+		t.Fatalf("resume args = %q, want %q", got, want)
+	}
+	handle := openPiSession(t, session)
+	if handle.ID != resume.NativeSessionID || handle.Filename != resume.NativeSessionFilename {
+		t.Fatalf("Open() = %+v, want retained native identity", handle)
+	}
+	if writes := process.requestTypes(); strings.Join(writes, ",") != "get_state" {
+		t.Fatalf("requests = %v, want get_state only", writes)
+	}
+}
+
+func TestAdapterRejectsMissingOrOverriddenPiResumeBeforeLaunch(t *testing.T) {
+	valid := piResumeHandle(t)
+	tests := []struct {
+		name   string
+		resume *harness.ResumeHandle
+		args   []string
+		want   error
+	}{
+		{name: "missing native filename", resume: &harness.ResumeHandle{LocalHandleID: valid.LocalHandleID, NativeSessionID: valid.NativeSessionID, WorkspaceFingerprint: valid.WorkspaceFingerprint, NativeVersion: valid.NativeVersion}, want: ErrResumeRejected},
+		{name: "missing native file", resume: &harness.ResumeHandle{LocalHandleID: valid.LocalHandleID, NativeSessionID: valid.NativeSessionID, NativeSessionFilename: filepath.Join(t.TempDir(), "missing.jsonl"), WorkspaceFingerprint: valid.WorkspaceFingerprint, NativeVersion: valid.NativeVersion}, want: ErrResumeRejected},
+		{name: "incompatible native version", resume: &harness.ResumeHandle{LocalHandleID: valid.LocalHandleID, NativeSessionID: valid.NativeSessionID, NativeSessionFilename: valid.NativeSessionFilename, WorkspaceFingerprint: valid.WorkspaceFingerprint, NativeVersion: "0.0.0"}, want: ErrResumeRejected},
+		{name: "profile session override", resume: valid, args: []string{"--session", filepath.Join(t.TempDir(), "other.jsonl")}, want: ErrResumeRejected},
+		{name: "profile resume override", resume: valid, args: []string{"--resume"}, want: ErrResumeRejected},
+		{name: "profile compact resume override", resume: valid, args: []string{"-rother"}, want: ErrResumeRejected},
+		{name: "profile mode override", resume: valid, args: []string{"--mode=json"}, want: ErrResumeRejected},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			started := false
+			adapter := &Adapter{executable: "pi-test", startProcess: func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
+				started = true
+				return newFakeNativeProcess(), nil
+			}}
+			_, err := adapter.Start(context.Background(), harness.StartRequest{Workspace: t.TempDir(), Resume: test.resume, Invocation: execution.Invocation{Args: test.args}}, &recordingHarnessSink{})
+			if test.want != nil && !errors.Is(err, test.want) {
+				t.Fatalf("Start() error = %v, want %v", err, test.want)
+			}
+			if started {
+				t.Fatal("Start() launched despite invalid or profile-overridden resume identity")
+			}
+		})
+	}
+}
+
+func TestAdapterRejectsPiResumeWithMismatchedOrActiveStateBeforePrompt(t *testing.T) {
+	tests := []struct {
+		name             string
+		data             func(*harness.ResumeHandle) map[string]any
+		want             error
+		wantHandlerError bool
+	}{
+		{name: "mismatched ID", data: func(resume *harness.ResumeHandle) map[string]any {
+			return map[string]any{"sessionId": "other", "sessionFile": resume.NativeSessionFilename, "isStreaming": false, "isCompacting": false, "pendingMessageCount": 0}
+		}, want: ErrResumeRejected, wantHandlerError: true},
+		{name: "mismatched filename", data: func(resume *harness.ResumeHandle) map[string]any {
+			return map[string]any{"sessionId": resume.NativeSessionID, "sessionFile": filepath.Join(t.TempDir(), "other.jsonl"), "isStreaming": false, "isCompacting": false, "pendingMessageCount": 0}
+		}, want: ErrResumeRejected, wantHandlerError: true},
+		{name: "streaming", data: func(resume *harness.ResumeHandle) map[string]any {
+			return map[string]any{"sessionId": resume.NativeSessionID, "sessionFile": resume.NativeSessionFilename, "isStreaming": true, "isCompacting": false, "pendingMessageCount": 0}
+		}, want: ErrResumeRejected},
+		{name: "compacting", data: func(resume *harness.ResumeHandle) map[string]any {
+			return map[string]any{"sessionId": resume.NativeSessionID, "sessionFile": resume.NativeSessionFilename, "isStreaming": false, "isCompacting": true, "pendingMessageCount": 0}
+		}, want: ErrResumeRejected},
+		{name: "queued", data: func(resume *harness.ResumeHandle) map[string]any {
+			return map[string]any{"sessionId": resume.NativeSessionID, "sessionFile": resume.NativeSessionFilename, "isStreaming": false, "isCompacting": false, "pendingMessageCount": 1}
+		}, want: ErrResumeRejected},
+		{name: "state omits queue status", data: func(resume *harness.ResumeHandle) map[string]any {
+			return map[string]any{"sessionId": resume.NativeSessionID, "sessionFile": resume.NativeSessionFilename, "isStreaming": false, "isCompacting": false}
+		}, want: ErrResumeRejected},
+		{name: "state omits compacting status", data: func(resume *harness.ResumeHandle) map[string]any {
+			return map[string]any{"sessionId": resume.NativeSessionID, "sessionFile": resume.NativeSessionFilename, "isStreaming": false, "pendingMessageCount": 0}
+		}, want: ErrResumeRejected},
+		{name: "state omits streaming status", data: func(resume *harness.ResumeHandle) map[string]any {
+			return map[string]any{"sessionId": resume.NativeSessionID, "sessionFile": resume.NativeSessionFilename, "isCompacting": false, "pendingMessageCount": 0}
+		}, want: ErrResumeRejected},
+		{name: "null streaming status", data: func(resume *harness.ResumeHandle) map[string]any {
+			return map[string]any{"sessionId": resume.NativeSessionID, "sessionFile": resume.NativeSessionFilename, "isStreaming": nil, "isCompacting": false, "pendingMessageCount": 0}
+		}, want: ErrResumeRejected, wantHandlerError: true},
+		{name: "null compacting status", data: func(resume *harness.ResumeHandle) map[string]any {
+			return map[string]any{"sessionId": resume.NativeSessionID, "sessionFile": resume.NativeSessionFilename, "isStreaming": false, "isCompacting": nil, "pendingMessageCount": 0}
+		}, want: ErrResumeRejected, wantHandlerError: true},
+		{name: "null queue status", data: func(resume *harness.ResumeHandle) map[string]any {
+			return map[string]any{"sessionId": resume.NativeSessionID, "sessionFile": resume.NativeSessionFilename, "isStreaming": false, "isCompacting": false, "pendingMessageCount": nil}
+		}, want: ErrResumeRejected, wantHandlerError: true},
+		{name: "negative queue status", data: func(resume *harness.ResumeHandle) map[string]any {
+			return map[string]any{"sessionId": resume.NativeSessionID, "sessionFile": resume.NativeSessionFilename, "isStreaming": false, "isCompacting": false, "pendingMessageCount": -1}
+		}, want: ErrResumeRejected, wantHandlerError: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			process := newFakeNativeProcess()
+			adapter := fakePiAdapter(process)
+			resume := piResumeHandle(t)
+			process.onWrite = func(request Request) {
+				if request.Type != CommandGetState {
+					t.Fatalf("request = %+v, want get_state", request)
+				}
+				if err := process.emitJSONError(map[string]any{"type": "response", "id": request.ID, "command": "get_state", "success": true, "data": test.data(resume)}); err == nil && test.wantHandlerError {
+					t.Fatal("mismatched get_state was accepted")
+				}
+			}
+			session := startPiSession(t, adapter, harness.StartRequest{Workspace: t.TempDir(), Resume: resume}, &recordingHarnessSink{})
+			_, err := session.Open(context.Background())
+			if !errors.Is(err, test.want) {
+				t.Fatalf("Open() error = %v, want %v", err, test.want)
+			}
+			if writes := process.requestTypes(); strings.Join(writes, ",") != "get_state" {
+				t.Fatalf("requests = %v, want get_state only", writes)
+			}
+			closePiSession(t, session)
+		})
+	}
+}
+
+func piResumeHandle(t *testing.T) *harness.ResumeHandle {
+	t.Helper()
+	filename := filepath.Join(t.TempDir(), "retained.jsonl")
+	if err := os.WriteFile(filename, []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write retained pi session: %v", err)
+	}
+	return &harness.ResumeHandle{
+		LocalHandleID:         "local-retained-pi-handle",
+		NativeSessionID:       "pi-retained-session",
+		NativeSessionFilename: filename,
+		WorkspaceFingerprint:  "sha256:workspace",
+		NativeVersion:         TestedVersion,
+	}
+}
+
+func closePiSession(t *testing.T, session *nativeSession) {
+	t.Helper()
+	context, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := session.Close(context); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func startPiSession(t *testing.T, adapter *Adapter, request harness.StartRequest, sink harness.EventSink) *nativeSession {
+	t.Helper()
+	started, err := adapter.Start(context.Background(), request, sink)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	session, ok := started.(*nativeSession)
+	if !ok {
+		t.Fatalf("Start() session = %T, want *nativeSession", started)
+	}
+	return session
+}
+
+func openPiSession(t *testing.T, session *nativeSession) harness.NativeSessionHandle {
+	t.Helper()
+	handle, err := session.Open(context.Background())
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	return handle
+}
+
+func fakePiAdapter(process *fakeNativeProcess) *Adapter {
+	return &Adapter{
+		executable: "pi-test",
+		startProcess: func(_ context.Context, _ execution.Invocation, sink execution.Sink) (nativeProcess, error) {
+			process.sink = sink
+			return process, nil
+		},
+	}
+}
+
+func assistantTaskResultMessage(t *testing.T) map[string]any {
+	t.Helper()
+	return map[string]any{
+		"role": "assistant",
+		"content": []any{
+			map[string]any{"type": "text", "text": validTaskResultJSON(t)},
+		},
+		"stopReason": "stop",
+	}
+}
+
+type fakeNativeProcess struct {
+	mutex           sync.Mutex
+	sink            execution.Sink
+	onWrite         func(Request)
+	writes          []Request
+	result          execution.Result
+	resultDone      chan struct{}
+	resultOnce      sync.Once
+	sequence        uint64
+	terminateErrors []error
+	terminations    int
+}
+
+func newFakeNativeProcess() *fakeNativeProcess {
+	return &fakeNativeProcess{resultDone: make(chan struct{})}
+}
+
+func (process *fakeNativeProcess) WriteInputContext(_ context.Context, input []byte) error {
+	var request Request
+	if err := json.Unmarshal(bytesTrimLine(input), &request); err != nil {
+		return err
+	}
+	process.mutex.Lock()
+	process.writes = append(process.writes, request)
+	onWrite := process.onWrite
+	process.mutex.Unlock()
+	if onWrite != nil {
+		onWrite(request)
+	}
+	return nil
+}
+
+func bytesTrimLine(input []byte) []byte {
+	return []byte(strings.TrimSuffix(string(input), "\n"))
+}
+
+func (process *fakeNativeProcess) Wait() execution.Result {
+	<-process.resultDone
+	process.mutex.Lock()
+	defer process.mutex.Unlock()
+	return process.result
+}
+
+func (process *fakeNativeProcess) Terminate(_ context.Context, _ time.Duration) error {
+	process.mutex.Lock()
+	process.terminations++
+	var err error
+	if len(process.terminateErrors) > 0 {
+		err = process.terminateErrors[0]
+		process.terminateErrors = process.terminateErrors[1:]
+	}
+	process.mutex.Unlock()
+	if err != nil {
+		return err
+	}
+	process.finish(execution.Result{PID: 42, Terminated: true, OutputTruncated: true})
+	return nil
+}
+
+func (process *fakeNativeProcess) ProcessDetails() (int, string) { return 42, "test:42" }
+
+func (process *fakeNativeProcess) emitJSON(t *testing.T, value any) {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal native JSON: %v", err)
+	}
+	process.mutex.Lock()
+	process.sequence++
+	sequence := process.sequence
+	sink := process.sink
+	process.mutex.Unlock()
+	if sink == nil {
+		t.Fatal("native output sink is nil")
+	}
+	if err := sink.Handle(context.Background(), execution.Event{Stream: execution.Stdout, Sequence: sequence, At: time.Now().UTC(), Data: append(encoded, '\n')}); err != nil {
+		t.Fatalf("emit native JSON: %v", err)
+	}
+}
+
+func (process *fakeNativeProcess) emitJSONError(value any) error {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	process.mutex.Lock()
+	process.sequence++
+	sequence := process.sequence
+	sink := process.sink
+	process.mutex.Unlock()
+	if sink == nil {
+		return errors.New("native output sink is nil")
+	}
+	return sink.Handle(context.Background(), execution.Event{Stream: execution.Stdout, Sequence: sequence, At: time.Now().UTC(), Data: append(encoded, '\n')})
+}
+
+func (process *fakeNativeProcess) emitRaw(t *testing.T, data []byte) {
+	t.Helper()
+	process.mutex.Lock()
+	process.sequence++
+	sequence := process.sequence
+	sink := process.sink
+	process.mutex.Unlock()
+	if sink == nil {
+		t.Fatal("native output sink is nil")
+	}
+	if err := sink.Handle(context.Background(), execution.Event{Stream: execution.Stdout, Sequence: sequence, At: time.Now().UTC(), Data: append([]byte(nil), data...)}); err == nil {
+		t.Fatal("emit malformed native output error = nil")
+	}
+}
+
+func (process *fakeNativeProcess) finish(result execution.Result) {
+	process.resultOnce.Do(func() {
+		process.mutex.Lock()
+		process.result = result
+		process.mutex.Unlock()
+		close(process.resultDone)
+	})
+}
+
+func (process *fakeNativeProcess) requestTypes() []string {
+	process.mutex.Lock()
+	defer process.mutex.Unlock()
+	values := make([]string, 0, len(process.writes))
+	for _, request := range process.writes {
+		values = append(values, string(request.Type))
+	}
+	return values
+}
+
+func (process *fakeNativeProcess) terminateCount() int {
+	process.mutex.Lock()
+	defer process.mutex.Unlock()
+	return process.terminations
+}
+
+type recordingHarnessSink struct {
+	mutex  sync.Mutex
+	events []harness.Event
+	err    error
+}
+
+type blockingTaskResultSink struct {
+	publishing chan struct{}
+	release    <-chan struct{}
+}
+
+func (sink *blockingTaskResultSink) Handle(_ context.Context, event harness.Event) error {
+	if event.Kind == harness.EventTaskResult {
+		close(sink.publishing)
+		<-sink.release
+	}
+	return nil
+}
+
+func (sink *recordingHarnessSink) Handle(_ context.Context, event harness.Event) error {
+	sink.mutex.Lock()
+	defer sink.mutex.Unlock()
+	sink.events = append(sink.events, event)
+	return sink.err
+}
+
+func (sink *recordingHarnessSink) has(kind harness.EventKind) bool {
+	sink.mutex.Lock()
+	defer sink.mutex.Unlock()
+	for _, event := range sink.events {
+		if event.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+type fakeCommandRunner struct {
+	outputs map[string][]byte
+	err     error
+}
+
+type hangingCommandRunner struct {
+	started chan struct{}
+}
+
+func (runner hangingCommandRunner) Run(ctx context.Context, _ string, _ ...string) ([]byte, error) {
+	if runner.started != nil {
+		close(runner.started)
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+type cancellationSuccessRunner struct {
+	started     chan struct{}
+	startedOnce sync.Once
+	mutex       sync.Mutex
+	calls       []string
+}
+
+func (runner *cancellationSuccessRunner) Run(ctx context.Context, _ string, args ...string) ([]byte, error) {
+	key := strings.Join(args, " ")
+	runner.mutex.Lock()
+	runner.calls = append(runner.calls, key)
+	runner.mutex.Unlock()
+	if key == "--version" {
+		runner.startedOnce.Do(func() { close(runner.started) })
+		<-ctx.Done()
+		return []byte("0.85.1\n"), nil
+	}
+	return []byte("--mode <mode> rpc"), nil
+}
+
+func (runner *cancellationSuccessRunner) callsSnapshot() []string {
+	runner.mutex.Lock()
+	defer runner.mutex.Unlock()
+	return append([]string(nil), runner.calls...)
+}
+
+type probeDeadlineContext struct {
+	done chan struct{}
+	once sync.Once
+	mu   sync.Mutex
+	err  error
+}
+
+func newProbeDeadlineContext() (context.Context, context.CancelFunc) {
+	ctx := &probeDeadlineContext{done: make(chan struct{})}
+	return ctx, ctx.expire
+}
+
+func (ctx *probeDeadlineContext) Deadline() (time.Time, bool) {
+	return time.Unix(0, 0), true
+}
+
+func (ctx *probeDeadlineContext) Done() <-chan struct{} {
+	return ctx.done
+}
+
+func (ctx *probeDeadlineContext) Err() error {
+	ctx.mu.Lock()
+	defer ctx.mu.Unlock()
+	return ctx.err
+}
+
+func (*probeDeadlineContext) Value(any) any {
+	return nil
+}
+
+func (ctx *probeDeadlineContext) expire() {
+	ctx.once.Do(func() {
+		ctx.mu.Lock()
+		ctx.err = context.DeadlineExceeded
+		ctx.mu.Unlock()
+		close(ctx.done)
+	})
+}
+
+func (runner fakeCommandRunner) Run(_ context.Context, _ string, args ...string) ([]byte, error) {
+	if runner.err != nil {
+		return nil, runner.err
+	}
+	return runner.outputs[strings.Join(args, " ")], nil
+}

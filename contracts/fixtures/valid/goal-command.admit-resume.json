@@ -1,0 +1,15 @@
+{
+  "schema_version": "symmetry.goal_command.v1",
+  "mutation_id": "08080808-0808-4808-8808-080808080808",
+  "expected_version": 5,
+  "expected_revision": 1,
+  "kind": "admit_task",
+  "payload": {
+    "work_item_id": "33333333-3333-4333-8333-333333333333",
+    "purpose": "validate",
+    "model_profile": "validation-default",
+    "session_mode": "resume",
+    "requested_session_id": "66666666-6666-4666-8666-666666666666",
+    "validation_of_task_id": "77777777-7777-4777-8777-777777777777"
+  }
+}

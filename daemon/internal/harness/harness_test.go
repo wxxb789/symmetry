@@ -1,0 +1,518 @@
+package harness
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/wxxb789/symmetry/daemon/internal/execution"
+	"github.com/wxxb789/symmetry/daemon/internal/protocol"
+)
+
+type testAdapter struct {
+	capabilities Capabilities
+}
+
+func (adapter *testAdapter) Probe(context.Context) (Capabilities, error) {
+	return adapter.capabilities, nil
+}
+
+func (*testAdapter) Start(context.Context, StartRequest, EventSink) (Session, error) {
+	return nil, errors.New("not implemented")
+}
+
+func TestRegistryRejectsUnknownAdapter(t *testing.T) {
+	registry := NewRegistry()
+	_, err := registry.Lookup(Kind("missing"))
+	if !errors.Is(err, ErrUnknownAdapter) {
+		t.Fatalf("Lookup() error = %v, want ErrUnknownAdapter", err)
+	}
+}
+
+func TestRegistryKeepsUnavailableCapabilitiesExplicit(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		kind Kind
+	}{
+		{name: "codex", kind: KindCodex},
+		{name: "claude", kind: KindClaude},
+		{name: "pi", kind: KindPi},
+		{name: "opencode", kind: KindOpenCode},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			registry := NewRegistry()
+			capabilities, err := registry.Probe(context.Background(), test.kind)
+			if err == nil {
+				t.Fatal("Probe() error = nil, want unavailable error")
+			}
+			if errors.Is(err, ErrUnknownAdapter) {
+				t.Fatalf("Probe() error = %v, want known unsupported adapter", err)
+			}
+			if validateErr := capabilities.Validate(); validateErr != nil {
+				t.Fatalf("unavailable capabilities are invalid: %v; capabilities = %+v", validateErr, capabilities)
+			}
+			if capabilities.Kind != test.kind {
+				t.Fatalf("capability kind = %q, want %q", capabilities.Kind, test.kind)
+			}
+			if capabilities.Verified || capabilities.Start || capabilities.Events || capabilities.Cancel || capabilities.ProviderAccess {
+				t.Fatalf("unavailable capabilities = %+v, want fail-closed operations", capabilities)
+			}
+			if capabilities.Guidance != GuidanceUnsupported || capabilities.Pause != PauseUnsupported || capabilities.Usage != UsageUnknown {
+				t.Fatalf("unavailable control capabilities = %+v, want explicit unsupported values", capabilities)
+			}
+			if capabilities.Unsupported[string(CapabilityPause)] == "" {
+				t.Fatalf("unsupported map = %#v, want pause reason", capabilities.Unsupported)
+			}
+			if capabilities.Unsupported[string(CapabilityProviderAccess)] == "" {
+				t.Fatalf("unsupported map = %#v, want provider access reason", capabilities.Unsupported)
+			}
+			if requireErr := capabilities.Require(CapabilityStart); !errors.Is(requireErr, ErrUnsupportedCapability) {
+				t.Fatalf("Require(start) error = %v, want ErrUnsupportedCapability", requireErr)
+			}
+		})
+	}
+}
+
+func TestCapabilitiesRejectUnsafeVersionAndOperationClaims(t *testing.T) {
+	verified := Capabilities{
+		Kind:                  KindCodex,
+		NativeVersion:         "1.2.3",
+		ImplementationVersion: "adapter-v1",
+		ProtocolVersion:       1,
+		VersionKnown:          true,
+		TransportVerified:     true,
+		Verified:              true,
+		Start:                 true,
+		Events:                true,
+		Cancel:                true,
+		Guidance:              GuidanceUnsupported,
+		Pause:                 PauseUnsupported,
+		Usage:                 UsageUnknown,
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*Capabilities)
+	}{
+		{name: "zero protocol", mutate: func(value *Capabilities) { value.ProtocolVersion = 0 }},
+		{name: "known without native version", mutate: func(value *Capabilities) { value.NativeVersion = "" }},
+		{name: "native version not marked known", mutate: func(value *Capabilities) { value.VersionKnown = false }},
+		{name: "verified transport without version", mutate: func(value *Capabilities) { value.NativeVersion = ""; value.VersionKnown = false }},
+		{name: "verified without implementation", mutate: func(value *Capabilities) { value.ImplementationVersion = "" }},
+		{name: "cancel without start", mutate: func(value *Capabilities) { value.Start = false }},
+		{name: "cancel without events", mutate: func(value *Capabilities) { value.Events = false }},
+		{name: "handoff without start", mutate: func(value *Capabilities) { value.Handoff = true; value.Start = false }},
+		{name: "handoff without events", mutate: func(value *Capabilities) { value.Handoff = true; value.Events = false }},
+		{name: "handoff without cancel", mutate: func(value *Capabilities) { value.Handoff = true; value.Cancel = false }},
+		{name: "unverified handoff", mutate: func(value *Capabilities) { value.Handoff = true; value.Verified = false }},
+		{name: "approval without start", mutate: func(value *Capabilities) { value.ApprovalResponse = true; value.Start = false }},
+		{name: "approval without events", mutate: func(value *Capabilities) { value.ApprovalResponse = true; value.Events = false }},
+		{name: "provider access without start", mutate: func(value *Capabilities) { value.ProviderAccess = true; value.Start = false }},
+		{name: "provider access without events", mutate: func(value *Capabilities) { value.ProviderAccess = true; value.Events = false }},
+		{name: "provider access without cancel", mutate: func(value *Capabilities) { value.ProviderAccess = true; value.Cancel = false }},
+		{name: "unverified executable start", mutate: func(value *Capabilities) { value.Verified = false }},
+		{name: "unverified provider access", mutate: func(value *Capabilities) {
+			value.Start = false
+			value.Events = false
+			value.Cancel = false
+			value.ProviderAccess = true
+			value.Verified = false
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			capabilities := verified
+			test.mutate(&capabilities)
+			if err := capabilities.Validate(); err == nil {
+				t.Fatalf("Validate() succeeded for unsafe capabilities: %+v", capabilities)
+			}
+			if capabilities.Supports(CapabilityStart) {
+				t.Fatalf("Supports(start) accepted invalid capabilities: %+v", capabilities)
+			}
+		})
+	}
+}
+
+func TestVerifiedCapabilitiesCanAdvertiseProviderAccess(t *testing.T) {
+	capabilities := Capabilities{
+		Kind:                  KindPi,
+		NativeVersion:         "0.85.1",
+		ImplementationVersion: "adapter-v1",
+		ProtocolVersion:       1,
+		VersionKnown:          true,
+		TransportVerified:     true,
+		Verified:              true,
+		Start:                 true,
+		Events:                true,
+		Cancel:                true,
+		Guidance:              GuidanceUnsupported,
+		Pause:                 PauseUnsupported,
+		Usage:                 UsageUnknown,
+		ProviderAccess:        true,
+	}
+	if err := capabilities.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if !capabilities.Supports(CapabilityProviderAccess) {
+		t.Fatal("verified provider access capability was not supported")
+	}
+}
+
+func TestRegistryRejectsAdapterThatReportsAnotherHarnessKind(t *testing.T) {
+	registry := NewRegistry()
+	capabilities := UnsupportedCapabilities(KindCodex, "test adapter")
+	if err := registry.Register(KindPi, &testAdapter{capabilities: capabilities}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := registry.Probe(context.Background(), KindPi)
+	if err == nil || !strings.Contains(err.Error(), "reported capability kind") {
+		t.Fatalf("Probe() error = %v, want capability kind mismatch", err)
+	}
+}
+
+func TestGenericAdapterProbeCarriesCoherentVersionEvidence(t *testing.T) {
+	capabilities, err := NewGenericAdapter().Probe(context.Background())
+	if err != nil {
+		t.Fatalf("Probe() error = %v", err)
+	}
+	if capabilities.NativeVersion != "generic-v1" || !capabilities.VersionKnown || !capabilities.TransportVerified || !capabilities.Verified {
+		t.Fatalf("generic capabilities = %+v, want verified version and transport evidence", capabilities)
+	}
+	if err := capabilities.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestGenericAdapterDoesNotInterpretFakeAgentJSON(t *testing.T) {
+	process := newFakeProcess()
+	runner := &fakeRunner{process: process}
+	adapter := NewGenericAdapter(runner)
+	var got []Event
+	ctx := context.Background()
+	_, err := adapter.Start(ctx, StartRequest{}, EventSinkFunc(func(_ context.Context, event Event) error {
+		got = append(got, event)
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	runner.emit(execution.Event{Stream: execution.Stdout, Sequence: 1, Data: []byte(`{"type":"progress"}`)})
+	process.finish(execution.Result{PID: 7, ExitCode: 0, FinishedAt: time.Now().UTC()})
+	if len(got) != 1 || got[0].Kind != EventOutput {
+		t.Fatalf("events = %#v, want one opaque output event", got)
+	}
+	if got[0].Diagnostic {
+		t.Fatal("generic fake-agent JSON was interpreted as a native diagnostic")
+	}
+}
+
+func TestGenericAdapterRetainsProcessOwnerWhenStartFails(t *testing.T) {
+	process := newFakeProcess()
+	want := errors.New("process identity persistence failed")
+	runner := &fakeRunner{process: process, startErr: want}
+	persisted := false
+	session, err := NewGenericAdapter(runner).Start(context.Background(), StartRequest{
+		PersistProcess: func(pid int, identity string) error {
+			persisted = pid == 7 && identity == "created:7"
+			return nil
+		},
+	}, nil)
+	if !errors.Is(err, want) {
+		t.Fatalf("Start() error = %v, want runner failure", err)
+	}
+	if session == nil {
+		t.Fatal("Start() discarded process owner with runner failure")
+	}
+	if runner.invocation.PersistProcess == nil {
+		t.Fatal("Start() did not forward top-level PersistProcess")
+	}
+	if err := runner.invocation.PersistProcess(7, "created:7"); err != nil || !persisted {
+		t.Fatalf("forwarded PersistProcess() = %v, persisted=%v", err, persisted)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	result, waitErr := session.Wait(context.Background())
+	if waitErr != nil || result.Kind != ResultCancelled || !process.wasTerminated() {
+		t.Fatalf("retained failed start result = %#v, error = %v, terminated = %v", result, waitErr, process.wasTerminated())
+	}
+}
+
+func TestGenericSessionCancellationLifecycle(t *testing.T) {
+	process := newFakeProcess()
+	runner := &fakeRunner{process: process}
+	adapter := NewGenericAdapter(runner)
+	session, err := adapter.Start(context.Background(), StartRequest{}, nil)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if _, ok := session.(StagedSession); ok {
+		t.Fatal("generic session unexpectedly implements staged native lifecycle")
+	}
+
+	receipt, err := session.Control(context.Background(), ControlRequest{CommandID: "cancel-1", Kind: ControlCancel})
+	if err != nil {
+		t.Fatalf("Control(cancel) error = %v", err)
+	}
+	if receipt.Outcome != ControlApplied || receipt.Capability != CapabilityCancel {
+		t.Fatalf("receipt = %+v, want applied cancel", receipt)
+	}
+	result, err := session.Wait(context.Background())
+	if err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+	if result.Kind != ResultCancelled {
+		t.Fatalf("result kind = %q, want cancelled", result.Kind)
+	}
+	if !process.wasTerminated() {
+		t.Fatal("process was not terminated by cancellation")
+	}
+}
+
+func TestGenericSessionCloseRetriesFailedTerminationAndStabilizesSuccess(t *testing.T) {
+	terminationErr := errors.New("transient termination failure")
+	process := newRetryableProcess(terminationErr)
+	t.Cleanup(process.releaseFirstTermination)
+	runner := &retryableProcessRunner{process: process}
+	session, err := NewGenericAdapter(runner).Start(context.Background(), StartRequest{}, nil)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- session.Close(context.Background()) }()
+	select {
+	case <-process.firstTerminateStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first Close() did not start process termination")
+	}
+
+	secondContext, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := session.Close(secondContext); !errors.Is(err, context.Canceled) {
+		t.Fatalf("second Close() error = %v, want cancellation while first close is incomplete", err)
+	}
+
+	process.releaseFirstTermination()
+	if err := <-firstDone; !errors.Is(err, terminationErr) {
+		t.Fatalf("first Close() error = %v, want %v", err, terminationErr)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("retry Close() error = %v", err)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("repeated successful Close() error = %v", err)
+	}
+	if calls := process.terminationCallCount(); calls != 2 {
+		t.Fatalf("Terminate calls = %d, want one failed attempt and one retry", calls)
+	}
+	result, err := session.Wait(context.Background())
+	if err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+	if result.Kind != ResultCancelled {
+		t.Fatalf("result kind = %q, want cancelled after successful retry", result.Kind)
+	}
+}
+
+func TestGenericSessionRejectsUnsupportedControls(t *testing.T) {
+	process := newFakeProcess()
+	session, err := NewGenericAdapter(&fakeRunner{process: process}).Start(context.Background(), StartRequest{}, nil)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	_, err = session.Control(context.Background(), ControlRequest{Kind: ControlPause})
+	var capabilityErr *CapabilityError
+	if !errors.As(err, &capabilityErr) || !errors.Is(err, ErrUnsupportedCapability) {
+		t.Fatalf("pause error = %v, want typed unsupported capability", err)
+	}
+	if capabilityErr.Capability != CapabilityPause {
+		t.Fatalf("capability = %q, want pause", capabilityErr.Capability)
+	}
+	_ = session.Close(context.Background())
+}
+
+func TestGenericAdapterRejectsStrictCostCapBeforeProcessStart(t *testing.T) {
+	process := newFakeProcess()
+	runner := &fakeRunner{process: process}
+	cap := "250000"
+	_, err := NewGenericAdapter(runner).Start(context.Background(), StartRequest{Limits: Limits{MaxCostMicrousd: &cap}}, nil)
+	var capabilityErr *CapabilityError
+	if !errors.As(err, &capabilityErr) || capabilityErr.Capability != CapabilityHardCostLimit {
+		t.Fatalf("Start() error = %v, want hard-cost capability rejection", err)
+	}
+	if runner.starts != 0 {
+		t.Fatalf("generic runner starts = %d, want none for strict cap", runner.starts)
+	}
+}
+
+func TestGenericAdapterRejectsProviderAccessBeforeProcessStart(t *testing.T) {
+	process := newFakeProcess()
+	runner := &fakeRunner{process: process}
+	_, err := NewGenericAdapter(runner).Start(context.Background(), StartRequest{
+		ProviderAccess: &protocol.ProviderAccess{Path: "https://control.example.test/api/v1/provider-actions", Token: "provider-token"},
+	}, nil)
+	var capabilityErr *CapabilityError
+	if !errors.As(err, &capabilityErr) || capabilityErr.Capability != CapabilityProviderAccess {
+		t.Fatalf("Start() error = %v, want provider-access capability rejection", err)
+	}
+	if runner.starts != 0 {
+		t.Fatalf("generic runner starts = %d, want none for provider access", runner.starts)
+	}
+}
+
+func TestGenericAdapterRejectsProviderBridgeBeforeProcessStart(t *testing.T) {
+	runner := &fakeRunner{}
+	_, err := NewGenericAdapter(runner).Start(context.Background(), StartRequest{
+		ProviderBridge: &ProviderBridgeLaunch{},
+	}, nil)
+	var capabilityErr *CapabilityError
+	if !errors.As(err, &capabilityErr) || capabilityErr.Capability != CapabilityProviderAccess {
+		t.Fatalf("Start() error = %v, want provider-access capability rejection", err)
+	}
+	if runner.starts != 0 {
+		t.Fatalf("generic runner starts = %d, want none for provider bridge", runner.starts)
+	}
+}
+
+type fakeRunner struct {
+	process    *fakeProcess
+	sink       execution.Sink
+	invocation execution.Invocation
+	startErr   error
+	starts     int
+}
+
+func (runner *fakeRunner) Start(_ context.Context, invocation execution.Invocation, sink execution.Sink) (ProcessHandle, error) {
+	runner.starts++
+	runner.sink = sink
+	runner.invocation = invocation
+	return runner.process, runner.startErr
+}
+
+func (runner *fakeRunner) emit(event execution.Event) {
+	if runner.sink == nil {
+		return
+	}
+	_ = runner.sink.Handle(context.Background(), event)
+}
+
+type retryableProcessRunner struct {
+	process ProcessHandle
+}
+
+func (runner *retryableProcessRunner) Start(_ context.Context, _ execution.Invocation, _ execution.Sink) (ProcessHandle, error) {
+	return runner.process, nil
+}
+
+type retryableProcess struct {
+	done                  chan struct{}
+	firstTerminateStarted chan struct{}
+	releaseFirst          chan struct{}
+	firstErr              error
+	startOnce             sync.Once
+	releaseOnce           sync.Once
+	doneOnce              sync.Once
+
+	mu          sync.Mutex
+	calls       int
+	termination execution.Result
+}
+
+func newRetryableProcess(firstErr error) *retryableProcess {
+	return &retryableProcess{
+		done:                  make(chan struct{}),
+		firstTerminateStarted: make(chan struct{}),
+		releaseFirst:          make(chan struct{}),
+		firstErr:              firstErr,
+	}
+}
+
+func (process *retryableProcess) Wait() execution.Result {
+	<-process.done
+	process.mu.Lock()
+	defer process.mu.Unlock()
+	return process.termination
+}
+
+func (process *retryableProcess) Terminate(ctx context.Context, _ time.Duration) error {
+	process.mu.Lock()
+	process.calls++
+	call := process.calls
+	process.mu.Unlock()
+	if call == 1 {
+		process.startOnce.Do(func() { close(process.firstTerminateStarted) })
+		select {
+		case <-process.releaseFirst:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		return process.firstErr
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	process.mu.Lock()
+	process.termination = execution.Result{PID: 9, ExitCode: -1, Terminated: true, FinishedAt: time.Now().UTC()}
+	process.mu.Unlock()
+	process.doneOnce.Do(func() { close(process.done) })
+	return nil
+}
+
+func (process *retryableProcess) releaseFirstTermination() {
+	process.releaseOnce.Do(func() { close(process.releaseFirst) })
+}
+
+func (process *retryableProcess) terminationCallCount() int {
+	process.mu.Lock()
+	defer process.mu.Unlock()
+	return process.calls
+}
+
+type fakeProcess struct {
+	done chan struct{}
+
+	mu         sync.Mutex
+	result     execution.Result
+	terminated bool
+	closeOnce  sync.Once
+}
+
+func newFakeProcess() *fakeProcess {
+	return &fakeProcess{done: make(chan struct{})}
+}
+
+func (process *fakeProcess) Wait() execution.Result {
+	<-process.done
+	process.mu.Lock()
+	defer process.mu.Unlock()
+	return process.result
+}
+
+func (process *fakeProcess) Terminate(ctx context.Context, _ time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	process.mu.Lock()
+	process.terminated = true
+	process.result = execution.Result{PID: 7, ExitCode: -1, Terminated: true, FinishedAt: time.Now().UTC()}
+	process.mu.Unlock()
+	process.closeOnce.Do(func() { close(process.done) })
+	return nil
+}
+
+func (process *fakeProcess) finish(result execution.Result) {
+	process.mu.Lock()
+	process.result = result
+	process.mu.Unlock()
+	process.closeOnce.Do(func() { close(process.done) })
+}
+
+func (process *fakeProcess) wasTerminated() bool {
+	process.mu.Lock()
+	defer process.mu.Unlock()
+	return process.terminated
+}

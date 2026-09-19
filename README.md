@@ -48,6 +48,12 @@ container image. The execution daemon is natively supported on Linux and
 Windows. FreeBSD is unsupported. Native macOS daemon support and verification
 are deferred and must not be treated as supported.
 
+Linux execution requires `PIDFD_SIGNAL_PROCESS_GROUP` (Linux 6.9 or later,
+permitted by the host's security policy). The daemon checks this capability
+before launch and fails closed without numeric-PID fallback. See
+[`docs/goal-process-stop-testing.md`](docs/goal-process-stop-testing.md) for the
+owned process-group/Windows Job boundary and restart recovery limitations.
+
 ## Local Development
 
 Prerequisites are Elixir 1.20 with Erlang/OTP 29 for `control/`, Go 1.27 for

@@ -1,0 +1,59 @@
+{
+  "schema_version": "symmetry.task_result.v1",
+  "result_id": "67676767-6767-4676-8676-676767676767",
+  "kind": "plan_proposed",
+  "summary": "The bounded implementation plan is ready for operator review.",
+  "subject": {
+    "resource_id": "22222222-2222-4222-8222-222222222222",
+    "commit": "0123456789abcdef0123456789abcdef01234567",
+    "tree_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "subject_hash": "sha256:88c59dff7c5897758b4315961f687117819b744faf505eed29babc2437828dd0",
+  "evidence_refs": [],
+  "blocker": null,
+  "proposed_next_action": null,
+  "proposal": {
+    "schema_version": "symmetry.plan.v1",
+    "proposal_id": "78787878-7878-4787-8787-787878787878",
+    "goal_id": "11111111-1111-4111-8111-111111111111",
+    "expected_revision": 1,
+    "items": [
+      {
+        "key": "implementation",
+        "title": "Implement the approved change.",
+        "description": "Produce the candidate subject under the approved contract.",
+        "required": true,
+        "repository_resource_id": "22222222-2222-4222-8222-222222222222",
+        "acceptance": {
+          "schema_version": "symmetry.acceptance.v1",
+          "description": "The candidate passes the required check.",
+          "predicates": [
+            {
+              "id": "tests",
+              "kind": "check",
+              "validator_profile": "default-checks"
+            },
+            {
+              "id": "tests",
+              "kind": "check",
+              "validator_profile": "other-validator"
+            }
+          ]
+        },
+        "depends_on_keys": [],
+        "model_profile": "implementation-default",
+        "change_target": null,
+        "baseline": {
+          "kind": "subject",
+          "subject": {
+            "resource_id": "22222222-2222-4222-8222-222222222222",
+            "commit": "0123456789abcdef0123456789abcdef01234567",
+            "tree_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        }
+      }
+    ]
+  },
+  "reason": null,
+  "diagnostics": []
+}

@@ -43,8 +43,17 @@ specific WorkItem and goal revision, not for an entire mutable conversation.
 
 Stored states: `draft`, `active`, `paused`, `achieved`, `cancelled`.
 Derived blockers: `waiting_decision`, `waiting_dependency`, `waiting_external`,
-`budget_blocked`, `validation_failed`, `stale_context`, `runtime_unavailable`.
+`budget_blocked`, `validation_failed`, `stale_context`, `runtime_unavailable`,
+`integration_outcome_required`, `required_predicates_unmet`.
 These are read-model reasons, not additional lifecycle states.
+
+Automatic admission may additionally expose a revision-scoped
+`automatic_admission_blocked` reason when a stable candidate violates immutable
+approved policy or context. The failed candidate creates no Task, reservation or
+usage record. Conditions that can change independently, such as runtime/profile
+availability or budget accounting, retain a bounded durable future wake and an
+inspectable deferred receipt; a terminal result requiring operator judgment does
+not busy-loop a wakeup worker.
 
 | Command | Allowed source | Result |
 | --- | --- | --- |
@@ -98,10 +107,17 @@ a new task and counts against it. There is no infinite continue-on-exit policy.
 
 ## Planning and useful stopping
 
-Planning is a normal harness task that returns bounded WorkItem proposals with
-acceptance predicates, dependencies, resource IDs and intended purpose. A plan
-does not write goal tables. In v1, the operator accepts the proposed plan as a
-revision admission. Automatic execution/repair may operate only on admitted
+Planning is a normal fenced harness task that returns bounded WorkItem proposals
+with acceptance predicates, dependencies, resource IDs and intended purpose. An
+operator may issue `request_plan` only for a draft Goal with no approved plan;
+it creates one Goal-scoped `purpose=plan` Task with no WorkItem, an immutable
+context snapshot, reservation and the same retry fence as any other Task. The
+operator selects the model profile and an approved repository Subject. A plan
+Task has no provider scope and cannot run automatically. Its `plan_proposed`
+result stores a proposal and opens a scoped plan Decision; it cannot create
+WorkItems, edges, outcomes or approvals. The operator resolves that Decision
+and explicitly accepts the plan before implementation work can be admitted or
+the Goal activated. Automatic execution/repair may operate only on admitted
 items and the revision's allowed resources/actions. New scope or dependencies
 requires a new plan decision; no automatic free-form backlog expansion.
 

@@ -11,6 +11,8 @@ defmodule SymmetryControl.Repo.Migrations.AddSupervisoryControls do
   end
 
   def down do
+    execute("LOCK TABLE commands, runs IN SHARE MODE")
+
     execute("""
     DO $$
     BEGIN
