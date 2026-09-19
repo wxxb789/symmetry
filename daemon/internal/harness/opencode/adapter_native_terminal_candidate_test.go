@@ -140,7 +140,7 @@ func nativeOpenCodeTerminalCandidateValidateExecutable(executable, expectedExecu
 	if configuredSHA != "" && !strings.EqualFold(strings.TrimPrefix(configuredSHA, "sha256:"), expectedSHA) {
 		return fmt.Errorf("%s must equal the pinned SHA-256 %s", nativeOpenCodeTerminalCandidateSHA256Env, expectedSHA)
 	}
-	if err := nativeOpenCodeVerifyExecutableSHA256(executable, "sha256:"+expectedSHA); err != nil {
+	if err := nativeOpenCodeTerminalCandidateVerifyExecutableSHA256(executable, "sha256:"+expectedSHA); err != nil {
 		return fmt.Errorf("verify exact pinned OpenCode executable: %w", err)
 	}
 	return nil
@@ -219,7 +219,7 @@ func nativeOpenCodeRunTerminalCandidateScenario(t *testing.T, executable string,
 		},
 	}, sink)
 	if err != nil {
-		if cleanupErr := nativeOpenCodeCloseFailedStart(session, nativeOpenCodeTerminalCandidateCloseTimeout); cleanupErr != nil {
+		if cleanupErr := nativeOpenCodeTerminalCandidateCloseFailedStart(session, nativeOpenCodeTerminalCandidateCloseTimeout); cleanupErr != nil {
 			t.Errorf("cleanup failed OpenCode terminal candidate start: %v", cleanupErr)
 		}
 		t.Fatalf("start OpenCode terminal candidate: %v", err)
@@ -232,7 +232,7 @@ func nativeOpenCodeRunTerminalCandidateScenario(t *testing.T, executable string,
 		if closed {
 			return
 		}
-		if err := nativeOpenCodeCloseAndWait(session, nativeOpenCodeTerminalCandidateCloseTimeout); err != nil {
+		if err := nativeOpenCodeTerminalCandidateCloseAndWait(session, nativeOpenCodeTerminalCandidateCloseTimeout); err != nil {
 			t.Errorf("cleanup OpenCode terminal candidate session: %v", err)
 		}
 	})
@@ -549,7 +549,7 @@ func nativeOpenCodeTerminalCandidateAssertEnvironment(t *testing.T, environment 
 		"OPENCODE_DISABLE_EXTERNAL_SKILLS":    "1",
 		"OPENCODE_DISABLE_CLAUDE_CODE_SKILLS": "1",
 	} {
-		if got := nativeOpenCodeEnvironmentValue(environment, key); got != want {
+		if got := nativeOpenCodeTerminalCandidateEnvironmentValue(environment, key); got != want {
 			t.Fatalf("OpenCode terminal candidate %s = %q, want %q", key, got, want)
 		}
 	}
@@ -2069,7 +2069,7 @@ func (gateway *nativeOpenCodeTerminalCandidateGateway) handle(response http.Resp
 		Stream   bool              `json:"stream"`
 		Messages []json.RawMessage `json:"messages"`
 	}
-	body, err := nativeOpenCodeReadGatewayBody(request, nativeOpenCodeTerminalCandidateMaxBodyBytes)
+	body, err := nativeOpenCodeTerminalCandidateReadGatewayBody(request, nativeOpenCodeTerminalCandidateMaxBodyBytes)
 	if err != nil {
 		gateway.recordError(fmt.Errorf("decode terminal candidate provider request: %w", err))
 		http.Error(response, "invalid request", http.StatusRequestEntityTooLarge)
@@ -2472,6 +2472,107 @@ func nativeOpenCodeTerminalCandidateConfig(baseURL, model string) string {
 	}
 	encoded, _ := json.Marshal(config)
 	return string(encoded)
+}
+
+func nativeOpenCodeTerminalCandidateVerifyExecutableSHA256(executable, expected string) error {
+	const prefix = "sha256:"
+	if expected != strings.TrimSpace(expected) || !strings.HasPrefix(expected, prefix) || len(expected) != len(prefix)+sha256.Size*2 {
+		return errors.New("expected executable digest must be sha256:<64 lowercase hex characters>")
+	}
+	digestText := expected[len(prefix):]
+	if strings.ToLower(digestText) != digestText {
+		return errors.New("expected executable digest must be lowercase hexadecimal")
+	}
+	if _, err := hex.DecodeString(digestText); err != nil {
+		return fmt.Errorf("decode expected executable digest: %w", err)
+	}
+	file, err := os.Open(executable)
+	if err != nil {
+		return fmt.Errorf("open executable: %w", err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("stat executable: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("executable must be a regular file")
+	}
+	digest := sha256.New()
+	if _, err := io.Copy(digest, file); err != nil {
+		return fmt.Errorf("hash executable: %w", err)
+	}
+	actual := prefix + hex.EncodeToString(digest.Sum(nil))
+	if actual != expected {
+		return fmt.Errorf("executable SHA-256 = %s, want %s", actual, expected)
+	}
+	return nil
+}
+
+func nativeOpenCodeTerminalCandidateCloseFailedStart(session harness.Session, timeout time.Duration) error {
+	return nativeOpenCodeTerminalCandidateCloseAndWait(session, timeout)
+}
+
+func nativeOpenCodeTerminalCandidateCloseAndWait(session harness.Session, timeout time.Duration) error {
+	if session == nil {
+		return nil
+	}
+	if timeout <= 0 {
+		return errors.New("native OpenCode terminal candidate cleanup timeout must be positive")
+	}
+	deadline := time.Now().Add(timeout)
+	var closeErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		cleanupContext, cleanupCancel := context.WithDeadline(context.Background(), deadline)
+		closeErr = session.Close(cleanupContext)
+		cleanupCancel()
+		if closeErr == nil || time.Until(deadline) <= 0 {
+			break
+		}
+	}
+	waitContext, waitCancel := context.WithDeadline(context.Background(), deadline)
+	result, waitErr := session.Wait(waitContext)
+	waitCancel()
+	if waitErr != nil {
+		return errors.Join(closeErr, waitErr)
+	}
+	if result.Kind != harness.ResultUnknown || result.Usage.State != harness.UsageUnknown ||
+		!result.Process.Terminated || result.Process.SinkError != nil || result.Process.OutputError != nil ||
+		result.Process.TerminationError != nil || result.Process.ContainmentError != nil {
+		return errors.Join(closeErr, fmt.Errorf("native OpenCode terminal candidate cleanup result = %+v; want unknown with clean terminated process", result))
+	}
+	return closeErr
+}
+
+func nativeOpenCodeTerminalCandidateEnvironmentValue(environment []string, name string) string {
+	for _, entry := range environment {
+		key, value, found := strings.Cut(entry, "=")
+		if found && key == name {
+			return value
+		}
+	}
+	return ""
+}
+
+func nativeOpenCodeTerminalCandidateReadGatewayBody(request *http.Request, limit int64) ([]byte, error) {
+	if request == nil || request.Body == nil {
+		return nil, errors.New("native OpenCode terminal candidate request body is unavailable")
+	}
+	if limit <= 0 {
+		return nil, errors.New("native OpenCode terminal candidate request body limit must be positive")
+	}
+	defer request.Body.Close()
+	if request.ContentLength > limit {
+		return nil, fmt.Errorf("declared request length %d exceeds %d", request.ContentLength, limit)
+	}
+	body, err := io.ReadAll(io.LimitReader(request.Body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > limit {
+		return nil, fmt.Errorf("request body length %d exceeds %d", len(body), limit)
+	}
+	return body, nil
 }
 
 func nativeOpenCodeTerminalCandidateRedactIdentity(value string) string {
