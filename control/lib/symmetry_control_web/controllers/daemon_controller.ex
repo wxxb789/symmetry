@@ -233,13 +233,32 @@ defmodule SymmetryControlWeb.DaemonController do
 
     with {:ok, target} <- body_value(body, "state"),
          :ok <- owns_run(conn, run_id),
-         {:ok, run} <- Orchestration.transition(run_id, request, target, payload, transition_id) do
+         {:ok, owner} <- Orchestration.claim_owner(run_id),
+         {:ok, run} <-
+           transition_with_owner(owner, run_id, request, target, payload, transition_id) do
       if target in ["completed", "failed", "cancelled"], do: Scheduler.wake()
       json(conn, Protocol.run(run))
     else
       {:error, reason} -> Protocol.error(conn, reason)
     end
   end
+
+  defp transition_with_owner(:goal, run_id, request, "paused", payload, transition_id) do
+    case Goals.apply_goal_pause_transition(run_id, request, payload, transition_id) do
+      {:ok, run, :created, _receipt} ->
+        Orchestration.emit_transition(run, "paused")
+        {:ok, run}
+
+      {:ok, run, :replayed} ->
+        {:ok, run}
+
+      error ->
+        error
+    end
+  end
+
+  defp transition_with_owner(_owner, run_id, request, target, payload, transition_id),
+    do: Orchestration.transition(run_id, request, target, payload, transition_id)
 
   def reconcile(conn, _params) do
     runtime_id = path_param(conn, "runtime_id")

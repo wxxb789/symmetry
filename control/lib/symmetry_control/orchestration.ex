@@ -2011,6 +2011,16 @@ defmodule SymmetryControl.Orchestration do
     })
   end
 
+  @doc false
+  @spec emit_transition(Run.t(), String.t()) :: :ok
+  def emit_transition(%Run{} = run, state) when is_binary(state) do
+    emit([:run, :transition], %{
+      run_id: run.id,
+      generation: run.generation,
+      state: state
+    })
+  end
+
   @spec renew_lease(Ecto.UUID.t(), map(), keyword()) :: {:ok, Run.t()} | {:error, atom()}
   def renew_lease(run_id, fence, opts \\ [])
 
@@ -2130,63 +2140,65 @@ defmodule SymmetryControl.Orchestration do
               jsonb_compatible?(payload)) do
       {:error, :invalid_request}
     else
-      body = %{state: target_state, payload: payload}
-      {body_hash, body_hash_version} = RequestHash.write(body)
-      notify? = not Repo.in_transaction?()
+      if target_state == "paused" and goal_owned_run?(run_id) do
+        {:error, :goal_authority_required}
+      else
+        body = %{state: target_state, payload: payload}
+        {body_hash, body_hash_version} = RequestHash.write(body)
+        notify? = not Repo.in_transaction?()
 
-      result =
-        Repo.transaction(fn ->
-          {task, run, runtime, goal, item} = lock_transition_chain(run_id, target_state)
-          current = now(opts)
-          ensure_transition_static_fence!(task, run, runtime, fence, target_state)
+        result =
+          Repo.transaction(fn ->
+            {task, run, runtime, goal, item} = lock_transition_chain(run_id, target_state)
+            current = now(opts)
+            ensure_transition_static_fence!(task, run, runtime, fence, target_state)
 
-          case Repo.get_by(RunTransition, run_id: run.id, transition_id: transition_id) do
-            %RunTransition{} = transition ->
-              if RequestHash.matches?(
-                   transition.request_hash,
-                   transition.request_hash_version,
-                   body
-                 ),
-                 do: {:replayed, transition_response(run, transition)},
-                 else: rollback(:idempotency_conflict)
+            case Repo.get_by(RunTransition, run_id: run.id, transition_id: transition_id) do
+              %RunTransition{} = transition ->
+                if RequestHash.matches?(
+                     transition.request_hash,
+                     transition.request_hash_version,
+                     body
+                   ),
+                   do: {:replayed, transition_response(run, transition)},
+                   else: rollback(:idempotency_conflict)
 
-            nil ->
-              ensure_current_goal_transition_authority!(goal, item, task, target_state)
-              ensure_cancelled_transition_authority!(run, target_state)
-              ensure_transition_fence!(task, run, runtime, fence, target_state, current)
-              if target_state == "waiting_for_input", do: validate_decision_packet!(task, payload)
+              nil ->
+                ensure_current_goal_transition_authority!(goal, item, task, target_state)
+                ensure_cancelled_transition_authority!(run, target_state)
+                ensure_transition_fence!(task, run, runtime, fence, target_state, current)
 
-              {:created,
-               transition_once!(
-                 task,
-                 run,
-                 target_state,
-                 payload,
-                 transition_id,
-                 body_hash,
-                 body_hash_version,
-                 current,
-                 goal
-               )}
-          end
-        end)
+                if target_state == "waiting_for_input",
+                  do: validate_decision_packet!(task, payload)
 
-      case result do
-        {:ok, {:created, {run, receipt}}} ->
-          emit([:run, :transition], %{
-            run_id: run.id,
-            generation: run.generation,
-            state: target_state
-          })
+                {:created,
+                 transition_once!(
+                   task,
+                   run,
+                   target_state,
+                   payload,
+                   transition_id,
+                   body_hash,
+                   body_hash_version,
+                   current,
+                   goal
+                 )}
+            end
+          end)
 
-          notify_goal_task_terminal(receipt, opts, notify?)
-          {:ok, run}
+        case result do
+          {:ok, {:created, {run, receipt}}} ->
+            emit_transition(run, target_state)
 
-        {:ok, {:replayed, run}} ->
-          {:ok, run}
+            notify_goal_task_terminal(receipt, opts, notify?)
+            {:ok, run}
 
-        error ->
-          error
+          {:ok, {:replayed, run}} ->
+            {:ok, run}
+
+          error ->
+            error
+        end
       end
     end
   end
@@ -2325,6 +2337,83 @@ defmodule SymmetryControl.Orchestration do
   end
 
   def create_goal_control_command_in_transaction(_, _, _), do: {:error, :invalid_request}
+
+  @doc false
+  @spec apply_goal_pause_transition_in_transaction(
+          Task.t(),
+          Run.t(),
+          map(),
+          map(),
+          Ecto.UUID.t(),
+          keyword()
+        ) ::
+          {:created, {Run.t(), map() | nil}}
+          | {:replayed, Run.t()}
+          | {:error, term()}
+  def apply_goal_pause_transition_in_transaction(
+        task,
+        run,
+        fence,
+        payload,
+        transition_id,
+        opts \\ []
+      )
+
+  def apply_goal_pause_transition_in_transaction(
+        %Task{} = task,
+        %Run{} = run,
+        fence,
+        payload,
+        transition_id,
+        opts
+      )
+      when is_map(fence) and is_map(payload) and is_binary(transition_id) and is_list(opts) do
+    if not (Repo.in_transaction?() and valid_fence?(fence) and valid_uuid?(transition_id) and
+              jsonb_compatible?(payload)) do
+      {:error, :invalid_request}
+    else
+      body = %{state: "paused", payload: payload}
+      {body_hash, body_hash_version} = RequestHash.write(body)
+      current = now(opts)
+
+      if run.task_id != task.id do
+        {:error, :ownership_lost}
+      else
+        runtime = lock_runtime(run.runtime_id)
+        ensure_transition_static_fence!(task, run, runtime, fence, "paused")
+
+        case Repo.get_by(RunTransition, run_id: run.id, transition_id: transition_id) do
+          %RunTransition{} = transition ->
+            if RequestHash.matches?(
+                 transition.request_hash,
+                 transition.request_hash_version,
+                 body
+               ),
+               do: {:replayed, transition_response(run, transition)},
+               else: rollback(:idempotency_conflict)
+
+          nil ->
+            ensure_transition_fence!(task, run, runtime, fence, "paused", current)
+
+            {:created,
+             transition_once!(
+               task,
+               run,
+               "paused",
+               payload,
+               transition_id,
+               body_hash,
+               body_hash_version,
+               current,
+               nil
+             )}
+        end
+      end
+    end
+  end
+
+  def apply_goal_pause_transition_in_transaction(_, _, _, _, _, _),
+    do: {:error, :invalid_request}
 
   @spec request_cancel(Ecto.UUID.t(), keyword()) ::
           {:ok, Task.t(), Command.t() | nil} | {:error, atom()}
@@ -3655,6 +3744,15 @@ defmodule SymmetryControl.Orchestration do
 
   defp lock_transition_chain(run_id, _target_state) do
     lock_goal_chain(run_id)
+  end
+
+  defp goal_owned_run?(run_id) do
+    Repo.exists?(
+      from run in Run,
+        join: task in Task,
+        on: task.id == run.task_id,
+        where: run.id == ^run_id and not is_nil(task.goal_id)
+    )
   end
 
   defp lock_execution_chain(run_id) do

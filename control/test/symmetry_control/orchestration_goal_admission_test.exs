@@ -1290,6 +1290,31 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     refute Repo.exists?(from(command in Command, where: command.task_id == ^task.id))
   end
 
+  test "legacy pause transition facade fails closed for a Goal-owned Run" do
+    {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
+    runtime = register_runtime("goal-pause-fail-closed")
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+
+    assert {:ok, %{state: "running"}} =
+             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
+               now: @now
+             )
+
+    assert {:error, :goal_authority_required} =
+             Orchestration.transition(
+               run.id,
+               fence,
+               "paused",
+               %{"command_id" => Ecto.UUID.generate()},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    assert task.id == run.task_id
+    assert %{state: "running"} = Repo.get!(Run, run.id)
+  end
+
   test "Goal control dispatch rejects a superseded lifecycle action" do
     {task, goal_id} = insert_goal_task(max_run_attempts: 2)
     pause_action_id = Ecto.UUID.generate()
@@ -2294,10 +2319,9 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     )
 
     assert {:error, :stale_revision} =
-             Orchestration.transition(
+             Goals.apply_goal_pause_transition(
                run.id,
                fence,
-               "paused",
                %{"command_id" => command.id},
                Ecto.UUID.generate(),
                now: @now
@@ -2306,6 +2330,315 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     assert Repo.get!(Command, command.id).state == "pending"
     assert {:ok, running} = Orchestration.fetch_run(run.id)
     assert running.state == "running"
+  end
+
+  test "Goal pause transition rejects a pause command superseded by amend" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    runtime = register_runtime("stale-pause-amend-transition")
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+
+    assert {:ok, %{state: "running"}} =
+             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
+               now: @now
+             )
+
+    pause_action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, pause_action_id, 1, "pause")
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "paused", event_sequence: 1]
+    )
+
+    command = insert_goal_pause_command(task, run, pause_action_id)
+
+    amend_action_id = Ecto.UUID.generate()
+    insert_goal_revision(goal_id, 2)
+    insert_goal_event(goal_id, amend_action_id, 2, "amend", 2)
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "paused", current_revision: 2, event_sequence: 2]
+    )
+
+    assert {:error, :stale_revision} =
+             Goals.apply_goal_pause_transition(
+               run.id,
+               fence,
+               %{"command_id" => command.id},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    assert Repo.get!(Command, command.id).state == "pending"
+    assert {:ok, running} = Orchestration.fetch_run(run.id)
+    assert running.state == "running"
+  end
+
+  test "Goal pause transition creates once and replays after Goal advancement" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    runtime = register_runtime("goal-pause-replay")
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+
+    assert {:ok, %{state: "running"}} =
+             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
+               now: @now
+             )
+
+    action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, action_id, 1, "pause")
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "paused", event_sequence: 1]
+    )
+
+    command = insert_goal_pause_command(task, run, action_id)
+    transition_id = Ecto.UUID.generate()
+    payload = %{"command_id" => command.id}
+
+    assert {:ok, %{state: "paused"} = paused, :created, nil} =
+             Goals.apply_goal_pause_transition(run.id, fence, payload, transition_id, now: @now)
+
+    resume_action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, resume_action_id, 2, "resume")
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "active", event_sequence: 2]
+    )
+
+    assert {:ok, replayed, :replayed} =
+             Goals.apply_goal_pause_transition(run.id, fence, payload, transition_id, now: @now)
+
+    assert replayed.state == paused.state
+
+    assert {:error, :idempotency_conflict} =
+             Goals.apply_goal_pause_transition(
+               run.id,
+               fence,
+               Map.put(payload, "generation", run.generation + 1),
+               transition_id,
+               now: @now
+             )
+
+    assert 1 ==
+             Repo.aggregate(
+               from(transition in SymmetryControl.Orchestration.RunTransition,
+                 where:
+                   transition.run_id == ^run.id and
+                     transition.transition_id == ^transition_id
+               ),
+               :count
+             )
+  end
+
+  test "daemon Goal pause route emits telemetry only for the committed creation" do
+    ref =
+      :telemetry_test.attach_event_handlers(self(), [
+        [:symmetry_control, :orchestration, :run, :transition]
+      ])
+
+    on_exit(fn -> :telemetry.detach(ref) end)
+
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    runtime = register_runtime("goal-pause-controller")
+    machine = Repo.get!(SymmetryControl.Orchestration.Machine, runtime.machine_id)
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+
+    assert {:ok, %{state: "running"}} =
+             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
+               now: @now
+             )
+
+    Repo.update_all(
+      from(stored in Run, where: stored.id == ^run.id),
+      set: [lease_expires_at: DateTime.add(DateTime.utc_now(), 60, :second)]
+    )
+
+    assert_receive {[:symmetry_control, :orchestration, :run, :transition], ^ref, %{count: 1},
+                    %{run_id: run_id, state: "running"}}
+
+    assert run_id == run.id
+
+    action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, action_id, 1, "pause")
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "paused", event_sequence: 1]
+    )
+
+    command = insert_goal_pause_command(task, run, action_id)
+    transition_id = Ecto.UUID.generate()
+
+    body =
+      fence
+      |> Map.new(fn {key, value} -> {Atom.to_string(key), value} end)
+      |> Map.merge(%{"state" => "paused", "payload" => %{"command_id" => command.id}})
+
+    build_conn = fn ->
+      Phoenix.ConnTest.build_conn()
+      |> Plug.Conn.assign(:machine, machine)
+      |> Map.put(:path_params, %{"run_id" => run.id, "transition_id" => transition_id})
+      |> Map.put(:body_params, body)
+    end
+
+    first = SymmetryControlWeb.DaemonController.transition(build_conn.(), %{})
+    assert first.status == 200, first.resp_body
+    assert %{"state" => "paused"} = Jason.decode!(first.resp_body)
+
+    assert_receive {[:symmetry_control, :orchestration, :run, :transition], ^ref, %{count: 1},
+                    %{run_id: paused_run_id, generation: generation, state: "paused"}}
+
+    assert paused_run_id == run.id
+    assert generation == run.generation
+
+    replay = SymmetryControlWeb.DaemonController.transition(build_conn.(), %{})
+    assert replay.status == 200
+    assert %{"state" => "paused"} = Jason.decode!(replay.resp_body)
+
+    refute_receive {[:symmetry_control, :orchestration, :run, :transition], ^ref, _, _}
+  end
+
+  test "Goal pause transition rolls back with an outer transaction" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    runtime = register_runtime("goal-pause-rollback")
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+
+    assert {:ok, %{state: "running"}} =
+             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
+               now: @now
+             )
+
+    action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, action_id, 1, "pause")
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "paused", event_sequence: 1]
+    )
+
+    command = insert_goal_pause_command(task, run, action_id)
+    transition_id = Ecto.UUID.generate()
+
+    assert {:error, :later_failure} =
+             Repo.transaction(fn ->
+               assert {:ok, %{state: "paused"}, :created, nil} =
+                        Goals.apply_goal_pause_transition(
+                          run.id,
+                          fence,
+                          %{"command_id" => command.id},
+                          transition_id,
+                          now: @now
+                        )
+
+               Repo.rollback(:later_failure)
+             end)
+
+    assert %{state: "running"} = Repo.get!(Run, run.id)
+
+    refute Repo.exists?(
+             from(transition in SymmetryControl.Orchestration.RunTransition,
+               where: transition.run_id == ^run.id and transition.transition_id == ^transition_id
+             )
+           )
+  end
+
+  test "Goal pause transition rejects mismatched command and fence identity" do
+    {task, goal_id} = insert_goal_task(max_run_attempts: 2)
+    runtime = register_runtime("goal-pause-identity")
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    fence = claim(run, runtime)
+
+    assert {:ok, %{state: "running"}} =
+             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
+               now: @now
+             )
+
+    action_id = Ecto.UUID.generate()
+    insert_goal_event(goal_id, action_id, 1, "pause")
+
+    Repo.update_all(
+      from(goal in Goal, where: goal.id == ^goal_id),
+      set: [state: "paused", event_sequence: 1]
+    )
+
+    {other_task, _other_goal_id} = insert_goal_task(max_run_attempts: 2)
+    other_command = insert_goal_pause_command(other_task, run, action_id)
+
+    assert {:error, :state_conflict} =
+             Goals.apply_goal_pause_transition(
+               run.id,
+               fence,
+               %{"command_id" => other_command.id},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    Repo.delete!(other_command)
+    command = insert_goal_pause_command(task, run, action_id)
+
+    assert {:error, :ownership_lost} =
+             Goals.apply_goal_pause_transition(
+               run.id,
+               fence,
+               %{"command_id" => command.id, "run_id" => Ecto.UUID.generate()},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    assert {:error, :ownership_lost} =
+             Goals.apply_goal_pause_transition(
+               run.id,
+               fence,
+               %{"command_id" => command.id, "generation" => run.generation + 1},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    assert {:error, :ownership_lost} =
+             Goals.apply_goal_pause_transition(
+               run.id,
+               Map.put(fence, :claim_id, Ecto.UUID.generate()),
+               %{"command_id" => command.id},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    Repo.update_all(
+      from(stored in Command, where: stored.id == ^command.id),
+      set: [run_id: nil, generation: nil]
+    )
+
+    assert {:error, :ownership_lost} =
+             Goals.apply_goal_pause_transition(
+               run.id,
+               fence,
+               %{"command_id" => command.id},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    Repo.update_all(
+      from(stored in Command, where: stored.id == ^command.id),
+      set: [run_id: run.id, generation: run.generation + 1]
+    )
+
+    assert {:error, :ownership_lost} =
+             Goals.apply_goal_pause_transition(
+               run.id,
+               fence,
+               %{"command_id" => command.id},
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    assert %{state: "running"} = Repo.get!(Run, run.id)
   end
 
   test "Goal pause does not create an unimplemented native pause descriptor" do
