@@ -12,7 +12,7 @@ versioned payload data; identity, ownership, state and dedup keys stay relationa
 | Table | Additions and meaning |
 | --- | --- |
 | `work_items` | nullable `goal_id uuid`; `admitted_revision integer`; `required boolean DEFAULT true`; `integration boolean NOT NULL DEFAULT false`; `acceptance_contract jsonb`; nullable immutable `baseline_subject jsonb` or `baseline_dependency_id uuid`; nullable immutable `change_target jsonb`; goal-less items retain current behavior |
-| `tasks` | nullable `work_item_id uuid`, `goal_id uuid`, `goal_revision integer`, `context_snapshot_id uuid`; `purpose text DEFAULT 'implement'`; nullable `validation_of_task_id uuid`; `admission_key uuid`; `max_run_attempts integer` for goal tasks; nullable `requested_session_id uuid`; nullable immutable `handoff_source_run_id uuid` |
+| `tasks` | nullable `work_item_id uuid`, `goal_id uuid`, `goal_revision integer`, `context_snapshot_id uuid`; `purpose text DEFAULT 'implement'`; nullable `validation_of_task_id uuid`; `admission_key uuid`; `max_run_attempts integer` for goal tasks; nullable immutable `allowed_runtime_ids uuid[]` snapshot; nullable `requested_session_id uuid`; nullable immutable `handoff_source_run_id uuid` |
 | `runs` | nullable `harness_session_id uuid` paired with immutable `harness_binding_id uuid`; native result/evidence remain associated with the original execution fence |
 | `runtimes` | `harness_kind text`, `harness_version text`, `adapter_version text`, `adapter_protocol_version integer`, nullable `repository_resource_id uuid`; explicit capabilities described in protocol.md |
 
@@ -43,6 +43,11 @@ Preserve `work_items.orchestration_task_id` as the current/latest task pointer f
 existing APIs. `tasks.work_item_id` is durable membership for historical queries;
 do not infer history from the current pointer. `tasks.goal_id` and revision are
 captured at admission; do not recompute them from a mutable WorkItem later.
+
+For every Goal Task, `tasks.allowed_runtime_ids` is the immutable admission-time
+snapshot of the admitted GoalRevision execution policy. Goal-less Tasks retain
+`NULL`. Assignment and new claim consume this Task-local value; a later Goal
+revision never rewrites or recomputes the runtime selector for an existing Task.
 
 `UNIQUE(tasks.goal_id, admission_key)` for non-null goal_id. Add composite unique
 keys and foreign keys to enforce `(work_item_id, goal_id)` membership and

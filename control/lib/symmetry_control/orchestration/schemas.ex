@@ -160,6 +160,7 @@ defmodule SymmetryControl.Orchestration.Task do
     field :goal_revision, :integer
     field :purpose, :string, default: "implement"
     field :admission_key, Ecto.UUID
+    field :allowed_runtime_ids, {:array, Ecto.UUID}
     field :max_run_attempts, :integer
     field :result, :map
     field :failure, :map
@@ -188,6 +189,7 @@ defmodule SymmetryControl.Orchestration.Task do
       :purpose,
       :validation_of_task_id,
       :admission_key,
+      :allowed_runtime_ids,
       :max_run_attempts,
       :requested_session_id,
       :handoff_source_run_id,
@@ -209,6 +211,7 @@ defmodule SymmetryControl.Orchestration.Task do
     |> validate_number(:attempt_generation, greater_than: 0)
     |> validate_number(:goal_revision, greater_than: 0)
     |> validate_number(:max_run_attempts, greater_than: 0)
+    |> validate_allowed_runtime_ids()
     |> validate_inclusion(:request_hash_version, [1, 2])
     |> validate_inclusion(:purpose, ["implement", "validate", "plan", "observe", "chat"])
     |> validate_goal_task_fields()
@@ -235,6 +238,9 @@ defmodule SymmetryControl.Orchestration.Task do
     |> check_constraint(:goal_id, name: :tasks_goal_fields_all_or_none)
     |> check_constraint(:purpose, name: :tasks_purpose_check)
     |> check_constraint(:max_run_attempts, name: :tasks_max_run_attempts_positive)
+    |> check_constraint(:allowed_runtime_ids,
+      name: :tasks_allowed_runtime_ids_membership_check
+    )
     |> foreign_key_constraint(:work_item_id, name: :tasks_goal_work_item_membership_fkey)
     |> foreign_key_constraint(:goal_id, name: :tasks_goal_revision_fkey)
     |> foreign_key_constraint(:context_snapshot_id,
@@ -255,6 +261,7 @@ defmodule SymmetryControl.Orchestration.Task do
             :goal_revision,
             :context_snapshot_id,
             :admission_key,
+            :allowed_runtime_ids,
             :max_run_attempts,
             :handoff_source_run_id
           ],
@@ -284,8 +291,31 @@ defmodule SymmetryControl.Orchestration.Task do
           do: add_error(changeset, :max_run_attempts, "must be present for a Goal task"),
           else: changeset
 
+      changeset =
+        if is_nil(get_field(changeset, :allowed_runtime_ids)),
+          do: add_error(changeset, :allowed_runtime_ids, "must be present for a Goal task"),
+          else: changeset
+
       validate_goal_task_purpose_fields(changeset)
     end
+  end
+
+  defp validate_allowed_runtime_ids(changeset) do
+    validate_change(changeset, :allowed_runtime_ids, fn :allowed_runtime_ids, runtime_ids ->
+      cond do
+        is_nil(runtime_ids) ->
+          []
+
+        length(runtime_ids) > 256 ->
+          [allowed_runtime_ids: "must contain at most 256 UUIDs"]
+
+        length(runtime_ids) != length(Enum.uniq(runtime_ids)) ->
+          [allowed_runtime_ids: "must not contain duplicate UUIDs"]
+
+        true ->
+          []
+      end
+    end)
   end
 
   defp validate_goal_task_purpose_fields(changeset) do

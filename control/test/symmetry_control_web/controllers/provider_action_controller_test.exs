@@ -2733,6 +2733,7 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
       attempt_generation: 1,
       purpose: "implement",
       admission_key: uuid(),
+      allowed_runtime_ids: [],
       max_run_attempts: 1
     })
     |> Repo.insert!()

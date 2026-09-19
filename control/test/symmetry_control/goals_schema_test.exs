@@ -46,9 +46,47 @@ defmodule SymmetryControl.GoalsSchemaTest do
     partial = Task.changeset(%Task{}, Map.merge(task_attrs(), %{goal_id: @id}))
     assert "must be present for a Goal task" in errors_on(partial).work_item_id
     assert "must be present for a Goal task" in errors_on(partial).max_run_attempts
+    assert "must be present for a Goal task" in errors_on(partial).allowed_runtime_ids
 
     goal_task = Task.changeset(%Task{}, Map.merge(task_attrs(), goal_task_attrs()))
     assert goal_task.valid?
+
+    malformed_runtime_policy =
+      Task.changeset(
+        %Task{},
+        Map.merge(
+          task_attrs(),
+          Map.merge(goal_task_attrs(), %{allowed_runtime_ids: ["not-a-uuid"]})
+        )
+      )
+
+    refute malformed_runtime_policy.valid?
+
+    duplicate_runtime_policy =
+      Task.changeset(
+        %Task{},
+        Map.merge(task_attrs(), Map.merge(goal_task_attrs(), %{allowed_runtime_ids: [@id, @id]}))
+      )
+
+    assert "must not contain duplicate UUIDs" in errors_on(duplicate_runtime_policy).allowed_runtime_ids
+
+    oversized_runtime_policy =
+      Task.changeset(
+        %Task{},
+        Map.merge(
+          task_attrs(),
+          Map.merge(goal_task_attrs(), %{
+            allowed_runtime_ids: Enum.map(1..257, fn _ -> Ecto.UUID.generate() end)
+          })
+        )
+      )
+
+    assert "must contain at most 256 UUIDs" in errors_on(oversized_runtime_policy).allowed_runtime_ids
+
+    goal_less_runtime_policy =
+      Task.changeset(%Task{}, Map.merge(task_attrs(), %{allowed_runtime_ids: []}))
+
+    assert "must be absent without Goal membership" in errors_on(goal_less_runtime_policy).allowed_runtime_ids
 
     missing_producer =
       Task.changeset(
@@ -487,6 +525,7 @@ defmodule SymmetryControl.GoalsSchemaTest do
       goal_revision: 1,
       context_snapshot_id: @other_id,
       admission_key: "00000000-0000-0000-0000-000000000003",
+      allowed_runtime_ids: [],
       max_run_attempts: 2
     }
   end

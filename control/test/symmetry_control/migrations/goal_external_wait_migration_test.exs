@@ -364,11 +364,12 @@ defmodule SymmetryControl.Migrations.GoalExternalWaitMigrationTest do
         id, idempotency_key, request_hash, goal, agent_profile, workspace, input,
         required_capabilities, state, current_generation, attempt_generation, work_item_id,
         goal_id, goal_revision, context_snapshot_id, purpose, validation_of_task_id, admission_key,
+        allowed_runtime_ids,
         max_run_attempts, inserted_at, updated_at
       )
       VALUES ($1, 'external-wait-task', $2, 'External wait task', 'default', 'primary',
               '{}'::jsonb, '{}'::jsonb, 'completed', 1, 1, $3, $4, 1, $5, 'implement', NULL,
-              $6, 2, now(), now())
+              $6, ARRAY[]::uuid[], 2, now(), now())
       """,
       [
         task_id,

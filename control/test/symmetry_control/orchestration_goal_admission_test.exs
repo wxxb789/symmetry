@@ -554,6 +554,73 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     assert run.runtime_id == expected_runtime.id
   end
 
+  test "assignment and exact claim replay use the frozen Task runtime snapshot" do
+    allowed = register_runtime("snapshot-allowed")
+    disallowed = register_runtime("snapshot-disallowed")
+
+    {task, goal_id} =
+      insert_goal_task(
+        max_run_attempts: 2,
+        execution_policy: Map.put(execution_policy(2), "allowed_runtime_ids", [allowed.id])
+      )
+
+    repository_resource_id = Repo.get!(WorkItem, task.work_item_id).repository_resource_id
+
+    Repo.update_all(
+      from(runtime in Runtime, where: runtime.id in ^[allowed.id, disallowed.id]),
+      set: [repository_resource_id: repository_resource_id]
+    )
+
+    update_live_goal_runtime_policy!(goal_id, [disallowed.id])
+
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    assert run.runtime_id == allowed.id
+
+    request = %{
+      runtime_id: allowed.id,
+      runtime_epoch: allowed.connection_epoch,
+      generation: run.generation,
+      claim_id: Ecto.UUID.generate()
+    }
+
+    assert {:ok, claimed} = Orchestration.claim(run.id, request, now: @now)
+    assert {:ok, replayed} = Orchestration.claim(run.id, request, now: @now)
+    assert replayed.lease_token == claimed.lease_token
+  end
+
+  test "a new claim rejects an assigned runtime outside the Task snapshot" do
+    allowed = register_runtime("snapshot-new-claim-allowed")
+    disallowed = register_runtime("snapshot-new-claim-disallowed")
+
+    {task, goal_id} =
+      insert_goal_task(
+        max_run_attempts: 2,
+        execution_policy: Map.put(execution_policy(2), "allowed_runtime_ids", [allowed.id])
+      )
+
+    repository_resource_id = Repo.get!(WorkItem, task.work_item_id).repository_resource_id
+
+    Repo.update_all(
+      from(runtime in Runtime, where: runtime.id in ^[allowed.id, disallowed.id]),
+      set: [repository_resource_id: repository_resource_id]
+    )
+
+    update_live_goal_runtime_policy!(goal_id, [disallowed.id])
+    run = insert_assigned_run!(task, disallowed)
+
+    assert {:error, :ownership_lost} =
+             Orchestration.claim(
+               run.id,
+               %{
+                 runtime_id: disallowed.id,
+                 runtime_epoch: disallowed.connection_epoch,
+                 generation: run.generation,
+                 claim_id: Ecto.UUID.generate()
+               },
+               now: @now
+             )
+  end
+
   test "Goal assignment requires the runtime repository affinity" do
     {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
     item = Repo.get!(WorkItem, task.work_item_id)
@@ -2119,6 +2186,8 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     validation_of_task_id = if purpose == "validate", do: Ecto.UUID.generate(), else: nil
     validation_bindings = Keyword.get(opts, :validation_bindings, [])
     policy = Keyword.get(opts, :execution_policy, execution_policy(max_run_attempts))
+    allowed_runtime_ids = Map.get(policy, "allowed_runtime_ids", [])
+    strict_budget? = Map.get(policy, "budget_mode", "soft") == "strict"
     retained_runtime = Keyword.get(opts, :retained_runtime)
 
     requested_session_id =
@@ -2143,6 +2212,16 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
           input
         end
       end)
+
+    task_input =
+      Map.put(task_input, "limits", %{
+        "max_turns" => 1,
+        "deadline_at" => DateTime.to_iso8601(DateTime.add(@now, 15 * 60, :second)),
+        "max_cost_microusd" =>
+          if(strict_budget?,
+            do: Integer.to_string(Map.fetch!(policy, "per_run_cost_limit_microusd"))
+          )
+      })
 
     assert {:ok, {task, goal_id}} =
              Repo.transaction(fn ->
@@ -2275,10 +2354,12 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
                    INSERT INTO tasks (
                      id, idempotency_key, request_hash, request_hash_version, goal, agent_profile, workspace,
                      input, required_capabilities, state, current_generation, attempt_generation, work_item_id,
-                     goal_id, goal_revision, context_snapshot_id, purpose, validation_of_task_id, admission_key, max_run_attempts,
+                     goal_id, goal_revision, context_snapshot_id, purpose, validation_of_task_id, admission_key,
+                     allowed_runtime_ids, max_run_attempts,
                      inserted_at, updated_at
                    ) VALUES ($1, $2, $3, 1, 'Goal admission producer', 'codex', 'primary', '{}'::jsonb,
-                     '{}'::jsonb, 'completed', 1, 1, $4, $5, 1, $6, 'implement', NULL, $7, $8, $9, $9)
+                     '{}'::jsonb, 'completed', 1, 1, $4, $5, 1, $6, 'implement', NULL, $7,
+                     ARRAY(SELECT value::uuid FROM jsonb_array_elements_text($8::text::jsonb) AS value), $9, $10, $10)
                    """,
                    [
                      db_uuid(validation_of_task_id),
@@ -2288,6 +2369,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
                      db_uuid(goal_id),
                      db_uuid(snapshot_id),
                      db_uuid(Ecto.UUID.generate()),
+                     Jason.encode!(allowed_runtime_ids),
                      max_run_attempts,
                      @now
                    ]
@@ -2299,10 +2381,12 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
                  INSERT INTO tasks (
                  id, idempotency_key, request_hash, request_hash_version, goal, agent_profile, workspace,
                  input, required_capabilities, state, current_generation, attempt_generation, work_item_id,
-                 goal_id, goal_revision, context_snapshot_id, purpose, validation_of_task_id, admission_key, max_run_attempts,
-                 requested_session_id, inserted_at, updated_at
+                 goal_id, goal_revision, context_snapshot_id, purpose, validation_of_task_id, admission_key,
+                 allowed_runtime_ids, max_run_attempts, requested_session_id, inserted_at, updated_at
                  ) VALUES ($1, $2, $3, 1, 'Goal admission task', 'codex', 'primary', $4::text::jsonb,
-                 '{}'::jsonb, 'queued', 0, 1, $5, $6, 1, $7, $8, $9, $10, $11, $12, $13, $13)
+                 '{}'::jsonb, 'queued', 0, 1, $5, $6, 1, $7, $8, $9, $10,
+                 ARRAY(SELECT value::uuid FROM jsonb_array_elements_text($11::text::jsonb) AS value),
+                 $12, $13, $14, $14)
                  """,
                  [
                    db_uuid(task_id),
@@ -2315,6 +2399,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
                    purpose,
                    maybe_db_uuid(validation_of_task_id),
                    db_uuid(admission_key),
+                   Jason.encode!(allowed_runtime_ids),
                    max_run_attempts,
                    maybe_db_uuid(requested_session_id),
                    task_inserted_at
@@ -2459,6 +2544,22 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
       "allowed_actions" => [],
       "allowed_resource_ids" => []
     }
+  end
+
+  defp update_live_goal_runtime_policy!(goal_id, runtime_ids) do
+    Repo.query!("ALTER TABLE goal_revisions DISABLE TRIGGER USER")
+
+    try do
+      Repo.query!(
+        "UPDATE goal_revisions SET execution_policy = $1::text::jsonb WHERE goal_id = $2",
+        [
+          Jason.encode!(Map.put(execution_policy(2), "allowed_runtime_ids", runtime_ids)),
+          db_uuid(goal_id)
+        ]
+      )
+    after
+      Repo.query!("ALTER TABLE goal_revisions ENABLE TRIGGER USER")
+    end
   end
 
   defp enable_goal_rollout do
@@ -2608,6 +2709,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
       purpose: source_task.purpose,
       validation_of_task_id: source_task.validation_of_task_id,
       admission_key: Ecto.UUID.generate(),
+      allowed_runtime_ids: source_task.allowed_runtime_ids,
       max_run_attempts: source_task.max_run_attempts,
       requested_session_id: nil,
       handoff_source_run_id: source_run.id

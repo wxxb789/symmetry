@@ -6453,6 +6453,7 @@ defmodule SymmetryControl.Goals do
         purpose: purpose,
         validation_of_task_id: optional_uuid!(payload, :validation_of_task_id),
         admission_key: admission_key,
+        allowed_runtime_ids: admission_allowed_runtime_ids!(revision),
         max_run_attempts:
           policy_integer(
             revision.execution_policy,
@@ -6605,6 +6606,7 @@ defmodule SymmetryControl.Goals do
         purpose: "plan",
         validation_of_task_id: nil,
         admission_key: admission_key,
+        allowed_runtime_ids: admission_allowed_runtime_ids!(revision),
         max_run_attempts:
           policy_integer(
             revision.execution_policy,
@@ -8749,6 +8751,20 @@ defmodule SymmetryControl.Goals do
 
     validate_execution_policy!(normalized)
     normalized
+  end
+
+  defp admission_allowed_runtime_ids!(revision) do
+    case value(revision.execution_policy || %{}, "allowed_runtime_ids") do
+      runtime_ids when is_list(runtime_ids) ->
+        if length(runtime_ids) <= 256 and
+             length(runtime_ids) == length(Enum.uniq(runtime_ids)) and
+             Enum.all?(runtime_ids, &valid_uuid?/1),
+           do: runtime_ids,
+           else: rollback(:invalid_request)
+
+      _ ->
+        rollback(:invalid_request)
+    end
   end
 
   defp admission_subject!(goal, item, "validate", payload, opts) do

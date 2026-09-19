@@ -8,6 +8,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   alias SymmetryControl.Repo.Migrations.AddGoalTerminalAuthorityGuardsAndSessionReciprocity
   alias SymmetryControl.Repo.Migrations.AddHarnessSessionStopReceipts
   alias SymmetryControl.Repo.Migrations.AddHarnessSessionAttachReceipts
+  alias SymmetryControl.Repo.Migrations.AddTaskRuntimePolicySnapshot
   alias SymmetryControl.Repo.Migrations.AddGoalIntegrationWorkItemDesignation
   alias SymmetryControl.Repo.Migrations.AddGoalIdentityGuards
   alias SymmetryControl.Repo.Migrations.AddTaskHandoffLineage
@@ -55,6 +56,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   @handoff_lineage_migration_version 20_260_910_040_000
   @session_stop_receipt_migration_version 20_260_910_050_000
   @session_attach_receipt_migration_version 20_260_911_000_000
+  @runtime_policy_snapshot_migration_version 20_260_916_000_000
 
   test "upgrades legacy rows without assigning their textual goal to durable Goal history" do
     with_schema(fn ->
@@ -260,6 +262,268 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
     end)
   end
 
+  test "backfills and freezes the Task runtime policy snapshot" do
+    with_schema(fn ->
+      migrate_goal_up!()
+      migrate_terminal_policy_up!()
+
+      allowed_runtime_ids = [Ecto.UUID.generate(), Ecto.UUID.generate()]
+
+      %{goal_id: goal_id, work_item_id: work_item_id} =
+        insert_goal_fixture!(
+          protected_execution_policy_json(%{"allowed_runtime_ids" => allowed_runtime_ids})
+        )
+
+      goal_task_id = insert_goal_task!(%{goal_id: goal_id, work_item_id: work_item_id})
+      legacy_task_id = insert_legacy_task!("Goal-less runtime policy task")
+
+      migrate_runtime_policy_snapshot_up!()
+
+      assert %{rows: [[^allowed_runtime_ids]]} =
+               Repo.query!(
+                 """
+                 SELECT ARRAY(
+                   SELECT runtime_id::text
+                   FROM unnest(allowed_runtime_ids) AS runtime_id(runtime_id)
+                 )
+                 FROM tasks
+                 WHERE id = $1
+                 """,
+                 [goal_task_id]
+               )
+
+      assert %{rows: [[nil]]} =
+               Repo.query!("SELECT allowed_runtime_ids FROM tasks WHERE id = $1", [
+                 legacy_task_id
+               ])
+
+      assert_raise Postgrex.Error, ~r/goal_0006_task_runtime_policy_snapshot_immutable/i, fn ->
+        Repo.query!("UPDATE tasks SET allowed_runtime_ids = ARRAY[]::uuid[] WHERE id = $1", [
+          goal_task_id
+        ])
+      end
+
+      assert_raise Postgrex.Error, ~r/goal_0006_task_runtime_policy_membership_immutable/i, fn ->
+        Repo.query!("UPDATE tasks SET goal_id = NULL WHERE id = $1", [goal_task_id])
+      end
+
+      forged_snapshot = [Ecto.UUID.generate()]
+
+      assert_raise Postgrex.Error, ~r/goal_0006_task_runtime_policy_source_mismatch/i, fn ->
+        insert_goal_task_with_snapshot!(goal_id, work_item_id, forged_snapshot)
+      end
+
+      assert_raise Postgrex.Error,
+                   ~r/cannot roll back task runtime policy snapshots while Goal task history exists/i,
+                   &migrate_runtime_policy_snapshot_down!/0
+    end)
+  end
+
+  test "direct SQL runtime policy snapshots compare unique members as a set" do
+    with_schema(fn ->
+      migrate_goal_up!()
+      migrate_terminal_policy_up!()
+
+      runtime_a = Ecto.UUID.generate()
+      runtime_b = Ecto.UUID.generate()
+
+      %{goal_id: goal_id, work_item_id: work_item_id} =
+        insert_goal_fixture!(
+          protected_execution_policy_json(%{"allowed_runtime_ids" => [runtime_a, runtime_b]})
+        )
+
+      migrate_runtime_policy_snapshot_up!()
+
+      reordered_task_id =
+        insert_goal_task_with_snapshot!(goal_id, work_item_id, [runtime_b, runtime_a])
+
+      assert %{rows: [[allowed_runtime_ids]]} =
+               Repo.query!(
+                 "SELECT allowed_runtime_ids FROM tasks WHERE id = $1",
+                 [reordered_task_id]
+               )
+
+      assert %Task{allowed_runtime_ids: [^runtime_b, ^runtime_a]} =
+               Repo.load(Task, %{allowed_runtime_ids: allowed_runtime_ids})
+
+      assert %{rows: [[task_count_before_reject, snapshot_count_before_reject]]} =
+               Repo.query!(
+                 """
+                 SELECT
+                   (SELECT COUNT(*) FROM tasks WHERE goal_id = $1),
+                   (SELECT COUNT(*) FROM context_snapshots WHERE goal_id = $1)
+                 """,
+                 [goal_id]
+               )
+
+      assert_raise Postgrex.Error, ~r/tasks_allowed_runtime_ids_dimensions_check/i, fn ->
+        Repo.transaction(fn ->
+          context_snapshot_id = insert_context_snapshot!(goal_id, work_item_id)
+
+          Repo.query!(
+            """
+            INSERT INTO tasks (
+              id, idempotency_key, request_hash, goal, agent_profile, workspace, input,
+              required_capabilities, state, current_generation, attempt_generation, work_item_id,
+              goal_id, goal_revision, context_snapshot_id, purpose, validation_of_task_id,
+              admission_key, allowed_runtime_ids, max_run_attempts, inserted_at, updated_at
+            )
+            VALUES ($1, $2, $3, 'Multidimensional Goal task', 'codex', 'primary', '{}'::jsonb,
+                    '{}'::jsonb, 'completed', 1, 1, $4, $5, 1, $6, 'implement', NULL, $7,
+                    ARRAY[[$8::text::uuid, $9::text::uuid]]::uuid[], 2, now(), now())
+            """,
+            [
+              Ecto.UUID.bingenerate(),
+              "multidimensional-goal-task-#{System.unique_integer([:positive])}",
+              hash(17),
+              work_item_id,
+              goal_id,
+              context_snapshot_id,
+              Ecto.UUID.bingenerate(),
+              runtime_a,
+              runtime_b
+            ]
+          )
+        end)
+      end
+
+      assert %{rows: [[^task_count_before_reject, ^snapshot_count_before_reject]]} =
+               Repo.query!(
+                 """
+                 SELECT
+                   (SELECT COUNT(*) FROM tasks WHERE goal_id = $1),
+                   (SELECT COUNT(*) FROM context_snapshots WHERE goal_id = $1)
+                 """,
+                 [goal_id]
+               )
+
+      assert_raise Postgrex.Error, ~r/goal_0006_task_runtime_policy_source_mismatch/i, fn ->
+        insert_goal_task_with_snapshot!(goal_id, work_item_id, [runtime_a, runtime_a])
+      end
+
+      assert %{rows: [[^task_count_before_reject, ^snapshot_count_before_reject]]} =
+               Repo.query!(
+                 """
+                 SELECT
+                   (SELECT COUNT(*) FROM tasks WHERE goal_id = $1),
+                   (SELECT COUNT(*) FROM context_snapshots WHERE goal_id = $1)
+                 """,
+                 [goal_id]
+               )
+
+      assert_raise Postgrex.Error, ~r/goal_0006_task_runtime_policy_source_mismatch/i, fn ->
+        insert_goal_task_with_snapshot!(goal_id, work_item_id, [runtime_a, Ecto.UUID.generate()])
+      end
+
+      assert %{rows: [[^task_count_before_reject, ^snapshot_count_before_reject]]} =
+               Repo.query!(
+                 """
+                 SELECT
+                   (SELECT COUNT(*) FROM tasks WHERE goal_id = $1),
+                   (SELECT COUNT(*) FROM context_snapshots WHERE goal_id = $1)
+                 """,
+                 [goal_id]
+               )
+
+      assert %{rows: [[1]]} =
+               Repo.query!("SELECT COUNT(*) FROM tasks WHERE id = $1", [reordered_task_id])
+    end)
+  end
+
+  test "invalid historical runtime policies abort snapshot migration atomically" do
+    duplicate_id = Ecto.UUID.generate()
+
+    invalid_policies = [
+      {:malformed_uuid, ["not-a-uuid"]},
+      {:duplicate_ids, [duplicate_id, duplicate_id]},
+      {:oversized, Enum.map(1..257, fn _ -> Ecto.UUID.generate() end)}
+    ]
+
+    Enum.each(invalid_policies, fn {_label, runtime_ids} ->
+      with_schema(fn ->
+        migrate_goal_up!()
+        migrate_terminal_policy_up!()
+
+        %{goal_id: goal_id, work_item_id: work_item_id} =
+          insert_goal_fixture!(protected_execution_policy_json(%{}))
+
+        insert_goal_task!(%{goal_id: goal_id, work_item_id: work_item_id})
+
+        Repo.query!("ALTER TABLE goal_revisions DISABLE TRIGGER goal_revisions_immutable_history")
+
+        Repo.query!(
+          "ALTER TABLE goal_revisions DROP CONSTRAINT goal_revisions_execution_policy_v1"
+        )
+
+        Repo.query!(
+          "UPDATE goal_revisions SET execution_policy = $1::text::jsonb WHERE goal_id = $2",
+          [
+            protected_execution_policy_json(%{"allowed_runtime_ids" => runtime_ids}),
+            goal_id
+          ]
+        )
+
+        Repo.query!("ALTER TABLE goal_revisions ENABLE TRIGGER goal_revisions_immutable_history")
+
+        assert_raise(
+          Postgrex.Error,
+          ~r/goal_0006_task_runtime_policy_source_invalid/i,
+          &migrate_runtime_policy_snapshot_up!/0
+        )
+
+        assert %{rows: []} =
+                 Repo.query!("""
+                 SELECT 1
+                 FROM information_schema.columns
+                 WHERE table_schema = current_schema()
+                   AND table_name = 'tasks'
+                   AND column_name = 'allowed_runtime_ids'
+                 """)
+
+        assert %{rows: []} =
+                 Repo.query!("SELECT version FROM schema_migrations WHERE version = $1", [
+                   @runtime_policy_snapshot_migration_version
+                 ])
+      end)
+    end)
+  end
+
+  test "goal-less schemas roll back and reapply the runtime policy snapshot" do
+    with_schema(fn ->
+      migrate_goal_up!()
+      migrate_terminal_policy_up!()
+      legacy_task_id = insert_legacy_task!("Clean runtime policy snapshot rollback")
+
+      migrate_runtime_policy_snapshot_up!()
+      migrate_runtime_policy_snapshot_down!()
+
+      assert %{rows: []} =
+               Repo.query!("""
+               SELECT 1
+               FROM information_schema.columns
+               WHERE table_schema = current_schema()
+                 AND table_name = 'tasks'
+                 AND column_name = 'allowed_runtime_ids'
+               """)
+
+      migrate_runtime_policy_snapshot_up!()
+
+      assert %{rows: [["allowed_runtime_ids"]]} =
+               Repo.query!("""
+               SELECT column_name
+               FROM information_schema.columns
+               WHERE table_schema = current_schema()
+                 AND table_name = 'tasks'
+                 AND column_name = 'allowed_runtime_ids'
+               """)
+
+      assert %{rows: [[nil]]} =
+               Repo.query!("SELECT allowed_runtime_ids FROM tasks WHERE id = $1", [
+                 legacy_task_id
+               ])
+    end)
+  end
+
   test "migrated goal-less legacy tasks pass the existing lifecycle changesets" do
     with_schema(fn ->
       project_id = insert_project!()
@@ -273,7 +537,28 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
 
       migrate_goal_up!()
       migrate_handoff_lineage_up!()
-      task = Repo.get!(Task, Ecto.UUID.cast!(task_id))
+
+      %{columns: columns, rows: [row]} =
+        Repo.query!(
+          """
+          SELECT id, idempotency_key, request_hash, request_hash_version, work_item_id,
+                 goal_id, goal_revision, context_snapshot_id, goal, agent_profile, workspace,
+                 input, required_capabilities, state, current_generation, attempt_generation,
+                 waiting_transition_id, purpose, validation_of_task_id, admission_key,
+                 max_run_attempts, requested_session_id, handoff_source_run_id, result, failure,
+                 inserted_at, updated_at
+          FROM tasks
+          WHERE id = $1
+          """,
+          [task_id]
+        )
+
+      task_attrs =
+        columns
+        |> Enum.zip(row)
+        |> Map.new(fn {column, value} -> {String.to_existing_atom(column), value} end)
+
+      task = Repo.load(Task, task_attrs)
 
       assert task.goal_id == nil
       assert task.work_item_id == Ecto.UUID.cast!(work_item_id)
@@ -3801,6 +4086,30 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
     )
   end
 
+  defp migrate_runtime_policy_snapshot_up! do
+    Ecto.Migrator.run(
+      Repo,
+      [{@runtime_policy_snapshot_migration_version, AddTaskRuntimePolicySnapshot}],
+      :up,
+      all: true,
+      log: false,
+      migration_lock: false,
+      dynamic_repo: Repo.get_dynamic_repo()
+    )
+  end
+
+  defp migrate_runtime_policy_snapshot_down! do
+    Ecto.Migrator.run(
+      Repo,
+      [{@runtime_policy_snapshot_migration_version, AddTaskRuntimePolicySnapshot}],
+      :down,
+      step: 1,
+      log: false,
+      migration_lock: false,
+      dynamic_repo: Repo.get_dynamic_repo()
+    )
+  end
+
   defp migrate_change_target_up! do
     Ecto.Migrator.run(
       Repo,
@@ -4176,6 +4485,43 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
     id
   end
 
+  defp insert_goal_task_with_snapshot!(goal_id, work_item_id, allowed_runtime_ids) do
+    {:ok, id} =
+      Repo.transaction(fn ->
+        id = Ecto.UUID.bingenerate()
+        context_snapshot_id = insert_context_snapshot!(goal_id, work_item_id)
+
+        Repo.query!(
+          """
+          INSERT INTO tasks (
+            id, idempotency_key, request_hash, goal, agent_profile, workspace, input,
+            required_capabilities, state, current_generation, attempt_generation, work_item_id,
+            goal_id, goal_revision, context_snapshot_id, purpose, validation_of_task_id, admission_key,
+            allowed_runtime_ids, max_run_attempts, inserted_at, updated_at
+          )
+          VALUES ($1, $2, $3, 'Forged Goal task', 'codex', 'primary', '{}'::jsonb, '{}'::jsonb,
+                  'completed', 1, 1, $4, $5, 1, $6, 'implement', NULL, $7,
+                  ARRAY(SELECT value::uuid FROM jsonb_array_elements_text($8::text::jsonb) AS value),
+                  2, now(), now())
+          """,
+          [
+            id,
+            "forged-goal-task-#{System.unique_integer([:positive])}",
+            hash(16),
+            work_item_id,
+            goal_id,
+            context_snapshot_id,
+            Ecto.UUID.bingenerate(),
+            Jason.encode!(allowed_runtime_ids)
+          ]
+        )
+
+        id
+      end)
+
+    id
+  end
+
   defp insert_resolved_goal_decision!(goal_id) do
     id = Ecto.UUID.bingenerate()
 
@@ -4543,7 +4889,8 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
        "20260910030000_add_goal_terminal_authority_guards_and_session_reciprocity.exs"},
       {AddTaskHandoffLineage, "20260910040000_add_task_handoff_lineage.exs"},
       {AddHarnessSessionStopReceipts, "20260910050000_add_harness_session_stop_receipts.exs"},
-      {AddHarnessSessionAttachReceipts, "20260911000000_add_harness_session_attach_receipts.exs"}
+      {AddHarnessSessionAttachReceipts, "20260911000000_add_harness_session_attach_receipts.exs"},
+      {AddTaskRuntimePolicySnapshot, "20260916000000_add_task_runtime_policy_snapshot.exs"}
     ]
 
     Enum.each(migrations, fn {module, filename} ->

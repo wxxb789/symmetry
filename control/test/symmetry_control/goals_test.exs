@@ -1306,6 +1306,10 @@ defmodule SymmetryControl.GoalsTest do
     task = Repo.get!(Task, task_id)
     assert task.goal_id == goal_id
     assert task.goal_revision == 1
+
+    assert task.allowed_runtime_ids ==
+             fetch_goal!(goal_id).revision.execution_policy["allowed_runtime_ids"]
+
     assert task.context_snapshot_id
     assert task.admission_key
     assert task.max_run_attempts == 2
@@ -1597,6 +1601,10 @@ defmodule SymmetryControl.GoalsTest do
 
     assert task.goal_id == created.goal.id
     assert task.goal_revision == created.goal.current_revision
+
+    assert task.allowed_runtime_ids ==
+             fetch_goal!(created.goal.id).revision.execution_policy["allowed_runtime_ids"]
+
     assert task.purpose == "plan"
     assert task.work_item_id == nil
     assert task.validation_of_task_id == nil
@@ -6602,6 +6610,7 @@ defmodule SymmetryControl.GoalsTest do
         attempt_generation: 1,
         purpose: "implement",
         admission_key: task_input["admission_id"],
+        allowed_runtime_ids: admitted_task.allowed_runtime_ids,
         max_run_attempts: admitted_task.max_run_attempts
       })
       |> Repo.insert!()

@@ -16,7 +16,6 @@ defmodule SymmetryControl.Orchestration do
     ContractValidation,
     Goal,
     GoalEvent,
-    GoalRevision,
     HarnessSession
   }
 
@@ -1089,8 +1088,6 @@ defmodule SymmetryControl.Orchestration do
       from task in Task,
         join: goal in Goal,
         on: goal.id == task.goal_id,
-        join: revision in GoalRevision,
-        on: revision.goal_id == goal.id and revision.revision == goal.current_revision,
         left_join: item in WorkItem,
         on: item.id == task.work_item_id,
         where: task.state == "queued" and not is_nil(task.goal_id),
@@ -1139,11 +1136,11 @@ defmodule SymmetryControl.Orchestration do
 
   defp try_assign_goal_candidate(candidate, _current, assignment_duration_ms, opts) do
     Repo.transaction(fn ->
-      with {:ok, _project, goal, item, revision, task} <-
+      with {:ok, _project, goal, item, task} <-
              try_lock_goal_assignment_chain(candidate),
            current <- now(opts),
            true <- goal_task_assignable?(goal, task) and goal_work_item_owned?(goal, item, task),
-           %Runtime{} = runtime <- next_goal_runtime(task, revision, item, current),
+           %Runtime{} = runtime <- next_goal_runtime(task, item, current),
            true <- runtime_has_capacity?(runtime) do
         {:assigned, assign_task_to_runtime!(task, runtime, item, current, assignment_duration_ms)}
       else
@@ -1164,9 +1161,8 @@ defmodule SymmetryControl.Orchestration do
          %Goal{} = goal <- try_lock_goal(candidate.goal_id),
          item <- try_lock_goal_task_item(candidate.work_item_id),
          true <- is_nil(item) or match?(%WorkItem{}, item),
-         %GoalRevision{} = revision <- try_lock_goal_revision(goal),
          %Task{} = task <- try_lock_task(candidate.task_id) do
-      {:ok, project, goal, item, revision, task}
+      {:ok, project, goal, item, task}
     else
       _ -> :skip
     end
@@ -1195,14 +1191,6 @@ defmodule SymmetryControl.Orchestration do
 
   defp try_lock_goal_task_item(nil), do: nil
   defp try_lock_goal_task_item(work_item_id), do: try_lock_work_item(work_item_id)
-
-  defp try_lock_goal_revision(goal) do
-    Repo.one(
-      from revision in GoalRevision,
-        where: revision.goal_id == ^goal.id and revision.revision == ^goal.current_revision,
-        lock: "FOR SHARE SKIP LOCKED"
-    )
-  end
 
   defp try_lock_task(task_id),
     do: Repo.one(from task in Task, where: task.id == ^task_id, lock: "FOR UPDATE SKIP LOCKED")
@@ -1308,9 +1296,8 @@ defmodule SymmetryControl.Orchestration do
     )
   end
 
-  defp next_goal_runtime(task, revision, item, current) do
-    case {goal_task_repository_resource_id(task, item),
-          allowed_runtime_ids(revision.execution_policy || %{}),
+  defp next_goal_runtime(task, item, current) do
+    case {goal_task_repository_resource_id(task, item), task_allowed_runtime_ids(task),
           validation_runtime_ids_for_task(task), native_goal_session_requirement(task)} do
       {nil, _, _, _} ->
         nil
@@ -1328,8 +1315,7 @@ defmodule SymmetryControl.Orchestration do
        session_requirement} ->
         adapter_requirement = native_goal_adapter_requirement()
 
-        strict_budget_requirement =
-          strict_budget_capability_requirement(revision.execution_policy)
+        strict_budget_requirement = strict_budget_capability_requirement(task)
 
         query =
           from runtime in Runtime,
@@ -1380,7 +1366,7 @@ defmodule SymmetryControl.Orchestration do
             nil
 
           runtime ->
-            if goal_runtime_matches?(runtime, task, revision, item), do: runtime, else: nil
+            if goal_runtime_matches?(runtime, task, item), do: runtime, else: nil
         end
     end
   end
@@ -1563,7 +1549,7 @@ defmodule SymmetryControl.Orchestration do
       task.attempt_generation <= task.max_run_attempts
   end
 
-  defp goal_runtime_matches?(runtime, task, revision, item) do
+  defp goal_runtime_matches?(runtime, task, item) do
     runtime_matches_task?(runtime, task) and
       goal_subject_matches_resource?(task, goal_task_repository_resource_id(task, item)) and
       runtime_matches_goal_resource?(
@@ -1571,10 +1557,10 @@ defmodule SymmetryControl.Orchestration do
         task.goal_id,
         goal_task_repository_resource_id(task, item)
       ) and
-      runtime_allowed_for_goal?(runtime, revision) and
+      runtime_allowed_for_task?(runtime, task) and
       validation_runtime_allowed?(runtime, task) and
       handoff_source_machine_matches?(runtime, task) and
-      native_goal_adapter_capable?(runtime, task, revision)
+      native_goal_adapter_capable?(runtime, task)
   end
 
   # Validation profile authorization is frozen into the admitted ContextSnapshot.
@@ -1687,23 +1673,35 @@ defmodule SymmetryControl.Orchestration do
 
   defp runtime_matches_goal_resource?(_runtime, _goal_id, _repository_resource_id), do: false
 
-  defp runtime_allowed_for_goal?(runtime, revision) do
-    case allowed_runtime_ids(revision.execution_policy || %{}) do
+  defp runtime_allowed_for_task?(runtime, task) do
+    case task_allowed_runtime_ids(task) do
       {:ok, []} -> true
       {:ok, allowed_runtime_ids} -> runtime.id in allowed_runtime_ids
       :invalid -> false
     end
   end
 
-  defp allowed_runtime_ids(policy) do
-    case value(policy, :allowed_runtime_ids, []) do
-      ids when is_list(ids) ->
-        if Enum.all?(ids, &valid_uuid?/1), do: {:ok, ids}, else: :invalid
+  defp task_allowed_runtime_ids(%Task{goal_id: goal_id, allowed_runtime_ids: runtime_ids})
+       when not is_nil(goal_id) do
+    cond do
+      not is_list(runtime_ids) ->
+        :invalid
 
-      _ ->
+      length(runtime_ids) > 256 ->
+        :invalid
+
+      length(runtime_ids) != length(Enum.uniq(runtime_ids)) ->
+        :invalid
+
+      Enum.all?(runtime_ids, &canonical_runtime_uuid?/1) ->
+        {:ok, runtime_ids}
+
+      true ->
         :invalid
     end
   end
+
+  defp task_allowed_runtime_ids(_task), do: {:ok, nil}
 
   defp native_goal_adapter_requirement do
     %{
@@ -1747,7 +1745,7 @@ defmodule SymmetryControl.Orchestration do
     end
   end
 
-  defp native_goal_adapter_capable?(runtime, task, revision) do
+  defp native_goal_adapter_capable?(runtime, task) do
     adapter = value(runtime.capabilities, :adapter)
     operations = value(adapter, :operations)
     session_mode = value(task.input || %{}, :session_mode, "fresh")
@@ -1758,19 +1756,28 @@ defmodule SymmetryControl.Orchestration do
       value(operations, :start) == true and value(operations, :events) == true and
       value(operations, :cancel) == true and value(operations, :pause) == "unsupported" and
       value(runtime.capabilities, :supervisory_control, false) != true and
-      (value(revision.execution_policy || %{}, :budget_mode, "soft") != "strict" or
-         value(operations, :hard_cost_limit) == true) and
+      (not strict_budget_task?(task) or value(operations, :hard_cost_limit) == true) and
       (session_mode != "resume" or value(operations, :resume) == true) and
       (session_mode != "handoff" or value(operations, :handoff) == true)
   end
 
-  defp strict_budget_capability_requirement(execution_policy) do
-    if value(execution_policy || %{}, :budget_mode, "soft") == "strict" do
+  defp strict_budget_capability_requirement(task) do
+    if strict_budget_task?(task) do
       %{"adapter" => %{"operations" => %{"hard_cost_limit" => true}}}
     else
       %{}
     end
   end
+
+  defp strict_budget_task?(%Task{} = task) do
+    task.input
+    |> value(:limits, %{})
+    |> value(:max_cost_microusd)
+    |> is_nil()
+    |> Kernel.not()
+  end
+
+  defp strict_budget_task?(_task), do: false
 
   @spec assign_all(keyword()) :: {:ok, [Run.t()]}
   def assign_all(opts \\ []) do
@@ -3585,7 +3592,7 @@ defmodule SymmetryControl.Orchestration do
   end
 
   # Claim additionally verifies that the currently selected runtime still
-  # satisfies the active Goal policy.
+  # satisfies the frozen Task execution inputs.
   defp lock_claim_chain(run_id) do
     lock_goal_chain(run_id)
   end
@@ -3593,9 +3600,8 @@ defmodule SymmetryControl.Orchestration do
   defp ensure_new_goal_claim_authority!(nil, _item, _task, _runtime), do: :ok
 
   defp ensure_new_goal_claim_authority!(goal, item, task, runtime) do
-    revision = lock_goal_revision(goal)
     ensure_current_goal_execution!(goal, item, task)
-    unless goal_runtime_matches?(runtime, task, revision, item), do: rollback(:ownership_lost)
+    unless goal_runtime_matches?(runtime, task, item), do: rollback(:ownership_lost)
   end
 
   defp ensure_requested_session_claim_binding!(
@@ -3709,14 +3715,6 @@ defmodule SymmetryControl.Orchestration do
     do:
       Repo.one(from item in WorkItem, where: item.id == ^work_item_id, lock: "FOR UPDATE") ||
         rollback(:not_found)
-
-  defp lock_goal_revision(goal) do
-    Repo.one(
-      from revision in GoalRevision,
-        where: revision.goal_id == ^goal.id and revision.revision == ^goal.current_revision,
-        lock: "FOR SHARE"
-    ) || rollback(:stale_revision)
-  end
 
   defp ensure_current_goal_control_action!(goal, revision, action_id, command_kind) do
     action =
