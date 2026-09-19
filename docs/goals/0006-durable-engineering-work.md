@@ -1,5 +1,10 @@
 # 0006 — Trustworthy long-horizon engineering work
 
+> **Umbrella goal.** PR #6 merged the completed durable-work foundation. The
+> remaining independently verifiable outcomes are defined by goals 0006a–0006i.
+> Use those files as the active implementation contracts; retain this file as
+> the end-to-end product outcome and final acceptance boundary.
+
 Make Symmetry sustain engineering goals across sessions, interrupted executions
 and compatible harness handoffs while preserving approved intent, authority,
 useful context, dependencies and verifiable progress. Implement within the fixed

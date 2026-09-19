@@ -1,5 +1,9 @@
 # 0007 — A polished, maintainable engineering workspace
 
+> **Umbrella goal.** This outcome is decomposed into goals 0007a–0007i so each
+> increment can be completed and merged independently within one bounded agent
+> run. Use the lettered goals as the active implementation contracts.
+
 Replace Symmetry's current portal frontend with a modern TypeScript and Effect
 workspace integrated with Phoenix, within the fixed architecture and interaction
 contract in [frontend](../design/frontend.md) and [protocol](../design/protocol.md).

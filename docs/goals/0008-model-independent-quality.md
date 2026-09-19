@@ -1,5 +1,9 @@
 # 0008 — Lower-cost development with unchanged acceptance standards
 
+> **Umbrella goal.** This outcome is decomposed into goals 0008a–0008d so the
+> workflow foundation and each language-specific routing decision have separate
+> completion judgments. Use the lettered goals as the active contracts.
+
 Establish and validate a practical development workflow in which lightweight
 models perform suitable Symmetry Go, Elixir and TypeScript work without lowering
 the code acceptance standard, following [quality](../design/quality.md) and the
