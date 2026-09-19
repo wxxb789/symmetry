@@ -3,10 +3,10 @@ defmodule SymmetryControl.Goals do
   PostgreSQL-backed Goal transition policy.
 
   This context is the only writer for Goal lifecycle, revision, plan, admission,
-  decision and acceptance records.  It deliberately does not call Orchestration:
-  goal-aware writes acquire the Goal lock first, while Orchestration owns the
-  inverse Task/Run lifecycle.  Terminal Task handling reaches `settle_task/4`
-  only after the orchestration transaction has committed.
+  decision and acceptance records. Goal-aware writes acquire Goal authority
+  before invoking policy-free Orchestration transaction kernels. Terminal Task
+  handling reaches `settle_task/4` only after the orchestration transaction has
+  committed.
   """
 
   import Ecto.Query
@@ -116,6 +116,159 @@ defmodule SymmetryControl.Goals do
   @max_microusd 9_223_372_036_854_775_807
 
   @type receipt :: %{goal: map(), event: map(), response: map()}
+
+  @typedoc false
+  @type new_claim_authority_envelope :: %{
+          required(:project) => Project.t(),
+          required(:goal) => Goal.t(),
+          required(:work_item) => WorkItem.t() | nil,
+          required(:task) => Task.t(),
+          required(:run) => Run.t(),
+          required(:ownership) => map()
+        }
+
+  @spec new_claim_authority(new_claim_authority_envelope()) ::
+          :ok | {:error, :state_conflict | :ownership_lost}
+  defp new_claim_authority(%{
+         project: %Project{id: project_id, status: status},
+         goal: %Goal{project_id: goal_project_id} = goal,
+         work_item: work_item,
+         task: %Task{} = task,
+         run: %Run{} = run,
+         ownership: ownership
+       }) do
+    cond do
+      status != "active" ->
+        {:error, :state_conflict}
+
+      project_id != goal_project_id ->
+        {:error, :ownership_lost}
+
+      not claim_identity_current?(ownership, task, run) ->
+        {:error, :ownership_lost}
+
+      not claim_work_item_owned?(project_id, goal, work_item, task) ->
+        {:error, :ownership_lost}
+
+      not claim_task_current?(goal, task) ->
+        {:error, :ownership_lost}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp new_claim_authority(_), do: {:error, :ownership_lost}
+
+  @doc false
+  @spec claim(Ecto.UUID.t(), map(), keyword()) :: {:ok, Run.t()} | {:error, atom()}
+  def claim(run_id, request, opts \\ []) do
+    notify? = not Repo.in_transaction?()
+
+    case claim_with_disposition(run_id, request, opts) do
+      {:ok, run, :created} ->
+        if notify?, do: SymmetryControl.Orchestration.emit_claimed(run)
+        {:ok, run}
+
+      {:ok, run, :replayed} ->
+        {:ok, run}
+
+      error ->
+        error
+    end
+  end
+
+  @doc false
+  @spec claim_with_disposition(Ecto.UUID.t(), map(), keyword()) ::
+          {:ok, Run.t(), :created | :replayed} | {:error, atom()}
+  def claim_with_disposition(run_id, request, opts \\ [])
+
+  def claim_with_disposition(run_id, request, opts)
+      when is_binary(run_id) and is_map(request) and is_list(opts) do
+    if valid_uuid?(run_id) do
+      result =
+        if Repo.in_transaction?() do
+          {:ok, claim_with_disposition_in_transaction(run_id, request, opts)}
+        else
+          Repo.transaction(fn -> claim_with_disposition_in_transaction(run_id, request, opts) end)
+        end
+
+      case result do
+        {:ok, {:created, run}} -> {:ok, run, :created}
+        {:ok, {:replayed, run}} -> {:ok, run, :replayed}
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      {:error, :invalid_request}
+    end
+  end
+
+  def claim_with_disposition(_, _, _), do: {:error, :invalid_request}
+
+  defp claim_with_disposition_in_transaction(run_id, request, opts) do
+    ownership =
+      Repo.one(
+        from run in Run,
+          join: task in Task,
+          on: task.id == run.task_id,
+          left_join: goal in Goal,
+          on: goal.id == task.goal_id,
+          where: run.id == ^run_id,
+          select: %{
+            task_id: task.id,
+            goal_id: task.goal_id,
+            project_id: goal.project_id,
+            work_item_id: task.work_item_id
+          }
+      ) || rollback(:not_found)
+
+    notify_claim_authority_routed(opts, ownership)
+
+    if is_nil(ownership.goal_id), do: rollback(:goal_authority_required)
+
+    project = lock_project!(ownership.project_id)
+    goal = lock_goal(ownership.goal_id)
+    item = if ownership.work_item_id, do: lock_work_item(ownership.work_item_id)
+
+    case SymmetryControl.Orchestration.prepare_claim_in_transaction(
+           run_id,
+           request,
+           opts,
+           item
+         ) do
+      {:replayed, %{run: run, task: task}} ->
+        if claim_identity_current?(ownership, task, run) do
+          {:replayed, run}
+        else
+          rollback(:ownership_lost)
+        end
+
+      {:new, %{run: run, task: task} = claim_context} ->
+        case new_claim_authority(%{
+               project: project,
+               goal: goal,
+               work_item: item,
+               task: task,
+               run: run,
+               ownership: ownership
+             }) do
+          :ok ->
+            case SymmetryControl.Orchestration.commit_new_claim_in_transaction(
+                   claim_context,
+                   opts
+                 ) do
+              {:created, claimed_run} -> {:created, claimed_run}
+              {:error, reason} -> rollback(reason)
+            end
+
+          {:error, reason} ->
+            rollback(reason)
+        end
+
+      {:error, reason} ->
+        rollback(reason)
+    end
+  end
 
   @spec create_goal(Ecto.UUID.t(), map(), String.t(), keyword()) ::
           {:ok, receipt(), :created | :replayed} | {:error, term()}
@@ -8049,6 +8202,46 @@ defmodule SymmetryControl.Goals do
 
   defp ensure_project_active!(%Project{status: "active"} = project), do: project
   defp ensure_project_active!(_project), do: rollback(:state_conflict)
+
+  defp claim_task_current?(goal, task) do
+    task.goal_id == goal.id and task.goal_revision == goal.current_revision and
+      ((goal.state == "draft" and claim_planning_task?(task)) or
+         (goal.state == "active" and task.purpose != "plan"))
+  end
+
+  defp claim_planning_task?(%Task{
+         purpose: "plan",
+         work_item_id: nil,
+         validation_of_task_id: nil
+       }),
+       do: true
+
+  defp claim_planning_task?(_task), do: false
+
+  defp claim_identity_current?(ownership, %Task{} = task, %Run{} = run) do
+    task.id == ownership.task_id and run.task_id == task.id and
+      task.goal_id == ownership.goal_id and task.work_item_id == ownership.work_item_id and
+      task.current_generation == run.generation
+  end
+
+  defp notify_claim_authority_routed(opts, ownership) do
+    case Keyword.get(opts, :on_goal_claim_routed) do
+      hook when is_function(hook, 1) -> hook.(ownership)
+      _ -> :ok
+    end
+  end
+
+  defp claim_work_item_owned?(project_id, goal, nil, %Task{} = task) do
+    claim_planning_task?(task) and task.goal_id == goal.id and goal.project_id == project_id
+  end
+
+  defp claim_work_item_owned?(project_id, goal, %WorkItem{} = work_item, %Task{} = task) do
+    task.goal_id == goal.id and task.work_item_id == work_item.id and
+      work_item.project_id == project_id and work_item.goal_id == goal.id and
+      work_item.admitted_revision == task.goal_revision
+  end
+
+  defp claim_work_item_owned?(_project_id, _goal, _work_item, _task), do: false
 
   defp try_lock_active_goal_project(goal_id) do
     with project_id when is_binary(project_id) <-

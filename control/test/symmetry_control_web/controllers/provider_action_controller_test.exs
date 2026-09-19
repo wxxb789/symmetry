@@ -455,6 +455,29 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
            ]
   end
 
+  test "Goal-owned HTTP claim emits claimed telemetry exactly once", context do
+    goal =
+      goal_fixture(
+        context.item.project_id,
+        provider_goal_authority(["change.upsert"], [context.repository.id])
+      )
+
+    item = admit_goal_owned_item(context.item, goal)
+    snapshot = goal_context_snapshot(item, goal)
+    task = goal_task(item, goal, snapshot, context.repository.id)
+    run = goal_run(task, context.runtime_id)
+    event = [:symmetry_control, :orchestration, :run, :claimed]
+    ref = :telemetry_test.attach_event_handlers(self(), [event])
+    on_exit(fn -> :telemetry.detach(ref) end)
+
+    %{claim_id: claim_id} = claim_goal_provider_access(context, run)
+
+    assert_receive {^event, ^ref, %{count: 1}, %{run_id: run_id}}, 1_000
+    assert run_id == run.id
+    assert is_binary(claim_id)
+    refute_receive {^event, ^ref, _measurements, _metadata}
+  end
+
   test "Goal branch targets permit their frozen sync and upsert operations", context do
     goal =
       goal_fixture(

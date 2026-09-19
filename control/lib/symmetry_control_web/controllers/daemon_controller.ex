@@ -136,50 +136,33 @@ defmodule SymmetryControlWeb.DaemonController do
   end
 
   defp claim_with_provider_access(run_id, request) do
-    if ProviderAccess.exact_claim_replay?(run_id, request) do
-      replay_claim_with_provider_access(run_id, request)
-    else
-      create_claim_with_provider_access(run_id, request)
+    with {:ok, owner} <- Orchestration.claim_owner(run_id) do
+      Repo.transaction(fn ->
+        # Scope locking precedes a new claim to preserve the established
+        # Goal -> resource lock order. A replay ignores a now-stale scope result.
+        provider_scope = ProviderAccess.lock_claim_scope(run_id)
+
+        with {:ok, run, disposition} <-
+               claim_with_owner(owner, run_id, request,
+                 lease_duration_ms: config(:lease_duration_ms)
+               ),
+             {:ok, %{task: task}} <- Orchestration.task_snapshot(run.task_id),
+             {:ok, provider_access} <-
+               provider_access_for_claim(provider_scope, disposition, run, task) do
+          {run, task, provider_access, disposition}
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+      |> claim_provider_access_result()
     end
   end
 
-  defp replay_claim_with_provider_access(run_id, request) do
-    Repo.transaction(fn ->
-      with {:ok, run, :replayed} <-
-             Orchestration.claim_with_disposition(run_id, request,
-               lease_duration_ms: config(:lease_duration_ms)
-             ),
-           {:ok, %{task: task}} <- Orchestration.task_snapshot(run.task_id),
-           {:ok, provider_access} <- ProviderAccess.replay_claim_access(run, task) do
-        {run, task, provider_access, :replayed}
-      else
-        {:ok, _run, :created} -> Repo.rollback(:ownership_lost)
-        {:error, reason} -> Repo.rollback(reason)
-      end
-    end)
-    |> claim_provider_access_result()
-  end
+  defp claim_with_owner(:goal, run_id, request, opts),
+    do: Goals.claim_with_disposition(run_id, request, opts)
 
-  defp create_claim_with_provider_access(run_id, request) do
-    Repo.transaction(fn ->
-      # Scope locking precedes a new claim to preserve Goal -> Project -> resource
-      # lock order. A replay intentionally ignores a now-stale scope result.
-      provider_scope = ProviderAccess.lock_claim_scope(run_id)
-
-      with {:ok, run, disposition} <-
-             Orchestration.claim_with_disposition(run_id, request,
-               lease_duration_ms: config(:lease_duration_ms)
-             ),
-           {:ok, %{task: task}} <- Orchestration.task_snapshot(run.task_id),
-           {:ok, provider_access} <-
-             provider_access_for_claim(provider_scope, disposition, run, task) do
-        {run, task, provider_access, disposition}
-      else
-        {:error, reason} -> Repo.rollback(reason)
-      end
-    end)
-    |> claim_provider_access_result()
-  end
+  defp claim_with_owner(:legacy, run_id, request, opts),
+    do: Orchestration.claim_with_disposition(run_id, request, opts)
 
   defp claim_provider_access_result(result) do
     case result do

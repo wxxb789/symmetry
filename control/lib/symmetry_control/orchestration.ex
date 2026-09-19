@@ -1793,9 +1793,11 @@ defmodule SymmetryControl.Orchestration do
 
   @spec claim(Ecto.UUID.t(), map(), keyword()) :: {:ok, Run.t()} | {:error, atom()}
   def claim(run_id, request, opts \\ []) do
+    notify? = not Repo.in_transaction?()
+
     case claim_with_disposition(run_id, request, opts) do
       {:ok, run, :created} ->
-        emit_claimed(run)
+        if notify?, do: emit_claimed(run)
         {:ok, run}
 
       {:ok, run, :replayed} ->
@@ -1807,70 +1809,45 @@ defmodule SymmetryControl.Orchestration do
   end
 
   @doc false
+  @spec claim_owner(Ecto.UUID.t()) :: {:ok, :goal | :legacy} | {:error, atom()}
+  def claim_owner(run_id) when is_binary(run_id) do
+    if valid_uuid?(run_id) do
+      case Repo.one(
+             from run in Run,
+               join: task in Task,
+               on: task.id == run.task_id,
+               where: run.id == ^run_id,
+               select: %{goal_id: task.goal_id}
+           ) do
+        %{goal_id: nil} -> {:ok, :legacy}
+        %{goal_id: goal_id} when is_binary(goal_id) -> {:ok, :goal}
+        nil -> {:error, :not_found}
+      end
+    else
+      {:error, :invalid_request}
+    end
+  end
+
+  def claim_owner(_), do: {:error, :invalid_request}
+
+  @doc false
   @spec claim_with_disposition(Ecto.UUID.t(), map(), keyword()) ::
           {:ok, Run.t(), :created | :replayed} | {:error, atom()}
   def claim_with_disposition(run_id, request, opts) when is_map(request) do
     with true <- valid_uuid?(run_id) and valid_claim_request?(request),
-         {:ok, lease_duration_ms} <- lease_duration_ms(opts) do
+         {:ok, _lease_duration_ms} <- lease_duration_ms(opts),
+         {:ok, :legacy} <- claim_owner(run_id) do
       result =
         Repo.transaction(fn ->
-          {task, run, runtime, goal, item} = lock_claim_chain(run_id)
-          current = now(opts)
-          request_runtime_id = value(request, :runtime_id)
-          request_epoch = value(request, :runtime_epoch)
-          request_generation = value(request, :generation)
-          request_claim_id = value(request, :claim_id)
+          case prepare_claim_in_transaction(run_id, request, opts, nil) do
+            {:replayed, %{run: run}} ->
+              run
 
-          if replayed_claim?(task, run, runtime, request, current) do
-            run
-          else
-            ensure_requested_session_claim_binding!(task, runtime, item, run)
-            ensure_new_goal_claim_authority!(goal, item, task, runtime)
+            {:new, %{task: %Task{goal_id: nil}} = claim_context} ->
+              commit_new_claim_in_transaction(claim_context, opts)
 
-            cond do
-              run.runtime_id != request_runtime_id or runtime.id != request_runtime_id ->
-                rollback(:ownership_lost)
-
-              runtime.connection_epoch != request_epoch or
-                task.current_generation != request_generation or
-                  run.generation != request_generation ->
-                rollback(:ownership_lost)
-
-              not runtime_matches_task?(runtime, task) ->
-                rollback(:ownership_lost)
-
-              run.state != "assigned" ->
-                rollback(:ownership_lost)
-
-              DateTime.compare(run.assignment_expires_at, current) != :gt ->
-                rollback(:assignment_expired)
-
-              task.state != "assigned" ->
-                rollback(:ownership_lost)
-
-              true ->
-                lease_expires_at = DateTime.add(current, lease_duration_ms, :millisecond)
-
-                run =
-                  run
-                  |> Run.changeset(%{
-                    state: "claimed",
-                    claimed_runtime_epoch: request_epoch,
-                    claim_id: request_claim_id,
-                    lease_token: Ecto.UUID.generate(),
-                    claimed_at: current,
-                    lease_expires_at: lease_expires_at
-                  })
-                  |> stamp_update(current)
-                  |> Repo.update!()
-
-                task
-                |> Task.changeset(%{state: "claimed"})
-                |> stamp_update(current)
-                |> Repo.update!()
-
-                {:created, run}
-            end
+            {:new, _claim_context} ->
+              rollback(:goal_authority_required)
           end
         end)
         |> case do
@@ -1890,11 +1867,138 @@ defmodule SymmetryControl.Orchestration do
           error
       end
     else
-      _ -> {:error, :invalid_request}
+      {:ok, :goal} -> {:error, :goal_authority_required}
+      {:error, reason} -> {:error, reason}
+      :error -> {:error, :invalid_request}
+      false -> {:error, :invalid_request}
     end
   end
 
   def claim_with_disposition(_, _, _), do: {:error, :invalid_request}
+
+  @doc false
+  @spec prepare_claim_in_transaction(Ecto.UUID.t(), map(), keyword(), WorkItem.t() | nil) ::
+          {:replayed, map()} | {:new, map()} | {:error, atom()}
+  def prepare_claim_in_transaction(run_id, request, opts, work_item)
+      when is_binary(run_id) and is_map(request) and is_list(opts) do
+    if Repo.in_transaction?() and valid_uuid?(run_id) and valid_claim_request?(request) and
+         (is_nil(work_item) or match?(%WorkItem{}, work_item)) do
+      current = now(opts)
+
+      case prepare_claim_locked(run_id, request, current, work_item, opts) do
+        {:replayed, claim_context} ->
+          {:replayed, claim_context}
+
+        {:new, claim_context} ->
+          {:new, Map.put(claim_context, :current, current)}
+      end
+    else
+      {:error, :invalid_request}
+    end
+  end
+
+  def prepare_claim_in_transaction(_, _, _, _), do: {:error, :invalid_request}
+
+  @doc false
+  @spec commit_new_claim_in_transaction(map(), keyword()) ::
+          {:created, Run.t()} | {:error, atom()}
+  def commit_new_claim_in_transaction(claim_context, opts)
+      when is_map(claim_context) and is_list(opts) do
+    with true <- Repo.in_transaction?(),
+         %DateTime{} = current <- Map.get(claim_context, :current),
+         {:ok, lease_duration_ms} <- lease_duration_ms(opts) do
+      commit_new_claim!(claim_context, current, lease_duration_ms)
+    else
+      _ -> {:error, :invalid_request}
+    end
+  end
+
+  def commit_new_claim_in_transaction(_, _), do: {:error, :invalid_request}
+
+  defp prepare_claim_locked(run_id, request, current, work_item, opts) do
+    {task, run, runtime} = lock_chain(run_id, opts)
+
+    claim_context = %{
+      task: task,
+      run: run,
+      runtime: runtime,
+      work_item: work_item,
+      request_runtime_id: value(request, :runtime_id),
+      request_epoch: value(request, :runtime_epoch),
+      request_generation: value(request, :generation),
+      request_claim_id: value(request, :claim_id)
+    }
+
+    if replayed_claim?(task, run, runtime, request, current) do
+      {:replayed, claim_context}
+    else
+      ensure_requested_session_claim_binding!(task, runtime, work_item, run)
+      {:new, claim_context}
+    end
+  end
+
+  defp commit_new_claim!(
+         %{
+           task: task,
+           run: run,
+           runtime: runtime,
+           work_item: work_item,
+           request_runtime_id: request_runtime_id,
+           request_epoch: request_epoch,
+           request_generation: request_generation,
+           request_claim_id: request_claim_id
+         },
+         current,
+         lease_duration_ms
+       ) do
+    cond do
+      not is_nil(task.goal_id) and not goal_runtime_matches?(runtime, task, work_item) ->
+        rollback(:ownership_lost)
+
+      run.runtime_id != request_runtime_id or runtime.id != request_runtime_id ->
+        rollback(:ownership_lost)
+
+      runtime.connection_epoch != request_epoch or
+        task.current_generation != request_generation or
+          run.generation != request_generation ->
+        rollback(:ownership_lost)
+
+      not runtime_matches_task?(runtime, task) ->
+        rollback(:ownership_lost)
+
+      run.state != "assigned" ->
+        rollback(:ownership_lost)
+
+      DateTime.compare(run.assignment_expires_at, current) != :gt ->
+        rollback(:assignment_expired)
+
+      task.state != "assigned" ->
+        rollback(:ownership_lost)
+
+      true ->
+        lease_expires_at = DateTime.add(current, lease_duration_ms, :millisecond)
+
+        run =
+          run
+          |> Run.changeset(%{
+            state: "claimed",
+            claimed_runtime_epoch: request_epoch,
+            claim_id: request_claim_id,
+            lease_token: Ecto.UUID.generate(),
+            claimed_at: current,
+            lease_expires_at: lease_expires_at
+          })
+          |> stamp_update(current)
+          |> Repo.update!()
+
+        task
+        |> Task.changeset(%{state: "claimed"})
+        |> stamp_update(current)
+        |> Repo.update!()
+
+        {:created, run}
+    end
+  end
 
   @doc false
   @spec emit_claimed(Run.t()) :: :ok
@@ -3495,15 +3599,24 @@ defmodule SymmetryControl.Orchestration do
     unless valid?, do: rollback(:ownership_lost)
   end
 
-  defp lock_chain(run_id) do
+  defp lock_chain(run_id, opts \\ []) do
     task_id =
       Repo.one(from run in Run, where: run.id == ^run_id, select: run.task_id) ||
         rollback(:not_found)
 
     task = lock_task(task_id)
+    notify_claim_task_locked(opts, task)
     run = Repo.one!(from run in Run, where: run.id == ^run_id, lock: "FOR UPDATE")
+    unless run.task_id == task.id, do: rollback(:ownership_lost)
     runtime = lock_runtime(run.runtime_id)
     {task, run, runtime}
+  end
+
+  defp notify_claim_task_locked(opts, task) do
+    case Keyword.get(opts, :on_claim_task_locked) do
+      hook when is_function(hook, 1) -> hook.(task)
+      _ -> :ok
+    end
   end
 
   # A Goal pause transition consumes a Goal-issued control action. It must keep
@@ -3589,19 +3702,6 @@ defmodule SymmetryControl.Orchestration do
 
   defp ensure_current_goal_transition_authority!(goal, item, task, _target_state) do
     ensure_current_goal_execution!(goal, item, task)
-  end
-
-  # Claim additionally verifies that the currently selected runtime still
-  # satisfies the frozen Task execution inputs.
-  defp lock_claim_chain(run_id) do
-    lock_goal_chain(run_id)
-  end
-
-  defp ensure_new_goal_claim_authority!(nil, _item, _task, _runtime), do: :ok
-
-  defp ensure_new_goal_claim_authority!(goal, item, task, runtime) do
-    ensure_current_goal_execution!(goal, item, task)
-    unless goal_runtime_matches?(runtime, task, item), do: rollback(:ownership_lost)
   end
 
   defp ensure_requested_session_claim_binding!(

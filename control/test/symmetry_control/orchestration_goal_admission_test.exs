@@ -17,7 +17,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
   alias SymmetryControl.Orchestration.{Command, Run, Runtime, Task}
   alias SymmetryControl.Repo
   alias SymmetryControl.Workspaces
-  alias SymmetryControl.Workspaces.{ProjectResource, WorkItem}
+  alias SymmetryControl.Workspaces.{Project, ProjectResource, WorkItem}
 
   @now ~U[2026-09-09 09:00:00.000000Z]
 
@@ -528,7 +528,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     Repo.update_all(from(goal in Goal, where: goal.id == ^goal_id), set: [state: "paused"])
 
     assert {:error, :ownership_lost} =
-             Orchestration.claim(
+             Goals.claim(
                run.id,
                %{
                  runtime_id: allowed.id,
@@ -583,8 +583,8 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
       claim_id: Ecto.UUID.generate()
     }
 
-    assert {:ok, claimed} = Orchestration.claim(run.id, request, now: @now)
-    assert {:ok, replayed} = Orchestration.claim(run.id, request, now: @now)
+    assert {:ok, claimed} = Goals.claim(run.id, request, now: @now)
+    assert {:ok, replayed} = Goals.claim(run.id, request, now: @now)
     assert replayed.lease_token == claimed.lease_token
   end
 
@@ -609,7 +609,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     run = insert_assigned_run!(task, disallowed)
 
     assert {:error, :ownership_lost} =
-             Orchestration.claim(
+             Goals.claim(
                run.id,
                %{
                  runtime_id: disallowed.id,
@@ -673,7 +673,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     )
 
     assert {:error, :ownership_lost} =
-             Orchestration.claim(
+             Goals.claim(
                run.id,
                %{
                  runtime_id: hard_limit_runtime.id,
@@ -696,7 +696,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
       claim_id: Ecto.UUID.generate()
     }
 
-    assert {:ok, claimed} = Orchestration.claim(run.id, claim_request, now: @now)
+    assert {:ok, claimed} = Goals.claim(run.id, claim_request, now: @now)
 
     Repo.update_all(
       from(runtime in Runtime, where: runtime.id == ^hard_limit_runtime.id),
@@ -710,7 +710,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
       ]
     )
 
-    assert {:ok, replayed} = Orchestration.claim(run.id, claim_request, now: @now)
+    assert {:ok, replayed} = Goals.claim(run.id, claim_request, now: @now)
     assert replayed.lease_token == claimed.lease_token
   end
 
@@ -847,7 +847,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     )
 
     assert {:error, :ownership_lost} =
-             Orchestration.claim(
+             Goals.claim(
                run.id,
                %{
                  runtime_id: runtime.id,
@@ -1041,7 +1041,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     assigned_run = insert_assigned_run!(assigned_task, assigned_runtime)
 
     assert {:error, :ownership_lost} =
-             Orchestration.claim(
+             Goals.claim(
                assigned_run.id,
                %{
                  runtime_id: assigned_runtime.id,
@@ -1074,15 +1074,75 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     }
 
     assert {:ok, claimed} =
-             Orchestration.claim(replay_run.id, replay_request,
-               now: DateTime.add(@now, 1, :second)
-             )
+             Goals.claim(replay_run.id, replay_request, now: DateTime.add(@now, 1, :second))
 
     assert {:ok, replayed} =
-             Orchestration.claim(replay_run.id, replay_request,
-               now: DateTime.add(@now, 1, :second)
-             )
+             Goals.claim(replay_run.id, replay_request, now: DateTime.add(@now, 1, :second))
 
+    assert replayed.lease_token == claimed.lease_token
+  end
+
+  test "direct Goal claim rejects an archived Project" do
+    {project, repository} = project_repository_fixture("archived-project-claim")
+    runtime = register_runtime("archived-project-claim", repository_resource_id: repository.id)
+
+    {task, _goal_id} =
+      insert_goal_task(
+        max_run_attempts: 2,
+        project_id: project.id,
+        repository_id: repository.id
+      )
+
+    run = insert_assigned_run!(task, runtime)
+
+    Repo.update_all(
+      from(project_row in Project, where: project_row.id == ^project.id),
+      set: [status: "archived"]
+    )
+
+    assert {:error, :state_conflict} =
+             Goals.claim(
+               run.id,
+               %{
+                 runtime_id: runtime.id,
+                 runtime_epoch: runtime.connection_epoch,
+                 generation: run.generation,
+                 claim_id: Ecto.UUID.generate(),
+                 provider_scope: nil
+               },
+               now: @now
+             )
+  end
+
+  test "exact Goal claim replay remains allowed after its Project is archived" do
+    {project, repository} = project_repository_fixture("archived-project-replay")
+    runtime = register_runtime("archived-project-replay", repository_resource_id: repository.id)
+
+    {task, _goal_id} =
+      insert_goal_task(
+        max_run_attempts: 2,
+        project_id: project.id,
+        repository_id: repository.id
+      )
+
+    run = insert_assigned_run!(task, runtime)
+
+    claim_request = %{
+      runtime_id: runtime.id,
+      runtime_epoch: runtime.connection_epoch,
+      generation: run.generation,
+      claim_id: Ecto.UUID.generate(),
+      provider_scope: nil
+    }
+
+    assert {:ok, claimed} = Goals.claim(run.id, claim_request, now: @now)
+
+    Repo.update_all(
+      from(project_row in Project, where: project_row.id == ^project.id),
+      set: [status: "archived"]
+    )
+
+    assert {:ok, replayed} = Goals.claim(run.id, claim_request, now: @now)
     assert replayed.lease_token == claimed.lease_token
   end
 
@@ -1098,7 +1158,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
       claim_id: Ecto.UUID.generate()
     }
 
-    assert {:ok, claimed} = Orchestration.claim(run.id, request, now: @now)
+    assert {:ok, claimed} = Goals.claim(run.id, request, now: @now)
     item = Repo.get!(WorkItem, task.work_item_id)
 
     assert {:ok, other_repository} =
@@ -1112,9 +1172,102 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
       set: [repository_resource_id: other_repository.id]
     )
 
-    assert {:ok, replayed} = Orchestration.claim(run.id, request, now: @now)
+    assert {:ok, replayed} = Goals.claim(run.id, request, now: @now)
     assert replayed.lease_token == claimed.lease_token
     assert replayed.claim_id == claimed.claim_id
+  end
+
+  test "legacy Orchestration claim entry fails closed for a Goal-owned Run" do
+    {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
+    runtime = register_runtime("goal-claim-fail-closed")
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    assert run.task_id == task.id
+
+    assert {:error, :goal_authority_required} =
+             Orchestration.claim(
+               run.id,
+               %{
+                 runtime_id: runtime.id,
+                 runtime_epoch: runtime.connection_epoch,
+                 generation: run.generation,
+                 claim_id: Ecto.UUID.generate()
+               },
+               now: @now
+             )
+
+    assert %{state: "assigned"} = Repo.get!(Task, task.id)
+    assert %{state: "assigned", claim_id: nil} = Repo.get!(Run, run.id)
+  end
+
+  test "claim fails closed when Run identity changes after its Task lock" do
+    {goal_task, _goal_id} = insert_goal_task(max_run_attempts: 2)
+
+    assert {:ok, legacy_task, :created} =
+             Orchestration.submit_task(
+               %{
+                 goal: "Legacy claim routing race",
+                 agent_profile: "codex",
+                 workspace: "primary",
+                 input: %{}
+               },
+               Ecto.UUID.generate(),
+               now: @now
+             )
+
+    runtime = register_runtime("legacy-claim-routing-race")
+    run = insert_assigned_run!(legacy_task, runtime)
+
+    assert {:error, :ownership_lost} =
+             Orchestration.claim(
+               run.id,
+               %{
+                 runtime_id: runtime.id,
+                 runtime_epoch: runtime.connection_epoch,
+                 generation: run.generation,
+                 claim_id: Ecto.UUID.generate()
+               },
+               now: @now,
+               on_claim_task_locked: fn locked_task ->
+                 assert locked_task.id == legacy_task.id
+
+                 Repo.update_all(
+                   from(run_row in Run, where: run_row.id == ^run.id),
+                   set: [task_id: goal_task.id]
+                 )
+               end
+             )
+
+    assert %{state: "assigned", claim_id: nil} = Repo.get!(Run, run.id)
+  end
+
+  test "Goal claim rejects a Run identity change after authority routing" do
+    {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
+    {other_task, _other_goal_id} = insert_goal_task(max_run_attempts: 2)
+    runtime = register_runtime("goal-claim-identity-race")
+    run = insert_assigned_run!(task, runtime)
+
+    assert {:error, :ownership_lost} =
+             Goals.claim(
+               run.id,
+               %{
+                 runtime_id: runtime.id,
+                 runtime_epoch: runtime.connection_epoch,
+                 generation: run.generation,
+                 claim_id: Ecto.UUID.generate()
+               },
+               now: @now,
+               on_goal_claim_routed: fn ownership ->
+                 assert ownership.task_id == task.id
+
+                 Repo.update_all(
+                   from(run_row in Run, where: run_row.id == ^run.id),
+                   set: [task_id: other_task.id]
+                 )
+               end
+             )
+
+    assert %{task_id: task_id, state: "assigned", claim_id: nil} = Repo.get!(Run, run.id)
+    assert task_id == task.id
   end
 
   test "runtime registration accepts only existing repository resources" do
@@ -1401,7 +1554,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     }
 
     assert {:error, :ownership_lost} =
-             Orchestration.claim(target_run.id, claim_request, now: @now)
+             Goals.claim(target_run.id, claim_request, now: @now)
 
     target_task_after = Repo.get!(Task, target_task.id)
     target_run_after = Repo.get!(Run, target_run.id)
@@ -1599,16 +1752,14 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
       claim_id: Ecto.UUID.generate()
     }
 
-    assert {:ok, claimed} = Orchestration.claim(run.id, claim_request, now: @now)
+    assert {:ok, claimed} = Goals.claim(run.id, claim_request, now: @now)
     pause_goal!(goal_id)
 
-    assert {:ok, replayed_claim} = Orchestration.claim(run.id, claim_request, now: @now)
+    assert {:ok, replayed_claim} = Goals.claim(run.id, claim_request, now: @now)
     assert replayed_claim.lease_token == claimed.lease_token
 
     assert {:error, :ownership_lost} =
-             Orchestration.claim(run.id, %{claim_request | claim_id: Ecto.UUID.generate()},
-               now: @now
-             )
+             Goals.claim(run.id, %{claim_request | claim_id: Ecto.UUID.generate()}, now: @now)
 
     assert task.id == run.task_id
   end
@@ -1625,7 +1776,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
       claim_id: Ecto.UUID.generate()
     }
 
-    assert {:ok, claimed} = Orchestration.claim(run.id, claim_request, now: @now)
+    assert {:ok, claimed} = Goals.claim(run.id, claim_request, now: @now)
 
     fence = %{
       runtime_id: runtime.id,
@@ -2761,7 +2912,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     claim_id = Ecto.UUID.generate()
 
     assert {:ok, claimed} =
-             Orchestration.claim(
+             Goals.claim(
                run.id,
                %{
                  runtime_id: runtime.id,
