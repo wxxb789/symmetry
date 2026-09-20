@@ -331,6 +331,12 @@ func (store *Store) QueueGoalUsage(key RunKey, usage protocol.Usage) (RunJournal
 // and the exact native usage delivery. The barrier may only be cleared after
 // this immutable body is present in the journal delivery history.
 func (store *Store) QueueNativeUsageRecovery(key RunKey, usage protocol.Usage) (RunJournal, error) {
+	return store.QueueNativeUsageRecoverySettlement(key, usage, nil)
+}
+
+// QueueNativeUsageRecoverySettlement atomically retains the exact usage body,
+// recovery barrier, and any terminal intent already observed by the live owner.
+func (store *Store) QueueNativeUsageRecoverySettlement(key RunKey, usage protocol.Usage, settlement *NativeUsageTerminalRecovery) (RunJournal, error) {
 	if err := usage.Validate(); err != nil {
 		return RunJournal{}, err
 	}
@@ -342,6 +348,9 @@ func (store *Store) QueueNativeUsageRecovery(key RunKey, usage protocol.Usage) (
 			return errors.New("run journal has no claim grant")
 		}
 		journal.NativeUsageRecoveryRequired = true
+		if err := mergeNativeUsageTerminalRecovery(journal, settlement); err != nil {
+			return err
+		}
 		delivery := GoalDelivery{Kind: GoalDeliveryUsage, DeliveryID: usage.UsageKey, Fence: journal.Fence(), Usage: &usage, Ready: true}
 		if err := prepareGoalDelivery(journal.RunID, &delivery); err != nil {
 			return err
@@ -373,6 +382,41 @@ func (store *Store) QueueNativeUsageRecovery(key RunKey, usage protocol.Usage) (
 		journal.GoalDeliveryEnabled = true
 		return nil
 	})
+}
+
+func mergeNativeUsageTerminalRecovery(journal *RunJournal, settlement *NativeUsageTerminalRecovery) error {
+	if settlement == nil {
+		return nil
+	}
+	if !validNativeUsageTerminalRecovery(settlement) {
+		return errors.New("native usage terminal recovery is invalid")
+	}
+	copy := *settlement
+	copy.Payload = append(json.RawMessage(nil), settlement.Payload...)
+	if journal.NativeUsageTerminalRecovery == nil {
+		journal.NativeUsageTerminalRecovery = &copy
+		return nil
+	}
+	if journal.NativeUsageTerminalRecovery.State != copy.State ||
+		journal.NativeUsageTerminalRecovery.CommandID != copy.CommandID ||
+		journal.NativeUsageTerminalRecovery.CommandOutcome != copy.CommandOutcome ||
+		!bytes.Equal(journal.NativeUsageTerminalRecovery.Payload, copy.Payload) {
+		return ErrGoalDeliveryConflict
+	}
+	return nil
+}
+
+func validNativeUsageTerminalRecovery(settlement *NativeUsageTerminalRecovery) bool {
+	if settlement == nil {
+		return true
+	}
+	if !isTerminalTransitionState(settlement.State) || !validRawMessage(settlement.Payload) {
+		return false
+	}
+	if settlement.CommandID == "" {
+		return settlement.CommandOutcome == ""
+	}
+	return validRequiredString(settlement.CommandID, 4096) && validCommandAcknowledgementOutcome(settlement.CommandOutcome)
 }
 
 func (store *Store) queueGoalDelivery(key RunKey, delivery GoalDelivery) (RunJournal, error) {

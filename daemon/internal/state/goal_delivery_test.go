@@ -177,6 +177,22 @@ func TestNativeUsageObservationIgnoresOutOfOrderRegressionAcrossRestart(t *testi
 	}
 }
 
+func TestNativeUsageObservationCoversEqualCountersRegardlessOfObservationTime(t *testing.T) {
+	expected := NativeUsageObservation{
+		SchemaVersion: 1, InputTokens: 100, OutputTokens: 40, CachedInputTokens: 20,
+		ReasoningOutputTokens: 10, TotalTokens: 150, ObservedAt: time.Date(2026, 9, 9, 1, 0, 2, 0, time.UTC),
+	}
+	observed := expected
+	observed.ObservedAt = expected.ObservedAt.Add(-time.Second)
+	if !observed.Covers(expected) {
+		t.Fatalf("equal cumulative counters did not cover expected usage: observed=%#v expected=%#v", observed, expected)
+	}
+	observed.TotalTokens--
+	if observed.Covers(expected) {
+		t.Fatalf("regressed cumulative counters covered expected usage: observed=%#v expected=%#v", observed, expected)
+	}
+}
+
 func TestGoalUsageDeliverySurvivesConclusiveTerminalAndBlocksCleanup(t *testing.T) {
 	store := mustStore(t)
 	key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
@@ -275,6 +291,106 @@ func TestNativeUsageRecoveryRequiresExactUsageBeforeClearOrJournalDeletion(t *te
 	}
 	if err := store.DeleteJournal(key); err != nil {
 		t.Fatalf("DeleteJournal() error = %v", err)
+	}
+}
+
+func TestNativeUsageRecoverySettlementPersistsExactTerminalIntent(t *testing.T) {
+	store := mustStore(t)
+	key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
+	if err := store.SaveJournal(testGoalDeliveryJournal(key)); err != nil {
+		t.Fatal(err)
+	}
+	usage := testGoalUsage(key.RunID)
+	usage.UsageKey = "native-final"
+	settlement := &NativeUsageTerminalRecovery{
+		State:          "failed",
+		Payload:        json.RawMessage(`{"reason":"process_failure","output_truncated":true}`),
+		CommandID:      "cancel-1",
+		CommandOutcome: "rejected",
+	}
+	queued, err := store.QueueNativeUsageRecoverySettlement(key, usage, settlement)
+	if err != nil {
+		t.Fatalf("QueueNativeUsageRecoverySettlement() error = %v", err)
+	}
+	if queued.NativeUsageTerminalRecovery == nil || !reflect.DeepEqual(*queued.NativeUsageTerminalRecovery, *settlement) {
+		t.Fatalf("native terminal recovery = %#v", queued.NativeUsageTerminalRecovery)
+	}
+	changed := *settlement
+	changed.CommandOutcome = "failed"
+	if _, err := store.QueueNativeUsageRecoverySettlement(key, usage, &changed); !errors.Is(err, ErrGoalDeliveryConflict) {
+		t.Fatalf("conflicting native terminal recovery error = %v", err)
+	}
+	invalid := *settlement
+	invalid.CommandOutcome = "unknown"
+	if _, err := store.QueueNativeUsageRecoverySettlement(key, usage, &invalid); err == nil {
+		t.Fatal("QueueNativeUsageRecoverySettlement() accepted an invalid command outcome")
+	}
+	if _, err := store.ClearNativeUsageRecoveryRequired(key, usage); err != nil {
+		t.Fatalf("ClearNativeUsageRecoveryRequired() error = %v", err)
+	}
+	cleared, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared.NativeUsageRecoveryRequired || cleared.NativeUsageTerminalRecovery != nil {
+		t.Fatalf("cleared native recovery = %#v", cleared)
+	}
+}
+
+func TestTerminalSettlementDigestsSurviveDeliveryAndRetirement(t *testing.T) {
+	for _, mode := range []string{"delivered", "retired"} {
+		t.Run(mode, func(t *testing.T) {
+			store := mustStore(t)
+			key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
+			if err := store.SaveJournal(testGoalDeliveryJournal(key)); err != nil {
+				t.Fatal(err)
+			}
+			transition := protocol.StateTransitionRequest{
+				TransitionID: "terminal-1",
+				State:        "failed",
+				Payload:      json.RawMessage(`{"reason":"process_failure"}`),
+			}
+			acknowledgement := protocol.CommandAcknowledgement{
+				AckID:     "ack-1",
+				CommandID: "cancel-1",
+				Outcome:   "failed",
+			}
+			queued, err := store.QueueTerminalTransitionAndAcknowledgementAt(key, transition, acknowledgement, time.Date(2026, 9, 20, 4, 0, 0, 0, time.UTC))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == "delivered" {
+				queued, err = store.MarkTransitionsDelivered(key, []string{transition.TransitionID})
+				if err == nil {
+					queued, err = store.MarkCommandAcknowledgementsDelivered(key, []string{acknowledgement.AckID})
+				}
+			} else {
+				queued, err = store.ResolveTerminalForCleanup(key, TerminalVerdictOwnershipLost, time.Date(2026, 9, 20, 4, 1, 0, 0, time.UTC))
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(queued.PendingTransitions) != 0 || len(queued.PendingCommandAcknowledgements) != 0 {
+				t.Fatalf("%s terminal bodies remain pending: %#v", mode, queued)
+			}
+			if matched, present := TerminalIntentMatches(queued, transition.State, transition.Payload); !present || !matched {
+				t.Fatalf("%s terminal intent match = %t, %t", mode, matched, present)
+			}
+			if matched, present := TerminalCommandIntentMatches(queued, acknowledgement.CommandID, acknowledgement.Outcome); !present || !matched {
+				t.Fatalf("%s terminal command match = %t, %t", mode, matched, present)
+			}
+			if matched, present := TerminalSettlementMatches(queued, transition, acknowledgement); !present || !matched {
+				t.Fatalf("%s terminal settlement match = %t, %t", mode, matched, present)
+			}
+			changedTransition := transition
+			changedTransition.Payload = json.RawMessage(`{"reason":"unknown_outcome"}`)
+			if matched, present := TerminalIntentMatches(queued, changedTransition.State, changedTransition.Payload); !present || matched {
+				t.Fatalf("%s changed terminal intent match = %t, %t", mode, matched, present)
+			}
+			if matched, present := TerminalCommandIntentMatches(queued, acknowledgement.CommandID, "rejected"); !present || matched {
+				t.Fatalf("%s changed terminal command match = %t, %t", mode, matched, present)
+			}
+		})
 	}
 }
 

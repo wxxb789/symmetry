@@ -61,12 +61,22 @@ func (daemon *daemon) cleanupWorkerActive() bool {
 }
 
 func (daemon *daemon) scheduleCleanup(ctx context.Context, journal state.RunJournal) error {
+	if daemon.deferStaleCleanupForPendingAcknowledgement(journal) {
+		return nil
+	}
 	if journal.HasProcessDetails() {
 		// The terminal outbox may be accepted while its owning process remains
 		// unproven. Capacity is releasable, but cleanup and journal deletion are
 		// not until the exact persisted marker is cleared.
-		daemon.releaseSlotOnce(journal.Key())
-		daemon.enqueueCleanup(journal.Key())
+		key := journal.Key()
+		daemon.mu.Lock()
+		active := daemon.running[key]
+		startInFlight := active != nil && active.nativeStartInFlight
+		daemon.mu.Unlock()
+		if !startInFlight {
+			daemon.releaseSlotOnce(key)
+		}
+		daemon.enqueueCleanup(key)
 		return nil
 	}
 	if journal.NativeUsageRecoveryRequired {
@@ -85,9 +95,33 @@ func (daemon *daemon) scheduleCleanup(ctx context.Context, journal state.RunJour
 	return daemon.cleanupPending(ctx, journal)
 }
 
+func (daemon *daemon) deferStaleCleanupForPendingAcknowledgement(journal state.RunJournal) bool {
+	if journal.LocalState != "stale" || len(journal.PendingCommandAcknowledgements) == 0 {
+		return false
+	}
+	key := journal.Key()
+	daemon.mu.Lock()
+	active := daemon.running[key]
+	startInFlight := active != nil && active.nativeStartInFlight
+	daemon.mu.Unlock()
+	if !startInFlight {
+		daemon.releaseSlotOnce(key)
+	}
+	daemon.signalOutboxFor(key)
+	return true
+}
+
 func (daemon *daemon) releaseCleanupIfReady(key state.RunKey) bool {
+	daemon.mu.Lock()
+	active := daemon.running[key]
+	startInFlight := active != nil && active.nativeStartInFlight
+	blocked := active != nil && active.cleanupBlocked
+	daemon.mu.Unlock()
+	if startInFlight {
+		return false
+	}
 	daemon.releaseSlotOnce(key)
-	if daemon.cleanupBlocked(key) {
+	if blocked {
 		return false
 	}
 	daemon.releaseRun(key)
@@ -103,7 +137,13 @@ func (daemon *daemon) cleanupBlocked(key state.RunKey) bool {
 
 func (daemon *daemon) releaseCleanupAfterProcessExit(key state.RunKey) {
 	journal, err := daemon.store.LoadJournal(key)
-	if err != nil || journal.HasProcessDetails() {
+	if err != nil {
+		return
+	}
+	if daemon.deferStaleCleanupForPendingAcknowledgement(journal) {
+		return
+	}
+	if journal.HasProcessDetails() {
 		return
 	}
 	if journal.LocalState == "terminal_pending" {
@@ -213,6 +253,10 @@ func (daemon *daemon) flushCleanups(ctx context.Context) {
 		}
 		if err != nil {
 			daemon.retryCleanup(key)
+			continue
+		}
+		if daemon.deferStaleCleanupForPendingAcknowledgement(journal) {
+			daemon.completeCleanup(key)
 			continue
 		}
 		if !journal.GoalDeliveryEnabled && journal.LocalState != "terminal_pending" && journal.LocalState != "cleanup_pending" && journal.LocalState != "stale" {
@@ -465,6 +509,22 @@ func (daemon *daemon) enterCleanupPending(journal state.RunJournal) (state.RunJo
 func (daemon *daemon) cleanupPending(ctx context.Context, journal state.RunJournal) error {
 	if journal.LocalState != "cleanup_pending" && journal.LocalState != "stale" {
 		return nil
+	}
+	if daemon.deferStaleCleanupForPendingAcknowledgement(journal) {
+		return errors.New("command acknowledgement remains pending")
+	}
+	if len(journal.PendingCommandAcknowledgements) != 0 {
+		if !state.CommandAcknowledgementRetired(journal) {
+			daemon.signalOutboxFor(journal.Key())
+			return errors.New("command acknowledgement remains pending")
+		}
+		for len(journal.PendingCommandAcknowledgements) > 0 {
+			updated, err := daemon.markCommandAcknowledgementDelivered(journal.Key(), journal.PendingCommandAcknowledgements[0])
+			if err != nil {
+				return err
+			}
+			journal = updated
+		}
 	}
 	if journal.HasPendingGoalDeliveries() {
 		return errors.New("Goal delivery remains pending")

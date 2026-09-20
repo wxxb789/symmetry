@@ -1548,6 +1548,90 @@ func TestQueueCancelledTransitionAndAcknowledgementIsAtomic(t *testing.T) {
 	}
 }
 
+func TestQueueTerminalTransitionAndAcknowledgementPersistsFailedRejectedPair(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-terminal-command", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	pendingAt := time.Date(2026, 9, 20, 1, 2, 3, 0, time.UTC)
+	transition := protocol.StateTransitionRequest{TransitionID: "failed-1", State: "failed", Payload: json.RawMessage(`{"reason":"native_run_failed"}`)}
+	acknowledgement := protocol.CommandAcknowledgement{RunID: journal.RunID, CommandID: "cancel-1", Outcome: "rejected", AckID: "ack-1"}
+
+	queued, err := store.QueueTerminalTransitionAndAcknowledgementAt(journal.Key(), transition, acknowledgement, pendingAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded, queued) {
+		t.Fatalf("persisted terminal pair:\n got: %#v\nwant: %#v", loaded, queued)
+	}
+	if loaded.LocalState != "terminal_pending" || loaded.TerminalState != "failed" || !loaded.TerminalPendingAt.Equal(pendingAt) {
+		t.Fatalf("terminal state = %#v", loaded)
+	}
+	if len(loaded.PendingTransitions) != 1 || loaded.PendingTransitions[0].TransitionID != transition.TransitionID || loaded.PendingTransitions[0].State != transition.State || !sameFence(loaded.PendingTransitions[0].Fence, journal.Fence()) {
+		t.Fatalf("pending transitions = %#v", loaded.PendingTransitions)
+	}
+	if len(loaded.PendingCommandAcknowledgements) != 1 || loaded.PendingCommandAcknowledgements[0].CommandID != acknowledgement.CommandID || loaded.PendingCommandAcknowledgements[0].Outcome != acknowledgement.Outcome || loaded.PendingCommandAcknowledgements[0].AckID != acknowledgement.AckID || !sameFence(loaded.PendingCommandAcknowledgements[0].Fence, journal.Fence()) {
+		t.Fatalf("pending acknowledgements = %#v", loaded.PendingCommandAcknowledgements)
+	}
+}
+
+func TestQueueTerminalTransitionAndAcknowledgementInvalidAcknowledgementRollsBack(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-terminal-command-invalid", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pendingAt := time.Date(2026, 9, 20, 1, 2, 3, 0, time.UTC)
+	transition := protocol.StateTransitionRequest{TransitionID: "failed-1", State: "failed", Payload: json.RawMessage(`{}`)}
+	acknowledgement := protocol.CommandAcknowledgement{RunID: journal.RunID, CommandID: "cancel-1", Outcome: "rejected"}
+
+	if _, err := store.QueueTerminalTransitionAndAcknowledgementAt(journal.Key(), transition, acknowledgement, pendingAt); err == nil {
+		t.Fatal("atomic terminal queue accepted an invalid acknowledgement")
+	}
+	loaded, err := store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded, before) {
+		t.Fatalf("failed atomic terminal queue mutated journal:\n got: %#v\nwant: %#v", loaded, before)
+	}
+}
+
+func TestQueueCancelledTransitionAndAcknowledgementRejectsNonCancelledState(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("run-cancel-wrapper", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pendingAt := time.Date(2026, 9, 20, 1, 2, 3, 0, time.UTC)
+	transition := protocol.StateTransitionRequest{TransitionID: "failed-1", State: "failed", Payload: json.RawMessage(`{}`)}
+	acknowledgement := protocol.CommandAcknowledgement{RunID: journal.RunID, CommandID: "cancel-1", Outcome: "rejected", AckID: "ack-1"}
+
+	if _, err := store.QueueCancelledTransitionAndAcknowledgementAt(journal.Key(), transition, acknowledgement, pendingAt); err == nil {
+		t.Fatal("cancelled terminal queue accepted a non-cancelled transition")
+	}
+	loaded, err := store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded, before) {
+		t.Fatalf("rejected cancelled wrapper mutated journal:\n got: %#v\nwant: %#v", loaded, before)
+	}
+}
+
 func TestQueueWaitingForInputCoalescesEventsAndPendingTransition(t *testing.T) {
 	store := mustStore(t)
 	journal := testJournal("run-1", 1)
@@ -2131,6 +2215,40 @@ func TestDeleteJournalDeletesOnlyTarget(t *testing.T) {
 	}
 	if _, err := store.LoadJournal(second.Key()); err != nil {
 		t.Fatalf("LoadJournal(remaining) error = %v", err)
+	}
+}
+
+func TestDeleteJournalRequiresCommandAcknowledgementDelivery(t *testing.T) {
+	store := mustStore(t)
+	journal := stoppedTestJournal("run-stale-ack", 1)
+	journal.LocalState = "stale"
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	acknowledgement := protocol.CommandAcknowledgement{CommandID: "cancel-1", Outcome: "rejected", AckID: "ack-1"}
+	queued, err := store.QueueCommandAcknowledgement(journal.Key(), acknowledgement)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.DeleteJournal(journal.Key()); err == nil || !strings.Contains(err.Error(), "command acknowledgement") {
+		t.Fatalf("DeleteJournal() error = %v, want pending acknowledgement guard", err)
+	}
+	retained, err := store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(retained.PendingCommandAcknowledgements) != 1 || retained.PendingCommandAcknowledgements[0].AckID != acknowledgement.AckID {
+		t.Fatalf("retained pending acknowledgements = %#v", retained.PendingCommandAcknowledgements)
+	}
+	if _, err := store.MarkCommandAcknowledgementsDelivered(journal.Key(), []string{queued.PendingCommandAcknowledgements[0].AckID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteJournal(journal.Key()); err != nil {
+		t.Fatalf("DeleteJournal() after acknowledgement delivery error = %v", err)
+	}
+	if _, err := store.LoadJournal(journal.Key()); !IsNotFound(err) {
+		t.Fatalf("LoadJournal(deleted) error = %v, want not found", err)
 	}
 }
 

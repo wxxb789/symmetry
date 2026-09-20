@@ -639,9 +639,16 @@ func cleanupFailedStartStarted(
 	// Do not expose pre-persistence output to the caller's sink. The cleanup
 	// Process still drains the pipes and owns the child wait.
 	closeFiles(stdinRead, stdoutWrite, stderrWrite)
-	process := newProcessFromStarted(
+	var process *Process
+	cleanupSink := SinkFunc(func(_ context.Context, event Event) error {
+		if len(event.Data) > 0 && process != nil {
+			process.recordOutputTruncated()
+		}
+		return nil
+	})
+	process = newProcessFromStarted(
 		started,
-		SinkFunc(func(context.Context, Event) error { return nil }),
+		cleanupSink,
 		startedAt,
 		stdinWrite,
 		nil,
@@ -831,6 +838,11 @@ func (process *Process) Terminate(ctx context.Context, grace time.Duration) erro
 		process.terminationStart = true
 		process.terminated = true
 		process.stopOutputDelivery()
+		// Closing stdin is part of termination, not post-exit cleanup. An
+		// interactive child may be blocked in a read, and waiting for its exit
+		// before closing this transport would make the termination barrier
+		// circular when platform containment is delayed or unavailable.
+		_ = process.CloseInput()
 		go process.terminateTree(grace)
 	}
 	done := process.terminationDone
@@ -886,13 +898,14 @@ func (process *Process) readOutput(reader *os.File, stream Stream) {
 func (process *Process) enqueue(stream Stream, data []byte) bool {
 	select {
 	case <-process.outputStop:
+		if len(data) > 0 {
+			process.recordOutputTruncated()
+		}
 		return false
 	default:
 	}
 
 	process.eventMutex.Lock()
-	defer process.eventMutex.Unlock()
-
 	event := Event{
 		Stream:   stream,
 		Sequence: process.nextSequence + 1,
@@ -902,8 +915,13 @@ func (process *Process) enqueue(stream Stream, data []byte) bool {
 	select {
 	case process.events <- event:
 		process.nextSequence++
+		process.eventMutex.Unlock()
 		return true
 	case <-process.outputStop:
+		process.eventMutex.Unlock()
+		if len(data) > 0 {
+			process.recordOutputTruncated()
+		}
 		return false
 	}
 }
@@ -912,10 +930,19 @@ func (process *Process) deliverOutput() {
 	defer close(process.deliveryDone)
 	for event := range process.events {
 		if process.outputDeliveryStopped() {
+			if len(event.Data) > 0 {
+				process.recordOutputTruncated()
+			}
 			continue
 		}
-		if err := process.sink.Handle(process.sinkContext, event); err != nil && !process.outputDeliveryStopped() {
-			process.recordSinkError(err)
+		if err := process.sink.Handle(process.sinkContext, event); err != nil {
+			if process.outputDeliveryStopped() {
+				if len(event.Data) > 0 {
+					process.recordOutputTruncated()
+				}
+			} else {
+				process.recordSinkError(err)
+			}
 		}
 	}
 }
@@ -951,11 +978,12 @@ func (process *Process) waitForCompletion() {
 		}
 	}
 
+	// Keep the termination mutex through result publication. Terminate uses the
+	// same lock to decide whether it owns the transition, so a caller cannot
+	// start termination after this snapshot but before the published result.
 	process.terminationMutex.Lock()
 	terminated := process.terminated
 	terminationError := process.terminationError
-	process.terminationMutex.Unlock()
-
 	process.errorMutex.Lock()
 	process.result.ExitCode = exitCode
 	process.result.FinishedAt = time.Now().UTC()
@@ -968,6 +996,7 @@ func (process *Process) waitForCompletion() {
 	process.result.ContainmentError = process.containmentError
 	process.errorMutex.Unlock()
 	close(process.resultDone)
+	process.terminationMutex.Unlock()
 }
 
 func (process *Process) terminateWhenContextCancels(ctx context.Context) {
@@ -1226,9 +1255,6 @@ func (process *Process) setContainmentError(err error) {
 
 func (process *Process) stopOutputDelivery() {
 	process.outputStopOnce.Do(func() {
-		process.errorMutex.Lock()
-		process.outputTruncated = true
-		process.errorMutex.Unlock()
 		close(process.outputStop)
 		process.cancelSink()
 	})
@@ -1263,6 +1289,15 @@ func (process *Process) recordOutputError(err error) {
 	if process.outputError == nil {
 		process.outputError = err
 	}
+}
+
+func (process *Process) recordOutputTruncated() {
+	if process == nil {
+		return
+	}
+	process.errorMutex.Lock()
+	process.outputTruncated = true
+	process.errorMutex.Unlock()
 }
 
 func (process *Process) recordContainmentError(err error) {
