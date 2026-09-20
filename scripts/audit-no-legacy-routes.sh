@@ -10,6 +10,7 @@ cd "$repo_root"
 # contains the retired paths so it is not an audit target.
 audit_targets=(
   README.md
+  README_zh-cn.md
   control/README.md
   docs/goal-01-runbook.md
   docs/protocol-v1.md

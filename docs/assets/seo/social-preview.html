@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Symmetry social preview</title>
+    <style>
+      :root {
+        --bg-0: #05070f;
+        --bg-1: #0b1024;
+        --card: rgba(15, 23, 42, 0.72);
+        --ink: #eef2ff;
+        --muted: #9aa7c7;
+        --teal: #5eead4;
+        --indigo: #818cf8;
+        --fuchsia: #e879f9;
+        --line: rgba(148, 163, 184, 0.2);
+      }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body {
+        width: 1280px;
+        height: 640px;
+        font-family: "Noto Sans", "DejaVu Sans", sans-serif;
+        background: var(--bg-0);
+        color: var(--ink);
+      }
+      .card {
+        position: relative;
+        width: 1280px;
+        height: 640px;
+        overflow: hidden;
+        background:
+          radial-gradient(720px 420px at 92% -12%, rgba(129, 140, 248, 0.32), transparent 62%),
+          radial-gradient(680px 420px at 4% 118%, rgba(94, 234, 212, 0.22), transparent 64%),
+          linear-gradient(135deg, var(--bg-0) 0%, var(--bg-1) 100%);
+        padding: 56px 68px;
+        display: flex;
+        flex-direction: column;
+      }
+      .grid {
+        position: absolute; inset: 0;
+        background-image:
+          linear-gradient(rgba(148, 163, 184, 0.06) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(148, 163, 184, 0.06) 1px, transparent 1px);
+        background-size: 44px 44px;
+        mask-image: radial-gradient(900px 560px at 50% 40%, #000 30%, transparent 88%);
+      }
+      .head { position: relative; z-index: 2; display: flex; align-items: center; justify-content: space-between; }
+      .brand { display: flex; align-items: center; gap: 18px; }
+      .mark { width: 66px; height: 66px; }
+      .name { font-size: 40px; font-weight: 800; letter-spacing: -0.8px; }
+      .name span { color: var(--muted); font-weight: 500; font-size: 22px; margin-left: 12px; letter-spacing: 0; }
+      .pill {
+        font-family: "DejaVu Sans Mono", monospace;
+        font-size: 14px; letter-spacing: 1px; text-transform: uppercase;
+        color: var(--teal);
+        border: 1px solid rgba(94, 234, 212, 0.45);
+        background: rgba(94, 234, 212, 0.08);
+        padding: 9px 16px; border-radius: 999px;
+      }
+      .hero { position: relative; z-index: 2; margin-top: 40px; max-width: 1000px; }
+      .hero h1 {
+        font-size: 47px; font-weight: 800; line-height: 1.12; letter-spacing: -0.8px;
+        background: linear-gradient(96deg, #ffffff 24%, var(--teal) 72%, var(--indigo) 100%);
+        -webkit-background-clip: text; background-clip: text; color: transparent;
+      }
+      .hero p { margin-top: 18px; font-size: 21px; color: var(--muted); line-height: 1.45; max-width: 980px; }
+      .hero p b { color: var(--ink); font-weight: 600; }
+      .flow { position: relative; z-index: 2; margin-top: auto; display: flex; align-items: stretch; gap: 14px; }
+      .stage {
+        flex: 1; border: 1px solid var(--line); border-radius: 16px;
+        background: var(--card); padding: 18px 18px 16px; min-width: 0;
+      }
+      .stage .role { font-family: "DejaVu Sans Mono", monospace; font-size: 12px; letter-spacing: 1.6px; text-transform: uppercase; color: var(--muted); }
+      .stage .title { margin-top: 8px; font-size: 19px; font-weight: 700; }
+      .stage .tech { margin-top: 6px; font-size: 14px; color: var(--muted); }
+      .arrow { align-self: center; color: var(--indigo); font-size: 22px; font-weight: 700; }
+      .stage.p { flex: 1.5; }
+      .stage.t .role { color: var(--teal); }
+      .stage.i .role { color: var(--indigo); }
+      .stage.f .role { color: var(--fuchsia); }
+      .stage.p .role { color: #fbbf24; }
+      .foot { position: relative; z-index: 2; margin-top: 22px; display: flex; align-items: center; justify-content: space-between; }
+      .chips { display: flex; gap: 10px; }
+      .chip {
+        font-size: 15px; font-weight: 600; padding: 7px 15px; border-radius: 999px;
+        border: 1px solid var(--line); color: var(--ink); background: rgba(15, 23, 42, 0.6);
+      }
+      .chip.t { border-color: rgba(94,234,212,0.5); color: var(--teal); }
+      .chip.i { border-color: rgba(129,140,248,0.5); color: var(--indigo); }
+      .chip.f { border-color: rgba(232,121,249,0.5); color: var(--fuchsia); }
+      .foot .meta { font-family: "DejaVu Sans Mono", monospace; font-size: 15px; color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <div class="card" id="card">
+      <div class="grid"></div>
+      <div class="head">
+        <div class="brand">
+          <svg class="mark" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="g" x1="0" y1="0" x2="120" y2="120" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#5eead4" /><stop offset="1" stop-color="#818cf8" />
+              </linearGradient>
+            </defs>
+            <rect x="6" y="6" width="108" height="108" rx="26" stroke="rgba(148,163,184,0.35)" stroke-width="2" />
+            <path d="M60 16V104" stroke="url(#g)" stroke-width="3" stroke-linecap="round" opacity="0.9" />
+            <path d="M30 34L60 34L30 62L60 62" stroke="url(#g)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" />
+            <path d="M90 34L60 34L90 62L60 62" stroke="#e879f9" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" />
+            <circle cx="60" cy="34" r="6" fill="#5eead4" />
+            <circle cx="60" cy="62" r="6" fill="#e879f9" />
+            <path d="M42 84H78" stroke="rgba(226,232,240,0.7)" stroke-width="6" stroke-linecap="round" />
+            <path d="M50 96H70" stroke="rgba(226,232,240,0.4)" stroke-width="6" stroke-linecap="round" />
+          </svg>
+          <div class="name">Symmetry<span>Agent orchestration &amp; execution platform</span></div>
+        </div>
+        <div class="pill">pre-0.0.1 · active development</div>
+      </div>
+
+      <div class="hero">
+        <h1>Durable, self-hosted agent orchestration and execution for engineering work.</h1>
+        <p>
+          PostgreSQL owns authoritative control state, <b>Elixir/Phoenix</b> owns transition policy,
+          a <b>Go daemon</b> owns machine-local execution, and native adapters run
+          <b>Codex</b>, <b>Claude Code</b>, <b>pi</b> and <b>OpenCode</b> under leases, fencing and crash recovery.
+        </p>
+      </div>
+
+      <div class="flow">
+        <div class="stage t">
+          <div class="role">Surface</div>
+          <div class="title">Operator Portal</div>
+          <div class="tech">Projects · Kanban · Chat</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="stage i">
+          <div class="role">Policy</div>
+          <div class="title">Control Plane</div>
+          <div class="tech">Elixir · Phoenix · OTP</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="stage f">
+          <div class="role">Execution</div>
+          <div class="title">Go Daemon</div>
+          <div class="tech">Leases · Fences · Recovery</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="stage p">
+          <div class="role">Harnesses</div>
+          <div class="title">Coding Agents</div>
+          <div class="tech">Codex · Claude · pi · OpenCode</div>
+        </div>
+      </div>
+
+      <div class="foot">
+        <div class="chips">
+          <span class="chip t">Codex</span>
+          <span class="chip i">Claude Code</span>
+          <span class="chip f">pi</span>
+          <span class="chip">OpenCode</span>
+        </div>
+        <div class="meta">github.com/wxxb789/symmetry · MIT</div>
+      </div>
+    </div>
+  </body>
+</html>

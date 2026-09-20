@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Symmetry banner</title>
+    <style>
+      :root {
+        --bg-0: #05070f;
+        --bg-1: #0b1024;
+        --ink: #eef2ff;
+        --muted: #9aa7c7;
+        --teal: #5eead4;
+        --indigo: #818cf8;
+        --fuchsia: #e879f9;
+        --line: rgba(148, 163, 184, 0.18);
+      }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body {
+        width: 1600px;
+        height: 400px;
+        font-family: "Noto Sans", "DejaVu Sans", sans-serif;
+        background: var(--bg-0);
+        color: var(--ink);
+      }
+      .banner {
+        position: relative;
+        width: 1600px;
+        height: 400px;
+        overflow: hidden;
+        background:
+          radial-gradient(900px 420px at 88% -10%, rgba(129, 140, 248, 0.28), transparent 60%),
+          radial-gradient(760px 380px at 8% 120%, rgba(94, 234, 212, 0.22), transparent 62%),
+          linear-gradient(135deg, var(--bg-0) 0%, var(--bg-1) 100%);
+      }
+      .grid {
+        position: absolute;
+        inset: 0;
+        background-image:
+          linear-gradient(rgba(148, 163, 184, 0.07) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(148, 163, 184, 0.07) 1px, transparent 1px);
+        background-size: 40px 40px;
+        mask-image: radial-gradient(1200px 380px at 50% 50%, #000 35%, transparent 85%);
+      }
+      .axis {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 812px;
+        width: 1px;
+        background: linear-gradient(180deg, transparent, rgba(94, 234, 212, 0.5), transparent);
+      }
+      .content {
+        position: relative;
+        z-index: 2;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        height: 100%;
+        padding: 0 78px;
+        gap: 40px;
+      }
+      .brand { display: flex; align-items: center; gap: 28px; }
+      .mark { width: 118px; height: 118px; flex: 0 0 auto; filter: drop-shadow(0 10px 30px rgba(94, 234, 212, 0.28)); }
+      .name {
+        font-size: 82px;
+        font-weight: 800;
+        letter-spacing: -1.5px;
+        line-height: 1;
+        background: linear-gradient(96deg, #ffffff 12%, var(--teal) 55%, var(--indigo) 100%);
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+      }
+      .tagline {
+        margin-top: 16px;
+        font-size: 27px;
+        font-weight: 500;
+        color: var(--ink);
+        line-height: 1.35;
+        max-width: 560px;
+      }
+      .tagline b { color: var(--teal); font-weight: 700; }
+      .stack {
+        margin-top: 20px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-family: "DejaVu Sans Mono", monospace;
+        font-size: 16px;
+        color: var(--muted);
+        letter-spacing: 0.3px;
+      }
+      .stack span.dot { color: var(--indigo); }
+      .right { text-align: right; }
+      .kicker {
+        font-family: "DejaVu Sans Mono", monospace;
+        font-size: 15px;
+        letter-spacing: 3px;
+        text-transform: uppercase;
+        color: var(--muted);
+        margin-bottom: 18px;
+      }
+      .chips { display: flex; flex-wrap: wrap; gap: 12px; justify-content: flex-end; max-width: 560px; }
+      .chip {
+        padding: 10px 20px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: rgba(15, 23, 42, 0.6);
+        font-size: 19px;
+        font-weight: 600;
+        color: var(--ink);
+      }
+      .chip.t { border-color: rgba(94, 234, 212, 0.5); color: var(--teal); }
+      .chip.i { border-color: rgba(129, 140, 248, 0.5); color: var(--indigo); }
+      .chip.f { border-color: rgba(232, 121, 249, 0.5); color: var(--fuchsia); }
+      .url {
+        margin-top: 22px;
+        font-family: "DejaVu Sans Mono", monospace;
+        font-size: 16px;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="banner" id="banner">
+      <div class="grid"></div>
+      <div class="axis"></div>
+      <div class="content">
+        <div class="brand">
+          <svg class="mark" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="g1" x1="0" y1="0" x2="120" y2="120" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#5eead4" />
+                <stop offset="1" stop-color="#818cf8" />
+              </linearGradient>
+            </defs>
+            <rect x="6" y="6" width="108" height="108" rx="26" stroke="rgba(148,163,184,0.35)" stroke-width="2" />
+            <path d="M60 16V104" stroke="url(#g1)" stroke-width="3" stroke-linecap="round" opacity="0.9" />
+            <path d="M30 34L60 34L30 62L60 62" stroke="url(#g1)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" />
+            <path d="M90 34L60 34L90 62L60 62" stroke="#e879f9" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" opacity="0.95" />
+            <circle cx="60" cy="34" r="6" fill="#5eead4" />
+            <circle cx="60" cy="62" r="6" fill="#e879f9" />
+            <path d="M42 84H78" stroke="rgba(226,232,240,0.7)" stroke-width="6" stroke-linecap="round" />
+            <path d="M50 96H70" stroke="rgba(226,232,240,0.4)" stroke-width="6" stroke-linecap="round" />
+          </svg>
+          <div>
+            <div class="name">Symmetry</div>
+            <div class="tagline">Durable <b>agent orchestration</b> &amp; execution for engineering work</div>
+            <div class="stack">Elixir <span class="dot">·</span> Phoenix <span class="dot">·</span> Go <span class="dot">·</span> PostgreSQL <span class="dot">·</span> TypeScript</div>
+          </div>
+        </div>
+        <div class="right">
+          <div class="kicker">Native harness adapters</div>
+          <div class="chips">
+            <span class="chip t">Codex</span>
+            <span class="chip i">Claude Code</span>
+            <span class="chip f">pi</span>
+            <span class="chip">OpenCode</span>
+          </div>
+          <div class="url">github.com/wxxb789/symmetry</div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
