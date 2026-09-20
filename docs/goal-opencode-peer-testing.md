@@ -2,7 +2,7 @@
 
 This check protects the private OpenCode HTTP transport. It does not establish
 native lifecycle, terminal-result, permission, usage, or resume support. Those
-capabilities remain explicitly unverified under [Goal 0006](goals/0006-durable-engineering-work.md).
+capabilities remain explicitly unverified under [Goal 0006 final review](goals/0006-final.md).
 
 ## Contract
 

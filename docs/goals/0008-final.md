@@ -1,8 +1,23 @@
-# 0008 — Lower-cost development with unchanged acceptance standards
+# 0008-final - Model-independent quality final review
 
-> **Umbrella goal.** This outcome is decomposed into goals 0008a–0008d so the
-> workflow foundation and each language-specific routing decision have separate
-> completion judgments. Use the lettered goals as the active contracts.
+> **Run last, after 0008a-0008d are complete.** The lettered goals deliver the
+> acceptance workflow and language-specific routing decisions; this goal reviews
+> their combined evidence against the full acceptance contract below.
+
+Review the workflow receipts and the Go, Elixir, and TypeScript evaluations
+together. Verify that every proposed routing rule stays within the tested task
+classes, preserves acceptance standards, and has the owner's acceptance. This
+review adds no new benchmark or implementation work and makes no claim for
+untested classes.
+
+Completion requires a final review receipt mapping every requirement below to
+the frozen task revisions and evaluation evidence, with the accepted routing
+decisions, known costs, limitations, and any unresolved findings. Preserve valid
+negative findings and explicitly insufficient results. Missing required inputs,
+stale evidence, or unmet requirements keep this goal incomplete; return findings
+to the responsible lettered goal before finishing the review.
+
+## Full-series acceptance contract
 
 Establish and validate a practical development workflow in which lightweight
 models perform suitable Symmetry Go, Elixir and TypeScript work without lowering

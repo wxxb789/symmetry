@@ -1,9 +1,23 @@
-# 0006 — Trustworthy long-horizon engineering work
+# 0006-final - Durable engineering work final review
 
-> **Umbrella goal.** PR #6 merged the completed durable-work foundation. The
-> remaining independently verifiable outcomes are defined by goals 0006a–0006i.
-> Use those files as the active implementation contracts; retain this file as
-> the end-to-end product outcome and final acceptance boundary.
+> **Run last, after 0006a-0006i are complete.** PR #6 supplied the completed
+> durable-work foundation. The lettered goals deliver the remaining outcomes;
+> this goal reviews the whole series against the full acceptance contract below.
+
+Review the exact release Subject and the evidence produced by
+[0006i](0006i-exact-subject-release-acceptance.md). That goal owns release
+validation and authenticated operator acceptance; this review verifies their
+coverage and validity without issuing another `achieve` or repeating the
+implementation goals.
+
+Completion requires a final review receipt mapping every requirement below to
+current evidence and recording the authorized acceptance, capability limits,
+and any unresolved findings. Reuse receipts only when they remain valid for the
+reviewed Subject. Missing or stale evidence and unmet requirements keep this
+goal incomplete; return findings to the responsible lettered goal and repeat
+affected validation before finishing the review.
+
+## Full-series acceptance contract
 
 Make Symmetry sustain engineering goals across sessions, interrupted executions
 and compatible harness handoffs while preserving approved intent, authority,

@@ -5,14 +5,26 @@ one agent run of at most 12 hours and one complete pull request. Every PR must b
 safe to merge by itself: the repository remains runnable, existing supported
 behavior stays correct, and no unmerged sibling is required for correctness.
 
-The original 0006, 0007 and 0008 files remain as umbrella outcomes. Their
-lettered files are the active implementation contracts.
+Each series starts with its lettered goals and ends with a `-final` goal. The
+`-final` file preserves the full-series acceptance contract and is the last
+check/review goal, after every lettered goal in that series is complete. Read
+its contract before implementation, but execute its review last.
+
+| Series | Default serial order |
+| --- | --- |
+| 0006 | 0006a through 0006i, then 0006-final |
+| 0007 | 0007a through 0007i, then 0007-final |
+| 0008 | 0008a through 0008d, then 0008-final |
+
+Independent lettered goals may run in parallel once their stated prerequisites
+are met. Final reviews check integrated outcomes and reuse valid evidence from
+the lettered goals; they do not repeat implementation or duplicate authorized
+acceptance actions. Missing evidence or unresolved requirements block completion.
 
 ## Durable engineering work
 
 | Goal | Desired outcome |
 | --- | --- |
-| [0006](0006-durable-engineering-work.md) | Umbrella: trustworthy long-horizon work across native harnesses |
 | [0006a](0006a-native-run-settlement.md) | Single-owner native terminal and usage settlement |
 | [0006b](0006b-crash-safe-process-containment.md) | Crash-safe process containment and authority handoff |
 | [0006c](0006c-retained-session-continuity.md) | Verified retained-session resume and handoff |
@@ -22,12 +34,12 @@ lettered files are the active implementation contracts.
 | [0006g](0006g-opencode-support-decision.md) | Evidence-backed OpenCode support decision |
 | [0006h](0006h-credentialed-provider-accounting.md) | Credentialed provider reconciliation and accounting |
 | [0006i](0006i-exact-subject-release-acceptance.md) | Exact-subject release and authorized acceptance |
+| [0006-final](0006-final.md) | Final review of the complete durable-work outcome and acceptance evidence |
 
 ## Modern workspace
 
 | Goal | Desired outcome |
 | --- | --- |
-| [0007](0007-modern-workspace.md) | Umbrella: maintainable Phoenix-hosted TypeScript workspace |
 | [0007a](0007a-deployable-workspace-shell.md) | Deployable authenticated workspace shell |
 | [0007b](0007b-readable-work-views.md) | Readable project, board and work-detail views |
 | [0007c](0007c-safe-work-planning.md) | Safe project and work-item editing |
@@ -37,16 +49,17 @@ lettered files are the active implementation contracts.
 | [0007g](0007g-scoped-engineering-chat.md) | Scoped, recoverable engineering conversation |
 | [0007h](0007h-goal-attention-workspace.md) | Goal, attention and decision workspace |
 | [0007i](0007i-portal-cutover.md) | Single real-time Portal cutover |
+| [0007-final](0007-final.md) | Final review of the integrated workspace and owner acceptance |
 
 ## Model-independent quality
 
 | Goal | Desired outcome |
 | --- | --- |
-| [0008](0008-model-independent-quality.md) | Umbrella: evidence-based lower-cost development |
 | [0008a](0008a-auditable-acceptance-workflow.md) | Auditable model-independent acceptance workflow |
 | [0008b](0008b-go-model-routing.md) | Evidence-based Go model routing |
 | [0008c](0008c-elixir-model-routing.md) | Evidence-based Elixir model routing |
 | [0008d](0008d-typescript-model-routing.md) | Evidence-based TypeScript model routing |
+| [0008-final](0008-final.md) | Final review of the combined evaluation evidence and accepted routing policy |
 
 Read [fixed design](../design/README.md) and root `AGENTS.md` before executing.
 Goal payloads define completion, not implementation plans. A dependency listed
