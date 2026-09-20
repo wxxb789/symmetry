@@ -1,4 +1,23 @@
-# 0007 — A polished, maintainable engineering workspace
+# 0007-final - Modern workspace final review
+
+> **Run last, after 0007a-0007i are complete.** The lettered goals deliver the
+> workspace and Portal cutover; this goal reviews the integrated product against
+> the full acceptance contract below.
+
+Review the deployed workspace revision, the cutover evidence from
+[0007i](0007i-portal-cutover.md), and the owner's rendered-product acceptance.
+Verify that the combined workflows satisfy the original product outcome without
+repeating their implementation or treating isolated component checks as proof
+of the complete experience.
+
+Completion requires a final review receipt mapping every requirement below to
+current executable or rendered evidence and recording the owner's acceptance
+and any unresolved findings. Reuse evidence only when valid for the reviewed
+revision. Missing or stale evidence and unmet requirements keep this goal
+incomplete; return findings to the responsible lettered goal and repeat affected
+validation before finishing the review.
+
+## Full-series acceptance contract
 
 Replace Symmetry's current portal frontend with a modern TypeScript and Effect
 workspace integrated with Phoenix, within the fixed architecture and interaction
