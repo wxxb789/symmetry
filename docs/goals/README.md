@@ -25,7 +25,6 @@ acceptance actions. Missing evidence or unresolved requirements block completion
 
 | Goal | Desired outcome |
 | --- | --- |
-| [0006a](0006a-native-run-settlement.md) | Single-owner native terminal and usage settlement |
 | [0006b](0006b-crash-safe-process-containment.md) | Crash-safe process containment and authority handoff |
 | [0006c](0006c-retained-session-continuity.md) | Verified retained-session resume and handoff |
 | [0006d](0006d-codex-native-capability.md) | Evidence-bounded Codex native capability |
