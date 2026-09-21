@@ -458,6 +458,7 @@ func TestNativeGoalUsageRetrySucceedsWithoutRestartAndFinalizesOnce(t *testing.T
 	}
 	active.nativeUsageRetryAt = now.Add(-time.Second)
 	daemon.flushPendingNativeUsage(context.Background())
+	daemon.backgroundWG.Wait()
 	if usageCalls != 2 || terminalCalls != 1 || active.nativeUsageRetryPending || !active.nativeUsageFinalized {
 		t.Fatalf("usage retry finalization: usage_calls=%d terminal_calls=%d active=%#v", usageCalls, terminalCalls, active)
 	}
@@ -513,6 +514,7 @@ func TestNativeGoalUsageRetryExhaustionBlocksRenewalAndRetainsEvidence(t *testin
 	for attempt := 0; attempt < nativeUsageRetryLimit-1; attempt++ {
 		active.nativeUsageRetryAt = now.Add(-time.Second)
 		daemon.flushPendingNativeUsage(context.Background())
+		daemon.backgroundWG.Wait()
 	}
 	j, err := store.LoadJournal(key)
 	if err != nil {
@@ -563,6 +565,7 @@ func TestNativeUsageRecoveryAtomicWriteFailureRetainsExactUsageUntilRetry(t *tes
 	restore()
 	active.nativeUsageRetryAt = now.Add(-time.Second)
 	daemon.flushPendingNativeUsage(context.Background())
+	daemon.backgroundWG.Wait()
 
 	journal, err = store.LoadJournal(key)
 	if err != nil {
@@ -1967,6 +1970,417 @@ func saveAttachedGoalSessionForDelivery(t *testing.T, store *state.Store, key st
 		t.Fatal(err)
 	}
 	return sessionKey
+}
+
+func TestNativeGoalUsagePreparationReservesOneLiveBody(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	active := &runningRun{}
+	app := &daemon{
+		config:  testConfig(t),
+		store:   store,
+		running: map[state.RunKey]*runningRun{key: active},
+		options: options{clock: func() time.Time { return time.Date(2026, 9, 15, 2, 0, 0, 0, time.UTC) }},
+	}
+
+	first, firstShouldQueue, err := app.prepareNativeGoalUsage(key, nil)
+	if err != nil || !firstShouldQueue {
+		t.Fatalf("first prepare = usage:%#v shouldQueue:%t error:%v", first, firstShouldQueue, err)
+	}
+	second, secondShouldQueue, err := app.prepareNativeGoalUsage(key, nil)
+	if err != nil || !secondShouldQueue {
+		t.Fatalf("second prepare = usage:%#v shouldQueue:%t error:%v", second, secondShouldQueue, err)
+	}
+	if first.UsageID != second.UsageID || active.nativeFinalUsage == nil || active.nativeFinalUsage.UsageID != first.UsageID {
+		t.Fatalf("live native usage bodies diverged: first=%#v second=%#v active=%#v", first, second, active.nativeFinalUsage)
+	}
+}
+
+func TestNativeTerminalObservationWinsLateLeaseTermination(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	store, key := claimedGoalDeliveryStore(t)
+	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000007"}
+	saveAttachedGoalSession(t, store, key, admission, sessionKey)
+	if _, err := store.SetProcessDetails(key, 71, "native:71", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+
+	waitTurnGate := make(chan struct{})
+	close(waitTurnGate)
+	finalWaitGate := make(chan struct{})
+	closeEntered := make(chan struct{}, 2)
+	waitEntered := make(chan struct{}, 2)
+	session := &fakeNativeGoalSession{
+		result:          harness.TaskResult{Kind: harness.ResultSucceeded, Summary: "native terminal"},
+		waitGate:        waitTurnGate,
+		finalWaitGate:   finalWaitGate,
+		turnStarted:     make(chan struct{}),
+		closeEntered:    closeEntered,
+		waitEntered:     waitEntered,
+		processPID:      71,
+		processIdentity: "native:71",
+	}
+	active := &runningRun{nativeSession: session, goalSession: &sessionKey, goalAdmission: &admission}
+	daemon := &daemon{
+		config:  testConfig(t),
+		store:   store,
+		running: map[state.RunKey]*runningRun{key: active},
+		options: options{newID: ids(), clock: time.Now},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		daemon.waitForNativeRun(context.Background(), key, active, session)
+		close(done)
+	}()
+	select {
+	case <-closeEntered:
+	case <-time.After(time.Second):
+		t.Fatal("native close did not start after successful WaitTurn")
+	}
+	select {
+	case <-waitEntered:
+	case <-time.After(time.Second):
+		t.Fatal("native final wait did not start")
+	}
+	daemon.mu.Lock()
+	nativeOwner, terminalizing := active.nativeTerminalOwner, active.terminalizing
+	daemon.mu.Unlock()
+	if !nativeOwner || terminalizing != 1 {
+		t.Fatalf("native terminal observation did not reserve terminal owner: owner=%t terminalizing=%d", nativeOwner, terminalizing)
+	}
+
+	j, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemon.terminateForLease(j, "lease expired after native terminal observation")
+	if active.cancelled || active.stale {
+		t.Fatalf("late lease termination changed native terminal owner state: cancelled=%t stale=%t", active.cancelled, active.stale)
+	}
+
+	close(finalWaitGate)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("native terminal observation did not complete")
+	}
+	daemon.mu.Lock()
+	nativeOwner, terminalizing = active.nativeTerminalOwner, active.terminalizing
+	daemon.mu.Unlock()
+	if nativeOwner || terminalizing != 0 {
+		t.Fatalf("native terminal owner was not released after durable terminal: owner=%t terminalizing=%d", nativeOwner, terminalizing)
+	}
+	j, err = store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j.TerminalState != "failed" || j.LocalState != "terminal_pending" || len(j.PendingTransitions) != 1 || j.PendingTransitions[0].State != "failed" {
+		t.Fatalf("late lease termination replaced native terminal result: %#v", j)
+	}
+}
+
+func TestNativeCancellationOwnerStopsLosingTerminalWaiter(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000007"}
+	saveAttachedGoalSession(t, store, key, admission, sessionKey)
+
+	waitTurnGate := make(chan struct{})
+	waitTurnEntered := make(chan struct{}, 2)
+	finalWaitGate := make(chan struct{})
+	close(finalWaitGate)
+	usageEntered := make(chan struct{})
+	releaseUsage := make(chan struct{})
+	usageReleased := false
+	defer func() {
+		if !usageReleased {
+			close(releaseUsage)
+		}
+	}()
+	session := &fakeNativeGoalSession{
+		result:          harness.TaskResult{Kind: harness.ResultSucceeded, Summary: "cancelled native turn"},
+		waitGate:        waitTurnGate,
+		finalWaitGate:   finalWaitGate,
+		turnStarted:     make(chan struct{}),
+		waitTurnEntered: waitTurnEntered,
+		processPID:      71,
+		processIdentity: "native:71",
+	}
+	session.onControl = func() { close(waitTurnGate) }
+	active := &runningRun{claimed: true, nativeSession: session, goalSession: &sessionKey, goalAdmission: &admission}
+	app := &daemon{
+		config:  testConfig(t),
+		store:   store,
+		control: &fakeControl{},
+		running: map[state.RunKey]*runningRun{key: active},
+		options: options{
+			newID: ids(), clock: time.Now,
+			queueGoalUsage: func(runKey state.RunKey, usage protocol.Usage) (state.RunJournal, error) {
+				select {
+				case <-usageEntered:
+				default:
+					close(usageEntered)
+				}
+				<-releaseUsage
+				return store.QueueGoalUsage(runKey, usage)
+			},
+		},
+	}
+	waiterDone := make(chan struct{})
+	go func() {
+		app.waitForNativeRun(context.Background(), key, active, session)
+		close(waiterDone)
+	}()
+	select {
+	case <-waitTurnEntered:
+	case <-time.After(time.Second):
+		t.Fatal("native terminal waiter did not enter WaitTurn")
+	}
+	cancelDone := make(chan bool, 1)
+	go func() {
+		cancelDone <- app.handleCommand(context.Background(), protocol.Command{
+			RunID: key.RunID, Generation: key.Generation, CommandID: "cancel-1", Kind: "cancel",
+		})
+	}()
+	select {
+	case <-usageEntered:
+	case <-time.After(time.Second):
+		t.Fatal("cancellation owner did not reach final usage persistence")
+	}
+	select {
+	case <-waiterDone:
+	case <-time.After(time.Second):
+		close(releaseUsage)
+		usageReleased = true
+		<-cancelDone
+		t.Fatal("losing native terminal waiter continued into close or usage persistence")
+	}
+	close(releaseUsage)
+	usageReleased = true
+	if accepted := <-cancelDone; !accepted {
+		t.Fatal("native cancellation was not durably accepted")
+	}
+
+	closeCalls := 0
+	for _, call := range session.callsSnapshot() {
+		if call == "close" {
+			closeCalls++
+		}
+	}
+	if closeCalls != 1 {
+		t.Fatalf("native close calls = %d, want cancellation owner only; calls=%#v", closeCalls, session.callsSnapshot())
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	usageDeliveries := 0
+	for _, delivery := range journal.PendingGoalDeliveries {
+		if delivery.Kind == state.GoalDeliveryUsage && delivery.DeliveryID == nativeGoalUsageKey {
+			usageDeliveries++
+		}
+	}
+	if usageDeliveries != 1 || journal.TerminalState != "cancelled" || len(journal.PendingCommandAcknowledgements) != 1 {
+		t.Fatalf("cancel-first terminal evidence = %#v", journal)
+	}
+}
+
+func TestNativeTerminalOwnerRejectsConcurrentCancellation(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000007"}
+	saveAttachedGoalSession(t, store, key, admission, sessionKey)
+
+	waitTurnGate := make(chan struct{})
+	close(waitTurnGate)
+	finalWaitGate := make(chan struct{})
+	waitEntered := make(chan struct{}, 1)
+	session := &fakeNativeGoalSession{
+		result:          harness.TaskResult{Kind: harness.ResultSucceeded, Summary: "native terminal"},
+		waitGate:        waitTurnGate,
+		finalWaitGate:   finalWaitGate,
+		turnStarted:     make(chan struct{}),
+		waitEntered:     waitEntered,
+		processPID:      71,
+		processIdentity: "native:71",
+	}
+	active := &runningRun{claimed: true, nativeSession: session, goalSession: &sessionKey, goalAdmission: &admission}
+	app := &daemon{
+		config:  testConfig(t),
+		store:   store,
+		control: &fakeControl{},
+		running: map[state.RunKey]*runningRun{key: active},
+		options: options{newID: ids(), clock: time.Now},
+	}
+	waiterDone := make(chan struct{})
+	go func() {
+		app.waitForNativeRun(context.Background(), key, active, session)
+		close(waiterDone)
+	}()
+	select {
+	case <-waitEntered:
+	case <-time.After(time.Second):
+		t.Fatal("native terminal owner did not reach final Wait")
+	}
+	command := protocol.Command{RunID: key.RunID, Generation: key.Generation, CommandID: "cancel-after-terminal", Kind: "cancel"}
+	if app.handleCommand(context.Background(), command) {
+		t.Fatal("cancellation was acknowledged before the native terminal owner committed")
+	}
+	for _, call := range session.callsSnapshot() {
+		if call == "control:cancel" {
+			t.Fatalf("terminal-first cancellation touched native control: %#v", session.callsSnapshot())
+		}
+	}
+	if active.cancelled {
+		t.Fatal("terminal-first cancellation marked the run cancelled")
+	}
+	close(finalWaitGate)
+	select {
+	case <-waiterDone:
+	case <-time.After(time.Second):
+		t.Fatal("native terminal owner did not complete")
+	}
+	if !app.handleCommand(context.Background(), command) {
+		t.Fatal("durable native terminal did not reject the replayed cancellation")
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.TerminalState == "cancelled" || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].Outcome != "rejected" {
+		t.Fatalf("terminal-first cancellation replay = %#v", journal)
+	}
+}
+
+func TestNativeTerminalReservationSurvivesLeaseTerminationDuringUsageRetry(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	store, key := claimedGoalDeliveryStore(t)
+	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000007"}
+	saveAttachedGoalSession(t, store, key, admission, sessionKey)
+	if _, err := store.SetProcessDetails(key, 71, "native:71", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+
+	waitTurnGate := make(chan struct{})
+	close(waitTurnGate)
+	finalWaitGate := make(chan struct{})
+	close(finalWaitGate)
+	now := time.Date(2026, 9, 15, 1, 0, 0, 0, time.UTC)
+	usageCalls := 0
+	session := &fakeNativeGoalSession{
+		result:          harness.TaskResult{Kind: harness.ResultSucceeded, Summary: "native terminal"},
+		waitGate:        waitTurnGate,
+		finalWaitGate:   finalWaitGate,
+		turnStarted:     make(chan struct{}),
+		closeEntered:    make(chan struct{}, 2),
+		processPID:      71,
+		processIdentity: "native:71",
+	}
+	active := &runningRun{nativeSession: session, goalSession: &sessionKey, goalAdmission: &admission}
+	daemon := &daemon{
+		config:  testConfig(t),
+		store:   store,
+		running: map[state.RunKey]*runningRun{key: active},
+		options: options{newID: ids(), clock: func() time.Time { return now }, queueGoalUsage: func(runKey state.RunKey, usage protocol.Usage) (state.RunJournal, error) {
+			usageCalls++
+			if usageCalls == 1 {
+				return state.RunJournal{}, errors.New("injected native usage persistence failure")
+			}
+			return store.QueueGoalUsage(runKey, usage)
+		}},
+	}
+
+	daemon.waitForNativeRun(context.Background(), key, active, session)
+	if usageCalls != 1 || !active.nativeUsageRetryPending {
+		t.Fatalf("initial native usage retry state: calls=%d active=%#v", usageCalls, active)
+	}
+	daemon.mu.Lock()
+	nativeOwner, terminalizing := active.nativeTerminalOwner, active.terminalizing
+	daemon.mu.Unlock()
+	if !nativeOwner || terminalizing != 1 {
+		t.Fatalf("native usage retry lost terminal owner: owner=%t terminalizing=%d", nativeOwner, terminalizing)
+	}
+	j, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemon.terminateForLease(j, "lease expired during native usage retry")
+	if active.cancelled || active.stale {
+		t.Fatalf("lease termination changed native usage reservation: cancelled=%t stale=%t", active.cancelled, active.stale)
+	}
+
+	active.nativeUsageRetryAt = now.Add(-time.Second)
+	daemon.flushPendingNativeUsage(context.Background())
+	daemon.backgroundWG.Wait()
+	j, err = store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemon.mu.Lock()
+	nativeOwner, terminalizing = active.nativeTerminalOwner, active.terminalizing
+	daemon.mu.Unlock()
+	if nativeOwner || terminalizing != 0 {
+		t.Fatalf("native usage retry did not release terminal owner: owner=%t terminalizing=%d", nativeOwner, terminalizing)
+	}
+	if usageCalls != 2 || !active.nativeUsageFinalized || j.TerminalState != "failed" || j.LocalState != "terminal_pending" || len(j.PendingTransitions) != 1 {
+		t.Fatalf("native usage retry lost reserved terminal: calls=%d active=%#v journal=%#v", usageCalls, active, j)
+	}
+}
+
+func TestNativeUsageRetryExhaustionRetentionFailureKeepsRecoveryBarrier(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	usage := protocol.Usage{
+		SchemaVersion: protocol.UsageSchemaVersion,
+		UsageID:       "00000000-0000-4000-8000-000000000010",
+		RunID:         key.RunID,
+		UsageKey:      nativeGoalUsageKey,
+		Provider:      "openai",
+		Model:         "gpt-test",
+		CostBasis:     protocol.CostUnknown,
+		ObservedAt:    "2026-09-16T01:00:00Z",
+	}
+	retentionErr := errors.New("injected workspace retention failure")
+	active := &runningRun{
+		nativeFinalResult: &harness.TaskResult{Kind: harness.ResultSucceeded},
+		nativeFinalUsage:  &usage,
+	}
+	daemon := &daemon{
+		config:  testConfig(t),
+		store:   store,
+		running: map[state.RunKey]*runningRun{key: active},
+		options: options{newID: ids(), clock: time.Now, retainWorkspace: func(state.RunKey) (state.RunJournal, error) {
+			return state.RunJournal{}, retentionErr
+		}},
+	}
+
+	daemon.exhaustNativeUsageRetry(context.Background(), key, active, errors.New("usage retries exhausted"))
+
+	j, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if daemon.runningRun(key) != active || !active.nativeUsageRetryPending || !active.nativeUsageRetryExhausted || !active.stale || !active.cleanupBlocked {
+		t.Fatalf("retention failure released native recovery: active=%#v journal=%#v", active, j)
+	}
+	if j.TerminalState != "" || len(j.PendingTransitions) != 0 || j.NativeUsageRecoveryRequired || len(j.PendingGoalDeliveries) != 0 || j.RetainWorkspace {
+		t.Fatalf("retention failure crossed durable recovery barrier: %#v", j)
+	}
 }
 
 func saveRetainedGoalSession(t *testing.T, store *state.Store, key state.RunKey) (state.GoalSessionKey, string, string) {

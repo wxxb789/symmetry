@@ -274,6 +274,7 @@ type claudeCandidateSession struct {
 	turnErr              error
 	turnResult           *TaskResult
 	terminal             *claudeprotocol.Terminal
+	terminalFailure      error
 	lastSequence         uint64
 	eventCount           uint64
 	cancelRequested      bool
@@ -581,9 +582,34 @@ func (session *claudeCandidateSession) Control(ctx context.Context, request Cont
 	turnStarted := session.turnStarted
 	turnFinal := session.turnFinal
 	cancelRequested := session.cancelRequested
-	session.mutex.Unlock()
-	if !turnStarted || (turnFinal && !cancelRequested) {
+	terminalObserved := session.terminal != nil
+	terminalFailureObserved := session.terminalFailure != nil
+	if !turnStarted {
+		session.mutex.Unlock()
 		return ControlReceipt{CommandID: request.CommandID, Kind: request.Kind, Outcome: ControlRejected, Capability: CapabilityCancel, Message: "Claude turn is not active", AppliedAt: time.Now().UTC()}, nil
+	}
+	if !cancelRequested && terminalObserved {
+		session.mutex.Unlock()
+		return ControlReceipt{CommandID: request.CommandID, Kind: request.Kind, Outcome: ControlRejected, Capability: CapabilityCancel, Message: "Claude terminal was already observed; cancellation rejected", AppliedAt: time.Now().UTC()}, nil
+	}
+	if !cancelRequested && terminalFailureObserved {
+		session.mutex.Unlock()
+		return ControlReceipt{CommandID: request.CommandID, Kind: request.Kind, Outcome: ControlRejected, Capability: CapabilityCancel, Message: "Claude terminal observation failed; cancellation rejected", AppliedAt: time.Now().UTC()}, nil
+	}
+	if turnFinal && !cancelRequested {
+		session.mutex.Unlock()
+		return ControlReceipt{CommandID: request.CommandID, Kind: request.Kind, Outcome: ControlRejected, Capability: CapabilityCancel, Message: "Claude turn is not active", AppliedAt: time.Now().UTC()}, nil
+	}
+	if !turnFinal {
+		// Claim cancellation while holding the same mutex as terminal
+		// observation. Whichever state is recorded first owns the turn.
+		session.cancelRequested = true
+		session.closing = true
+	}
+	writeCancel := session.turnWriteCancel
+	session.mutex.Unlock()
+	if writeCancel != nil {
+		writeCancel()
 	}
 	if err := session.Close(ctx); err != nil {
 		return ControlReceipt{CommandID: request.CommandID, Kind: request.Kind, Outcome: ControlFailed, Capability: CapabilityCancel, Message: err.Error(), AppliedAt: time.Now().UTC()}, err
@@ -850,6 +876,9 @@ func (session *claudeCandidateSession) handleClaudeRecord(_ context.Context, pro
 				session.terminal = &copyOfTerminal
 			}
 		}
+	}
+	if observeErr != nil && record.Type == claudeprotocol.EventResult && session.terminal == nil && session.terminalFailure == nil {
+		session.terminalFailure = observeErr
 	}
 	session.lastSequence = maxUint64(session.lastSequence, record.Sequence)
 	session.mutex.Unlock()

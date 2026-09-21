@@ -256,6 +256,78 @@ func TestClaudeCandidateAcceptsVerifiedTaskResultAndPublishesEvent(t *testing.T)
 	}
 }
 
+func TestClaudeCandidateLateCancelAfterTerminalObservationIsRejected(t *testing.T) {
+	process := newClaudeCandidateFakeProcess()
+	sink := newBlockingClaudeCandidateSink()
+	adapter := newClaudeCandidateTestAdapter(process, nil)
+	session, err := adapter.Start(context.Background(), claudeCandidateStartRequest(t), sink)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	cleanupClaudeCandidateSession(t, session)
+	staged := session.(StagedSession)
+	openClaudeCandidateSession(t, staged, process)
+	if err := staged.StartTurn(context.Background(), TurnRequest{Goal: "observe terminal before publication", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+
+	emitDone := make(chan error, 1)
+	go func() {
+		emitDone <- process.emitJSON(claudeCandidateResultEnvelope(t, validClaudeCandidateTaskResultJSON(t)))
+	}()
+	select {
+	case <-sink.taskResultEntered:
+	case <-time.After(time.Second):
+		t.Fatal("terminal result was not held in EventTaskResult delivery")
+	}
+
+	receipt, controlErr := staged.Control(context.Background(), ControlRequest{CommandID: "cancel-late", Kind: ControlCancel})
+	if controlErr != nil {
+		t.Fatalf("late Control(cancel) error = %v, want rejected receipt", controlErr)
+	}
+	if receipt.Outcome != ControlRejected || receipt.Message != "Claude terminal was already observed; cancellation rejected" {
+		t.Fatalf("late cancel receipt = %+v, want clear terminal-observation rejection", receipt)
+	}
+	if calls, _ := process.terminationDetails(); calls != 0 {
+		t.Fatalf("late cancel Terminate calls = %d, want zero", calls)
+	}
+
+	close(sink.releaseTaskResult)
+	if err := <-emitDone; err != nil {
+		t.Fatalf("emit terminal result error = %v", err)
+	}
+}
+
+func TestClaudeCandidateTerminalValidationFailureRejectsLateCancel(t *testing.T) {
+	process := newClaudeCandidateFakeProcess()
+	adapter := newClaudeCandidateTestAdapter(process, nil)
+	session, err := adapter.Start(context.Background(), claudeCandidateStartRequest(t), &recordingClaudeCandidateSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	cleanupClaudeCandidateSession(t, session)
+	staged := session.(StagedSession)
+	openClaudeCandidateSession(t, staged, process)
+	if err := staged.StartTurn(context.Background(), TurnRequest{Goal: "observe terminal failure", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	invalid := `{"type":"result","subtype":"success","terminal_reason":"completed","is_error":true,"session_id":"` + claudeCandidateTestSessionID + `","result":"failed"}`
+	if err := process.emitJSON(invalid); !errors.Is(err, claudeprotocol.ErrResultReportedError) {
+		t.Fatalf("invalid terminal error = %v, want ErrResultReportedError", err)
+	}
+
+	receipt, controlErr := staged.Control(context.Background(), ControlRequest{CommandID: "cancel-after-failure", Kind: ControlCancel})
+	if controlErr != nil {
+		t.Fatalf("late Control(cancel) after terminal failure error = %v", controlErr)
+	}
+	if receipt.Outcome != ControlRejected || receipt.Message != "Claude terminal observation failed; cancellation rejected" {
+		t.Fatalf("late cancel after terminal failure receipt = %+v, want clear rejection", receipt)
+	}
+	if calls, _ := process.terminationDetails(); calls != 0 {
+		t.Fatalf("late cancel after terminal failure Terminate calls = %d, want zero", calls)
+	}
+}
+
 func TestClaudeCandidateOpenCancellationStopsOwnedProcess(t *testing.T) {
 	process := newClaudeCandidateFakeProcess()
 	adapter := newClaudeCandidateTestAdapter(process, nil)
@@ -816,6 +888,33 @@ func cleanupClaudeCandidateSessionExpectClose(t *testing.T, session Session, exp
 type recordingClaudeCandidateSink struct {
 	mu     sync.Mutex
 	events []Event
+}
+
+type blockingClaudeCandidateSink struct {
+	*recordingClaudeCandidateSink
+	taskResultEntered chan struct{}
+	releaseTaskResult chan struct{}
+	taskResultOnce    sync.Once
+}
+
+func newBlockingClaudeCandidateSink() *blockingClaudeCandidateSink {
+	return &blockingClaudeCandidateSink{
+		recordingClaudeCandidateSink: &recordingClaudeCandidateSink{},
+		taskResultEntered:            make(chan struct{}),
+		releaseTaskResult:            make(chan struct{}),
+	}
+}
+
+func (sink *blockingClaudeCandidateSink) Handle(ctx context.Context, event Event) error {
+	if event.Kind == EventTaskResult {
+		sink.taskResultOnce.Do(func() { close(sink.taskResultEntered) })
+		select {
+		case <-sink.releaseTaskResult:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return sink.recordingClaudeCandidateSink.Handle(ctx, event)
 }
 
 func (sink *recordingClaudeCandidateSink) Handle(_ context.Context, event Event) error {

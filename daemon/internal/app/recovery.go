@@ -90,6 +90,24 @@ func (daemon *daemon) recoverGoalSession(rootContext context.Context, session st
 		journal = updated
 		break
 	}
+	if session.LaunchState == state.GoalSessionLaunchStateIntent && !session.LaunchAttempted && !session.RecoveryRequired &&
+		session.NativeSessionID == "" && session.NativeSessionFilename == "" {
+		if !terminalKnown {
+			summary := "native Goal session was not launched before daemon restart"
+			if err := daemon.queueRecoveryTerminalTransition(rootContext, key, "failed", map[string]string{
+				"stage":   "goal_session_recovery",
+				"reason":  string(protocol.TaskResultReasonProcessFailure),
+				"summary": summary,
+				"error":   summary,
+			}); err != nil {
+				return fmt.Errorf("queue pre-launch Goal failure for %s/%d: %w", key.RunID, key.Generation, err)
+			}
+		}
+		if _, err := daemon.store.AbortGoalSessionLaunchBeforeNativeStart(session.Key()); err != nil {
+			return fmt.Errorf("close unstarted Goal session for %s/%d: %w", key.RunID, key.Generation, err)
+		}
+		return nil
+	}
 	attachMappingPending := goalSessionAttachmentMappingPending(session, journal)
 	resumeAttachmentPending := goalSessionResumeAttachmentPending(session, journal)
 	if attachMappingPending || resumeAttachmentPending {
@@ -269,9 +287,29 @@ func (daemon *daemon) recoverGoalSession(rootContext context.Context, session st
 		// its local handle for explicit reconciliation rather than terminalize.
 		return nil
 	}
-	// Restart recovery has no native final-result boundary, even when the
-	// persisted process can be stopped successfully. Never promote the latest
-	// cumulative observation to a final total on this path.
+	journal, loadErr = daemon.store.LoadJournal(key)
+	if loadErr != nil {
+		return fmt.Errorf("reload native run before terminal recovery for %s/%d: %w", key.RunID, key.Generation, loadErr)
+	}
+	if journal.NativeUsageRecoveryRequired {
+		updated, usage, usageErr := daemon.recoverNativeUsageDelivery(journal)
+		if usageErr != nil {
+			return fmt.Errorf("restore native usage recovery for %s/%d: %w", key.RunID, key.Generation, usageErr)
+		}
+		updated, usageErr = daemon.queueNativeUsageRecoveryTerminal(rootContext, updated, nil)
+		if usageErr != nil {
+			return fmt.Errorf("restore exact native terminal for %s/%d: %w", key.RunID, key.Generation, usageErr)
+		}
+		if _, usageErr = daemon.store.ClearNativeUsageRecoveryRequired(key, usage); usageErr != nil {
+			return fmt.Errorf("clear native usage recovery for %s/%d: %w", key.RunID, key.Generation, usageErr)
+		}
+		if stopErr != nil {
+			return errors.Join(errRecoveryRegistrationReady, errNativePhysicalRecoveryPending, stopErr)
+		}
+		return nil
+	}
+	// Restart recovery has no native final-result boundary when the live owner
+	// did not persist one. Never promote a cumulative observation to a final total.
 	if err := daemon.queueNativeUnknownUsageRecovery(key); err != nil {
 		return fmt.Errorf("queue unknown recovered Goal usage for %s/%d: %w", key.RunID, key.Generation, err)
 	}

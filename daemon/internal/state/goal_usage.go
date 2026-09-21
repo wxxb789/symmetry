@@ -29,18 +29,21 @@ func (observation NativeUsageObservation) Validate() error {
 	return nil
 }
 
+// Covers reports whether observation contains at least the cumulative counters
+// in expected. Observation time is diagnostic and does not reduce accounting.
+func (observation NativeUsageObservation) Covers(expected NativeUsageObservation) bool {
+	return observation.InputTokens >= expected.InputTokens &&
+		observation.OutputTokens >= expected.OutputTokens &&
+		observation.CachedInputTokens >= expected.CachedInputTokens &&
+		observation.ReasoningOutputTokens >= expected.ReasoningOutputTokens &&
+		observation.TotalTokens >= expected.TotalTokens
+}
+
 func nativeUsageObservationRegresses(previous, next NativeUsageObservation) bool {
-	regresses := next.InputTokens < previous.InputTokens ||
-		next.OutputTokens < previous.OutputTokens ||
-		next.CachedInputTokens < previous.CachedInputTokens ||
-		next.ReasoningOutputTokens < previous.ReasoningOutputTokens ||
-		next.TotalTokens < previous.TotalTokens
-	if regresses {
+	if !next.Covers(previous) {
 		return true
 	}
-	return next.InputTokens == previous.InputTokens && next.OutputTokens == previous.OutputTokens &&
-		next.CachedInputTokens == previous.CachedInputTokens && next.ReasoningOutputTokens == previous.ReasoningOutputTokens &&
-		next.TotalTokens == previous.TotalTokens && next.ObservedAt.Before(previous.ObservedAt)
+	return previous.Covers(next) && next.ObservedAt.Before(previous.ObservedAt)
 }
 
 // RecordNativeUsageObservation stores only a monotonic cumulative snapshot.

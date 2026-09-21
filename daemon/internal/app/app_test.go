@@ -17,12 +17,14 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/config"
 	"github.com/wxxb789/symmetry/daemon/internal/control"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
+	"github.com/wxxb789/symmetry/daemon/internal/harness"
 	"github.com/wxxb789/symmetry/daemon/internal/notification"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
@@ -8722,13 +8724,15 @@ func (client *fakeControl) AcknowledgeCommand(context.Context, string, protocol.
 }
 
 type fakeWorkspace struct {
-	subject        protocol.Subject
-	derivedSubject protocol.Subject
-	deriveErr      error
-	prepareCalls   int
-	recoverCalls   int
-	recoveredRun   workspace.RunRef
-	recoveredPath  string
+	subject               protocol.Subject
+	derivedSubject        protocol.Subject
+	deriveErr             error
+	prepareCalls          int
+	recoverCalls          int
+	recoveredRun          workspace.RunRef
+	recoveredPath         string
+	prepareSubjectEntered chan<- struct{}
+	prepareSubjectRelease <-chan struct{}
 }
 
 type countingWorkspace struct {
@@ -8758,6 +8762,12 @@ func (fake *fakeWorkspace) PrepareSubject(_ context.Context, key string, run wor
 	}
 	fake.prepareCalls++
 	fake.subject = subject
+	if fake.prepareSubjectEntered != nil {
+		fake.prepareSubjectEntered <- struct{}{}
+	}
+	if fake.prepareSubjectRelease != nil {
+		<-fake.prepareSubjectRelease
+	}
 	return workspace.SubjectWorkspace{Prepared: workspace.Prepared{Path: "C:\\workspace", BindingKey: key, Run: run}, Subject: subject}, nil
 }
 func (fake *fakeWorkspace) RecoverSubject(_ context.Context, key string, run workspace.RunRef, path string, subject protocol.Subject) (workspace.SubjectWorkspace, error) {
@@ -8893,11 +8903,18 @@ func TestStartFailureRetainsReturnedProcessUntilItExits(t *testing.T) {
 	process := newStartFailureProcess()
 	startErr := errors.New("initial stdin write failed")
 	daemon := &daemon{
-		config:       testConfig(t),
-		store:        store,
-		control:      &fakeControl{},
-		workspace:    &fakeWorkspace{},
-		start:        func(context.Context, execution.Invocation, execution.Sink) (Process, error) { return process, startErr },
+		config:    testConfig(t),
+		store:     store,
+		control:   &fakeControl{},
+		workspace: &fakeWorkspace{},
+		start: func(_ context.Context, invocation execution.Invocation, _ execution.Sink) (Process, error) {
+			if invocation.PersistProcess != nil {
+				if err := invocation.PersistProcess(42, "test:42"); err != nil {
+					return nil, err
+				}
+			}
+			return process, startErr
+		},
 		options:      options{newID: ids(), clock: time.Now},
 		runtimeID:    "runtime-1",
 		runtimeEpoch: 1,
@@ -8907,16 +8924,23 @@ func TestStartFailureRetainsReturnedProcessUntilItExits(t *testing.T) {
 	key := state.RunKey{RunID: "run-1", Generation: 1}
 	daemon.startAssignment(context.Background(), protocol.Assignment{RunID: key.RunID, Generation: key.Generation, Work: protocol.Work{Goal: "work"}})
 	select {
-	case <-process.waitStarted:
+	case <-process.detailsEntered:
 	case <-time.After(time.Second):
-		t.Fatal("returned process was not retained for Wait")
+		t.Fatal("returned process identity was not observed")
 	}
 	active := daemon.runningRun(key)
 	if active == nil || active.process != process {
 		t.Fatalf("start failure dropped returned process ownership: active=%#v", active)
 	}
+	if got := process.waitCalls.Load(); got != 0 {
+		t.Fatalf("Process.Wait calls before ResultDone = %d, want zero", got)
+	}
 	close(process.releaseWait)
 	daemon.workers.Wait()
+	daemon.failedStartWatchWG.Wait()
+	if got := process.waitCalls.Load(); got != 1 {
+		t.Fatalf("Process.Wait calls = %d, want exactly one", got)
+	}
 	if process.terminations != 0 {
 		t.Fatalf("app retried process termination after Start returned ownership: %d", process.terminations)
 	}
@@ -9017,9 +9041,12 @@ func TestRunShutdownDoesNotWaitForUnresolvedProcessReturnedWithStartError(t *tes
 		t.Fatal("returned process identity was not persisted")
 	}
 	select {
-	case <-process.waitStarted:
+	case <-process.detailsEntered:
 	case <-time.After(time.Second):
-		t.Fatal("returned process was not handed to the exit watcher")
+		t.Fatal("returned process identity was not observed")
+	}
+	if got := process.waitCalls.Load(); got != 0 {
+		t.Fatalf("shutdown Process.Wait calls before ResultDone = %d, want zero", got)
 	}
 
 	cancel()
@@ -9039,13 +9066,73 @@ func TestRunShutdownDoesNotWaitForUnresolvedProcessReturnedWithStartError(t *tes
 		t.Fatalf("unresolved process did not retain durable recovery ownership: %#v", journal)
 	}
 	close(process.releaseWait)
+	select {
+	case <-process.waitReturned:
+		t.Fatal("shutdown watcher called Process.Wait after finalization context cancellation")
+	default:
+	}
+	if got := process.waitCalls.Load(); got != 0 {
+		t.Fatalf("shutdown Process.Wait calls = %d, want zero", got)
+	}
+}
+
+func TestFailedStartWithoutResultCompletionWitnessRetainsRecoveryMarker(t *testing.T) {
+	store, err := state.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	process := &unsupportedCompletionProcess{}
+	startErr := errors.New("start returned an unsupported completion process")
+	daemon := &daemon{
+		config:    testConfig(t),
+		store:     store,
+		control:   &fakeControl{},
+		workspace: &fakeWorkspace{},
+		start: func(_ context.Context, invocation execution.Invocation, _ execution.Sink) (Process, error) {
+			if invocation.PersistProcess != nil {
+				if err := invocation.PersistProcess(42, "unsupported:42"); err != nil {
+					return nil, err
+				}
+			}
+			return process, startErr
+		},
+		options:      options{newID: ids(), clock: time.Now},
+		runtimeID:    "runtime-1",
+		runtimeEpoch: 1,
+		running:      make(map[state.RunKey]*runningRun),
+		slots:        make(chan struct{}, 1),
+	}
+	key := state.RunKey{RunID: "run-1", Generation: 1}
+	daemon.startAssignment(context.Background(), protocol.Assignment{RunID: key.RunID, Generation: key.Generation, Work: protocol.Work{Goal: "work"}})
+	daemon.workers.Wait()
+	daemon.failedStartWatchWG.Wait()
+	if got := process.waitCalls.Load(); got != 0 {
+		t.Fatalf("unsupported completion process Wait calls = %d, want zero", got)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.PID != 42 || journal.ProcessIdentity != "unsupported:42" || journal.LocalState == "cleanup_pending" {
+		t.Fatalf("unsupported completion process lost recovery marker: %#v", journal)
+	}
 }
 
 type startFailureProcess struct {
-	waitStarted  chan struct{}
-	releaseWait  chan struct{}
-	waitOnce     sync.Once
-	terminations int
+	waitStarted    chan struct{}
+	detailsEntered chan struct{}
+	waitReturned   chan struct{}
+	releaseWait    chan struct{}
+	waitOnce       sync.Once
+	detailsOnce    sync.Once
+	returnOnce     sync.Once
+	waitCalls      atomic.Int32
+	terminations   int
+}
+
+type unsupportedCompletionProcess struct {
+	waitCalls atomic.Int32
 }
 
 type typedNilProcess struct{}
@@ -9058,7 +9145,7 @@ func (*typedNilProcess) Wait() execution.Result        { panic("unexpected Wait"
 func (*typedNilProcess) ProcessDetails() (int, string) { panic("unexpected ProcessDetails") }
 
 func newStartFailureProcess() *startFailureProcess {
-	return &startFailureProcess{waitStarted: make(chan struct{}), releaseWait: make(chan struct{})}
+	return &startFailureProcess{waitStarted: make(chan struct{}), detailsEntered: make(chan struct{}), waitReturned: make(chan struct{}), releaseWait: make(chan struct{})}
 }
 
 func (*startFailureProcess) WriteInput([]byte) error { return nil }
@@ -9067,11 +9154,27 @@ func (process *startFailureProcess) Terminate(context.Context, time.Duration) er
 	return errors.New("termination failed")
 }
 func (process *startFailureProcess) Wait() execution.Result {
+	process.waitCalls.Add(1)
 	process.waitOnce.Do(func() { close(process.waitStarted) })
 	<-process.releaseWait
+	process.returnOnce.Do(func() { close(process.waitReturned) })
 	return execution.Result{ExitCode: 1, WaitError: errors.New("exit status 1")}
 }
-func (*startFailureProcess) ProcessDetails() (int, string) { return 42, "test:42" }
+func (process *startFailureProcess) ResultDone() <-chan struct{} { return process.releaseWait }
+func (process *startFailureProcess) ProcessDetails() (int, string) {
+	process.detailsOnce.Do(func() { close(process.detailsEntered) })
+	return 42, "test:42"
+}
+
+func (*unsupportedCompletionProcess) WriteInput([]byte) error { return nil }
+func (*unsupportedCompletionProcess) Terminate(context.Context, time.Duration) error {
+	return nil
+}
+func (process *unsupportedCompletionProcess) Wait() execution.Result {
+	process.waitCalls.Add(1)
+	return execution.Result{ExitCode: 1, WaitError: errors.New("unsupported completion process waited")}
+}
+func (*unsupportedCompletionProcess) ProcessDetails() (int, string) { return 42, "unsupported:42" }
 
 func (process fakeProcess) WriteInput([]byte) error                        { return nil }
 func (process fakeProcess) Terminate(context.Context, time.Duration) error { return nil }
@@ -9209,3 +9312,500 @@ func (process *deferredExitProcess) Wait() execution.Result {
 	return execution.Result{Terminated: true}
 }
 func (*deferredExitProcess) ProcessDetails() (int, string) { return 45, "test:45" }
+
+func TestNativeUsageRetryExhaustionAcknowledgesOriginalCancellation(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
+	usage := protocol.Usage{
+		SchemaVersion: protocol.UsageSchemaVersion,
+		UsageID:       "00000000-0000-4000-8000-000000000010",
+		RunID:         key.RunID,
+		UsageKey:      nativeGoalUsageKey,
+		Provider:      "openai",
+		Model:         "gpt-test",
+		CostBasis:     protocol.CostUnknown,
+		ObservedAt:    "2026-09-16T01:00:00Z",
+	}
+	result := harness.TaskResult{Kind: harness.ResultCancelled}
+	active := &runningRun{
+		nativeFinalResult:         &result,
+		nativeFinalUsage:          &usage,
+		nativeCancelCommandID:     "cancel-1",
+		nativeTerminalOwner:       true,
+		terminalizing:             1,
+		nativeUsageRetryExhausted: true,
+	}
+	daemon := &daemon{
+		config:  testConfig(t),
+		store:   store,
+		running: map[state.RunKey]*runningRun{key: active},
+		options: options{newID: ids(), clock: time.Now},
+	}
+
+	daemon.exhaustNativeUsageRetry(context.Background(), key, active, errors.New("usage retries exhausted"))
+
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if daemon.runningRun(key) != nil {
+		t.Fatal("usage retry exhaustion released the run before cancellation acknowledgement")
+	}
+	if journal.TerminalState != "cancelled" || journal.LocalState != "terminal_pending" || len(journal.PendingTransitions) != 1 {
+		t.Fatalf("usage retry exhaustion terminal evidence = %#v", journal)
+	}
+	if len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].CommandID != "cancel-1" || journal.PendingCommandAcknowledgements[0].Outcome != "applied" {
+		t.Fatalf("usage retry exhaustion cancellation acknowledgement = %#v", journal.PendingCommandAcknowledgements)
+	}
+}
+
+type terminalObservedStagedSession struct {
+	*fakeNativeGoalSession
+	terminalObserved      atomic.Bool
+	waitTurnCalls         atomic.Int32
+	terminalObservedReady chan struct{}
+	releaseFirstWaitTurn  chan struct{}
+}
+
+func (session *terminalObservedStagedSession) WaitTurn(ctx context.Context) error {
+	if session.waitTurnCalls.Add(1) == 1 {
+		session.terminalObserved.Store(true)
+		close(session.terminalObservedReady)
+		select {
+		case <-session.releaseFirstWaitTurn:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
+func (session *terminalObservedStagedSession) Control(ctx context.Context, request harness.ControlRequest) (harness.ControlReceipt, error) {
+	if request.Kind == harness.ControlCancel && session.terminalObserved.Load() {
+		session.recordCall("control:" + string(request.Kind))
+		return harness.ControlReceipt{
+			CommandID: request.CommandID,
+			Kind:      request.Kind,
+			Outcome:   harness.ControlRejected,
+			Message:   "native turn already terminal",
+		}, nil
+	}
+	return session.fakeNativeGoalSession.Control(ctx, request)
+}
+
+type terminalObservedFailureStagedSession struct {
+	*terminalObservedStagedSession
+	waitErr error
+}
+
+func (session *terminalObservedFailureStagedSession) WaitTurn(ctx context.Context) error {
+	if session.waitTurnCalls.Add(1) == 1 {
+		session.terminalObserved.Store(true)
+		close(session.terminalObservedReady)
+		select {
+		case <-session.releaseFirstWaitTurn:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return session.waitErr
+}
+
+func TestLateCancelAfterStagedTerminalObservationCannotWin(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	app, store, _, _ := nativeAdmissionDaemon(t, admission, validNativeTaskResult(t, admission), nil)
+	defer store.Close()
+	key := state.RunKey{RunID: "run-1", Generation: 1}
+	saveClaimedGoalRun(t, store, key)
+	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000007"}
+	saveAttachedGoalSession(t, store, key, admission, sessionKey)
+	semantic := validNativeTaskResult(t, admission)
+	base := &fakeNativeGoalSession{
+		handle:      harness.NativeSessionHandle{ID: "native-thread-1"},
+		result:      harness.TaskResult{Kind: harness.ResultSucceeded, Summary: "terminal result", Semantic: &semantic},
+		turnStarted: make(chan struct{}),
+	}
+	session := &terminalObservedStagedSession{
+		fakeNativeGoalSession: base,
+		terminalObservedReady: make(chan struct{}),
+		releaseFirstWaitTurn:  make(chan struct{}),
+	}
+	app.workspace.(*fakeWorkspace).subject = admission.Subject
+	active := &runningRun{
+		claimed:       true,
+		nativeSession: session,
+		goalSession:   &sessionKey,
+		goalAdmission: &admission,
+		prepared:      workspace.Prepared{Path: "C:\\workspace"},
+	}
+	app.running = map[state.RunKey]*runningRun{key: active}
+	app.log = slog.New(slog.NewJSONHandler(io.Discard, nil))
+
+	var waitGroup sync.WaitGroup
+	waitGroup.Add(1)
+	go func() {
+		defer waitGroup.Done()
+		app.waitForNativeRun(context.Background(), key, active, session)
+	}()
+	select {
+	case <-session.terminalObservedReady:
+	case <-time.After(time.Second):
+		t.Fatal("native terminal observation did not reach the waiter")
+	}
+
+	command := protocol.Command{RunID: key.RunID, Generation: key.Generation, CommandID: "cancel-late", Kind: "cancel"}
+	if !app.handleCommand(context.Background(), command) {
+		t.Fatal("late cancellation was not rejected after native terminal observation")
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.TerminalState == "cancelled" {
+		t.Fatalf("late cancellation won native terminal observation: %#v", journal.PendingTransitions)
+	}
+	if journal.TerminalState != "completed" {
+		t.Fatalf("native terminal state = %q, want completed", journal.TerminalState)
+	}
+	if len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].CommandID != command.CommandID || journal.PendingCommandAcknowledgements[0].Outcome != "rejected" {
+		t.Fatalf("late cancellation acknowledgement = %#v, want rejected", journal.PendingCommandAcknowledgements)
+	}
+
+	close(session.releaseFirstWaitTurn)
+	waitGroup.Wait()
+}
+
+func TestObservedNativeFailureWinsLateCancel(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	app, store, _, _ := nativeAdmissionDaemon(t, admission, validNativeTaskResult(t, admission), nil)
+	defer store.Close()
+	key := state.RunKey{RunID: "run-1", Generation: 1}
+	saveClaimedGoalRun(t, store, key)
+	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000007"}
+	saveAttachedGoalSession(t, store, key, admission, sessionKey)
+	semantic := validNativeTaskResult(t, admission)
+	base := &fakeNativeGoalSession{
+		handle:      harness.NativeSessionHandle{ID: "native-thread-1"},
+		result:      harness.TaskResult{Kind: harness.ResultSucceeded, Summary: "terminal result", Semantic: &semantic},
+		turnStarted: make(chan struct{}),
+	}
+	nativeFailure := errors.New("native terminal observation failed")
+	session := &terminalObservedFailureStagedSession{
+		terminalObservedStagedSession: &terminalObservedStagedSession{
+			fakeNativeGoalSession: base,
+			terminalObservedReady: make(chan struct{}),
+			releaseFirstWaitTurn:  make(chan struct{}),
+		},
+		waitErr: nativeFailure,
+	}
+	app.workspace.(*fakeWorkspace).subject = admission.Subject
+	active := &runningRun{
+		claimed:       true,
+		nativeSession: session,
+		goalSession:   &sessionKey,
+		goalAdmission: &admission,
+		prepared:      workspace.Prepared{Path: "C:\\workspace"},
+	}
+	app.running = map[state.RunKey]*runningRun{key: active}
+	app.log = slog.New(slog.NewJSONHandler(io.Discard, nil))
+
+	var waitGroup sync.WaitGroup
+	waitGroup.Add(1)
+	go func() {
+		defer waitGroup.Done()
+		app.waitForNativeRun(context.Background(), key, active, session)
+	}()
+	select {
+	case <-session.terminalObservedReady:
+	case <-time.After(time.Second):
+		t.Fatal("native terminal observation did not reach the waiter")
+	}
+
+	command := protocol.Command{RunID: key.RunID, Generation: key.Generation, CommandID: "cancel-after-failure", Kind: "cancel"}
+	if !app.handleCommand(context.Background(), command) {
+		t.Fatal("late cancellation was not durably rejected after native observation failure")
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.TerminalState != "failed" {
+		t.Fatalf("late cancellation replaced observed failure: terminal state = %q, journal = %#v", journal.TerminalState, journal)
+	}
+	if len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].CommandID != command.CommandID || journal.PendingCommandAcknowledgements[0].Outcome != "failed" {
+		t.Fatalf("late cancellation acknowledgement = %#v, want failed", journal.PendingCommandAcknowledgements)
+	}
+
+	close(session.releaseFirstWaitTurn)
+	waitGroup.Wait()
+}
+
+func TestCancelledNativeStartCloseFailureSettlesBeforeCleanupRetry(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	store, key := claimedGoalDeliveryStore(t)
+	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000007"}
+	saveAttachedGoalSession(t, store, key, admission, sessionKey)
+	if _, err := store.SetProcessDetails(key, 71, "native:71", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	session := &fakeNativeGoalSession{
+		handle:          harness.NativeSessionHandle{ID: "native-thread-1"},
+		result:          harness.TaskResult{Kind: harness.ResultCancelled},
+		closeErr:        errors.New("injected close failure"),
+		processPID:      71,
+		processIdentity: "native:71",
+	}
+	active := &runningRun{
+		starting:        true,
+		claimed:         true,
+		nativeSession:   session,
+		goalSession:     &sessionKey,
+		goalAdmission:   &admission,
+		cancelled:       true,
+		cancelCommandID: "cancel-1",
+	}
+	daemon := &daemon{
+		config:  testConfig(t),
+		store:   store,
+		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		running: map[state.RunKey]*runningRun{key: active},
+		options: options{newID: ids(), clock: time.Now},
+	}
+
+	settled, err := daemon.settleCancelledNativeStart(context.Background(), key, sessionKey, sessionKey.LocalHandleID, session, false, false)
+	if !settled || err != nil {
+		t.Fatalf("cancelled native start settlement = settled:%t error:%v", settled, err)
+	}
+	daemon.mu.Lock()
+	if active.nativeTerminalOwner || active.terminalizing != 0 || !active.nativeCloseRetryRequired || !active.cleanupBlocked {
+		daemon.mu.Unlock()
+		t.Fatalf("cancelled native start state after close failure = %#v", active)
+	}
+	daemon.mu.Unlock()
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.TerminalState != "failed" || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].Outcome != "failed" {
+		t.Fatalf("cancelled native start durable settlement = %#v", journal)
+	}
+	usageFound := false
+	for _, delivery := range journal.PendingGoalDeliveries {
+		if delivery.Kind == state.GoalDeliveryUsage && delivery.DeliveryID == nativeGoalUsageKey {
+			usageFound = true
+		}
+	}
+	if !usageFound {
+		t.Fatalf("cancelled native start did not persist usage before terminal: %#v", journal.PendingGoalDeliveries)
+	}
+
+	session.closeErr = nil
+	daemon.retryBlockedNativeSessionCloses()
+	daemon.mu.Lock()
+	nativeOwner, terminalizing := active.nativeTerminalOwner, active.terminalizing
+	remainingSession := active.nativeSession
+	daemon.mu.Unlock()
+	if nativeOwner || terminalizing != 0 || remainingSession != nil {
+		t.Fatalf("cancelled native start owner after close retry = owner:%t terminalizing:%d session:%v", nativeOwner, terminalizing, remainingSession)
+	}
+}
+
+func TestNativeStartPublicationDefersCancellationUntilSettlement(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	store, key := claimedGoalDeliveryStore(t)
+	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000007"}
+	saveAttachedGoalSession(t, store, key, admission, sessionKey)
+	session := &fakeNativeGoalSession{
+		handle: harness.NativeSessionHandle{ID: "native-thread-1"},
+		result: harness.TaskResult{Kind: harness.ResultCancelled},
+	}
+	active := &runningRun{starting: true, claimed: true}
+	daemon := &daemon{
+		config:  testConfig(t),
+		store:   store,
+		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		running: map[state.RunKey]*runningRun{key: active},
+		options: options{newID: ids(), clock: time.Now},
+	}
+	if !daemon.beginNativeStart(key) {
+		t.Fatal("beginNativeStart() rejected the test start")
+	}
+	daemon.publishNativeStartResult(key, session, sessionKey, admission, workspace.Prepared{Path: `C:\workspace`})
+	if acknowledged := daemon.handleCommand(context.Background(), protocol.Command{RunID: key.RunID, Generation: key.Generation, CommandID: "cancel-1", Kind: "cancel"}); acknowledged {
+		t.Fatal("cancellation was acknowledged before native start settlement")
+	}
+	for _, call := range session.callsSnapshot() {
+		if call == "control:cancel" {
+			t.Fatalf("cancellation crossed the publication barrier: %#v", session.callsSnapshot())
+		}
+	}
+	settled, err := daemon.settleCancelledNativeStart(context.Background(), key, sessionKey, sessionKey.LocalHandleID, session, false, false)
+	if err != nil || !settled {
+		t.Fatalf("settleCancelledNativeStart() = settled:%t error:%v", settled, err)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.TerminalState != "cancelled" || len(journal.PendingCommandAcknowledgements) != 1 {
+		t.Fatalf("publication barrier cancellation evidence = %#v", journal)
+	}
+	if active.nativeStartInFlight || active.nativeTerminalOwner || active.terminalizing != 0 {
+		t.Fatalf("publication barrier was not released after settlement: %#v", active)
+	}
+}
+
+func TestCancelledNativeStartLeaseExpiryPreservesAcknowledgement(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	app, store, session, controlClient := nativeAdmissionDaemon(t, admission, validNativeTaskResult(t, admission), nil)
+	defer store.Close()
+	adapterValue, err := app.harnessRegistry.Lookup(harness.KindCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := adapterValue.(*fakeNativeGoalAdapter)
+	startEntered := make(chan struct{}, 1)
+	startRelease := make(chan struct{})
+	adapter.startEntered = startEntered
+	adapter.startRelease = startRelease
+	t.Cleanup(func() {
+		select {
+		case <-startRelease:
+		default:
+			close(startRelease)
+		}
+		app.workers.Wait()
+	})
+	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
+	select {
+	case <-startEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("native Adapter.Start did not enter")
+	}
+	key := state.RunKey{RunID: "run-1", Generation: 1}
+	if app.handleCommand(context.Background(), protocol.Command{RunID: key.RunID, Generation: key.Generation, CommandID: "cancel-during-start", Kind: "cancel"}) {
+		t.Fatal("cancellation was acknowledged before native start settled")
+	}
+	app.mu.Lock()
+	active := app.running[key]
+	if active == nil || !active.nativeStartInFlight || !active.cancelled {
+		app.mu.Unlock()
+		t.Fatalf("cancelled native start state = %#v", active)
+	}
+	active.localLeaseDeadlineAt = time.Now().UTC().Add(-time.Second)
+	app.mu.Unlock()
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.terminateForLease(journal, "lease expired after cancellation during native start")
+	close(startRelease)
+	app.workers.Wait()
+
+	journal, err = store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.LocalState != "stale" || !hasPendingCommandAcknowledgement(journal, "cancel-during-start") {
+		t.Fatalf("cancel plus lease expiry lost stale resolution or acknowledgement: %#v", journal)
+	}
+	for _, call := range session.callsSnapshot() {
+		if call == "open" || call == "start_turn" {
+			t.Fatalf("cancel plus lease expiry crossed the native Open/StartTurn boundary: %#v", session.callsSnapshot())
+		}
+	}
+}
+
+type terminalObservedResponseLossSession struct {
+	*terminalObservedStagedSession
+}
+
+func (session *terminalObservedResponseLossSession) Control(_ context.Context, request harness.ControlRequest) (harness.ControlReceipt, error) {
+	session.recordCall("control:" + string(request.Kind))
+	return harness.ControlReceipt{CommandID: request.CommandID, Kind: request.Kind, Outcome: harness.ControlFailed}, errors.New("native cancel response lost")
+}
+
+func TestCancelResponseLossAfterTerminalObservationIsFailedNotRejected(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	app, store, _, _ := nativeAdmissionDaemon(t, admission, validNativeTaskResult(t, admission), nil)
+	defer store.Close()
+	key := state.RunKey{RunID: "run-1", Generation: 1}
+	saveClaimedGoalRun(t, store, key)
+	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000007"}
+	saveAttachedGoalSession(t, store, key, admission, sessionKey)
+	semantic := validNativeTaskResult(t, admission)
+	session := &terminalObservedResponseLossSession{terminalObservedStagedSession: &terminalObservedStagedSession{
+		fakeNativeGoalSession: &fakeNativeGoalSession{
+			result:      harness.TaskResult{Kind: harness.ResultSucceeded, Summary: "terminal result", Semantic: &semantic},
+			turnStarted: make(chan struct{}),
+		},
+		terminalObservedReady: make(chan struct{}),
+		releaseFirstWaitTurn:  make(chan struct{}),
+	}}
+	app.workspace.(*fakeWorkspace).subject = admission.Subject
+	active := &runningRun{claimed: true, nativeSession: session, goalSession: &sessionKey, goalAdmission: &admission, prepared: workspace.Prepared{Path: "C:\\workspace"}}
+	app.running = map[state.RunKey]*runningRun{key: active}
+	app.log = slog.New(slog.NewJSONHandler(io.Discard, nil))
+
+	done := make(chan struct{})
+	go func() {
+		app.waitForNativeRun(context.Background(), key, active, session)
+		close(done)
+	}()
+	select {
+	case <-session.terminalObservedReady:
+	case <-time.After(time.Second):
+		t.Fatal("native terminal observation did not reach the waiter")
+	}
+	command := protocol.Command{RunID: key.RunID, Generation: key.Generation, CommandID: "cancel-response-lost", Kind: "cancel"}
+	if !app.handleCommand(context.Background(), command) {
+		t.Fatal("lost cancel response did not persist a terminal acknowledgement")
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.TerminalState != "completed" || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].Outcome != "failed" {
+		t.Fatalf("lost cancel response settlement = %#v", journal)
+	}
+	close(session.releaseFirstWaitTurn)
+	<-done
+}
+
+func TestNativeCloseRetrySuccessDoesNotReleaseObservedTerminalOwner(t *testing.T) {
+	key := state.RunKey{RunID: "run-1", Generation: 1}
+	session := &fakeNativeGoalSession{turnStarted: make(chan struct{})}
+	active := &runningRun{
+		nativeSession:            session,
+		nativeTerminalOwner:      true,
+		terminalizing:            1,
+		nativeCloseRetryRequired: true,
+		nativeCloseRetrying:      true,
+	}
+	app := &daemon{running: map[state.RunKey]*runningRun{key: active}}
+	app.publishNativeCloseRetrySuccess(key, active, session)
+	if !active.nativeTerminalOwner || active.terminalizing != 1 {
+		t.Fatalf("close retry released another terminal owner: %#v", active)
+	}
+	if active.nativeSession != nil || active.nativeCloseRetryRequired || active.nativeCloseRetrying || !active.cleanupBlocked {
+		t.Fatalf("close retry publication state = %#v", active)
+	}
+}

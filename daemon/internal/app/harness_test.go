@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -2692,35 +2693,23 @@ func TestFreshCodexGoalAttachQueueFailureReportsAbortCompensationFailure(t *test
 	app.options.abortGoalSessionLaunchBeforeNativeStart = func(state.GoalSessionKey) (state.GoalSessionJournal, error) {
 		return state.GoalSessionJournal{}, abortFailure
 	}
-	var conflictQueueErr error
+	attachWriteFailed := false
+	restoreWriter := store.SetAtomicWriterForTesting(func(path string, data []byte) error {
+		if strings.Contains(string(data), `"kind":"session_attach"`) {
+			attachWriteFailed = true
+			return state.ErrGoalDeliveryConflict
+		}
+		return writeAppStateAtomic(path, data)
+	})
+	defer restoreWriter()
 	err = app.startGoalAdmission(context.Background(), key, protocol.ClaimResponse{
 		RunID: key.RunID, Generation: key.Generation, TaskID: "task-1", Work: controlClient.work,
-	}, admission, func(workspace.Prepared) {
-		sessions, listErr := store.ListGoalSessions()
-		if listErr != nil {
-			t.Fatalf("ListGoalSessions() in workspace callback: %v", listErr)
-		}
-		if len(sessions) != 1 {
-			t.Fatalf("Goal sessions in workspace callback = %#v, want one", sessions)
-		}
-		resourceID := admission.Subject.ResourceID
-		_, conflictQueueErr = store.QueueGoalSessionAttach(key, state.GoalSessionAttachDelivery{
-			GoalID:               admission.GoalID,
-			LocalHandleID:        sessions[0].LocalHandleID,
-			ServerIssuedBinding:  true,
-			HarnessKind:          string(app.harnessCapabilities.Kind),
-			HarnessVersion:       app.harnessCapabilities.NativeVersion,
-			AdapterVersion:       app.harnessCapabilities.ImplementationVersion,
-			WorkspaceFingerprint: sessions[0].WorkspaceFingerprint,
-			Workspace:            "conflicting-workspace",
-			RepositoryResourceID: &resourceID,
-		})
-	})
-	if conflictQueueErr != nil {
-		t.Fatalf("workspace callback unexpectedly failed to queue conflicting attach: %v", conflictQueueErr)
+	}, admission, nil)
+	if !attachWriteFailed {
+		t.Fatal("native Goal attach write was not attempted")
 	}
-	if !errors.Is(err, state.ErrGoalDeliveryConflict) || !errors.Is(err, abortFailure) {
-		t.Fatalf("attach queue compensation error = %v, want both queue conflict and abort failure", err)
+	if err == nil || !strings.Contains(err.Error(), "write run journal") || !errors.Is(err, abortFailure) {
+		t.Fatalf("attach queue compensation error = %v, want both queue write and abort failures", err)
 	}
 	if len(session.calls) != 0 {
 		t.Fatalf("native adapter started after attach queue failure: %v", session.calls)
@@ -3154,9 +3143,20 @@ func TestFreshCodexGoalCancellationUsesNativeControlBeforeReceipt(t *testing.T) 
 	gate := make(chan struct{})
 	turnReturn := make(chan struct{})
 	app, store, session, controlClient := nativeAdmissionDaemon(t, admission, validNativeTaskResult(t, admission), gate)
-	defer store.Close()
+	var gateOnce sync.Once
+	releaseGate := func() { gateOnce.Do(func() { close(gate) }) }
+	var turnReturnOnce sync.Once
+	releaseTurnReturn := func() { turnReturnOnce.Do(func() { close(turnReturn) }) }
+	t.Cleanup(func() {
+		releaseGate()
+		releaseTurnReturn()
+		app.workers.Wait()
+		_ = store.Close()
+	})
 	session.turnReturnGate = turnReturn
-	session.onControl = func() { close(gate) }
+	session.waitTurnEntered = make(chan struct{}, 1)
+	session.onControl = releaseGate
+	session.suppressTaskResult = true
 
 	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
 	select {
@@ -3164,15 +3164,20 @@ func TestFreshCodexGoalCancellationUsesNativeControlBeforeReceipt(t *testing.T) 
 	case <-time.After(time.Second):
 		t.Fatal("native turn did not start")
 	}
+	releaseTurnReturn()
+	select {
+	case <-session.waitTurnEntered:
+	case <-time.After(time.Second):
+		t.Fatal("native terminal wait did not start")
+	}
 	command := protocol.Command{RunID: "run-1", Generation: 1, CommandID: "cancel-1", Kind: "cancel"}
 	if !app.handleCommand(context.Background(), command) {
 		t.Fatal("native cancellation was not accepted")
 	}
 	calls := session.callsSnapshot()
-	if len(calls) < 5 || !sameStrings(calls[:5], []string{"start", "details", "open", "start_turn", "control:cancel"}) {
+	if len(calls) < 6 || !sameStrings(calls[:6], []string{"start", "details", "open", "start_turn", "wait_turn", "control:cancel"}) {
 		t.Fatalf("native cancellation order = %#v", calls)
 	}
-	close(turnReturn)
 	app.workers.Wait()
 	journal, err := store.LoadJournal(state.RunKey{RunID: "run-1", Generation: 1})
 	if err != nil {
@@ -3942,9 +3947,13 @@ func (client *nativeAdmissionControl) Transition(ctx context.Context, runID stri
 }
 
 type fakeNativeGoalAdapter struct {
-	session      *fakeNativeGoalSession
-	capabilities harness.Capabilities
-	probeErr     error
+	session        *fakeNativeGoalSession
+	capabilities   harness.Capabilities
+	probeErr       error
+	startEntered   chan struct{}
+	startRelease   <-chan struct{}
+	startReturnErr error
+	returnTypedNil bool
 }
 
 func (adapter *fakeNativeGoalAdapter) Probe(context.Context) (harness.Capabilities, error) {
@@ -3953,6 +3962,15 @@ func (adapter *fakeNativeGoalAdapter) Probe(context.Context) (harness.Capabiliti
 
 func (adapter *fakeNativeGoalAdapter) Start(_ context.Context, request harness.StartRequest, sink harness.EventSink) (harness.Session, error) {
 	adapter.session.recordCall("start")
+	if adapter.startEntered != nil {
+		select {
+		case adapter.startEntered <- struct{}{}:
+		default:
+		}
+	}
+	if adapter.startRelease != nil {
+		<-adapter.startRelease
+	}
 	if adapter.session.startErr != nil {
 		return nil, adapter.session.startErr
 	}
@@ -3979,31 +3997,40 @@ func (adapter *fakeNativeGoalAdapter) Start(_ context.Context, request harness.S
 	}
 	adapter.session.request = request
 	adapter.session.sink = sink
+	if adapter.returnTypedNil {
+		var typedNil *fakeNativeGoalSession
+		return typedNil, adapter.startReturnErr
+	}
+	if adapter.startReturnErr != nil {
+		return adapter.session, adapter.startReturnErr
+	}
 	return adapter.session, nil
 }
 
 type fakeNativeGoalSession struct {
-	callsMu         sync.Mutex
-	calls           []string
-	request         harness.StartRequest
-	turnRequest     harness.TurnRequest
-	sink            harness.EventSink
-	handle          harness.NativeSessionHandle
-	result          harness.TaskResult
-	waitGate        <-chan struct{}
-	finalWaitGate   <-chan struct{}
-	turnReturnGate  <-chan struct{}
-	turnStarted     chan struct{}
-	waitEntered     chan struct{}
-	processPID      int
-	processIdentity string
-	persistAtomic   bool
-	startErr        error
-	closeErr        error
-	closeEntered    chan struct{}
-	providerBridge  harness.ProviderBridgeLifecycle
-	onControl       func()
-	waitTurnDone    bool
+	callsMu            sync.Mutex
+	calls              []string
+	request            harness.StartRequest
+	turnRequest        harness.TurnRequest
+	sink               harness.EventSink
+	handle             harness.NativeSessionHandle
+	result             harness.TaskResult
+	waitGate           <-chan struct{}
+	finalWaitGate      <-chan struct{}
+	turnReturnGate     <-chan struct{}
+	turnStarted        chan struct{}
+	waitTurnEntered    chan struct{}
+	waitEntered        chan struct{}
+	processPID         int
+	processIdentity    string
+	persistAtomic      bool
+	startErr           error
+	closeErr           error
+	closeEntered       chan struct{}
+	providerBridge     harness.ProviderBridgeLifecycle
+	onControl          func()
+	waitTurnDone       bool
+	suppressTaskResult bool
 }
 
 func (session *fakeNativeGoalSession) recordCall(call string) {
@@ -4049,12 +4076,14 @@ func (session *fakeNativeGoalSession) StartTurn(ctx context.Context, request har
 			return err
 		}
 	}
-	payload, err := json.Marshal(session.result.Semantic)
-	if err != nil {
-		return err
-	}
-	if err := session.sink.Handle(ctx, harness.Event{Kind: harness.EventTaskResult, At: time.Now().UTC(), Payload: payload}); err != nil {
-		return err
+	if !session.suppressTaskResult {
+		payload, err := json.Marshal(session.result.Semantic)
+		if err != nil {
+			return err
+		}
+		if err := session.sink.Handle(ctx, harness.Event{Kind: harness.EventTaskResult, At: time.Now().UTC(), Payload: payload}); err != nil {
+			return err
+		}
 	}
 	if session.turnReturnGate == nil {
 		return nil
@@ -4099,6 +4128,9 @@ func (session *fakeNativeGoalSession) Wait(ctx context.Context) (harness.TaskRes
 
 func (session *fakeNativeGoalSession) WaitTurn(ctx context.Context) error {
 	session.recordCall("wait_turn")
+	if session.waitTurnEntered != nil {
+		session.waitTurnEntered <- struct{}{}
+	}
 	var waitErr error
 	if session.waitGate != nil {
 		select {
@@ -4172,4 +4204,611 @@ func (runner nativeProbeCommandFixtures) Run(_ context.Context, _ string, args .
 		return nil, errors.New("fixture command not found")
 	}
 	return response, nil
+}
+
+func TestNativeAdapterStartPublicationLinearizesCancellation(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		cancelFirst    bool
+		startError     error
+		returnTypedNil bool
+	}{
+		{name: "cancel-first", cancelFirst: true},
+		{name: "start-first", cancelFirst: false},
+		{name: "cancel-first-nil-context-canceled", cancelFirst: true, startError: context.Canceled},
+		{name: "cancel-first-typed-nil-context-canceled", cancelFirst: true, startError: context.Canceled, returnTypedNil: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			admission, present, err := parseAdmissionInput(validAdmissionInput())
+			if err != nil || !present {
+				t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+			}
+			app, store, session, controlClient := nativeAdmissionDaemon(t, admission, validNativeTaskResult(t, admission), nil)
+			defer store.Close()
+			app.log = slog.New(slog.NewJSONHandler(io.Discard, nil))
+			adapterValue, err := app.harnessRegistry.Lookup(harness.KindCodex)
+			if err != nil {
+				t.Fatal(err)
+			}
+			adapter := adapterValue.(*fakeNativeGoalAdapter)
+			if test.startError != nil {
+				if test.returnTypedNil {
+					adapter.returnTypedNil = true
+					adapter.startReturnErr = test.startError
+				} else {
+					session.startErr = test.startError
+				}
+			}
+			startEntered := make(chan struct{}, 1)
+			startRelease := make(chan struct{})
+			adapter.startEntered = startEntered
+			adapter.startRelease = startRelease
+			turnRelease := make(chan struct{})
+			session.turnReturnGate = turnRelease
+			session.onControl = func() {
+				select {
+				case <-turnRelease:
+				default:
+					close(turnRelease)
+				}
+			}
+			t.Cleanup(func() {
+				select {
+				case <-startRelease:
+				default:
+					close(startRelease)
+				}
+				select {
+				case <-turnRelease:
+				default:
+					close(turnRelease)
+				}
+				app.workers.Wait()
+			})
+
+			app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
+			select {
+			case <-startEntered:
+			case <-time.After(time.Second):
+				t.Fatal("native Adapter.Start did not enter")
+			}
+			command := protocol.Command{RunID: "run-1", Generation: 1, CommandID: "cancel-start-race", Kind: "cancel"}
+			if test.cancelFirst {
+				if app.handleCommand(context.Background(), command) {
+					t.Fatal("cancel-first unexpectedly acknowledged before Adapter.Start publication")
+				}
+				journal, loadErr := store.LoadJournal(state.RunKey{RunID: "run-1", Generation: 1})
+				if loadErr != nil {
+					t.Fatal(loadErr)
+				}
+				if durableTerminalPresent(journal) || len(journal.PendingCommandAcknowledgements) != 0 {
+					t.Fatalf("cancel-first settled before Start publication: %#v", journal)
+				}
+				close(startRelease)
+				app.workers.Wait()
+
+				journal, loadErr = store.LoadJournal(state.RunKey{RunID: "run-1", Generation: 1})
+				if loadErr != nil {
+					t.Fatal(loadErr)
+				}
+				if journal.TerminalState != "cancelled" || len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].State != "cancelled" {
+					t.Fatalf("cancel-first terminal journal = %#v, want one cancelled transition", journal)
+				}
+				if len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].CommandID != command.CommandID || journal.PendingCommandAcknowledgements[0].Outcome != "applied" {
+					t.Fatalf("cancel-first acknowledgements = %#v, want one applied cancellation ack", journal.PendingCommandAcknowledgements)
+				}
+				for _, transition := range journal.PendingTransitions {
+					if transition.State == "failed" {
+						t.Fatalf("cancel-first published failed transition: %#v", journal.PendingTransitions)
+					}
+				}
+				sessions, listErr := store.ListGoalSessions()
+				if listErr != nil {
+					t.Fatal(listErr)
+				}
+				if len(sessions) != 1 || sessions[0].LaunchState != state.GoalSessionLaunchStateClosed || sessions[0].SessionState != state.GoalSessionStateClosed || sessions[0].NeedsReconciliation() {
+					t.Fatalf("cancel-first Goal session = %#v, want closed and reconciled", sessions)
+				}
+				for _, delivery := range journal.PendingGoalDeliveries {
+					if delivery.Kind == state.GoalDeliverySessionAttach {
+						t.Fatalf("cancel-first retained native attach delivery: %#v", journal.PendingGoalDeliveries)
+					}
+				}
+				app.mu.Lock()
+				active := app.running[state.RunKey{RunID: "run-1", Generation: 1}]
+				if active != nil && (active.nativeStartInFlight || active.nativeSession != nil || active.goalSession != nil || active.nativeTerminalOwner || active.nativeCloseRetryRequired) {
+					app.mu.Unlock()
+					t.Fatalf("cancel-first retained native owner/session: %#v", active)
+				}
+				app.mu.Unlock()
+				calls := session.callsSnapshot()
+				if test.startError == nil && !slices.Contains(calls, "close") {
+					t.Fatalf("cancel-first did not close returned native session: %#v", calls)
+				}
+				return
+			}
+
+			close(startRelease)
+			select {
+			case <-session.turnStarted:
+			case <-time.After(time.Second):
+				t.Fatal("native turn did not start after Adapter.Start publication")
+			}
+			if app.handleCommand(context.Background(), command) {
+				t.Fatal("StartTurn-in-flight cancellation was acknowledged before publication settled")
+			}
+			if calls := session.callsSnapshot(); slices.Contains(calls, "control:cancel") || slices.Contains(calls, "close") {
+				t.Fatalf("StartTurn-in-flight cancellation crossed start ownership: %#v", calls)
+			}
+			close(turnRelease)
+			app.workers.Wait()
+			journal, loadErr := store.LoadJournal(state.RunKey{RunID: "run-1", Generation: 1})
+			if loadErr != nil {
+				t.Fatal(loadErr)
+			}
+			if journal.TerminalState != "completed" || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].Outcome != "rejected" {
+				t.Fatalf("StartTurn-in-flight cancellation settlement = %#v", journal)
+			}
+		})
+	}
+}
+
+func TestLeaseExpiryDuringNativeStartBlocksOpenAndTurn(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	app, store, session, controlClient := nativeAdmissionDaemon(t, admission, validNativeTaskResult(t, admission), nil)
+	defer store.Close()
+	app.log = slog.New(slog.NewJSONHandler(io.Discard, nil))
+	adapterValue, err := app.harnessRegistry.Lookup(harness.KindCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := adapterValue.(*fakeNativeGoalAdapter)
+	startEntered := make(chan struct{}, 1)
+	startRelease := make(chan struct{})
+	adapter.startEntered = startEntered
+	adapter.startRelease = startRelease
+	t.Cleanup(func() {
+		select {
+		case <-startRelease:
+		default:
+			close(startRelease)
+		}
+		app.workers.Wait()
+	})
+
+	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
+	select {
+	case <-startEntered:
+	case <-time.After(time.Second):
+		t.Fatal("native Adapter.Start did not enter")
+	}
+	now := time.Now().UTC()
+	key := state.RunKey{RunID: "run-1", Generation: 1}
+	app.mu.Lock()
+	active := app.running[key]
+	if active == nil || !active.nativeStartInFlight {
+		app.mu.Unlock()
+		t.Fatalf("native start barrier was not active: %#v", active)
+	}
+	active.localLeaseDeadlineAt = now.Add(-time.Second)
+	app.mu.Unlock()
+
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.terminateForLease(journal, "relative lease deadline elapsed during native start")
+	if app.handleCommand(context.Background(), protocol.Command{RunID: key.RunID, Generation: key.Generation, CommandID: "cancel-after-lease", Kind: "cancel"}) {
+		t.Fatal("cancellation was acknowledged after lease expiry owned native start")
+	}
+	app.mu.Lock()
+	active = app.running[key]
+	leaseExpired := active != nil && active.nativeStartLeaseExpired
+	cancelled := active != nil && active.cancelled
+	stale := active != nil && active.stale
+	app.mu.Unlock()
+	if !leaseExpired || !stale || cancelled {
+		t.Fatalf("lease expiry state = expired:%t stale:%t cancelled:%t", leaseExpired, stale, cancelled)
+	}
+	journal, err = store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.LocalState != "stale" || durableTerminalPresent(journal) {
+		t.Fatalf("lease expiry durable state = %#v", journal)
+	}
+
+	close(startRelease)
+	app.workers.Wait()
+	calls := session.callsSnapshot()
+	for _, call := range calls {
+		if call == "open" || call == "start_turn" {
+			t.Fatalf("lease-expired native start crossed Open/StartTurn boundary: %#v", calls)
+		}
+	}
+	journal, err = store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.LocalState != "stale" || durableTerminalPresent(journal) {
+		t.Fatalf("post-start lease expiry state = %#v", journal)
+	}
+}
+
+func TestFreshCodexPreNativeLaunchWriteFailuresReadBackAndCompensate(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		marker     string
+		postRename bool
+	}{
+		{name: "save-pre-write", marker: `"launch_state":"intent"`},
+		{name: "save-post-rename", marker: `"launch_state":"intent"`, postRename: true},
+		{name: "mark-pre-write", marker: `"launch_state":"launching"`},
+		{name: "mark-post-rename", marker: `"launch_state":"launching"`, postRename: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			admission, present, err := parseAdmissionInput(validAdmissionInput())
+			if err != nil || !present {
+				t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+			}
+			app, store, session, controlClient := nativeAdmissionDaemon(t, admission, validNativeTaskResult(t, admission), nil)
+			defer store.Close()
+			key := state.RunKey{RunID: "run-1", Generation: 1}
+			saveClaimedGoalRun(t, store, key)
+			failed := false
+			restoreWriter := store.SetAtomicWriterForTesting(func(path string, data []byte) error {
+				if !failed && strings.Contains(string(data), test.marker) {
+					failed = true
+					if test.postRename {
+						if err := writeAppStateAtomic(path, data); err != nil {
+							return err
+						}
+					}
+					return errors.New("injected pre-native Goal session write failure")
+				}
+				return writeAppStateAtomic(path, data)
+			})
+			defer restoreWriter()
+
+			err = app.startGoalAdmission(context.Background(), key, protocol.ClaimResponse{
+				RunID: key.RunID, Generation: key.Generation, TaskID: "task-1", Work: controlClient.work,
+			}, admission, nil)
+			if !failed {
+				t.Fatal("targeted Goal session write fault was not exercised")
+			}
+			if err == nil {
+				t.Fatal("pre-native write failure was hidden")
+			}
+			if reason, typed := taskResultFailureReason(err); typed && reason == protocol.TaskResultReasonUnknownOutcome {
+				t.Fatalf("known pre-native compensation was typed unknown: %v", err)
+			}
+			sessions, listErr := store.ListGoalSessions()
+			if listErr != nil {
+				t.Fatal(listErr)
+			}
+			if test.name == "save-pre-write" {
+				if len(sessions) != 0 {
+					t.Fatalf("pre-write Save failure left a Goal session: %#v", sessions)
+				}
+			} else if len(sessions) != 1 || !goalSessionClosed(sessions[0]) || sessions[0].NeedsReconciliation() {
+				t.Fatalf("pre-native write compensation = %#v", sessions)
+			}
+			if calls := session.callsSnapshot(); len(calls) != 0 {
+				t.Fatalf("native adapter started after pre-native write failure: %#v", calls)
+			}
+		})
+	}
+}
+
+func TestFreshCodexNativeStartPublishesReturnedSessionWithError(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	app, store, session, controlClient := nativeAdmissionDaemon(t, admission, validNativeTaskResult(t, admission), nil)
+	defer store.Close()
+	adapterValue, err := app.harnessRegistry.Lookup(harness.KindCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := adapterValue.(*fakeNativeGoalAdapter)
+	adapter.startReturnErr = errors.New("native Start returned a session and an error")
+
+	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
+	app.workers.Wait()
+	calls := session.callsSnapshot()
+	if len(calls) == 0 || calls[0] != "start" {
+		t.Fatalf("native Start+error lifecycle = %#v", calls)
+	}
+	j, err := store.LoadJournal(state.RunKey{RunID: "run-1", Generation: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j.HasPendingGoalDeliveries() || !j.RetainWorkspace {
+		t.Fatalf("returned session+error lost cleanup barrier: %#v", j)
+	}
+	sessions, err := store.ListGoalSessions()
+	if err != nil || len(sessions) != 1 || !sessions[0].NeedsReconciliation() {
+		t.Fatalf("returned session+error recovery state = %#v, error = %v", sessions, err)
+	}
+}
+
+func TestFreshCodexNativeStartTypedNilSessionDoesNotBecomeOwner(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	app, store, session, controlClient := nativeAdmissionDaemon(t, admission, validNativeTaskResult(t, admission), nil)
+	defer store.Close()
+	adapterValue, err := app.harnessRegistry.Lookup(harness.KindCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := adapterValue.(*fakeNativeGoalAdapter)
+	adapter.returnTypedNil = true
+
+	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
+	app.workers.Wait()
+	calls := session.callsSnapshot()
+	if len(calls) == 0 || calls[0] != "start" {
+		t.Fatalf("typed-nil Start lifecycle = %#v", calls)
+	}
+	for _, call := range calls {
+		if call == "close" {
+			t.Fatalf("typed-nil session was treated as a close owner: %#v", calls)
+		}
+	}
+	sessions, err := store.ListGoalSessions()
+	if err != nil || len(sessions) != 1 {
+		t.Fatalf("typed-nil Goal session state = %#v, error = %v", sessions, err)
+	}
+}
+
+func TestReserveNativeTerminalRejectsExpiredLocalLeaseBeforeWatchdog(t *testing.T) {
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	now := time.Date(2026, 9, 15, 4, 5, 6, 0, time.UTC)
+	active := &runningRun{
+		nativeSession:        &fakeNativeGoalSession{turnStarted: make(chan struct{})},
+		localLeaseDeadlineAt: now.Add(-time.Millisecond),
+	}
+	app := &daemon{
+		store:   store,
+		running: map[state.RunKey]*runningRun{key: active},
+		options: options{localClock: func() time.Time { return now }},
+	}
+	if _, reserved := app.reserveNativeTerminalClaim(key, active); reserved {
+		t.Fatal("expired local lease reserved native terminal ownership")
+	}
+	if active.nativeTerminalOwner || active.terminalizing != 0 {
+		t.Fatalf("expired lease left terminal ownership: %#v", active)
+	}
+}
+
+func TestNativeSessionOwnershipRejectsNilAndTypedNilIdentities(t *testing.T) {
+	key := state.RunKey{RunID: "run-1", Generation: 1}
+	active := &runningRun{}
+	app := &daemon{running: map[state.RunKey]*runningRun{key: active}}
+	var nilSession harness.Session
+	var typedNil *fakeNativeGoalSession
+	typedNilSession := harness.Session(typedNil)
+	for _, session := range []harness.Session{nilSession, typedNilSession} {
+		if _, ok := app.activeNativeSessionKey(session); ok {
+			t.Fatalf("nil session identity matched an active run: %T", session)
+		}
+		unlock := app.lockNativeSessionClose(session)
+		unlock()
+		app.requireNativeSessionCloseRetry(key, session)
+		app.clearNativeSessionByValue(session)
+		if active.nativeCloseRetryRequired {
+			t.Fatalf("nil session identity claimed close retry ownership: %T", session)
+		}
+	}
+}
+
+func TestRecoverUnstartedGoalSessionDoesNotInventUsageOrWorkspaceRetention(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	if _, err := store.MarkWorkspaceRecoveryRequired(key); err != nil {
+		t.Fatal(err)
+	}
+	persistWorkspacePath(t, store, key, "C:\\workspace")
+	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000007"}
+	intent := state.GoalSessionLaunchIntent{
+		LaunchIntentID: "00000000-0000-4000-8000-000000000008", GoalID: admission.GoalID, GoalRevision: admission.GoalRevision,
+		WorkItemID: admissionWorkItemIDValue(admission.WorkItemID), TaskID: "task-1", RunID: key.RunID, Generation: key.Generation, AdmissionID: admission.AdmissionID,
+		LocalHandleID: sessionKey.LocalHandleID, RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: "0.153.4",
+		AdapterVersion: "symmetry-daemon:test", AdapterProtocolVersion: 1,
+		WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SessionMode: state.GoalSessionModeFresh,
+	}
+	if _, err := store.SaveGoalSessionLaunchIntent(intent); err != nil {
+		t.Fatal(err)
+	}
+	app := &daemon{
+		config: testConfig(t), store: store, options: options{newID: ids(), clock: time.Now},
+		running: make(map[state.RunKey]*runningRun), slots: make(chan struct{}, 1),
+	}
+	if err := app.recoverUnclosedGoalSessions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.LoadGoalSession(sessionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.LaunchState != state.GoalSessionLaunchStateClosed || session.SessionState != state.GoalSessionStateClosed || session.NeedsReconciliation() {
+		t.Fatalf("unstarted Goal session recovery = %#v", session)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, delivery := range journal.PendingGoalDeliveries {
+		if delivery.Kind == state.GoalDeliveryUsage {
+			t.Fatalf("unstarted Goal session invented usage delivery: %#v", delivery)
+		}
+	}
+	if journal.NativeUsageRecoveryRequired || journal.RetainWorkspace || journal.TerminalState != "failed" || len(journal.PendingTransitions) != 1 ||
+		!strings.Contains(string(journal.PendingTransitions[0].Payload), string(protocol.TaskResultReasonProcessFailure)) {
+		t.Fatalf("unstarted Goal session recovery journal = %#v", journal)
+	}
+}
+
+func TestCancelDuringGoalSubjectPreparationDoesNotLaunchNativeSession(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	app, store, session, controlClient := nativeAdmissionDaemon(t, admission, validNativeTaskResult(t, admission), nil)
+	defer store.Close()
+	app.log = slog.New(slog.NewJSONHandler(io.Discard, nil))
+	prepareEntered := make(chan struct{}, 1)
+	prepareRelease := make(chan struct{})
+	app.workspace = &fakeWorkspace{prepareSubjectEntered: prepareEntered, prepareSubjectRelease: prepareRelease}
+
+	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
+	select {
+	case <-prepareEntered:
+	case <-time.After(time.Second):
+		t.Fatal("Goal Subject preparation did not start")
+	}
+	if !app.handleCommand(context.Background(), protocol.Command{RunID: "run-1", Generation: 1, CommandID: "cancel-prelaunch", Kind: "cancel"}) {
+		t.Fatal("pre-launch cancellation was not durably accepted")
+	}
+	close(prepareRelease)
+	app.workers.Wait()
+
+	if calls := session.callsSnapshot(); len(calls) != 0 {
+		t.Fatalf("pre-launch cancellation started native lifecycle: %#v", calls)
+	}
+	sessions, err := store.ListGoalSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("pre-launch cancellation persisted Goal session intent: %#v", sessions)
+	}
+	journal, err := store.LoadJournal(state.RunKey{RunID: "run-1", Generation: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.WorkspacePath == "" || journal.TerminalState != "cancelled" || len(journal.PendingCommandAcknowledgements) != 1 {
+		t.Fatalf("pre-launch cancellation journal = %#v", journal)
+	}
+	if app.isStarting(state.RunKey{RunID: "run-1", Generation: 1}) {
+		t.Fatal("pre-launch cancellation left the run in starting state")
+	}
+}
+
+func TestCancelAfterGoalSessionIntentDoesNotCrossNativeStartBoundary(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	app, store, session, controlClient := nativeAdmissionDaemon(t, admission, validNativeTaskResult(t, admission), nil)
+	defer store.Close()
+	app.log = slog.New(slog.NewJSONHandler(io.Discard, nil))
+	leaseClockEntered := make(chan struct{}, 1)
+	leaseClockRelease := make(chan struct{})
+	localClockCalls := 0
+	app.options.localClock = func() time.Time {
+		localClockCalls++
+		if localClockCalls == 2 {
+			leaseClockEntered <- struct{}{}
+			<-leaseClockRelease
+		}
+		return time.Now()
+	}
+
+	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
+	select {
+	case <-leaseClockEntered:
+	case <-time.After(time.Second):
+		t.Fatal("Goal launch did not reach the final native lease boundary")
+	}
+	if !app.handleCommand(context.Background(), protocol.Command{RunID: "run-1", Generation: 1, CommandID: "cancel-before-native-start", Kind: "cancel"}) {
+		t.Fatal("pre-native-start cancellation was not durably accepted")
+	}
+	close(leaseClockRelease)
+	app.workers.Wait()
+
+	if calls := session.callsSnapshot(); len(calls) != 0 {
+		t.Fatalf("cancelled Goal launch crossed native Start boundary: %#v", calls)
+	}
+	sessions, err := store.ListGoalSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].LaunchState != state.GoalSessionLaunchStateClosed || sessions[0].SessionState != state.GoalSessionStateClosed || sessions[0].NeedsReconciliation() {
+		t.Fatalf("cancelled pre-native Goal session = %#v", sessions)
+	}
+	journal, err := store.LoadJournal(state.RunKey{RunID: "run-1", Generation: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, delivery := range journal.PendingGoalDeliveries {
+		if delivery.Kind == state.GoalDeliverySessionAttach {
+			t.Fatalf("cancelled pre-native launch retained unready attach: %#v", delivery)
+		}
+	}
+	if journal.TerminalState != "cancelled" || len(journal.PendingCommandAcknowledgements) != 1 {
+		t.Fatalf("cancelled pre-native launch journal = %#v", journal)
+	}
+}
+
+func TestGoalCancellationRetriesNativeUsageBeforeReceipt(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000007"}
+	saveAttachedGoalSession(t, store, key, admission, sessionKey)
+	session := &fakeNativeGoalSession{handle: harness.NativeSessionHandle{ID: "native-thread-1"}, result: harness.TaskResult{Kind: harness.ResultSucceeded}, turnStarted: make(chan struct{})}
+	usageAttempts := 0
+	usageFailure := errors.New("transient native usage queue failure")
+	app := &daemon{
+		config:  testConfig(t),
+		store:   store,
+		control: &fakeControl{},
+		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		running: map[state.RunKey]*runningRun{key: {claimed: true, nativeSession: session, goalSession: &sessionKey}},
+		slots:   make(chan struct{}, 1),
+		options: options{newID: ids(), clock: time.Now, queueGoalUsage: func(got state.RunKey, usage protocol.Usage) (state.RunJournal, error) {
+			usageAttempts++
+			if usageAttempts == 1 {
+				return state.RunJournal{}, usageFailure
+			}
+			return store.QueueGoalUsage(got, usage)
+		}},
+	}
+	if app.handleCommand(context.Background(), protocol.Command{RunID: key.RunID, Generation: key.Generation, CommandID: "cancel-retry", Kind: "cancel"}) {
+		t.Fatal("cancellation acknowledged before native usage retry")
+	}
+	app.mu.Lock()
+	active := app.running[key]
+	active.nativeUsageRetryAt = time.Time{}
+	app.mu.Unlock()
+	if active == nil || !active.nativeUsageRetryPending || !active.nativeTerminalOwner {
+		t.Fatalf("usage retry did not retain native cancellation owner: %#v", active)
+	}
+	app.flushPendingNativeUsage(context.Background())
+	app.backgroundWG.Wait()
+	if usageAttempts < 2 {
+		t.Fatalf("native usage attempts = %d, want retry", usageAttempts)
+	}
+	j, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j.TerminalState != "cancelled" || len(j.PendingCommandAcknowledgements) != 1 || j.PendingCommandAcknowledgements[0].CommandID != "cancel-retry" {
+		t.Fatalf("usage retry cancellation journal = %#v", j)
+	}
 }

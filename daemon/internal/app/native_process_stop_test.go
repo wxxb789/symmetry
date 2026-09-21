@@ -147,6 +147,114 @@ func TestNativeHandlePersistenceAndDiscardFailureStillClosesOwner(t *testing.T) 
 	}
 }
 
+func TestCancelledNativeStartDiscardFailureStillSettlesAfterClose(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission: %v", err)
+	}
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000007"}
+	saveAttachedGoalSession(t, store, key, admission, sessionKey)
+	if _, err := store.SetProcessDetails(key, 71, "native:71", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	session := &stopProofSession{pid: 71, identity: "native:71", result: execution.Result{}}
+	active := &runningRun{
+		starting: true, claimed: true, nativeSession: session, goalSession: &sessionKey, goalAdmission: &admission,
+		cancelled: true, cancelCommandID: "cancel-1",
+	}
+	discardFailure := errors.New("discard write failed")
+	discardCalls := 0
+	daemon := &daemon{
+		config: testConfig(t), store: store,
+		running: map[state.RunKey]*runningRun{key: active},
+		options: options{
+			newID: ids(), clock: time.Now,
+			discardUnreadyGoalSessionAttachDelivery: func(state.RunKey, string) (state.RunJournal, error) {
+				discardCalls++
+				return state.RunJournal{}, discardFailure
+			},
+		},
+	}
+
+	settled, err := daemon.settleCancelledNativeStart(context.Background(), key, sessionKey, sessionKey.LocalHandleID, session, true, false)
+	if !settled || !errors.Is(err, discardFailure) || discardCalls != 1 {
+		t.Fatalf("discard-failure settlement = settled:%t error:%v discard_calls:%d", settled, err, discardCalls)
+	}
+	waitCalls := 0
+	for _, call := range session.calls {
+		if call == "wait" {
+			waitCalls++
+		}
+	}
+	if !slices.Contains(session.calls, "close") || waitCalls < 2 {
+		t.Fatalf("discard failure truncated native cleanup: calls=%v", session.calls)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.HasProcessDetails() || journal.TerminalState != "cancelled" || len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].State != "cancelled" || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].CommandID != "cancel-1" {
+		t.Fatalf("discard failure lost cancellation settlement: %#v", journal)
+	}
+	daemon.mu.Lock()
+	owner, terminalizing, retry, nativeSession := active.nativeTerminalOwner, active.terminalizing, active.nativeCloseRetryRequired, active.nativeSession
+	daemon.mu.Unlock()
+	if owner || terminalizing != 0 || retry || nativeSession != nil {
+		t.Fatalf("successful cleanup retained cancellation owner: owner=%t terminalizing=%d retry=%t session=%v", owner, terminalizing, retry, nativeSession)
+	}
+}
+
+func TestCancelledNativeStartDiscardAndCloseFailuresJoinAndRetainRetry(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission: %v", err)
+	}
+	store, key := claimedGoalDeliveryStore(t)
+	defer store.Close()
+	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: "00000000-0000-4000-8000-000000000007"}
+	saveAttachedGoalSession(t, store, key, admission, sessionKey)
+	if _, err := store.SetProcessDetails(key, 71, "native:71", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	closeFailure := errors.New("close failed")
+	session := &closeFailureGoalSession{err: closeFailure}
+	active := &runningRun{
+		starting: true, claimed: true, nativeSession: session, goalSession: &sessionKey, goalAdmission: &admission,
+		cancelled: true, cancelCommandID: "cancel-1",
+	}
+	discardFailure := errors.New("discard write failed")
+	daemon := &daemon{
+		config: testConfig(t), store: store,
+		running: map[state.RunKey]*runningRun{key: active},
+		options: options{
+			newID: ids(), clock: time.Now,
+			discardUnreadyGoalSessionAttachDelivery: func(state.RunKey, string) (state.RunJournal, error) {
+				return state.RunJournal{}, discardFailure
+			},
+		},
+	}
+
+	settled, err := daemon.settleCancelledNativeStart(context.Background(), key, sessionKey, sessionKey.LocalHandleID, session, true, false)
+	if !settled || err != nil {
+		t.Fatalf("discard+close failure settlement = settled:%t error:%v", settled, err)
+	}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.TerminalState != "failed" || len(journal.PendingCommandAcknowledgements) != 1 || journal.PendingCommandAcknowledgements[0].Outcome != "failed" || !journal.HasProcessDetails() {
+		t.Fatalf("close failure settlement lost terminal, acknowledgement, or process evidence: %#v", journal)
+	}
+	daemon.mu.Lock()
+	owner, terminalizing, retry, nativeSession := active.nativeTerminalOwner, active.terminalizing, active.nativeCloseRetryRequired, active.nativeSession
+	daemon.mu.Unlock()
+	if owner || terminalizing != 0 || !retry || nativeSession != session {
+		t.Fatalf("close failure lost retry ownership: owner=%t terminalizing=%d retry=%t session=%v", owner, terminalizing, retry, nativeSession)
+	}
+}
+
 type stopProofSession struct {
 	closeFailureGoalSession
 	pid      int
