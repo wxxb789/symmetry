@@ -345,6 +345,7 @@ type linuxSupervisor struct {
 	receipt               *authority.StopReceipt
 	closeErr              error
 	responseDropTriggered bool
+	responseTransportLost bool
 	responseLossPending   bool
 	waitCode              int
 	waitErr               error
@@ -945,14 +946,7 @@ func (supervisor *linuxSupervisor) stop(operation string) error {
 	response, err := supervisor.request(operation, 0, 0)
 	if err != nil {
 		if errors.Is(err, ErrLinuxSupervisorResponseLost) {
-			supervisor.mu.Lock()
-			supervisor.responseLossPending = true
-			supervisor.mu.Unlock()
-			if recoveryErr := supervisor.recoverResponseLossStop(); recoveryErr == nil {
-				return nil
-			} else {
-				return errors.Join(fmt.Errorf("%w: %w", ErrLinuxSupervisorStopUnproven, err), recoveryErr)
-			}
+			return supervisor.recoverResponseLossStop()
 		}
 		if supervisor.containmentUnprovenCallback != nil {
 			_ = supervisor.containmentUnprovenCallback()
@@ -991,28 +985,56 @@ func (supervisor *linuxSupervisor) recoverResponseLossStop() error {
 	if value == nil {
 		return fmt.Errorf("%w: Linux supervisor authority is unavailable", ErrLinuxSupervisorStopUnproven)
 	}
-	receipt, err := StopPersistedLinuxSupervisor(*value)
-	if err != nil {
-		return errors.Join(ErrLinuxSupervisorStopUnproven, ErrLinuxSupervisorResponseLost, err)
-	}
-	if !receipt.ValidFor(*value) {
-		return fmt.Errorf("%w: response-loss recovery returned invalid stop receipt", ErrLinuxSupervisorStopUnproven)
-	}
-	if err := supervisor.verifyMirrorObservation(); err != nil {
-		if supervisor.containmentUnprovenCallback != nil {
-			_ = supervisor.containmentUnprovenCallback()
-		}
-		return fmt.Errorf("%w: response-loss mirror proof: %w", ErrLinuxSupervisorStopUnproven, err)
-	}
+	// Keep response-loss sticky even after recovery succeeds. The daemon can
+	// now have a receipt, but the normal response pipe is permanently
+	// untrustworthy and must never be used by a later lifecycle operation.
 	supervisor.mu.Lock()
-	supervisor.receipt = &receipt
-	supervisor.authority.StopReceipt = &receipt
-	supervisor.handoff.StopReceipt = &receipt
-	supervisor.stopped = true
-	supervisor.pidfd = -1
-	supervisor.responseLossPending = false
+	supervisor.responseLossPending = true
 	supervisor.mu.Unlock()
-	return nil
+	deadline := time.Now().Add(containmentCloseDeadline)
+	var lastErr error
+	for {
+		receipt, err := StopPersistedLinuxSupervisor(*value)
+		retry := false
+		if err == nil {
+			if !receipt.ValidFor(*value) {
+				lastErr = errors.New("response-loss recovery returned invalid stop receipt")
+			} else if mirrorErr := supervisor.verifyMirrorObservation(); mirrorErr != nil {
+				if supervisor.containmentUnprovenCallback != nil {
+					_ = supervisor.containmentUnprovenCallback()
+				}
+				lastErr = fmt.Errorf("response-loss mirror proof: %w", mirrorErr)
+			} else {
+				supervisor.mu.Lock()
+				supervisor.receipt = &receipt
+				supervisor.authority.StopReceipt = &receipt
+				supervisor.handoff.StopReceipt = &receipt
+				supervisor.stopped = true
+				supervisor.pidfd = -1
+				supervisor.mu.Unlock()
+				return nil
+			}
+		} else {
+			lastErr = err
+			retry = linuxSupervisorRecoveryRetryable(err)
+		}
+		if !retry {
+			break
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		if remaining > containmentCloseProbeInterval {
+			remaining = containmentCloseProbeInterval
+		}
+		timer := time.NewTimer(remaining)
+		<-timer.C
+	}
+	if lastErr == nil {
+		lastErr = errors.New("response-loss recovery deadline expired")
+	}
+	return errors.Join(ErrLinuxSupervisorStopUnproven, ErrLinuxSupervisorResponseLost, lastErr)
 }
 
 func (supervisor *linuxSupervisor) stopWithMirror() error {
@@ -1140,7 +1162,11 @@ func (supervisor *linuxSupervisor) ReleaseContainment() error {
 	}
 	helperDead := channelClosedV2(supervisor.helperDone)
 	mirror := supervisor.mirror
+	responseTransportLost := supervisor.responseTransportLost || supervisor.responseLossPending
 	supervisor.mu.Unlock()
+	if responseTransportLost {
+		return supervisor.releaseThroughRecovery(mirror)
+	}
 	if helperDead {
 		if err := supervisor.releaseAfterHelperDeath(mirror); err != nil {
 			return err
@@ -1149,6 +1175,9 @@ func (supervisor *linuxSupervisor) ReleaseContainment() error {
 	}
 	response, err := supervisor.request(linuxSupervisorOpRelease, 0, 0)
 	if err != nil {
+		if errors.Is(err, ErrLinuxSupervisorResponseLost) {
+			return supervisor.releaseThroughRecovery(mirror)
+		}
 		if channelClosedV2(supervisor.helperDone) {
 			return supervisor.releaseAfterHelperDeath(mirror)
 		}
@@ -1157,9 +1186,15 @@ func (supervisor *linuxSupervisor) ReleaseContainment() error {
 	if response.Status != "released" {
 		return fmt.Errorf("release Linux supervisor helper returned %q", response.Status)
 	}
+	return supervisor.finalizeReleasedContainment(mirror)
+}
+
+func (supervisor *linuxSupervisor) finalizeReleasedContainment(mirror *processGroup) error {
+	if supervisor == nil {
+		return nil
+	}
 	supervisor.mu.Lock()
 	fd := supervisor.pidfd
-	mirror = supervisor.mirror
 	ownerWrite, controlWrite, responseRead, statusRead := supervisor.ownerWrite, supervisor.controlWrite, supervisor.responseRead, supervisor.statusRead
 	supervisor.mu.Unlock()
 	if mirror != nil {
@@ -1177,6 +1212,44 @@ func (supervisor *linuxSupervisor) ReleaseContainment() error {
 	supervisor.mu.Unlock()
 	closeLinuxSupervisorFilesV2(ownerWrite, controlWrite, responseRead, statusRead)
 	return nil
+}
+
+func (supervisor *linuxSupervisor) releaseThroughRecovery(mirror *processGroup) error {
+	if supervisor == nil {
+		return nil
+	}
+	value := supervisor.ContainmentAuthority()
+	if value == nil || value.StopReceipt == nil || !value.StopReceipt.ValidFor(*value) {
+		return ErrLinuxSupervisorStopUnproven
+	}
+	deadline := time.Now().Add(containmentCloseDeadline)
+	var lastErr error
+	for {
+		err := ReleasePersistedLinuxSupervisor(*value)
+		if err == nil {
+			return supervisor.finalizeReleasedContainment(mirror)
+		}
+		lastErr = err
+		if !linuxSupervisorRecoveryRetryable(err) {
+			break
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		if remaining > containmentCloseProbeInterval {
+			remaining = containmentCloseProbeInterval
+		}
+		timer := time.NewTimer(remaining)
+		<-timer.C
+	}
+	return fmt.Errorf("release Linux supervisor through recovery endpoint: %w", lastErr)
+}
+
+func linuxSupervisorRecoveryRetryable(err error) bool {
+	return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOENT) ||
+		errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.EPIPE) || errors.Is(err, io.EOF)
 }
 
 func (supervisor *linuxSupervisor) verifyMirrorObservation() error {
@@ -1285,6 +1358,12 @@ func (supervisor *linuxSupervisor) request(operation string, sequence uint64, de
 		supervisor.mu.Unlock()
 		return linuxSupervisorResponse{}, ErrLinuxSupervisorReleased
 	}
+	if supervisor.responseTransportLost || supervisor.responseLossPending || supervisor.responseRead == nil || supervisor.responseReader == nil {
+		supervisor.responseTransportLost = true
+		supervisor.responseLossPending = true
+		supervisor.mu.Unlock()
+		return linuxSupervisorResponse{}, ErrLinuxSupervisorResponseLost
+	}
 	if channelClosedV2(supervisor.helperDone) {
 		supervisor.mu.Unlock()
 		return linuxSupervisorResponse{}, ErrLinuxSupervisorHelperExited
@@ -1298,13 +1377,14 @@ func (supervisor *linuxSupervisor) request(operation string, sequence uint64, de
 	if err := writeLinuxSupervisorFrame(control, request); err != nil {
 		return linuxSupervisorResponse{}, err
 	}
-	responseDropped := supervisor.dropResponseTransportOnce(operation)
+	supervisor.dropResponseTransportOnce(operation)
 	var response linuxSupervisorResponse
 	if err := readLinuxSupervisorFrame(reader, &response); err != nil {
-		if responseDropped {
-			return linuxSupervisorResponse{}, errors.Join(ErrLinuxSupervisorResponseLost, err)
-		}
-		return linuxSupervisorResponse{}, err
+		supervisor.mu.Lock()
+		supervisor.responseTransportLost = true
+		supervisor.responseLossPending = true
+		supervisor.mu.Unlock()
+		return linuxSupervisorResponse{}, errors.Join(ErrLinuxSupervisorResponseLost, err)
 	}
 	if response.Version != linuxSupervisorProtocolVersion || response.Operation != operation || response.LaunchToken != supervisor.authority.LaunchToken || response.TargetPID != supervisor.authority.TargetPID || response.TargetIdentity != supervisor.authority.TargetIdentity || response.OwnerKind != supervisor.authority.OwnerKind || response.OwnerContext != supervisor.authority.OwnerContext || response.SupervisorPID != supervisor.authority.SupervisorPID || response.SupervisorIdentity != supervisor.authority.SupervisorIdentity || response.Token != supervisor.authority.PipeToken || response.JobID != supervisor.authority.JobID {
 		return linuxSupervisorResponse{}, errors.New("Linux supervisor response identity mismatch")
@@ -1334,6 +1414,8 @@ func (supervisor *linuxSupervisor) dropResponseTransportOnce(operation string) b
 	}
 	responseRead := supervisor.responseRead
 	supervisor.responseDropTriggered = true
+	supervisor.responseTransportLost = true
+	supervisor.responseLossPending = true
 	supervisor.responseRead = nil
 	supervisor.responseReader = nil
 	supervisor.mu.Unlock()

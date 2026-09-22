@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -926,6 +927,9 @@ func TestLinuxSupervisorResponseDropStopFiresOnceAndWritesMarker(t *testing.T) {
 	if !supervisor.responseDropTriggered || supervisor.responseRead != nil {
 		t.Fatalf("response-drop transport state = triggered:%v response:%v, want true,nil", supervisor.responseDropTriggered, supervisor.responseRead)
 	}
+	if _, err := supervisor.request(linuxSupervisorOpStop, 0, 0); !errors.Is(err, ErrLinuxSupervisorResponseLost) {
+		t.Fatalf("request after response drop = %v, want ErrLinuxSupervisorResponseLost", err)
+	}
 	supervisor.dropResponseTransportOnce(linuxSupervisorOpStop)
 	if !supervisor.responseDropTriggered || supervisor.responseRead != nil {
 		t.Fatal("repeated response-drop invocation changed once-only state")
@@ -953,6 +957,245 @@ func TestLinuxSupervisorResponseDropReleasePreservesRecoveryEndpoint(t *testing.
 	if !strings.Contains(supervisor.authority.OwnerContext, "|endpoint=") {
 		t.Fatalf("recovery owner context = %q, want endpoint fence", supervisor.authority.OwnerContext)
 	}
+}
+
+func TestLinuxSupervisorResponseLossStopUsesRecoveryReceipt(t *testing.T) {
+	value := testLinuxSupervisorRecoveryAuthority(t)
+	requests := newLinuxSupervisorRecoveryTestServer(t, value, "stopped", "")
+	controlRead, controlWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	supervisor := &linuxSupervisor{
+		authority:             value,
+		helperDone:            make(chan struct{}),
+		controlWrite:          controlWrite,
+		responseTransportLost: true,
+		responseLossPending:   true,
+	}
+	t.Cleanup(func() {
+		_ = controlRead.Close()
+		_ = controlWrite.Close()
+	})
+
+	if err := supervisor.Terminate(true); err != nil {
+		t.Fatalf("Terminate() after response loss = %v", err)
+	}
+	select {
+	case request := <-requests:
+		if request.Operation != linuxSupervisorOpStop || request.Secret != value.Secret {
+			t.Fatalf("recovery stop request = %#v, want authenticated stop", request)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("recovery stop request was not received")
+	}
+	receipt, ok := supervisor.ContainmentStopReceipt()
+	if !ok || !receipt.ValidFor(value) {
+		t.Fatalf("recovered stop receipt = %#v, available=%v, want exact receipt", receipt, ok)
+	}
+	if !supervisor.responseTransportLost || !supervisor.responseLossPending {
+		t.Fatalf("response-loss state = transport:%v pending:%v, want sticky", supervisor.responseTransportLost, supervisor.responseLossPending)
+	}
+	_ = controlWrite.Close()
+	data, err := io.ReadAll(controlRead)
+	if err != nil {
+		t.Fatalf("read normal control pipe = %v", err)
+	}
+	if len(data) != 0 {
+		t.Fatalf("normal control pipe received %d bytes during recovery", len(data))
+	}
+}
+
+func TestLinuxSupervisorReleaseResponseLossUsesRecoveryWhenReaderNil(t *testing.T) {
+	value := testLinuxSupervisorRecoveryAuthority(t)
+	receipt := testLinuxSupervisorStopReceipt(value)
+	value.StopReceipt = &receipt
+	requests := newLinuxSupervisorRecoveryTestServer(t, value, "released", "")
+	controlRead, controlWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	supervisor := &linuxSupervisor{
+		authority:             value,
+		receipt:               &receipt,
+		helperDone:            make(chan struct{}),
+		controlWrite:          controlWrite,
+		pidfd:                 -1,
+		responseTransportLost: true,
+		responseLossPending:   true,
+	}
+	t.Cleanup(func() {
+		_ = controlRead.Close()
+		_ = controlWrite.Close()
+	})
+
+	if err := supervisor.ReleaseContainment(); err != nil {
+		t.Fatalf("ReleaseContainment() after response loss = %v", err)
+	}
+	select {
+	case request := <-requests:
+		if request.Operation != linuxSupervisorOpRelease || request.Secret != value.Secret {
+			t.Fatalf("recovery release request = %#v, want authenticated release", request)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("recovery release request was not received")
+	}
+	if !supervisor.released || !supervisor.closed {
+		t.Fatalf("release state = released:%v closed:%v, want both true", supervisor.released, supervisor.closed)
+	}
+	if got, ok := supervisor.ContainmentStopReceipt(); !ok || !got.ValidFor(value) {
+		t.Fatalf("release cleared stop receipt: %#v, available=%v", got, ok)
+	}
+	data, err := io.ReadAll(controlRead)
+	if err != nil {
+		t.Fatalf("read normal control pipe after release = %v", err)
+	}
+	if len(data) != 0 {
+		t.Fatalf("normal control pipe received %d bytes during recovery release", len(data))
+	}
+}
+
+func TestLinuxSupervisorReleaseResponseLossFailureRetainsAuthority(t *testing.T) {
+	value := testLinuxSupervisorRecoveryAuthority(t)
+	receipt := testLinuxSupervisorStopReceipt(value)
+	value.StopReceipt = &receipt
+	requests := newLinuxSupervisorRecoveryTestServer(t, value, "error", "release unresolved")
+	controlRead, controlWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	supervisor := &linuxSupervisor{
+		authority:             value,
+		receipt:               &receipt,
+		helperDone:            make(chan struct{}),
+		controlWrite:          controlWrite,
+		pidfd:                 -1,
+		responseTransportLost: true,
+		responseLossPending:   true,
+	}
+	t.Cleanup(func() {
+		_ = controlRead.Close()
+		_ = controlWrite.Close()
+	})
+
+	if err := supervisor.ReleaseContainment(); err == nil {
+		t.Fatal("ReleaseContainment() after recovery release error = nil")
+	}
+	select {
+	case request := <-requests:
+		if request.Operation != linuxSupervisorOpRelease {
+			t.Fatalf("recovery failure request operation = %q, want release", request.Operation)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("recovery release request was not received")
+	}
+	if supervisor.released || supervisor.closed {
+		t.Fatalf("failed release state = released:%v closed:%v, want both false", supervisor.released, supervisor.closed)
+	}
+	if got, ok := supervisor.ContainmentStopReceipt(); !ok || !got.ValidFor(value) {
+		t.Fatalf("failed release lost stop receipt: %#v, available=%v", got, ok)
+	}
+	if got := supervisor.ContainmentAuthority(); got == nil || got.StopReceipt == nil || !got.StopReceipt.ValidFor(*got) {
+		t.Fatalf("failed release lost authority receipt: %#v", got)
+	}
+	_ = controlWrite.Close()
+	data, err := io.ReadAll(controlRead)
+	if err != nil {
+		t.Fatalf("read normal control pipe after failed release = %v", err)
+	}
+	if len(data) != 0 {
+		t.Fatalf("normal control pipe received %d bytes during failed recovery release", len(data))
+	}
+}
+
+func TestLinuxSupervisorResponseLossNeverReusesNormalRequestPipe(t *testing.T) {
+	value := testLinuxSupervisorAuthority(t)
+	controlRead, controlWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	responseRead, responseWrite, err := os.Pipe()
+	if err != nil {
+		_ = controlRead.Close()
+		_ = controlWrite.Close()
+		t.Fatal(err)
+	}
+	supervisor := &linuxSupervisor{
+		authority:             value,
+		helperDone:            make(chan struct{}),
+		controlWrite:          controlWrite,
+		responseRead:          responseRead,
+		responseReader:        bufio.NewReader(responseRead),
+		responseTransportLost: true,
+		responseLossPending:   true,
+	}
+	t.Cleanup(func() {
+		for _, file := range []*os.File{controlRead, controlWrite, responseRead, responseWrite} {
+			_ = file.Close()
+		}
+	})
+
+	if err := supervisor.RenewLease(time.Second, 1); !errors.Is(err, ErrLinuxSupervisorResponseLost) {
+		t.Fatalf("RenewLease() after response loss = %v, want response-loss error", err)
+	}
+	_ = controlWrite.Close()
+	data, err := io.ReadAll(controlRead)
+	if err != nil {
+		t.Fatalf("read normal control pipe = %v", err)
+	}
+	if len(data) != 0 {
+		t.Fatalf("normal control pipe received %d bytes after sticky response loss", len(data))
+	}
+}
+
+func newLinuxSupervisorRecoveryTestServer(t *testing.T, value authority.Supervisor, status, message string) <-chan linuxSupervisorRequest {
+	t.Helper()
+	endpoint, err := linuxSupervisorEndpoint(value.OwnerContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: endpoint, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := make(chan linuxSupervisorRequest, 1)
+	serverErrors := make(chan error, 1)
+	t.Cleanup(func() {
+		_ = listener.Close()
+		_ = os.Remove(endpoint)
+	})
+	go func() {
+		connection, err := listener.AcceptUnix()
+		if err != nil {
+			serverErrors <- err
+			return
+		}
+		defer connection.Close()
+		var request linuxSupervisorRequest
+		if err := readLinuxSupervisorFrame(bufio.NewReader(connection), &request); err != nil {
+			serverErrors <- err
+			return
+		}
+		requests <- request
+		serverErrors <- writeLinuxSupervisorFrame(connection, linuxSupervisorResponse{
+			Version:            linuxSupervisorProtocolVersion,
+			Operation:          request.Operation,
+			Status:             status,
+			LaunchToken:        value.LaunchToken,
+			Sequence:           request.Sequence,
+			TargetPID:          value.TargetPID,
+			TargetIdentity:     value.TargetIdentity,
+			OwnerKind:          value.OwnerKind,
+			OwnerContext:       value.OwnerContext,
+			SupervisorPID:      value.SupervisorPID,
+			SupervisorIdentity: value.SupervisorIdentity,
+			Token:              value.PipeToken,
+			JobID:              value.JobID,
+			ActiveProcesses:    0,
+			Error:              message,
+		})
+	}()
+	return requests
 }
 
 func newLinuxSupervisorRequestHarness(t *testing.T) (*linuxSupervisor, <-chan error, func()) {
@@ -1530,6 +1773,21 @@ func testLinuxSupervisorAuthority(t *testing.T) authority.Supervisor {
 	}
 	if err := value.Validate(); err != nil {
 		t.Fatalf("synthetic Linux supervisor authority = %v", err)
+	}
+	return value
+}
+
+func testLinuxSupervisorRecoveryAuthority(t *testing.T) authority.Supervisor {
+	t.Helper()
+	value := testLinuxSupervisorAuthority(t)
+	identity, err := ProcessIdentity(os.Getpid())
+	if err != nil {
+		t.Fatalf("ProcessIdentity() for recovery authority: %v", err)
+	}
+	value.SupervisorPID = os.Getpid()
+	value.SupervisorIdentity = identity
+	if err := value.Validate(); err != nil {
+		t.Fatalf("synthetic recovery authority = %v", err)
 	}
 	return value
 }

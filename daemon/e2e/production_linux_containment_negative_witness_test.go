@@ -336,9 +336,7 @@ func linuxNegativeSetsidTargetScript(targetMarker, descendantMarker string) stri
 	return "#!/bin/sh\n" +
 		"set -eu\n" +
 		"printf '%s\\n' \"$$\" > " + linuxWitnessShellQuote(targetMarker) + "\n" +
-		"setsid sh -c 'trap \"\" TERM; while :; do sleep 1; done' &\n" +
-		"child=\"$!\"\n" +
-		"printf '%s\\n' \"$child\" > " + linuxWitnessShellQuote(descendantMarker) + "\n" +
+		"setsid sh -c 'printf \"%s\\n\" \"$$\" > \"$1\"; trap \"\" TERM; while :; do sleep 1; done' sh " + linuxWitnessShellQuote(descendantMarker) + " &\n" +
 		"printf '%s\\n' '{\"type\":\"progress\",\"message\":\"setsid escape witness started\"}'\n" +
 		"while :; do sleep 1; done\n"
 }

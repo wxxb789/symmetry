@@ -3,9 +3,11 @@
 package e2e_test
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -159,6 +161,7 @@ func runLinuxStopResponseLostCase(t *testing.T, environment e2eEnvironment, daem
 		Notes: []string{
 			"production helper stop response is dropped once after the stop request is written",
 			"the first restart reconstructs the stop receipt; the final restart is armed to fail if it repeats stop",
+			"the recovery endpoint is held by a test-owned partial frame until the first daemon SIGKILL",
 		},
 	}
 	writeLinuxReplayEvidence(t, target.EvidencePath, evidence)
@@ -185,6 +188,9 @@ func runLinuxStopResponseLostCase(t *testing.T, environment e2eEnvironment, daem
 	}
 	cancelTask(t, operator, task.TaskID)
 	waitForLinuxReplayMarker(t, responseMarker, 20*time.Second)
+	recoveryBarrierMarker := filepath.Join(caseRoot, "recovery-barrier.fired")
+	recoveryBarrier := armLinuxReplayRecoveryBarrier(t, file.Journal.ContainmentAuthority, recoveryBarrierMarker)
+	defer recoveryBarrier.release(t)
 	lostFile, found, err := readLinuxWitnessJournalForKey(target.StateDir, file.Journal.Key())
 	if err != nil || !found {
 		t.Fatalf("read journal after dropped stop response: found=%t error=%v", found, err)
@@ -204,6 +210,7 @@ func runLinuxStopResponseLostCase(t *testing.T, environment e2eEnvironment, daem
 		linuxWitnessProcessSnapshotAt("helper_after_stop_response_loss", helperPID, helperIdentity),
 	)
 	writeLinuxReplayEvidence(t, target.EvidencePath, evidence)
+	recoveryBarrier.release(t)
 
 	beforeInfo, err := os.Stat(lostFile.Path)
 	if err != nil {
@@ -484,6 +491,84 @@ func assertLinuxReplayMarkerAbsent(t *testing.T, path string) {
 func linuxReplayMarkerExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+type linuxReplayRecoveryBarrier struct {
+	connection net.Conn
+}
+
+func armLinuxReplayRecoveryBarrier(t *testing.T, value *authority.Supervisor, markerPath string) *linuxReplayRecoveryBarrier {
+	t.Helper()
+	if value == nil {
+		t.Fatal("cannot arm Linux replay recovery barrier without containment authority")
+	}
+	endpoint, err := linuxReplayRecoveryEndpoint(value.OwnerContext)
+	if err != nil {
+		t.Fatalf("parse Linux replay recovery endpoint: %v", err)
+	}
+	waitForLinuxReplayRecoveryLoop(t, endpoint)
+	connection, err := net.DialTimeout("unix", endpoint, 5*time.Second)
+	if err != nil {
+		t.Fatalf("connect Linux replay recovery barrier: %v", err)
+	}
+	if _, err := connection.Write([]byte("{")); err != nil {
+		_ = connection.Close()
+		t.Fatalf("write Linux replay recovery barrier frame: %v", err)
+	}
+	if err := os.WriteFile(markerPath, []byte("fired\n"), 0o600); err != nil {
+		_ = connection.Close()
+		t.Fatalf("write Linux replay recovery barrier marker: %v", err)
+	}
+	return &linuxReplayRecoveryBarrier{connection: connection}
+}
+
+func waitForLinuxReplayRecoveryLoop(t *testing.T, endpoint string) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		connection, err := net.DialTimeout("unix", endpoint, time.Second)
+		if err == nil {
+			_ = connection.SetDeadline(time.Now().Add(500 * time.Millisecond))
+			_, writeErr := connection.Write([]byte("{}\n"))
+			response, readErr := bufio.NewReader(connection).ReadString('\n')
+			_ = connection.Close()
+			if writeErr == nil && readErr == nil {
+				var value struct {
+					Status string `json:"status"`
+				}
+				if json.Unmarshal([]byte(response), &value) == nil && value.Status == "error" {
+					return
+				}
+			}
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("Linux replay recovery endpoint %q did not enter its authenticated recovery loop within 20s", endpoint)
+}
+
+func (barrier *linuxReplayRecoveryBarrier) release(t *testing.T) {
+	t.Helper()
+	if barrier == nil || barrier.connection == nil {
+		return
+	}
+	connection := barrier.connection
+	barrier.connection = nil
+	if err := connection.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("release Linux replay recovery barrier: %v", err)
+	}
+}
+
+func linuxReplayRecoveryEndpoint(ownerContext string) (string, error) {
+	marker := "|endpoint="
+	index := strings.LastIndex(ownerContext, marker)
+	if index < 0 {
+		return "", errors.New("Linux replay owner context has no recovery endpoint")
+	}
+	endpoint := strings.TrimSpace(ownerContext[index+len(marker):])
+	if endpoint == "" || len(endpoint) >= 108 || !filepath.IsAbs(endpoint) {
+		return "", errors.New("Linux replay recovery endpoint is invalid")
+	}
+	return endpoint, nil
 }
 
 func runLinuxContainmentReplayCase(t *testing.T, environment e2eEnvironment, daemonBinary string, metadata linuxReplayMetadata, caseRoot string, killHelper bool) {
