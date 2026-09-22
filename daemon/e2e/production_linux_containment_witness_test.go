@@ -898,7 +898,7 @@ func linuxWitnessTargetScript(targetMarker, descendantMarker string) string {
 	return "#!/bin/sh\n" +
 		"set -eu\n" +
 		"printf '%s\\n' \"$$\" > " + linuxWitnessShellQuote(targetMarker) + "\n" +
-		"sleep 600 &\n" +
+		"sh -c 'trap \"\" HUP; exec sleep 600' &\n" +
 		"child=\"$!\"\n" +
 		"printf '%s\\n' \"$child\" > " + linuxWitnessShellQuote(descendantMarker) + "\n" +
 		"printf '%s\\n' '{\"type\":\"progress\",\"message\":\"linux containment witness started\"}'\n" +
