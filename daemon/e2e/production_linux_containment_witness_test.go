@@ -503,9 +503,7 @@ func runLinuxHelperCrashMirrorWitness(t *testing.T, environment e2eEnvironment, 
 	if err := waitForLinuxWitnessIdentityGone(helperPID, helperIdentity, 15*time.Second); err != nil {
 		t.Fatalf("killed helper remained live: %v", err)
 	}
-	if err := assertLinuxWitnessProcessLive(targetPID, targetIdentity); err != nil {
-		t.Fatalf("mirror took over before helper death/cancel boundary: %v", err)
-	}
+	assertLinuxWitnessTargetAfterHelperDeath(t, targetPID, targetIdentity)
 	if err := assertLinuxWitnessProcessLive(childPID, ""); err != nil {
 		t.Fatalf("same-group descendant stopped before mirror takeover: %v", err)
 	}
@@ -899,11 +897,22 @@ func killLinuxProductionDaemon(process *productionDaemonWitnessProcess) linuxWit
 		if waitStatus, ok := process.command.ProcessState.Sys().(syscall.WaitStatus); ok {
 			status.Signaled = waitStatus.Signaled()
 			if status.Signaled {
-				status.Signal = waitStatus.Signal().String()
+				status.Signal = linuxWitnessSignalName(waitStatus.Signal())
 			}
 		}
 	}
 	return status
+}
+
+func linuxWitnessSignalName(signal syscall.Signal) string {
+	switch signal {
+	case syscall.SIGKILL:
+		return "SIGKILL"
+	case syscall.SIGTERM:
+		return "SIGTERM"
+	default:
+		return signal.String()
+	}
 }
 
 func killLinuxWitnessProcess(t *testing.T, pid int, identity string) error {
@@ -930,6 +939,23 @@ func assertLinuxWitnessProcessLive(pid int, identity string) error {
 		return fmt.Errorf("process %d is not live: %#v", pid, snapshot)
 	}
 	return nil
+}
+
+func assertLinuxWitnessTargetAfterHelperDeath(t *testing.T, pid int, identity string) {
+	t.Helper()
+	snapshot := linuxWitnessProcessSnapshotAt("target_after_helper_death", pid, identity)
+	if !snapshot.Exists {
+		t.Fatalf("target disappeared after helper death: %#v", snapshot)
+	}
+	if identity != "" && snapshot.Identity != identity {
+		t.Fatalf("target identity after helper death = %q, want %q", snapshot.Identity, identity)
+	}
+	// Pdeathsig may make the ptrace target a zombie immediately when its helper
+	// is SIGKILLed. The durable mirror still owns the exact PID/group fence;
+	// the same-group descendant must remain live until mirror cancellation.
+	if snapshot.State != "Z" && snapshot.State != "T" && snapshot.State != "t" && snapshot.State != "S" && snapshot.State != "R" {
+		t.Fatalf("target entered an unexpected state after helper death: %#v", snapshot)
+	}
 }
 
 func waitForLinuxWitnessIdentityGone(pid int, identity string, timeout time.Duration) error {

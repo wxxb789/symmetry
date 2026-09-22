@@ -1227,9 +1227,12 @@ func (supervisor *linuxSupervisor) request(operation string, sequence uint64, de
 	if err := writeLinuxSupervisorFrame(control, request); err != nil {
 		return linuxSupervisorResponse{}, err
 	}
-	supervisor.dropResponseTransportOnce(operation)
+	responseDropped := supervisor.dropResponseTransportOnce(operation)
 	var response linuxSupervisorResponse
 	if err := readLinuxSupervisorFrame(reader, &response); err != nil {
+		if responseDropped {
+			return linuxSupervisorResponse{}, errors.Join(ErrLinuxSupervisorResponseLost, err)
+		}
 		return linuxSupervisorResponse{}, err
 	}
 	if response.Version != linuxSupervisorProtocolVersion || response.Operation != operation || response.LaunchToken != supervisor.authority.LaunchToken || response.TargetPID != supervisor.authority.TargetPID || response.TargetIdentity != supervisor.authority.TargetIdentity || response.OwnerKind != supervisor.authority.OwnerKind || response.OwnerContext != supervisor.authority.OwnerContext || response.SupervisorPID != supervisor.authority.SupervisorPID || response.SupervisorIdentity != supervisor.authority.SupervisorIdentity || response.Token != supervisor.authority.PipeToken || response.JobID != supervisor.authority.JobID {
@@ -1244,19 +1247,19 @@ func (supervisor *linuxSupervisor) request(operation string, sequence uint64, de
 	return response, nil
 }
 
-func (supervisor *linuxSupervisor) dropResponseTransportOnce(operation string) {
+func (supervisor *linuxSupervisor) dropResponseTransportOnce(operation string) bool {
 	if supervisor == nil || os.Getenv(linuxSupervisorProductionWitnessEnv) != "1" {
-		return
+		return false
 	}
 	configuredOperation := os.Getenv(linuxSupervisorDropResponseOnceEnv)
 	if configuredOperation != linuxSupervisorOpStop && configuredOperation != linuxSupervisorOpRelease || configuredOperation != operation {
-		return
+		return false
 	}
 
 	supervisor.mu.Lock()
 	if supervisor.responseDropTriggered || supervisor.responseRead == nil {
 		supervisor.mu.Unlock()
-		return
+		return false
 	}
 	responseRead := supervisor.responseRead
 	supervisor.responseDropTriggered = true
@@ -1268,6 +1271,7 @@ func (supervisor *linuxSupervisor) dropResponseTransportOnce(operation string) {
 		_ = os.WriteFile(markerPath, []byte("fired\n"), 0o600)
 	}
 	_ = responseRead.Close()
+	return true
 }
 
 type linuxSupervisorScanFailureInjection struct {

@@ -542,9 +542,7 @@ func runLinuxContainmentReplayCase(t *testing.T, environment e2eEnvironment, dae
 		if err := waitForLinuxWitnessIdentityGone(helperPID, helperIdentity, 15*time.Second); err != nil {
 			t.Fatalf("wait for Linux supervisor helper death: %v", err)
 		}
-		if err := assertLinuxWitnessProcessLive(targetPID, targetIdentity); err != nil {
-			t.Fatalf("target after helper death: %v", err)
-		}
+		assertLinuxWitnessTargetAfterHelperDeath(t, targetPID, targetIdentity)
 	}
 
 	firstKill := make(chan linuxReplayKillResult, 1)

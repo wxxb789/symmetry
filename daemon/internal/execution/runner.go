@@ -1365,7 +1365,8 @@ func (process *Process) closeContainment() error {
 			// must retain their own authority for authenticated recovery instead
 			// of being converted into an unrecoverable generic marker.
 			_, supportsUnprovenObserver := process.containment.(containmentUnprovenCallbackSetter)
-			if supportsUnprovenObserver && process.persistContainmentUnproven != nil && !process.containmentUnprovenPersisted {
+			responseLost := errors.Is(err, platform.ErrLinuxSupervisorResponseLost)
+			if supportsUnprovenObserver && !responseLost && process.persistContainmentUnproven != nil && !process.containmentUnprovenPersisted {
 				persist := process.containmentUnprovenCallback
 				if persist == nil {
 					persist = func() error {
