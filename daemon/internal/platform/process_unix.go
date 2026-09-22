@@ -677,11 +677,25 @@ func (group *processGroup) closeUntil(deadline time.Time) error {
 			return group.finishUnprovenClose(deadline, leaderErr)
 		}
 		if !initialLeaderPresent && monitorPresent {
-			group.mutex.Lock()
-			uncertain := !group.descendantScanCompleted || group.descendantScanLost || len(group.escapedDescendants) > 0
-			group.mutex.Unlock()
-			if uncertain {
-				return group.finishUnprovenClose(deadline, nil)
+			// The leader may disappear just before the monitor publishes its
+			// terminal result. Wait for that bounded result instead of turning a
+			// still-provable teardown into sticky uncertainty.
+			result, requestErr := group.requestDescendantMonitorScan(deadline)
+			finalScanErr := requestErr
+			if finalScanErr == nil {
+				finalScanErr = result.scanErr
+				group.mutex.Lock()
+				cleanTerminal := result.terminalReason == descendantMonitorTerminalCleanLeaderAbsent &&
+					group.descendantScanCompleted &&
+					!group.descendantScanLost &&
+					len(group.escapedDescendants) == 0
+				group.mutex.Unlock()
+				if finalScanErr == nil && !cleanTerminal {
+					finalScanErr = fmt.Errorf("%w: leader disappeared without a clean descendant terminal proof", ErrLinuxDescendantContainmentUnproven)
+				}
+			}
+			if finalScanErr != nil {
+				return group.finishUnprovenClose(deadline, finalScanErr)
 			}
 		}
 	}

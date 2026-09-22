@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -1816,6 +1817,93 @@ func TestProcessGroupLeaderExitAfterSuccessfulDescendantScanRemainsProven(t *tes
 	}
 	if group.fd != -1 || !group.closeCompleted || group.ContainmentCloseRetryable() {
 		t.Fatalf("after proven leader reaping fd:%d completed:%v retryable:%v, want released, complete, non-retryable", group.fd, group.closeCompleted, group.ContainmentCloseRetryable())
+	}
+}
+
+func TestProcessGroupCloseWaitsForDelayedCleanLeaderAbsentTerminal(t *testing.T) {
+	anchor := linuxProcessGroupAnchor{pid: 1234, pgrp: 1234, session: 77, startTime: 456}
+	initialScan := make(chan struct{})
+	delayedScan := make(chan struct{})
+	closeObserved := make(chan struct{})
+	releaseScan := make(chan struct{})
+	var scanCalls atomic.Int32
+	var leaderAbsent atomic.Bool
+	var initialOnce sync.Once
+	var delayedOnce sync.Once
+	var closeOnce sync.Once
+
+	previousStat := readLinuxProcessStat
+	previousChildren := readLinuxProcessChildren
+	readLinuxProcessStat = func(pid int) (linuxProcessStat, error) {
+		if pid != anchor.pid {
+			return linuxProcessStat{}, os.ErrNotExist
+		}
+		call := scanCalls.Add(1)
+		if call == 1 {
+			return linuxProcessStat{pid: anchor.pid, pgrp: anchor.pgrp, session: anchor.session, startTime: anchor.startTime}, nil
+		}
+		if call == 2 {
+			delayedOnce.Do(func() { close(delayedScan) })
+			<-releaseScan
+		}
+		if call >= 3 {
+			closeOnce.Do(func() { close(closeObserved) })
+		}
+		if leaderAbsent.Load() {
+			return linuxProcessStat{}, os.ErrNotExist
+		}
+		return linuxProcessStat{pid: anchor.pid, pgrp: anchor.pgrp, session: anchor.session, startTime: anchor.startTime}, nil
+	}
+	readLinuxProcessChildren = func(int) ([]int, error) {
+		initialOnce.Do(func() { close(initialScan) })
+		return nil, nil
+	}
+	t.Cleanup(func() {
+		select {
+		case <-releaseScan:
+		default:
+			close(releaseScan)
+		}
+		readLinuxProcessStat = previousStat
+		readLinuxProcessChildren = previousChildren
+	})
+
+	var signals []unix.Signal
+	restorePIDFDCalls(t, func(_ int, signal unix.Signal, _ *unix.Siginfo, _ int) error {
+		signals = append(signals, signal)
+		if signal == unix.SIGKILL {
+			return nil
+		}
+		if signal == 0 {
+			return unix.ESRCH
+		}
+		t.Fatalf("unexpected signal %v", signal)
+		return nil
+	}, func(int) error { return nil })
+
+	group := &processGroup{pid: anchor.pid, fd: 47, anchor: anchor, anchorCaptured: true}
+	group.startDescendantMonitor()
+	<-initialScan
+	leaderAbsent.Store(true)
+	<-delayedScan
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- group.Close() }()
+	<-closeObserved
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close() returned before delayed clean terminal was released: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(releaseScan)
+	if err := <-closeDone; err != nil {
+		t.Fatalf("Close() after delayed clean terminal = %v, want nil", err)
+	}
+	if !slices.Equal(signals, []unix.Signal{unix.SIGKILL, 0}) {
+		t.Fatalf("signals = %#v, want [SIGKILL 0]", signals)
+	}
+	if group.descendantScanLost || !group.descendantScanCompleted || group.fd != -1 || !group.closeCompleted {
+		t.Fatalf("successful close state = lost:%v complete:%v fd:%d closed:%v, want false,true,-1,true", group.descendantScanLost, group.descendantScanCompleted, group.fd, group.closeCompleted)
 	}
 }
 
