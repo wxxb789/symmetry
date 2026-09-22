@@ -676,7 +676,7 @@ func (group *processGroup) closeUntil(deadline time.Time) error {
 		if leaderErr != nil {
 			return group.finishUnprovenClose(deadline, leaderErr)
 		}
-		if !initialLeaderPresent && monitorPresent {
+		if !initialLeaderPresent && monitorPresent && !channelClosedV2(group.monitorDone) {
 			// The leader may disappear just before the monitor publishes its
 			// terminal result. Wait for that bounded result instead of turning a
 			// still-provable teardown into sticky uncertainty.
