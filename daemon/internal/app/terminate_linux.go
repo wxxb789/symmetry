@@ -54,6 +54,27 @@ func terminatePersistedProcessWithContext(ctx context.Context, pid int, identity
 	return nil
 }
 
-func terminatePersistedProcessWithAuthority(_ int, _ string, _ *authority.Supervisor) (authority.StopReceipt, error) {
-	return authority.StopReceipt{}, fmt.Errorf("%w: persisted containment authority is unsupported on Linux", errPersistedProcessStopUnproven)
+func init() {
+	releasePersistedContainmentAuthority = releasePersistedLinuxContainmentAuthority
+}
+
+func terminatePersistedProcessWithAuthority(pid int, identity string, persisted *authority.Supervisor) (authority.StopReceipt, error) {
+	if persisted == nil || persisted.TargetPID != pid || persisted.TargetIdentity != identity {
+		return authority.StopReceipt{}, fmt.Errorf("%w: persisted Linux authority identity mismatch", errPersistedProcessStopUnproven)
+	}
+	receipt, err := platform.StopPersistedLinuxSupervisor(*persisted)
+	if err != nil {
+		return authority.StopReceipt{}, fmt.Errorf("%w: recover persisted Linux supervisor: %w", errPersistedProcessStopUnproven, err)
+	}
+	return receipt, nil
+}
+
+func releasePersistedLinuxContainmentAuthority(pid int, identity string, persisted *authority.Supervisor) error {
+	if persisted == nil || persisted.TargetPID != pid || persisted.TargetIdentity != identity {
+		return fmt.Errorf("%w: persisted Linux authority identity mismatch", errPersistedProcessStopUnproven)
+	}
+	if err := platform.ReleasePersistedLinuxSupervisor(*persisted); err != nil {
+		return fmt.Errorf("%w: release persisted Linux supervisor: %w", errPersistedProcessStopUnproven, err)
+	}
+	return nil
 }

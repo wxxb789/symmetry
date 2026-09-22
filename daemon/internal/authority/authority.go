@@ -144,6 +144,9 @@ func (value Supervisor) Validate() error {
 	if !validOwner(value.OwnerKind, value.OwnerContext) {
 		return errors.New("supervisor authority owner is invalid")
 	}
+	if value.OwnerKind == OwnerKindLinuxHelper && value.CreatorSessionID != nil {
+		return errors.New("Linux supervisor authority cannot carry a Windows creator session")
+	}
 	if !validHex(value.Secret, SecretBytes*2) || !validOptionalHex(value.LaunchToken, TokenBytes*2) || !validHex(value.PipeToken, TokenBytes*2) || !validHex(value.JobID, TokenBytes*2) {
 		return errors.New("supervisor authority token is invalid")
 	}
@@ -207,6 +210,9 @@ func (value SupervisorHandoff) Validate() error {
 	}
 	if !validOwner(value.OwnerKind, value.OwnerContext) {
 		return errors.New("supervisor handoff owner is invalid")
+	}
+	if value.OwnerKind == OwnerKindLinuxHelper && value.CreatorSessionID != nil {
+		return errors.New("Linux supervisor handoff cannot carry a Windows creator session")
 	}
 	if (value.SupervisorPID == 0) != (strings.TrimSpace(value.SupervisorIdentity) == "") || value.SupervisorPID < 0 || !validOptionalBounded(value.SupervisorIdentity, 4096) {
 		return errors.New("supervisor handoff helper identity is invalid")
@@ -325,6 +331,9 @@ func (proof SupervisorHandoffReleaseProof) Validate() error {
 	if !validHex(proof.PipeToken, TokenBytes*2) || !validHex(proof.JobID, TokenBytes*2) || !validBounded(proof.TargetIdentity, 4096) || (proof.SupervisorPID == 0) != (strings.TrimSpace(proof.SupervisorIdentity) == "") || !validOptionalBounded(proof.SupervisorIdentity, 4096) {
 		return errors.New("supervisor handoff release proof is invalid")
 	}
+	if proof.OwnerKind == OwnerKindLinuxHelper && proof.CreatorSessionID != nil {
+		return errors.New("Linux supervisor release proof cannot carry a Windows creator session")
+	}
 	return nil
 }
 
@@ -347,6 +356,9 @@ func (proof SupervisorHandoffAbortProof) Validate() error {
 	}
 	if !validBounded(proof.TargetIdentity, 4096) || (proof.SupervisorPID == 0) != (strings.TrimSpace(proof.SupervisorIdentity) == "") || !validOptionalBounded(proof.SupervisorIdentity, 4096) {
 		return errors.New("supervisor handoff abort proof is invalid")
+	}
+	if proof.OwnerKind == OwnerKindLinuxHelper && proof.CreatorSessionID != nil {
+		return errors.New("Linux supervisor abort proof cannot carry a Windows creator session")
 	}
 	if proof.OwnerKind != OwnerKindLinuxHelper && proof.CreatorSessionID == nil {
 		return errors.New("supervisor handoff abort proof is invalid")

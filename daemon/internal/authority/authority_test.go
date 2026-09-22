@@ -152,6 +152,27 @@ func TestSupervisorHandoffLinuxAbortProofDoesNotRequireCreatorSession(t *testing
 	}
 }
 
+func TestLinuxOwnerRejectsWindowsCreatorSession(t *testing.T) {
+	handoff := testAuthoritySupervisorHandoffFixture()
+	handoff.OwnerKind = OwnerKindLinuxHelper
+	handoff.OwnerContext = "helper-endpoint:linux:run-1"
+	handoff.SupervisorPID = 99
+	handoff.SupervisorIdentity = "linux:99:start-time"
+	creatorSessionID := uint32(0)
+	handoff.CreatorSessionID = &creatorSessionID
+	if err := handoff.Validate(); err == nil {
+		t.Fatal("Linux handoff accepted a Windows creator session")
+	}
+	value, err := handoff.ToSupervisor()
+	if err == nil || value.Version != 0 {
+		t.Fatal("Linux authority conversion accepted a Windows creator session")
+	}
+	proof := handoff.ReleaseProof()
+	if err := proof.Validate(); err == nil {
+		t.Fatal("Linux release proof accepted a Windows creator session")
+	}
+}
+
 func TestSupervisorHandoffOwnerBindingPropagatesThroughCloneConversionAndProofs(t *testing.T) {
 	handoff := testAuthoritySupervisorHandoffFixture()
 	handoff.OwnerKind = OwnerKindLinuxHelper

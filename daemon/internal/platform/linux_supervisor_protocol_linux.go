@@ -60,6 +60,11 @@ type linuxSupervisorResponse struct {
 	Token              string `json:"token,omitempty"`
 	JobID              string `json:"job_id,omitempty"`
 	ActiveProcesses    uint32 `json:"active_processes,omitempty"`
+	TargetPGRP         int64  `json:"target_pgrp,omitempty"`
+	TargetSession      int64  `json:"target_session,omitempty"`
+	TargetStartTime    uint64 `json:"target_start_time,omitempty"`
+	ExitCode           int    `json:"exit_code,omitempty"`
+	ExitError          string `json:"exit_error,omitempty"`
 	Error              string `json:"error,omitempty"`
 }
 
@@ -92,12 +97,9 @@ func readLinuxSupervisorFrame(reader *bufio.Reader, destination any) error {
 	if reader == nil || destination == nil {
 		return errors.New("linux supervisor frame reader and destination are required")
 	}
-	line, err := reader.ReadBytes('\n')
+	line, err := readLinuxSupervisorBoundedLine(reader)
 	if err != nil {
 		return fmt.Errorf("read linux supervisor frame: %w", err)
-	}
-	if len(line) > linuxSupervisorMaxFrame {
-		return errLinuxSupervisorFrameTooLarge
 	}
 	decoder := json.NewDecoder(bytesReader(line[:len(line)-1]))
 	decoder.DisallowUnknownFields()
@@ -112,6 +114,26 @@ func readLinuxSupervisorFrame(reader *bufio.Reader, destination any) error {
 		return fmt.Errorf("decode trailing linux supervisor frame data: %w", err)
 	}
 	return nil
+}
+
+func readLinuxSupervisorBoundedLine(reader *bufio.Reader) ([]byte, error) {
+	line := make([]byte, 0, linuxSupervisorMaxFrame)
+	for {
+		part, err := reader.ReadSlice('\n')
+		if len(line)+len(part) > linuxSupervisorMaxFrame {
+			return nil, errLinuxSupervisorFrameTooLarge
+		}
+		line = append(line, part...)
+		if err == nil {
+			if len(line) == 0 {
+				return nil, errors.New("linux supervisor frame is empty")
+			}
+			return line, nil
+		}
+		if err != bufio.ErrBufferFull {
+			return nil, err
+		}
+	}
 }
 
 // bytesReader avoids exposing a mutable bytes.Buffer to protocol callers.
@@ -136,6 +158,25 @@ type linuxSupervisorSequenceFence struct {
 	last uint64
 }
 
+// resume executes the authorization check and the ptrace detach under one
+// lease-state lock. A timer callback cannot latch expiry between the check and
+// the detach operation.
+func (state *linuxSupervisorLeaseState) resume(ownerLost func() bool, detach func() error) error {
+	if state == nil || detach == nil {
+		return ErrLinuxSupervisorLeaseExpired
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.latchExpiredLocked(time.Now())
+	if !state.armed {
+		return ErrLinuxSupervisorLeaseUnarmed
+	}
+	if state.stopped || state.ownerLost || state.expiredGen != 0 || (ownerLost != nil && ownerLost()) {
+		return ErrLinuxSupervisorLeaseExpired
+	}
+	return detach()
+}
+
 func (fence *linuxSupervisorSequenceFence) accept(sequence uint64) error {
 	if fence == nil || sequence == 0 {
 		return errLinuxSupervisorSequence
@@ -153,14 +194,19 @@ type linuxSupervisorOwnerWatchdog struct {
 	file      *os.File
 	lost      chan struct{}
 	done      chan struct{}
+	onLost    func()
 	mu        sync.Mutex
 	disarmed  bool
 	closeOnce sync.Once
 	lostOnce  sync.Once
 }
 
-func newLinuxSupervisorOwnerWatchdog(file *os.File) *linuxSupervisorOwnerWatchdog {
-	watchdog := &linuxSupervisorOwnerWatchdog{file: file, lost: make(chan struct{}), done: make(chan struct{})}
+func newLinuxSupervisorOwnerWatchdog(file *os.File, onLost ...func()) *linuxSupervisorOwnerWatchdog {
+	var callback func()
+	if len(onLost) != 0 {
+		callback = onLost[0]
+	}
+	watchdog := &linuxSupervisorOwnerWatchdog{file: file, lost: make(chan struct{}), done: make(chan struct{}), onLost: callback}
 	go watchdog.watch()
 	return watchdog
 }
@@ -175,9 +221,15 @@ func (watchdog *linuxSupervisorOwnerWatchdog) watch() {
 		if _, err := watchdog.file.Read(buffer[:]); err != nil {
 			watchdog.mu.Lock()
 			disarmed := watchdog.disarmed
+			onLost := watchdog.onLost
 			watchdog.mu.Unlock()
 			if !disarmed {
-				watchdog.lostOnce.Do(func() { close(watchdog.lost) })
+				watchdog.lostOnce.Do(func() {
+					if onLost != nil {
+						onLost()
+					}
+					close(watchdog.lost)
+				})
 			}
 			return
 		}

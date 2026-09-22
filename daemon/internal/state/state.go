@@ -1035,6 +1035,9 @@ func (store *Store) RecordSupervisorHandoffStopReceipt(key RunKey, expected auth
 	if err := expected.Validate(); err != nil {
 		return RunJournal{}, err
 	}
+	if expected.SupervisorPID <= 0 || expected.SupervisorIdentity == "" {
+		return RunJournal{}, errors.New("supervisor handoff stop receipt requires a bound helper")
+	}
 	if !receipt.ValidForHandoff(expected) {
 		return RunJournal{}, errors.New("supervisor handoff stop receipt does not match handoff")
 	}

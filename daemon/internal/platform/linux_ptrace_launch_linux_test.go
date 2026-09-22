@@ -27,8 +27,9 @@ func TestLaunchLinuxPtraceStopsBeforeUserCodeAndCapturesFence(t *testing.T) {
 		t.Fatalf("LaunchLinuxPtrace() error = %v", err)
 	}
 	t.Cleanup(func() {
-		if _, waitErr := process.Wait(); waitErr != nil {
-			t.Errorf("cleanup Wait() error = %v", waitErr)
+		if _, err := process.Wait(); errors.Is(err, errLinuxPtraceLaunchStopped) {
+			_ = process.Terminate()
+			_, _ = process.Wait()
 		}
 	})
 
@@ -75,6 +76,95 @@ func TestLaunchLinuxPtraceStopsBeforeUserCodeAndCapturesFence(t *testing.T) {
 	}
 }
 
+func TestLinuxPtraceResumeUsesPersistentOwnerThread(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "started")
+	process, err := LaunchLinuxPtrace(linuxPtraceHelperCommand(t, "write", output))
+	if err != nil {
+		t.Fatalf("LaunchLinuxPtrace() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := process.Wait(); errors.Is(err, errLinuxPtraceLaunchStopped) {
+			_ = process.Terminate()
+			_, _ = process.Wait()
+		}
+	})
+
+	if err := process.Resume(); err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+	if _, err := process.Wait(); err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+
+	process.mutex.Lock()
+	launchThread, resumeThread, waitThread := process.ownerThreadID, process.resumeThreadID, process.lastWaitThreadID
+	process.mutex.Unlock()
+	if launchThread == 0 || resumeThread == 0 || waitThread == 0 {
+		t.Fatalf("owner thread observations = launch:%d resume:%d wait:%d, want non-zero", launchThread, resumeThread, waitThread)
+	}
+	if launchThread != resumeThread || launchThread != waitThread {
+		t.Fatalf("ptrace owner thread changed: launch:%d resume:%d wait:%d", launchThread, resumeThread, waitThread)
+	}
+	if _, err := os.Stat(output); err != nil {
+		t.Fatalf("helper output after Resume() error = %v", err)
+	}
+}
+
+func TestLinuxPtracePreResumeTerminateUsesPersistentOwnerThread(t *testing.T) {
+	process, err := LaunchLinuxPtrace(linuxPtraceHelperCommand(t, "block", filepath.Join(t.TempDir(), "started")))
+	if err != nil {
+		t.Fatalf("LaunchLinuxPtrace() error = %v", err)
+	}
+	if err := process.Terminate(); err != nil {
+		t.Fatalf("Terminate() error = %v", err)
+	}
+	if _, err := process.Wait(); err == nil {
+		t.Fatal("Wait() error = nil, want killed-process error")
+	}
+
+	process.mutex.Lock()
+	launchThread, abortThread, waitThread := process.ownerThreadID, process.abortThreadID, process.lastWaitThreadID
+	process.mutex.Unlock()
+	if launchThread == 0 || abortThread == 0 || waitThread == 0 {
+		t.Fatalf("owner thread observations = launch:%d abort:%d wait:%d, want non-zero", launchThread, abortThread, waitThread)
+	}
+	if launchThread != abortThread || launchThread != waitThread {
+		t.Fatalf("pre-resume owner thread changed: launch:%d abort:%d wait:%d", launchThread, abortThread, waitThread)
+	}
+}
+
+func TestLinuxPtraceTerminateRetriesBeforeWaitAfterTransientSignalFailure(t *testing.T) {
+	process, err := LaunchLinuxPtrace(linuxPtraceHelperCommand(t, "block", filepath.Join(t.TempDir(), "started")))
+	if err != nil {
+		t.Fatalf("LaunchLinuxPtrace() error = %v", err)
+	}
+	previousSignal := sendPIDFDSignal
+	want := errors.New("transient pidfd signal failure")
+	calls := 0
+	sendPIDFDSignal = func(fd int, signal unix.Signal, info *unix.Siginfo, flags int) error {
+		calls++
+		if calls == 1 {
+			return want
+		}
+		return previousSignal(fd, signal, info, flags)
+	}
+	t.Cleanup(func() { sendPIDFDSignal = previousSignal })
+
+	if err := process.Terminate(); !errors.Is(err, want) {
+		t.Fatalf("first Terminate() error = %v, want transient failure", err)
+	}
+	if err := process.Terminate(); err != nil {
+		t.Fatalf("retry Terminate() error = %v, want success", err)
+	}
+	code, err := process.Wait()
+	if err == nil || code == 0 {
+		t.Fatalf("Wait() = (%d, %v), want killed-process result after retry", code, err)
+	}
+	if calls != 2 {
+		t.Fatalf("pidfd signal calls = %d, want first failure plus one retry", calls)
+	}
+}
+
 func TestLinuxPtraceTerminateStopsExecStoppedGroup(t *testing.T) {
 	output := filepath.Join(t.TempDir(), "started")
 	command := linuxPtraceHelperCommand(t, "block", output)
@@ -82,6 +172,12 @@ func TestLinuxPtraceTerminateStopsExecStoppedGroup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LaunchLinuxPtrace() error = %v", err)
 	}
+	t.Cleanup(func() {
+		if _, waitErr := process.Wait(); errors.Is(waitErr, errLinuxPtraceLaunchStopped) {
+			_ = process.Terminate()
+			_, _ = process.Wait()
+		}
+	})
 	if err := process.Terminate(); err != nil {
 		t.Fatalf("Terminate() error = %v", err)
 	}
@@ -108,6 +204,21 @@ func TestLaunchLinuxPtraceFailsClosedWhenPIDFDGroupSignalIsUnavailable(t *testin
 	}
 	if command.Process != nil || command.SysProcAttr != nil {
 		t.Fatalf("failed capability probe changed command: process=%v attrs=%#v", command.Process, command.SysProcAttr)
+	}
+}
+
+func TestLaunchLinuxPtraceFailsClosedWhenPtraceStartIsRejected(t *testing.T) {
+	previous := startLinuxPtraceCommand
+	want := errors.New("ptrace is unavailable")
+	startLinuxPtraceCommand = func(*exec.Cmd) error { return want }
+	t.Cleanup(func() { startLinuxPtraceCommand = previous })
+
+	command := exec.Command("true")
+	if _, err := LaunchLinuxPtrace(command); !errors.Is(err, want) {
+		t.Fatalf("LaunchLinuxPtrace() error = %v, want %v", err, want)
+	}
+	if command.Process != nil {
+		t.Fatal("ptrace start rejection returned a process")
 	}
 }
 

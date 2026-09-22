@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"sync"
 	"syscall"
 
@@ -19,6 +20,7 @@ var (
 	}
 	waitLinuxPtraceExecStop = waitLinuxPtraceExecStopFor
 	detachLinuxPtrace       = unix.PtraceDetach
+	linuxPtraceThreadID     = unix.Gettid
 )
 
 var (
@@ -26,7 +28,70 @@ var (
 	errLinuxPtraceLaunchStopped  = errors.New("Linux ptrace process is still exec-stopped")
 	errLinuxPtraceLaunchClosed   = errors.New("Linux ptrace process is unavailable")
 	errLinuxPtraceLaunchFinished = errors.New("Linux ptrace process has already been waited")
+	errLinuxPtraceOwnerClosed    = errors.New("Linux ptrace owner thread is unavailable")
 )
+
+// linuxPtraceOwner serializes every ptrace-sensitive operation for one
+// tracee. The goroutine is pinned once for its entire lifetime; callers never
+// pin and unpin arbitrary goroutines around individual operations.
+type linuxPtraceOwner struct {
+	requests chan linuxPtraceOwnerRequest
+	done     chan struct{}
+
+	mutex  sync.Mutex
+	closed bool
+}
+
+type linuxPtraceOwnerRequest struct {
+	operation func() error
+	result    chan error
+}
+
+func newLinuxPtraceOwner() *linuxPtraceOwner {
+	owner := &linuxPtraceOwner{
+		requests: make(chan linuxPtraceOwnerRequest),
+		done:     make(chan struct{}),
+	}
+	go owner.run()
+	return owner
+}
+
+func (owner *linuxPtraceOwner) run() {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	defer close(owner.done)
+	for request := range owner.requests {
+		request.result <- request.operation()
+	}
+}
+
+func (owner *linuxPtraceOwner) call(operation func() error) error {
+	if owner == nil || operation == nil {
+		return errLinuxPtraceOwnerClosed
+	}
+	result := make(chan error, 1)
+	owner.mutex.Lock()
+	if owner.closed {
+		owner.mutex.Unlock()
+		return errLinuxPtraceOwnerClosed
+	}
+	owner.requests <- linuxPtraceOwnerRequest{operation: operation, result: result}
+	owner.mutex.Unlock()
+	return <-result
+}
+
+func (owner *linuxPtraceOwner) close() {
+	if owner == nil {
+		return
+	}
+	owner.mutex.Lock()
+	if !owner.closed {
+		owner.closed = true
+		close(owner.requests)
+	}
+	owner.mutex.Unlock()
+	<-owner.done
+}
 
 // LinuxProcessGroupAnchor is the creation-time fence for a Linux process
 // group leader. The process must remain in this group and session for the
@@ -47,10 +112,15 @@ type LinuxPtraceProcess struct {
 	pidfd    int
 	identity string
 	anchor   LinuxProcessGroupAnchor
+	owner    *linuxPtraceOwner
 
-	mutex      sync.Mutex
-	resumed    bool
-	terminated bool
+	mutex            sync.Mutex
+	resumed          bool
+	terminated       bool
+	ownerThreadID    int
+	resumeThreadID   int
+	abortThreadID    int
+	lastWaitThreadID int
 
 	waitStarted bool
 	waited      bool
@@ -71,7 +141,7 @@ func LaunchLinuxPtrace(command *exec.Cmd) (*LinuxPtraceProcess, error) {
 		return nil, errors.New("Linux ptrace command has already started")
 	}
 	if err := probePIDFDGroupSupport(); err != nil {
-		return nil, fmt.Errorf("%w: Linux ptrace launch requires pidfd process-group support: %v", errors.ErrUnsupported, err)
+		return nil, fmt.Errorf("%w: Linux ptrace launch requires pidfd process-group support: %w", errors.ErrUnsupported, err)
 	}
 
 	pidfd := -1
@@ -101,33 +171,44 @@ func LaunchLinuxPtrace(command *exec.Cmd) (*LinuxPtraceProcess, error) {
 	attributes.PidFD = &pidfd
 	command.SysProcAttr = attributes
 
-	if err := startLinuxPtraceCommand(command); err != nil {
-		return nil, fmt.Errorf("start Linux ptrace process: %w", err)
-	}
 	process := &LinuxPtraceProcess{
 		command: command,
-		pid:     command.Process.Pid,
-		pidfd:   pidfd,
+		pidfd:   -1,
+		owner:   newLinuxPtraceOwner(),
 	}
-	if pidfd < 0 {
-		return nil, process.abortLaunch(fmt.Errorf("%w: Linux ptrace launch returned no pidfd", errors.ErrUnsupported))
+	if err := process.owner.call(func() error { return process.launchOnOwner(&pidfd) }); err != nil {
+		process.owner.close()
+		return nil, err
+	}
+	return process, nil
+}
+
+func (process *LinuxPtraceProcess) launchOnOwner(pidfd *int) error {
+	process.ownerThreadID = linuxPtraceThreadID()
+	if err := startLinuxPtraceCommand(process.command); err != nil {
+		return fmt.Errorf("start Linux ptrace process: %w", err)
+	}
+	process.pid = process.command.Process.Pid
+	process.pidfd = *pidfd
+	if process.pidfd < 0 {
+		return process.abortLaunchOnOwner(fmt.Errorf("%w: Linux ptrace launch returned no pidfd", errors.ErrUnsupported))
 	}
 
 	status, err := waitLinuxPtraceExecStop(process.pid)
 	if err != nil {
-		return nil, process.abortLaunch(fmt.Errorf("wait for Linux ptrace exec-stop: %w", err))
+		return process.abortLaunchOnOwner(fmt.Errorf("wait for Linux ptrace exec-stop: %w", err))
 	}
 	if !status.Stopped() || status.StopSignal() != unix.SIGTRAP {
-		return nil, process.abortLaunch(fmt.Errorf("wait for Linux ptrace exec-stop: unexpected wait status %#x", uint32(status)))
+		return process.abortLaunchOnOwner(fmt.Errorf("wait for Linux ptrace exec-stop: unexpected wait status %#x", uint32(status)))
 	}
 
 	identity, err := readProcessIdentity(process.pid)
 	if err != nil {
-		return nil, process.abortLaunch(fmt.Errorf("capture Linux ptrace process identity: %w", err))
+		return process.abortLaunchOnOwner(fmt.Errorf("capture Linux ptrace process identity: %w", err))
 	}
 	anchor, err := captureLinuxProcessGroupAnchor(process.pid)
 	if err != nil {
-		return nil, process.abortLaunch(fmt.Errorf("capture Linux ptrace process-group anchor: %w", err))
+		return process.abortLaunchOnOwner(fmt.Errorf("capture Linux ptrace process-group anchor: %w", err))
 	}
 	process.identity = identity
 	process.anchor = LinuxProcessGroupAnchor{
@@ -136,7 +217,7 @@ func LaunchLinuxPtrace(command *exec.Cmd) (*LinuxPtraceProcess, error) {
 		Session:   anchor.session,
 		StartTime: anchor.startTime,
 	}
-	return process, nil
+	return nil
 }
 
 // PID returns the target process identifier.
@@ -178,21 +259,31 @@ func (process *LinuxPtraceProcess) Resume() error {
 		return errLinuxPtraceLaunchClosed
 	}
 	process.mutex.Lock()
-	defer process.mutex.Unlock()
 	if process.waited {
+		process.mutex.Unlock()
 		return errLinuxPtraceLaunchFinished
 	}
 	if process.terminated {
+		process.mutex.Unlock()
 		return errors.New("Linux ptrace process was terminated before resume")
 	}
 	if process.resumed {
+		process.mutex.Unlock()
 		return errLinuxPtraceLaunchResumed
 	}
-	if err := detachLinuxPtrace(process.pid); err != nil {
-		return fmt.Errorf("detach Linux ptrace process %d: %w", process.pid, err)
-	}
-	process.resumed = true
-	return nil
+	owner := process.owner
+	pid := process.pid
+	process.mutex.Unlock()
+	return owner.call(func() error {
+		if err := detachLinuxPtrace(pid); err != nil {
+			return fmt.Errorf("detach Linux ptrace process %d: %w", pid, err)
+		}
+		process.mutex.Lock()
+		process.resumeThreadID = linuxPtraceThreadID()
+		process.resumed = true
+		process.mutex.Unlock()
+		return nil
+	})
 }
 
 // Terminate forcefully signals the retained pidfd-owned process group. It is
@@ -203,19 +294,43 @@ func (process *LinuxPtraceProcess) Terminate() error {
 		return errLinuxPtraceLaunchClosed
 	}
 	process.mutex.Lock()
-	defer process.mutex.Unlock()
 	if process.waited || process.terminated {
+		process.mutex.Unlock()
 		return nil
 	}
 	if process.pidfd < 0 {
+		if process.waitStarted {
+			process.mutex.Unlock()
+			return nil
+		}
+		process.mutex.Unlock()
 		return fmt.Errorf("terminate Linux ptrace process %d: %w", process.pid, errors.ErrUnsupported)
 	}
-	err := sendPIDFDSignal(process.pidfd, unix.SIGKILL, nil, unix.PIDFD_SIGNAL_PROCESS_GROUP)
-	if err != nil && !errors.Is(err, unix.ESRCH) {
-		return fmt.Errorf("terminate Linux ptrace process group %d: %w", process.pid, err)
+	owner := process.owner
+	pidfd := process.pidfd
+	pid := process.pid
+	preResume := !process.resumed
+	process.mutex.Unlock()
+	terminate := func() error {
+		process.mutex.Lock()
+		defer process.mutex.Unlock()
+		if process.waited || process.pidfd != pidfd {
+			return nil
+		}
+		err := sendPIDFDSignal(pidfd, unix.SIGKILL, nil, unix.PIDFD_SIGNAL_PROCESS_GROUP)
+		if err != nil && !errors.Is(err, unix.ESRCH) {
+			return fmt.Errorf("terminate Linux ptrace process group %d: %w", pid, err)
+		}
+		process.terminated = true
+		if preResume {
+			process.abortThreadID = linuxPtraceThreadID()
+		}
+		return nil
 	}
-	process.terminated = true
-	return nil
+	if preResume {
+		return owner.call(terminate)
+	}
+	return terminate()
 }
 
 // Wait blocks until the target exits and returns its process exit code. The
@@ -249,11 +364,15 @@ func (process *LinuxPtraceProcess) Wait() (int, error) {
 	done := process.waitDone
 	process.mutex.Unlock()
 
-	waitErr := process.command.Wait()
 	code := -1
-	if process.command.ProcessState != nil {
-		code = process.command.ProcessState.ExitCode()
-	}
+	waitErr := process.owner.call(func() error {
+		process.lastWaitThreadID = linuxPtraceThreadID()
+		waitErr := process.command.Wait()
+		if process.command.ProcessState != nil {
+			code = process.command.ProcessState.ExitCode()
+		}
+		return waitErr
+	})
 	closeErr := process.releasePIDFD()
 
 	process.mutex.Lock()
@@ -261,9 +380,11 @@ func (process *LinuxPtraceProcess) Wait() (int, error) {
 	process.waitErr = errors.Join(waitErr, closeErr)
 	process.waited = true
 	process.waitStarted = false
+	resultErr := process.waitErr
 	close(done)
 	process.mutex.Unlock()
-	return code, process.waitErr
+	process.owner.close()
+	return code, resultErr
 }
 
 func (process *LinuxPtraceProcess) releasePIDFD() error {
@@ -280,7 +401,8 @@ func (process *LinuxPtraceProcess) releasePIDFD() error {
 	return nil
 }
 
-func (process *LinuxPtraceProcess) abortLaunch(cause error) error {
+func (process *LinuxPtraceProcess) abortLaunchOnOwner(cause error) error {
+	process.abortThreadID = linuxPtraceThreadID()
 	var cleanupErr error
 	if process.pidfd >= 0 {
 		if err := sendPIDFDSignal(process.pidfd, unix.SIGKILL, nil, unix.PIDFD_SIGNAL_PROCESS_GROUP); err != nil && !errors.Is(err, unix.ESRCH) {
