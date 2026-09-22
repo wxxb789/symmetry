@@ -1885,6 +1885,7 @@ jobs:
           fi
 
       - name: Run production Linux containment witness matrix
+        if: ${{ always() }}
         working-directory: daemon
         env:
           SYMMETRY_E2E: "1"
