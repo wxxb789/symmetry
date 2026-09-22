@@ -401,6 +401,170 @@ func TestLinuxSupervisorMirrorRequiresHelperDeath(t *testing.T) {
 	_ = stderrWrite.Close()
 }
 
+func TestLinuxSupervisorGroupAbsentRetryWaitsForTransientPresence(t *testing.T) {
+	identity, err := ProcessIdentity(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousPriority := readLinuxProcessGroupPriority
+	previousProof := linuxSupervisorProveProcessGroupAbsent
+	t.Cleanup(func() {
+		readLinuxProcessGroupPriority = previousPriority
+		linuxSupervisorProveProcessGroupAbsent = previousProof
+	})
+
+	calls := 0
+	readLinuxProcessGroupPriority = func(which, who int) (int, error) {
+		if which != unix.PRIO_PGRP || who != os.Getpid() {
+			t.Fatalf("getpriority arguments = (%d, %d)", which, who)
+		}
+		calls++
+		if calls == 1 {
+			return 0, nil
+		}
+		return 0, unix.ESRCH
+	}
+	linuxSupervisorProveProcessGroupAbsent = ProvePersistedProcessGroupAbsent
+
+	deadline := time.Now().Add(250 * time.Millisecond)
+	if err := proveLinuxSupervisorGroupAbsentWithRetry(context.Background(), os.Getpid(), identity, deadline); err != nil {
+		t.Fatalf("proveLinuxSupervisorGroupAbsentWithRetry() = %v, want success", err)
+	}
+	if calls != 2 {
+		t.Fatalf("getpriority calls = %d, want 2", calls)
+	}
+}
+
+func TestLinuxSupervisorGroupAbsentRetryRejectsExpiredDeadline(t *testing.T) {
+	previous := linuxSupervisorProveProcessGroupAbsent
+	t.Cleanup(func() { linuxSupervisorProveProcessGroupAbsent = previous })
+
+	calls := 0
+	linuxSupervisorProveProcessGroupAbsent = func(context.Context, int, string) error {
+		calls++
+		return fmt.Errorf("%w: group still visible", errPersistedProcessGroupPresent)
+	}
+
+	deadline := time.Now().Add(-time.Nanosecond)
+	err := proveLinuxSupervisorGroupAbsentWithRetry(context.Background(), 123, "identity", deadline)
+	if !errors.Is(err, ErrPersistedProcessGroupUnproven) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expired proof error = %v, want unproven + deadline categories", err)
+	}
+	if calls != 0 {
+		t.Fatalf("group proof calls = %d, want 0 after expired deadline", calls)
+	}
+}
+
+func TestLinuxSupervisorGroupAbsentRetryDoesNotRetryNonTransientErrors(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		cause error
+	}{
+		{name: "identity", cause: errors.New("PID namespace identity changed")},
+		{name: "permission", cause: unix.EPERM},
+		{name: "context", cause: context.DeadlineExceeded},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			previous := linuxSupervisorProveProcessGroupAbsent
+			t.Cleanup(func() { linuxSupervisorProveProcessGroupAbsent = previous })
+
+			calls := 0
+			linuxSupervisorProveProcessGroupAbsent = func(context.Context, int, string) error {
+				calls++
+				return fmt.Errorf("%w: %w", ErrPersistedProcessGroupUnproven, test.cause)
+			}
+
+			err := proveLinuxSupervisorGroupAbsentWithRetry(context.Background(), 123, "identity", time.Now().Add(time.Second))
+			if !errors.Is(err, test.cause) || errors.Is(err, errPersistedProcessGroupPresent) {
+				t.Fatalf("non-transient proof error = %v, want cause %v without transient category", err, test.cause)
+			}
+			if calls != 1 {
+				t.Fatalf("non-transient proof calls = %d, want 1", calls)
+			}
+		})
+	}
+}
+
+func TestLinuxSupervisorGroupAbsentRetryPropagatesCancellation(t *testing.T) {
+	previous := linuxSupervisorProveProcessGroupAbsent
+	t.Cleanup(func() { linuxSupervisorProveProcessGroupAbsent = previous })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := 0
+	linuxSupervisorProveProcessGroupAbsent = func(ctx context.Context, _ int, _ string) error {
+		calls++
+		cancel()
+		return fmt.Errorf("%w: group still visible", errPersistedProcessGroupPresent)
+	}
+
+	err := proveLinuxSupervisorGroupAbsentWithRetry(ctx, 123, "identity", time.Now().Add(time.Second))
+	if !errors.Is(err, context.Canceled) || !errors.Is(err, errPersistedProcessGroupPresent) {
+		t.Fatalf("canceled proof error = %v, want canceled + transient-presence categories", err)
+	}
+	if calls != 1 {
+		t.Fatalf("canceled proof calls = %d, want 1", calls)
+	}
+}
+
+func TestLinuxSupervisorGroupAbsentRetryRejectsLateSuccessfulProbe(t *testing.T) {
+	previous := linuxSupervisorProveProcessGroupAbsent
+	t.Cleanup(func() { linuxSupervisorProveProcessGroupAbsent = previous })
+
+	calls := 0
+	linuxSupervisorProveProcessGroupAbsent = func(ctx context.Context, _ int, _ string) error {
+		calls++
+		<-ctx.Done()
+		return nil
+	}
+
+	err := proveLinuxSupervisorGroupAbsentWithRetry(context.Background(), 123, "identity", time.Now().Add(20*time.Millisecond))
+	if !errors.Is(err, ErrPersistedProcessGroupUnproven) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("late successful proof error = %v, want unproven + deadline categories", err)
+	}
+	if calls != 1 {
+		t.Fatalf("late successful proof calls = %d, want 1", calls)
+	}
+}
+
+func TestLinuxSupervisorMirrorProofFailureRetainsRetryableAuthority(t *testing.T) {
+	previous := linuxSupervisorProveProcessGroupAbsent
+	t.Cleanup(func() { linuxSupervisorProveProcessGroupAbsent = previous })
+	linuxSupervisorProveProcessGroupAbsent = func(context.Context, int, string) error {
+		return fmt.Errorf("%w: %w", ErrPersistedProcessGroupUnproven, unix.EPERM)
+	}
+
+	helperDone := make(chan struct{})
+	close(helperDone)
+	callbackCalls := 0
+	supervisor := &linuxSupervisor{
+		authority:  testLinuxSupervisorAuthority(t),
+		helperDone: helperDone,
+		mirror:     &processGroup{closeCompleted: true},
+		pidfd:      47,
+		containmentUnprovenCallback: func() error {
+			callbackCalls++
+			return nil
+		},
+	}
+
+	err := supervisor.Terminate(true)
+	if !errors.Is(err, ErrLinuxSupervisorStopUnproven) || !strings.Contains(err.Error(), "mirror proof") {
+		t.Fatalf("mirror proof failure = %v, want unresolved mirror proof", err)
+	}
+	if _, ok := supervisor.ContainmentStopReceipt(); ok || supervisor.receipt != nil || supervisor.stopped {
+		t.Fatalf("mirror proof failure state = receipt:%v stopped:%v, want no receipt and not stopped", supervisor.receipt, supervisor.stopped)
+	}
+	if supervisor.ContainmentAuthority().StopReceipt != nil {
+		t.Fatal("mirror proof failure installed an authority stop receipt")
+	}
+	if supervisor.pidfd != -1 || !supervisor.finalProofPending || !supervisor.ContainmentCloseRetryable() {
+		t.Fatalf("mirror proof failure authority = pidfd:%d finalProofPending:%v retryable:%v, want closed pidfd with proof-only retry", supervisor.pidfd, supervisor.finalProofPending, supervisor.ContainmentCloseRetryable())
+	}
+	if callbackCalls != 1 {
+		t.Fatalf("containment-unproven callback calls = %d, want 1", callbackCalls)
+	}
+}
+
 func TestLinuxSupervisorReleaseAfterHelperDeathUsesLocalDurableReceipt(t *testing.T) {
 	value := testLinuxSupervisorAuthority(t)
 	receipt := testLinuxSupervisorStopReceipt(value)

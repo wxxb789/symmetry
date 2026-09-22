@@ -321,6 +321,9 @@ type linuxSupervisor struct {
 	// mirror observes the target tree independently of the helper. It owns the
 	// duplicated pidfd and may take over only after the exact helper has exited.
 	mirror *processGroup
+	// finalProofPending means the mirror closed its pidfd and only the
+	// identity-bound read-only group proof remains retryable.
+	finalProofPending bool
 
 	requestMu sync.Mutex
 	statusMu  sync.Mutex
@@ -792,7 +795,7 @@ func (supervisor *linuxSupervisor) ContainmentCloseRetryable() bool {
 	}
 	supervisor.mu.Lock()
 	defer supervisor.mu.Unlock()
-	return !supervisor.released && supervisor.receipt == nil && supervisor.pidfd >= 0
+	return !supervisor.released && supervisor.receipt == nil && (supervisor.pidfd >= 0 || supervisor.finalProofPending)
 }
 
 func (supervisor *linuxSupervisor) SetContainmentUnprovenCallback(callback func() error) error {
@@ -957,13 +960,24 @@ func (supervisor *linuxSupervisor) stopWithMirror() error {
 	if mirror == nil {
 		return ErrLinuxSupervisorStopUnproven
 	}
-	if err := mirror.Close(); err != nil {
+	deadline := containmentDeadline(context.Background())
+	if err := mirror.closeUntil(deadline); err != nil {
+		mirror.mutex.Lock()
+		mirrorFD := mirror.fd
+		mirror.mutex.Unlock()
+		supervisor.mu.Lock()
+		supervisor.pidfd = mirrorFD
+		supervisor.mu.Unlock()
 		if supervisor.containmentUnprovenCallback != nil {
 			_ = supervisor.containmentUnprovenCallback()
 		}
 		return fmt.Errorf("%w: mirror stop and descendant proof: %v", ErrLinuxSupervisorStopUnproven, err)
 	}
-	if err := ProvePersistedProcessGroupAbsent(context.Background(), pid, identity); err != nil {
+	supervisor.mu.Lock()
+	supervisor.pidfd = -1
+	supervisor.finalProofPending = true
+	supervisor.mu.Unlock()
+	if err := proveLinuxSupervisorGroupAbsentWithRetry(context.Background(), pid, identity, deadline); err != nil {
 		if supervisor.containmentUnprovenCallback != nil {
 			_ = supervisor.containmentUnprovenCallback()
 		}
@@ -975,9 +989,55 @@ func (supervisor *linuxSupervisor) stopWithMirror() error {
 	supervisor.authority.StopReceipt = &receipt
 	supervisor.handoff.StopReceipt = &receipt
 	supervisor.stopped = true
-	supervisor.pidfd = -1
+	supervisor.finalProofPending = false
 	supervisor.mu.Unlock()
 	return nil
+}
+
+// proveLinuxSupervisorGroupAbsentWithRetry tolerates only the short interval
+// in which a killed process group is still visible to getpriority. Identity,
+// namespace, permission, and all other proof failures remain fail-closed.
+func proveLinuxSupervisorGroupAbsentWithRetry(ctx context.Context, pid int, identity string, deadline time.Time) error {
+	if ctx == nil {
+		return fmt.Errorf("%w: nil proof context", ErrPersistedProcessGroupUnproven)
+	}
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
+		deadline = contextDeadline
+	}
+	proofCtx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	for {
+		if budgetErr := checkProcessGroupProbeBudget(proofCtx, deadline); budgetErr != nil {
+			return fmt.Errorf("%w: %w", ErrPersistedProcessGroupUnproven, budgetErr)
+		}
+		err := linuxSupervisorProveProcessGroupAbsent(proofCtx, pid, identity)
+		if budgetErr := checkProcessGroupProbeBudget(proofCtx, deadline); budgetErr != nil {
+			if err == nil {
+				return fmt.Errorf("%w: proof completed after deadline: %w", ErrPersistedProcessGroupUnproven, budgetErr)
+			}
+			return errors.Join(err, budgetErr)
+		}
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, errPersistedProcessGroupPresent) {
+			return err
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return err
+		}
+		if remaining > containmentCloseProbeInterval {
+			remaining = containmentCloseProbeInterval
+		}
+		timer := time.NewTimer(remaining)
+		select {
+		case <-proofCtx.Done():
+			timer.Stop()
+			return errors.Join(err, proofCtx.Err())
+		case <-timer.C:
+		}
+	}
 }
 
 func (supervisor *linuxSupervisor) receiptFromResponse(response linuxSupervisorResponse) authority.StopReceipt {
@@ -1751,7 +1811,8 @@ func provePersistedLinuxSupervisorRelease(value authority.Supervisor) error {
 	if err := proveLinuxSupervisorTargetAbsent(value.TargetPID, value.TargetIdentity); err != nil {
 		return err
 	}
-	if err := linuxSupervisorProveProcessGroupAbsent(context.Background(), value.TargetPID, value.TargetIdentity); err != nil {
+	deadline := containmentDeadline(context.Background())
+	if err := proveLinuxSupervisorGroupAbsentWithRetry(context.Background(), value.TargetPID, value.TargetIdentity, deadline); err != nil {
 		return fmt.Errorf("prove persisted Linux supervisor process group absent: %w", err)
 	}
 	return retireLinuxSupervisorEndpoint(value.OwnerContext)
