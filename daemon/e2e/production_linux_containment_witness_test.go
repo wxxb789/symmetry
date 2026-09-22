@@ -29,6 +29,8 @@ import (
 const (
 	linuxProductionContainmentWitnessEnvironment     = "SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_WITNESS"
 	linuxProductionContainmentWitnessOutputDirectory = "SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_WITNESS_OUTPUT_DIR"
+	linuxCommitResumeBarrierReachedEnvironment       = "SYMMETRY_RUNNER_COMMIT_RESUME_BARRIER_REACHED_FILE"
+	linuxCommitResumeBarrierReleaseEnvironment       = "SYMMETRY_RUNNER_COMMIT_RESUME_BARRIER_RELEASE_FILE"
 )
 
 // TestProductionLinuxContainmentWitnessSpine is an opt-in production-binary
@@ -57,6 +59,9 @@ func TestProductionLinuxContainmentWitnessSpine(t *testing.T) {
 	t.Run("daemon_sigkill_prepare_before_bind", func(t *testing.T) {
 		runLinuxPrepareBeforeBindWitness(t, environment, daemonBinary, metadata, linuxWitnessCaseRoot(runRoot, "prepare-before-bind"))
 	})
+	t.Run("daemon_sigkill_after_commit_before_resume", func(t *testing.T) {
+		runLinuxDaemonCrashAfterCommitBeforeResumeWitness(t, environment, daemonBinary, metadata, linuxWitnessCaseRoot(runRoot, "commit-before-resume"))
+	})
 	t.Run("daemon_sigkill_after_resume_with_descendant", func(t *testing.T) {
 		runLinuxDaemonCrashAfterResumeWitness(t, environment, daemonBinary, metadata, linuxWitnessCaseRoot(runRoot, "daemon-after-resume"))
 	})
@@ -80,16 +85,24 @@ type linuxWitnessMetadata struct {
 }
 
 type linuxWitnessEvidence struct {
-	Version          int                           `json:"version"`
-	Case             string                        `json:"case"`
-	Stage            string                        `json:"stage"`
-	Metadata         linuxWitnessMetadata          `json:"metadata"`
-	CaseRoot         string                        `json:"case_root"`
-	Crash            *linuxWitnessExitStatus       `json:"crash,omitempty"`
-	JournalSnapshots []linuxWitnessJournalSnapshot `json:"journal_snapshots"`
-	ProcessSnapshots []linuxWitnessProcessSnapshot `json:"process_snapshots"`
-	RawOutput        map[string]string             `json:"raw_output,omitempty"`
-	Notes            []string                      `json:"notes,omitempty"`
+	Version                int                           `json:"version"`
+	Case                   string                        `json:"case"`
+	Stage                  string                        `json:"stage"`
+	Metadata               linuxWitnessMetadata          `json:"metadata"`
+	CaseRoot               string                        `json:"case_root"`
+	TaskID                 string                        `json:"task_id,omitempty"`
+	RunID                  string                        `json:"run_id,omitempty"`
+	Generation             int64                         `json:"generation,omitempty"`
+	JournalKey             string                        `json:"journal_key,omitempty"`
+	BarrierReachedPath     string                        `json:"barrier_reached_path,omitempty"`
+	BarrierReleasePath     string                        `json:"barrier_release_path,omitempty"`
+	BarrierReachedContents string                        `json:"barrier_reached_contents,omitempty"`
+	BarrierReleaseContents string                        `json:"barrier_release_contents,omitempty"`
+	Crash                  *linuxWitnessExitStatus       `json:"crash,omitempty"`
+	JournalSnapshots       []linuxWitnessJournalSnapshot `json:"journal_snapshots"`
+	ProcessSnapshots       []linuxWitnessProcessSnapshot `json:"process_snapshots"`
+	RawOutput              map[string]string             `json:"raw_output,omitempty"`
+	Notes                  []string                      `json:"notes,omitempty"`
 }
 
 type linuxWitnessExitStatus struct {
@@ -382,6 +395,200 @@ func runLinuxPrepareBeforeBindWitness(t *testing.T, environment e2eEnvironment, 
 	writeLinuxWitnessEvidence(t, target.EvidencePath, evidence)
 }
 
+func runLinuxDaemonCrashAfterCommitBeforeResumeWitness(t *testing.T, environment e2eEnvironment, daemonBinary string, metadata linuxWitnessMetadata, caseRoot string) {
+	t.Helper()
+	target := prepareLinuxWitnessTarget(t, environment, caseRoot, "commit-before-resume")
+	reachedPath := filepath.Join(caseRoot, "commit-resume.reached")
+	releasePath := filepath.Join(caseRoot, "commit-resume.release")
+	evidence := linuxWitnessEvidence{
+		Version:            1,
+		Case:               "daemon_sigkill_after_commit_before_resume",
+		Stage:              "initialized",
+		Metadata:           metadata,
+		CaseRoot:           caseRoot,
+		BarrierReachedPath: reachedPath,
+		BarrierReleasePath: releasePath,
+		RawOutput:          map[string]string{},
+	}
+	writeLinuxWitnessEvidence(t, target.EvidencePath, evidence)
+
+	var (
+		daemon                         *productionDaemonWitnessProcess
+		second                         *productionDaemonWitnessProcess
+		task                           protocol.Task
+		committed                      linuxWitnessJournalFile
+		key                            state.RunKey
+		targetPID, helperPID           int
+		targetIdentity, helperIdentity string
+	)
+	defer func() {
+		if contents, err := os.ReadFile(reachedPath); err == nil {
+			evidence.BarrierReachedContents = string(contents)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			evidence.Notes = append(evidence.Notes, fmt.Sprintf("read reached marker during teardown: %v", err))
+		}
+		if contents, err := os.ReadFile(releasePath); err == nil {
+			evidence.BarrierReleaseContents = string(contents)
+		} else if errors.Is(err, os.ErrNotExist) {
+			evidence.BarrierReleaseContents = "<absent>"
+		} else {
+			evidence.Notes = append(evidence.Notes, fmt.Sprintf("read release marker during teardown: %v", err))
+		}
+		if key.RunID != "" {
+			if current, found, err := readLinuxWitnessJournalForKey(target.StateDir, key); err == nil && found {
+				evidence.JournalSnapshots = append(evidence.JournalSnapshots, linuxWitnessJournalSnapshotFromFile(current))
+				if targetPID == 0 {
+					targetPID, targetIdentity, helperPID, helperIdentity = linuxWitnessOwnerIDs(current.Journal)
+				}
+			} else if err != nil {
+				evidence.Notes = append(evidence.Notes, fmt.Sprintf("read journal during teardown: %v", err))
+			}
+		}
+		if targetPID > 0 {
+			evidence.ProcessSnapshots = append(evidence.ProcessSnapshots,
+				linuxWitnessProcessSnapshotAt("teardown_target", targetPID, targetIdentity),
+				linuxWitnessProcessSnapshotAt("teardown_helper", helperPID, helperIdentity))
+		}
+		evidence.RawOutput = linuxWitnessLogs(daemon, second)
+		if evidence.Stage != "recovered_and_cleared" {
+			evidence.Notes = append(evidence.Notes, "teardown diagnostics captured without changing the failure outcome")
+		}
+		writeLinuxWitnessEvidence(t, target.EvidencePath, evidence)
+	}()
+
+	barrierEnvironment := map[string]string{
+		linuxProductionContainmentWitnessEnvironment: "1",
+		linuxCommitResumeBarrierReachedEnvironment:   reachedPath,
+		linuxCommitResumeBarrierReleaseEnvironment:   releasePath,
+	}
+	daemon = startLinuxCommitResumeBarrierDaemonWitness(t, daemonBinary, target.ConfigPath, caseRoot, environment.enrollmentToken, "slow", "first", barrierEnvironment)
+	defer func() {
+		if daemon != nil && !daemon.waited {
+			daemon.stop(t)
+		}
+	}()
+
+	operator := newOperator(t, environment)
+	profile, workspace := profileAndWorkspace(t, target.ConfigPath)
+	task = submit(t, operator, daemonRun{profile: profile, workspace: workspace}, "linux-commit-before-resume", "slow")
+	evidence.TaskID = task.TaskID
+	if task.RunID != nil {
+		evidence.RunID = *task.RunID
+	}
+	if task.Generation != nil {
+		evidence.Generation = *task.Generation
+	}
+	if err := waitForLinuxWitnessMarker(reachedPath, 45*time.Second); err != nil {
+		t.Fatalf("wait for production commit/resume reached marker: %v", err)
+	}
+	reachedContents, err := os.ReadFile(reachedPath)
+	if err != nil {
+		t.Fatalf("read production commit/resume reached marker: %v", err)
+	}
+	evidence.BarrierReachedContents = string(reachedContents)
+	if !strings.Contains(evidence.BarrierReachedContents, "lease_armed=false") {
+		t.Fatalf("commit/resume reached marker = %q, want lease_armed=false", evidence.BarrierReachedContents)
+	}
+	if _, err := os.Stat(releasePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("release marker before daemon crash = %v, want absent", err)
+	}
+
+	files, err := readLinuxWitnessJournals(target.StateDir)
+	if err != nil {
+		t.Fatalf("read journal after commit/resume reached marker: %v", err)
+	}
+	for _, file := range files {
+		if file.Journal.ContainmentAuthority != nil && file.Journal.ContainmentHandoff == nil {
+			committed = file
+			break
+		}
+	}
+	if committed.Path == "" {
+		t.Fatalf("journal after commit/resume reached marker did not expose durable committed authority: %#v", files)
+	}
+	if committed.Journal.ContainmentAuthority.StopReceipt != nil {
+		t.Fatalf("committed authority unexpectedly contained stop receipt: %#v", committed.Journal.ContainmentAuthority)
+	}
+	key = committed.Journal.Key()
+	evidence.TaskID = task.TaskID
+	evidence.RunID = key.RunID
+	evidence.Generation = key.Generation
+	evidence.JournalKey = fmt.Sprintf("%s/%d", key.RunID, key.Generation)
+	targetPID, targetIdentity, helperPID, helperIdentity = linuxWitnessOwnerIDs(committed.Journal)
+	targetSnapshot := linuxWitnessProcessSnapshotAt("target_before_resume", targetPID, targetIdentity)
+	helperSnapshot := linuxWitnessProcessSnapshotAt("helper_before_resume", helperPID, helperIdentity)
+	if !targetSnapshot.Exists || !helperSnapshot.Exists {
+		t.Fatalf("commit/resume barrier process snapshots are incomplete: target=%#v helper=%#v", targetSnapshot, helperSnapshot)
+	}
+	if targetSnapshot.State != "T" && targetSnapshot.State != "t" {
+		t.Fatalf("target process state before resume = %q, want Linux stopped state T or t: %#v", targetSnapshot.State, targetSnapshot)
+	}
+	if _, err := os.Stat(target.TargetMarker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("target user-code marker before resume = %v, want absent", err)
+	}
+	if _, err := os.Stat(target.DescendantMarker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("descendant user-code marker before resume = %v, want absent", err)
+	}
+	evidence.Stage = "committed_before_resume_lease_unarmed"
+	evidence.JournalSnapshots = append(evidence.JournalSnapshots, linuxWitnessJournalSnapshotFromFile(committed))
+	evidence.ProcessSnapshots = append(evidence.ProcessSnapshots, targetSnapshot, helperSnapshot)
+	evidence.Notes = append(evidence.Notes, "reached marker was observed after durable commit and before initial helper lease arm; target and descendant markers were absent")
+	writeLinuxWitnessEvidence(t, target.EvidencePath, evidence)
+
+	crash := killLinuxProductionDaemon(daemon)
+	if crash.RequestedSignal != "SIGKILL" || !crash.Signaled || crash.Signal != "SIGKILL" {
+		t.Fatalf("daemon crash status = %#v, want SIGKILL", crash)
+	}
+	evidence.Stage = "daemon_crashed_after_commit_before_resume"
+	evidence.Crash = &crash
+	evidence.RawOutput = linuxWitnessLogs(daemon, nil)
+	writeLinuxWitnessEvidence(t, target.EvidencePath, evidence)
+	if err := waitForLinuxWitnessProcessStopped(targetPID, targetIdentity, 20*time.Second); err != nil {
+		t.Fatalf("helper owner loss did not stop target group before resume: %v", err)
+	}
+	if _, err := os.Stat(target.TargetMarker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("target user-code marker after daemon crash = %v, want absent", err)
+	}
+	if _, err := os.Stat(target.DescendantMarker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("descendant user-code marker after daemon crash = %v, want absent", err)
+	}
+	evidence.ProcessSnapshots = append(evidence.ProcessSnapshots,
+		linuxWitnessProcessSnapshotAt("target_after_owner_loss", targetPID, targetIdentity),
+		linuxWitnessProcessSnapshotAt("helper_after_owner_loss", helperPID, helperIdentity))
+	writeLinuxWitnessEvidence(t, target.EvidencePath, evidence)
+
+	second = startProductionDaemonWitness(t, daemonBinary, target.ConfigPath, caseRoot, "", "slow", "second")
+	defer func() {
+		if second != nil && !second.waited {
+			second.stop(t)
+		}
+	}()
+	if err := waitForLinuxWitnessJournalReleased(target.StateDir, key, 45*time.Second); err != nil {
+		t.Fatalf("recover commit-before-resume authority: %v", err)
+	}
+	cleared, found, err := readLinuxWitnessJournalForKey(target.StateDir, key)
+	if err != nil {
+		t.Fatalf("read recovered commit-before-resume journal: %v", err)
+	}
+	if !found {
+		t.Fatalf("recovered commit-before-resume journal %s/%d disappeared", key.RunID, key.Generation)
+	}
+	if cleared.Journal.ContainmentHandoff != nil || cleared.Journal.ContainmentAuthority != nil || cleared.Journal.HasProcessDetails() {
+		t.Fatalf("recovered commit-before-resume journal retained containment: %#v", cleared.Journal)
+	}
+	if got := getTask(t, operator, task.TaskID); got.RunID == nil || *got.RunID != key.RunID {
+		t.Fatalf("recovered task run identity changed: %#v", got)
+	}
+	evidence.Stage = "recovered_and_cleared"
+	evidence.JournalSnapshots = append(evidence.JournalSnapshots, linuxWitnessJournalSnapshotFromFile(cleared))
+	evidence.ProcessSnapshots = append(evidence.ProcessSnapshots,
+		linuxWitnessProcessSnapshotAt("target_after_recovery", targetPID, targetIdentity),
+		linuxWitnessProcessSnapshotAt("helper_after_recovery", helperPID, helperIdentity))
+	second.stop(t)
+	evidence.RawOutput = linuxWitnessLogs(daemon, second)
+	writeLinuxWitnessEvidence(t, target.EvidencePath, evidence)
+}
+
 func runLinuxDaemonCrashAfterResumeWitness(t *testing.T, environment e2eEnvironment, daemonBinary string, metadata linuxWitnessMetadata, caseRoot string) {
 	t.Helper()
 	target := prepareLinuxWitnessTarget(t, environment, caseRoot, "daemon-after-resume")
@@ -593,6 +800,60 @@ func waitAndKillLinuxDaemonAtHandoff(daemon *productionDaemonWitnessProcess, sta
 		runtime.Gosched()
 	}
 	return linuxBoundKillResult{Err: fmt.Errorf("bound pre-commit handoff did not appear within %s", timeout)}
+}
+
+func startLinuxCommitResumeBarrierDaemonWitness(t *testing.T, binary, configPath, workDir, enrollmentToken, agentMode, label string, extraEnvironment map[string]string) *productionDaemonWitnessProcess {
+	t.Helper()
+	stdoutPath := filepath.Join(workDir, label+"-daemon.stdout.log")
+	stderrPath := filepath.Join(workDir, label+"-daemon.stderr.log")
+	stdout, err := os.OpenFile(stdoutPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		t.Fatalf("open daemon stdout log: %v", err)
+	}
+	stderr, err := os.OpenFile(stderrPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		_ = stdout.Close()
+		t.Fatalf("open daemon stderr log: %v", err)
+	}
+	command := exec.Command(binary, "-config", configPath)
+	command.Dir = workDir
+	command.Stdout = stdout
+	command.Stderr = stderr
+	if err := platform.ConfigureHeadlessProcess(command); err != nil {
+		_ = stdout.Close()
+		_ = stderr.Close()
+		t.Fatalf("configure hidden daemon process: %v", err)
+	}
+	command.Env = witnessEnvironment(enrollmentToken, agentMode)
+	for key, value := range extraEnvironment {
+		command.Env = setLinuxWitnessEnvironment(command.Env, key, value)
+	}
+	if err := command.Start(); err != nil {
+		_ = stdout.Close()
+		_ = stderr.Close()
+		t.Fatalf("start production daemon: %v", err)
+	}
+	return &productionDaemonWitnessProcess{command: command, stdout: stdout, stderr: stderr}
+}
+
+func setLinuxWitnessEnvironment(environment []string, key, value string) []string {
+	prefix := key + "="
+	updated := make([]string, 0, len(environment)+1)
+	found := false
+	for _, entry := range environment {
+		if strings.HasPrefix(entry, prefix) {
+			if !found {
+				updated = append(updated, prefix+value)
+				found = true
+			}
+			continue
+		}
+		updated = append(updated, entry)
+	}
+	if !found {
+		updated = append(updated, prefix+value)
+	}
+	return updated
 }
 
 func prepareLinuxWitnessTarget(t *testing.T, environment e2eEnvironment, caseRoot, name string) linuxWitnessTarget {

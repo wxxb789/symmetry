@@ -91,6 +91,27 @@ func TestLinuxSupervisorDurableHandoffIsDisabledForGoTestBinary(t *testing.T) {
 	}
 }
 
+func TestWaitForLinuxSupervisorTargetReturnsWhenComplete(t *testing.T) {
+	waitDone := make(chan struct{})
+	close(waitDone)
+
+	if err := waitForLinuxSupervisorTarget(waitDone, time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("waitForLinuxSupervisorTarget() = %v, want nil", err)
+	}
+}
+
+func TestWaitForLinuxSupervisorTargetBoundsDeadline(t *testing.T) {
+	waitDone := make(chan struct{})
+	started := time.Now()
+	err := waitForLinuxSupervisorTarget(waitDone, started.Add(25*time.Millisecond))
+	if !errors.Is(err, ErrLinuxSupervisorStopUnproven) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("waitForLinuxSupervisorTarget() error = %v, want unresolved deadline", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("waitForLinuxSupervisorTarget() took %v after deadline, want bounded return", elapsed)
+	}
+}
+
 func TestLinuxSupervisorLeaseStateLatchesDeadlineBeforeTimerCallback(t *testing.T) {
 	newExpired := func() *linuxSupervisorLeaseState {
 		state := newLinuxSupervisorLeaseState()

@@ -21,9 +21,17 @@ import (
 )
 
 const (
-	readChunkSize           = 32 * 1024
-	eventQueueCapacity      = 64
-	defaultTerminationGrace = 5 * time.Second
+	readChunkSize                   = 32 * 1024
+	eventQueueCapacity              = 64
+	defaultTerminationGrace         = 5 * time.Second
+	commitResumeBarrierTimeout      = 30 * time.Second
+	commitResumeBarrierPollInterval = 25 * time.Millisecond
+)
+
+const (
+	commitResumeBarrierWitnessGateEnvironment = "SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_WITNESS"
+	commitResumeBarrierReachedEnvironment     = "SYMMETRY_RUNNER_COMMIT_RESUME_BARRIER_REACHED_FILE"
+	commitResumeBarrierReleaseEnvironment     = "SYMMETRY_RUNNER_COMMIT_RESUME_BARRIER_RELEASE_FILE"
 )
 
 // ErrInputClosed reports that the process input transport can no longer accept
@@ -440,6 +448,15 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 				nil,
 			)
 		}
+		if err := runner.waitForCommitResumeBarrier(ctx, started); err != nil {
+			return cleanupFailedStartStarted(
+				started,
+				stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
+				startedAt,
+				fmt.Errorf("wait for commit/resume barrier: %w", err),
+				nil,
+			)
+		}
 		markerPersisted.Store(true)
 		if value, err := started.containmentHandoff.ToSupervisor(); err == nil {
 			cloned := value.Clone()
@@ -665,6 +682,107 @@ func (runner Runner) commitStartedHandoff(started *startedProcess, startedAt tim
 	started.containmentHandoffCommitUnknown = false
 	started.containmentHandoffCommitted = true
 	return nil
+}
+
+// waitForCommitResumeBarrier is an opt-in crash-witness seam. It is disabled
+// unless both marker paths are supplied, and it never changes the ordinary
+// production lifecycle. The reached marker is created only after durable
+// commit; lease arming and target resume remain behind the release marker.
+func (runner Runner) waitForCommitResumeBarrier(ctx context.Context, started *startedProcess) error {
+	if os.Getenv(commitResumeBarrierWitnessGateEnvironment) != "1" {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("commit/resume barrier cancelled: %w", err)
+	}
+	reachedPath, reachedConfigured := os.LookupEnv(commitResumeBarrierReachedEnvironment)
+	releasePath, releaseConfigured := os.LookupEnv(commitResumeBarrierReleaseEnvironment)
+	if !reachedConfigured && !releaseConfigured {
+		return nil
+	}
+	if reachedConfigured != releaseConfigured {
+		return fmt.Errorf("commit/resume barrier requires both %s and %s", commitResumeBarrierReachedEnvironment, commitResumeBarrierReleaseEnvironment)
+	}
+	reachedPath = strings.TrimSpace(reachedPath)
+	releasePath = strings.TrimSpace(releasePath)
+	if reachedPath == "" || releasePath == "" {
+		return errors.New("commit/resume barrier marker paths must not be empty")
+	}
+	if filepath.Clean(reachedPath) == filepath.Clean(releasePath) {
+		return errors.New("commit/resume barrier marker paths must be distinct")
+	}
+	if err := assertCommitResumeBarrierPathAbsent(reachedPath); err != nil {
+		return fmt.Errorf("validate reached marker %q: %w", reachedPath, err)
+	}
+	if err := assertCommitResumeBarrierPathAbsent(releasePath); err != nil {
+		return fmt.Errorf("validate release marker %q: %w", releasePath, err)
+	}
+
+	reached, err := os.OpenFile(reachedPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("create reached marker %q: %w", reachedPath, err)
+	}
+	marker := fmt.Sprintf(
+		"pid=%d\ntarget_pid=%d\ntime=%s\nlease_armed=false\n",
+		os.Getpid(),
+		commitResumeBarrierTargetPID(started),
+		time.Now().UTC().Format(time.RFC3339Nano),
+	)
+	writeErr := error(nil)
+	if _, writeErr = reached.WriteString(marker); writeErr == nil {
+		writeErr = reached.Sync()
+	}
+	if closeErr := reached.Close(); writeErr == nil {
+		writeErr = closeErr
+	}
+	if writeErr != nil {
+		return fmt.Errorf("publish reached marker %q: %w", reachedPath, writeErr)
+	}
+
+	deadline := time.NewTimer(commitResumeBarrierTimeout)
+	defer deadline.Stop()
+	poll := time.NewTicker(commitResumeBarrierPollInterval)
+	defer poll.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("commit/resume barrier cancelled: %w", err)
+		}
+		if err := commitResumeBarrierReleaseState(releasePath); err == nil {
+			return nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("observe release marker %q: %w", releasePath, err)
+		}
+		select {
+		case <-deadline.C:
+			return fmt.Errorf("commit/resume barrier release marker %q did not appear within %s", releasePath, commitResumeBarrierTimeout)
+		case <-ctx.Done():
+			return fmt.Errorf("commit/resume barrier cancelled: %w", ctx.Err())
+		case <-poll.C:
+		}
+	}
+}
+
+func assertCommitResumeBarrierPathAbsent(path string) error {
+	_, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err == nil {
+		return errors.New("path already exists")
+	}
+	return err
+}
+
+func commitResumeBarrierReleaseState(path string) error {
+	_, err := os.Lstat(path)
+	return err
+}
+
+func commitResumeBarrierTargetPID(started *startedProcess) int {
+	if started == nil || started.containmentHandoff == nil {
+		return 0
+	}
+	return started.containmentHandoff.TargetPID
 }
 
 var errInitialLeaseDeadlineExpired = errors.New("initial containment lease deadline has elapsed")

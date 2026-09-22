@@ -1670,6 +1670,7 @@ func RunContainmentSupervisor(args []string) error {
 		})
 	}
 	preHelloStop := func() error {
+		deadline := containmentDeadline(context.Background())
 		if preHelloReceipt != nil {
 			return nil
 		}
@@ -1686,8 +1687,9 @@ func RunContainmentSupervisor(args []string) error {
 		group.skipNextCloseSignal = true
 		group.mutex.Unlock()
 		preHelloStartWait()
-		<-preHelloWaitDone
-		deadline := containmentDeadline(context.Background())
+		if err := waitForLinuxSupervisorTarget(preHelloWaitDone, deadline); err != nil {
+			return err
+		}
 		if err := reapLinuxProcessGroupChildren(group.anchor, deadline); err != nil {
 			return err
 		}
@@ -1701,7 +1703,7 @@ func RunContainmentSupervisor(args []string) error {
 	hello := linuxSupervisorHello{Version: linuxSupervisorProtocolVersion, Operation: linuxSupervisorOpHello, LaunchToken: launch.LaunchToken, OwnerKind: linuxSupervisorOwnerKind, OwnerContext: launch.OwnerContext, TargetPID: target.PID(), TargetIdentity: target.Identity(), TargetPGRP: anchor.PGRP, TargetSession: anchor.Session, TargetStartTime: anchor.StartTime, SupervisorPID: os.Getpid(), SupervisorIdentity: helperIdentity, PipeToken: launch.PipeToken, JobID: launch.JobID}
 	if err := writeLinuxSupervisorFrame(files[3], hello); err != nil {
 		if stopErr := preHelloStop(); stopErr != nil {
-			return errors.Join(err, runLinuxSupervisorRecoveryLoop(listener, launch, target, &preHelloReceipt, "", preHelloStop, preHelloWaitDone))
+			return errors.Join(err, runLinuxSupervisorRecoveryLoop(listener, launch, target, &preHelloReceipt, "", preHelloStop))
 		}
 		return err
 	}
@@ -1742,6 +1744,31 @@ func parseLinuxSupervisorFDs(args []string) (linuxSupervisorFDs, error) {
 	return parsed, nil
 }
 
+// waitForLinuxSupervisorTarget waits for target.Wait and its status publication
+// to complete. The status writer is part of waitDone so a blocked status pipe
+// cannot be mistaken for a proven stop; callers retain the recovery authority
+// when this bounded wait expires.
+func waitForLinuxSupervisorTarget(waitDone <-chan struct{}, deadline time.Time) error {
+	if waitDone == nil {
+		return fmt.Errorf("%w: Linux supervisor target wait is unavailable", ErrLinuxSupervisorStopUnproven)
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return fmt.Errorf("wait for Linux supervisor target: %w", errors.Join(ErrLinuxSupervisorStopUnproven, context.DeadlineExceeded))
+	}
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	select {
+	case <-waitDone:
+		if time.Now().After(deadline) {
+			return fmt.Errorf("wait for Linux supervisor target: %w", errors.Join(ErrLinuxSupervisorStopUnproven, context.DeadlineExceeded))
+		}
+		return nil
+	case <-timer.C:
+		return fmt.Errorf("wait for Linux supervisor target: %w", errors.Join(ErrLinuxSupervisorStopUnproven, context.DeadlineExceeded))
+	}
+}
+
 func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.UnixListener, target *LinuxPtraceProcess, group *processGroup, ownerFile, controlFile, responseFile, statusFile, stdinFile, stdoutFile, stderrFile *os.File) error {
 	leaseState := newLinuxSupervisorLeaseState()
 	defer leaseState.stop()
@@ -1771,6 +1798,7 @@ func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.Un
 		})
 	}
 	stop := func() error {
+		deadline := containmentDeadline(context.Background())
 		leaseState.stop()
 		stateMu.Lock()
 		if receipt != nil {
@@ -1796,8 +1824,9 @@ func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.Un
 		group.skipNextCloseSignal = true
 		group.mutex.Unlock()
 		startWait()
-		<-waitDone
-		deadline := containmentDeadline(context.Background())
+		if err := waitForLinuxSupervisorTarget(waitDone, deadline); err != nil {
+			return err
+		}
 		if err := reapLinuxProcessGroupChildren(group.anchor, deadline); err != nil {
 			return err
 		}
@@ -1815,10 +1844,9 @@ func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.Un
 		if err := stop(); err != nil {
 			// A failed physical stop retains the helper's authority and the
 			// authenticated recovery endpoint for a later retry.
-			return runLinuxSupervisorRecoveryLoop(listener, launch, target, &receipt, boundSecret, stop, waitDone)
+			return runLinuxSupervisorRecoveryLoop(listener, launch, target, &receipt, boundSecret, stop)
 		}
-		<-waitDone
-		return runLinuxSupervisorRecoveryLoop(listener, launch, target, &receipt, boundSecret, stop, waitDone)
+		return runLinuxSupervisorRecoveryLoop(listener, launch, target, &receipt, boundSecret, stop)
 	}
 	type requestEvent struct {
 		request linuxSupervisorRequest
@@ -1844,10 +1872,9 @@ func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.Un
 			if err := stop(); err != nil {
 				// Keep the exact helper endpoint alive for an authenticated
 				// recovery retry. A failed proof never becomes a receipt.
-				return runLinuxSupervisorRecoveryLoop(listener, launch, target, &receipt, boundSecret, stop, waitDone)
+				return runLinuxSupervisorRecoveryLoop(listener, launch, target, &receipt, boundSecret, stop)
 			}
-			<-waitDone
-			return runLinuxSupervisorRecoveryLoop(listener, launch, target, &receipt, boundSecret, stop, waitDone)
+			return runLinuxSupervisorRecoveryLoop(listener, launch, target, &receipt, boundSecret, stop)
 		case <-leaseState.wakeup():
 			if !leaseState.takeExpiry() {
 				continue
@@ -1881,7 +1908,6 @@ func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.Un
 				if err := writeLinuxSupervisorResponseV2(responseFile, request, "aborted", target, launch, 0, ""); err != nil {
 					return enterRecovery()
 				}
-				<-waitDone
 				return nil
 			}
 			if request.Operation == linuxSupervisorOpBind {
@@ -1909,7 +1935,6 @@ func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.Un
 					if err := writeLinuxSupervisorResponseV2(responseFile, request, "stopped", target, launch, 0, ""); err != nil {
 						return enterRecovery()
 					}
-					<-waitDone
 					return nil
 				}
 				continue
@@ -1972,14 +1997,13 @@ func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.Un
 				continue
 			}
 			if request.Operation == linuxSupervisorOpRelease && status == "released" {
-				<-waitDone
 				return nil
 			}
 		}
 	}
 }
 
-func runLinuxSupervisorRecoveryLoop(listener *net.UnixListener, launch linuxSupervisorLaunch, target *LinuxPtraceProcess, receipt **authority.StopReceipt, boundSecret string, stop func() error, waitDone <-chan struct{}) error {
+func runLinuxSupervisorRecoveryLoop(listener *net.UnixListener, launch linuxSupervisorLaunch, target *LinuxPtraceProcess, receipt **authority.StopReceipt, boundSecret string, stop func() error) error {
 	for {
 		connection, err := listener.AcceptUnix()
 		if err != nil {
@@ -2043,9 +2067,6 @@ func runLinuxSupervisorRecoveryLoop(listener *net.UnixListener, launch linuxSupe
 		}
 		_ = connection.Close()
 		if status == "aborted" {
-			if waitDone != nil {
-				<-waitDone
-			}
 			return nil
 		}
 		if status == "released" {
