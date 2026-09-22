@@ -601,7 +601,12 @@ func runLinuxContainmentReplayCase(t *testing.T, environment e2eEnvironment, dae
 		if err := waitForLinuxWitnessIdentityGone(helperPID, helperIdentity, 15*time.Second); err != nil {
 			t.Fatalf("wait for Linux supervisor helper death: %v", err)
 		}
-		assertLinuxWitnessTargetAfterHelperDeath(t, targetPID, targetIdentity)
+		// The helper's Pdeathsig may reap the ptrace leader before this snapshot;
+		// the same-group descendant is the durable live member that proves the
+		// daemon mirror still had physical work to contain after helper death.
+		if err := assertLinuxWitnessProcessLive(childPID, ""); err != nil {
+			t.Fatalf("same-group descendant stopped before mirror takeover: %v", err)
+		}
 	}
 
 	firstKill := make(chan linuxReplayKillResult, 1)
