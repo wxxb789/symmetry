@@ -210,6 +210,38 @@ func TestCaptureLinuxEscapedDescendantsFailsClosedOnChildrenReadError(t *testing
 	}
 }
 
+func TestCaptureLinuxEscapedDescendantsRetainsPartialEscapeOnLaterENOENT(t *testing.T) {
+	anchor := linuxProcessGroupAnchor{pid: 1234, pgrp: 1234, session: 77, startTime: 456}
+	escapedPID := 2345
+	missingPID := 3456
+	childrenCalls := 0
+	readStat := func(pid int) (linuxProcessStat, error) {
+		switch pid {
+		case escapedPID:
+			return linuxProcessStat{pid: escapedPID, pgrp: 9999, session: 9999, startTime: 789}, nil
+		case missingPID:
+			return linuxProcessStat{}, os.ErrNotExist
+		default:
+			return linuxProcessStat{pid: anchor.pid, pgrp: anchor.pgrp, session: anchor.session, startTime: anchor.startTime}, nil
+		}
+	}
+	readChildren := func(pid int) ([]int, error) {
+		childrenCalls++
+		if pid == anchor.pid && childrenCalls == 1 {
+			return []int{escapedPID, missingPID}, nil
+		}
+		return nil, nil
+	}
+
+	escaped, err := captureLinuxEscapedDescendantsWithReaders(anchor.pid, anchor, readStat, readChildren)
+	if err == nil || !errors.Is(err, ErrLinuxDescendantContainmentUnproven) {
+		t.Fatalf("partial escaped scan error = %v, want unresolved scan error", err)
+	}
+	if len(escaped) != 1 || escaped[0].pid != escapedPID {
+		t.Fatalf("partial escaped scan = %#v, want escaped pid %d retained", escaped, escapedPID)
+	}
+}
+
 func TestProcessGroupRetainsAuthorityAfterPostReadbackDescendantScanFailure(t *testing.T) {
 	anchor := linuxProcessGroupAnchor{pid: 1234, pgrp: 1234, session: 77, startTime: 456}
 	previousStat := readLinuxProcessStat
@@ -1231,6 +1263,295 @@ func TestProcessGroupMonitorFailureRetainsUncertaintyBeforeLeaderExit(t *testing
 	}
 	if !group.ContainmentCloseRetryable() {
 		t.Fatal("Close() made containment non-retryable after monitor uncertainty")
+	}
+}
+
+func TestProcessGroupMonitorClassifiesTeardownScanENOENTAfterLeaderExit(t *testing.T) {
+	anchor := linuxProcessGroupAnchor{pid: 1234, pgrp: 1234, session: 77, startTime: 456}
+	childPID := 2345
+	allowTeardownScan := make(chan struct{})
+	var stateMu sync.Mutex
+	leaderPresent := true
+	childrenCalls := 0
+
+	previousStat := readLinuxProcessStat
+	previousChildren := readLinuxProcessChildren
+	readLinuxProcessStat = func(pid int) (linuxProcessStat, error) {
+		if pid == childPID {
+			return linuxProcessStat{}, os.ErrNotExist
+		}
+		stateMu.Lock()
+		present := leaderPresent
+		stateMu.Unlock()
+		if !present {
+			return linuxProcessStat{}, os.ErrNotExist
+		}
+		return linuxProcessStat{pid: anchor.pid, pgrp: anchor.pgrp, session: anchor.session, startTime: anchor.startTime}, nil
+	}
+	readLinuxProcessChildren = func(pid int) ([]int, error) {
+		if pid != anchor.pid {
+			return nil, nil
+		}
+		stateMu.Lock()
+		childrenCalls++
+		call := childrenCalls
+		stateMu.Unlock()
+		if call == 1 {
+			return nil, nil
+		}
+		<-allowTeardownScan
+		stateMu.Lock()
+		leaderPresent = false
+		stateMu.Unlock()
+		return []int{childPID}, nil
+	}
+	group := &processGroup{pid: anchor.pid, fd: 47, anchor: anchor, anchorCaptured: true}
+	releaseTeardownScan := func() {
+		select {
+		case <-allowTeardownScan:
+		default:
+			close(allowTeardownScan)
+		}
+	}
+	t.Cleanup(func() {
+		releaseTeardownScan()
+		group.endTeardownIntent()
+		_ = group.stopDescendantMonitor(time.Now().Add(time.Second))
+		readLinuxProcessStat = previousStat
+		readLinuxProcessChildren = previousChildren
+	})
+	group.startDescendantMonitor()
+	if err := group.waitForInitialDescendantScan(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("initial descendant scan = %v", err)
+	}
+	group.beginTeardownIntent()
+	releaseTeardownScan()
+	result, err := group.requestDescendantMonitorScan(time.Now().Add(time.Second))
+	group.endTeardownIntent()
+	if err != nil {
+		t.Fatalf("teardown descendant scan request = %v", err)
+	}
+	if !result.stopped || result.scanErr != nil || result.terminalReason != descendantMonitorTerminalTeardownScanRace {
+		t.Fatalf("teardown scan result = %#v, want stopped teardown race", result)
+	}
+	if err := group.stopDescendantMonitor(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("stopDescendantMonitor() = %v", err)
+	}
+	if !group.teardownScanRace || group.descendantScanLost {
+		t.Fatalf("teardown race state = race:%v lost:%v, want race true and no sticky scan loss", group.teardownScanRace, group.descendantScanLost)
+	}
+	if group.monitorTerminalReason != descendantMonitorTerminalTeardownScanRace {
+		t.Fatalf("monitor terminal reason = %s, want teardown_scan_race", group.monitorTerminalReason)
+	}
+}
+
+func TestProcessGroupMonitorTeardownScanENOENTWithLeaderPresentFailsClosed(t *testing.T) {
+	anchor := linuxProcessGroupAnchor{pid: 1234, pgrp: 1234, session: 77, startTime: 456}
+	childPID := 2345
+	allowTeardownScan := make(chan struct{})
+	var stateMu sync.Mutex
+	childrenCalls := 0
+
+	previousStat := readLinuxProcessStat
+	previousChildren := readLinuxProcessChildren
+	readLinuxProcessStat = func(pid int) (linuxProcessStat, error) {
+		if pid == childPID {
+			return linuxProcessStat{}, os.ErrNotExist
+		}
+		return linuxProcessStat{pid: anchor.pid, pgrp: anchor.pgrp, session: anchor.session, startTime: anchor.startTime}, nil
+	}
+	readLinuxProcessChildren = func(pid int) ([]int, error) {
+		if pid != anchor.pid {
+			return nil, nil
+		}
+		stateMu.Lock()
+		childrenCalls++
+		call := childrenCalls
+		stateMu.Unlock()
+		if call == 1 {
+			return nil, nil
+		}
+		<-allowTeardownScan
+		return []int{childPID}, nil
+	}
+	group := &processGroup{pid: anchor.pid, fd: 47, anchor: anchor, anchorCaptured: true}
+	releaseTeardownScan := func() {
+		select {
+		case <-allowTeardownScan:
+		default:
+			close(allowTeardownScan)
+		}
+	}
+	t.Cleanup(func() {
+		releaseTeardownScan()
+		group.endTeardownIntent()
+		_ = group.stopDescendantMonitor(time.Now().Add(time.Second))
+		readLinuxProcessStat = previousStat
+		readLinuxProcessChildren = previousChildren
+	})
+	group.startDescendantMonitor()
+	if err := group.waitForInitialDescendantScan(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("initial descendant scan = %v", err)
+	}
+	group.beginTeardownIntent()
+	releaseTeardownScan()
+	result, err := group.requestDescendantMonitorScan(time.Now().Add(time.Second))
+	group.endTeardownIntent()
+	if err != nil {
+		t.Fatalf("teardown descendant scan request = %v", err)
+	}
+	if result.scanErr == nil || result.terminalReason != descendantMonitorTerminalScanFailure {
+		t.Fatalf("teardown scan result = %#v, want scan failure with leader present", result)
+	}
+	if err := group.stopDescendantMonitor(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("stopDescendantMonitor() = %v", err)
+	}
+	if !group.descendantScanLost || group.teardownScanRace {
+		t.Fatalf("leader-present ENOENT state = lost:%v race:%v, want sticky loss and no race", group.descendantScanLost, group.teardownScanRace)
+	}
+}
+
+func TestProcessGroupMonitorPreservesPartialEscapeBeforeTeardownScanENOENT(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		childrenAfter int
+	}{
+		{name: "descendant stat", childrenAfter: 1},
+		{name: "children read", childrenAfter: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			anchor := linuxProcessGroupAnchor{pid: 1234, pgrp: 1234, session: 77, startTime: 456}
+			escapedPID := 2345
+			missingPID := 3456
+			allowTeardownScan := make(chan struct{})
+			var stateMu sync.Mutex
+			leaderPresent := true
+			childrenCalls := 0
+
+			previousStat := readLinuxProcessStat
+			previousChildren := readLinuxProcessChildren
+			readLinuxProcessStat = func(pid int) (linuxProcessStat, error) {
+				switch pid {
+				case escapedPID:
+					return linuxProcessStat{pid: escapedPID, pgrp: 9999, session: 9999, startTime: 789}, nil
+				case missingPID:
+					return linuxProcessStat{}, os.ErrNotExist
+				}
+				stateMu.Lock()
+				present := leaderPresent
+				stateMu.Unlock()
+				if !present {
+					return linuxProcessStat{}, os.ErrNotExist
+				}
+				return linuxProcessStat{pid: anchor.pid, pgrp: anchor.pgrp, session: anchor.session, startTime: anchor.startTime}, nil
+			}
+			readLinuxProcessChildren = func(pid int) ([]int, error) {
+				if pid == escapedPID && test.childrenAfter == 2 {
+					return nil, os.ErrNotExist
+				}
+				if pid != anchor.pid {
+					return nil, nil
+				}
+				stateMu.Lock()
+				childrenCalls++
+				call := childrenCalls
+				stateMu.Unlock()
+				if call == 1 {
+					return nil, nil
+				}
+				<-allowTeardownScan
+				stateMu.Lock()
+				leaderPresent = false
+				stateMu.Unlock()
+				if test.childrenAfter == 1 {
+					return []int{escapedPID, missingPID}, nil
+				}
+				return []int{escapedPID}, nil
+			}
+
+			group := &processGroup{pid: anchor.pid, fd: 47, anchor: anchor, anchorCaptured: true}
+			releaseTeardownScan := func() {
+				select {
+				case <-allowTeardownScan:
+				default:
+					close(allowTeardownScan)
+				}
+			}
+			t.Cleanup(func() {
+				releaseTeardownScan()
+				group.endTeardownIntent()
+				_ = group.stopDescendantMonitor(time.Now().Add(time.Second))
+				readLinuxProcessStat = previousStat
+				readLinuxProcessChildren = previousChildren
+			})
+			group.startDescendantMonitor()
+			if err := group.waitForInitialDescendantScan(time.Now().Add(time.Second)); err != nil {
+				t.Fatalf("initial descendant scan = %v", err)
+			}
+			group.beginTeardownIntent()
+			releaseTeardownScan()
+			result, err := group.requestDescendantMonitorScan(time.Now().Add(time.Second))
+			if err != nil {
+				t.Fatalf("partial escape scan request = %v", err)
+			}
+			if err := group.stopDescendantMonitor(time.Now().Add(time.Second)); err != nil {
+				t.Fatalf("stopDescendantMonitor() = %v", err)
+			}
+			if !result.leaderPresent || result.stopped || result.scanErr == nil || result.terminalReason != descendantMonitorTerminalObservedEscape {
+				t.Fatalf("partial escape scan result = %#v, want leader-present observed escape with scan error", result)
+			}
+			if len(group.escapedDescendants) != 1 || group.escapedDescendants[0].pid != escapedPID {
+				t.Fatalf("partial escape state = %#v, want escaped pid %d retained", group.escapedDescendants, escapedPID)
+			}
+			if group.teardownScanRace || group.descendantScanLost {
+				t.Fatalf("partial escape uncertainty = race:%v lost:%v, want race false and scan loss false", group.teardownScanRace, group.descendantScanLost)
+			}
+			if err := (&linuxSupervisor{mirror: group}).verifyMirrorObservation(); !errors.Is(err, ErrLinuxDescendantContainmentUnproven) {
+				t.Fatalf("partial escape mirror verification = %v, want unresolved proof", err)
+			}
+		})
+	}
+}
+
+func TestProcessGroupDoesNotClassifyTeardownScanWithoutIntent(t *testing.T) {
+	anchor := linuxProcessGroupAnchor{pid: 1234, pgrp: 1234, session: 77, startTime: 456}
+	group := &processGroup{pid: anchor.pid, anchor: anchor, anchorCaptured: true}
+	readStat := func(int) (linuxProcessStat, error) { return linuxProcessStat{}, os.ErrNotExist }
+	if group.markTeardownScanRaceIfLeaderAbsent(fmt.Errorf("descendant disappeared: %w", os.ErrNotExist), readStat) {
+		t.Fatal("scan without teardown intent was classified as teardown race")
+	}
+	if group.teardownScanRace {
+		t.Fatal("scan without teardown intent set teardownScanRace")
+	}
+}
+
+func TestProcessGroupDoesNotClassifyTeardownScanWhenLeaderRereadFails(t *testing.T) {
+	anchor := linuxProcessGroupAnchor{pid: 1234, pgrp: 1234, session: 77, startTime: 456}
+	for _, test := range []struct {
+		name     string
+		readStat func(int) (linuxProcessStat, error)
+	}{
+		{
+			name: "identity mismatch",
+			readStat: func(int) (linuxProcessStat, error) {
+				return linuxProcessStat{pid: anchor.pid, pgrp: anchor.pgrp, session: anchor.session, startTime: anchor.startTime + 1}, nil
+			},
+		},
+		{
+			name:     "permission error",
+			readStat: func(int) (linuxProcessStat, error) { return linuxProcessStat{}, unix.EPERM },
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			group := &processGroup{pid: anchor.pid, anchor: anchor, anchorCaptured: true}
+			group.beginTeardownIntent()
+			if group.markTeardownScanRaceIfLeaderAbsent(fmt.Errorf("descendant disappeared: %w", os.ErrNotExist), test.readStat) {
+				t.Fatal("leader reread failure was classified as teardown race")
+			}
+			if group.teardownScanRace {
+				t.Fatal("leader reread failure set teardownScanRace")
+			}
+		})
 	}
 }
 

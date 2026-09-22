@@ -339,6 +339,7 @@ type linuxSupervisor struct {
 	finalProofPending bool
 
 	requestMu sync.Mutex
+	stopMu    sync.Mutex
 	statusMu  sync.Mutex
 
 	committed             bool
@@ -360,6 +361,14 @@ type linuxSupervisor struct {
 	prepareUnknown              bool
 	bindUnknown                 bool
 }
+
+type linuxSupervisorStopReceiptSource uint8
+
+const (
+	linuxSupervisorStopReceiptUnknown linuxSupervisorStopReceiptSource = iota
+	linuxSupervisorStopReceiptFromHelper
+	linuxSupervisorStopReceiptFromAbsenceProof
+)
 
 // StartLinuxSupervisor starts the helper first.  The helper then launches the
 // ptrace-stopped target, sends its exact identity and a duplicate pidfd back,
@@ -933,6 +942,8 @@ func (supervisor *linuxSupervisor) stop(operation string) error {
 	if supervisor == nil {
 		return ErrLinuxSupervisorHelperExited
 	}
+	supervisor.stopMu.Lock()
+	defer supervisor.stopMu.Unlock()
 	supervisor.mu.Lock()
 	if supervisor.receipt != nil {
 		supervisor.mu.Unlock()
@@ -943,6 +954,10 @@ func (supervisor *linuxSupervisor) stop(operation string) error {
 	supervisor.mu.Unlock()
 	if helperDead {
 		return supervisor.stopWithMirror()
+	}
+	if supervisor.mirror != nil {
+		supervisor.mirror.beginTeardownIntent()
+		defer supervisor.mirror.endTeardownIntent()
 	}
 	if responseLossPending {
 		return supervisor.recoverResponseLossStop()
@@ -1001,7 +1016,14 @@ func (supervisor *linuxSupervisor) recoverResponseLossStop() error {
 		if channelClosedV2(supervisor.helperDone) {
 			return supervisor.stopWithMirror()
 		}
-		receipt, err := StopPersistedLinuxSupervisor(*value)
+		receipt, source, err := stopPersistedLinuxSupervisor(*value)
+		// The helper may die while the recovery endpoint is being contacted.
+		// A receipt reconstructed from endpoint absence is not a healthy-helper
+		// response and cannot authorize the teardown-race shortcut; re-enter the
+		// strict mirror takeover path instead.
+		if source == linuxSupervisorStopReceiptFromAbsenceProof || channelClosedV2(supervisor.helperDone) {
+			return supervisor.stopWithMirror()
+		}
 		retry := false
 		if err == nil {
 			if !receipt.ValidFor(*value) {
@@ -1053,6 +1075,9 @@ func (supervisor *linuxSupervisor) stopWithMirror() error {
 	if mirror == nil {
 		return ErrLinuxSupervisorStopUnproven
 	}
+	// A helper-dead takeover has no healthy stop response that can authorize a
+	// teardown scan race. Force the mirror path back to strict proof.
+	mirror.endTeardownIntent()
 	deadline := containmentDeadline(context.Background())
 	if err := mirror.Terminate(true); err != nil && !errors.Is(err, unix.ESRCH) {
 		if supervisor.containmentUnprovenCallback != nil {
@@ -1281,6 +1306,14 @@ func (supervisor *linuxSupervisor) verifyMirrorObservation() error {
 	defer mirror.mutex.Unlock()
 	if mirror.descendantScanLost || len(mirror.escapedDescendants) > 0 {
 		return fmt.Errorf("%w: mirror observed descendant escape or scan loss", ErrLinuxDescendantContainmentUnproven)
+	}
+	if mirror.teardownScanRace {
+		if mirror.monitorTerminalReason != descendantMonitorTerminalTeardownScanRace ||
+			!mirror.teardownIntent || mirror.teardownIntentGeneration == 0 ||
+			mirror.teardownScanRaceGeneration != mirror.teardownIntentGeneration {
+			return fmt.Errorf("%w: mirror teardown scan race has no exact healthy stop proof", ErrLinuxDescendantContainmentUnproven)
+		}
+		return nil
 	}
 	if !mirror.descendantScanCompleted {
 		return fmt.Errorf("%w: mirror has no completed descendant observation", ErrLinuxDescendantContainmentUnproven)
@@ -2194,29 +2227,36 @@ func mustLinuxSupervisorIdentity() string {
 // returns a fresh exact stop receipt.  Endpoint absence, helper identity
 // mismatch, and unknown responses are all unresolved outcomes.
 func StopPersistedLinuxSupervisor(value authority.Supervisor) (authority.StopReceipt, error) {
+	receipt, _, err := stopPersistedLinuxSupervisor(value)
+	return receipt, err
+}
+
+func stopPersistedLinuxSupervisor(value authority.Supervisor) (authority.StopReceipt, linuxSupervisorStopReceiptSource, error) {
 	if err := value.Validate(); err != nil {
-		return authority.StopReceipt{}, fmt.Errorf("validate persisted Linux supervisor authority: %w", err)
+		return authority.StopReceipt{}, linuxSupervisorStopReceiptUnknown, fmt.Errorf("validate persisted Linux supervisor authority: %w", err)
 	}
 	connection, err := dialLinuxSupervisorRecovery(value)
 	if err != nil {
 		if !isLinuxSupervisorRecoveryEndpointUnreachable(err) {
-			return authority.StopReceipt{}, fmt.Errorf("connect persisted Linux supervisor: %w", err)
+			return authority.StopReceipt{}, linuxSupervisorStopReceiptUnknown, fmt.Errorf("connect persisted Linux supervisor: %w", err)
 		}
 		if proofErr := provePersistedLinuxSupervisorStop(value); proofErr != nil {
-			return authority.StopReceipt{}, errors.Join(fmt.Errorf("connect persisted Linux supervisor: %w", err), proofErr)
+			return authority.StopReceipt{}, linuxSupervisorStopReceiptUnknown, errors.Join(fmt.Errorf("connect persisted Linux supervisor: %w", err), proofErr)
 		}
-		return persistedLinuxSupervisorStopReceipt(value)
+		receipt, receiptErr := persistedLinuxSupervisorStopReceipt(value)
+		return receipt, linuxSupervisorStopReceiptFromAbsenceProof, receiptErr
 	}
 	defer connection.Close()
 	request := linuxSupervisorRequest{Version: linuxSupervisorProtocolVersion, Operation: linuxSupervisorOpStop, LaunchToken: value.LaunchToken, TargetPID: value.TargetPID, TargetIdentity: value.TargetIdentity, OwnerKind: value.OwnerKind, OwnerContext: value.OwnerContext, SupervisorPID: value.SupervisorPID, SupervisorIdentity: value.SupervisorIdentity, Token: value.PipeToken, JobID: value.JobID, Secret: value.Secret}
 	response, err := exchangeLinuxSupervisorRecovery(connection, request, value)
 	if err != nil {
-		return authority.StopReceipt{}, err
+		return authority.StopReceipt{}, linuxSupervisorStopReceiptUnknown, err
 	}
 	if response.Status != "stopped" || response.ActiveProcesses != 0 {
-		return authority.StopReceipt{}, fmt.Errorf("%w: persisted helper returned %q", ErrLinuxSupervisorStopUnproven, response.Status)
+		return authority.StopReceipt{}, linuxSupervisorStopReceiptUnknown, fmt.Errorf("%w: persisted helper returned %q", ErrLinuxSupervisorStopUnproven, response.Status)
 	}
-	return persistedLinuxSupervisorStopReceipt(value)
+	receipt, receiptErr := persistedLinuxSupervisorStopReceipt(value)
+	return receipt, linuxSupervisorStopReceiptFromHelper, receiptErr
 }
 
 // ReleasePersistedLinuxSupervisor releases a helper after the caller has
