@@ -1907,6 +1907,88 @@ func TestProcessGroupCloseWaitsForDelayedCleanLeaderAbsentTerminal(t *testing.T)
 	}
 }
 
+func TestProcessGroupCloseWaitsForInitialScanBeforeCleanLeaderAbsentTerminal(t *testing.T) {
+	anchor := linuxProcessGroupAnchor{pid: 1234, pgrp: 1234, session: 77, startTime: 456}
+	initialChildrenEntered := make(chan struct{})
+	releaseInitialScan := make(chan struct{})
+	closeObserved := make(chan struct{})
+	var statCalls atomic.Int32
+	var leaderAbsent atomic.Bool
+	var initialOnce sync.Once
+	var closeOnce sync.Once
+
+	previousStat := readLinuxProcessStat
+	previousChildren := readLinuxProcessChildren
+	readLinuxProcessStat = func(pid int) (linuxProcessStat, error) {
+		if pid != anchor.pid {
+			return linuxProcessStat{}, os.ErrNotExist
+		}
+		call := statCalls.Add(1)
+		if call == 1 {
+			return linuxProcessStat{pid: anchor.pid, pgrp: anchor.pgrp, session: anchor.session, startTime: anchor.startTime}, nil
+		}
+		if call >= 2 {
+			closeOnce.Do(func() { close(closeObserved) })
+		}
+		if leaderAbsent.Load() {
+			return linuxProcessStat{}, os.ErrNotExist
+		}
+		return linuxProcessStat{pid: anchor.pid, pgrp: anchor.pgrp, session: anchor.session, startTime: anchor.startTime}, nil
+	}
+	readLinuxProcessChildren = func(int) ([]int, error) {
+		if statCalls.Load() == 1 {
+			initialOnce.Do(func() { close(initialChildrenEntered) })
+			<-releaseInitialScan
+		}
+		return nil, nil
+	}
+	t.Cleanup(func() {
+		select {
+		case <-releaseInitialScan:
+		default:
+			close(releaseInitialScan)
+		}
+		readLinuxProcessStat = previousStat
+		readLinuxProcessChildren = previousChildren
+	})
+
+	var signals []unix.Signal
+	restorePIDFDCalls(t, func(_ int, signal unix.Signal, _ *unix.Siginfo, _ int) error {
+		signals = append(signals, signal)
+		if signal == unix.SIGKILL {
+			return nil
+		}
+		if signal == 0 {
+			return unix.ESRCH
+		}
+		t.Fatalf("unexpected signal %v", signal)
+		return nil
+	}, func(int) error { return nil })
+
+	group := &processGroup{pid: anchor.pid, fd: 47, anchor: anchor, anchorCaptured: true}
+	group.startDescendantMonitor()
+	<-initialChildrenEntered
+	leaderAbsent.Store(true)
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- group.Close() }()
+	<-closeObserved
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close() returned before initial scan was released: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(releaseInitialScan)
+	if err := <-closeDone; err != nil {
+		t.Fatalf("Close() after delayed initial scan = %v, want nil", err)
+	}
+	if !slices.Equal(signals, []unix.Signal{unix.SIGKILL, 0}) {
+		t.Fatalf("signals = %#v, want [SIGKILL 0]", signals)
+	}
+	if group.descendantScanLost || !group.descendantScanCompleted || group.fd != -1 || !group.closeCompleted {
+		t.Fatalf("successful close state = lost:%v complete:%v fd:%d closed:%v, want false,true,-1,true", group.descendantScanLost, group.descendantScanCompleted, group.fd, group.closeCompleted)
+	}
+}
+
 func TestProcessGroupCloseRejectsLeaderDisappearanceWithoutPostReadbackScan(t *testing.T) {
 	anchor := linuxProcessGroupAnchor{pid: 1234, pgrp: 1234, session: 77, startTime: 456}
 	initialScan := make(chan struct{})
