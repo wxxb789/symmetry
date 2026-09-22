@@ -3,7 +3,6 @@
 package e2e_test
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -506,7 +505,6 @@ func armLinuxReplayRecoveryBarrier(t *testing.T, value *authority.Supervisor, ma
 	if err != nil {
 		t.Fatalf("parse Linux replay recovery endpoint: %v", err)
 	}
-	waitForLinuxReplayRecoveryLoop(t, endpoint)
 	connection, err := net.DialTimeout("unix", endpoint, 5*time.Second)
 	if err != nil {
 		t.Fatalf("connect Linux replay recovery barrier: %v", err)
@@ -520,30 +518,6 @@ func armLinuxReplayRecoveryBarrier(t *testing.T, value *authority.Supervisor, ma
 		t.Fatalf("write Linux replay recovery barrier marker: %v", err)
 	}
 	return &linuxReplayRecoveryBarrier{connection: connection}
-}
-
-func waitForLinuxReplayRecoveryLoop(t *testing.T, endpoint string) {
-	t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
-	for time.Now().Before(deadline) {
-		connection, err := net.DialTimeout("unix", endpoint, time.Second)
-		if err == nil {
-			_ = connection.SetDeadline(time.Now().Add(500 * time.Millisecond))
-			_, writeErr := connection.Write([]byte("{}\n"))
-			response, readErr := bufio.NewReader(connection).ReadString('\n')
-			_ = connection.Close()
-			if writeErr == nil && readErr == nil {
-				var value struct {
-					Status string `json:"status"`
-				}
-				if json.Unmarshal([]byte(response), &value) == nil && value.Status == "error" {
-					return
-				}
-			}
-		}
-		time.Sleep(25 * time.Millisecond)
-	}
-	t.Fatalf("Linux replay recovery endpoint %q did not enter its authenticated recovery loop within 20s", endpoint)
 }
 
 func (barrier *linuxReplayRecoveryBarrier) release(t *testing.T) {

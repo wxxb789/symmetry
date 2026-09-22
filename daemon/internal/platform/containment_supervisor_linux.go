@@ -937,11 +937,11 @@ func (supervisor *linuxSupervisor) stop(operation string) error {
 	responseLossPending := supervisor.responseLossPending
 	helperDead := channelClosedV2(supervisor.helperDone)
 	supervisor.mu.Unlock()
-	if responseLossPending {
-		return supervisor.recoverResponseLossStop()
-	}
 	if helperDead {
 		return supervisor.stopWithMirror()
+	}
+	if responseLossPending {
+		return supervisor.recoverResponseLossStop()
 	}
 	response, err := supervisor.request(operation, 0, 0)
 	if err != nil {
@@ -994,6 +994,9 @@ func (supervisor *linuxSupervisor) recoverResponseLossStop() error {
 	deadline := time.Now().Add(containmentCloseDeadline)
 	var lastErr error
 	for {
+		if channelClosedV2(supervisor.helperDone) {
+			return supervisor.stopWithMirror()
+		}
 		receipt, err := StopPersistedLinuxSupervisor(*value)
 		retry := false
 		if err == nil {

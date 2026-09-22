@@ -442,6 +442,9 @@ func TestLinuxSupervisorMirrorRequiresHelperDeath(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("helper did not exit after kill")
 	}
+	// An in-flight response can be lost at the same time as helper death;
+	// mirror takeover must win over the recovery-endpoint retry path.
+	supervisor.responseLossPending = true
 	if err := supervisor.Terminate(true); err != nil {
 		t.Fatalf("mirror Terminate() with adopted children = %v", err)
 	}
