@@ -425,6 +425,158 @@ func TestParseContainmentSupervisorArgsRequiresInheritedOwnerHandle(t *testing.T
 	}
 }
 
+func TestParseDurableContainmentSupervisorRequiresInheritedBootstrap(t *testing.T) {
+	_, err := parseContainmentSupervisorArgs([]string{
+		"-durable",
+		"-owner-handle", "13",
+		"-job-handle", "14",
+		"-target-pid", "71",
+		"-target-identity", "windows:71:0000000000000001",
+		"-pipe-token", strings.Repeat("a", authority.TokenBytes*2),
+		"-job-id", strings.Repeat("b", authority.TokenBytes*2),
+		"-job-name", containmentJobName(strings.Repeat("b", authority.TokenBytes*2)),
+		"-launch-token", strings.Repeat("c", authority.TokenBytes*2),
+	})
+	if err == nil || !strings.Contains(err.Error(), "bootstrap handle is required") {
+		t.Fatalf("missing durable bootstrap error = %v, want inherited bootstrap requirement", err)
+	}
+}
+
+func TestContainmentSupervisorRejectsWrongSecretBeforeOperation(t *testing.T) {
+	endpoint, err := containmentEndpointForIdentity(71, "windows:71:0000000000000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := containmentSupervisorRequest{
+		Version:        containmentSupervisorProtocol,
+		Operation:      "hello",
+		TargetPID:      endpoint.TargetPID,
+		TargetIdentity: endpoint.TargetIdentity,
+		Token:          endpoint.Token,
+		JobID:          endpoint.JobID,
+		Secret:         strings.Repeat("f", authority.SecretBytes*2),
+	}
+	if request.Secret == endpoint.Secret {
+		t.Fatal("test secret unexpectedly matched endpoint secret")
+	}
+	if err := validateSupervisorRequest(endpoint, request); err == nil || !strings.Contains(err.Error(), "authority secret mismatch") {
+		t.Fatalf("wrong-secret validation error = %v, want authority secret mismatch", err)
+	}
+}
+
+func TestContainmentSupervisorUnauthenticatedRequestDoesNotStopJob(t *testing.T) {
+	supervisorPID := os.Getpid()
+	supervisorIdentity, err := ProcessIdentity(supervisorPID)
+	if err != nil {
+		t.Fatalf("ProcessIdentity() error = %v", err)
+	}
+	endpoint, err := containmentEndpointForIdentity(71, "windows:71:0000000000000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint.SupervisorPID = supervisorPID
+	endpoint.SupervisorIdentity = supervisorIdentity
+	if err := validateSupervisorEndpoint(endpoint, true); err != nil {
+		t.Fatalf("validateSupervisorEndpoint() error = %v", err)
+	}
+
+	bootstrap := containmentSupervisorBootstrap{
+		Version:            containmentSupervisorProtocol,
+		JobHandle:          uint64(syscall.Handle(1234)),
+		TargetPID:          endpoint.TargetPID,
+		TargetIdentity:     endpoint.TargetIdentity,
+		SupervisorPID:      endpoint.SupervisorPID,
+		SupervisorIdentity: endpoint.SupervisorIdentity,
+		PipeToken:          endpoint.Token,
+		JobID:              endpoint.JobID,
+		Secret:             endpoint.Secret,
+	}
+	stopCalled := make(chan struct{})
+	var stopOnce sync.Once
+	stopAttempts := 0
+	var stopMu sync.Mutex
+	releaseCalls := 0
+	restoreJobCalls(t,
+		func(syscall.Handle) error {
+			stopMu.Lock()
+			stopAttempts++
+			stopMu.Unlock()
+			stopOnce.Do(func() { close(stopCalled) })
+			return nil
+		},
+		func(syscall.Handle) (uint32, error) { return 0, nil },
+		func(syscall.Handle) error {
+			stopMu.Lock()
+			releaseCalls++
+			stopMu.Unlock()
+			return nil
+		},
+	)
+	restoreJobWait(t, func(syscall.Handle, time.Time, func(syscall.Handle) (uint32, error)) error { return nil })
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- runContainmentSupervisor(containmentSupervisorArgs{}, bootstrap) }()
+	cleanup := func() {
+		deadline := time.Now().Add(5 * time.Second)
+		_, _ = requestContainmentSupervisorPipe(endpoint, "close", deadline)
+		_, _ = requestContainmentSupervisorPipe(endpoint, "release", deadline)
+		select {
+		case <-runDone:
+		case <-time.After(5 * time.Second):
+			t.Errorf("containment supervisor did not finish during cleanup")
+		}
+	}
+	defer cleanup()
+
+	wrongSecret := containmentSupervisorRequest{
+		Version:            containmentSupervisorProtocol,
+		Operation:          "hello",
+		LaunchToken:        endpoint.LaunchToken,
+		TargetPID:          endpoint.TargetPID,
+		TargetIdentity:     endpoint.TargetIdentity,
+		SupervisorPID:      endpoint.SupervisorPID,
+		SupervisorIdentity: endpoint.SupervisorIdentity,
+		Token:              endpoint.Token,
+		JobID:              endpoint.JobID,
+		Secret:             strings.Repeat("f", authority.SecretBytes*2),
+	}
+	if _, err := requestContainmentSupervisorPipeWithRequest(endpoint, wrongSecret, time.Now().Add(5*time.Second)); err == nil {
+		t.Fatal("wrong-secret request unexpectedly received a supervisor response")
+	}
+	select {
+	case <-stopCalled:
+		t.Fatal("wrong-secret request stopped the containment Job")
+	case <-time.After(200 * time.Millisecond):
+	}
+	stopMu.Lock()
+	if stopAttempts != 0 || releaseCalls != 0 {
+		stopMu.Unlock()
+		t.Fatalf("unauthenticated request changed Job state: stop attempts=%d release calls=%d", stopAttempts, releaseCalls)
+	}
+	stopMu.Unlock()
+
+	if _, err := requestContainmentSupervisorPipe(endpoint, "hello", time.Now().Add(5*time.Second)); err != nil {
+		t.Fatalf("valid hello after wrong-secret request = %v", err)
+	}
+}
+
+func TestNewSupervisorHandoffCarriesLaunchAndCreatorIdentity(t *testing.T) {
+	jobID := strings.Repeat("b", authority.TokenBytes*2)
+	handoff, err := NewSupervisorHandoff(71, "windows:71:0000000000000001", jobID)
+	if err != nil {
+		t.Fatalf("NewSupervisorHandoff() error = %v", err)
+	}
+	if err := handoff.Validate(); err != nil {
+		t.Fatalf("handoff validation error = %v", err)
+	}
+	if !validContainmentToken(handoff.LaunchToken) {
+		t.Fatalf("LaunchToken = %q, want valid token", handoff.LaunchToken)
+	}
+	if handoff.CreatorSessionID == nil {
+		t.Fatal("CreatorSessionID is nil")
+	}
+}
+
 func TestContainmentSupervisorOwnerWatchdogObservesOwnerEOF(t *testing.T) {
 	ownerRead, ownerWrite, err := os.Pipe()
 	if err != nil {

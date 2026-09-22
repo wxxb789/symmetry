@@ -107,6 +107,11 @@ func TestClaudeCandidateStartForwardsPersistProcessWithAuthority(t *testing.T) {
 		gotIdentity = identity
 		return nil
 	}
+	request.Invocation.PrepareSupervisorHandoff = func(authority.SupervisorHandoff) error { return nil }
+	request.Invocation.BindSupervisorHandoff = func(authority.SupervisorHandoff, int, string) error { return nil }
+	request.Invocation.CommitSupervisorHandoff = func(authority.SupervisorHandoff, time.Time) error { return nil }
+	request.Invocation.RecordSupervisorHandoffStopReceipt = func(authority.SupervisorHandoff, authority.StopReceipt) error { return nil }
+	request.Invocation.ClearSupervisorHandoff = func(authority.SupervisorHandoff, authority.SupervisorHandoffReleaseProof) error { return nil }
 	session, err := adapter.Start(context.Background(), request, &recordingClaudeCandidateSink{})
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -114,6 +119,9 @@ func TestClaudeCandidateStartForwardsPersistProcessWithAuthority(t *testing.T) {
 	cleanupClaudeCandidateSession(t, session)
 	if invocation.PersistProcessWithAuthority == nil {
 		t.Fatal("Start() did not forward PersistProcessWithAuthority")
+	}
+	if invocation.PrepareSupervisorHandoff == nil || invocation.BindSupervisorHandoff == nil || invocation.CommitSupervisorHandoff == nil || invocation.RecordSupervisorHandoffStopReceipt == nil || invocation.ClearSupervisorHandoff == nil {
+		t.Fatal("Start() did not forward complete supervisor handoff callbacks")
 	}
 	if err := invocation.PersistProcessWithAuthority(42, "test:42", nil); err != nil {
 		t.Fatalf("forwarded PersistProcessWithAuthority() error = %v", err)

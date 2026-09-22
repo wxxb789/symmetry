@@ -88,10 +88,12 @@ membership proof, so absence of the leader or a successful `taskkill` is not
 enough to clear it.
 
 These are the existing owned-container boundaries, not unconditional isolation
-of every possible descendant. Processes that escape a Unix group or run before
-Windows post-start Job assignment are not made verified by this patch. Missing
-creation identity or lost native containment evidence remains an explicit
-recovery limitation; no synthetic identity or claimed native capability fills it.
+of every possible descendant. Linux launches also set `Pdeathsig=SIGKILL` so a
+daemon crash before marker persistence cannot leave the direct child ownerless.
+Processes that escape a Unix group or run before Windows post-start Job
+assignment are not made verified by this patch. Missing creation identity or
+lost native containment evidence remains an explicit recovery limitation; no
+synthetic identity or claimed native capability fills it.
 
 ## Verification
 

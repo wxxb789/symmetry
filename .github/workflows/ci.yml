@@ -1524,6 +1524,10 @@ jobs:
             exit 1
           }
           if ($testStatus -ne 0) { exit $testStatus }
+      - name: Run production pre-authority crash witness matrix
+        env:
+          SYMMETRY_PRODUCTION_PREAUTHORITY_WITNESS: "1"
+        run: go test -count=1 -timeout 600s ./e2e -run '^TestProductionPreAuthority(CrashWitnessMatrix|WrongSecretFirstClientRace)$' -v
 
   integration:
     runs-on: ubuntu-latest

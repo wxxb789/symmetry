@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -97,6 +98,7 @@ func TestParseLinuxProcessStatRejectsMalformedValues(t *testing.T) {
 func TestLinuxProcessGroupObservationRejectsEscapedLeaderAfterPIDFDESRCH(t *testing.T) {
 	anchor := linuxProcessGroupAnchor{pid: 1234, pgrp: 1234, session: 77, startTime: 456}
 	originalRead := readLinuxProcessStat
+	originalChildren := readLinuxProcessChildren
 	readCalls := 0
 	readLinuxProcessStat = func(int) (linuxProcessStat, error) {
 		readCalls++
@@ -107,7 +109,11 @@ func TestLinuxProcessGroupObservationRejectsEscapedLeaderAfterPIDFDESRCH(t *test
 			return linuxProcessStat{pid: anchor.pid, pgrp: anchor.pgrp + 1, session: anchor.session, startTime: anchor.startTime}, nil
 		}
 	}
-	t.Cleanup(func() { readLinuxProcessStat = originalRead })
+	readLinuxProcessChildren = func(int) ([]int, error) { return nil, nil }
+	t.Cleanup(func() {
+		readLinuxProcessStat = originalRead
+		readLinuxProcessChildren = originalChildren
+	})
 
 	var signals []unix.Signal
 	restorePIDFDCalls(t, func(_ int, signal unix.Signal, _ *unix.Siginfo, _ int) error {
@@ -127,6 +133,128 @@ func TestLinuxProcessGroupObservationRejectsEscapedLeaderAfterPIDFDESRCH(t *test
 	}
 	if group.fd != 47 || !group.ContainmentCloseRetryable() {
 		t.Fatalf("escaped-leader failure left fd:%d retryable:%v, want retained fd and retryable", group.fd, group.ContainmentCloseRetryable())
+	}
+}
+
+func TestProcessGroupRetainsAuthorityWhenDescendantEscapesProcessGroup(t *testing.T) {
+	anchor := linuxProcessGroupAnchor{pid: 1234, pgrp: 1234, session: 77, startTime: 456}
+	previousStat := readLinuxProcessStat
+	previousChildren := readLinuxProcessChildren
+	childAlive := true
+	readLinuxProcessStat = func(pid int) (linuxProcessStat, error) {
+		switch pid {
+		case anchor.pid:
+			return linuxProcessStat{pid: anchor.pid, pgrp: anchor.pgrp, session: anchor.session, startTime: anchor.startTime}, nil
+		case 2345:
+			if !childAlive {
+				return linuxProcessStat{}, os.ErrNotExist
+			}
+			return linuxProcessStat{pid: 2345, pgrp: 2345, session: 2345, startTime: 789}, nil
+		default:
+			return linuxProcessStat{}, os.ErrNotExist
+		}
+	}
+	readLinuxProcessChildren = func(pid int) ([]int, error) {
+		if pid == anchor.pid && childAlive {
+			return []int{2345}, nil
+		}
+		return nil, nil
+	}
+	t.Cleanup(func() {
+		readLinuxProcessStat = previousStat
+		readLinuxProcessChildren = previousChildren
+	})
+
+	var signals []unix.Signal
+	restorePIDFDCalls(t, func(_ int, signal unix.Signal, _ *unix.Siginfo, _ int) error {
+		signals = append(signals, signal)
+		if signal == 0 {
+			return unix.ESRCH
+		}
+		return nil
+	}, func(int) error { return nil })
+
+	group := &processGroup{pid: anchor.pid, fd: 47, anchor: anchor, anchorCaptured: true}
+	first := group.Close()
+	if !errors.Is(first, ErrLinuxDescendantContainmentUnproven) {
+		t.Fatalf("first Close() error = %v, want escaped-descendant proof failure", first)
+	}
+	if group.fd != 47 || group.closeCompleted || !group.ContainmentCloseRetryable() {
+		t.Fatalf("after escaped descendant fd:%d completed:%v retryable:%v, want retained, incomplete, retryable", group.fd, group.closeCompleted, group.ContainmentCloseRetryable())
+	}
+	if !slices.Equal(signals, []unix.Signal{unix.SIGKILL, 0}) {
+		t.Fatalf("first Close() signals = %#v, want [SIGKILL 0]", signals)
+	}
+
+	childAlive = false
+	if err := group.Close(); !errors.Is(err, ErrLinuxDescendantContainmentUnproven) {
+		t.Fatalf("Close() after exact escaped identity disappeared = %v, want unresolved escaped subtree", err)
+	}
+	if group.fd != 47 || group.closeCompleted || !group.ContainmentCloseRetryable() {
+		t.Fatalf("escaped descendant state fd:%d completed:%v retryable:%v, want retained, incomplete, retryable", group.fd, group.closeCompleted, group.ContainmentCloseRetryable())
+	}
+	if !slices.Equal(signals, []unix.Signal{unix.SIGKILL, 0, unix.SIGKILL, 0}) {
+		t.Fatalf("all Close() signals = %#v, want two fenced attempts", signals)
+	}
+}
+
+func TestCaptureLinuxEscapedDescendantsFailsClosedOnChildrenReadError(t *testing.T) {
+	previousChildren := readLinuxProcessChildren
+	want := errors.New("children unavailable")
+	readLinuxProcessChildren = func(int) ([]int, error) { return nil, want }
+	t.Cleanup(func() { readLinuxProcessChildren = previousChildren })
+
+	_, err := captureLinuxEscapedDescendants(1234, linuxProcessGroupAnchor{pid: 1234, pgrp: 1234, session: 77, startTime: 456})
+	if !errors.Is(err, ErrLinuxDescendantContainmentUnproven) || !errors.Is(err, want) {
+		t.Fatalf("captureLinuxEscapedDescendants() error = %v, want unresolved children error wrapping %v", err, want)
+	}
+}
+
+func TestProcessGroupRetainsAuthorityAfterPostReadbackDescendantScanFailure(t *testing.T) {
+	anchor := linuxProcessGroupAnchor{pid: 1234, pgrp: 1234, session: 77, startTime: 456}
+	previousStat := readLinuxProcessStat
+	previousChildren := readLinuxProcessChildren
+	readLinuxProcessStat = func(pid int) (linuxProcessStat, error) {
+		if pid == anchor.pid {
+			return linuxProcessStat{pid: anchor.pid, pgrp: anchor.pgrp, session: anchor.session, startTime: anchor.startTime}, nil
+		}
+		return linuxProcessStat{}, os.ErrNotExist
+	}
+	readLinuxProcessChildren = func(pid int) ([]int, error) {
+		if pid == anchor.pid {
+			return nil, errors.New("children read failed")
+		}
+		return nil, os.ErrNotExist
+	}
+	t.Cleanup(func() {
+		readLinuxProcessStat = previousStat
+		readLinuxProcessChildren = previousChildren
+	})
+
+	var signals []unix.Signal
+	restorePIDFDCalls(t, func(_ int, signal unix.Signal, _ *unix.Siginfo, _ int) error {
+		signals = append(signals, signal)
+		if signal == 0 {
+			return unix.ESRCH
+		}
+		return nil
+	}, func(int) error { return nil })
+
+	group := &processGroup{pid: anchor.pid, fd: 47, anchor: anchor, anchorCaptured: true}
+	first := group.Close()
+	if !errors.Is(first, ErrLinuxDescendantContainmentUnproven) {
+		t.Fatalf("first Close() error = %v, want unresolved scan failure", first)
+	}
+	if !slices.Equal(signals, []unix.Signal{unix.SIGKILL, 0}) || group.fd != 47 || !group.ContainmentCloseRetryable() {
+		t.Fatalf("after scan failure signals:%#v fd:%d retryable:%v, want [SIGKILL 0], retained, retryable", signals, group.fd, group.ContainmentCloseRetryable())
+	}
+
+	readLinuxProcessChildren = func(int) ([]int, error) { return nil, nil }
+	if err := group.Close(); !errors.Is(err, ErrLinuxDescendantContainmentUnproven) {
+		t.Fatalf("Close() after scan recovery = %v, want sticky unresolved result", err)
+	}
+	if !slices.Equal(signals, []unix.Signal{unix.SIGKILL, 0}) || group.fd != 47 || group.closeCompleted || !group.ContainmentCloseRetryable() {
+		t.Fatalf("after sticky scan recovery signals:%#v fd:%d completed:%v retryable:%v, want [SIGKILL 0], retained, false, true", signals, group.fd, group.closeCompleted, group.ContainmentCloseRetryable())
 	}
 }
 
@@ -176,6 +304,9 @@ func TestConfigureProcessSetsProcessGroupAfterPIDFDSupportProbe(t *testing.T) {
 	if command.SysProcAttr == nil || !command.SysProcAttr.Setpgid {
 		t.Fatalf("ConfigureProcess() SysProcAttr = %#v, want Setpgid", command.SysProcAttr)
 	}
+	if command.SysProcAttr.Pdeathsig != syscall.SIGKILL {
+		t.Fatalf("ConfigureProcess() Pdeathsig = %v, want SIGKILL", command.SysProcAttr.Pdeathsig)
+	}
 }
 
 func TestAttachProcessReturnsPartialContainmentAfterIdentityFailure(t *testing.T) {
@@ -219,6 +350,402 @@ func TestAttachProcessReturnsPartialContainmentAfterIdentityFailure(t *testing.T
 	}
 	if retryer, ok := containment.(ContainmentCloseRetryer); !ok || retryer.ContainmentCloseRetryable() {
 		t.Fatalf("partial containment retryability = (%v, %v), want implemented and false", retryer, ok)
+	}
+}
+
+func TestTerminatePersistedProcessGroupReleasesPartialAttachOwner(t *testing.T) {
+	process, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		t.Fatalf("FindProcess() error = %v", err)
+	}
+	t.Cleanup(func() { _ = process.Release() })
+
+	previousDuplicate := duplicatePIDFD
+	previousIdentity := readProcessIdentity
+	duplicatePIDFD = func(uintptr) (int, error) { return 47, nil }
+	identityCalls := 0
+	want := errors.New("identity unavailable")
+	readProcessIdentity = func(int) (string, error) {
+		identityCalls++
+		if identityCalls == 1 {
+			return "expected", nil
+		}
+		return "", want
+	}
+	t.Cleanup(func() {
+		duplicatePIDFD = previousDuplicate
+		readProcessIdentity = previousIdentity
+	})
+
+	closeCalls := 0
+	restorePIDFDCalls(t, func(int, unix.Signal, *unix.Siginfo, int) error {
+		t.Fatal("partial attach must not signal the process group")
+		return nil
+	}, func(fd int) error {
+		if fd != 47 {
+			t.Errorf("released pidfd = %d, want 47", fd)
+		}
+		closeCalls++
+		return nil
+	})
+
+	err = TerminatePersistedProcessGroup(context.Background(), process, "expected")
+	if !errors.Is(err, want) {
+		t.Fatalf("TerminatePersistedProcessGroup() error = %v, want %v", err, want)
+	}
+	if identityCalls != 2 {
+		t.Fatalf("readProcessIdentity() calls = %d, want precheck plus attach", identityCalls)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("partial attach pidfd close calls = %d, want 1", closeCalls)
+	}
+}
+
+func TestTerminatePersistedProcessGroupReleasesOwnerAfterTerminateError(t *testing.T) {
+	process, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		t.Fatalf("FindProcess() error = %v", err)
+	}
+	t.Cleanup(func() { _ = process.Release() })
+
+	previousDuplicate := duplicatePIDFD
+	previousIdentity := readProcessIdentity
+	previousStat := readLinuxProcessStat
+	previousChildren := readLinuxProcessChildren
+	duplicatePIDFD = func(uintptr) (int, error) { return 47, nil }
+	readProcessIdentity = func(int) (string, error) { return "expected", nil }
+	readLinuxProcessStat = func(pid int) (linuxProcessStat, error) {
+		return linuxProcessStat{pid: pid, pgrp: int64(pid), session: 77, startTime: 456}, nil
+	}
+	monitorStarted := make(chan struct{})
+	var monitorStartedOnce sync.Once
+	readLinuxProcessChildren = func(int) ([]int, error) {
+		monitorStartedOnce.Do(func() { close(monitorStarted) })
+		return nil, nil
+	}
+	t.Cleanup(func() {
+		duplicatePIDFD = previousDuplicate
+		readProcessIdentity = previousIdentity
+		readLinuxProcessStat = previousStat
+		readLinuxProcessChildren = previousChildren
+	})
+
+	want := errors.New("terminate failed")
+	var signals []unix.Signal
+	closeCalls := 0
+	restorePIDFDCalls(t, func(_ int, signal unix.Signal, _ *unix.Siginfo, _ int) error {
+		signals = append(signals, signal)
+		select {
+		case <-monitorStarted:
+		case <-time.After(time.Second):
+			return errors.New("descendant monitor did not start")
+		}
+		return want
+	}, func(fd int) error {
+		if fd != 47 {
+			t.Errorf("released pidfd = %d, want 47", fd)
+		}
+		closeCalls++
+		return nil
+	})
+
+	err = TerminatePersistedProcessGroup(context.Background(), process, "expected")
+	if !errors.Is(err, want) {
+		t.Fatalf("TerminatePersistedProcessGroup() error = %v, want %v", err, want)
+	}
+	if !slices.Equal(signals, []unix.Signal{unix.SIGKILL}) {
+		t.Fatalf("termination signals = %#v, want [SIGKILL]", signals)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("terminate-error pidfd close calls = %d, want 1", closeCalls)
+	}
+}
+
+func TestTerminatePersistedProcessGroupReleasesOwnerAfterUnprovenClose(t *testing.T) {
+	process, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		t.Fatalf("FindProcess() error = %v", err)
+	}
+	t.Cleanup(func() { _ = process.Release() })
+
+	previousDuplicate := duplicatePIDFD
+	previousIdentity := readProcessIdentity
+	previousStat := readLinuxProcessStat
+	previousChildren := readLinuxProcessChildren
+	duplicatePIDFD = func(uintptr) (int, error) { return 47, nil }
+	readProcessIdentity = func(int) (string, error) { return "expected", nil }
+	readLinuxProcessStat = func(pid int) (linuxProcessStat, error) {
+		return linuxProcessStat{pid: pid, pgrp: int64(pid), session: 77, startTime: 456}, nil
+	}
+	monitorStarted := make(chan struct{})
+	var monitorStartedOnce sync.Once
+	wantScan := errors.New("descendant scan failed")
+	readLinuxProcessChildren = func(int) ([]int, error) {
+		monitorStartedOnce.Do(func() { close(monitorStarted) })
+		return nil, wantScan
+	}
+	t.Cleanup(func() {
+		duplicatePIDFD = previousDuplicate
+		readProcessIdentity = previousIdentity
+		readLinuxProcessStat = previousStat
+		readLinuxProcessChildren = previousChildren
+	})
+
+	var signals []unix.Signal
+	closeCalls := 0
+	restorePIDFDCalls(t, func(_ int, signal unix.Signal, _ *unix.Siginfo, _ int) error {
+		signals = append(signals, signal)
+		select {
+		case <-monitorStarted:
+		case <-time.After(time.Second):
+			return errors.New("descendant monitor did not start")
+		}
+		if signal == 0 {
+			return unix.ESRCH
+		}
+		return nil
+	}, func(fd int) error {
+		if fd != 47 {
+			t.Errorf("released pidfd = %d, want 47", fd)
+		}
+		closeCalls++
+		return nil
+	})
+
+	err = TerminatePersistedProcessGroup(context.Background(), process, "expected")
+	if !errors.Is(err, ErrLinuxDescendantContainmentUnproven) {
+		t.Fatalf("TerminatePersistedProcessGroup() error = %v, want unresolved descendant scan", err)
+	}
+	if !slices.Equal(signals, []unix.Signal{unix.SIGKILL}) && !slices.Equal(signals, []unix.Signal{unix.SIGKILL, 0}) && !slices.Equal(signals, []unix.Signal{unix.SIGKILL, unix.SIGKILL, 0}) {
+		t.Fatalf("termination signals = %#v, want [SIGKILL], [SIGKILL 0], or [SIGKILL SIGKILL 0] without a fabricated proof probe", signals)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("unproven-close pidfd close calls = %d, want 1", closeCalls)
+	}
+}
+
+func TestTerminatePersistedProcessGroupReleasesOwnerAfterContextCancellation(t *testing.T) {
+	process, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		t.Fatalf("FindProcess() error = %v", err)
+	}
+	t.Cleanup(func() { _ = process.Release() })
+
+	previousDuplicate := duplicatePIDFD
+	previousIdentity := readProcessIdentity
+	previousStat := readLinuxProcessStat
+	previousChildren := readLinuxProcessChildren
+	duplicatePIDFD = func(uintptr) (int, error) { return 47, nil }
+	readProcessIdentity = func(int) (string, error) { return "expected", nil }
+	readLinuxProcessStat = func(pid int) (linuxProcessStat, error) {
+		return linuxProcessStat{pid: pid, pgrp: int64(pid), session: 77, startTime: 456}, nil
+	}
+	monitorStarted := make(chan struct{})
+	var monitorStartedOnce sync.Once
+	readLinuxProcessChildren = func(int) ([]int, error) {
+		monitorStartedOnce.Do(func() { close(monitorStarted) })
+		return nil, nil
+	}
+	t.Cleanup(func() {
+		duplicatePIDFD = previousDuplicate
+		readProcessIdentity = previousIdentity
+		readLinuxProcessStat = previousStat
+		readLinuxProcessChildren = previousChildren
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var signals []unix.Signal
+	closeCalls := 0
+	restorePIDFDCalls(t, func(_ int, signal unix.Signal, _ *unix.Siginfo, _ int) error {
+		signals = append(signals, signal)
+		select {
+		case <-monitorStarted:
+		case <-time.After(time.Second):
+			return errors.New("descendant monitor did not start")
+		}
+		cancel()
+		return nil
+	}, func(fd int) error {
+		if fd != 47 {
+			t.Errorf("released pidfd = %d, want 47", fd)
+		}
+		closeCalls++
+		return nil
+	})
+
+	err = TerminatePersistedProcessGroup(ctx, process, "expected")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("TerminatePersistedProcessGroup() error = %v, want context.Canceled", err)
+	}
+	if !slices.Equal(signals, []unix.Signal{unix.SIGKILL}) {
+		t.Fatalf("termination signals = %#v, want [SIGKILL] without a stop proof", signals)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("cancellation pidfd close calls = %d, want 1", closeCalls)
+	}
+}
+
+func TestReleaseProcessGroupOwnerReleasesPIDFDAndMonitor(t *testing.T) {
+	previousStat := readLinuxProcessStat
+	previousChildren := readLinuxProcessChildren
+	readLinuxProcessStat = func(pid int) (linuxProcessStat, error) {
+		return linuxProcessStat{pid: pid, pgrp: int64(pid), session: 77, startTime: 456}, nil
+	}
+	readLinuxProcessChildren = func(int) ([]int, error) { return nil, nil }
+	t.Cleanup(func() {
+		readLinuxProcessStat = previousStat
+		readLinuxProcessChildren = previousChildren
+	})
+
+	closeCalls := 0
+	restorePIDFDCalls(t, func(int, unix.Signal, *unix.Siginfo, int) error {
+		t.Fatal("owner release must not signal the process group")
+		return nil
+	}, func(fd int) error {
+		if fd != 47 {
+			t.Errorf("released pidfd = %d, want 47", fd)
+		}
+		closeCalls++
+		return nil
+	})
+
+	group := &processGroup{
+		pid:            1234,
+		fd:             47,
+		anchor:         linuxProcessGroupAnchor{pid: 1234, pgrp: 1234, session: 77, startTime: 456},
+		anchorCaptured: true,
+	}
+	group.startDescendantMonitor()
+	if err := releaseProcessGroupOwner(group); err != nil {
+		t.Fatalf("releaseProcessGroupOwner() error = %v", err)
+	}
+	select {
+	case <-group.monitorDone:
+	default:
+		t.Fatal("releaseProcessGroupOwner() returned before descendant monitor stopped")
+	}
+	if group.fd != -1 || !group.closeCompleted || group.ContainmentCloseRetryable() {
+		t.Fatalf("released owner state = fd:%d completed:%v retryable:%v, want -1,true,false", group.fd, group.closeCompleted, group.ContainmentCloseRetryable())
+	}
+	if closeCalls != 1 {
+		t.Fatalf("owner-release pidfd close calls = %d, want 1", closeCalls)
+	}
+}
+
+func TestReleaseProcessGroupOwnerTransfersBlockedMonitorOwnership(t *testing.T) {
+	anchor := linuxProcessGroupAnchor{pid: 1234, pgrp: 1234, session: 77, startTime: 456}
+	entered := make(chan struct{})
+	releaseReader := make(chan struct{})
+	allowPIDFDClose := make(chan struct{})
+	var enteredOnce sync.Once
+	var releaseReaderOnce sync.Once
+	var allowPIDFDCloseOnce sync.Once
+
+	previousStat := readLinuxProcessStat
+	previousChildren := readLinuxProcessChildren
+	readLinuxProcessStat = func(pid int) (linuxProcessStat, error) {
+		return linuxProcessStat{pid: pid, pgrp: anchor.pgrp, session: anchor.session, startTime: anchor.startTime}, nil
+	}
+	readLinuxProcessChildren = func(int) ([]int, error) {
+		enteredOnce.Do(func() { close(entered) })
+		<-releaseReader
+		return nil, nil
+	}
+	t.Cleanup(func() {
+		readLinuxProcessStat = previousStat
+		readLinuxProcessChildren = previousChildren
+	})
+
+	closeCalls := 0
+	closeEntered := make(chan struct{})
+	var closeEnteredOnce sync.Once
+	restorePIDFDCalls(t, func(_ int, signal unix.Signal, _ *unix.Siginfo, _ int) error {
+		t.Errorf("owner release signalled process group with signal %v", signal)
+		return nil
+	}, func(fd int) error {
+		if fd != 47 {
+			t.Errorf("released pidfd = %d, want 47", fd)
+		}
+		closeCalls++
+		closeEnteredOnce.Do(func() { close(closeEntered) })
+		<-allowPIDFDClose
+		return nil
+	})
+
+	group := &processGroup{
+		pid:            anchor.pid,
+		fd:             47,
+		anchor:         anchor,
+		anchorCaptured: true,
+	}
+	group.startDescendantMonitor()
+	t.Cleanup(func() {
+		releaseReaderOnce.Do(func() { close(releaseReader) })
+		allowPIDFDCloseOnce.Do(func() { close(allowPIDFDClose) })
+		select {
+		case <-group.monitorDone:
+		case <-time.After(containmentCloseDeadline + time.Second):
+			t.Errorf("descendant monitor did not stop during cleanup")
+		}
+	})
+
+	releaseResult := make(chan error, 1)
+	go func() { releaseResult <- releaseProcessGroupOwner(group) }()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("descendant monitor did not enter the blocked reader")
+	}
+
+	var releaseErr error
+	select {
+	case releaseErr = <-releaseResult:
+	case <-time.After(containmentCloseDeadline + time.Second):
+		t.Fatal("releaseProcessGroupOwner() did not return after the monitor deadline")
+	}
+	if !errors.Is(releaseErr, ErrLinuxDescendantContainmentUnproven) || !strings.Contains(releaseErr.Error(), "descendant monitor did not stop before deadline") {
+		t.Fatalf("releaseProcessGroupOwner() error = %v, want unresolved descendant monitor timeout", releaseErr)
+	}
+
+	group.mutex.Lock()
+	pending := group.ownerReleasePending
+	fd := group.fd
+	completed := group.closeCompleted
+	closeErr := group.closeErr
+	group.mutex.Unlock()
+	if !pending || fd != 47 || completed || !errors.Is(closeErr, ErrLinuxDescendantContainmentUnproven) || group.ContainmentCloseRetryable() {
+		t.Fatalf("pending owner-release state = pending:%v fd:%d completed:%v retryable:%v closeErr:%v, want true,47,false,false,unresolved", pending, fd, completed, group.ContainmentCloseRetryable(), closeErr)
+	}
+	select {
+	case <-closeEntered:
+		t.Fatal("pidfd was released before the blocked descendant reader was released")
+	default:
+	}
+
+	releaseReaderOnce.Do(func() { close(releaseReader) })
+	select {
+	case <-group.monitorDone:
+	case <-time.After(time.Second):
+		t.Fatal("descendant monitor did not stop after releasing the reader")
+	}
+	select {
+	case <-closeEntered:
+	case <-time.After(time.Second):
+		t.Fatal("retire goroutine did not begin pidfd release")
+	}
+	allowPIDFDCloseOnce.Do(func() { close(allowPIDFDClose) })
+
+	group.operationMutex.Lock()
+	group.mutex.Lock()
+	pending = group.ownerReleasePending
+	fd = group.fd
+	completed = group.closeCompleted
+	closeErr = group.closeErr
+	group.mutex.Unlock()
+	group.operationMutex.Unlock()
+	if closeCalls != 1 || pending || fd != -1 || !completed || !errors.Is(closeErr, ErrLinuxDescendantContainmentUnproven) || group.ContainmentCloseRetryable() {
+		t.Fatalf("retired owner state = calls:%d pending:%v fd:%d completed:%v retryable:%v closeErr:%v, want 1,false,-1,true,false,unresolved", closeCalls, pending, fd, completed, group.ContainmentCloseRetryable(), closeErr)
 	}
 }
 
@@ -502,14 +1029,11 @@ func TestProcessGroupCloseAfterLeaderReapedStopsLiveChild(t *testing.T) {
 		t.Fatal("AttachProcess() returned an empty identity")
 	}
 	waited := false
-	closed := false
 	child := &linuxTestChildOwner{}
 	t.Cleanup(func() {
 		_ = stdin.Close()
 		_ = stdout.Close()
-		if !closed {
-			_ = containment.Close()
-		}
+		_ = containment.Close()
 		if !waited {
 			_ = command.Process.Kill()
 			_ = command.Wait()
@@ -557,20 +1081,443 @@ func TestProcessGroupCloseAfterLeaderReapedStopsLiveChild(t *testing.T) {
 		t.Fatalf("after forced observation failure containment = (%T), want retained incomplete processGroup fd", containment)
 	}
 
-	closeResult := make(chan error, 1)
-	go func() { closeResult <- containment.Close() }()
-	// The test owns the adopted child and reaps it concurrently with Close. This
-	// prevents a zombie-only observation from being accepted as final ESRCH.
-	child.reap(t)
-	if err := <-closeResult; err != nil {
-		t.Fatalf("Close() after leader reaping: %v", err)
+	if err := containment.Terminate(true); err != nil {
+		t.Fatalf("Terminate(true) after forced observation failure: %v", err)
 	}
-	closed = true
+	// The first Close() permanently records scan uncertainty, so a later Close()
+	// must not signal again. Terminate the adopted child explicitly before that
+	// sticky retry; otherwise reaping the live sleep helper can block indefinitely.
+	child.reap(t)
+	secondErr := containment.Close()
+	if !errors.Is(secondErr, ErrLinuxDescendantContainmentUnproven) {
+		t.Fatalf("Close() after leader reaping = %v, want unresolved descendant containment", secondErr)
+	}
+	group, ok := containment.(*processGroup)
+	if !ok || !group.descendantScanLost || group.closeCompleted || group.fd < 0 || !group.ContainmentCloseRetryable() {
+		t.Fatalf("sticky containment after leader reaping = (%T), want lost, incomplete, retained, retryable", containment)
+	}
 	if state, err := readLinuxProcessState(child.pid); err == nil && state != 'Z' && state != 'X' && state != 'x' {
 		t.Fatalf("owned child %d remained live after Close(): state=%q", child.pid, state)
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("read owned child %d state after Close(): %v", child.pid, err)
 	}
+}
+
+func TestProcessGroupCloseRejectsLiveSetSIDDescendant(t *testing.T) {
+	enableLinuxTestSubreaper(t)
+	command, stdin, stdout := startEscapedContainmentHelper(t)
+	containment, identity, err := AttachProcess(command.Process)
+	if err != nil {
+		stopContainmentHelper(t, command)
+		t.Fatalf("AttachProcess() error = %v", err)
+	}
+	if identity == "" {
+		t.Fatal("AttachProcess() returned an empty identity")
+	}
+
+	waited := false
+	waitStarted := false
+	waitResult := make(chan error, 1)
+	child := &linuxTestChildOwner{}
+	group, ok := containment.(*processGroup)
+	if !ok || group.escapeObserved == nil {
+		t.Fatalf("containment = %T, want processGroup with descendant monitor", containment)
+	}
+	t.Cleanup(func() {
+		_ = stdin.Close()
+		_ = stdout.Close()
+		if waitStarted && !waited {
+			_ = command.Process.Kill()
+			if err := <-waitResult; err == nil {
+				t.Errorf("leader Wait() error = nil during cleanup")
+			}
+		} else if !waited {
+			_ = command.Process.Kill()
+			_ = command.Wait()
+		}
+		child.cleanup(t)
+	})
+
+	if _, err := stdin.Write([]byte{1}); err != nil {
+		t.Fatalf("start escaped child: %v", err)
+	}
+	line, err := bufio.NewReader(stdout).ReadString('\n')
+	if err != nil {
+		t.Fatalf("read escaped child PID: %v", err)
+	}
+	child.pid, err = strconv.Atoi(strings.TrimSpace(line))
+	if err != nil || child.pid <= 0 {
+		t.Fatalf("escaped child PID %q: %v", line, err)
+	}
+	if err := syscall.Kill(child.pid, 0); err != nil {
+		t.Fatalf("escaped child %d was not running before leader exit: %v", child.pid, err)
+	}
+
+	select {
+	case <-group.escapeObserved:
+	case <-time.After(15 * time.Second):
+		t.Fatal("descendant monitor did not observe setsid escape")
+	}
+	waitStarted = true
+	go func() { waitResult <- command.Wait() }()
+	if _, err := stdin.Write([]byte{1}); err != nil {
+		t.Fatalf("allow leader exit: %v", err)
+	}
+	if err := stdin.Close(); err != nil {
+		t.Fatalf("close escaped helper stdin: %v", err)
+	}
+	if err := <-waitResult; err != nil {
+		t.Fatalf("leader Wait() error = %v, want natural exit", err)
+	}
+	waited = true
+	closeErr := containment.Close()
+	if !errors.Is(closeErr, ErrLinuxDescendantContainmentUnproven) {
+		t.Fatalf("Close() error = %v, want unresolved escaped descendant", closeErr)
+	}
+	retryer, ok := containment.(ContainmentCloseRetryer)
+	if !ok || !retryer.ContainmentCloseRetryable() {
+		t.Fatalf("after escaped descendant Close() retryability = (%v, %v), want true", retryer, ok)
+	}
+	if err := syscall.Kill(child.pid, 0); err != nil {
+		t.Fatalf("setsid descendant %d was reported unresolved but is not live: %v", child.pid, err)
+	}
+}
+
+func TestProcessGroupMonitorFailureRetainsUncertaintyBeforeLeaderExit(t *testing.T) {
+	anchor := linuxProcessGroupAnchor{pid: 1234, pgrp: 1234, session: 77, startTime: 456}
+	scanStarted := make(chan struct{})
+	leaderExit := make(chan struct{})
+	leaderAbsent := make(chan struct{})
+	var scanOnce sync.Once
+	var absentOnce sync.Once
+
+	previousStat := readLinuxProcessStat
+	previousChildren := readLinuxProcessChildren
+	readLinuxProcessStat = func(int) (linuxProcessStat, error) {
+		select {
+		case <-leaderExit:
+			absentOnce.Do(func() { close(leaderAbsent) })
+			return linuxProcessStat{}, os.ErrNotExist
+		default:
+			return linuxProcessStat{pid: anchor.pid, pgrp: anchor.pgrp, session: anchor.session, startTime: anchor.startTime}, nil
+		}
+	}
+	readLinuxProcessChildren = func(int) ([]int, error) {
+		scanOnce.Do(func() { close(scanStarted) })
+		return nil, errors.New("forced descendant scan failure")
+	}
+	t.Cleanup(func() {
+		readLinuxProcessStat = previousStat
+		readLinuxProcessChildren = previousChildren
+	})
+
+	group := &processGroup{pid: anchor.pid, fd: 47, anchor: anchor, anchorCaptured: true}
+	group.startDescendantMonitor()
+	<-scanStarted
+	close(leaderExit)
+	<-leaderAbsent
+	if err := group.stopDescendantMonitor(time.Now().Add(containmentCloseDeadline)); err != nil {
+		t.Fatalf("stopDescendantMonitor() error = %v", err)
+	}
+
+	if !group.descendantScanLost {
+		t.Fatal("descendant monitor lost uncertainty after a scan failure and leader exit")
+	}
+	if group.monitorTerminalReason != descendantMonitorTerminalScanFailure {
+		t.Fatalf("monitor terminal reason = %s, want %s", group.monitorTerminalReason, descendantMonitorTerminalScanFailure)
+	}
+	if err := group.Close(); !errors.Is(err, ErrLinuxDescendantContainmentUnproven) {
+		t.Fatalf("Close() error = %v, want unresolved descendant containment", err)
+	}
+	if !group.ContainmentCloseRetryable() {
+		t.Fatal("Close() made containment non-retryable after monitor uncertainty")
+	}
+}
+
+func TestProcessGroupPersistsExistingUncertaintyWhenCallbackIsInstalled(t *testing.T) {
+	anchor := linuxProcessGroupAnchor{pid: 1234, pgrp: 1234, session: 77, startTime: 456}
+	markerReady := false
+	markerErr := errors.New("process marker is not written")
+	calls := 0
+	group := &processGroup{
+		pid:                anchor.pid,
+		fd:                 47,
+		anchor:             anchor,
+		anchorCaptured:     true,
+		escapedDescendants: []linuxProcessStat{{pid: 2345, pgrp: 2345, session: 2345, startTime: 789}},
+	}
+	callback := func() error {
+		calls++
+		if !markerReady {
+			return markerErr
+		}
+		return nil
+	}
+
+	if err := group.SetContainmentUnprovenCallback(callback); !errors.Is(err, markerErr) {
+		t.Fatalf("SetContainmentUnprovenCallback() before marker = %v, want %v", err, markerErr)
+	}
+	if group.containmentUnprovenPersisted {
+		t.Fatal("containment uncertainty was marked persisted before the process marker existed")
+	}
+	markerReady = true
+	if err := group.SetContainmentUnprovenCallback(callback); err != nil {
+		t.Fatalf("SetContainmentUnprovenCallback() after marker = %v", err)
+	}
+	if !group.containmentUnprovenPersisted || calls != 2 {
+		t.Fatalf("containment persistence = persisted:%v calls:%d, want true and two deterministic attempts", group.containmentUnprovenPersisted, calls)
+	}
+}
+
+func TestProcessGroupContainmentCallbackFailureRetainsAuthority(t *testing.T) {
+	anchor := linuxProcessGroupAnchor{pid: 1234, pgrp: 1234, session: 77, startTime: 456}
+	want := errors.New("marker write failed")
+	group := &processGroup{
+		pid:                anchor.pid,
+		fd:                 47,
+		anchor:             anchor,
+		anchorCaptured:     true,
+		descendantScanLost: true,
+	}
+	if err := group.SetContainmentUnprovenCallback(func() error { return want }); !errors.Is(err, want) {
+		t.Fatalf("SetContainmentUnprovenCallback() = %v, want %v", err, want)
+	}
+	err := group.Close()
+	if !errors.Is(err, ErrLinuxDescendantContainmentUnproven) || !errors.Is(err, want) {
+		t.Fatalf("Close() = %v, want unresolved containment wrapping %v", err, want)
+	}
+	if group.fd != 47 || group.closeCompleted || !group.ContainmentCloseRetryable() {
+		t.Fatalf("failed uncertainty persistence state = fd:%d completed:%v retryable:%v, want retained, incomplete, retryable", group.fd, group.closeCompleted, group.ContainmentCloseRetryable())
+	}
+}
+
+func TestProcessGroupLeaderExitAfterSuccessfulDescendantScanRemainsProven(t *testing.T) {
+	anchor := linuxProcessGroupAnchor{pid: 1234, pgrp: 1234, session: 77, startTime: 456}
+	leaderExit := make(chan struct{})
+	leaderGone := make(chan struct{})
+	scanComplete := make(chan struct{})
+	var goneOnce sync.Once
+	var scanOnce sync.Once
+
+	previousStat := readLinuxProcessStat
+	previousChildren := readLinuxProcessChildren
+	readLinuxProcessStat = func(pid int) (linuxProcessStat, error) {
+		if pid != anchor.pid {
+			return linuxProcessStat{}, os.ErrNotExist
+		}
+		select {
+		case <-leaderExit:
+			goneOnce.Do(func() { close(leaderGone) })
+			return linuxProcessStat{}, os.ErrNotExist
+		default:
+			return linuxProcessStat{pid: anchor.pid, pgrp: anchor.pgrp, session: anchor.session, startTime: anchor.startTime}, nil
+		}
+	}
+	readLinuxProcessChildren = func(int) ([]int, error) {
+		scanOnce.Do(func() { close(scanComplete) })
+		return nil, nil
+	}
+	t.Cleanup(func() {
+		readLinuxProcessStat = previousStat
+		readLinuxProcessChildren = previousChildren
+	})
+	var signals []unix.Signal
+	restorePIDFDCalls(t, func(_ int, signal unix.Signal, _ *unix.Siginfo, _ int) error {
+		signals = append(signals, signal)
+		if signal == unix.SIGKILL {
+			return nil
+		}
+		return unix.ESRCH
+	}, func(int) error { return nil })
+
+	group := &processGroup{pid: anchor.pid, fd: 47, anchor: anchor, anchorCaptured: true}
+	group.startDescendantMonitor()
+	<-scanComplete
+	close(leaderExit)
+	<-leaderGone
+	if err := group.stopDescendantMonitor(time.Now().Add(containmentCloseDeadline)); err != nil {
+		t.Fatalf("stopDescendantMonitor() = %v", err)
+	}
+	if !group.descendantScanCompleted || group.descendantScanLost {
+		t.Fatalf("monitor state = complete:%v lost:%v, want clean scan", group.descendantScanCompleted, group.descendantScanLost)
+	}
+	if group.monitorTerminalReason != descendantMonitorTerminalCleanLeaderAbsent {
+		t.Fatalf("monitor terminal reason = %s, want %s", group.monitorTerminalReason, descendantMonitorTerminalCleanLeaderAbsent)
+	}
+	if err := group.Close(); err != nil {
+		t.Fatalf("Close() after clean leader reaping = %v, want nil", err)
+	}
+	if !slices.Equal(signals, []unix.Signal{unix.SIGKILL, 0}) {
+		t.Fatalf("signals = %#v, want [SIGKILL 0]", signals)
+	}
+	if group.fd != -1 || !group.closeCompleted || group.ContainmentCloseRetryable() {
+		t.Fatalf("after proven leader reaping fd:%d completed:%v retryable:%v, want released, complete, non-retryable", group.fd, group.closeCompleted, group.ContainmentCloseRetryable())
+	}
+}
+
+func TestProcessGroupCloseRejectsLeaderDisappearanceWithoutPostReadbackScan(t *testing.T) {
+	anchor := linuxProcessGroupAnchor{pid: 1234, pgrp: 1234, session: 77, startTime: 456}
+	initialScan := make(chan struct{})
+	var initialScanOnce sync.Once
+	leaderPresent := true
+
+	previousStat := readLinuxProcessStat
+	previousChildren := readLinuxProcessChildren
+	readLinuxProcessStat = func(pid int) (linuxProcessStat, error) {
+		if !leaderPresent {
+			return linuxProcessStat{}, os.ErrNotExist
+		}
+		return linuxProcessStat{pid: pid, pgrp: anchor.pgrp, session: anchor.session, startTime: anchor.startTime}, nil
+	}
+	readLinuxProcessChildren = func(int) ([]int, error) {
+		initialScanOnce.Do(func() { close(initialScan) })
+		return nil, nil
+	}
+	t.Cleanup(func() {
+		readLinuxProcessStat = previousStat
+		readLinuxProcessChildren = previousChildren
+	})
+
+	var signals []unix.Signal
+	restorePIDFDCalls(t, func(_ int, signal unix.Signal, _ *unix.Siginfo, _ int) error {
+		signals = append(signals, signal)
+		if signal == unix.SIGKILL {
+			return nil
+		}
+		if signal == 0 {
+			return unix.ESRCH
+		}
+		t.Fatalf("unexpected signal %v", signal)
+		return nil
+	}, func(int) error { return nil })
+
+	group := &processGroup{pid: anchor.pid, fd: 47, anchor: anchor, anchorCaptured: true}
+	group.startDescendantMonitor()
+	<-initialScan
+	if err := group.stopDescendantMonitor(time.Now().Add(containmentCloseDeadline)); err != nil {
+		t.Fatalf("stopDescendantMonitor() = %v", err)
+	}
+	leaderPresent = false
+
+	err := group.Close()
+	if !errors.Is(err, ErrLinuxDescendantContainmentUnproven) {
+		t.Fatalf("Close() without post-readback scan = %v, want unresolved containment", err)
+	}
+	if group.monitorTerminalReason != descendantMonitorTerminalOwnerStop {
+		t.Fatalf("monitor terminal reason = %s, want %s", group.monitorTerminalReason, descendantMonitorTerminalOwnerStop)
+	}
+	if !slices.Equal(signals, []unix.Signal{unix.SIGKILL, 0}) {
+		t.Fatalf("signals = %#v, want [SIGKILL 0] before unresolved result", signals)
+	}
+	if group.fd != 47 || group.closeCompleted || !group.ContainmentCloseRetryable() {
+		t.Fatalf("after missing post-readback scan fd:%d completed:%v retryable:%v, want retained, incomplete, retryable", group.fd, group.closeCompleted, group.ContainmentCloseRetryable())
+	}
+}
+
+func TestProcessGroupCloseSucceedsAfterPostReadbackDescendantScan(t *testing.T) {
+	anchor := linuxProcessGroupAnchor{pid: 1234, pgrp: 1234, session: 77, startTime: 456}
+	initialScan := make(chan struct{})
+	postReadbackScan := make(chan struct{})
+	readbackComplete := make(chan struct{})
+	var initialScanOnce sync.Once
+	var postReadbackScanOnce sync.Once
+	var readbackOnce sync.Once
+
+	previousStat := readLinuxProcessStat
+	previousChildren := readLinuxProcessChildren
+	readLinuxProcessStat = func(pid int) (linuxProcessStat, error) {
+		return linuxProcessStat{pid: pid, pgrp: anchor.pgrp, session: anchor.session, startTime: anchor.startTime}, nil
+	}
+	readLinuxProcessChildren = func(int) ([]int, error) {
+		initialScanOnce.Do(func() { close(initialScan) })
+		select {
+		case <-readbackComplete:
+			postReadbackScanOnce.Do(func() { close(postReadbackScan) })
+		default:
+		}
+		return nil, nil
+	}
+	t.Cleanup(func() {
+		readLinuxProcessStat = previousStat
+		readLinuxProcessChildren = previousChildren
+	})
+
+	var signals []unix.Signal
+	restorePIDFDCalls(t, func(_ int, signal unix.Signal, _ *unix.Siginfo, _ int) error {
+		signals = append(signals, signal)
+		if signal == unix.SIGKILL {
+			return nil
+		}
+		if signal == 0 {
+			readbackOnce.Do(func() { close(readbackComplete) })
+			return unix.ESRCH
+		}
+		t.Fatalf("unexpected signal %v", signal)
+		return nil
+	}, func(int) error { return nil })
+
+	group := &processGroup{pid: anchor.pid, fd: 47, anchor: anchor, anchorCaptured: true}
+	group.startDescendantMonitor()
+	<-initialScan
+	if err := group.Close(); err != nil {
+		t.Fatalf("Close() with post-readback descendant scan = %v, want nil", err)
+	}
+	select {
+	case <-postReadbackScan:
+	default:
+		t.Fatal("Close() returned without a descendant scan after group readback")
+	}
+	if !slices.Equal(signals, []unix.Signal{unix.SIGKILL, 0}) {
+		t.Fatalf("signals = %#v, want [SIGKILL 0]", signals)
+	}
+	if group.descendantScanLost || !group.descendantScanCompleted || group.fd != -1 || !group.closeCompleted {
+		t.Fatalf("successful close state = lost:%v complete:%v fd:%d closed:%v, want false,true,-1,true", group.descendantScanLost, group.descendantScanCompleted, group.fd, group.closeCompleted)
+	}
+}
+
+func TestProcessGroupCloseBoundsBlockedDescendantMonitor(t *testing.T) {
+	anchor := linuxProcessGroupAnchor{pid: 1234, pgrp: 1234, session: 77, startTime: 456}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var enteredOnce sync.Once
+	previousStat := readLinuxProcessStat
+	previousChildren := readLinuxProcessChildren
+	readLinuxProcessStat = func(int) (linuxProcessStat, error) {
+		return linuxProcessStat{pid: anchor.pid, pgrp: anchor.pgrp, session: anchor.session, startTime: anchor.startTime}, nil
+	}
+	readLinuxProcessChildren = func(int) ([]int, error) {
+		enteredOnce.Do(func() { close(entered) })
+		<-release
+		return nil, nil
+	}
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+		readLinuxProcessStat = previousStat
+		readLinuxProcessChildren = previousChildren
+	})
+
+	group := &processGroup{pid: anchor.pid, fd: 47, anchor: anchor, anchorCaptured: true}
+	group.startDescendantMonitor()
+	<-entered
+	deadline := time.Now().Add(25 * time.Millisecond)
+	started := time.Now()
+	err := group.closeUntil(deadline)
+	if !errors.Is(err, ErrLinuxDescendantContainmentUnproven) {
+		t.Fatalf("closeUntil() error = %v, want bounded unresolved result", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("closeUntil() took %v after monitor deadline, want bounded return", elapsed)
+	}
+	if group.fd != 47 || group.closeCompleted || !group.ContainmentCloseRetryable() {
+		t.Fatalf("after monitor timeout fd:%d completed:%v retryable:%v, want retained, incomplete, retryable", group.fd, group.closeCompleted, group.ContainmentCloseRetryable())
+	}
+
+	close(release)
+	<-group.monitorDone
 }
 
 func restorePIDFDCalls(t *testing.T, send func(int, unix.Signal, *unix.Siginfo, int) error, close func(int) error) {
@@ -680,6 +1627,27 @@ func startContainmentHelper(t *testing.T) (*exec.Cmd, io.WriteCloser, io.ReadClo
 	return command, stdin, stdout
 }
 
+func startEscapedContainmentHelper(t *testing.T) (*exec.Cmd, io.WriteCloser, io.ReadCloser) {
+	t.Helper()
+	command := exec.Command(os.Args[0], "-test.run=^TestProcessGroupContainmentHelper$", "--", "leader-holds-setsid-child")
+	command.Env = append(os.Environ(), "GO_WANT_PROCESS_GROUP_CONTAINMENT_HELPER=1")
+	stdin, err := command.StdinPipe()
+	if err != nil {
+		t.Fatalf("create escaped helper stdin: %v", err)
+	}
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		t.Fatalf("create escaped helper stdout: %v", err)
+	}
+	if err := ConfigureProcess(command); err != nil {
+		t.Fatalf("ConfigureProcess() error = %v", err)
+	}
+	if err := command.Start(); err != nil {
+		t.Fatalf("start escaped helper: %v", err)
+	}
+	return command, stdin, stdout
+}
+
 func stopContainmentHelper(t *testing.T, command *exec.Cmd) {
 	t.Helper()
 	if command == nil || command.Process == nil {
@@ -737,6 +1705,61 @@ func TestProcessGroupContainmentHelper(t *testing.T) {
 		if _, err := io.ReadFull(os.Stdin, release[:]); err != nil {
 			fmt.Fprint(os.Stderr, err)
 			os.Exit(5)
+		}
+	case "leader-holds-setsid-child":
+		var release [1]byte
+		if _, err := io.ReadFull(os.Stdin, release[:]); err != nil {
+			fmt.Fprint(os.Stderr, err)
+			os.Exit(6)
+		}
+		readyReader, readyWriter, err := os.Pipe()
+		if err != nil {
+			fmt.Fprint(os.Stderr, err)
+			os.Exit(7)
+		}
+		defer readyReader.Close()
+		child := exec.Command(os.Args[0], "-test.run=^TestProcessGroupContainmentHelper$", "--", "setsid-child")
+		child.Env = append(os.Environ(), "GO_WANT_PROCESS_GROUP_CONTAINMENT_HELPER=1")
+		child.ExtraFiles = []*os.File{readyWriter}
+		if err := child.Start(); err != nil {
+			readyWriter.Close()
+			fmt.Fprint(os.Stderr, err)
+			os.Exit(8)
+		}
+		readyWriter.Close()
+		var ready [1]byte
+		if _, err := io.ReadFull(readyReader, ready[:]); err != nil {
+			fmt.Fprint(os.Stderr, err)
+			os.Exit(9)
+		}
+		if _, err := fmt.Fprintln(os.Stdout, child.Process.Pid); err != nil {
+			fmt.Fprint(os.Stderr, err)
+			os.Exit(10)
+		}
+		if _, err := io.ReadFull(os.Stdin, release[:]); err != nil {
+			fmt.Fprint(os.Stderr, err)
+			os.Exit(11)
+		}
+	case "setsid-child":
+		if _, err := unix.Setsid(); err != nil {
+			fmt.Fprint(os.Stderr, err)
+			os.Exit(12)
+		}
+		readyWriter := os.NewFile(uintptr(3), "ready")
+		if readyWriter == nil {
+			fmt.Fprint(os.Stderr, "ready pipe is unavailable")
+			os.Exit(13)
+		}
+		if _, err := readyWriter.Write([]byte{1}); err != nil {
+			fmt.Fprint(os.Stderr, err)
+			os.Exit(14)
+		}
+		_ = readyWriter.Close()
+		for {
+			if err := unix.Pause(); err != nil && !errors.Is(err, unix.EINTR) {
+				fmt.Fprint(os.Stderr, err)
+				os.Exit(15)
+			}
 		}
 	default:
 		os.Exit(2)

@@ -165,7 +165,7 @@ func TestCancellationStopsWhileRetentionAndTerminalJournalWritesFail(t *testing.
 	}
 }
 
-func TestRestartRetentionWriteFailureStillTerminatesAndPreservesDurableControlArtifacts(t *testing.T) {
+func TestRestartRetentionWriteFailureBlocksProcessControlAndPreservesJournal(t *testing.T) {
 	app, key, _ := supervisoryDaemon(t)
 	artifact := retainTestArtifact(t, app, key)
 	if !app.handleCommand(context.Background(), supervisoryCommand(key, "pause-1", "pause")) {
@@ -185,20 +185,20 @@ func TestRestartRetentionWriteFailureStillTerminatesAndPreservesDurableControlAr
 	}
 	app.options.retainWorkspace = func(state.RunKey) (state.RunJournal, error) {
 		retentionAttempts++
-		if terminated != 1 {
-			t.Fatal("recovery retention write preceded process termination")
+		if terminated != 0 {
+			t.Fatal("recovery process termination preceded workspace retention")
 		}
 		return state.RunJournal{}, os.ErrPermission
 	}
-	if err := app.recoverUnresolvedInputIntents(context.Background()); err != nil {
-		t.Fatal(err)
+	if err := app.recoverUnresolvedInputIntents(context.Background()); !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("recoverUnresolvedInputIntents() error = %v, want %v", err, os.ErrPermission)
 	}
 	journal := supervisoryJournal(t, app, key)
-	if terminated != 1 || retentionAttempts != 1 || journal.TerminalState != "failed" || journal.RetainWorkspace || len(journal.ControlCommandIntents) != 1 || journal.ControlCommandIntents[0].Outcome != "rejected" {
-		t.Fatalf("unsafe recovery under failed retention persistence: %#v, terminated=%d attempts=%d", journal, terminated, retentionAttempts)
+	if terminated != 0 || retentionAttempts != 1 || journal.TerminalState != "" || journal.RetainWorkspace || !journal.HasProcessDetails() || len(journal.ControlCommandIntents) != 1 || journal.ControlCommandIntents[0].Outcome != "" {
+		t.Fatalf("recovery crossed failed retention barrier: %#v, terminated=%d attempts=%d", journal, terminated, retentionAttempts)
 	}
-	// A second restart loses memory-only retention. The durable control intent
-	// must independently stop an automatic cleanup profile from deleting work.
+	// A second restart loses memory-only retention. The unresolved supervisory
+	// journal still blocks workspace cleanup while the process marker remains.
 	app.retainedWorkspaces = nil
 	if err := app.cleanupRecoveredWorkspace(context.Background(), journal, false); err != nil {
 		t.Fatal(err)

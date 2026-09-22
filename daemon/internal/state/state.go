@@ -143,7 +143,11 @@ type RunJournal struct {
 	// ContainmentHandoff is the durable pre-authority launch fence. It is
 	// mutually exclusive with ContainmentAuthority and is cleared only by the
 	// dedicated commit or release-proof mutations.
-	ContainmentHandoff             *authority.SupervisorHandoff      `json:"containment_handoff,omitempty"`
+	ContainmentHandoff *authority.SupervisorHandoff `json:"containment_handoff,omitempty"`
+	// ContainmentUnproven records that a local stop attempt could not prove the
+	// complete owned process boundary. Recovery must retain the marker until a
+	// later positive stop proof clears this flag explicitly.
+	ContainmentUnproven            bool                              `json:"containment_unproven,omitempty"`
 	LastEventSequence              int64                             `json:"last_event_sequence"`
 	PendingEvents                  []protocol.RunEvent               `json:"pending_events"`
 	DroppedOutputChunks            int64                             `json:"dropped_output_chunks,omitempty"`
@@ -507,6 +511,9 @@ func (store *Store) SaveJournal(journal RunJournal) error {
 		if current.PID != journal.PID || current.ProcessIdentity != journal.ProcessIdentity || !current.StartedAt.Equal(journal.StartedAt) {
 			return errors.New("process details require dedicated mutation")
 		}
+		if current.ContainmentUnproven != journal.ContainmentUnproven {
+			return errors.New("containment uncertainty requires dedicated mutation")
+		}
 		if !sameContainmentAuthority(current.ContainmentAuthority, journal.ContainmentAuthority) {
 			return errors.New("containment authority requires dedicated mutation")
 		}
@@ -796,6 +803,40 @@ func (store *Store) SetProcessDetailsWithAuthority(key RunKey, pid int, identity
 		}
 		cloned := value.Clone()
 		journal.ContainmentAuthority = &cloned
+		return nil
+	})
+}
+
+// MarkContainmentUnproven retains an exact process marker when local cleanup
+// cannot prove that the complete owned boundary stopped. It is idempotent for
+// the same process identity and survives daemon restart.
+func (store *Store) MarkContainmentUnproven(key RunKey, pid int, identity string) (RunJournal, error) {
+	if pid <= 0 || !validRequiredString(identity, 4096) {
+		return RunJournal{}, errors.New("process details are invalid")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.PID != pid || journal.ProcessIdentity != identity || !journal.HasProcessDetails() {
+			return errors.New("containment uncertainty requires the exact process marker")
+		}
+		journal.ContainmentUnproven = true
+		return nil
+	})
+}
+
+// ClearContainmentUnproven clears a prior uncertainty marker only after the
+// caller has completed a fresh identity-bound stop proof.
+func (store *Store) ClearContainmentUnproven(key RunKey, pid int, identity string) (RunJournal, error) {
+	if pid <= 0 || !validRequiredString(identity, 4096) {
+		return RunJournal{}, errors.New("process details are invalid")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if !journal.HasProcessDetails() {
+			return nil
+		}
+		if journal.PID != pid || journal.ProcessIdentity != identity {
+			return errors.New("persisted process details changed during containment proof")
+		}
+		journal.ContainmentUnproven = false
 		return nil
 	})
 }
@@ -1173,6 +1214,14 @@ func (store *Store) ClearProcessDetails(key RunKey, pid int, identity string) (R
 		}
 		if journal.PID != pid || journal.ProcessIdentity != identity {
 			return errors.New("persisted process details changed during termination")
+		}
+		if journal.ContainmentUnproven {
+			return errors.New("containment stop proof is unresolved")
+		}
+		if journal.ContainmentAuthority != nil {
+			if journal.ContainmentAuthority.StopReceipt == nil || !journal.ContainmentAuthority.StopReceipt.ValidFor(*journal.ContainmentAuthority) {
+				return errors.New("containment stop receipt is required before clearing process details")
+			}
 		}
 		journal.PID = 0
 		journal.ProcessIdentity = ""
@@ -2510,6 +2559,9 @@ func validateJournal(journal RunJournal) error {
 	}
 	if journal.PID > 0 && (journal.StartedAt.IsZero() || !validRequiredString(journal.ProcessIdentity, 4096)) {
 		return errors.New("run journal process details are invalid")
+	}
+	if journal.ContainmentUnproven && !journal.HasProcessDetails() {
+		return errors.New("run journal containment uncertainty is invalid")
 	}
 	if journal.ContainmentAuthority != nil {
 		if err := journal.ContainmentAuthority.Validate(); err != nil ||

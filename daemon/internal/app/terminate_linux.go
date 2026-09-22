@@ -15,7 +15,7 @@ import (
 var (
 	readPersistedProcessIdentity     = platform.ProcessIdentity
 	findPersistedProcess             = os.FindProcess
-	terminatePersistedProcessGroup   = platform.TerminateProcessGroup
+	terminatePersistedProcessGroup   = platform.TerminatePersistedProcessGroup
 	provePersistedProcessGroupAbsent = platform.ProvePersistedProcessGroupAbsent
 )
 
@@ -23,6 +23,9 @@ func terminatePersistedProcess(pid int, identity string) error {
 	return terminatePersistedProcessWithContext(context.Background(), pid, identity)
 }
 
+// This helper is used only after recovery has rejected a journal already
+// marked ContainmentUnproven. A missing leader plus an ESRCH process-group
+// proof cannot rediscover descendants that escaped the original group.
 func terminatePersistedProcessWithContext(ctx context.Context, pid int, identity string) error {
 	if pid <= 0 || identity == "" {
 		return errors.New("persisted process identity is required")
@@ -32,7 +35,7 @@ func terminatePersistedProcessWithContext(ctx context.Context, pid int, identity
 		if proofErr := provePersistedProcessGroupAbsent(ctx, pid, identity); proofErr != nil {
 			return fmt.Errorf("%w: prove persisted process group absence: %w", errPersistedProcessStopUnproven, proofErr)
 		}
-		return nil
+		return fmt.Errorf("%w: process-group absence does not prove descendant containment", errPersistedProcessStopUnproven)
 	}
 	if err != nil {
 		return fmt.Errorf("%w: read persisted process identity: %w", errPersistedProcessStopUnproven, err)

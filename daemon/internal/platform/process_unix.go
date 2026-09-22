@@ -19,18 +19,25 @@ import (
 )
 
 const (
-	containmentCloseDeadline      = 5 * time.Second
-	containmentCloseProbeInterval = 10 * time.Millisecond
+	containmentCloseDeadline             = 5 * time.Second
+	containmentCloseProbeInterval        = 10 * time.Millisecond
+	containmentDescendantMonitorInterval = 10 * time.Millisecond
 )
 
 var (
-	probePIDFDGroupSupport = checkPIDFDGroupSupport
-	duplicatePIDFD         = duplicatePIDFDHandle
-	readProcessIdentity    = ProcessIdentity
-	sendPIDFDSignal        = unix.PidfdSendSignal
-	closePIDFD             = unix.Close
-	readLinuxProcessStat   = readLinuxProcessStatFile
+	probePIDFDGroupSupport   = checkPIDFDGroupSupport
+	duplicatePIDFD           = duplicatePIDFDHandle
+	readProcessIdentity      = ProcessIdentity
+	sendPIDFDSignal          = unix.PidfdSendSignal
+	closePIDFD               = unix.Close
+	readLinuxProcessStat     = readLinuxProcessStatFile
+	readLinuxProcessChildren = readLinuxProcessChildrenFile
 )
+
+// ErrLinuxDescendantContainmentUnproven means that the original process-group
+// fence was not enough to prove every descendant stopped. Callers must retain
+// the process marker and retry the identity-bound containment operation.
+var ErrLinuxDescendantContainmentUnproven = errors.New("Linux descendant containment is unproven")
 
 // Containment owns a launched process's platform-specific termination boundary.
 type Containment interface {
@@ -43,14 +50,18 @@ type Containment interface {
 func ConfigureHeadlessProcess(*exec.Cmd) error { return nil }
 
 // ConfigureProcess verifies pidfd process-group signalling before making the
-// launched process the leader of a new process group. Containment owns only
-// processes that remain in that original group; descendants that create a
-// session or move to another group are outside this platform boundary.
+// launched process the leader of a new process group. Close additionally
+// inspects the live descendant tree; descendants that create a session or move
+// to another group remain unresolved because this authority cannot safely
+// signal their subtree without a stronger kernel boundary.
 func ConfigureProcess(command *exec.Cmd) error {
 	if err := probePIDFDGroupSupport(); err != nil {
 		return fmt.Errorf("pidfd process-group containment is unsupported: %w", err)
 	}
-	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	command.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid:   true,
+		Pdeathsig: syscall.SIGKILL,
+	}
 	return nil
 }
 
@@ -95,17 +106,73 @@ func AttachProcess(process *os.Process) (Containment, string, error) {
 		}
 		return nil, "", callbackErr
 	}
+	group.startDescendantMonitor()
 	return group, identity, nil
 }
 
 type processGroup struct {
-	mutex          sync.Mutex
-	pid            int
-	fd             int
-	anchor         linuxProcessGroupAnchor
-	anchorCaptured bool
-	closeCompleted bool
-	closeErr       error
+	operationMutex     sync.Mutex
+	mutex              sync.Mutex
+	pid                int
+	fd                 int
+	anchor             linuxProcessGroupAnchor
+	anchorCaptured     bool
+	escapedDescendants []linuxProcessStat
+	// descendantScanLost is irreversible for this authority: a later clean
+	// scan cannot prove what escaped while observation was uncertain.
+	descendantScanLost      bool
+	descendantScanCompleted bool
+
+	containmentUnprovenCallback          func() error
+	containmentUnprovenCallbackAttempted bool
+	containmentUnprovenPersisted         bool
+	containmentUnprovenCallbackErr       error
+	containmentUnprovenCallbackMutex     sync.Mutex
+
+	monitorStop           chan struct{}
+	monitorDone           chan struct{}
+	monitorScanRequest    chan chan descendantMonitorScanResult
+	monitorTerminalReason descendantMonitorTerminalReason
+	monitorStopOnce       sync.Once
+	escapeObserved        chan struct{}
+	escapeObservedOnce    sync.Once
+	monitorReadStat       func(int) (linuxProcessStat, error)
+	monitorReadChildren   func(int) ([]int, error)
+	closeCompleted        bool
+	closeErr              error
+	ownerReleasePending   bool
+}
+
+type descendantMonitorTerminalReason uint8
+
+const (
+	descendantMonitorTerminalNone descendantMonitorTerminalReason = iota
+	descendantMonitorTerminalCleanLeaderAbsent
+	descendantMonitorTerminalScanFailure
+	descendantMonitorTerminalObservedEscape
+	descendantMonitorTerminalOwnerStop
+)
+
+type descendantMonitorScanResult struct {
+	leaderPresent  bool
+	scanErr        error
+	stopped        bool
+	terminalReason descendantMonitorTerminalReason
+}
+
+func (reason descendantMonitorTerminalReason) String() string {
+	switch reason {
+	case descendantMonitorTerminalCleanLeaderAbsent:
+		return "leader_absent"
+	case descendantMonitorTerminalScanFailure:
+		return "scan_failure"
+	case descendantMonitorTerminalObservedEscape:
+		return "observed_escape"
+	case descendantMonitorTerminalOwnerStop:
+		return "owner_stop"
+	default:
+		return "none"
+	}
 }
 
 var _ ContainmentCloseRetryer = (*processGroup)(nil)
@@ -119,13 +186,260 @@ func (group *processGroup) ContainmentCloseRetryable() bool {
 	}
 	group.mutex.Lock()
 	defer group.mutex.Unlock()
-	return group.anchorCaptured && group.fd >= 0 && !group.closeCompleted
+	return group.anchorCaptured && group.fd >= 0 && !group.closeCompleted && !group.ownerReleasePending
+}
+
+// SetContainmentUnprovenCallback installs the durable uncertainty callback
+// after the process marker is available. Observation may race that install, so
+// an already observed escape or scan loss is delivered synchronously here.
+// Callback failures remain fail-closed and are retried by Close.
+func (group *processGroup) SetContainmentUnprovenCallback(callback func() error) error {
+	if group == nil {
+		return errors.New("process-group containment is unavailable")
+	}
+	group.mutex.Lock()
+	group.containmentUnprovenCallback = callback
+	observed := group.containmentUnprovenObservedLocked()
+	if callback != nil && observed && !group.containmentUnprovenPersisted {
+		group.containmentUnprovenCallbackAttempted = false
+	}
+	group.mutex.Unlock()
+	if !observed || callback == nil {
+		return nil
+	}
+	return group.persistContainmentUnproven(true)
+}
+
+func (group *processGroup) containmentUnprovenObservedLocked() bool {
+	return group.descendantScanLost || len(group.escapedDescendants) > 0
+}
+
+func (group *processGroup) markContainmentUnproven(scanLost bool) {
+	group.mutex.Lock()
+	if group.closeCompleted {
+		group.mutex.Unlock()
+		return
+	}
+	if scanLost {
+		group.descendantScanLost = true
+	}
+	observed := group.containmentUnprovenObservedLocked()
+	group.mutex.Unlock()
+	if observed {
+		// The monitor must not spin on a failed durable write. Close retries the
+		// same callback while retaining the process-group authority.
+		_ = group.persistContainmentUnproven(false)
+	}
+}
+
+func (group *processGroup) persistContainmentUnproven(force bool) error {
+	group.containmentUnprovenCallbackMutex.Lock()
+	defer group.containmentUnprovenCallbackMutex.Unlock()
+
+	group.mutex.Lock()
+	if !group.containmentUnprovenObservedLocked() || group.containmentUnprovenPersisted {
+		group.mutex.Unlock()
+		return nil
+	}
+	if !force && group.containmentUnprovenCallbackAttempted {
+		err := group.containmentUnprovenCallbackErr
+		group.mutex.Unlock()
+		return err
+	}
+	callback := group.containmentUnprovenCallback
+	if callback == nil {
+		group.mutex.Unlock()
+		return nil
+	}
+	group.containmentUnprovenCallbackAttempted = true
+	group.mutex.Unlock()
+
+	err := callback()
+	group.mutex.Lock()
+	if err == nil {
+		group.containmentUnprovenPersisted = true
+		group.containmentUnprovenCallbackErr = nil
+	} else {
+		group.containmentUnprovenCallbackErr = err
+	}
+	group.mutex.Unlock()
+	return err
+}
+
+func (group *processGroup) closeContainmentUnproven(cause error) error {
+	persistErr := group.persistContainmentUnproven(true)
+	result := fmt.Errorf("%w: descendant observation was uncertain", ErrLinuxDescendantContainmentUnproven)
+	if cause != nil {
+		result = errors.Join(result, cause)
+	}
+	if persistErr != nil {
+		result = errors.Join(result, fmt.Errorf("persist containment uncertainty: %w", persistErr))
+	}
+	return result
+}
+
+func (group *processGroup) startDescendantMonitor() {
+	if group == nil || !group.anchorCaptured {
+		return
+	}
+	group.monitorStop = make(chan struct{})
+	group.monitorDone = make(chan struct{})
+	group.monitorScanRequest = make(chan chan descendantMonitorScanResult, 1)
+	group.escapeObserved = make(chan struct{})
+	group.monitorReadStat = readLinuxProcessStat
+	group.monitorReadChildren = readLinuxProcessChildren
+	go group.monitorDescendants()
+}
+
+func (group *processGroup) recordDescendantMonitorTerminalReason(reason descendantMonitorTerminalReason) descendantMonitorTerminalReason {
+	group.mutex.Lock()
+	defer group.mutex.Unlock()
+	if group.monitorTerminalReason == descendantMonitorTerminalNone {
+		group.monitorTerminalReason = reason
+	}
+	return group.monitorTerminalReason
+}
+
+func (group *processGroup) descendantMonitorTerminalResult() (descendantMonitorScanResult, error) {
+	group.mutex.Lock()
+	reason := group.monitorTerminalReason
+	group.mutex.Unlock()
+	result := descendantMonitorScanResult{stopped: true, terminalReason: reason}
+	if reason == descendantMonitorTerminalCleanLeaderAbsent {
+		return result, nil
+	}
+	if reason == descendantMonitorTerminalNone {
+		return result, fmt.Errorf("%w: descendant monitor exited before final scan", ErrLinuxDescendantContainmentUnproven)
+	}
+	return result, fmt.Errorf("%w: descendant monitor terminated before final scan (%s)", ErrLinuxDescendantContainmentUnproven, reason)
+}
+
+func (group *processGroup) stopDescendantMonitor(deadline time.Time) error {
+	if group == nil || group.monitorStop == nil {
+		return nil
+	}
+	group.recordDescendantMonitorTerminalReason(descendantMonitorTerminalOwnerStop)
+	group.monitorStopOnce.Do(func() { close(group.monitorStop) })
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return fmt.Errorf("%w: descendant monitor stop deadline elapsed", ErrLinuxDescendantContainmentUnproven)
+	}
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	select {
+	case <-group.monitorDone:
+		return nil
+	case <-timer.C:
+		return fmt.Errorf("%w: descendant monitor did not stop before deadline", ErrLinuxDescendantContainmentUnproven)
+	}
+}
+
+func (group *processGroup) monitorDescendants() {
+	defer close(group.monitorDone)
+	scan := func() descendantMonitorScanResult {
+		present, err := observeLinuxProcessGroupLeaderWithReader(group.pid, group.anchor, group.monitorReadStat)
+		if err != nil {
+			group.recordDescendantMonitorTerminalReason(descendantMonitorTerminalScanFailure)
+			group.markContainmentUnproven(true)
+			return descendantMonitorScanResult{scanErr: err, terminalReason: descendantMonitorTerminalScanFailure}
+		}
+		if !present {
+			group.mutex.Lock()
+			uncertain := !group.descendantScanCompleted || group.descendantScanLost || len(group.escapedDescendants) > 0
+			group.mutex.Unlock()
+			reason := group.recordDescendantMonitorTerminalReason(descendantMonitorTerminalCleanLeaderAbsent)
+			if uncertain {
+				group.markContainmentUnproven(true)
+			}
+			return descendantMonitorScanResult{stopped: true, terminalReason: reason}
+		}
+		escaped, scanErr := captureLinuxEscapedDescendantsWithReaders(group.pid, group.anchor, group.monitorReadStat, group.monitorReadChildren)
+		if scanErr != nil {
+			group.recordDescendantMonitorTerminalReason(descendantMonitorTerminalScanFailure)
+			group.markContainmentUnproven(true)
+			return descendantMonitorScanResult{leaderPresent: true, scanErr: scanErr, terminalReason: descendantMonitorTerminalScanFailure}
+		}
+		group.mutex.Lock()
+		newEscape := false
+		if !group.closeCompleted {
+			group.descendantScanCompleted = true
+			before := len(group.escapedDescendants)
+			group.escapedDescendants = mergeLinuxEscapedDescendants(group.escapedDescendants, escaped)
+			newEscape = len(group.escapedDescendants) > before
+			if newEscape {
+				group.escapeObservedOnce.Do(func() { close(group.escapeObserved) })
+			}
+		}
+		group.mutex.Unlock()
+		if newEscape {
+			group.recordDescendantMonitorTerminalReason(descendantMonitorTerminalObservedEscape)
+			group.markContainmentUnproven(false)
+		}
+		return descendantMonitorScanResult{leaderPresent: true}
+	}
+	if scan().stopped {
+		return
+	}
+	ticker := time.NewTicker(containmentDescendantMonitorInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-group.monitorStop:
+			return
+		case resultChannel := <-group.monitorScanRequest:
+			result := scan()
+			resultChannel <- result
+			if result.stopped {
+				return
+			}
+		case <-ticker.C:
+			if scan().stopped {
+				return
+			}
+		}
+	}
+}
+
+func (group *processGroup) requestDescendantMonitorScan(deadline time.Time) (descendantMonitorScanResult, error) {
+	if group == nil || group.monitorStop == nil || group.monitorDone == nil || group.monitorScanRequest == nil {
+		return descendantMonitorScanResult{}, fmt.Errorf("%w: descendant monitor is unavailable", ErrLinuxDescendantContainmentUnproven)
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return descendantMonitorScanResult{}, fmt.Errorf("%w: descendant monitor final scan deadline elapsed", ErrLinuxDescendantContainmentUnproven)
+	}
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	resultChannel := make(chan descendantMonitorScanResult, 1)
+	select {
+	case group.monitorScanRequest <- resultChannel:
+	case <-group.monitorDone:
+		return group.descendantMonitorTerminalResult()
+	case <-timer.C:
+		return descendantMonitorScanResult{}, fmt.Errorf("%w: descendant monitor final scan request timed out", ErrLinuxDescendantContainmentUnproven)
+	}
+	select {
+	case result := <-resultChannel:
+		return result, nil
+	case <-group.monitorDone:
+		select {
+		case result := <-resultChannel:
+			return result, nil
+		default:
+			return group.descendantMonitorTerminalResult()
+		}
+	case <-timer.C:
+		return descendantMonitorScanResult{}, fmt.Errorf("%w: descendant monitor final scan timed out", ErrLinuxDescendantContainmentUnproven)
+	}
 }
 
 func (group *processGroup) Terminate(force bool) error {
+	group.operationMutex.Lock()
+	defer group.operationMutex.Unlock()
+
 	group.mutex.Lock()
 	defer group.mutex.Unlock()
-	if group.closeCompleted {
+	if group.closeCompleted || group.ownerReleasePending {
 		return group.closeErr
 	}
 	err := group.terminateLocked(force)
@@ -155,40 +469,158 @@ func (group *processGroup) signalLocked(signal unix.Signal) error {
 // probe result is only a bounded observation; it is never converted to proof.
 // Stop/proof failures retain an anchored pidfd for a bounded caller retry.
 func (group *processGroup) Close() error {
+	return group.closeUntil(containmentDeadline(context.Background()))
+}
+
+func (group *processGroup) closeUntil(deadline time.Time) error {
+	group.operationMutex.Lock()
+	defer group.operationMutex.Unlock()
+
 	group.mutex.Lock()
-	defer group.mutex.Unlock()
 	if group.closeCompleted {
-		return group.closeErr
+		err := group.closeErr
+		group.mutex.Unlock()
+		return err
+	}
+	if group.ownerReleasePending {
+		err := group.closeErr
+		group.mutex.Unlock()
+		return err
+	}
+	alreadyUnproven := group.descendantScanLost
+	monitorPresent := group.monitorStop != nil
+	anchorCaptured := group.anchorCaptured
+	group.mutex.Unlock()
+
+	if alreadyUnproven {
+		return group.finishUnprovenClose(deadline, nil)
 	}
 
-	deadline := containmentDeadline(context.Background())
+	group.mutex.Lock()
+	if group.descendantScanLost {
+		group.mutex.Unlock()
+		return group.finishUnprovenClose(deadline, nil)
+	}
+	group.mutex.Unlock()
+
 	var stopErr error
-	if !group.anchorCaptured {
-		initialSignalErr := group.terminateLocked(true)
-		if initialSignalErr != nil && !errors.Is(initialSignalErr, unix.ESRCH) {
-			stopErr = fmt.Errorf("terminate process group %d during containment close: %w", group.pid, initialSignalErr)
-		} else {
-			stopErr = errors.New("process group leader anchor is unavailable")
-		}
-	} else {
-		initialLeaderPresent, leaderErr := observeLinuxProcessGroupLeader(group.pid, group.anchor)
+	initialLeaderPresent := false
+	if anchorCaptured {
+		var leaderErr error
+		initialLeaderPresent, leaderErr = observeLinuxProcessGroupLeader(group.pid, group.anchor)
 		if leaderErr != nil {
-			stopErr = leaderErr
-		} else {
-			initialSignalErr := group.terminateLocked(true)
-			if initialSignalErr != nil && !errors.Is(initialSignalErr, unix.ESRCH) {
-				stopErr = fmt.Errorf("terminate process group %d during containment close: %w", group.pid, initialSignalErr)
-			} else {
-				stopErr = waitForProcessGroupExit(context.Background(), group.pid, deadline, func() error {
-					return group.probeGroupExitLocked(context.Background(), deadline, initialLeaderPresent)
-				})
+			return group.finishUnprovenClose(deadline, leaderErr)
+		}
+		if !initialLeaderPresent && monitorPresent {
+			group.mutex.Lock()
+			uncertain := !group.descendantScanCompleted || group.descendantScanLost || len(group.escapedDescendants) > 0
+			group.mutex.Unlock()
+			if uncertain {
+				return group.finishUnprovenClose(deadline, nil)
 			}
 		}
 	}
-	if stopErr != nil && group.anchorCaptured && group.fd >= 0 {
-		// The original group was not proven stopped. Keep the identity-bound
-		// pidfd and leave closeCompleted false so the owner can retry Close.
+
+	group.mutex.Lock()
+	initialSignalErr := group.terminateLocked(true)
+	group.mutex.Unlock()
+	if initialSignalErr != nil && !errors.Is(initialSignalErr, unix.ESRCH) {
+		stopErr = fmt.Errorf("terminate process group %d during containment close: %w", group.pid, initialSignalErr)
+	} else if anchorCaptured {
+		// Keep the monitor active through SIGKILL and group readback. The final
+		// scan request is issued only after this readback succeeds, so an escape
+		// observed during the wait cannot be hidden by an earlier scan.
+		stopErr = waitForProcessGroupExit(context.Background(), group.pid, deadline, func() error {
+			group.mutex.Lock()
+			defer group.mutex.Unlock()
+			return group.probeGroupExitLocked(context.Background(), deadline, initialLeaderPresent)
+		})
+		if stopErr == nil && monitorPresent {
+			// The request is serviced by the monitor itself, so a blocked reader
+			// remains bounded by deadline without creating an unowned scan
+			// goroutine.
+			result, requestErr := group.requestDescendantMonitorScan(deadline)
+			finalScanErr := requestErr
+			if finalScanErr == nil {
+				finalScanErr = result.scanErr
+				if finalScanErr == nil && !result.leaderPresent {
+					group.mutex.Lock()
+					cleanTerminal := result.terminalReason == descendantMonitorTerminalCleanLeaderAbsent &&
+						group.descendantScanCompleted &&
+						!group.descendantScanLost &&
+						len(group.escapedDescendants) == 0
+					group.mutex.Unlock()
+					if !cleanTerminal {
+						finalScanErr = fmt.Errorf("%w: leader disappeared without a clean descendant terminal proof", ErrLinuxDescendantContainmentUnproven)
+					}
+				}
+			}
+			if finalScanErr != nil {
+				group.mutex.Lock()
+				group.descendantScanLost = true
+				group.mutex.Unlock()
+				stopErr = finalScanErr
+			}
+		}
+		if stopErr == nil && !monitorPresent {
+			// The proof scan follows the kill and the group-exit readback. A
+			// scan before SIGKILL leaves an escape window between observation
+			// and termination.
+			postKillLeaderPresent, leaderErr := observeLinuxProcessGroupLeader(group.pid, group.anchor)
+			if leaderErr != nil {
+				stopErr = leaderErr
+			} else if postKillLeaderPresent {
+				escaped, scanErr := captureLinuxEscapedDescendants(group.pid, group.anchor)
+				if scanErr != nil {
+					group.mutex.Lock()
+					group.descendantScanLost = true
+					group.mutex.Unlock()
+					stopErr = scanErr
+				} else {
+					group.mutex.Lock()
+					group.descendantScanCompleted = true
+					group.escapedDescendants = mergeLinuxEscapedDescendants(group.escapedDescendants, escaped)
+					group.mutex.Unlock()
+				}
+			}
+		}
+	} else {
+		stopErr = errors.New("process group leader anchor is unavailable")
+	}
+
+	// Do not stop the monitor until the kill, group readback, and post-kill
+	// scan have all completed. A stop timeout transfers no ownership and keeps
+	// the process marker retryable.
+	monitorErr := group.stopDescendantMonitor(deadline)
+	if monitorErr != nil {
+		group.mutex.Lock()
+		group.descendantScanLost = true
+		group.mutex.Unlock()
+		if stopErr == nil {
+			stopErr = monitorErr
+		} else {
+			stopErr = errors.Join(stopErr, monitorErr)
+		}
+	}
+
+	group.mutex.Lock()
+	retainAuthority := stopErr != nil && group.anchorCaptured && group.fd >= 0
+	uncertain := group.descendantScanLost
+	escapedErr := group.rejectEscapedDescendants()
+	if uncertain {
+		group.mutex.Unlock()
+		return group.closeContainmentUnproven(stopErr)
+	}
+	if retainAuthority {
+		group.mutex.Unlock()
 		return stopErr
+	}
+	if escapedErr != nil {
+		// A process outside the original group cannot be safely signalled by
+		// this authority. Keep the original marker unresolved; a later retry
+		// cannot prove descendants that may have been created after the scan.
+		group.mutex.Unlock()
+		return group.closeContainmentUnproven(errors.Join(stopErr, escapedErr))
 	}
 
 	// No anchor is unsafe to retry. A proven stop is final as well, and the
@@ -196,11 +628,54 @@ func (group *processGroup) Close() error {
 	// replayed.
 	group.closeCompleted = true
 	group.closeErr = errors.Join(stopErr, group.releasePIDFDLocked())
-	return group.closeErr
+	err := group.closeErr
+	group.mutex.Unlock()
+	return err
+}
+
+func (group *processGroup) finishUnprovenClose(deadline time.Time, cause error) error {
+	monitorErr := group.stopDescendantMonitor(deadline)
+	group.mutex.Lock()
+	group.descendantScanLost = true
+	group.mutex.Unlock()
+	if monitorErr != nil {
+		cause = errors.Join(cause, monitorErr)
+	}
+	return group.closeContainmentUnproven(cause)
 }
 
 func (group *processGroup) probeGroupExitLocked(ctx context.Context, deadline time.Time, previousLeaderPresent bool) error {
 	return probeLinuxProcessGroupExit(ctx, deadline, group.pid, group.anchor, previousLeaderPresent, group.signalLocked)
+}
+
+func (group *processGroup) rejectEscapedDescendants() error {
+	if len(group.escapedDescendants) == 0 {
+		return nil
+	}
+	// Once an escape has been observed, this process-group authority cannot
+	// prove the escaped subtree's descendants were also stopped. Keep the
+	// marker unresolved even if the recorded process itself disappears.
+	return fmt.Errorf("%w: descendant escaped original process group %d", ErrLinuxDescendantContainmentUnproven, group.anchor.pgrp)
+}
+
+func mergeLinuxEscapedDescendants(existing, discovered []linuxProcessStat) []linuxProcessStat {
+	if len(discovered) == 0 {
+		return existing
+	}
+	merged := append([]linuxProcessStat(nil), existing...)
+	for _, candidate := range discovered {
+		known := false
+		for _, value := range merged {
+			if value.pid == candidate.pid && value.startTime == candidate.startTime {
+				known = true
+				break
+			}
+		}
+		if !known {
+			merged = append(merged, candidate)
+		}
+	}
+	return merged
 }
 
 func (group *processGroup) releasePIDFDLocked() error {
@@ -275,6 +750,123 @@ func TerminateProcessGroup(ctx context.Context, process *os.Process, expectedIde
 		return fmt.Errorf("borrow process handle for group termination: %w", err)
 	}
 	return terminationErr
+}
+
+// TerminatePersistedProcessGroup applies the same descendant-aware containment
+// boundary used by a live process to a marker recovered after daemon restart.
+// A missing leader is not a stop proof: the original group may be gone while a
+// descendant escaped before the daemon observed it.
+func TerminatePersistedProcessGroup(ctx context.Context, process *os.Process, expectedIdentity string) (resultErr error) {
+	if ctx == nil {
+		return errors.New("termination context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if process == nil || process.Pid <= 0 || expectedIdentity == "" {
+		return errors.New("process handle and expected identity are required for persisted process-group termination")
+	}
+	actualIdentity, err := readProcessIdentity(process.Pid)
+	if err != nil {
+		return fmt.Errorf("read persisted process identity before group termination: %w", err)
+	}
+	if actualIdentity != expectedIdentity {
+		return fmt.Errorf("process identity mismatch before persisted group termination: got %q, want %q", actualIdentity, expectedIdentity)
+	}
+	containment, _, err := AttachProcess(process)
+	if err != nil {
+		if containment != nil {
+			if releaseErr := releaseProcessGroupOwner(containment); releaseErr != nil {
+				return errors.Join(fmt.Errorf("attach persisted process containment: %w", err), fmt.Errorf("release partial persisted containment: %w", releaseErr))
+			}
+		}
+		return fmt.Errorf("attach persisted process containment: %w", err)
+	}
+	defer func() {
+		closeErr := releaseProcessGroupOwner(containment)
+		if closeErr == nil {
+			return
+		}
+		if resultErr == nil {
+			resultErr = fmt.Errorf("release persisted process containment: %w", closeErr)
+			return
+		}
+		resultErr = errors.Join(resultErr, fmt.Errorf("release persisted process containment: %w", closeErr))
+	}()
+	if err := containment.Terminate(true); err != nil && !errors.Is(err, unix.ESRCH) {
+		return fmt.Errorf("terminate persisted process group: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if group, ok := containment.(*processGroup); ok {
+		if err := group.closeUntil(containmentDeadline(ctx)); err != nil {
+			return fmt.Errorf("prove persisted process-group stop: %w", err)
+		}
+		return nil
+	}
+	if err := containment.Close(); err != nil {
+		return fmt.Errorf("close persisted process containment: %w", err)
+	}
+	return nil
+}
+
+// releaseProcessGroupOwner retires a temporary recovery containment owner
+// without converting an unproven stop into success. If the monitor cannot stop
+// within the bounded release window, ownership transfers to a one-shot retire
+// goroutine that waits for monitorDone before releasing the pidfd.
+func releaseProcessGroupOwner(containment Containment) error {
+	if containment == nil {
+		return nil
+	}
+	if group, ok := containment.(*processGroup); ok {
+		group.operationMutex.Lock()
+		defer group.operationMutex.Unlock()
+
+		monitorErr := group.stopDescendantMonitor(time.Now().Add(containmentCloseDeadline))
+		group.mutex.Lock()
+		if monitorErr != nil {
+			// Keep the duplicate pidfd and the monitor-owned group alive when
+			// shutdown is not proven. Marking this owner complete here would
+			// abandon both the retry authority and the monitor goroutine.
+			group.descendantScanLost = true
+			group.closeCompleted = false
+			group.closeErr = errors.Join(group.closeErr, monitorErr)
+			if !group.ownerReleasePending {
+				group.ownerReleasePending = true
+				go group.retireProcessGroupOwner()
+			}
+			group.mutex.Unlock()
+			return monitorErr
+		}
+		releaseErr := group.releasePIDFDLocked()
+		group.ownerReleasePending = false
+		group.closeCompleted = true
+		group.closeErr = errors.Join(group.closeErr, monitorErr, releaseErr)
+		group.mutex.Unlock()
+		return errors.Join(monitorErr, releaseErr)
+	}
+	return containment.Close()
+}
+
+func (group *processGroup) retireProcessGroupOwner() {
+	if group == nil || group.monitorDone == nil {
+		return
+	}
+	<-group.monitorDone
+
+	group.operationMutex.Lock()
+	defer group.operationMutex.Unlock()
+	group.mutex.Lock()
+	if !group.ownerReleasePending {
+		group.mutex.Unlock()
+		return
+	}
+	releaseErr := group.releasePIDFDLocked()
+	group.ownerReleasePending = false
+	group.closeCompleted = true
+	group.closeErr = errors.Join(group.closeErr, releaseErr)
+	group.mutex.Unlock()
 }
 
 func terminatePIDFDProcessGroup(ctx context.Context, fd, pid int, anchor linuxProcessGroupAnchor) error {
@@ -355,7 +947,11 @@ func (stat linuxProcessStat) matchesAnchor(anchor linuxProcessGroupAnchor) bool 
 }
 
 func observeLinuxProcessGroupLeader(pid int, anchor linuxProcessGroupAnchor) (bool, error) {
-	leader, err := readLinuxProcessStat(pid)
+	return observeLinuxProcessGroupLeaderWithReader(pid, anchor, readLinuxProcessStat)
+}
+
+func observeLinuxProcessGroupLeaderWithReader(pid int, anchor linuxProcessGroupAnchor, readStat func(int) (linuxProcessStat, error)) (bool, error) {
+	leader, err := readStat(pid)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
@@ -425,6 +1021,49 @@ func captureLinuxProcessGroupAnchor(pid int) (linuxProcessGroupAnchor, error) {
 	}, nil
 }
 
+func captureLinuxEscapedDescendants(pid int, anchor linuxProcessGroupAnchor) ([]linuxProcessStat, error) {
+	return captureLinuxEscapedDescendantsWithReaders(pid, anchor, readLinuxProcessStat, readLinuxProcessChildren)
+}
+
+func captureLinuxEscapedDescendantsWithReaders(pid int, anchor linuxProcessGroupAnchor, readStat func(int) (linuxProcessStat, error), readChildren func(int) ([]int, error)) ([]linuxProcessStat, error) {
+	pending := []int{pid}
+	visited := map[int]struct{}{pid: {}}
+	var escaped []linuxProcessStat
+
+	for len(pending) > 0 {
+		current := pending[0]
+		pending = pending[1:]
+		children, err := readChildren(current)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("%w: process %d disappeared during fenced scan: %w", ErrLinuxDescendantContainmentUnproven, current, err)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%w: read children of process %d: %w", ErrLinuxDescendantContainmentUnproven, current, err)
+		}
+		for _, child := range children {
+			if child <= 0 {
+				return nil, fmt.Errorf("%w: child pid %d is invalid", ErrLinuxDescendantContainmentUnproven, child)
+			}
+			if _, seen := visited[child]; seen {
+				continue
+			}
+			visited[child] = struct{}{}
+			stat, statErr := readStat(child)
+			if errors.Is(statErr, os.ErrNotExist) {
+				return nil, fmt.Errorf("%w: descendant %d disappeared during fenced scan: %w", ErrLinuxDescendantContainmentUnproven, child, statErr)
+			}
+			if statErr != nil {
+				return nil, fmt.Errorf("%w: read descendant %d: %w", ErrLinuxDescendantContainmentUnproven, child, statErr)
+			}
+			if stat.pgrp != anchor.pgrp || stat.session != anchor.session {
+				escaped = append(escaped, stat)
+			}
+			pending = append(pending, child)
+		}
+	}
+	return escaped, nil
+}
+
 func readLinuxProcessStatFile(pid int) (linuxProcessStat, error) {
 	if pid <= 0 {
 		return linuxProcessStat{}, errors.New("process pid must be positive")
@@ -441,6 +1080,29 @@ func readLinuxProcessStatFile(pid int) (linuxProcessStat, error) {
 		return linuxProcessStat{}, fmt.Errorf("read /proc/%d/stat returned pid %d", pid, stat.pid)
 	}
 	return stat, nil
+}
+
+func readLinuxProcessChildrenFile(pid int) ([]int, error) {
+	if pid <= 0 {
+		return nil, errors.New("process pid must be positive")
+	}
+	value, err := os.ReadFile(fmt.Sprintf("/proc/%d/task/%d/children", pid, pid))
+	if err != nil {
+		return nil, fmt.Errorf("read /proc/%d/task/%d/children: %w", pid, pid, err)
+	}
+	fields := strings.Fields(string(value))
+	children := make([]int, 0, len(fields))
+	for _, field := range fields {
+		child, parseErr := strconv.Atoi(field)
+		if parseErr != nil || child <= 0 {
+			if parseErr == nil {
+				parseErr = errors.New("pid must be positive")
+			}
+			return nil, fmt.Errorf("parse process child pid %q: %w", field, parseErr)
+		}
+		children = append(children, child)
+	}
+	return children, nil
 }
 
 func parseLinuxProcessStat(value string) (linuxProcessStat, error) {

@@ -75,8 +75,9 @@ func TestTerminatePersistedProcessProvesAbsentLeaderWithoutProcessSideEffects(t 
 		return nil
 	}
 
-	if err := terminatePersistedProcessWithContext(context.Background(), 99, "linux:v2:expected"); err != nil {
-		t.Fatalf("terminatePersistedProcessWithContext() error = %v", err)
+	err := terminatePersistedProcessWithContext(context.Background(), 99, "linux:v2:expected")
+	if !errors.Is(err, errPersistedProcessStopUnproven) {
+		t.Fatalf("terminatePersistedProcessWithContext() error = %v, want unresolved descendant stop", err)
 	}
 	if !proofCalled {
 		t.Fatal("absent process leader did not invoke process-group absence proof")
