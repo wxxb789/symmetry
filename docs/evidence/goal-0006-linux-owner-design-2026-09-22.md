@@ -7,12 +7,13 @@ current proposal is revision `0006b-linux-helper-v1.1`.
 
 It is
 not a completion receipt and does not silently amend the approved Goal or the
-fixed design baseline. The current subject is `055fd1ea45c91427444fb6becfd839174efdf2c7`.
+fixed design baseline. The current implementation subject is
+`7efe82c10f64369c27b43c125d1253a096f442c0`, tree
+`f730acd2795b20e4c02d928d18c49bd5c24640fa`.
 
-The existing Linux implementation is still fail-closed but does not provide a
-daemon-external owner after daemon crash. Goal completion remains blocked until
-the owner contract below is implemented and exercised by a production-binary
-Linux witness.
+The owner contract below is the binding target for the Linux implementation.
+Goal completion remains blocked until the contract, exact-subject production
+evidence, and independent review receipts are all accepted.
 
 ## Binding Scope
 
@@ -100,10 +101,31 @@ descendant, helper PID/identity, process-group anchor, journal snapshots,
 external crash exit status, and raw test output. A skipped witness is not a
 passing gate.
 
-## Current Gap
+## Exact Subject Verification
 
-At `055fd1e`, Linux still has only `Setpgid`, direct-child `Pdeathsig`, and a
-daemon-memory pidfd/monitor in `daemon/internal/platform/process_unix.go`.
-The initial-scan barrier and retained-attach persistence fixes are verified,
-but they do not satisfy the daemon-external owner contract above. The Goal
-therefore remains active and incomplete.
+The push workflow run `35747212737` (2026-09-22) produced artifact
+`production-linux-containment-witness-35747212737-1`. Its provenance binds
+`subject_head=7efe82c10f64369c27b43c125d1253a096f442c0` and
+`subject_tree=f730acd2795b20e4c02d928d18c49bd5c24640fa`, with Go 1.27.0 on
+Linux kernel 6.17.0-1022-azure.
+
+The artifact test event stream records all three required top-level witnesses
+as `run=1`, `pass=1`, `skip=0`, `fail=0`:
+
+- `TestProductionLinuxContainmentWitnessSpine`
+- `TestProductionLinuxContainmentNegativeWitness`
+- `TestProductionLinuxContainmentReplayWitness`
+
+The daemon job for the same exact subject passed `gofmt`, `go vet ./...`,
+`go test -count=3 -timeout 300s ./...`, `go test -race -count=1 -timeout
+600s ./...`, and the Linux cross-build. The Windows daemon job also passed its
+native test/build and Windows containment witnesses. Other workflow failures
+in this run were outside this containment evidence (Pi/PostgreSQL, Compose,
+OpenCode synthetic, and control-restart integration jobs).
+
+## Remaining Acceptance
+
+This file remains an evidence record and is not a completion receipt. Final
+Goal acceptance still requires the review receipts and PR checks to bind to
+the exact subject above; unrelated workflow failures must not be represented
+as containment failures or silently ignored.
