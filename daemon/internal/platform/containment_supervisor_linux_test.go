@@ -3,6 +3,7 @@
 package platform
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -11,7 +12,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -334,6 +338,8 @@ func TestLinuxSupervisorHelperFirstLifecycle(t *testing.T) {
 }
 
 func TestLinuxSupervisorMirrorRequiresHelperDeath(t *testing.T) {
+	enableLinuxTestSubreaper(t)
+
 	stdinRead, stdinWrite, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
@@ -356,7 +362,8 @@ func TestLinuxSupervisorMirrorRequiresHelperDeath(t *testing.T) {
 	}
 	defer stderrRead.Close()
 
-	command := exec.Command("/bin/sh", "-c", "sleep 10")
+	command := exec.Command(os.Args[0], "-test.run=^TestProcessGroupContainmentHelper$", "--", "leader-exits-after-child")
+	command.Env = append(os.Environ(), "GO_WANT_PROCESS_GROUP_CONTAINMENT_HELPER=1")
 	command.Stdin = stdinRead
 	command.Stdout = stdoutWrite
 	command.Stderr = stderrWrite
@@ -372,6 +379,26 @@ func TestLinuxSupervisorMirrorRequiresHelperDeath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	leader := &linuxTestChildOwner{pid: supervisor.PID()}
+	t.Cleanup(func() { leader.cleanup(t) })
+	child := &linuxTestChildOwner{}
+	t.Cleanup(func() { child.cleanup(t) })
+	t.Cleanup(func() {
+		if supervisor == nil {
+			return
+		}
+		if supervisor.helper != nil {
+			_ = supervisor.helper.Kill()
+		}
+		select {
+		case <-supervisor.helperDone:
+		case <-time.After(2 * time.Second):
+		}
+		if _, ok := supervisor.ContainmentStopReceipt(); !ok {
+			_ = supervisor.Terminate(true)
+		}
+		_ = supervisor.ReleaseContainment()
+	})
 	if err := supervisor.Commit(); err != nil {
 		t.Fatal(err)
 	}
@@ -381,6 +408,31 @@ func TestLinuxSupervisorMirrorRequiresHelperDeath(t *testing.T) {
 	if err := supervisor.Resume(); err != nil {
 		t.Fatal(err)
 	}
+	if err := stdoutRead.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stdinWrite.Write([]byte{1}); err != nil {
+		t.Fatalf("start target descendant = %v", err)
+	}
+	childLine, err := bufio.NewReader(stdoutRead).ReadString('\n')
+	if err != nil {
+		t.Fatalf("read target descendant PID = %v", err)
+	}
+	child.pid, err = strconv.Atoi(strings.TrimSpace(childLine))
+	if err != nil || child.pid <= 0 {
+		t.Fatalf("target descendant PID %q = %v", childLine, err)
+	}
+	if err := syscall.Kill(child.pid, 0); err != nil {
+		t.Fatalf("target descendant %d is not live: %v", child.pid, err)
+	}
+	childStat, err := readLinuxProcessStat(child.pid)
+	if err != nil {
+		t.Fatalf("read target descendant %d stat = %v", child.pid, err)
+	}
+	anchor := supervisor.ProcessGroupAnchor()
+	if childStat.pgrp != anchor.PGRP || childStat.session != anchor.Session {
+		t.Fatalf("target descendant anchor = pgrp:%d session:%d, want pgrp:%d session:%d", childStat.pgrp, childStat.session, anchor.PGRP, anchor.Session)
+	}
 	if err := supervisor.helper.Kill(); err != nil {
 		t.Fatal(err)
 	}
@@ -389,6 +441,11 @@ func TestLinuxSupervisorMirrorRequiresHelperDeath(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("helper did not exit after kill")
 	}
+	if err := supervisor.mirror.Terminate(true); err != nil && !errors.Is(err, unix.ESRCH) {
+		t.Fatalf("mirror terminate before adopted-child reap = %v", err)
+	}
+	leader.reap(t)
+	child.reap(t)
 	if err := supervisor.Terminate(true); err != nil {
 		t.Fatalf("mirror Terminate() error = %v", err)
 	}
@@ -814,6 +871,356 @@ func TestLinuxSupervisorMirrorDescendantScanFailureDoesNotProduceReceipt(t *test
 	}
 }
 
+func TestLinuxSupervisorResponseDropGateOffPreservesResponse(t *testing.T) {
+	t.Setenv(linuxSupervisorProductionWitnessEnv, "0")
+	t.Setenv(linuxSupervisorDropResponseOnceEnv, linuxSupervisorOpStop)
+	supervisor, responseDone, releaseResponse := newLinuxSupervisorRequestHarness(t)
+	releaseResponse()
+
+	response, err := supervisor.request(linuxSupervisorOpStop, 0, 0)
+	if err != nil || response.Status != "ok" {
+		t.Fatalf("gate-off request = (%#v, %v), want response", response, err)
+	}
+	if err := <-responseDone; err != nil {
+		t.Fatalf("gate-off response writer = %v", err)
+	}
+	if supervisor.responseDropTriggered || supervisor.responseRead == nil {
+		t.Fatalf("gate-off transport state = triggered:%v response:%v, want false and open", supervisor.responseDropTriggered, supervisor.responseRead)
+	}
+}
+
+func TestLinuxSupervisorResponseDropWrongOperationPreservesResponse(t *testing.T) {
+	t.Setenv(linuxSupervisorProductionWitnessEnv, "1")
+	t.Setenv(linuxSupervisorDropResponseOnceEnv, "bogus")
+	supervisor, responseDone, releaseResponse := newLinuxSupervisorRequestHarness(t)
+	releaseResponse()
+
+	response, err := supervisor.request(linuxSupervisorOpStop, 0, 0)
+	if err != nil || response.Status != "ok" {
+		t.Fatalf("wrong-operation request = (%#v, %v), want response", response, err)
+	}
+	if err := <-responseDone; err != nil {
+		t.Fatalf("wrong-operation response writer = %v", err)
+	}
+	if supervisor.responseDropTriggered || supervisor.responseRead == nil {
+		t.Fatalf("wrong-operation transport state = triggered:%v response:%v, want false and open", supervisor.responseDropTriggered, supervisor.responseRead)
+	}
+}
+
+func TestLinuxSupervisorResponseDropStopFiresOnceAndWritesMarker(t *testing.T) {
+	markerPath := filepath.Join(t.TempDir(), "response-drop-fired")
+	t.Setenv(linuxSupervisorProductionWitnessEnv, "1")
+	t.Setenv(linuxSupervisorDropResponseOnceEnv, linuxSupervisorOpStop)
+	t.Setenv(linuxSupervisorDropResponseMarkerEnv, markerPath)
+	supervisor, responseDone, releaseResponse := newLinuxSupervisorRequestHarness(t)
+
+	if _, err := supervisor.request(linuxSupervisorOpStop, 0, 0); err == nil {
+		t.Fatal("response-drop request error = nil, want closed response transport")
+	}
+	releaseResponse()
+	if err := <-responseDone; err == nil {
+		t.Fatal("response writer error = nil, want closed client transport")
+	}
+	contents, err := os.ReadFile(markerPath)
+	if err != nil {
+		t.Fatalf("read response-drop marker: %v", err)
+	}
+	if string(contents) != "fired\n" {
+		t.Fatalf("response-drop marker = %q, want fired marker", contents)
+	}
+	if !supervisor.responseDropTriggered || supervisor.responseRead != nil {
+		t.Fatalf("response-drop transport state = triggered:%v response:%v, want true,nil", supervisor.responseDropTriggered, supervisor.responseRead)
+	}
+	supervisor.dropResponseTransportOnce(linuxSupervisorOpStop)
+	if !supervisor.responseDropTriggered || supervisor.responseRead != nil {
+		t.Fatal("repeated response-drop invocation changed once-only state")
+	}
+}
+
+func TestLinuxSupervisorResponseDropReleasePreservesRecoveryEndpoint(t *testing.T) {
+	t.Setenv(linuxSupervisorProductionWitnessEnv, "1")
+	t.Setenv(linuxSupervisorDropResponseOnceEnv, linuxSupervisorOpRelease)
+	supervisor, responseDone, releaseResponse := newLinuxSupervisorRequestHarness(t)
+
+	if _, err := supervisor.request(linuxSupervisorOpRelease, 0, 0); err == nil {
+		t.Fatal("release response-drop request error = nil, want closed response transport")
+	}
+	releaseResponse()
+	if err := <-responseDone; err == nil {
+		t.Fatal("release response writer error = nil, want closed client transport")
+	}
+	if !supervisor.responseDropTriggered || supervisor.responseRead != nil {
+		t.Fatalf("release response-drop transport state = triggered:%v response:%v, want true,nil", supervisor.responseDropTriggered, supervisor.responseRead)
+	}
+	if supervisor.controlWrite == nil || supervisor.ownerWrite == nil {
+		t.Fatal("response drop closed control or owner transport, losing recovery endpoint")
+	}
+	if !strings.Contains(supervisor.authority.OwnerContext, "|endpoint=") {
+		t.Fatalf("recovery owner context = %q, want endpoint fence", supervisor.authority.OwnerContext)
+	}
+}
+
+func newLinuxSupervisorRequestHarness(t *testing.T) (*linuxSupervisor, <-chan error, func()) {
+	t.Helper()
+	value := testLinuxSupervisorAuthority(t)
+	controlRead, controlWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	responseRead, responseWrite, err := os.Pipe()
+	if err != nil {
+		controlRead.Close()
+		controlWrite.Close()
+		t.Fatal(err)
+	}
+	ownerRead, ownerWrite, err := os.Pipe()
+	if err != nil {
+		controlRead.Close()
+		controlWrite.Close()
+		responseRead.Close()
+		responseWrite.Close()
+		t.Fatal(err)
+	}
+	supervisor := &linuxSupervisor{
+		authority:      value,
+		helperDone:     make(chan struct{}),
+		ownerWrite:     ownerWrite,
+		controlWrite:   controlWrite,
+		responseRead:   responseRead,
+		responseReader: bufio.NewReader(responseRead),
+	}
+	responseDone := make(chan error, 1)
+	responseGate := make(chan struct{})
+	var responseGateOnce sync.Once
+	releaseResponse := func() { responseGateOnce.Do(func() { close(responseGate) }) }
+	go func() {
+		requestReader := bufio.NewReader(controlRead)
+		var request linuxSupervisorRequest
+		if err := readLinuxSupervisorFrame(requestReader, &request); err != nil {
+			responseDone <- err
+			return
+		}
+		<-responseGate
+		responseDone <- writeLinuxSupervisorFrame(responseWrite, linuxSupervisorResponse{
+			Version:            linuxSupervisorProtocolVersion,
+			Operation:          request.Operation,
+			Status:             "ok",
+			LaunchToken:        value.LaunchToken,
+			Sequence:           request.Sequence,
+			TargetPID:          value.TargetPID,
+			TargetIdentity:     value.TargetIdentity,
+			OwnerKind:          value.OwnerKind,
+			OwnerContext:       value.OwnerContext,
+			SupervisorPID:      value.SupervisorPID,
+			SupervisorIdentity: value.SupervisorIdentity,
+			Token:              value.PipeToken,
+			JobID:              value.JobID,
+		})
+	}()
+	t.Cleanup(func() {
+		releaseResponse()
+		for _, file := range []*os.File{controlRead, controlWrite, responseRead, responseWrite, ownerRead, ownerWrite} {
+			_ = file.Close()
+		}
+	})
+	return supervisor, responseDone, releaseResponse
+}
+
+func TestLinuxSupervisorScanFailureInjectionGateOffPreservesReader(t *testing.T) {
+	triggerPath := filepath.Join(t.TempDir(), "trigger")
+	firedPath := filepath.Join(t.TempDir(), "fired")
+	if err := os.WriteFile(triggerPath, []byte("trigger\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(linuxSupervisorProductionWitnessEnv, "0")
+	t.Setenv(linuxSupervisorScanFailureModeEnv, linuxSupervisorScanFailureChildren)
+	t.Setenv(linuxSupervisorScanFailureTriggerEnv, triggerPath)
+	t.Setenv(linuxSupervisorScanFailureFiredEnv, firedPath)
+
+	called := 0
+	group := &processGroup{
+		monitorReadStat: func(int) (linuxProcessStat, error) { return linuxProcessStat{}, nil },
+		monitorReadChildren: func(int) ([]int, error) {
+			called++
+			return []int{7}, nil
+		},
+	}
+	restore := installLinuxSupervisorScanFailureInjection(group, os.Getpid(), "unused")
+	t.Cleanup(restore)
+	children, err := group.monitorReadChildren(os.Getpid())
+	if err != nil || len(children) != 1 || called != 1 {
+		t.Fatalf("gate-off reader = (%v, %v), calls=%d, want real reader", children, err, called)
+	}
+	if _, err := os.Stat(firedPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("gate-off fired marker = %v, want absent", err)
+	}
+}
+
+func TestLinuxSupervisorScanFailureInjectionConfigurationFailsClosed(t *testing.T) {
+	t.Setenv(linuxSupervisorProductionWitnessEnv, "0")
+	t.Setenv(linuxSupervisorScanFailureModeEnv, "unsupported")
+	if err := validateLinuxSupervisorScanFailureEnv(); err != nil {
+		t.Fatalf("master gate off validation = %v, want nil", err)
+	}
+
+	t.Setenv(linuxSupervisorProductionWitnessEnv, "1")
+	if err := validateLinuxSupervisorScanFailureEnv(); err == nil {
+		t.Fatal("unsupported scan-failure mode validation = nil, want error")
+	}
+	t.Setenv(linuxSupervisorScanFailureModeEnv, linuxSupervisorScanFailureChildren)
+	if err := validateLinuxSupervisorScanFailureEnv(); err == nil {
+		t.Fatal("missing scan-failure marker paths validation = nil, want error")
+	}
+}
+
+func TestLinuxSupervisorScanFailureInjectionTriggerBeforeAndAfterInstall(t *testing.T) {
+	identity, err := ProcessIdentity(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name          string
+		createTrigger bool
+	}{
+		{name: "trigger before install", createTrigger: true},
+		{name: "trigger after install", createTrigger: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			directory := t.TempDir()
+			triggerPath := filepath.Join(directory, "trigger")
+			firedPath := filepath.Join(directory, "fired")
+			t.Setenv(linuxSupervisorProductionWitnessEnv, "1")
+			t.Setenv(linuxSupervisorScanFailureModeEnv, linuxSupervisorScanFailureChildren)
+			t.Setenv(linuxSupervisorScanFailureTriggerEnv, triggerPath)
+			t.Setenv(linuxSupervisorScanFailureFiredEnv, firedPath)
+			if test.createTrigger {
+				if err := os.WriteFile(triggerPath, []byte("trigger\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			calls := 0
+			group := &processGroup{
+				monitorReadStat: func(int) (linuxProcessStat, error) { return linuxProcessStat{}, nil },
+				monitorReadChildren: func(int) ([]int, error) {
+					calls++
+					return []int{7}, nil
+				},
+			}
+			restore := installLinuxSupervisorScanFailureInjection(group, os.Getpid(), identity)
+			t.Cleanup(restore)
+			if test.createTrigger {
+				children, err := group.monitorReadChildren(os.Getpid())
+				if !errors.Is(err, errLinuxSupervisorInjectedDescendantScanFailure) || children != nil {
+					t.Fatalf("pre-installed trigger reader = (%v, %v), want distinct scan failure", children, err)
+				}
+			} else {
+				if children, err := group.monitorReadChildren(os.Getpid()); err != nil || len(children) != 1 || calls != 1 {
+					t.Fatalf("pre-trigger reader = (%v, %v), calls=%d, want real reader", children, err, calls)
+				}
+				if err := os.WriteFile(triggerPath, []byte("trigger\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			children, err := group.monitorReadChildren(os.Getpid())
+			if test.createTrigger {
+				if err != nil || len(children) != 1 || calls != 1 {
+					t.Fatalf("restored reader = (%v, %v), calls=%d, want real reader", children, err, calls)
+				}
+			} else if !errors.Is(err, errLinuxSupervisorInjectedDescendantScanFailure) || children != nil {
+				t.Fatalf("post-installed trigger reader = (%v, %v), want distinct scan failure", children, err)
+			}
+			marker, err := os.ReadFile(firedPath)
+			if err != nil || string(marker) != "fired\n" {
+				t.Fatalf("fired marker = (%q, %v), want fired marker", marker, err)
+			}
+			children, err = group.monitorReadChildren(os.Getpid())
+			if err != nil || len(children) != 1 || calls != 2 {
+				t.Fatalf("second restored reader = (%v, %v), calls=%d, want real reader once", children, err, calls)
+			}
+		})
+	}
+}
+
+func TestLinuxSupervisorScanFailureInjectionIsStickyAndProducesNoReceipt(t *testing.T) {
+	identity := "linux:v2:scan-failure-target"
+	targetPID := 1234
+	directory := t.TempDir()
+	triggerPath := filepath.Join(directory, "trigger")
+	firedPath := filepath.Join(directory, "fired")
+	if err := os.WriteFile(triggerPath, []byte("trigger\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(linuxSupervisorProductionWitnessEnv, "1")
+	t.Setenv(linuxSupervisorScanFailureModeEnv, linuxSupervisorScanFailureChildren)
+	t.Setenv(linuxSupervisorScanFailureTriggerEnv, triggerPath)
+	t.Setenv(linuxSupervisorScanFailureFiredEnv, firedPath)
+
+	previousIdentity := readProcessIdentity
+	t.Cleanup(func() { readProcessIdentity = previousIdentity })
+	readProcessIdentity = func(pid int) (string, error) {
+		if pid == targetPID {
+			return identity, nil
+		}
+		return "", os.ErrNotExist
+	}
+	anchor := linuxProcessGroupAnchor{pid: targetPID, pgrp: int64(targetPID), session: 77, startTime: 456}
+	previousStat := readLinuxProcessStat
+	previousChildren := readLinuxProcessChildren
+	readLinuxProcessStat = func(pid int) (linuxProcessStat, error) {
+		if pid != targetPID {
+			return linuxProcessStat{}, os.ErrNotExist
+		}
+		return linuxProcessStat{pid: targetPID, pgrp: int64(targetPID), session: anchor.session, startTime: anchor.startTime}, nil
+	}
+	readLinuxProcessChildren = func(int) ([]int, error) { return nil, nil }
+	t.Cleanup(func() {
+		readLinuxProcessStat = previousStat
+		readLinuxProcessChildren = previousChildren
+	})
+	group := &processGroup{
+		pid:            targetPID,
+		fd:             47,
+		anchor:         anchor,
+		anchorCaptured: true,
+	}
+	group.startDescendantMonitor()
+	if err := group.waitForInitialDescendantScan(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("initial scan = %v", err)
+	}
+	restore := installLinuxSupervisorScanFailureInjection(group, targetPID, identity)
+	t.Cleanup(restore)
+
+	result, err := group.requestDescendantMonitorScan(time.Now().Add(time.Second))
+	if err != nil {
+		t.Fatalf("triggered scan request = %v", err)
+	}
+	if !errors.Is(result.scanErr, errLinuxSupervisorInjectedDescendantScanFailure) {
+		t.Fatalf("triggered scan result = %#v, want injected failure", result)
+	}
+	if !group.descendantScanLost {
+		t.Fatal("scan failure did not latch sticky descendant uncertainty")
+	}
+
+	helperDone := make(chan struct{})
+	close(helperDone)
+	value := testLinuxSupervisorAuthority(t)
+	supervisor := &linuxSupervisor{authority: value, helperDone: helperDone, mirror: group, pidfd: 47}
+	if err := supervisor.Terminate(true); !errors.Is(err, ErrLinuxSupervisorStopUnproven) {
+		t.Fatalf("sticky mirror Terminate() = %v, want unresolved stop", err)
+	}
+	if _, ok := supervisor.ContainmentStopReceipt(); ok || supervisor.stopped {
+		t.Fatal("sticky scan failure produced a stop receipt")
+	}
+	if !supervisor.ContainmentCloseRetryable() {
+		t.Fatal("sticky scan failure did not retain retryable authority")
+	}
+	if marker, err := os.ReadFile(firedPath); err != nil || string(marker) != "fired\n" {
+		t.Fatalf("sticky fired marker = (%q, %v), want fired marker", marker, err)
+	}
+}
+
 func TestLinuxSupervisorControlEOFFailsClosedBeforeOwnerLoss(t *testing.T) {
 	stdinRead, stdinWrite, err := os.Pipe()
 	if err != nil {
@@ -1002,6 +1409,56 @@ func TestReleasePersistedLinuxSupervisorAllowsExactDeadOwnerProof(t *testing.T) 
 
 	if err := ReleasePersistedLinuxSupervisor(value); err != nil {
 		t.Fatalf("ReleasePersistedLinuxSupervisor() = %v, want exact dead-owner proof", err)
+	}
+}
+
+func TestStopPersistedLinuxSupervisorReconstructsReceiptAfterDeadHelper(t *testing.T) {
+	value := testLinuxSupervisorAuthority(t)
+	value.TargetPID = os.Getpid() + 100001
+	value.TargetIdentity = "linux:v2:dead-target"
+	endpoint, err := linuxSupervisorEndpoint(value.OwnerContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: endpoint, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener.SetUnlinkOnClose(false)
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(endpoint); err != nil {
+		t.Fatalf("stale endpoint setup = %v, want socket pathname retained", err)
+	}
+
+	previousIdentity := linuxSupervisorProcessIdentity
+	previousGroupProof := linuxSupervisorProveProcessGroupAbsent
+	t.Cleanup(func() {
+		linuxSupervisorProcessIdentity = previousIdentity
+		linuxSupervisorProveProcessGroupAbsent = previousGroupProof
+		_ = os.Remove(endpoint)
+	})
+	linuxSupervisorProcessIdentity = func(int) (string, error) { return "", os.ErrNotExist }
+	linuxSupervisorProveProcessGroupAbsent = func(context.Context, int, string) error { return nil }
+
+	receipt, err := StopPersistedLinuxSupervisor(value)
+	if err != nil {
+		t.Fatalf("StopPersistedLinuxSupervisor() after dead helper = %v", err)
+	}
+	if !receipt.ValidFor(value) {
+		t.Fatalf("reconstructed receipt = %#v, want exact authority-bound receipt", receipt)
+	}
+	if _, err := os.Lstat(endpoint); err != nil {
+		t.Fatalf("stop fallback retired endpoint early: %v", err)
+	}
+
+	value.StopReceipt = &receipt
+	if err := ReleasePersistedLinuxSupervisor(value); err != nil {
+		t.Fatalf("ReleasePersistedLinuxSupervisor() after reconstructed receipt = %v", err)
+	}
+	if _, err := os.Lstat(endpoint); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale endpoint after release = %v, want removed", err)
 	}
 }
 

@@ -1884,6 +1884,98 @@ jobs:
             exit "$restart_status"
           fi
 
+      - name: Run production Linux containment witness matrix
+        working-directory: daemon
+        env:
+          SYMMETRY_E2E: "1"
+          SYMMETRY_E2E_URL: http://127.0.0.1:4000
+          SYMMETRY_E2E_AGENT: /tmp/symmetry-fake-agent
+          SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_WITNESS: "1"
+          SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_NEGATIVE_WITNESS: "1"
+          SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_REPLAY_WITNESS: "1"
+          SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_WITNESS_OUTPUT_DIR: ${{ runner.temp }}/symmetry-linux-containment-witness
+        run: |
+          set -Eeuo pipefail
+          output_dir="$SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_WITNESS_OUTPUT_DIR"
+          mkdir -p "$output_dir"
+          test_events="$RUNNER_TEMP/production-linux-containment-witness-test.json"
+          : > "$RUNNER_TEMP/production-linux-containment-witness-workflow-provenance.txt"
+          {
+            printf 'source_revision=%s\n' "$GITHUB_SHA"
+            printf 'subject_head=%s\n' "$(git rev-parse HEAD)"
+            printf 'subject_tree=%s\n' "$(git rev-parse HEAD^{tree})"
+            printf 'go_version=%s\n' "$(go version)"
+            printf 'kernel=%s\n' "$(uname -a)"
+            printf 'arch=%s\n' "$(uname -m)"
+            printf 'witness_output_dir=%s\n' "$output_dir"
+          } > "$RUNNER_TEMP/production-linux-containment-witness-workflow-provenance.txt"
+
+          set +e
+          go test -count=1 -timeout 900s -json ./e2e \
+            -run '^TestProductionLinuxContainment(WitnessSpine|NegativeWitness|ReplayWitness)$' > "$test_events" 2>&1
+          test_status=$?
+          set -e
+          cat "$test_events"
+
+          summary_status=0
+          python3 - "$test_events" \
+            TestProductionLinuxContainmentWitnessSpine \
+            TestProductionLinuxContainmentNegativeWitness \
+            TestProductionLinuxContainmentReplayWitness <<'PY' || summary_status=$?
+          import json
+          import sys
+
+          expected = set(sys.argv[2:])
+          run = set()
+          passed = set()
+          skipped = set()
+          failures = []
+          for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+              try:
+                  event = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              action = event.get("Action")
+              test = event.get("Test")
+              if action == "run" and test in expected:
+                  run.add(test)
+              elif action == "pass" and test in expected:
+                  passed.add(test)
+              elif action == "skip" and test in expected:
+                  skipped.add(test)
+              elif action == "fail":
+                  failures.append(test or event.get("Package") or "<package>")
+          missing_run = expected - run
+          missing_pass = expected - passed
+          if missing_run or missing_pass or skipped or failures:
+              raise SystemExit(
+                  "Linux production witness gate failed: "
+                  f"missing run={sorted(missing_run)}, missing pass={sorted(missing_pass)}, "
+                  f"skipped={sorted(skipped)}, fail events={failures}"
+              )
+          print(f"verified Linux witness events: run={sorted(run)}, pass={sorted(passed)}")
+          PY
+
+          if (( test_status != 0 )); then
+            exit "$test_status"
+          fi
+          if (( summary_status != 0 )); then
+            exit "$summary_status"
+          fi
+
+      - name: Upload production Linux containment witness evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-linux-containment-witness-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/production-linux-containment-witness-test.json
+            ${{ runner.temp }}/production-linux-containment-witness-workflow-provenance.txt
+            ${{ runner.temp }}/symmetry-linux-containment-witness/**/*.json
+            ${{ runner.temp }}/symmetry-linux-containment-witness/**/*.log
+
   compose:
     runs-on: ubuntu-latest
     steps:

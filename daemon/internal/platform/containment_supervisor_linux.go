@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -45,18 +46,26 @@ const (
 	linuxSupervisorOpRelease = "release"
 	linuxSupervisorOpWait    = "wait"
 
-	linuxSupervisorOwnerKind = authority.OwnerKindLinuxHelper
-	linuxSupervisorTimeout   = 5 * time.Second
+	linuxSupervisorOwnerKind             = authority.OwnerKindLinuxHelper
+	linuxSupervisorTimeout               = 5 * time.Second
+	linuxSupervisorProductionWitnessEnv  = "SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_WITNESS"
+	linuxSupervisorDropResponseOnceEnv   = "SYMMETRY_LINUX_SUPERVISOR_DROP_RESPONSE_ONCE"
+	linuxSupervisorDropResponseMarkerEnv = "SYMMETRY_LINUX_SUPERVISOR_DROP_RESPONSE_FIRED_PATH"
+	linuxSupervisorScanFailureModeEnv    = "SYMMETRY_LINUX_SUPERVISOR_INJECT_SCAN_FAILURE_ONCE"
+	linuxSupervisorScanFailureTriggerEnv = "SYMMETRY_LINUX_SUPERVISOR_INJECT_SCAN_FAILURE_TRIGGER_PATH"
+	linuxSupervisorScanFailureFiredEnv   = "SYMMETRY_LINUX_SUPERVISOR_INJECT_SCAN_FAILURE_FIRED_PATH"
+	linuxSupervisorScanFailureChildren   = "children_after_initial"
 )
 
 var (
-	ErrLinuxSupervisorNotCommitted = errors.New("Linux supervisor authority is not committed")
-	ErrLinuxSupervisorOwnerLost    = errors.New("Linux supervisor owner was lost")
-	ErrLinuxSupervisorHelperExited = errors.New("Linux supervisor helper exited")
-	ErrLinuxSupervisorStopUnproven = errors.New("Linux supervisor stop is unproven")
-	ErrLinuxSupervisorReleased     = errors.New("Linux supervisor containment was released")
-	ErrLinuxSupervisorLeaseExpired = errors.New("Linux supervisor lease expired")
-	ErrLinuxSupervisorLeaseUnarmed = errors.New("Linux supervisor lease is not armed")
+	ErrLinuxSupervisorNotCommitted                  = errors.New("Linux supervisor authority is not committed")
+	ErrLinuxSupervisorOwnerLost                     = errors.New("Linux supervisor owner was lost")
+	ErrLinuxSupervisorHelperExited                  = errors.New("Linux supervisor helper exited")
+	ErrLinuxSupervisorStopUnproven                  = errors.New("Linux supervisor stop is unproven")
+	ErrLinuxSupervisorReleased                      = errors.New("Linux supervisor containment was released")
+	ErrLinuxSupervisorLeaseExpired                  = errors.New("Linux supervisor lease expired")
+	ErrLinuxSupervisorLeaseUnarmed                  = errors.New("Linux supervisor lease is not armed")
+	errLinuxSupervisorInjectedDescendantScanFailure = errors.New("injected Linux supervisor descendant scan failure")
 
 	linuxSupervisorLstat                   = os.Lstat
 	linuxSupervisorProcessIdentity         = ProcessIdentity
@@ -328,17 +337,18 @@ type linuxSupervisor struct {
 	requestMu sync.Mutex
 	statusMu  sync.Mutex
 
-	committed bool
-	resumed   bool
-	stopped   bool
-	released  bool
-	closed    bool
-	receipt   *authority.StopReceipt
-	closeErr  error
-	waitCode  int
-	waitErr   error
-	waitDone  chan struct{}
-	waitOnce  sync.Once
+	committed             bool
+	resumed               bool
+	stopped               bool
+	released              bool
+	closed                bool
+	receipt               *authority.StopReceipt
+	closeErr              error
+	responseDropTriggered bool
+	waitCode              int
+	waitErr               error
+	waitDone              chan struct{}
+	waitOnce              sync.Once
 
 	containmentUnprovenCallback func() error
 	prepareUnknown              bool
@@ -1217,6 +1227,7 @@ func (supervisor *linuxSupervisor) request(operation string, sequence uint64, de
 	if err := writeLinuxSupervisorFrame(control, request); err != nil {
 		return linuxSupervisorResponse{}, err
 	}
+	supervisor.dropResponseTransportOnce(operation)
 	var response linuxSupervisorResponse
 	if err := readLinuxSupervisorFrame(reader, &response); err != nil {
 		return linuxSupervisorResponse{}, err
@@ -1231,6 +1242,131 @@ func (supervisor *linuxSupervisor) request(operation string, sequence uint64, de
 		return response, errors.New(response.Error)
 	}
 	return response, nil
+}
+
+func (supervisor *linuxSupervisor) dropResponseTransportOnce(operation string) {
+	if supervisor == nil || os.Getenv(linuxSupervisorProductionWitnessEnv) != "1" {
+		return
+	}
+	configuredOperation := os.Getenv(linuxSupervisorDropResponseOnceEnv)
+	if configuredOperation != linuxSupervisorOpStop && configuredOperation != linuxSupervisorOpRelease || configuredOperation != operation {
+		return
+	}
+
+	supervisor.mu.Lock()
+	if supervisor.responseDropTriggered || supervisor.responseRead == nil {
+		supervisor.mu.Unlock()
+		return
+	}
+	responseRead := supervisor.responseRead
+	supervisor.responseDropTriggered = true
+	supervisor.responseRead = nil
+	supervisor.responseReader = nil
+	supervisor.mu.Unlock()
+
+	if markerPath := strings.TrimSpace(os.Getenv(linuxSupervisorDropResponseMarkerEnv)); markerPath != "" {
+		_ = os.WriteFile(markerPath, []byte("fired\n"), 0o600)
+	}
+	_ = responseRead.Close()
+}
+
+type linuxSupervisorScanFailureInjection struct {
+	triggerPath string
+	firedPath   string
+}
+
+func linuxSupervisorScanFailureInjectionFromEnv() (linuxSupervisorScanFailureInjection, bool) {
+	if os.Getenv(linuxSupervisorProductionWitnessEnv) != "1" ||
+		strings.TrimSpace(os.Getenv(linuxSupervisorScanFailureModeEnv)) == "" {
+		return linuxSupervisorScanFailureInjection{}, false
+	}
+	if strings.TrimSpace(os.Getenv(linuxSupervisorScanFailureModeEnv)) != linuxSupervisorScanFailureChildren {
+		return linuxSupervisorScanFailureInjection{}, false
+	}
+	triggerPath := strings.TrimSpace(os.Getenv(linuxSupervisorScanFailureTriggerEnv))
+	firedPath := strings.TrimSpace(os.Getenv(linuxSupervisorScanFailureFiredEnv))
+	if triggerPath == "" || firedPath == "" || !filepath.IsAbs(triggerPath) || !filepath.IsAbs(firedPath) {
+		return linuxSupervisorScanFailureInjection{}, false
+	}
+	return linuxSupervisorScanFailureInjection{triggerPath: triggerPath, firedPath: firedPath}, true
+}
+
+func validateLinuxSupervisorScanFailureEnv() error {
+	if os.Getenv(linuxSupervisorProductionWitnessEnv) != "1" {
+		return nil
+	}
+	mode := strings.TrimSpace(os.Getenv(linuxSupervisorScanFailureModeEnv))
+	if mode == "" {
+		return nil
+	}
+	if mode != linuxSupervisorScanFailureChildren {
+		return fmt.Errorf("unsupported Linux supervisor scan-failure mode %q", mode)
+	}
+	triggerPath := strings.TrimSpace(os.Getenv(linuxSupervisorScanFailureTriggerEnv))
+	firedPath := strings.TrimSpace(os.Getenv(linuxSupervisorScanFailureFiredEnv))
+	if triggerPath == "" || firedPath == "" || !filepath.IsAbs(triggerPath) || !filepath.IsAbs(firedPath) {
+		return errors.New("Linux supervisor scan-failure injection requires absolute trigger and fired marker paths")
+	}
+	return nil
+}
+
+func installLinuxSupervisorScanFailureInjection(group *processGroup, targetPID int, targetIdentity string) func() {
+	injection, enabled := linuxSupervisorScanFailureInjectionFromEnv()
+	if !enabled || group == nil || targetPID <= 0 || targetIdentity == "" {
+		return func() {}
+	}
+
+	group.mutex.Lock()
+	realStat := group.monitorReadStat
+	realChildren := group.monitorReadChildren
+	if realStat == nil || realChildren == nil {
+		group.mutex.Unlock()
+		return func() {}
+	}
+	var fired atomic.Bool
+	var restored atomic.Bool
+	var injectedStat func(int) (linuxProcessStat, error)
+	var injectedChildren func(int) ([]int, error)
+	restore := func() {
+		if !restored.CompareAndSwap(false, true) {
+			return
+		}
+		group.mutex.Lock()
+		group.monitorReadStat = realStat
+		group.monitorReadChildren = realChildren
+		group.mutex.Unlock()
+	}
+	maybeInject := func(pid int) error {
+		if pid != targetPID {
+			return nil
+		}
+		if _, err := os.Stat(injection.triggerPath); err != nil {
+			return nil
+		}
+		actualIdentity, identityErr := readProcessIdentity(pid)
+		if identityErr != nil || actualIdentity != targetIdentity || !fired.CompareAndSwap(false, true) {
+			return nil
+		}
+		markerErr := os.WriteFile(injection.firedPath, []byte("fired\n"), 0o600)
+		restore()
+		if markerErr != nil {
+			return fmt.Errorf("%w: write fired marker: %v", errLinuxSupervisorInjectedDescendantScanFailure, markerErr)
+		}
+		return errLinuxSupervisorInjectedDescendantScanFailure
+	}
+	injectedStat = func(pid int) (linuxProcessStat, error) {
+		return realStat(pid)
+	}
+	injectedChildren = func(pid int) ([]int, error) {
+		if err := maybeInject(pid); err != nil {
+			return nil, err
+		}
+		return realChildren(pid)
+	}
+	group.monitorReadStat = injectedStat
+	group.monitorReadChildren = injectedChildren
+	group.mutex.Unlock()
+	return restore
 }
 
 func channelClosedV2(ch <-chan struct{}) bool {
@@ -1257,6 +1393,9 @@ func RunContainmentSupervisor(args []string) error {
 	defer runtime.UnlockOSThread()
 	fd, err := parseLinuxSupervisorFDs(args)
 	if err != nil {
+		return err
+	}
+	if err := validateLinuxSupervisorScanFailureEnv(); err != nil {
 		return err
 	}
 	files := make([]*os.File, 0, 9)
@@ -1332,6 +1471,8 @@ func RunContainmentSupervisor(args []string) error {
 		_, _ = target.Wait()
 		return errors.New("Linux supervisor target identity or anchor mismatch")
 	}
+	restoreScanFailureInjection := installLinuxSupervisorScanFailureInjection(group, target.PID(), identity)
+	defer restoreScanFailureInjection()
 	groupFD, err := unix.FcntlInt(uintptr(group.fd), unix.F_DUPFD_CLOEXEC, 0)
 	if err != nil {
 		_ = group.Terminate(true)
@@ -1754,7 +1895,13 @@ func StopPersistedLinuxSupervisor(value authority.Supervisor) (authority.StopRec
 	}
 	connection, err := dialLinuxSupervisorRecovery(value)
 	if err != nil {
-		return authority.StopReceipt{}, fmt.Errorf("connect persisted Linux supervisor: %w", err)
+		if !isLinuxSupervisorRecoveryEndpointUnreachable(err) {
+			return authority.StopReceipt{}, fmt.Errorf("connect persisted Linux supervisor: %w", err)
+		}
+		if proofErr := provePersistedLinuxSupervisorStop(value); proofErr != nil {
+			return authority.StopReceipt{}, errors.Join(fmt.Errorf("connect persisted Linux supervisor: %w", err), proofErr)
+		}
+		return persistedLinuxSupervisorStopReceipt(value)
 	}
 	defer connection.Close()
 	request := linuxSupervisorRequest{Version: linuxSupervisorProtocolVersion, Operation: linuxSupervisorOpStop, LaunchToken: value.LaunchToken, TargetPID: value.TargetPID, TargetIdentity: value.TargetIdentity, OwnerKind: value.OwnerKind, OwnerContext: value.OwnerContext, SupervisorPID: value.SupervisorPID, SupervisorIdentity: value.SupervisorIdentity, Token: value.PipeToken, JobID: value.JobID, Secret: value.Secret}
@@ -1765,11 +1912,7 @@ func StopPersistedLinuxSupervisor(value authority.Supervisor) (authority.StopRec
 	if response.Status != "stopped" || response.ActiveProcesses != 0 {
 		return authority.StopReceipt{}, fmt.Errorf("%w: persisted helper returned %q", ErrLinuxSupervisorStopUnproven, response.Status)
 	}
-	receipt := authority.StopReceipt{Version: authority.SupervisorVersion, Status: "stopped", OwnerKind: value.OwnerKind, OwnerContext: value.OwnerContext, TargetPID: value.TargetPID, TargetIdentity: value.TargetIdentity, PipeToken: value.PipeToken, JobID: value.JobID, SupervisorPID: value.SupervisorPID, SupervisorIdentity: value.SupervisorIdentity, ActiveProcesses: 0}
-	if !receipt.ValidFor(value) {
-		return authority.StopReceipt{}, fmt.Errorf("%w: persisted helper receipt identity mismatch", ErrLinuxSupervisorStopUnproven)
-	}
-	return receipt, nil
+	return persistedLinuxSupervisorStopReceipt(value)
 }
 
 // ReleasePersistedLinuxSupervisor releases a helper after the caller has
@@ -1783,6 +1926,9 @@ func ReleasePersistedLinuxSupervisor(value authority.Supervisor) error {
 	}
 	connection, err := dialLinuxSupervisorRecovery(value)
 	if err != nil {
+		if !isLinuxSupervisorRecoveryEndpointUnreachable(err) {
+			return fmt.Errorf("connect persisted Linux supervisor for release: %w", err)
+		}
 		if proofErr := provePersistedLinuxSupervisorRelease(value); proofErr == nil {
 			return nil
 		} else {
@@ -1801,10 +1947,22 @@ func ReleasePersistedLinuxSupervisor(value authority.Supervisor) error {
 	return nil
 }
 
-// provePersistedLinuxSupervisorRelease is the restart-safe local release
-// boundary. An absent endpoint is not sufficient by itself: the exact helper,
-// target identity, and original process group must all be absent as well.
-func provePersistedLinuxSupervisorRelease(value authority.Supervisor) error {
+func persistedLinuxSupervisorStopReceipt(value authority.Supervisor) (authority.StopReceipt, error) {
+	receipt := authority.StopReceipt{Version: authority.SupervisorVersion, Status: "stopped", OwnerKind: value.OwnerKind, OwnerContext: value.OwnerContext, TargetPID: value.TargetPID, TargetIdentity: value.TargetIdentity, PipeToken: value.PipeToken, JobID: value.JobID, SupervisorPID: value.SupervisorPID, SupervisorIdentity: value.SupervisorIdentity, ActiveProcesses: 0}
+	if !receipt.ValidFor(value) {
+		return authority.StopReceipt{}, fmt.Errorf("%w: persisted helper receipt identity mismatch", ErrLinuxSupervisorStopUnproven)
+	}
+	return receipt, nil
+}
+
+func isLinuxSupervisorRecoveryEndpointUnreachable(err error) bool {
+	return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED)
+}
+
+// provePersistedLinuxSupervisorStop is the restart-safe local stop boundary.
+// An absent endpoint is not sufficient by itself: the exact helper, target
+// identity, and original process group must all be absent as well.
+func provePersistedLinuxSupervisorStop(value authority.Supervisor) error {
 	if err := proveLinuxSupervisorHelperAbsent(value.SupervisorPID, value.SupervisorIdentity); err != nil {
 		return err
 	}
@@ -1814,6 +1972,16 @@ func provePersistedLinuxSupervisorRelease(value authority.Supervisor) error {
 	deadline := containmentDeadline(context.Background())
 	if err := proveLinuxSupervisorGroupAbsentWithRetry(context.Background(), value.TargetPID, value.TargetIdentity, deadline); err != nil {
 		return fmt.Errorf("prove persisted Linux supervisor process group absent: %w", err)
+	}
+	return nil
+}
+
+// provePersistedLinuxSupervisorRelease extends the stop proof with stale
+// endpoint retirement. The endpoint is cleared only after the exact stop
+// receipt has been reconstructed and durably supplied by the caller.
+func provePersistedLinuxSupervisorRelease(value authority.Supervisor) error {
+	if err := provePersistedLinuxSupervisorStop(value); err != nil {
+		return err
 	}
 	return retireLinuxSupervisorEndpoint(value.OwnerContext)
 }
