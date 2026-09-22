@@ -565,6 +565,42 @@ func TestLinuxSupervisorMirrorProofFailureRetainsRetryableAuthority(t *testing.T
 	}
 }
 
+func TestLinuxSupervisorMirrorProofRetryProducesReceiptAfterTransientPresence(t *testing.T) {
+	previous := linuxSupervisorProveProcessGroupAbsent
+	t.Cleanup(func() { linuxSupervisorProveProcessGroupAbsent = previous })
+
+	calls := 0
+	linuxSupervisorProveProcessGroupAbsent = func(context.Context, int, string) error {
+		calls++
+		if calls == 1 {
+			return fmt.Errorf("%w: group still visible", errPersistedProcessGroupPresent)
+		}
+		return nil
+	}
+
+	helperDone := make(chan struct{})
+	close(helperDone)
+	supervisor := &linuxSupervisor{
+		authority:  testLinuxSupervisorAuthority(t),
+		helperDone: helperDone,
+		mirror:     &processGroup{closeCompleted: true},
+		pidfd:      47,
+	}
+
+	if err := supervisor.Terminate(true); err != nil {
+		t.Fatalf("mirror proof retry = %v, want receipt success", err)
+	}
+	if calls != 2 {
+		t.Fatalf("mirror proof calls = %d, want first transient failure plus successful retry", calls)
+	}
+	if _, ok := supervisor.ContainmentStopReceipt(); !ok || supervisor.receipt == nil || !supervisor.stopped {
+		t.Fatalf("mirror proof retry state = receipt:%v stopped:%v available:%v, want successful receipt", supervisor.receipt, supervisor.stopped, ok)
+	}
+	if supervisor.pidfd != -1 || supervisor.finalProofPending || supervisor.ContainmentCloseRetryable() {
+		t.Fatalf("mirror proof retry authority = pidfd:%d finalProofPending:%v retryable:%v, want finalized state", supervisor.pidfd, supervisor.finalProofPending, supervisor.ContainmentCloseRetryable())
+	}
+}
+
 func TestLinuxSupervisorReleaseAfterHelperDeathUsesLocalDurableReceipt(t *testing.T) {
 	value := testLinuxSupervisorAuthority(t)
 	receipt := testLinuxSupervisorStopReceipt(value)
