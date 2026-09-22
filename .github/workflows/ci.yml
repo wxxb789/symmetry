@@ -152,13 +152,14 @@ jobs:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: symmetry_control_test
-      TMPDIR: ${{ runner.temp }}/symmetry-pi-control-tmp
     steps:
       - uses: actions/checkout@v4
       - name: Initialize Linux Pi E2E workspace
         shell: bash
         run: |
           set -Eeuo pipefail
+          export TMPDIR="$RUNNER_TEMP/symmetry-pi-control-tmp"
+          printf 'TMPDIR=%s\n' "$TMPDIR" >> "$GITHUB_ENV"
           mkdir -p "$TMPDIR"
           : > "$RUNNER_TEMP/pi-control-e2e-linux.log"
       - uses: erlef/setup-beam@v1
@@ -633,18 +634,26 @@ jobs:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: symmetry_control_test
-      PI_E2E_TEMP: ${{ runner.temp }}\symmetry-pi-control-tmp
-      PI_E2E_LOG: ${{ runner.temp }}\pi-control-e2e-windows.log
-      PI_E2E_PROVENANCE: ${{ runner.temp }}\pi-control-e2e-windows-provenance.txt
-      PI_E2E_POSTGRES_DATA: ${{ runner.temp }}\symmetry-pi-control-postgres
-      PI_E2E_POSTGRES_LOG: ${{ runner.temp }}\symmetry-pi-control-postgres.log
-      PI_E2E_EXECUTABLE: ${{ runner.temp }}\pi-0.85.1\pi.exe
     steps:
       - uses: actions/checkout@v4
       - name: Initialize Windows Pi E2E workspace
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $env:PI_E2E_TEMP = Join-Path $env:RUNNER_TEMP 'symmetry-pi-control-tmp'
+          $env:PI_E2E_LOG = Join-Path $env:RUNNER_TEMP 'pi-control-e2e-windows.log'
+          $env:PI_E2E_PROVENANCE = Join-Path $env:RUNNER_TEMP 'pi-control-e2e-windows-provenance.txt'
+          $env:PI_E2E_POSTGRES_DATA = Join-Path $env:RUNNER_TEMP 'symmetry-pi-control-postgres'
+          $env:PI_E2E_POSTGRES_LOG = Join-Path $env:RUNNER_TEMP 'symmetry-pi-control-postgres.log'
+          $env:PI_E2E_EXECUTABLE = Join-Path $env:RUNNER_TEMP 'pi-0.85.1\pi.exe'
+          @(
+            "PI_E2E_TEMP=$env:PI_E2E_TEMP"
+            "PI_E2E_LOG=$env:PI_E2E_LOG"
+            "PI_E2E_PROVENANCE=$env:PI_E2E_PROVENANCE"
+            "PI_E2E_POSTGRES_DATA=$env:PI_E2E_POSTGRES_DATA"
+            "PI_E2E_POSTGRES_LOG=$env:PI_E2E_POSTGRES_LOG"
+            "PI_E2E_EXECUTABLE=$env:PI_E2E_EXECUTABLE"
+          ) | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           New-Item -ItemType Directory -Force -Path $env:PI_E2E_TEMP | Out-Null
           Set-Content -LiteralPath $env:PI_E2E_LOG -Value ''
           if ($env:POSTGRES_HOST -cne '127.0.0.1') {
@@ -1327,16 +1336,20 @@ jobs:
   opencode-native-synthetic-windows:
     runs-on: windows-latest
     timeout-minutes: 15
-    env:
-      OPENCODE_SYNTHETIC_LOG: ${{ runner.temp }}\opencode-native-synthetic-windows.log
-      OPENCODE_SYNTHETIC_PROVENANCE: ${{ runner.temp }}\opencode-native-synthetic-windows-provenance.txt
-      OPENCODE_SYNTHETIC_EXECUTABLE: ${{ runner.temp }}\opencode-1.18.30\opencode.exe
     steps:
       - uses: actions/checkout@v4
       - name: Initialize OpenCode synthetic evidence
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $env:OPENCODE_SYNTHETIC_LOG = Join-Path $env:RUNNER_TEMP 'opencode-native-synthetic-windows.log'
+          $env:OPENCODE_SYNTHETIC_PROVENANCE = Join-Path $env:RUNNER_TEMP 'opencode-native-synthetic-windows-provenance.txt'
+          $env:OPENCODE_SYNTHETIC_EXECUTABLE = Join-Path $env:RUNNER_TEMP 'opencode-1.18.30\opencode.exe'
+          @(
+            "OPENCODE_SYNTHETIC_LOG=$env:OPENCODE_SYNTHETIC_LOG"
+            "OPENCODE_SYNTHETIC_PROVENANCE=$env:OPENCODE_SYNTHETIC_PROVENANCE"
+            "OPENCODE_SYNTHETIC_EXECUTABLE=$env:OPENCODE_SYNTHETIC_EXECUTABLE"
+          ) | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           Set-Content -LiteralPath $env:OPENCODE_SYNTHETIC_LOG -Value ''
           $runnerImage = [Environment]::GetEnvironmentVariable('ImageVersion')
           @(

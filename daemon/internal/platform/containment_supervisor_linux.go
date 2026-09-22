@@ -63,6 +63,17 @@ var (
 	linuxSupervisorProveProcessGroupAbsent = ProvePersistedProcessGroupAbsent
 )
 
+// DurableSupervisorHandoffAvailable reports whether the current executable
+// can dispatch the daemon's hidden supervisor mode. Go test binaries have a
+// generated test main and must retain the local containment path instead.
+func DurableSupervisorHandoffAvailable() bool {
+	if flag.CommandLine.Lookup("test.v") == nil {
+		return true
+	}
+	name := strings.ToLower(os.Args[0])
+	return !strings.HasSuffix(name, ".test")
+}
+
 // SupervisorHandoffAbortVerifier is supplied by the caller that still owns
 // the current daemon/store lifetime. It must return nil only after the old
 // writer is quiesced.

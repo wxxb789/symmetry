@@ -73,6 +73,17 @@ func releasePersistedLinuxContainmentAuthority(pid int, identity string, persist
 	if persisted == nil || persisted.TargetPID != pid || persisted.TargetIdentity != identity {
 		return fmt.Errorf("%w: persisted Linux authority identity mismatch", errPersistedProcessStopUnproven)
 	}
+	// Legacy/non-Linux authority records remain compatible journal data. Only
+	// the explicit Linux helper owner may authorize the Linux endpoint release
+	// proof; legacy records retain the shared recovery seam's no-op boundary.
+	switch persisted.OwnerKind {
+	case "", authority.OwnerKindLegacyWindows:
+		return nil
+	case authority.OwnerKindLinuxHelper:
+		// Continue with the authenticated Linux helper release proof below.
+	default:
+		return fmt.Errorf("%w: unsupported persisted authority owner kind %q", errPersistedProcessStopUnproven, persisted.OwnerKind)
+	}
 	if err := platform.ReleasePersistedLinuxSupervisor(*persisted); err != nil {
 		return fmt.Errorf("%w: release persisted Linux supervisor: %w", errPersistedProcessStopUnproven, err)
 	}

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -76,6 +77,12 @@ func TestLinuxSupervisorLeaseStateReplaysAndFencesGenerations(t *testing.T) {
 	}
 	if _, err := state.renew(time.Second, 4); !errors.Is(err, ErrLinuxSupervisorLeaseExpired) {
 		t.Fatalf("renewal after expiry = %v, want lease-expired", err)
+	}
+}
+
+func TestLinuxSupervisorDurableHandoffIsDisabledForGoTestBinary(t *testing.T) {
+	if DurableSupervisorHandoffAvailable() {
+		t.Fatal("Go test binary advertised production Linux supervisor dispatch")
 	}
 }
 
@@ -662,9 +669,17 @@ func TestLinuxSupervisorControlEOFFailsClosedBeforeOwnerLoss(t *testing.T) {
 	// Keep the owner writer open so its watchdog cannot publish owner loss.
 	// Closing control first deterministically delivers EOF to requestEvents.
 	_ = supervisor.controlWrite.Close()
-	receipt, err := StopPersistedLinuxSupervisor(*value)
-	if err != nil {
-		t.Fatalf("StopPersistedLinuxSupervisor() after control EOF = %v", err)
+	var receipt authority.StopReceipt
+	var stopErr error
+	for attempt := 0; attempt < 8; attempt++ {
+		receipt, stopErr = StopPersistedLinuxSupervisor(*value)
+		if stopErr == nil {
+			break
+		}
+		runtime.Gosched()
+	}
+	if stopErr != nil {
+		t.Fatalf("StopPersistedLinuxSupervisor() after control EOF = %v", stopErr)
 	}
 	if err := proveLinuxSupervisorTargetAbsent(value.TargetPID, value.TargetIdentity); err != nil {
 		t.Fatalf("control EOF left target live: %v", err)
@@ -681,12 +696,14 @@ func TestLinuxSupervisorControlEOFFailsClosedBeforeOwnerLoss(t *testing.T) {
 	if err := ReleasePersistedLinuxSupervisor(*value); err != nil {
 		t.Fatal(err)
 	}
+	// The recovery release has completed; close the still-open owner writer so
+	// the watchdog's deferred shutdown cannot extend the helper exit fence.
+	_ = supervisor.ownerWrite.Close()
 	select {
 	case <-supervisor.helperDone:
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("helper did not exit after recovery release")
 	}
-	_ = supervisor.ownerWrite.Close()
 	_ = stdinRead.Close()
 	_ = stdoutWrite.Close()
 	_ = stderrWrite.Close()

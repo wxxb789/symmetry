@@ -29,7 +29,7 @@ func defaultProcessLauncher(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if durableSupervisorHandoffRequestedLinux(invocation) {
+	if durableSupervisorHandoffRequestedLinux(invocation) && platform.DurableSupervisorHandoffAvailable() {
 		if !durableSupervisorHandoffCallbacksCompleteLinux(invocation) {
 			return nil, errors.New("durable Linux supervisor handoff callbacks are incomplete")
 		}
