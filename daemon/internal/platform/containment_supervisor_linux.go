@@ -1466,6 +1466,9 @@ func RunContainmentSupervisor(args []string) error {
 	// the later Resume/detach boundary.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+	if err := ensureLinuxChildSubreaper(); err != nil {
+		return err
+	}
 	fd, err := parseLinuxSupervisorFDs(args)
 	if err != nil {
 		return err
@@ -1597,10 +1600,14 @@ func RunContainmentSupervisor(args []string) error {
 		group.skipNextCloseSignal = true
 		group.mutex.Unlock()
 		preHelloStartWait()
-		if err := group.Close(); err != nil {
+		<-preHelloWaitDone
+		deadline := containmentDeadline(context.Background())
+		if err := reapLinuxProcessGroupChildren(group.anchor, deadline); err != nil {
 			return err
 		}
-		<-preHelloWaitDone
+		if err := group.closeUntil(deadline); err != nil {
+			return err
+		}
 		receipt := authority.StopReceipt{Version: authority.SupervisorVersion, Status: "stopped", OwnerKind: linuxSupervisorOwnerKind, OwnerContext: launch.OwnerContext, TargetPID: target.PID(), TargetIdentity: target.Identity(), PipeToken: launch.PipeToken, JobID: launch.JobID, SupervisorPID: os.Getpid(), SupervisorIdentity: helperIdentity, ActiveProcesses: 0}
 		preHelloReceipt = &receipt
 		return nil
@@ -1703,10 +1710,14 @@ func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.Un
 		group.skipNextCloseSignal = true
 		group.mutex.Unlock()
 		startWait()
-		if err := group.Close(); err != nil {
+		<-waitDone
+		deadline := containmentDeadline(context.Background())
+		if err := reapLinuxProcessGroupChildren(group.anchor, deadline); err != nil {
 			return err
 		}
-		<-waitDone
+		if err := group.closeUntil(deadline); err != nil {
+			return err
+		}
 		receiptValue := authority.StopReceipt{Version: authority.SupervisorVersion, Status: "stopped", OwnerKind: linuxSupervisorOwnerKind, OwnerContext: launch.OwnerContext, TargetPID: target.PID(), TargetIdentity: target.Identity(), PipeToken: launch.PipeToken, JobID: launch.JobID, SupervisorPID: os.Getpid(), SupervisorIdentity: mustLinuxSupervisorIdentity(), ActiveProcesses: 0}
 		receipt = &receiptValue
 		stateMu.Lock()
