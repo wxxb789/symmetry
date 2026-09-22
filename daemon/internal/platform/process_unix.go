@@ -107,6 +107,9 @@ func AttachProcess(process *os.Process) (Containment, string, error) {
 		return nil, "", callbackErr
 	}
 	group.startDescendantMonitor()
+	if err := group.waitForInitialDescendantScan(time.Now().Add(containmentCloseDeadline)); err != nil {
+		return group, identity, fmt.Errorf("initial descendant containment scan: %w", err)
+	}
 	return group, identity, nil
 }
 
@@ -129,18 +132,23 @@ type processGroup struct {
 	containmentUnprovenCallbackErr       error
 	containmentUnprovenCallbackMutex     sync.Mutex
 
-	monitorStop           chan struct{}
-	monitorDone           chan struct{}
-	monitorScanRequest    chan chan descendantMonitorScanResult
-	monitorTerminalReason descendantMonitorTerminalReason
-	monitorStopOnce       sync.Once
-	escapeObserved        chan struct{}
-	escapeObservedOnce    sync.Once
-	monitorReadStat       func(int) (linuxProcessStat, error)
-	monitorReadChildren   func(int) ([]int, error)
-	closeCompleted        bool
-	closeErr              error
-	ownerReleasePending   bool
+	monitorStop                chan struct{}
+	monitorDone                chan struct{}
+	monitorInitialScanDone     chan struct{}
+	monitorScanRequest         chan chan descendantMonitorScanResult
+	monitorTerminalReason      descendantMonitorTerminalReason
+	initialScanResult          descendantMonitorScanResult
+	initialScanErr             error
+	initialScanComplete        bool
+	monitorStopOnce            sync.Once
+	monitorInitialScanDoneOnce sync.Once
+	escapeObserved             chan struct{}
+	escapeObservedOnce         sync.Once
+	monitorReadStat            func(int) (linuxProcessStat, error)
+	monitorReadChildren        func(int) ([]int, error)
+	closeCompleted             bool
+	closeErr                   error
+	ownerReleasePending        bool
 }
 
 type descendantMonitorTerminalReason uint8
@@ -284,11 +292,49 @@ func (group *processGroup) startDescendantMonitor() {
 	}
 	group.monitorStop = make(chan struct{})
 	group.monitorDone = make(chan struct{})
+	group.monitorInitialScanDone = make(chan struct{})
 	group.monitorScanRequest = make(chan chan descendantMonitorScanResult, 1)
 	group.escapeObserved = make(chan struct{})
 	group.monitorReadStat = readLinuxProcessStat
 	group.monitorReadChildren = readLinuxProcessChildren
 	go group.monitorDescendants()
+}
+
+// waitForInitialDescendantScan prevents the caller from reaping the process
+// before the monitor has observed the first process-tree state. Tests and
+// explicit recovery owners may continue to start the monitor asynchronously;
+// the launch boundary alone must wait for this barrier.
+func (group *processGroup) waitForInitialDescendantScan(deadline time.Time) error {
+	if group == nil || group.monitorInitialScanDone == nil {
+		return fmt.Errorf("%w: initial descendant scan is unavailable", ErrLinuxDescendantContainmentUnproven)
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return fmt.Errorf("%w: initial descendant scan deadline elapsed", ErrLinuxDescendantContainmentUnproven)
+	}
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	select {
+	case <-group.monitorInitialScanDone:
+	case <-timer.C:
+		return fmt.Errorf("%w: initial descendant scan did not complete before deadline", ErrLinuxDescendantContainmentUnproven)
+	}
+	group.mutex.Lock()
+	initialErr := group.initialScanErr
+	initialResult := group.initialScanResult
+	uncertain := group.descendantScanLost || len(group.escapedDescendants) > 0
+	complete := group.initialScanComplete
+	group.mutex.Unlock()
+	if !complete {
+		return fmt.Errorf("%w: initial descendant scan did not publish a result", ErrLinuxDescendantContainmentUnproven)
+	}
+	if initialErr != nil {
+		return initialErr
+	}
+	if initialResult.stopped && uncertain {
+		return fmt.Errorf("%w: initial scan observed leader absence before a complete descendant scan", ErrLinuxDescendantContainmentUnproven)
+	}
+	return nil
 }
 
 func (group *processGroup) recordDescendantMonitorTerminalReason(reason descendantMonitorTerminalReason) descendantMonitorTerminalReason {
@@ -334,8 +380,21 @@ func (group *processGroup) stopDescendantMonitor(deadline time.Time) error {
 	}
 }
 
+func (group *processGroup) signalInitialScanComplete() {
+	if group == nil || group.monitorInitialScanDone == nil {
+		return
+	}
+	group.monitorInitialScanDoneOnce.Do(func() { close(group.monitorInitialScanDone) })
+}
+
 func (group *processGroup) monitorDescendants() {
-	defer close(group.monitorDone)
+	defer func() {
+		group.mutex.Lock()
+		group.initialScanComplete = true
+		group.mutex.Unlock()
+		group.signalInitialScanComplete()
+		close(group.monitorDone)
+	}()
 	scan := func() descendantMonitorScanResult {
 		present, err := observeLinuxProcessGroupLeaderWithReader(group.pid, group.anchor, group.monitorReadStat)
 		if err != nil {
@@ -377,7 +436,14 @@ func (group *processGroup) monitorDescendants() {
 		}
 		return descendantMonitorScanResult{leaderPresent: true}
 	}
-	if scan().stopped {
+	initial := scan()
+	group.mutex.Lock()
+	group.initialScanResult = initial
+	group.initialScanErr = initial.scanErr
+	group.initialScanComplete = true
+	group.mutex.Unlock()
+	group.signalInitialScanComplete()
+	if initial.stopped {
 		return
 	}
 	ticker := time.NewTicker(containmentDescendantMonitorInterval)
@@ -775,12 +841,26 @@ func TerminatePersistedProcessGroup(ctx context.Context, process *os.Process, ex
 	}
 	containment, _, err := AttachProcess(process)
 	if err != nil {
-		if containment != nil {
-			if releaseErr := releaseProcessGroupOwner(containment); releaseErr != nil {
-				return errors.Join(fmt.Errorf("attach persisted process containment: %w", err), fmt.Errorf("release partial persisted containment: %w", releaseErr))
+		resultErr = fmt.Errorf("attach persisted process containment: %w", err)
+		if group, ok := containment.(*processGroup); ok {
+			group.mutex.Lock()
+			canTerminate := group.anchorCaptured && group.fd >= 0
+			group.mutex.Unlock()
+			if canTerminate {
+				if terminateErr := group.Terminate(true); terminateErr != nil && !errors.Is(terminateErr, unix.ESRCH) {
+					resultErr = errors.Join(resultErr, fmt.Errorf("terminate partial persisted process group: %w", terminateErr))
+				}
+				if closeErr := group.Close(); closeErr != nil {
+					resultErr = errors.Join(resultErr, fmt.Errorf("close partial persisted process containment: %w", closeErr))
+				}
 			}
 		}
-		return fmt.Errorf("attach persisted process containment: %w", err)
+		if containment != nil {
+			if releaseErr := releaseProcessGroupOwner(containment); releaseErr != nil {
+				resultErr = errors.Join(resultErr, fmt.Errorf("release partial persisted containment: %w", releaseErr))
+			}
+		}
+		return resultErr
 	}
 	defer func() {
 		closeErr := releaseProcessGroupOwner(containment)

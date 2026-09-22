@@ -294,6 +294,53 @@ func TestStartRetainsPartialAttachmentForOwnedCleanup(t *testing.T) {
 	}
 }
 
+func TestStartPersistsMarkerBeforeCleaningRetainedInitialScanFailure(t *testing.T) {
+	wantAttachErr := errors.New("initial descendant containment scan: leader absence before a complete descendant scan")
+	containment := &earlyUnprovenContainment{observed: true}
+	events := make([]string, 0, 2)
+	invocation := helperInvocation("exit")
+	invocation.PersistProcess = func(pid int, identity string) error {
+		containment.mutex.Lock()
+		callbackInstalled := containment.callback != nil
+		containment.mutex.Unlock()
+		if !callbackInstalled {
+			t.Fatal("containment uncertainty callback was not installed before marker persistence")
+		}
+		if pid <= 0 || identity != "bound:process" {
+			t.Fatalf("PersistProcess() = (%d, %q), want an exact attached process identity", pid, identity)
+		}
+		events = append(events, "marker")
+		return nil
+	}
+	invocation.PersistContainmentUnproven = func(pid int, identity string) error {
+		if pid <= 0 || identity != "bound:process" {
+			t.Fatalf("PersistContainmentUnproven() = (%d, %q), want an exact attached process identity", pid, identity)
+		}
+		events = append(events, "uncertainty")
+		return nil
+	}
+	runner := Runner{
+		configureProcess: func(*exec.Cmd) error { return nil },
+		attachProcess: func(*os.Process) (platform.Containment, string, error) {
+			return containment, "bound:process", wantAttachErr
+		},
+	}
+	process, err := runner.Start(context.Background(), invocation, &recordingSink{})
+	if !errors.Is(err, wantAttachErr) {
+		t.Fatalf("Start() error = %v, want initial scan failure", err)
+	}
+	if process == nil {
+		t.Fatal("Start() returned nil process after retained initial scan failure")
+	}
+	if len(events) != 2 || events[0] != "marker" || events[1] != "uncertainty" {
+		t.Fatalf("persistence order = %#v, want [marker uncertainty] before cleanup", events)
+	}
+	result := waitForResult(t, process)
+	if !errors.Is(result.ContainmentError, wantAttachErr) {
+		t.Fatalf("ContainmentError = %v, want initial scan failure", result.ContainmentError)
+	}
+}
+
 func TestFinalizeContainmentRetriesPartialHelperCleanup(t *testing.T) {
 	want := errors.New("partial helper cleanup failed")
 	containment := &retryablePartialContainment{
@@ -852,6 +899,8 @@ func (containment *earlyUnprovenContainment) SetContainmentUnprovenCallback(call
 	}
 	return nil
 }
+
+func (*earlyUnprovenContainment) ContainmentCloseRetryable() bool { return true }
 
 type retryablePartialContainment struct {
 	*scriptedContainment

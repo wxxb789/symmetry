@@ -1291,6 +1291,149 @@ func TestProcessGroupContainmentCallbackFailureRetainsAuthority(t *testing.T) {
 	}
 }
 
+func TestAttachProcessWaitsForInitialDescendantScan(t *testing.T) {
+	process, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		t.Fatalf("FindProcess() error = %v", err)
+	}
+	t.Cleanup(func() { _ = process.Release() })
+
+	previousDuplicate := duplicatePIDFD
+	previousIdentity := readProcessIdentity
+	previousStat := readLinuxProcessStat
+	previousChildren := readLinuxProcessChildren
+	duplicatePIDFD = func(uintptr) (int, error) { return 47, nil }
+	readProcessIdentity = func(int) (string, error) { return "expected", nil }
+	anchor := linuxProcessGroupAnchor{pid: process.Pid, pgrp: int64(process.Pid), session: 77, startTime: 456}
+	readLinuxProcessStat = func(int) (linuxProcessStat, error) {
+		return linuxProcessStat{pid: anchor.pid, pgrp: anchor.pgrp, session: anchor.session, startTime: anchor.startTime}, nil
+	}
+	scanStarted := make(chan struct{})
+	releaseScan := make(chan struct{})
+	var scanStartedOnce sync.Once
+	readLinuxProcessChildren = func(int) ([]int, error) {
+		scanStartedOnce.Do(func() { close(scanStarted) })
+		<-releaseScan
+		return nil, nil
+	}
+	var releaseScanOnce sync.Once
+	var group *processGroup
+	type attachResult struct {
+		containment Containment
+		identity    string
+		err         error
+	}
+	result := make(chan attachResult, 1)
+	t.Cleanup(func() {
+		releaseScanOnce.Do(func() { close(releaseScan) })
+		if group != nil && group.monitorDone != nil {
+			select {
+			case <-group.monitorDone:
+			case <-time.After(time.Second):
+				t.Errorf("initial descendant monitor did not stop during cleanup")
+			}
+		}
+		readLinuxProcessStat = previousStat
+		readLinuxProcessChildren = previousChildren
+		readProcessIdentity = previousIdentity
+		duplicatePIDFD = previousDuplicate
+	})
+
+	go func() {
+		containment, identity, attachErr := AttachProcess(process)
+		result <- attachResult{containment: containment, identity: identity, err: attachErr}
+	}()
+
+	select {
+	case <-scanStarted:
+	case <-time.After(time.Second):
+		t.Fatal("initial descendant scan did not start")
+	}
+	select {
+	case attached := <-result:
+		t.Fatalf("AttachProcess() returned before initial scan completed: containment=%T identity=%q err=%v", attached.containment, attached.identity, attached.err)
+	default:
+	}
+
+	releaseScanOnce.Do(func() { close(releaseScan) })
+	attached := <-result
+	if attached.err != nil {
+		t.Fatalf("AttachProcess() error = %v, want nil after initial scan", attached.err)
+	}
+	if attached.identity != "expected" {
+		t.Fatalf("AttachProcess() identity = %q, want expected", attached.identity)
+	}
+	var ok bool
+	group, ok = attached.containment.(*processGroup)
+	if !ok || group == nil {
+		t.Fatalf("AttachProcess() containment = %T, want *processGroup", attached.containment)
+	}
+	if !group.initialScanComplete || group.descendantScanLost {
+		t.Fatalf("initial scan state = complete:%v lost:%v, want true,false", group.initialScanComplete, group.descendantScanLost)
+	}
+	if err := group.stopDescendantMonitor(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("stopDescendantMonitor() = %v", err)
+	}
+}
+
+func TestAttachProcessRejectsImmediateLeaderExitBeforeInitialDescendantScan(t *testing.T) {
+	process, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		t.Fatalf("FindProcess() error = %v", err)
+	}
+	t.Cleanup(func() { _ = process.Release() })
+
+	previousDuplicate := duplicatePIDFD
+	previousIdentity := readProcessIdentity
+	previousStat := readLinuxProcessStat
+	previousChildren := readLinuxProcessChildren
+	duplicatePIDFD = func(uintptr) (int, error) { return 47, nil }
+	readProcessIdentity = func(int) (string, error) { return "expected", nil }
+	anchor := linuxProcessGroupAnchor{pid: process.Pid, pgrp: int64(process.Pid), session: 77, startTime: 456}
+	statCalls := 0
+	readLinuxProcessStat = func(int) (linuxProcessStat, error) {
+		statCalls++
+		if statCalls == 1 {
+			return linuxProcessStat{pid: anchor.pid, pgrp: anchor.pgrp, session: anchor.session, startTime: anchor.startTime}, nil
+		}
+		return linuxProcessStat{}, os.ErrNotExist
+	}
+	childrenCalls := 0
+	readLinuxProcessChildren = func(int) ([]int, error) {
+		childrenCalls++
+		return nil, nil
+	}
+	t.Cleanup(func() {
+		readLinuxProcessStat = previousStat
+		readLinuxProcessChildren = previousChildren
+		readProcessIdentity = previousIdentity
+		duplicatePIDFD = previousDuplicate
+	})
+
+	containment, identity, attachErr := AttachProcess(process)
+	if containment == nil || identity != "expected" || !errors.Is(attachErr, ErrLinuxDescendantContainmentUnproven) {
+		t.Fatalf("AttachProcess() = (%T, %q, %v), want retained containment, expected identity, unresolved containment", containment, identity, attachErr)
+	}
+	group, ok := containment.(*processGroup)
+	if !ok || group == nil {
+		t.Fatalf("AttachProcess() containment = %T, want *processGroup", containment)
+	}
+	if !strings.Contains(attachErr.Error(), "leader absence before a complete descendant scan") {
+		t.Fatalf("AttachProcess() error = %v, want immediate-leader-exit barrier detail", attachErr)
+	}
+	if !group.initialScanComplete || !group.descendantScanLost || group.monitorTerminalReason != descendantMonitorTerminalCleanLeaderAbsent {
+		t.Fatalf("initial exit state = complete:%v lost:%v terminal:%s, want true,true,leader_absent", group.initialScanComplete, group.descendantScanLost, group.monitorTerminalReason)
+	}
+	if childrenCalls != 0 {
+		t.Fatalf("initial leader-exit scan read children %d times, want 0", childrenCalls)
+	}
+	select {
+	case <-group.monitorDone:
+	default:
+		t.Fatal("AttachProcess() returned before the initial descendant monitor stopped")
+	}
+}
+
 func TestProcessGroupLeaderExitAfterSuccessfulDescendantScanRemainsProven(t *testing.T) {
 	anchor := linuxProcessGroupAnchor{pid: 1234, pgrp: 1234, session: 77, startTime: 456}
 	leaderExit := make(chan struct{})

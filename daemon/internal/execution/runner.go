@@ -354,6 +354,7 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 
 	startedAt := time.Now().UTC()
 	var started *startedProcess
+	var attachFailureErr error
 	if runner.launchProcess != nil {
 		started, err = runner.launchProcess(ctx, command, invocation, stdinRead, stdoutWrite, stderrWrite)
 		if started != nil {
@@ -386,13 +387,20 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 		started = legacyStartedProcess(command, containment, identity)
 		if attachErr != nil {
 			wrappedErr := fmt.Errorf("contain process tree for %q: %w", program, attachErr)
-			return cleanupFailedStartStarted(
-				started,
-				stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
-				startedAt,
-				wrappedErr,
-				wrappedErr,
-			)
+			if !canPersistRetainedAttachFailure(containment, identity) {
+				return cleanupFailedStartStarted(
+					started,
+					stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
+					startedAt,
+					wrappedErr,
+					wrappedErr,
+				)
+			}
+			// A retained, retryable containment owner has enough identity and
+			// authority to enter the normal persistence fence before cleanup. This
+			// is required for Linux initial-scan failures, where Close must retain
+			// an unresolved owner for restart recovery.
+			attachFailureErr = wrappedErr
 		}
 	}
 	containment := started.containment
@@ -536,6 +544,15 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 		// failure when the daemon supplies the receipt callback unconditionally.
 		started.persistStopReceipt = nil
 		started.stopReceiptRequired = false
+	}
+	if attachFailureErr != nil {
+		return cleanupFailedStartStarted(
+			started,
+			stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
+			startedAt,
+			attachFailureErr,
+			attachFailureErr,
+		)
 	}
 	initialLeaseDeadline, initialLeaseRequested, deadlineErr := runner.initialLeaseDeadline(invocation)
 	if deadlineErr != nil {
@@ -698,6 +715,22 @@ func (runner Runner) attach(process *os.Process) (platform.Containment, string, 
 		return runner.attachProcess(process)
 	}
 	return platform.AttachProcess(process)
+}
+
+// canPersistRetainedAttachFailure recognizes the narrow partial-attachment
+// contract that is safe to journal before cleanup. A non-empty identity alone
+// is insufficient: the retained owner must expose both the uncertainty
+// observer and a retryable containment authority, which excludes identity or
+// process-group-anchor capture failures.
+func canPersistRetainedAttachFailure(containment platform.Containment, identity string) bool {
+	if containment == nil || identity == "" {
+		return false
+	}
+	if _, ok := containment.(containmentUnprovenCallbackSetter); !ok {
+		return false
+	}
+	retryer, ok := containment.(platform.ContainmentCloseRetryer)
+	return ok && retryer.ContainmentCloseRetryable()
 }
 
 func installContainmentUnprovenCallback(started *startedProcess, markerReady *atomic.Bool) error {
