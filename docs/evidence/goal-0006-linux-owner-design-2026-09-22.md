@@ -8,8 +8,8 @@ current proposal is revision `0006b-linux-helper-v1.1`.
 It is
 not a completion receipt and does not silently amend the approved Goal or the
 fixed design baseline. The current implementation subject is
-`7efe82c10f64369c27b43c125d1253a096f442c0`, tree
-`f730acd2795b20e4c02d928d18c49bd5c24640fa`.
+`568c9403812b18438d6ebd7f40c8e69104554276`, tree
+`26a402aff73d91a862ed5948c63d10797476e999`.
 
 The owner contract below is the binding target for the Linux implementation.
 Goal completion remains blocked until the contract, exact-subject production
@@ -103,10 +103,11 @@ passing gate.
 
 ## Exact Subject Verification
 
-The push workflow run `35747212737` (2026-09-22) produced artifact
-`production-linux-containment-witness-35747212737-1`. Its provenance binds
-`subject_head=7efe82c10f64369c27b43c125d1253a096f442c0` and
-`subject_tree=f730acd2795b20e4c02d928d18c49bd5c24640fa`, with Go 1.27.0 on
+The push workflow run `35749712299`, attempt 2 (2026-09-22) produced artifact
+`production-linux-containment-witness-35749712299-2` (artifact ID
+`10705627093`). Its provenance binds
+`subject_head=568c9403812b18438d6ebd7f40c8e69104554276` and
+`subject_tree=26a402aff73d91a862ed5948c63d10797476e999`, with Go 1.27.0 on
 Linux kernel 6.17.0-1022-azure.
 
 The artifact test event stream records all three required top-level witnesses
@@ -125,7 +126,9 @@ OpenCode synthetic, and control-restart integration jobs).
 
 ## Remaining Acceptance
 
-This file remains an evidence record and is not a completion receipt. Final
-Goal acceptance still requires the review receipts and PR checks to bind to
-the exact subject above; unrelated workflow failures must not be represented
-as containment failures or silently ignored.
+This file remains an evidence record and is not a completion receipt. The
+implementation-bound receipts and artifact above apply to the exact subject
+named above; this evidence-only documentation update does not change daemon
+behavior. Final Goal acceptance still requires the review receipts and PR
+checks to bind to that subject; unrelated workflow failures must not be
+represented as containment failures or silently ignored.
