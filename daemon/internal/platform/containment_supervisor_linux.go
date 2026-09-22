@@ -1590,8 +1590,12 @@ func RunContainmentSupervisor(args []string) error {
 				return errors.Join(terminateErr, retryErr, group.Close())
 			}
 		}
-		// Reap only after the target is marked terminated, matching the normal
-		// helper stop ordering for a ptrace-stopped target.
+		if err := group.Terminate(true); err != nil && !errors.Is(err, unix.ESRCH) {
+			return err
+		}
+		group.mutex.Lock()
+		group.skipNextCloseSignal = true
+		group.mutex.Unlock()
 		preHelloStartWait()
 		if err := group.Close(); err != nil {
 			return err
@@ -1690,9 +1694,14 @@ func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.Un
 				}
 			}
 		}
-		// Start reaping only after a ptrace-stopped target has a durable
-		// terminated marker. Otherwise Wait can return immediately and consume
-		// the one-shot reaper before the process-group kill lands.
+		// Signal the exact process group before reaping the leader. Reaping first
+		// can make a same-group descendant unreachable from the leader fence.
+		if err := group.Terminate(true); err != nil && !errors.Is(err, unix.ESRCH) {
+			return err
+		}
+		group.mutex.Lock()
+		group.skipNextCloseSignal = true
+		group.mutex.Unlock()
 		startWait()
 		if err := group.Close(); err != nil {
 			return err
