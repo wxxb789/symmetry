@@ -570,17 +570,21 @@ func runLinuxDaemonCrashAfterCommitBeforeResumeWitness(t *testing.T, environment
 	if err != nil {
 		t.Fatalf("read recovered commit-before-resume journal: %v", err)
 	}
-	if !found {
-		t.Fatalf("recovered commit-before-resume journal %s/%d disappeared", key.RunID, key.Generation)
-	}
-	if cleared.Journal.ContainmentHandoff != nil || cleared.Journal.ContainmentAuthority != nil || cleared.Journal.HasProcessDetails() {
-		t.Fatalf("recovered commit-before-resume journal retained containment: %#v", cleared.Journal)
+	if found {
+		if cleared.Journal.ContainmentHandoff != nil || cleared.Journal.ContainmentAuthority != nil || cleared.Journal.HasProcessDetails() {
+			t.Fatalf("recovered commit-before-resume journal retained containment: %#v", cleared.Journal)
+		}
+		evidence.JournalSnapshots = append(evidence.JournalSnapshots, linuxWitnessJournalSnapshotFromFile(cleared))
+	} else {
+		// Recovery may retire the already-cleared journal before this readback.
+		// waitForLinuxWitnessJournalReleased above has already observed the
+		// release boundary; absence now is the expected post-clear state.
+		evidence.Notes = append(evidence.Notes, "recovered commit-before-resume journal was retired after durable containment clear")
 	}
 	if got := getTask(t, operator, task.TaskID); got.RunID == nil || *got.RunID != key.RunID {
 		t.Fatalf("recovered task run identity changed: %#v", got)
 	}
 	evidence.Stage = "recovered_and_cleared"
-	evidence.JournalSnapshots = append(evidence.JournalSnapshots, linuxWitnessJournalSnapshotFromFile(cleared))
 	evidence.ProcessSnapshots = append(evidence.ProcessSnapshots,
 		linuxWitnessProcessSnapshotAt("target_after_recovery", targetPID, targetIdentity),
 		linuxWitnessProcessSnapshotAt("helper_after_recovery", helperPID, helperIdentity))
