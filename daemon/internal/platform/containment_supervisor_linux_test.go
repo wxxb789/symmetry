@@ -943,6 +943,8 @@ func TestLinuxSupervisorResponseDropReleasePreservesRecoveryEndpoint(t *testing.
 	t.Setenv(linuxSupervisorProductionWitnessEnv, "1")
 	t.Setenv(linuxSupervisorDropResponseOnceEnv, linuxSupervisorOpRelease)
 	supervisor, responseDone, releaseResponse := newLinuxSupervisorRequestHarness(t)
+	receipt := testLinuxSupervisorStopReceipt(supervisor.authority)
+	supervisor.receipt = &receipt
 
 	if _, err := supervisor.request(linuxSupervisorOpRelease, 0, 0); err == nil {
 		t.Fatal("release response-drop request error = nil, want closed response transport")

@@ -1411,7 +1411,8 @@ func (supervisor *linuxSupervisor) dropResponseTransportOnce(operation string) b
 	}
 
 	supervisor.mu.Lock()
-	if supervisor.responseDropTriggered || supervisor.responseRead == nil {
+	if supervisor.responseDropTriggered || supervisor.responseRead == nil ||
+		(operation == linuxSupervisorOpRelease && supervisor.receipt == nil) {
 		supervisor.mu.Unlock()
 		return false
 	}
