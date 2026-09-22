@@ -46,15 +46,19 @@ const (
 	linuxSupervisorOpRelease = "release"
 	linuxSupervisorOpWait    = "wait"
 
-	linuxSupervisorOwnerKind             = authority.OwnerKindLinuxHelper
-	linuxSupervisorTimeout               = 5 * time.Second
-	linuxSupervisorProductionWitnessEnv  = "SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_WITNESS"
-	linuxSupervisorDropResponseOnceEnv   = "SYMMETRY_LINUX_SUPERVISOR_DROP_RESPONSE_ONCE"
-	linuxSupervisorDropResponseMarkerEnv = "SYMMETRY_LINUX_SUPERVISOR_DROP_RESPONSE_FIRED_PATH"
-	linuxSupervisorScanFailureModeEnv    = "SYMMETRY_LINUX_SUPERVISOR_INJECT_SCAN_FAILURE_ONCE"
-	linuxSupervisorScanFailureTriggerEnv = "SYMMETRY_LINUX_SUPERVISOR_INJECT_SCAN_FAILURE_TRIGGER_PATH"
-	linuxSupervisorScanFailureFiredEnv   = "SYMMETRY_LINUX_SUPERVISOR_INJECT_SCAN_FAILURE_FIRED_PATH"
-	linuxSupervisorScanFailureChildren   = "children_after_initial"
+	linuxSupervisorOwnerKind                  = authority.OwnerKindLinuxHelper
+	linuxSupervisorTimeout                    = 5 * time.Second
+	linuxSupervisorProductionWitnessEnv       = "SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_WITNESS"
+	linuxSupervisorDropResponseOnceEnv        = "SYMMETRY_LINUX_SUPERVISOR_DROP_RESPONSE_ONCE"
+	linuxSupervisorDropResponseMarkerEnv      = "SYMMETRY_LINUX_SUPERVISOR_DROP_RESPONSE_FIRED_PATH"
+	linuxSupervisorReleaseBarrierReachedEnv   = "SYMMETRY_LINUX_SUPERVISOR_RELEASE_RESPONSE_LOSS_BARRIER_REACHED_FILE"
+	linuxSupervisorReleaseBarrierReleaseEnv   = "SYMMETRY_LINUX_SUPERVISOR_RELEASE_RESPONSE_LOSS_BARRIER_RELEASE_FILE"
+	linuxSupervisorScanFailureModeEnv         = "SYMMETRY_LINUX_SUPERVISOR_INJECT_SCAN_FAILURE_ONCE"
+	linuxSupervisorScanFailureTriggerEnv      = "SYMMETRY_LINUX_SUPERVISOR_INJECT_SCAN_FAILURE_TRIGGER_PATH"
+	linuxSupervisorScanFailureFiredEnv        = "SYMMETRY_LINUX_SUPERVISOR_INJECT_SCAN_FAILURE_FIRED_PATH"
+	linuxSupervisorScanFailureChildren        = "children_after_initial"
+	linuxSupervisorReleaseBarrierTimeout      = 30 * time.Second
+	linuxSupervisorReleaseBarrierPollInterval = 25 * time.Millisecond
 )
 
 var (
@@ -1179,6 +1183,9 @@ func (supervisor *linuxSupervisor) ReleaseContainment() error {
 	response, err := supervisor.request(linuxSupervisorOpRelease, 0, 0)
 	if err != nil {
 		if errors.Is(err, ErrLinuxSupervisorResponseLost) {
+			if barrierErr := supervisor.waitForLinuxSupervisorReleaseResponseLossBarrier(); barrierErr != nil {
+				return barrierErr
+			}
 			return supervisor.releaseThroughRecovery(mirror)
 		}
 		if channelClosedV2(supervisor.helperDone) {
@@ -2073,6 +2080,101 @@ func runLinuxSupervisorRecoveryLoop(listener *net.UnixListener, launch linuxSupe
 			return nil
 		}
 	}
+}
+
+// waitForLinuxSupervisorReleaseResponseLossBarrier is an opt-in production
+// witness seam. It runs only after the daemon wrote a release request, the
+// explicitly injected response transport loss was observed, and both test-owned
+// marker paths are configured. The reached marker is created before automatic
+// recovery; the daemon waits for the test-owned release marker before allowing
+// recovery or clear to proceed.
+func (supervisor *linuxSupervisor) waitForLinuxSupervisorReleaseResponseLossBarrier() error {
+	if os.Getenv(linuxSupervisorProductionWitnessEnv) != "1" ||
+		os.Getenv(linuxSupervisorDropResponseOnceEnv) != linuxSupervisorOpRelease {
+		return nil
+	}
+	supervisor.mu.Lock()
+	dropTriggered := supervisor.responseDropTriggered && supervisor.responseTransportLost
+	receiptPresent := supervisor.receipt != nil
+	supervisor.mu.Unlock()
+	if !dropTriggered {
+		return nil
+	}
+	reachedPath, reachedConfigured := os.LookupEnv(linuxSupervisorReleaseBarrierReachedEnv)
+	releasePath, releaseConfigured := os.LookupEnv(linuxSupervisorReleaseBarrierReleaseEnv)
+	if !reachedConfigured && !releaseConfigured {
+		return nil
+	}
+	if reachedConfigured != releaseConfigured {
+		return fmt.Errorf("Linux supervisor release response-loss barrier requires both %s and %s", linuxSupervisorReleaseBarrierReachedEnv, linuxSupervisorReleaseBarrierReleaseEnv)
+	}
+	reachedPath = strings.TrimSpace(reachedPath)
+	releasePath = strings.TrimSpace(releasePath)
+	if reachedPath == "" || releasePath == "" {
+		return errors.New("Linux supervisor release response-loss barrier marker paths must not be empty")
+	}
+	if filepath.Clean(reachedPath) == filepath.Clean(releasePath) {
+		return errors.New("Linux supervisor release response-loss barrier marker paths must be distinct")
+	}
+	if err := assertLinuxSupervisorBarrierPathAbsent(reachedPath); err != nil {
+		return fmt.Errorf("validate release response-loss reached marker %q: %w", reachedPath, err)
+	}
+	if err := assertLinuxSupervisorBarrierPathAbsent(releasePath); err != nil {
+		return fmt.Errorf("validate release response-loss release marker %q: %w", releasePath, err)
+	}
+	if !receiptPresent {
+		return errors.New("Linux supervisor release response-loss barrier requires a stop receipt")
+	}
+
+	reached, err := os.OpenFile(reachedPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("create release response-loss reached marker %q: %w", reachedPath, err)
+	}
+	marker := fmt.Sprintf(
+		"pid=%d\ntime=%s\noperation=%s\nreceipt_present=%t\n",
+		os.Getpid(),
+		time.Now().UTC().Format(time.RFC3339Nano),
+		linuxSupervisorOpRelease,
+		receiptPresent,
+	)
+	writeErr := error(nil)
+	if _, writeErr = reached.WriteString(marker); writeErr == nil {
+		writeErr = reached.Sync()
+	}
+	if closeErr := reached.Close(); writeErr == nil {
+		writeErr = closeErr
+	}
+	if writeErr != nil {
+		return fmt.Errorf("publish release response-loss reached marker %q: %w", reachedPath, writeErr)
+	}
+
+	deadline := time.NewTimer(linuxSupervisorReleaseBarrierTimeout)
+	defer deadline.Stop()
+	poll := time.NewTicker(linuxSupervisorReleaseBarrierPollInterval)
+	defer poll.Stop()
+	for {
+		if _, err := os.Lstat(releasePath); err == nil {
+			return nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("observe release response-loss release marker %q: %w", releasePath, err)
+		}
+		select {
+		case <-deadline.C:
+			return fmt.Errorf("release response-loss barrier release marker %q did not appear within %s", releasePath, linuxSupervisorReleaseBarrierTimeout)
+		case <-poll.C:
+		}
+	}
+}
+
+func assertLinuxSupervisorBarrierPathAbsent(path string) error {
+	_, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err == nil {
+		return errors.New("path already exists")
+	}
+	return err
 }
 
 func writeLinuxSupervisorResponseV2(writer *os.File, request linuxSupervisorRequest, status string, target *LinuxPtraceProcess, launch linuxSupervisorLaunch, active uint32, message string) error {

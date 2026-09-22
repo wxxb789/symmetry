@@ -25,9 +25,11 @@ import (
 const linuxProductionContainmentReplayWitnessEnvironment = "SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_REPLAY_WITNESS"
 
 const (
-	linuxReplayProductionWitnessEnv = "SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_WITNESS"
-	linuxReplayDropOperationEnv     = "SYMMETRY_LINUX_SUPERVISOR_DROP_RESPONSE_ONCE"
-	linuxReplayDropMarkerEnv        = "SYMMETRY_LINUX_SUPERVISOR_DROP_RESPONSE_FIRED_PATH"
+	linuxReplayProductionWitnessEnv     = "SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_WITNESS"
+	linuxReplayDropOperationEnv         = "SYMMETRY_LINUX_SUPERVISOR_DROP_RESPONSE_ONCE"
+	linuxReplayDropMarkerEnv            = "SYMMETRY_LINUX_SUPERVISOR_DROP_RESPONSE_FIRED_PATH"
+	linuxReplayReleaseBarrierReachedEnv = "SYMMETRY_LINUX_SUPERVISOR_RELEASE_RESPONSE_LOSS_BARRIER_REACHED_FILE"
+	linuxReplayReleaseBarrierReleaseEnv = "SYMMETRY_LINUX_SUPERVISOR_RELEASE_RESPONSE_LOSS_BARRIER_RELEASE_FILE"
 )
 
 // TestProductionLinuxContainmentReplayWitness exercises the production daemon
@@ -77,6 +79,10 @@ type linuxReplayEvidence struct {
 	Stage               string                          `json:"stage"`
 	Metadata            linuxReplayMetadata             `json:"metadata"`
 	CaseRoot            string                          `json:"case_root"`
+	TaskID              string                          `json:"task_id,omitempty"`
+	RunID               string                          `json:"run_id,omitempty"`
+	Generation          int64                           `json:"generation,omitempty"`
+	JournalKey          string                          `json:"journal_key,omitempty"`
 	CrashStatuses       []linuxWitnessExitStatus        `json:"crash_statuses,omitempty"`
 	JournalSnapshots    []linuxWitnessJournalSnapshot   `json:"journal_snapshots"`
 	RawJournalSnapshots []linuxReplayRawJournalSnapshot `json:"raw_journal_snapshots"`
@@ -88,6 +94,10 @@ type linuxReplayEvidence struct {
 	ResponseDropOp      string                          `json:"response_drop_operation,omitempty"`
 	ResponseDropMarker  string                          `json:"response_drop_marker,omitempty"`
 	ResponseDropFired   bool                            `json:"response_drop_fired"`
+	BarrierReachedPath  string                          `json:"barrier_reached_path,omitempty"`
+	BarrierReleasePath  string                          `json:"barrier_release_path,omitempty"`
+	BarrierReached      string                          `json:"barrier_reached,omitempty"`
+	BarrierRelease      string                          `json:"barrier_release,omitempty"`
 	DuplicateStopMarker string                          `json:"duplicate_stop_marker,omitempty"`
 	DuplicateStopSeen   bool                            `json:"duplicate_stop_seen"`
 	RawOutput           map[string]string               `json:"raw_output,omitempty"`
@@ -165,7 +175,7 @@ func runLinuxStopResponseLostCase(t *testing.T, environment e2eEnvironment, daem
 	}
 	writeLinuxReplayEvidence(t, target.EvidencePath, evidence)
 
-	first := startLinuxReplayDaemonWitness(t, daemonBinary, target.ConfigPath, caseRoot, environment.enrollmentToken, "slow", "first", "stop", responseMarker)
+	first := startLinuxReplayDaemonWitness(t, daemonBinary, target.ConfigPath, caseRoot, environment.enrollmentToken, "slow", "first", "stop", responseMarker, "", "")
 	defer func() {
 		if first != nil && !first.waited {
 			first.stop(t)
@@ -215,7 +225,7 @@ func runLinuxStopResponseLostCase(t *testing.T, environment e2eEnvironment, daem
 	if err != nil {
 		t.Fatalf("stat journal before stop receipt reconstruction: %v", err)
 	}
-	second := startLinuxReplayDaemonWitness(t, daemonBinary, target.ConfigPath, caseRoot, "", "slow", "second", "", "")
+	second := startLinuxReplayDaemonWitness(t, daemonBinary, target.ConfigPath, caseRoot, "", "slow", "second", "", "", "", "")
 	defer func() {
 		if second != nil && !second.waited {
 			second.stop(t)
@@ -240,7 +250,7 @@ func runLinuxStopResponseLostCase(t *testing.T, environment e2eEnvironment, daem
 	evidence.RawJournalSnapshots = append(evidence.RawJournalSnapshots, linuxReplayRawJournalSnapshotFromFile(secondResult.File))
 	writeLinuxReplayEvidence(t, target.EvidencePath, evidence)
 
-	third := startLinuxReplayDaemonWitness(t, daemonBinary, target.ConfigPath, caseRoot, "", "slow", "third", "stop", duplicateStopMarker)
+	third := startLinuxReplayDaemonWitness(t, daemonBinary, target.ConfigPath, caseRoot, "", "slow", "third", "stop", duplicateStopMarker, "", "")
 	defer func() {
 		if third != nil && !third.waited {
 			third.stop(t)
@@ -274,6 +284,8 @@ func runLinuxReleaseResponseLostCase(t *testing.T, environment e2eEnvironment, d
 	t.Helper()
 	target := prepareLinuxWitnessTarget(t, environment, caseRoot, "release-response-lost")
 	responseMarker := filepath.Join(caseRoot, "release-response.fired")
+	barrierReachedPath := filepath.Join(caseRoot, "release-response-loss.reached")
+	barrierReleasePath := filepath.Join(caseRoot, "release-response-loss.release")
 	duplicateStopMarker := filepath.Join(caseRoot, "unexpected-stop.fired")
 	evidence := linuxReplayEvidence{
 		Version:             1,
@@ -283,34 +295,104 @@ func runLinuxReleaseResponseLostCase(t *testing.T, environment e2eEnvironment, d
 		CaseRoot:            caseRoot,
 		ResponseDropOp:      "release",
 		ResponseDropMarker:  responseMarker,
+		BarrierReachedPath:  barrierReachedPath,
+		BarrierReleasePath:  barrierReleasePath,
 		DuplicateStopMarker: duplicateStopMarker,
 		RawOutput:           map[string]string{},
 		Notes: []string{
-			"production helper release response is dropped once after the stop receipt is durable",
-			"restart must release from the exact existing receipt and must not issue a second stop",
+			"the daemon release request is written once, its response transport is dropped once, and automatic recovery is held behind a test-owned barrier",
+			"restart must replay the exact existing receipt, perform one release, and never issue a duplicate stop",
 		},
 	}
 	writeLinuxReplayEvidence(t, target.EvidencePath, evidence)
 
-	first := startLinuxReplayDaemonWitness(t, daemonBinary, target.ConfigPath, caseRoot, environment.enrollmentToken, "slow", "first", "release", responseMarker)
+	var (
+		first, second, third           *productionDaemonWitnessProcess
+		task                           protocol.Task
+		key                            state.RunKey
+		targetPID, helperPID           int
+		targetIdentity, helperIdentity string
+		childPID                       int
+		receipt                        authority.StopReceipt
+	)
 	defer func() {
+		if contents, err := os.ReadFile(barrierReachedPath); err == nil {
+			evidence.BarrierReached = string(contents)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			evidence.Notes = append(evidence.Notes, fmt.Sprintf("read release barrier reached marker during teardown: %v", err))
+		}
+		if contents, err := os.ReadFile(barrierReleasePath); err == nil {
+			evidence.BarrierRelease = string(contents)
+		} else if errors.Is(err, os.ErrNotExist) {
+			evidence.BarrierRelease = "<absent>"
+		} else {
+			evidence.Notes = append(evidence.Notes, fmt.Sprintf("read release barrier marker during teardown: %v", err))
+		}
+		if key.RunID != "" {
+			if current, found, err := readLinuxWitnessJournalForKey(target.StateDir, key); err == nil && found {
+				evidence.JournalSnapshots = append(evidence.JournalSnapshots, linuxWitnessJournalSnapshotFromFile(current))
+				evidence.RawJournalSnapshots = append(evidence.RawJournalSnapshots, linuxReplayRawJournalSnapshotFromFile(current))
+				if targetPID == 0 {
+					targetPID, targetIdentity, helperPID, helperIdentity = linuxWitnessOwnerIDs(current.Journal)
+				}
+			} else if err != nil {
+				evidence.Notes = append(evidence.Notes, fmt.Sprintf("read release journal during teardown: %v", err))
+			}
+		}
+		if targetPID > 0 {
+			evidence.ProcessSnapshots = append(evidence.ProcessSnapshots,
+				linuxWitnessProcessSnapshotAt("teardown_target", targetPID, targetIdentity),
+				linuxWitnessProcessSnapshotAt("teardown_descendant", childPID, ""),
+				linuxWitnessProcessSnapshotAt("teardown_helper", helperPID, helperIdentity))
+		}
+		evidence.RawOutput = linuxWitnessLogs(first, second)
+		for path, contents := range linuxWitnessLogs(third, nil) {
+			evidence.RawOutput[path] = contents
+		}
+		if evidence.Stage != "release_replayed_clear" {
+			evidence.Notes = append(evidence.Notes, "teardown diagnostics captured without changing the failure outcome")
+		}
+		writeLinuxReplayEvidence(t, target.EvidencePath, evidence)
+
 		if first != nil && !first.waited {
 			first.stop(t)
 		}
+		if second != nil && !second.waited {
+			second.stop(t)
+		}
+		if third != nil && !third.waited {
+			third.stop(t)
+		}
 	}()
+
+	first = startLinuxReplayDaemonWitness(t, daemonBinary, target.ConfigPath, caseRoot, environment.enrollmentToken, "slow", "first", "release", responseMarker, barrierReachedPath, barrierReleasePath)
 	operator := newOperator(t, environment)
 	profile, workspace := profileAndWorkspace(t, target.ConfigPath)
-	task := submit(t, operator, daemonRun{profile: profile, workspace: workspace}, "linux-release-response-loss", "slow")
+	task = submit(t, operator, daemonRun{profile: profile, workspace: workspace}, "linux-release-response-loss", "slow")
+	evidence.TaskID = task.TaskID
 	file, err := waitForLinuxWitnessJournal(target.StateDir, "Linux release-response-loss authority", 45*time.Second, func(value linuxWitnessJournalFile) bool {
 		return value.Journal.ContainmentAuthority != nil && value.Journal.LocalState == "running"
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	targetPID, targetIdentity, helperPID, helperIdentity := linuxWitnessOwnerIDs(file.Journal)
-	childPID, err := waitForLinuxWitnessPIDMarker(target.DescendantMarker, 20*time.Second)
+	key = file.Journal.Key()
+	evidence.RunID = key.RunID
+	evidence.Generation = key.Generation
+	evidence.JournalKey = fmt.Sprintf("%s/%d", key.RunID, key.Generation)
+	targetPID, targetIdentity, helperPID, helperIdentity = linuxWitnessOwnerIDs(file.Journal)
+	childPID, err = waitForLinuxWitnessPIDMarker(target.DescendantMarker, 20*time.Second)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if filepath.Clean(barrierReachedPath) == filepath.Clean(barrierReleasePath) {
+		t.Fatalf("release response-loss barrier paths must be distinct: %q", barrierReachedPath)
+	}
+	if _, err := os.Lstat(barrierReachedPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("release response-loss reached marker before cancel = %v, want absent", err)
+	}
+	if _, err := os.Lstat(barrierReleasePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("release response-loss release marker before cancel = %v, want absent", err)
 	}
 	cancelTask(t, operator, task.TaskID)
 	receiptFile, err := waitForLinuxWitnessJournal(target.StateDir, "Linux stop receipt before release response loss", 30*time.Second, func(value linuxWitnessJournalFile) bool {
@@ -319,33 +401,57 @@ func runLinuxReleaseResponseLostCase(t *testing.T, environment e2eEnvironment, d
 	if err != nil {
 		t.Fatal(err)
 	}
-	receipt := requireLinuxReplayReceipt(t, receiptFile.Journal)
+	receipt = requireLinuxReplayReceipt(t, receiptFile.Journal)
 	assertLinuxReplayReceiptBeforeClear(t, receiptFile.Journal, receipt)
 	waitForLinuxReplayMarker(t, responseMarker, 20*time.Second)
+	if err := waitForLinuxWitnessMarker(barrierReachedPath, 20*time.Second); err != nil {
+		t.Fatalf("wait for release response-loss reached marker: %v", err)
+	}
+	reachedContents, err := os.ReadFile(barrierReachedPath)
+	if err != nil {
+		t.Fatalf("read release response-loss reached marker: %v", err)
+	}
+	evidence.BarrierReached = string(reachedContents)
+	if !strings.Contains(evidence.BarrierReached, "operation=release\n") || !strings.Contains(evidence.BarrierReached, "receipt_present=true\n") || !strings.Contains(evidence.BarrierReached, "pid=") || !strings.Contains(evidence.BarrierReached, "time=") {
+		t.Fatalf("release response-loss reached marker = %q, want daemon identity and release receipt witness", evidence.BarrierReached)
+	}
+	if _, err := os.Lstat(barrierReleasePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("release response-loss barrier released before daemon crash = %v, want absent", err)
+	}
+	reachedFile, found, err := readLinuxWitnessJournalForKey(target.StateDir, key)
+	if err != nil || !found {
+		t.Fatalf("read journal after release response-loss reached marker: found=%t error=%v", found, err)
+	}
+	reachedReceipt := requireLinuxReplayReceipt(t, reachedFile.Journal)
+	if reachedReceipt != receipt {
+		t.Fatalf("release response-loss reached journal changed receipt: before=%#v reached=%#v", receipt, reachedReceipt)
+	}
 	firstCrash := killLinuxProductionDaemon(first)
-	evidence.Stage = "release_response_lost_after_receipt"
+	if firstCrash.RequestedSignal != "SIGKILL" || !firstCrash.Signaled || firstCrash.Signal != "SIGKILL" {
+		t.Fatalf("first daemon crash status = %#v, want SIGKILL", firstCrash)
+	}
+	evidence.Stage = "release_response_lost_before_recovery"
 	evidence.ResponseDropFired = true
 	evidence.ReceiptBeforeClear = linuxReplayReceiptSnapshotFromReceipt(receipt)
 	evidence.CrashStatuses = append(evidence.CrashStatuses, firstCrash)
-	evidence.JournalSnapshots = append(evidence.JournalSnapshots, linuxWitnessJournalSnapshotFromFile(file), linuxWitnessJournalSnapshotFromFile(receiptFile))
-	evidence.RawJournalSnapshots = append(evidence.RawJournalSnapshots, linuxReplayRawJournalSnapshotFromFile(file), linuxReplayRawJournalSnapshotFromFile(receiptFile))
+	evidence.JournalSnapshots = append(evidence.JournalSnapshots, linuxWitnessJournalSnapshotFromFile(file), linuxWitnessJournalSnapshotFromFile(receiptFile), linuxWitnessJournalSnapshotFromFile(reachedFile))
+	evidence.RawJournalSnapshots = append(evidence.RawJournalSnapshots, linuxReplayRawJournalSnapshotFromFile(file), linuxReplayRawJournalSnapshotFromFile(receiptFile), linuxReplayRawJournalSnapshotFromFile(reachedFile))
 	evidence.ProcessSnapshots = append(evidence.ProcessSnapshots,
-		linuxWitnessProcessSnapshotAt("target_after_release_response_loss", targetPID, targetIdentity),
-		linuxWitnessProcessSnapshotAt("descendant_after_release_response_loss", childPID, ""),
-		linuxWitnessProcessSnapshotAt("helper_after_release_response_loss", helperPID, helperIdentity),
+		linuxWitnessProcessSnapshotAt("target_before_first_daemon_crash", targetPID, targetIdentity),
+		linuxWitnessProcessSnapshotAt("descendant_before_first_daemon_crash", childPID, ""),
+		linuxWitnessProcessSnapshotAt("helper_before_first_daemon_crash", helperPID, helperIdentity),
 	)
 	writeLinuxReplayEvidence(t, target.EvidencePath, evidence)
+	if err := os.WriteFile(barrierReleasePath, []byte("released\n"), 0o600); err != nil {
+		t.Fatalf("release Linux response-loss daemon barrier: %v", err)
+	}
+	evidence.BarrierRelease = "released\n"
 
 	beforeInfo, err := os.Stat(receiptFile.Path)
 	if err != nil {
 		t.Fatalf("stat journal before release replay: %v", err)
 	}
-	second := startLinuxReplayDaemonWitness(t, daemonBinary, target.ConfigPath, caseRoot, "", "slow", "second", "stop", duplicateStopMarker)
-	defer func() {
-		if second != nil && !second.waited {
-			second.stop(t)
-		}
-	}()
+	second = startLinuxReplayDaemonWitness(t, daemonBinary, target.ConfigPath, caseRoot, "", "slow", "second", "stop", duplicateStopMarker, "", "")
 	secondKill := make(chan linuxReplayKillResult, 1)
 	go func() {
 		secondKill <- waitAndKillLinuxReplayDaemon(second, target.StateDir, file.Journal.Key(), beforeInfo.ModTime())
@@ -367,12 +473,7 @@ func runLinuxReleaseResponseLostCase(t *testing.T, environment e2eEnvironment, d
 	evidence.RawJournalSnapshots = append(evidence.RawJournalSnapshots, linuxReplayRawJournalSnapshotFromFile(secondResult.File))
 	writeLinuxReplayEvidence(t, target.EvidencePath, evidence)
 
-	third := startLinuxReplayDaemonWitness(t, daemonBinary, target.ConfigPath, caseRoot, "", "slow", "third", "", "")
-	defer func() {
-		if third != nil && !third.waited {
-			third.stop(t)
-		}
-	}()
+	third = startLinuxReplayDaemonWitness(t, daemonBinary, target.ConfigPath, caseRoot, "", "slow", "third", "", "", "", "")
 	if err := waitForLinuxWitnessJournalReleased(target.StateDir, file.Journal.Key(), 45*time.Second); err != nil {
 		t.Fatalf("release replay clear: %v", err)
 	}
@@ -390,14 +491,22 @@ func runLinuxReleaseResponseLostCase(t *testing.T, environment e2eEnvironment, d
 	}
 	waitForTask(t, operator, task.TaskID, 45*time.Second, func(value protocol.Task) bool { return value.State == "cancelled" })
 	evidence.Stage = "release_replayed_clear"
-	evidence.ClearObserved = true
+	finalSnapshots, finalAbsent := linuxReplayReleasedSnapshot(t, target.StateDir, key)
+	evidence.JournalSnapshots = append(evidence.JournalSnapshots, finalSnapshots...)
+	if finalFile, found, err := readLinuxWitnessJournalForKey(target.StateDir, key); err == nil && found {
+		evidence.RawJournalSnapshots = append(evidence.RawJournalSnapshots, linuxReplayRawJournalSnapshotFromFile(finalFile))
+	}
+	evidence.ClearObserved = finalAbsent || len(finalSnapshots) > 0
 	evidence.DuplicateStopSeen = linuxReplayMarkerExists(duplicateStopMarker)
 	evidence.RawOutput = linuxWitnessLogs(first, second)
+	for path, contents := range linuxWitnessLogs(third, nil) {
+		evidence.RawOutput[path] = contents
+	}
 	third.stop(t)
 	writeLinuxReplayEvidence(t, target.EvidencePath, evidence)
 }
 
-func startLinuxReplayDaemonWitness(t *testing.T, binary, configPath, workDir, enrollmentToken, agentMode, label, dropOperation, markerPath string) *productionDaemonWitnessProcess {
+func startLinuxReplayDaemonWitness(t *testing.T, binary, configPath, workDir, enrollmentToken, agentMode, label, dropOperation, markerPath, barrierReachedPath, barrierReleasePath string) *productionDaemonWitnessProcess {
 	t.Helper()
 	stdoutPath := filepath.Join(workDir, label+"-daemon.stdout.log")
 	stderrPath := filepath.Join(workDir, label+"-daemon.stderr.log")
@@ -419,7 +528,7 @@ func startLinuxReplayDaemonWitness(t *testing.T, binary, configPath, workDir, en
 		_ = stderr.Close()
 		t.Fatalf("configure Linux replay daemon: %v", err)
 	}
-	command.Env = linuxReplayDaemonEnvironment(enrollmentToken, agentMode, dropOperation, markerPath)
+	command.Env = linuxReplayDaemonEnvironment(enrollmentToken, agentMode, dropOperation, markerPath, barrierReachedPath, barrierReleasePath)
 	if err := command.Start(); err != nil {
 		_ = stdout.Close()
 		_ = stderr.Close()
@@ -428,7 +537,7 @@ func startLinuxReplayDaemonWitness(t *testing.T, binary, configPath, workDir, en
 	return &productionDaemonWitnessProcess{command: command, stdout: stdout, stderr: stderr}
 }
 
-func linuxReplayDaemonEnvironment(enrollmentToken, agentMode, dropOperation, markerPath string) []string {
+func linuxReplayDaemonEnvironment(enrollmentToken, agentMode, dropOperation, markerPath, barrierReachedPath, barrierReleasePath string) []string {
 	environment := witnessEnvironment(enrollmentToken, agentMode)
 	set := func(key, value string) {
 		prefix := key + "="
@@ -453,10 +562,16 @@ func linuxReplayDaemonEnvironment(enrollmentToken, agentMode, dropOperation, mar
 	remove(linuxReplayProductionWitnessEnv)
 	remove(linuxReplayDropOperationEnv)
 	remove(linuxReplayDropMarkerEnv)
+	remove(linuxReplayReleaseBarrierReachedEnv)
+	remove(linuxReplayReleaseBarrierReleaseEnv)
 	if dropOperation != "" {
 		set(linuxReplayProductionWitnessEnv, "1")
 		set(linuxReplayDropOperationEnv, dropOperation)
 		set(linuxReplayDropMarkerEnv, markerPath)
+	}
+	if barrierReachedPath != "" && barrierReleasePath != "" {
+		set(linuxReplayReleaseBarrierReachedEnv, barrierReachedPath)
+		set(linuxReplayReleaseBarrierReleaseEnv, barrierReleasePath)
 	}
 	return environment
 }
