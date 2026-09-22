@@ -441,13 +441,8 @@ func TestLinuxSupervisorMirrorRequiresHelperDeath(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("helper did not exit after kill")
 	}
-	if err := supervisor.mirror.Terminate(true); err != nil && !errors.Is(err, unix.ESRCH) {
-		t.Fatalf("mirror terminate before adopted-child reap = %v", err)
-	}
-	leader.reap(t)
-	child.reap(t)
 	if err := supervisor.Terminate(true); err != nil {
-		t.Fatalf("mirror Terminate() error = %v", err)
+		t.Fatalf("mirror Terminate() with adopted children = %v", err)
 	}
 	if _, ok := supervisor.ContainmentStopReceipt(); !ok {
 		t.Fatal("mirror stop did not produce an exact receipt")

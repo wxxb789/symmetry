@@ -137,7 +137,6 @@ type processGroup struct {
 	monitorInitialScanDone     chan struct{}
 	monitorScanRequest         chan chan descendantMonitorScanResult
 	monitorTerminalReason      descendantMonitorTerminalReason
-	monitorOwnerStopRequested  bool
 	initialScanResult          descendantMonitorScanResult
 	initialScanErr             error
 	initialScanComplete        bool
@@ -150,6 +149,7 @@ type processGroup struct {
 	closeCompleted             bool
 	closeErr                   error
 	ownerReleasePending        bool
+	skipNextCloseSignal        bool
 }
 
 func (group *processGroup) monitorReaders() (func(int) (linuxProcessStat, error), func(int) ([]int, error)) {
@@ -371,9 +371,6 @@ func (group *processGroup) stopDescendantMonitor(deadline time.Time) error {
 	if group == nil || group.monitorStop == nil {
 		return nil
 	}
-	group.mutex.Lock()
-	group.monitorOwnerStopRequested = true
-	group.mutex.Unlock()
 	group.recordDescendantMonitorTerminalReason(descendantMonitorTerminalOwnerStop)
 	group.monitorStopOnce.Do(func() { close(group.monitorStop) })
 	remaining := time.Until(deadline)
@@ -567,6 +564,8 @@ func (group *processGroup) closeUntil(deadline time.Time) error {
 	alreadyUnproven := group.descendantScanLost
 	monitorPresent := group.monitorStop != nil
 	anchorCaptured := group.anchorCaptured
+	skipInitialSignal := group.skipNextCloseSignal
+	group.skipNextCloseSignal = false
 	group.mutex.Unlock()
 
 	if alreadyUnproven {
@@ -591,22 +590,19 @@ func (group *processGroup) closeUntil(deadline time.Time) error {
 		if !initialLeaderPresent && monitorPresent {
 			group.mutex.Lock()
 			uncertain := !group.descendantScanCompleted || group.descendantScanLost || len(group.escapedDescendants) > 0
-			ownerStopped := group.monitorOwnerStopRequested
 			group.mutex.Unlock()
 			if uncertain {
 				return group.finishUnprovenClose(deadline, nil)
 			}
-			if !ownerStopped {
-				if handled, err := group.closeNaturalExit(deadline); handled {
-					return err
-				}
-			}
 		}
 	}
 
-	group.mutex.Lock()
-	initialSignalErr := group.terminateLocked(true)
-	group.mutex.Unlock()
+	var initialSignalErr error
+	if !skipInitialSignal {
+		group.mutex.Lock()
+		initialSignalErr = group.terminateLocked(true)
+		group.mutex.Unlock()
+	}
 	if initialSignalErr != nil && !errors.Is(initialSignalErr, unix.ESRCH) {
 		stopErr = fmt.Errorf("terminate process group %d during containment close: %w", group.pid, initialSignalErr)
 	} else if anchorCaptured {
@@ -725,74 +721,6 @@ func (group *processGroup) finishUnprovenClose(deadline time.Time, cause error) 
 		cause = errors.Join(cause, monitorErr)
 	}
 	return group.closeContainmentUnproven(cause)
-}
-
-// closeNaturalExit accepts a monitor-owned clean leader-absent terminal scan
-// as the stop proof. This path intentionally avoids a second SIGKILL and the
-// identity probe that can race with PID reuse after a natural exit. An owner
-// that explicitly stopped the monitor does not use this shortcut; its normal
-// fenced close path remains responsible for the final readback.
-func (group *processGroup) closeNaturalExit(deadline time.Time) (bool, error) {
-	group.mutex.Lock()
-	if group.monitorOwnerStopRequested {
-		group.mutex.Unlock()
-		return false, nil
-	}
-	group.mutex.Unlock()
-
-	result, requestErr := group.requestDescendantMonitorScan(deadline)
-	if requestErr != nil {
-		group.mutex.Lock()
-		group.descendantScanLost = true
-		group.mutex.Unlock()
-		monitorErr := group.stopDescendantMonitor(deadline)
-		if monitorErr != nil {
-			requestErr = errors.Join(requestErr, monitorErr)
-		}
-		return true, group.closeContainmentUnproven(requestErr)
-	}
-
-	group.mutex.Lock()
-	clean := result.stopped &&
-		result.terminalReason == descendantMonitorTerminalCleanLeaderAbsent &&
-		group.descendantScanCompleted &&
-		!group.descendantScanLost &&
-		len(group.escapedDescendants) == 0
-	group.mutex.Unlock()
-	if !clean {
-		cause := result.scanErr
-		if cause == nil {
-			cause = fmt.Errorf("%w: natural leader exit lacked a clean descendant terminal proof", ErrLinuxDescendantContainmentUnproven)
-		}
-		group.mutex.Lock()
-		group.descendantScanLost = true
-		group.mutex.Unlock()
-		monitorErr := group.stopDescendantMonitor(deadline)
-		if monitorErr != nil {
-			cause = errors.Join(cause, monitorErr)
-		}
-		return true, group.closeContainmentUnproven(cause)
-	}
-
-	if monitorErr := group.stopDescendantMonitor(deadline); monitorErr != nil {
-		group.mutex.Lock()
-		group.descendantScanLost = true
-		group.mutex.Unlock()
-		return true, group.closeContainmentUnproven(monitorErr)
-	}
-
-	group.mutex.Lock()
-	if group.monitorTerminalReason != descendantMonitorTerminalCleanLeaderAbsent ||
-		!group.descendantScanCompleted || group.descendantScanLost || len(group.escapedDescendants) > 0 {
-		group.descendantScanLost = true
-		group.mutex.Unlock()
-		return true, group.closeContainmentUnproven(nil)
-	}
-	group.closeCompleted = true
-	group.closeErr = errors.Join(nil, group.releasePIDFDLocked())
-	err := group.closeErr
-	group.mutex.Unlock()
-	return true, err
 }
 
 func (group *processGroup) probeGroupExitLocked(ctx context.Context, deadline time.Time, previousLeaderPresent bool) error {

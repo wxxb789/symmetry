@@ -256,6 +256,9 @@ func runLinuxInjectedScanFailureWitness(t *testing.T, environment e2eEnvironment
 	t.Setenv(linuxScanFailureTriggerEnv, triggerPath)
 	t.Setenv(linuxScanFailureFiredEnv, firedPath)
 	target := prepareLinuxWitnessTarget(t, environment, caseRoot, "scan-failure")
+	if err := os.WriteFile(filepath.Join(caseRoot, "linux-containment-target.sh"), []byte(linuxNegativeScanFailureTargetScript(target.TargetMarker, target.DescendantMarker)), 0o700); err != nil {
+		t.Fatalf("write scan-failure target: %v", err)
+	}
 	evidence := linuxNegativeWitnessEvidence{Version: 1, Case: "injected_descendant_scan_failure", Status: "initialized", Metadata: metadata, CaseRoot: caseRoot, Assertions: map[string]bool{}}
 	writeLinuxNegativeWitnessEvidence(t, target.EvidencePath, evidence)
 	if err := os.WriteFile(triggerPath, []byte("trigger\n"), 0o600); err != nil {

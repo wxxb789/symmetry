@@ -345,6 +345,7 @@ type linuxSupervisor struct {
 	receipt               *authority.StopReceipt
 	closeErr              error
 	responseDropTriggered bool
+	responseLossPending   bool
 	waitCode              int
 	waitErr               error
 	waitDone              chan struct{}
@@ -932,14 +933,31 @@ func (supervisor *linuxSupervisor) stop(operation string) error {
 		supervisor.mu.Unlock()
 		return nil
 	}
+	responseLossPending := supervisor.responseLossPending
 	helperDead := channelClosedV2(supervisor.helperDone)
 	supervisor.mu.Unlock()
+	if responseLossPending {
+		return supervisor.recoverResponseLossStop()
+	}
 	if helperDead {
 		return supervisor.stopWithMirror()
 	}
 	response, err := supervisor.request(operation, 0, 0)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrLinuxSupervisorStopUnproven, err)
+		if errors.Is(err, ErrLinuxSupervisorResponseLost) {
+			supervisor.mu.Lock()
+			supervisor.responseLossPending = true
+			supervisor.mu.Unlock()
+			if recoveryErr := supervisor.recoverResponseLossStop(); recoveryErr == nil {
+				return nil
+			} else {
+				return errors.Join(fmt.Errorf("%w: %w", ErrLinuxSupervisorStopUnproven, err), recoveryErr)
+			}
+		}
+		if supervisor.containmentUnprovenCallback != nil {
+			_ = supervisor.containmentUnprovenCallback()
+		}
+		return fmt.Errorf("%w: %w", ErrLinuxSupervisorStopUnproven, err)
 	}
 	if response.Status != "stopped" || response.ActiveProcesses != 0 {
 		return fmt.Errorf("%w: helper returned %q with %d active processes", ErrLinuxSupervisorStopUnproven, response.Status, response.ActiveProcesses)
@@ -961,6 +979,42 @@ func (supervisor *linuxSupervisor) stop(operation string) error {
 	return nil
 }
 
+// recoverResponseLossStop replays a committed stop through the authenticated
+// recovery endpoint. The normal response pipe may have been closed after the
+// helper applied the request, so later Terminate/Close retries must retain this
+// typed recovery boundary instead of degrading to helper-exited.
+func (supervisor *linuxSupervisor) recoverResponseLossStop() error {
+	if supervisor == nil {
+		return ErrLinuxSupervisorHelperExited
+	}
+	value := supervisor.ContainmentAuthority()
+	if value == nil {
+		return fmt.Errorf("%w: Linux supervisor authority is unavailable", ErrLinuxSupervisorStopUnproven)
+	}
+	receipt, err := StopPersistedLinuxSupervisor(*value)
+	if err != nil {
+		return errors.Join(ErrLinuxSupervisorStopUnproven, ErrLinuxSupervisorResponseLost, err)
+	}
+	if !receipt.ValidFor(*value) {
+		return fmt.Errorf("%w: response-loss recovery returned invalid stop receipt", ErrLinuxSupervisorStopUnproven)
+	}
+	if err := supervisor.verifyMirrorObservation(); err != nil {
+		if supervisor.containmentUnprovenCallback != nil {
+			_ = supervisor.containmentUnprovenCallback()
+		}
+		return fmt.Errorf("%w: response-loss mirror proof: %w", ErrLinuxSupervisorStopUnproven, err)
+	}
+	supervisor.mu.Lock()
+	supervisor.receipt = &receipt
+	supervisor.authority.StopReceipt = &receipt
+	supervisor.handoff.StopReceipt = &receipt
+	supervisor.stopped = true
+	supervisor.pidfd = -1
+	supervisor.responseLossPending = false
+	supervisor.mu.Unlock()
+	return nil
+}
+
 func (supervisor *linuxSupervisor) stopWithMirror() error {
 	supervisor.mu.Lock()
 	mirror := supervisor.mirror
@@ -971,6 +1025,23 @@ func (supervisor *linuxSupervisor) stopWithMirror() error {
 		return ErrLinuxSupervisorStopUnproven
 	}
 	deadline := containmentDeadline(context.Background())
+	if err := mirror.Terminate(true); err != nil && !errors.Is(err, unix.ESRCH) {
+		if supervisor.containmentUnprovenCallback != nil {
+			_ = supervisor.containmentUnprovenCallback()
+		}
+		return fmt.Errorf("%w: mirror signal: %w", ErrLinuxSupervisorStopUnproven, err)
+	}
+	mirror.mutex.Lock()
+	mirror.skipNextCloseSignal = true
+	mirror.mutex.Unlock()
+	if mirror.anchorCaptured && mirror.anchor.pgrp > 0 {
+		if err := reapLinuxProcessGroupChildren(mirror.anchor, deadline); err != nil {
+			if supervisor.containmentUnprovenCallback != nil {
+				_ = supervisor.containmentUnprovenCallback()
+			}
+			return fmt.Errorf("%w: mirror reap: %w", ErrLinuxSupervisorStopUnproven, err)
+		}
+	}
 	if err := mirror.closeUntil(deadline); err != nil {
 		mirror.mutex.Lock()
 		mirrorFD := mirror.fd
