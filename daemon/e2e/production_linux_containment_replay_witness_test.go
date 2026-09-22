@@ -185,11 +185,11 @@ func runLinuxStopResponseLostCase(t *testing.T, environment e2eEnvironment, daem
 	if err != nil {
 		t.Fatal(err)
 	}
-	cancelTask(t, operator, task.TaskID)
-	waitForLinuxReplayMarker(t, responseMarker, 20*time.Second)
 	recoveryBarrierMarker := filepath.Join(caseRoot, "recovery-barrier.fired")
 	recoveryBarrier := armLinuxReplayRecoveryBarrier(t, file.Journal.ContainmentAuthority, recoveryBarrierMarker)
 	defer recoveryBarrier.release(t)
+	cancelTask(t, operator, task.TaskID)
+	waitForLinuxReplayMarker(t, responseMarker, 20*time.Second)
 	lostFile, found, err := readLinuxWitnessJournalForKey(target.StateDir, file.Journal.Key())
 	if err != nil || !found {
 		t.Fatalf("read journal after dropped stop response: found=%t error=%v", found, err)
