@@ -247,3 +247,23 @@ The same review found a P2: the recovery endpoint directory was chosen by
 existence only, so an existing but unwritable `TMPDIR` blocked the `/tmp`
 fallback and the helper failed to bind. The directory must now accept a probe
 file before it is chosen.
+
+## Worker-Thread Children (2026-09-24)
+
+CI run `36032576906` (subject `355f46b`) failed
+`TestProcessGroupCloseRejectsLiveSetSIDDescendant` once: the monitor did not
+observe the `setsid` child within 15 s. The test passed 40 of 40 local runs.
+The cause was a coverage gap that already existed at base `568c940`.
+`/proc/<pid>/task/<tid>/children` lists only the children forked by that
+thread, and the scan read only the main thread's file. Go and Node fork from
+worker threads, so their children, including observed-escape candidates, were
+not visible to the scan. This weakened the observed-escape guarantee for the
+original group.
+
+The reader now lists every thread under `/proc/<pid>/task` and merges each
+thread's children. A worker thread that exits mid-read is skipped, because
+its children are reparented to a remaining thread of the same process, which
+is still read. Failure to read the main thread still follows the existing
+leader-absence rules. The regression test forks from a thread other than the
+main thread. It failed 5 of 5 runs with the old reader and passes with the
+new one.
