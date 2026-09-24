@@ -2533,3 +2533,36 @@ func TestReadLinuxProcessChildrenIncludesWorkerThreadChildren(t *testing.T) {
 	}
 	t.Fatalf("readLinuxProcessChildrenFile(%d) = %v, want worker-thread child %d", command.Process.Pid, children, childPID)
 }
+
+// An exiting worker thread hands its children to the main thread. The main
+// thread is read last so a child moved during the pass is still observed.
+func TestReadLinuxThreadChildrenSeesChildMovedFromExitingWorker(t *testing.T) {
+	const pid, worker, child = 100, 101, 200
+	for _, workerErr := range []error{nil, os.ErrNotExist} {
+		t.Run(fmt.Sprintf("worker read error %v", workerErr), func(t *testing.T) {
+			moved := false
+			readTask := func(_ int, tid int) ([]byte, error) {
+				switch {
+				case tid == worker && !moved:
+					moved = true
+					if workerErr != nil {
+						return nil, workerErr
+					}
+					return nil, nil
+				case tid == pid && moved:
+					return []byte(strconv.Itoa(child)), nil
+				}
+				return nil, nil
+			}
+			children, err := readLinuxThreadChildren(pid, func(int) ([]int, error) { return []int{pid, worker}, nil }, readTask)
+			if err != nil || !slices.Contains(children, child) {
+				t.Fatalf("readLinuxThreadChildren() = (%v, %v), want child %d moved to the main thread", children, err, child)
+			}
+		})
+	}
+	if _, err := readLinuxThreadChildren(pid, func(int) ([]int, error) { return []int{pid}, nil }, func(int, int) ([]byte, error) {
+		return nil, os.ErrNotExist
+	}); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing main thread error = %v, want not-exist for leader-absence handling", err)
+	}
+}

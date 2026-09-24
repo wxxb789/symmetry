@@ -1251,8 +1251,12 @@ func readLinuxProcessChildrenFile(pid int) ([]int, error) {
 	if pid <= 0 {
 		return nil, errors.New("process pid must be positive")
 	}
-	// Each task file lists only the children that thread forked, and runtimes
-	// such as Go and Node fork from worker threads. Read every thread's list.
+	return readLinuxThreadChildren(pid, readLinuxTaskIDs, func(pid, tid int) ([]byte, error) {
+		return readLinuxProcFile(fmt.Sprintf("/proc/%d/task/%d/children", pid, tid))
+	})
+}
+
+func readLinuxTaskIDs(pid int) ([]int, error) {
 	tasks, err := os.ReadDir(fmt.Sprintf("/proc/%d/task", pid))
 	if err != nil {
 		if errors.Is(err, syscall.ESRCH) {
@@ -1260,16 +1264,41 @@ func readLinuxProcessChildrenFile(pid int) ([]int, error) {
 		}
 		return nil, fmt.Errorf("read /proc/%d/task: %w", pid, err)
 	}
-	var children []int
+	tids := make([]int, 0, len(tasks))
 	for _, task := range tasks {
 		tid, parseErr := strconv.Atoi(task.Name())
 		if parseErr != nil || tid <= 0 {
 			return nil, fmt.Errorf("parse process %d task %q: invalid thread id", pid, task.Name())
 		}
-		value, err := readLinuxProcFile(fmt.Sprintf("/proc/%d/task/%d/children", pid, tid))
+		tids = append(tids, tid)
+	}
+	return tids, nil
+}
+
+// readLinuxThreadChildren merges the children of every thread of pid. Each
+// task file lists only the children that thread forked, and Go and Node fork
+// from worker threads. A thread that exits hands its children to the main
+// thread while the main thread runs, so reading the main thread last sees any
+// child moved during the pass, including from a worker that vanished.
+// ponytail: a main thread that exits while workers still run hands children
+// to a worker that may already have been read; Go and Node keep the main
+// thread alive. Treat a zombie main thread as unproven if a harness needs it.
+func readLinuxThreadChildren(pid int, listTasks func(int) ([]int, error), readTask func(pid, tid int) ([]byte, error)) ([]int, error) {
+	tids, err := listTasks(pid)
+	if err != nil {
+		return nil, err
+	}
+	ordered := make([]int, 0, len(tids)+1)
+	for _, tid := range tids {
+		if tid != pid {
+			ordered = append(ordered, tid)
+		}
+	}
+	ordered = append(ordered, pid)
+	var children []int
+	for _, tid := range ordered {
+		value, err := readTask(pid, tid)
 		if errors.Is(err, os.ErrNotExist) && tid != pid {
-			// A worker thread that exits hands its children to another thread
-			// of the same process, which is still listed.
 			continue
 		}
 		if err != nil {
