@@ -187,13 +187,22 @@ The daemon now settles such a cancel without weakening the stop proof:
   proves the recorded process before it writes the receipt.
 - Without a stop witness the command stays unacknowledged.
 
-After the change the local scenario passed 5 of 6 runs. Owner decision
-(2026-09-24): ship the fix and record the remaining window as a known
-limitation. When cleanup deletes the stale journal before the cancel arrives
-(observed gap about 30 ms), no local owner is left to prove the stop. The
-journal read fails, the cancel stays unacknowledged, and Control's reaper
-remains the fallback. This is fail-closed: no receipt is published without a
-proven process stop.
+After the change the local scenario passed 5 of 6 runs. A later instrumented
+repro at `f85d15b` (8 runs: 3 passed, 5 failed) showed that every failure had a
+positive exact process-exit witness. The failures came from two cleanup races:
+
+- in 3 runs, cleanup deleted the stale journal before the cancel arrived, so
+  `handleCommand` could not load it;
+- in 2 runs, the cancel had already loaded the stale journal when cleanup
+  deleted it, and the receipt write then failed.
+
+Owner decision (2026-09-24): keep a stale journal with no terminal state
+until its lease expires. Control can send a cancel only until then; after
+expiry its lease reaper settles the Run. `cleanupPending` now defers such a
+journal and the cleanup retry deletes it after expiry. The cost is that the
+stale journal and its workspace stay at most one lease period longer. Every
+path stays fail-closed: no receipt is published without a proven process
+stop.
 
 ## Scan Exit-Race Boundary (2026-09-24)
 
