@@ -409,7 +409,10 @@ func StartLinuxSupervisor(spec LinuxSupervisorStartSpec) (*linuxSupervisor, erro
 		return nil, fmt.Errorf("generate Linux supervisor secret: %w", err)
 	}
 	secretDigest := sha256.Sum256([]byte(secret))
-	endpoint := filepath.Join(os.TempDir(), "symmetry-linux-supervisor-"+jobID+".sock")
+	endpoint, err := linuxSupervisorEndpointPath(jobID, os.TempDir(), "/tmp")
+	if err != nil {
+		return nil, err
+	}
 	_ = os.Remove(endpoint)
 	ownerContext := spec.OwnerContext + "|endpoint=" + endpoint
 	if len(ownerContext) > 4096 {
@@ -2687,6 +2690,27 @@ func credentialsPID(credentials *unix.Ucred) int {
 	return int(credentials.Pid)
 }
 
+// linuxSupervisorEndpointMax is sizeof(sun_path); the path must also fit its
+// terminating NUL.
+const linuxSupervisorEndpointMax = 108
+
+// linuxSupervisorEndpointPath places the recovery socket in the first existing
+// directory whose path fits sun_path. A long TMPDIR or an image without /tmp
+// would otherwise fail only inside the helper, after the target is launched.
+func linuxSupervisorEndpointPath(jobID string, directories ...string) (string, error) {
+	name := "symmetry-linux-supervisor-" + jobID + ".sock"
+	for _, directory := range directories {
+		endpoint := filepath.Join(directory, name)
+		if !filepath.IsAbs(endpoint) || len(endpoint) >= linuxSupervisorEndpointMax {
+			continue
+		}
+		if info, err := os.Stat(directory); err == nil && info.IsDir() {
+			return endpoint, nil
+		}
+	}
+	return "", fmt.Errorf("Linux supervisor recovery endpoint needs an existing directory with a path shorter than %d bytes; tried %q", linuxSupervisorEndpointMax-len(name)-1, directories)
+}
+
 func linuxSupervisorEndpoint(ownerContext string) (string, error) {
 	marker := "|endpoint="
 	index := strings.LastIndex(ownerContext, marker)
@@ -2694,7 +2718,7 @@ func linuxSupervisorEndpoint(ownerContext string) (string, error) {
 		return "", errors.New("Linux supervisor owner context has no recovery endpoint")
 	}
 	endpoint := strings.TrimSpace(ownerContext[index+len(marker):])
-	if endpoint == "" || len(endpoint) >= 108 || filepath.IsAbs(endpoint) == false {
+	if endpoint == "" || len(endpoint) >= linuxSupervisorEndpointMax || filepath.IsAbs(endpoint) == false {
 		return "", errors.New("Linux supervisor recovery endpoint is invalid")
 	}
 	return endpoint, nil

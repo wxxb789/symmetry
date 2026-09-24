@@ -888,6 +888,34 @@ func TestLinuxSupervisorMirrorDescendantScanFailureDoesNotProduceReceipt(t *test
 	}
 }
 
+func TestLinuxSupervisorEndpointPathSkipsMissingAndLongDirectories(t *testing.T) {
+	jobID := strings.Repeat("a", authority.TokenBytes*2)
+	usable, err := os.MkdirTemp("/tmp", "sym")
+	if err != nil {
+		t.Skipf("create short temp directory: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(usable) })
+	long := filepath.Join(usable, strings.Repeat("d", linuxSupervisorEndpointMax))
+	if err := os.MkdirAll(long, 0o700); err != nil {
+		t.Skipf("create long directory: %v", err)
+	}
+	missing := filepath.Join(usable, "missing")
+
+	endpoint, err := linuxSupervisorEndpointPath(jobID, missing, long, "relative", usable)
+	if err != nil {
+		t.Fatalf("linuxSupervisorEndpointPath() = %v", err)
+	}
+	if filepath.Dir(endpoint) != usable {
+		t.Fatalf("endpoint = %q, want it under %q", endpoint, usable)
+	}
+	if _, err := linuxSupervisorEndpoint("owner|endpoint=" + endpoint); err != nil {
+		t.Fatalf("chosen endpoint is not accepted by recovery parsing: %v", err)
+	}
+	if _, err := linuxSupervisorEndpointPath(jobID, missing, long); err == nil {
+		t.Fatal("linuxSupervisorEndpointPath() without a usable directory = nil error")
+	}
+}
+
 func TestLinuxSupervisorMirrorObservationRequiresCleanCompletedScan(t *testing.T) {
 	value := testLinuxSupervisorAuthority(t)
 	newSupervisor := func(mirror *processGroup) *linuxSupervisor {
