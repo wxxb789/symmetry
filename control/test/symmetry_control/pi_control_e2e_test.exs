@@ -4256,9 +4256,17 @@ defmodule SymmetryControl.PiControlE2ETest do
 
   defp valid_native_process_identity?(identity) do
     case :os.type() do
-      {:win32, _} -> Regex.match?(~r/^windows:\d+:[0-9a-f]{16}$/, identity)
-      {:unix, :linux} -> Regex.match?(~r/^linux:[^:\s]+:\d+:\d+$/, identity)
-      _ -> false
+      {:win32, _} ->
+        Regex.match?(~r/^windows:\d+:[0-9a-f]{16}$/, identity)
+
+      {:unix, :linux} ->
+        Regex.match?(
+          ~r/^linux:v2:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:\d+:\d+:\d+$/,
+          identity
+        )
+
+      _ ->
+        false
     end
   end
 
@@ -4431,6 +4439,10 @@ defmodule SymmetryControl.PiControlE2ETest do
 
   defp linux_native_process_identity(os_pid) do
     with {:ok, boot_id} <- File.read("/proc/sys/kernel/random/boot_id"),
+         {:ok, pid_namespace} <- File.read_link("/proc/#{os_pid}/ns/pid"),
+         [_, pid_namespace_inode] <-
+           Regex.run(~r/\Apid:\[(\d+)\]\z/, pid_namespace) ||
+             {:error, :invalid_pid_namespace_link},
          {:ok, stat} <- File.read("/proc/#{os_pid}/stat"),
          {:ok, start_time} <- unix_process_start_time(stat) do
       boot_id = String.trim(boot_id)
@@ -4438,7 +4450,7 @@ defmodule SymmetryControl.PiControlE2ETest do
       if boot_id == "" do
         {:error, "Linux boot ID is empty"}
       else
-        {:ok, "linux:#{boot_id}:#{os_pid}:#{start_time}"}
+        {:ok, "linux:v2:#{boot_id}:#{pid_namespace_inode}:#{os_pid}:#{start_time}"}
       end
     else
       {:error, reason} -> {:error, inspect(reason)}
