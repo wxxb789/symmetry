@@ -261,9 +261,21 @@ not visible to the scan. This weakened the observed-escape guarantee for the
 original group.
 
 The reader now lists every thread under `/proc/<pid>/task` and merges each
-thread's children. A worker thread that exits mid-read is skipped, because
-its children are reparented to a remaining thread of the same process, which
-is still read. Failure to read the main thread still follows the existing
+thread's children. It reads the main thread last. While the main thread runs,
+an exiting thread hands its children to the main thread, so reading it last
+sees any child moved during the pass, including from a worker that vanished
+mid-read. Failure to read the main thread still follows the existing
 leader-absence rules. The regression test forks from a thread other than the
 main thread. It failed 5 of 5 runs with the old reader and passes with the
 new one.
+
+The independent delta review (Codex `gpt-6-luna`, `xhigh`, subject
+`3f74f34`) rejected the first version, which read the main thread first. A
+worker that exited after the main thread was read moved its live `setsid`
+child to the main thread, so the pass missed it and `Close()` succeeded (10 of
+10 reproductions). With the main thread read last, the same reproduction
+fails closed in 10 of 10 runs with `descendant containment is unproven`.
+
+Known limit: if the main thread exits while worker threads still run,
+children can move to a worker that was already read. Go and Node keep the
+main thread alive, so this is out of scope for now.
