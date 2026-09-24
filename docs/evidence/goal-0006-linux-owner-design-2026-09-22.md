@@ -194,3 +194,47 @@ limitation. When cleanup deletes the stale journal before the cancel arrives
 journal read fails, the cancel stays unacknowledged, and Control's reaper
 remains the fallback. This is fail-closed: no receipt is published without a
 proven process stop.
+
+## Scan Exit-Race Boundary (2026-09-24)
+
+Commit `3267bd0` classifies a process that disappears during a `/proc` scan the
+same way as one that disappeared between two scans. procfs reports such a
+task as `ENOENT`, as `ESRCH` between open and read, or with pgrp/session `-1`
+after `release_task`. A vanished descendant is skipped because its subtree is
+no longer reachable from the leader. A vanished leader counts as absent only
+after an identity-bound re-read (PID, pgrp, session, start time) confirms it.
+Other read errors, a present leader returning `ENOENT`, identity changes, and
+observed escapes still fail closed. Before this change, strict mid-scan
+classification closed about a third of short runs with transient children as
+unproven.
+
+The independent Linux review (Codex `gpt-6-luna`, `xhigh`, subject
+`f85d15b`) rejected this rule as a P1. Its fault-injection test lets the
+leader children read return `ENOENT` while a live out-of-group process that
+no scan ever observed survives; `Close()` then succeeds. A boundary probe ran
+the same fixture at base `568c940` and at `f85d15b`:
+
+- leader reaped between scans, unseen live escape: `Close()` succeeds at both
+  revisions;
+- leader reaped mid-scan, unseen live escape: fails closed at `568c940`,
+  succeeds at `f85d15b`.
+
+In both variants the surviving process was never observed, so it is an
+unobserved escape. The Goal places that outside the verified boundary
+(`docs/goals/0006b-crash-safe-process-containment.md:19-22`). The mid-scan
+variant is no weaker than the between-scans variant the base already
+accepted.
+
+Owner decision (2026-09-24): keep the rule and state the boundary. The Binding
+Scope sentence "They never become a successful stop receipt through absence,
+`ESRCH`, or a numeric PID/PGID lookup" applies to observed escapes, scan
+failures, identity mismatches, helper loss, and unknown write outcomes. An
+`ENOENT` or `ESRCH` confirmed by the identity-bound re-read is an observed
+exit, not a scan failure. Covering descendants that leave the group between
+observations needs the separate ownership-boundary amendment named under
+Harness Session Escapes.
+
+The same review found a P2: the recovery endpoint directory was chosen by
+existence only, so an existing but unwritable `TMPDIR` blocked the `/tmp`
+fallback and the helper failed to bind. The directory must now accept a probe
+file before it is chosen.
