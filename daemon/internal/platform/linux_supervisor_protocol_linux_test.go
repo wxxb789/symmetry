@@ -5,6 +5,7 @@ package platform
 import (
 	"bufio"
 	"errors"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -24,19 +25,9 @@ func TestLinuxSupervisorFrameRejectsUnknownAndTrailingData(t *testing.T) {
 	}
 }
 
-func TestLinuxSupervisorFrameBoundsAndSequence(t *testing.T) {
-	if err := writeLinuxSupervisorFrame(discardWriter{}, strings.Repeat("x", linuxSupervisorMaxFrame)); !errors.Is(err, errLinuxSupervisorFrameTooLarge) {
+func TestLinuxSupervisorFrameBounds(t *testing.T) {
+	if err := writeLinuxSupervisorFrame(io.Discard, strings.Repeat("x", linuxSupervisorMaxFrame)); !errors.Is(err, errLinuxSupervisorFrameTooLarge) {
 		t.Fatalf("writeLinuxSupervisorFrame() error = %v, want frame-too-large", err)
-	}
-	fence := &linuxSupervisorSequenceFence{}
-	if err := fence.accept(1); err != nil {
-		t.Fatalf("accept(1) error = %v", err)
-	}
-	if err := fence.accept(1); !errors.Is(err, errLinuxSupervisorSequence) {
-		t.Fatalf("accept(replay) error = %v", err)
-	}
-	if err := fence.accept(2); err != nil {
-		t.Fatalf("accept(2) error = %v", err)
 	}
 }
 
@@ -67,7 +58,3 @@ func TestLinuxSupervisorOwnerWatchdogDistinguishesDisarmAndEOF(t *testing.T) {
 	}
 	watchdog2.disarm()
 }
-
-type discardWriter struct{}
-
-func (discardWriter) Write(p []byte) (int, error) { return len(p), nil }

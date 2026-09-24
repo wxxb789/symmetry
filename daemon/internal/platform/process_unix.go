@@ -114,13 +114,13 @@ func AttachProcess(process *os.Process) (Containment, string, error) {
 }
 
 type processGroup struct {
-	operationMutex     sync.Mutex
-	mutex              sync.Mutex
-	pid                int
-	fd                 int
-	anchor             linuxProcessGroupAnchor
-	anchorCaptured     bool
-	escapedDescendants []linuxProcessStat
+	operationMutex    sync.Mutex
+	mutex             sync.Mutex
+	pid               int
+	fd                int
+	anchor            linuxProcessGroupAnchor
+	anchorCaptured    bool
+	escapedDescendant *linuxProcessStat
 	// descendantScanLost is irreversible for this authority: a later clean
 	// scan cannot prove what escaped while observation was uncertain.
 	descendantScanLost      bool
@@ -131,14 +131,6 @@ type processGroup struct {
 	containmentUnprovenPersisted         bool
 	containmentUnprovenCallbackErr       error
 	containmentUnprovenCallbackMutex     sync.Mutex
-	// teardownIntent is set only while a healthy supervisor stop request is in
-	// flight. A child disappearing after the anchored leader is reaped can then
-	// be classified as a bounded teardown race without weakening strict proof
-	// for helper-dead takeover.
-	teardownIntent             bool
-	teardownIntentGeneration   uint64
-	teardownScanRace           bool
-	teardownScanRaceGeneration uint64
 
 	monitorStop                chan struct{}
 	monitorDone                chan struct{}
@@ -174,7 +166,6 @@ const (
 	descendantMonitorTerminalScanFailure
 	descendantMonitorTerminalObservedEscape
 	descendantMonitorTerminalOwnerStop
-	descendantMonitorTerminalTeardownScanRace
 )
 
 type descendantMonitorScanResult struct {
@@ -194,8 +185,6 @@ func (reason descendantMonitorTerminalReason) String() string {
 		return "observed_escape"
 	case descendantMonitorTerminalOwnerStop:
 		return "owner_stop"
-	case descendantMonitorTerminalTeardownScanRace:
-		return "teardown_scan_race"
 	default:
 		return "none"
 	}
@@ -237,59 +226,20 @@ func (group *processGroup) SetContainmentUnprovenCallback(callback func() error)
 }
 
 func (group *processGroup) containmentUnprovenObservedLocked() bool {
-	return group.descendantScanLost || len(group.escapedDescendants) > 0
+	return group.descendantScanLost || group.escapedDescendant != nil
 }
 
-func (group *processGroup) beginTeardownIntent() {
-	if group == nil {
-		return
-	}
-	group.mutex.Lock()
-	group.teardownIntent = true
-	group.teardownIntentGeneration++
-	if group.teardownIntentGeneration == 0 {
-		group.teardownIntentGeneration = 1
-	}
-	group.mutex.Unlock()
-}
-
-func (group *processGroup) endTeardownIntent() {
-	if group == nil {
-		return
-	}
-	group.mutex.Lock()
-	group.teardownIntent = false
-	group.mutex.Unlock()
-}
-
-// markTeardownScanRaceIfLeaderAbsent recognizes only the narrow TOCTOU in
-// which a descendant reader reports ENOENT after the anchored leader was
-// reaped by an in-flight healthy helper stop. The leader re-read remains
-// identity-bound; any present leader, identity error, or permission error
-// stays a normal fail-closed scan failure.
-func (group *processGroup) markTeardownScanRaceIfLeaderAbsent(scanErr error, readStat func(int) (linuxProcessStat, error)) bool {
-	if group == nil || !errors.Is(scanErr, os.ErrNotExist) {
+// leaderVanishedDuringScan reports whether a scan failed only because the
+// anchored leader was reaped between its stat read and its children read. That
+// is the same observation as a leader absent when the scan starts. A present
+// leader, an identity change, or any other read error remains a fail-closed
+// scan failure.
+func leaderVanishedDuringScan(pid int, anchor linuxProcessGroupAnchor, scanErr error, readStat func(int) (linuxProcessStat, error)) bool {
+	if !errors.Is(scanErr, os.ErrNotExist) {
 		return false
 	}
-	group.mutex.Lock()
-	intent := group.teardownIntent
-	generation := group.teardownIntentGeneration
-	group.mutex.Unlock()
-	if !intent {
-		return false
-	}
-	present, err := observeLinuxProcessGroupLeaderWithReader(group.pid, group.anchor, readStat)
-	if err != nil || present {
-		return false
-	}
-	group.mutex.Lock()
-	defer group.mutex.Unlock()
-	if !group.teardownIntent || group.teardownIntentGeneration != generation || group.descendantScanLost || len(group.escapedDescendants) > 0 {
-		return false
-	}
-	group.teardownScanRace = true
-	group.teardownScanRaceGeneration = generation
-	return true
+	present, err := observeLinuxProcessGroupLeaderWithReader(pid, anchor, readStat)
+	return err == nil && !present
 }
 
 func (group *processGroup) markContainmentUnproven(scanLost bool) {
@@ -310,23 +260,18 @@ func (group *processGroup) markContainmentUnproven(scanLost bool) {
 	}
 }
 
-// mergeEscapedDescendants retains every escape observed before a later scan
-// error. A partial scan is still evidence of an escape and must remain sticky;
-// the error must never turn that evidence into a teardown race.
-func (group *processGroup) mergeEscapedDescendants(discovered []linuxProcessStat) bool {
+// recordEscapedDescendant retains one identity sample. Any escape makes this
+// authority permanently unproven, so additional samples cannot change cleanup.
+func (group *processGroup) recordEscapedDescendant(discovered []linuxProcessStat) bool {
 	if group == nil || len(discovered) == 0 {
 		return false
 	}
 	group.mutex.Lock()
 	defer group.mutex.Unlock()
-	if group.closeCompleted {
+	if group.closeCompleted || group.escapedDescendant != nil {
 		return false
 	}
-	before := len(group.escapedDescendants)
-	group.escapedDescendants = mergeLinuxEscapedDescendants(group.escapedDescendants, discovered)
-	if len(group.escapedDescendants) == before {
-		return false
-	}
+	group.escapedDescendant = retainFirstLinuxEscapedDescendant(nil, discovered)
 	if group.escapeObserved != nil {
 		group.escapeObservedOnce.Do(func() { close(group.escapeObserved) })
 	}
@@ -415,7 +360,7 @@ func (group *processGroup) waitForInitialDescendantScan(deadline time.Time) erro
 	group.mutex.Lock()
 	initialErr := group.initialScanErr
 	initialResult := group.initialScanResult
-	uncertain := group.descendantScanLost || group.teardownScanRace || len(group.escapedDescendants) > 0
+	uncertain := group.descendantScanLost || group.escapedDescendant != nil
 	complete := group.initialScanComplete
 	group.mutex.Unlock()
 	if !complete {
@@ -444,13 +389,31 @@ func (group *processGroup) descendantMonitorTerminalResult() (descendantMonitorS
 	reason := group.monitorTerminalReason
 	group.mutex.Unlock()
 	result := descendantMonitorScanResult{stopped: true, terminalReason: reason}
-	if reason == descendantMonitorTerminalCleanLeaderAbsent || reason == descendantMonitorTerminalTeardownScanRace {
+	if reason == descendantMonitorTerminalCleanLeaderAbsent {
 		return result, nil
 	}
 	if reason == descendantMonitorTerminalNone {
 		return result, fmt.Errorf("%w: descendant monitor exited before final scan", ErrLinuxDescendantContainmentUnproven)
 	}
 	return result, fmt.Errorf("%w: descendant monitor terminated before final scan (%s)", ErrLinuxDescendantContainmentUnproven, reason)
+}
+
+func (group *processGroup) cleanDescendantTerminalProof(result descendantMonitorScanResult) (bool, string) {
+	group.mutex.Lock()
+	defer group.mutex.Unlock()
+	if result.terminalReason == descendantMonitorTerminalCleanLeaderAbsent &&
+		group.descendantScanCompleted &&
+		!group.descendantScanLost &&
+		group.escapedDescendant == nil {
+		return true, ""
+	}
+	return false, fmt.Sprintf(
+		"terminal_reason=%s scan_completed=%t scan_lost=%t observed_escape=%t",
+		result.terminalReason,
+		group.descendantScanCompleted,
+		group.descendantScanLost,
+		group.escapedDescendant != nil,
+	)
 }
 
 func (group *processGroup) stopDescendantMonitor(deadline time.Time) error {
@@ -488,6 +451,16 @@ func (group *processGroup) monitorDescendants() {
 		group.signalInitialScanComplete()
 		close(group.monitorDone)
 	}()
+	leaderAbsent := func() descendantMonitorScanResult {
+		group.mutex.Lock()
+		uncertain := !group.descendantScanCompleted || group.descendantScanLost || group.escapedDescendant != nil
+		group.mutex.Unlock()
+		reason := group.recordDescendantMonitorTerminalReason(descendantMonitorTerminalCleanLeaderAbsent)
+		if uncertain {
+			group.markContainmentUnproven(true)
+		}
+		return descendantMonitorScanResult{stopped: true, terminalReason: reason}
+	}
 	scan := func() descendantMonitorScanResult {
 		readStat, readChildren := group.monitorReaders()
 		present, err := observeLinuxProcessGroupLeaderWithReader(group.pid, group.anchor, readStat)
@@ -497,25 +470,17 @@ func (group *processGroup) monitorDescendants() {
 			return descendantMonitorScanResult{scanErr: err, terminalReason: descendantMonitorTerminalScanFailure}
 		}
 		if !present {
-			group.mutex.Lock()
-			uncertain := !group.descendantScanCompleted || group.descendantScanLost || len(group.escapedDescendants) > 0
-			group.mutex.Unlock()
-			reason := group.recordDescendantMonitorTerminalReason(descendantMonitorTerminalCleanLeaderAbsent)
-			if uncertain {
-				group.markContainmentUnproven(true)
-			}
-			return descendantMonitorScanResult{stopped: true, terminalReason: reason}
+			return leaderAbsent()
 		}
 		escaped, scanErr := captureLinuxEscapedDescendantsWithReaders(group.pid, group.anchor, readStat, readChildren)
 		if scanErr != nil {
-			if group.mergeEscapedDescendants(escaped) {
+			if group.recordEscapedDescendant(escaped) {
 				reason := group.recordDescendantMonitorTerminalReason(descendantMonitorTerminalObservedEscape)
 				group.markContainmentUnproven(false)
 				return descendantMonitorScanResult{leaderPresent: true, scanErr: scanErr, terminalReason: reason}
 			}
-			if group.markTeardownScanRaceIfLeaderAbsent(scanErr, readStat) {
-				reason := group.recordDescendantMonitorTerminalReason(descendantMonitorTerminalTeardownScanRace)
-				return descendantMonitorScanResult{stopped: true, terminalReason: reason}
+			if leaderVanishedDuringScan(group.pid, group.anchor, scanErr, readStat) {
+				return leaderAbsent()
 			}
 			group.recordDescendantMonitorTerminalReason(descendantMonitorTerminalScanFailure)
 			group.markContainmentUnproven(true)
@@ -526,7 +491,7 @@ func (group *processGroup) monitorDescendants() {
 			group.descendantScanCompleted = true
 		}
 		group.mutex.Unlock()
-		newEscape := group.mergeEscapedDescendants(escaped)
+		newEscape := group.recordEscapedDescendant(escaped)
 		if newEscape {
 			group.recordDescendantMonitorTerminalReason(descendantMonitorTerminalObservedEscape)
 			group.markContainmentUnproven(false)
@@ -650,7 +615,7 @@ func (group *processGroup) closeUntil(deadline time.Time) error {
 		group.mutex.Unlock()
 		return err
 	}
-	alreadyUnproven := group.descendantScanLost || group.teardownScanRace
+	alreadyUnproven := group.descendantScanLost
 	monitorPresent := group.monitorStop != nil
 	anchorCaptured := group.anchorCaptured
 	skipInitialSignal := group.skipNextCloseSignal
@@ -662,7 +627,7 @@ func (group *processGroup) closeUntil(deadline time.Time) error {
 	}
 
 	group.mutex.Lock()
-	if group.descendantScanLost || group.teardownScanRace {
+	if group.descendantScanLost {
 		group.mutex.Unlock()
 		return group.finishUnprovenClose(deadline, nil)
 	}
@@ -684,14 +649,9 @@ func (group *processGroup) closeUntil(deadline time.Time) error {
 			finalScanErr := requestErr
 			if finalScanErr == nil {
 				finalScanErr = result.scanErr
-				group.mutex.Lock()
-				cleanTerminal := result.terminalReason == descendantMonitorTerminalCleanLeaderAbsent &&
-					group.descendantScanCompleted &&
-					!group.descendantScanLost &&
-					len(group.escapedDescendants) == 0
-				group.mutex.Unlock()
+				cleanTerminal, proofDetails := group.cleanDescendantTerminalProof(result)
 				if finalScanErr == nil && !cleanTerminal {
-					finalScanErr = fmt.Errorf("%w: leader disappeared without a clean descendant terminal proof", ErrLinuxDescendantContainmentUnproven)
+					finalScanErr = fmt.Errorf("%w: leader disappeared without a clean descendant terminal proof (%s)", ErrLinuxDescendantContainmentUnproven, proofDetails)
 				}
 			}
 			if finalScanErr != nil {
@@ -726,14 +686,9 @@ func (group *processGroup) closeUntil(deadline time.Time) error {
 			if finalScanErr == nil {
 				finalScanErr = result.scanErr
 				if finalScanErr == nil && !result.leaderPresent {
-					group.mutex.Lock()
-					cleanTerminal := result.terminalReason == descendantMonitorTerminalCleanLeaderAbsent &&
-						group.descendantScanCompleted &&
-						!group.descendantScanLost &&
-						len(group.escapedDescendants) == 0
-					group.mutex.Unlock()
+					cleanTerminal, proofDetails := group.cleanDescendantTerminalProof(result)
 					if !cleanTerminal {
-						finalScanErr = fmt.Errorf("%w: leader disappeared without a clean descendant terminal proof", ErrLinuxDescendantContainmentUnproven)
+						finalScanErr = fmt.Errorf("%w: leader disappeared without a clean descendant terminal proof (%s)", ErrLinuxDescendantContainmentUnproven, proofDetails)
 					}
 				}
 			}
@@ -754,7 +709,7 @@ func (group *processGroup) closeUntil(deadline time.Time) error {
 			} else if postKillLeaderPresent {
 				escaped, scanErr := captureLinuxEscapedDescendants(group.pid, group.anchor)
 				if scanErr != nil {
-					group.mergeEscapedDescendants(escaped)
+					group.recordEscapedDescendant(escaped)
 					group.mutex.Lock()
 					group.descendantScanLost = true
 					group.mutex.Unlock()
@@ -762,7 +717,7 @@ func (group *processGroup) closeUntil(deadline time.Time) error {
 				} else {
 					group.mutex.Lock()
 					group.descendantScanCompleted = true
-					group.escapedDescendants = mergeLinuxEscapedDescendants(group.escapedDescendants, escaped)
+					group.escapedDescendant = retainFirstLinuxEscapedDescendant(group.escapedDescendant, escaped)
 					group.mutex.Unlock()
 				}
 			}
@@ -788,7 +743,7 @@ func (group *processGroup) closeUntil(deadline time.Time) error {
 
 	group.mutex.Lock()
 	retainAuthority := stopErr != nil && group.anchorCaptured && group.fd >= 0
-	uncertain := group.descendantScanLost || group.teardownScanRace
+	uncertain := group.descendantScanLost
 	escapedErr := group.rejectEscapedDescendants()
 	if uncertain {
 		group.mutex.Unlock()
@@ -832,7 +787,7 @@ func (group *processGroup) probeGroupExitLocked(ctx context.Context, deadline ti
 }
 
 func (group *processGroup) rejectEscapedDescendants() error {
-	if len(group.escapedDescendants) == 0 {
+	if group.escapedDescendant == nil {
 		return nil
 	}
 	// Once an escape has been observed, this process-group authority cannot
@@ -841,24 +796,12 @@ func (group *processGroup) rejectEscapedDescendants() error {
 	return fmt.Errorf("%w: descendant escaped original process group %d", ErrLinuxDescendantContainmentUnproven, group.anchor.pgrp)
 }
 
-func mergeLinuxEscapedDescendants(existing, discovered []linuxProcessStat) []linuxProcessStat {
-	if len(discovered) == 0 {
+func retainFirstLinuxEscapedDescendant(existing *linuxProcessStat, discovered []linuxProcessStat) *linuxProcessStat {
+	if existing != nil || len(discovered) == 0 {
 		return existing
 	}
-	merged := append([]linuxProcessStat(nil), existing...)
-	for _, candidate := range discovered {
-		known := false
-		for _, value := range merged {
-			if value.pid == candidate.pid && value.startTime == candidate.startTime {
-				known = true
-				break
-			}
-		}
-		if !known {
-			merged = append(merged, candidate)
-		}
-	}
-	return merged
+	sample := discovered[0]
+	return &sample
 }
 
 func (group *processGroup) releasePIDFDLocked() error {
@@ -1231,6 +1174,11 @@ func captureLinuxEscapedDescendantsWithReaders(pid int, anchor linuxProcessGroup
 		current := pending[0]
 		pending = pending[1:]
 		children, err := readChildren(current)
+		if errors.Is(err, os.ErrNotExist) && current != pid {
+			// A descendant reaped mid-scan is the same observation as one reaped
+			// between scans: its subtree is no longer reachable from the leader.
+			continue
+		}
 		if errors.Is(err, os.ErrNotExist) {
 			return escaped, fmt.Errorf("%w: process %d disappeared during fenced scan: %w", ErrLinuxDescendantContainmentUnproven, current, err)
 		}
@@ -1247,12 +1195,12 @@ func captureLinuxEscapedDescendantsWithReaders(pid int, anchor linuxProcessGroup
 			visited[child] = struct{}{}
 			stat, statErr := readStat(child)
 			if errors.Is(statErr, os.ErrNotExist) {
-				return escaped, fmt.Errorf("%w: descendant %d disappeared during fenced scan: %w", ErrLinuxDescendantContainmentUnproven, child, statErr)
+				continue
 			}
 			if statErr != nil {
 				return escaped, fmt.Errorf("%w: read descendant %d: %w", ErrLinuxDescendantContainmentUnproven, child, statErr)
 			}
-			if stat.pgrp != anchor.pgrp || stat.session != anchor.session {
+			if (stat.pgrp != anchor.pgrp || stat.session != anchor.session) && len(escaped) == 0 {
 				escaped = append(escaped, stat)
 			}
 			pending = append(pending, child)
@@ -1261,11 +1209,22 @@ func captureLinuxEscapedDescendantsWithReaders(pid int, anchor linuxProcessGroup
 	return escaped, nil
 }
 
+// readLinuxProcFile reports a process reaped between open and read as absent.
+// procfs returns ESRCH instead of ENOENT for that window, and both describe
+// the same exited process.
+func readLinuxProcFile(path string) ([]byte, error) {
+	value, err := os.ReadFile(path)
+	if errors.Is(err, syscall.ESRCH) {
+		return nil, errors.Join(err, os.ErrNotExist)
+	}
+	return value, err
+}
+
 func readLinuxProcessStatFile(pid int) (linuxProcessStat, error) {
 	if pid <= 0 {
 		return linuxProcessStat{}, errors.New("process pid must be positive")
 	}
-	value, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	value, err := readLinuxProcFile(fmt.Sprintf("/proc/%d/stat", pid))
 	if err != nil {
 		return linuxProcessStat{}, fmt.Errorf("read /proc/%d/stat: %w", pid, err)
 	}
@@ -1283,7 +1242,7 @@ func readLinuxProcessChildrenFile(pid int) ([]int, error) {
 	if pid <= 0 {
 		return nil, errors.New("process pid must be positive")
 	}
-	value, err := os.ReadFile(fmt.Sprintf("/proc/%d/task/%d/children", pid, pid))
+	value, err := readLinuxProcFile(fmt.Sprintf("/proc/%d/task/%d/children", pid, pid))
 	if err != nil {
 		return nil, fmt.Errorf("read /proc/%d/task/%d/children: %w", pid, pid, err)
 	}
@@ -1331,6 +1290,11 @@ func parseLinuxProcessStat(value string) (linuxProcessStat, error) {
 	session, err := strconv.ParseInt(fields[3], 10, 64)
 	if err != nil {
 		return linuxProcessStat{}, fmt.Errorf("parse /proc stat session: %w", err)
+	}
+	if pgrp < 0 || session < 0 {
+		// procfs reports -1 after release_task detaches the signal state. The
+		// task is reaped and can no longer run or own children.
+		return linuxProcessStat{}, fmt.Errorf("parse /proc stat: process %d was released: %w", pid, os.ErrNotExist)
 	}
 	startTime, err := strconv.ParseUint(fields[startTimeIndex], 10, 64)
 	if err != nil || startTime == 0 {

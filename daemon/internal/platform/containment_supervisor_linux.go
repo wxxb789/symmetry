@@ -344,7 +344,6 @@ type linuxSupervisor struct {
 
 	committed             bool
 	resumed               bool
-	stopped               bool
 	released              bool
 	closed                bool
 	receipt               *authority.StopReceipt
@@ -955,10 +954,6 @@ func (supervisor *linuxSupervisor) stop(operation string) error {
 	if helperDead {
 		return supervisor.stopWithMirror()
 	}
-	if supervisor.mirror != nil {
-		supervisor.mirror.beginTeardownIntent()
-		defer supervisor.mirror.endTeardownIntent()
-	}
 	if responseLossPending {
 		return supervisor.recoverResponseLossStop()
 	}
@@ -986,7 +981,6 @@ func (supervisor *linuxSupervisor) stop(operation string) error {
 	supervisor.receipt = &receipt
 	supervisor.authority.StopReceipt = &receipt
 	supervisor.handoff.StopReceipt = &receipt
-	supervisor.stopped = true
 	supervisor.pidfd = -1
 	supervisor.mu.Unlock()
 	return nil
@@ -1019,8 +1013,7 @@ func (supervisor *linuxSupervisor) recoverResponseLossStop() error {
 		receipt, source, err := stopPersistedLinuxSupervisor(*value)
 		// The helper may die while the recovery endpoint is being contacted.
 		// A receipt reconstructed from endpoint absence is not a healthy-helper
-		// response and cannot authorize the teardown-race shortcut; re-enter the
-		// strict mirror takeover path instead.
+		// stop response; re-enter the mirror takeover path for exact proof.
 		if source == linuxSupervisorStopReceiptFromAbsenceProof || channelClosedV2(supervisor.helperDone) {
 			return supervisor.stopWithMirror()
 		}
@@ -1038,7 +1031,6 @@ func (supervisor *linuxSupervisor) recoverResponseLossStop() error {
 				supervisor.receipt = &receipt
 				supervisor.authority.StopReceipt = &receipt
 				supervisor.handoff.StopReceipt = &receipt
-				supervisor.stopped = true
 				supervisor.pidfd = -1
 				supervisor.mu.Unlock()
 				return nil
@@ -1075,9 +1067,6 @@ func (supervisor *linuxSupervisor) stopWithMirror() error {
 	if mirror == nil {
 		return ErrLinuxSupervisorStopUnproven
 	}
-	// A helper-dead takeover has no healthy stop response that can authorize a
-	// teardown scan race. Force the mirror path back to strict proof.
-	mirror.endTeardownIntent()
 	deadline := containmentDeadline(context.Background())
 	if err := mirror.Terminate(true); err != nil && !errors.Is(err, unix.ESRCH) {
 		if supervisor.containmentUnprovenCallback != nil {
@@ -1123,7 +1112,6 @@ func (supervisor *linuxSupervisor) stopWithMirror() error {
 	supervisor.receipt = &receipt
 	supervisor.authority.StopReceipt = &receipt
 	supervisor.handoff.StopReceipt = &receipt
-	supervisor.stopped = true
 	supervisor.finalProofPending = false
 	supervisor.mu.Unlock()
 	return nil
@@ -1304,16 +1292,8 @@ func (supervisor *linuxSupervisor) verifyMirrorObservation() error {
 	}
 	mirror.mutex.Lock()
 	defer mirror.mutex.Unlock()
-	if mirror.descendantScanLost || len(mirror.escapedDescendants) > 0 {
+	if mirror.descendantScanLost || mirror.escapedDescendant != nil {
 		return fmt.Errorf("%w: mirror observed descendant escape or scan loss", ErrLinuxDescendantContainmentUnproven)
-	}
-	if mirror.teardownScanRace {
-		if mirror.monitorTerminalReason != descendantMonitorTerminalTeardownScanRace ||
-			!mirror.teardownIntent || mirror.teardownIntentGeneration == 0 ||
-			mirror.teardownScanRaceGeneration != mirror.teardownIntentGeneration {
-			return fmt.Errorf("%w: mirror teardown scan race has no exact healthy stop proof", ErrLinuxDescendantContainmentUnproven)
-		}
-		return nil
 	}
 	if !mirror.descendantScanCompleted {
 		return fmt.Errorf("%w: mirror has no completed descendant observation", ErrLinuxDescendantContainmentUnproven)
@@ -1814,11 +1794,9 @@ func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.Un
 	defer leaseState.stop()
 	watchdog := newLinuxSupervisorOwnerWatchdog(ownerFile, leaseState.latchOwnerLost)
 	defer watchdog.disarm()
-	var stateMu sync.Mutex
 	bound := false
 	committed := false
 	resumed := false
-	stopped := false
 	var receipt *authority.StopReceipt
 	boundSecret := ""
 	waitDone := make(chan struct{})
@@ -1840,12 +1818,9 @@ func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.Un
 	stop := func() error {
 		deadline := containmentDeadline(context.Background())
 		leaseState.stop()
-		stateMu.Lock()
 		if receipt != nil {
-			stateMu.Unlock()
 			return nil
 		}
-		stateMu.Unlock()
 		var terminateErr error
 		if !resumed {
 			terminateErr = target.Terminate()
@@ -1875,17 +1850,12 @@ func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.Un
 		}
 		receiptValue := authority.StopReceipt{Version: authority.SupervisorVersion, Status: "stopped", OwnerKind: linuxSupervisorOwnerKind, OwnerContext: launch.OwnerContext, TargetPID: target.PID(), TargetIdentity: target.Identity(), PipeToken: launch.PipeToken, JobID: launch.JobID, SupervisorPID: os.Getpid(), SupervisorIdentity: mustLinuxSupervisorIdentity(), ActiveProcesses: 0}
 		receipt = &receiptValue
-		stateMu.Lock()
-		stopped = true
-		stateMu.Unlock()
 		return nil
 	}
 	enterRecovery := func() error {
-		if err := stop(); err != nil {
-			// A failed physical stop retains the helper's authority and the
-			// authenticated recovery endpoint for a later retry.
-			return runLinuxSupervisorRecoveryLoop(listener, launch, target, &receipt, boundSecret, stop)
-		}
+		// Keep the authenticated endpoint alive whether stop succeeds now or
+		// still needs a retry through recovery.
+		_ = stop()
 		return runLinuxSupervisorRecoveryLoop(listener, launch, target, &receipt, boundSecret, stop)
 	}
 	type requestEvent struct {
@@ -1909,12 +1879,7 @@ func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.Un
 		select {
 		case <-ownerLost:
 			ownerLost = nil
-			if err := stop(); err != nil {
-				// Keep the exact helper endpoint alive for an authenticated
-				// recovery retry. A failed proof never becomes a receipt.
-				return runLinuxSupervisorRecoveryLoop(listener, launch, target, &receipt, boundSecret, stop)
-			}
-			return runLinuxSupervisorRecoveryLoop(listener, launch, target, &receipt, boundSecret, stop)
+			return enterRecovery()
 		case <-leaseState.wakeup():
 			if !leaseState.takeExpiry() {
 				continue
@@ -1992,7 +1957,7 @@ func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.Un
 			case linuxSupervisorOpResume:
 				if !committed {
 					status, message = "error", ErrLinuxSupervisorNotCommitted.Error()
-				} else if stopped {
+				} else if receipt != nil {
 					status, message = "error", ErrLinuxSupervisorStopUnproven.Error()
 				} else if err := leaseState.resume(func() bool { return channelClosedV2(watchdog.ownerLost()) }, target.Resume); err != nil {
 					status, message = "error", err.Error()

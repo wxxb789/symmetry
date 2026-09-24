@@ -628,8 +628,8 @@ func TestLinuxSupervisorMirrorProofFailureRetainsRetryableAuthority(t *testing.T
 	if !errors.Is(err, ErrLinuxSupervisorStopUnproven) || !strings.Contains(err.Error(), "mirror proof") {
 		t.Fatalf("mirror proof failure = %v, want unresolved mirror proof", err)
 	}
-	if _, ok := supervisor.ContainmentStopReceipt(); ok || supervisor.receipt != nil || supervisor.stopped {
-		t.Fatalf("mirror proof failure state = receipt:%v stopped:%v, want no receipt and not stopped", supervisor.receipt, supervisor.stopped)
+	if _, ok := supervisor.ContainmentStopReceipt(); ok || supervisor.receipt != nil {
+		t.Fatalf("mirror proof failure installed a stop receipt: receipt=%v available=%v", supervisor.receipt, ok)
 	}
 	if supervisor.ContainmentAuthority().StopReceipt != nil {
 		t.Fatal("mirror proof failure installed an authority stop receipt")
@@ -670,8 +670,8 @@ func TestLinuxSupervisorMirrorProofRetryProducesReceiptAfterTransientPresence(t 
 	if calls != 2 {
 		t.Fatalf("mirror proof calls = %d, want first transient failure plus successful retry", calls)
 	}
-	if _, ok := supervisor.ContainmentStopReceipt(); !ok || supervisor.receipt == nil || !supervisor.stopped {
-		t.Fatalf("mirror proof retry state = receipt:%v stopped:%v available:%v, want successful receipt", supervisor.receipt, supervisor.stopped, ok)
+	if _, ok := supervisor.ContainmentStopReceipt(); !ok || supervisor.receipt == nil {
+		t.Fatalf("mirror proof retry did not install a successful receipt: receipt=%v available=%v", supervisor.receipt, ok)
 	}
 	if supervisor.pidfd != -1 || supervisor.finalProofPending || supervisor.ContainmentCloseRetryable() {
 		t.Fatalf("mirror proof retry authority = pidfd:%d finalProofPending:%v retryable:%v, want finalized state", supervisor.pidfd, supervisor.finalProofPending, supervisor.ContainmentCloseRetryable())
@@ -880,9 +880,6 @@ func TestLinuxSupervisorMirrorDescendantScanFailureDoesNotProduceReceipt(t *test
 	if _, ok := supervisor.ContainmentStopReceipt(); ok {
 		t.Fatal("mirror descendant scan failure produced a successful stop receipt")
 	}
-	if supervisor.stopped {
-		t.Fatal("mirror descendant scan failure marked supervisor stopped")
-	}
 	if supervisor.pidfd != pidfd || !supervisor.ContainmentCloseRetryable() {
 		t.Fatalf("mirror failure state = pidfd:%d retryable:%v, want retained pidfd %d and retryable", supervisor.pidfd, supervisor.ContainmentCloseRetryable(), pidfd)
 	}
@@ -891,86 +888,36 @@ func TestLinuxSupervisorMirrorDescendantScanFailureDoesNotProduceReceipt(t *test
 	}
 }
 
-func TestLinuxSupervisorMirrorTeardownScanRaceRequiresHealthyStopProof(t *testing.T) {
+func TestLinuxSupervisorMirrorObservationRequiresCleanCompletedScan(t *testing.T) {
 	value := testLinuxSupervisorAuthority(t)
 	newSupervisor := func(mirror *processGroup) *linuxSupervisor {
 		return &linuxSupervisor{authority: value, mirror: mirror}
 	}
 
-	raced := &processGroup{
-		teardownIntent:             true,
-		teardownIntentGeneration:   1,
-		teardownScanRace:           true,
-		teardownScanRaceGeneration: 1,
-		monitorTerminalReason:      descendantMonitorTerminalTeardownScanRace,
-	}
-	if err := newSupervisor(raced).verifyMirrorObservation(); err != nil {
-		t.Fatalf("healthy-stop teardown race verification = %v, want nil", err)
-	}
-	raced.teardownIntentGeneration = 2
-	if err := newSupervisor(raced).verifyMirrorObservation(); !errors.Is(err, ErrLinuxDescendantContainmentUnproven) {
-		t.Fatalf("stale teardown race verification = %v, want unresolved proof", err)
+	clean := &processGroup{descendantScanCompleted: true, monitorTerminalReason: descendantMonitorTerminalCleanLeaderAbsent}
+	if err := newSupervisor(clean).verifyMirrorObservation(); err != nil {
+		t.Fatalf("clean completed mirror verification = %v, want nil", err)
 	}
 
 	for _, test := range []struct {
 		name   string
 		mirror *processGroup
 	}{
-		{
-			name: "scan failure",
-			mirror: &processGroup{
-				teardownScanRace:      true,
-				monitorTerminalReason: descendantMonitorTerminalTeardownScanRace,
-				descendantScanLost:    true,
-			},
-		},
+		{name: "no completed scan", mirror: &processGroup{monitorTerminalReason: descendantMonitorTerminalCleanLeaderAbsent}},
+		{name: "scan failure", mirror: &processGroup{descendantScanCompleted: true, descendantScanLost: true}},
 		{
 			name: "observed escape",
 			mirror: &processGroup{
-				teardownScanRace:      true,
-				monitorTerminalReason: descendantMonitorTerminalTeardownScanRace,
-				escapedDescendants:    []linuxProcessStat{{pid: 2345, pgrp: 2345, session: 2345, startTime: 789}},
+				descendantScanCompleted: true,
+				escapedDescendant:       &linuxProcessStat{pid: 2345, pgrp: 2345, session: 2345, startTime: 789},
 			},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if err := newSupervisor(test.mirror).verifyMirrorObservation(); !errors.Is(err, ErrLinuxDescendantContainmentUnproven) {
-				t.Fatalf("negative teardown race verification = %v, want unresolved proof", err)
+				t.Fatalf("mirror verification = %v, want unresolved proof", err)
 			}
 		})
-	}
-}
-
-func TestLinuxSupervisorHelperDeathKeepsTeardownScanRaceUnproven(t *testing.T) {
-	value := testLinuxSupervisorAuthority(t)
-	helperDone := make(chan struct{})
-	close(helperDone)
-	previousSignal := sendPIDFDSignal
-	previousClose := closePIDFD
-	sendPIDFDSignal = func(int, unix.Signal, *unix.Siginfo, int) error { return unix.ESRCH }
-	closePIDFD = func(int) error { return nil }
-	t.Cleanup(func() {
-		sendPIDFDSignal = previousSignal
-		closePIDFD = previousClose
-	})
-
-	mirror := &processGroup{
-		pid:                   value.TargetPID,
-		fd:                    47,
-		anchor:                linuxProcessGroupAnchor{pid: value.TargetPID},
-		anchorCaptured:        true,
-		teardownScanRace:      true,
-		monitorTerminalReason: descendantMonitorTerminalTeardownScanRace,
-	}
-	supervisor := &linuxSupervisor{authority: value, helperDone: helperDone, mirror: mirror, pidfd: mirror.fd}
-	if err := supervisor.Terminate(true); !errors.Is(err, ErrLinuxSupervisorStopUnproven) {
-		t.Fatalf("helper-dead teardown race Terminate() = %v, want unresolved proof", err)
-	}
-	if _, ok := supervisor.ContainmentStopReceipt(); ok || supervisor.stopped {
-		t.Fatal("helper-dead teardown race produced a stop receipt")
-	}
-	if !mirror.descendantScanLost || mirror.closeCompleted {
-		t.Fatalf("helper-dead teardown race mirror = lost:%v completed:%v, want sticky unresolved state", mirror.descendantScanLost, mirror.closeCompleted)
 	}
 }
 
@@ -1557,7 +1504,7 @@ func TestLinuxSupervisorScanFailureInjectionIsStickyAndProducesNoReceipt(t *test
 	if err := supervisor.Terminate(true); !errors.Is(err, ErrLinuxSupervisorStopUnproven) {
 		t.Fatalf("sticky mirror Terminate() = %v, want unresolved stop", err)
 	}
-	if _, ok := supervisor.ContainmentStopReceipt(); ok || supervisor.stopped {
+	if _, ok := supervisor.ContainmentStopReceipt(); ok {
 		t.Fatal("sticky scan failure produced a stop receipt")
 	}
 	if !supervisor.ContainmentCloseRetryable() {

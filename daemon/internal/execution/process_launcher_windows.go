@@ -133,21 +133,6 @@ func nativeStartedProcess(native *platform.SuspendedProcess, containment platfor
 	}
 }
 
-func durableSupervisorHandoffRequested(invocation Invocation) bool {
-	return invocation.PrepareSupervisorHandoff != nil ||
-		invocation.BindSupervisorHandoff != nil ||
-		invocation.CommitSupervisorHandoff != nil ||
-		invocation.RecordSupervisorHandoffStopReceipt != nil ||
-		invocation.ClearSupervisorHandoff != nil
-}
-
-func durableSupervisorHandoffCallbacksComplete(invocation Invocation) bool {
-	if invocation.PrepareSupervisorHandoff == nil || invocation.BindSupervisorHandoff == nil {
-		return false
-	}
-	return invocation.CommitSupervisorHandoff != nil
-}
-
 func targetIdentityForHandoff(handoff authority.SupervisorHandoff, fallback string) string {
 	if handoff.TargetIdentity != "" {
 		return handoff.TargetIdentity

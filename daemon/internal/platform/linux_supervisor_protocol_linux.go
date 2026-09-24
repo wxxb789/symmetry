@@ -4,6 +4,7 @@ package platform
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,7 +21,6 @@ const (
 
 var (
 	errLinuxSupervisorFrameTooLarge = errors.New("linux supervisor frame is too large")
-	errLinuxSupervisorFrameVersion  = errors.New("linux supervisor frame version is invalid")
 	errLinuxSupervisorSequence      = errors.New("linux supervisor sequence is stale")
 )
 
@@ -101,7 +101,7 @@ func readLinuxSupervisorFrame(reader *bufio.Reader, destination any) error {
 	if err != nil {
 		return fmt.Errorf("read linux supervisor frame: %w", err)
 	}
-	decoder := json.NewDecoder(bytesReader(line[:len(line)-1]))
+	decoder := json.NewDecoder(bytes.NewReader(line[:len(line)-1]))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil {
 		return fmt.Errorf("decode linux supervisor frame: %w", err)
@@ -136,28 +136,6 @@ func readLinuxSupervisorBoundedLine(reader *bufio.Reader) ([]byte, error) {
 	}
 }
 
-// bytesReader avoids exposing a mutable bytes.Buffer to protocol callers.
-type linuxBytesReader struct {
-	data []byte
-	pos  int
-}
-
-func bytesReader(data []byte) *linuxBytesReader { return &linuxBytesReader{data: data} }
-
-func (reader *linuxBytesReader) Read(p []byte) (int, error) {
-	if reader.pos >= len(reader.data) {
-		return 0, io.EOF
-	}
-	n := copy(p, reader.data[reader.pos:])
-	reader.pos += n
-	return n, nil
-}
-
-type linuxSupervisorSequenceFence struct {
-	mu   sync.Mutex
-	last uint64
-}
-
 // resume executes the authorization check and the ptrace detach under one
 // lease-state lock. A timer callback cannot latch expiry between the check and
 // the detach operation.
@@ -175,19 +153,6 @@ func (state *linuxSupervisorLeaseState) resume(ownerLost func() bool, detach fun
 		return ErrLinuxSupervisorLeaseExpired
 	}
 	return detach()
-}
-
-func (fence *linuxSupervisorSequenceFence) accept(sequence uint64) error {
-	if fence == nil || sequence == 0 {
-		return errLinuxSupervisorSequence
-	}
-	fence.mu.Lock()
-	defer fence.mu.Unlock()
-	if sequence <= fence.last {
-		return errLinuxSupervisorSequence
-	}
-	fence.last = sequence
-	return nil
 }
 
 type linuxSupervisorOwnerWatchdog struct {

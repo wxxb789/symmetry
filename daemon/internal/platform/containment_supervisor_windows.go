@@ -48,9 +48,9 @@ var errContainmentSupervisorLeaseStopped = errors.New("containment supervisor le
 
 var errContainmentSupervisorStopReceiptUnavailable = errors.New("containment supervisor stop receipt is unavailable")
 
-var errContainmentSupervisorOwnerLost = errors.New("containment supervisor owner was lost; recovery is required")
-
 const containmentSupervisorOwnerLostMessage = "containment supervisor owner was lost; recovery is required"
+
+var errContainmentSupervisorOwnerLost = errors.New(containmentSupervisorOwnerLostMessage)
 
 // SupervisorHandoffStage identifies which side of the durable handoff was
 // reached when a helper reports owner loss.

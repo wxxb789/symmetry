@@ -29,8 +29,8 @@ func defaultProcessLauncher(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if durableSupervisorHandoffRequestedLinux(invocation) && platform.DurableSupervisorHandoffAvailable() {
-		if !durableSupervisorHandoffCallbacksCompleteLinux(invocation) {
+	if durableSupervisorHandoffRequested(invocation) && platform.DurableSupervisorHandoffAvailable() {
+		if !durableSupervisorHandoffCallbacksComplete(invocation) {
 			return nil, errors.New("durable Linux supervisor handoff callbacks are incomplete")
 		}
 		supervisor, launchErr := platform.StartLinuxSupervisor(platform.LinuxSupervisorStartSpec{
@@ -99,18 +99,6 @@ func defaultProcessLauncher(
 		return started, fmt.Errorf("contain Linux process tree: %w", attachErr)
 	}
 	return started, nil
-}
-
-func durableSupervisorHandoffRequestedLinux(invocation Invocation) bool {
-	return invocation.PrepareSupervisorHandoff != nil ||
-		invocation.BindSupervisorHandoff != nil ||
-		invocation.CommitSupervisorHandoff != nil ||
-		invocation.RecordSupervisorHandoffStopReceipt != nil ||
-		invocation.ClearSupervisorHandoff != nil
-}
-
-func durableSupervisorHandoffCallbacksCompleteLinux(invocation Invocation) bool {
-	return invocation.PrepareSupervisorHandoff != nil && invocation.BindSupervisorHandoff != nil && invocation.CommitSupervisorHandoff != nil
 }
 
 func linuxSupervisorOwnerContext(invocation Invocation) string {

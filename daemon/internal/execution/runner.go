@@ -132,6 +132,20 @@ type Invocation struct {
 	InitialLeaseSequence   uint64
 }
 
+func durableSupervisorHandoffRequested(invocation Invocation) bool {
+	return invocation.PrepareSupervisorHandoff != nil ||
+		invocation.BindSupervisorHandoff != nil ||
+		invocation.CommitSupervisorHandoff != nil ||
+		invocation.RecordSupervisorHandoffStopReceipt != nil ||
+		invocation.ClearSupervisorHandoff != nil
+}
+
+func durableSupervisorHandoffCallbacksComplete(invocation Invocation) bool {
+	return invocation.PrepareSupervisorHandoff != nil &&
+		invocation.BindSupervisorHandoff != nil &&
+		invocation.CommitSupervisorHandoff != nil
+}
+
 // LeaseRenewer is an optional process capability. The app uses a type
 // assertion so legacy and unsupported-platform process fakes do not acquire a
 // second required lifecycle method.
@@ -179,7 +193,6 @@ type startedProcess struct {
 	persistStopReceipt                 func(int, string, authority.StopReceipt) error
 	persistContainmentUnproven         func(int, string) error
 	containmentUnprovenCallback        func() error
-	containmentUnprovenPersisted       bool
 	stopReceiptRequired                bool
 	containmentAuthorityUncertain      bool
 	wait                               func() (int, error)
@@ -232,7 +245,6 @@ type Process struct {
 	clearSupervisorHandoff             func(authority.SupervisorHandoff, authority.SupervisorHandoffReleaseProof) error
 	containmentHandoffReceiptSaved     bool
 	containmentHandoffReleased         bool
-	containmentHandoffCleared          bool
 	persistProcessWithAuthority        func(int, string, *authority.Supervisor) error
 	persistAuthority                   func(int, string, *authority.Supervisor) error
 	containmentAuthority               *authority.Supervisor
@@ -439,7 +451,7 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 	atomicPersist := invocation.PersistProcessWithAuthority
 	if started.containmentHandoff != nil {
 		setStopReceiptPersistence()
-		if err := runner.commitStartedHandoff(started, startedAt, atomicPersist); err != nil {
+		if err := runner.commitStartedHandoff(started, startedAt); err != nil {
 			return cleanupFailedStartStarted(
 				started,
 				stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
@@ -662,7 +674,7 @@ func configureStartedHandoff(started *startedProcess, invocation Invocation) {
 // commitStartedHandoff is the only transition that permits a suspended target
 // to resume. A callback error is unknown, so the exact same handoff and launch
 // timestamp are retried once; unresolved state remains owned for recovery.
-func (runner Runner) commitStartedHandoff(started *startedProcess, startedAt time.Time, _ func(int, string, *authority.Supervisor) error) error {
+func (runner Runner) commitStartedHandoff(started *startedProcess, startedAt time.Time) error {
 	if started == nil || started.containmentHandoff == nil {
 		return nil
 	}
@@ -672,7 +684,6 @@ func (runner Runner) commitStartedHandoff(started *startedProcess, startedAt tim
 	if callback == nil {
 		return errors.New("supervisor handoff commit callback is required; atomic process persistence cannot substitute for commit")
 	}
-	started.commitSupervisorHandoff = callback
 	firstErr := callback(expected.Clone(), startedAt)
 	if firstErr != nil {
 		if retryErr := callback(expected.Clone(), startedAt); retryErr != nil {
@@ -1609,8 +1620,7 @@ func (process *Process) closeContainment() error {
 }
 
 func (process *Process) pendingSupervisorHandoff() bool {
-	return process != nil && process.containmentHandoff != nil &&
-		!process.containmentHandoffCommitted && !process.containmentHandoffCleared
+	return process != nil && process.containmentHandoff != nil && !process.containmentHandoffCommitted
 }
 
 func (process *Process) containmentStopReceiptProvider() (platform.ContainmentStopReceiptProvider, bool) {
@@ -1721,14 +1731,11 @@ func (process *Process) finalizeSupervisorHandoffLocked(provider platform.Contai
 		process.containmentHandoffReleased = true
 	}
 	proof := handoff.ReleaseProof()
-	if !process.containmentHandoffCleared {
-		if err := retrySupervisorHandoffClear(process.clearSupervisorHandoff, handoff, proof); err != nil {
-			process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), fmt.Errorf("clear supervisor handoff: %w", err)))
-			return err
-		}
-		process.containmentHandoffCleared = true
-		process.containmentHandoff = nil
+	if err := retrySupervisorHandoffClear(process.clearSupervisorHandoff, handoff, proof); err != nil {
+		process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), fmt.Errorf("clear supervisor handoff: %w", err)))
+		return err
 	}
+	process.containmentHandoff = nil
 	process.containmentFinalized = true
 	finalErr := process.containmentFinalizationBaseError()
 	process.setContainmentError(finalErr)
