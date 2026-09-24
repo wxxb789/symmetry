@@ -1708,6 +1708,7 @@ func TestStaleGoalDeliveryStartupScanCleansAfterFinalReceipt(t *testing.T) {
 	if _, err := store.SetLocalState(key, "stale"); err != nil {
 		t.Fatal(err)
 	}
+	expireLeaseBeforeCleanup(t, store, key)
 	client := &goalDeliveryControl{fakeControl: &fakeControl{}}
 	daemon := &daemon{config: testConfig(t), store: store, control: client, options: options{clock: time.Now}}
 	daemon.enqueueRecoveredCleanups()

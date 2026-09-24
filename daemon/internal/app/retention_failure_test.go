@@ -114,6 +114,9 @@ func TestRetentionWriteFailureNeverPreventsCancellationOrLeaseFencing(t *testing
 			if !app.workspaceRetentionRemembered(key) {
 				t.Fatal("releaseRun forgot retention before cleanup")
 			}
+			if scenario == "ownership_lost" {
+				journal = expireLeaseBeforeCleanup(t, app.store, key)
+			}
 			if err := app.cleanupPending(context.Background(), journal); err != nil {
 				t.Fatal(err)
 			}

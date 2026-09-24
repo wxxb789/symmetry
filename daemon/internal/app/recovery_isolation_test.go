@@ -367,6 +367,7 @@ func TestStaleGenericWaitSchedulesCleanupAfterStaleStateWriteFailure(t *testing.
 		t.Fatalf("stale Wait cleanup retry delay = %s, want immediate queued retry", got)
 	}
 
+	expireLeaseBeforeCleanup(t, store, key)
 	app.flushCleanups(context.Background())
 	if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
 		t.Fatalf("cleanup worker did not clear marker and retire stale journal: %v", err)

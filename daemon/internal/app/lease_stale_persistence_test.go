@@ -201,6 +201,74 @@ func cleanupQueued(daemon *daemon, key state.RunKey) bool {
 	return ok
 }
 
+func expireLeaseBeforeCleanup(t *testing.T, store *state.Store, key state.RunKey) state.RunJournal {
+	t.Helper()
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal.LeaseExpiresAt = time.Now().UTC().Add(-time.Minute)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	return journal
+}
+
+func TestCleanupRetainsStaleJournalUntilLeaseExpiry(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	journal, err := store.SetLocalState(key, "stale")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.TerminalState != "" || journal.HasProcessDetails() || len(journal.PendingCommandAcknowledgements) != 0 {
+		t.Fatalf("stale cleanup precondition = %#v", journal)
+	}
+	now := journal.LeaseExpiresAt.Add(-time.Second)
+	app := &daemon{
+		store:   store,
+		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		running: make(map[state.RunKey]*runningRun),
+		options: options{newID: ids(), clock: func() time.Time { return now }},
+	}
+	if err := app.cleanupPending(context.Background(), journal); err == nil {
+		t.Fatal("cleanup removed a stale journal before lease expiry")
+	}
+	if _, err := store.LoadJournal(key); err != nil {
+		t.Fatalf("stale journal before lease expiry = %v, want retained", err)
+	}
+	cancel := protocol.Command{CommandID: "cancel-1", RunID: key.RunID, Generation: key.Generation, Kind: "cancel"}
+	if !app.handleCommand(context.Background(), cancel) {
+		t.Fatal("cancel was not acknowledged without an in-memory owner")
+	}
+	journal, err = store.LoadJournal(key)
+	if err != nil || journal.TerminalState != "cancelled" || !hasPendingCommandAcknowledgementOutcome(journal, "cancel-1", "applied") {
+		t.Fatalf("stale cancel = journal:%#v error:%v, want cancelled with applied acknowledgement", journal, err)
+	}
+
+	expiredStore, expiredKey := claimedStore(t)
+	defer expiredStore.Close()
+	expiredJournal, err := expiredStore.SetLocalState(expiredKey, "stale")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expiredJournal.TerminalState != "" || expiredJournal.HasProcessDetails() || len(expiredJournal.PendingCommandAcknowledgements) != 0 {
+		t.Fatalf("expired cleanup precondition = %#v", expiredJournal)
+	}
+	expiredNow := expiredJournal.LeaseExpiresAt.Add(time.Second)
+	expiredDaemon := &daemon{
+		store:   expiredStore,
+		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		options: options{clock: func() time.Time { return expiredNow }},
+	}
+	if err := expiredDaemon.cleanupPending(context.Background(), expiredJournal); err != nil {
+		t.Fatalf("cleanup after lease expiry: %v", err)
+	}
+	if _, err := expiredStore.LoadJournal(expiredKey); !state.IsNotFound(err) {
+		t.Fatalf("expired stale journal = %v, want deleted", err)
+	}
+}
+
 // Control moves a cancelled Run to cancelling and then rejects its lease
 // renewal, so the daemon sees lease loss before it handles the cancel. The
 // cancel must still settle once the exact process owner is proven stopped.
