@@ -1539,8 +1539,11 @@ func TestProcessGroupMonitorPreservesEscapeBeforeDescendantReapedMidScan(t *test
 			if err := group.stopDescendantMonitor(time.Now().Add(time.Second)); err != nil {
 				t.Fatalf("stopDescendantMonitor() = %v", err)
 			}
-			if !result.leaderPresent || result.stopped || group.monitorTerminalReason != descendantMonitorTerminalObservedEscape {
-				t.Fatalf("escape scan result = %#v reason = %s, want leader-present observed escape", result, group.monitorTerminalReason)
+			if !result.leaderPresent || result.stopped || result.scanErr != nil || group.monitorTerminalReason != descendantMonitorTerminalObservedEscape {
+				t.Fatalf("escape scan result = %#v reason = %s, want leader-present observed escape without scan error", result, group.monitorTerminalReason)
+			}
+			if group.descendantScanLost {
+				t.Fatal("descendant reaped mid-scan was recorded as scan loss")
 			}
 			if group.escapedDescendant == nil || group.escapedDescendant.pid != escapedPID {
 				t.Fatalf("escape state = %#v, want escaped pid %d retained", group.escapedDescendant, escapedPID)
