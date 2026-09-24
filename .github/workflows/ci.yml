@@ -847,9 +847,19 @@ jobs:
                 throw "initdb.exe failed with status $initStatus"
               }
 
-              $startOutput = & $pgCtl -D $env:PI_E2E_POSTGRES_DATA -o "-h $env:POSTGRES_HOST -p $env:POSTGRES_PORT" -l $env:PI_E2E_POSTGRES_LOG -w -t 30 start 2>&1
-              $startStatus = $LASTEXITCODE
-              $startOutput | Tee-Object -FilePath $env:PI_E2E_LOG -Append | Out-Host
+              # The postmaster inherits pg_ctl's stdout/stderr. Capturing them
+              # with & ... 2>&1 keeps the pipe open and never returns, so wait
+              # on pg_ctl alone and read its redirected output afterwards.
+              $startOut = Join-Path $env:RUNNER_TEMP 'pg_ctl-start.out'
+              $startErr = Join-Path $env:RUNNER_TEMP 'pg_ctl-start.err'
+              $startProcess = Start-Process -FilePath $pgCtl -NoNewWindow -PassThru `
+                -ArgumentList @('-D', "`"$env:PI_E2E_POSTGRES_DATA`"", '-o', "`"-h $env:POSTGRES_HOST -p $env:POSTGRES_PORT`"", '-l', "`"$env:PI_E2E_POSTGRES_LOG`"", '-w', '-t', '30', 'start') `
+                -RedirectStandardOutput $startOut -RedirectStandardError $startErr
+              if (-not $startProcess.WaitForExit(60000)) {
+                throw 'pg_ctl.exe start did not exit within 60 seconds'
+              }
+              $startStatus = $startProcess.ExitCode
+              Get-Content -LiteralPath $startOut, $startErr -ErrorAction SilentlyContinue | Tee-Object -FilePath $env:PI_E2E_LOG -Append | Out-Host
               if ($startStatus -ne 0) {
                 throw "pg_ctl.exe start failed with status $startStatus"
               }
