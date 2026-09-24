@@ -366,6 +366,15 @@ func (group *processGroup) waitForInitialDescendantScan(deadline time.Time) erro
 	if !complete {
 		return fmt.Errorf("%w: initial descendant scan did not publish a result", ErrLinuxDescendantContainmentUnproven)
 	}
+	if initialResult.stopped && group.monitorDone != nil {
+		// A stopped initial scan ends the monitor; return only after it exits
+		// so the caller never races its final state writes.
+		select {
+		case <-group.monitorDone:
+		case <-timer.C:
+			return fmt.Errorf("%w: initial descendant monitor did not stop before deadline", ErrLinuxDescendantContainmentUnproven)
+		}
+	}
 	if initialErr != nil {
 		return initialErr
 	}
