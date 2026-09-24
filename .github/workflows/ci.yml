@@ -838,7 +838,6 @@ jobs:
               Add-Content -LiteralPath $env:PI_E2E_LOG -Value "postgres_version=$version"
               Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "postgres_version=$version"
 
-              New-Item -ItemType Directory -Force -Path $env:PI_E2E_POSTGRES_DATA | Out-Null
               $env:PGPASSWORD = $env:POSTGRES_PASSWORD
 
               $initOutput = & $initDb -D $env:PI_E2E_POSTGRES_DATA -U $env:POSTGRES_USER --auth=trust --no-locale --encoding=UTF8 2>&1
