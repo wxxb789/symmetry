@@ -1251,21 +1251,40 @@ func readLinuxProcessChildrenFile(pid int) ([]int, error) {
 	if pid <= 0 {
 		return nil, errors.New("process pid must be positive")
 	}
-	value, err := readLinuxProcFile(fmt.Sprintf("/proc/%d/task/%d/children", pid, pid))
+	// Each task file lists only the children that thread forked, and runtimes
+	// such as Go and Node fork from worker threads. Read every thread's list.
+	tasks, err := os.ReadDir(fmt.Sprintf("/proc/%d/task", pid))
 	if err != nil {
-		return nil, fmt.Errorf("read /proc/%d/task/%d/children: %w", pid, pid, err)
-	}
-	fields := strings.Fields(string(value))
-	children := make([]int, 0, len(fields))
-	for _, field := range fields {
-		child, parseErr := strconv.Atoi(field)
-		if parseErr != nil || child <= 0 {
-			if parseErr == nil {
-				parseErr = errors.New("pid must be positive")
-			}
-			return nil, fmt.Errorf("parse process child pid %q: %w", field, parseErr)
+		if errors.Is(err, syscall.ESRCH) {
+			err = errors.Join(err, os.ErrNotExist)
 		}
-		children = append(children, child)
+		return nil, fmt.Errorf("read /proc/%d/task: %w", pid, err)
+	}
+	var children []int
+	for _, task := range tasks {
+		tid, parseErr := strconv.Atoi(task.Name())
+		if parseErr != nil || tid <= 0 {
+			return nil, fmt.Errorf("parse process %d task %q: invalid thread id", pid, task.Name())
+		}
+		value, err := readLinuxProcFile(fmt.Sprintf("/proc/%d/task/%d/children", pid, tid))
+		if errors.Is(err, os.ErrNotExist) && tid != pid {
+			// A worker thread that exits hands its children to another thread
+			// of the same process, which is still listed.
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read /proc/%d/task/%d/children: %w", pid, tid, err)
+		}
+		for _, field := range strings.Fields(string(value)) {
+			child, parseErr := strconv.Atoi(field)
+			if parseErr != nil || child <= 0 {
+				if parseErr == nil {
+					parseErr = errors.New("pid must be positive")
+				}
+				return nil, fmt.Errorf("parse process child pid %q: %w", field, parseErr)
+			}
+			children = append(children, child)
+		}
 	}
 	return children, nil
 }

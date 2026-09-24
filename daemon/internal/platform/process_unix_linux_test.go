@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"slices"
 	"strconv"
@@ -2458,7 +2459,77 @@ func TestProcessGroupContainmentHelper(t *testing.T) {
 				os.Exit(15)
 			}
 		}
+	case "worker-thread-child":
+		// Fork from a locked thread other than the main thread so only that
+		// task's children file lists the child.
+		started := make(chan int)
+		var forkFromWorker func()
+		forkFromWorker = func() {
+			runtime.LockOSThread()
+			if unix.Gettid() == os.Getpid() {
+				runtime.UnlockOSThread()
+				go forkFromWorker()
+				return
+			}
+			child := exec.Command("sleep", "30")
+			if err := child.Start(); err != nil {
+				fmt.Fprint(os.Stderr, err)
+				os.Exit(16)
+			}
+			started <- child.Process.Pid
+			select {}
+		}
+		go forkFromWorker()
+		if _, err := fmt.Fprintln(os.Stdout, <-started); err != nil {
+			fmt.Fprint(os.Stderr, err)
+			os.Exit(17)
+		}
+		var release [1]byte
+		_, _ = io.ReadFull(os.Stdin, release[:])
 	default:
 		os.Exit(2)
 	}
+}
+
+func TestReadLinuxProcessChildrenIncludesWorkerThreadChildren(t *testing.T) {
+	command := exec.Command(os.Args[0], "-test.run=^TestProcessGroupContainmentHelper$", "--", "worker-thread-child")
+	command.Env = append(os.Environ(), "GO_WANT_PROCESS_GROUP_CONTAINMENT_HELPER=1")
+	stdin, err := command.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	var childPID int
+	t.Cleanup(func() {
+		if childPID > 0 {
+			_ = syscall.Kill(childPID, syscall.SIGKILL)
+		}
+		_ = stdin.Close()
+		_ = command.Process.Kill()
+		_ = command.Wait()
+	})
+	line, err := bufio.NewReader(stdout).ReadString('\n')
+	if err != nil {
+		t.Fatalf("read worker-thread child PID: %v", err)
+	}
+	childPID, err = strconv.Atoi(strings.TrimSpace(line))
+	if err != nil || childPID <= 0 {
+		t.Fatalf("worker-thread child PID %q: %v", line, err)
+	}
+	children, err := readLinuxProcessChildrenFile(command.Process.Pid)
+	if err != nil {
+		t.Fatalf("readLinuxProcessChildrenFile() error = %v", err)
+	}
+	for _, child := range children {
+		if child == childPID {
+			return
+		}
+	}
+	t.Fatalf("readLinuxProcessChildrenFile(%d) = %v, want worker-thread child %d", command.Process.Pid, children, childPID)
 }
