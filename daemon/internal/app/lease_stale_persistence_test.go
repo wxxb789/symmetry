@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
@@ -197,4 +198,134 @@ func cleanupQueued(daemon *daemon, key state.RunKey) bool {
 	defer daemon.mu.Unlock()
 	_, ok := daemon.cleanupQueued[key]
 	return ok
+}
+
+// Control moves a cancelled Run to cancelling and then rejects its lease
+// renewal, so the daemon sees lease loss before it handles the cancel. The
+// cancel must still settle once the exact process owner is proven stopped.
+func TestStaleCancelSettlesAfterProvenProcessStop(t *testing.T) {
+	for _, order := range []string{"cancel-before-exit", "cancel-after-exit"} {
+		t.Run(order, func(t *testing.T) {
+			store, key := claimedStore(t)
+			defer store.Close()
+			if _, err := store.SetProcessDetails(key, 44, "test:44", time.Now().UTC()); err != nil {
+				t.Fatal(err)
+			}
+			process := newBlockingProcess()
+			active := &runningRun{process: process, claimed: true, slotHeld: true, cleanupBlocked: true}
+			slots := make(chan struct{}, 1)
+			slots <- struct{}{}
+			daemon := &daemon{
+				store:       store,
+				log:         slog.New(slog.NewJSONHandler(io.Discard, nil)),
+				running:     map[state.RunKey]*runningRun{key: active},
+				slots:       slots,
+				cleanupWake: make(chan struct{}, 1),
+				background:  context.Background(),
+				options:     options{newID: ids(), clock: time.Now},
+			}
+			cancel := protocol.Command{CommandID: "cancel-1", RunID: key.RunID, Generation: key.Generation, Kind: "cancel"}
+
+			daemon.terminateForLease(journalForKey(t, store, key), "lease renewal failed")
+			if process.terminations != 1 {
+				t.Fatalf("lease loss terminations = %d, want 1", process.terminations)
+			}
+			if order == "cancel-before-exit" {
+				if daemon.handleCommand(context.Background(), cancel) {
+					t.Fatal("stale cancel was acknowledged before the process stop was proven")
+				}
+				if journal := journalForKey(t, store, key); len(journal.PendingCommandAcknowledgements) != 0 || journal.TerminalState != "" {
+					t.Fatalf("stale cancel published a receipt before the stop witness: %#v", journal)
+				}
+			}
+			daemon.waitForRunWithContext(context.Background(), key)
+			if order == "cancel-after-exit" && !daemon.handleCommand(context.Background(), cancel) {
+				t.Fatal("stale cancel after the proven stop was not acknowledged")
+			}
+
+			journal := journalForKey(t, store, key)
+			if journal.TerminalState != "cancelled" || !hasPendingCommandAcknowledgementOutcome(journal, "cancel-1", "applied") {
+				t.Fatalf("stale cancel journal = state %q acks %#v, want cancelled with applied receipt", journal.TerminalState, journal.PendingCommandAcknowledgements)
+			}
+			if !daemon.handleCommand(context.Background(), cancel) {
+				t.Fatal("replayed stale cancel was not treated as already acknowledged")
+			}
+			if again := journalForKey(t, store, key); len(again.PendingCommandAcknowledgements) != 1 {
+				t.Fatalf("replayed stale cancel duplicated its receipt: %#v", again.PendingCommandAcknowledgements)
+			}
+		})
+	}
+}
+
+func TestStaleCancelWithoutStopWitnessStaysUnacknowledged(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	if _, err := store.SetProcessDetails(key, 99, "test:99", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	process := &failingTerminateProcess{}
+	active := &runningRun{process: process, claimed: true, slotHeld: true, cleanupBlocked: true}
+	daemon := &daemon{
+		store:       store,
+		log:         slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		running:     map[state.RunKey]*runningRun{key: active},
+		slots:       make(chan struct{}, 1),
+		cleanupWake: make(chan struct{}, 1),
+		background:  context.Background(),
+		options:     options{newID: ids(), clock: time.Now},
+	}
+	daemon.terminateForLease(journalForKey(t, store, key), "lease renewal failed")
+	if daemon.handleCommand(context.Background(), protocol.Command{CommandID: "cancel-1", RunID: key.RunID, Generation: key.Generation, Kind: "cancel"}) {
+		t.Fatal("stale cancel was acknowledged without a process stop witness")
+	}
+	journal := journalForKey(t, store, key)
+	if journal.LocalState != "stale" || journal.TerminalState != "" || len(journal.PendingCommandAcknowledgements) != 0 || !journal.HasProcessDetails() {
+		t.Fatalf("unproven stale cancel changed durable state: %#v", journal)
+	}
+}
+
+func TestStaleCancelAfterOwnerReleaseSettlesThroughRecovery(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	if _, err := store.SetLocalState(key, "stale"); err != nil {
+		t.Fatal(err)
+	}
+	daemon := &daemon{
+		store:   store,
+		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		running: map[state.RunKey]*runningRun{},
+		options: options{newID: ids(), clock: time.Now},
+	}
+	cancel := protocol.Command{CommandID: "cancel-1", RunID: key.RunID, Generation: key.Generation, Kind: "cancel"}
+	if !daemon.handleCommand(context.Background(), cancel) {
+		t.Fatal("stale cancel after owner release was not acknowledged")
+	}
+	journal := journalForKey(t, store, key)
+	if journal.TerminalState != "cancelled" || !hasPendingCommandAcknowledgementOutcome(journal, "cancel-1", "applied") {
+		t.Fatalf("stale cancel after owner release = state %q acks %#v, want cancelled with applied receipt", journal.TerminalState, journal.PendingCommandAcknowledgements)
+	}
+}
+
+func TestStaleCancelAfterOwnerReleaseKeepsUnprovenProcess(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	if _, err := store.SetProcessDetails(key, 42, "test:42", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetLocalState(key, "stale"); err != nil {
+		t.Fatal(err)
+	}
+	daemon := &daemon{
+		store:   store,
+		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		running: map[state.RunKey]*runningRun{},
+		options: options{newID: ids(), clock: time.Now},
+	}
+	if daemon.handleCommand(context.Background(), protocol.Command{CommandID: "cancel-1", RunID: key.RunID, Generation: key.Generation, Kind: "cancel"}) {
+		t.Fatal("stale cancel acknowledged a recorded process that recovery cannot stop")
+	}
+	journal := journalForKey(t, store, key)
+	if journal.TerminalState != "" || len(journal.PendingCommandAcknowledgements) != 0 || !journal.HasProcessDetails() {
+		t.Fatalf("unproven stale cancel changed durable state: %#v", journal)
+	}
 }

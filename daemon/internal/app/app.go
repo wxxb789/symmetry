@@ -6472,6 +6472,11 @@ func (daemon *daemon) waitForRunResultWithContext(ctx context.Context, key state
 	}
 	if stale {
 		active.inputMu.Unlock()
+		if daemon.settleStaleCancellation(ctx, key) {
+			daemon.releaseSlotOnce(key)
+			daemon.enqueueCleanup(key)
+			return
+		}
 		_, err := daemon.store.SetLocalState(key, "stale")
 		daemon.releaseSlotOnce(key)
 		daemon.enqueueCleanup(key)
@@ -8061,6 +8066,12 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 			if journal.LocalState == "terminal_pending" {
 				return daemon.queueCancellationReceipt(ctx, key, command.CommandID)
 			}
+			if journal.LocalState == "stale" {
+				// Lease loss released the in-memory owner before this cancel
+				// arrived. Recovery stops or proves the recorded process before
+				// it publishes the cancellation receipt.
+				return daemon.cancelRecoveredJournal(ctx, journal, command.CommandID)
+			}
 			return daemon.queueCommandAcknowledgementWithContext(ctx, key, command.CommandID, "rejected")
 		}
 		if active.terminal || active.terminalizing > 0 {
@@ -8098,8 +8109,14 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 			return false
 		}
 		if active.stale {
+			// Lease loss already stopped this owner. Remember the cancel so the
+			// exact process-exit witness can settle it; never acknowledge before
+			// that physical stop is proven.
+			if active.cancelCommandID == "" {
+				active.cancelCommandID = command.CommandID
+			}
 			daemon.mu.Unlock()
-			return false
+			return daemon.settleStaleCancellation(ctx, key)
 		}
 		if !active.claimed {
 			active.cancelled = true
@@ -8554,6 +8571,36 @@ func (daemon *daemon) queueCancellationReceipt(ctx context.Context, key state.Ru
 		return false
 	}
 	return true
+}
+
+// settleStaleCancellation completes a cancel that arrived after lease loss made
+// the run stale. Control moves a cancelled Run to cancelling and then rejects
+// its lease renewal, so the stale owner must still publish the cancellation
+// receipt once the exact process owner is proven stopped. Without that witness
+// the command stays unacknowledged and Control's reaper remains the fallback.
+func (daemon *daemon) settleStaleCancellation(ctx context.Context, key state.RunKey) bool {
+	daemon.mu.Lock()
+	active := daemon.running[key]
+	if active == nil || !active.stale || active.cancelCommandID == "" || active.process == nil || active.processStopWitness != active.process {
+		daemon.mu.Unlock()
+		return false
+	}
+	commandID := active.cancelCommandID
+	stopPID, stopIdentity := active.processStopPID, active.processStopIdentity
+	daemon.mu.Unlock()
+	journal, err := daemon.store.LoadJournal(key)
+	if err != nil {
+		return false
+	}
+	if journal.HasProcessDetails() && (journal.PID != stopPID || journal.ProcessIdentity != stopIdentity) {
+		return false
+	}
+	if durableTerminalPresent(journal) {
+		return daemon.replayOrRejectCancellationAcknowledgement(ctx, key, commandID, journal)
+	}
+	receipt := daemon.queueCancellationReceipt(ctx, key, commandID)
+	daemon.finishDeferredCommand(commandKey{run: key, id: commandID}, receipt)
+	return receipt
 }
 
 func (daemon *daemon) newIDWithRetry(ctx context.Context, key state.RunKey, commandID, kind string) (string, error) {
