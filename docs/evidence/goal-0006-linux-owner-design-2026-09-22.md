@@ -166,3 +166,31 @@ Two failures on the same jobs are not containment escapes:
 - The Windows Pi job's `pg_ctl start -w` hangs its step until the job is
   cancelled. It started failing only after `initdb` was fixed to create its own
   data directory.
+
+## Stale-Run Cancel Race (2026-09-24)
+
+The `integration` restart-cancel scenario was already flaky on `main`
+(locally 2 of 8 passing on both `main` and this branch). A cancel that arrives
+after lease loss marked the run stale was dropped: Control moves the Run to
+`cancelling` and rejects the next renewal with `409 ownership_lost`, while the
+daemon never published a cancellation receipt, so only Control's lease reaper
+(about 30 s later) settled the Run.
+
+The daemon now settles such a cancel without weakening the stop proof:
+
+- While the stale owner is still in memory, the cancel is remembered and is
+  acknowledged only after the exact process-exit witness matches the journal
+  PID and identity. A durable terminal replays through the existing
+  acknowledgement path.
+- If the in-memory owner has already been released and the journal is
+  `stale`, the cancel goes through `cancelRecoveredJournal`, which stops or
+  proves the recorded process before it writes the receipt.
+- Without a stop witness the command stays unacknowledged.
+
+After the change the local scenario passed 5 of 6 runs. Owner decision
+(2026-09-24): ship the fix and record the remaining window as a known
+limitation. When cleanup deletes the stale journal before the cancel arrives
+(observed gap about 30 ms), no local owner is left to prove the stop. The
+journal read fails, the cancel stays unacknowledged, and Control's reaper
+remains the fallback. This is fail-closed: no receipt is published without a
+proven process stop.
