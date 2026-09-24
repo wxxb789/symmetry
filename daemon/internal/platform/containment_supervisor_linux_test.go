@@ -888,7 +888,7 @@ func TestLinuxSupervisorMirrorDescendantScanFailureDoesNotProduceReceipt(t *test
 	}
 }
 
-func TestLinuxSupervisorEndpointPathSkipsMissingAndLongDirectories(t *testing.T) {
+func TestLinuxSupervisorEndpointPathSkipsUnusableDirectories(t *testing.T) {
 	jobID := strings.Repeat("a", authority.TokenBytes*2)
 	usable, err := os.MkdirTemp("/tmp", "sym")
 	if err != nil {
@@ -901,7 +901,8 @@ func TestLinuxSupervisorEndpointPathSkipsMissingAndLongDirectories(t *testing.T)
 	}
 	missing := filepath.Join(usable, "missing")
 
-	endpoint, err := linuxSupervisorEndpointPath(jobID, missing, long, "relative", usable)
+	// procfs exists and fits sun_path but cannot hold a socket, even for root.
+	endpoint, err := linuxSupervisorEndpointPath(jobID, missing, long, "relative", "/proc", usable)
 	if err != nil {
 		t.Fatalf("linuxSupervisorEndpointPath() = %v", err)
 	}
@@ -911,7 +912,7 @@ func TestLinuxSupervisorEndpointPathSkipsMissingAndLongDirectories(t *testing.T)
 	if _, err := linuxSupervisorEndpoint("owner|endpoint=" + endpoint); err != nil {
 		t.Fatalf("chosen endpoint is not accepted by recovery parsing: %v", err)
 	}
-	if _, err := linuxSupervisorEndpointPath(jobID, missing, long); err == nil {
+	if _, err := linuxSupervisorEndpointPath(jobID, missing, long, "/proc"); err == nil {
 		t.Fatal("linuxSupervisorEndpointPath() without a usable directory = nil error")
 	}
 }

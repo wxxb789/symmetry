@@ -2694,9 +2694,10 @@ func credentialsPID(credentials *unix.Ucred) int {
 // terminating NUL.
 const linuxSupervisorEndpointMax = 108
 
-// linuxSupervisorEndpointPath places the recovery socket in the first existing
-// directory whose path fits sun_path. A long TMPDIR or an image without /tmp
-// would otherwise fail only inside the helper, after the target is launched.
+// linuxSupervisorEndpointPath places the recovery socket in the first writable
+// directory whose path fits sun_path. A long or read-only TMPDIR, or an image
+// without /tmp, would otherwise fail only inside the helper, after the target
+// is launched.
 func linuxSupervisorEndpointPath(jobID string, directories ...string) (string, error) {
 	name := "symmetry-linux-supervisor-" + jobID + ".sock"
 	for _, directory := range directories {
@@ -2704,11 +2705,15 @@ func linuxSupervisorEndpointPath(jobID string, directories ...string) (string, e
 		if !filepath.IsAbs(endpoint) || len(endpoint) >= linuxSupervisorEndpointMax {
 			continue
 		}
-		if info, err := os.Stat(directory); err == nil && info.IsDir() {
-			return endpoint, nil
+		probe, err := os.CreateTemp(directory, ".symmetry-endpoint-probe-*")
+		if err != nil {
+			continue
 		}
+		_ = probe.Close()
+		_ = os.Remove(probe.Name())
+		return endpoint, nil
 	}
-	return "", fmt.Errorf("Linux supervisor recovery endpoint needs an existing directory with a path shorter than %d bytes; tried %q", linuxSupervisorEndpointMax-len(name)-1, directories)
+	return "", fmt.Errorf("Linux supervisor recovery endpoint needs a writable directory with a path shorter than %d bytes; tried %q", linuxSupervisorEndpointMax-len(name)-1, directories)
 }
 
 func linuxSupervisorEndpoint(ownerContext string) (string, error) {
