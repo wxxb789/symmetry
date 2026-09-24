@@ -132,3 +132,37 @@ named above; this evidence-only documentation update does not change daemon
 behavior. Final Goal acceptance still requires the review receipts and PR
 checks to bind to that subject; unrelated workflow failures must not be
 represented as containment failures or silently ignored.
+
+## Harness Session Escapes (2026-09-24)
+
+Pinned harness binaries start helper children in a new session, so the Linux
+scan observes them outside the original group:
+
+- OpenCode `1.18.30` runs `git` snapshot and repository probes (`rev-parse`,
+  `ls-files`, `write-tree`) as session leaders. Reproduced locally on Linux at
+  `d7cc419`: `TestNativeSyntheticGatewayToolIntegration` closes with
+  `observed_escape` on every run. The same test passes on `main`, which had no
+  descendant scan.
+- pi `0.85.1` embeds `spawn(cmd, args, { stdio: "ignore", detached: true })`.
+  In CI run `35981857022` (subject `4fa39d8`), the Linux Pi Control E2E handoff
+  task failed with the same `observed_escape` stop-unproven error. This case
+  was not reproduced locally.
+
+Owner decision (2026-09-24): keep the fail-closed boundary. An observed session
+escape remains durable unresolved containment. The `opencode-native-synthetic`
+and Linux Pi Control E2E jobs stay red for this goal instead of weakening the
+check. Supporting these harnesses on Linux needs a separate amendment that
+gives the daemon an ownership boundary covering new sessions (for example a
+delegated cgroup v2 or subreaper-tracked adoption set). It must not be a
+harness opt-out from escape proof.
+
+Two failures on the same jobs are not containment escapes:
+
+- The Pi E2E test (`control/test/symmetry_control/pi_control_e2e_test.exs`
+  around lines 4257 and 4432) still validates and rebuilds the Linux v1 identity
+  `linux:<boot>:<pid>:<start>`. The daemon persists v2
+  `linux:v2:<boot>:<pidns>:<pid>:<start>`, and that format already exists on
+  `main`.
+- The Windows Pi job's `pg_ctl start -w` hangs its step until the job is
+  cancelled. It started failing only after `initdb` was fixed to create its own
+  data directory.
