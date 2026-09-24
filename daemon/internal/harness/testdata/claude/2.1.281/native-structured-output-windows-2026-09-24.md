@@ -65,3 +65,9 @@ production adapter. That path is shown only by the driver captures and replay
 tests. It does not prove real-model tool compliance, resume, cancellation,
 usage, repository work, or Linux behavior. The capability projection stays
 fail-closed (`ErrNativeUnverified`).
+
+## Owner decision (2026-09-24)
+
+The `Open` amendment is deferred to goal 0006e and needs independent review
+there. The 0006b containment PR does not change `Open`. Until 0006e resolves
+the conflict, Claude Code 2.1.281 cannot open a candidate session.
