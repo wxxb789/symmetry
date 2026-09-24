@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -327,5 +328,50 @@ func TestStaleCancelAfterOwnerReleaseKeepsUnprovenProcess(t *testing.T) {
 	journal := journalForKey(t, store, key)
 	if journal.TerminalState != "" || len(journal.PendingCommandAcknowledgements) != 0 || !journal.HasProcessDetails() {
 		t.Fatalf("unproven stale cancel changed durable state: %#v", journal)
+	}
+}
+
+func TestStaleCancelAfterOwnerReleaseStopsExactProcessBeforeReceipt(t *testing.T) {
+	for _, stopErr := range []error{nil, errors.New("process identity mismatch")} {
+		t.Run(fmt.Sprintf("stop error %v", stopErr), func(t *testing.T) {
+			store, key := claimedStore(t)
+			defer store.Close()
+			if _, err := store.SetProcessDetails(key, 42, "test:42", time.Now().UTC()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.SetLocalState(key, "stale"); err != nil {
+				t.Fatal(err)
+			}
+			stops := 0
+			daemon := &daemon{
+				store:   store,
+				log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
+				running: map[state.RunKey]*runningRun{},
+				options: options{newID: ids(), clock: time.Now, terminatePersist: func(pid int, identity string) error {
+					if pid != 42 || identity != "test:42" {
+						t.Fatalf("recovered stop target = (%d, %q), want recorded (42, test:42)", pid, identity)
+					}
+					if journal := journalForKey(t, store, key); journal.TerminalState != "" || len(journal.PendingCommandAcknowledgements) != 0 {
+						t.Fatalf("receipt published before the recorded process stop: %#v", journal)
+					}
+					stops++
+					return stopErr
+				}},
+			}
+			acknowledged := daemon.handleCommand(context.Background(), protocol.Command{CommandID: "cancel-1", RunID: key.RunID, Generation: key.Generation, Kind: "cancel"})
+			journal := journalForKey(t, store, key)
+			if stops != 1 {
+				t.Fatalf("recorded process stops = %d, want 1", stops)
+			}
+			if stopErr != nil {
+				if acknowledged || journal.TerminalState != "" || len(journal.PendingCommandAcknowledgements) != 0 || !journal.HasProcessDetails() {
+					t.Fatalf("failed stop acknowledged=%v changed durable state: %#v", acknowledged, journal)
+				}
+				return
+			}
+			if !acknowledged || journal.HasProcessDetails() || journal.TerminalState != "cancelled" || !hasPendingCommandAcknowledgementOutcome(journal, "cancel-1", "applied") {
+				t.Fatalf("proven stop acknowledged=%v journal = %#v, want cleared process and applied cancel receipt", acknowledged, journal)
+			}
+		})
 	}
 }
