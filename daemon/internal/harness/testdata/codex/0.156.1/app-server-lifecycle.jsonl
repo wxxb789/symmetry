@@ -1,6 +1,6 @@
 {"jsonrpc":"2.0","method":"remoteControl/status/changed","params":{"status":"idle"}}
-{"jsonrpc":"2.0","id":1,"result":{"userAgent":"codex-cli/0.153.4","codexHome":"C:/redacted","platformFamily":"windows","platformOs":"windows"}}
-{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thread-redacted","sessionId":"session-redacted","cwd":"C:/workspace-redacted","cliVersion":"0.153.4","status":"idle"},"approvalPolicy":"on-request","sandbox":"read-only"}}
+{"jsonrpc":"2.0","id":1,"result":{"userAgent":"codex-cli/0.156.1","codexHome":"C:/redacted","platformFamily":"windows","platformOs":"windows"}}
+{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thread-redacted","sessionId":"session-redacted","cwd":"C:/workspace-redacted","cliVersion":"0.156.1","status":"idle"},"approvalPolicy":"on-request","sandbox":"read-only"}}
 {"jsonrpc":"2.0","id":3,"result":{"turn":{"id":"turn-redacted","items":[],"status":"inProgress"}}}
 {"jsonrpc":"2.0","method":"thread/started","params":{"thread":{"id":"thread-redacted"}}}
 {"jsonrpc":"2.0","method":"turn/started","params":{"threadId":"thread-redacted","turn":{"id":"turn-redacted","items":[],"status":"inProgress"}}}

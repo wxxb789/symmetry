@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,8 +12,8 @@ import (
 
 func TestClaudeProbeKnownVersionAndHelpFailsClosed(t *testing.T) {
 	runner := &claudeFixtureRunner{responses: map[string][]byte{
-		"--version": []byte("2.1.259 (Claude Code)\n"),
-		"--help":    []byte("claude --print --output-format <format> text, json, or stream-json\n"),
+		"--version": []byte(testedClaudeVersion + " (Claude Code)\n"),
+		"--help":    []byte("claude --print --output-format <format> text, json, or stream-json\n  --json-schema <schema>  JSON Schema for structured output validation.\n"),
 	}}
 
 	capabilities, err := probeClaudeExecutable(context.Background(), `C:\Users\lhan\.local\bin\claude.exe`, runner)
@@ -33,9 +34,24 @@ func TestClaudeProbeKnownVersionAndHelpFailsClosed(t *testing.T) {
 	}
 }
 
+func TestClaudeProbeHelpWithoutJSONSchemaFailsClosed(t *testing.T) {
+	runner := &claudeFixtureRunner{responses: map[string][]byte{
+		"--version": []byte(testedClaudeVersion + " (Claude Code)\n"),
+		"--help":    []byte("claude --print --output-format <format> text, json, or stream-json\n"),
+	}}
+
+	capabilities, err := probeClaudeExecutable(context.Background(), "claude", runner)
+	if !errors.Is(err, ErrNativeUnverified) || !strings.Contains(err.Error(), "--json-schema") {
+		t.Fatalf("probe error = %v, want ErrNativeUnverified naming --json-schema", err)
+	}
+	if capabilities.TransportVerified || capabilities.Verified || capabilities.Start {
+		t.Fatalf("capabilities = %+v, want no transport evidence without --json-schema", capabilities)
+	}
+}
+
 func TestClaudeProbeUnknownVersionFailsClosed(t *testing.T) {
 	runner := &claudeFixtureRunner{responses: map[string][]byte{
-		"--version": []byte("2.1.260 (Claude Code)\n"),
+		"--version": []byte("2.1.259 (Claude Code)\n"),
 		"--help":    []byte("should not be called"),
 	}}
 
@@ -43,7 +59,7 @@ func TestClaudeProbeUnknownVersionFailsClosed(t *testing.T) {
 	if !errors.Is(err, ErrUnsupportedVersion) {
 		t.Fatalf("probe error = %v, want ErrUnsupportedVersion", err)
 	}
-	if capabilities.NativeVersion != "2.1.260" || !capabilities.VersionKnown || capabilities.TransportVerified || capabilities.Verified {
+	if capabilities.NativeVersion != "2.1.259" || !capabilities.VersionKnown || capabilities.TransportVerified || capabilities.Verified {
 		t.Fatalf("capabilities = %+v, want known unsupported version without transport evidence", capabilities)
 	}
 	if got, want := runner.calls, []string{"--version"}; !sameStrings(got, want) {
@@ -70,8 +86,8 @@ func TestClaudeProbeAbsentExecutableIsUnavailable(t *testing.T) {
 
 func TestClaudeAdapterStartRemainsFailClosedAfterProbeEvidence(t *testing.T) {
 	runner := &claudeFixtureRunner{responses: map[string][]byte{
-		"--version": []byte("2.1.259 (Claude Code)\n"),
-		"--help":    []byte("--print --output-format stream-json"),
+		"--version": []byte(testedClaudeVersion + " (Claude Code)\n"),
+		"--help":    []byte("--print --output-format stream-json --json-schema"),
 	}}
 	adapter := NewClaudeAdapterWithRunner("claude", runner)
 
@@ -163,7 +179,7 @@ func TestClaudeProbeDoesNotParseFailedCommandOutput(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runner := &claudeFixtureRunner{results: map[string]claudeFixtureResult{
-				"--version": {output: []byte("2.1.259 (Claude Code)\n"), err: test.err},
+				"--version": {output: []byte(testedClaudeVersion + " (Claude Code)\n"), err: test.err},
 			}}
 			capabilities, err := probeClaudeExecutable(context.Background(), "claude", runner)
 			if err == nil {
@@ -192,7 +208,7 @@ type claudeSuccessAfterDeadlineRunner struct{}
 
 func (claudeSuccessAfterDeadlineRunner) Run(ctx context.Context, _ string, _ ...string) ([]byte, error) {
 	<-ctx.Done()
-	return []byte("2.1.259 (Claude Code)\n"), nil
+	return []byte(testedClaudeVersion + " (Claude Code)\n"), nil
 }
 
 func (runner *claudeFixtureRunner) Run(_ context.Context, _ string, args ...string) ([]byte, error) {

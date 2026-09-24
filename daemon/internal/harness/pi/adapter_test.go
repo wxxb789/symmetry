@@ -889,7 +889,7 @@ func TestMalformedRecordPreservesDiagnosticDurabilityFailure(t *testing.T) {
 
 func TestProbeRemainsNativeUnverifiedWithAllExecutableCapabilitiesFalse(t *testing.T) {
 	runner := fakeCommandRunner{outputs: map[string][]byte{
-		"--version": []byte("0.85.1\n"),
+		"--version": []byte(TestedVersion + "\n"),
 		"--help":    []byte("Options:\n  --mode <mode> Output mode: text, json, or rpc\n"),
 	}}
 	result, err := Probe(context.Background(), "pi-test", runner)
@@ -1394,7 +1394,7 @@ func (runner *cancellationSuccessRunner) Run(ctx context.Context, _ string, args
 	if key == "--version" {
 		runner.startedOnce.Do(func() { close(runner.started) })
 		<-ctx.Done()
-		return []byte("0.85.1\n"), nil
+		return []byte(TestedVersion + "\n"), nil
 	}
 	return []byte("--mode <mode> rpc"), nil
 }

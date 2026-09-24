@@ -1,12 +1,17 @@
 # OpenCode 1.18.30 private protocol fixtures
 
+The records in this directory are historical evidence for OpenCode 1.18.30,
+superseded by [`../1.18.32/`](../1.18.32/README.md); the synthetic `.sse`
+fixtures moved there.
+
 These synthetic fixtures model the locally inspected OpenCode `serve` API at
 version `1.18.30` (upstream commit `3104c1428ec91f809e5ab86631300de41eb6952e`).
 They exercise HTTP identity, SSE framing/cursor validation, and strict
 source-derived durable event decoding only.
 
-The lifecycle fixtures (`lifecycle-terminal.sse`, `lifecycle-tool-retry.sse`,
-`unknown-then-terminal.sse`, and `missing-result.sse`) are synthetic sequences
+The lifecycle fixtures that moved to `../1.18.32/` (`lifecycle-terminal.sse`,
+`lifecycle-tool-retry.sse`, `unknown-then-terminal.sse`, and
+`missing-result.sse`) are synthetic sequences
 derived from the pinned upstream event definitions. They are not captures from
 a live model, do not prove terminal-result behavior, and must not promote any
 OpenCode capability.

@@ -158,7 +158,7 @@ func TestFramerRejectsInvalidJSONRPCMessageShape(t *testing.T) {
 }
 
 func TestFramerReadsSanitizedVersionFixture(t *testing.T) {
-	fixture, err := os.ReadFile(filepath.Join("..", "testdata", "codex", "0.153.4", "frames.jsonl"))
+	fixture, err := os.ReadFile(filepath.Join("..", "testdata", "codex", TestedVersion, "frames.jsonl"))
 	if err != nil {
 		t.Fatalf("read framing fixture: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestFramerReadsSanitizedVersionFixture(t *testing.T) {
 }
 
 func TestFramerAcceptsRawCodexStartSmokeWithoutJSONRPCHeader(t *testing.T) {
-	fixture, err := os.ReadFile(filepath.Join("..", "testdata", "codex", "0.153.4", "app-server-start-smoke.jsonl"))
+	fixture, err := os.ReadFile(filepath.Join("..", "testdata", "codex", TestedVersion, "app-server-start-smoke.jsonl"))
 	if err != nil {
 		t.Fatalf("read raw start smoke fixture: %v", err)
 	}
@@ -192,8 +192,8 @@ func TestFramerAcceptsRawCodexStartSmokeWithoutJSONRPCHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Feed() error = %v", err)
 	}
-	if len(frames) != 3 {
-		t.Fatalf("frames = %d, want three raw smoke records", len(frames))
+	if len(frames) != 4 {
+		t.Fatalf("frames = %d, want four raw smoke records", len(frames))
 	}
 	want := []struct {
 		kind FrameKind
@@ -202,6 +202,7 @@ func TestFramerAcceptsRawCodexStartSmokeWithoutJSONRPCHeader(t *testing.T) {
 		{kind: FrameResponse, code: "unverified_native_response"},
 		{kind: FrameNotification, code: "unverified_native_method"},
 		{kind: FrameResponse, code: "unverified_native_response"},
+		{kind: FrameNotification, code: "unverified_native_method"},
 	}
 	for index, frame := range frames {
 		if frame.Kind != want[index].kind || frame.DiagnosticCode != want[index].code || frame.IsFramingError() {

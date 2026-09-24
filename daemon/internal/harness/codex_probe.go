@@ -9,8 +9,8 @@ import (
 const (
 	// CodexTestedVersion and CodexTestedSchemaHash identify the only Codex
 	// transport bundle whose probe evidence is accepted by this build.
-	CodexTestedVersion    = "0.153.4"
-	CodexTestedSchemaHash = "sha256:d3eace08be5dca386bfd1f1e8df650058b4113f1e10870a284d775d75517576a"
+	CodexTestedVersion    = "0.156.1"
+	CodexTestedSchemaHash = "sha256:995fc3b8f8c469f6787e8fc5be4038c4f31359025edd8480b862e83355f3bf3b"
 )
 
 // CodexProbeEvidence is the shared conservative result of version, transport,

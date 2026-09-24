@@ -24,7 +24,7 @@ func TestProbeMapsBoundedVersionOutputFailureToHarnessUnavailable(t *testing.T) 
 
 func TestProbeMapsBoundedHelpOutputFailureToNativeUnverified(t *testing.T) {
 	runner := probeErrorRunner{
-		version: []byte("0.85.1\n"),
+		version: []byte(TestedVersion + "\n"),
 		err:     execution.ErrOutputLimitExceeded,
 	}
 

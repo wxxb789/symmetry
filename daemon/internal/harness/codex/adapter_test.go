@@ -2440,7 +2440,7 @@ func TestCloseRetriesFailedTerminationAndStabilizesSuccess(t *testing.T) {
 }
 
 func TestSanitizedLifecycleFixturePreservesNativeInterleaving(t *testing.T) {
-	fixture, err := os.ReadFile(filepath.Join("..", "testdata", "codex", "0.153.4", "app-server-lifecycle.jsonl"))
+	fixture, err := os.ReadFile(filepath.Join("..", "testdata", "codex", TestedVersion, "app-server-lifecycle.jsonl"))
 	if err != nil {
 		t.Fatalf("read lifecycle fixture: %v", err)
 	}

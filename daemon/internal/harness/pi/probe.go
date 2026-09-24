@@ -14,7 +14,7 @@ import (
 
 const (
 	DefaultExecutable = "pi"
-	TestedVersion     = "0.85.1"
+	TestedVersion     = "0.87.1"
 	probeTimeout      = time.Second
 	probeOutputLimit  = 64 * 1024
 )

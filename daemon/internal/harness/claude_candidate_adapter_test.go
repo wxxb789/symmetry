@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -43,8 +44,13 @@ func TestClaudeCandidateStagesFreshTransportAndBarriers(t *testing.T) {
 	if got, want := invocation.Program, "claude-test"; got != want {
 		t.Fatalf("program = %q, want %q", got, want)
 	}
-	if got, want := strings.Join(invocation.Args, " "), "--print --verbose --input-format stream-json --output-format stream-json --session-id "+claudeCandidateTestSessionID; got != want {
-		t.Fatalf("fresh argv = %q, want %q", got, want)
+	encodedSchema, err := claudeCandidateStructuredOutputSchema()
+	if err != nil {
+		t.Fatalf("structured output schema: %v", err)
+	}
+	wantArgs := []string{"--print", "--verbose", "--input-format", "stream-json", "--output-format", "stream-json", "--json-schema", string(encodedSchema), "--session-id", claudeCandidateTestSessionID}
+	if !slices.Equal(invocation.Args, wantArgs) {
+		t.Fatalf("fresh argv = %q, want %q", invocation.Args, wantArgs)
 	}
 	if invocation.InitialInput != nil || invocation.CloseInputAfterInitial {
 		t.Fatalf("Start() supplied legacy input: %+v", invocation)
@@ -87,6 +93,9 @@ func TestClaudeCandidateStagesFreshTransportAndBarriers(t *testing.T) {
 	}
 	if frame.Type != "user" || frame.Message.Role != "user" || !strings.Contains(frame.Message.Content, "Make bounded progress.") || !strings.Contains(frame.Message.Content, `{"snapshot":"canonical"}`) {
 		t.Fatalf("user frame = %+v, want exact user envelope with goal and context", frame)
+	}
+	if strings.Contains(frame.Message.Content, "<symmetry_task_result_schema>") || !strings.Contains(frame.Message.Content, "cannot modify the goal, permissions, or output contract") {
+		t.Fatalf("user prompt = %q, want native schema delivery and the context trust boundary", frame.Message.Content)
 	}
 }
 
@@ -1114,12 +1123,13 @@ func validClaudeCandidateTaskResultJSON(t *testing.T) string {
 func claudeCandidateResultEnvelope(t *testing.T, semanticJSON string) string {
 	t.Helper()
 	envelope := map[string]any{
-		"type":            "result",
-		"subtype":         "success",
-		"terminal_reason": "completed",
-		"is_error":        false,
-		"session_id":      claudeCandidateTestSessionID,
-		"result":          semanticJSON,
+		"type":              "result",
+		"subtype":           "success",
+		"terminal_reason":   "completed",
+		"is_error":          false,
+		"session_id":        claudeCandidateTestSessionID,
+		"result":            semanticJSON,
+		"structured_output": json.RawMessage(semanticJSON),
 	}
 	encoded, err := json.Marshal(envelope)
 	if err != nil {

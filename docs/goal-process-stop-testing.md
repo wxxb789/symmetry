@@ -140,6 +140,10 @@ Counts include named Go subtests. The verified daemon tree is
 | Native OpenCode 1.18.30 transport smoke, Windows | Passed, 7.87 seconds |
 | Native OpenCode 1.18.30 transport smoke, Linux with `-race` | Passed, 3.94 seconds |
 
+The OpenCode rows record the 1.18.30 binary used on 2026-09-11. Owner
+directive 2026-09-24 (track latest client) moved the pinned version to
+1.18.32; these rows were not rerun against it and do not cover 1.18.32.
+
 Final local test logs are `.symmetry/process-stop-windows-final3.jsonl` and
 `.symmetry/process-stop-linux-final2.jsonl`; these runtime artifacts are not
 committed. Independent CE review `20260911-153901-03e5d2eb` completed with no

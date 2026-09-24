@@ -72,7 +72,7 @@ func TestNewHarnessRegistryBindsConcretePiAndOpenCodeAdapters(t *testing.T) {
 func TestNativeRegistrationDoesNotAdvertiseUnverifiedProviderAccess(t *testing.T) {
 	value := testConfig(t)
 	value.Runtime.HarnessKind = config.RuntimeHarnessCodex
-	value.Runtime.HarnessVersion = "0.153.4"
+	value.Runtime.HarnessVersion = codex.TestedVersion
 	value.Runtime.AdapterVersion = "symmetry-daemon:test"
 	value.Runtime.AdapterProtocolVersion = 1
 	profile := value.AgentProfiles[value.Runtime.AgentProfile]
@@ -175,13 +175,13 @@ func TestStartupProbeRejectsUnknownCodexVersion(t *testing.T) {
 func TestStartupProbeRegistersUnverifiedCodexProjection(t *testing.T) {
 	value := testConfig(t)
 	value.Runtime.HarnessKind = config.RuntimeHarnessCodex
-	value.Runtime.HarnessVersion = "0.153.4"
+	value.Runtime.HarnessVersion = codex.TestedVersion
 	value.Runtime.AdapterVersion = "symmetry-daemon:test"
 	value.Runtime.AdapterProtocolVersion = 1
 	registry := harness.NewRegistry()
 	if err := registry.Register(harness.KindCodex, codex.NewAdapterWithRunner("codex", codexCommandFixtures{
 		responses: map[string][]byte{
-			"--version":         []byte("codex-cli 0.153.4\n"),
+			"--version":         []byte("codex-cli " + codex.TestedVersion + "\n"),
 			"app-server --help": []byte("app-server\nstdio://\n"),
 		},
 	})); err != nil {
@@ -204,6 +204,14 @@ func TestStartupProbeRegistersUnverifiedCodexProjection(t *testing.T) {
 	}
 }
 
+// absentClaudeRunner keeps the unavailable projection independent of any
+// Claude Code executable installed on the test host.
+type absentClaudeRunner struct{}
+
+func (absentClaudeRunner) Run(context.Context, string, ...string) ([]byte, error) {
+	return nil, errors.New("claude executable not found")
+}
+
 func TestStartupProbeRegistersUnavailableNativeProjections(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -211,7 +219,7 @@ func TestStartupProbeRegistersUnavailableNativeProjections(t *testing.T) {
 		harnessKind harness.Kind
 		adapter     harness.Adapter
 	}{
-		{name: "claude", configKind: config.RuntimeHarnessClaudeCode, harnessKind: harness.KindClaude, adapter: harness.NewClaudeAdapter()},
+		{name: "claude", configKind: config.RuntimeHarnessClaudeCode, harnessKind: harness.KindClaude, adapter: harness.NewClaudeAdapterWithRunner("claude", absentClaudeRunner{})},
 		{name: "pi", configKind: config.RuntimeHarnessPi, harnessKind: harness.KindPi, adapter: harness.NewPiAdapter()},
 		{name: "opencode", configKind: config.RuntimeHarnessOpenCode, harnessKind: harness.KindOpenCode, adapter: harness.NewOpenCodeAdapter()},
 	}
@@ -325,7 +333,7 @@ func TestConcreteNativeProbeRegistrationRemainsUnverified(t *testing.T) {
 func TestStartupProbeRejectsInvalidUnverifiedProjection(t *testing.T) {
 	value := testConfig(t)
 	value.Runtime.HarnessKind = config.RuntimeHarnessCodex
-	value.Runtime.HarnessVersion = "0.153.4"
+	value.Runtime.HarnessVersion = codex.TestedVersion
 	value.Runtime.AdapterVersion = "symmetry-daemon:test"
 	value.Runtime.AdapterProtocolVersion = 1
 	capabilities := verifiedCodexCapabilities()
@@ -384,13 +392,13 @@ func TestStartupProbeRejectsUnexpectedJoinedProbeError(t *testing.T) {
 func TestStartupProbeRejectsMismatchedKnownNativeVersion(t *testing.T) {
 	value := testConfig(t)
 	value.Runtime.HarnessKind = config.RuntimeHarnessCodex
-	value.Runtime.HarnessVersion = "0.153.5"
+	value.Runtime.HarnessVersion = "0.156.2"
 	value.Runtime.AdapterVersion = "symmetry-daemon:test"
 	value.Runtime.AdapterProtocolVersion = 1
 	registry := harness.NewRegistry()
 	if err := registry.Register(harness.KindCodex, codex.NewAdapterWithRunner("codex", codexCommandFixtures{
 		responses: map[string][]byte{
-			"--version":         []byte("codex-cli 0.153.4\n"),
+			"--version":         []byte("codex-cli " + codex.TestedVersion + "\n"),
 			"app-server --help": []byte("app-server\nstdio://\n"),
 		},
 	})); err != nil {
@@ -440,7 +448,7 @@ func TestRegistrationWireIncludesAdapterObject(t *testing.T) {
 func TestBuildRuntimeRegistrationRejectsMismatchedAdapterKind(t *testing.T) {
 	runtime := config.Runtime{
 		RuntimeKey: "claude", Name: "Claude", Capacity: 1, AgentProfile: "default", Workspace: "primary",
-		HarnessKind: config.RuntimeHarnessClaudeCode, HarnessVersion: "2.1.259", AdapterVersion: "symmetry-daemon:test", AdapterProtocolVersion: 1,
+		HarnessKind: config.RuntimeHarnessClaudeCode, HarnessVersion: "2.1.281", AdapterVersion: "symmetry-daemon:test", AdapterProtocolVersion: 1,
 	}
 	capabilities := harness.UnsupportedCapabilities(harness.KindCodex, "test")
 	_, _, err := buildRuntimeRegistration(runtime, config.AgentProfile{InputMode: config.InputModeJSON}, capabilities)
@@ -459,7 +467,7 @@ func TestNativeRegistrationCarriesConfiguredRepositoryResourceID(t *testing.T) {
 		Workspace:              "primary",
 		RepositoryResourceID:   repositoryResourceID,
 		HarnessKind:            config.RuntimeHarnessCodex,
-		HarnessVersion:         "0.153.4",
+		HarnessVersion:         codex.TestedVersion,
 		AdapterVersion:         "symmetry-daemon:test",
 		AdapterProtocolVersion: 1,
 	}
@@ -2775,7 +2783,7 @@ func TestNativeGoalDeadlineInterruptsThenClosesBeforeFailure(t *testing.T) {
 	intent := state.GoalSessionLaunchIntent{
 		LaunchIntentID: "00000000-0000-4000-8000-000000000008", GoalID: admission.GoalID, GoalRevision: admission.GoalRevision,
 		WorkItemID: admissionWorkItemIDValue(admission.WorkItemID), TaskID: "task-1", RunID: key.RunID, Generation: key.Generation, AdmissionID: admission.AdmissionID,
-		LocalHandleID: sessionKey.LocalHandleID, RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: "0.153.4",
+		LocalHandleID: sessionKey.LocalHandleID, RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: codex.TestedVersion,
 		AdapterVersion: "symmetry-daemon:test", AdapterProtocolVersion: 1,
 		WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SessionMode: state.GoalSessionModeFresh,
 	}
@@ -3052,7 +3060,7 @@ func TestRecoverClosedTerminalGoalSessionRetiresUnreadyAttach(t *testing.T) {
 		LocalHandleID:        sessionKey.LocalHandleID,
 		BindingID:            "00000000-0000-4000-8000-000000000009",
 		HarnessKind:          "codex",
-		HarnessVersion:       "0.153.4",
+		HarnessVersion:       codex.TestedVersion,
 		AdapterVersion:       "symmetry-daemon:test",
 		WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		Workspace:            "local",
@@ -3120,7 +3128,7 @@ func saveAttachedGoalSession(t *testing.T, store *state.Store, key state.RunKey,
 	intent := state.GoalSessionLaunchIntent{
 		LaunchIntentID: "00000000-0000-4000-8000-000000000008", GoalID: admission.GoalID, GoalRevision: admission.GoalRevision,
 		WorkItemID: admissionWorkItemIDValue(admission.WorkItemID), TaskID: "task-1", RunID: key.RunID, Generation: key.Generation, AdmissionID: admission.AdmissionID,
-		LocalHandleID: sessionKey.LocalHandleID, RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: "0.153.4",
+		LocalHandleID: sessionKey.LocalHandleID, RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: codex.TestedVersion,
 		AdapterVersion: "symmetry-daemon:test", AdapterProtocolVersion: 1,
 		WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SessionMode: state.GoalSessionModeFresh,
 	}
@@ -4624,7 +4632,7 @@ func TestRecoverUnstartedGoalSessionDoesNotInventUsageOrWorkspaceRetention(t *te
 	intent := state.GoalSessionLaunchIntent{
 		LaunchIntentID: "00000000-0000-4000-8000-000000000008", GoalID: admission.GoalID, GoalRevision: admission.GoalRevision,
 		WorkItemID: admissionWorkItemIDValue(admission.WorkItemID), TaskID: "task-1", RunID: key.RunID, Generation: key.Generation, AdmissionID: admission.AdmissionID,
-		LocalHandleID: sessionKey.LocalHandleID, RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: "0.153.4",
+		LocalHandleID: sessionKey.LocalHandleID, RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: codex.TestedVersion,
 		AdapterVersion: "symmetry-daemon:test", AdapterProtocolVersion: 1,
 		WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SessionMode: state.GoalSessionModeFresh,
 	}

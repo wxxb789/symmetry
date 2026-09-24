@@ -177,15 +177,15 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          release_url='https://github.com/earendil-works/pi/releases/download/v0.85.1/pi-linux-x64.tar.gz'
+          release_url='https://github.com/earendil-works/pi/releases/download/v0.87.1/pi-linux-x64.tar.gz'
           archive="$RUNNER_TEMP/pi-linux-x64.tar.gz"
-          release_dir="$RUNNER_TEMP/pi-0.85.1"
+          release_dir="$RUNNER_TEMP/pi-0.87.1"
           executable="$release_dir/pi/pi"
           log="$RUNNER_TEMP/pi-control-e2e-linux.log"
           provenance="$RUNNER_TEMP/pi-control-e2e-linux-provenance.txt"
-          archive_sha256='494e498f47d74d21f40b3386f6a5e921a3d49531a169cab55bbdaca0ea1fe25a'
-          executable_sha256='443bd83f30e4dbc7bac2eed9c6aa2461b9a15016fd555f48c92a0591d028c403'
-          pi_version='0.85.1'
+          archive_sha256='80d78dd62d50049a006b981d994c61255bcc10e730b0c278d4ea0a755909764c'
+          executable_sha256='3e8177cb94d6b4577f3626f9400d80c92d991867400c21a779784f5bee9b9925'
+          pi_version='0.87.1'
 
           : > "$log"
           rm -rf "$release_dir"
@@ -239,7 +239,7 @@ jobs:
           : > "$test_output"
           set +e
           SYMMETRY_PI_PROVIDER_ACTION_SMOKE=1 \
-          SYMMETRY_PI_NATIVE_SMOKE_EXECUTABLE="$RUNNER_TEMP/pi-0.85.1/pi/pi" \
+          SYMMETRY_PI_NATIVE_SMOKE_EXECUTABLE="$RUNNER_TEMP/pi-0.87.1/pi/pi" \
             go test -json -count=1 -timeout 90s ./internal/harness/pi \
               -run '^TestNativePiProviderBridgeAction$' 2>&1 |
             tee -a "$log" "$test_output"
@@ -309,7 +309,7 @@ jobs:
           : > "$test_output"
           set +e
           SYMMETRY_PI_CONTROL_E2E=1 \
-          SYMMETRY_PI_CONTROL_E2E_EXECUTABLE="$RUNNER_TEMP/pi-0.85.1/pi/pi" \
+          SYMMETRY_PI_CONTROL_E2E_EXECUTABLE="$RUNNER_TEMP/pi-0.87.1/pi/pi" \
             mix test test/symmetry_control/pi_control_e2e_test.exs --include skip:true --only pi_control_e2e 2>&1 |
             tee -a "$log" "$test_output"
           pipeline_status=("${PIPESTATUS[@]}")
@@ -645,7 +645,7 @@ jobs:
           $env:PI_E2E_PROVENANCE = Join-Path $env:RUNNER_TEMP 'pi-control-e2e-windows-provenance.txt'
           $env:PI_E2E_POSTGRES_DATA = Join-Path $env:RUNNER_TEMP 'symmetry-pi-control-postgres'
           $env:PI_E2E_POSTGRES_LOG = Join-Path $env:RUNNER_TEMP 'symmetry-pi-control-postgres.log'
-          $env:PI_E2E_EXECUTABLE = Join-Path $env:RUNNER_TEMP 'pi-0.85.1\pi.exe'
+          $env:PI_E2E_EXECUTABLE = Join-Path $env:RUNNER_TEMP 'pi-0.87.1\pi.exe'
           @(
             "PI_E2E_TEMP=$env:PI_E2E_TEMP"
             "PI_E2E_LOG=$env:PI_E2E_LOG"
@@ -680,11 +680,11 @@ jobs:
             "runner_arch=$env:RUNNER_ARCH"
             "runner_image=$runnerImage"
             'pi_target=x86_64-pc-windows'
-            'pi_version_expected=0.85.1'
-            'pi_release_url=https://github.com/earendil-works/pi/releases/download/v0.85.1/pi-windows-x64.zip'
-            'pi_archive_sha256_expected=002fa95b90d521245b9985d8f168caebc237ad56e7e30b319807dee1b2e17e1c'
+            'pi_version_expected=0.87.1'
+            'pi_release_url=https://github.com/earendil-works/pi/releases/download/v0.87.1/pi-windows-x64.zip'
+            'pi_archive_sha256_expected=aab2ba67baf8ff97a52d05b62d88e9e65a840c6ea8fa1029a28d62d210d4e5fc'
             "pi_executable_path=$env:PI_E2E_EXECUTABLE"
-            'pi_executable_sha256_expected=2d4d351da30bfe23a473032e66a571b238763565aa93754e74f4a939de13f195'
+            'pi_executable_sha256_expected=dd5fdf61bdd10e3fa3fb3d7dbca1ce9f21475d4a7a410f2e0524fd19ae35651f'
             'process_visibility=Elixir Port.open :hide for Windows native children; backup cleanup is verification-only and never invokes numeric process termination'
             'upstream_scope=numeric IPv4 loopback only'
             'provider_credentials=none'
@@ -880,11 +880,11 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $releaseUrl = 'https://github.com/earendil-works/pi/releases/download/v0.85.1/pi-windows-x64.zip'
+          $releaseUrl = 'https://github.com/earendil-works/pi/releases/download/v0.87.1/pi-windows-x64.zip'
           $archive = Join-Path $env:RUNNER_TEMP 'pi-windows-x64.zip'
           $releaseDir = Split-Path -Parent $env:PI_E2E_EXECUTABLE
-          $archiveSha256 = '002fa95b90d521245b9985d8f168caebc237ad56e7e30b319807dee1b2e17e1c'
-          $executableSha256 = '2d4d351da30bfe23a473032e66a571b238763565aa93754e74f4a939de13f195'
+          $archiveSha256 = 'aab2ba67baf8ff97a52d05b62d88e9e65a840c6ea8fa1029a28d62d210d4e5fc'
+          $executableSha256 = 'dd5fdf61bdd10e3fa3fb3d7dbca1ce9f21475d4a7a410f2e0524fd19ae35651f'
 
           Add-Content -LiteralPath $env:PI_E2E_LOG -Value "download_url=$releaseUrl"
           Invoke-WebRequest -UseBasicParsing -TimeoutSec 120 -Headers @{ 'User-Agent' = 'symmetry-ci' } -Uri $releaseUrl -OutFile $archive
@@ -909,8 +909,8 @@ jobs:
           $versionOutput = & $env:PI_E2E_EXECUTABLE --version 2>&1
           $versionStatus = $LASTEXITCODE
           $actualPiVersion = ($versionOutput -join "`n").Trim()
-          if ($versionStatus -ne 0 -or $actualPiVersion -ne '0.85.1') {
-            throw "Pi --version did not equal 0.85.1; status=$versionStatus output=$actualPiVersion"
+          if ($versionStatus -ne 0 -or $actualPiVersion -ne '0.87.1') {
+            throw "Pi --version did not equal 0.87.1; status=$versionStatus output=$actualPiVersion"
           }
 
           Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "pi_executable_sha256_actual=$actualExecutableSha256"
@@ -921,7 +921,7 @@ jobs:
         shell: pwsh
         env:
           SYMMETRY_PI_PROVIDER_ACTION_SMOKE: "1"
-          SYMMETRY_PI_NATIVE_SMOKE_EXECUTABLE: ${{ runner.temp }}\pi-0.85.1\pi.exe
+          SYMMETRY_PI_NATIVE_SMOKE_EXECUTABLE: ${{ runner.temp }}\pi-0.87.1\pi.exe
         run: |
           $ErrorActionPreference = 'Stop'
           $testOutput = & go test -json -count=1 -timeout 90s ./internal/harness/pi -run '^TestNativePiProviderBridgeAction$' 2>&1
@@ -976,7 +976,7 @@ jobs:
         shell: pwsh
         env:
           SYMMETRY_PI_CONTROL_E2E: "1"
-          SYMMETRY_PI_CONTROL_E2E_EXECUTABLE: ${{ runner.temp }}\pi-0.85.1\pi.exe
+          SYMMETRY_PI_CONTROL_E2E_EXECUTABLE: ${{ runner.temp }}\pi-0.87.1\pi.exe
           TEMP: ${{ runner.temp }}\symmetry-pi-control-tmp
           TMP: ${{ runner.temp }}\symmetry-pi-control-tmp
           TMPDIR: ${{ runner.temp }}\symmetry-pi-control-tmp
@@ -1234,19 +1234,19 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          release_url='https://github.com/anomalyco/opencode/releases/download/v1.18.30/opencode-linux-x64-baseline.tar.gz'
+          release_url='https://github.com/anomalyco/opencode/releases/download/v1.18.32/opencode-linux-x64-baseline.tar.gz'
           archive="$RUNNER_TEMP/opencode-linux-x64-baseline.tar.gz"
-          release_dir="$RUNNER_TEMP/opencode-1.18.30"
+          release_dir="$RUNNER_TEMP/opencode-1.18.32"
           executable="$release_dir/opencode"
           provenance="$RUNNER_TEMP/opencode-native-synthetic-provenance.txt"
-          archive_sha256='60c92147d0d86ca606dda8a77260d3c87e0ef959eb2d8dbffb34df6d8a64e063'
+          archive_sha256='763af386ef88a8cab18df00fcf055690e5a55e31a7088beabe02307142a6adce'
 
           rm -rf "$release_dir"
           mkdir -p "$release_dir"
           {
             printf 'source_revision=%s\n' "$GITHUB_SHA"
             printf 'release_url=%s\n' "$release_url"
-            printf 'version_expected=1.18.30\n'
+            printf 'version_expected=1.18.32\n'
             printf 'archive_sha256_expected=%s\n' "$archive_sha256"
             printf 'provider_credentials=none\n'
             printf 'upstream_scope=synthetic numeric loopback only\n'
@@ -1259,7 +1259,7 @@ jobs:
           tar --extract --file "$archive" --directory "$release_dir"
           test -x "$executable"
           actual_version=$(timeout 30s "$executable" --version)
-          test "$actual_version" = '1.18.30'
+          test "$actual_version" = '1.18.32'
           {
             printf 'archive_sha256_actual=%s\n' "$(sha256sum "$archive" | awk '{print $1}')"
             printf 'version_actual=%s\n' "$actual_version"
@@ -1269,7 +1269,7 @@ jobs:
         working-directory: daemon
         env:
           SYMMETRY_OPENCODE_NATIVE_SYNTHETIC_TOOL: "1"
-          SYMMETRY_OPENCODE_NATIVE_SYNTHETIC_TOOL_EXECUTABLE: ${{ runner.temp }}/opencode-1.18.30/opencode
+          SYMMETRY_OPENCODE_NATIVE_SYNTHETIC_TOOL_EXECUTABLE: ${{ runner.temp }}/opencode-1.18.32/opencode
         run: |
           set -Eeuo pipefail
           test_events="$RUNNER_TEMP/opencode-native-synthetic-test.json"
@@ -1343,7 +1343,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $env:OPENCODE_SYNTHETIC_LOG = Join-Path $env:RUNNER_TEMP 'opencode-native-synthetic-windows.log'
           $env:OPENCODE_SYNTHETIC_PROVENANCE = Join-Path $env:RUNNER_TEMP 'opencode-native-synthetic-windows-provenance.txt'
-          $env:OPENCODE_SYNTHETIC_EXECUTABLE = Join-Path $env:RUNNER_TEMP 'opencode-1.18.30\opencode.exe'
+          $env:OPENCODE_SYNTHETIC_EXECUTABLE = Join-Path $env:RUNNER_TEMP 'opencode-1.18.32\opencode.exe'
           @(
             "OPENCODE_SYNTHETIC_LOG=$env:OPENCODE_SYNTHETIC_LOG"
             "OPENCODE_SYNTHETIC_PROVENANCE=$env:OPENCODE_SYNTHETIC_PROVENANCE"
@@ -1356,10 +1356,10 @@ jobs:
             "runner_os=$env:RUNNER_OS"
             "runner_arch=$env:RUNNER_ARCH"
             "runner_image=$runnerImage"
-            'release_url=https://github.com/anomalyco/opencode/releases/download/v1.18.30/opencode-windows-x64-baseline.zip'
-            'version_expected=1.18.30'
-            'archive_sha256_expected=8c34c5767a688e8d6c4640b4893d34f08f08b071ed0043c940dc5be17a3b9233'
-            'executable_sha256_expected=17aea6d895c750ad5008df2395c5ae85353bd03a62ffc698ec040ef6dfea4115'
+            'release_url=https://github.com/anomalyco/opencode/releases/download/v1.18.32/opencode-windows-x64-baseline.zip'
+            'version_expected=1.18.32'
+            'archive_sha256_expected=cd852831bd094c2df2eb379eb98bed7a63db7f823a7caf277c732cdac33cbdb6'
+            'executable_sha256_expected=da86eed515d91a7b2d7da9a8230a2bd095f68a89f0cf44eb6a9217bead81fffc'
             'provider_credentials=none'
             'upstream_scope=synthetic numeric loopback only'
             'witness_scope=test-only'
@@ -1373,11 +1373,11 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $releaseUrl = 'https://github.com/anomalyco/opencode/releases/download/v1.18.30/opencode-windows-x64-baseline.zip'
+          $releaseUrl = 'https://github.com/anomalyco/opencode/releases/download/v1.18.32/opencode-windows-x64-baseline.zip'
           $archive = Join-Path $env:RUNNER_TEMP 'opencode-windows-x64-baseline.zip'
-          $releaseDir = Join-Path $env:RUNNER_TEMP 'opencode-1.18.30'
-          $archiveSha256 = '8c34c5767a688e8d6c4640b4893d34f08f08b071ed0043c940dc5be17a3b9233'
-          $executableSha256 = '17aea6d895c750ad5008df2395c5ae85353bd03a62ffc698ec040ef6dfea4115'
+          $releaseDir = Join-Path $env:RUNNER_TEMP 'opencode-1.18.32'
+          $archiveSha256 = 'cd852831bd094c2df2eb379eb98bed7a63db7f823a7caf277c732cdac33cbdb6'
+          $executableSha256 = 'da86eed515d91a7b2d7da9a8230a2bd095f68a89f0cf44eb6a9217bead81fffc'
 
           Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_LOG -Value "download_url=$releaseUrl"
           Invoke-WebRequest -UseBasicParsing -TimeoutSec 120 -Headers @{ 'User-Agent' = 'symmetry-ci' } -Uri $releaseUrl -OutFile $archive
@@ -1407,8 +1407,8 @@ jobs:
           $versionStatus = $LASTEXITCODE
           $actualVersion = ($versionOutput -join "`n").Trim()
           $versionOutput | Tee-Object -FilePath $env:OPENCODE_SYNTHETIC_LOG -Append | Out-Host
-          if ($versionStatus -ne 0 -or $actualVersion -ne '1.18.30') {
-            throw "OpenCode --version did not equal 1.18.30; status=$versionStatus output=$actualVersion"
+          if ($versionStatus -ne 0 -or $actualVersion -ne '1.18.32') {
+            throw "OpenCode --version did not equal 1.18.32; status=$versionStatus output=$actualVersion"
           }
 
           $helpOutput = & $env:OPENCODE_SYNTHETIC_EXECUTABLE serve --help 2>&1
@@ -1433,7 +1433,7 @@ jobs:
         shell: pwsh
         env:
           SYMMETRY_OPENCODE_NATIVE_SYNTHETIC_TOOL: '1'
-          SYMMETRY_OPENCODE_NATIVE_SYNTHETIC_TOOL_EXECUTABLE: ${{ runner.temp }}\opencode-1.18.30\opencode.exe
+          SYMMETRY_OPENCODE_NATIVE_SYNTHETIC_TOOL_EXECUTABLE: ${{ runner.temp }}\opencode-1.18.32\opencode.exe
         run: |
           $ErrorActionPreference = 'Stop'
           $testOutput = & go test -count=1 -timeout 180s -json ./internal/harness/opencode -run '^TestNativeSyntheticGatewayToolIntegration$' 2>&1

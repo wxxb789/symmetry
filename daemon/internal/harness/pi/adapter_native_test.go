@@ -34,7 +34,7 @@ func TestNativeRPCOpenAndClose(t *testing.T) {
 
 	executable := strings.TrimSpace(os.Getenv(nativeSmokeExecutableEnv))
 	if executable == "" {
-		t.Fatalf("%s must name the absolute Pi 0.85.1 executable", nativeSmokeExecutableEnv)
+		t.Fatalf("%s must name the absolute Pi executable", nativeSmokeExecutableEnv)
 	}
 	if !filepath.IsAbs(executable) {
 		t.Fatalf("%s must be absolute", nativeSmokeExecutableEnv)
