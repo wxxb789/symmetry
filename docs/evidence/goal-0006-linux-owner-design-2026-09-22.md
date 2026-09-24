@@ -8,8 +8,8 @@ current proposal is revision `0006b-linux-helper-v1.1`.
 It is
 not a completion receipt and does not silently amend the approved Goal or the
 fixed design baseline. The current implementation subject is
-`568c9403812b18438d6ebd7f40c8e69104554276`, tree
-`26a402aff73d91a862ed5948c63d10797476e999`.
+`fcebf721c8c47d163a765fec15c33be159328786`, tree
+`8d3a145374882a06f8205ebf0b0fc36b4363c41c`.
 
 The owner contract below is the binding target for the Linux implementation.
 Goal completion remains blocked until the contract, exact-subject production
@@ -103,11 +103,11 @@ passing gate.
 
 ## Exact Subject Verification
 
-The push workflow run `35749712299`, attempt 2 (2026-09-22) produced artifact
-`production-linux-containment-witness-35749712299-2` (artifact ID
-`10705627093`). Its provenance binds
-`subject_head=568c9403812b18438d6ebd7f40c8e69104554276` and
-`subject_tree=26a402aff73d91a862ed5948c63d10797476e999`, with Go 1.27.0 on
+The push workflow run `36044074516`, attempt 1 (2026-09-24) produced artifact
+`production-linux-containment-witness-36044074516-1` (artifact ID
+`10827668140`). Its provenance binds
+`subject_head=fcebf721c8c47d163a765fec15c33be159328786` and
+`subject_tree=8d3a145374882a06f8205ebf0b0fc36b4363c41c`, with Go 1.27.0 on
 Linux kernel 6.17.0-1022-azure.
 
 The artifact test event stream records all three required top-level witnesses
@@ -119,19 +119,44 @@ as `run=1`, `pass=1`, `skip=0`, `fail=0`:
 
 The daemon job for the same exact subject passed `gofmt`, `go vet ./...`,
 `go test -count=3 -timeout 300s ./...`, `go test -race -count=1 -timeout
-600s ./...`, and the Linux cross-build. The Windows daemon job also passed its
-native test/build and Windows containment witnesses. Other workflow failures
-in this run were outside this containment evidence (Pi/PostgreSQL, Compose,
-OpenCode synthetic, and control-restart integration jobs).
+600s ./...`, and the Linux cross-build. The Windows daemon job passed its
+native tests and build, the production Windows containment witness, and the
+production pre-authority crash witness matrix. `integration`, `compose`,
+`control`, `contracts`, `legacy-route-audit`, `pi-control-e2e-windows` and
+`opencode-native-synthetic-windows` also passed. The pull request run
+`36044082686` for PR #9 on the same subject has the same job results.
+
+Two jobs fail on this subject, as decided under Harness Session Escapes:
+`pi-control-e2e-linux` and `opencode-native-synthetic`. Their only failure
+cause is `observed_escape`, which is the fail-closed containment result for
+harness children that start a new session. They are not containment defects.
+
+The earlier subject `568c9403812b18438d6ebd7f40c8e69104554276` (run
+`35749712299`, artifact `10705627093`) is superseded; its evidence does not
+validate the later code.
+
+## Independent Review Receipts
+
+Each review was a separate local Codex session (`gpt-6-luna`, `xhigh`) with
+the requirement, this file and the exact diff. Reviewers could run tests on
+Windows and in the WSL distro `symmetry-race` (Alpine, Go 1.27.0) and could
+not edit tracked files.
+
+| Subject | Scope | Verdict | Outcome |
+| --- | --- | --- | --- |
+| `3d5076f` | stale-run cancel fix | reject | Scope pointed at a docs-only commit and tests could not run. `f85d15b` added the missing recovery-path stop tests. |
+| `f85d15b` | stale-run cancel fix, `bb239d2..f85d15b` | accept | No defect. Low: one guard test also passes on the base; no stale-witness and terminal interleaving test. |
+| `f85d15b` | Linux containment, `568c940..f85d15b` | reject | P1: kept by owner decision, see Scan Exit-Race Boundary. P2: fixed in `c04cd47`. |
+| `3f74f34` | delta `f85d15b..3f74f34` | reject | P1 worker-thread exit false-clean, fixed in `fe918d8`. Stale retention and endpoint probe had no defect. |
+| `fcebf72` | delta `3f74f34..fcebf72` | accept | Original P1 reproduction fails closed 10 of 10. A post-snapshot unobserved escape remains outside the Goal boundary. |
 
 ## Remaining Acceptance
 
 This file remains an evidence record and is not a completion receipt. The
-implementation-bound receipts and artifact above apply to the exact subject
-named above; this evidence-only documentation update does not change daemon
-behavior. Final Goal acceptance still requires the review receipts and PR
-checks to bind to that subject; unrelated workflow failures must not be
-represented as containment failures or silently ignored.
+artifact, checks and receipts above bind to `fcebf72`. A later commit that
+only changes this file does not change daemon behavior. Goal acceptance
+needs the owner to accept this evidence, the kept P1 boundary, and the two
+fail-closed harness jobs.
 
 ## Harness Session Escapes (2026-09-24)
 
