@@ -1404,15 +1404,19 @@ func (process *Process) terminateTree(grace time.Duration) {
 	}
 
 	if err := process.containment.Terminate(true); err != nil {
+		// Record the containment failure before the root kill. The kill unblocks
+		// command.Wait, so waitAndComplete can publish its result snapshot while
+		// this goroutine is still between the kill and the record; recording
+		// first keeps the published result from omitting the failure.
+		process.recordTerminationError(err)
 		// Containment is responsible for descendants, but it must not be the
 		// sole termination mechanism for the root process. Otherwise a failed
 		// job/task-kill leaves command.Wait blocked forever after a failed
 		// initial-input cleanup path.
 		killErr := process.killProcess()
-		if errors.Is(killErr, os.ErrProcessDone) {
-			killErr = nil
+		if !errors.Is(killErr, os.ErrProcessDone) && killErr != nil {
+			process.recordTerminationError(killErr)
 		}
-		process.recordTerminationError(errors.Join(err, killErr))
 		return
 	}
 	<-process.resultDone
