@@ -8,8 +8,8 @@ current proposal is revision `0006b-linux-helper-v1.1`.
 It is
 not a completion receipt and does not silently amend the approved Goal or the
 fixed design baseline. The current implementation subject is
-`fcebf721c8c47d163a765fec15c33be159328786`, tree
-`8d3a145374882a06f8205ebf0b0fc36b4363c41c`.
+`add532e926fac69ada5a2fbe5c7103dace596ae9`, tree
+`af920dbadbfa19c9e58bfabd199dcdf8395e53f5`.
 
 The owner contract below is the binding target for the Linux implementation.
 Goal completion remains blocked until the contract, exact-subject production
@@ -103,11 +103,11 @@ passing gate.
 
 ## Exact Subject Verification
 
-The push workflow run `36044074516`, attempt 1 (2026-09-24) produced artifact
-`production-linux-containment-witness-36044074516-1` (artifact ID
-`10827668140`). Its provenance binds
-`subject_head=fcebf721c8c47d163a765fec15c33be159328786` and
-`subject_tree=8d3a145374882a06f8205ebf0b0fc36b4363c41c`, with Go 1.27.0 on
+The push workflow run `36120037489`, attempt 1 (2026-09-25) produced artifact
+`production-linux-containment-witness-36120037489-1` (artifact ID
+`10856674088`). Its provenance binds
+`subject_head=add532e926fac69ada5a2fbe5c7103dace596ae9` and
+`subject_tree=af920dbadbfa19c9e58bfabd199dcdf8395e53f5`, with Go 1.27.0 on
 Linux kernel 6.17.0-1022-azure.
 
 The artifact test event stream records all three required top-level witnesses
@@ -124,16 +124,18 @@ native tests and build, the production Windows containment witness, and the
 production pre-authority crash witness matrix. `integration`, `compose`,
 `control`, `contracts`, `legacy-route-audit`, `pi-control-e2e-windows` and
 `opencode-native-synthetic-windows` also passed. The pull request run
-`36044082686` for PR #9 on the same subject has the same job results.
+`36120042078` for PR #9 on the same subject has the same job results.
 
 Two jobs fail on this subject, as decided under Harness Session Escapes:
 `pi-control-e2e-linux` and `opencode-native-synthetic`. Their only failure
 cause is `observed_escape`, which is the fail-closed containment result for
 harness children that start a new session. They are not containment defects.
 
-The earlier subject `568c9403812b18438d6ebd7f40c8e69104554276` (run
-`35749712299`, artifact `10705627093`) is superseded; its evidence does not
-validate the later code.
+The earlier subjects `568c9403812b18438d6ebd7f40c8e69104554276` (run
+`35749712299`, artifact `10705627093`) and
+`fcebf721c8c47d163a765fec15c33be159328786` (run `36044074516`, artifact
+`10827668140`) are superseded; their evidence does not validate the later
+code.
 
 ## Independent Review Receipts
 
@@ -149,11 +151,12 @@ not edit tracked files.
 | `f85d15b` | Linux containment, `568c940..f85d15b` | reject | P1: kept by owner decision, see Scan Exit-Race Boundary. P2: fixed in `c04cd47`. |
 | `3f74f34` | delta `f85d15b..3f74f34` | reject | P1 worker-thread exit false-clean, fixed in `fe918d8`. Stale retention and endpoint probe had no defect. |
 | `fcebf72` | delta `3f74f34..fcebf72` | accept | Original P1 reproduction fails closed 10 of 10. A post-snapshot unobserved escape remains outside the Goal boundary. |
+| `add532e` | delta `fcebf72..add532e` | accept | A deterministic kill-to-record window amplification fails 10 of 10 `-race` batches on `fcebf72` and passes 10 of 10 on `add532e`; the unmodified race test passed 1,200 iterations per revision. No new defect. |
 
 ## Remaining Acceptance
 
 This file remains an evidence record and is not a completion receipt. The
-artifact, checks and receipts above bind to `fcebf72`. A later commit that
+artifact, checks and receipts above bind to `add532e`. A later commit that
 only changes this file does not change daemon behavior. Goal acceptance
 needs the owner to accept this evidence, the kept P1 boundary, and the two
 fail-closed harness jobs.
@@ -304,3 +307,28 @@ fails closed in 10 of 10 runs with `descendant containment is unproven`.
 Known limit: if the main thread exits while worker threads still run,
 children can move to a worker that was already read. Go and Node keep the
 main thread alive, so this is out of scope for now.
+
+## Termination-Error Publication Race (2026-09-25)
+
+The pull-request CI run `36047218329` (subject `9830fe6`, daemon job,
+2026-09-24) failed `TestTerminateFallsBackToRootKillWhenForcedContainmentFails`
+once: the result had `Terminated=true` with `TerminationError=nil`. The old
+`terminateTree` recorded the forced containment failure only after the root
+kill. The kill unblocks `command.Wait`, so `waitAndComplete` could take
+`terminationMutex`, snapshot the still-nil `terminationError`, and publish the
+result while `terminateTree` was between the kill and the record.
+
+The spontaneous failure did not reproduce locally: the unmodified test passed
+1,200 `-race` iterations per revision on `fcebf72` and on `add532e` (200
+single runs, then 10 batches of 100). A temporary synchronization test that
+makes the root kill unblock `Wait` and wait for result publication before
+returning failed 10 of 10 `-race` runs on `fcebf72` with `Terminated=true` and
+`TerminationError=nil` and passed 10 of 10 on `add532e` with the
+forced-containment error present. The fix records the containment error
+before the root kill; the kill error is recorded separately and
+`os.ErrProcessDone` stays ignored. After the fix the full
+`go test -race ./internal/execution/ ./internal/app/` passed in WSL and the
+Windows `./...` suite passed. `recordTerminationError` joins errors
+append-only, so the published result cannot lose the containment error or
+duplicate the kill error.
+
