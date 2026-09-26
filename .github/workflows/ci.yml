@@ -1925,7 +1925,6 @@ jobs:
             -run '^TestProductionLinuxContainment(WitnessSpine|NegativeWitness|ReplayWitness)$' > "$test_events" 2>&1
           test_status=$?
           set -e
-          cat "$test_events"
 
           summary_status=0
           python3 - "$test_events" \
@@ -1981,10 +1980,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: |
-            ${{ runner.temp }}/production-linux-containment-witness-test.json
             ${{ runner.temp }}/production-linux-containment-witness-workflow-provenance.txt
-            ${{ runner.temp }}/symmetry-linux-containment-witness/**/*.json
-            ${{ runner.temp }}/symmetry-linux-containment-witness/**/*.log
+            ${{ runner.temp }}/symmetry-linux-containment-witness/provenance-*.json
 
   compose:
     runs-on: ubuntu-latest
