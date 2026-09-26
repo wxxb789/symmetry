@@ -8,6 +8,304 @@ permissions:
   contents: read
 
 jobs:
+  cgroup-v2-delegation-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.0'
+      - name: Build disposable cgroup-v2 capability probe
+        working-directory: daemon
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          source="$RUNNER_TEMP/cgroup-v2-delegation-probe.go"
+          binary="$RUNNER_TEMP/cgroup-v2-delegation-probe"
+          cat > "$source" <<'GO'
+          package main
+
+          import (
+            "bufio"
+            "bytes"
+            "context"
+            "fmt"
+            "io"
+            "os"
+            "os/exec"
+            "path/filepath"
+            "strconv"
+            "strings"
+            "syscall"
+            "time"
+          )
+
+          type report struct {
+            uid        int
+            childUID   int
+            kernel     string
+            cgroup     string
+            leafCgroup string
+            capability string
+          }
+
+          func membership() (string, error) {
+            file, err := os.Open("/proc/self/cgroup")
+            if err != nil {
+              return "", err
+            }
+            defer file.Close()
+            scanner := bufio.NewScanner(file)
+            for scanner.Scan() {
+              fields := strings.SplitN(scanner.Text(), ":", 3)
+              if len(fields) == 3 && fields[0] == "0" && fields[1] == "" &&
+                strings.HasPrefix(fields[2], "/") && filepath.Clean(fields[2]) == fields[2] {
+                return fields[2], nil
+              }
+            }
+            if err := scanner.Err(); err != nil {
+              return "", err
+            }
+            return "", fmt.Errorf("unified cgroup membership missing")
+          }
+
+          func unescapeMountField(value string) (string, error) {
+            var result strings.Builder
+            for i := 0; i < len(value); i++ {
+              if value[i] != '\\' {
+                result.WriteByte(value[i])
+                continue
+              }
+              if i+3 >= len(value) {
+                return "", fmt.Errorf("invalid mountinfo escape")
+              }
+              code, err := strconv.ParseUint(value[i+1:i+4], 8, 8)
+              if err != nil {
+                return "", err
+              }
+              result.WriteByte(byte(code))
+              i += 3
+            }
+            return result.String(), nil
+          }
+
+          func cgroupDirectory(cgroup string) (string, error) {
+            file, err := os.Open("/proc/self/mountinfo")
+            if err != nil {
+              return "", err
+            }
+            defer file.Close()
+            scanner := bufio.NewScanner(file)
+            scanner.Buffer(make([]byte, 4096), 1024*1024)
+            bestRoot := ""
+            bestDirectory := ""
+            for scanner.Scan() {
+              line := scanner.Text()
+              separator := strings.Index(line, " - ")
+              if separator < 0 {
+                continue
+              }
+              before := strings.Fields(line[:separator])
+              after := strings.Fields(line[separator+3:])
+              if len(before) < 5 || len(after) < 1 || after[0] != "cgroup2" {
+                continue
+              }
+              root, err := unescapeMountField(before[3])
+              if err != nil {
+                return "", err
+              }
+              mountpoint, err := unescapeMountField(before[4])
+              if err != nil {
+                return "", err
+              }
+              matches := cgroup == root || root == "/" ||
+                (strings.HasPrefix(cgroup, strings.TrimSuffix(root, "/")) &&
+                  strings.HasPrefix(strings.TrimPrefix(cgroup, strings.TrimSuffix(root, "/")), "/"))
+              if !matches || len(root) < len(bestRoot) {
+                continue
+              }
+              relative := strings.TrimPrefix(strings.TrimPrefix(cgroup, root), "/")
+              bestRoot = root
+              bestDirectory = filepath.Join(mountpoint, filepath.FromSlash(relative))
+            }
+            if err := scanner.Err(); err != nil {
+              return "", err
+            }
+            if bestDirectory == "" {
+              return "", fmt.Errorf("cgroup2 mount not found")
+            }
+            return bestDirectory, nil
+          }
+
+          func child() int {
+            cgroup, err := membership()
+            if err != nil {
+              return 1
+            }
+            fmt.Printf("uid=%d\ncgroup_path=%s\n", os.Geteuid(), cgroup)
+            return 0
+          }
+
+          func runProbe() (result report, failure string) {
+            result.uid = os.Geteuid()
+            result.capability = "not-proven"
+            kernel, err := os.ReadFile("/proc/sys/kernel/osrelease")
+            if err != nil {
+              return result, "kernel-version"
+            }
+            result.kernel = "linux/" + strings.TrimSpace(string(kernel))
+            if result.uid == 0 {
+              return result, "runner-is-root"
+            }
+            result.cgroup, err = membership()
+            if err != nil {
+              return result, "parent-membership"
+            }
+            parentDirectory, err := cgroupDirectory(result.cgroup)
+            if err != nil {
+              return result, "cgroup2-mount"
+            }
+            leafDirectory, err := os.MkdirTemp(parentDirectory, "symmetry-cgroup-probe-")
+            if err != nil {
+              result.capability = "unavailable"
+              return result, "delegated-parent-not-writable"
+            }
+            result.leafCgroup = result.cgroup
+            if result.leafCgroup != "/" {
+              result.leafCgroup += "/"
+            }
+            result.leafCgroup += filepath.Base(leafDirectory)
+            leafCreated := true
+            var leafFD *os.File
+            defer func() {
+              if leafFD != nil {
+                if err := leafFD.Close(); err != nil && failure == "" {
+                  failure = "close-leaf-fd"
+                }
+              }
+              if leafCreated {
+                if err := os.Remove(leafDirectory); err != nil && failure == "" {
+                  failure = "remove-leaf"
+                }
+              }
+            }()
+            leafFD, err = os.Open(leafDirectory)
+            if err != nil {
+              return result, "open-leaf-fd"
+            }
+
+            ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+            defer cancel()
+            output := new(bytes.Buffer)
+            pidFD := -1
+            command := exec.CommandContext(ctx, "/proc/self/exe", "--child")
+            command.Stdout = output
+            command.Stderr = io.Discard
+            command.SysProcAttr = &syscall.SysProcAttr{
+              UseCgroupFD: true,
+              CgroupFD:    int(leafFD.Fd()),
+              PidFD:       &pidFD,
+            }
+            if err := command.Start(); err != nil {
+              result.capability = "unavailable"
+              return result, "clone3-cgroupfd-pidfd"
+            }
+            if pidFD < 0 {
+              cancel()
+              _ = command.Wait()
+              result.capability = "unavailable"
+              return result, "pidfd-not-returned"
+            }
+            pidFDErr := syscall.Close(pidFD)
+            waitErr := command.Wait()
+            timedOut := ctx.Err() != nil
+            cancel()
+            if pidFDErr != nil {
+              return result, "close-pidfd"
+            }
+            if waitErr != nil {
+              if timedOut {
+                return result, "child-timeout"
+              }
+              return result, "child-exit"
+            }
+
+            values := make(map[string]string)
+            for _, line := range strings.Split(strings.TrimSpace(output.String()), "\n") {
+              key, value, ok := strings.Cut(line, "=")
+              if ok {
+                values[key] = value
+              }
+            }
+            result.childUID, err = strconv.Atoi(values["uid"])
+            if err != nil || result.childUID != result.uid {
+              return result, "child-uid-mismatch"
+            }
+            if values["cgroup_path"] != result.leafCgroup {
+              return result, "child-leaf-mismatch"
+            }
+            events, err := os.ReadFile(filepath.Join(leafDirectory, "cgroup.events"))
+            if err != nil {
+              return result, "read-cgroup-events"
+            }
+            populatedZero := false
+            fields := strings.Fields(string(events))
+            for i := 0; i+1 < len(fields); i += 2 {
+              if fields[i] == "populated" && fields[i+1] == "0" {
+                populatedZero = true
+              }
+            }
+            if !populatedZero {
+              return result, "leaf-still-populated"
+            }
+            result.capability = "clone3-cgroupfd-pidfd"
+            return result, ""
+          }
+
+          func main() {
+            if len(os.Args) == 2 && os.Args[1] == "--child" {
+              os.Exit(child())
+            }
+            result, failure := runProbe()
+            fmt.Printf("uid=%d\n", result.uid)
+            if result.childUID != 0 {
+              fmt.Printf("child_uid=%d\n", result.childUID)
+            }
+            if result.kernel != "" {
+              fmt.Printf("kernel=%s\n", result.kernel)
+            }
+            if result.cgroup != "" {
+              fmt.Printf("cgroup_path=%s\n", result.cgroup)
+            }
+            if result.leafCgroup != "" {
+              fmt.Printf("leaf_cgroup_path=%s\n", result.leafCgroup)
+            }
+            fmt.Printf("capability=%s\n", result.capability)
+            if failure != "" {
+              fmt.Printf("status=failed stage=%s\n", failure)
+              os.Exit(1)
+            }
+            fmt.Println("status=passed")
+          }
+          GO
+          go build -trimpath -o "$binary" "$source"
+      - name: Run as the unprivileged delegated service user
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if timeout --signal=TERM --kill-after=5s 120s \
+            sudo -n systemd-run --quiet --system --wait --collect --pipe \
+              --property=Delegate=yes \
+              --property="User=$(id -un)" \
+              --property="WorkingDirectory=$GITHUB_WORKSPACE/daemon" \
+              --property=RuntimeMaxSec=90s \
+              "$RUNNER_TEMP/cgroup-v2-delegation-probe"; then
+            exit 0
+          fi
+          printf 'capability=not-proven\nstatus=failed stage=systemd-run-or-timeout\n'
+          exit 1
+
   contracts:
     runs-on: ubuntu-latest
     steps:
