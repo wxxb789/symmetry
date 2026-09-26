@@ -30,6 +30,10 @@ func main() {
 		fmt.Fprintln(os.Stderr, "-config is required")
 		os.Exit(2)
 	}
+	if err := platform.EnsureLinuxChildSubreaper(); err != nil {
+		fmt.Fprintf(os.Stderr, "enable Linux child subreaper: %v\n", err)
+		os.Exit(1)
+	}
 
 	value, err := config.Load(*configPath)
 	if err != nil {

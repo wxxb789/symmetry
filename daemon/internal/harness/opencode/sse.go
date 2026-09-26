@@ -147,7 +147,7 @@ func DecodeGlobalEvent(frame Frame) (Event, error) {
 }
 
 // DecodePromptAdmittedEvent recognizes one durable session event captured from
-// v1.18.30. It intentionally rejects any other event type. Use
+// v1.18.32. It intentionally rejects any other event type. Use
 // DecodeSessionEvent when replaying a stream that may contain later native
 // event types.
 func DecodePromptAdmittedEvent(frame Frame) (PromptAdmittedEvent, error) {
@@ -181,7 +181,7 @@ const (
 )
 
 // DecodeSessionEvent strictly decodes the durable session-event subset pinned
-// to OpenCode 1.18.30. Unknown event types are returned as Kind
+// to OpenCode 1.18.32. Unknown event types are returned as Kind
 // SessionEventUnknown after their envelope, durable cursor, and session
 // identity have been validated. This allows a watcher to emit a bounded
 // diagnostic and continue to a later terminal event.

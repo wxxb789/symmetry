@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
@@ -20,14 +21,24 @@ import (
 )
 
 const (
-	readChunkSize           = 32 * 1024
-	eventQueueCapacity      = 64
-	defaultTerminationGrace = 5 * time.Second
+	readChunkSize                   = 32 * 1024
+	eventQueueCapacity              = 64
+	defaultTerminationGrace         = 5 * time.Second
+	commitResumeBarrierTimeout      = 30 * time.Second
+	commitResumeBarrierPollInterval = 25 * time.Millisecond
+)
+
+const (
+	commitResumeBarrierWitnessGateEnvironment = "SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_WITNESS"
+	commitResumeBarrierReachedEnvironment     = "SYMMETRY_RUNNER_COMMIT_RESUME_BARRIER_REACHED_FILE"
+	commitResumeBarrierReleaseEnvironment     = "SYMMETRY_RUNNER_COMMIT_RESUME_BARRIER_RELEASE_FILE"
 )
 
 // ErrInputClosed reports that the process input transport can no longer accept
 // a complete write.
 var ErrInputClosed = errors.New("process standard input is closed")
+
+var errContainmentMarkerPending = errors.New("process marker persistence is pending")
 
 // Stream identifies the source of an output event.
 type Stream string
@@ -74,6 +85,20 @@ type Invocation struct {
 	Env                    []string
 	InitialInput           []byte
 	CloseInputAfterInitial bool
+	// PrepareSupervisorHandoff durably records the exact launch binding before
+	// a Windows containment helper can outlive the daemon.
+	PrepareSupervisorHandoff func(authority.SupervisorHandoff) error
+	// BindSupervisorHandoff records the exact helper PID and creation identity
+	// after the inherited pre-auth channel has identified the helper.
+	BindSupervisorHandoff func(authority.SupervisorHandoff, int, string) error
+	// CommitSupervisorHandoff promotes a fully bound handoff into the normal
+	// process marker and containment authority before resume or lease arm.
+	CommitSupervisorHandoff func(authority.SupervisorHandoff, time.Time) error
+	// RecordSupervisorHandoffStopReceipt persists a stop proof for a pending
+	// handoff before its helper is released.
+	RecordSupervisorHandoffStopReceipt func(authority.SupervisorHandoff, authority.StopReceipt) error
+	// ClearSupervisorHandoff removes a pending handoff only after release proof.
+	ClearSupervisorHandoff func(authority.SupervisorHandoff, authority.SupervisorHandoffReleaseProof) error
 	// PersistProcess runs immediately after the OS process identity is
 	// captured, before output readers or the Process value are exposed.
 	PersistProcess func(pid int, identity string) error
@@ -90,6 +115,9 @@ type Invocation struct {
 	// proves an empty tree and before an independent supervisor is released.
 	// A failure retains that helper authority for retry or restart recovery.
 	PersistContainmentStopReceipt func(pid int, identity string, receipt authority.StopReceipt) error
+	// PersistContainmentUnproven retains the exact process marker when local
+	// containment cleanup cannot prove the complete owned boundary stopped.
+	PersistContainmentUnproven func(pid int, identity string) error
 	// InitialLeaseDeadline arms an optional independent containment watchdog
 	// after local authority persistence and before initial input is written. A
 	// zero value leaves legacy/test containment unchanged. When
@@ -102,6 +130,20 @@ type Invocation struct {
 	// only consume lease time.
 	InitialLeaseDeadlineAt time.Time
 	InitialLeaseSequence   uint64
+}
+
+func durableSupervisorHandoffRequested(invocation Invocation) bool {
+	return invocation.PrepareSupervisorHandoff != nil ||
+		invocation.BindSupervisorHandoff != nil ||
+		invocation.CommitSupervisorHandoff != nil ||
+		invocation.RecordSupervisorHandoffStopReceipt != nil ||
+		invocation.ClearSupervisorHandoff != nil
+}
+
+func durableSupervisorHandoffCallbacksComplete(invocation Invocation) bool {
+	return invocation.PrepareSupervisorHandoff != nil &&
+		invocation.BindSupervisorHandoff != nil &&
+		invocation.CommitSupervisorHandoff != nil
 }
 
 // LeaseRenewer is an optional process capability. The app uses a type
@@ -120,28 +162,47 @@ type Runner struct {
 	now              func() time.Time
 }
 
+// containmentUnprovenCallbackSetter is implemented only by containment owners
+// that can observe an unresolved descendant boundary before Close. Keeping the
+// seam consumer-side lets Linux add the early durable marker without changing
+// the common Containment contract or the Windows implementation.
+type containmentUnprovenCallbackSetter interface {
+	SetContainmentUnprovenCallback(func() error) error
+}
+
 // startedProcess is the small lifecycle boundary shared by the standard
 // library launcher and the Windows native suspended launcher. The latter does
 // not have an exec.Cmd-compatible ProcessState, so the process lifecycle is
 // deliberately carried by functions instead of a second process abstraction.
 type startedProcess struct {
-	command                       *exec.Cmd
-	pid                           int
-	identity                      string
-	containment                   platform.Containment
-	persistProcessWithAuthority   func(int, string, *authority.Supervisor) error
-	persistAuthority              func(int, string, *authority.Supervisor) error
-	containmentAuthority          *authority.Supervisor
-	persistStopReceipt            func(int, string, authority.StopReceipt) error
-	stopReceiptRequired           bool
-	containmentAuthorityUncertain bool
-	wait                          func() (int, error)
-	kill                          func() error
-	close                         func() error
-	resume                        func() error
+	command                            *exec.Cmd
+	pid                                int
+	identity                           string
+	containment                        platform.Containment
+	containmentHandoff                 *authority.SupervisorHandoff
+	containmentHandoffCommitted        bool
+	containmentHandoffPrepareUnknown   bool
+	containmentHandoffBindUnknown      bool
+	containmentHandoffCommitUnknown    bool
+	commitSupervisorHandoff            func(authority.SupervisorHandoff, time.Time) error
+	recordSupervisorHandoffStopReceipt func(authority.SupervisorHandoff, authority.StopReceipt) error
+	clearSupervisorHandoff             func(authority.SupervisorHandoff, authority.SupervisorHandoffReleaseProof) error
+	persistProcessWithAuthority        func(int, string, *authority.Supervisor) error
+	persistAuthority                   func(int, string, *authority.Supervisor) error
+	containmentAuthority               *authority.Supervisor
+	persistStopReceipt                 func(int, string, authority.StopReceipt) error
+	persistContainmentUnproven         func(int, string) error
+	containmentUnprovenCallback        func() error
+	stopReceiptRequired                bool
+	containmentAuthorityUncertain      bool
+	wait                               func() (int, error)
+	kill                               func() error
+	close                              func() error
+	resume                             func() error
 }
 
 type processLauncher func(
+	ctx context.Context,
 	command *exec.Cmd,
 	invocation Invocation,
 	stdinRead, stdoutWrite, stderrWrite *os.File,
@@ -170,18 +231,31 @@ type Process struct {
 	// daemon instance can reject a recycled PID after restart.
 	Identity string
 
-	command                       *exec.Cmd
-	backend                       *startedProcess
-	sink                          Sink
-	containment                   platform.Containment
-	persistProcessWithAuthority   func(int, string, *authority.Supervisor) error
-	persistAuthority              func(int, string, *authority.Supervisor) error
-	containmentAuthority          *authority.Supervisor
-	persistStopReceipt            func(int, string, authority.StopReceipt) error
-	stopReceiptRequired           bool
-	containmentAuthorityUncertain bool
-	sinkContext                   context.Context
-	cancelSink                    context.CancelFunc
+	command                            *exec.Cmd
+	backend                            *startedProcess
+	sink                               Sink
+	containment                        platform.Containment
+	containmentHandoff                 *authority.SupervisorHandoff
+	containmentHandoffCommitted        bool
+	containmentHandoffPrepareUnknown   bool
+	containmentHandoffBindUnknown      bool
+	containmentHandoffCommitUnknown    bool
+	commitSupervisorHandoff            func(authority.SupervisorHandoff, time.Time) error
+	recordSupervisorHandoffStopReceipt func(authority.SupervisorHandoff, authority.StopReceipt) error
+	clearSupervisorHandoff             func(authority.SupervisorHandoff, authority.SupervisorHandoffReleaseProof) error
+	containmentHandoffReceiptSaved     bool
+	containmentHandoffReleased         bool
+	persistProcessWithAuthority        func(int, string, *authority.Supervisor) error
+	persistAuthority                   func(int, string, *authority.Supervisor) error
+	containmentAuthority               *authority.Supervisor
+	persistStopReceipt                 func(int, string, authority.StopReceipt) error
+	persistContainmentUnproven         func(int, string) error
+	containmentUnprovenCallback        func() error
+	containmentUnprovenPersisted       bool
+	stopReceiptRequired                bool
+	containmentAuthorityUncertain      bool
+	sinkContext                        context.Context
+	cancelSink                         context.CancelFunc
 
 	stdinMutex       sync.Mutex
 	stdin            *os.File
@@ -300,8 +374,12 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 
 	startedAt := time.Now().UTC()
 	var started *startedProcess
+	var attachFailureErr error
 	if runner.launchProcess != nil {
-		started, err = runner.launchProcess(command, invocation, stdinRead, stdoutWrite, stderrWrite)
+		started, err = runner.launchProcess(ctx, command, invocation, stdinRead, stdoutWrite, stderrWrite)
+		if started != nil {
+			configureStartedHandoff(started, invocation)
+		}
 		if err != nil && !errors.Is(err, errNativeProcessLauncherUnavailable) {
 			if started == nil {
 				closeFiles(stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite)
@@ -329,17 +407,25 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 		started = legacyStartedProcess(command, containment, identity)
 		if attachErr != nil {
 			wrappedErr := fmt.Errorf("contain process tree for %q: %w", program, attachErr)
-			return cleanupFailedStartStarted(
-				started,
-				stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
-				startedAt,
-				wrappedErr,
-				wrappedErr,
-			)
+			if !canPersistRetainedAttachFailure(containment, identity) {
+				return cleanupFailedStartStarted(
+					started,
+					stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
+					startedAt,
+					wrappedErr,
+					wrappedErr,
+				)
+			}
+			// A retained, retryable containment owner has enough identity and
+			// authority to enter the normal persistence fence before cleanup. This
+			// is required for Linux initial-scan failures, where Close must retain
+			// an unresolved owner for restart recovery.
+			attachFailureErr = wrappedErr
 		}
 	}
 	containment := started.containment
 	identity := started.identity
+	started.persistContainmentUnproven = invocation.PersistContainmentUnproven
 	_, hasStopReceiptProvider := containment.(platform.ContainmentStopReceiptProvider)
 	provider, hasAuthorityProvider := containment.(platform.ContainmentAuthorityProvider)
 	setStopReceiptPersistence := func() {
@@ -348,12 +434,47 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 			started.stopReceiptRequired = invocation.PersistContainmentStopReceipt != nil
 		}
 	}
+	var markerPersisted atomic.Bool
+	if err := installContainmentUnprovenCallback(started, &markerPersisted); err != nil {
+		return cleanupFailedStartStarted(
+			started,
+			stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
+			startedAt,
+			fmt.Errorf("install containment uncertainty observer: %w", err),
+			nil,
+		)
+	}
 	authorityCapable := hasAuthorityProvider
 	if capability, ok := containment.(platform.ContainmentAuthorityCapability); ok && !capability.ContainmentAuthorityAvailable() {
 		authorityCapable = false
 	}
 	atomicPersist := invocation.PersistProcessWithAuthority
-	if authorityCapable && atomicPersist != nil {
+	if started.containmentHandoff != nil {
+		setStopReceiptPersistence()
+		if err := runner.commitStartedHandoff(started, startedAt); err != nil {
+			return cleanupFailedStartStarted(
+				started,
+				stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
+				startedAt,
+				fmt.Errorf("commit supervisor handoff: %w", err),
+				nil,
+			)
+		}
+		if err := runner.waitForCommitResumeBarrier(ctx, started); err != nil {
+			return cleanupFailedStartStarted(
+				started,
+				stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
+				startedAt,
+				fmt.Errorf("wait for commit/resume barrier: %w", err),
+				nil,
+			)
+		}
+		markerPersisted.Store(true)
+		if value, err := started.containmentHandoff.ToSupervisor(); err == nil {
+			cloned := value.Clone()
+			started.containmentAuthority = &cloned
+		}
+	} else if authorityCapable && atomicPersist != nil {
 		value := provider.ContainmentAuthority()
 		setStopReceiptPersistence()
 		if value == nil {
@@ -385,6 +506,7 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 			)
 		}
 		started.containmentAuthorityUncertain = false
+		markerPersisted.Store(true)
 	} else {
 		if invocation.PersistProcess != nil {
 			if persistErr := invocation.PersistProcess(started.pid, identity); persistErr != nil {
@@ -396,6 +518,7 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 					nil,
 				)
 			}
+			markerPersisted.Store(true)
 		}
 		setStopReceiptPersistence()
 		if authorityCapable && invocation.PersistProcessAuthority != nil {
@@ -428,6 +551,18 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 				)
 			}
 			started.containmentAuthorityUncertain = false
+			markerPersisted.Store(true)
+		}
+	}
+	if markerPersisted.Load() {
+		if err := installContainmentUnprovenCallback(started, &markerPersisted); err != nil {
+			return cleanupFailedStartStarted(
+				started,
+				stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
+				startedAt,
+				fmt.Errorf("persist containment uncertainty: %w", err),
+				nil,
+			)
 		}
 	}
 	if capability, ok := containment.(platform.ContainmentAuthorityCapability); ok && !capability.ContainmentAuthorityAvailable() {
@@ -438,6 +573,15 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 		// failure when the daemon supplies the receipt callback unconditionally.
 		started.persistStopReceipt = nil
 		started.stopReceiptRequired = false
+	}
+	if attachFailureErr != nil {
+		return cleanupFailedStartStarted(
+			started,
+			stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
+			startedAt,
+			attachFailureErr,
+			attachFailureErr,
+		)
 	}
 	initialLeaseDeadline, initialLeaseRequested, deadlineErr := runner.initialLeaseDeadline(invocation)
 	if deadlineErr != nil {
@@ -472,6 +616,15 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 		}
 	}
 	if started.resume != nil {
+		if err := ctx.Err(); err != nil {
+			return cleanupFailedStartStarted(
+				started,
+				stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
+				startedAt,
+				fmt.Errorf("execution context cancelled before process resume: %w", err),
+				nil,
+			)
+		}
 		if err := started.resume(); err != nil {
 			return cleanupFailedStartStarted(
 				started,
@@ -501,6 +654,146 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 		}
 	}
 	return process, nil
+}
+
+func configureStartedHandoff(started *startedProcess, invocation Invocation) {
+	if started == nil || started.containmentHandoff == nil {
+		return
+	}
+	if started.commitSupervisorHandoff == nil {
+		started.commitSupervisorHandoff = invocation.CommitSupervisorHandoff
+	}
+	if started.recordSupervisorHandoffStopReceipt == nil {
+		started.recordSupervisorHandoffStopReceipt = invocation.RecordSupervisorHandoffStopReceipt
+	}
+	if started.clearSupervisorHandoff == nil {
+		started.clearSupervisorHandoff = invocation.ClearSupervisorHandoff
+	}
+}
+
+// commitStartedHandoff is the only transition that permits a suspended target
+// to resume. A callback error is unknown, so the exact same handoff and launch
+// timestamp are retried once; unresolved state remains owned for recovery.
+func (runner Runner) commitStartedHandoff(started *startedProcess, startedAt time.Time) error {
+	if started == nil || started.containmentHandoff == nil {
+		return nil
+	}
+	expected := started.containmentHandoff.Clone()
+	started.containmentHandoffCommitUnknown = true
+	callback := started.commitSupervisorHandoff
+	if callback == nil {
+		return errors.New("supervisor handoff commit callback is required; atomic process persistence cannot substitute for commit")
+	}
+	firstErr := callback(expected.Clone(), startedAt)
+	if firstErr != nil {
+		if retryErr := callback(expected.Clone(), startedAt); retryErr != nil {
+			return errors.Join(firstErr, retryErr)
+		}
+	}
+	started.containmentHandoffCommitUnknown = false
+	started.containmentHandoffCommitted = true
+	return nil
+}
+
+// waitForCommitResumeBarrier is an opt-in crash-witness seam. It is disabled
+// unless both marker paths are supplied, and it never changes the ordinary
+// production lifecycle. The reached marker is created only after durable
+// commit; lease arming and target resume remain behind the release marker.
+func (runner Runner) waitForCommitResumeBarrier(ctx context.Context, started *startedProcess) error {
+	if os.Getenv(commitResumeBarrierWitnessGateEnvironment) != "1" {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("commit/resume barrier cancelled: %w", err)
+	}
+	reachedPath, reachedConfigured := os.LookupEnv(commitResumeBarrierReachedEnvironment)
+	releasePath, releaseConfigured := os.LookupEnv(commitResumeBarrierReleaseEnvironment)
+	if !reachedConfigured && !releaseConfigured {
+		return nil
+	}
+	if reachedConfigured != releaseConfigured {
+		return fmt.Errorf("commit/resume barrier requires both %s and %s", commitResumeBarrierReachedEnvironment, commitResumeBarrierReleaseEnvironment)
+	}
+	reachedPath = strings.TrimSpace(reachedPath)
+	releasePath = strings.TrimSpace(releasePath)
+	if reachedPath == "" || releasePath == "" {
+		return errors.New("commit/resume barrier marker paths must not be empty")
+	}
+	if filepath.Clean(reachedPath) == filepath.Clean(releasePath) {
+		return errors.New("commit/resume barrier marker paths must be distinct")
+	}
+	if err := assertCommitResumeBarrierPathAbsent(reachedPath); err != nil {
+		return fmt.Errorf("validate reached marker %q: %w", reachedPath, err)
+	}
+	if err := assertCommitResumeBarrierPathAbsent(releasePath); err != nil {
+		return fmt.Errorf("validate release marker %q: %w", releasePath, err)
+	}
+
+	reached, err := os.OpenFile(reachedPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("create reached marker %q: %w", reachedPath, err)
+	}
+	marker := fmt.Sprintf(
+		"pid=%d\ntarget_pid=%d\ntime=%s\nlease_armed=false\n",
+		os.Getpid(),
+		commitResumeBarrierTargetPID(started),
+		time.Now().UTC().Format(time.RFC3339Nano),
+	)
+	writeErr := error(nil)
+	if _, writeErr = reached.WriteString(marker); writeErr == nil {
+		writeErr = reached.Sync()
+	}
+	if closeErr := reached.Close(); writeErr == nil {
+		writeErr = closeErr
+	}
+	if writeErr != nil {
+		return fmt.Errorf("publish reached marker %q: %w", reachedPath, writeErr)
+	}
+
+	deadline := time.NewTimer(commitResumeBarrierTimeout)
+	defer deadline.Stop()
+	poll := time.NewTicker(commitResumeBarrierPollInterval)
+	defer poll.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("commit/resume barrier cancelled: %w", err)
+		}
+		if err := commitResumeBarrierReleaseState(releasePath); err == nil {
+			return nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("observe release marker %q: %w", releasePath, err)
+		}
+		select {
+		case <-deadline.C:
+			return fmt.Errorf("commit/resume barrier release marker %q did not appear within %s", releasePath, commitResumeBarrierTimeout)
+		case <-ctx.Done():
+			return fmt.Errorf("commit/resume barrier cancelled: %w", ctx.Err())
+		case <-poll.C:
+		}
+	}
+}
+
+func assertCommitResumeBarrierPathAbsent(path string) error {
+	_, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err == nil {
+		return errors.New("path already exists")
+	}
+	return err
+}
+
+func commitResumeBarrierReleaseState(path string) error {
+	_, err := os.Lstat(path)
+	return err
+}
+
+func commitResumeBarrierTargetPID(started *startedProcess) int {
+	if started == nil || started.containmentHandoff == nil {
+		return 0
+	}
+	return started.containmentHandoff.TargetPID
 }
 
 var errInitialLeaseDeadlineExpired = errors.New("initial containment lease deadline has elapsed")
@@ -553,6 +846,54 @@ func (runner Runner) attach(process *os.Process) (platform.Containment, string, 
 	return platform.AttachProcess(process)
 }
 
+// canPersistRetainedAttachFailure recognizes the narrow partial-attachment
+// contract that is safe to journal before cleanup. A non-empty identity alone
+// is insufficient: the retained owner must expose both the uncertainty
+// observer and a retryable containment authority, which excludes identity or
+// process-group-anchor capture failures.
+func canPersistRetainedAttachFailure(containment platform.Containment, identity string) bool {
+	if containment == nil || identity == "" {
+		return false
+	}
+	if _, ok := containment.(containmentUnprovenCallbackSetter); !ok {
+		return false
+	}
+	retryer, ok := containment.(platform.ContainmentCloseRetryer)
+	return ok && retryer.ContainmentCloseRetryable()
+}
+
+func installContainmentUnprovenCallback(started *startedProcess, markerReady *atomic.Bool) error {
+	if started == nil || started.containment == nil || started.persistContainmentUnproven == nil {
+		return nil
+	}
+	setter, ok := started.containment.(containmentUnprovenCallbackSetter)
+	if !ok {
+		return nil
+	}
+	var mutex sync.Mutex
+	persisted := false
+	callback := func() error {
+		mutex.Lock()
+		defer mutex.Unlock()
+		if persisted {
+			return nil
+		}
+		if markerReady != nil && !markerReady.Load() {
+			return errContainmentMarkerPending
+		}
+		if err := started.persistContainmentUnproven(started.pid, started.identity); err != nil {
+			return err
+		}
+		persisted = true
+		return nil
+	}
+	started.containmentUnprovenCallback = callback
+	if err := setter.SetContainmentUnprovenCallback(callback); err != nil && !errors.Is(err, errContainmentMarkerPending) {
+		return err
+	}
+	return nil
+}
+
 func legacyStartedProcess(command *exec.Cmd, containment platform.Containment, identity string) *startedProcess {
 	return &startedProcess{
 		command:     command,
@@ -571,6 +912,14 @@ func legacyStartedProcess(command *exec.Cmd, containment platform.Containment, i
 	}
 }
 
+func cloneSupervisorHandoff(value *authority.SupervisorHandoff) *authority.SupervisorHandoff {
+	if value == nil {
+		return nil
+	}
+	cloned := value.Clone()
+	return &cloned
+}
+
 func newProcess(command *exec.Cmd, sink Sink, containment platform.Containment, identity string, startedAt time.Time, stdin *os.File) *Process {
 	return newProcessFromStarted(legacyStartedProcess(command, containment, identity), sink, startedAt, stdin, nil)
 }
@@ -586,28 +935,38 @@ func newProcessFromStarted(started *startedProcess, sink Sink, startedAt time.Ti
 	}
 	sinkContext, cancelSink := context.WithCancel(context.Background())
 	process := &Process{
-		PID:                           started.pid,
-		Identity:                      started.identity,
-		command:                       started.command,
-		backend:                       started,
-		sink:                          sink,
-		containment:                   started.containment,
-		persistProcessWithAuthority:   started.persistProcessWithAuthority,
-		persistAuthority:              started.persistAuthority,
-		containmentAuthority:          containmentAuthority,
-		persistStopReceipt:            persistStopReceipt,
-		stopReceiptRequired:           started.stopReceiptRequired,
-		containmentAuthorityUncertain: started.containmentAuthorityUncertain,
-		sinkContext:                   sinkContext,
-		cancelSink:                    cancelSink,
-		stdin:                         stdin,
-		stdinWritePermit:              make(chan struct{}, 1),
-		events:                        make(chan Event, eventQueueCapacity),
-		deliveryDone:                  make(chan struct{}),
-		resultDone:                    make(chan struct{}),
-		commandDone:                   make(chan struct{}),
-		terminationDone:               make(chan struct{}),
-		outputStop:                    make(chan struct{}),
+		PID:                                started.pid,
+		Identity:                           started.identity,
+		command:                            started.command,
+		backend:                            started,
+		sink:                               sink,
+		containment:                        started.containment,
+		containmentHandoff:                 cloneSupervisorHandoff(started.containmentHandoff),
+		containmentHandoffCommitted:        started.containmentHandoffCommitted,
+		containmentHandoffPrepareUnknown:   started.containmentHandoffPrepareUnknown,
+		containmentHandoffBindUnknown:      started.containmentHandoffBindUnknown,
+		containmentHandoffCommitUnknown:    started.containmentHandoffCommitUnknown,
+		commitSupervisorHandoff:            started.commitSupervisorHandoff,
+		recordSupervisorHandoffStopReceipt: started.recordSupervisorHandoffStopReceipt,
+		clearSupervisorHandoff:             started.clearSupervisorHandoff,
+		persistProcessWithAuthority:        started.persistProcessWithAuthority,
+		persistAuthority:                   started.persistAuthority,
+		containmentAuthority:               containmentAuthority,
+		persistStopReceipt:                 persistStopReceipt,
+		persistContainmentUnproven:         started.persistContainmentUnproven,
+		containmentUnprovenCallback:        started.containmentUnprovenCallback,
+		stopReceiptRequired:                started.stopReceiptRequired,
+		containmentAuthorityUncertain:      started.containmentAuthorityUncertain,
+		sinkContext:                        sinkContext,
+		cancelSink:                         cancelSink,
+		stdin:                              stdin,
+		stdinWritePermit:                   make(chan struct{}, 1),
+		events:                             make(chan Event, eventQueueCapacity),
+		deliveryDone:                       make(chan struct{}),
+		resultDone:                         make(chan struct{}),
+		commandDone:                        make(chan struct{}),
+		terminationDone:                    make(chan struct{}),
+		outputStop:                         make(chan struct{}),
 		result: Result{
 			PID:       started.pid,
 			StartedAt: startedAt,
@@ -1045,15 +1404,19 @@ func (process *Process) terminateTree(grace time.Duration) {
 	}
 
 	if err := process.containment.Terminate(true); err != nil {
+		// Record the containment failure before the root kill. The kill unblocks
+		// command.Wait, so waitAndComplete can publish its result snapshot while
+		// this goroutine is still between the kill and the record; recording
+		// first keeps the published result from omitting the failure.
+		process.recordTerminationError(err)
 		// Containment is responsible for descendants, but it must not be the
 		// sole termination mechanism for the root process. Otherwise a failed
 		// job/task-kill leaves command.Wait blocked forever after a failed
 		// initial-input cleanup path.
 		killErr := process.killProcess()
-		if errors.Is(killErr, os.ErrProcessDone) {
-			killErr = nil
+		if !errors.Is(killErr, os.ErrProcessDone) && killErr != nil {
+			process.recordTerminationError(killErr)
 		}
-		process.recordTerminationError(errors.Join(err, killErr))
 		return
 	}
 	<-process.resultDone
@@ -1089,7 +1452,10 @@ func isUnsupportedOnly(err error) bool {
 }
 
 func (process *Process) closeContainment() error {
-	if process == nil || process.containment == nil {
+	if process == nil {
+		return nil
+	}
+	if process.containment == nil && !process.pendingSupervisorHandoff() {
 		return nil
 	}
 	process.containmentFinalizeMutex.Lock()
@@ -1100,6 +1466,13 @@ func (process *Process) closeContainment() error {
 	}
 	if process.containmentFinalized {
 		return process.containmentFinalizeError()
+	}
+	if process.pendingSupervisorHandoff() {
+		provider, hasReceiptProvider := process.containmentStopReceiptProvider()
+		if err := process.closeContainmentOwnerLocked(); err != nil {
+			return err
+		}
+		return process.finalizeSupervisorHandoffLocked(provider, hasReceiptProvider)
 	}
 	provider, hasReceiptProvider := process.containment.(platform.ContainmentStopReceiptProvider)
 	if !hasReceiptProvider && process.stopReceiptRequired {
@@ -1120,6 +1493,25 @@ func (process *Process) closeContainment() error {
 	if !process.containmentCloseAttempted || closeRetryable {
 		process.containmentCloseAttempted = true
 		if err := process.containment.Close(); err != nil {
+			// ContainmentUnproven is a durable Linux descendant-observation
+			// marker. Platform owners without the explicit observer capability
+			// must retain their own authority for authenticated recovery instead
+			// of being converted into an unrecoverable generic marker.
+			_, supportsUnprovenObserver := process.containment.(containmentUnprovenCallbackSetter)
+			responseLost := errors.Is(err, platform.ErrLinuxSupervisorResponseLost)
+			if supportsUnprovenObserver && !responseLost && process.persistContainmentUnproven != nil && !process.containmentUnprovenPersisted {
+				persist := process.containmentUnprovenCallback
+				if persist == nil {
+					persist = func() error {
+						return process.persistContainmentUnproven(process.PID, process.Identity)
+					}
+				}
+				if persistErr := persist(); persistErr == nil {
+					process.containmentUnprovenPersisted = true
+				} else {
+					err = errors.Join(err, fmt.Errorf("persist containment uncertainty: %w", persistErr))
+				}
+			}
 			retryableAfterFailure := false
 			if retryer, ok := process.containment.(platform.ContainmentCloseRetryer); ok {
 				retryableAfterFailure = retryer.ContainmentCloseRetryable()
@@ -1229,6 +1621,171 @@ func (process *Process) closeContainment() error {
 	finalErr := process.containmentFinalizationBaseError()
 	process.setContainmentError(finalErr)
 	return finalErr
+}
+
+func (process *Process) pendingSupervisorHandoff() bool {
+	return process != nil && process.containmentHandoff != nil && !process.containmentHandoffCommitted
+}
+
+func (process *Process) containmentStopReceiptProvider() (platform.ContainmentStopReceiptProvider, bool) {
+	if process == nil || process.containment == nil {
+		return nil, false
+	}
+	provider, ok := process.containment.(platform.ContainmentStopReceiptProvider)
+	return provider, ok
+}
+
+func (process *Process) closeContainmentOwnerLocked() error {
+	if process == nil || process.containment == nil {
+		return nil
+	}
+	closeRetryable := false
+	if retryer, ok := process.containment.(platform.ContainmentCloseRetryer); ok {
+		closeRetryable = retryer.ContainmentCloseRetryable()
+	}
+	if !process.containmentCloseAttempted || closeRetryable {
+		process.containmentCloseAttempted = true
+		if err := process.containment.Close(); err != nil {
+			retryableAfterFailure := false
+			if retryer, ok := process.containment.(platform.ContainmentCloseRetryer); ok {
+				retryableAfterFailure = retryer.ContainmentCloseRetryable()
+			}
+			if !retryableAfterFailure {
+				process.containmentStableError = errors.Join(process.containmentStableError, err)
+			}
+			process.setContainmentError(errors.Join(process.containmentInitialError, err))
+			return err
+		}
+	}
+	return nil
+}
+
+func (process *Process) finalizeSupervisorHandoffLocked(provider platform.ContainmentStopReceiptProvider, hasReceiptProvider bool) error {
+	if !process.pendingSupervisorHandoff() {
+		return process.containmentFinalizeError()
+	}
+	handoff := process.containmentHandoff.Clone()
+	if process.containmentHandoffCommitUnknown {
+		if hasReceiptProvider {
+			receipt, available := provider.ContainmentStopReceipt()
+			if available {
+				if !receipt.ValidForHandoff(handoff) {
+					err := errors.New("containment stop receipt does not match pending supervisor handoff")
+					process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), err))
+					return err
+				}
+				if err := process.recordSupervisorHandoffReceiptLocked(handoff, receipt); err != nil {
+					return err
+				}
+			}
+		}
+		err := errors.New("supervisor handoff commit outcome is unknown")
+		process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), err))
+		return err
+	}
+	if process.containmentHandoffPrepareUnknown || process.containmentHandoffBindUnknown {
+		err := errors.New("supervisor handoff cleanup outcome is unknown")
+		process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), err))
+		return err
+	}
+	// An unbound handoff cannot be cleared with a release proof. It requires a
+	// platform-specific AbortProof after exact owner/helper/target absence has
+	// been established; retaining the record is the only safe fallback here.
+	if handoff.SupervisorPID == 0 {
+		err := errors.New("unbound supervisor handoff requires an explicit abort proof")
+		process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), err))
+		return err
+	}
+	if process.clearSupervisorHandoff == nil {
+		err := errors.New("supervisor handoff clear callback is missing")
+		process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), err))
+		return err
+	}
+	if !hasReceiptProvider {
+		err := errors.New("pending supervisor handoff stop receipt provider is missing")
+		process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), err))
+		return err
+	}
+	receipt, available := provider.ContainmentStopReceipt()
+	if !available {
+		err := errors.New("pending supervisor handoff stop receipt is unavailable")
+		process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), err))
+		return err
+	}
+	if !receipt.ValidForHandoff(handoff) {
+		err := errors.New("containment stop receipt does not match pending supervisor handoff")
+		process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), err))
+		return err
+	}
+	if err := process.recordSupervisorHandoffReceiptLocked(handoff, receipt); err != nil {
+		return err
+	}
+	handoff = process.containmentHandoff.Clone()
+	if !process.containmentHandoffReleased {
+		releaser, ok := process.containment.(platform.ContainmentStopReceiptReleaser)
+		if !ok {
+			err := errors.New("containment stop receipt releaser is missing")
+			process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), err))
+			return err
+		}
+		if err := releaser.ReleaseContainment(); err != nil {
+			process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), fmt.Errorf("release pending containment authority: %w", err)))
+			return err
+		}
+		process.containmentHandoffReleased = true
+	}
+	proof := handoff.ReleaseProof()
+	if err := retrySupervisorHandoffClear(process.clearSupervisorHandoff, handoff, proof); err != nil {
+		process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), fmt.Errorf("clear supervisor handoff: %w", err)))
+		return err
+	}
+	process.containmentHandoff = nil
+	process.containmentFinalized = true
+	finalErr := process.containmentFinalizationBaseError()
+	process.setContainmentError(finalErr)
+	return finalErr
+}
+
+func (process *Process) recordSupervisorHandoffReceiptLocked(handoff authority.SupervisorHandoff, receipt authority.StopReceipt) error {
+	if process.containmentHandoffReceiptSaved {
+		return nil
+	}
+	if process.recordSupervisorHandoffStopReceipt == nil {
+		err := errors.New("supervisor handoff stop receipt callback is missing")
+		process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), err))
+		return err
+	}
+	if err := retrySupervisorHandoffReceipt(process.recordSupervisorHandoffStopReceipt, handoff, receipt); err != nil {
+		process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), fmt.Errorf("record supervisor handoff stop receipt: %w", err)))
+		return err
+	}
+	withReceipt := handoff.Clone()
+	withReceipt.StopReceipt = &receipt
+	process.containmentHandoff = &withReceipt
+	process.containmentHandoffReceiptSaved = true
+	return nil
+}
+
+func retrySupervisorHandoffReceipt(callback func(authority.SupervisorHandoff, authority.StopReceipt) error, handoff authority.SupervisorHandoff, receipt authority.StopReceipt) error {
+	firstErr := callback(handoff.Clone(), receipt)
+	if firstErr == nil {
+		return nil
+	}
+	if retryErr := callback(handoff.Clone(), receipt); retryErr != nil {
+		return errors.Join(firstErr, retryErr)
+	}
+	return nil
+}
+
+func retrySupervisorHandoffClear(callback func(authority.SupervisorHandoff, authority.SupervisorHandoffReleaseProof) error, handoff authority.SupervisorHandoff, proof authority.SupervisorHandoffReleaseProof) error {
+	firstErr := callback(handoff.Clone(), proof)
+	if firstErr == nil {
+		return nil
+	}
+	if retryErr := callback(handoff.Clone(), proof); retryErr != nil {
+		return errors.Join(firstErr, retryErr)
+	}
+	return nil
 }
 
 func (process *Process) containmentFailure() error {

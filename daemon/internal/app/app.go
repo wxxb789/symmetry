@@ -68,6 +68,8 @@ var (
 	errGoalAttachmentPending        = errors.New("retained Goal session has no verified current attachment")
 	errPersistedProcessStopUnproven = errors.New("persisted process stop is unproven")
 	errAuthoritativeTerminal        = errors.New("authoritative terminal already durable")
+	errDaemonStoreClosing           = errors.New("daemon state store is closing")
+	errContainmentStopObserver      = errors.New("containment stop observer failed")
 	workspaceFingerprint            = workspace.Fingerprint
 )
 
@@ -229,6 +231,7 @@ type options struct {
 	start                                      StartProcess
 	harnessRegistry                            *harness.Registry
 	processObserver                            func(state.RunKey, int, string, time.Time)
+	containmentStopObserver                    func(state.RunKey, int, string, authority.StopReceipt) error
 	notifications                              NotificationClient
 	logWriter                                  io.Writer
 	clock                                      func() time.Time
@@ -241,7 +244,15 @@ type options struct {
 	recordWorkspace                            func(state.RunKey, string) (state.RunJournal, error)
 	recordProcess                              func(state.RunKey, int, string, time.Time) (state.RunJournal, error)
 	recordProcessAuthority                     func(state.RunKey, int, string, authority.Supervisor, time.Time) (state.RunJournal, error)
+	markContainmentUnproven                    func(state.RunKey, int, string) (state.RunJournal, error)
+	clearContainmentUnproven                   func(state.RunKey, int, string) (state.RunJournal, error)
 	recordContainmentStopReceipt               func(state.RunKey, int, string, authority.StopReceipt) (state.RunJournal, error)
+	prepareSupervisorHandoff                   func(state.RunKey, authority.SupervisorHandoff) (state.RunJournal, error)
+	bindSupervisorHandoff                      func(state.RunKey, authority.SupervisorHandoff, int, string) (state.RunJournal, error)
+	commitSupervisorHandoff                    func(state.RunKey, authority.SupervisorHandoff, time.Time) (state.RunJournal, error)
+	recordSupervisorHandoffStopReceipt         func(state.RunKey, authority.SupervisorHandoff, authority.StopReceipt) (state.RunJournal, error)
+	clearSupervisorHandoff                     func(state.RunKey, authority.SupervisorHandoff, authority.SupervisorHandoffReleaseProof) (state.RunJournal, error)
+	clearSupervisorHandoffAfterAbort           func(state.RunKey, authority.SupervisorHandoff, authority.SupervisorHandoffAbortProof) (state.RunJournal, error)
 	queueTerminalTransition                    func(state.RunKey, protocol.StateTransitionRequest, time.Time) (state.RunJournal, error)
 	queueGoalUsage                             func(state.RunKey, protocol.Usage) (state.RunJournal, error)
 	markGoalSessionAttachDeliveryReady         func(state.RunKey, string) (state.RunJournal, error)
@@ -353,6 +364,8 @@ type daemon struct {
 	mu                  sync.Mutex
 	commandReceiptMu    sync.Mutex
 	eventReceiptMu      sync.Mutex
+	storeLifetimeMu     sync.RWMutex
+	storeClosing        bool
 	workers             sync.WaitGroup
 	background          context.Context
 	backgroundCancel    context.CancelFunc
@@ -1361,6 +1374,9 @@ func (daemon *daemon) loadOrCreateEnrollmentIntent() (state.EnrollmentIntent, er
 }
 
 func (daemon *daemon) close() {
+	daemon.storeLifetimeMu.Lock()
+	defer daemon.storeLifetimeMu.Unlock()
+	daemon.storeClosing = true
 	if daemon.options.store == nil && daemon.store != nil {
 		_ = daemon.store.Close()
 	}
@@ -1392,6 +1408,11 @@ func (daemon *daemon) persistProcessWithAuthorityCallback(key state.RunKey) func
 
 func (daemon *daemon) persistProcessAuthorityCallback(key state.RunKey) func(int, string, *authority.Supervisor) error {
 	return func(pid int, identity string, value *authority.Supervisor) error {
+		daemon.storeLifetimeMu.RLock()
+		defer daemon.storeLifetimeMu.RUnlock()
+		if daemon.storeClosing || (daemon.store == nil && daemon.options.recordProcessAuthority == nil) {
+			return errDaemonStoreClosing
+		}
 		if value == nil {
 			return errors.New("persisted containment authority is nil")
 		}
@@ -1400,6 +1421,290 @@ func (daemon *daemon) persistProcessAuthorityCallback(key state.RunKey) func(int
 			daemon.options.processObserver(key, pid, identity, daemon.now())
 		}
 		return persistErr
+	}
+}
+
+// persistProcessMarker owns the marker-only CAS boundary. A post-rename
+// persistence error leaves the result unknown; an exact readback is only a
+// reason to replay the same mutation and require a fresh successful barrier.
+func (daemon *daemon) persistProcessMarker(key state.RunKey, pid int, identity string, startedAt time.Time) error {
+	daemon.storeLifetimeMu.RLock()
+	defer daemon.storeLifetimeMu.RUnlock()
+	if daemon.storeClosing || (daemon.store == nil && daemon.options.recordProcess == nil) {
+		return errDaemonStoreClosing
+	}
+	write := func() error {
+		if daemon.options.recordProcess != nil {
+			_, err := daemon.options.recordProcess(key, pid, identity, startedAt)
+			return err
+		}
+		_, err := daemon.store.SetProcessDetails(key, pid, identity, startedAt)
+		return err
+	}
+	if err := write(); err == nil {
+		return nil
+	} else {
+		firstErr := err
+		if daemon.store == nil {
+			return firstErr
+		}
+		journal, readErr := daemon.store.LoadJournal(key)
+		if readErr == nil && journal.PID == pid && journal.ProcessIdentity == identity && !journal.StartedAt.IsZero() {
+			if replayErr := write(); replayErr == nil {
+				return nil
+			} else {
+				return errors.Join(firstErr, fmt.Errorf("replay process marker write: %w", replayErr))
+			}
+		}
+		if readErr != nil {
+			return errors.Join(firstErr, fmt.Errorf("read back process marker: %w", readErr))
+		}
+		return firstErr
+	}
+}
+
+func (daemon *daemon) markContainmentUnprovenCallback(key state.RunKey) func(int, string) error {
+	return func(pid int, identity string) error {
+		daemon.storeLifetimeMu.RLock()
+		defer daemon.storeLifetimeMu.RUnlock()
+		mark := daemon.options.markContainmentUnproven
+		if mark == nil {
+			if daemon.storeClosing || daemon.store == nil {
+				return errDaemonStoreClosing
+			}
+			mark = daemon.store.MarkContainmentUnproven
+		} else if daemon.storeClosing {
+			return errDaemonStoreClosing
+		}
+		_, err := mark(key, pid, identity)
+		return err
+	}
+}
+
+func (daemon *daemon) clearContainmentUnprovenCallback(key state.RunKey) func(int, string) error {
+	return func(pid int, identity string) error {
+		daemon.storeLifetimeMu.RLock()
+		defer daemon.storeLifetimeMu.RUnlock()
+		clear := daemon.options.clearContainmentUnproven
+		if clear == nil {
+			if daemon.storeClosing || daemon.store == nil {
+				return errDaemonStoreClosing
+			}
+			clear = daemon.store.ClearContainmentUnproven
+		} else if daemon.storeClosing {
+			return errDaemonStoreClosing
+		}
+		_, err := clear(key, pid, identity)
+		return err
+	}
+}
+
+func (daemon *daemon) persistContainmentStopReceiptCallback(key state.RunKey) func(int, string, authority.StopReceipt) error {
+	return func(pid int, identity string, receipt authority.StopReceipt) error {
+		daemon.storeLifetimeMu.RLock()
+		defer daemon.storeLifetimeMu.RUnlock()
+		if daemon.storeClosing || (daemon.store == nil && daemon.options.recordContainmentStopReceipt == nil) {
+			return errDaemonStoreClosing
+		}
+		if daemon.options.recordContainmentStopReceipt != nil {
+			if _, err := daemon.options.recordContainmentStopReceipt(key, pid, identity, receipt); err != nil {
+				return err
+			}
+		} else if _, err := daemon.store.RecordContainmentStopReceipt(key, pid, identity, receipt); err != nil {
+			return err
+		}
+		if err := daemon.verifyDurableContainmentStopReceipt(key, pid, identity, receipt); err != nil {
+			return err
+		}
+		return daemon.observeContainmentStop(key, pid, identity, receipt)
+	}
+}
+
+// observeContainmentStop is a test-only external witness boundary. Callers
+// invoke it only after the exact receipt mutation has returned successfully;
+// an observer error therefore keeps the containment authority unreleased so a
+// later recovery pass can retry the same receipt.
+func (daemon *daemon) observeContainmentStop(key state.RunKey, pid int, identity string, receipt authority.StopReceipt) error {
+	if daemon.options.containmentStopObserver == nil {
+		return nil
+	}
+	if err := daemon.options.containmentStopObserver(key, pid, identity, receipt); err != nil {
+		return fmt.Errorf("%w: %v", errContainmentStopObserver, err)
+	}
+	return nil
+}
+
+func (daemon *daemon) verifyDurableContainmentStopReceipt(key state.RunKey, pid int, identity string, receipt authority.StopReceipt) error {
+	if daemon.store == nil {
+		return errors.New("state store is unavailable")
+	}
+	journal, err := daemon.store.LoadJournal(key)
+	if err != nil {
+		return fmt.Errorf("read back containment stop receipt: %w", err)
+	}
+	if journal.ContainmentHandoff != nil {
+		if journal.ContainmentHandoff.TargetPID != pid || journal.ContainmentHandoff.TargetIdentity != identity {
+			return errors.New("containment stop receipt readback target mismatch")
+		}
+		if journal.ContainmentHandoff.StopReceipt != nil && *journal.ContainmentHandoff.StopReceipt == receipt {
+			if !receipt.ValidForHandoff(*journal.ContainmentHandoff) {
+				return errors.New("containment stop receipt readback is invalid")
+			}
+			return nil
+		}
+	} else {
+		if journal.PID != pid || journal.ProcessIdentity != identity {
+			return errors.New("containment stop receipt readback target mismatch")
+		}
+	}
+	if journal.ContainmentAuthority != nil && journal.ContainmentAuthority.StopReceipt != nil && *journal.ContainmentAuthority.StopReceipt == receipt {
+		if !receipt.ValidFor(*journal.ContainmentAuthority) {
+			return errors.New("containment stop receipt readback is invalid")
+		}
+		return nil
+	}
+	return errors.New("containment stop receipt was not durably retained")
+}
+
+// Supervisor handoff callbacks are the only app-owned bridge from execution's
+// pre-authority lifecycle into the durable Store. Keep the store lifetime read
+// lock across each complete CAS so daemon shutdown cannot close the Store while
+// a runner is still deciding whether a write outcome is known.
+func (daemon *daemon) prepareSupervisorHandoffCallback(key state.RunKey) func(authority.SupervisorHandoff) error {
+	return func(handoff authority.SupervisorHandoff) error {
+		daemon.storeLifetimeMu.RLock()
+		defer daemon.storeLifetimeMu.RUnlock()
+		prepare := daemon.options.prepareSupervisorHandoff
+		if prepare == nil {
+			if daemon.storeClosing || daemon.store == nil {
+				return errDaemonStoreClosing
+			}
+			prepare = daemon.store.PrepareSupervisorHandoff
+		} else if daemon.storeClosing {
+			return errDaemonStoreClosing
+		}
+		_, err := prepare(key, handoff.Clone())
+		return err
+	}
+}
+
+func (daemon *daemon) bindSupervisorHandoffCallback(key state.RunKey) func(authority.SupervisorHandoff, int, string) error {
+	return func(expected authority.SupervisorHandoff, pid int, identity string) error {
+		daemon.storeLifetimeMu.RLock()
+		defer daemon.storeLifetimeMu.RUnlock()
+		bind := daemon.options.bindSupervisorHandoff
+		if bind == nil {
+			if daemon.storeClosing || daemon.store == nil {
+				return errDaemonStoreClosing
+			}
+			bind = daemon.store.BindSupervisorHandoff
+		} else if daemon.storeClosing {
+			return errDaemonStoreClosing
+		}
+		_, err := bind(key, expected.Clone(), pid, identity)
+		return err
+	}
+}
+
+func (daemon *daemon) commitSupervisorHandoffCallback(key state.RunKey) func(authority.SupervisorHandoff, time.Time) error {
+	return func(expected authority.SupervisorHandoff, startedAt time.Time) error {
+		daemon.storeLifetimeMu.RLock()
+		defer daemon.storeLifetimeMu.RUnlock()
+		commit := daemon.options.commitSupervisorHandoff
+		if commit == nil {
+			if daemon.storeClosing || daemon.store == nil {
+				return errDaemonStoreClosing
+			}
+			commit = daemon.store.CommitSupervisorHandoff
+		} else if daemon.storeClosing {
+			return errDaemonStoreClosing
+		}
+		committed, err := commit(key, expected.Clone(), startedAt)
+		if err != nil {
+			return err
+		}
+		if daemon.options.processObserver != nil {
+			daemon.options.processObserver(key, committed.PID, committed.ProcessIdentity, daemon.now())
+		}
+		return nil
+	}
+}
+
+func (daemon *daemon) recordSupervisorHandoffStopReceiptCallback(key state.RunKey) func(authority.SupervisorHandoff, authority.StopReceipt) error {
+	return func(expected authority.SupervisorHandoff, receipt authority.StopReceipt) error {
+		return daemon.persistSupervisorHandoffStopReceipt(key, expected, receipt, true)
+	}
+}
+
+// rewriteSupervisorHandoffStopReceipt re-submits an already recorded exact
+// receipt without invoking the external observer. Recovery uses this barrier
+// before observing or releasing a helper so a prior unknown write result is
+// never upgraded by readback alone.
+func (daemon *daemon) rewriteSupervisorHandoffStopReceipt(key state.RunKey, expected authority.SupervisorHandoff, receipt authority.StopReceipt) error {
+	return daemon.persistSupervisorHandoffStopReceipt(key, expected, receipt, false)
+}
+
+func (daemon *daemon) persistSupervisorHandoffStopReceipt(key state.RunKey, expected authority.SupervisorHandoff, receipt authority.StopReceipt, observe bool) error {
+	daemon.storeLifetimeMu.RLock()
+	defer daemon.storeLifetimeMu.RUnlock()
+	if daemon.storeClosing {
+		return errDaemonStoreClosing
+	}
+	if !receipt.ValidForHandoff(expected) {
+		return errors.New("supervisor handoff stop receipt does not match handoff")
+	}
+	record := daemon.options.recordSupervisorHandoffStopReceipt
+	if record == nil {
+		if daemon.store == nil {
+			return errDaemonStoreClosing
+		}
+		record = daemon.store.RecordSupervisorHandoffStopReceipt
+	}
+	if _, err := record(key, expected.Clone(), receipt); err != nil {
+		return err
+	}
+	if err := daemon.verifyDurableContainmentStopReceipt(key, expected.TargetPID, expected.TargetIdentity, receipt); err != nil {
+		return err
+	}
+	if observe {
+		return daemon.observeContainmentStop(key, expected.TargetPID, expected.TargetIdentity, receipt)
+	}
+	return nil
+}
+
+func (daemon *daemon) clearSupervisorHandoffCallback(key state.RunKey) func(authority.SupervisorHandoff, authority.SupervisorHandoffReleaseProof) error {
+	return func(expected authority.SupervisorHandoff, proof authority.SupervisorHandoffReleaseProof) error {
+		daemon.storeLifetimeMu.RLock()
+		defer daemon.storeLifetimeMu.RUnlock()
+		clear := daemon.options.clearSupervisorHandoff
+		if clear == nil {
+			if daemon.storeClosing || daemon.store == nil {
+				return errDaemonStoreClosing
+			}
+			clear = daemon.store.ClearSupervisorHandoff
+		} else if daemon.storeClosing {
+			return errDaemonStoreClosing
+		}
+		_, err := clear(key, expected.Clone(), proof)
+		return err
+	}
+}
+
+func (daemon *daemon) clearSupervisorHandoffAfterAbortCallback(key state.RunKey) func(authority.SupervisorHandoff, authority.SupervisorHandoffAbortProof) error {
+	return func(expected authority.SupervisorHandoff, proof authority.SupervisorHandoffAbortProof) error {
+		daemon.storeLifetimeMu.RLock()
+		defer daemon.storeLifetimeMu.RUnlock()
+		clear := daemon.options.clearSupervisorHandoffAfterAbort
+		if clear == nil {
+			if daemon.storeClosing || daemon.store == nil {
+				return errDaemonStoreClosing
+			}
+			clear = daemon.store.ClearSupervisorHandoffAfterAbort
+		} else if daemon.storeClosing {
+			return errDaemonStoreClosing
+		}
+		_, err := clear(key, expected.Clone(), proof)
+		return err
 	}
 }
 
@@ -1473,24 +1778,50 @@ func (daemon *daemon) recoverUnresolvedInputIntents(ctx context.Context) error {
 		if !restartInputRecoveryRequired(journal) || daemon.hasRun(journal.Key()) {
 			continue
 		}
-		if supervisoryRecoveryRequired(journal) {
-			daemon.rememberWorkspaceRetention(journal.Key())
+		// Recovery may stop a persisted process or resolve a pre-authority
+		// supervisor handoff. The workspace-retention decision must be durable
+		// before either process-control action is attempted.
+		if supervisoryRecoveryRequired(journal) || journal.HasProcessDetails() {
+			if journal.RetainWorkspace {
+				daemon.rememberWorkspaceRetention(journal.Key())
+			} else if err := daemon.retainUnknownGoalLaunchWorkspaceChecked(journal.Key()); err != nil {
+				incomplete = errors.Join(incomplete, fmt.Errorf("retain recovered input workspace %s/%d: %w", journal.RunID, journal.Generation, err))
+				continue
+			} else {
+				journal.RetainWorkspace = true
+			}
 		}
 		var stopErr error
-		if journal.HasProcessDetails() {
+		handoffRecoveryPending := journal.ContainmentHandoff != nil
+		if handoffRecoveryPending {
+			key := journal.Key()
+			stopErr = daemon.recoverPersistedSupervisorHandoff(journal.Key(), *journal.ContainmentHandoff)
+			if stopErr != nil {
+				incomplete = errors.Join(incomplete, fmt.Errorf("recover persisted supervisor handoff %s/%d: %w", journal.RunID, journal.Generation, stopErr))
+				continue
+			}
+			journal, err = daemon.store.LoadJournal(key)
+			if err != nil {
+				incomplete = errors.Join(incomplete, fmt.Errorf("reload run after supervisor handoff recovery %s/%d: %w", key.RunID, key.Generation, err))
+				continue
+			}
+			handoffRecoveryPending = journal.ContainmentHandoff != nil
+			if handoffRecoveryPending {
+				incomplete = errors.Join(incomplete, fmt.Errorf("recover persisted supervisor handoff %s/%d: supervisor handoff remains pending after recovery", journal.RunID, journal.Generation))
+				continue
+			}
+		}
+		if !handoffRecoveryPending && stopErr == nil && journal.HasProcessDetails() {
 			stopErr = daemon.stopPersistedProcess(rootContext, journal)
 			if stopErr == nil {
 				_, stopErr = daemon.clearPersistedProcessDetails(journal.Key(), journal.PID, journal.ProcessIdentity)
 			}
 		}
-		if stopErr != nil {
-			if err := daemon.retainUnknownGoalLaunchWorkspaceChecked(journal.Key()); err != nil {
-				incomplete = errors.Join(incomplete, fmt.Errorf("retain recovered input workspace %s/%d: %w", journal.RunID, journal.Generation, err))
-				continue
-			}
-		}
 		if stopErr != nil && daemon.log != nil {
 			daemon.log.Warn("recovered_input_process_stop_pending", "run_id", journal.RunID, "generation", journal.Generation, "error", stopErr)
+		}
+		if !restartInputRecoveryRequired(journal) {
+			continue
 		}
 		recoveries = append(recoveries, journal)
 	}
@@ -1500,9 +1831,6 @@ func (daemon *daemon) recoverUnresolvedInputIntents(ctx context.Context) error {
 		}
 		if daemon.hasRun(journal.Key()) {
 			continue
-		}
-		if supervisoryRecoveryRequired(journal) {
-			daemon.persistWorkspaceRetention(journal.Key())
 		}
 		entryContext, cancel := context.WithTimeout(rootContext, controlRequestLimit)
 		if err := daemon.drainRestartInputOutbox(entryContext, journal.Key()); err != nil && !isConclusiveRestartInputFailure(err) {
@@ -1574,6 +1902,12 @@ func (daemon *daemon) recoverUnclosedGoalSessions(ctx context.Context) error {
 }
 
 func restartInputRecoveryRequired(journal state.RunJournal) bool {
+	// Any retained process or pre-authority handoff is a restart barrier. The
+	// daemon has no in-memory owner to reattach, so recovery must stop/retain it
+	// before reconcile or a new assignment can use the same RunKey.
+	if journal.ContainmentUnproven || journal.ContainmentHandoff != nil {
+		return true
+	}
 	if journal.InputCommandIntent == nil && !supervisoryRecoveryRequired(journal) {
 		return false
 	}
@@ -1714,6 +2048,12 @@ func (daemon *daemon) reconcile(ctx context.Context) bool {
 	runs := make([]protocol.ReconcileRun, 0, len(journals))
 	for _, journal := range journals {
 		if journal.LocalState == "terminal_pending" || journal.LocalState == "cleanup_pending" {
+			continue
+		}
+		if journal.ContainmentUnproven || journal.ContainmentHandoff != nil {
+			// Process containment recovery owns this lineage until the exact
+			// marker/handoff is cleared. Do not advertise it as a live reconcile
+			// candidate while a new assignment could overlap the old owner.
 			continue
 		}
 		if isReconcileState(journal.LocalState) && hasFullFence(journal) {
@@ -2364,8 +2704,10 @@ func (daemon *daemon) startAssignment(ctx context.Context, assignment protocol.A
 	if assignment.RunID == "" || assignment.Generation <= 0 {
 		return
 	}
-	if journal, err := daemon.store.LoadJournal(key); err == nil && journal.LocalState == "cleanup_pending" {
-		return
+	if journal, err := daemon.store.LoadJournal(key); err == nil {
+		if journal.LocalState == "cleanup_pending" || journal.ContainmentUnproven || journal.ContainmentHandoff != nil {
+			return
+		}
 	}
 	select {
 	case daemon.slots <- struct{}{}:
@@ -2587,35 +2929,29 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		return
 	}
 	process, err := daemon.start(executionContext, execution.Invocation{
-		Program:                     profile.Command,
-		Args:                        profile.Args,
-		Dir:                         prepared.Path,
-		Env:                         environment,
-		InitialInput:                input,
-		CloseInputAfterInitial:      !profile.Interactive,
-		InitialLeaseDeadline:        initialLeaseDeadline,
-		InitialLeaseDeadlineAt:      initialLeaseDeadlineAt,
-		InitialLeaseSequence:        1,
-		PersistProcessWithAuthority: daemon.persistProcessWithAuthorityCallback(key),
+		Program:                            profile.Command,
+		Args:                               profile.Args,
+		Dir:                                prepared.Path,
+		Env:                                environment,
+		InitialInput:                       input,
+		CloseInputAfterInitial:             !profile.Interactive,
+		InitialLeaseDeadline:               initialLeaseDeadline,
+		InitialLeaseDeadlineAt:             initialLeaseDeadlineAt,
+		InitialLeaseSequence:               1,
+		PrepareSupervisorHandoff:           daemon.prepareSupervisorHandoffCallback(key),
+		BindSupervisorHandoff:              daemon.bindSupervisorHandoffCallback(key),
+		CommitSupervisorHandoff:            daemon.commitSupervisorHandoffCallback(key),
+		RecordSupervisorHandoffStopReceipt: daemon.recordSupervisorHandoffStopReceiptCallback(key),
+		ClearSupervisorHandoff:             daemon.clearSupervisorHandoffCallback(key),
+		PersistContainmentUnproven:         daemon.markContainmentUnprovenCallback(key),
+		PersistProcessWithAuthority:        daemon.persistProcessWithAuthorityCallback(key),
 		PersistProcess: func(pid int, identity string) error {
-			if daemon.options.recordProcess != nil {
-				_, recordErr := daemon.options.recordProcess(key, pid, identity, daemon.now())
-				return recordErr
-			}
-			_, recordErr := daemon.store.SetProcessDetails(key, pid, identity, daemon.now())
-			return recordErr
+			return daemon.persistProcessMarker(key, pid, identity, daemon.now())
 		},
 		PersistProcessAuthority: func(pid int, identity string, value *authority.Supervisor) error {
 			return daemon.persistProcessAuthorityCallback(key)(pid, identity, value)
 		},
-		PersistContainmentStopReceipt: func(pid int, identity string, receipt authority.StopReceipt) error {
-			if daemon.options.recordContainmentStopReceipt != nil {
-				_, recordErr := daemon.options.recordContainmentStopReceipt(key, pid, identity, receipt)
-				return recordErr
-			}
-			_, recordErr := daemon.store.RecordContainmentStopReceipt(key, pid, identity, receipt)
-			return recordErr
-		},
+		PersistContainmentStopReceipt: daemon.persistContainmentStopReceiptCallback(key),
 	}, sink)
 	if isNilProcess(process) {
 		process = nil
@@ -2702,10 +3038,15 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		daemon.waitForRunWithContext(ctx, key)
 		return
 	}
-	if daemon.options.recordProcess != nil {
-		_, err = daemon.options.recordProcess(key, pid, identity, daemon.options.clock())
-	} else {
-		_, err = daemon.store.SetProcessDetails(key, pid, identity, daemon.options.clock())
+	alreadyRecorded, readErr := daemon.processDetailsAlreadyRecorded(key, pid, identity)
+	if readErr != nil {
+		err = readErr
+	} else if !alreadyRecorded {
+		if daemon.options.recordProcess != nil {
+			_, err = daemon.options.recordProcess(key, pid, identity, daemon.options.clock())
+		} else {
+			_, err = daemon.store.SetProcessDetails(key, pid, identity, daemon.options.clock())
+		}
 	}
 	if err != nil {
 		if !daemon.isCancelled(key) {
@@ -3162,6 +3503,20 @@ func processDetails(process Process) (int, string, error) {
 		return pid, identity, nil
 	}
 	return 0, "", errors.New("process does not expose a persistent identity")
+}
+
+func (daemon *daemon) processDetailsAlreadyRecorded(key state.RunKey, pid int, identity string) (bool, error) {
+	if daemon.store == nil {
+		return false, nil
+	}
+	journal, err := daemon.store.LoadJournal(key)
+	if state.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return journal.PID == pid && journal.ProcessIdentity == identity && !journal.StartedAt.IsZero(), nil
 }
 
 func isNilProcess(process Process) bool {
@@ -3751,22 +4106,23 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 		ProviderAccess: providerAccess,
 		ProviderBridge: providerBridge,
 		Invocation: execution.Invocation{
-			Program:                     profile.Command,
-			Args:                        profile.Args,
-			Dir:                         prepared.Path,
-			Env:                         environment,
-			InitialLeaseDeadline:        initialLeaseDeadline,
-			InitialLeaseDeadlineAt:      initialLeaseDeadlineAt,
-			InitialLeaseSequence:        1,
-			PersistProcessWithAuthority: daemon.persistProcessWithAuthorityCallback(key),
+			Program:                            profile.Command,
+			Args:                               profile.Args,
+			Dir:                                prepared.Path,
+			Env:                                environment,
+			InitialLeaseDeadline:               initialLeaseDeadline,
+			InitialLeaseDeadlineAt:             initialLeaseDeadlineAt,
+			InitialLeaseSequence:               1,
+			PrepareSupervisorHandoff:           daemon.prepareSupervisorHandoffCallback(key),
+			BindSupervisorHandoff:              daemon.bindSupervisorHandoffCallback(key),
+			CommitSupervisorHandoff:            daemon.commitSupervisorHandoffCallback(key),
+			RecordSupervisorHandoffStopReceipt: daemon.recordSupervisorHandoffStopReceiptCallback(key),
+			ClearSupervisorHandoff:             daemon.clearSupervisorHandoffCallback(key),
+			PersistContainmentUnproven:         daemon.markContainmentUnprovenCallback(key),
+			PersistProcessWithAuthority:        daemon.persistProcessWithAuthorityCallback(key),
 		},
 		PersistProcess: func(pid int, identity string) error {
-			var persistErr error
-			if daemon.options.recordProcess != nil {
-				_, persistErr = daemon.options.recordProcess(key, pid, identity, daemon.now())
-			} else {
-				_, persistErr = daemon.store.SetProcessDetails(key, pid, identity, daemon.now())
-			}
+			persistErr := daemon.persistProcessMarker(key, pid, identity, daemon.now())
 			if persistErr == nil && daemon.options.processObserver != nil {
 				daemon.options.processObserver(key, pid, identity, daemon.now())
 			}
@@ -3775,14 +4131,7 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 		PersistProcessAuthority: func(pid int, identity string, value *authority.Supervisor) error {
 			return daemon.persistProcessAuthorityCallback(key)(pid, identity, value)
 		},
-		PersistContainmentStopReceipt: func(pid int, identity string, receipt authority.StopReceipt) error {
-			if daemon.options.recordContainmentStopReceipt != nil {
-				_, persistErr := daemon.options.recordContainmentStopReceipt(key, pid, identity, receipt)
-				return persistErr
-			}
-			_, persistErr := daemon.store.RecordContainmentStopReceipt(key, pid, identity, receipt)
-			return persistErr
-		},
+		PersistContainmentStopReceipt: daemon.persistContainmentStopReceiptCallback(key),
 	}, sink)
 	nativeLaunchAttempted = true
 	if isNilHarnessSession(session) {
@@ -6123,6 +6472,11 @@ func (daemon *daemon) waitForRunResultWithContext(ctx context.Context, key state
 	}
 	if stale {
 		active.inputMu.Unlock()
+		if daemon.settleStaleCancellation(ctx, key) {
+			daemon.releaseSlotOnce(key)
+			daemon.enqueueCleanup(key)
+			return
+		}
 		_, err := daemon.store.SetLocalState(key, "stale")
 		daemon.releaseSlotOnce(key)
 		daemon.enqueueCleanup(key)
@@ -6202,6 +6556,9 @@ func (daemon *daemon) recordGenericProcessExit(key state.RunKey, expected *runni
 }
 
 func (daemon *daemon) clearPersistedProcessDetails(key state.RunKey, pid int, identity string) (state.RunJournal, error) {
+	if err := daemon.clearContainmentUnprovenCallback(key)(pid, identity); err != nil {
+		return state.RunJournal{}, err
+	}
 	clear := daemon.options.clearProcessDetails
 	if clear == nil {
 		clear = daemon.store.ClearProcessDetails
@@ -7709,6 +8066,12 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 			if journal.LocalState == "terminal_pending" {
 				return daemon.queueCancellationReceipt(ctx, key, command.CommandID)
 			}
+			if journal.LocalState == "stale" {
+				// Lease loss released the in-memory owner before this cancel
+				// arrived. Recovery stops or proves the recorded process before
+				// it publishes the cancellation receipt.
+				return daemon.cancelRecoveredJournal(ctx, journal, command.CommandID)
+			}
 			return daemon.queueCommandAcknowledgementWithContext(ctx, key, command.CommandID, "rejected")
 		}
 		if active.terminal || active.terminalizing > 0 {
@@ -7746,8 +8109,14 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 			return false
 		}
 		if active.stale {
+			// Lease loss already stopped this owner. Remember the cancel so the
+			// exact process-exit witness can settle it; never acknowledge before
+			// that physical stop is proven.
+			if active.cancelCommandID == "" {
+				active.cancelCommandID = command.CommandID
+			}
 			daemon.mu.Unlock()
-			return false
+			return daemon.settleStaleCancellation(ctx, key)
 		}
 		if !active.claimed {
 			active.cancelled = true
@@ -8202,6 +8571,36 @@ func (daemon *daemon) queueCancellationReceipt(ctx context.Context, key state.Ru
 		return false
 	}
 	return true
+}
+
+// settleStaleCancellation completes a cancel that arrived after lease loss made
+// the run stale. Control moves a cancelled Run to cancelling and then rejects
+// its lease renewal, so the stale owner must still publish the cancellation
+// receipt once the exact process owner is proven stopped. Without that witness
+// the command stays unacknowledged and Control's reaper remains the fallback.
+func (daemon *daemon) settleStaleCancellation(ctx context.Context, key state.RunKey) bool {
+	daemon.mu.Lock()
+	active := daemon.running[key]
+	if active == nil || !active.stale || active.cancelCommandID == "" || active.process == nil || active.processStopWitness != active.process {
+		daemon.mu.Unlock()
+		return false
+	}
+	commandID := active.cancelCommandID
+	stopPID, stopIdentity := active.processStopPID, active.processStopIdentity
+	daemon.mu.Unlock()
+	journal, err := daemon.store.LoadJournal(key)
+	if err != nil {
+		return false
+	}
+	if journal.HasProcessDetails() && (journal.PID != stopPID || journal.ProcessIdentity != stopIdentity) {
+		return false
+	}
+	if durableTerminalPresent(journal) {
+		return daemon.replayOrRejectCancellationAcknowledgement(ctx, key, commandID, journal)
+	}
+	receipt := daemon.queueCancellationReceipt(ctx, key, commandID)
+	daemon.finishDeferredCommand(commandKey{run: key, id: commandID}, receipt)
+	return receipt
 }
 
 func (daemon *daemon) newIDWithRetry(ctx context.Context, key state.RunKey, commandID, kind string) (string, error) {

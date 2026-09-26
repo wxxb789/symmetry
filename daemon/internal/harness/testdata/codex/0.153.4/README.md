@@ -1,17 +1,16 @@
 # Codex 0.153.4 probe evidence
 
+The files remaining here (`app-server-help.txt`, `app-server-start-smoke.jsonl`,
+`schema-manifest.json`, `native-smoke.md`) are historical evidence for Codex
+0.153.4, superseded by [`../0.156.1/`](../0.156.1/README.md).
+
 These files record local executable/help and transport-framing evidence only.
 They do not claim that Codex app-server native session, control, approval or
 usage semantics are supported by Symmetry.
 
 `app-server-help.txt` is a sanitized copy of the locally observed
-`codex app-server --help` output. `frames.jsonl` contains generic JSON-RPC
-framing examples used to prove buffering and diagnostic handling; it does not
-name or implement a Codex RPC method.
-
-`app-server-lifecycle.jsonl` is a normalized strict-JSON-RPC fixture for
-deterministic parser tests. It preserves the v2 method names and interleaving,
-but is not a raw capture.
+`codex app-server --help` output. The synthetic `frames.jsonl` and
+`app-server-lifecycle.jsonl` fixtures moved to `../0.156.1/`.
 
 `app-server-start-smoke.jsonl` is a sanitized non-credentialed Windows
 observation from 2026-09-09 for Codex CLI 0.153.4. The installed server

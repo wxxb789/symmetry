@@ -4,7 +4,7 @@ defmodule SymmetryControl.PiControlE2ETest do
 
   This test uses an explicitly named test admission witness. The witness gives
   the test child a fixed, scoped capability projection while delegating native
-  execution to the real Pi 0.85.1 adapter. The loopback upstream is synthetic,
+  execution to the real Pi 0.87.1 adapter. The loopback upstream is synthetic,
   noncredentialed, and configured through a numeric loopback address. This test
   does not prove firewall or network-namespace isolation and makes no
   production capability, provider accounting, or Goal-completion claim.
@@ -41,16 +41,16 @@ defmodule SymmetryControl.PiControlE2ETest do
   # explicit `--include skip:true` filter.
   @moduletag skip: true
 
-  @pi_version "0.85.1"
+  @pi_version "0.87.1"
   @pi_provider "symmetry-control-loopback"
   @pi_model "gpt-5.6-terra"
   @pi_api "openai-responses"
   @pi_api_key "symmetry-control-loopback-test-key"
   @pi_executable_sha256_by_platform %{
     {{:win32, :nt}, "x86_64-pc-windows"} =>
-      "2d4d351da30bfe23a473032e66a571b238763565aa93754e74f4a939de13f195",
+      "dd5fdf61bdd10e3fa3fb3d7dbca1ce9f21475d4a7a410f2e0524fd19ae35651f",
     {{:unix, :linux}, "x86_64-pc-linux-gnu"} =>
-      "443bd83f30e4dbc7bac2eed9c6aa2461b9a15016fd555f48c92a0591d028c403"
+      "3e8177cb94d6b4577f3626f9400d80c92d991867400c21a779784f5bee9b9925"
   }
   @witness_adapter_version "symmetry-test:pi-control-loopback-witness-v1"
   @artifact_path "pi-control-e2e-artifact.txt"
@@ -4256,9 +4256,17 @@ defmodule SymmetryControl.PiControlE2ETest do
 
   defp valid_native_process_identity?(identity) do
     case :os.type() do
-      {:win32, _} -> Regex.match?(~r/^windows:\d+:[0-9a-f]{16}$/, identity)
-      {:unix, :linux} -> Regex.match?(~r/^linux:[^:\s]+:\d+:\d+$/, identity)
-      _ -> false
+      {:win32, _} ->
+        Regex.match?(~r/^windows:\d+:[0-9a-f]{16}$/, identity)
+
+      {:unix, :linux} ->
+        Regex.match?(
+          ~r/^linux:v2:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:\d+:\d+:\d+$/,
+          identity
+        )
+
+      _ ->
+        false
     end
   end
 
@@ -4431,6 +4439,10 @@ defmodule SymmetryControl.PiControlE2ETest do
 
   defp linux_native_process_identity(os_pid) do
     with {:ok, boot_id} <- File.read("/proc/sys/kernel/random/boot_id"),
+         {:ok, pid_namespace} <- File.read_link("/proc/#{os_pid}/ns/pid"),
+         [_, pid_namespace_inode] <-
+           Regex.run(~r/\Apid:\[(\d+)\]\z/, pid_namespace) ||
+             {:error, :invalid_pid_namespace_link},
          {:ok, stat} <- File.read("/proc/#{os_pid}/stat"),
          {:ok, start_time} <- unix_process_start_time(stat) do
       boot_id = String.trim(boot_id)
@@ -4438,7 +4450,7 @@ defmodule SymmetryControl.PiControlE2ETest do
       if boot_id == "" do
         {:error, "Linux boot ID is empty"}
       else
-        {:ok, "linux:#{boot_id}:#{os_pid}:#{start_time}"}
+        {:ok, "linux:v2:#{boot_id}:#{pid_namespace_inode}:#{os_pid}:#{start_time}"}
       end
     else
       {:error, reason} -> {:error, inspect(reason)}
@@ -4658,7 +4670,7 @@ defmodule SymmetryControl.PiControlE2ETest do
     value = String.trim(System.get_env("SYMMETRY_PI_CONTROL_E2E_EXECUTABLE") || "")
 
     if value == "",
-      do: flunk("SYMMETRY_PI_CONTROL_E2E_EXECUTABLE must name the real Pi 0.85.1 executable")
+      do: flunk("SYMMETRY_PI_CONTROL_E2E_EXECUTABLE must name the real Pi 0.87.1 executable")
 
     unless Path.type(value) == :absolute, do: flunk("Pi executable path must be absolute")
     if not File.regular?(value), do: flunk("Pi executable path must name a regular file")

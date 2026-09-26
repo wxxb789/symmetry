@@ -336,7 +336,7 @@ func TestNativePiProviderBridgeLifecycle(t *testing.T) {
 	}
 	executable := strings.TrimSpace(os.Getenv(nativeSmokeExecutableEnv))
 	if executable == "" || !filepath.IsAbs(executable) {
-		t.Fatalf("%s must name the absolute Pi 0.85.1 executable", nativeSmokeExecutableEnv)
+		t.Fatalf("%s must name the absolute Pi executable", nativeSmokeExecutableEnv)
 	}
 
 	root := t.TempDir()

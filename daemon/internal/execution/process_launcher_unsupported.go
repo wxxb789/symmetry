@@ -1,18 +1,20 @@
-//go:build !windows
+//go:build !windows && !linux
 
 package execution
 
 import (
+	"context"
 	"os"
 	"os/exec"
 )
 
 func defaultProcessLauncher(
-	*exec.Cmd,
-	Invocation,
-	*os.File,
-	*os.File,
-	*os.File,
+	_ context.Context,
+	_ *exec.Cmd,
+	_ Invocation,
+	_ *os.File,
+	_ *os.File,
+	_ *os.File,
 ) (*startedProcess, error) {
 	return nil, errNativeProcessLauncherUnavailable
 }

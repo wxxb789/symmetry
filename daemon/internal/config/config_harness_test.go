@@ -21,7 +21,7 @@ func TestRuntimeAcceptsCompleteNativeAdapterMetadata(t *testing.T) {
 	value := validConfigObject(t)
 	runtime := value["runtime"].(map[string]any)
 	runtime["harness_kind"] = RuntimeHarnessCodex
-	runtime["harness_version"] = "0.153.4"
+	runtime["harness_version"] = "0.156.1"
 	runtime["adapter_version"] = "symmetry-daemon:test"
 	runtime["adapter_protocol_version"] = 1
 	runtime["repository_resource_id"] = "00000000-0000-4000-8000-000000000001"
@@ -43,7 +43,7 @@ func TestRuntimeAcceptsCompleteNativeAdapterMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if actual.Runtime.HarnessKind != RuntimeHarnessCodex || actual.Runtime.HarnessVersion != "0.153.4" ||
+	if actual.Runtime.HarnessKind != RuntimeHarnessCodex || actual.Runtime.HarnessVersion != "0.156.1" ||
 		actual.Runtime.AdapterVersion != "symmetry-daemon:test" || actual.Runtime.AdapterProtocolVersion != 1 {
 		t.Fatalf("runtime metadata = %+v", actual.Runtime)
 	}
@@ -67,7 +67,7 @@ func TestCodexRuntimeRequiresCanonicalNativeModel(t *testing.T) {
 			value := validConfigObject(t)
 			runtime := value["runtime"].(map[string]any)
 			runtime["harness_kind"] = RuntimeHarnessCodex
-			runtime["harness_version"] = "0.153.4"
+			runtime["harness_version"] = "0.156.1"
 			runtime["adapter_version"] = "symmetry-daemon:test"
 			runtime["adapter_protocol_version"] = 1
 			runtime["repository_resource_id"] = "00000000-0000-4000-8000-000000000001"
@@ -103,7 +103,7 @@ func TestCodexRuntimeRequiresCanonicalNativeModelProvider(t *testing.T) {
 			value := validConfigObject(t)
 			runtime := value["runtime"].(map[string]any)
 			runtime["harness_kind"] = RuntimeHarnessCodex
-			runtime["harness_version"] = "0.153.4"
+			runtime["harness_version"] = "0.156.1"
 			runtime["adapter_version"] = "symmetry-daemon:test"
 			runtime["adapter_protocol_version"] = 1
 			runtime["repository_resource_id"] = "00000000-0000-4000-8000-000000000001"
@@ -155,7 +155,7 @@ func TestNativeRuntimeRequiresGitWorktree(t *testing.T) {
 	value := validConfigObject(t)
 	runtime := value["runtime"].(map[string]any)
 	runtime["harness_kind"] = RuntimeHarnessCodex
-	runtime["harness_version"] = "0.153.4"
+	runtime["harness_version"] = "0.156.1"
 	runtime["adapter_version"] = "symmetry-daemon:test"
 	runtime["adapter_protocol_version"] = 1
 	runtime["repository_resource_id"] = "00000000-0000-4000-8000-000000000001"
@@ -182,7 +182,7 @@ func TestNativeRuntimeRequiresCanonicalRepositoryResourceID(t *testing.T) {
 			value := validConfigObject(t)
 			runtime := value["runtime"].(map[string]any)
 			runtime["harness_kind"] = RuntimeHarnessCodex
-			runtime["harness_version"] = "0.153.4"
+			runtime["harness_version"] = "0.156.1"
 			runtime["adapter_version"] = "symmetry-daemon:test"
 			runtime["adapter_protocol_version"] = 1
 			profile := value["agent_profiles"].(map[string]any)["default"].(map[string]any)

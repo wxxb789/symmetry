@@ -19,5 +19,6 @@ under goal 0007, following `docs/design/frontend.md` and `protocol.md`.
 - Use the exact installed Effect major and its matching APIs. Do not mix v3
   examples with v4 RC documentation.
 
-Target commands are defined in frontend.md; they do not exist in this PR.
+Target commands are defined in frontend.md and do not exist until the
+application lands.
 Until migration, browser/ remains the actual Playwright suite and CI contract.

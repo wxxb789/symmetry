@@ -1,6 +1,6 @@
 # 0006e - Evidence-bounded Claude Code native capability
 
-Establish the exact supported native capability range for Claude Code `2.1.259`
+Establish the exact supported native capability range for Claude Code `2.1.281`
 through real repository and session work. Terminal, cancellation, artifact, and
 usage outcomes are authoritative only when the native protocol proves them;
 unverified resume, pause, approvals, or provider operations remain unsupported.
@@ -14,3 +14,6 @@ This goal starts only when both Linux and Windows native runners, the pinned
 binary, approved credentials, repository, and permitted spend are available;
 the 12-hour bound starts after all prerequisites are ready. It depends on 0006a
 and 0006b and produces one independently mergeable PR.
+
+Pinned version changed from `2.1.259` to `2.1.281` by owner directive
+2026-09-24: track latest client.

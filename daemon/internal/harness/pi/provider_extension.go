@@ -191,21 +191,21 @@ async function executeAction(toolCallId: string, operation: string, resourceId: 
   throw new Error("Symmetry provider bridge response is invalid");
 }
 
-function registerAction(pi: any, operation: string, name: string, label: string) {
+function registerAction(pi: any, operation: string, name: string, label: string, description: string) {
   const resourceIds = (resourcesByOperation as Record<string, readonly string[]>)[operation] ?? [];
   if (resourceIds.length === 0) return;
   const change = operation !== "resource.sync";
-  const properties: Record<string, unknown> = { resource_id: { type: "string", enum: resourceIds } };
+  const properties: Record<string, unknown> = { resource_id: { type: "string", enum: resourceIds, description: "Authorized connected resource ID." } };
   const required = ["resource_id"];
   if (change) {
-    properties.title = { type: "string", minLength: 1, maxLength: 255 };
-    properties.body = { type: "string", maxLength: 1048576 };
+    properties.title = { type: "string", minLength: 1, maxLength: 255, description: "Pull request title." };
+    properties.body = { type: "string", maxLength: 1048576, description: "Pull request description in Markdown. Omit to keep an existing description unchanged." };
     required.push("title");
   }
   pi.registerTool({
     name,
     label,
-    description: label + " through the run-scoped Symmetry provider broker. Repository, branch, and pull-request identity are server-owned.",
+    description,
     promptSnippet: label + " through the authorized Symmetry provider broker",
     promptGuidelines: ["Use " + name + " only for the authorized connected resource. Never substitute local Git commands for this provider operation."],
     parameters: { type: "object", properties, required, additionalProperties: false },
@@ -218,9 +218,12 @@ function registerAction(pi: any, operation: string, name: string, label: string)
 
 export default function symmetryProviderBridge(pi: any) {
   bridgeConfiguration();
-  registerAction(pi, "resource.sync", "symmetry_resource_sync", "Synchronize connected resource");
-  registerAction(pi, "change.upsert", "symmetry_change_upsert", "Create or reconcile change request");
-  registerAction(pi, "change.update", "symmetry_change_update", "Update authorized change request");
+  registerAction(pi, "resource.sync", "symmetry_resource_sync", "Synchronize connected resource",
+    "Refresh Symmetry's stored copy of a connected GitHub or Azure DevOps resource, such as repository metadata, issues or work items, CI status and linked pull request state. It changes nothing at the provider. The text result reports only success or a failure code, not the synchronized content.");
+  registerAction(pi, "change.upsert", "symmetry_change_upsert", "Create or reconcile change request",
+    "Create the pull request from this task's approved source branch to its approved target branch, or update the title and body of the open pull request between them. Symmetry fixes the repository and both branches; you supply the title and optional body. It does not push commits, so the source branch must already exist on the remote. The text result reports only success or a failure code.");
+  registerAction(pi, "change.update", "symmetry_change_update", "Update authorized change request",
+    "Update the title and body of the one pull request this task may change: the approved pull request for this task, or the one this run's symmetry_change_upsert returned. Symmetry selects the pull request; you supply the title and optional body. It cannot create a pull request. The text result reports only success or a failure code.");
 }
 `
 

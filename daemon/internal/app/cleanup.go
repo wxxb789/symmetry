@@ -513,6 +513,12 @@ func (daemon *daemon) cleanupPending(ctx context.Context, journal state.RunJourn
 	if daemon.deferStaleCleanupForPendingAcknowledgement(journal) {
 		return errors.New("command acknowledgement remains pending")
 	}
+	if journal.LocalState == "stale" && journal.TerminalState == "" && daemon.now().Before(journal.LeaseExpiresAt) {
+		// Control can still send a cancel until the lost lease expires; after
+		// that its reaper settles the Run. Keep the stale journal so that cancel
+		// can be acknowledged against the recorded stop.
+		return errors.New("stale run lease has not expired")
+	}
 	if len(journal.PendingCommandAcknowledgements) != 0 {
 		if !state.CommandAcknowledgementRetired(journal) {
 			daemon.signalOutboxFor(journal.Key())

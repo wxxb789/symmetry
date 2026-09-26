@@ -10,7 +10,7 @@ import (
 
 func TestCodexProbeKnownVersionHelpAndSchemaFailsClosed(t *testing.T) {
 	runner := &codexFixtureRunner{responses: map[string][]byte{
-		"--version":         []byte("codex-cli 0.153.4\n"),
+		"--version":         []byte("codex-cli " + CodexTestedVersion + "\n"),
 		"app-server --help": []byte("codex app-server stdio transport\n"),
 	}, schemaDigest: CodexTestedSchemaHash}
 
@@ -31,9 +31,9 @@ func TestCodexProbeKnownVersionHelpAndSchemaFailsClosed(t *testing.T) {
 
 func TestCodexProbeRejectsNonExactVersionOutput(t *testing.T) {
 	for _, versionOutput := range []string{
-		"codex-cli 0.153.4-alpha.1\n",
-		"codex-cli 0.153.4+build.1\n",
-		"codex-cli 0.153.4 trailing-token\n",
+		"codex-cli 0.156.1-alpha.1\n",
+		"codex-cli 0.156.1+build.1\n",
+		"codex-cli 0.156.1 trailing-token\n",
 	} {
 		t.Run(versionOutput, func(t *testing.T) {
 			runner := &codexFixtureRunner{responses: map[string][]byte{"--version": []byte(versionOutput)}}
@@ -54,7 +54,7 @@ func TestCodexProbeRejectsNonExactVersionOutput(t *testing.T) {
 func TestCodexProbeSchemaMismatchFailsClosed(t *testing.T) {
 	runner := &codexFixtureRunner{
 		responses: map[string][]byte{
-			"--version":         []byte("codex-cli 0.153.4\n"),
+			"--version":         []byte("codex-cli " + CodexTestedVersion + "\n"),
 			"app-server --help": []byte("codex app-server stdio transport\n"),
 		},
 		schemaDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -81,9 +81,9 @@ func TestCodexProbeDoesNotParseFailedCommandOutput(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			results := map[string]codexFixtureResult{}
-			responses := map[string][]byte{"--version": []byte("codex-cli 0.153.4\n")}
+			responses := map[string][]byte{"--version": []byte("codex-cli " + CodexTestedVersion + "\n")}
 			if test.stage == "version" {
-				results["--version"] = codexFixtureResult{output: []byte("codex-cli 0.153.4\n"), err: test.err}
+				results["--version"] = codexFixtureResult{output: []byte("codex-cli " + CodexTestedVersion + "\n"), err: test.err}
 			} else {
 				responses["app-server --help"] = []byte("codex app-server stdio transport\n")
 				results["app-server --help"] = codexFixtureResult{output: []byte("codex app-server stdio transport\n"), err: test.err}

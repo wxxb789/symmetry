@@ -6,9 +6,11 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"golang.org/x/sys/unix"
 )
@@ -75,8 +77,9 @@ func TestTerminatePersistedProcessProvesAbsentLeaderWithoutProcessSideEffects(t 
 		return nil
 	}
 
-	if err := terminatePersistedProcessWithContext(context.Background(), 99, "linux:v2:expected"); err != nil {
-		t.Fatalf("terminatePersistedProcessWithContext() error = %v", err)
+	err := terminatePersistedProcessWithContext(context.Background(), 99, "linux:v2:expected")
+	if !errors.Is(err, errPersistedProcessStopUnproven) {
+		t.Fatalf("terminatePersistedProcessWithContext() error = %v, want unresolved descendant stop", err)
 	}
 	if !proofCalled {
 		t.Fatal("absent process leader did not invoke process-group absence proof")
@@ -197,5 +200,38 @@ func TestTerminatePersistedProcessFailsClosedWhenPlatformCannotProveExit(t *test
 	err := terminatePersistedProcess(99, "linux:99:expected")
 	if !errors.Is(err, errPersistedProcessStopUnproven) {
 		t.Fatalf("terminatePersistedProcess() error = %v, want unproven stop", err)
+	}
+}
+
+func TestReleasePersistedLinuxContainmentAuthorityRequiresHelperEndpoint(t *testing.T) {
+	value := authority.Supervisor{
+		Version:            authority.SupervisorVersion,
+		Secret:             strings.Repeat("a", authority.SecretBytes*2),
+		OwnerKind:          authority.OwnerKindLinuxHelper,
+		OwnerContext:       "linux-helper:legacy",
+		TargetPID:          99,
+		TargetIdentity:     "linux:99:expected",
+		PipeToken:          strings.Repeat("b", authority.TokenBytes*2),
+		JobID:              strings.Repeat("c", authority.TokenBytes*2),
+		SupervisorPID:      100,
+		SupervisorIdentity: "linux:100:expected",
+	}
+	value.StopReceipt = &authority.StopReceipt{
+		Version:            authority.SupervisorVersion,
+		Status:             "stopped",
+		OwnerKind:          value.OwnerKind,
+		OwnerContext:       value.OwnerContext,
+		TargetPID:          value.TargetPID,
+		TargetIdentity:     value.TargetIdentity,
+		PipeToken:          value.PipeToken,
+		JobID:              value.JobID,
+		SupervisorPID:      value.SupervisorPID,
+		SupervisorIdentity: value.SupervisorIdentity,
+		ActiveProcesses:    0,
+	}
+
+	err := releasePersistedLinuxContainmentAuthority(value.TargetPID, value.TargetIdentity, &value)
+	if !errors.Is(err, errPersistedProcessStopUnproven) || !strings.Contains(err.Error(), "recovery endpoint") {
+		t.Fatalf("releasePersistedLinuxContainmentAuthority() error = %v, want missing recovery endpoint", err)
 	}
 }
