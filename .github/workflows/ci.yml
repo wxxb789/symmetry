@@ -206,6 +206,88 @@ jobs:
               fail("helper-error", error)
           `
 
+          // Clear A's inherited supplementary groups before it creates the child user namespace.
+          const rootGroupPrepScript = `
+          import os, stat, sys
+          def fail(stage, error):
+              os.write(2, ("group-preparation-failure=%s detail=%r\n" % (stage, str(error))).encode())
+              raise SystemExit(1)
+          def status(pid):
+              values = {}
+              with open("/proc/%d/status" % pid, encoding="ascii") as stream:
+                  for line in stream:
+                      key, separator, value = line.partition(":")
+                      if separator and key in ("Uid", "Gid", "PPid", "Groups"):
+                          values[key] = [int(item) for item in value.split()]
+              if any(key not in values for key in ("Uid", "Gid", "PPid", "Groups")):
+                  raise RuntimeError("incomplete process status")
+              return values
+          def capability_mask(name):
+              with open("/proc/self/status", encoding="ascii") as stream:
+                  for line in stream:
+                      if line.startswith(name + ":"):
+                          return int(line.partition(":")[2].strip(), 16)
+              raise RuntimeError(name + " missing from process status")
+          def cgroup(pid):
+              with open("/proc/%d/cgroup" % pid, encoding="ascii") as stream:
+                  for line in stream:
+                      fields = line.rstrip("\n").split(":", 2)
+                      if len(fields) == 3 and fields[0] == "0" and fields[1] == "":
+                          return fields[2]
+              raise RuntimeError("unified cgroup membership missing")
+          try:
+              os.chdir("/")
+              if os.geteuid() != 0 or len(sys.argv) != 5:
+                  fail("arguments", "expected root, A PID/UID/GID, and exact probe binary path")
+              a_pid, a_uid, a_gid, binary_path = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
+              owner = int(os.environ["SUDO_UID"])
+              sudo_gid = int(os.environ["SUDO_GID"])
+              sudo_pid = os.getppid()
+              a = status(a_pid)
+              if owner != a_uid or sudo_gid != a_gid or a["Uid"] != [a_uid] * 4 or a["Gid"] != [a_gid] * 4:
+                  fail("caller-identity", "A credentials do not match the authenticated sudo caller")
+              if sudo_pid != a_pid:
+                  sudo = status(sudo_pid)
+                  if sudo["PPid"] != [a_pid]:
+                      fail("sudo-parent-identity", "root helper was not launched by A through sudo")
+              service_cgroup = cgroup(a_pid)
+              if cgroup(sudo_pid) != service_cgroup or cgroup(os.getpid()) != service_cgroup:
+                  fail("service-cgroup", "A, sudo, and root prep helper must share the transient service cgroup")
+              if not os.path.isabs(binary_path) or os.path.normpath(binary_path) != binary_path or os.path.basename(binary_path) != "cgroup-v2-delegation-probe":
+                  fail("probe-path", "unexpected probe executable path")
+              if os.readlink("/proc/%d/exe" % a_pid) != binary_path:
+                  fail("probe-executable-identity", "A is not running the exact probe binary path")
+              binary_fd = os.open(binary_path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+              try:
+                  binary = os.fstat(binary_fd)
+                  process_binary = os.stat("/proc/%d/exe" % a_pid)
+                  if not stat.S_ISREG(binary.st_mode) or binary.st_ino != process_binary.st_ino or binary.st_dev != process_binary.st_dev:
+                      fail("probe-executable-identity", "probe path does not name A's exact executable")
+                  if binary.st_uid != a_uid or binary.st_mode & 0o022 or binary.st_mode & 0o6000 or not binary.st_mode & 0o111:
+                      fail("probe-executable-ownership", "probe must be A-owned, executable, non-setid, and not group/world writable")
+                  groups_before = a["Groups"]
+                  os.setgroups([])
+                  if os.getgroups():
+                      fail("supplementary-groups", "root could not clear A's inherited groups (count=%d)" % len(groups_before))
+                  os.setresgid(a_gid, a_gid, a_gid)
+                  os.setresuid(a_uid, a_uid, a_uid)
+                  dropped = status(os.getpid())
+                  if (dropped["Uid"] != [a_uid] * 4 or dropped["Gid"] != [a_gid] * 4 or
+                      dropped["Groups"] or os.getgroups() or
+                      any(capability_mask(name) != 0 for name in ("CapEff", "CapPrm", "CapAmb"))):
+                      fail("credential-drop", "root prep did not fully drop to group-free A")
+                  print("group-preparation=passed initial_supplementary_group_count=%d" % len(groups_before), flush=True)
+                  if cgroup(os.getpid()) != service_cgroup:
+                      fail("service-cgroup-after-drop", "prepared probe left the transient service cgroup")
+                  os.execve(binary_fd, [binary_path, "--prepared"], {"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"})
+              finally:
+                  os.close(binary_fd)
+          except SystemExit:
+              raise
+          except Exception as error:
+              fail("helper-error", error)
+          `
+
           type report struct {
             uid                  int
             childUID             int
@@ -587,6 +669,59 @@ jobs:
             return nil
           }
 
+          type boundedOutput struct {
+            bytes.Buffer
+            limit     int
+            truncated bool
+          }
+
+          func (output *boundedOutput) Write(value []byte) (int, error) {
+            length := len(value)
+            available := output.limit - output.Len()
+            if available <= 0 {
+              output.truncated = length != 0 || output.truncated
+              return length, nil
+            }
+            if length > available {
+              output.truncated = true
+              value = value[:available]
+            }
+            _, err := output.Buffer.Write(value)
+            return length, err
+          }
+
+          func hasPreparedSuccessMarkers(output string) bool {
+            expected := map[string]string{
+              "group-preparation": "passed",
+              "capability": "clone3-cgroupfd-pidfd",
+              "cross_uid_capability": "fixed-b-child-userns-fdinfo-pidfd-getfd",
+              "host_a_pidfd_getfd": "passed",
+              "status": "passed",
+            }
+            counts := make(map[string]int, len(expected))
+            matched := make(map[string]int, len(expected))
+            for _, line := range strings.Split(output, "\n") {
+              for _, field := range strings.Fields(line) {
+                key, value, ok := strings.Cut(field, "=")
+                if !ok {
+                  continue
+                }
+                if want, required := expected[key]; required {
+                  counts[key]++
+                  if value == want {
+                    matched[key]++
+                  }
+                }
+              }
+            }
+            for key := range expected {
+              if counts[key] != 1 || matched[key] != 1 {
+                return false
+              }
+            }
+            return true
+          }
+
           func runRootMapping(mode string, aPID int, childPID int, nsDev uint64, nsIno uint64,
             childStart uint64, aCgroup string, leafCgroup string) error {
             for _, path := range []string{"/usr/bin/sudo", "/usr/bin/python3"} {
@@ -615,6 +750,46 @@ jobs:
             }
             fmt.Println(strings.TrimSpace(stdout.String()))
             return nil
+          }
+
+          func runWithRootPreparedGroups() int {
+            binaryPath, err := os.Executable()
+            if err != nil {
+              fmt.Printf("status=failed stage=group-preparation-path detail=%q\n", err.Error())
+              return 1
+            }
+            for _, path := range []string{"/usr/bin/sudo", "/usr/bin/python3"} {
+              if err := trustedRootExecutable(path); err != nil {
+                fmt.Printf("status=failed stage=group-preparation-prerequisite detail=%q\n", err.Error())
+                return 1
+              }
+            }
+            args := []string{
+              "-n", "--", "/usr/bin/python3", "-I", "-S", "-c", rootGroupPrepScript,
+              strconv.Itoa(os.Getpid()), strconv.Itoa(os.Getuid()), strconv.Itoa(os.Getgid()), binaryPath,
+            }
+            command := exec.Command("/usr/bin/sudo", args...)
+            command.Dir = "/"
+            command.Env = []string{"PATH=/usr/bin:/bin", "LANG=C", "LC_ALL=C"}
+            stdout := boundedOutput{limit: 64 * 1024}
+            stderr := boundedOutput{limit: 64 * 1024}
+            command.Stdout = &stdout
+            command.Stderr = &stderr
+            err = command.Run()
+            _, _ = os.Stdout.Write(stdout.Bytes())
+            _, _ = os.Stderr.Write(stderr.Bytes())
+            if err != nil {
+              var exitError *exec.ExitError
+              if errors.As(err, &exitError) && exitError.ExitCode() >= 0 {
+                return exitError.ExitCode()
+              }
+              return 1
+            }
+            if stdout.truncated || stderr.truncated || !hasPreparedSuccessMarkers(stdout.String()) {
+              fmt.Println("status=failed stage=prepared-probe-success-markers")
+              return 1
+            }
+            return 0
           }
 
           func parseValues(line string) map[string]string {
@@ -1371,6 +1546,13 @@ jobs:
             }
             if len(os.Args) == 3 && os.Args[1] == "--socket-peer" {
               os.Exit(socketPeer())
+            }
+            if len(os.Args) == 1 {
+              os.Exit(runWithRootPreparedGroups())
+            }
+            if len(os.Args) != 2 || os.Args[1] != "--prepared" {
+              fmt.Println("status=failed stage=invalid-probe-invocation")
+              os.Exit(2)
             }
             result, failure := runProbe()
             fmt.Printf("uid=%d\n", result.uid)
