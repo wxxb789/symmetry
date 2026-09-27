@@ -61,18 +61,23 @@ jobs:
           def fail(stage, error):
               os.write(1, ("namespace-gate-failure=%s detail=%r\n" % (stage, str(error))).encode())
               raise SystemExit(1)
+          def supplementary_groups():
+              with open("/proc/self/status", encoding="ascii") as stream:
+                  for line in stream:
+                      if line.startswith("Groups:"):
+                          return line.partition(":")[2].split()
+              raise RuntimeError("Groups missing from process status")
           if len(sys.argv) != 4:
               fail("arguments", "expected probe binary, delegated leaf, and A namespace")
+          groups = supplementary_groups()
+          if groups:
+              fail("supplementary-groups-not-empty", "namespace probe cannot sanitize A groups without the production root launcher; count=%d" % len(groups))
           try:
-              os.write(3, b"R")
+              os.write(3, b"E")
           except OSError as error:
               fail("uid-map-ready", error)
           if os.read(0, 1) != b"U":
               fail("uid-map-release", "parent did not authorize UID map")
-          try:
-              os.setgroups([])
-          except OSError as error:
-              fail("clear-supplementary-groups", error)
           try:
               os.write(3, b"G")
           except OSError as error:
@@ -151,6 +156,8 @@ jobs:
                   helper_cgroup = cgroup(os.getpid())
                   if a["Uid"] != [owner] * 4 or child["Uid"] != [owner] * 4 or child["Gid"] != a["Gid"]:
                       fail("caller-identity", "A and its exact child must retain their host credentials")
+                  if child["Groups"]:
+                      fail("supplementary-groups", "A must clear supplementary groups before either ID map")
                   if child["PPid"] != [a_pid] or cgroup(a_pid) != a_cgroup or helper_cgroup != a_cgroup:
                       fail("delegated-service-identity", "mapping helper and A must share the transient service cgroup")
                   if not os.path.isabs(a_cgroup) or os.path.normpath(a_cgroup) != a_cgroup or not os.path.isabs(leaf_cgroup) or os.path.normpath(leaf_cgroup) != leaf_cgroup:
@@ -179,8 +186,6 @@ jobs:
                   else:
                       if not map_ids(uid_map) or gid_map or setgroups != "allow":
                           fail("gid-map-precondition", "B UID map or setgroups allow state missing")
-                      if child["Groups"]:
-                          fail("supplementary-groups", "A must clear supplementary groups before GID mapping")
                       write_at(procfd, "setgroups", "deny\n")
                       if read_at(procfd, "setgroups") != "deny":
                           fail("setgroups-policy", "setgroups denial was not installed")
@@ -192,7 +197,7 @@ jobs:
                   final_namespace = os.stat("/proc/%d/ns/user" % child_pid)
                   if final_namespace.st_dev != ns_dev or final_namespace.st_ino != ns_ino:
                       fail("userns-identity", "target namespace changed while mapping")
-                  print("mapping=%s-passed" % mode, flush=True)
+                  print("mapping=%s-passed groups=empty" % mode, flush=True)
               finally:
                   os.close(procfd)
           except SystemExit:
@@ -505,6 +510,16 @@ jobs:
                 result.failureDetail = "fixed B UID/GID must differ from every A UID/GID"
                 return "fixed-b-not-distinct"
               }
+            }
+            groups, err := statusValue(os.Getpid(), "Groups")
+            if err != nil {
+              result.failureDetail = err.Error()
+              return "read-host-supplementary-groups"
+            }
+            groupCount := len(strings.Fields(groups))
+            if groupCount != 0 {
+              result.failureDetail = fmt.Sprintf("A has %d supplementary groups; this probe cannot sanitize them without the production root launcher", groupCount)
+              return "host-supplementary-groups-not-empty"
             }
             if err := checkUsernsCreate(); err != nil {
               result.failureDetail = err.Error()
@@ -997,10 +1012,11 @@ jobs:
             }
             defer syscall.Close(pidFD)
             ready := make([]byte, 1)
-            if _, err := io.ReadFull(readyRead, ready); err != nil || ready[0] != 'R' {
+            if _, err := io.ReadFull(readyRead, ready); err != nil || ready[0] != 'E' {
               diagnostic, _ := io.ReadAll(output)
               return "cross-uid-userns-create", fmt.Sprintf("child user namespace unavailable: %v: %s", err, strings.TrimSpace(string(diagnostic)))
             }
+            fmt.Println("namespace_gate_groups=empty")
             nsDev, nsIno, err := namespaceIdentity(pid)
             if err != nil {
               return "cross-uid-userns-identity", err.Error()
