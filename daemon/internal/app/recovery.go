@@ -25,12 +25,26 @@ var releasePersistedContainmentAuthority = func(int, string, *authority.Supervis
 	return nil
 }
 
+// These build-tagged seams keep recovery portable while allowing Windows to
+// use the authenticated prepared-supervisor operations. Tests replace them to
+// exercise the durable state transitions without requiring a Windows helper.
+var (
+	recoverPreparedSupervisorForRecovery      = recoverPreparedSupervisorPlatform
+	releasePreparedSupervisorForRecovery      = releasePreparedSupervisorPlatform
+	provePreparedSupervisorAbortedForRecovery = provePreparedSupervisorAbortedPlatform
+)
+
 // A successful recovered stop survives local persistence retries, not restart.
 type recoveredProcessStop struct {
 	pid       int
 	identity  string
 	startedAt time.Time
 	authority *authority.Supervisor
+}
+
+func persistedContainmentStopUnproven(journal state.RunJournal) bool {
+	return journal.ContainmentUnproven &&
+		(journal.ContainmentAuthority == nil || journal.ContainmentAuthority.StopReceipt == nil)
 }
 
 func (stop recoveredProcessStop) matches(journal state.RunJournal) bool {
@@ -66,6 +80,14 @@ func (daemon *daemon) recoverGoalSession(rootContext context.Context, session st
 			return nil
 		}
 		return fmt.Errorf("load associated run %s/%d: %w", key.RunID, key.Generation, loadErr)
+	}
+	if journal.ContainmentHandoff != nil {
+		if err := daemon.recoverPersistedSupervisorHandoff(key, *journal.ContainmentHandoff); err != nil {
+			return fmt.Errorf("recover persisted supervisor handoff for %s/%d: %w", key.RunID, key.Generation, err)
+		}
+		if journal, loadErr = daemon.store.LoadJournal(key); loadErr != nil {
+			return fmt.Errorf("reload run after supervisor handoff recovery for %s/%d: %w", key.RunID, key.Generation, loadErr)
+		}
 	}
 	processEvidence := journal.HasProcessDetails()
 	terminalKnown := journal.TerminalState != "" || journal.LocalState == "terminal_pending" || journal.LocalState == "cleanup_pending" || journal.LocalState == "stale"
@@ -221,6 +243,13 @@ func (daemon *daemon) recoverGoalSession(rootContext context.Context, session st
 	// is cleared. A generic closed session is not that witness: it still has
 	// to reconcile any persisted process identity.
 	nativeStopWitness := retainedGoalSessionNativeStopWitness(session, journal)
+	if nativeStopWitness && persistedContainmentStopUnproven(journal) {
+		// A retained-session witness proves that the native session close path
+		// completed, but it cannot override a separate unresolved process
+		// containment marker. The marker may represent an escaped descendant
+		// whose original process group no longer exists after restart.
+		nativeStopWitness = false
+	}
 	if nativeStopWitness && processEvidence {
 		if err := daemon.clearNativeProcessDetailsExact(key, journal.PID, journal.ProcessIdentity); err != nil {
 			return fmt.Errorf("clear stale stopped native process record for %s/%d: %w", key.RunID, key.Generation, err)
@@ -234,8 +263,12 @@ func (daemon *daemon) recoverGoalSession(rootContext context.Context, session st
 
 	// Retention is durable before any process-control action. The native
 	// session could have changed the worktree after the last Run event.
-	if err := daemon.retainUnknownGoalLaunchWorkspaceChecked(key); err != nil {
-		return fmt.Errorf("retain workspace for recovered Goal session %s/%d: %w", key.RunID, key.Generation, err)
+	if !journal.RetainWorkspace {
+		if err := daemon.retainUnknownGoalLaunchWorkspaceChecked(key); err != nil {
+			return fmt.Errorf("retain workspace for recovered Goal session %s/%d: %w", key.RunID, key.Generation, err)
+		}
+	} else {
+		daemon.rememberWorkspaceRetention(key)
 	}
 	legacyAttachmentBarrier := legacyGoalSessionAttachmentBarrier(session, journal)
 	attachedStopRecovery := attachMappingPending || resumeAttachmentPending || resumePreStart || (session.HasVerifiedControlAttachment() && session.SessionState == state.GoalSessionStateBusy)
@@ -348,6 +381,10 @@ func (daemon *daemon) stopPersistedProcess(ctx context.Context, journal state.Ru
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if persistedContainmentStopUnproven(journal) {
+		daemon.forgetRecoveredProcessStop(journal.Key())
+		return errPersistedProcessStopUnproven
+	}
 	var authorityCopy *authority.Supervisor
 	if journal.ContainmentAuthority != nil {
 		cloned := journal.ContainmentAuthority.Clone()
@@ -360,6 +397,10 @@ func (daemon *daemon) stopPersistedProcess(ctx context.Context, journal state.Ru
 			daemon.forgetRecoveredProcessStop(journal.Key())
 		}
 		return err
+	}
+	if persistedContainmentStopUnproven(current) {
+		daemon.forgetRecoveredProcessStop(journal.Key())
+		return errPersistedProcessStopUnproven
 	}
 	if journal.PID <= 0 || strings.TrimSpace(journal.ProcessIdentity) == "" || !stop.matches(current) {
 		daemon.forgetRecoveredProcessStop(journal.Key())
@@ -374,6 +415,9 @@ func (daemon *daemon) stopPersistedProcess(ctx context.Context, journal state.Ru
 	daemon.mu.Unlock()
 	if proven {
 		if authorityCopy != nil && authorityCopy.StopReceipt != nil && authorityCopy.StopReceipt.ValidFor(*authorityCopy) {
+			if err := daemon.persistExistingContainmentStopReceipt(journal, authorityCopy); err != nil {
+				return fmt.Errorf("persist existing containment stop receipt: %w", err)
+			}
 			if err := releasePersistedContainmentAuthority(journal.PID, journal.ProcessIdentity, authorityCopy); err != nil {
 				return err
 			}
@@ -381,6 +425,9 @@ func (daemon *daemon) stopPersistedProcess(ctx context.Context, journal state.Ru
 		return nil
 	}
 	if authorityCopy != nil && authorityCopy.StopReceipt != nil && authorityCopy.StopReceipt.ValidFor(*authorityCopy) {
+		if err := daemon.persistExistingContainmentStopReceipt(journal, authorityCopy); err != nil {
+			return fmt.Errorf("persist existing containment stop receipt: %w", err)
+		}
 		if err := releasePersistedContainmentAuthority(journal.PID, journal.ProcessIdentity, authorityCopy); err != nil {
 			return err
 		}
@@ -420,12 +467,113 @@ func (daemon *daemon) stopPersistedProcess(ctx context.Context, journal state.Ru
 			return err
 		}
 	}
+	latest, latestErr := daemon.store.LoadJournal(journal.Key())
+	if latestErr != nil {
+		if state.IsNotFound(latestErr) {
+			daemon.forgetRecoveredProcessStop(journal.Key())
+		}
+		return latestErr
+	}
+	if persistedContainmentStopUnproven(latest) {
+		daemon.forgetRecoveredProcessStop(journal.Key())
+		return errPersistedProcessStopUnproven
+	}
 	daemon.mu.Lock()
 	if daemon.recoveredStops == nil {
 		daemon.recoveredStops = make(map[state.RunKey]recoveredProcessStop)
 	}
 	daemon.recoveredStops[journal.Key()] = stop
 	daemon.mu.Unlock()
+	return nil
+}
+
+// recoverPersistedSupervisorHandoff resolves the pre-authority journal before
+// ordinary Goal-session recovery can terminalize or enqueue cleanup. A bound
+// handoff uses a positive stop receipt and authenticated release; an unbound
+// handoff can only be cleared by an independent pre-authority abort proof.
+func (daemon *daemon) recoverPersistedSupervisorHandoff(key state.RunKey, handoff authority.SupervisorHandoff) error {
+	expected := handoff.Clone()
+	if err := expected.Validate(); err != nil {
+		return err
+	}
+	journal, err := daemon.store.LoadJournal(key)
+	if err != nil {
+		return fmt.Errorf("load journal before supervisor handoff recovery: %w", err)
+	}
+	if !journal.RetainWorkspace {
+		if err := daemon.retainUnknownGoalLaunchWorkspaceChecked(key); err != nil {
+			return fmt.Errorf("retain workspace before supervisor handoff recovery: %w", err)
+		}
+	} else {
+		// Restart recovery may begin without the volatile marker even though the
+		// journal already proves that cleanup must retain this workspace.
+		daemon.rememberWorkspaceRetention(key)
+	}
+	if expected.StopReceipt == nil && expected.SupervisorPID == 0 {
+		return daemon.abortPersistedSupervisorHandoff(key, expected)
+	}
+
+	if expected.StopReceipt == nil {
+		receipt, err := recoverPreparedSupervisorForRecovery(expected)
+		if err != nil {
+			if abortErr := daemon.abortPersistedSupervisorHandoff(key, expected); abortErr == nil {
+				return nil
+			} else {
+				return errors.Join(fmt.Errorf("recover prepared supervisor: %w", err), fmt.Errorf("abort prepared supervisor after recover failure: %w", abortErr))
+			}
+		}
+		if !receipt.ValidForHandoff(expected) {
+			return errors.New("prepared supervisor returned an invalid stop receipt")
+		}
+		if err := daemon.persistSupervisorHandoffStopReceipt(key, expected, receipt, false); err != nil {
+			return fmt.Errorf("persist prepared supervisor stop receipt: %w", err)
+		}
+		expected.StopReceipt = &receipt
+	} else {
+		receipt := *expected.StopReceipt
+		if err := daemon.rewriteSupervisorHandoffStopReceipt(key, expected, receipt); err != nil {
+			return fmt.Errorf("rewrite prepared supervisor stop receipt: %w", err)
+		}
+	}
+
+	proof, err := releasePreparedSupervisorForRecovery(expected)
+	if err != nil {
+		return fmt.Errorf("release prepared supervisor: %w", err)
+	}
+	if err := proof.Validate(); err != nil || !proof.ValidFor(expected) {
+		if err != nil {
+			return fmt.Errorf("validate prepared supervisor release proof: %w", err)
+		}
+		return errors.New("prepared supervisor release proof does not match handoff")
+	}
+	if err := daemon.clearSupervisorHandoffCallback(key)(expected, proof); err != nil {
+		return fmt.Errorf("clear released supervisor handoff: %w", err)
+	}
+	return nil
+}
+
+func (daemon *daemon) persistExistingContainmentStopReceipt(journal state.RunJournal, persisted *authority.Supervisor) error {
+	if persisted == nil || persisted.StopReceipt == nil || !persisted.StopReceipt.ValidFor(*persisted) {
+		return errors.New("persisted containment stop receipt is invalid")
+	}
+	receipt := *persisted.StopReceipt
+	return daemon.persistContainmentStopReceipt(journal.Key(), journal.PID, journal.ProcessIdentity, receipt)
+}
+
+func (daemon *daemon) abortPersistedSupervisorHandoff(key state.RunKey, handoff authority.SupervisorHandoff) error {
+	proof, err := provePreparedSupervisorAbortedForRecovery(handoff)
+	if err != nil {
+		return fmt.Errorf("prove prepared supervisor abort: %w", err)
+	}
+	if err := proof.Validate(); err != nil || !proof.ValidFor(handoff) {
+		if err != nil {
+			return fmt.Errorf("validate prepared supervisor abort proof: %w", err)
+		}
+		return errors.New("prepared supervisor abort proof does not match handoff")
+	}
+	if err := daemon.clearSupervisorHandoffAfterAbortCallback(key)(handoff, proof); err != nil {
+		return fmt.Errorf("clear aborted supervisor handoff: %w", err)
+	}
 	return nil
 }
 
@@ -436,14 +584,21 @@ func (daemon *daemon) persistContainmentStopReceipt(key state.RunKey, pid int, i
 	if _, err := daemon.store.RecordContainmentStopReceipt(key, pid, identity, receipt); err == nil {
 		return nil
 	} else {
+		firstErr := err
 		journal, readErr := daemon.store.LoadJournal(key)
 		if readErr == nil && journal.PID == pid && journal.ProcessIdentity == identity && journal.ContainmentAuthority != nil && journal.ContainmentAuthority.StopReceipt != nil && *journal.ContainmentAuthority.StopReceipt == receipt {
-			return nil
+			// A matching readback leaves the first write outcome unknown; replay the
+			// exact mutation and require a fresh successful persistence barrier.
+			if _, replayErr := daemon.store.RecordContainmentStopReceipt(key, pid, identity, receipt); replayErr == nil {
+				return nil
+			} else {
+				return errors.Join(firstErr, fmt.Errorf("replay containment stop receipt write: %w", replayErr))
+			}
 		}
 		if readErr != nil {
-			return errors.Join(err, fmt.Errorf("read back containment stop receipt: %w", readErr))
+			return errors.Join(firstErr, fmt.Errorf("read back containment stop receipt: %w", readErr))
 		}
-		return err
+		return firstErr
 	}
 }
 

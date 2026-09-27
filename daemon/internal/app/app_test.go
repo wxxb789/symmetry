@@ -3997,6 +3997,7 @@ func TestOwnershipLossReleasesActiveSlotAfterProcessStops(t *testing.T) {
 	if len(slots) != 1 {
 		t.Fatal("slot was released before the process exited")
 	}
+	expireLeaseBeforeCleanup(t, store, key)
 	close(process.exit)
 	daemon.workers.Wait()
 	daemon.flushCleanups(context.Background())
@@ -4337,6 +4338,7 @@ func TestRecoveredJournalCleanupDeletesOnlyAfterRecover(t *testing.T) {
 	if err := store.SaveJournal(journal); err != nil {
 		t.Fatal(err)
 	}
+	journal = expireLeaseBeforeCleanup(t, store, key)
 	cleaned := make(chan bool, 1)
 	daemon := &daemon{store: store, workspace: &trackingWorkspace{cleaned: cleaned}, log: slog.New(slog.NewJSONHandler(io.Discard, nil))}
 	daemon.stopRecoveredJournal(journal, "stale")
@@ -4363,6 +4365,7 @@ func TestReconcileFiltersIneligibleJournalStates(t *testing.T) {
 	if err := store.SaveJournal(journal); err != nil {
 		t.Fatal(err)
 	}
+	expireLeaseBeforeCleanup(t, store, key)
 	control := &reconcileCaptureControl{}
 	daemon := &daemon{store: store, control: control, workspace: &fakeWorkspace{}, log: slog.New(slog.NewJSONHandler(io.Discard, nil)), running: make(map[state.RunKey]*runningRun)}
 	daemon.reconcile(context.Background())
@@ -4444,11 +4447,14 @@ func TestRunRetriesReconcileWithBackoffWithoutNotifications(t *testing.T) {
 	value := testConfig(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	clock := &atomic.Value{}
+	clock.Store(time.Now().UTC())
 	done := make(chan error, 1)
 	go func() {
 		done <- Run(ctx, value, WithStore(store), WithControl(control), WithWorkspace(cleanup), WithStartProcess(failStart), WithLogWriter(io.Discard), func(settings *options) {
 			settings.newTimer = timers.new
 			settings.newID = ids()
+			settings.clock = func() time.Time { return clock.Load().(time.Time) }
 			settings.terminatePersist = func(pid int, identity string) error {
 				if identity != "test:99" {
 					return errors.New("unexpected persisted process identity")
@@ -4462,6 +4468,11 @@ func TestRunRetriesReconcileWithBackoffWithoutNotifications(t *testing.T) {
 	awaitReconcileCall(t, control.calls, 1)
 	timers.fireUntil(t, minimumInterval, control.calls, 2)
 	secondRetry := timers.await(t, 2*time.Second)
+	leaseJournal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock.Store(leaseJournal.LeaseExpiresAt.Add(time.Second))
 	secondRetry.channel <- time.Now()
 	awaitReconcileCall(t, control.calls, 3)
 	select {
@@ -4808,6 +4819,7 @@ func TestRecoveredCleanupRulesPreserveOrRemoveJournalSafely(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		journal = expireLeaseBeforeCleanup(t, store, key)
 		daemon := &daemon{store: store, log: slog.New(slog.NewJSONHandler(io.Discard, nil))}
 		daemon.stopRecoveredJournal(journal, "stale")
 		if _, err := store.LoadJournal(key); !state.IsNotFound(err) {

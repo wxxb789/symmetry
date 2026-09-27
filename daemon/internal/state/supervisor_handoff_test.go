@@ -718,6 +718,16 @@ func TestSupervisorHandoffLegacyAndMalformedJournalHandling(t *testing.T) {
 		t.Fatal("LoadJournal() accepted a handoff and authority together")
 	}
 
+	uncertainFile := stoppedTestJournal("containment-uncertainty-without-marker", 1)
+	uncertainFile.PID = 0
+	uncertainFile.ProcessIdentity = ""
+	uncertainFile.StartedAt = time.Time{}
+	uncertainFile.ContainmentUnproven = true
+	writeJournalForTest(t, store, uncertainFile)
+	if _, err := store.LoadJournal(uncertainFile.Key()); err == nil {
+		t.Fatal("LoadJournal() accepted containment uncertainty without a process marker")
+	}
+
 	unknown := stoppedTestJournal("handoff-unknown-field", 1)
 	path := store.journalPath(unknown.Key())
 	data, err := json.Marshal(unknown)

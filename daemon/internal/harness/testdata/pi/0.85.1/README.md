@@ -1,5 +1,9 @@
 # pi 0.85.1 RPC synthetic fixtures
 
+The real-run records in this directory (`native-*.md`) are historical evidence
+for pi 0.85.1, superseded by [`../0.87.1/`](../0.87.1/README.md). The synthetic
+`lifecycle.jsonl` and `compaction-continuation.jsonl` fixtures moved there.
+
 These fixtures model the installed `pi --mode rpc` documentation only. They do
 not prove authenticated native execution or advertise a supported adapter.
 

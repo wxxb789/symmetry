@@ -1,7 +1,9 @@
 # 0006d - Evidence-bounded Codex native capability
 
 Establish the exact supported native capability range for the pinned Codex
-`0.153.4` binary and expose only operations proved against a real repository.
+`0.156.1` binary and expose only operations proved against a real repository.
+The pin moved from `0.153.4` to `0.156.1` by owner directive 2026-09-24: track
+latest client.
 Unsupported permission, session, terminal, provider, or usage behavior remains
 explicitly unavailable rather than inferred from process exit or transport.
 

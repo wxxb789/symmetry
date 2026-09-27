@@ -246,7 +246,7 @@ func (response threadStartResponse) validate(expectedCWD string) error {
 		return errors.New("thread/start response is missing sandbox.type")
 	}
 	if response.Sandbox.Type == "workspaceWrite" {
-		// Codex 0.153.4 treats cwd as an implicit writable root; this array
+		// The tested Codex version treats cwd as an implicit writable root; this array
 		// contains only additional roots, so an explicit empty array is valid.
 		if response.Sandbox.WritableRoots == nil {
 			return errors.New("thread/start workspaceWrite response is missing writableRoots")

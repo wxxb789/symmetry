@@ -262,7 +262,7 @@ func TestNativeRepositoryTask(t *testing.T) {
 }
 
 // TestNativeCancellationDrainsInFlightLoopbackRequest is deliberately opt-in
-// because it starts the real Pi 0.85.1 binary on Linux or Windows. The local
+// because it starts the real Pi binary on Linux or Windows. The local
 // gateway accepts the Responses request body and then waits for the HTTP
 // request context to be cancelled. This proves a native clear_queue/abort
 // reaches an actually in-flight provider operation without claiming semantic
@@ -276,7 +276,7 @@ func TestNativeCancellationDrainsInFlightLoopbackRequest(t *testing.T) {
 	}
 	executable := strings.TrimSpace(os.Getenv(nativeCancellationExecutableEnv))
 	if executable == "" {
-		t.Fatalf("%s must name the absolute Pi 0.85.1 executable", nativeCancellationExecutableEnv)
+		t.Fatalf("%s must name the absolute Pi executable", nativeCancellationExecutableEnv)
 	}
 	if !filepath.IsAbs(executable) {
 		t.Fatalf("%s must be absolute", nativeCancellationExecutableEnv)
@@ -1159,13 +1159,13 @@ func nativePiRepositoryTaskRequiredEnv(t *testing.T, name string) string {
 }
 
 func nativePiRepositoryTaskCredentialEnvironmentAllowed(name string) bool {
-	// Credential names are pinned to Pi 0.85.1 docs/providers.md. Runtime and
+	// Credential names are pinned to the tested Pi docs/providers.md. Runtime and
 	// loader configuration must never enter the child as a selected credential.
 	switch name {
-	case "AI_GATEWAY_API_KEY", "ANTHROPIC_API_KEY", "ANT_LING_API_KEY", "AWS_BEARER_TOKEN_BEDROCK",
-		"AZURE_OPENAI_API_KEY", "BASETEN_API_KEY", "CEREBRAS_API_KEY", "CLOUDFLARE_API_KEY",
+	case "AI_GATEWAY_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_OAUTH_TOKEN", "ANT_LING_API_KEY", "AWS_BEARER_TOKEN_BEDROCK",
+		"AZURE_OPENAI_API_KEY", "BASETEN_API_KEY", "CEREBRAS_API_KEY", "CLOUDFLARE_API_KEY", "COPILOT_GITHUB_TOKEN",
 		"DEEPSEEK_API_KEY", "FIREWORKS_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY", "HF_TOKEN",
-		"KIMI_API_KEY", "MINIMAX_API_KEY", "MINIMAX_CN_API_KEY", "MISTRAL_API_KEY", "NVIDIA_API_KEY",
+		"KIMI_API_KEY", "META_API_KEY", "MINIMAX_API_KEY", "MINIMAX_CN_API_KEY", "MISTRAL_API_KEY", "MOONSHOT_API_KEY", "NVIDIA_API_KEY",
 		"OPENAI_API_KEY", "OPENCODE_API_KEY", "OPENROUTER_API_KEY", "QWEN_TOKEN_PLAN_API_KEY",
 		"QWEN_TOKEN_PLAN_CN_API_KEY", "RADIUS_API_KEY", "TOGETHER_API_KEY", "XAI_API_KEY",
 		"XIAOMI_API_KEY", "XIAOMI_TOKEN_PLAN_AMS_API_KEY", "XIAOMI_TOKEN_PLAN_CN_API_KEY",

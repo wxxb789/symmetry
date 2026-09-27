@@ -341,7 +341,7 @@ cancellable.
 
 ### Claude Code Local Transport Smoke (Opt-In)
 
-The repository includes an opt-in Windows smoke check for Claude Code `2.1.259`:
+The repository includes an opt-in Windows smoke check for Claude Code `2.1.281`:
 
 ```powershell
 pwsh -NoLogo -NoProfile -File .\scripts\claude-code-local-transport-smoke.ps1 -ClaudeExecutable claude.exe
@@ -381,7 +381,7 @@ bounded 30-second timeout, kills the entire child process tree through a hidden
 tree-aware fallback when needed, and removes the settings file in `finally`. It
 does not start, stop, or reconfigure an existing endpoint or Codex process.
 
-The command requires Claude Code `2.1.259` and a loopback provider endpoint,
+The command requires Claude Code `2.1.281` and a loopback provider endpoint,
 then uses Claude's `--bare --settings ... --tools "" --permission-mode dontAsk
 --permission-prompts none --no-session-persistence --print --output-format json
 --model sonnet` invocation. Passing means only that the child exited with code

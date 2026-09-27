@@ -25,6 +25,11 @@ const (
 	SecretBytes = 32
 	// TokenBytes is the entropy used for a pipe address and Job label.
 	TokenBytes = 16
+	// OwnerKindLinuxHelper identifies the platform-neutral Linux helper owner.
+	OwnerKindLinuxHelper = "linux_helper"
+	// OwnerKindLegacyWindows identifies the existing Windows owner/session
+	// binding. Empty owner fields remain valid for legacy v1 records.
+	OwnerKindLegacyWindows = "legacy_windows"
 )
 
 // Supervisor binds one launched target to the exact helper that owns its
@@ -37,6 +42,8 @@ type Supervisor struct {
 	// bootstrap endpoint. It is optional only for legacy records created before
 	// committed handoff recovery carried this identity.
 	LaunchToken        string `json:"launch_token,omitempty"`
+	OwnerKind          string `json:"owner_kind,omitempty"`
+	OwnerContext       string `json:"owner_context,omitempty"`
 	TargetPID          int    `json:"target_pid"`
 	TargetIdentity     string `json:"target_identity"`
 	PipeToken          string `json:"pipe_token"`
@@ -58,6 +65,8 @@ type SupervisorHandoff struct {
 	Version            int    `json:"version"`
 	LaunchToken        string `json:"launch_token"`
 	Secret             string `json:"secret"`
+	OwnerKind          string `json:"owner_kind,omitempty"`
+	OwnerContext       string `json:"owner_context,omitempty"`
 	TargetPID          int    `json:"target_pid"`
 	TargetIdentity     string `json:"target_identity"`
 	PipeToken          string `json:"pipe_token"`
@@ -79,6 +88,8 @@ type SupervisorHandoffReleaseProof struct {
 	Version            int     `json:"version"`
 	Status             string  `json:"status"`
 	LaunchToken        string  `json:"launch_token"`
+	OwnerKind          string  `json:"owner_kind,omitempty"`
+	OwnerContext       string  `json:"owner_context,omitempty"`
 	TargetPID          int     `json:"target_pid"`
 	TargetIdentity     string  `json:"target_identity"`
 	PipeToken          string  `json:"pipe_token"`
@@ -98,6 +109,8 @@ type SupervisorHandoffAbortProof struct {
 	Disposition        string  `json:"disposition"`
 	LaunchToken        string  `json:"launch_token"`
 	JobID              string  `json:"job_id"`
+	OwnerKind          string  `json:"owner_kind,omitempty"`
+	OwnerContext       string  `json:"owner_context,omitempty"`
 	TargetPID          int     `json:"target_pid"`
 	TargetIdentity     string  `json:"target_identity"`
 	SupervisorPID      int     `json:"supervisor_pid,omitempty"`
@@ -111,6 +124,8 @@ type SupervisorHandoffAbortProof struct {
 type StopReceipt struct {
 	Version            int    `json:"version"`
 	Status             string `json:"status"`
+	OwnerKind          string `json:"owner_kind,omitempty"`
+	OwnerContext       string `json:"owner_context,omitempty"`
 	TargetPID          int    `json:"target_pid"`
 	TargetIdentity     string `json:"target_identity"`
 	PipeToken          string `json:"pipe_token"`
@@ -125,6 +140,12 @@ type StopReceipt struct {
 func (value Supervisor) Validate() error {
 	if value.Version != SupervisorVersion || value.TargetPID <= 0 || value.SupervisorPID <= 0 {
 		return errors.New("supervisor authority is invalid")
+	}
+	if !validOwner(value.OwnerKind, value.OwnerContext) {
+		return errors.New("supervisor authority owner is invalid")
+	}
+	if value.OwnerKind == OwnerKindLinuxHelper && value.CreatorSessionID != nil {
+		return errors.New("Linux supervisor authority cannot carry a Windows creator session")
 	}
 	if !validHex(value.Secret, SecretBytes*2) || !validOptionalHex(value.LaunchToken, TokenBytes*2) || !validHex(value.PipeToken, TokenBytes*2) || !validHex(value.JobID, TokenBytes*2) {
 		return errors.New("supervisor authority token is invalid")
@@ -141,6 +162,7 @@ func (value Supervisor) Validate() error {
 // ValidFor reports whether a receipt is a positive stop witness for value.
 func (receipt StopReceipt) ValidFor(value Supervisor) bool {
 	return receipt.Version == SupervisorVersion && receipt.Status == "stopped" && receipt.ActiveProcesses == 0 &&
+		receipt.OwnerKind == value.OwnerKind && receipt.OwnerContext == value.OwnerContext &&
 		receipt.TargetPID == value.TargetPID && receipt.TargetIdentity == value.TargetIdentity &&
 		receipt.PipeToken == value.PipeToken && receipt.JobID == value.JobID &&
 		receipt.SupervisorPID == value.SupervisorPID && receipt.SupervisorIdentity == value.SupervisorIdentity
@@ -161,7 +183,7 @@ func (value Supervisor) Clone() Supervisor {
 // Equal compares all durable authority fields, including the secret and any
 // terminal receipt. It is used by compare-and-set journal mutations.
 func (value Supervisor) Equal(other Supervisor) bool {
-	if value.Version != other.Version || value.Secret != other.Secret || value.LaunchToken != other.LaunchToken || value.TargetPID != other.TargetPID ||
+	if value.Version != other.Version || value.Secret != other.Secret || value.LaunchToken != other.LaunchToken || value.OwnerKind != other.OwnerKind || value.OwnerContext != other.OwnerContext || value.TargetPID != other.TargetPID ||
 		value.TargetIdentity != other.TargetIdentity || value.PipeToken != other.PipeToken || value.JobID != other.JobID ||
 		value.SupervisorPID != other.SupervisorPID || value.SupervisorIdentity != other.SupervisorIdentity ||
 		!equalUint32(value.CreatorSessionID, other.CreatorSessionID) {
@@ -185,6 +207,12 @@ func (value SupervisorHandoff) Validate() error {
 	}
 	if !validBounded(value.TargetIdentity, 4096) {
 		return errors.New("supervisor handoff target identity is invalid")
+	}
+	if !validOwner(value.OwnerKind, value.OwnerContext) {
+		return errors.New("supervisor handoff owner is invalid")
+	}
+	if value.OwnerKind == OwnerKindLinuxHelper && value.CreatorSessionID != nil {
+		return errors.New("Linux supervisor handoff cannot carry a Windows creator session")
 	}
 	if (value.SupervisorPID == 0) != (strings.TrimSpace(value.SupervisorIdentity) == "") || value.SupervisorPID < 0 || !validOptionalBounded(value.SupervisorIdentity, 4096) {
 		return errors.New("supervisor handoff helper identity is invalid")
@@ -210,6 +238,8 @@ func (value SupervisorHandoff) ToSupervisor() (Supervisor, error) {
 		Version:            SupervisorVersion,
 		Secret:             value.Secret,
 		LaunchToken:        value.LaunchToken,
+		OwnerKind:          value.OwnerKind,
+		OwnerContext:       value.OwnerContext,
 		TargetPID:          value.TargetPID,
 		TargetIdentity:     value.TargetIdentity,
 		PipeToken:          value.PipeToken,
@@ -242,7 +272,7 @@ func (value SupervisorHandoff) Clone() SupervisorHandoff {
 // Equal compares every durable handoff field, including helper identity and
 // stop receipt. It is used by exact compare-and-set mutations.
 func (value SupervisorHandoff) Equal(other SupervisorHandoff) bool {
-	if value.Version != other.Version || value.LaunchToken != other.LaunchToken || value.Secret != other.Secret || value.TargetPID != other.TargetPID ||
+	if value.Version != other.Version || value.LaunchToken != other.LaunchToken || value.Secret != other.Secret || value.OwnerKind != other.OwnerKind || value.OwnerContext != other.OwnerContext || value.TargetPID != other.TargetPID ||
 		value.TargetIdentity != other.TargetIdentity || value.PipeToken != other.PipeToken || value.JobID != other.JobID ||
 		value.SupervisorPID != other.SupervisorPID || value.SupervisorIdentity != other.SupervisorIdentity ||
 		!equalUint32(value.CreatorSessionID, other.CreatorSessionID) {
@@ -258,7 +288,7 @@ func (value SupervisorHandoff) Equal(other SupervisorHandoff) bool {
 // binding and terminal receipt, which may be added by later dedicated phases.
 func (value SupervisorHandoff) SameLaunch(other SupervisorHandoff) bool {
 	return value.Version == other.Version && value.LaunchToken == other.LaunchToken && value.Secret == other.Secret &&
-		value.TargetPID == other.TargetPID && value.TargetIdentity == other.TargetIdentity && value.PipeToken == other.PipeToken && value.JobID == other.JobID &&
+		value.OwnerKind == other.OwnerKind && value.OwnerContext == other.OwnerContext && value.TargetPID == other.TargetPID && value.TargetIdentity == other.TargetIdentity && value.PipeToken == other.PipeToken && value.JobID == other.JobID &&
 		equalUint32(value.CreatorSessionID, other.CreatorSessionID)
 }
 
@@ -267,6 +297,7 @@ func (value SupervisorHandoff) SameLaunch(other SupervisorHandoff) bool {
 // authority for backwards compatibility.
 func (receipt StopReceipt) ValidForHandoff(value SupervisorHandoff) bool {
 	return receipt.Version == SupervisorVersion && receipt.Status == "stopped" && receipt.ActiveProcesses == 0 &&
+		receipt.OwnerKind == value.OwnerKind && receipt.OwnerContext == value.OwnerContext &&
 		receipt.TargetPID == value.TargetPID && receipt.TargetIdentity == value.TargetIdentity &&
 		receipt.PipeToken == value.PipeToken && receipt.JobID == value.JobID &&
 		receipt.SupervisorPID == value.SupervisorPID && receipt.SupervisorIdentity == value.SupervisorIdentity
@@ -280,6 +311,8 @@ func (value SupervisorHandoff) ReleaseProof() SupervisorHandoffReleaseProof {
 		Version:            SupervisorHandoffVersion,
 		Status:             "released",
 		LaunchToken:        value.LaunchToken,
+		OwnerKind:          value.OwnerKind,
+		OwnerContext:       value.OwnerContext,
 		TargetPID:          value.TargetPID,
 		TargetIdentity:     value.TargetIdentity,
 		PipeToken:          value.PipeToken,
@@ -292,11 +325,14 @@ func (value SupervisorHandoff) ReleaseProof() SupervisorHandoffReleaseProof {
 
 // Validate checks a release proof before it can clear a pending handoff.
 func (proof SupervisorHandoffReleaseProof) Validate() error {
-	if proof.Version != SupervisorHandoffVersion || proof.Status != "released" || !validHex(proof.LaunchToken, TokenBytes*2) || proof.TargetPID <= 0 || proof.SupervisorPID < 0 {
+	if proof.Version != SupervisorHandoffVersion || proof.Status != "released" || !validHex(proof.LaunchToken, TokenBytes*2) || proof.TargetPID <= 0 || proof.SupervisorPID < 0 || !validOwner(proof.OwnerKind, proof.OwnerContext) {
 		return errors.New("supervisor handoff release proof is invalid")
 	}
 	if !validHex(proof.PipeToken, TokenBytes*2) || !validHex(proof.JobID, TokenBytes*2) || !validBounded(proof.TargetIdentity, 4096) || (proof.SupervisorPID == 0) != (strings.TrimSpace(proof.SupervisorIdentity) == "") || !validOptionalBounded(proof.SupervisorIdentity, 4096) {
 		return errors.New("supervisor handoff release proof is invalid")
+	}
+	if proof.OwnerKind == OwnerKindLinuxHelper && proof.CreatorSessionID != nil {
+		return errors.New("Linux supervisor release proof cannot carry a Windows creator session")
 	}
 	return nil
 }
@@ -305,20 +341,26 @@ func (proof SupervisorHandoffReleaseProof) Validate() error {
 // release.
 func (proof SupervisorHandoffReleaseProof) ValidFor(value SupervisorHandoff) bool {
 	return proof.Version == SupervisorHandoffVersion && proof.Status == "released" &&
-		proof.LaunchToken == value.LaunchToken && proof.TargetPID == value.TargetPID && proof.TargetIdentity == value.TargetIdentity &&
+		proof.LaunchToken == value.LaunchToken && proof.OwnerKind == value.OwnerKind && proof.OwnerContext == value.OwnerContext && proof.TargetPID == value.TargetPID && proof.TargetIdentity == value.TargetIdentity &&
 		proof.PipeToken == value.PipeToken && proof.JobID == value.JobID &&
 		proof.SupervisorPID == value.SupervisorPID && proof.SupervisorIdentity == value.SupervisorIdentity &&
 		equalUint32(proof.CreatorSessionID, value.CreatorSessionID)
 }
 
-// Validate checks the exact pre-authority abort proof shape. A helper
-// identity is either completely absent or completely present, matching the
-// optional pair in SupervisorHandoff.
+// Validate checks the exact pre-authority abort proof shape. Windows legacy
+// proofs retain the CreatorSessionID requirement; Linux helper proofs bind
+// owner kind/context instead and must not synthesize a Windows session.
 func (proof SupervisorHandoffAbortProof) Validate() error {
-	if proof.Version != SupervisorHandoffAbortProofVersion || proof.Disposition != SupervisorHandoffAbortDisposition || !validHex(proof.LaunchToken, TokenBytes*2) || !validHex(proof.JobID, TokenBytes*2) || proof.TargetPID <= 0 || proof.SupervisorPID < 0 || proof.CreatorSessionID == nil {
+	if proof.Version != SupervisorHandoffAbortProofVersion || proof.Disposition != SupervisorHandoffAbortDisposition || !validHex(proof.LaunchToken, TokenBytes*2) || !validHex(proof.JobID, TokenBytes*2) || proof.TargetPID <= 0 || proof.SupervisorPID < 0 || !validOwner(proof.OwnerKind, proof.OwnerContext) {
 		return errors.New("supervisor handoff abort proof is invalid")
 	}
 	if !validBounded(proof.TargetIdentity, 4096) || (proof.SupervisorPID == 0) != (strings.TrimSpace(proof.SupervisorIdentity) == "") || !validOptionalBounded(proof.SupervisorIdentity, 4096) {
+		return errors.New("supervisor handoff abort proof is invalid")
+	}
+	if proof.OwnerKind == OwnerKindLinuxHelper && proof.CreatorSessionID != nil {
+		return errors.New("Linux supervisor abort proof cannot carry a Windows creator session")
+	}
+	if proof.OwnerKind != OwnerKindLinuxHelper && proof.CreatorSessionID == nil {
 		return errors.New("supervisor handoff abort proof is invalid")
 	}
 	return nil
@@ -328,10 +370,20 @@ func (proof SupervisorHandoffAbortProof) Validate() error {
 // definitively aborted before authority commit.
 func (proof SupervisorHandoffAbortProof) ValidFor(value SupervisorHandoff) bool {
 	return proof.Version == SupervisorHandoffAbortProofVersion && proof.Disposition == SupervisorHandoffAbortDisposition &&
-		proof.LaunchToken == value.LaunchToken && proof.JobID == value.JobID &&
+		proof.LaunchToken == value.LaunchToken && proof.JobID == value.JobID && proof.OwnerKind == value.OwnerKind && proof.OwnerContext == value.OwnerContext &&
 		proof.TargetPID == value.TargetPID && proof.TargetIdentity == value.TargetIdentity &&
 		proof.SupervisorPID == value.SupervisorPID && proof.SupervisorIdentity == value.SupervisorIdentity &&
-		proof.CreatorSessionID != nil && equalUint32(proof.CreatorSessionID, value.CreatorSessionID)
+		(proof.OwnerKind == OwnerKindLinuxHelper || (proof.CreatorSessionID != nil && value.CreatorSessionID != nil)) && equalUint32(proof.CreatorSessionID, value.CreatorSessionID)
+}
+
+func validOwner(kind, context string) bool {
+	if kind == "" {
+		return context == ""
+	}
+	if kind != OwnerKindLinuxHelper && kind != OwnerKindLegacyWindows {
+		return false
+	}
+	return validBounded(context, 4096)
 }
 
 func cloneUint32(value *uint32) *uint32 {

@@ -247,7 +247,7 @@ func TestResumeStartupFailureDoesNotBecomeContainmentErrorAfterRelease(t *testin
 	backendCloseErr := errors.New("native close after resume failure")
 	runner := Runner{
 		configureProcess: func(*exec.Cmd) error { return nil },
-		launchProcess: func(*exec.Cmd, Invocation, *os.File, *os.File, *os.File) (*startedProcess, error) {
+		launchProcess: func(context.Context, *exec.Cmd, Invocation, *os.File, *os.File, *os.File) (*startedProcess, error) {
 			return &startedProcess{
 				pid:         123,
 				identity:    "bound:process",

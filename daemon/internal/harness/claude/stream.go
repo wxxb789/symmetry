@@ -1,4 +1,5 @@
 // Package claude contains private Claude Code stream-json transport helpers.
+// Terminal success requires the native --json-schema structured_output object.
 // It intentionally does not expose a harness.Adapter until credentialed native
 // lifecycle evidence proves the required session and control semantics.
 package claude
@@ -23,7 +24,7 @@ var (
 	ErrUnsupportedEvent          = errors.New("Claude stream-json event type is unsupported")
 	ErrInvalidSessionID          = errors.New("Claude stream-json session_id must be a non-empty string")
 	ErrInvalidResult             = errors.New("Claude stream-json result is invalid")
-	ErrMissingResultPayload      = errors.New("Claude stream-json successful result must contain a non-empty result payload")
+	ErrMissingStructuredOutput   = errors.New("Claude stream-json successful result must contain a structured_output JSON object")
 	ErrInvalidControlRequest     = errors.New("Claude stream-json control_request is invalid")
 	ErrMissingResult             = errors.New("Claude stream-json stream ended without a result event")
 	ErrMissingResultIdentity     = errors.New("Claude stream-json result did not establish a session identity")
@@ -64,13 +65,16 @@ type Event struct {
 }
 
 // Result carries only terminal fields required to reject unsafe promotion.
+// StructuredOutput is the native --json-schema payload; Output is the raw
+// "result" field kept only as diagnostic data and is never a success payload.
 // Usage is deliberately raw and is not a claim of verified usage semantics.
 type Result struct {
-	Subtype        string
-	TerminalReason string
-	IsError        bool
-	Output         json.RawMessage
-	Usage          json.RawMessage
+	Subtype          string
+	TerminalReason   string
+	IsError          bool
+	Output           json.RawMessage
+	StructuredOutput json.RawMessage
+	Usage            json.RawMessage
 }
 
 // ControlRequest makes native control prompts visible without treating them
@@ -237,6 +241,9 @@ func decodeResult(object map[string]json.RawMessage) *Result {
 	if value, ok := object["result"]; ok {
 		result.Output = append(json.RawMessage(nil), value...)
 	}
+	if value, ok := object["structured_output"]; ok {
+		result.StructuredOutput = append(json.RawMessage(nil), value...)
+	}
 	if value, ok := object["usage"]; ok {
 		result.Usage = append(json.RawMessage(nil), value...)
 	}
@@ -272,8 +279,10 @@ type Terminal struct {
 }
 
 // TerminalValidator binds a finite stream to one observed session identity and
-// admits only a single verified-success-shaped result envelope. It does not
-// claim that this proves a native session lifecycle.
+// admits only a single verified-success-shaped result envelope whose native
+// structured_output is a JSON object. A text "result" never substitutes for
+// structured_output. It does not claim that this proves a native session
+// lifecycle.
 type TerminalValidator struct {
 	expectedSessionID string
 	observedSessionID string
@@ -347,20 +356,21 @@ func (validator *TerminalValidator) Observe(event Event) error {
 		validator.failed = fmt.Errorf("%w: %q", ErrNonSuccessTerminalReason, event.Result.TerminalReason)
 		return validator.failed
 	}
-	if !isUsableResultPayload(event.Result.Output) {
-		validator.failed = ErrMissingResultPayload
+	if !isJSONObject(event.Result.StructuredOutput) {
+		validator.failed = ErrMissingStructuredOutput
 		return validator.failed
 	}
 	stored := *event.Result
 	stored.Output = append(json.RawMessage(nil), event.Result.Output...)
+	stored.StructuredOutput = append(json.RawMessage(nil), event.Result.StructuredOutput...)
 	stored.Usage = append(json.RawMessage(nil), event.Result.Usage...)
 	validator.result = &stored
 	return nil
 }
 
-func isUsableResultPayload(raw json.RawMessage) bool {
-	var output string
-	return len(raw) > 0 && json.Unmarshal(raw, &output) == nil && strings.TrimSpace(output) != ""
+func isJSONObject(raw json.RawMessage) bool {
+	var object map[string]json.RawMessage
+	return len(raw) > 0 && json.Unmarshal(raw, &object) == nil && object != nil
 }
 
 // Finish returns the one observed terminal result after the caller has drained

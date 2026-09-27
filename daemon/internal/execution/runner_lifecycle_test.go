@@ -15,6 +15,39 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 )
 
+func TestRunnerPassesCallerContextToProcessLauncher(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	entered := make(chan struct{})
+	runner := Runner{
+		configureProcess: func(*exec.Cmd) error { return nil },
+		launchProcess: func(launchContext context.Context, _ *exec.Cmd, _ Invocation, _ *os.File, _ *os.File, _ *os.File) (*startedProcess, error) {
+			close(entered)
+			<-launchContext.Done()
+			return nil, launchContext.Err()
+		},
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := runner.Start(ctx, helperInvocation("wait"), &recordingSink{})
+		result <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("process launcher was not entered")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Start() error = %v, want context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Start() did not return after launcher context cancellation")
+	}
+}
+
 func TestStartPersistenceFailureRetainsProcessForMarkerRecovery(t *testing.T) {
 	want := errors.New("journal unavailable")
 	invocation := helperInvocation("stdout-then-wait", "persistence output")
@@ -41,6 +74,95 @@ func TestStartPersistenceFailureRetainsProcessForMarkerRecovery(t *testing.T) {
 	}
 	if got := containment.calls(); got != "soft,force,close" {
 		t.Fatalf("containment calls = %q, want soft,force,close", got)
+	}
+}
+
+func TestContainmentCloseErrorDoesNotPersistGenericUnprovenMarker(t *testing.T) {
+	closeErr := errors.New("transient containment close failure")
+	containment := &scriptedContainment{closeErr: closeErr}
+	markerPersisted := false
+	process, err := testRunner(containment, "bound:process").Start(
+		context.Background(),
+		Invocation{
+			Program: os.Args[0],
+			Args:    []string{"-test.run=^TestHelperProcess$", "--", "wait"},
+			Env:     append(minimalEnvironment(), "GO_WANT_HELPER_PROCESS=1"),
+			PersistContainmentUnproven: func(int, string) error {
+				markerPersisted = true
+				return nil
+			},
+		},
+		&recordingSink{},
+	)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := process.Terminate(ctx, 0); !errors.Is(err, closeErr) {
+		t.Fatalf("Terminate() error = %v, want %v", err, closeErr)
+	}
+	result := process.Wait()
+	if !errors.Is(result.ContainmentError, closeErr) {
+		t.Fatalf("ContainmentError = %v, want %v", result.ContainmentError, closeErr)
+	}
+	if markerPersisted {
+		t.Fatal("generic containment close error persisted Linux-only uncertainty marker")
+	}
+}
+
+func TestRunnerPersistsObservedContainmentUncertaintyAfterMarkerBeforeClose(t *testing.T) {
+	for _, observed := range []bool{true, false} {
+		t.Run(fmt.Sprintf("observed=%v", observed), func(t *testing.T) {
+			containment := &earlyUnprovenContainment{observed: observed, closeGate: make(chan struct{})}
+			markerReady := false
+			persistenceCalls := 0
+			invocation := helperInvocation("args")
+			invocation.PersistProcess = func(int, string) error {
+				containment.mutex.Lock()
+				installed := containment.callback != nil
+				containment.mutex.Unlock()
+				if !installed {
+					t.Fatal("containment uncertainty callback was not installed before marker persistence")
+				}
+				markerReady = true
+				return nil
+			}
+			invocation.PersistContainmentUnproven = func(int, string) error {
+				if !markerReady {
+					return errors.New("process marker is not written")
+				}
+				persistenceCalls++
+				return nil
+			}
+
+			runner := Runner{
+				configureProcess: func(*exec.Cmd) error { return nil },
+				attachProcess: func(process *os.Process) (platform.Containment, string, error) {
+					return containment, "bound:process", nil
+				},
+			}
+			process, err := runner.Start(context.Background(), invocation, &recordingSink{})
+			if err != nil {
+				t.Fatalf("Start() error = %v", err)
+			}
+			if process == nil {
+				t.Fatal("Start() returned nil process")
+			}
+			wantCalls := 0
+			if observed {
+				wantCalls = 1
+			}
+			if persistenceCalls != wantCalls {
+				t.Fatalf("early uncertainty persistence calls = %d, want %d", persistenceCalls, wantCalls)
+			}
+			close(containment.closeGate)
+			result := waitForResult(t, process)
+			if result.ContainmentError != nil {
+				t.Fatalf("result containment error = %v", result.ContainmentError)
+			}
+		})
 	}
 }
 
@@ -169,6 +291,53 @@ func TestStartRetainsPartialAttachmentForOwnedCleanup(t *testing.T) {
 	}
 	if got := containment.calls(); got != "soft,force,close" {
 		t.Fatalf("containment calls = %q, want soft,force,close", got)
+	}
+}
+
+func TestStartPersistsMarkerBeforeCleaningRetainedInitialScanFailure(t *testing.T) {
+	wantAttachErr := errors.New("initial descendant containment scan: leader absence before a complete descendant scan")
+	containment := &earlyUnprovenContainment{observed: true}
+	events := make([]string, 0, 2)
+	invocation := helperInvocation("exit")
+	invocation.PersistProcess = func(pid int, identity string) error {
+		containment.mutex.Lock()
+		callbackInstalled := containment.callback != nil
+		containment.mutex.Unlock()
+		if !callbackInstalled {
+			t.Fatal("containment uncertainty callback was not installed before marker persistence")
+		}
+		if pid <= 0 || identity != "bound:process" {
+			t.Fatalf("PersistProcess() = (%d, %q), want an exact attached process identity", pid, identity)
+		}
+		events = append(events, "marker")
+		return nil
+	}
+	invocation.PersistContainmentUnproven = func(pid int, identity string) error {
+		if pid <= 0 || identity != "bound:process" {
+			t.Fatalf("PersistContainmentUnproven() = (%d, %q), want an exact attached process identity", pid, identity)
+		}
+		events = append(events, "uncertainty")
+		return nil
+	}
+	runner := Runner{
+		configureProcess: func(*exec.Cmd) error { return nil },
+		attachProcess: func(*os.Process) (platform.Containment, string, error) {
+			return containment, "bound:process", wantAttachErr
+		},
+	}
+	process, err := runner.Start(context.Background(), invocation, &recordingSink{})
+	if !errors.Is(err, wantAttachErr) {
+		t.Fatalf("Start() error = %v, want initial scan failure", err)
+	}
+	if process == nil {
+		t.Fatal("Start() returned nil process after retained initial scan failure")
+	}
+	if len(events) != 2 || events[0] != "marker" || events[1] != "uncertainty" {
+		t.Fatalf("persistence order = %#v, want [marker uncertainty] before cleanup", events)
+	}
+	result := waitForResult(t, process)
+	if !errors.Is(result.ContainmentError, wantAttachErr) {
+		t.Fatalf("ContainmentError = %v, want initial scan failure", result.ContainmentError)
 	}
 }
 
@@ -476,7 +645,7 @@ func TestStartResumesOnlyAfterAuthorityAndInitialLeaseBarriers(t *testing.T) {
 	resumed := false
 	runner := Runner{
 		configureProcess: func(*exec.Cmd) error { return nil },
-		launchProcess: func(*exec.Cmd, Invocation, *os.File, *os.File, *os.File) (*startedProcess, error) {
+		launchProcess: func(context.Context, *exec.Cmd, Invocation, *os.File, *os.File, *os.File) (*startedProcess, error) {
 			return &startedProcess{
 				pid:         123,
 				identity:    "bound:process",
@@ -698,6 +867,40 @@ type scriptedContainment struct {
 	force    func() error
 	callsLog []string
 }
+
+type earlyUnprovenContainment struct {
+	mutex      sync.Mutex
+	observed   bool
+	callback   func() error
+	closeGate  chan struct{}
+	closeCalls int
+}
+
+func (containment *earlyUnprovenContainment) Terminate(bool) error { return nil }
+
+func (containment *earlyUnprovenContainment) Close() error {
+	containment.mutex.Lock()
+	containment.closeCalls++
+	gate := containment.closeGate
+	containment.mutex.Unlock()
+	if gate != nil {
+		<-gate
+	}
+	return nil
+}
+
+func (containment *earlyUnprovenContainment) SetContainmentUnprovenCallback(callback func() error) error {
+	containment.mutex.Lock()
+	containment.callback = callback
+	observed := containment.observed
+	containment.mutex.Unlock()
+	if observed {
+		return callback()
+	}
+	return nil
+}
+
+func (*earlyUnprovenContainment) ContainmentCloseRetryable() bool { return true }
 
 type retryablePartialContainment struct {
 	*scriptedContainment

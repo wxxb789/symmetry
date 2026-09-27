@@ -27,6 +27,8 @@ var (
 	readLinuxProcessGroupPriority = unix.Getpriority
 )
 
+var errPersistedProcessGroupPresent = errors.New("persisted process group is still present")
+
 type linuxPIDNamespaceInfo struct {
 	link  string
 	inode uint64
@@ -301,7 +303,7 @@ func ProvePersistedProcessGroupAbsent(ctx context.Context, pid int, expectedIden
 		return nil
 	}
 	if priorityErr == nil {
-		return fmt.Errorf("%w: getpriority found process group %d", ErrPersistedProcessGroupUnproven, pid)
+		return fmt.Errorf("%w: %w: getpriority found process group %d", ErrPersistedProcessGroupUnproven, errPersistedProcessGroupPresent, pid)
 	}
 	return fmt.Errorf("%w: getpriority process group %d: %w", ErrPersistedProcessGroupUnproven, pid, priorityErr)
 }

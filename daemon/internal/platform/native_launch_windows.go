@@ -64,6 +64,7 @@ type SuspendedProcess struct {
 	process windows.Handle
 	thread  windows.Handle
 	job     windows.Handle
+	jobID   string
 	pid     uint32
 
 	resumed     bool
@@ -92,21 +93,21 @@ func LaunchSuspended(spec NativeLaunchSpec) (*SuspendedProcess, error) {
 	}
 	defer restoreHandles()
 
-	job, err := windows.CreateJobObject(nil, nil)
+	job, jobID, err := createNamedContainmentJob()
 	if err != nil {
 		return nil, fmt.Errorf("create native launch job: %w", err)
 	}
 	keepJob := false
 	defer func() {
 		if !keepJob {
-			_ = windows.CloseHandle(job)
+			_ = windows.CloseHandle(windows.Handle(job))
 		}
 	}()
 
 	limits := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{}
 	limits.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
 	if _, err := windows.SetInformationJobObject(
-		job,
+		windows.Handle(job),
 		windows.JobObjectExtendedLimitInformation,
 		uintptr(unsafe.Pointer(&limits)),
 		uint32(unsafe.Sizeof(limits)),
@@ -185,10 +186,23 @@ func LaunchSuspended(spec NativeLaunchSpec) (*SuspendedProcess, error) {
 	return &SuspendedProcess{
 		process:   processInfo.Process,
 		thread:    processInfo.Thread,
-		job:       job,
+		job:       windows.Handle(job),
+		jobID:     jobID,
 		pid:       processInfo.ProcessId,
 		closeDone: make(chan struct{}),
 	}, nil
+}
+
+// JobID returns the random identifier embedded in the Local named Job Object
+// created for this suspended process. It is safe to expose to the durable
+// journal because it is an object name, not a credential.
+func (process *SuspendedProcess) JobID() string {
+	if process == nil {
+		return ""
+	}
+	process.mu.Lock()
+	defer process.mu.Unlock()
+	return process.jobID
 }
 
 // prepareNativeStandardHandles duplicates the requested stdio handles into
@@ -587,6 +601,7 @@ func (process *SuspendedProcess) Close() error {
 	process.process = 0
 	process.thread = 0
 	process.job = 0
+	process.jobID = ""
 	process.closeErr = closeErr
 	process.closed = true
 	close(process.closeDone)

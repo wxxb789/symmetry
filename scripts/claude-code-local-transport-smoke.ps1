@@ -11,7 +11,7 @@ param(
     [int]$TimeoutSeconds = 30,
 
     [Parameter()]
-    [string]$ExpectedClaudeVersion = "2.1.259",
+    [string]$ExpectedClaudeVersion = "2.1.281",
 
     [Parameter()]
     [string]$Prompt = "Reply with exactly OK."

@@ -1,10 +1,14 @@
 # 0006f - Evidence-bounded pi native continuity
 
-Establish the supported capability range for the pinned pi `0.85.1` binary,
+Establish the supported capability range for the pinned pi `0.87.1` binary,
 including repository work, cancellation, retained resume, compatible fresh
 handoff, provider access, and exact session-directory provenance. Every handoff
 creates a new native session and every effect remains bound to its durable
 control identity.
+
+The pin moved from `0.85.1` to `0.87.1` by owner directive 2026-09-24: track
+latest client. Evidence recorded for `0.85.1` does not count toward this goal's
+completion for `0.87.1`.
 
 Completion requires exact-binary Linux and Windows evidence for each promoted
 operation, restart and lost-acknowledgement recovery, no duplicate effects,

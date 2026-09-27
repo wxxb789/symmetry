@@ -31,6 +31,7 @@ const (
 var (
 	kernel32                         = syscall.NewLazyDLL("kernel32.dll")
 	createJobObject                  = kernel32.NewProc("CreateJobObjectW")
+	openJobObject                    = kernel32.NewProc("OpenJobObjectW")
 	setInformationJobObject          = kernel32.NewProc("SetInformationJobObject")
 	assignProcessToJobObject         = kernel32.NewProc("AssignProcessToJobObject")
 	terminateJobObject               = kernel32.NewProc("TerminateJobObject")
@@ -93,6 +94,7 @@ type extendedLimitInformation struct {
 type jobContainment struct {
 	mutex        sync.Mutex
 	handle       syscall.Handle
+	jobID        string
 	supervisor   containmentSupervisorLease
 	stopReceipt  *authority.StopReceipt
 	closeStarted bool
@@ -295,11 +297,10 @@ func AttachProcess(process *os.Process) (Containment, string, error) {
 		return nil, "", errors.New("process handle is required for containment")
 	}
 
-	handle, _, callError := createJobObject.Call(0, 0)
-	if handle == 0 {
-		return cleanupFailedAttach(process, 0, fmt.Errorf("create job object: %w", callError))
+	job, jobID, err := createNamedContainmentJob()
+	if err != nil {
+		return cleanupFailedAttach(process, 0, fmt.Errorf("create job object: %w", err))
 	}
-	job := syscall.Handle(handle)
 	var supervisor containmentSupervisorLease
 	cleanup := func(errorValue error) (Containment, string, error) {
 		var supervisorErr error
@@ -321,7 +322,7 @@ func AttachProcess(process *os.Process) (Containment, string, error) {
 		return cleanup(fmt.Errorf("configure job object: %w", callError))
 	}
 
-	contained := &jobContainment{handle: job}
+	contained := &jobContainment{handle: job, jobID: jobID}
 	var identity string
 	var callbackErr error
 	var assigned bool

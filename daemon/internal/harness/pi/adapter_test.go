@@ -140,6 +140,11 @@ func TestAdapterStartForwardsPersistProcessWithAuthority(t *testing.T) {
 				gotIdentity = identity
 				return nil
 			},
+			PrepareSupervisorHandoff:           func(authority.SupervisorHandoff) error { return nil },
+			BindSupervisorHandoff:              func(authority.SupervisorHandoff, int, string) error { return nil },
+			CommitSupervisorHandoff:            func(authority.SupervisorHandoff, time.Time) error { return nil },
+			RecordSupervisorHandoffStopReceipt: func(authority.SupervisorHandoff, authority.StopReceipt) error { return nil },
+			ClearSupervisorHandoff:             func(authority.SupervisorHandoff, authority.SupervisorHandoffReleaseProof) error { return nil },
 		},
 	}
 	started, err := adapter.Start(context.Background(), request, &recordingHarnessSink{})
@@ -152,6 +157,9 @@ func TestAdapterStartForwardsPersistProcessWithAuthority(t *testing.T) {
 	})
 	if invocation.PersistProcessWithAuthority == nil {
 		t.Fatal("Start() did not forward PersistProcessWithAuthority")
+	}
+	if invocation.PrepareSupervisorHandoff == nil || invocation.BindSupervisorHandoff == nil || invocation.CommitSupervisorHandoff == nil || invocation.RecordSupervisorHandoffStopReceipt == nil || invocation.ClearSupervisorHandoff == nil {
+		t.Fatal("Start() did not forward complete supervisor handoff callbacks")
 	}
 	if err := invocation.PersistProcessWithAuthority(42, "test:42", nil); err != nil {
 		t.Fatalf("forwarded PersistProcessWithAuthority() error = %v", err)
@@ -881,7 +889,7 @@ func TestMalformedRecordPreservesDiagnosticDurabilityFailure(t *testing.T) {
 
 func TestProbeRemainsNativeUnverifiedWithAllExecutableCapabilitiesFalse(t *testing.T) {
 	runner := fakeCommandRunner{outputs: map[string][]byte{
-		"--version": []byte("0.85.1\n"),
+		"--version": []byte(TestedVersion + "\n"),
 		"--help":    []byte("Options:\n  --mode <mode> Output mode: text, json, or rpc\n"),
 	}}
 	result, err := Probe(context.Background(), "pi-test", runner)
@@ -1386,7 +1394,7 @@ func (runner *cancellationSuccessRunner) Run(ctx context.Context, _ string, args
 	if key == "--version" {
 		runner.startedOnce.Do(func() { close(runner.started) })
 		<-ctx.Done()
-		return []byte("0.85.1\n"), nil
+		return []byte(TestedVersion + "\n"), nil
 	}
 	return []byte("--mode <mode> rpc"), nil
 }

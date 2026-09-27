@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -60,6 +61,201 @@ func TestStopPersistedProcessDurableReceiptPrecedesHelperRelease(t *testing.T) {
 	}
 	if !releaseSeen {
 		t.Fatal("durable stop did not release the helper")
+	}
+}
+
+func TestStopPersistedProcessReplaysReceiptWriteBarrierAfterPostRenameUnknown(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	value := testRecoverySupervisorAuthority()
+	if _, err := store.SetProcessDetails(key, value.TargetPID, value.TargetIdentity, time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetContainmentAuthority(key, value.TargetPID, value.TargetIdentity, value); err != nil {
+		t.Fatal(err)
+	}
+	receipt := testRecoveryStopReceipt(value)
+	writes := 0
+	restore := store.SetAtomicWriterForTesting(func(path string, data []byte) error {
+		writes++
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			return err
+		}
+		if writes == 1 {
+			return errors.New("injected post-rename receipt outcome")
+		}
+		return nil
+	})
+	defer restore()
+	releaseCalls := 0
+	previousRelease := releasePersistedContainmentAuthority
+	t.Cleanup(func() { releasePersistedContainmentAuthority = previousRelease })
+	releasePersistedContainmentAuthority = func(pid int, identity string, persisted *authority.Supervisor) error {
+		releaseCalls++
+		if pid != value.TargetPID || identity != value.TargetIdentity || persisted == nil || persisted.StopReceipt == nil {
+			t.Fatalf("release authority = (%d, %q, %#v), want exact durable receipt", pid, identity, persisted)
+		}
+		return nil
+	}
+	app := &daemon{
+		store:   store,
+		running: make(map[state.RunKey]*runningRun),
+		options: options{terminatePersistAuthority: func(int, string, *authority.Supervisor) (authority.StopReceipt, error) {
+			return receipt, nil
+		}},
+	}
+
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.stopPersistedProcess(context.Background(), journal); err != nil {
+		t.Fatalf("stopPersistedProcess() error = %v", err)
+	}
+	if writes != 2 {
+		t.Fatalf("receipt journal writes = %d, want first unknown write plus fresh replay barrier", writes)
+	}
+	if releaseCalls != 1 {
+		t.Fatalf("release calls = %d, want 1 after fresh replay barrier", releaseCalls)
+	}
+	persisted, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.ContainmentAuthority == nil || persisted.ContainmentAuthority.StopReceipt == nil || *persisted.ContainmentAuthority.StopReceipt != receipt {
+		t.Fatalf("persisted receipt = %#v, want exact receipt %#v", persisted.ContainmentAuthority, receipt)
+	}
+}
+
+func TestStopPersistedProcessReplaysExistingReceiptBeforeRelease(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	value := testRecoverySupervisorAuthority()
+	if _, err := store.SetProcessDetails(key, value.TargetPID, value.TargetIdentity, time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetContainmentAuthority(key, value.TargetPID, value.TargetIdentity, value); err != nil {
+		t.Fatal(err)
+	}
+	receipt := testRecoveryStopReceipt(value)
+	if _, err := store.RecordContainmentStopReceipt(key, value.TargetPID, value.TargetIdentity, receipt); err != nil {
+		t.Fatalf("RecordContainmentStopReceipt() error = %v", err)
+	}
+	writes := 0
+	restore := store.SetAtomicWriterForTesting(func(path string, data []byte) error {
+		writes++
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			return err
+		}
+		return errors.New("injected post-rename existing-receipt barrier failure")
+	})
+	releaseCalls := 0
+	terminateCalls := 0
+	previousRelease := releasePersistedContainmentAuthority
+	t.Cleanup(func() {
+		releasePersistedContainmentAuthority = previousRelease
+		restore()
+	})
+	releasePersistedContainmentAuthority = func(pid int, identity string, persisted *authority.Supervisor) error {
+		releaseCalls++
+		if pid != value.TargetPID || identity != value.TargetIdentity || persisted == nil || persisted.StopReceipt == nil {
+			t.Fatalf("release authority = (%d, %q, %#v), want exact persisted receipt", pid, identity, persisted)
+		}
+		return nil
+	}
+	app := &daemon{
+		store:   store,
+		running: make(map[state.RunKey]*runningRun),
+		options: options{terminatePersistAuthority: func(int, string, *authority.Supervisor) (authority.StopReceipt, error) {
+			terminateCalls++
+			return authority.StopReceipt{}, errors.New("terminate must not replay for an existing receipt")
+		}},
+	}
+
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.stopPersistedProcess(context.Background(), journal); err == nil {
+		t.Fatal("stopPersistedProcess() hid repeated existing-receipt barrier failure")
+	}
+	if writes != 2 {
+		t.Fatalf("first receipt barrier writes = %d, want two post-rename unknown writes", writes)
+	}
+	if releaseCalls != 0 || terminateCalls != 0 {
+		t.Fatalf("first attempt side effects = release:%d terminate:%d, want both zero", releaseCalls, terminateCalls)
+	}
+
+	restore()
+	journal, err = store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.stopPersistedProcess(context.Background(), journal); err != nil {
+		t.Fatalf("replayed stopPersistedProcess() error = %v", err)
+	}
+	if releaseCalls != 1 {
+		t.Fatalf("release calls after fresh replay barrier = %d, want 1", releaseCalls)
+	}
+	if terminateCalls != 0 {
+		t.Fatalf("terminate calls after fresh replay barrier = %d, want 0", terminateCalls)
+	}
+}
+
+func TestStopPersistedProcessRetainsReceiptWhenReplayWriteBarrierFails(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	value := testRecoverySupervisorAuthority()
+	if _, err := store.SetProcessDetails(key, value.TargetPID, value.TargetIdentity, time.Date(2026, 9, 14, 12, 1, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetContainmentAuthority(key, value.TargetPID, value.TargetIdentity, value); err != nil {
+		t.Fatal(err)
+	}
+	receipt := testRecoveryStopReceipt(value)
+	writes := 0
+	restore := store.SetAtomicWriterForTesting(func(path string, data []byte) error {
+		writes++
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			return err
+		}
+		return errors.New("injected unknown receipt barrier failure")
+	})
+	defer restore()
+	releaseCalls := 0
+	previousRelease := releasePersistedContainmentAuthority
+	t.Cleanup(func() { releasePersistedContainmentAuthority = previousRelease })
+	releasePersistedContainmentAuthority = func(int, string, *authority.Supervisor) error {
+		releaseCalls++
+		return nil
+	}
+	app := &daemon{
+		store:   store,
+		running: make(map[state.RunKey]*runningRun),
+		options: options{terminatePersistAuthority: func(int, string, *authority.Supervisor) (authority.StopReceipt, error) {
+			return receipt, nil
+		}},
+	}
+
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.stopPersistedProcess(context.Background(), journal); err == nil {
+		t.Fatal("stopPersistedProcess() hid replay write barrier failure")
+	}
+	if writes != 2 {
+		t.Fatalf("receipt journal writes = %d, want first unknown write plus failed fresh replay barrier", writes)
+	}
+	if releaseCalls != 0 {
+		t.Fatalf("release calls = %d, want 0 while receipt acknowledgement is unresolved", releaseCalls)
+	}
+	persisted, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.PID != value.TargetPID || persisted.ProcessIdentity != value.TargetIdentity || persisted.ContainmentAuthority == nil || persisted.ContainmentAuthority.StopReceipt == nil || *persisted.ContainmentAuthority.StopReceipt != receipt {
+		t.Fatalf("unresolved persisted containment = %#v, want retained exact process and receipt", persisted)
 	}
 }
 

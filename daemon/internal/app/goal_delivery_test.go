@@ -16,6 +16,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/control"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
+	"github.com/wxxb789/symmetry/daemon/internal/harness/codex"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
@@ -764,7 +765,7 @@ func TestJournalFingerprintTracksGoalDeliveryState(t *testing.T) {
 	payload := state.GoalSessionAttachDelivery{
 		GoalID: "00000000-0000-4000-8000-000000000002", LocalHandleID: "00000000-0000-4000-8000-000000000003",
 		BindingID:   "00000000-0000-4000-8000-000000000004",
-		HarnessKind: "codex", HarnessVersion: "0.153.4", AdapterVersion: "symmetry-daemon:test",
+		HarnessKind: "codex", HarnessVersion: codex.TestedVersion, AdapterVersion: "symmetry-daemon:test",
 		WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Workspace: `C:\worktree`,
 	}
 	saveAttachedGoalSessionForDelivery(t, store, key, payload)
@@ -793,7 +794,7 @@ func TestRetainedSessionStopDeliveryWaitsForTerminalAcceptance(t *testing.T) {
 	intent := state.GoalSessionLaunchIntent{
 		LaunchIntentID: "00000000-0000-4000-8000-000000000008", GoalID: admission.GoalID, GoalRevision: admission.GoalRevision,
 		WorkItemID: admissionWorkItemIDValue(admission.WorkItemID), TaskID: "task-1", RunID: key.RunID, Generation: key.Generation, AdmissionID: admission.AdmissionID,
-		LocalHandleID: sessionKey.LocalHandleID, BindingID: bindingID, RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: "0.153.4",
+		LocalHandleID: sessionKey.LocalHandleID, BindingID: bindingID, RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: codex.TestedVersion,
 		AdapterVersion: "symmetry-daemon:test", AdapterProtocolVersion: 1, WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		WorkspacePath: `C:\worktree\retained`, SessionMode: state.GoalSessionModeFresh,
 	}
@@ -963,7 +964,7 @@ func TestRecoveryPreservesReleasedSessionBeforeStopOutboxAck(t *testing.T) {
 	intent := state.GoalSessionLaunchIntent{
 		LaunchIntentID: "00000000-0000-4000-8000-000000000008", GoalID: admission.GoalID, GoalRevision: admission.GoalRevision,
 		WorkItemID: admissionWorkItemIDValue(admission.WorkItemID), TaskID: "task-1", RunID: key.RunID, Generation: key.Generation, AdmissionID: admission.AdmissionID,
-		LocalHandleID: sessionKey.LocalHandleID, BindingID: bindingID, RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: "0.153.4",
+		LocalHandleID: sessionKey.LocalHandleID, BindingID: bindingID, RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: codex.TestedVersion,
 		AdapterVersion: "symmetry-daemon:test", AdapterProtocolVersion: 1, WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		WorkspacePath: `C:\worktree\retained`, SessionMode: state.GoalSessionModeFresh,
 	}
@@ -1120,7 +1121,7 @@ func TestRecoveryQuarantinesLegacyStoppedAttachWithoutBindingAuthority(t *testin
 	intent := state.GoalSessionLaunchIntent{
 		LaunchIntentID: "00000000-0000-4000-8000-000000000008", GoalID: admission.GoalID, GoalRevision: admission.GoalRevision,
 		WorkItemID: admissionWorkItemIDValue(admission.WorkItemID), TaskID: "task-1", RunID: key.RunID, Generation: key.Generation, AdmissionID: admission.AdmissionID,
-		LocalHandleID: sessionKey.LocalHandleID, RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: "0.153.4",
+		LocalHandleID: sessionKey.LocalHandleID, RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: codex.TestedVersion,
 		AdapterVersion: "symmetry-daemon:test", AdapterProtocolVersion: 1, WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		WorkspacePath: `C:\worktree\retained`, SessionMode: state.GoalSessionModeFresh,
 	}
@@ -1141,7 +1142,7 @@ func TestRecoveryQuarantinesLegacyStoppedAttachWithoutBindingAuthority(t *testin
 		t.Fatal(err)
 	}
 	legacy := state.GoalDelivery{Kind: state.GoalDeliverySessionAttach, DeliveryID: sessionKey.LocalHandleID, Fence: journal.Fence(), Ready: true, SessionAttach: &state.GoalSessionAttachDelivery{
-		GoalID: admission.GoalID, LocalHandleID: sessionKey.LocalHandleID, HarnessKind: "codex", HarnessVersion: "0.153.4", AdapterVersion: "symmetry-daemon:test",
+		GoalID: admission.GoalID, LocalHandleID: sessionKey.LocalHandleID, HarnessKind: "codex", HarnessVersion: codex.TestedVersion, AdapterVersion: "symmetry-daemon:test",
 		WorkspaceFingerprint: intent.WorkspaceFingerprint, Workspace: "local", RepositoryResourceID: &admission.Subject.ResourceID,
 	}}
 	encoded, err := json.Marshal(struct {
@@ -1609,7 +1610,7 @@ func TestRecoveryDiscardsUnreadyGoalSessionAttachBeforeTerminalCleanup(t *testin
 	intent := state.GoalSessionLaunchIntent{
 		LaunchIntentID: "00000000-0000-4000-8000-000000000008", GoalID: admission.GoalID, GoalRevision: admission.GoalRevision,
 		WorkItemID: admissionWorkItemIDValue(admission.WorkItemID), TaskID: "task-1", RunID: key.RunID, Generation: key.Generation, AdmissionID: admission.AdmissionID,
-		LocalHandleID: sessionKey.LocalHandleID, RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: "0.153.4",
+		LocalHandleID: sessionKey.LocalHandleID, RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: codex.TestedVersion,
 		BindingID:      "00000000-0000-4000-8000-000000000009",
 		AdapterVersion: "symmetry-daemon:test", AdapterProtocolVersion: 1,
 		WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SessionMode: state.GoalSessionModeFresh,
@@ -1621,7 +1622,7 @@ func TestRecoveryDiscardsUnreadyGoalSessionAttachBeforeTerminalCleanup(t *testin
 		t.Fatal(err)
 	}
 	attach := state.GoalSessionAttachDelivery{
-		GoalID: admission.GoalID, LocalHandleID: sessionKey.LocalHandleID, HarnessKind: "codex", HarnessVersion: "0.153.4",
+		GoalID: admission.GoalID, LocalHandleID: sessionKey.LocalHandleID, HarnessKind: "codex", HarnessVersion: codex.TestedVersion,
 		BindingID:      intent.BindingID,
 		AdapterVersion: "symmetry-daemon:test", WorkspaceFingerprint: intent.WorkspaceFingerprint, Workspace: "local",
 	}
@@ -1707,6 +1708,7 @@ func TestStaleGoalDeliveryStartupScanCleansAfterFinalReceipt(t *testing.T) {
 	if _, err := store.SetLocalState(key, "stale"); err != nil {
 		t.Fatal(err)
 	}
+	expireLeaseBeforeCleanup(t, store, key)
 	client := &goalDeliveryControl{fakeControl: &fakeControl{}}
 	daemon := &daemon{config: testConfig(t), store: store, control: client, options: options{clock: time.Now}}
 	daemon.enqueueRecoveredCleanups()
@@ -1729,7 +1731,7 @@ func TestGoalDeliveryMalformedOrMismatchedReceiptRetainsExactIntent(t *testing.T
 		{
 			name: "attach malformed",
 			queue: func(store *state.Store, key state.RunKey) (state.RunJournal, state.GoalDeliveryKind, string, error) {
-				payload := state.GoalSessionAttachDelivery{GoalID: "00000000-0000-4000-8000-000000000002", LocalHandleID: "00000000-0000-4000-8000-000000000003", BindingID: "00000000-0000-4000-8000-000000000004", HarnessKind: "codex", HarnessVersion: "0.153.4", AdapterVersion: "symmetry-daemon:test", WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Workspace: `C:\worktree`}
+				payload := state.GoalSessionAttachDelivery{GoalID: "00000000-0000-4000-8000-000000000002", LocalHandleID: "00000000-0000-4000-8000-000000000003", BindingID: "00000000-0000-4000-8000-000000000004", HarnessKind: "codex", HarnessVersion: codex.TestedVersion, AdapterVersion: "symmetry-daemon:test", WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Workspace: `C:\worktree`}
 				saveAttachedGoalSessionForDelivery(t, store, key, payload)
 				journal, err := store.QueueGoalSessionAttach(key, payload)
 				if err == nil {
@@ -1742,7 +1744,7 @@ func TestGoalDeliveryMalformedOrMismatchedReceiptRetainsExactIntent(t *testing.T
 		{
 			name: "attach mismatch",
 			queue: func(store *state.Store, key state.RunKey) (state.RunJournal, state.GoalDeliveryKind, string, error) {
-				payload := state.GoalSessionAttachDelivery{GoalID: "00000000-0000-4000-8000-000000000002", LocalHandleID: "00000000-0000-4000-8000-000000000003", BindingID: "00000000-0000-4000-8000-000000000004", HarnessKind: "codex", HarnessVersion: "0.153.4", AdapterVersion: "symmetry-daemon:test", WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Workspace: `C:\worktree`}
+				payload := state.GoalSessionAttachDelivery{GoalID: "00000000-0000-4000-8000-000000000002", LocalHandleID: "00000000-0000-4000-8000-000000000003", BindingID: "00000000-0000-4000-8000-000000000004", HarnessKind: "codex", HarnessVersion: codex.TestedVersion, AdapterVersion: "symmetry-daemon:test", WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Workspace: `C:\worktree`}
 				saveAttachedGoalSessionForDelivery(t, store, key, payload)
 				journal, err := store.QueueGoalSessionAttach(key, payload)
 				if err == nil {
@@ -2395,7 +2397,7 @@ func saveRetainedGoalSession(t *testing.T, store *state.Store, key state.RunKey)
 	intent := state.GoalSessionLaunchIntent{
 		LaunchIntentID: "00000000-0000-4000-8000-000000000008", GoalID: admission.GoalID, GoalRevision: admission.GoalRevision,
 		WorkItemID: admissionWorkItemIDValue(admission.WorkItemID), TaskID: "task-1", RunID: key.RunID, Generation: key.Generation, AdmissionID: admission.AdmissionID,
-		LocalHandleID: sessionKey.LocalHandleID, BindingID: bindingID, MachineID: "machine-1", RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: "0.153.4",
+		LocalHandleID: sessionKey.LocalHandleID, BindingID: bindingID, MachineID: "machine-1", RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: codex.TestedVersion,
 		AdapterVersion: "symmetry-daemon:test", AdapterProtocolVersion: 1, WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		WorkspacePath: `C:\worktree\retained`, SessionMode: state.GoalSessionModeFresh,
 	}
@@ -2425,7 +2427,7 @@ func saveReadyAttachPendingGoalSession(t *testing.T, store *state.Store, key sta
 	intent := state.GoalSessionLaunchIntent{
 		LaunchIntentID: "00000000-0000-4000-8000-000000000008", GoalID: admission.GoalID, GoalRevision: admission.GoalRevision,
 		WorkItemID: admissionWorkItemIDValue(admission.WorkItemID), TaskID: "task-1", RunID: key.RunID, Generation: key.Generation, AdmissionID: admission.AdmissionID,
-		LocalHandleID: sessionKey.LocalHandleID, BindingID: bindingID, MachineID: "machine-1", RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: "0.153.4",
+		LocalHandleID: sessionKey.LocalHandleID, BindingID: bindingID, MachineID: "machine-1", RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: codex.TestedVersion,
 		AdapterVersion: "symmetry-daemon:test", AdapterProtocolVersion: 1, WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		WorkspacePath: `C:\worktree\retained`, RepositoryResourceID: admission.Subject.ResourceID, SessionMode: state.GoalSessionModeFresh,
 	}
@@ -2438,7 +2440,7 @@ func saveReadyAttachPendingGoalSession(t *testing.T, store *state.Store, key sta
 	if _, err := store.PersistGoalSessionHandle(sessionKey, state.GoalSessionHandle{NativeSessionID: "native-thread-1"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.QueueGoalSessionAttach(key, state.GoalSessionAttachDelivery{GoalID: admission.GoalID, LocalHandleID: sessionKey.LocalHandleID, BindingID: bindingID, HarnessKind: "codex", HarnessVersion: "0.153.4", AdapterVersion: "symmetry-daemon:test", WorkspaceFingerprint: intent.WorkspaceFingerprint, Workspace: "local", RepositoryResourceID: &admission.Subject.ResourceID}); err != nil {
+	if _, err := store.QueueGoalSessionAttach(key, state.GoalSessionAttachDelivery{GoalID: admission.GoalID, LocalHandleID: sessionKey.LocalHandleID, BindingID: bindingID, HarnessKind: "codex", HarnessVersion: codex.TestedVersion, AdapterVersion: "symmetry-daemon:test", WorkspaceFingerprint: intent.WorkspaceFingerprint, Workspace: "local", RepositoryResourceID: &admission.Subject.ResourceID}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.MarkGoalSessionAttachDeliveryReady(key, sessionKey.LocalHandleID); err != nil {
@@ -2457,7 +2459,7 @@ func saveLegacyReadyGoalSessionAttach(t *testing.T, store *state.Store, key stat
 	intent := state.GoalSessionLaunchIntent{
 		LaunchIntentID: "00000000-0000-4000-8000-000000000008", GoalID: admission.GoalID, GoalRevision: admission.GoalRevision,
 		WorkItemID: admissionWorkItemIDValue(admission.WorkItemID), TaskID: "task-1", RunID: key.RunID, Generation: key.Generation, AdmissionID: admission.AdmissionID,
-		LocalHandleID: sessionKey.LocalHandleID, MachineID: "machine-1", RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: "0.153.4",
+		LocalHandleID: sessionKey.LocalHandleID, MachineID: "machine-1", RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: codex.TestedVersion,
 		AdapterVersion: "symmetry-daemon:test", AdapterProtocolVersion: 1, WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		WorkspacePath: `C:\worktree\retained`, SessionMode: state.GoalSessionModeFresh,
 	}
@@ -2480,7 +2482,7 @@ func saveLegacyReadyGoalSessionAttach(t *testing.T, store *state.Store, key stat
 		t.Fatal(err)
 	}
 	legacy := state.GoalDelivery{Kind: state.GoalDeliverySessionAttach, DeliveryID: sessionKey.LocalHandleID, Fence: journal.Fence(), Ready: true, SessionAttach: &state.GoalSessionAttachDelivery{
-		GoalID: admission.GoalID, LocalHandleID: sessionKey.LocalHandleID, HarnessKind: "codex", HarnessVersion: "0.153.4", AdapterVersion: "symmetry-daemon:test",
+		GoalID: admission.GoalID, LocalHandleID: sessionKey.LocalHandleID, HarnessKind: "codex", HarnessVersion: codex.TestedVersion, AdapterVersion: "symmetry-daemon:test",
 		WorkspaceFingerprint: intent.WorkspaceFingerprint, Workspace: "local", RepositoryResourceID: &admission.Subject.ResourceID,
 	}}
 	encoded, err := json.Marshal(struct {

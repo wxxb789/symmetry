@@ -36,17 +36,18 @@ multi-agent orchestration is required by these files.
 
 ## Commands and gates
 
-The current CI already has Elixir tests/release, Linux Go tests/race tests,
-Windows tests and daemon/control restart E2E. Preserve those gates. Do not pretend
-future frontend/contract commands already exist in this documentation PR.
+The current CI has Elixir tests/release, Linux Go vet/tests/race tests, Windows
+tests, the wire-contract gate and daemon/control restart E2E. Preserve those
+gates. Frontend commands do not exist until goal 0007 builds `frontend/`; do not
+report them as run.
 
-| Surface | Actual baseline commands / target additions |
+| Surface | Actual commands / target additions |
 | --- | --- |
 | Elixir (`control/`) | `mix format --check-formatted`; `mix compile --warnings-as-errors`; `mix test`; release/E2E per current CI |
-| Go (`daemon/`) | `go test ./...`; concurrency changes: `go test -race ./...`; add `go vet ./...` to gate if absent |
+| Go (`daemon/`) | `go vet ./...`; `go test ./...`; concurrency changes: `go test -race ./...` |
 | Browser (`browser/`, before migration) | `npm ci`; `npm test`; configured control/daemon fixtures required |
 | TS (goal 0007 target) | frontend typecheck/lint/test/build commands from frontend.md; migrate browser runner to pnpm |
-| Wire contract (goal 0006 target) | generate/check DTO drift; positive/negative fixtures through Elixir/Go/Effect decoders |
+| Wire contract | `pnpm contracts:check` (schemas, fixtures through Effect decoders, generated-file drift; regenerate with `pnpm contracts:generate`); Go and Elixir fixture decoders run in their test suites |
 
 Run affected focused checks during development; required CI gates remain required
 before merge. Native credentialed harness tests and Windows behavior cannot be

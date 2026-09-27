@@ -1,5 +1,5 @@
 // Package opencode contains private protocol helpers for the observed
-// OpenCode 1.18.30 serve API. It deliberately does not expose a harness.Adapter
+// OpenCode 1.18.32 serve API. It deliberately does not expose a harness.Adapter
 // until native lifecycle behavior has independent evidence.
 package opencode
 
