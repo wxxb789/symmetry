@@ -30,24 +30,191 @@ jobs:
             "bufio"
             "bytes"
             "context"
+            "errors"
             "fmt"
             "io"
+            "net"
             "os"
             "os/exec"
             "path/filepath"
+            "runtime"
             "strconv"
             "strings"
             "syscall"
             "time"
+            "unsafe"
+
+            "golang.org/x/sys/unix"
           )
 
+          const (
+            probeBUID       = 65534
+            probeBGID       = 65534
+            capSysSetgid    = 6
+            capSysSetuid    = 7
+            capSysPtrace    = 19
+            soNetNSCookie   = 71
+          )
+
+          const namespaceGateScript = `
+          import os, sys
+          def fail(stage, error):
+              os.write(1, ("namespace-gate-failure=%s detail=%r\n" % (stage, str(error))).encode())
+              raise SystemExit(1)
+          if len(sys.argv) != 4:
+              fail("arguments", "expected probe binary, delegated leaf, and A namespace")
+          try:
+              os.write(3, b"R")
+          except OSError as error:
+              fail("uid-map-ready", error)
+          if os.read(0, 1) != b"U":
+              fail("uid-map-release", "parent did not authorize UID map")
+          try:
+              os.setgroups([])
+          except OSError as error:
+              fail("clear-supplementary-groups", error)
+          try:
+              os.write(3, b"G")
+          except OSError as error:
+              fail("gid-map-ready", error)
+          if os.read(0, 1) != b"G":
+              fail("gid-map-release", "parent did not authorize GID map")
+          os.close(3)
+          try:
+              os.execv(sys.argv[1], [sys.argv[1], "--namespace-worker", sys.argv[2], sys.argv[3]])
+          except OSError as error:
+              fail("worker-exec", error)
+          `
+
+          // Called through sudo only inside the delegated service; writes fixed B maps to an authenticated direct child.
+          const rootMapScript = `
+          import os, sys
+          BUID = 65534
+          BGID = 65534
+          def fail(stage, error):
+              os.write(1, ("mapping-failure=%s detail=%r\n" % (stage, str(error))).encode())
+              raise SystemExit(1)
+          def read_at(procfd, name):
+              fd = os.open(name, os.O_RDONLY, dir_fd=procfd)
+              try:
+                  return os.read(fd, 65536).decode().strip()
+              finally:
+                  os.close(fd)
+          def write_at(procfd, name, value):
+              fd = os.open(name, os.O_WRONLY, dir_fd=procfd)
+              try:
+                  os.write(fd, value.encode())
+              finally:
+                  os.close(fd)
+          def status(pid):
+              values = {}
+              with open("/proc/%d/status" % pid, encoding="ascii") as stream:
+                  for line in stream:
+                      key, separator, value = line.partition(":")
+                      if separator and key in ("Uid", "Gid", "PPid", "Groups"):
+                          values[key] = [int(item) for item in value.split()]
+              if "Uid" not in values or "Gid" not in values or "PPid" not in values or "Groups" not in values:
+                  raise RuntimeError("incomplete process status")
+              return values
+          def cgroup(pid):
+              with open("/proc/%d/cgroup" % pid, encoding="ascii") as stream:
+                  for line in stream:
+                      fields = line.rstrip("\n").split(":", 2)
+                      if len(fields) == 3 and fields[0] == "0" and fields[1] == "":
+                          return fields[2]
+              raise RuntimeError("unified cgroup membership missing")
+          def starttime(procfd):
+              value = read_at(procfd, "stat")
+              end = value.rfind(")")
+              fields = value[end + 1:].split()
+              if end < 0 or len(fields) <= 19:
+                  raise RuntimeError("invalid process stat")
+              return int(fields[19])
+          def map_ids(fields):
+              return fields == ["1", "65534", "1"]
+          try:
+              if os.geteuid() != 0 or len(sys.argv) != 9:
+                  fail("arguments", "expected root and fixed mapping arguments")
+              mode = sys.argv[1]
+              a_pid, child_pid, ns_dev, ns_ino, child_start = [int(value) for value in sys.argv[2:7]]
+              a_cgroup, leaf_cgroup = sys.argv[7:9]
+              owner = int(os.environ["SUDO_UID"])
+              if mode not in ("uid", "gid") or a_pid <= 1 or child_pid <= 1 or owner == BUID:
+                  fail("arguments", "invalid mode, PID, or fixed-B identity")
+              sudo_parent_pid = os.getppid()
+              if sudo_parent_pid != a_pid and status(sudo_parent_pid)["PPid"] != [a_pid]:
+                  fail("caller-process", "mapping helper was not invoked by A")
+              procfd = os.open("/proc/%d" % child_pid, os.O_RDONLY | os.O_DIRECTORY)
+              try:
+                  a = status(a_pid)
+                  child = status(child_pid)
+                  helper_cgroup = cgroup(os.getpid())
+                  if a["Uid"] != [owner] * 4 or child["Uid"] != [owner] * 4 or child["Gid"] != a["Gid"]:
+                      fail("caller-identity", "A and its exact child must retain their host credentials")
+                  if child["PPid"] != [a_pid] or cgroup(a_pid) != a_cgroup or helper_cgroup != a_cgroup:
+                      fail("delegated-service-identity", "mapping helper and A must share the transient service cgroup")
+                  if not os.path.isabs(a_cgroup) or os.path.normpath(a_cgroup) != a_cgroup or not os.path.isabs(leaf_cgroup) or os.path.normpath(leaf_cgroup) != leaf_cgroup:
+                      fail("delegated-cgroup-path", "cgroup paths must be normalized absolute paths")
+                  if cgroup(child_pid) != leaf_cgroup or os.path.dirname(leaf_cgroup) != a_cgroup:
+                      fail("delegated-leaf-identity", "target must be A's direct cgroup leaf")
+                  if not os.path.basename(leaf_cgroup).startswith("symmetry-cgroup-probe-"):
+                      fail("delegated-leaf-name", "unexpected probe leaf")
+                  owner_namespace = os.stat("/proc/%d/ns/user" % a_pid)
+                  if owner_namespace.st_dev == ns_dev and owner_namespace.st_ino == ns_ino:
+                      fail("userns-owner", "target namespace must be a child of A's user namespace")
+                  namespace = os.stat("/proc/%d/ns/user" % child_pid)
+                  if namespace.st_dev != ns_dev or namespace.st_ino != ns_ino:
+                      fail("userns-identity", "target namespace identity changed")
+                  if starttime(procfd) != child_start:
+                      fail("pid-identity", "target PID was reused")
+                  uid_map = read_at(procfd, "uid_map").split()
+                  gid_map = read_at(procfd, "gid_map").split()
+                  setgroups = read_at(procfd, "setgroups")
+                  if mode == "uid":
+                      if uid_map or gid_map or setgroups != "allow":
+                          fail("uid-map-precondition", "child maps or setgroups policy changed")
+                      write_at(procfd, "uid_map", "1 65534 1\n")
+                      if not map_ids(read_at(procfd, "uid_map").split()) or read_at(procfd, "gid_map").strip():
+                          fail("uid-map-verification", "only fixed B UID must be mapped")
+                  else:
+                      if not map_ids(uid_map) or gid_map or setgroups != "allow":
+                          fail("gid-map-precondition", "B UID map or setgroups allow state missing")
+                      if child["Groups"]:
+                          fail("supplementary-groups", "A must clear supplementary groups before GID mapping")
+                      write_at(procfd, "setgroups", "deny\n")
+                      if read_at(procfd, "setgroups") != "deny":
+                          fail("setgroups-policy", "setgroups denial was not installed")
+                      write_at(procfd, "gid_map", "1 65534 1\n")
+                      if not map_ids(read_at(procfd, "gid_map").split()):
+                          fail("gid-map-verification", "only fixed B GID must be mapped")
+                  if starttime(procfd) != child_start or status(child_pid)["PPid"] != [a_pid]:
+                      fail("pid-identity", "target process identity changed while mapping")
+                  final_namespace = os.stat("/proc/%d/ns/user" % child_pid)
+                  if final_namespace.st_dev != ns_dev or final_namespace.st_ino != ns_ino:
+                      fail("userns-identity", "target namespace changed while mapping")
+                  print("mapping=%s-passed" % mode, flush=True)
+              finally:
+                  os.close(procfd)
+          except SystemExit:
+              raise
+          except Exception as error:
+              fail("helper-error", error)
+          `
+
           type report struct {
-            uid        int
-            childUID   int
-            kernel     string
-            cgroup     string
-            leafCgroup string
-            capability string
+            uid                  int
+            childUID             int
+            bUID                 int
+            kernel               string
+            cgroup               string
+            leafCgroup           string
+            capability           string
+            crossUIDCapability   string
+            suidDumpable         string
+            usernsEnabled        bool
+            usernsCreated        bool
+            hostCapEff           string
+            failureDetail        string
           }
 
           func membership() (string, error) {
@@ -147,9 +314,867 @@ jobs:
             return 0
           }
 
+          func membershipFor(pid int) (string, error) {
+            file, err := os.Open(fmt.Sprintf("/proc/%d/cgroup", pid))
+            if err != nil {
+              return "", err
+            }
+            defer file.Close()
+            scanner := bufio.NewScanner(file)
+            for scanner.Scan() {
+              fields := strings.SplitN(scanner.Text(), ":", 3)
+              if len(fields) == 3 && fields[0] == "0" && fields[1] == "" &&
+                strings.HasPrefix(fields[2], "/") && filepath.Clean(fields[2]) == fields[2] {
+                return fields[2], nil
+              }
+            }
+            if err := scanner.Err(); err != nil {
+              return "", err
+            }
+            return "", fmt.Errorf("unified cgroup membership missing")
+          }
+
+          func statusValue(pid int, name string) (string, error) {
+            contents, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+            if err != nil {
+              return "", err
+            }
+            prefix := name + ":"
+            for _, line := range strings.Split(string(contents), "\n") {
+              if strings.HasPrefix(line, prefix) {
+                return strings.TrimSpace(strings.TrimPrefix(line, prefix)), nil
+              }
+            }
+            return "", fmt.Errorf("%s missing from process status", name)
+          }
+
+          func statusIDs(pid int, name string) ([]int, error) {
+            value, err := statusValue(pid, name)
+            if err != nil {
+              return nil, err
+            }
+            fields := strings.Fields(value)
+            if len(fields) != 4 {
+              return nil, fmt.Errorf("%s did not contain four IDs", name)
+            }
+            ids := make([]int, len(fields))
+            for i, field := range fields {
+              ids[i], err = strconv.Atoi(field)
+              if err != nil {
+                return nil, err
+              }
+            }
+            return ids, nil
+          }
+
+          func permissionDenied(err error) bool {
+            return err != nil && (errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM))
+          }
+
+          func recordCleanupFailure(failure *string, detail *string, stage string, err error) {
+            message := stage + ": " + err.Error()
+            if *failure == "" {
+              *failure = stage
+              *detail = err.Error()
+              return
+            }
+            if *detail == "" {
+              *detail = message
+            } else {
+              *detail += "; " + message
+            }
+          }
+
+          func usernsCheckChild() int {
+            namespace, err := os.Readlink("/proc/self/ns/user")
+            if err != nil {
+              fmt.Printf("userns-check-failure=%q\n", err.Error())
+              return 1
+            }
+            fmt.Printf("userns=%s\n", namespace)
+            if _, err := io.Copy(io.Discard, os.Stdin); err != nil {
+              fmt.Printf("userns-check-failure=%q\n", err.Error())
+              return 1
+            }
+            return 0
+          }
+
+          func checkUsernsCreate() error {
+            parentNamespace, err := os.Readlink("/proc/self/ns/user")
+            if err != nil {
+              return err
+            }
+            ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+            defer cancel()
+            command := exec.CommandContext(ctx, "/proc/self/exe", "--userns-check")
+            command.Stderr = io.Discard
+            command.SysProcAttr = &syscall.SysProcAttr{Cloneflags: syscall.CLONE_NEWUSER}
+            output, err := command.StdoutPipe()
+            if err != nil {
+              return err
+            }
+            input, err := command.StdinPipe()
+            if err != nil {
+              return err
+            }
+            if err := command.Start(); err != nil {
+              return err
+            }
+            waited := false
+            defer func() {
+              _ = input.Close()
+              if !waited {
+                _ = command.Process.Kill()
+                _ = command.Wait()
+              }
+            }()
+            line, err := bufio.NewReader(output).ReadString('\n')
+            if err != nil {
+              return err
+            }
+            values := parseValues(line)
+            childNamespace := values["userns"]
+            if childNamespace == "" || childNamespace == parentNamespace {
+              return fmt.Errorf("child did not enter a distinct user namespace: %s", strings.TrimSpace(line))
+            }
+            if _, err := input.Write([]byte{'x'}); err != nil {
+              return err
+            }
+            if err := input.Close(); err != nil {
+              return err
+            }
+            if err := command.Wait(); err != nil {
+              waited = true
+              if ctx.Err() != nil {
+                return ctx.Err()
+              }
+              return err
+            }
+            waited = true
+            return nil
+          }
+
+          func checkHostPrerequisites(result *report) string {
+            dumpable, err := os.ReadFile("/proc/sys/fs/suid_dumpable")
+            if err != nil {
+              result.failureDetail = err.Error()
+              return "read-fs-suid-dumpable"
+            }
+            result.suidDumpable = strings.TrimSpace(string(dumpable))
+            if result.suidDumpable != "0" {
+              result.failureDetail = "expected fs.suid_dumpable=0"
+              return "fs-suid-dumpable-not-zero"
+            }
+
+            maxNamespaces, err := os.ReadFile("/proc/sys/user/max_user_namespaces")
+            if err != nil {
+              result.failureDetail = err.Error()
+              return "read-user-max-user-namespaces"
+            }
+            maxCount, err := strconv.ParseUint(strings.TrimSpace(string(maxNamespaces)), 10, 64)
+            if err != nil || maxCount == 0 {
+              result.failureDetail = "user.max_user_namespaces must be positive"
+              return "user-namespaces-disabled"
+            }
+            if unprivilegedClone, err := os.ReadFile("/proc/sys/kernel/unprivileged_userns_clone"); err == nil {
+              if strings.TrimSpace(string(unprivilegedClone)) != "1" {
+                result.failureDetail = "kernel.unprivileged_userns_clone must be 1"
+                return "unprivileged-user-namespaces-disabled"
+              }
+            } else if !errors.Is(err, os.ErrNotExist) {
+              result.failureDetail = err.Error()
+              return "read-unprivileged-user-namespaces"
+            }
+            result.usernsEnabled = true
+
+            capEff, err := statusValue(os.Getpid(), "CapEff")
+            if err != nil {
+              result.failureDetail = err.Error()
+              return "read-host-cap-eff"
+            }
+            result.hostCapEff = capEff
+            capMask, err := strconv.ParseUint(capEff, 16, 64)
+            if err != nil || capMask != 0 {
+              result.failureDetail = "the host runner process must have CapEff=0"
+              return "host-capabilities-nonzero"
+            }
+            hostUIDs, uidErr := statusIDs(os.Getpid(), "Uid")
+            hostGIDs, gidErr := statusIDs(os.Getpid(), "Gid")
+            if uidErr != nil || gidErr != nil || len(hostUIDs) != 4 || len(hostGIDs) != 4 {
+              result.failureDetail = "could not verify A's host UID/GID tuple"
+              return "host-id-tuple"
+            }
+            for i := range hostUIDs {
+              if hostUIDs[i] == probeBUID || hostGIDs[i] == probeBGID {
+                result.failureDetail = "fixed B UID/GID must differ from every A UID/GID"
+                return "fixed-b-not-distinct"
+              }
+            }
+            if err := checkUsernsCreate(); err != nil {
+              result.failureDetail = err.Error()
+              return "user-namespace-create-denied"
+            }
+            result.usernsCreated = true
+            return ""
+          }
+
+          func exactIDMap(pid int, name string, expectedID int) error {
+            contents, err := os.ReadFile(fmt.Sprintf("/proc/%d/%s", pid, name))
+            if err != nil {
+              return err
+            }
+            fields := strings.Fields(string(contents))
+            expected := []string{"1", strconv.Itoa(expectedID), "1"}
+            if len(fields) != len(expected) {
+              return fmt.Errorf("%s was not a single-ID B-only mapping", name)
+            }
+            for i := range expected {
+              if fields[i] != expected[i] {
+                return fmt.Errorf("%s was not the required B-only mapping", name)
+              }
+            }
+            return nil
+          }
+
+          func namespaceIdentity(pid int) (uint64, uint64, error) {
+            info, err := os.Stat(fmt.Sprintf("/proc/%d/ns/user", pid))
+            if err != nil {
+              return 0, 0, err
+            }
+            stat, ok := info.Sys().(*syscall.Stat_t)
+            if !ok {
+              return 0, 0, fmt.Errorf("user namespace stat unavailable")
+            }
+            return uint64(stat.Dev), stat.Ino, nil
+          }
+
+          func processStartTime(pid int) (uint64, error) {
+            contents, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+            if err != nil {
+              return 0, err
+            }
+            end := strings.LastIndex(string(contents), ")")
+            if end < 0 {
+              return 0, fmt.Errorf("process stat command field malformed")
+            }
+            fields := strings.Fields(string(contents)[end+1:])
+            if len(fields) <= 19 {
+              return 0, fmt.Errorf("process start time missing")
+            }
+            return strconv.ParseUint(fields[19], 10, 64)
+          }
+
+          func trustedRootExecutable(path string) error {
+            info, err := os.Stat(path)
+            if err != nil {
+              return err
+            }
+            stat, ok := info.Sys().(*syscall.Stat_t)
+            if !ok || stat.Uid != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0 || info.Mode().Perm()&0o111 == 0 {
+              return fmt.Errorf("%s is not a trusted root-owned executable", path)
+            }
+            return nil
+          }
+
+          func runRootMapping(mode string, aPID int, childPID int, nsDev uint64, nsIno uint64,
+            childStart uint64, aCgroup string, leafCgroup string) error {
+            for _, path := range []string{"/usr/bin/sudo", "/usr/bin/python3"} {
+              if err := trustedRootExecutable(path); err != nil {
+                return err
+              }
+            }
+            args := []string{
+              "-n", "--", "/usr/bin/python3", "-I", "-S", "-c", rootMapScript,
+              mode, strconv.Itoa(aPID), strconv.Itoa(childPID), strconv.FormatUint(nsDev, 10),
+              strconv.FormatUint(nsIno, 10), strconv.FormatUint(childStart, 10), aCgroup, leafCgroup,
+            }
+            command := exec.Command("/usr/bin/sudo", args...)
+            command.Dir = "/"
+            command.Env = []string{"PATH=/usr/bin:/bin", "LANG=C", "LC_ALL=C"}
+            var stdout bytes.Buffer
+            var stderr bytes.Buffer
+            command.Stdout = &stdout
+            command.Stderr = &stderr
+            if err := command.Run(); err != nil {
+              return fmt.Errorf("transient %s map helper failed: %w: %s %s", mode, err,
+                strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()))
+            }
+            if !strings.Contains(stdout.String(), "mapping="+mode+"-passed") {
+              return fmt.Errorf("transient %s map helper did not confirm the fixed B map: %s", mode, strings.TrimSpace(stdout.String()))
+            }
+            fmt.Println(strings.TrimSpace(stdout.String()))
+            return nil
+          }
+
+          func parseValues(line string) map[string]string {
+            values := make(map[string]string)
+            for _, field := range strings.Fields(line) {
+              key, value, ok := strings.Cut(field, "=")
+              if ok {
+                values[key] = value
+              }
+            }
+            return values
+          }
+
+          func procSocketInode(pid int, fd int) (uint64, error) {
+            link, err := os.Readlink(fmt.Sprintf("/proc/%d/fd/%d", pid, fd))
+            if err != nil {
+              return 0, err
+            }
+            if !strings.HasPrefix(link, "socket:[") || !strings.HasSuffix(link, "]") {
+              return 0, fmt.Errorf("target descriptor is not a socket: %s", link)
+            }
+            linkInode, err := strconv.ParseUint(strings.TrimSuffix(strings.TrimPrefix(link, "socket:["), "]"), 10, 64)
+            if err != nil {
+              return 0, err
+            }
+            contents, err := os.ReadFile(fmt.Sprintf("/proc/%d/fdinfo/%d", pid, fd))
+            if err != nil {
+              return 0, err
+            }
+            for _, line := range strings.Split(string(contents), "\n") {
+              fields := strings.Fields(line)
+              if len(fields) == 2 && fields[0] == "ino:" {
+                infoInode, err := strconv.ParseUint(fields[1], 10, 64)
+                if err != nil {
+                  return 0, err
+                }
+                if infoInode != linkInode {
+                  return 0, fmt.Errorf("fdinfo inode did not match the target socket")
+                }
+                return infoInode, nil
+              }
+            }
+            return 0, fmt.Errorf("socket inode missing from fdinfo")
+          }
+
+          func tcpFD(conn *net.TCPConn) (int, error) {
+            raw, err := conn.SyscallConn()
+            if err != nil {
+              return -1, err
+            }
+            fd := -1
+            if err := raw.Control(func(value uintptr) { fd = int(value) }); err != nil {
+              return -1, err
+            }
+            if fd < 0 {
+              return -1, fmt.Errorf("TCP socket descriptor missing")
+            }
+            return fd, nil
+          }
+
+          func socketNetnsCookie(fd int) (uint64, error) {
+            var cookie uint64
+            length := uint32(8)
+            _, _, errno := syscall.Syscall6(syscall.SYS_GETSOCKOPT,
+              uintptr(fd), uintptr(syscall.SOL_SOCKET), uintptr(soNetNSCookie),
+              uintptr(unsafe.Pointer(&cookie)), uintptr(unsafe.Pointer(&length)), 0)
+            runtime.KeepAlive(&cookie)
+            runtime.KeepAlive(&length)
+            if errno != 0 {
+              return 0, errno
+            }
+            if length != 8 {
+              return 0, fmt.Errorf("SO_NETNS_COOKIE returned %d bytes", length)
+            }
+            return cookie, nil
+          }
+
+          func sameTCPAddr(left net.Addr, right net.Addr) bool {
+            a, okA := left.(*net.TCPAddr)
+            b, okB := right.(*net.TCPAddr)
+            return okA && okB && a.Port == b.Port && bytes.Equal(a.IP.To4(), b.IP.To4())
+          }
+
+          func probeLeafWriteDenied(leafDirectory string) error {
+            file, err := os.OpenFile(filepath.Join(leafDirectory, "cgroup.procs"), os.O_WRONLY, 0)
+            if err != nil {
+              if permissionDenied(err) {
+                return nil
+              }
+              return fmt.Errorf("opening A's cgroup.procs did not return EACCES/EPERM: %w", err)
+            }
+            defer file.Close()
+            _, err = file.Write([]byte("not-a-pid\n"))
+            if permissionDenied(err) {
+              return nil
+            }
+            if err == nil {
+              return fmt.Errorf("B could write A's cgroup.procs")
+            }
+            return fmt.Errorf("writing A's cgroup.procs returned %v, not EACCES/EPERM", err)
+          }
+
+          func peerFailure(stage string, err error) int {
+            fmt.Printf("peer-failure=%s detail=%q\n", stage, err.Error())
+            return 1
+          }
+
+          func socketPeer() int {
+            if err := unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0); err != nil {
+              return peerFailure("set-nondumpable", err)
+            }
+            if os.Getuid() != 1 || os.Getgid() != 1 {
+              return peerFailure("fixed-b-namespace-credentials", fmt.Errorf("expected namespace uid/gid 1"))
+            }
+            listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+            if err != nil {
+              return peerFailure("loopback-listen", err)
+            }
+            defer listener.Close()
+            fmt.Printf("port=%d\n", listener.Addr().(*net.TCPAddr).Port)
+            connection, err := listener.AcceptTCP()
+            if err != nil {
+              return peerFailure("loopback-accept", err)
+            }
+            defer connection.Close()
+            fd, err := tcpFD(connection)
+            if err != nil {
+              return peerFailure("socket-fd", err)
+            }
+            if err := probeLeafWriteDenied(os.Args[2]); err != nil {
+              return peerFailure("b-cgroup-write-permission", err)
+            }
+            fmt.Printf("socket-ready fd=%d uid=%d gid=%d leaf_write=denied\n", fd, os.Getuid(), os.Getgid())
+            if _, err := io.Copy(io.Discard, os.Stdin); err != nil {
+              return peerFailure("socket-peer-wait", err)
+            }
+            return 0
+          }
+
+          func namespaceWorker(leafDirectory string, parentUserNS string, input *bufio.Reader) int {
+            currentUserNS, err := os.Readlink("/proc/self/ns/user")
+            if err != nil {
+              return peerFailure("read-worker-userns", err)
+            }
+            if currentUserNS == parentUserNS {
+              return peerFailure("worker-userns-not-child", fmt.Errorf("worker remained in A's parent user namespace"))
+            }
+
+            peer := exec.Command("/proc/self/exe", "--socket-peer", leafDirectory)
+            peer.Dir = "/"
+            peer.Env = []string{"PATH=/usr/bin:/bin", "LANG=C", "LC_ALL=C"}
+            peerPIDFD := -1
+            peer.SysProcAttr = &syscall.SysProcAttr{
+              Credential: &syscall.Credential{Uid: 1, Gid: 1, NoSetGroups: true},
+              Pdeathsig: syscall.SIGKILL,
+              PidFD: &peerPIDFD,
+            }
+            peerOutput, err := peer.StdoutPipe()
+            if err != nil {
+              return peerFailure("peer-stdout", err)
+            }
+            peerInput, err := peer.StdinPipe()
+            if err != nil {
+              return peerFailure("peer-stdin", err)
+            }
+            peer.Stderr = io.Discard
+            if err := peer.Start(); err != nil {
+              return peerFailure("cross-uid-b-launch", err)
+            }
+            if peerPIDFD < 0 {
+              _ = peer.Process.Kill()
+              _ = peer.Wait()
+              return peerFailure("cross-uid-b-pidfd", fmt.Errorf("B launch did not return a pidfd"))
+            }
+            defer unix.Close(peerPIDFD)
+            defer func() {
+              _ = peerInput.Close()
+              _ = peer.Process.Kill()
+              _ = peer.Wait()
+            }()
+
+            peerReader := bufio.NewReader(peerOutput)
+            portLine, err := peerReader.ReadString('\n')
+            if err != nil {
+              return peerFailure("loopback-listener-ready", err)
+            }
+            portValues := parseValues(portLine)
+            port, err := strconv.Atoi(portValues["port"])
+            if err != nil || port < 1 || port > 65535 {
+              return peerFailure("loopback-listener-port", fmt.Errorf("invalid listener port"))
+            }
+            connection, err := net.DialTimeout("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 5*time.Second)
+            if err != nil {
+              return peerFailure("loopback-connect", err)
+            }
+            defer connection.Close()
+            client, ok := connection.(*net.TCPConn)
+            if !ok {
+              return peerFailure("loopback-client-type", fmt.Errorf("connection was not TCP"))
+            }
+
+            peerLine, err := peerReader.ReadString('\n')
+            if err != nil {
+              return peerFailure("b-socket-ready", err)
+            }
+            peerValues := parseValues(peerLine)
+            if peerValues["leaf_write"] != "denied" || peerValues["uid"] != "1" || peerValues["gid"] != "1" {
+              return peerFailure("b-cgroup-write-permission", fmt.Errorf("B identity or denied leaf write was not proved"))
+            }
+            fd, err := strconv.Atoi(peerValues["fd"])
+            if err != nil || fd < 0 {
+              return peerFailure("b-socket-fd", fmt.Errorf("invalid B socket descriptor"))
+            }
+            fmt.Printf("peer pid=%d fd=%d leaf_write=denied\n", peer.Process.Pid, fd)
+
+            signal, err := input.ReadByte()
+            if err != nil || signal != 'P' {
+              return peerFailure("host-a-cross-uid-check", fmt.Errorf("host A did not authorize namespace proof"))
+            }
+
+            inode, err := procSocketInode(peer.Process.Pid, fd)
+            if err != nil {
+              return peerFailure("namespace-fdinfo-permission", err)
+            }
+            duplicateFD, err := unix.PidfdGetfd(peerPIDFD, fd, 0)
+            if err != nil {
+              return peerFailure("namespace-pidfd-getfd-permission", err)
+            }
+            duplicateFile := os.NewFile(uintptr(duplicateFD), "pidfd-getfd-socket")
+            if duplicateFile == nil {
+              _ = unix.Close(duplicateFD)
+              return peerFailure("namespace-pidfd-getfd-file", fmt.Errorf("duplicated descriptor was invalid"))
+            }
+            defer duplicateFile.Close()
+            var duplicateStat syscall.Stat_t
+            if err := syscall.Fstat(duplicateFD, &duplicateStat); err != nil || uint64(duplicateStat.Ino) != inode {
+              return peerFailure("duplicated-socket-inode", fmt.Errorf("pidfd duplicate did not match the exact fdinfo inode: %v", err))
+            }
+            socketType, err := unix.GetsockoptInt(duplicateFD, unix.SOL_SOCKET, unix.SO_TYPE)
+            if err != nil || socketType != unix.SOCK_STREAM {
+              return peerFailure("duplicated-socket-type", fmt.Errorf("expected SOCK_STREAM: %v", err))
+            }
+            tcpInfo, err := unix.GetsockoptTCPInfo(duplicateFD, unix.IPPROTO_TCP, unix.TCP_INFO)
+            // Linux TCP_ESTABLISHED is 1 (include/net/tcp_states.h).
+            if err != nil || tcpInfo.State != 1 {
+              return peerFailure("duplicated-socket-state", fmt.Errorf("expected TCP_ESTABLISHED: %v", err))
+            }
+            duplicateConnection, err := net.FileConn(duplicateFile)
+            if err != nil {
+              return peerFailure("duplicated-socket-endpoints", err)
+            }
+            defer duplicateConnection.Close()
+            local, okLocal := duplicateConnection.LocalAddr().(*net.TCPAddr)
+            remote, okRemote := duplicateConnection.RemoteAddr().(*net.TCPAddr)
+            clientLocal := client.LocalAddr().(*net.TCPAddr)
+            clientRemote := client.RemoteAddr().(*net.TCPAddr)
+            if !okLocal || !okRemote || !local.IP.IsLoopback() || !remote.IP.IsLoopback() ||
+              local.Port == 0 || remote.Port == 0 || !sameTCPAddr(local, clientRemote) ||
+              !sameTCPAddr(remote, clientLocal) {
+              return peerFailure("duplicated-socket-tuple", fmt.Errorf("B socket was not the established loopback peer"))
+            }
+            clientFD, err := tcpFD(client)
+            if err != nil {
+              return peerFailure("client-socket-fd", err)
+            }
+            netnsCookie, err := socketNetnsCookie(duplicateFD)
+            if err != nil {
+              return peerFailure("duplicated-socket-netns-cookie", err)
+            }
+            clientNetnsCookie, err := socketNetnsCookie(clientFD)
+            if err != nil || netnsCookie == 0 || netnsCookie != clientNetnsCookie {
+              return peerFailure("socket-netns-cookie-mismatch", fmt.Errorf("exact B socket and A loopback peer must share a nonzero network namespace cookie: %v", err))
+            }
+            fmt.Printf("namespace-proof=passed fdinfo_inode=%d tuple=%s:%d<->%s:%d tcp_state=ESTABLISHED netns_cookie=%d pidfd_getfd=passed\n",
+              inode, local.IP.String(), local.Port, remote.IP.String(), remote.Port, netnsCookie)
+            return 0
+          }
+
+          func leafIsEmpty(leafDirectory string) (bool, error) {
+            events, err := os.ReadFile(filepath.Join(leafDirectory, "cgroup.events"))
+            if err != nil {
+              return false, err
+            }
+            fields := strings.Fields(string(events))
+            for i := 0; i+1 < len(fields); i += 2 {
+              if fields[i] == "populated" {
+                return fields[i+1] == "0", nil
+              }
+            }
+            return false, fmt.Errorf("populated entry missing from cgroup.events")
+          }
+
+          func waitForLeafEmpty(leafDirectory string) error {
+            deadline := time.Now().Add(5 * time.Second)
+            for time.Now().Before(deadline) {
+              empty, err := leafIsEmpty(leafDirectory)
+              if err != nil {
+                return err
+              }
+              if empty {
+                return nil
+              }
+              time.Sleep(50 * time.Millisecond)
+            }
+            return fmt.Errorf("delegated leaf remained populated after cross-UID cleanup")
+          }
+
+          func runCrossUIDProbe(result *report, leafFD *os.File, leafDirectory string) (failure string, detail string) {
+            leafInfo, err := os.Stat(leafDirectory)
+            if err != nil {
+              return "cross-uid-leaf-stat", err.Error()
+            }
+            leafStat, ok := leafInfo.Sys().(*syscall.Stat_t)
+            if !ok || int(leafStat.Uid) != result.uid {
+              return "cross-uid-leaf-not-owned-by-a", "delegated probe leaf must be owned by A"
+            }
+            procsInfo, err := os.Stat(filepath.Join(leafDirectory, "cgroup.procs"))
+            if err != nil {
+              return "cross-uid-leaf-procs-stat", err.Error()
+            }
+            procsStat, ok := procsInfo.Sys().(*syscall.Stat_t)
+            if !ok || int(procsStat.Uid) != result.uid {
+              return "cross-uid-leaf-procs-not-owned-by-a", "delegated cgroup.procs must be owned by A"
+            }
+            parentUserNS, err := os.Readlink("/proc/self/ns/user")
+            if err != nil {
+              return "parent-userns-read", err.Error()
+            }
+
+            ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+            defer cancel()
+            executable, err := os.Executable()
+            if err != nil {
+              return "cross-uid-executable-path", err.Error()
+            }
+            if err := trustedRootExecutable("/usr/bin/python3"); err != nil {
+              return "cross-uid-python-prerequisite", err.Error()
+            }
+            command := exec.CommandContext(ctx, "/usr/bin/python3", "-I", "-S", "-c",
+              namespaceGateScript, executable, leafDirectory, parentUserNS)
+            command.Dir = "/"
+            command.Env = []string{"PATH=/usr/bin:/bin", "LANG=C", "LC_ALL=C"}
+            command.Stderr = io.Discard
+            pidFD := -1
+            command.SysProcAttr = &syscall.SysProcAttr{
+              Cloneflags: syscall.CLONE_NEWUSER,
+              UseCgroupFD: true,
+              CgroupFD: int(leafFD.Fd()),
+              PidFD: &pidFD,
+              AmbientCaps: []uintptr{capSysSetgid, capSysSetuid, capSysPtrace},
+            }
+            readyRead, readyWrite, err := os.Pipe()
+            if err != nil {
+              return "userns-ready-pipe", err.Error()
+            }
+            defer readyRead.Close()
+            command.ExtraFiles = []*os.File{readyWrite}
+            input, err := command.StdinPipe()
+            if err != nil {
+              _ = readyWrite.Close()
+              return "userns-stdin", err.Error()
+            }
+            output, err := command.StdoutPipe()
+            if err != nil {
+              _ = readyWrite.Close()
+              _ = input.Close()
+              return "userns-stdout", err.Error()
+            }
+            if err := command.Start(); err != nil {
+              _ = readyWrite.Close()
+              _ = input.Close()
+              return "cross-uid-userns-create", err.Error()
+            }
+            waited := false
+            defer func() {
+              _ = input.Close()
+              _ = readyWrite.Close()
+              if !waited {
+                _ = command.Process.Kill()
+                _ = command.Wait()
+                waited = true
+              }
+              if err := waitForLeafEmpty(leafDirectory); err != nil {
+                recordCleanupFailure(&failure, &detail, "cross-uid-child-cleanup", err)
+              }
+            }()
+            _ = readyWrite.Close()
+            pid := command.Process.Pid
+            if pidFD < 0 {
+              return "cross-uid-userns-pidfd", "clone3 did not return a pidfd"
+            }
+            defer syscall.Close(pidFD)
+            ready := make([]byte, 1)
+            if _, err := io.ReadFull(readyRead, ready); err != nil || ready[0] != 'R' {
+              diagnostic, _ := io.ReadAll(output)
+              return "cross-uid-userns-create", fmt.Sprintf("child user namespace unavailable: %v: %s", err, strings.TrimSpace(string(diagnostic)))
+            }
+            nsDev, nsIno, err := namespaceIdentity(pid)
+            if err != nil {
+              return "cross-uid-userns-identity", err.Error()
+            }
+            childStart, err := processStartTime(pid)
+            if err != nil {
+              return "cross-uid-child-identity", err.Error()
+            }
+            if err := runRootMapping("uid", os.Getpid(), pid, nsDev, nsIno, childStart,
+              result.cgroup, result.leafCgroup); err != nil {
+              return "cross-uid-fixed-b-uid-map", err.Error()
+            }
+            if err := exactIDMap(pid, "uid_map", probeBUID); err != nil {
+              return "cross-uid-fixed-b-uid-map", err.Error()
+            }
+            if _, err := input.Write([]byte{'U'}); err != nil {
+              return "cross-uid-clear-groups", err.Error()
+            }
+            if _, err := io.ReadFull(readyRead, ready); err != nil || ready[0] != 'G' {
+              diagnostic, _ := io.ReadAll(output)
+              return "cross-uid-gid-map-ready", fmt.Sprintf("namespace gate did not reach the GID map boundary: %v: %s", err, strings.TrimSpace(string(diagnostic)))
+            }
+            if err := runRootMapping("gid", os.Getpid(), pid, nsDev, nsIno, childStart,
+              result.cgroup, result.leafCgroup); err != nil {
+              return "cross-uid-fixed-b-gid-map", err.Error()
+            }
+            if err := exactIDMap(pid, "gid_map", probeBGID); err != nil {
+              return "cross-uid-fixed-b-gid-map", err.Error()
+            }
+            setgroups, err := os.ReadFile(fmt.Sprintf("/proc/%d/setgroups", pid))
+            if err != nil || strings.TrimSpace(string(setgroups)) != "deny" {
+              return "cross-uid-setgroups-policy", "setgroups policy was not deny after the B-only GID map"
+            }
+            fmt.Println("userns_uid_map=1,65534,1")
+            fmt.Println("userns_gid_map=1,65534,1")
+            fmt.Println("userns_setgroups=deny")
+            fmt.Println("root_mapping=transient-helper-in-delegated-unit")
+            if _, err := input.Write([]byte{'G'}); err != nil {
+              return "cross-uid-userns-release", err.Error()
+            }
+
+            parentNamespace, err := os.Readlink("/proc/self/ns/user")
+            if err != nil {
+              return "parent-userns-read", err.Error()
+            }
+            childNamespace, err := os.Readlink(fmt.Sprintf("/proc/%d/ns/user", pid))
+            if err != nil || childNamespace == parentNamespace {
+              return "cross-uid-userns-not-child", "A-owned child user namespace was not observed"
+            }
+            ownerIDs, err := statusIDs(pid, "Uid")
+            if err != nil || len(ownerIDs) != 4 || ownerIDs[0] != result.uid || ownerIDs[1] != result.uid ||
+              ownerIDs[2] != result.uid || ownerIDs[3] != result.uid {
+              return "cross-uid-userns-owner", "user namespace worker did not retain A's host UID"
+            }
+            parentGIDs, err := statusIDs(os.Getpid(), "Gid")
+            workerGIDs, workerGIDErr := statusIDs(pid, "Gid")
+            if err != nil || workerGIDErr != nil || len(parentGIDs) != 4 || len(workerGIDs) != 4 {
+              return "cross-uid-userns-owner-gid", "could not verify A's host GID in the namespace worker"
+            }
+            for i := range parentGIDs {
+              if workerGIDs[i] != parentGIDs[i] {
+                return "cross-uid-userns-owner-gid", "user namespace worker did not retain A's host GID"
+              }
+            }
+            groups, err := statusValue(pid, "Groups")
+            if err != nil || strings.TrimSpace(groups) != "" {
+              return "cross-uid-groups-not-cleared", "A-owned namespace worker retained supplementary groups"
+            }
+            workerCaps, err := statusValue(pid, "CapEff")
+            workerCapMask, capErr := strconv.ParseUint(workerCaps, 16, 64)
+            if err != nil || capErr != nil || workerCapMask&(1<<capSysPtrace) == 0 {
+              return "namespace-cap-sys-ptrace-unavailable", "A-owned child namespace lacks CAP_SYS_PTRACE"
+            }
+            if result.hostCapEff != "0000000000000000" {
+              return "host-capabilities-changed", "A must retain host CapEff=0"
+            }
+            hostCapEff, err := statusValue(os.Getpid(), "CapEff")
+            if err != nil || strings.TrimSpace(hostCapEff) != "0000000000000000" {
+              return "host-capabilities-changed", "A must retain host CapEff=0"
+            }
+
+            reader := bufio.NewReader(output)
+            line, err := reader.ReadString('\n')
+            if err != nil {
+              return "cross-uid-b-launch", fmt.Sprintf("B socket peer did not become ready: %v", err)
+            }
+            values := parseValues(line)
+            if !strings.HasPrefix(line, "peer ") {
+              return "cross-uid-b-launch", strings.TrimSpace(line)
+            }
+            peerPID, err := strconv.Atoi(values["pid"])
+            if err != nil || peerPID <= 0 {
+              return "cross-uid-b-launch", "invalid B PID"
+            }
+            peerFD, err := strconv.Atoi(values["fd"])
+            if err != nil || peerFD < 0 {
+              return "cross-uid-b-socket-fd", "invalid B socket FD"
+            }
+            if values["leaf_write"] != "denied" {
+              return "cross-uid-b-cgroup-write", "B did not prove denial on A's cgroup.procs"
+            }
+            peerUIDs, err := statusIDs(peerPID, "Uid")
+            if err != nil || len(peerUIDs) != 4 || peerUIDs[0] != probeBUID || peerUIDs[1] != probeBUID ||
+              peerUIDs[2] != probeBUID || peerUIDs[3] != probeBUID {
+              return "cross-uid-b-host-uid", "B process did not run with the fixed host UID"
+            }
+            peerGIDs, err := statusIDs(peerPID, "Gid")
+            if err != nil || len(peerGIDs) != 4 || peerGIDs[0] != probeBGID || peerGIDs[1] != probeBGID ||
+              peerGIDs[2] != probeBGID || peerGIDs[3] != probeBGID {
+              return "cross-uid-b-host-gid", "B process did not run with the fixed host GID"
+            }
+            peerGroups, err := statusValue(peerPID, "Groups")
+            if err != nil || strings.TrimSpace(peerGroups) != "" {
+              return "cross-uid-b-groups-not-empty", "B retained supplementary groups"
+            }
+            peerCapEff, err := statusValue(peerPID, "CapEff")
+            if err != nil || strings.TrimSpace(peerCapEff) != "0000000000000000" {
+              return "cross-uid-b-capabilities-nonzero", "B must have CapEff=0"
+            }
+            peerUserNS, err := os.Readlink(fmt.Sprintf("/proc/%d/ns/user", peerPID))
+            if err != nil || peerUserNS != childNamespace {
+              return "cross-uid-b-userns", "B was not launched in A's child user namespace"
+            }
+            peerCgroup, err := membershipFor(peerPID)
+            if err != nil || peerCgroup != result.leafCgroup {
+              return "cross-uid-b-cgroup", "B was not launched in A's exact delegated leaf"
+            }
+
+            if _, err := os.ReadFile(fmt.Sprintf("/proc/%d/fdinfo/%d", peerPID, peerFD)); !permissionDenied(err) {
+              return "host-a-fdinfo-not-denied", "host A must be denied B's nondumpable fdinfo"
+            }
+            hostPeerFD, err := unix.PidfdOpen(peerPID, 0)
+            if err != nil {
+              return "host-a-pidfd-open", err.Error()
+            }
+            hostDuplicate, hostGetErr := unix.PidfdGetfd(hostPeerFD, peerFD, 0)
+            _ = unix.Close(hostPeerFD)
+            if hostGetErr == nil {
+              _ = unix.Close(hostDuplicate)
+              return "host-a-pidfd-getfd-not-denied", "host A unexpectedly duplicated B's socket"
+            }
+            if !permissionDenied(hostGetErr) {
+              return "host-a-pidfd-getfd-permission", hostGetErr.Error()
+            }
+            if _, err := input.Write([]byte{'P'}); err != nil {
+              return "cross-uid-namespace-release", err.Error()
+            }
+            proof, err := io.ReadAll(reader)
+            if err != nil {
+              return "namespace-pidfd-proof-read", err.Error()
+            }
+            waitErr := command.Wait()
+            waited = true
+            if waitErr != nil {
+              if ctx.Err() != nil {
+                return "cross-uid-probe-timeout", ctx.Err().Error()
+              }
+              return "cross-uid-namespace-pidfd-proof", waitErr.Error() + ": " + strings.TrimSpace(string(proof))
+            }
+            if !strings.Contains(string(proof), "namespace-proof=passed") ||
+              !strings.Contains(string(proof), "fdinfo_inode=") ||
+              !strings.Contains(string(proof), "tcp_state=ESTABLISHED") ||
+              !strings.Contains(string(proof), "netns_cookie=") ||
+              !strings.Contains(string(proof), "pidfd_getfd=passed") {
+              return "cross-uid-namespace-pidfd-proof", strings.TrimSpace(string(proof))
+            }
+            return "", ""
+          }
+
           func runProbe() (result report, failure string) {
             result.uid = os.Geteuid()
+            result.bUID = probeBUID
             result.capability = "not-proven"
+            result.crossUIDCapability = "not-proven"
             kernel, err := os.ReadFile("/proc/sys/kernel/osrelease")
             if err != nil {
               return result, "kernel-version"
@@ -157,6 +1182,9 @@ jobs:
             result.kernel = "linux/" + strings.TrimSpace(string(kernel))
             if result.uid == 0 {
               return result, "runner-is-root"
+            }
+            if failure := checkHostPrerequisites(&result); failure != "" {
+              return result, failure
             }
             result.cgroup, err = membership()
             if err != nil {
@@ -180,13 +1208,13 @@ jobs:
             var leafFD *os.File
             defer func() {
               if leafFD != nil {
-                if err := leafFD.Close(); err != nil && failure == "" {
-                  failure = "close-leaf-fd"
+                if err := leafFD.Close(); err != nil {
+                  recordCleanupFailure(&failure, &result.failureDetail, "close-leaf-fd", err)
                 }
               }
               if leafCreated {
-                if err := os.Remove(leafDirectory); err != nil && failure == "" {
-                  failure = "remove-leaf"
+                if err := os.Remove(leafDirectory); err != nil {
+                  recordCleanupFailure(&failure, &result.failureDetail, "remove-leaf", err)
                 }
               }
             }()
@@ -260,15 +1288,45 @@ jobs:
               return result, "leaf-still-populated"
             }
             result.capability = "clone3-cgroupfd-pidfd"
+            if failure, detail := runCrossUIDProbe(&result, leafFD, leafDirectory); failure != "" {
+              result.failureDetail = detail
+              return result, failure
+            }
+            events, err = os.ReadFile(filepath.Join(leafDirectory, "cgroup.events"))
+            if err != nil {
+              return result, "read-cross-uid-cgroup-events"
+            }
+            populatedZero = false
+            fields = strings.Fields(string(events))
+            for i := 0; i+1 < len(fields); i += 2 {
+              if fields[i] == "populated" && fields[i+1] == "0" {
+                populatedZero = true
+              }
+            }
+            if !populatedZero {
+              return result, "cross-uid-leaf-still-populated"
+            }
+            result.crossUIDCapability = "fixed-b-child-userns-fdinfo-pidfd-getfd"
             return result, ""
           }
 
           func main() {
+            if len(os.Args) == 2 && os.Args[1] == "--userns-check" {
+              os.Exit(usernsCheckChild())
+            }
             if len(os.Args) == 2 && os.Args[1] == "--child" {
               os.Exit(child())
             }
+            if len(os.Args) == 4 && os.Args[1] == "--namespace-worker" {
+              os.Exit(namespaceWorker(os.Args[2], os.Args[3], bufio.NewReader(os.Stdin)))
+            }
+            if len(os.Args) == 3 && os.Args[1] == "--socket-peer" {
+              os.Exit(socketPeer())
+            }
             result, failure := runProbe()
             fmt.Printf("uid=%d\n", result.uid)
+            fmt.Printf("cross_uid_target=%d\n", result.bUID)
+            fmt.Printf("cross_gid_target=%d\n", probeBGID)
             if result.childUID != 0 {
               fmt.Printf("child_uid=%d\n", result.childUID)
             }
@@ -282,8 +1340,26 @@ jobs:
               fmt.Printf("leaf_cgroup_path=%s\n", result.leafCgroup)
             }
             fmt.Printf("capability=%s\n", result.capability)
+            fmt.Printf("cross_uid_capability=%s\n", result.crossUIDCapability)
+            fmt.Println("coverage=native_pi_opencode=not-tested daemon_crash=not-tested")
+            if result.suidDumpable != "" {
+              fmt.Printf("fs_suid_dumpable=%s\n", result.suidDumpable)
+            }
+            if result.usernsEnabled {
+              fmt.Println("userns_enabled=true")
+            }
+            if result.usernsCreated {
+              fmt.Println("userns_create=passed")
+            }
+            if result.hostCapEff != "" {
+              fmt.Printf("host_cap_eff=%s\n", result.hostCapEff)
+            }
             if failure != "" {
-              fmt.Printf("status=failed stage=%s\n", failure)
+              fmt.Printf("status=failed stage=%s", failure)
+              if result.failureDetail != "" {
+                fmt.Printf(" detail=%q", result.failureDetail)
+              }
+              fmt.Println()
               os.Exit(1)
             }
             fmt.Println("status=passed")
@@ -305,6 +1381,14 @@ jobs:
           fi
           printf 'capability=not-proven\nstatus=failed stage=systemd-run-or-timeout\n'
           exit 1
+
+      - name: Remove disposable cgroup probe programs
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -f -- "$RUNNER_TEMP/cgroup-v2-delegation-probe.go" \
+            "$RUNNER_TEMP/cgroup-v2-delegation-probe"
 
   contracts:
     runs-on: ubuntu-latest
@@ -598,6 +1682,210 @@ jobs:
           log="$RUNNER_TEMP/pi-control-e2e-linux.log"
           mix format --check-formatted 2>&1 | tee -a "$log"
           mix compile --warnings-as-errors 2>&1 | tee -a "$log"
+      - name: Verify Linux Pi cleanup pidfd group signaling
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          fixture_root="$RUNNER_TEMP/pi-pidfd-cleanup-fixture"
+          mkdir -p "$fixture_root/runner-temp" "$fixture_root/tmp"
+          export RUNNER_TEMP="$fixture_root/runner-temp"
+          export TMPDIR="$fixture_root/tmp"
+          python3 - ../scripts/cleanup-linux-pi-processes.sh <<'PY'
+          import json
+          import os
+          import pathlib
+          import platform
+          import signal
+          import subprocess
+          import sys
+          import tempfile
+          import threading
+
+          cleanup_script = sys.argv[1]
+          groups = []
+
+          def process_stat(pid):
+              with open(f"/proc/{pid}/stat", encoding="ascii") as stream:
+                  _, fields = stream.read().rsplit(") ", 1)
+              values = fields.split()
+              return {
+                  "state": values[0],
+                  "pgrp": int(values[2]),
+                  "session": int(values[3]),
+                  "start": values[19],
+              }
+
+          def launch_group(label):
+              marker_dir = pathlib.Path(
+                  tempfile.mkdtemp(
+                      prefix=f"symmetry-pi-control-run-{label}-",
+                      dir=os.environ["TMPDIR"],
+                  )
+              )
+              group = {
+                  "label": label,
+                  "marker": marker_dir / "process-marker.json",
+                  "processes": [],
+                  "pidfds": [],
+                  "reaped": [],
+              }
+              groups.append(group)
+
+              leader = subprocess.Popen(
+                  [sys.executable, "-c", "import signal; signal.pause()"],
+                  process_group=0,
+                  stdin=subprocess.DEVNULL,
+                  stdout=subprocess.DEVNULL,
+                  stderr=subprocess.DEVNULL,
+              )
+              group["processes"].append(leader)
+              group["pidfds"].append(None)
+              leader_reaped = threading.Event()
+              group["reaped"].append(leader_reaped)
+              threading.Thread(
+                  target=lambda: (leader.wait(), leader_reaped.set()),
+                  daemon=True,
+              ).start()
+              group["pidfds"][-1] = os.pidfd_open(leader.pid, 0)
+
+              child = subprocess.Popen(
+                  [sys.executable, "-c", "import signal; signal.pause()"],
+                  process_group=leader.pid,
+                  stdin=subprocess.DEVNULL,
+                  stdout=subprocess.DEVNULL,
+                  stderr=subprocess.DEVNULL,
+              )
+              group["processes"].append(child)
+              group["pidfds"].append(None)
+              child_reaped = threading.Event()
+              group["reaped"].append(child_reaped)
+              threading.Thread(
+                  target=lambda: (child.wait(), child_reaped.set()),
+                  daemon=True,
+              ).start()
+              group["pidfds"][-1] = os.pidfd_open(child.pid, 0)
+
+              leader_stat = process_stat(leader.pid)
+              child_stat = process_stat(child.pid)
+              if (
+                  leader_stat["state"] in ("Z", "X", "x")
+                  or child_stat["state"] in ("Z", "X", "x")
+                  or leader_stat["pgrp"] != leader.pid
+                  or leader_stat["session"] == leader.pid
+                  or child_stat["pgrp"] != leader.pid
+                  or child_stat["session"] != leader_stat["session"]
+              ):
+                  raise RuntimeError("fixture processes are not a live same-session process group")
+
+              with open("/proc/sys/kernel/random/boot_id", encoding="ascii") as stream:
+                  boot_id = stream.read().strip()
+              namespace_link = os.readlink(f"/proc/{leader.pid}/ns/pid")
+              namespace_inode = os.stat(f"/proc/{leader.pid}/ns/pid").st_ino
+              if namespace_link != f"pid:[{namespace_inode}]":
+                  raise RuntimeError("fixture PID namespace identity did not match its proc link")
+              group["identity"] = (
+                  f"linux:v2:{boot_id}:{namespace_inode}:{leader.pid}:{leader_stat['start']}"
+              )
+              return group
+
+          def write_marker(group, identity):
+              group["marker"].write_text(
+                  json.dumps({"pid": group["processes"][0].pid, "process_identity": identity}),
+                  encoding="utf-8",
+              )
+
+          def run_cleanup():
+              result = subprocess.run(
+                  ["bash", cleanup_script],
+                  capture_output=True,
+                  check=False,
+                  text=True,
+              )
+              sys.stdout.write(result.stdout)
+              sys.stderr.write(result.stderr)
+              return result
+
+          def wait_for_stopped_group(group):
+              for reaped in group["reaped"]:
+                  if not reaped.wait(timeout=5):
+                      raise RuntimeError(f"{group['label']} fixture process did not exit")
+
+          def assert_group_live(group):
+              if any(process.poll() is not None for process in group["processes"]):
+                  raise RuntimeError(f"{group['label']} fixture process was signalled")
+
+          def signal_fixture_process(group, index, signal_number):
+              process = group["processes"][index]
+              pidfd = group["pidfds"][index]
+              if pidfd is None:
+                  if process.poll() is None:
+                      process.send_signal(signal_number)
+              else:
+                  try:
+                      signal.pidfd_send_signal(pidfd, signal_number)
+                  except ProcessLookupError:
+                      pass
+
+          def stop_fixture_group(group):
+              for index in range(len(group["processes"])):
+                  signal_fixture_process(group, index, signal.SIGTERM)
+              if not all(reaped.wait(timeout=5) for reaped in group["reaped"]):
+                  for index in range(len(group["processes"])):
+                      signal_fixture_process(group, index, signal.SIGKILL)
+                  if not all(reaped.wait(timeout=5) for reaped in group["reaped"]):
+                      raise RuntimeError(f"could not stop {group['label']} fixture processes")
+
+          try:
+              if platform.machine() not in ("x86_64", "amd64"):
+                  raise RuntimeError(f"fixture requires x86_64, got {platform.machine()!r}")
+
+              matching = launch_group("matching")
+              write_marker(matching, matching["identity"])
+              matching_result = run_cleanup()
+              if matching_result.returncode != 0:
+                  raise RuntimeError(
+                      f"matching identity cleanup failed with status {matching_result.returncode}"
+                  )
+              if f"cleanup stopped process group={matching['processes'][0].pid}" not in matching_result.stdout:
+                  raise RuntimeError("matching identity cleanup did not report stopped process group")
+              wait_for_stopped_group(matching)
+              matching["marker"].unlink()
+              print("verified matching v2 identity stopped and proved leader plus same-group child")
+
+              mismatched = launch_group("wrong-start")
+              _, _, boot_id, namespace, pid, start = mismatched["identity"].split(":")
+              wrong_identity = (
+                  f"linux:v2:{boot_id}:{namespace}:{pid}:{int(start) + 1}"
+              )
+              write_marker(mismatched, wrong_identity)
+              mismatch_result = run_cleanup()
+              if mismatch_result.returncode == 0:
+                  raise RuntimeError("wrong-start identity was accepted")
+              if "exact process identity is not live" not in mismatch_result.stdout:
+                  raise RuntimeError("wrong-start identity was not refused for the identity mismatch")
+              assert_group_live(mismatched)
+              mismatched["marker"].unlink()
+              print("verified wrong-start identity was refused without signalling either process")
+          finally:
+              cleanup_errors = []
+              for group in groups:
+                  try:
+                      group["marker"].unlink(missing_ok=True)
+                      stop_fixture_group(group)
+                  except Exception as error:
+                      cleanup_errors.append(f"{group['label']}: {error}")
+                  finally:
+                      for pidfd in group["pidfds"]:
+                          if pidfd is not None:
+                              os.close(pidfd)
+                      for process in group["processes"]:
+                          if process.stdout is not None:
+                              process.stdout.close()
+                          if process.stderr is not None:
+                              process.stderr.close()
+              if cleanup_errors:
+                  raise RuntimeError("fixture cleanup failed: " + "; ".join(cleanup_errors))
+          PY
       - name: Run Linux Pi Control E2E
         shell: bash
         run: |
@@ -662,254 +1950,7 @@ jobs:
       - name: Cleanup orphaned Pi Control processes
         if: always()
         shell: bash
-        run: |
-          set -uo pipefail
-          log="$RUNNER_TEMP/pi-control-e2e-linux.log"
-          if ! mkdir -p "$TMPDIR" || ! : >> "$log"; then
-            printf 'cleanup could not initialize TMPDIR or log\n' >&2
-            exit 1
-          fi
-          if ! cleanup_process_group=$(ps -o pgid= -p "$$" | awk '{$1=$1; print}') || ! [[ "$cleanup_process_group" =~ ^[0-9]+$ ]]; then
-            printf 'cleanup could not determine its own process group\n' | tee -a "$log"
-            exit 1
-          fi
-          cleanup_failed=0
-
-          # A group can outlive its leader, and zombie entries can outlive the
-          # work they represent. Observe every member and count only runnable
-          # members before declaring the owned group stopped.
-          process_group_members() {
-            local process_group="$1"
-            local process_list
-
-            if ! process_list=$(ps -eo pid=,pgid=,stat=); then
-              return 2
-            fi
-
-            awk -v process_group="$process_group" \
-              '$2 == process_group { print $1 "\t" $3 }' <<< "$process_list"
-          }
-
-          group_has_live_members() {
-            local process_group="$1"
-            local members member_pid member_state
-
-            if ! members=$(process_group_members "$process_group"); then
-              return 2
-            fi
-
-            while IFS=$'\t' read -r member_pid member_state; do
-              [ -n "$member_pid" ] || continue
-              if ! [[ "$member_pid" =~ ^[0-9]+$ ]] || [ -z "$member_state" ]; then
-                return 2
-              fi
-              case "$member_state" in
-                Z*|X*)
-                  ;;
-                *)
-                  return 0
-                  ;;
-              esac
-            done <<< "$members"
-
-            return 1
-          }
-
-          wait_for_group_exit() {
-            local process_group="$1"
-            local attempts=0
-            local status
-
-            while [ "$attempts" -lt 100 ]; do
-              group_has_live_members "$process_group"
-              status=$?
-              case "$status" in
-                0)
-                  ;;
-                1)
-                  return 0
-                  ;;
-                *)
-                  return 2
-                  ;;
-              esac
-              sleep 0.05
-              attempts=$((attempts + 1))
-            done
-
-            return 1
-          }
-
-          read_linux_process_stat() {
-            local proc_stat="$1"
-
-            python3 - "$proc_stat" <<'PY'
-          import pathlib
-          import sys
-
-          path = pathlib.Path(sys.argv[1])
-          try:
-              contents = path.read_text()
-              _prefix, fields = contents.rsplit(") ", 1)
-              values = fields.split()
-              if len(values) < 20:
-                  raise ValueError("/proc stat has too few fields")
-              print(f"{values[0]}\t{values[2]}\t{values[19]}")
-          except Exception as exc:
-              print(f"error={exc}")
-              raise SystemExit(2)
-          PY
-          }
-
-          for marker in "$TMPDIR"/symmetry-pi-control-run-*/process-marker.json; do
-            [ -f "$marker" ] || continue
-            printf 'cleanup marker=%s\n' "$marker" | tee -a "$log"
-
-            if ! marker_contents=$(<"$marker"); then
-              printf 'cleanup failed to read marker=%s\n' "$marker" | tee -a "$log"
-              cleanup_failed=1
-              continue
-            fi
-            marker_state=$(printf '%s' "$marker_contents" | tr -d '[:space:]')
-            case "$marker_state" in
-              not_started)
-                printf 'cleanup marker=%s has no native process\n' "$marker" | tee -a "$log"
-                continue
-                ;;
-              starting)
-                printf 'cleanup cannot prove native process state from marker=%s\n' "$marker" | tee -a "$log"
-                cleanup_failed=1
-                continue
-                ;;
-            esac
-
-            marker_data=$(python3 - "$marker" <<'PY'
-          import json
-          import pathlib
-          import sys
-
-          path = pathlib.Path(sys.argv[1])
-          try:
-              value = json.loads(path.read_text())
-          except Exception as exc:
-              print(f"error={exc}")
-              raise SystemExit(2)
-          pid = value.get("pid")
-          identity = value.get("process_identity")
-          if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0 or not isinstance(identity, str) or not identity:
-              print("error=marker must contain a positive integer pid and non-empty process_identity")
-              raise SystemExit(2)
-          print(f"{pid}\t{identity}")
-          PY
-            )
-            if [ $? -ne 0 ]; then
-              printf 'cleanup failed to parse marker=%s\n' "$marker" | tee -a "$log"
-              cleanup_failed=1
-              continue
-            fi
-
-            IFS=$'\t' read -r pid identity <<< "$marker_data"
-            if [[ "$identity" =~ ^linux:([^:[:space:]]+):([0-9]+):([0-9]+)$ ]]; then
-              identity_boot="${BASH_REMATCH[1]}"
-              identity_pid="${BASH_REMATCH[2]}"
-              identity_start="${BASH_REMATCH[3]}"
-            else
-              printf 'cleanup refused marker=%s identity=%s\n' "$marker" "$identity" | tee -a "$log"
-              cleanup_failed=1
-              continue
-            fi
-            if [ "$identity_pid" != "$pid" ]; then
-              printf 'cleanup refused marker=%s identity=%s\n' "$marker" "$identity" | tee -a "$log"
-              cleanup_failed=1
-              continue
-            fi
-
-            proc_stat="/proc/$pid/stat"
-            leader_present=0
-            if [ -r "$proc_stat" ]; then
-              if proc_data=$(read_linux_process_stat "$proc_stat"); then
-                IFS=$'\t' read -r leader_state leader_group leader_start <<< "$proc_data"
-                if ! [[ "$leader_group" =~ ^[0-9]+$ ]] || ! [[ "$leader_start" =~ ^[0-9]+$ ]] || [ -z "$leader_state" ]; then
-                  printf 'cleanup failed to inspect leader pid=%s\n' "$pid" | tee -a "$log"
-                  cleanup_failed=1
-                  continue
-                fi
-                leader_present=1
-              elif [ -r "$proc_stat" ]; then
-                printf 'cleanup failed to inspect leader pid=%s\n' "$pid" | tee -a "$log"
-                cleanup_failed=1
-                continue
-              fi
-            elif kill -0 "$pid" 2>/dev/null; then
-              printf 'cleanup failed to inspect live leader pid=%s\n' "$pid" | tee -a "$log"
-              cleanup_failed=1
-              continue
-            fi
-            if [ "$leader_present" -eq 1 ]; then
-              if ! actual_boot=$(< /proc/sys/kernel/random/boot_id); then
-                printf 'cleanup failed to read Linux boot ID for pid=%s\n' "$pid" | tee -a "$log"
-                cleanup_failed=1
-                continue
-              fi
-              if [ "$actual_boot" != "$identity_boot" ] || [ "$leader_start" != "$identity_start" ] || [ "$leader_group" != "$pid" ]; then
-                printf 'cleanup refused pid=%s due to identity mismatch\n' "$pid" | tee -a "$log"
-                cleanup_failed=1
-                continue
-              fi
-            else
-              printf 'cleanup leader pid=%s already exited; inspecting process group\n' "$pid" | tee -a "$log"
-            fi
-            if [ "$pid" = "$cleanup_process_group" ]; then
-              printf 'cleanup refused process group=%s because it owns the cleanup shell\n' "$pid" | tee -a "$log"
-              cleanup_failed=1
-              continue
-            fi
-
-            group_has_live_members "$pid"
-            group_status=$?
-            case "$group_status" in
-              0)
-                ;;
-              1)
-                printf 'cleanup group=%s has no live members (zombie/dead members ignored)\n' "$pid" | tee -a "$log"
-                continue
-                ;;
-              *)
-                printf 'cleanup failed to inspect process group=%s\n' "$pid" | tee -a "$log"
-                cleanup_failed=1
-                continue
-                ;;
-            esac
-
-            kill -TERM -- "-$pid" 2>&1 | tee -a "$log" || true
-            wait_for_group_exit "$pid"
-            wait_status=$?
-            if [ "$wait_status" -ne 0 ]; then
-              if [ "$wait_status" -eq 2 ]; then
-                printf 'cleanup could not prove process group=%s after TERM\n' "$pid" | tee -a "$log"
-                cleanup_failed=1
-              else
-                printf 'cleanup escalating process group=%s after TERM timeout\n' "$pid" | tee -a "$log"
-              fi
-              kill -KILL -- "-$pid" 2>&1 | tee -a "$log" || true
-              wait_for_group_exit "$pid"
-              kill_wait_status=$?
-            else
-              kill_wait_status=0
-            fi
-
-            if [ "$kill_wait_status" -eq 0 ]; then
-              printf 'cleanup stopped process group=%s\n' "$pid" | tee -a "$log"
-            elif [ "$kill_wait_status" -eq 2 ]; then
-              printf 'cleanup could not prove process group=%s stopped\n' "$pid" | tee -a "$log"
-              cleanup_failed=1
-            else
-              printf 'cleanup left live process-group members for group=%s\n' "$pid" | tee -a "$log"
-              cleanup_failed=1
-            fi
-          done
-
-          exit "$cleanup_failed"
+        run: bash ../scripts/cleanup-linux-pi-processes.sh
       - name: Upload Linux Pi E2E log and provenance
         if: always()
         uses: actions/upload-artifact@v4
@@ -2278,8 +3319,12 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: |
+            ${{ runner.temp }}/production-linux-containment-witness-test.json
             ${{ runner.temp }}/production-linux-containment-witness-workflow-provenance.txt
             ${{ runner.temp }}/symmetry-linux-containment-witness/provenance-*.json
+            ${{ runner.temp }}/symmetry-linux-containment-witness/*/witness-evidence.json
+            ${{ runner.temp }}/symmetry-linux-containment-witness/*/*.stdout.log
+            ${{ runner.temp }}/symmetry-linux-containment-witness/*/*.stderr.log
 
   compose:
     runs-on: ubuntu-latest
