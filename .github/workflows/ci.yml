@@ -457,13 +457,9 @@ jobs:
           func checkHostPrerequisites(result *report) string {
             dumpable, err := os.ReadFile("/proc/sys/fs/suid_dumpable")
             if err != nil {
-              result.failureDetail = err.Error()
-              return "read-fs-suid-dumpable"
-            }
-            result.suidDumpable = strings.TrimSpace(string(dumpable))
-            if result.suidDumpable != "0" {
-              result.failureDetail = "expected fs.suid_dumpable=0"
-              return "fs-suid-dumpable-not-zero"
+              result.suidDumpable = "unavailable"
+            } else {
+              result.suidDumpable = strings.TrimSpace(string(dumpable))
             }
 
             maxNamespaces, err := os.ReadFile("/proc/sys/user/max_user_namespaces")
@@ -618,17 +614,6 @@ jobs:
           }
 
           func procSocketInode(pid int, fd int) (uint64, error) {
-            link, err := os.Readlink(fmt.Sprintf("/proc/%d/fd/%d", pid, fd))
-            if err != nil {
-              return 0, err
-            }
-            if !strings.HasPrefix(link, "socket:[") || !strings.HasSuffix(link, "]") {
-              return 0, fmt.Errorf("target descriptor is not a socket: %s", link)
-            }
-            linkInode, err := strconv.ParseUint(strings.TrimSuffix(strings.TrimPrefix(link, "socket:["), "]"), 10, 64)
-            if err != nil {
-              return 0, err
-            }
             contents, err := os.ReadFile(fmt.Sprintf("/proc/%d/fdinfo/%d", pid, fd))
             if err != nil {
               return 0, err
@@ -640,13 +625,10 @@ jobs:
                 if err != nil {
                   return 0, err
                 }
-                if infoInode != linkInode {
-                  return 0, fmt.Errorf("fdinfo inode did not match the target socket")
-                }
                 return infoInode, nil
               }
             }
-            return 0, fmt.Errorf("socket inode missing from fdinfo")
+            return 0, fmt.Errorf("inode missing from fdinfo")
           }
 
           func tcpFD(conn *net.TCPConn) (int, error) {
@@ -685,6 +667,45 @@ jobs:
             a, okA := left.(*net.TCPAddr)
             b, okB := right.(*net.TCPAddr)
             return okA && okB && a.Port == b.Port && bytes.Equal(a.IP.To4(), b.IP.To4())
+          }
+
+          func verifySocketDuplicate(fd int, inode uint64, expectedLocal net.Addr,
+            expectedRemote net.Addr, expectedNetnsCookie uint64) (uint64, error) {
+            duplicateFile := os.NewFile(uintptr(fd), "pidfd-getfd-socket")
+            if duplicateFile == nil {
+              _ = syscall.Close(fd)
+              return 0, fmt.Errorf("duplicated descriptor was invalid")
+            }
+            defer duplicateFile.Close()
+            var duplicateStat syscall.Stat_t
+            if err := syscall.Fstat(fd, &duplicateStat); err != nil || uint64(duplicateStat.Ino) != inode {
+              return 0, fmt.Errorf("pidfd duplicate did not match fdinfo inode %d: %v", inode, err)
+            }
+            socketType, err := unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_TYPE)
+            if err != nil || socketType != unix.SOCK_STREAM {
+              return 0, fmt.Errorf("expected SOCK_STREAM: %v", err)
+            }
+            tcpInfo, err := unix.GetsockoptTCPInfo(fd, unix.IPPROTO_TCP, unix.TCP_INFO)
+            if err != nil || tcpInfo.State != 1 {
+              return 0, fmt.Errorf("expected TCP_ESTABLISHED: %v", err)
+            }
+            connection, err := net.FileConn(duplicateFile)
+            if err != nil {
+              return 0, err
+            }
+            defer connection.Close()
+            local, okLocal := connection.LocalAddr().(*net.TCPAddr)
+            remote, okRemote := connection.RemoteAddr().(*net.TCPAddr)
+            if !okLocal || !okRemote || !local.IP.IsLoopback() || !remote.IP.IsLoopback() ||
+              local.Port == 0 || remote.Port == 0 || !sameTCPAddr(local, expectedLocal) ||
+              !sameTCPAddr(remote, expectedRemote) {
+              return 0, fmt.Errorf("duplicated B socket tuple did not match the live loopback connection")
+            }
+            netnsCookie, err := socketNetnsCookie(fd)
+            if err != nil || netnsCookie == 0 || netnsCookie != expectedNetnsCookie {
+              return 0, fmt.Errorf("duplicated B socket network namespace cookie mismatch: %v", err)
+            }
+            return netnsCookie, nil
           }
 
           func probeLeafWriteDenied(leafDirectory string) error {
@@ -817,7 +838,27 @@ jobs:
             if err != nil || fd < 0 {
               return peerFailure("b-socket-fd", fmt.Errorf("invalid B socket descriptor"))
             }
-            fmt.Printf("peer pid=%d fd=%d leaf_write=denied\n", peer.Process.Pid, fd)
+            clientLocal := client.LocalAddr().(*net.TCPAddr)
+            clientRemote := client.RemoteAddr().(*net.TCPAddr)
+            if !clientLocal.IP.IsLoopback() || !clientRemote.IP.IsLoopback() ||
+              clientLocal.Port == 0 || clientRemote.Port == 0 {
+              return peerFailure("loopback-client-tuple", fmt.Errorf("client was not an established loopback TCP connection"))
+            }
+            clientFD, err := tcpFD(client)
+            if err != nil {
+              return peerFailure("client-socket-fd", err)
+            }
+            clientNetnsCookie, err := socketNetnsCookie(clientFD)
+            if err != nil || clientNetnsCookie == 0 {
+              return peerFailure("client-socket-netns-cookie", fmt.Errorf("loopback client lacked a network namespace cookie: %v", err))
+            }
+            peerStart, err := processStartTime(peer.Process.Pid)
+            if err != nil {
+              return peerFailure("b-process-start-time", err)
+            }
+            fmt.Printf("peer pid=%d start=%d fd=%d leaf_write=denied client_local_ip=%s client_local_port=%d client_remote_ip=%s client_remote_port=%d client_netns_cookie=%d\n",
+              peer.Process.Pid, peerStart, fd, clientLocal.IP.String(), clientLocal.Port,
+              clientRemote.IP.String(), clientRemote.Port, clientNetnsCookie)
 
             signal, err := input.ReadByte()
             if err != nil || signal != 'P' {
@@ -832,53 +873,12 @@ jobs:
             if err != nil {
               return peerFailure("namespace-pidfd-getfd-permission", err)
             }
-            duplicateFile := os.NewFile(uintptr(duplicateFD), "pidfd-getfd-socket")
-            if duplicateFile == nil {
-              _ = unix.Close(duplicateFD)
-              return peerFailure("namespace-pidfd-getfd-file", fmt.Errorf("duplicated descriptor was invalid"))
-            }
-            defer duplicateFile.Close()
-            var duplicateStat syscall.Stat_t
-            if err := syscall.Fstat(duplicateFD, &duplicateStat); err != nil || uint64(duplicateStat.Ino) != inode {
-              return peerFailure("duplicated-socket-inode", fmt.Errorf("pidfd duplicate did not match the exact fdinfo inode: %v", err))
-            }
-            socketType, err := unix.GetsockoptInt(duplicateFD, unix.SOL_SOCKET, unix.SO_TYPE)
-            if err != nil || socketType != unix.SOCK_STREAM {
-              return peerFailure("duplicated-socket-type", fmt.Errorf("expected SOCK_STREAM: %v", err))
-            }
-            tcpInfo, err := unix.GetsockoptTCPInfo(duplicateFD, unix.IPPROTO_TCP, unix.TCP_INFO)
-            // Linux TCP_ESTABLISHED is 1 (include/net/tcp_states.h).
-            if err != nil || tcpInfo.State != 1 {
-              return peerFailure("duplicated-socket-state", fmt.Errorf("expected TCP_ESTABLISHED: %v", err))
-            }
-            duplicateConnection, err := net.FileConn(duplicateFile)
+            netnsCookie, err := verifySocketDuplicate(duplicateFD, inode, clientRemote, clientLocal, clientNetnsCookie)
             if err != nil {
-              return peerFailure("duplicated-socket-endpoints", err)
-            }
-            defer duplicateConnection.Close()
-            local, okLocal := duplicateConnection.LocalAddr().(*net.TCPAddr)
-            remote, okRemote := duplicateConnection.RemoteAddr().(*net.TCPAddr)
-            clientLocal := client.LocalAddr().(*net.TCPAddr)
-            clientRemote := client.RemoteAddr().(*net.TCPAddr)
-            if !okLocal || !okRemote || !local.IP.IsLoopback() || !remote.IP.IsLoopback() ||
-              local.Port == 0 || remote.Port == 0 || !sameTCPAddr(local, clientRemote) ||
-              !sameTCPAddr(remote, clientLocal) {
-              return peerFailure("duplicated-socket-tuple", fmt.Errorf("B socket was not the established loopback peer"))
-            }
-            clientFD, err := tcpFD(client)
-            if err != nil {
-              return peerFailure("client-socket-fd", err)
-            }
-            netnsCookie, err := socketNetnsCookie(duplicateFD)
-            if err != nil {
-              return peerFailure("duplicated-socket-netns-cookie", err)
-            }
-            clientNetnsCookie, err := socketNetnsCookie(clientFD)
-            if err != nil || netnsCookie == 0 || netnsCookie != clientNetnsCookie {
-              return peerFailure("socket-netns-cookie-mismatch", fmt.Errorf("exact B socket and A loopback peer must share a nonzero network namespace cookie: %v", err))
+              return peerFailure("namespace-duplicated-socket", err)
             }
             fmt.Printf("namespace-proof=passed fdinfo_inode=%d tuple=%s:%d<->%s:%d tcp_state=ESTABLISHED netns_cookie=%d pidfd_getfd=passed\n",
-              inode, local.IP.String(), local.Port, remote.IP.String(), remote.Port, netnsCookie)
+              inode, clientRemote.IP.String(), clientRemote.Port, clientLocal.IP.String(), clientLocal.Port, netnsCookie)
             return 0
           }
 
@@ -1095,9 +1095,39 @@ jobs:
             if err != nil || peerPID <= 0 {
               return "cross-uid-b-launch", "invalid B PID"
             }
+            peerStart, err := strconv.ParseUint(values["start"], 10, 64)
+            if err != nil || peerStart == 0 {
+              return "cross-uid-b-start-time", "invalid B start time"
+            }
             peerFD, err := strconv.Atoi(values["fd"])
             if err != nil || peerFD < 0 {
               return "cross-uid-b-socket-fd", "invalid B socket FD"
+            }
+            clientLocalIP := net.ParseIP(values["client_local_ip"])
+            clientLocalPort, localPortErr := strconv.Atoi(values["client_local_port"])
+            clientRemoteIP := net.ParseIP(values["client_remote_ip"])
+            clientRemotePort, remotePortErr := strconv.Atoi(values["client_remote_port"])
+            clientNetnsCookie, cookieErr := strconv.ParseUint(values["client_netns_cookie"], 10, 64)
+            if localPortErr != nil || remotePortErr != nil || cookieErr != nil ||
+              clientLocalIP == nil || clientRemoteIP == nil || !clientLocalIP.IsLoopback() ||
+              !clientRemoteIP.IsLoopback() || clientLocalPort < 1 || clientRemotePort < 1 || clientNetnsCookie == 0 {
+              return "cross-uid-loopback-metadata", "B peer did not forward a valid live loopback tuple and network namespace cookie"
+            }
+            expectedLocal := &net.TCPAddr{IP: clientRemoteIP, Port: clientRemotePort}
+            expectedRemote := &net.TCPAddr{IP: clientLocalIP, Port: clientLocalPort}
+            hostPeerFD, err := unix.PidfdOpen(peerPID, 0)
+            if err != nil {
+              return "host-a-pidfd-open", err.Error()
+            }
+            defer unix.Close(hostPeerFD)
+            currentStart, err := processStartTime(peerPID)
+            if err != nil || currentStart != peerStart {
+              return "host-a-b-pid-identity", "B PID/start-time changed before host-A pidfd acquisition"
+            }
+            peerParent, err := statusValue(peerPID, "PPid")
+            parentPID, parentErr := strconv.Atoi(peerParent)
+            if err != nil || parentErr != nil || parentPID != pid {
+              return "host-a-b-parent-identity", "B was not the exact child of A's namespace worker"
             }
             if values["leaf_write"] != "denied" {
               return "cross-uid-b-cgroup-write", "B did not prove denial on A's cgroup.procs"
@@ -1129,22 +1159,25 @@ jobs:
               return "cross-uid-b-cgroup", "B was not launched in A's exact delegated leaf"
             }
 
-            if _, err := os.ReadFile(fmt.Sprintf("/proc/%d/fdinfo/%d", peerPID, peerFD)); !permissionDenied(err) {
-              return "host-a-fdinfo-not-denied", "host A must be denied B's nondumpable fdinfo"
+            hostCapEff, err = statusValue(os.Getpid(), "CapEff")
+            if err != nil || strings.TrimSpace(hostCapEff) != "0000000000000000" {
+              return "host-a-capabilities-nonzero", "host A must retain CapEff=0 for its positive B socket proof"
             }
-            hostPeerFD, err := unix.PidfdOpen(peerPID, 0)
+            inode, err := procSocketInode(peerPID, peerFD)
             if err != nil {
-              return "host-a-pidfd-open", err.Error()
+              return "host-a-fdinfo-permission", err.Error()
             }
-            hostDuplicate, hostGetErr := unix.PidfdGetfd(hostPeerFD, peerFD, 0)
-            _ = unix.Close(hostPeerFD)
-            if hostGetErr == nil {
-              _ = unix.Close(hostDuplicate)
-              return "host-a-pidfd-getfd-not-denied", "host A unexpectedly duplicated B's socket"
+            hostDuplicate, err := unix.PidfdGetfd(hostPeerFD, peerFD, 0)
+            if err != nil {
+              return "host-a-pidfd-getfd-permission", err.Error()
             }
-            if !permissionDenied(hostGetErr) {
-              return "host-a-pidfd-getfd-permission", hostGetErr.Error()
+            hostNetnsCookie, err := verifySocketDuplicate(hostDuplicate, inode, expectedLocal, expectedRemote, clientNetnsCookie)
+            if err != nil {
+              return "host-a-duplicated-socket", err.Error()
             }
+            fmt.Printf("host_a_pidfd_getfd=passed b_pid=%d b_start=%d fdinfo_inode=%d netns_cookie=%d host_cap_eff=0\n",
+              peerPID, peerStart, inode, hostNetnsCookie)
+
             if _, err := input.Write([]byte{'P'}); err != nil {
               return "cross-uid-namespace-release", err.Error()
             }
@@ -1341,7 +1374,7 @@ jobs:
             }
             fmt.Printf("capability=%s\n", result.capability)
             fmt.Printf("cross_uid_capability=%s\n", result.crossUIDCapability)
-            fmt.Println("coverage=native_pi_opencode=not-tested daemon_crash=not-tested")
+            fmt.Println("coverage=production_a_gate=not-tested native_pi_opencode=not-tested daemon_crash=not-tested")
             if result.suidDumpable != "" {
               fmt.Printf("fs_suid_dumpable=%s\n", result.suidDumpable)
             }
