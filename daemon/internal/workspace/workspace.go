@@ -40,12 +40,17 @@ type Prepared struct {
 	BindingKey string
 	Run        RunRef
 
-	managed     bool
-	policy      config.CleanupPolicy
-	repository  string
-	root        string
-	journal     string
-	reservation string
+	managed               bool
+	linuxClone            bool
+	linuxCloneFingerprint string
+	linuxCloneTarget      string
+	linuxCloneBindingKey  string
+	linuxCloneRun         RunRef
+	policy                config.CleanupPolicy
+	repository            string
+	root                  string
+	journal               string
+	reservation           string
 }
 
 // Service is the workspace boundary used by run execution.
@@ -95,6 +100,8 @@ func (manager *Manager) Prepare(ctx context.Context, bindingKey string, run RunR
 		return prepareExisting(bindingKey, binding, run)
 	case config.WorkspacePolicyGitWorktree:
 		return manager.prepareWorktree(ctx, bindingKey, binding, run)
+	case config.WorkspacePolicyGitCloneV2:
+		return Prepared{}, errors.New("git_clone_v2 requires a reserved Linux clone grant")
 	default:
 		return Prepared{}, fmt.Errorf("workspace binding %q has unsupported policy %q", bindingKey, binding.Policy)
 	}
@@ -190,6 +197,8 @@ func (manager *Manager) Recover(ctx context.Context, bindingKey string, run RunR
 			return Prepared{}, err
 		}
 		return prepared, nil
+	case config.WorkspacePolicyGitCloneV2:
+		return Prepared{}, errors.New("git_clone_v2 recovery requires the journal-bound Linux clone grant")
 	default:
 		return Prepared{}, fmt.Errorf("workspace binding %q has unsupported policy %q", bindingKey, binding.Policy)
 	}
@@ -199,6 +208,9 @@ func (manager *Manager) Recover(ctx context.Context, bindingKey string, run RunR
 func (manager *Manager) Cleanup(ctx context.Context, prepared Prepared, succeeded bool) error {
 	if manager == nil {
 		return errors.New("workspace manager is nil")
+	}
+	if prepared.linuxClone {
+		return errors.New("Linux clone cleanup requires explicit Store readback authorization")
 	}
 	if !prepared.managed {
 		return nil

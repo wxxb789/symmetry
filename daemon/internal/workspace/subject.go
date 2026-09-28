@@ -517,19 +517,32 @@ type treeManifestEntry struct {
 	digest   [sha256.Size]byte
 }
 
+type subjectGitOutputReader func(context.Context, string, int, error, ...string) ([]byte, error)
+type subjectGitBlobReader func(context.Context, string, string) ([]byte, error)
+
 func gitTreeDigest(ctx context.Context, repository, commit string) (string, error) {
+	return gitTreeDigestWithReaders(ctx, repository, commit,
+		func(ctx context.Context, repository string, maxBytes int, limitErr error, arguments ...string) ([]byte, error) {
+			command := gitNoReplaceObjectsCommand(ctx, repository, arguments...)
+			return gitCommandOutputLimited(ctx, command, maxBytes, limitErr)
+		}, gitBlobContent)
+}
+
+func gitTreeDigestWithReaders(ctx context.Context, repository, commit string, readOutput subjectGitOutputReader, readBlob subjectGitBlobReader) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	command := gitNoReplaceObjectsCommand(ctx, repository, "ls-tree", "--full-tree", "-r", "-z", commit)
-	output, err := gitCommandOutputLimited(ctx, command, maxSubjectTreeOutputBytes, ErrSubjectTreeTooLarge)
+	if readOutput == nil || readBlob == nil {
+		return "", errors.New("subject Git readers are incomplete")
+	}
+	output, err := readOutput(ctx, repository, maxSubjectTreeOutputBytes, ErrSubjectTreeTooLarge, "ls-tree", "--full-tree", "-r", "-z", commit)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return "", ctxErr
 		}
 		return "", fmt.Errorf("list committed tree for %q: %w", commit, err)
 	}
-	entries, err := parseTreeManifest(ctx, repository, output)
+	entries, err := parseTreeManifestWithReader(ctx, repository, output, readBlob)
 	if err != nil {
 		return "", err
 	}
@@ -556,6 +569,13 @@ func gitTreeDigest(ctx context.Context, repository, commit string) (string, erro
 }
 
 func parseTreeManifest(ctx context.Context, repository string, output []byte) ([]treeManifestEntry, error) {
+	return parseTreeManifestWithReader(ctx, repository, output, gitBlobContent)
+}
+
+func parseTreeManifestWithReader(ctx context.Context, repository string, output []byte, readBlob subjectGitBlobReader) ([]treeManifestEntry, error) {
+	if readBlob == nil {
+		return nil, errors.New("subject Git blob reader is nil")
+	}
 	records := bytes.Split(output, []byte{0})
 	entries := make([]treeManifestEntry, 0, len(records))
 	for index, record := range records {
@@ -589,7 +609,7 @@ func parseTreeManifest(ctx context.Context, repository string, output []byte) ([
 				Cause:     ErrUnsupportedSubjectTree,
 			}
 		}
-		content, err := gitBlobContent(ctx, repository, objectID)
+		content, err := readBlob(ctx, repository, objectID)
 		if err != nil {
 			return nil, fmt.Errorf("read committed blob %q: %w", string(path), err)
 		}

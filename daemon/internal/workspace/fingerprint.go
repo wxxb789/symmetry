@@ -19,14 +19,14 @@ import (
 const workspaceFingerprintSchemaVersion = 1
 
 // Fingerprint returns the stable, machine-local identity of a daemon-owned
-// linked worktree. The digest binds the canonical workspace path, the Git
-// repository identity, and both Git and Symmetry ownership identities. A
-// commit is intentionally not part of the identity because it is a moving
-// artifact inside the workspace.
+// linked worktree or reserved Linux v2 clone. Linked worktrees bind the
+// canonical path, repository, and ownership identities; Linux clones bind
+// only the A-owned intent and measured seed receipt, never B Git metadata.
+// Commits remain moving artifacts inside either workspace identity.
 //
-// Fingerprint fails closed for an unregistered, non-Git, or non-daemon-owned
-// directory. It returns only a digest; the paths and ownership metadata used
-// to derive it are never exposed to callers.
+// Linked-worktree fingerprints fail closed for unregistered, non-Git, or
+// non-daemon-owned directories. It returns only a digest; the identity inputs
+// are never exposed to callers.
 func Fingerprint(ctx context.Context, prepared Prepared) (string, error) {
 	if ctx == nil {
 		return "", errors.New("workspace fingerprint context is nil")
@@ -36,6 +36,18 @@ func Fingerprint(ctx context.Context, prepared Prepared) (string, error) {
 	}
 	if !validFingerprintBindingKey(prepared.BindingKey) {
 		return "", errors.New("workspace binding key is invalid")
+	}
+	if prepared.linuxClone {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		if prepared.Path != prepared.linuxCloneTarget || prepared.BindingKey != prepared.linuxCloneBindingKey || prepared.Run != prepared.linuxCloneRun {
+			return "", errors.New("Linux clone Prepared identity differs from its reserved grant")
+		}
+		if !validLinuxCloneFingerprint(prepared.linuxCloneFingerprint) {
+			return "", errors.New("Linux clone fingerprint is invalid")
+		}
+		return prepared.linuxCloneFingerprint, nil
 	}
 
 	path, err := canonicalWorkspaceDirectory(prepared.Path)
@@ -102,6 +114,14 @@ func Fingerprint(ctx context.Context, prepared Prepared) (string, error) {
 	}
 	digest := sha256.Sum256(encoded)
 	return "sha256:" + hex.EncodeToString(digest[:]), nil
+}
+
+func validLinuxCloneFingerprint(value string) bool {
+	if len(value) != len("sha256:")+sha256.Size*2 || !strings.HasPrefix(value, "sha256:") {
+		return false
+	}
+	decoded, err := hex.DecodeString(value[len("sha256:"):])
+	return err == nil && len(decoded) == sha256.Size && hex.EncodeToString(decoded) == value[len("sha256:"):]
 }
 
 func validFingerprintBindingKey(value string) bool {
