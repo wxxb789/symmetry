@@ -37,13 +37,14 @@ policy; Go owns machine-local execution; the frontend owns presentation.
 
 ## Parallel agents
 
-For substantial work, use available subagents to pursue independent, bounded
-workstreams in parallel. Give concurrent writers disjoint files or isolated
-workspaces and one owner for shared interfaces; do not serialize independent
-work merely for convenience. Keep one integration owner for combined checks,
-conflicts, and completion. Use independent read-only review at security,
-authority, and recovery milestones. Parallelism never weakens acceptance or
-evidence requirements.
+Leverage available subagents and multi-agent execution whenever independent,
+bounded workstreams can shorten delivery and improve quality. Parallelize
+investigation, implementation, and independent review rather than serializing
+work for convenience. Give concurrent writers disjoint files or isolated
+workspaces and one owner for shared interfaces. Keep one integration owner for
+combined checks, conflicts, and completion. Use independent read-only review
+at security, authority, and recovery milestones. Parallelism never weakens
+acceptance or evidence requirements.
 
 ## Working and verifying
 
