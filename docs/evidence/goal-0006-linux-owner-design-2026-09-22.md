@@ -681,6 +681,42 @@ well as systemd delegation; this kernel must reject native starts and supply
 a fail-closed witness instead of a positive WSL2 claim. A separately capable
 WSL2 host, if available, must pass the same native positive matrix as Linux.
 
+Follow-up disposable Ubuntu 24.04 WSL2 host evidence (2026-09-28): with the
+root-owned static gate and launcher core installed in the **temporary** distro,
+an A-run `systemd-run --system --wait --collect --pipe` unit with `Delegate=yes`
+and `DelegateSubgroup=manager` passed
+`TestInstalledLinuxOwnerUnsupportedPeerHostRefusesNative`. The test opened an
+A-created, empty exact leaf; the root wrapper cleared its groups, READY bound
+the direct launcher and the root launcher was waited/reaped. A's parked gate
+namespace readback returned a typed inaccessible-nsfs result; the test asserted
+no B/native/bootstrap exec attempt, killed/reaped only the retained gate pidfd,
+observed the leaf empty and removed its scratch leaf. This is a **positive
+fail-closed refusal witness**, not a native B positive. The installed scratch
+launcher-core SHA-256 was
+`d46d40bf399db6d1643a3a448589f28cd796ea9baea7e145d33226d566b5abda`;
+the gate SHA-256 was
+`a96440fa8c4e0c1d5ab946cb74ebe0ec2c64b307ad6b633c2df2d38dca8d48f7`.
+These temporary images are not an immutable combined production subject.
+
+In a separately booted disposable `systemd-nspawn` guest inside that WSL2
+distro, a fresh A-owned `StateDir/runs` and mode-0600 Store lock allowed the
+one-time read-only legacy drain and root-owned nine-artifact installer to pass.
+An identical installer replay verified its durable same-version install-intent
+marker **without re-running legacy drain**; removing only the guest's installed
+bootstrap image then rerunning the installer restored that exact staged image
+without starting or enabling a service. `systemd-analyze verify` accepted both
+installed unit templates. The first owner service start failed at a real
+`openat2` `EINVAL`: `O_NONBLOCK` was invalid in combination with `O_PATH`
+when inspecting root-owned parent `cgroup.kill`. After the focused regression
+and fix `a260b9b`, the scratch owner unit started and reported `ActiveState=active`,
+`Delegate=yes`, `NoNewPrivileges=no`, `KillMode=control-group` and
+`SendSIGKILL=yes`; the manager `cgroup.procs` was A-owned, the parent
+`cgroup.kill` remained root-owned mode `0200`, and the A-owned private socket
+was mode `0600`. The unit stopped through its recovery-only `ExecStop` without
+claiming a native StopReceipt. The guest was shut down afterward. Neither this
+installer smoke nor the WSL denial demonstrates a distinct-UID Pi/OpenCode
+positive or the complete crash/replay matrix on a qualified Linux host.
+
 ### Proposed v1.2 owner contract — pending host and security proof
 
 This proposal changes **new** Linux executions only. Existing v1 pidfd-group
