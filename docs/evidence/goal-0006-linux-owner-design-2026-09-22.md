@@ -993,3 +993,33 @@ literal v2 PID-reuse proof has been claimed from a numeric comparison or
 host-global sysctl write. A guest-local `clone3(set_tid)` capability and an
 exact production owner witness remain unverified.
 
+## B checkout cleanup contract amendment (2026-09-29)
+
+The owner explicitly approved best-effort cleanup **inside the shared native
+UID B filesystem trust domain**, not an atomic guarantee that a concurrent B
+writer cannot substitute a B-owned sibling. Independent review found that
+`fstatat` followed by `unlinkat`/`rmdir` cannot atomically bind an expected
+inode to the name being removed. A separate B process may retain directory
+FDs outside the stopped run leaf, move the original checkout or exchange a
+sibling between the checks and the unlink. Rechecking afterward detects some
+mismatches but cannot undo a sibling deletion. `openat2` restricts path
+resolution, not subsequent namespace changes; advisory locks and a root-only
+quarantine do not exclude B processes holding directory FDs.
+
+The scoped root operation still requires the exact versioned physical-stop
+receipt, durable cleanup intent and pinned no-follow/no-cross-mount checkout
+boundary. It must not enter A-owned private Git, journal or cgroup control
+storage. It may delete a sibling that B could itself rename within its
+writable trust domain; a detected mismatch retains the journal, source seed
+and base ref rather than reporting a completed exact target removal. A
+successful fresh target-removal proof requires the original pinned checkout
+inode to be unlinked and the root worker's bounded exit/readback. Persist
+that exact proof with a dedicated State CAS **before** removing A-owned
+seed/ref/scratch. In particular, `ENOENT` on first inspection does not prove
+the original inode was removed: if a prior durable exact removal proof is
+absent, leave cleanup unresolved. Replay may use a recorded matching proof
+with independent absence/readback; no fresh absence-only proof is allowed.
+This amendment does not weaken RunKey fences, process containment, v2 stop
+and leaf-release receipts, or existing Windows/Linux-v1 behavior. Root
+implementation and independent security/crash review remain pending evidence.
+

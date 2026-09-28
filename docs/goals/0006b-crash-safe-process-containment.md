@@ -47,7 +47,17 @@ authorization, B creates its own per-run standalone clone from an A-controlled
 seed. A never runs Git against B-owned configuration or treats B's Git metadata
 as ownership proof; a proposed commit is validated and promoted in A-owned
 storage before acceptance. Existing Windows and Linux v1 linked-worktree
-behavior remains unchanged. The existing rootless Compose daemon has no such
+behavior remains unchanged. Cleanup of that B-owned checkout is best effort
+within the shared B filesystem trust domain after the exact durable v2 stop
+receipt. A transient root deleter remains confined to the pinned checkout,
+no-follow and no-cross-mount checks; it cannot access A's private Git or
+control state. Another B process with the same UID can concurrently exchange
+names, so an inspected B-owned sibling can be deleted before a mismatch is
+detected. A detected mismatch retains the journal and A-owned seed/ref; no
+proof claims atomic sibling exclusion. A missing checkout path without a
+previously durable exact root-removal proof cannot establish that the original
+checkout inode was destroyed. Process containment and physical stop proofs
+are unchanged. The existing rootless Compose daemon has no such
 delegation or launcher: new native execution there fails closed, without a
 group-only or same-UID fallback; legacy journal recovery remains required.
 The delegated helper must survive an ordinary daemon-process crash under the
