@@ -54,7 +54,15 @@ The delegated helper must survive an ordinary daemon-process crash under the
 supported service policy. Manager termination of both owners needs a separate
 bounded recovery/stop proof and cannot invent a receipt. Pi and OpenCode
 positive native tests must run under the actual distinct-UID boundary, not
-only a same-UID capability probe. Linux needs real native launch,
+only a same-UID capability probe. For this containment goal the positive
+acceptance surface is an isolated production-binary owner witness that uses
+the real App-owned RunJournal, launcher, native Pi/OpenCode adapters and exact
+peer check without advertising unverified harness capabilities or declaring
+a Goal complete. Ordinary Goal admission remains fail closed while Pi/OpenCode
+native capabilities are unverified; existing synthetic Control tests cannot
+substitute for the owner witness. The Pi provider-action witness requires an
+authentic Control-issued claim-scoped token and an isolated test Integration,
+not a synthetic provider success. Linux needs real native launch,
 descendant-stop and privilege-boundary evidence. WSL2 needs the same positive
 evidence only on a kernel passing the exact A/B peer checks; this observed
 denying WSL2 kernel instead needs a real fail-closed witness and must not be

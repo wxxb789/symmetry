@@ -734,7 +734,12 @@ as v1.2; retain the v1 reader for stopped or receipt-bearing legacy owners.
    controls source Git objects/refs/config/hooks, the seed, and any accepted
    object promotion; it never invokes Git against B-owned configuration or
    treats B's `.git` or checkout marker as ownership proof. B must not write
-   code or Git configuration consumed as executable instructions by A.
+   code or Git configuration consumed as executable instructions by A. The
+   checkout-ready frame comes from B **after** the authorized A-to-B RELEASE;
+   it is a B-origin progress claim, not an A-certified immutable or clean
+   checkout. A binds only the exact grant, seed, target inode and durable CAS
+   before acknowledging the intended CLI exec; A imports and verifies a
+   proposed commit independently after physical stop.
    A fixed B UID shares its HOME/credentials and
    filesystem permissions across all native runs; a cgroup leaf is **not** a
    per-run filesystem confidentiality boundary. The root-owned transient
@@ -873,8 +878,17 @@ as v1.2; retain the v1 reader for stopped or receipt-bearing legacy owners.
    retain unresolved rather than treating it as the old leaf. Absence cannot
    mint a new receipt.
 
-Acceptance must include the **unchanged positive** pinned Linux Pi and
-OpenCode native tests running inside a proved delegated boundary on a
+The owner approved a strictly scoped **production-binary native-owner witness**
+for Goal 0006b. Pi and OpenCode currently report `ErrNativeUnverified`; a
+normal Goal admission cannot claim their Start/Events/Cancel or model
+completion capabilities. The isolated witness must use the real App-owned
+RunJournal, helper/gate/clone and native adapters without publishing a false
+capability or Goal success. Older synthetic Control integration tests remain
+evidence only for their own scope, not substitutes for this A/B owner proof.
+Pi's positive provider action must consume an authentic Control-issued claim
+and isolated test Integration; a fabricated provider response or token is not
+evidence. Acceptance must include real pinned Linux Pi and OpenCode native
+owner tests running inside a proved delegated boundary on a
 **Linux x86-64/amd64** systemd host. A **WSL2 x86-64/amd64** systemd host
 must pass the same positive matrix only when its unprivileged A can prove
 real nsfs identities and exact post-B `pidfd_getfd`; the observed denying
