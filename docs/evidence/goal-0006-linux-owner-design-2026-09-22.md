@@ -967,3 +967,29 @@ a daemon process failure under its operator service policy;
 service-manager termination of **both** owners needs its own bounded cleanup
 policy and is not silently classified as a single-owner failure.
 
+## Protected native acceptance inputs (2026-09-28)
+
+The owner chose a manually dispatched, protected GitHub Environment for the
+credentialed Linux acceptance job. Read-only GitHub API checks after the
+authorized Environment creation returned `linux-v2-native-acceptance` with a
+required `@wxxb789` reviewer, `prevent_self_review=false`, and a branch
+policy admitting only `codex/goal-0006b-crash-safe-process-containment`. The
+repository currently has only that one contributor; self-review is an
+explicit **single-writer** tradeoff, not independent review. Before another
+writer gets branch/dispatch access, the Environment must be changed to an
+independent reviewer with self-review prevention. Ordinary push/PR jobs do
+not receive the test provider credentials; the native job is manual-only.
+
+The Environment's two required Secrets
+`SYMMETRY_LINUX_V2_TEST_GITHUB_OAUTH_TOKEN` and
+`SYMMETRY_LINUX_V2_TEST_OPENAI_API_KEY` and its Variables
+`SYMMETRY_LINUX_V2_TEST_PI_MODEL` and
+`SYMMETRY_LINUX_V2_TEST_OPENCODE_MODEL` were absent when read. They must be
+isolated test resources, never production credentials or committed fixtures.
+No protected manual run, real Pi provider action, qualified Linux distinct-UID
+Pi/OpenCode positive, or exact committed-subject CI result exists yet. The
+disposable WSL2 guest's own PID namespace had a read-only `ns_last_pid`; no
+literal v2 PID-reuse proof has been claimed from a numeric comparison or
+host-global sysctl write. A guest-local `clone3(set_tid)` capability and an
+exact production owner witness remain unverified.
+
