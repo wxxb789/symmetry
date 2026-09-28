@@ -27,11 +27,15 @@ var (
 func TestRunnerStartsWindowsChildWithoutConsoleWindow(t *testing.T) {
 	const expectedInput = "headless-stdin"
 
+	environment, err := BuildEnvironment()
+	if err != nil {
+		t.Fatalf("build child environment: %v", err)
+	}
 	sink := &recordingSink{}
 	process, err := NewRunner().Start(context.Background(), Invocation{
 		Program: os.Args[0],
 		Args:    []string{"-test.run=^TestHeadlessRunnerChild$", "--"},
-		Env: append(os.Environ(),
+		Env: append(environment,
 			"GO_WANT_HEADLESS_RUNNER_CHILD=1",
 		),
 		InitialInput:           []byte(expectedInput),

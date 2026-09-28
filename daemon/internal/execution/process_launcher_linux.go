@@ -29,6 +29,9 @@ func defaultProcessLauncher(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if invocation.linuxV2Requested() {
+		return launchLinuxV2Process(ctx, command, invocation, stdinRead, stdoutWrite, stderrWrite)
+	}
 	if durableSupervisorHandoffRequested(invocation) && platform.DurableSupervisorHandoffAvailable() {
 		if !durableSupervisorHandoffCallbacksComplete(invocation) {
 			return nil, errors.New("durable Linux supervisor handoff callbacks are incomplete")

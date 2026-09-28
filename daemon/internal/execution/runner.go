@@ -18,20 +18,26 @@ import (
 
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
+	"github.com/wxxb789/symmetry/daemon/internal/protocol"
+	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
 
 const (
-	readChunkSize                   = 32 * 1024
-	eventQueueCapacity              = 64
-	defaultTerminationGrace         = 5 * time.Second
-	commitResumeBarrierTimeout      = 30 * time.Second
-	commitResumeBarrierPollInterval = 25 * time.Millisecond
+	readChunkSize             = 32 * 1024
+	eventQueueCapacity        = 64
+	defaultTerminationGrace   = 5 * time.Second
+	linuxV2OutputDrainTimeout = 5 * time.Second
+	linuxV2OutputCloseWait    = 250 * time.Millisecond
+	resumeBarrierTimeout      = 30 * time.Second
+	resumeBarrierPollInterval = 25 * time.Millisecond
 )
 
 const (
-	commitResumeBarrierWitnessGateEnvironment = "SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_WITNESS"
+	resumeBarrierWitnessGateEnvironment       = "SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_WITNESS"
 	commitResumeBarrierReachedEnvironment     = "SYMMETRY_RUNNER_COMMIT_RESUME_BARRIER_REACHED_FILE"
 	commitResumeBarrierReleaseEnvironment     = "SYMMETRY_RUNNER_COMMIT_RESUME_BARRIER_RELEASE_FILE"
+	leaseArmedResumeBarrierReachedEnvironment = "SYMMETRY_RUNNER_LEASE_ARMED_RESUME_BARRIER_REACHED_FILE"
+	leaseArmedResumeBarrierReleaseEnvironment = "SYMMETRY_RUNNER_LEASE_ARMED_RESUME_BARRIER_RELEASE_FILE"
 )
 
 // ErrInputClosed reports that the process input transport can no longer accept
@@ -85,6 +91,11 @@ type Invocation struct {
 	Env                    []string
 	InitialInput           []byte
 	CloseInputAfterInitial bool
+	// LinuxV2Required forbids the legacy Linux process-group and direct-Go-test
+	// launch paths. LinuxV2 supplies the exact RunJournal grant and App-owned
+	// typed journal callbacks. A non-nil LinuxV2 also requests this path.
+	LinuxV2Required bool
+	LinuxV2         *LinuxV2Invocation
 	// PrepareSupervisorHandoff durably records the exact launch binding before
 	// a Windows containment helper can outlive the daemon.
 	PrepareSupervisorHandoff func(authority.SupervisorHandoff) error
@@ -132,12 +143,101 @@ type Invocation struct {
 	InitialLeaseSequence   uint64
 }
 
+// LinuxV2JournalCallbacks are typed App-owned mutations over the single
+// existing RunJournal. Each callback is scoped to one RunKey/fence by its
+// caller; execution never opens or writes state.Store itself.
+type LinuxV2JournalCallbacks struct {
+	Reserve                  func(state.LinuxCgroupReservation) error
+	MarkCreateStarted        func(state.LinuxCgroupReservation) error
+	BindLeaf                 func(state.LinuxCgroupReservation, authority.LinuxCgroupIdentity) error
+	BindHelper               func(state.LinuxCgroupReservation, authority.LinuxCgroupProcessIdentity) error
+	BindLauncher             func(state.LinuxCgroupReservation, authority.LinuxCgroupProcessIdentity) error
+	ArmLauncherGrant         func(state.LinuxCgroupReservation) error
+	RecordLauncherExit       func(state.LinuxCgroupReservation, authority.LinuxCgroupExitProof) error
+	RecordHelperExit         func(state.LinuxCgroupReservation, authority.LinuxCgroupExitProof) error
+	BindGate                 func(state.LinuxCgroupReservation, authority.LinuxCgroupGateIdentity) error
+	PrepareHandoff           func(authority.SupervisorHandoff) error
+	BindHandoffV2            func(authority.SupervisorHandoff, authority.LinuxCgroupProcessIdentity, authority.LinuxCgroupProcessIdentity) error
+	CommitHandoff            func(authority.SupervisorHandoff, time.Time) error
+	RecordStopReceipt        func(authority.SupervisorHandoff, authority.StopReceipt) error
+	RecordPreGateStopReceipt func(state.LinuxCgroupReservation, authority.LinuxCgroupPreGateStopReceipt) error
+	AbortReservation         func(state.LinuxCgroupReservation, authority.LinuxCgroupReservationAbortProof) error
+	ClearHandoffV2           func(authority.SupervisorHandoff, platform.LinuxCgroupV2Release) error
+	ClearProcessDetailsV2    func(int, string, platform.LinuxCgroupV2Release) error
+	ClearReservationV2       func(state.LinuxCgroupReservation, platform.LinuxCgroupV2Release) error
+	// RecordLinuxCloneCheckoutReady returns to the helper only after Store has
+	// durably bound the exact B-created checkout; it gates native exec.
+	RecordLinuxCloneCheckoutReady func(authority.LinuxCloneCheckoutReceipt) error
+	// LinuxCloneProposedCommit distinguishes a candidate from failed/cancelled
+	// native results. A false result requires durable workspace retention.
+	LinuxCloneProposedCommit   func(context.Context, LinuxCloneRunOutcome) (commit string, proposed bool, err error)
+	RetainUnpromotedLinuxClone func(context.Context) error
+	// PromoteLinuxClone runs A-owned validation/promotion only after physical
+	// stop proof and receipt-bound opaque leaf removal.
+	PromoteLinuxClone func(context.Context, authority.LinuxCloneGrant, authority.LinuxCloneCheckoutReceipt,
+		string, authority.StopReceipt, platform.LinuxCgroupV2Release) (authority.LinuxClonePromotionReceipt, error)
+	// RecordLinuxClonePromotion durably records the exact promoted A-owned ref
+	// before containment clear or terminal settlement.
+	RecordLinuxClonePromotion func(authority.LinuxClonePromotionReceipt) error
+	// FinalizeNoCheckoutLinuxCloneAfterRetirement removes only an exact
+	// no-checkout clone after the corresponding no-producer cgroup-abort fence
+	// or pre-gate release and any required helper/anchor retirement.
+	FinalizeNoCheckoutLinuxCloneAfterRetirement func(context.Context, authority.LinuxCloneIntent,
+		*authority.LinuxCloneSeedReceipt, *authority.LinuxCgroupPreGateReleaseProof,
+		*authority.LinuxCgroupReservationAbortProof) error
+}
+
+// LinuxCloneRunOutcome is Runner's independent observation of the B process
+// before App considers an A-owned promotion. It deliberately does not use the
+// adapter's eventual Wait result, which may depend on Runner finalization.
+type LinuxCloneRunOutcome struct {
+	ExitCode              int
+	WaitError             error
+	Terminated            bool
+	RunContextCancelled   bool
+	TerminationError      error
+	SinkError             error
+	OutputError           error
+	OutputTruncated       bool
+	PriorContainmentError error
+	StopReceiptValid      bool
+	LeafRemovalProven     bool
+}
+
+func (outcome LinuxCloneRunOutcome) PromotionEligible() bool {
+	return outcome.ExitCode == 0 && outcome.WaitError == nil && !outcome.Terminated &&
+		!outcome.RunContextCancelled && outcome.TerminationError == nil && outcome.SinkError == nil &&
+		outcome.OutputError == nil && !outcome.OutputTruncated && outcome.PriorContainmentError == nil &&
+		outcome.StopReceiptValid && outcome.LeafRemovalProven
+}
+
+// LinuxV2Invocation is the one-run grant supplied by App. Parent and Anchor
+// are borrowed long-lived A-owned handles; execution owns only the leaf,
+// helper, gate pidfd and per-run communication handles created from them.
+// Platform placeholders keep this API source-compatible on unsupported OSes;
+// Runner rejects a requested launch there before any process side effect.
+type LinuxV2Invocation struct {
+	RunKey           state.RunKey
+	Fence            protocol.Fence
+	Parent           *platform.LinuxCgroupV2Parent
+	Anchor           *platform.LinuxOwnerAnchorClient
+	RecoveryEndpoint string
+	// CloneGrant binds the one-use gate RELEASE to the A-authorized standalone
+	// B-owned checkout. It is never placed in argv or environment.
+	CloneGrant *authority.LinuxCloneGrant
+	Callbacks  LinuxV2JournalCallbacks
+}
+
 func durableSupervisorHandoffRequested(invocation Invocation) bool {
 	return invocation.PrepareSupervisorHandoff != nil ||
 		invocation.BindSupervisorHandoff != nil ||
 		invocation.CommitSupervisorHandoff != nil ||
 		invocation.RecordSupervisorHandoffStopReceipt != nil ||
 		invocation.ClearSupervisorHandoff != nil
+}
+
+func (invocation Invocation) linuxV2Requested() bool {
+	return invocation.LinuxV2Required || invocation.LinuxV2 != nil
 }
 
 func durableSupervisorHandoffCallbacksComplete(invocation Invocation) bool {
@@ -156,10 +256,11 @@ type LeaseRenewer interface {
 
 // Runner starts coding-agent process invocations.
 type Runner struct {
-	configureProcess func(*exec.Cmd) error
-	attachProcess    func(*os.Process) (platform.Containment, string, error)
-	launchProcess    processLauncher
-	now              func() time.Time
+	configureProcess   func(*exec.Cmd) error
+	attachProcess      func(*os.Process) (platform.Containment, string, error)
+	launchProcess      processLauncher
+	now                func() time.Time
+	outputDrainTimeout time.Duration
 }
 
 // containmentUnprovenCallbackSetter is implemented only by containment owners
@@ -175,30 +276,38 @@ type containmentUnprovenCallbackSetter interface {
 // not have an exec.Cmd-compatible ProcessState, so the process lifecycle is
 // deliberately carried by functions instead of a second process abstraction.
 type startedProcess struct {
-	command                            *exec.Cmd
-	pid                                int
-	identity                           string
-	containment                        platform.Containment
-	containmentHandoff                 *authority.SupervisorHandoff
-	containmentHandoffCommitted        bool
-	containmentHandoffPrepareUnknown   bool
-	containmentHandoffBindUnknown      bool
-	containmentHandoffCommitUnknown    bool
-	commitSupervisorHandoff            func(authority.SupervisorHandoff, time.Time) error
-	recordSupervisorHandoffStopReceipt func(authority.SupervisorHandoff, authority.StopReceipt) error
-	clearSupervisorHandoff             func(authority.SupervisorHandoff, authority.SupervisorHandoffReleaseProof) error
-	persistProcessWithAuthority        func(int, string, *authority.Supervisor) error
-	persistAuthority                   func(int, string, *authority.Supervisor) error
-	containmentAuthority               *authority.Supervisor
-	persistStopReceipt                 func(int, string, authority.StopReceipt) error
-	persistContainmentUnproven         func(int, string) error
-	containmentUnprovenCallback        func() error
-	stopReceiptRequired                bool
-	containmentAuthorityUncertain      bool
-	wait                               func() (int, error)
-	kill                               func() error
-	close                              func() error
-	resume                             func() error
+	command                              *exec.Cmd
+	pid                                  int
+	identity                             string
+	peerMutex                            sync.Mutex
+	duplicateLinuxV2Peer                 func() (*LinuxV2Peer, error)
+	closeLinuxV2Containment              func() error
+	stopLinuxV2BeforeOutputDrain         func() error
+	deferLinuxV2FinalizeUntilOutputDrain bool
+	recordLinuxV2CloneOutcome            func(LinuxCloneRunOutcome)
+	renewLinuxV2Lease                    func(context.Context, time.Duration, uint64) error
+	containment                          platform.Containment
+	containmentHandoff                   *authority.SupervisorHandoff
+	containmentHandoffStartedAt          time.Time
+	containmentHandoffCommitted          bool
+	containmentHandoffPrepareUnknown     bool
+	containmentHandoffBindUnknown        bool
+	containmentHandoffCommitUnknown      bool
+	commitSupervisorHandoff              func(authority.SupervisorHandoff, time.Time) error
+	recordSupervisorHandoffStopReceipt   func(authority.SupervisorHandoff, authority.StopReceipt) error
+	clearSupervisorHandoff               func(authority.SupervisorHandoff, authority.SupervisorHandoffReleaseProof) error
+	persistProcessWithAuthority          func(int, string, *authority.Supervisor) error
+	persistAuthority                     func(int, string, *authority.Supervisor) error
+	containmentAuthority                 *authority.Supervisor
+	persistStopReceipt                   func(int, string, authority.StopReceipt) error
+	persistContainmentUnproven           func(int, string) error
+	containmentUnprovenCallback          func() error
+	stopReceiptRequired                  bool
+	containmentAuthorityUncertain        bool
+	wait                                 func() (int, error)
+	kill                                 func() error
+	close                                func() error
+	resume                               func() error
 }
 
 type processLauncher func(
@@ -233,6 +342,7 @@ type Process struct {
 
 	command                            *exec.Cmd
 	backend                            *startedProcess
+	outputDrainTimeout                 time.Duration
 	sink                               Sink
 	containment                        platform.Containment
 	containmentHandoff                 *authority.SupervisorHandoff
@@ -256,16 +366,22 @@ type Process struct {
 	containmentAuthorityUncertain      bool
 	sinkContext                        context.Context
 	cancelSink                         context.CancelFunc
+	runContext                         context.Context
 
 	stdinMutex       sync.Mutex
 	stdin            *os.File
 	stdinWritePermit chan struct{}
 
-	events       chan Event
-	eventMutex   sync.Mutex
-	nextSequence uint64
-	readers      sync.WaitGroup
-	deliveryDone chan struct{}
+	events               chan Event
+	eventMutex           sync.Mutex
+	eventsClosed         bool
+	nextSequence         uint64
+	readersLeft          atomic.Int32
+	readersDone          chan struct{}
+	outputReaderMutex    sync.Mutex
+	outputReaders        [2]*os.File
+	outputDrainAbandoned atomic.Bool
+	deliveryDone         chan struct{}
 
 	resultDone  chan struct{}
 	commandDone chan struct{}
@@ -275,6 +391,9 @@ type Process struct {
 	sinkError        error
 	outputError      error
 	containmentError error
+	// containmentTransientError reports the early clone-stop timeout to Wait
+	// without turning a later successful FinalizeContainment retry permanent.
+	containmentTransientError error
 
 	containmentFinalizeMutex       sync.Mutex
 	containmentFinalized           bool
@@ -284,14 +403,36 @@ type Process struct {
 	containmentStableError         error
 	containmentReceiptSaved        bool
 
-	terminationMutex sync.Mutex
-	terminationDone  chan struct{}
-	terminationStart bool
-	terminated       bool
-	terminationError error
-	outputStop       chan struct{}
-	outputStopOnce   sync.Once
-	outputTruncated  bool
+	terminationMutex         sync.Mutex
+	terminationDone          chan struct{}
+	terminationStart         bool
+	terminated               bool
+	cloneFinalizationStarted bool
+	cloneFinalizationDone    chan struct{}
+	terminationError         error
+	outputStop               chan struct{}
+	outputStopOnce           sync.Once
+	outputTruncated          bool
+}
+
+// LinuxV2Peer owns a duplicate of the exact pidfd returned when the trusted
+// gate was born. The caller must close it after the native peer is retired.
+// The namespace identity must be independently authenticated while the gate
+// is parked; a procfs symlink inode or nonzero device/inode is insufficient.
+type LinuxV2Peer struct {
+	PID           int
+	Identity      string
+	UserNamespace platform.LinuxUserNamespaceIdentity
+	PIDFD         *os.File
+}
+
+func (peer *LinuxV2Peer) Close() error {
+	if peer == nil || peer.PIDFD == nil {
+		return nil
+	}
+	err := peer.PIDFD.Close()
+	peer.PIDFD = nil
+	return err
 }
 
 // Result describes the completed process without requiring callers to parse an
@@ -333,6 +474,21 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("execution context already cancelled: %w", err)
 	}
+	linuxV2Requested := invocation.linuxV2Requested()
+	if linuxV2Requested && (runtime.GOOS != "linux" || runtime.GOARCH != "amd64") {
+		return nil, errors.New("Linux v2 process launch is supported only on Linux x86-64")
+	}
+	if invocation.LinuxV2Required && invocation.LinuxV2 == nil {
+		return nil, errors.New("Linux v2 process launch was required but its grant and callbacks are missing")
+	}
+	if linuxV2Requested {
+		if invocation.InitialLeaseDeadlineAt.IsZero() || invocation.InitialLeaseSequence != 1 {
+			return nil, errors.New("Linux v2 process launch requires the claim-derived initial lease deadline and sequence 1")
+		}
+		if _, _, err := runner.initialLeaseDeadline(invocation); err != nil {
+			return nil, fmt.Errorf("validate claim-derived Linux v2 lease before launch: %w", err)
+		}
+	}
 	program, err := validateInvocation(invocation)
 	if err != nil {
 		return nil, err
@@ -367,20 +523,26 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 	command.Stdin = stdinRead
 	command.Stdout = stdoutWrite
 	command.Stderr = stderrWrite
-	if err := runner.configure(command); err != nil {
-		closeFiles(stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite)
-		return nil, fmt.Errorf("configure process containment for %q: %w", program, err)
+	if !linuxV2Requested {
+		if err := runner.configure(command); err != nil {
+			closeFiles(stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite)
+			return nil, fmt.Errorf("configure process containment for %q: %w", program, err)
+		}
 	}
 
 	startedAt := time.Now().UTC()
 	var started *startedProcess
 	var attachFailureErr error
+	if linuxV2Requested && runner.launchProcess == nil {
+		closeFiles(stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite)
+		return nil, errors.New("Linux v2 process launcher is unavailable; direct process fallback is forbidden")
+	}
 	if runner.launchProcess != nil {
 		started, err = runner.launchProcess(ctx, command, invocation, stdinRead, stdoutWrite, stderrWrite)
-		if started != nil {
+		if started != nil && started.closeLinuxV2Containment == nil {
 			configureStartedHandoff(started, invocation)
 		}
-		if err != nil && !errors.Is(err, errNativeProcessLauncherUnavailable) {
+		if err != nil && (!errors.Is(err, errNativeProcessLauncherUnavailable) || linuxV2Requested) {
 			if started == nil {
 				closeFiles(stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite)
 				return nil, fmt.Errorf("start %q: %w", invocation.Program, err)
@@ -399,6 +561,10 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 		}
 	}
 	if started == nil {
+		if linuxV2Requested {
+			closeFiles(stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite)
+			return nil, errors.New("Linux v2 process launch did not produce an owned process; direct process fallback is forbidden")
+		}
 		if err := command.Start(); err != nil {
 			closeFiles(stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite)
 			return nil, fmt.Errorf("start %q: %w", invocation.Program, err)
@@ -451,7 +617,11 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 	atomicPersist := invocation.PersistProcessWithAuthority
 	if started.containmentHandoff != nil {
 		setStopReceiptPersistence()
-		if err := runner.commitStartedHandoff(started, startedAt); err != nil {
+		commitAt := startedAt
+		if !started.containmentHandoffStartedAt.IsZero() {
+			commitAt = started.containmentHandoffStartedAt
+		}
+		if err := runner.commitStartedHandoff(started, commitAt); err != nil {
 			return cleanupFailedStartStarted(
 				started,
 				stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
@@ -470,9 +640,11 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 			)
 		}
 		markerPersisted.Store(true)
-		if value, err := started.containmentHandoff.ToSupervisor(); err == nil {
-			cloned := value.Clone()
-			started.containmentAuthority = &cloned
+		if started.closeLinuxV2Containment == nil {
+			if value, err := started.containmentHandoff.ToSupervisor(); err == nil {
+				cloned := value.Clone()
+				started.containmentAuthority = &cloned
+			}
 		}
 	} else if authorityCapable && atomicPersist != nil {
 		value := provider.ContainmentAuthority()
@@ -594,7 +766,35 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 		)
 	}
 	if initialLeaseRequested {
-		if renewer, ok := containment.(platform.ContainmentLeaseRenewer); ok && renewer.LeaseRenewalAvailable() {
+		if started.renewLinuxV2Lease != nil {
+			if invocation.InitialLeaseSequence == 0 {
+				return cleanupFailedStartStarted(
+					started,
+					stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
+					startedAt,
+					errors.New("initial containment lease sequence is missing"),
+					nil,
+				)
+			}
+			if err := started.renewLinuxV2Lease(ctx, initialLeaseDeadline, invocation.InitialLeaseSequence); err != nil {
+				return cleanupFailedStartStarted(
+					started,
+					stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
+					startedAt,
+					fmt.Errorf("arm initial Linux v2 containment lease: %w", err),
+					nil,
+				)
+			}
+			if err := runner.waitForLeaseArmedResumeBarrier(ctx, started); err != nil {
+				return cleanupFailedStartStarted(
+					started,
+					stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
+					startedAt,
+					fmt.Errorf("wait for lease-armed/resume barrier: %w", err),
+					nil,
+				)
+			}
+		} else if renewer, ok := containment.(platform.ContainmentLeaseRenewer); ok && renewer.LeaseRenewalAvailable() {
 			if invocation.InitialLeaseSequence == 0 {
 				return cleanupFailedStartStarted(
 					started,
@@ -610,6 +810,15 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 					stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
 					startedAt,
 					fmt.Errorf("arm initial containment lease: %w", err),
+					nil,
+				)
+			}
+			if err := runner.waitForLeaseArmedResumeBarrier(ctx, started); err != nil {
+				return cleanupFailedStartStarted(
+					started,
+					stdinRead, stdinWrite, stdoutRead, stdoutWrite, stderrRead, stderrWrite,
+					startedAt,
+					fmt.Errorf("wait for lease-armed/resume barrier: %w", err),
 					nil,
 				)
 			}
@@ -641,6 +850,7 @@ func (runner Runner) Start(ctx context.Context, invocation Invocation, sink Sink
 	closeFiles(stdinRead, stdoutWrite, stderrWrite)
 
 	process := newProcessFromStarted(started, sink, startedAt, stdinWrite, nil)
+	process.outputDrainTimeout = runner.outputDrainTimeout
 	process.start(stdoutRead, stderrRead, ctx)
 
 	if len(invocation.InitialInput) > 0 {
@@ -700,32 +910,59 @@ func (runner Runner) commitStartedHandoff(started *startedProcess, startedAt tim
 // production lifecycle. The reached marker is created only after durable
 // commit; lease arming and target resume remain behind the release marker.
 func (runner Runner) waitForCommitResumeBarrier(ctx context.Context, started *startedProcess) error {
-	if os.Getenv(commitResumeBarrierWitnessGateEnvironment) != "1" {
+	return runner.waitForResumeBarrier(
+		ctx,
+		started,
+		"commit/resume",
+		commitResumeBarrierReachedEnvironment,
+		commitResumeBarrierReleaseEnvironment,
+		false,
+	)
+}
+
+// waitForLeaseArmedResumeBarrier is an opt-in crash-witness seam after the
+// helper accepted the initial lease and before the suspended target resumes.
+func (runner Runner) waitForLeaseArmedResumeBarrier(ctx context.Context, started *startedProcess) error {
+	if runtime.GOOS != "linux" {
+		return nil
+	}
+	return runner.waitForResumeBarrier(
+		ctx,
+		started,
+		"lease-armed/resume",
+		leaseArmedResumeBarrierReachedEnvironment,
+		leaseArmedResumeBarrierReleaseEnvironment,
+		true,
+	)
+}
+
+func (runner Runner) waitForResumeBarrier(ctx context.Context, started *startedProcess, phase, reachedEnvironment, releaseEnvironment string, leaseArmed bool) error {
+	if os.Getenv(resumeBarrierWitnessGateEnvironment) != "1" {
 		return nil
 	}
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("commit/resume barrier cancelled: %w", err)
+		return fmt.Errorf("%s barrier cancelled: %w", phase, err)
 	}
-	reachedPath, reachedConfigured := os.LookupEnv(commitResumeBarrierReachedEnvironment)
-	releasePath, releaseConfigured := os.LookupEnv(commitResumeBarrierReleaseEnvironment)
+	reachedPath, reachedConfigured := os.LookupEnv(reachedEnvironment)
+	releasePath, releaseConfigured := os.LookupEnv(releaseEnvironment)
 	if !reachedConfigured && !releaseConfigured {
 		return nil
 	}
 	if reachedConfigured != releaseConfigured {
-		return fmt.Errorf("commit/resume barrier requires both %s and %s", commitResumeBarrierReachedEnvironment, commitResumeBarrierReleaseEnvironment)
+		return fmt.Errorf("%s barrier requires both %s and %s", phase, reachedEnvironment, releaseEnvironment)
 	}
 	reachedPath = strings.TrimSpace(reachedPath)
 	releasePath = strings.TrimSpace(releasePath)
 	if reachedPath == "" || releasePath == "" {
-		return errors.New("commit/resume barrier marker paths must not be empty")
+		return fmt.Errorf("%s barrier marker paths must not be empty", phase)
 	}
 	if filepath.Clean(reachedPath) == filepath.Clean(releasePath) {
-		return errors.New("commit/resume barrier marker paths must be distinct")
+		return fmt.Errorf("%s barrier marker paths must be distinct", phase)
 	}
-	if err := assertCommitResumeBarrierPathAbsent(reachedPath); err != nil {
+	if err := assertResumeBarrierPathAbsent(reachedPath); err != nil {
 		return fmt.Errorf("validate reached marker %q: %w", reachedPath, err)
 	}
-	if err := assertCommitResumeBarrierPathAbsent(releasePath); err != nil {
+	if err := assertResumeBarrierPathAbsent(releasePath); err != nil {
 		return fmt.Errorf("validate release marker %q: %w", releasePath, err)
 	}
 
@@ -734,10 +971,11 @@ func (runner Runner) waitForCommitResumeBarrier(ctx context.Context, started *st
 		return fmt.Errorf("create reached marker %q: %w", reachedPath, err)
 	}
 	marker := fmt.Sprintf(
-		"pid=%d\ntarget_pid=%d\ntime=%s\nlease_armed=false\n",
+		"pid=%d\ntarget_pid=%d\ntime=%s\nlease_armed=%t\n",
 		os.Getpid(),
-		commitResumeBarrierTargetPID(started),
+		resumeBarrierTargetPID(started),
 		time.Now().UTC().Format(time.RFC3339Nano),
+		leaseArmed,
 	)
 	writeErr := error(nil)
 	if _, writeErr = reached.WriteString(marker); writeErr == nil {
@@ -750,30 +988,30 @@ func (runner Runner) waitForCommitResumeBarrier(ctx context.Context, started *st
 		return fmt.Errorf("publish reached marker %q: %w", reachedPath, writeErr)
 	}
 
-	deadline := time.NewTimer(commitResumeBarrierTimeout)
+	deadline := time.NewTimer(resumeBarrierTimeout)
 	defer deadline.Stop()
-	poll := time.NewTicker(commitResumeBarrierPollInterval)
+	poll := time.NewTicker(resumeBarrierPollInterval)
 	defer poll.Stop()
 	for {
 		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("commit/resume barrier cancelled: %w", err)
+			return fmt.Errorf("%s barrier cancelled: %w", phase, err)
 		}
-		if err := commitResumeBarrierReleaseState(releasePath); err == nil {
+		if err := resumeBarrierReleaseState(releasePath); err == nil {
 			return nil
 		} else if !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("observe release marker %q: %w", releasePath, err)
+			return fmt.Errorf("observe %s barrier release marker %q: %w", phase, releasePath, err)
 		}
 		select {
 		case <-deadline.C:
-			return fmt.Errorf("commit/resume barrier release marker %q did not appear within %s", releasePath, commitResumeBarrierTimeout)
+			return fmt.Errorf("%s barrier release marker %q did not appear within %s", phase, releasePath, resumeBarrierTimeout)
 		case <-ctx.Done():
-			return fmt.Errorf("commit/resume barrier cancelled: %w", ctx.Err())
+			return fmt.Errorf("%s barrier cancelled: %w", phase, ctx.Err())
 		case <-poll.C:
 		}
 	}
 }
 
-func assertCommitResumeBarrierPathAbsent(path string) error {
+func assertResumeBarrierPathAbsent(path string) error {
 	_, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -784,12 +1022,12 @@ func assertCommitResumeBarrierPathAbsent(path string) error {
 	return err
 }
 
-func commitResumeBarrierReleaseState(path string) error {
+func resumeBarrierReleaseState(path string) error {
 	_, err := os.Lstat(path)
 	return err
 }
 
-func commitResumeBarrierTargetPID(started *startedProcess) int {
+func resumeBarrierTargetPID(started *startedProcess) int {
 	if started == nil || started.containmentHandoff == nil {
 		return 0
 	}
@@ -962,6 +1200,7 @@ func newProcessFromStarted(started *startedProcess, sink Sink, startedAt time.Ti
 		stdin:                              stdin,
 		stdinWritePermit:                   make(chan struct{}, 1),
 		events:                             make(chan Event, eventQueueCapacity),
+		readersDone:                        make(chan struct{}),
 		deliveryDone:                       make(chan struct{}),
 		resultDone:                         make(chan struct{}),
 		commandDone:                        make(chan struct{}),
@@ -977,7 +1216,11 @@ func newProcessFromStarted(started *startedProcess, sink Sink, startedAt time.Ti
 }
 
 func (process *Process) start(stdoutRead, stderrRead *os.File, ctx context.Context) {
-	process.readers.Add(2)
+	process.runContext = ctx
+	process.outputReaderMutex.Lock()
+	process.outputReaders = [2]*os.File{stdoutRead, stderrRead}
+	process.outputReaderMutex.Unlock()
+	process.readersLeft.Store(2)
 	go process.readOutput(stdoutRead, Stdout)
 	go process.readOutput(stderrRead, Stderr)
 	go process.deliverOutput()
@@ -1125,14 +1368,20 @@ func writeAll(stdin *os.File, input []byte) error {
 	return nil
 }
 
-// Wait waits for process exit, pipe draining, and queued sink delivery. The
-// underlying command is waited exactly once regardless of how many callers use
-// Wait concurrently.
+// Wait waits for process exit, pipe draining, and queued sink delivery. If a
+// Linux v2 cgroup stop remains unproven, it cancels delivery and returns an
+// unresolved, output-truncated result instead of waiting on inherited pipe
+// writers. The underlying command is waited exactly once regardless of how
+// many callers use Wait concurrently.
 func (process *Process) Wait() Result {
 	<-process.resultDone
 	process.errorMutex.Lock()
 	result := process.result
-	result.ContainmentError = process.containmentError
+	if process.containmentError != nil {
+		result.ContainmentError = process.containmentError
+	} else {
+		result.ContainmentError = process.containmentTransientError
+	}
 	process.errorMutex.Unlock()
 	return result
 }
@@ -1153,6 +1402,34 @@ func (process *Process) ProcessDetails() (int, string) {
 		return 0, ""
 	}
 	return process.PID, process.Identity
+}
+
+// DuplicateLinuxV2Peer returns a caller-owned pidfd without reopening a
+// numeric PID. The launch owner serializes duplication with its own Close.
+// It fails closed with errors.ErrUnsupported when the parked gate's namespace
+// identity cannot be independently verified.
+func (process *Process) DuplicateLinuxV2Peer() (*LinuxV2Peer, error) {
+	if process == nil || process.backend == nil {
+		return nil, errors.ErrUnsupported
+	}
+	backend := process.backend
+	backend.peerMutex.Lock()
+	defer backend.peerMutex.Unlock()
+	if backend.duplicateLinuxV2Peer == nil {
+		return nil, errors.ErrUnsupported
+	}
+	peer, err := backend.duplicateLinuxV2Peer()
+	if err != nil {
+		return nil, err
+	}
+	if peer == nil || peer.PIDFD == nil || peer.PID != process.PID || peer.Identity != process.Identity ||
+		peer.UserNamespace.Device == 0 || peer.UserNamespace.Inode == 0 {
+		if peer != nil {
+			_ = peer.Close()
+		}
+		return nil, errors.New("Linux v2 process peer identity is unavailable")
+	}
+	return peer, nil
 }
 
 // LeaseRenewalAvailable reports whether the process has an independent local
@@ -1188,6 +1465,25 @@ func (process *Process) Terminate(ctx context.Context, grace time.Duration) erro
 	}
 	process.terminationMutex.Lock()
 	if !process.terminationStart {
+		if process.cloneFinalizationStarted {
+			done := process.cloneFinalizationDone
+			process.terminationMutex.Unlock()
+			if done == nil {
+				return errors.New("Linux v2 clone finalizer has no completion signal")
+			}
+			select {
+			case <-done:
+				process.errorMutex.Lock()
+				containmentError := process.containmentError
+				process.errorMutex.Unlock()
+				process.terminationMutex.Lock()
+				terminationError := process.terminationError
+				process.terminationMutex.Unlock()
+				return errors.Join(containmentError, terminationError)
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
 		select {
 		case <-process.resultDone:
 			process.terminationMutex.Unlock()
@@ -1196,6 +1492,12 @@ func (process *Process) Terminate(ctx context.Context, grace time.Duration) erro
 		}
 		process.terminationStart = true
 		process.terminated = true
+		if process.backend != nil && process.backend.recordLinuxV2CloneOutcome != nil {
+			process.backend.recordLinuxV2CloneOutcome(LinuxCloneRunOutcome{
+				ExitCode: -1, Terminated: true,
+				RunContextCancelled: process.runContext != nil && process.runContext.Err() != nil,
+			})
+		}
 		process.stopOutputDelivery()
 		// Closing stdin is part of termination, not post-exit cleanup. An
 		// interactive child may be blocked in a read, and waiting for its exit
@@ -1235,7 +1537,11 @@ func (process *Process) FinalizeContainment() error {
 }
 
 func (process *Process) readOutput(reader *os.File, stream Stream) {
-	defer process.readers.Done()
+	defer func() {
+		if process.readersLeft.Add(-1) == 0 {
+			close(process.readersDone)
+		}
+	}()
 	defer reader.Close()
 
 	buffer := make([]byte, readChunkSize)
@@ -1247,7 +1553,7 @@ func (process *Process) readOutput(reader *os.File, stream Stream) {
 		if err == nil {
 			continue
 		}
-		if !errors.Is(err, io.EOF) {
+		if !errors.Is(err, io.EOF) && !process.outputDrainAbandoned.Load() {
 			process.recordOutputError(fmt.Errorf("read %s: %w", stream, err))
 		}
 		return
@@ -1265,6 +1571,13 @@ func (process *Process) enqueue(stream Stream, data []byte) bool {
 	}
 
 	process.eventMutex.Lock()
+	if process.eventsClosed {
+		process.eventMutex.Unlock()
+		if len(data) > 0 {
+			process.recordOutputTruncated()
+		}
+		return false
+	}
 	event := Event{
 		Stream:   stream,
 		Sequence: process.nextSequence + 1,
@@ -1275,6 +1588,12 @@ func (process *Process) enqueue(stream Stream, data []byte) bool {
 	case process.events <- event:
 		process.nextSequence++
 		process.eventMutex.Unlock()
+		if process.outputDeliveryStopped() {
+			if len(data) > 0 {
+				process.recordOutputTruncated()
+			}
+			return false
+		}
 		return true
 	case <-process.outputStop:
 		process.eventMutex.Unlock()
@@ -1285,9 +1604,29 @@ func (process *Process) enqueue(stream Stream, data []byte) bool {
 	}
 }
 
+func (process *Process) closeEvents() {
+	process.eventMutex.Lock()
+	if !process.eventsClosed {
+		process.eventsClosed = true
+		close(process.events)
+	}
+	process.eventMutex.Unlock()
+}
+
 func (process *Process) deliverOutput() {
 	defer close(process.deliveryDone)
-	for event := range process.events {
+	for {
+		var event Event
+		select {
+		case <-process.outputStop:
+			process.discardQueuedOutput()
+			return
+		case next, ok := <-process.events:
+			if !ok {
+				return
+			}
+			event = next
+		}
 		if process.outputDeliveryStopped() {
 			if len(event.Data) > 0 {
 				process.recordOutputTruncated()
@@ -1306,6 +1645,22 @@ func (process *Process) deliverOutput() {
 	}
 }
 
+func (process *Process) discardQueuedOutput() {
+	for {
+		select {
+		case event, ok := <-process.events:
+			if !ok {
+				return
+			}
+			if len(event.Data) > 0 {
+				process.recordOutputTruncated()
+			}
+		default:
+			return
+		}
+	}
+}
+
 func (process *Process) waitForCompletion() {
 	exitCode := -1
 	var waitError error
@@ -1317,19 +1672,56 @@ func (process *Process) waitForCompletion() {
 	close(process.commandDone)
 	_ = process.CloseInput()
 
-	if !process.terminationRequested() {
+	deferLinuxV2Finalization := process.backend != nil && process.backend.deferLinuxV2FinalizeUntilOutputDrain
+	if deferLinuxV2Finalization {
+		// A clone run must stop its cgroup promptly, but App's final-result sink
+		// supplies the proposed commit needed for promotion. Keep the release and
+		// Store clear for after output delivery; this stop phase issues no receipt
+		// or release capability by itself.
+		var stopErr error
+		if process.backend.stopLinuxV2BeforeOutputDrain == nil {
+			stopErr = errors.New("Linux v2 clone cgroup stop hook is unavailable")
+		} else {
+			stopErr = process.backend.stopLinuxV2BeforeOutputDrain()
+		}
+		if stopErr != nil {
+			process.recordContainmentTransientError(fmt.Errorf("stop Linux v2 clone cgroup before output drain: %w", stopErr))
+			process.abandonOutputDrain()
+			process.waitForOutputShutdown(linuxV2OutputCloseWait)
+			process.publishResult(exitCode, waitError)
+			return
+		}
+	} else if !process.terminationRequested() {
 		process.closeContainment()
 	}
 
-	process.readers.Wait()
-	close(process.events)
-	<-process.deliveryDone
+	if deferLinuxV2Finalization {
+		drainTimeout := process.outputDrainTimeout
+		if drainTimeout <= 0 {
+			drainTimeout = linuxV2OutputDrainTimeout
+		}
+		if !process.waitForOutputDrain(drainTimeout) {
+			process.abandonOutputDrain()
+			process.waitForOutputShutdown(linuxV2OutputCloseWait)
+		}
+	} else {
+		<-process.readersDone
+		process.closeEvents()
+		<-process.deliveryDone
+	}
 	process.cancelSink()
-	if process.terminationRequested() {
+	if deferLinuxV2Finalization && process.backend.recordLinuxV2CloneOutcome != nil {
+		process.backend.recordLinuxV2CloneOutcome(process.linuxCloneRunOutcome(exitCode, waitError))
+	}
+	if process.terminationRequested() || deferLinuxV2Finalization {
 		process.closeContainment()
 	}
 	if process.backend != nil && process.backend.close != nil {
-		if err := process.backend.close(); err != nil {
+		process.backend.peerMutex.Lock()
+		closeErr := process.backend.close()
+		process.backend.duplicateLinuxV2Peer = nil
+		process.backend.peerMutex.Unlock()
+		if err := closeErr; err != nil {
 			// The containment receipt/release boundary is independent from local
 			// process-handle cleanup. Keep this failure observable without
 			// misreporting a successfully proven containment stop.
@@ -1337,6 +1729,68 @@ func (process *Process) waitForCompletion() {
 		}
 	}
 
+	process.publishResult(exitCode, waitError)
+}
+
+func (process *Process) waitForOutputDrain(timeout time.Duration) bool {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-process.readersDone:
+		process.closeEvents()
+	case <-timer.C:
+		return false
+	}
+	select {
+	case <-process.deliveryDone:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
+func (process *Process) abandonOutputDrain() {
+	process.outputDrainAbandoned.Store(true)
+	process.stopOutputDelivery()
+	// The sink and readers are no longer part of the process-result barrier
+	// after a bounded drain. Keep containment authority independent of these
+	// Runner-owned pipe ends and never close the exact cgroup/helper owner here.
+	process.recordOutputTruncated()
+	process.closeOutputReaders()
+	process.closeEvents()
+}
+
+func (process *Process) closeOutputReaders() {
+	process.outputReaderMutex.Lock()
+	readers := process.outputReaders
+	process.outputReaders = [2]*os.File{}
+	process.outputReaderMutex.Unlock()
+	for _, reader := range readers {
+		if reader != nil {
+			_ = reader.Close()
+		}
+	}
+}
+
+func (process *Process) waitForOutputShutdown(timeout time.Duration) bool {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	readersDone := process.readersDone
+	deliveryDone := process.deliveryDone
+	for readersDone != nil || deliveryDone != nil {
+		select {
+		case <-readersDone:
+			readersDone = nil
+		case <-deliveryDone:
+			deliveryDone = nil
+		case <-timer.C:
+			return false
+		}
+	}
+	return true
+}
+
+func (process *Process) publishResult(exitCode int, waitError error) {
 	// Keep the termination mutex through result publication. Terminate uses the
 	// same lock to decide whether it owns the transition, so a caller cannot
 	// start termination after this snapshot but before the published result.
@@ -1353,6 +1807,9 @@ func (process *Process) waitForCompletion() {
 	process.result.OutputTruncated = process.outputTruncated
 	process.result.TerminationError = terminationError
 	process.result.ContainmentError = process.containmentError
+	if process.result.ContainmentError == nil {
+		process.result.ContainmentError = process.containmentTransientError
+	}
 	process.errorMutex.Unlock()
 	close(process.resultDone)
 	process.terminationMutex.Unlock()
@@ -1454,6 +1911,62 @@ func isUnsupportedOnly(err error) bool {
 func (process *Process) closeContainment() error {
 	if process == nil {
 		return nil
+	}
+	if process.backend != nil && process.backend.closeLinuxV2Containment != nil {
+		process.containmentFinalizeMutex.Lock()
+		defer process.containmentFinalizeMutex.Unlock()
+		if process.backend.deferLinuxV2FinalizeUntilOutputDrain && process.backend.recordLinuxV2CloneOutcome != nil {
+			process.errorMutex.Lock()
+			resultPublished := !process.result.FinishedAt.IsZero()
+			exitCode, waitError := process.result.ExitCode, process.result.WaitError
+			process.errorMutex.Unlock()
+			if resultPublished {
+				process.backend.recordLinuxV2CloneOutcome(process.linuxCloneRunOutcome(exitCode, waitError))
+			}
+		}
+		if !process.containmentFinalizationStarted {
+			process.containmentFinalizationStarted = true
+			process.containmentInitialError = process.containmentFailure()
+		}
+		if process.containmentFinalized {
+			return process.containmentFinalizeError()
+		}
+		var finalizeErr error
+		var cloneFinalizationDone chan struct{}
+		if process.backend.deferLinuxV2FinalizeUntilOutputDrain {
+			process.terminationMutex.Lock()
+			process.cloneFinalizationStarted = true
+			cloneFinalizationDone = make(chan struct{})
+			process.cloneFinalizationDone = cloneFinalizationDone
+			process.terminationMutex.Unlock()
+			defer func() {
+				process.terminationMutex.Lock()
+				close(cloneFinalizationDone)
+				process.terminationMutex.Unlock()
+			}()
+			finalizeErr = process.backend.closeLinuxV2Containment()
+		} else {
+			finalizeErr = process.backend.closeLinuxV2Containment()
+		}
+		if finalizeErr != nil {
+			process.setContainmentError(errors.Join(process.containmentFinalizationBaseError(), finalizeErr))
+			return finalizeErr
+		}
+		process.containmentFinalized = true
+		finalErr := process.containmentFinalizationBaseError()
+		process.setContainmentError(finalErr)
+		process.backend.peerMutex.Lock()
+		var closeErr error
+		if process.backend.close != nil {
+			closeErr = process.backend.close()
+		}
+		process.backend.duplicateLinuxV2Peer = nil
+		process.backend.peerMutex.Unlock()
+		if closeErr != nil {
+			process.recordTerminationError(fmt.Errorf("close cleared Linux v2 process owner: %w", closeErr))
+			return errors.Join(finalErr, closeErr)
+		}
+		return finalErr
 	}
 	if process.containment == nil && !process.pendingSupervisorHandoff() {
 		return nil
@@ -1794,6 +2307,17 @@ func (process *Process) containmentFailure() error {
 	return process.containmentError
 }
 
+func (process *Process) recordContainmentTransientError(err error) {
+	if process == nil || err == nil {
+		return
+	}
+	process.errorMutex.Lock()
+	if process.containmentTransientError == nil {
+		process.containmentTransientError = err
+	}
+	process.errorMutex.Unlock()
+}
+
 func (process *Process) containmentFinalizationBaseError() error {
 	return errors.Join(process.containmentInitialError, process.containmentStableError)
 }
@@ -1807,6 +2331,9 @@ func (process *Process) containmentFinalizeError() error {
 func (process *Process) setContainmentError(err error) {
 	process.errorMutex.Lock()
 	process.containmentError = err
+	if err == nil {
+		process.containmentTransientError = nil
+	}
 	process.errorMutex.Unlock()
 }
 
@@ -1830,6 +2357,26 @@ func (process *Process) terminationRequested() bool {
 	process.terminationMutex.Lock()
 	defer process.terminationMutex.Unlock()
 	return process.terminationStart
+}
+
+func (process *Process) linuxCloneRunOutcome(exitCode int, waitError error) LinuxCloneRunOutcome {
+	process.errorMutex.Lock()
+	sinkError := process.sinkError
+	outputError := process.outputError
+	outputTruncated := process.outputTruncated
+	containmentError := process.containmentError
+	process.errorMutex.Unlock()
+	process.terminationMutex.Lock()
+	terminated := process.terminationStart || process.terminated
+	terminationError := process.terminationError
+	process.terminationMutex.Unlock()
+	contextCancelled := process.runContext != nil && process.runContext.Err() != nil
+	return LinuxCloneRunOutcome{
+		ExitCode: exitCode, WaitError: waitError, Terminated: terminated,
+		RunContextCancelled: contextCancelled, TerminationError: terminationError,
+		SinkError: sinkError, OutputError: outputError, OutputTruncated: outputTruncated,
+		PriorContainmentError: containmentError,
+	}
 }
 
 func (process *Process) recordSinkError(err error) {
