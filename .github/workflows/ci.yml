@@ -954,6 +954,33 @@ jobs:
             return 0
           }
 
+          func namespaceLaunchCapabilities() string {
+            fields := []string{"CapEff", "CapPrm", "CapAmb", "NoNewPrivs", "Seccomp"}
+            var values []string
+            for _, field := range fields {
+              value, err := statusValue(os.Getpid(), field)
+              if err != nil {
+                values = append(values, field+"=unavailable")
+                continue
+              }
+              values = append(values, field+"="+strings.ReplaceAll(value, " ", "_"))
+              if field == "CapEff" || field == "CapPrm" || field == "CapAmb" {
+                mask, err := strconv.ParseUint(value, 16, 64)
+                if err != nil {
+                  values = append(values, field+"_parse=failed")
+                  continue
+                }
+                for _, capability := range []struct {
+                  name string
+                  bit  uint
+                }{{"setgid", 6}, {"setuid", 7}, {"ptrace", 19}} {
+                  values = append(values, field+"_"+capability.name+"="+strconv.FormatBool(mask&(1<<capability.bit) != 0))
+                }
+              }
+            }
+            return strings.Join(values, " ")
+          }
+
           func namespaceWorker(leafDirectory string, parentUserNS string, input *bufio.Reader) int {
             currentUserNS, err := os.Readlink("/proc/self/ns/user")
             if err != nil {
@@ -982,6 +1009,10 @@ jobs:
             }
             peer.Stderr = io.Discard
             if err := peer.Start(); err != nil {
+              fmt.Printf("peer-start-diagnostic error=%q %s\n", err.Error(), namespaceLaunchCapabilities())
+              if peerPIDFD >= 0 {
+                _ = syscall.Close(peerPIDFD)
+              }
               return peerFailure("cross-uid-b-launch", err)
             }
             if peerPIDFD < 0 {
