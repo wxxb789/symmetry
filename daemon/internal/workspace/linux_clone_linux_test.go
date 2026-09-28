@@ -170,7 +170,7 @@ func TestLinuxCloneAbortProofRequiresAbsentTargetAndReplays(t *testing.T) {
 		if err := os.Mkdir(fixture.target, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		_, err := fixture.manager.AbortLinuxCloneBeforeCheckout(context.Background(), fixture.intent, &fixture.grant.Seed, nil, nil)
+		_, err := fixture.manager.AbortLinuxCloneBeforeCheckout(context.Background(), fixture.intent, &fixture.grant.Seed, nil, nil, nil)
 		if err == nil {
 			t.Fatal("abort produced a no-target proof while an unreceipted B target existed")
 		}
@@ -188,7 +188,7 @@ func TestLinuxCloneAbortProofRequiresAbsentTargetAndReplays(t *testing.T) {
 
 	t.Run("safe replay", func(t *testing.T) {
 		fixture := newLinuxCloneWorkspaceFixture(t)
-		first, err := fixture.manager.AbortLinuxCloneBeforeCheckout(context.Background(), fixture.intent, &fixture.grant.Seed, nil, nil)
+		first, err := fixture.manager.AbortLinuxCloneBeforeCheckout(context.Background(), fixture.intent, &fixture.grant.Seed, nil, nil, nil)
 		if err != nil {
 			t.Fatalf("AbortLinuxCloneBeforeCheckout() error = %v", err)
 		}
@@ -199,11 +199,87 @@ func TestLinuxCloneAbortProofRequiresAbsentTargetAndReplays(t *testing.T) {
 		if _, err := os.Lstat(fixture.intent.SeedPath); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("aborted seed remains: %v", err)
 		}
-		second, err := fixture.manager.AbortLinuxCloneBeforeCheckout(context.Background(), fixture.intent, &fixture.grant.Seed, nil, nil)
+		second, err := fixture.manager.AbortLinuxCloneBeforeCheckout(context.Background(), fixture.intent, &fixture.grant.Seed, nil, nil, nil)
 		if err != nil || !first.Equal(second) {
 			t.Fatalf("abort replay = %#v, %v; want exact proof %#v", second, err, first)
 		}
 	})
+}
+
+func TestLinuxCloneAbortAfterNormalReleaseRequiresAbsentTarget(t *testing.T) {
+	// Workspace validates and echoes this DTO; App/Store bind it to the exact
+	// RunKey/fence before calling the no-target abort API.
+	release := linuxCloneNormalReleaseProof(t)
+	t.Run("target present retains seed", func(t *testing.T) {
+		fixture := newLinuxCloneWorkspaceFixture(t)
+		if err := os.MkdirAll(filepath.Dir(fixture.target), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(fixture.target, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fixture.manager.AbortLinuxCloneBeforeCheckout(context.Background(), fixture.intent, &fixture.grant.Seed, nil, nil, &release); err == nil {
+			t.Fatal("normal stop receipt inferred no B checkout while Target existed")
+		}
+		if _, err := os.Stat(fixture.intent.SeedPath); err != nil {
+			t.Fatalf("normal-release abort removed the seed before target absence: %v", err)
+		}
+	})
+
+	t.Run("target absent echoes stop proof", func(t *testing.T) {
+		fixture := newLinuxCloneWorkspaceFixture(t)
+		proof, err := fixture.manager.AbortLinuxCloneBeforeCheckout(context.Background(), fixture.intent, &fixture.grant.Seed, nil, nil, &release)
+		if err != nil {
+			t.Fatalf("AbortLinuxCloneBeforeCheckout(normal release) error = %v", err)
+		}
+		if err := proof.Validate(); err != nil || proof.NormalReleaseProof == nil || !proof.NormalReleaseProof.Equal(release) ||
+			proof.PreGateReleaseProof != nil || proof.CgroupAbortProof != nil || !proof.TargetAbsent || !proof.SeedAbsent {
+			t.Fatalf("normal-release abort proof = %#v, validation error=%v", proof, err)
+		}
+		if _, err := os.Lstat(fixture.intent.SeedPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("normal-release abort left A seed: %v", err)
+		}
+		baseRef, err := authority.LinuxCloneBaseRef(fixture.intent.RunID, fixture.intent.Generation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := linuxCloneRefValue(context.Background(), fixture.repository, baseRef); !errors.Is(err, errLinuxCloneRefMissing) {
+			t.Fatalf("normal-release abort base ref readback = %v, want absent", err)
+		}
+	})
+}
+
+func TestLinuxCloneNoTargetRewalkRejectsReplacedParent(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "b-root")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	parent := filepath.Join(root, "binding-native", "run-race")
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(parent, "generation-1")
+	observed := make(chan struct{})
+	swapped := make(chan struct{})
+	var swapErr error
+	go func() {
+		<-observed
+		swapErr = os.Rename(parent, parent+"-old")
+		if swapErr == nil {
+			swapErr = os.Mkdir(parent, 0o700)
+		}
+		close(swapped)
+	}()
+	err := verifyLinuxCloneTargetAbsentUnderRootWithReadback(context.Background(), root, target, func() {
+		close(observed)
+		<-swapped
+	})
+	if swapErr != nil {
+		t.Fatalf("replace target parent at absence barrier: %v", swapErr)
+	}
+	if err == nil {
+		t.Fatal("no-target check accepted absence observed through a detached parent inode")
+	}
 }
 
 func TestLinuxCloneRejectsAlternatesSymlinksChangedAndOversizedObjects(t *testing.T) {
@@ -583,4 +659,75 @@ func resolveLinuxCloneGitPath(repository, value string) string {
 	}
 	resolved, _ := filepath.EvalSymlinks(value)
 	return resolved
+}
+
+func linuxCloneNormalReleaseProof(t *testing.T) authority.SupervisorHandoffReleaseProof {
+	t.Helper()
+	parent := authority.LinuxCgroupParentIdentity{
+		BootID: "00000000-0000-4000-8000-000000000001", MountID: 42, Device: 84, Inode: 126,
+		Path: "/system.slice/symmetry.slice/delegated",
+	}
+	cgroup := authority.LinuxCgroupIdentity{
+		Version: authority.LinuxCgroupIdentityVersion, Parent: parent,
+		LeafName: strings.Repeat("e", authority.TokenBytes*2), LeafDevice: 168, LeafInode: 210,
+	}
+	anchor := authority.LinuxCgroupProcessIdentity{PID: 10, Identity: "anchor:10:start"}
+	helper := authority.LinuxCgroupProcessIdentity{PID: 20, Identity: "helper:20:start"}
+	launcher := authority.LinuxCgroupProcessIdentity{PID: 30, Identity: "launcher:30:start"}
+	gate := authority.LinuxCgroupProcessIdentity{PID: 40, Identity: "gate:40:start"}
+	mirror := authority.LinuxCgroupProcessIdentity{PID: 50, Identity: "daemon:50:start"}
+	launcherExit := &authority.LinuxCgroupExitProof{
+		Version: authority.LinuxCgroupIdentityVersion, Process: launcher, Witness: helper, Waited: true, Reaped: true,
+	}
+	handoff := authority.SupervisorHandoff{
+		Version: authority.SupervisorHandoffVersionV2, LaunchToken: strings.Repeat("a", authority.TokenBytes*2),
+		Secret: strings.Repeat("b", authority.SecretBytes*2), OwnerKind: authority.OwnerKindLinuxHelper,
+		OwnerContext: "/run/symmetry/recovery.sock", TargetPID: gate.PID, TargetIdentity: gate.Identity,
+		OwnerUID: 1000, LauncherUID: 0, PipeToken: strings.Repeat("c", authority.TokenBytes*2),
+		JobID: strings.Repeat("d", authority.TokenBytes*2), TargetBirthKind: authority.LinuxCgroupTargetBirthTrustedAGate,
+		CgroupIdentity: &cgroup, AnchorPID: anchor.PID, AnchorIdentity: anchor.Identity,
+		LauncherPID: launcher.PID, LauncherIdentity: launcher.Identity, LauncherExit: launcherExit,
+		SupervisorPID: helper.PID, SupervisorIdentity: helper.Identity, Mirror: &mirror,
+	}
+	value, err := handoff.ToSupervisor()
+	if err != nil {
+		t.Fatalf("construct release authority: %v", err)
+	}
+	stopProof := authority.LinuxCgroupStopProof{
+		Version: authority.LinuxCgroupIdentityVersion, Kind: authority.LinuxCgroupStopProofHelper,
+		Issuer: helper, Reaper: helper, PinnedLeafFD: true, CgroupKillAcknowledged: true,
+		CgroupPopulatedZero: true, NoMigrationObserved: true, ProducerFenced: true, DescendantsReaped: true,
+		LauncherExit: *launcherExit,
+		GateExit:     authority.LinuxCgroupExitProof{Version: authority.LinuxCgroupIdentityVersion, Process: gate, Witness: helper, Waited: true, Reaped: true},
+	}
+	receipt := authority.StopReceipt{
+		Version: authority.SupervisorVersionV2, Status: "stopped", OwnerKind: handoff.OwnerKind, OwnerContext: handoff.OwnerContext,
+		TargetPID: handoff.TargetPID, TargetIdentity: handoff.TargetIdentity, OwnerUID: handoff.OwnerUID, LauncherUID: handoff.LauncherUID,
+		PipeToken: handoff.PipeToken, JobID: handoff.JobID, SupervisorPID: handoff.SupervisorPID,
+		SupervisorIdentity: handoff.SupervisorIdentity, ActiveProcesses: 0, TargetBirthKind: handoff.TargetBirthKind,
+		CgroupIdentity: &cgroup, LinuxProof: &stopProof,
+	}
+	if !receipt.ValidForHandoff(handoff) {
+		t.Fatal("normal-release stop receipt fixture is invalid")
+	}
+	handoff.StopReceipt = &receipt
+	value, err = handoff.ToSupervisor()
+	if err != nil || value.Validate() != nil {
+		t.Fatalf("bind stop receipt to release authority: value=%#v error=%v", value, err)
+	}
+	release := authority.SupervisorHandoffReleaseProof{
+		Version: authority.SupervisorHandoffVersionV2, Status: "released", LaunchToken: handoff.LaunchToken,
+		OwnerKind: handoff.OwnerKind, OwnerContext: handoff.OwnerContext, TargetPID: handoff.TargetPID,
+		TargetIdentity: handoff.TargetIdentity, OwnerUID: handoff.OwnerUID, LauncherUID: handoff.LauncherUID,
+		PipeToken: handoff.PipeToken, JobID: handoff.JobID, SupervisorPID: handoff.SupervisorPID,
+		SupervisorIdentity: handoff.SupervisorIdentity, TargetBirthKind: handoff.TargetBirthKind,
+		CgroupIdentity: &cgroup, AnchorPID: handoff.AnchorPID, AnchorIdentity: handoff.AnchorIdentity,
+		LauncherPID: handoff.LauncherPID, LauncherIdentity: handoff.LauncherIdentity,
+		LauncherExit: launcherExit, Mirror: &mirror, LeafDisposition: authority.LinuxCgroupLeafRemoved,
+		StopReceipt: &receipt,
+	}
+	if err := release.Validate(); err != nil || !release.ValidForSupervisor(value) {
+		t.Fatalf("normal-release proof fixture is invalid: proof=%#v authority=%#v error=%v", release, value, err)
+	}
+	return release
 }

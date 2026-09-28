@@ -414,18 +414,21 @@ func (manager *Manager) CleanupLinuxClone(ctx context.Context, grant authority.L
 	}
 	target, err := openLinuxCloneTarget(grant.Intent, checkout, binding.Root)
 	if errors.Is(err, os.ErrNotExist) {
-		parentFD, name, parentErr := openLinuxCloneTargetParent(binding.Root, grant.Intent.Target)
-		if parentErr != nil {
-			return fmt.Errorf("verify absent Linux clone target parent: %w", parentErr)
-		}
-		defer unix.Close(parentFD)
-		if err := unix.Fsync(parentFD); err != nil {
-			return fmt.Errorf("sync already absent Linux clone target: %w", err)
-		}
-		if err := verifyLinuxCloneTargetAbsent(parentFD, name); err != nil {
+		if err := verifyLinuxCloneTargetAbsentUnderRoot(ctx, binding.Root, grant.Intent.Target); err != nil {
 			return err
 		}
-		return nil
+		rootFD, _, err := openLinuxCloneDirPath(binding.Root)
+		if err != nil {
+			return fmt.Errorf("reopen B clone root for absent cleanup readback: %w", err)
+		}
+		if err := unix.Fsync(rootFD); err != nil {
+			_ = unix.Close(rootFD)
+			return fmt.Errorf("sync already absent Linux clone root: %w", err)
+		}
+		if err := unix.Close(rootFD); err != nil {
+			return err
+		}
+		return verifyLinuxCloneTargetAbsentUnderRoot(ctx, binding.Root, grant.Intent.Target)
 	}
 	if err != nil {
 		return fmt.Errorf("open authorized Linux clone target for cleanup: %w", err)
@@ -439,10 +442,10 @@ func (manager *Manager) CleanupLinuxClone(ctx context.Context, grant authority.L
 
 // AbortLinuxCloneBeforeCheckout returns a no-target cleanup proof only after
 // the caller has durably fenced every possible clone producer in State. The
-// optional seed and either pre-gate or no-producer cgroup proof must be exact
-// Store readbacks. This method never substitutes a native stop receipt or
-// writes State.
-func (manager *Manager) AbortLinuxCloneBeforeCheckout(ctx context.Context, intent authority.LinuxCloneIntent, seedReceipt *authority.LinuxCloneSeedReceipt, preGateRelease *authority.LinuxCgroupPreGateReleaseProof, cgroupAbortProof *authority.LinuxCgroupReservationAbortProof) (authority.LinuxCloneAbortProof, error) {
+// optional seed and at most one cgroup proof must be exact Store readbacks.
+// A normal release proves stopped containment, not that B never ran; this
+// method never writes State.
+func (manager *Manager) AbortLinuxCloneBeforeCheckout(ctx context.Context, intent authority.LinuxCloneIntent, seedReceipt *authority.LinuxCloneSeedReceipt, preGateRelease *authority.LinuxCgroupPreGateReleaseProof, cgroupAbortProof *authority.LinuxCgroupReservationAbortProof, normalRelease *authority.SupervisorHandoffReleaseProof) (authority.LinuxCloneAbortProof, error) {
 	if manager == nil {
 		return authority.LinuxCloneAbortProof{}, errors.New("workspace manager is nil")
 	}
@@ -465,8 +468,19 @@ func (manager *Manager) AbortLinuxCloneBeforeCheckout(ctx context.Context, inten
 	if cgroupAbortProof != nil && cgroupAbortProof.Validate() != nil {
 		return authority.LinuxCloneAbortProof{}, errors.New("Store-bound cgroup abort proof is invalid")
 	}
-	if preGateRelease != nil && cgroupAbortProof != nil {
-		return authority.LinuxCloneAbortProof{}, errors.New("pre-gate release and cgroup abort proofs are mutually exclusive")
+	if normalRelease != nil && (normalRelease.Validate() != nil || normalRelease.Version != authority.SupervisorHandoffVersionV2 ||
+		normalRelease.Status != "released" || normalRelease.StopReceipt == nil ||
+		(normalRelease.LeafDisposition != authority.LinuxCgroupLeafRemoved && normalRelease.LeafDisposition != authority.LinuxCgroupLeafAbsentAfterReceipt)) {
+		return authority.LinuxCloneAbortProof{}, errors.New("Store-bound normal Linux v2 release proof is invalid")
+	}
+	proofInputs := 0
+	for _, present := range []bool{preGateRelease != nil, cgroupAbortProof != nil, normalRelease != nil} {
+		if present {
+			proofInputs++
+		}
+	}
+	if proofInputs > 1 {
+		return authority.LinuxCloneAbortProof{}, errors.New("Linux clone abort containment proofs are mutually exclusive")
 	}
 	if err := verifyLinuxCloneSource(ctx, repository); err != nil {
 		return authority.LinuxCloneAbortProof{}, fmt.Errorf("validate A-owned Git source for abort: %w", err)
@@ -535,6 +549,10 @@ func (manager *Manager) AbortLinuxCloneBeforeCheckout(ctx context.Context, inten
 	if cgroupAbortProof != nil {
 		abortProof := cgroupAbortProof.Clone()
 		proof.CgroupAbortProof = &abortProof
+	}
+	if normalRelease != nil {
+		release := normalRelease.Clone()
+		proof.NormalReleaseProof = &release
 	}
 	if err := proof.Validate(); err != nil {
 		return authority.LinuxCloneAbortProof{}, fmt.Errorf("validate Linux clone no-target proof: %w", err)

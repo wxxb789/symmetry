@@ -575,7 +575,7 @@ func (journal RunJournal) LinuxCloneCleanupEligible(key RunKey, fence protocol.F
 		return false
 	}
 	if journal.LinuxCloneAbortProof != nil {
-		return !journal.LinuxCloneAbortPending && journal.LinuxCloneCheckoutReceipt == nil && journal.LinuxClonePromotionReceipt == nil &&
+		return !journal.RetainWorkspace && !journal.LinuxCloneAbortPending && journal.LinuxCloneCheckoutReceipt == nil && journal.LinuxClonePromotionReceipt == nil &&
 			journal.WorkspacePath == "" && !journal.WorkspaceRecoveryRequired
 	}
 	return !journal.LinuxCloneAbortPending && !journal.RetainWorkspace && journal.TerminalState != "cancelled" &&
@@ -1026,8 +1026,8 @@ func (store *Store) ReserveLinuxCloneIntent(key RunKey, fence protocol.Fence, in
 			journal.ContainmentCgroup != nil || journal.ContainmentCgroupReleaseProof != nil || journal.ContainmentCgroupPreGateReleaseProof != nil {
 			return errors.New("Linux clone intent must be reserved before process containment or terminal cleanup")
 		}
-		if journal.WorkspacePath != "" && journal.WorkspacePath != intent.Target {
-			return errors.New("Linux clone target conflicts with the journal workspace path")
+		if journal.WorkspacePath != "" {
+			return errors.New("Linux clone intent cannot adopt a pre-existing workspace path")
 		}
 		copy := intent.Clone()
 		journal.LinuxCloneIntent = &copy
@@ -1231,6 +1231,34 @@ func (store *Store) CompleteLinuxCloneAbort(key RunKey, fence protocol.Fence, in
 		journal.LinuxCloneAbortPending = false
 		journal.WorkspacePath = ""
 		journal.WorkspaceRecoveryRequired = false
+		return nil
+	})
+}
+
+// ClearLinuxCloneNoTargetRetention releases a retained-workspace barrier only
+// after App has independently checked that no retained GoalSession or other
+// retention owner remains. The exact Store-bound absence proof and RunKey fence
+// make the mutation replayable; ordinary checkout/promotion retention cannot
+// be cleared through this path.
+func (store *Store) ClearLinuxCloneNoTargetRetention(key RunKey, fence protocol.Fence, proof authority.LinuxCloneAbortProof) (RunJournal, error) {
+	if err := requireLinuxClonePlatform(); err != nil {
+		return RunJournal{}, err
+	}
+	if err := proof.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if err := requireLinuxCloneJournalFence(*journal, fence, proof.Intent); err != nil {
+			return err
+		}
+		if journal.LinuxCloneIntent == nil || !journal.LinuxCloneIntent.Equal(proof.Intent) ||
+			journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof == nil ||
+			!journal.LinuxCloneAbortProof.Equal(proof) || journal.LinuxCloneCheckoutReceipt != nil ||
+			journal.LinuxClonePromotionReceipt != nil || journal.WorkspacePath != "" || journal.WorkspaceRecoveryRequired ||
+			!linuxCloneAbortHistoryMatches(*journal, &proof) {
+			return errors.New("Linux clone retention clear lacks exact no-target abort proof")
+		}
+		journal.RetainWorkspace = false
 		return nil
 	})
 }
@@ -4039,23 +4067,33 @@ func linuxCloneAbortHistoryMatches(journal RunJournal, proof *authority.LinuxClo
 			journal.ContainmentCgroupPreGateReleaseProof == nil
 	}
 	if proof.CgroupAbortProof != nil {
-		return proof.PreGateReleaseProof == nil && journal.ContainmentCgroup != nil &&
+		return proof.PreGateReleaseProof == nil && proof.NormalReleaseProof == nil && journal.ContainmentCgroup != nil &&
 			journal.ContainmentCgroup.AbortProof != nil && journal.ContainmentCgroup.AbortProof.Equal(*proof.CgroupAbortProof) &&
 			linuxCgroupReservationAbortMatches(*journal.ContainmentCgroup, *proof.CgroupAbortProof) &&
 			journal.ContainmentCgroupReleaseProof == nil && journal.ContainmentCgroupPreGateReleaseProof == nil
 	}
 	if proof.PreGateReleaseProof != nil {
-		return journal.ContainmentCgroup == nil && journal.ContainmentCgroupReleaseProof == nil &&
+		return proof.NormalReleaseProof == nil && journal.ContainmentCgroup == nil && journal.ContainmentCgroupReleaseProof == nil &&
 			journal.ContainmentCgroupPreGateReleaseProof != nil &&
 			journal.ContainmentCgroupPreGateReleaseProof.Equal(*proof.PreGateReleaseProof)
+	}
+	if proof.NormalReleaseProof != nil {
+		return journal.ContainmentCgroup == nil && journal.ContainmentCgroupPreGateReleaseProof == nil &&
+			journal.ContainmentCgroupReleaseProof != nil && journal.ContainmentCgroupReleaseProof.Equal(*proof.NormalReleaseProof) &&
+			proof.NormalReleaseProof.Validate() == nil && proof.NormalReleaseProof.Version == authority.SupervisorHandoffVersionV2 &&
+			proof.NormalReleaseProof.StopReceipt != nil
 	}
 	return journal.ContainmentCgroup == nil && journal.ContainmentCgroupReleaseProof == nil &&
 		journal.ContainmentCgroupPreGateReleaseProof == nil
 }
 
 func linuxCloneAbortFenceAvailable(journal RunJournal) bool {
-	if !linuxCloneAbortNoActiveOwner(journal) || journal.ContainmentCgroupReleaseProof != nil {
+	if !linuxCloneAbortNoActiveOwner(journal) {
 		return false
+	}
+	if release := journal.ContainmentCgroupReleaseProof; release != nil {
+		return journal.ContainmentCgroup == nil && journal.ContainmentCgroupPreGateReleaseProof == nil &&
+			release.Validate() == nil && release.Version == authority.SupervisorHandoffVersionV2 && release.StopReceipt != nil
 	}
 	if reservation := journal.ContainmentCgroup; reservation != nil {
 		proof := reservation.AbortProof

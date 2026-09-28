@@ -133,6 +133,17 @@ func TestLinuxCloneAbortFencesLaunchAndRetiresOnlyAfterAbsenceProof(t *testing.T
 		_, err := store.CompleteLinuxCloneAbort(key, fence, intent, proof)
 		return err
 	})
+	if err := store.DeleteJournal(key); err == nil {
+		t.Fatal("DeleteJournal() cleared a no-target abort while workspace retention remained set")
+	}
+	replayUnknownStateMutation(t, store, func() error {
+		_, err := store.ClearLinuxCloneNoTargetRetention(key, fence, proof)
+		return err
+	})
+	clearedRetention := loadStateJournal(t, store, key)
+	if clearedRetention.RetainWorkspace {
+		t.Fatal("ClearLinuxCloneNoTargetRetention() left the exact no-target retention barrier set")
+	}
 	if err := store.DeleteJournal(key); err != nil {
 		t.Fatalf("DeleteJournal() rejected a completed no-target abort after terminal cleanup gates: %v", err)
 	}
@@ -263,6 +274,75 @@ func TestLinuxCloneAbortAcceptsOnlyExactCgroupNoTargetTombstones(t *testing.T) {
 				t.Fatalf("clone abort lost exact cgroup no-target tombstone: %#v", completed)
 			}
 		})
+	}
+}
+
+func TestLinuxCloneAbortNormalReleaseRequiresExactPhysicalStopTombstone(t *testing.T) {
+	requireLinuxCloneAMD64(t)
+	store := mustStore(t)
+	journal, intent := newLinuxCloneJournal(t, "clone-normal-release-abort")
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ReserveLinuxCloneIntent(journal.Key(), journal.Fence(), intent); err != nil {
+		t.Fatal(err)
+	}
+	handoff, reservation := bindStateLinuxCgroupV2Handoff(t, store, journal.Key())
+	startedAt := reservation.Gate.ObservedAt
+	if _, err := store.CommitSupervisorHandoff(journal.Key(), handoff, startedAt); err != nil {
+		t.Fatal(err)
+	}
+	owner := loadStateJournal(t, store, journal.Key()).ContainmentAuthority.Clone()
+	stopReceipt := testStateLinuxCgroupV2Receipt(owner, authority.LinuxCgroupStopProofHelper, nil)
+	if _, err := store.RecordContainmentStopReceipt(journal.Key(), owner.TargetPID, owner.TargetIdentity, stopReceipt); err != nil {
+		t.Fatal(err)
+	}
+	releaseProof := testStateLinuxCgroupV2ReleaseDTO(handoff, stopReceipt)
+	if err := releaseProof.Validate(); err != nil {
+		t.Fatalf("normal release proof fixture invalid: %v", err)
+	}
+	baseRef, err := authority.LinuxCloneBaseRef(journal.RunID, journal.Generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	promotionRef, err := authority.LinuxClonePromotionRef(journal.RunID, journal.Generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := authority.LinuxCloneAbortProof{
+		Version: authority.LinuxCloneVersion, Intent: intent, NormalReleaseProof: &releaseProof,
+		BaseRef: baseRef, PromotionRef: promotionRef,
+		TargetAbsent: true, SeedAbsent: true, BaseRefAbsent: true, PromotionRefAbsent: true,
+	}
+	if err := proof.Validate(); err != nil {
+		t.Fatalf("normal-release abort proof invalid: %v", err)
+	}
+	stopped := loadStateJournal(t, store, journal.Key())
+	stopped.PID, stopped.ProcessIdentity, stopped.StartedAt = 0, "", time.Time{}
+	stopped.ContainmentAuthority = nil
+	stopped.ContainmentHandoff = nil
+	stopped.ContainmentCgroup = nil
+	stopped.ContainmentCgroupReleaseProof = &releaseProof
+	if !linuxCloneAbortHistoryMatches(stopped, &proof) {
+		t.Fatal("exact normal v2 release tombstone did not authorize the post-stop no-checkout proof path")
+	}
+	wrongRelease := proof.Clone()
+	wrongRelease.NormalReleaseProof.LeafDisposition = authority.LinuxCgroupLeafAbsentAfterReceipt
+	if err := wrongRelease.Validate(); err != nil {
+		t.Fatalf("alternate valid release disposition failed structural validation: %v", err)
+	}
+	if linuxCloneAbortHistoryMatches(stopped, &wrongRelease) {
+		t.Fatal("clone abort accepted a different durable normal-release tombstone")
+	}
+	missingTargetProof := proof.Clone()
+	missingTargetProof.TargetAbsent = false
+	if missingTargetProof.Validate() == nil {
+		t.Fatal("normal release proof implied target absence without an independent target check")
+	}
+	missingRelease := stopped
+	missingRelease.ContainmentCgroupReleaseProof = nil
+	if linuxCloneAbortHistoryMatches(missingRelease, &proof) {
+		t.Fatal("clone abort accepted normal stop proof without the journal's durable release tombstone")
 	}
 }
 

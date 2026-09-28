@@ -37,6 +37,9 @@ type linuxCloneTarget struct {
 	fd       int
 	name     string
 	identity unix.Stat_t
+	root     string
+	intent   authority.LinuxCloneIntent
+	receipt  authority.LinuxCloneCheckoutReceipt
 }
 
 func (target *linuxCloneTarget) close() error {
@@ -277,7 +280,10 @@ func openLinuxCloneTarget(intent authority.LinuxCloneIntent, receipt authority.L
 		_ = unix.Close(parentFD)
 		return nil, errors.New("Linux clone target changed while opening the checkout receipt inode")
 	}
-	return &linuxCloneTarget{parentFD: parentFD, fd: fd, name: name, identity: opened}, nil
+	return &linuxCloneTarget{
+		parentFD: parentFD, fd: fd, name: name, identity: opened,
+		root: root, intent: intent.Clone(), receipt: receipt.Clone(),
+	}, nil
 }
 
 func verifyLinuxCloneTargetStillBound(target *linuxCloneTarget) error {
@@ -295,6 +301,13 @@ func verifyLinuxCloneTargetStillBound(target *linuxCloneTarget) error {
 		opened.Mode&unix.S_IFMT != unix.S_IFDIR || named.Mode&unix.S_IFMT != unix.S_IFDIR {
 		return errors.New("Linux clone target name or inode changed during object extraction")
 	}
+	currentPath, err := openLinuxCloneTarget(target.intent, target.receipt, target.root)
+	if err != nil {
+		return fmt.Errorf("Linux clone target path no longer names the checkout receipt inode: %w", err)
+	}
+	if err := currentPath.close(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -311,6 +324,10 @@ func verifyLinuxCloneTargetAbsent(parentFD int, name string) error {
 }
 
 func verifyLinuxCloneTargetAbsentUnderRoot(ctx context.Context, root, target string) error {
+	return verifyLinuxCloneTargetAbsentUnderRootWithReadback(ctx, root, target, nil)
+}
+
+func verifyLinuxCloneTargetAbsentUnderRootWithReadback(ctx context.Context, root, target string, afterAbsent func()) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -321,12 +338,13 @@ func verifyLinuxCloneTargetAbsentUnderRoot(ctx context.Context, root, target str
 	if err != nil || relative == "." || filepath.IsAbs(relative) {
 		return errors.New("Linux clone no-target path is invalid")
 	}
-	parentFD, _, err := openLinuxCloneDirPath(root)
+	components := strings.Split(relative, string(filepath.Separator))
+	parentFD, rootIdentity, err := openLinuxCloneDirPath(root)
 	if err != nil {
 		return fmt.Errorf("open configured B clone root: %w", err)
 	}
 	defer func() { _ = unix.Close(parentFD) }()
-	components := strings.Split(relative, string(filepath.Separator))
+	ancestors := make([]linuxCloneNamedDirectory, 0, len(components))
 	for index, component := range components {
 		if component == "" || component == "." || component == ".." {
 			return errors.New("Linux clone target contains an invalid path component")
@@ -341,7 +359,10 @@ func verifyLinuxCloneTargetAbsentUnderRoot(ctx context.Context, root, target str
 			}
 			var readback unix.Stat_t
 			if readbackErr := unix.Fstatat(parentFD, component, &readback, unix.AT_SYMLINK_NOFOLLOW); errors.Is(readbackErr, unix.ENOENT) {
-				return nil
+				if afterAbsent != nil {
+					afterAbsent()
+				}
+				return verifyLinuxCloneTargetAbsentAfterRewalk(ctx, root, rootIdentity, ancestors, component)
 			} else if readbackErr != nil {
 				return readbackErr
 			}
@@ -362,10 +383,66 @@ func verifyLinuxCloneTargetAbsentUnderRoot(ctx context.Context, root, target str
 			_ = unix.Close(childFD)
 			return errors.New("Linux clone target parent changed during no-target readback")
 		}
+		ancestors = append(ancestors, linuxCloneNamedDirectory{name: component, identity: opened})
 		_ = unix.Close(parentFD)
 		parentFD = childFD
 	}
 	return errors.New("Linux clone target absence was not observed")
+}
+
+type linuxCloneNamedDirectory struct {
+	name     string
+	identity unix.Stat_t
+}
+
+func verifyLinuxCloneTargetAbsentAfterRewalk(ctx context.Context, root string, rootIdentity unix.Stat_t, ancestors []linuxCloneNamedDirectory, missingName string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	parentFD, currentRoot, err := openLinuxCloneDirPath(root)
+	if err != nil {
+		return fmt.Errorf("reopen configured B clone root: %w", err)
+	}
+	defer func() { _ = unix.Close(parentFD) }()
+	if !sameLinuxCloneDirectoryIdentity(&rootIdentity, &currentRoot) {
+		return errors.New("configured B clone root changed during no-target observation")
+	}
+	for _, ancestor := range ancestors {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		var named unix.Stat_t
+		if err := unix.Fstatat(parentFD, ancestor.name, &named, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+			return fmt.Errorf("recheck B clone parent %q: %w", ancestor.name, err)
+		}
+		if !sameLinuxCloneDirectoryIdentity(&ancestor.identity, &named) {
+			return fmt.Errorf("B clone parent %q changed during no-target observation", ancestor.name)
+		}
+		childFD, err := openLinuxCloneDirAt(parentFD, ancestor.name)
+		if err != nil {
+			return fmt.Errorf("reopen B clone parent %q: %w", ancestor.name, err)
+		}
+		var opened unix.Stat_t
+		if err := unix.Fstat(childFD, &opened); err != nil || !sameLinuxCloneDirectoryIdentity(&ancestor.identity, &opened) {
+			_ = unix.Close(childFD)
+			return fmt.Errorf("B clone parent %q changed during no-target rewalk", ancestor.name)
+		}
+		_ = unix.Close(parentFD)
+		parentFD = childFD
+	}
+	var absent unix.Stat_t
+	if err := unix.Fstatat(parentFD, missingName, &absent, unix.AT_SYMLINK_NOFOLLOW); errors.Is(err, unix.ENOENT) {
+		var readback unix.Stat_t
+		if readbackErr := unix.Fstatat(parentFD, missingName, &readback, unix.AT_SYMLINK_NOFOLLOW); errors.Is(readbackErr, unix.ENOENT) {
+			return nil
+		} else if readbackErr != nil {
+			return readbackErr
+		}
+		return errors.New("Linux clone target reappeared during final path readback")
+	} else if err != nil {
+		return err
+	}
+	return errors.New("Linux clone target exists on the current B root path")
 }
 
 func sameLinuxCloneDirectoryIdentity(left, right *unix.Stat_t) bool {
@@ -952,7 +1029,10 @@ func removeLinuxCloneTarget(ctx context.Context, target *linuxCloneTarget) error
 	if err := unix.Fsync(target.parentFD); err != nil {
 		return fmt.Errorf("sync removed Linux clone target parent: %w", err)
 	}
-	return verifyLinuxCloneTargetAbsent(target.parentFD, target.name)
+	if err := verifyLinuxCloneTargetAbsent(target.parentFD, target.name); err != nil {
+		return err
+	}
+	return verifyLinuxCloneTargetAbsentUnderRoot(ctx, target.root, target.intent.Target)
 }
 
 func removeLinuxCloneDirectoryContents(ctx context.Context, directoryFD int) error {

@@ -229,16 +229,18 @@ func (value LinuxClonePromotionReceipt) Equal(other LinuxClonePromotionReceipt) 
 
 func (value LinuxClonePromotionReceipt) Clone() LinuxClonePromotionReceipt { return value }
 
-// LinuxCloneAbortProof certifies A-side cleanup of an intent that never
-// reached B checkout: the exact target, seed path and run-keyed refs are
-// independently verified absent. It is a cleanup tombstone, not physical-stop
-// or checkout/promotion evidence.
+// LinuxCloneAbortProof certifies A-side cleanup of an intent without a durable
+// checkout receipt: the exact target, seed path and run-keyed refs are
+// independently verified absent. Optional history binds the producer fence
+// (pre-gate stop, no-target cgroup abort, or normal physical stop); this is not
+// checkout or promotion evidence and does not assert that B never ran.
 type LinuxCloneAbortProof struct {
 	Version             int                               `json:"version"`
 	Intent              LinuxCloneIntent                  `json:"intent"`
 	SeedReceipt         *LinuxCloneSeedReceipt            `json:"seed_receipt,omitempty"`
 	PreGateReleaseProof *LinuxCgroupPreGateReleaseProof   `json:"pre_gate_release_proof,omitempty"`
 	CgroupAbortProof    *LinuxCgroupReservationAbortProof `json:"cgroup_abort_proof,omitempty"`
+	NormalReleaseProof  *SupervisorHandoffReleaseProof    `json:"normal_release_proof,omitempty"`
 	BaseRef             string                            `json:"base_ref"`
 	PromotionRef        string                            `json:"promotion_ref"`
 	TargetAbsent        bool                              `json:"target_absent"`
@@ -253,10 +255,12 @@ func (proof LinuxCloneAbortProof) Validate() error {
 	if proof.Version != LinuxCloneVersion || proof.Intent.Validate() != nil || baseErr != nil || promotionErr != nil ||
 		proof.BaseRef != baseRef || proof.PromotionRef != promotionRef || !proof.TargetAbsent || !proof.SeedAbsent ||
 		!proof.BaseRefAbsent || !proof.PromotionRefAbsent ||
-		proof.PreGateReleaseProof != nil && proof.CgroupAbortProof != nil ||
+		countLinuxCloneAbortHistories(proof) > 1 ||
 		proof.SeedReceipt != nil && (proof.SeedReceipt.Validate() != nil || proof.SeedReceipt.BaseCommit != proof.Intent.BaseCommit) ||
 		proof.PreGateReleaseProof != nil && proof.PreGateReleaseProof.Validate() != nil ||
-		proof.CgroupAbortProof != nil && proof.CgroupAbortProof.Validate() != nil {
+		proof.CgroupAbortProof != nil && proof.CgroupAbortProof.Validate() != nil ||
+		proof.NormalReleaseProof != nil && (proof.NormalReleaseProof.Validate() != nil ||
+			proof.NormalReleaseProof.Version != SupervisorHandoffVersionV2 || proof.NormalReleaseProof.StopReceipt == nil) {
 		return errors.New("Linux clone abort proof is invalid")
 	}
 	return nil
@@ -276,6 +280,10 @@ func (proof LinuxCloneAbortProof) Clone() LinuxCloneAbortProof {
 		cgroupAbortProof := proof.CgroupAbortProof.Clone()
 		cloned.CgroupAbortProof = &cgroupAbortProof
 	}
+	if proof.NormalReleaseProof != nil {
+		normalReleaseProof := proof.NormalReleaseProof.Clone()
+		cloned.NormalReleaseProof = &normalReleaseProof
+	}
 	return cloned
 }
 
@@ -284,9 +292,24 @@ func (proof LinuxCloneAbortProof) Equal(other LinuxCloneAbortProof) bool {
 		equalLinuxCloneSeedReceipt(proof.SeedReceipt, other.SeedReceipt) &&
 		equalLinuxCgroupPreGateReleaseProof(proof.PreGateReleaseProof, other.PreGateReleaseProof) &&
 		equalLinuxCgroupReservationAbortProof(proof.CgroupAbortProof, other.CgroupAbortProof) &&
+		equalSupervisorHandoffReleaseProof(proof.NormalReleaseProof, other.NormalReleaseProof) &&
 		proof.BaseRef == other.BaseRef && proof.PromotionRef == other.PromotionRef &&
 		proof.TargetAbsent == other.TargetAbsent && proof.SeedAbsent == other.SeedAbsent &&
 		proof.BaseRefAbsent == other.BaseRefAbsent && proof.PromotionRefAbsent == other.PromotionRefAbsent
+}
+
+func countLinuxCloneAbortHistories(proof LinuxCloneAbortProof) int {
+	count := 0
+	if proof.PreGateReleaseProof != nil {
+		count++
+	}
+	if proof.CgroupAbortProof != nil {
+		count++
+	}
+	if proof.NormalReleaseProof != nil {
+		count++
+	}
+	return count
 }
 
 func equalLinuxCloneSeedReceipt(left, right *LinuxCloneSeedReceipt) bool {
@@ -304,6 +327,13 @@ func equalLinuxCgroupPreGateReleaseProof(left, right *LinuxCgroupPreGateReleaseP
 }
 
 func equalLinuxCgroupReservationAbortProof(left, right *LinuxCgroupReservationAbortProof) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
+func equalSupervisorHandoffReleaseProof(left, right *SupervisorHandoffReleaseProof) bool {
 	if left == nil || right == nil {
 		return left == nil && right == nil
 	}

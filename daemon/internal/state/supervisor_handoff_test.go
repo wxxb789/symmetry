@@ -751,6 +751,567 @@ func TestSupervisorHandoffLegacyAndMalformedJournalHandling(t *testing.T) {
 	}
 }
 
+func TestLinuxSupervisorScanFencesReplayBeforeReceiptAndClear(t *testing.T) {
+	store := mustStore(t)
+	journal := stoppedTestJournal("linux-scan-fences", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	handoff := testStateLinuxSupervisorHandoffFixture(42, "linux:v2:01234567-89ab-cdef-0123-456789abcdef:77:42:456")
+	if _, err := store.PrepareSupervisorHandoff(journal.Key(), handoff); err != nil {
+		t.Fatal(err)
+	}
+	bound, err := store.BindSupervisorHandoff(journal.Key(), testStateLinuxBindRequest(handoff), 99, "linux:v2:01234567-89ab-cdef-0123-456789abcdef:77:99:789")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := *bound.ContainmentHandoff
+	if bound.ContainmentScans == nil || bound.ContainmentScans.Helper.PendingSequence != 1 || bound.ContainmentScans.Mirror.PendingSequence != 1 {
+		t.Fatalf("bound scan fences = %#v, want both sequence-one scans pending", bound.ContainmentScans)
+	}
+	fabricatedMirror := testStateLinuxBindRequest(handoff)
+	fabricatedMirror.ScanUpdate.MirrorIdentity = strings.Repeat("f", authority.TokenBytes*2)
+	if _, err := store.BindSupervisorHandoff(journal.Key(), fabricatedMirror, 99, "linux:v2:01234567-89ab-cdef-0123-456789abcdef:77:99:789"); err == nil {
+		t.Fatal("Linux supervisor bind accepted a fabricated mirror identity")
+	}
+
+	helperBegin := testStateScanUpdate(expected, authority.SupervisorScanOwnerHelper, authority.SupervisorScanPhaseBegin, 1, "")
+	fabricatedScan := testStateScanUpdate(expected, authority.SupervisorScanOwnerHelper, authority.SupervisorScanPhaseBegin, 1, "")
+	fabricatedScan.ScanUpdate.MirrorIdentity = strings.Repeat("f", authority.TokenBytes*2)
+	if _, err := store.PrepareSupervisorHandoff(journal.Key(), fabricatedScan); err == nil {
+		t.Fatal("Linux supervisor scan update accepted a mismatched mirror identity")
+	}
+	writes := 0
+	unknownWriter := store.SetAtomicWriterForTesting(func(path string, data []byte) error {
+		writes++
+		if err := writeAtomic(path, data); err != nil {
+			return err
+		}
+		return errors.New("scan begin result is unknown after rename")
+	})
+	if _, err := store.PrepareSupervisorHandoff(journal.Key(), helperBegin); err == nil {
+		unknownWriter()
+		t.Fatal("scan begin hid its unknown write result")
+	}
+	unknownWriter()
+	loaded, err := store.LoadJournal(journal.Key())
+	if err != nil || loaded.ContainmentScans == nil || loaded.ContainmentScans.Helper.PendingSequence != 1 {
+		t.Fatalf("unknown scan begin state = %#v, %v", loaded.ContainmentScans, err)
+	}
+	writes = 0
+	replayWriter := store.SetAtomicWriterForTesting(func(path string, data []byte) error {
+		writes++
+		return writeAtomic(path, data)
+	})
+	if _, err := store.PrepareSupervisorHandoff(journal.Key(), helperBegin); err != nil {
+		replayWriter()
+		t.Fatalf("exact scan begin replay = %v", err)
+	}
+	replayWriter()
+	if writes != 1 {
+		t.Fatalf("exact scan begin replay writes = %d, want a fresh persistence barrier", writes)
+	}
+	if _, err := store.RecordSupervisorHandoffStopReceipt(journal.Key(), expected, testStateLinuxSupervisorStopReceipt(expected)); err == nil {
+		t.Fatal("stop receipt accepted while helper and mirror scans were pending")
+	}
+	wrongSequence := testStateScanUpdate(expected, authority.SupervisorScanOwnerHelper, authority.SupervisorScanPhaseBegin, 2, "")
+	if _, err := store.PrepareSupervisorHandoff(journal.Key(), wrongSequence); err == nil {
+		t.Fatal("out-of-order scan sequence replaced a pending fence")
+	}
+
+	helperClean := testStateScanUpdate(expected, authority.SupervisorScanOwnerHelper, authority.SupervisorScanPhaseClean, 1, "")
+	unknownWriter = store.SetAtomicWriterForTesting(func(path string, data []byte) error {
+		if err := writeAtomic(path, data); err != nil {
+			return err
+		}
+		return errors.New("scan completion result is unknown after rename")
+	})
+	if _, err := store.PrepareSupervisorHandoff(journal.Key(), helperClean); err == nil {
+		unknownWriter()
+		t.Fatal("scan completion hid its unknown write result")
+	}
+	unknownWriter()
+	writes = 0
+	replayWriter = store.SetAtomicWriterForTesting(func(path string, data []byte) error {
+		writes++
+		return writeAtomic(path, data)
+	})
+	if _, err := store.PrepareSupervisorHandoff(journal.Key(), helperClean); err != nil {
+		replayWriter()
+		t.Fatalf("exact scan completion replay = %v", err)
+	}
+	replayWriter()
+	if writes != 1 {
+		t.Fatalf("exact scan completion replay writes = %d, want a fresh persistence barrier", writes)
+	}
+	loaded, err = store.LoadJournal(journal.Key())
+	if err != nil || loaded.ContainmentScans == nil || loaded.ContainmentScans.Helper.PendingSequence != 1 || loaded.ContainmentScans.Helper.CleanResultSequence != 1 {
+		t.Fatalf("clean result retired its pending fence before helper acknowledgement: %#v, %v", loaded.ContainmentScans, err)
+	}
+	if _, err := store.CommitSupervisorHandoff(journal.Key(), expected, time.Date(2026, 9, 26, 1, 2, 3, 0, time.UTC)); err == nil {
+		t.Fatal("handoff committed while the mirror initial scan remained pending")
+	}
+	mirrorBegin := testStateScanUpdate(expected, authority.SupervisorScanOwnerMirror, authority.SupervisorScanPhaseBegin, 1, "")
+	if _, err := store.PrepareSupervisorHandoff(journal.Key(), mirrorBegin); err != nil {
+		t.Fatalf("acknowledge mirror pre-scan fence = %v", err)
+	}
+	mirrorClean := testStateScanUpdate(expected, authority.SupervisorScanOwnerMirror, authority.SupervisorScanPhaseClean, 1, "")
+	if _, err := store.PrepareSupervisorHandoff(journal.Key(), mirrorClean); err != nil {
+		t.Fatalf("complete mirror initial scan = %v", err)
+	}
+	helperRetire := testStateScanUpdate(expected, authority.SupervisorScanOwnerHelper, authority.SupervisorScanPhaseRetire, 1, "")
+	retireWriter := store.SetAtomicWriterForTesting(func(path string, data []byte) error {
+		if err := writeAtomic(path, data); err != nil {
+			return err
+		}
+		return errors.New("scan retirement result is unknown after rename")
+	})
+	if _, err := store.PrepareSupervisorHandoff(journal.Key(), helperRetire); err == nil {
+		retireWriter()
+		t.Fatal("scan retirement hid its unknown write result")
+	}
+	retireWriter()
+	loaded, err = store.LoadJournal(journal.Key())
+	if err != nil || loaded.ContainmentScans == nil || loaded.ContainmentScans.Helper.PendingSequence != 0 || loaded.ContainmentScans.Helper.CompletedSequence != 1 {
+		t.Fatalf("unknown scan retirement state = %#v, %v", loaded.ContainmentScans, err)
+	}
+	writes = 0
+	replayWriter = store.SetAtomicWriterForTesting(func(path string, data []byte) error {
+		writes++
+		return writeAtomic(path, data)
+	})
+	if _, err := store.PrepareSupervisorHandoff(journal.Key(), helperRetire); err != nil {
+		replayWriter()
+		t.Fatalf("exact scan retirement replay = %v", err)
+	}
+	replayWriter()
+	if writes != 1 {
+		t.Fatalf("exact scan retirement replay writes = %d, want a fresh persistence barrier", writes)
+	}
+	mirrorRetire := testStateScanUpdate(expected, authority.SupervisorScanOwnerMirror, authority.SupervisorScanPhaseRetire, 1, "")
+	if _, err := store.PrepareSupervisorHandoff(journal.Key(), mirrorRetire); err != nil {
+		t.Fatalf("retire acknowledged mirror scan fence = %v", err)
+	}
+	committed, err := store.CommitSupervisorHandoff(journal.Key(), expected, time.Date(2026, 9, 26, 1, 2, 3, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("commit clean scan handoff = %v", err)
+	}
+	if committed.ContainmentScans == nil || !committed.ContainmentScans.clean() {
+		t.Fatalf("committed scan journal = %#v, want clean helper and mirror proof", committed.ContainmentScans)
+	}
+	reloadedCommit, err := store.LoadJournal(journal.Key())
+	if err != nil || reloadedCommit.ContainmentScans == nil || reloadedCommit.ContainmentScans.Helper.SealedSequence != 0 ||
+		reloadedCommit.ContainmentScans.Mirror.SealedSequence != 0 || !reloadedCommit.ContainmentObservationUnresolved() {
+		t.Fatalf("clean legacy-compatible scan round trip = %#v unresolved:%v, %v", reloadedCommit.ContainmentScans, reloadedCommit.ContainmentObservationUnresolved(), err)
+	}
+	receipt := testStateLinuxSupervisorStopReceipt(expected)
+	if _, err := store.RecordSupervisorHandoffStopReceipt(journal.Key(), expected, receipt); err == nil {
+		t.Fatal("stop receipt accepted clean retired scans before either scanner was sealed")
+	}
+	helperSeal := testStateScanUpdate(expected, authority.SupervisorScanOwnerHelper, authority.SupervisorScanPhaseSeal, 1, "")
+	if _, err := store.PrepareSupervisorHandoff(journal.Key(), helperSeal); err != nil {
+		t.Fatalf("seal final helper scan = %v", err)
+	}
+	if _, err := store.RecordSupervisorHandoffStopReceipt(journal.Key(), expected, receipt); err == nil {
+		t.Fatal("stop receipt accepted after only the helper scanner was sealed")
+	}
+	mirrorSeal := testStateScanUpdate(expected, authority.SupervisorScanOwnerMirror, authority.SupervisorScanPhaseSeal, 1, "")
+	if _, err := store.PrepareSupervisorHandoff(journal.Key(), mirrorSeal); err != nil {
+		t.Fatalf("seal final mirror scan = %v", err)
+	}
+	if _, err := store.RecordSupervisorHandoffStopReceipt(journal.Key(), expected, receipt); err != nil {
+		t.Fatalf("record stop receipt after both exact seals = %v", err)
+	}
+	cleared, err := store.ClearProcessDetails(journal.Key(), expected.TargetPID, expected.TargetIdentity)
+	if err != nil {
+		t.Fatalf("clear exact process after durable clean receipt = %v", err)
+	}
+	if cleared.ContainmentScans != nil || cleared.HasProcessDetails() || cleared.ContainmentAuthority != nil {
+		t.Fatalf("cleared Linux containment state = %#v", cleared)
+	}
+}
+
+func TestLinuxSupervisorScanFailureStaysStickyAcrossAbortAndReceipt(t *testing.T) {
+	store := mustStore(t)
+	journal := stoppedTestJournal("linux-scan-failure", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	handoff := testStateLinuxSupervisorHandoffFixture(42, "linux:v2:01234567-89ab-cdef-0123-456789abcdef:77:42:456")
+	if _, err := store.PrepareSupervisorHandoff(journal.Key(), handoff); err != nil {
+		t.Fatal(err)
+	}
+	bound, err := store.BindSupervisorHandoff(journal.Key(), testStateLinuxBindRequest(handoff), 99, "linux:v2:01234567-89ab-cdef-0123-456789abcdef:77:99:789")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := *bound.ContainmentHandoff
+	begin := testStateScanUpdate(expected, authority.SupervisorScanOwnerHelper, authority.SupervisorScanPhaseBegin, 1, "")
+	if _, err := store.PrepareSupervisorHandoff(journal.Key(), begin); err != nil {
+		t.Fatal(err)
+	}
+	failure := testStateScanUpdate(expected, authority.SupervisorScanOwnerHelper, authority.SupervisorScanPhaseUnproven, 1, "observed_escape")
+	unknownWriter := store.SetAtomicWriterForTesting(func(path string, data []byte) error {
+		if err := writeAtomic(path, data); err != nil {
+			return err
+		}
+		return errors.New("scan failure result is unknown after rename")
+	})
+	if _, err := store.PrepareSupervisorHandoff(journal.Key(), failure); err == nil {
+		unknownWriter()
+		t.Fatal("helper scan failure hid its unknown write result")
+	}
+	unknownWriter()
+	loaded, err := store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.ContainmentUnproven || loaded.ContainmentScans == nil || loaded.ContainmentScans.Helper.PendingSequence != 0 || loaded.ContainmentScans.Helper.UnprovenSequence != 1 || loaded.ContainmentScans.Helper.FailureKind != "observed_escape" {
+		t.Fatalf("helper failure was not durably latched: %#v", loaded)
+	}
+	writes := 0
+	replayWriter := store.SetAtomicWriterForTesting(func(path string, data []byte) error {
+		writes++
+		return writeAtomic(path, data)
+	})
+	if _, err := store.PrepareSupervisorHandoff(journal.Key(), failure); err != nil {
+		replayWriter()
+		t.Fatalf("exact helper failure replay = %v", err)
+	}
+	replayWriter()
+	if writes != 1 {
+		t.Fatalf("exact helper failure replay writes = %d, want a fresh persistence barrier", writes)
+	}
+	if _, err := store.RecordSupervisorHandoffStopReceipt(journal.Key(), expected, testStateLinuxSupervisorStopReceipt(expected)); err == nil {
+		t.Fatal("receipt accepted after helper-only scan failure")
+	}
+	proof := testStateSupervisorHandoffAbortProofFixture(expected)
+	if _, err := store.ClearSupervisorHandoffAfterAbort(journal.Key(), expected, proof); err == nil {
+		t.Fatal("abort proof cleared an observed helper scan failure")
+	}
+	if err := store.DeleteJournal(journal.Key()); err == nil {
+		t.Fatal("journal deletion cleared a sticky helper scan failure")
+	}
+	if !loaded.ContainmentObservationUnresolved() {
+		t.Fatal("helper scan failure was not classified as unresolved containment")
+	}
+}
+
+func TestLinuxFailedPreScanBeginCannotBecomeStopReceipt(t *testing.T) {
+	store, key, handoff := committedLinuxScanHandoffForTest(t, "linux-failed-next-begin")
+	for _, owner := range []string{authority.SupervisorScanOwnerHelper, authority.SupervisorScanOwnerMirror} {
+		for _, update := range []authority.SupervisorHandoff{
+			testStateScanUpdate(handoff, owner, authority.SupervisorScanPhaseBegin, 2, ""),
+			testStateScanUpdate(handoff, owner, authority.SupervisorScanPhaseClean, 2, ""),
+			testStateScanUpdate(handoff, owner, authority.SupervisorScanPhaseRetire, 2, ""),
+		} {
+			if _, err := store.PrepareSupervisorHandoff(key, update); err != nil {
+				t.Fatalf("retire periodic %s scan: %v", owner, err)
+			}
+		}
+	}
+
+	failedWrite := store.SetAtomicWriterForTesting(func(string, []byte) error {
+		return errors.New("pre-rename scan write failure")
+	})
+	begin := testStateScanUpdate(handoff, authority.SupervisorScanOwnerHelper, authority.SupervisorScanPhaseBegin, 3, "")
+	if _, err := store.PrepareSupervisorHandoff(key, begin); err == nil {
+		failedWrite()
+		t.Fatal("failed BEGIN unexpectedly persisted")
+	}
+	failure := testStateScanUpdate(handoff, authority.SupervisorScanOwnerHelper, authority.SupervisorScanPhaseUnproven, 3, "pre_scan_ack_failure")
+	if _, err := store.PrepareSupervisorHandoff(key, failure); err == nil {
+		failedWrite()
+		t.Fatal("unproven update unexpectedly persisted while the journal writer was unavailable")
+	}
+	failedWrite()
+
+	loaded, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scans := loaded.ContainmentScans; scans == nil || scans.Helper.CompletedSequence != 2 ||
+		scans.Helper.PendingSequence != 0 || scans.Helper.UnprovenSequence != 0 || scans.Helper.SealedSequence != 0 {
+		t.Fatalf("failed BEGIN state = %#v; want prior clean sequence unsealed and no durable failed update", scans)
+	}
+	if !loaded.ContainmentObservationUnresolved() {
+		t.Fatal("clean-but-unsealed scan state was not classified as unresolved")
+	}
+	if _, err := store.RecordSupervisorHandoffStopReceipt(key, handoff, testStateLinuxSupervisorStopReceipt(handoff)); err == nil {
+		t.Fatal("helper hard-death state after failed BEGIN authorized a stop receipt")
+	}
+
+	if _, err := store.PrepareSupervisorHandoff(key, failure); err != nil {
+		t.Fatalf("record exact pre-scan acknowledgement failure after storage recovers: %v", err)
+	}
+	loaded, err = store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.ContainmentUnproven || loaded.ContainmentScans == nil ||
+		loaded.ContainmentScans.Helper.UnprovenSequence != 3 || loaded.ContainmentScans.Helper.FailureKind != "pre_scan_ack_failure" {
+		t.Fatalf("pre-scan failure was not made sticky at CompletedSequence+1: %#v", loaded)
+	}
+	if _, err := store.RecordSupervisorHandoffStopReceipt(key, handoff, testStateLinuxSupervisorStopReceipt(handoff)); err == nil {
+		t.Fatal("stop receipt accepted after the exact pre-scan failure was latched")
+	}
+}
+
+func TestLinuxScanSealReplayIsExactAndNeverReopens(t *testing.T) {
+	store, key, handoff := committedLinuxScanHandoffForTest(t, "linux-seal-replay")
+	for _, update := range []authority.SupervisorHandoff{
+		testStateScanUpdate(handoff, authority.SupervisorScanOwnerHelper, authority.SupervisorScanPhaseBegin, 2, ""),
+		testStateScanUpdate(handoff, authority.SupervisorScanOwnerHelper, authority.SupervisorScanPhaseClean, 2, ""),
+		testStateScanUpdate(handoff, authority.SupervisorScanOwnerHelper, authority.SupervisorScanPhaseRetire, 2, ""),
+	} {
+		if _, err := store.PrepareSupervisorHandoff(key, update); err != nil {
+			t.Fatalf("prepare helper final scan: %v", err)
+		}
+	}
+	helperSeal := testStateScanUpdate(handoff, authority.SupervisorScanOwnerHelper, authority.SupervisorScanPhaseSeal, 2, "")
+	unknownWriter := store.SetAtomicWriterForTesting(func(path string, data []byte) error {
+		if err := writeAtomic(path, data); err != nil {
+			return err
+		}
+		return errors.New("seal result is unknown after rename")
+	})
+	if _, err := store.PrepareSupervisorHandoff(key, helperSeal); err == nil {
+		unknownWriter()
+		t.Fatal("seal hid its unknown write result")
+	}
+	unknownWriter()
+	loaded, err := store.LoadJournal(key)
+	if err != nil || loaded.ContainmentScans == nil || loaded.ContainmentScans.Helper.SealedSequence != 2 {
+		t.Fatalf("unknown seal state = %#v, %v", loaded.ContainmentScans, err)
+	}
+	writes := 0
+	replayWriter := store.SetAtomicWriterForTesting(func(path string, data []byte) error {
+		writes++
+		return writeAtomic(path, data)
+	})
+	if _, err := store.PrepareSupervisorHandoff(key, helperSeal); err != nil {
+		replayWriter()
+		t.Fatalf("exact seal replay did not establish a fresh persistence barrier: %v", err)
+	}
+	replayWriter()
+	if writes != 1 {
+		t.Fatalf("exact seal replay writes = %d, want one fresh durable write", writes)
+	}
+
+	if _, err := store.PrepareSupervisorHandoff(key, testStateScanUpdate(handoff, authority.SupervisorScanOwnerHelper, authority.SupervisorScanPhaseBegin, 3, "")); err == nil {
+		t.Fatal("sealed helper scanner began a later sequence")
+	}
+	if _, err := store.PrepareSupervisorHandoff(key, testStateScanUpdate(handoff, authority.SupervisorScanOwnerHelper, authority.SupervisorScanPhaseSeal, 1, "")); err == nil {
+		t.Fatal("sealed helper scanner changed its exact seal sequence")
+	}
+	if _, err := store.PrepareSupervisorHandoff(key, testStateScanUpdate(handoff, authority.SupervisorScanOwnerMirror, authority.SupervisorScanPhaseSeal, 1, "")); err != nil {
+		t.Fatalf("seal final mirror sequence: %v", err)
+	}
+	assertSealed := testStateScanUpdate(handoff, authority.SupervisorScanOwnerHelper, authority.SupervisorScanPhaseAssertAllSealed, 2, "")
+	if _, err := store.PrepareSupervisorHandoff(key, assertSealed); err != nil {
+		t.Fatalf("assert exact helper and mirror seals: %v", err)
+	}
+	if _, err := store.RecordSupervisorHandoffStopReceipt(key, handoff, testStateLinuxSupervisorStopReceipt(handoff)); err != nil {
+		t.Fatalf("record receipt after exact helper+mirror seals: %v", err)
+	}
+}
+
+func TestLinuxRecoverySealRequiresCleanHelperProofAndPriorMirrorSeal(t *testing.T) {
+	store, key, handoff := committedLinuxScanHandoffForTest(t, "linux-recovery-seal")
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.RecoveryHelperScanSealEligible() {
+		t.Fatal("recovery seal was eligible before the daemon mirror had sealed")
+	}
+	value := journal.ContainmentAuthority.Clone()
+	if _, err := store.RecordSupervisorRecoveryScanSeal(key, value, 2); err == nil {
+		t.Fatal("helper recovery proof sealed an unsealed mirror")
+	}
+	mirrorSeal := testStateScanUpdate(handoff, authority.SupervisorScanOwnerMirror, authority.SupervisorScanPhaseSeal, 1, "")
+	if _, err := store.PrepareSupervisorHandoff(key, mirrorSeal); err != nil {
+		t.Fatalf("persist durable mirror seal: %v", err)
+	}
+	journal, err = store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !journal.RecoveryHelperScanSealEligible() {
+		t.Fatal("clean unsealed helper with exact sealed mirror was not eligible for authenticated terminal proof")
+	}
+	unknownWriter := store.SetAtomicWriterForTesting(func(path string, data []byte) error {
+		if err := writeAtomic(path, data); err != nil {
+			return err
+		}
+		return errors.New("helper terminal seal result is unknown after rename")
+	})
+	if _, err := store.RecordSupervisorRecoveryScanSeal(key, value, 2); err == nil {
+		unknownWriter()
+		t.Fatal("helper terminal seal hid its unknown write result")
+	}
+	unknownWriter()
+	loaded, err := store.LoadJournal(key)
+	if err != nil || loaded.ContainmentScans == nil || loaded.ContainmentScans.Helper.CompletedSequence != 2 ||
+		loaded.ContainmentScans.Helper.SealedSequence != 2 || loaded.ContainmentObservationUnresolved() {
+		t.Fatalf("recovered helper seal state = %#v unresolved:%v, %v", loaded.ContainmentScans, loaded.ContainmentObservationUnresolved(), err)
+	}
+	writes := 0
+	replayWriter := store.SetAtomicWriterForTesting(func(path string, data []byte) error {
+		writes++
+		return writeAtomic(path, data)
+	})
+	if _, err := store.RecordSupervisorRecoveryScanSeal(key, value, 2); err != nil {
+		replayWriter()
+		t.Fatalf("exact recovered helper seal replay: %v", err)
+	}
+	replayWriter()
+	if writes != 1 {
+		t.Fatalf("exact recovered helper seal replay writes = %d, want one fresh barrier", writes)
+	}
+	if _, err := store.RecordContainmentStopReceipt(key, value.TargetPID, value.TargetIdentity, testStateLinuxSupervisorStopReceipt(handoff)); err != nil {
+		t.Fatalf("record receipt after authenticated helper seal and prior mirror seal: %v", err)
+	}
+}
+
+func TestLinuxInitialBoundAbortClearsOnlyWithoutReceipt(t *testing.T) {
+	store := mustStore(t)
+	journal := stoppedTestJournal("linux-precommit-abort", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	launch := testStateLinuxSupervisorHandoffFixture(42, "linux:v2:01234567-89ab-cdef-0123-456789abcdef:77:42:456")
+	if _, err := store.PrepareSupervisorHandoff(journal.Key(), launch); err != nil {
+		t.Fatal(err)
+	}
+	bound, err := store.BindSupervisorHandoff(journal.Key(), testStateLinuxBindRequest(launch), 99, "linux:v2:01234567-89ab-cdef-0123-456789abcdef:77:99:789")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := *bound.ContainmentHandoff
+	for _, update := range []authority.SupervisorHandoff{
+		testStateScanUpdate(expected, authority.SupervisorScanOwnerMirror, authority.SupervisorScanPhaseBegin, 1, ""),
+		testStateScanUpdate(expected, authority.SupervisorScanOwnerMirror, authority.SupervisorScanPhaseClean, 1, ""),
+		testStateScanUpdate(expected, authority.SupervisorScanOwnerMirror, authority.SupervisorScanPhaseRetire, 1, ""),
+	} {
+		if _, err := store.PrepareSupervisorHandoff(journal.Key(), update); err != nil {
+			t.Fatalf("persist mirror's initial clean scan: %v", err)
+		}
+	}
+	proof := testStateSupervisorHandoffAbortProofFixture(expected)
+	cleared, err := store.ClearSupervisorHandoffAfterAbort(journal.Key(), expected, proof)
+	if err != nil {
+		t.Fatalf("clear exact never-committed initial handoff after abort proof: %v", err)
+	}
+	if cleared.ContainmentHandoff != nil || cleared.ContainmentScans != nil || cleared.ContainmentAuthority != nil || cleared.HasProcessDetails() {
+		t.Fatalf("pre-commit abort left containment authority: %#v", cleared)
+	}
+}
+
+func TestBoundLegacyLinuxAuthorityLoadsButCannotProveCleanScans(t *testing.T) {
+	store, key := claimedStoreForSupervisorScanTest(t)
+	startedAt := time.Date(2026, 9, 26, 2, 2, 3, 0, time.UTC)
+	handoff := testStateLinuxSupervisorHandoffFixture(42, "linux:v2:01234567-89ab-cdef-0123-456789abcdef:77:42:456")
+	value, err := handoffWithHelper(handoff, 99, "linux:v2:01234567-89ab-cdef-0123-456789abcdef:77:99:789").ToSupervisor()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetProcessDetailsWithAuthority(key, value.TargetPID, value.TargetIdentity, startedAt, value); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatalf("read additive legacy Linux journal: %v", err)
+	}
+	if loaded.ContainmentScans != nil || !loaded.ContainmentObservationUnresolved() {
+		t.Fatalf("legacy Linux journal scan state = %#v unresolved:%v, want missing-but-unresolved", loaded.ContainmentScans, loaded.ContainmentObservationUnresolved())
+	}
+	if _, err := store.RecordContainmentStopReceipt(key, value.TargetPID, value.TargetIdentity, testStateLinuxSupervisorStopReceipt(handoffWithHelper(handoff, 99, "linux:v2:01234567-89ab-cdef-0123-456789abcdef:77:99:789"))); err == nil {
+		t.Fatal("legacy Linux journal minted a receipt without scan fences")
+	}
+}
+
+func committedLinuxScanHandoffForTest(t *testing.T, runID string) (*Store, RunKey, authority.SupervisorHandoff) {
+	t.Helper()
+	store := mustStore(t)
+	journal := stoppedTestJournal(runID, 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	launch := testStateLinuxSupervisorHandoffFixture(42, "linux:v2:01234567-89ab-cdef-0123-456789abcdef:77:42:456")
+	if _, err := store.PrepareSupervisorHandoff(journal.Key(), launch); err != nil {
+		t.Fatal(err)
+	}
+	bound, err := store.BindSupervisorHandoff(journal.Key(), testStateLinuxBindRequest(launch), 99, "linux:v2:01234567-89ab-cdef-0123-456789abcdef:77:99:789")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handoff := *bound.ContainmentHandoff
+	for _, owner := range []string{authority.SupervisorScanOwnerHelper, authority.SupervisorScanOwnerMirror} {
+		for _, phase := range []string{authority.SupervisorScanPhaseBegin, authority.SupervisorScanPhaseClean, authority.SupervisorScanPhaseRetire} {
+			update := testStateScanUpdate(handoff, owner, phase, 1, "")
+			if _, err := store.PrepareSupervisorHandoff(journal.Key(), update); err != nil {
+				t.Fatalf("complete %s initial scan phase %s: %v", owner, phase, err)
+			}
+		}
+	}
+	if _, err := store.CommitSupervisorHandoff(journal.Key(), handoff, time.Date(2026, 9, 26, 5, 6, 7, 0, time.UTC)); err != nil {
+		t.Fatalf("commit exact clean initial scans: %v", err)
+	}
+	return store, journal.Key(), handoff
+}
+
+func claimedStoreForSupervisorScanTest(t *testing.T) (*Store, RunKey) {
+	t.Helper()
+	store := mustStore(t)
+	journal := stoppedTestJournal("linux-scan-legacy", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	return store, journal.Key()
+}
+
+func handoffWithHelper(handoff authority.SupervisorHandoff, pid int, identity string) authority.SupervisorHandoff {
+	handoff.SupervisorPID = pid
+	handoff.SupervisorIdentity = identity
+	return handoff
+}
+
+func testStateLinuxSupervisorHandoffFixture(pid int, identity string) authority.SupervisorHandoff {
+	handoff := testStateSupervisorHandoffFixture(pid, identity)
+	handoff.OwnerKind = authority.OwnerKindLinuxHelper
+	handoff.OwnerContext = "linux-helper:test|endpoint=/tmp/supervisor.sock"
+	return handoff
+}
+
+func testStateLinuxBindRequest(handoff authority.SupervisorHandoff) authority.SupervisorHandoff {
+	handoff.ScanUpdate = &authority.SupervisorScanUpdate{
+		MirrorIdentity: strings.Repeat("e", authority.TokenBytes*2),
+		Owner:          authority.SupervisorScanOwnerMirror, Sequence: 1, Phase: authority.SupervisorScanPhaseInitialize,
+	}
+	return handoff
+}
+
+func testStateScanUpdate(handoff authority.SupervisorHandoff, owner, phase string, sequence uint64, failureKind string) authority.SupervisorHandoff {
+	helperPID := handoff.SupervisorPID
+	helperIdentity := handoff.SupervisorIdentity
+	handoff.SupervisorPID = 0
+	handoff.SupervisorIdentity = ""
+	handoff.ScanUpdate = &authority.SupervisorScanUpdate{
+		SupervisorPID: helperPID, SupervisorIdentity: helperIdentity,
+		MirrorIdentity: strings.Repeat("e", authority.TokenBytes*2),
+		Owner:          owner, Phase: phase, Sequence: sequence, FailureKind: failureKind,
+	}
+	return handoff
+}
+
+func testStateLinuxSupervisorStopReceipt(handoff authority.SupervisorHandoff) authority.StopReceipt {
+	receipt := testStateSupervisorHandoffStopReceipt(handoff)
+	receipt.OwnerKind = handoff.OwnerKind
+	receipt.OwnerContext = handoff.OwnerContext
+	return receipt
+}
+
 func testStateSupervisorHandoffFixture(pid int, identity string) authority.SupervisorHandoff {
 	return authority.SupervisorHandoff{
 		Version: authority.SupervisorHandoffVersion, LaunchToken: strings.Repeat("d", authority.TokenBytes*2),
@@ -762,7 +1323,8 @@ func testStateSupervisorHandoffFixture(pid int, identity string) authority.Super
 func testStateSupervisorHandoffAbortProofFixture(handoff authority.SupervisorHandoff) authority.SupervisorHandoffAbortProof {
 	return authority.SupervisorHandoffAbortProof{
 		Version: authority.SupervisorHandoffAbortProofVersion, Disposition: authority.SupervisorHandoffAbortDisposition,
-		LaunchToken: handoff.LaunchToken, JobID: handoff.JobID, TargetPID: handoff.TargetPID,
+		LaunchToken: handoff.LaunchToken, JobID: handoff.JobID, OwnerKind: handoff.OwnerKind, OwnerContext: handoff.OwnerContext,
+		TargetPID:      handoff.TargetPID,
 		TargetIdentity: handoff.TargetIdentity, SupervisorPID: handoff.SupervisorPID, SupervisorIdentity: handoff.SupervisorIdentity,
 		CreatorSessionID: cloneStateUint32Pointer(handoff.CreatorSessionID),
 	}
