@@ -1,0 +1,33 @@
+[Unit]
+Description=Symmetry Linux containment owner anchor
+After=local-fs.target
+RequiresMountsFor=/sys/fs/cgroup
+# Before first activation only: stop/recover under the old v1 topology, then run
+# `symmetry-daemon -verify-legacy-owner-drained -config /etc/symmetry/daemon.json` as A.
+# The installer performs this cutover gate; it must not run on owner restarts.
+
+[Service]
+Type=notify
+NotifyAccess=main
+User=@A_USER@
+Group=@A_GROUP@
+NoNewPrivileges=no
+UMask=0077
+WorkingDirectory=/
+Slice=system.slice
+RuntimeDirectory=symmetry-owner
+RuntimeDirectoryMode=0700
+Delegate=yes
+DelegateSubgroup=manager
+KillMode=control-group
+SendSIGKILL=yes
+TimeoutStartSec=30s
+# Recovery allows the configured maximum cleanup deadline (10 min) plus anchor shutdown.
+TimeoutStopSec=12min
+Restart=on-failure
+RestartSec=5s
+ExecStart=/usr/libexec/symmetry/symmetry-daemon -linux-owner-anchor -cgroup-mount /sys/fs/cgroup -delegated-path system.slice/symmetry-owner.service/manager -socket /run/symmetry-owner/owner.sock
+ExecStop=/usr/libexec/symmetry/symmetry-daemon -recover-containment-only -config /etc/symmetry/daemon.json
+
+[Install]
+WantedBy=multi-user.target
