@@ -1081,8 +1081,12 @@ func openLinuxCgroupPath(dirfd int, name string, beneath bool) (int, error) {
 }
 
 func openLinuxCgroupControlAt(dirfd int, name string, flags int) (int, error) {
+	openFlags := flags | unix.O_CLOEXEC | unix.O_NOFOLLOW
+	if flags&unix.O_PATH == 0 {
+		openFlags |= unix.O_NONBLOCK
+	}
 	how := &unix.OpenHow{
-		Flags:   uint64(flags | unix.O_CLOEXEC | unix.O_NOFOLLOW | unix.O_NONBLOCK),
+		Flags:   uint64(openFlags),
 		Resolve: uint64(unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_XDEV),
 	}
 	return unix.Openat2(dirfd, name, how)

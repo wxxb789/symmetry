@@ -43,6 +43,9 @@ func TestLinuxCgroupV2Openat2RejectsTraversalAndSymlinks(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(root, "inside"), 0700); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(root, "cgroup.kill"), nil, 0200); err != nil {
+		t.Fatal(err)
+	}
 	outside := t.TempDir()
 	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
 		t.Fatal(err)
@@ -64,6 +67,11 @@ func TestLinuxCgroupV2Openat2RejectsTraversalAndSymlinks(t *testing.T) {
 		t.Fatalf("open safe child directory: %v", err)
 	}
 	_ = unix.Close(fd)
+	killFD, err := openLinuxCgroupControlAt(rootFD, "cgroup.kill", unix.O_PATH)
+	if err != nil {
+		t.Fatalf("inspect root-owned cgroup.kill by O_PATH without requesting write access: %v", err)
+	}
+	_ = unix.Close(killFD)
 
 	if _, err := OpenLinuxCgroupV2Parent(filepath.Join(root, "escape"), ""); err == nil {
 		t.Fatal("OpenLinuxCgroupV2Parent accepted a symlinked mount point")
