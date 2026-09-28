@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -104,6 +105,297 @@ type ClaimIntent struct {
 	WorkspaceBindingKey string
 }
 
+// LinuxCgroupReservation is the single RunJournal's v2 run-leaf creation and
+// producer-fencing record. Its key/fence are inherited from the enclosing
+// journal. Parent and leaf name are immutable reservation intent; matching
+// path/inode fields never recreate authority after all live pins are lost.
+// AbortProof is an exact pre-effect no-target tombstone, not a stop receipt;
+// retaining it makes lost abort-write responses replayable without making the
+// aborted leaf a pending containment owner.
+type LinuxCgroupReservation struct {
+	Version          int                                 `json:"version"`
+	LaunchToken      string                              `json:"launch_token"`
+	Secret           string                              `json:"secret"`
+	PipeToken        string                              `json:"pipe_token"`
+	JobID            string                              `json:"job_id"`
+	OwnerUID         uint32                              `json:"owner_uid"`
+	LauncherUID      uint32                              `json:"launcher_uid"`
+	RecoveryEndpoint string                              `json:"recovery_endpoint"`
+	Parent           authority.LinuxCgroupParentIdentity `json:"parent"`
+	LeafName         string                              `json:"leaf_name"`
+	CreateStarted    bool                                `json:"create_started,omitempty"`
+	// LauncherGrantPossible is set and fsynced before the grant can reach the
+	// root launcher. Once true, the no-target abort path is permanently closed.
+	LauncherGrantPossible bool                                        `json:"launcher_grant_possible,omitempty"`
+	LeafIdentity          *authority.LinuxCgroupIdentity              `json:"leaf_identity,omitempty"`
+	Anchor                authority.LinuxCgroupProcessIdentity        `json:"anchor"`
+	Helper                *authority.LinuxCgroupProcessIdentity       `json:"helper,omitempty"`
+	Launcher              *authority.LinuxCgroupProcessIdentity       `json:"launcher,omitempty"`
+	LauncherExit          *authority.LinuxCgroupExitProof             `json:"launcher_exit,omitempty"`
+	Gate                  *authority.LinuxCgroupGateIdentity          `json:"gate,omitempty"`
+	HelperExit            *authority.LinuxCgroupExitProof             `json:"helper_exit,omitempty"`
+	Mirror                *authority.LinuxCgroupProcessIdentity       `json:"mirror,omitempty"`
+	AbortProof            *authority.LinuxCgroupReservationAbortProof `json:"abort_proof,omitempty"`
+	PreGateStopReceipt    *authority.LinuxCgroupPreGateStopReceipt    `json:"pre_gate_stop_receipt,omitempty"`
+}
+
+const LinuxCgroupReservationVersion = 2
+
+func (value LinuxCgroupReservation) Validate() error {
+	if value.Version != LinuxCgroupReservationVersion || !validStateLowerHex(value.LaunchToken, authority.TokenBytes*2) ||
+		!validStateLowerHex(value.Secret, authority.SecretBytes*2) || !validStateLowerHex(value.PipeToken, authority.TokenBytes*2) ||
+		!validStateLowerHex(value.JobID, authority.TokenBytes*2) || !validRequiredString(value.RecoveryEndpoint, 4096) ||
+		value.OwnerUID == 0 || value.LauncherUID != 0 || strings.IndexByte(value.RecoveryEndpoint, 0) >= 0 || value.Parent.Validate() != nil ||
+		!validStateLowerHex(value.LeafName, authority.TokenBytes*2) || value.Anchor.Validate() != nil ||
+		value.Mirror == nil || value.Mirror.Validate() != nil {
+		return errors.New("Linux cgroup reservation is invalid")
+	}
+	if value.LeafIdentity != nil {
+		if !value.CreateStarted || value.LeafIdentity.Validate() != nil ||
+			!value.LeafIdentity.Parent.Equal(value.Parent) || value.LeafIdentity.LeafName != value.LeafName {
+			return errors.New("Linux cgroup reservation leaf identity is invalid")
+		}
+	}
+	if value.Helper != nil && (value.LeafIdentity == nil || value.Helper.Validate() != nil) {
+		return errors.New("Linux cgroup helper identity is invalid")
+	}
+	if value.Helper != nil && value.Helper.Equal(value.Anchor) {
+		return errors.New("Linux cgroup helper aliases the anchor process")
+	}
+	if value.Launcher != nil && (value.Helper == nil || value.Launcher.Validate() != nil) {
+		return errors.New("Linux cgroup launcher identity is invalid")
+	}
+	if value.LauncherGrantPossible && value.Launcher == nil {
+		return errors.New("Linux cgroup launcher grant has no bound launcher")
+	}
+	if value.Launcher != nil && (value.Launcher.Equal(value.Anchor) || value.Launcher.Equal(*value.Helper)) {
+		return errors.New("Linux cgroup launcher aliases another producer")
+	}
+	if value.LauncherExit != nil && (value.Launcher == nil ||
+		value.Helper == nil || !value.LauncherExit.ValidForOwnedDescendant(*value.Launcher, *value.Helper, value.Anchor, value.HelperExit)) {
+		return errors.New("Linux cgroup launcher exit proof is invalid")
+	}
+	if value.Gate != nil && (!value.LauncherGrantPossible || value.LauncherExit == nil || value.LeafIdentity == nil ||
+		value.Gate.Validate() != nil || value.Gate.HostUID != value.OwnerUID || !value.Gate.Cgroup.Equal(*value.LeafIdentity)) {
+		return errors.New("Linux cgroup gate identity is invalid")
+	}
+	if value.Gate != nil && (value.Gate.Process.Equal(value.Anchor) || value.Gate.Process.Equal(*value.Helper) ||
+		value.Gate.Process.Equal(*value.Launcher)) {
+		return errors.New("Linux cgroup gate aliases another producer")
+	}
+	if value.HelperExit != nil && (value.Helper == nil || !value.HelperExit.ValidFor(*value.Helper, value.Anchor)) {
+		return errors.New("Linux cgroup helper exit proof is invalid")
+	}
+	if value.Mirror.Equal(value.Anchor) || (value.Helper != nil && value.Mirror.Equal(*value.Helper)) ||
+		(value.Launcher != nil && value.Mirror.Equal(*value.Launcher)) || (value.Gate != nil && value.Mirror.Equal(value.Gate.Process)) {
+		return errors.New("Linux cgroup mirror aliases another producer")
+	}
+	if value.AbortProof != nil && !linuxCgroupReservationAbortMatches(value, *value.AbortProof) {
+		return errors.New("Linux cgroup reservation abort proof is invalid")
+	}
+	if value.PreGateStopReceipt != nil && !linuxCgroupPreGateReceiptMatchesReservation(value, *value.PreGateStopReceipt) {
+		return errors.New("Linux pre-gate cgroup stop receipt is invalid")
+	}
+	if value.AbortProof != nil && value.PreGateStopReceipt != nil {
+		return errors.New("Linux cgroup reservation cannot have both abort and physical-stop proof")
+	}
+	if value.AbortProof != nil && (value.HelperExit != nil && value.AbortProof.HelperExit == nil ||
+		value.LauncherExit != nil && value.AbortProof.LauncherExit == nil) {
+		return errors.New("Linux cgroup aborted reservation lost producer-exit evidence")
+	}
+	if !value.CreateStarted && (value.LeafIdentity != nil || value.Helper != nil || value.Launcher != nil ||
+		value.LauncherExit != nil || value.Gate != nil || value.HelperExit != nil ||
+		value.AbortProof != nil && value.AbortProof.LeafDisposition != authority.LinuxCgroupAbortLeafNeverCreated) {
+		return errors.New("Linux cgroup reservation has effects before creation intent")
+	}
+	return nil
+}
+
+func (value LinuxCgroupReservation) ValidateWithoutPreGateReceipt() error {
+	cloned := value.Clone()
+	cloned.PreGateStopReceipt = nil
+	return cloned.Validate()
+}
+
+func (value LinuxCgroupReservation) Clone() LinuxCgroupReservation {
+	cloned := value
+	if value.LeafIdentity != nil {
+		leaf := *value.LeafIdentity
+		cloned.LeafIdentity = &leaf
+	}
+	if value.Helper != nil {
+		helper := *value.Helper
+		cloned.Helper = &helper
+	}
+	if value.Launcher != nil {
+		launcher := *value.Launcher
+		cloned.Launcher = &launcher
+	}
+	if value.LauncherExit != nil {
+		proof := *value.LauncherExit
+		cloned.LauncherExit = &proof
+	}
+	if value.Gate != nil {
+		gate := *value.Gate
+		cloned.Gate = &gate
+	}
+	if value.HelperExit != nil {
+		proof := *value.HelperExit
+		cloned.HelperExit = &proof
+	}
+	if value.Mirror != nil {
+		mirror := *value.Mirror
+		cloned.Mirror = &mirror
+	}
+	if value.AbortProof != nil {
+		proof := value.AbortProof.Clone()
+		cloned.AbortProof = &proof
+	}
+	if value.PreGateStopReceipt != nil {
+		receipt := value.PreGateStopReceipt.Clone()
+		cloned.PreGateStopReceipt = &receipt
+	}
+	return cloned
+}
+
+func (value LinuxCgroupReservation) Equal(other LinuxCgroupReservation) bool {
+	return value.Version == other.Version && value.LaunchToken == other.LaunchToken && value.Secret == other.Secret &&
+		value.PipeToken == other.PipeToken && value.JobID == other.JobID && value.RecoveryEndpoint == other.RecoveryEndpoint &&
+		value.OwnerUID == other.OwnerUID && value.LauncherUID == other.LauncherUID &&
+		value.Parent.Equal(other.Parent) && value.LeafName == other.LeafName && value.CreateStarted == other.CreateStarted &&
+		value.LauncherGrantPossible == other.LauncherGrantPossible &&
+		equalAuthorityCgroupIdentity(value.LeafIdentity, other.LeafIdentity) &&
+		value.Anchor.Equal(other.Anchor) && equalAuthorityProcess(value.Helper, other.Helper) &&
+		equalAuthorityProcess(value.Launcher, other.Launcher) && equalAuthorityExit(value.LauncherExit, other.LauncherExit) &&
+		equalAuthorityGate(value.Gate, other.Gate) && equalAuthorityExit(value.HelperExit, other.HelperExit) &&
+		equalAuthorityProcess(value.Mirror, other.Mirror) && equalAuthorityAbortProof(value.AbortProof, other.AbortProof) &&
+		equalAuthorityPreGateReceipt(value.PreGateStopReceipt, other.PreGateStopReceipt)
+}
+
+func validStateLowerHex(value string, length int) bool {
+	return len(value) == length && value == strings.ToLower(value) && validHex(value)
+}
+
+func equalAuthorityCgroupIdentity(left, right *authority.LinuxCgroupIdentity) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
+func equalAuthorityProcess(left, right *authority.LinuxCgroupProcessIdentity) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
+func equalAuthorityExit(left, right *authority.LinuxCgroupExitProof) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
+func equalAuthorityGate(left, right *authority.LinuxCgroupGateIdentity) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
+func equalAuthorityAbortProof(left, right *authority.LinuxCgroupReservationAbortProof) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
+func equalAuthorityPreGateReceipt(left, right *authority.LinuxCgroupPreGateStopReceipt) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
+func exactCgroupMutationStage(journal *RunJournal, expected, after LinuxCgroupReservation) (bool, error) {
+	if !journal.hasClaimGrant() || journal.LocalState == "cleanup_pending" || journal.ContainmentCgroup == nil ||
+		expected.AbortProof != nil || expected.PreGateStopReceipt != nil {
+		return false, errors.New("Linux cgroup reservation is not mutable")
+	}
+	if err := after.Validate(); err != nil {
+		return false, err
+	}
+	current := journal.ContainmentCgroup
+	if current.Equal(after) {
+		return true, nil
+	}
+	if current.Equal(expected) {
+		return false, nil
+	}
+	return false, errors.New("Linux cgroup reservation compare-and-set mismatch")
+}
+
+func (store *Store) ensureLinuxCgroupLeafAvailableLocked(key RunKey, reservation LinuxCgroupReservation) error {
+	entries, err := os.ReadDir(store.runsDir())
+	if err != nil {
+		return errors.New("list run journals before cgroup reservation")
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !isJournalFile(entry.Name()) {
+			continue
+		}
+		var existing RunJournal
+		path := filepath.Join(store.runsDir(), entry.Name())
+		if err := store.readRunJournalJSONWithLimit(path, &existing, maxJournalFileBytes); err != nil ||
+			validateJournal(existing) != nil || filepath.Base(store.journalPath(existing.Key())) != entry.Name() {
+			return errors.New("cannot establish unique Linux cgroup leaf reservation")
+		}
+		if existing.Key() == key || existing.ContainmentCgroup == nil {
+			continue
+		}
+		other := existing.ContainmentCgroup
+		if other.Parent.Path == reservation.Parent.Path && other.LeafName == reservation.LeafName {
+			return errors.New("Linux cgroup leaf path is already reserved")
+		}
+	}
+	return nil
+}
+
+func (store *Store) ensureLinuxClonePathsAvailableLocked(key RunKey, intent authority.LinuxCloneIntent) error {
+	entries, err := os.ReadDir(store.runsDir())
+	if err != nil {
+		return errors.New("list run journals before Linux clone reservation")
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !isJournalFile(entry.Name()) {
+			continue
+		}
+		var existing RunJournal
+		path := filepath.Join(store.runsDir(), entry.Name())
+		if err := store.readRunJournalJSONWithLimit(path, &existing, maxJournalFileBytes); err != nil ||
+			validateJournal(existing) != nil || filepath.Base(store.journalPath(existing.Key())) != entry.Name() {
+			return errors.New("cannot establish unique Linux clone paths")
+		}
+		if existing.Key() == key || existing.LinuxCloneIntent == nil ||
+			existing.LinuxCloneAbortProof != nil && !existing.LinuxCloneAbortPending {
+			continue
+		}
+		other := *existing.LinuxCloneIntent
+		if linuxClonePathAliases(intent.SeedPath, other.SeedPath) ||
+			linuxClonePathAliases(intent.Target, other.Target) ||
+			linuxClonePathAliases(intent.SeedPath, other.Target) ||
+			linuxClonePathAliases(intent.Target, other.SeedPath) {
+			return errors.New("Linux clone seed or target path is already reserved")
+		}
+	}
+	return nil
+}
+
+func linuxClonePathAliases(left, right string) bool {
+	return left == right || strings.HasPrefix(left, right+"/") || strings.HasPrefix(right, left+"/")
+}
+
 // RunJournal is the complete durable local recovery record for one run
 // generation. It contains only opaque protocol state and machine-local process
 // information; coding-agent and repository credentials never belong here.
@@ -133,9 +425,21 @@ type RunJournal struct {
 	WorkspaceRecoveryRequired bool                    `json:"workspace_recovery_required,omitempty"`
 	RetainWorkspace           bool                    `json:"retain_workspace,omitempty"`
 	WorkspaceBindingKey       string                  `json:"workspace_binding_key"`
-	PID                       int                     `json:"pid"`
-	ProcessIdentity           string                  `json:"process_identity"`
-	StartedAt                 time.Time               `json:"started_at"`
+	// LinuxCloneIntent and the stage receipts are additive v2 clone authority
+	// in this existing run journal. Each advances only through its dedicated
+	// RunKey/fence CAS; checkout presence never clears process containment.
+	LinuxCloneIntent           *authority.LinuxCloneIntent           `json:"linux_clone_intent,omitempty"`
+	LinuxCloneSeedReceipt      *authority.LinuxCloneSeedReceipt      `json:"linux_clone_seed_receipt,omitempty"`
+	LinuxCloneCheckoutReceipt  *authority.LinuxCloneCheckoutReceipt  `json:"linux_clone_checkout_receipt,omitempty"`
+	LinuxClonePromotionReceipt *authority.LinuxClonePromotionReceipt `json:"linux_clone_promotion_receipt,omitempty"`
+	// LinuxCloneAbortPending is written before A-side no-checkout cleanup and
+	// fences every later gate/checkout stage. LinuxCloneAbortProof is the exact
+	// absence tombstone written only after A verifies target, seed and refs gone.
+	LinuxCloneAbortPending bool                            `json:"linux_clone_abort_pending,omitempty"`
+	LinuxCloneAbortProof   *authority.LinuxCloneAbortProof `json:"linux_clone_abort_proof,omitempty"`
+	PID                    int                             `json:"pid"`
+	ProcessIdentity        string                          `json:"process_identity"`
+	StartedAt              time.Time                       `json:"started_at"`
 	// ContainmentAuthority is optional for backwards compatibility with
 	// journals created before the independent Windows supervisor existed. A
 	// process marker without it remains intentionally unrecoverable on Windows.
@@ -144,6 +448,22 @@ type RunJournal struct {
 	// mutually exclusive with ContainmentAuthority and is cleared only by the
 	// dedicated commit or release-proof mutations.
 	ContainmentHandoff *authority.SupervisorHandoff `json:"containment_handoff,omitempty"`
+	// ContainmentCgroup is the additive v2 Linux run-leaf reservation and
+	// producer ledger. It remains in this same RunJournal from pre-mkdir reserve
+	// through receipt-backed release, including while PID is zero.
+	ContainmentCgroup *LinuxCgroupReservation `json:"containment_cgroup,omitempty"`
+	// ContainmentCgroupReleaseProof is the exact post-removal proof retained in
+	// this same RunJournal after atomic v2 clear. It is a replay tombstone, not
+	// pending containment; only the exact successful clear is acknowledged.
+	ContainmentCgroupReleaseProof *authority.SupervisorHandoffReleaseProof `json:"containment_cgroup_release_proof,omitempty"`
+	// ContainmentCgroupPreGateReleaseProof is the matching receipt-bound
+	// tombstone for a gate-never-produced, PID-zero reservation clear.
+	ContainmentCgroupPreGateReleaseProof *authority.LinuxCgroupPreGateReleaseProof `json:"containment_cgroup_pre_gate_release_proof,omitempty"`
+	// ContainmentScans is the additive durable pre-scan/result ledger for Linux
+	// helper and daemon-mirror observations. Missing is valid for journals
+	// written before scan fencing existed; bound legacy Linux owners then remain
+	// unresolved rather than being upgraded from readback or process absence.
+	ContainmentScans *ContainmentScanJournal `json:"containment_scans,omitempty"`
 	// ContainmentUnproven records that a local stop attempt could not prove the
 	// complete owned process boundary. Recovery must retain the marker until a
 	// later positive stop proof clears this flag explicitly.
@@ -165,6 +485,36 @@ type RunJournal struct {
 	InputCommandIntent             *InputCommandIntent               `json:"input_command_intent,omitempty"`
 	ControlCommandIntents          []ControlCommandIntent            `json:"control_command_intents,omitempty"`
 	ProviderActionIntents          []ProviderActionIntent            `json:"provider_action_intents,omitempty"`
+}
+
+// ContainmentScanProgress tracks one scanner's monotonic durable scan fence.
+// PendingSequence remains set through CleanResultSequence until the scanner
+// receives the durable clean-result ACK and retires that exact fence.
+// SealedSequence is a one-way quiescence proof for the exact final clean
+// sequence; zero (including a missing legacy field) is never sealed.
+// UnprovenSequence is sticky for the lifetime of the process authority.
+type ContainmentScanProgress struct {
+	PendingSequence     uint64 `json:"pending_sequence,omitempty"`
+	CleanResultSequence uint64 `json:"clean_result_sequence,omitempty"`
+	CompletedSequence   uint64 `json:"completed_sequence,omitempty"`
+	SealedSequence      uint64 `json:"sealed_sequence,omitempty"`
+	UnprovenSequence    uint64 `json:"unproven_sequence,omitempty"`
+	FailureKind         string `json:"failure_kind,omitempty"`
+}
+
+// ContainmentScanJournal binds helper and volatile mirror scan progress to the
+// exact Linux launch and one mirror generation recorded by this RunJournal's
+// run/generation key.
+type ContainmentScanJournal struct {
+	Version            int                     `json:"version"`
+	LaunchToken        string                  `json:"launch_token"`
+	TargetPID          int                     `json:"target_pid"`
+	TargetIdentity     string                  `json:"target_identity"`
+	SupervisorPID      int                     `json:"supervisor_pid"`
+	SupervisorIdentity string                  `json:"supervisor_identity"`
+	MirrorIdentity     string                  `json:"mirror_identity"`
+	Helper             ContainmentScanProgress `json:"helper"`
+	Mirror             ContainmentScanProgress `json:"mirror"`
 }
 
 // NativeUsageTerminalRecovery preserves the exact terminal intent observed
@@ -200,11 +550,149 @@ func (journal RunJournal) HasProcessDetails() bool {
 	return journal.PID != 0 || journal.ProcessIdentity != "" || !journal.StartedAt.IsZero()
 }
 
-// HasPendingContainment reports a durable containment authority or an
-// unresolved pre-authority handoff. It intentionally does not include the
-// legacy process marker so HasProcessDetails retains its existing meaning.
+// HasPendingContainment reports a durable containment authority, handoff, scan
+// ledger, or v2 leaf reservation. It intentionally does not include the legacy
+// process marker so HasProcessDetails retains its existing meaning.
 func (journal RunJournal) HasPendingContainment() bool {
-	return journal.ContainmentAuthority != nil || journal.ContainmentHandoff != nil
+	return journal.ContainmentAuthority != nil || journal.ContainmentHandoff != nil ||
+		journal.ContainmentScans != nil || journal.ContainmentCgroup != nil && journal.ContainmentCgroup.AbortProof == nil
+}
+
+// LinuxCloneCleanupEligible reports whether the B-owned clone can be removed
+// without using checkout presence as containment or artifact proof. The caller
+// must still check retained GoalSession ownership and any in-memory retention
+// decision; this state-local predicate covers only durable RunJournal gates.
+// An exact no-target abort proof is the exception to RetainWorkspace because
+// it establishes that no clone, seed or run-keyed source ref remains.
+func (journal RunJournal) LinuxCloneCleanupEligible(key RunKey, fence protocol.Fence) bool {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" || journal.Key() != key || journal.Fence() != fence ||
+		(journal.LocalState != "cleanup_pending" && journal.LocalState != "stale") ||
+		journal.LocalState == "stale" && journal.TerminalState == "" && journal.LeaseExpiresAt.After(time.Now()) ||
+		journal.HasProcessDetails() || journal.HasPendingContainment() ||
+		len(journal.PendingCommandAcknowledgements) != 0 || journal.HasPendingGoalDeliveries() ||
+		journal.NativeUsageRecoveryRequired || len(journal.PendingTransitions) != 0 || len(journal.PendingEvents) != 0 ||
+		journal.LinuxCloneIntent == nil || linuxCloneArtifactReceiptRequired(journal) || validateLinuxCloneJournal(journal) != nil {
+		return false
+	}
+	if journal.LinuxCloneAbortProof != nil {
+		return !journal.LinuxCloneAbortPending && journal.LinuxCloneCheckoutReceipt == nil && journal.LinuxClonePromotionReceipt == nil &&
+			journal.WorkspacePath == "" && !journal.WorkspaceRecoveryRequired
+	}
+	return !journal.LinuxCloneAbortPending && !journal.RetainWorkspace && journal.TerminalState != "cancelled" &&
+		journal.LinuxCloneSeedReceipt != nil && journal.LinuxCloneCheckoutReceipt != nil && journal.LinuxClonePromotionReceipt != nil &&
+		journal.WorkspacePath == journal.LinuxCloneIntent.Target && journal.WorkspaceBindingKey == journal.LinuxCloneIntent.BindingKey &&
+		journal.ContainmentCgroupReleaseProof != nil && journal.ContainmentCgroupReleaseProof.Validate() == nil &&
+		journal.ContainmentCgroupReleaseProof.Version == authority.SupervisorHandoffVersionV2
+}
+
+func linuxCloneArtifactReceiptRequired(journal RunJournal) bool {
+	if !journal.GoalDeliveryEnabled || journal.TerminalState != "completed" {
+		return false
+	}
+	admission, present, err := protocol.ParseAdmissionInput(journal.Work.Input)
+	if err != nil || !present {
+		return true
+	}
+	if admission.Purpose != protocol.AdmissionPurposeImplement {
+		return false
+	}
+	switch journal.TerminalTaskResultKind {
+	case protocol.TaskResultCandidateCompletion:
+		for _, delivery := range journal.DeliveredGoalDeliveries {
+			if delivery.Kind == GoalDeliveryEvidence && delivery.Evidence != nil && delivery.Evidence.Kind == protocol.EvidenceArtifact {
+				return false
+			}
+		}
+		return true
+	case protocol.TaskResultProgress, protocol.TaskResultBlocked, protocol.TaskResultRepairRequired,
+		protocol.TaskResultReplanRequired, protocol.TaskResultFailed, protocol.TaskResultPlanProposed:
+		return false
+	default:
+		return true
+	}
+}
+
+// ContainmentObservationUnresolved reports whether bound Linux scan evidence
+// is pending, sticky-unproven, incomplete, absent, or clean-but-unsealed. A
+// periodic clean scan is not a terminal witness; only exact durable seals for
+// both scanner owners permit stop-receipt recovery. Missing legacy fields stay
+// unsealed and cannot be upgraded from process absence.
+func (journal RunJournal) ContainmentObservationUnresolved() bool {
+	if journal.ContainmentCgroup != nil {
+		if journal.ContainmentCgroup.AbortProof != nil {
+			return false
+		}
+		if journal.ContainmentCgroup.PreGateStopReceipt != nil &&
+			linuxCgroupPreGateReceiptMatchesReservation(*journal.ContainmentCgroup, *journal.ContainmentCgroup.PreGateStopReceipt) {
+			return false
+		}
+		if authorityValue := journal.ContainmentAuthority; authorityValue != nil &&
+			authorityValue.Version == authority.SupervisorVersionV2 && authorityValue.StopReceipt != nil &&
+			authorityValue.StopReceipt.ValidFor(*authorityValue) {
+			return false
+		}
+		if handoff := journal.ContainmentHandoff; handoff != nil &&
+			handoff.Version == authority.SupervisorHandoffVersionV2 && handoff.StopReceipt != nil &&
+			handoff.StopReceipt.ValidForHandoff(*handoff) {
+			return false
+		}
+		return true
+	}
+	if journal.ContainmentUnproven {
+		return true
+	}
+	if journal.ContainmentScans != nil {
+		return !journal.ContainmentScans.sealed()
+	}
+	if journal.ContainmentAuthority != nil && journal.ContainmentAuthority.OwnerKind == authority.OwnerKindLinuxHelper {
+		return true
+	}
+	if handoff := journal.ContainmentHandoff; handoff != nil && handoff.OwnerKind == authority.OwnerKindLinuxHelper && handoff.SupervisorPID > 0 {
+		return true
+	}
+	return false
+}
+
+// RecoveryHelperScanSealEligible reports whether an authenticated live helper
+// can complete exactly the next terminal sequence during daemon-loss recovery.
+// It never permits recovery to seal a vanished mirror or advance pending scan
+// evidence.
+func (journal RunJournal) RecoveryHelperScanSealEligible() bool {
+	value := journal.ContainmentAuthority
+	scans := journal.ContainmentScans
+	if journal.ContainmentCgroup != nil || journal.ContainmentUnproven || value == nil || value.OwnerKind != authority.OwnerKindLinuxHelper ||
+		value.StopReceipt != nil || scans == nil || !scans.matchesAuthority(*value) || !scans.Mirror.sealed() {
+		return false
+	}
+	progress := scans.Helper
+	return progress.CompletedSequence > 0 && progress.CompletedSequence != ^uint64(0) && progress.PendingSequence == 0 && progress.CleanResultSequence == 0 &&
+		progress.SealedSequence == 0 && progress.UnprovenSequence == 0 && progress.FailureKind == ""
+}
+
+func (scans ContainmentScanJournal) clean() bool {
+	return scans.Helper.PendingSequence == 0 && scans.Helper.CleanResultSequence == 0 && scans.Helper.UnprovenSequence == 0 && scans.Helper.CompletedSequence > 0 &&
+		scans.Mirror.PendingSequence == 0 && scans.Mirror.CleanResultSequence == 0 && scans.Mirror.UnprovenSequence == 0 && scans.Mirror.CompletedSequence > 0
+}
+
+func (progress ContainmentScanProgress) sealed() bool {
+	return progress.CompletedSequence > 0 && progress.SealedSequence == progress.CompletedSequence &&
+		progress.PendingSequence == 0 && progress.CleanResultSequence == 0 && progress.UnprovenSequence == 0 && progress.FailureKind == ""
+}
+
+func (scans ContainmentScanJournal) sealed() bool {
+	return scans.Helper.sealed() && scans.Mirror.sealed()
+}
+
+func (scans ContainmentScanJournal) matchesHandoff(handoff authority.SupervisorHandoff) bool {
+	return scans.Version == 1 && scans.LaunchToken == handoff.LaunchToken && scans.TargetPID == handoff.TargetPID &&
+		scans.TargetIdentity == handoff.TargetIdentity && scans.SupervisorPID == handoff.SupervisorPID &&
+		scans.SupervisorIdentity == handoff.SupervisorIdentity
+}
+
+func (scans ContainmentScanJournal) matchesAuthority(value authority.Supervisor) bool {
+	return scans.Version == 1 && scans.LaunchToken == value.LaunchToken && scans.TargetPID == value.TargetPID &&
+		scans.TargetIdentity == value.TargetIdentity && scans.SupervisorPID == value.SupervisorPID &&
+		scans.SupervisorIdentity == value.SupervisorIdentity
 }
 
 // Fence returns the fencing data currently held by the journal.
@@ -469,6 +957,21 @@ func (store *Store) SaveClaimGrant(key RunKey, grant protocol.ClaimResponse) (Ru
 		strings.TrimSpace(grant.LeaseToken) == "" || grant.LeaseExpiresAt.IsZero() {
 		return RunJournal{}, errors.New("claim grant does not match journal")
 	}
+	if journal.ContainmentCgroup != nil || journal.LinuxCloneIntent != nil {
+		if journal.LeaseToken != grant.LeaseToken || !journal.LeaseExpiresAt.Equal(grant.LeaseExpiresAt) || !sameWork(journal.Work, grant.Work) {
+			return RunJournal{}, errors.New("claim grant cannot replace a v2 run authority fence")
+		}
+		if err := store.saveJournalWithCapacityGuardLocked(journal); err != nil {
+			return RunJournal{}, err
+		}
+		return journal, nil
+	}
+	if journal.ContainmentCgroupReleaseProof != nil {
+		return RunJournal{}, errors.New("claim grant cannot change after v2 containment release")
+	}
+	if journal.ContainmentCgroupPreGateReleaseProof != nil {
+		return RunJournal{}, errors.New("claim grant cannot change after v2 pre-gate release")
+	}
 	journal.LeaseToken = grant.LeaseToken
 	journal.LeaseExpiresAt = grant.LeaseExpiresAt
 	journal.Work = grant.Work
@@ -492,6 +995,246 @@ func (store *Store) LoadJournal(key RunKey) (RunJournal, error) {
 	return store.loadJournalLocked(key)
 }
 
+// ReserveLinuxCloneIntent durably reserves the exact RunKey, current admitted
+// Subject, seed path and B-owned target before the workspace service performs
+// any Git/ref/bundle or checkout side effect.
+func (store *Store) ReserveLinuxCloneIntent(key RunKey, fence protocol.Fence, intent authority.LinuxCloneIntent) (RunJournal, error) {
+	if err := requireLinuxClonePlatform(); err != nil {
+		return RunJournal{}, err
+	}
+	if err := intent.Validate(); err != nil || intent.RunID != key.RunID || intent.Generation != key.Generation {
+		return RunJournal{}, errors.New("Linux clone intent does not match RunKey")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if err := requireLinuxCloneJournalFence(*journal, fence, intent); err != nil {
+			return err
+		}
+		if err := store.ensureLinuxClonePathsAvailableLocked(key, intent); err != nil {
+			return err
+		}
+		if journal.LinuxCloneIntent != nil {
+			if !journal.LinuxCloneIntent.Equal(intent) {
+				return errors.New("Linux clone intent cannot be replaced")
+			}
+			if journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil {
+				return errors.New("Linux clone intent is fenced for pre-checkout abort")
+			}
+			return nil
+		}
+		if journal.LocalState == "terminal_pending" || journal.LocalState == "cleanup_pending" || journal.LocalState == "stale" ||
+			journal.HasProcessDetails() || journal.ContainmentHandoff != nil || journal.ContainmentAuthority != nil ||
+			journal.ContainmentCgroup != nil || journal.ContainmentCgroupReleaseProof != nil || journal.ContainmentCgroupPreGateReleaseProof != nil {
+			return errors.New("Linux clone intent must be reserved before process containment or terminal cleanup")
+		}
+		if journal.WorkspacePath != "" && journal.WorkspacePath != intent.Target {
+			return errors.New("Linux clone target conflicts with the journal workspace path")
+		}
+		copy := intent.Clone()
+		journal.LinuxCloneIntent = &copy
+		journal.WorkspacePath = intent.Target
+		journal.WorkspaceBindingKey = intent.BindingKey
+		journal.WorkspaceRecoveryRequired = true
+		return nil
+	})
+}
+
+// BindLinuxCloneSeed records the A-measured immutable seed bundle receipt only
+// after its exact reserved intent has been persisted.
+func (store *Store) BindLinuxCloneSeed(key RunKey, fence protocol.Fence, intent authority.LinuxCloneIntent, seed authority.LinuxCloneSeedReceipt) (RunJournal, error) {
+	if err := requireLinuxClonePlatform(); err != nil {
+		return RunJournal{}, err
+	}
+	if err := seed.Validate(); err != nil || seed.BaseCommit != intent.BaseCommit {
+		return RunJournal{}, errors.New("Linux clone seed receipt does not match its intent")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if err := requireLinuxCloneJournalFence(*journal, fence, intent); err != nil {
+			return err
+		}
+		if journal.LinuxCloneIntent == nil || !journal.LinuxCloneIntent.Equal(intent) {
+			return errors.New("Linux clone seed intent is not durably reserved")
+		}
+		if journal.LinuxCloneSeedReceipt != nil {
+			if !journal.LinuxCloneSeedReceipt.Equal(seed) {
+				return errors.New("Linux clone seed receipt cannot be changed")
+			}
+			return nil
+		}
+		if journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil || !linuxCloneStageCanAdvance(*journal) {
+			return errors.New("Linux clone seed cannot advance after abort or terminal fencing")
+		}
+		copy := seed.Clone()
+		journal.LinuxCloneSeedReceipt = &copy
+		return nil
+	})
+}
+
+// RecordLinuxCloneCheckoutReady binds the B-created target inode to the
+// reserved intent and seed. The initial write is legal only after the v2
+// handoff is durably committed; the trusted same-PID gate calls it after its
+// existing initial-lease-ACK/RELEASE barrier and before native exec.
+func (store *Store) RecordLinuxCloneCheckoutReady(key RunKey, fence protocol.Fence, intent authority.LinuxCloneIntent, receipt authority.LinuxCloneCheckoutReceipt) (RunJournal, error) {
+	if err := requireLinuxClonePlatform(); err != nil {
+		return RunJournal{}, err
+	}
+	if err := receipt.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if err := requireLinuxCloneJournalFence(*journal, fence, intent); err != nil {
+			return err
+		}
+		if journal.LinuxCloneIntent == nil || !journal.LinuxCloneIntent.Equal(intent) || journal.LinuxCloneSeedReceipt == nil {
+			return errors.New("Linux clone checkout is missing its reserved intent or seed")
+		}
+		if journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil {
+			return errors.New("Linux clone checkout is fenced for pre-checkout abort")
+		}
+		if !linuxCloneCheckoutMatches(intent, *journal.LinuxCloneSeedReceipt, receipt) {
+			return errors.New("Linux clone checkout receipt does not match its intent and seed")
+		}
+		if journal.LinuxCloneCheckoutReceipt != nil {
+			if !journal.LinuxCloneCheckoutReceipt.Equal(receipt) {
+				return errors.New("Linux clone checkout receipt cannot be changed")
+			}
+			return nil
+		}
+		if !linuxCloneStageCanAdvance(*journal) {
+			return errors.New("Linux clone checkout cannot advance after terminal fencing")
+		}
+		if !linuxCloneCommittedGateReady(*journal) {
+			return errors.New("Linux clone checkout requires committed v2 gate authority")
+		}
+		copy := receipt.Clone()
+		journal.LinuxCloneCheckoutReceipt = &copy
+		return nil
+	})
+}
+
+// RecordLinuxClonePromotion records only an A-validated candidate receipt for
+// the deterministic run-keyed A-owned promotion ref, after durable physical
+// stop proof. It never clears or advances containment state.
+func (store *Store) RecordLinuxClonePromotion(key RunKey, fence protocol.Fence, intent authority.LinuxCloneIntent, receipt authority.LinuxClonePromotionReceipt) (RunJournal, error) {
+	if err := requireLinuxClonePlatform(); err != nil {
+		return RunJournal{}, err
+	}
+	if err := receipt.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	ref, err := authority.LinuxClonePromotionRef(key.RunID, key.Generation)
+	if err != nil || receipt.Ref != ref {
+		return RunJournal{}, errors.New("Linux clone promotion ref does not match RunKey")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if err := requireLinuxCloneJournalFence(*journal, fence, intent); err != nil {
+			return err
+		}
+		if journal.LinuxCloneIntent == nil || !journal.LinuxCloneIntent.Equal(intent) ||
+			journal.LinuxCloneSeedReceipt == nil || journal.LinuxCloneCheckoutReceipt == nil {
+			return errors.New("Linux clone promotion is missing its reserved checkout evidence")
+		}
+		if journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil {
+			return errors.New("Linux clone promotion is fenced for pre-checkout abort")
+		}
+		if !linuxCloneStopProven(*journal) {
+			return errors.New("Linux clone promotion requires durable v2 physical-stop proof")
+		}
+		if journal.LinuxClonePromotionReceipt != nil {
+			if !journal.LinuxClonePromotionReceipt.Equal(receipt) {
+				return errors.New("Linux clone promotion receipt cannot be changed")
+			}
+			return nil
+		}
+		if !linuxCloneStageCanAdvance(*journal) {
+			return errors.New("Linux clone promotion cannot advance after terminal fencing")
+		}
+		copy := receipt.Clone()
+		journal.LinuxClonePromotionReceipt = &copy
+		return nil
+	})
+}
+
+// FenceLinuxCloneBeforeCheckout closes every B-side launch path before A
+// removes a reserved seed or source ref. Replaying the same fence only adds a
+// fresh persistence barrier; an existing checkout cannot enter this stage.
+func (store *Store) FenceLinuxCloneBeforeCheckout(key RunKey, fence protocol.Fence, intent authority.LinuxCloneIntent) (RunJournal, error) {
+	if err := requireLinuxClonePlatform(); err != nil {
+		return RunJournal{}, err
+	}
+	if err := intent.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if err := requireLinuxCloneJournalFence(*journal, fence, intent); err != nil {
+			return err
+		}
+		if journal.LinuxCloneIntent == nil || !journal.LinuxCloneIntent.Equal(intent) ||
+			journal.LinuxCloneCheckoutReceipt != nil || journal.LinuxClonePromotionReceipt != nil {
+			return errors.New("Linux clone is not eligible for pre-checkout abort fencing")
+		}
+		if journal.LinuxCloneAbortProof != nil {
+			if journal.LinuxCloneAbortProof.Intent.Equal(intent) && !journal.LinuxCloneAbortPending {
+				return nil
+			}
+			return errors.New("Linux clone abort fence conflicts with completed proof")
+		}
+		if journal.LinuxCloneAbortPending {
+			return nil
+		}
+		if !linuxCloneAbortFenceAvailable(*journal) {
+			return errors.New("Linux clone abort fence requires no producer or a durable no-gate abort proof")
+		}
+		journal.LinuxCloneAbortPending = true
+		journal.WorkspacePath = intent.Target
+		journal.WorkspaceBindingKey = intent.BindingKey
+		journal.WorkspaceRecoveryRequired = true
+		return nil
+	})
+}
+
+// CompleteLinuxCloneAbort records exact A-side proof that the target, seed and
+// run-keyed refs are absent after FenceLinuxCloneBeforeCheckout. It does not
+// create checkout, promotion, or physical-stop evidence.
+func (store *Store) CompleteLinuxCloneAbort(key RunKey, fence protocol.Fence, intent authority.LinuxCloneIntent, proof authority.LinuxCloneAbortProof) (RunJournal, error) {
+	if err := requireLinuxClonePlatform(); err != nil {
+		return RunJournal{}, err
+	}
+	if err := proof.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if err := requireLinuxCloneJournalFence(*journal, fence, intent); err != nil {
+			return err
+		}
+		if journal.LinuxCloneIntent == nil || !journal.LinuxCloneIntent.Equal(intent) || !proof.Intent.Equal(intent) ||
+			journal.LinuxCloneCheckoutReceipt != nil || journal.LinuxClonePromotionReceipt != nil {
+			return errors.New("Linux clone abort proof does not match a pre-checkout intent")
+		}
+		if journal.LinuxCloneAbortProof != nil {
+			if !journal.LinuxCloneAbortProof.Equal(proof) || journal.LinuxCloneAbortPending {
+				return errors.New("Linux clone abort proof replay conflicts with journal")
+			}
+			return nil
+		}
+		if !journal.LinuxCloneAbortPending {
+			return errors.New("Linux clone abort completion has no durable creator fence")
+		}
+		if journal.LinuxCloneSeedReceipt != nil &&
+			(proof.SeedReceipt == nil || !journal.LinuxCloneSeedReceipt.Equal(*proof.SeedReceipt)) {
+			return errors.New("Linux clone abort proof does not preserve the bound seed receipt")
+		}
+		if !linuxCloneAbortHistoryMatches(*journal, &proof) {
+			return errors.New("Linux clone abort proof does not match durable no-gate history")
+		}
+		copy := proof.Clone()
+		journal.LinuxCloneAbortProof = &copy
+		journal.LinuxCloneAbortPending = false
+		journal.WorkspacePath = ""
+		journal.WorkspaceRecoveryRequired = false
+		return nil
+	})
+}
+
 // SaveJournal atomically replaces a complete run journal. It is intended for
 // recovery imports and carefully coordinated callers; normal callers should
 // prefer the mutation helpers below.
@@ -505,6 +1248,28 @@ func (store *Store) SaveJournal(journal RunJournal) error {
 		return err
 	}
 	if current, err := store.loadJournalLocked(journal.Key()); err == nil {
+		if !sameContainmentCgroupReleaseProof(current.ContainmentCgroupReleaseProof, journal.ContainmentCgroupReleaseProof) {
+			return errors.New("v2 cgroup release proof requires dedicated clear mutation")
+		}
+		if !sameContainmentPreGateReleaseProof(current.ContainmentCgroupPreGateReleaseProof, journal.ContainmentCgroupPreGateReleaseProof) {
+			return errors.New("v2 pre-gate release proof requires dedicated clear mutation")
+		}
+		if !sameLinuxCloneIntent(current.LinuxCloneIntent, journal.LinuxCloneIntent) ||
+			!sameLinuxCloneSeedReceipt(current.LinuxCloneSeedReceipt, journal.LinuxCloneSeedReceipt) ||
+			!sameLinuxCloneCheckoutReceipt(current.LinuxCloneCheckoutReceipt, journal.LinuxCloneCheckoutReceipt) ||
+			!sameLinuxClonePromotionReceipt(current.LinuxClonePromotionReceipt, journal.LinuxClonePromotionReceipt) ||
+			current.LinuxCloneAbortPending != journal.LinuxCloneAbortPending ||
+			!sameLinuxCloneAbortProof(current.LinuxCloneAbortProof, journal.LinuxCloneAbortProof) {
+			return errors.New("Linux clone authority requires dedicated mutation")
+		}
+		if current.ContainmentCgroup != nil || journal.ContainmentCgroup != nil ||
+			current.LinuxCloneIntent != nil || journal.LinuxCloneIntent != nil {
+			if current.RuntimeKey != journal.RuntimeKey || current.RuntimeID != journal.RuntimeID ||
+				current.ClaimedRuntimeEpoch != journal.ClaimedRuntimeEpoch || current.ClaimID != journal.ClaimID ||
+				current.LeaseToken != journal.LeaseToken || !current.LeaseExpiresAt.Equal(journal.LeaseExpiresAt) {
+				return errors.New("run fence requires dedicated mutation while v2 authority is reserved")
+			}
+		}
 		if current.TerminalTaskResultKind != journal.TerminalTaskResultKind {
 			return errors.New("terminal task result kind is immutable")
 		}
@@ -520,6 +1285,12 @@ func (store *Store) SaveJournal(journal RunJournal) error {
 		if !sameContainmentHandoff(current.ContainmentHandoff, journal.ContainmentHandoff) {
 			return errors.New("containment handoff requires dedicated mutation")
 		}
+		if !sameContainmentCgroup(current.ContainmentCgroup, journal.ContainmentCgroup) {
+			return errors.New("v2 cgroup reservation requires dedicated mutation")
+		}
+		if !sameContainmentScans(current.ContainmentScans, journal.ContainmentScans) {
+			return errors.New("containment scan progress requires dedicated mutation")
+		}
 		if (current.LocalState == "cleanup_pending") != (journal.LocalState == "cleanup_pending") {
 			return errors.New("cleanup state requires dedicated transition")
 		}
@@ -529,6 +1300,23 @@ func (store *Store) SaveJournal(journal RunJournal) error {
 		}
 		if journal.ContainmentHandoff != nil {
 			return errors.New("containment handoff requires dedicated mutation")
+		}
+		if journal.ContainmentScans != nil {
+			return errors.New("containment scan progress requires dedicated mutation")
+		}
+		if journal.ContainmentCgroup != nil {
+			return errors.New("v2 cgroup reservation requires dedicated mutation")
+		}
+		if journal.ContainmentCgroupReleaseProof != nil {
+			return errors.New("v2 cgroup release proof requires dedicated clear mutation")
+		}
+		if journal.ContainmentCgroupPreGateReleaseProof != nil {
+			return errors.New("v2 pre-gate release proof requires dedicated clear mutation")
+		}
+		if journal.LinuxCloneIntent != nil || journal.LinuxCloneSeedReceipt != nil ||
+			journal.LinuxCloneCheckoutReceipt != nil || journal.LinuxClonePromotionReceipt != nil ||
+			journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil {
+			return errors.New("Linux clone authority requires dedicated mutation")
 		}
 	} else {
 		return err
@@ -643,6 +1431,9 @@ func (store *Store) DeleteJournal(key RunKey) error {
 	if journal.HasPendingContainment() {
 		return errors.New("containment state remains pending")
 	}
+	if journal.LinuxCloneIntent != nil && !journal.LinuxCloneCleanupEligible(key, journal.Fence()) {
+		return errors.New("Linux clone journal is not eligible for workspace deletion")
+	}
 	if len(journal.PendingCommandAcknowledgements) != 0 {
 		return errors.New("command acknowledgement remains pending")
 	}
@@ -734,6 +1525,21 @@ func (store *Store) SetProcessDetails(key RunKey, pid int, identity string, star
 		if !journal.hasClaimGrant() {
 			return errors.New("journal has no claim grant")
 		}
+		if journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil {
+			return errors.New("process launch is fenced by Linux clone abort")
+		}
+		if journal.LinuxCloneIntent != nil {
+			return errors.New("Linux clone run requires v2 cgroup process registration")
+		}
+		if journal.ContainmentCgroup != nil {
+			return errors.New("process details require v2 cgroup handoff mutation")
+		}
+		if journal.ContainmentCgroupReleaseProof != nil {
+			return errors.New("process details cannot be recreated after v2 containment release")
+		}
+		if journal.ContainmentCgroupPreGateReleaseProof != nil {
+			return errors.New("process details cannot be recreated after v2 pre-gate release")
+		}
 		if journal.ContainmentHandoff != nil {
 			return errors.New("process details require supervisor handoff mutation")
 		}
@@ -764,6 +1570,9 @@ func (store *Store) SetProcessDetailsWithAuthority(key RunKey, pid int, identity
 	if err := value.Validate(); err != nil {
 		return RunJournal{}, err
 	}
+	if value.Version == authority.SupervisorVersionV2 {
+		return RunJournal{}, errors.New("v2 containment authority requires supervisor handoff commit")
+	}
 	if value.TargetPID != pid || value.TargetIdentity != identity {
 		return RunJournal{}, errors.New("containment authority target does not match process details")
 	}
@@ -771,8 +1580,23 @@ func (store *Store) SetProcessDetailsWithAuthority(key RunKey, pid int, identity
 		if !journal.hasClaimGrant() {
 			return errors.New("journal has no claim grant")
 		}
+		if journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil {
+			return errors.New("process launch is fenced by Linux clone abort")
+		}
+		if journal.LinuxCloneIntent != nil {
+			return errors.New("Linux clone run requires v2 cgroup process registration")
+		}
 		if journal.ContainmentHandoff != nil {
 			return errors.New("process details require supervisor handoff mutation")
+		}
+		if journal.ContainmentCgroup != nil {
+			return errors.New("process details require v2 cgroup handoff mutation")
+		}
+		if journal.ContainmentCgroupReleaseProof != nil {
+			return errors.New("process details cannot be recreated after v2 containment release")
+		}
+		if journal.ContainmentCgroupPreGateReleaseProof != nil {
+			return errors.New("process details cannot be recreated after v2 pre-gate release")
 		}
 		if journal.LocalState == "cleanup_pending" {
 			return errors.New("cannot register process details during cleanup")
@@ -830,11 +1654,20 @@ func (store *Store) ClearContainmentUnproven(key RunKey, pid int, identity strin
 		return RunJournal{}, errors.New("process details are invalid")
 	}
 	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.ContainmentCgroup != nil {
+			return errors.New("v2 containment uncertainty clears only with an exact stop receipt")
+		}
 		if !journal.HasProcessDetails() {
 			return nil
 		}
 		if journal.PID != pid || journal.ProcessIdentity != identity {
 			return errors.New("persisted process details changed during containment proof")
+		}
+		if journal.ContainmentScans != nil && !journal.ContainmentScans.clean() {
+			return errors.New("containment scan uncertainty is sticky")
+		}
+		if journal.ContainmentAuthority != nil && journal.ContainmentAuthority.OwnerKind == authority.OwnerKindLinuxHelper && journal.ContainmentScans == nil {
+			return errors.New("Linux containment scan fence is missing")
 		}
 		journal.ContainmentUnproven = false
 		return nil
@@ -851,10 +1684,28 @@ func (store *Store) SetContainmentAuthority(key RunKey, pid int, identity string
 	if err := value.Validate(); err != nil {
 		return RunJournal{}, err
 	}
+	if value.Version == authority.SupervisorVersionV2 {
+		return RunJournal{}, errors.New("v2 containment authority requires supervisor handoff commit")
+	}
 	if value.TargetPID != pid || value.TargetIdentity != identity {
 		return RunJournal{}, errors.New("containment authority target does not match process details")
 	}
 	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil {
+			return errors.New("process launch is fenced by Linux clone abort")
+		}
+		if journal.LinuxCloneIntent != nil {
+			return errors.New("Linux clone run requires v2 cgroup process registration")
+		}
+		if journal.ContainmentCgroup != nil {
+			return errors.New("v2 containment authority requires supervisor handoff commit")
+		}
+		if journal.ContainmentCgroupReleaseProof != nil {
+			return errors.New("v2 containment authority cannot be recreated after release")
+		}
+		if journal.ContainmentCgroupPreGateReleaseProof != nil {
+			return errors.New("v2 pre-gate containment authority cannot be recreated after release")
+		}
 		if journal.ContainmentHandoff != nil {
 			return errors.New("containment authority requires supervisor handoff mutation")
 		}
@@ -884,15 +1735,395 @@ func (store *Store) SetContainmentAuthority(key RunKey, pid int, identity string
 	})
 }
 
+// ReserveLinuxCgroup durably reserves the immutable run leaf before any mkdir
+// or producer launch. Exact retries write the same journal again, including a
+// fresh filesystem persistence barrier after an unknown earlier result.
+func (store *Store) ReserveLinuxCgroup(key RunKey, reservation LinuxCgroupReservation) (RunJournal, error) {
+	if err := reservation.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if reservation.CreateStarted || reservation.LeafIdentity != nil || reservation.Helper != nil ||
+		reservation.Launcher != nil || reservation.LauncherExit != nil || reservation.Gate != nil ||
+		reservation.HelperExit != nil || reservation.AbortProof != nil || reservation.PreGateStopReceipt != nil ||
+		reservation.Mirror == nil {
+		return RunJournal{}, errors.New("Linux cgroup reservation must precede creation")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if !journal.hasClaimGrant() {
+			return errors.New("journal has no claim grant")
+		}
+		if journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil {
+			return errors.New("Linux cgroup reservation is fenced by clone abort")
+		}
+		if journal.LocalState == "cleanup_pending" || journal.HasProcessDetails() ||
+			journal.ContainmentAuthority != nil || journal.ContainmentHandoff != nil ||
+			journal.ContainmentScans != nil || journal.ContainmentUnproven || journal.ContainmentCgroupReleaseProof != nil ||
+			journal.ContainmentCgroupPreGateReleaseProof != nil {
+			return errors.New("Linux cgroup reservation conflicts with existing containment")
+		}
+		if journal.ContainmentCgroup != nil {
+			if journal.ContainmentCgroup.Equal(reservation) {
+				return nil
+			}
+			return errors.New("Linux cgroup reservation conflicts with journal")
+		}
+		if err := store.ensureLinuxCgroupLeafAvailableLocked(key, reservation); err != nil {
+			return err
+		}
+		cloned := reservation.Clone()
+		journal.ContainmentCgroup = &cloned
+		return nil
+	})
+}
+
+// MarkLinuxCgroupCreateStarted commits the before-mkdir creation intent.
+// Replaying its exact pre-state after an unknown write performs another fsync
+// barrier; no later stage can be inferred from the flag alone. The reserved
+// daemon mirror identity remains present here; it is not a cgroup producer
+// grant and does not make the leaf exist.
+func (store *Store) MarkLinuxCgroupCreateStarted(key RunKey, expected LinuxCgroupReservation) (RunJournal, error) {
+	if err := expected.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if expected.CreateStarted || expected.LeafIdentity != nil || expected.Helper != nil ||
+		expected.Launcher != nil || expected.LauncherExit != nil || expected.Gate != nil ||
+		expected.HelperExit != nil {
+		return RunJournal{}, errors.New("Linux cgroup creation intent expected value is invalid")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		after := expected.Clone()
+		after.CreateStarted = true
+		replayed, err := exactCgroupMutationStage(journal, expected, after)
+		if err != nil {
+			return err
+		}
+		if replayed {
+			return nil
+		}
+		cloned := after.Clone()
+		journal.ContainmentCgroup = &cloned
+		return nil
+	})
+}
+
+// BindLinuxCgroupLeaf records the first measured leaf object identity after a
+// successful durable creation intent. It never adopts an already-bound or
+// path-reopened leaf with a different object identity. The caller must invoke
+// it only while the measured directory is still pinned through uninterrupted
+// A-owned FD provenance; matching a path/stat after all pins are lost is not
+// evidence that this reservation created that object.
+func (store *Store) BindLinuxCgroupLeaf(key RunKey, expected LinuxCgroupReservation, measured authority.LinuxCgroupIdentity) (RunJournal, error) {
+	if err := expected.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if err := measured.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if !expected.CreateStarted || measured.LeafName != expected.LeafName || !measured.Parent.Equal(expected.Parent) {
+		return RunJournal{}, errors.New("measured Linux cgroup leaf does not match reservation")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if expected.LeafIdentity != nil || expected.Helper != nil || expected.Launcher != nil || expected.Gate != nil {
+			return errors.New("Linux cgroup leaf must bind before its producers")
+		}
+		leaf := measured
+		after := expected.Clone()
+		after.LeafIdentity = &leaf
+		replayed, err := exactCgroupMutationStage(journal, expected, after)
+		if err != nil {
+			return err
+		}
+		if replayed {
+			return nil
+		}
+		cloned := after.Clone()
+		journal.ContainmentCgroup = &cloned
+		return nil
+	})
+}
+
+// BindLinuxCgroupHelper records the exact UID-A helper identity after the
+// daemon and helper have independently pinned the measured leaf.
+func (store *Store) BindLinuxCgroupHelper(key RunKey, expected LinuxCgroupReservation, helper authority.LinuxCgroupProcessIdentity) (RunJournal, error) {
+	if err := expected.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if err := helper.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if expected.LeafIdentity == nil || expected.Helper != nil || expected.Launcher != nil || expected.Gate != nil ||
+			expected.AbortProof != nil || expected.PreGateStopReceipt != nil || journal.ContainmentHandoff != nil || journal.ContainmentAuthority != nil {
+			return errors.New("Linux cgroup helper bind is out of order")
+		}
+		bound := helper
+		after := expected.Clone()
+		after.Helper = &bound
+		replayed, err := exactCgroupMutationStage(journal, expected, after)
+		if err != nil {
+			return err
+		}
+		if replayed {
+			return nil
+		}
+		cloned := after.Clone()
+		journal.ContainmentCgroup = &cloned
+		return nil
+	})
+}
+
+// BindLinuxCgroupLauncher records the exact root-launcher process before that
+// producer can receive or act on a run grant.
+func (store *Store) BindLinuxCgroupLauncher(key RunKey, expected LinuxCgroupReservation, launcher authority.LinuxCgroupProcessIdentity) (RunJournal, error) {
+	if err := expected.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if err := launcher.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if expected.LeafIdentity == nil || expected.Helper == nil || expected.Launcher != nil || expected.LauncherExit != nil || expected.Gate != nil ||
+			journal.ContainmentHandoff != nil || journal.ContainmentAuthority != nil {
+			return errors.New("Linux cgroup launcher bind is out of order")
+		}
+		bound := launcher
+		after := expected.Clone()
+		after.Launcher = &bound
+		replayed, err := exactCgroupMutationStage(journal, expected, after)
+		if err != nil {
+			return err
+		}
+		if replayed {
+			return nil
+		}
+		cloned := after.Clone()
+		journal.ContainmentCgroup = &cloned
+		return nil
+	})
+}
+
+// ArmLinuxCgroupLauncherGrant durably records that an external grant may now
+// reach the exact bound launcher. Callers must replay this exact CAS and
+// obtain a successful persistence barrier before sending the grant; after this
+// point the no-target abort path is closed even if the launcher later exits.
+func (store *Store) ArmLinuxCgroupLauncherGrant(key RunKey, expected LinuxCgroupReservation) (RunJournal, error) {
+	if err := expected.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if expected.Launcher == nil || expected.LauncherGrantPossible || expected.LauncherExit != nil || expected.Gate != nil ||
+		expected.AbortProof != nil {
+		return RunJournal{}, errors.New("Linux cgroup launcher grant expected value is invalid")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.ContainmentHandoff != nil || journal.ContainmentAuthority != nil || journal.ContainmentCgroup == nil {
+			return errors.New("Linux cgroup launcher grant has no pending reservation")
+		}
+		after := expected.Clone()
+		after.LauncherGrantPossible = true
+		replayed, err := exactCgroupMutationStage(journal, expected, after)
+		if err != nil {
+			return err
+		}
+		if replayed {
+			return nil
+		}
+		cloned := after.Clone()
+		journal.ContainmentCgroup = &cloned
+		return nil
+	})
+}
+
+// RecordLinuxCgroupLauncherExit persists the anchor's exact wait/reap witness
+// before gate binding or handoff preparation may advance.
+func (store *Store) RecordLinuxCgroupLauncherExit(key RunKey, expected LinuxCgroupReservation, proof authority.LinuxCgroupExitProof) (RunJournal, error) {
+	if err := expected.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if err := proof.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if expected.Launcher == nil || expected.Helper == nil || expected.LauncherExit != nil ||
+			!proof.ValidForOwnedDescendant(*expected.Launcher, *expected.Helper, expected.Anchor, expected.HelperExit) {
+			return errors.New("Linux cgroup launcher exit proof does not match producer")
+		}
+		copy := proof
+		after := expected.Clone()
+		after.LauncherExit = &copy
+		replayed, err := exactCgroupMutationStage(journal, expected, after)
+		if err != nil {
+			return err
+		}
+		if replayed {
+			return nil
+		}
+		cloned := after.Clone()
+		journal.ContainmentCgroup = &cloned
+		return nil
+	})
+}
+
+// BindLinuxCgroupGate records the trusted A gate born in the bound leaf after
+// the exact root-launcher wait has been durably acknowledged.
+func (store *Store) BindLinuxCgroupGate(key RunKey, expected LinuxCgroupReservation, gate authority.LinuxCgroupGateIdentity) (RunJournal, error) {
+	if err := expected.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if err := gate.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if expected.LeafIdentity == nil || expected.Helper == nil ||
+			expected.LauncherExit == nil || expected.Gate != nil ||
+			!gate.Cgroup.Equal(*expected.LeafIdentity) ||
+			journal.ContainmentHandoff != nil || journal.ContainmentAuthority != nil {
+			return errors.New("Linux cgroup gate bind is out of order")
+		}
+		copy := gate
+		after := expected.Clone()
+		after.Gate = &copy
+		replayed, err := exactCgroupMutationStage(journal, expected, after)
+		if err != nil {
+			return err
+		}
+		if replayed {
+			return nil
+		}
+		cloned := after.Clone()
+		journal.ContainmentCgroup = &cloned
+		return nil
+	})
+}
+
+// RecordLinuxCgroupHelperExit stores the anchor's exact helper wait/reap proof
+// for a permitted mirror-takeover receipt. It does not itself prove cgroup stop.
+func (store *Store) RecordLinuxCgroupHelperExit(key RunKey, expected LinuxCgroupReservation, proof authority.LinuxCgroupExitProof) (RunJournal, error) {
+	if err := expected.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if err := proof.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.ContainmentHandoff != nil && journal.ContainmentHandoff.StopReceipt != nil ||
+			journal.ContainmentAuthority != nil && journal.ContainmentAuthority.StopReceipt != nil {
+			return errors.New("Linux cgroup helper exit cannot follow a durable stop receipt")
+		}
+		if expected.Helper == nil || expected.HelperExit != nil || !proof.ValidFor(*expected.Helper, expected.Anchor) {
+			return errors.New("Linux cgroup helper exit proof does not match producer")
+		}
+		copy := proof
+		after := expected.Clone()
+		after.HelperExit = &copy
+		replayed, err := exactCgroupMutationStage(journal, expected, after)
+		if err != nil {
+			return err
+		}
+		if replayed {
+			return nil
+		}
+		cloned := after.Clone()
+		journal.ContainmentCgroup = &cloned
+		return nil
+	})
+}
+
+// AbortLinuxCgroupReservation records a replayable no-target abort only after
+// an independent caller proves the exact parent unchanged, every producer
+// fenced, no launcher grant possible and either never-created or exact empty
+// leaf removal. It never creates a stop receipt. The tombstone is not pending
+// containment but remains until journal deletion so an unknown write can be
+// replayed with the same proof and a fresh persistence barrier.
+func (store *Store) AbortLinuxCgroupReservation(key RunKey, expected LinuxCgroupReservation, proof authority.LinuxCgroupReservationAbortProof) (RunJournal, error) {
+	if err := expected.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if err := proof.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if !proof.ValidFor(expected.LaunchToken, expected.Parent, expected.LeafName, expected.CreateStarted,
+		expected.OwnerUID, expected.Anchor, *expected.Mirror, expected.Helper, expected.Launcher) ||
+		expected.AbortProof != nil || expected.PreGateStopReceipt != nil || expected.Gate != nil {
+		return RunJournal{}, errors.New("Linux cgroup reservation abort proof does not match a pre-effect owner")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		return applyLinuxCgroupReservationAbort(journal, expected, proof)
+	})
+}
+
+// AbortNeverCreatedLinuxCgroupReservation records a no-target tombstone when
+// the durable before-mkdir CAS was never advanced. The exclusive open Store
+// lock and exact RunKey/fence prove that no compliant creator could have
+// proceeded past CreateStarted=false; this is not a filesystem observation,
+// physical-stop receipt, or authority to remove a cgroup leaf.
+func (store *Store) AbortNeverCreatedLinuxCgroupReservation(key RunKey, fence protocol.Fence, expected LinuxCgroupReservation) (RunJournal, error) {
+	if err := expected.Validate(); err != nil || expected.CreateStarted || expected.LeafIdentity != nil ||
+		expected.Helper != nil || expected.Launcher != nil || expected.LauncherExit != nil || expected.Gate != nil ||
+		expected.HelperExit != nil || expected.AbortProof != nil || expected.PreGateStopReceipt != nil ||
+		expected.LauncherGrantPossible || expected.Mirror == nil {
+		return RunJournal{}, errors.New("Linux cgroup reservation is not a never-created state")
+	}
+	proof := authority.LinuxCgroupReservationAbortProof{
+		Version: authority.LinuxCgroupAbortProofVersion, LaunchToken: expected.LaunchToken,
+		Parent: expected.Parent, LeafName: expected.LeafName, CreateStarted: false,
+		LeafDisposition: authority.LinuxCgroupAbortLeafNeverCreated, OwnerUID: expected.OwnerUID,
+		Anchor: expected.Anchor, Mirror: *expected.Mirror, Witness: expected.Anchor,
+		CreatorFenced: true, NoProducerCanAct: true, ParentUnchanged: true, LeafAbsent: true,
+		LeafNeverAppeared: false,
+	}
+	if err := proof.Validate(); err != nil || !linuxCgroupReservationAbortMatches(expected, proof) {
+		return RunJournal{}, errors.New("Linux cgroup never-created tombstone is invalid")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.Fence() != fence || !journal.hasClaimGrant() {
+			return errors.New("Linux cgroup never-created abort has a stale RunKey fence")
+		}
+		return applyLinuxCgroupReservationAbort(journal, expected, proof)
+	})
+}
+
+func applyLinuxCgroupReservationAbort(journal *RunJournal, expected LinuxCgroupReservation, proof authority.LinuxCgroupReservationAbortProof) error {
+	if journal.ContainmentCgroup == nil {
+		return errors.New("Linux cgroup reservation abort compare-and-set mismatch")
+	}
+	current := journal.ContainmentCgroup
+	if current.AbortProof != nil {
+		previous := current.Clone()
+		previous.AbortProof = nil
+		if previous.Equal(expected) && current.AbortProof.Equal(proof) &&
+			journal.ContainmentAuthority == nil && journal.ContainmentHandoff == nil &&
+			journal.ContainmentScans == nil && !journal.HasProcessDetails() && !journal.ContainmentUnproven {
+			return nil
+		}
+		return errors.New("Linux cgroup reservation abort replay conflicts with journal")
+	}
+	if !current.Equal(expected) || journal.ContainmentHandoff != nil || journal.ContainmentAuthority != nil ||
+		journal.ContainmentScans != nil || journal.HasProcessDetails() || journal.ContainmentUnproven {
+		return errors.New("Linux cgroup reservation abort compare-and-set mismatch")
+	}
+	if !linuxCgroupReservationAbortMatches(*current, proof) {
+		return errors.New("Linux cgroup reservation abort has a live or unidentified producer")
+	}
+	copy := proof.Clone()
+	current.AbortProof = &copy
+	return nil
+}
+
 // PrepareSupervisorHandoff durably records the immutable launch binding before
 // an independently running helper can outlive the daemon. Replaying the same
 // launch preserves the record and performs a fresh persistence barrier so an
 // unknown prior write is not upgraded by readback alone. A different launch
-// cannot replace an unresolved record. Helper identity and stop receipt are
-// advanced only by their dedicated CAS mutations.
+// cannot replace an unresolved record. Helper identity, scan progress, and stop
+// receipt are advanced only by their dedicated CAS mutations.
 func (store *Store) PrepareSupervisorHandoff(key RunKey, handoff authority.SupervisorHandoff) (RunJournal, error) {
 	if err := handoff.Validate(); err != nil {
 		return RunJournal{}, err
+	}
+	if handoff.Version == authority.SupervisorHandoffVersionV2 {
+		return store.prepareLinuxCgroupSupervisorHandoff(key, handoff)
+	}
+	if handoff.ScanUpdate != nil {
+		return store.recordSupervisorScanUpdate(key, handoff)
 	}
 	if handoff.StopReceipt != nil {
 		return RunJournal{}, errors.New("supervisor handoff stop receipt requires dedicated mutation")
@@ -901,11 +2132,23 @@ func (store *Store) PrepareSupervisorHandoff(key RunKey, handoff authority.Super
 		if !journal.hasClaimGrant() {
 			return errors.New("journal has no claim grant")
 		}
+		if journal.LinuxCloneIntent != nil {
+			return errors.New("Linux clone run requires v2 cgroup supervisor handoff")
+		}
+		if journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil {
+			return errors.New("supervisor handoff is fenced by Linux clone abort")
+		}
 		if journal.LocalState == "cleanup_pending" {
 			return errors.New("cannot prepare supervisor handoff during cleanup")
 		}
 		if journal.HasProcessDetails() || journal.ContainmentAuthority != nil {
 			return errors.New("supervisor handoff conflicts with committed containment")
+		}
+		if journal.ContainmentCgroupReleaseProof != nil {
+			return errors.New("supervisor handoff cannot be recreated after v2 containment release")
+		}
+		if journal.ContainmentCgroupPreGateReleaseProof != nil {
+			return errors.New("supervisor handoff cannot be recreated after v2 pre-gate release")
 		}
 		if journal.ContainmentHandoff == nil {
 			cloned := handoff.Clone()
@@ -929,13 +2172,242 @@ func (store *Store) PrepareSupervisorHandoff(key RunKey, handoff authority.Super
 	})
 }
 
-// BindSupervisorHandoff adds the exact helper PID/creation identity to a
-// prepared handoff. The expected handoff is an exact CAS value, so a stale
-// writer cannot retarget a retained helper. Exact replays perform a fresh
-// persistence barrier after readback of an unknown prior write.
+func (store *Store) prepareLinuxCgroupSupervisorHandoff(key RunKey, handoff authority.SupervisorHandoff) (RunJournal, error) {
+	if handoff.Version != authority.SupervisorHandoffVersionV2 || handoff.SupervisorPID != 0 ||
+		handoff.SupervisorIdentity != "" || handoff.Mirror != nil || handoff.StopReceipt != nil {
+		return RunJournal{}, errors.New("Linux cgroup supervisor handoff prepare value is invalid")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if !journal.hasClaimGrant() || journal.LocalState == "cleanup_pending" || journal.HasProcessDetails() ||
+			journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil ||
+			journal.ContainmentAuthority != nil || journal.ContainmentScans != nil || journal.ContainmentUnproven ||
+			journal.ContainmentCgroupReleaseProof != nil || journal.ContainmentCgroupPreGateReleaseProof != nil {
+			return errors.New("Linux cgroup supervisor handoff conflicts with journal")
+		}
+		if journal.ContainmentCgroup == nil ||
+			!linuxCgroupReservationMatchesHandoff(*journal.ContainmentCgroup, handoff, false) {
+			return errors.New("Linux cgroup supervisor handoff does not match a complete leaf reservation")
+		}
+		if journal.ContainmentHandoff == nil {
+			cloned := handoff.Clone()
+			journal.ContainmentHandoff = &cloned
+			return nil
+		}
+		current := journal.ContainmentHandoff
+		if !current.Equal(handoff) || current.StopReceipt != nil ||
+			!linuxCgroupReservationMatchesHandoff(*journal.ContainmentCgroup, *current, current.SupervisorPID > 0) {
+			return errors.New("Linux cgroup supervisor handoff conflicts with journal")
+		}
+		return nil
+	})
+}
+
+// BindSupervisorHandoffV2 binds the reservation's already durable helper and
+// the exact daemon mirror identity in the prepared v2 handoff. It intentionally
+// initializes no v1 process-group scan ledger.
+func (store *Store) BindSupervisorHandoffV2(key RunKey, expected authority.SupervisorHandoff, helper authority.LinuxCgroupProcessIdentity, mirror authority.LinuxCgroupProcessIdentity) (RunJournal, error) {
+	if err := expected.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if expected.Version != authority.SupervisorHandoffVersionV2 || expected.SupervisorPID != 0 ||
+		expected.SupervisorIdentity != "" || expected.Mirror != nil || expected.StopReceipt != nil {
+		return RunJournal{}, errors.New("Linux cgroup supervisor bind expected value is invalid")
+	}
+	if err := helper.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if err := mirror.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	after := expected.Clone()
+	after.SupervisorPID = helper.PID
+	after.SupervisorIdentity = helper.Identity
+	after.Mirror = &mirror
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if !journal.hasClaimGrant() || journal.LocalState == "cleanup_pending" || journal.ContainmentScans != nil ||
+			journal.ContainmentAuthority != nil || journal.HasProcessDetails() || journal.ContainmentUnproven ||
+			journal.ContainmentCgroup == nil || journal.ContainmentCgroup.Helper == nil ||
+			!journal.ContainmentCgroup.Helper.Equal(helper) ||
+			journal.ContainmentCgroup.Gate == nil || journal.ContainmentCgroup.Mirror == nil ||
+			!journal.ContainmentCgroup.Mirror.Equal(mirror) {
+			return errors.New("Linux cgroup supervisor bind has no matching producer reservation")
+		}
+		current := journal.ContainmentHandoff
+		if current == nil || !current.SameLaunch(expected) || current.StopReceipt != nil {
+			return errors.New("Linux cgroup supervisor handoff compare-and-set mismatch")
+		}
+		if current.Equal(after) {
+			if journal.ContainmentCgroup.Mirror == nil || !journal.ContainmentCgroup.Mirror.Equal(mirror) {
+				return errors.New("Linux cgroup mirror identity conflicts with reservation")
+			}
+			return nil
+		}
+		if !current.Equal(expected) {
+			return errors.New("Linux cgroup supervisor handoff compare-and-set mismatch")
+		}
+		cloned := after.Clone()
+		journal.ContainmentHandoff = &cloned
+		return nil
+	})
+}
+
+func (store *Store) recordSupervisorScanUpdate(key RunKey, request authority.SupervisorHandoff) (RunJournal, error) {
+	update := request.ScanUpdate
+	if update == nil {
+		return RunJournal{}, errors.New("supervisor scan update is missing")
+	}
+	expected := request.Clone()
+	expected.ScanUpdate = nil
+	expected.SupervisorPID = update.SupervisorPID
+	expected.SupervisorIdentity = update.SupervisorIdentity
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.LocalState == "cleanup_pending" {
+			return errors.New("Linux containment scan update arrived during cleanup")
+		}
+		if journal.ContainmentUnproven && update.Phase != authority.SupervisorScanPhaseUnproven {
+			return errors.New("Linux containment observation is already unresolved")
+		}
+		if journal.ContainmentHandoff != nil {
+			current := journal.ContainmentHandoff
+			if current.StopReceipt != nil || !current.Equal(expected) {
+				return errors.New("supervisor scan update handoff identity mismatch")
+			}
+		} else {
+			value, err := expected.ToSupervisor()
+			if err != nil {
+				return err
+			}
+			current := journal.ContainmentAuthority
+			if current == nil || current.StopReceipt != nil || journal.PID != value.TargetPID || journal.ProcessIdentity != value.TargetIdentity {
+				return errors.New("supervisor scan update has no active containment authority")
+			}
+			currentBinding := current.Clone()
+			currentBinding.StopReceipt = nil
+			if !currentBinding.Equal(value) {
+				return errors.New("supervisor scan update authority identity mismatch")
+			}
+		}
+		scans := journal.ContainmentScans
+		if scans == nil || !scans.matchesHandoff(expected) || scans.MirrorIdentity != update.MirrorIdentity {
+			return errors.New("supervisor scan update fence is missing or mismatched")
+		}
+		progress := &scans.Helper
+		if update.Owner == authority.SupervisorScanOwnerMirror {
+			progress = &scans.Mirror
+		}
+		switch update.Phase {
+		case authority.SupervisorScanPhaseBegin:
+			if progress.SealedSequence != 0 || progress.UnprovenSequence != 0 || progress.PendingSequence != 0 && progress.PendingSequence != update.Sequence {
+				return errors.New("supervisor scan begin conflicts with unresolved sequence")
+			}
+			if progress.PendingSequence == update.Sequence {
+				if progress.CleanResultSequence != 0 {
+					return errors.New("supervisor scan is awaiting fence retirement")
+				}
+				return nil
+			}
+			if progress.CompletedSequence == ^uint64(0) || update.Sequence != progress.CompletedSequence+1 {
+				return errors.New("supervisor scan begin sequence is stale or out of order")
+			}
+			progress.PendingSequence = update.Sequence
+		case authority.SupervisorScanPhaseClean:
+			if progress.SealedSequence != 0 || progress.UnprovenSequence != 0 || journal.ContainmentUnproven {
+				return errors.New("supervisor scan cannot clear unresolved observation")
+			}
+			if progress.PendingSequence == update.Sequence {
+				if progress.CleanResultSequence != 0 && progress.CleanResultSequence != update.Sequence {
+					return errors.New("supervisor clean scan result conflicts with pending sequence")
+				}
+				progress.CleanResultSequence = update.Sequence
+				return nil
+			}
+			if progress.PendingSequence == 0 && progress.CleanResultSequence == 0 && progress.CompletedSequence == update.Sequence {
+				return nil
+			}
+			return errors.New("supervisor clean scan sequence is not pending")
+		case authority.SupervisorScanPhaseRetire:
+			if progress.SealedSequence != 0 || progress.UnprovenSequence != 0 || journal.ContainmentUnproven {
+				return errors.New("supervisor scan fence cannot retire unresolved observation")
+			}
+			if progress.PendingSequence == update.Sequence && progress.CleanResultSequence == update.Sequence {
+				progress.PendingSequence = 0
+				progress.CleanResultSequence = 0
+				progress.CompletedSequence = update.Sequence
+				return nil
+			}
+			if progress.PendingSequence == 0 && progress.CleanResultSequence == 0 && progress.CompletedSequence == update.Sequence {
+				return nil
+			}
+			return errors.New("supervisor scan result is not durably ready for retirement")
+		case authority.SupervisorScanPhaseSeal:
+			if progress.SealedSequence == update.Sequence && progress.sealed() {
+				return nil
+			}
+			if progress.SealedSequence != 0 || progress.PendingSequence != 0 || progress.CleanResultSequence != 0 ||
+				progress.UnprovenSequence != 0 || journal.ContainmentUnproven || progress.CompletedSequence == 0 ||
+				progress.CompletedSequence != update.Sequence || progress.FailureKind != "" {
+				return errors.New("supervisor scan seal does not match a final clean sequence")
+			}
+			progress.SealedSequence = update.Sequence
+		case authority.SupervisorScanPhaseUnproven:
+			if progress.UnprovenSequence == update.Sequence && progress.FailureKind == update.FailureKind {
+				return nil
+			}
+			preScanBeginFailure := update.FailureKind == "pre_scan_ack_failure" && progress.PendingSequence == 0 &&
+				progress.CleanResultSequence == 0 && progress.SealedSequence == 0 && progress.CompletedSequence != ^uint64(0) &&
+				update.Sequence == progress.CompletedSequence+1
+			cleanRetireFailure := progress.PendingSequence == 0 && progress.CompletedSequence == update.Sequence &&
+				update.FailureKind == "clean_retire_ack_failure"
+			if progress.SealedSequence != 0 || progress.UnprovenSequence != 0 ||
+				(progress.PendingSequence != update.Sequence && !cleanRetireFailure && !preScanBeginFailure) {
+				return errors.New("supervisor unproven scan sequence is not pending")
+			}
+			progress.PendingSequence = 0
+			progress.CleanResultSequence = 0
+			progress.UnprovenSequence = update.Sequence
+			progress.FailureKind = update.FailureKind
+			journal.ContainmentUnproven = true
+		case authority.SupervisorScanPhaseAssertClean:
+			if update.Sequence != progress.CompletedSequence || journal.ContainmentUnproven || !scans.clean() {
+				return errors.New("Linux containment scan evidence is unresolved")
+			}
+		case authority.SupervisorScanPhaseAssertSealed:
+			if update.Sequence != progress.SealedSequence || journal.ContainmentUnproven || !progress.sealed() {
+				return errors.New("Linux containment scan owner seal is unresolved")
+			}
+		case authority.SupervisorScanPhaseAssertAllSealed:
+			if update.Sequence != progress.SealedSequence || journal.ContainmentUnproven || !scans.sealed() {
+				return errors.New("Linux containment scan seals are unresolved")
+			}
+		default:
+			return errors.New("supervisor scan update phase is invalid")
+		}
+		return nil
+	})
+}
+
+// BindSupervisorHandoff adds the exact helper PID/creation identity and the
+// first helper/mirror scan fences to a prepared handoff. The expected handoff
+// is an exact CAS value, so a stale writer cannot retarget a retained helper.
+// Exact replays perform a fresh persistence barrier after readback of an
+// unknown prior write.
 func (store *Store) BindSupervisorHandoff(key RunKey, expected authority.SupervisorHandoff, pid int, identity string) (RunJournal, error) {
 	if err := expected.Validate(); err != nil {
 		return RunJournal{}, err
+	}
+	if expected.Version == authority.SupervisorHandoffVersionV2 {
+		return RunJournal{}, errors.New("v2 handoff requires BindSupervisorHandoffV2")
+	}
+	scanUpdate := expected.ScanUpdate
+	baseExpected := expected.Clone()
+	baseExpected.ScanUpdate = nil
+	if expected.OwnerKind == authority.OwnerKindLinuxHelper {
+		if scanUpdate == nil || scanUpdate.Phase != authority.SupervisorScanPhaseInitialize ||
+			scanUpdate.Owner != authority.SupervisorScanOwnerMirror || scanUpdate.Sequence != 1 || scanUpdate.MirrorIdentity == "" {
+			return RunJournal{}, errors.New("Linux supervisor bind requires an exact mirror scan identity")
+		}
+	} else if scanUpdate != nil {
+		return RunJournal{}, errors.New("non-Linux supervisor bind cannot carry scan state")
 	}
 	if pid <= 0 || !validRequiredString(identity, 4096) {
 		return RunJournal{}, errors.New("supervisor handoff helper identity is invalid")
@@ -948,21 +2420,42 @@ func (store *Store) BindSupervisorHandoff(key RunKey, expected authority.Supervi
 			return errors.New("supervisor handoff is not pending")
 		}
 		current := journal.ContainmentHandoff
-		if !current.Equal(expected) {
+		if !current.Equal(baseExpected) {
 			// A write error after rename leaves the helper binding durable while
 			// the caller still holds the pre-bind expected value. Replaying the
 			// same binding is safe and must not be mistaken for retargeting.
-			if expected.SupervisorPID == 0 && expected.SupervisorIdentity == "" && expected.StopReceipt == nil &&
-				current.SameLaunch(expected) && current.SupervisorPID == pid && current.SupervisorIdentity == identity && current.StopReceipt == nil {
+			if baseExpected.SupervisorPID == 0 && baseExpected.SupervisorIdentity == "" && baseExpected.StopReceipt == nil &&
+				current.SameLaunch(baseExpected) && current.SupervisorPID == pid && current.SupervisorIdentity == identity && current.StopReceipt == nil {
+				if current.OwnerKind == authority.OwnerKindLinuxHelper &&
+					(journal.ContainmentScans == nil || !journal.ContainmentScans.matchesHandoff(*current) || journal.ContainmentScans.MirrorIdentity != scanUpdate.MirrorIdentity) {
+					return errors.New("Linux supervisor bind scan identity conflicts with journal")
+				}
 				return nil
 			}
 			return errors.New("supervisor handoff compare-and-set mismatch")
 		}
 		if current.SupervisorPID != 0 || current.SupervisorIdentity != "" {
 			if current.SupervisorPID == pid && current.SupervisorIdentity == identity {
+				if current.OwnerKind == authority.OwnerKindLinuxHelper &&
+					(journal.ContainmentScans == nil || !journal.ContainmentScans.matchesHandoff(*current) || journal.ContainmentScans.MirrorIdentity != scanUpdate.MirrorIdentity) {
+					return errors.New("Linux supervisor handoff scan fence is missing or mismatched")
+				}
 				return nil
 			}
 			return errors.New("supervisor handoff helper identity conflicts with journal")
+		}
+		if current.OwnerKind == authority.OwnerKindLinuxHelper {
+			if journal.ContainmentUnproven || journal.ContainmentScans != nil {
+				return errors.New("Linux supervisor handoff cannot bind over unresolved scan state")
+			}
+			scans := ContainmentScanJournal{
+				Version: 1, LaunchToken: current.LaunchToken, TargetPID: current.TargetPID,
+				TargetIdentity: current.TargetIdentity, SupervisorPID: pid, SupervisorIdentity: identity,
+				MirrorIdentity: scanUpdate.MirrorIdentity,
+				Helper:         ContainmentScanProgress{PendingSequence: 1},
+				Mirror:         ContainmentScanProgress{PendingSequence: 1},
+			}
+			journal.ContainmentScans = &scans
 		}
 		current.SupervisorPID = pid
 		current.SupervisorIdentity = identity
@@ -990,14 +2483,40 @@ func (store *Store) CommitSupervisorHandoff(key RunKey, expected authority.Super
 		return RunJournal{}, err
 	}
 	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if value.Version == authority.SupervisorVersionV2 {
+			if journal.ContainmentCgroup == nil || journal.ContainmentCgroup.Gate == nil ||
+				!journal.ContainmentCgroup.Gate.Process.Equal(authority.LinuxCgroupProcessIdentity{PID: value.TargetPID, Identity: value.TargetIdentity}) ||
+				!startedAt.Equal(journal.ContainmentCgroup.Gate.ObservedAt) {
+				return errors.New("v2 supervisor handoff commit time must match durable gate observation")
+			}
+		}
 		if journal.ContainmentHandoff == nil {
 			if journal.PID == value.TargetPID && journal.ProcessIdentity == value.TargetIdentity &&
 				!journal.StartedAt.IsZero() && journal.ContainmentAuthority != nil {
+				if value.Version == authority.SupervisorVersionV2 && !journal.StartedAt.Equal(startedAt) {
+					return errors.New("v2 supervisor handoff commit timestamp changed during replay")
+				}
+				if value.Version == authority.SupervisorVersionV2 && journal.ContainmentAuthority.StopReceipt != nil {
+					return errors.New("v2 handoff commit replay must precede receipt advancement")
+				}
 				existing := journal.ContainmentAuthority.Clone()
 				existing.StopReceipt = nil
 				candidate := value.Clone()
 				candidate.StopReceipt = nil
 				if existing.Equal(candidate) {
+					if value.Version == authority.SupervisorVersionV2 {
+						if journal.ContainmentUnproven || journal.ContainmentCgroup == nil ||
+							!linuxCgroupReservationMatchesAuthority(*journal.ContainmentCgroup, *journal.ContainmentAuthority) {
+							return errors.New("v2 committed authority has no matching cgroup reservation")
+						}
+					} else {
+						if err := requireLinuxScansCleanForAuthority(*journal, *journal.ContainmentAuthority); err != nil {
+							return err
+						}
+						if journal.ContainmentUnproven {
+							return errors.New("Linux supervisor initial scan observation is unresolved")
+						}
+					}
 					return nil
 				}
 			}
@@ -1011,6 +2530,18 @@ func (store *Store) CommitSupervisorHandoff(key RunKey, expected authority.Super
 		}
 		if !journal.hasClaimGrant() {
 			return errors.New("journal has no claim grant")
+		}
+		if value.OwnerKind == authority.OwnerKindLinuxHelper {
+			if value.Version == authority.SupervisorVersionV2 {
+				if journal.ContainmentUnproven || journal.ContainmentScans != nil || journal.ContainmentCgroup == nil ||
+					journal.ContainmentCgroup.HelperExit != nil ||
+					!linuxCgroupReservationMatchesHandoff(*journal.ContainmentCgroup, expected, true) {
+					return errors.New("Linux cgroup initial producer fences are unresolved")
+				}
+			} else if journal.ContainmentUnproven || journal.ContainmentScans == nil ||
+				!journal.ContainmentScans.matchesHandoff(expected) || !journal.ContainmentScans.clean() {
+				return errors.New("Linux supervisor initial scan fences are unresolved")
+			}
 		}
 		if journal.LocalState == "cleanup_pending" {
 			return errors.New("cannot commit supervisor handoff during cleanup")
@@ -1035,6 +2566,9 @@ func (store *Store) RecordSupervisorHandoffStopReceipt(key RunKey, expected auth
 	if err := expected.Validate(); err != nil {
 		return RunJournal{}, err
 	}
+	if expected.Version == authority.SupervisorHandoffVersionV2 {
+		return store.recordLinuxCgroupSupervisorStopReceipt(key, expected, receipt)
+	}
 	if expected.SupervisorPID <= 0 || expected.SupervisorIdentity == "" {
 		return RunJournal{}, errors.New("supervisor handoff stop receipt requires a bound helper")
 	}
@@ -1048,7 +2582,19 @@ func (store *Store) RecordSupervisorHandoffStopReceipt(key RunKey, expected auth
 				if !current.SameLaunch(expected) || current.SupervisorPID != expected.SupervisorPID || current.SupervisorIdentity != expected.SupervisorIdentity || current.StopReceipt == nil || *current.StopReceipt != receipt {
 					return errors.New("supervisor handoff compare-and-set mismatch")
 				}
+				if journal.ContainmentUnproven {
+					return errors.New("supervisor handoff scan observation is unresolved")
+				}
+				if err := requireLinuxScansSealedForHandoff(*journal, *current); err != nil {
+					return err
+				}
 				return nil
+			}
+			if journal.ContainmentUnproven {
+				return errors.New("supervisor handoff scan observation is unresolved")
+			}
+			if err := requireLinuxScansSealedForHandoff(*journal, *current); err != nil {
+				return err
 			}
 			if current.StopReceipt != nil {
 				if *current.StopReceipt == receipt {
@@ -1066,6 +2612,12 @@ func (store *Store) RecordSupervisorHandoffStopReceipt(key RunKey, expected auth
 		}
 		if journal.ContainmentAuthority == nil || journal.PID != value.TargetPID || journal.ProcessIdentity != value.TargetIdentity {
 			return errors.New("supervisor handoff is not pending or committed")
+		}
+		if journal.ContainmentUnproven {
+			return errors.New("supervisor handoff scan observation is unresolved")
+		}
+		if err := requireLinuxScansSealedForAuthority(*journal, *journal.ContainmentAuthority); err != nil {
+			return err
 		}
 		existing := journal.ContainmentAuthority.Clone()
 		existing.StopReceipt = nil
@@ -1086,12 +2638,76 @@ func (store *Store) RecordSupervisorHandoffStopReceipt(key RunKey, expected auth
 	})
 }
 
-// ClearSupervisorHandoff removes a pending handoff only after the caller has
-// supplied both an exact durable stop receipt and an exact platform release
-// proof. A release proof without a receipt belongs to the separate abort path.
+func (store *Store) recordLinuxCgroupSupervisorStopReceipt(key RunKey, expected authority.SupervisorHandoff, receipt authority.StopReceipt) (RunJournal, error) {
+	if expected.SupervisorPID <= 0 || expected.SupervisorIdentity == "" || expected.Mirror == nil ||
+		!receipt.ValidForHandoff(expected) {
+		return RunJournal{}, errors.New("v2 supervisor stop receipt does not match handoff")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.ContainmentCgroup == nil || journal.ContainmentScans != nil ||
+			!linuxCgroupReceiptMatchesReservation(*journal.ContainmentCgroup, receipt) {
+			return errors.New("v2 stop receipt has no matching cgroup producer reservation")
+		}
+		if journal.ContainmentHandoff != nil {
+			current := journal.ContainmentHandoff
+			if !sameBoundV2Handoff(current, &expected) {
+				return errors.New("v2 supervisor handoff compare-and-set mismatch")
+			}
+			if current.StopReceipt != nil {
+				if current.StopReceipt.Equal(receipt) {
+					return nil
+				}
+				return errors.New("v2 supervisor stop receipt cannot replace an existing witness")
+			}
+			if !current.Equal(expected) {
+				return errors.New("v2 supervisor handoff compare-and-set mismatch")
+			}
+			copy := receipt
+			copy.CgroupIdentity = cloneStateCgroupIdentity(receipt.CgroupIdentity)
+			copy.LinuxProof = cloneStateStopProof(receipt.LinuxProof)
+			current.StopReceipt = &copy
+			journal.ContainmentUnproven = false
+			return nil
+		}
+		value, err := expected.ToSupervisor()
+		if err != nil {
+			return err
+		}
+		current := journal.ContainmentAuthority
+		if current == nil || current.Version != authority.SupervisorVersionV2 ||
+			journal.PID != value.TargetPID || journal.ProcessIdentity != value.TargetIdentity {
+			return errors.New("v2 supervisor handoff is not pending or committed")
+		}
+		candidate := value.Clone()
+		candidate.StopReceipt = nil
+		currentBinding := current.Clone()
+		currentBinding.StopReceipt = nil
+		if !currentBinding.Equal(candidate) || !linuxCgroupReservationMatchesAuthority(*journal.ContainmentCgroup, *current) {
+			return errors.New("v2 committed authority conflicts with handoff")
+		}
+		if current.StopReceipt != nil {
+			if current.StopReceipt.Equal(receipt) {
+				return nil
+			}
+			return errors.New("v2 supervisor stop receipt cannot replace an existing witness")
+		}
+		copy := receipt
+		copy.CgroupIdentity = cloneStateCgroupIdentity(receipt.CgroupIdentity)
+		copy.LinuxProof = cloneStateStopProof(receipt.LinuxProof)
+		current.StopReceipt = &copy
+		journal.ContainmentUnproven = false
+		return nil
+	})
+}
+
+// ClearSupervisorHandoff preserves the v1 release path. V2 Linux handoffs are
+// rejected here and must use the Linux-only opaque platform release API.
 func (store *Store) ClearSupervisorHandoff(key RunKey, expected authority.SupervisorHandoff, proof authority.SupervisorHandoffReleaseProof) (RunJournal, error) {
 	if err := expected.Validate(); err != nil {
 		return RunJournal{}, err
+	}
+	if expected.Version == authority.SupervisorHandoffVersionV2 {
+		return RunJournal{}, errors.New("v2 supervisor handoff release requires a platform cgroup release")
 	}
 	if expected.StopReceipt == nil {
 		return RunJournal{}, errors.New("supervisor handoff stop receipt is required before release")
@@ -1112,6 +2728,12 @@ func (store *Store) ClearSupervisorHandoff(key RunKey, expected authority.Superv
 		if !journal.ContainmentHandoff.Equal(expected) {
 			return errors.New("supervisor handoff compare-and-set mismatch")
 		}
+		if journal.ContainmentUnproven {
+			return errors.New("supervisor handoff has unresolved containment observation")
+		}
+		if err := requireLinuxScansSealedForHandoff(*journal, expected); err != nil {
+			return err
+		}
 		current := journal.ContainmentHandoff
 		if !proof.ValidFor(*current) {
 			return errors.New("supervisor handoff release proof does not match journal")
@@ -1123,6 +2745,7 @@ func (store *Store) ClearSupervisorHandoff(key RunKey, expected authority.Superv
 			return errors.New("supervisor handoff stop receipt is invalid")
 		}
 		journal.ContainmentHandoff = nil
+		journal.ContainmentScans = nil
 		return nil
 	})
 }
@@ -1140,6 +2763,9 @@ func (store *Store) ClearSupervisorHandoff(key RunKey, expected authority.Superv
 func (store *Store) ClearSupervisorHandoffAfterAbort(key RunKey, expected authority.SupervisorHandoff, proof authority.SupervisorHandoffAbortProof) (RunJournal, error) {
 	if err := expected.Validate(); err != nil {
 		return RunJournal{}, err
+	}
+	if expected.Version == authority.SupervisorHandoffVersionV2 {
+		return RunJournal{}, errors.New("v2 cgroup handoff cannot use the v1 pre-authority abort path")
 	}
 	if expected.StopReceipt != nil {
 		return RunJournal{}, errors.New("supervisor handoff abort cannot carry a stop receipt")
@@ -1167,7 +2793,21 @@ func (store *Store) ClearSupervisorHandoffAfterAbort(key RunKey, expected author
 		if !proof.ValidFor(*current) {
 			return false, errors.New("supervisor handoff abort proof does not match journal")
 		}
+		if journal.ContainmentUnproven {
+			return false, errors.New("supervisor handoff has unresolved containment observation")
+		}
+		if expected.OwnerKind == authority.OwnerKindLinuxHelper {
+			if expected.SupervisorPID == 0 {
+				if journal.ContainmentScans != nil {
+					return false, errors.New("unbound Linux handoff unexpectedly has scan state")
+				}
+			} else if journal.ContainmentScans == nil || !journal.ContainmentScans.matchesHandoff(expected) ||
+				!initialPrecommitLinuxScansAbortable(*journal.ContainmentScans) {
+				return false, errors.New("Linux supervisor pre-commit scan state is unresolved")
+			}
+		}
 		journal.ContainmentHandoff = nil
+		journal.ContainmentScans = nil
 		return true, nil
 	})
 }
@@ -1184,6 +2824,36 @@ func (store *Store) RecordContainmentStopReceipt(key RunKey, pid int, identity s
 		if journal.PID != pid || journal.ProcessIdentity != identity || journal.ContainmentAuthority == nil {
 			return errors.New("containment stop receipt has no matching authority")
 		}
+		if journal.ContainmentAuthority.Version == authority.SupervisorVersionV2 {
+			current := journal.ContainmentAuthority
+			if journal.ContainmentCgroup == nil || journal.ContainmentScans != nil ||
+				!linuxCgroupReservationMatchesAuthority(*journal.ContainmentCgroup, *current) ||
+				!linuxCgroupReceiptMatchesReservation(*journal.ContainmentCgroup, receipt) ||
+				!receipt.ValidFor(*current) {
+				return errors.New("v2 containment stop receipt does not match exact cgroup authority")
+			}
+			if current.StopReceipt != nil {
+				if current.StopReceipt.Equal(receipt) {
+					return nil
+				}
+				return errors.New("v2 containment stop receipt cannot replace an existing witness")
+			}
+			copy := receipt
+			copy.CgroupIdentity = cloneStateCgroupIdentity(receipt.CgroupIdentity)
+			copy.LinuxProof = cloneStateStopProof(receipt.LinuxProof)
+			current.StopReceipt = &copy
+			journal.ContainmentUnproven = false
+			return nil
+		}
+		if journal.ContainmentCgroup != nil {
+			return errors.New("v1 containment receipt cannot act on a v2 cgroup reservation")
+		}
+		if journal.ContainmentUnproven {
+			return errors.New("containment scan observation is unresolved")
+		}
+		if err := requireLinuxScansSealedForAuthority(*journal, *journal.ContainmentAuthority); err != nil {
+			return err
+		}
 		if !receipt.ValidFor(*journal.ContainmentAuthority) {
 			return errors.New("containment stop receipt does not match containment authority")
 		}
@@ -1199,6 +2869,53 @@ func (store *Store) RecordContainmentStopReceipt(key RunKey, pid int, identity s
 	})
 }
 
+// RecordSupervisorRecoveryScanSeal persists a helper's authenticated
+// owner-loss terminal scan after a daemon restart. The caller may use this only
+// after the exact helper recovery endpoint has attested a clean, joined
+// terminal scan; the mirror must already have its own durable seal. A pending
+// or unproven journal can never be advanced by this recovery-only mutation.
+// Replaying the exact proof performs a fresh journal write barrier.
+func (store *Store) RecordSupervisorRecoveryScanSeal(key RunKey, expected authority.Supervisor, sequence uint64) (RunJournal, error) {
+	if err := expected.Validate(); err != nil {
+		return RunJournal{}, err
+	}
+	if expected.OwnerKind != authority.OwnerKindLinuxHelper || expected.StopReceipt != nil || sequence == 0 {
+		return RunJournal{}, errors.New("Linux helper recovery scan seal identity is invalid")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		current := journal.ContainmentAuthority
+		if current == nil || journal.PID != expected.TargetPID || journal.ProcessIdentity != expected.TargetIdentity || current.StopReceipt != nil {
+			return errors.New("Linux helper recovery seal has no active matching authority")
+		}
+		currentBinding := current.Clone()
+		currentBinding.StopReceipt = nil
+		candidate := expected.Clone()
+		candidate.StopReceipt = nil
+		if !currentBinding.Equal(candidate) {
+			return errors.New("Linux helper recovery seal authority identity mismatch")
+		}
+		scans := journal.ContainmentScans
+		if scans == nil || !scans.matchesAuthority(expected) {
+			return errors.New("Linux helper recovery seal scan fence is missing or mismatched")
+		}
+		if journal.ContainmentUnproven || !scans.Mirror.sealed() {
+			return errors.New("Linux helper recovery seal requires a durable clean mirror seal")
+		}
+		progress := &scans.Helper
+		if progress.SealedSequence == sequence && progress.sealed() {
+			return nil
+		}
+		if progress.CompletedSequence == 0 || progress.CompletedSequence == ^uint64(0) || sequence != progress.CompletedSequence+1 ||
+			progress.PendingSequence != 0 || progress.CleanResultSequence != 0 || progress.SealedSequence != 0 ||
+			progress.UnprovenSequence != 0 || progress.FailureKind != "" {
+			return errors.New("Linux helper recovery scan proof is not the exact next clean sequence")
+		}
+		progress.CompletedSequence = sequence
+		progress.SealedSequence = sequence
+		return nil
+	})
+}
+
 // ClearProcessDetails records that the process identified by the expected PID
 // and identity has been stopped. The compare-and-clear guard prevents recovery
 // from erasing a newer process record if another owner replaced the process
@@ -1209,6 +2926,9 @@ func (store *Store) ClearProcessDetails(key RunKey, pid int, identity string) (R
 		return RunJournal{}, errors.New("process details are invalid")
 	}
 	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.ContainmentCgroup != nil || journal.ContainmentAuthority != nil && journal.ContainmentAuthority.Version == authority.SupervisorVersionV2 {
+			return errors.New("v2 process details require ClearProcessDetailsV2")
+		}
 		if journal.ContainmentHandoff != nil {
 			return errors.New("process details require supervisor handoff mutation")
 		}
@@ -1222,6 +2942,9 @@ func (store *Store) ClearProcessDetails(key RunKey, pid int, identity string) (R
 			return errors.New("containment stop proof is unresolved")
 		}
 		if journal.ContainmentAuthority != nil {
+			if err := requireLinuxScansSealedForAuthority(*journal, *journal.ContainmentAuthority); err != nil {
+				return err
+			}
 			if journal.ContainmentAuthority.StopReceipt == nil || !journal.ContainmentAuthority.StopReceipt.ValidFor(*journal.ContainmentAuthority) {
 				return errors.New("containment stop receipt is required before clearing process details")
 			}
@@ -1230,6 +2953,7 @@ func (store *Store) ClearProcessDetails(key RunKey, pid int, identity string) (R
 		journal.ProcessIdentity = ""
 		journal.StartedAt = time.Time{}
 		journal.ContainmentAuthority = nil
+		journal.ContainmentScans = nil
 		return nil
 	})
 }
@@ -2178,6 +3902,186 @@ func (journal RunJournal) hasClaimGrant() bool {
 	return strings.TrimSpace(journal.LeaseToken) != "" && !journal.LeaseExpiresAt.IsZero()
 }
 
+func requireLinuxClonePlatform() error {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		return errors.New("Linux clone-v2 mutations are supported only on Linux/amd64")
+	}
+	return nil
+}
+
+func requireLinuxCloneJournalFence(journal RunJournal, fence protocol.Fence, intent authority.LinuxCloneIntent) error {
+	if intent.Validate() != nil || intent.RunID != journal.RunID || intent.Generation != journal.Generation ||
+		journal.Fence() != fence || !journal.hasClaimGrant() {
+		return errors.New("Linux clone RunKey or fence is stale")
+	}
+	if intent.BindingKey != journal.WorkspaceBindingKey {
+		return errors.New("Linux clone binding key does not match the journal")
+	}
+	admission, present, err := protocol.ParseAdmissionInput(journal.Work.Input)
+	if err != nil || !present || admission.Subject.Validate() != nil || admission.Subject.ResourceID != intent.ResourceID ||
+		admission.Subject.Commit != intent.BaseCommit || admission.Subject.TreeDigest != intent.BaseTreeDigest {
+		return errors.New("Linux clone intent does not match the current admitted Subject")
+	}
+	return nil
+}
+
+func linuxCloneStageCanAdvance(journal RunJournal) bool {
+	return journal.LocalState != "terminal_pending" && journal.LocalState != "cleanup_pending" && journal.LocalState != "stale" &&
+		!journal.LinuxCloneAbortPending && journal.LinuxCloneAbortProof == nil
+}
+
+func linuxCloneCheckoutMatches(intent authority.LinuxCloneIntent, seed authority.LinuxCloneSeedReceipt, receipt authority.LinuxCloneCheckoutReceipt) bool {
+	return receipt.Validate() == nil && receipt.RunID == intent.RunID && receipt.Generation == intent.Generation &&
+		receipt.BindingKey == intent.BindingKey && receipt.ResourceID == intent.ResourceID &&
+		receipt.Target == intent.Target && receipt.Nonce == intent.Nonce &&
+		receipt.SeedDigest == seed.Digest && receipt.BaseCommit == intent.BaseCommit && seed.BaseCommit == intent.BaseCommit
+}
+
+func linuxCloneCommittedGateReady(journal RunJournal) bool {
+	if journal.LocalState == "terminal_pending" || journal.LocalState == "cleanup_pending" || journal.LocalState == "stale" ||
+		!journal.HasProcessDetails() || journal.ContainmentUnproven || journal.ContainmentHandoff != nil ||
+		journal.ContainmentCgroup == nil || journal.ContainmentCgroup.Gate == nil || journal.ContainmentAuthority == nil {
+		return false
+	}
+	owner := journal.ContainmentAuthority
+	gate := journal.ContainmentCgroup.Gate
+	return owner.Version == authority.SupervisorVersionV2 && owner.Validate() == nil && owner.StopReceipt == nil &&
+		linuxCgroupReservationMatchesAuthority(*journal.ContainmentCgroup, *owner) &&
+		owner.TargetPID == journal.PID && owner.TargetIdentity == journal.ProcessIdentity &&
+		gate.Process.PID == journal.PID && gate.Process.Identity == journal.ProcessIdentity
+}
+
+func linuxCloneStopProven(journal RunJournal) bool {
+	if owner := journal.ContainmentAuthority; owner != nil && owner.Version == authority.SupervisorVersionV2 &&
+		owner.StopReceipt != nil && owner.StopReceipt.ValidFor(*owner) {
+		return true
+	}
+	release := journal.ContainmentCgroupReleaseProof
+	return release != nil && release.Version == authority.SupervisorHandoffVersionV2 && release.Validate() == nil
+}
+
+func validateLinuxCloneJournal(journal RunJournal) error {
+	intent := journal.LinuxCloneIntent
+	if intent == nil {
+		if journal.LinuxCloneSeedReceipt != nil || journal.LinuxCloneCheckoutReceipt != nil || journal.LinuxClonePromotionReceipt != nil ||
+			journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil {
+			return errors.New("run journal has Linux clone evidence without an intent")
+		}
+		return nil
+	}
+	if intent.Validate() != nil || intent.RunID != journal.RunID || intent.Generation != journal.Generation ||
+		intent.BindingKey != journal.WorkspaceBindingKey || !journal.hasClaimGrant() {
+		return errors.New("run journal Linux clone intent is invalid")
+	}
+	if err := requireLinuxCloneJournalFenceSubject(journal, *intent); err != nil {
+		return errors.New("run journal Linux clone intent does not match admitted Subject")
+	}
+	seed := journal.LinuxCloneSeedReceipt
+	if seed != nil && (seed.Validate() != nil || seed.BaseCommit != intent.BaseCommit) {
+		return errors.New("run journal Linux clone seed receipt is invalid")
+	}
+	if journal.LinuxCloneAbortPending && journal.LinuxCloneAbortProof != nil {
+		return errors.New("run journal Linux clone abort is both pending and complete")
+	}
+	if journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil {
+		if journal.LinuxCloneCheckoutReceipt != nil || journal.LinuxClonePromotionReceipt != nil {
+			return errors.New("run journal Linux clone abort state is invalid")
+		}
+		if journal.LinuxCloneAbortPending {
+			if !linuxCloneAbortFenceAvailable(journal) {
+				return errors.New("run journal Linux clone abort lost its producer fence")
+			}
+			if journal.WorkspacePath != intent.Target || !journal.WorkspaceRecoveryRequired {
+				return errors.New("run journal pending clone abort lost its reserved target")
+			}
+			return nil
+		}
+		proof := journal.LinuxCloneAbortProof
+		if proof.Validate() != nil || !proof.Intent.Equal(*intent) || journal.WorkspacePath != "" || journal.WorkspaceRecoveryRequired ||
+			!linuxCloneAbortHistoryMatches(journal, proof) {
+			return errors.New("run journal Linux clone abort proof is invalid")
+		}
+		if seed != nil && (proof.SeedReceipt == nil || !seed.Equal(*proof.SeedReceipt)) {
+			return errors.New("run journal Linux clone abort proof lost its bound seed receipt")
+		}
+		return nil
+	}
+	if journal.WorkspacePath != intent.Target {
+		return errors.New("run journal Linux clone target path changed")
+	}
+	checkout := journal.LinuxCloneCheckoutReceipt
+	if checkout == nil {
+		if journal.LinuxClonePromotionReceipt != nil {
+			return errors.New("run journal Linux clone promotion has no checkout receipt")
+		}
+		return nil
+	}
+	if !linuxCloneCheckoutMatches(*intent, *seed, *checkout) {
+		return errors.New("run journal Linux clone checkout receipt is invalid")
+	}
+	promotion := journal.LinuxClonePromotionReceipt
+	if promotion == nil {
+		return nil
+	}
+	ref, err := authority.LinuxClonePromotionRef(journal.RunID, journal.Generation)
+	if promotion.Validate() != nil || err != nil || promotion.Ref != ref || !linuxCloneStopProven(journal) {
+		return errors.New("run journal Linux clone promotion receipt is invalid")
+	}
+	return nil
+}
+
+func linuxCloneAbortHistoryMatches(journal RunJournal, proof *authority.LinuxCloneAbortProof) bool {
+	if !linuxCloneAbortNoActiveOwner(journal) {
+		return false
+	}
+	if proof == nil {
+		return journal.ContainmentCgroup == nil && journal.ContainmentCgroupReleaseProof == nil &&
+			journal.ContainmentCgroupPreGateReleaseProof == nil
+	}
+	if proof.CgroupAbortProof != nil {
+		return proof.PreGateReleaseProof == nil && journal.ContainmentCgroup != nil &&
+			journal.ContainmentCgroup.AbortProof != nil && journal.ContainmentCgroup.AbortProof.Equal(*proof.CgroupAbortProof) &&
+			linuxCgroupReservationAbortMatches(*journal.ContainmentCgroup, *proof.CgroupAbortProof) &&
+			journal.ContainmentCgroupReleaseProof == nil && journal.ContainmentCgroupPreGateReleaseProof == nil
+	}
+	if proof.PreGateReleaseProof != nil {
+		return journal.ContainmentCgroup == nil && journal.ContainmentCgroupReleaseProof == nil &&
+			journal.ContainmentCgroupPreGateReleaseProof != nil &&
+			journal.ContainmentCgroupPreGateReleaseProof.Equal(*proof.PreGateReleaseProof)
+	}
+	return journal.ContainmentCgroup == nil && journal.ContainmentCgroupReleaseProof == nil &&
+		journal.ContainmentCgroupPreGateReleaseProof == nil
+}
+
+func linuxCloneAbortFenceAvailable(journal RunJournal) bool {
+	if !linuxCloneAbortNoActiveOwner(journal) || journal.ContainmentCgroupReleaseProof != nil {
+		return false
+	}
+	if reservation := journal.ContainmentCgroup; reservation != nil {
+		proof := reservation.AbortProof
+		return proof != nil && reservation.PreGateStopReceipt == nil && reservation.Gate == nil &&
+			linuxCgroupReservationAbortMatches(*reservation, *proof) && journal.ContainmentCgroupPreGateReleaseProof == nil
+	}
+	if proof := journal.ContainmentCgroupPreGateReleaseProof; proof != nil {
+		return proof.Version == authority.SupervisorHandoffVersionV2 && proof.Validate() == nil
+	}
+	return true
+}
+
+func linuxCloneAbortNoActiveOwner(journal RunJournal) bool {
+	return !journal.HasProcessDetails() && journal.ContainmentAuthority == nil && journal.ContainmentHandoff == nil &&
+		journal.ContainmentScans == nil && !journal.ContainmentUnproven && !journal.HasPendingContainment()
+}
+
+func requireLinuxCloneJournalFenceSubject(journal RunJournal, intent authority.LinuxCloneIntent) error {
+	admission, present, err := protocol.ParseAdmissionInput(journal.Work.Input)
+	if err != nil || !present || admission.Subject.Validate() != nil || admission.Subject.ResourceID != intent.ResourceID ||
+		admission.Subject.Commit != intent.BaseCommit || admission.Subject.TreeDigest != intent.BaseTreeDigest {
+		return errors.New("admitted Subject does not match Linux clone intent")
+	}
+	return nil
+}
+
 func (store *Store) saveJournalLocked(journal RunJournal) error {
 	if err := validateJournal(journal); err != nil {
 		return err
@@ -2550,6 +4454,303 @@ func sameContainmentHandoff(left, right *authority.SupervisorHandoff) bool {
 	return left.Equal(*right)
 }
 
+func sameContainmentCgroup(left, right *LinuxCgroupReservation) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
+func sameLinuxCloneIntent(left, right *authority.LinuxCloneIntent) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
+func sameLinuxCloneSeedReceipt(left, right *authority.LinuxCloneSeedReceipt) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
+func sameLinuxCloneCheckoutReceipt(left, right *authority.LinuxCloneCheckoutReceipt) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
+func sameLinuxClonePromotionReceipt(left, right *authority.LinuxClonePromotionReceipt) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
+func sameLinuxCloneAbortProof(left, right *authority.LinuxCloneAbortProof) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
+func sameContainmentCgroupReleaseProof(left, right *authority.SupervisorHandoffReleaseProof) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
+func sameContainmentPreGateReleaseProof(left, right *authority.LinuxCgroupPreGateReleaseProof) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
+func cloneStateCgroupIdentity(value *authority.LinuxCgroupIdentity) *authority.LinuxCgroupIdentity {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func cloneStateStopProof(value *authority.LinuxCgroupStopProof) *authority.LinuxCgroupStopProof {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	cloned.LauncherExit.HelperExit = cloneJournalExitProof(value.LauncherExit.HelperExit)
+	cloned.GateExit.HelperExit = cloneJournalExitProof(value.GateExit.HelperExit)
+	cloned.HelperExit = cloneJournalExitProof(value.HelperExit)
+	return &cloned
+}
+
+func cloneJournalExitProof(value *authority.LinuxCgroupExitProof) *authority.LinuxCgroupExitProof {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	cloned.HelperExit = cloneJournalExitProof(value.HelperExit)
+	return &cloned
+}
+
+func sameBoundV2Handoff(left, right *authority.SupervisorHandoff) bool {
+	return left != nil && right != nil && left.Version == authority.SupervisorHandoffVersionV2 &&
+		right.Version == authority.SupervisorHandoffVersionV2 && left.SameLaunch(*right) &&
+		left.SupervisorPID == right.SupervisorPID && left.SupervisorIdentity == right.SupervisorIdentity &&
+		equalAuthorityProcess(left.Mirror, right.Mirror)
+}
+
+func linuxCgroupReservationMatchesHandoff(reservation LinuxCgroupReservation, handoff authority.SupervisorHandoff, requireBound bool) bool {
+	if reservation.Validate() != nil || reservation.PreGateStopReceipt != nil || handoff.Version != authority.SupervisorHandoffVersionV2 ||
+		reservation.LeafIdentity == nil || reservation.Helper == nil || reservation.LauncherExit == nil || reservation.Gate == nil ||
+		!reservation.LauncherGrantPossible ||
+		handoff.LaunchToken != reservation.LaunchToken || handoff.Secret != reservation.Secret ||
+		handoff.PipeToken != reservation.PipeToken || handoff.JobID != reservation.JobID ||
+		handoff.OwnerKind != authority.OwnerKindLinuxHelper || handoff.OwnerContext != reservation.RecoveryEndpoint ||
+		handoff.OwnerUID != reservation.OwnerUID || handoff.LauncherUID != reservation.LauncherUID ||
+		handoff.TargetBirthKind != reservation.Gate.BirthKind || handoff.TargetPID != reservation.Gate.Process.PID ||
+		handoff.TargetIdentity != reservation.Gate.Process.Identity || handoff.CgroupIdentity == nil ||
+		!handoff.CgroupIdentity.Equal(*reservation.LeafIdentity) || handoff.AnchorPID != reservation.Anchor.PID ||
+		handoff.AnchorIdentity != reservation.Anchor.Identity || handoff.LauncherPID != reservation.Launcher.PID ||
+		handoff.LauncherIdentity != reservation.Launcher.Identity || handoff.LauncherExit == nil ||
+		!handoff.LauncherExit.Equal(*reservation.LauncherExit) {
+		return false
+	}
+	if handoff.SupervisorPID == 0 {
+		return !requireBound && handoff.SupervisorIdentity == "" && handoff.Mirror == nil && reservation.Mirror != nil
+	}
+	return requireBound && handoff.SupervisorPID == reservation.Helper.PID &&
+		handoff.SupervisorIdentity == reservation.Helper.Identity && reservation.Mirror != nil &&
+		equalAuthorityProcess(handoff.Mirror, reservation.Mirror)
+}
+
+func linuxCgroupReservationMatchesAuthority(reservation LinuxCgroupReservation, value authority.Supervisor) bool {
+	return reservation.Validate() == nil && reservation.AbortProof == nil && reservation.PreGateStopReceipt == nil &&
+		reservation.LauncherGrantPossible && value.Version == authority.SupervisorVersionV2 &&
+		reservation.LeafIdentity != nil && reservation.Helper != nil && reservation.Launcher != nil &&
+		reservation.LauncherExit != nil && reservation.Gate != nil && reservation.Mirror != nil &&
+		value.LaunchToken == reservation.LaunchToken && value.Secret == reservation.Secret &&
+		value.PipeToken == reservation.PipeToken && value.JobID == reservation.JobID &&
+		value.OwnerKind == authority.OwnerKindLinuxHelper && value.OwnerContext == reservation.RecoveryEndpoint &&
+		value.OwnerUID == reservation.OwnerUID && value.LauncherUID == reservation.LauncherUID &&
+		value.TargetBirthKind == reservation.Gate.BirthKind && value.TargetPID == reservation.Gate.Process.PID &&
+		value.TargetIdentity == reservation.Gate.Process.Identity && value.CgroupIdentity != nil &&
+		value.CgroupIdentity.Equal(*reservation.LeafIdentity) && value.AnchorPID == reservation.Anchor.PID &&
+		value.AnchorIdentity == reservation.Anchor.Identity && value.LauncherPID == reservation.Launcher.PID &&
+		value.LauncherIdentity == reservation.Launcher.Identity && value.LauncherExit != nil &&
+		value.LauncherExit.Equal(*reservation.LauncherExit) && value.SupervisorPID == reservation.Helper.PID &&
+		value.SupervisorIdentity == reservation.Helper.Identity && equalAuthorityProcess(value.Mirror, reservation.Mirror)
+}
+
+func linuxCgroupReceiptMatchesReservation(reservation LinuxCgroupReservation, receipt authority.StopReceipt) bool {
+	if reservation.Validate() != nil || reservation.AbortProof != nil || reservation.PreGateStopReceipt != nil ||
+		!reservation.LauncherGrantPossible || reservation.LeafIdentity == nil || reservation.Helper == nil ||
+		reservation.Launcher == nil || reservation.LauncherExit == nil || reservation.Gate == nil || reservation.Mirror == nil {
+		return false
+	}
+	value := authority.Supervisor{
+		Version:            authority.SupervisorVersionV2,
+		Secret:             reservation.Secret,
+		LaunchToken:        reservation.LaunchToken,
+		OwnerKind:          authority.OwnerKindLinuxHelper,
+		OwnerContext:       reservation.RecoveryEndpoint,
+		TargetPID:          reservation.Gate.Process.PID,
+		TargetIdentity:     reservation.Gate.Process.Identity,
+		OwnerUID:           reservation.OwnerUID,
+		LauncherUID:        reservation.LauncherUID,
+		PipeToken:          reservation.PipeToken,
+		JobID:              reservation.JobID,
+		SupervisorPID:      reservation.Helper.PID,
+		SupervisorIdentity: reservation.Helper.Identity,
+		TargetBirthKind:    reservation.Gate.BirthKind,
+		CgroupIdentity:     reservation.LeafIdentity,
+		AnchorPID:          reservation.Anchor.PID,
+		AnchorIdentity:     reservation.Anchor.Identity,
+		LauncherPID:        reservation.Launcher.PID,
+		LauncherIdentity:   reservation.Launcher.Identity,
+		LauncherExit:       reservation.LauncherExit,
+		Mirror:             reservation.Mirror,
+	}
+	if value.Validate() != nil || !receipt.ValidFor(value) || receipt.LinuxProof == nil {
+		return false
+	}
+	if receipt.LinuxProof.Kind == authority.LinuxCgroupStopProofMirror {
+		return reservation.HelperExit != nil && receipt.LinuxProof.HelperExit != nil &&
+			receipt.LinuxProof.HelperExit.Equal(*reservation.HelperExit)
+	}
+	return receipt.LinuxProof.Kind == authority.LinuxCgroupStopProofHelper && reservation.HelperExit == nil
+}
+
+func linuxCgroupReservationAbortMatches(reservation LinuxCgroupReservation, proof authority.LinuxCgroupReservationAbortProof) bool {
+	if reservation.Version != LinuxCgroupReservationVersion || proof.Validate() != nil || reservation.LauncherGrantPossible ||
+		!proof.ValidFor(reservation.LaunchToken, reservation.Parent, reservation.LeafName, reservation.CreateStarted,
+			reservation.OwnerUID, reservation.Anchor, *reservation.Mirror, reservation.Helper, reservation.Launcher) ||
+		reservation.AbortProof != nil && !reservation.AbortProof.Equal(proof) ||
+		reservation.Gate != nil || reservation.PreGateStopReceipt != nil {
+		return false
+	}
+	switch proof.LeafDisposition {
+	case authority.LinuxCgroupAbortLeafNeverCreated:
+		return reservation.LeafIdentity == nil && reservation.Helper == nil && reservation.HelperExit == nil &&
+			reservation.Launcher == nil && reservation.LauncherExit == nil && proof.LeafIdentity == nil &&
+			proof.LauncherExit == nil && !proof.LauncherGrantPossible
+	case authority.LinuxCgroupAbortLeafRemovedEmpty, authority.LinuxCgroupAbortLeafAbsentAfterRmdir:
+		if reservation.LeafIdentity == nil || proof.LeafIdentity == nil || !reservation.LeafIdentity.Equal(*proof.LeafIdentity) ||
+			!proof.LeafEmpty || !proof.LeafAbsent || proof.LauncherGrantPossible {
+			return false
+		}
+		if reservation.Launcher == nil {
+			if reservation.LauncherExit != nil || proof.LauncherExit != nil {
+				return false
+			}
+		} else if reservation.LauncherExit == nil || proof.LauncherExit == nil ||
+			!reservation.LauncherExit.Equal(*proof.LauncherExit) ||
+			!proof.LauncherExit.ValidForOwnedDescendant(*reservation.Launcher, *reservation.Helper, reservation.Anchor, reservation.HelperExit) {
+			return false
+		}
+		if reservation.Helper == nil {
+			return reservation.HelperExit == nil && proof.HelperExit == nil
+		}
+		return reservation.HelperExit != nil && proof.HelperExit != nil &&
+			reservation.HelperExit.Equal(*proof.HelperExit) &&
+			proof.HelperExit.ValidFor(*reservation.Helper, reservation.Anchor)
+	default:
+		return false
+	}
+}
+
+func linuxCgroupPreGateReceiptMatchesReservation(reservation LinuxCgroupReservation, receipt authority.LinuxCgroupPreGateStopReceipt) bool {
+	return reservation.Version == LinuxCgroupReservationVersion && reservation.ValidateWithoutPreGateReceipt() == nil &&
+		reservation.CreateStarted && reservation.LauncherGrantPossible && reservation.LeafIdentity != nil &&
+		reservation.Helper != nil && reservation.Launcher != nil && reservation.LauncherExit != nil &&
+		reservation.Mirror != nil && reservation.Gate == nil && reservation.AbortProof == nil &&
+		(reservation.PreGateStopReceipt == nil || reservation.PreGateStopReceipt.Equal(receipt)) &&
+		receipt.ValidFor(reservation.LaunchToken, *reservation.LeafIdentity, reservation.OwnerUID, reservation.LauncherUID,
+			reservation.Anchor, *reservation.Helper, *reservation.Launcher, *reservation.Mirror, *reservation.LauncherExit, reservation.HelperExit)
+}
+
+func sameContainmentScans(left, right *ContainmentScanJournal) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+func requireLinuxScansCleanForHandoff(journal RunJournal, handoff authority.SupervisorHandoff) error {
+	if handoff.OwnerKind != authority.OwnerKindLinuxHelper {
+		return nil
+	}
+	if handoff.SupervisorPID <= 0 || handoff.SupervisorIdentity == "" || journal.ContainmentScans == nil ||
+		!journal.ContainmentScans.matchesHandoff(handoff) {
+		return errors.New("Linux supervisor scan fence is missing or mismatched")
+	}
+	if journal.ContainmentUnproven || !journal.ContainmentScans.clean() {
+		return errors.New("Linux supervisor scan evidence is unresolved")
+	}
+	return nil
+}
+
+func initialPrecommitLinuxScansAbortable(scans ContainmentScanJournal) bool {
+	return initialPrecommitLinuxScanProgressAbortable(scans.Helper) && initialPrecommitLinuxScanProgressAbortable(scans.Mirror)
+}
+
+func initialPrecommitLinuxScanProgressAbortable(progress ContainmentScanProgress) bool {
+	if progress.UnprovenSequence != 0 || progress.FailureKind != "" || progress.CompletedSequence > 1 ||
+		progress.PendingSequence > 1 || progress.CleanResultSequence > 1 || progress.SealedSequence > 1 {
+		return false
+	}
+	if progress.CompletedSequence == 0 {
+		return progress.PendingSequence == 1 && progress.SealedSequence == 0
+	}
+	return progress.PendingSequence == 0 && progress.CleanResultSequence == 0 &&
+		(progress.SealedSequence == 0 || progress.SealedSequence == progress.CompletedSequence)
+}
+
+func requireLinuxScansCleanForAuthority(journal RunJournal, value authority.Supervisor) error {
+	if value.OwnerKind != authority.OwnerKindLinuxHelper {
+		return nil
+	}
+	if journal.ContainmentScans == nil || !journal.ContainmentScans.matchesAuthority(value) {
+		return errors.New("Linux supervisor scan fence is missing or mismatched")
+	}
+	if journal.ContainmentUnproven || !journal.ContainmentScans.clean() {
+		return errors.New("Linux supervisor scan evidence is unresolved")
+	}
+	return nil
+}
+
+func requireLinuxScansSealedForHandoff(journal RunJournal, handoff authority.SupervisorHandoff) error {
+	if handoff.OwnerKind != authority.OwnerKindLinuxHelper {
+		return nil
+	}
+	if handoff.SupervisorPID <= 0 || handoff.SupervisorIdentity == "" || journal.ContainmentScans == nil ||
+		!journal.ContainmentScans.matchesHandoff(handoff) {
+		return errors.New("Linux supervisor scan fence is missing or mismatched")
+	}
+	if journal.ContainmentUnproven || !journal.ContainmentScans.sealed() {
+		return errors.New("Linux supervisor scan seals are unresolved")
+	}
+	return nil
+}
+
+func requireLinuxScansSealedForAuthority(journal RunJournal, value authority.Supervisor) error {
+	if value.OwnerKind != authority.OwnerKindLinuxHelper {
+		return nil
+	}
+	if journal.ContainmentScans == nil || !journal.ContainmentScans.matchesAuthority(value) {
+		return errors.New("Linux supervisor scan fence is missing or mismatched")
+	}
+	if journal.ContainmentUnproven || !journal.ContainmentScans.sealed() {
+		return errors.New("Linux supervisor scan seals are unresolved")
+	}
+	return nil
+}
+
 func validateJournal(journal RunJournal) error {
 	if err := validateKey(journal.Key()); err != nil {
 		return err
@@ -2563,7 +4764,8 @@ func validateJournal(journal RunJournal) error {
 	if journal.PID > 0 && (journal.StartedAt.IsZero() || !validRequiredString(journal.ProcessIdentity, 4096)) {
 		return errors.New("run journal process details are invalid")
 	}
-	if journal.ContainmentUnproven && !journal.HasProcessDetails() {
+	if journal.ContainmentUnproven && !journal.HasProcessDetails() && journal.ContainmentHandoff == nil &&
+		journal.ContainmentScans == nil && journal.ContainmentCgroup == nil {
 		return errors.New("run journal containment uncertainty is invalid")
 	}
 	if journal.ContainmentAuthority != nil {
@@ -2572,6 +4774,17 @@ func validateJournal(journal RunJournal) error {
 			journal.ContainmentAuthority.TargetIdentity != journal.ProcessIdentity {
 			return errors.New("run journal containment authority is invalid")
 		}
+		if journal.ContainmentAuthority.Version == authority.SupervisorVersionV2 {
+			if journal.ContainmentCgroup == nil || journal.ContainmentScans != nil ||
+				journal.ContainmentCgroupReleaseProof != nil ||
+				!linuxCgroupReservationMatchesAuthority(*journal.ContainmentCgroup, *journal.ContainmentAuthority) ||
+				journal.ContainmentCgroup.Gate == nil || !journal.StartedAt.Equal(journal.ContainmentCgroup.Gate.ObservedAt) ||
+				journal.ContainmentAuthority.StopReceipt != nil && journal.ContainmentUnproven {
+				return errors.New("run journal v2 containment authority is invalid")
+			}
+		} else if journal.ContainmentCgroup != nil {
+			return errors.New("v1 containment authority cannot use a v2 cgroup reservation")
+		}
 	}
 	if journal.ContainmentHandoff != nil {
 		if journal.ContainmentAuthority != nil || journal.HasProcessDetails() || !journal.hasClaimGrant() {
@@ -2579,6 +4792,84 @@ func validateJournal(journal RunJournal) error {
 		}
 		if err := journal.ContainmentHandoff.Validate(); err != nil {
 			return errors.New("run journal containment handoff is invalid")
+		}
+		if journal.ContainmentHandoff.Version == authority.SupervisorHandoffVersionV2 {
+			if journal.ContainmentCgroup == nil || journal.ContainmentScans != nil ||
+				journal.ContainmentCgroupReleaseProof != nil ||
+				!linuxCgroupReservationMatchesHandoff(*journal.ContainmentCgroup, *journal.ContainmentHandoff, journal.ContainmentHandoff.SupervisorPID > 0) ||
+				journal.ContainmentHandoff.StopReceipt != nil && journal.ContainmentUnproven {
+				return errors.New("run journal v2 containment handoff is invalid")
+			}
+		} else if journal.ContainmentCgroup != nil {
+			return errors.New("v1 containment handoff cannot use a v2 cgroup reservation")
+		}
+	}
+	if journal.ContainmentCgroup != nil {
+		reservation := journal.ContainmentCgroup
+		if reservation.Validate() != nil || !journal.hasClaimGrant() || journal.ContainmentScans != nil {
+			return errors.New("run journal v2 cgroup reservation is invalid")
+		}
+		if reservation.AbortProof != nil && (journal.ContainmentUnproven || journal.ContainmentAuthority != nil ||
+			journal.ContainmentHandoff != nil || journal.HasProcessDetails()) {
+			return errors.New("run journal aborted cgroup reservation has active owner state")
+		}
+		if reservation.PreGateStopReceipt != nil && (journal.ContainmentUnproven || journal.ContainmentAuthority != nil ||
+			journal.ContainmentHandoff != nil || journal.HasProcessDetails()) {
+			return errors.New("run journal pre-gate cgroup receipt has active owner state")
+		}
+		if journal.ContainmentAuthority == nil && journal.ContainmentHandoff == nil {
+			if journal.HasProcessDetails() {
+				return errors.New("uncommitted v2 cgroup reservation has process authority")
+			}
+		}
+		if journal.ContainmentAuthority != nil && journal.ContainmentAuthority.Version != authority.SupervisorVersionV2 {
+			return errors.New("v2 cgroup reservation cannot accompany a v1 authority")
+		}
+		if journal.ContainmentHandoff != nil && journal.ContainmentHandoff.Version != authority.SupervisorHandoffVersionV2 {
+			return errors.New("v2 cgroup reservation cannot accompany a v1 handoff")
+		}
+	}
+	if journal.ContainmentScans != nil {
+		scans := journal.ContainmentScans
+		if journal.ContainmentCgroup != nil || scans.Version != 1 || len(scans.LaunchToken) != authority.TokenBytes*2 || !validHex(scans.LaunchToken) ||
+			len(scans.MirrorIdentity) != authority.TokenBytes*2 || !validHex(scans.MirrorIdentity) || scans.TargetPID <= 0 ||
+			!validRequiredString(scans.TargetIdentity, 4096) || scans.SupervisorPID <= 0 ||
+			!validRequiredString(scans.SupervisorIdentity, 4096) ||
+			!validContainmentScanProgress(scans.Helper) || !validContainmentScanProgress(scans.Mirror) {
+			return errors.New("run journal containment scan state is invalid")
+		}
+		if journal.ContainmentHandoff != nil {
+			handoff := journal.ContainmentHandoff
+			if handoff.OwnerKind != authority.OwnerKindLinuxHelper || handoff.SupervisorPID <= 0 || !scans.matchesHandoff(*handoff) {
+				return errors.New("run journal containment scan handoff is invalid")
+			}
+		} else if journal.ContainmentAuthority != nil {
+			value := journal.ContainmentAuthority
+			if value.OwnerKind != authority.OwnerKindLinuxHelper || !scans.matchesAuthority(*value) {
+				return errors.New("run journal containment scan authority is invalid")
+			}
+		} else {
+			return errors.New("run journal containment scan state has no Linux owner")
+		}
+		if (scans.Helper.UnprovenSequence != 0 || scans.Mirror.UnprovenSequence != 0) && !journal.ContainmentUnproven {
+			return errors.New("run journal containment scan failure is not sticky")
+		}
+	}
+	if releaseProof := journal.ContainmentCgroupReleaseProof; releaseProof != nil {
+		if releaseProof.Validate() != nil || releaseProof.Version != authority.SupervisorHandoffVersionV2 ||
+			journal.ContainmentAuthority != nil || journal.ContainmentHandoff != nil || journal.ContainmentCgroup != nil ||
+			journal.ContainmentScans != nil || journal.ContainmentCgroupPreGateReleaseProof != nil ||
+			journal.HasProcessDetails() || journal.PID != 0 ||
+			journal.ProcessIdentity != "" || !journal.StartedAt.IsZero() || journal.ContainmentUnproven {
+			return errors.New("run journal v2 cgroup release proof is invalid")
+		}
+	}
+	if releaseProof := journal.ContainmentCgroupPreGateReleaseProof; releaseProof != nil {
+		if releaseProof.Validate() != nil || journal.ContainmentCgroupReleaseProof != nil ||
+			journal.ContainmentAuthority != nil || journal.ContainmentHandoff != nil || journal.ContainmentCgroup != nil ||
+			journal.ContainmentScans != nil || journal.HasProcessDetails() || journal.PID != 0 ||
+			journal.ProcessIdentity != "" || !journal.StartedAt.IsZero() || journal.ContainmentUnproven {
+			return errors.New("run journal pre-gate cgroup release proof is invalid")
 		}
 	}
 	if (strings.TrimSpace(journal.LeaseToken) == "") != journal.LeaseExpiresAt.IsZero() || len(journal.LeaseToken) > 65536 || !validWork(journal.Work) {
@@ -2593,8 +4884,15 @@ func validateJournal(journal RunJournal) error {
 	if journal.DroppedOutputChunks < 0 || journal.DroppedOutputBytes < 0 {
 		return errors.New("run journal is invalid")
 	}
-	if !journal.hasClaimGrant() && (journal.PID != 0 || !journal.StartedAt.IsZero() || len(journal.PendingEvents) != 0 || journal.DroppedOutputChunks != 0 || journal.DroppedOutputBytes != 0 || len(journal.PendingTransitions) != 0 || len(journal.PendingCommandAcknowledgements) != 0) {
+	if !journal.hasClaimGrant() && (journal.PID != 0 || !journal.StartedAt.IsZero() || journal.ContainmentCgroup != nil ||
+		journal.LinuxCloneIntent != nil || journal.LinuxCloneSeedReceipt != nil || journal.LinuxCloneCheckoutReceipt != nil ||
+		journal.LinuxClonePromotionReceipt != nil || journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil ||
+		len(journal.PendingEvents) != 0 || journal.DroppedOutputChunks != 0 ||
+		journal.DroppedOutputBytes != 0 || len(journal.PendingTransitions) != 0 || len(journal.PendingCommandAcknowledgements) != 0) {
 		return errors.New("run journal is invalid")
+	}
+	if err := validateLinuxCloneJournal(journal); err != nil {
+		return err
 	}
 	lastSequence := int64(0)
 	for _, event := range journal.PendingEvents {
@@ -2656,12 +4954,44 @@ func validateJournal(journal RunJournal) error {
 	return nil
 }
 
+func validContainmentScanProgress(progress ContainmentScanProgress) bool {
+	if progress.SealedSequence != 0 &&
+		(progress.CompletedSequence == 0 || progress.SealedSequence != progress.CompletedSequence ||
+			progress.PendingSequence != 0 || progress.CleanResultSequence != 0 || progress.UnprovenSequence != 0 || progress.FailureKind != "") {
+		return false
+	}
+	if progress.PendingSequence != 0 {
+		if progress.UnprovenSequence != 0 || progress.CompletedSequence == ^uint64(0) ||
+			progress.PendingSequence != progress.CompletedSequence+1 {
+			return false
+		}
+	}
+	if progress.CleanResultSequence != 0 &&
+		(progress.PendingSequence != progress.CleanResultSequence || progress.CompletedSequence == ^uint64(0) ||
+			progress.CleanResultSequence != progress.CompletedSequence+1 || progress.UnprovenSequence != 0) {
+		return false
+	}
+	if progress.UnprovenSequence == 0 {
+		return progress.FailureKind == ""
+	}
+	if progress.PendingSequence != 0 || progress.CleanResultSequence != 0 || !validRequiredString(progress.FailureKind, 128) {
+		return false
+	}
+	return progress.CompletedSequence != ^uint64(0) && progress.UnprovenSequence == progress.CompletedSequence+1 ||
+		progress.UnprovenSequence == progress.CompletedSequence && progress.FailureKind == "clean_retire_ack_failure"
+}
+
 func validRequiredString(value string, limit int) bool {
 	return strings.TrimSpace(value) != "" && len(value) <= limit
 }
 
 func validWork(work protocol.Work) bool {
 	return len(work.Goal) <= 65536 && len(work.AgentProfile) <= 4096 && len(work.Workspace) <= 4096 && validRawMessage(work.Input)
+}
+
+func sameWork(left, right protocol.Work) bool {
+	return left.Goal == right.Goal && left.AgentProfile == right.AgentProfile && left.Workspace == right.Workspace &&
+		bytes.Equal(left.Input, right.Input)
 }
 
 func validEvent(event protocol.RunEvent) bool {
