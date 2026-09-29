@@ -885,12 +885,16 @@ as v1.2; retain the v1 reader for stopped or receipt-bearing legacy owners.
    second child nor authorizes a second release. An unidentifiable outcome
    remains unresolved until readback; a ready A gate does not prove native
    exec or successful work.
-5. Normal helper A stop writes `1` to the pinned leaf's `cgroup.kill`, verifies
-   the same subtree's recursive `cgroup.events populated=0`, waits for the
-   exact gate/native PID and reaps run-owned adopted children, including other
-   sessions and nested child cgroups. If the helper died, the daemon mirror
-   must obtain the anchor subreaper's authenticated, run-bound wait/reap
-   evidence; the mirror is not an ancestor and `ECHILD` is not reaping proof.
+5. The anchor is the sole writer of `1` to the pinned v2 leaf's `cgroup.kill`
+   for both normal helper-requested stop and helper-death takeover. The helper
+   first fences its release and other late producers, then requests the exact
+   run-bound anchor stop and requires its kill-write acknowledgement and
+   recursive `cgroup.events populated=0` proof before issuing a receipt. The
+   helper waits for its exact gate/native PID; after helper death, the daemon
+   mirror requires the anchor subreaper's authenticated kill, empty and
+   wait/reap evidence for the same attempt. The mirror is not an ancestor and
+   `ECHILD` is not reaping proof. A repeated request reads back the same
+   anchor attempt; it does not write `cgroup.kill` again.
    Stop must first fence both launcher and A-gate producers and the gate's
    release channel, then prove neither producer can create a late child
    before the final kill/empty observation. A daemon mirror may do so only
@@ -1022,4 +1026,64 @@ with independent absence/readback; no fresh absence-only proof is allowed.
 This amendment does not weaken RunKey fences, process containment, v2 stop
 and leaf-release receipts, or existing Windows/Linux-v1 behavior. Root
 implementation and independent security/crash review remain pending evidence.
+
+The transient root worker must not accept an A socket caller's structurally
+valid cleanup request as proof of the durable preconditions. The trusted
+owner-anchor must independently read the exact persisted RunJournal using
+the State-owned decoder before invoking root: pending Begin intent, full
+RunKey/fence, v2 StopReceipt and leaf release, and any prior target-removal
+proof must match. A root-owned installed owner configuration pins the StateDir;
+the daemon's native preflight must reject a different configured StateDir.
+The separate anchor cannot open a second writable Store because the daemon
+holds its exclusive lock for its lifetime. A read-only reader instead pins
+the existing journal and runs directory, syncs them, and reopens the same
+named journal to verify identity and contents before authorizing the effect.
+The root worker remains journal-blind and accepts only the exact authenticated
+anchor. Missing or changed evidence blocks cleanup; a renamed pre-receipt B
+checkout cannot become a no-target abort merely because its old name vanished.
+
+This check rejects an unpersisted *RPC claim*, not a hostile process already
+running as UID A: A owns and can change the actual StateDir and is the trusted
+journal-writing domain under the approved host model. Preventing a malicious
+same-UID A writer from forging journal contents would require a different
+host identity or an independent non-forgeable commit authority, neither of
+which is claimed here. The read-only verifier, installed StateDir binding,
+post-RELEASE abort rejection, and their crash/security checks remain pending
+implementation evidence.
+
+## Single v2 leaf kill writer amendment (2026-09-29)
+
+The owner explicitly replaced the earlier helper-direct `cgroup.kill` choice
+in point 5 above: the long-lived anchor alone writes to an exact pinned v2
+leaf, including normal helper-driven stop. The helper can die before or after
+its direct write without the anchor knowing whether it happened. Repeating
+that write can duplicate an unknown effect; declining to write can leave a
+live B child after helper death. An anchor-owned, run-bound single attempt
+with authenticated kill ACK, recursive empty, producer-fence and exact
+wait/reap evidence resolves that handoff without a second durable scheduler.
+The helper and daemon mirror consume the same attempt and may persist only a
+version-matched StopReceipt built from positive evidence; an unknown write,
+lost anchor, changed pinned leaf or unproven process exit retains the journal.
+The existing `StopProof.Issuer` names the receipt coordinator (helper or
+mirror), and `Reaper` names the process wait/reap owner; neither claims to
+be the `cgroup.kill` writer. The caller must validate the anchor's typed,
+run-bound physical-stop evidence before recording that receipt. This retains
+the on-disk receipt schema and its v1/v2 journal compatibility.
+Legacy Linux v1 group stopping and Windows supervisor ownership do not change.
+The anchor/helper RPC cutover and real crash/response-loss witnesses remain
+pending implementation and independent verification.
+
+## Non-Goal native checkout retention (2026-09-29)
+
+The owner chose to retain, not auto-dispose, a stopped non-Goal Linux v2
+Run's B checkout, A seed/base and RunJournal when it has no exactly delivered
+Goal candidate artifact. The existing cleanup CAS requires that delivery;
+weakening its artifact gate would discard possible unaccepted work without
+an authorized disposition. A verified v2 physical StopReceipt and leaf
+release still protect process containment, but a terminal WorkItem state
+alone is not filesystem deletion authority. The retained journal/workspace
+may occupy disk until a separately authorized disposition is defined and
+performed; no test may count this as checkout-cleanup success. The rootless
+Compose refusal occurs before B checkout preparation and does not exercise
+this retained post-checkout case.
 

@@ -57,7 +57,11 @@ detected. A detected mismatch retains the journal and A-owned seed/ref; no
 proof claims atomic sibling exclusion. A missing checkout path without a
 previously durable exact root-removal proof cannot establish that the original
 checkout inode was destroyed. Process containment and physical stop proofs
-are unchanged. The existing rootless Compose daemon has no such
+are unchanged. A stopped non-Goal Run without an exactly delivered Goal
+candidate artifact retains its journal, B checkout and A seed/base until an
+explicitly authorized disposition; terminal state alone does not permit
+destructive checkout cleanup. This is retention, not a completed cleanup
+receipt. The existing rootless Compose daemon has no such
 delegation or launcher: new native execution there fails closed, without a
 group-only or same-UID fallback; legacy journal recovery remains required.
 The delegated helper must survive an ordinary daemon-process crash under the
@@ -78,6 +82,12 @@ evidence only on a kernel passing the exact A/B peer checks; this observed
 denying WSL2 kernel instead needs a real fail-closed witness and must not be
 reported as natively supported. An unprovisioned WSL2 instance also fails
 closed without reverting to the old process group.
+
+For Linux v2 leaves, the surviving A anchor is the only `cgroup.kill` writer:
+normal helper stop requests and helper-death takeover share one exact
+run-bound kill attempt and its authenticated acknowledgement, recursive-empty
+and wait/reap evidence. A helper or daemon mirror cannot issue a physical-stop
+receipt from its own second kill, PID absence or an unknown anchor outcome.
 
 This goal excludes harness-specific terminal semantics and capability promotion.
 It remains one independently mergeable PR and preserves journal compatibility;
