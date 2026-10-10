@@ -1,5 +1,11 @@
 # Next goals for local Codex
 
+Goal [0006b](archive/0006b-crash-safe-process-containment.md) completed its
+owner-approved 2026-10-10 bounded pre-0.0.1 iteration and is archived. Its closure
+is not a release, native-capability or whole-project readiness certificate.
+Deferred verification remains unpassed; use that goal's amended closure contract rather than treating
+every full-series acceptance requirement below as a blocker for this iteration.
+
 Each active goal below is one independently meaningful outcome intended to fit
 one agent run of at most 12 hours and one complete pull request. Every PR must be
 safe to merge by itself: the repository remains runnable, existing supported
@@ -12,7 +18,7 @@ its contract before implementation, but execute its review last.
 
 | Series | Default serial order |
 | --- | --- |
-| 0006 | 0006a through 0006i, then 0006-final |
+| 0006 | 0006c through 0006i, then 0006-final (0006a and 0006b archived) |
 | 0007 | 0007a through 0007i, then 0007-final |
 | 0008 | 0008a through 0008d, then 0008-final |
 
@@ -25,7 +31,6 @@ acceptance actions. Missing evidence or unresolved requirements block completion
 
 | Goal | Desired outcome |
 | --- | --- |
-| [0006b](0006b-crash-safe-process-containment.md) | Crash-safe process containment and authority handoff |
 | [0006c](0006c-retained-session-continuity.md) | Verified retained-session resume and handoff |
 | [0006d](0006d-codex-native-capability.md) | Evidence-bounded Codex native capability |
 | [0006e](0006e-claude-native-capability.md) | Evidence-bounded Claude Code native capability |
