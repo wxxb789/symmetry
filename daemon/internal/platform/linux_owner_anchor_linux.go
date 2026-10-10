@@ -5,6 +5,9 @@ package platform
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"debug/elf"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -15,8 +18,11 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -28,27 +34,50 @@ import (
 )
 
 const (
-	linuxOwnerAnchorProtocolVersion        = 1
-	linuxOwnerAnchorReservationVersion     = 2
-	linuxOwnerAnchorMaxFrame               = 128 << 10
-	linuxOwnerAnchorMaxSocketPath          = 108
-	linuxOwnerAnchorRequestTimeout         = 5 * time.Second
-	linuxOwnerAnchorWaitTimeout            = 30 * time.Second
-	linuxOwnerAnchorWaitPoll               = 25 * time.Millisecond
-	linuxOwnerAnchorReapPageSize           = 4
-	linuxOwnerAnchorOperationStart         = "start-helper-v2"
-	linuxOwnerAnchorOperationAttach        = "attach-helper-v2"
-	linuxOwnerAnchorOperationLookup        = "lookup-helper-v2"
-	linuxOwnerAnchorOperationRetire        = "retire-helper-v2"
-	linuxOwnerAnchorOperationReapRun       = "wait-reap-run-v2"
-	linuxOwnerAnchorOperationWaitHelper    = "wait-helper-v2"
-	linuxOwnerAnchorOperationRetireCleared = "retire-cleared-run-v2"
-	linuxOwnerAnchorOperationRetireAborted = "retire-aborted-helper-v2"
+	linuxOwnerAnchorProtocolVersion               = 1
+	linuxOwnerAnchorReservationVersion            = 2
+	linuxOwnerAnchorMaxFrame                      = 128 << 10
+	linuxOwnerAnchorMaxSocketPath                 = 108
+	linuxOwnerAnchorRequestTimeout                = 5 * time.Second
+	linuxOwnerAnchorWaitTimeout                   = 30 * time.Second
+	linuxOwnerAnchorCleanupTimeout                = 6 * time.Minute
+	linuxOwnerAnchorWaitPoll                      = 25 * time.Millisecond
+	linuxOwnerAnchorSupervisionRetry              = time.Second
+	linuxOwnerAnchorReapPageSize                  = 4
+	linuxOwnerAnchorOperationStart                = "start-helper-v2"
+	linuxOwnerAnchorOperationAttach               = "attach-helper-v2"
+	linuxOwnerAnchorOperationLookup               = "lookup-helper-v2"
+	linuxOwnerAnchorOperationRetire               = "retire-helper-v2"
+	linuxOwnerAnchorOperationReapRun              = "wait-reap-run-v2"
+	linuxOwnerAnchorOperationWaitHelper           = "wait-helper-v2"
+	linuxOwnerAnchorOperationRetireCleared        = "retire-cleared-run-v2"
+	linuxOwnerAnchorOperationRetireAborted        = "retire-aborted-helper-v2"
+	linuxOwnerAnchorOperationCloneCleanup         = "remove-b-clone-after-receipt"
+	linuxOwnerAnchorOperationRegisterGate         = "register-gate-v2"
+	linuxOwnerAnchorOperationAuthorizeGate        = "authorize-gate-release-v2"
+	linuxOwnerAnchorOperationStopLeaf             = "stop-leaf-v2"
+	linuxOwnerAnchorOperationClassifyChild        = "classify-run-child-origin-v2"
+	linuxOwnerAnchorStopEvidenceVersion           = 1
+	linuxOwnerAnchorRunChildClassificationVersion = 1
+	linuxOwnerAnchorMaxUserNamespaceDepth         = 32
 )
 
 // DefaultLinuxOwnerAnchorSocketPath is the systemd-provisioned A-private
 // endpoint used by the daemon preflight and the per-run v2 helper.
 const DefaultLinuxOwnerAnchorSocketPath = "/run/symmetry-owner/owner.sock"
+const linuxOwnerAnchorGateImagePath = "/usr/libexec/symmetry/symmetry-linux-gate"
+const linuxOwnerAnchorWitnessConfigPath = "/etc/symmetry/linux-owner-witness.json"
+const linuxOwnerAnchorWitnessConfigVersion = 1
+const linuxOwnerAnchorWitnessConfigMaxBytes = 4096
+
+type linuxOwnerAnchorWitnessConfig struct {
+	Version            int    `json:"version"`
+	RunID              string `json:"run_id"`
+	Generation         int64  `json:"generation"`
+	DropResponse       string `json:"drop_response,omitempty"`
+	HelperAction       string `json:"helper_action,omitempty"`
+	HoldForReleaseFile bool   `json:"hold_for_release_file,omitempty"`
+}
 
 var ErrLinuxOwnerAnchorHelperAlreadyStarted = errors.New("Linux cgroup-v2 owner helper already exists; attach to its exact identity instead of starting another")
 
@@ -59,6 +88,136 @@ type LinuxOwnerAnchorRunKey struct {
 	RunID      string `json:"run_id"`
 	Generation int64  `json:"generation"`
 }
+
+// linuxOwnerAnchorRunChildOrigin is an Anchor-RPC-only process attribution
+// result. It is never a State receipt and does not assert a creator edge for
+// an adopted process whose original parent was not observed.
+type linuxOwnerAnchorRunChildOrigin string
+
+const (
+	linuxOwnerAnchorRunChildOriginRegisteredCurrent          linuxOwnerAnchorRunChildOrigin = "registered_current"
+	linuxOwnerAnchorRunChildOriginGateUserNSCurrent          linuxOwnerAnchorRunChildOrigin = "gate_userns_current"
+	linuxOwnerAnchorRunChildOriginRegisteredForeign          linuxOwnerAnchorRunChildOrigin = "registered_foreign"
+	linuxOwnerAnchorRunChildOriginOtherUserNSForeign         linuxOwnerAnchorRunChildOrigin = "other_userns_foreign"
+	linuxOwnerAnchorRunChildOriginCurrentRunEscaped          linuxOwnerAnchorRunChildOrigin = "current_run_escaped"
+	linuxOwnerAnchorRunChildOriginPreReleaseGatePhysicalOnly linuxOwnerAnchorRunChildOrigin = "pre_release_gate_physical_only"
+	linuxOwnerAnchorRunChildOriginPhysicalOnlyForeign        linuxOwnerAnchorRunChildOrigin = "physical_only_foreign"
+	linuxOwnerAnchorRunChildOriginUnknown                    linuxOwnerAnchorRunChildOrigin = "unknown"
+)
+
+// linuxOwnerAnchorRunChildClassification binds an origin result to both the
+// requested RunKey and, when known, the RunKey whose gate user namespace
+// proves the process origin. This type travels only on the authenticated
+// Anchor control socket; it is not persisted in the RunJournal.
+type linuxOwnerAnchorRunChildClassification struct {
+	Version      int                                  `json:"version"`
+	RunKey       LinuxOwnerAnchorRunKey               `json:"run_key"`
+	OriginRunKey LinuxOwnerAnchorRunKey               `json:"origin_run_key,omitempty"`
+	Fence        protocol.Fence                       `json:"fence"`
+	LaunchToken  string                               `json:"launch_token"`
+	Helper       authority.LinuxCgroupProcessIdentity `json:"helper"`
+	Process      authority.LinuxCgroupProcessIdentity `json:"process"`
+	Role         string                               `json:"role,omitempty"`
+	Origin       linuxOwnerAnchorRunChildOrigin       `json:"origin"`
+}
+
+func (classification linuxOwnerAnchorRunChildClassification) ValidateFor(
+	grant LinuxOwnerAnchorGrant,
+	helper, process authority.LinuxCgroupProcessIdentity,
+) error {
+	if grant.Validate() != nil || helper.Validate() != nil || process.Validate() != nil ||
+		classification.Version != linuxOwnerAnchorRunChildClassificationVersion ||
+		classification.RunKey != grant.RunKey || classification.Fence != grant.Fence ||
+		classification.LaunchToken != grant.LaunchToken || !classification.Helper.Equal(helper) ||
+		!classification.Process.Equal(process) {
+		return errors.New("Linux owner anchor child classification differs from its exact RunKey and process")
+	}
+	switch classification.Origin {
+	case linuxOwnerAnchorRunChildOriginRegisteredCurrent:
+		if classification.OriginRunKey != grant.RunKey || !linuxOwnerAnchorValidChildRole(classification.Role) {
+			return errors.New("registered-current child classification lacks its exact origin RunKey or role")
+		}
+	case linuxOwnerAnchorRunChildOriginGateUserNSCurrent:
+		if classification.OriginRunKey != grant.RunKey || classification.Role != "descendant" {
+			return errors.New("gate-userns child classification is not an exact current-run descendant")
+		}
+	case linuxOwnerAnchorRunChildOriginRegisteredForeign, linuxOwnerAnchorRunChildOriginOtherUserNSForeign:
+		if !validLinuxOwnerAnchorRunID(classification.OriginRunKey.RunID) || classification.OriginRunKey.Generation <= 0 ||
+			classification.OriginRunKey == grant.RunKey || classification.Role != "" && !linuxOwnerAnchorValidChildRole(classification.Role) {
+			return errors.New("foreign child classification lacks a distinct exact origin RunKey")
+		}
+	case linuxOwnerAnchorRunChildOriginCurrentRunEscaped:
+		if classification.OriginRunKey != grant.RunKey || !linuxOwnerAnchorValidChildRole(classification.Role) {
+			return errors.New("escaped child classification lacks the current RunKey or process role")
+		}
+	case linuxOwnerAnchorRunChildOriginPreReleaseGatePhysicalOnly, linuxOwnerAnchorRunChildOriginPhysicalOnlyForeign:
+		if classification.OriginRunKey != (LinuxOwnerAnchorRunKey{}) || classification.Role != "pre_release_gate" {
+			return errors.New("physical-only gate classification invents a durable RunKey gate identity")
+		}
+	case linuxOwnerAnchorRunChildOriginUnknown:
+		if classification.OriginRunKey != (LinuxOwnerAnchorRunKey{}) ||
+			classification.Role != "" && !linuxOwnerAnchorValidChildRole(classification.Role) {
+			return errors.New("unknown child classification carries an unproven origin RunKey")
+		}
+	default:
+		return errors.New("Linux owner anchor child classification has an unknown origin kind")
+	}
+	return nil
+}
+
+func (classification linuxOwnerAnchorRunChildClassification) currentRunMember() bool {
+	return classification.Origin == linuxOwnerAnchorRunChildOriginRegisteredCurrent ||
+		classification.Origin == linuxOwnerAnchorRunChildOriginGateUserNSCurrent
+}
+
+func linuxOwnerAnchorClassifyNamespaceMembership(
+	targetRun, originRun LinuxOwnerAnchorRunKey,
+	cgroupPath, targetLeaf string,
+) linuxOwnerAnchorRunChildOrigin {
+	if !validLinuxOwnerAnchorRunID(targetRun.RunID) || targetRun.Generation <= 0 ||
+		!validLinuxOwnerAnchorRunID(originRun.RunID) || originRun.Generation <= 0 || cgroupPath == "" || targetLeaf == "" {
+		return linuxOwnerAnchorRunChildOriginUnknown
+	}
+	if originRun != targetRun {
+		return linuxOwnerAnchorRunChildOriginOtherUserNSForeign
+	}
+	if linuxOwnerCgroupPathWithin(cgroupPath, targetLeaf) {
+		return linuxOwnerAnchorRunChildOriginGateUserNSCurrent
+	}
+	return linuxOwnerAnchorRunChildOriginCurrentRunEscaped
+}
+
+func (classification linuxOwnerAnchorRunChildClassification) Equal(other linuxOwnerAnchorRunChildClassification) bool {
+	return classification.Version == other.Version && classification.RunKey == other.RunKey &&
+		classification.OriginRunKey == other.OriginRunKey && classification.Fence == other.Fence &&
+		classification.LaunchToken == other.LaunchToken && classification.Helper.Equal(other.Helper) &&
+		classification.Process.Equal(other.Process) && classification.Role == other.Role && classification.Origin == other.Origin
+}
+
+// LinuxOwnerAnchorCleanupVerifier is the read-only State seam used immediately
+// before the anchor delegates an exact clone cleanup to the root worker. The
+// implementation is supplied by cmd/symmetry-daemon to avoid a platform→State
+// import cycle; Close releases its pinned StateDir/runs descriptors.
+type LinuxOwnerAnchorCleanupVerifier interface {
+	Verify(runID string, generation int64, grant authority.LinuxCloneGrant, intent authority.LinuxCloneCleanupIntent, prior *authority.LinuxCloneTargetRemovalProof, targetFDPresent bool) error
+	Close() error
+}
+
+// LinuxOwnerAnchorCleanupVerifierFactory opens the State-owned read-only
+// verifier from the root-installed StateDir. RunLinuxOwnerAnchor requires the
+// factory; v2 config pins its reader before READY, while strict legacy v1 config
+// has no StateDir and therefore keeps clone cleanup disabled.
+type LinuxOwnerAnchorCleanupVerifierFactory func(stateDir string) (LinuxOwnerAnchorCleanupVerifier, error)
+
+type linuxOwnerAnchorCloneCleanupWorker func(
+	ctx context.Context,
+	rootFD, targetFD int,
+	grant authority.LinuxCloneGrant,
+	intent authority.LinuxCloneCleanupIntent,
+	prior *authority.LinuxCloneTargetRemovalProof,
+) (authority.LinuxCloneTargetRemovalProof, error)
+
+var errLinuxOwnerAnchorCleanupAuthority = errors.New("Linux owner anchor State cleanup authority is unproven")
 
 // LinuxOwnerAnchorGrant is the durable, run-bound input to the anchor. The
 // caller obtains it from the existing RunJournal after the cgroup leaf is
@@ -98,6 +257,484 @@ type LinuxOwnerAnchorReapEvidence struct {
 	ProcessRole string                               `json:"process_role"`
 	HelperExit  authority.LinuxCgroupExitProof       `json:"helper_exit"`
 	ProcessExit authority.LinuxCgroupExitProof       `json:"process_exit"`
+}
+
+// LinuxOwnerAnchorProducerFence is the helper's authenticated stop latch.
+// It reports only that lease renewal, preparation and release have quiesced;
+// it never attests to cgroup.kill or to the subsequent populated=0 observation.
+type LinuxOwnerAnchorProducerFence struct {
+	Version                int                                        `json:"version"`
+	RunKey                 LinuxOwnerAnchorRunKey                     `json:"run_key"`
+	Fence                  protocol.Fence                             `json:"fence"`
+	LaunchToken            string                                     `json:"launch_token"`
+	Helper                 authority.LinuxCgroupProcessIdentity       `json:"helper"`
+	StopLatched            bool                                       `json:"stop_latched"`
+	LeaseStopped           bool                                       `json:"lease_stopped"`
+	PrepareAttempted       bool                                       `json:"prepare_attempted"`
+	PrepareQuiesced        bool                                       `json:"prepare_quiesced"`
+	ReleaseAttempted       bool                                       `json:"release_attempted"`
+	ReleaseQuiesced        bool                                       `json:"release_quiesced"`
+	Released               bool                                       `json:"released"`
+	LeafMembershipVerified bool                                       `json:"leaf_membership_verified"`
+	Launcher               *authority.LinuxCgroupProcessIdentity      `json:"launcher,omitempty"`
+	LauncherExit           *authority.LinuxCgroupExitProof            `json:"launcher_exit,omitempty"`
+	Gate                   *authority.LinuxCgroupGateIdentity         `json:"gate,omitempty"`
+	UserNamespace          *LinuxUserNamespaceIdentity                `json:"user_namespace,omitempty"`
+	UntrustedProcess       *authority.LinuxCgroupProcessIdentity      `json:"untrusted_process,omitempty"`
+	GateOutcome            *authority.LinuxCgroupGateProductionResult `json:"gate_outcome,omitempty"`
+}
+
+func (fence LinuxOwnerAnchorProducerFence) ValidateFor(grant LinuxOwnerAnchorGrant, helper authority.LinuxCgroupProcessIdentity) error {
+	if grant.Validate() != nil || helper.Validate() != nil || fence.Version != linuxOwnerAnchorStopEvidenceVersion ||
+		fence.RunKey != grant.RunKey || fence.Fence != grant.Fence || fence.LaunchToken != grant.LaunchToken ||
+		!fence.Helper.Equal(helper) || !fence.StopLatched || !fence.LeaseStopped || !fence.PrepareQuiesced ||
+		!fence.ReleaseQuiesced || !fence.LeafMembershipVerified || fence.Released && !fence.ReleaseAttempted {
+		return errors.New("Linux owner anchor producer fence differs from the exact stop-latched run")
+	}
+	if !fence.PrepareAttempted {
+		if fence.Launcher != nil || fence.LauncherExit != nil || fence.Gate != nil || fence.UserNamespace != nil ||
+			fence.UntrustedProcess != nil || fence.GateOutcome != nil ||
+			fence.ReleaseAttempted || fence.Released {
+			return errors.New("Linux owner anchor stop fence invents a producer for an unprepared run")
+		}
+		return nil
+	}
+	if fence.Launcher == nil || fence.Launcher.Validate() != nil || fence.LauncherExit == nil || fence.LauncherExit.Validate() != nil ||
+		!fence.LauncherExit.ValidForOwnedDescendant(*fence.Launcher, helper, grant.Anchor, nil) {
+		return errors.New("Linux owner anchor stop fence lacks exact launcher exit/reap evidence")
+	}
+	if fence.Gate == nil {
+		if fence.UserNamespace != nil || fence.ReleaseAttempted || fence.Released {
+			return errors.New("Linux owner anchor pre-gate stop fence carries release or user-namespace state")
+		}
+		if fence.GateOutcome != nil {
+			if fence.UntrustedProcess != nil || fence.GateOutcome.ValidateFor(grant.LaunchToken, *fence.Launcher) != nil ||
+				linuxgate.VerifyGateNeverProducedAuthenticator(grant.Secret, *fence.GateOutcome) != nil {
+				return errors.New("Linux owner anchor no-gate stop fence lacks the exact authenticated launcher outcome")
+			}
+			return nil
+		}
+		if fence.UntrustedProcess == nil || fence.UntrustedProcess.Validate() != nil ||
+			fence.UntrustedProcess.Equal(*fence.Launcher) || fence.UntrustedProcess.Equal(helper) || fence.UntrustedProcess.Equal(grant.Anchor) {
+			return errors.New("Linux owner anchor failed-Prepare fence lacks its exact untrusted child identity")
+		}
+		return nil
+	}
+	if fence.UntrustedProcess != nil || fence.GateOutcome != nil || fence.Gate.Validate() != nil || fence.Gate.HostUID != grant.OwnerUID ||
+		!fence.Gate.Cgroup.Equal(grant.Leaf) || fence.UserNamespace == nil || !fence.UserNamespace.valid() {
+		return errors.New("Linux owner anchor stop fence gate or user namespace differs from the exact reservation")
+	}
+	return nil
+}
+
+func (fence LinuxOwnerAnchorProducerFence) Clone() LinuxOwnerAnchorProducerFence {
+	cloned := fence
+	cloned.Launcher = cloneLinuxOwnerProcessIdentity(fence.Launcher)
+	cloned.LauncherExit = cloneLinuxOwnerAnchorExitProof(fence.LauncherExit)
+	cloned.Gate = cloneLinuxOwnerGateIdentity(fence.Gate)
+	cloned.UntrustedProcess = cloneLinuxOwnerProcessIdentity(fence.UntrustedProcess)
+	if fence.UserNamespace != nil {
+		copy := *fence.UserNamespace
+		cloned.UserNamespace = &copy
+	}
+	if fence.GateOutcome != nil {
+		copy := *fence.GateOutcome
+		cloned.GateOutcome = &copy
+	}
+	return cloned
+}
+
+func (fence LinuxOwnerAnchorProducerFence) Equal(other LinuxOwnerAnchorProducerFence) bool {
+	return fence.Version == other.Version && fence.RunKey == other.RunKey && fence.Fence == other.Fence &&
+		fence.LaunchToken == other.LaunchToken && fence.Helper.Equal(other.Helper) && fence.StopLatched == other.StopLatched &&
+		fence.LeaseStopped == other.LeaseStopped && fence.PrepareAttempted == other.PrepareAttempted &&
+		fence.PrepareQuiesced == other.PrepareQuiesced && fence.ReleaseAttempted == other.ReleaseAttempted &&
+		fence.ReleaseQuiesced == other.ReleaseQuiesced && fence.Released == other.Released &&
+		fence.LeafMembershipVerified == other.LeafMembershipVerified &&
+		equalLinuxOwnerAnchorProcessPointer(fence.Launcher, other.Launcher) &&
+		equalLinuxOwnerAnchorExitPointer(fence.LauncherExit, other.LauncherExit) &&
+		equalLinuxOwnerAnchorGatePointer(fence.Gate, other.Gate) &&
+		equalLinuxOwnerAnchorUserNamespacePointer(fence.UserNamespace, other.UserNamespace) &&
+		equalLinuxOwnerAnchorProcessPointer(fence.UntrustedProcess, other.UntrustedProcess) &&
+		equalLinuxOwnerAnchorGateOutcomePointer(fence.GateOutcome, other.GateOutcome)
+}
+
+// LinuxOwnerAnchorStopEvidence is the anchor's ephemeral physical-kill and
+// empty-leaf observation. Anchor identifies the cgroup.kill writer; durable
+// LinuxCgroupStopProof.Issuer remains the helper or mirror that coordinates
+// receipt creation, and Reaper remains the owner of the reported waitid calls.
+// This is not a State receipt; callers combine it with the durable reservation
+// and exact wait/reap evidence before issuing one.
+type LinuxOwnerAnchorStopEvidence struct {
+	Version               int                                        `json:"version"`
+	RunKey                LinuxOwnerAnchorRunKey                     `json:"run_key"`
+	Fence                 protocol.Fence                             `json:"fence"`
+	LaunchToken           string                                     `json:"launch_token"`
+	Parent                authority.LinuxCgroupParentIdentity        `json:"parent"`
+	Leaf                  authority.LinuxCgroupIdentity              `json:"leaf"`
+	Anchor                authority.LinuxCgroupProcessIdentity       `json:"anchor"`
+	Helper                authority.LinuxCgroupProcessIdentity       `json:"helper"`
+	ProducerFence         *LinuxOwnerAnchorProducerFence             `json:"producer_fence,omitempty"`
+	HelperExit            *authority.LinuxCgroupExitProof            `json:"helper_exit,omitempty"`
+	Launcher              *authority.LinuxCgroupProcessIdentity      `json:"launcher,omitempty"`
+	Gate                  *authority.LinuxCgroupGateIdentity         `json:"gate,omitempty"`
+	UserNamespace         *LinuxUserNamespaceIdentity                `json:"user_namespace,omitempty"`
+	UntrustedProcess      *authority.LinuxCgroupProcessIdentity      `json:"untrusted_process,omitempty"`
+	GateOutcome           *authority.LinuxCgroupGateProductionResult `json:"gate_outcome,omitempty"`
+	GateReleaseAuthorized bool                                       `json:"gate_release_authorized"`
+	PinnedLeafFD          bool                                       `json:"pinned_leaf_fd"`
+	KillAttempted         bool                                       `json:"kill_attempted"`
+	KillAcknowledged      bool                                       `json:"kill_acknowledged"`
+	CgroupPopulatedZero   bool                                       `json:"cgroup_populated_zero"`
+	NoMigrationObserved   bool                                       `json:"no_migration_observed"`
+	ProducerFenced        bool                                       `json:"producer_fenced"`
+	DescendantsReaped     bool                                       `json:"descendants_reaped"`
+	ReapCount             uint64                                     `json:"reap_count"`
+	ReapDigest            string                                     `json:"reap_digest,omitempty"`
+}
+
+// LinuxOwnerAnchorRunReapResult pairs the anchor's physical stop witness with
+// its complete, sorted per-process P_PIDFD wait/reap evidence.
+type LinuxOwnerAnchorRunReapResult struct {
+	Processes []LinuxOwnerAnchorReapEvidence `json:"processes"`
+	Stop      LinuxOwnerAnchorStopEvidence   `json:"stop"`
+}
+
+// ValidateFor treats processes as the complete set the anchor itself waited
+// and reaped. When the Anchor still owns the gate's nsfs pin, callers pass it
+// so the serialized UserNamespace is checked against that independent witness.
+// Omitting the pin performs wire-shape validation only; Anchor authority paths
+// must supply the retained FD, while authenticated clients may validate the
+// returned shape after the Anchor has checked its independent witness.
+// It never turns ECHILD or a helper-owned prior wait into anchor reap evidence;
+// callers may separately combine exact helper wait results.
+func (evidence LinuxOwnerAnchorStopEvidence) ValidateFor(
+	grant LinuxOwnerAnchorGrant,
+	helper, anchor authority.LinuxCgroupProcessIdentity,
+	processes []LinuxOwnerAnchorReapEvidence,
+	requireReaped bool,
+	retainedGateNamespaceFD ...*os.File,
+) error {
+	if len(retainedGateNamespaceFD) > 1 {
+		return errors.New("Linux owner anchor stop evidence has multiple retained gate namespace pins")
+	}
+	if grant.Validate() != nil || helper.Validate() != nil || anchor.Validate() != nil || evidence.Version != linuxOwnerAnchorStopEvidenceVersion ||
+		evidence.RunKey != grant.RunKey || evidence.Fence != grant.Fence || evidence.LaunchToken != grant.LaunchToken ||
+		!evidence.Parent.Equal(grant.Parent) || !evidence.Leaf.Equal(grant.Leaf) || !evidence.Anchor.Equal(anchor) ||
+		!evidence.Helper.Equal(helper) || !evidence.PinnedLeafFD || !evidence.KillAttempted || !evidence.KillAcknowledged ||
+		!evidence.CgroupPopulatedZero || !evidence.NoMigrationObserved || !evidence.ProducerFenced {
+		return errors.New("Linux owner anchor stop evidence is not bound to the exact run and acknowledged physical kill")
+	}
+	if evidence.ProducerFence != nil {
+		if evidence.ProducerFence.ValidateFor(grant, helper) != nil ||
+			!equalLinuxOwnerAnchorProcessPointer(evidence.Launcher, evidence.ProducerFence.Launcher) ||
+			!equalLinuxOwnerAnchorGatePointer(evidence.Gate, evidence.ProducerFence.Gate) ||
+			!equalLinuxOwnerAnchorUserNamespacePointer(evidence.UserNamespace, evidence.ProducerFence.UserNamespace) ||
+			!equalLinuxOwnerAnchorProcessPointer(evidence.UntrustedProcess, evidence.ProducerFence.UntrustedProcess) ||
+			!equalLinuxOwnerAnchorGateOutcomePointer(evidence.GateOutcome, evidence.ProducerFence.GateOutcome) ||
+			evidence.ProducerFence.Released && !evidence.GateReleaseAuthorized ||
+			evidence.GateReleaseAuthorized && !evidence.ProducerFence.ReleaseAttempted {
+			return errors.New("Linux owner anchor stop evidence differs from the helper's exact producer fence")
+		}
+	}
+	if evidence.HelperExit != nil && !evidence.HelperExit.ValidFor(helper, anchor) {
+		return errors.New("Linux owner anchor stop evidence helper exit differs from the exact anchor wait")
+	}
+	if evidence.ProducerFence == nil && evidence.HelperExit == nil {
+		return errors.New("Linux owner anchor stop evidence has neither a live-helper fence nor an exact helper exit")
+	}
+	if evidence.Launcher != nil && evidence.Launcher.Validate() != nil ||
+		evidence.Gate != nil && (evidence.Gate.Validate() != nil || evidence.Gate.HostUID != grant.OwnerUID || !evidence.Gate.Cgroup.Equal(grant.Leaf)) ||
+		evidence.UserNamespace != nil && !evidence.UserNamespace.valid() ||
+		evidence.UntrustedProcess != nil && evidence.UntrustedProcess.Validate() != nil ||
+		evidence.Gate != nil && evidence.UserNamespace == nil ||
+		evidence.Gate == nil && evidence.UserNamespace != nil || evidence.Gate != nil && evidence.UntrustedProcess != nil ||
+		evidence.GateReleaseAuthorized && (evidence.Gate == nil || evidence.UserNamespace == nil) {
+		return errors.New("Linux owner anchor stop evidence contains an invalid producer identity")
+	}
+	if len(retainedGateNamespaceFD) == 1 {
+		if err := verifyLinuxOwnerAnchorStopEvidenceNamespacePin(evidence, retainedGateNamespaceFD[0]); err != nil {
+			return err
+		}
+	}
+	if evidence.GateOutcome != nil && (evidence.Launcher == nil ||
+		evidence.GateOutcome.ValidateFor(grant.LaunchToken, *evidence.Launcher) != nil ||
+		linuxgate.VerifyGateNeverProducedAuthenticator(grant.Secret, *evidence.GateOutcome) != nil) {
+		return errors.New("Linux owner anchor stop evidence contains an unauthenticated no-gate result")
+	}
+	if requireReaped {
+		if evidence.HelperExit == nil || !evidence.DescendantsReaped || evidence.ReapCount != uint64(len(processes)) {
+			return errors.New("Linux owner anchor run-reap stop evidence lacks exact helper and descendant waits")
+		}
+		if err := validateLinuxOwnerAnchorReapSet(grant, helper, anchor, *evidence.HelperExit, processes, evidence.ReapDigest); err != nil {
+			return err
+		}
+		for _, process := range processes {
+			switch process.ProcessRole {
+			case "gate":
+				if evidence.Gate == nil || !evidence.Gate.Process.Equal(process.Process) {
+					return errors.New("anchor gate reap differs from the exact registered gate identity")
+				}
+			case "native":
+				if !evidence.GateReleaseAuthorized || evidence.Gate == nil || !evidence.Gate.Process.Equal(process.Process) {
+					return errors.New("anchor native reap lacks exact registered gate and release authorization")
+				}
+			}
+		}
+		if evidence.ProducerFence != nil && evidence.ProducerFence.UntrustedProcess != nil {
+			found := false
+			for _, process := range processes {
+				if process.ProcessRole == "descendant" && process.Process.Equal(*evidence.ProducerFence.UntrustedProcess) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return errors.New("anchor run-reap set omits the exact failed-Prepare child")
+			}
+		}
+	} else if evidence.DescendantsReaped || evidence.ReapCount != 0 || evidence.ReapDigest != "" {
+		return errors.New("live-helper StopLeaf response invents anchor child-reap evidence")
+	}
+	return nil
+}
+
+func verifyLinuxOwnerAnchorStopEvidenceNamespacePin(evidence LinuxOwnerAnchorStopEvidence, retainedFD *os.File) error {
+	if evidence.Gate == nil {
+		if retainedFD != nil {
+			return errors.New("pre-gate stop evidence unexpectedly has a retained gate namespace FD")
+		}
+		return nil
+	}
+	if retainedFD == nil || evidence.UserNamespace == nil || !evidence.UserNamespace.valid() {
+		return errors.New("gate-bound Anchor stop evidence lacks its retained gate namespace pin")
+	}
+	identity, err := linuxOwnerAnchorUserNamespaceFDIdentity(retainedFD)
+	if err != nil || identity != *evidence.UserNamespace {
+		return fmt.Errorf("Anchor stop evidence user namespace differs from its retained exact nsfs FD: %w", errOr(err, errors.New("device or inode differs")))
+	}
+	return nil
+}
+
+func validateLinuxOwnerAnchorReapSet(
+	grant LinuxOwnerAnchorGrant,
+	helper, anchor authority.LinuxCgroupProcessIdentity,
+	helperExit authority.LinuxCgroupExitProof,
+	processes []LinuxOwnerAnchorReapEvidence,
+	digest string,
+) error {
+	if helperExit.Validate() != nil || !helperExit.ValidFor(helper, anchor) {
+		return errors.New("Linux owner anchor reap set lacks exact helper exit/reap evidence")
+	}
+	for index, process := range processes {
+		if !linuxOwnerAnchorValidChildRole(process.ProcessRole) ||
+			process.ValidateFor(grant, helper, process.Process, process.ProcessRole) != nil ||
+			!process.HelperExit.Equal(helperExit) || index > 0 && processes[index-1].Process.PID >= process.Process.PID {
+			return errors.New("Linux owner anchor reap set contains invalid, duplicate, or unordered process evidence")
+		}
+	}
+	encoded, err := json.Marshal(processes)
+	if err != nil {
+		return fmt.Errorf("encode exact Linux owner anchor reap set: %w", err)
+	}
+	actual := sha256.Sum256(encoded)
+	if len(digest) != sha256.Size*2 || hex.EncodeToString(actual[:]) != digest {
+		return errors.New("Linux owner anchor stop evidence digest differs from its exact reap set")
+	}
+	return nil
+}
+
+func (evidence LinuxOwnerAnchorStopEvidence) Clone() LinuxOwnerAnchorStopEvidence {
+	cloned := evidence
+	if evidence.ProducerFence != nil {
+		fence := evidence.ProducerFence.Clone()
+		cloned.ProducerFence = &fence
+	}
+	cloned.HelperExit = cloneLinuxOwnerAnchorExitProof(evidence.HelperExit)
+	cloned.Launcher = cloneLinuxOwnerProcessIdentity(evidence.Launcher)
+	cloned.Gate = cloneLinuxOwnerGateIdentity(evidence.Gate)
+	cloned.UntrustedProcess = cloneLinuxOwnerProcessIdentity(evidence.UntrustedProcess)
+	if evidence.UserNamespace != nil {
+		copy := *evidence.UserNamespace
+		cloned.UserNamespace = &copy
+	}
+	if evidence.GateOutcome != nil {
+		copy := *evidence.GateOutcome
+		cloned.GateOutcome = &copy
+	}
+	return cloned
+}
+
+func (evidence LinuxOwnerAnchorStopEvidence) Equal(other LinuxOwnerAnchorStopEvidence) bool {
+	return evidence.Version == other.Version && evidence.RunKey == other.RunKey && evidence.Fence == other.Fence &&
+		evidence.LaunchToken == other.LaunchToken && evidence.Parent.Equal(other.Parent) && evidence.Leaf.Equal(other.Leaf) &&
+		evidence.Anchor.Equal(other.Anchor) && evidence.Helper.Equal(other.Helper) &&
+		equalLinuxOwnerAnchorProducerFencePointer(evidence.ProducerFence, other.ProducerFence) &&
+		equalLinuxOwnerAnchorExitPointer(evidence.HelperExit, other.HelperExit) &&
+		equalLinuxOwnerAnchorProcessPointer(evidence.Launcher, other.Launcher) &&
+		equalLinuxOwnerAnchorGatePointer(evidence.Gate, other.Gate) &&
+		equalLinuxOwnerAnchorUserNamespacePointer(evidence.UserNamespace, other.UserNamespace) &&
+		equalLinuxOwnerAnchorProcessPointer(evidence.UntrustedProcess, other.UntrustedProcess) &&
+		equalLinuxOwnerAnchorGateOutcomePointer(evidence.GateOutcome, other.GateOutcome) &&
+		evidence.GateReleaseAuthorized == other.GateReleaseAuthorized &&
+		evidence.PinnedLeafFD == other.PinnedLeafFD && evidence.KillAttempted == other.KillAttempted &&
+		evidence.KillAcknowledged == other.KillAcknowledged && evidence.CgroupPopulatedZero == other.CgroupPopulatedZero &&
+		evidence.NoMigrationObserved == other.NoMigrationObserved && evidence.ProducerFenced == other.ProducerFenced &&
+		evidence.DescendantsReaped == other.DescendantsReaped && evidence.ReapCount == other.ReapCount &&
+		evidence.ReapDigest == other.ReapDigest
+}
+
+func equalLinuxOwnerAnchorProducerFencePointer(left, right *LinuxOwnerAnchorProducerFence) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
+func equalLinuxOwnerAnchorProcessPointer(left, right *authority.LinuxCgroupProcessIdentity) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
+func equalLinuxOwnerAnchorExitPointer(left, right *authority.LinuxCgroupExitProof) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
+func equalLinuxOwnerAnchorGatePointer(left, right *authority.LinuxCgroupGateIdentity) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
+func equalLinuxOwnerAnchorUserNamespacePointer(left, right *LinuxUserNamespaceIdentity) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+func equalLinuxOwnerAnchorGateOutcomePointer(
+	left, right *authority.LinuxCgroupGateProductionResult,
+) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
+// RemoveBCloneAfterReceipt runs the installed root cleanup primitive inside
+// this exact anchor process. It transfers only the caller's pinned O_PATH root
+// and optional target descriptors, never paths or commands. Workspace validates
+// the returned proof again before State records cleanup completion. cleanup
+// must be the exact durable Begin-cleanup readback; its NormalReleaseProof
+// supplies the anchor identity after ClearSupervisorHandoffV2 has removed the
+// reservation Secret. A live target FD requires priorRemoval=nil; targetFD=-1
+// is replay-only and requires the exact State-readback Removed proof. Callers
+// must hold no State or cgroup lock while this bounded filesystem RPC runs.
+func (client *LinuxOwnerAnchorClient) RemoveBCloneAfterReceipt(
+	ctx context.Context,
+	rootFD, targetFD int,
+	cloneGrant authority.LinuxCloneGrant,
+	cleanup authority.LinuxCloneCleanupIntent,
+	priorRemoval *authority.LinuxCloneTargetRemovalProof,
+) (authority.LinuxCloneTargetRemovalProof, error) {
+	if client == nil || ctx == nil || rootFD < 0 || targetFD < -1 {
+		return authority.LinuxCloneTargetRemovalProof{}, errors.New("Linux clone cleanup anchor request is incomplete")
+	}
+	if err := validateLinuxOwnerAnchorCloneCleanup(cloneGrant, cleanup, client.owner.AUID); err != nil {
+		return authority.LinuxCloneTargetRemovalProof{}, err
+	}
+	if targetFD >= 0 {
+		if priorRemoval != nil {
+			return authority.LinuxCloneTargetRemovalProof{}, errors.New("live target cleanup must not reuse a prior removal proof")
+		}
+	} else if err := verifyLinuxOwnerAnchorPriorRemoval(rootFD, cleanup, priorRemoval, client.owner); err != nil {
+		return authority.LinuxCloneTargetRemovalProof{}, err
+	}
+	request := linuxOwnerAnchorRequest{
+		Version: linuxOwnerAnchorProtocolVersion, Operation: linuxOwnerAnchorOperationCloneCleanup,
+		RunKey:      LinuxOwnerAnchorRunKey{RunID: cleanup.Intent.RunID, Generation: cleanup.Intent.Generation},
+		FenceDigest: cleanup.FenceDigest, TargetFDPresent: targetFD >= 0,
+	}
+	cloneGrantCopy := cloneGrant.Clone()
+	cleanupCopy := cleanup.Clone()
+	request.CloneGrant = &cloneGrantCopy
+	request.Cleanup = &cleanupCopy
+	if priorRemoval != nil {
+		priorCopy := priorRemoval.Clone()
+		request.PriorRemovalProof = &priorCopy
+	}
+	sendFDs := []int{rootFD}
+	if targetFD >= 0 {
+		sendFDs = append(sendFDs, targetFD)
+	}
+	response, rights, err := client.exchange(ctx, request, sendFDs...)
+	closeLinuxOwnerAnchorFDs(rights)
+	if err != nil {
+		return authority.LinuxCloneTargetRemovalProof{}, err
+	}
+	if response.Status != "clone_removed" || response.RunKey != request.RunKey || response.FenceDigest != cleanup.FenceDigest ||
+		response.Anchor.PID != cleanup.NormalReleaseProof.AnchorPID || response.Anchor.Identity != cleanup.NormalReleaseProof.AnchorIdentity ||
+		response.CloneRemoval == nil || len(rights) != 0 || response.CloneRemoval.Validate() != nil ||
+		!response.CloneRemoval.Intent.Equal(cleanup) ||
+		targetFD >= 0 && (priorRemoval != nil || response.CloneRemoval.Disposition != authority.LinuxCloneTargetDispositionRemoved) ||
+		targetFD < 0 && (priorRemoval == nil || !response.CloneRemoval.Equal(*priorRemoval)) {
+		return authority.LinuxCloneTargetRemovalProof{}, errors.New("Linux owner anchor returned no exact root clone-removal proof")
+	}
+	return response.CloneRemoval.Clone(), nil
+}
+
+func validateLinuxOwnerAnchorCloneCleanup(
+	cloneGrant authority.LinuxCloneGrant,
+	cleanup authority.LinuxCloneCleanupIntent,
+	ownerUID uint32,
+) error {
+	if cloneGrant.Validate() != nil || cleanup.Validate() != nil || ownerUID == 0 ||
+		cloneGrant.Intent.RunID != cleanup.Intent.RunID || cloneGrant.Intent.Generation != cleanup.Intent.Generation ||
+		!cloneGrant.Intent.Equal(cleanup.Intent) || !cloneGrant.Seed.Equal(cleanup.SeedReceipt) ||
+		cleanup.NormalReleaseProof.AnchorPID <= 0 || cleanup.NormalReleaseProof.AnchorIdentity == "" ||
+		cleanup.NormalReleaseProof.OwnerUID != ownerUID || cleanup.NormalReleaseProof.LauncherUID != 0 ||
+		cleanup.NormalReleaseProof.CgroupIdentity == nil || cleanup.NormalReleaseProof.CgroupIdentity.Validate() != nil {
+		return errors.New("Linux clone cleanup authority differs from the exact RunKey or normal-release anchor")
+	}
+	return nil
+}
+
+func verifyLinuxOwnerAnchorPriorRemoval(
+	rootFD int,
+	cleanup authority.LinuxCloneCleanupIntent,
+	prior *authority.LinuxCloneTargetRemovalProof,
+	owner linuxgate.OwnerConfig,
+) error {
+	if rootFD < 0 || prior == nil || owner.Validate() != nil || cleanup.Validate() != nil ||
+		prior.Validate() != nil || prior.Disposition != authority.LinuxCloneTargetDispositionRemoved ||
+		!prior.Intent.Equal(cleanup) {
+		return errors.New("absent-target cleanup requires the exact previously durable removal proof")
+	}
+	flags, err := unix.FcntlInt(uintptr(rootFD), unix.F_GETFL, 0)
+	if err != nil || flags&unix.O_PATH == 0 {
+		return fmt.Errorf("verify pinned B clone root O_PATH descriptor: %w", errOr(err, errors.New("descriptor is not O_PATH")))
+	}
+	var stat unix.Stat_t
+	if err := unix.Fstat(rootFD, &stat); err != nil {
+		return fmt.Errorf("stat pinned B clone root: %w", err)
+	}
+	if stat.Mode&unix.S_IFMT != unix.S_IFDIR || stat.Uid != owner.BUID || stat.Gid != owner.BGID ||
+		uint64(stat.Dev) != prior.RootDevice || prior.RootDevice != cleanup.CheckoutReceipt.TargetDevice || stat.Ino != prior.RootInode ||
+		prior.TargetDevice != cleanup.CheckoutReceipt.TargetDevice || prior.TargetInode != cleanup.CheckoutReceipt.TargetInode {
+		return errors.New("prior removal proof differs from the pinned B root or checkout inode")
+	}
+	path, err := os.Readlink(fmt.Sprintf("/proc/self/fd/%d", rootFD))
+	if err != nil || !filepath.IsAbs(path) || filepath.Clean(path) != path || path != cleanup.RootPath || strings.Contains(path, " (deleted)") {
+		return errors.New("prior removal proof root differs from the pinned canonical B root")
+	}
+	return nil
 }
 
 // LinuxOwnerAnchorHelper owns the exact helper pidfd, a daemon-side pinned
@@ -215,8 +852,8 @@ func cloneLinuxOwnerAnchorExitProof(value *authority.LinuxCgroupExitProof) *auth
 }
 
 // LinuxOwnerAnchorClient speaks only the fixed local protocol. It has no API
-// for command/argv submission: the anchor, when implemented, may start only a
-// fixed hidden helper mode in the existing symmetry-daemon binary.
+// for command/argv submission: the anchor starts only a fixed hidden helper
+// mode in the existing symmetry-daemon binary.
 type LinuxOwnerAnchorClient struct {
 	socketPath string
 	owner      linuxgate.OwnerConfig
@@ -294,8 +931,9 @@ func (client *LinuxOwnerAnchorClient) Discover(ctx context.Context) (LinuxOwnerA
 		response.Anchor.PID != peer.PID || response.Anchor.Identity != peer.Identity || response.Parent.Validate() != nil ||
 		response.OwnerUID != client.owner.AUID || response.ManagerPath != response.Parent.Path ||
 		response.ManagerPath == "/" ||
-		response.RunKey != (LinuxOwnerAnchorRunKey{}) || response.Fence != (protocol.Fence{}) || response.LaunchToken != "" ||
-		response.Helper != nil || response.Evidence != nil ||
+		response.RunKey != (LinuxOwnerAnchorRunKey{}) || response.Fence != (protocol.Fence{}) || response.FenceDigest != "" || response.LaunchToken != "" ||
+		response.Helper != nil || response.Evidence != nil || len(response.ReapEvidence) != 0 || response.HelperExit != nil ||
+		response.NextPID != 0 || response.More || response.CloneRemoval != nil ||
 		linuxOwnerCgroupPathsOverlap(peer.CgroupPath, response.ManagerPath) {
 		closeLinuxOwnerAnchorFDs(rights)
 		return LinuxOwnerAnchorIdentity{}, errors.New("Linux owner anchor identity response differs from exact peer credentials or fixed configuration")
@@ -608,15 +1246,15 @@ func (client *LinuxOwnerAnchorClient) LookupHelper(ctx context.Context, grant Li
 	return &LinuxOwnerAnchorHelper{PID: helper.PID, Identity: helper.Identity, PIDFD: pidfdFile, LeafFD: leafFile, ParentFD: parentFile, Control: control}, nil
 }
 
-// RegisterProcess binds a durable gate, launcher, native PID, or known
-// descendant to the exact run/helper after the caller has durably recorded
-// that process identity. The server independently checks its pidfd, ancestry,
-// host credentials, pinned leaf membership, and manager/leaf path.
+// RegisterProcess binds an exact launcher, native PID, or known descendant to
+// the run/helper after the caller has durably recorded that process identity.
+// The parked trusted gate has a separate RegisterGate path so its pre-release
+// user namespace can anchor the later same-PID A-to-B transition.
 func (client *LinuxOwnerAnchorClient) RegisterProcess(ctx context.Context, grant LinuxOwnerAnchorGrant, helper, creator, process authority.LinuxCgroupProcessIdentity, role string, pidfd int) error {
 	if client == nil || ctx == nil || grant.Validate() != nil || helper.Validate() != nil || creator.Validate() != nil || process.Validate() != nil || pidfd < 0 {
 		return errors.New("Linux owner anchor process registration is incomplete")
 	}
-	if role != "launcher" && role != "gate" && role != "native" && role != "descendant" {
+	if role != "launcher" && role != "native" && role != "descendant" {
 		return errors.New("Linux owner anchor process role is unsupported")
 	}
 	if err := verifyLinuxOwnerAnchorPIDFD(pidfd, process); err != nil {
@@ -633,6 +1271,113 @@ func (client *LinuxOwnerAnchorClient) RegisterProcess(ctx context.Context, grant
 	}
 	if !response.matches(grant, request.Operation) || response.Status != "registered" || len(rights) != 0 {
 		return errors.New("Linux owner anchor did not authenticate the exact run-process registration")
+	}
+	return nil
+}
+
+// ClassifyRunChildOrigin asks the authenticated Anchor to classify one exact
+// process against the target RunKey and all active gate-userns pins. The PIDFD
+// is borrowed and transferred only for this bounded read-only request.
+func (client *LinuxOwnerAnchorClient) ClassifyRunChildOrigin(
+	ctx context.Context,
+	grant LinuxOwnerAnchorGrant,
+	helper, process authority.LinuxCgroupProcessIdentity,
+	pidfd *os.File,
+) (linuxOwnerAnchorRunChildClassification, error) {
+	if client == nil || ctx == nil || grant.Validate() != nil || helper.Validate() != nil ||
+		process.Validate() != nil || pidfd == nil {
+		return linuxOwnerAnchorRunChildClassification{}, errors.New("Linux owner anchor child-origin request is incomplete")
+	}
+	if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(pidfd.Fd()), process); err != nil {
+		return linuxOwnerAnchorRunChildClassification{}, fmt.Errorf("verify exact process pidfd before origin request: %w", err)
+	}
+	request := linuxOwnerAnchorRequest{
+		Version: linuxOwnerAnchorProtocolVersion, Operation: linuxOwnerAnchorOperationClassifyChild,
+		Grant: grant, Helper: &helper, Process: &process,
+	}
+	response, rights, err := client.exchange(ctx, request, int(pidfd.Fd()))
+	closeLinuxOwnerAnchorFDs(rights)
+	if err != nil {
+		return linuxOwnerAnchorRunChildClassification{}, err
+	}
+	classification := response.ChildClassification
+	if !response.matches(grant, request.Operation) || response.Status != "classified" ||
+		response.Helper == nil || !response.Helper.Equal(helper) || response.Evidence != nil ||
+		response.StopEvidence != nil || len(response.ReapEvidence) != 0 || response.HelperExit != nil ||
+		classification == nil || len(rights) != 0 {
+		return linuxOwnerAnchorRunChildClassification{}, errors.New("Linux owner anchor returned no authenticated exact child-origin classification")
+	}
+	if err := classification.ValidateFor(grant, helper, process); err != nil {
+		return linuxOwnerAnchorRunChildClassification{}, err
+	}
+	return *classification, nil
+}
+
+// RegisterGate pins the authenticated helper's exact trusted A-gate result,
+// pre-release user namespace, and pidfd. The anchor independently verifies
+// the A credentials, B-only maps, setgroups denial, namespace inode, ancestry,
+// and exact run-leaf membership before accepting the gate transition proof.
+func (client *LinuxOwnerAnchorClient) RegisterGate(
+	ctx context.Context,
+	grant LinuxOwnerAnchorGrant,
+	helper authority.LinuxCgroupProcessIdentity,
+	gate authority.LinuxCgroupGateIdentity,
+	userNamespace LinuxUserNamespaceIdentity,
+	pidfd int,
+) error {
+	if client == nil || ctx == nil || grant.Validate() != nil || helper.Validate() != nil ||
+		gate.Validate() != nil || gate.HostUID != grant.OwnerUID || !gate.Cgroup.Equal(grant.Leaf) ||
+		!userNamespace.valid() || pidfd < 0 {
+		return errors.New("Linux owner anchor gate registration is incomplete")
+	}
+	if err := verifyLinuxOwnerAnchorPIDFD(pidfd, gate.Process); err != nil {
+		return fmt.Errorf("verify parked-gate pidfd before owner-anchor registration: %w", err)
+	}
+	gateCopy := gate
+	userNamespaceCopy := userNamespace
+	request := linuxOwnerAnchorRequest{
+		Version: linuxOwnerAnchorProtocolVersion, Operation: linuxOwnerAnchorOperationRegisterGate,
+		Grant: grant, Helper: &helper, Gate: &gateCopy, UserNamespace: &userNamespaceCopy,
+	}
+	response, rights, err := client.exchange(ctx, request, pidfd)
+	closeLinuxOwnerAnchorFDs(rights)
+	if err != nil {
+		return err
+	}
+	if !response.matches(grant, request.Operation) || response.Status != "registered" || len(rights) != 0 {
+		return errors.New("Linux owner anchor did not authenticate the exact parked-gate registration")
+	}
+	return nil
+}
+
+// AuthorizeGateRelease records one exact helper authorization before the
+// parked A gate can become B. Exact retries after an uncertain ACK are
+// accepted only while the same pinned process is still the pre-release A
+// gate; a missing ACK must never be treated as permission to RELEASE.
+func (client *LinuxOwnerAnchorClient) AuthorizeGateRelease(
+	ctx context.Context,
+	grant LinuxOwnerAnchorGrant,
+	helper authority.LinuxCgroupProcessIdentity,
+	gate authority.LinuxCgroupGateIdentity,
+	userNamespace LinuxUserNamespaceIdentity,
+) error {
+	if client == nil || ctx == nil || grant.Validate() != nil || helper.Validate() != nil ||
+		gate.Validate() != nil || gate.HostUID != grant.OwnerUID || !gate.Cgroup.Equal(grant.Leaf) || !userNamespace.valid() {
+		return errors.New("Linux owner anchor gate-release authorization is incomplete")
+	}
+	gateCopy := gate
+	userNamespaceCopy := userNamespace
+	request := linuxOwnerAnchorRequest{
+		Version: linuxOwnerAnchorProtocolVersion, Operation: linuxOwnerAnchorOperationAuthorizeGate,
+		Grant: grant, Helper: &helper, Gate: &gateCopy, UserNamespace: &userNamespaceCopy,
+	}
+	response, rights, err := client.exchange(ctx, request)
+	closeLinuxOwnerAnchorFDs(rights)
+	if err != nil {
+		return err
+	}
+	if !response.matches(grant, request.Operation) || response.Status != "release_authorized" || len(rights) != 0 {
+		return errors.New("Linux owner anchor did not authenticate the exact one-use gate-release authorization")
 	}
 	return nil
 }
@@ -663,14 +1408,51 @@ func (client *LinuxOwnerAnchorClient) WaitReap(ctx context.Context, grant LinuxO
 	return *response.Evidence, nil
 }
 
+// StopLeaf transfers cgroup.kill authority to the exact anchor after the
+// helper has latched stop and fenced all producers. A retry after a known
+// pre-syscall failure revalidates the same fence before the first actual write;
+// once a write may have been attempted, a retry returns only cached evidence
+// or remains unresolved and never writes again. The result is not a State receipt.
+func (client *LinuxOwnerAnchorClient) StopLeaf(
+	ctx context.Context,
+	grant LinuxOwnerAnchorGrant,
+	helper authority.LinuxCgroupProcessIdentity,
+	producerFence LinuxOwnerAnchorProducerFence,
+) (LinuxOwnerAnchorStopEvidence, error) {
+	if client == nil || ctx == nil || grant.Validate() != nil || helper.Validate() != nil ||
+		producerFence.ValidateFor(grant, helper) != nil {
+		return LinuxOwnerAnchorStopEvidence{}, errors.New("Linux owner anchor stop request lacks the exact producer fence")
+	}
+	fenceCopy := producerFence.Clone()
+	request := linuxOwnerAnchorRequest{
+		Version: linuxOwnerAnchorProtocolVersion, Operation: linuxOwnerAnchorOperationStopLeaf,
+		Grant: grant, Helper: &helper, StopFence: &fenceCopy,
+	}
+	response, rights, err := client.exchange(ctx, request)
+	closeLinuxOwnerAnchorFDs(rights)
+	if err != nil {
+		return LinuxOwnerAnchorStopEvidence{}, err
+	}
+	if !response.matches(grant, request.Operation) || response.Status != "stopped" || len(rights) != 0 || response.StopEvidence == nil {
+		return LinuxOwnerAnchorStopEvidence{}, errors.New("Linux owner anchor returned no exact cached StopLeaf evidence")
+	}
+	if err := response.StopEvidence.ValidateFor(grant, helper, grant.Anchor, nil, false); err != nil ||
+		response.StopEvidence.ProducerFence == nil || !response.StopEvidence.ProducerFence.Equal(producerFence) || response.StopEvidence.HelperExit != nil {
+		return LinuxOwnerAnchorStopEvidence{}, errors.Join(errors.New("Linux owner anchor StopLeaf evidence differs from the exact producer fence"), err)
+	}
+	return response.StopEvidence.Clone(), nil
+}
+
 // WaitReapRun asks the anchor to reap every currently adopted child bound to
 // this exact RunKey after helper death. The response is paged so large native
-// descendant sets cannot exceed the local seqpacket frame limit.
-func (client *LinuxOwnerAnchorClient) WaitReapRun(ctx context.Context, grant LinuxOwnerAnchorGrant, helper authority.LinuxCgroupProcessIdentity) ([]LinuxOwnerAnchorReapEvidence, error) {
+// descendant sets cannot exceed the local seqpacket frame limit; every page
+// carries the same cached, anchor-issued physical-stop observation.
+func (client *LinuxOwnerAnchorClient) WaitReapRun(ctx context.Context, grant LinuxOwnerAnchorGrant, helper authority.LinuxCgroupProcessIdentity) (LinuxOwnerAnchorRunReapResult, error) {
 	if client == nil || ctx == nil || grant.Validate() != nil || helper.Validate() != nil {
-		return nil, errors.New("Linux owner anchor run-wide wait/reap request is incomplete")
+		return LinuxOwnerAnchorRunReapResult{}, errors.New("Linux owner anchor run-wide wait/reap request is incomplete")
 	}
-	var result []LinuxOwnerAnchorReapEvidence
+	result := make([]LinuxOwnerAnchorReapEvidence, 0)
+	var stopEvidence *LinuxOwnerAnchorStopEvidence
 	afterPID := 0
 	for {
 		request := linuxOwnerAnchorRequest{
@@ -680,24 +1462,37 @@ func (client *LinuxOwnerAnchorClient) WaitReapRun(ctx context.Context, grant Lin
 		response, rights, err := client.exchange(ctx, request)
 		closeLinuxOwnerAnchorFDs(rights)
 		if err != nil {
-			return nil, err
+			return LinuxOwnerAnchorRunReapResult{}, err
 		}
 		if !response.matches(grant, linuxOwnerAnchorOperationReapRun) || response.Status != "reaped" ||
-			response.Evidence != nil || len(rights) != 0 || len(response.ReapEvidence) > linuxOwnerAnchorReapPageSize {
-			return nil, errors.New("Linux owner anchor returned an invalid run-wide reap page")
+			response.Evidence != nil || len(rights) != 0 || response.StopEvidence == nil ||
+			len(response.ReapEvidence) > linuxOwnerAnchorReapPageSize {
+			return LinuxOwnerAnchorRunReapResult{}, errors.New("Linux owner anchor returned an invalid run-wide reap page")
+		}
+		if stopEvidence == nil {
+			copy := response.StopEvidence.Clone()
+			stopEvidence = &copy
+		} else if !stopEvidence.Equal(*response.StopEvidence) {
+			return LinuxOwnerAnchorRunReapResult{}, errors.New("Linux owner anchor changed cached StopLeaf evidence across reap pages")
 		}
 		for _, evidence := range response.ReapEvidence {
 			if !linuxOwnerAnchorValidChildRole(evidence.ProcessRole) ||
 				evidence.ValidateFor(grant, helper, evidence.Process, evidence.ProcessRole) != nil || evidence.Process.PID <= afterPID {
-				return nil, errors.New("Linux owner anchor run-wide reap page contains non-exact evidence")
+				return LinuxOwnerAnchorRunReapResult{}, errors.New("Linux owner anchor run-wide reap page contains non-exact evidence")
 			}
 			result = append(result, evidence)
 		}
 		if !response.More {
-			return result, nil
+			if stopEvidence == nil {
+				return LinuxOwnerAnchorRunReapResult{}, errors.New("Linux owner anchor returned no cached stop evidence")
+			}
+			if err := stopEvidence.ValidateFor(grant, helper, grant.Anchor, result, true); err != nil {
+				return LinuxOwnerAnchorRunReapResult{}, err
+			}
+			return LinuxOwnerAnchorRunReapResult{Processes: result, Stop: *stopEvidence}, nil
 		}
 		if response.NextPID <= afterPID || len(response.ReapEvidence) == 0 {
-			return nil, errors.New("Linux owner anchor run-wide reap cursor did not advance")
+			return LinuxOwnerAnchorRunReapResult{}, errors.New("Linux owner anchor run-wide reap cursor did not advance")
 		}
 		afterPID = response.NextPID
 	}
@@ -727,17 +1522,84 @@ func (client *LinuxOwnerAnchorClient) WaitHelper(ctx context.Context, grant Linu
 }
 
 func (client *LinuxOwnerAnchorClient) exchange(ctx context.Context, request linuxOwnerAnchorRequest, sendFDs ...int) (linuxOwnerAnchorResponse, []int, error) {
-	if client == nil || ctx == nil || ctx.Err() != nil || request.Grant.Validate() != nil {
-		return linuxOwnerAnchorResponse{}, nil, errors.New("Linux owner anchor request has no live client, context, or exact grant")
+	if client == nil || ctx == nil || ctx.Err() != nil {
+		return linuxOwnerAnchorResponse{}, nil, errors.New("Linux owner anchor request has no live client or context")
 	}
-	if request.Grant.OwnerUID != client.owner.AUID || request.Grant.LauncherUID != 0 {
-		return linuxOwnerAnchorResponse{}, nil, errors.New("Linux owner anchor grant UID boundary differs from fixed A/B configuration")
-	}
-	if request.Grant.Anchor.PID == os.Getpid() {
-		return linuxOwnerAnchorResponse{}, nil, errors.New("daemon client and Linux owner anchor must be distinct exact processes")
+	var expectedAnchor authority.LinuxCgroupProcessIdentity
+	cloneCleanup := request.Operation == linuxOwnerAnchorOperationCloneCleanup
+	stopLeaf := request.Operation == linuxOwnerAnchorOperationStopLeaf
+	classifyChild := request.Operation == linuxOwnerAnchorOperationClassifyChild
+	if cloneCleanup {
+		wantFDs := 1
+		if request.TargetFDPresent {
+			wantFDs++
+		}
+		if request.Grant != (LinuxOwnerAnchorGrant{}) || request.CloneGrant == nil || request.Cleanup == nil ||
+			request.RunKey != (LinuxOwnerAnchorRunKey{RunID: request.Cleanup.Intent.RunID, Generation: request.Cleanup.Intent.Generation}) ||
+			request.FenceDigest != request.Cleanup.FenceDigest || request.Fence != (protocol.Fence{}) ||
+			len(sendFDs) != wantFDs || request.Helper != nil || request.Gate != nil || request.UserNamespace != nil ||
+			request.StopFence != nil ||
+			request.Creator != nil || request.Process != nil || request.Role != "" ||
+			request.ReleaseProof != nil || request.PreGateReleaseProof != nil || request.AbortProof != nil || request.AfterPID != 0 ||
+			request.Cleanup.NormalReleaseProof.CgroupIdentity == nil ||
+			(request.TargetFDPresent && request.PriorRemovalProof != nil) || (!request.TargetFDPresent && request.PriorRemovalProof == nil) {
+			return linuxOwnerAnchorResponse{}, nil, errors.New("Linux owner anchor cleanup request is not bound to its durable RunKey and fence digest")
+		}
+		if err := validateLinuxOwnerAnchorCloneCleanup(*request.CloneGrant, *request.Cleanup, client.owner.AUID); err != nil {
+			return linuxOwnerAnchorResponse{}, nil, err
+		}
+		if !request.TargetFDPresent {
+			if err := verifyLinuxOwnerAnchorPriorRemoval(sendFDs[0], *request.Cleanup, request.PriorRemovalProof, client.owner); err != nil {
+				return linuxOwnerAnchorResponse{}, nil, err
+			}
+		}
+		expectedAnchor = authority.LinuxCgroupProcessIdentity{
+			PID:      request.Cleanup.NormalReleaseProof.AnchorPID,
+			Identity: request.Cleanup.NormalReleaseProof.AnchorIdentity,
+		}
+		if expectedAnchor.PID == os.Getpid() {
+			return linuxOwnerAnchorResponse{}, nil, errors.New("clone cleanup daemon and owner anchor must be distinct exact processes")
+		}
+	} else if classifyChild {
+		if len(sendFDs) != 1 || request.Grant.Validate() != nil || request.Helper == nil || request.Helper.Validate() != nil ||
+			request.Process == nil || request.Process.Validate() != nil || request.Gate != nil || request.UserNamespace != nil ||
+			request.StopFence != nil || request.Creator != nil || request.Role != "" ||
+			request.ReleaseProof != nil || request.PreGateReleaseProof != nil || request.AbortProof != nil ||
+			request.RunKey != (LinuxOwnerAnchorRunKey{}) || request.Fence != (protocol.Fence{}) || request.FenceDigest != "" ||
+			request.AfterPID != 0 || request.CloneGrant != nil || request.Cleanup != nil || request.PriorRemovalProof != nil || request.TargetFDPresent {
+			return linuxOwnerAnchorResponse{}, nil, errors.New("Linux owner child-origin request differs from its exact helper/process PIDFD")
+		}
+		if err := verifyLinuxOwnerAnchorPIDFD(sendFDs[0], *request.Process); err != nil {
+			return linuxOwnerAnchorResponse{}, nil, fmt.Errorf("verify exact process pidfd for owner-origin request: %w", err)
+		}
+		expectedAnchor = request.Grant.Anchor
+	} else if stopLeaf {
+		if len(sendFDs) != 0 || request.Grant.Validate() != nil || request.Helper == nil || request.Helper.Validate() != nil ||
+			request.StopFence == nil || request.StopFence.ValidateFor(request.Grant, *request.Helper) != nil ||
+			request.Gate != nil || request.UserNamespace != nil || request.Creator != nil || request.Process != nil || request.Role != "" ||
+			request.ReleaseProof != nil || request.PreGateReleaseProof != nil || request.AbortProof != nil ||
+			request.RunKey != (LinuxOwnerAnchorRunKey{}) || request.Fence != (protocol.Fence{}) || request.FenceDigest != "" ||
+			request.AfterPID != 0 || request.CloneGrant != nil || request.Cleanup != nil || request.PriorRemovalProof != nil || request.TargetFDPresent {
+			return linuxOwnerAnchorResponse{}, nil, errors.New("Linux owner anchor StopLeaf request differs from its exact helper producer fence")
+		}
+		expectedAnchor = request.Grant.Anchor
+	} else {
+		if request.StopFence != nil {
+			return linuxOwnerAnchorResponse{}, nil, errors.New("Linux owner anchor request carries an unexpected StopLeaf producer fence")
+		}
+		if request.Grant.Validate() != nil {
+			return linuxOwnerAnchorResponse{}, nil, errors.New("Linux owner anchor request has no exact durable grant")
+		}
+		if request.Grant.OwnerUID != client.owner.AUID || request.Grant.LauncherUID != 0 {
+			return linuxOwnerAnchorResponse{}, nil, errors.New("Linux owner anchor grant UID boundary differs from fixed A/B configuration")
+		}
+		if request.Grant.Anchor.PID == os.Getpid() {
+			return linuxOwnerAnchorResponse{}, nil, errors.New("daemon client and Linux owner anchor must be distinct exact processes")
+		}
+		expectedAnchor = request.Grant.Anchor
 	}
 	timeout := linuxOwnerAnchorRequestTimeout
-	if request.Operation == "wait-reap" {
+	if request.Operation == "wait-reap" || classifyChild {
 		timeout = linuxOwnerAnchorWaitTimeout
 	}
 	if request.Operation == linuxOwnerAnchorOperationReapRun {
@@ -749,13 +1611,19 @@ func (client *LinuxOwnerAnchorClient) exchange(ctx context.Context, request linu
 	if request.Operation == linuxOwnerAnchorOperationLookup {
 		timeout = linuxOwnerAnchorWaitTimeout
 	}
+	if request.Operation == linuxOwnerAnchorOperationCloneCleanup {
+		timeout = linuxOwnerAnchorCleanupTimeout
+	}
+	if stopLeaf {
+		timeout = linuxOwnerAnchorWaitTimeout
+	}
 	connection, stopClose, err := client.dial(ctx, timeout)
 	if err != nil {
 		return linuxOwnerAnchorResponse{}, nil, err
 	}
 	defer connection.Close()
 	defer stopClose()
-	if err := verifyLinuxOwnerAnchorPeer(connection, client.owner, request.Grant.Anchor); err != nil {
+	if err := verifyLinuxOwnerAnchorPeer(connection, client.owner, expectedAnchor); err != nil {
 		return linuxOwnerAnchorResponse{}, nil, fmt.Errorf("authenticate Linux owner anchor peer: %w", err)
 	}
 	clientIdentity, err := ProcessIdentity(os.Getpid())
@@ -781,6 +1649,9 @@ func (client *LinuxOwnerAnchorClient) exchange(ctx context.Context, request linu
 		}
 		duplicates = append(duplicates, duplicate)
 	}
+	if len(duplicates) > 3 {
+		return linuxOwnerAnchorResponse{}, nil, errors.New("Linux owner anchor descriptor transfer exceeds its fixed limit")
+	}
 	if len(duplicates) > 0 {
 		rights = syscall.UnixRights(duplicates...)
 	}
@@ -793,7 +1664,19 @@ func (client *LinuxOwnerAnchorClient) exchange(ctx context.Context, request linu
 		closeLinuxOwnerAnchorFDs(receivedFDs)
 		return linuxOwnerAnchorResponse{}, nil, err
 	}
-	if !response.matches(request.Grant, request.Operation) {
+	if cloneCleanup {
+		parent := request.Cleanup.NormalReleaseProof.CgroupIdentity.Parent
+		if response.Version != linuxOwnerAnchorProtocolVersion || response.Operation != request.Operation ||
+			response.RunKey != request.RunKey || response.FenceDigest != request.FenceDigest ||
+			response.LaunchToken != request.Cleanup.NormalReleaseProof.LaunchToken ||
+			!response.Anchor.Equal(expectedAnchor) || !response.Parent.Equal(parent) || response.OwnerUID != client.owner.AUID ||
+			response.ManagerPath != parent.Path || response.Fence != (protocol.Fence{}) ||
+			response.Helper != nil || response.Evidence != nil || len(response.ReapEvidence) != 0 || response.HelperExit != nil ||
+			response.NextPID != 0 || response.More {
+			closeLinuxOwnerAnchorFDs(receivedFDs)
+			return linuxOwnerAnchorResponse{}, nil, errors.New("Linux owner anchor cleanup response differs from its exact intent and Anchor")
+		}
+	} else if !response.matches(request.Grant, request.Operation) {
 		closeLinuxOwnerAnchorFDs(receivedFDs)
 		return linuxOwnerAnchorResponse{}, nil, errors.New("Linux owner anchor response does not match the exact request grant")
 	}
@@ -807,6 +1690,9 @@ type linuxOwnerAnchorRequest struct {
 	ClientIdentity      string                                      `json:"client_identity"`
 	Grant               LinuxOwnerAnchorGrant                       `json:"grant"`
 	Helper              *authority.LinuxCgroupProcessIdentity       `json:"helper,omitempty"`
+	Gate                *authority.LinuxCgroupGateIdentity          `json:"gate,omitempty"`
+	UserNamespace       *LinuxUserNamespaceIdentity                 `json:"user_namespace,omitempty"`
+	StopFence           *LinuxOwnerAnchorProducerFence              `json:"stop_fence,omitempty"`
 	Creator             *authority.LinuxCgroupProcessIdentity       `json:"creator,omitempty"`
 	Process             *authority.LinuxCgroupProcessIdentity       `json:"process,omitempty"`
 	Role                string                                      `json:"role,omitempty"`
@@ -815,26 +1701,35 @@ type linuxOwnerAnchorRequest struct {
 	AbortProof          *authority.LinuxCgroupReservationAbortProof `json:"abort_proof,omitempty"`
 	RunKey              LinuxOwnerAnchorRunKey                      `json:"run_key,omitempty"`
 	Fence               protocol.Fence                              `json:"fence,omitempty"`
+	FenceDigest         string                                      `json:"fence_digest,omitempty"`
 	AfterPID            int                                         `json:"after_pid,omitempty"`
+	CloneGrant          *authority.LinuxCloneGrant                  `json:"clone_grant,omitempty"`
+	Cleanup             *authority.LinuxCloneCleanupIntent          `json:"cleanup,omitempty"`
+	PriorRemovalProof   *authority.LinuxCloneTargetRemovalProof     `json:"prior_removal_proof,omitempty"`
+	TargetFDPresent     bool                                        `json:"target_fd_present,omitempty"`
 }
 
 type linuxOwnerAnchorResponse struct {
-	Version      int                                   `json:"version"`
-	Operation    string                                `json:"operation"`
-	Status       string                                `json:"status"`
-	RunKey       LinuxOwnerAnchorRunKey                `json:"run_key"`
-	Fence        protocol.Fence                        `json:"fence"`
-	LaunchToken  string                                `json:"launch_token"`
-	Anchor       authority.LinuxCgroupProcessIdentity  `json:"anchor"`
-	Parent       authority.LinuxCgroupParentIdentity   `json:"parent"`
-	OwnerUID     uint32                                `json:"owner_uid"`
-	ManagerPath  string                                `json:"manager_path"`
-	Helper       *authority.LinuxCgroupProcessIdentity `json:"helper,omitempty"`
-	Evidence     *LinuxOwnerAnchorReapEvidence         `json:"evidence,omitempty"`
-	ReapEvidence []LinuxOwnerAnchorReapEvidence        `json:"reap_evidence,omitempty"`
-	HelperExit   *authority.LinuxCgroupExitProof       `json:"helper_exit,omitempty"`
-	NextPID      int                                   `json:"next_pid,omitempty"`
-	More         bool                                  `json:"more,omitempty"`
+	Version             int                                     `json:"version"`
+	Operation           string                                  `json:"operation"`
+	Status              string                                  `json:"status"`
+	RunKey              LinuxOwnerAnchorRunKey                  `json:"run_key"`
+	Fence               protocol.Fence                          `json:"fence"`
+	FenceDigest         string                                  `json:"fence_digest,omitempty"`
+	LaunchToken         string                                  `json:"launch_token"`
+	Anchor              authority.LinuxCgroupProcessIdentity    `json:"anchor"`
+	Parent              authority.LinuxCgroupParentIdentity     `json:"parent"`
+	OwnerUID            uint32                                  `json:"owner_uid"`
+	ManagerPath         string                                  `json:"manager_path"`
+	Helper              *authority.LinuxCgroupProcessIdentity   `json:"helper,omitempty"`
+	ChildClassification *linuxOwnerAnchorRunChildClassification `json:"child_classification,omitempty"`
+	Evidence            *LinuxOwnerAnchorReapEvidence           `json:"evidence,omitempty"`
+	ReapEvidence        []LinuxOwnerAnchorReapEvidence          `json:"reap_evidence,omitempty"`
+	StopEvidence        *LinuxOwnerAnchorStopEvidence           `json:"stop_evidence,omitempty"`
+	HelperExit          *authority.LinuxCgroupExitProof         `json:"helper_exit,omitempty"`
+	NextPID             int                                     `json:"next_pid,omitempty"`
+	More                bool                                    `json:"more,omitempty"`
+	CloneRemoval        *authority.LinuxCloneTargetRemovalProof `json:"clone_removal_proof,omitempty"`
 }
 
 func (response linuxOwnerAnchorResponse) matches(grant LinuxOwnerAnchorGrant, operation string) bool {
@@ -855,7 +1750,10 @@ type linuxOwnerAnchorOptions struct {
 // manager subgroup, installs and reads back its own subreaper flag, then
 // serves one bounded authenticated request at a time. Shutdown closes only
 // local descriptors; it never manufactures a RunJournal receipt.
-func RunLinuxOwnerAnchor(args []string) error {
+func RunLinuxOwnerAnchor(args []string, openVerifier LinuxOwnerAnchorCleanupVerifierFactory) (result error) {
+	if openVerifier == nil {
+		return errors.New("Linux owner anchor requires a State cleanup verifier factory")
+	}
 	options, err := parseLinuxOwnerAnchorArgs(args)
 	if err != nil {
 		return err
@@ -870,6 +1768,21 @@ func RunLinuxOwnerAnchor(args []string) error {
 	if uint32(os.Getuid()) != owner.AUID || uint32(os.Geteuid()) != owner.AUID ||
 		uint32(os.Getgid()) != owner.AGID || uint32(os.Getegid()) != owner.AGID {
 		return errors.New("Linux owner anchor must run with the configured host UID/GID A")
+	}
+	cleanupVerifier, err := openLinuxOwnerAnchorCleanupVerifierForConfig(owner, openVerifier)
+	if err != nil {
+		return fmt.Errorf("prepare read-only StateDir clone-cleanup verifier before READY: %w", err)
+	}
+	if cleanupVerifier != nil {
+		defer func() {
+			if closeErr := cleanupVerifier.Close(); closeErr != nil {
+				result = errors.Join(result, fmt.Errorf("close read-only StateDir clone-cleanup verifier: %w", closeErr))
+			}
+		}()
+	} // strict v1 owner config has no StateDir; retain legacy launch/recovery but never allow clone cleanup.
+	witness, err := readLinuxOwnerAnchorWitnessConfig(owner)
+	if err != nil {
+		return fmt.Errorf("validate root-owned witness selector before READY: %w", err)
 	}
 	parent, err := OpenLinuxCgroupV2Parent(options.cgroupMount, options.delegatedPath)
 	if err != nil {
@@ -892,6 +1805,12 @@ func RunLinuxOwnerAnchor(args []string) error {
 	if err := verifyLinuxOwnerAProcess(os.Getpid(), anchorIdentity, owner.AUID, owner.AGID, 0, parent.Identity().Path); err != nil {
 		return fmt.Errorf("verify Linux owner anchor A credentials and manager membership: %w", err)
 	}
+	anchorProcess := authority.LinuxCgroupProcessIdentity{PID: os.Getpid(), Identity: anchorIdentity}
+	anchorUserNamespaceFD, anchorUserNamespace, err := openLinuxOwnerAnchorUserNamespaceFD(anchorProcess, -1)
+	if err != nil {
+		return fmt.Errorf("pin Linux owner anchor user namespace before READY: %w", err)
+	}
+	defer anchorUserNamespaceFD.Close()
 	listener, socketIdentity, err := listenLinuxOwnerAnchor(options.socketPath, owner)
 	if err != nil {
 		return err
@@ -899,9 +1818,11 @@ func RunLinuxOwnerAnchor(args []string) error {
 	defer unlinkLinuxOwnerAnchorSocket(options.socketPath, socketIdentity, owner.AUID)
 	anchor := &linuxOwnerAnchor{
 		owner: owner, parent: parent, listener: listener,
-		identity:    authority.LinuxCgroupProcessIdentity{PID: os.Getpid(), Identity: anchorIdentity},
+		identity:        authority.LinuxCgroupProcessIdentity{PID: os.Getpid(), Identity: anchorIdentity},
+		userNamespaceFD: anchorUserNamespaceFD, userNamespace: anchorUserNamespace,
 		managerPath: parent.Identity().Path, socketPath: options.socketPath,
-		runs: make(map[LinuxOwnerAnchorRunKey]*linuxOwnerAnchorRun),
+		runs: make(map[LinuxOwnerAnchorRunKey]*linuxOwnerAnchorRun), cleanupVerifier: cleanupVerifier, witness: witness,
+		cloneCleanupWorker: linuxgate.RemoveBCloneAfterReceipt,
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -909,6 +1830,31 @@ func RunLinuxOwnerAnchor(args []string) error {
 		return err
 	}
 	return anchor.serve(ctx)
+}
+
+func openLinuxOwnerAnchorCleanupVerifierForConfig(
+	owner linuxgate.OwnerConfig,
+	factory LinuxOwnerAnchorCleanupVerifierFactory,
+) (LinuxOwnerAnchorCleanupVerifier, error) {
+	if factory == nil {
+		return nil, errors.New("Linux owner anchor requires a State cleanup verifier factory")
+	}
+	if owner.StateDir == "" {
+		// Strict v1 owner configs remain usable for launch/recovery, but v2 clone
+		// cleanup stays closed because no fixed StateDir is present.
+		return nil, nil
+	}
+	if !validLinuxOwnerAnchorStateDir(owner.StateDir) {
+		return nil, errors.New("Linux owner anchor requires canonical absolute StateDir from the root-installed owner configuration")
+	}
+	verifier, err := factory(owner.StateDir)
+	if err != nil {
+		return nil, err
+	}
+	if verifier == nil {
+		return nil, errors.New("Linux owner anchor StateDir clone-cleanup verifier factory returned nil")
+	}
+	return verifier, nil
 }
 
 func parseLinuxOwnerAnchorArgs(args []string) (linuxOwnerAnchorOptions, error) {
@@ -931,18 +1877,138 @@ func parseLinuxOwnerAnchorArgs(args []string) (linuxOwnerAnchorOptions, error) {
 	return options, nil
 }
 
+func validLinuxOwnerAnchorStateDir(value string) bool {
+	if value == "" || len(value) > 4095 || !path.IsAbs(value) || path.Clean(value) != value || value == "/" {
+		return false
+	}
+	for index := range len(value) {
+		if value[index] < 0x20 || value[index] == 0x7f {
+			return false
+		}
+	}
+	for _, component := range strings.Split(strings.TrimPrefix(value, "/"), "/") {
+		if component == "" || component == "." || component == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+func readLinuxOwnerAnchorWitnessConfig(owner linuxgate.OwnerConfig) (*linuxOwnerAnchorWitnessConfig, error) {
+	if owner.Validate() != nil {
+		return nil, errors.New("Linux owner anchor witness config requires the fixed owner mapping")
+	}
+	rootFD, err := unix.Open("/", unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, fmt.Errorf("open root for witness selector ancestry: %w", err)
+	}
+	defer unix.Close(rootFD)
+	var rootStat unix.Stat_t
+	if err := unix.Fstat(rootFD, &rootStat); err != nil || rootStat.Uid != 0 || rootStat.Mode&unix.S_IFMT != unix.S_IFDIR || rootStat.Mode&0022 != 0 {
+		return nil, fmt.Errorf("verify root witness selector ancestor: %w", errOr(err, errors.New("root ownership or mode is unsafe")))
+	}
+	etcFD, err := unix.Openat2(rootFD, "etc", &unix.OpenHow{
+		Flags:   uint64(unix.O_PATH | unix.O_DIRECTORY | unix.O_CLOEXEC),
+		Resolve: uint64(unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("open root-controlled Linux owner config directory: %w", err)
+	}
+	defer unix.Close(etcFD)
+	var etcStat unix.Stat_t
+	if err := unix.Fstat(etcFD, &etcStat); err != nil || etcStat.Uid != 0 || etcStat.Mode&unix.S_IFMT != unix.S_IFDIR || etcStat.Mode&0022 != 0 {
+		return nil, fmt.Errorf("verify root-controlled /etc directory: %w", errOr(err, errors.New("directory ownership or mode is unsafe")))
+	}
+	symmetryFD, err := unix.Openat2(etcFD, "symmetry", &unix.OpenHow{
+		Flags:   uint64(unix.O_PATH | unix.O_DIRECTORY | unix.O_CLOEXEC),
+		Resolve: uint64(unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS),
+	})
+	if errors.Is(err, unix.ENOENT) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open root-controlled /etc/symmetry directory: %w", err)
+	}
+	defer unix.Close(symmetryFD)
+	var directoryStat unix.Stat_t
+	if err := unix.Fstat(symmetryFD, &directoryStat); err != nil || directoryStat.Uid != 0 ||
+		directoryStat.Mode&unix.S_IFMT != unix.S_IFDIR || directoryStat.Mode&0022 != 0 {
+		return nil, fmt.Errorf("verify root-controlled /etc/symmetry directory: %w", errOr(err, errors.New("directory ownership or mode is unsafe")))
+	}
+	witnessName := filepath.Base(linuxOwnerAnchorWitnessConfigPath)
+	witnessFD, err := unix.Openat2(symmetryFD, witnessName, &unix.OpenHow{
+		Flags:   uint64(unix.O_RDONLY | unix.O_CLOEXEC | unix.O_NOFOLLOW | unix.O_NONBLOCK),
+		Resolve: uint64(unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS),
+	})
+	if errors.Is(err, unix.ENOENT) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open root-controlled Linux owner witness selector: %w", err)
+	}
+	witnessFile := os.NewFile(uintptr(witnessFD), "linux-owner-root-witness-config")
+	if witnessFile == nil {
+		_ = unix.Close(witnessFD)
+		return nil, errors.New("wrap root-controlled Linux owner witness selector")
+	}
+	defer witnessFile.Close()
+	var witnessStat unix.Stat_t
+	if err := unix.Fstat(witnessFD, &witnessStat); err != nil || witnessStat.Uid != 0 || witnessStat.Gid != owner.AGID ||
+		witnessStat.Mode&unix.S_IFMT != unix.S_IFREG || witnessStat.Mode&0777 != 0440 || witnessStat.Nlink != 1 ||
+		witnessStat.Size <= 0 || witnessStat.Size > linuxOwnerAnchorWitnessConfigMaxBytes {
+		return nil, fmt.Errorf("verify root-owned Linux owner witness selector: %w", errOr(err, errors.New("file ownership, mode, link count, or size is unsafe")))
+	}
+	contents, err := io.ReadAll(io.LimitReader(witnessFile, linuxOwnerAnchorWitnessConfigMaxBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read root-controlled Linux owner witness selector: %w", err)
+	}
+	if len(contents) > linuxOwnerAnchorWitnessConfigMaxBytes {
+		return nil, errors.New("root-controlled Linux owner witness selector exceeds its bound")
+	}
+	return parseLinuxOwnerAnchorWitnessConfig(contents)
+}
+
+func parseLinuxOwnerAnchorWitnessConfig(contents []byte) (*linuxOwnerAnchorWitnessConfig, error) {
+	if len(contents) == 0 || len(contents) > linuxOwnerAnchorWitnessConfigMaxBytes {
+		return nil, errors.New("root-controlled Linux owner witness selector has an invalid size")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(contents))
+	decoder.DisallowUnknownFields()
+	var witness linuxOwnerAnchorWitnessConfig
+	if err := decoder.Decode(&witness); err != nil {
+		return nil, fmt.Errorf("decode root-controlled Linux owner witness selector: %w", err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return nil, errors.New("root-controlled Linux owner witness selector has trailing JSON")
+	}
+	if witness.Version != linuxOwnerAnchorWitnessConfigVersion || !validLinuxOwnerAnchorRunID(witness.RunID) || witness.Generation <= 0 ||
+		(witness.DropResponse == "") == (witness.HelperAction == "") ||
+		witness.DropResponse != "" && (witness.DropResponse != "stop" && witness.DropResponse != "ack-stop-receipt" && witness.DropResponse != "launcher-ready" || witness.HoldForReleaseFile) ||
+		witness.HelperAction != "" && (witness.HelperAction != "crash_after_release_before_register" || !witness.HoldForReleaseFile) {
+		return nil, errors.New("root-controlled Linux owner witness selector fields are invalid")
+	}
+	return &witness, nil
+}
+
 type linuxOwnerAnchor struct {
-	owner            linuxgate.OwnerConfig
-	parent           *LinuxCgroupV2Parent
-	listener         *net.UnixListener
-	identity         authority.LinuxCgroupProcessIdentity
-	managerPath      string
-	socketPath       string
-	stopping         bool
-	shutdownDeadline time.Time
-	shutdownForced   bool
-	shutdownError    error
-	runs             map[LinuxOwnerAnchorRunKey]*linuxOwnerAnchorRun
+	owner               linuxgate.OwnerConfig
+	parent              *LinuxCgroupV2Parent
+	listener            *net.UnixListener
+	identity            authority.LinuxCgroupProcessIdentity
+	userNamespaceFD     *os.File
+	userNamespace       LinuxUserNamespaceIdentity
+	managerPath         string
+	socketPath          string
+	stopping            bool
+	shutdownDeadline    time.Time
+	shutdownForced      bool
+	shutdownError       error
+	runs                map[LinuxOwnerAnchorRunKey]*linuxOwnerAnchorRun
+	cleanupVerifier     LinuxOwnerAnchorCleanupVerifier
+	cloneCleanupWorker  linuxOwnerAnchorCloneCleanupWorker
+	witness             *linuxOwnerAnchorWitnessConfig
+	cloneCleanupWorkers atomic.Int32
 }
 
 func (anchor *linuxOwnerAnchor) serve(ctx context.Context) (result error) {
@@ -955,7 +2021,6 @@ func (anchor *linuxOwnerAnchor) serve(ctx context.Context) (result error) {
 			_ = anchor.listener.Close()
 		}
 		stopContext, cancel := context.WithTimeout(context.Background(), linuxOwnerAnchorWaitTimeout)
-		defer cancel()
 		for key, run := range anchor.runs {
 			if run != nil && run.retired {
 				if err := run.close(); err != nil {
@@ -973,6 +2038,10 @@ func (anchor *linuxOwnerAnchor) serve(ctx context.Context) (result error) {
 				result = errors.Join(result, fmt.Errorf("final exact stop for unresolved Linux owner RunKey %s/%d: %w", key.RunID, key.Generation, stopErr))
 			}
 			result = errors.Join(result, fmt.Errorf("Linux owner RunKey %s/%d remains unresolved; no durable receipt or clear was created", key.RunID, key.Generation))
+		}
+		cancel()
+		if err := anchor.waitForCloneCleanupWorkers(); err != nil {
+			result = errors.Join(result, fmt.Errorf("wait for bounded root clone cleanup worker before verifier close: %w", err))
 		}
 	}()
 	if ctx == nil || anchor.listener == nil || anchor.parent == nil {
@@ -1029,8 +2098,28 @@ func (anchor *linuxOwnerAnchor) serve(ctx context.Context) (result error) {
 			return errors.Join(fmt.Errorf("accept Linux owner anchor connection: %w", sanitizeLinuxOwnerAnchorSocketError(err)), stopErr)
 		}
 		anchor.serveConnection(connection)
-		_ = connection.Close()
 	}
+}
+
+func (anchor *linuxOwnerAnchor) waitForCloneCleanupWorkers() error {
+	if anchor == nil {
+		return nil
+	}
+	deadline := time.Now().Add(linuxOwnerAnchorCleanupTimeout)
+	timedOut := false
+	for anchor.cloneCleanupWorkers.Load() != 0 {
+		if !timedOut && !time.Now().Before(deadline) {
+			timedOut = true
+		}
+		// Keep the State reader pinned until every worker exits. Its own
+		// context and the owner unit's bounded stop timeout bound this wait.
+		timer := time.NewTimer(linuxOwnerAnchorWaitPoll)
+		<-timer.C
+	}
+	if timedOut {
+		return context.DeadlineExceeded
+	}
+	return nil
 }
 
 func (anchor *linuxOwnerAnchor) allRunsRetired() bool {
@@ -1070,8 +2159,11 @@ func (anchor *linuxOwnerAnchor) superviseExitedHelpers() error {
 	if anchor == nil {
 		return errors.New("Linux owner anchor is nil")
 	}
+	now := time.Now()
 	for _, run := range anchor.runs {
-		if run == nil || run.retired || run.helperPIDFD == nil || run.helperDeathContainmentAttempted || run.helperDeathContainmentComplete {
+		if run == nil || run.retired || run.helperPIDFD == nil || run.helperDeathContainmentComplete ||
+			run.supervisionTerminal || run.helperDeathContainmentAttempted && run.supervisionError == nil ||
+			run.supervisionError != nil && now.Before(run.supervisionRetryAfter) {
 			continue
 		}
 		var observationErr error
@@ -1101,16 +2193,25 @@ func (anchor *linuxOwnerAnchor) superviseExitedHelpers() error {
 		cancel()
 		if err != nil {
 			run.supervisionError = errors.Join(observationErr, fmt.Errorf("contain run after exact helper death: %w", err))
-			return run.supervisionError
+			retryWithoutNewKill := !run.leafKillAttempted && !run.leafKillCallStarted && !run.leafKillAcknowledged ||
+				run.leafKillAcknowledged && !run.leafEmptyObserved || run.stopEvidence != nil
+			if retryWithoutNewKill {
+				run.helperDeathContainmentAttempted = false
+				run.supervisionRetryAfter = time.Now().Add(linuxOwnerAnchorSupervisionRetry)
+			} else {
+				// A positive kill/empty observation without a complete run proof is
+				// permanently unresolved in this in-memory Anchor lifetime. Never
+				// retry the write or fail the owner unit and sweep sibling RunKeys.
+				run.helperDeathContainmentAttempted = true
+				run.supervisionTerminal = true
+			}
+			continue
 		}
 		run.helperDeathContainmentComplete = true
+		run.helperDeathContainmentAttempted = true
 		run.supervisionError = nil
-	}
-	for _, run := range anchor.runs {
-		if run != nil && !run.retired && run.helperDeathContainmentAttempted &&
-			!run.helperDeathContainmentComplete && run.supervisionError != nil {
-			return run.supervisionError
-		}
+		run.supervisionRetryAfter = time.Time{}
+		run.supervisionTerminal = false
 	}
 	return nil
 }
@@ -1150,85 +2251,1183 @@ func (anchor *linuxOwnerAnchor) ensureExitedHelperContained(ctx context.Context,
 		return err
 	}
 	run.helperDeathContainmentComplete = true
+	run.helperDeathContainmentAttempted = true
+	run.supervisionTerminal = false
+	run.supervisionRetryAfter = time.Time{}
 	run.supervisionError = nil
 	return nil
+}
+
+func (anchor *linuxOwnerAnchor) verifyStopProducerFence(ctx context.Context, run *linuxOwnerAnchorRun, fence LinuxOwnerAnchorProducerFence) error {
+	if anchor == nil || ctx == nil || run == nil || run.helperExit != nil ||
+		run.stopLeafAttempted && (run.stopFence == nil || !run.stopFence.Equal(fence) || run.leafKillCallStarted ||
+			run.leafKillAttempted || run.leafKillAcknowledged || run.stopEvidence != nil) ||
+		run.helperPIDFD == nil || run.leaf == nil || fence.ValidateFor(run.grant, run.helper) != nil {
+		return errors.New("Linux owner anchor StopLeaf producer fence is not live or exact")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(run.helperPIDFD.Fd()), run.helper); err != nil {
+		return fmt.Errorf("verify exact live helper at StopLeaf: %w", err)
+	}
+	if err := verifyLinuxOwnerAProcess(run.helper.PID, run.helper.Identity, run.owner.AUID, run.owner.AGID, anchor.identity.PID, anchor.managerPath); err != nil {
+		return fmt.Errorf("verify exact helper credentials at StopLeaf: %w", err)
+	}
+	if (run.gateIdentity == nil) != (fence.Gate == nil) ||
+		run.gateIdentity != nil && (!run.gateIdentity.Equal(*fence.Gate) || run.gateUserNamespace != *fence.UserNamespace) {
+		return errors.New("Linux owner anchor StopLeaf gate differs from the exact registered process")
+	}
+	if fence.UntrustedProcess != nil {
+		child, exists := run.children[fence.UntrustedProcess.PID]
+		if !exists || !child.identity.Equal(*fence.UntrustedProcess) || !child.creator.Equal(run.helper) ||
+			child.role != "descendant" || child.pidfd == nil {
+			return errors.New("failed-Prepare StopLeaf identity differs from its exact retained descendant registration")
+		}
+		if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(child.pidfd.Fd()), child.identity); err != nil {
+			return fmt.Errorf("verify failed-Prepare child pidfd before anchor kill: %w", err)
+		}
+		credentials, err := readLinuxOwnerProcessCredentials(child.identity.PID)
+		if err != nil || credentials.Parent != run.helper.PID {
+			return fmt.Errorf("verify failed-Prepare child ancestry before anchor kill: %w", errOr(err, errors.New("parent differs from exact helper")))
+		}
+		if err := verifyLinuxOwnerRunChildCredentials(child.identity.PID, "gate", run.owner); err != nil {
+			return fmt.Errorf("failed-Prepare child is not the exact unprivileged A process: %w", err)
+		}
+		if err := verifyLinuxOwnerRunChildMembership(child.identity.PID, "descendant", run.grant, run.leaf); err != nil {
+			cgroupPath, pathErr := readLinuxOwnerProcessCgroupPath(child.identity.PID)
+			if pathErr != nil || linuxOwnerCgroupPathWithin(cgroupPath, path.Join(run.grant.Parent.Path, run.grant.Leaf.LeafName)) {
+				return errors.Join(err, pathErr)
+			}
+			run.migrationObserved = true
+		}
+	}
+	if run.gateReleaseAuthorized && !fence.ReleaseAttempted || fence.Released && !run.gateReleaseAuthorized {
+		return errors.New("Linux owner anchor StopLeaf release fence differs from the one-use gate authorization")
+	}
+	if fence.Launcher != nil {
+		launcher, exists := run.children[fence.Launcher.PID]
+		if !exists || !launcher.identity.Equal(*fence.Launcher) || !launcher.creator.Equal(run.helper) ||
+			launcher.role != "launcher" || launcher.pidfd == nil {
+			return errors.New("Linux owner anchor StopLeaf launcher differs from its exact retained process pin")
+		}
+		ready, err := linuxOwnerAnchorPIDFDReady(launcher.pidfd)
+		if err != nil || !ready {
+			return fmt.Errorf("exact root launcher remains live at StopLeaf: %w", errOr(err, errors.New("launcher pidfd is not ready")))
+		}
+	} else {
+		for _, child := range run.children {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if child.role == "launcher" {
+				return errors.New("Linux owner anchor StopLeaf omitted its registered launcher")
+			}
+		}
+	}
+	if present, err := linuxOwnerAnchorPinnedLeafPresent(run); err != nil || !present {
+		return fmt.Errorf("verify exact pinned leaf before StopLeaf: %w", errOr(err, errors.New("run leaf is absent")))
+	}
+	for _, child := range run.children {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if child.role == "launcher" {
+			continue
+		}
+		if child.pidfd == nil {
+			return errors.New("Linux owner anchor StopLeaf run child lacks an exact pidfd")
+		}
+		ready, err := linuxOwnerAnchorPIDFDReady(child.pidfd)
+		if err != nil {
+			return fmt.Errorf("poll exact StopLeaf child pidfd: %w", err)
+		}
+		if ready {
+			continue
+		}
+		if identity, err := ProcessIdentity(child.identity.PID); err != nil || identity != child.identity.Identity {
+			return fmt.Errorf("verify live StopLeaf child identity: %w", errOr(err, errors.New("creation identity changed")))
+		}
+		switch child.role {
+		case "gate":
+			if run.gateIdentity == nil || !run.gateIdentity.Process.Equal(child.identity) {
+				return errors.New("Linux owner anchor StopLeaf has an unbound gate child")
+			}
+			if fence.Released {
+				if err := run.verifyAuthorizedGateExec(child.identity, true); err != nil {
+					if looseErr := run.verifyAuthorizedGateExec(child.identity, false); looseErr != nil {
+						return fmt.Errorf("helper reports RELEASEd without the exact B exec transition: %w", errors.Join(err, looseErr))
+					}
+					run.migrationObserved = true
+				}
+				continue
+			}
+			if run.gateReleaseAuthorized {
+				if err := run.verifyAuthorizedGateExec(child.identity, true); err == nil {
+					continue
+				} else if looseErr := run.verifyAuthorizedGateExec(child.identity, false); looseErr == nil {
+					run.migrationObserved = true
+					continue
+				}
+			}
+			if err := verifyLinuxOwnerRunChildCredentials(child.identity.PID, "gate", run.owner); err != nil {
+				return err
+			}
+			if err := verifyLinuxOwnerAnchorGateNamespace(child.identity.PID, run.gateUserNamespace, run.owner); err != nil {
+				return err
+			}
+			if err := verifyLinuxOwnerRunChildMembership(child.identity.PID, "gate", run.grant, run.leaf); err != nil {
+				cgroupPath, pathErr := readLinuxOwnerProcessCgroupPath(child.identity.PID)
+				if pathErr != nil || linuxOwnerCgroupPathWithin(cgroupPath, path.Join(run.grant.Parent.Path, run.grant.Leaf.LeafName)) {
+					return errors.Join(err, pathErr)
+				}
+				run.migrationObserved = true
+			}
+		case "native":
+			if err := run.verifyAuthorizedGateExec(child.identity, true); err != nil {
+				if looseErr := run.verifyAuthorizedGateExec(child.identity, false); looseErr != nil {
+					return errors.Join(err, looseErr)
+				}
+				run.migrationObserved = true
+			}
+		case "descendant":
+			if err := verifyLinuxOwnerRunChildCredentials(child.identity.PID, child.role, run.owner); err != nil {
+				return err
+			}
+			if err := verifyLinuxOwnerRunChildMembership(child.identity.PID, child.role, run.grant, run.leaf); err != nil {
+				cgroupPath, pathErr := readLinuxOwnerProcessCgroupPath(child.identity.PID)
+				if pathErr != nil || linuxOwnerCgroupPathWithin(cgroupPath, path.Join(run.grant.Parent.Path, run.grant.Leaf.LeafName)) {
+					return errors.Join(err, pathErr)
+				}
+				run.migrationObserved = true
+			}
+		default:
+			return errors.New("Linux owner anchor StopLeaf observed an unknown tracked child role")
+		}
+	}
+	return anchor.verifyAnchorChildrenBeforeStopLeaf(ctx, run)
+}
+
+func (anchor *linuxOwnerAnchor) verifyNormalStopChildMembership(
+	ctx context.Context,
+	run *linuxOwnerAnchorRun,
+	process authority.LinuxCgroupProcessIdentity,
+	cgroupPath string,
+) (bool, error) {
+	if anchor == nil || ctx == nil || run == nil || run.grant.Validate() != nil || process.Validate() != nil || cgroupPath == "" {
+		return false, errors.New("normal stop child membership check is incomplete")
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	leafPath := path.Join(run.grant.Parent.Path, run.grant.Leaf.LeafName)
+	if process.Equal(run.helper) {
+		if cgroupPath != anchor.managerPath {
+			return false, errors.New("exact helper is outside the pinned manager subgroup during StopLeaf")
+		}
+		return false, nil
+	}
+	var pidfd int
+	if tracked, exists := run.children[process.PID]; exists {
+		if !tracked.identity.Equal(process) || tracked.pidfd == nil {
+			return false, errors.New("anchor child differs from its exact current-run process pin")
+		}
+		pidfd = int(tracked.pidfd.Fd())
+	} else {
+		opened, err := unix.PidfdOpen(process.PID, 0)
+		if err != nil {
+			run.migrationObserved = true
+			return false, fmt.Errorf("open exact anchor child pidfd before normal StopLeaf: %w", err)
+		}
+		defer unix.Close(opened)
+		pidfd = opened
+	}
+	classification, err := anchor.classifyRunChildOrigin(ctx, run, process, pidfd)
+	if err != nil {
+		run.migrationObserved = true
+		return false, fmt.Errorf("classify exact anchor child before normal StopLeaf: %w", err)
+	}
+	actualCgroupPath, err := readLinuxOwnerProcessCgroupPath(process.PID)
+	if err != nil || actualCgroupPath != cgroupPath {
+		run.migrationObserved = true
+		return false, fmt.Errorf("recheck anchor child cgroup before normal StopLeaf: %w", errOr(err, errors.New("cgroup path changed")))
+	}
+	switch classification.Origin {
+	case linuxOwnerAnchorRunChildOriginRegisteredCurrent:
+		if classification.Role == "launcher" {
+			if cgroupPath != run.grant.Parent.Path {
+				return false, errors.New("registered launcher left the exact manager subgroup before StopLeaf")
+			}
+		} else if !linuxOwnerCgroupPathWithin(cgroupPath, leafPath) {
+			return false, errors.New("registered current-run child left the exact run leaf before StopLeaf")
+		}
+		return false, nil
+	case linuxOwnerAnchorRunChildOriginGateUserNSCurrent:
+		if !linuxOwnerCgroupPathWithin(cgroupPath, leafPath) {
+			return false, errors.New("namespace-proven current-run child is outside the exact leaf before StopLeaf")
+		}
+		if _, exists := run.children[process.PID]; !exists {
+			if err := run.trackNamespaceProvenChild(process, pidfd, classification); err != nil {
+				return false, fmt.Errorf("retain exact namespace-proven anchor child before StopLeaf: %w", err)
+			}
+		}
+		return false, nil
+	case linuxOwnerAnchorRunChildOriginRegisteredForeign, linuxOwnerAnchorRunChildOriginOtherUserNSForeign,
+		linuxOwnerAnchorRunChildOriginPhysicalOnlyForeign:
+		if linuxOwnerCgroupPathWithin(cgroupPath, leafPath) {
+			run.migrationObserved = true
+			return false, errors.New("different RunKey child is inside this exact run leaf before StopLeaf")
+		}
+		return true, nil
+	case linuxOwnerAnchorRunChildOriginCurrentRunEscaped:
+		run.migrationObserved = true
+		return false, nil
+	default:
+		run.migrationObserved = true
+		return false, errors.New("anchor observed an unclassified process before normal StopLeaf")
+	}
+}
+
+func (anchor *linuxOwnerAnchor) verifyAnchorChildrenBeforeStopLeaf(ctx context.Context, run *linuxOwnerAnchorRun) error {
+	if anchor == nil || ctx == nil || run == nil || run.helper.Validate() != nil || run.helperPIDFD == nil {
+		return errors.New("normal StopLeaf anchor-child fence is incomplete")
+	}
+	pids, err := readLinuxOwnerProcessChildren(ctx, anchor.identity)
+	if err != nil {
+		return fmt.Errorf("read all-thread anchor child census before normal StopLeaf: %w", err)
+	}
+	for _, pid := range pids {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		identity, err := ProcessIdentity(pid)
+		if err != nil {
+			run.migrationObserved = true
+			return fmt.Errorf("capture anchor child identity before normal StopLeaf: %w", err)
+		}
+		process := authority.LinuxCgroupProcessIdentity{PID: pid, Identity: identity}
+		credentials, err := readLinuxOwnerProcessCredentials(pid)
+		if err != nil || credentials.Parent != anchor.identity.PID {
+			run.migrationObserved = true
+			return fmt.Errorf("verify anchor-child ancestry before normal StopLeaf: %w", errOr(err, errors.New("parent PID differs")))
+		}
+		cgroupPath, err := readLinuxOwnerProcessCgroupPath(pid)
+		if err != nil {
+			run.migrationObserved = true
+			return fmt.Errorf("read anchor child cgroup before normal StopLeaf: %w", err)
+		}
+		skip, err := anchor.verifyNormalStopChildMembership(ctx, run, process, cgroupPath)
+		if err != nil {
+			return fmt.Errorf("verify anchor-child RunKey membership before normal StopLeaf: %w", err)
+		}
+		if process.Equal(run.helper) {
+			if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(run.helperPIDFD.Fd()), run.helper); err != nil {
+				return fmt.Errorf("recheck exact helper pidfd before normal StopLeaf: %w", err)
+			}
+			if actual, err := ProcessIdentity(run.helper.PID); err != nil || actual != run.helper.Identity {
+				return fmt.Errorf("recheck exact helper identity before normal StopLeaf: %w", errOr(err, errors.New("creation identity differs")))
+			}
+			continue
+		}
+		if skip {
+			continue
+		}
+		if tracked, exists := run.children[pid]; exists {
+			if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(tracked.pidfd.Fd()), process); err != nil {
+				return fmt.Errorf("verify exact current-run child pidfd before normal StopLeaf: %w", err)
+			}
+		}
+		if actual, err := ProcessIdentity(pid); err != nil || actual != process.Identity {
+			return fmt.Errorf("recheck anchor child identity before normal StopLeaf: %w", errOr(err, errors.New("creation identity differs")))
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(run.helperPIDFD.Fd()), run.helper); err != nil {
+		return fmt.Errorf("recheck exact helper pidfd after normal StopLeaf child scan: %w", err)
+	}
+	if err := verifyLinuxOwnerAProcess(run.helper.PID, run.helper.Identity, run.owner.AUID, run.owner.AGID,
+		anchor.identity.PID, anchor.managerPath); err != nil {
+		return fmt.Errorf("recheck exact helper credentials and manager subgroup after normal StopLeaf child scan: %w", err)
+	}
+	return nil
+}
+
+func (anchor *linuxOwnerAnchor) verifyNoUnknownRunProducer(ctx context.Context, run *linuxOwnerAnchorRun) error {
+	if anchor == nil || ctx == nil || run == nil || run.helperExit == nil || !run.helperExit.ValidFor(run.helper, anchor.identity) {
+		return errors.New("Linux owner anchor takeover requires exact helper exit/reap evidence")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	pids, err := readLinuxOwnerProcessChildren(ctx, anchor.identity)
+	if err != nil {
+		return fmt.Errorf("read all-thread anchor child census before takeover StopLeaf: %w", err)
+	}
+	for _, pid := range pids {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		identity, err := ProcessIdentity(pid)
+		if err != nil {
+			run.migrationObserved = true
+			return fmt.Errorf("capture anchor child identity before takeover StopLeaf: %w", err)
+		}
+		process := authority.LinuxCgroupProcessIdentity{PID: pid, Identity: identity}
+		credentials, err := readLinuxOwnerProcessCredentials(pid)
+		if err != nil || credentials.Parent != anchor.identity.PID {
+			run.migrationObserved = true
+			return fmt.Errorf("verify anchor child ancestry before takeover StopLeaf: %w", errOr(err, errors.New("parent PID differs")))
+		}
+		if err := anchor.verifyTakeoverChildOrigin(ctx, run, process); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (anchor *linuxOwnerAnchor) verifyTakeoverChildOrigin(
+	ctx context.Context,
+	run *linuxOwnerAnchorRun,
+	process authority.LinuxCgroupProcessIdentity,
+) error {
+	tracked, registered := run.children[process.PID]
+	var pidfd int
+	if registered {
+		if !tracked.identity.Equal(process) || tracked.pidfd == nil {
+			return errors.New("anchor child differs from its exact run registration during takeover")
+		}
+		pidfd = int(tracked.pidfd.Fd())
+	} else {
+		opened, err := unix.PidfdOpen(process.PID, 0)
+		if err != nil {
+			run.migrationObserved = true
+			return fmt.Errorf("open exact unregistered anchor-child pidfd during takeover: %w", err)
+		}
+		pidfd = opened
+		defer unix.Close(pidfd)
+	}
+	classification, err := anchor.classifyRunChildOrigin(ctx, run, process, pidfd)
+	if err != nil {
+		run.migrationObserved = true
+		return fmt.Errorf("classify anchor child before takeover StopLeaf: %w", err)
+	}
+	cgroupPath, err := readLinuxOwnerProcessCgroupPath(process.PID)
+	if err != nil {
+		run.migrationObserved = true
+		return fmt.Errorf("recheck anchor child cgroup during takeover: %w", err)
+	}
+	leafPath := path.Join(run.grant.Parent.Path, run.grant.Leaf.LeafName)
+	switch classification.Origin {
+	case linuxOwnerAnchorRunChildOriginRegisteredCurrent:
+		if classification.Role == "launcher" {
+			ready, err := linuxOwnerAnchorPIDFDReady(tracked.pidfd)
+			if err != nil || !ready {
+				return fmt.Errorf("registered launcher remains live at anchor takeover: %w", errOr(err, errors.New("pidfd is not ready")))
+			}
+			return nil
+		}
+		if !linuxOwnerCgroupPathWithin(cgroupPath, leafPath) {
+			run.migrationObserved = true
+			return nil
+		}
+		return nil
+	case linuxOwnerAnchorRunChildOriginGateUserNSCurrent:
+		if !linuxOwnerCgroupPathWithin(cgroupPath, leafPath) {
+			run.migrationObserved = true
+			return nil
+		}
+		if !registered {
+			if err := run.trackNamespaceProvenChild(process, pidfd, classification); err != nil {
+				return fmt.Errorf("retain namespace-proven takeover child: %w", err)
+			}
+		}
+		return nil
+	case linuxOwnerAnchorRunChildOriginPreReleaseGatePhysicalOnly:
+		if err := run.trackPreReleaseGatePhysicalOnlyChild(process, pidfd, classification); err != nil {
+			return fmt.Errorf("retain pre-RegisterGate physical-only gate: %w", err)
+		}
+		return nil
+	case linuxOwnerAnchorRunChildOriginRegisteredForeign, linuxOwnerAnchorRunChildOriginOtherUserNSForeign,
+		linuxOwnerAnchorRunChildOriginPhysicalOnlyForeign:
+		if linuxOwnerCgroupPathWithin(cgroupPath, leafPath) {
+			run.migrationObserved = true
+			return errors.New("foreign RunKey process is inside this exact run leaf before takeover StopLeaf")
+		}
+		return nil
+	case linuxOwnerAnchorRunChildOriginCurrentRunEscaped:
+		run.migrationObserved = true
+		return nil
+	default:
+		run.migrationObserved = true
+		return errors.New("anchor observed an unclassified child before takeover StopLeaf")
+	}
+}
+
+func (anchor *linuxOwnerAnchor) skipChildOwnedByAnotherRun(
+	ctx context.Context,
+	run *linuxOwnerAnchorRun,
+	process authority.LinuxCgroupProcessIdentity,
+	cgroupPath string,
+) (bool, error) {
+	if anchor == nil || ctx == nil || run == nil || run.grant.Validate() != nil || process.Validate() != nil || cgroupPath == "" {
+		return false, errors.New("classify anchor child ownership requires an exact run and process identity")
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	var pidfd int
+	if tracked, exists := run.children[process.PID]; exists {
+		if !tracked.identity.Equal(process) || tracked.pidfd == nil {
+			return false, errors.New("anchor child differs from its exact current-run registration")
+		}
+		pidfd = int(tracked.pidfd.Fd())
+	} else {
+		opened, err := unix.PidfdOpen(process.PID, 0)
+		if err != nil {
+			return false, fmt.Errorf("open exact anchor child pidfd for cross-run classification: %w", err)
+		}
+		defer unix.Close(opened)
+		pidfd = opened
+	}
+	classification, err := anchor.classifyRunChildOrigin(ctx, run, process, pidfd)
+	if err != nil {
+		run.migrationObserved = true
+		return false, fmt.Errorf("classify anchor child RunKey origin: %w", err)
+	}
+	actualCgroupPath, err := readLinuxOwnerProcessCgroupPath(process.PID)
+	if err != nil || actualCgroupPath != cgroupPath {
+		run.migrationObserved = true
+		return false, fmt.Errorf("recheck anchor child cgroup for cross-run classification: %w", errOr(err, errors.New("cgroup path changed")))
+	}
+	leafPath := path.Join(run.grant.Parent.Path, run.grant.Leaf.LeafName)
+	switch classification.Origin {
+	case linuxOwnerAnchorRunChildOriginRegisteredForeign, linuxOwnerAnchorRunChildOriginOtherUserNSForeign:
+		if linuxOwnerCgroupPathWithin(cgroupPath, leafPath) {
+			run.migrationObserved = true
+			return false, errors.New("anchor observed a different RunKey's child in this exact run leaf")
+		}
+		return true, nil
+	case linuxOwnerAnchorRunChildOriginRegisteredCurrent, linuxOwnerAnchorRunChildOriginGateUserNSCurrent:
+		return false, nil
+	case linuxOwnerAnchorRunChildOriginPreReleaseGatePhysicalOnly:
+		return false, nil
+	case linuxOwnerAnchorRunChildOriginPhysicalOnlyForeign:
+		if linuxOwnerCgroupPathWithin(cgroupPath, leafPath) {
+			run.migrationObserved = true
+			return false, errors.New("another RunKey's physical-only gate is inside this exact run leaf")
+		}
+		return true, nil
+	case linuxOwnerAnchorRunChildOriginCurrentRunEscaped:
+		run.migrationObserved = true
+		return false, errors.New("anchor observed a current-run process outside its exact run leaf")
+	default:
+		run.migrationObserved = true
+		return false, errors.New("anchor observed an unclassified child during cross-run ownership check")
+	}
+}
+
+func (anchor *linuxOwnerAnchor) verifyNoForeignRunProcessInLeaf(ctx context.Context, run *linuxOwnerAnchorRun) error {
+	if anchor == nil || ctx == nil || run == nil || run.grant.Validate() != nil || !run.grant.Anchor.Equal(anchor.identity) {
+		return errors.New("foreign-run leaf membership check lacks exact anchor authority")
+	}
+	processes, err := readLinuxOwnerAnchorRunLeafProcessIDs(ctx, run.leaf, run.grant, run.owner.AUID)
+	if err != nil {
+		return fmt.Errorf("read bounded recursive pinned-leaf process set before cgroup.kill: %w", err)
+	}
+	pids := make([]int, 0, len(processes))
+	for pid := range processes {
+		pids = append(pids, pid)
+	}
+	sort.Ints(pids)
+	leafPath := path.Join(run.grant.Parent.Path, run.grant.Leaf.LeafName)
+	for _, pid := range pids {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		identity, err := ProcessIdentity(pid)
+		if err != nil {
+			run.migrationObserved = true
+			return fmt.Errorf("capture exact pinned-leaf process identity before cgroup.kill: %w", err)
+		}
+		process := authority.LinuxCgroupProcessIdentity{PID: pid, Identity: identity}
+		pidfd, err := unix.PidfdOpen(pid, 0)
+		if err != nil {
+			run.migrationObserved = true
+			return fmt.Errorf("open exact pinned-leaf process pidfd before cgroup.kill: %w", err)
+		}
+		classification, classifyErr := anchor.classifyRunChildOrigin(ctx, run, process, pidfd)
+		if classifyErr != nil {
+			_ = unix.Close(pidfd)
+			run.migrationObserved = true
+			return fmt.Errorf("classify exact pinned-leaf process before cgroup.kill: %w", classifyErr)
+		}
+		switch classification.Origin {
+		case linuxOwnerAnchorRunChildOriginRegisteredCurrent:
+			if classification.Role == "launcher" {
+				_ = unix.Close(pidfd)
+				run.migrationObserved = true
+				return errors.New("registered root launcher is inside the exact run leaf before cgroup.kill")
+			}
+		case linuxOwnerAnchorRunChildOriginGateUserNSCurrent:
+			beforePath, err := readLinuxOwnerProcessCgroupPath(pid)
+			if err != nil {
+				_ = unix.Close(pidfd)
+				run.migrationObserved = true
+				return fmt.Errorf("recheck namespace-proven current-run process cgroup during leaf census: %w", err)
+			}
+			if !linuxOwnerCgroupPathWithin(beforePath, leafPath) {
+				_ = unix.Close(pidfd)
+				run.migrationObserved = true
+				continue
+			}
+			if _, exists := run.children[pid]; !exists {
+				if err := run.trackNamespaceProvenChild(process, pidfd, classification); err != nil {
+					_ = unix.Close(pidfd)
+					run.migrationObserved = true
+					return fmt.Errorf("retain exact namespace-proven leaf process before cgroup.kill: %w", err)
+				}
+			}
+		case linuxOwnerAnchorRunChildOriginPreReleaseGatePhysicalOnly:
+			if err := run.trackPreReleaseGatePhysicalOnlyChild(process, pidfd, classification); err != nil {
+				_ = unix.Close(pidfd)
+				run.migrationObserved = true
+				return fmt.Errorf("retain pre-RegisterGate physical-only gate before cgroup.kill: %w", err)
+			}
+		case linuxOwnerAnchorRunChildOriginRegisteredForeign, linuxOwnerAnchorRunChildOriginOtherUserNSForeign,
+			linuxOwnerAnchorRunChildOriginPhysicalOnlyForeign:
+			_ = unix.Close(pidfd)
+			run.migrationObserved = true
+			return errors.New("foreign RunKey process is inside this exact run leaf before cgroup.kill")
+		case linuxOwnerAnchorRunChildOriginCurrentRunEscaped:
+			_ = unix.Close(pidfd)
+			run.migrationObserved = true
+			continue
+		default:
+			_ = unix.Close(pidfd)
+			run.migrationObserved = true
+			return errors.New("unattributable process is inside the exact run leaf before cgroup.kill")
+		}
+		if err := verifyLinuxOwnerAnchorPIDFDIdentity(pidfd, process); err != nil {
+			_ = unix.Close(pidfd)
+			run.migrationObserved = true
+			return fmt.Errorf("recheck pinned-leaf process pidfd before cgroup.kill: %w", err)
+		}
+		if actual, err := ProcessIdentity(pid); err != nil || actual != process.Identity {
+			_ = unix.Close(pidfd)
+			run.migrationObserved = true
+			return fmt.Errorf("recheck pinned-leaf process identity before cgroup.kill: %w", errOr(err, errors.New("creation identity differs")))
+		}
+		cgroupPath, err := readLinuxOwnerProcessCgroupPath(pid)
+		_ = unix.Close(pidfd)
+		if err != nil || !linuxOwnerCgroupPathWithin(cgroupPath, leafPath) {
+			run.migrationObserved = true
+			return fmt.Errorf("recheck pinned-leaf process membership before cgroup.kill: %w", errOr(err, errors.New("process left the exact run leaf")))
+		}
+	}
+	return nil
+}
+
+func (anchor *linuxOwnerAnchor) establishRunNoMigrationProof(
+	ctx context.Context,
+	run *linuxOwnerAnchorRun,
+	fence *LinuxOwnerAnchorProducerFence,
+) error {
+	if anchor == nil || ctx == nil || run == nil || run.grant.Validate() != nil || !run.grant.Anchor.Equal(anchor.identity) {
+		return errors.New("NoMigrationObserved requires the exact retained Anchor and RunKey")
+	}
+	if fence != nil && fence.ValidateFor(run.grant, run.helper) != nil {
+		return errors.New("NoMigrationObserved premise differs from the exact producer fence")
+	}
+	run.noMigrationProven = false
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if len(run.physicalOnlyChildren) != 0 {
+		// The gate can be physically contained under its exact launcher-birth
+		// premise, but without a registered GateIdentity it cannot participate
+		// in a RunKey-complete StopReceipt.
+		return nil
+	}
+	if run.migrationObserved {
+		return nil
+	}
+	if run.gateIdentity == nil {
+		if fence == nil || fence.Launcher == nil || fence.LauncherExit == nil ||
+			fence.Gate != nil || fence.UserNamespace != nil || run.gateUserNamespaceFD != nil || run.gateImageFD != nil {
+			// A helper-death takeover before RegisterGate has no authenticated
+			// no-gate result. It remains physically containable only when the
+			// earlier producer scans show no unknown process; it cannot issue a
+			// run-bound stop receipt.
+			return nil
+		}
+		if !fence.LauncherExit.ValidForOwnedDescendant(*fence.Launcher, run.helper, anchor.identity, nil) {
+			return errors.New("pre-gate no-target proof lacks exact helper-owned launcher reap evidence")
+		}
+		if fence.GateOutcome != nil {
+			if fence.UntrustedProcess != nil ||
+				linuxgate.VerifyGateNeverProducedAuthenticator(run.grant.Secret, *fence.GateOutcome) != nil ||
+				!fence.GateOutcome.Launcher.Equal(*fence.Launcher) {
+				return errors.New("pre-gate no-gate migration premise differs from its exact authenticated launcher outcome")
+			}
+			launcherSeen := false
+			for _, child := range run.children {
+				if child.role != "launcher" || !child.identity.Equal(*fence.Launcher) ||
+					!child.creator.Equal(run.helper) || child.pidfd == nil ||
+					child.classification.ValidateFor(run.grant, run.helper, child.identity) != nil ||
+					child.classification.Origin != linuxOwnerAnchorRunChildOriginRegisteredCurrent {
+					return errors.New("pre-gate no-target proof contains an unbound root launcher")
+				}
+				if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(child.pidfd.Fd()), child.identity); err != nil {
+					return fmt.Errorf("verify pre-gate launcher pidfd: %w", err)
+				}
+				ready, err := linuxOwnerAnchorPIDFDReady(child.pidfd)
+				if err != nil || !ready {
+					return fmt.Errorf("verify pre-gate launcher exit: %w", errOr(err, errors.New("pidfd is not ready")))
+				}
+				launcherSeen = true
+			}
+			if !launcherSeen {
+				return errors.New("pre-gate no-target proof lacks its retained exact root launcher")
+			}
+			run.noMigrationProven = true
+			return nil
+		}
+		if fence.UntrustedProcess == nil || run.gateReleaseAuthorized || fence.ReleaseAttempted || fence.Released {
+			return nil
+		}
+		untrusted, exists := run.children[fence.UntrustedProcess.PID]
+		if !exists || !untrusted.identity.Equal(*fence.UntrustedProcess) || untrusted.role != "descendant" ||
+			!untrusted.creator.Equal(run.helper) || untrusted.pidfd == nil ||
+			untrusted.classification.ValidateFor(run.grant, run.helper, untrusted.identity) != nil ||
+			untrusted.classification.Origin != linuxOwnerAnchorRunChildOriginRegisteredCurrent {
+			return errors.New("pre-gate failed-Prepare migration premise lacks its exact retained A child")
+		}
+		if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(untrusted.pidfd.Fd()), untrusted.identity); err != nil {
+			return fmt.Errorf("verify failed-Prepare child pidfd for no-migration proof: %w", err)
+		}
+		if err := verifyLinuxOwnerRunChildCredentials(untrusted.identity.PID, "gate", run.owner); err != nil {
+			return fmt.Errorf("verify failed-Prepare child remains host A: %w", err)
+		}
+		if !run.migrationObserved {
+			if err := verifyLinuxOwnerRunChildMembership(untrusted.identity.PID, "descendant", run.grant, run.leaf); err != nil {
+				return err
+			}
+		}
+		launcherSeen, untrustedSeen := false, false
+		for _, child := range run.children {
+			switch child.role {
+			case "launcher":
+				if !child.identity.Equal(*fence.Launcher) || child.pidfd == nil ||
+					child.classification.ValidateFor(run.grant, run.helper, child.identity) != nil ||
+					child.classification.Origin != linuxOwnerAnchorRunChildOriginRegisteredCurrent {
+					return errors.New("pre-gate failed-Prepare proof contains an unbound root launcher")
+				}
+				launcherSeen = true
+			case "descendant":
+				if !child.identity.Equal(*fence.UntrustedProcess) || !child.creator.Equal(run.helper) ||
+					child.pidfd == nil || child.classification.ValidateFor(run.grant, run.helper, child.identity) != nil ||
+					child.classification.Origin != linuxOwnerAnchorRunChildOriginRegisteredCurrent {
+					return errors.New("pre-gate failed-Prepare proof contains an unbound helper descendant")
+				}
+				untrustedSeen = true
+			default:
+				return errors.New("pre-gate failed-Prepare proof contains a gate or native process")
+			}
+		}
+		if !launcherSeen || !untrustedSeen {
+			return errors.New("pre-gate failed-Prepare proof lacks its exact producer set")
+		}
+		run.noMigrationProven = true
+		return nil
+	}
+	if run.gateIdentity.Validate() != nil || !run.gateIdentity.TrustedImage || !run.gateIdentity.BornInLeaf ||
+		!run.gateIdentity.Cgroup.Equal(run.grant.Leaf) || !run.gateReadyAuthenticated || run.gateImageFD == nil {
+		return errors.New("whole-leaf kill lacks the exact authenticated GateReady/image proof")
+	}
+	if err := run.verifyPinnedGateUserNamespace(); err != nil {
+		return err
+	}
+	parentNamespace, err := linuxOwnerAnchorUserNamespaceParentIdentity(run.gateUserNamespaceFD)
+	if err != nil || parentNamespace != anchor.userNamespace {
+		return fmt.Errorf("verify exact gate user-namespace parent before cgroup.kill: %w", errOr(err, errors.New("parent namespace differs")))
+	}
+	var gateImageStat unix.Stat_t
+	if err := unix.Fstat(int(run.gateImageFD.Fd()), &gateImageStat); err != nil ||
+		gateImageStat.Mode&unix.S_IFMT != unix.S_IFREG || gateImageStat.Uid != 0 || gateImageStat.Gid != 0 ||
+		gateImageStat.Mode&0022 != 0 || gateImageStat.Mode&0111 == 0 || gateImageStat.Nlink != 1 {
+		return fmt.Errorf("verify exact pinned gate image before cgroup.kill: %w", errOr(err, errors.New("root-owned image identity differs")))
+	}
+	if fence != nil {
+		if fence.Gate == nil || !fence.Gate.Equal(*run.gateIdentity) || fence.UserNamespace == nil ||
+			*fence.UserNamespace != run.gateUserNamespace || fence.ValidateFor(run.grant, run.helper) != nil {
+			return errors.New("normal StopLeaf migration premise differs from the exact helper GateReady fence")
+		}
+	}
+	// The pinned trusted static gate passed its inherited-FD census before
+	// GateReady, then enforced the fixed four-rights RELEASE allowlist, B-only
+	// maps, no-new-privileges, and zero host capabilities before exec. The
+	// Anchor rechecks B credentials/namespace and every present leaf member
+	// above. No kernel snapshot can exclude an arbitrary concurrent UID-A
+	// cgroup.procs migration; this proof depends on the provisioned trusted-A
+	// birth-only placement contract. Any future A migration API must serialize
+	// through this Anchor and record source/destination before its effect.
+	run.noMigrationProven = true
+	return nil
+}
+
+func validateLinuxOwnerAnchorCreatorChain(ctx context.Context, run *linuxOwnerAnchorRun, child linuxOwnerAnchorTrackedProcess) error {
+	if ctx == nil || run == nil || run.grant.Validate() != nil || run.helper.Validate() != nil || child.identity.Validate() != nil ||
+		child.creator.Validate() != nil || child.pidfd == nil || !linuxOwnerAnchorValidChildRole(child.role) ||
+		child.classification.ValidateFor(run.grant, run.helper, child.identity) != nil ||
+		child.classification.Origin != linuxOwnerAnchorRunChildOriginRegisteredCurrent || child.classification.Role != child.role {
+		return errors.New("RunKey creator chain has incomplete process identities")
+	}
+	current := child
+	var visited [linuxOwnerAnchorMaxCreatorChainDepth]int
+	visitedCount := 0
+	for step := 0; step < linuxOwnerAnchorMaxCreatorChainDepth; step++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		for index := 0; index < visitedCount; index++ {
+			if visited[index] == current.identity.PID {
+				return errors.New("RunKey child creator ancestry contains a cycle")
+			}
+		}
+		visited[visitedCount] = current.identity.PID
+		visitedCount++
+		if current.creator.Equal(run.helper) {
+			if run.helperExit != nil {
+				if !run.helperExit.ValidFor(run.helper, run.grant.Anchor) {
+					return errors.New("RunKey helper creator exit differs from its exact anchor wait")
+				}
+				return nil
+			}
+			if run.helperPIDFD == nil {
+				return errors.New("live RunKey helper creator has no retained pidfd")
+			}
+			ready, err := linuxOwnerAnchorPIDFDReady(run.helperPIDFD)
+			if err != nil || ready {
+				return fmt.Errorf("verify live RunKey helper creator: %w", errOr(err, errors.New("pidfd is not live")))
+			}
+			if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(run.helperPIDFD.Fd()), run.helper); err != nil {
+				return fmt.Errorf("verify live RunKey helper creator pidfd: %w", err)
+			}
+			if err := verifyLinuxOwnerAProcess(run.helper.PID, run.helper.Identity, run.owner.AUID, run.owner.AGID,
+				run.grant.Anchor.PID, run.grant.Parent.Path); err != nil {
+				return fmt.Errorf("verify live RunKey helper creator ancestry: %w", err)
+			}
+			return nil
+		}
+		parent, exists := run.children[current.creator.PID]
+		if !exists || !parent.identity.Equal(current.creator) || !linuxOwnerAnchorValidChildRole(parent.role) {
+			return errors.New("RunKey child creator is not the exact retained parent identity")
+		}
+		if evidence, reaped := run.reaped[parent.identity.PID]; reaped {
+			if !evidence.Process.Equal(parent.identity) || evidence.ValidateFor(run.grant, run.helper, parent.identity, parent.role) != nil {
+				return errors.New("RunKey child creator has invalid exact anchor wait/reap evidence")
+			}
+		} else {
+			if parent.pidfd == nil {
+				return errors.New("unreaped RunKey child creator has no retained exact pidfd")
+			}
+			ready, err := linuxOwnerAnchorPIDFDReady(parent.pidfd)
+			if err != nil {
+				return fmt.Errorf("poll retained RunKey child creator pidfd: %w", err)
+			}
+			if ready {
+				// The retained pidfd and stored creator identity remain the exact
+				// historical edge even if the parent has exited and been reaped
+				// outside the anchor's wait domain.
+				flags, err := unix.FcntlInt(parent.pidfd.Fd(), unix.F_GETFD, 0)
+				if err != nil || flags&unix.FD_CLOEXEC == 0 {
+					return errors.Join(errors.New("exited RunKey child creator pidfd is not a retained close-on-exec descriptor"), err)
+				}
+			} else {
+				if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(parent.pidfd.Fd()), parent.identity); err != nil {
+					return fmt.Errorf("verify live RunKey child creator pidfd: %w", err)
+				}
+				if identity, err := ProcessIdentity(parent.identity.PID); err != nil || identity != parent.identity.Identity {
+					return fmt.Errorf("verify live RunKey child creator identity: %w", errOr(err, errors.New("creation identity differs")))
+				}
+				if err := verifyLinuxOwnerRunChildCredentials(parent.identity.PID, parent.role, run.owner); err != nil {
+					return fmt.Errorf("verify live RunKey child creator credentials: %w", err)
+				}
+				if !run.leafRemovedObserved {
+					if err := verifyLinuxOwnerRunChildMembership(parent.identity.PID, parent.role, run.grant, run.leaf); err != nil {
+						return fmt.Errorf("verify live RunKey child creator membership: %w", err)
+					}
+				}
+			}
+		}
+		current = parent
+	}
+	return errors.New("RunKey child creator ancestry exceeds its bounded depth")
+}
+
+func (anchor *linuxOwnerAnchor) stopRunLeaf(
+	ctx context.Context,
+	run *linuxOwnerAnchorRun,
+	fence *LinuxOwnerAnchorProducerFence,
+) (LinuxOwnerAnchorStopEvidence, error) {
+	if anchor == nil || ctx == nil || run == nil || run.retired || run.leaf == nil || run.helperPIDFD == nil || run.grant.Validate() != nil {
+		return LinuxOwnerAnchorStopEvidence{}, ErrLinuxCgroupV2Unresolved
+	}
+	if err := ctx.Err(); err != nil {
+		return LinuxOwnerAnchorStopEvidence{}, err
+	}
+	preWriteRetry := run.stopLeafAttempted && !run.leafKillAttempted && !run.leafKillAcknowledged && !run.leafKillCallStarted
+	if fence != nil && (!run.stopLeafAttempted || preWriteRetry) {
+		if err := anchor.verifyStopProducerFence(ctx, run, *fence); err != nil {
+			return LinuxOwnerAnchorStopEvidence{}, err
+		}
+	} else if fence == nil && (run.helperExit == nil || !run.helperExit.ValidFor(run.helper, anchor.identity)) {
+		return LinuxOwnerAnchorStopEvidence{}, errors.New("anchor takeover StopLeaf lacks exact helper exit/reap evidence")
+	}
+	if run.stopLeafAttempted {
+		cached, err := run.cachedStopLeaf(fence)
+		if err != nil {
+			if run.leafKillAttempted && !run.leafKillAcknowledged {
+				if emptyErr := run.leaf.WaitEmpty(ctx); emptyErr == nil {
+					run.leafEmptyObserved = true
+				}
+			}
+			return LinuxOwnerAnchorStopEvidence{}, err
+		}
+		if cached != nil {
+			if err := anchor.remeasureStopLeaf(ctx, run); err != nil {
+				return LinuxOwnerAnchorStopEvidence{}, err
+			}
+			return *cached, nil
+		}
+		if preWriteRetry {
+			if fence == nil {
+				if err := anchor.fenceRunLaunchers(ctx, run); err != nil {
+					return LinuxOwnerAnchorStopEvidence{}, err
+				}
+			}
+			if err := anchor.verifyNoForeignRunProcessInLeaf(ctx, run); err != nil {
+				return LinuxOwnerAnchorStopEvidence{}, err
+			}
+			if err := anchor.establishRunNoMigrationProof(ctx, run, fence); err != nil {
+				return LinuxOwnerAnchorStopEvidence{}, err
+			}
+		}
+	} else {
+		if fence == nil {
+			if err := anchor.verifyNoUnknownRunProducer(ctx, run); err != nil {
+				return LinuxOwnerAnchorStopEvidence{}, err
+			}
+		}
+		if err := anchor.verifyNoForeignRunProcessInLeaf(ctx, run); err != nil {
+			return LinuxOwnerAnchorStopEvidence{}, err
+		}
+		if err := anchor.establishRunNoMigrationProof(ctx, run, fence); err != nil {
+			return LinuxOwnerAnchorStopEvidence{}, err
+		}
+		if err := ctx.Err(); err != nil {
+			return LinuxOwnerAnchorStopEvidence{}, err
+		}
+		run.stopLeafAttempted = true
+		run.stopRequested = true
+		if fence != nil {
+			copy := fence.Clone()
+			run.stopFence = &copy
+		}
+	}
+	if !run.leafKillAcknowledged {
+		if run.leafKillAttempted {
+			return LinuxOwnerAnchorStopEvidence{}, errors.New("previous cgroup.kill write result is unknown; no retry is permitted")
+		}
+		if err := run.leaf.VerifyKillControl(); err != nil {
+			return LinuxOwnerAnchorStopEvidence{}, fmt.Errorf("verify exact cgroup.kill control before one-use StopLeaf: %w", err)
+		}
+		if err := run.writeCgroupKillOnce(ctx, run.leaf.Kill); err != nil {
+			if run.leafKillAttempted {
+				if emptyErr := run.leaf.WaitEmpty(ctx); emptyErr == nil {
+					run.leafEmptyObserved = true
+				}
+			}
+			return LinuxOwnerAnchorStopEvidence{}, fmt.Errorf("anchor cgroup.kill attempt is not positively acknowledged and cannot be replayed: %w", err)
+		}
+	}
+	if err := run.leaf.WaitEmpty(ctx); err != nil {
+		return LinuxOwnerAnchorStopEvidence{}, fmt.Errorf("wait for exact recursive leaf empty after anchor cgroup.kill: %w", err)
+	}
+	run.leafEmptyObserved = true
+	if _, err := linuxOwnerAnchorPinnedLeafPresent(run); err != nil {
+		return LinuxOwnerAnchorStopEvidence{}, fmt.Errorf("remeasure exact pinned leaf after anchor cgroup.kill: %w", err)
+	}
+	evidence := makeLinuxOwnerAnchorStopEvidence(run, anchor.identity)
+	if err := evidence.ValidateFor(run.grant, run.helper, anchor.identity, nil, false, run.gateUserNamespaceFD); err != nil {
+		return LinuxOwnerAnchorStopEvidence{}, err
+	}
+	copy := evidence.Clone()
+	run.stopEvidence = &copy
+	return evidence, nil
+}
+
+func (run *linuxOwnerAnchorRun) writeCgroupKillOnce(ctx context.Context, write func(context.Context) error) error {
+	if ctx == nil || write == nil || run == nil {
+		return errors.Join(errLinuxCgroupKillWriteNotAttempted, errors.New("anchor cgroup.kill operation is incomplete"))
+	}
+	if run.leafKillAcknowledged {
+		return nil
+	}
+	if run.leafKillCallStarted {
+		if run.leafKillAttempted {
+			return errors.New("anchor cgroup.kill write outcome is unknown and cannot be replayed")
+		}
+		return errors.New("anchor cgroup.kill call was already attempted and cannot be replayed")
+	}
+	run.leafKillCallStarted = true
+	err := write(ctx)
+	if err != nil {
+		if errors.Is(err, errLinuxCgroupKillWriteNotAttempted) {
+			run.leafKillCallStarted = false
+		} else {
+			run.leafKillAttempted = true
+		}
+		return err
+	}
+	run.leafKillAttempted = true
+	run.leafKillAcknowledged = true
+	return nil
+}
+
+func (run *linuxOwnerAnchorRun) cachedStopLeaf(fence *LinuxOwnerAnchorProducerFence) (*LinuxOwnerAnchorStopEvidence, error) {
+	if run == nil || !run.stopLeafAttempted {
+		return nil, errors.New("anchor StopLeaf cache lookup has no recorded one-use attempt")
+	}
+	if fence != nil && (run.stopFence == nil || !run.stopFence.Equal(*fence)) {
+		return nil, errors.New("StopLeaf replay differs from its exact one-use producer fence")
+	}
+	if run.stopEvidence != nil {
+		if !run.leafKillAttempted || !run.leafKillAcknowledged {
+			return nil, errors.New("cached anchor StopLeaf evidence lacks a positive write acknowledgement")
+		}
+		copy := run.stopEvidence.Clone()
+		return &copy, nil
+	}
+	if !run.leafKillAcknowledged {
+		if run.leafKillAttempted {
+			return nil, errors.New("prior anchor cgroup.kill write result is unknown; no retry is permitted")
+		}
+		if run.leafKillCallStarted {
+			return nil, errors.New("anchor cgroup.kill write attempt is still unresolved")
+		}
+		// No syscall was attempted. The caller must repeat the exact producer
+		// fence or takeover scan before the first physical write.
+		return nil, nil
+	}
+	return nil, nil
+}
+
+func (anchor *linuxOwnerAnchor) fenceRunLaunchers(ctx context.Context, run *linuxOwnerAnchorRun) error {
+	if anchor == nil || ctx == nil || run == nil || run.helperExit == nil || !run.helperExit.ValidFor(run.helper, anchor.identity) {
+		return errors.New("anchor launcher fencing requires exact helper exit/reap evidence")
+	}
+	for _, child := range run.children {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if child.role != "launcher" {
+			continue
+		}
+		if child.pidfd == nil {
+			return errors.New("registered root launcher lacks its exact pidfd during anchor takeover")
+		}
+		ready, err := linuxOwnerAnchorPIDFDReady(child.pidfd)
+		if err != nil {
+			return fmt.Errorf("poll exact root launcher before takeover: %w", err)
+		}
+		if ready {
+			continue
+		}
+		if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(child.pidfd.Fd()), child.identity); err != nil {
+			return fmt.Errorf("verify live root launcher before takeover: %w", err)
+		}
+		if err := unix.PidfdSendSignal(int(child.pidfd.Fd()), unix.SIGKILL, nil, 0); err != nil && !errors.Is(err, unix.ESRCH) {
+			return fmt.Errorf("signal exact root launcher during takeover: %w", err)
+		}
+		if err := waitLinuxOwnerAnchorPIDFDReady(ctx, child.pidfd); err != nil {
+			return fmt.Errorf("wait for exact root launcher fence during takeover: %w", err)
+		}
+	}
+	return anchor.verifyNoUnknownRunProducer(ctx, run)
+}
+
+func waitLinuxOwnerAnchorPIDFDReady(ctx context.Context, pidfd *os.File) error {
+	if ctx == nil || pidfd == nil {
+		return errors.New("wait for exact process pidfd requires a live context and pidfd")
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		ready, err := linuxOwnerAnchorPIDFDReady(pidfd)
+		if err != nil || ready {
+			return err
+		}
+		timer := time.NewTimer(linuxOwnerAnchorWaitPoll)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (anchor *linuxOwnerAnchor) remeasureStopLeaf(ctx context.Context, run *linuxOwnerAnchorRun) error {
+	if anchor == nil || ctx == nil || run == nil || run.stopEvidence == nil || run.leaf == nil ||
+		!run.leafKillAttempted || !run.leafKillAcknowledged || !run.stopEvidence.KillAcknowledged || run.migrationObserved {
+		return errors.New("anchor StopLeaf replay lacks a cached positive cgroup.kill acknowledgement")
+	}
+	if err := verifyLinuxOwnerAnchorStopEvidenceNamespacePin(*run.stopEvidence, run.gateUserNamespaceFD); err != nil {
+		return err
+	}
+	if run.stopEvidence.Gate != nil {
+		if err := run.verifyPinnedGateUserNamespace(); err != nil {
+			return err
+		}
+	}
+	present, err := linuxOwnerAnchorPinnedLeafPresent(run)
+	if err != nil {
+		return fmt.Errorf("remeasure exact pinned leaf identity on StopLeaf replay: %w", err)
+	}
+	if present {
+		if err := run.leaf.WaitEmpty(ctx); err != nil {
+			return fmt.Errorf("remeasure recursive empty leaf on StopLeaf replay: %w", err)
+		}
+	}
+	// linuxOwnerAnchorPinnedLeafPresent treats exact absence under the retained
+	// parent FD as rmdir-backed emptiness; it also checks the detached FD's
+	// populated state when that kernel observation remains available.
+	return nil
+}
+
+func (anchor *linuxOwnerAnchor) finalizeRunStopEvidence(
+	ctx context.Context,
+	run *linuxOwnerAnchorRun,
+	processes []LinuxOwnerAnchorReapEvidence,
+) (LinuxOwnerAnchorStopEvidence, error) {
+	if anchor == nil || ctx == nil || run == nil || run.stopEvidence == nil || run.helperExit == nil ||
+		!run.helperExit.ValidFor(run.helper, anchor.identity) || run.migrationObserved {
+		return LinuxOwnerAnchorStopEvidence{}, errors.New("anchor run stop proof lacks the exact helper wait/reap and cached kill")
+	}
+	if err := anchor.remeasureStopLeaf(ctx, run); err != nil {
+		return LinuxOwnerAnchorStopEvidence{}, fmt.Errorf("recheck cached anchor kill/empty proof before run-reap response: %w", err)
+	}
+	evidence := run.stopEvidence.Clone()
+	helperExit := *cloneLinuxOwnerAnchorExitProof(run.helperExit)
+	evidence.HelperExit = &helperExit
+	evidence.DescendantsReaped = true
+	evidence.ReapCount = uint64(len(processes))
+	encoded, err := json.Marshal(processes)
+	if err != nil {
+		return LinuxOwnerAnchorStopEvidence{}, fmt.Errorf("encode exact anchor run reaps: %w", err)
+	}
+	digest := sha256.Sum256(encoded)
+	evidence.ReapDigest = hex.EncodeToString(digest[:])
+	if err := evidence.ValidateFor(run.grant, run.helper, anchor.identity, processes, true, run.gateUserNamespaceFD); err != nil {
+		return LinuxOwnerAnchorStopEvidence{}, err
+	}
+	run.stopEvidence = new(LinuxOwnerAnchorStopEvidence)
+	*run.stopEvidence = evidence.Clone()
+	return evidence, nil
+}
+
+func makeLinuxOwnerAnchorStopEvidence(run *linuxOwnerAnchorRun, anchor authority.LinuxCgroupProcessIdentity) LinuxOwnerAnchorStopEvidence {
+	evidence := LinuxOwnerAnchorStopEvidence{
+		Version: linuxOwnerAnchorStopEvidenceVersion, RunKey: run.grant.RunKey, Fence: run.grant.Fence,
+		LaunchToken: run.grant.LaunchToken, Parent: run.grant.Parent, Leaf: run.grant.Leaf,
+		Anchor: anchor, Helper: run.helper, PinnedLeafFD: true, KillAttempted: run.leafKillAttempted,
+		KillAcknowledged: run.leafKillAcknowledged, CgroupPopulatedZero: run.leafEmptyObserved,
+		NoMigrationObserved: run.noMigrationProven && !run.migrationObserved, ProducerFenced: true,
+		GateReleaseAuthorized: run.gateReleaseAuthorized,
+	}
+	if run.stopFence != nil {
+		fence := run.stopFence.Clone()
+		evidence.ProducerFence = &fence
+		evidence.Launcher = cloneLinuxOwnerProcessIdentity(fence.Launcher)
+		evidence.Gate = cloneLinuxOwnerGateIdentity(fence.Gate)
+		evidence.UntrustedProcess = cloneLinuxOwnerProcessIdentity(fence.UntrustedProcess)
+		if fence.UserNamespace != nil {
+			copy := *fence.UserNamespace
+			evidence.UserNamespace = &copy
+		}
+		if fence.GateOutcome != nil {
+			copy := *fence.GateOutcome
+			evidence.GateOutcome = &copy
+		}
+	} else {
+		evidence.HelperExit = cloneLinuxOwnerAnchorExitProof(run.helperExit)
+		if run.gateIdentity != nil {
+			gate := *run.gateIdentity
+			evidence.Gate = &gate
+			userNamespace := run.gateUserNamespace
+			evidence.UserNamespace = &userNamespace
+		}
+		for _, child := range run.children {
+			if child.role == "launcher" {
+				launcher := child.identity
+				evidence.Launcher = &launcher
+				break
+			}
+		}
+	}
+	return evidence
 }
 
 func (anchor *linuxOwnerAnchor) forceStopRunForShutdown(ctx context.Context, run *linuxOwnerAnchorRun) error {
 	if ctx == nil || run == nil || run.leaf == nil || run.helperPIDFD == nil || run.grant.Validate() != nil {
 		return ErrLinuxCgroupV2Unresolved
 	}
-	var helperSignalErr error
-	var helperWaitErr error
 	if run.helperExit == nil {
+		var signalErr error
 		if err := unix.PidfdSendSignal(int(run.helperPIDFD.Fd()), unix.SIGKILL, nil, 0); err != nil && !errors.Is(err, unix.ESRCH) {
-			helperSignalErr = fmt.Errorf("signal exact helper during bounded anchor shutdown: %w", err)
+			signalErr = fmt.Errorf("signal exact helper during bounded anchor shutdown: %w", err)
 		}
 		if err := run.waitHelper(ctx); err != nil {
-			helperWaitErr = fmt.Errorf("wait/reap exact helper during bounded anchor shutdown: %w", err)
+			return errors.Join(signalErr, fmt.Errorf("wait/reap exact helper during bounded anchor shutdown: %w", err))
 		}
 	}
-	var launcherSignalErr error
-	for _, child := range run.children {
-		if child.role != "launcher" || child.pidfd == nil {
-			continue
-		}
-		if err := unix.PidfdSendSignal(int(child.pidfd.Fd()), unix.SIGKILL, nil, 0); err != nil && !errors.Is(err, unix.ESRCH) {
-			launcherSignalErr = errors.Join(launcherSignalErr, fmt.Errorf("fence exact root launcher during anchor shutdown: %w", err))
-		}
+	if err := anchor.fenceRunLaunchers(ctx, run); err != nil {
+		return fmt.Errorf("fence exact run launcher before anchor-owned cgroup.kill: %w", err)
 	}
-	present, err := linuxOwnerAnchorPinnedLeafPresent(run)
+	stopContext, cancel := context.WithTimeout(ctx, linuxOwnerAnchorWaitTimeout)
+	_, stopErr := anchor.stopRunLeaf(stopContext, run, nil)
+	cancel()
+	if stopErr != nil {
+		var reapErr error
+		if run.leafEmptyObserved && run.helperExit != nil {
+			_, reapErr = anchor.reapRunChildren(ctx, run)
+		}
+		return errors.Join(fmt.Errorf("anchor-owned cgroup.kill/empty evidence is unresolved: %w", stopErr), reapErr)
+	}
+	processes, err := anchor.reapRunChildren(ctx, run)
 	if err != nil {
-		return errors.Join(helperSignalErr, fmt.Errorf("verify exact pinned leaf during anchor shutdown: %w", err))
+		return fmt.Errorf("reap exact adopted run children after anchor-owned cgroup.kill: %w", err)
 	}
-	if !present {
-		run.leafRemovedObserved = true
-		run.leafEmptyObserved = true
-	} else if !run.leafEmptyObserved {
-		leafContext, cancel := context.WithTimeout(context.Background(), linuxOwnerAnchorWaitTimeout)
-		defer cancel()
-		if !run.leafKillAcknowledged {
-			if run.leafKillAttempted {
-				if err := run.leaf.WaitEmpty(leafContext); err != nil {
-					return errors.Join(helperSignalErr, helperWaitErr, fmt.Errorf("unknown prior exact cgroup.kill result remains populated during anchor shutdown: %w", err))
-				}
-				run.leafEmptyObserved = true
-			} else {
-				if err := run.leaf.VerifyKillControl(); err != nil {
-					return errors.Join(helperSignalErr, helperWaitErr, fmt.Errorf("verify exact cgroup kill control during anchor shutdown: %w", err))
-				}
-				if err := run.leaf.Kill(leafContext); err != nil {
-					if errors.Is(err, errLinuxCgroupKillWriteNotAttempted) {
-						return errors.Join(helperSignalErr, helperWaitErr, fmt.Errorf("exact cgroup.kill was not written during anchor shutdown: %w", err))
-					}
-					run.leafKillAttempted = true
-					if emptyErr := run.leaf.WaitEmpty(leafContext); emptyErr != nil {
-						return errors.Join(helperSignalErr, helperWaitErr, fmt.Errorf("cgroup.kill result is unknown during anchor shutdown: %w", err), emptyErr)
-					}
-					run.leafEmptyObserved = true
-				} else {
-					run.leafKillAttempted = true
-					run.leafKillAcknowledged = true
-				}
-			}
-		}
-		if !run.leafEmptyObserved {
-			if err := run.leaf.WaitEmpty(leafContext); err != nil {
-				return errors.Join(helperSignalErr, helperWaitErr, fmt.Errorf("wait for exact run leaf empty during anchor shutdown: %w", err))
-			}
-			run.leafEmptyObserved = true
-		}
+	finalEvidence, err := anchor.finalizeRunStopEvidence(ctx, run, processes)
+	if err != nil {
+		return fmt.Errorf("finalize exact anchor stop/reap evidence: %w", err)
 	}
-	if run.helperExit == nil {
-		return errors.Join(helperSignalErr, helperWaitErr, errors.New("anchor cannot reap run children without exact helper wait/reap proof"))
-	}
-	if _, err := anchor.reapRunChildren(ctx, run); err != nil {
-		return errors.Join(helperSignalErr, helperWaitErr, launcherSignalErr, fmt.Errorf("reap exact adopted run children during anchor shutdown: %w", err))
+	if err := finalEvidence.ValidateFor(run.grant, run.helper, anchor.identity, processes, true, run.gateUserNamespaceFD); err != nil {
+		return fmt.Errorf("validate final anchor stop/reap evidence: %w", err)
 	}
 	return nil
 }
 
-func (anchor *linuxOwnerAnchor) serveConnection(connection *net.UnixConn) {
+func (anchor *linuxOwnerAnchor) serveConnection(connection *net.UnixConn) (detached bool) {
+	defer func() {
+		if !detached {
+			_ = connection.Close()
+		}
+	}()
 	if err := connection.SetDeadline(time.Now().Add(linuxOwnerAnchorRequestTimeout)); err != nil {
 		return
 	}
@@ -1245,7 +3444,21 @@ func (anchor *linuxOwnerAnchor) serveConnection(connection *net.UnixConn) {
 	if request.Version != linuxOwnerAnchorProtocolVersion || request.ClientPID != peer.PID || request.ClientIdentity != peer.Identity {
 		return
 	}
-	if anchor.stopping && (request.Operation == "identity" || request.Operation == linuxOwnerAnchorOperationStart || request.Operation == "register-process") {
+	if request.Operation != linuxOwnerAnchorOperationCloneCleanup &&
+		(request.CloneGrant != nil || request.Cleanup != nil || request.TargetFDPresent) {
+		return
+	}
+	gateOperation := request.Operation == linuxOwnerAnchorOperationRegisterGate || request.Operation == linuxOwnerAnchorOperationAuthorizeGate
+	stopLeafOperation := request.Operation == linuxOwnerAnchorOperationStopLeaf
+	classifyChildOperation := request.Operation == linuxOwnerAnchorOperationClassifyChild
+	if !gateOperation && (request.Gate != nil || request.UserNamespace != nil) {
+		return
+	}
+	if !stopLeafOperation && request.StopFence != nil {
+		return
+	}
+	if anchor.stopping && (request.Operation == "identity" || request.Operation == linuxOwnerAnchorOperationStart ||
+		request.Operation == "register-process" || gateOperation || stopLeafOperation || classifyChildOperation) {
 		anchor.writeResponse(connection, request, "anchor_stopping", nil, nil)
 		return
 	}
@@ -1254,7 +3467,7 @@ func (anchor *linuxOwnerAnchor) serveConnection(connection *net.UnixConn) {
 			return
 		}
 		if len(receivedFDs) != 0 || request.Grant != (LinuxOwnerAnchorGrant{}) || request.Helper != nil || request.Creator != nil || request.Process != nil || request.Role != "" ||
-			request.ReleaseProof != nil || request.PreGateReleaseProof != nil || request.AbortProof != nil ||
+			request.ReleaseProof != nil || request.PreGateReleaseProof != nil || request.AbortProof != nil || request.CloneGrant != nil || request.Cleanup != nil || request.TargetFDPresent ||
 			request.RunKey != (LinuxOwnerAnchorRunKey{}) || request.Fence != (protocol.Fence{}) {
 			return
 		}
@@ -1295,13 +3508,17 @@ func (anchor *linuxOwnerAnchor) serveConnection(connection *net.UnixConn) {
 		}
 		return
 	}
+	if request.Operation == linuxOwnerAnchorOperationCloneCleanup {
+		detached = anchor.serveCloneCleanup(connection, peer, request, receivedFDs)
+		return
+	}
 	if request.Grant.Validate() != nil || request.Grant.OwnerUID != anchor.owner.AUID || request.Grant.LauncherUID != 0 ||
 		!request.Grant.Anchor.Equal(anchor.identity) ||
 		!request.Grant.Parent.Equal(anchor.parent.Identity()) {
 		return
 	}
 	helperPeer := false
-	if request.Operation == "register-process" && request.Helper != nil {
+	if (request.Operation == "register-process" || gateOperation || stopLeafOperation || classifyChildOperation) && request.Helper != nil {
 		run := anchor.runs[request.Grant.RunKey]
 		helperPeer = run != nil && run.grant.Equal(request.Grant) && run.helper.Equal(*request.Helper) &&
 			peer.PID == run.helper.PID && peer.Identity == run.helper.Identity
@@ -1312,6 +3529,9 @@ func (anchor *linuxOwnerAnchor) serveConnection(connection *net.UnixConn) {
 	operationTimeout := linuxOwnerAnchorRequestTimeout
 	if request.Operation == "wait-reap" || request.Operation == linuxOwnerAnchorOperationReapRun ||
 		request.Operation == linuxOwnerAnchorOperationWaitHelper || request.Operation == linuxOwnerAnchorOperationLookup {
+		operationTimeout = linuxOwnerAnchorWaitTimeout
+	}
+	if stopLeafOperation || classifyChildOperation {
 		operationTimeout = linuxOwnerAnchorWaitTimeout
 	}
 	if err := connection.SetDeadline(time.Now().Add(operationTimeout)); err != nil {
@@ -1348,16 +3568,26 @@ func (anchor *linuxOwnerAnchor) serveConnection(connection *net.UnixConn) {
 			anchor.writeResponse(connection, request, "already_started", &existing.helper, nil)
 			return
 		}
-		// Retain the RunKey tombstone before the first fork. An uncertain launch
-		// response can never cause this anchor to create a second child.
-		anchor.runs[request.Grant.RunKey] = nil
+		var witnessForRun *linuxOwnerAnchorWitnessConfig
+		if anchor.witness != nil && anchor.witness.RunID == request.Grant.RunKey.RunID &&
+			anchor.witness.Generation == request.Grant.RunKey.Generation {
+			copy := *anchor.witness
+			witnessForRun = &copy
+		}
 		ownerProcess := authority.LinuxCgroupProcessIdentity{PID: peer.PID, Identity: peer.Identity}
-		run, err := startLinuxOwnerAnchorHelperV2(anchor, request.Grant, ownerProcess, receivedFDs[0], receivedFDs[1])
+		beforeFork := func() error { return anchor.recordHelperForkMayStart(request.Grant.RunKey) }
+		run, err := startLinuxOwnerAnchorHelperV2(
+			anchor, request.Grant, ownerProcess, receivedFDs[0], receivedFDs[1], witnessForRun, beforeFork,
+		)
 		if run != nil {
 			anchor.runs[request.Grant.RunKey] = run
 		}
-		if err != nil {
-			anchor.writeResponse(connection, request, "start_unresolved", nil, nil)
+		if err != nil || run == nil {
+			status := "request_rejected"
+			if _, forkMayHaveOccurred := anchor.runs[request.Grant.RunKey]; forkMayHaveOccurred {
+				status = "start_unresolved"
+			}
+			anchor.writeResponse(connection, request, status, nil, nil)
 			return
 		}
 		helperFD, err := unix.FcntlInt(run.helperPIDFD.Fd(), unix.F_DUPFD_CLOEXEC, 0)
@@ -1474,7 +3704,9 @@ func (anchor *linuxOwnerAnchor) serveConnection(connection *net.UnixConn) {
 		_ = leafFD.Close()
 		_ = parentFD.Close()
 	case "register-process":
-		if len(receivedFDs) != 1 || request.Helper == nil || request.Creator == nil || request.Process == nil {
+		if len(receivedFDs) != 1 || request.Helper == nil || request.Creator == nil || request.Process == nil ||
+			request.Gate != nil || request.UserNamespace != nil ||
+			(request.Role != "launcher" && request.Role != "native" && request.Role != "descendant") {
 			return
 		}
 		run := anchor.runs[request.Grant.RunKey]
@@ -1487,6 +3719,90 @@ func (anchor *linuxOwnerAnchor) serveConnection(connection *net.UnixConn) {
 			return
 		}
 		anchor.writeResponse(connection, request, "registered", nil, nil)
+	case linuxOwnerAnchorOperationClassifyChild:
+		if len(receivedFDs) != 1 || !validLinuxOwnerAnchorChildOriginRequest(request) || !helperPeer {
+			return
+		}
+		run := anchor.runs[request.Grant.RunKey]
+		if run == nil || !run.grant.Equal(request.Grant) || !run.helper.Equal(*request.Helper) {
+			anchor.writeResponse(connection, request, "run_unavailable", nil, nil)
+			return
+		}
+		if err := verifyLinuxOwnerAnchorPIDFDIdentity(receivedFDs[0], *request.Process); err != nil {
+			anchor.writeResponseWithChildClassification(connection, request, "origin_unproven", linuxOwnerAnchorUnknownChildClassification(run, *request.Process))
+			return
+		}
+		credentials, err := readLinuxOwnerProcessCredentials(request.Process.PID)
+		if err != nil || credentials.Parent != run.helper.PID {
+			run.migrationObserved = true
+			anchor.writeResponseWithChildClassification(connection, request, "origin_unproven", linuxOwnerAnchorUnknownChildClassification(run, *request.Process))
+			return
+		}
+		classifyContext, cancel := context.WithTimeout(context.Background(), operationTimeout)
+		classification, err := anchor.classifyRunChildOrigin(classifyContext, run, *request.Process, receivedFDs[0])
+		cancel()
+		credentials, parentErr := readLinuxOwnerProcessCredentials(request.Process.PID)
+		if err != nil || parentErr != nil || credentials.Parent != run.helper.PID {
+			run.migrationObserved = true
+			anchor.writeResponseWithChildClassification(connection, request, "origin_unproven", linuxOwnerAnchorUnknownChildClassification(run, *request.Process))
+			return
+		}
+		anchor.writeResponseWithChildClassification(connection, request, "classified", classification)
+	case linuxOwnerAnchorOperationRegisterGate:
+		if len(receivedFDs) != 1 || !validLinuxOwnerAnchorGateRequest(request) || request.Creator != nil || request.Process != nil || request.Role != "" {
+			return
+		}
+		run := anchor.runs[request.Grant.RunKey]
+		if run == nil || !run.grant.Equal(request.Grant) || !run.helper.Equal(*request.Helper) || !helperPeer {
+			anchor.writeResponse(connection, request, "run_unavailable", nil, nil)
+			return
+		}
+		for key, other := range anchor.runs {
+			if key == request.Grant.RunKey || other == nil || other.retired || other.gateUserNamespaceFD == nil {
+				continue
+			}
+			otherNamespace, err := linuxOwnerAnchorUserNamespaceFDIdentity(other.gateUserNamespaceFD)
+			if err != nil || otherNamespace == *request.UserNamespace {
+				anchor.writeResponse(connection, request, "request_rejected", nil, nil)
+				return
+			}
+		}
+		if err := run.registerGate(*request.Gate, *request.UserNamespace, receivedFDs[0], anchor.userNamespaceFD); err != nil {
+			anchor.writeResponse(connection, request, "request_rejected", nil, nil)
+			return
+		}
+		anchor.writeResponse(connection, request, "registered", nil, nil)
+	case linuxOwnerAnchorOperationAuthorizeGate:
+		if len(receivedFDs) != 0 || !validLinuxOwnerAnchorGateRequest(request) || request.Creator != nil || request.Process != nil || request.Role != "" {
+			return
+		}
+		run := anchor.runs[request.Grant.RunKey]
+		if run == nil || !run.grant.Equal(request.Grant) || !run.helper.Equal(*request.Helper) || !helperPeer {
+			anchor.writeResponse(connection, request, "run_unavailable", nil, nil)
+			return
+		}
+		if err := run.authorizeGateRelease(*request.Gate, *request.UserNamespace); err != nil {
+			anchor.writeResponse(connection, request, "request_rejected", nil, nil)
+			return
+		}
+		anchor.writeResponse(connection, request, "release_authorized", nil, nil)
+	case linuxOwnerAnchorOperationStopLeaf:
+		if len(receivedFDs) != 0 || !validLinuxOwnerAnchorStopLeafRequest(request) {
+			return
+		}
+		run := anchor.runs[request.Grant.RunKey]
+		if run == nil || !run.grant.Equal(request.Grant) || !run.helper.Equal(*request.Helper) || !helperPeer {
+			anchor.writeResponse(connection, request, "run_unavailable", nil, nil)
+			return
+		}
+		stopContext, cancel := context.WithTimeout(context.Background(), linuxOwnerAnchorWaitTimeout)
+		stopEvidence, err := anchor.stopRunLeaf(stopContext, run, request.StopFence)
+		cancel()
+		if err != nil {
+			anchor.writeResponse(connection, request, "stop_unproven", nil, nil)
+			return
+		}
+		anchor.writeResponseWithStopEvidence(connection, request, "stopped", stopEvidence)
 	case "wait-reap":
 		if len(receivedFDs) != 0 || request.Helper == nil || request.Creator != nil || request.Process == nil || !linuxOwnerAnchorValidChildRole(request.Role) {
 			return
@@ -1544,9 +3860,15 @@ func (anchor *linuxOwnerAnchor) serveConnection(connection *net.UnixConn) {
 			return
 		}
 		evidence, err := anchor.reapRunChildren(waitContext, run)
+		if err != nil {
+			cancel()
+			anchor.writeResponse(connection, request, "wait_unproven", nil, nil)
+			return
+		}
+		stopEvidence, err := anchor.finalizeRunStopEvidence(waitContext, run, evidence)
 		cancel()
 		if err != nil {
-			anchor.writeResponse(connection, request, "wait_unproven", nil, nil)
+			anchor.writeResponse(connection, request, "stop_unproven", nil, nil)
 			return
 		}
 		filtered := make([]LinuxOwnerAnchorReapEvidence, 0, linuxOwnerAnchorReapPageSize)
@@ -1566,7 +3888,7 @@ func (anchor *linuxOwnerAnchor) serveConnection(connection *net.UnixConn) {
 				}
 			}
 		}
-		anchor.writeResponseWithReapEvidence(connection, request, "reaped", filtered, nextPID, more)
+		anchor.writeResponseWithReapEvidence(connection, request, "reaped", filtered, nextPID, more, stopEvidence)
 	case linuxOwnerAnchorOperationWaitHelper:
 		if len(receivedFDs) != 0 || request.Helper == nil || request.Creator != nil || request.Process != nil || request.Role != "" {
 			return
@@ -1591,14 +3913,258 @@ func (anchor *linuxOwnerAnchor) serveConnection(connection *net.UnixConn) {
 	default:
 		return
 	}
+	return
+}
+
+func (anchor *linuxOwnerAnchor) recordHelperForkMayStart(key LinuxOwnerAnchorRunKey) error {
+	if anchor == nil || anchor.runs == nil || !validLinuxOwnerAnchorRunID(key.RunID) || key.Generation <= 0 {
+		return errors.New("Linux owner anchor pre-fork tombstone identity is invalid")
+	}
+	if _, exists := anchor.runs[key]; exists {
+		return ErrLinuxOwnerAnchorHelperAlreadyStarted
+	}
+	// This callback runs immediately before cmd.Start. Any later uncertain
+	// outcome keeps the tombstone; pre-fork validation failures stay retryable.
+	anchor.runs[key] = nil
+	return nil
+}
+
+func validLinuxOwnerAnchorChildOriginRequest(request linuxOwnerAnchorRequest) bool {
+	return request.Operation == linuxOwnerAnchorOperationClassifyChild && request.Grant.Validate() == nil &&
+		request.Helper != nil && request.Helper.Validate() == nil && request.Process != nil && request.Process.Validate() == nil &&
+		request.Gate == nil && request.UserNamespace == nil && request.StopFence == nil && request.Creator == nil && request.Role == "" &&
+		request.ReleaseProof == nil && request.PreGateReleaseProof == nil && request.AbortProof == nil &&
+		request.RunKey == (LinuxOwnerAnchorRunKey{}) && request.Fence == (protocol.Fence{}) && request.FenceDigest == "" &&
+		request.AfterPID == 0 && request.CloneGrant == nil && request.Cleanup == nil && request.PriorRemovalProof == nil && !request.TargetFDPresent
+}
+
+func linuxOwnerAnchorUnknownChildClassification(run *linuxOwnerAnchorRun, process authority.LinuxCgroupProcessIdentity) linuxOwnerAnchorRunChildClassification {
+	if run == nil {
+		return linuxOwnerAnchorRunChildClassification{}
+	}
+	return linuxOwnerAnchorRunChildClassification{
+		Version: linuxOwnerAnchorRunChildClassificationVersion,
+		RunKey:  run.grant.RunKey, Fence: run.grant.Fence, LaunchToken: run.grant.LaunchToken,
+		Helper: run.helper, Process: process, Origin: linuxOwnerAnchorRunChildOriginUnknown,
+	}
+}
+
+func validLinuxOwnerAnchorGateRequest(request linuxOwnerAnchorRequest) bool {
+	return (request.Operation == linuxOwnerAnchorOperationRegisterGate || request.Operation == linuxOwnerAnchorOperationAuthorizeGate) &&
+		request.Helper != nil && request.Helper.Validate() == nil && request.Gate != nil && request.Gate.Validate() == nil &&
+		request.UserNamespace != nil && request.UserNamespace.valid() && request.Creator == nil && request.Process == nil && request.Role == "" &&
+		request.ReleaseProof == nil && request.PreGateReleaseProof == nil && request.AbortProof == nil &&
+		request.RunKey == (LinuxOwnerAnchorRunKey{}) && request.Fence == (protocol.Fence{}) && request.FenceDigest == "" &&
+		request.AfterPID == 0 && request.CloneGrant == nil && request.Cleanup == nil && request.PriorRemovalProof == nil && !request.TargetFDPresent
+}
+
+func validLinuxOwnerAnchorStopLeafRequest(request linuxOwnerAnchorRequest) bool {
+	return request.Operation == linuxOwnerAnchorOperationStopLeaf && request.Helper != nil && request.Helper.Validate() == nil &&
+		request.StopFence != nil && request.StopFence.ValidateFor(request.Grant, *request.Helper) == nil &&
+		request.Gate == nil && request.UserNamespace == nil && request.Creator == nil && request.Process == nil && request.Role == "" &&
+		request.ReleaseProof == nil && request.PreGateReleaseProof == nil && request.AbortProof == nil &&
+		request.RunKey == (LinuxOwnerAnchorRunKey{}) && request.Fence == (protocol.Fence{}) && request.FenceDigest == "" &&
+		request.AfterPID == 0 && request.CloneGrant == nil && request.Cleanup == nil && request.PriorRemovalProof == nil && !request.TargetFDPresent
+}
+
+// runCloneCleanupAfterStateReadback is called only after the socket request,
+// pinned descriptor, exact intent and optional prior proof pass anchor-side
+// structural checks. State remains authoritative for whether Begin/receipt
+// facts were actually committed; the root worker is unreachable until that
+// pinned readback succeeds.
+func (anchor *linuxOwnerAnchor) runCloneCleanupAfterStateReadback(
+	ctx context.Context,
+	request linuxOwnerAnchorRequest,
+	rootFD, targetFD int,
+	cloneGrant authority.LinuxCloneGrant,
+	cleanup authority.LinuxCloneCleanupIntent,
+	priorRemoval *authority.LinuxCloneTargetRemovalProof,
+) (authority.LinuxCloneTargetRemovalProof, error) {
+	if anchor == nil || ctx == nil || ctx.Err() != nil || request.Operation != linuxOwnerAnchorOperationCloneCleanup ||
+		request.Cleanup == nil || request.CloneGrant == nil || request.RunKey != (LinuxOwnerAnchorRunKey{RunID: cleanup.Intent.RunID, Generation: cleanup.Intent.Generation}) ||
+		request.FenceDigest != cleanup.FenceDigest || !request.Cleanup.Equal(cleanup) || !request.CloneGrant.Equal(cloneGrant) {
+		return authority.LinuxCloneTargetRemovalProof{}, errors.New("Linux owner anchor clone cleanup worker is not bound to its exact request")
+	}
+	if rootFD < 0 || targetFD < -1 || request.TargetFDPresent != (targetFD >= 0) ||
+		(request.TargetFDPresent && priorRemoval != nil) || (!request.TargetFDPresent && priorRemoval == nil) ||
+		(request.PriorRemovalProof == nil) != (priorRemoval == nil) ||
+		request.PriorRemovalProof != nil && !request.PriorRemovalProof.Equal(*priorRemoval) {
+		return authority.LinuxCloneTargetRemovalProof{}, errors.New("Linux owner anchor clone cleanup descriptors differ from the exact prior-removal request")
+	}
+	if anchor.cleanupVerifier == nil {
+		return authority.LinuxCloneTargetRemovalProof{}, errLinuxOwnerAnchorCleanupAuthority
+	}
+	if err := anchor.cleanupVerifier.Verify(
+		request.RunKey.RunID, request.RunKey.Generation, cloneGrant, cleanup, priorRemoval, request.TargetFDPresent,
+	); err != nil {
+		return authority.LinuxCloneTargetRemovalProof{}, errors.Join(errLinuxOwnerAnchorCleanupAuthority, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return authority.LinuxCloneTargetRemovalProof{}, fmt.Errorf("State cleanup readback outlasted its bounded anchor request: %w", err)
+	}
+	if anchor.cloneCleanupWorker == nil {
+		return authority.LinuxCloneTargetRemovalProof{}, errors.New("Linux owner anchor clone cleanup worker is unavailable")
+	}
+	return anchor.cloneCleanupWorker(ctx, rootFD, targetFD, cloneGrant, cleanup, priorRemoval)
+}
+
+func (anchor *linuxOwnerAnchor) serveCloneCleanup(
+	connection *net.UnixConn,
+	peer linuxOwnerAnchorPeer,
+	request linuxOwnerAnchorRequest,
+	receivedFDs []int,
+) bool {
+	wantFDs := 1
+	if request.TargetFDPresent {
+		wantFDs++
+	}
+	if len(receivedFDs) != wantFDs || request.Grant != (LinuxOwnerAnchorGrant{}) ||
+		request.CloneGrant == nil || request.Cleanup == nil || request.Helper != nil || request.Creator != nil ||
+		request.Process != nil || request.Role != "" || request.ReleaseProof != nil ||
+		request.PreGateReleaseProof != nil || request.AbortProof != nil ||
+		request.TargetFDPresent && request.PriorRemovalProof != nil || !request.TargetFDPresent && request.PriorRemovalProof == nil ||
+		request.AfterPID != 0 ||
+		request.RunKey != (LinuxOwnerAnchorRunKey{RunID: request.Cleanup.Intent.RunID, Generation: request.Cleanup.Intent.Generation}) ||
+		request.Fence != (protocol.Fence{}) || request.FenceDigest != request.Cleanup.FenceDigest ||
+		linuxOwnerCgroupPathsOverlap(peer.CgroupPath, anchor.managerPath) {
+		return false
+	}
+	expectedAnchor := authority.LinuxCgroupProcessIdentity{
+		PID:      request.Cleanup.NormalReleaseProof.AnchorPID,
+		Identity: request.Cleanup.NormalReleaseProof.AnchorIdentity,
+	}
+	if err := validateLinuxOwnerAnchorCloneCleanup(*request.CloneGrant, *request.Cleanup, anchor.owner.AUID); err != nil ||
+		!expectedAnchor.Equal(anchor.identity) || request.Cleanup.NormalReleaseProof.CgroupIdentity == nil ||
+		!request.Cleanup.NormalReleaseProof.CgroupIdentity.Parent.Equal(anchor.parent.Identity()) {
+		anchor.writeResponse(connection, request, "request_rejected", nil, nil)
+		return false
+	}
+	if !request.TargetFDPresent {
+		if err := verifyLinuxOwnerAnchorPriorRemoval(receivedFDs[0], *request.Cleanup, request.PriorRemovalProof, anchor.owner); err != nil {
+			anchor.writeResponse(connection, request, "request_rejected", nil, nil)
+			return false
+		}
+	}
+	if err := connection.SetDeadline(time.Now().Add(linuxOwnerAnchorCleanupTimeout)); err != nil {
+		return false
+	}
+	if err := verifyLinuxOwnerAnchorManagerMembership(os.Getpid(), anchor.managerPath); err != nil {
+		anchor.writeResponse(connection, request, "request_rejected", nil, nil)
+		return false
+	}
+	if err := anchor.parent.verifyPinnedParent(); err != nil {
+		anchor.writeResponse(connection, request, "request_rejected", nil, nil)
+		return false
+	}
+	if anchor.cloneCleanupWorkers.Add(1) > 1 {
+		anchor.cloneCleanupWorkers.Add(-1)
+		anchor.writeResponse(connection, request, "cleanup_busy", nil, nil)
+		return false
+	}
+	rootCopy, err := unix.FcntlInt(uintptr(receivedFDs[0]), unix.F_DUPFD_CLOEXEC, 0)
+	if err != nil {
+		anchor.cloneCleanupWorkers.Add(-1)
+		anchor.writeResponse(connection, request, "cleanup_unproven", nil, nil)
+		return false
+	}
+	rootFile := os.NewFile(uintptr(rootCopy), "symmetry-owner-anchor-clone-root")
+	if rootFile == nil {
+		_ = unix.Close(rootCopy)
+		anchor.cloneCleanupWorkers.Add(-1)
+		anchor.writeResponse(connection, request, "cleanup_unproven", nil, nil)
+		return false
+	}
+	targetFD := -1
+	var targetFile *os.File
+	if request.TargetFDPresent {
+		targetCopy, duplicateErr := unix.FcntlInt(uintptr(receivedFDs[1]), unix.F_DUPFD_CLOEXEC, 0)
+		if duplicateErr != nil {
+			_ = rootFile.Close()
+			anchor.cloneCleanupWorkers.Add(-1)
+			anchor.writeResponse(connection, request, "cleanup_unproven", nil, nil)
+			return false
+		}
+		targetFile = os.NewFile(uintptr(targetCopy), "symmetry-owner-anchor-clone-target")
+		if targetFile == nil {
+			_ = unix.Close(targetCopy)
+			_ = rootFile.Close()
+			anchor.cloneCleanupWorkers.Add(-1)
+			anchor.writeResponse(connection, request, "cleanup_unproven", nil, nil)
+			return false
+		}
+		targetFD = int(targetFile.Fd())
+	}
+	requestCopy := request
+	cloneGrant := request.CloneGrant.Clone()
+	cleanup := request.Cleanup.Clone()
+	var priorRemoval *authority.LinuxCloneTargetRemovalProof
+	if request.PriorRemovalProof != nil {
+		priorCopy := request.PriorRemovalProof.Clone()
+		priorRemoval = &priorCopy
+	}
+	go func() {
+		defer func() {
+			if targetFile != nil {
+				_ = targetFile.Close()
+			}
+			_ = rootFile.Close()
+			anchor.cloneCleanupWorkers.Add(-1)
+			_ = connection.Close()
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), linuxOwnerAnchorCleanupTimeout)
+		proof, err := anchor.runCloneCleanupAfterStateReadback(
+			ctx, requestCopy, int(rootFile.Fd()), targetFD, cloneGrant, cleanup, priorRemoval,
+		)
+		cancel()
+		if err != nil || proof.Validate() != nil || !proof.Intent.Equal(cleanup) ||
+			priorRemoval == nil && proof.Disposition != authority.LinuxCloneTargetDispositionRemoved ||
+			priorRemoval != nil && !proof.Equal(*priorRemoval) {
+			status := "clone_cleanup_unproven"
+			if errors.Is(err, errLinuxOwnerAnchorCleanupAuthority) {
+				status = "cleanup_authority_unproven"
+			}
+			anchor.writeResponse(connection, requestCopy, status, nil, nil)
+			return
+		}
+		anchor.writeResponseWithCloneRemoval(connection, requestCopy, "clone_removed", nil, nil, &proof)
+	}()
+	return true
 }
 
 func (anchor *linuxOwnerAnchor) writeResponse(connection *net.UnixConn, request linuxOwnerAnchorRequest, status string, helper *authority.LinuxCgroupProcessIdentity, evidence *LinuxOwnerAnchorReapEvidence) {
+	anchor.writeResponseWithCloneRemoval(connection, request, status, helper, evidence, nil)
+}
+
+func (anchor *linuxOwnerAnchor) writeResponseWithStopEvidence(
+	connection *net.UnixConn,
+	request linuxOwnerAnchorRequest,
+	status string,
+	evidence LinuxOwnerAnchorStopEvidence,
+) {
 	response := linuxOwnerAnchorResponse{
 		Version: linuxOwnerAnchorProtocolVersion, Operation: request.Operation, Status: status,
 		RunKey: request.Grant.RunKey, Fence: request.Grant.Fence, LaunchToken: request.Grant.LaunchToken,
 		Anchor: anchor.identity, Parent: anchor.parent.Identity(), OwnerUID: anchor.owner.AUID,
-		ManagerPath: anchor.managerPath, Helper: helper, Evidence: evidence,
+		ManagerPath: anchor.managerPath, StopEvidence: &evidence,
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil || len(encoded) > linuxOwnerAnchorMaxFrame {
+		return
+	}
+	_, _, _ = connection.WriteMsgUnix(encoded, nil, nil)
+}
+
+func (anchor *linuxOwnerAnchor) writeResponseWithCloneRemoval(connection *net.UnixConn, request linuxOwnerAnchorRequest, status string, helper *authority.LinuxCgroupProcessIdentity, evidence *LinuxOwnerAnchorReapEvidence, cloneRemoval *authority.LinuxCloneTargetRemovalProof) {
+	response := linuxOwnerAnchorResponse{
+		Version: linuxOwnerAnchorProtocolVersion, Operation: request.Operation, Status: status,
+		RunKey: request.Grant.RunKey, Fence: request.Grant.Fence, LaunchToken: request.Grant.LaunchToken,
+		Anchor: anchor.identity, Parent: anchor.parent.Identity(), OwnerUID: anchor.owner.AUID,
+		ManagerPath: anchor.managerPath, Helper: helper, Evidence: evidence, CloneRemoval: cloneRemoval,
+	}
+	if request.Operation == linuxOwnerAnchorOperationCloneCleanup && request.Cleanup != nil {
+		response.RunKey = request.RunKey
+		response.FenceDigest = request.FenceDigest
+		response.LaunchToken = request.Cleanup.NormalReleaseProof.LaunchToken
 	}
 	encoded, err := json.Marshal(response)
 	if err != nil || len(encoded) > linuxOwnerAnchorMaxFrame {
@@ -1621,12 +4187,40 @@ func (anchor *linuxOwnerAnchor) writeResponseWithFDs(connection *net.UnixConn, r
 	_, _, _ = connection.WriteMsgUnix(encoded, syscall.UnixRights(fds...), nil)
 }
 
-func (anchor *linuxOwnerAnchor) writeResponseWithReapEvidence(connection *net.UnixConn, request linuxOwnerAnchorRequest, status string, evidence []LinuxOwnerAnchorReapEvidence, nextPID int, more bool) {
+func (anchor *linuxOwnerAnchor) writeResponseWithReapEvidence(
+	connection *net.UnixConn,
+	request linuxOwnerAnchorRequest,
+	status string,
+	evidence []LinuxOwnerAnchorReapEvidence,
+	nextPID int,
+	more bool,
+	stopEvidence LinuxOwnerAnchorStopEvidence,
+) {
 	response := linuxOwnerAnchorResponse{
 		Version: linuxOwnerAnchorProtocolVersion, Operation: request.Operation, Status: status,
 		RunKey: request.Grant.RunKey, Fence: request.Grant.Fence, LaunchToken: request.Grant.LaunchToken,
 		Anchor: anchor.identity, Parent: anchor.parent.Identity(), OwnerUID: anchor.owner.AUID,
-		ManagerPath: anchor.managerPath, ReapEvidence: evidence, NextPID: nextPID, More: more,
+		ManagerPath: anchor.managerPath, ReapEvidence: evidence, StopEvidence: &stopEvidence, NextPID: nextPID, More: more,
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil || len(encoded) > linuxOwnerAnchorMaxFrame {
+		return
+	}
+	_, _, _ = connection.WriteMsgUnix(encoded, nil, nil)
+}
+
+func (anchor *linuxOwnerAnchor) writeResponseWithChildClassification(
+	connection *net.UnixConn,
+	request linuxOwnerAnchorRequest,
+	status string,
+	classification linuxOwnerAnchorRunChildClassification,
+) {
+	copy := classification
+	response := linuxOwnerAnchorResponse{
+		Version: linuxOwnerAnchorProtocolVersion, Operation: request.Operation, Status: status,
+		RunKey: request.Grant.RunKey, Fence: request.Grant.Fence, LaunchToken: request.Grant.LaunchToken,
+		Anchor: anchor.identity, Parent: anchor.parent.Identity(), OwnerUID: anchor.owner.AUID,
+		ManagerPath: anchor.managerPath, Helper: request.Helper, ChildClassification: &copy,
 	}
 	encoded, err := json.Marshal(response)
 	if err != nil || len(encoded) > linuxOwnerAnchorMaxFrame {
@@ -2292,22 +4886,44 @@ func linuxOwnerAnchorWaitPIDFD(ctx context.Context, pidfd *os.File, expected aut
 // can be populated only after an authenticated helper/daemon handoff has
 // pinned the exact leaf and identities.
 type linuxOwnerAnchorRun struct {
-	grant       LinuxOwnerAnchorGrant
-	owner       linuxgate.OwnerConfig
-	helper      authority.LinuxCgroupProcessIdentity
-	helperPIDFD *os.File
-	helperExit  *authority.LinuxCgroupExitProof
-	leaf        *LinuxCgroupV2Leaf
+	grant                  LinuxOwnerAnchorGrant
+	owner                  linuxgate.OwnerConfig
+	helper                 authority.LinuxCgroupProcessIdentity
+	helperPIDFD            *os.File
+	helperExit             *authority.LinuxCgroupExitProof
+	leaf                   *LinuxCgroupV2Leaf
+	gateIdentity           *authority.LinuxCgroupGateIdentity
+	gateUserNamespace      LinuxUserNamespaceIdentity
+	gateUserNamespaceFD    *os.File
+	gateImageFD            *os.File
+	gateReadyAuthenticated bool
+	gateReleaseAuthorized  bool
+	stopRequested          bool
+	stopLeafAttempted      bool
+	stopFence              *LinuxOwnerAnchorProducerFence
+	stopEvidence           *LinuxOwnerAnchorStopEvidence
+	// migrationObserved is sticky: a foreign, escaped, or unattributable
+	// process observation permanently prevents this ephemeral run from claiming
+	// NoMigrationObserved, even if that process later exits or leaves the leaf.
+	migrationObserved bool
+	// noMigrationProven is set only after the authenticated GateReady/image,
+	// B-only namespace/credential and complete pinned-leaf membership checks.
+	// It is not copied into durable State independently of AnchorStop.
+	noMigrationProven bool
 	// These observations are ephemeral emergency-stop state only; none can
 	// authorize State receipt creation or journal clearing.
 	helperDeathContainmentComplete  bool
 	helperDeathContainmentAttempted bool
+	supervisionRetryAfter           time.Time
+	supervisionTerminal             bool
 	supervisionError                error
 	leafKillAttempted               bool
+	leafKillCallStarted             bool
 	leafKillAcknowledged            bool
 	leafEmptyObserved               bool
 	leafRemovedObserved             bool
 	children                        map[int]linuxOwnerAnchorTrackedProcess
+	physicalOnlyChildren            map[int]linuxOwnerAnchorPhysicalOnlyChild
 	// reaped retains exact responses only while this anchor process lives. It
 	// is not durable and cannot recover proof after correlated anchor loss.
 	reaped                map[int]LinuxOwnerAnchorReapEvidence
@@ -2318,10 +4934,23 @@ type linuxOwnerAnchorRun struct {
 }
 
 type linuxOwnerAnchorTrackedProcess struct {
-	identity authority.LinuxCgroupProcessIdentity
-	creator  authority.LinuxCgroupProcessIdentity
-	role     string
-	pidfd    *os.File
+	identity       authority.LinuxCgroupProcessIdentity
+	creator        authority.LinuxCgroupProcessIdentity
+	classification linuxOwnerAnchorRunChildClassification
+	role           string
+	pidfd          *os.File
+}
+
+// linuxOwnerAnchorPhysicalOnlyChild pins a pre-RegisterGate A gate solely so
+// the subreaper can wait/reap its exact PIDFD after whole-leaf containment. It
+// is deliberately separate from RunKey children and never contributes durable
+// ReapEvidence, StopEvidence, or receipt authority.
+type linuxOwnerAnchorPhysicalOnlyChild struct {
+	identity       authority.LinuxCgroupProcessIdentity
+	classification linuxOwnerAnchorRunChildClassification
+	pidfd          *os.File
+	imageFD        *os.File
+	waited         bool
 }
 
 func newLinuxOwnerAnchorRun(grant LinuxOwnerAnchorGrant, helper authority.LinuxCgroupProcessIdentity, helperPIDFD *os.File, leaf *LinuxCgroupV2Leaf, owner linuxgate.OwnerConfig) (*linuxOwnerAnchorRun, error) {
@@ -2449,8 +5078,11 @@ func linuxOwnerAnchorPinnedLeafPresent(run *linuxOwnerAnchorRun) (bool, error) {
 
 func (run *linuxOwnerAnchorRun) registerChild(process authority.LinuxCgroupProcessIdentity, creator authority.LinuxCgroupProcessIdentity, role string, pidfd int) error {
 	if run == nil || run.grant.Validate() != nil || run.helper.Validate() != nil || process.Validate() != nil ||
-		creator.Validate() != nil || pidfd < 0 || run.helperPIDFD == nil || run.helperExit != nil || run.leaf == nil {
+		creator.Validate() != nil || pidfd < 0 || run.helperPIDFD == nil || run.helperExit != nil || run.leaf == nil || run.stopRequested {
 		return errors.New("Linux owner anchor child registration is not within the live helper phase")
+	}
+	if role != "launcher" && role != "gate" && role != "native" && role != "descendant" {
+		return errors.New("Linux owner anchor refuses an unknown process role")
 	}
 	if !creator.Equal(run.helper) {
 		parent, ok := run.children[creator.PID]
@@ -2464,12 +5096,19 @@ func (run *linuxOwnerAnchorRun) registerChild(process authority.LinuxCgroupProce
 		return fmt.Errorf("verify Linux owner helper creator identity: %w", err)
 	}
 	if existing, exists := run.children[process.PID]; exists {
-		if !existing.identity.Equal(process) || !existing.creator.Equal(creator) {
+		if !existing.identity.Equal(process) || !existing.creator.Equal(creator) ||
+			existing.classification.ValidateFor(run.grant, run.helper, process) != nil ||
+			existing.classification.Origin != linuxOwnerAnchorRunChildOriginRegisteredCurrent {
 			return errors.New("Linux owner anchor refuses a reused process PID")
 		}
 		if existing.role == role {
 			if evidence, reaped := run.reaped[process.PID]; reaped {
 				return evidence.ValidateFor(run.grant, run.helper, process, role)
+			}
+			if role == "native" {
+				if err := run.verifyAuthorizedGateExec(process, true); err != nil {
+					return err
+				}
 			}
 			if err := verifyLinuxOwnerAnchorPIDFDIdentity(pidfd, process); err != nil {
 				return fmt.Errorf("verify replayed Linux owner child pidfd: %w", err)
@@ -2479,6 +5118,11 @@ func (run *linuxOwnerAnchorRun) registerChild(process authority.LinuxCgroupProce
 		if existing.role != "gate" || role != "native" {
 			return errors.New("Linux owner anchor refuses invalid same-PID role transition")
 		}
+		if err := run.verifyAuthorizedGateExec(process, true); err != nil {
+			return fmt.Errorf("verify authorized same-PID A-gate to B-native transition: %w", err)
+		}
+	} else if role == "native" {
+		return errors.New("Linux owner anchor refuses a native process without its exact registered A-gate")
 	}
 	if err := verifyLinuxOwnerAnchorPIDFD(pidfd, process); err != nil {
 		return err
@@ -2501,6 +5145,7 @@ func (run *linuxOwnerAnchorRun) registerChild(process authority.LinuxCgroupProce
 	}
 	if existing, exists := run.children[process.PID]; exists {
 		existing.role = role
+		existing.classification.Role = role
 		run.children[process.PID] = existing
 		return nil
 	}
@@ -2511,9 +5156,1425 @@ func (run *linuxOwnerAnchorRun) registerChild(process authority.LinuxCgroupProce
 	if err != nil {
 		return fmt.Errorf("retain exact Linux owner child pidfd: %w", err)
 	}
+	classification := linuxOwnerAnchorRunChildClassification{
+		Version: linuxOwnerAnchorRunChildClassificationVersion,
+		RunKey:  run.grant.RunKey, OriginRunKey: run.grant.RunKey,
+		Fence: run.grant.Fence, LaunchToken: run.grant.LaunchToken,
+		Helper: run.helper, Process: process, Role: role,
+		Origin: linuxOwnerAnchorRunChildOriginRegisteredCurrent,
+	}
 	run.children[process.PID] = linuxOwnerAnchorTrackedProcess{
-		identity: process, creator: creator, role: role,
+		identity: process, creator: creator, classification: classification, role: role,
 		pidfd: os.NewFile(uintptr(copyFD), "symmetry-owner-anchor-run-child-pidfd"),
+	}
+	return nil
+}
+
+// trackNamespaceProvenChild retains an exact PIDFD and Anchor-classified
+// run-origin result for a process whose creator edge was lost at subreaper
+// adoption. It deliberately leaves creator zero; only the exact namespace
+// ancestry and RunKey-bound classification supply its origin.
+func (run *linuxOwnerAnchorRun) trackNamespaceProvenChild(
+	process authority.LinuxCgroupProcessIdentity,
+	pidfd int,
+	classification linuxOwnerAnchorRunChildClassification,
+) error {
+	if run == nil || run.grant.Validate() != nil || run.helper.Validate() != nil || run.helperPIDFD == nil ||
+		run.leaf == nil || run.gateUserNamespaceFD == nil ||
+		process.Validate() != nil || pidfd < 0 ||
+		classification.ValidateFor(run.grant, run.helper, process) != nil ||
+		classification.Origin != linuxOwnerAnchorRunChildOriginGateUserNSCurrent || classification.Role != "descendant" {
+		return errors.New("anchor namespace-derived child lacks the exact RunKey and gate-namespace evidence")
+	}
+	if err := run.verifyPinnedGateUserNamespace(); err != nil {
+		return err
+	}
+	if run.helperExit != nil {
+		if !run.helperExit.ValidFor(run.helper, run.grant.Anchor) {
+			return errors.New("anchor namespace-derived child helper exit differs from the exact wait")
+		}
+	} else {
+		if verifyLinuxOwnerAnchorPIDFDIdentity(int(run.helperPIDFD.Fd()), run.helper) != nil {
+			return errors.New("anchor namespace-derived child live-helper phase lacks the exact helper pidfd")
+		}
+		ready, err := linuxOwnerAnchorPIDFDReady(run.helperPIDFD)
+		if err != nil || ready {
+			return fmt.Errorf("verify namespace-derived child helper remains live: %w", errOr(err, errors.New("helper pidfd is ready")))
+		}
+	}
+	if err := verifyLinuxOwnerAnchorPIDFDIdentity(pidfd, process); err != nil {
+		return fmt.Errorf("verify namespace-derived adopted child pidfd: %w", err)
+	}
+	if identity, err := ProcessIdentity(process.PID); err != nil || identity != process.Identity {
+		return fmt.Errorf("verify namespace-derived adopted child identity: %w", errOr(err, errors.New("creation identity differs")))
+	}
+	if !run.leafRemovedObserved {
+		if err := verifyLinuxOwnerRunChildCredentials(process.PID, "native", run.owner); err != nil {
+			return fmt.Errorf("verify namespace-derived adopted child B credentials: %w", err)
+		}
+		if err := verifyLinuxOwnerRunChildMembership(process.PID, "descendant", run.grant, run.leaf); err != nil {
+			return err
+		}
+	}
+	if existing, exists := run.children[process.PID]; exists {
+		if !existing.identity.Equal(process) {
+			return errors.New("anchor namespace-derived process PID was reused")
+		}
+		if existing.classification.ValidateFor(run.grant, run.helper, process) != nil {
+			return errors.New("anchor namespace-derived process conflicts with its prior origin classification")
+		}
+		if existing.classification.Origin == linuxOwnerAnchorRunChildOriginRegisteredCurrent {
+			return nil
+		}
+		if existing.classification.Origin != linuxOwnerAnchorRunChildOriginGateUserNSCurrent ||
+			!existing.classification.Equal(classification) || existing.pidfd == nil {
+			return errors.New("anchor namespace-derived process differs from its retained exact origin pin")
+		}
+		return verifyLinuxOwnerAnchorPIDFDIdentity(int(existing.pidfd.Fd()), process)
+	}
+	copyFD, err := unix.FcntlInt(uintptr(pidfd), unix.F_DUPFD_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("retain namespace-derived adopted child pidfd: %w", err)
+	}
+	pidfdFile := os.NewFile(uintptr(copyFD), "symmetry-owner-anchor-namespace-child-pidfd")
+	if pidfdFile == nil {
+		_ = unix.Close(copyFD)
+		return errors.New("wrap namespace-derived adopted child pidfd")
+	}
+	if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(pidfdFile.Fd()), process); err != nil {
+		_ = pidfdFile.Close()
+		return fmt.Errorf("recheck retained namespace-derived child pidfd: %w", err)
+	}
+	if run.children == nil {
+		run.children = make(map[int]linuxOwnerAnchorTrackedProcess)
+	}
+	run.children[process.PID] = linuxOwnerAnchorTrackedProcess{
+		identity: process, classification: classification, role: "descendant", pidfd: pidfdFile,
+	}
+	return nil
+}
+
+func (run *linuxOwnerAnchorRun) trackPreReleaseGatePhysicalOnlyChild(
+	process authority.LinuxCgroupProcessIdentity,
+	pidfd int,
+	classification linuxOwnerAnchorRunChildClassification,
+) error {
+	if run == nil || run.grant.Validate() != nil || run.helper.Validate() != nil || run.helperExit == nil ||
+		!run.helperExit.ValidFor(run.helper, run.grant.Anchor) || run.retired || run.stopRequested || run.stopLeafAttempted || run.stopFence != nil || run.gateIdentity != nil ||
+		run.gateReleaseAuthorized || run.gateUserNamespaceFD != nil || run.gateImageFD != nil || run.gateReadyAuthenticated ||
+		process.Validate() != nil || pidfd < 0 ||
+		classification.ValidateFor(run.grant, run.helper, process) != nil ||
+		classification.Origin != linuxOwnerAnchorRunChildOriginPreReleaseGatePhysicalOnly {
+		return errors.New("pre-RegisterGate physical-only child lacks exact helper-death and no-release evidence")
+	}
+	if err := verifyLinuxOwnerAnchorPIDFDIdentity(pidfd, process); err != nil {
+		return fmt.Errorf("verify physical-only gate pidfd: %w", err)
+	}
+	if identity, err := ProcessIdentity(process.PID); err != nil || identity != process.Identity {
+		return fmt.Errorf("verify physical-only gate identity: %w", errOr(err, errors.New("creation identity differs")))
+	}
+	credentials, err := readLinuxOwnerProcessCredentials(process.PID)
+	if err != nil || credentials.Parent != run.grant.Anchor.PID {
+		return fmt.Errorf("verify physical-only gate Anchor parent: %w", errOr(err, errors.New("parent PID differs")))
+	}
+	if err := verifyLinuxOwnerRunChildCredentials(process.PID, "gate", run.owner); err != nil {
+		return err
+	}
+	if err := verifyLinuxOwnerRunChildMembership(process.PID, "gate", run.grant, run.leaf); err != nil {
+		return err
+	}
+	if _, exists := run.children[process.PID]; exists {
+		return errors.New("physical-only pre-release gate PID aliases a retained RunKey child")
+	}
+	launcherCount := 0
+	for _, child := range run.children {
+		if child.identity.Validate() != nil || child.role != "launcher" || child.creator.Validate() != nil || !child.creator.Equal(run.helper) || child.pidfd == nil ||
+			child.classification.ValidateFor(run.grant, run.helper, child.identity) != nil ||
+			child.classification.Origin != linuxOwnerAnchorRunChildOriginRegisteredCurrent {
+			return errors.New("physical-only pre-release gate lacks an exclusive exact root launcher producer")
+		}
+		ready, err := linuxOwnerAnchorPIDFDReady(child.pidfd)
+		if err != nil || !ready {
+			return fmt.Errorf("physical-only gate root launcher remains live: %w", errOr(err, errors.New("launcher pidfd is not ready")))
+		}
+		launcherCount++
+	}
+	if launcherCount != 1 {
+		return errors.New("physical-only pre-release gate does not have exactly one registered root launcher")
+	}
+	if existing, exists := run.physicalOnlyChildren[process.PID]; exists {
+		if !existing.identity.Equal(process) || !existing.classification.Equal(classification) || existing.pidfd == nil || existing.imageFD == nil {
+			return errors.New("physical-only gate PID conflicts with its retained Anchor process identity")
+		}
+		if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(existing.pidfd.Fd()), process); err != nil {
+			return err
+		}
+		return verifyLinuxOwnerAnchorGateImageFD(existing.imageFD, process, int(existing.pidfd.Fd()))
+	}
+	if len(run.physicalOnlyChildren) != 0 {
+		return errors.New("run already has a different physical-only pre-release gate")
+	}
+	imageFD, err := pinLinuxOwnerAnchorGateImage(process, pidfd, run.owner)
+	if err != nil {
+		return fmt.Errorf("retain exact static gate image for physical-only containment: %w", err)
+	}
+	keepImage := false
+	defer func() {
+		if !keepImage {
+			_ = imageFD.Close()
+		}
+	}()
+	copyFD, err := unix.FcntlInt(uintptr(pidfd), unix.F_DUPFD_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("retain physical-only gate pidfd: %w", err)
+	}
+	pidfdFile := os.NewFile(uintptr(copyFD), "symmetry-owner-anchor-physical-only-gate-pidfd")
+	if pidfdFile == nil {
+		_ = unix.Close(copyFD)
+		return errors.New("wrap physical-only gate pidfd")
+	}
+	if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(pidfdFile.Fd()), process); err != nil {
+		_ = pidfdFile.Close()
+		return fmt.Errorf("recheck retained physical-only gate pidfd: %w", err)
+	}
+	if err := verifyLinuxOwnerRunChildMembership(process.PID, "gate", run.grant, run.leaf); err != nil {
+		_ = pidfdFile.Close()
+		return fmt.Errorf("recheck physical-only gate membership after image pin: %w", err)
+	}
+	if err := verifyLinuxOwnerAnchorGateImageFD(imageFD, process, int(pidfdFile.Fd())); err != nil {
+		_ = pidfdFile.Close()
+		return fmt.Errorf("recheck retained physical-only gate image: %w", err)
+	}
+	if run.physicalOnlyChildren == nil {
+		run.physicalOnlyChildren = make(map[int]linuxOwnerAnchorPhysicalOnlyChild)
+	}
+	run.physicalOnlyChildren[process.PID] = linuxOwnerAnchorPhysicalOnlyChild{
+		identity: process, classification: classification, pidfd: pidfdFile, imageFD: imageFD,
+	}
+	keepImage = true
+	return nil
+}
+
+func (anchor *linuxOwnerAnchor) reapPhysicalOnlyChild(
+	ctx context.Context,
+	run *linuxOwnerAnchorRun,
+	process authority.LinuxCgroupProcessIdentity,
+) error {
+	if anchor == nil || ctx == nil || run == nil || run.grant.Validate() != nil ||
+		!run.grant.Anchor.Equal(anchor.identity) || run.helperExit == nil ||
+		!run.helperExit.ValidFor(run.helper, anchor.identity) || run.leaf == nil ||
+		!(run.leafRemovedObserved || run.leafKillAttempted && run.leafKillAcknowledged && run.leafEmptyObserved) || process.Validate() != nil {
+		return errors.New("physical-only gate wait lacks the exact helper-death and empty-leaf observation")
+	}
+	child, exists := run.physicalOnlyChildren[process.PID]
+	if !exists || !child.identity.Equal(process) || child.pidfd == nil || child.waited ||
+		child.imageFD == nil ||
+		child.classification.ValidateFor(run.grant, run.helper, process) != nil ||
+		child.classification.Origin != linuxOwnerAnchorRunChildOriginPreReleaseGatePhysicalOnly {
+		return errors.New("physical-only gate wait lacks its exact retained Anchor PIDFD")
+	}
+	if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(child.pidfd.Fd()), process); err != nil {
+		return fmt.Errorf("verify retained physical-only gate PIDFD before wait: %w", err)
+	}
+	if err := linuxOwnerAnchorWaitPIDFD(ctx, child.pidfd, process); err != nil {
+		return fmt.Errorf("wait/reap exact physical-only gate with P_PIDFD: %w", err)
+	}
+	child.waited = true
+	run.physicalOnlyChildren[process.PID] = child
+	return nil
+}
+
+func (run *linuxOwnerAnchorRun) registerGate(
+	gate authority.LinuxCgroupGateIdentity,
+	userNamespace LinuxUserNamespaceIdentity,
+	pidfd int,
+	anchorUserNamespaceFD *os.File,
+) error {
+	if run == nil || run.grant.Validate() != nil || run.helper.Validate() != nil ||
+		gate.Validate() != nil || gate.HostUID != run.owner.AUID || !gate.Cgroup.Equal(run.grant.Leaf) ||
+		!userNamespace.valid() || pidfd < 0 || anchorUserNamespaceFD == nil || run.gateReleaseAuthorized || run.stopRequested {
+		return errors.New("Linux owner anchor trusted A-gate registration is incomplete or too late")
+	}
+	if run.gateIdentity != nil && (!run.gateIdentity.Equal(gate) || run.gateUserNamespace != userNamespace) {
+		return errors.New("Linux owner anchor refuses a different gate or user namespace for the same run")
+	}
+	gateNamespaceFD, capturedNamespace, err := openLinuxOwnerAnchorUserNamespaceFD(gate.Process, pidfd)
+	if err != nil {
+		return fmt.Errorf("pin exact parked-gate user namespace: %w", err)
+	}
+	keepNamespace := false
+	defer func() {
+		if !keepNamespace {
+			_ = gateNamespaceFD.Close()
+		}
+	}()
+	if capturedNamespace != userNamespace {
+		return errors.New("parked-gate user namespace differs from its helper-supplied device/inode")
+	}
+	gateImageFD, err := pinLinuxOwnerAnchorGateImage(gate.Process, pidfd, run.owner)
+	if err != nil {
+		return fmt.Errorf("pin trusted installed static gate after authenticated READY: %w", err)
+	}
+	keepImage := false
+	defer func() {
+		if !keepImage {
+			_ = gateImageFD.Close()
+		}
+	}()
+	anchorNamespace, err := linuxOwnerAnchorUserNamespaceFDIdentity(anchorUserNamespaceFD)
+	if err != nil {
+		return fmt.Errorf("verify pinned Anchor user namespace: %w", err)
+	}
+	parentNamespace, err := linuxOwnerAnchorUserNamespaceParentIdentity(gateNamespaceFD)
+	if err != nil || parentNamespace != anchorNamespace {
+		return fmt.Errorf("verify gate user namespace is a direct child of the pinned Anchor namespace: %w", errOr(err, errors.New("parent namespace differs")))
+	}
+	if err := verifyLinuxOwnerAnchorGateNamespace(gate.Process.PID, userNamespace, run.owner); err != nil {
+		return fmt.Errorf("verify exact parked-gate user namespace and B-only maps before registration: %w", err)
+	}
+	if err := run.registerChild(gate.Process, run.helper, "gate", pidfd); err != nil {
+		return err
+	}
+	tracked, exists := run.children[gate.Process.PID]
+	if !exists || !tracked.identity.Equal(gate.Process) || !tracked.creator.Equal(run.helper) || tracked.role != "gate" || tracked.pidfd == nil {
+		return errors.New("Linux owner anchor gate registration lacks its exact retained pidfd")
+	}
+	if err := verifyLinuxOwnerAnchorGateNamespace(gate.Process.PID, userNamespace, run.owner); err != nil {
+		return fmt.Errorf("verify exact parked-gate user namespace and B-only maps: %w", err)
+	}
+	if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(tracked.pidfd.Fd()), gate.Process); err != nil {
+		return fmt.Errorf("recheck parked-gate pidfd after namespace verification: %w", err)
+	}
+	if actual, err := ProcessIdentity(gate.Process.PID); err != nil || actual != gate.Process.Identity {
+		return fmt.Errorf("recheck parked-gate creation identity after namespace verification: %w", errOr(err, errors.New("identity changed")))
+	}
+	if actual, err := linuxOwnerAnchorUserNamespaceFDIdentity(gateNamespaceFD); err != nil || actual != userNamespace {
+		return fmt.Errorf("recheck retained gate user namespace after registration: %w", errOr(err, errors.New("device or inode changed")))
+	}
+	if err := verifyLinuxOwnerAnchorGateImageFD(gateImageFD, gate.Process, pidfd); err != nil {
+		return fmt.Errorf("recheck exact trusted static gate after registration: %w", err)
+	}
+	if run.gateUserNamespaceFD != nil {
+		actual, err := linuxOwnerAnchorUserNamespaceFDIdentity(run.gateUserNamespaceFD)
+		if err != nil || actual != userNamespace {
+			return fmt.Errorf("replay gate namespace pin differs from the exact registration: %w", errOr(err, errors.New("device or inode changed")))
+		}
+		if run.gateImageFD == nil {
+			return errors.New("replayed gate registration lost its exact image pin")
+		}
+		var oldImage, newImage unix.Stat_t
+		if err := unix.Fstat(int(run.gateImageFD.Fd()), &oldImage); err != nil {
+			return fmt.Errorf("stat retained gate image on registration replay: %w", err)
+		}
+		if err := unix.Fstat(int(gateImageFD.Fd()), &newImage); err != nil || oldImage.Dev != newImage.Dev || oldImage.Ino != newImage.Ino {
+			return fmt.Errorf("replayed gate image differs from its exact retained pin: %w", errOr(err, errors.New("device or inode differs")))
+		}
+		return nil
+	}
+	gateCopy := gate
+	run.gateIdentity = &gateCopy
+	run.gateUserNamespace = userNamespace
+	run.gateUserNamespaceFD = gateNamespaceFD
+	run.gateImageFD = gateImageFD
+	run.gateReadyAuthenticated = true
+	keepNamespace = true
+	keepImage = true
+	return nil
+}
+
+func (run *linuxOwnerAnchorRun) authorizeGateRelease(
+	gate authority.LinuxCgroupGateIdentity,
+	userNamespace LinuxUserNamespaceIdentity,
+) error {
+	if run == nil || run.grant.Validate() != nil || run.helper.Validate() != nil || run.helperExit != nil || run.stopRequested ||
+		run.helperPIDFD == nil || run.gateIdentity == nil || !run.gateIdentity.Equal(gate) ||
+		run.gateUserNamespace != userNamespace || !userNamespace.valid() || run.verifyPinnedGateUserNamespace() != nil {
+		return errors.New("Linux owner anchor gate-release authorization differs from the registered gate")
+	}
+	tracked, exists := run.children[gate.Process.PID]
+	if !exists || !tracked.identity.Equal(gate.Process) || !tracked.creator.Equal(run.helper) || tracked.role != "gate" || tracked.pidfd == nil ||
+		tracked.classification.ValidateFor(run.grant, run.helper, gate.Process) != nil ||
+		tracked.classification.Origin != linuxOwnerAnchorRunChildOriginRegisteredCurrent {
+		return errors.New("Linux owner anchor gate-release authorization lacks its exact parked gate")
+	}
+	if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(run.helperPIDFD.Fd()), run.helper); err != nil {
+		return fmt.Errorf("verify exact helper before gate-release authorization: %w", err)
+	}
+	if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(tracked.pidfd.Fd()), gate.Process); err != nil {
+		return fmt.Errorf("verify exact parked gate before release authorization: %w", err)
+	}
+	if actual, err := ProcessIdentity(gate.Process.PID); err != nil || actual != gate.Process.Identity {
+		return fmt.Errorf("verify parked gate identity before release authorization: %w", errOr(err, errors.New("creation identity changed")))
+	}
+	credentials, err := readLinuxOwnerProcessCredentials(gate.Process.PID)
+	if err != nil || credentials.Parent != run.helper.PID {
+		return fmt.Errorf("verify parked gate ancestry before release authorization: %w", errOr(err, errors.New("parent PID differs from exact helper")))
+	}
+	if err := verifyLinuxOwnerRunChildCredentials(gate.Process.PID, "gate", run.owner); err != nil {
+		return err
+	}
+	if err := verifyLinuxOwnerRunChildMembership(gate.Process.PID, "gate", run.grant, run.leaf); err != nil {
+		return err
+	}
+	if err := verifyLinuxOwnerAnchorGateNamespace(gate.Process.PID, userNamespace, run.owner); err != nil {
+		return fmt.Errorf("revalidate exact parked-gate user namespace before release: %w", err)
+	}
+	if run.gateReleaseAuthorized {
+		return nil
+	}
+	run.gateReleaseAuthorized = true
+	return nil
+}
+
+func (run *linuxOwnerAnchorRun) verifyRegisteredGateA(process authority.LinuxCgroupProcessIdentity, verifyMembership bool) error {
+	if run == nil || run.grant.Validate() != nil || process.Validate() != nil || run.gateIdentity == nil ||
+		!run.gateIdentity.Process.Equal(process) || !run.gateUserNamespace.valid() || run.verifyPinnedGateUserNamespace() != nil {
+		return errors.New("Linux parked gate differs from its exact registered process and user namespace")
+	}
+	tracked, exists := run.children[process.PID]
+	if !exists || !tracked.identity.Equal(process) || !tracked.creator.Equal(run.helper) || tracked.role != "gate" || tracked.pidfd == nil ||
+		tracked.classification.ValidateFor(run.grant, run.helper, process) != nil ||
+		tracked.classification.Origin != linuxOwnerAnchorRunChildOriginRegisteredCurrent {
+		return errors.New("Linux parked gate lacks its exact retained A-gate pidfd")
+	}
+	if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(tracked.pidfd.Fd()), process); err != nil {
+		return fmt.Errorf("verify exact parked-gate pidfd during anchor reap: %w", err)
+	}
+	if actual, err := ProcessIdentity(process.PID); err != nil || actual != process.Identity {
+		return fmt.Errorf("verify exact parked-gate creation identity during anchor reap: %w", errOr(err, errors.New("identity changed")))
+	}
+	credentials, err := readLinuxOwnerProcessCredentials(process.PID)
+	if err != nil || credentials.Parent != run.grant.Anchor.PID {
+		return fmt.Errorf("verify parked-gate anchor ancestry: %w", errOr(err, errors.New("parent PID differs from anchor")))
+	}
+	if err := verifyLinuxOwnerRunChildCredentials(process.PID, "gate", run.owner); err != nil {
+		return err
+	}
+	if err := verifyLinuxOwnerAnchorGateNamespace(process.PID, run.gateUserNamespace, run.owner); err != nil {
+		return fmt.Errorf("verify parked-gate user namespace during anchor reap: %w", err)
+	}
+	if verifyMembership && !run.leafRemovedObserved {
+		if err := verifyLinuxOwnerRunChildMembership(process.PID, "gate", run.grant, run.leaf); err != nil {
+			return err
+		}
+	}
+	if run.leafRemovedObserved {
+		ready, err := linuxOwnerAnchorPIDFDReady(tracked.pidfd)
+		if err != nil || !ready {
+			return fmt.Errorf("live parked gate remains after exact run-leaf removal: %w", errOr(err, errors.New("pidfd is not ready")))
+		}
+	}
+	if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(tracked.pidfd.Fd()), process); err != nil {
+		return fmt.Errorf("recheck exact parked-gate pidfd during anchor reap: %w", err)
+	}
+	if actual, err := ProcessIdentity(process.PID); err != nil || actual != process.Identity {
+		return fmt.Errorf("recheck parked-gate creation identity during anchor reap: %w", errOr(err, errors.New("identity changed")))
+	}
+	return nil
+}
+
+func (run *linuxOwnerAnchorRun) verifyAuthorizedGateExec(process authority.LinuxCgroupProcessIdentity, verifyMembership bool) error {
+	if run == nil || run.grant.Validate() != nil || process.Validate() != nil || run.gateIdentity == nil ||
+		!run.gateReleaseAuthorized || !run.gateIdentity.Process.Equal(process) || !run.gateUserNamespace.valid() ||
+		run.verifyPinnedGateUserNamespace() != nil {
+		return errors.New("Linux native process lacks exact pre-registered gate and one-use release authorization")
+	}
+	tracked, exists := run.children[process.PID]
+	if !exists || !tracked.identity.Equal(process) || !tracked.creator.Equal(run.helper) ||
+		(tracked.role != "gate" && tracked.role != "native") || tracked.pidfd == nil ||
+		tracked.classification.ValidateFor(run.grant, run.helper, process) != nil ||
+		tracked.classification.Origin != linuxOwnerAnchorRunChildOriginRegisteredCurrent {
+		return errors.New("Linux native process differs from its exact retained A-gate pidfd")
+	}
+	if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(tracked.pidfd.Fd()), process); err != nil {
+		return fmt.Errorf("verify same-PID native pidfd: %w", err)
+	}
+	if actual, err := ProcessIdentity(process.PID); err != nil || actual != process.Identity {
+		return fmt.Errorf("verify same-PID native creation identity: %w", errOr(err, errors.New("identity changed")))
+	}
+	if err := verifyLinuxOwnerRunChildCredentials(process.PID, "native", run.owner); err != nil {
+		return err
+	}
+	if err := verifyLinuxOwnerAnchorGateNamespace(process.PID, run.gateUserNamespace, run.owner); err != nil {
+		return fmt.Errorf("verify same-PID native user namespace and B-only maps: %w", err)
+	}
+	if err := verifyLinuxOwnerAnchorNativePrivilegeState(process.PID); err != nil {
+		return err
+	}
+	if verifyMembership && !run.leafRemovedObserved {
+		if err := verifyLinuxOwnerRunChildMembership(process.PID, "native", run.grant, run.leaf); err != nil {
+			return err
+		}
+	}
+	if run.leafRemovedObserved {
+		ready, err := linuxOwnerAnchorPIDFDReady(tracked.pidfd)
+		if err != nil || !ready {
+			return fmt.Errorf("live native process remains after exact run-leaf removal: %w", errOr(err, errors.New("pidfd is not ready")))
+		}
+	}
+	if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(tracked.pidfd.Fd()), process); err != nil {
+		return fmt.Errorf("recheck same-PID native pidfd: %w", err)
+	}
+	if actual, err := ProcessIdentity(process.PID); err != nil || actual != process.Identity {
+		return fmt.Errorf("recheck same-PID native creation identity: %w", errOr(err, errors.New("identity changed")))
+	}
+	return nil
+}
+
+func (run *linuxOwnerAnchorRun) verifyPinnedGateUserNamespace() error {
+	if run == nil || run.gateUserNamespaceFD == nil || run.gateImageFD == nil ||
+		!run.gateReadyAuthenticated || !run.gateUserNamespace.valid() {
+		return errors.New("Linux owner run lacks its authenticated GateReady, image, or user-namespace pin")
+	}
+	identity, err := linuxOwnerAnchorUserNamespaceFDIdentity(run.gateUserNamespaceFD)
+	if err != nil || identity != run.gateUserNamespace {
+		return fmt.Errorf("verify retained gate user-namespace FD: %w", errOr(err, errors.New("device or inode differs")))
+	}
+	var imageStat unix.Stat_t
+	if err := unix.Fstat(int(run.gateImageFD.Fd()), &imageStat); err != nil ||
+		imageStat.Mode&unix.S_IFMT != unix.S_IFREG || imageStat.Uid != 0 || imageStat.Gid != 0 ||
+		imageStat.Mode&0022 != 0 || imageStat.Mode&0111 == 0 || imageStat.Nlink != 1 {
+		return fmt.Errorf("verify retained static gate image FD: %w", errOr(err, errors.New("root-owned image identity differs")))
+	}
+	return nil
+}
+
+func verifyLinuxOwnerAnchorGateNamespace(pid int, expected LinuxUserNamespaceIdentity, owner linuxgate.OwnerConfig) error {
+	if pid <= 0 || !expected.valid() || owner.Validate() != nil {
+		return errors.New("Linux owner anchor gate namespace identity is incomplete")
+	}
+	actual, err := readLinuxUserNamespaceIdentity(pid)
+	if err != nil || actual != expected {
+		return fmt.Errorf("Linux owner anchor gate user namespace differs from its pre-release pin: %w", errOr(err, errors.New("device or inode differs")))
+	}
+	uidMap, err := readLinuxOwnerAnchorProcText(pid, "uid_map", 4096)
+	if err != nil {
+		return fmt.Errorf("read exact gate uid_map: %w", err)
+	}
+	gidMap, err := readLinuxOwnerAnchorProcText(pid, "gid_map", 4096)
+	if err != nil {
+		return fmt.Errorf("read exact gate gid_map: %w", err)
+	}
+	setgroups, err := readLinuxOwnerAnchorProcText(pid, "setgroups", 256)
+	if err != nil {
+		return fmt.Errorf("read exact gate setgroups policy: %w", err)
+	}
+	if canonicalLinuxOwnerAnchorMap(uidMap) != fmt.Sprintf("1 %d 1", owner.BUID) ||
+		canonicalLinuxOwnerAnchorMap(gidMap) != fmt.Sprintf("1 %d 1", owner.BGID) || strings.TrimSpace(setgroups) != "deny" {
+		return errors.New("Linux owner anchor gate user namespace is not the exact fixed-B-only map with setgroups denied")
+	}
+	rechecked, err := readLinuxUserNamespaceIdentity(pid)
+	if err != nil || rechecked != expected {
+		return fmt.Errorf("recheck Linux owner anchor gate user namespace identity: %w", errOr(err, errors.New("device or inode changed")))
+	}
+	return nil
+}
+
+func verifyLinuxOwnerAnchorGateImage(
+	process authority.LinuxCgroupProcessIdentity,
+	pidfd int,
+	owner linuxgate.OwnerConfig,
+) error {
+	if process.Validate() != nil || pidfd < 0 || owner.Validate() != nil {
+		return errors.New("trusted Linux gate image check is incomplete")
+	}
+	if err := verifyLinuxOwnerAnchorPIDFDIdentity(pidfd, process); err != nil {
+		return fmt.Errorf("verify exact gate pidfd before image readback: %w", err)
+	}
+	if identity, err := ProcessIdentity(process.PID); err != nil || identity != process.Identity {
+		return fmt.Errorf("verify exact gate process before image readback: %w", errOr(err, errors.New("creation identity differs")))
+	}
+	for _, directory := range []string{"/usr", "/usr/libexec", "/usr/libexec/symmetry"} {
+		fd, err := unix.Open(directory, unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+		if err != nil {
+			return fmt.Errorf("open fixed trusted gate image directory %q: %w", directory, err)
+		}
+		var stat unix.Stat_t
+		statErr := unix.Fstat(fd, &stat)
+		closeErr := unix.Close(fd)
+		if statErr != nil || closeErr != nil || stat.Mode&unix.S_IFMT != unix.S_IFDIR || stat.Uid != 0 || stat.Gid != 0 || stat.Mode&0022 != 0 {
+			return errors.Join(fmt.Errorf("fixed gate image directory %q is not root-owned and non-writable", directory), statErr, closeErr)
+		}
+	}
+	imageFD, err := unix.Open(linuxOwnerAnchorGateImagePath, unix.O_PATH|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return fmt.Errorf("open fixed installed Linux gate image: %w", err)
+	}
+	defer unix.Close(imageFD)
+	var imageStat unix.Stat_t
+	if err := unix.Fstat(imageFD, &imageStat); err != nil {
+		return fmt.Errorf("stat fixed installed Linux gate image: %w", err)
+	}
+	if imageStat.Mode&unix.S_IFMT != unix.S_IFREG || imageStat.Uid != 0 || imageStat.Gid != 0 ||
+		imageStat.Mode&0022 != 0 || imageStat.Mode&0111 == 0 || imageStat.Nlink != 1 {
+		return errors.New("fixed Linux gate image is not singly-linked, root-owned, executable, and immutable to A/B")
+	}
+	readFD, err := unix.Open(linuxOwnerAnchorGateImagePath, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return fmt.Errorf("open fixed Linux gate image for static-ELF verification: %w", err)
+	}
+	readFile := os.NewFile(uintptr(readFD), "symmetry-owner-anchor-gate-image-read")
+	if readFile == nil {
+		_ = unix.Close(readFD)
+		return errors.New("wrap fixed Linux gate image read FD")
+	}
+	defer readFile.Close()
+	var readStat unix.Stat_t
+	if err := unix.Fstat(readFD, &readStat); err != nil || readStat.Dev != imageStat.Dev || readStat.Ino != imageStat.Ino {
+		return fmt.Errorf("recheck fixed Linux gate image inode for ELF verification: %w", errOr(err, errors.New("inode changed")))
+	}
+	image, err := elf.NewFile(readFile)
+	if err != nil {
+		return fmt.Errorf("parse fixed Linux gate ELF image: %w", err)
+	}
+	for _, program := range image.Progs {
+		if program.Type == elf.PT_INTERP {
+			_ = image.Close()
+			return errors.New("fixed Linux gate ELF image is dynamically linked")
+		}
+	}
+	staticAMD64 := image.Class == elf.ELFCLASS64 && image.Data == elf.ELFDATA2LSB && image.Machine == elf.EM_X86_64
+	_ = image.Close()
+	if !staticAMD64 {
+		return errors.New("fixed Linux gate ELF image is not static Linux/amd64")
+	}
+	var processStat unix.Stat_t
+	if err := unix.Stat(fmt.Sprintf("/proc/%d/exe", process.PID), &processStat); err != nil {
+		return fmt.Errorf("read exact gate executable inode: %w", err)
+	}
+	if processStat.Mode&unix.S_IFMT != unix.S_IFREG || processStat.Dev != imageStat.Dev || processStat.Ino != imageStat.Ino {
+		return errors.New("exact gate process is not executing the pinned static A gate image")
+	}
+	if err := verifyLinuxOwnerAnchorPIDFDIdentity(pidfd, process); err != nil {
+		return fmt.Errorf("recheck exact gate pidfd after image readback: %w", err)
+	}
+	if identity, err := ProcessIdentity(process.PID); err != nil || identity != process.Identity {
+		return fmt.Errorf("recheck exact gate process after image readback: %w", errOr(err, errors.New("creation identity differs")))
+	}
+	return nil
+}
+
+func pinLinuxOwnerAnchorGateImage(
+	process authority.LinuxCgroupProcessIdentity,
+	pidfd int,
+	owner linuxgate.OwnerConfig,
+) (*os.File, error) {
+	if err := verifyLinuxOwnerAnchorGateImage(process, pidfd, owner); err != nil {
+		return nil, err
+	}
+	fd, err := unix.Open(linuxOwnerAnchorGateImagePath, unix.O_PATH|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, fmt.Errorf("retain fixed installed Linux gate image: %w", err)
+	}
+	image := os.NewFile(uintptr(fd), "symmetry-owner-anchor-pinned-gate-image")
+	if image == nil {
+		_ = unix.Close(fd)
+		return nil, errors.New("wrap retained static gate image FD")
+	}
+	if err := verifyLinuxOwnerAnchorGateImageFD(image, process, pidfd); err != nil {
+		_ = image.Close()
+		return nil, err
+	}
+	return image, nil
+}
+
+func verifyLinuxOwnerAnchorGateImageFD(
+	image *os.File,
+	process authority.LinuxCgroupProcessIdentity,
+	pidfd int,
+) error {
+	if image == nil || process.Validate() != nil || pidfd < 0 {
+		return errors.New("pinned gate image/process identity is incomplete")
+	}
+	var imageStat unix.Stat_t
+	if err := unix.Fstat(int(image.Fd()), &imageStat); err != nil {
+		return fmt.Errorf("stat retained fixed gate image: %w", err)
+	}
+	if imageStat.Mode&unix.S_IFMT != unix.S_IFREG || imageStat.Uid != 0 || imageStat.Gid != 0 ||
+		imageStat.Mode&0022 != 0 || imageStat.Mode&0111 == 0 || imageStat.Nlink != 1 {
+		return errors.New("retained Linux gate image lost its root-owned non-writable identity")
+	}
+	var processStat unix.Stat_t
+	if err := unix.Stat(fmt.Sprintf("/proc/%d/exe", process.PID), &processStat); err != nil {
+		return fmt.Errorf("read exact gate executable against retained image pin: %w", err)
+	}
+	if processStat.Mode&unix.S_IFMT != unix.S_IFREG || processStat.Dev != imageStat.Dev || processStat.Ino != imageStat.Ino {
+		return errors.New("exact gate process executable differs from the retained root-owned static image")
+	}
+	if err := verifyLinuxOwnerAnchorPIDFDIdentity(pidfd, process); err != nil {
+		return fmt.Errorf("recheck exact gate pidfd against retained image pin: %w", err)
+	}
+	if identity, err := ProcessIdentity(process.PID); err != nil || identity != process.Identity {
+		return fmt.Errorf("recheck exact gate process against retained image pin: %w", errOr(err, errors.New("creation identity differs")))
+	}
+	return nil
+}
+
+type linuxOwnerAnchorNamespacePin struct {
+	runKey    LinuxOwnerAnchorRunKey
+	namespace LinuxUserNamespaceIdentity
+	fd        *os.File
+}
+
+func openLinuxOwnerAnchorUserNamespaceFD(
+	process authority.LinuxCgroupProcessIdentity,
+	pidfd int,
+) (*os.File, LinuxUserNamespaceIdentity, error) {
+	if process.Validate() != nil || pidfd < -1 || pidfd < 0 && process.PID != os.Getpid() {
+		return nil, LinuxUserNamespaceIdentity{}, errors.New("pin exact Linux process user namespace requires a valid process identity and pidfd")
+	}
+	if pidfd >= 0 {
+		if err := verifyLinuxOwnerAnchorPIDFDIdentity(pidfd, process); err != nil {
+			return nil, LinuxUserNamespaceIdentity{}, fmt.Errorf("verify process pidfd before user-namespace pin: %w", err)
+		}
+	}
+	if identity, err := ProcessIdentity(process.PID); err != nil || identity != process.Identity {
+		return nil, LinuxUserNamespaceIdentity{}, fmt.Errorf("verify process identity before user-namespace pin: %w", errOr(err, errors.New("creation identity differs")))
+	}
+	fd, err := unix.Open(fmt.Sprintf("/proc/%d/ns/user", process.PID), unix.O_RDONLY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, LinuxUserNamespaceIdentity{}, fmt.Errorf("open exact process user namespace: %w", err)
+	}
+	namespaceFile := os.NewFile(uintptr(fd), "symmetry-owner-anchor-user-namespace")
+	if namespaceFile == nil {
+		_ = unix.Close(fd)
+		return nil, LinuxUserNamespaceIdentity{}, errors.New("wrap exact process user namespace FD")
+	}
+	namespace, err := linuxOwnerAnchorUserNamespaceFDIdentity(namespaceFile)
+	if err != nil {
+		_ = namespaceFile.Close()
+		return nil, LinuxUserNamespaceIdentity{}, err
+	}
+	current, err := readLinuxUserNamespaceIdentity(process.PID)
+	if err != nil || current != namespace {
+		_ = namespaceFile.Close()
+		return nil, LinuxUserNamespaceIdentity{}, fmt.Errorf("compare pinned nsfs inode with exact process namespace: %w", errOr(err, errors.New("device or inode differs")))
+	}
+	if identity, err := ProcessIdentity(process.PID); err != nil || identity != process.Identity {
+		_ = namespaceFile.Close()
+		return nil, LinuxUserNamespaceIdentity{}, fmt.Errorf("recheck process identity after user-namespace pin: %w", errOr(err, errors.New("creation identity differs")))
+	}
+	if pidfd >= 0 {
+		if err := verifyLinuxOwnerAnchorPIDFDIdentity(pidfd, process); err != nil {
+			_ = namespaceFile.Close()
+			return nil, LinuxUserNamespaceIdentity{}, fmt.Errorf("recheck process pidfd after user-namespace pin: %w", err)
+		}
+	}
+	runtime.KeepAlive(namespaceFile)
+	return namespaceFile, namespace, nil
+}
+
+func linuxOwnerAnchorUserNamespaceFDIdentity(namespace *os.File) (LinuxUserNamespaceIdentity, error) {
+	if namespace == nil {
+		return LinuxUserNamespaceIdentity{}, errors.New("Linux user-namespace FD is unavailable")
+	}
+	var stat unix.Stat_t
+	if err := unix.Fstat(int(namespace.Fd()), &stat); err != nil {
+		return LinuxUserNamespaceIdentity{}, fmt.Errorf("stat pinned Linux user-namespace FD: %w", err)
+	}
+	if stat.Mode&unix.S_IFMT != unix.S_IFREG {
+		return LinuxUserNamespaceIdentity{}, errors.New("pinned Linux user-namespace FD is not an nsfs inode")
+	}
+	namespaceType, err := unix.IoctlRetInt(int(namespace.Fd()), unix.NS_GET_NSTYPE)
+	if err != nil || namespaceType != unix.CLONE_NEWUSER {
+		return LinuxUserNamespaceIdentity{}, fmt.Errorf("verify pinned nsfs object is a user namespace: %w", errOr(err, errors.New("namespace type differs")))
+	}
+	identity := LinuxUserNamespaceIdentity{Device: uint64(stat.Dev), Inode: stat.Ino}
+	if !identity.valid() {
+		return LinuxUserNamespaceIdentity{}, errors.New("pinned Linux user-namespace identity is invalid")
+	}
+	return identity, nil
+}
+
+func linuxOwnerAnchorUserNamespaceParentIdentity(namespace *os.File) (LinuxUserNamespaceIdentity, error) {
+	if _, err := linuxOwnerAnchorUserNamespaceFDIdentity(namespace); err != nil {
+		return LinuxUserNamespaceIdentity{}, err
+	}
+	parentFD, err := unix.IoctlRetInt(int(namespace.Fd()), unix.NS_GET_PARENT)
+	if err != nil {
+		return LinuxUserNamespaceIdentity{}, fmt.Errorf("read parent user namespace with NS_GET_PARENT: %w", err)
+	}
+	parent := os.NewFile(uintptr(parentFD), "symmetry-owner-anchor-parent-user-namespace")
+	if parent == nil {
+		_ = unix.Close(parentFD)
+		return LinuxUserNamespaceIdentity{}, errors.New("wrap parent Linux user-namespace FD")
+	}
+	defer parent.Close()
+	return linuxOwnerAnchorUserNamespaceFDIdentity(parent)
+}
+
+// linuxOwnerAnchorUserNamespaceRun returns the exact active RunKey whose
+// pinned gate namespace is an ancestor of process. The Anchor's own pinned
+// user namespace is the traversal stop: an inaccessible parent, malformed
+// nsfs object, changed PID, or unstable namespace returns an error and cannot
+// be interpreted as current-run origin.
+func linuxOwnerAnchorUserNamespaceRun(
+	ctx context.Context,
+	process authority.LinuxCgroupProcessIdentity,
+	pidfd int,
+	pins []linuxOwnerAnchorNamespacePin,
+	anchorNamespaceFD *os.File,
+) (LinuxOwnerAnchorRunKey, bool, error) {
+	if ctx == nil || process.Validate() != nil || pidfd < 0 || anchorNamespaceFD == nil {
+		return LinuxOwnerAnchorRunKey{}, false, errors.New("Linux run user-namespace ancestry check is incomplete")
+	}
+	if err := verifyLinuxOwnerAnchorPIDFDIdentity(pidfd, process); err != nil {
+		return LinuxOwnerAnchorRunKey{}, false, fmt.Errorf("verify process pidfd before user-namespace ancestry check: %w", err)
+	}
+	anchorNamespace, err := linuxOwnerAnchorUserNamespaceFDIdentity(anchorNamespaceFD)
+	if err != nil {
+		return LinuxOwnerAnchorRunKey{}, false, err
+	}
+	for index, pin := range pins {
+		if !validLinuxOwnerAnchorRunID(pin.runKey.RunID) || pin.runKey.Generation <= 0 || pin.fd == nil || !pin.namespace.valid() {
+			return LinuxOwnerAnchorRunKey{}, false, errors.New("active RunKey gate user-namespace pin is incomplete")
+		}
+		identity, err := linuxOwnerAnchorUserNamespaceFDIdentity(pin.fd)
+		if err != nil || identity != pin.namespace || identity == anchorNamespace {
+			return LinuxOwnerAnchorRunKey{}, false, fmt.Errorf("verify active RunKey gate user-namespace pin: %w", errOr(err, errors.New("identity is invalid or aliases the Anchor namespace")))
+		}
+		for previous := 0; previous < index; previous++ {
+			if pins[previous].runKey == pin.runKey || pins[previous].namespace == pin.namespace {
+				return LinuxOwnerAnchorRunKey{}, false, errors.New("active RunKey gate user-namespace pins are not distinct")
+			}
+		}
+	}
+	processNamespaceFD, processNamespace, err := openLinuxOwnerAnchorUserNamespaceFD(process, pidfd)
+	if err != nil {
+		return LinuxOwnerAnchorRunKey{}, false, err
+	}
+	defer processNamespaceFD.Close()
+	current := processNamespaceFD
+	currentOwned := false
+	defer func() {
+		if currentOwned && current != nil {
+			_ = current.Close()
+		}
+	}()
+	var match LinuxOwnerAnchorRunKey
+	found := false
+	for depth := 0; depth <= linuxOwnerAnchorMaxUserNamespaceDepth; depth++ {
+		if err := ctx.Err(); err != nil {
+			return LinuxOwnerAnchorRunKey{}, false, err
+		}
+		currentIdentity, err := linuxOwnerAnchorUserNamespaceFDIdentity(current)
+		if err != nil {
+			return LinuxOwnerAnchorRunKey{}, false, err
+		}
+		if currentIdentity == anchorNamespace {
+			break
+		}
+		for _, pin := range pins {
+			if currentIdentity == pin.namespace {
+				match = pin.runKey
+				found = true
+				break
+			}
+		}
+		if found {
+			break
+		}
+		if depth == linuxOwnerAnchorMaxUserNamespaceDepth {
+			return LinuxOwnerAnchorRunKey{}, false, errors.New("user-namespace ancestry exceeds the kernel's bounded nesting depth")
+		}
+		parentFD, err := unix.IoctlRetInt(int(current.Fd()), unix.NS_GET_PARENT)
+		if err != nil {
+			return LinuxOwnerAnchorRunKey{}, false, fmt.Errorf("walk bounded NS_GET_PARENT chain: %w", err)
+		}
+		parent := os.NewFile(uintptr(parentFD), "symmetry-owner-anchor-user-namespace-parent")
+		if parent == nil {
+			_ = unix.Close(parentFD)
+			return LinuxOwnerAnchorRunKey{}, false, errors.New("wrap parent user-namespace ancestry FD")
+		}
+		parentIdentity, err := linuxOwnerAnchorUserNamespaceFDIdentity(parent)
+		if err != nil || parentIdentity == currentIdentity {
+			_ = parent.Close()
+			return LinuxOwnerAnchorRunKey{}, false, fmt.Errorf("verify parent user-namespace ancestry FD: %w", errOr(err, errors.New("namespace ancestry cycle")))
+		}
+		if currentOwned {
+			_ = current.Close()
+		}
+		current = parent
+		currentOwned = true
+	}
+	if identity, err := ProcessIdentity(process.PID); err != nil || identity != process.Identity {
+		return LinuxOwnerAnchorRunKey{}, false, fmt.Errorf("recheck process identity after user-namespace ancestry: %w", errOr(err, errors.New("creation identity differs")))
+	}
+	currentProcessNamespace, err := readLinuxUserNamespaceIdentity(process.PID)
+	if err != nil || currentProcessNamespace != processNamespace {
+		return LinuxOwnerAnchorRunKey{}, false, fmt.Errorf("recheck process user namespace after ancestry walk: %w", errOr(err, errors.New("device or inode changed")))
+	}
+	if err := verifyLinuxOwnerAnchorPIDFDIdentity(pidfd, process); err != nil {
+		return LinuxOwnerAnchorRunKey{}, false, fmt.Errorf("recheck process pidfd after user-namespace ancestry: %w", err)
+	}
+	return match, found, nil
+}
+
+func (anchor *linuxOwnerAnchor) classifyRunChildOrigin(
+	ctx context.Context,
+	run *linuxOwnerAnchorRun,
+	process authority.LinuxCgroupProcessIdentity,
+	pidfd int,
+) (linuxOwnerAnchorRunChildClassification, error) {
+	unknown := linuxOwnerAnchorUnknownChildClassification(run, process)
+	if anchor == nil || ctx == nil || run == nil || run.grant.Validate() != nil || run.helper.Validate() != nil ||
+		!run.grant.Anchor.Equal(anchor.identity) || process.Validate() != nil || pidfd < 0 {
+		return unknown, errors.New("Linux owner anchor child-origin classifier is not bound to an exact active run")
+	}
+	if active, exists := anchor.runs[run.grant.RunKey]; !exists || active != run || !run.grant.Equal(active.grant) {
+		return unknown, errors.New("Linux owner anchor child-origin classifier run is not the retained exact RunKey")
+	}
+	if err := ctx.Err(); err != nil {
+		return unknown, err
+	}
+	if err := verifyLinuxOwnerAnchorPIDFDIdentity(pidfd, process); err != nil {
+		return unknown, fmt.Errorf("verify exact process pidfd before origin classification: %w", err)
+	}
+	if identity, err := ProcessIdentity(process.PID); err != nil || identity != process.Identity {
+		return unknown, fmt.Errorf("verify process identity before origin classification: %w", errOr(err, errors.New("creation identity differs")))
+	}
+	if physicalOnly, exists := run.physicalOnlyChildren[process.PID]; exists {
+		if !physicalOnly.identity.Equal(process) || physicalOnly.pidfd == nil || physicalOnly.imageFD == nil ||
+			physicalOnly.classification.ValidateFor(run.grant, run.helper, process) != nil ||
+			physicalOnly.classification.Origin != linuxOwnerAnchorRunChildOriginPreReleaseGatePhysicalOnly {
+			return unknown, errors.New("physical-only gate PID conflicts with its retained exact Anchor pin")
+		}
+		if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(physicalOnly.pidfd.Fd()), process); err != nil {
+			return unknown, fmt.Errorf("verify retained physical-only gate pidfd: %w", err)
+		}
+		if err := verifyLinuxOwnerAnchorGateImageFD(physicalOnly.imageFD, process, int(physicalOnly.pidfd.Fd())); err != nil {
+			return unknown, fmt.Errorf("verify retained physical-only static gate image: %w", err)
+		}
+		return physicalOnly.classification, nil
+	}
+	trackedAtStart, trackedAtStartExists := run.children[process.PID]
+	emptyAfterStop := run.leafRemovedObserved || run.leafKillAcknowledged && run.leafEmptyObserved
+	if trackedAtStartExists && trackedAtStart.identity.Equal(process) && trackedAtStart.pidfd != nil &&
+		trackedAtStart.role == trackedAtStart.classification.Role &&
+		trackedAtStart.classification.currentRunMember() &&
+		trackedAtStart.classification.ValidateFor(run.grant, run.helper, process) == nil && emptyAfterStop {
+		ready, err := linuxOwnerAnchorPIDFDReady(trackedAtStart.pidfd)
+		if err != nil {
+			return unknown, fmt.Errorf("poll cached namespace-proven child pidfd: %w", err)
+		}
+		if ready {
+			if trackedAtStart.classification.Origin == linuxOwnerAnchorRunChildOriginGateUserNSCurrent ||
+				trackedAtStart.role == "gate" || trackedAtStart.role == "native" {
+				if err := run.verifyPinnedGateUserNamespace(); err != nil {
+					return unknown, err
+				}
+			}
+			if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(trackedAtStart.pidfd.Fd()), process); err != nil {
+				return unknown, fmt.Errorf("recheck cached namespace-proven child pidfd: %w", err)
+			}
+			return trackedAtStart.classification, nil
+		}
+	}
+	cgroupPath, err := readLinuxOwnerProcessCgroupPath(process.PID)
+	if err != nil {
+		return unknown, fmt.Errorf("read process cgroup before origin classification: %w", err)
+	}
+	leafPath := path.Join(run.grant.Parent.Path, run.grant.Leaf.LeafName)
+	processInTargetLeaf := linuxOwnerCgroupPathWithin(cgroupPath, leafPath)
+	var sourceRun *linuxOwnerAnchorRun
+	var sourceKey LinuxOwnerAnchorRunKey
+	var tracked *linuxOwnerAnchorTrackedProcess
+	for key, candidate := range anchor.runs {
+		if err := ctx.Err(); err != nil {
+			return unknown, err
+		}
+		if candidate == nil || candidate.retired {
+			continue
+		}
+		if candidate.grant.Validate() != nil || candidate.grant.RunKey != key || candidate.helper.Validate() != nil {
+			return unknown, errors.New("anchor has an invalid active RunKey while classifying a process")
+		}
+		if physicalOnly, exists := candidate.physicalOnlyChildren[process.PID]; exists {
+			if candidate.helperExit == nil || !candidate.helperExit.ValidFor(candidate.helper, anchor.identity) ||
+				!physicalOnly.identity.Equal(process) || physicalOnly.pidfd == nil || physicalOnly.imageFD == nil || physicalOnly.waited ||
+				physicalOnly.classification.ValidateFor(candidate.grant, candidate.helper, process) != nil ||
+				physicalOnly.classification.Origin != linuxOwnerAnchorRunChildOriginPreReleaseGatePhysicalOnly {
+				return unknown, errors.New("physical-only foreign gate differs from its retained exact PIDFD origin")
+			}
+			if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(physicalOnly.pidfd.Fd()), process); err != nil {
+				return unknown, fmt.Errorf("verify physical-only source gate pidfd: %w", err)
+			}
+			if err := verifyLinuxOwnerAnchorGateImageFD(physicalOnly.imageFD, process, int(physicalOnly.pidfd.Fd())); err != nil {
+				return unknown, fmt.Errorf("verify physical-only source gate image: %w", err)
+			}
+			if key == run.grant.RunKey {
+				return physicalOnly.classification, nil
+			}
+			if processInTargetLeaf {
+				run.migrationObserved = true
+			}
+			return anchor.finishLinuxOwnerAnchorChildClassification(ctx, run, process, pidfd, cgroupPath,
+				linuxOwnerAnchorRunChildOriginPhysicalOnlyForeign, LinuxOwnerAnchorRunKey{}, "pre_release_gate")
+		}
+		if candidate.helper.Equal(process) {
+			if sourceRun != nil {
+				return unknown, errors.New("process identity collides with multiple active RunKeys")
+			}
+			sourceRun = candidate
+			sourceKey = key
+			continue
+		}
+		if child, exists := candidate.children[process.PID]; exists {
+			if !child.identity.Equal(process) {
+				return unknown, errors.New("anchor child PID conflicts with a retained process identity")
+			}
+			if sourceRun != nil {
+				return unknown, errors.New("process identity collides with multiple active RunKeys")
+			}
+			childCopy := child
+			sourceRun = candidate
+			sourceKey = key
+			tracked = &childCopy
+		}
+	}
+	if sourceRun != nil {
+		if sourceRun.helper.Validate() != nil || !sourceRun.grant.Anchor.Equal(anchor.identity) {
+			return unknown, errors.New("registered process source RunKey differs from the exact Anchor")
+		}
+		if sourceRun.helper.Equal(process) {
+			if sourceRun.helperPIDFD == nil || sourceRun.helperExit != nil ||
+				verifyLinuxOwnerAnchorPIDFDIdentity(int(sourceRun.helperPIDFD.Fd()), process) != nil {
+				return unknown, errors.New("registered helper process is not pinned as an exact live child")
+			}
+			if sourceKey == run.grant.RunKey {
+				if processInTargetLeaf {
+					run.migrationObserved = true
+				}
+				return unknown, errors.New("helper itself is not a run-child origin candidate")
+			}
+			if processInTargetLeaf {
+				run.migrationObserved = true
+			}
+			return anchor.finishLinuxOwnerAnchorChildClassification(ctx, run, process, pidfd,
+				cgroupPath, linuxOwnerAnchorRunChildOriginRegisteredForeign, sourceKey, "")
+		}
+		if tracked == nil || tracked.pidfd == nil || tracked.classification.ValidateFor(sourceRun.grant, sourceRun.helper, process) != nil {
+			return unknown, errors.New("registered child source lacks its exact retained PIDFD and RunKey classification")
+		}
+		if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(tracked.pidfd.Fd()), process); err != nil {
+			return unknown, fmt.Errorf("verify retained source-run child pidfd: %w", err)
+		}
+		switch tracked.classification.Origin {
+		case linuxOwnerAnchorRunChildOriginRegisteredCurrent:
+			if tracked.creator.Validate() != nil || tracked.classification.OriginRunKey != sourceKey {
+				return unknown, errors.New("registered source-run child lacks its exact observed creator edge")
+			}
+			if linuxOwnerCgroupPathWithin(cgroupPath, path.Join(sourceRun.grant.Parent.Path, sourceRun.grant.Leaf.LeafName)) {
+				if err := validateLinuxOwnerAnchorCreatorChain(ctx, sourceRun, *tracked); err != nil {
+					return unknown, fmt.Errorf("verify registered source-run creator chain: %w", err)
+				}
+			}
+		case linuxOwnerAnchorRunChildOriginGateUserNSCurrent:
+			if tracked.creator.Validate() == nil || tracked.classification.OriginRunKey != sourceKey ||
+				tracked.role != "descendant" {
+				return unknown, errors.New("namespace-derived source-run child carries a synthetic creator edge")
+			}
+			pins, err := anchor.activeGateNamespacePins()
+			if err != nil {
+				return unknown, err
+			}
+			originRun, found, err := linuxOwnerAnchorUserNamespaceRun(ctx, process, pidfd, pins, anchor.userNamespaceFD)
+			if err != nil || !found || originRun != sourceKey {
+				return unknown, fmt.Errorf("recheck namespace-derived source-run origin: %w", errOr(err, errors.New("gate namespace ancestry differs")))
+			}
+		default:
+			return unknown, errors.New("retained source-run child has an unsupported origin classification")
+		}
+		if sourceKey == run.grant.RunKey {
+			if tracked.classification.Origin == linuxOwnerAnchorRunChildOriginGateUserNSCurrent {
+				if run.leafKillAttempted && run.leafKillAcknowledged && run.leafEmptyObserved {
+					ready, err := linuxOwnerAnchorPIDFDReady(tracked.pidfd)
+					if err != nil {
+						return unknown, fmt.Errorf("recheck cached namespace-proven child pidfd after cgroup.empty: %w", err)
+					}
+					if ready {
+						if err := tracked.classification.ValidateFor(run.grant, run.helper, process); err != nil {
+							return unknown, err
+						}
+						return tracked.classification, nil
+					}
+				}
+				if !processInTargetLeaf {
+					run.migrationObserved = true
+					return anchor.makeLinuxOwnerAnchorChildClassification(run, process, sourceKey, "descendant",
+						linuxOwnerAnchorRunChildOriginCurrentRunEscaped), nil
+				}
+				if err := verifyLinuxOwnerRunChildCredentials(process.PID, "native", run.owner); err != nil {
+					return unknown, err
+				}
+				return anchor.finishLinuxOwnerAnchorChildClassification(ctx, run, process, pidfd, cgroupPath,
+					linuxOwnerAnchorRunChildOriginGateUserNSCurrent, sourceKey, "descendant")
+			}
+			if tracked.classification.Origin != linuxOwnerAnchorRunChildOriginRegisteredCurrent {
+				return unknown, errors.New("current-run child classification is not registered or namespace-proven")
+			}
+			role := tracked.role
+			if role == "launcher" && cgroupPath != run.grant.Parent.Path || role != "launcher" && !processInTargetLeaf {
+				run.migrationObserved = true
+				return anchor.makeLinuxOwnerAnchorChildClassification(run, process, sourceKey, role,
+					linuxOwnerAnchorRunChildOriginCurrentRunEscaped), nil
+			}
+			switch role {
+			case "launcher":
+				if err := verifyLinuxOwnerRunChildCredentials(process.PID, role, run.owner); err != nil {
+					return unknown, err
+				}
+			case "gate":
+				if processInTargetLeaf && run.gateReleaseAuthorized {
+					if err := run.verifyAuthorizedGateExec(process, true); err == nil {
+						role = "native"
+						tracked.role = role
+						tracked.classification.Role = role
+						run.children[process.PID] = *tracked
+					} else if err := run.verifyRegisteredGateA(process, true); err != nil {
+						return unknown, fmt.Errorf("verify registered gate/native transition during origin classification: %w", errors.Join(err))
+					}
+				} else if err := run.verifyRegisteredGateA(process, true); err != nil {
+					return unknown, err
+				}
+			case "native":
+				if err := run.verifyAuthorizedGateExec(process, processInTargetLeaf); err != nil {
+					return unknown, err
+				}
+			case "descendant":
+				if err := verifyLinuxOwnerRunChildCredentials(process.PID, role, run.owner); err != nil {
+					return unknown, err
+				}
+				if err := validateLinuxOwnerAnchorCreatorChain(ctx, run, *tracked); err != nil {
+					return unknown, fmt.Errorf("verify current-run registered creator chain: %w", err)
+				}
+			default:
+				return unknown, errors.New("registered current-run child has an unsupported process role")
+			}
+			return anchor.finishLinuxOwnerAnchorChildClassification(ctx, run, process, pidfd, cgroupPath,
+				linuxOwnerAnchorRunChildOriginRegisteredCurrent, sourceKey, role)
+		}
+		if processInTargetLeaf {
+			run.migrationObserved = true
+		}
+		return anchor.finishLinuxOwnerAnchorChildClassification(ctx, run, process, pidfd, cgroupPath,
+			linuxOwnerAnchorRunChildOriginRegisteredForeign, sourceKey, tracked.role)
+	}
+	if process.Equal(run.helper) || process.Equal(anchor.identity) {
+		return unknown, errors.New("Anchor/helper process cannot be classified as an unregistered run descendant")
+	}
+	pins, err := anchor.activeGateNamespacePins()
+	if err != nil {
+		return unknown, err
+	}
+	originRunKey, found, err := linuxOwnerAnchorUserNamespaceRun(ctx, process, pidfd, pins, anchor.userNamespaceFD)
+	if err != nil {
+		return unknown, err
+	}
+	if !found {
+		physicalOnly, eligible, err := anchor.classifyUnregisteredPreReleaseGate(ctx, run, process, pidfd, cgroupPath)
+		if err != nil {
+			return unknown, err
+		}
+		if eligible {
+			return physicalOnly, nil
+		}
+		run.migrationObserved = true
+		return unknown, nil
+	}
+	origin := linuxOwnerAnchorClassifyNamespaceMembership(run.grant.RunKey, originRunKey, cgroupPath, leafPath)
+	if origin == linuxOwnerAnchorRunChildOriginOtherUserNSForeign {
+		if processInTargetLeaf {
+			run.migrationObserved = true
+		}
+		return anchor.finishLinuxOwnerAnchorChildClassification(ctx, run, process, pidfd, cgroupPath, origin, originRunKey, "descendant")
+	}
+	if origin == linuxOwnerAnchorRunChildOriginUnknown {
+		run.migrationObserved = true
+		return unknown, nil
+	}
+	if err := verifyLinuxOwnerRunChildCredentials(process.PID, "native", run.owner); err != nil {
+		return unknown, fmt.Errorf("verify unregistered B descendant host credentials: %w", err)
+	}
+	if origin == linuxOwnerAnchorRunChildOriginCurrentRunEscaped {
+		run.migrationObserved = true
+		return anchor.finishLinuxOwnerAnchorChildClassification(ctx, run, process, pidfd, cgroupPath, origin, originRunKey, "descendant")
+	}
+	return anchor.finishLinuxOwnerAnchorChildClassification(ctx, run, process, pidfd, cgroupPath,
+		linuxOwnerAnchorRunChildOriginGateUserNSCurrent, originRunKey, "descendant")
+}
+
+func (anchor *linuxOwnerAnchor) activeGateNamespacePins() ([]linuxOwnerAnchorNamespacePin, error) {
+	if anchor == nil || anchor.userNamespaceFD == nil || !anchor.userNamespace.valid() {
+		return nil, errors.New("Anchor host user namespace pin is unavailable")
+	}
+	identity, err := linuxOwnerAnchorUserNamespaceFDIdentity(anchor.userNamespaceFD)
+	if err != nil || identity != anchor.userNamespace {
+		return nil, fmt.Errorf("verify exact Anchor user namespace pin: %w", errOr(err, errors.New("device or inode differs")))
+	}
+	pins := make([]linuxOwnerAnchorNamespacePin, 0, len(anchor.runs))
+	for key, run := range anchor.runs {
+		if run == nil || run.retired {
+			continue
+		}
+		if run.grant.Validate() != nil || run.grant.RunKey != key {
+			return nil, errors.New("Anchor has an invalid active RunKey while building namespace origin pins")
+		}
+		if run.gateIdentity == nil {
+			if run.gateUserNamespaceFD != nil {
+				return nil, errors.New("Anchor run has a user-namespace FD without an exact gate identity")
+			}
+			continue
+		}
+		if err := run.verifyPinnedGateUserNamespace(); err != nil {
+			return nil, err
+		}
+		parentNamespace, err := linuxOwnerAnchorUserNamespaceParentIdentity(run.gateUserNamespaceFD)
+		if err != nil || parentNamespace != anchor.userNamespace {
+			return nil, fmt.Errorf("verify active gate user namespace parent: %w", errOr(err, errors.New("parent namespace differs from Anchor")))
+		}
+		pins = append(pins, linuxOwnerAnchorNamespacePin{runKey: key, namespace: run.gateUserNamespace, fd: run.gateUserNamespaceFD})
+	}
+	sort.Slice(pins, func(left, right int) bool {
+		if pins[left].runKey.RunID == pins[right].runKey.RunID {
+			return pins[left].runKey.Generation < pins[right].runKey.Generation
+		}
+		return pins[left].runKey.RunID < pins[right].runKey.RunID
+	})
+	return pins, nil
+}
+
+func (anchor *linuxOwnerAnchor) classifyUnregisteredPreReleaseGate(
+	ctx context.Context,
+	run *linuxOwnerAnchorRun,
+	process authority.LinuxCgroupProcessIdentity,
+	pidfd int,
+	cgroupPath string,
+) (linuxOwnerAnchorRunChildClassification, bool, error) {
+	if anchor == nil || ctx == nil || run == nil || run.grant.Validate() != nil ||
+		run.helperExit == nil || !run.helperExit.ValidFor(run.helper, anchor.identity) ||
+		run.retired || run.gateIdentity != nil || run.gateUserNamespaceFD != nil || run.gateImageFD != nil ||
+		run.gateReadyAuthenticated || run.gateReleaseAuthorized || run.stopRequested || run.stopLeafAttempted || run.stopFence != nil {
+		return linuxOwnerAnchorRunChildClassification{}, false, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return linuxOwnerAnchorRunChildClassification{}, false, err
+	}
+	leafPath := path.Join(run.grant.Parent.Path, run.grant.Leaf.LeafName)
+	if !linuxOwnerCgroupPathWithin(cgroupPath, leafPath) {
+		return linuxOwnerAnchorRunChildClassification{}, false, nil
+	}
+	if err := verifyLinuxOwnerAnchorPIDFDIdentity(pidfd, process); err != nil {
+		return linuxOwnerAnchorRunChildClassification{}, false, fmt.Errorf("verify possible pre-release gate pidfd: %w", err)
+	}
+	if identity, err := ProcessIdentity(process.PID); err != nil || identity != process.Identity {
+		return linuxOwnerAnchorRunChildClassification{}, false, fmt.Errorf("verify possible pre-release gate identity: %w", errOr(err, errors.New("creation identity differs")))
+	}
+	credentials, err := readLinuxOwnerProcessCredentials(process.PID)
+	if err != nil || credentials.Parent != anchor.identity.PID {
+		return linuxOwnerAnchorRunChildClassification{}, false, fmt.Errorf("verify possible pre-release gate Anchor parent: %w", errOr(err, errors.New("parent PID differs")))
+	}
+	if err := verifyLinuxOwnerRunChildCredentials(process.PID, "gate", run.owner); err != nil {
+		return linuxOwnerAnchorRunChildClassification{}, false, nil
+	}
+	launcherCount := 0
+	for _, child := range run.children {
+		if child.role != "launcher" {
+			// A physical-only gate is accepted only in the narrow fork gap
+			// after the run's sole registered root launcher and before any gate
+			// or native identity was installed.
+			return linuxOwnerAnchorRunChildClassification{}, false, nil
+		}
+		if child.identity.Validate() != nil || child.creator.Validate() != nil || !child.creator.Equal(run.helper) ||
+			child.pidfd == nil || child.classification.ValidateFor(run.grant, run.helper, child.identity) != nil ||
+			child.classification.Origin != linuxOwnerAnchorRunChildOriginRegisteredCurrent {
+			return linuxOwnerAnchorRunChildClassification{}, false, errors.New("pre-release gate source lacks the exact registered root launcher")
+		}
+		// RegisterProcess already bound this retained PIDFD to the exact
+		// launcher start identity. The helper may have waitid-reaped it before
+		// Anchor observes helper death, in which case fdinfo intentionally no
+		// longer exposes a numeric PID; never reopen that number after exit.
+		ready, err := linuxOwnerAnchorPIDFDReady(child.pidfd)
+		if err != nil || !ready {
+			return linuxOwnerAnchorRunChildClassification{}, false, fmt.Errorf("verify root launcher exited before unregistered gate containment: %w", errOr(err, errors.New("launcher pidfd is not ready")))
+		}
+		launcherCount++
+	}
+	if launcherCount != 1 {
+		return linuxOwnerAnchorRunChildClassification{}, false, nil
+	}
+	gateNamespaceFD, gateNamespace, err := openLinuxOwnerAnchorUserNamespaceFD(process, pidfd)
+	if err != nil {
+		return linuxOwnerAnchorRunChildClassification{}, false, fmt.Errorf("pin possible pre-release gate user namespace: %w", err)
+	}
+	defer gateNamespaceFD.Close()
+	if gateNamespace == anchor.userNamespace {
+		return linuxOwnerAnchorRunChildClassification{}, false, nil
+	}
+	parentNamespace, err := linuxOwnerAnchorUserNamespaceParentIdentity(gateNamespaceFD)
+	if err != nil || parentNamespace != anchor.userNamespace {
+		return linuxOwnerAnchorRunChildClassification{}, false, fmt.Errorf("verify possible pre-release gate namespace parent: %w", errOr(err, errors.New("namespace is not an Anchor child")))
+	}
+	if err := verifyLinuxOwnerAnchorPIDFDIdentity(pidfd, process); err != nil {
+		return linuxOwnerAnchorRunChildClassification{}, false, err
+	}
+	if actual, err := ProcessIdentity(process.PID); err != nil || actual != process.Identity {
+		return linuxOwnerAnchorRunChildClassification{}, false, fmt.Errorf("recheck possible pre-release gate identity: %w", errOr(err, errors.New("creation identity differs")))
+	}
+	actualCgroupPath, err := readLinuxOwnerProcessCgroupPath(process.PID)
+	if err != nil || actualCgroupPath != cgroupPath {
+		return linuxOwnerAnchorRunChildClassification{}, false, fmt.Errorf("recheck possible pre-release gate leaf membership: %w", errOr(err, errors.New("cgroup path changed")))
+	}
+	classification := anchor.makeLinuxOwnerAnchorChildClassification(
+		run, process, LinuxOwnerAnchorRunKey{}, "pre_release_gate", linuxOwnerAnchorRunChildOriginPreReleaseGatePhysicalOnly,
+	)
+	if err := classification.ValidateFor(run.grant, run.helper, process); err != nil {
+		return linuxOwnerAnchorRunChildClassification{}, false, err
+	}
+	// Only the authenticated Anchor RegisterGate transition can install a gate
+	// identity, and AuthorizeGateRelease rejects requests until that transition
+	// has pinned GateReady. The fixed helper calls AuthorizeGateRelease before
+	// writing the one-use private RELEASE socket, so an exact helper exit with
+	// neither state set proves this pre-RegisterGate gate could not have received
+	// RELEASE. Keep that proof's image inode pinned through containment.
+	if err := run.trackPreReleaseGatePhysicalOnlyChild(process, pidfd, classification); err != nil {
+		return linuxOwnerAnchorRunChildClassification{}, false, fmt.Errorf("retain exact pre-release gate origin proof: %w", err)
+	}
+	return classification, true, nil
+}
+
+func (anchor *linuxOwnerAnchor) makeLinuxOwnerAnchorChildClassification(
+	run *linuxOwnerAnchorRun,
+	process authority.LinuxCgroupProcessIdentity,
+	originRun LinuxOwnerAnchorRunKey,
+	role string,
+	origin linuxOwnerAnchorRunChildOrigin,
+) linuxOwnerAnchorRunChildClassification {
+	classification := linuxOwnerAnchorUnknownChildClassification(run, process)
+	classification.OriginRunKey = originRun
+	classification.Role = role
+	classification.Origin = origin
+	return classification
+}
+
+func (anchor *linuxOwnerAnchor) finishLinuxOwnerAnchorChildClassification(
+	ctx context.Context,
+	run *linuxOwnerAnchorRun,
+	process authority.LinuxCgroupProcessIdentity,
+	pidfd int,
+	cgroupPath string,
+	origin linuxOwnerAnchorRunChildOrigin,
+	originRun LinuxOwnerAnchorRunKey,
+	role string,
+) (linuxOwnerAnchorRunChildClassification, error) {
+	unknown := linuxOwnerAnchorUnknownChildClassification(run, process)
+	if ctx == nil || ctx.Err() != nil || anchor == nil || run == nil || process.Validate() != nil || pidfd < 0 ||
+		!linuxOwnerAnchorValidChildRole(role) {
+		return unknown, errors.New("finish exact run-child classification requires a live bounded request")
+	}
+	if identity, err := ProcessIdentity(process.PID); err != nil || identity != process.Identity {
+		return unknown, fmt.Errorf("recheck child creation identity after origin classification: %w", errOr(err, errors.New("creation identity differs")))
+	}
+	if err := verifyLinuxOwnerAnchorPIDFDIdentity(pidfd, process); err != nil {
+		return unknown, fmt.Errorf("recheck child pidfd after origin classification: %w", err)
+	}
+	currentCgroupPath, err := readLinuxOwnerProcessCgroupPath(process.PID)
+	if err != nil || currentCgroupPath != cgroupPath {
+		return unknown, fmt.Errorf("recheck child cgroup after origin classification: %w", errOr(err, errors.New("cgroup path changed")))
+	}
+	classification := anchor.makeLinuxOwnerAnchorChildClassification(run, process, originRun, role, origin)
+	if err := classification.ValidateFor(run.grant, run.helper, process); err != nil {
+		return unknown, err
+	}
+	return classification, nil
+}
+
+func canonicalLinuxOwnerAnchorMap(value string) string {
+	fields := strings.Fields(value)
+	if len(fields) != 3 {
+		return ""
+	}
+	for _, field := range fields {
+		parsed, err := strconv.ParseUint(field, 10, 32)
+		if err != nil || strconv.FormatUint(parsed, 10) != field {
+			return ""
+		}
+	}
+	return strings.Join(fields, " ")
+}
+
+func readLinuxOwnerAnchorProcText(pid int, name string, maxBytes int64) (string, error) {
+	if pid <= 1 || maxBytes <= 0 || (name != "uid_map" && name != "gid_map" && name != "setgroups" && name != "status") {
+		return "", errors.New("Linux owner anchor proc read requires a fixed filename, positive PID, and byte bound")
+	}
+	file, err := os.Open(fmt.Sprintf("/proc/%d/%s", pid, name))
+	if err != nil {
+		return "", fmt.Errorf("open exact Linux owner process %s: %w", name, err)
+	}
+	defer file.Close()
+	contents, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("read exact Linux owner process %s: %w", name, err)
+	}
+	if int64(len(contents)) > maxBytes {
+		return "", fmt.Errorf("exact Linux owner process %s exceeds its bound", name)
+	}
+	return string(contents), nil
+}
+
+func verifyLinuxOwnerAnchorNativePrivilegeState(pid int) error {
+	contents, err := readLinuxOwnerAnchorProcText(pid, "status", 1<<20)
+	if err != nil {
+		return err
+	}
+	var groupsSeen, noNewPrivsSeen bool
+	var capabilitySeen [5]bool
+	var noNewPrivs uint64
+	var capabilities [5]uint64
+	capabilityFields := [...]string{"CapEff", "CapPrm", "CapInh", "CapBnd", "CapAmb"}
+	for _, line := range strings.Split(contents, "\n") {
+		key, value, found := strings.Cut(line, ":")
+		if !found {
+			continue
+		}
+		switch key {
+		case "Groups":
+			if groupsSeen || len(strings.Fields(value)) != 0 {
+				return errors.New("Linux native process has supplementary groups or duplicate Groups status")
+			}
+			groupsSeen = true
+		case "NoNewPrivs":
+			if noNewPrivsSeen {
+				return errors.New("Linux native process status duplicates NoNewPrivs")
+			}
+			parsed, parseErr := strconv.ParseUint(strings.TrimSpace(value), 10, 32)
+			if parseErr != nil {
+				return errors.New("Linux native process NoNewPrivs status is malformed")
+			}
+			noNewPrivs, noNewPrivsSeen = parsed, true
+		default:
+			for index, name := range capabilityFields {
+				if key != name {
+					continue
+				}
+				if capabilitySeen[index] {
+					return fmt.Errorf("Linux native process status duplicates %s", name)
+				}
+				parsed, parseErr := strconv.ParseUint(strings.TrimSpace(value), 16, 64)
+				if parseErr != nil {
+					return fmt.Errorf("Linux native process %s status is malformed", name)
+				}
+				capabilities[index], capabilitySeen[index] = parsed, true
+			}
+		}
+	}
+	if !groupsSeen || !noNewPrivsSeen || noNewPrivs != 1 {
+		return errors.New("Linux native process status lacks empty Groups or NoNewPrivs=1")
+	}
+	for index, name := range capabilityFields {
+		if !capabilitySeen[index] || capabilities[index] != 0 {
+			return fmt.Errorf("Linux native process %s is missing or nonzero", name)
+		}
 	}
 	return nil
 }
@@ -2588,7 +6649,41 @@ func (run *linuxOwnerAnchorRun) close() error {
 		}
 		delete(run.children, pid)
 	}
+	for pid, child := range run.physicalOnlyChildren {
+		if child.pidfd != nil {
+			if err := child.pidfd.Close(); result == nil {
+				result = err
+			}
+		}
+		if child.imageFD != nil {
+			if err := child.imageFD.Close(); result == nil {
+				result = err
+			}
+		}
+		delete(run.physicalOnlyChildren, pid)
+	}
 	clear(run.reaped)
+	if run.gateUserNamespaceFD != nil {
+		if err := run.gateUserNamespaceFD.Close(); result == nil {
+			result = err
+		}
+		run.gateUserNamespaceFD = nil
+	}
+	if run.gateImageFD != nil {
+		if err := run.gateImageFD.Close(); result == nil {
+			result = err
+		}
+		run.gateImageFD = nil
+	}
+	run.gateIdentity = nil
+	run.gateUserNamespace = LinuxUserNamespaceIdentity{}
+	run.gateReadyAuthenticated = false
+	run.gateReleaseAuthorized = false
+	run.stopRequested = false
+	run.stopLeafAttempted = false
+	run.stopFence = nil
+	run.stopEvidence = nil
+	run.noMigrationProven = false
 	if run.leaf != nil {
 		if err := run.leaf.Close(); result == nil {
 			result = err
@@ -2604,6 +6699,31 @@ func (run *linuxOwnerAnchorRun) waitForAdoptedChild(ctx context.Context, anchor 
 	}
 	bounded, cancel := context.WithTimeout(ctx, linuxOwnerAnchorWaitTimeout)
 	defer cancel()
+	if run.leafRemovedObserved || run.leafKillAcknowledged && run.leafEmptyObserved {
+		if tracked, exists := run.children[target.PID]; exists && tracked.identity.Equal(target) && tracked.role == role &&
+			tracked.role == tracked.classification.Role &&
+			tracked.pidfd != nil && tracked.classification.ValidateFor(run.grant, run.helper, target) == nil &&
+			tracked.classification.currentRunMember() {
+			ready, err := linuxOwnerAnchorPIDFDReady(tracked.pidfd)
+			if err != nil {
+				return fmt.Errorf("poll exact empty-leaf child pidfd before wait: %w", err)
+			}
+			if ready {
+				if tracked.classification.Origin == linuxOwnerAnchorRunChildOriginGateUserNSCurrent {
+					if err := run.verifyPinnedGateUserNamespace(); err != nil {
+						return err
+					}
+				}
+				if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(tracked.pidfd.Fd()), target); err != nil {
+					return fmt.Errorf("recheck retained empty-leaf child pidfd: %w", err)
+				}
+				// The exact process and its in-leaf origin were retained before
+				// cgroup.kill. Empty plus this PIDFD now permits P_PIDFD to prove
+				// adoption/reap without depending on dead-task procfs entries.
+				return nil
+			}
+		}
+	}
 	for {
 		if err := bounded.Err(); err != nil {
 			return fmt.Errorf("wait for exact Linux run child adoption: %w", err)
@@ -2612,16 +6732,31 @@ func (run *linuxOwnerAnchorRun) waitForAdoptedChild(ctx context.Context, anchor 
 		if err != nil || identity != target.Identity {
 			return fmt.Errorf("verify Linux run child identity during adoption: %w", errOr(err, errors.New("creation identity changed")))
 		}
-		if run.leafRemovedObserved {
-			tracked, exists := run.children[target.PID]
-			if !exists || !tracked.identity.Equal(target) || tracked.role != role {
-				return errors.New("removed-leaf reap target lacks its earlier exact anchor registration")
+		switch role {
+		case "gate":
+			if err := run.verifyRegisteredGateA(target, !run.leafRemovedObserved); err != nil {
+				return fmt.Errorf("revalidate exact A gate before anchor wait/reap: %w", err)
 			}
-			if err := verifyLinuxOwnerRunChildCredentials(target.PID, role, run.owner); err != nil {
+		case "native":
+			if err := run.verifyAuthorizedGateExec(target, !run.leafRemovedObserved); err != nil {
+				return fmt.Errorf("revalidate exact authorized B native before anchor wait/reap: %w", err)
+			}
+		default:
+			if run.leafRemovedObserved {
+				tracked, exists := run.children[target.PID]
+				if !exists || !tracked.identity.Equal(target) || tracked.role != role || tracked.pidfd == nil {
+					return errors.New("removed-leaf reap target lacks its earlier exact anchor registration")
+				}
+				if err := verifyLinuxOwnerRunChildCredentials(target.PID, role, run.owner); err != nil {
+					return err
+				}
+				ready, err := linuxOwnerAnchorPIDFDReady(tracked.pidfd)
+				if err != nil || !ready {
+					return fmt.Errorf("live run child remains after exact run-leaf removal: %w", errOr(err, errors.New("pidfd is not ready")))
+				}
+			} else if err := verifyLinuxOwnerRunChildMembership(target.PID, role, run.grant, run.leaf); err != nil {
 				return err
 			}
-		} else if err := verifyLinuxOwnerRunChildMembership(target.PID, role, run.grant, run.leaf); err != nil {
-			return err
 		}
 		credentials, err := readLinuxOwnerProcessCredentials(target.PID)
 		if err != nil {
@@ -2697,6 +6832,139 @@ func verifyLinuxOwnerAnchorLeaf(leaf *LinuxCgroupV2Leaf, expected authority.Linu
 		return errors.New("Linux owner anchor leaf pin differs from the exact run grant")
 	}
 	return leaf.verifyLive()
+}
+
+func readLinuxOwnerAnchorRunLeafProcessIDs(
+	ctx context.Context,
+	leaf *LinuxCgroupV2Leaf,
+	grant LinuxOwnerAnchorGrant,
+	ownerUID uint32,
+) (map[int]struct{}, error) {
+	if ctx == nil || leaf == nil || grant.Validate() != nil || ownerUID == 0 ||
+		ownerUID != grant.OwnerUID || !leaf.Identity().Equal(grant.Leaf) {
+		return nil, errors.New("anchor recursive leaf census is not bound to its exact run grant")
+	}
+	leafPin, err := leaf.DuplicateFD()
+	if err != nil {
+		return nil, fmt.Errorf("duplicate exact leaf pin for anchor membership census: %w", err)
+	}
+	defer leafPin.Close()
+	rootFD := int(leafPin.Fd())
+	parent := grant.Parent
+	leafIdentity := grant.Leaf
+	seenDirectories := make(map[[2]uint64]struct{})
+	processes := make(map[int]struct{})
+	directoryCount := 1
+	var totalProcsBytes int64
+	var scan func(int, int) error
+	scan = func(directoryFD, depth int) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if depth > linuxOwnerHelperV2MaxMembershipDepth {
+			return errors.New("anchor run-leaf census exceeds its bounded nested-cgroup depth")
+		}
+		stat, err := statLinuxCgroupFD(directoryFD)
+		if err != nil || stat.mount != parent.MountID || stat.device != parent.Device || stat.uid != ownerUID ||
+			stat.mode&unix.S_IFMT != unix.S_IFDIR || stat.mode&0300 != 0300 {
+			return fmt.Errorf("verify exact anchor run-leaf subtree directory: %w", errOr(err, errors.New("mount, device, owner, or mode differs")))
+		}
+		if directoryFD == rootFD && (stat.device != leafIdentity.LeafDevice || stat.inode != leafIdentity.LeafInode) {
+			return errors.New("anchor run-leaf census root differs from the exact reserved inode")
+		}
+		directoryKey := [2]uint64{stat.device, stat.inode}
+		if _, duplicate := seenDirectories[directoryKey]; duplicate {
+			return errors.New("anchor run-leaf census encountered a duplicate cgroup directory identity")
+		}
+		seenDirectories[directoryKey] = struct{}{}
+		procsFD, err := openLinuxCgroupControlAt(directoryFD, "cgroup.procs", unix.O_RDONLY)
+		if err != nil {
+			return fmt.Errorf("open pinned anchor run-leaf cgroup.procs: %w", err)
+		}
+		if err := verifyLinuxCgroupControlFileOnMount(procsFD, parent.MountID, parent.Device); err != nil {
+			_ = unix.Close(procsFD)
+			return err
+		}
+		procsFile := os.NewFile(uintptr(procsFD), "symmetry-owner-anchor-leaf-cgroup-procs")
+		if procsFile == nil {
+			_ = unix.Close(procsFD)
+			return errors.New("wrap pinned anchor run-leaf cgroup.procs")
+		}
+		remainingBytes := int64(linuxOwnerHelperV2MaxCgroupProcsBytes) - totalProcsBytes
+		if remainingBytes < 0 {
+			_ = procsFile.Close()
+			return errors.New("anchor run-leaf census exhausted its aggregate cgroup.procs byte bound")
+		}
+		contents, readErr := io.ReadAll(io.LimitReader(procsFile, remainingBytes+1))
+		closeErr := procsFile.Close()
+		if readErr != nil || closeErr != nil || int64(len(contents)) > remainingBytes {
+			return errors.Join(errors.New("read bounded pinned anchor run-leaf cgroup.procs"), readErr, closeErr)
+		}
+		totalProcsBytes += int64(len(contents))
+		for _, field := range strings.Fields(string(contents)) {
+			pid, parseErr := strconv.Atoi(field)
+			if parseErr != nil || pid <= 1 || strconv.Itoa(pid) != field {
+				return errors.New("anchor run-leaf cgroup.procs contains a noncanonical PID")
+			}
+			if _, duplicate := processes[pid]; duplicate {
+				return errors.New("anchor run-leaf cgroup.procs repeats a PID across nested cgroups")
+			}
+			processes[pid] = struct{}{}
+			if len(processes) > linuxOwnerHelperV2MaxMembershipProcesses {
+				return errors.New("anchor run-leaf census exceeds its bounded process count")
+			}
+		}
+		names, err := readLinuxCgroupDirectoryNames(directoryFD)
+		if err != nil {
+			return fmt.Errorf("enumerate nested anchor run-leaf cgroups: %w", err)
+		}
+		for _, name := range names {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if name == "." || name == ".." {
+				continue
+			}
+			var childStat unix.Stat_t
+			if err := unix.Fstatat(directoryFD, name, &childStat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+				return fmt.Errorf("stat nested anchor run-leaf cgroup: %w", err)
+			}
+			if childStat.Mode&unix.S_IFMT != unix.S_IFDIR {
+				continue
+			}
+			directoryCount++
+			if directoryCount > linuxOwnerHelperV2MaxMembershipCgroups {
+				return errors.New("anchor run-leaf census exceeds its bounded nested-cgroup count")
+			}
+			childFD, err := unix.Openat2(directoryFD, name, &unix.OpenHow{
+				Flags:   uint64(unix.O_PATH | unix.O_DIRECTORY | unix.O_CLOEXEC),
+				Resolve: uint64(unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_XDEV),
+			})
+			if err != nil {
+				return fmt.Errorf("open nested anchor run-leaf cgroup without following links: %w", err)
+			}
+			childIdentity, identityErr := statLinuxCgroupFD(childFD)
+			if identityErr != nil || childIdentity.mount != parent.MountID || childIdentity.device != parent.Device ||
+				childIdentity.inode != childStat.Ino || childIdentity.uid != ownerUID ||
+				childIdentity.mode&unix.S_IFMT != unix.S_IFDIR || childIdentity.mode&0300 != 0300 {
+				_ = unix.Close(childFD)
+				return fmt.Errorf("verify nested anchor run-leaf directory pin: %w", errOr(identityErr, errors.New("directory identity changed")))
+			}
+			scanErr := scan(childFD, depth+1)
+			closeErr := unix.Close(childFD)
+			if scanErr != nil || closeErr != nil {
+				return errors.Join(scanErr, closeErr)
+			}
+		}
+		return nil
+	}
+	if err := scan(rootFD, 0); err != nil {
+		return nil, err
+	}
+	if err := leaf.verifyLive(); err != nil {
+		return nil, fmt.Errorf("revalidate exact leaf after anchor membership census: %w", err)
+	}
+	return processes, nil
 }
 
 func verifyLinuxOwnerRunChildMembership(pid int, role string, grant LinuxOwnerAnchorGrant, leaf *LinuxCgroupV2Leaf) error {

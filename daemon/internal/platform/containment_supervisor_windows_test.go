@@ -1040,3 +1040,27 @@ func TestContainmentEndpointDoesNotDeriveAuthorityFromPlainIdentity(t *testing.T
 		t.Fatal("accepted composite containment identity")
 	}
 }
+
+func TestContainmentSupervisorPipeOpenErrorRedactsPipeName(t *testing.T) {
+	marker := containmentSupervisorPipePrefix + "known-marker-token"
+	previous := openContainmentSupervisorPipe
+	openContainmentSupervisorPipe = func(name string) (*os.File, error) {
+		return nil, &os.PathError{Op: "open", Path: name, Err: os.ErrNotExist}
+	}
+	t.Cleanup(func() { openContainmentSupervisorPipe = previous })
+
+	_, err := openContainmentSupervisorEndpointPipe(marker)
+	if err == nil {
+		t.Fatal("openContainmentSupervisorEndpointPipe() error = nil")
+	}
+	if strings.Contains(err.Error(), marker) {
+		t.Fatalf("sanitized pipe error = %q, contains pipe-name marker", err)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("errors.Is(%v, os.ErrNotExist) = false", err)
+	}
+	var pathErr *os.PathError
+	if !errors.As(err, &pathErr) || pathErr.Path == marker {
+		t.Fatalf("sanitized pipe PathError = %#v, want safe typed path", pathErr)
+	}
+}

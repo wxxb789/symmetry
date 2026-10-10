@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -192,11 +193,25 @@ func (daemon *daemon) preparePiProviderBridge(ctx context.Context, key state.Run
 	if err != nil {
 		return nil, fmt.Errorf("create pi provider bridge executor: %w", err)
 	}
-	extensionRoot, err := filepath.Abs(filepath.Join(daemon.config.StateDir, "generated", "pi", pi.TestedVersion))
-	if err != nil {
-		return nil, errors.New("resolve pi provider bridge extension directory")
+	var extension pi.ProviderBridgeExtension
+	if runtime.GOOS == "linux" {
+		stateRoot, pathErr := filepath.Abs(daemon.config.StateDir)
+		if pathErr != nil {
+			return nil, errors.New("resolve pi provider bridge state directory")
+		}
+		extension, err = pi.MaterializeProviderBridgeExtensionForShare(
+			daemon.config.PiProviderExtensionDir,
+			stateRoot,
+			daemon.config.PiProviderExtensionGroupID,
+			access.Grants,
+		)
+	} else {
+		extensionRoot, pathErr := filepath.Abs(filepath.Join(daemon.config.StateDir, "generated", "pi", pi.TestedVersion))
+		if pathErr != nil {
+			return nil, errors.New("resolve pi provider bridge extension directory")
+		}
+		extension, err = pi.MaterializeProviderBridgeExtension(extensionRoot, access.Grants)
 	}
-	extension, err := pi.MaterializeProviderBridgeExtension(extensionRoot, access.Grants)
 	if err != nil {
 		return nil, fmt.Errorf("materialize pi provider bridge extension: %w", err)
 	}

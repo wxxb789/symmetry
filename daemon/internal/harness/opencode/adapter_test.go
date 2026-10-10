@@ -285,7 +285,9 @@ func TestStartRetainsProcessOwnerWhenRunnerReturnsError(t *testing.T) {
 		},
 		func(Config) (api, error) { return &fakeAPI{}, nil },
 		func() (string, string, error) { return "opencode", "test-secret", nil },
-		func(int, string) ConnectionVerifier { return func(context.Context, net.Conn) error { return nil } },
+		func(int, string, *linuxV2PeerOwner) ConnectionVerifier {
+			return func(context.Context, net.Conn) error { return nil }
+		},
 	)
 	started, err := adapter.Start(context.Background(), startRequest(t), &recordingSink{})
 	if !errors.Is(err, want) {
@@ -691,7 +693,9 @@ func TestSessionWatcherRejectsUnexpectedAdmissionIdentityBeforePublishingFrame(t
 	sink := &recordingSink{}
 	eventContext, cancelEvents := context.WithCancel(sessionContext)
 	defer cancelEvents()
-	session := newNativeSession(sessionContext, cancel, eventContext, cancelEvents, sink, t.TempDir(), func(Config) (api, error) { return &fakeAPI{}, nil }, "opencode", "secret", func(int, string) ConnectionVerifier { return func(context.Context, net.Conn) error { return nil } }, time.Millisecond, time.Second)
+	session := newNativeSession(sessionContext, cancel, eventContext, cancelEvents, sink, t.TempDir(), func(Config) (api, error) { return &fakeAPI{}, nil }, "opencode", "secret", func(int, string, *linuxV2PeerOwner) ConnectionVerifier {
+		return func(context.Context, net.Conn) error { return nil }
+	}, time.Millisecond, time.Second)
 	stream := &streamHandle{body: io.NopCloser(strings.NewReader("data: {\"id\":\"evt_1\",\"type\":\"session.next.prompt.admitted\",\"durable\":{\"aggregateID\":\"ses_native_1\",\"seq\":1,\"version\":1},\"data\":{\"timestamp\":1,\"sessionID\":\"ses_native_1\",\"messageID\":\"msg_other\",\"prompt\":{\"text\":\"other\"},\"delivery\":\"steer\"}}\n\n"))}
 	done := make(chan struct{})
 	go session.watchSessionEvents(stream, done, "ses_native_1", "msg_expected")
@@ -755,7 +759,9 @@ func TestSessionWatcherPublishesKnownLifecycleAndDiagnosesUnknownEvents(t *testi
 	sink := &recordingSink{}
 	eventContext, cancelEvents := context.WithCancel(sessionContext)
 	defer cancelEvents()
-	session := newNativeSession(sessionContext, cancel, eventContext, cancelEvents, sink, t.TempDir(), func(Config) (api, error) { return &fakeAPI{}, nil }, "opencode", "secret", func(int, string) ConnectionVerifier { return func(context.Context, net.Conn) error { return nil } }, time.Millisecond, time.Second)
+	session := newNativeSession(sessionContext, cancel, eventContext, cancelEvents, sink, t.TempDir(), func(Config) (api, error) { return &fakeAPI{}, nil }, "opencode", "secret", func(int, string, *linuxV2PeerOwner) ConnectionVerifier {
+		return func(context.Context, net.Conn) error { return nil }
+	}, time.Millisecond, time.Second)
 	stream := &streamHandle{body: io.NopCloser(strings.NewReader(strings.Join([]string{
 		"data: {\"id\":\"evt_admission\",\"type\":\"session.next.prompt.admitted\",\"durable\":{\"aggregateID\":\"ses_native_1\",\"seq\":1,\"version\":1},\"data\":{\"timestamp\":1,\"sessionID\":\"ses_native_1\",\"messageID\":\"msg_expected\",\"prompt\":{\"text\":\"one\"},\"delivery\":\"steer\"}}\n\n",
 		"data: {\"id\":\"evt_step\",\"type\":\"session.next.step.started\",\"durable\":{\"aggregateID\":\"ses_native_1\",\"seq\":2,\"version\":1},\"data\":{\"timestamp\":2,\"sessionID\":\"ses_native_1\",\"assistantMessageID\":\"msg_assistant\",\"agent\":\"build\",\"model\":{\"id\":\"model\",\"providerID\":\"provider\"}}}\n\n",
@@ -834,7 +840,9 @@ func TestCloseCancelsBlockedSSEPersistenceBeforeWaitCompletes(t *testing.T) {
 	eventContext, cancelEvents := context.WithCancel(processContext)
 	defer cancelEvents()
 	sink := newBlockingEventSink()
-	session := newNativeSession(processContext, cancelProcess, eventContext, cancelEvents, sink, t.TempDir(), func(Config) (api, error) { return &fakeAPI{}, nil }, "opencode", "secret", func(int, string) ConnectionVerifier { return func(context.Context, net.Conn) error { return nil } }, time.Millisecond, time.Second)
+	session := newNativeSession(processContext, cancelProcess, eventContext, cancelEvents, sink, t.TempDir(), func(Config) (api, error) { return &fakeAPI{}, nil }, "opencode", "secret", func(int, string, *linuxV2PeerOwner) ConnectionVerifier {
+		return func(context.Context, net.Conn) error { return nil }
+	}, time.Millisecond, time.Second)
 	stream := &streamHandle{body: io.NopCloser(strings.NewReader("data: {\"id\":\"evt_1\",\"type\":\"session.next.prompt.admitted\",\"durable\":{\"aggregateID\":\"ses_native_1\",\"seq\":1,\"version\":1},\"data\":{\"timestamp\":1,\"sessionID\":\"ses_native_1\",\"messageID\":\"msg_expected\",\"prompt\":{\"text\":\"one\"},\"delivery\":\"steer\"}}\n\n"))}
 	session.mu.Lock()
 	session.process = process
@@ -1160,6 +1168,10 @@ func (process *fakeProcess) Terminate(context.Context, time.Duration) error {
 
 func (process *fakeProcess) ProcessDetails() (int, string) { return 123, "created:123" }
 
+func (process *fakeProcess) DuplicateLinuxV2Peer() (*execution.LinuxV2Peer, error) {
+	return nil, errors.ErrUnsupported
+}
+
 func (process *fakeProcess) finish(result execution.Result) {
 	process.mu.Lock()
 	defer process.mu.Unlock()
@@ -1334,6 +1346,9 @@ func (sink *recordingSink) hasCode(code string) bool {
 	return false
 }
 
+// newTestAdapter injects an API fake for lifecycle tests; it never stands in
+// for a positive OpenCode socket-ownership claim. Linux peer proof lives in
+// peer_linux_test.go and uses an execution.Process v2 owner.
 func newTestAdapter(start processStarter, fake api) *Adapter {
 	readyStart := func(ctx context.Context, invocation execution.Invocation, sink execution.Sink) (nativeProcess, error) {
 		process, err := start(ctx, invocation, sink)
@@ -1348,7 +1363,9 @@ func newTestAdapter(start processStarter, fake api) *Adapter {
 		}
 		return process, nil
 	}
-	adapter := newAdapter("opencode-test", nil, readyStart, func(Config) (api, error) { return fake, nil }, func() (string, string, error) { return "opencode", "test-secret", nil }, func(int, string) ConnectionVerifier { return func(context.Context, net.Conn) error { return nil } })
+	adapter := newAdapter("opencode-test", nil, readyStart, func(Config) (api, error) { return fake, nil }, func() (string, string, error) { return "opencode", "test-secret", nil }, func(int, string, *linuxV2PeerOwner) ConnectionVerifier {
+		return func(context.Context, net.Conn) error { return nil }
+	})
 	adapter.healthRetryWait = time.Millisecond
 	adapter.terminationWait = time.Second
 	return adapter

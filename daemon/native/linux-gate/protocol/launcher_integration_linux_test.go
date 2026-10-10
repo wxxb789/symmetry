@@ -56,6 +56,23 @@ func TestLinuxOwnerReleaseV2RejectsLegacyAndWrongDescriptorCount(t *testing.T) {
 	}
 }
 
+func TestOwnerConfigV1CompatibilityAndV2StateDir(t *testing.T) {
+	legacy, err := parseOwnerConfig([]byte("version=1\na_uid=1001\na_gid=1002\nb_uid=2001\nb_gid=2002\n"))
+	if err != nil || legacy.StateDir != "" || legacy.AUID != 1001 || legacy.BUID != 2001 {
+		t.Fatalf("legacy v1 owner config = %+v, err=%v", legacy, err)
+	}
+	current, err := parseOwnerConfig([]byte("version=2\na_uid=1001\na_gid=1002\nb_uid=2001\nb_gid=2002\nstate_dir=/var/lib/symmetry/state\n"))
+	if err != nil || current.StateDir != "/var/lib/symmetry/state" {
+		t.Fatalf("v2 owner config StateDir = %q, err=%v", current.StateDir, err)
+	}
+	for _, stateDir := range []string{"", "relative/state", "/", "/var/lib/../state", "/var//lib/state", "/var/lib/state/", "/var/lib/state\t"} {
+		data := []byte("version=2\na_uid=1001\na_gid=1002\nb_uid=2001\nb_gid=2002\nstate_dir=" + stateDir + "\n")
+		if _, err := parseOwnerConfig(data); err == nil {
+			t.Errorf("v2 owner config accepted noncanonical StateDir %q", stateDir)
+		}
+	}
+}
+
 func TestNativeExecStatusCannotOverrideAPinnedImage(t *testing.T) {
 	expected := nativeImageIdentity{Device: 7, Inode: 19, UID: 1001, GID: 1001, Mode: 0o100755, Size: 4096, Links: 1}
 	image := &pinnedNativeImage{identity: expected}
@@ -82,6 +99,184 @@ func TestFakeUserNamespaceDirectoryIsTypedFailClosed(t *testing.T) {
 	if inaccessible.PID != 4242 || inaccessible.Cause == nil {
 		t.Fatalf("typed fake nsfs failure lost the exact process/cause: %+v", inaccessible)
 	}
+}
+
+func TestInstalledLinuxOwnerRejectsUnexpectedCgroupProcsFD(t *testing.T) {
+	if os.Getenv("SYMMETRY_LINUX_OWNER_TEST_SCRATCH") != "1" {
+		t.Skip("requires an operator-created scratch cgroup leaf and installed A/B gate")
+	}
+	leafPath := os.Getenv("SYMMETRY_LINUX_OWNER_TEST_LEAF")
+	if !filepath.IsAbs(leafPath) || filepath.Clean(leafPath) != leafPath ||
+		!strings.HasPrefix(leafPath, "/sys/fs/cgroup/") ||
+		!strings.HasPrefix(filepath.Base(leafPath), "symmetry-owner-test-") {
+		t.Fatal("scratch test leaf must be a normalized /sys/fs/cgroup/symmetry-owner-test-* path")
+	}
+	config, err := ReadInstalledOwnerConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uint32(os.Getuid()) != config.AUID || uint32(os.Getgid()) != config.AGID {
+		t.Fatal("unexpected-cgroup-FD test must run as the installed A service identity")
+	}
+	leafFD, err := unix.Open(leafPath, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		t.Fatalf("open operator-created scratch leaf: %v", err)
+	}
+	defer unix.Close(leafFD)
+	if err := verifyCgroupLeafFD(leafFD, config.AUID); err != nil {
+		t.Fatal(err)
+	}
+	if populated, err := scratchLeafPopulated(leafFD); err != nil || populated {
+		t.Fatalf("scratch leaf must begin empty: populated=%t err=%v", populated, err)
+	}
+	if empty, err := scratchLeafProcsEmpty(leafFD); err != nil || !empty {
+		t.Fatalf("scratch leaf must begin with no PIDs: empty=%t err=%v", empty, err)
+	}
+	if err := unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0); err != nil {
+		t.Fatalf("configure scratch test process as the A gate reaper: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 0, 0, 0, 0); err != nil {
+			t.Errorf("restore scratch test process subreaper setting: %v", err)
+		}
+	})
+
+	var gate *PreparedGate
+	leaderReaped := false
+	t.Cleanup(func() {
+		if gate == nil {
+			return
+		}
+		if !leaderReaped && gate.PIDFD() != nil {
+			if err := unix.PidfdSendSignal(int(gate.PIDFD().Fd()), unix.SIGKILL, nil, 0); err != nil && !errors.Is(err, unix.ESRCH) {
+				t.Errorf("kill only the exact scratch gate/native leader by pidfd: %v", err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			_, err := gate.WaitLeader(ctx)
+			cancel()
+			if err != nil && !errors.Is(err, unix.ECHILD) {
+				t.Errorf("reap scratch leader by pidfd: %v", err)
+			}
+		}
+		if err := gate.Close(); err != nil {
+			t.Errorf("close scratch gate descriptors: %v", err)
+		}
+	})
+
+	prepareContext, cancelPrepare := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancelPrepare()
+	gate, err = Prepare(prepareContext, leafFD, scratchGateProductionAuth(), func(_ context.Context, identity LauncherIdentity, pidfd *os.File) error {
+		if identity.PID <= 1 || identity.StartTime == 0 || identity.BootID == "" || pidfd == nil {
+			return errors.New("unexpected-cgroup-FD gate producer identity is incomplete")
+		}
+		if target, err := readPIDFDTarget(int(pidfd.Fd())); err != nil || target != identity.PID {
+			return fmt.Errorf("unexpected-cgroup-FD root producer pidfd mismatch: target=%d err=%v", target, err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("prepare scratch A gate: %v", err)
+	}
+	identity := gate.Identity()
+	if err := gate.VerifyLeafMembership(leafFD); err != nil {
+		t.Fatalf("parked gate is not in the exact scratch leaf: %v", err)
+	}
+	if err := assertParkedAGate(identity, config); err != nil {
+		t.Fatalf("parked gate inherited an unexpected descriptor or crossed a boundary: %v", err)
+	}
+
+	cgroupProcsFD, err := unix.Openat(leafFD, "cgroup.procs", unix.O_WRONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		t.Fatalf("open real scratch leaf cgroup.procs as A: %v", err)
+	}
+	defer unix.Close(cgroupProcsFD)
+	statusFlags, err := unix.FcntlInt(uintptr(cgroupProcsFD), unix.F_GETFL, 0)
+	if err != nil || statusFlags&unix.O_ACCMODE != unix.O_WRONLY {
+		t.Fatalf("scratch cgroup.procs FD is not O_WRONLY: flags=%#x err=%v", statusFlags, err)
+	}
+	descriptorFlags, err := unix.FcntlInt(uintptr(cgroupProcsFD), unix.F_GETFD, 0)
+	if err != nil || descriptorFlags&unix.FD_CLOEXEC == 0 {
+		t.Fatalf("scratch cgroup.procs FD is not close-on-exec: flags=%#x err=%v", descriptorFlags, err)
+	}
+	if target, err := os.Readlink(fmt.Sprintf("/proc/self/fd/%d", cgroupProcsFD)); err != nil || target != filepath.Join(leafPath, "cgroup.procs") {
+		t.Fatalf("opened descriptor is not the exact pinned scratch leaf cgroup.procs: target=%q err=%v", target, err)
+	}
+
+	sleepPath, err := trustedSleepPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pipes := newScratchNativePipes(t)
+	command := NativeCommand{
+		Path: sleepPath, Args: []string{sleepPath, "3600"}, Env: []string{}, Dir: "/",
+		Stdin: pipes.stdinRead, Stdout: pipes.stdoutWrite, Stderr: pipes.stderrWrite,
+	}
+	guard, ownerWriter := newScratchReleaseGuard(t, time.Minute)
+	packet, err := EncodeRelease(gate.token, command, guard)
+	if err != nil {
+		t.Fatalf("encode otherwise valid guarded RELEASE: %v", err)
+	}
+	packetSize := len(packet)
+	if binary.LittleEndian.Uint32(packet[48:52]) != releaseFDCount {
+		t.Fatalf("guarded RELEASE header declares %d FDs, want %d", binary.LittleEndian.Uint32(packet[48:52]), releaseFDCount)
+	}
+	// The normal RELEASE has exactly four rights. Add a fifth writable cgroup
+	// control FD to exercise the C receiver's ancillary-FD rejection directly.
+	oob := unix.UnixRights(
+		int(command.Stdin.Fd()), int(command.Stdout.Fd()), int(command.Stderr.Fd()), int(guard.OwnerPipe.Fd()), cgroupProcsFD,
+	)
+	gate.mu.Lock()
+	if gate.state != gatePrepared || gate.release == nil || gate.execAck == nil {
+		gate.mu.Unlock()
+		clear(packet)
+		clear(oob)
+		t.Fatal("scratch gate is not parked with its one-use RELEASE and exec-status channels")
+	}
+	gate.state = gateReleaseAttempted
+	gate.releaseWaiting = true
+	written, sendErr := unix.SendmsgN(int(gate.release.Fd()), packet, oob, nil, unix.MSG_NOSIGNAL)
+	clear(packet)
+	clear(oob)
+	clear(gate.token[:])
+	releaseCloseErr := gate.closeReleaseLocked()
+	gate.releaseWaiting = false
+	gate.mu.Unlock()
+	if sendErr != nil || written != packetSize || releaseCloseErr != nil {
+		t.Fatalf("send guarded RELEASE with an unexpected fifth O_CLOEXEC writable cgroup.procs SCM_RIGHTS FD and close channel: wrote=%d/%d send=%v close=%v",
+			written, packetSize, sendErr, releaseCloseErr)
+	}
+
+	waitContext, cancelWait := context.WithTimeout(context.Background(), 15*time.Second)
+	exitInfo, err := gate.WaitLeader(waitContext)
+	cancelWait()
+	if err != nil {
+		t.Fatalf("reap gate rejecting the fifth SCM_RIGHTS FD by exact pidfd: %v", err)
+	}
+	leaderReaped = true
+	if exitInfo.Signo != int32(unix.SIGCHLD) || exitInfo.Code != 1 {
+		t.Fatalf("gate did not reject the writable cgroup.procs RELEASE descriptor: signo=%d code=%d", exitInfo.Signo, exitInfo.Code)
+	}
+	var statusByte [64]byte
+	n, oobn, flags, _, err := unix.Recvmsg(int(gate.execAck.Fd()), statusByte[:], nil, unix.MSG_DONTWAIT|unix.MSG_CMSG_CLOEXEC)
+	if err != nil || n != 0 || oobn != 0 || flags&(unix.MSG_TRUNC|unix.MSG_CTRUNC|unix.MSG_EOR) != 0 {
+		t.Fatalf("malformed RELEASE reached native exec status or left ancillary data: n=%d oob=%d flags=%#x err=%v", n, oobn, flags, err)
+	}
+	if populated, err := scratchLeafPopulated(leafFD); err != nil || populated {
+		t.Fatalf("malformed RELEASE left the exact scratch leaf populated: populated=%t err=%v", populated, err)
+	}
+	if empty, err := scratchLeafProcsEmpty(leafFD); err != nil || !empty {
+		t.Fatalf("malformed RELEASE left PIDs in the exact scratch leaf: empty=%t err=%v", empty, err)
+	}
+	if err := leafContainsPID(leafFD, identity.PID); err == nil {
+		t.Fatal("reaped gate/native PID remains in scratch cgroup.procs")
+	}
+	if err := ownerWriter.Close(); err != nil {
+		t.Fatalf("close scratch owner writer after gate rejection: %v", err)
+	}
+	if err := gate.Close(); err != nil {
+		t.Fatalf("close reaped malformed-RELEASE gate: %v", err)
+	}
+	gate = nil
 }
 
 // TestInstalledLinuxOwnerBoundaryScratch exercises the installed setuid

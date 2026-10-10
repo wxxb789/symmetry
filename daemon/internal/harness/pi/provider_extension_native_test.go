@@ -25,8 +25,8 @@ import (
 const nativeProviderBridgeActionSmokeEnv = "SYMMETRY_PI_PROVIDER_ACTION_SMOKE"
 
 func TestNativePiProviderBridgeAction(t *testing.T) {
-	if runtime.GOOS != "windows" && runtime.GOOS != "linux" {
-		t.Skip("native Pi provider action smoke supports Linux and Windows only")
+	if runtime.GOOS != "windows" {
+		t.Skip("legacy native Pi provider action positive is Windows-only; Linux requires an installed v2 owner")
 	}
 	if os.Getenv(nativeProviderBridgeActionSmokeEnv) != "1" {
 		t.Skip("set SYMMETRY_PI_PROVIDER_ACTION_SMOKE=1 to run the native provider action smoke")

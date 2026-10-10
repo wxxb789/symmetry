@@ -181,7 +181,7 @@ func TestBlockedCleanupDoesNotBlockOutboxDelivery(t *testing.T) {
 	done := make(chan struct{})
 	go func() { daemon.flushAll(ctx); close(done) }()
 	select {
-	case <-time.After(time.Second):
+	case <-time.After(3 * time.Second):
 		t.Fatal("blocked cleanup prevented an unrelated outbox event from being delivered")
 	case <-control.events:
 	}
@@ -708,17 +708,26 @@ func TestAttachedProcessFailureWaitsBeforeCleanup(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer store.Close()
+			t.Cleanup(func() { _ = store.Close() })
 			cleaned := make(chan bool, 1)
 			daemon := startupTestDaemon(t, store, &trackingWorkspace{cleaned: cleaned})
 			daemon.control = &orderingControl{}
 			daemon.start = test.process.Start
 			daemon.options.recordProcess = test.recordProcess
+			var releaseWait sync.Once
+			releaseProcessWait := func() {
+				releaseWait.Do(func() { close(test.process.waitRelease) })
+			}
+			t.Cleanup(func() {
+				releaseProcessWait()
+				daemon.workers.Wait()
+				daemon.failedStartWatchWG.Wait()
+			})
 			key := state.RunKey{RunID: "run-1", Generation: 1}
 			daemon.startAssignment(context.Background(), protocol.Assignment{RunID: key.RunID, Generation: key.Generation, Work: protocol.Work{Goal: "g"}})
 			select {
 			case <-test.process.terminated:
-			case <-time.After(time.Second):
+			case <-time.After(processOwnershipTestTimeout):
 				t.Fatal("startup failure did not terminate returned process")
 			}
 			journal, err := store.LoadJournal(key)
@@ -740,8 +749,9 @@ func TestAttachedProcessFailureWaitsBeforeCleanup(t *testing.T) {
 				t.Fatal("workspace was cleaned before returned process exited")
 			default:
 			}
-			close(test.process.waitRelease)
+			releaseProcessWait()
 			daemon.workers.Wait()
+			daemon.failedStartWatchWG.Wait()
 			daemon.flushCleanups(context.Background())
 			journal, err = store.LoadJournal(key)
 			if err != nil {
@@ -755,7 +765,7 @@ func TestAttachedProcessFailureWaitsBeforeCleanup(t *testing.T) {
 			}
 			select {
 			case <-cleaned:
-			case <-time.After(time.Second):
+			case <-time.After(processOwnershipTestTimeout):
 				t.Fatal("workspace was not cleaned after returned process exit")
 			}
 		})

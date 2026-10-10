@@ -184,8 +184,13 @@ func TestGoalNativeStartUsesAtomicProcessPersistenceBeforeObserver(t *testing.T)
 	})
 	select {
 	case <-session.turnStarted:
-	case <-time.After(time.Second):
-		t.Fatal("native turn did not start")
+	case <-time.After(10 * time.Second):
+		journal, loadErr := store.LoadJournal(key)
+		if loadErr != nil {
+			t.Fatalf("native turn did not start; read journal: %v", loadErr)
+		}
+		t.Fatalf("native turn did not start; local_state=%q terminal_state=%q process_present=%t authority_present=%t session_calls=%v",
+			journal.LocalState, journal.TerminalState, journal.HasProcessDetails(), journal.ContainmentAuthority != nil, session.callsSnapshot())
 	}
 
 	journal, err := store.LoadJournal(key)

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/config"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 )
@@ -59,6 +60,16 @@ type Service interface {
 	Recover(context.Context, string, RunRef, string) (Prepared, error)
 	Cleanup(context.Context, Prepared, bool) error
 }
+
+// LinuxCloneTargetDeleter is the trusted root-worker capability for removing
+// one exact B checkout after normal release and State Begin readback. The two
+// descriptors are borrowed O_PATH pins owned by Workspace; the callback must
+// not close them or accept a path, argv, shell command, or Git operation. App
+// must bind it to the exact release-anchor client; Workspace launches no
+// privileged helper and does not treat its own daemon identity as the anchor.
+// A non-nil prior proof is valid only for an exact stored Removed proof and an
+// already-absent path; a fresh absent path never authorizes deletion success.
+type LinuxCloneTargetDeleter func(context.Context, int, int, authority.LinuxCloneGrant, authority.LinuxCloneCleanupIntent, *authority.LinuxCloneTargetRemovalProof) (authority.LinuxCloneTargetRemovalProof, error)
 
 // Manager resolves bindings only from the daemon's local configuration.
 type Manager struct {

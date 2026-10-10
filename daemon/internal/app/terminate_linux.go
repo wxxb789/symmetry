@@ -56,11 +56,15 @@ func terminatePersistedProcessWithContext(ctx context.Context, pid int, identity
 
 func init() {
 	releasePersistedContainmentAuthority = releasePersistedLinuxContainmentAuthority
+	terminatePersistAuthorityWithScanSeal = terminatePersistedProcessWithAuthorityScanSeal
 }
 
 func terminatePersistedProcessWithAuthority(pid int, identity string, persisted *authority.Supervisor) (authority.StopReceipt, error) {
 	if persisted == nil || persisted.TargetPID != pid || persisted.TargetIdentity != identity {
 		return authority.StopReceipt{}, fmt.Errorf("%w: persisted Linux authority identity mismatch", errPersistedProcessStopUnproven)
+	}
+	if persisted.Version == authority.SupervisorVersionV2 {
+		return authority.StopReceipt{}, fmt.Errorf("%w: v2 cgroup recovery requires the exact RunJournal reservation and helper endpoint", errPersistedProcessStopUnproven)
 	}
 	receipt, err := platform.StopPersistedLinuxSupervisor(*persisted)
 	if err != nil {
@@ -69,9 +73,29 @@ func terminatePersistedProcessWithAuthority(pid int, identity string, persisted 
 	return receipt, nil
 }
 
+func terminatePersistedProcessWithAuthorityScanSeal(pid int, identity string, persisted *authority.Supervisor) (authority.StopReceipt, uint64, error) {
+	if persisted == nil || persisted.TargetPID != pid || persisted.TargetIdentity != identity {
+		return authority.StopReceipt{}, 0, fmt.Errorf("%w: persisted Linux authority identity mismatch", errPersistedProcessStopUnproven)
+	}
+	if persisted.Version == authority.SupervisorVersionV2 {
+		return authority.StopReceipt{}, 0, fmt.Errorf("%w: v2 cgroup recovery does not use legacy group scan seals", errPersistedProcessStopUnproven)
+	}
+	receipt, sequence, err := platform.StopPersistedLinuxSupervisorWithScanSeal(*persisted)
+	if err != nil {
+		return authority.StopReceipt{}, 0, fmt.Errorf("%w: recover persisted Linux supervisor scan seal: %w", errPersistedProcessStopUnproven, err)
+	}
+	if !receipt.ValidFor(*persisted) || sequence == 0 {
+		return authority.StopReceipt{}, 0, fmt.Errorf("%w: authenticated helper returned an incomplete terminal scan proof", errPersistedProcessStopUnproven)
+	}
+	return receipt, sequence, nil
+}
+
 func releasePersistedLinuxContainmentAuthority(pid int, identity string, persisted *authority.Supervisor) error {
 	if persisted == nil || persisted.TargetPID != pid || persisted.TargetIdentity != identity {
 		return fmt.Errorf("%w: persisted Linux authority identity mismatch", errPersistedProcessStopUnproven)
+	}
+	if persisted.Version == authority.SupervisorVersionV2 {
+		return fmt.Errorf("%w: v2 release requires the opaque receipt-backed leaf removal token", errPersistedProcessStopUnproven)
 	}
 	// Legacy/non-Linux authority records remain compatible journal data. Only
 	// the explicit Linux helper owner may authorize the Linux endpoint release

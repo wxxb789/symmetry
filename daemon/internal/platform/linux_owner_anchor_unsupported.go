@@ -2,7 +2,11 @@
 
 package platform
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/wxxb789/symmetry/daemon/internal/authority"
+)
 
 // DefaultLinuxOwnerAnchorSocketPath is the fixed systemd socket location used
 // by Linux owner preflight; unsupported platforms never create or connect it.
@@ -12,13 +16,24 @@ const DefaultLinuxOwnerAnchorSocketPath = "/run/symmetry-owner/owner.sock"
 // execution contracts can remain concrete while construction fails closed.
 type LinuxOwnerAnchorClient struct{}
 
+// LinuxOwnerAnchorCleanupVerifier is the read-only State seam used by the
+// Linux owner anchor. Unsupported targets expose the type only so shared
+// daemon entrypoints compile; no verifier is invoked here.
+type LinuxOwnerAnchorCleanupVerifier interface {
+	Verify(runID string, generation int64, grant authority.LinuxCloneGrant, intent authority.LinuxCloneCleanupIntent, prior *authority.LinuxCloneTargetRemovalProof, targetFDPresent bool) error
+	Close() error
+}
+
+// LinuxOwnerAnchorCleanupVerifierFactory is unavailable on unsupported targets.
+type LinuxOwnerAnchorCleanupVerifierFactory func(stateDir string) (LinuxOwnerAnchorCleanupVerifier, error)
+
 func NewLinuxOwnerAnchorClient(string) (*LinuxOwnerAnchorClient, error) {
 	return nil, errors.New("Linux owner anchor client is supported only on Linux x86-64")
 }
 
 // RunLinuxOwnerAnchor is unavailable outside Linux x86-64. It must not launch
 // a helper or route to the legacy process-group supervisor on other targets.
-func RunLinuxOwnerAnchor([]string) error {
+func RunLinuxOwnerAnchor([]string, LinuxOwnerAnchorCleanupVerifierFactory) error {
 	return errors.New("Linux owner anchor is supported only on Linux x86-64")
 }
 

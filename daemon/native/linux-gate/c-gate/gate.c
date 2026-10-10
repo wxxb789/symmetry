@@ -313,20 +313,86 @@ static int pidfd_pid(int fd, pid_t *pid_out) {
   return -1;
 }
 
-static int mark_unexpected_fds_cloexec(void) {
+static int parse_proc_numeric_name(const char *name, long minimum, long *value_out) {
+  if (name[0] < '0' || name[0] > '9') {
+    errno = EPROTO;
+    return -1;
+  }
+  char *end = NULL;
+  errno = 0;
+  long value = strtol(name, &end, 10);
+  if (errno != 0 || end == name || *end != '\0' || value < minimum || value > INT32_MAX) {
+    errno = EPROTO;
+    return -1;
+  }
+  *value_out = value;
+  return 0;
+}
+
+static int verify_single_threaded(void) {
+  DIR *tasks = opendir("/proc/self/task");
+  if (tasks == NULL) return -1;
+  int result = 0;
+  int task_count = 0;
+  struct dirent *entry;
+  for (;;) {
+    errno = 0;
+    entry = readdir(tasks);
+    if (entry == NULL) {
+      if (errno != 0) result = -1;
+      break;
+    }
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+    long tid;
+    if (parse_proc_numeric_name(entry->d_name, 1, &tid) != 0 || tid != (long)getpid() || ++task_count != 1) {
+      errno = EPERM;
+      result = -1;
+      break;
+    }
+  }
+  if (result == 0 && task_count != 1) {
+    errno = EPERM;
+    result = -1;
+  }
+  int saved_errno = errno;
+  if (closedir(tasks) != 0 && result == 0) {
+    result = -1;
+    saved_errno = errno;
+  }
+  errno = saved_errno;
+  return result;
+}
+
+static int reject_unexpected_inherited_fds(void) {
+  /* execve starts this static gate as one thread, and it creates no threads
+   * before this census. That keeps the FD table stable while procfs is read. */
+  if (verify_single_threaded() != 0) return -1;
   DIR *directory = opendir("/proc/self/fd");
   if (directory == NULL) return -1;
   int directory_fd = dirfd(directory);
+  if (directory_fd != IMAGE_FD) {
+    int saved_errno = EPROTO;
+    closedir(directory);
+    errno = saved_errno;
+    return -1;
+  }
   int result = 0;
   struct dirent *entry;
-  while ((entry = readdir(directory)) != NULL) {
-    char *end = NULL;
+  for (;;) {
     errno = 0;
-    long descriptor = strtol(entry->d_name, &end, 10);
-    if (errno != 0 || end == entry->d_name || *end != '\0' || descriptor <= EXEC_STATUS_FD || descriptor == directory_fd) continue;
-    int flags = fcntl((int)descriptor, F_GETFD);
-    if (flags < 0 && errno == EBADF) continue;
-    if (flags < 0 || fcntl((int)descriptor, F_SETFD, flags | FD_CLOEXEC) != 0) {
+    entry = readdir(directory);
+    if (entry == NULL) {
+      if (errno != 0) result = -1;
+      break;
+    }
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+    long descriptor;
+    if (parse_proc_numeric_name(entry->d_name, 0, &descriptor) != 0) {
+      result = -1;
+      break;
+    }
+    if (descriptor != directory_fd && descriptor > EXEC_STATUS_FD) {
+      errno = EPERM;
       result = -1;
       break;
     }
@@ -775,6 +841,11 @@ static int read_release(pid_t owner_pid, int owner_pidfd, struct owner_config *c
   if (position != body_size) goto invalid;
   if (check_parent(owner_pid, owner_pidfd) != 0) goto invalid;
   if (wait_peer_eof(RELEASE_FD, owner_pid, owner_pidfd, USERNS_WAIT_MS) != 0) goto invalid;
+  /* RELEASE is the only source of command-specific descriptors after the
+   * fixed trusted image opens. Accept exactly three distinct FIFO stdio ends
+   * in their required directions plus one distinct read-only owner FIFO;
+   * cgroup control files are not in this list and are rejected before
+   * exec_as_b drops credentials. */
   for (size_t index = 0; index < RELEASE_STDIO_FD_COUNT; ++index) command->stdio_fds[index] = release_fds[index];
   command->owner_pipe_fd = release_fds[3];
   command->lease_deadline_ns = lease_deadline_ns;
@@ -1241,9 +1312,9 @@ static int gate_run(void) {
   pid_t owner_pid = release_peer.pid;
   pid_t owner_pidfd_pid = 0;
   if (pidfd_pid(OWNER_PIDFD, &owner_pidfd_pid) != 0 || owner_pidfd_pid != owner_pid || pidfd_signal_zero(OWNER_PIDFD) != 0) return -1;
-  if (open_clone_bootstrap_images() != 0) return -1;
+  if (reject_unexpected_inherited_fds() != 0) return -1;
   if (set_cloexec(RELEASE_FD) != 0 || set_cloexec(SYNC_FD) != 0 || set_cloexec(OWNER_PIDFD) != 0 ||
-      set_cloexec(EXEC_STATUS_FD) != 0 || mark_unexpected_fds_cloexec() != 0) return -1;
+      set_cloexec(EXEC_STATUS_FD) != 0 || open_clone_bootstrap_images() != 0) return -1;
 
   uid_t a_uid = getuid();
   gid_t a_gid = getgid();

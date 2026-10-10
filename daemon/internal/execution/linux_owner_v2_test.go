@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
+	linuxgate "github.com/wxxb789/symmetry/daemon/native/linux-gate/protocol"
 	"golang.org/x/sys/unix"
 )
 
@@ -26,6 +28,117 @@ type linuxV2FallbackTestContainment struct{}
 
 func (linuxV2FallbackTestContainment) Terminate(bool) error { return nil }
 func (linuxV2FallbackTestContainment) Close() error         { return nil }
+
+type linuxV2AdmissionReleaseTestClient struct {
+	calls int
+	err   error
+}
+
+func (client *linuxV2AdmissionReleaseTestClient) Release(
+	context.Context,
+	linuxgate.NativeCommand,
+	func(context.Context, authority.LinuxCloneCheckoutReceipt) error,
+) error {
+	client.calls++
+	return client.err
+}
+
+type linuxV2HelperStatusReaderFunc func(context.Context) (platform.LinuxOwnerHelperV2Status, error)
+
+func (reader linuxV2HelperStatusReaderFunc) Status(ctx context.Context) (platform.LinuxOwnerHelperV2Status, error) {
+	return reader(ctx)
+}
+
+type observedDoneContext struct {
+	context.Context
+	doneCalled chan struct{}
+	once       sync.Once
+}
+
+func (ctx *observedDoneContext) Done() <-chan struct{} {
+	ctx.once.Do(func() { close(ctx.doneCalled) })
+	return ctx.Context.Done()
+}
+
+func TestLinuxV2LiveOwnerStatusHelperExitDuringStatusRPC(t *testing.T) {
+	const helperEnvironment = "SYMMETRY_LINUX_V2_STATUS_PIDFD_HELPER"
+	if os.Getenv(helperEnvironment) == "1" {
+		if _, err := os.Stdout.Write([]byte{0xa5}); err != nil {
+			t.Fatal(err)
+		}
+		var request [1]byte
+		if _, err := os.Stdin.Read(request[:]); !errors.Is(err, io.EOF) {
+			t.Fatalf("helper stdin read error = %v, want EOF", err)
+		}
+		return
+	}
+
+	command := exec.Command(os.Args[0], "-test.run=^TestLinuxV2LiveOwnerStatusHelperExitDuringStatusRPC$")
+	command.Env = append(os.Environ(), helperEnvironment+"=1")
+	stdin, err := command.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		_ = stdin.Close()
+		t.Fatal(err)
+	}
+	command.Stderr = io.Discard
+	if err := command.Start(); err != nil {
+		_ = stdin.Close()
+		t.Fatal(err)
+	}
+	waited := false
+	var pidfdFile *os.File
+	t.Cleanup(func() {
+		_ = stdin.Close()
+		_ = stdout.Close()
+		if pidfdFile != nil {
+			_ = pidfdFile.Close()
+		}
+		if !waited {
+			_ = command.Process.Kill()
+			_ = command.Wait()
+		}
+	})
+	var ready [1]byte
+	if _, err := io.ReadFull(stdout, ready[:]); err != nil || ready[0] != 0xa5 {
+		t.Fatalf("helper ready marker = %#v, %v", ready, err)
+	}
+	pidfd, err := unix.PidfdOpen(command.Process.Pid, 0)
+	if errors.Is(err, unix.ENOSYS) || errors.Is(err, unix.EPERM) || errors.Is(err, unix.EINVAL) {
+		t.Skipf("pidfd_open is unavailable: %v", err)
+	}
+	if err != nil {
+		t.Fatalf("open helper pidfd: %v", err)
+	}
+	pidfdFile = os.NewFile(uintptr(pidfd), "linux-v2-status-helper-pidfd")
+	if pidfdFile == nil {
+		_ = unix.Close(pidfd)
+		t.Fatal("wrap helper pidfd")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	statusReader := linuxV2HelperStatusReaderFunc(func(ctx context.Context) (platform.LinuxOwnerHelperV2Status, error) {
+		if err := ctx.Err(); err != nil {
+			return platform.LinuxOwnerHelperV2Status{}, err
+		}
+		if err := stdin.Close(); err != nil {
+			return platform.LinuxOwnerHelperV2Status{}, err
+		}
+		if err := command.Wait(); err != nil {
+			return platform.LinuxOwnerHelperV2Status{}, err
+		}
+		waited = true
+		return platform.LinuxOwnerHelperV2Status{}, nil
+	})
+	status, err := linuxV2ReadHelperStatusWithPIDFD(ctx, pidfdFile, statusReader)
+	_ = status.Close()
+	if err == nil || !strings.Contains(err.Error(), "exited during Status") {
+		t.Fatalf("Status read/pidfd fence error = %v, want helper exit observed after the RPC", err)
+	}
+}
 
 func TestRunnerLinuxV2RequiredNeverFallsBackToDirectProcessStart(t *testing.T) {
 	configured := false
@@ -57,6 +170,141 @@ func TestRunnerLinuxV2RequiredNeverFallsBackToDirectProcessStart(t *testing.T) {
 	}
 	if configured || attached || !launched {
 		t.Fatalf("Linux v2 launch path configured=%t launched=%t attached=%t; want no legacy setup/attach and one v2 attempt", configured, launched, attached)
+	}
+}
+
+func TestLinuxV2AdmissionRejectionDoesNotAttemptNativeRelease(t *testing.T) {
+	admissionErr := errors.New("foreign live RunKey blocks native admission")
+	releaseClient := &linuxV2AdmissionReleaseTestClient{err: errors.New("native RELEASE must not be called")}
+	owner := &linuxV2ProcessOwner{
+		handoffCommitTried: true, journalCommitted: true,
+		helperCommitAck: true, leaseAck: true,
+		helper: &platform.LinuxOwnerAnchorHelper{Control: new(platform.LinuxOwnerHelperV2Client)},
+	}
+	checkCalls := 0
+	err := owner.releaseAfterAdmission(context.Background(), linuxgate.NativeCommand{}, releaseClient, nil, func() error {
+		checkCalls++
+		return admissionErr
+	})
+	if !errors.Is(err, admissionErr) {
+		t.Fatalf("releaseAfterAdmission() error = %v, want admission rejection", err)
+	}
+	owner.mu.Lock()
+	releaseAttempted := owner.releaseAttempted
+	owner.mu.Unlock()
+	if checkCalls != 1 || releaseAttempted || releaseClient.calls != 0 {
+		t.Fatalf("admission rejection side effects: checkCalls=%d releaseAttempted=%t helperReleaseCalls=%d", checkCalls, releaseAttempted, releaseClient.calls)
+	}
+}
+
+func TestLinuxV2LiveOwnerStatusWaitsForLeaseRenewalSettlement(t *testing.T) {
+	baseContext, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx := &observedDoneContext{Context: baseContext, doneCalled: make(chan struct{})}
+	renewalDone := make(chan struct{})
+	owner := &linuxV2ProcessOwner{
+		leaseAck: true, leaseSequence: 1,
+		leaseRenewalInFlight: true, leaseRenewalSequence: 2, leaseRenewalDone: renewalDone,
+	}
+	settleOnce := sync.Once{}
+	settle := func() {
+		settleOnce.Do(func() {
+			owner.mu.Lock()
+			owner.leaseAck = true
+			owner.leaseSequence = 2
+			owner.leaseRenewalInFlight = false
+			owner.leaseRenewalUncertain = false
+			owner.leaseRenewalSequence = 0
+			owner.leaseRenewalDone = nil
+			owner.mu.Unlock()
+			close(renewalDone)
+		})
+	}
+	result := make(chan error, 1)
+	go func() { result <- owner.waitForLeaseRenewal(ctx) }()
+	select {
+	case <-ctx.doneCalled:
+	case <-time.After(time.Second):
+		settle()
+		t.Fatal("live-owner status did not wait on the in-flight lease ACK")
+	}
+	select {
+	case err := <-result:
+		settle()
+		t.Fatalf("live-owner status returned before lease settlement: %v", err)
+	default:
+	}
+	settle()
+	if err := <-result; err != nil {
+		t.Fatalf("live-owner status after lease settlement: %v", err)
+	}
+}
+
+func TestLinuxV2LeaseReadbackReconcilesOnlyExactSequence(t *testing.T) {
+	key := state.RunKey{RunID: "run-lease", Generation: 3}
+	fence := protocol.Fence{Generation: 3, RuntimeID: "runtime", RuntimeEpoch: 1, ClaimID: "claim", LeaseToken: "lease"}
+	grant := platform.LinuxOwnerAnchorGrant{RunKey: platform.LinuxOwnerAnchorRunKey{RunID: key.RunID, Generation: key.Generation}, Fence: fence}
+	helper := authority.LinuxCgroupProcessIdentity{PID: 101, Identity: "helper:101"}
+	status := platform.LinuxOwnerHelperV2Status{
+		RunKey: grant.RunKey, Fence: fence, Helper: helper,
+		State: "active", CommitAcknowledged: true, LeaseLive: true, LeaseSequence: 2,
+	}
+	if !linuxV2LeaseAckStatusMatches(status, grant, helper, 2) {
+		t.Fatal("exact helper Status did not validate the accepted lease sequence")
+	}
+	done := make(chan struct{})
+	owner := &linuxV2ProcessOwner{
+		leaseAck: true, leaseSequence: 1,
+		leaseRenewalInFlight: true, leaseRenewalSequence: 2, leaseRenewalDone: done,
+	}
+	if err := owner.finishLeaseRenewal(done, 2, true); err != nil {
+		t.Fatalf("settle exact lease ACK readback: %v", err)
+	}
+	if !owner.leaseAck || owner.leaseSequence != 2 || owner.leaseRenewalInFlight || owner.leaseRenewalUncertain {
+		t.Fatalf("exact lease ACK readback left inconsistent owner state: %#v", owner)
+	}
+	select {
+	case <-done:
+	default:
+		t.Fatal("lease renewal completion signal remained open")
+	}
+
+	stale := status
+	stale.LeaseSequence = 1
+	if linuxV2LeaseAckStatusMatches(stale, grant, helper, 2) {
+		t.Fatal("stale helper Status was accepted for the pending lease sequence")
+	}
+	unresolvedDone := make(chan struct{})
+	unresolved := &linuxV2ProcessOwner{
+		leaseAck: true, leaseSequence: 1,
+		leaseRenewalInFlight: true, leaseRenewalSequence: 2, leaseRenewalDone: unresolvedDone,
+	}
+	if err := unresolved.finishLeaseRenewal(unresolvedDone, 2, false); err != nil {
+		t.Fatalf("retain unresolved lease ACK: %v", err)
+	}
+	if !unresolved.leaseAck || unresolved.leaseSequence != 1 || !unresolved.leaseRenewalUncertain || unresolved.leaseRenewalInFlight {
+		t.Fatalf("stale readback changed the acknowledged lease state: %#v", unresolved)
+	}
+}
+
+func TestLinuxV2NativeAdmissionCheckWaitsForReleaseGates(t *testing.T) {
+	owner := &linuxV2ProcessOwner{
+		handoffCommitTried: true, journalCommitted: true,
+		helperCommitAck: true,
+		helper:          &platform.LinuxOwnerAnchorHelper{Control: new(platform.LinuxOwnerHelperV2Client)},
+	}
+	releaseClient := &linuxV2AdmissionReleaseTestClient{}
+	checkCalls := 0
+	err := owner.releaseAfterAdmission(context.Background(), linuxgate.NativeCommand{}, releaseClient, nil, func() error {
+		checkCalls++
+		return nil
+	})
+	if err == nil {
+		t.Fatal("releaseAfterAdmission() accepted a missing initial lease ACK")
+	}
+	if checkCalls != 0 || releaseClient.calls != 0 || owner.releaseAttempted {
+		t.Fatalf("admission/readiness ordering: checkCalls=%d releaseCalls=%d releaseAttempted=%t",
+			checkCalls, releaseClient.calls, owner.releaseAttempted)
 	}
 }
 
@@ -141,6 +389,40 @@ func TestLinuxV2RejectsMissingCloneGrantBeforeReservation(t *testing.T) {
 	}
 }
 
+func TestLinuxV2MirrorAcceptsOnlyExactPostReleaseNativeReap(t *testing.T) {
+	gate := authority.LinuxCgroupProcessIdentity{PID: 41, Identity: "gate:41:start"}
+	otherStart := gate
+	otherStart.Identity = "gate:41:other-start"
+	otherPID := gate
+	otherPID.PID++
+	tests := []struct {
+		name                  string
+		process               authority.LinuxCgroupProcessIdentity
+		role                  string
+		releaseAttempted      bool
+		gateReleaseAuthorized bool
+		want                  bool
+	}{
+		{name: "original gate before release", process: gate, role: "gate", want: true},
+		{name: "gate after failed release authorization", process: gate, role: "gate", releaseAttempted: true, want: true},
+		{name: "gate after authorized release", process: gate, role: "gate", releaseAttempted: true, gateReleaseAuthorized: true, want: true},
+		{name: "same pid B exec after authorized release", process: gate, role: "native", releaseAttempted: true, gateReleaseAuthorized: true, want: true},
+		{name: "same pid B exec before release", process: gate, role: "native", want: false},
+		{name: "same pid B exec without anchor release authorization", process: gate, role: "native", releaseAttempted: true, want: false},
+		{name: "anchor authorization without durable release attempt", process: gate, role: "native", gateReleaseAuthorized: true, want: false},
+		{name: "reused gate pid", process: otherStart, role: "native", releaseAttempted: true, gateReleaseAuthorized: true, want: false},
+		{name: "different native pid", process: otherPID, role: "native", releaseAttempted: true, gateReleaseAuthorized: true, want: false},
+		{name: "descendant role cannot impersonate leader", process: gate, role: "descendant", releaseAttempted: true, gateReleaseAuthorized: true, want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := linuxV2MirrorGateReapRoleAllowed(test.process, gate, test.role, test.releaseAttempted, test.gateReleaseAuthorized); got != test.want {
+				t.Fatalf("gate reap role accepted = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
 func TestLinuxV2HandoffCarriesReservationSecretAndRecoveryEndpoint(t *testing.T) {
 	parent := authority.LinuxCgroupParentIdentity{
 		BootID: "11111111-1111-4111-8111-111111111111", MountID: 1, Device: 2, Inode: 3,
@@ -192,6 +474,17 @@ func TestLinuxV2HandoffCarriesReservationSecretAndRecoveryEndpoint(t *testing.T)
 	}
 }
 
+func TestLinuxV2MutationAckLostIsNotReplayed(t *testing.T) {
+	calls := 0
+	err := runLinuxV2MutationRetry(func() error {
+		calls++
+		return errors.Join(errors.New("StageReplay dropped ACK after readback"), ErrLinuxV2MutationAckLost)
+	})
+	if !errors.Is(err, ErrLinuxV2MutationAckLost) || calls != 1 {
+		t.Fatalf("mutation retry error=%v calls=%d, want one non-replayable ACK-loss attempt", err, calls)
+	}
+}
+
 func TestNoPrepareHelperExitLostAckIsReadBackBeforeLeafAbort(t *testing.T) {
 	store, err := state.New(t.TempDir())
 	if err != nil {
@@ -211,6 +504,7 @@ func TestNoPrepareHelperExitLostAckIsReadBackBeforeLeafAbort(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := journal.Key()
+	fence := journal.Fence()
 	loadJournal := func() state.RunJournal {
 		t.Helper()
 		loaded, err := store.LoadJournal(key)
@@ -232,10 +526,10 @@ func TestNoPrepareHelperExitLostAckIsReadBackBeforeLeafAbort(t *testing.T) {
 		OwnerUID: 1000, LauncherUID: 0, RecoveryEndpoint: "/run/symmetry/recovery.sock",
 		Parent: parent, LeafName: strings.Repeat("e", authority.TokenBytes*2), Anchor: anchor, Mirror: &mirror,
 	}
-	if _, err := store.ReserveLinuxCgroup(key, reservation); err != nil {
+	if _, err := store.ReserveLinuxCgroup(key, fence, reservation, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.MarkLinuxCgroupCreateStarted(key, reservation); err != nil {
+	if _, err := store.MarkLinuxCgroupCreateStarted(key, fence, reservation, nil); err != nil {
 		t.Fatal(err)
 	}
 	reservation = loadJournal().ContainmentCgroup.Clone()
@@ -427,7 +721,8 @@ func TestLinuxCloneAbortCallbackWaitsForExactRetirement(t *testing.T) {
 		Version: authority.LinuxCloneVersion, RunID: "run-1", Generation: 3, BindingKey: "primary",
 		ResourceID: "00000000-0000-4000-8000-000000000001", BaseCommit: strings.Repeat("a", 40),
 		BaseTreeDigest: "sha256:" + strings.Repeat("b", 64), Nonce: strings.Repeat("c", authority.LinuxCloneNonceBytes*2),
-		SeedPath: "/srv/symmetry/seeds/run-1.bundle", Target: "/srv/symmetry/work/run-1",
+		SeedPath: "/var/lib/symmetry/seeds/run-1.bundle",
+		Target:   "/var/lib/symmetry/checkouts/binding-primary/run-run-1/generation-3",
 	}
 	grant := authority.LinuxCloneGrant{
 		Intent: intent,
@@ -737,7 +1032,14 @@ func TestLinuxCloneSuccessfulStopBoundsDetachedPipeDrain(t *testing.T) {
 			_ = writerHold.Close()
 		}
 	}()
-	result := process.Wait()
+	waitDone := make(chan Result, 1)
+	go func() { waitDone <- process.Wait() }()
+	var result Result
+	select {
+	case result = <-waitDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Process.Wait() blocked after a successful cgroup stop with a detached pipe writer")
+	}
 	if !result.OutputTruncated || result.Success() || !finalizerCalled.Load() || !outcome.StopReceiptValid || !outcome.LeafRemovalProven {
 		t.Fatalf("result=%#v finalizerCalled=%t outcome=%#v", result, finalizerCalled.Load(), outcome)
 	}
@@ -866,6 +1168,9 @@ func TestLinuxCloneCancellationInvalidatesCandidateBeforeFinalizer(t *testing.T)
 func TestLinuxCloneTerminateDeadlineDuringFinalizerDoesNotBlock(t *testing.T) {
 	finalizerStarted := make(chan struct{})
 	releaseFinalizer := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseFinalizer) }) }
+	defer release()
 	runner := Runner{
 		configureProcess: func(*exec.Cmd) error { return nil },
 		launchProcess: func(_ context.Context, _ *exec.Cmd, _ Invocation, _ *os.File, _ *os.File, _ *os.File) (*startedProcess, error) {
@@ -898,14 +1203,88 @@ func TestLinuxCloneTerminateDeadlineDuringFinalizerDoesNotBlock(t *testing.T) {
 		t.Fatal("clone finalizer did not reach its terminal decision")
 	}
 	terminationContext, cancelTermination := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	terminationErr := process.Terminate(terminationContext, 0)
+	terminationDone := make(chan error, 1)
+	go func() { terminationDone <- process.Terminate(terminationContext, 0) }()
+	var terminationErr error
+	select {
+	case terminationErr = <-terminationDone:
+	case <-time.After(time.Second):
+		t.Fatal("Terminate() blocked past its deadline while clone finalization was in progress")
+	}
 	cancelTermination()
 	if !errors.Is(terminationErr, context.DeadlineExceeded) {
 		t.Fatalf("Terminate() during clone finalization = %v, want the caller's deadline", terminationErr)
 	}
-	close(releaseFinalizer)
+	release()
 	result := <-waitDone
 	if result.Terminated || !result.Success() {
 		t.Fatalf("deadline-limited Terminate() reclassified the completed clone run: %#v", result)
+	}
+}
+
+func TestLinuxCloneTerminateDeadlineBoundsFinalizerStartedAfterResult(t *testing.T) {
+	finalizerStarted := make(chan struct{})
+	releaseFinalizer := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseFinalizer) }) }
+	defer release()
+	stopErr := errors.New("helper stop remains unproven")
+	runner := Runner{
+		configureProcess: func(*exec.Cmd) error { return nil },
+		launchProcess: func(_ context.Context, _ *exec.Cmd, _ Invocation, _ *os.File, _ *os.File, _ *os.File) (*startedProcess, error) {
+			return &startedProcess{
+				pid: 42, identity: "linux:v2:gate",
+				wait:                                 func() (int, error) { return 0, nil },
+				renewLinuxV2Lease:                    func(context.Context, time.Duration, uint64) error { return nil },
+				stopLinuxV2BeforeOutputDrain:         func() error { return stopErr },
+				deferLinuxV2FinalizeUntilOutputDrain: true,
+				closeLinuxV2Containment: func() error {
+					close(finalizerStarted)
+					<-releaseFinalizer
+					return nil
+				},
+			}, nil
+		},
+	}
+	process, err := runner.Start(context.Background(), Invocation{
+		Program: "/bin/true", LinuxV2Required: true, LinuxV2: &LinuxV2Invocation{},
+		InitialLeaseDeadlineAt: time.Now().Add(time.Minute), InitialLeaseSequence: 1,
+	}, SinkFunc(func(context.Context, Event) error { return nil }))
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	result := process.Wait()
+	if result.ContainmentError == nil || !result.OutputTruncated {
+		t.Fatalf("result=%#v, want an unresolved early stop before finalization", result)
+	}
+	select {
+	case <-finalizerStarted:
+		t.Fatal("early unproven stop unexpectedly entered finalization before Terminate")
+	default:
+	}
+
+	terminationContext, cancelTermination := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancelTermination()
+	terminationDone := make(chan error, 1)
+	go func() { terminationDone <- process.Terminate(terminationContext, 0) }()
+	select {
+	case <-finalizerStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Terminate() did not start exact-owner finalization retry")
+	}
+	select {
+	case terminationErr := <-terminationDone:
+		if !errors.Is(terminationErr, context.DeadlineExceeded) {
+			t.Fatalf("Terminate() after early stop = %v, want the caller's deadline", terminationErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Terminate() blocked past its deadline while starting finalization after the result")
+	}
+	release()
+	if err := process.FinalizeContainment(); err != nil {
+		t.Fatalf("FinalizeContainment() after releasing the in-flight retry: %v", err)
+	}
+	if result := process.Wait(); result.ContainmentError != nil {
+		t.Fatalf("Wait() after exact-owner retry = %#v, want cleared containment error", result)
 	}
 }

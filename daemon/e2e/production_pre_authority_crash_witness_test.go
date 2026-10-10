@@ -187,21 +187,21 @@ func assertPreAuthoritySupervisorJobReleased(t *testing.T, jobID string) {
 		t.Fatalf("supervisor Job ID length = %d, want %d", len(jobID), authority.TokenBytes*2)
 	}
 	if _, err := hex.DecodeString(jobID); err != nil {
-		t.Fatalf("supervisor Job ID %q is not hexadecimal: %v", jobID, err)
+		t.Fatal("supervisor Job ID is not hexadecimal")
 	}
 	name := preAuthoritySupervisorJobPrefix + jobID
 	namePointer, err := windows.UTF16PtrFromString(name)
 	if err != nil {
-		t.Fatalf("encode exact supervisor Job name %q: %v", name, err)
+		t.Fatalf("encode exact supervisor Job name: %v", err)
 	}
 	const desiredAccess = uint32(0x0004 | 0x0008 | windows.SYNCHRONIZE)
 	handle, _, callErr := preAuthorityOpenJobObject.Call(uintptr(desiredAccess), 0, uintptr(unsafe.Pointer(namePointer)))
 	if handle != 0 {
 		_ = windows.CloseHandle(windows.Handle(handle))
-		t.Fatalf("exact supervisor Job %q remained open after recovery", name)
+		t.Fatal("exact supervisor Job remained open after recovery")
 	}
 	if !errors.Is(callErr, windows.ERROR_FILE_NOT_FOUND) && !errors.Is(callErr, windows.ERROR_PATH_NOT_FOUND) {
-		t.Fatalf("open exact supervisor Job %q after recovery: %v", name, callErr)
+		t.Fatalf("open exact supervisor Job after recovery: %v", callErr)
 	}
 }
 
@@ -247,10 +247,11 @@ func TestProductionPreAuthorityWrongSecretFirstClientRace(t *testing.T) {
 		t.Fatalf("wrong-secret witness status = %q, want rejected", marker.Status)
 	}
 	if marker.ActiveProcesses == 0 || marker.TargetPID <= 0 || marker.SupervisorPID <= 0 || marker.JobID == "" {
-		t.Fatalf("wrong-secret witness evidence is incomplete: %#v", marker)
+		t.Fatalf("wrong-secret witness evidence is incomplete: active_processes=%d target=%d/%q supervisor=%d/%q has_job_id=%t",
+			marker.ActiveProcesses, marker.TargetPID, marker.TargetIdentity, marker.SupervisorPID, marker.SupervisorIdentity, marker.JobID != "")
 	}
 	if strings.TrimSpace(marker.TargetIdentity) == "" || strings.TrimSpace(marker.SupervisorIdentity) == "" {
-		t.Fatalf("wrong-secret witness identities are incomplete: %#v", marker)
+		t.Fatalf("wrong-secret witness identities are incomplete: target=%q supervisor=%q", marker.TargetIdentity, marker.SupervisorIdentity)
 	}
 	retryContents, err := os.ReadFile(markerFile + ".hello-retry.json")
 	if err != nil {
@@ -270,7 +271,8 @@ func TestProductionPreAuthorityWrongSecretFirstClientRace(t *testing.T) {
 	key := state.RunKey{RunID: runID, Generation: generation}
 	journal := loadPreAuthorityWitnessJournal(t, stateDir, key)
 	if journal.HasProcessDetails() || journal.ContainmentAuthority != nil || journal.ContainmentHandoff != nil {
-		t.Fatalf("completed wrong-secret witness retained containment: %#v", journal)
+		t.Fatalf("completed wrong-secret witness retained containment: process_details=%t authority_present=%t handoff_present=%t",
+			journal.HasProcessDetails(), journal.ContainmentAuthority != nil, journal.ContainmentHandoff != nil)
 	}
 	assertPreAuthoritySupervisorJobReleased(t, marker.JobID)
 }
@@ -282,7 +284,13 @@ func assertPreAuthorityCrashState(t *testing.T, witnessCase preAuthorityCrashCas
 	}
 	if witnessCase.wantBoundHandoff {
 		if journal.ContainmentHandoff == nil || journal.ContainmentHandoff.SupervisorPID <= 0 || journal.ContainmentHandoff.SupervisorIdentity == "" {
-			t.Fatalf("bound handoff = %#v, want helper identity", journal.ContainmentHandoff)
+			var helperPID int
+			var helperIdentity string
+			if journal.ContainmentHandoff != nil {
+				helperPID = journal.ContainmentHandoff.SupervisorPID
+				helperIdentity = journal.ContainmentHandoff.SupervisorIdentity
+			}
+			t.Fatalf("bound handoff helper identity = pid=%d identity=%q, want helper identity", helperPID, helperIdentity)
 		}
 	}
 	if (journal.ContainmentAuthority != nil) != witnessCase.wantAuthority {
@@ -297,7 +305,8 @@ func assertPreAuthorityCrashState(t *testing.T, witnessCase preAuthorityCrashCas
 		}
 	}
 	if witnessCase.wantCleared && (journal.HasProcessDetails() || journal.ContainmentAuthority != nil || journal.ContainmentHandoff != nil) {
-		t.Fatalf("cleared crash state retained ownership: %#v", journal)
+		t.Fatalf("cleared crash state retained ownership: process_details=%t authority_present=%t handoff_present=%t",
+			journal.HasProcessDetails(), journal.ContainmentAuthority != nil, journal.ContainmentHandoff != nil)
 	}
 }
 
@@ -312,7 +321,8 @@ func assertPreAuthorityCrashReport(t *testing.T, path string, witnessCase preAut
 		t.Fatalf("decode crash report: %v", err)
 	}
 	if report.Stage != witnessCase.crashAt || report.Status != "hard-crash" {
-		t.Fatalf("crash report = %#v, want stage %q and hard-crash status", report, witnessCase.crashAt)
+		t.Fatalf("crash report stage=%q status=%q has_stop_receipt=%t, want stage %q and hard-crash status",
+			report.Stage, report.Status, report.HasStopReceipt, witnessCase.crashAt)
 	}
 	// The clear crash report intentionally uses the post-clear journal flags;
 	// its process binding is carried separately from the pre-clear journal.
@@ -326,7 +336,8 @@ func preAuthorityProcessWitnesses(t *testing.T, journal state.RunJournal, readyP
 	t.Helper()
 	targetPID, targetIdentity := preAuthorityTargetBinding(t, journal, report)
 	if targetPID <= 0 || strings.TrimSpace(targetIdentity) == "" {
-		t.Fatalf("pre-authority target binding is incomplete: pid=%d identity=%q journal=%#v", targetPID, targetIdentity, journal)
+		t.Fatalf("pre-authority target binding is incomplete: pid=%d identity=%q journal_process_details=%t authority_present=%t handoff_present=%t",
+			targetPID, targetIdentity, journal.HasProcessDetails(), journal.ContainmentAuthority != nil, journal.ContainmentHandoff != nil)
 	}
 
 	ready, readyPresent := loadPreAuthoritySentinelReadyRecord(t, readyPath)
@@ -342,7 +353,8 @@ func preAuthorityProcessWitnesses(t *testing.T, journal state.RunJournal, readyP
 	}
 	helperPID, helperIdentity := preAuthorityHelperBinding(journal, report)
 	if (helperPID == 0) != (strings.TrimSpace(helperIdentity) == "") {
-		t.Fatalf("pre-authority helper binding is partial: pid=%d identity=%q journal=%#v", helperPID, helperIdentity, journal)
+		t.Fatalf("pre-authority helper binding is partial: pid=%d identity=%q journal_process_details=%t authority_present=%t handoff_present=%t",
+			helperPID, helperIdentity, journal.HasProcessDetails(), journal.ContainmentAuthority != nil, journal.ContainmentHandoff != nil)
 	}
 	if helperPID > 0 {
 		witnesses = append(witnesses, preAuthorityProcessWitness{
@@ -357,7 +369,8 @@ func preAuthorityTargetBinding(t *testing.T, journal state.RunJournal, report pr
 	if journal.ContainmentAuthority != nil {
 		value := journal.ContainmentAuthority
 		if journal.HasProcessDetails() && (journal.PID != value.TargetPID || journal.ProcessIdentity != value.TargetIdentity) {
-			t.Fatalf("journal target marker disagrees with authority: pid=%d identity=%q authority=%#v", journal.PID, journal.ProcessIdentity, value)
+			t.Fatalf("journal target marker disagrees with authority: journal=%d/%q authority=%d/%q",
+				journal.PID, journal.ProcessIdentity, value.TargetPID, value.TargetIdentity)
 		}
 		return value.TargetPID, value.TargetIdentity
 	}

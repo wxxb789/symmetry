@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -616,7 +617,7 @@ func TestHandoffAdmissionWithoutVerifiedCapabilityFailsBeforeWorkspaceAndNativeS
 	}
 }
 
-func TestVerifiedPiAndOpenCodeHandoffAdmissionsStartNewNativeSessions(t *testing.T) {
+func TestPiAndOpenCodeHandoffAdmissionsUseOnlyVerifiedNativeOwner(t *testing.T) {
 	for _, test := range []struct {
 		name          string
 		kind          harness.Kind
@@ -645,9 +646,44 @@ func TestVerifiedPiAndOpenCodeHandoffAdmissionsStartNewNativeSessions(t *testing
 				t.Fatalf("%s test witness native version = %q, want tested version %q", test.kind, capabilities.NativeVersion, test.nativeVersion)
 			}
 			result := validNativeTaskResult(t, admission)
+			t.Setenv("HOME", "/daemon-a-home")
+			t.Setenv("XDG_CONFIG_HOME", "/daemon-a-xdg-config")
 			app, store, session, controlClient := nativeAdmissionDaemonForHarness(t, admission, result, nil, test.kind, test.configKind, capabilities)
 			defer store.Close()
 			controlClient.contextSnapshot = &contextSnapshot
+			profile := app.config.AgentProfiles[app.config.Runtime.AgentProfile]
+			profile.EnvAllowlist = []string{"HOME", "XDG_CONFIG_HOME"}
+			app.config.AgentProfiles[app.config.Runtime.AgentProfile] = profile
+			if runtime.GOOS == "linux" {
+				owner := &fakeLinuxV2NativeOwner{
+					kind: test.kind, preflightErr: errors.New("verified Linux B-owned clone/kernel owner is unavailable in this fixture"),
+				}
+				app.options.linuxV2NativeOwnerFactory = func(config.Config) (linuxV2NativeOwner, error) { return owner, nil }
+				adapterValue, err := app.harnessRegistry.Lookup(test.kind)
+				if err != nil {
+					t.Fatal(err)
+				}
+				adapter := adapterValue.(*fakeNativeGoalAdapter)
+				app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
+				app.workers.Wait()
+				if owner.preflights != 1 || owner.invocations != 0 || adapter.probeCalls != 0 ||
+					len(session.callsSnapshot()) != 0 || len(controlClient.calls) != 0 ||
+					app.workspace.(*fakeWorkspace).prepareCalls != 0 || app.workspace.(*fakeWorkspace).recoverCalls != 0 {
+					t.Fatalf("unverified Linux handoff crossed native boundary: preflight=%d build=%d probe=%d native=%#v control=%#v workspace=%#v",
+						owner.preflights, owner.invocations, adapter.probeCalls, session.callsSnapshot(), controlClient.calls, app.workspace)
+				}
+				journal, err := store.LoadJournal(state.RunKey{RunID: "run-1", Generation: 1})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if journal.HasProcessDetails() || journal.WorkspacePath != "" || journal.LinuxCloneIntent != nil {
+					t.Fatalf("unverified Linux handoff persisted owner/workspace authority: %#v", journal)
+				}
+				if sessions, err := store.ListGoalSessions(); err != nil || len(sessions) != 0 {
+					t.Fatalf("unverified Linux handoff persisted Goal sessions: %#v, error=%v", sessions, err)
+				}
+				return
+			}
 
 			app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
 			app.workers.Wait()
@@ -661,6 +697,28 @@ func TestVerifiedPiAndOpenCodeHandoffAdmissionsStartNewNativeSessions(t *testing
 			}
 			if session.request.Resume != nil {
 				t.Fatalf("handoff passed a resume handle to a new session: %#v", session.request.Resume)
+			}
+			if runtime.GOOS == "linux" {
+				values := make(map[string]string)
+				homeCount := 0
+				for _, entry := range session.request.Invocation.Env {
+					name, value, found := strings.Cut(entry, "=")
+					if !found {
+						continue
+					}
+					values[name] = value
+					if name == "HOME" {
+						homeCount++
+					}
+				}
+				if homeCount != 1 || values["HOME"] != "/native-b-home" ||
+					values["XDG_CONFIG_HOME"] != "/native-b-home/.config" ||
+					values["TMPDIR"] != "/native-b-home/.cache" {
+					t.Fatalf("Linux v2 native environment = %#v, want fixed-B HOME/XDG/tmp paths and no A inheritance", session.request.Invocation.Env)
+				}
+				if !session.request.Invocation.LinuxV2Required || session.request.Invocation.LinuxV2 == nil {
+					t.Fatal("Linux Pi/OpenCode native start did not carry the mandatory v2 owner grant")
+				}
 			}
 			if session.request.LocalHandleID == "" || session.request.LocalHandleID == sourceRunID {
 				t.Fatalf("handoff local handle = %q, want new local native handle", session.request.LocalHandleID)
@@ -964,8 +1022,13 @@ func TestPiAdmissionsRejectInvalidRPCProfileBeforeNativeLaunch(t *testing.T) {
 					if err != nil || len(journal.PendingTransitions) != 1 {
 						t.Fatalf("terminal transition count=%d, error=%v", len(journal.PendingTransitions), err)
 					}
-					if payload := journal.PendingTransitions[0].Payload; !strings.Contains(string(payload), "validate pi RPC invocation before native launch") {
-						t.Fatalf("admission did not reach the Pi argv guard: %s", payload)
+					payload := string(journal.PendingTransitions[0].Payload)
+					wantFailure := "validate pi RPC invocation before native launch"
+					if test.mode == protocol.SessionModeResume && runtime.GOOS == "linux" {
+						wantFailure = string(protocol.TaskResultReasonResumeRejected)
+					}
+					if !strings.Contains(payload, wantFailure) {
+						t.Fatalf("admission failure = %s, want %q", payload, wantFailure)
 					}
 				})
 			}
@@ -973,7 +1036,15 @@ func TestPiAdmissionsRejectInvalidRPCProfileBeforeNativeLaunch(t *testing.T) {
 	}
 }
 
+func skipLinuxV2PiResumeWithoutCloneReuseGrant(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "linux" {
+		t.Skip("Linux v2 retained-session resume requires a separately fenced B-clone reuse grant")
+	}
+}
+
 func TestPiResumeAdmissionReusesRetainedNativeSessionAndWorkspace(t *testing.T) {
+	skipLinuxV2PiResumeWithoutCloneReuseGrant(t)
 	admission, present, err := parseAdmissionInput(validAdmissionInput())
 	if err != nil || !present {
 		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
@@ -1429,6 +1500,7 @@ func TestRecoveryQuarantinesPreStartPiResumeAfterDefinitiveAttachRejection(t *te
 }
 
 func TestPiResumeRejectedBeforeNativeStartReleasesExactNewBinding(t *testing.T) {
+	skipLinuxV2PiResumeWithoutCloneReuseGrant(t)
 	admission, present, err := parseAdmissionInput(validAdmissionInput())
 	if err != nil || !present {
 		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
@@ -1474,6 +1546,7 @@ func TestPiResumeRejectedBeforeNativeStartReleasesExactNewBinding(t *testing.T) 
 }
 
 func TestPiResumeUnknownStartRetainsReadyAttachmentBarrier(t *testing.T) {
+	skipLinuxV2PiResumeWithoutCloneReuseGrant(t)
 	admission, present, err := parseAdmissionInput(validAdmissionInput())
 	if err != nil || !present {
 		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
@@ -1516,6 +1589,7 @@ func TestPiResumeUnknownStartRetainsReadyAttachmentBarrier(t *testing.T) {
 }
 
 func TestPiResumeAttachTimeoutAfterKnownCloseRepairsThroughReadbackBarrier(t *testing.T) {
+	skipLinuxV2PiResumeWithoutCloneReuseGrant(t)
 	admission, present, err := parseAdmissionInput(validAdmissionInput())
 	if err != nil || !present {
 		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
@@ -1571,6 +1645,7 @@ func TestPiResumeAttachTimeoutAfterKnownCloseRepairsThroughReadbackBarrier(t *te
 }
 
 func TestPiResumeDefinitiveAttachRejectionAfterKnownCloseQuarantinesSession(t *testing.T) {
+	skipLinuxV2PiResumeWithoutCloneReuseGrant(t)
 	admission, present, err := parseAdmissionInput(validAdmissionInput())
 	if err != nil || !present {
 		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
@@ -3355,6 +3430,36 @@ func TestGoalAdmissionBuildsPiProviderBridgeOnlyForVerifiedCapability(t *testing
 			Operations: []string{"resource.sync"},
 		}},
 	}
+	if runtime.GOOS == "linux" {
+		owner := &fakeLinuxV2NativeOwner{
+			kind: harness.KindPi, preflightErr: errors.New("verified Linux B-owned provider share is unavailable in this fixture"),
+		}
+		app.options.linuxV2NativeOwnerFactory = func(config.Config) (linuxV2NativeOwner, error) { return owner, nil }
+		adapterValue, err := app.harnessRegistry.Lookup(harness.KindPi)
+		if err != nil {
+			t.Fatal(err)
+		}
+		adapter := adapterValue.(*fakeNativeGoalAdapter)
+		app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
+		app.workers.Wait()
+		if owner.preflights != 1 || owner.invocations != 0 || adapter.probeCalls != 0 ||
+			len(session.callsSnapshot()) != 0 || len(controlClient.calls) != 0 || app.workspace.(*fakeWorkspace).prepareCalls != 0 {
+			t.Fatalf("unverified Linux provider share crossed native boundary: preflight=%d build=%d probe=%d native=%#v control=%#v workspace=%#v",
+				owner.preflights, owner.invocations, adapter.probeCalls, session.callsSnapshot(), controlClient.calls, app.workspace)
+		}
+		journal, err := store.LoadJournal(state.RunKey{RunID: "run-1", Generation: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := json.Marshal(journal)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if journal.WorkspacePath != "" || journal.LinuxCloneIntent != nil || strings.Contains(string(encoded), controlClient.providerAccess.Token) {
+			t.Fatalf("failed Linux provider preflight persisted workspace/credential state: %#v", journal)
+		}
+		return
+	}
 
 	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
 	select {
@@ -3602,7 +3707,20 @@ func saveClaimedGoalRun(t *testing.T, store *state.Store, key state.RunKey) {
 
 func nativeAdmissionDaemonForHarness(t *testing.T, admission protocol.Admission, result protocol.TaskResult, waitGate <-chan struct{}, kind harness.Kind, configKind string, capabilities harness.Capabilities) (*daemon, *state.Store, *fakeNativeGoalSession, *nativeAdmissionControl) {
 	t.Helper()
-	store, err := state.New(t.TempDir())
+	temporaryRoot := ""
+	if runtime.GOOS == "linux" {
+		temporaryRoot = "/tmp"
+	}
+	stateDir, err := os.MkdirTemp(temporaryRoot, "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(stateDir); err != nil {
+			t.Errorf("remove native admission test StateDir: %v", err)
+		}
+	})
+	store, err := state.New(stateDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3628,6 +3746,7 @@ func nativeAdmissionDaemonForHarness(t *testing.T, admission protocol.Admission,
 	}
 	controlClient := &nativeAdmissionControl{fakeControl: &fakeControl{}, work: protocol.Work{Goal: "implement the admitted change", Input: input}, admission: admission}
 	value := testConfig(t)
+	value.StateDir = stateDir
 	value.Runtime.HarnessKind = configKind
 	value.Runtime.HarnessVersion = capabilities.NativeVersion
 	value.Runtime.AdapterVersion = capabilities.ImplementationVersion
@@ -3647,8 +3766,57 @@ func nativeAdmissionDaemonForHarness(t *testing.T, admission protocol.Admission,
 		running:             make(map[state.RunKey]*runningRun),
 		slots:               make(chan struct{}, 1),
 	}
+	if requiresLinuxV2NativeOwner(kind) {
+		app.options.linuxV2NativeOwnerFactory = func(config.Config) (linuxV2NativeOwner, error) {
+			return &fakeLinuxV2NativeOwner{kind: kind}, nil
+		}
+	}
 	return app, store, session, controlClient
 }
+
+type fakeLinuxV2NativeOwner struct {
+	kind         harness.Kind
+	preflightErr error
+	preflights   int
+	invocations  int
+}
+
+func (owner *fakeLinuxV2NativeOwner) Preflight(_ context.Context, _ config.Config, kind harness.Kind, _ config.AgentProfile, _ bool) ([]string, error) {
+	owner.preflights++
+	if owner.preflightErr != nil {
+		return nil, owner.preflightErr
+	}
+	if kind != owner.kind {
+		return nil, errors.New("test Linux v2 owner harness mismatch")
+	}
+	environment := []string{
+		"HOME=/native-b-home",
+		"USER=native-b",
+		"LOGNAME=native-b",
+		"TMPDIR=/native-b-home/.cache",
+		"TEMP=/native-b-home/.cache",
+		"TMP=/native-b-home/.cache",
+		"XDG_CONFIG_HOME=/native-b-home/.config",
+		"XDG_CACHE_HOME=/native-b-home/.cache",
+		"XDG_DATA_HOME=/native-b-home/.local/share",
+		"XDG_STATE_HOME=/native-b-home/.local/state",
+	}
+	if kind == harness.KindPi {
+		environment = append(environment, "PI_CODING_AGENT_DIR=/native-b-home/.pi/agent")
+	}
+	return environment, nil
+}
+
+func (owner *fakeLinuxV2NativeOwner) BuildInvocation(_ context.Context, key state.RunKey, fence protocol.Fence, invocation execution.Invocation, callbacks execution.LinuxV2JournalCallbacks) (execution.Invocation, error) {
+	owner.invocations++
+	invocation.LinuxV2Required = true
+	invocation.LinuxV2 = &execution.LinuxV2Invocation{RunKey: key, Fence: fence, Callbacks: callbacks}
+	return invocation, nil
+}
+
+func (*fakeLinuxV2NativeOwner) Close() error { return nil }
+
+func (*fakeLinuxV2NativeOwner) trustedPiProviderExtensionGroupID() uint32 { return 60001 }
 
 func verifiedCodexCapabilities() harness.Capabilities {
 	return testVerifiedNativeCapabilities(harness.KindCodex)
@@ -3827,14 +3995,21 @@ func canonicalGoalContextHash(t *testing.T, snapshot control.GoalContextSnapshot
 
 type nativeAdmissionControl struct {
 	*fakeControl
+	mu                  sync.Mutex
 	work                protocol.Work
+	workForRun          func(string) protocol.Work
 	admission           protocol.Admission
+	admissionForRun     func(string) protocol.Admission
 	contextSnapshot     *control.GoalContextSnapshot
 	providerAccess      *protocol.ProviderAccess
 	claimLeaseExpiresAt time.Time
 	harnessSessionID    *string
 	harnessBindingID    *string
 	attachSessionID     string
+	taskIDForRun        func(string) string
+	sessionIDForRun     func(string) string
+	bindingIDForRun     func(string) string
+	attachmentIDForRun  func(string) string
 	attachErr           error
 	stopReceiptID       string
 	calls               []string
@@ -3852,35 +4027,88 @@ type nativeAdmissionFenceCall struct {
 }
 
 func (client *nativeAdmissionControl) recordFenceCall(kind, runID string, fence protocol.Fence) {
+	client.mu.Lock()
 	client.fenceCalls = append(client.fenceCalls, nativeAdmissionFenceCall{kind: kind, runID: runID, fence: fence})
+	client.mu.Unlock()
+}
+
+func (client *nativeAdmissionControl) recordCall(call string) {
+	client.mu.Lock()
+	client.calls = append(client.calls, call)
+	client.mu.Unlock()
+}
+
+func (client *nativeAdmissionControl) taskID(runID string) string {
+	if client.taskIDForRun != nil {
+		return client.taskIDForRun(runID)
+	}
+	return "task-1"
+}
+
+func (client *nativeAdmissionControl) runWork(runID string) protocol.Work {
+	if client.workForRun != nil {
+		return client.workForRun(runID)
+	}
+	return client.work
+}
+
+func (client *nativeAdmissionControl) runAdmission(runID string) protocol.Admission {
+	if client.admissionForRun != nil {
+		return client.admissionForRun(runID)
+	}
+	return client.admission
+}
+
+func (client *nativeAdmissionControl) sessionID(runID string) string {
+	if client.sessionIDForRun != nil {
+		return client.sessionIDForRun(runID)
+	}
+	if client.attachSessionID != "" {
+		return client.attachSessionID
+	}
+	return "00000000-0000-4000-8000-000000000010"
+}
+
+func (client *nativeAdmissionControl) bindingID(runID string) string {
+	if client.bindingIDForRun != nil {
+		return client.bindingIDForRun(runID)
+	}
+	return "00000000-0000-4000-8000-000000000009"
+}
+
+func (client *nativeAdmissionControl) attachmentID(runID string) string {
+	if client.attachmentIDForRun != nil {
+		return client.attachmentIDForRun(runID)
+	}
+	return "00000000-0000-4000-8000-000000000011"
 }
 
 func (client *nativeAdmissionControl) Claim(_ context.Context, runID string, request protocol.ClaimRequest) (protocol.ClaimResponse, error) {
+	client.mu.Lock()
 	client.claimCalls++
+	client.mu.Unlock()
 	leaseExpiresAt := client.claimLeaseExpiresAt
 	if leaseExpiresAt.IsZero() {
 		leaseExpiresAt = time.Now().Add(time.Minute)
 	}
-	return protocol.ClaimResponse{RunID: runID, TaskID: "task-1", Generation: request.Generation, ClaimID: request.ClaimID, LeaseToken: "lease", LeaseExpiresAt: leaseExpiresAt, Work: client.work, ProviderAccess: client.providerAccess, HarnessSessionID: client.harnessSessionID, HarnessBindingID: client.harnessBindingID}, nil
+	return protocol.ClaimResponse{RunID: runID, TaskID: client.taskID(runID), Generation: request.Generation, ClaimID: request.ClaimID, LeaseToken: "lease", LeaseExpiresAt: leaseExpiresAt, Work: client.runWork(runID), ProviderAccess: client.providerAccess, HarnessSessionID: client.harnessSessionID, HarnessBindingID: client.harnessBindingID}, nil
 }
 
 func (client *nativeAdmissionControl) AttachHarnessSession(_ context.Context, runID string, request control.GoalSessionAttachRequest) (control.GoalSessionReceipt, error) {
 	client.recordFenceCall("attach", runID, request.Fence)
-	client.calls = append(client.calls, "attach")
+	client.recordCall("attach")
 	if client.attachErr != nil {
 		return control.GoalSessionReceipt{}, client.attachErr
 	}
-	bindingID := "00000000-0000-4000-8000-000000000009"
+	admission := client.runAdmission(runID)
+	bindingID := client.bindingID(runID)
 	if request.BindingID != nil {
 		bindingID = *request.BindingID
 	}
-	sessionID := client.attachSessionID
-	if sessionID == "" {
-		sessionID = "00000000-0000-4000-8000-000000000010"
-	}
+	sessionID := client.sessionID(runID)
 	receipt := control.GoalSessionReceipt{
-		ID: sessionID, AttachmentReceiptID: "00000000-0000-4000-8000-000000000011", GoalID: client.admission.GoalID, TaskID: "task-1", RunID: runID, ActiveRunID: runID,
-		MachineID: "machine-1", RuntimeID: request.RuntimeID, RepositoryResourceID: client.admission.Subject.ResourceID, LocalHandleID: request.LocalHandleID,
+		ID: sessionID, AttachmentReceiptID: client.attachmentID(runID), GoalID: admission.GoalID, TaskID: client.taskID(runID), RunID: runID, ActiveRunID: runID,
+		MachineID: "machine-1", RuntimeID: request.RuntimeID, RepositoryResourceID: admission.Subject.ResourceID, LocalHandleID: request.LocalHandleID,
 		BindingID:   bindingID,
 		HarnessKind: request.HarnessKind, HarnessVersion: request.HarnessVersion, AdapterVersion: request.AdapterVersion,
 		WorkspaceFingerprint: request.WorkspaceFingerprint, Workspace: request.Workspace, State: state.GoalSessionStateBusy,
@@ -3890,7 +4118,7 @@ func (client *nativeAdmissionControl) AttachHarnessSession(_ context.Context, ru
 
 func (client *nativeAdmissionControl) MarkHarnessSessionStopped(_ context.Context, runID string, request control.GoalSessionStoppedRequest) (control.GoalSessionStoppedReceipt, error) {
 	client.recordFenceCall("stopped", runID, request.Fence)
-	client.calls = append(client.calls, "stopped")
+	client.recordCall("stopped")
 	receiptID := client.stopReceiptID
 	if receiptID == "" {
 		receiptID = "00000000-0000-4000-8000-000000000011"
@@ -3904,38 +4132,36 @@ func (client *nativeAdmissionControl) MarkHarnessSessionStopped(_ context.Contex
 
 func (client *nativeAdmissionControl) FetchRunContext(_ context.Context, runID string, fence protocol.Fence) (control.GoalRunContext, error) {
 	client.recordFenceCall("context", runID, fence)
-	client.calls = append(client.calls, "context")
-	sessionID := client.attachSessionID
-	if sessionID == "" {
-		sessionID = "00000000-0000-4000-8000-000000000010"
-	}
+	client.recordCall("context")
+	admission := client.runAdmission(runID)
+	sessionID := client.sessionID(runID)
 	contextSnapshot := control.GoalContextSnapshot{
-		SnapshotID:   client.admission.ContextSnapshotID,
-		GoalID:       client.admission.GoalID,
-		GoalRevision: client.admission.GoalRevision,
-		WorkItemID:   client.admission.WorkItemID,
-		ContentHash:  client.admission.ContextHash,
-		Subject:      client.admission.Subject,
-		WorkContract: control.WorkContract{Purpose: string(client.admission.Purpose)},
+		SnapshotID:   admission.ContextSnapshotID,
+		GoalID:       admission.GoalID,
+		GoalRevision: admission.GoalRevision,
+		WorkItemID:   admission.WorkItemID,
+		ContentHash:  admission.ContextHash,
+		Subject:      admission.Subject,
+		WorkContract: control.WorkContract{Purpose: string(admission.Purpose)},
 	}
 	if client.contextSnapshot != nil {
 		contextSnapshot = *client.contextSnapshot
 	}
 	return control.GoalRunContext{
-		GoalID: client.admission.GoalID, TaskID: "task-1", RunID: runID, Generation: fence.Generation, SessionID: &sessionID,
+		GoalID: admission.GoalID, TaskID: client.taskID(runID), RunID: runID, Generation: fence.Generation, SessionID: &sessionID,
 		Context: contextSnapshot,
 	}, nil
 }
 
 func (client *nativeAdmissionControl) AppendEvidence(_ context.Context, runID string, fence protocol.Fence, _ protocol.Evidence) (control.GoalEvidenceReceipt, error) {
 	client.recordFenceCall("evidence", runID, fence)
-	client.calls = append(client.calls, "evidence")
+	client.recordCall("evidence")
 	return control.GoalEvidenceReceipt{}, nil
 }
 
 func (client *nativeAdmissionControl) RecordUsage(_ context.Context, runID string, fence protocol.Fence, _ protocol.Usage) (control.GoalUsageReceipt, error) {
 	client.recordFenceCall("usage", runID, fence)
-	client.calls = append(client.calls, "usage")
+	client.recordCall("usage")
 	return control.GoalUsageReceipt{}, nil
 }
 
@@ -3956,7 +4182,11 @@ func (client *nativeAdmissionControl) Transition(ctx context.Context, runID stri
 
 type fakeNativeGoalAdapter struct {
 	session        *fakeNativeGoalSession
+	sessionFactory func(harness.StartRequest) *fakeNativeGoalSession
+	sessionWrapper func(*fakeNativeGoalSession) harness.Session
+	onStart        func(harness.StartRequest, *fakeNativeGoalSession) error
 	capabilities   harness.Capabilities
+	probeCalls     int
 	probeErr       error
 	startEntered   chan struct{}
 	startRelease   <-chan struct{}
@@ -3965,11 +4195,19 @@ type fakeNativeGoalAdapter struct {
 }
 
 func (adapter *fakeNativeGoalAdapter) Probe(context.Context) (harness.Capabilities, error) {
+	adapter.probeCalls++
 	return adapter.capabilities, adapter.probeErr
 }
 
 func (adapter *fakeNativeGoalAdapter) Start(_ context.Context, request harness.StartRequest, sink harness.EventSink) (harness.Session, error) {
-	adapter.session.recordCall("start")
+	session := adapter.session
+	if adapter.sessionFactory != nil {
+		session = adapter.sessionFactory(request)
+	}
+	if session == nil {
+		return nil, errors.New("fake native session factory returned nil")
+	}
+	session.recordCall("start")
 	if adapter.startEntered != nil {
 		select {
 		case adapter.startEntered <- struct{}{}:
@@ -3979,40 +4217,52 @@ func (adapter *fakeNativeGoalAdapter) Start(_ context.Context, request harness.S
 	if adapter.startRelease != nil {
 		<-adapter.startRelease
 	}
-	if adapter.session.startErr != nil {
-		return nil, adapter.session.startErr
+	if adapter.onStart != nil {
+		if err := adapter.onStart(request, session); err != nil {
+			return nil, err
+		}
 	}
-	if adapter.session.persistAtomic && request.Invocation.PersistProcessWithAuthority != nil {
-		adapter.session.recordCall("atomic")
-		pid, identity := adapter.session.ProcessDetails()
+	if session.startErr != nil {
+		return nil, session.startErr
+	}
+	if !session.skipProcessPersist && session.persistAtomic && request.Invocation.PersistProcessWithAuthority != nil {
+		session.recordCall("atomic")
+		pid, identity := session.ProcessDetails()
 		authorityValue := testProcessPersistenceAuthority(pid, identity)
 		if err := request.Invocation.PersistProcessWithAuthority(pid, identity, &authorityValue); err != nil {
 			return nil, err
 		}
-	} else if request.PersistProcess != nil {
-		pid, identity := adapter.session.ProcessDetails()
+	} else if !session.skipProcessPersist && request.PersistProcess != nil {
+		pid, identity := session.ProcessDetails()
 		if err := request.PersistProcess(pid, identity); err != nil {
 			return nil, err
 		}
 	}
 	if request.ProviderBridge != nil {
-		pid, identity := adapter.session.ProcessDetails()
+		pid, identity := session.ProcessDetails()
 		if err := request.ProviderBridge.Lifecycle.BindProcess(pid, identity); err != nil {
-			adapter.session.providerBridge = request.ProviderBridge.Lifecycle
-			return adapter.session, err
+			session.providerBridge = request.ProviderBridge.Lifecycle
+			return adapter.nativeSessionResult(session), err
 		}
-		adapter.session.providerBridge = request.ProviderBridge.Lifecycle
+		session.providerBridge = request.ProviderBridge.Lifecycle
 	}
-	adapter.session.request = request
-	adapter.session.sink = sink
+	session.request = request
+	session.sink = sink
 	if adapter.returnTypedNil {
 		var typedNil *fakeNativeGoalSession
 		return typedNil, adapter.startReturnErr
 	}
 	if adapter.startReturnErr != nil {
-		return adapter.session, adapter.startReturnErr
+		return adapter.nativeSessionResult(session), adapter.startReturnErr
 	}
-	return adapter.session, nil
+	return adapter.nativeSessionResult(session), nil
+}
+
+func (adapter *fakeNativeGoalAdapter) nativeSessionResult(session *fakeNativeGoalSession) harness.Session {
+	if adapter.sessionWrapper != nil {
+		return adapter.sessionWrapper(session)
+	}
+	return session
 }
 
 type fakeNativeGoalSession struct {
@@ -4031,7 +4281,10 @@ type fakeNativeGoalSession struct {
 	waitEntered        chan struct{}
 	processPID         int
 	processIdentity    string
+	nativeThreadID     string
 	persistAtomic      bool
+	skipProcessPersist bool
+	linuxV2Status      execution.LinuxV2LiveOwnerStatus
 	startErr           error
 	closeErr           error
 	closeEntered       chan struct{}
@@ -4076,8 +4329,16 @@ func (session *fakeNativeGoalSession) StartTurn(ctx context.Context, request har
 	session.turnRequest = request
 	session.callsMu.Unlock()
 	close(session.turnStarted)
+	threadID := session.nativeThreadID
+	if threadID == "" {
+		threadID = "native-thread-1"
+	}
+	startedPayload, err := json.Marshal(map[string]string{"thread_id": threadID})
+	if err != nil {
+		return err
+	}
 	for _, event := range []harness.Event{
-		{Kind: harness.EventSessionStarted, At: time.Now().UTC(), Payload: json.RawMessage(`{"thread_id":"native-thread-1"}`)},
+		{Kind: harness.EventSessionStarted, At: time.Now().UTC(), Payload: startedPayload},
 		{Kind: harness.EventMessageDelta, At: time.Now().UTC(), Payload: json.RawMessage(`{"delta":"working"}`)},
 	} {
 		if err := session.sink.Handle(ctx, event); err != nil {

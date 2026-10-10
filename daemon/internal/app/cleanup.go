@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 	"github.com/wxxb789/symmetry/daemon/internal/workspace"
@@ -324,6 +325,53 @@ func (daemon *daemon) flushCleanups(ctx context.Context) {
 // Wait witness or an identity-bound recovered process stop proves its exit.
 func (daemon *daemon) resolveCleanupProcessMarker(ctx context.Context, journal state.RunJournal) (bool, error) {
 	key := journal.Key()
+	if hasLinuxV2ContainmentState(journal) {
+		daemon.mu.Lock()
+		active := daemon.running[key]
+		daemon.mu.Unlock()
+		if active != nil {
+			if active.processExited && active.process != nil && active.processStopWitness == active.process {
+				latest, err := daemon.store.LoadJournal(key)
+				if err != nil {
+					return false, err
+				}
+				if !latest.HasProcessDetails() && !hasPendingLinuxV2Containment(latest) {
+					return true, nil
+				}
+				return false, errors.New("Linux v2 process finalizer retained its exact owner marker")
+			}
+			if !active.processExited || active.process == nil {
+				return false, nil
+			}
+			if finalized, err := daemon.finalizeExitedProcess(key, journal, active); err != nil {
+				return false, err
+			} else if !finalized {
+				return false, nil
+			}
+			latest, err := daemon.store.LoadJournal(key)
+			if err != nil {
+				return false, err
+			}
+			if latest.HasProcessDetails() || hasPendingLinuxV2Containment(latest) {
+				return false, errors.New("Linux v2 process finalizer did not clear the exact released owner")
+			}
+			return true, nil
+		}
+		if !journal.HasProcessDetails() && !hasPendingLinuxV2Containment(journal) {
+			return true, nil
+		}
+		if err := daemon.stopPersistedProcess(ctx, journal); err != nil {
+			return false, err
+		}
+		latest, err := daemon.store.LoadJournal(key)
+		if err != nil {
+			return false, err
+		}
+		if latest.HasProcessDetails() || hasPendingLinuxV2Containment(latest) {
+			return false, errors.New("Linux v2 containment remains pending after exact recovery")
+		}
+		return true, nil
+	}
 	daemon.mu.Lock()
 	active := daemon.running[key]
 	hasWitness := active != nil && active.processStopWitness != nil && active.processStopWitness == active.process
@@ -472,6 +520,9 @@ func (daemon *daemon) cleanupContext(ctx context.Context) (context.Context, cont
 }
 
 func (daemon *daemon) cleanupRecoveredWorkspace(ctx context.Context, journal state.RunJournal, succeeded bool) error {
+	if journal.LinuxCloneIntent != nil {
+		return daemon.cleanupLinuxCloneWorkspace(ctx, journal)
+	}
 	if journal.RetainWorkspace || journal.TerminalState == "cancelled" || daemon.workspaceRetentionRemembered(journal.Key()) ||
 		(journal.TerminalState != "completed" && supervisoryRecoveryRequired(journal)) {
 		return nil
@@ -496,6 +547,347 @@ func (daemon *daemon) cleanupRecoveredWorkspace(ctx context.Context, journal sta
 		return err
 	}
 	return daemon.workspace.Cleanup(cleanupContext, prepared, succeeded)
+}
+
+func (daemon *daemon) cleanupLinuxCloneWorkspace(ctx context.Context, journal state.RunJournal) error {
+	if ctx == nil || daemon == nil || daemon.store == nil {
+		return errors.New("Linux clone cleanup lacks its exact context, daemon, or Store")
+	}
+	if journal.LinuxCloneAbortProof != nil {
+		if journal.LinuxCloneAbortPending || !linuxCloneAbortProofMatchesJournal(journal) {
+			return errors.New("Linux clone abort tombstone does not match its completed no-target cleanup")
+		}
+		if journal.WorkspacePath != "" || journal.WorkspaceRecoveryRequired {
+			return errors.New("Linux clone abort tombstone retained workspace fields")
+		}
+		return linuxCloneAbortRecovery(ctx, daemon, journal)
+	}
+	if journal.LinuxCloneAbortPending || linuxCloneAbortRecoveryEligible(journal) {
+		if !linuxCloneAbortRecoveryEligible(journal) {
+			return errors.New("Linux clone abort is unresolved after possible B execution; retain its fenced RunJournal")
+		}
+		if journal.LinuxCloneCheckoutReceipt != nil || journal.LinuxClonePromotionIntent != nil || journal.LinuxClonePromotionReceipt != nil {
+			return errors.New("Linux clone abort is not eligible after checkout or promotion")
+		}
+		return linuxCloneAbortRecovery(ctx, daemon, journal)
+	}
+	if journal.LinuxCloneIntent == nil || journal.LinuxCloneSeedReceipt == nil ||
+		journal.LinuxCloneCheckoutReceipt == nil || journal.LinuxClonePromotionReceipt == nil {
+		return errors.New("Linux clone cleanup requires its exact workspace adapter and complete durable receipts")
+	}
+	key := journal.Key()
+	fence := journal.Fence()
+	if !linuxCloneCleanupJournalMatchesFence(journal, key, fence) {
+		return errors.New("Linux clone cleanup journal does not match its exact RunKey and claim fence")
+	}
+	cloneWorkspace, ok := daemon.workspace.(linuxV2CloneWorkspace)
+	if !ok {
+		return errors.New("Linux clone cleanup requires its exact workspace adapter")
+	}
+	grant := authority.LinuxCloneGrant{
+		Intent: journal.LinuxCloneIntent.Clone(), Seed: journal.LinuxCloneSeedReceipt.Clone(),
+	}
+	checkout := journal.LinuxCloneCheckoutReceipt.Clone()
+	if err := grant.Validate(); err != nil || checkout.Validate() != nil ||
+		checkout.RunID != key.RunID || checkout.Generation != key.Generation || checkout.Target != grant.Intent.Target ||
+		checkout.BindingKey != grant.Intent.BindingKey || checkout.ResourceID != grant.Intent.ResourceID ||
+		checkout.Nonce != grant.Intent.Nonce || checkout.SeedDigest != grant.Seed.Digest || checkout.BaseCommit != grant.Intent.BaseCommit {
+		return errors.Join(errors.New("validate exact Linux clone cleanup grant and checkout receipt"), err)
+	}
+
+	latest, err := daemon.store.LoadJournal(key)
+	if err != nil {
+		return fmt.Errorf("read back Linux clone cleanup journal: %w", err)
+	}
+	if !linuxCloneCleanupJournalMatchesFence(latest, key, fence) || latest.LinuxCloneIntent == nil ||
+		!latest.LinuxCloneIntent.Equal(grant.Intent) || latest.LinuxCloneSeedReceipt == nil ||
+		!latest.LinuxCloneSeedReceipt.Equal(grant.Seed) || latest.LinuxCloneCheckoutReceipt == nil ||
+		!latest.LinuxCloneCheckoutReceipt.Equal(checkout) || latest.LinuxClonePromotionIntent == nil ||
+		latest.LinuxClonePromotionReceipt == nil {
+		return errors.New("Linux clone cleanup authority changed from the exact terminal RunJournal")
+	}
+	cleanupIntent, err := state.LinuxCloneCleanupIntentForJournal(latest)
+	if err != nil {
+		return fmt.Errorf("derive exact Linux clone cleanup intent from RunJournal: %w", err)
+	}
+	if latest.LinuxCloneCleanupIntent != nil && !latest.LinuxCloneCleanupIntent.Equal(cleanupIntent) {
+		return errors.New("Linux clone cleanup intent differs from the exact RunJournal")
+	}
+	if err := daemon.requireUnownedLinuxCloneCleanupTarget(key, cleanupIntent, latest); err != nil {
+		return err
+	}
+
+	cleanupProof := authority.LinuxCloneCleanupProof{}
+	if latest.LinuxCloneCleanupProof != nil {
+		cleanupProof = latest.LinuxCloneCleanupProof.Clone()
+		if !latest.LinuxCloneCleanupEligible(key, fence) || !cleanupProof.Intent.Equal(cleanupIntent) {
+			return errors.New("completed Linux clone cleanup proof differs from its eligible RunJournal")
+		}
+	} else {
+		if !latest.LinuxCloneCleanupBeginEligible(key, fence) {
+			return errors.New("Linux clone cleanup is not authorized by the exact terminal RunJournal")
+		}
+		if err := linuxCloneCleanupPersistMutation(daemon, daemon.store, key, fence, "begin Linux clone cleanup", func() (state.RunJournal, error) {
+			return daemon.store.BeginLinuxCloneCleanup(key, fence)
+		}, func(current state.RunJournal) bool {
+			return current.LinuxCloneCleanupPending && current.LinuxCloneCleanupIntent != nil &&
+				current.LinuxCloneCleanupIntent.Equal(cleanupIntent) && current.LinuxCloneCleanupProof == nil &&
+				current.WorkspacePath == grant.Intent.Target && current.WorkspaceRecoveryRequired
+		}); err != nil {
+			return fmt.Errorf("persist exact Linux clone cleanup intent before Workspace effects: %w", err)
+		}
+		latest, err = daemon.store.LoadJournal(key)
+		if err != nil || !linuxCloneCleanupJournalMatchesFence(latest, key, fence) || !latest.LinuxCloneCleanupPending ||
+			latest.LinuxCloneCleanupIntent == nil || !latest.LinuxCloneCleanupIntent.Equal(cleanupIntent) ||
+			latest.LinuxCloneCleanupProof != nil || latest.WorkspacePath != grant.Intent.Target || !latest.WorkspaceRecoveryRequired {
+			return errors.Join(errors.New("read back exact pending Linux clone cleanup intent"), err)
+		}
+	}
+
+	var priorRemovalProof *authority.LinuxCloneTargetRemovalProof
+	if latest.LinuxCloneTargetRemovalProof != nil {
+		copy := latest.LinuxCloneTargetRemovalProof.Clone()
+		if copy.Validate() != nil || !copy.Intent.Equal(cleanupIntent) ||
+			copy.Disposition != authority.LinuxCloneTargetDispositionRemoved {
+			return errors.New("stored Linux clone target-removal proof differs from the exact cleanup intent")
+		}
+		priorRemovalProof = &copy
+	}
+	cleanupContext, cancel := daemon.cleanupContext(ctx)
+	defer cancel()
+	if latest.LinuxCloneCleanupProof == nil {
+		// Begin is durable before the B target can be removed. Recheck
+		// volatile/persisted ownership immediately before that effect because
+		// State cannot know about an in-process owner.
+		latest, err = daemon.store.LoadJournal(key)
+		if err != nil || !linuxCloneCleanupJournalMatchesFence(latest, key, fence) ||
+			!latest.LinuxCloneCleanupPending || latest.LinuxCloneCleanupIntent == nil ||
+			!latest.LinuxCloneCleanupIntent.Equal(cleanupIntent) || latest.LinuxCloneCleanupProof != nil ||
+			latest.RetainWorkspace || latest.WorkspacePath != grant.Intent.Target || !latest.WorkspaceRecoveryRequired {
+			return errors.Join(errors.New("recheck exact pending Linux clone cleanup before target removal"), err)
+		}
+		if latest.LinuxCloneTargetRemovalProof == nil {
+			if priorRemovalProof != nil {
+				return errors.New("stored target-removal proof disappeared before Workspace replay")
+			}
+		} else if priorRemovalProof == nil {
+			copy := latest.LinuxCloneTargetRemovalProof.Clone()
+			if copy.Validate() != nil || !copy.Intent.Equal(cleanupIntent) {
+				return errors.New("fresh RunJournal target-removal proof differs from exact cleanup intent")
+			}
+			priorRemovalProof = &copy
+		} else if !latest.LinuxCloneTargetRemovalProof.Equal(*priorRemovalProof) {
+			return errors.New("RunJournal target-removal proof changed before Workspace replay")
+		}
+		if !latest.LinuxCloneCleanupBeginEligible(key, fence) {
+			return errors.New("Linux clone cleanup gates changed after the durable Begin intent")
+		}
+		if err := daemon.requireUnownedLinuxCloneCleanupTarget(key, cleanupIntent, latest); err != nil {
+			return err
+		}
+		var deleter workspace.LinuxCloneTargetDeleter
+		if priorRemovalProof == nil {
+			deleter, err = linuxCloneTargetDeleterForRun(daemon, grant, cleanupIntent, nil)
+			if err != nil {
+				return fmt.Errorf("bind exact target-removal request to its authenticated Linux owner anchor: %w", err)
+			}
+		}
+		targetRemovalProof, removeErr := cloneWorkspace.RemoveLinuxCloneTarget(cleanupContext, grant, checkout, latest, deleter)
+		if removeErr != nil {
+			return fmt.Errorf("remove exact B-owned Linux clone before A cleanup: %w", removeErr)
+		}
+		if targetRemovalProof.Validate() != nil || !targetRemovalProof.Intent.Equal(cleanupIntent) ||
+			targetRemovalProof.Disposition != authority.LinuxCloneTargetDispositionRemoved ||
+			priorRemovalProof != nil && !targetRemovalProof.Equal(*priorRemovalProof) {
+			return errors.New("Workspace returned no exact stored/root-proven Linux clone target removal")
+		}
+		if err := daemon.persistLinuxCloneTargetRemoval(key, fence, cleanupIntent, targetRemovalProof); err != nil {
+			return fmt.Errorf("persist exact root target-removal proof before A cleanup: %w", err)
+		}
+		latest, err = daemon.store.LoadJournal(key)
+		if err != nil || !linuxCloneCleanupJournalMatchesFence(latest, key, fence) || !latest.LinuxCloneCleanupPending ||
+			latest.LinuxCloneCleanupIntent == nil || !latest.LinuxCloneCleanupIntent.Equal(cleanupIntent) ||
+			latest.LinuxCloneTargetRemovalProof == nil || !latest.LinuxCloneTargetRemovalProof.Equal(targetRemovalProof) ||
+			latest.LinuxCloneCleanupProof != nil {
+			return errors.Join(errors.New("read back exact durable Linux clone target-removal proof"), err)
+		}
+		if err := daemon.requireUnownedLinuxCloneCleanupTarget(key, cleanupIntent, latest); err != nil {
+			return err
+		}
+		cleanupProof, err = cloneWorkspace.CleanupLinuxClone(cleanupContext, grant, checkout, latest)
+		if err != nil {
+			return fmt.Errorf("retire A-owned Linux clone material after durable B removal proof: %w", err)
+		}
+		if cleanupProof.Validate() != nil || !cleanupProof.Intent.Equal(cleanupIntent) ||
+			!cleanupProof.TargetRemovalProof.Equal(targetRemovalProof) {
+			return errors.New("Workspace returned no exact Linux clone cleanup proof")
+		}
+		if err := linuxCloneCleanupPersistMutation(daemon, daemon.store, key, fence, "complete Linux clone cleanup", func() (state.RunJournal, error) {
+			return daemon.store.CompleteLinuxCloneCleanup(key, fence, cleanupIntent, cleanupProof)
+		}, func(current state.RunJournal) bool {
+			return !current.LinuxCloneCleanupPending && current.LinuxCloneCleanupIntent != nil &&
+				current.LinuxCloneCleanupIntent.Equal(cleanupIntent) && current.LinuxCloneCleanupProof != nil &&
+				current.LinuxCloneCleanupProof.Equal(cleanupProof) && current.WorkspacePath == "" &&
+				!current.WorkspaceRecoveryRequired
+		}); err != nil {
+			return fmt.Errorf("persist exact Linux clone cleanup proof: %w", err)
+		}
+		latest, err = daemon.store.LoadJournal(key)
+		if err != nil || !linuxCloneCleanupJournalMatchesFence(latest, key, fence) || latest.LinuxCloneCleanupPending ||
+			latest.LinuxCloneCleanupIntent == nil || !latest.LinuxCloneCleanupIntent.Equal(cleanupIntent) ||
+			latest.LinuxCloneCleanupProof == nil || !latest.LinuxCloneCleanupProof.Equal(cleanupProof) ||
+			latest.LinuxCloneTargetRemovalProof == nil || !latest.LinuxCloneTargetRemovalProof.Equal(targetRemovalProof) ||
+			latest.WorkspacePath != "" || latest.WorkspaceRecoveryRequired {
+			return errors.Join(errors.New("read back exact completed Linux clone cleanup proof"), err)
+		}
+	} else {
+		// A completed proof can be the result of a prior lost ACK. Freshly
+		// replay its exact State CAS before relying on it for journal deletion.
+		if err := linuxCloneCleanupPersistMutation(daemon, daemon.store, key, fence, "replay completed Linux clone cleanup", func() (state.RunJournal, error) {
+			return daemon.store.CompleteLinuxCloneCleanup(key, fence, cleanupIntent, cleanupProof)
+		}, func(current state.RunJournal) bool {
+			return !current.LinuxCloneCleanupPending && current.LinuxCloneCleanupIntent != nil &&
+				current.LinuxCloneCleanupIntent.Equal(cleanupIntent) && current.LinuxCloneCleanupProof != nil &&
+				current.LinuxCloneCleanupProof.Equal(cleanupProof) && current.WorkspacePath == "" &&
+				!current.WorkspaceRecoveryRequired
+		}); err != nil {
+			return fmt.Errorf("replay exact completed Linux clone cleanup proof: %w", err)
+		}
+		latest, err = daemon.store.LoadJournal(key)
+		if err != nil || !linuxCloneCleanupJournalMatchesFence(latest, key, fence) || !latest.LinuxCloneCleanupEligible(key, fence) ||
+			latest.LinuxCloneCleanupIntent == nil || !latest.LinuxCloneCleanupIntent.Equal(cleanupIntent) ||
+			latest.LinuxCloneCleanupProof == nil || !latest.LinuxCloneCleanupProof.Equal(cleanupProof) {
+			return errors.Join(errors.New("read back replayed completed Linux clone cleanup proof"), err)
+		}
+	}
+
+	verifiedProof, err := cloneWorkspace.CleanupLinuxClone(cleanupContext, grant, checkout, latest)
+	if err != nil || !verifiedProof.Equal(cleanupProof) {
+		return errors.Join(errors.New("reverify completed Linux clone cleanup before journal deletion"), err)
+	}
+	return nil
+}
+
+func (daemon *daemon) persistLinuxCloneTargetRemoval(
+	key state.RunKey,
+	fence protocol.Fence,
+	expected authority.LinuxCloneCleanupIntent,
+	proof authority.LinuxCloneTargetRemovalProof,
+) error {
+	if daemon == nil || daemon.store == nil || expected.Validate() != nil || proof.Validate() != nil ||
+		proof.Disposition != authority.LinuxCloneTargetDispositionRemoved || !proof.Intent.Equal(expected) {
+		return errors.New("Linux clone target-removal proof is incomplete or differs from its cleanup intent")
+	}
+	if err := linuxCloneCleanupPersistMutation(daemon, daemon.store, key, fence, "record Linux clone target removal", func() (state.RunJournal, error) {
+		return daemon.store.RecordLinuxCloneTargetRemoval(key, fence, expected, proof)
+	}, func(current state.RunJournal) bool {
+		return current.LinuxCloneCleanupPending && current.LinuxCloneCleanupIntent != nil &&
+			current.LinuxCloneCleanupIntent.Equal(expected) && current.LinuxCloneTargetRemovalProof != nil &&
+			current.LinuxCloneTargetRemovalProof.Equal(proof) && current.LinuxCloneCleanupProof == nil &&
+			current.WorkspacePath == expected.Intent.Target && current.WorkspaceRecoveryRequired
+	}); err != nil {
+		return fmt.Errorf("persist exact B target-removal receipt: %w", err)
+	}
+	readback, err := daemon.store.LoadJournal(key)
+	if err != nil || !linuxCloneCleanupJournalMatchesFence(readback, key, fence) ||
+		!readback.LinuxCloneCleanupPending || readback.LinuxCloneCleanupIntent == nil ||
+		!readback.LinuxCloneCleanupIntent.Equal(expected) || readback.LinuxCloneTargetRemovalProof == nil ||
+		!readback.LinuxCloneTargetRemovalProof.Equal(proof) || readback.LinuxCloneCleanupProof != nil ||
+		readback.WorkspacePath != expected.Intent.Target || !readback.WorkspaceRecoveryRequired {
+		return errors.Join(errors.New("read back exact durable B target-removal receipt"), err)
+	}
+	return nil
+}
+
+func linuxCloneCleanupJournalMatchesFence(journal state.RunJournal, key state.RunKey, fence protocol.Fence) bool {
+	return journal.Key() == key && journal.Fence() == fence && fence.Generation == key.Generation
+}
+
+func (daemon *daemon) requireUnownedLinuxCloneCleanupTarget(
+	key state.RunKey,
+	cleanup authority.LinuxCloneCleanupIntent,
+	journal state.RunJournal,
+) error {
+	if journal.RetainWorkspace || daemon.workspaceRetentionRemembered(key) {
+		return errors.New("Linux clone cleanup remains blocked by durable or volatile workspace retention")
+	}
+	retained, err := daemon.retainedGoalSessionWorkspace(key)
+	if err != nil {
+		return err
+	}
+	if retained {
+		return errors.New("Linux clone cleanup remains blocked by a GoalSession workspace owner")
+	}
+	journals, err := daemon.store.ListJournals()
+	if err != nil {
+		return fmt.Errorf("list RunJournals before Linux clone target removal: %w", err)
+	}
+	for _, other := range journals {
+		if other.Key() == key {
+			continue
+		}
+		if other.WorkspaceBindingKey == cleanup.Intent.BindingKey && other.WorkspacePath == cleanup.Intent.Target ||
+			other.LinuxCloneIntent != nil && other.LinuxCloneIntent.BindingKey == cleanup.Intent.BindingKey &&
+				other.LinuxCloneIntent.Target == cleanup.Intent.Target {
+			return fmt.Errorf("Linux clone cleanup target is still named by another RunJournal %s/%d", other.RunID, other.Generation)
+		}
+	}
+	daemon.mu.Lock()
+	defer daemon.mu.Unlock()
+	for ownerKey, active := range daemon.running {
+		if active == nil {
+			continue
+		}
+		if ownerKey == key || active.prepared.BindingKey == cleanup.Intent.BindingKey && active.prepared.Path == cleanup.Intent.Target ||
+			active.linuxClone != nil && active.linuxClone.grant.Intent.BindingKey == cleanup.Intent.BindingKey &&
+				active.linuxClone.grant.Intent.Target == cleanup.Intent.Target {
+			return errors.New("Linux clone cleanup target is still owned by a volatile run")
+		}
+	}
+	return nil
+}
+
+func linuxCloneAbortRecoveryEligible(journal state.RunJournal) bool {
+	if journal.LinuxCloneIntent == nil || journal.LinuxCloneCheckoutReceipt != nil ||
+		journal.LinuxClonePromotionIntent != nil || journal.LinuxClonePromotionReceipt != nil ||
+		journal.HasProcessDetails() || journal.ContainmentAuthority != nil || journal.ContainmentHandoff != nil ||
+		journal.ContainmentScans != nil || journal.ContainmentUnproven || journal.ContainmentCgroupReleaseProof != nil {
+		return false
+	}
+	if journal.ContainmentCgroupPreGateReleaseProof != nil {
+		proof := journal.ContainmentCgroupPreGateReleaseProof
+		return journal.ContainmentCgroup == nil && proof.Validate() == nil && proof.Receipt.Validate() == nil
+	}
+	return journal.ContainmentCgroup == nil || journal.ContainmentCgroup.AbortProof != nil
+}
+
+func linuxCloneAbortProofMatchesJournal(journal state.RunJournal) bool {
+	proof := journal.LinuxCloneAbortProof
+	intent := journal.LinuxCloneIntent
+	if proof == nil || intent == nil || proof.Validate() != nil || !proof.Intent.Equal(*intent) ||
+		journal.LinuxClonePromotionIntent != nil || journal.LinuxClonePromotionReceipt != nil ||
+		proof.NormalReleaseProof != nil || journal.ContainmentCgroupReleaseProof != nil ||
+		journal.ContainmentAuthority != nil || journal.ContainmentHandoff != nil ||
+		journal.HasProcessDetails() || journal.ContainmentScans != nil || journal.ContainmentUnproven {
+		return false
+	}
+	seedMatches := proof.SeedReceipt == nil && journal.LinuxCloneSeedReceipt == nil ||
+		proof.SeedReceipt != nil && journal.LinuxCloneSeedReceipt != nil && proof.SeedReceipt.Equal(*journal.LinuxCloneSeedReceipt)
+	preGateMatches := proof.PreGateReleaseProof == nil && journal.ContainmentCgroupPreGateReleaseProof == nil ||
+		proof.PreGateReleaseProof != nil && journal.ContainmentCgroupPreGateReleaseProof != nil &&
+			proof.PreGateReleaseProof.Equal(*journal.ContainmentCgroupPreGateReleaseProof)
+	var cgroupAbort *authority.LinuxCgroupReservationAbortProof
+	if journal.ContainmentCgroup != nil && journal.ContainmentCgroup.AbortProof != nil {
+		copy := journal.ContainmentCgroup.AbortProof.Clone()
+		cgroupAbort = &copy
+	}
+	cgroupMatches := proof.CgroupAbortProof == nil && cgroupAbort == nil ||
+		proof.CgroupAbortProof != nil && cgroupAbort != nil && proof.CgroupAbortProof.Equal(*cgroupAbort)
+	if journal.ContainmentCgroup != nil && cgroupAbort == nil {
+		return false
+	}
+	return seedMatches && preGateMatches && cgroupMatches &&
+		!(proof.PreGateReleaseProof != nil && proof.CgroupAbortProof != nil)
 }
 
 func (daemon *daemon) enterCleanupPending(journal state.RunJournal) (state.RunJournal, error) {
@@ -545,6 +937,9 @@ func (daemon *daemon) cleanupPending(ctx context.Context, journal state.RunJourn
 	}
 	if journal.HasProcessDetails() {
 		return errors.New("process identity remains pending")
+	}
+	if journal.HasPendingContainment() {
+		return errors.New("containment state remains pending")
 	}
 	if err := daemon.cleanupRecoveredWorkspace(ctx, journal, journal.LocalState == "cleanup_pending" && journal.TerminalState == "completed"); err != nil {
 		daemon.log.Warn("cleanup_terminal_workspace_failed", "run_id", journal.RunID, "error", err)

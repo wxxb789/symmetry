@@ -23,6 +23,10 @@ type ControlCommandIntent struct {
 // RetainWorkspace preserves artifacts even when the profile normally cleans up.
 func (store *Store) RetainWorkspace(key RunKey) (RunJournal, error) {
 	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.LinuxCloneIntent != nil && (journal.LinuxCloneCleanupPending ||
+			journal.LinuxCloneCleanupIntent != nil || journal.LinuxCloneTargetRemovalProof != nil || journal.LinuxCloneCleanupProof != nil) {
+			return errors.New("Linux clone retention cannot be added after normal cleanup has begun")
+		}
 		journal.RetainWorkspace = true
 		return nil
 	})

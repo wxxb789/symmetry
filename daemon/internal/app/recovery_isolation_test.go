@@ -562,6 +562,7 @@ func TestReconcilePendingRecoverySchedulesSnapshotBeforeBackoff(t *testing.T) {
 	assignmentKey := state.RunKey{RunID: "run-assignment", Generation: 1}
 	const commandID = "snapshot-cancel"
 	control := &snapshotReconcileControl{
+		registered: make(chan struct{}),
 		runRetryReconcileControl: runRetryReconcileControl{
 			calls: make(chan int, 2),
 			response: protocol.ReconcileResponse{
@@ -602,7 +603,19 @@ func TestReconcilePendingRecoverySchedulesSnapshotBeforeBackoff(t *testing.T) {
 		}
 	})
 
-	awaitReconcileCall(t, control.calls, 1)
+	select {
+	case <-control.registered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("snapshot recovery did not register")
+	}
+	select {
+	case call := <-control.calls:
+		if call != 1 {
+			t.Fatalf("Reconcile call = %d, want 1", call)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Reconcile call 1 did not occur after registration")
+	}
 	timers.await(t, minimumInterval)
 	var observation snapshotStartObservation
 	select {
@@ -736,7 +749,14 @@ type snapshotStartObservation struct {
 
 type snapshotReconcileControl struct {
 	runRetryReconcileControl
+	registered   chan struct{}
 	acknowledged chan protocol.CommandAcknowledgement
+}
+
+func (control *snapshotReconcileControl) RegisterSession(ctx context.Context, machineID, machineToken string, request protocol.SessionRegistrationRequest) (protocol.SessionRegistrationResponse, error) {
+	response, err := control.fakeControl.RegisterSession(ctx, machineID, machineToken, request)
+	close(control.registered)
+	return response, err
 }
 
 func (control *snapshotReconcileControl) AcknowledgeCommand(_ context.Context, _ string, acknowledgement protocol.CommandAcknowledgement) error {

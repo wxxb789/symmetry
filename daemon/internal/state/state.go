@@ -336,60 +336,216 @@ func exactCgroupMutationStage(journal *RunJournal, expected, after LinuxCgroupRe
 	return false, errors.New("Linux cgroup reservation compare-and-set mismatch")
 }
 
-func (store *Store) ensureLinuxCgroupLeafAvailableLocked(key RunKey, reservation LinuxCgroupReservation) error {
-	entries, err := os.ReadDir(store.runsDir())
-	if err != nil {
-		return errors.New("list run journals before cgroup reservation")
+func (store *Store) checkLinuxV2NativeAdmissionLocked(
+	target RunJournal,
+	key RunKey,
+	fence protocol.Fence,
+	now time.Time,
+	liveOwners map[RunKey]protocol.Fence,
+	reservation *LinuxCgroupReservation,
+	cloneIntent *authority.LinuxCloneIntent,
+) error {
+	if target.Key() != key || target.Fence() != fence || !target.hasClaimGrant() ||
+		!validLinuxV2AdmissionFence(key, fence) || now.IsZero() {
+		return errors.New("Linux v2 native admission target RunKey/fence is stale")
 	}
-	for _, entry := range entries {
-		if entry.IsDir() || !isJournalFile(entry.Name()) {
-			continue
+	if !linuxV2TargetCanStartNativeEffects(target, now) {
+		return errors.New("Linux v2 native admission target lease or lifecycle is not effect-ready")
+	}
+	return store.scanLinuxV2NativeAdmissionLocked(&key, fence, now, liveOwners, reservation, cloneIntent)
+}
+
+func linuxV2TargetCanStartNativeEffects(journal RunJournal, now time.Time) bool {
+	if !journal.hasClaimGrant() || !journal.LeaseExpiresAt.After(now) || journal.NativeUsageRecoveryRequired ||
+		journal.ContainmentUnproven || journal.TerminalState != "" || journal.TerminalVerdict != "" ||
+		hasPendingTerminalTransition(journal.PendingTransitions) || journal.LinuxCloneAbortPending ||
+		journal.LinuxCloneAbortProof != nil || journal.LinuxCloneCleanupPending || journal.LinuxCloneCleanupIntent != nil ||
+		journal.LinuxCloneTargetRemovalProof != nil || journal.LinuxCloneCleanupProof != nil {
+		return false
+	}
+	switch journal.LocalState {
+	case "claimed", "running":
+		return true
+	default:
+		return false
+	}
+}
+
+func (store *Store) scanLinuxV2NativeAdmissionLocked(
+	targetKey *RunKey,
+	targetFence protocol.Fence,
+	now time.Time,
+	liveOwners map[RunKey]protocol.Fence,
+	reservation *LinuxCgroupReservation,
+	cloneIntent *authority.LinuxCloneIntent,
+) error {
+	if now.IsZero() {
+		return errors.New("Linux v2 admission clock is missing")
+	}
+	for candidateKey, candidateFence := range liveOwners {
+		if !validLinuxV2AdmissionFence(candidateKey, candidateFence) ||
+			targetKey != nil && candidateKey == *targetKey && candidateFence != targetFence {
+			return errors.New("Linux v2 live-owner snapshot contains an invalid RunKey/fence")
 		}
-		var existing RunJournal
-		path := filepath.Join(store.runsDir(), entry.Name())
-		if err := store.readRunJournalJSONWithLimit(path, &existing, maxJournalFileBytes); err != nil ||
-			validateJournal(existing) != nil || filepath.Base(store.journalPath(existing.Key())) != entry.Name() {
-			return errors.New("cannot establish unique Linux cgroup leaf reservation")
+	}
+	matchedLiveOwners := 0
+	targetFound := targetKey == nil
+	err := store.forEachJournalLocked(func(foreign RunJournal) error {
+		foreignKey := foreign.Key()
+		if targetKey != nil && foreignKey == *targetKey {
+			targetFound = foreign.Fence() == targetFence
+			if !targetFound {
+				return errors.New("Linux v2 admission target changed fence during Store scan")
+			}
+			if _, hasLiveOwner := liveOwners[foreignKey]; hasLiveOwner {
+				matchedLiveOwners++
+			}
+			return nil
 		}
-		if existing.Key() == key || existing.ContainmentCgroup == nil {
-			continue
+		liveFence, hasLiveOwner := liveOwners[foreignKey]
+		if hasLiveOwner {
+			if liveFence != foreign.Fence() || !linuxV2ForeignOwnerIsHealthy(foreign, now) {
+				return fmt.Errorf("foreign Linux v2 live-owner snapshot is stale or unhealthy for %s/%d", foreignKey.RunID, foreignKey.Generation)
+			}
+			matchedLiveOwners++
+		} else if !linuxV2ForeignJournalIsSafelyRetired(foreign) {
+			return fmt.Errorf("foreign RunJournal %s/%d has unresolved native ownership", foreignKey.RunID, foreignKey.Generation)
 		}
-		other := existing.ContainmentCgroup
-		if other.Parent.Path == reservation.Parent.Path && other.LeafName == reservation.LeafName {
-			return errors.New("Linux cgroup leaf path is already reserved")
+		if cloneIntent != nil && foreign.LinuxCloneIntent != nil &&
+			!(foreign.LinuxCloneAbortProof != nil && !foreign.LinuxCloneAbortPending) {
+			other := foreign.LinuxCloneIntent
+			if linuxClonePathAliases(cloneIntent.SeedPath, other.SeedPath) ||
+				linuxClonePathAliases(cloneIntent.Target, other.Target) ||
+				linuxClonePathAliases(cloneIntent.SeedPath, other.Target) ||
+				linuxClonePathAliases(cloneIntent.Target, other.SeedPath) {
+				return errors.New("Linux clone seed or target path is already reserved")
+			}
 		}
+		if reservation != nil && foreign.ContainmentCgroup != nil {
+			other := foreign.ContainmentCgroup
+			if other.Parent.Path == reservation.Parent.Path && other.LeafName == reservation.LeafName {
+				return errors.New("Linux cgroup leaf path is already reserved")
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("scan State journals before Linux v2 native admission: %w", err)
+	}
+	if !targetFound {
+		return errors.New("Linux v2 admission target journal is missing from the locked Store scan")
+	}
+	if matchedLiveOwners != len(liveOwners) {
+		return errors.New("Linux v2 live-owner snapshot has no current RunJournal for every fenced owner")
 	}
 	return nil
 }
 
-func (store *Store) ensureLinuxClonePathsAvailableLocked(key RunKey, intent authority.LinuxCloneIntent) error {
-	entries, err := os.ReadDir(store.runsDir())
-	if err != nil {
-		return errors.New("list run journals before Linux clone reservation")
+func validLinuxV2AdmissionFence(key RunKey, fence protocol.Fence) bool {
+	return validateKey(key) == nil && fence.Generation == key.Generation &&
+		validRequiredString(fence.RuntimeID, 4096) && fence.RuntimeEpoch > 0 &&
+		validRequiredString(fence.ClaimID, 4096) && validRequiredString(fence.LeaseToken, 65536)
+}
+
+func linuxV2ForeignJournalIsSafelyRetired(journal RunJournal) bool {
+	noActiveMarkers := !journal.HasProcessDetails() && journal.ContainmentAuthority == nil &&
+		journal.ContainmentHandoff == nil && journal.ContainmentScans == nil && !journal.ContainmentUnproven
+	if release := journal.ContainmentCgroupReleaseProof; release != nil {
+		return noActiveMarkers && journal.ContainmentCgroup == nil && journal.ContainmentCgroupPreGateReleaseProof == nil &&
+			release.Validate() == nil && release.Version == authority.SupervisorHandoffVersionV2 && release.StopReceipt != nil &&
+			(release.LeafDisposition == authority.LinuxCgroupLeafRemoved || release.LeafDisposition == authority.LinuxCgroupLeafAbsentAfterReceipt) &&
+			linuxV2ReleasedCloneStateSafe(journal)
 	}
-	for _, entry := range entries {
-		if entry.IsDir() || !isJournalFile(entry.Name()) {
-			continue
-		}
-		var existing RunJournal
-		path := filepath.Join(store.runsDir(), entry.Name())
-		if err := store.readRunJournalJSONWithLimit(path, &existing, maxJournalFileBytes); err != nil ||
-			validateJournal(existing) != nil || filepath.Base(store.journalPath(existing.Key())) != entry.Name() {
-			return errors.New("cannot establish unique Linux clone paths")
-		}
-		if existing.Key() == key || existing.LinuxCloneIntent == nil ||
-			existing.LinuxCloneAbortProof != nil && !existing.LinuxCloneAbortPending {
-			continue
-		}
-		other := *existing.LinuxCloneIntent
-		if linuxClonePathAliases(intent.SeedPath, other.SeedPath) ||
-			linuxClonePathAliases(intent.Target, other.Target) ||
-			linuxClonePathAliases(intent.SeedPath, other.Target) ||
-			linuxClonePathAliases(intent.Target, other.SeedPath) {
-			return errors.New("Linux clone seed or target path is already reserved")
-		}
+	if release := journal.ContainmentCgroupPreGateReleaseProof; release != nil {
+		return noActiveMarkers && journal.ContainmentCgroup == nil && journal.ContainmentCgroupReleaseProof == nil &&
+			release.Validate() == nil && release.Version == authority.SupervisorHandoffVersionV2 &&
+			release.Receipt.Proof.GateOutcome.Outcome == authority.LinuxCgroupGateOutcomeNeverCreated
 	}
-	return nil
+	if reservation := journal.ContainmentCgroup; reservation != nil && reservation.AbortProof != nil {
+		return noActiveMarkers && journal.ContainmentCgroupReleaseProof == nil && journal.ContainmentCgroupPreGateReleaseProof == nil &&
+			reservation.Validate() == nil && linuxCgroupReservationAbortMatches(*reservation, *reservation.AbortProof)
+	}
+	if proof := journal.LinuxCloneAbortProof; proof != nil {
+		return noActiveMarkers && proof.Validate() == nil && linuxCloneAbortHistoryMatches(journal, proof)
+	}
+	if owner := journal.ContainmentAuthority; owner != nil && owner.Version == authority.SupervisorVersion && owner.StopReceipt != nil {
+		return linuxV1StopReceiptSafelyRetires(journal, *owner)
+	}
+	return false
+}
+
+func linuxV1StopReceiptSafelyRetires(journal RunJournal, owner authority.Supervisor) bool {
+	switch journal.LocalState {
+	case "terminal_pending", "cleanup_pending", "stale":
+	default:
+		return false
+	}
+	return owner.Validate() == nil && owner.Version == authority.SupervisorVersion && owner.StopReceipt != nil &&
+		owner.StopReceipt.ValidFor(owner) && journal.HasProcessDetails() && journal.PID == owner.TargetPID &&
+		journal.ProcessIdentity == owner.TargetIdentity && journal.ContainmentHandoff == nil &&
+		journal.ContainmentCgroup == nil && journal.ContainmentCgroupReleaseProof == nil &&
+		journal.ContainmentCgroupPreGateReleaseProof == nil && !journal.ContainmentUnproven &&
+		!journal.NativeUsageRecoveryRequired && requireLinuxScansSealedForAuthority(journal, owner) == nil &&
+		!linuxV2JournalHasPendingEffects(journal)
+}
+
+func linuxV2ReleasedCloneStateSafe(journal RunJournal) bool {
+	if journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil || journal.LinuxCloneCleanupPending {
+		return false
+	}
+	if journal.LinuxCloneIntent == nil {
+		return journal.LinuxCloneSeedReceipt == nil && journal.LinuxCloneCheckoutReceipt == nil &&
+			journal.LinuxClonePromotionIntent == nil && journal.LinuxClonePromotionReceipt == nil &&
+			journal.LinuxCloneCleanupIntent == nil && journal.LinuxCloneTargetRemovalProof == nil &&
+			journal.LinuxCloneCleanupProof == nil && journal.WorkspacePath == "" &&
+			!journal.WorkspaceRecoveryRequired && !journal.RetainWorkspace
+	}
+	if journal.LinuxCloneIntent.ValidateForJournal() != nil {
+		return false
+	}
+	if journal.LinuxCloneCleanupProof != nil {
+		return journal.LinuxCloneCleanupIntent != nil && journal.LinuxCloneTargetRemovalProof != nil &&
+			journal.LinuxCloneCleanupIntent.Validate() == nil && journal.LinuxCloneTargetRemovalProof.Validate() == nil &&
+			journal.LinuxCloneCleanupProof.Validate() == nil &&
+			journal.LinuxCloneCleanupIntent.Intent.Equal(*journal.LinuxCloneIntent) &&
+			journal.LinuxCloneTargetRemovalProof.Intent.Equal(*journal.LinuxCloneCleanupIntent) &&
+			journal.LinuxCloneCleanupProof.Intent.Equal(*journal.LinuxCloneCleanupIntent) &&
+			journal.LinuxCloneCleanupProof.TargetRemovalProof.Equal(*journal.LinuxCloneTargetRemovalProof) &&
+			linuxCloneCleanupIntentMatchesJournal(journal, *journal.LinuxCloneCleanupIntent) &&
+			journal.WorkspacePath == "" && !journal.WorkspaceRecoveryRequired && !journal.RetainWorkspace
+	}
+	return journal.LinuxCloneCleanupIntent == nil && journal.LinuxCloneTargetRemovalProof == nil &&
+		journal.LinuxCloneCheckoutReceipt != nil && journal.LinuxCloneCheckoutReceipt.Validate() == nil &&
+		journal.LinuxCloneCheckoutReceipt.Target == journal.LinuxCloneIntent.Target &&
+		journal.WorkspacePath == journal.LinuxCloneIntent.Target && journal.WorkspaceRecoveryRequired && journal.RetainWorkspace
+}
+
+func linuxV2JournalHasPendingEffects(journal RunJournal) bool {
+	return journal.ContainmentCgroup != nil || journal.ContainmentCgroupReleaseProof != nil ||
+		journal.ContainmentCgroupPreGateReleaseProof != nil || journal.LinuxCloneIntent != nil || journal.LinuxCloneSeedReceipt != nil ||
+		journal.LinuxCloneCheckoutReceipt != nil || journal.LinuxClonePromotionIntent != nil || journal.LinuxClonePromotionReceipt != nil ||
+		journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil || journal.LinuxCloneCleanupPending ||
+		journal.LinuxCloneCleanupIntent != nil || journal.LinuxCloneTargetRemovalProof != nil || journal.LinuxCloneCleanupProof != nil
+}
+
+func linuxV2ForeignOwnerIsHealthy(journal RunJournal, now time.Time) bool {
+	reservation := journal.ContainmentCgroup
+	owner := journal.ContainmentAuthority
+	switch journal.LocalState {
+	case "claimed", "running", "paused", "waiting_for_input":
+	default:
+		return false
+	}
+	return reservation != nil && owner != nil && owner.Version == authority.SupervisorVersionV2 && owner.StopReceipt == nil &&
+		reservation.Validate() == nil && reservation.AbortProof == nil && reservation.PreGateStopReceipt == nil &&
+		linuxCgroupReservationMatchesAuthority(*reservation, *owner) && journal.ContainmentHandoff == nil &&
+		journal.ContainmentCgroupReleaseProof == nil && journal.ContainmentCgroupPreGateReleaseProof == nil &&
+		journal.ContainmentScans == nil && !journal.ContainmentUnproven && !journal.LinuxCloneAbortPending &&
+		journal.LinuxCloneAbortProof == nil && !journal.LinuxCloneCleanupPending && journal.LinuxCloneCleanupIntent == nil &&
+		journal.LinuxCloneTargetRemovalProof == nil && journal.LinuxCloneCleanupProof == nil && journal.HasProcessDetails() &&
+		journal.PID == owner.TargetPID && journal.ProcessIdentity == owner.TargetIdentity &&
+		journal.TerminalState == "" && journal.TerminalVerdict == "" && !journal.NativeUsageRecoveryRequired &&
+		journal.LeaseExpiresAt.After(now) && journal.hasClaimGrant()
 }
 
 func linuxClonePathAliases(left, right string) bool {
@@ -431,15 +587,23 @@ type RunJournal struct {
 	LinuxCloneIntent           *authority.LinuxCloneIntent           `json:"linux_clone_intent,omitempty"`
 	LinuxCloneSeedReceipt      *authority.LinuxCloneSeedReceipt      `json:"linux_clone_seed_receipt,omitempty"`
 	LinuxCloneCheckoutReceipt  *authority.LinuxCloneCheckoutReceipt  `json:"linux_clone_checkout_receipt,omitempty"`
+	LinuxClonePromotionIntent  *authority.LinuxClonePromotionIntent  `json:"linux_clone_promotion_intent,omitempty"`
 	LinuxClonePromotionReceipt *authority.LinuxClonePromotionReceipt `json:"linux_clone_promotion_receipt,omitempty"`
 	// LinuxCloneAbortPending is written before A-side no-checkout cleanup and
 	// fences every later gate/checkout stage. LinuxCloneAbortProof is the exact
 	// absence tombstone written only after A verifies target, seed and refs gone.
 	LinuxCloneAbortPending bool                            `json:"linux_clone_abort_pending,omitempty"`
 	LinuxCloneAbortProof   *authority.LinuxCloneAbortProof `json:"linux_clone_abort_proof,omitempty"`
-	PID                    int                             `json:"pid"`
-	ProcessIdentity        string                          `json:"process_identity"`
-	StartedAt              time.Time                       `json:"started_at"`
+	// LinuxCloneCleanupPending fences exact normal cleanup effects after all
+	// candidate/stop/owner gates. The target-removal receipt is persisted before
+	// A-side cleanup; the cleanup proof is the final durable readback.
+	LinuxCloneCleanupPending     bool                                    `json:"linux_clone_cleanup_pending,omitempty"`
+	LinuxCloneCleanupIntent      *authority.LinuxCloneCleanupIntent      `json:"linux_clone_cleanup_intent,omitempty"`
+	LinuxCloneTargetRemovalProof *authority.LinuxCloneTargetRemovalProof `json:"linux_clone_target_removal_proof,omitempty"`
+	LinuxCloneCleanupProof       *authority.LinuxCloneCleanupProof       `json:"linux_clone_cleanup_proof,omitempty"`
+	PID                          int                                     `json:"pid"`
+	ProcessIdentity              string                                  `json:"process_identity"`
+	StartedAt                    time.Time                               `json:"started_at"`
 	// ContainmentAuthority is optional for backwards compatibility with
 	// journals created before the independent Windows supervisor existed. A
 	// process marker without it remains intentionally unrecoverable on Windows.
@@ -575,14 +739,21 @@ func (journal RunJournal) LinuxCloneCleanupEligible(key RunKey, fence protocol.F
 		return false
 	}
 	if journal.LinuxCloneAbortProof != nil {
-		return !journal.RetainWorkspace && !journal.LinuxCloneAbortPending && journal.LinuxCloneCheckoutReceipt == nil && journal.LinuxClonePromotionReceipt == nil &&
+		return journal.LinuxCloneAbortProof.Validate() == nil && linuxCloneAbortHistoryMatches(journal, journal.LinuxCloneAbortProof) &&
+			!journal.RetainWorkspace && !journal.LinuxCloneAbortPending && journal.LinuxCloneCleanupIntent == nil &&
+			journal.LinuxCloneTargetRemovalProof == nil && journal.LinuxCloneCleanupProof == nil && !journal.LinuxCloneCleanupPending &&
+			journal.LinuxCloneCheckoutReceipt == nil && journal.LinuxClonePromotionIntent == nil && journal.LinuxClonePromotionReceipt == nil &&
 			journal.WorkspacePath == "" && !journal.WorkspaceRecoveryRequired
 	}
-	return !journal.LinuxCloneAbortPending && !journal.RetainWorkspace && journal.TerminalState != "cancelled" &&
-		journal.LinuxCloneSeedReceipt != nil && journal.LinuxCloneCheckoutReceipt != nil && journal.LinuxClonePromotionReceipt != nil &&
-		journal.WorkspacePath == journal.LinuxCloneIntent.Target && journal.WorkspaceBindingKey == journal.LinuxCloneIntent.BindingKey &&
-		journal.ContainmentCgroupReleaseProof != nil && journal.ContainmentCgroupReleaseProof.Validate() == nil &&
-		journal.ContainmentCgroupReleaseProof.Version == authority.SupervisorHandoffVersionV2
+	return !journal.LinuxCloneAbortPending && journal.LinuxCloneAbortProof == nil && !journal.LinuxCloneCleanupPending &&
+		!journal.RetainWorkspace && journal.TerminalState == "completed" && journal.LinuxCloneCleanupIntent != nil &&
+		journal.LinuxCloneTargetRemovalProof != nil && journal.LinuxCloneTargetRemovalProof.Validate() == nil &&
+		journal.LinuxCloneCleanupProof != nil &&
+		journal.LinuxCloneCleanupProof.TargetRemovalProof.Equal(*journal.LinuxCloneTargetRemovalProof) &&
+		journal.LinuxCloneCleanupProof.Validate() == nil &&
+		journal.LinuxCloneCleanupProof.Intent.Equal(*journal.LinuxCloneCleanupIntent) &&
+		linuxCloneExactArtifactDelivered(journal) && journal.WorkspacePath == "" && !journal.WorkspaceRecoveryRequired &&
+		linuxCloneCleanupIntentMatchesJournal(journal, *journal.LinuxCloneCleanupIntent)
 }
 
 func linuxCloneArtifactReceiptRequired(journal RunJournal) bool {
@@ -610,6 +781,159 @@ func linuxCloneArtifactReceiptRequired(journal RunJournal) bool {
 	default:
 		return true
 	}
+}
+
+// LinuxCloneCleanupIntentForJournal returns the deterministic cleanup identity
+// derived from an exact RunJournal. It never accepts a caller-selected path,
+// ref, seed, candidate, or release receipt.
+func LinuxCloneCleanupIntentForJournal(journal RunJournal) (authority.LinuxCloneCleanupIntent, error) {
+	derived, err := linuxCloneCleanupIntentFromJournal(journal)
+	if err != nil {
+		return authority.LinuxCloneCleanupIntent{}, err
+	}
+	if journal.LinuxCloneCleanupIntent != nil {
+		if !journal.LinuxCloneCleanupIntent.Equal(derived) {
+			return authority.LinuxCloneCleanupIntent{}, errors.New("stored Linux clone cleanup intent differs from RunJournal authority")
+		}
+		return journal.LinuxCloneCleanupIntent.Clone(), nil
+	}
+	if !journal.LinuxCloneCleanupBeginEligible(journal.Key(), journal.Fence()) {
+		return authority.LinuxCloneCleanupIntent{}, errors.New("RunJournal is not eligible to begin Linux clone cleanup")
+	}
+	return derived, nil
+}
+
+func linuxCloneCleanupIntentFromJournal(journal RunJournal) (authority.LinuxCloneCleanupIntent, error) {
+	if journal.LinuxCloneIntent == nil || journal.LinuxCloneSeedReceipt == nil || journal.LinuxCloneCheckoutReceipt == nil ||
+		journal.LinuxClonePromotionIntent == nil || journal.LinuxClonePromotionReceipt == nil ||
+		journal.ContainmentCgroupReleaseProof == nil {
+		return authority.LinuxCloneCleanupIntent{}, errors.New("Linux clone cleanup intent lacks complete promotion and release evidence")
+	}
+	root, err := authority.LinuxCloneWorkspaceRoot(*journal.LinuxCloneIntent)
+	if err != nil {
+		return authority.LinuxCloneCleanupIntent{}, err
+	}
+	baseRef, err := authority.LinuxCloneBaseRef(journal.RunID, journal.Generation)
+	if err != nil {
+		return authority.LinuxCloneCleanupIntent{}, err
+	}
+	fenceBytes, err := json.Marshal(journal.Fence())
+	if err != nil {
+		return authority.LinuxCloneCleanupIntent{}, errors.New("encode Linux clone cleanup fence")
+	}
+	fenceHash := sha256.Sum256(fenceBytes)
+	cleanup := authority.LinuxCloneCleanupIntent{
+		Version:            authority.LinuxCloneVersion,
+		Intent:             journal.LinuxCloneIntent.Clone(),
+		FenceDigest:        "sha256:" + hex.EncodeToString(fenceHash[:]),
+		RootPath:           root,
+		BaseRef:            baseRef,
+		SeedReceipt:        journal.LinuxCloneSeedReceipt.Clone(),
+		CheckoutReceipt:    journal.LinuxCloneCheckoutReceipt.Clone(),
+		PromotionIntent:    journal.LinuxClonePromotionIntent.Clone(),
+		PromotionReceipt:   journal.LinuxClonePromotionReceipt.Clone(),
+		NormalReleaseProof: journal.ContainmentCgroupReleaseProof.Clone(),
+	}
+	artifact, ok := linuxCloneDeliveredArtifactIdentity(journal)
+	if !ok {
+		return authority.LinuxCloneCleanupIntent{}, errors.New("exact promoted candidate artifact delivery is missing")
+	}
+	cleanup.ArtifactEvidenceID = artifact.EvidenceID
+	cleanup.ArtifactEvidenceKey = artifact.EvidenceKey
+	cleanup.ArtifactSubjectHash = artifact.SubjectHash
+	cleanup.ArtifactDeliveryDigest = artifact.DeliveryDigest
+	if err := cleanup.Validate(); err != nil {
+		return authority.LinuxCloneCleanupIntent{}, err
+	}
+	return cleanup, nil
+}
+
+func linuxCloneCleanupIntentMatchesJournal(journal RunJournal, expected authority.LinuxCloneCleanupIntent) bool {
+	actual, err := linuxCloneCleanupIntentFromJournal(journal)
+	return err == nil && actual.Equal(expected)
+}
+
+// LinuxCloneCleanupBeginEligible enforces the durable half of App's terminal,
+// candidate-artifact, retention and physical-stop gates before root cleanup.
+// App must additionally establish that no GoalSession or other volatile owner
+// remains and recheck it immediately before the effect.
+func (journal RunJournal) LinuxCloneCleanupBeginEligible(key RunKey, fence protocol.Fence) bool {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" || journal.Key() != key || journal.Fence() != fence ||
+		(journal.LocalState != "cleanup_pending" && journal.LocalState != "stale") ||
+		journal.LocalState == "stale" && journal.TerminalState == "" && journal.LeaseExpiresAt.After(time.Now()) ||
+		journal.TerminalState != "completed" || !validTerminalVerdict(journal.TerminalVerdict) ||
+		journal.TerminalTaskResultKind != protocol.TaskResultCandidateCompletion || !journal.GoalDeliveryEnabled ||
+		journal.RetainWorkspace || journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil ||
+		journal.HasProcessDetails() || journal.HasPendingContainment() || journal.ContainmentAuthority != nil ||
+		journal.ContainmentHandoff != nil || journal.ContainmentCgroup != nil || journal.ContainmentScans != nil ||
+		journal.ContainmentUnproven || journal.ContainmentCgroupPreGateReleaseProof != nil ||
+		journal.ContainmentCgroupReleaseProof == nil || journal.ContainmentCgroupReleaseProof.Validate() != nil ||
+		journal.ContainmentCgroupReleaseProof.Version != authority.SupervisorHandoffVersionV2 ||
+		journal.ContainmentCgroupReleaseProof.StopReceipt == nil ||
+		len(journal.PendingEvents) != 0 || len(journal.PendingTransitions) != 0 || len(journal.PendingCommandAcknowledgements) != 0 ||
+		journal.HasPendingGoalDeliveries() || journal.NativeUsageRecoveryRequired || hasUnresolvedProviderActions(journal) ||
+		!linuxCloneExactArtifactDelivered(journal) || validateLinuxCloneJournal(journal) != nil {
+		return false
+	}
+	if journal.LinuxCloneCleanupProof != nil {
+		return false
+	}
+	cleanup, err := linuxCloneCleanupIntentFromJournal(journal)
+	if err != nil {
+		return false
+	}
+	if journal.LinuxCloneCleanupPending {
+		return journal.LinuxCloneCleanupIntent != nil && journal.LinuxCloneCleanupIntent.Equal(cleanup)
+	}
+	return journal.LinuxCloneCleanupIntent == nil
+}
+
+func linuxCloneExactArtifactDelivered(journal RunJournal) bool {
+	_, ok := linuxCloneDeliveredArtifactIdentity(journal)
+	return ok
+}
+
+type linuxCloneArtifactReceipt struct {
+	EvidenceID     string
+	EvidenceKey    string
+	SubjectHash    string
+	DeliveryDigest string
+}
+
+func linuxCloneDeliveredArtifactIdentity(journal RunJournal) (linuxCloneArtifactReceipt, bool) {
+	intent := journal.LinuxClonePromotionIntent
+	if intent == nil || !journal.GoalDeliveryEnabled || journal.TerminalState != "completed" ||
+		journal.TerminalTaskResultKind != protocol.TaskResultCandidateCompletion {
+		return linuxCloneArtifactReceipt{}, false
+	}
+	admission, present, err := protocol.ParseAdmissionInput(journal.Work.Input)
+	if err != nil || !present || admission.Purpose != protocol.AdmissionPurposeImplement ||
+		admission.Subject.ResourceID != intent.ResourceID {
+		return linuxCloneArtifactReceipt{}, false
+	}
+	subject := protocol.Subject{ResourceID: intent.ResourceID, Commit: intent.Commit, TreeDigest: intent.TreeDigest}
+	subjectHash, err := subject.Hash()
+	if err != nil {
+		return linuxCloneArtifactReceipt{}, false
+	}
+	for _, delivery := range journal.DeliveredGoalDeliveries {
+		evidence := delivery.Evidence
+		if delivery.Kind == GoalDeliveryEvidence && delivery.Ready && delivery.Fence == journal.Fence() &&
+			evidence != nil && delivery.DeliveryID == evidence.EvidenceKey && validGoalDeliveryDigest(delivery.PayloadDigest) &&
+			evidence.Validate() == nil && evidence.RunID == journal.RunID &&
+			evidence.Kind == protocol.EvidenceArtifact && evidence.Subject == subject && evidence.SubjectHash == subjectHash {
+			candidate := delivery
+			candidate.PayloadDigest = ""
+			if err := prepareGoalDelivery(journal.RunID, &candidate); err != nil || candidate.PayloadDigest != delivery.PayloadDigest {
+				continue
+			}
+			return linuxCloneArtifactReceipt{
+				EvidenceID: evidence.EvidenceID, EvidenceKey: evidence.EvidenceKey,
+				SubjectHash: evidence.SubjectHash, DeliveryDigest: delivery.PayloadDigest,
+			}, true
+		}
+	}
+	return linuxCloneArtifactReceipt{}, false
 }
 
 // ContainmentObservationUnresolved reports whether bound Linux scan evidence
@@ -997,8 +1321,9 @@ func (store *Store) LoadJournal(key RunKey) (RunJournal, error) {
 
 // ReserveLinuxCloneIntent durably reserves the exact RunKey, current admitted
 // Subject, seed path and B-owned target before the workspace service performs
-// any Git/ref/bundle or checkout side effect.
-func (store *Store) ReserveLinuxCloneIntent(key RunKey, fence protocol.Fence, intent authority.LinuxCloneIntent) (RunJournal, error) {
+// any Git/ref/bundle or checkout side effect. Even exact replay requires the
+// target Control lease and lifecycle to remain effect-ready.
+func (store *Store) ReserveLinuxCloneIntent(key RunKey, fence protocol.Fence, intent authority.LinuxCloneIntent, liveOwners map[RunKey]protocol.Fence) (RunJournal, error) {
 	if err := requireLinuxClonePlatform(); err != nil {
 		return RunJournal{}, err
 	}
@@ -1009,7 +1334,7 @@ func (store *Store) ReserveLinuxCloneIntent(key RunKey, fence protocol.Fence, in
 		if err := requireLinuxCloneJournalFence(*journal, fence, intent); err != nil {
 			return err
 		}
-		if err := store.ensureLinuxClonePathsAvailableLocked(key, intent); err != nil {
+		if err := store.checkLinuxV2NativeAdmissionLocked(*journal, key, fence, time.Now(), liveOwners, nil, &intent); err != nil {
 			return err
 		}
 		if journal.LinuxCloneIntent != nil {
@@ -1111,15 +1436,71 @@ func (store *Store) RecordLinuxCloneCheckoutReady(key RunKey, fence protocol.Fen
 	})
 }
 
-// RecordLinuxClonePromotion records only an A-validated candidate receipt for
-// the deterministic run-keyed A-owned promotion ref, after durable physical
-// stop proof. It never clears or advances containment state.
-func (store *Store) RecordLinuxClonePromotion(key RunKey, fence protocol.Fence, intent authority.LinuxCloneIntent, receipt authority.LinuxClonePromotionReceipt) (RunJournal, error) {
+// ReserveLinuxClonePromotion persists the exact candidate before the workspace
+// service imports objects or creates the A-owned promotion ref. It is legal
+// only under the committed checkout's durable v2 stop receipt. A replay never
+// adopts a ref; it must match this already stored candidate intent, and the
+// target Control lease/lifecycle must still authorize a first promotion effect.
+func (store *Store) ReserveLinuxClonePromotion(key RunKey, fence protocol.Fence, intent authority.LinuxCloneIntent, candidate authority.LinuxClonePromotionIntent) (RunJournal, error) {
 	if err := requireLinuxClonePlatform(); err != nil {
 		return RunJournal{}, err
 	}
-	if err := receipt.Validate(); err != nil {
+	if err := candidate.Validate(); err != nil {
 		return RunJournal{}, err
+	}
+	if candidate.ResourceID != intent.ResourceID || len(candidate.Commit) != len(intent.BaseCommit) {
+		return RunJournal{}, errors.New("Linux clone promotion candidate does not match its resource or object format")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if err := requireLinuxCloneJournalFence(*journal, fence, intent); err != nil {
+			return err
+		}
+		if !linuxV2TargetCanStartNativeEffects(*journal, time.Now()) {
+			return errors.New("Linux clone promotion target lease or lifecycle is not effect-ready")
+		}
+		if journal.LinuxCloneIntent == nil || !journal.LinuxCloneIntent.Equal(intent) ||
+			journal.LinuxCloneSeedReceipt == nil || journal.LinuxCloneCheckoutReceipt == nil {
+			return errors.New("Linux clone promotion intent is missing its reserved checkout evidence")
+		}
+		if journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil {
+			return errors.New("Linux clone promotion is fenced for pre-checkout abort")
+		}
+		if journal.LinuxClonePromotionIntent == nil && journal.LinuxClonePromotionReceipt != nil {
+			return errors.New("legacy Linux clone promotion receipt has no pre-effect candidate intent")
+		}
+		if journal.LinuxClonePromotionIntent != nil {
+			if !journal.LinuxClonePromotionIntent.Equal(candidate) {
+				return errors.New("Linux clone promotion intent cannot be changed")
+			}
+			return nil
+		}
+		if !linuxCloneStageCanAdvance(*journal) {
+			return errors.New("Linux clone promotion intent cannot advance after terminal fencing")
+		}
+		owner := journal.ContainmentAuthority
+		if owner == nil || owner.Version != authority.SupervisorVersionV2 || owner.StopReceipt == nil ||
+			!owner.StopReceipt.ValidFor(*owner) || journal.ContainmentCgroup == nil || journal.ContainmentHandoff != nil ||
+			journal.ContainmentCgroupReleaseProof != nil || journal.ContainmentUnproven || !journal.HasProcessDetails() {
+			return errors.New("Linux clone promotion intent requires the durable v2 stop receipt before release")
+		}
+		copy := candidate.Clone()
+		journal.LinuxClonePromotionIntent = &copy
+		return nil
+	})
+}
+
+// RecordLinuxClonePromotion records only the A-validated candidate receipt for
+// its immutable promotion intent and deterministic RunKey ref. An exact intent
+// authorizes crash-recovery readback after normal release; a stranded ref with
+// no prior intent is never adopted. This mutation never clears containment.
+func (store *Store) RecordLinuxClonePromotion(key RunKey, fence protocol.Fence, intent authority.LinuxCloneIntent, candidate authority.LinuxClonePromotionIntent, receipt authority.LinuxClonePromotionReceipt) (RunJournal, error) {
+	if err := requireLinuxClonePlatform(); err != nil {
+		return RunJournal{}, err
+	}
+	if err := candidate.Validate(); err != nil || receipt.Validate() != nil ||
+		candidate.ResourceID != intent.ResourceID || len(candidate.Commit) != len(intent.BaseCommit) ||
+		receipt.Version != candidate.Version || receipt.Commit != candidate.Commit || receipt.TreeDigest != candidate.TreeDigest {
+		return RunJournal{}, errors.New("Linux clone promotion receipt does not match candidate intent")
 	}
 	ref, err := authority.LinuxClonePromotionRef(key.RunID, key.Generation)
 	if err != nil || receipt.Ref != ref {
@@ -1130,23 +1511,18 @@ func (store *Store) RecordLinuxClonePromotion(key RunKey, fence protocol.Fence, 
 			return err
 		}
 		if journal.LinuxCloneIntent == nil || !journal.LinuxCloneIntent.Equal(intent) ||
-			journal.LinuxCloneSeedReceipt == nil || journal.LinuxCloneCheckoutReceipt == nil {
-			return errors.New("Linux clone promotion is missing its reserved checkout evidence")
+			journal.LinuxCloneSeedReceipt == nil || journal.LinuxCloneCheckoutReceipt == nil ||
+			journal.LinuxClonePromotionIntent == nil || !journal.LinuxClonePromotionIntent.Equal(candidate) {
+			return errors.New("Linux clone promotion receipt has no exact durable intent")
 		}
-		if journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil {
-			return errors.New("Linux clone promotion is fenced for pre-checkout abort")
-		}
-		if !linuxCloneStopProven(*journal) {
-			return errors.New("Linux clone promotion requires durable v2 physical-stop proof")
+		if journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil || !linuxCloneStopProven(*journal) {
+			return errors.New("Linux clone promotion receipt lacks durable physical-stop evidence")
 		}
 		if journal.LinuxClonePromotionReceipt != nil {
 			if !journal.LinuxClonePromotionReceipt.Equal(receipt) {
 				return errors.New("Linux clone promotion receipt cannot be changed")
 			}
 			return nil
-		}
-		if !linuxCloneStageCanAdvance(*journal) {
-			return errors.New("Linux clone promotion cannot advance after terminal fencing")
 		}
 		copy := receipt.Clone()
 		journal.LinuxClonePromotionReceipt = &copy
@@ -1173,12 +1549,17 @@ func (store *Store) FenceLinuxCloneBeforeCheckout(key RunKey, fence protocol.Fen
 			return errors.New("Linux clone is not eligible for pre-checkout abort fencing")
 		}
 		if journal.LinuxCloneAbortProof != nil {
-			if journal.LinuxCloneAbortProof.Intent.Equal(intent) && !journal.LinuxCloneAbortPending {
+			if journal.LinuxCloneAbortProof.Validate() == nil &&
+				linuxCloneAbortHistoryMatches(*journal, journal.LinuxCloneAbortProof) &&
+				journal.LinuxCloneAbortProof.Intent.Equal(intent) && !journal.LinuxCloneAbortPending {
 				return nil
 			}
 			return errors.New("Linux clone abort fence conflicts with completed proof")
 		}
 		if journal.LinuxCloneAbortPending {
+			if !linuxCloneAbortFenceAvailable(*journal) {
+				return errors.New("Linux clone abort fence is unresolved after possible B release")
+			}
 			return nil
 		}
 		if !linuxCloneAbortFenceAvailable(*journal) {
@@ -1263,6 +1644,123 @@ func (store *Store) ClearLinuxCloneNoTargetRetention(key RunKey, fence protocol.
 	})
 }
 
+// BeginLinuxCloneCleanup persists the derived normal cleanup identity before
+// Workspace or the trusted root deleter performs any destructive effect.
+// App must separately exclude retained GoalSessions and volatile owners.
+func (store *Store) BeginLinuxCloneCleanup(key RunKey, fence protocol.Fence) (RunJournal, error) {
+	if err := requireLinuxClonePlatform(); err != nil {
+		return RunJournal{}, err
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.Key() != key || journal.Fence() != fence {
+			return errors.New("Linux clone cleanup RunKey fence is stale")
+		}
+		if journal.LinuxCloneCleanupIntent != nil {
+			intent, err := LinuxCloneCleanupIntentForJournal(*journal)
+			if err != nil || !journal.LinuxCloneCleanupIntent.Equal(intent) {
+				return errors.New("Linux clone cleanup intent readback is invalid")
+			}
+			if journal.LinuxCloneCleanupProof != nil {
+				if journal.LinuxCloneCleanupPending || !journal.LinuxCloneCleanupProof.Intent.Equal(intent) {
+					return errors.New("Linux clone cleanup proof conflicts with its intent")
+				}
+				return nil
+			}
+			if !journal.LinuxCloneCleanupPending || !journal.LinuxCloneCleanupBeginEligible(key, fence) {
+				return errors.New("Linux clone cleanup intent is not durably pending")
+			}
+			return nil
+		}
+		if journal.LinuxCloneCleanupPending || journal.LinuxCloneCleanupProof != nil ||
+			!journal.LinuxCloneCleanupBeginEligible(key, fence) {
+			return errors.New("Linux clone cleanup is not eligible to begin")
+		}
+		intent, err := linuxCloneCleanupIntentFromJournal(*journal)
+		if err != nil {
+			return err
+		}
+		copy := intent.Clone()
+		journal.LinuxCloneCleanupIntent = &copy
+		journal.LinuxCloneCleanupPending = true
+		journal.WorkspacePath = intent.Intent.Target
+		journal.WorkspaceBindingKey = intent.Intent.BindingKey
+		journal.WorkspaceRecoveryRequired = true
+		return nil
+	})
+}
+
+// RecordLinuxCloneTargetRemoval persists the exact trusted-root receipt before
+// any A-side cleanup. The initial receipt must prove unlink of the pinned inode;
+// an absent path is never promoted into a fresh removal fact. Exact replay
+// supplies a fresh durability barrier for a response whose outcome was lost.
+func (store *Store) RecordLinuxCloneTargetRemoval(key RunKey, fence protocol.Fence, expected authority.LinuxCloneCleanupIntent, proof authority.LinuxCloneTargetRemovalProof) (RunJournal, error) {
+	if err := requireLinuxClonePlatform(); err != nil {
+		return RunJournal{}, err
+	}
+	if err := expected.Validate(); err != nil || proof.Validate() != nil ||
+		proof.Disposition != authority.LinuxCloneTargetDispositionRemoved || !proof.TargetNlinkZero ||
+		!proof.Intent.Equal(expected) {
+		return RunJournal{}, errors.New("Linux clone target-removal proof does not match cleanup intent")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.Key() != key || journal.Fence() != fence {
+			return errors.New("Linux clone target-removal fence is stale")
+		}
+		if !journal.LinuxCloneCleanupPending || journal.LinuxCloneCleanupIntent == nil ||
+			!journal.LinuxCloneCleanupIntent.Equal(expected) || !linuxCloneCleanupIntentMatchesJournal(*journal, expected) ||
+			!journal.LinuxCloneCleanupBeginEligible(key, fence) {
+			return errors.New("Linux clone target-removal proof lacks its exact pending cleanup intent and gates")
+		}
+		if journal.LinuxCloneTargetRemovalProof != nil {
+			if !journal.LinuxCloneTargetRemovalProof.Equal(proof) {
+				return errors.New("Linux clone target-removal proof replay conflicts with journal")
+			}
+			return nil
+		}
+		copy := proof.Clone()
+		journal.LinuxCloneTargetRemovalProof = &copy
+		return nil
+	})
+}
+
+// CompleteLinuxCloneCleanup records the trusted root worker's exact target
+// removal and A-side seed/base-ref/scratch readbacks. It never infers absence
+// from PID or cgroup state and preserves the promoted artifact ref.
+func (store *Store) CompleteLinuxCloneCleanup(key RunKey, fence protocol.Fence, expected authority.LinuxCloneCleanupIntent, proof authority.LinuxCloneCleanupProof) (RunJournal, error) {
+	if err := requireLinuxClonePlatform(); err != nil {
+		return RunJournal{}, err
+	}
+	if err := expected.Validate(); err != nil || proof.Validate() != nil || !proof.Intent.Equal(expected) {
+		return RunJournal{}, errors.New("Linux clone cleanup proof does not match cleanup intent")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.Key() != key || journal.Fence() != fence {
+			return errors.New("Linux clone cleanup completion fence is stale")
+		}
+		if journal.LinuxCloneCleanupProof != nil {
+			if journal.LinuxCloneCleanupPending || journal.LinuxCloneCleanupIntent == nil ||
+				journal.LinuxCloneTargetRemovalProof == nil || !journal.LinuxCloneTargetRemovalProof.Equal(proof.TargetRemovalProof) ||
+				!journal.LinuxCloneCleanupIntent.Equal(expected) || !journal.LinuxCloneCleanupProof.Equal(proof) {
+				return errors.New("Linux clone cleanup proof replay conflicts with journal")
+			}
+			return nil
+		}
+		if !journal.LinuxCloneCleanupPending || journal.LinuxCloneCleanupIntent == nil ||
+			!journal.LinuxCloneCleanupIntent.Equal(expected) || !linuxCloneCleanupIntentMatchesJournal(*journal, expected) ||
+			journal.LinuxCloneTargetRemovalProof == nil ||
+			!journal.LinuxCloneTargetRemovalProof.Equal(proof.TargetRemovalProof) ||
+			!journal.LinuxCloneCleanupBeginEligible(key, fence) || !proof.Intent.Equal(expected) {
+			return errors.New("Linux clone cleanup completion lacks its exact pending intent and gates")
+		}
+		copy := proof.Clone()
+		journal.LinuxCloneCleanupProof = &copy
+		journal.LinuxCloneCleanupPending = false
+		journal.WorkspacePath = ""
+		journal.WorkspaceRecoveryRequired = false
+		return nil
+	})
+}
+
 // SaveJournal atomically replaces a complete run journal. It is intended for
 // recovery imports and carefully coordinated callers; normal callers should
 // prefer the mutation helpers below.
@@ -1276,6 +1774,13 @@ func (store *Store) SaveJournal(journal RunJournal) error {
 		return err
 	}
 	if current, err := store.loadJournalLocked(journal.Key()); err == nil {
+		if current.LinuxCloneIntent != nil && current.RetainWorkspace && !journal.RetainWorkspace {
+			return errors.New("Linux clone retention requires a dedicated evidence-checked clear")
+		}
+		if current.LinuxCloneIntent != nil && (current.LinuxCloneCleanupPending || current.LinuxCloneCleanupIntent != nil) &&
+			current.RetainWorkspace != journal.RetainWorkspace {
+			return errors.New("Linux clone retention cannot change after normal cleanup has begun")
+		}
 		if !sameContainmentCgroupReleaseProof(current.ContainmentCgroupReleaseProof, journal.ContainmentCgroupReleaseProof) {
 			return errors.New("v2 cgroup release proof requires dedicated clear mutation")
 		}
@@ -1285,9 +1790,14 @@ func (store *Store) SaveJournal(journal RunJournal) error {
 		if !sameLinuxCloneIntent(current.LinuxCloneIntent, journal.LinuxCloneIntent) ||
 			!sameLinuxCloneSeedReceipt(current.LinuxCloneSeedReceipt, journal.LinuxCloneSeedReceipt) ||
 			!sameLinuxCloneCheckoutReceipt(current.LinuxCloneCheckoutReceipt, journal.LinuxCloneCheckoutReceipt) ||
+			!sameLinuxClonePromotionIntent(current.LinuxClonePromotionIntent, journal.LinuxClonePromotionIntent) ||
 			!sameLinuxClonePromotionReceipt(current.LinuxClonePromotionReceipt, journal.LinuxClonePromotionReceipt) ||
 			current.LinuxCloneAbortPending != journal.LinuxCloneAbortPending ||
-			!sameLinuxCloneAbortProof(current.LinuxCloneAbortProof, journal.LinuxCloneAbortProof) {
+			!sameLinuxCloneAbortProof(current.LinuxCloneAbortProof, journal.LinuxCloneAbortProof) ||
+			current.LinuxCloneCleanupPending != journal.LinuxCloneCleanupPending ||
+			!sameLinuxCloneCleanupIntent(current.LinuxCloneCleanupIntent, journal.LinuxCloneCleanupIntent) ||
+			!sameLinuxCloneTargetRemovalProof(current.LinuxCloneTargetRemovalProof, journal.LinuxCloneTargetRemovalProof) ||
+			!sameLinuxCloneCleanupProof(current.LinuxCloneCleanupProof, journal.LinuxCloneCleanupProof) {
 			return errors.New("Linux clone authority requires dedicated mutation")
 		}
 		if current.ContainmentCgroup != nil || journal.ContainmentCgroup != nil ||
@@ -1342,8 +1852,9 @@ func (store *Store) SaveJournal(journal RunJournal) error {
 			return errors.New("v2 pre-gate release proof requires dedicated clear mutation")
 		}
 		if journal.LinuxCloneIntent != nil || journal.LinuxCloneSeedReceipt != nil ||
-			journal.LinuxCloneCheckoutReceipt != nil || journal.LinuxClonePromotionReceipt != nil ||
-			journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil {
+			journal.LinuxCloneCheckoutReceipt != nil || journal.LinuxClonePromotionIntent != nil || journal.LinuxClonePromotionReceipt != nil ||
+			journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil || journal.LinuxCloneCleanupPending ||
+			journal.LinuxCloneCleanupIntent != nil || journal.LinuxCloneTargetRemovalProof != nil || journal.LinuxCloneCleanupProof != nil {
 			return errors.New("Linux clone authority requires dedicated mutation")
 		}
 	} else {
@@ -1496,27 +2007,27 @@ func (store *Store) ListJournals() ([]RunJournal, error) {
 	if err := store.ensureOpenLocked(); err != nil {
 		return nil, err
 	}
+	return store.listJournalsLocked(true)
+}
+
+func (store *Store) listJournalsLocked(cleanOwnedTemps bool) ([]RunJournal, error) {
 	entries, err := os.ReadDir(store.runsDir())
 	if err != nil {
 		return nil, errors.New("list run journal directory")
 	}
-	if err := store.removeOwnedTempsLocked(entries); err != nil {
-		return nil, err
+	if cleanOwnedTemps {
+		if err := store.removeOwnedTempsLocked(entries); err != nil {
+			return nil, err
+		}
 	}
 	result := make([]RunJournal, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || !isJournalFile(entry.Name()) {
 			continue
 		}
-		var journal RunJournal
-		if err := store.readRunJournalJSONWithLimit(filepath.Join(store.runsDir(), entry.Name()), &journal, maxJournalFileBytes); err != nil {
+		journal, err := store.readJournalEntryLocked(entry)
+		if err != nil {
 			return nil, err
-		}
-		if err := validateJournal(journal); err != nil {
-			return nil, errors.New("invalid run journal")
-		}
-		if filepath.Base(store.journalPath(journal.Key())) != entry.Name() {
-			return nil, errors.New("run journal file does not match its key")
 		}
 		result = append(result, journal)
 	}
@@ -1527,6 +2038,49 @@ func (store *Store) ListJournals() ([]RunJournal, error) {
 		return result[left].RunID < result[right].RunID
 	})
 	return result, nil
+}
+
+func (store *Store) forEachJournalLocked(visit func(RunJournal) error) error {
+	directory, err := os.Open(store.runsDir())
+	if err != nil {
+		return errors.New("list run journal directory")
+	}
+	defer directory.Close()
+	for {
+		entries, readErr := directory.ReadDir(64)
+		for _, entry := range entries {
+			if entry.IsDir() || !isJournalFile(entry.Name()) {
+				continue
+			}
+			journal, err := store.readJournalEntryLocked(entry)
+			if err != nil {
+				return err
+			}
+			if err := visit(journal); err != nil {
+				return err
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			return nil
+		}
+		if readErr != nil {
+			return errors.New("list run journal directory")
+		}
+	}
+}
+
+func (store *Store) readJournalEntryLocked(entry os.DirEntry) (RunJournal, error) {
+	var journal RunJournal
+	if err := store.readRunJournalJSONWithLimit(filepath.Join(store.runsDir(), entry.Name()), &journal, maxJournalFileBytes); err != nil {
+		return RunJournal{}, err
+	}
+	if err := validateJournal(journal); err != nil {
+		return RunJournal{}, errors.New("invalid run journal")
+	}
+	if filepath.Base(store.journalPath(journal.Key())) != entry.Name() {
+		return RunJournal{}, errors.New("run journal file does not match its key")
+	}
+	return journal, nil
 }
 
 // SetLocalState persists a local lifecycle state transition.
@@ -1763,10 +2317,57 @@ func (store *Store) SetContainmentAuthority(key RunKey, pid int, identity string
 	})
 }
 
+// CheckLinuxV2NativeAdmissionBeforeClaim is a read-only dispatch gate for a
+// fresh native assignment, before Control has issued the target RunKey/fence.
+// It never authorizes launch; the claimed-key checks and reservation CAS are
+// still mandatory before seed, cgroup, or producer effects.
+func (store *Store) CheckLinuxV2NativeAdmissionBeforeClaim(now time.Time, liveOwners map[RunKey]protocol.Fence) error {
+	if err := requireLinuxV2NativeAdmissionPlatform(); err != nil {
+		return err
+	}
+	if now.IsZero() {
+		return errors.New("Linux v2 native admission time is missing")
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.ensureOpenLocked(); err != nil {
+		return err
+	}
+	return store.scanLinuxV2NativeAdmissionLocked(nil, protocol.Fence{}, now, liveOwners, nil, nil)
+}
+
+// CheckLinuxV2NativeAdmission performs the post-claim read-only admission scan.
+// The live-owner map is an App snapshot; State verifies every full fence against
+// the current journals while holding the Store lock.
+func (store *Store) CheckLinuxV2NativeAdmission(key RunKey, fence protocol.Fence, now time.Time, liveOwners map[RunKey]protocol.Fence) error {
+	if err := requireLinuxV2NativeAdmissionPlatform(); err != nil {
+		return err
+	}
+	if err := validateKey(key); err != nil || !validLinuxV2AdmissionFence(key, fence) || now.IsZero() {
+		return errors.New("Linux v2 native admission RunKey, fence, or time is invalid")
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.ensureOpenLocked(); err != nil {
+		return err
+	}
+	journal, err := store.loadJournalLocked(key)
+	if err != nil {
+		return err
+	}
+	return store.checkLinuxV2NativeAdmissionLocked(journal, key, fence, now, liveOwners, nil, nil)
+}
+
 // ReserveLinuxCgroup durably reserves the immutable run leaf before any mkdir
 // or producer launch. Exact retries write the same journal again, including a
-// fresh filesystem persistence barrier after an unknown earlier result.
-func (store *Store) ReserveLinuxCgroup(key RunKey, reservation LinuxCgroupReservation) (RunJournal, error) {
+// fresh filesystem persistence barrier after an unknown earlier result, only
+// while the target Control lease and lifecycle remain effect-ready. The
+// caller's current fence and App-attested foreign owners are checked atomically
+// with the cross-RunKey journal scan and this reservation CAS.
+func (store *Store) ReserveLinuxCgroup(key RunKey, fence protocol.Fence, reservation LinuxCgroupReservation, liveOwners map[RunKey]protocol.Fence) (RunJournal, error) {
+	if err := requireLinuxV2NativeAdmissionPlatform(); err != nil {
+		return RunJournal{}, err
+	}
 	if err := reservation.Validate(); err != nil {
 		return RunJournal{}, err
 	}
@@ -1779,6 +2380,12 @@ func (store *Store) ReserveLinuxCgroup(key RunKey, reservation LinuxCgroupReserv
 	return store.mutateJournal(key, func(journal *RunJournal) error {
 		if !journal.hasClaimGrant() {
 			return errors.New("journal has no claim grant")
+		}
+		if journal.Fence() != fence || !validLinuxV2AdmissionFence(key, fence) {
+			return errors.New("Linux cgroup reservation RunKey/fence is stale")
+		}
+		if err := store.checkLinuxV2NativeAdmissionLocked(*journal, key, fence, time.Now(), liveOwners, &reservation, nil); err != nil {
+			return err
 		}
 		if journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil {
 			return errors.New("Linux cgroup reservation is fenced by clone abort")
@@ -1795,9 +2402,6 @@ func (store *Store) ReserveLinuxCgroup(key RunKey, reservation LinuxCgroupReserv
 			}
 			return errors.New("Linux cgroup reservation conflicts with journal")
 		}
-		if err := store.ensureLinuxCgroupLeafAvailableLocked(key, reservation); err != nil {
-			return err
-		}
 		cloned := reservation.Clone()
 		journal.ContainmentCgroup = &cloned
 		return nil
@@ -1806,10 +2410,14 @@ func (store *Store) ReserveLinuxCgroup(key RunKey, reservation LinuxCgroupReserv
 
 // MarkLinuxCgroupCreateStarted commits the before-mkdir creation intent.
 // Replaying its exact pre-state after an unknown write performs another fsync
-// barrier; no later stage can be inferred from the flag alone. The reserved
-// daemon mirror identity remains present here; it is not a cgroup producer
-// grant and does not make the leaf exist.
-func (store *Store) MarkLinuxCgroupCreateStarted(key RunKey, expected LinuxCgroupReservation) (RunJournal, error) {
+// barrier only while the target Control lease and lifecycle remain effect-ready;
+// no later stage can be inferred from the flag alone. The reserved daemon mirror
+// identity remains present here; it is not a cgroup producer grant and does not
+// make the leaf exist.
+func (store *Store) MarkLinuxCgroupCreateStarted(key RunKey, fence protocol.Fence, expected LinuxCgroupReservation, liveOwners map[RunKey]protocol.Fence) (RunJournal, error) {
+	if err := requireLinuxV2NativeAdmissionPlatform(); err != nil {
+		return RunJournal{}, err
+	}
 	if err := expected.Validate(); err != nil {
 		return RunJournal{}, err
 	}
@@ -1819,6 +2427,12 @@ func (store *Store) MarkLinuxCgroupCreateStarted(key RunKey, expected LinuxCgrou
 		return RunJournal{}, errors.New("Linux cgroup creation intent expected value is invalid")
 	}
 	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.Fence() != fence || !validLinuxV2AdmissionFence(key, fence) {
+			return errors.New("Linux cgroup creation RunKey/fence is stale")
+		}
+		if err := store.checkLinuxV2NativeAdmissionLocked(*journal, key, fence, time.Now(), liveOwners, nil, nil); err != nil {
+			return err
+		}
 		after := expected.Clone()
 		after.CreateStarted = true
 		replayed, err := exactCgroupMutationStage(journal, expected, after)
@@ -1931,10 +2545,14 @@ func (store *Store) BindLinuxCgroupLauncher(key RunKey, expected LinuxCgroupRese
 }
 
 // ArmLinuxCgroupLauncherGrant durably records that an external grant may now
-// reach the exact bound launcher. Callers must replay this exact CAS and
-// obtain a successful persistence barrier before sending the grant; after this
+// reach the exact bound launcher. Callers must replay this exact CAS and obtain
+// a successful persistence barrier before sending the grant; expired or
+// otherwise effect-ineligible targets cannot use replay to send it. After this
 // point the no-target abort path is closed even if the launcher later exits.
-func (store *Store) ArmLinuxCgroupLauncherGrant(key RunKey, expected LinuxCgroupReservation) (RunJournal, error) {
+func (store *Store) ArmLinuxCgroupLauncherGrant(key RunKey, fence protocol.Fence, expected LinuxCgroupReservation, liveOwners map[RunKey]protocol.Fence) (RunJournal, error) {
+	if err := requireLinuxV2NativeAdmissionPlatform(); err != nil {
+		return RunJournal{}, err
+	}
 	if err := expected.Validate(); err != nil {
 		return RunJournal{}, err
 	}
@@ -1943,6 +2561,12 @@ func (store *Store) ArmLinuxCgroupLauncherGrant(key RunKey, expected LinuxCgroup
 		return RunJournal{}, errors.New("Linux cgroup launcher grant expected value is invalid")
 	}
 	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.Fence() != fence || !validLinuxV2AdmissionFence(key, fence) {
+			return errors.New("Linux cgroup launcher grant RunKey/fence is stale")
+		}
+		if err := store.checkLinuxV2NativeAdmissionLocked(*journal, key, fence, time.Now(), liveOwners, nil, nil); err != nil {
+			return err
+		}
 		if journal.ContainmentHandoff != nil || journal.ContainmentAuthority != nil || journal.ContainmentCgroup == nil {
 			return errors.New("Linux cgroup launcher grant has no pending reservation")
 		}
@@ -3937,6 +4561,13 @@ func requireLinuxClonePlatform() error {
 	return nil
 }
 
+func requireLinuxV2NativeAdmissionPlatform() error {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		return errors.New("Linux v2 native admission is supported only on Linux/amd64")
+	}
+	return nil
+}
+
 func requireLinuxCloneJournalFence(journal RunJournal, fence protocol.Fence, intent authority.LinuxCloneIntent) error {
 	if intent.Validate() != nil || intent.RunID != journal.RunID || intent.Generation != journal.Generation ||
 		journal.Fence() != fence || !journal.hasClaimGrant() {
@@ -3991,13 +4622,15 @@ func linuxCloneStopProven(journal RunJournal) bool {
 func validateLinuxCloneJournal(journal RunJournal) error {
 	intent := journal.LinuxCloneIntent
 	if intent == nil {
-		if journal.LinuxCloneSeedReceipt != nil || journal.LinuxCloneCheckoutReceipt != nil || journal.LinuxClonePromotionReceipt != nil ||
-			journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil {
+		if journal.LinuxCloneSeedReceipt != nil || journal.LinuxCloneCheckoutReceipt != nil ||
+			journal.LinuxClonePromotionIntent != nil || journal.LinuxClonePromotionReceipt != nil ||
+			journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil || journal.LinuxCloneCleanupPending ||
+			journal.LinuxCloneCleanupIntent != nil || journal.LinuxCloneTargetRemovalProof != nil || journal.LinuxCloneCleanupProof != nil {
 			return errors.New("run journal has Linux clone evidence without an intent")
 		}
 		return nil
 	}
-	if intent.Validate() != nil || intent.RunID != journal.RunID || intent.Generation != journal.Generation ||
+	if intent.ValidateForJournal() != nil || intent.RunID != journal.RunID || intent.Generation != journal.Generation ||
 		intent.BindingKey != journal.WorkspaceBindingKey || !journal.hasClaimGrant() {
 		return errors.New("run journal Linux clone intent is invalid")
 	}
@@ -4012,11 +4645,15 @@ func validateLinuxCloneJournal(journal RunJournal) error {
 		return errors.New("run journal Linux clone abort is both pending and complete")
 	}
 	if journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil {
-		if journal.LinuxCloneCheckoutReceipt != nil || journal.LinuxClonePromotionReceipt != nil {
+		if journal.LinuxCloneCheckoutReceipt != nil || journal.LinuxClonePromotionIntent != nil || journal.LinuxClonePromotionReceipt != nil {
 			return errors.New("run journal Linux clone abort state is invalid")
 		}
+		if journal.LinuxCloneCleanupPending || journal.LinuxCloneCleanupIntent != nil ||
+			journal.LinuxCloneTargetRemovalProof != nil || journal.LinuxCloneCleanupProof != nil {
+			return errors.New("run journal clone abort conflicts with normal cleanup")
+		}
 		if journal.LinuxCloneAbortPending {
-			if !linuxCloneAbortFenceAvailable(journal) {
+			if !linuxCloneAbortFenceAvailable(journal) && !linuxCloneAbortPendingReleaseUnresolved(journal) {
 				return errors.New("run journal Linux clone abort lost its producer fence")
 			}
 			if journal.WorkspacePath != intent.Target || !journal.WorkspaceRecoveryRequired {
@@ -4025,21 +4662,28 @@ func validateLinuxCloneJournal(journal RunJournal) error {
 			return nil
 		}
 		proof := journal.LinuxCloneAbortProof
-		if proof.Validate() != nil || !proof.Intent.Equal(*intent) || journal.WorkspacePath != "" || journal.WorkspaceRecoveryRequired ||
-			!linuxCloneAbortHistoryMatches(journal, proof) {
+		if proof.ValidateForJournal() != nil || !proof.Intent.Equal(*intent) || journal.WorkspacePath != "" || journal.WorkspaceRecoveryRequired {
 			return errors.New("run journal Linux clone abort proof is invalid")
+		}
+		if proof.NormalReleaseProof != nil {
+			if !linuxCloneAbortPendingReleaseUnresolved(journal) ||
+				!journal.ContainmentCgroupReleaseProof.Equal(*proof.NormalReleaseProof) {
+				return errors.New("legacy normal-release Linux clone abort remains unresolved")
+			}
+		} else if !linuxCloneAbortHistoryMatches(journal, proof) {
+			return errors.New("run journal Linux clone abort proof lacks exact no-gate history")
 		}
 		if seed != nil && (proof.SeedReceipt == nil || !seed.Equal(*proof.SeedReceipt)) {
 			return errors.New("run journal Linux clone abort proof lost its bound seed receipt")
 		}
 		return nil
 	}
-	if journal.WorkspacePath != intent.Target {
-		return errors.New("run journal Linux clone target path changed")
-	}
 	checkout := journal.LinuxCloneCheckoutReceipt
 	if checkout == nil {
-		if journal.LinuxClonePromotionReceipt != nil {
+		if journal.LinuxClonePromotionIntent != nil || journal.LinuxClonePromotionReceipt != nil ||
+			journal.LinuxCloneCleanupPending || journal.LinuxCloneCleanupIntent != nil ||
+			journal.LinuxCloneTargetRemovalProof != nil || journal.LinuxCloneCleanupProof != nil ||
+			journal.WorkspacePath != intent.Target {
 			return errors.New("run journal Linux clone promotion has no checkout receipt")
 		}
 		return nil
@@ -4047,19 +4691,80 @@ func validateLinuxCloneJournal(journal RunJournal) error {
 	if !linuxCloneCheckoutMatches(*intent, *seed, *checkout) {
 		return errors.New("run journal Linux clone checkout receipt is invalid")
 	}
-	promotion := journal.LinuxClonePromotionReceipt
-	if promotion == nil {
+	promotionIntent := journal.LinuxClonePromotionIntent
+	if promotionIntent == nil {
+		if journal.LinuxCloneCleanupPending || journal.LinuxCloneCleanupIntent != nil ||
+			journal.LinuxCloneTargetRemovalProof != nil || journal.LinuxCloneCleanupProof != nil {
+			return errors.New("run journal Linux clone promotion receipt has no intent")
+		}
+		promotion := journal.LinuxClonePromotionReceipt
+		if promotion == nil {
+			if journal.WorkspacePath != intent.Target {
+				return errors.New("run journal Linux clone target path changed")
+			}
+			return nil
+		}
+		legacyRef, refErr := authority.LinuxClonePromotionRef(journal.RunID, journal.Generation)
+		if promotion.Validate() != nil || refErr != nil || promotion.Ref != legacyRef ||
+			len(promotion.Commit) != len(intent.BaseCommit) || !linuxCloneStopProven(journal) ||
+			journal.WorkspacePath != intent.Target {
+			return errors.New("run journal legacy Linux clone promotion receipt is invalid")
+		}
 		return nil
 	}
 	ref, err := authority.LinuxClonePromotionRef(journal.RunID, journal.Generation)
-	if promotion.Validate() != nil || err != nil || promotion.Ref != ref || !linuxCloneStopProven(journal) {
+	if promotionIntent.Validate() != nil || promotionIntent.ResourceID != intent.ResourceID ||
+		len(promotionIntent.Commit) != len(intent.BaseCommit) || !linuxCloneStopProven(journal) {
+		return errors.New("run journal Linux clone promotion intent is invalid")
+	}
+	promotion := journal.LinuxClonePromotionReceipt
+	if promotion == nil {
+		if journal.LinuxCloneCleanupPending || journal.LinuxCloneCleanupIntent != nil ||
+			journal.LinuxCloneTargetRemovalProof != nil || journal.LinuxCloneCleanupProof != nil ||
+			journal.WorkspacePath != intent.Target {
+			return errors.New("run journal Linux clone cleanup has no promotion receipt")
+		}
+		return nil
+	}
+	if promotion.Validate() != nil || err != nil || promotion.Ref != ref || promotion.Commit != promotionIntent.Commit ||
+		promotion.TreeDigest != promotionIntent.TreeDigest || !linuxCloneStopProven(journal) {
 		return errors.New("run journal Linux clone promotion receipt is invalid")
+	}
+	if journal.LinuxCloneCleanupIntent == nil {
+		if journal.LinuxCloneCleanupPending || journal.LinuxCloneTargetRemovalProof != nil ||
+			journal.LinuxCloneCleanupProof != nil || journal.WorkspacePath != intent.Target {
+			return errors.New("run journal Linux clone cleanup stage is invalid")
+		}
+		return nil
+	}
+	cleanupIntent, err := linuxCloneCleanupIntentFromJournal(journal)
+	if err != nil || !cleanupIntent.Equal(*journal.LinuxCloneCleanupIntent) {
+		return errors.New("run journal Linux clone cleanup intent is invalid")
+	}
+	if journal.LinuxCloneCleanupPending {
+		if journal.LinuxCloneCleanupProof != nil || journal.WorkspacePath != intent.Target || !journal.WorkspaceRecoveryRequired {
+			return errors.New("run journal pending Linux clone cleanup stage is invalid")
+		}
+		if journal.LinuxCloneTargetRemovalProof != nil &&
+			(journal.LinuxCloneTargetRemovalProof.Validate() != nil ||
+				!journal.LinuxCloneTargetRemovalProof.Intent.Equal(cleanupIntent)) {
+			return errors.New("run journal pending Linux clone target-removal proof is invalid")
+		}
+		return nil
+	}
+	cleanupProof := journal.LinuxCloneCleanupProof
+	if journal.LinuxCloneTargetRemovalProof == nil || journal.LinuxCloneTargetRemovalProof.Validate() != nil ||
+		!journal.LinuxCloneTargetRemovalProof.Intent.Equal(cleanupIntent) || cleanupProof == nil ||
+		cleanupProof.Validate() != nil || !cleanupProof.Intent.Equal(cleanupIntent) ||
+		!cleanupProof.TargetRemovalProof.Equal(*journal.LinuxCloneTargetRemovalProof) ||
+		journal.WorkspacePath != "" || journal.WorkspaceRecoveryRequired {
+		return errors.New("run journal Linux clone cleanup proof is invalid")
 	}
 	return nil
 }
 
 func linuxCloneAbortHistoryMatches(journal RunJournal, proof *authority.LinuxCloneAbortProof) bool {
-	if !linuxCloneAbortNoActiveOwner(journal) {
+	if !linuxCloneAbortNoActiveOwner(journal) || proof != nil && proof.NormalReleaseProof != nil {
 		return false
 	}
 	if proof == nil {
@@ -4073,27 +4778,30 @@ func linuxCloneAbortHistoryMatches(journal RunJournal, proof *authority.LinuxClo
 			journal.ContainmentCgroupReleaseProof == nil && journal.ContainmentCgroupPreGateReleaseProof == nil
 	}
 	if proof.PreGateReleaseProof != nil {
-		return proof.NormalReleaseProof == nil && journal.ContainmentCgroup == nil && journal.ContainmentCgroupReleaseProof == nil &&
+		return journal.ContainmentCgroup == nil && journal.ContainmentCgroupReleaseProof == nil &&
 			journal.ContainmentCgroupPreGateReleaseProof != nil &&
 			journal.ContainmentCgroupPreGateReleaseProof.Equal(*proof.PreGateReleaseProof)
 	}
-	if proof.NormalReleaseProof != nil {
-		return journal.ContainmentCgroup == nil && journal.ContainmentCgroupPreGateReleaseProof == nil &&
-			journal.ContainmentCgroupReleaseProof != nil && journal.ContainmentCgroupReleaseProof.Equal(*proof.NormalReleaseProof) &&
-			proof.NormalReleaseProof.Validate() == nil && proof.NormalReleaseProof.Version == authority.SupervisorHandoffVersionV2 &&
-			proof.NormalReleaseProof.StopReceipt != nil
-	}
 	return journal.ContainmentCgroup == nil && journal.ContainmentCgroupReleaseProof == nil &&
 		journal.ContainmentCgroupPreGateReleaseProof == nil
+}
+
+// linuxCloneAbortPendingReleaseUnresolved recognizes only the old structural
+// state shape where a no-checkout abort was fenced after normal v2 release.
+// It keeps that journal readable but never supplies no-gate authority.
+func linuxCloneAbortPendingReleaseUnresolved(journal RunJournal) bool {
+	release := journal.ContainmentCgroupReleaseProof
+	return linuxCloneAbortNoActiveOwner(journal) && journal.ContainmentCgroup == nil &&
+		journal.ContainmentCgroupPreGateReleaseProof == nil && release != nil &&
+		release.Validate() == nil && release.Version == authority.SupervisorHandoffVersionV2 && release.StopReceipt != nil
 }
 
 func linuxCloneAbortFenceAvailable(journal RunJournal) bool {
 	if !linuxCloneAbortNoActiveOwner(journal) {
 		return false
 	}
-	if release := journal.ContainmentCgroupReleaseProof; release != nil {
-		return journal.ContainmentCgroup == nil && journal.ContainmentCgroupPreGateReleaseProof == nil &&
-			release.Validate() == nil && release.Version == authority.SupervisorHandoffVersionV2 && release.StopReceipt != nil
+	if journal.ContainmentCgroupReleaseProof != nil {
+		return false
 	}
 	if reservation := journal.ContainmentCgroup; reservation != nil {
 		proof := reservation.AbortProof
@@ -4163,6 +4871,13 @@ func (store *Store) readJSONWithLimitAndTags(path string, resource string, desti
 		if errors.Is(err, os.ErrNotExist) {
 			return &NotFoundError{Resource: resource}
 		}
+		return errors.New("read " + resource)
+	}
+	return decodeJSONWithLimitAndTags(data, resource, destination, limit, rootType)
+}
+
+func decodeJSONWithLimitAndTags(data []byte, resource string, destination any, limit int, rootType reflect.Type) error {
+	if len(data) > limit {
 		return errors.New("read " + resource)
 	}
 	if err := protocol.RejectDuplicateJSONMembers(data); err != nil {
@@ -4520,6 +5235,13 @@ func sameLinuxCloneCheckoutReceipt(left, right *authority.LinuxCloneCheckoutRece
 	return left.Equal(*right)
 }
 
+func sameLinuxClonePromotionIntent(left, right *authority.LinuxClonePromotionIntent) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
 func sameLinuxClonePromotionReceipt(left, right *authority.LinuxClonePromotionReceipt) bool {
 	if left == nil || right == nil {
 		return left == nil && right == nil
@@ -4528,6 +5250,27 @@ func sameLinuxClonePromotionReceipt(left, right *authority.LinuxClonePromotionRe
 }
 
 func sameLinuxCloneAbortProof(left, right *authority.LinuxCloneAbortProof) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
+func sameLinuxCloneCleanupIntent(left, right *authority.LinuxCloneCleanupIntent) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
+func sameLinuxCloneTargetRemovalProof(left, right *authority.LinuxCloneTargetRemovalProof) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
+func sameLinuxCloneCleanupProof(left, right *authority.LinuxCloneCleanupProof) bool {
 	if left == nil || right == nil {
 		return left == nil && right == nil
 	}
@@ -4924,7 +5667,7 @@ func validateJournal(journal RunJournal) error {
 	}
 	if !journal.hasClaimGrant() && (journal.PID != 0 || !journal.StartedAt.IsZero() || journal.ContainmentCgroup != nil ||
 		journal.LinuxCloneIntent != nil || journal.LinuxCloneSeedReceipt != nil || journal.LinuxCloneCheckoutReceipt != nil ||
-		journal.LinuxClonePromotionReceipt != nil || journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil ||
+		journal.LinuxClonePromotionIntent != nil || journal.LinuxClonePromotionReceipt != nil || journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil ||
 		len(journal.PendingEvents) != 0 || journal.DroppedOutputChunks != 0 ||
 		journal.DroppedOutputBytes != 0 || len(journal.PendingTransitions) != 0 || len(journal.PendingCommandAcknowledgements) != 0) {
 		return errors.New("run journal is invalid")

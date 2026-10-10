@@ -5,9 +5,7 @@ package execution
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -25,9 +23,15 @@ import (
 )
 
 const (
-	linuxV2StopTimeout    = 30 * time.Second
-	linuxV2ControlTimeout = 30 * time.Second
+	linuxV2StopTimeout            = 30 * time.Second
+	linuxV2ControlTimeout         = 30 * time.Second
+	linuxV2WitnessStatusTimeout   = 2 * time.Second
+	linuxV2AdmissionStatusTimeout = 2 * time.Second
 )
+
+type linuxV2NativeReleaser interface {
+	Release(context.Context, linuxgate.NativeCommand, func(context.Context, authority.LinuxCloneCheckoutReceipt) error) error
+}
 
 type linuxV2ProcessOwner struct {
 	mu sync.Mutex
@@ -53,6 +57,7 @@ type linuxV2ProcessOwner struct {
 	verifiedUserNamespace     platform.LinuxUserNamespaceIdentity
 	rootUserNamespaceVerified bool
 	releaseSucceeded          bool
+	observedWitnessDrop       *LinuxV2WitnessDropStatus
 	cloneCheckout             *authority.LinuxCloneCheckoutReceipt
 	cloneRunOutcome           *LinuxCloneRunOutcome
 	cloneOutcomeKnown         bool
@@ -63,25 +68,26 @@ type linuxV2ProcessOwner struct {
 	cloneRetained             bool
 	cloneAbortDone            bool
 
-	helperBound          bool
-	helperStartAttempted bool
-	grantArmed           bool
-	launcherExited       bool
-	gateBound            bool
-	handoffPreparedFlag  bool
-	handoffBound         bool
-	handoffCommitTried   bool
-	journalCommitted     bool
-	helperCommitAck      bool
-	leaseAck             bool
-	leaseSequence        uint64
-	stopRequested        bool
-	releaseAttempted     bool
+	helperBound           bool
+	helperStartAttempted  bool
+	grantArmed            bool
+	launcherExited        bool
+	gateBound             bool
+	handoffPreparedFlag   bool
+	handoffBound          bool
+	handoffCommitTried    bool
+	journalCommitted      bool
+	helperCommitAck       bool
+	leaseAck              bool
+	leaseSequence         uint64
+	leaseRenewalInFlight  bool
+	leaseRenewalUncertain bool
+	leaseRenewalSequence  uint64
+	leaseRenewalDone      chan struct{}
+	stopRequested         bool
+	releaseAttempted      bool
 
 	stopMu                  sync.Mutex
-	mirrorKillAttempted     bool
-	mirrorKillAcknowledged  bool
-	mirrorKillError         error
 	stopEvidence            *platform.LinuxOwnerHelperV2StopEvidence
 	abortProof              *authority.LinuxCgroupReservationAbortProof
 	helperFencedBeforeAbort bool
@@ -314,6 +320,9 @@ func validateLinuxV2Invocation(invocation *LinuxV2Invocation) error {
 	if err := validateLinuxCloneGrantForInvocation(*invocation.CloneGrant, invocation.RunKey, invocation.CloneGrant.Intent.Target); err != nil {
 		return err
 	}
+	if invocation.Callbacks.CheckNativeAdmission == nil {
+		return errors.New("Linux v2 native release requires an App admission check")
+	}
 	if invocation.Callbacks.RecordLinuxCloneCheckoutReady == nil || invocation.Callbacks.LinuxCloneProposedCommit == nil ||
 		invocation.Callbacks.RetainUnpromotedLinuxClone == nil || invocation.Callbacks.PromoteLinuxClone == nil ||
 		invocation.Callbacks.RecordLinuxClonePromotion == nil ||
@@ -333,13 +342,15 @@ func validateLinuxCloneGrantForInvocation(grant authority.LinuxCloneGrant, key s
 
 func (owner *linuxV2ProcessOwner) startedProcess() *startedProcess {
 	return &startedProcess{
-		containment:             &linuxV2Containment{owner: owner},
-		wait:                    owner.wait,
-		kill:                    owner.stopForTermination,
-		close:                   owner.closeAfterClear,
-		duplicateLinuxV2Peer:    owner.duplicatePeer,
-		closeLinuxV2Containment: owner.finalize,
-		renewLinuxV2Lease:       owner.renewLease,
+		containment:              &linuxV2Containment{owner: owner},
+		wait:                     owner.wait,
+		kill:                     owner.stopForTermination,
+		close:                    owner.closeAfterClear,
+		duplicateLinuxV2Peer:     owner.duplicatePeer,
+		linuxV2WitnessDropStatus: owner.witnessDropStatus,
+		linuxV2LiveOwnerStatus:   owner.liveOwnerStatus,
+		closeLinuxV2Containment:  owner.finalize,
+		renewLinuxV2Lease:        owner.renewLease,
 	}
 }
 
@@ -474,7 +485,12 @@ func (owner *linuxV2ProcessOwner) startHelper(ctx context.Context) error {
 	return nil
 }
 
-func (owner *linuxV2ProcessOwner) prepareGate(ctx context.Context, command *exec.Cmd) error {
+func (owner *linuxV2ProcessOwner) prepareGate(ctx context.Context, command *exec.Cmd) (resultErr error) {
+	defer func() {
+		if resultErr != nil {
+			owner.captureWitnessDropStatus()
+		}
+	}()
 	if owner.helper == nil || owner.helper.Control == nil || !owner.helperBound || command == nil || command.Path == "" {
 		return errors.New("Linux v2 helper must be durably bound before gate preparation")
 	}
@@ -748,26 +764,252 @@ func (owner *linuxV2ProcessOwner) renewLease(ctx context.Context, deadline time.
 	}
 	owner.mu.Lock()
 	if !owner.helperCommitAck || owner.helper == nil || owner.helper.Control == nil ||
-		(!owner.leaseAck && sequence != 1) || (owner.leaseAck && sequence != owner.leaseSequence+1) || owner.stopRequested {
+		(!owner.leaseAck && sequence != 1) || (owner.leaseAck && sequence != owner.leaseSequence+1) ||
+		owner.stopRequested || owner.leaseRenewalInFlight || owner.leaseRenewalUncertain {
 		owner.mu.Unlock()
-		return errors.New("Linux v2 helper lease sequence is not the exact next committed live-run renewal")
+		return errors.New("Linux v2 helper lease sequence is not the exact next resolved committed live-run renewal")
 	}
 	helper := owner.helper.Control
+	helperIdentity := authority.LinuxCgroupProcessIdentity{PID: owner.helper.PID, Identity: owner.helper.Identity}
+	leaseAckedOnEntry := owner.leaseAck
+	done := make(chan struct{})
+	owner.leaseRenewalInFlight = true
+	owner.leaseRenewalSequence = sequence
+	owner.leaseRenewalDone = done
 	owner.mu.Unlock()
 	if err := retryLinuxV2(func() error { return helper.RenewLease(ctx, deadline, sequence) }); err != nil {
-		return err
+		statusContext, cancel := context.WithTimeout(ctx, linuxV2AdmissionStatusTimeout)
+		status, statusErr := helper.Status(statusContext)
+		cancel()
+		acknowledged := false
+		if statusErr == nil {
+			owner.mu.Lock()
+			grant := owner.grant
+			owner.mu.Unlock()
+			acknowledged = linuxV2LeaseAckStatusMatches(status, grant, helperIdentity, sequence)
+			_ = status.Close()
+		}
+		finishErr := owner.finishLeaseRenewal(done, sequence, acknowledged)
+		if acknowledged && finishErr == nil {
+			return nil
+		}
+		owner.captureWitnessDropStatus()
+		if statusErr == nil && !acknowledged {
+			statusErr = errors.New("fresh helper Status did not confirm the exact renewed lease sequence")
+		}
+		return errors.Join(fmt.Errorf("Linux v2 helper lease renewal response is unresolved: %w", err), statusErr, finishErr)
 	}
-	owner.mu.Lock()
-	owner.leaseAck = true
-	owner.leaseSequence = sequence
-	owner.mu.Unlock()
+	if err := owner.finishLeaseRenewal(done, sequence, true); err != nil {
+		return fmt.Errorf("record acknowledged Linux v2 helper lease sequence: %w", err)
+	}
+	if sequence == 1 && owner.invocation.Callbacks.DropAckAfter != nil {
+		if err := owner.invocation.Callbacks.DropAckAfter(LinuxV2AckStageLeaseArmed, leaseAckedOnEntry); err != nil {
+			owner.captureWitnessDropStatus()
+			return fmt.Errorf("initial Linux v2 lease ACK response was lost after helper acceptance: %w", err)
+		}
+	}
 	return nil
+}
+
+func linuxV2LeaseAckStatusMatches(
+	status platform.LinuxOwnerHelperV2Status,
+	grant platform.LinuxOwnerAnchorGrant,
+	helper authority.LinuxCgroupProcessIdentity,
+	sequence uint64,
+) bool {
+	return status.RunKey == grant.RunKey && status.Fence == grant.Fence && status.Helper.Equal(helper) &&
+		status.LeaseSequence == sequence && linuxV2LeaseStatusCanReconcile(status)
+}
+
+func linuxV2LeaseStatusCanReconcile(status platform.LinuxOwnerHelperV2Status) bool {
+	return status.State == "active" && status.CommitAcknowledged && status.LeaseLive &&
+		!status.OwnerLost && !status.StopRequested && !status.StopAttempted && !status.ReleaseInFlight &&
+		status.ReleaseAttempted == status.Released && status.StopEvidence == nil && status.Exit == nil && status.ErrorCode == ""
+}
+
+func (owner *linuxV2ProcessOwner) finishLeaseRenewal(done chan struct{}, sequence uint64, acknowledged bool) error {
+	owner.mu.Lock()
+	if done == nil || owner.leaseRenewalDone != done || !owner.leaseRenewalInFlight || owner.leaseRenewalSequence != sequence {
+		owner.mu.Unlock()
+		return errors.New("Linux v2 helper lease renewal ownership changed before settlement")
+	}
+	owner.leaseRenewalInFlight = false
+	owner.leaseRenewalDone = nil
+	if acknowledged {
+		owner.leaseAck = true
+		owner.leaseSequence = sequence
+		owner.leaseRenewalUncertain = false
+		owner.leaseRenewalSequence = 0
+	} else {
+		owner.leaseRenewalUncertain = true
+	}
+	owner.mu.Unlock()
+	close(done)
+	return nil
+}
+
+func (owner *linuxV2ProcessOwner) waitForLeaseRenewal(ctx context.Context) error {
+	for {
+		if err := lockLinuxV2OwnerStatusContext(ctx, owner); err != nil {
+			return err
+		}
+		if !owner.leaseRenewalInFlight {
+			owner.mu.Unlock()
+			return nil
+		}
+		done := owner.leaseRenewalDone
+		owner.mu.Unlock()
+		if done == nil {
+			return errors.New("Linux v2 lease renewal has no completion signal")
+		}
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+type linuxV2HelperStatusReader interface {
+	Status(context.Context) (platform.LinuxOwnerHelperV2Status, error)
+}
+
+// linuxV2ReadHelperStatusWithPIDFD rejects a Status reply if the exact helper
+// exited while the authenticated RPC was in flight.
+func linuxV2ReadHelperStatusWithPIDFD(
+	ctx context.Context,
+	helperPIDFD *os.File,
+	reader linuxV2HelperStatusReader,
+) (platform.LinuxOwnerHelperV2Status, error) {
+	if ctx == nil || helperPIDFD == nil || reader == nil {
+		return platform.LinuxOwnerHelperV2Status{}, errors.New("Linux v2 helper Status pidfd fence is incomplete")
+	}
+	exited, err := linuxV2PIDFDExited(helperPIDFD)
+	if err != nil {
+		return platform.LinuxOwnerHelperV2Status{}, err
+	}
+	if exited {
+		return platform.LinuxOwnerHelperV2Status{}, errors.New("exact Linux v2 helper pidfd exited before Status")
+	}
+	status, err := reader.Status(ctx)
+	if err != nil {
+		return platform.LinuxOwnerHelperV2Status{}, err
+	}
+	exited, err = linuxV2PIDFDExited(helperPIDFD)
+	if err != nil || exited {
+		_ = status.Close()
+		if err != nil {
+			return platform.LinuxOwnerHelperV2Status{}, fmt.Errorf("recheck exact helper pidfd after Status: %w", err)
+		}
+		return platform.LinuxOwnerHelperV2Status{}, errors.New("exact Linux v2 helper exited during Status")
+	}
+	return status, nil
+}
+
+func (owner *linuxV2ProcessOwner) readLiveOwnerHelperStatus(
+	ctx context.Context,
+	control *platform.LinuxOwnerHelperV2Client,
+	helperPIDFD *os.File,
+	grant platform.LinuxOwnerAnchorGrant,
+	helper authority.LinuxCgroupProcessIdentity,
+) (platform.LinuxOwnerHelperV2Status, error) {
+	for {
+		if err := owner.waitForLeaseRenewal(ctx); err != nil {
+			return platform.LinuxOwnerHelperV2Status{}, err
+		}
+		status, err := linuxV2ReadHelperStatusWithPIDFD(ctx, helperPIDFD, control)
+		if err != nil {
+			return platform.LinuxOwnerHelperV2Status{}, fmt.Errorf("read exact live-owner helper Status: %w", err)
+		}
+		if status.RunKey != grant.RunKey || status.Fence != grant.Fence || !status.Helper.Equal(helper) {
+			_ = status.Close()
+			return platform.LinuxOwnerHelperV2Status{}, errors.New("live-owner helper Status changed its exact RunKey, fence, or identity")
+		}
+		if err := lockLinuxV2OwnerStatusContext(ctx, owner); err != nil {
+			_ = status.Close()
+			return platform.LinuxOwnerHelperV2Status{}, err
+		}
+		currentHelper := owner.helper
+		if currentHelper == nil || currentHelper.Control != control || currentHelper.PID != helper.PID || currentHelper.Identity != helper.Identity {
+			owner.mu.Unlock()
+			_ = status.Close()
+			return platform.LinuxOwnerHelperV2Status{}, errors.New("live-owner helper changed during Status readback")
+		}
+		if owner.leaseRenewalInFlight {
+			done := owner.leaseRenewalDone
+			owner.mu.Unlock()
+			_ = status.Close()
+			if done == nil {
+				return platform.LinuxOwnerHelperV2Status{}, errors.New("in-flight lease renewal has no completion signal")
+			}
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				return platform.LinuxOwnerHelperV2Status{}, ctx.Err()
+			}
+		}
+		if owner.stopRequested || owner.ownerReleased {
+			owner.mu.Unlock()
+			return status, nil
+		}
+		leaseAck := owner.leaseAck
+		leaseSequence := owner.leaseSequence
+		uncertain := owner.leaseRenewalUncertain
+		pendingSequence := owner.leaseRenewalSequence
+		if uncertain {
+			if pendingSequence > 0 && status.LeaseSequence == pendingSequence && linuxV2LeaseStatusCanReconcile(status) {
+				owner.leaseAck = true
+				owner.leaseSequence = pendingSequence
+				owner.leaseRenewalUncertain = false
+				owner.leaseRenewalSequence = 0
+				owner.mu.Unlock()
+				return status, nil
+			}
+			if leaseAck && status.LeaseSequence == leaseSequence && linuxV2LeaseStatusCanReconcile(status) {
+				owner.mu.Unlock()
+				_ = status.Close()
+				if err := waitLinuxV2AdmissionStatusRetry(ctx); err != nil {
+					return platform.LinuxOwnerHelperV2Status{}, fmt.Errorf("lease renewal readback remained unresolved: %w", err)
+				}
+				continue
+			}
+			owner.mu.Unlock()
+			_ = status.Close()
+			return platform.LinuxOwnerHelperV2Status{}, errors.New("fresh helper Status did not reconcile the exact in-flight lease sequence")
+		}
+		if leaseAck && status.LeaseSequence < leaseSequence {
+			owner.mu.Unlock()
+			_ = status.Close()
+			if err := waitLinuxV2AdmissionStatusRetry(ctx); err != nil {
+				return platform.LinuxOwnerHelperV2Status{}, fmt.Errorf("helper Status remained behind the last acknowledged lease sequence: %w", err)
+			}
+			continue
+		}
+		if status.LeaseSequence != leaseSequence {
+			owner.mu.Unlock()
+			_ = status.Close()
+			return platform.LinuxOwnerHelperV2Status{}, errors.New("helper Status lease sequence differs from the last acknowledged owner sequence")
+		}
+		owner.mu.Unlock()
+		return status, nil
+	}
+}
+
+func waitLinuxV2AdmissionStatusRetry(ctx context.Context) error {
+	timer := time.NewTimer(25 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (owner *linuxV2ProcessOwner) release(ctx context.Context, native linuxgate.NativeCommand) error {
 	owner.mu.Lock()
-	if !owner.handoffCommitTried || !owner.journalCommitted || !owner.helperCommitAck || !owner.leaseAck ||
-		owner.releaseAttempted || owner.helper == nil || owner.helper.Control == nil {
+	if owner.invocation == nil || owner.leaf == nil || !owner.releaseReadyLocked() {
 		owner.mu.Unlock()
 		return errors.New("Linux v2 RELEASE requires durable commit, helper commit ACK, initial lease ACK, and an unused gate")
 	}
@@ -775,24 +1017,79 @@ func (owner *linuxV2ProcessOwner) release(ctx context.Context, native linuxgate.
 		owner.mu.Unlock()
 		return fmt.Errorf("verify exact Linux v2 leaf before RELEASE: %w", err)
 	}
-	owner.releaseAttempted = true
+	releaseAckedOnEntry := owner.releaseSucceeded
 	helper := owner.helper.Control
+	checkNativeAdmission := owner.invocation.Callbacks.CheckNativeAdmission
 	var onCheckoutReady func(context.Context, authority.LinuxCloneCheckoutReceipt) error
 	if owner.cloneGrant != nil {
 		onCheckoutReady = owner.recordLinuxCloneCheckoutReady
 	}
 	owner.mu.Unlock()
-	// The daemon sends only the command and three Runner pipes. The helper
-	// supplies its own retained read-only owner pipe and the exact monotonic
-	// cutoff from the acknowledged lease to PreparedGate.Release; execution must
-	// never synthesize either guard value.
-	if err := helper.Release(ctx, native, onCheckoutReady); err != nil {
-		return fmt.Errorf("one-use Linux v2 RELEASE result is unresolved: %w", err)
+	if err := owner.releaseAfterAdmission(ctx, native, helper, onCheckoutReady, checkNativeAdmission); err != nil {
+		owner.mu.Lock()
+		releaseAttempted := owner.releaseAttempted
+		owner.mu.Unlock()
+		if releaseAttempted {
+			owner.captureWitnessDropStatus()
+			return fmt.Errorf("one-use Linux v2 RELEASE result is unresolved: %w", err)
+		}
+		return err
 	}
 	owner.mu.Lock()
 	owner.releaseSucceeded = true
 	owner.mu.Unlock()
+	if owner.invocation.Callbacks.DropAckAfter != nil {
+		if err := owner.invocation.Callbacks.DropAckAfter(LinuxV2AckStageNativeRelease, releaseAckedOnEntry); err != nil {
+			owner.captureWitnessDropStatus()
+			return fmt.Errorf("Linux v2 native RELEASE ACK response was lost after helper acceptance: %w", err)
+		}
+	}
 	return nil
+}
+
+func (owner *linuxV2ProcessOwner) releaseReadyLocked() bool {
+	return owner != nil && owner.handoffCommitTried && owner.journalCommitted && owner.helperCommitAck && owner.leaseAck &&
+		!owner.leaseRenewalInFlight && !owner.leaseRenewalUncertain && !owner.releaseAttempted &&
+		!owner.stopRequested && !owner.ownerReleased && owner.helper != nil && owner.helper.Control != nil
+}
+
+func (owner *linuxV2ProcessOwner) releaseAfterAdmission(
+	ctx context.Context,
+	native linuxgate.NativeCommand,
+	helper linuxV2NativeReleaser,
+	onCheckoutReady func(context.Context, authority.LinuxCloneCheckoutReceipt) error,
+	checkNativeAdmission func() error,
+) error {
+	if ctx == nil || helper == nil || checkNativeAdmission == nil {
+		return errors.New("Linux v2 native release is missing its context, helper, or App admission check")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	owner.mu.Lock()
+	if !owner.releaseReadyLocked() {
+		owner.mu.Unlock()
+		return errors.New("Linux v2 release authority is not ready before the App admission check")
+	}
+	owner.mu.Unlock()
+	if err := checkNativeAdmission(); err != nil {
+		return fmt.Errorf("recheck cross-RunKey native admission before Linux v2 RELEASE: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	owner.mu.Lock()
+	if !owner.releaseReadyLocked() {
+		owner.mu.Unlock()
+		return errors.New("Linux v2 release authority changed during the App admission check")
+	}
+	owner.releaseAttempted = true
+	owner.mu.Unlock()
+	// The daemon sends only the command and three Runner pipes. The helper
+	// supplies its own retained read-only owner pipe and the exact monotonic
+	// cutoff from the acknowledged lease to PreparedGate.Release; execution must
+	// never synthesize either guard value.
+	return helper.Release(ctx, native, onCheckoutReady)
 }
 
 func (owner *linuxV2ProcessOwner) recordLinuxCloneCheckoutReady(ctx context.Context, receipt authority.LinuxCloneCheckoutReceipt) error {
@@ -941,6 +1238,7 @@ func (owner *linuxV2ProcessOwner) stop(ctx context.Context) (*platform.LinuxOwne
 	}
 	evidence, firstErr := helper.Control.Stop(ctx)
 	if firstErr != nil {
+		owner.captureWitnessDropStatus()
 		var err error
 		evidence, err = helper.Control.Stop(ctx)
 		if err != nil {
@@ -973,39 +1271,32 @@ func (owner *linuxV2ProcessOwner) stopAsMirror(ctx context.Context, helper autho
 		owner.anchorID.Process.Validate() != nil || owner.reservation.Mirror == nil || owner.grant.Validate() != nil {
 		return platform.LinuxOwnerHelperV2StopEvidence{}, errors.New("Linux v2 mirror lacks the exact helper, gate, launcher, leaf, or anchor")
 	}
-	if err := waitLinuxV2PIDFD(ctx, owner.helper.PIDFD); err != nil {
-		return platform.LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("wait for exact helper pidfd death before mirror takeover: %w", err)
-	}
-	helperExit, err := owner.anchor.WaitHelper(ctx, owner.grant, helper)
-	if err != nil {
-		return platform.LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("anchor could not attest exact helper wait/reap before mirror takeover: %w", err)
-	}
-	if !owner.mirrorKillAttempted {
-		owner.mirrorKillAttempted = true
-		if err := owner.leaf.Kill(ctx); err != nil {
-			owner.mirrorKillError = err
-			return platform.LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("mirror cgroup.kill outcome is unknown and will not be replayed: %w", err)
-		}
-		owner.mirrorKillAcknowledged = true
-	} else if owner.mirrorKillError != nil {
-		return platform.LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("mirror cgroup.kill outcome remains unresolved: %w", owner.mirrorKillError)
-	} else if !owner.mirrorKillAcknowledged {
-		return platform.LinuxOwnerHelperV2StopEvidence{}, errors.New("mirror cgroup.kill has no positive acknowledgement")
-	}
-	if err := owner.leaf.WaitEmpty(ctx); err != nil {
-		return platform.LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("mirror could not prove exact recursive cgroup empty: %w", err)
-	}
+	owner.mu.Lock()
+	releaseAttempted := owner.releaseAttempted
+	owner.mu.Unlock()
 	reaped, err := owner.anchor.WaitReapRun(ctx, owner.grant, helper)
 	if err != nil {
 		return platform.LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("anchor could not prove run-wide exact wait/reap after helper death: %w", err)
 	}
+	anchorStop := reaped.Stop.Clone()
+	if err := anchorStop.ValidateFor(owner.grant, helper, owner.anchorID.Process, reaped.Processes, true); err != nil {
+		return platform.LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("anchor run-wide result lacks exact physical-stop evidence: %w", err)
+	}
+	if anchorStop.HelperExit == nil {
+		return platform.LinuxOwnerHelperV2StopEvidence{}, errors.New("anchor run-wide stop evidence lacks the exact helper wait/reap")
+	}
+	helperExit := *cloneLinuxV2Exit(anchorStop.HelperExit)
+	if err := owner.leaf.WaitEmpty(ctx); err != nil {
+		return platform.LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("mirror could not independently recheck the exact stopped cgroup leaf: %w", err)
+	}
 	var gateEvidence *platform.LinuxOwnerAnchorReapEvidence
-	for index := range reaped {
-		item := &reaped[index]
-		if !item.HelperExit.Equal(helperExit) || !item.HelperExit.ValidFor(helper, owner.anchorID.Process) {
-			return platform.LinuxOwnerHelperV2StopEvidence{}, errors.New("anchor run-wide evidence does not bind the exact helper death")
-		}
-		if item.ProcessRole == "gate" && item.Process.Equal(owner.gate.Process) {
+	for index := range reaped.Processes {
+		item := &reaped.Processes[index]
+		if item.ProcessRole == "gate" || item.ProcessRole == "native" {
+			if !linuxV2MirrorGateReapRoleAllowed(item.Process, owner.gate.Process, item.ProcessRole,
+				releaseAttempted, anchorStop.GateReleaseAuthorized) {
+				return platform.LinuxOwnerHelperV2StopEvidence{}, errors.New("anchor reaped a gate/native identity outside the exact same-PID release transition")
+			}
 			if gateEvidence != nil {
 				return platform.LinuxOwnerHelperV2StopEvidence{}, errors.New("anchor returned duplicate gate reaping evidence")
 			}
@@ -1031,36 +1322,56 @@ func (owner *linuxV2ProcessOwner) stopAsMirror(ctx context.Context, helper autho
 		}, owner.reservation); err != nil {
 			return platform.LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("durably record anchor's exact helper wait before mirror receipt: %w", err)
 		}
-		copy := helperExit
+		copy := *cloneLinuxV2Exit(&helperExit)
 		owner.reservation.HelperExit = &copy
 	} else if !owner.reservation.HelperExit.Equal(helperExit) {
 		return platform.LinuxOwnerHelperV2StopEvidence{}, errors.New("anchor helper wait differs from the exact durable helper exit")
 	}
-	digestInput, err := json.Marshal(reaped)
-	if err != nil {
-		return platform.LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("encode exact anchor run-wide reap evidence: %w", err)
-	}
-	digest := sha256.Sum256(digestInput)
 	launcherExit := *owner.reservation.LauncherExit
-	helperExitCopy := helperExit
+	helperExitCopy := *cloneLinuxV2Exit(&helperExit)
 	proof := authority.LinuxCgroupStopProof{
 		Version: authority.LinuxCgroupIdentityVersion, Kind: authority.LinuxCgroupStopProofMirror,
 		Issuer: *owner.reservation.Mirror, Reaper: owner.anchorID.Process,
-		PinnedLeafFD: true, CgroupKillAcknowledged: true, CgroupPopulatedZero: true,
-		NoMigrationObserved: true, ProducerFenced: true, DescendantsReaped: true,
+		PinnedLeafFD: anchorStop.PinnedLeafFD, CgroupKillAcknowledged: anchorStop.KillAcknowledged,
+		CgroupPopulatedZero: anchorStop.CgroupPopulatedZero, NoMigrationObserved: anchorStop.NoMigrationObserved,
+		ProducerFenced: anchorStop.ProducerFenced, DescendantsReaped: anchorStop.DescendantsReaped,
 		LauncherExit: launcherExit, GateExit: gateExit, HelperExit: &helperExitCopy,
 	}
 	evidence := platform.LinuxOwnerHelperV2StopEvidence{
 		Version: 1, RunKey: owner.grant.RunKey, Fence: owner.grant.Fence,
 		LaunchToken: owner.grant.LaunchToken, Parent: owner.grant.Parent, Leaf: owner.grant.Leaf,
 		Anchor: owner.grant.Anchor, Helper: helper, Launcher: *owner.reservation.Launcher,
-		Gate: *owner.gate, Proof: proof, DescendantCount: uint64(len(reaped)),
-		DescendantDigest: hex.EncodeToString(digest[:]),
+		AnchorStop: &anchorStop, RunReapEvidence: reaped.Processes,
+		Gate: *owner.gate, Proof: proof, DescendantCount: anchorStop.ReapCount,
+		DescendantDigest: anchorStop.ReapDigest,
 	}
-	if err := evidence.ValidateFor(owner.grant, helper, *owner.reservation.Launcher, *owner.gate); err != nil {
+	if err := evidence.ValidateMirrorFor(owner.grant, helper, *owner.reservation.Mirror, *owner.reservation.Launcher,
+		launcherExit, *owner.gate); err != nil {
 		return platform.LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("validate exact cgroup-v2 mirror physical-stop evidence: %w", err)
 	}
 	return evidence, nil
+}
+
+func linuxV2MirrorGateReapRoleAllowed(
+	process authority.LinuxCgroupProcessIdentity,
+	expected authority.LinuxCgroupProcessIdentity,
+	role string,
+	releaseAttempted bool,
+	gateReleaseAuthorized bool,
+) bool {
+	if !process.Equal(expected) {
+		return false
+	}
+	switch role {
+	case "gate":
+		// A failed RELEASE attempt may still leave the original A gate to reap.
+		return true
+	case "native":
+		// The same PID is native only after both caller attempt and anchor auth.
+		return releaseAttempted && gateReleaseAuthorized
+	default:
+		return false
+	}
 }
 
 func linuxV2PIDFDExited(pidfd *os.File) (bool, error) {
@@ -1068,11 +1379,17 @@ func linuxV2PIDFDExited(pidfd *os.File) (bool, error) {
 		return false, errors.New("exact helper pidfd is unavailable")
 	}
 	poll := []unix.PollFd{{Fd: int32(pidfd.Fd()), Events: unix.POLLIN}}
-	n, err := unix.Poll(poll, 0)
-	if err != nil && !errors.Is(err, unix.EINTR) {
-		return false, err
+	for {
+		poll[0].Revents = 0
+		n, err := unix.Poll(poll, 0)
+		if errors.Is(err, unix.EINTR) {
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		return n > 0 && poll[0].Revents&(unix.POLLIN|unix.POLLHUP|unix.POLLERR) != 0, nil
 	}
-	return n > 0 && poll[0].Revents&(unix.POLLIN|unix.POLLHUP|unix.POLLERR) != 0, nil
 }
 
 func waitLinuxV2PIDFD(ctx context.Context, pidfd *os.File) error {
@@ -1179,8 +1496,19 @@ func (owner *linuxV2ProcessOwner) finalize() error {
 		handoff.StopReceipt = receipt
 	}
 	if !mirrorStop && !receiptAcked {
-		if err := retryLinuxV2(func() error { return helper.Control.AcknowledgeStopReceipt(ctx, *receipt) }); err != nil {
-			return fmt.Errorf("acknowledge durable Linux v2 stop receipt before release: %w", err)
+		var firstAckError error
+		ackErr := retryLinuxV2(func() error {
+			err := helper.Control.AcknowledgeStopReceipt(ctx, *receipt)
+			if err != nil && firstAckError == nil {
+				firstAckError = err
+			}
+			return err
+		})
+		if firstAckError != nil {
+			owner.captureWitnessDropStatus()
+		}
+		if ackErr != nil {
+			return fmt.Errorf("acknowledge durable Linux v2 stop receipt before release: %w", ackErr)
 		}
 		owner.mu.Lock()
 		owner.stopReceiptAcked = true
@@ -1814,8 +2142,19 @@ func (owner *linuxV2ProcessOwner) finalizePreGate(ctx context.Context) error {
 		owner.mu.Unlock()
 	}
 	if !preGateAcked {
-		if err := retryLinuxV2(func() error { return owner.helper.Control.AcknowledgePreGateStopReceipt(ctx, receipt) }); err != nil {
-			return fmt.Errorf("acknowledge durable Linux v2 pre-gate stop receipt: %w", err)
+		var firstAckError error
+		ackErr := retryLinuxV2(func() error {
+			err := owner.helper.Control.AcknowledgePreGateStopReceipt(ctx, receipt)
+			if err != nil && firstAckError == nil {
+				firstAckError = err
+			}
+			return err
+		})
+		if firstAckError != nil {
+			owner.captureWitnessDropStatus()
+		}
+		if ackErr != nil {
+			return fmt.Errorf("acknowledge durable Linux v2 pre-gate stop receipt: %w", ackErr)
 		}
 		owner.mu.Lock()
 		owner.preGateReceiptAcked = true
@@ -2001,6 +2340,219 @@ func (owner *linuxV2ProcessOwner) duplicatePeer() (*LinuxV2Peer, error) {
 	}, nil
 }
 
+func (owner *linuxV2ProcessOwner) witnessDropStatus(ctx context.Context) (LinuxV2WitnessDropStatus, error) {
+	if ctx == nil {
+		return LinuxV2WitnessDropStatus{}, errors.New("Linux v2 helper witness status context is nil")
+	}
+	owner.mu.Lock()
+	if owner.observedWitnessDrop != nil {
+		cached := *owner.observedWitnessDrop
+		owner.mu.Unlock()
+		return cached, nil
+	}
+	helper := owner.helper
+	grant := owner.grant
+	var expectedHelper *authority.LinuxCgroupProcessIdentity
+	if owner.reservation.Helper != nil {
+		copy := *owner.reservation.Helper
+		expectedHelper = &copy
+	}
+	owner.mu.Unlock()
+	if helper == nil || helper.Control == nil || grant.Validate() != nil || expectedHelper == nil ||
+		!expectedHelper.Equal(authority.LinuxCgroupProcessIdentity{PID: helper.PID, Identity: helper.Identity}) {
+		return LinuxV2WitnessDropStatus{}, errors.ErrUnsupported
+	}
+	status, err := helper.Control.Status(ctx)
+	if err != nil {
+		return LinuxV2WitnessDropStatus{}, fmt.Errorf("read exact helper ACK-loss witness status: %w", err)
+	}
+	defer status.Close()
+	if status.RunKey.RunID != grant.RunKey.RunID || status.RunKey.Generation != grant.RunKey.Generation ||
+		status.Fence != grant.Fence || !status.Helper.Equal(*expectedHelper) {
+		return LinuxV2WitnessDropStatus{}, errors.New("Linux owner helper witness status changed its exact RunKey, fence, or helper")
+	}
+	validOperation := status.WitnessDropOperation == "stop" || status.WitnessDropOperation == "ack-stop-receipt" ||
+		status.WitnessDropOperation == "launcher-ready"
+	if status.WitnessDropObserved && !validOperation || !status.WitnessDropObserved && status.WitnessDropOperation != "" {
+		return LinuxV2WitnessDropStatus{}, errors.New("Linux owner helper returned an invalid ACK-loss witness operation")
+	}
+	result := LinuxV2WitnessDropStatus{
+		RunKey: state.RunKey{RunID: status.RunKey.RunID, Generation: status.RunKey.Generation},
+		Fence:  status.Fence, Helper: status.Helper,
+		Observed: status.WitnessDropObserved, Operation: status.WitnessDropOperation,
+	}
+	if result.Observed {
+		owner.mu.Lock()
+		if owner.observedWitnessDrop == nil {
+			copy := result
+			owner.observedWitnessDrop = &copy
+		} else if owner.observedWitnessDrop.RunKey != result.RunKey || owner.observedWitnessDrop.Fence != result.Fence ||
+			!owner.observedWitnessDrop.Helper.Equal(result.Helper) ||
+			owner.observedWitnessDrop.Operation != result.Operation {
+			owner.mu.Unlock()
+			return LinuxV2WitnessDropStatus{}, errors.New("Linux helper witness status changed its exact run operation")
+		}
+		owner.mu.Unlock()
+	}
+	return result, nil
+}
+
+func (owner *linuxV2ProcessOwner) liveOwnerStatus(ctx context.Context) (LinuxV2LiveOwnerStatus, error) {
+	if owner == nil || ctx == nil {
+		return LinuxV2LiveOwnerStatus{}, errors.New("Linux v2 live-owner status context is incomplete")
+	}
+	statusContext, cancel := context.WithTimeout(ctx, linuxV2AdmissionStatusTimeout)
+	defer cancel()
+
+	if err := lockLinuxV2OwnerStatusContext(statusContext, owner); err != nil {
+		return LinuxV2LiveOwnerStatus{}, fmt.Errorf("lock exact Linux v2 owner status: %w", err)
+	}
+	helper := owner.helper
+	if helper == nil || helper.Control == nil || helper.PIDFD == nil || owner.grant.Validate() != nil ||
+		owner.reservation.Helper == nil {
+		owner.mu.Unlock()
+		return LinuxV2LiveOwnerStatus{}, errors.ErrUnsupported
+	}
+	helperIdentity := authority.LinuxCgroupProcessIdentity{PID: helper.PID, Identity: helper.Identity}
+	if helperIdentity.Validate() != nil || !owner.reservation.Helper.Equal(helperIdentity) {
+		owner.mu.Unlock()
+		return LinuxV2LiveOwnerStatus{}, errors.New("Linux v2 live-owner helper differs from the exact reservation")
+	}
+	helperFD, err := unix.FcntlInt(helper.PIDFD.Fd(), unix.F_DUPFD_CLOEXEC, 0)
+	if err != nil {
+		owner.mu.Unlock()
+		return LinuxV2LiveOwnerStatus{}, fmt.Errorf("duplicate exact Linux owner helper pidfd: %w", err)
+	}
+	helperPIDFD := os.NewFile(uintptr(helperFD), "linux-v2-helper-live-owner-pidfd")
+	if helperPIDFD == nil {
+		_ = unix.Close(helperFD)
+		owner.mu.Unlock()
+		return LinuxV2LiveOwnerStatus{}, errors.New("wrap duplicated Linux owner helper pidfd")
+	}
+	helperControl := helper.Control
+	grant := owner.grant
+	expectedGate := cloneLinuxV2Gate(owner.gate)
+	reservationGate := cloneLinuxV2Gate(owner.reservation.Gate)
+	expectedUserNamespace := owner.verifiedUserNamespace
+	rootUserNamespaceVerified := owner.rootUserNamespaceVerified
+	owner.mu.Unlock()
+	defer helperPIDFD.Close()
+	var status platform.LinuxOwnerHelperV2Status
+	statusOpen := false
+	defer func() {
+		if statusOpen {
+			_ = status.Close()
+		}
+	}()
+	for {
+		var err error
+		status, err = owner.readLiveOwnerHelperStatus(statusContext, helperControl, helperPIDFD, grant, helperIdentity)
+		if err != nil {
+			return LinuxV2LiveOwnerStatus{}, err
+		}
+		statusOpen = true
+		if expectedGate == nil || reservationGate == nil || status.Gate == nil || status.Gate.Validate() != nil ||
+			!status.Gate.Equal(*expectedGate) || !status.Gate.Equal(*reservationGate) || !rootUserNamespaceVerified ||
+			status.UserNamespace == nil || *status.UserNamespace != expectedUserNamespace {
+			return LinuxV2LiveOwnerStatus{}, errors.New("Linux owner helper Status differs from the exact gate or authenticated user namespace")
+		}
+
+		if err := lockLinuxV2OwnerStatusContext(statusContext, owner); err != nil {
+			return LinuxV2LiveOwnerStatus{}, fmt.Errorf("recheck exact Linux v2 owner status: %w", err)
+		}
+		currentHelper := owner.helper
+		if currentHelper == nil || currentHelper.Control != helperControl || currentHelper.PID != helperIdentity.PID ||
+			currentHelper.Identity != helperIdentity.Identity {
+			owner.mu.Unlock()
+			return LinuxV2LiveOwnerStatus{}, errors.New("Linux owner helper changed while reading live-owner Status")
+		}
+		if owner.leaseRenewalInFlight || owner.leaseRenewalUncertain ||
+			owner.leaseAck && status.LeaseSequence < owner.leaseSequence {
+			done := owner.leaseRenewalDone
+			inFlight := owner.leaseRenewalInFlight
+			owner.mu.Unlock()
+			_ = status.Close()
+			statusOpen = false
+			if inFlight {
+				if done == nil {
+					return LinuxV2LiveOwnerStatus{}, errors.New("in-flight lease renewal has no completion signal")
+				}
+				select {
+				case <-done:
+				case <-statusContext.Done():
+					return LinuxV2LiveOwnerStatus{}, statusContext.Err()
+				}
+			} else if err := waitLinuxV2AdmissionStatusRetry(statusContext); err != nil {
+				return LinuxV2LiveOwnerStatus{}, fmt.Errorf("lease Status did not settle at the last acknowledged sequence: %w", err)
+			}
+			continue
+		}
+		leaseAck := owner.leaseAck
+		leaseSequence := owner.leaseSequence
+		if status.LeaseSequence != leaseSequence {
+			owner.mu.Unlock()
+			return LinuxV2LiveOwnerStatus{}, errors.New("helper Status lease sequence differs from the last acknowledged owner sequence")
+		}
+		stopRequested := owner.stopRequested
+		localReleaseAttempted := owner.releaseAttempted
+		localReleaseSucceeded := owner.releaseSucceeded
+		ownerReleased := owner.ownerReleased
+		owner.mu.Unlock()
+
+		targetExited := true
+		if status.PIDFD != nil {
+			targetExited, err = linuxV2PIDFDExited(status.PIDFD)
+			if err != nil {
+				return LinuxV2LiveOwnerStatus{}, fmt.Errorf("probe exact Linux owner target pidfd: %w", err)
+			}
+		}
+		helperExitedAfterStatus, err := linuxV2PIDFDExited(helperPIDFD)
+		if err != nil {
+			return LinuxV2LiveOwnerStatus{}, fmt.Errorf("recheck exact Linux owner helper pidfd after Status: %w", err)
+		}
+		releaseUncertain := status.ReleaseInFlight || status.ReleaseAttempted && !status.Released ||
+			localReleaseAttempted && !status.ReleaseAttempted || localReleaseSucceeded && !status.Released
+		terminal := status.State == "stopped" || status.State == "recovery_only" || status.Exit != nil ||
+			status.StopEvidence != nil || status.ErrorCode != "" || ownerReleased
+		return LinuxV2LiveOwnerStatus{
+			RunKey: state.RunKey{RunID: status.RunKey.RunID, Generation: status.RunKey.Generation},
+			Fence:  status.Fence, Helper: status.Helper, Target: status.Gate.Process,
+			HelperPIDFDLive: !helperExitedAfterStatus, TargetPIDFDLive: status.PIDFD != nil && !targetExited,
+			LeaseSequence: leaseSequence,
+			LeaseLive:     leaseAck && leaseSequence > 0 && status.LeaseLive && status.LeaseSequence == leaseSequence,
+			OwnerLost:     status.OwnerLost || status.State == "recovery_only", CommitAcknowledged: status.CommitAcknowledged,
+			StopRequested:    stopRequested || status.StopRequested,
+			StopAttempted:    status.StopAttempted,
+			ReleaseAttempted: status.ReleaseAttempted,
+			ReleaseSucceeded: status.Released,
+			ReleaseInFlight:  status.ReleaseInFlight, ReleaseUncertain: releaseUncertain, Terminal: terminal,
+		}, nil
+	}
+}
+
+func lockLinuxV2OwnerStatusContext(ctx context.Context, owner *linuxV2ProcessOwner) error {
+	if ctx == nil || owner == nil {
+		return errors.New("Linux v2 owner status lock is incomplete")
+	}
+	for !owner.mu.TryLock() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := ctx.Err(); err != nil {
+		owner.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+func (owner *linuxV2ProcessOwner) captureWitnessDropStatus() {
+	ctx, cancel := context.WithTimeout(context.Background(), linuxV2WitnessStatusTimeout)
+	defer cancel()
+	_, _ = owner.witnessDropStatus(ctx)
+}
+
 func (owner *linuxV2ProcessOwner) closeAfterClear() error {
 	owner.mu.Lock()
 	if !owner.ownerReleased || !owner.clearDone {
@@ -2035,8 +2587,8 @@ func runLinuxV2JournalMutation[T interface{ Clone() T }](callback func(T) error,
 
 func runLinuxV2MutationRetry(callback func() error) error {
 	first := callback()
-	if first == nil {
-		return nil
+	if first == nil || errors.Is(first, ErrLinuxV2MutationAckLost) {
+		return first
 	}
 	second := callback()
 	if second == nil {
@@ -2154,8 +2706,23 @@ func cloneLinuxV2StopEvidence(value *platform.LinuxOwnerHelperV2StopEvidence) pl
 	copy.Proof.LauncherExit = *cloneLinuxV2Exit(&value.Proof.LauncherExit)
 	copy.Proof.GateExit = *cloneLinuxV2Exit(&value.Proof.GateExit)
 	copy.Proof.HelperExit = cloneLinuxV2Exit(value.Proof.HelperExit)
+	if value.AnchorStop != nil {
+		anchorStop := value.AnchorStop.Clone()
+		copy.AnchorStop = &anchorStop
+	}
+	if value.RunReapEvidence != nil {
+		copy.RunReapEvidence = append([]platform.LinuxOwnerAnchorReapEvidence(nil), value.RunReapEvidence...)
+		for index := range copy.RunReapEvidence {
+			copy.RunReapEvidence[index].HelperExit = *cloneLinuxV2Exit(&value.RunReapEvidence[index].HelperExit)
+			copy.RunReapEvidence[index].ProcessExit = *cloneLinuxV2Exit(&value.RunReapEvidence[index].ProcessExit)
+		}
+	}
 	if value.PreGate != nil {
 		preGate := *value.PreGate
+		if value.PreGate.AnchorStop != nil {
+			anchorStop := value.PreGate.AnchorStop.Clone()
+			preGate.AnchorStop = &anchorStop
+		}
 		preGate.Launcher = cloneLinuxV2Process(&value.PreGate.Launcher)
 		preGate.LauncherExit = cloneLinuxV2Exit(value.PreGate.LauncherExit)
 		preGate.Proof = cloneLinuxV2PreGateProof(value.PreGate.Proof)

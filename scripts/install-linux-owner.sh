@@ -16,6 +16,9 @@ Usage (root): install-linux-owner.sh A_USER B_USER SETUID_WRAPPER STATIC_LAUNCHE
 All nine artifacts must be direct files in the private root-owned staging directory
 /root/symmetry-linux-owner-stage (mode 0700), on the root filesystem. Build only
 from a reviewed root-owned, non-writable source checkout using a trusted pipeline.
+The installed v2 owner config pins the canonical absolute StateDir read from the
+existing /etc/symmetry/daemon.json; v1 owner configs remain readable for existing
+launch/recovery but cannot authorize root clone cleanup without this field.
 Never stage artifacts from /tmp, a workspace, or an A/B-writable tree. Example
 native amd64 commands from that trusted checkout:
   install -d -o root -g root -m 0700 /root/symmetry-linux-owner-stage
@@ -392,27 +395,51 @@ check_unsupported_systemd_overrides_absent() {
   done
 }
 
-run_legacy_drain() {
-  [ -f /etc/symmetry/daemon.json ] && [ ! -L /etc/symmetry/daemon.json ] || fail 'the existing /etc/symmetry/daemon.json is required for the one-time legacy drain'
-  TMP_DRAIN_DIR=$(/usr/bin/mktemp -d /usr/libexec/.symmetry-linux-owner-drain.XXXXXX) || fail 'create unique temporary legacy-drain directory'
+prepare_drain_daemon() {
+  [ -x /usr/bin/setpriv ] || fail 'setpriv is required to run trusted daemon config probes as A'
+  if [ -n "$TMP_DRAIN_DAEMON" ]; then return; fi
+  TMP_DRAIN_DIR=$(/usr/bin/mktemp -d /usr/libexec/.symmetry-linux-owner-drain.XXXXXX) || fail 'create unique temporary daemon-probe directory'
   TMP_DRAIN_DAEMON=$TMP_DRAIN_DIR/symmetry-daemon
   CREATED_DRAIN_DIR=1
   /usr/bin/chown root:root "$TMP_DRAIN_DIR"
   /usr/bin/chmod 0711 "$TMP_DRAIN_DIR"
   check_root_directory "$TMP_DRAIN_DIR"
   /usr/bin/install -o root -g root -m 0755 "$DAEMON" "$TMP_DRAIN_DAEMON"
-  verify_artifact_copy "$DAEMON" "$TMP_DRAIN_DAEMON" "$DAEMON_HASH" 'daemon drain image' 0 755
-  [ -x /usr/bin/setpriv ] || fail 'setpriv is required to run the one-time drain as A with empty groups'
+  verify_artifact_copy "$DAEMON" "$TMP_DRAIN_DAEMON" "$DAEMON_HASH" 'daemon probe image' 0 755
+}
+
+release_drain_daemon() {
+  if [ -z "$TMP_DRAIN_DIR" ]; then return; fi
+  /usr/bin/rm -f "$TMP_DRAIN_DAEMON"
+  /usr/bin/rmdir "$TMP_DRAIN_DIR" || fail 'remove temporary daemon-probe directory'
+  CREATED_DRAIN_DIR=0
+  TMP_DRAIN_DAEMON=
+  TMP_DRAIN_DIR=
+}
+
+read_configured_state_dir() {
+  prepare_drain_daemon
+  STATE_DIR=$(/usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C HOME=/nonexistent \
+    /usr/bin/setpriv --reuid="$A_UID" --regid="$A_GID" --clear-groups \
+      --inh-caps=-all --ambient-caps=-all --bounding-set=-all --no-new-privs -- \
+      "$TMP_DRAIN_DAEMON" -print-state-dir -config /etc/symmetry/daemon.json) || \
+      fail 'the staged daemon could not read its configured StateDir as A'
+  case "$STATE_DIR" in /*) ;; *) fail 'the staged daemon returned a non-absolute StateDir' ;; esac
+  [ -n "$STATE_DIR" ] && [ "$STATE_DIR" != / ] && [ "${#STATE_DIR}" -le 4095 ] || fail 'the staged daemon returned an invalid StateDir'
+  case "$STATE_DIR" in
+    *//*|*/./*|*/../*|*/.|*/..|*/) fail 'the staged daemon returned a noncanonical StateDir' ;;
+  esac
+}
+
+run_legacy_drain() {
+  [ -f /etc/symmetry/daemon.json ] && [ ! -L /etc/symmetry/daemon.json ] || fail 'the existing /etc/symmetry/daemon.json is required for the one-time legacy drain'
+  prepare_drain_daemon
   /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C HOME=/nonexistent \
     /usr/bin/setpriv --reuid="$A_UID" --regid="$A_GID" --clear-groups \
       --inh-caps=-all --ambient-caps=-all --bounding-set=-all --no-new-privs -- \
       "$TMP_DRAIN_DAEMON" -verify-legacy-owner-drained -config /etc/symmetry/daemon.json || \
       fail 'the new pinned daemon refused the one-time read-only legacy drain proof'
-  /usr/bin/rm -f "$TMP_DRAIN_DAEMON"
-  /usr/bin/rmdir "$TMP_DRAIN_DIR" || fail 'remove temporary legacy-drain directory'
-  CREATED_DRAIN_DIR=0
-  TMP_DRAIN_DAEMON=
-  TMP_DRAIN_DIR=
+  release_drain_daemon
 }
 
 [ "$(/usr/bin/id -u)" -eq 0 ] || fail 'must run as root'
@@ -440,6 +467,7 @@ LEGACY_DRAIN_THIS_RUN=0
 CREATED_DRAIN_DIR=0
 TMP_DRAIN_DIR=
 TMP_DRAIN_DAEMON=
+STATE_DIR=
 TMP_WRAPPER=
 TMP_CORE=
 TMP_GATE=
@@ -571,17 +599,19 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 
+read_configured_state_dir
 TMP_CONFIG=$(/usr/bin/mktemp "$ETC/.linux-owner-config.XXXXXX") || fail 'create temporary fixed owner config'
 TMP_OWNER_UNIT=$(/usr/bin/mktemp "$SYSTEMD_DIR/.symmetry-owner-unit.XXXXXX") || fail 'create temporary owner unit'
 TMP_DAEMON_UNIT=$(/usr/bin/mktemp "$SYSTEMD_DIR/.symmetry-daemon-unit.XXXXXX") || fail 'create temporary daemon unit'
 TMP_INTENT=$(/usr/bin/mktemp "$ETC/.linux-owner-intent.XXXXXX") || fail 'create temporary install-intent manifest'
 
 {
-  printf 'version=1\n'
+  printf 'version=2\n'
   printf 'a_uid=%s\n' "$A_UID"
   printf 'a_gid=%s\n' "$A_GID"
   printf 'b_uid=%s\n' "$B_UID"
   printf 'b_gid=%s\n' "$B_GID"
+  printf 'state_dir=%s\n' "$STATE_DIR"
 } > "$TMP_CONFIG"
 /usr/bin/chown root:root "$TMP_CONFIG"
 /usr/bin/chmod 0644 "$TMP_CONFIG"
@@ -599,7 +629,7 @@ CURRENT_CONFIG_HASH=$(sha256_file /etc/symmetry/daemon.json)
 	[ "$(sha256_file "$DAEMON_TEMPLATE")" = "$DAEMON_TEMPLATE_HASH" ] || fail 'unit template changed while preparing the owner install'
 
 {
-  printf 'format=linux-owner-install-intent-v1\n'
+  printf 'format=linux-owner-install-intent-v2\n'
   printf 'install_root=%s\n' "$DEST"
   printf 'config_root=%s\n' "$ETC"
   printf 'systemd_root=%s\n' "$SYSTEMD_DIR"
@@ -610,6 +640,7 @@ CURRENT_CONFIG_HASH=$(sha256_file /etc/symmetry/daemon.json)
   printf 'b_user=%s\n' "$B_USER"
   printf 'b_uid=%s\n' "$B_UID"
   printf 'b_gid=%s\n' "$B_GID"
+  printf 'state_dir=%s\n' "$STATE_DIR"
   printf 'daemon_config_metadata=%s\n' "$DAEMON_CONFIG_METADATA"
   printf 'daemon_config_sha256=%s\n' "$DAEMON_CONFIG_HASH"
   printf 'wrapper_sha256=%s\n' "$WRAPPER_HASH"
@@ -698,6 +729,7 @@ verify_published_file "$SYSTEMD_DIR/symmetry-daemon.service" "$DAEMON_UNIT_HASH"
 # Unit files are inert until an operator explicitly enables/starts them. A
 # manager reload makes the published templates visible without activation.
 /usr/bin/systemctl --system daemon-reload || fail 'systemd daemon-reload failed after publishing fixed units'
+release_drain_daemon
 trap - EXIT HUP INT TERM
 printf 'Verified fixed Linux owner assets for A=%s(%s:%s) B=%s(%s:%s).\n' \
   "$A_USER" "$A_UID" "$A_GID" "$B_USER" "$B_UID" "$B_GID"

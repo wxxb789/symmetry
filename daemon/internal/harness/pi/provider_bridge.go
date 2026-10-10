@@ -14,11 +14,13 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"runtime"
 	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
@@ -120,6 +122,11 @@ type ProviderBridgeEndpoint struct {
 // shutdown error until that callback exits.
 type ProviderBridge struct {
 	mu sync.Mutex
+	// peerMu pins an owned v2 pidfd through verification. Close takes the
+	// exclusive lock before releasing it, so the verifier never borrows a
+	// descriptor concurrently with Close.
+	peerMu     sync.RWMutex
+	peerClosed bool
 
 	runID               string
 	grants              map[string]map[string]struct{}
@@ -134,6 +141,7 @@ type ProviderBridge struct {
 	requirePeerIdentity bool
 	peerPID             int
 	peerIdentity        string
+	linuxV2Peer         *execution.LinuxV2Peer
 	// onReplayWait is a package-local synchronization seam used only by the
 	// deterministic single-flight tests; production construction leaves it nil.
 	onReplayWait func()
@@ -195,20 +203,30 @@ func NewProviderBridge(options ProviderBridgeOptions) (*ProviderBridge, error) {
 	}, nil
 }
 
-// BindProcess authorizes the one native Pi process allowed to call a bridge
-// configured with RequirePeerIdentity. Exact replay is idempotent; replacing
-// the process identity is forbidden for the bridge lifetime.
+// BindProcess retains the legacy v1 process identity binding for Windows.
+// Linux native bridges must use BindLinuxV2Process with the launch-retained
+// peer capability; this method fails unsupported there.
 func (bridge *ProviderBridge) BindProcess(pid int, identity string) error {
 	if bridge == nil || pid <= 0 || validateBridgeString(identity, 4096, false) != nil {
 		return errors.New("provider bridge process identity is invalid")
 	}
+	if runtime.GOOS == "linux" {
+		return fmt.Errorf("%w: Linux provider bridge binding requires the launch-retained v2 TCP peer capability", errors.ErrUnsupported)
+	}
 	bridge.mu.Lock()
-	defer bridge.mu.Unlock()
 	if bridge.closed {
+		bridge.mu.Unlock()
 		return errProviderBridgeClosed
 	}
 	if !bridge.requirePeerIdentity {
+		bridge.mu.Unlock()
 		return errors.New("provider bridge peer identity is not required")
+	}
+	bridge.mu.Unlock()
+	bridge.peerMu.Lock()
+	defer bridge.peerMu.Unlock()
+	if bridge.peerClosed {
+		return errProviderBridgeClosed
 	}
 	if bridge.peerPID != 0 || bridge.peerIdentity != "" {
 		if bridge.peerPID == pid && bridge.peerIdentity == identity {
@@ -219,6 +237,51 @@ func (bridge *ProviderBridge) BindProcess(pid int, identity string) error {
 	bridge.peerPID = pid
 	bridge.peerIdentity = identity
 	return nil
+}
+
+// BindLinuxV2Process transfers ownership of the caller's cloned launch-retained
+// pidfd to the bridge. The bridge closes it when the bridge closes.
+func (bridge *ProviderBridge) BindLinuxV2Process(peer *execution.LinuxV2Peer) error {
+	if bridge == nil || peer == nil || peer.PID <= 0 || validateBridgeString(peer.Identity, 4096, false) != nil || peer.PIDFD == nil || peer.UserNamespace.Device == 0 || peer.UserNamespace.Inode == 0 {
+		return errors.New("provider bridge v2 process capability is invalid")
+	}
+	bridge.mu.Lock()
+	if bridge.closed {
+		bridge.mu.Unlock()
+		return errProviderBridgeClosed
+	}
+	if !bridge.requirePeerIdentity {
+		bridge.mu.Unlock()
+		return errors.New("provider bridge peer identity is not required")
+	}
+	bridge.mu.Unlock()
+	bridge.peerMu.Lock()
+	defer bridge.peerMu.Unlock()
+	if bridge.peerClosed {
+		return errProviderBridgeClosed
+	}
+	if bridge.peerPID != 0 || bridge.peerIdentity != "" || bridge.linuxV2Peer != nil {
+		if bridge.linuxV2Peer == peer {
+			return nil
+		}
+		return errProviderBridgePeerAlreadyBound
+	}
+	bridge.peerPID = peer.PID
+	bridge.peerIdentity = peer.Identity
+	bridge.linuxV2Peer = peer
+	return nil
+}
+
+func (bridge *ProviderBridge) closePeer() error {
+	bridge.peerMu.Lock()
+	defer bridge.peerMu.Unlock()
+	bridge.peerClosed = true
+	peer := bridge.linuxV2Peer
+	bridge.linuxV2Peer = nil
+	if peer == nil {
+		return nil
+	}
+	return peer.Close()
 }
 
 func normalizedProviderBridgeExecutionTimeout(timeout time.Duration) time.Duration {
@@ -359,19 +422,22 @@ func (bridge *ProviderBridge) Close(ctx context.Context) error {
 		server := bridge.server
 		serveDone := bridge.serveDone
 		cancelLifetime := bridge.cancelLifetime
+		bridge.mu.Unlock()
+		peerErr := bridge.closePeer()
 		if server == nil {
 			cancelLifetime()
-			bridge.closeErr = nil
-			bridge.closeFinalErr = nil
+			bridge.mu.Lock()
+			bridge.closeErr = peerErr
+			bridge.closeFinalErr = peerErr
 			bridge.closeExecutionUnproven = false
 			close(bridge.closeDone)
 			bridge.mu.Unlock()
-			return nil
+			return peerErr
 		}
-		bridge.mu.Unlock()
 
 		cancelLifetime()
 		shutdownErr, executionUnproven := bridge.shutdownServer(ctx, server, serveDone)
+		shutdownErr = errors.Join(shutdownErr, peerErr)
 		firstCloseErr := shutdownErr
 		if executionUnproven {
 			firstCloseErr = errors.Join(firstCloseErr, errProviderBridgeExecutionUnproven)
@@ -568,14 +634,17 @@ func (bridge *ProviderBridge) serveHTTP(response http.ResponseWriter, request *h
 type providerBridgeConnectionContextKey struct{}
 
 func (bridge *ProviderBridge) verifyRequestPeer(ctx context.Context) error {
-	bridge.mu.Lock()
 	required := bridge.requirePeerIdentity
-	pid := bridge.peerPID
-	identity := bridge.peerIdentity
-	bridge.mu.Unlock()
 	if !required {
 		return nil
 	}
+	bridge.peerMu.RLock()
+	defer bridge.peerMu.RUnlock()
+	if bridge.peerClosed {
+		return errProviderBridgeClosed
+	}
+	pid := bridge.peerPID
+	identity := bridge.peerIdentity
 	if pid <= 0 || identity == "" {
 		return errProviderBridgePeerNotBound
 	}
@@ -585,6 +654,13 @@ func (bridge *ProviderBridge) verifyRequestPeer(ctx context.Context) error {
 	}
 	verificationContext, cancel := context.WithTimeout(ctx, providerBridgePeerVerificationTimeout)
 	defer cancel()
+	if runtime.GOOS == "linux" {
+		peer := bridge.linuxV2Peer
+		if peer == nil {
+			return fmt.Errorf("%w: Linux provider bridge peer has no launch-retained v2 TCP capability", errors.ErrUnsupported)
+		}
+		return platform.VerifyLoopbackTCPPeerV2(verificationContext, connection, peer.PID, peer.Identity, peer.PIDFD, peer.UserNamespace)
+	}
 	return platform.VerifyLoopbackTCPPeer(verificationContext, connection, pid, identity)
 }
 

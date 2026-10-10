@@ -43,6 +43,11 @@ var (
 	errLinuxCloneUnsupportedObjects = errors.New("Linux clone object store layout is unsupported")
 )
 
+// ErrLinuxClonePromotionRefMissing means the exact promotion intent is
+// durable but its deterministic A-owned ref is not present. App may retry live
+// promotion only with the still-valid checkout receipt and issued release.
+var ErrLinuxClonePromotionRefMissing = errors.New("Linux clone promotion ref is missing")
+
 // ErrLinuxCloneProcessUnresolved means an A-side Git process group could not
 // be proven stopped. Callers must retain the RunJournal and must not advance
 // clone abort, promotion, or cleanup.
@@ -139,8 +144,23 @@ func (manager *Manager) PrepareLinuxCloneSeed(ctx context.Context, intent author
 		return authority.LinuxCloneSeedReceipt{}, fmt.Errorf("open A-owned Linux clone seed parent: %w", err)
 	}
 	defer unix.Close(parentFD)
+	temporaryName, err := linuxCloneSeedTempName(intent.Nonce)
+	if err != nil {
+		return authority.LinuxCloneSeedReceipt{}, err
+	}
+	temporaryExists, err := inspectLinuxCloneSeedTemporaries(ctx, parentFD, temporaryName)
+	if err != nil {
+		return authority.LinuxCloneSeedReceipt{}, err
+	}
 
 	if receipt, err := readLinuxCloneSeed(ctx, repository, parentFD, name, intent, baseRef, nil); err == nil {
+		if temporaryExists {
+			temporaryReceipt, tempErr := readLinuxCloneSeed(ctx, repository, parentFD, temporaryName, intent, baseRef, nil)
+			if tempErr != nil {
+				return authority.LinuxCloneSeedReceipt{}, fmt.Errorf("%w: verify exact seed temp beside published bundle: %v", ErrLinuxCloneProcessUnresolved, tempErr)
+			}
+			return publishLinuxCloneSeedTemp(ctx, repository, parentFD, temporaryName, name, intent, baseRef, temporaryReceipt)
+		}
 		if err := freezeLinuxCloneSeed(parentFD, name, receipt); err != nil {
 			return authority.LinuxCloneSeedReceipt{}, fmt.Errorf("freeze existing Linux clone seed: %w", err)
 		}
@@ -151,36 +171,40 @@ func (manager *Manager) PrepareLinuxCloneSeed(ctx context.Context, intent author
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return authority.LinuxCloneSeedReceipt{}, fmt.Errorf("verify existing Linux clone seed: %w", err)
 	}
+	if temporaryExists {
+		temporaryReceipt, err := readLinuxCloneSeed(ctx, repository, parentFD, temporaryName, intent, baseRef, nil)
+		if err != nil {
+			return authority.LinuxCloneSeedReceipt{}, fmt.Errorf("%w: recover exact seed temp: %v", ErrLinuxCloneProcessUnresolved, err)
+		}
+		return publishLinuxCloneSeedTemp(ctx, repository, parentFD, temporaryName, name, intent, baseRef, temporaryReceipt)
+	}
 
-	temporary, temporaryName, err := createLinuxCloneSeedTemp(parentFD)
+	temporary, err := createLinuxCloneSeedTemp(parentFD, temporaryName)
+	if errors.Is(err, unix.EEXIST) {
+		temporaryReceipt, readErr := readLinuxCloneSeed(ctx, repository, parentFD, temporaryName, intent, baseRef, nil)
+		if readErr != nil {
+			return authority.LinuxCloneSeedReceipt{}, fmt.Errorf("%w: inspect concurrently created exact seed temp: %v", ErrLinuxCloneProcessUnresolved, readErr)
+		}
+		return publishLinuxCloneSeedTemp(ctx, repository, parentFD, temporaryName, name, intent, baseRef, temporaryReceipt)
+	}
 	if err != nil {
 		return authority.LinuxCloneSeedReceipt{}, fmt.Errorf("create Linux clone seed temporary: %w", err)
 	}
 	temporaryOpen := true
-	removeTemporary := true
 	defer func() {
 		if temporaryOpen {
 			_ = temporary.Close()
-		}
-		if removeTemporary {
-			_ = unix.Unlinkat(parentFD, temporaryName, 0)
 		}
 	}()
 	temporaryPath := filepath.Join(filepath.Dir(intent.SeedPath), temporaryName)
 	digest, size, err := writeLinuxCloneBundle(ctx, repository, baseRef, temporary)
 	if err != nil {
-		if errors.Is(err, ErrLinuxCloneProcessUnresolved) {
-			removeTemporary = false
-		}
 		return authority.LinuxCloneSeedReceipt{}, err
 	}
 	if err := temporary.Sync(); err != nil {
 		return authority.LinuxCloneSeedReceipt{}, fmt.Errorf("sync Linux clone seed bytes: %w", err)
 	}
 	if err := verifyLinuxCloneBundle(ctx, repository, temporaryPath, intent, baseRef); err != nil {
-		if errors.Is(err, ErrLinuxCloneProcessUnresolved) {
-			removeTemporary = false
-		}
 		return authority.LinuxCloneSeedReceipt{}, fmt.Errorf("verify generated Linux clone bundle: %w", err)
 	}
 	if size <= 0 || size > maxLinuxCloneBundleBytes {
@@ -189,41 +213,86 @@ func (manager *Manager) PrepareLinuxCloneSeed(ctx context.Context, intent author
 	if digest == "" {
 		return authority.LinuxCloneSeedReceipt{}, errors.New("Linux clone bundle digest is unavailable")
 	}
-
-	if err := unix.Linkat(parentFD, temporaryName, parentFD, name, 0); err != nil {
-		if !errors.Is(err, unix.EEXIST) {
-			return authority.LinuxCloneSeedReceipt{}, fmt.Errorf("publish immutable Linux clone seed: %w", err)
-		}
-		if err := temporary.Close(); err != nil {
-			return authority.LinuxCloneSeedReceipt{}, fmt.Errorf("close unpublished Linux clone seed temporary: %w", err)
-		}
-		temporaryOpen = false
-		if receipt, verifyErr := readLinuxCloneSeed(ctx, repository, parentFD, name, intent, baseRef, nil); verifyErr == nil {
-			if err := freezeLinuxCloneSeed(parentFD, name, receipt); err != nil {
-				return authority.LinuxCloneSeedReceipt{}, fmt.Errorf("freeze concurrent Linux clone seed: %w", err)
-			}
-			if err := unix.Fsync(parentFD); err != nil {
-				return authority.LinuxCloneSeedReceipt{}, fmt.Errorf("sync replayed Linux clone seed parent: %w", err)
-			}
-			return readLinuxCloneSeed(ctx, repository, parentFD, name, intent, baseRef, expectedLinuxCloneSeedDigest(&receipt))
-		} else {
-			return authority.LinuxCloneSeedReceipt{}, fmt.Errorf("verify concurrent Linux clone seed publication: %w", verifyErr)
-		}
+	temporaryReceipt, err := readLinuxCloneSeed(ctx, repository, parentFD, temporaryName, intent, baseRef, nil)
+	if err != nil {
+		return authority.LinuxCloneSeedReceipt{}, fmt.Errorf("verify exact Linux clone seed temporary: %w", err)
 	}
-	if err := unix.Fchmod(int(temporary.Fd()), 0o440); err != nil {
-		return authority.LinuxCloneSeedReceipt{}, fmt.Errorf("make published Linux clone seed immutable: %w", err)
-	}
-	if err := temporary.Sync(); err != nil {
-		return authority.LinuxCloneSeedReceipt{}, fmt.Errorf("sync immutable Linux clone seed: %w", err)
+	if temporaryReceipt.Digest != digest || temporaryReceipt.Size != size {
+		return authority.LinuxCloneSeedReceipt{}, errors.New("streamed Linux clone bundle differs from its exact temp readback")
 	}
 	if err := temporary.Close(); err != nil {
 		return authority.LinuxCloneSeedReceipt{}, fmt.Errorf("close Linux clone seed temporary: %w", err)
 	}
 	temporaryOpen = false
-	if err := unix.Fsync(parentFD); err != nil {
-		return authority.LinuxCloneSeedReceipt{}, fmt.Errorf("sync Linux clone seed publication: %w", err)
+	return publishLinuxCloneSeedTemp(ctx, repository, parentFD, temporaryName, name, intent, baseRef, temporaryReceipt)
+}
+
+func inspectLinuxCloneSeedTemporaries(ctx context.Context, parentFD int, expectedName string) (bool, error) {
+	names, err := readLinuxCloneDirNames(ctx, parentFD)
+	if err != nil {
+		return false, err
 	}
-	return readLinuxCloneSeed(ctx, repository, parentFD, name, intent, baseRef, &linuxCloneExpectedDigest{digest: digest, size: size})
+	temporaryExists := false
+	for _, name := range names {
+		if strings.HasPrefix(name, ".clone-seed-") {
+			if name != expectedName {
+				return false, fmt.Errorf("%w: unrecognized A seed temp %q", ErrLinuxCloneProcessUnresolved, name)
+			}
+			temporaryExists = true
+		}
+		if strings.HasPrefix(name, ".symmetry-clone-") {
+			return false, fmt.Errorf("%w: A clone scratch %q remains", ErrLinuxCloneProcessUnresolved, name)
+		}
+	}
+	return temporaryExists, nil
+}
+
+func publishLinuxCloneSeedTemp(ctx context.Context, repository string, parentFD int, temporaryName, finalName string, intent authority.LinuxCloneIntent, baseRef string, receipt authority.LinuxCloneSeedReceipt) (authority.LinuxCloneSeedReceipt, error) {
+	if err := ctx.Err(); err != nil {
+		return authority.LinuxCloneSeedReceipt{}, err
+	}
+	if err := receipt.Validate(); err != nil || receipt.BaseCommit != intent.BaseCommit {
+		return authority.LinuxCloneSeedReceipt{}, errors.New("verified Linux clone temp receipt differs from its intent")
+	}
+	var temporaryInfo unix.Stat_t
+	if err := unix.Fstatat(parentFD, temporaryName, &temporaryInfo, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return authority.LinuxCloneSeedReceipt{}, fmt.Errorf("read exact Linux clone temp before publish: %w", err)
+	}
+	if temporaryInfo.Mode&unix.S_IFMT != unix.S_IFREG || uint32(temporaryInfo.Uid) != uint32(os.Geteuid()) ||
+		uint64(temporaryInfo.Dev) != receipt.Device || uint64(temporaryInfo.Ino) != receipt.Inode ||
+		temporaryInfo.Nlink != 1 || temporaryInfo.Size != receipt.Size || temporaryInfo.Mode&0o077 != 0 {
+		return authority.LinuxCloneSeedReceipt{}, errors.New("exact Linux clone temp inode or private mode changed before publish")
+	}
+	if err := unix.Renameat2(parentFD, temporaryName, parentFD, finalName, unix.RENAME_NOREPLACE); err != nil {
+		if !errors.Is(err, unix.EEXIST) {
+			return authority.LinuxCloneSeedReceipt{}, fmt.Errorf("publish A-owned Linux clone seed without replacement: %w", err)
+		}
+		finalReceipt, readErr := readLinuxCloneSeed(ctx, repository, parentFD, finalName, intent, baseRef, nil)
+		if readErr != nil {
+			return authority.LinuxCloneSeedReceipt{}, fmt.Errorf("verify concurrent Linux clone seed: %w", readErr)
+		}
+		if err := freezeLinuxCloneSeed(parentFD, finalName, finalReceipt); err != nil {
+			return authority.LinuxCloneSeedReceipt{}, err
+		}
+		if err := unix.Fsync(parentFD); err != nil {
+			return authority.LinuxCloneSeedReceipt{}, err
+		}
+		finalReceipt, err := readLinuxCloneSeed(ctx, repository, parentFD, finalName, intent, baseRef, expectedLinuxCloneSeedDigest(&finalReceipt))
+		if err != nil {
+			return authority.LinuxCloneSeedReceipt{}, err
+		}
+		if err := removeLinuxCloneSeedTempChecked(parentFD, temporaryName, &receipt); err != nil {
+			return authority.LinuxCloneSeedReceipt{}, fmt.Errorf("remove duplicate exact Linux clone temp: %w", err)
+		}
+		return finalReceipt, nil
+	}
+	if err := freezeLinuxCloneSeed(parentFD, finalName, receipt); err != nil {
+		return authority.LinuxCloneSeedReceipt{}, err
+	}
+	if err := unix.Fsync(parentFD); err != nil {
+		return authority.LinuxCloneSeedReceipt{}, fmt.Errorf("sync atomic Linux clone seed rename: %w", err)
+	}
+	return readLinuxCloneSeed(ctx, repository, parentFD, finalName, intent, baseRef, expectedLinuxCloneSeedDigest(&receipt))
 }
 
 // PrepareLinuxClone creates only A-owned Prepared metadata. In particular it
@@ -295,7 +364,7 @@ func (manager *Manager) ValidateLinuxCloneCheckout(grant authority.LinuxCloneGra
 // release proves stopped-and-removed containment. The App must first bind that
 // release to this RunKey/fence with Store readback; the release itself carries
 // no RunKey. Candidate bytes are read only through the checkout-receipt inode.
-func (manager *Manager) PromoteLinuxClone(ctx context.Context, grant authority.LinuxCloneGrant, checkout authority.LinuxCloneCheckoutReceipt, proposedCommit string, release platform.LinuxCgroupV2Release) (result authority.LinuxClonePromotionReceipt, resultErr error) {
+func (manager *Manager) PromoteLinuxClone(ctx context.Context, grant authority.LinuxCloneGrant, checkout authority.LinuxCloneCheckoutReceipt, candidate authority.LinuxClonePromotionIntent, release platform.LinuxCgroupV2Release) (result authority.LinuxClonePromotionReceipt, resultErr error) {
 	if manager == nil {
 		return authority.LinuxClonePromotionReceipt{}, errors.New("workspace manager is nil")
 	}
@@ -311,11 +380,11 @@ func (manager *Manager) PromoteLinuxClone(ctx context.Context, grant authority.L
 	if err := validateLinuxCloneCheckoutReceipt(grant, checkout); err != nil {
 		return authority.LinuxClonePromotionReceipt{}, err
 	}
-	if err := validateLinuxCloneRelease(release); err != nil {
+	if err := validateLinuxClonePromotionIntent(grant.Intent, candidate); err != nil {
 		return authority.LinuxClonePromotionReceipt{}, err
 	}
-	if !validLinuxCloneObjectID(proposedCommit) || len(proposedCommit) != len(grant.Intent.BaseCommit) {
-		return authority.LinuxClonePromotionReceipt{}, errors.New("proposed Linux clone commit is invalid")
+	if err := validateLinuxCloneRelease(release); err != nil {
+		return authority.LinuxClonePromotionReceipt{}, err
 	}
 	binding, repository, err := manager.linuxCloneBinding(grant.Intent)
 	if err != nil {
@@ -329,113 +398,521 @@ func (manager *Manager) PromoteLinuxClone(ctx context.Context, grant authority.L
 		return authority.LinuxClonePromotionReceipt{}, fmt.Errorf("open stopped Linux clone target: %w", err)
 	}
 	defer target.close()
+	scratchParentFD, _, err := openLinuxCloneSeedParent(binding.SeedRoot, grant.Intent.SeedPath, false)
+	if err != nil {
+		return authority.LinuxClonePromotionReceipt{}, fmt.Errorf("open A-owned Linux clone scratch parent: %w", err)
+	}
+	defer unix.Close(scratchParentFD)
 
-	quarantine, err := createLinuxCloneQuarantine(ctx, target, filepath.Dir(grant.Intent.SeedPath), len(grant.Intent.BaseCommit))
+	quarantine, err := createLinuxCloneQuarantine(ctx, target, filepath.Dir(grant.Intent.SeedPath), grant.Intent, len(grant.Intent.BaseCommit))
 	if err != nil {
 		return authority.LinuxClonePromotionReceipt{}, fmt.Errorf("copy stopped Linux clone objects to A-only quarantine: %w", err)
 	}
-	removeQuarantine := true
+	keepScratch := false
 	defer func() {
-		if !removeQuarantine {
+		if keepScratch {
 			return
 		}
-		if err := os.RemoveAll(quarantine); err != nil {
+		if err := removeLinuxClonePromotionScratch(context.WithoutCancel(ctx), scratchParentFD, grant.Intent); err != nil {
 			result = authority.LinuxClonePromotionReceipt{}
-			resultErr = errors.Join(resultErr, fmt.Errorf("remove A-only Linux clone quarantine: %w", err))
+			resultErr = errors.Join(resultErr, fmt.Errorf("remove exact A-only Linux clone promotion scratch: %w", err))
 		}
 	}()
 	if err := verifyLinuxCloneTargetStillBound(target); err != nil {
 		return authority.LinuxClonePromotionReceipt{}, err
 	}
-	if err := verifyLinuxCloneCandidate(ctx, quarantine, grant.Intent.BaseCommit, proposedCommit); err != nil {
+	if err := verifyLinuxCloneCandidate(ctx, quarantine, grant.Intent.BaseCommit, candidate.Commit); err != nil {
 		if errors.Is(err, ErrLinuxCloneProcessUnresolved) {
-			removeQuarantine = false
+			keepScratch = true
 		}
 		return authority.LinuxClonePromotionReceipt{}, fmt.Errorf("validate proposed Linux clone commit: %w", err)
 	}
-	treeDigest, err := linuxCloneTreeDigest(ctx, quarantine, proposedCommit)
+	treeDigest, err := linuxCloneTreeDigest(ctx, quarantine, candidate.Commit)
 	if err != nil {
 		if errors.Is(err, ErrLinuxCloneProcessUnresolved) {
-			removeQuarantine = false
+			keepScratch = true
 		}
 		return authority.LinuxClonePromotionReceipt{}, fmt.Errorf("digest proposed Linux clone tree: %w", err)
+	}
+	if treeDigest != candidate.TreeDigest {
+		return authority.LinuxClonePromotionReceipt{}, errors.New("proposed Linux clone tree differs from its durable promotion intent")
 	}
 	if err := verifyLinuxCloneTargetStillBound(target); err != nil {
 		return authority.LinuxClonePromotionReceipt{}, err
 	}
-	if err := importLinuxCloneCandidate(ctx, repository, quarantine, proposedCommit); err != nil {
+	if err := importLinuxCloneCandidate(ctx, repository, quarantine, candidate.Commit); err != nil {
 		if errors.Is(err, ErrLinuxCloneProcessUnresolved) {
-			removeQuarantine = false
+			keepScratch = true
 		}
 		return authority.LinuxClonePromotionReceipt{}, fmt.Errorf("import validated Linux clone objects into A source: %w", err)
 	}
-	receipt, err := promoteLinuxCloneRef(ctx, repository, grant.Intent, proposedCommit, treeDigest)
+	receipt, err := promoteLinuxCloneRef(ctx, repository, grant.Intent, candidate.Commit, treeDigest)
 	if err != nil {
 		if errors.Is(err, ErrLinuxCloneProcessUnresolved) {
-			removeQuarantine = false
+			keepScratch = true
 		}
 		return authority.LinuxClonePromotionReceipt{}, err
+	}
+	if receipt.Commit != candidate.Commit || receipt.TreeDigest != candidate.TreeDigest {
+		return authority.LinuxClonePromotionReceipt{}, errors.New("A promotion ref readback differs from its durable candidate intent")
 	}
 	return receipt, nil
 }
 
-// CleanupLinuxClone removes only a promoted B-owned clone whose exact State
-// readback proves terminal cleanup eligibility. The caller separately checks
-// retained Goal-session ownership before passing that readback.
-func (manager *Manager) CleanupLinuxClone(ctx context.Context, grant authority.LinuxCloneGrant, checkout authority.LinuxCloneCheckoutReceipt, journal state.RunJournal) error {
+// ReadExistingLinuxClonePromotion reconciles only a ref that an exact
+// Store-reserved candidate intent could have created. It never adopts an
+// arbitrary A ref and never reads B's Target; the App supplies fresh journal
+// readback and either the live issued release or its durable clear tombstone.
+// It leaves run-bound A scratch untouched; the later fenced normal cleanup
+// retires only exact nonce-derived scratch names.
+func (manager *Manager) ReadExistingLinuxClonePromotion(ctx context.Context, intent authority.LinuxCloneIntent, candidate authority.LinuxClonePromotionIntent, journal state.RunJournal, release platform.LinuxCgroupV2Release) (authority.LinuxClonePromotionReceipt, error) {
 	if manager == nil {
-		return errors.New("workspace manager is nil")
+		return authority.LinuxClonePromotionReceipt{}, errors.New("workspace manager is nil")
 	}
 	if ctx == nil {
-		return errors.New("Linux clone cleanup context is nil")
+		return authority.LinuxClonePromotionReceipt{}, errors.New("Linux clone promotion readback context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return authority.LinuxClonePromotionReceipt{}, err
+	}
+	if err := intent.Validate(); err != nil {
+		return authority.LinuxClonePromotionReceipt{}, err
+	}
+	if err := validateLinuxClonePromotionIntent(intent, candidate); err != nil {
+		return authority.LinuxClonePromotionReceipt{}, err
+	}
+	if err := validateLinuxClonePromotionReadbackJournal(intent, candidate, journal, release); err != nil {
+		return authority.LinuxClonePromotionReceipt{}, err
+	}
+	binding, repository, err := manager.linuxCloneBinding(intent)
+	if err != nil {
+		return authority.LinuxClonePromotionReceipt{}, err
+	}
+	grant := authority.LinuxCloneGrant{Intent: intent.Clone(), Seed: journal.LinuxCloneSeedReceipt.Clone()}
+	if err := verifyLinuxCloneGrant(ctx, repository, binding, grant); err != nil {
+		return authority.LinuxClonePromotionReceipt{}, err
+	}
+	ref, err := authority.LinuxClonePromotionRef(intent.RunID, intent.Generation)
+	if err != nil {
+		return authority.LinuxClonePromotionReceipt{}, err
+	}
+	if err := requireLinuxCloneRefLockAbsent(ctx, repository, ref); err != nil {
+		return authority.LinuxClonePromotionReceipt{}, fmt.Errorf("A promotion ref lock is unresolved: %w", err)
+	}
+	objectID, err := linuxCloneRefValue(ctx, repository, ref)
+	if errors.Is(err, errLinuxCloneRefMissing) {
+		if journal.LinuxClonePromotionReceipt != nil {
+			return authority.LinuxClonePromotionReceipt{}, errors.New("Store has a promotion receipt but the A promotion ref is absent")
+		}
+		return authority.LinuxClonePromotionReceipt{}, ErrLinuxClonePromotionRefMissing
+	}
+	if err != nil {
+		return authority.LinuxClonePromotionReceipt{}, fmt.Errorf("read deterministic A promotion ref: %w", err)
+	}
+	if objectID != candidate.Commit {
+		return authority.LinuxClonePromotionReceipt{}, errors.New("deterministic A promotion ref differs from the reserved candidate commit")
+	}
+	if err := verifyLinuxCloneRef(ctx, repository, ref, candidate.Commit); err != nil {
+		return authority.LinuxClonePromotionReceipt{}, err
+	}
+	if err := verifyLinuxCloneCandidate(ctx, repository, intent.BaseCommit, candidate.Commit); err != nil {
+		return authority.LinuxClonePromotionReceipt{}, fmt.Errorf("verify existing A promotion graph and ancestry: %w", err)
+	}
+	treeDigest, err := linuxCloneTreeDigest(ctx, repository, candidate.Commit)
+	if err != nil {
+		return authority.LinuxClonePromotionReceipt{}, err
+	}
+	if treeDigest != candidate.TreeDigest {
+		return authority.LinuxClonePromotionReceipt{}, errors.New("existing A promotion ref tree digest differs from the reserved candidate")
+	}
+	if err := requireLinuxCloneRefLockAbsent(ctx, repository, ref); err != nil {
+		return authority.LinuxClonePromotionReceipt{}, fmt.Errorf("A promotion ref lock appeared during readback: %w", err)
+	}
+	finalObjectID, err := linuxCloneRefValue(ctx, repository, ref)
+	if err != nil || finalObjectID != candidate.Commit {
+		return authority.LinuxClonePromotionReceipt{}, fmt.Errorf("A promotion ref changed during exact graph/tree readback: %w", linuxCloneErrorOr(err, errors.New("promotion ref object changed")))
+	}
+	receipt := authority.LinuxClonePromotionReceipt{
+		Version: authority.LinuxCloneVersion, Commit: candidate.Commit, TreeDigest: treeDigest, Ref: ref,
+	}
+	if err := receipt.Validate(); err != nil {
+		return authority.LinuxClonePromotionReceipt{}, err
+	}
+	if journal.LinuxClonePromotionReceipt != nil && !journal.LinuxClonePromotionReceipt.Equal(receipt) {
+		return authority.LinuxClonePromotionReceipt{}, errors.New("existing A promotion ref differs from the Store receipt")
+	}
+	return receipt, nil
+}
+
+func validateLinuxClonePromotionIntent(intent authority.LinuxCloneIntent, candidate authority.LinuxClonePromotionIntent) error {
+	if err := candidate.Validate(); err != nil {
+		return err
+	}
+	if candidate.ResourceID != intent.ResourceID || len(candidate.Commit) != len(intent.BaseCommit) {
+		return errors.New("Linux clone promotion intent differs from the admitted resource or object format")
+	}
+	return nil
+}
+
+func validateLinuxClonePromotionReadbackJournal(intent authority.LinuxCloneIntent, candidate authority.LinuxClonePromotionIntent, journal state.RunJournal, release platform.LinuxCgroupV2Release) error {
+	key := state.RunKey{RunID: intent.RunID, Generation: intent.Generation}
+	fence := journal.Fence()
+	if journal.Key() != key || fence.Generation != key.Generation || fence.RuntimeID == "" || fence.RuntimeEpoch <= 0 || fence.ClaimID == "" || fence.LeaseToken == "" {
+		return errors.New("Linux clone promotion readback has a stale RunKey or fence")
+	}
+	if journal.LinuxCloneIntent == nil || !journal.LinuxCloneIntent.Equal(intent) ||
+		journal.WorkspacePath != intent.Target || journal.WorkspaceBindingKey != intent.BindingKey ||
+		journal.LinuxCloneSeedReceipt == nil || journal.LinuxCloneCheckoutReceipt == nil ||
+		journal.LinuxClonePromotionIntent == nil || !journal.LinuxClonePromotionIntent.Equal(candidate) ||
+		journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil || journal.ContainmentCgroupPreGateReleaseProof != nil {
+		return errors.New("RunJournal does not contain the exact Linux clone promotion intent and checkout")
+	}
+	grant := authority.LinuxCloneGrant{Intent: intent, Seed: *journal.LinuxCloneSeedReceipt}
+	if err := grant.Validate(); err != nil {
+		return err
+	}
+	if err := validateLinuxCloneCheckoutReceipt(grant, *journal.LinuxCloneCheckoutReceipt); err != nil {
+		return err
+	}
+	releaseProof, issued := release.Snapshot()
+	if issued {
+		if err := validateLinuxCloneRelease(release); err != nil {
+			return err
+		}
+		if journal.ContainmentAuthority != nil {
+			if journal.ContainmentAuthority.Version != authority.SupervisorVersionV2 ||
+				journal.ContainmentAuthority.StopReceipt == nil || !journal.ContainmentAuthority.StopReceipt.ValidFor(*journal.ContainmentAuthority) ||
+				!releaseProof.ValidForSupervisor(*journal.ContainmentAuthority) {
+				return errors.New("issued release does not match the journal-bound v2 stop receipt")
+			}
+		} else if journal.ContainmentCgroupReleaseProof == nil || !journal.ContainmentCgroupReleaseProof.Equal(releaseProof) {
+			return errors.New("issued release has no matching Store authority or clear tombstone")
+		}
+		if journal.ContainmentCgroupReleaseProof != nil && !journal.ContainmentCgroupReleaseProof.Equal(releaseProof) {
+			return errors.New("issued release differs from the durable release tombstone")
+		}
+		return nil
+	}
+	durable := journal.ContainmentCgroupReleaseProof
+	if durable == nil || durable.Validate() != nil || durable.Version != authority.SupervisorHandoffVersionV2 ||
+		durable.StopReceipt == nil || journal.HasProcessDetails() || journal.HasPendingContainment() || journal.ContainmentUnproven {
+		return errors.New("promotion-ref replay requires an issued release or exact durable v2 release tombstone")
+	}
+	return nil
+}
+
+// RemoveLinuxCloneTarget performs only the ROOT-owned B effect. A first effect
+// requires the original checkout inode to be present and pinned; ENOENT without
+// an exact Store-persisted removal proof is unresolved, never success. A prior
+// proof permits only a read-only absence replay.
+func (manager *Manager) RemoveLinuxCloneTarget(ctx context.Context, grant authority.LinuxCloneGrant, checkout authority.LinuxCloneCheckoutReceipt, journal state.RunJournal, deleter LinuxCloneTargetDeleter) (result authority.LinuxCloneTargetRemovalProof, resultErr error) {
+	if manager == nil {
+		return authority.LinuxCloneTargetRemovalProof{}, errors.New("workspace manager is nil")
+	}
+	if ctx == nil {
+		return authority.LinuxCloneTargetRemovalProof{}, errors.New("Linux clone target-removal context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return authority.LinuxCloneTargetRemovalProof{}, err
+	}
+	if err := grant.Validate(); err != nil {
+		return authority.LinuxCloneTargetRemovalProof{}, err
+	}
+	if err := validateLinuxCloneCheckoutReceipt(grant, checkout); err != nil {
+		return authority.LinuxCloneTargetRemovalProof{}, err
+	}
+	cleanupIntent, _, storedProof, err := validateLinuxCloneCleanupJournal(grant, checkout, journal)
+	if err != nil {
+		return authority.LinuxCloneTargetRemovalProof{}, err
+	}
+	binding, _, err := manager.linuxCloneBinding(grant.Intent)
+	if err != nil {
+		return authority.LinuxCloneTargetRemovalProof{}, err
+	}
+	if binding.Root != cleanupIntent.RootPath {
+		return authority.LinuxCloneTargetRemovalProof{}, errors.New("cleanup intent B root differs from the configured clone root")
+	}
+	target, err := openLinuxCloneCleanupTarget(ctx, binding.Root, grant.Intent.Target, checkout)
+	if err != nil {
+		return authority.LinuxCloneTargetRemovalProof{}, fmt.Errorf("pin exact B clone cleanup target: %w", err)
+	}
+	defer func() {
+		if closeErr := target.close(); closeErr != nil {
+			result = authority.LinuxCloneTargetRemovalProof{}
+			resultErr = errors.Join(resultErr, fmt.Errorf("close pinned B clone cleanup descriptors: %w", closeErr))
+		}
+	}()
+	if storedProof != nil {
+		if err := validateLinuxCloneTargetRemovalProof(*storedProof, cleanupIntent, target); err != nil {
+			return authority.LinuxCloneTargetRemovalProof{}, err
+		}
+		if target.targetFD >= 0 {
+			return authority.LinuxCloneTargetRemovalProof{}, errors.New("B target reappeared after its durable removal proof")
+		}
+		if err := target.verifyAbsent(ctx); err != nil {
+			return authority.LinuxCloneTargetRemovalProof{}, fmt.Errorf("reverify B target absence from exact stored proof: %w", err)
+		}
+		return storedProof.Clone(), nil
+	}
+	if deleter == nil {
+		return authority.LinuxCloneTargetRemovalProof{}, errors.New("Linux clone target removal requires the authenticated ROOT deleter")
+	}
+	if target.targetFD < 0 {
+		return authority.LinuxCloneTargetRemovalProof{}, errors.New("B target is absent without an exact stored inode-removal proof")
+	}
+	if err := target.verifyRootPinned(ctx); err != nil {
+		return authority.LinuxCloneTargetRemovalProof{}, err
+	}
+	targetProof, err := deleter(ctx, target.rootFD, target.targetFD, grant.Clone(), cleanupIntent.Clone(), nil)
+	if err != nil {
+		return authority.LinuxCloneTargetRemovalProof{}, fmt.Errorf("trusted root B clone deletion is unresolved: %w", err)
+	}
+	if err := validateLinuxCloneTargetRemovalProof(targetProof, cleanupIntent, target); err != nil {
+		return authority.LinuxCloneTargetRemovalProof{}, fmt.Errorf("trusted root returned an invalid B removal proof: %w", err)
+	}
+	var pinnedTarget unix.Stat_t
+	if err := unix.Fstat(target.targetFD, &pinnedTarget); err != nil {
+		return authority.LinuxCloneTargetRemovalProof{}, fmt.Errorf("recheck original pinned B inode after root removal: %w", err)
+	}
+	if uint64(pinnedTarget.Dev) != checkout.TargetDevice || uint64(pinnedTarget.Ino) != checkout.TargetInode ||
+		pinnedTarget.Mode&unix.S_IFMT != unix.S_IFDIR || pinnedTarget.Nlink != 0 {
+		return authority.LinuxCloneTargetRemovalProof{}, errors.New("root effect did not remove the original pinned B checkout inode")
+	}
+	if err := target.verifyAbsent(ctx); err != nil {
+		return authority.LinuxCloneTargetRemovalProof{}, fmt.Errorf("independently verify B target absence after root cleanup: %w", err)
+	}
+	if err := target.closeTarget(); err != nil {
+		return authority.LinuxCloneTargetRemovalProof{}, fmt.Errorf("close removed B target O_PATH pin: %w", err)
+	}
+	return targetProof.Clone(), nil
+}
+
+// CleanupLinuxClone retires A-owned material only after the exact ROOT proof
+// has been persisted in the pending RunJournal. A completed-proof replay is
+// read-only and never repeats the B effect.
+func (manager *Manager) CleanupLinuxClone(ctx context.Context, grant authority.LinuxCloneGrant, checkout authority.LinuxCloneCheckoutReceipt, journal state.RunJournal) (result authority.LinuxCloneCleanupProof, resultErr error) {
+	if manager == nil {
+		return authority.LinuxCloneCleanupProof{}, errors.New("workspace manager is nil")
+	}
+	if ctx == nil {
+		return authority.LinuxCloneCleanupProof{}, errors.New("Linux clone cleanup context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return authority.LinuxCloneCleanupProof{}, err
+	}
+	if err := grant.Validate(); err != nil {
+		return authority.LinuxCloneCleanupProof{}, err
+	}
+	if err := validateLinuxCloneCheckoutReceipt(grant, checkout); err != nil {
+		return authority.LinuxCloneCleanupProof{}, err
+	}
+	cleanupIntent, completed, storedProof, err := validateLinuxCloneCleanupJournal(grant, checkout, journal)
+	if err != nil {
+		return authority.LinuxCloneCleanupProof{}, err
+	}
+	if storedProof == nil {
+		return authority.LinuxCloneCleanupProof{}, errors.New("A cleanup requires the exact Store-persisted ROOT target-removal proof")
+	}
+	binding, repository, err := manager.linuxCloneBinding(grant.Intent)
+	if err != nil {
+		return authority.LinuxCloneCleanupProof{}, err
+	}
+	if binding.Root != cleanupIntent.RootPath {
+		return authority.LinuxCloneCleanupProof{}, errors.New("cleanup intent B root differs from the configured clone root")
+	}
+	if err := verifyLinuxCloneSource(ctx, repository); err != nil {
+		return authority.LinuxCloneCleanupProof{}, fmt.Errorf("validate A-owned Git source for cleanup: %w", err)
+	}
+	if err := verifyLinuxCloneBase(ctx, repository, grant.Intent); err != nil {
+		return authority.LinuxCloneCleanupProof{}, fmt.Errorf("verify A-owned Linux clone base for cleanup: %w", err)
+	}
+	if err := verifyLinuxClonePromotion(ctx, repository, grant.Intent, cleanupIntent.PromotionReceipt); err != nil {
+		return authority.LinuxCloneCleanupProof{}, fmt.Errorf("verify retained A promotion ref before cleanup: %w", err)
+	}
+	target, err := openLinuxCloneCleanupTarget(ctx, binding.Root, grant.Intent.Target, checkout)
+	if err != nil {
+		return authority.LinuxCloneCleanupProof{}, fmt.Errorf("pin exact B clone cleanup target: %w", err)
+	}
+	defer func() {
+		if closeErr := target.close(); closeErr != nil {
+			result = authority.LinuxCloneCleanupProof{}
+			resultErr = errors.Join(resultErr, fmt.Errorf("close pinned B clone cleanup descriptors: %w", closeErr))
+		}
+	}()
+	if uint64(target.rootInfo.Dev) != storedProof.RootDevice || uint64(target.rootInfo.Ino) != storedProof.RootInode {
+		return authority.LinuxCloneCleanupProof{}, errors.New("stored ROOT removal proof belongs to a different pinned B root")
+	}
+	if target.targetFD >= 0 {
+		return authority.LinuxCloneCleanupProof{}, errors.New("B target reappeared after the exact stored ROOT removal proof")
+	}
+	if err := target.verifyAbsent(ctx); err != nil {
+		return authority.LinuxCloneCleanupProof{}, fmt.Errorf("verify absent B target from exact stored ROOT proof: %w", err)
+	}
+	parentFD, seedName, err := openLinuxCloneSeedParent(binding.SeedRoot, grant.Intent.SeedPath, false)
+	if err != nil {
+		return authority.LinuxCloneCleanupProof{}, fmt.Errorf("open exact A seed/scratch parent for cleanup: %w", err)
+	}
+	defer func() {
+		if closeErr := unix.Close(parentFD); closeErr != nil {
+			result = authority.LinuxCloneCleanupProof{}
+			resultErr = errors.Join(resultErr, fmt.Errorf("close A seed/scratch parent: %w", closeErr))
+		}
+	}()
+	scratch, err := inspectLinuxCloneScratchEntries(ctx, parentFD, grant.Intent)
+	if err != nil {
+		return authority.LinuxCloneCleanupProof{}, fmt.Errorf("inspect exact A clone scratch before cleanup: %w", err)
+	}
+	seedPresent, err := verifyLinuxCloneCleanupSeedFile(ctx, repository, parentFD, seedName, cleanupIntent)
+	if err != nil {
+		return authority.LinuxCloneCleanupProof{}, fmt.Errorf("verify exact A seed before cleanup: %w", err)
+	}
+	if err := verifyLinuxCloneCleanupBaseRef(ctx, repository, cleanupIntent); err != nil {
+		return authority.LinuxCloneCleanupProof{}, err
+	}
+	if completed {
+		if seedPresent {
+			return authority.LinuxCloneCleanupProof{}, errors.New("completed cleanup proof does not match a present A seed")
+		}
+		if err := requireLinuxCloneRefLockAbsent(ctx, repository, cleanupIntent.BaseRef); err != nil {
+			return authority.LinuxCloneCleanupProof{}, err
+		}
+		if err := requireLinuxCloneRefAbsent(ctx, repository, cleanupIntent.BaseRef); err != nil {
+			return authority.LinuxCloneCleanupProof{}, fmt.Errorf("verify completed base ref absence: %w", err)
+		}
+		if scratch.seedTemp || scratch.quarantine || scratch.template {
+			return authority.LinuxCloneCleanupProof{}, errors.New("completed cleanup proof does not match present A scratch")
+		}
+		if err := verifyLinuxClonePromotion(ctx, repository, grant.Intent, cleanupIntent.PromotionReceipt); err != nil {
+			return authority.LinuxCloneCleanupProof{}, fmt.Errorf("reverify retained A promotion ref: %w", err)
+		}
+		return journal.LinuxCloneCleanupProof.Clone(), nil
+	}
+	if err := removeLinuxCloneCleanupSeed(ctx, repository, parentFD, seedName, cleanupIntent); err != nil {
+		return authority.LinuxCloneCleanupProof{}, fmt.Errorf("remove exact A-owned seed after stored ROOT proof: %w", err)
+	}
+	if err := removeLinuxCloneBaseRefExact(ctx, repository, cleanupIntent.BaseRef, grant.Intent.BaseCommit); err != nil {
+		return authority.LinuxCloneCleanupProof{}, fmt.Errorf("compare-delete exact A base ref: %w", err)
+	}
+	if err := removeLinuxCloneCleanupScratch(ctx, parentFD, grant.Intent); err != nil {
+		return authority.LinuxCloneCleanupProof{}, fmt.Errorf("retire exact A clone scratch: %w", err)
+	}
+	if seedPresent, err := verifyLinuxCloneCleanupSeedFile(ctx, repository, parentFD, seedName, cleanupIntent); err != nil || seedPresent {
+		return authority.LinuxCloneCleanupProof{}, errors.Join(errors.New("A clone seed absence readback failed"), err)
+	}
+	if err := requireLinuxCloneRefLockAbsent(ctx, repository, cleanupIntent.BaseRef); err != nil {
+		return authority.LinuxCloneCleanupProof{}, err
+	}
+	if err := requireLinuxCloneRefAbsent(ctx, repository, cleanupIntent.BaseRef); err != nil {
+		return authority.LinuxCloneCleanupProof{}, fmt.Errorf("verify A base ref absence: %w", err)
+	}
+	remainingScratch, err := inspectLinuxCloneScratchEntries(ctx, parentFD, grant.Intent)
+	if err != nil {
+		return authority.LinuxCloneCleanupProof{}, err
+	}
+	if remainingScratch.seedTemp || remainingScratch.quarantine || remainingScratch.template {
+		return authority.LinuxCloneCleanupProof{}, errors.New("A clone scratch remains after cleanup")
+	}
+	if err := verifyLinuxClonePromotion(ctx, repository, grant.Intent, cleanupIntent.PromotionReceipt); err != nil {
+		return authority.LinuxCloneCleanupProof{}, fmt.Errorf("reverify retained A promotion ref after cleanup: %w", err)
+	}
+	if err := target.verifyAbsent(ctx); err != nil {
+		return authority.LinuxCloneCleanupProof{}, fmt.Errorf("reverify B target absence after A cleanup: %w", err)
+	}
+	proof := authority.LinuxCloneCleanupProof{
+		Version: authority.LinuxCloneVersion, Intent: cleanupIntent.Clone(),
+		TargetRemovalProof: storedProof.Clone(), SeedAbsent: true, BaseRefAbsent: true,
+		ScratchAbsent: true, PromotionRefPresent: true,
+	}
+	if err := proof.Validate(); err != nil {
+		return authority.LinuxCloneCleanupProof{}, fmt.Errorf("validate final Linux clone cleanup proof: %w", err)
+	}
+	return proof, nil
+}
+
+func validateLinuxCloneTargetRemovalProof(proof authority.LinuxCloneTargetRemovalProof, intent authority.LinuxCloneCleanupIntent, target *linuxCloneCleanupTarget) error {
+	if target == nil || proof.Validate() != nil || !proof.Intent.Equal(intent) ||
+		uint64(target.rootInfo.Dev) != proof.RootDevice || uint64(target.rootInfo.Ino) != proof.RootInode ||
+		proof.TargetDevice != intent.CheckoutReceipt.TargetDevice || proof.TargetInode != intent.CheckoutReceipt.TargetInode ||
+		proof.Disposition != authority.LinuxCloneTargetDispositionRemoved || !proof.TargetNlinkZero || !proof.BOwnedMountConfined {
+		return errors.New("root target-removal receipt differs from the exact cleanup intent and pinned inode")
+	}
+	return nil
+}
+
+func verifyLinuxCloneCleanupSeedFile(ctx context.Context, repository string, parentFD int, seedName string, intent authority.LinuxCloneCleanupIntent) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	var named unix.Stat_t
+	if err := unix.Fstatat(parentFD, seedName, &named, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		if !errors.Is(err, unix.ENOENT) {
+			return false, err
+		}
+		if err := verifyLinuxCloneSeedAbsent(parentFD, seedName); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+	receipt, err := readLinuxCloneSeed(ctx, repository, parentFD, seedName, intent.Intent, intent.BaseRef, expectedLinuxCloneSeedDigest(&intent.SeedReceipt))
+	if err != nil {
+		return false, err
+	}
+	if named.Mode&unix.S_IFMT != unix.S_IFREG || uint32(named.Uid) != uint32(os.Geteuid()) || named.Nlink != 1 ||
+		named.Mode&0o022 != 0 || named.Mode&0o007 != 0 ||
+		uint64(named.Dev) != receipt.Device || uint64(named.Ino) != receipt.Inode || named.Size != receipt.Size {
+		return false, errors.New("A-owned seed name changed during cleanup receipt readback")
+	}
+	return true, nil
+}
+
+func removeLinuxCloneCleanupSeed(ctx context.Context, repository string, parentFD int, seedName string, intent authority.LinuxCloneCleanupIntent) error {
+	present, err := verifyLinuxCloneCleanupSeedFile(ctx, repository, parentFD, seedName, intent)
+	if err != nil || !present {
+		return err
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := grant.Validate(); err != nil {
+	var before unix.Stat_t
+	if err := unix.Fstatat(parentFD, seedName, &before, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 		return err
 	}
-	if err := validateLinuxCloneCheckoutReceipt(grant, checkout); err != nil {
-		return err
+	if before.Mode&unix.S_IFMT != unix.S_IFREG || uint32(before.Uid) != uint32(os.Geteuid()) || before.Nlink != 1 ||
+		before.Mode&0o022 != 0 || before.Mode&0o007 != 0 ||
+		uint64(before.Dev) != intent.SeedReceipt.Device || uint64(before.Ino) != intent.SeedReceipt.Inode || before.Size != intent.SeedReceipt.Size {
+		return errors.New("A seed inode changed after exact receipt verification")
 	}
-	if err := validateLinuxCloneCleanupJournal(grant, checkout, journal); err != nil {
-		return err
-	}
-	binding, repository, err := manager.linuxCloneBinding(grant.Intent)
-	if err != nil {
-		return err
-	}
-	if err := verifyLinuxCloneGrant(ctx, repository, binding, grant); err != nil {
-		return err
-	}
-	promotion := *journal.LinuxClonePromotionReceipt
-	if err := verifyLinuxClonePromotion(ctx, repository, grant.Intent, promotion); err != nil {
-		return err
-	}
-	target, err := openLinuxCloneTarget(grant.Intent, checkout, binding.Root)
-	if errors.Is(err, os.ErrNotExist) {
-		if err := verifyLinuxCloneTargetAbsentUnderRoot(ctx, binding.Root, grant.Intent.Target); err != nil {
-			return err
+	if err := unix.Unlinkat(parentFD, seedName, 0); err != nil {
+		if absentErr := verifyLinuxCloneSeedAbsent(parentFD, seedName); absentErr == nil {
+			if syncErr := unix.Fsync(parentFD); syncErr != nil {
+				return fmt.Errorf("sync read-back A-owned seed removal: %w", syncErr)
+			}
+			return verifyLinuxCloneSeedAbsent(parentFD, seedName)
 		}
-		rootFD, _, err := openLinuxCloneDirPath(binding.Root)
-		if err != nil {
-			return fmt.Errorf("reopen B clone root for absent cleanup readback: %w", err)
-		}
-		if err := unix.Fsync(rootFD); err != nil {
-			_ = unix.Close(rootFD)
-			return fmt.Errorf("sync already absent Linux clone root: %w", err)
-		}
-		if err := unix.Close(rootFD); err != nil {
-			return err
-		}
-		return verifyLinuxCloneTargetAbsentUnderRoot(ctx, binding.Root, grant.Intent.Target)
+		return err
+	}
+	if err := unix.Fsync(parentFD); err != nil {
+		return fmt.Errorf("sync exact A-owned seed removal: %w", err)
+	}
+	return verifyLinuxCloneSeedAbsent(parentFD, seedName)
+}
+
+func verifyLinuxCloneCleanupBaseRef(ctx context.Context, repository string, intent authority.LinuxCloneCleanupIntent) error {
+	if err := requireLinuxCloneRefLockAbsent(ctx, repository, intent.BaseRef); err != nil {
+		return fmt.Errorf("A base ref lock is unresolved before cleanup: %w", err)
+	}
+	value, err := linuxCloneRefValue(ctx, repository, intent.BaseRef)
+	if errors.Is(err, errLinuxCloneRefMissing) {
+		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("open authorized Linux clone target for cleanup: %w", err)
+		return fmt.Errorf("read A base ref before cleanup: %w", err)
 	}
-	defer target.close()
-	if err := removeLinuxCloneTarget(ctx, target); err != nil {
-		return fmt.Errorf("remove authorized Linux clone target: %w", err)
+	if value != intent.Intent.BaseCommit {
+		return errors.New("A base ref differs from the immutable cleanup intent")
+	}
+	if err := verifyLinuxCloneRef(ctx, repository, intent.BaseRef, intent.Intent.BaseCommit); err != nil {
+		return fmt.Errorf("verify exact A base ref before cleanup: %w", err)
 	}
 	return nil
 }
@@ -443,8 +920,10 @@ func (manager *Manager) CleanupLinuxClone(ctx context.Context, grant authority.L
 // AbortLinuxCloneBeforeCheckout returns a no-target cleanup proof only after
 // the caller has durably fenced every possible clone producer in State. The
 // optional seed and at most one cgroup proof must be exact Store readbacks.
-// A normal release proves stopped containment, not that B never ran; this
-// method never writes State.
+// It removes only this intent's nonce-bound partial seed temp; other scratch
+// remains unresolved.
+// A normal release proves stopped containment, not that B never ran, and never
+// authorizes this no-checkout cleanup path. This method never writes State.
 func (manager *Manager) AbortLinuxCloneBeforeCheckout(ctx context.Context, intent authority.LinuxCloneIntent, seedReceipt *authority.LinuxCloneSeedReceipt, preGateRelease *authority.LinuxCgroupPreGateReleaseProof, cgroupAbortProof *authority.LinuxCgroupReservationAbortProof, normalRelease *authority.SupervisorHandoffReleaseProof) (authority.LinuxCloneAbortProof, error) {
 	if manager == nil {
 		return authority.LinuxCloneAbortProof{}, errors.New("workspace manager is nil")
@@ -482,6 +961,9 @@ func (manager *Manager) AbortLinuxCloneBeforeCheckout(ctx context.Context, inten
 	if proofInputs > 1 {
 		return authority.LinuxCloneAbortProof{}, errors.New("Linux clone abort containment proofs are mutually exclusive")
 	}
+	if normalRelease != nil {
+		return authority.LinuxCloneAbortProof{}, errors.New("normal Linux v2 release cannot authorize no-checkout abort because B may have executed")
+	}
 	if err := verifyLinuxCloneSource(ctx, repository); err != nil {
 		return authority.LinuxCloneAbortProof{}, fmt.Errorf("validate A-owned Git source for abort: %w", err)
 	}
@@ -518,7 +1000,7 @@ func (manager *Manager) AbortLinuxCloneBeforeCheckout(ctx context.Context, inten
 	if err := removeLinuxCloneSeedForAbort(ctx, repository, binding.SeedRoot, intent, baseRef, seedReceipt); err != nil {
 		return authority.LinuxCloneAbortProof{}, fmt.Errorf("remove exact A-owned Linux clone seed: %w", err)
 	}
-	if err := removeLinuxCloneBaseRefForAbort(ctx, repository, baseRef, intent.BaseCommit); err != nil {
+	if err := removeLinuxCloneBaseRefExact(ctx, repository, baseRef, intent.BaseCommit); err != nil {
 		return authority.LinuxCloneAbortProof{}, fmt.Errorf("remove exact A-owned Linux clone base ref: %w", err)
 	}
 	if err := requireLinuxCloneRefAbsent(ctx, repository, baseRef); err != nil {
@@ -550,10 +1032,6 @@ func (manager *Manager) AbortLinuxCloneBeforeCheckout(ctx context.Context, inten
 		abortProof := cgroupAbortProof.Clone()
 		proof.CgroupAbortProof = &abortProof
 	}
-	if normalRelease != nil {
-		release := normalRelease.Clone()
-		proof.NormalReleaseProof = &release
-	}
 	if err := proof.Validate(); err != nil {
 		return authority.LinuxCloneAbortProof{}, fmt.Errorf("validate Linux clone no-target proof: %w", err)
 	}
@@ -579,7 +1057,7 @@ func requireLinuxCloneRefAbsent(ctx context.Context, repository, ref string) err
 	return errors.New("Linux clone ref is still present")
 }
 
-func removeLinuxCloneBaseRefForAbort(ctx context.Context, repository, ref, commit string) error {
+func removeLinuxCloneBaseRefExact(ctx context.Context, repository, ref, commit string) error {
 	if err := requireLinuxCloneRefLockAbsent(ctx, repository, ref); err != nil {
 		return err
 	}
@@ -628,14 +1106,17 @@ func removeLinuxCloneSeedForAbort(ctx context.Context, repository, seedRoot stri
 		return err
 	}
 	defer unix.Close(parentFD)
-	entries, err := readLinuxCloneDirNames(ctx, parentFD)
+	temporaryName, err := linuxCloneSeedTempName(intent.Nonce)
+	if err != nil {
+		return err
+	}
+	temporaryExists, err := inspectLinuxCloneSeedTemporaries(ctx, parentFD, temporaryName)
 	if err != nil {
 		return fmt.Errorf("inspect A-owned seed directory for in-flight build: %w", err)
 	}
-	for _, entry := range entries {
-		if strings.HasPrefix(entry, ".clone-seed-") || strings.HasPrefix(entry, ".symmetry-clone-quarantine-") ||
-			strings.HasPrefix(entry, ".symmetry-clone-template-") {
-			return errors.New("A-side Linux clone temporary remains; no-target abort is unresolved")
+	if temporaryExists {
+		if err := removeLinuxCloneSeedTempChecked(parentFD, temporaryName, nil); err != nil {
+			return fmt.Errorf("remove exact fenced A-owned Linux clone seed temp: %w", err)
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -644,7 +1125,17 @@ func removeLinuxCloneSeedForAbort(ctx context.Context, repository, seedRoot stri
 	var namedBefore unix.Stat_t
 	if err := unix.Fstatat(parentFD, name, &namedBefore, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 		if errors.Is(err, unix.ENOENT) {
-			return verifyLinuxCloneSeedAbsent(parentFD, name)
+			if err := verifyLinuxCloneSeedAbsent(parentFD, name); err != nil {
+				return err
+			}
+			remaining, err := inspectLinuxCloneSeedTemporaries(ctx, parentFD, temporaryName)
+			if err != nil {
+				return err
+			}
+			if remaining {
+				return errors.New("exact fenced A-owned Linux clone seed temp reappeared during abort")
+			}
+			return nil
 		}
 		return err
 	}
@@ -666,7 +1157,17 @@ func removeLinuxCloneSeedForAbort(ctx context.Context, repository, seedRoot stri
 	if err := unix.Fsync(parentFD); err != nil {
 		return fmt.Errorf("sync A-owned seed removal: %w", err)
 	}
-	return verifyLinuxCloneSeedAbsent(parentFD, name)
+	if err := verifyLinuxCloneSeedAbsent(parentFD, name); err != nil {
+		return err
+	}
+	remaining, err := inspectLinuxCloneSeedTemporaries(ctx, parentFD, temporaryName)
+	if err != nil {
+		return err
+	}
+	if remaining {
+		return errors.New("exact fenced A-owned Linux clone seed temp reappeared during abort")
+	}
+	return nil
 }
 
 func expectedLinuxCloneSeedDigest(receipt *authority.LinuxCloneSeedReceipt) *linuxCloneExpectedDigest {
@@ -1173,26 +1674,53 @@ func validateLinuxCloneRelease(release platform.LinuxCgroupV2Release) error {
 	return nil
 }
 
-func validateLinuxCloneCleanupJournal(grant authority.LinuxCloneGrant, checkout authority.LinuxCloneCheckoutReceipt, journal state.RunJournal) error {
+func validateLinuxCloneCleanupJournal(grant authority.LinuxCloneGrant, checkout authority.LinuxCloneCheckoutReceipt, journal state.RunJournal) (authority.LinuxCloneCleanupIntent, bool, *authority.LinuxCloneTargetRemovalProof, error) {
 	key := state.RunKey{RunID: grant.Intent.RunID, Generation: grant.Intent.Generation}
 	fence := journal.Fence()
-	if fence.Generation != key.Generation || fence.RuntimeID == "" || fence.RuntimeEpoch <= 0 || fence.ClaimID == "" || fence.LeaseToken == "" {
-		return errors.New("RunJournal clone cleanup fence is incomplete")
+	if journal.Key() != key || fence.Generation != key.Generation || fence.RuntimeID == "" || fence.RuntimeEpoch <= 0 || fence.ClaimID == "" || fence.LeaseToken == "" {
+		return authority.LinuxCloneCleanupIntent{}, false, nil, errors.New("RunJournal clone cleanup fence is incomplete")
 	}
-	if !journal.LinuxCloneCleanupEligible(key, fence) {
-		return errors.New("RunJournal is not durably eligible for Linux clone cleanup")
+	if journal.LinuxCloneCleanupIntent == nil {
+		return authority.LinuxCloneCleanupIntent{}, false, nil, errors.New("RunJournal has no durable Begin cleanup intent")
 	}
-	if journal.WorkspacePath != grant.Intent.Target || journal.WorkspaceBindingKey != grant.Intent.BindingKey ||
+	cleanupIntent, err := state.LinuxCloneCleanupIntentForJournal(journal)
+	if err != nil {
+		return authority.LinuxCloneCleanupIntent{}, false, nil, fmt.Errorf("validate immutable State cleanup intent: %w", err)
+	}
+	if cleanupIntent.Validate() != nil || !cleanupIntent.Intent.Equal(grant.Intent) ||
+		!cleanupIntent.SeedReceipt.Equal(grant.Seed) || !cleanupIntent.CheckoutReceipt.Equal(checkout) ||
 		journal.LinuxCloneIntent == nil || !journal.LinuxCloneIntent.Equal(grant.Intent) ||
 		journal.LinuxCloneSeedReceipt == nil || !journal.LinuxCloneSeedReceipt.Equal(grant.Seed) ||
 		journal.LinuxCloneCheckoutReceipt == nil || !journal.LinuxCloneCheckoutReceipt.Equal(checkout) ||
-		journal.LinuxClonePromotionReceipt == nil || journal.ContainmentCgroupPreGateReleaseProof != nil {
-		return errors.New("RunJournal clone authority does not match cleanup grant and checkout")
+		journal.LinuxClonePromotionIntent == nil || !journal.LinuxClonePromotionIntent.Equal(cleanupIntent.PromotionIntent) ||
+		journal.LinuxClonePromotionReceipt == nil || !journal.LinuxClonePromotionReceipt.Equal(cleanupIntent.PromotionReceipt) ||
+		journal.ContainmentCgroupReleaseProof == nil || !journal.ContainmentCgroupReleaseProof.Equal(cleanupIntent.NormalReleaseProof) ||
+		journal.ContainmentCgroupPreGateReleaseProof != nil || journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil {
+		return authority.LinuxCloneCleanupIntent{}, false, nil, errors.New("RunJournal clone authority does not match cleanup intent, grant, and checkout")
 	}
-	if err := journal.LinuxClonePromotionReceipt.Validate(); err != nil {
-		return fmt.Errorf("validate durable Linux clone promotion receipt: %w", err)
+	var targetRemovalProof *authority.LinuxCloneTargetRemovalProof
+	if journal.LinuxCloneTargetRemovalProof != nil {
+		proof := journal.LinuxCloneTargetRemovalProof.Clone()
+		if proof.Validate() != nil || !proof.Intent.Equal(cleanupIntent) || proof.Disposition != authority.LinuxCloneTargetDispositionRemoved {
+			return authority.LinuxCloneCleanupIntent{}, false, nil, errors.New("RunJournal target-removal proof differs from the exact cleanup intent")
+		}
+		targetRemovalProof = &proof
 	}
-	return nil
+	if journal.LinuxCloneCleanupPending {
+		if journal.LinuxCloneCleanupProof != nil || !journal.LinuxCloneCleanupBeginEligible(key, fence) ||
+			journal.WorkspacePath != grant.Intent.Target || journal.WorkspaceBindingKey != grant.Intent.BindingKey ||
+			!journal.WorkspaceRecoveryRequired {
+			return authority.LinuxCloneCleanupIntent{}, false, nil, errors.New("RunJournal does not contain the exact pending Begin cleanup readback")
+		}
+		return cleanupIntent, false, targetRemovalProof, nil
+	}
+	if targetRemovalProof == nil || journal.LinuxCloneCleanupProof == nil || journal.LinuxCloneCleanupProof.Validate() != nil ||
+		!journal.LinuxCloneCleanupProof.TargetRemovalProof.Equal(*targetRemovalProof) ||
+		!journal.LinuxCloneCleanupProof.Intent.Equal(cleanupIntent) || !journal.LinuxCloneCleanupEligible(key, fence) ||
+		journal.WorkspacePath != "" || journal.WorkspaceRecoveryRequired {
+		return authority.LinuxCloneCleanupIntent{}, false, nil, errors.New("RunJournal does not contain the exact completed cleanup readback")
+	}
+	return cleanupIntent, true, targetRemovalProof, nil
 }
 
 func verifyLinuxClonePromotion(ctx context.Context, repository string, intent authority.LinuxCloneIntent, receipt authority.LinuxClonePromotionReceipt) error {
@@ -1221,6 +1749,13 @@ func verifyLinuxClonePromotion(ctx context.Context, repository string, intent au
 	}
 	if digest != receipt.TreeDigest {
 		return errors.New("promoted Linux clone tree digest differs from its State receipt")
+	}
+	if err := requireLinuxCloneRefLockAbsent(ctx, repository, receipt.Ref); err != nil {
+		return fmt.Errorf("promoted Linux clone ref lock appeared during tree readback: %w", err)
+	}
+	finalObjectID, err := linuxCloneRefValue(ctx, repository, receipt.Ref)
+	if err != nil || finalObjectID != receipt.Commit {
+		return fmt.Errorf("promoted Linux clone ref changed during exact readback: %w", linuxCloneErrorOr(err, errors.New("promotion ref object changed")))
 	}
 	return nil
 }

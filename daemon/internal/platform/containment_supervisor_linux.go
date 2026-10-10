@@ -13,6 +13,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -45,20 +46,34 @@ const (
 	linuxSupervisorOpRenew   = "renew"
 	linuxSupervisorOpRelease = "release"
 	linuxSupervisorOpWait    = "wait"
+	linuxSupervisorOpScan    = "scan_update"
 
-	linuxSupervisorOwnerKind                  = authority.OwnerKindLinuxHelper
-	linuxSupervisorTimeout                    = 5 * time.Second
-	linuxSupervisorProductionWitnessEnv       = "SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_WITNESS"
-	linuxSupervisorDropResponseOnceEnv        = "SYMMETRY_LINUX_SUPERVISOR_DROP_RESPONSE_ONCE"
-	linuxSupervisorDropResponseMarkerEnv      = "SYMMETRY_LINUX_SUPERVISOR_DROP_RESPONSE_FIRED_PATH"
-	linuxSupervisorReleaseBarrierReachedEnv   = "SYMMETRY_LINUX_SUPERVISOR_RELEASE_RESPONSE_LOSS_BARRIER_REACHED_FILE"
-	linuxSupervisorReleaseBarrierReleaseEnv   = "SYMMETRY_LINUX_SUPERVISOR_RELEASE_RESPONSE_LOSS_BARRIER_RELEASE_FILE"
-	linuxSupervisorScanFailureModeEnv         = "SYMMETRY_LINUX_SUPERVISOR_INJECT_SCAN_FAILURE_ONCE"
-	linuxSupervisorScanFailureTriggerEnv      = "SYMMETRY_LINUX_SUPERVISOR_INJECT_SCAN_FAILURE_TRIGGER_PATH"
-	linuxSupervisorScanFailureFiredEnv        = "SYMMETRY_LINUX_SUPERVISOR_INJECT_SCAN_FAILURE_FIRED_PATH"
-	linuxSupervisorScanFailureChildren        = "children_after_initial"
-	linuxSupervisorReleaseBarrierTimeout      = 30 * time.Second
-	linuxSupervisorReleaseBarrierPollInterval = 25 * time.Millisecond
+	linuxSupervisorOwnerKind                     = authority.OwnerKindLinuxHelper
+	linuxSupervisorTimeout                       = 5 * time.Second
+	linuxSupervisorProductionWitnessEnv          = "SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_WITNESS"
+	linuxSupervisorHelloSessionInjectionEnv      = "SYMMETRY_LINUX_SUPERVISOR_TEST_INJECT_WRONG_HELLO_SESSION"
+	linuxSupervisorHelloSessionFiredEnv          = "SYMMETRY_LINUX_SUPERVISOR_TEST_WRONG_HELLO_SESSION_FIRED_PATH"
+	linuxSupervisorHelloSessionReleaseEnv        = "SYMMETRY_LINUX_SUPERVISOR_TEST_WRONG_HELLO_SESSION_RELEASE_PATH"
+	linuxSupervisorOwnerLossProofReachedEnv      = "SYMMETRY_LINUX_SUPERVISOR_TEST_OWNER_STOP_BEFORE_PROOF_REACHED_FILE"
+	linuxSupervisorOwnerLossProofReleaseEnv      = "SYMMETRY_LINUX_SUPERVISOR_TEST_OWNER_STOP_BEFORE_PROOF_RELEASE_FILE"
+	linuxSupervisorOwnerLossProofResultEnv       = "SYMMETRY_LINUX_SUPERVISOR_TEST_OWNER_STOP_PROOF_RESULT_FILE"
+	linuxSupervisorOwnerRecoveryAuthenticatedEnv = "SYMMETRY_LINUX_SUPERVISOR_TEST_OWNER_RECOVERY_AUTHENTICATED_FILE"
+	linuxSupervisorLeaseArmedBarrierReachedEnv   = "SYMMETRY_RUNNER_LEASE_ARMED_RESUME_BARRIER_REACHED_FILE"
+	linuxSupervisorDropResponseOnceEnv           = "SYMMETRY_LINUX_SUPERVISOR_DROP_RESPONSE_ONCE"
+	linuxSupervisorDropResponseMarkerEnv         = "SYMMETRY_LINUX_SUPERVISOR_DROP_RESPONSE_FIRED_PATH"
+	linuxSupervisorReleaseBarrierReachedEnv      = "SYMMETRY_LINUX_SUPERVISOR_RELEASE_RESPONSE_LOSS_BARRIER_REACHED_FILE"
+	linuxSupervisorReleaseBarrierReleaseEnv      = "SYMMETRY_LINUX_SUPERVISOR_RELEASE_RESPONSE_LOSS_BARRIER_RELEASE_FILE"
+	linuxSupervisorScanFailureModeEnv            = "SYMMETRY_LINUX_SUPERVISOR_INJECT_SCAN_FAILURE_ONCE"
+	linuxSupervisorScanFailureTriggerEnv         = "SYMMETRY_LINUX_SUPERVISOR_INJECT_SCAN_FAILURE_TRIGGER_PATH"
+	linuxSupervisorScanFailureFiredEnv           = "SYMMETRY_LINUX_SUPERVISOR_INJECT_SCAN_FAILURE_FIRED_PATH"
+	linuxSupervisorScanPendingReleaseEnv         = "SYMMETRY_LINUX_SUPERVISOR_SCAN_PENDING_RELEASE_PATH"
+	linuxSupervisorScanFailureChildren           = "children_after_initial"
+	linuxSupervisorScanPendingChildren           = "children_after_initial_pending"
+	linuxSupervisorScanPauseAfterClean           = "pause_after_clean_scan"
+	linuxSupervisorScanSealAfterClean            = "seal_after_clean_scan"
+	linuxSupervisorScanSealOwnerEnv              = "SYMMETRY_LINUX_SUPERVISOR_SCAN_SEAL_OWNER"
+	linuxSupervisorReleaseBarrierTimeout         = 30 * time.Second
+	linuxSupervisorReleaseBarrierPollInterval    = 25 * time.Millisecond
 )
 
 var (
@@ -70,6 +85,7 @@ var (
 	ErrLinuxSupervisorLeaseExpired                  = errors.New("Linux supervisor lease expired")
 	ErrLinuxSupervisorLeaseUnarmed                  = errors.New("Linux supervisor lease is not armed")
 	errLinuxSupervisorInjectedDescendantScanFailure = errors.New("injected Linux supervisor descendant scan failure")
+	errLinuxSupervisorControlWriteLost              = errors.New("Linux supervisor control request write failed")
 
 	linuxSupervisorLstat                   = os.Lstat
 	linuxSupervisorProcessIdentity         = ProcessIdentity
@@ -106,27 +122,28 @@ type LinuxSupervisorStartSpec struct {
 }
 
 type linuxSupervisorLaunch struct {
-	Version      int      `json:"version"`
-	Operation    string   `json:"operation"`
-	Program      string   `json:"program"`
-	Args         []string `json:"args,omitempty"`
-	Env          []string `json:"env,omitempty"`
-	Dir          string   `json:"dir,omitempty"`
-	OwnerContext string   `json:"owner_context"`
-	LaunchToken  string   `json:"launch_token"`
-	PipeToken    string   `json:"pipe_token"`
-	JobID        string   `json:"job_id"`
-	SecretDigest string   `json:"secret_digest"`
-	Endpoint     string   `json:"endpoint"`
-	BootstrapFD  int      `json:"bootstrap_fd"`
-	OwnerFD      int      `json:"owner_fd"`
-	ControlFD    int      `json:"control_fd"`
-	ResponseFD   int      `json:"response_fd"`
-	StatusFD     int      `json:"status_fd"`
-	MetadataFD   int      `json:"metadata_fd"`
-	StdinFD      int      `json:"stdin_fd"`
-	StdoutFD     int      `json:"stdout_fd"`
-	StderrFD     int      `json:"stderr_fd"`
+	Version        int      `json:"version"`
+	Operation      string   `json:"operation"`
+	Program        string   `json:"program"`
+	Args           []string `json:"args,omitempty"`
+	Env            []string `json:"env,omitempty"`
+	Dir            string   `json:"dir,omitempty"`
+	OwnerContext   string   `json:"owner_context"`
+	LaunchToken    string   `json:"launch_token"`
+	PipeToken      string   `json:"pipe_token"`
+	JobID          string   `json:"job_id"`
+	MirrorIdentity string   `json:"mirror_identity"`
+	SecretDigest   string   `json:"secret_digest"`
+	Endpoint       string   `json:"endpoint"`
+	BootstrapFD    int      `json:"bootstrap_fd"`
+	OwnerFD        int      `json:"owner_fd"`
+	ControlFD      int      `json:"control_fd"`
+	ResponseFD     int      `json:"response_fd"`
+	StatusFD       int      `json:"status_fd"`
+	MetadataFD     int      `json:"metadata_fd"`
+	StdinFD        int      `json:"stdin_fd"`
+	StdoutFD       int      `json:"stdout_fd"`
+	StderrFD       int      `json:"stderr_fd"`
 }
 
 type linuxSupervisorHello struct {
@@ -144,6 +161,72 @@ type linuxSupervisorHello struct {
 	SupervisorIdentity string `json:"supervisor_identity"`
 	PipeToken          string `json:"pipe_token"`
 	JobID              string `json:"job_id"`
+}
+
+type linuxSupervisorHelloAnchorWitness struct {
+	TargetPID       int    `json:"target_pid"`
+	TargetIdentity  string `json:"target_identity"`
+	TargetPGRP      int64  `json:"target_pgrp"`
+	TargetSession   int64  `json:"target_session"`
+	TargetStartTime uint64 `json:"target_start_time"`
+}
+
+type linuxSupervisorHelloSessionWitness struct {
+	Actual             linuxSupervisorHelloAnchorWitness `json:"actual"`
+	Transmitted        linuxSupervisorHelloAnchorWitness `json:"transmitted"`
+	SupervisorPID      int                               `json:"supervisor_pid"`
+	SupervisorIdentity string                            `json:"supervisor_identity"`
+}
+
+// linuxSupervisorScanRequest and linuxSupervisorScanResponse use the inherited
+// full-duplex metadata socket. The socket is per launch; the redundant exact
+// owner fields reject stale, cross-launch, or fabricated observations before
+// the run-scoped Store callback is invoked.
+type linuxSupervisorScanRequest struct {
+	Version            int    `json:"version"`
+	Operation          string `json:"operation"`
+	LaunchToken        string `json:"launch_token"`
+	OwnerKind          string `json:"owner_kind"`
+	OwnerContext       string `json:"owner_context"`
+	TargetPID          int    `json:"target_pid"`
+	TargetIdentity     string `json:"target_identity"`
+	SupervisorPID      int    `json:"supervisor_pid"`
+	SupervisorIdentity string `json:"supervisor_identity"`
+	PipeToken          string `json:"pipe_token"`
+	JobID              string `json:"job_id"`
+	MirrorIdentity     string `json:"mirror_identity"`
+	Owner              string `json:"owner"`
+	Sequence           uint64 `json:"sequence"`
+	Phase              string `json:"phase"`
+	FailureKind        string `json:"failure_kind,omitempty"`
+}
+
+type linuxSupervisorScanResponse struct {
+	Version            int    `json:"version"`
+	Operation          string `json:"operation"`
+	Status             string `json:"status"`
+	LaunchToken        string `json:"launch_token"`
+	OwnerKind          string `json:"owner_kind"`
+	OwnerContext       string `json:"owner_context"`
+	TargetPID          int    `json:"target_pid"`
+	TargetIdentity     string `json:"target_identity"`
+	SupervisorPID      int    `json:"supervisor_pid"`
+	SupervisorIdentity string `json:"supervisor_identity"`
+	PipeToken          string `json:"pipe_token"`
+	JobID              string `json:"job_id"`
+	MirrorIdentity     string `json:"mirror_identity"`
+	Owner              string `json:"owner"`
+	Sequence           uint64 `json:"sequence"`
+	Phase              string `json:"phase"`
+	Error              string `json:"error,omitempty"`
+}
+
+// linuxSupervisorRecoveryResponse extends the ordinary local response with
+// the helper's exact terminal scan-seal sequence. It is read only after the
+// recovery endpoint has authenticated the peer and full launch identity.
+type linuxSupervisorRecoveryResponse struct {
+	linuxSupervisorResponse
+	ScanSealSequence uint64 `json:"scan_seal_sequence,omitempty"`
 }
 
 // linuxSupervisorLeaseState owns one helper-local lease timer. The timer
@@ -324,13 +407,18 @@ type linuxSupervisor struct {
 	helperDone     chan struct{}
 	helperWaitErr  error
 
-	ownerWrite     *os.File
-	controlWrite   *os.File
-	responseRead   *os.File
-	responseReader *bufio.Reader
-	statusRead     *os.File
-	statusReader   *bufio.Reader
-	pidfd          int
+	ownerWrite               *os.File
+	controlWrite             *os.File
+	responseRead             *os.File
+	responseReader           *bufio.Reader
+	statusRead               *os.File
+	statusReader             *bufio.Reader
+	scanConn                 *net.UnixConn
+	scanEventsDone           chan struct{}
+	scanPrepare              func(authority.SupervisorHandoff) error
+	mirrorIdentity           string
+	mirrorScanBarrierRestore func()
+	pidfd                    int
 	// mirror observes the target tree independently of the helper. It owns the
 	// duplicated pidfd and may take over only after the exact helper has exited.
 	mirror *processGroup
@@ -338,9 +426,13 @@ type linuxSupervisor struct {
 	// identity-bound read-only group proof remains retryable.
 	finalProofPending bool
 
-	requestMu sync.Mutex
-	stopMu    sync.Mutex
-	statusMu  sync.Mutex
+	requestMu     sync.Mutex
+	stopMu        sync.Mutex
+	statusMu      sync.Mutex
+	leaseResumeMu sync.Mutex
+	// writeControlFrameForTesting places helper exit at the control-write
+	// boundary and returns the resulting real pipe error.
+	writeControlFrameForTesting func(*os.File, linuxSupervisorRequest) error
 
 	committed             bool
 	resumed               bool
@@ -351,10 +443,12 @@ type linuxSupervisor struct {
 	responseDropTriggered bool
 	responseTransportLost bool
 	responseLossPending   bool
-	waitCode              int
-	waitErr               error
-	waitDone              chan struct{}
-	waitOnce              sync.Once
+	// mirrorSealWitnessScanTriggered is a one-shot pre-resume production-witness latch.
+	mirrorSealWitnessScanTriggered bool
+	waitCode                       int
+	waitErr                        error
+	waitDone                       chan struct{}
+	waitOnce                       sync.Once
 
 	containmentUnprovenCallback func() error
 	prepareUnknown              bool
@@ -382,6 +476,9 @@ func StartLinuxSupervisor(spec LinuxSupervisorStartSpec) (*linuxSupervisor, erro
 	if strings.TrimSpace(spec.OwnerContext) == "" {
 		return nil, errors.New("Linux supervisor owner context is required")
 	}
+	if spec.Prepare == nil || spec.Bind == nil {
+		return nil, errors.New("Linux supervisor requires durable prepare and bind callbacks")
+	}
 	if len(spec.Command.ExtraFiles) != 0 {
 		return nil, errors.New("Linux supervisor target ExtraFiles are unsupported")
 	}
@@ -407,6 +504,10 @@ func StartLinuxSupervisor(spec LinuxSupervisorStartSpec) (*linuxSupervisor, erro
 	secret, err := linuxSupervisorRandomHex(authority.SecretBytes)
 	if err != nil {
 		return nil, fmt.Errorf("generate Linux supervisor secret: %w", err)
+	}
+	mirrorIdentity, err := linuxSupervisorRandomHex(authority.TokenBytes)
+	if err != nil {
+		return nil, fmt.Errorf("generate Linux supervisor mirror identity: %w", err)
 	}
 	secretDigest := sha256.Sum256([]byte(secret))
 	endpoint, err := linuxSupervisorEndpointPath(jobID, os.TempDir(), "/tmp")
@@ -443,7 +544,7 @@ func StartLinuxSupervisor(spec LinuxSupervisorStartSpec) (*linuxSupervisor, erro
 		closeLinuxSupervisorFilesV2(bootstrapRead, bootstrapWrite, ownerRead, ownerWrite, controlRead, controlWrite, responseRead, responseWrite)
 		return nil, fmt.Errorf("create Linux supervisor status pipe: %w", err)
 	}
-	metadataPair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+	metadataPair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
 		closeLinuxSupervisorFilesV2(bootstrapRead, bootstrapWrite, ownerRead, ownerWrite, controlRead, controlWrite, responseRead, responseWrite, statusRead, statusWrite)
 		return nil, fmt.Errorf("create Linux supervisor metadata socket: %w", err)
@@ -483,27 +584,28 @@ func StartLinuxSupervisor(spec LinuxSupervisorStartSpec) (*linuxSupervisor, erro
 	closeLinuxSupervisorFilesV2(bootstrapRead, ownerRead, controlRead, responseWrite, statusWrite, metadataHelper)
 
 	launch := linuxSupervisorLaunch{
-		Version:      linuxSupervisorProtocolVersion,
-		Operation:    linuxSupervisorOpLaunch,
-		Program:      spec.Command.Path,
-		Args:         append([]string(nil), spec.Command.Args[1:]...),
-		Env:          append([]string(nil), spec.Command.Env...),
-		Dir:          spec.Command.Dir,
-		OwnerContext: ownerContext,
-		LaunchToken:  launchToken,
-		PipeToken:    pipeToken,
-		JobID:        jobID,
-		SecretDigest: hex.EncodeToString(secretDigest[:]),
-		Endpoint:     endpoint,
-		BootstrapFD:  3,
-		OwnerFD:      4,
-		ControlFD:    5,
-		ResponseFD:   6,
-		StatusFD:     7,
-		MetadataFD:   8,
-		StdinFD:      9,
-		StdoutFD:     10,
-		StderrFD:     11,
+		Version:        linuxSupervisorProtocolVersion,
+		Operation:      linuxSupervisorOpLaunch,
+		Program:        spec.Command.Path,
+		Args:           append([]string(nil), spec.Command.Args[1:]...),
+		Env:            append([]string(nil), spec.Command.Env...),
+		Dir:            spec.Command.Dir,
+		OwnerContext:   ownerContext,
+		LaunchToken:    launchToken,
+		PipeToken:      pipeToken,
+		JobID:          jobID,
+		MirrorIdentity: mirrorIdentity,
+		SecretDigest:   hex.EncodeToString(secretDigest[:]),
+		Endpoint:       endpoint,
+		BootstrapFD:    3,
+		OwnerFD:        4,
+		ControlFD:      5,
+		ResponseFD:     6,
+		StatusFD:       7,
+		MetadataFD:     8,
+		StdinFD:        9,
+		StdoutFD:       10,
+		StderrFD:       11,
 	}
 	if err := writeLinuxSupervisorFrame(bootstrapWrite, launch); err != nil {
 		_ = help.Process.Kill()
@@ -538,34 +640,58 @@ func StartLinuxSupervisor(spec LinuxSupervisorStartSpec) (*linuxSupervisor, erro
 		return nil, fmt.Errorf("validate Linux supervisor authority: %w", err)
 	}
 	handoff := authority.SupervisorHandoff{Version: authority.SupervisorHandoffVersion, LaunchToken: launchToken, Secret: secret, OwnerKind: linuxSupervisorOwnerKind, OwnerContext: ownerContext, TargetPID: hello.TargetPID, TargetIdentity: hello.TargetIdentity, PipeToken: pipeToken, JobID: jobID, SupervisorPID: help.Process.Pid, SupervisorIdentity: helperIdentity}
-
-	mirror := &processGroup{pid: hello.TargetPID, fd: pidfd, anchor: anchor.private(), anchorCaptured: true}
-	mirror.startDescendantMonitor()
-	if err := mirror.waitForInitialDescendantScan(time.Now().Add(containmentCloseDeadline)); err != nil {
-		_ = mirror.Terminate(true)
-		_ = mirror.Close()
+	metadataConn, err := linuxSupervisorUnixConn(metadataDaemon)
+	if err != nil {
+		_ = unix.Close(pidfd)
 		_ = help.Process.Kill()
 		_, _ = help.Process.Wait()
 		closeLinuxSupervisorFilesV2(ownerWrite, controlWrite, responseRead, statusRead, metadataDaemon)
-		return nil, fmt.Errorf("observe Linux supervisor mirror containment: %w", err)
+		return nil, err
 	}
-	supervisor := &linuxSupervisor{authority: value, handoff: handoff, anchor: anchor, helper: help.Process, helperIdentity: helperIdentity, helperDone: make(chan struct{}), ownerWrite: ownerWrite, controlWrite: controlWrite, responseRead: responseRead, responseReader: bufio.NewReader(responseRead), statusRead: statusRead, statusReader: bufio.NewReader(statusRead), pidfd: pidfd, mirror: mirror}
+	mirror := &processGroup{pid: hello.TargetPID, fd: pidfd, anchor: anchor.private(), anchorCaptured: true}
+	supervisor := &linuxSupervisor{
+		authority: value, handoff: handoff, anchor: anchor, helper: help.Process, helperIdentity: helperIdentity,
+		helperDone: make(chan struct{}), ownerWrite: ownerWrite, controlWrite: controlWrite,
+		responseRead: responseRead, responseReader: bufio.NewReader(responseRead),
+		statusRead: statusRead, statusReader: bufio.NewReader(statusRead), scanConn: metadataConn,
+		scanPrepare: spec.Prepare, mirrorIdentity: mirrorIdentity, pidfd: pidfd, mirror: mirror,
+	}
 	go supervisor.waitHelper()
 
 	preparedHandoff := handoff.Clone()
 	preparedHandoff.SupervisorPID = 0
 	preparedHandoff.SupervisorIdentity = ""
-	if spec.Prepare != nil {
-		if err := callLinuxSupervisorPrepare(spec.Prepare, preparedHandoff); err != nil {
-			supervisor.prepareUnknown = true
-			return supervisor, fmt.Errorf("prepare Linux supervisor handoff: %w", err)
-		}
+	if err := callLinuxSupervisorPrepare(spec.Prepare, preparedHandoff); err != nil {
+		supervisor.prepareUnknown = true
+		_ = supervisor.closeScanTransport(time.Now().Add(containmentCloseDeadline))
+		return supervisor, fmt.Errorf("prepare Linux supervisor handoff: %w", err)
 	}
-	if spec.Bind != nil {
-		if err := callLinuxSupervisorBind(spec.Bind, preparedHandoff, handoff.SupervisorPID, handoff.SupervisorIdentity); err != nil {
-			supervisor.bindUnknown = true
-			return supervisor, fmt.Errorf("bind Linux supervisor handoff: %w", err)
-		}
+	bindRequest := preparedHandoff.Clone()
+	bindRequest.ScanUpdate = &authority.SupervisorScanUpdate{
+		MirrorIdentity: mirrorIdentity, Owner: authority.SupervisorScanOwnerMirror,
+		Sequence: 1, Phase: authority.SupervisorScanPhaseInitialize,
+	}
+	if err := callLinuxSupervisorBind(spec.Bind, bindRequest, handoff.SupervisorPID, handoff.SupervisorIdentity); err != nil {
+		supervisor.bindUnknown = true
+		_ = supervisor.closeScanTransport(time.Now().Add(containmentCloseDeadline))
+		return supervisor, fmt.Errorf("bind Linux supervisor handoff: %w", err)
+	}
+	if err := supervisor.startScanEventServer(metadataConn, spec.Prepare); err != nil {
+		_ = supervisor.closeScanTransport(time.Now().Add(containmentCloseDeadline))
+		return supervisor, fmt.Errorf("start Linux supervisor scan event server: %w", err)
+	}
+	if err := mirror.pauseDescendantMonitoringUntilResume(); err != nil {
+		_ = supervisor.closeScanTransport(time.Now().Add(containmentCloseDeadline))
+		return supervisor, fmt.Errorf("pause Linux supervisor mirror monitoring before resume: %w", err)
+	}
+	if err := mirror.setDescendantScanObserver(supervisor.persistMirrorScanEvent); err != nil {
+		_ = supervisor.closeScanTransport(time.Now().Add(containmentCloseDeadline))
+		return supervisor, fmt.Errorf("install Linux supervisor mirror scan observer: %w", err)
+	}
+	supervisor.mirrorScanBarrierRestore = installLinuxSupervisorCleanScanBarrier(mirror, hello.TargetPID, hello.TargetIdentity, authority.SupervisorScanOwnerMirror)
+	mirror.startDescendantMonitor()
+	if err := mirror.waitForInitialDescendantScan(time.Now().Add(containmentCloseDeadline)); err != nil {
+		return supervisor, fmt.Errorf("observe Linux supervisor mirror containment: %w", err)
 	}
 	if _, err := supervisor.request(linuxSupervisorOpBind, 0, 0); err != nil {
 		return supervisor, fmt.Errorf("bind Linux supervisor helper: %w", err)
@@ -615,6 +741,64 @@ func closeLinuxSupervisorFilesV2(files ...*os.File) {
 			_ = file.Close()
 		}
 	}
+}
+
+func linuxSupervisorUnixConn(file *os.File) (*net.UnixConn, error) {
+	if file == nil {
+		return nil, errors.New("Linux supervisor metadata file is nil")
+	}
+	connection, err := net.FileConn(file)
+	if err != nil {
+		return nil, fmt.Errorf("duplicate Linux supervisor metadata connection: %w", err)
+	}
+	_ = file.Close()
+	unixConnection, ok := connection.(*net.UnixConn)
+	if !ok {
+		_ = connection.Close()
+		return nil, errors.New("Linux supervisor metadata connection is not a Unix socket")
+	}
+	return unixConnection, nil
+}
+
+func reportLinuxSupervisorScanEvent(connection *net.UnixConn, reader *bufio.Reader, launch linuxSupervisorLaunch, target *LinuxPtraceProcess, helperIdentity string, event descendantScanEvent) error {
+	if connection == nil || reader == nil || target == nil || helperIdentity == "" {
+		return errors.New("Linux supervisor scan channel is unavailable")
+	}
+	if err := connection.SetDeadline(time.Now().Add(linuxSupervisorTimeout)); err != nil {
+		return fmt.Errorf("set Linux supervisor scan deadline: %w", err)
+	}
+	defer connection.SetDeadline(time.Time{})
+	request := linuxSupervisorScanRequest{
+		Version: linuxSupervisorProtocolVersion, Operation: linuxSupervisorOpScan,
+		LaunchToken: launch.LaunchToken, OwnerKind: linuxSupervisorOwnerKind, OwnerContext: launch.OwnerContext,
+		TargetPID: target.PID(), TargetIdentity: target.Identity(), SupervisorPID: os.Getpid(),
+		SupervisorIdentity: helperIdentity, PipeToken: launch.PipeToken, JobID: launch.JobID,
+		MirrorIdentity: launch.MirrorIdentity,
+		Owner:          authority.SupervisorScanOwnerHelper, Sequence: event.Sequence, Phase: event.Phase,
+		FailureKind: event.FailureKind,
+	}
+	if err := writeLinuxSupervisorFrame(connection, request); err != nil {
+		return fmt.Errorf("send Linux supervisor scan observation: %w", err)
+	}
+	var response linuxSupervisorScanResponse
+	if err := readLinuxSupervisorFrame(reader, &response); err != nil {
+		return fmt.Errorf("read Linux supervisor scan acknowledgement: %w", err)
+	}
+	if response.Version != request.Version || response.Operation != request.Operation || response.LaunchToken != request.LaunchToken ||
+		response.OwnerKind != request.OwnerKind || response.OwnerContext != request.OwnerContext ||
+		response.TargetPID != request.TargetPID || response.TargetIdentity != request.TargetIdentity ||
+		response.SupervisorPID != request.SupervisorPID || response.SupervisorIdentity != request.SupervisorIdentity ||
+		response.PipeToken != request.PipeToken || response.JobID != request.JobID || response.MirrorIdentity != request.MirrorIdentity || response.Owner != request.Owner ||
+		response.Sequence != request.Sequence || response.Phase != request.Phase {
+		return errors.New("Linux supervisor scan acknowledgement identity mismatch")
+	}
+	if response.Status != "acknowledged" {
+		if response.Error == "" {
+			return errors.New("Linux supervisor scan observation was not acknowledged")
+		}
+		return errors.New(response.Error)
+	}
+	return nil
 }
 
 func linuxSupervisorRandomHex(size int) (string, error) {
@@ -682,25 +866,65 @@ func receiveLinuxSupervisorFD(file *os.File) (int, error) {
 		return -1, errors.New("Linux supervisor fd transport is nil")
 	}
 	data := make([]byte, 1)
-	oob := make([]byte, unix.CmsgSpace(4))
-	_, oobn, _, _, err := unix.Recvmsg(int(file.Fd()), data, oob, 0)
+	// Linux limits SCM_RIGHTS to 253 descriptors per message. Receive the
+	// complete bounded control payload so every unexpected descriptor can be
+	// closed before rejecting the helper response.
+	oob := make([]byte, unix.CmsgSpace(253*4))
+	n, oobn, flags, _, err := unix.Recvmsg(int(file.Fd()), data, oob, unix.MSG_CMSG_CLOEXEC)
 	if err != nil {
 		return -1, err
 	}
-	messages, err := unix.ParseSocketControlMessage(oob[:oobn])
-	if err != nil {
-		return -1, err
+	receivedFD := -1
+	closeReceivedFD := func() {
+		if receivedFD >= 0 {
+			_ = unix.Close(receivedFD)
+			receivedFD = -1
+		}
 	}
+	var receiveErr error
+	if n != len(data) {
+		receiveErr = errors.New("Linux supervisor fd payload is incomplete")
+	}
+	if flags&unix.MSG_CTRUNC != 0 && receiveErr == nil {
+		receiveErr = errors.New("Linux supervisor fd control message is truncated")
+	}
+	messages, parseErr := unix.ParseSocketControlMessage(oob[:oobn])
+	if parseErr != nil && receiveErr == nil {
+		receiveErr = parseErr
+	}
+	fdCount := 0
 	for _, message := range messages {
-		fds, err := unix.ParseUnixRights(&message)
-		if err != nil {
-			return -1, err
+		if message.Header.Level != unix.SOL_SOCKET || message.Header.Type != unix.SCM_RIGHTS {
+			if receiveErr == nil {
+				receiveErr = errors.New("Linux supervisor fd control message is unexpected")
+			}
+			continue
 		}
-		if len(fds) == 1 {
-			return fds[0], nil
+		fds, rightsErr := unix.ParseUnixRights(&message)
+		if rightsErr != nil {
+			if receiveErr == nil {
+				receiveErr = rightsErr
+			}
+			continue
+		}
+		for _, fd := range fds {
+			fdCount++
+			if fdCount == 1 {
+				receivedFD = fd
+			} else {
+				_ = unix.Close(fd)
+			}
 		}
 	}
-	return -1, errors.New("Linux supervisor pidfd was not transferred")
+	if receiveErr != nil {
+		closeReceivedFD()
+		return -1, receiveErr
+	}
+	if fdCount != 1 {
+		closeReceivedFD()
+		return -1, errors.New("Linux supervisor pidfd transfer did not contain exactly one descriptor")
+	}
+	return receivedFD, nil
 }
 
 func (supervisor *linuxSupervisor) waitHelper() {
@@ -839,6 +1063,207 @@ func (supervisor *linuxSupervisor) SetContainmentUnprovenCallback(callback func(
 	return nil
 }
 
+func (supervisor *linuxSupervisor) startScanEventServer(connection *net.UnixConn, prepare func(authority.SupervisorHandoff) error) error {
+	if supervisor == nil || connection == nil || prepare == nil {
+		return errors.New("Linux supervisor scan event server dependencies are incomplete")
+	}
+	done := make(chan struct{})
+	supervisor.mu.Lock()
+	if (supervisor.scanConn != nil && supervisor.scanConn != connection) || supervisor.scanEventsDone != nil {
+		supervisor.mu.Unlock()
+		return errors.New("Linux supervisor scan event server is already running")
+	}
+	supervisor.scanConn = connection
+	supervisor.scanEventsDone = done
+	supervisor.scanPrepare = prepare
+	supervisor.mu.Unlock()
+	go supervisor.serveScanEvents(connection, done, prepare)
+	return nil
+}
+
+func (supervisor *linuxSupervisor) serveScanEvents(connection *net.UnixConn, done chan struct{}, prepare func(authority.SupervisorHandoff) error) {
+	defer close(done)
+	reader := bufio.NewReader(connection)
+	for {
+		var request linuxSupervisorScanRequest
+		if err := readLinuxSupervisorFrame(reader, &request); err != nil {
+			return
+		}
+		response := linuxSupervisorScanResponse{
+			Version: request.Version, Operation: request.Operation, Status: "rejected",
+			LaunchToken: request.LaunchToken, OwnerKind: request.OwnerKind, OwnerContext: request.OwnerContext,
+			TargetPID: request.TargetPID, TargetIdentity: request.TargetIdentity,
+			SupervisorPID: request.SupervisorPID, SupervisorIdentity: request.SupervisorIdentity,
+			PipeToken: request.PipeToken, JobID: request.JobID, MirrorIdentity: request.MirrorIdentity, Owner: request.Owner,
+			Sequence: request.Sequence, Phase: request.Phase,
+		}
+		if err := supervisor.persistHelperScanRequest(request, prepare); err != nil {
+			response.Error = err.Error()
+		} else {
+			response.Status = "acknowledged"
+		}
+		if err := connection.SetWriteDeadline(time.Now().Add(linuxSupervisorTimeout)); err != nil {
+			return
+		}
+		writeErr := writeLinuxSupervisorFrame(connection, response)
+		_ = connection.SetWriteDeadline(time.Time{})
+		if writeErr != nil {
+			return
+		}
+	}
+}
+
+func (supervisor *linuxSupervisor) persistHelperScanRequest(request linuxSupervisorScanRequest, prepare func(authority.SupervisorHandoff) error) error {
+	if supervisor == nil {
+		return errors.New("Linux supervisor is unavailable")
+	}
+	supervisor.mu.Lock()
+	value := supervisor.authority.Clone()
+	handoff := supervisor.handoff.Clone()
+	expectedMirrorIdentity := supervisor.mirrorIdentity
+	supervisor.mu.Unlock()
+	if request.Version != linuxSupervisorProtocolVersion || request.Operation != linuxSupervisorOpScan ||
+		request.OwnerKind != value.OwnerKind || request.OwnerContext != value.OwnerContext ||
+		request.LaunchToken != value.LaunchToken || request.TargetPID != value.TargetPID || request.TargetIdentity != value.TargetIdentity ||
+		request.SupervisorPID != value.SupervisorPID || request.SupervisorIdentity != value.SupervisorIdentity ||
+		request.PipeToken != value.PipeToken || request.JobID != value.JobID || request.MirrorIdentity != expectedMirrorIdentity ||
+		request.Owner != authority.SupervisorScanOwnerHelper || request.Sequence == 0 {
+		return errors.New("Linux supervisor scan observation identity mismatch")
+	}
+	handoff.SupervisorPID = 0
+	handoff.SupervisorIdentity = ""
+	handoff.ScanUpdate = &authority.SupervisorScanUpdate{
+		SupervisorPID: request.SupervisorPID, SupervisorIdentity: request.SupervisorIdentity,
+		MirrorIdentity: request.MirrorIdentity,
+		Owner:          request.Owner, Sequence: request.Sequence, Phase: request.Phase, FailureKind: request.FailureKind,
+	}
+	if err := handoff.Validate(); err != nil {
+		return fmt.Errorf("validate Linux supervisor scan observation: %w", err)
+	}
+	return callLinuxSupervisorPrepare(prepare, handoff)
+}
+
+func (supervisor *linuxSupervisor) persistMirrorScanEvent(event descendantScanEvent) error {
+	if supervisor == nil {
+		return errors.New("Linux supervisor is unavailable")
+	}
+	supervisor.mu.Lock()
+	handoff := supervisor.handoff.Clone()
+	prepare := supervisor.scanPrepare
+	helperPID := supervisor.authority.SupervisorPID
+	helperIdentity := supervisor.authority.SupervisorIdentity
+	mirrorIdentity := supervisor.mirrorIdentity
+	supervisor.mu.Unlock()
+	if prepare == nil {
+		return errors.New("Linux supervisor scan persistence callback is unavailable")
+	}
+	handoff.SupervisorPID = 0
+	handoff.SupervisorIdentity = ""
+	handoff.ScanUpdate = &authority.SupervisorScanUpdate{
+		SupervisorPID: helperPID, SupervisorIdentity: helperIdentity,
+		MirrorIdentity: mirrorIdentity,
+		Owner:          authority.SupervisorScanOwnerMirror, Sequence: event.Sequence,
+		Phase: event.Phase, FailureKind: event.FailureKind,
+	}
+	if err := handoff.Validate(); err != nil {
+		return fmt.Errorf("validate Linux mirror scan update: %w", err)
+	}
+	return callLinuxSupervisorPrepare(prepare, handoff)
+}
+
+func (supervisor *linuxSupervisor) assertDurableScanStateClean() error {
+	if supervisor == nil {
+		return errors.New("Linux supervisor is unavailable")
+	}
+	supervisor.mu.Lock()
+	mirror := supervisor.mirror
+	supervisor.mu.Unlock()
+	if mirror == nil {
+		return fmt.Errorf("%w: daemon mirror is unavailable", ErrLinuxSupervisorStopUnproven)
+	}
+	mirror.mutex.Lock()
+	sequence := mirror.descendantScanSequence
+	clean := sequence > 0 && sequence == mirror.descendantScanCompletedSequence && !mirror.descendantScanInFlight &&
+		mirror.descendantScanCompleted && !mirror.descendantScanLost && mirror.escapedDescendant == nil
+	mirror.mutex.Unlock()
+	if !clean {
+		return fmt.Errorf("%w: daemon mirror has no clean scan sequence", ErrLinuxSupervisorStopUnproven)
+	}
+	return supervisor.persistMirrorScanEvent(descendantScanEvent{Sequence: sequence, Phase: authority.SupervisorScanPhaseAssertClean})
+}
+
+func (supervisor *linuxSupervisor) assertDurableScanStateSealed() error {
+	if supervisor == nil {
+		return errors.New("Linux supervisor is unavailable")
+	}
+	supervisor.mu.Lock()
+	mirror := supervisor.mirror
+	supervisor.mu.Unlock()
+	if mirror == nil {
+		return fmt.Errorf("%w: daemon mirror is unavailable", ErrLinuxSupervisorStopUnproven)
+	}
+	mirror.mutex.Lock()
+	sequence := mirror.descendantScanSequence
+	sealed := mirror.descendantScanSealed && sequence > 0 && sequence == mirror.descendantScanCompletedSequence &&
+		!mirror.descendantScanInFlight && mirror.descendantScanCompleted && !mirror.descendantScanLost && mirror.escapedDescendant == nil
+	mirror.mutex.Unlock()
+	if !sealed {
+		return fmt.Errorf("%w: daemon mirror has no exact clean scan seal", ErrLinuxSupervisorStopUnproven)
+	}
+	return supervisor.persistMirrorScanEvent(descendantScanEvent{Sequence: sequence, Phase: authority.SupervisorScanPhaseAssertAllSealed})
+}
+
+func (supervisor *linuxSupervisor) waitForScanEvents(deadline time.Time) error {
+	if supervisor == nil {
+		return errors.New("Linux supervisor is unavailable")
+	}
+	supervisor.mu.Lock()
+	done := supervisor.scanEventsDone
+	supervisor.mu.Unlock()
+	if done == nil {
+		return nil
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return fmt.Errorf("wait for Linux supervisor scan events: %w", context.DeadlineExceeded)
+	}
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return nil
+	case <-timer.C:
+		return fmt.Errorf("wait for Linux supervisor scan events: %w", context.DeadlineExceeded)
+	}
+}
+
+func (supervisor *linuxSupervisor) closeScanTransport(deadline time.Time) error {
+	if supervisor == nil {
+		return nil
+	}
+	supervisor.mu.Lock()
+	connection := supervisor.scanConn
+	supervisor.scanConn = nil
+	supervisor.mu.Unlock()
+	if connection != nil {
+		_ = connection.Close()
+	}
+	return supervisor.waitForScanEvents(deadline)
+}
+
+func (supervisor *linuxSupervisor) restoreMirrorScanBarrier() {
+	if supervisor == nil {
+		return
+	}
+	supervisor.mu.Lock()
+	restore := supervisor.mirrorScanBarrierRestore
+	supervisor.mirrorScanBarrierRestore = nil
+	supervisor.mu.Unlock()
+	if restore != nil {
+		restore()
+	}
+}
+
 func (supervisor *linuxSupervisor) Commit() error {
 	if supervisor == nil {
 		return ErrLinuxSupervisorHelperExited
@@ -866,6 +1291,8 @@ func (supervisor *linuxSupervisor) Resume() error {
 	if supervisor == nil {
 		return ErrLinuxSupervisorHelperExited
 	}
+	supervisor.leaseResumeMu.Lock()
+	defer supervisor.leaseResumeMu.Unlock()
 	supervisor.mu.Lock()
 	if supervisor.resumed {
 		supervisor.mu.Unlock()
@@ -876,12 +1303,24 @@ func (supervisor *linuxSupervisor) Resume() error {
 		return ErrLinuxSupervisorNotCommitted
 	}
 	supervisor.mu.Unlock()
+	if err := supervisor.verifyMirrorObservation(); err != nil {
+		return fmt.Errorf("verify Linux supervisor observations before resume: %w", err)
+	}
+	supervisor.mu.Lock()
+	mirror := supervisor.mirror
+	supervisor.mu.Unlock()
+	if mirror == nil {
+		return fmt.Errorf("%w: daemon mirror is unavailable", ErrLinuxSupervisorStopUnproven)
+	}
 	response, err := supervisor.request(linuxSupervisorOpResume, 0, 0)
 	if err != nil {
 		return err
 	}
 	if response.Status != "resumed" {
 		return fmt.Errorf("Linux supervisor resume returned %q", response.Status)
+	}
+	if err := mirror.resumeDescendantMonitoring(); err != nil {
+		return fmt.Errorf("resume Linux supervisor mirror monitoring: %w", err)
 	}
 	supervisor.mu.Lock()
 	supervisor.resumed = true
@@ -962,7 +1401,7 @@ func (supervisor *linuxSupervisor) stop(operation string) error {
 	}
 	response, err := supervisor.request(operation, 0, 0)
 	if err != nil {
-		if errors.Is(err, ErrLinuxSupervisorResponseLost) {
+		if errors.Is(err, ErrLinuxSupervisorResponseLost) || errors.Is(err, errLinuxSupervisorControlWriteLost) {
 			return supervisor.recoverResponseLossStop()
 		}
 		if supervisor.containmentUnprovenCallback != nil {
@@ -978,6 +1417,12 @@ func (supervisor *linuxSupervisor) stop(operation string) error {
 			_ = supervisor.containmentUnprovenCallback()
 		}
 		return fmt.Errorf("%w: daemon mirror proof: %v", ErrLinuxSupervisorStopUnproven, err)
+	}
+	if err := supervisor.freezeMirrorObservation(); err != nil {
+		if supervisor.containmentUnprovenCallback != nil {
+			_ = supervisor.containmentUnprovenCallback()
+		}
+		return fmt.Errorf("%w: freeze daemon mirror observation: %w", ErrLinuxSupervisorStopUnproven, err)
 	}
 	receipt := supervisor.receiptFromResponse(response)
 	supervisor.mu.Lock()
@@ -1004,16 +1449,16 @@ func (supervisor *linuxSupervisor) recoverResponseLossStop() error {
 	// Keep response-loss sticky even after recovery succeeds. The daemon can
 	// now have a receipt, but the normal response pipe is permanently
 	// untrustworthy and must never be used by a later lifecycle operation.
-	supervisor.mu.Lock()
-	supervisor.responseLossPending = true
-	supervisor.mu.Unlock()
+	supervisor.requestMu.Lock()
+	supervisor.closeControlAfterResponseLossRequestLocked()
+	supervisor.requestMu.Unlock()
 	deadline := time.Now().Add(containmentCloseDeadline)
 	var lastErr error
 	for {
 		if channelClosedV2(supervisor.helperDone) {
 			return supervisor.stopWithMirror()
 		}
-		receipt, source, err := stopPersistedLinuxSupervisor(*value)
+		receipt, _, source, err := stopPersistedLinuxSupervisor(*value)
 		// The helper may die while the recovery endpoint is being contacted.
 		// A receipt reconstructed from endpoint absence is not a healthy-helper
 		// stop response; re-enter the mirror takeover path for exact proof.
@@ -1029,6 +1474,11 @@ func (supervisor *linuxSupervisor) recoverResponseLossStop() error {
 					_ = supervisor.containmentUnprovenCallback()
 				}
 				lastErr = fmt.Errorf("response-loss mirror proof: %w", mirrorErr)
+			} else if mirrorErr := supervisor.freezeMirrorObservation(); mirrorErr != nil {
+				if supervisor.containmentUnprovenCallback != nil {
+					_ = supervisor.containmentUnprovenCallback()
+				}
+				lastErr = fmt.Errorf("response-loss mirror freeze: %w", mirrorErr)
 			} else {
 				supervisor.mu.Lock()
 				supervisor.receipt = &receipt
@@ -1067,10 +1517,16 @@ func (supervisor *linuxSupervisor) stopWithMirror() error {
 	pid := supervisor.authority.TargetPID
 	identity := supervisor.authority.TargetIdentity
 	supervisor.mu.Unlock()
+	deadline := containmentDeadline(context.Background())
+	if err := supervisor.waitForExactHelperDeath(deadline); err != nil {
+		if supervisor.containmentUnprovenCallback != nil {
+			_ = supervisor.containmentUnprovenCallback()
+		}
+		return fmt.Errorf("%w: helper death fence: %w", ErrLinuxSupervisorStopUnproven, err)
+	}
 	if mirror == nil {
 		return ErrLinuxSupervisorStopUnproven
 	}
-	deadline := containmentDeadline(context.Background())
 	if err := mirror.Terminate(true); err != nil && !errors.Is(err, unix.ESRCH) {
 		if supervisor.containmentUnprovenCallback != nil {
 			_ = supervisor.containmentUnprovenCallback()
@@ -1100,6 +1556,7 @@ func (supervisor *linuxSupervisor) stopWithMirror() error {
 		}
 		return fmt.Errorf("%w: mirror stop and descendant proof: %v", ErrLinuxSupervisorStopUnproven, err)
 	}
+	supervisor.restoreMirrorScanBarrier()
 	supervisor.mu.Lock()
 	supervisor.pidfd = -1
 	supervisor.finalProofPending = true
@@ -1110,6 +1567,21 @@ func (supervisor *linuxSupervisor) stopWithMirror() error {
 		}
 		return fmt.Errorf("%w: mirror proof: %v", ErrLinuxSupervisorStopUnproven, err)
 	}
+	if err := supervisor.waitForScanEvents(deadline); err != nil {
+		if supervisor.containmentUnprovenCallback != nil {
+			_ = supervisor.containmentUnprovenCallback()
+		}
+		return fmt.Errorf("%w: helper scan observations did not drain: %w", ErrLinuxSupervisorStopUnproven, err)
+	}
+	if err := supervisor.closeScanTransport(deadline); err != nil {
+		return fmt.Errorf("%w: close drained helper scan channel: %w", ErrLinuxSupervisorStopUnproven, err)
+	}
+	if err := supervisor.assertDurableScanStateSealed(); err != nil {
+		if supervisor.containmentUnprovenCallback != nil {
+			_ = supervisor.containmentUnprovenCallback()
+		}
+		return fmt.Errorf("%w: mirror takeover scan seals: %w", ErrLinuxSupervisorStopUnproven, err)
+	}
 	receipt := supervisor.receiptFromResponse(linuxSupervisorResponse{Status: "stopped", ActiveProcesses: 0})
 	supervisor.mu.Lock()
 	supervisor.receipt = &receipt
@@ -1118,6 +1590,42 @@ func (supervisor *linuxSupervisor) stopWithMirror() error {
 	supervisor.finalProofPending = false
 	supervisor.mu.Unlock()
 	return nil
+}
+
+// waitForExactHelperDeath joins the exact helper waiter and then reads back its
+// persisted identity. A closed wait channel or a failed control write alone is
+// not enough to authorize mirror takeover.
+func (supervisor *linuxSupervisor) waitForExactHelperDeath(deadline time.Time) error {
+	if supervisor == nil || supervisor.helperDone == nil {
+		return errors.New("Linux supervisor helper wait is unavailable")
+	}
+	if supervisor.authority.SupervisorPID <= 0 || supervisor.authority.SupervisorIdentity == "" {
+		return errors.New("Linux supervisor helper identity is unavailable")
+	}
+	if !channelClosedV2(supervisor.helperDone) {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return fmt.Errorf("wait for exact Linux supervisor helper exit: %w", context.DeadlineExceeded)
+		}
+		timer := time.NewTimer(remaining)
+		defer timer.Stop()
+		select {
+		case <-supervisor.helperDone:
+		case <-timer.C:
+			return fmt.Errorf("wait for exact Linux supervisor helper exit: %w", context.DeadlineExceeded)
+		}
+	}
+	actualIdentity, err := linuxSupervisorProcessIdentity(supervisor.authority.SupervisorPID)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read exact Linux supervisor helper identity after wait: %w", err)
+	}
+	if actualIdentity != supervisor.authority.SupervisorIdentity {
+		return fmt.Errorf("Linux supervisor helper identity mismatch after wait: got %q, want %q", actualIdentity, supervisor.authority.SupervisorIdentity)
+	}
+	return fmt.Errorf("exact Linux supervisor helper %d remains alive after wait", supervisor.authority.SupervisorPID)
 }
 
 // proveLinuxSupervisorGroupAbsentWithRetry tolerates only the short interval
@@ -1188,6 +1696,9 @@ func (supervisor *linuxSupervisor) ReleaseContainment() error {
 	responseTransportLost := supervisor.responseTransportLost || supervisor.responseLossPending
 	supervisor.mu.Unlock()
 	if responseTransportLost {
+		supervisor.requestMu.Lock()
+		supervisor.closeControlAfterResponseLossRequestLocked()
+		supervisor.requestMu.Unlock()
 		return supervisor.releaseThroughRecovery(mirror)
 	}
 	if helperDead {
@@ -1198,7 +1709,7 @@ func (supervisor *linuxSupervisor) ReleaseContainment() error {
 	}
 	response, err := supervisor.request(linuxSupervisorOpRelease, 0, 0)
 	if err != nil {
-		if errors.Is(err, ErrLinuxSupervisorResponseLost) {
+		if errors.Is(err, ErrLinuxSupervisorResponseLost) || errors.Is(err, errLinuxSupervisorControlWriteLost) {
 			if barrierErr := supervisor.waitForLinuxSupervisorReleaseResponseLossBarrier(); barrierErr != nil {
 				return barrierErr
 			}
@@ -1218,6 +1729,9 @@ func (supervisor *linuxSupervisor) ReleaseContainment() error {
 func (supervisor *linuxSupervisor) finalizeReleasedContainment(mirror *processGroup) error {
 	if supervisor == nil {
 		return nil
+	}
+	if err := supervisor.closeScanTransport(time.Now().Add(containmentCloseDeadline)); err != nil {
+		return fmt.Errorf("close Linux supervisor scan channel: %w", err)
 	}
 	supervisor.mu.Lock()
 	fd := supervisor.pidfd
@@ -1294,14 +1808,44 @@ func (supervisor *linuxSupervisor) verifyMirrorObservation() error {
 		}
 	}
 	mirror.mutex.Lock()
-	defer mirror.mutex.Unlock()
-	if mirror.descendantScanLost || mirror.escapedDescendant != nil {
+	lost := mirror.descendantScanLost || mirror.escapedDescendant != nil
+	completed := mirror.descendantScanCompleted
+	sequence := mirror.descendantScanSequence
+	completedSequence := mirror.descendantScanCompletedSequence
+	inFlight := mirror.descendantScanInFlight
+	mirror.mutex.Unlock()
+	if lost {
 		return fmt.Errorf("%w: mirror observed descendant escape or scan loss", ErrLinuxDescendantContainmentUnproven)
 	}
-	if !mirror.descendantScanCompleted {
+	if !completed || sequence == 0 || sequence != completedSequence || inFlight {
 		return fmt.Errorf("%w: mirror has no completed descendant observation", ErrLinuxDescendantContainmentUnproven)
 	}
-	return nil
+	return supervisor.assertDurableScanStateClean()
+}
+
+func (supervisor *linuxSupervisor) freezeMirrorObservation() error {
+	if supervisor == nil {
+		return errors.New("Linux supervisor is unavailable")
+	}
+	supervisor.mu.Lock()
+	mirror := supervisor.mirror
+	supervisor.mu.Unlock()
+	if mirror == nil {
+		return fmt.Errorf("%w: daemon mirror is unavailable", ErrLinuxDescendantContainmentUnproven)
+	}
+	if mirror.monitorStop != nil && !channelClosedV2(mirror.monitorDone) {
+		if err := mirror.stopDescendantMonitor(time.Now().Add(containmentCloseDeadline)); err != nil {
+			return err
+		}
+	}
+	supervisor.restoreMirrorScanBarrier()
+	if err := mirror.sealDescendantScanAfterMonitorStop(); err != nil {
+		return err
+	}
+	if err := mirror.assertDescendantScanSealedLocally(); err != nil {
+		return err
+	}
+	return supervisor.assertDurableScanStateSealed()
 }
 
 // releaseAfterHelperDeath is the only local release path. A durable receipt
@@ -1316,6 +1860,10 @@ func (supervisor *linuxSupervisor) releaseAfterHelperDeath(mirror *processGroup)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("release Linux supervisor helper: prove exact helper exit: %w", err)
 	}
+	deadline := time.Now().Add(containmentCloseDeadline)
+	if err := supervisor.waitForScanEvents(deadline); err != nil {
+		return fmt.Errorf("release Linux supervisor with undrained scan events: %w", err)
+	}
 	if err := provePersistedLinuxSupervisorRelease(supervisor.authority); err != nil {
 		return fmt.Errorf("release Linux supervisor physical proof: %w", err)
 	}
@@ -1323,6 +1871,9 @@ func (supervisor *linuxSupervisor) releaseAfterHelperDeath(mirror *processGroup)
 		if err := releaseProcessGroupOwner(mirror); err != nil {
 			return fmt.Errorf("release Linux supervisor mirror after helper death: %w", err)
 		}
+	}
+	if err := supervisor.closeScanTransport(deadline); err != nil {
+		return fmt.Errorf("close Linux supervisor scan channel after helper death: %w", err)
 	}
 	supervisor.mu.Lock()
 	if supervisor.released {
@@ -1347,22 +1898,161 @@ func (supervisor *linuxSupervisor) AbortContainment() error {
 	if supervisor == nil {
 		return nil
 	}
+	supervisor.mu.Lock()
+	precommit := !supervisor.committed && !supervisor.resumed
+	released := supervisor.released
+	supervisor.mu.Unlock()
+	if released {
+		return nil
+	}
+	if precommit {
+		return supervisor.abortPreparedContainment()
+	}
 	if err := supervisor.stop(linuxSupervisorOpAbort); err != nil {
 		return err
 	}
 	return supervisor.ReleaseContainment()
 }
 
+func (supervisor *linuxSupervisor) abortPreparedContainment() error {
+	if supervisor == nil {
+		return nil
+	}
+	supervisor.stopMu.Lock()
+	defer supervisor.stopMu.Unlock()
+	response, err := supervisor.request(linuxSupervisorOpAbort, 0, 0)
+	if err != nil {
+		return fmt.Errorf("abort prepared Linux supervisor: %w", err)
+	}
+	if response.Status != "aborted" || response.ActiveProcesses != 0 {
+		return fmt.Errorf("abort prepared Linux supervisor returned %q with %d active processes", response.Status, response.ActiveProcesses)
+	}
+	deadline := time.Now().Add(containmentCloseDeadline)
+	if supervisor.helperDone != nil {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return fmt.Errorf("wait for aborted Linux supervisor helper: %w", context.DeadlineExceeded)
+		}
+		timer := time.NewTimer(remaining)
+		defer timer.Stop()
+		select {
+		case <-supervisor.helperDone:
+		case <-timer.C:
+			return fmt.Errorf("wait for aborted Linux supervisor helper: %w", context.DeadlineExceeded)
+		}
+	}
+	if err := supervisor.waitForScanEvents(deadline); err != nil {
+		return fmt.Errorf("drain prepared Linux supervisor scan events: %w", err)
+	}
+	supervisor.mu.Lock()
+	mirror := supervisor.mirror
+	handoff := supervisor.handoff.Clone()
+	supervisor.mu.Unlock()
+	if mirror != nil {
+		if err := mirror.closePreparedAbort(deadline); err != nil {
+			return fmt.Errorf("stop prepared Linux supervisor mirror: %w", err)
+		}
+	}
+	if err := waitForLinuxSupervisorAbortAbsence(handoff); err != nil {
+		return err
+	}
+	if err := supervisor.closeScanTransport(deadline); err != nil {
+		return fmt.Errorf("close prepared Linux supervisor scan transport: %w", err)
+	}
+	supervisor.restoreMirrorScanBarrier()
+
+	supervisor.mu.Lock()
+	if supervisor.released {
+		supervisor.mu.Unlock()
+		return nil
+	}
+	fd := supervisor.pidfd
+	supervisor.pidfd = -1
+	supervisor.released = true
+	supervisor.closed = true
+	ownerWrite, controlWrite, responseRead, statusRead := supervisor.ownerWrite, supervisor.controlWrite, supervisor.responseRead, supervisor.statusRead
+	supervisor.ownerWrite, supervisor.controlWrite, supervisor.responseRead, supervisor.statusRead = nil, nil, nil, nil
+	supervisor.mu.Unlock()
+	var closeErr error
+	// StartLinuxSupervisor stores the mirror-owned pidfd in supervisor too.
+	// closePreparedAbort already released that descriptor when mirror != nil.
+	if fd >= 0 && mirror == nil {
+		closeErr = unix.Close(fd)
+	}
+	closeLinuxSupervisorFilesV2(ownerWrite, controlWrite, responseRead, statusRead)
+	if closeErr != nil {
+		return fmt.Errorf("close prepared Linux supervisor pidfd: %w", closeErr)
+	}
+	return nil
+}
+
 func (supervisor *linuxSupervisor) RenewLease(deadline time.Duration, sequence uint64) error {
 	if deadline <= 0 || sequence == 0 {
 		return errors.New("Linux supervisor lease deadline and sequence must be positive")
 	}
+	supervisor.leaseResumeMu.Lock()
+	defer supervisor.leaseResumeMu.Unlock()
 	response, err := supervisor.request(linuxSupervisorOpRenew, sequence, deadline)
 	if err != nil {
 		return err
 	}
 	if response.Status != "renewed" && response.Status != "already_renewed" {
 		return fmt.Errorf("Linux supervisor lease returned %q", response.Status)
+	}
+	return supervisor.sealInitialMirrorScanForWitness(sequence)
+}
+
+// sealInitialMirrorScanForWitness lets the explicitly gated lease-armed
+// pre-resume witness record a durable mirror seal after its first lease
+// acknowledgement. Its barrier-path gate leaves post-resume scan witnesses,
+// normal launches, later renewals, and resumed targets on their existing paths.
+func (supervisor *linuxSupervisor) sealInitialMirrorScanForWitness(sequence uint64) error {
+	injection, enabled := linuxSupervisorScanFailureInjectionFromEnv()
+	if !enabled || strings.TrimSpace(os.Getenv(linuxSupervisorLeaseArmedBarrierReachedEnv)) == "" ||
+		sequence != 1 || !injection.sealAfterClean || injection.sealOwner != authority.SupervisorScanOwnerMirror {
+		return nil
+	}
+	supervisor.mu.Lock()
+	if !supervisor.committed || supervisor.resumed || supervisor.mirrorSealWitnessScanTriggered {
+		supervisor.mu.Unlock()
+		return nil
+	}
+	supervisor.mirrorSealWitnessScanTriggered = true
+	mirror := supervisor.mirror
+	supervisor.mu.Unlock()
+	if mirror == nil {
+		return fmt.Errorf("%w: pre-resume mirror witness scan is unavailable", ErrLinuxDescendantContainmentUnproven)
+	}
+	deadline := time.Now().Add(containmentCloseDeadline)
+	result, err := mirror.requestDescendantMonitorScan(deadline)
+	if err != nil {
+		return fmt.Errorf("request pre-resume Linux mirror witness scan: %w", err)
+	}
+	if result.scanErr != nil {
+		return fmt.Errorf("pre-resume Linux mirror witness scan: %w", result.scanErr)
+	}
+	if !result.leaderPresent || result.stopped {
+		return fmt.Errorf("%w: pre-resume Linux mirror witness scan did not observe the stopped target", ErrLinuxDescendantContainmentUnproven)
+	}
+	mirror.mutex.Lock()
+	done := mirror.monitorDone
+	mirror.mutex.Unlock()
+	remaining := time.Until(deadline)
+	if done == nil || remaining <= 0 {
+		return fmt.Errorf("%w: pre-resume Linux mirror seal did not stop its monitor", ErrLinuxDescendantContainmentUnproven)
+	}
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+		return fmt.Errorf("%w: wait for pre-resume Linux mirror seal: %w", ErrLinuxDescendantContainmentUnproven, context.DeadlineExceeded)
+	}
+	if err := mirror.sealDescendantScanAfterMonitorStop(); err != nil {
+		return fmt.Errorf("seal pre-resume Linux mirror witness scan: %w", err)
+	}
+	if err := mirror.assertDescendantScanSealedLocally(); err != nil {
+		return fmt.Errorf("verify pre-resume Linux mirror witness seal: %w", err)
 	}
 	return nil
 }
@@ -1385,9 +2075,11 @@ func (supervisor *linuxSupervisor) request(operation string, sequence uint64, de
 		return linuxSupervisorResponse{}, ErrLinuxSupervisorReleased
 	}
 	if supervisor.responseTransportLost || supervisor.responseLossPending || supervisor.responseRead == nil || supervisor.responseReader == nil {
-		supervisor.responseTransportLost = true
-		supervisor.responseLossPending = true
+		controlWrite := supervisor.markResponseTransportLostLocked()
 		supervisor.mu.Unlock()
+		if controlWrite != nil {
+			_ = controlWrite.Close()
+		}
 		return linuxSupervisorResponse{}, ErrLinuxSupervisorResponseLost
 	}
 	if channelClosedV2(supervisor.helperDone) {
@@ -1400,16 +2092,30 @@ func (supervisor *linuxSupervisor) request(operation string, sequence uint64, de
 	if control == nil || reader == nil {
 		return linuxSupervisorResponse{}, ErrLinuxSupervisorHelperExited
 	}
-	if err := writeLinuxSupervisorFrame(control, request); err != nil {
-		return linuxSupervisorResponse{}, err
+	var writeErr error
+	if supervisor.writeControlFrameForTesting != nil {
+		writeErr = supervisor.writeControlFrameForTesting(control, request)
+	} else {
+		writeErr = writeLinuxSupervisorFrame(control, request)
+	}
+	if writeErr != nil {
+		supervisor.mu.Lock()
+		controlWrite := supervisor.markResponseTransportLostLocked()
+		supervisor.mu.Unlock()
+		if controlWrite != nil {
+			_ = controlWrite.Close()
+		}
+		return linuxSupervisorResponse{}, errors.Join(errLinuxSupervisorControlWriteLost, fmt.Errorf("write Linux supervisor request: %w", writeErr))
 	}
 	supervisor.dropResponseTransportOnce(operation)
 	var response linuxSupervisorResponse
 	if err := readLinuxSupervisorFrame(reader, &response); err != nil {
 		supervisor.mu.Lock()
-		supervisor.responseTransportLost = true
-		supervisor.responseLossPending = true
+		controlWrite := supervisor.markResponseTransportLostLocked()
 		supervisor.mu.Unlock()
+		if controlWrite != nil {
+			_ = controlWrite.Close()
+		}
 		return linuxSupervisorResponse{}, errors.Join(ErrLinuxSupervisorResponseLost, err)
 	}
 	if response.Version != linuxSupervisorProtocolVersion || response.Operation != operation || response.LaunchToken != supervisor.authority.LaunchToken || response.TargetPID != supervisor.authority.TargetPID || response.TargetIdentity != supervisor.authority.TargetIdentity || response.OwnerKind != supervisor.authority.OwnerKind || response.OwnerContext != supervisor.authority.OwnerContext || response.SupervisorPID != supervisor.authority.SupervisorPID || response.SupervisorIdentity != supervisor.authority.SupervisorIdentity || response.Token != supervisor.authority.PipeToken || response.JobID != supervisor.authority.JobID {
@@ -1422,6 +2128,29 @@ func (supervisor *linuxSupervisor) request(operation string, sequence uint64, de
 		return response, errors.New(response.Error)
 	}
 	return response, nil
+}
+
+// markResponseTransportLostLocked detaches the normal control writer so it is
+// closed once, after the in-flight request frame has been queued. The caller
+// must hold supervisor.mu and requestMu, and must close the returned file only
+// after releasing supervisor.mu.
+func (supervisor *linuxSupervisor) markResponseTransportLostLocked() *os.File {
+	supervisor.responseTransportLost = true
+	supervisor.responseLossPending = true
+	controlWrite := supervisor.controlWrite
+	supervisor.controlWrite = nil
+	return controlWrite
+}
+
+// closeControlAfterResponseLossRequestLocked preserves pipe ordering: callers
+// hold requestMu, while mu protects detaching the writer from other cleanup.
+func (supervisor *linuxSupervisor) closeControlAfterResponseLossRequestLocked() {
+	supervisor.mu.Lock()
+	controlWrite := supervisor.markResponseTransportLostLocked()
+	supervisor.mu.Unlock()
+	if controlWrite != nil {
+		_ = controlWrite.Close()
+	}
 }
 
 func (supervisor *linuxSupervisor) dropResponseTransportOnce(operation string) bool {
@@ -1441,30 +2170,39 @@ func (supervisor *linuxSupervisor) dropResponseTransportOnce(operation string) b
 	}
 	responseRead := supervisor.responseRead
 	supervisor.responseDropTriggered = true
-	supervisor.responseTransportLost = true
-	supervisor.responseLossPending = true
 	supervisor.responseRead = nil
 	supervisor.responseReader = nil
+	controlWrite := supervisor.markResponseTransportLostLocked()
 	supervisor.mu.Unlock()
 
 	if markerPath := strings.TrimSpace(os.Getenv(linuxSupervisorDropResponseMarkerEnv)); markerPath != "" {
 		_ = os.WriteFile(markerPath, []byte("fired\n"), 0o600)
 	}
 	_ = responseRead.Close()
+	if controlWrite != nil {
+		_ = controlWrite.Close()
+	}
 	return true
 }
 
 type linuxSupervisorScanFailureInjection struct {
-	triggerPath string
-	firedPath   string
+	triggerPath     string
+	firedPath       string
+	releasePath     string
+	sealOwner       string
+	pending         bool
+	pauseAfterClean bool
+	sealAfterClean  bool
 }
 
 func linuxSupervisorScanFailureInjectionFromEnv() (linuxSupervisorScanFailureInjection, bool) {
-	if os.Getenv(linuxSupervisorProductionWitnessEnv) != "1" ||
+	if strings.TrimSpace(os.Getenv(linuxSupervisorProductionWitnessEnv)) != "1" ||
 		strings.TrimSpace(os.Getenv(linuxSupervisorScanFailureModeEnv)) == "" {
 		return linuxSupervisorScanFailureInjection{}, false
 	}
-	if strings.TrimSpace(os.Getenv(linuxSupervisorScanFailureModeEnv)) != linuxSupervisorScanFailureChildren {
+	mode := strings.TrimSpace(os.Getenv(linuxSupervisorScanFailureModeEnv))
+	if mode != linuxSupervisorScanFailureChildren && mode != linuxSupervisorScanPendingChildren &&
+		mode != linuxSupervisorScanPauseAfterClean && mode != linuxSupervisorScanSealAfterClean {
 		return linuxSupervisorScanFailureInjection{}, false
 	}
 	triggerPath := strings.TrimSpace(os.Getenv(linuxSupervisorScanFailureTriggerEnv))
@@ -1472,7 +2210,27 @@ func linuxSupervisorScanFailureInjectionFromEnv() (linuxSupervisorScanFailureInj
 	if triggerPath == "" || firedPath == "" || !filepath.IsAbs(triggerPath) || !filepath.IsAbs(firedPath) {
 		return linuxSupervisorScanFailureInjection{}, false
 	}
-	return linuxSupervisorScanFailureInjection{triggerPath: triggerPath, firedPath: firedPath}, true
+	releasePath := strings.TrimSpace(os.Getenv(linuxSupervisorScanPendingReleaseEnv))
+	if (mode == linuxSupervisorScanPendingChildren || mode == linuxSupervisorScanPauseAfterClean || mode == linuxSupervisorScanSealAfterClean) &&
+		(releasePath == "" || !filepath.IsAbs(releasePath)) {
+		return linuxSupervisorScanFailureInjection{}, false
+	}
+	sealOwner := ""
+	if mode == linuxSupervisorScanSealAfterClean {
+		sealOwner = strings.TrimSpace(os.Getenv(linuxSupervisorScanSealOwnerEnv))
+		if sealOwner == "" {
+			sealOwner = "both"
+		}
+		if sealOwner != "both" && sealOwner != authority.SupervisorScanOwnerHelper && sealOwner != authority.SupervisorScanOwnerMirror {
+			return linuxSupervisorScanFailureInjection{}, false
+		}
+	}
+	return linuxSupervisorScanFailureInjection{
+		triggerPath: triggerPath, firedPath: firedPath, releasePath: releasePath, sealOwner: sealOwner,
+		pending:         mode == linuxSupervisorScanPendingChildren,
+		pauseAfterClean: mode == linuxSupervisorScanPauseAfterClean,
+		sealAfterClean:  mode == linuxSupervisorScanSealAfterClean,
+	}, true
 }
 
 func validateLinuxSupervisorScanFailureEnv() error {
@@ -1483,7 +2241,8 @@ func validateLinuxSupervisorScanFailureEnv() error {
 	if mode == "" {
 		return nil
 	}
-	if mode != linuxSupervisorScanFailureChildren {
+	if mode != linuxSupervisorScanFailureChildren && mode != linuxSupervisorScanPendingChildren &&
+		mode != linuxSupervisorScanPauseAfterClean && mode != linuxSupervisorScanSealAfterClean {
 		return fmt.Errorf("unsupported Linux supervisor scan-failure mode %q", mode)
 	}
 	triggerPath := strings.TrimSpace(os.Getenv(linuxSupervisorScanFailureTriggerEnv))
@@ -1491,23 +2250,341 @@ func validateLinuxSupervisorScanFailureEnv() error {
 	if triggerPath == "" || firedPath == "" || !filepath.IsAbs(triggerPath) || !filepath.IsAbs(firedPath) {
 		return errors.New("Linux supervisor scan-failure injection requires absolute trigger and fired marker paths")
 	}
+	if mode == linuxSupervisorScanPendingChildren || mode == linuxSupervisorScanPauseAfterClean || mode == linuxSupervisorScanSealAfterClean {
+		releasePath := strings.TrimSpace(os.Getenv(linuxSupervisorScanPendingReleaseEnv))
+		if releasePath == "" || !filepath.IsAbs(releasePath) {
+			return errors.New("Linux supervisor scan barrier requires an absolute release marker path")
+		}
+	}
+	if mode == linuxSupervisorScanSealAfterClean {
+		owner := strings.TrimSpace(os.Getenv(linuxSupervisorScanSealOwnerEnv))
+		if owner != "" && owner != "both" && owner != authority.SupervisorScanOwnerHelper && owner != authority.SupervisorScanOwnerMirror {
+			return fmt.Errorf("unsupported Linux supervisor scan seal owner %q", owner)
+		}
+	}
+	return nil
+}
+
+type linuxSupervisorHelloSessionInjection struct {
+	firedPath   string
+	releasePath string
+}
+
+func linuxSupervisorHelloSessionInjectionFromEnv() (linuxSupervisorHelloSessionInjection, bool, error) {
+	if os.Getenv(linuxSupervisorProductionWitnessEnv) != "1" {
+		return linuxSupervisorHelloSessionInjection{}, false, nil
+	}
+	mode := strings.TrimSpace(os.Getenv(linuxSupervisorHelloSessionInjectionEnv))
+	if mode == "" {
+		return linuxSupervisorHelloSessionInjection{}, false, nil
+	}
+	if mode != "1" {
+		return linuxSupervisorHelloSessionInjection{}, false, fmt.Errorf("unsupported Linux supervisor wrong-session hello injection mode %q", mode)
+	}
+	firedPath := strings.TrimSpace(os.Getenv(linuxSupervisorHelloSessionFiredEnv))
+	if firedPath == "" || !filepath.IsAbs(firedPath) {
+		return linuxSupervisorHelloSessionInjection{}, false, errors.New("Linux supervisor wrong-session hello injection requires an absolute fired marker path")
+	}
+	releasePath := strings.TrimSpace(os.Getenv(linuxSupervisorHelloSessionReleaseEnv))
+	if releasePath != "" && !filepath.IsAbs(releasePath) {
+		return linuxSupervisorHelloSessionInjection{}, false, errors.New("Linux supervisor wrong-session hello barrier requires an absolute release marker path")
+	}
+	return linuxSupervisorHelloSessionInjection{firedPath: firedPath, releasePath: releasePath}, true, nil
+}
+
+func wrongLinuxSupervisorHelloSession(anchor LinuxProcessGroupAnchor) (int64, error) {
+	session := anchor.Session + 1
+	if session <= 0 {
+		session = anchor.Session - 1
+	}
+	if session == int64(anchor.PID) {
+		session++
+	}
+	if session <= 0 || session == anchor.Session || session == int64(anchor.PID) {
+		return 0, errors.New("cannot construct a plausible wrong Linux supervisor target session")
+	}
+	return session, nil
+}
+
+func writeLinuxSupervisorHelloSessionWitness(path string, actual, transmitted linuxSupervisorHello) error {
+	witness := linuxSupervisorHelloSessionWitness{
+		Actual: linuxSupervisorHelloAnchorWitness{
+			TargetPID: actual.TargetPID, TargetIdentity: actual.TargetIdentity,
+			TargetPGRP: actual.TargetPGRP, TargetSession: actual.TargetSession,
+			TargetStartTime: actual.TargetStartTime,
+		},
+		Transmitted: linuxSupervisorHelloAnchorWitness{
+			TargetPID: transmitted.TargetPID, TargetIdentity: transmitted.TargetIdentity,
+			TargetPGRP: transmitted.TargetPGRP, TargetSession: transmitted.TargetSession,
+			TargetStartTime: transmitted.TargetStartTime,
+		},
+		SupervisorPID: transmitted.SupervisorPID, SupervisorIdentity: transmitted.SupervisorIdentity,
+	}
+	contents, err := json.Marshal(witness)
+	if err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	contents = append(contents, '\n')
+	written, err := file.Write(contents)
+	if err != nil || written != len(contents) {
+		_ = file.Close()
+		_ = os.Remove(path)
+		if err != nil {
+			return err
+		}
+		return io.ErrShortWrite
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func waitForLinuxSupervisorHelloSessionRelease(owner *os.File, releasePath string) error {
+	deadline := time.Now().Add(linuxSupervisorReleaseBarrierTimeout)
+	ownerPoll := []unix.PollFd{{Fd: int32(owner.Fd()), Events: unix.POLLHUP | unix.POLLERR}}
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return fmt.Errorf("wait for Linux supervisor wrong-session release marker: %w", context.DeadlineExceeded)
+		}
+		pollFor := remaining
+		if pollFor > 25*time.Millisecond {
+			pollFor = 25 * time.Millisecond
+		}
+		milliseconds := int((pollFor + time.Millisecond - 1) / time.Millisecond)
+		ownerPoll[0].Revents = 0
+		count, err := unix.Poll(ownerPoll, milliseconds)
+		if err != nil && !errors.Is(err, unix.EINTR) {
+			return fmt.Errorf("watch Linux supervisor owner during wrong-session barrier: %w", err)
+		}
+		if count > 0 && ownerPoll[0].Revents&(unix.POLLHUP|unix.POLLERR) != 0 {
+			return io.EOF
+		}
+		if _, err := os.Stat(releasePath); err == nil {
+			return nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("read Linux supervisor wrong-session release marker: %w", err)
+		}
+	}
+}
+
+type linuxSupervisorOwnerLossProofBarrier struct {
+	reachedPath string
+	releasePath string
+	resultPath  string
+}
+
+type linuxSupervisorOwnerRecoveryAuthenticatedMarker struct {
+	path string
+}
+
+func linuxSupervisorOwnerRecoveryAuthenticatedMarkerFromEnv() (linuxSupervisorOwnerRecoveryAuthenticatedMarker, bool, error) {
+	raw, configured := os.LookupEnv(linuxSupervisorOwnerRecoveryAuthenticatedEnv)
+	if !configured {
+		return linuxSupervisorOwnerRecoveryAuthenticatedMarker{}, false, nil
+	}
+	if os.Getenv(linuxSupervisorProductionWitnessEnv) != "1" {
+		return linuxSupervisorOwnerRecoveryAuthenticatedMarker{}, false, errors.New("Linux supervisor authenticated owner-recovery marker requires the production witness flag")
+	}
+	path := strings.TrimSpace(raw)
+	if path == "" || !filepath.IsAbs(path) {
+		return linuxSupervisorOwnerRecoveryAuthenticatedMarker{}, false, errors.New("Linux supervisor authenticated owner-recovery marker requires a non-empty absolute file path")
+	}
+	if err := assertLinuxSupervisorBarrierPathAbsent(path); err != nil {
+		return linuxSupervisorOwnerRecoveryAuthenticatedMarker{}, false, fmt.Errorf("Linux supervisor authenticated owner-recovery marker path is not absent: %w", err)
+	}
+	return linuxSupervisorOwnerRecoveryAuthenticatedMarker{path: path}, true, nil
+}
+
+// writeLinuxSupervisorOwnerRecoveryAuthenticatedMarker records test evidence
+// only; it never grants recovery authority.
+func writeLinuxSupervisorOwnerRecoveryAuthenticatedMarker(marker linuxSupervisorOwnerRecoveryAuthenticatedMarker, operation string, targetPID, helperPID int, proofCategory string) error {
+	if marker.path == "" {
+		return nil
+	}
+	switch operation {
+	case linuxSupervisorOpStop, linuxSupervisorOpClose, linuxSupervisorOpAbort, linuxSupervisorOpRelease:
+	default:
+		return errors.New("Linux supervisor authenticated owner-recovery marker operation is invalid")
+	}
+	if targetPID <= 0 || helperPID <= 1 {
+		return errors.New("Linux supervisor authenticated owner-recovery marker process identity is invalid")
+	}
+	if proofCategory != "identity_or_anchor_mismatch" && proofCategory != "other_error" {
+		return errors.New("Linux supervisor authenticated owner-recovery marker has no latched owner-loss proof category")
+	}
+	contents := fmt.Sprintf("operation=%s\ntarget_pid=%d\nhelper_pid=%d\nowner_loss_proof_category=%s\n", operation, targetPID, helperPID, proofCategory)
+	if err := writeLinuxSupervisorTestMarker(marker.path, contents); err != nil {
+		return fmt.Errorf("publish Linux supervisor authenticated owner-recovery marker: %w", err)
+	}
+	return nil
+}
+
+func linuxSupervisorOwnerLossProofBarrierFromEnv() (linuxSupervisorOwnerLossProofBarrier, bool, error) {
+	if os.Getenv(linuxSupervisorProductionWitnessEnv) != "1" {
+		return linuxSupervisorOwnerLossProofBarrier{}, false, nil
+	}
+	var barrier linuxSupervisorOwnerLossProofBarrier
+	values := []struct {
+		name string
+		path *string
+	}{
+		{linuxSupervisorOwnerLossProofReachedEnv, &barrier.reachedPath},
+		{linuxSupervisorOwnerLossProofReleaseEnv, &barrier.releasePath},
+		{linuxSupervisorOwnerLossProofResultEnv, &barrier.resultPath},
+	}
+	configured := 0
+	for _, value := range values {
+		if raw, ok := os.LookupEnv(value.name); ok {
+			configured++
+			*value.path = strings.TrimSpace(raw)
+		}
+	}
+	if configured == 0 {
+		return linuxSupervisorOwnerLossProofBarrier{}, false, nil
+	}
+	if configured != len(values) {
+		return linuxSupervisorOwnerLossProofBarrier{}, false, errors.New("Linux supervisor owner-loss proof barrier requires all reached, release, and result marker paths")
+	}
+	paths := []string{barrier.reachedPath, barrier.releasePath, barrier.resultPath}
+	for _, path := range paths {
+		if path == "" || !filepath.IsAbs(path) {
+			return linuxSupervisorOwnerLossProofBarrier{}, false, errors.New("Linux supervisor owner-loss proof barrier requires non-empty absolute marker paths")
+		}
+	}
+	for left := range paths {
+		for right := left + 1; right < len(paths); right++ {
+			if filepath.Clean(paths[left]) == filepath.Clean(paths[right]) {
+				return linuxSupervisorOwnerLossProofBarrier{}, false, errors.New("Linux supervisor owner-loss proof barrier marker paths must be distinct")
+			}
+		}
+	}
+	for _, path := range paths {
+		if err := assertLinuxSupervisorBarrierPathAbsent(path); err != nil {
+			return linuxSupervisorOwnerLossProofBarrier{}, false, fmt.Errorf("Linux supervisor owner-loss proof barrier marker path is not absent: %w", err)
+		}
+	}
+	return barrier, true, nil
+}
+
+func validateLinuxSupervisorOwnerLossProofBarrierEnv() error {
+	_, _, err := linuxSupervisorOwnerLossProofBarrierFromEnv()
+	return err
+}
+
+func waitForLinuxSupervisorOwnerLossProofBarrier(barrier linuxSupervisorOwnerLossProofBarrier) error {
+	if err := writeLinuxSupervisorTestMarker(barrier.reachedPath, "post_reap_pre_proof\n"); err != nil {
+		return fmt.Errorf("publish Linux supervisor owner-loss proof barrier: %w", err)
+	}
+	deadline := time.NewTimer(linuxSupervisorReleaseBarrierTimeout)
+	defer deadline.Stop()
+	poll := time.NewTicker(linuxSupervisorReleaseBarrierPollInterval)
+	defer poll.Stop()
+	for {
+		if _, err := os.Lstat(barrier.releasePath); err == nil {
+			return nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("observe Linux supervisor owner-loss proof release marker: %w", err)
+		}
+		select {
+		case <-deadline.C:
+			return fmt.Errorf("Linux supervisor owner-loss proof barrier was not released within %s", linuxSupervisorReleaseBarrierTimeout)
+		case <-poll.C:
+		}
+	}
+}
+
+func writeLinuxSupervisorOwnerLossProofResult(barrier linuxSupervisorOwnerLossProofBarrier, proofErr error) error {
+	contents := "proof_attempted\n"
+	if category := linuxSupervisorOwnerLossProofResultCategory(proofErr); category != "" {
+		contents += "category=" + category + "\n"
+	}
+	if err := writeLinuxSupervisorTestMarker(barrier.resultPath, contents); err != nil {
+		return fmt.Errorf("publish Linux supervisor owner-loss proof result: %w", err)
+	}
+	return nil
+}
+
+func linuxSupervisorOwnerLossProofResultCategory(proofErr error) string {
+	if proofErr == nil {
+		return ""
+	}
+	message := strings.ToLower(proofErr.Error())
+	if strings.Contains(message, "identity") || strings.Contains(message, "anchor") || strings.Contains(message, "fence") || strings.Contains(message, "reused") {
+		return "identity_or_anchor_mismatch"
+	}
+	return "other_error"
+}
+
+func writeLinuxSupervisorTestMarker(path, contents string) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	written, writeErr := io.WriteString(file, contents)
+	if writeErr == nil && written != len(contents) {
+		writeErr = io.ErrShortWrite
+	}
+	if writeErr == nil {
+		writeErr = file.Sync()
+	}
+	if closeErr := file.Close(); writeErr == nil {
+		writeErr = closeErr
+	}
+	if writeErr != nil {
+		_ = os.Remove(path)
+		return writeErr
+	}
 	return nil
 }
 
 func installLinuxSupervisorScanFailureInjection(group *processGroup, targetPID int, targetIdentity string) func() {
+	return installLinuxSupervisorScanInjection(group, targetPID, targetIdentity, false, authority.SupervisorScanOwnerHelper, false)
+}
+
+func installLinuxSupervisorScanFailureInjectionAfterInitial(group *processGroup, targetPID int, targetIdentity string) func() {
+	return installLinuxSupervisorScanInjection(group, targetPID, targetIdentity, true, authority.SupervisorScanOwnerHelper, false)
+}
+
+func installLinuxSupervisorCleanScanBarrier(group *processGroup, targetPID int, targetIdentity, owner string) func() {
+	return installLinuxSupervisorScanInjection(group, targetPID, targetIdentity, true, owner, true)
+}
+
+func installLinuxSupervisorScanInjection(group *processGroup, targetPID int, targetIdentity string, skipInitial bool, owner string, barrierOnly bool) func() {
 	injection, enabled := linuxSupervisorScanFailureInjectionFromEnv()
 	if !enabled || group == nil || targetPID <= 0 || targetIdentity == "" {
+		return func() {}
+	}
+	if barrierOnly && !injection.pauseAfterClean && !injection.sealAfterClean {
+		return func() {}
+	}
+	if injection.sealAfterClean && injection.sealOwner != "both" && injection.sealOwner != owner {
 		return func() {}
 	}
 
 	group.mutex.Lock()
 	realStat := group.monitorReadStat
 	realChildren := group.monitorReadChildren
-	if realStat == nil || realChildren == nil {
-		group.mutex.Unlock()
-		return func() {}
+	realAfterClean := group.afterCleanScan
+	realSealAfterClean := group.sealAfterCleanScan
+	realAfterSeal := group.afterDescendantScanSeal
+	realSealCleanScanForTesting := group.sealCleanScanForTesting
+	if realStat == nil {
+		realStat = readLinuxProcessStat
+	}
+	if realChildren == nil {
+		realChildren = readLinuxProcessChildren
 	}
 	var fired atomic.Bool
+	var initialChildrenObserved atomic.Bool
+	if !skipInitial {
+		initialChildrenObserved.Store(true)
+	}
 	var restored atomic.Bool
 	var injectedStat func(int) (linuxProcessStat, error)
 	var injectedChildren func(int) ([]int, error)
@@ -1518,7 +2595,98 @@ func installLinuxSupervisorScanFailureInjection(group *processGroup, targetPID i
 		group.mutex.Lock()
 		group.monitorReadStat = realStat
 		group.monitorReadChildren = realChildren
+		group.afterCleanScan = realAfterClean
+		group.sealAfterCleanScan = realSealAfterClean
+		group.afterDescendantScanSeal = realAfterSeal
+		group.sealCleanScanForTesting = realSealCleanScanForTesting
 		group.mutex.Unlock()
+	}
+	if injection.pauseAfterClean {
+		var firstRetire atomic.Bool
+		var barrierFired atomic.Bool
+		if !skipInitial {
+			firstRetire.Store(true)
+		}
+		group.afterCleanScan = func(sequence uint64) bool {
+			if realAfterClean != nil && realAfterClean(sequence) {
+				return true
+			}
+			if !firstRetire.Swap(true) {
+				return false
+			}
+			if _, err := os.Lstat(injection.triggerPath); err != nil || !barrierFired.CompareAndSwap(false, true) {
+				return false
+			}
+			reachedPath := injection.firedPath + "." + owner
+			if err := os.WriteFile(reachedPath, []byte(fmt.Sprintf("owner=%s\nsequence=%d\n", owner, sequence)), 0o600); err != nil {
+				return false
+			}
+			for {
+				select {
+				case <-group.monitorStop:
+					return true
+				default:
+				}
+				if _, err := os.Lstat(injection.releasePath); err == nil {
+					return true
+				} else if !errors.Is(err, os.ErrNotExist) {
+					return true
+				}
+				timer := time.NewTimer(linuxSupervisorReleaseBarrierPollInterval)
+				select {
+				case <-group.monitorStop:
+					timer.Stop()
+					return true
+				case <-timer.C:
+				}
+			}
+		}
+		group.mutex.Unlock()
+		return restore
+	}
+	if injection.sealAfterClean {
+		var firstRetire atomic.Bool
+		var barrierFired atomic.Bool
+		if !skipInitial {
+			firstRetire.Store(true)
+		}
+		group.sealAfterCleanScan = func(sequence uint64) bool {
+			if realSealAfterClean != nil && realSealAfterClean(sequence) {
+				return true
+			}
+			if !firstRetire.Swap(true) {
+				return false
+			}
+			if _, err := os.Lstat(injection.triggerPath); err != nil || !barrierFired.CompareAndSwap(false, true) {
+				return false
+			}
+			for {
+				select {
+				case <-group.monitorStop:
+					return false
+				default:
+				}
+				if _, err := os.Lstat(injection.releasePath); err == nil {
+					return true
+				} else if !errors.Is(err, os.ErrNotExist) {
+					return true
+				}
+				timer := time.NewTimer(linuxSupervisorReleaseBarrierPollInterval)
+				select {
+				case <-group.monitorStop:
+					timer.Stop()
+					return false
+				case <-timer.C:
+				}
+			}
+		}
+		group.afterDescendantScanSeal = func(sequence uint64) {
+			path := injection.firedPath + "." + owner
+			_ = os.WriteFile(path, []byte(fmt.Sprintf("owner=%s\nsequence=%d\n", owner, sequence)), 0o600)
+		}
+		group.sealCleanScanForTesting = true
+		group.mutex.Unlock()
+		return restore
 	}
 	maybeInject := func(pid int) error {
 		if pid != targetPID {
@@ -1532,16 +2700,32 @@ func installLinuxSupervisorScanFailureInjection(group *processGroup, targetPID i
 			return nil
 		}
 		markerErr := os.WriteFile(injection.firedPath, []byte("fired\n"), 0o600)
-		restore()
 		if markerErr != nil {
+			restore()
 			return fmt.Errorf("%w: write fired marker: %v", errLinuxSupervisorInjectedDescendantScanFailure, markerErr)
 		}
+		if injection.pending {
+			for {
+				if _, err := os.Lstat(injection.releasePath); err == nil {
+					break
+				} else if !errors.Is(err, os.ErrNotExist) {
+					restore()
+					return fmt.Errorf("%w: observe pending-scan release marker: %v", errLinuxSupervisorInjectedDescendantScanFailure, err)
+				}
+				timer := time.NewTimer(linuxSupervisorReleaseBarrierPollInterval)
+				<-timer.C
+			}
+		}
+		restore()
 		return errLinuxSupervisorInjectedDescendantScanFailure
 	}
 	injectedStat = func(pid int) (linuxProcessStat, error) {
 		return realStat(pid)
 	}
 	injectedChildren = func(pid int) ([]int, error) {
+		if pid == targetPID && !initialChildrenObserved.Swap(true) {
+			return realChildren(pid)
+		}
 		if err := maybeInject(pid); err != nil {
 			return nil, err
 		}
@@ -1585,6 +2769,17 @@ func RunContainmentSupervisor(args []string) error {
 	if err := validateLinuxSupervisorScanFailureEnv(); err != nil {
 		return err
 	}
+	helloInjection, injectWrongHelloSession, err := linuxSupervisorHelloSessionInjectionFromEnv()
+	if err != nil {
+		return err
+	}
+	if err := validateLinuxSupervisorOwnerLossProofBarrierEnv(); err != nil {
+		return err
+	}
+	ownerRecoveryMarker, _, err := linuxSupervisorOwnerRecoveryAuthenticatedMarkerFromEnv()
+	if err != nil {
+		return err
+	}
 	files := make([]*os.File, 0, 9)
 	for _, value := range []struct {
 		fd   int
@@ -1611,7 +2806,7 @@ func RunContainmentSupervisor(args []string) error {
 	if err := readLinuxSupervisorFrame(bufio.NewReader(files[0]), &launch); err != nil {
 		return err
 	}
-	if launch.Version != linuxSupervisorProtocolVersion || launch.Operation != linuxSupervisorOpLaunch || launch.OwnerContext == "" || launch.Program == "" || !linuxSupervisorValidHexV2(launch.LaunchToken, authority.TokenBytes*2) || !linuxSupervisorValidHexV2(launch.PipeToken, authority.TokenBytes*2) || !linuxSupervisorValidHexV2(launch.JobID, authority.TokenBytes*2) || !linuxSupervisorValidHexV2(launch.SecretDigest, sha256.Size*2) {
+	if launch.Version != linuxSupervisorProtocolVersion || launch.Operation != linuxSupervisorOpLaunch || launch.OwnerContext == "" || launch.Program == "" || !linuxSupervisorValidHexV2(launch.LaunchToken, authority.TokenBytes*2) || !linuxSupervisorValidHexV2(launch.PipeToken, authority.TokenBytes*2) || !linuxSupervisorValidHexV2(launch.JobID, authority.TokenBytes*2) || !linuxSupervisorValidHexV2(launch.MirrorIdentity, authority.TokenBytes*2) || !linuxSupervisorValidHexV2(launch.SecretDigest, sha256.Size*2) {
 		return errors.New("Linux supervisor launch is invalid")
 	}
 	if strings.TrimSpace(launch.Endpoint) == "" || !strings.Contains(launch.OwnerContext, "|endpoint=") {
@@ -1619,7 +2814,7 @@ func RunContainmentSupervisor(args []string) error {
 	}
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: launch.Endpoint, Net: "unix"})
 	if err != nil {
-		return fmt.Errorf("listen Linux supervisor recovery endpoint: %w", err)
+		return fmt.Errorf("listen Linux supervisor recovery endpoint: %w", sanitizeLinuxSupervisorEndpointError(err))
 	}
 	_ = os.Chmod(launch.Endpoint, 0o600)
 	defer func() {
@@ -1636,7 +2831,7 @@ func RunContainmentSupervisor(args []string) error {
 	if err != nil {
 		return fmt.Errorf("launch Linux supervisor target: %w", err)
 	}
-	containment, identity, attachErr := AttachProcess(command.Process)
+	containment, identity, attachErr := attachProcessWithoutMonitor(command.Process)
 	if attachErr != nil {
 		if containment != nil {
 			_ = containment.Terminate(true)
@@ -1658,7 +2853,7 @@ func RunContainmentSupervisor(args []string) error {
 		_, _ = target.Wait()
 		return errors.New("Linux supervisor target identity or anchor mismatch")
 	}
-	restoreScanFailureInjection := installLinuxSupervisorScanFailureInjection(group, target.PID(), identity)
+	restoreScanFailureInjection := installLinuxSupervisorScanFailureInjectionAfterInitial(group, target.PID(), identity)
 	defer restoreScanFailureInjection()
 	groupFD, err := unix.FcntlInt(uintptr(group.fd), unix.F_DUPFD_CLOEXEC, 0)
 	if err != nil {
@@ -1677,11 +2872,29 @@ func RunContainmentSupervisor(args []string) error {
 		return err
 	}
 	_ = unix.Close(groupFD)
+	metadataConn, err := linuxSupervisorUnixConn(files[5])
+	if err != nil {
+		_ = group.Terminate(true)
+		_ = group.Close()
+		_ = target.Terminate()
+		_, _ = target.Wait()
+		return err
+	}
+	defer metadataConn.Close()
+	metadataReader := bufio.NewReader(metadataConn)
 	helperIdentity, err := ProcessIdentity(os.Getpid())
 	if err != nil {
 		return err
 	}
-	var preHelloReceipt *authority.StopReceipt
+	if err := group.setDescendantScanObserver(func(event descendantScanEvent) error {
+		return reportLinuxSupervisorScanEvent(metadataConn, metadataReader, launch, target, helperIdentity, event)
+	}); err != nil {
+		return err
+	}
+	if err := group.pauseDescendantMonitoringUntilResume(); err != nil {
+		return err
+	}
+	preHelloAborted := false
 	preHelloWaitDone := make(chan struct{})
 	var preHelloWaitOnce sync.Once
 	preHelloStartWait := func() {
@@ -1694,13 +2907,13 @@ func RunContainmentSupervisor(args []string) error {
 	}
 	preHelloStop := func() error {
 		deadline := containmentDeadline(context.Background())
-		if preHelloReceipt != nil {
+		if preHelloAborted {
 			return nil
 		}
 		terminateErr := target.Terminate()
 		if terminateErr != nil {
 			if retryErr := target.Terminate(); retryErr != nil {
-				return errors.Join(terminateErr, retryErr, group.Close())
+				return errors.Join(terminateErr, retryErr, group.closePreparedAbort(deadline))
 			}
 		}
 		if err := group.Terminate(true); err != nil && !errors.Is(err, unix.ESRCH) {
@@ -1716,21 +2929,50 @@ func RunContainmentSupervisor(args []string) error {
 		if err := reapLinuxProcessGroupChildren(group.anchor, deadline); err != nil {
 			return err
 		}
-		if err := group.closeUntil(deadline); err != nil {
+		if err := group.closePreparedAbort(deadline); err != nil {
 			return err
 		}
-		receipt := authority.StopReceipt{Version: authority.SupervisorVersion, Status: "stopped", OwnerKind: linuxSupervisorOwnerKind, OwnerContext: launch.OwnerContext, TargetPID: target.PID(), TargetIdentity: target.Identity(), PipeToken: launch.PipeToken, JobID: launch.JobID, SupervisorPID: os.Getpid(), SupervisorIdentity: helperIdentity, ActiveProcesses: 0}
-		preHelloReceipt = &receipt
+		preHelloAborted = true
 		return nil
 	}
 	hello := linuxSupervisorHello{Version: linuxSupervisorProtocolVersion, Operation: linuxSupervisorOpHello, LaunchToken: launch.LaunchToken, OwnerKind: linuxSupervisorOwnerKind, OwnerContext: launch.OwnerContext, TargetPID: target.PID(), TargetIdentity: target.Identity(), TargetPGRP: anchor.PGRP, TargetSession: anchor.Session, TargetStartTime: anchor.StartTime, SupervisorPID: os.Getpid(), SupervisorIdentity: helperIdentity, PipeToken: launch.PipeToken, JobID: launch.JobID}
+	actualHello := hello
+	if injectWrongHelloSession {
+		wrongSession, err := wrongLinuxSupervisorHelloSession(anchor)
+		if err != nil {
+			if stopErr := preHelloStop(); stopErr != nil {
+				return errors.Join(err, runLinuxSupervisorRecoveryLoop(listener, launch, target, nil, "", nil, preHelloStop, true, nil, ownerRecoveryMarker, ""))
+			}
+			return err
+		}
+		hello.TargetSession = wrongSession
+	}
 	if err := writeLinuxSupervisorFrame(files[3], hello); err != nil {
 		if stopErr := preHelloStop(); stopErr != nil {
-			return errors.Join(err, runLinuxSupervisorRecoveryLoop(listener, launch, target, &preHelloReceipt, "", preHelloStop))
+			return errors.Join(err, runLinuxSupervisorRecoveryLoop(listener, launch, target, nil, "", nil, preHelloStop, true, nil, ownerRecoveryMarker, ""))
 		}
 		return err
 	}
-	return runLinuxSupervisorHelperLoop(launch, listener, target, group, files[1], files[2], files[3], files[4], files[6], files[7], files[8])
+	if injectWrongHelloSession {
+		if err := writeLinuxSupervisorHelloSessionWitness(helloInjection.firedPath, actualHello, hello); err != nil {
+			if stopErr := preHelloStop(); stopErr != nil {
+				return errors.Join(err, runLinuxSupervisorRecoveryLoop(listener, launch, target, nil, "", nil, preHelloStop, true, nil, ownerRecoveryMarker, ""))
+			}
+			return fmt.Errorf("write Linux supervisor wrong-session hello witness: %w", err)
+		}
+		if helloInjection.releasePath != "" {
+			if err := waitForLinuxSupervisorHelloSessionRelease(files[1], helloInjection.releasePath); err != nil {
+				if stopErr := preHelloStop(); stopErr != nil {
+					return errors.Join(err, runLinuxSupervisorRecoveryLoop(listener, launch, target, nil, "", nil, preHelloStop, true, nil, ownerRecoveryMarker, ""))
+				}
+				if errors.Is(err, io.EOF) {
+					return nil
+				}
+				return err
+			}
+		}
+	}
+	return runLinuxSupervisorHelperLoop(launch, listener, target, group, files[1], files[2], files[3], files[4], files[6], files[7], files[8], ownerRecoveryMarker)
 }
 
 type linuxSupervisorFDs struct{ bootstrap, owner, control, response, status, metadata, stdin, stdout, stderr int }
@@ -1792,7 +3034,11 @@ func waitForLinuxSupervisorTarget(waitDone <-chan struct{}, deadline time.Time) 
 	}
 }
 
-func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.UnixListener, target *LinuxPtraceProcess, group *processGroup, ownerFile, controlFile, responseFile, statusFile, stdinFile, stdoutFile, stderrFile *os.File) error {
+func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.UnixListener, target *LinuxPtraceProcess, group *processGroup, ownerFile, controlFile, responseFile, statusFile, stdinFile, stdoutFile, stderrFile *os.File, ownerRecoveryMarker linuxSupervisorOwnerRecoveryAuthenticatedMarker) error {
+	ownerLossProofBarrier, ownerLossProofBarrierEnabled, err := linuxSupervisorOwnerLossProofBarrierFromEnv()
+	if err != nil {
+		return err
+	}
 	leaseState := newLinuxSupervisorLeaseState()
 	defer leaseState.stop()
 	watchdog := newLinuxSupervisorOwnerWatchdog(ownerFile, leaseState.latchOwnerLost)
@@ -1802,6 +3048,12 @@ func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.Un
 	resumed := false
 	var receipt *authority.StopReceipt
 	boundSecret := ""
+	ownerLostLatched := false
+	ownerLossProofBarrierStarted := false
+	ownerLossProofBarrierReleased := false
+	var ownerLossProofBarrierErr error
+	ownerLossProofResultWritten := false
+	ownerLossProofResultCategory := ""
 	waitDone := make(chan struct{})
 	var waitOnce sync.Once
 	startWait := func() {
@@ -1823,6 +3075,12 @@ func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.Un
 		leaseState.stop()
 		if receipt != nil {
 			return nil
+		}
+		ownerLostStop := ownerLostLatched || channelClosedV2(watchdog.ownerLost())
+		precommitAbort := !committed && !resumed
+		var ownerLossScanErr error
+		if ownerLostStop && (bound || resumed) && !precommitAbort {
+			ownerLossScanErr = group.prepareDescendantMonitorForOwnerLoss(deadline)
 		}
 		var terminateErr error
 		if !resumed {
@@ -1848,8 +3106,56 @@ func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.Un
 		if err := reapLinuxProcessGroupChildren(group.anchor, deadline); err != nil {
 			return err
 		}
-		if err := group.closeUntil(deadline); err != nil {
-			return err
+		proofDeadline := deadline
+		if ownerLostStop && !precommitAbort && ownerLossProofBarrierEnabled {
+			if !ownerLossProofBarrierStarted {
+				ownerLossProofBarrierStarted = true
+				ownerLossProofBarrierErr = waitForLinuxSupervisorOwnerLossProofBarrier(ownerLossProofBarrier)
+				ownerLossProofBarrierReleased = ownerLossProofBarrierErr == nil
+			}
+			if !ownerLossProofBarrierReleased {
+				return errors.Join(ownerLossScanErr, ownerLossProofBarrierErr)
+			}
+			// The bounded stop deadline above covered signal, target wait, and
+			// same-group reaping. The witness pause must not consume the close
+			// proof's independent bounded deadline.
+			proofDeadline = time.Now().Add(containmentCloseDeadline)
+		}
+		var closeErr error
+		if precommitAbort {
+			closeErr = group.closePreparedAbort(proofDeadline)
+		} else {
+			closeErr = group.closeUntil(proofDeadline)
+		}
+		if ownerLostStop && !precommitAbort && ownerLossProofBarrierReleased && !ownerLossProofResultWritten {
+			ownerLossProofResultWritten = true
+			proofErr := errors.Join(ownerLossScanErr, closeErr)
+			if resultErr := writeLinuxSupervisorOwnerLossProofResult(ownerLossProofBarrier, proofErr); resultErr != nil {
+				closeErr = errors.Join(closeErr, resultErr)
+			} else {
+				ownerLossProofResultCategory = linuxSupervisorOwnerLossProofResultCategory(proofErr)
+			}
+		}
+		if closeErr != nil {
+			return errors.Join(ownerLossScanErr, closeErr)
+		}
+		if ownerLossScanErr != nil {
+			return ownerLossScanErr
+		}
+		if precommitAbort {
+			// The target remained exec-stopped because commit never crossed the
+			// helper. Abort is proved by exact helper/target/group absence, not by
+			// inventing a scan receipt for an execution that never became runnable.
+			return nil
+		}
+		var scanErr error
+		if ownerLostStop {
+			scanErr = group.assertDescendantScanSealedLocally()
+		} else {
+			scanErr = group.assertDescendantScanSealed()
+		}
+		if scanErr != nil {
+			return scanErr
 		}
 		receiptValue := authority.StopReceipt{Version: authority.SupervisorVersion, Status: "stopped", OwnerKind: linuxSupervisorOwnerKind, OwnerContext: launch.OwnerContext, TargetPID: target.PID(), TargetIdentity: target.Identity(), PipeToken: launch.PipeToken, JobID: launch.JobID, SupervisorPID: os.Getpid(), SupervisorIdentity: mustLinuxSupervisorIdentity(), ActiveProcesses: 0}
 		receipt = &receiptValue
@@ -1858,8 +3164,9 @@ func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.Un
 	enterRecovery := func() error {
 		// Keep the authenticated endpoint alive whether stop succeeds now or
 		// still needs a retry through recovery.
+		ownerLostLatched = ownerLostLatched || channelClosedV2(watchdog.ownerLost())
 		_ = stop()
-		return runLinuxSupervisorRecoveryLoop(listener, launch, target, &receipt, boundSecret, stop)
+		return runLinuxSupervisorRecoveryLoop(listener, launch, target, &receipt, boundSecret, watchdog.ownerLost(), stop, !committed && !resumed, group.descendantScanSealSequence, ownerRecoveryMarker, ownerLossProofResultCategory)
 	}
 	type requestEvent struct {
 		request linuxSupervisorRequest
@@ -1882,6 +3189,7 @@ func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.Un
 		select {
 		case <-ownerLost:
 			ownerLost = nil
+			ownerLostLatched = true
 			return enterRecovery()
 		case <-leaseState.wakeup():
 			if !leaseState.takeExpiry() {
@@ -1922,9 +3230,16 @@ func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.Un
 				if !linuxSupervisorRequestMatchesV2(request, launch, target) || request.Secret == "" || !linuxSupervisorSecretMatchesV2(request.Secret, launch.SecretDigest) {
 					continue
 				}
-				bound = true
-				boundSecret = request.Secret
-				if err := writeLinuxSupervisorResponseV2(responseFile, request, "bound", target, launch, 0, ""); err != nil {
+				status, message := "bound", ""
+				if !bound {
+					bound = true
+					boundSecret = request.Secret
+					group.startDescendantMonitor()
+					if err := group.waitForInitialDescendantScan(time.Now().Add(containmentCloseDeadline)); err != nil {
+						status, message = "error", err.Error()
+					}
+				}
+				if err := writeLinuxSupervisorResponseV2(responseFile, request, status, target, launch, 0, message); err != nil {
 					return enterRecovery()
 				}
 				continue
@@ -1950,6 +3265,19 @@ func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.Un
 			if !linuxSupervisorRequestMatchesV2(request, launch, target) || request.Secret == "" || !linuxSupervisorSecretMatchesV2(request.Secret, launch.SecretDigest) {
 				continue
 			}
+			if request.Operation == linuxSupervisorOpAbort && !committed && !resumed {
+				status, message := "aborted", ""
+				if err := stop(); err != nil {
+					status, message = "error", err.Error()
+				}
+				if err := writeLinuxSupervisorResponseV2(responseFile, request, status, target, launch, 0, message); err != nil {
+					return enterRecovery()
+				}
+				if status == "aborted" {
+					return nil
+				}
+				continue
+			}
 			status := "ok"
 			message := ""
 			needsRecovery := false
@@ -1960,14 +3288,21 @@ func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.Un
 			case linuxSupervisorOpResume:
 				if !committed {
 					status, message = "error", ErrLinuxSupervisorNotCommitted.Error()
+				} else if group.descendantObservationUnproven() {
+					status, message = "error", ErrLinuxDescendantContainmentUnproven.Error()
 				} else if receipt != nil {
 					status, message = "error", ErrLinuxSupervisorStopUnproven.Error()
 				} else if err := leaseState.resume(func() bool { return channelClosedV2(watchdog.ownerLost()) }, target.Resume); err != nil {
 					status, message = "error", err.Error()
 				} else {
 					resumed = true
-					startWait()
-					status = "resumed"
+					if err := group.resumeDescendantMonitoring(); err != nil {
+						status, message = "error", err.Error()
+						needsRecovery = true
+					} else {
+						startWait()
+						status = "resumed"
+					}
 				}
 			case linuxSupervisorOpRenew:
 				replay, err := leaseState.renew(time.Duration(request.DeadlineMS)*time.Millisecond, request.Sequence)
@@ -2011,12 +3346,29 @@ func runLinuxSupervisorHelperLoop(launch linuxSupervisorLaunch, listener *net.Un
 	}
 }
 
-func runLinuxSupervisorRecoveryLoop(listener *net.UnixListener, launch linuxSupervisorLaunch, target *LinuxPtraceProcess, receipt **authority.StopReceipt, boundSecret string, stop func() error) error {
+func runLinuxSupervisorRecoveryLoop(listener *net.UnixListener, launch linuxSupervisorLaunch, target *LinuxPtraceProcess, receipt **authority.StopReceipt, boundSecret string, ownerLost <-chan struct{}, stop func() error, allowAbort bool, scanSealSequence func() uint64, ownerRecoveryMarker linuxSupervisorOwnerRecoveryAuthenticatedMarker, ownerLossProofResultCategory string) error {
+	ownerLossHandled := false
+	ownerRecoveryMarkerPublished := false
 	for {
+		if !ownerLossHandled && channelClosedV2(ownerLost) {
+			ownerLossHandled = true
+			if stop != nil {
+				_ = stop()
+			}
+		}
+		if ownerLost != nil {
+			_ = listener.SetDeadline(time.Now().Add(100 * time.Millisecond))
+		}
 		connection, err := listener.AcceptUnix()
 		if err != nil {
+			err = sanitizeLinuxSupervisorEndpointError(err)
+			if networkErr, ok := err.(net.Error); ok && networkErr.Timeout() {
+				_ = listener.SetDeadline(time.Time{})
+				continue
+			}
 			return err
 		}
+		_ = listener.SetDeadline(time.Time{})
 		if err := connection.SetDeadline(time.Now().Add(linuxSupervisorTimeout)); err != nil {
 			_ = connection.Close()
 			continue
@@ -2027,17 +3379,27 @@ func runLinuxSupervisorRecoveryLoop(listener *net.UnixListener, launch linuxSupe
 			_ = connection.Close()
 			continue
 		}
-		unboundAbort := boundSecret == "" && request.Operation == linuxSupervisorOpAbort && request.SupervisorPID == 0 && request.SupervisorIdentity == ""
+		// A structurally exact but unsupported operation must not fall through
+		// to the default stopped response.
+		recoveryOperationSupported := request.Operation == linuxSupervisorOpAbort || request.Operation == linuxSupervisorOpStop || request.Operation == linuxSupervisorOpClose || request.Operation == linuxSupervisorOpRelease
+		unboundAbort := recoveryOperationSupported && boundSecret == "" && request.Operation == linuxSupervisorOpAbort && request.SupervisorPID == 0 && request.SupervisorIdentity == ""
 		valid := false
 		if unboundAbort {
 			valid = linuxSupervisorUnboundAbortRequestMatches(request, launch, target)
-		} else {
+		} else if recoveryOperationSupported {
 			valid = linuxSupervisorRequestMatchesV2(request, launch, target) && request.Secret != ""
 			if boundSecret != "" {
 				valid = valid && request.Secret == boundSecret
 			} else {
 				valid = valid && linuxSupervisorSecretMatchesV2(request.Secret, launch.SecretDigest)
 			}
+		}
+		if valid && ownerRecoveryMarker.path != "" && !ownerRecoveryMarkerPublished {
+			if err := writeLinuxSupervisorOwnerRecoveryAuthenticatedMarker(ownerRecoveryMarker, request.Operation, target.PID(), os.Getpid(), ownerLossProofResultCategory); err != nil {
+				_ = connection.Close()
+				return err
+			}
+			ownerRecoveryMarkerPublished = true
 		}
 		status, message := "stopped", ""
 		if !valid {
@@ -2054,7 +3416,17 @@ func runLinuxSupervisorRecoveryLoop(listener *net.UnixListener, launch linuxSupe
 			} else {
 				status = "aborted"
 			}
-		} else if (receipt == nil || *receipt == nil) && (request.Operation == linuxSupervisorOpStop || request.Operation == linuxSupervisorOpClose || request.Operation == linuxSupervisorOpAbort) {
+		} else if request.Operation == linuxSupervisorOpAbort && allowAbort && (receipt == nil || *receipt == nil) {
+			if stop == nil {
+				status, message = "error", ErrLinuxSupervisorStopUnproven.Error()
+			} else if stopErr := stop(); stopErr != nil {
+				status, message = "error", stopErr.Error()
+			} else {
+				status = "aborted"
+			}
+		} else if request.Operation == linuxSupervisorOpAbort {
+			status, message = "error", "Linux supervisor abort is allowed only before commit"
+		} else if (receipt == nil || *receipt == nil) && (request.Operation == linuxSupervisorOpStop || request.Operation == linuxSupervisorOpClose) {
 			if stop == nil {
 				status, message = "error", ErrLinuxSupervisorStopUnproven.Error()
 			} else if stopErr := stop(); stopErr != nil {
@@ -2068,7 +3440,20 @@ func runLinuxSupervisorRecoveryLoop(listener *net.UnixListener, launch linuxSupe
 			status = "released"
 		}
 		identity := mustLinuxSupervisorIdentity()
-		response := linuxSupervisorResponse{Version: linuxSupervisorProtocolVersion, Operation: request.Operation, Status: status, LaunchToken: launch.LaunchToken, Sequence: request.Sequence, TargetPID: target.PID(), TargetIdentity: target.Identity(), OwnerKind: linuxSupervisorOwnerKind, OwnerContext: launch.OwnerContext, SupervisorPID: os.Getpid(), SupervisorIdentity: identity, Token: launch.PipeToken, JobID: launch.JobID, ActiveProcesses: 0, Error: message}
+		sealSequence := uint64(0)
+		if status == "stopped" && scanSealSequence != nil {
+			sealSequence = scanSealSequence()
+		}
+		response := linuxSupervisorRecoveryResponse{
+			linuxSupervisorResponse: linuxSupervisorResponse{
+				Version: linuxSupervisorProtocolVersion, Operation: request.Operation, Status: status,
+				LaunchToken: launch.LaunchToken, Sequence: request.Sequence,
+				TargetPID: target.PID(), TargetIdentity: target.Identity(), OwnerKind: linuxSupervisorOwnerKind,
+				OwnerContext: launch.OwnerContext, SupervisorPID: os.Getpid(), SupervisorIdentity: identity,
+				Token: launch.PipeToken, JobID: launch.JobID, ActiveProcesses: 0, Error: message,
+			},
+			ScanSealSequence: sealSequence,
+		}
 		if err := writeLinuxSupervisorFrame(connection, response); err != nil {
 			_ = connection.Close()
 			continue
@@ -2195,36 +3580,48 @@ func mustLinuxSupervisorIdentity() string {
 // returns a fresh exact stop receipt.  Endpoint absence, helper identity
 // mismatch, and unknown responses are all unresolved outcomes.
 func StopPersistedLinuxSupervisor(value authority.Supervisor) (authority.StopReceipt, error) {
-	receipt, _, err := stopPersistedLinuxSupervisor(value)
+	receipt, _, _, err := stopPersistedLinuxSupervisor(value)
 	return receipt, err
 }
 
-func stopPersistedLinuxSupervisor(value authority.Supervisor) (authority.StopReceipt, linuxSupervisorStopReceiptSource, error) {
+func StopPersistedLinuxSupervisorWithScanSeal(value authority.Supervisor) (authority.StopReceipt, uint64, error) {
+	receipt, sequence, _, err := stopPersistedLinuxSupervisor(value)
+	return receipt, sequence, err
+}
+
+func stopPersistedLinuxSupervisor(value authority.Supervisor) (authority.StopReceipt, uint64, linuxSupervisorStopReceiptSource, error) {
 	if err := value.Validate(); err != nil {
-		return authority.StopReceipt{}, linuxSupervisorStopReceiptUnknown, fmt.Errorf("validate persisted Linux supervisor authority: %w", err)
+		return authority.StopReceipt{}, 0, linuxSupervisorStopReceiptUnknown, fmt.Errorf("validate persisted Linux supervisor authority: %w", err)
 	}
 	connection, err := dialLinuxSupervisorRecovery(value)
 	if err != nil {
 		if !isLinuxSupervisorRecoveryEndpointUnreachable(err) {
-			return authority.StopReceipt{}, linuxSupervisorStopReceiptUnknown, fmt.Errorf("connect persisted Linux supervisor: %w", err)
+			return authority.StopReceipt{}, 0, linuxSupervisorStopReceiptUnknown, fmt.Errorf("connect persisted Linux supervisor: %w", err)
+		}
+		if value.StopReceipt == nil || !value.StopReceipt.ValidFor(value) {
+			return authority.StopReceipt{}, 0, linuxSupervisorStopReceiptUnknown,
+				fmt.Errorf("%w: absent helper endpoint cannot mint a stop receipt", ErrLinuxSupervisorStopUnproven)
 		}
 		if proofErr := provePersistedLinuxSupervisorStop(value); proofErr != nil {
-			return authority.StopReceipt{}, linuxSupervisorStopReceiptUnknown, errors.Join(fmt.Errorf("connect persisted Linux supervisor: %w", err), proofErr)
+			return authority.StopReceipt{}, 0, linuxSupervisorStopReceiptUnknown, errors.Join(fmt.Errorf("connect persisted Linux supervisor: %w", err), proofErr)
 		}
-		receipt, receiptErr := persistedLinuxSupervisorStopReceipt(value)
-		return receipt, linuxSupervisorStopReceiptFromAbsenceProof, receiptErr
+		return *value.StopReceipt, 0, linuxSupervisorStopReceiptFromAbsenceProof, nil
 	}
 	defer connection.Close()
 	request := linuxSupervisorRequest{Version: linuxSupervisorProtocolVersion, Operation: linuxSupervisorOpStop, LaunchToken: value.LaunchToken, TargetPID: value.TargetPID, TargetIdentity: value.TargetIdentity, OwnerKind: value.OwnerKind, OwnerContext: value.OwnerContext, SupervisorPID: value.SupervisorPID, SupervisorIdentity: value.SupervisorIdentity, Token: value.PipeToken, JobID: value.JobID, Secret: value.Secret}
 	response, err := exchangeLinuxSupervisorRecovery(connection, request, value)
 	if err != nil {
-		return authority.StopReceipt{}, linuxSupervisorStopReceiptUnknown, err
+		return authority.StopReceipt{}, 0, linuxSupervisorStopReceiptUnknown, err
 	}
 	if response.Status != "stopped" || response.ActiveProcesses != 0 {
-		return authority.StopReceipt{}, linuxSupervisorStopReceiptUnknown, fmt.Errorf("%w: persisted helper returned %q", ErrLinuxSupervisorStopUnproven, response.Status)
+		return authority.StopReceipt{}, 0, linuxSupervisorStopReceiptUnknown, fmt.Errorf("%w: persisted helper returned %q", ErrLinuxSupervisorStopUnproven, response.Status)
+	}
+	if response.ScanSealSequence == 0 {
+		return authority.StopReceipt{}, 0, linuxSupervisorStopReceiptUnknown,
+			fmt.Errorf("%w: persisted helper returned no terminal scan seal", ErrLinuxSupervisorStopUnproven)
 	}
 	receipt, receiptErr := persistedLinuxSupervisorStopReceipt(value)
-	return receipt, linuxSupervisorStopReceiptFromHelper, receiptErr
+	return receipt, response.ScanSealSequence, linuxSupervisorStopReceiptFromHelper, receiptErr
 }
 
 // ReleasePersistedLinuxSupervisor releases a helper after the caller has
@@ -2324,7 +3721,7 @@ func retireLinuxSupervisorEndpoint(ownerContext string) error {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("inspect Linux supervisor recovery endpoint: %w", err)
+		return fmt.Errorf("inspect Linux supervisor recovery endpoint: %w", sanitizeLinuxSupervisorEndpointError(err))
 	}
 	if info.Mode()&os.ModeSocket == 0 {
 		return errors.New("Linux supervisor recovery endpoint is not a socket")
@@ -2334,24 +3731,26 @@ func retireLinuxSupervisorEndpoint(ownerContext string) error {
 		_ = connection.Close()
 		return errors.New("Linux supervisor recovery endpoint still accepts connections")
 	}
+	dialErr = sanitizeLinuxSupervisorEndpointError(dialErr)
 	if !errors.Is(dialErr, syscall.ECONNREFUSED) && !errors.Is(dialErr, os.ErrNotExist) {
 		return fmt.Errorf("probe stale Linux supervisor recovery endpoint: %w", dialErr)
 	}
 	if err := os.Remove(endpoint); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove stale Linux supervisor recovery endpoint: %w", err)
+		return fmt.Errorf("remove stale Linux supervisor recovery endpoint: %w", sanitizeLinuxSupervisorEndpointError(err))
 	}
 	if _, err := linuxSupervisorLstat(endpoint); err == nil {
 		return errors.New("Linux supervisor recovery endpoint remained after stale removal")
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("verify stale Linux supervisor recovery endpoint removal: %w", err)
+		return fmt.Errorf("verify stale Linux supervisor recovery endpoint removal: %w", sanitizeLinuxSupervisorEndpointError(err))
 	}
 	return nil
 }
 
-// ProvePreparedSupervisorAborted proves that an unbound Linux supervisor
-// handoff left no live recovery endpoint, exact target, or original process
-// group. Any live object or uncertain observation remains unresolved; this
-// proof never claims that a target was stopped.
+// ProvePreparedSupervisorAborted proves that a never-committed Linux
+// supervisor handoff left no live recovery endpoint, exact helper or target,
+// or original process group. A bound helper is authenticated before its secret
+// is sent. Any live object or uncertain observation remains unresolved; this
+// proof never claims that a target ran or mints a stop receipt.
 func ProvePreparedSupervisorAborted(handoff authority.SupervisorHandoff, verifyOldOwnerQuiesced SupervisorHandoffAbortVerifier) (authority.SupervisorHandoffAbortProof, error) {
 	if verifyOldOwnerQuiesced == nil {
 		return authority.SupervisorHandoffAbortProof{}, errors.New("supervisor handoff abort verifier is required")
@@ -2361,9 +3760,6 @@ func ProvePreparedSupervisorAborted(handoff authority.SupervisorHandoff, verifyO
 	}
 	if handoff.OwnerKind != authority.OwnerKindLinuxHelper || handoff.CreatorSessionID != nil {
 		return authority.SupervisorHandoffAbortProof{}, errors.New("Linux supervisor abort proof has invalid owner binding")
-	}
-	if handoff.SupervisorPID != 0 {
-		return authority.SupervisorHandoffAbortProof{}, errors.New("Linux supervisor abort proof requires an unbound handoff")
 	}
 	if handoff.StopReceipt != nil {
 		return authority.SupervisorHandoffAbortProof{}, errors.New("Linux supervisor abort proof cannot carry a stop receipt")
@@ -2379,14 +3775,16 @@ func ProvePreparedSupervisorAborted(handoff authority.SupervisorHandoff, verifyO
 	}
 
 	proof := authority.SupervisorHandoffAbortProof{
-		Version:        authority.SupervisorHandoffAbortProofVersion,
-		Disposition:    authority.SupervisorHandoffAbortDisposition,
-		LaunchToken:    handoff.LaunchToken,
-		JobID:          handoff.JobID,
-		OwnerKind:      handoff.OwnerKind,
-		OwnerContext:   handoff.OwnerContext,
-		TargetPID:      handoff.TargetPID,
-		TargetIdentity: handoff.TargetIdentity,
+		Version:            authority.SupervisorHandoffAbortProofVersion,
+		Disposition:        authority.SupervisorHandoffAbortDisposition,
+		LaunchToken:        handoff.LaunchToken,
+		JobID:              handoff.JobID,
+		OwnerKind:          handoff.OwnerKind,
+		OwnerContext:       handoff.OwnerContext,
+		TargetPID:          handoff.TargetPID,
+		TargetIdentity:     handoff.TargetIdentity,
+		SupervisorPID:      handoff.SupervisorPID,
+		SupervisorIdentity: handoff.SupervisorIdentity,
 	}
 	if err := proof.Validate(); err != nil {
 		return authority.SupervisorHandoffAbortProof{}, err
@@ -2404,6 +3802,7 @@ func requestLinuxSupervisorAbort(handoff authority.SupervisorHandoff) (bool, err
 	}
 	connection, err := net.DialTimeout("unix", endpoint, linuxSupervisorTimeout)
 	if err != nil {
+		err = sanitizeLinuxSupervisorEndpointError(err)
 		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
 		}
@@ -2416,21 +3815,38 @@ func requestLinuxSupervisorAbort(handoff authority.SupervisorHandoff) (bool, err
 	}
 	defer unixConnection.Close()
 	if err := unixConnection.SetDeadline(time.Now().Add(linuxSupervisorTimeout)); err != nil {
-		return true, fmt.Errorf("set Linux supervisor abort deadline: %w", err)
+		return true, fmt.Errorf("set Linux supervisor abort deadline: %w", sanitizeLinuxSupervisorEndpointError(err))
 	}
 	defer unixConnection.SetDeadline(time.Time{})
-	if err := verifyLinuxSupervisorUnboundPeer(unixConnection, handoff.OwnerContext); err != nil {
-		return true, err
+	expectedPID := handoff.SupervisorPID
+	expectedIdentity := handoff.SupervisorIdentity
+	if expectedPID > 0 {
+		if err := verifyLinuxSupervisorPeerBeforeSecret(unixConnection, expectedPID, expectedIdentity); err != nil {
+			return true, err
+		}
+	} else {
+		if err := verifyLinuxSupervisorUnboundPeer(unixConnection, handoff.OwnerContext); err != nil {
+			return true, err
+		}
+		credentials, err := linuxSupervisorPeerCredentials(unixConnection)
+		if err != nil {
+			return true, sanitizeLinuxSupervisorEndpointError(err)
+		}
+		expectedPID = int(credentials.Pid)
+		expectedIdentity, err = linuxSupervisorHelperIdentity(handoff.OwnerContext)
+		if err != nil {
+			return true, err
+		}
 	}
-	request := linuxSupervisorRequest{Version: linuxSupervisorProtocolVersion, Operation: linuxSupervisorOpAbort, LaunchToken: handoff.LaunchToken, TargetPID: handoff.TargetPID, TargetIdentity: handoff.TargetIdentity, OwnerKind: handoff.OwnerKind, OwnerContext: handoff.OwnerContext, Token: handoff.PipeToken, JobID: handoff.JobID, Secret: handoff.Secret}
+	request := linuxSupervisorRequest{Version: linuxSupervisorProtocolVersion, Operation: linuxSupervisorOpAbort, LaunchToken: handoff.LaunchToken, TargetPID: handoff.TargetPID, TargetIdentity: handoff.TargetIdentity, OwnerKind: handoff.OwnerKind, OwnerContext: handoff.OwnerContext, SupervisorPID: handoff.SupervisorPID, SupervisorIdentity: handoff.SupervisorIdentity, Token: handoff.PipeToken, JobID: handoff.JobID, Secret: handoff.Secret}
 	if err := writeLinuxSupervisorFrame(unixConnection, request); err != nil {
-		return true, fmt.Errorf("send Linux supervisor abort request: %w", err)
+		return true, fmt.Errorf("send Linux supervisor abort request: %w", sanitizeLinuxSupervisorEndpointError(err))
 	}
 	var response linuxSupervisorResponse
 	if err := readLinuxSupervisorFrame(bufio.NewReader(unixConnection), &response); err != nil {
-		return true, fmt.Errorf("read Linux supervisor abort response: %w", err)
+		return true, fmt.Errorf("read Linux supervisor abort response: %w", sanitizeLinuxSupervisorEndpointError(err))
 	}
-	if response.Version != linuxSupervisorProtocolVersion || response.Operation != linuxSupervisorOpAbort || response.Sequence != request.Sequence || response.LaunchToken != handoff.LaunchToken || response.TargetPID != handoff.TargetPID || response.TargetIdentity != handoff.TargetIdentity || response.OwnerKind != handoff.OwnerKind || response.OwnerContext != handoff.OwnerContext || response.Token != handoff.PipeToken || response.JobID != handoff.JobID {
+	if response.Version != linuxSupervisorProtocolVersion || response.Operation != linuxSupervisorOpAbort || response.Sequence != request.Sequence || response.LaunchToken != handoff.LaunchToken || response.TargetPID != handoff.TargetPID || response.TargetIdentity != handoff.TargetIdentity || response.OwnerKind != handoff.OwnerKind || response.OwnerContext != handoff.OwnerContext || response.SupervisorPID != expectedPID || response.SupervisorIdentity != expectedIdentity || response.Token != handoff.PipeToken || response.JobID != handoff.JobID {
 		return true, errors.New("Linux supervisor abort response identity mismatch")
 	}
 	if response.Status == "error" {
@@ -2442,10 +3858,7 @@ func requestLinuxSupervisorAbort(handoff authority.SupervisorHandoff) (bool, err
 	if response.Status != "aborted" || response.ActiveProcesses != 0 {
 		return true, fmt.Errorf("Linux supervisor abort returned %q with %d active processes", response.Status, response.ActiveProcesses)
 	}
-	if response.SupervisorPID <= 0 || response.SupervisorIdentity == "" {
-		return true, errors.New("Linux supervisor abort response has no helper identity")
-	}
-	if err := verifyLinuxSupervisorPeer(unixConnection, response.SupervisorPID, response.SupervisorIdentity); err != nil {
+	if err := verifyLinuxSupervisorPeer(unixConnection, expectedPID, expectedIdentity); err != nil {
 		return true, err
 	}
 	actualIdentity, err := linuxSupervisorProcessIdentity(response.SupervisorPID)
@@ -2463,14 +3876,21 @@ func waitForLinuxSupervisorAbortAbsence(handoff authority.SupervisorHandoff) err
 	var lastErr error
 	for {
 		endpointErr := proveLinuxSupervisorEndpointAbsent(handoff.OwnerContext)
+		var helperErr error
+		if handoff.SupervisorPID > 0 {
+			helperErr = proveLinuxSupervisorHelperAbsent(handoff.SupervisorPID, handoff.SupervisorIdentity)
+		}
 		targetErr := proveLinuxSupervisorTargetAbsent(handoff.TargetPID, handoff.TargetIdentity)
 		groupErr := linuxSupervisorProveProcessGroupAbsent(context.Background(), handoff.TargetPID, handoff.TargetIdentity)
-		if endpointErr == nil && targetErr == nil && groupErr == nil {
+		if endpointErr == nil && helperErr == nil && targetErr == nil && groupErr == nil {
 			return nil
 		}
 		var causes []error
 		if endpointErr != nil {
 			causes = append(causes, endpointErr)
+		}
+		if helperErr != nil {
+			causes = append(causes, helperErr)
 		}
 		if targetErr != nil {
 			causes = append(causes, targetErr)
@@ -2499,7 +3919,7 @@ func proveLinuxSupervisorEndpointAbsent(ownerContext string) error {
 	if _, err := linuxSupervisorLstat(endpoint); err == nil {
 		return errors.New("Linux supervisor recovery endpoint is still present")
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("prove Linux supervisor recovery endpoint absent: %w", err)
+		return fmt.Errorf("prove Linux supervisor recovery endpoint absent: %w", sanitizeLinuxSupervisorEndpointError(err))
 	}
 	return nil
 }
@@ -2525,7 +3945,7 @@ func dialLinuxSupervisorRecovery(value authority.Supervisor) (*net.UnixConn, err
 	}
 	connection, err := net.DialTimeout("unix", endpoint, linuxSupervisorTimeout)
 	if err != nil {
-		return nil, err
+		return nil, sanitizeLinuxSupervisorEndpointError(err)
 	}
 	unixConnection, ok := connection.(*net.UnixConn)
 	if !ok {
@@ -2535,39 +3955,39 @@ func dialLinuxSupervisorRecovery(value authority.Supervisor) (*net.UnixConn, err
 	return unixConnection, nil
 }
 
-func exchangeLinuxSupervisorRecovery(connection *net.UnixConn, request linuxSupervisorRequest, value authority.Supervisor) (linuxSupervisorResponse, error) {
+func exchangeLinuxSupervisorRecovery(connection *net.UnixConn, request linuxSupervisorRequest, value authority.Supervisor) (linuxSupervisorRecoveryResponse, error) {
 	if err := connection.SetDeadline(time.Now().Add(linuxSupervisorTimeout)); err != nil {
-		return linuxSupervisorResponse{}, fmt.Errorf("set Linux supervisor recovery deadline: %w", err)
+		return linuxSupervisorRecoveryResponse{}, fmt.Errorf("set Linux supervisor recovery deadline: %w", sanitizeLinuxSupervisorEndpointError(err))
 	}
 	defer connection.SetDeadline(time.Time{})
 	if err := verifyLinuxSupervisorPeerBeforeSecret(connection, value.SupervisorPID, value.SupervisorIdentity); err != nil {
-		return linuxSupervisorResponse{}, err
+		return linuxSupervisorRecoveryResponse{}, err
 	}
 	if err := writeLinuxSupervisorFrame(connection, request); err != nil {
-		return linuxSupervisorResponse{}, err
+		return linuxSupervisorRecoveryResponse{}, fmt.Errorf("send Linux supervisor recovery request: %w", sanitizeLinuxSupervisorEndpointError(err))
 	}
-	var response linuxSupervisorResponse
+	var response linuxSupervisorRecoveryResponse
 	if err := readLinuxSupervisorFrame(bufio.NewReader(connection), &response); err != nil {
-		return linuxSupervisorResponse{}, err
+		return linuxSupervisorRecoveryResponse{}, fmt.Errorf("read Linux supervisor recovery response: %w", sanitizeLinuxSupervisorEndpointError(err))
 	}
 	if response.Version != linuxSupervisorProtocolVersion || response.Operation != request.Operation || response.LaunchToken != value.LaunchToken || response.TargetPID != value.TargetPID || response.TargetIdentity != value.TargetIdentity || response.OwnerKind != value.OwnerKind || response.OwnerContext != value.OwnerContext || response.SupervisorPID != value.SupervisorPID || response.SupervisorIdentity != value.SupervisorIdentity || response.Token != value.PipeToken || response.JobID != value.JobID {
-		return linuxSupervisorResponse{}, errors.New("Linux supervisor recovery response identity mismatch")
+		return linuxSupervisorRecoveryResponse{}, errors.New("Linux supervisor recovery response identity mismatch")
 	}
 	if response.Status == "error" {
 		if response.Error == "" {
-			return linuxSupervisorResponse{}, errors.New("Linux supervisor recovery returned an unspecified error")
+			return linuxSupervisorRecoveryResponse{}, errors.New("Linux supervisor recovery returned an unspecified error")
 		}
-		return linuxSupervisorResponse{}, errors.New(response.Error)
+		return linuxSupervisorRecoveryResponse{}, errors.New(response.Error)
 	}
 	if err := verifyLinuxSupervisorPeer(connection, response.SupervisorPID, response.SupervisorIdentity); err != nil {
-		return linuxSupervisorResponse{}, err
+		return linuxSupervisorRecoveryResponse{}, err
 	}
 	actual, err := ProcessIdentity(response.SupervisorPID)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return linuxSupervisorResponse{}, fmt.Errorf("Linux supervisor recovery helper identity is not exact: %v", err)
+		return linuxSupervisorRecoveryResponse{}, fmt.Errorf("Linux supervisor recovery helper identity is not exact: %v", err)
 	}
 	if err == nil && actual != response.SupervisorIdentity {
-		return linuxSupervisorResponse{}, fmt.Errorf("Linux supervisor recovery helper identity is not exact: got %q, want %q", actual, response.SupervisorIdentity)
+		return linuxSupervisorRecoveryResponse{}, fmt.Errorf("Linux supervisor recovery helper identity is not exact: got %q, want %q", actual, response.SupervisorIdentity)
 	}
 	return response, nil
 }
@@ -2688,6 +4108,30 @@ func credentialsPID(credentials *unix.Ucred) int {
 		return 0
 	}
 	return int(credentials.Pid)
+}
+
+// sanitizeLinuxSupervisorEndpointError preserves the typed cause and operation
+// while removing the random recovery socket path from OS error formatting.
+func sanitizeLinuxSupervisorEndpointError(err error) error {
+	switch typed := err.(type) {
+	case *net.OpError:
+		copy := *typed
+		copy.Source = nil
+		copy.Addr = nil
+		copy.Err = sanitizeLinuxSupervisorEndpointError(typed.Err)
+		return &copy
+	case *os.PathError:
+		copy := *typed
+		copy.Path = "Linux supervisor recovery endpoint"
+		copy.Err = sanitizeLinuxSupervisorEndpointError(typed.Err)
+		return &copy
+	case *os.SyscallError:
+		copy := *typed
+		copy.Err = sanitizeLinuxSupervisorEndpointError(typed.Err)
+		return &copy
+	default:
+		return err
+	}
 }
 
 // linuxSupervisorEndpointMax is sizeof(sun_path); the path must also fit its

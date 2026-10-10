@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,25 +33,36 @@ import (
 )
 
 const (
-	linuxOwnerHelperV2Version      = 1
-	linuxOwnerHelperV2BootstrapFD  = 3
-	linuxOwnerHelperV2LeafFD       = 4
-	linuxOwnerHelperV2ParentFD     = 5
-	linuxOwnerHelperV2OwnerPipeFD  = 6
-	linuxOwnerHelperV2MaxFrame     = 192 << 10
-	linuxOwnerHelperV2Timeout      = 2 * time.Minute
-	linuxOwnerHelperV2StartupWait  = 5 * time.Second
-	linuxOwnerHelperV2StopTimeout  = 30 * time.Second
-	linuxOwnerHelperV2PollInterval = 25 * time.Millisecond
+	linuxOwnerHelperV2Version                = 1
+	linuxOwnerHelperV2BootstrapFD            = 3
+	linuxOwnerHelperV2LeafFD                 = 4
+	linuxOwnerHelperV2ParentFD               = 5
+	linuxOwnerHelperV2OwnerPipeFD            = 6
+	linuxOwnerHelperV2MaxFrame               = 192 << 10
+	linuxOwnerHelperV2Timeout                = 2 * time.Minute
+	linuxOwnerHelperV2StartupWait            = 5 * time.Second
+	linuxOwnerHelperV2StopTimeout            = 30 * time.Second
+	linuxOwnerHelperV2PollInterval           = 25 * time.Millisecond
+	linuxOwnerHelperV2MaxMembershipProcesses = 1 << 16
+	linuxOwnerHelperV2MaxMembershipCgroups   = 1 << 12
+	linuxOwnerHelperV2MaxMembershipDepth     = 128
+	linuxOwnerHelperV2MaxCgroupProcsBytes    = 1 << 20
+	// Bound the raw /proc list at 11 bytes per permitted decimal PID.
+	linuxOwnerAnchorMaxChildrenBytes           = 11 * linuxOwnerHelperV2MaxMembershipProcesses
+	linuxOwnerAnchorMaxCreatorChainDepth       = 128
+	linuxOwnerProcessChildrenSnapshotAttempts  = 3
+	linuxOwnerHelperV2WitnessCrashAfterRelease = "crash_after_release_before_register"
 )
 
 var (
-	ErrLinuxOwnerHelperV2OwnerLost    = errors.New("Linux owner helper observed daemon-owner loss")
-	ErrLinuxOwnerHelperV2NotCommitted = errors.New("Linux owner helper has no durable handoff acknowledgement")
-	ErrLinuxOwnerHelperV2LeaseUnarmed = errors.New("Linux owner helper has no acknowledged initial lease")
-	ErrLinuxOwnerHelperV2ReleaseUsed  = errors.New("Linux owner helper RELEASE is single-use")
-	ErrLinuxOwnerHelperV2StopUnproven = errors.New("Linux owner helper stop is unproven")
-	ErrLinuxOwnerHelperV2RecoveryOnly = errors.New("Linux owner helper is latched to recovery-only mode")
+	ErrLinuxOwnerHelperV2OwnerLost      = errors.New("Linux owner helper observed daemon-owner loss")
+	ErrLinuxOwnerHelperV2NotCommitted   = errors.New("Linux owner helper has no durable handoff acknowledgement")
+	ErrLinuxOwnerHelperV2LeaseUnarmed   = errors.New("Linux owner helper has no acknowledged initial lease")
+	ErrLinuxOwnerHelperV2ReleaseUsed    = errors.New("Linux owner helper RELEASE is single-use")
+	ErrLinuxOwnerHelperV2StopUnproven   = errors.New("Linux owner helper stop is unproven")
+	ErrLinuxOwnerHelperV2RecoveryOnly   = errors.New("Linux owner helper is latched to recovery-only mode")
+	errLinuxOwnerHelperV2WitnessExit    = errors.New("Linux owner helper exited at the selected post-RELEASE witness boundary")
+	errLinuxOwnerProcessChildrenChanged = errors.New("Linux process child census snapshot changed")
 )
 
 // LinuxOwnerHelperV2Prepared is evidence from the helper's actual parked-gate
@@ -123,6 +135,8 @@ type LinuxOwnerHelperV2StopEvidence struct {
 	Leaf             authority.LinuxCgroupIdentity          `json:"leaf"`
 	Anchor           authority.LinuxCgroupProcessIdentity   `json:"anchor"`
 	Helper           authority.LinuxCgroupProcessIdentity   `json:"helper"`
+	AnchorStop       *LinuxOwnerAnchorStopEvidence          `json:"anchor_stop"`
+	RunReapEvidence  []LinuxOwnerAnchorReapEvidence         `json:"run_reap_evidence,omitempty"`
 	Launcher         authority.LinuxCgroupProcessIdentity   `json:"launcher"`
 	Gate             authority.LinuxCgroupGateIdentity      `json:"gate"`
 	Proof            authority.LinuxCgroupStopProof         `json:"proof"`
@@ -143,6 +157,7 @@ type LinuxOwnerHelperV2PreGateStopEvidence struct {
 	Leaf                   authority.LinuxCgroupIdentity              `json:"leaf"`
 	Anchor                 authority.LinuxCgroupProcessIdentity       `json:"anchor"`
 	Helper                 authority.LinuxCgroupProcessIdentity       `json:"helper"`
+	AnchorStop             *LinuxOwnerAnchorStopEvidence              `json:"anchor_stop"`
 	PrepareAttempted       bool                                       `json:"prepare_attempted"`
 	Launcher               *authority.LinuxCgroupProcessIdentity      `json:"launcher,omitempty"`
 	LauncherExit           *authority.LinuxCgroupExitProof            `json:"launcher_exit,omitempty"`
@@ -162,7 +177,9 @@ func (evidence LinuxOwnerHelperV2PreGateStopEvidence) ValidateFor(grant LinuxOwn
 	if grant.Validate() != nil || helper.Validate() != nil || evidence.Version != linuxOwnerHelperV2Version ||
 		evidence.RunKey != grant.RunKey || evidence.Fence != grant.Fence || evidence.LaunchToken != grant.LaunchToken ||
 		!evidence.Parent.Equal(grant.Parent) || !evidence.Leaf.Equal(grant.Leaf) || !evidence.Anchor.Equal(grant.Anchor) ||
-		!evidence.Helper.Equal(helper) || !evidence.NoProducerCanAct || !evidence.PinnedLeafFD ||
+		!evidence.Helper.Equal(helper) || evidence.AnchorStop == nil ||
+		evidence.AnchorStop.ValidateFor(grant, helper, grant.Anchor, nil, false) != nil ||
+		!evidence.NoProducerCanAct || !evidence.PinnedLeafFD ||
 		!evidence.CgroupKillAcknowledged || !evidence.CgroupPopulatedZero || !evidence.NoMigrationObserved || !evidence.DescendantsReaped {
 		return errors.New("Linux owner helper pre-gate stop evidence differs from the exact reservation or physical observations")
 	}
@@ -187,26 +204,42 @@ func (evidence LinuxOwnerHelperV2PreGateStopEvidence) ValidateFor(grant LinuxOwn
 		!proof.Issuer.Equal(helper) || !proof.Reaper.Equal(helper) || !proof.PinnedLeafFD ||
 		!proof.CgroupKillAcknowledged || !proof.CgroupPopulatedZero || !proof.NoMigrationObserved ||
 		!proof.ProducerFenced || !proof.DescendantsReaped || !proof.LauncherExit.Equal(*evidence.LauncherExit) ||
-		!proof.GateOutcome.Equal(*evidence.GateOutcome) {
+		!proof.GateOutcome.Equal(*evidence.GateOutcome) ||
+		proof.CgroupKillAcknowledged != evidence.AnchorStop.KillAcknowledged ||
+		proof.CgroupPopulatedZero != evidence.AnchorStop.CgroupPopulatedZero ||
+		proof.NoMigrationObserved != evidence.AnchorStop.NoMigrationObserved ||
+		proof.ProducerFenced != evidence.AnchorStop.ProducerFenced {
 		return errors.New("Linux owner helper pre-gate physical proof is inconsistent")
 	}
 	return nil
 }
 
 type LinuxOwnerHelperV2Status struct {
-	State              string
-	OwnerLost          bool
-	CommitAcknowledged bool
-	ReleaseAttempted   bool
-	Released           bool
-	Exit               *LinuxOwnerHelperV2Exit
-	Launcher           *authority.LinuxCgroupProcessIdentity
-	LauncherExit       *authority.LinuxCgroupExitProof
-	Gate               *authority.LinuxCgroupGateIdentity
-	UserNamespace      *LinuxUserNamespaceIdentity
-	PIDFD              *os.File
-	StopEvidence       *LinuxOwnerHelperV2StopEvidence
-	ErrorCode          string
+	RunKey                LinuxOwnerAnchorRunKey
+	Fence                 protocol.Fence
+	Helper                authority.LinuxCgroupProcessIdentity
+	State                 string
+	OwnerLost             bool
+	CommitAcknowledged    bool
+	ReleaseAttempted      bool
+	Released              bool
+	LeaseLive             bool
+	LeaseSequence         uint64
+	StopRequested         bool
+	StopAttempted         bool
+	ReleaseInFlight       bool
+	WitnessDropObserved   bool
+	WitnessDropOperation  string
+	WitnessActionObserved bool
+	WitnessAction         string
+	Exit                  *LinuxOwnerHelperV2Exit
+	Launcher              *authority.LinuxCgroupProcessIdentity
+	LauncherExit          *authority.LinuxCgroupExitProof
+	Gate                  *authority.LinuxCgroupGateIdentity
+	UserNamespace         *LinuxUserNamespaceIdentity
+	PIDFD                 *os.File
+	StopEvidence          *LinuxOwnerHelperV2StopEvidence
+	ErrorCode             string
 }
 
 // LinuxOwnerHelperV2Exit reports a kernel waitid(P_PIDFD) result from the
@@ -238,18 +271,93 @@ func (evidence LinuxOwnerHelperV2StopEvidence) ValidateFor(grant LinuxOwnerAncho
 		return errors.New("Linux owner helper stop evidence differs from the exact RunKey, fence, gate, or producers")
 	}
 	if evidence.PreGate != nil {
-		if evidence.PreGate.ValidateFor(grant, helper) != nil || launcher.Validate() == nil || gate.Validate() == nil {
+		if evidence.AnchorStop != nil || len(evidence.RunReapEvidence) != 0 || evidence.PreGate.ValidateFor(grant, helper) != nil ||
+			launcher.Validate() == nil || gate.Validate() == nil {
 			return errors.New("Linux owner helper pre-gate stop evidence is mixed with gate-bound authority")
 		}
 		return nil
 	}
-	if launcher.Validate() != nil || gate.Validate() != nil || !evidence.Launcher.Equal(launcher) ||
+	if evidence.AnchorStop == nil || evidence.AnchorStop.HelperExit != nil || len(evidence.RunReapEvidence) != 0 ||
+		evidence.AnchorStop.ValidateFor(grant, helper, grant.Anchor, nil, false) != nil ||
+		evidence.AnchorStop.UntrustedProcess != nil ||
+		!equalLinuxOwnerAnchorProcessPointer(evidence.AnchorStop.Launcher, &launcher) ||
+		!equalLinuxOwnerAnchorGatePointer(evidence.AnchorStop.Gate, &gate) ||
+		evidence.Proof.CgroupKillAcknowledged != evidence.AnchorStop.KillAcknowledged ||
+		evidence.Proof.CgroupPopulatedZero != evidence.AnchorStop.CgroupPopulatedZero ||
+		evidence.Proof.NoMigrationObserved != evidence.AnchorStop.NoMigrationObserved ||
+		evidence.Proof.ProducerFenced != evidence.AnchorStop.ProducerFenced ||
+		launcher.Validate() != nil || gate.Validate() != nil || !evidence.Launcher.Equal(launcher) ||
 		!evidence.Gate.Equal(gate) || evidence.Proof.ValidateFor(linuxOwnerHelperV2Supervisor(grant, helper, launcher, gate, evidence.Proof.LauncherExit)) != nil {
 		return errors.New("Linux owner helper gate stop proof differs from the exact producer identities")
 	}
 	decodedDigest, err := hex.DecodeString(evidence.DescendantDigest)
 	if err != nil || len(decodedDigest) != sha256.Size || hex.EncodeToString(decodedDigest) != evidence.DescendantDigest {
 		return errors.New("Linux owner helper stop evidence has an invalid exact-child digest")
+	}
+	return nil
+}
+
+// ValidateMirrorFor validates the anchor takeover proof used after helper
+// death. Unlike ValidateFor, it requires the anchor's exact helper exit and
+// complete run-wide wait/reap set; it never accepts helper-supplied booleans
+// in place of the cached anchor StopLeaf result.
+func (evidence LinuxOwnerHelperV2StopEvidence) ValidateMirrorFor(
+	grant LinuxOwnerAnchorGrant,
+	helper, mirror authority.LinuxCgroupProcessIdentity,
+	launcher authority.LinuxCgroupProcessIdentity,
+	launcherExit authority.LinuxCgroupExitProof,
+	gate authority.LinuxCgroupGateIdentity,
+) error {
+	if grant.Validate() != nil || helper.Validate() != nil || mirror.Validate() != nil ||
+		launcher.Validate() != nil || launcherExit.Validate() != nil || gate.Validate() != nil || evidence.PreGate != nil ||
+		evidence.Version != linuxOwnerHelperV2Version || evidence.RunKey != grant.RunKey ||
+		evidence.Fence != grant.Fence || evidence.LaunchToken != grant.LaunchToken ||
+		!evidence.Parent.Equal(grant.Parent) || !evidence.Leaf.Equal(grant.Leaf) ||
+		!evidence.Anchor.Equal(grant.Anchor) || !evidence.Helper.Equal(helper) ||
+		!evidence.Launcher.Equal(launcher) || !evidence.Gate.Equal(gate) || evidence.AnchorStop == nil ||
+		evidence.AnchorStop.HelperExit == nil ||
+		!equalLinuxOwnerAnchorProcessPointer(evidence.AnchorStop.Launcher, &launcher) ||
+		!equalLinuxOwnerAnchorGatePointer(evidence.AnchorStop.Gate, &gate) ||
+		evidence.AnchorStop.UserNamespace == nil ||
+		!launcherExit.Process.Equal(launcher) || !launcherExit.ValidForOwnedDescendant(launcher, helper, grant.Anchor, nil) ||
+		evidence.DescendantCount != evidence.AnchorStop.ReapCount || evidence.DescendantDigest != evidence.AnchorStop.ReapDigest {
+		return errors.New("Linux v2 mirror stop evidence differs from the exact helper-death run")
+	}
+	if err := evidence.AnchorStop.ValidateFor(grant, helper, grant.Anchor, evidence.RunReapEvidence, true); err != nil {
+		return fmt.Errorf("validate cached anchor mirror stop/reap evidence: %w", err)
+	}
+	if evidence.AnchorStop.HelperExit.Validate() != nil || !evidence.AnchorStop.HelperExit.ValidFor(helper, grant.Anchor) ||
+		evidence.Proof.HelperExit == nil || !evidence.Proof.HelperExit.Equal(*evidence.AnchorStop.HelperExit) ||
+		evidence.Proof.Kind != authority.LinuxCgroupStopProofMirror || !evidence.Proof.Issuer.Equal(mirror) ||
+		!evidence.Proof.Reaper.Equal(grant.Anchor) || evidence.Proof.PinnedLeafFD != evidence.AnchorStop.PinnedLeafFD ||
+		!evidence.Proof.LauncherExit.Equal(launcherExit) ||
+		evidence.Proof.CgroupKillAcknowledged != evidence.AnchorStop.KillAcknowledged ||
+		evidence.Proof.CgroupPopulatedZero != evidence.AnchorStop.CgroupPopulatedZero ||
+		evidence.Proof.NoMigrationObserved != evidence.AnchorStop.NoMigrationObserved ||
+		evidence.Proof.ProducerFenced != evidence.AnchorStop.ProducerFenced ||
+		!evidence.Proof.DescendantsReaped {
+		return errors.New("Linux v2 mirror proof is not derived from the exact anchor stop and helper exit")
+	}
+	var gateReap *LinuxOwnerAnchorReapEvidence
+	for index := range evidence.RunReapEvidence {
+		item := &evidence.RunReapEvidence[index]
+		if item.ProcessRole != "gate" && item.ProcessRole != "native" {
+			continue
+		}
+		if !item.Process.Equal(gate.Process) ||
+			item.ProcessRole == "native" && !evidence.AnchorStop.GateReleaseAuthorized || gateReap != nil {
+			return errors.New("Linux v2 mirror run-reap set contains an invalid or duplicate same-PID gate transition")
+		}
+		gateReap = item
+	}
+	if gateReap != nil && !gateReap.ProcessExit.Equal(evidence.Proof.GateExit) {
+		return errors.New("Linux v2 mirror gate exit differs from the anchor's exact run-reap set")
+	}
+	supervisor := linuxOwnerHelperV2Supervisor(grant, helper, launcher, gate, launcherExit)
+	mirrorCopy := mirror
+	supervisor.Mirror = &mirrorCopy
+	if err := evidence.Proof.ValidateFor(supervisor); err != nil {
+		return fmt.Errorf("validate Linux v2 mirror StopReceipt proof: %w", err)
 	}
 	return nil
 }
@@ -268,10 +376,15 @@ func linuxOwnerHelperV2Supervisor(grant LinuxOwnerAnchorGrant, helper, launcher 
 }
 
 type linuxOwnerHelperV2Bootstrap struct {
-	Version      int                                  `json:"version"`
-	Grant        LinuxOwnerAnchorGrant                `json:"grant"`
-	AnchorSocket string                               `json:"anchor_socket"`
-	OwnerProcess authority.LinuxCgroupProcessIdentity `json:"owner_process"`
+	Version                   int                                  `json:"version"`
+	Grant                     LinuxOwnerAnchorGrant                `json:"grant"`
+	AnchorSocket              string                               `json:"anchor_socket"`
+	OwnerProcess              authority.LinuxCgroupProcessIdentity `json:"owner_process"`
+	WitnessDropResponse       string                               `json:"witness_drop_response,omitempty"`
+	WitnessHelperAction       string                               `json:"helper_action,omitempty"`
+	WitnessHoldForReleaseFile bool                                 `json:"hold_for_release_file,omitempty"`
+	WitnessRunID              string                               `json:"witness_run_id,omitempty"`
+	WitnessGeneration         int64                                `json:"witness_generation,omitempty"`
 }
 
 type linuxOwnerHelperV2BootstrapReady struct {
@@ -311,29 +424,42 @@ type linuxOwnerHelperV2Request struct {
 	AbortProof          *authority.LinuxCgroupReservationAbortProof `json:"abort_proof,omitempty"`
 }
 
+type linuxOwnerHelperV2StatusSnapshot struct {
+	LeaseLive       bool   `json:"lease_live"`
+	LeaseSequence   uint64 `json:"lease_sequence"`
+	StopRequested   bool   `json:"stop_requested"`
+	StopAttempted   bool   `json:"stop_attempted"`
+	ReleaseInFlight bool   `json:"release_in_flight"`
+}
+
 type linuxOwnerHelperV2Response struct {
-	Version            int                                        `json:"version"`
-	Operation          string                                     `json:"operation"`
-	Status             string                                     `json:"status"`
-	RunKey             LinuxOwnerAnchorRunKey                     `json:"run_key"`
-	Fence              protocolFence                              `json:"fence"`
-	LaunchToken        string                                     `json:"launch_token"`
-	Helper             authority.LinuxCgroupProcessIdentity       `json:"helper"`
-	OwnerLost          bool                                       `json:"owner_lost,omitempty"`
-	CommitAcknowledged bool                                       `json:"commit_acknowledged,omitempty"`
-	ReleaseAttempted   bool                                       `json:"release_attempted,omitempty"`
-	Released           bool                                       `json:"released,omitempty"`
-	LeaseSequence      uint64                                     `json:"lease_sequence,omitempty"`
-	Launcher           *authority.LinuxCgroupProcessIdentity      `json:"launcher,omitempty"`
-	Gate               *authority.LinuxCgroupGateIdentity         `json:"gate,omitempty"`
-	LauncherExit       *authority.LinuxCgroupExitProof            `json:"launcher_exit,omitempty"`
-	GateProcess        *authority.LinuxCgroupProcessIdentity      `json:"gate_process,omitempty"`
-	UserNamespace      *LinuxUserNamespaceIdentity                `json:"user_namespace,omitempty"`
-	GateOutcome        *authority.LinuxCgroupGateProductionResult `json:"gate_outcome,omitempty"`
-	StopEvidence       *LinuxOwnerHelperV2StopEvidence            `json:"stop_evidence,omitempty"`
-	ExitResult         *LinuxOwnerHelperV2Exit                    `json:"exit_result,omitempty"`
-	CheckoutReceipt    *authority.LinuxCloneCheckoutReceipt       `json:"checkout_receipt,omitempty"`
-	ErrorCode          string                                     `json:"error_code,omitempty"`
+	Version               int                                        `json:"version"`
+	Operation             string                                     `json:"operation"`
+	Status                string                                     `json:"status"`
+	RunKey                LinuxOwnerAnchorRunKey                     `json:"run_key"`
+	Fence                 protocolFence                              `json:"fence"`
+	LaunchToken           string                                     `json:"launch_token"`
+	Helper                authority.LinuxCgroupProcessIdentity       `json:"helper"`
+	OwnerLost             bool                                       `json:"owner_lost,omitempty"`
+	WitnessDropObserved   bool                                       `json:"witness_drop_observed,omitempty"`
+	WitnessDropOperation  string                                     `json:"witness_drop_operation,omitempty"`
+	WitnessActionObserved bool                                       `json:"witness_action_observed,omitempty"`
+	WitnessAction         string                                     `json:"witness_action,omitempty"`
+	CommitAcknowledged    bool                                       `json:"commit_acknowledged,omitempty"`
+	ReleaseAttempted      bool                                       `json:"release_attempted,omitempty"`
+	Released              bool                                       `json:"released,omitempty"`
+	LeaseSequence         uint64                                     `json:"lease_sequence,omitempty"`
+	Launcher              *authority.LinuxCgroupProcessIdentity      `json:"launcher,omitempty"`
+	Gate                  *authority.LinuxCgroupGateIdentity         `json:"gate,omitempty"`
+	LauncherExit          *authority.LinuxCgroupExitProof            `json:"launcher_exit,omitempty"`
+	GateProcess           *authority.LinuxCgroupProcessIdentity      `json:"gate_process,omitempty"`
+	UserNamespace         *LinuxUserNamespaceIdentity                `json:"user_namespace,omitempty"`
+	GateOutcome           *authority.LinuxCgroupGateProductionResult `json:"gate_outcome,omitempty"`
+	StopEvidence          *LinuxOwnerHelperV2StopEvidence            `json:"stop_evidence,omitempty"`
+	ExitResult            *LinuxOwnerHelperV2Exit                    `json:"exit_result,omitempty"`
+	CheckoutReceipt       *authority.LinuxCloneCheckoutReceipt       `json:"checkout_receipt,omitempty"`
+	StatusSnapshot        *linuxOwnerHelperV2StatusSnapshot          `json:"status_snapshot,omitempty"`
+	ErrorCode             string                                     `json:"error_code,omitempty"`
 }
 
 func (response linuxOwnerHelperV2Response) matches(grant LinuxOwnerAnchorGrant, helper authority.LinuxCgroupProcessIdentity) bool {
@@ -352,6 +478,20 @@ func linuxOwnerHelperV2CheckoutReceiptMatches(receipt authority.LinuxCloneChecko
 		receipt.Generation == intent.Generation && receipt.BindingKey == intent.BindingKey &&
 		receipt.ResourceID == intent.ResourceID && receipt.Target == intent.Target && receipt.Nonce == intent.Nonce &&
 		receipt.SeedDigest == clone.Seed.Digest && receipt.BaseCommit == intent.BaseCommit
+}
+
+func linuxOwnerHelperV2WitnessBootstrapValid(bootstrap linuxOwnerHelperV2Bootstrap) bool {
+	if bootstrap.WitnessDropResponse == "" && bootstrap.WitnessHelperAction == "" {
+		return !bootstrap.WitnessHoldForReleaseFile && bootstrap.WitnessRunID == "" && bootstrap.WitnessGeneration == 0
+	}
+	if bootstrap.WitnessRunID != bootstrap.Grant.RunKey.RunID || bootstrap.WitnessGeneration != bootstrap.Grant.RunKey.Generation {
+		return false
+	}
+	if bootstrap.WitnessDropResponse != "" {
+		return bootstrap.WitnessHelperAction == "" && !bootstrap.WitnessHoldForReleaseFile &&
+			(bootstrap.WitnessDropResponse == "stop" || bootstrap.WitnessDropResponse == "ack-stop-receipt" || bootstrap.WitnessDropResponse == "launcher-ready")
+	}
+	return bootstrap.WitnessHelperAction == linuxOwnerHelperV2WitnessCrashAfterRelease && bootstrap.WitnessHoldForReleaseFile
 }
 
 // LinuxOwnerHelperV2Client is the daemon's authenticated per-run IPC handle.
@@ -411,7 +551,8 @@ func RunLinuxOwnerHelperV2(args []string) error {
 		return errors.Join(errors.New("Linux owner helper v2 is not running under the fixed A identity"), err)
 	}
 	if bootstrap.Version != linuxOwnerHelperV2Version || bootstrap.Grant.Validate() != nil ||
-		!canonicalAbsoluteLinuxPath(bootstrap.AnchorSocket) || bootstrap.OwnerProcess.Validate() != nil {
+		!canonicalAbsoluteLinuxPath(bootstrap.AnchorSocket) || bootstrap.OwnerProcess.Validate() != nil ||
+		!linuxOwnerHelperV2WitnessBootstrapValid(bootstrap) {
 		_ = ownerPipe.Close()
 		return errors.New("Linux owner helper v2 bootstrap is invalid")
 	}
@@ -464,7 +605,11 @@ func RunLinuxOwnerHelperV2(args []string) error {
 		owner: owner, grant: bootstrap.Grant, helper: authority.LinuxCgroupProcessIdentity{PID: os.Getpid(), Identity: helperID},
 		initialOwner: bootstrap.OwnerProcess, anchorClient: anchorClient, parent: parent, leaf: leaf,
 		listener: listener, ownerPipe: ownerPipe, activeConns: make(map[*net.UnixConn]struct{}),
-		lease: newLinuxOwnerHelperV2Lease(),
+		witnessDropResponse:       bootstrap.WitnessDropResponse,
+		witnessHelperAction:       bootstrap.WitnessHelperAction,
+		witnessHoldForReleaseFile: bootstrap.WitnessHoldForReleaseFile,
+		witnessRunKey:             LinuxOwnerAnchorRunKey{RunID: bootstrap.WitnessRunID, Generation: bootstrap.WitnessGeneration},
+		lease:                     newLinuxOwnerHelperV2Lease(),
 	}
 	ready := linuxOwnerHelperV2BootstrapReady{
 		Version: linuxOwnerHelperV2Version, Status: "ready", Helper: helper.helper,
@@ -476,10 +621,13 @@ func RunLinuxOwnerHelperV2(args []string) error {
 	return helper.serve()
 }
 
-func startLinuxOwnerAnchorHelperV2(anchor *linuxOwnerAnchor, grant LinuxOwnerAnchorGrant, ownerProcess authority.LinuxCgroupProcessIdentity, leafFD, ownerPipeFD int) (*linuxOwnerAnchorRun, error) {
+func startLinuxOwnerAnchorHelperV2(anchor *linuxOwnerAnchor, grant LinuxOwnerAnchorGrant, ownerProcess authority.LinuxCgroupProcessIdentity, leafFD, ownerPipeFD int, witness *linuxOwnerAnchorWitnessConfig, beforeFork func() error) (*linuxOwnerAnchorRun, error) {
 	if anchor == nil || grant.Validate() != nil || ownerProcess.Validate() != nil || leafFD < 0 || ownerPipeFD < 0 ||
-		!grant.Anchor.Equal(anchor.identity) || !grant.Parent.Equal(anchor.parent.Identity()) {
+		!grant.Anchor.Equal(anchor.identity) || !grant.Parent.Equal(anchor.parent.Identity()) || beforeFork == nil {
 		return nil, errors.New("Linux owner anchor helper launch grant is incomplete")
+	}
+	if witness != nil && (witness.RunID != grant.RunKey.RunID || witness.Generation != grant.RunKey.Generation) {
+		return nil, errors.New("Linux owner anchor witness selector differs from the exact RunKey")
 	}
 	if err := verifyLinuxOwnerHelperEndpointVacant(grant.RecoveryEndpoint, anchor.owner.AUID); err != nil {
 		return nil, err
@@ -529,6 +677,10 @@ func startLinuxOwnerAnchorHelperV2(anchor *linuxOwnerAnchor, grant LinuxOwnerAnc
 	command.ExtraFiles = []*os.File{helperBoot, leafFile, parentFile, ownerFile}
 	helperPIDFD := -1
 	command.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL, PidFD: &helperPIDFD}
+	if err := beforeFork(); err != nil {
+		closeLinuxOwnerHelperFiles(anchorBoot, helperBoot, leafFile, parentFile, ownerFile)
+		return nil, fmt.Errorf("reserve exact RunKey before helper fork: %w", err)
+	}
 	if err := command.Start(); err != nil {
 		closeLinuxOwnerHelperFiles(anchorBoot, helperBoot, leafFile, parentFile, ownerFile)
 		return nil, fmt.Errorf("start the fixed hidden Linux owner helper: %w", err)
@@ -568,6 +720,13 @@ func startLinuxOwnerAnchorHelperV2(anchor *linuxOwnerAnchor, grant LinuxOwnerAnc
 	bootstrap := linuxOwnerHelperV2Bootstrap{
 		Version: linuxOwnerHelperV2Version, Grant: grant, AnchorSocket: anchor.socketPath,
 		OwnerProcess: ownerProcess,
+	}
+	if witness != nil {
+		bootstrap.WitnessDropResponse = witness.DropResponse
+		bootstrap.WitnessHelperAction = witness.HelperAction
+		bootstrap.WitnessHoldForReleaseFile = witness.HoldForReleaseFile
+		bootstrap.WitnessRunID = witness.RunID
+		bootstrap.WitnessGeneration = witness.Generation
 	}
 	encoded, err := json.Marshal(bootstrap)
 	if err != nil || len(encoded) > linuxOwnerAnchorMaxFrame {
@@ -1018,6 +1177,10 @@ func readLinuxOwnerHelperV2Response(connection *net.UnixConn) (linuxOwnerHelperV
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		closeLinuxOwnerAnchorFDs(fds)
 		return linuxOwnerHelperV2Response{}, nil, errors.New("Linux owner helper response has trailing JSON")
+	}
+	if response.Operation != "status" && (response.WitnessActionObserved || response.WitnessAction != "") {
+		closeLinuxOwnerAnchorFDs(fds)
+		return linuxOwnerHelperV2Response{}, nil, errors.New("Linux owner helper exposed a selected action outside authenticated Status")
 	}
 	return response, fds, nil
 }
@@ -1549,16 +1712,45 @@ func (client *LinuxOwnerHelperV2Client) openParallelControl(ctx context.Context)
 }
 
 func (client *LinuxOwnerHelperV2Client) Status(ctx context.Context) (LinuxOwnerHelperV2Status, error) {
-	request := client.newRequest("status")
-	response, rights, err := client.request(ctx, request)
+	if client == nil || ctx == nil {
+		return LinuxOwnerHelperV2Status{}, errors.New("Linux owner helper status client is incomplete")
+	}
+	statusClient, err := client.openParallelControl(ctx)
+	if err != nil {
+		return LinuxOwnerHelperV2Status{}, err
+	}
+	defer statusClient.Close()
+	request := statusClient.newRequest("status")
+	response, rights, err := statusClient.request(ctx, request)
 	if err != nil {
 		closeLinuxOwnerAnchorFDs(rights)
 		return LinuxOwnerHelperV2Status{}, err
 	}
+	snapshot := response.StatusSnapshot
+	if snapshot == nil || snapshot.LeaseSequence != response.LeaseSequence ||
+		snapshot.LeaseLive && snapshot.LeaseSequence == 0 ||
+		snapshot.StopAttempted && !snapshot.StopRequested ||
+		snapshot.ReleaseInFlight && !response.ReleaseAttempted || response.Released && !response.ReleaseAttempted {
+		closeLinuxOwnerAnchorFDs(rights)
+		return LinuxOwnerHelperV2Status{}, errors.New("Linux owner helper Status lacks a consistent fresh lease/stop snapshot")
+	}
+	if response.WitnessActionObserved &&
+		(response.WitnessAction != linuxOwnerHelperV2WitnessCrashAfterRelease || !response.ReleaseAttempted || !response.Released) ||
+		!response.WitnessActionObserved && response.WitnessAction != "" {
+		closeLinuxOwnerAnchorFDs(rights)
+		return LinuxOwnerHelperV2Status{}, errors.New("Linux owner helper Status has an invalid post-RELEASE witness action")
+	}
 	status := LinuxOwnerHelperV2Status{
+		RunKey: response.RunKey, Fence: response.Fence, Helper: response.Helper,
 		State: response.Status, OwnerLost: response.OwnerLost,
 		CommitAcknowledged: response.CommitAcknowledged,
-		ReleaseAttempted:   response.ReleaseAttempted, Released: response.Released, Exit: response.ExitResult,
+		ReleaseAttempted:   response.ReleaseAttempted, Released: response.Released,
+		LeaseLive: snapshot.LeaseLive, LeaseSequence: snapshot.LeaseSequence,
+		StopRequested: snapshot.StopRequested, StopAttempted: snapshot.StopAttempted,
+		ReleaseInFlight:     snapshot.ReleaseInFlight,
+		WitnessDropObserved: response.WitnessDropObserved, WitnessDropOperation: response.WitnessDropOperation,
+		WitnessActionObserved: response.WitnessActionObserved, WitnessAction: response.WitnessAction,
+		Exit:          response.ExitResult,
 		Launcher:      cloneLinuxOwnerProcessIdentity(response.Launcher),
 		LauncherExit:  cloneLinuxOwnerAnchorExitProof(response.LauncherExit),
 		Gate:          cloneLinuxOwnerGateIdentity(response.Gate),
@@ -1767,6 +1959,15 @@ func (lease *linuxOwnerHelperV2Lease) stop() {
 	lease.mu.Unlock()
 }
 
+func (lease *linuxOwnerHelperV2Lease) isStopped() bool {
+	if lease == nil {
+		return false
+	}
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	return lease.stopped
+}
+
 func (lease *linuxOwnerHelperV2Lease) snapshot() (uint64, bool) {
 	if lease == nil {
 		return 0, false
@@ -1780,6 +1981,17 @@ func (lease *linuxOwnerHelperV2Lease) snapshot() (uint64, bool) {
 		return lease.sequence, false
 	}
 	return lease.sequence, true
+}
+
+// peekStatus reports lease liveness without latching expiry or waking the
+// owner-loss watcher. Status is an observation; effectful paths own expiry.
+func (lease *linuxOwnerHelperV2Lease) peekStatus() (uint64, bool) {
+	if lease == nil {
+		return 0, false
+	}
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	return lease.sequence, !lease.deadline.IsZero() && !lease.stopped && time.Now().Before(lease.deadline)
 }
 
 func (lease *linuxOwnerHelperV2Lease) releaseGuard() (uint64, time.Time, bool) {
@@ -1798,16 +2010,20 @@ func (lease *linuxOwnerHelperV2Lease) releaseGuard() (uint64, time.Time, bool) {
 }
 
 type linuxOwnerHelperV2 struct {
-	owner        linuxgate.OwnerConfig
-	grant        LinuxOwnerAnchorGrant
-	helper       authority.LinuxCgroupProcessIdentity
-	initialOwner authority.LinuxCgroupProcessIdentity
-	anchorClient *LinuxOwnerAnchorClient
-	parent       *LinuxCgroupV2Parent
-	leaf         *LinuxCgroupV2Leaf
-	listener     *net.UnixListener
-	ownerPipe    *os.File
-	lease        *linuxOwnerHelperV2Lease
+	owner                     linuxgate.OwnerConfig
+	grant                     LinuxOwnerAnchorGrant
+	helper                    authority.LinuxCgroupProcessIdentity
+	initialOwner              authority.LinuxCgroupProcessIdentity
+	anchorClient              *LinuxOwnerAnchorClient
+	parent                    *LinuxCgroupV2Parent
+	leaf                      *LinuxCgroupV2Leaf
+	listener                  *net.UnixListener
+	ownerPipe                 *os.File
+	lease                     *linuxOwnerHelperV2Lease
+	witnessDropResponse       string
+	witnessHelperAction       string
+	witnessHoldForReleaseFile bool
+	witnessRunKey             LinuxOwnerAnchorRunKey
 
 	stateMu                    sync.Mutex
 	activeConns                map[*net.UnixConn]struct{}
@@ -1828,6 +2044,7 @@ type linuxOwnerHelperV2 struct {
 	gate                       *authority.LinuxCgroupGateIdentity
 	gateUserNamespace          *LinuxUserNamespaceIdentity
 	prepared                   *linuxgate.PreparedGate
+	untrustedProcess           *authority.LinuxCgroupProcessIdentity
 	helperBoundAck             bool
 	commitAcknowledged         bool
 	releaseAttempted           bool
@@ -1839,12 +2056,14 @@ type linuxOwnerHelperV2 struct {
 	stopAttempted              bool
 	stopInFlight               bool
 	stopDone                   chan struct{}
-	killAttempted              bool
-	killAcknowledged           bool
-	leafEmptyObserved          bool
 	descendantReaped           map[int]authority.LinuxCgroupProcessIdentity
 	stopEvidence               *LinuxOwnerHelperV2StopEvidence
 	stopErrorCode              string
+	witnessDropUsed            bool
+	witnessActionObserved      bool
+	witnessAction              string
+	witnessExitRequested       bool
+	witnessExitCause           error
 	receiptAcknowledged        bool
 	acknowledgedReceipt        *authority.StopReceipt
 	acknowledgedPreGateReceipt *authority.LinuxCgroupPreGateStopReceipt
@@ -1853,6 +2072,10 @@ type linuxOwnerHelperV2 struct {
 	waitDone                   chan struct{}
 	waitResult                 *LinuxOwnerHelperV2Exit
 	waitError                  error
+	untrustedWaitMu            sync.Mutex
+	untrustedWaitAttempted     bool
+	untrustedWaitResult        *LinuxOwnerHelperV2Exit
+	untrustedWaitError         error
 }
 
 // linuxOwnerHelperV2Finalization serializes pin retirement for one exact
@@ -2076,6 +2299,9 @@ func (helper *linuxOwnerHelperV2) serve() (result error) {
 			if helper.isFinalized() {
 				return nil
 			}
+			if helper.isWitnessExitRequested() {
+				return helper.witnessExitError()
+			}
 			acceptErr := fmt.Errorf("accept Linux owner helper control connection: %w", sanitizeLinuxOwnerAnchorSocketError(err))
 			ownerErr := helper.markOwnerLost()
 			if ownerErr != nil {
@@ -2187,7 +2413,7 @@ func (helper *linuxOwnerHelperV2) markOwnerLost() error {
 		_ = connection.Close()
 	}
 	stopContext, cancel := context.WithTimeout(context.Background(), linuxOwnerHelperV2StopTimeout)
-	_, err := helper.stopOwnedWithSafeRetry(stopContext)
+	_, err := helper.stopOwned(stopContext)
 	cancel()
 	return err
 }
@@ -2225,6 +2451,24 @@ func (helper *linuxOwnerHelperV2) isFinalized() bool {
 	helper.stateMu.Lock()
 	defer helper.stateMu.Unlock()
 	return helper.finalized
+}
+
+func (helper *linuxOwnerHelperV2) isWitnessExitRequested() bool {
+	if helper == nil {
+		return false
+	}
+	helper.stateMu.Lock()
+	defer helper.stateMu.Unlock()
+	return helper.witnessExitRequested
+}
+
+func (helper *linuxOwnerHelperV2) witnessExitError() error {
+	if helper == nil {
+		return errLinuxOwnerHelperV2WitnessExit
+	}
+	helper.stateMu.Lock()
+	defer helper.stateMu.Unlock()
+	return errors.Join(errLinuxOwnerHelperV2WitnessExit, helper.witnessExitCause)
 }
 
 func (helper *linuxOwnerHelperV2) serveOwnerConnection(connection *net.UnixConn) error {
@@ -2327,6 +2571,9 @@ func (helper *linuxOwnerHelperV2) baseResponse(operation, status string) linuxOw
 }
 
 func (helper *linuxOwnerHelperV2) writeResponse(connection *net.UnixConn, operation, status string, launcher *authority.LinuxCgroupProcessIdentity, gate *authority.LinuxCgroupGateIdentity, launcherExit *authority.LinuxCgroupExitProof, gateProcess *authority.LinuxCgroupProcessIdentity, gateOutcome *authority.LinuxCgroupGateProductionResult, leaseSequence uint64, evidence *LinuxOwnerHelperV2StopEvidence, errorCode string, fds ...int) error {
+	if helper.dropWitnessResponse(connection, operation, status, evidence) {
+		return nil
+	}
 	response := helper.baseResponse(operation, status)
 	response.Launcher = launcher
 	response.Gate = gate
@@ -2343,6 +2590,42 @@ func (helper *linuxOwnerHelperV2) writeResponse(connection *net.UnixConn, operat
 	response.Released = helper.released
 	helper.stateMu.Unlock()
 	return writeLinuxOwnerHelperV2Response(connection, response, fds...)
+}
+
+func (helper *linuxOwnerHelperV2) dropWitnessResponse(
+	connection *net.UnixConn,
+	operation, status string,
+	evidence *LinuxOwnerHelperV2StopEvidence,
+) bool {
+	if helper == nil || connection == nil {
+		return false
+	}
+	helper.stateMu.Lock()
+	if helper.witnessDropUsed || helper.witnessRunKey != helper.grant.RunKey ||
+		helper.witnessDropResponse != operation {
+		helper.stateMu.Unlock()
+		return false
+	}
+	mutated := false
+	switch operation {
+	case "stop":
+		mutated = status == "stopped" && evidence != nil && helper.stopEvidence != nil &&
+			evidence.RunKey == helper.grant.RunKey && evidence.Fence == helper.grant.Fence &&
+			helper.stopEvidence.RunKey == helper.grant.RunKey && helper.stopEvidence.Fence == helper.grant.Fence
+	case "ack-stop-receipt":
+		mutated = status == "receipt_acknowledged" &&
+			((helper.receiptAcknowledged && helper.acknowledgedReceipt != nil) || helper.acknowledgedPreGateReceipt != nil)
+	}
+	if !mutated {
+		helper.stateMu.Unlock()
+		return false
+	}
+	helper.witnessDropUsed = true
+	helper.stateMu.Unlock()
+	// The operation's measured state is already cached. Closing only this
+	// response channel creates a lost-ACK witness without forging evidence.
+	_ = connection.Close()
+	return true
 }
 
 func (helper *linuxOwnerHelperV2) handleRequest(connection *net.UnixConn, request linuxOwnerHelperV2Request, rights []int) (bool, error) {
@@ -2435,12 +2718,32 @@ func (helper *linuxOwnerHelperV2) handleStatus(connection *net.UnixConn) error {
 	gate := cloneLinuxOwnerGateIdentity(helper.gate)
 	userNamespace := helper.gateUserNamespace
 	launcherExit := cloneLinuxOwnerAnchorExitProof(helper.launcherExit)
+	leaseSequence, leaseLive := helper.lease.peekStatus()
 	ownerLost := helper.ownerLost
 	prepared := helper.prepareResponse != nil
 	evidence := helper.stopEvidence
 	commitAcknowledged := helper.commitAcknowledged
 	releaseAttempted := helper.releaseAttempted
+	releaseInFlight := helper.releaseInFlight
 	released := helper.released
+	stopRequested := helper.stopRequested
+	stopAttempted := helper.stopAttempted
+	witnessDropObserved := helper.witnessDropUsed
+	witnessDropOperation := ""
+	if witnessDropObserved {
+		witnessDropOperation = helper.witnessDropResponse
+	}
+	witnessActionObserved := helper.witnessActionObserved
+	witnessAction := helper.witnessAction
+	if witnessActionObserved && (witnessAction != linuxOwnerHelperV2WitnessCrashAfterRelease ||
+		helper.witnessRunKey != helper.grant.RunKey || !released || !releaseAttempted) ||
+		!witnessActionObserved && witnessAction != "" {
+		helper.stateMu.Unlock()
+		return errors.New("Linux owner helper witness action is not bound to a successful exact RELEASE")
+	}
+	if !witnessActionObserved {
+		witnessAction = ""
+	}
 	var errorCode string
 	if evidence == nil && helper.stopAttempted {
 		errorCode = helper.stopErrorCode
@@ -2470,9 +2773,18 @@ func (helper *linuxOwnerHelperV2) handleStatus(connection *net.UnixConn) error {
 	response.StopEvidence = evidence
 	response.ErrorCode = errorCode
 	response.OwnerLost = ownerLost
+	response.WitnessDropObserved = witnessDropObserved
+	response.WitnessDropOperation = witnessDropOperation
+	response.WitnessActionObserved = witnessActionObserved
+	response.WitnessAction = witnessAction
 	response.CommitAcknowledged = commitAcknowledged
 	response.ReleaseAttempted = releaseAttempted
 	response.Released = released
+	response.LeaseSequence = leaseSequence
+	response.StatusSnapshot = &linuxOwnerHelperV2StatusSnapshot{
+		LeaseLive: leaseLive, LeaseSequence: leaseSequence,
+		StopRequested: stopRequested, StopAttempted: stopAttempted, ReleaseInFlight: releaseInFlight,
+	}
 	helper.waitMu.Lock()
 	if helper.waitDone != nil {
 		select {
@@ -2604,8 +2916,24 @@ func (helper *linuxOwnerHelperV2) handlePrepare(connection *net.UnixConn) error 
 					prepareErr = fmt.Errorf("validate exact A gate identity: %w", err)
 				}
 			}
-			if err := helper.anchorClient.RegisterProcess(context.Background(), helper.grant, helper.helper, helper.helper, process, "gate", gatePIDFD); err != nil {
-				prepareErr = errors.Join(prepareErr, fmt.Errorf("register exact parked gate with owner anchor: %w", err))
+			registerContext, cancel := context.WithTimeout(context.Background(), linuxOwnerAnchorRequestTimeout)
+			var registerErr error
+			if gateIdentity.Validate() == nil && gateIdentity.Process.Equal(process) && userNamespace != nil {
+				registerErr = helper.anchorClient.RegisterGate(registerContext, helper.grant, helper.helper, gateIdentity, *userNamespace, gatePIDFD)
+			} else {
+				// A failed Prepare may retain an exact A child for emergency stop,
+				// but must never establish gate-release transition authority.
+				if credentialErr := verifyLinuxOwnerRunChildCredentials(process.PID, "descendant", helper.owner); credentialErr != nil {
+					registerErr = fmt.Errorf("failed-Prepare child credentials are unresolved: %w", credentialErr)
+				} else if membershipErr := verifyLinuxOwnerRunChildMembership(process.PID, "descendant", helper.grant, helper.leaf); membershipErr != nil {
+					registerErr = fmt.Errorf("failed-Prepare child membership is unresolved: %w", membershipErr)
+				} else {
+					registerErr = helper.anchorClient.RegisterProcess(registerContext, helper.grant, helper.helper, helper.helper, process, "descendant", gatePIDFD)
+				}
+			}
+			cancel()
+			if registerErr != nil {
+				prepareErr = errors.Join(prepareErr, fmt.Errorf("register exact parked gate with owner anchor: %w", registerErr))
 			}
 		} else {
 			if identityErr == nil {
@@ -2726,6 +3054,9 @@ func (helper *linuxOwnerHelperV2) handleHelperBound(connection *net.UnixConn, re
 }
 
 func (helper *linuxOwnerHelperV2) sendPrepareResponse(connection *net.UnixConn, response linuxOwnerHelperV2Response) error {
+	if helper.dropPreparedGateResponse(connection, response) {
+		return nil
+	}
 	if response.Operation == "gate-ready" && response.Gate != nil && helper.prepared != nil {
 		pidfd, err := unix.FcntlInt(helper.prepared.PIDFD().Fd(), unix.F_DUPFD_CLOEXEC, 0)
 		if err != nil {
@@ -2743,6 +3074,33 @@ func (helper *linuxOwnerHelperV2) sendPrepareResponse(connection *net.UnixConn, 
 		return writeLinuxOwnerHelperV2Response(connection, response, pidfd)
 	}
 	return writeLinuxOwnerHelperV2Response(connection, response)
+}
+
+func (helper *linuxOwnerHelperV2) dropPreparedGateResponse(connection *net.UnixConn, response linuxOwnerHelperV2Response) bool {
+	if helper == nil || connection == nil {
+		return false
+	}
+	helper.stateMu.Lock()
+	cached := helper.prepareResponse
+	valid := helper.witnessDropResponse == "launcher-ready" && !helper.witnessDropUsed &&
+		helper.witnessRunKey == helper.grant.RunKey && helper.prepareStarted && helper.prepared != nil && helper.gate != nil &&
+		helper.launcher != nil && helper.launcherExit != nil && cached != nil && cached.Operation == "gate-ready" &&
+		cached.Status == "ready" && response.Operation == "gate-ready" && response.Status == "ready" &&
+		cached.Gate != nil && response.Gate != nil && cached.Gate.Equal(*response.Gate) &&
+		cached.Launcher != nil && response.Launcher != nil && cached.Launcher.Equal(*response.Launcher) &&
+		cached.LauncherExit != nil && response.LauncherExit != nil && cached.LauncherExit.Equal(*response.LauncherExit) &&
+		cached.UserNamespace != nil && response.UserNamespace != nil && *cached.UserNamespace == *response.UserNamespace &&
+		helper.gateUserNamespace != nil && *helper.gateUserNamespace == *response.UserNamespace &&
+		helper.gate.Equal(*response.Gate) && helper.launcher.Equal(*response.Launcher) && helper.launcherExit.Equal(*response.LauncherExit)
+	if valid {
+		helper.witnessDropUsed = true
+	}
+	helper.stateMu.Unlock()
+	if !valid {
+		return false
+	}
+	_ = connection.Close()
+	return true
 }
 
 func (helper *linuxOwnerHelperV2) cachePrepareFailure(connection *net.UnixConn, code string, outcome *authority.LinuxCgroupGateProductionResult) error {
@@ -2866,6 +3224,12 @@ func (helper *linuxOwnerHelperV2) handleRelease(connection *net.UnixConn, reques
 	helper.releaseCancel = cancelRelease
 	prepared := helper.prepared
 	gateProcess := helper.gate.Process
+	gateIdentity := cloneLinuxOwnerGateIdentity(helper.gate)
+	var gateUserNamespace *LinuxUserNamespaceIdentity
+	if helper.gateUserNamespace != nil {
+		copy := *helper.gateUserNamespace
+		gateUserNamespace = &copy
+	}
 	ownerPipe := helper.ownerPipe
 	helper.stateMu.Unlock()
 	onCheckoutReady := func(callbackContext context.Context, receipt authority.LinuxCloneCheckoutReceipt) error {
@@ -2874,16 +3238,47 @@ func (helper *linuxOwnerHelperV2) handleRelease(connection *net.UnixConn, reques
 		}
 		return helper.relayCheckoutReady(callbackContext, connection, request, cloneGrant, receipt)
 	}
-	err := prepared.Release(releaseContext, int(helper.leaf.leafFD), command, linuxgate.ReleaseGuard{
-		OwnerPipe: ownerPipe, LeaseDeadline: leaseDeadline,
-	}, onCheckoutReady)
-	cancelRelease()
+	var err error
+	if gateIdentity == nil || gateUserNamespace == nil {
+		err = errors.New("Linux owner helper lacks the exact registered gate/user namespace for release authorization")
+	} else {
+		err = helper.anchorClient.AuthorizeGateRelease(releaseContext, helper.grant, helper.helper, *gateIdentity, *gateUserNamespace)
+	}
+	if err == nil {
+		err = prepared.Release(releaseContext, int(helper.leaf.leafFD), command, linuxgate.ReleaseGuard{
+			OwnerPipe: ownerPipe, LeaseDeadline: leaseDeadline,
+		}, onCheckoutReady)
+	}
 	helper.stateMu.Lock()
 	helper.releaseCancel = nil
+	witnessAction := ""
 	if err == nil {
 		helper.released = true
+		if helper.witnessHelperAction != "" {
+			if helper.witnessHelperAction != linuxOwnerHelperV2WitnessCrashAfterRelease ||
+				helper.witnessRunKey != helper.grant.RunKey || !helper.witnessHoldForReleaseFile {
+				err = errors.New("Linux owner helper post-RELEASE witness action differs from its exact RunKey contract")
+			} else {
+				witnessAction = helper.witnessHelperAction
+				helper.witnessAction = witnessAction
+				helper.witnessActionObserved = true
+			}
+		}
+	}
+	if witnessAction != "" {
+		// The Gate RELEASE is complete, so an owner-loss stop no longer needs to
+		// wait for the native RegisterProcess callback that this witness omits.
+		helper.releaseInFlight = false
+		close(releaseDone)
 	}
 	helper.stateMu.Unlock()
+	cancelRelease()
+	if witnessAction != "" {
+		if err := helper.waitForWitnessSelectorUnlink(); err != nil {
+			return helper.exitAtWitnessAction(fmt.Errorf("wait for root to unlink the exact post-RELEASE selector: %w", err))
+		}
+		return helper.exitAtWitnessAction(nil)
+	}
 	if err == nil {
 		registerContext, cancel := context.WithTimeout(context.Background(), linuxOwnerAnchorRequestTimeout)
 		registerErr := helper.anchorClient.RegisterProcess(registerContext, helper.grant, helper.helper, helper.helper, gateProcess, "native", int(prepared.PIDFD().Fd()))
@@ -2903,7 +3298,7 @@ func (helper *linuxOwnerHelperV2) handleRelease(connection *net.UnixConn, reques
 	helper.stateMu.Unlock()
 	if err != nil || ownerLost || stopRequested || !leaseLive {
 		ctx, cancel := context.WithTimeout(context.Background(), linuxOwnerHelperV2StopTimeout)
-		_, stopErr := helper.stopOwnedWithSafeRetry(ctx)
+		_, stopErr := helper.stopOwned(ctx)
 		cancel()
 		code := "release_outcome_unknown"
 		if ownerLost {
@@ -2918,6 +3313,122 @@ func (helper *linuxOwnerHelperV2) handleRelease(connection *net.UnixConn, reques
 		return responseErr
 	}
 	return helper.writeResponse(connection, "release", "released", nil, nil, nil, nil, nil, sequence, nil, "")
+}
+
+func (helper *linuxOwnerHelperV2) waitForWitnessSelectorUnlink() error {
+	if helper == nil {
+		return errors.New("Linux owner helper witness selector wait is incomplete")
+	}
+	helper.stateMu.Lock()
+	valid := helper.witnessActionObserved && helper.witnessAction == linuxOwnerHelperV2WitnessCrashAfterRelease &&
+		helper.witnessRunKey == helper.grant.RunKey && helper.witnessHoldForReleaseFile && helper.released
+	helper.stateMu.Unlock()
+	if !valid {
+		return errors.New("Linux owner helper witness selector wait lacks the exact successful RELEASE action")
+	}
+	directoryFD, err := openLinuxOwnerHelperWitnessSelectorDirectory()
+	if err != nil {
+		return fmt.Errorf("open pinned root witness selector directory: %w", err)
+	}
+	defer unix.Close(directoryFD)
+	timer := time.NewTimer(linuxOwnerHelperV2Timeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(linuxOwnerHelperV2PollInterval)
+	defer ticker.Stop()
+	selectorName := filepath.Base(linuxOwnerAnchorWitnessConfigPath)
+	for {
+		var selectorStat unix.Stat_t
+		err := unix.Fstatat(directoryFD, selectorName, &selectorStat, unix.AT_SYMLINK_NOFOLLOW)
+		if errors.Is(err, unix.ENOENT) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("inspect pinned root witness selector without following links: %w", err)
+		}
+		helper.stateMu.Lock()
+		ownerLost := helper.ownerLost
+		helper.stateMu.Unlock()
+		if ownerLost {
+			return ErrLinuxOwnerHelperV2OwnerLost
+		}
+		if _, _, leaseLive := helper.lease.releaseGuard(); !leaseLive {
+			return ErrLinuxOwnerHelperV2LeaseUnarmed
+		}
+		select {
+		case <-ticker.C:
+		case <-timer.C:
+			return errors.New("root did not unlink the selected Linux owner witness selector before the bounded wait expired")
+		}
+	}
+}
+
+func openLinuxOwnerHelperWitnessSelectorDirectory() (int, error) {
+	rootFD, err := unix.Open("/", unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return -1, fmt.Errorf("open filesystem root: %w", err)
+	}
+	defer unix.Close(rootFD)
+	var rootStat unix.Stat_t
+	if err := unix.Fstat(rootFD, &rootStat); err != nil || rootStat.Uid != 0 || rootStat.Mode&unix.S_IFMT != unix.S_IFDIR || rootStat.Mode&0022 != 0 {
+		return -1, fmt.Errorf("verify filesystem root ownership and mode: %w", errOr(err, errors.New("root is not root-owned and non-writable by group/world")))
+	}
+	etcFD, err := unix.Openat2(rootFD, "etc", &unix.OpenHow{
+		Flags:   uint64(unix.O_PATH | unix.O_DIRECTORY | unix.O_CLOEXEC),
+		Resolve: uint64(unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS),
+	})
+	if err != nil {
+		return -1, fmt.Errorf("open root-controlled /etc directory: %w", err)
+	}
+	defer unix.Close(etcFD)
+	var etcStat unix.Stat_t
+	if err := unix.Fstat(etcFD, &etcStat); err != nil || etcStat.Uid != 0 || etcStat.Mode&unix.S_IFMT != unix.S_IFDIR || etcStat.Mode&0022 != 0 {
+		return -1, fmt.Errorf("verify /etc ownership and mode: %w", errOr(err, errors.New("/etc is not root-owned and non-writable by group/world")))
+	}
+	directoryFD, err := unix.Openat2(etcFD, "symmetry", &unix.OpenHow{
+		Flags:   uint64(unix.O_PATH | unix.O_DIRECTORY | unix.O_CLOEXEC),
+		Resolve: uint64(unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS),
+	})
+	if err != nil {
+		return -1, fmt.Errorf("open root-controlled /etc/symmetry directory: %w", err)
+	}
+	var directoryStat unix.Stat_t
+	if err := unix.Fstat(directoryFD, &directoryStat); err != nil || directoryStat.Uid != 0 ||
+		directoryStat.Mode&unix.S_IFMT != unix.S_IFDIR || directoryStat.Mode&0022 != 0 {
+		_ = unix.Close(directoryFD)
+		return -1, fmt.Errorf("verify /etc/symmetry ownership and mode: %w", errOr(err, errors.New("directory is not root-owned and non-writable by group/world")))
+	}
+	return directoryFD, nil
+}
+
+func (helper *linuxOwnerHelperV2) exitAtWitnessAction(cause error) error {
+	if helper == nil {
+		return errors.Join(errLinuxOwnerHelperV2WitnessExit, cause)
+	}
+	helper.stateMu.Lock()
+	valid := helper.witnessActionObserved && helper.witnessAction == linuxOwnerHelperV2WitnessCrashAfterRelease &&
+		helper.witnessRunKey == helper.grant.RunKey && helper.released
+	if valid {
+		helper.witnessExitRequested = true
+		helper.witnessExitCause = cause
+	}
+	helper.stateMu.Unlock()
+	if !valid {
+		return errors.Join(cause, errors.New("Linux owner helper witness exit lacks the exact observed action"))
+	}
+	if helper.listener == nil {
+		helper.stateMu.Lock()
+		helper.witnessExitCause = errors.Join(helper.witnessExitCause, errors.New("Linux owner helper witness exit has no control listener"))
+		helper.stateMu.Unlock()
+		return helper.witnessExitError()
+	}
+	if err := helper.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+		helper.stateMu.Lock()
+		helper.witnessExitCause = errors.Join(helper.witnessExitCause, fmt.Errorf("close helper listener at witness exit: %w", err))
+		helper.stateMu.Unlock()
+		helper.requestAnchorTakeover()
+		return helper.witnessExitError()
+	}
+	return helper.witnessExitError()
 }
 
 func (helper *linuxOwnerHelperV2) relayCheckoutReady(
@@ -2979,7 +3490,7 @@ func (helper *linuxOwnerHelperV2) relayCheckoutReady(
 func (helper *linuxOwnerHelperV2) handleStop(connection *net.UnixConn) error {
 	ctx, cancel := context.WithTimeout(context.Background(), linuxOwnerHelperV2StopTimeout)
 	defer cancel()
-	evidence, err := helper.stopOwnedWithSafeRetry(ctx)
+	evidence, err := helper.stopOwned(ctx)
 	if err != nil {
 		responseErr := helper.writeResponse(connection, "stop", "unresolved", nil, nil, nil, nil, nil, 0, nil, linuxOwnerHelperV2ErrorCode(err))
 		helper.requestAnchorTakeover()
@@ -3014,92 +3525,318 @@ func (helper *linuxOwnerHelperV2) handleFenceBeforeAbort(connection *net.UnixCon
 	return nil
 }
 
-func (helper *linuxOwnerHelperV2) stopPinnedLeaf(ctx context.Context) error {
-	helper.stateMu.Lock()
-	killAttempted := helper.killAttempted
-	killAcknowledged := helper.killAcknowledged
-	leafEmpty := helper.leafEmptyObserved
-	helper.stateMu.Unlock()
-	if !killAcknowledged {
-		if killAttempted {
-			if !leafEmpty {
-				if err := helper.leaf.WaitEmpty(ctx); err != nil {
-					helper.setStopError("cgroup_kill_unacknowledged")
-					return fmt.Errorf("%w: prior cgroup.kill write result is unknown and the exact pinned leaf is not empty: %v", ErrLinuxOwnerHelperV2StopUnproven, err)
-				}
-				helper.stateMu.Lock()
-				helper.leafEmptyObserved = true
-				helper.stateMu.Unlock()
-			}
-			helper.setStopError("cgroup_kill_unacknowledged")
-			return fmt.Errorf("%w: prior cgroup.kill write result is unknown; pinned emptiness does not acknowledge the write", ErrLinuxOwnerHelperV2StopUnproven)
-		}
-		if err := helper.leaf.VerifyKillControl(); err != nil {
-			helper.setStopError("cgroup_kill_control_unavailable")
-			return fmt.Errorf("%w: exact leaf kill control is not A-writable: %v", ErrLinuxOwnerHelperV2StopUnproven, err)
-		}
-		if err := helper.leaf.Kill(ctx); err != nil {
-			if errors.Is(err, errLinuxCgroupKillWriteNotAttempted) {
-				helper.setStopError("cgroup_kill_not_attempted")
-				return fmt.Errorf("%w: exact cgroup.kill syscall was not attempted and may be retried after producer fencing: %w", ErrLinuxOwnerHelperV2StopUnproven, err)
-			}
-			helper.stateMu.Lock()
-			helper.killAttempted = true
-			helper.stateMu.Unlock()
-			helper.setStopError("cgroup_kill_unacknowledged")
-			if emptyErr := helper.leaf.WaitEmpty(ctx); emptyErr == nil {
-				helper.stateMu.Lock()
-				helper.leafEmptyObserved = true
-				helper.stateMu.Unlock()
-				return fmt.Errorf("%w: exact cgroup.kill write result is unknown despite pinned empty observation: %w", ErrLinuxOwnerHelperV2StopUnproven, err)
-			} else {
-				return fmt.Errorf("%w: exact cgroup.kill write result is unknown: %w; pinned empty remeasurement: %v", ErrLinuxOwnerHelperV2StopUnproven, err, emptyErr)
-			}
-		}
-		helper.stateMu.Lock()
-		helper.killAttempted = true
-		helper.killAcknowledged = true
-		helper.stateMu.Unlock()
+func (helper *linuxOwnerHelperV2) readRunLeafProcessIDs(ctx context.Context) (map[int]struct{}, error) {
+	if helper == nil || ctx == nil || helper.leaf == nil || helper.grant.Validate() != nil ||
+		helper.owner.Validate() != nil || helper.owner.AUID != helper.grant.OwnerUID ||
+		!helper.leaf.Identity().Equal(helper.grant.Leaf) {
+		return nil, errors.New("Linux owner helper leaf membership scan is incomplete")
 	}
-	if !leafEmpty {
-		if err := helper.leaf.WaitEmpty(ctx); err != nil {
-			helper.setStopError("cgroup_empty_unproven")
-			return fmt.Errorf("%w: exact recursive cgroup did not prove empty: %v", ErrLinuxOwnerHelperV2StopUnproven, err)
+	pids, err := readLinuxOwnerAnchorRunLeafProcessIDs(ctx, helper.leaf, helper.grant, helper.owner.AUID)
+	if err != nil {
+		return nil, fmt.Errorf("read exact run-leaf process set for helper membership audit: %w", err)
+	}
+	if err := helper.leaf.verifyLive(); err != nil {
+		return nil, fmt.Errorf("revalidate pinned run leaf after membership scan: %w", err)
+	}
+	return pids, nil
+}
+
+type linuxOwnerHelperV2RunProcessSnapshot struct {
+	process     authority.LinuxCgroupProcessIdentity
+	credentials linuxOwnerProcessCredentials
+}
+
+func linuxOwnerHelperV2RunTreeOrder(
+	helperPID int,
+	processes map[int]linuxOwnerHelperV2RunProcessSnapshot,
+) ([]int, error) {
+	if helperPID <= 1 {
+		return nil, errors.New("run process tree lacks an exact helper PID")
+	}
+	if _, helperInLeaf := processes[helperPID]; helperInLeaf {
+		return nil, errors.New("helper process unexpectedly appears in its reserved run leaf")
+	}
+	childrenByParent := make(map[int][]int, len(processes))
+	for pid, snapshot := range processes {
+		if pid <= 1 || snapshot.process.PID != pid || snapshot.process.Validate() != nil || snapshot.credentials.Parent <= 1 {
+			return nil, errors.New("run leaf contains an invalid exact process snapshot")
 		}
-		helper.stateMu.Lock()
-		helper.leafEmptyObserved = true
-		helper.stateMu.Unlock()
+		if snapshot.credentials.Parent != helperPID {
+			if _, parentInLeaf := processes[snapshot.credentials.Parent]; !parentInLeaf {
+				return nil, errors.New("run leaf process parent is neither helper nor a pinned run-leaf member")
+			}
+		}
+		childrenByParent[snapshot.credentials.Parent] = append(childrenByParent[snapshot.credentials.Parent], pid)
+	}
+	for _, children := range childrenByParent {
+		sort.Ints(children)
+	}
+	seen := map[int]struct{}{helperPID: {}}
+	order := make([]int, 1, len(processes)+1)
+	order[0] = helperPID
+	for cursor := 0; cursor < len(order); cursor++ {
+		for _, pid := range childrenByParent[order[cursor]] {
+			if _, duplicate := seen[pid]; duplicate {
+				return nil, errors.New("run leaf process tree contains a duplicate or cyclic PID")
+			}
+			seen[pid] = struct{}{}
+			order = append(order, pid)
+		}
+	}
+	if len(order)-1 != len(processes) {
+		return nil, errors.New("run leaf contains a process outside the exact helper-owned descendant tree")
+	}
+	return order[1:], nil
+}
+
+func (helper *linuxOwnerHelperV2) verifyLeafMembershipBeforeStop(
+	ctx context.Context,
+	prepared *linuxgate.PreparedGate,
+	launcher *authority.LinuxCgroupProcessIdentity,
+	launcherExit *authority.LinuxCgroupExitProof,
+	gate *authority.LinuxCgroupGateIdentity,
+	untrustedProcess *authority.LinuxCgroupProcessIdentity,
+	releaseAttempted, released bool,
+) error {
+	if helper == nil || ctx == nil || helper.leaf == nil ||
+		!helper.leaf.Identity().Equal(helper.grant.Leaf) ||
+		(launcher == nil) != (launcherExit == nil) || released && !releaseAttempted ||
+		(releaseAttempted && gate == nil) || gate != nil && (prepared == nil || untrustedProcess != nil) ||
+		gate == nil && prepared != nil && untrustedProcess == nil ||
+		untrustedProcess != nil && (prepared == nil || gate != nil || releaseAttempted || released || untrustedProcess.Validate() != nil) {
+		return errors.New("Linux owner helper pre-kill leaf-membership audit is incomplete")
+	}
+	if err := helper.leaf.verifyLive(); err != nil {
+		return fmt.Errorf("verify exact pinned leaf before anchor stop: %w", err)
+	}
+	if launcher != nil && (launcher.Validate() != nil ||
+		!launcherExit.ValidForOwnedDescendant(*launcher, helper.helper, helper.grant.Anchor, nil)) {
+		return errors.New("Linux owner helper has no exact completed launcher producer fence")
+	}
+	gateLive := false
+	untrustedLive := false
+	if gate != nil {
+		preparedIdentity := prepared.Identity()
+		registeredIdentity, parseErr := parseLinuxProcessIdentity(gate.Process.Identity)
+		if prepared.PIDFD() == nil || parseErr != nil || registeredIdentity.version != linuxProcessIdentityVersion ||
+			registeredIdentity.pid != preparedIdentity.PID || registeredIdentity.bootID != preparedIdentity.BootID ||
+			registeredIdentity.startTime != preparedIdentity.StartTime || gate.Process.PID != preparedIdentity.PID ||
+			helper.gateUserNamespace == nil || !helper.gateUserNamespace.valid() ||
+			helper.gateUserNamespace.Device != preparedIdentity.UserNSDevice ||
+			helper.gateUserNamespace.Inode != preparedIdentity.UserNSInode {
+			return errors.New("Linux owner helper gate/PIDFD/user namespace differs from the exact prepared leaf member")
+		}
+		ready, err := linuxOwnerAnchorPIDFDReady(prepared.PIDFD())
+		if err != nil {
+			return fmt.Errorf("probe exact gate PIDFD before anchor stop: %w", err)
+		}
+		gateLive = !ready
+		if gateLive {
+			identity, err := ProcessIdentity(gate.Process.PID)
+			if err != nil || identity != gate.Process.Identity {
+				return fmt.Errorf("verify exact live gate identity before anchor stop: %w", errOr(err, errors.New("creation identity differs")))
+			}
+			if err := prepared.VerifyLeafMembership(int(helper.leaf.leafFD)); err != nil {
+				return fmt.Errorf("verify exact live gate remains in its prepared leaf: %w", err)
+			}
+		}
+	}
+	if untrustedProcess != nil {
+		preparedIdentity, err := linuxOwnerHelperUntrustedProcessIdentity(prepared.Identity(), prepared.PIDFD(), helper.helper, launcher)
+		if err != nil || !preparedIdentity.Equal(*untrustedProcess) {
+			return fmt.Errorf("verify exact failed-Prepare child PIDFD identity: %w", errOr(err, errors.New("identity differs")))
+		}
+		ready, err := linuxOwnerAnchorPIDFDReady(prepared.PIDFD())
+		if err != nil {
+			return fmt.Errorf("probe failed-Prepare child PIDFD before anchor stop: %w", err)
+		}
+		untrustedLive = !ready
+	}
+	leafPIDs, err := helper.readRunLeafProcessIDs(ctx)
+	if err != nil {
+		return fmt.Errorf("read exact run-leaf process set before recursive membership audit: %w", err)
+	}
+	if len(leafPIDs) > linuxOwnerHelperV2MaxMembershipProcesses {
+		return errors.New("recursive run-process membership scan exceeds its bounded process count")
+	}
+	processes := make(map[int]linuxOwnerHelperV2RunProcessSnapshot, len(leafPIDs))
+	for pid := range leafPIDs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		identity, err := ProcessIdentity(pid)
+		if err != nil {
+			return fmt.Errorf("capture exact run-leaf process identity for membership audit: %w", err)
+		}
+		credentials, err := readLinuxOwnerProcessCredentials(pid)
+		if err != nil {
+			return fmt.Errorf("read exact run-leaf process credentials for membership audit: %w", err)
+		}
+		processes[pid] = linuxOwnerHelperV2RunProcessSnapshot{
+			process: authority.LinuxCgroupProcessIdentity{PID: pid, Identity: identity}, credentials: credentials,
+		}
+	}
+	if launcher != nil {
+		if _, exists := leafPIDs[launcher.PID]; exists {
+			return errors.New("root launcher PID remains in the run leaf after its exact producer wait")
+		}
+	}
+	treeOrder, err := linuxOwnerHelperV2RunTreeOrder(helper.helper.PID, processes)
+	if err != nil {
+		return fmt.Errorf("validate recursive helper-owned process tree: %w", err)
+	}
+	identities := map[int]string{helper.helper.PID: helper.helper.Identity}
+	helperIdentity, err := ProcessIdentity(helper.helper.PID)
+	if err != nil || helperIdentity != helper.helper.Identity {
+		return fmt.Errorf("verify exact helper identity before StopLeaf: %w", errOr(err, errors.New("creation identity differs")))
+	}
+	verifiedParents := map[int]struct{}{helper.helper.PID: {}}
+	descendants := make(map[int]authority.LinuxCgroupProcessIdentity)
+	liveDescendants := make(map[int]struct{})
+	gateSeen := false
+	untrustedSeen := false
+	helper.stateMu.Lock()
+	previouslyReaped := make(map[int]authority.LinuxCgroupProcessIdentity, len(helper.descendantReaped))
+	for pid, identity := range helper.descendantReaped {
+		previouslyReaped[pid] = identity
+	}
+	helper.stateMu.Unlock()
+	for _, pid := range treeOrder {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		snapshot := processes[pid]
+		parentPID := snapshot.credentials.Parent
+		if _, parentVerified := verifiedParents[parentPID]; !parentVerified {
+			parentIdentity, parentKnown := identities[parentPID]
+			if !parentKnown {
+				return errors.New("recursive helper-owned process tree lost an exact parent identity")
+			}
+			actualParentIdentity, err := ProcessIdentity(parentPID)
+			if err != nil || actualParentIdentity != parentIdentity {
+				return fmt.Errorf("verify exact process-tree parent identity before StopLeaf: %w", errOr(err, errors.New("creation identity differs")))
+			}
+			verifiedParents[parentPID] = struct{}{}
+		}
+		process := snapshot.process
+		identity, err := ProcessIdentity(pid)
+		if err != nil || identity != process.Identity {
+			return fmt.Errorf("capture exact recursive run-process identity: %w", errOr(err, errors.New("creation identity changed")))
+		}
+		if launcher != nil && pid == launcher.PID {
+			if process.Equal(*launcher) {
+				return errors.New("root launcher remains in the recursive process tree after its exact wait")
+			}
+			return errors.New("launcher PID was reused in the recursive process tree before StopLeaf")
+		}
+		if previous, wasReaped := previouslyReaped[pid]; wasReaped {
+			if previous.Equal(process) {
+				return errors.New("an exactly reaped descendant remains in the live process tree")
+			}
+			return errors.New("a reaped descendant PID was reused before StopLeaf")
+		}
+		if gate != nil && pid == gate.Process.PID && !process.Equal(gate.Process) {
+			return errors.New("gate PID was reused before the anchor stop fence")
+		}
+		if untrustedProcess != nil && pid == untrustedProcess.PID && !process.Equal(*untrustedProcess) {
+			return errors.New("failed-Prepare child PID was reused before the anchor stop fence")
+		}
+		pidfd, err := unix.PidfdOpen(pid, 0)
+		if err != nil {
+			return fmt.Errorf("open exact descendant pidfd before StopLeaf: %w", err)
+		}
+		if err := verifyLinuxOwnerAnchorPIDFD(pidfd, process); err != nil {
+			_ = unix.Close(pidfd)
+			return err
+		}
+		pidfdFile := os.NewFile(uintptr(pidfd), "linux-owner-helper-stop-membership-pidfd")
+		if pidfdFile == nil {
+			_ = unix.Close(pidfd)
+			return errors.New("wrap exact run descendant pidfd for StopLeaf membership")
+		}
+		pidfdReady, pollErr := linuxOwnerAnchorPIDFDReady(pidfdFile)
+		_ = pidfdFile.Close()
+		if pollErr != nil {
+			return fmt.Errorf("poll exact descendant pidfd before StopLeaf: %w", pollErr)
+		}
+		credentials, err := readLinuxOwnerProcessCredentials(pid)
+		if err != nil || credentials != snapshot.credentials || credentials.Parent != parentPID {
+			return fmt.Errorf("revalidate exact recursive process ancestry before StopLeaf: %w", errOr(err, errors.New("credentials or parent changed")))
+		}
+		identityAfter, err := ProcessIdentity(pid)
+		if err != nil || identityAfter != process.Identity {
+			return fmt.Errorf("revalidate exact recursive process identity before StopLeaf: %w", errOr(err, errors.New("creation identity changed")))
+		}
+		role := "descendant"
+		if gate != nil && process.Equal(gate.Process) {
+			gateSeen = true
+			role = "gate"
+			if released {
+				role = "native"
+			}
+		}
+		if untrustedProcess != nil && process.Equal(*untrustedProcess) {
+			untrustedSeen = true
+		}
+		if !pidfdReady {
+			if role == "gate" && releaseAttempted {
+				gateCredErr := verifyLinuxOwnerRunChildCredentials(pid, "gate", helper.owner)
+				if gateCredErr != nil {
+					if nativeCredErr := verifyLinuxOwnerRunChildCredentials(pid, "native", helper.owner); nativeCredErr != nil {
+						return errors.Join(gateCredErr, nativeCredErr)
+					}
+				}
+			} else if err := verifyLinuxOwnerRunChildCredentials(pid, role, helper.owner); err != nil {
+				return err
+			}
+			if err := verifyLinuxOwnerRunChildMembership(pid, role, helper.grant, helper.leaf); err != nil {
+				return fmt.Errorf("verify recursive run-process leaf membership before StopLeaf: %w", err)
+			}
+			liveDescendants[pid] = struct{}{}
+		}
+		identities[pid] = process.Identity
+		descendants[pid] = process
+	}
+	if gateLive && !gateSeen {
+		return errors.New("live gate PIDFD was absent from the recursive helper-owned process tree")
+	}
+	if untrustedLive && !untrustedSeen {
+		return errors.New("live failed-Prepare child PIDFD was absent from the recursive helper-owned process tree")
+	}
+	leafPIDs, err = helper.readRunLeafProcessIDs(ctx)
+	if err != nil {
+		return fmt.Errorf("read recursive exact leaf members before StopLeaf: %w", err)
+	}
+	for pid := range leafPIDs {
+		if _, runMember := descendants[pid]; !runMember {
+			return errors.New("exact run leaf contains a process outside the recursive helper-owned run tree")
+		}
+	}
+	for pid := range liveDescendants {
+		if _, leafMember := leafPIDs[pid]; !leafMember {
+			return errors.New("live recursive run descendant is absent from the exact leaf subtree")
+		}
 	}
 	return nil
 }
 
-func (helper *linuxOwnerHelperV2) reapAfterUnknownKill(ctx context.Context, gate *authority.LinuxCgroupGateIdentity) error {
-	if helper == nil || ctx == nil {
-		return errors.New("Linux owner helper unknown-kill reaping is incomplete")
+func (helper *linuxOwnerHelperV2) stopLeafThroughAnchor(ctx context.Context, fence LinuxOwnerAnchorProducerFence) (*LinuxOwnerAnchorStopEvidence, error) {
+	if helper == nil || ctx == nil || helper.anchorClient == nil || helper.leaf == nil || fence.ValidateFor(helper.grant, helper.helper) != nil {
+		return nil, errors.New("Linux owner helper lacks the exact anchor StopLeaf producer fence")
 	}
-	helper.stateMu.Lock()
-	unknownEmpty := helper.killAttempted && !helper.killAcknowledged && helper.leafEmptyObserved
-	releaseDone := helper.releaseDone
-	helper.stateMu.Unlock()
-	if !unknownEmpty {
-		return nil
+	evidence, err := helper.anchorClient.StopLeaf(ctx, helper.grant, helper.helper, fence)
+	if err != nil {
+		return nil, fmt.Errorf("anchor StopLeaf outcome is unresolved: %w", err)
 	}
-	if releaseDone != nil {
-		select {
-		case <-releaseDone:
-		case <-ctx.Done():
-			return fmt.Errorf("wait for release before unknown-kill child reap: %w", ctx.Err())
-		}
+	if err := evidence.ValidateFor(helper.grant, helper.helper, helper.grant.Anchor, nil, false); err != nil ||
+		evidence.ProducerFence == nil || !evidence.ProducerFence.Equal(fence) || evidence.HelperExit != nil {
+		return nil, errors.Join(errors.New("anchor StopLeaf evidence differs from the exact live-helper producer fence"), err)
 	}
-	if gate != nil {
-		if _, err := helper.waitGate(ctx); err != nil {
-			return fmt.Errorf("wait for exact gate before unknown-kill descendant reap: %w", err)
-		}
+	if err := helper.leaf.WaitEmpty(ctx); err != nil {
+		return nil, fmt.Errorf("remeasure exact pinned leaf after anchor StopLeaf: %w", err)
 	}
-	if _, _, err := helper.reapAdoptedChildren(ctx, gate); err != nil {
-		return fmt.Errorf("reap exact descendants after unknown cgroup.kill result: %w", err)
-	}
-	return nil
+	copy := evidence.Clone()
+	return &copy, nil
 }
 
 func (helper *linuxOwnerHelperV2) stopOwned(ctx context.Context) (LinuxOwnerHelperV2StopEvidence, error) {
@@ -3149,6 +3886,7 @@ func (helper *linuxOwnerHelperV2) stopOwned(ctx context.Context) (LinuxOwnerHelp
 	}
 	prepareStarted := helper.prepareStarted
 	prepareDone := helper.prepareDone
+	releaseAttempted := helper.releaseAttempted
 	releaseDone := helper.releaseDone
 	helper.stateMu.Unlock()
 	defer func() {
@@ -3158,12 +3896,32 @@ func (helper *linuxOwnerHelperV2) stopOwned(ctx context.Context) (LinuxOwnerHelp
 		close(done)
 		helper.stateMu.Unlock()
 	}()
-	if prepareStarted && prepareDone != nil {
+	prepareQuiesced := !prepareStarted
+	if prepareStarted {
+		if prepareDone == nil {
+			helper.setStopError("prepare_did_not_quiesce")
+			return LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("%w: Prepare has no exact completion signal", ErrLinuxOwnerHelperV2StopUnproven)
+		}
 		select {
 		case <-prepareDone:
+			prepareQuiesced = true
 		case <-ctx.Done():
 			helper.setStopError("prepare_did_not_quiesce")
 			return LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("%w: wait for root producer fencing: %v", ErrLinuxOwnerHelperV2StopUnproven, ctx.Err())
+		}
+	}
+	releaseQuiesced := !releaseAttempted
+	if releaseAttempted {
+		if releaseDone == nil {
+			helper.setStopError("release_did_not_quiesce")
+			return LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("%w: RELEASE has no exact completion signal", ErrLinuxOwnerHelperV2StopUnproven)
+		}
+		select {
+		case <-releaseDone:
+			releaseQuiesced = true
+		case <-ctx.Done():
+			helper.setStopError("release_did_not_quiesce")
+			return LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("%w: one-use RELEASE did not quiesce after stop latch: %v", ErrLinuxOwnerHelperV2StopUnproven, ctx.Err())
 		}
 	}
 	helper.stateMu.Lock()
@@ -3172,8 +3930,16 @@ func (helper *linuxOwnerHelperV2) stopOwned(ctx context.Context) (LinuxOwnerHelp
 	launcher := cloneLinuxOwnerProcessIdentity(helper.launcher)
 	launcherExit := cloneLinuxOwnerAnchorExitProof(helper.launcherExit)
 	gateOutcome := helper.gateOutcome
-	prepareStarted = helper.prepareStarted
+	gateUserNamespace := helper.gateUserNamespace
+	currentPrepareStarted := helper.prepareStarted
+	currentReleaseAttempted := helper.releaseAttempted
+	released := helper.released
+	stopLatched := helper.stopRequested && helper.stopAttempted
 	helper.stateMu.Unlock()
+	if currentPrepareStarted != prepareStarted || currentReleaseAttempted != releaseAttempted || !stopLatched || !helper.lease.isStopped() {
+		helper.setStopError("producer_fence_state_changed")
+		return LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("%w: helper producer-fence state changed after stop latch", ErrLinuxOwnerHelperV2StopUnproven)
+	}
 	if prepared == nil && gate == nil {
 		if prepareStarted && (launcher == nil || launcherExit == nil || gateOutcome == nil ||
 			gateOutcome.ValidateFor(helper.grant.LaunchToken, *launcher) != nil ||
@@ -3181,16 +3947,32 @@ func (helper *linuxOwnerHelperV2) stopOwned(ctx context.Context) (LinuxOwnerHelp
 			helper.setStopError("no_gate_producer_exit_unproven")
 			return LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("%w: helper cannot prove that the exact launcher never produced a gate", ErrLinuxOwnerHelperV2StopUnproven)
 		}
-		if err := helper.stopPinnedLeaf(ctx); err != nil {
-			return LinuxOwnerHelperV2StopEvidence{}, errors.Join(err, helper.reapAfterUnknownKill(ctx, nil))
+		if releaseAttempted || released || releaseDone != nil && !releaseQuiesced {
+			helper.setStopError("pre_gate_release_state_invalid")
+			return LinuxOwnerHelperV2StopEvidence{}, errors.New("Linux owner helper pre-gate stop has an impossible RELEASE phase")
 		}
-		if releaseDone != nil {
-			select {
-			case <-releaseDone:
-			case <-ctx.Done():
-				helper.setStopError("release_did_not_quiesce")
-				return LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("%w: one-use release did not quiesce after Abort: %v", ErrLinuxOwnerHelperV2StopUnproven, ctx.Err())
-			}
+		if err := helper.verifyLeafMembershipBeforeStop(ctx, nil, launcher, launcherExit, nil, nil, false, false); err != nil {
+			helper.setStopError("leaf_membership_unproven")
+			return LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("verify pre-gate producer membership before anchor StopLeaf: %w", err)
+		}
+		var gateOutcomeCopy *authority.LinuxCgroupGateProductionResult
+		if gateOutcome != nil {
+			copy := *gateOutcome
+			gateOutcomeCopy = &copy
+		}
+		fence := LinuxOwnerAnchorProducerFence{
+			Version: linuxOwnerAnchorStopEvidenceVersion, RunKey: helper.grant.RunKey, Fence: helper.grant.Fence,
+			LaunchToken: helper.grant.LaunchToken, Helper: helper.helper,
+			StopLatched: stopLatched, LeaseStopped: helper.lease.isStopped(),
+			PrepareAttempted: prepareStarted, PrepareQuiesced: prepareQuiesced,
+			ReleaseAttempted: releaseAttempted, ReleaseQuiesced: releaseQuiesced, Released: released,
+			LeafMembershipVerified: true, Launcher: cloneLinuxOwnerProcessIdentity(launcher),
+			LauncherExit: cloneLinuxOwnerAnchorExitProof(launcherExit), GateOutcome: gateOutcomeCopy,
+		}
+		anchorStop, err := helper.stopLeafThroughAnchor(ctx, fence)
+		if err != nil {
+			helper.setStopError("anchor_stop_unproven")
+			return LinuxOwnerHelperV2StopEvidence{}, err
 		}
 		descendantCount, descendantDigest, err := helper.reapAdoptedChildren(ctx, nil)
 		if err != nil {
@@ -3200,9 +3982,11 @@ func (helper *linuxOwnerHelperV2) stopOwned(ctx context.Context) (LinuxOwnerHelp
 		preGate := &LinuxOwnerHelperV2PreGateStopEvidence{
 			Version: linuxOwnerHelperV2Version, RunKey: helper.grant.RunKey, Fence: helper.grant.Fence,
 			LaunchToken: helper.grant.LaunchToken, Parent: helper.grant.Parent, Leaf: helper.grant.Leaf,
-			Anchor: helper.grant.Anchor, Helper: helper.helper, PrepareAttempted: prepareStarted,
-			NoProducerCanAct: true, PinnedLeafFD: true, CgroupKillAcknowledged: true,
-			CgroupPopulatedZero: true, NoMigrationObserved: true, DescendantsReaped: true,
+			Anchor: helper.grant.Anchor, Helper: helper.helper, AnchorStop: anchorStop, PrepareAttempted: prepareStarted,
+			NoProducerCanAct: anchorStop.ProducerFenced, PinnedLeafFD: anchorStop.PinnedLeafFD,
+			CgroupKillAcknowledged: anchorStop.KillAcknowledged,
+			CgroupPopulatedZero:    anchorStop.CgroupPopulatedZero,
+			NoMigrationObserved:    anchorStop.NoMigrationObserved, DescendantsReaped: true,
 			DescendantCount: descendantCount, DescendantDigest: descendantDigest,
 		}
 		if prepareStarted {
@@ -3211,9 +3995,11 @@ func (helper *linuxOwnerHelperV2) stopOwned(ctx context.Context) (LinuxOwnerHelp
 			preGate.GateOutcome = gateOutcome
 			preGate.Proof = &authority.LinuxCgroupPreGateStopProof{
 				Version: authority.LinuxCgroupIdentityVersion, Kind: authority.LinuxCgroupStopProofHelper,
-				Issuer: helper.helper, Reaper: helper.helper, PinnedLeafFD: true,
-				CgroupKillAcknowledged: true, CgroupPopulatedZero: true, NoMigrationObserved: true,
-				ProducerFenced: true, DescendantsReaped: true,
+				Issuer: helper.helper, Reaper: helper.helper, PinnedLeafFD: anchorStop.PinnedLeafFD,
+				CgroupKillAcknowledged: anchorStop.KillAcknowledged,
+				CgroupPopulatedZero:    anchorStop.CgroupPopulatedZero,
+				NoMigrationObserved:    anchorStop.NoMigrationObserved,
+				ProducerFenced:         anchorStop.ProducerFenced, DescendantsReaped: true,
 				LauncherExit: *launcherExit, GateOutcome: *gateOutcome,
 			}
 		}
@@ -3233,38 +4019,90 @@ func (helper *linuxOwnerHelperV2) stopOwned(ctx context.Context) (LinuxOwnerHelp
 		helper.stateMu.Unlock()
 		return evidence, nil
 	}
+	if prepared != nil && gate == nil {
+		if !prepareStarted || launcher == nil || launcherExit == nil || gateOutcome != nil || releaseAttempted || released {
+			helper.setStopError("untrusted_prepare_child_unproven")
+			return LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("%w: failed-Prepare child lacks an exact launcher fence or contradicts the no-gate outcome", ErrLinuxOwnerHelperV2StopUnproven)
+		}
+		helper.stateMu.Lock()
+		untrustedProcess := cloneLinuxOwnerProcessIdentity(helper.untrustedProcess)
+		helper.stateMu.Unlock()
+		if untrustedProcess == nil {
+			process, err := linuxOwnerHelperUntrustedProcessIdentity(prepared.Identity(), prepared.PIDFD(), helper.helper, launcher)
+			if err != nil {
+				helper.setStopError("untrusted_prepare_identity_unproven")
+				return LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("%w: exact failed-Prepare child identity is unavailable: %v", ErrLinuxOwnerHelperV2StopUnproven, err)
+			}
+			helper.stateMu.Lock()
+			if helper.untrustedProcess == nil {
+				helper.untrustedProcess = cloneLinuxOwnerProcessIdentity(&process)
+			} else if !helper.untrustedProcess.Equal(process) {
+				helper.stateMu.Unlock()
+				helper.setStopError("untrusted_prepare_identity_conflict")
+				return LinuxOwnerHelperV2StopEvidence{}, errors.New("failed-Prepare child identity changed during producer fencing")
+			}
+			untrustedProcess = cloneLinuxOwnerProcessIdentity(helper.untrustedProcess)
+			helper.stateMu.Unlock()
+		}
+		if err := helper.verifyLeafMembershipBeforeStop(ctx, prepared, launcher, launcherExit, nil, untrustedProcess, false, false); err != nil {
+			helper.setStopError("untrusted_prepare_membership_unproven")
+			return LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("%w: failed-Prepare child tree is not in the exact run leaf: %v", ErrLinuxOwnerHelperV2StopUnproven, err)
+		}
+		fence := LinuxOwnerAnchorProducerFence{
+			Version: linuxOwnerAnchorStopEvidenceVersion, RunKey: helper.grant.RunKey, Fence: helper.grant.Fence,
+			LaunchToken: helper.grant.LaunchToken, Helper: helper.helper,
+			StopLatched: stopLatched, LeaseStopped: helper.lease.isStopped(),
+			PrepareAttempted: true, PrepareQuiesced: prepareQuiesced,
+			ReleaseQuiesced: releaseQuiesced, LeafMembershipVerified: true,
+			Launcher:     cloneLinuxOwnerProcessIdentity(launcher),
+			LauncherExit: cloneLinuxOwnerAnchorExitProof(launcherExit), UntrustedProcess: untrustedProcess,
+		}
+		if _, err := helper.stopLeafThroughAnchor(ctx, fence); err != nil {
+			helper.setStopError("untrusted_prepare_anchor_stop_unproven")
+			return LinuxOwnerHelperV2StopEvidence{}, err
+		}
+		if _, err := helper.waitUntrustedPreparedChild(ctx, prepared, *untrustedProcess); err != nil {
+			helper.setStopError("untrusted_prepare_child_wait_unproven")
+			return LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("%w: exact failed-Prepare child wait/reap is unproven: %v", ErrLinuxOwnerHelperV2StopUnproven, err)
+		}
+		if _, _, err := helper.reapAdoptedChildren(ctx, nil); err != nil {
+			helper.setStopError("untrusted_prepare_descendant_reap_unproven")
+			return LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("%w: failed-Prepare descendants were not exactly reaped: %v", ErrLinuxOwnerHelperV2StopUnproven, err)
+		}
+		helper.setStopError("untrusted_prepare_child_stopped_without_receipt")
+		return LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("%w: anchor stopped an untrusted failed-Prepare child, but no authenticated GateNeverProduced result permits a durable stop receipt", ErrLinuxOwnerHelperV2StopUnproven)
+	}
 	if prepared == nil || gate == nil || launcher == nil || launcherExit == nil {
 		helper.setStopError("gate_or_producer_identity_unproven")
 		return LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("%w: exact gate or producer wait is unavailable", ErrLinuxOwnerHelperV2StopUnproven)
 	}
 	if err := ctx.Err(); err != nil {
-		helper.setStopError("stop_context_expired_before_kill")
+		helper.setStopError("stop_context_expired_before_anchor_stop")
 		return LinuxOwnerHelperV2StopEvidence{}, err
 	}
-	if err := unix.PidfdSendSignal(int(prepared.PIDFD().Fd()), 0, nil, 0); err == nil {
-		if membershipErr := prepared.VerifyLeafMembership(int(helper.leaf.leafFD)); membershipErr != nil {
-			if stillLiveErr := unix.PidfdSendSignal(int(prepared.PIDFD().Fd()), 0, nil, 0); stillLiveErr == nil {
-				helper.setStopError("gate_leaf_membership_unproven")
-				return LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("%w: live gate differs from the exact pinned leaf: %v", ErrLinuxOwnerHelperV2StopUnproven, membershipErr)
-			} else if !errors.Is(stillLiveErr, unix.ESRCH) {
-				helper.setStopError("gate_identity_unproven")
-				return LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("%w: exact gate liveness changed ambiguously: %v", ErrLinuxOwnerHelperV2StopUnproven, stillLiveErr)
-			}
-		}
-	} else if !errors.Is(err, unix.ESRCH) {
-		helper.setStopError("gate_identity_unproven")
-		return LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("%w: exact gate pidfd identity could not be probed: %v", ErrLinuxOwnerHelperV2StopUnproven, err)
+	if err := helper.verifyLeafMembershipBeforeStop(ctx, prepared, launcher, launcherExit, gate, nil, releaseAttempted, released); err != nil {
+		helper.setStopError("leaf_membership_unproven")
+		return LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("verify exact run process tree before anchor StopLeaf: %w", err)
 	}
-	if err := helper.stopPinnedLeaf(ctx); err != nil {
-		return LinuxOwnerHelperV2StopEvidence{}, errors.Join(err, helper.reapAfterUnknownKill(ctx, gate))
+	var userNamespace *LinuxUserNamespaceIdentity
+	if gateUserNamespace != nil {
+		copy := *gateUserNamespace
+		userNamespace = &copy
 	}
-	if releaseDone != nil {
-		select {
-		case <-releaseDone:
-		case <-ctx.Done():
-			helper.setStopError("release_did_not_quiesce")
-			return LinuxOwnerHelperV2StopEvidence{}, fmt.Errorf("%w: one-use release did not quiesce after Abort: %v", ErrLinuxOwnerHelperV2StopUnproven, ctx.Err())
-		}
+	fence := LinuxOwnerAnchorProducerFence{
+		Version: linuxOwnerAnchorStopEvidenceVersion, RunKey: helper.grant.RunKey, Fence: helper.grant.Fence,
+		LaunchToken: helper.grant.LaunchToken, Helper: helper.helper,
+		StopLatched: stopLatched, LeaseStopped: helper.lease.isStopped(),
+		PrepareAttempted: prepareStarted, PrepareQuiesced: prepareQuiesced,
+		ReleaseAttempted: releaseAttempted, ReleaseQuiesced: releaseQuiesced, Released: released,
+		LeafMembershipVerified: true, Launcher: cloneLinuxOwnerProcessIdentity(launcher),
+		LauncherExit: cloneLinuxOwnerAnchorExitProof(launcherExit), Gate: cloneLinuxOwnerGateIdentity(gate),
+		UserNamespace: userNamespace,
+	}
+	anchorStop, err := helper.stopLeafThroughAnchor(ctx, fence)
+	if err != nil {
+		helper.setStopError("anchor_stop_unproven")
+		return LinuxOwnerHelperV2StopEvidence{}, err
 	}
 	waitResult, err := helper.waitGate(ctx)
 	if err != nil {
@@ -3279,15 +4117,16 @@ func (helper *linuxOwnerHelperV2) stopOwned(ctx context.Context) (LinuxOwnerHelp
 	gateExit := waitResult.Proof
 	proof := authority.LinuxCgroupStopProof{
 		Version: authority.LinuxCgroupIdentityVersion, Kind: authority.LinuxCgroupStopProofHelper,
-		Issuer: helper.helper, Reaper: helper.helper, PinnedLeafFD: true,
-		CgroupKillAcknowledged: true, CgroupPopulatedZero: true, NoMigrationObserved: true,
-		ProducerFenced: true, DescendantsReaped: true,
-		LauncherExit: *launcherExit, GateExit: gateExit,
+		Issuer: helper.helper, Reaper: helper.helper, PinnedLeafFD: anchorStop.PinnedLeafFD,
+		CgroupKillAcknowledged: anchorStop.KillAcknowledged, CgroupPopulatedZero: anchorStop.CgroupPopulatedZero,
+		NoMigrationObserved: anchorStop.NoMigrationObserved, ProducerFenced: anchorStop.ProducerFenced,
+		DescendantsReaped: true,
+		LauncherExit:      *launcherExit, GateExit: gateExit,
 	}
 	evidence := LinuxOwnerHelperV2StopEvidence{
 		Version: linuxOwnerHelperV2Version, RunKey: helper.grant.RunKey, Fence: helper.grant.Fence,
 		LaunchToken: helper.grant.LaunchToken, Parent: helper.grant.Parent, Leaf: helper.grant.Leaf,
-		Anchor: helper.grant.Anchor, Helper: helper.helper, Launcher: *launcher,
+		Anchor: helper.grant.Anchor, Helper: helper.helper, AnchorStop: anchorStop, Launcher: *launcher,
 		Gate: *gate, Proof: proof, DescendantCount: descendantCount, DescendantDigest: descendantDigest,
 	}
 	if err := evidence.ValidateFor(helper.grant, helper.helper, *launcher, *gate); err != nil {
@@ -3306,7 +4145,6 @@ func (helper *linuxOwnerHelperV2) stopOwned(ctx context.Context) (LinuxOwnerHelp
 }
 
 func (helper *linuxOwnerHelperV2) reapAdoptedChildren(ctx context.Context, gate *authority.LinuxCgroupGateIdentity) (uint64, string, error) {
-	childrenPath := fmt.Sprintf("/proc/%d/task/%d/children", os.Getpid(), os.Getpid())
 	seen := make(map[int]authority.LinuxCgroupProcessIdentity, len(helper.descendantReaped))
 	identityRows := make([]string, 0, len(helper.descendantReaped))
 	for pid, process := range helper.descendantReaped {
@@ -3317,21 +4155,16 @@ func (helper *linuxOwnerHelperV2) reapAdoptedChildren(ctx context.Context, gate 
 		if err := ctx.Err(); err != nil {
 			return 0, "", err
 		}
-		contents, err := os.ReadFile(childrenPath)
+		pids, err := readLinuxOwnerProcessChildren(ctx, helper.helper)
 		if err != nil {
 			return 0, "", fmt.Errorf("read helper's exact kernel child list: %w", err)
 		}
-		fields := strings.Fields(string(contents))
-		if len(fields) == 0 {
+		if len(pids) == 0 {
 			sort.Strings(identityRows)
 			digest := sha256.Sum256([]byte(strings.Join(identityRows, "\n")))
 			return uint64(len(seen)), hex.EncodeToString(digest[:]), nil
 		}
-		for _, field := range fields {
-			pid, err := strconv.Atoi(field)
-			if err != nil || pid <= 1 || strconv.Itoa(pid) != field {
-				return 0, "", errors.New("helper child list contains an invalid PID")
-			}
+		for _, pid := range pids {
 			if gate != nil && pid == gate.Process.PID {
 				return 0, "", errors.New("gate remained in helper child list after exact gate wait")
 			}
@@ -3368,6 +4201,45 @@ func (helper *linuxOwnerHelperV2) reapAdoptedChildren(ctx context.Context, gate 
 			if pidfdFile == nil {
 				_ = unix.Close(pidfd)
 				return 0, "", errors.New("wrap pidfd for adopted run child")
+			}
+			classification, err := helper.anchorClient.ClassifyRunChildOrigin(
+				ctx, helper.grant, helper.helper, process, pidfdFile,
+			)
+			if err != nil {
+				_ = pidfdFile.Close()
+				return 0, "", fmt.Errorf("anchor could not prove adopted child origin before helper wait: %w", err)
+			}
+			if err := classification.ValidateFor(helper.grant, helper.helper, process); err != nil {
+				_ = pidfdFile.Close()
+				return 0, "", fmt.Errorf("anchor returned an invalid adopted-helper child classification: %w", err)
+			}
+			if classification.Origin == linuxOwnerAnchorRunChildOriginPreReleaseGatePhysicalOnly ||
+				classification.Origin == linuxOwnerAnchorRunChildOriginPhysicalOnlyForeign ||
+				classification.Role != "descendant" || !classification.currentRunMember() {
+				_ = pidfdFile.Close()
+				return 0, "", errors.New("anchor classified adopted helper child outside the exact current RunKey descendant origin")
+			}
+			if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(pidfdFile.Fd()), process); err != nil {
+				_ = pidfdFile.Close()
+				return 0, "", fmt.Errorf("revalidate adopted child pidfd after origin proof: %w", err)
+			}
+			identityAfter, err := ProcessIdentity(pid)
+			if err != nil || identityAfter != process.Identity {
+				_ = pidfdFile.Close()
+				return 0, "", fmt.Errorf("revalidate adopted child identity after origin proof: %w", errOr(err, errors.New("creation identity changed")))
+			}
+			credentials, err = readLinuxOwnerProcessCredentials(pid)
+			if err != nil || credentials.Parent != os.Getpid() {
+				_ = pidfdFile.Close()
+				return 0, "", fmt.Errorf("revalidate adopted child parent after origin proof: %w", errOr(err, errors.New("parent differs from helper")))
+			}
+			if err := verifyLinuxOwnerRunChildCredentials(pid, "descendant", helper.owner); err != nil {
+				_ = pidfdFile.Close()
+				return 0, "", err
+			}
+			if err := verifyLinuxOwnerRunChildMembership(pid, "descendant", helper.grant, helper.leaf); err != nil {
+				_ = pidfdFile.Close()
+				return 0, "", err
 			}
 			if err := linuxOwnerAnchorWaitPIDFD(ctx, pidfdFile, process); err != nil {
 				_ = pidfdFile.Close()
@@ -3618,19 +4490,6 @@ func (helper *linuxOwnerHelperV2) setStopError(code string) {
 	helper.stateMu.Unlock()
 }
 
-func (helper *linuxOwnerHelperV2) stopOwnedWithSafeRetry(ctx context.Context) (LinuxOwnerHelperV2StopEvidence, error) {
-	if helper == nil {
-		return LinuxOwnerHelperV2StopEvidence{}, errors.New("Linux owner helper is unavailable")
-	}
-	evidence, err := helper.stopOwned(ctx)
-	if err == nil || !errors.Is(err, errLinuxCgroupKillWriteNotAttempted) {
-		return evidence, err
-	}
-	retryContext, cancel := context.WithTimeout(ctx, linuxOwnerHelperV2StopTimeout)
-	defer cancel()
-	return helper.stopOwned(retryContext)
-}
-
 func (helper *linuxOwnerHelperV2) isOwnerLost() bool {
 	helper.stateMu.Lock()
 	defer helper.stateMu.Unlock()
@@ -3730,6 +4589,61 @@ func (helper *linuxOwnerHelperV2) waitGate(ctx context.Context) (LinuxOwnerHelpe
 	}
 }
 
+func (helper *linuxOwnerHelperV2) waitUntrustedPreparedChild(
+	ctx context.Context,
+	prepared *linuxgate.PreparedGate,
+	process authority.LinuxCgroupProcessIdentity,
+) (LinuxOwnerHelperV2Exit, error) {
+	if helper == nil || ctx == nil || prepared == nil || process.Validate() != nil {
+		return LinuxOwnerHelperV2Exit{}, errors.New("failed-Prepare child wait is incomplete")
+	}
+	helper.untrustedWaitMu.Lock()
+	if helper.untrustedWaitResult != nil {
+		result := *helper.untrustedWaitResult
+		result.Proof = result.Proof.Clone()
+		helper.untrustedWaitMu.Unlock()
+		return result, nil
+	}
+	if helper.untrustedWaitError != nil {
+		err := helper.untrustedWaitError
+		helper.untrustedWaitMu.Unlock()
+		return LinuxOwnerHelperV2Exit{}, err
+	}
+	if helper.untrustedWaitAttempted {
+		helper.untrustedWaitMu.Unlock()
+		return LinuxOwnerHelperV2Exit{}, errors.New("failed-Prepare child wait is already in progress")
+	}
+	helper.untrustedWaitAttempted = true
+	helper.untrustedWaitMu.Unlock()
+	info, err := prepared.WaitLeader(ctx)
+	if err != nil {
+		helper.untrustedWaitMu.Lock()
+		if ctx.Err() != nil {
+			helper.untrustedWaitAttempted = false
+		} else {
+			helper.untrustedWaitError = err
+		}
+		helper.untrustedWaitMu.Unlock()
+		return LinuxOwnerHelperV2Exit{}, fmt.Errorf("wait/reap exact failed-Prepare child by its retained pidfd: %w", err)
+	}
+	result, err := linuxOwnerHelperV2ExitResult(info, process, helper.helper)
+	if err != nil || result == nil || !result.Proof.ValidForOwnedDescendant(process, helper.helper, helper.grant.Anchor, nil) {
+		if err == nil {
+			err = errors.New("failed-Prepare child wait proof differs from the exact helper-owned identity")
+		}
+		helper.untrustedWaitMu.Lock()
+		helper.untrustedWaitError = err
+		helper.untrustedWaitMu.Unlock()
+		return LinuxOwnerHelperV2Exit{}, err
+	}
+	copy := *result
+	copy.Proof = copy.Proof.Clone()
+	helper.untrustedWaitMu.Lock()
+	helper.untrustedWaitResult = &copy
+	helper.untrustedWaitMu.Unlock()
+	return copy, nil
+}
+
 func linuxOwnerHelperV2ExitResult(info unix.Siginfo, process, helper authority.LinuxCgroupProcessIdentity) (*LinuxOwnerHelperV2Exit, error) {
 	if process.Validate() != nil || helper.Validate() != nil || info.Signo != int32(unix.SIGCHLD) {
 		return nil, errors.New("Linux owner helper exact wait returned an invalid process status")
@@ -3810,6 +4724,36 @@ func linuxOwnerHelperGateProcessIdentity(identity linuxgate.ProcessIdentity) (au
 	return authority.LinuxCgroupProcessIdentity{PID: identity.PID, Identity: actual}, nil
 }
 
+func linuxOwnerHelperUntrustedProcessIdentity(
+	identity linuxgate.ProcessIdentity,
+	pidfd *os.File,
+	helper authority.LinuxCgroupProcessIdentity,
+	launcher *authority.LinuxCgroupProcessIdentity,
+) (authority.LinuxCgroupProcessIdentity, error) {
+	if identity.PID <= 1 || identity.StartTime == 0 || identity.BootID == "" || identity.OwnerPID <= 1 ||
+		pidfd == nil || helper.Validate() != nil || launcher == nil || launcher.Validate() != nil || identity.OwnerPID != launcher.PID {
+		return authority.LinuxCgroupProcessIdentity{}, errors.New("failed-Prepare child identity is incomplete or not launcher-owned")
+	}
+	actual, err := ProcessIdentity(identity.PID)
+	if err != nil {
+		return authority.LinuxCgroupProcessIdentity{}, err
+	}
+	parsed, err := parseLinuxProcessIdentity(actual)
+	if err != nil || parsed.version != linuxProcessIdentityVersion || parsed.pid != identity.PID ||
+		parsed.bootID != identity.BootID || parsed.startTime != identity.StartTime {
+		return authority.LinuxCgroupProcessIdentity{}, errors.Join(errors.New("failed-Prepare child PID/start identity differs from its retained gate pidfd"), err)
+	}
+	process := authority.LinuxCgroupProcessIdentity{PID: identity.PID, Identity: actual}
+	if err := verifyLinuxOwnerAnchorPIDFD(int(pidfd.Fd()), process); err != nil {
+		return authority.LinuxCgroupProcessIdentity{}, fmt.Errorf("verify failed-Prepare child pidfd identity: %w", err)
+	}
+	credentials, err := readLinuxOwnerProcessCredentials(process.PID)
+	if err != nil || credentials.Parent != helper.PID {
+		return authority.LinuxCgroupProcessIdentity{}, fmt.Errorf("verify failed-Prepare child helper ancestry: %w", errOr(err, errors.New("parent differs")))
+	}
+	return process, nil
+}
+
 func isGateNeverProduced(err error) bool {
 	var failure *linuxgate.GateNeverProducedError
 	return errors.As(err, &failure)
@@ -3860,6 +4804,34 @@ func cloneLinuxOwnerGateIdentityIfValid(value authority.LinuxCgroupGateIdentity)
 
 func cloneLinuxOwnerHelperV2StopEvidence(value LinuxOwnerHelperV2StopEvidence) LinuxOwnerHelperV2StopEvidence {
 	cloned := value
+	if value.AnchorStop != nil {
+		stop := value.AnchorStop.Clone()
+		cloned.AnchorStop = &stop
+	}
+	cloned.RunReapEvidence = append([]LinuxOwnerAnchorReapEvidence(nil), value.RunReapEvidence...)
+	for index := range cloned.RunReapEvidence {
+		cloned.RunReapEvidence[index].HelperExit = value.RunReapEvidence[index].HelperExit.Clone()
+		cloned.RunReapEvidence[index].ProcessExit = value.RunReapEvidence[index].ProcessExit.Clone()
+	}
+	if value.PreGate != nil {
+		preGate := *value.PreGate
+		if value.PreGate.AnchorStop != nil {
+			stop := value.PreGate.AnchorStop.Clone()
+			preGate.AnchorStop = &stop
+		}
+		preGate.Launcher = cloneLinuxOwnerProcessIdentity(value.PreGate.Launcher)
+		preGate.LauncherExit = cloneLinuxOwnerAnchorExitProof(value.PreGate.LauncherExit)
+		if value.PreGate.GateOutcome != nil {
+			gateOutcome := *value.PreGate.GateOutcome
+			preGate.GateOutcome = &gateOutcome
+		}
+		if value.PreGate.Proof != nil {
+			proof := *value.PreGate.Proof
+			proof.HelperExit = cloneLinuxOwnerAnchorExitProof(value.PreGate.Proof.HelperExit)
+			preGate.Proof = &proof
+		}
+		cloned.PreGate = &preGate
+	}
 	cloned.Proof.LauncherExit = *cloneLinuxOwnerAnchorExitProof(&value.Proof.LauncherExit)
 	cloned.Proof.GateExit = *cloneLinuxOwnerAnchorExitProof(&value.Proof.GateExit)
 	cloned.Proof.HelperExit = cloneLinuxOwnerAnchorExitProof(value.Proof.HelperExit)
@@ -4359,6 +5331,11 @@ func (anchor *linuxOwnerAnchor) verifyRetiredRunPhysicalState(ctx context.Contex
 		!run.helperExit.ValidFor(run.helper, anchor.identity) {
 		return errors.New("anchor retirement lacks exact helper exit/reap and pinned leaf authority")
 	}
+	if run.stopEvidence != nil {
+		if err := verifyLinuxOwnerAnchorStopEvidenceNamespacePin(*run.stopEvidence, run.gateUserNamespaceFD); err != nil {
+			return fmt.Errorf("verify cached AnchorStop namespace pin before retirement: %w", err)
+		}
+	}
 	present, err := linuxOwnerAnchorPinnedLeafPresent(run)
 	if err != nil {
 		return fmt.Errorf("verify exact pinned leaf before retirement: %w", err)
@@ -4370,6 +5347,9 @@ func (anchor *linuxOwnerAnchor) verifyRetiredRunPhysicalState(ctx context.Contex
 	run.leafEmptyObserved = true
 	if _, err := anchor.reapRunChildren(ctx, run); err != nil {
 		return fmt.Errorf("reap every exact anchor-adopted run child before retirement: %w", err)
+	}
+	if len(run.physicalOnlyChildren) != 0 {
+		return errors.New("physical-only pre-RegisterGate gate remains outside RunReapEvidence; run cannot be retired or cleared")
 	}
 	return nil
 }
@@ -4396,91 +5376,131 @@ func (anchor *linuxOwnerAnchor) reapRunChildren(ctx context.Context, run *linuxO
 		run.leafRemovedObserved = true
 		run.leafEmptyObserved = true
 	}
-	childrenPath := fmt.Sprintf("/proc/%d/task/%d/children", anchor.identity.PID, anchor.identity.PID)
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		contents, err := os.ReadFile(childrenPath)
+		pids, err := readLinuxOwnerProcessChildren(ctx, anchor.identity)
 		if err != nil {
 			return nil, fmt.Errorf("read anchor's exact kernel child list: %w", err)
 		}
-		pids, err := parseLinuxOwnerChildPIDs(contents)
-		if err != nil {
-			return nil, err
-		}
 		var foundRunChild bool
 		for _, pid := range pids {
-			identity, err := ProcessIdentity(pid)
-			if err != nil {
-				return nil, fmt.Errorf("capture anchor-adopted process creation identity: %w", err)
-			}
-			process := authority.LinuxCgroupProcessIdentity{PID: pid, Identity: identity}
 			tracked, known := run.children[pid]
-			if known && !tracked.identity.Equal(process) {
-				return nil, errors.New("anchor adopted a reused process PID for this run")
+			if known && (tracked.identity.PID != pid || tracked.identity.Validate() != nil || tracked.pidfd == nil) {
+				return nil, errors.New("anchor run child lacks its exact retained process identity and pidfd")
 			}
-			credentials, err := readLinuxOwnerProcessCredentials(pid)
-			if err != nil || credentials.Parent != anchor.identity.PID {
-				return nil, fmt.Errorf("verify exact anchor-adopted child ancestry: %w", errOr(err, errors.New("PPid differs from anchor")))
+			if physicalOnly, exists := run.physicalOnlyChildren[pid]; exists {
+				process := physicalOnly.identity
+				if known || process.PID != pid || process.Validate() != nil || physicalOnly.pidfd == nil ||
+					physicalOnly.classification.ValidateFor(run.grant, run.helper, process) != nil ||
+					physicalOnly.classification.Origin != linuxOwnerAnchorRunChildOriginPreReleaseGatePhysicalOnly {
+					return nil, errors.New("anchor physical-only gate child differs from its exact dedicated PIDFD tracker")
+				}
+				if _, alreadyInRunEvidence := run.reaped[pid]; alreadyInRunEvidence {
+					return nil, errors.New("physical-only pre-RegisterGate child entered RunReapEvidence")
+				}
+				// This A gate is physical-containment-only, never a Run child receipt.
+				if err := anchor.reapPhysicalOnlyChild(ctx, run, process); err != nil {
+					return nil, fmt.Errorf("wait/reap exact physical-only pre-RegisterGate child: %w", err)
+				}
+				continue
 			}
-			cgroupPath, err := readLinuxOwnerProcessCgroupPath(pid)
-			if err != nil {
-				return nil, err
-			}
-			role := "descendant"
-			if known {
-				role = tracked.role
-				if err := verifyLinuxOwnerRunChildCredentials(pid, role, run.owner); err != nil {
+			var classification linuxOwnerAnchorRunChildClassification
+			classified := false
+			postKillRetained := false
+			postKillObservation := run.leafRemovedObserved || run.leafKillAcknowledged && run.leafEmptyObserved
+			var process authority.LinuxCgroupProcessIdentity
+			if known && tracked.classification.currentRunMember() {
+				process = tracked.identity
+				tracked, classification, err = anchor.classifyRunChildForReap(ctx, run, process, tracked, known)
+				if err != nil {
 					return nil, err
 				}
-				if !run.leafRemovedObserved {
-					if err := verifyLinuxOwnerRunChildMembership(pid, role, run.grant, run.leaf); err != nil {
-						return nil, err
+				classified = true
+				if postKillObservation {
+					ready, err := linuxOwnerAnchorPIDFDReady(tracked.pidfd)
+					if err != nil {
+						return nil, fmt.Errorf("poll exact retained child pidfd after run-leaf containment: %w", err)
 					}
-				}
-			} else {
-				leafPath := run.grant.Parent.Path + "/" + run.grant.Leaf.LeafName
-				if !linuxOwnerCgroupPathWithin(cgroupPath, leafPath) {
-					if anchor.childBelongsToAnotherRun(run.grant.RunKey, process, cgroupPath) {
-						continue
-					}
-					return nil, errors.New("anchor observed an unregistered child outside this exact run leaf")
-				}
-				if err := verifyLinuxOwnerRunChildCredentials(pid, role, run.owner); err != nil {
-					return nil, err
-				}
-				if !run.leafRemovedObserved {
-					if err := verifyLinuxOwnerRunChildMembership(pid, role, run.grant, run.leaf); err != nil {
-						return nil, err
-					}
+					postKillRetained = ready && classification.currentRunMember()
 				}
 			}
-			foundRunChild = true
+			if !postKillRetained {
+				identity, err := ProcessIdentity(pid)
+				if err != nil {
+					return nil, fmt.Errorf("capture anchor-adopted process creation identity: %w", err)
+				}
+				process = authority.LinuxCgroupProcessIdentity{PID: pid, Identity: identity}
+				if known && !tracked.identity.Equal(process) {
+					return nil, errors.New("anchor adopted a reused process PID for this run")
+				}
+				credentials, err := readLinuxOwnerProcessCredentials(pid)
+				if err != nil || credentials.Parent != anchor.identity.PID {
+					return nil, fmt.Errorf("verify exact anchor-adopted child ancestry: %w", errOr(err, errors.New("PPid differs from anchor")))
+				}
+			}
+			if !known {
+				cgroupPath, err := readLinuxOwnerProcessCgroupPath(pid)
+				if err != nil {
+					return nil, fmt.Errorf("read untracked anchor child cgroup before cross-RunKey skip: %w", err)
+				}
+				otherRunChild, err := anchor.skipChildOwnedByAnotherRun(ctx, run, process, cgroupPath)
+				if err != nil {
+					return nil, fmt.Errorf("classify unknown anchor child before run-wide reap: %w", err)
+				}
+				if otherRunChild {
+					continue
+				}
+			}
 			if evidence, reaped := run.reaped[pid]; reaped {
-				if err := evidence.ValidateFor(run.grant, run.helper, process, role); err != nil {
+				if err := evidence.ValidateFor(run.grant, run.helper, process, evidence.ProcessRole); err != nil {
 					return nil, err
 				}
 				return nil, errors.New("anchor child is marked reaped but still appears in the kernel child list")
 			}
-			if !known {
-				pidfd, err := unix.PidfdOpen(pid, 0)
+			if !classified {
+				tracked, classification, err = anchor.classifyRunChildForReap(ctx, run, process, tracked, known)
 				if err != nil {
-					return nil, fmt.Errorf("open pidfd for exact anchor-adopted run child: %w", err)
-				}
-				if err := verifyLinuxOwnerAnchorPIDFDIdentity(pidfd, process); err != nil {
-					_ = unix.Close(pidfd)
 					return nil, err
 				}
-				pidfdFile := os.NewFile(uintptr(pidfd), "symmetry-owner-anchor-run-child-pidfd")
-				if pidfdFile == nil {
-					_ = unix.Close(pidfd)
-					return nil, errors.New("wrap exact anchor-adopted run child pidfd")
-				}
-				run.children[pid] = linuxOwnerAnchorTrackedProcess{
-					identity: process, creator: run.helper, role: role, pidfd: pidfdFile,
+			}
+			if classification.Origin == linuxOwnerAnchorRunChildOriginPreReleaseGatePhysicalOnly {
+				return nil, errors.New("physical-only pre-RegisterGate child lacks its dedicated Anchor PIDFD tracker")
+			}
+			role := tracked.role
+			if classification.Role != role {
+				return nil, errors.New("anchor child origin role differs from its exact retained run classification")
+			}
+			if !postKillRetained {
+				switch role {
+				case "gate":
+					if transitionErr := run.verifyAuthorizedGateExec(process, !run.leafRemovedObserved); transitionErr == nil {
+						role = "native"
+						tracked.role = role
+						tracked.classification.Role = role
+						run.children[pid] = tracked
+					} else if gateErr := run.verifyRegisteredGateA(process, !run.leafRemovedObserved); gateErr != nil {
+						return nil, errors.Join(fmt.Errorf("verify authorized gate-to-native transition: %w", transitionErr), gateErr)
+					}
+				case "native":
+					if err := run.verifyAuthorizedGateExec(process, !run.leafRemovedObserved); err != nil {
+						return nil, fmt.Errorf("verify exact authorized native role before reap: %w", err)
+					}
+				default:
+					if err := verifyLinuxOwnerRunChildCredentials(pid, role, run.owner); err != nil {
+						return nil, err
+					}
+					postKillNamespaceOrigin := classification.Origin == linuxOwnerAnchorRunChildOriginGateUserNSCurrent &&
+						(run.leafRemovedObserved || run.leafKillAcknowledged && run.leafEmptyObserved)
+					if !run.leafRemovedObserved && !postKillNamespaceOrigin {
+						if err := verifyLinuxOwnerRunChildMembership(pid, role, run.grant, run.leaf); err != nil {
+							return nil, err
+						}
+					}
 				}
 			}
+			foundRunChild = true
 			if _, err := run.reapChild(ctx, anchor.identity, process, role); err != nil {
 				return nil, err
 			}
@@ -4497,34 +5517,459 @@ func (anchor *linuxOwnerAnchor) reapRunChildren(ctx context.Context, run *linuxO
 	return result, nil
 }
 
-func (anchor *linuxOwnerAnchor) childBelongsToAnotherRun(except LinuxOwnerAnchorRunKey, process authority.LinuxCgroupProcessIdentity, cgroupPath string) bool {
+func (anchor *linuxOwnerAnchor) classifyRunChildForReap(
+	ctx context.Context,
+	run *linuxOwnerAnchorRun,
+	process authority.LinuxCgroupProcessIdentity,
+	tracked linuxOwnerAnchorTrackedProcess,
+	known bool,
+) (linuxOwnerAnchorTrackedProcess, linuxOwnerAnchorRunChildClassification, error) {
+	if anchor == nil || ctx == nil || run == nil || process.Validate() != nil {
+		return linuxOwnerAnchorTrackedProcess{}, linuxOwnerAnchorRunChildClassification{}, errors.New("anchor run-child classification is incomplete")
+	}
+	pidfd := -1
+	if known {
+		if !tracked.identity.Equal(process) || tracked.pidfd == nil {
+			return linuxOwnerAnchorTrackedProcess{}, linuxOwnerAnchorRunChildClassification{}, errors.New("registered run child lacks its exact pidfd")
+		}
+		pidfd = int(tracked.pidfd.Fd())
+	} else {
+		var err error
+		pidfd, err = unix.PidfdOpen(process.PID, 0)
+		if err != nil {
+			return linuxOwnerAnchorTrackedProcess{}, linuxOwnerAnchorRunChildClassification{}, fmt.Errorf("open pidfd for unregistered anchor child classification: %w", err)
+		}
+		defer unix.Close(pidfd)
+		if err := verifyLinuxOwnerAnchorPIDFDIdentity(pidfd, process); err != nil {
+			return linuxOwnerAnchorTrackedProcess{}, linuxOwnerAnchorRunChildClassification{}, err
+		}
+	}
+	classification, err := anchor.classifyRunChildOrigin(ctx, run, process, pidfd)
+	if err != nil {
+		return linuxOwnerAnchorTrackedProcess{}, linuxOwnerAnchorRunChildClassification{}, fmt.Errorf("classify exact anchor run-child origin before wait: %w", err)
+	}
+	if err := classification.ValidateFor(run.grant, run.helper, process); err != nil {
+		return linuxOwnerAnchorTrackedProcess{}, linuxOwnerAnchorRunChildClassification{}, err
+	}
+	switch classification.Origin {
+	case linuxOwnerAnchorRunChildOriginRegisteredCurrent:
+		registered, exists := run.children[process.PID]
+		if !exists || !registered.identity.Equal(process) || registered.pidfd == nil ||
+			registered.role != classification.Role || !registered.classification.Equal(classification) {
+			return linuxOwnerAnchorTrackedProcess{}, linuxOwnerAnchorRunChildClassification{}, errors.New("registered-current origin lacks the exact retained RunKey child")
+		}
+		return registered, classification, nil
+	case linuxOwnerAnchorRunChildOriginGateUserNSCurrent:
+		if classification.Role != "descendant" {
+			return linuxOwnerAnchorTrackedProcess{}, linuxOwnerAnchorRunChildClassification{}, errors.New("gate-userns current origin is not a run descendant")
+		}
+		if known {
+			if !tracked.identity.Equal(process) || tracked.classification.ValidateFor(run.grant, run.helper, process) != nil ||
+				!tracked.classification.Equal(classification) || tracked.role != classification.Role {
+				return linuxOwnerAnchorTrackedProcess{}, linuxOwnerAnchorRunChildClassification{}, errors.New("namespace-proven current child differs from its retained origin pin")
+			}
+			return tracked, classification, nil
+		}
+		if err := run.trackNamespaceProvenChild(process, pidfd, classification); err != nil {
+			return linuxOwnerAnchorTrackedProcess{}, linuxOwnerAnchorRunChildClassification{}, fmt.Errorf("retain exact namespace-proven anchor child: %w", err)
+		}
+		registered, exists := run.children[process.PID]
+		if !exists || !registered.identity.Equal(process) || registered.pidfd == nil ||
+			!registered.classification.Equal(classification) || registered.creator.Validate() == nil {
+			return linuxOwnerAnchorTrackedProcess{}, linuxOwnerAnchorRunChildClassification{}, errors.New("namespace-proven child was not retained without a synthetic creator")
+		}
+		return registered, classification, nil
+	case linuxOwnerAnchorRunChildOriginPreReleaseGatePhysicalOnly:
+		return linuxOwnerAnchorTrackedProcess{}, classification, errors.New("physical-only pre-RegisterGate gate cannot become RunReapEvidence")
+	case linuxOwnerAnchorRunChildOriginPhysicalOnlyForeign:
+		return linuxOwnerAnchorTrackedProcess{}, classification, errors.New("foreign physical-only gate is not a current-RunKey reap candidate")
+	case linuxOwnerAnchorRunChildOriginCurrentRunEscaped:
+		run.migrationObserved = true
+		return linuxOwnerAnchorTrackedProcess{}, classification, errors.New("exact current-run child escaped its reserved cgroup leaf")
+	default:
+		return linuxOwnerAnchorTrackedProcess{}, classification, fmt.Errorf("Anchor classified child as non-member of this RunKey (%s)", classification.Origin)
+	}
+}
+
+func (anchor *linuxOwnerAnchor) childBelongsToAnotherRun(
+	ctx context.Context,
+	except LinuxOwnerAnchorRunKey,
+	process authority.LinuxCgroupProcessIdentity,
+) (bool, error) {
+	if anchor == nil || ctx == nil || process.Validate() != nil || anchor.identity.Validate() != nil {
+		return false, errors.New("classify another RunKey child requires exact anchor and process identities")
+	}
+	if len(anchor.runs) > linuxOwnerHelperV2MaxMembershipProcesses {
+		return false, errors.New("anchor RunKey set exceeds its bounded child-origin scan")
+	}
 	for key, run := range anchor.runs {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
 		if key == except || run == nil {
 			continue
 		}
+		if run.grant.Validate() != nil || run.grant.RunKey != key || run.helper.Validate() != nil {
+			return false, errors.New("anchor has an unresolved RunKey while classifying an adopted child")
+		}
+		if physicalOnly, exists := run.physicalOnlyChildren[process.PID]; exists {
+			if !physicalOnly.identity.Equal(process) || physicalOnly.pidfd == nil || physicalOnly.waited ||
+				physicalOnly.classification.ValidateFor(run.grant, run.helper, process) != nil ||
+				physicalOnly.classification.Origin != linuxOwnerAnchorRunChildOriginPreReleaseGatePhysicalOnly {
+				return false, errors.New("other RunKey physical-only gate differs from its exact retained identity")
+			}
+			if run.retired || run.helperExit == nil || !run.helperExit.ValidFor(run.helper, anchor.identity) {
+				return false, errors.New("physical-only foreign gate lacks its exact live RunKey fence")
+			}
+			if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(physicalOnly.pidfd.Fd()), process); err != nil {
+				return false, fmt.Errorf("verify foreign physical-only gate pidfd: %w", err)
+			}
+			identity, err := ProcessIdentity(process.PID)
+			if err != nil || identity != process.Identity {
+				return false, fmt.Errorf("verify foreign physical-only gate identity: %w", errOr(err, errors.New("creation identity differs")))
+			}
+			credentials, err := readLinuxOwnerProcessCredentials(process.PID)
+			if err != nil || credentials.Parent != anchor.identity.PID {
+				return false, fmt.Errorf("verify foreign physical-only gate adoption: %w", errOr(err, errors.New("PPid differs from Anchor")))
+			}
+			return true, nil
+		}
+		if run.retired {
+			if run.helper.Equal(process) {
+				return false, errors.New("retired RunKey helper remains in the anchor child list")
+			}
+			if child, exists := run.children[process.PID]; exists && child.identity.Equal(process) {
+				return false, errors.New("retired RunKey child remains in the anchor child list")
+			}
+			continue
+		}
 		if run.helper.Equal(process) {
-			return true
+			if run.helperExit != nil {
+				return false, errors.New("reaped other RunKey helper remains in the anchor child list")
+			}
+			if run.helperPIDFD == nil {
+				return false, errors.New("another RunKey helper lacks its previously bound pidfd")
+			}
+			if err := verifyLinuxOwnerAnchorPIDFDIdentity(int(run.helperPIDFD.Fd()), run.helper); err != nil {
+				return false, fmt.Errorf("verify exact other-RunKey helper pidfd: %w", err)
+			}
+			identity, err := ProcessIdentity(run.helper.PID)
+			if err != nil || identity != run.helper.Identity {
+				return false, fmt.Errorf("verify exact other-RunKey helper identity: %w", errOr(err, errors.New("creation identity differs")))
+			}
+			credentials, err := readLinuxOwnerProcessCredentials(run.helper.PID)
+			if err != nil || credentials.Parent != anchor.identity.PID {
+				return false, fmt.Errorf("verify other-RunKey helper ancestry: %w", errOr(err, errors.New("PPid differs from anchor")))
+			}
+			return true, nil
 		}
-		if tracked, ok := run.children[process.PID]; ok && tracked.identity.Equal(process) {
-			return true
+		tracked, exists := run.children[process.PID]
+		if !exists || !tracked.identity.Equal(process) {
+			continue
 		}
-		otherLeaf := run.grant.Parent.Path + "/" + run.grant.Leaf.LeafName
-		if linuxOwnerCgroupPathWithin(cgroupPath, otherLeaf) {
-			return true
+		if !linuxOwnerAnchorValidChildRole(tracked.role) || tracked.pidfd == nil {
+			return false, errors.New("other RunKey child lacks its exact creator, role, or retained pidfd")
+		}
+		if run.helperExit == nil || !run.helperExit.ValidFor(run.helper, anchor.identity) {
+			return false, errors.New("adopted other RunKey child lacks its exact helper exit proof")
+		}
+		if err := tracked.classification.ValidateFor(run.grant, run.helper, process); err != nil {
+			return false, fmt.Errorf("verify stored other-RunKey child origin: %w", err)
+		}
+		switch tracked.classification.Origin {
+		case linuxOwnerAnchorRunChildOriginRegisteredCurrent:
+			if err := validateLinuxOwnerAnchorCreatorChain(ctx, run, tracked); err != nil {
+				return false, fmt.Errorf("verify exact creator chain for other RunKey child: %w", err)
+			}
+		case linuxOwnerAnchorRunChildOriginGateUserNSCurrent:
+			if tracked.creator.Validate() == nil || tracked.role != "descendant" {
+				return false, errors.New("namespace-derived other RunKey child carries a synthetic creator edge")
+			}
+		default:
+			return false, errors.New("other RunKey child has no registered or namespace-bound origin")
+		}
+		if reaped, alreadyReaped := run.reaped[process.PID]; alreadyReaped && reaped.Process.Equal(process) {
+			return false, errors.New("previously reaped other RunKey child remains in the anchor child list")
+		}
+		classification, err := anchor.classifyRunChildOrigin(ctx, run, process, int(tracked.pidfd.Fd()))
+		if err != nil {
+			return false, fmt.Errorf("recheck exact other-RunKey child origin: %w", err)
+		}
+		if err := classification.ValidateFor(run.grant, run.helper, process); err != nil ||
+			classification.OriginRunKey != run.grant.RunKey ||
+			(classification.Origin != linuxOwnerAnchorRunChildOriginRegisteredCurrent &&
+				classification.Origin != linuxOwnerAnchorRunChildOriginGateUserNSCurrent &&
+				classification.Origin != linuxOwnerAnchorRunChildOriginCurrentRunEscaped) {
+			return false, errors.Join(errors.New("other RunKey child origin changed during pidfd recheck"), err)
+		}
+		return true, nil
+	}
+	pidfd := -1
+	for key, run := range anchor.runs {
+		if err := ctx.Err(); err != nil {
+			if pidfd >= 0 {
+				_ = unix.Close(pidfd)
+			}
+			return false, err
+		}
+		if key == except || run == nil || run.retired {
+			continue
+		}
+		if pidfd < 0 {
+			var err error
+			pidfd, err = unix.PidfdOpen(process.PID, 0)
+			if err != nil {
+				return false, fmt.Errorf("open exact pidfd for unregistered RunKey origin: %w", err)
+			}
+			if err := verifyLinuxOwnerAnchorPIDFDIdentity(pidfd, process); err != nil {
+				_ = unix.Close(pidfd)
+				return false, err
+			}
+		}
+		classification, err := anchor.classifyRunChildOrigin(ctx, run, process, pidfd)
+		if err != nil {
+			_ = unix.Close(pidfd)
+			return false, fmt.Errorf("classify unregistered child against other RunKey: %w", err)
+		}
+		if err := classification.ValidateFor(run.grant, run.helper, process); err != nil {
+			_ = unix.Close(pidfd)
+			return false, fmt.Errorf("validate unregistered child origin against other RunKey: %w", err)
+		}
+		if classification.OriginRunKey == run.grant.RunKey &&
+			(classification.Origin == linuxOwnerAnchorRunChildOriginRegisteredCurrent ||
+				classification.Origin == linuxOwnerAnchorRunChildOriginGateUserNSCurrent ||
+				classification.Origin == linuxOwnerAnchorRunChildOriginCurrentRunEscaped) {
+			_ = unix.Close(pidfd)
+			if run.helperExit == nil || !run.helperExit.ValidFor(run.helper, anchor.identity) {
+				return false, errors.New("unregistered other-RunKey origin lacks exact helper exit/reparent proof")
+			}
+			return true, nil
 		}
 	}
-	return false
+	if pidfd >= 0 {
+		_ = unix.Close(pidfd)
+	}
+	return false, nil
 }
 
 func parseLinuxOwnerChildPIDs(contents []byte) ([]int, error) {
-	fields := strings.Fields(string(contents))
-	pids := make([]int, len(fields))
-	for index, field := range fields {
-		pid, err := strconv.Atoi(field)
-		if err != nil || pid <= 1 || strconv.Itoa(pid) != field {
+	return parseLinuxOwnerChildPIDsBounded(contents, linuxOwnerAnchorMaxChildrenBytes, linuxOwnerHelperV2MaxMembershipProcesses)
+}
+
+func parseLinuxOwnerChildPIDsBounded(contents []byte, maxBytes, maxPIDs int) ([]int, error) {
+	if maxBytes < 0 || maxPIDs < 0 || len(contents) > maxBytes {
+		return nil, errors.New("Linux /proc children list exceeds its bounded byte count")
+	}
+	pids := make([]int, 0)
+	for cursor := 0; cursor < len(contents); {
+		for cursor < len(contents) && linuxOwnerChildListSpace(contents[cursor]) {
+			cursor++
+		}
+		if cursor == len(contents) {
+			break
+		}
+		start := cursor
+		for cursor < len(contents) && !linuxOwnerChildListSpace(contents[cursor]) {
+			cursor++
+		}
+		if len(pids) >= maxPIDs {
+			return nil, errors.New("Linux /proc children list exceeds its bounded process count")
+		}
+		token := contents[start:cursor]
+		if len(token) > 10 || len(token) == 0 || token[0] == '0' {
 			return nil, errors.New("Linux /proc children list contains an invalid PID")
 		}
-		pids[index] = pid
+		pid := 0
+		for _, digit := range token {
+			if digit < '0' || digit > '9' {
+				return nil, errors.New("Linux /proc children list contains an invalid PID")
+			}
+			pid = pid*10 + int(digit-'0')
+		}
+		if pid <= 1 {
+			return nil, errors.New("Linux /proc children list contains an invalid PID")
+		}
+		pids = append(pids, pid)
 	}
 	return pids, nil
+}
+
+func readLinuxOwnerChildPIDs(path string) ([]int, error) {
+	pids, _, err := readLinuxOwnerChildPIDsBounded(path, linuxOwnerAnchorMaxChildrenBytes, linuxOwnerHelperV2MaxMembershipProcesses)
+	return pids, err
+}
+
+func readLinuxOwnerChildPIDsBounded(path string, maxBytes, maxPIDs int) ([]int, int, error) {
+	if maxBytes < 0 || maxPIDs < 0 {
+		return nil, 0, errors.New("Linux /proc children reader received negative bounds")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, 0, fmt.Errorf("open bounded Linux /proc children list: %w", err)
+	}
+	contents, readErr := io.ReadAll(io.LimitReader(file, int64(maxBytes)+1))
+	closeErr := file.Close()
+	if readErr != nil || closeErr != nil {
+		return nil, len(contents), errors.Join(errors.New("read bounded Linux /proc children list"), readErr, closeErr)
+	}
+	pids, err := parseLinuxOwnerChildPIDsBounded(contents, maxBytes, maxPIDs)
+	return pids, len(contents), err
+}
+
+func linuxOwnerChildListSpace(value byte) bool {
+	return value == ' ' || value == '\t' || value == '\n' || value == '\r' || value == '\v' || value == '\f'
+}
+
+func readLinuxOwnerProcessChildren(ctx context.Context, process authority.LinuxCgroupProcessIdentity) ([]int, error) {
+	if ctx == nil {
+		return nil, errors.New("Linux process child census requires a context")
+	}
+	var lastErr error
+	for attempt := 0; attempt < linuxOwnerProcessChildrenSnapshotAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		children, err := readLinuxOwnerProcessChildrenSnapshot(ctx, process)
+		if err == nil {
+			return children, nil
+		}
+		lastErr = err
+		if !errors.Is(err, errLinuxOwnerProcessChildrenChanged) && !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		if attempt+1 < linuxOwnerProcessChildrenSnapshotAttempts {
+			runtime.Gosched()
+		}
+	}
+	return nil, fmt.Errorf("all-thread child census remained unstable after %d bounded attempts: %w", linuxOwnerProcessChildrenSnapshotAttempts, lastErr)
+}
+
+func readLinuxOwnerProcessChildrenSnapshot(ctx context.Context, process authority.LinuxCgroupProcessIdentity) ([]int, error) {
+	if ctx == nil || process.Validate() != nil {
+		return nil, errors.New("Linux process child census requires a context and exact process identity")
+	}
+	identity, err := ProcessIdentity(process.PID)
+	if err != nil || identity != process.Identity {
+		return nil, fmt.Errorf("verify process identity before all-thread child census: %w", errOr(err, errors.New("creation identity differs")))
+	}
+	threadIDs, err := readLinuxOwnerProcessThreadIDs(process.PID)
+	if err != nil {
+		return nil, fmt.Errorf("read exact process thread set before child census: %w", err)
+	}
+	childrenByThread, err := readLinuxOwnerProcessThreadChildren(ctx, process.PID, threadIDs)
+	if err != nil {
+		return nil, err
+	}
+	children := make([]int, 0)
+	seenChildren := make(map[int]struct{})
+	for _, pids := range childrenByThread {
+		for _, pid := range pids {
+			if _, duplicate := seenChildren[pid]; duplicate {
+				return nil, errors.New("Linux process child appears in multiple thread child lists")
+			}
+			seenChildren[pid] = struct{}{}
+			children = append(children, pid)
+		}
+	}
+	threadIDsAfter, err := readLinuxOwnerProcessThreadIDs(process.PID)
+	if err != nil || !equalLinuxOwnerProcessThreadIDs(threadIDs, threadIDsAfter) {
+		return nil, fmt.Errorf("%w: process TID set changed during all-thread child census: %w", errLinuxOwnerProcessChildrenChanged, errOr(err, errors.New("thread snapshot differs")))
+	}
+	verifiedChildrenByThread, err := readLinuxOwnerProcessThreadChildren(ctx, process.PID, threadIDs)
+	if err != nil || !equalLinuxOwnerProcessChildLists(childrenByThread, verifiedChildrenByThread) {
+		return nil, fmt.Errorf("%w: per-thread child lists changed during all-thread census: %w", errLinuxOwnerProcessChildrenChanged, errOr(err, errors.New("child snapshots differ")))
+	}
+	identityAfter, err := ProcessIdentity(process.PID)
+	if err != nil || identityAfter != process.Identity {
+		return nil, fmt.Errorf("revalidate process identity after all-thread child census: %w", errOr(err, errors.New("creation identity changed")))
+	}
+	threadIDsAfter, err = readLinuxOwnerProcessThreadIDs(process.PID)
+	if err != nil || !equalLinuxOwnerProcessThreadIDs(threadIDs, threadIDsAfter) {
+		return nil, fmt.Errorf("%w: process TID set changed after all-thread child census: %w", errLinuxOwnerProcessChildrenChanged, errOr(err, errors.New("thread snapshot differs")))
+	}
+	sort.Ints(children)
+	return children, nil
+}
+
+func readLinuxOwnerProcessThreadChildren(ctx context.Context, pid int, threadIDs []int) ([][]int, error) {
+	childrenByThread := make([][]int, len(threadIDs))
+	bytesRead, pidsRead := 0, 0
+	for index, tid := range threadIDs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		childPath := fmt.Sprintf("/proc/%d/task/%d/children", pid, tid)
+		pids, n, err := readLinuxOwnerChildPIDsBounded(
+			childPath,
+			linuxOwnerAnchorMaxChildrenBytes-bytesRead,
+			linuxOwnerHelperV2MaxMembershipProcesses-pidsRead,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("read bounded child list for process TID %d: %w", tid, err)
+		}
+		sort.Ints(pids)
+		bytesRead += n
+		pidsRead += len(pids)
+		childrenByThread[index] = pids
+	}
+	return childrenByThread, nil
+}
+
+func readLinuxOwnerProcessThreadIDs(pid int) ([]int, error) {
+	if pid <= 1 {
+		return nil, errors.New("Linux process thread census requires an exact PID")
+	}
+	directory, err := os.Open(fmt.Sprintf("/proc/%d/task", pid))
+	if err != nil {
+		return nil, fmt.Errorf("open bounded Linux process task directory: %w", err)
+	}
+	entries, readErr := directory.ReadDir(linuxOwnerHelperV2MaxMembershipProcesses + 1)
+	closeErr := directory.Close()
+	if readErr != nil && !errors.Is(readErr, io.EOF) || closeErr != nil {
+		return nil, errors.Join(errors.New("read bounded Linux process task directory"), readErr, closeErr)
+	}
+	if len(entries) > linuxOwnerHelperV2MaxMembershipProcesses {
+		return nil, errors.New("Linux process thread set exceeds its bounded task count")
+	}
+	threadIDs := make([]int, 0, len(entries))
+	for _, entry := range entries {
+		name := entry.Name()
+		if !entry.IsDir() || len(name) > 10 {
+			return nil, errors.New("Linux process task directory contains an invalid TID entry")
+		}
+		tid, err := strconv.Atoi(name)
+		if err != nil || tid <= 0 || strconv.Itoa(tid) != name {
+			return nil, errors.New("Linux process task directory contains a noncanonical TID")
+		}
+		threadIDs = append(threadIDs, tid)
+	}
+	if len(threadIDs) == 0 {
+		return nil, errors.New("Linux process task directory contains no live TIDs")
+	}
+	sort.Ints(threadIDs)
+	return threadIDs, nil
+}
+
+func equalLinuxOwnerProcessThreadIDs(left, right []int) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func equalLinuxOwnerProcessChildLists(left, right [][]int) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if !equalLinuxOwnerProcessThreadIDs(left[index], right[index]) {
+			return false
+		}
+	}
+	return true
 }

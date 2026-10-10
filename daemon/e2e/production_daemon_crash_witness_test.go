@@ -2,6 +2,7 @@ package e2e_test
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -57,7 +58,7 @@ func TestProductionDaemonCrashResponseLossAndReconnect(t *testing.T) {
 			path := filepath.Join(runRoot, name)
 			contents, readErr := os.ReadFile(path)
 			if readErr == nil && len(contents) > 0 {
-				t.Logf("%s:\n%s", name, contents)
+				t.Logf("%s: %d bytes sha256=%x (log contents redacted)", name, len(contents), sha256.Sum256(contents))
 			}
 		}
 	})
@@ -103,7 +104,7 @@ func TestProductionDaemonCrashResponseLossAndReconnect(t *testing.T) {
 		return journal.LocalState == "terminal_pending" && journal.TerminalState == "cancelled" && len(journal.PendingTransitions) > 0
 	})
 	if pending.PendingTransitions[0].State != "cancelled" {
-		t.Fatalf("response-loss journal transition = %#v, want cancelled", pending.PendingTransitions[0])
+		t.Fatalf("response-loss journal transition state = %q, want cancelled", pending.PendingTransitions[0].State)
 	}
 	if pending.TerminalVerdict != "" {
 		t.Fatalf("response-loss journal terminal verdict = %q, want unknown before replay", pending.TerminalVerdict)
@@ -151,13 +152,14 @@ func TestProductionDaemonCrashResponseLossAndReconnect(t *testing.T) {
 		t.Fatalf("first dropped transition state = %q, want cancelled", firstRequest.State)
 	}
 	if firstRequest.TransitionID == "" || firstRequest.Fence == (protocol.Fence{}) || len(firstRequest.Payload) == 0 || len(firstRequest.Body) == 0 {
-		t.Fatalf("first dropped transition witness is incomplete: %#v", firstRequest)
+		t.Fatalf("first dropped transition witness is incomplete: %s", productionTransitionRequestDiagnostic(firstRequest))
 	}
 	if replayStatus != http.StatusOK {
 		t.Fatalf("replayed transition HTTP status = %d, want %d", replayStatus, http.StatusOK)
 	}
 	if !sameProductionTransitionRequest(firstRequest, replayRequest) {
-		t.Fatalf("replayed transition request differs from first terminal request: first=%#v replay=%#v", firstRequest, replayRequest)
+		t.Fatalf("replayed transition request differs from first terminal request: first={%s} replay={%s}",
+			productionTransitionRequestDiagnostic(firstRequest), productionTransitionRequestDiagnostic(replayRequest))
 	}
 
 	transitions := collectHistory(t, environment, task.TaskID, "transitions")
@@ -166,7 +168,7 @@ func TestProductionDaemonCrashResponseLossAndReconnect(t *testing.T) {
 		return state == "cancelled" || state == "completed" || state == "failed"
 	})
 	if len(terminalTransitions) != 1 {
-		t.Fatalf("Control terminal transition history = %d entries, want one: %#v", len(terminalTransitions), terminalTransitions)
+		t.Fatalf("Control terminal transition history = %d entries, want one", len(terminalTransitions))
 	}
 	if got := historyString(t, terminalTransitions[0], "state"); got != "cancelled" {
 		t.Fatalf("Control terminal transition state = %q, want cancelled", got)
@@ -266,17 +268,22 @@ func TestProductionResponseLossProxyOnlyDropsCancelledTerminalTransition(t *test
 
 	firstRequest, replayRequest, replayStatus, found := proxy.transitionWitness()
 	if !found || firstRequest.State != "cancelled" || replayStatus != http.StatusOK || !sameProductionTransitionRequest(firstRequest, replayRequest) {
-		t.Fatalf("cancelled transition witness/replay mismatch: first=%#v replay=%#v status=%d found=%t", firstRequest, replayRequest, replayStatus, found)
+		t.Fatalf("cancelled transition witness/replay mismatch: first={%s} replay={%s} status=%d found=%t",
+			productionTransitionRequestDiagnostic(firstRequest), productionTransitionRequestDiagnostic(replayRequest), replayStatus, found)
 	}
 	upstreamMu.Lock()
 	states := append([]string(nil), upstreamState...)
 	bodies := append([][]byte(nil), upstreamBody...)
 	upstreamMu.Unlock()
 	if len(states) != 3 || states[0] != "running" || states[1] != "cancelled" || states[2] != "cancelled" {
-		t.Fatalf("upstream transition states = %#v, want running then cancelled replay", states)
+		t.Fatalf("upstream transition states = %q, want running then cancelled replay", states)
 	}
-	if len(bodies) != 3 || !bytes.Equal(bodies[1], bodies[2]) {
-		t.Fatalf("cancelled replay body differs from first body: bodies=%#v", bodies)
+	if len(bodies) != 3 {
+		t.Fatalf("upstream transition body count = %d, want 3", len(bodies))
+	}
+	if !bytes.Equal(bodies[1], bodies[2]) {
+		t.Fatalf("cancelled replay body differs from first body: first={%s} replay={%s}",
+			productionTransitionBodyDiagnostic(bodies[1]), productionTransitionBodyDiagnostic(bodies[2]))
 	}
 }
 
@@ -323,6 +330,57 @@ func sameProductionTransitionRequest(left, right productionTransitionRequest) bo
 		left.State == right.State &&
 		bytes.Equal(left.Payload, right.Payload) &&
 		bytes.Equal(left.Body, right.Body)
+}
+
+func productionTransitionRequestDiagnostic(request productionTransitionRequest) string {
+	bodyDigest := sha256.Sum256(request.Body)
+	return fmt.Sprintf("state=%q transition_id_present=%t fence_present=%t payload_bytes=%d body_bytes=%d body_sha256=%x",
+		request.State, request.TransitionID != "", request.Fence != (protocol.Fence{}), len(request.Payload), len(request.Body), bodyDigest)
+}
+
+func productionTransitionBodyDiagnostic(body []byte) string {
+	digest := sha256.Sum256(body)
+	return fmt.Sprintf("bytes=%d sha256=%x", len(body), digest)
+}
+
+func TestProductionTransitionRequestDiagnosticRedactsCredentials(t *testing.T) {
+	const (
+		path       = "diagnostic-path-4c84"
+		transition = "diagnostic-transition-id-11d0"
+		runtimeID  = "diagnostic-runtime-id-2c79"
+		claimID    = "diagnostic-claim-id-8316"
+		leaseToken = "diagnostic-lease-token-57a2"
+		payload    = "diagnostic-payload-secret-0f19"
+	)
+	request := productionTransitionRequest{
+		Path:         path,
+		TransitionID: transition,
+		Fence:        protocol.Fence{RuntimeID: runtimeID, ClaimID: claimID, LeaseToken: leaseToken},
+		State:        "cancelled",
+		Payload:      json.RawMessage(`{"secret":"diagnostic-payload-secret-0f19"}`),
+		Body:         []byte(`{"claim_id":"diagnostic-claim-id-8316","lease_token":"diagnostic-lease-token-57a2"}`),
+	}
+	diagnostic := productionTransitionRequestDiagnostic(request)
+	for _, value := range []struct {
+		name  string
+		value string
+	}{
+		{name: "path", value: path},
+		{name: "transition ID", value: transition},
+		{name: "runtime ID", value: runtimeID},
+		{name: "claim ID", value: claimID},
+		{name: "lease token", value: leaseToken},
+		{name: "payload", value: payload},
+	} {
+		if strings.Contains(diagnostic, value.value) {
+			t.Errorf("transition diagnostic exposed raw %s", value.name)
+		}
+	}
+	bodyDigest := sha256.Sum256(request.Body)
+	if !strings.Contains(diagnostic, `state="cancelled"`) || !strings.Contains(diagnostic, fmt.Sprintf("body_bytes=%d", len(request.Body))) ||
+		!strings.Contains(diagnostic, fmt.Sprintf("body_sha256=%x", bodyDigest)) {
+		t.Errorf("transition diagnostic omitted safe state, size, or digest summary: %s", diagnostic)
+	}
 }
 
 func startProductionDaemonWitness(t *testing.T, binary, configPath, workDir, enrollmentToken, agentMode, label string) *productionDaemonWitnessProcess {

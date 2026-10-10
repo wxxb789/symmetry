@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -38,24 +40,36 @@ import (
 )
 
 const (
-	minimumInterval        = time.Second
-	maximumInterval        = time.Minute
-	reconcileRetryMax      = 30 * time.Second
-	leaseSafetyMargin      = 5 * time.Second
-	retryMaximum           = 30 * time.Second
-	terminalGrace          = 8 * time.Minute
-	controlRequestLimit    = 15 * time.Second
-	nativeUsageRetryLimit  = 5
-	nativeUsageRetryWindow = 2 * time.Minute
-	maxJSONLRecordBytes    = 256 * 1024
-	maxSemanticEventBytes  = 64 * 1024
-	rawOutputChunkBytes    = 32 * 1024
-	maxPendingOutputBytes  = 2 << 20
-	inputWriteTimeout      = 60 * time.Second
-	shutdownTerminateLimit = 2 * time.Second
+	minimumInterval               = time.Second
+	maximumInterval               = time.Minute
+	reconcileRetryMax             = 30 * time.Second
+	leaseSafetyMargin             = 5 * time.Second
+	retryMaximum                  = 30 * time.Second
+	terminalGrace                 = 8 * time.Minute
+	controlRequestLimit           = 15 * time.Second
+	nativeUsageRetryLimit         = 5
+	nativeUsageRetryWindow        = 2 * time.Minute
+	linuxV2AdmissionStatusTimeout = 2 * time.Second
+	// Bound the full owner snapshot so per-owner status deadlines cannot add up
+	// without limit when execution callbacks have no caller context.
+	linuxV2AdmissionSnapshotTimeout = 5 * time.Second
+	maxJSONLRecordBytes             = 256 * 1024
+	maxSemanticEventBytes           = 64 * 1024
+	rawOutputChunkBytes             = 32 * 1024
+	maxPendingOutputBytes           = 2 << 20
+	inputWriteTimeout               = 60 * time.Second
+	shutdownTerminateLimit          = 2 * time.Second
 )
 
 const controlUTCTimestampLayout = "2006-01-02T15:04:05.000000Z07:00"
+
+const (
+	linuxStopReceiptBarrierWitnessEnv = "SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_WITNESS"
+	linuxStopReceiptBarrierReachedEnv = "SYMMETRY_LINUX_SUPERVISOR_STOP_RECEIPT_BARRIER_REACHED_FILE"
+	linuxStopReceiptBarrierReleaseEnv = "SYMMETRY_LINUX_SUPERVISOR_STOP_RECEIPT_BARRIER_RELEASE_FILE"
+	linuxStopReceiptBarrierTimeout    = 30 * time.Second
+	linuxStopReceiptBarrierPoll       = 25 * time.Millisecond
+)
 
 var (
 	errAssignmentExpired            = errors.New("assignment expired")
@@ -71,6 +85,25 @@ var (
 	errDaemonStoreClosing           = errors.New("daemon state store is closing")
 	errContainmentStopObserver      = errors.New("containment stop observer failed")
 	workspaceFingerprint            = workspace.Fingerprint
+	linuxCloneAbortRecovery         = func(context.Context, *daemon, state.RunJournal) error {
+		return errors.New("Linux clone pre-checkout abort recovery is unavailable")
+	}
+	linuxCloneTargetDeleterForRun = func(
+		*daemon,
+		authority.LinuxCloneGrant,
+		authority.LinuxCloneCleanupIntent,
+		*authority.LinuxCloneTargetRemovalProof,
+	) (workspace.LinuxCloneTargetDeleter, error) {
+		return nil, errors.New("Linux clone target removal requires the authenticated owner anchor")
+	}
+	linuxCloneCleanupPersistMutation = func(
+		*daemon, *state.Store, state.RunKey, protocol.Fence, string,
+		func() (state.RunJournal, error), func(state.RunJournal) bool,
+	) error {
+		return errors.New("Linux clone cleanup persistence is supported only by the Linux v2 App")
+	}
+	normalizeLinuxNativeStateDir          = func(path string) (string, error) { return path, nil }
+	terminatePersistAuthorityWithScanSeal func(int, string, *authority.Supervisor) (authority.StopReceipt, uint64, error)
 )
 
 // terminalTransitionConflictError preserves the first-terminal-wins barrier
@@ -163,6 +196,23 @@ type goalSubjectWorkspace interface {
 	DeriveSubject(context.Context, workspace.Prepared, string) (protocol.Subject, error)
 }
 
+// linuxV2CloneWorkspace is the only workspace path permitted for new Linux
+// Pi/OpenCode owners. Its methods keep all source Git operations in A-owned
+// storage and never treat a B-owned .git directory as ownership evidence.
+type linuxV2CloneWorkspace interface {
+	PlanLinuxCloneIntent(string, workspace.RunRef, protocol.Subject) (authority.LinuxCloneIntent, error)
+	PrepareLinuxCloneSeed(context.Context, authority.LinuxCloneIntent) (authority.LinuxCloneSeedReceipt, error)
+	PrepareLinuxClone(context.Context, authority.LinuxCloneGrant) (workspace.Prepared, error)
+	ValidateLinuxCloneCheckout(authority.LinuxCloneGrant, authority.LinuxCloneCheckoutReceipt) error
+	PromoteLinuxClone(context.Context, authority.LinuxCloneGrant, authority.LinuxCloneCheckoutReceipt, authority.LinuxClonePromotionIntent, platform.LinuxCgroupV2Release) (authority.LinuxClonePromotionReceipt, error)
+	ReadExistingLinuxClonePromotion(context.Context, authority.LinuxCloneIntent, authority.LinuxClonePromotionIntent, state.RunJournal, platform.LinuxCgroupV2Release) (authority.LinuxClonePromotionReceipt, error)
+	RemoveLinuxCloneTarget(context.Context, authority.LinuxCloneGrant, authority.LinuxCloneCheckoutReceipt, state.RunJournal, workspace.LinuxCloneTargetDeleter) (authority.LinuxCloneTargetRemovalProof, error)
+	CleanupLinuxClone(context.Context, authority.LinuxCloneGrant, authority.LinuxCloneCheckoutReceipt, state.RunJournal) (authority.LinuxCloneCleanupProof, error)
+	AbortLinuxCloneBeforeCheckout(context.Context, authority.LinuxCloneIntent, *authority.LinuxCloneSeedReceipt,
+		*authority.LinuxCgroupPreGateReleaseProof, *authority.LinuxCgroupReservationAbortProof,
+		*authority.SupervisorHandoffReleaseProof) (authority.LinuxCloneAbortProof, error)
+}
+
 // goalRecoveredSubjectWorkspace is the retained-session counterpart to
 // goalSubjectWorkspace. Resume must recover the original daemon-owned
 // workspace; it must never materialize a new worktree for the new Run.
@@ -203,6 +253,66 @@ type ProcessFinalizer interface {
 // the control loop's callers.
 type StartProcess func(context.Context, execution.Invocation, execution.Sink) (Process, error)
 
+// linuxV2NativeOwner is the App-owned host boundary for new Linux Pi/OpenCode
+// executions. Preflight is read-only and must succeed before workspace or
+// provider-bridge effects; BuildInvocation binds the already-claimed Run to
+// the exact Store callback chain immediately before the staged adapter starts.
+type linuxV2NativeOwner interface {
+	Preflight(context.Context, config.Config, harness.Kind, config.AgentProfile, bool) ([]string, error)
+	BuildInvocation(context.Context, state.RunKey, protocol.Fence, execution.Invocation, execution.LinuxV2JournalCallbacks) (execution.Invocation, error)
+	Close() error
+}
+
+type linuxV2AdmissionStatusReader interface {
+	LinuxV2LiveOwnerStatus(context.Context) (execution.LinuxV2LiveOwnerStatus, error)
+}
+
+type linuxV2NativeOwnerPiGroup interface {
+	trustedPiProviderExtensionGroupID() uint32
+}
+
+func setTrustedPiProviderExtensionGroup(value *config.Config, owner linuxV2NativeOwner) error {
+	if value == nil || owner == nil || value.Runtime.HarnessKind != config.RuntimeHarnessPi {
+		return errors.New("trusted Linux Pi owner is unavailable")
+	}
+	groupOwner, ok := owner.(linuxV2NativeOwnerPiGroup)
+	if !ok || groupOwner.trustedPiProviderExtensionGroupID() == 0 {
+		return errors.New("Linux Pi owner has no trusted installed B primary group")
+	}
+	groupID := groupOwner.trustedPiProviderExtensionGroupID()
+	if value.PiProviderExtensionGroupID != groupID {
+		value.PiProviderExtensionGroupID = groupID
+	}
+	return nil
+}
+
+func validatePiProviderExtensionGroupID(value config.Config, trustedBGroup uint32) error {
+	if trustedBGroup == 0 || value.PiProviderExtensionGroupID != trustedBGroup {
+		return errors.New("trusted fixed-B primary group is unavailable")
+	}
+	return nil
+}
+
+type linuxV2NativeOwnerFactory func(config.Config) (linuxV2NativeOwner, error)
+
+var defaultLinuxV2NativeOwnerFactory linuxV2NativeOwnerFactory = func(config.Config) (linuxV2NativeOwner, error) {
+	return nil, errors.New("Linux v2 native owner is supported only on Linux amd64")
+}
+
+var containmentOnlyRecovery = func(context.Context, config.Config) error {
+	return errors.New("containment-only recovery is supported only on Linux amd64")
+}
+
+// RecoverContainmentOnly reconciles process ownership under the same exclusive
+// StateDir lock as Run. Its platform implementation must not register, claim,
+// schedule, launch native code, or drain the ordinary outbox.
+func RecoverContainmentOnly(ctx context.Context, value config.Config) error {
+	if ctx == nil {
+		return errors.New("containment-only recovery context must not be nil")
+	}
+	return containmentOnlyRecovery(ctx, value)
+}
+
 // NotificationClient is the durable-notification wakeup boundary.
 type NotificationClient interface {
 	Run(context.Context, chan<- notification.Hint) error
@@ -241,6 +351,7 @@ type options struct {
 	newMachineToken                            func() (string, error)
 	terminatePersist                           func(pid int, identity string) error
 	terminatePersistAuthority                  func(pid int, identity string, value *authority.Supervisor) (authority.StopReceipt, error)
+	terminatePersistAuthorityWithScanSeal      func(pid int, identity string, value *authority.Supervisor) (authority.StopReceipt, uint64, error)
 	recordWorkspace                            func(state.RunKey, string) (state.RunJournal, error)
 	recordProcess                              func(state.RunKey, int, string, time.Time) (state.RunJournal, error)
 	recordProcessAuthority                     func(state.RunKey, int, string, authority.Supervisor, time.Time) (state.RunJournal, error)
@@ -267,6 +378,7 @@ type options struct {
 	closeGoalSession                           func(state.GoalSessionKey) (state.GoalSessionJournal, error)
 	clearProcessDetails                        func(state.RunKey, int, string) (state.RunJournal, error)
 	nativeCloseRetryPublished                  func()
+	linuxV2NativeOwnerFactory                  linuxV2NativeOwnerFactory
 }
 
 // WithHTTPClient replaces the HTTP transport used for production clients.
@@ -312,19 +424,27 @@ func Run(ctx context.Context, value config.Config, changes ...Options) error {
 	if ctx == nil {
 		return errors.New("daemon context must not be nil")
 	}
+	if requiresLinuxV2NativeOwner(harness.Kind(value.Runtime.HarnessKind)) {
+		stateDir, err := normalizeLinuxNativeStateDir(value.StateDir)
+		if err != nil {
+			return fmt.Errorf("normalize Linux v2 StateDir against root working directory: %w", err)
+		}
+		value.StateDir = stateDir
+	}
 	if err := value.Validate(); err != nil {
 		return fmt.Errorf("validate config: %w", err)
 	}
 	settings := options{
-		httpClient:                &http.Client{Timeout: 30 * time.Second},
-		logWriter:                 os.Stderr,
-		clock:                     func() time.Time { return time.Now().UTC() },
-		localClock:                time.Now,
-		newTimer:                  func(delay time.Duration) deadlineTimer { return systemTimer{timer: time.NewTimer(delay)} },
-		newID:                     state.NewDaemonInstanceID,
-		newMachineToken:           state.NewMachineToken,
-		terminatePersist:          terminatePersistedProcess,
-		terminatePersistAuthority: terminatePersistedProcessWithAuthority,
+		httpClient:                            &http.Client{Timeout: 30 * time.Second},
+		logWriter:                             os.Stderr,
+		clock:                                 func() time.Time { return time.Now().UTC() },
+		localClock:                            time.Now,
+		newTimer:                              func(delay time.Duration) deadlineTimer { return systemTimer{timer: time.NewTimer(delay)} },
+		newID:                                 state.NewDaemonInstanceID,
+		newMachineToken:                       state.NewMachineToken,
+		terminatePersist:                      terminatePersistedProcess,
+		terminatePersistAuthority:             terminatePersistedProcessWithAuthority,
+		terminatePersistAuthorityWithScanSeal: terminatePersistAuthorityWithScanSeal,
 	}
 	for _, change := range changes {
 		if change != nil {
@@ -373,22 +493,34 @@ type daemon struct {
 	backgroundWG        sync.WaitGroup
 	terminalReleaseWG   sync.WaitGroup
 	failedStartWatchWG  sync.WaitGroup
-	commandWG           sync.WaitGroup
-	snapshotWG          sync.WaitGroup
-	outboxWake          chan struct{}
-	outboxRetry         map[state.RunKey]outboxRetry
-	cleanupWake         chan struct{}
-	cleanupQueued       map[state.RunKey]struct{}
-	cleanupRetry        map[state.RunKey]time.Time
-	recoveredStops      map[state.RunKey]recoveredProcessStop
-	retainedWorkspaces  map[state.RunKey]struct{}
-	clockSkewWarned     bool
-	commandWake         chan struct{}
-	commandQueue        []*queuedCommand
-	queuedCommands      map[commandKey]*queuedCommand
-	commandLanes        map[state.RunKey]*commandLane
-	commandRequests     map[uint64]map[commandKey]struct{}
-	nextCommandRequest  uint64
+	// linuxV2AdmissionMu serializes live-owner snapshots and their short State
+	// admission/CAS calls. Never hold daemon.mu while entering Store; helper and
+	// pidfd observations are collected before the State call.
+	linuxV2AdmissionMu sync.Mutex
+	// linuxV2LaunchPhaseMu serializes only the pre-RELEASE launch phase. It is
+	// released after exact live RELEASE proof or completed abort handling.
+	linuxV2LaunchPhaseMu    sync.Mutex
+	linuxV2LaunchPhaseOwner state.RunKey
+	linuxV2LaunchPhaseDone  chan struct{}
+	linuxV2OwnerInitMu      sync.Mutex
+	linuxV2Owner            linuxV2NativeOwner
+	recoveryOnly            bool
+	commandWG               sync.WaitGroup
+	snapshotWG              sync.WaitGroup
+	outboxWake              chan struct{}
+	outboxRetry             map[state.RunKey]outboxRetry
+	cleanupWake             chan struct{}
+	cleanupQueued           map[state.RunKey]struct{}
+	cleanupRetry            map[state.RunKey]time.Time
+	recoveredStops          map[state.RunKey]recoveredProcessStop
+	retainedWorkspaces      map[state.RunKey]struct{}
+	clockSkewWarned         bool
+	commandWake             chan struct{}
+	commandQueue            []*queuedCommand
+	queuedCommands          map[commandKey]*queuedCommand
+	commandLanes            map[state.RunKey]*commandLane
+	commandRequests         map[uint64]map[commandKey]struct{}
+	nextCommandRequest      uint64
 }
 
 type outboxRetry struct {
@@ -438,6 +570,10 @@ type runningRun struct {
 	// inputMu serializes stdin delivery with input-related lifecycle mutations.
 	// Never wait for it while holding daemon.mu.
 	inputMu sync.Mutex
+	// linuxCloneOperationMu serializes one RunKey's A-owned seed preparation
+	// with its exact pre-checkout abort. It is owned by the active run, not a
+	// second durable workspace lock.
+	linuxCloneOperationMu sync.Mutex
 	// nativeCloseMu serializes one native session Close with the durable session
 	// and process-marker evidence that proves its result. It is never acquired
 	// while daemon.mu is held.
@@ -446,6 +582,7 @@ type runningRun struct {
 	nativeSession         harness.Session
 	goalSession           *state.GoalSessionKey
 	goalAdmission         *protocol.Admission
+	linuxClone            *linuxCloneRun
 	goalUsage             *harness.Usage
 	goalUsageAt           time.Time
 	goalCachedInputTokens int64
@@ -515,6 +652,18 @@ type runningRun struct {
 	leaseSequence                uint64
 	leaseRenewalClosed           bool
 	terminalCancel               context.CancelFunc
+}
+
+type linuxCloneRun struct {
+	mu                sync.Mutex
+	workspace         linuxV2CloneWorkspace
+	grant             authority.LinuxCloneGrant
+	prepared          workspace.Prepared
+	checkout          *authority.LinuxCloneCheckoutReceipt
+	taskResult        *protocol.TaskResult
+	promotionIntent   *authority.LinuxClonePromotionIntent
+	promotion         *authority.LinuxClonePromotionReceipt
+	promotionEligible bool
 }
 
 func (daemon *daemon) run(ctx context.Context) error {
@@ -1377,9 +1526,481 @@ func (daemon *daemon) close() {
 	daemon.storeLifetimeMu.Lock()
 	defer daemon.storeLifetimeMu.Unlock()
 	daemon.storeClosing = true
+	daemon.linuxV2OwnerInitMu.Lock()
+	if daemon.linuxV2Owner != nil {
+		_ = daemon.linuxV2Owner.Close()
+		daemon.linuxV2Owner = nil
+	}
+	daemon.linuxV2OwnerInitMu.Unlock()
 	if daemon.options.store == nil && daemon.store != nil {
 		_ = daemon.store.Close()
 	}
+}
+
+func requiresLinuxV2NativeOwner(kind harness.Kind) bool {
+	return runtime.GOOS == "linux" && (kind == harness.KindPi || kind == harness.KindOpenCode)
+}
+
+func linuxV2RecoveryEndpoint(stateDir string, key state.RunKey) (string, error) {
+	if stateDir == "" || !filepath.IsAbs(stateDir) || filepath.Clean(stateDir) != stateDir || key.RunID == "" || key.Generation <= 0 {
+		return "", errors.New("Linux v2 recovery endpoint inputs are invalid")
+	}
+	identity := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d", key.RunID, key.Generation)))
+	path := filepath.Join(stateDir, "owner-"+hex.EncodeToString(identity[:])+".sock")
+	if len(path) >= 100 {
+		return "", errors.New("StateDir is too long for the private Linux v2 helper recovery endpoint")
+	}
+	return path, nil
+}
+
+func appErrorOr(err error, fallback string) error {
+	if err != nil {
+		return err
+	}
+	return errors.New(fallback)
+}
+
+func linuxNativeRuntimeRequiresGoalAdmission(harnessKind string) bool {
+	return runtime.GOOS == "linux" &&
+		(harnessKind == config.RuntimeHarnessPi || harnessKind == config.RuntimeHarnessOpenCode)
+}
+
+func (daemon *daemon) prepareLinuxV2NativeOwner(ctx context.Context, key state.RunKey, fence protocol.Fence, kind harness.Kind, profile config.AgentProfile, providerAccess bool) (linuxV2NativeOwner, []string, error) {
+	if _, err := linuxV2RecoveryEndpoint(daemon.config.StateDir, key); err != nil {
+		return nil, nil, fmt.Errorf("Linux v2 native owner recovery endpoint preflight: %w", err)
+	}
+	if err := daemon.checkLinuxV2NativeAdmission(ctx, key, fence); err != nil {
+		return nil, nil, fmt.Errorf("Linux v2 native owner admission is blocked by unresolved RunJournal ownership: %w", err)
+	}
+	daemon.linuxV2OwnerInitMu.Lock()
+	owner := daemon.linuxV2Owner
+	if owner == nil {
+		factory := daemon.options.linuxV2NativeOwnerFactory
+		if factory == nil {
+			factory = defaultLinuxV2NativeOwnerFactory
+		}
+		created, err := factory(daemon.config)
+		if err != nil {
+			daemon.linuxV2OwnerInitMu.Unlock()
+			return nil, nil, fmt.Errorf("initialize Linux v2 native owner: %w", err)
+		}
+		if created == nil {
+			daemon.linuxV2OwnerInitMu.Unlock()
+			return nil, nil, errors.New("initialize Linux v2 native owner: constructor returned nil")
+		}
+		daemon.linuxV2Owner = created
+		owner = created
+	}
+	if kind == harness.KindPi {
+		// This runtime-only value is derived from the owner constructed from the
+		// strict root-installed A/B config; JSON and ambient environment can
+		// never select the provider extension's group. Initialize it under the
+		// same lock before any concurrent native preflight reads the config.
+		if err := setTrustedPiProviderExtensionGroup(&daemon.config, owner); err != nil {
+			daemon.linuxV2OwnerInitMu.Unlock()
+			return nil, nil, errors.Join(err, owner.Close())
+		}
+	}
+	daemon.linuxV2OwnerInitMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	environment, err := owner.Preflight(ctx, daemon.config, kind, profile, providerAccess)
+	if err != nil {
+		return nil, nil, fmt.Errorf("Linux v2 native owner preflight: %w", err)
+	}
+	return owner, environment, nil
+}
+
+func (daemon *daemon) checkLinuxV2NativeAdmissionBeforeClaim(ctx context.Context) error {
+	return daemon.withLinuxV2NativeAdmission(ctx, state.RunKey{}, func(liveOwners map[state.RunKey]protocol.Fence) error {
+		return daemon.store.CheckLinuxV2NativeAdmissionBeforeClaim(daemon.now(), liveOwners)
+	})
+}
+
+func (daemon *daemon) checkLinuxV2NativeAdmission(ctx context.Context, key state.RunKey, fence protocol.Fence) error {
+	return daemon.withLinuxV2NativeAdmission(ctx, key, func(liveOwners map[state.RunKey]protocol.Fence) error {
+		return daemon.store.CheckLinuxV2NativeAdmission(key, fence, daemon.now(), liveOwners)
+	})
+}
+
+func (daemon *daemon) linuxV2LaunchPhasePendingFor(key state.RunKey) bool {
+	if daemon == nil {
+		return false
+	}
+	daemon.linuxV2LaunchPhaseMu.Lock()
+	pending := daemon.linuxV2LaunchPhaseOwner != (state.RunKey{}) && daemon.linuxV2LaunchPhaseOwner != key
+	daemon.linuxV2LaunchPhaseMu.Unlock()
+	return pending
+}
+
+// acquireLinuxV2LaunchPhase allows only one new native run to cross the
+// pre-RELEASE boundary at a time. Waiters keep their exact Control claims and
+// stop waiting before their local lease safety margin; the gate ends at proven
+// RELEASE rather than serializing the lifetime of released tasks.
+func (daemon *daemon) acquireLinuxV2LaunchPhase(ctx context.Context, key state.RunKey, claim protocol.ClaimResponse) (func(), error) {
+	if daemon == nil || ctx == nil || key.RunID == "" || key.Generation <= 0 {
+		return nil, errors.New("Linux v2 launch phase requires a context and exact RunKey")
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		remaining := daemon.linuxV2ClaimLeaseRemaining(key, claim)
+		if remaining <= leaseSafetyMargin {
+			return nil, errLeaseDeadlineReached
+		}
+
+		daemon.linuxV2LaunchPhaseMu.Lock()
+		if daemon.linuxV2LaunchPhaseOwner == (state.RunKey{}) {
+			done := make(chan struct{})
+			daemon.linuxV2LaunchPhaseOwner = key
+			daemon.linuxV2LaunchPhaseDone = done
+			daemon.linuxV2LaunchPhaseMu.Unlock()
+
+			var releaseOnce sync.Once
+			return func() {
+				releaseOnce.Do(func() {
+					daemon.linuxV2LaunchPhaseMu.Lock()
+					if daemon.linuxV2LaunchPhaseOwner == key && daemon.linuxV2LaunchPhaseDone == done {
+						daemon.linuxV2LaunchPhaseOwner = state.RunKey{}
+						daemon.linuxV2LaunchPhaseDone = nil
+						close(done)
+					}
+					daemon.linuxV2LaunchPhaseMu.Unlock()
+				})
+			}, nil
+		}
+		if daemon.linuxV2LaunchPhaseOwner == key {
+			daemon.linuxV2LaunchPhaseMu.Unlock()
+			return nil, errors.New("RunKey already owns the Linux v2 launch phase")
+		}
+		done := daemon.linuxV2LaunchPhaseDone
+		daemon.linuxV2LaunchPhaseMu.Unlock()
+		if done == nil {
+			return nil, errors.New("Linux v2 launch phase owner has no completion signal")
+		}
+
+		timer := daemon.timer(remaining - leaseSafetyMargin)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-done:
+			timer.Stop()
+		case <-timer.Chan():
+			timer.Stop()
+			return nil, errLeaseDeadlineReached
+		}
+	}
+}
+
+func (daemon *daemon) linuxV2ClaimLeaseRemaining(key state.RunKey, claim protocol.ClaimResponse) time.Duration {
+	if deadline, ok := daemon.localLeaseDeadline(key); ok {
+		return deadline.Sub(daemon.localNow())
+	}
+	if remaining := daemon.remainingLeaseDeadline(claim, claim.RequestStartedAt); remaining > 0 {
+		return remaining
+	}
+	if !claim.LeaseExpiresAt.IsZero() {
+		return claim.LeaseExpiresAt.Sub(daemon.now())
+	}
+	return 0
+}
+
+func (daemon *daemon) claimLocalLeaseDeadline(claim protocol.ClaimResponse, requestStarted time.Time) time.Time {
+	if deadline := leaseDeadlineAt(claim, requestStarted); !deadline.IsZero() {
+		return deadline
+	}
+	if claim.LeaseExpiresAt.IsZero() {
+		return time.Time{}
+	}
+	remaining := claim.LeaseExpiresAt.Sub(daemon.now())
+	if remaining <= 0 {
+		return time.Time{}
+	}
+	return daemon.localNow().Add(remaining)
+}
+
+// withLinuxV2EffectReadyTarget checks the exact current claim immediately
+// before an A-owned Git effect. The Store rechecks the fence, lease, lifecycle,
+// cancellation, and uncertainty under its own lock; no daemon lock is held
+// while the external effect runs.
+func (daemon *daemon) withLinuxV2EffectReadyTarget(ctx context.Context, key state.RunKey, fence protocol.Fence, effect func() error) error {
+	if daemon == nil || daemon.store == nil || ctx == nil || effect == nil {
+		return errors.New("Linux v2 effect boundary requires a context and effect")
+	}
+	if daemon.recoveryOnly {
+		return errors.New("containment-only recovery cannot create a Linux clone promotion ref")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := daemon.checkLinuxV2NativeAdmission(ctx, key, fence); err != nil {
+		return fmt.Errorf("recheck exact Linux v2 target lease before A-owned effect: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return effect()
+}
+
+// withLinuxV2NativeAdmission keeps App admission snapshots ordered with the
+// Store CAS while never holding daemon.mu across status RPCs or State access.
+func (daemon *daemon) withLinuxV2NativeAdmission(
+	ctx context.Context,
+	excludedKey state.RunKey,
+	apply func(map[state.RunKey]protocol.Fence) error,
+) error {
+	if daemon == nil || daemon.store == nil || apply == nil {
+		return errors.New("Linux v2 admission requires the App Store and check")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	boundedContext, cancel := context.WithTimeout(ctx, linuxV2AdmissionSnapshotTimeout)
+	defer cancel()
+	ctx = boundedContext
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	daemon.linuxV2AdmissionMu.Lock()
+	defer daemon.linuxV2AdmissionMu.Unlock()
+	if excludedKey != (state.RunKey{}) {
+		if err := daemon.checkLinuxV2TargetAdmission(excludedKey); err != nil {
+			return err
+		}
+	}
+	liveOwners, err := daemon.linuxV2LiveOwnerFences(ctx, excludedKey)
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if excludedKey != (state.RunKey{}) {
+		if err := daemon.checkLinuxV2TargetAdmission(excludedKey); err != nil {
+			return err
+		}
+	}
+	return apply(liveOwners)
+}
+
+// checkLinuxV2TargetAdmission rejects local cancellation, shutdown, terminal
+// ownership, and an expired local claim before an exact Store check or effect
+// CAS. It snapshots under daemon.mu but never carries that lock into State.
+func (daemon *daemon) checkLinuxV2TargetAdmission(key state.RunKey) error {
+	if key.RunID == "" || key.Generation <= 0 {
+		return errors.New("Linux v2 target admission requires an exact RunKey")
+	}
+	now := daemon.localNow()
+	daemon.mu.Lock()
+	active := daemon.running[key]
+	if active == nil {
+		daemon.mu.Unlock()
+		return errors.New("Linux v2 target RunKey is no longer owned by this App")
+	}
+	deadline := active.localLeaseDeadlineAt
+	blocked := !active.claimed || active.cancelled || active.stale || active.cancelCommandID != "" ||
+		active.nativeCancelCommandID != "" || active.nativeCancelTerminalObserved || active.nativeCancelTerminateErr != nil ||
+		active.nativeStartTerminalObserved || active.nativeStartLeaseExpired || active.terminal || active.terminalizing != 0 ||
+		active.nativeTerminalOwner || active.nativeStartTerminalOwner || active.leaseRenewalClosed ||
+		active.nativeUsageRenewalBlocked || active.processExited || active.processStopWitness != nil ||
+		active.processFinalizeOwner != nil || active.nativeCloseRetryRequired || active.nativeCloseRetrying || active.startFailure != nil
+	daemon.mu.Unlock()
+	if blocked {
+		return errors.New("Linux v2 target RunKey is cancelled, stale, terminalizing, or otherwise unavailable")
+	}
+	if deadline.IsZero() || !now.Add(leaseSafetyMargin).Before(deadline) {
+		return fmt.Errorf("Linux v2 target local lease is expired or within its safety margin: %w", errLeaseDeadlineReached)
+	}
+	return nil
+}
+
+// linuxV2LiveOwnerFences includes only exact process owners that the current
+// App still owns, whose local lease is unexpired, and whose helper independently
+// proves its pidfds, lease ACK, commit, and completed RELEASE. A run may still
+// be finishing staged startup after RELEASE; pre-RELEASE or ambiguous runs are
+// left out so State fails closed on their rows.
+func (daemon *daemon) linuxV2LiveOwnerFences(ctx context.Context, excludedKey state.RunKey) (map[state.RunKey]protocol.Fence, error) {
+	type candidate struct {
+		key     state.RunKey
+		active  *runningRun
+		process Process
+		session harness.Session
+	}
+	candidates := make([]candidate, 0)
+	localNow := daemon.localNow()
+	daemon.mu.Lock()
+	for key, active := range daemon.running {
+		if key == excludedKey || active == nil || isNilHarnessSession(active.nativeSession) ||
+			!active.claimed || active.cancelled || active.stale ||
+			active.cancelCommandID != "" || active.nativeCancelCommandID != "" || active.nativeCancelTerminalObserved ||
+			active.nativeCancelTerminateErr != nil || active.nativeStartTerminalObserved || active.nativeStartLeaseExpired ||
+			active.terminal || active.terminalizing != 0 || active.leaseRenewalClosed ||
+			active.nativeUsageRenewalBlocked || active.processExited || active.processStopWitness != nil ||
+			active.processFinalizeOwner != nil || active.nativeCloseRetryRequired || active.nativeCloseRetrying ||
+			active.startFailure != nil || active.localLeaseDeadlineAt.IsZero() ||
+			!localNow.Add(leaseSafetyMargin).Before(active.localLeaseDeadlineAt) {
+			continue
+		}
+		candidates = append(candidates, candidate{
+			key: key, active: active, process: active.process, session: active.nativeSession,
+		})
+	}
+	daemon.mu.Unlock()
+
+	liveOwners := make(map[state.RunKey]protocol.Fence, len(candidates))
+	for _, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		journal, err := daemon.store.LoadJournal(candidate.key)
+		if err != nil {
+			return nil, fmt.Errorf("read in-memory Linux v2 owner journal %s/%d: %w", candidate.key.RunID, candidate.key.Generation, err)
+		}
+		if journal.RuntimeID != daemon.runtimeID || journal.ClaimedRuntimeEpoch != daemon.runtimeEpoch ||
+			journal.ContainmentAuthority == nil || journal.ContainmentAuthority.Version != authority.SupervisorVersionV2 ||
+			journal.ContainmentAuthority.OwnerKind != authority.OwnerKindLinuxHelper || journal.ContainmentAuthority.StopReceipt != nil ||
+			journal.ContainmentHandoff != nil || journal.ContainmentCgroup == nil || journal.ContainmentCgroup.Helper == nil ||
+			journal.ContainmentCgroup.Gate == nil || !journal.ContainmentCgroup.LauncherGrantPossible ||
+			journal.ContainmentCgroup.AbortProof != nil || journal.ContainmentCgroup.PreGateStopReceipt != nil ||
+			journal.ContainmentCgroupReleaseProof != nil || journal.ContainmentCgroupPreGateReleaseProof != nil ||
+			journal.ContainmentUnproven || journal.TerminalState != "" || journal.TerminalVerdict != "" ||
+			journal.NativeUsageRecoveryRequired || journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil ||
+			journal.LinuxCloneCleanupPending || journal.LinuxCloneCleanupIntent != nil ||
+			journal.LinuxCloneTargetRemovalProof != nil || journal.LinuxCloneCleanupProof != nil || journal.LeaseToken == "" ||
+			!journal.LeaseExpiresAt.After(daemon.now().Add(leaseSafetyMargin)) || !journal.HasProcessDetails() {
+			return nil, fmt.Errorf("in-memory Linux v2 owner %s/%d does not match an active committed Journal", candidate.key.RunID, candidate.key.Generation)
+		}
+		switch journal.LocalState {
+		case "claimed", "running", "paused", "waiting_for_input":
+		default:
+			return nil, fmt.Errorf("in-memory Linux v2 owner %s/%d is not in an active lease state", candidate.key.RunID, candidate.key.Generation)
+		}
+		pid, identity, err := linuxV2AdmissionTargetDetails(candidate.process, candidate.session)
+		if err != nil || pid != journal.PID || identity != journal.ProcessIdentity ||
+			pid != journal.ContainmentAuthority.TargetPID || identity != journal.ContainmentAuthority.TargetIdentity {
+			return nil, errors.Join(fmt.Errorf("in-memory Linux v2 owner %s/%d differs from its exact Journal target", candidate.key.RunID, candidate.key.Generation), err)
+		}
+		liveStatusReader, ok := candidate.process.(linuxV2AdmissionStatusReader)
+		if !ok && !isNilHarnessSession(candidate.session) {
+			liveStatusReader, ok = candidate.session.(linuxV2AdmissionStatusReader)
+		}
+		if !ok {
+			return nil, fmt.Errorf("in-memory Linux v2 owner %s/%d has no production liveness status API", candidate.key.RunID, candidate.key.Generation)
+		}
+		statusContext, cancel := context.WithTimeout(ctx, linuxV2AdmissionStatusTimeout)
+		status, statusErr := liveStatusReader.LinuxV2LiveOwnerStatus(statusContext)
+		cancel()
+		if statusErr != nil {
+			return nil, fmt.Errorf("verify in-memory Linux v2 owner %s/%d liveness: %w", candidate.key.RunID, candidate.key.Generation, statusErr)
+		}
+		helper := *journal.ContainmentCgroup.Helper
+		if status.RunKey != candidate.key || status.Fence != journal.Fence() ||
+			!status.Target.Equal(authority.LinuxCgroupProcessIdentity{PID: pid, Identity: identity}) ||
+			!status.Helper.Equal(helper) || status.Helper.Validate() != nil || status.Target.Validate() != nil ||
+			status.Helper.PID != journal.ContainmentAuthority.SupervisorPID ||
+			status.Helper.Identity != journal.ContainmentAuthority.SupervisorIdentity ||
+			!status.HelperPIDFDLive || !status.TargetPIDFDLive || status.LeaseSequence == 0 || !status.LeaseLive ||
+			status.OwnerLost || !status.CommitAcknowledged || status.StopRequested || status.StopAttempted ||
+			!status.ReleaseAttempted || !status.ReleaseSucceeded || status.ReleaseInFlight || status.ReleaseUncertain || status.Terminal {
+			return nil, fmt.Errorf("in-memory Linux v2 owner %s/%d is not a proven live committed-and-released owner", candidate.key.RunID, candidate.key.Generation)
+		}
+
+		currentLocalNow := daemon.localNow()
+		daemon.mu.Lock()
+		current := daemon.running[candidate.key]
+		stillActive := current == candidate.active && !isNilHarnessSession(current.nativeSession) &&
+			current.claimed && !current.cancelled && !current.stale &&
+			current.cancelCommandID == "" && current.nativeCancelCommandID == "" && !current.nativeCancelTerminalObserved &&
+			current.nativeCancelTerminateErr == nil && !current.nativeStartTerminalObserved && !current.nativeStartLeaseExpired &&
+			!current.terminal && current.terminalizing == 0 && !current.leaseRenewalClosed &&
+			!current.nativeUsageRenewalBlocked && !current.processExited && current.processStopWitness == nil &&
+			current.processFinalizeOwner == nil && !current.nativeCloseRetryRequired && !current.nativeCloseRetrying &&
+			current.startFailure == nil && !current.localLeaseDeadlineAt.IsZero() &&
+			currentLocalNow.Add(leaseSafetyMargin).Before(current.localLeaseDeadlineAt)
+		currentProcess := Process(nil)
+		currentSession := harness.Session(nil)
+		if stillActive {
+			currentProcess = current.process
+			currentSession = current.nativeSession
+		}
+		daemon.mu.Unlock()
+		if !stillActive || isNilProcess(currentProcess) && isNilHarnessSession(currentSession) {
+			return nil, fmt.Errorf("in-memory Linux v2 owner %s/%d changed during admission snapshot", candidate.key.RunID, candidate.key.Generation)
+		}
+		currentPID, currentIdentity, currentErr := linuxV2AdmissionTargetDetails(currentProcess, currentSession)
+		if currentErr != nil || currentPID != pid || currentIdentity != identity {
+			return nil, errors.Join(fmt.Errorf("in-memory Linux v2 owner %s/%d changed its process identity during admission snapshot", candidate.key.RunID, candidate.key.Generation), currentErr)
+		}
+		liveOwners[candidate.key] = journal.Fence()
+	}
+	return liveOwners, nil
+}
+
+func (daemon *daemon) confirmLinuxV2LiveRelease(ctx context.Context, key state.RunKey, fence protocol.Fence) error {
+	if key.RunID == "" || key.Generation <= 0 || fence.Generation != key.Generation {
+		return errors.New("Linux v2 RELEASE confirmation requires the exact RunKey fence")
+	}
+	return daemon.withLinuxV2NativeAdmission(ctx, state.RunKey{}, func(liveOwners map[state.RunKey]protocol.Fence) error {
+		if observed, ok := liveOwners[key]; !ok || observed != fence {
+			return errors.New("returned Linux v2 native session has no exact live lease-ACKed RELEASE proof")
+		}
+		return nil
+	})
+}
+
+func linuxV2AdmissionTargetDetails(process Process, session harness.Session) (int, string, error) {
+	if !isNilProcess(process) {
+		return processDetails(process)
+	}
+	staged, ok := session.(harness.StagedSession)
+	if !ok || isNilHarnessSession(session) {
+		return 0, "", errors.New("live Linux v2 native session does not expose its process identity")
+	}
+	pid, identity := staged.ProcessDetails()
+	if pid <= 0 || strings.TrimSpace(identity) == "" {
+		return 0, "", errors.New("live Linux v2 native session identity is incomplete")
+	}
+	return pid, identity, nil
+}
+
+// mergeEnvironmentOverrides removes ambient values for every explicitly
+// trusted key before appending the root-config-derived B environment. This
+// prevents an allowlisted A HOME/XDG value from competing with B's fixed paths.
+func mergeEnvironmentOverrides(environment, overrides []string) ([]string, error) {
+	for index, entry := range overrides {
+		key, _, found := strings.Cut(entry, "=")
+		if !found || key == "" || strings.ContainsRune(entry, '\x00') {
+			return nil, errors.New("trusted native environment override is invalid")
+		}
+		for _, previous := range overrides[:index] {
+			previousKey, _, _ := strings.Cut(previous, "=")
+			if previousKey == key {
+				return nil, fmt.Errorf("trusted native environment overrides duplicate %q", key)
+			}
+		}
+	}
+	merged := environment[:0]
+	for _, entry := range environment {
+		key, _, found := strings.Cut(entry, "=")
+		if !found {
+			return nil, errors.New("native environment entry is invalid")
+		}
+		replaced := false
+		for _, override := range overrides {
+			overrideKey, _, _ := strings.Cut(override, "=")
+			if key == overrideKey {
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			merged = append(merged, entry)
+		}
+	}
+	return append(merged, overrides...), nil
 }
 
 func (daemon *daemon) interval(value time.Duration) time.Duration {
@@ -1397,13 +2018,6 @@ func (daemon *daemon) now() time.Time {
 		return daemon.options.clock()
 	}
 	return time.Now().UTC()
-}
-
-// persistProcessWithAuthorityCallback is the combined process/authority
-// callback supplied to Runner. The marker-only recordProcess override belongs
-// only to the plain no-authority callback and is never called here.
-func (daemon *daemon) persistProcessWithAuthorityCallback(key state.RunKey) func(int, string, *authority.Supervisor) error {
-	return daemon.persistProcessAuthorityCallback(key)
 }
 
 func (daemon *daemon) persistProcessAuthorityCallback(key state.RunKey) func(int, string, *authority.Supervisor) error {
@@ -1525,13 +2139,105 @@ func (daemon *daemon) persistContainmentStopReceiptCallback(key state.RunKey) fu
 // an observer error therefore keeps the containment authority unreleased so a
 // later recovery pass can retry the same receipt.
 func (daemon *daemon) observeContainmentStop(key state.RunKey, pid int, identity string, receipt authority.StopReceipt) error {
-	if daemon.options.containmentStopObserver == nil {
+	if daemon.options.containmentStopObserver != nil {
+		if err := daemon.options.containmentStopObserver(key, pid, identity, receipt); err != nil {
+			return fmt.Errorf("%w: %v", errContainmentStopObserver, err)
+		}
+	}
+	return waitForLinuxStopReceiptBarrier(key, pid, identity, receipt)
+}
+
+func waitForLinuxStopReceiptBarrier(key state.RunKey, pid int, identity string, receipt authority.StopReceipt) error {
+	if os.Getenv(linuxStopReceiptBarrierWitnessEnv) != "1" {
 		return nil
 	}
-	if err := daemon.options.containmentStopObserver(key, pid, identity, receipt); err != nil {
-		return fmt.Errorf("%w: %v", errContainmentStopObserver, err)
+	reachedPath, hasReached := os.LookupEnv(linuxStopReceiptBarrierReachedEnv)
+	releasePath, hasRelease := os.LookupEnv(linuxStopReceiptBarrierReleaseEnv)
+	if !hasReached && !hasRelease {
+		return nil
 	}
-	return nil
+	reachedPath = strings.TrimSpace(reachedPath)
+	releasePath = strings.TrimSpace(releasePath)
+	if !hasReached || !hasRelease || reachedPath == "" || releasePath == "" ||
+		!filepath.IsAbs(reachedPath) || !filepath.IsAbs(releasePath) || filepath.Clean(reachedPath) == filepath.Clean(releasePath) {
+		return errors.New("Linux stop-receipt barrier requires distinct absolute reached and release paths")
+	}
+	if err := assertLinuxStopReceiptBarrierPathAbsent(reachedPath); err != nil {
+		return fmt.Errorf("validate stop-receipt reached marker: %w", err)
+	}
+	if err := assertLinuxStopReceiptBarrierPathAbsent(releasePath); err != nil {
+		return fmt.Errorf("validate stop-receipt release marker: %w", err)
+	}
+	contents, err := json.Marshal(struct {
+		RunID      string                `json:"run_id"`
+		Generation int64                 `json:"generation"`
+		PID        int                   `json:"pid"`
+		Identity   string                `json:"identity"`
+		Receipt    authority.StopReceipt `json:"receipt"`
+	}{RunID: key.RunID, Generation: key.Generation, PID: pid, Identity: identity, Receipt: receipt})
+	if err != nil {
+		return fmt.Errorf("encode Linux stop-receipt barrier marker: %w", err)
+	}
+	marker, err := os.OpenFile(reachedPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("create Linux stop-receipt barrier marker: %w", err)
+	}
+	_, writeErr := marker.Write(contents)
+	if writeErr == nil {
+		writeErr = marker.Sync()
+	}
+	if closeErr := marker.Close(); writeErr == nil {
+		writeErr = closeErr
+	}
+	if writeErr == nil {
+		writeErr = syncLinuxStopReceiptBarrierDirectory(filepath.Dir(reachedPath))
+	}
+	if writeErr != nil {
+		return fmt.Errorf("persist Linux stop-receipt barrier marker: %w", writeErr)
+	}
+	deadline := time.NewTimer(linuxStopReceiptBarrierTimeout)
+	defer deadline.Stop()
+	poll := time.NewTicker(linuxStopReceiptBarrierPoll)
+	defer poll.Stop()
+	for {
+		if info, err := os.Lstat(releasePath); err == nil {
+			if !info.Mode().IsRegular() {
+				return errors.New("Linux stop-receipt release marker is not a regular file")
+			}
+			return nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("observe Linux stop-receipt release marker: %w", err)
+		}
+		select {
+		case <-deadline.C:
+			return fmt.Errorf("Linux stop-receipt barrier release marker did not appear within %s", linuxStopReceiptBarrierTimeout)
+		case <-poll.C:
+		}
+	}
+}
+
+func assertLinuxStopReceiptBarrierPathAbsent(path string) error {
+	_, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err == nil {
+		return errors.New("path already exists")
+	}
+	return err
+}
+
+func syncLinuxStopReceiptBarrierDirectory(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	syncErr := directory.Sync()
+	closeErr := directory.Close()
+	if syncErr != nil {
+		return syncErr
+	}
+	return closeErr
 }
 
 func (daemon *daemon) verifyDurableContainmentStopReceipt(key state.RunKey, pid int, identity string, receipt authority.StopReceipt) error {
@@ -1546,7 +2252,7 @@ func (daemon *daemon) verifyDurableContainmentStopReceipt(key state.RunKey, pid 
 		if journal.ContainmentHandoff.TargetPID != pid || journal.ContainmentHandoff.TargetIdentity != identity {
 			return errors.New("containment stop receipt readback target mismatch")
 		}
-		if journal.ContainmentHandoff.StopReceipt != nil && *journal.ContainmentHandoff.StopReceipt == receipt {
+		if journal.ContainmentHandoff.StopReceipt != nil && journal.ContainmentHandoff.StopReceipt.Equal(receipt) {
 			if !receipt.ValidForHandoff(*journal.ContainmentHandoff) {
 				return errors.New("containment stop receipt readback is invalid")
 			}
@@ -1557,7 +2263,7 @@ func (daemon *daemon) verifyDurableContainmentStopReceipt(key state.RunKey, pid 
 			return errors.New("containment stop receipt readback target mismatch")
 		}
 	}
-	if journal.ContainmentAuthority != nil && journal.ContainmentAuthority.StopReceipt != nil && *journal.ContainmentAuthority.StopReceipt == receipt {
+	if journal.ContainmentAuthority != nil && journal.ContainmentAuthority.StopReceipt != nil && journal.ContainmentAuthority.StopReceipt.Equal(receipt) {
 		if !receipt.ValidFor(*journal.ContainmentAuthority) {
 			return errors.New("containment stop receipt readback is invalid")
 		}
@@ -1774,6 +2480,21 @@ func (daemon *daemon) recoverUnresolvedInputIntents(ctx context.Context) error {
 	for _, journal := range journals {
 		if err := rootContext.Err(); err != nil {
 			return err
+		}
+		if hasLinuxV2ContainmentState(journal) && !daemon.hasRun(journal.Key()) {
+			if err := recoverLinuxV2ContainmentOwner(rootContext, daemon, journal); err != nil {
+				incomplete = errors.Join(incomplete, fmt.Errorf("recover Linux v2 owner %s/%d: %w", journal.RunID, journal.Generation, err))
+				continue
+			}
+			journal, err = daemon.store.LoadJournal(journal.Key())
+			if err != nil {
+				incomplete = errors.Join(incomplete, fmt.Errorf("reload Linux v2 owner journal %s/%d: %w", journal.RunID, journal.Generation, err))
+				continue
+			}
+			if hasPendingLinuxV2Containment(journal) {
+				incomplete = errors.Join(incomplete, fmt.Errorf("Linux v2 owner %s/%d remains pending after recovery", journal.RunID, journal.Generation))
+				continue
+			}
 		}
 		if !restartInputRecoveryRequired(journal) || daemon.hasRun(journal.Key()) {
 			continue
@@ -1992,6 +2713,12 @@ func (daemon *daemon) queueRestartInputFailure(ctx context.Context, key state.Ru
 		return err
 	}
 	if !restartInputRecoveryRequired(journal) {
+		return nil
+	}
+	// The terminal outbox may have settled while physical containment remains
+	// unresolved. Preserve that terminal and leave the process marker as the
+	// retry barrier instead of attempting a second terminal transition.
+	if durableTerminalPresent(journal) {
 		return nil
 	}
 	recoveryError := "input command recovery cannot safely replay stdin"
@@ -2705,7 +3432,17 @@ func (daemon *daemon) startAssignment(ctx context.Context, assignment protocol.A
 		return
 	}
 	if journal, err := daemon.store.LoadJournal(key); err == nil {
-		if journal.LocalState == "cleanup_pending" || journal.ContainmentUnproven || journal.ContainmentHandoff != nil {
+		if journal.LocalState == "cleanup_pending" || journal.ContainmentUnproven || journal.ContainmentHandoff != nil ||
+			linuxNativeRuntimeRequiresGoalAdmission(daemon.config.Runtime.HarnessKind) && hasLinuxV2ContainmentState(journal) {
+			return
+		}
+	}
+	if linuxNativeRuntimeRequiresGoalAdmission(daemon.config.Runtime.HarnessKind) && !daemon.linuxV2LaunchPhasePendingFor(key) {
+		if err := daemon.checkLinuxV2NativeAdmissionBeforeClaim(ctx); err != nil {
+			if daemon.log != nil {
+				daemon.log.Warn("linux_v2_native_assignment_blocked_by_owner_recovery", "run_id", key.RunID,
+					"generation", key.Generation, "error", err)
+			}
 			return
 		}
 	}
@@ -2804,7 +3541,11 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		return
 	}
 	claim.RequestStartedAt = claimStarted
-	daemon.setLocalLeaseDeadline(key, leaseDeadlineAt(claim, claimStarted))
+	localLeaseDeadline := leaseDeadlineAt(claim, claimStarted)
+	if linuxNativeRuntimeRequiresGoalAdmission(daemon.config.Runtime.HarnessKind) {
+		localLeaseDeadline = daemon.claimLocalLeaseDeadline(claim, claimStarted)
+	}
+	daemon.setLocalLeaseDeadline(key, localLeaseDeadline)
 	journal, err = daemon.store.SaveClaimGrant(key, claim)
 	if err != nil {
 		daemon.log.Error("save_claim_grant_failed", "run_id", assignment.RunID, "error", err)
@@ -2822,7 +3563,7 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		cancelCommandID = active.cancelCommandID
 		stale = active.stale
 	}
-	if !operatorCancelled && !stale && !contextCancelled && !admissionPresent {
+	if !operatorCancelled && !stale && !contextCancelled && !admissionPresent && !linuxNativeRuntimeRequiresGoalAdmission(daemon.config.Runtime.HarnessKind) {
 		err = daemon.markRunning(key)
 	}
 	daemon.mu.Unlock()
@@ -2855,6 +3596,10 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 			daemon.signalOutbox()
 		}
 		daemon.waitForRunWithContext(ctx, key)
+		return
+	}
+	if linuxNativeRuntimeRequiresGoalAdmission(daemon.config.Runtime.HarnessKind) {
+		daemon.queueFailure(ctx, key, "linux_v2_required", errors.New("Linux native Pi/OpenCode runtime requires an exact symmetry.admission.v1 RunKey/fence"))
 		return
 	}
 	if err != nil {
@@ -2944,7 +3689,7 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		RecordSupervisorHandoffStopReceipt: daemon.recordSupervisorHandoffStopReceiptCallback(key),
 		ClearSupervisorHandoff:             daemon.clearSupervisorHandoffCallback(key),
 		PersistContainmentUnproven:         daemon.markContainmentUnprovenCallback(key),
-		PersistProcessWithAuthority:        daemon.persistProcessWithAuthorityCallback(key),
+		PersistProcessWithAuthority:        daemon.persistProcessAuthorityCallback(key),
 		PersistProcess: func(pid int, identity string) error {
 			return daemon.persistProcessMarker(key, pid, identity, daemon.now())
 		},
@@ -3737,7 +4482,28 @@ func (daemon *daemon) attachResumedPiSession(ctx context.Context, key state.RunK
 // native session on retry.
 func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, claim protocol.ClaimResponse, admission protocol.Admission, workspacePersisted func(workspace.Prepared)) (returnErr error) {
 	nativeLaunchAttempted := false
+	cloneLaunchStarted := false
+	var linuxClone *linuxCloneRun
+	var linuxV2Fence protocol.Fence
+	var releaseLinuxV2LaunchPhase func()
 	defer func() {
+		if releaseLinuxV2LaunchPhase != nil {
+			releaseLinuxV2LaunchPhase()
+		}
+	}()
+	defer func() {
+		if linuxClone != nil && !cloneLaunchStarted {
+			abortParent := context.Background()
+			if ctx != nil {
+				abortParent = context.WithoutCancel(ctx)
+			}
+			cleanupContext, cancel := daemon.cleanupContext(abortParent)
+			abortErr := daemon.abortLinuxV2CloneBeforeCheckout(cleanupContext, key, linuxV2Fence, linuxClone.grant.Intent)
+			cancel()
+			if abortErr != nil {
+				returnErr = errors.Join(returnErr, fmt.Errorf("abort pre-checkout Linux clone after native-start refusal: %w", abortErr))
+			}
+		}
 		if returnErr == nil || !nativeLaunchAttempted {
 			return
 		}
@@ -3791,6 +4557,49 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 	if !nativeGoalHarnessKind(configuredKind) {
 		return fmt.Errorf("Goal admission harness %q is not a native staged adapter", configuredKind)
 	}
+	profile := daemon.config.AgentProfiles[daemon.config.Runtime.AgentProfile]
+	providerAccess, err := goalProviderAccess(profile, claim.ProviderAccess)
+	if err != nil {
+		return err
+	}
+	var (
+		linuxV2Owner       linuxV2NativeOwner
+		linuxV2Environment []string
+		linuxV2Required    = requiresLinuxV2NativeOwner(configuredKind)
+	)
+	if linuxV2Required {
+		if claim.RunID != key.RunID || claim.Generation != key.Generation || claim.ClaimID == "" || claim.LeaseToken == "" {
+			return errors.New("Linux v2 native admission claim does not match the exact RunKey fence")
+		}
+		if admission.SessionMode == protocol.SessionModeResume {
+			return taskResultFailure(protocol.TaskResultReasonResumeRejected, errors.New("Linux v2 retained-session resume requires a separately fenced B-clone reuse receipt; the prior RunKey does not authorize target reuse"))
+		}
+		linuxV2Fence = protocol.Fence{
+			RuntimeID: daemon.runtimeID, RuntimeEpoch: daemon.runtimeEpoch, Generation: key.Generation,
+			ClaimID: claim.ClaimID, LeaseToken: claim.LeaseToken,
+		}
+		releaseLinuxV2LaunchPhase, err = daemon.acquireLinuxV2LaunchPhase(ctx, key, claim)
+		if err != nil {
+			return fmt.Errorf("wait for Linux v2 native launch phase: %w", err)
+		}
+		if err := daemon.checkLinuxV2NativeAdmission(ctx, key, linuxV2Fence); err != nil {
+			return fmt.Errorf("recheck exact Linux v2 owner after launch-phase wait: %w", err)
+		}
+		linuxV2Owner, linuxV2Environment, err = daemon.prepareLinuxV2NativeOwner(ctx, key, linuxV2Fence, configuredKind, profile, providerAccess != nil)
+		if err != nil {
+			return err
+		}
+	}
+	if configuredKind == harness.KindPi {
+		if err := pi.ValidateRPCProfileArgs(profile.Args); err != nil {
+			return fmt.Errorf("validate pi RPC invocation before native launch: %w", err)
+		}
+		if providerAccess != nil {
+			if err := pi.ValidateProviderBridgeProfileArgs(profile.Args); err != nil {
+				return fmt.Errorf("validate pi provider bridge invocation before native launch: %w", err)
+			}
+		}
+	}
 	goalAPI, ok := daemon.control.(goalControlAPI)
 	if !ok {
 		return errors.New("control API does not implement Goal session admission")
@@ -3813,24 +4622,15 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 	if !reflect.DeepEqual(probedCapabilities, daemon.harnessCapabilities) {
 		return fmt.Errorf("configured Goal adapter %q capability projection changed since runtime registration", configuredKind)
 	}
-	profile := daemon.config.AgentProfiles[daemon.config.Runtime.AgentProfile]
-	providerAccess, err := goalProviderAccess(profile, claim.ProviderAccess)
-	if err != nil {
-		return err
-	}
-	if configuredKind == harness.KindPi {
-		if err := pi.ValidateRPCProfileArgs(profile.Args); err != nil {
-			return fmt.Errorf("validate pi RPC invocation before native launch: %w", err)
-		}
-		if providerAccess != nil {
-			if err := pi.ValidateProviderBridgeProfileArgs(profile.Args); err != nil {
-				return fmt.Errorf("validate pi provider bridge invocation before native launch: %w", err)
-			}
-		}
-	}
 	environment, err := execution.BuildEnvironment(profile.EnvAllowlist...)
 	if err != nil {
 		return fmt.Errorf("build native environment: %w", err)
+	}
+	if linuxV2Required {
+		environment, err = mergeEnvironmentOverrides(environment, linuxV2Environment)
+		if err != nil {
+			return fmt.Errorf("build fixed-B Linux native environment: %w", err)
+		}
 	}
 	providerBridge, err := daemon.preparePiProviderBridge(ctx, key, configuredKind, providerAccess)
 	if err != nil {
@@ -3941,37 +4741,60 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 		}
 		sessionKey = rebound.Key()
 	} else {
+		if linuxV2Required {
+			if err := daemon.checkLinuxV2NativeAdmission(ctx, key, linuxV2Fence); err != nil {
+				return fmt.Errorf("Linux v2 owner changed before clone effects: %w", err)
+			}
+		}
 		if _, err := daemon.store.MarkWorkspaceRecoveryRequired(key); err != nil {
 			return fmt.Errorf("mark workspace recovery required: %w", err)
 		}
-		subjectWorkspace, ok := daemon.workspace.(goalSubjectWorkspace)
-		if !ok {
-			return errors.New("workspace service does not support immutable Goal subjects")
-		}
-		preparedSubject, err := subjectWorkspace.PrepareSubject(ctx, daemon.config.Runtime.Workspace, workspace.RunRef{RunID: key.RunID, Generation: key.Generation}, admission.Subject)
-		if err != nil {
-			return fmt.Errorf("prepare admitted Subject workspace: %w", err)
-		}
-		prepared = preparedSubject.Prepared
-		if preparedSubject.Subject != admission.Subject {
-			return errors.New("prepared Goal workspace does not match the admitted Subject")
-		}
-		if !daemon.persistWorkspacePath(ctx, key, prepared.Path) {
-			return errors.New("persist workspace path")
-		}
-		if workspacePersisted != nil {
-			workspacePersisted(prepared)
-			workspacePersisted = nil
-		}
-		if daemon.isCancelled(key) {
-			return nil
-		}
-		fingerprint, err = workspaceFingerprint(ctx, prepared)
-		if err != nil {
-			return fmt.Errorf("fingerprint workspace: %w", err)
-		}
-		if daemon.isCancelled(key) {
-			return nil
+		if linuxV2Required {
+			linuxClone, fingerprint, err = daemon.prepareLinuxV2CloneRun(ctx, key, linuxV2Fence, admission)
+			if err != nil {
+				return err
+			}
+			prepared = linuxClone.prepared
+			if err := daemon.installLinuxCloneRun(key, linuxClone); err != nil {
+				return err
+			}
+			if workspacePersisted != nil {
+				workspacePersisted(prepared)
+				workspacePersisted = nil
+			}
+			if daemon.isCancelled(key) {
+				return nil
+			}
+		} else {
+			subjectWorkspace, ok := daemon.workspace.(goalSubjectWorkspace)
+			if !ok {
+				return errors.New("workspace service does not support immutable Goal subjects")
+			}
+			preparedSubject, err := subjectWorkspace.PrepareSubject(ctx, daemon.config.Runtime.Workspace, workspace.RunRef{RunID: key.RunID, Generation: key.Generation}, admission.Subject)
+			if err != nil {
+				return fmt.Errorf("prepare admitted Subject workspace: %w", err)
+			}
+			prepared = preparedSubject.Prepared
+			if preparedSubject.Subject != admission.Subject {
+				return errors.New("prepared Goal workspace does not match the admitted Subject")
+			}
+			if !daemon.persistWorkspacePath(ctx, key, prepared.Path) {
+				return errors.New("persist workspace path")
+			}
+			if workspacePersisted != nil {
+				workspacePersisted(prepared)
+				workspacePersisted = nil
+			}
+			if daemon.isCancelled(key) {
+				return nil
+			}
+			fingerprint, err = workspaceFingerprint(ctx, prepared)
+			if err != nil {
+				return fmt.Errorf("fingerprint workspace: %w", err)
+			}
+			if daemon.isCancelled(key) {
+				return nil
+			}
 		}
 		localHandleID, err = state.NewGoalSessionLocalHandleID()
 		if err != nil {
@@ -4029,21 +4852,6 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 	if cancelled, err := abortFreshLaunchIfCancelled(); cancelled {
 		return err
 	}
-	if resume != nil {
-		// For a retained session, Ready is also the durable native-start
-		// boundary. Recovery may compensate an unready rebind using the source
-		// stop certificate, but must treat a ready rebind as a possible new pi
-		// process and never infer that it stopped from a missing PID alone.
-		if _, err := daemon.markGoalSessionAttachDeliveryReady(key, localHandleID); err != nil {
-			daemon.retainUnknownGoalLaunchWorkspace(key)
-			return taskResultFailure(protocol.TaskResultReasonUnknownOutcome, fmt.Errorf("persist retained pi native-start boundary: %w", err))
-		}
-		if _, err := daemon.store.MarkGoalSessionResumeStartAttempted(sessionKey); err != nil {
-			daemon.retainUnknownGoalLaunchWorkspace(key)
-			return taskResultFailure(protocol.TaskResultReasonUnknownOutcome, fmt.Errorf("persist retained pi native-start attempt: %w", err))
-		}
-		attachReady = true
-	}
 	sink := harness.EventSinkFunc(func(_ context.Context, event harness.Event) error {
 		return daemon.queueNativeEvent(key, event)
 	})
@@ -4062,6 +4870,91 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 	}
 	if cancelled, err := abortFreshLaunchIfCancelled(); cancelled {
 		return err
+	}
+	nativeInvocation := execution.Invocation{
+		Program:                            profile.Command,
+		Args:                               profile.Args,
+		Dir:                                prepared.Path,
+		Env:                                environment,
+		InitialLeaseDeadline:               initialLeaseDeadline,
+		InitialLeaseDeadlineAt:             initialLeaseDeadlineAt,
+		InitialLeaseSequence:               1,
+		PrepareSupervisorHandoff:           daemon.prepareSupervisorHandoffCallback(key),
+		BindSupervisorHandoff:              daemon.bindSupervisorHandoffCallback(key),
+		CommitSupervisorHandoff:            daemon.commitSupervisorHandoffCallback(key),
+		RecordSupervisorHandoffStopReceipt: daemon.recordSupervisorHandoffStopReceiptCallback(key),
+		ClearSupervisorHandoff:             daemon.clearSupervisorHandoffCallback(key),
+		PersistContainmentUnproven:         daemon.markContainmentUnprovenCallback(key),
+		PersistProcessWithAuthority:        daemon.persistProcessAuthorityCallback(key),
+	}
+	if linuxV2Required {
+		if linuxClone == nil {
+			buildErr := errors.New("Linux v2 native admission has no durably reserved B-owned git_clone_v2 grant")
+			var discardErr error
+			if attachQueued && !attachReady {
+				discardErr = daemon.discardUnreadyGoalSessionAttachDelivery(key, localHandleID)
+			}
+			return errors.Join(daemon.compensatePreNativeGoalLaunchFailure(key, sessionKey, buildErr), discardErr)
+		}
+		nativeInvocation.LinuxV2Required = true
+		nativeInvocation, err = linuxV2Owner.BuildInvocation(ctx, key, linuxV2Fence, nativeInvocation, daemon.linuxV2JournalCallbacks(key, linuxV2Fence))
+		if err != nil {
+			buildErr := fmt.Errorf("build explicit Linux v2 native invocation: %w", err)
+			var discardErr error
+			if attachQueued && !attachReady {
+				discardErr = daemon.discardUnreadyGoalSessionAttachDelivery(key, localHandleID)
+			}
+			if resume == nil {
+				return errors.Join(daemon.compensatePreNativeGoalLaunchFailure(key, sessionKey, buildErr), discardErr)
+			}
+			return taskResultFailure(protocol.TaskResultReasonResumeRejected, errors.Join(buildErr, discardErr))
+		}
+		if !nativeInvocation.LinuxV2Required || nativeInvocation.LinuxV2 == nil {
+			buildErr := errors.New("Linux v2 native owner did not supply the required run grant and callbacks")
+			var discardErr error
+			if attachQueued && !attachReady {
+				discardErr = daemon.discardUnreadyGoalSessionAttachDelivery(key, localHandleID)
+			}
+			if resume == nil {
+				return errors.Join(daemon.compensatePreNativeGoalLaunchFailure(key, sessionKey, buildErr), discardErr)
+			}
+			return taskResultFailure(protocol.TaskResultReasonResumeRejected, errors.Join(buildErr, discardErr))
+		}
+		if nativeInvocation.LinuxV2.RunKey != key || nativeInvocation.LinuxV2.Fence != linuxV2Fence {
+			buildErr := errors.New("Linux v2 native owner changed the exact RunKey or claim fence")
+			var discardErr error
+			if attachQueued && !attachReady {
+				discardErr = daemon.discardUnreadyGoalSessionAttachDelivery(key, localHandleID)
+			}
+			return errors.Join(daemon.compensatePreNativeGoalLaunchFailure(key, sessionKey, buildErr), discardErr)
+		}
+		if linuxClone != nil {
+			grant := linuxClone.grant.Clone()
+			nativeInvocation.LinuxV2.CloneGrant = &grant
+			if err := daemon.installLinuxCloneRunnerCallbacks(key, linuxV2Fence, admission, linuxClone, &nativeInvocation.LinuxV2.Callbacks); err != nil {
+				buildErr := fmt.Errorf("install B-owned Linux clone callbacks: %w", err)
+				var discardErr error
+				if attachQueued && !attachReady {
+					discardErr = daemon.discardUnreadyGoalSessionAttachDelivery(key, localHandleID)
+				}
+				return errors.Join(daemon.compensatePreNativeGoalLaunchFailure(key, sessionKey, buildErr), discardErr)
+			}
+		}
+	}
+	if resume != nil {
+		// For a retained session, Ready is also the durable native-start
+		// boundary. Recovery may compensate an unready rebind using the source
+		// stop certificate, but must treat a ready rebind as a possible new pi
+		// process and never infer that it stopped from a missing PID alone.
+		if _, err := daemon.markGoalSessionAttachDeliveryReady(key, localHandleID); err != nil {
+			daemon.retainUnknownGoalLaunchWorkspace(key)
+			return taskResultFailure(protocol.TaskResultReasonUnknownOutcome, fmt.Errorf("persist retained pi native-start boundary: %w", err))
+		}
+		if _, err := daemon.store.MarkGoalSessionResumeStartAttempted(sessionKey); err != nil {
+			daemon.retainUnknownGoalLaunchWorkspace(key)
+			return taskResultFailure(protocol.TaskResultReasonUnknownOutcome, fmt.Errorf("persist retained pi native-start attempt: %w", err))
+		}
+		attachReady = true
 	}
 	if initialLeaseDeadline > 0 {
 		daemon.mu.Lock()
@@ -4091,6 +4984,7 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 		}
 		return taskResultFailure(protocol.TaskResultReasonResumeRejected, errors.New("native Goal start was rejected by cancellation or lease expiry"))
 	}
+	cloneLaunchStarted = linuxClone != nil
 	session, err := adapter.Start(ctx, harness.StartRequest{
 		AdmissionID:   admission.AdmissionID,
 		LocalHandleID: localHandleID,
@@ -4105,22 +4999,7 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 		},
 		ProviderAccess: providerAccess,
 		ProviderBridge: providerBridge,
-		Invocation: execution.Invocation{
-			Program:                            profile.Command,
-			Args:                               profile.Args,
-			Dir:                                prepared.Path,
-			Env:                                environment,
-			InitialLeaseDeadline:               initialLeaseDeadline,
-			InitialLeaseDeadlineAt:             initialLeaseDeadlineAt,
-			InitialLeaseSequence:               1,
-			PrepareSupervisorHandoff:           daemon.prepareSupervisorHandoffCallback(key),
-			BindSupervisorHandoff:              daemon.bindSupervisorHandoffCallback(key),
-			CommitSupervisorHandoff:            daemon.commitSupervisorHandoffCallback(key),
-			RecordSupervisorHandoffStopReceipt: daemon.recordSupervisorHandoffStopReceiptCallback(key),
-			ClearSupervisorHandoff:             daemon.clearSupervisorHandoffCallback(key),
-			PersistContainmentUnproven:         daemon.markContainmentUnprovenCallback(key),
-			PersistProcessWithAuthority:        daemon.persistProcessWithAuthorityCallback(key),
-		},
+		Invocation:     nativeInvocation,
 		PersistProcess: func(pid int, identity string) error {
 			persistErr := daemon.persistProcessMarker(key, pid, identity, daemon.now())
 			if persistErr == nil && daemon.options.processObserver != nil {
@@ -4145,6 +5024,14 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 	// Publish even a nil result so the Adapter.Start barrier cannot strand a
 	// cancellation when start fails without returning a session.
 	daemon.attachPartialNativeSession(key, session, sessionKey, admission, prepared)
+	if linuxV2Required && session != nil && err == nil {
+		if releaseErr := daemon.confirmLinuxV2LiveRelease(ctx, key, linuxV2Fence); releaseErr != nil {
+			err = fmt.Errorf("prove exact Linux v2 initial lease ACK and RELEASE before admitting another start: %w", releaseErr)
+		} else if releaseLinuxV2LaunchPhase != nil {
+			releaseLinuxV2LaunchPhase()
+			releaseLinuxV2LaunchPhase = nil
+		}
+	}
 	settlePublishedCancellation := func(stage string, cause error, discardAttach bool) (bool, error) {
 		if session == nil || !daemon.isCancelled(key) {
 			return false, nil
@@ -5319,7 +6206,50 @@ func (daemon *daemon) queueNativeEvent(key state.RunKey, event harness.Event) er
 		}
 		payload = encoded
 	}
-	return daemon.queueEvent(key, string(event.Kind), payload, at)
+	var (
+		cloneRun    *linuxCloneRun
+		cloneResult *protocol.TaskResult
+	)
+	if event.Kind == harness.EventTaskResult {
+		daemon.mu.Lock()
+		if active := daemon.running[key]; active != nil {
+			cloneRun = active.linuxClone
+		}
+		daemon.mu.Unlock()
+		if cloneRun != nil {
+			result, err := protocol.ParseTaskResult(payload)
+			if err != nil {
+				return fmt.Errorf("parse Linux clone TaskResult before durable event delivery: %w", err)
+			}
+			cloneRun.mu.Lock()
+			duplicate := cloneRun.taskResult != nil
+			cloneRun.mu.Unlock()
+			if duplicate {
+				return errors.New("Linux clone native session emitted more than one TaskResult")
+			}
+			cloneResult = &result
+		}
+	}
+	if err := daemon.queueEvent(key, string(event.Kind), payload, at); err != nil {
+		return err
+	}
+	if cloneResult != nil {
+		daemon.mu.Lock()
+		active := daemon.running[key]
+		stillOwned := active != nil && active.linuxClone == cloneRun
+		daemon.mu.Unlock()
+		if !stillOwned {
+			return errors.New("Linux clone run owner changed while persisting its TaskResult")
+		}
+		cloneRun.mu.Lock()
+		defer cloneRun.mu.Unlock()
+		if cloneRun.taskResult != nil {
+			return errors.New("Linux clone native session emitted more than one persisted TaskResult")
+		}
+		copy := *cloneResult
+		cloneRun.taskResult = &copy
+	}
+	return nil
 }
 
 type nativeUsageSnapshot struct {
@@ -6556,6 +7486,20 @@ func (daemon *daemon) recordGenericProcessExit(key state.RunKey, expected *runni
 }
 
 func (daemon *daemon) clearPersistedProcessDetails(key state.RunKey, pid int, identity string) (state.RunJournal, error) {
+	if daemon.store != nil {
+		journal, err := daemon.store.LoadJournal(key)
+		if err == nil && hasLinuxV2ContainmentState(journal) {
+			if !journal.HasProcessDetails() && journal.PID == 0 && journal.ProcessIdentity == "" && journal.StartedAt.IsZero() &&
+				journal.ContainmentCgroupReleaseProof != nil && journal.ContainmentCgroupReleaseProof.TargetPID == pid &&
+				journal.ContainmentCgroupReleaseProof.TargetIdentity == identity {
+				daemon.forgetRecoveredProcessStop(key)
+				return journal, nil
+			}
+			return state.RunJournal{}, errors.New("Linux v2 process details require the exact opaque receipt-backed release callback")
+		} else if err != nil && !state.IsNotFound(err) {
+			return state.RunJournal{}, err
+		}
+	}
 	if err := daemon.clearContainmentUnprovenCallback(key)(pid, identity); err != nil {
 		return state.RunJournal{}, err
 	}
@@ -6568,6 +7512,19 @@ func (daemon *daemon) clearPersistedProcessDetails(key state.RunKey, pid int, id
 		daemon.forgetRecoveredProcessStop(key)
 	}
 	return journal, err
+}
+
+func hasLinuxV2ContainmentState(journal state.RunJournal) bool {
+	return journal.ContainmentCgroup != nil || journal.ContainmentCgroupReleaseProof != nil ||
+		journal.ContainmentCgroupPreGateReleaseProof != nil ||
+		journal.ContainmentAuthority != nil && journal.ContainmentAuthority.Version == authority.SupervisorVersionV2 ||
+		journal.ContainmentHandoff != nil && journal.ContainmentHandoff.Version == authority.SupervisorHandoffVersionV2
+}
+
+func hasPendingLinuxV2Containment(journal state.RunJournal) bool {
+	return journal.ContainmentAuthority != nil && journal.ContainmentAuthority.Version == authority.SupervisorVersionV2 ||
+		journal.ContainmentHandoff != nil && journal.ContainmentHandoff.Version == authority.SupervisorHandoffVersionV2 ||
+		journal.ContainmentCgroup != nil && journal.ContainmentCgroup.AbortProof == nil
 }
 
 // watchFailedStartProcess restores the usual exit cleanup when a Process was
@@ -6695,7 +7652,7 @@ func (daemon *daemon) waitForNativeRun(ctx context.Context, key state.RunKey, ac
 	}
 
 	if waitErr == nil && closeErr == nil {
-		if err := daemon.verifyNativeTaskResultSubject(ctx, prepared, admission, &result); err != nil {
+		if err := daemon.verifyNativeTaskResultSubject(ctx, key, prepared, admission, &result); err != nil {
 			waitErr = err
 		}
 	}
@@ -7984,9 +8941,17 @@ func canonicalTaskResultReason(cause error, result *harness.TaskResult, fallback
 // artifact actually present in its daemon-owned worktree. A candidate result
 // may advance from admission Subject A to commit B; all other result kinds
 // remain bound to A.
-func (daemon *daemon) verifyNativeTaskResultSubject(ctx context.Context, prepared workspace.Prepared, admission *protocol.Admission, result *harness.TaskResult) error {
+func (daemon *daemon) verifyNativeTaskResultSubject(ctx context.Context, key state.RunKey, prepared workspace.Prepared, admission *protocol.Admission, result *harness.TaskResult) error {
 	if admission == nil {
 		return errors.New("native Goal admission is unavailable")
+	}
+	if key.RunID == "" || key.Generation <= 0 {
+		return errors.New("native Subject verification requires an exact RunKey")
+	}
+	if prepared.Run.RunID != "" || prepared.Run.Generation != 0 {
+		if prepared.Run.RunID != key.RunID || prepared.Run.Generation != key.Generation {
+			return errors.New("native Subject workspace belongs to a different RunKey")
+		}
 	}
 	if result == nil || result.Semantic == nil {
 		return nil
@@ -7996,6 +8961,11 @@ func (daemon *daemon) verifyNativeTaskResultSubject(ctx context.Context, prepare
 	}
 	if err := protocol.ValidateTaskResultForAdmission(*admission, *result.Semantic); err != nil {
 		return fmt.Errorf("native task_result is incompatible with admission: %w", err)
+	}
+	if journal, err := daemon.store.LoadJournal(key); err != nil {
+		return fmt.Errorf("load immutable Subject evidence before terminal validation: %w", err)
+	} else if journal.LinuxCloneIntent != nil {
+		return verifyLinuxCloneTaskResultSubject(journal, key, admission, *result.Semantic)
 	}
 	subjectWorkspace, ok := daemon.workspace.(goalSubjectWorkspace)
 	if !ok {
@@ -8010,6 +8980,34 @@ func (daemon *daemon) verifyNativeTaskResultSubject(ctx context.Context, prepare
 	}
 	if result.Semantic.Kind != protocol.TaskResultCandidateCompletion && actual != admission.Subject {
 		return errors.New("non-candidate native task_result advanced beyond the admitted Subject")
+	}
+	return nil
+}
+
+func verifyLinuxCloneTaskResultSubject(journal state.RunJournal, key state.RunKey, admission *protocol.Admission, result protocol.TaskResult) error {
+	intent := journal.LinuxCloneIntent
+	if intent == nil || intent.Validate() != nil || intent.RunID != key.RunID || intent.Generation != key.Generation ||
+		intent.ResourceID != admission.Subject.ResourceID || intent.BaseCommit != admission.Subject.Commit ||
+		intent.BaseTreeDigest != admission.Subject.TreeDigest {
+		return errors.New("Linux clone intent differs from the immutable admitted Subject")
+	}
+	if result.Kind != protocol.TaskResultCandidateCompletion {
+		if result.Subject != admission.Subject {
+			return errors.New("non-candidate Linux clone TaskResult differs from its admitted Subject")
+		}
+		return nil
+	}
+	promotion := journal.LinuxClonePromotionReceipt
+	if promotion == nil || promotion.Validate() != nil {
+		return errors.New("candidate Linux clone TaskResult lacks an A-validated promotion receipt")
+	}
+	expectedRef, err := authority.LinuxClonePromotionRef(key.RunID, key.Generation)
+	if err != nil {
+		return err
+	}
+	if promotion.Ref != expectedRef || result.Subject.ResourceID != intent.ResourceID ||
+		result.Subject.Commit != promotion.Commit || result.Subject.TreeDigest != promotion.TreeDigest {
+		return errors.New("candidate Linux clone TaskResult differs from the A-promoted commit/tree Subject")
 	}
 	return nil
 }
@@ -8247,7 +9245,7 @@ func (daemon *daemon) handleCommand(ctx context.Context, command protocol.Comman
 			}
 			if terminalObserved && finalResultKnown {
 				validationContext, stopValidation := context.WithTimeout(daemon.rootContext(ctx), controlRequestLimit)
-				terminalValidationErr = daemon.verifyNativeTaskResultSubject(validationContext, nativePrepared, nativeAdmission, &finalResult)
+				terminalValidationErr = daemon.verifyNativeTaskResultSubject(validationContext, key, nativePrepared, nativeAdmission, &finalResult)
 				stopValidation()
 			}
 		} else if process != nil {

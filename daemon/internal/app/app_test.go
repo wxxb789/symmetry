@@ -15,17 +15,20 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/config"
 	"github.com/wxxb789/symmetry/daemon/internal/control"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
 	"github.com/wxxb789/symmetry/daemon/internal/notification"
+	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 	"github.com/wxxb789/symmetry/daemon/internal/workspace"
@@ -1621,6 +1624,79 @@ func TestRestartInputRecoveryOwnershipLossQueuesTerminalBeforeCleanup(t *testing
 	}
 	if got, want := api.callsSnapshot(), []string{"event:event-before-input", "register", "event:event-before-input", "transition:failed"}; !sameStrings(got, want) {
 		t.Fatalf("conclusive terminal calls = %#v, want %#v", got, want)
+	}
+}
+
+func TestRestartInputRecoveryKeepsUnprovenProcessAfterExistingTerminalSettles(t *testing.T) {
+	store, key := claimedStore(t)
+	defer store.Close()
+	if err := store.SaveIdentity(state.MachineIdentity{MachineID: "machine-1", MachineToken: "machine-token"}); err != nil {
+		t.Fatal(err)
+	}
+	startedAt := time.Date(2026, time.September, 26, 1, 2, 3, 0, time.UTC)
+	if _, err := store.SetProcessDetails(key, 71, "agent:71", startedAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkContainmentUnproven(key, 71, "agent:71"); err != nil {
+		t.Fatal(err)
+	}
+	priorFailure := protocol.StateTransitionRequest{
+		TransitionID: "prior-failure",
+		State:        "failed",
+		Payload:      json.RawMessage(`{"stage":"prior_failure"}`),
+	}
+	if _, err := store.QueueTerminalTransitionAt(key, priorFailure, startedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	// initialize drains this terminal before considering a restart fallback.
+	api := &restartRecoveryControl{registeredEpoch: 2}
+	restarted := &daemon{
+		config: testConfig(t),
+		log:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		options: options{
+			store:     store,
+			control:   api,
+			workspace: &fakeWorkspace{},
+			start:     failStart,
+			clock:     time.Now,
+			newID:     ids(),
+		},
+		running: make(map[state.RunKey]*runningRun),
+	}
+	if err := restarted.initialize(context.Background()); err != nil {
+		t.Fatalf("initialize with an already-durable terminal = %v", err)
+	}
+
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.TerminalState != "failed" || journal.TerminalVerdict != state.TerminalVerdictAccepted || len(journal.PendingTransitions) != 0 {
+		t.Fatalf("settled prior terminal = %#v", journal)
+	}
+	if journal.PID != 71 || journal.ProcessIdentity != "agent:71" || !journal.StartedAt.Equal(startedAt) || !journal.ContainmentUnproven {
+		t.Fatalf("unproven process marker was cleared or changed: %#v", journal)
+	}
+	if !restartInputRecoveryRequired(journal) {
+		t.Fatal("settled terminal disabled the unresolved-containment recovery barrier")
+	}
+	if got, want := api.callsSnapshot(), []string{"transition:failed", "register"}; !sameStrings(got, want) {
+		t.Fatalf("startup calls = %#v, want one terminal settlement before registration", got)
+	}
+
+	if err := restarted.recoverUnresolvedInputIntents(context.Background()); err != nil {
+		t.Fatalf("subsequent unresolved-containment recovery = %v", err)
+	}
+	journal, err = store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.PID != 71 || journal.ProcessIdentity != "agent:71" || !journal.ContainmentUnproven || !restartInputRecoveryRequired(journal) {
+		t.Fatalf("subsequent recovery lost its retry barrier: %#v", journal)
+	}
+	if got, want := api.callsSnapshot(), []string{"transition:failed", "register"}; !sameStrings(got, want) {
+		t.Fatalf("recovery calls = %#v, want no duplicate terminal", got)
 	}
 }
 
@@ -4026,8 +4102,9 @@ func TestRetainedTerminalJournalDoesNotBlockNewSessionRegistration(t *testing.T)
 	if err := store.SaveIdentity(state.MachineIdentity{MachineID: "machine-1", MachineToken: "machine-token"}); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	control := &terminalRecoveryControl{cancel: cancel, transitionErr: errors.New("temporary failure")}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	control := &terminalRecoveryControl{cancel: cancel, cancelAfterFlush: true, transitionErr: errors.New("temporary failure")}
 	err := Run(ctx, testConfig(t), WithStore(store), WithControl(control), WithWorkspace(&fakeWorkspace{}), WithStartProcess(failStart))
 	if err != nil {
 		t.Fatal(err)
@@ -4035,25 +4112,11 @@ func TestRetainedTerminalJournalDoesNotBlockNewSessionRegistration(t *testing.T)
 	if control.registeredAfterFlush {
 		t.Fatal("terminal journal was flushed before new session registration")
 	}
-	if _, err := store.LoadJournal(key); err != nil {
-		t.Fatalf("terminal journal = %v, want retained", err)
-	}
-}
-
-func TestTerminalFlushFailureDoesNotPreventNewSessionRegistration(t *testing.T) {
-	store, key := terminalStore(t)
-	defer store.Close()
-	if err := store.SaveIdentity(state.MachineIdentity{MachineID: "machine-1", MachineToken: "machine-token"}); err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	control := &terminalRecoveryControl{cancel: cancel, transitionErr: errors.New("temporary failure")}
-	err := Run(ctx, testConfig(t), WithStore(store), WithControl(control), WithWorkspace(&fakeWorkspace{}), WithStartProcess(failStart))
-	if err != nil {
-		t.Fatal(err)
-	}
 	if control.registerCalls != 1 {
 		t.Fatalf("RegisterSession calls = %d, want 1", control.registerCalls)
+	}
+	if control.transitionCalls != 1 {
+		t.Fatalf("terminal flush attempts = %d, want 1", control.transitionCalls)
 	}
 	if _, err := store.LoadJournal(key); err != nil {
 		t.Fatalf("terminal journal = %v, want retained", err)
@@ -5404,7 +5467,8 @@ func TestBlockedInputDoesNotBlockAnotherRunCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	blocked := &blockingInputProcess{entered: make(chan struct{}, 1), release: make(chan struct{})}
-	other := &recordingProcess{}
+	otherEntered := make(chan struct{})
+	other := &recordingProcess{beforeWrite: func() { close(otherEntered) }}
 	daemon := &daemon{
 		store:          store,
 		control:        &fakeControl{},
@@ -5420,20 +5484,18 @@ func TestBlockedInputDoesNotBlockAnotherRunCommand(t *testing.T) {
 	firstDone := daemon.enqueueCommand(protocol.Command{CommandID: "input-1", RunID: first.RunID, Generation: first.Generation, Kind: "provide_input", Payload: json.RawMessage(`{}`)})
 	<-blocked.entered
 	secondDone := daemon.enqueueCommand(protocol.Command{CommandID: "input-2", RunID: second.RunID, Generation: second.Generation, Kind: "provide_input", Payload: json.RawMessage(`{}`)})
-	secondCompleted := false
+	otherStartedBeforeRelease := false
 	select {
-	case <-secondDone:
-		secondCompleted = true
-	case <-time.After(500 * time.Millisecond):
+	case <-otherEntered:
+		otherStartedBeforeRelease = true
+	case <-time.After(3 * time.Second):
 	}
 	close(blocked.release)
 	<-firstDone
-	if !secondCompleted {
-		<-secondDone
-	}
+	<-secondDone
 	cancel()
 	<-executorDone
-	if !secondCompleted {
+	if !otherStartedBeforeRelease {
 		t.Fatal("blocked input delayed a command for another run")
 	}
 	if other.writes != 1 {
@@ -8377,6 +8439,7 @@ func (*ownershipLossControl) AppendEvents(context.Context, string, protocol.Appe
 type terminalRecoveryControl struct {
 	fakeControl
 	cancel               context.CancelFunc
+	cancelAfterFlush     bool
 	transitionErr        error
 	failOnce             bool
 	transitionCalls      int
@@ -8388,6 +8451,9 @@ func (client *terminalRecoveryControl) Transition(_ context.Context, _ string, r
 	client.transitionCalls++
 	if request.State == "completed" {
 		client.flushed = true
+		if client.cancelAfterFlush && client.registerCalls > 0 && client.cancel != nil {
+			client.cancel()
+		}
 	}
 	if client.failOnce {
 		client.failOnce = false
@@ -8399,7 +8465,7 @@ func (client *terminalRecoveryControl) Transition(_ context.Context, _ string, r
 func (client *terminalRecoveryControl) RegisterSession(_ context.Context, _, _ string, _ protocol.SessionRegistrationRequest) (protocol.SessionRegistrationResponse, error) {
 	client.registerCalls++
 	client.registeredAfterFlush = client.flushed
-	if client.cancel != nil {
+	if !client.cancelAfterFlush && client.cancel != nil {
 		client.cancel()
 	}
 	return protocol.SessionRegistrationResponse{Runtimes: []protocol.RegisteredRuntime{{RuntimeKey: "default", RuntimeID: "runtime-1", RuntimeEpoch: 1}}, LeaseDurationMS: 120_000}, nil
@@ -8807,6 +8873,103 @@ func (fake *fakeWorkspace) DeriveSubject(_ context.Context, _ workspace.Prepared
 }
 func (*fakeWorkspace) Cleanup(context.Context, workspace.Prepared, bool) error { return nil }
 
+func (*fakeWorkspace) PlanLinuxCloneIntent(bindingKey string, run workspace.RunRef, subject protocol.Subject) (authority.LinuxCloneIntent, error) {
+	intent := authority.LinuxCloneIntent{
+		Version: authority.LinuxCloneVersion, RunID: run.RunID, Generation: run.Generation,
+		BindingKey: bindingKey, ResourceID: subject.ResourceID, BaseCommit: subject.Commit,
+		BaseTreeDigest: subject.TreeDigest, Nonce: strings.Repeat("a", authority.LinuxCloneNonceBytes*2),
+		SeedPath: filepath.Join("/tmp", "symmetry-app-test-seeds", bindingKey, "run-"+run.RunID+"-generation-"+strconv.FormatInt(run.Generation, 10)+".bundle"),
+		Target:   filepath.Join("/tmp", "symmetry-app-test-clones", bindingKey, run.RunID, "generation-"+strconv.FormatInt(run.Generation, 10)),
+	}
+	if err := intent.Validate(); err != nil {
+		return authority.LinuxCloneIntent{}, err
+	}
+	return intent, nil
+}
+
+func (*fakeWorkspace) PrepareLinuxCloneSeed(_ context.Context, intent authority.LinuxCloneIntent) (authority.LinuxCloneSeedReceipt, error) {
+	return authority.LinuxCloneSeedReceipt{
+		Version: authority.LinuxCloneVersion, BaseCommit: intent.BaseCommit,
+		Digest: "sha256:" + strings.Repeat("b", 64), Size: 128, Device: 1, Inode: 2,
+	}, nil
+}
+
+func (*fakeWorkspace) PrepareLinuxClone(_ context.Context, grant authority.LinuxCloneGrant) (workspace.Prepared, error) {
+	if err := grant.Validate(); err != nil {
+		return workspace.Prepared{}, err
+	}
+	return workspace.Prepared{
+		Path: grant.Intent.Target, BindingKey: grant.Intent.BindingKey,
+		Run: workspace.RunRef{RunID: grant.Intent.RunID, Generation: grant.Intent.Generation},
+	}, nil
+}
+
+func (*fakeWorkspace) ValidateLinuxCloneCheckout(authority.LinuxCloneGrant, authority.LinuxCloneCheckoutReceipt) error {
+	return errors.New("test fake does not create Linux clone checkouts")
+}
+
+func (*fakeWorkspace) PromoteLinuxClone(context.Context, authority.LinuxCloneGrant, authority.LinuxCloneCheckoutReceipt, authority.LinuxClonePromotionIntent, platform.LinuxCgroupV2Release) (authority.LinuxClonePromotionReceipt, error) {
+	return authority.LinuxClonePromotionReceipt{}, errors.New("test fake does not promote Linux clone candidates")
+}
+
+func (*fakeWorkspace) ReadExistingLinuxClonePromotion(context.Context, authority.LinuxCloneIntent, authority.LinuxClonePromotionIntent, state.RunJournal, platform.LinuxCgroupV2Release) (authority.LinuxClonePromotionReceipt, error) {
+	return authority.LinuxClonePromotionReceipt{}, errors.New("test fake does not reconcile Linux clone promotion refs")
+}
+
+func (*fakeWorkspace) RemoveLinuxCloneTarget(context.Context, authority.LinuxCloneGrant, authority.LinuxCloneCheckoutReceipt, state.RunJournal, workspace.LinuxCloneTargetDeleter) (authority.LinuxCloneTargetRemovalProof, error) {
+	return authority.LinuxCloneTargetRemovalProof{}, errors.New("test fake does not remove B-owned Linux clone targets")
+}
+
+func (*fakeWorkspace) CleanupLinuxClone(context.Context, authority.LinuxCloneGrant, authority.LinuxCloneCheckoutReceipt, state.RunJournal) (authority.LinuxCloneCleanupProof, error) {
+	return authority.LinuxCloneCleanupProof{}, errors.New("test fake does not clean B-owned Linux clone targets")
+}
+
+func (*fakeWorkspace) AbortLinuxCloneBeforeCheckout(
+	_ context.Context,
+	intent authority.LinuxCloneIntent,
+	seed *authority.LinuxCloneSeedReceipt,
+	preGate *authority.LinuxCgroupPreGateReleaseProof,
+	cgroupAbort *authority.LinuxCgroupReservationAbortProof,
+	normalRelease *authority.SupervisorHandoffReleaseProof,
+) (authority.LinuxCloneAbortProof, error) {
+	if (preGate != nil && cgroupAbort != nil) || (normalRelease != nil && (preGate != nil || cgroupAbort != nil)) {
+		return authority.LinuxCloneAbortProof{}, errors.New("conflicting test abort proof variants")
+	}
+	baseRef, err := authority.LinuxCloneBaseRef(intent.RunID, intent.Generation)
+	if err != nil {
+		return authority.LinuxCloneAbortProof{}, err
+	}
+	promotionRef, err := authority.LinuxClonePromotionRef(intent.RunID, intent.Generation)
+	if err != nil {
+		return authority.LinuxCloneAbortProof{}, err
+	}
+	proof := authority.LinuxCloneAbortProof{
+		Version: authority.LinuxCloneVersion, Intent: intent.Clone(),
+		BaseRef: baseRef, PromotionRef: promotionRef, TargetAbsent: true, SeedAbsent: true,
+		BaseRefAbsent: true, PromotionRefAbsent: true,
+	}
+	if seed != nil {
+		copy := seed.Clone()
+		proof.SeedReceipt = &copy
+	}
+	if preGate != nil {
+		copy := preGate.Clone()
+		proof.PreGateReleaseProof = &copy
+	}
+	if cgroupAbort != nil {
+		copy := cgroupAbort.Clone()
+		proof.CgroupAbortProof = &copy
+	}
+	if normalRelease != nil {
+		copy := normalRelease.Clone()
+		proof.NormalReleaseProof = &copy
+	}
+	if err := proof.Validate(); err != nil {
+		return authority.LinuxCloneAbortProof{}, err
+	}
+	return proof, nil
+}
+
 type trackingWorkspace struct{ cleaned chan<- bool }
 
 func (*trackingWorkspace) Prepare(_ context.Context, key string, run workspace.RunRef) (workspace.Prepared, error) {
@@ -8906,17 +9069,20 @@ func (client fakeNotifier) Run(ctx context.Context, hints chan<- notification.Hi
 
 type fakeProcess struct{ result execution.Result }
 
+const processOwnershipTestTimeout = 30 * time.Second
+
 func TestStartFailureRetainsReturnedProcessUntilItExits(t *testing.T) {
 	store, err := state.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	t.Cleanup(func() { _ = store.Close() })
 	process := newStartFailureProcess()
 	startErr := errors.New("initial stdin write failed")
 	daemon := &daemon{
 		config:    testConfig(t),
 		store:     store,
+		log:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		control:   &fakeControl{},
 		workspace: &fakeWorkspace{},
 		start: func(_ context.Context, invocation execution.Invocation, _ execution.Sink) (Process, error) {
@@ -8933,11 +9099,20 @@ func TestStartFailureRetainsReturnedProcessUntilItExits(t *testing.T) {
 		running:      make(map[state.RunKey]*runningRun),
 		slots:        make(chan struct{}, 1),
 	}
+	var releaseWait sync.Once
+	releaseProcessWait := func() {
+		releaseWait.Do(func() { close(process.releaseWait) })
+	}
+	t.Cleanup(func() {
+		releaseProcessWait()
+		daemon.workers.Wait()
+		daemon.failedStartWatchWG.Wait()
+	})
 	key := state.RunKey{RunID: "run-1", Generation: 1}
 	daemon.startAssignment(context.Background(), protocol.Assignment{RunID: key.RunID, Generation: key.Generation, Work: protocol.Work{Goal: "work"}})
 	select {
 	case <-process.detailsEntered:
-	case <-time.After(time.Second):
+	case <-time.After(processOwnershipTestTimeout):
 		t.Fatal("returned process identity was not observed")
 	}
 	active := daemon.runningRun(key)
@@ -8947,7 +9122,7 @@ func TestStartFailureRetainsReturnedProcessUntilItExits(t *testing.T) {
 	if got := process.waitCalls.Load(); got != 0 {
 		t.Fatalf("Process.Wait calls before ResultDone = %d, want zero", got)
 	}
-	close(process.releaseWait)
+	releaseProcessWait()
 	daemon.workers.Wait()
 	daemon.failedStartWatchWG.Wait()
 	if got := process.waitCalls.Load(); got != 1 {

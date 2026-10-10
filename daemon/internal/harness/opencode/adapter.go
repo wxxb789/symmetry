@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -79,10 +80,13 @@ func (osCommandRunner) Run(ctx context.Context, executable string, args ...strin
 
 // nativeProcess retains only the shared execution.Runner behavior this adapter
 // needs. The API server's stdin is deliberately never used as a control path.
+// Linux API verification requires DuplicateLinuxV2Peer to return a launch-
+// transferred capability; unsupported process owners fail before request data.
 type nativeProcess interface {
 	Wait() execution.Result
 	Terminate(context.Context, time.Duration) error
 	ProcessDetails() (int, string)
+	DuplicateLinuxV2Peer() (*execution.LinuxV2Peer, error)
 }
 
 type processStarter func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error)
@@ -117,12 +121,84 @@ func newCredentials() (string, string, error) {
 	return "opencode", base64.RawURLEncoding.EncodeToString(bytes), nil
 }
 
-type peerVerifierFactory func(pid int, identity string) ConnectionVerifier
+type peerVerifierFactory func(pid int, identity string, peer *linuxV2PeerOwner) ConnectionVerifier
 
-func ownedPeerVerifier(pid int, identity string) ConnectionVerifier {
+func ownedPeerVerifier(pid int, identity string, peer *linuxV2PeerOwner) ConnectionVerifier {
+	if runtime.GOOS == "linux" {
+		return func(ctx context.Context, conn net.Conn) error {
+			if peer == nil {
+				return fmt.Errorf("%w: native Linux OpenCode process has no launch-retained v2 TCP peer capability", errors.ErrUnsupported)
+			}
+			return peer.verify(ctx, conn)
+		}
+	}
 	return func(ctx context.Context, conn net.Conn) error {
 		return platform.VerifyLoopbackTCPPeer(ctx, conn, pid, identity)
 	}
+}
+
+// linuxV2PeerOwner serializes verifier use against session Close. The verifier
+// borrows the pidfd only while the read lock is held; Close owns its duplicate
+// and waits for current verification before releasing it.
+type linuxV2PeerOwner struct {
+	mu     sync.RWMutex
+	peer   *execution.LinuxV2Peer
+	err    error
+	closed bool
+}
+
+func newLinuxV2PeerOwner(process nativeProcess, pid int, identity string) *linuxV2PeerOwner {
+	owner := &linuxV2PeerOwner{}
+	peer, err := process.DuplicateLinuxV2Peer()
+	if err != nil {
+		owner.err = errors.Join(fmt.Errorf("%w: duplicate native Linux OpenCode v2 TCP peer capability: %v", errors.ErrUnsupported, err), peer.Close())
+		return owner
+	}
+	if peer == nil {
+		owner.err = fmt.Errorf("%w: native Linux OpenCode process returned no v2 TCP peer capability", errors.ErrUnsupported)
+		return owner
+	}
+	if peer.PID != pid || peer.Identity != identity || peer.PIDFD == nil || peer.UserNamespace.Device == 0 || peer.UserNamespace.Inode == 0 {
+		owner.err = fmt.Errorf("%w: native Linux OpenCode v2 TCP peer capability does not match the launched process", errors.ErrUnsupported)
+		_ = peer.Close()
+		return owner
+	}
+	owner.peer = peer
+	return owner
+}
+
+func (owner *linuxV2PeerOwner) verify(ctx context.Context, conn net.Conn) error {
+	owner.mu.RLock()
+	defer owner.mu.RUnlock()
+	if owner.closed {
+		return errors.New("native Linux OpenCode v2 TCP peer capability is closed")
+	}
+	if owner.err != nil {
+		return owner.err
+	}
+	peer := owner.peer
+	if peer == nil {
+		return errors.ErrUnsupported
+	}
+	return platform.VerifyLoopbackTCPPeerV2(ctx, conn, peer.PID, peer.Identity, peer.PIDFD, peer.UserNamespace)
+}
+
+func (owner *linuxV2PeerOwner) Close() error {
+	if owner == nil {
+		return nil
+	}
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	if owner.closed {
+		return nil
+	}
+	owner.closed = true
+	peer := owner.peer
+	owner.peer = nil
+	if peer == nil {
+		return nil
+	}
+	return peer.Close()
 }
 
 // Adapter launches an owned, local OpenCode serve process. It is intentionally
@@ -304,6 +380,8 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 		PersistProcessAuthority:            request.PersistProcessAuthority,
 		PersistContainmentStopReceipt:      request.PersistContainmentStopReceipt,
 		PersistContainmentUnproven:         request.Invocation.PersistContainmentUnproven,
+		LinuxV2Required:                    request.Invocation.LinuxV2Required,
+		LinuxV2:                            request.Invocation.LinuxV2,
 	}
 	process, err := adapter.startProcess(sessionContext, invocation, execution.SinkFunc(session.handleProcessOutput))
 	if isNilNativeProcess(process) {
@@ -409,6 +487,7 @@ type nativeSession struct {
 
 	mu              sync.Mutex
 	process         nativeProcess
+	peerOwner       *linuxV2PeerOwner
 	readinessBuffer []byte
 	listeningPort   int
 	readinessErr    error
@@ -473,6 +552,28 @@ func (session *nativeSession) ProcessDetails() (int, string) {
 		return 0, ""
 	}
 	return process.ProcessDetails()
+}
+
+// LinuxV2LiveOwnerStatus forwards the exact native process's bounded,
+// read-only helper observation without exposing process or helper handles.
+// It is intentionally optional and unsupported for legacy process owners.
+func (session *nativeSession) LinuxV2LiveOwnerStatus(ctx context.Context) (execution.LinuxV2LiveOwnerStatus, error) {
+	if session == nil || ctx == nil {
+		return execution.LinuxV2LiveOwnerStatus{}, errors.New("OpenCode Linux v2 live-owner status requires session and context")
+	}
+	session.mu.Lock()
+	process := session.process
+	session.mu.Unlock()
+	if isNilNativeProcess(process) {
+		return execution.LinuxV2LiveOwnerStatus{}, errors.ErrUnsupported
+	}
+	provider, ok := process.(interface {
+		LinuxV2LiveOwnerStatus(context.Context) (execution.LinuxV2LiveOwnerStatus, error)
+	})
+	if !ok {
+		return execution.LinuxV2LiveOwnerStatus{}, errors.ErrUnsupported
+	}
+	return provider.LinuxV2LiveOwnerStatus(ctx)
 }
 
 func (session *nativeSession) LeaseRenewalAvailable() bool {
@@ -620,8 +721,15 @@ func (session *nativeSession) clientForOwnedServer(ctx context.Context) (api, er
 	if pid <= 0 || strings.TrimSpace(identity) == "" {
 		return nil, ErrPeerOwnership
 	}
-	verifier := verifierFactory(pid, identity)
+	var peerOwner *linuxV2PeerOwner
+	if runtime.GOOS == "linux" {
+		peerOwner = newLinuxV2PeerOwner(process, pid, identity)
+	}
+	verifier := verifierFactory(pid, identity, peerOwner)
 	if verifier == nil {
+		if peerOwner != nil {
+			_ = peerOwner.Close()
+		}
 		return nil, ErrPeerOwnership
 	}
 	client, err := newAPI(Config{
@@ -631,14 +739,21 @@ func (session *nativeSession) clientForOwnedServer(ctx context.Context) (api, er
 		VerifyConnection: verifier,
 	})
 	if err != nil {
+		if peerOwner != nil {
+			err = errors.Join(err, peerOwner.Close())
+		}
 		return nil, fmt.Errorf("configure verified OpenCode local API: %w", err)
 	}
 	session.mu.Lock()
 	if session.closed {
 		session.mu.Unlock()
+		if peerOwner != nil {
+			_ = peerOwner.Close()
+		}
 		return nil, errSessionClosed
 	}
 	session.client = client
+	session.peerOwner = peerOwner
 	session.mu.Unlock()
 	return client, nil
 }
@@ -992,6 +1107,8 @@ func (session *nativeSession) closeOnce(ctx context.Context) error {
 	turnCancel := session.turnCancel
 	stream := session.stream
 	process := session.process
+	peerOwner := session.peerOwner
+	session.peerOwner = nil
 	session.mu.Unlock()
 	// Cancel journal delivery before closing the stream: this releases a sink
 	// that is currently persisting an SSE event, so watcher completion remains
@@ -1007,6 +1124,7 @@ func (session *nativeSession) closeOnce(ctx context.Context) error {
 	if stream != nil {
 		_ = stream.Close()
 	}
+	peerErr := peerOwner.Close()
 	session.cancel()
 	var terminateErr error
 	if process != nil {
@@ -1021,9 +1139,9 @@ func (session *nativeSession) closeOnce(ctx context.Context) error {
 		}
 	}
 	if terminateErr == nil && processErr == nil {
-		return nil
+		return errors.Join(interruptErr, peerErr)
 	}
-	return errors.Join(interruptErr, terminateErr, processErr)
+	return errors.Join(interruptErr, peerErr, terminateErr, processErr)
 }
 
 func (session *nativeSession) terminationGrace() time.Duration {

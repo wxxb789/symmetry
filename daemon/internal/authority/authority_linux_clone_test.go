@@ -58,6 +58,34 @@ func TestLinuxCloneAuthorityDTOValidationAndClone(t *testing.T) {
 	}
 }
 
+func TestLinuxClonePromotionIntentBindsCandidateSubject(t *testing.T) {
+	base := testLinuxCloneIntent()
+	candidate := LinuxClonePromotionIntent{
+		Version: LinuxCloneVersion, ResourceID: base.ResourceID,
+		Commit: strings.Repeat("e", 40), TreeDigest: "sha256:" + strings.Repeat("f", 64),
+	}
+	if err := candidate.Validate(); err != nil {
+		t.Fatalf("promotion intent Validate() error = %v", err)
+	}
+	if !candidate.Equal(candidate.Clone()) {
+		t.Fatal("promotion intent Clone()/Equal() changed its value")
+	}
+	for _, mutate := range []func(*LinuxClonePromotionIntent){
+		func(value *LinuxClonePromotionIntent) { value.ResourceID = "resource" },
+		func(value *LinuxClonePromotionIntent) { value.Commit = "partial" },
+		func(value *LinuxClonePromotionIntent) { value.TreeDigest = strings.Repeat("a", 64) },
+	} {
+		changed := candidate.Clone()
+		mutate(&changed)
+		if changed.Validate() == nil {
+			t.Fatal("promotion intent Validate() accepted malformed candidate identity")
+		}
+		if candidate.Equal(changed) {
+			t.Fatal("promotion intent Equal() ignored a changed candidate field")
+		}
+	}
+}
+
 func TestLinuxCloneAuthorityRejectsMalformedAndAliasedEvidence(t *testing.T) {
 	base := testLinuxCloneIntent()
 	for _, test := range []struct {
@@ -132,6 +160,27 @@ func TestLinuxCloneAuthorityRejectsMalformedAndAliasedEvidence(t *testing.T) {
 	}
 }
 
+func TestLinuxCloneIntentLegacyJournalTargetIsReadOnly(t *testing.T) {
+	legacy := testLinuxCloneIntent()
+	legacy.Target = "/var/lib/symmetry/legacy-checkout"
+	if err := legacy.ValidateForJournal(); err != nil {
+		t.Fatalf("ValidateForJournal() rejected structurally valid pre-layout journal intent: %v", err)
+	}
+	if legacy.Validate() == nil {
+		t.Fatal("Validate() accepted a pre-layout target for new side-effect authority")
+	}
+	grant := LinuxCloneGrant{
+		Intent: legacy,
+		Seed: LinuxCloneSeedReceipt{
+			Version: LinuxCloneVersion, BaseCommit: legacy.BaseCommit,
+			Digest: "sha256:" + strings.Repeat("d", 64), Size: 128, Inode: 11,
+		},
+	}
+	if grant.Validate() == nil {
+		t.Fatal("Linux clone grant upgraded a legacy journal-only target into new B-side authority")
+	}
+}
+
 func TestLinuxCloneRunRefsBindRunKeyAndUseBranchNamespace(t *testing.T) {
 	runID := "run-123"
 	base, err := LinuxCloneBaseRef(runID, 7)
@@ -190,6 +239,14 @@ func TestLinuxCloneAbortProofBindsAllNoTargetEvidence(t *testing.T) {
 	if !proof.Equal(cloned) {
 		t.Fatal("abort proof Clone()/Equal() changed the no-target evidence")
 	}
+	legacyRecord := proof.Clone()
+	legacyRecord.Intent.Target = "/var/lib/symmetry/legacy-checkout"
+	if err := legacyRecord.ValidateForJournal(); err != nil {
+		t.Fatalf("ValidateForJournal() rejected an old structural abort record: %v", err)
+	}
+	if legacyRecord.Validate() == nil {
+		t.Fatal("Validate() accepted an old-layout abort proof for a new filesystem effect")
+	}
 	seed := LinuxCloneSeedReceipt{
 		Version: LinuxCloneVersion, BaseCommit: intent.BaseCommit,
 		Digest: "sha256:" + strings.Repeat("c", 64), Size: 7, Inode: 9,
@@ -224,6 +281,133 @@ func TestLinuxCloneAbortProofBindsAllNoTargetEvidence(t *testing.T) {
 		if candidate.Validate() == nil {
 			t.Fatal("Validate() accepted incomplete or contradictory no-target evidence")
 		}
+	}
+}
+
+func TestLinuxCloneCleanupIntentAndRootRemovalProofBindExactRun(t *testing.T) {
+	clone := testLinuxCloneIntent()
+	root, err := LinuxCloneWorkspaceRoot(clone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseRef, err := LinuxCloneBaseRef(clone.RunID, clone.Generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	promotionRef, err := LinuxClonePromotionRef(clone.RunID, clone.Generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := LinuxCloneSeedReceipt{
+		Version: LinuxCloneVersion, BaseCommit: clone.BaseCommit,
+		Digest: "sha256:" + strings.Repeat("d", 64), Size: 4096, Device: 10, Inode: 11,
+	}
+	checkout := LinuxCloneCheckoutReceipt{
+		Version: LinuxCloneVersion, RunID: clone.RunID, Generation: clone.Generation,
+		BindingKey: clone.BindingKey, ResourceID: clone.ResourceID, Target: clone.Target, Nonce: clone.Nonce,
+		SeedDigest: seed.Digest, BaseCommit: clone.BaseCommit, TargetDevice: 12, TargetInode: 13,
+	}
+	promotionIntent := LinuxClonePromotionIntent{
+		Version: LinuxCloneVersion, ResourceID: clone.ResourceID,
+		Commit: strings.Repeat("e", 40), TreeDigest: "sha256:" + strings.Repeat("f", 64),
+	}
+	promotion := LinuxClonePromotionReceipt{
+		Version: LinuxCloneVersion, Commit: promotionIntent.Commit, TreeDigest: promotionIntent.TreeDigest, Ref: promotionRef,
+	}
+	handoff := testLinuxCgroupV2Handoff()
+	owner, err := handoff.ToSupervisor()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopReceipt := testLinuxCgroupV2Receipt(owner)
+	release := SupervisorHandoffReleaseProof{
+		Version: SupervisorHandoffVersionV2, Status: "released", LaunchToken: handoff.LaunchToken,
+		OwnerKind: handoff.OwnerKind, OwnerContext: handoff.OwnerContext, TargetPID: handoff.TargetPID,
+		TargetIdentity: handoff.TargetIdentity, OwnerUID: handoff.OwnerUID, LauncherUID: handoff.LauncherUID,
+		PipeToken: handoff.PipeToken, JobID: handoff.JobID, SupervisorPID: handoff.SupervisorPID,
+		SupervisorIdentity: handoff.SupervisorIdentity, TargetBirthKind: handoff.TargetBirthKind,
+		CgroupIdentity: cloneLinuxCgroupIdentity(handoff.CgroupIdentity), AnchorPID: handoff.AnchorPID,
+		AnchorIdentity: handoff.AnchorIdentity, LauncherPID: handoff.LauncherPID, LauncherIdentity: handoff.LauncherIdentity,
+		LauncherExit: cloneLinuxCgroupExitProof(handoff.LauncherExit), Mirror: cloneLinuxCgroupProcessIdentity(handoff.Mirror),
+		LeafDisposition: LinuxCgroupLeafRemoved, StopReceipt: &stopReceipt,
+	}
+	if err := release.Validate(); err != nil {
+		t.Fatalf("normal release proof fixture invalid: %v", err)
+	}
+	cleanup := LinuxCloneCleanupIntent{
+		Version: LinuxCloneVersion, Intent: clone, FenceDigest: "sha256:" + strings.Repeat("1", 64),
+		RootPath: root, BaseRef: baseRef, SeedReceipt: seed, CheckoutReceipt: checkout,
+		PromotionIntent: promotionIntent, PromotionReceipt: promotion, NormalReleaseProof: release,
+		ArtifactEvidenceID: "00000000-0000-4000-8000-000000000021", ArtifactEvidenceKey: "artifact-publish",
+		ArtifactSubjectHash: "sha256:" + strings.Repeat("2", 64), ArtifactDeliveryDigest: strings.Repeat("3", 64),
+	}
+	if err := cleanup.Validate(); err != nil {
+		t.Fatalf("cleanup intent Validate() error = %v", err)
+	}
+	if !cleanup.Equal(cleanup.Clone()) {
+		t.Fatal("cleanup intent Clone()/Equal() changed its authority snapshot")
+	}
+	deleter := LinuxCgroupProcessIdentity{PID: 90, Identity: "root-cleaner:90:start"}
+	witness := LinuxCgroupProcessIdentity{PID: handoff.AnchorPID, Identity: handoff.AnchorIdentity}
+	targetProof := LinuxCloneTargetRemovalProof{
+		Version: LinuxCloneVersion, Intent: cleanup, RootDevice: 20, RootInode: 21,
+		TargetDevice: checkout.TargetDevice, TargetInode: checkout.TargetInode,
+		Disposition: LinuxCloneTargetDispositionRemoved, PathRewalkVerified: true,
+		BOwnedMountConfined: true, TargetNlinkZero: true,
+		RootDeleterUID: 0, RootDeleter: deleter,
+		RootDeleterExit: LinuxCgroupExitProof{
+			Version: LinuxCgroupIdentityVersion, Process: deleter, Witness: witness, Waited: true, Reaped: true,
+		},
+	}
+	if err := targetProof.Validate(); err != nil {
+		t.Fatalf("target removal proof Validate() error = %v", err)
+	}
+	proof := LinuxCloneCleanupProof{
+		Version: LinuxCloneVersion, Intent: cleanup, TargetRemovalProof: targetProof,
+		SeedAbsent: true, BaseRefAbsent: true, ScratchAbsent: true, PromotionRefPresent: true,
+	}
+	if err := proof.Validate(); err != nil {
+		t.Fatalf("cleanup proof Validate() error = %v", err)
+	}
+	if !proof.Equal(proof.Clone()) {
+		t.Fatal("cleanup proof Clone()/Equal() changed its exact effects")
+	}
+
+	wrongTarget := targetProof.Clone()
+	wrongTarget.TargetInode++
+	if wrongTarget.Validate() == nil {
+		t.Fatal("root proof accepted a different B target inode")
+	}
+	wrongWorker := targetProof.Clone()
+	wrongWorker.RootDeleterUID = 1000
+	if wrongWorker.Validate() == nil {
+		t.Fatal("root proof accepted a non-root cleanup worker")
+	}
+	missingLinkProof := targetProof.Clone()
+	missingLinkProof.TargetNlinkZero = false
+	if missingLinkProof.Validate() == nil || missingLinkProof.Equal(targetProof) {
+		t.Fatal("root proof accepted a target inode whose post-unlink link count was not proven zero")
+	}
+	unconfinedProof := targetProof.Clone()
+	unconfinedProof.BOwnedMountConfined = false
+	if unconfinedProof.Validate() == nil || unconfinedProof.Equal(targetProof) {
+		t.Fatal("root proof accepted a target removal without B-owned mount confinement")
+	}
+	alreadyAbsentProof := targetProof.Clone()
+	alreadyAbsentProof.Disposition = LinuxCloneTargetDispositionAlreadyAbsent
+	alreadyAbsentProof.TargetNlinkZero = false
+	if alreadyAbsentProof.Validate() == nil || alreadyAbsentProof.Equal(targetProof) {
+		t.Fatal("root proof accepted name absence as a fresh target removal receipt")
+	}
+	wrongWait := targetProof.Clone()
+	wrongWait.RootDeleterExit.Witness.PID++
+	if wrongWait.Validate() == nil {
+		t.Fatal("root proof accepted a wait witness other than the durable A anchor")
+	}
+	missingSeed := proof.Clone()
+	missingSeed.SeedAbsent = false
+	if missingSeed.Validate() == nil {
+		t.Fatal("cleanup proof accepted a remaining A seed")
 	}
 }
 

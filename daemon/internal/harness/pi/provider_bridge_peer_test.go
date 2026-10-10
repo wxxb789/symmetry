@@ -11,9 +11,9 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 )
 
-func TestProviderBridgeRequiresExactNativePeerIdentity(t *testing.T) {
-	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
-		t.Skip("loopback TCP peer ownership is supported only on Linux and Windows")
+func TestWindowsLegacyProviderBridgeRequiresExactPeerIdentity(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("legacy v1 peer binding is retained for Windows only; Linux uses the v2 owner test")
 	}
 	identity, err := platform.ProcessIdentity(os.Getpid())
 	if err != nil {
@@ -57,9 +57,9 @@ func TestProviderBridgeRequiresExactNativePeerIdentity(t *testing.T) {
 	}
 }
 
-func TestProviderBridgeRejectsConnectionOwnedByDifferentProcessIdentity(t *testing.T) {
-	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
-		t.Skip("loopback TCP peer ownership is supported only on Linux and Windows")
+func TestWindowsLegacyProviderBridgeRejectsDifferentProcessIdentity(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("legacy v1 peer binding is retained for Windows only; Linux uses the v2 owner test")
 	}
 	identity, err := platform.ProcessIdentity(os.Getpid())
 	if err != nil {

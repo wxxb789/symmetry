@@ -3,8 +3,10 @@
 package state
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -18,13 +20,15 @@ import (
 func TestLinuxCgroupV2ReservationAndCommitReplayUseFreshWriteBarriers(t *testing.T) {
 	store := mustStore(t)
 	journal := stoppedTestJournal("linux-cgroup-v2-replay", 1)
+	journal.LeaseExpiresAt = time.Now().UTC().Add(time.Hour)
 	if err := store.SaveJournal(journal); err != nil {
 		t.Fatal(err)
 	}
 	key := journal.Key()
+	fence := journal.Fence()
 	reservation := testStateLinuxCgroupV2Reservation()
 	replayUnknownStateMutation(t, store, func() error {
-		_, err := store.ReserveLinuxCgroup(key, reservation)
+		_, err := store.ReserveLinuxCgroup(key, fence, reservation, nil)
 		return err
 	})
 
@@ -34,16 +38,20 @@ func TestLinuxCgroupV2ReservationAndCommitReplayUseFreshWriteBarriers(t *testing
 	}
 	reservation = loaded.ContainmentCgroup.Clone()
 	otherRun := stoppedTestJournal("linux-cgroup-v2-duplicate-leaf", 1)
+	otherRun.LeaseExpiresAt = time.Now().UTC().Add(time.Hour)
 	if err := store.SaveJournal(otherRun); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.ReserveLinuxCgroup(otherRun.Key(), reservation); err == nil {
+	if _, err := store.ReserveLinuxCgroup(otherRun.Key(), otherRun.Fence(), reservation, nil); err == nil {
 		t.Fatal("ReserveLinuxCgroup() reserved the same exclusive parent/name for another RunKey")
+	}
+	if err := store.DeleteJournal(otherRun.Key()); err != nil {
+		t.Fatalf("remove failed duplicate-leaf target: %v", err)
 	}
 
 	different := reservation
 	different.LeafName = strings.Repeat("f", authority.TokenBytes*2)
-	if _, err := store.ReserveLinuxCgroup(key, different); err == nil {
+	if _, err := store.ReserveLinuxCgroup(key, fence, different, nil); err == nil {
 		t.Fatal("ReserveLinuxCgroup() replaced an existing immutable leaf reservation")
 	}
 	if _, err := store.ClearProcessDetails(key, 400, "gate:400:start"); err == nil {
@@ -55,7 +63,7 @@ func TestLinuxCgroupV2ReservationAndCommitReplayUseFreshWriteBarriers(t *testing
 
 	createExpected := reservation.Clone()
 	replayUnknownStateMutation(t, store, func() error {
-		_, err := store.MarkLinuxCgroupCreateStarted(key, createExpected)
+		_, err := store.MarkLinuxCgroupCreateStarted(key, fence, createExpected, nil)
 		return err
 	})
 	reservation = loadStateJournal(t, store, key).ContainmentCgroup.Clone()
@@ -100,7 +108,7 @@ func TestLinuxCgroupV2ReservationAndCommitReplayUseFreshWriteBarriers(t *testing
 	})
 	reservation = loadStateJournal(t, store, key).ContainmentCgroup.Clone()
 	replayUnknownStateMutation(t, store, func() error {
-		_, err := store.ArmLinuxCgroupLauncherGrant(key, reservation)
+		_, err := store.ArmLinuxCgroupLauncherGrant(key, fence, reservation, nil)
 		return err
 	})
 	reservation = loadStateJournal(t, store, key).ContainmentCgroup.Clone()
@@ -186,6 +194,7 @@ func TestLinuxCgroupV2ReservationAndCommitReplayUseFreshWriteBarriers(t *testing
 func TestLinuxCgroupV2MirrorStopReceiptRequiresOpaqueRelease(t *testing.T) {
 	store := mustStore(t)
 	journal := stoppedTestJournal("linux-cgroup-v2-mirror", 1)
+	journal.LeaseExpiresAt = time.Now().UTC().Add(time.Hour)
 	if err := store.SaveJournal(journal); err != nil {
 		t.Fatal(err)
 	}
@@ -243,6 +252,7 @@ func TestLinuxCgroupV2MirrorStopReceiptRequiresOpaqueRelease(t *testing.T) {
 func TestLinuxCgroupV2PreGateStopReceiptKeepsReservationPendingUntilOpaqueRemoval(t *testing.T) {
 	store := mustStore(t)
 	journal := stoppedTestJournal("linux-cgroup-v2-pre-gate-stop", 1)
+	journal.LeaseExpiresAt = time.Now().UTC().Add(time.Hour)
 	if err := store.SaveJournal(journal); err != nil {
 		t.Fatal(err)
 	}
@@ -318,12 +328,14 @@ func TestLinuxCgroupV2PreGateStopReceiptKeepsReservationPendingUntilOpaqueRemova
 func TestLinuxCgroupReservationBlocksWorkspaceCleanupAndRequiresIndependentAbortProof(t *testing.T) {
 	store := mustStore(t)
 	journal := stoppedTestJournal("linux-cgroup-v2-abort", 1)
+	journal.LeaseExpiresAt = time.Now().UTC().Add(time.Hour)
 	if err := store.SaveJournal(journal); err != nil {
 		t.Fatal(err)
 	}
 	key := journal.Key()
+	fence := journal.Fence()
 	reservation := testStateLinuxCgroupV2Reservation()
-	if _, err := store.ReserveLinuxCgroup(key, reservation); err != nil {
+	if _, err := store.ReserveLinuxCgroup(key, fence, reservation, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -371,6 +383,7 @@ func TestLinuxCgroupReservationBlocksWorkspaceCleanupAndRequiresIndependentAbort
 	}
 
 	postIntent := stoppedTestJournal("linux-cgroup-v2-abort-after-intent", 1)
+	postIntent.LeaseExpiresAt = time.Now().UTC().Add(time.Hour)
 	if err := store.SaveJournal(postIntent); err != nil {
 		t.Fatal(err)
 	}
@@ -380,10 +393,10 @@ func TestLinuxCgroupReservationBlocksWorkspaceCleanupAndRequiresIndependentAbort
 	newReservation.PipeToken = strings.Repeat("3", authority.TokenBytes*2)
 	newReservation.JobID = strings.Repeat("4", authority.TokenBytes*2)
 	newReservation.LeafName = strings.Repeat("f", authority.TokenBytes*2)
-	if _, err := store.ReserveLinuxCgroup(postIntent.Key(), newReservation); err != nil {
+	if _, err := store.ReserveLinuxCgroup(postIntent.Key(), postIntent.Fence(), newReservation, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.MarkLinuxCgroupCreateStarted(postIntent.Key(), newReservation); err != nil {
+	if _, err := store.MarkLinuxCgroupCreateStarted(postIntent.Key(), postIntent.Fence(), newReservation, nil); err != nil {
 		t.Fatal(err)
 	}
 	newReservation = loadStateJournal(t, store, postIntent.Key()).ContainmentCgroup.Clone()
@@ -402,6 +415,7 @@ func TestLinuxCgroupReservationBlocksWorkspaceCleanupAndRequiresIndependentAbort
 
 	t.Run("empty leaf rmdir after no-target proof", func(t *testing.T) {
 		removalJournal := stoppedTestJournal("linux-cgroup-v2-abort-empty-leaf", 1)
+		removalJournal.LeaseExpiresAt = time.Now().UTC().Add(time.Hour)
 		if err := store.SaveJournal(removalJournal); err != nil {
 			t.Fatal(err)
 		}
@@ -411,10 +425,10 @@ func TestLinuxCgroupReservationBlocksWorkspaceCleanupAndRequiresIndependentAbort
 		removalReservation.Secret = strings.Repeat("9", authority.SecretBytes*2)
 		removalReservation.PipeToken = strings.Repeat("a", authority.TokenBytes*2)
 		removalReservation.JobID = strings.Repeat("b", authority.TokenBytes*2)
-		if _, err := store.ReserveLinuxCgroup(removalJournal.Key(), removalReservation); err != nil {
+		if _, err := store.ReserveLinuxCgroup(removalJournal.Key(), removalJournal.Fence(), removalReservation, nil); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := store.MarkLinuxCgroupCreateStarted(removalJournal.Key(), removalReservation); err != nil {
+		if _, err := store.MarkLinuxCgroupCreateStarted(removalJournal.Key(), removalJournal.Fence(), removalReservation, nil); err != nil {
 			t.Fatal(err)
 		}
 		removalReservation = loadStateJournal(t, store, removalJournal.Key()).ContainmentCgroup.Clone()
@@ -459,6 +473,610 @@ func TestLinuxCgroupReservationBlocksWorkspaceCleanupAndRequiresIndependentAbort
 			t.Fatalf("unknown rmdir no-target abort did not persist exact absence proof: %#v", aborted)
 		}
 	})
+}
+
+func TestLinuxV2AdmissionRejectsTerminalUnremovedAndUnprovenForeignOwners(t *testing.T) {
+	requireLinuxCloneAMD64(t)
+	for _, scenario := range []string{"terminal-empty-pid-unremoved-leaf", "migration-unproven"} {
+		t.Run(scenario, func(t *testing.T) {
+			store := mustStore(t)
+			target, targetIntent := newLinuxCloneJournal(t, "admission-target-"+scenario)
+			target.LeaseExpiresAt = time.Now().UTC().Add(time.Hour)
+			foreign := stoppedTestJournal("admission-foreign-"+scenario, 1)
+			foreign.LeaseExpiresAt = time.Now().UTC().Add(time.Hour)
+			if err := store.SaveJournal(foreign); err != nil {
+				t.Fatal(err)
+			}
+			foreignReservation := reserveStateLinuxV2AdmissionLeaf(t, store, foreign, strings.Repeat("e", authority.TokenBytes*2))
+			if foreignReservation.LeafIdentity == nil {
+				t.Fatal("foreign fixture lacks a still-bound cgroup leaf")
+			}
+			switch scenario {
+			case "terminal-empty-pid-unremoved-leaf":
+				if _, err := store.mutateJournal(foreign.Key(), func(journal *RunJournal) error {
+					journal.LocalState = "cleanup_pending"
+					journal.TerminalPendingAt = time.Now().UTC().Add(-time.Minute)
+					journal.TerminalState = "failed"
+					journal.TerminalVerdict = TerminalVerdictOwnershipLost
+					journal.TerminalResolvedAt = time.Now().UTC()
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			case "migration-unproven":
+				if _, err := store.mutateJournal(foreign.Key(), func(journal *RunJournal) error {
+					journal.ContainmentUnproven = true
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			loadedForeign := loadStateJournal(t, store, foreign.Key())
+			if loadedForeign.PID != 0 || loadedForeign.ContainmentCgroup == nil || loadedForeign.ContainmentCgroup.LeafIdentity == nil ||
+				loadedForeign.ContainmentCgroupReleaseProof != nil {
+				t.Fatalf("foreign unresolved leaf fixture = %#v", loadedForeign)
+			}
+
+			foreignBefore := readStateJournalBytes(t, store, foreign.Key())
+			now := time.Now().UTC()
+			if err := store.CheckLinuxV2NativeAdmissionBeforeClaim(now, nil); err == nil {
+				t.Fatal("preclaim dispatch admitted a new native assignment with an unresolved foreign v2 leaf")
+			}
+			if err := store.SaveJournal(target); err != nil {
+				t.Fatal(err)
+			}
+			targetBefore := readStateJournalBytes(t, store, target.Key())
+			if err := store.CheckLinuxV2NativeAdmission(target.Key(), target.Fence(), now, nil); err == nil {
+				t.Fatal("native admission accepted an unresolved foreign v2 leaf")
+			}
+			if _, err := store.ReserveLinuxCloneIntent(target.Key(), target.Fence(), targetIntent, nil); err == nil {
+				t.Fatal("clone-intent CAS admitted A seed effects beside an unresolved foreign v2 owner")
+			}
+			targetReservation := testStateLinuxCgroupV2Reservation()
+			targetReservation.LeafName = strings.Repeat("f", authority.TokenBytes*2)
+			if _, err := store.ReserveLinuxCgroup(target.Key(), target.Fence(), targetReservation, nil); err == nil {
+				t.Fatal("cgroup reservation CAS admitted a fresh native owner beside an unresolved foreign v2 leaf")
+			}
+			if after := readStateJournalBytes(t, store, target.Key()); !bytes.Equal(targetBefore, after) {
+				t.Fatal("rejected Linux v2 admission changed the target RunJournal")
+			}
+			if after := readStateJournalBytes(t, store, foreign.Key()); !bytes.Equal(foreignBefore, after) {
+				t.Fatal("rejected Linux v2 admission changed the foreign RunJournal")
+			}
+		})
+	}
+}
+
+func TestLinuxV2AdmissionFailsClosedOnCorruptForeignJournal(t *testing.T) {
+	requireLinuxCloneAMD64(t)
+	store := mustStore(t)
+	target, intent := newLinuxCloneJournal(t, "admission-corrupt-target")
+	if err := store.SaveJournal(target); err != nil {
+		t.Fatal(err)
+	}
+	foreign := stoppedTestJournal("admission-corrupt-foreign", 1)
+	if err := store.SaveJournal(foreign); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.journalPath(foreign.Key()), []byte(`{"run_id":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	targetBefore := readStateJournalBytes(t, store, target.Key())
+	if err := store.CheckLinuxV2NativeAdmissionBeforeClaim(time.Now().UTC(), nil); err == nil {
+		t.Fatal("preclaim State admission ignored a corrupt foreign RunJournal")
+	}
+	if _, err := store.ReserveLinuxCloneIntent(target.Key(), target.Fence(), intent, nil); err == nil {
+		t.Fatal("clone-intent State CAS proceeded with a corrupt foreign RunJournal")
+	}
+	if after := readStateJournalBytes(t, store, target.Key()); !bytes.Equal(targetBefore, after) {
+		t.Fatal("corrupt foreign-journal refusal changed the target RunJournal")
+	}
+}
+
+func TestLinuxV2AdmissionRequiresLegacyReleaseEvidence(t *testing.T) {
+	requireLinuxCloneAMD64(t)
+	for _, scenario := range []string{"claiming-without-grant", "running-before-process-registration"} {
+		t.Run(scenario, func(t *testing.T) {
+			store := mustStore(t)
+			foreign := stoppedTestJournal("admission-legacy-"+scenario, 1)
+			foreign.LeaseExpiresAt = time.Now().UTC().Add(time.Hour)
+			if scenario == "claiming-without-grant" {
+				foreign.LocalState = "claiming"
+				foreign.LeaseToken = ""
+				foreign.LeaseExpiresAt = time.Time{}
+				foreign.WorkspacePath = ""
+			}
+			if err := store.SaveJournal(foreign); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.CheckLinuxV2NativeAdmissionBeforeClaim(time.Now().UTC(), nil); err == nil {
+				t.Fatal("legacy row without a durable no-launch/release proof was admitted")
+			}
+		})
+	}
+
+	t.Run("bound v1 stop receipt only until normal clear and deletion", func(t *testing.T) {
+		store := mustStore(t)
+		foreign := testJournal("admission-v1-stop-receipt", 1)
+		foreign.LeaseExpiresAt = time.Now().UTC().Add(time.Hour)
+		if err := store.SaveJournal(foreign); err != nil {
+			t.Fatal(err)
+		}
+		owner := testContainmentAuthority(foreign.PID, foreign.ProcessIdentity)
+		if _, err := store.SetContainmentAuthority(foreign.Key(), foreign.PID, foreign.ProcessIdentity, owner); err != nil {
+			t.Fatal(err)
+		}
+		receipt := authority.StopReceipt{
+			Version: authority.SupervisorVersion, Status: "stopped", TargetPID: owner.TargetPID,
+			TargetIdentity: owner.TargetIdentity, PipeToken: owner.PipeToken, JobID: owner.JobID,
+			SupervisorPID: owner.SupervisorPID, SupervisorIdentity: owner.SupervisorIdentity,
+		}
+		if _, err := store.RecordContainmentStopReceipt(foreign.Key(), foreign.PID, foreign.ProcessIdentity, receipt); err != nil {
+			t.Fatal(err)
+		}
+		terminalAt := time.Now().UTC()
+		if _, err := store.mutateJournal(foreign.Key(), func(journal *RunJournal) error {
+			journal.LocalState = "terminal_pending"
+			journal.TerminalPendingAt = terminalAt
+			journal.TerminalState = "failed"
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		boundReceiptBytes := readStateJournalBytes(t, store, foreign.Key())
+		if err := store.CheckLinuxV2NativeAdmissionBeforeClaim(time.Now().UTC(), nil); err != nil {
+			t.Fatalf("exact durable v1 stop receipt did not retire its legacy row before claim: %v", err)
+		}
+
+		target, _ := newLinuxCloneJournal(t, "admission-v1-stop-target")
+		target.LeaseExpiresAt = time.Now().UTC().Add(time.Hour)
+		if err := store.SaveJournal(target); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.CheckLinuxV2NativeAdmission(target.Key(), target.Fence(), time.Now().UTC(), nil); err != nil {
+			t.Fatalf("exact v1 stop receipt did not retire its bound legacy process: %v", err)
+		}
+		if after := readStateJournalBytes(t, store, foreign.Key()); !bytes.Equal(boundReceiptBytes, after) {
+			t.Fatal("native admission rewrote or upgraded the bound v1 stop receipt")
+		}
+		if _, err := store.ClearProcessDetails(foreign.Key(), foreign.PID, foreign.ProcessIdentity); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.CheckLinuxV2NativeAdmission(target.Key(), target.Fence(), time.Now().UTC(), nil); err == nil {
+			t.Fatal("cleared legacy row without retained stop evidence was treated as physically retired")
+		}
+		if err := store.DeleteJournal(foreign.Key()); err != nil {
+			t.Fatalf("delete normally cleaned v1 row after its stop proof was consumed: %v", err)
+		}
+		if err := store.CheckLinuxV2NativeAdmission(target.Key(), target.Fence(), time.Now().UTC(), nil); err != nil {
+			t.Fatalf("deleted legacy row continued to block native admission: %v", err)
+		}
+	})
+}
+
+func TestLinuxV2AdmissionAllowsLiveFencedAndPhysicallyReleasedOwners(t *testing.T) {
+	requireLinuxCloneAMD64(t)
+	t.Run("healthy active helper requires exact App liveness fence", func(t *testing.T) {
+		store := mustStore(t)
+		target, targetIntent := newLinuxCloneJournal(t, "admission-live-target")
+		target.LeaseExpiresAt = time.Now().UTC().Add(3 * time.Hour)
+		foreign := stoppedTestJournal("admission-live-foreign", 1)
+		foreign.LeaseExpiresAt = time.Now().UTC().Add(time.Hour)
+		if err := store.SaveJournal(foreign); err != nil {
+			t.Fatal(err)
+		}
+		handoff, reservation := bindStateLinuxCgroupV2Handoff(t, store, foreign.Key())
+		if _, err := store.CommitSupervisorHandoff(foreign.Key(), handoff, reservation.Gate.ObservedAt); err != nil {
+			t.Fatal(err)
+		}
+		foreignFence := foreign.Fence()
+		liveOwners := map[RunKey]protocol.Fence{foreign.Key(): foreignFence}
+		now := time.Now().UTC()
+		collision := stoppedTestJournal("admission-leaf-collision", 1)
+		collision.LeaseExpiresAt = time.Now().UTC().Add(time.Hour)
+		if err := store.SaveJournal(collision); err != nil {
+			t.Fatal(err)
+		}
+		collisionReservation := testStateLinuxCgroupV2Reservation()
+		collisionReservation.LeafName = reservation.LeafName
+		if _, err := store.ReserveLinuxCgroup(collision.Key(), collision.Fence(), collisionReservation, liveOwners); err == nil {
+			t.Fatal("healthy foreign admission bypassed exact cgroup leaf-name uniqueness")
+		}
+		if err := store.DeleteJournal(collision.Key()); err != nil {
+			t.Fatalf("remove unreserved collision-test target: %v", err)
+		}
+		if err := store.CheckLinuxV2NativeAdmissionBeforeClaim(now, nil); err == nil {
+			t.Fatal("preclaim dispatch treated a durable lease/Authority as proof of a live helper")
+		}
+		if err := store.CheckLinuxV2NativeAdmissionBeforeClaim(now, liveOwners); err != nil {
+			t.Fatalf("preclaim dispatch rejected an exact active helper snapshot: %v", err)
+		}
+		if err := store.SaveJournal(target); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.CheckLinuxV2NativeAdmission(target.Key(), target.Fence(), now, nil); err == nil {
+			t.Fatal("native admission treated a durable lease/Authority as proof of a live helper")
+		}
+		wrongLiveOwners := map[RunKey]protocol.Fence{foreign.Key(): foreignFence}
+		wrongFence := foreignFence
+		wrongFence.LeaseToken += "-stale"
+		wrongLiveOwners[foreign.Key()] = wrongFence
+		if err := store.CheckLinuxV2NativeAdmission(target.Key(), target.Fence(), now, wrongLiveOwners); err == nil {
+			t.Fatal("native admission accepted an App liveness snapshot with a stale full fence")
+		}
+		if err := store.CheckLinuxV2NativeAdmission(target.Key(), target.Fence(), now, liveOwners); err != nil {
+			t.Fatalf("exact active helper and fence did not permit unrelated native admission: %v", err)
+		}
+		expiredSnapshotTime := foreign.LeaseExpiresAt.Add(time.Second)
+		if err := store.CheckLinuxV2NativeAdmission(target.Key(), target.Fence(), expiredSnapshotTime, liveOwners); err == nil {
+			t.Fatal("foreign owner with an expired lease remained admissible under its previously live fence")
+		}
+		if _, err := store.ReserveLinuxCloneIntent(target.Key(), target.Fence(), targetIntent, liveOwners); err != nil {
+			t.Fatalf("exact live-owner snapshot did not pass clone-intent CAS: %v", err)
+		}
+		targetReservation := testStateLinuxCgroupV2Reservation()
+		targetReservation.LeafName = strings.Repeat("f", authority.TokenBytes*2)
+		staleTargetFence := target.Fence()
+		staleTargetFence.LeaseToken += "-stale"
+		if err := store.CheckLinuxV2NativeAdmission(target.Key(), staleTargetFence, now, liveOwners); err == nil {
+			t.Fatal("post-claim admission accepted a stale target fence")
+		}
+		if _, err := store.ReserveLinuxCgroup(target.Key(), staleTargetFence, targetReservation, liveOwners); err == nil {
+			t.Fatal("cgroup reservation CAS accepted a stale target fence")
+		}
+		before := readStateJournalBytes(t, store, target.Key())
+		terminalAt := time.Now().UTC()
+		if _, err := store.mutateJournal(foreign.Key(), func(journal *RunJournal) error {
+			journal.LocalState = "terminal_pending"
+			journal.TerminalPendingAt = terminalAt
+			journal.TerminalState = "failed"
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.CheckLinuxV2NativeAdmission(target.Key(), target.Fence(), time.Now().UTC(), liveOwners); err == nil {
+			t.Fatal("foreign owner becoming terminal remained admissible")
+		}
+		if _, err := store.ReserveLinuxCloneIntent(target.Key(), target.Fence(), targetIntent, liveOwners); err == nil {
+			t.Fatal("clone-intent CAS replay crossed a foreign terminal transition")
+		}
+		blockedReservation := testStateLinuxCgroupV2Reservation()
+		blockedReservation.LeafName = strings.Repeat("c", authority.TokenBytes*2)
+		if _, err := store.ReserveLinuxCgroup(target.Key(), target.Fence(), blockedReservation, liveOwners); err == nil {
+			t.Fatal("Reserve CAS crossed a foreign terminal transition")
+		}
+		after := readStateJournalBytes(t, store, target.Key())
+		if !bytes.Equal(before, after) || loadStateJournal(t, store, target.Key()).ContainmentCgroup != nil {
+			t.Fatal("rejected terminal-owner admission CAS mutated the target journal")
+		}
+		if _, err := store.mutateJournal(foreign.Key(), func(journal *RunJournal) error {
+			journal.LocalState = "running"
+			journal.TerminalPendingAt = time.Time{}
+			journal.TerminalState = ""
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		targetReservation = testStateLinuxCgroupV2Reservation()
+		targetReservation.LeafName = strings.Repeat("f", authority.TokenBytes*2)
+		if _, err := store.ReserveLinuxCgroup(target.Key(), target.Fence(), targetReservation, liveOwners); err != nil {
+			t.Fatalf("exact live-owner snapshot did not pass cgroup reservation CAS: %v", err)
+		}
+		targetReservation = loadStateJournal(t, store, target.Key()).ContainmentCgroup.Clone()
+		createExpected := targetReservation.Clone()
+		if _, err := store.MarkLinuxCgroupCreateStarted(target.Key(), staleTargetFence, createExpected, liveOwners); err == nil {
+			t.Fatal("CreateStarted CAS accepted a stale target fence")
+		}
+		before = readStateJournalBytes(t, store, target.Key())
+		if _, err := store.mutateJournal(foreign.Key(), func(journal *RunJournal) error {
+			journal.LocalState = "stopped"
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.CheckLinuxV2NativeAdmission(target.Key(), target.Fence(), time.Now().UTC(), liveOwners); err == nil {
+			t.Fatal("foreign stopped owner remained admissible")
+		}
+		if _, err := store.ReserveLinuxCloneIntent(target.Key(), target.Fence(), targetIntent, liveOwners); err == nil {
+			t.Fatal("clone-intent CAS replay crossed a foreign stopped owner")
+		}
+		if _, err := store.ReserveLinuxCgroup(target.Key(), target.Fence(), targetReservation, liveOwners); err == nil {
+			t.Fatal("cgroup reservation replay crossed a foreign stopped owner")
+		}
+		if _, err := store.MarkLinuxCgroupCreateStarted(target.Key(), target.Fence(), createExpected, liveOwners); err == nil {
+			t.Fatal("CreateStarted CAS crossed a foreign stopped owner")
+		}
+		after = readStateJournalBytes(t, store, target.Key())
+		if !bytes.Equal(before, after) || loadStateJournal(t, store, target.Key()).ContainmentCgroup.CreateStarted {
+			t.Fatal("rejected stopped-owner admission CAS mutated the target journal")
+		}
+		if _, err := store.mutateJournal(foreign.Key(), func(journal *RunJournal) error {
+			journal.LocalState = "running"
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.MarkLinuxCgroupCreateStarted(target.Key(), target.Fence(), createExpected, liveOwners); err != nil {
+			t.Fatalf("exact live-owner snapshot did not pass CreateStarted CAS: %v", err)
+		}
+		targetReservation = loadStateJournal(t, store, target.Key()).ContainmentCgroup.Clone()
+		if _, err := store.BindLinuxCgroupLeaf(target.Key(), targetReservation, testStateLinuxCgroupV2Leaf(targetReservation)); err != nil {
+			t.Fatal(err)
+		}
+		targetReservation = loadStateJournal(t, store, target.Key()).ContainmentCgroup.Clone()
+		helper := testStateLinuxCgroupV2Helper()
+		if _, err := store.BindLinuxCgroupHelper(target.Key(), targetReservation, helper); err != nil {
+			t.Fatal(err)
+		}
+		targetReservation = loadStateJournal(t, store, target.Key()).ContainmentCgroup.Clone()
+		launcher := testStateLinuxCgroupV2Launcher()
+		if _, err := store.BindLinuxCgroupLauncher(target.Key(), targetReservation, launcher); err != nil {
+			t.Fatal(err)
+		}
+		targetReservation = loadStateJournal(t, store, target.Key()).ContainmentCgroup.Clone()
+		before = readStateJournalBytes(t, store, target.Key())
+		if _, err := store.mutateJournal(foreign.Key(), func(journal *RunJournal) error {
+			journal.ContainmentUnproven = true
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.CheckLinuxV2NativeAdmission(target.Key(), target.Fence(), time.Now().UTC(), liveOwners); err == nil {
+			t.Fatal("foreign owner becoming migration-unproven remained admissible")
+		}
+		if _, err := store.ArmLinuxCgroupLauncherGrant(target.Key(), target.Fence(), targetReservation, liveOwners); err == nil {
+			t.Fatal("launcher grant CAS crossed a foreign unproven state before RELEASE")
+		}
+		after = readStateJournalBytes(t, store, target.Key())
+		if !bytes.Equal(before, after) || loadStateJournal(t, store, target.Key()).ContainmentCgroup.LauncherGrantPossible {
+			t.Fatal("rejected unproven-owner admission CAS mutated the target journal")
+		}
+	})
+
+	for _, terminalState := range []string{"failed", "cancelled"} {
+		t.Run("retained released "+terminalState, func(t *testing.T) {
+			store := mustStore(t)
+			target := stoppedTestJournal("admission-released-target-"+terminalState, 1)
+			target.LeaseExpiresAt = time.Now().UTC().Add(time.Hour)
+			foreign, intent := newLinuxCloneJournal(t, "admission-released-retained-"+terminalState)
+			foreign.LeaseExpiresAt = time.Now().UTC().Add(time.Hour)
+			seed := authority.LinuxCloneSeedReceipt{
+				Version: authority.LinuxCloneVersion, BaseCommit: intent.BaseCommit,
+				Digest: "sha256:" + strings.Repeat("a", 64), Size: 1024, Device: 7, Inode: 11,
+			}
+			checkout := authority.LinuxCloneCheckoutReceipt{
+				Version: authority.LinuxCloneVersion, RunID: intent.RunID, Generation: intent.Generation,
+				BindingKey: intent.BindingKey, ResourceID: intent.ResourceID, Target: intent.Target, Nonce: intent.Nonce,
+				SeedDigest: seed.Digest, BaseCommit: intent.BaseCommit, TargetDevice: 168, TargetInode: 210,
+			}
+			foreign.LinuxCloneIntent = &intent
+			foreign.LinuxCloneSeedReceipt = &seed
+			foreign.LinuxCloneCheckoutReceipt = &checkout
+			foreign.WorkspacePath = intent.Target
+			foreign.WorkspaceRecoveryRequired = true
+			foreign.RetainWorkspace = true
+			encoded, err := json.Marshal(foreign)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(store.journalPath(foreign.Key()), encoded, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			releaseProof := testStateLinuxCgroupV2ReleaseProofFixture(t)
+			terminalAt := time.Now().UTC()
+			if _, err := store.mutateJournal(foreign.Key(), func(journal *RunJournal) error {
+				journal.ContainmentCgroupReleaseProof = &releaseProof
+				journal.LocalState = "cleanup_pending"
+				journal.TerminalPendingAt = terminalAt.Add(-time.Minute)
+				journal.TerminalState = terminalState
+				journal.TerminalVerdict = TerminalVerdictOwnershipLost
+				journal.TerminalResolvedAt = terminalAt
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			foreignBefore := readStateJournalBytes(t, store, foreign.Key())
+			if err := store.CheckLinuxV2NativeAdmissionBeforeClaim(time.Now().UTC(), nil); err != nil {
+				t.Fatalf("preclaim dispatch rejected an exact physically released retained row: %v", err)
+			}
+			if err := store.SaveJournal(target); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.CheckLinuxV2NativeAdmission(target.Key(), target.Fence(), time.Now().UTC(), nil); err != nil {
+				t.Fatalf("exact physical release failed to admit unrelated run with retained artifacts: %v", err)
+			}
+			reservation := testStateLinuxCgroupV2Reservation()
+			reservation.LeafName = strings.Repeat("f", authority.TokenBytes*2)
+			if _, err := store.ReserveLinuxCgroup(target.Key(), target.Fence(), reservation, nil); err != nil {
+				t.Fatalf("reservation blocked by physically released retained row: %v", err)
+			}
+			if after := readStateJournalBytes(t, store, foreign.Key()); !bytes.Equal(foreignBefore, after) {
+				t.Fatal("admitting an unrelated run mutated the retained physically released journal")
+			}
+		})
+	}
+}
+
+func TestLinuxV2TargetAdmissionRejectsUnsafeLifecycleAtEveryEffectCAS(t *testing.T) {
+	requireLinuxCloneAMD64(t)
+	stages := []string{"clone-intent", "cgroup-reserve", "create-start", "launcher-grant", "promotion-intent"}
+	lifecycle := []string{"expired", "stale", "terminal", "cancelled", "cancelling", "uncertain"}
+	for _, stage := range stages {
+		for _, state := range lifecycle {
+			t.Run(stage+"/"+state, func(t *testing.T) {
+				store := mustStore(t)
+				key, fence, intent, reservation := setupLinuxV2AdmissionStage(t, store, stage+"-"+state, stage)
+				if state == "cancelled" {
+					_, err := store.QueueTerminalTransition(key, protocol.StateTransitionRequest{
+						Fence: fence, TransitionID: "cancel-" + stage + "-" + state,
+						State: "cancelled", Payload: json.RawMessage(`{}`),
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+				} else if _, err := store.mutateJournal(key, func(journal *RunJournal) error {
+					switch state {
+					case "expired":
+						journal.LeaseExpiresAt = time.Now().UTC().Add(-time.Second)
+					case "stale":
+						journal.LocalState = "stale"
+					case "terminal":
+						journal.LocalState = "terminal_pending"
+						journal.TerminalPendingAt = time.Now().UTC()
+						journal.TerminalState = "failed"
+					case "cancelling":
+						journal.LocalState = "cancelling"
+					case "uncertain":
+						journal.NativeUsageRecoveryRequired = true
+					}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				before := readStateJournalBytes(t, store, key)
+				var err error
+				switch stage {
+				case "clone-intent":
+					_, err = store.ReserveLinuxCloneIntent(key, fence, intent, nil)
+				case "cgroup-reserve":
+					_, err = store.ReserveLinuxCgroup(key, fence, reservation, nil)
+				case "create-start":
+					_, err = store.MarkLinuxCgroupCreateStarted(key, fence, reservation, nil)
+				case "launcher-grant":
+					_, err = store.ArmLinuxCgroupLauncherGrant(key, fence, reservation, nil)
+				case "promotion-intent":
+					candidate := authority.LinuxClonePromotionIntent{
+						Version: authority.LinuxCloneVersion, ResourceID: intent.ResourceID,
+						Commit: strings.Repeat("e", 40), TreeDigest: "sha256:" + strings.Repeat("f", 64),
+					}
+					_, err = store.ReserveLinuxClonePromotion(key, fence, intent, candidate)
+				}
+				if err == nil {
+					t.Fatalf("%s CAS admitted target with %s lifecycle", stage, state)
+				}
+				if after := readStateJournalBytes(t, store, key); !bytes.Equal(before, after) {
+					t.Fatalf("rejected %s CAS mutated the target journal for %s lifecycle", stage, state)
+				}
+			})
+		}
+	}
+}
+
+func setupLinuxV2AdmissionStage(t *testing.T, store *Store, runID, stage string) (RunKey, protocol.Fence, authority.LinuxCloneIntent, LinuxCgroupReservation) {
+	t.Helper()
+	target, intent := newLinuxCloneJournal(t, "admission-target-"+runID)
+	target.LeaseExpiresAt = time.Now().UTC().Add(time.Hour)
+	if err := store.SaveJournal(target); err != nil {
+		t.Fatal(err)
+	}
+	if stage != "clone-intent" {
+		if _, err := store.ReserveLinuxCloneIntent(target.Key(), target.Fence(), intent, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if stage == "promotion-intent" {
+		seed := authority.LinuxCloneSeedReceipt{
+			Version: authority.LinuxCloneVersion, BaseCommit: intent.BaseCommit,
+			Digest: "sha256:" + strings.Repeat("a", 64), Size: 1024, Device: 7, Inode: 11,
+		}
+		if _, err := store.BindLinuxCloneSeed(target.Key(), target.Fence(), intent, seed); err != nil {
+			t.Fatal(err)
+		}
+		handoff, reservation := bindStateLinuxCgroupV2Handoff(t, store, target.Key())
+		if _, err := store.CommitSupervisorHandoff(target.Key(), handoff, reservation.Gate.ObservedAt); err != nil {
+			t.Fatal(err)
+		}
+		checkout := authority.LinuxCloneCheckoutReceipt{
+			Version: authority.LinuxCloneVersion, RunID: intent.RunID, Generation: intent.Generation,
+			BindingKey: intent.BindingKey, ResourceID: intent.ResourceID, Target: intent.Target,
+			Nonce: intent.Nonce, SeedDigest: seed.Digest, BaseCommit: intent.BaseCommit,
+			TargetDevice: 17, TargetInode: 23,
+		}
+		if _, err := store.RecordLinuxCloneCheckoutReady(target.Key(), target.Fence(), intent, checkout); err != nil {
+			t.Fatal(err)
+		}
+		journal := loadStateJournal(t, store, target.Key())
+		stopReceipt := testStateLinuxCgroupV2Receipt(*journal.ContainmentAuthority, authority.LinuxCgroupStopProofHelper, nil)
+		if _, err := store.RecordContainmentStopReceipt(target.Key(), journal.PID, journal.ProcessIdentity, stopReceipt); err != nil {
+			t.Fatal(err)
+		}
+		reservation = loadStateJournal(t, store, target.Key()).ContainmentCgroup.Clone()
+		return target.Key(), target.Fence(), intent, reservation
+	}
+	reservation := testStateLinuxCgroupV2Reservation()
+	reservation.LeafName = strings.Repeat("f", authority.TokenBytes*2)
+	if stage == "create-start" || stage == "launcher-grant" {
+		if _, err := store.ReserveLinuxCgroup(target.Key(), target.Fence(), reservation, nil); err != nil {
+			t.Fatal(err)
+		}
+		reservation = loadStateJournal(t, store, target.Key()).ContainmentCgroup.Clone()
+	}
+	if stage == "launcher-grant" {
+		if _, err := store.MarkLinuxCgroupCreateStarted(target.Key(), target.Fence(), reservation, nil); err != nil {
+			t.Fatal(err)
+		}
+		reservation = loadStateJournal(t, store, target.Key()).ContainmentCgroup.Clone()
+		if _, err := store.BindLinuxCgroupLeaf(target.Key(), reservation, testStateLinuxCgroupV2Leaf(reservation)); err != nil {
+			t.Fatal(err)
+		}
+		reservation = loadStateJournal(t, store, target.Key()).ContainmentCgroup.Clone()
+		if _, err := store.BindLinuxCgroupHelper(target.Key(), reservation, testStateLinuxCgroupV2Helper()); err != nil {
+			t.Fatal(err)
+		}
+		reservation = loadStateJournal(t, store, target.Key()).ContainmentCgroup.Clone()
+		if _, err := store.BindLinuxCgroupLauncher(target.Key(), reservation, testStateLinuxCgroupV2Launcher()); err != nil {
+			t.Fatal(err)
+		}
+		reservation = loadStateJournal(t, store, target.Key()).ContainmentCgroup.Clone()
+	}
+	return target.Key(), target.Fence(), intent, reservation
+}
+
+func reserveStateLinuxV2AdmissionLeaf(t *testing.T, store *Store, journal RunJournal, leafName string) LinuxCgroupReservation {
+	t.Helper()
+	reservation := testStateLinuxCgroupV2Reservation()
+	reservation.LeafName = leafName
+	fence := journal.Fence()
+	if _, err := store.ReserveLinuxCgroup(journal.Key(), fence, reservation, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkLinuxCgroupCreateStarted(journal.Key(), fence, reservation, nil); err != nil {
+		t.Fatal(err)
+	}
+	reservation = loadStateJournal(t, store, journal.Key()).ContainmentCgroup.Clone()
+	if _, err := store.BindLinuxCgroupLeaf(journal.Key(), reservation, testStateLinuxCgroupV2Leaf(reservation)); err != nil {
+		t.Fatal(err)
+	}
+	return loadStateJournal(t, store, journal.Key()).ContainmentCgroup.Clone()
+}
+
+func testStateLinuxCgroupV2ReleaseProofFixture(t *testing.T) authority.SupervisorHandoffReleaseProof {
+	t.Helper()
+	reservation := testStateLinuxCgroupV2ReadyReservation()
+	handoff := testStateLinuxCgroupV2Handoff(reservation)
+	handoff.SupervisorPID = reservation.Helper.PID
+	handoff.SupervisorIdentity = reservation.Helper.Identity
+	mirror := *reservation.Mirror
+	handoff.Mirror = &mirror
+	owner, err := handoff.ToSupervisor()
+	if err != nil {
+		t.Fatalf("v2 release owner fixture: %v", err)
+	}
+	receipt := testStateLinuxCgroupV2Receipt(owner, authority.LinuxCgroupStopProofHelper, nil)
+	proof := testStateLinuxCgroupV2ReleaseDTO(handoff, receipt)
+	if err := proof.Validate(); err != nil {
+		t.Fatalf("v2 release proof fixture: %v", err)
+	}
+	return proof
+}
+
+func readStateJournalBytes(t *testing.T, store *Store, key RunKey) []byte {
+	t.Helper()
+	data, err := os.ReadFile(store.journalPath(key))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 func TestV1LinuxGroupReceiptAndScansCannotAuthorizeV2CgroupState(t *testing.T) {
@@ -537,11 +1155,12 @@ func replayUnknownStateMutation(t *testing.T, store *Store, mutate func() error)
 
 func bindStateLinuxCgroupV2Handoff(t *testing.T, store *Store, key RunKey) (authority.SupervisorHandoff, LinuxCgroupReservation) {
 	t.Helper()
+	fence := loadStateJournal(t, store, key).Fence()
 	reservation := testStateLinuxCgroupV2Reservation()
-	if _, err := store.ReserveLinuxCgroup(key, reservation); err != nil {
+	if _, err := store.ReserveLinuxCgroup(key, fence, reservation, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.MarkLinuxCgroupCreateStarted(key, reservation); err != nil {
+	if _, err := store.MarkLinuxCgroupCreateStarted(key, fence, reservation, nil); err != nil {
 		t.Fatal(err)
 	}
 	reservation = loadStateJournal(t, store, key).ContainmentCgroup.Clone()
@@ -559,7 +1178,7 @@ func bindStateLinuxCgroupV2Handoff(t *testing.T, store *Store, key RunKey) (auth
 		t.Fatal(err)
 	}
 	reservation = loadStateJournal(t, store, key).ContainmentCgroup.Clone()
-	if _, err := store.ArmLinuxCgroupLauncherGrant(key, reservation); err != nil {
+	if _, err := store.ArmLinuxCgroupLauncherGrant(key, fence, reservation, nil); err != nil {
 		t.Fatal(err)
 	}
 	reservation = loadStateJournal(t, store, key).ContainmentCgroup.Clone()
@@ -584,11 +1203,12 @@ func bindStateLinuxCgroupV2Handoff(t *testing.T, store *Store, key RunKey) (auth
 
 func bindStateLinuxCgroupV2PreGateReservation(t *testing.T, store *Store, key RunKey) LinuxCgroupReservation {
 	t.Helper()
+	fence := loadStateJournal(t, store, key).Fence()
 	reservation := testStateLinuxCgroupV2Reservation()
-	if _, err := store.ReserveLinuxCgroup(key, reservation); err != nil {
+	if _, err := store.ReserveLinuxCgroup(key, fence, reservation, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.MarkLinuxCgroupCreateStarted(key, reservation); err != nil {
+	if _, err := store.MarkLinuxCgroupCreateStarted(key, fence, reservation, nil); err != nil {
 		t.Fatal(err)
 	}
 	reservation = loadStateJournal(t, store, key).ContainmentCgroup.Clone()
@@ -606,7 +1226,7 @@ func bindStateLinuxCgroupV2PreGateReservation(t *testing.T, store *Store, key Ru
 		t.Fatal(err)
 	}
 	reservation = loadStateJournal(t, store, key).ContainmentCgroup.Clone()
-	if _, err := store.ArmLinuxCgroupLauncherGrant(key, reservation); err != nil {
+	if _, err := store.ArmLinuxCgroupLauncherGrant(key, fence, reservation, nil); err != nil {
 		t.Fatal(err)
 	}
 	reservation = loadStateJournal(t, store, key).ContainmentCgroup.Clone()

@@ -44,6 +44,19 @@ const (
 // a complete write.
 var ErrInputClosed = errors.New("process standard input is closed")
 
+// LinuxV2MutationAckLostError marks an App-owned journal mutation whose
+// durable effect/readback is known but whose acknowledgement was lost.
+// Execution must not replay that callback; recovery owns the next observation.
+type LinuxV2MutationAckLostError struct{}
+
+func (LinuxV2MutationAckLostError) Error() string {
+	return "Linux v2 journal mutation acknowledgement lost"
+}
+
+// ErrLinuxV2MutationAckLost is the typed response-loss sentinel recognized by
+// the execution mutation retry boundary.
+var ErrLinuxV2MutationAckLost error = LinuxV2MutationAckLostError{}
+
 var errContainmentMarkerPending = errors.New("process marker persistence is pending")
 
 // Stream identifies the source of an output event.
@@ -179,13 +192,38 @@ type LinuxV2JournalCallbacks struct {
 	// RecordLinuxClonePromotion durably records the exact promoted A-owned ref
 	// before containment clear or terminal settlement.
 	RecordLinuxClonePromotion func(authority.LinuxClonePromotionReceipt) error
+	// CheckNativeAdmission is App's pre-effect cross-RunKey admission check/CAS.
+	// It runs immediately before the helper's one-use gate RELEASE. The callback
+	// must bound live-owner Status reads and hold no Store or daemon mutex while
+	// calling execution.Process APIs.
+	CheckNativeAdmission func() error
 	// FinalizeNoCheckoutLinuxCloneAfterRetirement removes only an exact
 	// no-checkout clone after the corresponding no-producer cgroup-abort fence
 	// or pre-gate release and any required helper/anchor retirement.
 	FinalizeNoCheckoutLinuxCloneAfterRetirement func(context.Context, authority.LinuxCloneIntent,
 		*authority.LinuxCloneSeedReceipt, *authority.LinuxCgroupPreGateReleaseProof,
 		*authority.LinuxCgroupReservationAbortProof) error
+	// DropAckAfter is an optional trusted App test seam. It runs only after the
+	// exact helper accepted the named acknowledgement; production callers leave
+	// it nil. ownerEffectAlreadyAckedOnEntry is captured before the helper call,
+	// so a replay is distinguished by durable owner state rather than a counter.
+	// ErrLinuxV2MutationAckLost models a committed effect with a lost response
+	// and is never replayed by Runner.
+	DropAckAfter func(stage string, ownerEffectAlreadyAckedOnEntry bool) error
 }
+
+const (
+	LinuxV2AckStageHelperBound        = "helper_bound"
+	LinuxV2AckStageLauncherBound      = "launcher_bound"
+	LinuxV2AckStageGateBound          = "gate_bound"
+	LinuxV2AckStageHandoffPrepared    = "handoff_prepared"
+	LinuxV2AckStageHandoffCommitted   = "handoff_committed"
+	LinuxV2AckStageLeaseArmed         = "lease_armed"
+	LinuxV2AckStageCheckoutReady      = "checkout_ready"
+	LinuxV2AckStageStopReceiptDurable = "stop_receipt_durable"
+	LinuxV2AckStageNativeRelease      = "native_release"
+	LinuxV2AckStageJournalCleared     = "journal_cleared"
+)
 
 // LinuxCloneRunOutcome is Runner's independent observation of the B process
 // before App considers an A-owned promotion. It deliberately does not use the
@@ -281,6 +319,8 @@ type startedProcess struct {
 	identity                             string
 	peerMutex                            sync.Mutex
 	duplicateLinuxV2Peer                 func() (*LinuxV2Peer, error)
+	linuxV2WitnessDropStatus             func(context.Context) (LinuxV2WitnessDropStatus, error)
+	linuxV2LiveOwnerStatus               func(context.Context) (LinuxV2LiveOwnerStatus, error)
 	closeLinuxV2Containment              func() error
 	stopLinuxV2BeforeOutputDrain         func() error
 	deferLinuxV2FinalizeUntilOutputDrain bool
@@ -424,6 +464,40 @@ type LinuxV2Peer struct {
 	Identity      string
 	UserNamespace platform.LinuxUserNamespaceIdentity
 	PIDFD         *os.File
+}
+
+// LinuxV2WitnessDropStatus is a reduced, read-only helper observation bound to
+// the exact execution RunKey, claim fence, and helper identity. It carries no
+// helper control handle or stop/release authority.
+type LinuxV2WitnessDropStatus struct {
+	RunKey    state.RunKey
+	Fence     protocol.Fence
+	Helper    authority.LinuxCgroupProcessIdentity
+	Observed  bool
+	Operation string
+}
+
+// LinuxV2LiveOwnerStatus is a reduced, read-only view of one exact live v2
+// owner. It contains no PIDFD or helper control handle; Process verifies both
+// pinned process identities before returning the snapshot.
+type LinuxV2LiveOwnerStatus struct {
+	RunKey             state.RunKey
+	Fence              protocol.Fence
+	Helper             authority.LinuxCgroupProcessIdentity
+	Target             authority.LinuxCgroupProcessIdentity
+	HelperPIDFDLive    bool
+	TargetPIDFDLive    bool
+	LeaseSequence      uint64
+	LeaseLive          bool
+	OwnerLost          bool
+	CommitAcknowledged bool
+	StopRequested      bool
+	StopAttempted      bool
+	ReleaseAttempted   bool
+	ReleaseSucceeded   bool
+	ReleaseInFlight    bool
+	ReleaseUncertain   bool
+	Terminal           bool
 }
 
 func (peer *LinuxV2Peer) Close() error {
@@ -1432,6 +1506,66 @@ func (process *Process) DuplicateLinuxV2Peer() (*LinuxV2Peer, error) {
 	return peer, nil
 }
 
+// LinuxV2WitnessDropStatus reads the exact helper's authenticated test-witness
+// observation without exposing its Control client to App. A nil/legacy owner
+// or an unavailable/malformed helper status is an error, never an empty result.
+func (process *Process) LinuxV2WitnessDropStatus(ctx context.Context) (LinuxV2WitnessDropStatus, error) {
+	if ctx == nil {
+		return LinuxV2WitnessDropStatus{}, errors.New("Linux v2 witness status context is nil")
+	}
+	if process == nil || process.backend == nil {
+		return LinuxV2WitnessDropStatus{}, errors.ErrUnsupported
+	}
+	backend := process.backend
+	backend.peerMutex.Lock()
+	defer backend.peerMutex.Unlock()
+	if backend.linuxV2WitnessDropStatus == nil {
+		return LinuxV2WitnessDropStatus{}, errors.ErrUnsupported
+	}
+	status, err := backend.linuxV2WitnessDropStatus(ctx)
+	if err != nil {
+		return LinuxV2WitnessDropStatus{}, err
+	}
+	validOperation := status.Operation == "stop" || status.Operation == "ack-stop-receipt" || status.Operation == "launcher-ready"
+	if status.RunKey.RunID == "" || status.RunKey.Generation <= 0 || status.Fence.Generation != status.RunKey.Generation ||
+		status.Helper.Validate() != nil || status.Observed && !validOperation || !status.Observed && status.Operation != "" {
+		return LinuxV2WitnessDropStatus{}, errors.New("Linux v2 helper witness status is incomplete or ambiguous")
+	}
+	return status, nil
+}
+
+// LinuxV2LiveOwnerStatus obtains a fresh authenticated helper Status snapshot
+// for this process's exact Linux v2 run. The result contains only identities
+// and liveness/lease facts; no PIDFD or helper control handle escapes.
+func (process *Process) LinuxV2LiveOwnerStatus(ctx context.Context) (LinuxV2LiveOwnerStatus, error) {
+	if ctx == nil {
+		return LinuxV2LiveOwnerStatus{}, errors.New("Linux v2 live-owner status context is nil")
+	}
+	if process == nil || process.backend == nil {
+		return LinuxV2LiveOwnerStatus{}, errors.ErrUnsupported
+	}
+	backend := process.backend
+	// Do not acquire peerMutex here: its Mutex.Lock is not context-aware. The
+	// owner callback duplicates its own PIDFD under the owner lock and bounds
+	// the authenticated Status request with ctx.
+	if backend.linuxV2LiveOwnerStatus == nil {
+		return LinuxV2LiveOwnerStatus{}, errors.ErrUnsupported
+	}
+	status, err := backend.linuxV2LiveOwnerStatus(ctx)
+	if err != nil {
+		return LinuxV2LiveOwnerStatus{}, err
+	}
+	if status.RunKey.RunID == "" || status.RunKey.Generation <= 0 || status.Fence.Generation != status.RunKey.Generation ||
+		status.Helper.Validate() != nil || status.Target.Validate() != nil {
+		return LinuxV2LiveOwnerStatus{}, errors.New("Linux v2 live-owner Status lacks exact run/fence process identity")
+	}
+	pid, identity := process.ProcessDetails()
+	if status.Target.PID != pid || status.Target.Identity != identity {
+		return LinuxV2LiveOwnerStatus{}, errors.New("Linux v2 live-owner target differs from the Process identity")
+	}
+	return status, nil
+}
+
 // LeaseRenewalAvailable reports whether the process has an independent local
 // containment watchdog. Unsupported and legacy containment remains usable
 // without this optional capability.
@@ -1468,24 +1602,22 @@ func (process *Process) Terminate(ctx context.Context, grace time.Duration) erro
 		if process.cloneFinalizationStarted {
 			done := process.cloneFinalizationDone
 			process.terminationMutex.Unlock()
-			if done == nil {
-				return errors.New("Linux v2 clone finalizer has no completion signal")
-			}
-			select {
-			case <-done:
-				process.errorMutex.Lock()
-				containmentError := process.containmentError
-				process.errorMutex.Unlock()
-				process.terminationMutex.Lock()
-				terminationError := process.terminationError
-				process.terminationMutex.Unlock()
-				return errors.Join(containmentError, terminationError)
-			case <-ctx.Done():
-				return ctx.Err()
-			}
+			return process.waitForCloneFinalization(ctx, done)
 		}
 		select {
 		case <-process.resultDone:
+			if process.backend != nil && process.backend.deferLinuxV2FinalizeUntilOutputDrain && process.backend.closeLinuxV2Containment != nil {
+				// An unproven early stop publishes the process result before any
+				// release attempt. Run that exact-owner retry asynchronously so this
+				// caller's context still bounds Terminate while the owner remains
+				// available for recovery.
+				done := make(chan struct{})
+				process.cloneFinalizationStarted = true
+				process.cloneFinalizationDone = done
+				process.terminationMutex.Unlock()
+				go func() { _ = process.closeContainmentAttempt(done) }()
+				return process.waitForCloneFinalization(ctx, done)
+			}
 			process.terminationMutex.Unlock()
 			return process.closeContainment()
 		default:
@@ -1515,6 +1647,24 @@ func (process *Process) Terminate(ctx context.Context, grace time.Duration) erro
 		terminationError := process.terminationError
 		process.terminationMutex.Unlock()
 		return errors.Join(terminationError, process.containmentFailure())
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (process *Process) waitForCloneFinalization(ctx context.Context, done <-chan struct{}) error {
+	if done == nil {
+		return errors.New("Linux v2 clone finalizer has no completion signal")
+	}
+	select {
+	case <-done:
+		process.errorMutex.Lock()
+		containmentError := process.containmentError
+		process.errorMutex.Unlock()
+		process.terminationMutex.Lock()
+		terminationError := process.terminationError
+		process.terminationMutex.Unlock()
+		return errors.Join(containmentError, terminationError)
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -1909,12 +2059,25 @@ func isUnsupportedOnly(err error) bool {
 }
 
 func (process *Process) closeContainment() error {
+	return process.closeContainmentAttempt(nil)
+}
+
+func (process *Process) closeContainmentAttempt(expectedCloneFinalization <-chan struct{}) error {
 	if process == nil {
 		return nil
 	}
 	if process.backend != nil && process.backend.closeLinuxV2Containment != nil {
 		process.containmentFinalizeMutex.Lock()
 		defer process.containmentFinalizeMutex.Unlock()
+		if expectedCloneFinalization != nil {
+			// A concurrent FinalizeContainment call may have consumed the
+			// reserved attempt while this goroutine waited for the finalizer lock.
+			select {
+			case <-expectedCloneFinalization:
+				return process.containmentFinalizeError()
+			default:
+			}
+		}
 		if process.backend.deferLinuxV2FinalizeUntilOutputDrain && process.backend.recordLinuxV2CloneOutcome != nil {
 			process.errorMutex.Lock()
 			resultPublished := !process.result.FinishedAt.IsZero()
@@ -1936,8 +2099,20 @@ func (process *Process) closeContainment() error {
 		if process.backend.deferLinuxV2FinalizeUntilOutputDrain {
 			process.terminationMutex.Lock()
 			process.cloneFinalizationStarted = true
-			cloneFinalizationDone = make(chan struct{})
-			process.cloneFinalizationDone = cloneFinalizationDone
+			// Terminate may have reserved this open signal before scheduling the
+			// finalizer goroutine. Reuse it so every waiter observes that attempt.
+			cloneFinalizationDone = process.cloneFinalizationDone
+			if cloneFinalizationDone != nil {
+				select {
+				case <-cloneFinalizationDone:
+					cloneFinalizationDone = nil
+				default:
+				}
+			}
+			if cloneFinalizationDone == nil {
+				cloneFinalizationDone = make(chan struct{})
+				process.cloneFinalizationDone = cloneFinalizationDone
+			}
 			process.terminationMutex.Unlock()
 			defer func() {
 				process.terminationMutex.Lock()

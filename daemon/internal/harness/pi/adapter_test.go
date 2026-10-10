@@ -1250,6 +1250,10 @@ func (process *fakeNativeProcess) Terminate(_ context.Context, _ time.Duration) 
 
 func (process *fakeNativeProcess) ProcessDetails() (int, string) { return 42, "test:42" }
 
+func (process *fakeNativeProcess) DuplicateLinuxV2Peer() (*execution.LinuxV2Peer, error) {
+	return nil, errors.ErrUnsupported
+}
+
 func (process *fakeNativeProcess) emitJSON(t *testing.T, value any) {
 	t.Helper()
 	encoded, err := json.Marshal(value)

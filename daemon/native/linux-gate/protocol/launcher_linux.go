@@ -32,9 +32,12 @@ import (
 )
 
 const (
+	OwnerConfigMaxBytes        = 8192
 	launcherPath               = "/usr/libexec/symmetry/symmetry-linux-launcher"
 	cloneBootstrapPath         = "/usr/libexec/symmetry/symmetry-linux-clone-bootstrap"
 	ownerConfigPath            = "/etc/symmetry/linux-owner.conf"
+	maxOwnerConfigBytes        = OwnerConfigMaxBytes
+	maxOwnerStateDirBytes      = 4095
 	launchMagic                = "SYMLA001"
 	wireVersion                = uint16(1)
 	frameLaunchRequest         = uint16(1)
@@ -107,14 +110,17 @@ func (failure *InaccessibleUserNamespaceError) Unwrap() error {
 	return errors.Join(ErrInaccessibleUserNamespace, failure.Cause)
 }
 
-// OwnerConfig is the non-secret root-owned fixed identity provisioned by the
-// operator. Namespace UID/GID 1 map to BUID/BGID; host A and host root are
-// deliberately absent from both maps.
+// OwnerConfig is the non-secret root-owned A/B identity and optional pinned
+// StateDir provisioned by the operator. StateDir is empty only for legacy v1
+// owner config; such config remains valid for launch but not root cleanup.
+// Namespace UID/GID 1 map to BUID/BGID; host A and host root are deliberately
+// absent from both maps.
 type OwnerConfig struct {
-	AUID uint32
-	AGID uint32
-	BUID uint32
-	BGID uint32
+	AUID     uint32
+	AGID     uint32
+	BUID     uint32
+	BGID     uint32
+	StateDir string
 }
 
 // ProcessIdentity pins the gate/native process through its pidfd, boot ID and
@@ -506,7 +512,7 @@ const (
 )
 
 // ReadInstalledOwnerConfig reads the strict, root-owned, non-writable
-// operator configuration. It is readable by A because it contains IDs only.
+// operator configuration. Its IDs and optional canonical StateDir are not secrets.
 func ReadInstalledOwnerConfig() (OwnerConfig, error) {
 	for _, path := range []string{"/etc", "/etc/symmetry"} {
 		fd, err := unix.Open(path, unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
@@ -530,7 +536,7 @@ func ReadInstalledOwnerConfig() (OwnerConfig, error) {
 		return OwnerConfig{}, fmt.Errorf("stat fixed Linux owner config: %w", err)
 	}
 	if stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Uid != 0 || stat.Gid != 0 ||
-		stat.Mode&0022 != 0 || stat.Nlink != 1 || stat.Size <= 0 || stat.Size > 512 {
+		stat.Mode&0022 != 0 || stat.Nlink != 1 || stat.Size <= 0 || stat.Size > maxOwnerConfigBytes {
 		return OwnerConfig{}, errors.New("fixed Linux owner config has unsafe ownership, mode, link count, or size")
 	}
 	content := make([]byte, stat.Size+1)
@@ -553,7 +559,9 @@ func ReadInstalledOwnerConfig() (OwnerConfig, error) {
 
 func parseOwnerConfig(data []byte) (OwnerConfig, error) {
 	lines := strings.Split(string(data), "\n")
-	if len(lines) != 6 || lines[5] != "" || lines[0] != "version=1" {
+	legacy := len(lines) == 6 && lines[5] == "" && lines[0] == "version=1"
+	withStateDir := len(lines) == 7 && lines[6] == "" && lines[0] == "version=2"
+	if !legacy && !withStateDir {
 		return OwnerConfig{}, errors.New("fixed Linux owner config has an invalid version or shape")
 	}
 	values := [4]uint32{}
@@ -570,6 +578,16 @@ func parseOwnerConfig(data []byte) (OwnerConfig, error) {
 		values[index] = uint32(parsed)
 	}
 	config := OwnerConfig{AUID: values[0], AGID: values[1], BUID: values[2], BGID: values[3]}
+	if withStateDir {
+		const prefix = "state_dir="
+		if !strings.HasPrefix(lines[5], prefix) {
+			return OwnerConfig{}, errors.New("fixed Linux owner config state_dir field is missing or reordered")
+		}
+		config.StateDir = strings.TrimPrefix(lines[5], prefix)
+		if err := validateOwnerStateDir(config.StateDir); err != nil {
+			return OwnerConfig{}, err
+		}
+	}
 	if err := config.Validate(); err != nil {
 		return OwnerConfig{}, err
 	}
@@ -584,6 +602,29 @@ func (config OwnerConfig) Validate() error {
 	}
 	if config.AGID == 0 || config.BGID == 0 || config.AGID == config.BGID {
 		return errors.New("Linux owner A and fixed native B must be distinct non-root primary GIDs")
+	}
+	if config.StateDir != "" {
+		if err := validateOwnerStateDir(config.StateDir); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateOwnerStateDir(stateDir string) error {
+	if stateDir == "" || len(stateDir) > maxOwnerStateDirBytes || !filepath.IsAbs(stateDir) ||
+		filepath.Clean(stateDir) != stateDir || stateDir == string(filepath.Separator) {
+		return errors.New("fixed Linux owner StateDir must be a canonical absolute non-root path")
+	}
+	for index := 0; index < len(stateDir); index++ {
+		if stateDir[index] < 0x20 || stateDir[index] == 0x7f {
+			return errors.New("fixed Linux owner StateDir contains a control character")
+		}
+	}
+	for _, component := range strings.Split(strings.TrimPrefix(stateDir, string(filepath.Separator)), string(filepath.Separator)) {
+		if component == "" || component == "." || component == ".." {
+			return errors.New("fixed Linux owner StateDir contains an unsafe path component")
+		}
 	}
 	return nil
 }

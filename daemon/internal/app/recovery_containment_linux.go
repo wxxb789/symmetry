@@ -11,6 +11,9 @@ import (
 )
 
 func recoverPreparedSupervisorPlatform(handoff authority.SupervisorHandoff) (authority.StopReceipt, error) {
+	if handoff.Version == authority.SupervisorHandoffVersionV2 {
+		return authority.StopReceipt{}, errors.New("v2 handoff recovery requires its exact cgroup reservation and anchor helper")
+	}
 	value, err := handoff.ToSupervisor()
 	if err != nil {
 		return authority.StopReceipt{}, fmt.Errorf("convert Linux supervisor handoff: %w", err)
@@ -19,6 +22,9 @@ func recoverPreparedSupervisorPlatform(handoff authority.SupervisorHandoff) (aut
 }
 
 func releasePreparedSupervisorPlatform(handoff authority.SupervisorHandoff) (authority.SupervisorHandoffReleaseProof, error) {
+	if handoff.Version == authority.SupervisorHandoffVersionV2 {
+		return authority.SupervisorHandoffReleaseProof{}, errors.New("v2 handoff release requires its opaque pinned-leaf removal token")
+	}
 	value, err := handoff.ToSupervisor()
 	if err != nil {
 		return authority.SupervisorHandoffReleaseProof{}, fmt.Errorf("convert Linux supervisor handoff: %w", err)
@@ -33,6 +39,9 @@ func releasePreparedSupervisorPlatform(handoff authority.SupervisorHandoff) (aut
 }
 
 func provePreparedSupervisorAbortedPlatform(handoff authority.SupervisorHandoff) (authority.SupervisorHandoffAbortProof, error) {
+	if handoff.Version == authority.SupervisorHandoffVersionV2 {
+		return authority.SupervisorHandoffAbortProof{}, errors.New("v2 reservation abort requires its exact producer-fencing proof")
+	}
 	// Recovery owns the exclusive Store lifetime after daemon restart, so the
 	// previous owner is quiesced before this platform proof is requested.
 	return platform.ProvePreparedSupervisorAborted(handoff, func() error { return nil })

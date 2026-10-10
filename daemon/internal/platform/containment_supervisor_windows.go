@@ -327,7 +327,7 @@ func bootstrapContainmentSupervisor(ctx context.Context, endpoint containmentSup
 			}
 			return fmt.Errorf("durable containment bootstrap connection timeout: %w", lastErr)
 		}
-		pipe, err := openContainmentSupervisorPipe(endpoint.PipeName)
+		pipe, err := openContainmentSupervisorEndpointPipe(endpoint.PipeName)
 		if err != nil {
 			lastErr = err
 			if !retryableSupervisorPipeError(err) {
@@ -461,7 +461,7 @@ func DiscoverPreparedSupervisor(handoff authority.SupervisorHandoff) (authority.
 	}
 	deadline := time.Now().Add(containmentSupervisorConnectionPoll)
 	for {
-		pipe, err := openContainmentSupervisorPipe(endpoint.PipeName)
+		pipe, err := openContainmentSupervisorEndpointPipe(endpoint.PipeName)
 		if err == nil {
 			serverPID := uint32(0)
 			if err := withContainmentSupervisorPipeHandle(pipe, func(handle windows.Handle) error {
@@ -1397,7 +1397,7 @@ func runContainmentSupervisorWrongSecretFirstClient(endpoint containmentSupervis
 		if time.Now().After(deadline) {
 			return fmt.Errorf("wrong-secret first-client witness timed out")
 		}
-		pipe, err := openContainmentSupervisorPipe(endpoint.PipeName)
+		pipe, err := openContainmentSupervisorEndpointPipe(endpoint.PipeName)
 		if err != nil {
 			if !retryableSupervisorPipeError(err) {
 				return fmt.Errorf("open supervisor pipe for wrong-secret witness: %w", err)
@@ -1937,7 +1937,7 @@ func requestContainmentSupervisorPipeWithRequest(endpoint containmentSupervisorE
 			err := fmt.Errorf("containment supervisor connection timeout: %w", lastErr)
 			return containmentSupervisorResponse{}, err
 		}
-		pipe, openErr := openContainmentSupervisorPipe(endpoint.PipeName)
+		pipe, openErr := openContainmentSupervisorEndpointPipe(endpoint.PipeName)
 		if openErr != nil {
 			lastErr = openErr
 			if !retryableSupervisorPipeError(openErr) {
@@ -2015,9 +2015,37 @@ func openContainmentSupervisorPipeFile(name string) (*os.File, error) {
 		0,
 	)
 	if err != nil {
-		return nil, err
+		return nil, sanitizeContainmentSupervisorPipeError(err)
 	}
-	return os.NewFile(uintptr(handle), name), nil
+	return os.NewFile(uintptr(handle), containmentSupervisorPipeFileName), nil
+}
+
+const containmentSupervisorPipeFileName = "containment supervisor pipe"
+
+func openContainmentSupervisorEndpointPipe(name string) (*os.File, error) {
+	file, err := openContainmentSupervisorPipe(name)
+	if err != nil {
+		return nil, sanitizeContainmentSupervisorPipeError(err)
+	}
+	return file, nil
+}
+
+// sanitizeContainmentSupervisorPipeError preserves the typed cause while
+// removing the random named-pipe path from OS error formatting.
+func sanitizeContainmentSupervisorPipeError(err error) error {
+	switch typed := err.(type) {
+	case *os.PathError:
+		copy := *typed
+		copy.Path = containmentSupervisorPipeFileName
+		copy.Err = sanitizeContainmentSupervisorPipeError(typed.Err)
+		return &copy
+	case *os.SyscallError:
+		copy := *typed
+		copy.Err = sanitizeContainmentSupervisorPipeError(typed.Err)
+		return &copy
+	default:
+		return err
+	}
 }
 
 func withContainmentSupervisorPipeHandle(file *os.File, action func(windows.Handle) error) error {
@@ -3522,9 +3550,9 @@ func createContainmentSupervisorPipe(name string) (*os.File, error) {
 		&securityAttributes,
 	)
 	if err != nil {
-		return nil, err
+		return nil, sanitizeContainmentSupervisorPipeError(err)
 	}
-	return os.NewFile(uintptr(handle), name), nil
+	return os.NewFile(uintptr(handle), containmentSupervisorPipeFileName), nil
 }
 
 // containmentSupervisorSecurityDescriptor grants the current Windows account
