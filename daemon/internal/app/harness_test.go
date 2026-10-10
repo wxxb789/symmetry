@@ -1085,6 +1085,10 @@ func TestPiResumeAdmissionReusesRetainedNativeSessionAndWorkspace(t *testing.T) 
 	if workspaceService.prepareCalls != 0 || workspaceService.recoverCalls != 1 || workspaceService.recoveredRun != (workspace.RunRef{RunID: "run-source", Generation: 7}) || workspaceService.recoveredPath != source.WorkspacePath {
 		t.Fatalf("resume workspace recovery = %#v", workspaceService)
 	}
+	run, err := store.LoadJournal(state.RunKey{RunID: "run-resume", Generation: 2})
+	if err != nil || run.TerminalState != "completed" {
+		t.Fatalf("resumed native Subject terminal = %#v, error = %v", run, err)
+	}
 	sessions, err := store.ListGoalSessions()
 	if err != nil || len(sessions) != 1 {
 		t.Fatalf("retained Goal sessions = %#v, error = %v", sessions, err)
@@ -1100,6 +1104,78 @@ func TestPiResumeAdmissionReusesRetainedNativeSessionAndWorkspace(t *testing.T) 
 	app.workers.Wait()
 	if !sameStrings(session.calls, calls) {
 		t.Fatalf("resume assignment replay started another native session: before=%#v after=%#v", calls, session.calls)
+	}
+}
+
+func TestPiResumeSubjectRejectsUnboundWorkspaceOwner(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	controlSessionID := "00000000-0000-4000-8000-000000000090"
+	admission.SessionMode = protocol.SessionModeResume
+	admission.RequestedSessionID = &controlSessionID
+	capabilities := testVerifiedNativeCapabilities(harness.KindPi)
+	capabilities.NativeVersion = pi.TestedVersion
+	capabilities.Resume = true
+	result := validNativeTaskResult(t, admission)
+	app, store, _, _ := nativeAdmissionDaemonForHarness(t, admission, result, nil, harness.KindPi, config.RuntimeHarnessPi, capabilities)
+	defer store.Close()
+	nativeFile := filepath.Join(t.TempDir(), "retained-session.jsonl")
+	if err := os.WriteFile(nativeFile, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := saveAvailablePiGoalSession(t, store, admission, controlSessionID, nativeFile, capabilities)
+	key := state.RunKey{RunID: "run-resume", Generation: 2}
+	saveClaimedGoalRun(t, store, key)
+	prepared := workspace.Prepared{Path: source.WorkspacePath, BindingKey: app.config.Runtime.Workspace, Run: workspace.RunRef{RunID: "run-source", Generation: 7}}
+	app.workspace.(*fakeWorkspace).subject = admission.Subject
+	nativeResult := harness.TaskResult{Kind: harness.ResultSucceeded, Semantic: &result}
+	if err := app.verifyNativeTaskResultSubject(context.Background(), key, prepared, &admission, &nativeResult); err == nil {
+		t.Fatal("predecessor session without current resume rebind authorized a foreign RunKey")
+	}
+	bindingID := "00000000-0000-4000-8000-000000000091"
+	rebound := rebindAvailablePiGoalSession(t, store, source, key, admission, bindingID, capabilities)
+	if _, err := store.MarkGoalSessionResumeStartAttempted(rebound.Key()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PersistGoalSessionControlAttachment(rebound.Key(), controlSessionID, bindingID, "00000000-0000-4000-8000-000000000094", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.verifyNativeTaskResultSubject(context.Background(), key, prepared, &admission, &nativeResult); err != nil {
+		t.Fatalf("exact bound resume rejected its immutable workspace owner: %v", err)
+	}
+	for _, mutation := range []struct {
+		name   string
+		change func(*workspace.Prepared, *protocol.Admission)
+	}{
+		{name: "wrong owner", change: func(value *workspace.Prepared, _ *protocol.Admission) { value.Run.RunID = "other-owner" }},
+		{name: "wrong path", change: func(value *workspace.Prepared, _ *protocol.Admission) { value.Path += "-foreign" }},
+		{name: "wrong binding", change: func(value *workspace.Prepared, _ *protocol.Admission) { value.BindingKey = "foreign" }},
+		{name: "wrong admission", change: func(_ *workspace.Prepared, value *protocol.Admission) {
+			value.AdmissionID = "00000000-0000-4000-8000-000000000099"
+		}},
+		{name: "wrong repository", change: func(_ *workspace.Prepared, value *protocol.Admission) {
+			value.Subject.ResourceID = "00000000-0000-4000-8000-000000000098"
+		}},
+		{name: "wrong Goal revision", change: func(_ *workspace.Prepared, value *protocol.Admission) { value.GoalRevision++ }},
+		{name: "fresh session", change: func(_ *workspace.Prepared, value *protocol.Admission) { value.SessionMode = protocol.SessionModeFresh }},
+	} {
+		t.Run(mutation.name, func(t *testing.T) {
+			changedPrepared, changedAdmission := prepared, admission
+			mutation.change(&changedPrepared, &changedAdmission)
+			if err := app.verifyNativeTaskResultSubject(context.Background(), key, changedPrepared, &changedAdmission, &nativeResult); err == nil {
+				t.Fatal("mismatched retained workspace authorized native Subject validation")
+			}
+		})
+	}
+	originalFingerprint := workspaceFingerprint
+	workspaceFingerprint = func(context.Context, workspace.Prepared) (string, error) {
+		return "sha256:" + strings.Repeat("b", 64), nil
+	}
+	defer func() { workspaceFingerprint = originalFingerprint }()
+	if err := app.verifyNativeTaskResultSubject(context.Background(), key, prepared, &admission, &nativeResult); err == nil {
+		t.Fatal("foreign retained workspace fingerprint authorized native Subject validation")
 	}
 }
 

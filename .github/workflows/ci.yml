@@ -398,7 +398,7 @@ jobs:
           SYMMETRY_PI_PROVIDER_ACTION_SMOKE=1 \
           SYMMETRY_PI_NATIVE_SMOKE_EXECUTABLE="$RUNNER_TEMP/pi-0.87.1/pi/pi" \
             go test -json -count=1 -timeout 90s ./internal/harness/pi \
-              -run '^TestLinuxLegacyPiProviderBridgeRefusesBeforeProviderAction$' 2>&1 |
+              -run '^TestLinuxLegacyPiProviderBridgeRefusesBeforeProviderAction$' |
             tee -a "$log" "$test_output"
           pipeline_status=("${PIPESTATUS[@]}")
           test_status=${pipeline_status[0]}
@@ -1315,6 +1315,7 @@ jobs:
           python3 ../scripts/ci/test-linux-v2-source-subject.py
           python3 ../scripts/ci/test-linux-v2-go-events.py
           python3 ../scripts/ci/test-linux-v2-evidence.py
+          python3 ../scripts/ci/test-rootless-compose-owner-claim.py
           sudo python3 ../scripts/ci/test-linux-v2-control-receipt.py
       - name: Run ordinary Go tests and gate deterministic pidfd peer-negative events
         shell: bash
@@ -1322,7 +1323,7 @@ jobs:
           set -Eeuo pipefail
           test_events="$RUNNER_TEMP/daemon-go-test.json"
           set +e
-          go test -count=1 -timeout 300s -json ./... >"$test_events" 2>&1
+          go test -count=1 -timeout 300s -json ./... >"$test_events"
           test_status=$?
           set -e
 
@@ -1408,7 +1409,7 @@ jobs:
           test_events="$RUNNER_TEMP/opencode-native-synthetic-test.json"
           set +e
           go test -count=1 -timeout 180s -json ./internal/harness/opencode \
-            -run '^TestLinuxLegacyOpenCodeRefusesBeforeHealthRequest$' > "$test_events" 2>&1
+            -run '^TestLinuxLegacyOpenCodeRefusesBeforeHealthRequest$' > "$test_events"
           test_status=$?
           set -e
           cat "$test_events"
@@ -1738,7 +1739,7 @@ jobs:
           go build -o /tmp/symmetry-fake-agent ./cmd/symmetry-fake-agent
           test_events="$RUNNER_TEMP/integration-selective-tests.json"
           set +e
-          go test -count=1 -timeout 180s -json ./e2e -run '^(TestCoreDaemonWorkflows|TestPollingFallbackDispatchesWithoutNotifications|TestStaleRuntimeEpochCannotOverwriteNewGeneration|TestDaemonReregistersAfterRestart|TestDaemonReconnectReclaimsExpiredRunWithNewGeneration|TestTaskInputDistinguishesOmissionFromEmptyObject|TestGitWorktreeCleanupRemovesOwnedArtifacts|TestTerminalTransitionRetriesAfterLeaseExpiry)$' > "$test_events" 2>&1
+          go test -count=1 -timeout 180s -json ./e2e -run '^(TestCoreDaemonWorkflows|TestPollingFallbackDispatchesWithoutNotifications|TestStaleRuntimeEpochCannotOverwriteNewGeneration|TestDaemonReregistersAfterRestart|TestDaemonReconnectReclaimsExpiredRunWithNewGeneration|TestTaskInputDistinguishesOmissionFromEmptyObject|TestGitWorktreeCleanupRemovesOwnedArtifacts|TestTerminalTransitionRetriesAfterLeaseExpiry)$' > "$test_events"
           test_status=$?
           set -e
           cat "$test_events"
@@ -1771,7 +1772,7 @@ jobs:
           set -Eeuo pipefail
           test_events="$RUNNER_TEMP/daemon-crash-response-loss.json"
           set +e
-          go test -count=1 -timeout 240s -json ./e2e -run '^TestProductionDaemonCrashResponseLossAndReconnect$' > "$test_events" 2>&1
+          go test -count=1 -timeout 240s -json ./e2e -run '^TestProductionDaemonCrashResponseLossAndReconnect$' > "$test_events"
           test_status=$?
           set -e
           cat "$test_events"
@@ -1863,7 +1864,7 @@ jobs:
           restarter_pid=$!
           test_events="$RUNNER_TEMP/daemon-control-restart.json"
           set +e
-          go test -count=1 -timeout 150s -json ./e2e -run '^TestDaemonSurvivesControlRestart$' > "$test_events" 2>&1
+          go test -count=1 -timeout 150s -json ./e2e -run '^TestDaemonSurvivesControlRestart$' > "$test_events"
           test_status=$?
           set -e
           cat "$test_events"
@@ -1918,7 +1919,7 @@ jobs:
 
           set +e
           go test -count=1 -timeout 900s -json ./e2e \
-            -run '^TestProductionLinuxContainment(WitnessSpine|NegativeWitness|ReplayWitness)$' > "$test_events" 2>&1
+            -run '^TestProductionLinuxContainment(WitnessSpine|NegativeWitness|ReplayWitness)$' > "$test_events"
           test_status=$?
           set -e
 

@@ -6,6 +6,7 @@ import json
 import pathlib
 import re
 import secrets
+import ssl
 import sys
 import time
 import urllib.error
@@ -52,9 +53,10 @@ def json_request(client, base_url, method, path, payload, token=None, csrf=None,
         fail(f"Control fixture endpoint unavailable for {method} {path}")
 
 
-def portal_client(base_url: str, operator_token: str):
+def portal_client(base_url: str, operator_token: str, ca_file: str):
     jar = http.cookiejar.CookieJar()
-    client = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    tls = urllib.request.HTTPSHandler(context=ssl.create_default_context(cafile=ca_file))
+    client = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar), tls)
     try:
         with client.open(base_url + "/portal/login", timeout=20) as response:
             login_page = response.read(1 << 20).decode("utf-8", errors="strict")
@@ -89,15 +91,15 @@ def portal_client(base_url: str, operator_token: str):
 
 
 def main() -> int:
-    if len(sys.argv) != 10:
-        fail("expected Control URL, operator/enrollment tokens, machine name, two output files, repository, commit, and tree digest")
+    if len(sys.argv) != 11:
+        fail("expected Control URL, operator/enrollment tokens, machine name, two output files, repository, commit, tree digest, and fixture CA file")
     (
         control_url, operator_token, enrollment_token, machine_name,
-        run_output, machine_token_output, repository, commit, tree_digest,
+        run_output, machine_token_output, repository, commit, tree_digest, ca_file,
     ) = sys.argv[1:]
     parsed = urllib.parse.urlparse(control_url)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc or parsed.path not in ("", "/"):
-        fail("Control URL must be an absolute HTTP(S) origin")
+    if parsed.scheme != "https" or not parsed.netloc or parsed.path not in ("", "/"):
+        fail("Control Portal URL must be an absolute HTTPS origin")
     base_url = control_url.rstrip("/")
     if not operator_token or not enrollment_token or not machine_name:
         fail("development operator/enrollment fixture values are required")
@@ -108,8 +110,8 @@ def main() -> int:
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", tree_digest):
         fail("repository tree digest is invalid")
 
-    client, csrf = portal_client(base_url, operator_token)
-    api_client = urllib.request.build_opener()
+    client, csrf = portal_client(base_url, operator_token, ca_file)
+    api_client = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ssl.create_default_context(cafile=ca_file)))
     suffix = secrets.token_hex(6).upper()
     project = json_request(client, base_url, "POST", "/portal/api/projects", {
         "name": "Rootless Compose hidden owner witness " + suffix,

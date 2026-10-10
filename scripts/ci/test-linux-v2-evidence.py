@@ -216,6 +216,70 @@ class ExporterTest(unittest.TestCase):
         for path, data in originals.items():
             self.assertEqual(path.read_bytes(), data)
 
+    def test_legacy_exports_unbound_handoff_without_inventing_supervisor_identity(self) -> None:
+        source = self.private_dir("unbound-source")
+        output = self.private_dir("unbound-output")
+        self.populate_legacy(source)
+        path = source / "prepare-before-bind" / "witness-evidence.json"
+        value = json.loads(path.read_text())
+        snapshot = value["journal_snapshots"][0]
+        snapshot.pop("authority")
+        snapshot.pop("stop_receipt")
+        snapshot.pop("containment_scans")
+        snapshot["has_process_details"] = False
+        snapshot.pop("pid")
+        snapshot.pop("process_identity")
+        snapshot["handoff"].update({"supervisor_pid": 0, "supervisor_identity": "", "has_stop_receipt": False})
+        original = self.write_json(path, value)
+        result = self.run_export("legacy", str(output), "1" * 40, "passed", "--witness-root", str(source))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        handoff = json.loads((output / "prepare-before-bind.json").read_text())["journal_snapshots"][0]["handoff"]
+        self.assertEqual((handoff["supervisor_pid"], handoff["supervisor_identity"], handoff["has_stop_receipt"]), (0, "", False))
+        self.assertEqual(path.read_bytes(), original)
+
+    def test_legacy_rejects_unbound_handoff_with_bound_journal_evidence(self) -> None:
+        for index, contradiction in enumerate(("stop_receipt", "authority", "containment_scans", "has_process_details", "pid", "process_identity")):
+            with self.subTest(contradiction=contradiction):
+                source = self.private_dir(f"contradictory-unbound-source-{index}")
+                output = self.private_dir(f"contradictory-unbound-output-{index}")
+                self.populate_legacy(source)
+                path = source / "prepare-before-bind" / "witness-evidence.json"
+                value = json.loads(path.read_text())
+                snapshot = value["journal_snapshots"][0]
+                bound = dict(snapshot)
+                for key in ("stop_receipt", "authority", "containment_scans"):
+                    snapshot.pop(key)
+                snapshot["has_process_details"] = False
+                snapshot.pop("pid")
+                snapshot.pop("process_identity")
+                snapshot["handoff"].update({"supervisor_pid": 0, "supervisor_identity": "", "has_stop_receipt": False})
+                snapshot[contradiction] = bound[contradiction]
+                original = self.write_json(path, value)
+                result = self.run_export("legacy", str(output), "1" * 40, "passed", "--witness-root", str(source))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("unbound handoff contradicts", result.stderr)
+                self.assertEqual(path.read_bytes(), original)
+
+    def test_legacy_rejects_empty_bound_or_receipted_supervisor_identity(self) -> None:
+        for index, (nested, pid, has_receipt) in enumerate((("handoff", 2102, False), ("handoff", 0, True), ("authority", 0, False))):
+            with self.subTest(nested=nested, pid=pid, has_receipt=has_receipt):
+                source = self.private_dir(f"invalid-owner-source-{index}")
+                output = self.private_dir(f"invalid-owner-output-{index}")
+                self.populate_legacy(source)
+                path = source / "prepare-before-bind" / "witness-evidence.json"
+                value = json.loads(path.read_text())
+                if nested == "handoff":
+                    for key in ("stop_receipt", "authority", "containment_scans"):
+                        value["journal_snapshots"][0].pop(key)
+                    value["journal_snapshots"][0]["has_process_details"] = False
+                    value["journal_snapshots"][0].pop("pid")
+                    value["journal_snapshots"][0].pop("process_identity")
+                value["journal_snapshots"][0][nested].update({"supervisor_pid": pid, "supervisor_identity": "", "has_stop_receipt": has_receipt})
+                self.write_json(path, value)
+                result = self.run_export("legacy", str(output), "1" * 40, "passed", "--witness-root", str(source))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("bounded safe value", result.stderr)
+
     def test_empty_legacy_proof_lists_write_failed_incomplete_manifest(self) -> None:
         source = self.private_dir("empty-source")
         output = self.private_dir("empty-output")

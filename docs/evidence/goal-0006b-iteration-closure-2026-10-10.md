@@ -251,3 +251,149 @@ the earlier fixture used by the full race run was not explicit, and test-level
 event counts did not exclude package results clearly. Both descriptions are
 corrected above. That review found no new product blocker within this bounded
 publication scope; the unexplained census failure remains a recorded risk.
+
+## Subsequent PR 9 CI diagnosis — 2026-10-10
+
+One non-interactive CI diagnosis pass inspected all fourteen failed check
+instances from runs [38028765077](https://github.com/wxxb789/symmetry/actions/runs/38028765077)
+and [38028761722](https://github.com/wxxb789/symmetry/actions/runs/38028761722),
+both on `eab6201374b226a1a5e52087602206e29a3389dc`. Repeated failures on
+the same source revision are not evidence of fix oscillation or flaky infrastructure.
+Individual job logs, check annotations, step metadata and allowlisted public
+artifact inventories were inspected; no failing test was replayed to confirm it.
+
+The bounded current-public-source patch addresses four independently traced
+defects, without changing native capability or host acceptance:
+
+- Linux Pi/OpenCode and ordinary integration event producers mixed Go's
+  module-download diagnostic stderr into the strict JSON stdout file. The
+  selected tests had exact passing events, but the gate correctly rejected
+  two or three diagnostic lines. Producers now keep the streams separate;
+  invalid JSON, missing/duplicate tests, skips, failure events and nonzero Go
+  exits remain fatal. Existing strict event-gate regressions remain unchanged.
+- Windows retained Pi resume recovers the original worktree owner, then rotates
+  only the execution Run through the existing stopped-certificate CAS. Terminal
+  Subject validation incorrectly demanded that those different identities match.
+  It now requires the exact durable current Pi resume binding, original owner,
+  Goal/admission/repository, machine/runtime, path and workspace fingerprint
+  before deriving the actual Subject. Fresh runs and Linux clone reuse retain
+  their existing fences. Regression coverage checks completed resume and rejects
+  foreign/unbound owner, path, workspace binding and admission identities.
+- A prepared legacy handoff intentionally has supervisor PID zero and empty
+  supervisor identity before binding. The exporter rejected this real shape.
+  Only an unreceipted handoff with PID zero may export that empty identity;
+  authority, bound supervisor and receipted shapes still reject it. Regression
+  fixtures also assert that source evidence is not mutated. A journal with this
+  unbound handoff cannot contain a receipt, authority, scan ledger or process
+  marker; contradictory cross-field evidence remains rejected.
+- Rootless Compose used production Control's Secure session cookie over HTTP,
+  losing the CSRF/session state before login. The fixture now uses a disposable
+  trusted TLS edge based on the existing production nginx policy. Both Portal
+  clients verify the new fixture certificate, and production Secure-cookie and
+  CSRF policies are unchanged. Credential-free Python/Go regression fixtures
+  cover trusted TLS session login and untrusted certificate refusal.
+
+Main completed the single final affected verification on this current dirty
+working-tree patch over `eab6201374b226a1a5e52087602206e29a3389dc`, after
+formatting its three affected Go files. This is not an exact-commit remote CI
+or native-support claim. The patch author executed no build, test, formatter,
+linter, service, provider call, installation, host privilege change or credential
+probe. No old frozen subject or private native input was read, replayed,
+repaired or cleaned up. Independent bounded source review closed with no
+remaining finding; publication still requires the caller's explicit gate.
+
+### Main's final affected checks
+
+Observed results are retained in `artifact://10279`, `artifact://10284`,
+`artifact://10285`, `artifact://10286` and corrected-file `artifact://10293`.
+All listed commands exited zero.
+
+| Check | Actual result | Scope / timing |
+| --- | --- | --- |
+| `gofmt -w` on three affected Go files | PASS | 1.348 s wall; formatter wrote only the affected files |
+| Windows selected App resume/owner checks | PASS | Four top-level tests plus rejection subcases; 6.645 s package / 36.203 s wall |
+| Windows `go vet ./...` | PASS | 21.998 s wall |
+| Linux amd64 `CGO_ENABLED=0 go build ./...` cross-build | PASS | 28.264 s wall |
+| Linux selected App owner/clone-reuse checks | PASS | Two top-level tests plus rejection subcases; 0.409 s package / 25.709 s wall |
+| Same two Linux App checks with `-race` | PASS | 2.156 s package / 33.221 s wall; not a full-suite race run |
+| Credential-free Go trusted-TLS Secure-session regression, after review correction | PASS | `TestRootlessComposePortalRequiresTrustedTLSForSecureSession`; 0.069 s package / 12.604 s wall; actual bad-certificate handshake preceded trusted session success |
+| `python3 scripts/ci/test-linux-v2-go-events.py` | PASS | Six strict event-gate tests; 1.630 s |
+| `python3 scripts/ci/test-linux-v2-evidence.py`, after review correction | PASS | Sixteen exporter tests including six contradictory-journal subcases; 5.380 s suite / 5.801 s wall |
+| `python3 scripts/ci/test-rootless-compose-owner-claim.py` | PASS | One credential-free TLS/Secure-cookie test; 0.902 s |
+| `bash -n scripts/ci/rootless-compose-native-acceptance.sh` | PASS | Syntax only; no native fixture execution |
+| CI YAML parse | PASS | Thirteen jobs; parsing is not workflow execution |
+
+Windows App selection:
+
+```text
+go test -count=1 -timeout=180s ./internal/app -run "^(TestPiResumeAdmissionReusesRetainedNativeSessionAndWorkspace|TestPiResumeSubjectRejectsUnboundWorkspaceOwner|TestPiResumeAdmissionRejectsIncompatibleOrUnavailableRetainedSessionBeforeNativeStart|TestRetainedPiWorkspaceOwnerBlocksSourceCleanupAfterRebind)$"
+```
+
+Linux App selection (ordinary and the same selection with `-race`):
+
+```text
+go test -count=1 -timeout=180s ./internal/app -run "^(TestPiResumeSubjectRejectsUnboundWorkspaceOwner|TestLinuxV2PiResumeRequiresSeparateCloneReuseGrant)$"
+```
+
+The earlier full ordinary/race evidence above predates this App/source patch
+and does **not** validate it. No full old-suite redo, census/UID-map failure
+confirmation, host prerequisite replay or native acceptance run was performed.
+The new TLS tests use fresh credential-free loopback fixtures; they do not
+certify installed Pi/OpenCode execution or the full rootless Compose witness.
+
+Independent review then required two bounded corrections before publication:
+the exporter initially allowed an empty handoff supervisor identity beside
+bound journal scan/receipt/authority evidence, and the Go TLS negative initially
+failed while reading an empty CA filename rather than testing certificate trust.
+The exporter now accepts only a consistent genuine-unbound snapshot and tests
+six contradictory journal fields. The Go test now uses a separately generated,
+readable unrelated CA and an atomic handler counter proving TLS rejection occurs
+before any HTTP request; the trusted session still must complete. Main then
+formatted only the corrected Go test file (exit zero, 0.077 s wall) and ran the
+corrected sixteen-test exporter and Go TLS regression successfully, as recorded
+in `artifact://10293` and the table. Earlier fifteen-test exporter and Go TLS
+results remain historical pre-review evidence, not validation of the corrected
+files. The selected App/race/static results remain unchanged in scope. No
+midflight check was run by the patch author.
+
+Review also investigated the fixture's two external DNS names against current
+nginx and Control contracts. The fixture certificate and server names admit
+only `localhost` and `rootless-portal-edge`, while production forwarding retains
+upstream Host `localhost`. Both Control pages emit `get_csrf_token/0` hostless
+masked session tokens and relative redirects; pinned Plug 1.20.3 validates those
+against session state without the distinct signed-per-host-token check. This
+source evidence does not establish a Host/CSRF mismatch. No cookie, CSRF,
+host-allowlist or permission policy was relaxed; actual full Compose acceptance
+remains unexecuted and deferred. Exact reviewed current-source excerpts are in
+`local://pr9-ci-review-fix-evidence-20261010.json`.
+
+`PR9CIRepairReview` subsequently returned **ship, no remaining findings** for
+the ten-path current-source scope. Both P2 corrections were independently
+confirmed closed and the speculative Host/CSRF concern was withdrawn after
+the current dependency/consumer contract investigation. The reviewer executed
+no command or mutation. This is bounded source approval, not CI-green, actual
+Compose/native, custody, release or whole-project certification. The reviewer
+did not receive an exact base-to-working-tree diff artifact; scope came from
+the ten-path report and current source/excerpts. The caller retains exact
+publication scope/revision checking and explicit commit/push authority.
+
+Remaining actual observations are preserved, **not passed or waived**:
+
+- The host prerequisite probe exits without a public rejecting stage; its
+  success-only artifact upload was skipped. Logs/annotations cannot establish
+  which systemd/cgroup/tool/cross-UID prerequisite failed. No host workaround or
+  capability promotion was attempted.
+- Both ordinary daemon runs reject inherited FD 142 in the current census
+  child (`errno=1`), and independently reject private user/PID namespace setup
+  with `/proc/self/uid_map: Operation not permitted`. The high FD's originating
+  owner is not established by public launch/source evidence. These CI details
+  neither explain nor resolve the original local unexplained EPERM above.
+- Both production negative-witness parents fail with three failure events.
+  The private event stream was not printed/uploaded; public artifacts contain
+  only the allowlisted first spine case. The exact negative subcase remains
+  unavailable, so exporter/channel fixes cannot certify its acceptance.
+
+The three complete typed residual objects and exact fourteen-key diagnosis map
+are retained in the caller's run report. Original installed-native, custody,
+release and host acceptance remain **DEFERRED / NOT PASSED** under the owner
+amendment; no new request for credentials or native authorization is implied.

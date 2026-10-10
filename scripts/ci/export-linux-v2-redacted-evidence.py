@@ -314,7 +314,7 @@ def project_receipt(value, context: str) -> dict:
     return result
 
 
-def project_owner(value, context: str) -> dict:
+def project_owner(value, context: str, *, handoff: bool = False) -> dict:
     source = require_object(value, context)
     reject_unknown(source, OWNER_KEYS, context)
     required = {"target_pid", "target_identity", "supervisor_pid", "supervisor_identity", "has_stop_receipt"}
@@ -329,6 +329,9 @@ def project_owner(value, context: str) -> dict:
             result[key] = safe_bool(child, f"{context}.{key}")
         elif key.endswith("sha256"):
             result[key] = safe_hash(child, f"{context}.{key}")
+        elif key == "supervisor_identity" and child == "" and handoff and source["supervisor_pid"] == 0 and source["has_stop_receipt"] is False:
+            # A prepared handoff has not bound a supervisor; authority and receipts never use this shape.
+            result[key] = ""
         else:
             result[key] = safe_text(child, f"{context}.{key}")
     return result
@@ -367,6 +370,10 @@ def project_journal(value, context: str) -> dict:
     missing = required - set(source)
     if missing:
         fail(f"legacy {context} omits required fields: {', '.join(sorted(missing))}")
+    handoff = source.get("handoff")
+    if isinstance(handoff, dict) and handoff.get("supervisor_identity") == "":
+        if any(key in source for key in ("stop_receipt", "authority", "containment_scans")) or source["has_process_details"] is not False or source.get("pid", 0) != 0 or source.get("process_identity", "") != "":
+            fail(f"legacy {context} unbound handoff contradicts bound process, receipt, authority, or scan evidence")
     result = {}
     for key, child in source.items():
         if key in ("path", "run_id", "at", "started_at", "lease_expires_at"):
@@ -382,7 +389,7 @@ def project_journal(value, context: str) -> dict:
         elif key == "stop_receipt":
             result[key] = project_receipt(child, f"{context}.{key}")
         elif key in ("handoff", "authority"):
-            result[key] = project_owner(child, f"{context}.{key}")
+            result[key] = project_owner(child, f"{context}.{key}", handoff=key == "handoff")
         else:
             result[key] = safe_text(child, f"{context}.{key}")
     return result

@@ -8950,7 +8950,31 @@ func (daemon *daemon) verifyNativeTaskResultSubject(ctx context.Context, key sta
 	}
 	if prepared.Run.RunID != "" || prepared.Run.Generation != 0 {
 		if prepared.Run.RunID != key.RunID || prepared.Run.Generation != key.Generation {
-			return errors.New("native Subject workspace belongs to a different RunKey")
+			if admission.SessionMode != protocol.SessionModeResume || admission.RequestedSessionID == nil {
+				return errors.New("native Subject workspace belongs to a different RunKey")
+			}
+			session, err := daemon.store.LoadGoalSessionByControlSessionID(*admission.RequestedSessionID)
+			if err != nil {
+				return fmt.Errorf("load retained native Subject workspace owner: %w", err)
+			}
+			// Resume rotates execution authority, never the worktree's original owner.
+			if session.SessionMode != state.GoalSessionModeResume || session.HarnessKind != string(harness.KindPi) ||
+				session.ResumeSourceStopCertificate == nil || !session.HasVerifiedControlAttachment() || session.NeedsReconciliation() ||
+				session.RunID != key.RunID || session.Generation != key.Generation || session.AdmissionID != admission.AdmissionID ||
+				session.GoalID != admission.GoalID || session.GoalRevision != admission.GoalRevision ||
+				session.WorkItemID != admissionWorkItemIDValue(admission.WorkItemID) || session.RepositoryResourceID != admission.Subject.ResourceID ||
+				session.MachineID != daemon.machineID || session.RuntimeID != daemon.runtimeID || session.RuntimeEpoch != daemon.runtimeEpoch ||
+				session.WorkspaceOwnerRunKey.RunID != prepared.Run.RunID || session.WorkspaceOwnerRunKey.Generation != prepared.Run.Generation ||
+				session.WorkspacePath != prepared.Path || prepared.BindingKey != daemon.config.Runtime.Workspace {
+				return errors.New("native Subject workspace does not match the exact retained resume owner")
+			}
+			fingerprint, err := workspaceFingerprint(ctx, prepared)
+			if err != nil {
+				return fmt.Errorf("fingerprint retained native Subject workspace: %w", err)
+			}
+			if fingerprint != session.WorkspaceFingerprint {
+				return errors.New("native Subject workspace fingerprint differs from its retained resume owner")
+			}
 		}
 	}
 	if result == nil || result.Semantic == nil {

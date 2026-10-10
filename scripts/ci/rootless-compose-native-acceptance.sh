@@ -19,7 +19,7 @@ local_project=$1
 temporary_dir=$2
 repo=$GITHUB_WORKSPACE
 source_subject_json=$(python3 "$repo/scripts/ci/linux-v2-source-subject.py" "$repo" "$GITHUB_SHA")
-control_url=http://127.0.0.1:4000
+control_api_url=http://127.0.0.1:4000
 rootless_app_state_dir=/var/lib/symmetry
 pi_inspection_state_dir=/var/lib/sym-pi
 opencode_inspection_state_dir=/var/lib/sym-oc
@@ -73,9 +73,9 @@ cleanup_native_services() {
   trap - EXIT INT TERM
   if [[ -f "$native_override" ]]; then
     "${local_compose[@]}" --file "$native_override" stop --timeout 20 \
-      rootless-native-pi rootless-native-opencode transition-proxy >/dev/null 2>&1 || true
+      rootless-native-pi rootless-native-opencode transition-proxy rootless-portal-edge >/dev/null 2>&1 || true
     "${local_compose[@]}" --file "$native_override" rm --force \
-      rootless-native-pi rootless-native-opencode transition-proxy >/dev/null 2>&1 || true
+      rootless-native-pi rootless-native-opencode transition-proxy rootless-portal-edge >/dev/null 2>&1 || true
   fi
   docker image rm "$container_image" >/dev/null 2>&1 || true
   if [[ -d "$evidence_source" && -d "$evidence_directory" ]]; then
@@ -196,8 +196,49 @@ pathlib.Path(opencode_path).write_text(
 PY
 chmod 0644 "$native_root/pi-daemon.json" "$native_root/opencode-daemon.json"
 
+tls_root="$native_root/portal-tls"
+mkdir -m 0755 "$tls_root"
+openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 1 \
+  -subj '/CN=localhost' -addext 'subjectAltName=DNS:localhost,DNS:rootless-portal-edge' \
+  -keyout "$tls_root/tls.key" -out "$tls_root/tls.crt" >/dev/null 2>&1
+chmod 0600 "$tls_root/tls.key"
+chmod 0644 "$tls_root/tls.crt"
+# Reuse production forwarding and TLS policy, admitting only this fixture's two DNS names.
+python3 - "$repo/docker/edge-nginx.conf" "$tls_root/edge-nginx.conf" <<'PY'
+import pathlib
+import sys
+
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+source = source.replace("server_name ${PHX_HOST};", "server_name localhost rootless-portal-edge;")
+pathlib.Path(sys.argv[2]).write_text(source, encoding="utf-8")
+PY
+chmod 0644 "$tls_root/edge-nginx.conf"
+
 cat > "$native_override" <<EOF
 services:
+  rootless-portal-edge:
+    image: nginx:1.27.5-alpine
+    depends_on:
+      control:
+        condition: service_started
+    environment:
+      PHX_HOST: localhost
+    ports:
+      - "127.0.0.1::443"
+    volumes:
+      - type: bind
+        source: $tls_root/tls.crt
+        target: /run/symmetry/tls.crt
+        read_only: true
+      - type: bind
+        source: $tls_root/tls.key
+        target: /run/symmetry/tls.key
+        read_only: true
+      - type: bind
+        source: $tls_root/edge-nginx.conf
+        target: /etc/nginx/templates/default.conf.template
+        read_only: true
+    restart: "no"
   transition-proxy:
     image: python:3.12-slim-bookworm
     user: "65532:65532"
@@ -265,6 +306,21 @@ services:
     restart: "no"
 EOF
 
+"${local_compose[@]}" --file "$native_override" up --detach rootless-portal-edge
+portal_address=$("${local_compose[@]}" --file "$native_override" port rootless-portal-edge 443)
+portal_port=${portal_address##*:}
+[[ "$portal_port" =~ ^[0-9]+$ ]] || fail 'TLS Portal fixture did not publish a decimal loopback port'
+control_url="https://localhost:$portal_port"
+portal_ready=false
+for _ in {1..30}; do
+  if curl --fail --silent --show-error --cacert "$tls_root/tls.crt" "$control_url/healthz" >/dev/null; then
+    portal_ready=true
+    break
+  fi
+  sleep 1
+done
+[[ "$portal_ready" == true ]] || fail 'trusted TLS Portal fixture did not become ready'
+
 owner_fixture="$native_root/owner-fixture"
 sudo install -d -o root -g root -m 0755 \
   "$owner_fixture" "$owner_fixture/unprovisioned" "$owner_fixture/production" \
@@ -291,7 +347,7 @@ python3 "$repo/scripts/ci/prepare-rootless-compose-owner-claim.py" \
   "$control_url" "$portal_operator_token" "$enrollment_token" \
   "rootless-compose-unprovisioned-opencode-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}" \
   "$owner_run_metadata" "$control_machine_token" \
-  "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$source_tree_digest"
+  "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$source_tree_digest" "$tls_root/tls.crt"
 
 python3 - "$owner_run_metadata" "$native_root/unprovisioned-config.json" \
   "$GITHUB_REPOSITORY" <<'PY'
@@ -354,7 +410,7 @@ PY
 chmod 0600 "$native_root/unprovisioned-config.json"
 python3 "$repo/scripts/ci/write-linux-v2-owner-request.py" \
   stage_replay "$owner_run_metadata" "$native_root/unprovisioned-config.json" \
-  "$owner_fixture/barriers/unprovisioned/request" "$control_url" \
+  "$owner_fixture/barriers/unprovisioned/request" "$control_api_url" \
   "$control_machine_token" "$owner_request_source" native_release
 sudo install -o root -g 65532 -m 0640 "$native_root/unprovisioned-config.json" \
   "$owner_fixture/unprovisioned/config.json"
@@ -382,6 +438,7 @@ docker run --rm --network "$network" --user 65532:65532 \
   --mount "type=bind,source=$evidence_source,target=/tmp/rootless-compose-output" \
   --mount "type=bind,source=$pi_executable,target=/usr/local/bin/pi,readonly" \
   --mount "type=bind,source=$opencode_executable,target=/usr/local/bin/opencode,readonly" \
+  --mount "type=bind,source=$tls_root/tls.crt,target=/opt/symmetry-ci/portal-ca.pem,readonly" \
   --env HOME=/tmp/rootless-compose-home \
   --env GOCACHE=/tmp/rootless-compose-go-cache \
   --env GOMODCACHE=/tmp/rootless-compose-go-mod-cache \
@@ -389,7 +446,8 @@ docker run --rm --network "$network" --user 65532:65532 \
   --env CGO_ENABLED=0 \
   --env GOFLAGS=-mod=readonly \
   --env SYMMETRY_PRODUCTION_LINUX_V2_ROOTLESS_COMPOSE_WITNESS=1 \
-  --env SYMMETRY_PRODUCTION_LINUX_V2_ROOTLESS_COMPOSE_CONTROL_URL=http://control:4000 \
+  --env SYMMETRY_PRODUCTION_LINUX_V2_ROOTLESS_COMPOSE_CONTROL_URL=https://rootless-portal-edge \
+  --env SYMMETRY_PRODUCTION_LINUX_V2_ROOTLESS_COMPOSE_CA_FILE=/opt/symmetry-ci/portal-ca.pem \
   --env SYMMETRY_PRODUCTION_LINUX_V2_COMPOSE_TRANSITION_RELEASE_URL=http://transition-proxy:4000/__test/release \
   --env SYMMETRY_PRODUCTION_LINUX_V2_ROOTLESS_COMPOSE_OPERATOR_TOKEN="$portal_operator_token" \
   --env SYMMETRY_PRODUCTION_LINUX_V2_ROOTLESS_COMPOSE_PI_STATE_DIR=/var/lib/sym-pi \
@@ -406,7 +464,7 @@ docker run --rm --network "$network" --user 65532:65532 \
   --env SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_WITNESS_OUTPUT_DIR=/tmp/rootless-compose-output \
   --entrypoint /bin/bash golang:1.27.0-bookworm \
   -euc 'mkdir -p "$HOME" "$GOCACHE" "$GOMODCACHE" "$GOTMPDIR" "$SYMMETRY_PRODUCTION_LINUX_V2_ROOTLESS_COMPOSE_WITNESS_OUTPUT_DIR"; cd /workspace/daemon; go mod download; go test -count=1 -timeout 900s -json ./e2e -run "^(TestProductionLinuxV2RootlessComposeNativeWorkItemRefusal|TestProductionLinuxV2UnprovisionedHostRefusal)$"' \
-  >"$event_file" 2>&1 || container_test_status=$?
+  >"$event_file" || container_test_status=$?
 if ! python3 "$repo/scripts/ci/assert-go-test-json.py" "$event_file" \
   TestProductionLinuxV2RootlessComposeNativeWorkItemRefusal \
   TestProductionLinuxV2RootlessComposeNativeWorkItemRefusal/pi \

@@ -5,19 +5,28 @@ package e2e_test
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"net/http/cookiejar"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -33,6 +42,7 @@ import (
 const (
 	linuxV2RootlessComposeWitnessEnvironment            = "SYMMETRY_PRODUCTION_LINUX_V2_ROOTLESS_COMPOSE_WITNESS"
 	linuxV2RootlessComposeControlEnvironment            = "SYMMETRY_PRODUCTION_LINUX_V2_ROOTLESS_COMPOSE_CONTROL_URL"
+	linuxV2RootlessComposeCAEnvironment                 = "SYMMETRY_PRODUCTION_LINUX_V2_ROOTLESS_COMPOSE_CA_FILE"
 	linuxV2RootlessComposeOperatorEnvironment           = "SYMMETRY_PRODUCTION_LINUX_V2_ROOTLESS_COMPOSE_OPERATOR_TOKEN"
 	linuxV2RootlessComposeTransitionReleaseEnvironment  = "SYMMETRY_PRODUCTION_LINUX_V2_COMPOSE_TRANSITION_RELEASE_URL"
 	linuxV2RootlessComposePIRuntimeKeyEnvironment       = "SYMMETRY_PRODUCTION_LINUX_V2_ROOTLESS_COMPOSE_PI_RUNTIME_KEY"
@@ -128,6 +138,76 @@ type linuxV2RootlessComposeEvidence struct {
 	NonGoalWorkItem         bool   `json:"non_goal_work_item"`
 }
 
+func TestRootlessComposePortalRequiresTrustedTLSForSecureSession(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests.Add(1)
+		cookie, _ := request.Cookie("fixture-session")
+		if request.Method == http.MethodGet && request.URL.Path == "/portal/login" {
+			http.SetCookie(writer, &http.Cookie{Name: "fixture-session", Value: "csrf", Secure: true, HttpOnly: true, Path: "/"})
+			_, _ = io.WriteString(writer, `<input name="_csrf_token" value="fixture-csrf">`)
+			return
+		}
+		if cookie == nil || cookie.Value != "csrf" {
+			http.Error(writer, "secure session missing", http.StatusForbidden)
+			return
+		}
+		switch request.URL.Path {
+		case "/portal/login":
+			if request.Method != http.MethodPost || request.FormValue("_csrf_token") != "fixture-csrf" || request.FormValue("operator_token") != "fixture-operator" {
+				http.Error(writer, "invalid login", http.StatusForbidden)
+				return
+			}
+			http.Redirect(writer, request, "/portal", http.StatusFound)
+		case "/portal":
+			_, _ = io.WriteString(writer, `<meta name="csrf-token" content="authenticated-csrf">`)
+		case "/portal/api/workspace":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(writer, `{}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	certificate := filepath.Join(t.TempDir(), "fixture-ca.pem")
+	if err := os.WriteFile(certificate, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newLinuxV2RootlessComposePortal(strings.Replace(server.URL, "https:", "http:", 1), "fixture-operator", certificate); err == nil {
+		t.Fatal("HTTP was accepted for a production Secure session")
+	}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Unrelated fixture CA"},
+		NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour),
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
+	}
+	unrelatedDER, err := x509.CreateCertificate(rand.Reader, ca, ca, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unrelatedCA := filepath.Join(t.TempDir(), "unrelated-ca.pem")
+	if err := os.WriteFile(unrelatedCA, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: unrelatedDER}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newLinuxV2RootlessComposePortal(server.URL, "fixture-operator", unrelatedCA); err == nil {
+		t.Fatal("untrusted TLS fixture certificate was accepted")
+	}
+	if requests.Load() != 0 {
+		t.Fatal("untrusted TLS request reached the HTTP handler")
+	}
+	portal, err := newLinuxV2RootlessComposePortal(server.URL, "fixture-operator", certificate)
+	if err != nil || portal.csrf != "authenticated-csrf" {
+		t.Fatalf("trusted TLS Secure session = %#v, error = %v", portal, err)
+	}
+	if requests.Load() == 0 {
+		t.Fatal("trusted TLS session did not reach the HTTP handler")
+	}
+}
+
 // TestProductionLinuxV2RootlessComposeNativeWorkItemRefusal uses both real
 // pinned native adapters and actual non-Goal WorkItem Runs assigned through
 // the rootless Compose Control plane. Direct Probe assertions supplement, but
@@ -148,7 +228,7 @@ func TestProductionLinuxV2RootlessComposeNativeWorkItemRefusal(t *testing.T) {
 
 	controlURL := strings.TrimSpace(os.Getenv(linuxV2RootlessComposeControlEnvironment))
 	if controlURL == "" {
-		controlURL = "http://control:4000"
+		controlURL = "https://rootless-portal-edge"
 	}
 	operatorToken := strings.TrimSpace(os.Getenv(linuxV2RootlessComposeOperatorEnvironment))
 	if operatorToken == "" {
@@ -165,7 +245,7 @@ func TestProductionLinuxV2RootlessComposeNativeWorkItemRefusal(t *testing.T) {
 		t.Fatalf("secure rootless Compose evidence directory: %v", err)
 	}
 
-	portal, err := newLinuxV2RootlessComposePortal(controlURL, operatorToken)
+	portal, err := newLinuxV2RootlessComposePortal(controlURL, operatorToken, os.Getenv(linuxV2RootlessComposeCAEnvironment))
 	if err != nil {
 		t.Fatalf("connect to rootless Compose Control portal: %v", err)
 	}
@@ -410,17 +490,33 @@ func linuxV2ValidateRootlessComposeNoProcessAuthority(journal state.RunJournal, 
 	return nil
 }
 
-func newLinuxV2RootlessComposePortal(controlURL, operatorToken string) (*linuxV2RootlessComposePortal, error) {
+func newLinuxV2RootlessComposePortal(controlURL, operatorToken, caFile string) (*linuxV2RootlessComposePortal, error) {
 	parsed, err := url.Parse(controlURL)
-	if err != nil || parsed.Host == "" || parsed.Path != "" && parsed.Path != "/" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return nil, errors.New("Control URL must be an absolute HTTP(S) origin")
+	if err != nil || parsed.Host == "" || parsed.Path != "" && parsed.Path != "/" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Scheme != "https" {
+		return nil, errors.New("Control Portal URL must be an absolute HTTPS origin")
 	}
 	baseURL := strings.TrimRight(controlURL, "/")
+	certificate, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, fmt.Errorf("read rootless Compose fixture CA: %w", err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(certificate) {
+		return nil, errors.New("rootless Compose fixture CA contains no certificates")
+	}
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		return nil, fmt.Errorf("create Control session jar: %w", err)
 	}
-	client := &http.Client{Timeout: 15 * time.Second, Jar: jar}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
+	client := &http.Client{Timeout: 15 * time.Second, Jar: jar, Transport: transport}
+	client.CheckRedirect = func(request *http.Request, via []*http.Request) error {
+		if request.URL.Scheme != parsed.Scheme || request.URL.Host != parsed.Host || len(via) >= 10 {
+			return errors.New("rootless Compose Portal redirect left its trusted HTTPS origin")
+		}
+		return nil
+	}
 	loginPage, status, err := linuxV2RootlessComposeDo(client, http.MethodGet, baseURL+"/portal/login", nil, nil)
 	if err != nil || status != http.StatusOK {
 		return nil, errors.New("fetch Control operator login page")
