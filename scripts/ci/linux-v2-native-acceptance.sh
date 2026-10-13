@@ -842,7 +842,7 @@ def config(kind, profile, model, resource_id):
         "args": ["--provider", "openai", "--model", model] if kind == "pi" else [],
         "native_model": model,
         "native_model_provider": "openai",
-        "input_mode": "goal",
+        "input_mode": "json",
         "provider_access": kind == "pi",
         "interactive": True,
         "supervisory_control": False,

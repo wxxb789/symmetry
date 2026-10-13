@@ -110,6 +110,8 @@ trap cleanup_native_services EXIT INT TERM
 
 source "$repo/scripts/ci/linux-v2-native-tools.sh"
 linux_v2_fetch_native_tools "$native_root"
+# Extraction inherits umask 077; the public binaries must execute as UID 65532.
+chmod 0555 "$pi_executable" "$opencode_executable"
 
 source_tree_digest=$(python3 -c 'import json, sys; print(json.load(sys.stdin)["tree_digest"])' <<< "$source_subject_json")
 
@@ -133,68 +135,6 @@ opencode_workspace="$native_root/opencode-workspaces"
 mkdir -m 0700 "$pi_state" "$opencode_state" "$pi_workspace" "$opencode_workspace"
 sudo chown -R 65532:65532 "$pi_state" "$opencode_state" "$pi_workspace" "$opencode_workspace"
 sudo chmod 0700 "$pi_state" "$opencode_state" "$pi_workspace" "$opencode_workspace"
-
-python3 - "$native_root/pi-daemon.json" "$native_root/opencode-daemon.json" \
-  "$GITHUB_REPOSITORY" "$rootless_app_state_dir" <<'PY'
-import json
-import pathlib
-import sys
-
-pi_path, opencode_path, repository, rootless_app_state_dir = sys.argv[1:]
-
-def config(kind, profile, command, version, model, state_dir):
-    agent = {
-        "command": command,
-        "args": ["--provider", "openai", "--model", model] if kind == "pi" else [],
-        "native_model": model,
-        "native_model_provider": "openai",
-        "input_mode": "goal",
-        "provider_access": False,
-        "interactive": True,
-        "supervisory_control": False,
-        "event_format": "jsonl",
-        "env_allowlist": [],
-    }
-    return {
-        "control_plane_url": "http://transition-proxy:4000",
-        "allow_insecure_http": True,
-        "state_dir": state_dir,
-        "cleanup_timeout_ms": 120000,
-        "machine_name": f"rootless-compose-native-{kind}",
-        "agent_profiles": {profile: agent},
-        "workspaces": {
-            "native": {
-                "policy": "existing_checkout",
-                "path": "/workspaces",
-                "repository": "",
-                "root": "",
-                "ref": "",
-                "cleanup": "never",
-            }
-        },
-        "runtime": {
-            "runtime_key": f"rootless-compose-native-{kind}",
-            "name": f"Rootless Compose native {kind} refusal witness",
-            "capacity": 1,
-            "agent_profile": profile,
-            "workspace": "native",
-            "harness_kind": kind,
-            "harness_version": version,
-            "adapter_version": "symmetry-daemon:rootless-compose-witness",
-            "adapter_protocol_version": 1,
-        },
-    }
-
-pathlib.Path(pi_path).write_text(
-    json.dumps(config("pi", "pi-native", "/usr/local/bin/pi", "0.87.1", "gpt-4.1-mini", rootless_app_state_dir), separators=(",", ":")),
-    encoding="utf-8",
-)
-pathlib.Path(opencode_path).write_text(
-    json.dumps(config("opencode", "opencode-native", "/usr/local/bin/opencode", "1.18.32", "openai/gpt-4.1-mini", rootless_app_state_dir), separators=(",", ":")),
-    encoding="utf-8",
-)
-PY
-chmod 0644 "$native_root/pi-daemon.json" "$native_root/opencode-daemon.json"
 
 tls_root="$native_root/portal-tls"
 mkdir -m 0755 "$tls_root"
@@ -273,6 +213,10 @@ services:
         source: $pi_workspace
         target: /workspaces
       - type: bind
+        source: $repo
+        target: /workspace
+        read_only: true
+      - type: bind
         source: $native_root/pi-daemon.json
         target: /etc/symmetry/daemon.json
         read_only: true
@@ -295,6 +239,10 @@ services:
       - type: bind
         source: $opencode_workspace
         target: /workspaces
+      - type: bind
+        source: $repo
+        target: /workspace
+        read_only: true
       - type: bind
         source: $native_root/opencode-daemon.json
         target: /etc/symmetry/daemon.json
@@ -349,15 +297,78 @@ python3 "$repo/scripts/ci/prepare-rootless-compose-owner-claim.py" \
   "$owner_run_metadata" "$control_machine_token" \
   "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$source_tree_digest" "$tls_root/tls.crt"
 
-python3 - "$owner_run_metadata" "$native_root/unprovisioned-config.json" \
-  "$GITHUB_REPOSITORY" <<'PY'
+python3 - "$native_root/pi-daemon.json" "$native_root/opencode-daemon.json" \
+  "$owner_run_metadata" "$GITHUB_SHA" "$rootless_app_state_dir" <<'PY'
 import json
 import pathlib
 import sys
 
-run_path, config_path, repository = sys.argv[1:]
+pi_path, opencode_path, run_path, commit, rootless_app_state_dir = sys.argv[1:]
 run = json.loads(pathlib.Path(run_path).read_text(encoding="utf-8"))
-model = "openai/gpt-4.1-mini"
+
+def config(kind, profile, command, version, model, state_dir):
+    agent = {
+        "command": command,
+        "args": ["--provider", "openai", "--model", model] if kind == "pi" else [],
+        "native_model": model,
+        "native_model_provider": "openai",
+        "input_mode": "json",
+        "provider_access": False,
+        "interactive": True,
+        "supervisory_control": False,
+        "event_format": "jsonl",
+        "env_allowlist": [],
+    }
+    return {
+        "control_plane_url": "http://transition-proxy:4000",
+        "allow_insecure_http": True,
+        "state_dir": state_dir,
+        "cleanup_timeout_ms": 120000,
+        "machine_name": f"rootless-compose-native-{kind}",
+        "agent_profiles": {profile: agent},
+        "workspaces": {
+            "native": {
+                "policy": "git_worktree",
+                "path": "",
+                "repository": "/workspace",
+                "root": "/workspaces",
+                "ref": commit,
+                "cleanup": "never",
+            }
+        },
+        "runtime": {
+            "runtime_key": f"rootless-compose-native-{kind}",
+            "name": f"Rootless Compose native {kind} refusal witness",
+            "capacity": 1,
+            "agent_profile": profile,
+            "workspace": "native",
+            "repository_resource_id": run["repository_resource_id"],
+            "harness_kind": kind,
+            "harness_version": version,
+            "adapter_version": "symmetry-daemon:rootless-compose-witness",
+            "adapter_protocol_version": 1,
+        },
+    }
+
+pathlib.Path(pi_path).write_text(
+    json.dumps(config("pi", "pi-native", "/usr/local/bin/pi", "0.87.1", "gpt-4.1-mini", rootless_app_state_dir), separators=(",", ":")),
+    encoding="utf-8",
+)
+pathlib.Path(opencode_path).write_text(
+    json.dumps(config("opencode", "opencode-native", "/usr/local/bin/opencode", "1.18.32", "gpt-4.1-mini", rootless_app_state_dir), separators=(",", ":")),
+    encoding="utf-8",
+)
+PY
+chmod 0644 "$native_root/pi-daemon.json" "$native_root/opencode-daemon.json"
+
+python3 - "$owner_run_metadata" "$native_root/unprovisioned-config.json" <<'PY'
+import json
+import pathlib
+import sys
+
+run_path, config_path = sys.argv[1:]
+run = json.loads(pathlib.Path(run_path).read_text(encoding="utf-8"))
+model = "gpt-4.1-mini"
 config = {
     "control_plane_url": "http://control:4000",
     "allow_insecure_http": True,
@@ -373,7 +384,7 @@ config = {
             "args": [],
             "native_model": model,
             "native_model_provider": "openai",
-            "input_mode": "goal",
+            "input_mode": "json",
             "provider_access": False,
             "interactive": True,
             "supervisory_control": False,
@@ -385,7 +396,7 @@ config = {
         "native": {
             "policy": "git_clone_v2",
             "path": "",
-            "repository": "https://github.com/" + repository + ".git",
+            "repository": "/workspace",
             "root": "/opt/symmetry-owner-test/production/clones",
             "seed_root": "/opt/symmetry-owner-test/production/seeds",
             "ref": "",

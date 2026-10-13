@@ -9,84 +9,15 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"golang.org/x/sys/unix"
 )
 
-type gateFDOwnershipDescriptor struct {
-	descriptor int
-	flags      int
-	flagsErr   error
-	stat       unix.Stat_t
-	statErr    error
-}
-
-var gateFDOwnershipEntry = snapshotGateFDOwnership()
-
-func snapshotGateFDOwnershipDescriptor(descriptor int) gateFDOwnershipDescriptor {
-	snapshot := gateFDOwnershipDescriptor{descriptor: descriptor}
-	snapshot.flags, snapshot.flagsErr = unix.FcntlInt(uintptr(descriptor), unix.F_GETFD, 0)
-	snapshot.statErr = unix.Fstat(descriptor, &snapshot.stat)
-	return snapshot
-}
-
-func snapshotGateFDOwnership() [4]gateFDOwnershipDescriptor {
-	var snapshot [4]gateFDOwnershipDescriptor
-	for index, descriptor := range [...]int{142, 0, 1, 2} {
-		snapshot[index] = snapshotGateFDOwnershipDescriptor(descriptor)
-	}
-	return snapshot
-}
-
-func logGateFDOwnership(t *testing.T, stage string, snapshots ...gateFDOwnershipDescriptor) {
-	t.Helper()
-	for _, snapshot := range snapshots {
-		t.Logf("census-fd-ownership stage=%s fd=%d flags=%d flags_errno=%v stat_errno=%v type=%o dev=%d ino=%d rdev=%d",
-			stage, snapshot.descriptor, snapshot.flags, snapshot.flagsErr, snapshot.statErr,
-			snapshot.stat.Mode&unix.S_IFMT, snapshot.stat.Dev, snapshot.stat.Ino, snapshot.stat.Rdev)
-	}
-}
-
-// Temporary current-run ownership oracle, not installed-gate qualification.
-func TestGateFDOwnershipProbe(t *testing.T) {
-	logGateFDOwnership(t, "package-entry", gateFDOwnershipEntry[:]...)
-	entry := snapshotGateFDOwnership()
-	logGateFDOwnership(t, "companion-entry", entry[:]...)
-	probe := buildGateFDCensusProbe(t)
-	stdio, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer stdio.Close()
-	ready := snapshotGateFDOwnership()
-	logGateFDOwnership(t, "stdio-ready", ready[:]...)
-	logGateFDOwnership(t, "owned-stdio", snapshotGateFDOwnershipDescriptor(int(stdio.Fd())))
-	probeContext, cancelProbe := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancelProbe()
-	command := exec.CommandContext(probeContext, probe, "ownership-probe")
-	command.Env = []string{"PATH=/usr/bin:/bin", "LANG=C"}
-	command.Stdin = stdio
-	command.ExtraFiles = []*os.File{nil, stdio, stdio, stdio, stdio}
-	output, err := command.CombinedOutput()
-	t.Logf("current-source ownership probe:\n%s", output)
-	if err != nil {
-		t.Fatalf("current-source ownership probe rejected its inherited FD table: %v", err)
-	}
-}
-
 func TestGateFDCensusAllowsStdioAndRejectsUnexpectedDescriptors(t *testing.T) {
-	logGateFDOwnership(t, "package-entry", gateFDOwnershipEntry[:]...)
-	entry := snapshotGateFDOwnership()
-	logGateFDOwnership(t, "regression-entry", entry[:]...)
 	probe := buildGateFDCensusProbe(t)
 	stdio, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer stdio.Close()
-	ready := snapshotGateFDOwnership()
-	logGateFDOwnership(t, "stdio-ready", ready[:]...)
-	logGateFDOwnership(t, "owned-stdio", snapshotGateFDOwnershipDescriptor(int(stdio.Fd())))
 	for _, scenario := range []string{"allowed-fds", "unexpected-fd", "occupied-image-fd", "numeric-names"} {
 		t.Run(scenario, func(t *testing.T) {
 			probeContext, cancelProbe := context.WithTimeout(context.Background(), 10*time.Second)
@@ -184,20 +115,6 @@ static int census_closedir(DIR *directory) {
 #include "gate.c"
 #undef main
 
-static void census_descriptor_snapshot(int descriptor) {
-  errno = 0;
-  int flags = fcntl(descriptor, F_GETFD);
-  int flags_errno = flags < 0 ? errno : 0;
-  struct stat identity;
-  memset(&identity, 0, sizeof(identity));
-  errno = 0;
-  int stat_errno = fstat(descriptor, &identity) == 0 ? 0 : errno;
-  fprintf(stderr, "census-fd-ownership stage=probe-entry fd=%d flags=%d flags_errno=%d stat_errno=%d type=%o dev=%llu ino=%llu rdev=%llu\n",
-      descriptor, flags, flags_errno, stat_errno, (unsigned int)(identity.st_mode & S_IFMT),
-      (unsigned long long)identity.st_dev, (unsigned long long)identity.st_ino,
-      (unsigned long long)identity.st_rdev);
-}
-
 static int check_numeric_names(void) {
   const char *invalid[] = {
     "", "-1", "+1", " 1", "1 ", "1x", "2147483648",
@@ -239,16 +156,9 @@ static int check_numeric_names(void) {
 int main(int argc, char **argv) {
   if (argc != 2) return 1;
   if (strcmp(argv[1], "numeric-names") == 0) return check_numeric_names();
-  int ownership_probe = strcmp(argv[1], "ownership-probe") == 0;
-  if (ownership_probe) {
-    const int descriptors[] = {142, 0, 1, 2};
-    for (size_t index = 0; index < sizeof(descriptors) / sizeof(descriptors[0]); ++index) {
-      census_descriptor_snapshot(descriptors[index]);
-    }
-  }
   int extra_open = strcmp(argv[1], "unexpected-fd") == 0;
   int image_open = strcmp(argv[1], "occupied-image-fd") == 0;
-  if (!ownership_probe && !extra_open && !image_open && strcmp(argv[1], "allowed-fds") != 0) return 1;
+  if (!extra_open && !image_open && strcmp(argv[1], "allowed-fds") != 0) return 1;
   for (int descriptor = 0; descriptor <= EXEC_STATUS_FD + 1; ++descriptor) {
     int expected_open = descriptor == IMAGE_FD ? image_open :
         (descriptor <= EXEC_STATUS_FD || extra_open);
@@ -263,11 +173,6 @@ int main(int argc, char **argv) {
   int result = reject_unexpected_inherited_fds();
   int error_number = errno;
   int expected_errno = image_open ? EPROTO : (extra_open ? EPERM : 0);
-  if (ownership_probe) {
-    fprintf(stderr, "census-fd-ownership stage=probe-result result=%d errno=%d last_fd=%ld\n",
-        result, error_number, census_last_fd);
-    fprintf(stderr, "%s%s", census_trace, census_trace_truncated ? "<trace truncated>\n" : "");
-  }
   if (result != (expected_errno == 0 ? 0 : -1) ||
       (expected_errno != 0 && error_number != expected_errno) ||
       (extra_open && census_last_fd != EXEC_STATUS_FD + 1)) {
@@ -289,12 +194,8 @@ int main(int argc, char **argv) {
 	compileContext, cancelCompile := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancelCompile()
 	compile := exec.CommandContext(compileContext, compiler, "-std=c11", "-O2", "-I", gateDirectory, "-o", probe, probeSource)
-	beforeCompile := snapshotGateFDOwnership()
-	logGateFDOwnership(t, "compile-before", beforeCompile[:]...)
 	if output, err := compile.CombinedOutput(); err != nil {
 		t.Fatalf("compile current gate census probe: %v\n%s", err, output)
 	}
-	afterCompile := snapshotGateFDOwnership()
-	logGateFDOwnership(t, "compile-after", afterCompile[:]...)
 	return probe
 }

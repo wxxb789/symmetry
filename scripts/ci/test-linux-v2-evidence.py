@@ -314,6 +314,77 @@ class ExporterTest(unittest.TestCase):
         self.assertFalse(manifest["complete"])
         self.assertEqual(manifest["incomplete_evidence_files"], [f"{LEGACY_NAMES[0]}.json"])
 
+    def test_helper_scan_crash_stages_preserve_initialized_incomplete_proof(self) -> None:
+        for name, case, scan_stage in (
+            ("helper-scan-failure-crash", "helper_scan_failure_sigkill_before_cancel", "scan_failure_journal"),
+            ("helper-scan-pending-crash", "helper_pending_scan_sigkill", "pending_scan_journal"),
+        ):
+            stages = (None, scan_stage, "complete")
+            for index, stage in enumerate(stages):
+                with self.subTest(case=case, stage=stage):
+                    source = self.private_dir(f"{name}-source-{index}")
+                    self.populate_legacy(source)
+                    path = source / name / "witness-evidence.json"
+                    value = {"version": 1, "case": case, "status": "initialized", "metadata": metadata(),
+                             "case_root": "/private/case/root", "assertions": {},
+                             "journal_snapshots": None, "process_snapshots": None}
+                    if stage is not None:
+                        value["stage"] = stage
+                    original = self.write_json(path, value)
+                    for run_status in (("failed", "passed") if stage == "complete" else ("failed",)):
+                        output = self.private_dir(f"{name}-output-{index}-{run_status}")
+                        result = self.run_export("legacy", str(output), "1" * 40, run_status, "--witness-root", str(source))
+                        if run_status == "failed":
+                            self.assertEqual(result.returncode, 0, result.stderr)
+                        else:
+                            self.assertNotEqual(result.returncode, 0)
+                        manifest = json.loads((output / "manifest.json").read_text())
+                        self.assertEqual(manifest["status"], "failed")
+                        self.assertFalse(manifest["complete"])
+                        self.assertEqual(manifest["incomplete_evidence_files"], [f"{name}.json"])
+                        projected = json.loads((output / f"{name}.json").read_text())
+                        self.assertEqual(projected["status"], "initialized")
+                        self.assertEqual(projected["assertions"], {})
+                        self.assertIsNone(projected["journal_snapshots"])
+                        self.assertIsNone(projected["process_snapshots"])
+                        if stage is None:
+                            self.assertNotIn("stage", projected)
+                        else:
+                            self.assertEqual(projected["stage"], stage)
+                        self.assertNotIn(b"/private/", (output / f"{name}.json").read_bytes())
+                    self.assertEqual(path.read_bytes(), original)
+
+    def test_helper_scan_crash_stage_rejects_unknown_and_credential_canaries(self) -> None:
+        for name, case, other_scan_stage in (
+            ("helper-scan-failure-crash", "helper_scan_failure_sigkill_before_cancel", "pending_scan_journal"),
+            ("helper-scan-pending-crash", "helper_pending_scan_sigkill", "scan_failure_journal"),
+        ):
+            for index, (stage, credential) in enumerate((
+                ("CREDENTIAL-CANARY-NOT-A-STAGE", False), (other_scan_stage, False), ("running_journal", True),
+            )):
+                with self.subTest(case=case, stage=stage, credential=credential):
+                    source = self.private_dir(f"{name}-rejected-source-{index}")
+                    output = self.private_dir(f"{name}-rejected-output-{index}")
+                    self.populate_legacy(source)
+                    path = source / name / "witness-evidence.json"
+                    value = {"version": 1, "case": case, "status": "initialized", "stage": stage,
+                             "metadata": metadata(), "case_root": "/private/case/root", "assertions": {},
+                             "journal_snapshots": None, "process_snapshots": None}
+                    original = self.write_json(path, value)
+                    arguments = ["legacy", str(output), "1" * 40, "failed", "--witness-root", str(source)]
+                    if credential:
+                        secret_file = self.root / f"{name}-stage-secrets"
+                        secret_file.write_bytes(stage.encode() + b"\0")
+                        arguments.extend(("--secret-values-file", str(secret_file)))
+                    result = self.run_export(*arguments)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("configured credential value" if credential else "stage is not allowlisted", result.stderr)
+                    self.assertNotIn(stage, result.stdout + result.stderr)
+                    self.assertFalse((output / f"{name}.json").exists())
+                    self.assertFalse((output / "manifest.json").exists())
+                    self.assertNotIn(stage.encode(), b"".join(child.read_bytes() for child in output.iterdir()))
+                    self.assertEqual(path.read_bytes(), original)
+
     def test_legacy_rejects_truncated_nested_receipt_and_owner(self) -> None:
         for index, (nested, required_field) in enumerate((("stop_receipt", "status"), ("authority", "target_pid"))):
             with self.subTest(nested=nested, required_field=required_field):

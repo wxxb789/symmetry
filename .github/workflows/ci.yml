@@ -2,6 +2,8 @@ name: CI
 
 on:
   push:
+    branches: [main]
+    tags: ['**']
   pull_request:
   workflow_dispatch:
 
@@ -412,12 +414,11 @@ jobs:
             exit "$summary_status"
           fi
           printf 'provider_bridge_smoke_status=passed\n' >> "$RUNNER_TEMP/pi-control-e2e-linux-provenance.txt"
-      - name: Run control format and compile
+      - name: Compile Control for Linux Pi E2E
         shell: bash
         run: |
           set -Eeuo pipefail
           log="$RUNNER_TEMP/pi-control-e2e-linux.log"
-          mix format --check-formatted 2>&1 | tee -a "$log"
           mix compile --warnings-as-errors 2>&1 | tee -a "$log"
       - name: Verify Linux Pi cleanup pidfd group signaling
         shell: bash
@@ -1038,15 +1039,10 @@ jobs:
             exit $summaryStatus
           }
           Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value 'provider_bridge_smoke_status=passed'
-      - name: Run control format and compile
+      - name: Compile Control for Windows Pi E2E
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $formatOutput = & mix format --check-formatted 2>&1
-          $formatStatus = $LASTEXITCODE
-          $formatOutput | Tee-Object -FilePath $env:PI_E2E_LOG -Append | Out-Host
-          if ($formatStatus -ne 0) { exit $formatStatus }
-
           $compileOutput = & mix compile --warnings-as-errors 2>&1
           $compileStatus = $LASTEXITCODE
           $compileOutput | Tee-Object -FilePath $env:PI_E2E_LOG -Append | Out-Host
@@ -1311,12 +1307,6 @@ jobs:
           python3 ../scripts/ci/test-linux-v2-evidence.py
           python3 ../scripts/ci/test-rootless-compose-owner-claim.py
           sudo python3 ../scripts/ci/test-linux-v2-control-receipt.py
-      - name: Build non-mutating test descriptor entry oracle
-        shell: bash
-        run: |
-          umask 077
-          cc -std=c11 -O2 -Wall -Wextra -Werror \
-            -o "$RUNNER_TEMP/census-fd-entry" ../scripts/ci/census-fd-entry.c
       - name: Run ordinary Go tests and gate deterministic pidfd peer-negative events
         shell: bash
         run: |
@@ -1331,8 +1321,7 @@ jobs:
           import sys
           result = subprocess.run(sys.argv[1:], close_fds=True)
           sys.exit(result.returncode if result.returncode >= 0 else 128 - result.returncode)
-          ' "$RUNNER_TEMP/census-fd-entry" "$(command -v go)" test \
-            -count=1 -timeout 300s -json -exec "$RUNNER_TEMP/census-fd-entry" ./... \
+          ' "$(command -v go)" test -count=1 -timeout 300s -json ./... \
             >"$test_events" 2>"$tool_stderr"
           test_status=$?
           set -e
@@ -1369,19 +1358,8 @@ jobs:
           import sys
           result = subprocess.run(sys.argv[1:], close_fds=True)
           sys.exit(result.returncode if result.returncode >= 0 else 128 - result.returncode)
-          ' "$RUNNER_TEMP/census-fd-entry" "$(command -v go)" test \
-            -race -count=1 -timeout 600s -exec "$RUNNER_TEMP/census-fd-entry" ./...
+          ' "$(command -v go)" test -race -count=1 -timeout 600s ./...
       - run: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...
-      - name: Upload ordinary test descriptor diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: daemon-descriptor-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
-          if-no-files-found: warn
-          retention-days: 7
-          path: |
-            ${{ runner.temp }}/daemon-go-test.json
-            ${{ runner.temp }}/daemon-go-tool.stderr
       - name: Upload ordinary namespace prerequisite evidence
         if: always()
         uses: actions/upload-artifact@v4

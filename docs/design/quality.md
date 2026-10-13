@@ -41,6 +41,12 @@ tests, the wire-contract gate and daemon/control restart E2E. Preserve those
 gates. Frontend commands do not exist until goal 0007 builds `frontend/`; do not
 report them as run.
 
+Run CI for pull requests, pushes to `main`, tags, and manual dispatch; do not
+duplicate the full matrix on feature-branch pushes. PR evidence binds the tested
+merge revision, not the unmerged feature head. Branches without a PR and
+conflicted PRs have no automatic feature-head run. The Control job owns the
+canonical formatter gate; Pi jobs retain platform-specific compilation and E2E.
+
 Ordinary Linux user/PID namespace fixtures still run as the original
 unprivileged runner UID. On disposable GitHub-hosted runners, preparation may
 attach a fresh per-program AppArmor `userns` exception to a private copy of the
@@ -50,8 +56,8 @@ Installed-owner host prerequisites must be proved in the same protected manual
 native-acceptance job as their consumers, not on a separate automatic PR runner.
 A skipped qualification job is unavailable evidence, never a passed predicate.
 
-Ordinary Go CI inherits only stdio from its command caller. Establish that
-descriptor boundary before Go starts, not inside a native census fixture.
+Ordinary daemon Go test commands inherit only stdio from their command caller.
+Establish that descriptor boundary before Go starts, not inside a native census fixture.
 Descriptors subsequently owned by a test remain subject to the unchanged
 production census, including unexpected FD rejection. This isolates descriptor
 inheritance only; it does not qualify a host or identify an upstream producer.
@@ -61,8 +67,15 @@ the five Windows positive integration scenarios. Test-only capability projection
 for admission does not establish installed-owner qualification. Linux-specific
 provider progress, crash/candidate handling, handoff and resume still need their
 own installed-owner evidence; generic Control state tests cannot replace it.
-Finite rootless failure diagnostics are separate from acceptance summaries and
+Finite witness failure diagnostics are separate from acceptance summaries and
 cannot satisfy missing receipts or turn a failed witness into a passing run.
+Legacy helper-scan crash phases identify only the entered assertion boundary;
+initialized evidence with absent snapshots remains incomplete.
+Rootless native fixtures must load through the production config validator and
+reuse a real repository resource binding. Public pinned executable inodes are
+read-only and executable by the container UID; private extraction directories
+and state stay private. Archive extraction under umask 077 alone does not
+preserve cross-UID execute permission.
 
 | Surface | Actual commands / target additions |
 | --- | --- |

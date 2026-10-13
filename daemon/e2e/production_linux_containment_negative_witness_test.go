@@ -59,6 +59,7 @@ type linuxNegativeWitnessEvidence struct {
 	Version          int                               `json:"version"`
 	Case             string                            `json:"case"`
 	Status           string                            `json:"status"`
+	Stage            string                            `json:"stage,omitempty"`
 	Metadata         linuxNegativeWitnessMetadata      `json:"metadata"`
 	CaseRoot         string                            `json:"case_root"`
 	Crash            *linuxWitnessExitStatus           `json:"crash,omitempty"`
@@ -1897,10 +1898,20 @@ func runLinuxHelperScanCrashWitness(t *testing.T, environment e2eEnvironment, da
 		}
 		cleanupLinuxNegativeWitnessProcess(t, targetPID, targetIdentity, churnPID, helperPID, helperIdentity)
 	}()
+	defer func(initial linuxNegativeWitnessEvidence) {
+		if t.Failed() {
+			// Preserve initialized proof before cleanup, even if final evidence was populated.
+			initial.Stage = evidence.Stage
+			initial.Assertions = map[string]bool{}
+			writeLinuxNegativeWitnessEvidence(t, target.EvidencePath, initial)
+		}
+	}(evidence)
+	evidence.Stage = "daemon_task_setup"
 	daemon = startProductionDaemonWitness(t, daemonBinary, target.ConfigPath, caseRoot, environment.enrollmentToken, "slow", "first")
 	profile, workspace := profileAndWorkspace(t, target.ConfigPath)
 	operator := newOperator(t, environment)
 	task := submit(t, operator, daemonRun{profile: profile, workspace: workspace}, caseName, "slow")
+	evidence.Stage = "running_journal"
 	file, err := waitForLinuxWitnessJournal(target.StateDir, "helper scan crash authority", 45*time.Second, func(value linuxWitnessJournalFile) bool {
 		return value.Journal.LocalState == "running" && value.Journal.ContainmentAuthority != nil && value.Journal.ContainmentScans != nil
 	})
@@ -1909,6 +1920,7 @@ func runLinuxHelperScanCrashWitness(t *testing.T, environment e2eEnvironment, da
 		t.Fatal(err)
 	}
 	targetPID, targetIdentity, helperPID, helperIdentity = linuxWitnessOwnerIDs(file.Journal)
+	evidence.Stage = "descendant_marker"
 	churnPID, err = waitForLinuxWitnessPIDMarker(target.DescendantMarker, 20*time.Second)
 	if err != nil {
 		daemon.stop(t)
@@ -1917,6 +1929,7 @@ func runLinuxHelperScanCrashWitness(t *testing.T, environment e2eEnvironment, da
 	beforeTarget := linuxWitnessProcessSnapshotAt("target_before_helper_sigkill", targetPID, targetIdentity)
 	beforeChurn := linuxWitnessProcessSnapshotAt("same_group_descendant_before_helper_sigkill", churnPID, "")
 	assertLinuxWitnessSameGroup(t, beforeTarget, beforeChurn)
+	evidence.Stage = "trigger_fired_marker"
 	if err := os.WriteFile(triggerPath, []byte("trigger\n"), 0o600); err != nil {
 		t.Fatalf("write helper scan trigger: %v", err)
 	}
@@ -1925,11 +1938,13 @@ func runLinuxHelperScanCrashWitness(t *testing.T, environment e2eEnvironment, da
 		t.Fatalf("wait for helper scan injection marker: %v", err)
 	}
 	if pending {
+		evidence.Stage = "pending_scan_journal"
 		file, err = waitForLinuxWitnessJournal(target.StateDir, "durable helper pending scan", 20*time.Second, func(value linuxWitnessJournalFile) bool {
 			scans := value.Journal.ContainmentScans
 			return scans != nil && !value.Journal.ContainmentUnproven && scans.Helper.PendingSequence > scans.Helper.CompletedSequence && scans.Helper.UnprovenSequence == 0
 		})
 	} else {
+		evidence.Stage = "scan_failure_journal"
 		file, err = waitForLinuxWitnessJournal(target.StateDir, "latched helper-only scan failure", 20*time.Second, func(value linuxWitnessJournalFile) bool {
 			scans := value.Journal.ContainmentScans
 			return scans != nil && value.Journal.ContainmentUnproven && scans.Helper.UnprovenSequence > 0 && scans.Helper.FailureKind == "descendant_scan_failure"
@@ -1939,6 +1954,7 @@ func runLinuxHelperScanCrashWitness(t *testing.T, environment e2eEnvironment, da
 		daemon.stop(t)
 		t.Fatal(err)
 	}
+	evidence.Stage = "helper_exit"
 	if err := killLinuxWitnessProcess(t, helperPID, helperIdentity); err != nil {
 		t.Fatalf("SIGKILL exact containment helper: %v", err)
 	}
@@ -1949,6 +1965,7 @@ func runLinuxHelperScanCrashWitness(t *testing.T, environment e2eEnvironment, da
 	// The helper is deliberately killed before cancellation. The surviving
 	// daemon mirror must force-stop the original group but may not turn helper
 	// failure or its unacknowledged scan into a clean receipt.
+	evidence.Stage = "mirror_takeover"
 	cancelTask(t, operator, task.TaskID)
 	condition, err := waitForLinuxWitnessJournal(target.StateDir, "mirror force-stop without scan receipt", 45*time.Second, func(value linuxWitnessJournalFile) bool {
 		journal := value.Journal
@@ -1964,6 +1981,7 @@ func runLinuxHelperScanCrashWitness(t *testing.T, environment e2eEnvironment, da
 		daemon.stop(t)
 		t.Fatalf("wait for unresolved mirror takeover state: %v", err)
 	}
+	evidence.Stage = "post_takeover"
 	if err := waitForLinuxWitnessIdentityGone(churnPID, "", 20*time.Second); err != nil {
 		daemon.stop(t)
 		t.Fatalf("mirror did not force-stop the live original-group descendant: %v", err)
@@ -2006,6 +2024,7 @@ func runLinuxHelperScanCrashWitness(t *testing.T, environment e2eEnvironment, da
 	}
 	evidence.RawOutput = linuxWitnessLogs(daemon, nil)
 	evidence.Notes = []string{"The helper was SIGKILLed after its scan failure or durable pre-scan fence and before task cancellation; the live daemon mirror force-stopped the original pidfd group but refused a receipt and journal clear."}
+	evidence.Stage = "complete"
 	writeLinuxNegativeWitnessEvidence(t, target.EvidencePath, evidence)
 	daemon.stop(t)
 }

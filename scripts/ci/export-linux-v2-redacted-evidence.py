@@ -92,6 +92,16 @@ LEGACY_WITNESSES = (
     "helper-scan-pending-crash", "literal-pid-reuse", "stop-response-lost",
     "release-response-lost", "helper-dead-mirror",
 )
+LEGACY_HELPER_SCAN_CRASH_STAGES = {
+    "helper_scan_failure_sigkill_before_cancel": {
+        "daemon_task_setup", "running_journal", "descendant_marker", "trigger_fired_marker",
+        "scan_failure_journal", "helper_exit", "mirror_takeover", "post_takeover", "complete",
+    },
+    "helper_pending_scan_sigkill": {
+        "daemon_task_setup", "running_journal", "descendant_marker", "trigger_fired_marker",
+        "pending_scan_journal", "helper_exit", "mirror_takeover", "post_takeover", "complete",
+    },
+}
 SAFE_STAGE_HOLDS = (
     "reservation_durable", "helper_bound", "gate_bound", "handoff_prepared", "handoff_committed",
     "lease_armed", "checkout_ready", "native_release", "stop_receipt_durable", "leaf_removed", "journal_cleared",
@@ -575,6 +585,8 @@ def project_legacy_document(document: dict) -> dict:
     elif "assertions" in document or "pid_reuse" in document or "helper_hello" in document:
         family = "negative"
         allowed = LEGACY_NEGATIVE_KEYS
+        if isinstance(document.get("case"), str) and document["case"] in LEGACY_HELPER_SCAN_CRASH_STAGES:
+            allowed = allowed | {"stage"}
     else:
         family = "spine"
         allowed = LEGACY_SPINE_KEYS
@@ -590,6 +602,8 @@ def project_legacy_document(document: dict) -> dict:
     }
     if "stage" in document:
         result["stage"] = safe_text(document["stage"], "stage")
+        if result["case"] in LEGACY_HELPER_SCAN_CRASH_STAGES and result["stage"] not in LEGACY_HELPER_SCAN_CRASH_STAGES[result["case"]]:
+            fail("legacy helper scan crash stage is not allowlisted")
     if "status" in document:
         result["status"] = safe_text(document["status"], "status")
     for key in ("crash", "crash_after_stop_receipt"):
