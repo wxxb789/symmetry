@@ -105,6 +105,207 @@ func TestMaterializeProviderBridgeExtensionRejectsExistingSymlink(t *testing.T) 
 	}
 }
 
+func TestMaterializeProviderBridgeExtensionForShareRequiresProvisionedSafePath(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("shared provider extension permissions are Linux-specific")
+	}
+	stateDir := t.TempDir()
+	share := makeProviderBridgeShare(t)
+	expectedBGroupID := providerBridgeTestGroupID(t, share)
+	tests := []struct {
+		name      string
+		directory string
+		stateDir  string
+	}{
+		{name: "missing share", directory: filepath.Join(t.TempDir(), "not-created"), stateDir: stateDir},
+		{name: "relative share", directory: "relative/share", stateDir: stateDir},
+		{name: "noncanonical share", directory: share + string(filepath.Separator) + ".." + string(filepath.Separator) + filepath.Base(share), stateDir: stateDir},
+		{name: "share equals state", directory: stateDir, stateDir: stateDir},
+		{name: "share inside state", directory: func() string {
+			path := filepath.Join(stateDir, "share")
+			if err := os.Mkdir(path, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			return path
+		}(), stateDir: stateDir},
+		{name: "relative state", directory: share, stateDir: "relative/state"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := MaterializeProviderBridgeExtensionForShare(test.directory, test.stateDir, expectedBGroupID, testProviderGrants()); err == nil {
+				t.Fatal("unsafe or unprovisioned provider extension share was accepted")
+			}
+		})
+	}
+	if _, err := os.Lstat(filepath.Join(tests[0].directory, providerBridgeExtensionPrefix)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing share was created implicitly: %v", err)
+	}
+
+	unsafe := t.TempDir()
+	if err := os.Chmod(unsafe, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MaterializeProviderBridgeExtensionForShare(unsafe, stateDir, expectedBGroupID, testProviderGrants()); err == nil {
+		t.Fatal("share without setgid group traversal was accepted")
+	}
+	wrongBGroupID := expectedBGroupID + 1
+	if wrongBGroupID == 0 {
+		wrongBGroupID = expectedBGroupID - 1
+	}
+	if _, err := MaterializeProviderBridgeExtensionForShare(share, stateDir, wrongBGroupID, testProviderGrants()); err == nil {
+		t.Fatal("share owned by a group other than configured B primary GID was accepted")
+	}
+}
+
+func TestMaterializeProviderBridgeExtensionForShareProducesAOwnedBReadableImmutableFile(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("shared provider extension permissions are Linux-specific")
+	}
+	stateDir := t.TempDir()
+	share := makeProviderBridgeShare(t)
+	expectedBGroupID := providerBridgeTestGroupID(t, share)
+	first, err := MaterializeProviderBridgeExtensionForShare(share, stateDir, expectedBGroupID, testProviderGrants())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := MaterializeProviderBridgeExtensionForShare(share, stateDir, expectedBGroupID, testProviderGrants())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second || filepath.Dir(first.Path) != share {
+		t.Fatalf("shared extension = %#v then %#v", first, second)
+	}
+	info, err := os.Lstat(first.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uid, gid, ok := providerBridgeUnixOwner(info)
+	directoryInfo, err := os.Stat(share)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, directoryGID, directoryOwned := providerBridgeUnixOwner(directoryInfo)
+	if !ok || !directoryOwned || uid != uint64(os.Geteuid()) || gid != directoryGID || info.Mode().Perm() != 0o440 ||
+		info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+		t.Fatalf("shared extension ownership/mode = uid:%d gid:%d mode:%#o, directory gid:%d", uid, gid, info.Mode(), directoryGID)
+	}
+	if info.Mode().Perm()&0o040 == 0 || info.Mode().Perm()&0o022 != 0 {
+		t.Fatalf("shared extension is not group-readable and non-writable: %v", info.Mode())
+	}
+	if directoryInfo.Mode().Perm() != 0o750 || directoryInfo.Mode()&os.ModeSetgid == 0 || directoryInfo.Mode().Perm()&0o022 != 0 {
+		t.Fatalf("shared extension directory is not setgid group-traversable without write access: %v", directoryInfo.Mode())
+	}
+}
+
+func TestMaterializeProviderBridgeExtensionForShareRejectsSymlinkAndDigestConflict(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("shared provider extension permissions are Linux-specific")
+	}
+	stateDir := t.TempDir()
+	source, err := providerBridgeExtensionSource(testProviderGrants())
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(source)
+	name := providerBridgeExtensionPrefix + hex.EncodeToString(digest[:]) + providerBridgeExtensionSuffix
+
+	t.Run("symlink", func(t *testing.T) {
+		share := makeProviderBridgeShare(t)
+		expectedBGroupID := providerBridgeTestGroupID(t, share)
+		target := filepath.Join(t.TempDir(), "target.ts")
+		if err := os.WriteFile(target, source, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Join(share, name)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := MaterializeProviderBridgeExtensionForShare(share, stateDir, expectedBGroupID, testProviderGrants()); err == nil {
+			t.Fatal("shared materializer accepted an existing digest symlink")
+		}
+	})
+
+	t.Run("directory symlink", func(t *testing.T) {
+		target := makeProviderBridgeShare(t)
+		expectedBGroupID := providerBridgeTestGroupID(t, target)
+		alias := filepath.Join(t.TempDir(), "share-alias")
+		if err := os.Symlink(target, alias); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := MaterializeProviderBridgeExtensionForShare(alias, stateDir, expectedBGroupID, testProviderGrants()); err == nil {
+			t.Fatal("shared materializer accepted a replaced directory path")
+		}
+	})
+
+	t.Run("conflicting content", func(t *testing.T) {
+		share := makeProviderBridgeShare(t)
+		expectedBGroupID := providerBridgeTestGroupID(t, share)
+		path := filepath.Join(share, name)
+		if err := os.WriteFile(path, []byte("conflicting digest content"), 0o440); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, 0o440); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := MaterializeProviderBridgeExtensionForShare(share, stateDir, expectedBGroupID, testProviderGrants()); err == nil {
+			t.Fatal("shared materializer accepted conflicting digest content")
+		}
+	})
+}
+
+func makeProviderBridgeShare(t *testing.T) string {
+	t.Helper()
+	share := t.TempDir()
+	if err := os.Chmod(share, os.ModeSetgid|0o750); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(share)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o750 || info.Mode()&os.ModeSetgid == 0 {
+		t.Fatalf("provider extension share mode = %v, want setgid 0750", info.Mode())
+	}
+	return share
+}
+
+func providerBridgeTestGroupID(t *testing.T, directory string) uint32 {
+	t.Helper()
+	info, err := os.Stat(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, gid, ok := providerBridgeUnixOwner(info)
+	if !ok || gid > uint64(^uint32(0)) {
+		t.Fatalf("provider bridge test directory has invalid GID: %v", info.Sys())
+	}
+	if gid == 0 {
+		t.Skip("host cannot provision the non-root B primary group required by the Linux share contract")
+	}
+	return uint32(gid)
+}
+
+func TestLegacyProviderBridgeExtensionMaterializationRemainsAvailableOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("legacy A-only path compatibility is retained for Windows")
+	}
+	stateDir := t.TempDir()
+	legacyDirectory := filepath.Join(stateDir, "generated", "pi")
+	extension, err := MaterializeProviderBridgeExtension(legacyDirectory, testProviderGrants())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(extension.Path) != legacyDirectory || !filepath.IsAbs(extension.Path) || len(extension.SHA256) != 64 {
+		t.Fatalf("legacy Windows extension path = %#v", extension)
+	}
+	fileInfo, err := os.Stat(extension.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fileInfo.Mode().IsRegular() {
+		t.Fatalf("legacy Windows extension is not a regular file: %v", fileInfo.Mode())
+	}
+}
+
 func TestPiRPCArgsWithProviderExtensionUsesOnlyDaemonOwnedLoader(t *testing.T) {
 	extension := filepath.Join(t.TempDir(), "provider.ts")
 	if err := os.WriteFile(extension, []byte("export default function () {}\n"), 0o600); err != nil {
@@ -126,6 +327,9 @@ func TestPiRPCArgsWithProviderExtensionUsesOnlyDaemonOwnedLoader(t *testing.T) {
 }
 
 func TestAdapterBindsAndRevokesDaemonOwnedProviderBridge(t *testing.T) {
+	if runtime.GOOS == "linux" {
+		t.Skip("fake process binding covers only the legacy boundary; Linux binding requires a launch-retained v2 owner")
+	}
 	extension, err := MaterializeProviderBridgeExtension(filepath.Join(t.TempDir(), "extensions"), testProviderGrants())
 	if err != nil {
 		t.Fatal(err)
@@ -181,6 +385,9 @@ func TestAdapterBindsAndRevokesDaemonOwnedProviderBridge(t *testing.T) {
 }
 
 func TestAdapterProviderBridgeBindFailureReturnsOwnedSessionForCleanup(t *testing.T) {
+	if runtime.GOOS == "linux" {
+		t.Skip("fake process binding covers only the legacy boundary; Linux binding requires a launch-retained v2 owner")
+	}
 	extension, err := MaterializeProviderBridgeExtension(filepath.Join(t.TempDir(), "extensions"), testProviderGrants())
 	if err != nil {
 		t.Fatal(err)
@@ -336,7 +543,7 @@ func TestNativePiProviderBridgeLifecycle(t *testing.T) {
 	}
 	executable := strings.TrimSpace(os.Getenv(nativeSmokeExecutableEnv))
 	if executable == "" || !filepath.IsAbs(executable) {
-		t.Fatalf("%s must name the absolute Pi 0.85.1 executable", nativeSmokeExecutableEnv)
+		t.Fatalf("%s must name the absolute Pi executable", nativeSmokeExecutableEnv)
 	}
 
 	root := t.TempDir()

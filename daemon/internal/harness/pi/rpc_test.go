@@ -13,7 +13,7 @@ import (
 )
 
 func TestDecoderReadsVersionedLifecycleFixtureAcrossArbitraryBoundaries(t *testing.T) {
-	fixture, err := os.ReadFile(filepath.Join("..", "testdata", "pi", "0.85.1", "lifecycle.jsonl"))
+	fixture, err := os.ReadFile(filepath.Join("..", "testdata", "pi", TestedVersion, "lifecycle.jsonl"))
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestValidatorDoesNotTreatPromptAcceptanceOrAgentEndAsFinal(t *testing.T) {
 }
 
 func TestValidatorAcceptsDocumentedCompactionContinuationAndRejectsInvalidLifecycle(t *testing.T) {
-	fixture, err := os.ReadFile(filepath.Join("..", "testdata", "pi", "0.85.1", "compaction-continuation.jsonl"))
+	fixture, err := os.ReadFile(filepath.Join("..", "testdata", "pi", TestedVersion, "compaction-continuation.jsonl"))
 	if err != nil {
 		t.Fatalf("read continuation fixture: %v", err)
 	}
@@ -137,6 +137,28 @@ func TestValidatorAllowsEventBeforePromptResponseButRequiresAcceptance(t *testin
 	observeJSON(t, validator, `{"type":"response","id":"prompt-1","command":"prompt","success":true}`)
 	if _, err := validator.Finish(); err != nil {
 		t.Fatalf("Finish() after prompt response error = %v", err)
+	}
+}
+
+// pi 0.87 appends a context-edit entry on every auto-retry and emits the
+// documented state events; they must stay non-terminal.
+func TestValidatorTreatsStateEventsAsNonTerminal(t *testing.T) {
+	validator := registeredValidator(t)
+	observeJSON(t, validator, `{"type":"response","id":"state-1","command":"get_state","success":true,"data":{"sessionId":"s","sessionFile":"C:/s.jsonl"}}`)
+	observeJSON(t, validator, `{"type":"response","id":"prompt-1","command":"prompt","success":true}`)
+	observeJSON(t, validator, `{"type":"agent_start"}`)
+	observeJSON(t, validator, `{"type":"auto_retry_start","attempt":1,"maxAttempts":3,"delayMs":1,"errorMessage":"overloaded"}`)
+	observeJSON(t, validator, `{"type":"entry_appended","entry":{"type":"context_edit","id":"e1"}}`)
+	observeJSON(t, validator, `{"type":"session_info_changed","name":"work"}`)
+	observeJSON(t, validator, `{"type":"thinking_level_changed","level":"high"}`)
+	if _, err := validator.Finish(); err == nil {
+		t.Fatal("Finish() succeeded after only state events, want an unsettled run")
+	}
+	observeJSON(t, validator, `{"type":"message_end","message":{"role":"assistant","content":"done","stopReason":"stop"}}`)
+	observeJSON(t, validator, `{"type":"agent_end","messages":[],"willRetry":false}`)
+	observeJSON(t, validator, `{"type":"agent_settled"}`)
+	if _, err := validator.Finish(); err != nil {
+		t.Fatalf("Finish() after settled run error = %v", err)
 	}
 }
 

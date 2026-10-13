@@ -75,7 +75,18 @@ goal authorization. A native "resume rejected" is typed and visible. A fresh
 session handoff preserves committed work and reconstructs context. Changing model
 or harness is an explicit new admission, with lineage preserved.
 
-Default goal-managed workspaces use existing git_worktree policy. A failed run's
+Default goal-managed workspaces use the existing git_worktree policy. New Linux
+v2 native runs under distinct host UIDs are the exception approved for Goal
+0006b: B owns a disposable per-run standalone Git clone, while A exclusively
+owns the source repository, launch/checkout intent, seed, artifact validation
+and promotion. A must not run Git against B-owned configuration or treat B's
+worktree metadata as ownership proof. The clone is prepared only after the
+existing durable handoff and initial lease acknowledgement. Its checkout-ready
+message originates from B and is not proof that B-owned files or Git metadata
+are immutable; A binds only the exact RunKey, seed, target identity and
+readback to its journal. A validates a proposed commit in A-owned quarantine
+after physical stop before promoting it. Windows and legacy Linux workspace
+behavior remain unchanged. A failed run's
 only artifact cannot be cleaned up under cleanup=always; retention reason is
 durable. Cross-machine handoff requires an artifact published to an authorized
 Git location by a separately allowed action. A reachable authorized Git commit

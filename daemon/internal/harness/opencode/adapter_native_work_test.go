@@ -60,11 +60,12 @@ const (
 // Direct Resume:false prompts only record admission; the production StartTurn
 // work path sends explicit Resume:true, while terminal semantics remain
 // fail-closed. The test proves only a synthetic loopback tool interaction by
-// the real OpenCode binary in an isolated repository. It is not native resume,
-// real-model, or Goal evidence.
+// the real OpenCode binary in an isolated Windows repository. Linux legacy
+// launches instead prove refusal; installed-v2 positives have separate owner
+// acceptance tests. This is not native resume, real-model, or Goal evidence.
 func TestNativeSyntheticGatewayToolIntegration(t *testing.T) {
-	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
-		t.Skip("native OpenCode synthetic tool integration supports Linux and Windows only")
+	if runtime.GOOS != "windows" {
+		t.Skip("legacy native OpenCode synthetic tool positive is Windows-only; Linux requires an installed v2 owner")
 	}
 	if os.Getenv(nativeSyntheticToolEnabledEnv) != "1" {
 		t.Skip("set SYMMETRY_OPENCODE_NATIVE_SYNTHETIC_TOOL=1 to run the synthetic OpenCode tool integration")

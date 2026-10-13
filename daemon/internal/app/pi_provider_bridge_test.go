@@ -6,18 +6,21 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/config"
 	"github.com/wxxb789/symmetry/daemon/internal/control"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/pi"
-	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
@@ -585,13 +588,24 @@ func TestPiProviderBridgeExecutorRejectsEscapedDuplicateResultMembers(t *testing
 }
 
 func TestPreparePiProviderBridgeRunsBoundPeerAndPersistsAction(t *testing.T) {
+	if runtime.GOOS == "linux" && os.Getegid() == 0 {
+		t.Skip("provider extension test needs a non-root fixed-B primary group")
+	}
 	directory := t.TempDir()
 	key := state.RunKey{RunID: "run-provider-app-bridge", Generation: 1}
 	store := newPiProviderActionStore(t, directory, key)
 	stub := &piProviderActionControlStub{fn: func(context.Context, protocol.ProviderAccess, string, string, string, json.RawMessage) (control.ProviderActionResponse, error) {
 		return testPiProviderSuccess(), nil
 	}}
-	daemon := &daemon{config: config.Config{StateDir: directory}, store: store, control: stub}
+	daemonConfig := config.Config{StateDir: directory}
+	if runtime.GOOS == "linux" {
+		daemonConfig.PiProviderExtensionDir = t.TempDir()
+		daemonConfig.PiProviderExtensionGroupID = uint32(os.Getegid())
+		if err := os.Chmod(daemonConfig.PiProviderExtensionDir, os.ModeSetgid|0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	daemon := &daemon{config: daemonConfig, store: store, control: stub}
 	launch, err := daemon.preparePiProviderBridge(context.Background(), key, harness.KindPi, func() *protocol.ProviderAccess {
 		value := testPiProviderAccess()
 		return &value
@@ -600,13 +614,6 @@ func TestPreparePiProviderBridgeRunsBoundPeerAndPersistsAction(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = launch.Lifecycle.Close(context.Background()) })
-	identity, err := platform.ProcessIdentity(os.Getpid())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := launch.Lifecycle.BindProcess(os.Getpid(), identity); err != nil {
-		t.Fatal(err)
-	}
 	extension, err := os.ReadFile(launch.ExtensionPath)
 	if err != nil {
 		t.Fatal(err)
@@ -616,19 +623,41 @@ func TestPreparePiProviderBridgeRunsBoundPeerAndPersistsAction(t *testing.T) {
 	}
 
 	body := []byte(`{"resource_id":"` + testPiProviderResource + `","operation":"change.upsert","action_key":"tool-call-app","input":{"title":"change"}}`)
-	request, err := http.NewRequest(http.MethodPost, launch.URL, bytes.NewReader(body))
+	newRequest := func() *http.Request {
+		request, err := http.NewRequest(http.MethodPost, launch.URL, bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("X-Symmetry-Bridge-Nonce", launch.Nonce)
+		return request
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	t.Cleanup(client.CloseIdleConnections)
+	unboundResponse, err := client.Do(newRequest())
 	if err != nil {
 		t.Fatal(err)
 	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-Symmetry-Bridge-Nonce", launch.Nonce)
-	response, err := (&http.Client{}).Do(request)
+	_, readErr := io.Copy(io.Discard, unboundResponse.Body)
+	closeErr := unboundResponse.Body.Close()
+	if readErr != nil || closeErr != nil || unboundResponse.StatusCode != http.StatusServiceUnavailable || stub.callCount() != 0 {
+		t.Fatalf("unbound bridge = status:%d calls:%d read:%v close:%v, want unavailable before provider execution", unboundResponse.StatusCode, stub.callCount(), readErr, closeErr)
+	}
+	unboundJournal, err := store.LoadJournal(key)
+	if err != nil || len(unboundJournal.ProviderActionIntents) != 0 {
+		t.Fatalf("unbound bridge journal = %#v, error = %v, want no provider action intent", unboundJournal.ProviderActionIntents, err)
+	}
+	bindPiProviderBridgeTestPeer(t, launch.Lifecycle)
+	response, err := client.Do(newRequest())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("provider bridge status = %d", response.StatusCode)
+	}
+	if stub.callCount() != 1 {
+		t.Fatalf("bound provider bridge calls = %d, want one durable provider action", stub.callCount())
 	}
 	journal, err := store.LoadJournal(key)
 	if err != nil {
@@ -643,5 +672,24 @@ func TestPreparePiProviderBridgeRunsBoundPeerAndPersistsAction(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), testPiProviderToken) || strings.Contains(string(encoded), `"title":"change"`) {
 		t.Fatalf("provider token or action input leaked into journal: %s", encoded)
+	}
+}
+
+func TestPreparePiProviderBridgeFailsClosedWithoutLinuxShare(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux-specific Pi provider extension share")
+	}
+	directory := t.TempDir()
+	key := state.RunKey{RunID: "run-provider-app-no-share", Generation: 1}
+	store := newPiProviderActionStore(t, directory, key)
+	defer store.Close()
+	stub := &piProviderActionControlStub{}
+	daemon := &daemon{config: config.Config{StateDir: directory}, store: store, control: stub}
+	access := testPiProviderAccess()
+	if _, err := daemon.preparePiProviderBridge(context.Background(), key, harness.KindPi, &access); err == nil {
+		t.Fatal("Linux Pi provider bridge started without a configured extension share")
+	}
+	if _, err := os.Stat(filepath.Join(directory, "generated", "pi")); !os.IsNotExist(err) {
+		t.Fatalf("Linux Pi provider bridge used the private StateDir fallback: %v", err)
 	}
 }

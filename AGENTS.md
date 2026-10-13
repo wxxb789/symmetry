@@ -35,6 +35,17 @@ policy; Go owns machine-local execution; the frontend owns presentation.
   complexity. Do not add wrapper-only layers, speculative extension systems,
   duplicate caches, or a second scheduler/state authority.
 
+## Parallel agents
+
+Leverage available subagents and multi-agent execution whenever independent,
+bounded workstreams can shorten delivery and improve quality. Parallelize
+investigation, implementation, and independent review rather than serializing
+work for convenience. Give concurrent writers disjoint files or isolated
+workspaces and one owner for shared interfaces. Keep one integration owner for
+combined checks, conflicts, and completion. Use independent read-only review
+at security, authority, and recovery milestones. Parallelism never weakens
+acceptance or evidence requirements.
+
 ## Working and verifying
 
 Use bounded changes with a complete behavior contract. Read relevant code and

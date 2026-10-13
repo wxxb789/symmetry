@@ -4,10 +4,15 @@ defmodule SymmetryControl.PiControlE2ETest do
 
   This test uses an explicitly named test admission witness. The witness gives
   the test child a fixed, scoped capability projection while delegating native
-  execution to the real Pi 0.85.1 adapter. The loopback upstream is synthetic,
+  execution to the real Pi 0.87.1 adapter. The loopback upstream is synthetic,
   noncredentialed, and configured through a numeric loopback address. This test
   does not prove firewall or network-namespace isolation and makes no
   production capability, provider accounting, or Goal-completion claim.
+
+  Linux automatic coverage proves the real installed-owner guard refuses an
+  exact Control Goal Claim before effects. The five native positive scenarios
+  remain Windows evidence; this synthetic projection cannot qualify Linux A/B
+  ownership or authorize B-owned clone/session reuse.
   """
 
   use SymmetryControlWeb.ConnCase, async: false
@@ -38,19 +43,21 @@ defmodule SymmetryControl.PiControlE2ETest do
   # Keep this skip literal. ExUnit prepares module filters before test setup,
   # while a dynamic environment-based skip can be frozen in cached BEAM
   # metadata. Running this module requires both the environment opt-in and an
-  # explicit `--include skip:true` filter.
+  # explicit `--include skip:<selector>` filter. Each scenario's literal @tag
+  # skip label overrides this module default; include only its matching label,
+  # since `--include skip:true` would override --only/--exclude selection.
   @moduletag skip: true
 
-  @pi_version "0.85.1"
+  @pi_version "0.87.1"
   @pi_provider "symmetry-control-loopback"
   @pi_model "gpt-5.6-terra"
   @pi_api "openai-responses"
   @pi_api_key "symmetry-control-loopback-test-key"
   @pi_executable_sha256_by_platform %{
     {{:win32, :nt}, "x86_64-pc-windows"} =>
-      "2d4d351da30bfe23a473032e66a571b238763565aa93754e74f4a939de13f195",
+      "dd5fdf61bdd10e3fa3fb3d7dbca1ce9f21475d4a7a410f2e0524fd19ae35651f",
     {{:unix, :linux}, "x86_64-pc-linux-gnu"} =>
-      "443bd83f30e4dbc7bac2eed9c6aa2461b9a15016fd555f48c92a0591d028c403"
+      "3e8177cb94d6b4577f3626f9400d80c92d991867400c21a779784f5bee9b9925"
   }
   @witness_adapter_version "symmetry-test:pi-control-loopback-witness-v1"
   @artifact_path "pi-control-e2e-artifact.txt"
@@ -97,6 +104,16 @@ defmodule SymmetryControl.PiControlE2ETest do
     end
 
     platform = assert_supported_platform!()
+    linux_refusal? = Map.get(context, :pi_control_e2e_linux_refusal, false)
+
+    if linux_refusal? do
+      assert :os.type() == {:unix, :linux}
+      assert File.lstat("/etc/symmetry/linux-owner.conf") == {:error, :enoent}
+    else
+      assert :os.type() == {:win32, :nt},
+             "native positive fixtures require Windows; Linux selects pi_control_e2e_linux_refusal"
+    end
+
     executable = required_pi_executable!(platform)
     assert_pi_version!(executable)
     acceptance_witness? = Map.get(context, :pi_control_acceptance, false)
@@ -118,7 +135,13 @@ defmodule SymmetryControl.PiControlE2ETest do
     end)
 
     root =
-      Path.join(System.tmp_dir!(), "symmetry-pi-control-run-#{Ecto.UUID.generate()}")
+      if linux_refusal? do
+        # The real owner recovery endpoint uses a full SHA256 Unix socket name.
+        # Keep its parent short enough to reach the installed-owner guard.
+        Path.join("/tmp", "pr9-" <> String.slice(Ecto.UUID.generate(), 0, 8))
+      else
+        Path.join(System.tmp_dir!(), "symmetry-pi-control-run-#{Ecto.UUID.generate()}")
+      end
 
     state_dir = Path.join(root, "state")
     process_marker_path = Path.join(root, "process-marker.json")
@@ -132,6 +155,11 @@ defmodule SymmetryControl.PiControlE2ETest do
     appdata_dir = Path.join(root, "appdata")
     localappdata_dir = Path.join(root, "localappdata")
     root_cleanup_state = :atomics.new(1, signed: false)
+    refusal_no_launch_proof = :atomics.new(1, signed: false)
+
+    if linux_refusal? do
+      :ok = File.mkdir(root)
+    end
 
     Enum.each(
       [
@@ -162,6 +190,7 @@ defmodule SymmetryControl.PiControlE2ETest do
            %{
              responses: 0,
              requests: [],
+             upstream_requests: [],
              authorizations: [],
              errors: [],
              expected_responses: if(acceptance_witness?, do: 3, else: 2),
@@ -178,7 +207,10 @@ defmodule SymmetryControl.PiControlE2ETest do
              subject_hash: nil,
              artifact_path: @artifact_path,
              artifact_content: @artifact_content,
-             acceptance_witness: acceptance_witness?
+             acceptance_witness: acceptance_witness?,
+             refusal_transition: nil,
+             refusal_holders: [],
+             refusal_released: false
            }
          end},
         id: {:pi_control_gateway_state, Ecto.UUID.generate()}
@@ -222,7 +254,11 @@ defmodule SymmetryControl.PiControlE2ETest do
     control_listener =
       start_supervised!(
         {Bandit,
-         plug: SymmetryControlWeb.Endpoint,
+         plug:
+           if(linux_refusal?,
+             do: {&linux_refusal_control_plug/2, gateway_state},
+             else: SymmetryControlWeb.Endpoint
+           ),
          scheme: :http,
          ip: {127, 0, 0, 1},
          port: 0,
@@ -251,6 +287,8 @@ defmodule SymmetryControl.PiControlE2ETest do
 
     daemon_process =
       start_daemon!(context.daemon, config_path, process_marker_path, root, root_cleanup_state)
+      |> Map.put(:linux_refusal?, linux_refusal?)
+      |> Map.put(:refusal_no_launch_proof, refusal_no_launch_proof)
 
     on_exit(fn ->
       stop_daemon!(daemon_process)
@@ -293,6 +331,7 @@ defmodule SymmetryControl.PiControlE2ETest do
      state_dir: state_dir,
      process_marker_path: process_marker_path,
      root_cleanup_state: root_cleanup_state,
+     refusal_no_launch_proof: refusal_no_launch_proof,
      repository_path: repository_path,
      workspace_root: workspace_root,
      gateway_state: gateway_state,
@@ -302,6 +341,164 @@ defmodule SymmetryControl.PiControlE2ETest do
      workspace: workspace}
   end
 
+  @tag :pi_control_e2e_linux_refusal
+  @tag skip: "pi_control_e2e_linux_refusal"
+  test "Linux Pi exact Control Goal Claim refuses the missing installed owner before effects",
+       context do
+    %{fixture: fixture, gateway_state: gateway_state} = context
+    runtime = Repo.get_by!(Runtime, runtime_key: fixture.runtime_key)
+    assigned = assign_goal_task!(context.daemon_port, fixture.task.id)
+    assert assigned.task_id == fixture.task.id
+    assert assigned.runtime_id == runtime.id
+    assert assigned.generation == fixture.task.attempt_generation
+
+    try do
+      held =
+        await!(
+          context.daemon_port,
+          "durable owner refusal with held terminal acknowledgement",
+          fn ->
+            case Agent.get(gateway_state, & &1.refusal_transition) do
+              nil -> :retry
+              held -> {:ok, held}
+            end
+          end,
+          15_000
+        )
+
+      failed_run = Repo.get!(Run, assigned.id)
+      failed_task = Repo.get!(Task, fixture.task.id)
+      assert failed_run.state == "failed"
+      assert failed_task.state == "failed"
+      assert failed_run.task_id == fixture.task.id
+      assert failed_run.runtime_id == runtime.id
+      assert failed_run.generation == assigned.generation
+      assert failed_run.claimed_runtime_epoch == runtime.connection_epoch
+      assert failed_run.claimed_runtime_epoch > 0
+      claim_id_present? = is_binary(failed_run.claim_id)
+      lease_token_present? = is_binary(failed_run.lease_token)
+      assert claim_id_present?, "Control refusal Claim ID is missing"
+      assert lease_token_present?, "Control refusal lease token is missing"
+      assert failed_run.claimed_at
+      no_provider_access? = failed_run.provider_access_snapshot == %{"v" => 1, "kind" => "none"}
+      assert no_provider_access?, "Control refusal unexpectedly granted provider access"
+      assert failed_task.current_generation == assigned.generation
+      failures_match? = failed_task.failure == failed_run.failure
+      expected_failure? = failed_run.failure == linux_missing_owner_failure!()
+      assert failures_match?, "Control Task and Run refusal failures differ"
+      assert expected_failure?, "Control Run did not record the exact installed-owner refusal"
+      assert held.run_id == failed_run.id
+
+      fence = %{
+        "runtime_id" => failed_run.runtime_id,
+        "runtime_epoch" => failed_run.claimed_runtime_epoch,
+        "generation" => failed_run.generation,
+        "claim_id" => failed_run.claim_id,
+        "lease_token" => failed_run.lease_token
+      }
+
+      request_fence_matches? = Map.take(held.request, Map.keys(fence)) == fence
+      assert request_fence_matches?, "held refusal request differs from the exact Control fence"
+      assert held.request["state"] == "failed"
+      request_failure_matches? = held.request["payload"] == failed_run.failure
+      assert request_failure_matches?, "held refusal request has a different failure payload"
+      assert held.response["run_id"] == failed_run.id
+      assert held.response["task_id"] == fixture.task.id
+      assert held.response["state"] == "failed"
+      response_failure_matches? = held.response["failure"] == failed_run.failure
+      assert response_failure_matches?, "held refusal response has a different failure payload"
+
+      response_fence_matches? =
+        Map.take(held.response, ~w(runtime_id generation claim_id lease_token)) ==
+          Map.take(fence, ~w(runtime_id generation claim_id lease_token))
+
+      assert response_fence_matches?, "held refusal response differs from the exact Control fence"
+
+      {:ok, journal} =
+        journal_for_run(context.state_dir, {assigned.id, assigned.generation})
+
+      assert journal["run_id"] == assigned.id
+      assert journal["generation"] == assigned.generation
+      assert journal["runtime_key"] == fixture.runtime_key
+      assert journal["runtime_id"] == runtime.id
+      assert journal["claimed_runtime_epoch"] == failed_run.claimed_runtime_epoch
+      assert journal["claim_id"] == failed_run.claim_id
+      journal_lease_matches? = journal["lease_token"] == failed_run.lease_token
+      assert journal_lease_matches?, "refusal journal lease differs from the exact Control Claim"
+      assert journal["terminal_state"] == "failed"
+      assert journal["local_state"] == "terminal_pending"
+      transitions = journal["pending_transitions"]
+      one_failed_transition? = match?([%{"state" => "failed"}], transitions)
+      assert one_failed_transition?, "refusal journal must contain exactly one failed transition"
+      [transition] = transitions
+      assert transition["transition_id"] == held.transition_id
+      transition_failure_matches? = transition["payload"] == failed_run.failure
+      transition_fence_matches? = Map.take(transition, Map.keys(fence)) == fence
+
+      assert transition_failure_matches?,
+             "refusal journal transition has a different failure payload"
+
+      assert transition_fence_matches?,
+             "refusal journal transition differs from the exact Control fence"
+
+      assert journal["work"]["agent_profile"] == context.profile
+      assert journal["work"]["workspace"] == context.workspace
+      admission_matches? = journal["work"]["input"] == fixture.task.input
+
+      assert admission_matches?,
+             "refusal journal admission differs from the exact Control Task input"
+
+      admission = journal["work"]["input"]
+      assert admission["schema_version"] == "symmetry.admission.v1"
+      assert admission["admission_id"] == fixture.task.admission_key
+      assert admission["goal_id"] == fixture.goal.id
+      assert admission["goal_revision"] == fixture.task.goal_revision
+      assert admission["work_item_id"] == fixture.item.id
+      assert admission["context_snapshot_id"] == fixture.task.context_snapshot_id
+      assert admission["model_profile"] == context.profile
+      assert admission["purpose"] == "implement"
+      assert admission["session_mode"] == "fresh"
+      assert admission["requested_session_id"] == nil
+      subject_matches? = admission["subject"] == fixture.subject
+      assert subject_matches?, "refusal admission Subject differs from the exact fixture Subject"
+
+      snapshot =
+        Repo.get!(SymmetryControl.Goals.ContextSnapshot, fixture.task.context_snapshot_id)
+
+      assert admission["context_hash"] == snapshot.payload["content_hash"]
+
+      assert_linux_refusal_journal_has_no_effects!(journal)
+
+      receipts =
+        Repo.all(from transition in RunTransition, where: transition.run_id == ^assigned.id)
+
+      one_failed_receipt? = match?([%RunTransition{state: "failed"}], receipts)
+      assert one_failed_receipt?, "Control refusal must have exactly one durable failed receipt"
+      [receipt] = receipts
+
+      assert receipt.transition_id == held.transition_id
+      receipt_failure_matches? = receipt.payload == failed_run.failure
+      assert receipt_failure_matches?, "Control refusal receipt has a different failure payload"
+      assert_linux_refusal_has_no_effects!(context, failed_run)
+
+      # Only the exact durable owner-constructor failure plus no-launch readback
+      # may authorize this negative fixture's teardown. Positives keep their
+      # unknown-starting-marker guard unchanged.
+      :atomics.put(context.refusal_no_launch_proof, 1, 1)
+      release_linux_refusal_ack!(gateway_state)
+      stop_daemon!(context.daemon_process)
+      assert_linux_refusal_has_no_effects!(context, Repo.get!(Run, assigned.id))
+
+      IO.puts(
+        "PI CONTROL LINUX REFUSAL: real Pi #{@pi_version} Probe remains native-unverified; exact Goal admission/Claim/failure receipt and held RunJournal fence observed; missing installed A/B owner refused before native Start, provider, workspace, or accepted Goal effects; no native qualification claim"
+      )
+    after
+      release_linux_refusal_ack!(gateway_state)
+    end
+  end
+
+  @tag :pi_control_e2e_native_positive
+  @tag skip: "pi_control_e2e_native_positive"
   test "real Pi repository work crosses Control receipts without accepting the Goal", context do
     IO.puts(
       "PI CONTROL E2E: test admission witness + synthetic numeric-loopback upstream; no credential forwarding, production capability/provider/accounting, firewall, network-namespace, native opaque-token continuity, or Goal completion claim"
@@ -499,6 +696,8 @@ defmodule SymmetryControl.PiControlE2ETest do
   end
 
   @tag :pi_control_crash_recovery
+  @tag :pi_control_e2e_native_positive
+  @tag skip: "pi_control_e2e_native_positive"
   test "hard daemon crash recovers an in-flight Pi run without replaying effects", context do
     %{fixture: fixture, gateway_state: gateway_state} = context
     runtime = Repo.get_by!(Runtime, runtime_key: fixture.runtime_key)
@@ -840,6 +1039,8 @@ defmodule SymmetryControl.PiControlE2ETest do
   end
 
   @tag :pi_control_acceptance
+  @tag :pi_control_e2e_native_positive
+  @tag skip: "pi_control_e2e_native_positive"
   test "real Pi committed candidate is independently validated and achieves the Goal", context do
     %{fixture: fixture, gateway_state: gateway_state} = context
     runtime = Repo.get_by!(Runtime, runtime_key: fixture.runtime_key)
@@ -1059,6 +1260,8 @@ defmodule SymmetryControl.PiControlE2ETest do
 
   @tag :pi_control_handoff
   @tag :pi_control_acceptance
+  @tag :pi_control_e2e_native_positive
+  @tag skip: "pi_control_e2e_native_positive"
   test "real Pi fresh handoff preserves Control lineage and starts one new native session",
        context do
     %{fixture: fixture, gateway_state: gateway_state} = context
@@ -1401,6 +1604,8 @@ defmodule SymmetryControl.PiControlE2ETest do
   end
 
   @tag :pi_control_resume
+  @tag :pi_control_e2e_native_positive
+  @tag skip: "pi_control_e2e_native_positive"
   test "real Pi retained resume crosses a fresh daemon with fenced Control lineage", context do
     %{fixture: fixture, gateway_state: gateway_state} = context
     opaque_marker = "opaque-" <> String.replace(Ecto.UUID.generate(), "-", "")
@@ -2653,7 +2858,190 @@ defmodule SymmetryControl.PiControlE2ETest do
     end
   end
 
+  defp linux_missing_owner_failure! do
+    assert File.lstat("/etc/symmetry/linux-owner.conf") == {:error, :enoent}
+
+    missing =
+      case File.lstat("/etc/symmetry") do
+        {:error, :enoent} ->
+          ~s(open fixed Linux owner config directory "/etc/symmetry": no such file or directory)
+
+        {:ok, %File.Stat{type: :directory}} ->
+          "open fixed Linux owner config: no such file or directory"
+
+        other ->
+          flunk("unexpected installed-owner directory observation: #{inspect(other)}")
+      end
+
+    %{
+      "stage" => "goal_admission",
+      "reason" => "unknown_outcome",
+      "summary" => "daemon failed during goal_admission",
+      "error" =>
+        "initialize Linux v2 native owner: read trusted root-installed Linux A/B owner configuration: " <>
+          missing
+    }
+  end
+
+  defp linux_refusal_control_plug(conn, gateway_state) do
+    conn
+    |> Plug.Conn.register_before_send(fn conn ->
+      path = Regex.run(~r{^/api/v1/runs/([^/]+)/transitions/([^/]+)$}, conn.request_path)
+
+      if conn.method == "PUT" and conn.status == 200 and is_list(path) and
+           conn.body_params["state"] == "failed" do
+        [_, run_id, transition_id] = path
+
+        held = %{
+          run_id: run_id,
+          transition_id: transition_id,
+          request: conn.body_params,
+          response: conn.resp_body |> IO.iodata_to_binary() |> Jason.decode!()
+        }
+
+        holder = self()
+
+        released? =
+          Agent.get_and_update(gateway_state, fn state ->
+            {state.refusal_released,
+             %{
+               state
+               | refusal_transition: held,
+                 refusal_holders: [holder | state.refusal_holders]
+             }}
+          end)
+
+        # Control has committed the real receipt; only its HTTP ACK is held so
+        # the normal outbox cannot delete the matching durable journal yet.
+        unless released? do
+          receive do
+            :release_linux_refusal_ack -> :ok
+          after
+            30_000 -> raise "Linux refusal terminal acknowledgement was not released"
+          end
+        end
+      end
+
+      conn
+    end)
+    |> SymmetryControlWeb.Endpoint.call(SymmetryControlWeb.Endpoint.init([]))
+  end
+
+  defp release_linux_refusal_ack!(gateway_state) do
+    holders =
+      Agent.get_and_update(gateway_state, fn state ->
+        {state.refusal_holders, %{state | refusal_released: true, refusal_holders: []}}
+      end)
+
+    Enum.each(holders, &send(&1, :release_linux_refusal_ack))
+  end
+
+  defp assert_linux_refusal_journal_has_no_effects!(journal) do
+    for {key, expected} <- [
+          {"pid", 0},
+          {"process_identity", ""},
+          {"started_at", "0001-01-01T00:00:00Z"},
+          {"workspace_path", ""},
+          {"last_event_sequence", 0}
+        ] do
+      unchanged? = journal[key] == expected
+      assert unchanged?, "unexpected #{key} before installed-owner refusal"
+    end
+
+    for key <- ~w(
+          workspace_recovery_required retain_workspace containment_unproven
+          native_usage_recovery_required linux_clone_abort_pending linux_clone_cleanup_pending
+          goal_delivery_enabled terminal_task_result_kind
+        ) do
+      absent? = journal[key] in [nil, false]
+      assert absent?, "unexpected #{key} before installed-owner refusal"
+    end
+
+    for key <- ~w(
+          containment_authority containment_handoff containment_cgroup containment_scans
+          containment_cgroup_release_proof containment_cgroup_pre_gate_release_proof
+          linux_clone_intent linux_clone_seed_receipt linux_clone_checkout_receipt
+          linux_clone_promotion_intent linux_clone_promotion_receipt linux_clone_abort_proof
+          linux_clone_cleanup_intent linux_clone_target_removal_proof linux_clone_cleanup_proof
+          native_usage_observation native_usage_terminal_recovery input_command_intent
+        ) do
+      absent? = journal[key] == nil
+      assert absent?, "unexpected #{key} before installed-owner refusal"
+    end
+
+    for key <- ~w(
+          pending_events pending_goal_deliveries delivered_goal_deliveries retired_goal_deliveries
+          pending_command_acknowledgements control_command_intents provider_action_intents
+        ) do
+      empty? = journal[key] in [nil, []]
+      assert empty?, "unexpected #{key} before installed-owner refusal"
+    end
+  end
+
+  defp assert_linux_refusal_has_no_effects!(context, run) do
+    assert run.state == "failed"
+    expected_failure? = run.failure == linux_missing_owner_failure!()
+    assert expected_failure?, "Control Run did not retain the exact installed-owner refusal"
+
+    for key <- [:result, :harness_session_id, :harness_binding_id] do
+      absent? = Map.fetch!(run, key) == nil
+      assert absent?, "unexpected Run #{key} before installed-owner refusal"
+    end
+
+    task = Repo.get!(Task, context.fixture.task.id)
+    assert task.state == "failed"
+    no_task_result? = task.result == nil
+    failures_match? = task.failure == run.failure
+    marker_unchanged? = File.read!(context.process_marker_path) == "starting\n"
+    workspace_empty? = File.ls!(context.workspace_root) == []
+    repository_clean? = git_status!(context.repository_path) == ""
+    assert no_task_result?, "Control refusal Task unexpectedly has a result"
+    assert failures_match?, "Control Task and Run refusal failures differ"
+    assert marker_unchanged?, "native process marker changed before installed-owner refusal"
+    assert workspace_empty?, "workspace root changed before installed-owner refusal"
+    assert repository_clean?, "source repository changed before installed-owner refusal"
+
+    assert String.trim(git_output!(context.repository_path, ["rev-parse", "HEAD"])) ==
+             context.fixture.subject["commit"]
+
+    case File.ls(Path.join(context.state_dir, "sessions")) do
+      {:ok, []} -> :ok
+      {:error, :enoent} -> :ok
+      _other -> flunk("unexpected native session state before installed-owner refusal")
+    end
+
+    refute Repo.exists?(from event in RunEvent, where: event.run_id == ^run.id)
+    no_attach_receipt? = is_nil(Repo.get_by(HarnessSessionAttachReceipt, run_id: run.id))
+    no_stop_receipt? = is_nil(Repo.get_by(HarnessSessionStopReceipt, run_id: run.id))
+    assert no_attach_receipt?, "unexpected native attach receipt before installed-owner refusal"
+    assert no_stop_receipt?, "unexpected native stop receipt before installed-owner refusal"
+
+    refute Repo.exists?(
+             from usage in SymmetryControl.Goals.RunUsage, where: usage.run_id == ^run.id
+           )
+
+    refute Repo.exists?(
+             from outcome in SymmetryControl.Goals.WorkOutcome,
+               where: outcome.work_item_id == ^context.fixture.item.id
+           )
+
+    assert Repo.get!(Goal, context.fixture.goal.id).state == "active"
+    gateway = Agent.get(context.gateway_state, & &1)
+
+    for key <- [:upstream_requests, :requests, :authorizations, :errors] do
+      empty? = Map.fetch!(gateway, key) == []
+      assert empty?, "unexpected gateway #{key} before installed-owner refusal"
+    end
+
+    no_responses? = gateway.responses == 0
+    assert no_responses?, "unexpected gateway responses before installed-owner refusal"
+  end
+
   defp loopback_gateway_plug(conn, gateway_state) do
+    Agent.update(gateway_state, fn state ->
+      %{state | upstream_requests: [{conn.method, conn.request_path} | state.upstream_requests]}
+    end)
+
     record_gateway_authorization!(gateway_state, conn)
 
     cond do
@@ -3550,6 +3938,22 @@ defmodule SymmetryControl.PiControlE2ETest do
   end
 
   defp cleanup_native_process_after_daemon_stop!(%{
+         linux_refusal?: true,
+         refusal_no_launch_proof: proof,
+         os_pid: os_pid,
+         process_marker_path: process_marker_path
+       }) do
+    if os_process_alive?(os_pid) do
+      raise "skipping native Pi refusal cleanup while Pi witness OS PID #{os_pid} remains alive"
+    end
+
+    unless :atomics.get(proof, 1) == 1 and
+             read_bounded_file(process_marker_path) == {:ok, "starting\n"} do
+      raise "refusing Linux Pi cleanup without exact durable installed-owner refusal and explicit no-launch proof"
+    end
+  end
+
+  defp cleanup_native_process_after_daemon_stop!(%{
          os_pid: os_pid,
          process_marker_path: process_marker_path
        }) do
@@ -4256,9 +4660,17 @@ defmodule SymmetryControl.PiControlE2ETest do
 
   defp valid_native_process_identity?(identity) do
     case :os.type() do
-      {:win32, _} -> Regex.match?(~r/^windows:\d+:[0-9a-f]{16}$/, identity)
-      {:unix, :linux} -> Regex.match?(~r/^linux:[^:\s]+:\d+:\d+$/, identity)
-      _ -> false
+      {:win32, _} ->
+        Regex.match?(~r/^windows:\d+:[0-9a-f]{16}$/, identity)
+
+      {:unix, :linux} ->
+        Regex.match?(
+          ~r/^linux:v2:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:\d+:\d+:\d+$/,
+          identity
+        )
+
+      _ ->
+        false
     end
   end
 
@@ -4431,6 +4843,10 @@ defmodule SymmetryControl.PiControlE2ETest do
 
   defp linux_native_process_identity(os_pid) do
     with {:ok, boot_id} <- File.read("/proc/sys/kernel/random/boot_id"),
+         {:ok, pid_namespace} <- File.read_link("/proc/#{os_pid}/ns/pid"),
+         [_, pid_namespace_inode] <-
+           Regex.run(~r/\Apid:\[(\d+)\]\z/, pid_namespace) ||
+             {:error, :invalid_pid_namespace_link},
          {:ok, stat} <- File.read("/proc/#{os_pid}/stat"),
          {:ok, start_time} <- unix_process_start_time(stat) do
       boot_id = String.trim(boot_id)
@@ -4438,7 +4854,7 @@ defmodule SymmetryControl.PiControlE2ETest do
       if boot_id == "" do
         {:error, "Linux boot ID is empty"}
       else
-        {:ok, "linux:#{boot_id}:#{os_pid}:#{start_time}"}
+        {:ok, "linux:v2:#{boot_id}:#{pid_namespace_inode}:#{os_pid}:#{start_time}"}
       end
     else
       {:error, reason} -> {:error, inspect(reason)}
@@ -4658,7 +5074,7 @@ defmodule SymmetryControl.PiControlE2ETest do
     value = String.trim(System.get_env("SYMMETRY_PI_CONTROL_E2E_EXECUTABLE") || "")
 
     if value == "",
-      do: flunk("SYMMETRY_PI_CONTROL_E2E_EXECUTABLE must name the real Pi 0.85.1 executable")
+      do: flunk("SYMMETRY_PI_CONTROL_E2E_EXECUTABLE must name the real Pi 0.87.1 executable")
 
     unless Path.type(value) == :absolute, do: flunk("Pi executable path must be absolute")
     if not File.regular?(value), do: flunk("Pi executable path must name a regular file")

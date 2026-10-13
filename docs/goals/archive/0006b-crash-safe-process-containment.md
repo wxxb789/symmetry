@@ -1,0 +1,143 @@
+# 0006b - Crash-safe process containment
+
+## Owner-approved iteration scope — 2026-10-10
+
+The owner explicitly reduced this Goal to a bounded, pre-0.0.1 implementation
+iteration. Closing this iteration does **not** certify project-wide readiness,
+absence of bugs, installed native support, release acceptance or completion of
+the entire containment verification programme. The implementation target below
+remains the intended behavior; its exhaustive acceptance requirements are no
+longer all prerequisites for closing this iteration.
+
+This iteration closes when:
+
+- The current containment, journal and recovery implementation has scoped
+  current-source checks and a real, non-destructive daemon CLI smoke. Relevant
+  existing regression checks remain intact; a missing native environment is
+  recorded rather than replaced by fabricated evidence.
+- An independent review checks the amended scope, the evidence claims and the
+  core authorization/recovery boundaries. Findings that prevent this bounded
+  outcome are resolved; unrelated or release-level concerns remain explicit.
+- A completion receipt distinguishes current checks, earlier component evidence,
+  known failures, unexecuted work and deferred acceptance. Unrelated worktree
+  changes are preserved. No commit, push, merge or remote CI is required merely
+  to close this local iteration.
+
+Deferred, **not passed**: recovery of historical preopen/writer-close/readback
+rules; full nineteen-input custody and three changed-content experiments; full
+SDK/compiler publication and retention; all seventeen namespace/CBOOT/J/U
+families; closed-host/base qualification; exact installed A52000/B52001 native
+positives; exhaustive Pi/OpenCode/provider/crash/replay/cleanup witnesses; the
+complete Control/browser/release/platform matrix; exact-commit remote CI and
+integration. The known live waiting-input failure remains unresolved. These
+items must not be reported as validated or silently retried on frozen subjects.
+
+The existing operator-provided `gpt-6-luna` model with `medium` effort remains
+the provider choice. Do not ask the owner to supply it or its credentials again.
+Provider availability is not proof of an authentic native Control Claim, and
+that separate native acceptance is deferred rather than made a new blocker.
+
+Scope reduction does not weaken product fences, authority checks, credential
+locality, journal compatibility or fail-closed handling of UNKNOWN outcomes.
+It authorizes no privilege workaround, destructive cleanup, access to frozen
+historical inputs or promotion of unverified harness capabilities. The fresh
+WSL2/9P ABI scripts authored for the previous custody track remain unexecuted;
+they are not needed for this iteration's closure.
+
+## Containment implementation target
+
+Make process authority survive daemon or owner failure before and after native
+launch without orphaning a child, resuming an unauthorized child, duplicating
+ownership, or clearing containment before durable stop proof exists. Windows
+supervisor handoff and Linux descendant cleanup remain platform-correct.
+
+Completion evidence covers prepare, bind, commit, lease arm, resume, stop
+receipt, release, and clear boundaries, including lost-response replay and hard
+crashes at each externally visible point. Production-binary witnesses and
+native platform tests show bounded cleanup and preserve unresolved state when
+physical stop cannot be proven.
+
+The Windows production witness also exercises a structurally valid wrong-secret
+request as the first named-pipe client after the inherited bootstrap. The helper
+must reject it without changing the Job or target, and the legitimate hello
+must then complete within the same absolute deadline.
+
+For **new Linux native executions**, the verified boundary includes the native
+CLI and every descendant, including detached and reparented Pi/OpenCode
+children that leave the original Unix process group. A delegated cgroup-v2
+run leaf is an exact, durable ownership subject: no native instruction executes
+before the existing handoff/lease authorization, and release/clear require a
+version-matched durable physical-stop receipt covering that leaf and its
+descendants. An unknown kill, migration, owner identity, reaping or receipt
+outcome remains durable and fail closed; neither PID absence nor an old
+process-group scan is a cgroup stop receipt. Existing Linux v1 group journals
+must recover under their own rules, never forged into v1.2 receipts. Windows
+ownership and protocol v1 behavior remain unchanged. This goal adds no 32-bit
+target; Windows execution remains x86-64/amd64.
+
+The supported Linux native deployment is **x86-64/amd64** on an
+operator-provisioned systemd host, including WSL2 only when it provides the
+same verified systemd delegation and service lifecycle **and** permits UID A,
+without host ptrace privileges, to verify real namespace identities, read
+B's fdinfo and duplicate the exact connected B socket using `pidfd_getfd`
+after B's credential drop. A WSL2 kernel denying these checks fails closed;
+systemd alone does not certify native support. It requires exclusive
+cgroup delegation to daemon/helper UID A, an installed
+root-owned transient launcher restricted to one distinct native UID B,
+operator-provisioned B HOME/credentials and approved workspace/Git access.
+A and B do not share host credentials or cgroup control permissions. The
+fixed B UID is a shared native-run filesystem trust domain, **not** per-run
+workspace confidentiality. For new Linux native runs, A owns the source Git
+repository and durable workspace intent; after the existing handoff and lease
+authorization, B creates its own per-run standalone clone from an A-controlled
+seed. A never runs Git against B-owned configuration or treats B's Git metadata
+as ownership proof; a proposed commit is validated and promoted in A-owned
+storage before acceptance. Existing Windows and Linux v1 linked-worktree
+behavior remains unchanged. Cleanup of that B-owned checkout is best effort
+within the shared B filesystem trust domain after the exact durable v2 stop
+receipt. A transient root deleter remains confined to the pinned checkout,
+no-follow and no-cross-mount checks; it cannot access A's private Git or
+control state. Another B process with the same UID can concurrently exchange
+names, so an inspected B-owned sibling can be deleted before a mismatch is
+detected. A detected mismatch retains the journal and A-owned seed/ref; no
+proof claims atomic sibling exclusion. A missing checkout path without a
+previously durable exact root-removal proof cannot establish that the original
+checkout inode was destroyed. Process containment and physical stop proofs
+are unchanged. A stopped non-Goal Run without an exactly delivered Goal
+candidate artifact retains its journal, B checkout and A seed/base until an
+explicitly authorized disposition; terminal state alone does not permit
+destructive checkout cleanup. This is retention, not a completed cleanup
+receipt. The existing rootless Compose daemon has no such
+delegation or launcher: new native execution there fails closed, without a
+group-only or same-UID fallback; legacy journal recovery remains required.
+The delegated helper must survive an ordinary daemon-process crash under the
+supported service policy. Manager termination of both owners needs a separate
+bounded recovery/stop proof and cannot invent a receipt. Pi and OpenCode
+positive native tests must run under the actual distinct-UID boundary, not
+only a same-UID capability probe. For this containment goal the positive
+acceptance surface is an isolated production-binary owner witness that uses
+the real App-owned RunJournal, launcher, native Pi/OpenCode adapters and exact
+peer check without advertising unverified harness capabilities or declaring
+a Goal complete. Ordinary Goal admission remains fail closed while Pi/OpenCode
+native capabilities are unverified; existing synthetic Control tests cannot
+substitute for the owner witness. The Pi provider-action witness requires an
+authentic Control-issued claim-scoped token and an isolated test Integration,
+not a synthetic provider success. Linux needs real native launch,
+descendant-stop and privilege-boundary evidence. WSL2 needs the same positive
+evidence only on a kernel passing the exact A/B peer checks; this observed
+denying WSL2 kernel instead needs a real fail-closed witness and must not be
+reported as natively supported. An unprovisioned WSL2 instance also fails
+closed without reverting to the old process group.
+
+For Linux v2 leaves, the surviving A anchor is the only `cgroup.kill` writer:
+normal helper stop requests and helper-death takeover share one exact
+run-bound kill attempt and its authenticated acknowledgement, recursive-empty
+and wait/reap evidence. A helper or daemon mirror cannot issue a physical-stop
+receipt from its own second kill, PID absence or an unknown anchor outcome.
+
+This goal excludes harness-specific terminal semantics and capability promotion.
+It remains one independently mergeable PR and preserves journal compatibility;
+the former 12-hour single-agent-run limit does not apply to this authorized
+Linux scope expansion. Full native, crash/replay and release certification needs
+its own complete evidence; local iteration closure follows the owner-approved
+scope above and must not be presented as that certification.

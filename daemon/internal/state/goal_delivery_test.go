@@ -111,7 +111,7 @@ func TestLegacyGoalDeliveryDigestAndJournalRemainReadableWithoutBinding(t *testi
 	store := mustStore(t)
 	key := RunKey{RunID: "00000000-0000-4000-8000-000000000001", Generation: 1}
 	delivery := GoalDelivery{Kind: GoalDeliverySessionAttach, DeliveryID: "00000000-0000-4000-8000-000000000004", Fence: testGoalDeliveryJournal(key).Fence(), Ready: true, SessionAttach: &GoalSessionAttachDelivery{
-		GoalID: "00000000-0000-4000-8000-000000000003", LocalHandleID: "00000000-0000-4000-8000-000000000004", HarnessKind: "codex", HarnessVersion: "0.153.4", AdapterVersion: "symmetry-daemon:test",
+		GoalID: "00000000-0000-4000-8000-000000000003", LocalHandleID: "00000000-0000-4000-8000-000000000004", HarnessKind: "codex", HarnessVersion: "0.156.1", AdapterVersion: "symmetry-daemon:test",
 		WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Workspace: `C:\worktree`,
 	}}
 	legacyEncoded, err := json.Marshal(struct {
@@ -954,7 +954,7 @@ func testGoalSessionAttachDelivery() GoalSessionAttachDelivery {
 	return GoalSessionAttachDelivery{
 		GoalID: "00000000-0000-4000-8000-000000000003", LocalHandleID: "00000000-0000-4000-8000-000000000004",
 		BindingID:   "00000000-0000-4000-8000-000000000005",
-		HarnessKind: "codex", HarnessVersion: "0.153.4", AdapterVersion: "symmetry-daemon:test",
+		HarnessKind: "codex", HarnessVersion: "0.156.1", AdapterVersion: "symmetry-daemon:test",
 		WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Workspace: `C:\worktree`, RepositoryResourceID: &repositoryID,
 	}
 }

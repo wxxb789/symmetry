@@ -16,6 +16,12 @@ type testAdapter struct {
 	capabilities Capabilities
 }
 
+type unavailableProbeRunner struct{}
+
+func (unavailableProbeRunner) Run(context.Context, string, ...string) ([]byte, error) {
+	return nil, errors.New("native executable is unavailable")
+}
+
 func (adapter *testAdapter) Probe(context.Context) (Capabilities, error) {
 	return adapter.capabilities, nil
 }
@@ -44,6 +50,12 @@ func TestRegistryKeepsUnavailableCapabilitiesExplicit(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			registry := NewRegistry()
+			if err := registry.Register(KindCodex, NewCodexAdapterWithRunner("codex", unavailableProbeRunner{})); err != nil {
+				t.Fatal(err)
+			}
+			if err := registry.Register(KindClaude, NewClaudeAdapterWithRunner("claude", unavailableProbeRunner{})); err != nil {
+				t.Fatal(err)
+			}
 			capabilities, err := registry.Probe(context.Background(), test.kind)
 			if err == nil {
 				t.Fatal("Probe() error = nil, want unavailable error")
@@ -137,7 +149,7 @@ func TestCapabilitiesRejectUnsafeVersionAndOperationClaims(t *testing.T) {
 func TestVerifiedCapabilitiesCanAdvertiseProviderAccess(t *testing.T) {
 	capabilities := Capabilities{
 		Kind:                  KindPi,
-		NativeVersion:         "0.85.1",
+		NativeVersion:         "0.87.1",
 		ImplementationVersion: "adapter-v1",
 		ProtocolVersion:       1,
 		VersionKnown:          true,

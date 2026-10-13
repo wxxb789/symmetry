@@ -1094,6 +1094,92 @@ func waitForPathsAbsent(t *testing.T, timeout time.Duration, paths ...string) {
 	t.Fatalf("cleanup paths remain after %s: %s", timeout, strings.Join(paths, ", "))
 }
 
+type runJournalDiagnosticSnapshot struct {
+	RunID                     string
+	Generation                int64
+	RuntimeID                 string
+	ClaimedRuntimeEpoch       int64
+	LocalState                string
+	TerminalState             string
+	TerminalVerdict           string
+	ClaimIDPresent            bool
+	LeaseTokenPresent         bool
+	PendingEvents             int
+	PendingTransitions        int
+	HasProcessDetails         bool
+	PID                       int
+	ProcessIdentity           string
+	ContainmentUnproven       bool
+	HasContainmentAuthority   bool
+	HasContainmentHandoff     bool
+	HasContainmentScans       bool
+	WorkspacePathPresent      bool
+	WorkspaceRecoveryRequired bool
+	RetainWorkspace           bool
+}
+
+func runJournalDiagnosticSnapshotFromJournal(journal state.RunJournal) runJournalDiagnosticSnapshot {
+	return runJournalDiagnosticSnapshot{
+		RunID:                     journal.RunID,
+		Generation:                journal.Generation,
+		RuntimeID:                 journal.RuntimeID,
+		ClaimedRuntimeEpoch:       journal.ClaimedRuntimeEpoch,
+		LocalState:                journal.LocalState,
+		TerminalState:             journal.TerminalState,
+		TerminalVerdict:           journal.TerminalVerdict,
+		ClaimIDPresent:            journal.ClaimID != "",
+		LeaseTokenPresent:         journal.LeaseToken != "",
+		PendingEvents:             len(journal.PendingEvents),
+		PendingTransitions:        len(journal.PendingTransitions),
+		HasProcessDetails:         journal.HasProcessDetails(),
+		PID:                       journal.PID,
+		ProcessIdentity:           journal.ProcessIdentity,
+		ContainmentUnproven:       journal.ContainmentUnproven,
+		HasContainmentAuthority:   journal.ContainmentAuthority != nil,
+		HasContainmentHandoff:     journal.ContainmentHandoff != nil,
+		HasContainmentScans:       journal.ContainmentScans != nil,
+		WorkspacePathPresent:      journal.WorkspacePath != "",
+		WorkspaceRecoveryRequired: journal.WorkspaceRecoveryRequired,
+		RetainWorkspace:           journal.RetainWorkspace,
+	}
+}
+
+func TestRunJournalDiagnosticSnapshotRedactsExecutionCredentials(t *testing.T) {
+	const (
+		claimID    = "diagnostic-claim-secret-1c70"
+		leaseToken = "diagnostic-lease-secret-5a1d"
+		workspace  = "diagnostic-workspace-path-secret-74d2"
+	)
+	journal := state.RunJournal{
+		RunID:              "visible-run-id",
+		Generation:         7,
+		ClaimID:            claimID,
+		LeaseToken:         leaseToken,
+		LocalState:         "stale",
+		WorkspacePath:      workspace,
+		PendingTransitions: make([]protocol.StateTransitionRequest, 2),
+	}
+	snapshot := runJournalDiagnosticSnapshotFromJournal(journal)
+	diagnostic := fmt.Sprintf("%#v", snapshot)
+	for _, value := range []struct {
+		name  string
+		value string
+	}{
+		{name: "claim ID", value: claimID},
+		{name: "lease token", value: leaseToken},
+		{name: "workspace path", value: workspace},
+	} {
+		if strings.Contains(diagnostic, value.value) {
+			t.Errorf("run journal diagnostic exposed machine-local %s", value.name)
+		}
+	}
+	if snapshot.RunID != journal.RunID || snapshot.Generation != journal.Generation ||
+		snapshot.LocalState != journal.LocalState || snapshot.PendingTransitions != 2 ||
+		!snapshot.ClaimIDPresent || !snapshot.LeaseTokenPresent || !snapshot.WorkspacePathPresent {
+		t.Errorf("run journal diagnostic lost safe recovery summary: %#v", snapshot)
+	}
+}
+
 func waitForJournalOnDisk(t *testing.T, stateDir string, key state.RunKey, timeout time.Duration, ready func(state.RunJournal) bool) state.RunJournal {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -1110,7 +1196,7 @@ func waitForJournalOnDisk(t *testing.T, stateDir string, key state.RunKey, timeo
 		lastErr = err
 		time.Sleep(100 * time.Millisecond)
 	}
-	t.Fatalf("journal %s/%d did not reach expected state: last=%#v error=%v", key.RunID, key.Generation, last, lastErr)
+	t.Fatalf("journal %s/%d did not reach expected state: last=%#v error=%v", key.RunID, key.Generation, runJournalDiagnosticSnapshotFromJournal(last), lastErr)
 	return state.RunJournal{}
 }
 
@@ -1152,7 +1238,7 @@ func waitForJournalRetiredOrRetained(t *testing.T, stateDir string, key state.Ru
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	t.Fatalf("journal %s/%d did not reach durable cleanup or retained recovery state after %s: last=%#v", key.RunID, key.Generation, timeout, last)
+	t.Fatalf("journal %s/%d did not reach durable cleanup or retained recovery state after %s: last=%#v", key.RunID, key.Generation, timeout, runJournalDiagnosticSnapshotFromJournal(last))
 	return state.RunJournal{}, false
 }
 
@@ -1223,20 +1309,24 @@ func TestReconnectReclaimTimeoutAtBounds(t *testing.T) {
 func assertRetainedRecoveryJournal(t *testing.T, journal, before state.RunJournal) {
 	t.Helper()
 	if journal.LocalState != "stale" {
-		t.Fatalf("retained journal is not an exact recovery barrier: before=%#v after=%#v", before, journal)
+		t.Fatalf("retained journal is not an exact recovery barrier: before=%#v after=%#v", runJournalDiagnosticSnapshotFromJournal(before), runJournalDiagnosticSnapshotFromJournal(journal))
 	}
 	if journal.RuntimeID != before.RuntimeID || journal.ClaimedRuntimeEpoch != before.ClaimedRuntimeEpoch || journal.ClaimID != before.ClaimID || journal.LeaseToken != before.LeaseToken {
-		t.Fatalf("retained journal changed its execution fence: before=%#v after=%#v", before, journal)
+		t.Fatalf("retained journal changed its execution fence (claim_id_equal=%t lease_token_equal=%t): before=%#v after=%#v",
+			journal.ClaimID == before.ClaimID, journal.LeaseToken == before.LeaseToken,
+			runJournalDiagnosticSnapshotFromJournal(before), runJournalDiagnosticSnapshotFromJournal(journal))
 	}
 	if journal.HasProcessDetails() {
 		if journal.PID != before.PID || journal.ProcessIdentity != before.ProcessIdentity || !journal.StartedAt.Equal(before.StartedAt) {
-			t.Fatalf("retained journal changed process identity: before=%#v after=%#v", before, journal)
+			t.Fatalf("retained journal changed process identity: before=%#v after=%#v", runJournalDiagnosticSnapshotFromJournal(before), runJournalDiagnosticSnapshotFromJournal(journal))
 		}
 	} else if before.HasProcessDetails() {
 		assertRetiredProcessIdentity(t, before)
 	}
 	if journal.WorkspacePath != before.WorkspacePath || journal.WorkspaceBindingKey != before.WorkspaceBindingKey {
-		t.Fatalf("retained journal changed workspace binding: before=%#v after=%#v", before, journal)
+		t.Fatalf("retained journal changed workspace binding (path_equal=%t binding_key_equal=%t): before=%#v after=%#v",
+			journal.WorkspacePath == before.WorkspacePath, journal.WorkspaceBindingKey == before.WorkspaceBindingKey,
+			runJournalDiagnosticSnapshotFromJournal(before), runJournalDiagnosticSnapshotFromJournal(journal))
 	}
 	if journal.WorkspacePath != "" {
 		if _, err := os.Stat(journal.WorkspacePath); err != nil {
@@ -1244,7 +1334,7 @@ func assertRetainedRecoveryJournal(t *testing.T, journal, before state.RunJourna
 		}
 	}
 	if !journal.WorkspaceRecoveryRequired && !journal.RetainWorkspace {
-		t.Fatalf("retained journal did not preserve workspace recovery: %#v", journal)
+		t.Fatalf("retained journal did not preserve workspace recovery: %#v", runJournalDiagnosticSnapshotFromJournal(journal))
 	}
 	assertStoppedProcessOrRecoveryConstraint(t, journal)
 }
@@ -1252,7 +1342,7 @@ func assertRetainedRecoveryJournal(t *testing.T, journal, before state.RunJourna
 func assertLivePersistedProcess(t *testing.T, journal state.RunJournal) {
 	t.Helper()
 	if journal.PID <= 0 || strings.TrimSpace(journal.ProcessIdentity) == "" || journal.StartedAt.IsZero() {
-		t.Fatalf("running journal has incomplete process identity: %#v", journal)
+		t.Fatalf("running journal has incomplete process identity: %#v", runJournalDiagnosticSnapshotFromJournal(journal))
 	}
 	identity, err := platform.ProcessIdentity(journal.PID)
 	if err != nil {
@@ -1352,7 +1442,7 @@ func assertStoppedProcessOrRecoveryConstraint(t *testing.T, journal state.RunJou
 		return
 	}
 	if !journal.WorkspaceRecoveryRequired && !journal.RetainWorkspace {
-		t.Fatalf("retained process marker has no explicit stop-unproven recovery constraint: %#v (identity error: %v)", journal, err)
+		t.Fatalf("retained process marker has no explicit stop-unproven recovery constraint: %#v (identity error type: %T)", runJournalDiagnosticSnapshotFromJournal(journal), err)
 	}
 	if err == nil {
 		t.Logf("retained stale journal still names process %d; accepting only explicit workspace recovery constraint", journal.PID)
@@ -1367,7 +1457,7 @@ func assertRetiredOldRunByControl(t *testing.T, task protocol.Task, oldKey, curr
 		t.Fatalf("Control retirement witness state = %q, want cancelled", task.State)
 	}
 	if task.RunID == nil || task.Generation == nil {
-		t.Fatalf("Control retirement witness has no current run identity: %#v", task)
+		t.Fatalf("Control retirement witness has no current run identity: task_id=%q state=%q run_id_present=%t generation_present=%t", task.TaskID, task.State, task.RunID != nil, task.Generation != nil)
 	}
 	if *task.RunID != currentKey.RunID || *task.Generation != currentKey.Generation {
 		t.Fatalf("Control retirement witness = (%s, %d), want (%s, %d)", *task.RunID, *task.Generation, currentKey.RunID, currentKey.Generation)

@@ -10,7 +10,7 @@ import (
 )
 
 func TestDecoderReadsFixtureAcrossChunksCRLFAndHeartbeat(t *testing.T) {
-	fixture, err := os.ReadFile(filepath.Join("..", "testdata", "opencode", "1.18.30", "session-events.sse"))
+	fixture, err := os.ReadFile(filepath.Join("..", "testdata", "opencode", TestedVersion, "session-events.sse"))
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}
@@ -407,7 +407,7 @@ func TestSyntheticLifecycleFixturesDecode(t *testing.T) {
 	fixtures := []string{"lifecycle-terminal.sse", "lifecycle-tool-retry.sse", "unknown-then-terminal.sse", "missing-result.sse"}
 	for _, name := range fixtures {
 		t.Run(name, func(t *testing.T) {
-			path := filepath.Join("..", "testdata", "opencode", "1.18.30", name)
+			path := filepath.Join("..", "testdata", "opencode", TestedVersion, name)
 			contents, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatalf("read fixture: %v", err)

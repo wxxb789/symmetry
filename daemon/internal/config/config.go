@@ -3,12 +3,14 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -21,14 +23,20 @@ const (
 
 // Config is the daemon's local configuration.
 type Config struct {
-	ControlPlaneURL   string                  `json:"control_plane_url"`
-	AllowInsecureHTTP bool                    `json:"allow_insecure_http"`
-	StateDir          string                  `json:"state_dir"`
-	MachineName       string                  `json:"machine_name"`
-	AgentProfiles     map[string]AgentProfile `json:"agent_profiles"`
-	Workspaces        map[string]Workspace    `json:"workspaces"`
-	Runtime           Runtime                 `json:"runtime"`
-	CleanupTimeoutMS  int64                   `json:"cleanup_timeout_ms"`
+	ControlPlaneURL         string `json:"control_plane_url"`
+	AllowInsecureHTTP       bool   `json:"allow_insecure_http"`
+	StateDir                string `json:"state_dir"`
+	PiProviderExtensionDir  string `json:"pi_provider_extension_dir,omitempty"`
+	LinuxOwnerCgroupMount   string `json:"linux_owner_cgroup_mount,omitempty"`
+	LinuxOwnerDelegatedPath string `json:"linux_owner_delegated_path,omitempty"`
+	LinuxOwnerSocket        string `json:"linux_owner_socket,omitempty"`
+	// PiProviderExtensionGroupID is populated from the installed fixed-B owner config.
+	PiProviderExtensionGroupID uint32                  `json:"-"`
+	MachineName                string                  `json:"machine_name"`
+	AgentProfiles              map[string]AgentProfile `json:"agent_profiles"`
+	Workspaces                 map[string]Workspace    `json:"workspaces"`
+	Runtime                    Runtime                 `json:"runtime"`
+	CleanupTimeoutMS           int64                   `json:"cleanup_timeout_ms"`
 }
 
 // Runtime declares the execution environment available on this machine.
@@ -104,6 +112,8 @@ const (
 	WorkspacePolicyExistingCheckout WorkspacePolicy = "existing_checkout"
 	// WorkspacePolicyGitWorktree creates a detached git worktree for each run.
 	WorkspacePolicyGitWorktree WorkspacePolicy = "git_worktree"
+	// WorkspacePolicyGitCloneV2 creates a Linux-v2-only B-owned standalone clone per run.
+	WorkspacePolicyGitCloneV2 WorkspacePolicy = "git_clone_v2"
 )
 
 // CleanupPolicy selects when a daemon-owned worktree is removed.
@@ -124,6 +134,7 @@ type Workspace struct {
 	Path       string          `json:"path"`
 	Repository string          `json:"repository"`
 	Root       string          `json:"root"`
+	SeedRoot   string          `json:"seed_root,omitempty"`
 	Ref        string          `json:"ref"`
 	Cleanup    CleanupPolicy   `json:"cleanup"`
 }
@@ -179,6 +190,33 @@ func (value *Config) Validate() error {
 	if err := requireNotEmpty("state_dir", value.StateDir); err != nil {
 		return err
 	}
+	if value.PiProviderExtensionDir != "" {
+		if err := requireAbsolutePath("pi_provider_extension_dir", value.PiProviderExtensionDir); err != nil {
+			return err
+		}
+		if strings.IndexByte(value.PiProviderExtensionDir, 0) >= 0 || filepath.Clean(value.PiProviderExtensionDir) != value.PiProviderExtensionDir {
+			return fmt.Errorf("pi_provider_extension_dir must be a canonical absolute path")
+		}
+	}
+	if value.LinuxOwnerCgroupMount != "" {
+		if !filepath.IsAbs(value.LinuxOwnerCgroupMount) || filepath.Clean(value.LinuxOwnerCgroupMount) != value.LinuxOwnerCgroupMount ||
+			strings.IndexByte(value.LinuxOwnerCgroupMount, 0) >= 0 {
+			return errors.New("linux_owner_cgroup_mount must be a canonical absolute path")
+		}
+	}
+	if value.LinuxOwnerDelegatedPath != "" {
+		if filepath.IsAbs(value.LinuxOwnerDelegatedPath) || filepath.Clean(value.LinuxOwnerDelegatedPath) != value.LinuxOwnerDelegatedPath ||
+			value.LinuxOwnerDelegatedPath == "." || value.LinuxOwnerDelegatedPath == ".." ||
+			strings.HasPrefix(value.LinuxOwnerDelegatedPath, ".."+string(filepath.Separator)) || strings.IndexByte(value.LinuxOwnerDelegatedPath, 0) >= 0 {
+			return errors.New("linux_owner_delegated_path must be a canonical relative cgroup path")
+		}
+	}
+	if value.LinuxOwnerSocket != "" {
+		if !filepath.IsAbs(value.LinuxOwnerSocket) || filepath.Clean(value.LinuxOwnerSocket) != value.LinuxOwnerSocket ||
+			strings.IndexByte(value.LinuxOwnerSocket, 0) >= 0 {
+			return errors.New("linux_owner_socket must be a canonical absolute path")
+		}
+	}
 	if err := requireNotEmpty("machine_name", value.MachineName); err != nil {
 		return err
 	}
@@ -217,9 +255,19 @@ func (value *Config) Validate() error {
 	if err := validateWorkspaces(value.Workspaces); err != nil {
 		return err
 	}
+	for _, workspace := range value.Workspaces {
+		if workspace.Policy == WorkspacePolicyGitCloneV2 {
+			if err := validateRuntimeWorkspacePolicy(runtime.GOOS, runtime.GOARCH, value.Runtime.HarnessKind, workspace.Policy); err != nil {
+				return err
+			}
+		}
+	}
 	profile, ok := value.AgentProfiles[value.Runtime.AgentProfile]
 	if !ok {
 		return fmt.Errorf("runtime.agent_profile %q is not configured", value.Runtime.AgentProfile)
+	}
+	if runtime.GOOS == "linux" && value.Runtime.HarnessKind == RuntimeHarnessPi && profile.ProviderAccess && value.PiProviderExtensionDir == "" {
+		return fmt.Errorf("pi_provider_extension_dir must be configured for Linux Pi provider access")
 	}
 	if value.Runtime.HarnessKind == RuntimeHarnessCodex && profile.NativeModel == "" {
 		return fmt.Errorf("agent_profiles.%s.native_model must be configured for a Codex runtime", value.Runtime.AgentProfile)
@@ -231,8 +279,8 @@ func (value *Config) Validate() error {
 	if !ok {
 		return fmt.Errorf("runtime.workspace %q is not configured", value.Runtime.Workspace)
 	}
-	if value.Runtime.HarnessKind != RuntimeHarnessGeneric && workspace.Policy != WorkspacePolicyGitWorktree {
-		return fmt.Errorf("runtime.workspace must use git_worktree for a native Goal-capable runtime")
+	if err := validateRuntimeWorkspacePolicy(runtime.GOOS, runtime.GOARCH, value.Runtime.HarnessKind, workspace.Policy); err != nil {
+		return err
 	}
 	if workspace.Policy == WorkspacePolicyExistingCheckout && value.Runtime.Capacity > 1 {
 		return fmt.Errorf("runtime.capacity must be 1 when runtime.workspace uses existing_checkout")
@@ -395,10 +443,16 @@ func validateWorkspaces(workspaces map[string]Workspace) error {
 
 		switch workspace.Policy {
 		case WorkspacePolicyExistingCheckout:
+			if workspace.SeedRoot != "" {
+				return fmt.Errorf("%s.seed_root is only valid with git_clone_v2", field)
+			}
 			if err := requireAbsolutePath(field+".path", workspace.Path); err != nil {
 				return err
 			}
 		case WorkspacePolicyGitWorktree:
+			if workspace.SeedRoot != "" {
+				return fmt.Errorf("%s.seed_root is only valid with git_clone_v2", field)
+			}
 			if err := requireAbsolutePath(field+".repository", workspace.Repository); err != nil {
 				return err
 			}
@@ -411,9 +465,46 @@ func validateWorkspaces(workspaces map[string]Workspace) error {
 			if strings.HasPrefix(strings.TrimSpace(workspace.Ref), "-") || strings.ContainsAny(workspace.Ref, "\x00\r\n") {
 				return fmt.Errorf("%s.ref is invalid", field)
 			}
+		case WorkspacePolicyGitCloneV2:
+			if workspace.Path != "" {
+				return fmt.Errorf("%s.path must be empty for git_clone_v2", field)
+			}
+			if workspace.Ref != "" {
+				return fmt.Errorf("%s.ref must be empty for git_clone_v2; the reserved run intent selects the base commit", field)
+			}
+			for _, pathField := range []struct{ name, value string }{
+				{name: "repository", value: workspace.Repository},
+				{name: "root", value: workspace.Root},
+				{name: "seed_root", value: workspace.SeedRoot},
+			} {
+				if err := requireCanonicalAbsolutePath(field+"."+pathField.name, pathField.value); err != nil {
+					return err
+				}
+			}
+			if workspacePathsOverlap(workspace.Repository, workspace.Root) ||
+				workspacePathsOverlap(workspace.Repository, workspace.SeedRoot) ||
+				workspacePathsOverlap(workspace.Root, workspace.SeedRoot) {
+				return fmt.Errorf("%s.repository, root, and seed_root must be disjoint paths", field)
+			}
 		default:
-			return fmt.Errorf("%s.policy must be existing_checkout or git_worktree", field)
+			return fmt.Errorf("%s.policy must be existing_checkout, git_worktree, or git_clone_v2", field)
 		}
+	}
+	return nil
+}
+
+func validateRuntimeWorkspacePolicy(goos, goarch, harnessKind string, policy WorkspacePolicy) error {
+	if policy == WorkspacePolicyGitCloneV2 {
+		if goos != "linux" || goarch != "amd64" {
+			return fmt.Errorf("runtime.workspace git_clone_v2 is supported only on Linux/amd64")
+		}
+		if harnessKind == RuntimeHarnessGeneric {
+			return fmt.Errorf("runtime.workspace git_clone_v2 requires a native runtime")
+		}
+		return nil
+	}
+	if harnessKind != RuntimeHarnessGeneric && policy != WorkspacePolicyGitWorktree {
+		return fmt.Errorf("runtime.workspace must use git_worktree for a native Goal-capable runtime")
 	}
 	return nil
 }
@@ -443,4 +534,29 @@ func requireAbsolutePath(field, value string) error {
 		return fmt.Errorf("%s must be an absolute path", field)
 	}
 	return nil
+}
+
+func requireCanonicalAbsolutePath(field, value string) error {
+	if err := requireAbsolutePath(field, value); err != nil {
+		return err
+	}
+	if strings.ContainsAny(value, "\x00\r\n") || filepath.Clean(value) != value {
+		return fmt.Errorf("%s must be a canonical absolute path", field)
+	}
+	return nil
+}
+
+func workspacePathsOverlap(left, right string) bool {
+	if left == "" || right == "" {
+		return true
+	}
+	return workspacePathContains(left, right) || workspacePathContains(right, left)
+}
+
+func workspacePathContains(parent, child string) bool {
+	relative, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
 }

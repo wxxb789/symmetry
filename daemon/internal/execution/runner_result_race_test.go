@@ -37,8 +37,7 @@ func TestWaitForCompletionPublishesNaturalExitBeforeLateTerminate(t *testing.T) 
 		}
 	}()
 
-	go process.deliverOutput()
-	go process.waitForCompletion()
+	startResultRaceProcess(t, process)
 	<-waitStarted
 	close(waitRelease)
 	<-closeReached
@@ -98,8 +97,7 @@ func TestWaitForCompletionPublishesTerminateWinner(t *testing.T) {
 		},
 	)
 
-	go process.deliverOutput()
-	go process.waitForCompletion()
+	startResultRaceProcess(t, process)
 	<-waitStarted
 
 	terminateDone := make(chan error, 1)
@@ -129,6 +127,27 @@ func newResultRaceProcess(wait func() (int, error), closeProcess, kill func() er
 	return newProcessFromStarted(started, SinkFunc(func(context.Context, Event) error {
 		return nil
 	}), time.Now().UTC(), nil, nil)
+}
+
+func startResultRaceProcess(t *testing.T, process *Process) {
+	t.Helper()
+	stdoutRead, stdoutWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create stdout fixture pipe: %v", err)
+	}
+	stderrRead, stderrWrite, err := os.Pipe()
+	if err != nil {
+		_ = stdoutRead.Close()
+		_ = stdoutWrite.Close()
+		t.Fatalf("create stderr fixture pipe: %v", err)
+	}
+	process.start(stdoutRead, stderrRead, context.Background())
+	if err := stdoutWrite.Close(); err != nil {
+		t.Fatalf("close stdout fixture pipe: %v", err)
+	}
+	if err := stderrWrite.Close(); err != nil {
+		t.Fatalf("close stderr fixture pipe: %v", err)
+	}
 }
 
 func waitForResultRaceTermination(t *testing.T, result <-chan error) error {

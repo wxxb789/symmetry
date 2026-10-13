@@ -175,7 +175,7 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
 
     on_exit(fn ->
       stop_daemon!(daemon_process)
-      File.rm_rf!(run_dir)
+      remove_run_fixture!(run_dir)
     end)
 
     daemon_port = daemon_process.port
@@ -1306,6 +1306,50 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
 
   defp success_status(:post), do: 201
   defp success_status(_method), do: 200
+
+  defp remove_run_fixture!(root) do
+    # File.rm_rf discards child errors, hiding their path and errno behind parent :eexist.
+    remove_run_fixture_entry!(root, root)
+
+    assert File.lstat(root) == {:error, :enoent},
+           "provider broker fixture root remains after cleanup"
+  end
+
+  defp remove_run_fixture_entry!(path, root) do
+    case File.lstat(path) do
+      {:ok, %File.Stat{type: :directory}} ->
+        case :file.list_dir_all(path) do
+          {:ok, entries} ->
+            Enum.each(entries, &remove_run_fixture_entry!(Path.join(path, &1), root))
+            remove_run_fixture_result!(File.rmdir(path), :rmdir, path, root)
+
+          {:error, reason} ->
+            raise_run_fixture_removal!(:list_dir, reason, path, root)
+        end
+
+      {:ok, _file_or_symlink} ->
+        remove_run_fixture_result!(:file.delete(path), :delete, path, root)
+
+      {:error, :enoent} ->
+        :ok
+
+      {:error, reason} ->
+        raise_run_fixture_removal!(:lstat, reason, path, root)
+    end
+  end
+
+  defp remove_run_fixture_result!(:ok, _operation, _path, _root), do: :ok
+  defp remove_run_fixture_result!({:error, :enoent}, _operation, _path, _root), do: :ok
+
+  defp remove_run_fixture_result!({:error, reason}, operation, path, root) do
+    raise_run_fixture_removal!(operation, reason, path, root)
+  end
+
+  defp raise_run_fixture_removal!(operation, reason, path, root) do
+    relative_path = Path.relative_to(path, root)
+
+    raise "provider broker fixture cleanup failed: #{operation} #{inspect(relative_path)}: #{inspect(reason)}"
+  end
 
   defp build_go_binary!(daemon_dir, build_dir, name) do
     package = "./cmd/" <> Path.rootname(name)

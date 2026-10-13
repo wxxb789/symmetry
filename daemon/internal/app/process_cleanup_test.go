@@ -204,6 +204,7 @@ func TestRecoverUnownedGenericProcessMarkerClearsLegacyTerminalCleanupStates(t *
 				if _, err := store.SetLocalState(key, test.state); err != nil {
 					t.Fatal(err)
 				}
+				expireLeaseBeforeCleanup(t, store, key)
 			}
 			terminated := false
 			d := &daemon{

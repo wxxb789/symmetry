@@ -271,6 +271,16 @@ func TestContainmentAuthorityAndStopReceiptAreDurableAndCompareCleared(t *testin
 	if _, err := store.SetContainmentAuthority(journal.Key(), journal.PID, journal.ProcessIdentity, value); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.ClearProcessDetails(journal.Key(), journal.PID, journal.ProcessIdentity); err == nil {
+		t.Fatal("ClearProcessDetails() cleared containment authority without a durable stop receipt")
+	}
+	withoutReceipt, err := store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withoutReceipt.PID != journal.PID || withoutReceipt.ProcessIdentity != journal.ProcessIdentity || withoutReceipt.ContainmentAuthority == nil || withoutReceipt.ContainmentAuthority.StopReceipt != nil {
+		t.Fatalf("clear without receipt changed durable containment state: %+v", withoutReceipt)
+	}
 	receipt := authority.StopReceipt{
 		Version:            authority.SupervisorVersion,
 		Status:             "stopped",
@@ -300,6 +310,75 @@ func TestContainmentAuthorityAndStopReceiptAreDurableAndCompareCleared(t *testin
 	}
 }
 
+func TestContainmentClearUsesExactCASAndReplaysUnknownOutcome(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("containment-clear-unknown", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	value := testContainmentAuthority(journal.PID, journal.ProcessIdentity)
+	if _, err := store.SetContainmentAuthority(journal.Key(), journal.PID, journal.ProcessIdentity, value); err != nil {
+		t.Fatal(err)
+	}
+	receipt := authority.StopReceipt{
+		Version:            authority.SupervisorVersion,
+		Status:             "stopped",
+		TargetPID:          value.TargetPID,
+		TargetIdentity:     value.TargetIdentity,
+		PipeToken:          value.PipeToken,
+		JobID:              value.JobID,
+		SupervisorPID:      value.SupervisorPID,
+		SupervisorIdentity: value.SupervisorIdentity,
+	}
+	if _, err := store.RecordContainmentStopReceipt(journal.Key(), journal.PID, journal.ProcessIdentity, receipt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ClearProcessDetails(journal.Key(), journal.PID, journal.ProcessIdentity+"-stale"); err == nil {
+		t.Fatal("ClearProcessDetails() accepted a stale process identity")
+	}
+	bound, err := store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bound.PID != journal.PID || bound.ProcessIdentity != journal.ProcessIdentity || bound.ContainmentAuthority == nil || bound.ContainmentAuthority.StopReceipt == nil {
+		t.Fatalf("stale clear changed durable authority: %+v", bound)
+	}
+
+	restore := store.SetAtomicWriterForTesting(func(path string, data []byte) error {
+		if err := writeAtomic(path, data); err != nil {
+			return err
+		}
+		return errors.New("injected post-rename clear outcome")
+	})
+	if _, err := store.ClearProcessDetails(journal.Key(), journal.PID, journal.ProcessIdentity); err == nil {
+		restore()
+		t.Fatal("ClearProcessDetails() hid post-rename unknown outcome")
+	}
+	restore()
+
+	cleared, err := store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared.HasProcessDetails() || cleared.ContainmentAuthority != nil {
+		t.Fatalf("post-rename clear state = %+v, want no process or authority", cleared)
+	}
+
+	writes := 0
+	replayWriter := store.SetAtomicWriterForTesting(func(path string, data []byte) error {
+		writes++
+		return writeAtomic(path, data)
+	})
+	if _, err := store.ClearProcessDetails(journal.Key(), journal.PID, journal.ProcessIdentity); err != nil {
+		replayWriter()
+		t.Fatalf("replayed ClearProcessDetails() error = %v", err)
+	}
+	replayWriter()
+	if writes != 1 {
+		t.Fatalf("replayed ClearProcessDetails() writes = %d, want persistence barrier", writes)
+	}
+}
+
 func TestLegacyProcessMarkerHasNoImplicitContainmentAuthority(t *testing.T) {
 	store := mustStore(t)
 	journal := testJournal("legacy-authority", 1)
@@ -312,6 +391,40 @@ func TestLegacyProcessMarkerHasNoImplicitContainmentAuthority(t *testing.T) {
 	}
 	if loaded.ContainmentAuthority != nil {
 		t.Fatal("legacy process marker unexpectedly gained containment authority")
+	}
+}
+
+func TestContainmentUnprovenSurvivesRestartUntilExplicitlyCleared(t *testing.T) {
+	store := mustStore(t)
+	journal := testJournal("containment-unproven", 1)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetProcessDetails(journal.Key(), journal.PID, journal.ProcessIdentity, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkContainmentUnproven(journal.Key(), journal.PID, journal.ProcessIdentity); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.LoadJournal(journal.Key())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.ContainmentUnproven {
+		t.Fatal("ContainmentUnproven = false after durable mark")
+	}
+	if _, err := store.ClearProcessDetails(journal.Key(), journal.PID, journal.ProcessIdentity); err == nil {
+		t.Fatal("ClearProcessDetails() cleared an unresolved containment marker")
+	}
+	if _, err := store.ClearContainmentUnproven(journal.Key(), journal.PID, journal.ProcessIdentity); err != nil {
+		t.Fatal(err)
+	}
+	cleared, err := store.ClearProcessDetails(journal.Key(), journal.PID, journal.ProcessIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared.HasProcessDetails() || cleared.ContainmentUnproven {
+		t.Fatalf("cleared journal = %#v, want no marker or uncertainty", cleared)
 	}
 }
 
@@ -471,6 +584,40 @@ func TestSaveJournalCannotBypassProcessMarkerMutations(t *testing.T) {
 			test.change(&journal)
 			if err := store.SaveJournal(journal); err == nil {
 				t.Fatal("complete replacement bypassed process marker ownership")
+			}
+		})
+	}
+}
+
+func TestSaveJournalCannotBypassContainmentUnprovenMutation(t *testing.T) {
+	for _, initiallyUnproven := range []bool{false, true} {
+		name := "false-to-true"
+		if initiallyUnproven {
+			name = "true-to-false"
+		}
+		t.Run(name, func(t *testing.T) {
+			store := mustStore(t)
+			journal := testJournal("containment-unproven-replacement", 1)
+			if err := store.SaveJournal(journal); err != nil {
+				t.Fatal(err)
+			}
+			if initiallyUnproven {
+				var err error
+				journal, err = store.MarkContainmentUnproven(journal.Key(), journal.PID, journal.ProcessIdentity)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			journal.ContainmentUnproven = !initiallyUnproven
+			if err := store.SaveJournal(journal); err == nil {
+				t.Fatal("SaveJournal bypassed dedicated containment uncertainty mutation")
+			}
+			loaded, err := store.LoadJournal(journal.Key())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if loaded.ContainmentUnproven != initiallyUnproven {
+				t.Fatalf("ContainmentUnproven changed after rejected replacement: got %t, want %t", loaded.ContainmentUnproven, initiallyUnproven)
 			}
 		})
 	}

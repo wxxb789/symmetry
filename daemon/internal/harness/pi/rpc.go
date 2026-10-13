@@ -156,6 +156,9 @@ const (
 	EventToolExecutionUpdate            EventType = "tool_execution_update"
 	EventToolExecutionEnd               EventType = "tool_execution_end"
 	EventQueueUpdate                    EventType = "queue_update"
+	EventEntryAppended                  EventType = "entry_appended"
+	EventSessionInfoChanged             EventType = "session_info_changed"
+	EventThinkingLevelChanged           EventType = "thinking_level_changed"
 	EventCompactionStart                EventType = "compaction_start"
 	EventCompactionEnd                  EventType = "compaction_end"
 	EventAutoRetryStart                 EventType = "auto_retry_start"
@@ -430,6 +433,7 @@ func supportedEvent(eventType EventType) bool {
 	case EventAgentStart, EventAgentEnd, EventAgentSettled, EventTurnStart, EventTurnEnd,
 		EventMessageStart, EventMessageUpdate, EventMessageEnd, EventBashExecutionUpdate,
 		EventToolExecutionStart, EventToolExecutionUpdate, EventToolExecutionEnd, EventQueueUpdate,
+		EventEntryAppended, EventSessionInfoChanged, EventThinkingLevelChanged,
 		EventCompactionStart, EventCompactionEnd, EventAutoRetryStart, EventAutoRetryEnd,
 		EventSummarizationRetryScheduled, EventSummarizationRetryAttemptStart,
 		EventSummarizationRetryFinished, EventExtensionError, EventExtensionUIRequest:

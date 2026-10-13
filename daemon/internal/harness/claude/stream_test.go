@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -9,7 +10,7 @@ import (
 )
 
 func TestDecoderReadsFixtureAcrossCRLFAndChunkBoundaries(t *testing.T) {
-	fixture, err := os.ReadFile(filepath.Join("..", "testdata", "claude", "2.1.259", "stream-json.jsonl"))
+	fixture, err := os.ReadFile(filepath.Join("..", "testdata", "claude", "2.1.281", "stream-json.jsonl"))
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}
@@ -38,14 +39,14 @@ func TestDecoderReadsFixtureAcrossCRLFAndChunkBoundaries(t *testing.T) {
 			t.Fatalf("event %d session = %q, want native-session-1", index, event.SessionID)
 		}
 	}
-	if events[4].Result == nil || events[4].Result.IsError || events[4].Result.Subtype != "success" {
-		t.Fatalf("result = %+v, want decoded successful result", events[4].Result)
+	if events[4].Result == nil || events[4].Result.IsError || events[4].Result.Subtype != "success" || string(events[4].Result.StructuredOutput) != `{"status":"done"}` {
+		t.Fatalf("result = %+v, want decoded successful result with structured_output", events[4].Result)
 	}
 }
 
 func TestTerminalValidatorAcceptsOnlyObservedMatchingSuccessfulResult(t *testing.T) {
 	decoder := NewDecoder(1024)
-	events, err := decoder.Feed([]byte("{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"actual\"}\n{\"type\":\"result\",\"subtype\":\"success\",\"terminal_reason\":\"completed\",\"is_error\":false,\"session_id\":\"actual\",\"result\":\"done\",\"usage\":{\"input_tokens\":1}}\n"))
+	events, err := decoder.Feed([]byte("{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"actual\"}\n{\"type\":\"result\",\"subtype\":\"success\",\"terminal_reason\":\"completed\",\"is_error\":false,\"session_id\":\"actual\",\"result\":\"done\",\"structured_output\":{\"status\":\"done\"},\"usage\":{\"input_tokens\":1}}\n"))
 	if err != nil {
 		t.Fatalf("Feed() error = %v", err)
 	}
@@ -59,7 +60,7 @@ func TestTerminalValidatorAcceptsOnlyObservedMatchingSuccessfulResult(t *testing
 	if err != nil {
 		t.Fatalf("Finish() error = %v", err)
 	}
-	if terminal.SessionID != "actual" || terminal.Result.Subtype != "success" || string(terminal.Result.Output) != "\"done\"" {
+	if terminal.SessionID != "actual" || terminal.Result.Subtype != "success" || string(terminal.Result.StructuredOutput) != `{"status":"done"}` || string(terminal.Result.Output) != "\"done\"" {
 		t.Fatalf("terminal = %+v, want observed successful result", terminal)
 	}
 }
@@ -134,25 +135,87 @@ func TestDecoderAndValidatorFailClosedForInvalidRecords(t *testing.T) {
 	}
 }
 
-func TestTerminalValidatorRequiresUsableSuccessfulResultPayload(t *testing.T) {
+func TestTerminalValidatorRequiresStructuredOutputObject(t *testing.T) {
 	tests := []struct {
 		name   string
-		result string
+		fields string
 	}{
-		{name: "missing", result: ""},
-		{name: "null", result: ",\"result\":null"},
-		{name: "empty string", result: ",\"result\":\"  \""},
-		{name: "non string", result: ",\"result\":{}"},
+		{name: "missing", fields: ""},
+		{name: "null", fields: `,"structured_output":null`},
+		{name: "string", fields: `,"structured_output":"{}"`},
+		{name: "array", fields: `,"structured_output":[{}]`},
+		{name: "success text without structured output", fields: `,"terminal_reason":"completed","result":"{\"kind\":\"progress\"}"`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			input := "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"session_id\":\"s\"" + test.result + "}\n"
+			input := `{"type":"result","subtype":"success","is_error":false,"session_id":"s"` + test.fields + "}\n"
 			events, err := NewDecoder(1024).Feed([]byte(input))
 			if err != nil || len(events) != 1 || events[0].DecodeError != nil {
 				t.Fatalf("Feed() = %#v, %v", events, err)
 			}
-			if err := NewTerminalValidator("s").Observe(events[0]); !errors.Is(err, ErrMissingResultPayload) {
-				t.Fatalf("Observe() error = %v, want ErrMissingResultPayload", err)
+			validator := NewTerminalValidator("s")
+			if err := validator.Observe(events[0]); !errors.Is(err, ErrMissingStructuredOutput) {
+				t.Fatalf("Observe() error = %v, want ErrMissingStructuredOutput", err)
+			}
+			if _, err := validator.Finish(); !errors.Is(err, ErrMissingStructuredOutput) {
+				t.Fatalf("Finish() error = %v, want ErrMissingStructuredOutput", err)
+			}
+		})
+	}
+}
+
+// TestTerminalValidatorReplaysNativeStructuredOutputCaptures feeds sanitized
+// Claude Code 2.1.281 --json-schema stream-json captures, recorded against a
+// loopback fake Messages API, through the decoder and validator.
+func TestTerminalValidatorReplaysNativeStructuredOutputCaptures(t *testing.T) {
+	tests := []struct {
+		file string
+		want error
+	}{
+		{file: "structured-output-task-result-success.jsonl"},
+		{file: "structured-output-retry-exhausted.jsonl", want: ErrResultReportedError},
+		{file: "structured-output-missing-after-text-success.jsonl", want: ErrMissingStructuredOutput},
+	}
+	for _, test := range tests {
+		t.Run(test.file, func(t *testing.T) {
+			capture, err := os.ReadFile(filepath.Join("..", "testdata", "claude", "2.1.281", test.file))
+			if err != nil {
+				t.Fatalf("read capture: %v", err)
+			}
+			decoder := NewDecoder(0)
+			events, err := decoder.Feed(capture)
+			if err != nil {
+				t.Fatalf("Feed() error = %v", err)
+			}
+			if trailing, closeErr := decoder.Close(); closeErr != nil || len(trailing) != 0 {
+				t.Fatalf("Close() = %#v, %v; want no trailing record", trailing, closeErr)
+			}
+			if len(events) == 0 || events[len(events)-1].Type != EventResult {
+				t.Fatalf("capture events = %d, want a terminal result record", len(events))
+			}
+			validator := NewTerminalValidator("")
+			var observeErr error
+			for _, event := range events {
+				if observeErr = validator.Observe(event); observeErr != nil {
+					break
+				}
+			}
+			terminal, finishErr := validator.Finish()
+			if test.want != nil {
+				if !errors.Is(observeErr, test.want) || !errors.Is(finishErr, test.want) {
+					t.Fatalf("Observe()/Finish() errors = %v / %v, want %v", observeErr, finishErr, test.want)
+				}
+				return
+			}
+			if observeErr != nil || finishErr != nil {
+				t.Fatalf("Observe()/Finish() errors = %v / %v, want success", observeErr, finishErr)
+			}
+			var output struct {
+				SchemaVersion string `json:"schema_version"`
+				Kind          string `json:"kind"`
+			}
+			if err := json.Unmarshal(terminal.Result.StructuredOutput, &output); err != nil || output.SchemaVersion != "symmetry.task_result.v1" || output.Kind != "progress" {
+				t.Fatalf("structured_output = %s (%v), want TaskResult object", terminal.Result.StructuredOutput, err)
 			}
 		})
 	}
@@ -201,7 +264,7 @@ func TestTerminalValidatorRejectsErrorResultsControlRequestsAndConflicts(t *test
 
 func TestTerminalValidatorRejectsRepeatedAndPostTerminalRecords(t *testing.T) {
 	decoder := NewDecoder(1024)
-	events, err := decoder.Feed([]byte("{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"session_id\":\"s\",\"result\":\"done\"}\n{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"session_id\":\"s\",\"result\":\"done\"}\n"))
+	events, err := decoder.Feed([]byte("{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"session_id\":\"s\",\"structured_output\":{}}\n{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"session_id\":\"s\",\"structured_output\":{}}\n"))
 	if err != nil || len(events) != 2 {
 		t.Fatalf("Feed() = %#v, %v", events, err)
 	}
@@ -228,7 +291,7 @@ func TestTerminalValidatorRejectsIdentityChangesAndTrailingRecords(t *testing.T)
 		t.Fatalf("second Observe() error = %v, want ErrConflictingIdentity", err)
 	}
 
-	events, err = NewDecoder(1024).Feed([]byte("{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"session_id\":\"s\",\"result\":\"done\"}\n{\"type\":\"log\",\"session_id\":\"s\"}\n"))
+	events, err = NewDecoder(1024).Feed([]byte("{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"session_id\":\"s\",\"structured_output\":{}}\n{\"type\":\"log\",\"session_id\":\"s\"}\n"))
 	if err != nil || len(events) != 2 {
 		t.Fatalf("trailing Feed() = %#v, %v", events, err)
 	}

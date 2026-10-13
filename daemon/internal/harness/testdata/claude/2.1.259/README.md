@@ -1,5 +1,8 @@
 # Claude Code 2.1.259 probe evidence
 
+These files are historical evidence for Claude Code 2.1.259, superseded by
+`../2.1.281/`.
+
 These files record local executable and CLI-help evidence only. They do not
 claim that Claude Code native session, resume, control, approval, usage, or
 artifact-recovery semantics are supported by Symmetry.
@@ -16,8 +19,8 @@ interleaved stream, cancellation/drain, usage, and retained-artifact recovery
 evidence for each claimed platform. Do not treat this probe fixture as a native
 smoke test.
 
-`stream-json.jsonl` is synthetic, Multica-derived framing evidence for the
-documented Claude Code `stream-json` envelope shape. It covers decoder DTO
+`stream-json.jsonl` (moved to `../2.1.281/`) is synthetic, Multica-derived
+framing evidence for the documented Claude Code `stream-json` envelope shape. It covers decoder DTO
 handling only; identifiers, messages, result text, and usage values are
 invented. It is not a credentialed native capture and cannot verify session
 creation, result/usage semantics, controls, resume, or artifact recovery.

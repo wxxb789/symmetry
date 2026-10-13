@@ -14,7 +14,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w -buildid=' \
     -o /out/symmetry-daemon ./cmd/symmetry-daemon \
     && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w -buildid=' \
     -o /out/symmetry-fake-agent ./cmd/symmetry-fake-agent \
-    && mkdir -p /out/state /out/workspaces
+    && mkdir -p /out/state /out/workspaces /out/tmp
 
 FROM debian:bookworm-slim AS certificates
 
@@ -34,6 +34,8 @@ COPY --from=certificates /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-ce
 COPY --from=init /sbin/tini-static /tini
 COPY --from=build --chown=65532:65532 /out/state /var/lib/symmetry
 COPY --from=build --chown=65532:65532 /out/workspaces /workspaces
+# The Linux supervisor helper binds its per-run recovery socket in the temp directory.
+COPY --from=build --chown=65532:65532 /out/tmp /tmp
 COPY --chown=65532:65532 docker/daemon-config.json /etc/symmetry/daemon.json
 
 USER 65532:65532

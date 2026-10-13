@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -34,6 +35,67 @@ func TestLoadAcceptsValidConfiguration(t *testing.T) {
 	}
 	if actual.CleanupTimeoutMS != defaultCleanupTimeoutMS {
 		t.Errorf("CleanupTimeoutMS = %d, want %d", actual.CleanupTimeoutMS, defaultCleanupTimeoutMS)
+	}
+}
+
+func TestPiProviderExtensionShareConfigValidation(t *testing.T) {
+	share := t.TempDir()
+	value := validConfigObject(t)
+	value["pi_provider_extension_dir"] = share
+	contents, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(writeConfig(t, string(contents)))
+	if err != nil {
+		t.Fatalf("Load() with absolute provider extension share error = %v", err)
+	}
+	if loaded.PiProviderExtensionDir != share {
+		t.Fatalf("PiProviderExtensionDir = %q, want %q", loaded.PiProviderExtensionDir, share)
+	}
+
+	value["pi_provider_extension_dir"] = "relative/share"
+	contents, err = json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(writeConfig(t, string(contents))); err == nil || !strings.Contains(err.Error(), "pi_provider_extension_dir") {
+		t.Fatalf("Load() with relative provider extension share error = %v, want path validation", err)
+	}
+}
+
+func TestLinuxPiProviderAccessRequiresExtensionShareConfig(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux-specific provider extension configuration")
+	}
+	value := validConfigObject(t)
+	runtimeConfig := value["runtime"].(map[string]any)
+	runtimeConfig["harness_kind"] = RuntimeHarnessPi
+	runtimeConfig["harness_version"] = "0.87.1"
+	runtimeConfig["adapter_version"] = "symmetry-daemon:test"
+	runtimeConfig["adapter_protocol_version"] = 1
+	runtimeConfig["repository_resource_id"] = "00000000-0000-4000-8000-000000000001"
+	profile := value["agent_profiles"].(map[string]any)["default"].(map[string]any)
+	profile["input_mode"] = string(InputModeJSON)
+	profile["provider_access"] = true
+	value["workspaces"].(map[string]any)["primary"] = map[string]any{
+		"policy": WorkspacePolicyGitWorktree, "repository": t.TempDir(), "root": t.TempDir(), "ref": "HEAD", "cleanup": CleanupAlways,
+	}
+	contents, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(writeConfig(t, string(contents))); err == nil || !strings.Contains(err.Error(), "pi_provider_extension_dir") {
+		t.Fatalf("Load() without Linux Pi provider share error = %v, want required share", err)
+	}
+
+	value["pi_provider_extension_dir"] = t.TempDir()
+	contents, err = json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(writeConfig(t, string(contents))); err != nil {
+		t.Fatalf("Load() with Linux Pi provider share error = %v", err)
 	}
 }
 
@@ -266,6 +328,116 @@ func TestLoadAllowsConcurrentGitWorktree(t *testing.T) {
 	}
 	if _, err := Load(writeConfig(t, string(contents))); err != nil {
 		t.Fatalf("Load() error = %v", err)
+	}
+}
+
+func TestGitCloneV2WorkspaceRequiresDisjointCanonicalPaths(t *testing.T) {
+	valid := Workspace{
+		Policy:     WorkspacePolicyGitCloneV2,
+		Repository: filepath.Join(t.TempDir(), "source"),
+		Root:       filepath.Join(t.TempDir(), "checkouts"),
+		SeedRoot:   filepath.Join(t.TempDir(), "seeds"),
+		Cleanup:    CleanupOnSuccess,
+	}
+	if err := validateWorkspaces(map[string]Workspace{"native": valid}); err != nil {
+		t.Fatalf("validateWorkspaces(valid clone binding) error = %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		mutate   func(*Workspace)
+		contains string
+	}{
+		{name: "missing seed root", mutate: func(value *Workspace) { value.SeedRoot = "" }, contains: "seed_root"},
+		{name: "relative seed root", mutate: func(value *Workspace) { value.SeedRoot = "seeds" }, contains: "seed_root"},
+		{name: "noncanonical root", mutate: func(value *Workspace) {
+			value.Root += string(filepath.Separator) + ".." + string(filepath.Separator) + "checkouts"
+		}, contains: "root"},
+		{name: "source overlaps checkout root", mutate: func(value *Workspace) { value.Root = filepath.Join(value.Repository, "checkouts") }, contains: "disjoint"},
+		{name: "seed overlaps source", mutate: func(value *Workspace) { value.SeedRoot = filepath.Join(value.Repository, "seeds") }, contains: "disjoint"},
+		{name: "path is forbidden", mutate: func(value *Workspace) { value.Path = valid.Repository }, contains: "path"},
+		{name: "ref is forbidden", mutate: func(value *Workspace) { value.Ref = "HEAD" }, contains: "ref"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			value := valid
+			test.mutate(&value)
+			if err := validateWorkspaces(map[string]Workspace{"native": value}); err == nil || !strings.Contains(err.Error(), test.contains) {
+				t.Fatalf("validateWorkspaces() error = %v, want %q validation", err, test.contains)
+			}
+		})
+	}
+}
+
+func TestGitCloneV2RuntimeSelectionIsLinuxAMD64NativeOnly(t *testing.T) {
+	tests := []struct {
+		name        string
+		goos        string
+		goarch      string
+		harnessKind string
+		wantErr     bool
+	}{
+		{name: "Linux amd64 native", goos: "linux", goarch: "amd64", harnessKind: RuntimeHarnessPi},
+		{name: "Windows amd64", goos: "windows", goarch: "amd64", harnessKind: RuntimeHarnessPi, wantErr: true},
+		{name: "Linux 386", goos: "linux", goarch: "386", harnessKind: RuntimeHarnessPi, wantErr: true},
+		{name: "Linux generic", goos: "linux", goarch: "amd64", harnessKind: RuntimeHarnessGeneric, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateRuntimeWorkspacePolicy(test.goos, test.goarch, test.harnessKind, WorkspacePolicyGitCloneV2)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("validateRuntimeWorkspacePolicy() error = %v, wantErr=%t", err, test.wantErr)
+			}
+		})
+	}
+	if err := validateRuntimeWorkspacePolicy("windows", "amd64", RuntimeHarnessGeneric, WorkspacePolicyExistingCheckout); err != nil {
+		t.Fatalf("legacy Windows checkout policy was rejected: %v", err)
+	}
+	if err := validateRuntimeWorkspacePolicy("linux", "amd64", RuntimeHarnessPi, WorkspacePolicyGitWorktree); err != nil {
+		t.Fatalf("legacy Linux worktree policy was rejected: %v", err)
+	}
+}
+
+func TestLoadAcceptsLinuxNativeGitCloneV2Binding(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("git_clone_v2 is Linux/amd64 only")
+	}
+	value := validConfigObject(t)
+	runtimeConfig := value["runtime"].(map[string]any)
+	runtimeConfig["harness_kind"] = RuntimeHarnessPi
+	runtimeConfig["harness_version"] = "0.87.1"
+	runtimeConfig["adapter_version"] = "symmetry-daemon:test"
+	runtimeConfig["adapter_protocol_version"] = 1
+	runtimeConfig["repository_resource_id"] = "00000000-0000-4000-8000-000000000001"
+	profile := value["agent_profiles"].(map[string]any)["default"].(map[string]any)
+	profile["input_mode"] = string(InputModeJSON)
+	value["workspaces"].(map[string]any)["primary"] = map[string]any{
+		"policy":     WorkspacePolicyGitCloneV2,
+		"repository": filepath.Join(t.TempDir(), "source"),
+		"root":       filepath.Join(t.TempDir(), "checkouts"),
+		"seed_root":  filepath.Join(t.TempDir(), "seeds"),
+		"cleanup":    CleanupAlways,
+	}
+	contents, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(writeConfig(t, string(contents)))
+	if err != nil {
+		t.Fatalf("Load() clone-v2 config error = %v", err)
+	}
+	if loaded.Workspaces["primary"].Policy != WorkspacePolicyGitCloneV2 || loaded.Workspaces["primary"].SeedRoot == "" {
+		t.Fatalf("loaded clone binding = %#v", loaded.Workspaces["primary"])
+	}
+}
+
+func TestLegacyWorkspaceJSONDoesNotGainSeedRoot(t *testing.T) {
+	encoded, err := json.Marshal(Workspace{Policy: WorkspacePolicyExistingCheckout, Path: filepath.Join(t.TempDir(), "checkout"), Cleanup: CleanupNever})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "seed_root") {
+		t.Fatalf("legacy workspace JSON unexpectedly contains seed_root: %s", encoded)
 	}
 }
 

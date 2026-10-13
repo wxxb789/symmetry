@@ -36,17 +36,68 @@ multi-agent orchestration is required by these files.
 
 ## Commands and gates
 
-The current CI already has Elixir tests/release, Linux Go tests/race tests,
-Windows tests and daemon/control restart E2E. Preserve those gates. Do not pretend
-future frontend/contract commands already exist in this documentation PR.
+The current CI has Elixir tests/release, Linux Go vet/tests/race tests, Windows
+tests, the wire-contract gate and daemon/control restart E2E. Preserve those
+gates. Frontend commands do not exist until goal 0007 builds `frontend/`; do not
+report them as run.
 
-| Surface | Actual baseline commands / target additions |
+Run CI for pull requests, pushes to `main`, tags, and manual dispatch; do not
+duplicate the full matrix on feature-branch pushes. PR evidence binds the tested
+merge revision, not the unmerged feature head. Branches without a PR and
+conflicted PRs have no automatic feature-head run. The Control job owns the
+canonical formatter gate; Pi jobs retain platform-specific compilation and E2E.
+
+Ordinary Linux user/PID namespace fixtures still run as the original
+unprivileged runner UID. On disposable GitHub-hosted runners, preparation may
+attach a fresh per-program AppArmor `userns` exception to a private copy of the
+system `unshare`; it must not disable global restrictions or run Go/tests with
+`sudo`. This exception is not a sandbox and does not qualify a native owner.
+Installed-owner host prerequisites must be proved in the same protected manual
+native-acceptance job as their consumers, not on a separate automatic PR runner.
+A skipped qualification job is unavailable evidence, never a passed predicate.
+
+Ordinary daemon Go test commands inherit only stdio from their command caller.
+Establish that descriptor boundary before Go starts, not inside a native census fixture.
+Descriptors subsequently owned by a test remain subject to the unchanged
+production census, including unexpected FD rejection. This isolates descriptor
+inheritance only; it does not qualify a host or identify an upstream producer.
+
+Control/Pi CI selects the production missing-owner refusal on Linux and retains
+the five Windows positive integration scenarios. Test-only capability projection
+for admission does not establish installed-owner qualification. Linux-specific
+provider progress, crash/candidate handling, handoff and resume still need their
+own installed-owner evidence; generic Control state tests cannot replace it.
+Finite witness failure diagnostics are separate from acceptance summaries and
+cannot satisfy missing receipts or turn a failed witness into a passing run.
+Runtime-registration observations retain the last successful Portal projection;
+`portal_unavailable` means no valid snapshot was obtained, not runtime absence.
+Helper-crash cancellation diagnostics classify one failed request without retry.
+An HTTP 409 client fallback is not a decoded server-code proof.
+`cancel_api_409_failed_run` additionally requires one bounded failed-Task readback
+matching the original run/generation.
+Legacy helper-scan crash phases identify only the entered assertion boundary;
+mirror-wait labels identify the last entered predicate guard, not takeover proof.
+Initialized evidence with absent snapshots remains incomplete.
+Rootless native fixtures must load through the production config validator and
+reuse a real repository resource binding. Public pinned assets are mounted
+read-only and readable by the container UID; executables retain execute access.
+Pi requires its complete release for relative version metadata and runtime assets,
+not a standalone executable mount. Private extraction parents and state stay
+private; archive extraction under umask 077 alone does not preserve cross-UID
+access. Native service images explicitly provide a UID-private writable HOME;
+OpenCode initializes XDG directories even for version and help probes.
+Owner-request barrier paths bind the container-visible mount namespace, not the
+host extraction path; fresh-directory ownership and mode guards remain.
+The response-hold fixture decodes gzip session-registration observations without
+changing the forwarded response status, headers or body.
+
+| Surface | Actual commands / target additions |
 | --- | --- |
 | Elixir (`control/`) | `mix format --check-formatted`; `mix compile --warnings-as-errors`; `mix test`; release/E2E per current CI |
-| Go (`daemon/`) | `go test ./...`; concurrency changes: `go test -race ./...`; add `go vet ./...` to gate if absent |
+| Go (`daemon/`) | `go vet ./...`; `go test ./...`; concurrency changes: `go test -race ./...` |
 | Browser (`browser/`, before migration) | `npm ci`; `npm test`; configured control/daemon fixtures required |
 | TS (goal 0007 target) | frontend typecheck/lint/test/build commands from frontend.md; migrate browser runner to pnpm |
-| Wire contract (goal 0006 target) | generate/check DTO drift; positive/negative fixtures through Elixir/Go/Effect decoders |
+| Wire contract | `pnpm contracts:check` (schemas, fixtures through Effect decoders, generated-file drift; regenerate with `pnpm contracts:generate`); Go and Elixir fixture decoders run in their test suites |
 
 Run affected focused checks during development; required CI gates remain required
 before merge. Native credentialed harness tests and Windows behavior cannot be

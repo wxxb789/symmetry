@@ -224,6 +224,16 @@ func TestFailedStartOutputMarksTruncated(t *testing.T) {
 
 func newOutputLifecycleProcess(t *testing.T, sink Sink) (*Process, chan struct{}) {
 	t.Helper()
+	stdoutRead, stdoutWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create stdout fixture pipe: %v", err)
+	}
+	stderrRead, stderrWrite, err := os.Pipe()
+	if err != nil {
+		_ = stdoutRead.Close()
+		_ = stdoutWrite.Close()
+		t.Fatalf("create stderr fixture pipe: %v", err)
+	}
 	waitStarted := make(chan struct{})
 	waitRelease := make(chan struct{})
 	started := &startedProcess{
@@ -238,8 +248,13 @@ func newOutputLifecycleProcess(t *testing.T, sink Sink) (*Process, chan struct{}
 		close: func() error { return nil },
 	}
 	process := newProcessFromStarted(started, sink, time.Now().UTC(), nil, nil)
-	go process.deliverOutput()
-	go process.waitForCompletion()
+	process.start(stdoutRead, stderrRead, context.Background())
+	if err := stdoutWrite.Close(); err != nil {
+		t.Fatalf("close stdout fixture pipe: %v", err)
+	}
+	if err := stderrWrite.Close(); err != nil {
+		t.Fatalf("close stderr fixture pipe: %v", err)
+	}
 	select {
 	case <-waitStarted:
 	case <-time.After(5 * time.Second):

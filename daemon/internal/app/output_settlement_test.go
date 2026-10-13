@@ -287,7 +287,11 @@ func (adapter *outputSettlementAdapter) Start(ctx context.Context, request harne
 	invocation.Program = adapter.executable
 	invocation.Args = nil
 	invocation.Dir = adapter.workspace
-	invocation.Env = append(os.Environ(), outputSettlementHelperEnvironment+"=1")
+	environment, err := execution.BuildEnvironment()
+	if err != nil {
+		return nil, err
+	}
+	invocation.Env = append(environment, outputSettlementHelperEnvironment+"=1")
 	invocation.InitialInput = nil
 	invocation.CloseInputAfterInitial = false
 	invocation.PersistProcess = request.PersistProcess

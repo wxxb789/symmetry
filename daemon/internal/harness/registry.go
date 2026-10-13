@@ -19,7 +19,7 @@ import (
 
 const (
 	defaultClaudeExecutable   = "claude"
-	testedClaudeVersion       = "2.1.259"
+	testedClaudeVersion       = "2.1.281"
 	claudeProbeTimeout        = time.Second
 	claudeProbeMaxOutputBytes = 64 << 10
 	defaultCodexExecutable    = "codex"
@@ -352,7 +352,7 @@ func probeClaudeExecutable(ctx context.Context, executable string, runner Claude
 		return capabilities, fmt.Errorf("%w: Claude Code help probe failed: %v", ErrNativeUnverified, err)
 	}
 	if !hasClaudeTransportHelp(string(helpOutput)) {
-		return capabilities, fmt.Errorf("%w: Claude Code help did not advertise print stream-json transport", ErrNativeUnverified)
+		return capabilities, fmt.Errorf("%w: Claude Code help did not advertise print stream-json transport with --json-schema", ErrNativeUnverified)
 	}
 	capabilities.TransportVerified = true
 
@@ -375,7 +375,8 @@ func hasClaudeTransportHelp(output string) bool {
 	value := strings.ToLower(output)
 	return strings.Contains(value, "--print") &&
 		strings.Contains(value, "--output-format") &&
-		strings.Contains(value, "stream-json")
+		strings.Contains(value, "stream-json") &&
+		strings.Contains(value, "--json-schema")
 }
 
 // NewPiAdapter returns the explicit unsupported pi adapter.
@@ -428,7 +429,7 @@ func (adapter *UnavailableAdapter) reason() string {
 }
 
 // NewCodexAdapter returns a conservative adapter for the installed Codex CLI.
-// Even the known 0.153.4 version remains unverified here: app-server help and
+// Even the tested version remains unverified here: app-server help and
 // JSON framing do not prove native session lifecycle or control semantics.
 func NewCodexAdapter() *UnavailableAdapter {
 	return NewCodexAdapterWithRunner(defaultCodexExecutable, osCodexCommandRunner{})

@@ -1,6 +1,6 @@
 # 0006g - Evidence-backed OpenCode support decision
 
-Resolve whether the pinned OpenCode `1.18.30` binary has an authoritative native
+Resolve whether the pinned OpenCode `1.18.32` binary has an authoritative native
 terminal contract that Symmetry can support. The accepted outcome is either a
 precisely bounded capability promotion backed by provider-owned terminal
 receipts, or an explicit fail-closed unsupported decision with the blocking
@@ -16,3 +16,7 @@ binary, and any approved credentials are available; the 12-hour bound starts
 after all prerequisites are ready. It depends on 0006a and 0006b and produces
 one independently mergeable PR. Ambiguous evidence completes only the explicit
 unsupported decision, never a capability promotion.
+
+Owner directive 2026-09-24: track latest client. The pin moved from `1.18.30`
+to the latest release `1.18.32`; 1.18.30 observations remain historical
+evidence only and do not satisfy this goal for 1.18.32.

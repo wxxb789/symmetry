@@ -31,8 +31,8 @@ const (
 	nativeOpenCodeTerminalCandidateEnabledEnv        = "SYMMETRY_OPENCODE_NATIVE_TERMINAL_CANDIDATE"
 	nativeOpenCodeTerminalCandidateExecutableEnv     = "SYMMETRY_OPENCODE_NATIVE_TERMINAL_EXECUTABLE"
 	nativeOpenCodeTerminalCandidateSHA256Env         = "SYMMETRY_OPENCODE_NATIVE_TERMINAL_EXECUTABLE_SHA256"
-	nativeOpenCodeTerminalCandidateDefaultExecutable = `C:\Users\lhan\AppData\Local\mise\installs\opencode\1.18.30\opencode.exe`
-	nativeOpenCodeTerminalCandidateSHA256            = "c1bdbb18767048e1853af4238311b3f7e16ff2f91b68fb4c7ced3c5175347eea"
+	nativeOpenCodeTerminalCandidateDefaultExecutable = `Q:\repos\symmetry\.tmp\harness-upgrade\opencode\win\opencode.exe`
+	nativeOpenCodeTerminalCandidateSHA256            = "da86eed515d91a7b2d7da9a8230a2bd095f68a89f0cf44eb6a9217bead81fffc"
 	nativeOpenCodeTerminalCandidateProvider          = "symmetry-opencode-terminal"
 	nativeOpenCodeTerminalCandidateModel             = "symmetry-opencode-terminal"
 	nativeOpenCodeTerminalCandidateAPIKey            = "symmetry-opencode-terminal-test-key"
@@ -1207,7 +1207,7 @@ func nativeOpenCodeTerminalCandidateWaitGlobalIdle(ctx context.Context, capture 
 }
 
 func nativeOpenCodeTerminalCandidateGlobalStateFromFrames(capture *nativeOpenCodeTerminalCandidateGlobalCapture, sessionID string) nativeOpenCodeTerminalCandidateGlobalState {
-	// OpenCode 1.18.30's pure-mode global stream may omit an exact idle marker.
+	// OpenCode's pure-mode global stream (observed on 1.18.30) may omit an exact idle marker.
 	// Only a matching session.status idle observation is accepted; step settlement
 	// and error events remain non-terminal evidence.
 	frames, captureErr := capture.Snapshot()

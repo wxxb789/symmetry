@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
+	"github.com/wxxb789/symmetry/daemon/internal/harness/codex"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
@@ -42,7 +43,7 @@ func TestPrelaunchRecoveryKeepsIntentUntilTerminalIsDurable(t *testing.T) {
 		RuntimeID:              "runtime-1",
 		RuntimeEpoch:           1,
 		HarnessKind:            "codex",
-		HarnessVersion:         "0.153.4",
+		HarnessVersion:         codex.TestedVersion,
 		AdapterVersion:         "symmetry-daemon:test",
 		AdapterProtocolVersion: 1,
 		WorkspaceFingerprint:   "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

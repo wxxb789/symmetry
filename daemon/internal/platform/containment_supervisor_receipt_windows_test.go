@@ -186,6 +186,80 @@ func TestReleasePersistedContainmentAuthenticatesAndAcknowledgesRelease(t *testi
 	}
 }
 
+func TestReleaseProofAfterLostResponseRequiresExactHelperExit(t *testing.T) {
+	persisted := testSupervisorAuthorityWithReceipt()
+	handoff := authority.SupervisorHandoff{
+		Version:            authority.SupervisorHandoffVersion,
+		LaunchToken:        strings.Repeat("d", authority.TokenBytes*2),
+		Secret:             persisted.Secret,
+		TargetPID:          persisted.TargetPID,
+		TargetIdentity:     persisted.TargetIdentity,
+		PipeToken:          persisted.PipeToken,
+		JobID:              persisted.JobID,
+		SupervisorPID:      persisted.SupervisorPID,
+		SupervisorIdentity: persisted.SupervisorIdentity,
+	}
+	previousOpen := openSupervisorObservationProcess
+	previousRead := readSupervisorObservationIdentity
+	previousWait := waitSupervisorObservationProcess
+	previousClose := closeSupervisorObservationProcess
+	t.Cleanup(func() {
+		openSupervisorObservationProcess = previousOpen
+		readSupervisorObservationIdentity = previousRead
+		waitSupervisorObservationProcess = previousWait
+		closeSupervisorObservationProcess = previousClose
+	})
+	closed := false
+	openSupervisorObservationProcess = func(int) (syscall.Handle, error) { return syscall.Handle(123), nil }
+	readSupervisorObservationIdentity = func(int, syscall.Handle) (string, error) { return handoff.SupervisorIdentity, nil }
+	waitSupervisorObservationProcess = func(syscall.Handle) (uint32, error) { return waitObject0, nil }
+	closeSupervisorObservationProcess = func(syscall.Handle) error { closed = true; return nil }
+
+	proof, err := releaseProofAfterLostResponse(containmentSupervisorEndpoint{
+		SupervisorPID:      handoff.SupervisorPID,
+		SupervisorIdentity: handoff.SupervisorIdentity,
+	}, handoff)
+	if err != nil {
+		t.Fatalf("releaseProofAfterLostResponse() error = %v", err)
+	}
+	if !closed || !proof.ValidFor(handoff) {
+		t.Fatalf("release proof = %#v closed=%t, want exact proof and helper observation close", proof, closed)
+	}
+
+	waitSupervisorObservationProcess = func(syscall.Handle) (uint32, error) { return waitTimeout, nil }
+	if _, err := releaseProofAfterLostResponse(containmentSupervisorEndpoint{
+		SupervisorPID:      handoff.SupervisorPID,
+		SupervisorIdentity: handoff.SupervisorIdentity,
+	}, handoff); err == nil {
+		t.Fatal("releaseProofAfterLostResponse() accepted a live exact helper after lost response")
+	}
+}
+
+func TestReleasePersistedContainmentDoesNotAcceptMissingIdentityReadAlone(t *testing.T) {
+	persisted := testSupervisorAuthorityWithReceipt()
+	previousIdentity := readSupervisorProcessIdentity
+	previousOpen := openSupervisorObservationProcess
+	previousRead := readSupervisorObservationIdentity
+	previousWait := waitSupervisorObservationProcess
+	previousClose := closeSupervisorObservationProcess
+	t.Cleanup(func() {
+		readSupervisorProcessIdentity = previousIdentity
+		openSupervisorObservationProcess = previousOpen
+		readSupervisorObservationIdentity = previousRead
+		waitSupervisorObservationProcess = previousWait
+		closeSupervisorObservationProcess = previousClose
+	})
+	readSupervisorProcessIdentity = func(int) (string, error) { return "", syscall.Errno(2) }
+	openSupervisorObservationProcess = func(int) (syscall.Handle, error) { return syscall.Handle(123), nil }
+	readSupervisorObservationIdentity = func(int, syscall.Handle) (string, error) { return persisted.SupervisorIdentity, nil }
+	waitSupervisorObservationProcess = func(syscall.Handle) (uint32, error) { return waitTimeout, nil }
+	closeSupervisorObservationProcess = func(syscall.Handle) error { return nil }
+
+	if err := ReleasePersistedContainmentWithAuthority(persisted.TargetPID, persisted.TargetIdentity, &persisted); err == nil {
+		t.Fatal("ReleasePersistedContainmentWithAuthority() accepted a missing identity read while exact helper remained live")
+	}
+}
+
 func testSupervisorAuthorityWithReceipt() authority.Supervisor {
 	value := authority.Supervisor{
 		Version:            authority.SupervisorVersion,

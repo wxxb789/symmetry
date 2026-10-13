@@ -15,6 +15,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/control"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
+	"github.com/wxxb789/symmetry/daemon/internal/harness/codex"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 	"github.com/wxxb789/symmetry/daemon/internal/workspace"
@@ -1108,7 +1109,7 @@ func saveLaunchingGoalSession(t *testing.T, store *state.Store, key state.RunKey
 	intent := state.GoalSessionLaunchIntent{
 		LaunchIntentID: "00000000-0000-4000-8000-000000000008", GoalID: admission.GoalID, GoalRevision: admission.GoalRevision,
 		WorkItemID: admissionWorkItemIDValue(admission.WorkItemID), TaskID: "task-1", RunID: key.RunID, Generation: key.Generation, AdmissionID: admission.AdmissionID,
-		LocalHandleID: sessionKey.LocalHandleID, RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: "0.153.4",
+		LocalHandleID: sessionKey.LocalHandleID, RuntimeID: "runtime-1", RuntimeEpoch: 1, HarnessKind: "codex", HarnessVersion: codex.TestedVersion,
 		AdapterVersion: "symmetry-daemon:test", AdapterProtocolVersion: 1,
 		WorkspaceFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SessionMode: state.GoalSessionModeFresh,
 	}

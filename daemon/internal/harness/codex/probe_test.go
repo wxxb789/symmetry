@@ -15,13 +15,13 @@ import (
 )
 
 func TestProbeKnownVersionAndHelpStillFailsClosed(t *testing.T) {
-	help, err := os.ReadFile(filepath.Join("..", "testdata", "codex", "0.153.4", "app-server-help.txt"))
+	help, err := os.ReadFile(filepath.Join("..", "testdata", "codex", TestedVersion, "app-server-help.txt"))
 	if err != nil {
 		t.Fatalf("read help fixture: %v", err)
 	}
 	runner := &fixtureRunner{
 		responses: map[string][]byte{
-			"--version":         []byte("codex-cli 0.153.4\n"),
+			"--version":         []byte("codex-cli " + TestedVersion + "\n"),
 			"app-server --help": help,
 		},
 		schemaDigest: TestedSchemaHash,
@@ -44,7 +44,7 @@ func TestProbeKnownVersionAndHelpStillFailsClosed(t *testing.T) {
 func TestProbeSchemaMismatchFailsClosedAsUnsupportedVersion(t *testing.T) {
 	runner := &fixtureRunner{
 		responses: map[string][]byte{
-			"--version":         []byte("codex-cli 0.153.4\n"),
+			"--version":         []byte("codex-cli " + TestedVersion + "\n"),
 			"app-server --help": []byte("app-server stdio\n"),
 		},
 		schemaDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -78,7 +78,7 @@ func TestProbeMapsBoundedCommandErrorsToFailClosedResults(t *testing.T) {
 		{
 			name: "help output limit",
 			responses: map[string][]byte{
-				"--version": []byte("codex-cli 0.153.4\n"),
+				"--version": []byte("codex-cli " + TestedVersion + "\n"),
 			},
 			runErrors: map[string]error{
 				"app-server --help": execution.ErrOutputLimitExceeded,
@@ -89,7 +89,7 @@ func TestProbeMapsBoundedCommandErrorsToFailClosedResults(t *testing.T) {
 		{
 			name: "schema output limit and cleanup",
 			responses: map[string][]byte{
-				"--version":         []byte("codex-cli 0.153.4\n"),
+				"--version":         []byte("codex-cli " + TestedVersion + "\n"),
 				"app-server --help": []byte("app-server stdio\n"),
 			},
 			schemaErr:  errors.Join(execution.ErrOutputLimitExceeded, errors.New("cleanup failed")),
@@ -169,9 +169,9 @@ func TestProbeUnknownVersionFailsClosed(t *testing.T) {
 
 func TestProbeRejectsNonExactVersionOutput(t *testing.T) {
 	for _, versionOutput := range []string{
-		"codex-cli 0.153.4-alpha.1\n",
-		"codex-cli 0.153.4+build.1\n",
-		"codex-cli 0.153.4 trailing-token\n",
+		"codex-cli 0.156.1-alpha.1\n",
+		"codex-cli 0.156.1+build.1\n",
+		"codex-cli 0.156.1 trailing-token\n",
 	} {
 		t.Run(versionOutput, func(t *testing.T) {
 			runner := &fixtureRunner{responses: map[string][]byte{"--version": []byte(versionOutput)}}
@@ -268,7 +268,7 @@ func TestProbeRejectsSuccessfulSchemaResultAfterCancellation(t *testing.T) {
 	runner := &cancellationSuccessSchemaRunner{
 		fixtureRunner: fixtureRunner{
 			responses: map[string][]byte{
-				"--version":         []byte("codex-cli 0.153.4\n"),
+				"--version":         []byte("codex-cli " + TestedVersion + "\n"),
 				"app-server --help": []byte("app-server stdio\n"),
 			},
 		},
@@ -301,7 +301,7 @@ func TestProbeRejectsSuccessfulSchemaResultAfterCancellation(t *testing.T) {
 func TestProbeBoundsHangingSchemaRunner(t *testing.T) {
 	runner := &hangingSchemaRunner{fixtureRunner: fixtureRunner{
 		responses: map[string][]byte{
-			"--version":         []byte("codex-cli 0.153.4\n"),
+			"--version":         []byte("codex-cli " + TestedVersion + "\n"),
 			"app-server --help": []byte("app-server stdio\n"),
 		},
 	}, started: make(chan struct{})}
@@ -328,7 +328,7 @@ func TestProbeBoundsHangingSchemaRunner(t *testing.T) {
 
 func TestAdapterStartDoesNotTreatProbeEvidenceAsAStartRequirement(t *testing.T) {
 	adapter := NewAdapterWithRunner("codex", &fixtureRunner{responses: map[string][]byte{
-		"--version":         []byte("codex-cli 0.153.4\n"),
+		"--version":         []byte("codex-cli " + TestedVersion + "\n"),
 		"app-server --help": []byte("app-server stdio\n"),
 	}})
 	process := newFakeNativeProcess()
@@ -426,7 +426,7 @@ func (runner *cancellationSuccessRunner) Run(ctx context.Context, _ string, args
 	if key == "--version" {
 		runner.startedOnce.Do(func() { close(runner.started) })
 		<-ctx.Done()
-		return []byte("codex-cli 0.153.4\n"), nil
+		return []byte("codex-cli " + TestedVersion + "\n"), nil
 	}
 	return []byte("app-server stdio\n"), nil
 }

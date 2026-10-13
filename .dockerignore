@@ -8,4 +8,5 @@ control/deps
 control/cover
 daemon/bin
 daemon/coverage.out
+.tmp
 

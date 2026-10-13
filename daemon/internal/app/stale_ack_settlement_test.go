@@ -33,6 +33,7 @@ func TestStaleCleanupWaitsForCommandAcknowledgementWithoutSendingOrdinaryOutbox(
 	if err != nil {
 		t.Fatal(err)
 	}
+	journal = expireLeaseBeforeCleanup(t, store, key)
 
 	var calls []string
 	record := func(call string) {
@@ -125,6 +126,7 @@ func TestStaleAcknowledgementConclusiveErrorRetiresBeforeCleanup(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			journal = expireLeaseBeforeCleanup(t, store, key)
 			var calls []string
 			record := func(call string) { calls = append(calls, call) }
 			app := &daemon{

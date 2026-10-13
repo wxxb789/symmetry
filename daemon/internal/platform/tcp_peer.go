@@ -14,6 +14,13 @@ type tcpPeerTuple struct {
 	client netip.AddrPort
 }
 
+// LinuxUserNamespaceIdentity is captured from the trusted gate before it
+// changes credentials. A zero value never authorizes a native peer.
+type LinuxUserNamespaceIdentity struct {
+	Device uint64
+	Inode  uint64
+}
+
 // VerifyLoopbackTCPPeer verifies an already-connected IPv4 loopback peer against
 // the exact process identity. No application bytes are sent. Kernel snapshots
 // cannot defend against a trusted process deliberately transferring its socket.

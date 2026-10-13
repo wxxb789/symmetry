@@ -1,0 +1,23 @@
+[Unit]
+Description=Symmetry execution daemon
+After=local-fs.target symmetry-owner.service
+BindsTo=symmetry-owner.service
+
+[Service]
+Type=simple
+User=@A_USER@
+Group=@A_GROUP@
+NoNewPrivileges=no
+UMask=0077
+WorkingDirectory=/
+KillMode=control-group
+SendSIGKILL=yes
+TimeoutStartSec=30s
+TimeoutStopSec=2min
+Restart=on-failure
+RestartSec=5s
+ExecStartPre=/usr/libexec/symmetry/symmetry-daemon -verify-linux-owner-install -config /etc/symmetry/daemon.json
+ExecStart=/usr/libexec/symmetry/symmetry-daemon -config /etc/symmetry/daemon.json
+
+[Install]
+WantedBy=multi-user.target
