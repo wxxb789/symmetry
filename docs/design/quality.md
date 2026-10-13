@@ -72,10 +72,15 @@ cannot satisfy missing receipts or turn a failed witness into a passing run.
 Legacy helper-scan crash phases identify only the entered assertion boundary;
 initialized evidence with absent snapshots remains incomplete.
 Rootless native fixtures must load through the production config validator and
-reuse a real repository resource binding. Public pinned executable inodes are
-read-only and executable by the container UID; private extraction directories
-and state stay private. Archive extraction under umask 077 alone does not
-preserve cross-UID execute permission.
+reuse a real repository resource binding. Public pinned assets are mounted
+read-only and readable by the container UID; executables retain execute access.
+Pi requires its complete release for relative version metadata and runtime assets,
+not a standalone executable mount. Private extraction parents and state stay
+private; archive extraction under umask 077 alone does not preserve cross-UID
+access. Native service images explicitly provide a UID-private writable HOME;
+OpenCode initializes XDG directories even for version and help probes.
+Owner-request barrier paths bind the container-visible mount namespace, not the
+host extraction path; fresh-directory ownership and mode guards remain.
 
 | Surface | Actual commands / target additions |
 | --- | --- |

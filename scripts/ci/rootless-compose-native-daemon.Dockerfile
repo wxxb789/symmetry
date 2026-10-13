@@ -11,4 +11,5 @@ RUN chmod 0555 /symmetry-daemon \
     && chmod 0700 /var/lib/symmetry /workspaces /tmp
 
 USER 65532:65532
+ENV HOME=/tmp
 ENTRYPOINT ["/symmetry-daemon", "-config", "/etc/symmetry/daemon.json"]
