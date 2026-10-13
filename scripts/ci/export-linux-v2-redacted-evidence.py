@@ -95,11 +95,15 @@ LEGACY_WITNESSES = (
 LEGACY_HELPER_SCAN_CRASH_STAGES = {
     "helper_scan_failure_sigkill_before_cancel": {
         "daemon_task_setup", "running_journal", "descendant_marker", "trigger_fired_marker",
-        "scan_failure_journal", "helper_exit", "mirror_takeover", "post_takeover", "complete",
+        "scan_failure_journal", "helper_exit", "cancel_request", "mirror_takeover",
+        "mirror_authority", "mirror_stop_receipt_absent", "mirror_process_details",
+        "mirror_scan_ledger", "mirror_unproven_scan", "post_takeover", "complete",
     },
     "helper_pending_scan_sigkill": {
         "daemon_task_setup", "running_journal", "descendant_marker", "trigger_fired_marker",
-        "pending_scan_journal", "helper_exit", "mirror_takeover", "post_takeover", "complete",
+        "pending_scan_journal", "helper_exit", "cancel_request", "mirror_takeover",
+        "mirror_authority", "mirror_stop_receipt_absent", "mirror_process_details",
+        "mirror_scan_ledger", "mirror_pending_scan", "post_takeover", "complete",
     },
 }
 SAFE_STAGE_HOLDS = (

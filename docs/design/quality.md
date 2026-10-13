@@ -70,7 +70,8 @@ own installed-owner evidence; generic Control state tests cannot replace it.
 Finite witness failure diagnostics are separate from acceptance summaries and
 cannot satisfy missing receipts or turn a failed witness into a passing run.
 Legacy helper-scan crash phases identify only the entered assertion boundary;
-initialized evidence with absent snapshots remains incomplete.
+mirror-wait labels identify the last entered predicate guard, not takeover proof.
+Initialized evidence with absent snapshots remains incomplete.
 Rootless native fixtures must load through the production config validator and
 reuse a real repository resource binding. Public pinned assets are mounted
 read-only and readable by the container UID; executables retain execute access.
@@ -81,6 +82,8 @@ access. Native service images explicitly provide a UID-private writable HOME;
 OpenCode initializes XDG directories even for version and help probes.
 Owner-request barrier paths bind the container-visible mount namespace, not the
 host extraction path; fresh-directory ownership and mode guards remain.
+The response-hold fixture decodes gzip session-registration observations without
+changing the forwarded response status, headers or body.
 
 | Surface | Actual commands / target additions |
 | --- | --- |

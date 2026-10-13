@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import http.client
 import json
@@ -11,6 +12,7 @@ import re
 import socket
 import threading
 import time
+import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
@@ -511,8 +513,25 @@ class TransitionProxyHandler(BaseHTTPRequestHandler):
             connection.close()
 
         transition = None
-        if self.command == "PUT" and 200 <= response_status < 300:
-            REGISTRY.observe_registration(parsed.path, response_body)
+        if (
+            self.command == "PUT"
+            and 200 <= response_status < 300
+            and SESSION_REGISTRATION.fullmatch(parsed.path) is not None
+        ):
+            observed_body = response_body
+            content_encoding = ",".join(
+                value.strip().lower()
+                for name, value in response_headers
+                if name.lower() == "content-encoding"
+            )
+            if content_encoding == "gzip":
+                try:
+                    observed_body = gzip.decompress(response_body)
+                except (gzip.BadGzipFile, EOFError, zlib.error):
+                    observed_body = b""
+            elif content_encoding not in ("", "identity"):
+                observed_body = b""
+            REGISTRY.observe_registration(parsed.path, observed_body)
         if self.command == "PUT":
             match = RUN_TRANSITION.fullmatch(parsed.path)
             if match is not None and 200 <= response_status < 300:

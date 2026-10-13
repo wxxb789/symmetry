@@ -316,8 +316,8 @@ class ExporterTest(unittest.TestCase):
 
     def test_helper_scan_crash_stages_preserve_initialized_incomplete_proof(self) -> None:
         for name, case, scan_stage in (
-            ("helper-scan-failure-crash", "helper_scan_failure_sigkill_before_cancel", "scan_failure_journal"),
-            ("helper-scan-pending-crash", "helper_pending_scan_sigkill", "pending_scan_journal"),
+            ("helper-scan-failure-crash", "helper_scan_failure_sigkill_before_cancel", "mirror_unproven_scan"),
+            ("helper-scan-pending-crash", "helper_pending_scan_sigkill", "mirror_pending_scan"),
         ):
             stages = (None, scan_stage, "complete")
             for index, stage in enumerate(stages):
@@ -356,8 +356,8 @@ class ExporterTest(unittest.TestCase):
 
     def test_helper_scan_crash_stage_rejects_unknown_and_credential_canaries(self) -> None:
         for name, case, other_scan_stage in (
-            ("helper-scan-failure-crash", "helper_scan_failure_sigkill_before_cancel", "pending_scan_journal"),
-            ("helper-scan-pending-crash", "helper_pending_scan_sigkill", "scan_failure_journal"),
+            ("helper-scan-failure-crash", "helper_scan_failure_sigkill_before_cancel", "mirror_pending_scan"),
+            ("helper-scan-pending-crash", "helper_pending_scan_sigkill", "mirror_unproven_scan"),
         ):
             for index, (stage, credential) in enumerate((
                 ("CREDENTIAL-CANARY-NOT-A-STAGE", False), (other_scan_stage, False), ("running_journal", True),

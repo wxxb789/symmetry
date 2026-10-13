@@ -1307,6 +1307,7 @@ jobs:
           python3 ../scripts/ci/test-linux-v2-evidence.py
           python3 ../scripts/ci/test-rootless-compose-owner-claim.py
           sudo python3 ../scripts/ci/test-linux-v2-control-receipt.py
+          python3 ../scripts/ci/test-rootless-compose-transition-proxy.py
       - name: Run ordinary Go tests and gate deterministic pidfd peer-negative events
         shell: bash
         run: |

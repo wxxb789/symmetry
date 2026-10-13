@@ -1965,17 +1965,33 @@ func runLinuxHelperScanCrashWitness(t *testing.T, environment e2eEnvironment, da
 	// The helper is deliberately killed before cancellation. The surviving
 	// daemon mirror must force-stop the original group but may not turn helper
 	// failure or its unacknowledged scan into a clean receipt.
-	evidence.Stage = "mirror_takeover"
+	evidence.Stage = "cancel_request"
 	cancelTask(t, operator, task.TaskID)
+	evidence.Stage = "mirror_takeover"
 	condition, err := waitForLinuxWitnessJournal(target.StateDir, "mirror force-stop without scan receipt", 45*time.Second, func(value linuxWitnessJournalFile) bool {
 		journal := value.Journal
-		if journal.ContainmentAuthority == nil || journal.ContainmentAuthority.StopReceipt != nil || !journal.HasProcessDetails() {
+		evidence.Stage = "mirror_authority"
+		if journal.ContainmentAuthority == nil {
+			return false
+		}
+		evidence.Stage = "mirror_stop_receipt_absent"
+		if journal.ContainmentAuthority.StopReceipt != nil {
+			return false
+		}
+		evidence.Stage = "mirror_process_details"
+		if !journal.HasProcessDetails() {
+			return false
+		}
+		evidence.Stage = "mirror_scan_ledger"
+		if journal.ContainmentScans == nil {
 			return false
 		}
 		if pending {
-			return journal.ContainmentScans != nil && journal.ContainmentScans.Helper.PendingSequence > journal.ContainmentScans.Helper.CompletedSequence
+			evidence.Stage = "mirror_pending_scan"
+			return journal.ContainmentScans.Helper.PendingSequence > journal.ContainmentScans.Helper.CompletedSequence
 		}
-		return journal.ContainmentUnproven && journal.ContainmentScans != nil && journal.ContainmentScans.Helper.UnprovenSequence > 0
+		evidence.Stage = "mirror_unproven_scan"
+		return journal.ContainmentUnproven && journal.ContainmentScans.Helper.UnprovenSequence > 0
 	})
 	if err != nil {
 		daemon.stop(t)
