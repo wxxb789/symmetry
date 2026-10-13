@@ -140,7 +140,7 @@ func newPiControlE2EWitness(executable string) *piControlE2EWitness {
 }
 
 func (witness *piControlE2EWitness) Probe(ctx context.Context) (harness.Capabilities, error) {
-	if witness == nil {
+	if witness == nil || witness.delegate == nil {
 		return harness.Capabilities{}, errors.New("test-only Pi control witness is nil")
 	}
 	if ctx == nil {
@@ -149,12 +149,30 @@ func (witness *piControlE2EWitness) Probe(ctx context.Context) (harness.Capabili
 	if err := ctx.Err(); err != nil {
 		return harness.Capabilities{}, err
 	}
+	// Admission projection never substitutes for the real pinned CLI Probe or
+	// promotes its deliberately unverified native lifecycle to production support.
+	native, err := witness.delegate.Probe(ctx)
+	if !errors.Is(err, harness.ErrNativeUnverified) {
+		return harness.Capabilities{}, fmt.Errorf("real Pi Probe must remain native-unverified, got %v", err)
+	}
+	if native.Kind != harness.KindPi || native.NativeVersion != pi.TestedVersion ||
+		!native.VersionKnown || !native.TransportVerified || native.Verified ||
+		native.Start || native.Events || native.Cancel || native.Resume || native.Handoff || native.ProviderAccess {
+		return harness.Capabilities{}, errors.New("real Pi Probe differs from the pinned conservative transport projection")
+	}
 	return witness.capabilities, nil
 }
 
 func (witness *piControlE2EWitness) Start(ctx context.Context, request harness.StartRequest, sink harness.EventSink) (harness.Session, error) {
 	if witness == nil || witness.delegate == nil {
 		return nil, errors.New("test-only Pi control witness delegate is nil")
+	}
+	// A failed Start may never reach App's persisted-process observer. Record
+	// the attempt first so the Linux refusal cannot mistake it for no launch.
+	if marker := strings.TrimSpace(os.Getenv(processMarkerEnv)); marker != "" {
+		if err := os.WriteFile(marker, []byte("native_start_attempted\n"), 0o600); err != nil {
+			return nil, fmt.Errorf("record test-only native Start attempt: %w", err)
+		}
 	}
 	// The witness only affects admission Probe. Native execution remains the
 	// real Pi RPC adapter and therefore still owns process/session semantics.

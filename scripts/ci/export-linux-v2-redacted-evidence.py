@@ -54,6 +54,37 @@ COMPOSE_WITNESSES = (
     "rootless-compose-opencode.json",
     "TestProductionLinuxV2UnprovisionedHostRefusal.json",
 )
+COMPOSE_DIAGNOSTICS = {
+    f"rootless-compose-{case}-diagnostic.json": case
+    for case in ("shared", "pi", "opencode", "unprovisioned")
+}
+COMPOSE_NATIVE_STAGES = {
+    "case_inputs", "pinned_version", "probe", "probe_projection", "runtime_registration",
+    "arm", "early_release", "work_item", "launch", "failed_run", "held_response",
+    "held_binding", "journal_read", "claim_binding", "no_effects", "wrong_releases",
+    "exact_release", "evidence_write", "complete",
+}
+COMPOSE_DIAGNOSTIC_STAGES = {
+    "shared": {"rootless_guards", "portal", "transition_proxy", "native_cases", "complete"},
+    "pi": COMPOSE_NATIVE_STAGES,
+    "opencode": COMPOSE_NATIVE_STAGES,
+    "unprovisioned": {
+        "rootless_guards", "fixture_files", "config", "empty_store", "request_contract",
+        "fresh_barrier", "binary_access", "command", "owner_refusal", "empty_response",
+        "store_unchanged", "barrier_unchanged", "evidence_write", "complete",
+    },
+}
+COMPOSE_DIAGNOSTIC_OBSERVATIONS = {
+    "probe": {"native_unverified", "unsupported_version", "unavailable", "cancelled", "deadline", "other"},
+    "probe_projection": {"transport_verified", "transport_unverified"},
+    "failed_run": {
+        "queued", "assigned", "claimed", "running", "paused", "waiting_for_input", "cancelling",
+        "failed", "completed", "cancelled", "expired", "other", "runtime_mismatch",
+        "assignment_missing", "refusal_mismatch",
+    },
+    "command": {"command_failed", "command_succeeded", "response_close_failed"},
+    "owner_refusal": {"other_refusal"},
+}
 LEGACY_WITNESSES = (
     "bind-before-commit", "prepare-before-bind", "commit-before-resume", "lease-arm-before-resume",
     "daemon-after-resume", "daemon-after-resume-clean-seal-boundary", "helper-mirror",
@@ -231,6 +262,24 @@ def reject_unknown(document: dict, allowed: set[str], context: str) -> None:
     unknown = set(document) - allowed
     if unknown:
         fail(f"legacy {context} contains unknown fields: {', '.join(sorted(unknown))}")
+
+
+def validate_compose_diagnostic(document: dict, case: str) -> None:
+    required = {"version", "case", "outcome", "stage"}
+    if not required <= set(document) or set(document) - required - {"observation"}:
+        fail("Compose diagnostic contains unexpected or missing fields")
+    if type(document["version"]) is not int or document["version"] != 1 or document["case"] != case:
+        fail("Compose diagnostic version or case does not match its fixed filename")
+    stage = document["stage"]
+    outcome = document["outcome"]
+    if not isinstance(stage, str) or stage not in COMPOSE_DIAGNOSTIC_STAGES[case]:
+        fail("Compose diagnostic stage is not allowlisted")
+    if not isinstance(outcome, str) or outcome not in {"passed", "failed"} or (outcome == "passed") != (stage == "complete"):
+        fail("Compose diagnostic outcome contradicts its stage")
+    if "observation" in document:
+        observation = document["observation"]
+        if not isinstance(observation, str) or observation not in COMPOSE_DIAGNOSTIC_OBSERVATIONS.get(stage, set()):
+            fail("Compose diagnostic observation is not allowlisted for its stage")
 
 
 def require_object(value, context: str) -> dict:
@@ -598,13 +647,17 @@ def read_json_regular(path: pathlib.Path) -> dict:
     return document
 
 
-def read_regular(path: pathlib.Path, secret_values: tuple[bytes, ...], validate: bool = True) -> tuple[bytes, dict | None]:
+def read_regular(path: pathlib.Path, secret_values: tuple[bytes, ...], validate: bool = True,
+                 diagnostic_owner: tuple[int, int] | None = None) -> tuple[bytes, dict | None]:
+    maximum_size = 2048 if diagnostic_owner is not None else MAX_EVIDENCE_SIZE
     try:
         info = path.lstat()
     except FileNotFoundError:
         raise
-    if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size <= 0 or info.st_size > MAX_EVIDENCE_SIZE:
+    if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size <= 0 or info.st_size > maximum_size:
         fail("allowlisted source must be a bounded regular file")
+    if diagnostic_owner is not None and ((info.st_uid, info.st_gid) != diagnostic_owner or info.st_nlink != 1):
+        fail("Compose diagnostic must be a bounded private singly-linked file")
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
     try:
         fd = os.open(path, flags)
@@ -612,9 +665,13 @@ def read_regular(path: pathlib.Path, secret_values: tuple[bytes, ...], validate:
             opened = os.fstat(fd)
             if not stat.S_ISREG(opened.st_mode) or opened.st_ino != info.st_ino or opened.st_dev != info.st_dev:
                 fail("allowlisted source changed during open")
+            if diagnostic_owner is not None and ((opened.st_uid, opened.st_gid) != diagnostic_owner or
+                                                  opened.st_nlink != 1 or stat.S_IMODE(opened.st_mode) != 0o600 or
+                                                  opened.st_size > maximum_size):
+                fail("Compose diagnostic changed its private file boundary")
             data = bytearray()
-            while len(data) <= MAX_EVIDENCE_SIZE:
-                chunk = os.read(fd, min(65536, MAX_EVIDENCE_SIZE + 1 - len(data)))
+            while len(data) <= maximum_size:
+                chunk = os.read(fd, min(65536, maximum_size + 1 - len(data)))
                 if not chunk:
                     break
                 data.extend(chunk)
@@ -723,6 +780,7 @@ def main() -> int:
             fail("Compose mode requires the private witness staging directory")
         witness_root = pathlib.Path(arguments.witness_root)
         expected.extend((witness_root / name, name) for name in COMPOSE_WITNESSES)
+        expected.extend((witness_root / name, name) for name in COMPOSE_DIAGNOSTICS)
     else:
         if not arguments.witness_root:
             fail("legacy mode requires the private witness root")
@@ -734,6 +792,7 @@ def main() -> int:
     copied = []
     missing = []
     incomplete_files = []
+    failed_diagnostics = []
     expected_destinations = {target for _, target in expected}
     for source, target in expected:
         if pathlib.Path(target).name != target or target == "manifest.json":
@@ -749,6 +808,11 @@ def main() -> int:
                     incomplete_files.append(target)
                 data = json.dumps(projected, separators=(",", ":"), sort_keys=True).encode("utf-8") + b"\n"
                 validate_document(data, secret_values)
+            elif arguments.mode == "compose" and target in COMPOSE_DIAGNOSTICS:
+                data, document = read_regular(source, secret_values, diagnostic_owner=(runner_uid, runner_gid))
+                validate_compose_diagnostic(document, COMPOSE_DIAGNOSTICS[target])
+                if document["outcome"] == "failed":
+                    failed_diagnostics.append(target)
             else:
                 data, _ = read_regular(source, secret_values)
         except FileNotFoundError:
@@ -773,8 +837,8 @@ def main() -> int:
     else:
         scope = "legacy Linux v1 production containment compatibility witnesses; sanitized summaries only"
 
-    incomplete = bool(missing or incomplete_files)
-    effective_status = "failed" if arguments.mode == "legacy" and incomplete else arguments.run_status
+    incomplete = bool(missing or incomplete_files or failed_diagnostics)
+    effective_status = "failed" if arguments.mode in ("legacy", "compose") and incomplete else arguments.run_status
     manifest = {
         "version": 1,
         "source_commit": arguments.source_commit,
@@ -791,8 +855,12 @@ def main() -> int:
     if arguments.mode == "legacy":
         manifest["complete"] = not incomplete
         manifest["incomplete_evidence_files"] = incomplete_files
+    if arguments.mode == "compose":
+        manifest["failed_diagnostic_files"] = failed_diagnostics
     encoded = json.dumps(manifest, separators=(",", ":"), sort_keys=True).encode("utf-8") + b"\n"
     atomic_write(output, "manifest.json", encoded, runner_uid, runner_gid)
+    if arguments.run_status == "passed" and failed_diagnostics:
+        fail("a successful witness run contains a failed Compose diagnostic")
     if arguments.run_status == "passed" and incomplete:
         fail("a successful witness run omitted required redacted receipts")
     print(f"allowlisted redacted evidence: {len(copied)} files; missing={len(missing)}")

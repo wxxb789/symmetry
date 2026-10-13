@@ -9,29 +9,6 @@ permissions:
   contents: read
 
 jobs:
-  linux-v2-host-prerequisite-probe:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.27.0'
-          cache-dependency-path: daemon/go.sum
-      - name: Probe systemd, delegated cgroup-v2, and cross-UID peer prerequisites
-        shell: bash
-        run: bash scripts/ci/linux-v2-host-prerequisite-probe.sh
-      - name: Upload narrow host prerequisite evidence
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-v2-host-prerequisite-${{ github.run_id }}-${{ github.run_attempt }}
-          if-no-files-found: warn
-          retention-days: 7
-          path: ${{ runner.temp }}/linux-v2-host-prerequisite-${{ github.run_id }}-${{ github.run_attempt }}.json
-
   linux-native-v2-acceptance:
     if: github.event_name == 'workflow_dispatch'
     # SECURITY PRECONDITION: The public repo currently has one writer. Before
@@ -103,6 +80,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
             acl build-essential curl debootstrap gh jq python3 sudo systemd-container
+      - name: Probe qualification on this native acceptance host
+        shell: bash
+        run: bash scripts/ci/linux-v2-host-prerequisite-probe.sh
+      - name: Upload narrow host prerequisite evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-v2-host-prerequisite-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 7
+          path: ${{ runner.temp }}/linux-v2-host-prerequisite-${{ github.run_id }}-${{ github.run_attempt }}.json
       - name: Run isolated A/B Linux v2 acceptance case sets
         shell: bash
         env:
@@ -212,7 +200,36 @@ jobs:
           go-version: 1.27.0
           cache-dependency-path: daemon/go.sum
       - run: mix deps.get
-      - run: mix format --check-formatted
+      - name: Check Control formatting
+        id: control-format
+        run: mix format --check-formatted
+      - name: Export scoped formatter correction on failure
+        if: failure() && steps.control-format.outcome == 'failure'
+        run: |
+          set -Eeuo pipefail
+          scratch=$(mktemp -d "$RUNNER_TEMP/pr9-control-format.XXXXXX")
+          patch="$RUNNER_TEMP/pr9-control-formatter.patch"
+          files=(test/symmetry_control/pi_control_e2e_test.exs test/symmetry_control/provider_broker_e2e_test.exs)
+          for file in "${files[@]}"; do
+            mkdir -p "$scratch/$(dirname "$file")"
+            cp -- "$file" "$scratch/$file"
+          done
+          mix format --dot-formatter .formatter.exs "${files[@]/#/$scratch/}"
+          : > "$patch"
+          for file in "${files[@]}"; do
+            status=0
+            diff -u --label "a/control/$file" --label "b/control/$file" \
+              "$file" "$scratch/$file" >> "$patch" || status=$?
+            if (( status > 1 )); then exit "$status"; fi
+          done
+      - name: Upload scoped formatter correction
+        if: failure() && steps.control-format.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr9-control-formatter-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 7
+          path: ${{ runner.temp }}/pr9-control-formatter.patch
       - run: mix compile --warnings-as-errors
       - run: mix test
       - name: Run provider broker end-to-end tests
@@ -645,7 +662,7 @@ jobs:
           set +e
           SYMMETRY_PI_CONTROL_E2E=1 \
           SYMMETRY_PI_CONTROL_E2E_EXECUTABLE="$RUNNER_TEMP/pi-0.87.1/pi/pi" \
-            mix test test/symmetry_control/pi_control_e2e_test.exs --include skip:true --only pi_control_e2e 2>&1 |
+            mix test test/symmetry_control/pi_control_e2e_test.exs --only pi_control_e2e_linux_refusal --include skip:pi_control_e2e_linux_refusal 2>&1 |
             tee -a "$log" "$test_output"
           pipeline_status=("${PIPESTATUS[@]}")
           test_status=${pipeline_status[0]}
@@ -1076,7 +1093,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
-          $testOutput = & mix test test/symmetry_control/pi_control_e2e_test.exs --include skip:true --only pi_control_e2e 2>&1
+          $testOutput = & mix test test/symmetry_control/pi_control_e2e_test.exs --only pi_control_e2e_native_positive --include skip:pi_control_e2e_native_positive 2>&1
           $testStatus = $LASTEXITCODE
           $testOutput | Tee-Object -FilePath $env:PI_E2E_LOG -Append | Out-Host
           Add-Content -LiteralPath $env:PI_E2E_PROVENANCE -Value "e2e_exit_status=$testStatus"
@@ -1308,6 +1325,12 @@ jobs:
         with:
           go-version: 1.27.0
           cache-dependency-path: daemon/go.sum
+      - name: Prepare ordinary private user and PID namespaces
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        env:
+          SYMMETRY_CI_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: bash scripts/ci/prepare-private-namespace-tests.sh
       - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
       - name: Check Linux v2 fixture contracts
@@ -1317,16 +1340,26 @@ jobs:
           python3 ../scripts/ci/test-linux-v2-evidence.py
           python3 ../scripts/ci/test-rootless-compose-owner-claim.py
           sudo python3 ../scripts/ci/test-linux-v2-control-receipt.py
+      - name: Build non-mutating test descriptor entry oracle
+        shell: bash
+        run: |
+          umask 077
+          cc -std=c11 -O2 -Wall -Wextra -Werror \
+            -o "$RUNNER_TEMP/census-fd-entry" ../scripts/ci/census-fd-entry.c
       - name: Run ordinary Go tests and gate deterministic pidfd peer-negative events
         shell: bash
         run: |
           set -Eeuo pipefail
           test_events="$RUNNER_TEMP/daemon-go-test.json"
+          tool_stderr="$RUNNER_TEMP/daemon-go-tool.stderr"
           set +e
-          go test -count=1 -timeout 300s -json ./... >"$test_events"
+          "$RUNNER_TEMP/census-fd-entry" "$(command -v go)" test \
+            -count=1 -timeout 300s -json -exec "$RUNNER_TEMP/census-fd-entry" ./... \
+            >"$test_events" 2>"$tool_stderr"
           test_status=$?
           set -e
 
+          cat "$tool_stderr"
           cat "$test_events"
           summary_status=0
           if ! python3 ../scripts/ci/assert-go-test-json.py "$test_events" \
@@ -1351,8 +1384,26 @@ jobs:
           if (( summary_status != 0 )); then
             exit "$summary_status"
           fi
-      - run: go test -race -count=1 -timeout 600s ./...
+      - run: go test -race -count=1 -timeout 600s -exec "$RUNNER_TEMP/census-fd-entry" ./...
       - run: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...
+      - name: Upload ordinary test descriptor diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daemon-descriptor-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            ${{ runner.temp }}/daemon-go-test.json
+            ${{ runner.temp }}/daemon-go-tool.stderr
+      - name: Upload ordinary namespace prerequisite evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ordinary-private-namespace-daemon-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 7
+          path: ${{ runner.temp }}/ordinary-private-namespace-${{ github.run_id }}-${{ github.run_attempt }}.json
 
   opencode-native-synthetic:
     runs-on: ubuntu-latest
@@ -1679,6 +1730,11 @@ jobs:
         with:
           go-version: 1.27.0
           cache-dependency-path: daemon/go.sum
+      - name: Prepare ordinary private user and PID namespaces
+        shell: bash
+        env:
+          SYMMETRY_CI_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: bash scripts/ci/prepare-private-namespace-tests.sh
       - name: Build control release
         working-directory: control
         run: |
@@ -1956,6 +2012,14 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: ${{ runner.temp }}/production-linux-containment-redacted-evidence/*.json
+      - name: Upload ordinary namespace prerequisite evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ordinary-private-namespace-integration-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 7
+          path: ${{ runner.temp }}/ordinary-private-namespace-${{ github.run_id }}-${{ github.run_attempt }}.json
 
   compose:
     runs-on: ubuntu-latest
@@ -2248,7 +2312,7 @@ jobs:
             bash scripts/ci/rootless-compose-native-acceptance.sh "$project" "$temporary_dir"
 
       - name: Upload allowlisted sanitized rootless Compose evidence
-        if: success()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: rootless-compose-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}
@@ -2259,3 +2323,7 @@ jobs:
             ${{ runner.temp }}/rootless-compose-evidence-${{ github.run_id }}-${{ github.run_attempt }}/rootless-compose-pi.json
             ${{ runner.temp }}/rootless-compose-evidence-${{ github.run_id }}-${{ github.run_attempt }}/rootless-compose-opencode.json
             ${{ runner.temp }}/rootless-compose-evidence-${{ github.run_id }}-${{ github.run_attempt }}/TestProductionLinuxV2UnprovisionedHostRefusal.json
+            ${{ runner.temp }}/rootless-compose-evidence-${{ github.run_id }}-${{ github.run_attempt }}/rootless-compose-shared-diagnostic.json
+            ${{ runner.temp }}/rootless-compose-evidence-${{ github.run_id }}-${{ github.run_attempt }}/rootless-compose-pi-diagnostic.json
+            ${{ runner.temp }}/rootless-compose-evidence-${{ github.run_id }}-${{ github.run_attempt }}/rootless-compose-opencode-diagnostic.json
+            ${{ runner.temp }}/rootless-compose-evidence-${{ github.run_id }}-${{ github.run_attempt }}/rootless-compose-unprovisioned-diagnostic.json

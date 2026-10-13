@@ -41,6 +41,23 @@ tests, the wire-contract gate and daemon/control restart E2E. Preserve those
 gates. Frontend commands do not exist until goal 0007 builds `frontend/`; do not
 report them as run.
 
+Ordinary Linux user/PID namespace fixtures still run as the original
+unprivileged runner UID. On disposable GitHub-hosted runners, preparation may
+attach a fresh per-program AppArmor `userns` exception to a private copy of the
+system `unshare`; it must not disable global restrictions or run Go/tests with
+`sudo`. This exception is not a sandbox and does not qualify a native owner.
+Installed-owner host prerequisites must be proved in the same protected manual
+native-acceptance job as their consumers, not on a separate automatic PR runner.
+A skipped qualification job is unavailable evidence, never a passed predicate.
+
+Control/Pi CI selects the production missing-owner refusal on Linux and retains
+the five Windows positive integration scenarios. Test-only capability projection
+for admission does not establish installed-owner qualification. Linux-specific
+provider progress, crash/candidate handling, handoff and resume still need their
+own installed-owner evidence; generic Control state tests cannot replace it.
+Finite rootless failure diagnostics are separate from acceptance summaries and
+cannot satisfy missing receipts or turn a failed witness into a passing run.
+
 | Surface | Actual commands / target additions |
 | --- | --- |
 | Elixir (`control/`) | `mix format --check-formatted`; `mix compile --warnings-as-errors`; `mix test`; release/E2E per current CI |

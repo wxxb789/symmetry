@@ -633,6 +633,10 @@ func TestProductionLinuxV2UnprovisionedHostRefusal(t *testing.T) {
 	if os.Getenv(linuxV2UnprovisionedWitnessEnvironment) != "1" {
 		t.Skip("set " + linuxV2UnprovisionedWitnessEnvironment + "=1 in an uninstalled guest to run the refusal witness")
 	}
+	refusalDiagnostic := linuxV2RootlessComposeDiagnostic{Version: 1, Case: "unprovisioned", Stage: "rootless_guards"}
+	if os.Getenv(linuxV2RootlessComposeWitnessEnvironment) == "1" {
+		defer writeLinuxV2RootlessComposeDiagnostic(t, &refusalDiagnostic)
+	}
 	if os.Geteuid() == 0 {
 		t.Fatal("unprovisioned refusal witness must run as an unprivileged host user")
 	}
@@ -651,6 +655,7 @@ func TestProductionLinuxV2UnprovisionedHostRefusal(t *testing.T) {
 	if _, err := os.Lstat("/etc/symmetry/linux-owner.conf"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("fixed Linux owner config is present or cannot be inspected: %v", err)
 	}
+	refusalDiagnostic.Stage = "fixture_files"
 	configPath := filepath.Join(root, "config.json")
 	requestPath := filepath.Join(root, "request.json")
 	for _, path := range []string{configPath, requestPath} {
@@ -658,6 +663,7 @@ func TestProductionLinuxV2UnprovisionedHostRefusal(t *testing.T) {
 			t.Fatalf("validate root-controlled unprovisioned fixture file: %v", err)
 		}
 	}
+	refusalDiagnostic.Stage = "config"
 	value, err := config.Load(configPath)
 	if err != nil || value.Runtime.HarnessKind != config.RuntimeHarnessOpenCode || value.StateDir == "" {
 		t.Fatalf("unprovisioned fixture config is not a valid OpenCode test config: %v", err)
@@ -665,6 +671,7 @@ func TestProductionLinuxV2UnprovisionedHostRefusal(t *testing.T) {
 	if !filepath.IsAbs(value.StateDir) || filepath.Clean(value.StateDir) != value.StateDir {
 		t.Fatal("unprovisioned fixture StateDir must be canonical and absolute")
 	}
+	refusalDiagnostic.Stage = "empty_store"
 	stateInfo, err := os.Lstat(value.StateDir)
 	if err != nil || !stateInfo.IsDir() {
 		t.Fatalf("unprovisioned fixture StateDir is unavailable: %v", err)
@@ -676,6 +683,7 @@ func TestProductionLinuxV2UnprovisionedHostRefusal(t *testing.T) {
 	if journals, err := readLinuxWitnessJournals(value.StateDir); err != nil || len(journals) != 0 {
 		t.Fatalf("unprovisioned refusal fixture StateDir is not empty: journals=%d error=%v", len(journals), err)
 	}
+	refusalDiagnostic.Stage = "request_contract"
 	requestContents, err := os.ReadFile(requestPath)
 	if err != nil {
 		t.Fatalf("read bounded unprovisioned request: %v", err)
@@ -686,6 +694,7 @@ func TestProductionLinuxV2UnprovisionedHostRefusal(t *testing.T) {
 		request.Claim.ProviderAccess != nil || len(request.Claim.Work.RequiredCapabilities) != 0 {
 		t.Fatalf("unprovisioned request does not preserve the exact OpenCode refusal contract: %v", err)
 	}
+	refusalDiagnostic.Stage = "fresh_barrier"
 	barrierInfo, err := os.Lstat(request.Barrier.Directory)
 	if err != nil || !barrierInfo.IsDir() {
 		t.Fatalf("unprovisioned barrier directory is unavailable: %v", err)
@@ -697,6 +706,7 @@ func TestProductionLinuxV2UnprovisionedHostRefusal(t *testing.T) {
 	if entries, err := os.ReadDir(request.Barrier.Directory); err != nil || len(entries) != 0 {
 		t.Fatalf("unprovisioned barrier directory is not fresh: entries=%d error=%v", len(entries), err)
 	}
+	refusalDiagnostic.Stage = "binary_access"
 	daemonInfo, err := os.Lstat(daemonPath)
 	if err != nil || !daemonInfo.Mode().IsRegular() {
 		t.Fatalf("unprovisioned production daemon binary is unavailable: %v", err)
@@ -708,6 +718,7 @@ func TestProductionLinuxV2UnprovisionedHostRefusal(t *testing.T) {
 	if err := unix.Access(daemonPath, unix.X_OK); err != nil {
 		t.Fatalf("unprivileged fixture user cannot execute the staged production binary: %v", err)
 	}
+	refusalDiagnostic.Stage = "command"
 	scratch, err := os.MkdirTemp(os.TempDir(), "symmetry-linux-v2-unprovisioned-")
 	if err != nil {
 		t.Fatalf("create private refusal witness scratch directory: %v", err)
@@ -735,21 +746,32 @@ func TestProductionLinuxV2UnprovisionedHostRefusal(t *testing.T) {
 	}
 	runErr := command.Run()
 	closeErr := responseFile.Close()
+	refusalDiagnostic.Observation = "command_failed"
+	if runErr == nil {
+		refusalDiagnostic.Observation = "command_succeeded"
+	} else if closeErr != nil {
+		refusalDiagnostic.Observation = "response_close_failed"
+	}
 	if runErr == nil || closeErr != nil {
 		t.Fatalf("production command did not fail closed at the missing owner-config boundary: run=%v close=%v", runErr, closeErr)
 	}
+	refusalDiagnostic.Stage, refusalDiagnostic.Observation = "owner_refusal", "other_refusal"
 	if !strings.Contains(diagnostics.String(), "trusted Linux A/B owner config") {
 		t.Fatalf("production command failed for an unexpected reason: %s", diagnostics.String())
 	}
+	refusalDiagnostic.Stage, refusalDiagnostic.Observation = "empty_response", ""
 	if responseInfo, err := os.Stat(responsePath); err != nil || responseInfo.Size() != 0 {
 		t.Fatal("unprovisioned command emitted a success response")
 	}
+	refusalDiagnostic.Stage = "store_unchanged"
 	if journals, err := readLinuxWitnessJournals(value.StateDir); err != nil || len(journals) != 0 {
 		t.Fatalf("unprovisioned refusal created local journal state: journals=%d error=%v", len(journals), err)
 	}
+	refusalDiagnostic.Stage = "barrier_unchanged"
 	if entries, err := os.ReadDir(request.Barrier.Directory); err != nil || len(entries) != 0 {
 		t.Fatalf("unprovisioned refusal created a durable stage marker: entries=%d error=%v", len(entries), err)
 	}
+	refusalDiagnostic.Stage = "evidence_write"
 	evidence := linuxV2NativeWitness{
 		Version: 1, Case: t.Name(), Harness: config.RuntimeHarnessOpenCode,
 		NativeVersion: value.Runtime.HarnessVersion, TaskID: request.Claim.TaskID,
@@ -764,6 +786,7 @@ func TestProductionLinuxV2UnprovisionedHostRefusal(t *testing.T) {
 	if err := writeLinuxV2NativeWitness(outputPath, evidence, leaseToken); err != nil {
 		t.Fatalf("write redacted unprovisioned refusal evidence: %v", err)
 	}
+	refusalDiagnostic.Stage = "complete"
 }
 
 func TestProductionLinuxV2HookMarkerReaderRejectsHostileEntries(t *testing.T) {

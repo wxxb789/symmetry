@@ -138,6 +138,15 @@ type linuxV2RootlessComposeEvidence struct {
 	NonGoalWorkItem         bool   `json:"non_goal_work_item"`
 }
 
+// Diagnostics identify the assertion boundary, never replace acceptance proof.
+type linuxV2RootlessComposeDiagnostic struct {
+	Version     int    `json:"version"`
+	Case        string `json:"case"`
+	Outcome     string `json:"outcome"`
+	Stage       string `json:"stage"`
+	Observation string `json:"observation,omitempty"`
+}
+
 func TestRootlessComposePortalRequiresTrustedTLSForSecureSession(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -216,6 +225,8 @@ func TestProductionLinuxV2RootlessComposeNativeWorkItemRefusal(t *testing.T) {
 	if os.Getenv(linuxV2RootlessComposeWitnessEnvironment) != "1" {
 		t.Skip("set " + linuxV2RootlessComposeWitnessEnvironment + "=1 to run the rootless Compose native WorkItem witnesses")
 	}
+	diagnostic := linuxV2RootlessComposeDiagnostic{Version: 1, Case: "shared", Stage: "rootless_guards"}
+	defer writeLinuxV2RootlessComposeDiagnostic(t, &diagnostic)
 	if os.Geteuid() == 0 {
 		t.Fatal("rootless Compose native witness must run as an unprivileged user")
 	}
@@ -245,10 +256,12 @@ func TestProductionLinuxV2RootlessComposeNativeWorkItemRefusal(t *testing.T) {
 		t.Fatalf("secure rootless Compose evidence directory: %v", err)
 	}
 
+	diagnostic.Stage = "portal"
 	portal, err := newLinuxV2RootlessComposePortal(controlURL, operatorToken, os.Getenv(linuxV2RootlessComposeCAEnvironment))
 	if err != nil {
 		t.Fatalf("connect to rootless Compose Control portal: %v", err)
 	}
+	diagnostic.Stage = "transition_proxy"
 	transitionReleaseURL := strings.TrimSpace(os.Getenv(linuxV2RootlessComposeTransitionReleaseEnvironment))
 	if transitionReleaseURL == "" {
 		t.Fatalf("%s is required; a direct/non-holding Control endpoint cannot prove the App RunJournal before cleanup", linuxV2RootlessComposeTransitionReleaseEnvironment)
@@ -273,30 +286,56 @@ func TestProductionLinuxV2RootlessComposeNativeWorkItemRefusal(t *testing.T) {
 			stateEnvironment:      linuxV2RootlessComposeOpenCodeStateEnvironment,
 		},
 	}
+	diagnostic.Stage = "native_cases"
 	for _, testCase := range cases {
 		testCase := testCase
 		t.Run(testCase.harness, func(t *testing.T) {
+			diagnostic := linuxV2RootlessComposeDiagnostic{Version: 1, Case: testCase.harness, Stage: "case_inputs"}
+			// Go defers run before t.Cleanup releases the held acknowledgement.
+			defer writeLinuxV2RootlessComposeDiagnostic(t, &diagnostic)
 			executable := rootlessComposeRequiredPath(t, testCase.executableEnvironment)
 			stateDirectory := rootlessComposeRequiredPath(t, testCase.stateEnvironment)
 			runtimeKey := strings.TrimSpace(os.Getenv(testCase.runtimeKeyEnvironment))
 			if runtimeKey == "" {
 				t.Fatalf("%s is required to select the exact native Compose runtime", testCase.runtimeKeyEnvironment)
 			}
+			diagnostic.Stage = "pinned_version"
 			if err := linuxV2VerifyPinnedNativeCLI(executable, testCase.version); err != nil {
 				t.Fatalf("verify pinned real %s executable: %v", testCase.harness, err)
 			}
+			diagnostic.Stage = "probe"
 			capabilities, probeErr := linuxV2RootlessComposeProbe(testCase.harness, executable)
+			switch {
+			case errors.Is(probeErr, harness.ErrNativeUnverified):
+				diagnostic.Observation = "native_unverified"
+			case errors.Is(probeErr, harness.ErrUnsupportedVersion):
+				diagnostic.Observation = "unsupported_version"
+			case errors.Is(probeErr, harness.ErrHarnessUnavailable):
+				diagnostic.Observation = "unavailable"
+			case errors.Is(probeErr, context.Canceled):
+				diagnostic.Observation = "cancelled"
+			case errors.Is(probeErr, context.DeadlineExceeded):
+				diagnostic.Observation = "deadline"
+			default:
+				diagnostic.Observation = "other"
+			}
 			if !errors.Is(probeErr, harness.ErrNativeUnverified) {
 				t.Fatalf("real %s Probe() error = %v, want ErrNativeUnverified", testCase.harness, probeErr)
+			}
+			diagnostic.Stage, diagnostic.Observation = "probe_projection", "transport_unverified"
+			if capabilities.TransportVerified {
+				diagnostic.Observation = "transport_verified"
 			}
 			if err := linuxV2ValidateRootlessComposeProbe(capabilities, testCase.harness, testCase.version); err != nil {
 				t.Fatalf("real %s Probe() capability projection: %v", testCase.harness, err)
 			}
 
+			diagnostic.Stage, diagnostic.Observation = "runtime_registration", ""
 			runtime := portal.awaitRuntime(t, testCase.harness, testCase.profile, testCase.version, runtimeKey)
 			if err := linuxV2ValidateRootlessComposeRuntime(runtime, testCase.harness, testCase.profile, testCase.version); err != nil {
 				t.Fatalf("Control registered %s runtime: %v", testCase.harness, err)
 			}
+			diagnostic.Stage = "arm"
 			nonce, err := linuxV2RootlessComposeUUID()
 			if err != nil {
 				t.Fatalf("generate private transition-release nonce: %v", err)
@@ -308,6 +347,7 @@ func TestProductionLinuxV2RootlessComposeNativeWorkItemRefusal(t *testing.T) {
 			if err != nil || armed.State != "armed" || armed.RuntimeID != runtime.RuntimeID || armed.RuntimeEpoch != runtime.ConnectionEpoch {
 				t.Fatalf("transition proxy did not retain the exact armed %s runtime: state=%q runtime=%q error=%v", testCase.harness, armed.State, armed.RuntimeID, err)
 			}
+			diagnostic.Stage = "early_release"
 			prematureRelease := linuxV2RootlessComposeTransitionRelease{
 				RunID: "unassigned-" + nonce, Generation: 1, RuntimeID: runtime.RuntimeID,
 				RuntimeEpoch: runtime.ConnectionEpoch, ClaimID: "unissued-claim",
@@ -338,36 +378,44 @@ func TestProductionLinuxV2RootlessComposeNativeWorkItemRefusal(t *testing.T) {
 				}
 			})
 
+			diagnostic.Stage = "work_item"
 			suffix, err := linuxV2RootlessComposeSuffix()
 			if err != nil {
 				t.Fatalf("generate isolated %s WorkItem identity: %v", testCase.harness, err)
 			}
-			workItemID := portal.createAndLaunchWorkItem(t, testCase.harness, testCase.profile, suffix)
-			execution := portal.awaitFailedWorkItem(t, workItemID, testCase.harness, runtime.RuntimeID, func(runID string, generation int64) {
+			workItemID := portal.createAndLaunchWorkItem(t, testCase.harness, testCase.profile, suffix, &diagnostic)
+			diagnostic.Stage = "failed_run"
+			execution := portal.awaitFailedWorkItem(t, workItemID, testCase.harness, runtime.RuntimeID, &diagnostic, func(runID string, generation int64) {
 				observedKey = state.RunKey{RunID: runID, Generation: generation}
 			})
+			diagnostic.Stage, diagnostic.Observation = "held_response", ""
 			held, err := transitionProxy.waitForStatus(t, runtime.RuntimeID, nonce, "held", 15*time.Second)
 			if err != nil {
 				t.Fatalf("rootless %s failed Run has no held exact terminal-transition response: %v", testCase.harness, err)
 			}
+			diagnostic.Stage = "held_binding"
 			if held.RunID != execution.RunID || held.Generation != execution.Generation || held.RuntimeID != runtime.RuntimeID ||
 				held.RuntimeEpoch != runtime.ConnectionEpoch || held.ClaimID == "" {
 				t.Fatalf("transition proxy held a different %s RunKey/runtime/fence than the Control WorkItem", testCase.harness)
 			}
+			diagnostic.Stage = "journal_read"
 			journal, found, err := linuxV2RootlessComposeReadRunJournal(stateDirectory, observedKey)
 			if err != nil || !found {
 				t.Fatalf("read exact %s App RunJournal while its Control transition ACK is held: found=%t error=%v", testCase.harness, found, err)
 			}
+			diagnostic.Stage = "claim_binding"
 			if journal.RuntimeID != runtime.RuntimeID || journal.RuntimeKey != runtime.RuntimeKey ||
 				journal.ClaimedRuntimeEpoch != runtime.ConnectionEpoch || journal.ClaimID == "" || journal.LeaseToken == "" ||
 				journal.ClaimID != held.ClaimID || journal.TerminalState != "failed" ||
 				journal.LocalState != "terminal_pending" && journal.LocalState != "cleanup_pending" {
 				t.Fatalf("rootless %s terminal RunJournal does not bind the held exact Control Claim/failure", testCase.harness)
 			}
+			diagnostic.Stage = "no_effects"
 			if err := linuxV2ValidateRootlessComposeNoProcessAuthority(journal, testCase.profile); err != nil {
 				t.Fatalf("rootless %s RunJournal crossed native execution before Linux v2 admission: %v", testCase.harness, err)
 			}
 			claimFenceObserved := journal.LeaseToken != ""
+			diagnostic.Stage = "wrong_releases"
 			for _, invalidRelease := range []struct {
 				name   string
 				mutate func(*linuxV2RootlessComposeTransitionRelease)
@@ -394,6 +442,7 @@ func TestProductionLinuxV2RootlessComposeNativeWorkItemRefusal(t *testing.T) {
 					t.Fatalf("wrong %s release changed the exact held transition: state=%q error=%v", invalidRelease.name, heldAgain.State, err)
 				}
 			}
+			diagnostic.Stage = "exact_release"
 			if status, err := transitionProxy.release(linuxV2RootlessComposeReleaseForJournal(journal, nonce)); err != nil || status != http.StatusNoContent {
 				t.Fatalf("release exact %s Control transition ACK after RunJournal proof: status=%d error=%v", testCase.harness, status, err)
 			}
@@ -416,10 +465,15 @@ func TestProductionLinuxV2RootlessComposeNativeWorkItemRefusal(t *testing.T) {
 				NoProcessAuthority: true, NoStopReceipt: true, NoProviderAccess: true,
 				NonGoalWorkItem: true,
 			}
+			diagnostic.Stage = "evidence_write"
 			if err := writeLinuxV2RootlessComposeEvidence(filepath.Join(outputDirectory, "rootless-compose-"+testCase.harness+".json"), evidence); err != nil {
 				t.Fatalf("write redacted rootless %s witness evidence: %v", testCase.harness, err)
 			}
+			diagnostic.Stage = "complete"
 		})
+	}
+	if !t.Failed() {
+		diagnostic.Stage = "complete"
 	}
 }
 
@@ -733,7 +787,7 @@ func (portal *linuxV2RootlessComposePortal) awaitRuntime(t *testing.T, harnessKi
 	return linuxV2RootlessComposeRuntime{}
 }
 
-func (portal *linuxV2RootlessComposePortal) createAndLaunchWorkItem(t *testing.T, harnessKind, profile, suffix string) string {
+func (portal *linuxV2RootlessComposePortal) createAndLaunchWorkItem(t *testing.T, harnessKind, profile, suffix string, diagnostic *linuxV2RootlessComposeDiagnostic) string {
 	t.Helper()
 	keyPrefix := map[string]string{"pi": "RPI", "opencode": "ROC"}[harnessKind]
 	projectBody := map[string]string{
@@ -781,6 +835,7 @@ func (portal *linuxV2RootlessComposePortal) createAndLaunchWorkItem(t *testing.T
 	if err != nil {
 		t.Fatalf("generate %s WorkItem launch idempotency key: %v", harnessKind, err)
 	}
+	diagnostic.Stage = "launch"
 	_, status, err = portal.jsonRequest(http.MethodPost,
 		"/portal/api/work-items/"+workItemResponse.WorkItem.ID+"/run", map[string]string{"action_id": actionID})
 	if err != nil || status != http.StatusAccepted {
@@ -792,6 +847,7 @@ func (portal *linuxV2RootlessComposePortal) createAndLaunchWorkItem(t *testing.T
 func (portal *linuxV2RootlessComposePortal) awaitFailedWorkItem(
 	t *testing.T,
 	workItemID, harnessKind, runtimeID string,
+	diagnostic *linuxV2RootlessComposeDiagnostic,
 	onRunKey func(string, int64),
 ) linuxV2RootlessComposeExecution {
 	t.Helper()
@@ -808,13 +864,21 @@ func (portal *linuxV2RootlessComposePortal) awaitFailedWorkItem(
 			}
 			if json.Unmarshal(contents, &detail) == nil && detail.WorkItem.ID == workItemID && detail.WorkItem.Execution != nil {
 				execution := *detail.WorkItem.Execution
+				switch execution.State {
+				case "queued", "assigned", "claimed", "running", "paused", "waiting_for_input", "cancelling", "failed", "completed", "cancelled", "expired":
+					diagnostic.Observation = execution.State
+				default:
+					diagnostic.Observation = "other"
+				}
 				if execution.RunID != "" && execution.Generation > 0 {
 					onRunKey(execution.RunID, execution.Generation)
 				}
 				if execution.RuntimeID != "" && execution.RuntimeID != runtimeID {
+					diagnostic.Observation = "runtime_mismatch"
 					t.Fatalf("Control assigned %s WorkItem to runtime %q, want exact native runtime %q", harnessKind, execution.RuntimeID, runtimeID)
 				}
 				if execution.RunID == "" && time.Now().After(assignmentDeadline) {
+					diagnostic.Observation = "assignment_missing"
 					t.Fatalf("missing prerequisite: Control did not assign the non-Goal %s WorkItem to its native runtime; it stayed queued, so no App Claim/RunJournal proof exists (standalone Probe is not acceptance)", harnessKind)
 				}
 				if execution.State == "failed" {
@@ -822,6 +886,7 @@ func (portal *linuxV2RootlessComposePortal) awaitFailedWorkItem(
 						execution.Failure.Stage != "linux_v2_required" ||
 						!strings.Contains(execution.Failure.Error, "exact symmetry.admission.v1 RunKey/fence") ||
 						rootlessComposeResultPresent(execution.Result) {
+						diagnostic.Observation = "refusal_mismatch"
 						t.Fatalf("Control terminal %s Run is not the exact pre-native Linux v2 refusal: task=%q run=%q generation=%d runtime=%q stage=%q result_present=%t",
 							harnessKind, execution.TaskID, execution.RunID, execution.Generation, execution.RuntimeID,
 							execution.Failure.Stage, rootlessComposeResultPresent(execution.Result))
@@ -911,7 +976,33 @@ func linuxV2RootlessComposeUUID() (string, error) {
 	return encoded[:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:], nil
 }
 
-func writeLinuxV2RootlessComposeEvidence(path string, evidence linuxV2RootlessComposeEvidence) error {
+func writeLinuxV2RootlessComposeDiagnostic(t *testing.T, diagnostic *linuxV2RootlessComposeDiagnostic) {
+	t.Helper()
+	output := strings.TrimSpace(os.Getenv(linuxV2RootlessComposeOutputEnvironment))
+	if !filepath.IsAbs(output) || filepath.Clean(output) != output {
+		t.Error("rootless diagnostic output directory is not canonical and absolute")
+		return
+	}
+	info, err := os.Lstat(output)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		t.Error("rootless diagnostic output directory is unavailable")
+		return
+	}
+	owner, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || owner.Uid != uint32(os.Geteuid()) || owner.Gid != uint32(os.Getegid()) || owner.Mode&0o7777 != 0o700 {
+		t.Error("rootless diagnostic output directory is not private to the witness user")
+		return
+	}
+	diagnostic.Outcome = "failed"
+	if !t.Failed() && diagnostic.Stage == "complete" {
+		diagnostic.Outcome, diagnostic.Observation = "passed", ""
+	}
+	if err := writeLinuxV2RootlessComposeEvidence(filepath.Join(output, "rootless-compose-"+diagnostic.Case+"-diagnostic.json"), diagnostic); err != nil {
+		t.Error("write private rootless refusal diagnostic failed")
+	}
+}
+
+func writeLinuxV2RootlessComposeEvidence(path string, evidence any) error {
 	encoded, err := json.MarshalIndent(evidence, "", "  ")
 	if err != nil {
 		return errors.New("encode redacted rootless Compose witness evidence")

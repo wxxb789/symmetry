@@ -382,10 +382,109 @@ class ExporterTest(unittest.TestCase):
         expected = {}
         for name in ("rootless-compose-pi.json", "rootless-compose-opencode.json", "TestProductionLinuxV2UnprovisionedHostRefusal.json"):
             expected[name] = self.write_json(source / name, {"case": name, "status": "refused"})
+        for case in ("shared", "pi", "opencode", "unprovisioned"):
+            self.write_json(source / f"rootless-compose-{case}-diagnostic.json",
+                            {"version": 1, "case": case, "outcome": "passed", "stage": "complete"})
         result = self.run_export("compose", str(output), "1" * 40, "passed", "--witness-root", str(source))
         self.assertEqual(result.returncode, 0, result.stderr)
         for name, data in expected.items():
             self.assertEqual((output / name).read_bytes(), data)
+
+    def test_compose_failure_diagnostic_exports_without_success_receipts(self) -> None:
+        source = self.private_dir("source")
+        output = self.private_dir("output")
+        diagnostic = {"version": 1, "case": "pi", "outcome": "failed", "stage": "probe_projection",
+                      "observation": "transport_unverified"}
+        original = self.write_json(source / "rootless-compose-pi-diagnostic.json", diagnostic)
+        result = self.run_export("compose", str(output), "1" * 40, "failed", "--witness-root", str(source))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        manifest = json.loads((output / "manifest.json").read_text())
+        self.assertEqual(manifest["status"], "failed")
+        self.assertIn("rootless-compose-pi.json", manifest["missing_allowlisted_files"])
+        self.assertEqual((output / "rootless-compose-pi-diagnostic.json").read_bytes(), original)
+
+    def test_compose_diagnostics_cannot_substitute_for_acceptance_receipts(self) -> None:
+        source = self.private_dir("source")
+        output = self.private_dir("output")
+        for case in ("shared", "pi", "opencode", "unprovisioned"):
+            self.write_json(source / f"rootless-compose-{case}-diagnostic.json",
+                            {"version": 1, "case": case, "outcome": "passed", "stage": "complete"})
+        result = self.run_export("compose", str(output), "1" * 40, "passed", "--witness-root", str(source))
+        self.assertNotEqual(result.returncode, 0)
+        manifest = json.loads((output / "manifest.json").read_text())
+        self.assertEqual(manifest["status"], "failed")
+        self.assertEqual(set(manifest["missing_allowlisted_files"]), {
+            "rootless-compose-pi.json", "rootless-compose-opencode.json",
+            "TestProductionLinuxV2UnprovisionedHostRefusal.json",
+        })
+
+    def test_compose_diagnostic_rejects_private_or_contradictory_values(self) -> None:
+        base = {"version": 1, "case": "pi", "outcome": "failed", "stage": "probe"}
+        changes = (
+            {"stage": "private-error-with-credential"}, {"observation": "private-error-with-credential"},
+            {"details": "private-error-with-credential"}, {"case": "opencode"},
+            {"version": True}, {"outcome": "passed"}, {"stage": "complete"},
+        )
+        for index, change in enumerate(changes):
+            with self.subTest(change=change):
+                source = self.private_dir(f"source-{index}")
+                output = self.private_dir(f"output-{index}")
+                self.write_json(source / "rootless-compose-pi-diagnostic.json", base | change)
+                result = self.run_export("compose", str(output), "1" * 40, "failed", "--witness-root", str(source))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("private-error-with-credential", result.stdout + result.stderr)
+                self.assertFalse((output / "rootless-compose-pi-diagnostic.json").exists())
+
+    def test_compose_failed_diagnostic_prevents_passed_manifest(self) -> None:
+        source = self.private_dir("source")
+        output = self.private_dir("output")
+        for name in ("rootless-compose-pi.json", "rootless-compose-opencode.json", "TestProductionLinuxV2UnprovisionedHostRefusal.json"):
+            self.write_json(source / name, {"case": name, "status": "refused"})
+        for case in ("shared", "pi", "opencode", "unprovisioned"):
+            value = {"version": 1, "case": case, "outcome": "passed", "stage": "complete"}
+            if case == "pi":
+                value.update({"outcome": "failed", "stage": "claim_binding"})
+            self.write_json(source / f"rootless-compose-{case}-diagnostic.json", value)
+        result = self.run_export("compose", str(output), "1" * 40, "passed", "--witness-root", str(source))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(json.loads((output / "manifest.json").read_text())["status"], "failed")
+
+    def test_compose_diagnostic_preserves_credential_scan_for_allowlisted_values(self) -> None:
+        source = self.private_dir("source")
+        output = self.private_dir("output")
+        self.write_json(source / "rootless-compose-pi-diagnostic.json", {
+            "version": 1, "case": "pi", "outcome": "failed", "stage": "probe_projection",
+            "observation": "transport_unverified",
+        })
+        secret_file = self.root / "secrets"
+        secret_file.write_bytes(b"transport_unverified\0")
+        result = self.run_export("compose", str(output), "1" * 40, "failed", "--witness-root", str(source),
+                                 "--secret-values-file", str(secret_file))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("configured credential value", result.stderr)
+        self.assertNotIn("transport_unverified", result.stdout + result.stderr)
+        self.assertEqual(list(output.iterdir()), [])
+
+    def test_compose_diagnostic_rejects_nonprivate_or_linked_source(self) -> None:
+        for index, kind in enumerate(("permissions", "symlink", "hardlink", "oversized")):
+            with self.subTest(kind=kind):
+                source = self.private_dir(f"source-{index}")
+                output = self.private_dir(f"output-{index}")
+                path = source / "rootless-compose-pi-diagnostic.json"
+                self.write_json(path, {"version": 1, "case": "pi", "outcome": "failed", "stage": "probe"})
+                if kind == "permissions":
+                    os.chmod(path, 0o644)
+                elif kind == "symlink":
+                    target = source / "private.json"
+                    path.rename(target)
+                    path.symlink_to(target)
+                elif kind == "hardlink":
+                    os.link(path, source / "private.json")
+                else:
+                    path.write_bytes(path.read_bytes() + b" " * 2048)
+                result = self.run_export("compose", str(output), "1" * 40, "failed", "--witness-root", str(source))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((output / "rootless-compose-pi-diagnostic.json").exists())
 
     def assert_compose_rejects_credential(self, value: dict, secret: str, escaped: bool) -> None:
         source = self.private_dir("source")
