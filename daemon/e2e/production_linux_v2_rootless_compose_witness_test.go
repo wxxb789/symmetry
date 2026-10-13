@@ -331,7 +331,7 @@ func TestProductionLinuxV2RootlessComposeNativeWorkItemRefusal(t *testing.T) {
 			}
 
 			diagnostic.Stage, diagnostic.Observation = "runtime_registration", ""
-			runtime := portal.awaitRuntime(t, testCase.harness, testCase.profile, testCase.version, runtimeKey)
+			runtime := portal.awaitRuntime(t, testCase.harness, testCase.profile, testCase.version, runtimeKey, &diagnostic)
 			if err := linuxV2ValidateRootlessComposeRuntime(runtime, testCase.harness, testCase.profile, testCase.version); err != nil {
 				t.Fatalf("Control registered %s runtime: %v", testCase.harness, err)
 			}
@@ -756,8 +756,9 @@ func (portal *linuxV2RootlessComposePortal) jsonRequest(method, path string, val
 	return linuxV2RootlessComposeDo(portal.client, method, portal.baseURL+path, body, headers)
 }
 
-func (portal *linuxV2RootlessComposePortal) awaitRuntime(t *testing.T, harnessKind, profile, nativeVersion, runtimeKey string) linuxV2RootlessComposeRuntime {
+func (portal *linuxV2RootlessComposePortal) awaitRuntime(t *testing.T, harnessKind, profile, nativeVersion, runtimeKey string, diagnostic *linuxV2RootlessComposeDiagnostic) linuxV2RootlessComposeRuntime {
 	t.Helper()
+	diagnostic.Observation = "portal_unavailable"
 	deadline := time.Now().Add(2 * time.Minute)
 	for time.Now().Before(deadline) {
 		contents, status, err := portal.jsonRequest(http.MethodGet, "/portal/api/workspace", nil)
@@ -766,17 +767,34 @@ func (portal *linuxV2RootlessComposePortal) awaitRuntime(t *testing.T, harnessKi
 				RegisteredRuntimes []linuxV2RootlessComposeRuntime `json:"registered_runtimes"`
 			}
 			if json.Unmarshal(contents, &snapshot) == nil {
+				diagnostic.Observation = "not_observed"
+				keyObserved, onlineObserved := false, false
 				var selected []linuxV2RootlessComposeRuntime
 				for _, runtime := range snapshot.RegisteredRuntimes {
-					if runtime.RuntimeKey == runtimeKey && runtime.AgentProfile == profile &&
+					if runtime.RuntimeKey != runtimeKey {
+						continue
+					}
+					keyObserved = true
+					onlineObserved = onlineObserved || runtime.Status == "online"
+					if runtime.AgentProfile == profile &&
 						runtime.Workspace == "native" && runtime.Status == "online" {
 						selected = append(selected, runtime)
 					}
 				}
+				if keyObserved {
+					diagnostic.Observation = "other_projection"
+					if !onlineObserved {
+						diagnostic.Observation = "offline"
+					}
+				}
 				if len(selected) == 1 {
+					if adapter := selected[0].Capabilities.Adapter; adapter != nil && adapter.NativeVersion != nativeVersion {
+						diagnostic.Observation = "native_version_mismatch"
+					}
 					if err := linuxV2ValidateRootlessComposeRuntime(selected[0], harnessKind, profile, nativeVersion); err != nil {
 						t.Fatalf("Control reported mismatched %s runtime: %v", harnessKind, err)
 					}
+					diagnostic.Observation = ""
 					return selected[0]
 				}
 			}

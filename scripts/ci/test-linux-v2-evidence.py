@@ -319,7 +319,7 @@ class ExporterTest(unittest.TestCase):
             ("helper-scan-failure-crash", "helper_scan_failure_sigkill_before_cancel", "mirror_unproven_scan"),
             ("helper-scan-pending-crash", "helper_pending_scan_sigkill", "mirror_pending_scan"),
         ):
-            stages = (None, scan_stage, "complete")
+            stages = (None, scan_stage, "cancel_api_409_failed_run", "complete")
             for index, stage in enumerate(stages):
                 with self.subTest(case=case, stage=stage):
                     source = self.private_dir(f"{name}-source-{index}")
@@ -331,7 +331,7 @@ class ExporterTest(unittest.TestCase):
                     if stage is not None:
                         value["stage"] = stage
                     original = self.write_json(path, value)
-                    for run_status in (("failed", "passed") if stage == "complete" else ("failed",)):
+                    for run_status in (("failed", "passed") if stage in ("cancel_api_409_failed_run", "complete") else ("failed",)):
                         output = self.private_dir(f"{name}-output-{index}-{run_status}")
                         result = self.run_export("legacy", str(output), "1" * 40, run_status, "--witness-root", str(source))
                         if run_status == "failed":
@@ -361,6 +361,7 @@ class ExporterTest(unittest.TestCase):
         ):
             for index, (stage, credential) in enumerate((
                 ("CREDENTIAL-CANARY-NOT-A-STAGE", False), (other_scan_stage, False), ("running_journal", True),
+                ("cancel_api_409_private_error", False), ("offline", False), ("cancel_api_409_failed_run", True),
             )):
                 with self.subTest(case=case, stage=stage, credential=credential):
                     source = self.private_dir(f"{name}-rejected-source-{index}")
@@ -384,6 +385,22 @@ class ExporterTest(unittest.TestCase):
                     self.assertFalse((output / "manifest.json").exists())
                     self.assertNotIn(stage.encode(), b"".join(child.read_bytes() for child in output.iterdir()))
                     self.assertEqual(path.read_bytes(), original)
+
+    def test_legacy_cancel_diagnostic_stage_rejects_unrelated_negative_case(self) -> None:
+        source = self.private_dir("source")
+        output = self.private_dir("output")
+        self.populate_legacy(source)
+        path = source / "scan-failure" / "witness-evidence.json"
+        value = legacy_fixture("scan-failure")
+        value["stage"] = "cancel_api_409_failed_run"
+        original = self.write_json(path, value)
+        result = self.run_export("legacy", str(output), "1" * 40, "failed", "--witness-root", str(source))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("negative evidence contains unknown fields: stage", result.stderr)
+        self.assertNotIn(value["stage"], result.stdout + result.stderr)
+        self.assertFalse((output / "scan-failure.json").exists())
+        self.assertFalse((output / "manifest.json").exists())
+        self.assertEqual(path.read_bytes(), original)
 
     def test_legacy_rejects_truncated_nested_receipt_and_owner(self) -> None:
         for index, (nested, required_field) in enumerate((("stop_receipt", "status"), ("authority", "target_pid"))):
@@ -462,17 +479,31 @@ class ExporterTest(unittest.TestCase):
             self.assertEqual((output / name).read_bytes(), data)
 
     def test_compose_failure_diagnostic_exports_without_success_receipts(self) -> None:
-        source = self.private_dir("source")
-        output = self.private_dir("output")
-        diagnostic = {"version": 1, "case": "pi", "outcome": "failed", "stage": "probe_projection",
-                      "observation": "transport_unverified"}
-        original = self.write_json(source / "rootless-compose-pi-diagnostic.json", diagnostic)
-        result = self.run_export("compose", str(output), "1" * 40, "failed", "--witness-root", str(source))
-        self.assertEqual(result.returncode, 0, result.stderr)
-        manifest = json.loads((output / "manifest.json").read_text())
-        self.assertEqual(manifest["status"], "failed")
-        self.assertIn("rootless-compose-pi.json", manifest["missing_allowlisted_files"])
-        self.assertEqual((output / "rootless-compose-pi-diagnostic.json").read_bytes(), original)
+        for index, (case, stage, observation) in enumerate((
+            ("pi", "probe_projection", "transport_unverified"),
+            ("pi", "runtime_registration", "offline"),
+            ("opencode", "runtime_registration", "portal_unavailable"),
+        )):
+            with self.subTest(case=case, stage=stage, observation=observation):
+                source = self.private_dir(f"source-{index}")
+                diagnostic = {"version": 1, "case": case, "outcome": "failed", "stage": stage,
+                              "observation": observation}
+                name = f"rootless-compose-{case}-diagnostic.json"
+                original = self.write_json(source / name, diagnostic)
+                for run_status in ("failed", "passed"):
+                    output = self.private_dir(f"output-{index}-{run_status}")
+                    result = self.run_export("compose", str(output), "1" * 40, run_status, "--witness-root", str(source))
+                    if run_status == "failed":
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                    else:
+                        self.assertNotEqual(result.returncode, 0)
+                    manifest = json.loads((output / "manifest.json").read_text())
+                    self.assertEqual(manifest["status"], "failed")
+                    self.assertEqual(manifest["failed_diagnostic_files"], [name])
+                    self.assertIn(f"rootless-compose-{case}.json", manifest["missing_allowlisted_files"])
+                    self.assertFalse(manifest["credentials_included"])
+                    self.assertEqual((output / name).read_bytes(), original)
+                self.assertEqual((source / name).read_bytes(), original)
 
     def test_compose_diagnostics_cannot_substitute_for_acceptance_receipts(self) -> None:
         source = self.private_dir("source")
@@ -492,19 +523,27 @@ class ExporterTest(unittest.TestCase):
     def test_compose_diagnostic_rejects_private_or_contradictory_values(self) -> None:
         base = {"version": 1, "case": "pi", "outcome": "failed", "stage": "probe"}
         changes = (
-            {"stage": "private-error-with-credential"}, {"observation": "private-error-with-credential"},
-            {"details": "private-error-with-credential"}, {"case": "opencode"},
-            {"version": True}, {"outcome": "passed"}, {"stage": "complete"},
+            ("pi", {"stage": "private-error-with-credential"}), ("pi", {"observation": "private-error-with-credential"}),
+            ("pi", {"details": "private-error-with-credential"}), ("pi", {"case": "opencode"}),
+            ("pi", {"version": True}), ("pi", {"outcome": "passed"}), ("pi", {"stage": "complete"}),
+            ("pi", {"stage": "runtime_registration", "observation": "private-error-with-credential"}),
+            ("pi", {"stage": "runtime_registration", "observation": "transport_unverified"}),
+            ("pi", {"observation": "offline"}),
+            ("pi", {"stage": "runtime_registration", "observation": "cancel_api_409_failed_run"}),
+            ("shared", {"case": "shared", "stage": "runtime_registration", "observation": "offline"}),
+            ("unprovisioned", {"case": "unprovisioned", "stage": "runtime_registration", "observation": "offline"}),
         )
-        for index, change in enumerate(changes):
-            with self.subTest(change=change):
+        for index, (case, change) in enumerate(changes):
+            with self.subTest(case=case, change=change):
                 source = self.private_dir(f"source-{index}")
                 output = self.private_dir(f"output-{index}")
-                self.write_json(source / "rootless-compose-pi-diagnostic.json", base | change)
+                name = f"rootless-compose-{case}-diagnostic.json"
+                original = self.write_json(source / name, base | change)
                 result = self.run_export("compose", str(output), "1" * 40, "failed", "--witness-root", str(source))
                 self.assertNotEqual(result.returncode, 0)
                 self.assertNotIn("private-error-with-credential", result.stdout + result.stderr)
-                self.assertFalse((output / "rootless-compose-pi-diagnostic.json").exists())
+                self.assertEqual(list(output.iterdir()), [])
+                self.assertEqual((source / name).read_bytes(), original)
 
     def test_compose_failed_diagnostic_prevents_passed_manifest(self) -> None:
         source = self.private_dir("source")
@@ -521,20 +560,26 @@ class ExporterTest(unittest.TestCase):
         self.assertEqual(json.loads((output / "manifest.json").read_text())["status"], "failed")
 
     def test_compose_diagnostic_preserves_credential_scan_for_allowlisted_values(self) -> None:
-        source = self.private_dir("source")
-        output = self.private_dir("output")
-        self.write_json(source / "rootless-compose-pi-diagnostic.json", {
-            "version": 1, "case": "pi", "outcome": "failed", "stage": "probe_projection",
-            "observation": "transport_unverified",
-        })
-        secret_file = self.root / "secrets"
-        secret_file.write_bytes(b"transport_unverified\0")
-        result = self.run_export("compose", str(output), "1" * 40, "failed", "--witness-root", str(source),
-                                 "--secret-values-file", str(secret_file))
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("configured credential value", result.stderr)
-        self.assertNotIn("transport_unverified", result.stdout + result.stderr)
-        self.assertEqual(list(output.iterdir()), [])
+        for index, (stage, observation) in enumerate((
+            ("probe_projection", "transport_unverified"), ("runtime_registration", "offline"),
+        )):
+            with self.subTest(stage=stage, observation=observation):
+                source = self.private_dir(f"source-{index}")
+                output = self.private_dir(f"output-{index}")
+                path = source / "rootless-compose-pi-diagnostic.json"
+                original = self.write_json(path, {
+                    "version": 1, "case": "pi", "outcome": "failed", "stage": stage,
+                    "observation": observation,
+                })
+                secret_file = self.root / f"secrets-{index}"
+                secret_file.write_bytes(observation.encode() + b"\0")
+                result = self.run_export("compose", str(output), "1" * 40, "failed", "--witness-root", str(source),
+                                         "--secret-values-file", str(secret_file))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("configured credential value", result.stderr)
+                self.assertNotIn(observation, result.stdout + result.stderr)
+                self.assertEqual(list(output.iterdir()), [])
+                self.assertEqual(path.read_bytes(), original)
 
     def test_compose_diagnostic_rejects_nonprivate_or_linked_source(self) -> None:
         for index, kind in enumerate(("permissions", "symlink", "hardlink", "oversized")):

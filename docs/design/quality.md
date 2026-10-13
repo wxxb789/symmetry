@@ -69,6 +69,12 @@ provider progress, crash/candidate handling, handoff and resume still need their
 own installed-owner evidence; generic Control state tests cannot replace it.
 Finite witness failure diagnostics are separate from acceptance summaries and
 cannot satisfy missing receipts or turn a failed witness into a passing run.
+Runtime-registration observations retain the last successful Portal projection;
+`portal_unavailable` means no valid snapshot was obtained, not runtime absence.
+Helper-crash cancellation diagnostics classify one failed request without retry.
+An HTTP 409 client fallback is not a decoded server-code proof.
+`cancel_api_409_failed_run` additionally requires one bounded failed-Task readback
+matching the original run/generation.
 Legacy helper-scan crash phases identify only the entered assertion boundary;
 mirror-wait labels identify the last entered predicate guard, not takeover proof.
 Initialized evidence with absent snapshots remains incomplete.

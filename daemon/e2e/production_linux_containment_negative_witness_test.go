@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -21,7 +22,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/control"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
+	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 	"golang.org/x/sys/unix"
 )
@@ -1966,7 +1969,40 @@ func runLinuxHelperScanCrashWitness(t *testing.T, environment e2eEnvironment, da
 	// daemon mirror must force-stop the original group but may not turn helper
 	// failure or its unacknowledged scan into a clean receipt.
 	evidence.Stage = "cancel_request"
-	cancelTask(t, operator, task.TaskID)
+	if _, err := operator.CreateTaskCommand(context.Background(), task.TaskID, unique("cancel"), protocol.TaskCommandRequest{Kind: "cancel"}); err != nil {
+		evidence.Stage = "cancel_other_error"
+		var apiError *control.APIError
+		var responseError *control.ResponseError
+		var transportError net.Error
+		switch {
+		case errors.As(err, &apiError):
+			evidence.Stage = "cancel_api_other"
+			if apiError.StatusCode == http.StatusConflict {
+				evidence.Stage = "cancel_api_409_other"
+				if apiError.Code == control.StateConflict {
+					// The client also uses StateConflict as its fallback for HTTP 409.
+					evidence.Stage = "cancel_api_409_state_conflict"
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					current, readErr := operator.GetTask(ctx, task.TaskID)
+					cancel()
+					if readErr == nil && current.State == "failed" && current.RunID != nil && current.Generation != nil &&
+						*current.RunID == file.Journal.RunID && *current.Generation == file.Journal.Generation {
+						evidence.Stage = "cancel_api_409_failed_run"
+					}
+				}
+			}
+		case errors.As(err, &responseError):
+			evidence.Stage = "cancel_invalid_response"
+		case errors.Is(err, context.DeadlineExceeded):
+			evidence.Stage = "cancel_timeout"
+		case errors.As(err, &transportError):
+			evidence.Stage = "cancel_transport"
+			if transportError.Timeout() {
+				evidence.Stage = "cancel_timeout"
+			}
+		}
+		t.Fatalf("single helper-crash cancel failed: %s", evidence.Stage)
+	}
 	evidence.Stage = "mirror_takeover"
 	condition, err := waitForLinuxWitnessJournal(target.StateDir, "mirror force-stop without scan receipt", 45*time.Second, func(value linuxWitnessJournalFile) bool {
 		journal := value.Journal

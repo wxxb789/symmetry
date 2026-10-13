@@ -77,6 +77,9 @@ COMPOSE_DIAGNOSTIC_STAGES = {
 COMPOSE_DIAGNOSTIC_OBSERVATIONS = {
     "probe": {"native_unverified", "unsupported_version", "unavailable", "cancelled", "deadline", "other"},
     "probe_projection": {"transport_verified", "transport_unverified"},
+    "runtime_registration": {
+        "portal_unavailable", "not_observed", "offline", "native_version_mismatch", "other_projection",
+    },
     "failed_run": {
         "queued", "assigned", "claimed", "running", "paused", "waiting_for_input", "cancelling",
         "failed", "completed", "cancelled", "expired", "other", "runtime_mismatch",
@@ -96,12 +99,16 @@ LEGACY_HELPER_SCAN_CRASH_STAGES = {
     "helper_scan_failure_sigkill_before_cancel": {
         "daemon_task_setup", "running_journal", "descendant_marker", "trigger_fired_marker",
         "scan_failure_journal", "helper_exit", "cancel_request", "mirror_takeover",
+        "cancel_api_409_state_conflict", "cancel_api_409_failed_run", "cancel_api_409_other",
+        "cancel_api_other", "cancel_invalid_response", "cancel_timeout", "cancel_transport", "cancel_other_error",
         "mirror_authority", "mirror_stop_receipt_absent", "mirror_process_details",
         "mirror_scan_ledger", "mirror_unproven_scan", "post_takeover", "complete",
     },
     "helper_pending_scan_sigkill": {
         "daemon_task_setup", "running_journal", "descendant_marker", "trigger_fired_marker",
         "pending_scan_journal", "helper_exit", "cancel_request", "mirror_takeover",
+        "cancel_api_409_state_conflict", "cancel_api_409_failed_run", "cancel_api_409_other",
+        "cancel_api_other", "cancel_invalid_response", "cancel_timeout", "cancel_transport", "cancel_other_error",
         "mirror_authority", "mirror_stop_receipt_absent", "mirror_process_details",
         "mirror_scan_ledger", "mirror_pending_scan", "post_takeover", "complete",
     },
