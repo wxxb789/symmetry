@@ -354,12 +354,17 @@ defmodule SymmetryControl.PiControlE2ETest do
 
     try do
       held =
-        await!(context.daemon_port, "durable owner refusal with held terminal acknowledgement", fn ->
-          case Agent.get(gateway_state, & &1.refusal_transition) do
-            nil -> :retry
-            held -> {:ok, held}
-          end
-        end, 15_000)
+        await!(
+          context.daemon_port,
+          "durable owner refusal with held terminal acknowledgement",
+          fn ->
+            case Agent.get(gateway_state, & &1.refusal_transition) do
+              nil -> :retry
+              held -> {:ok, held}
+            end
+          end,
+          15_000
+        )
 
       failed_run = Repo.get!(Run, assigned.id)
       failed_task = Repo.get!(Task, fixture.task.id)
@@ -429,12 +434,19 @@ defmodule SymmetryControl.PiControlE2ETest do
       assert transition["transition_id"] == held.transition_id
       transition_failure_matches? = transition["payload"] == failed_run.failure
       transition_fence_matches? = Map.take(transition, Map.keys(fence)) == fence
-      assert transition_failure_matches?, "refusal journal transition has a different failure payload"
-      assert transition_fence_matches?, "refusal journal transition differs from the exact Control fence"
+
+      assert transition_failure_matches?,
+             "refusal journal transition has a different failure payload"
+
+      assert transition_fence_matches?,
+             "refusal journal transition differs from the exact Control fence"
+
       assert journal["work"]["agent_profile"] == context.profile
       assert journal["work"]["workspace"] == context.workspace
       admission_matches? = journal["work"]["input"] == fixture.task.input
-      assert admission_matches?, "refusal journal admission differs from the exact Control Task input"
+
+      assert admission_matches?,
+             "refusal journal admission differs from the exact Control Task input"
 
       admission = journal["work"]["input"]
       assert admission["schema_version"] == "symmetry.admission.v1"
@@ -450,10 +462,13 @@ defmodule SymmetryControl.PiControlE2ETest do
       subject_matches? = admission["subject"] == fixture.subject
       assert subject_matches?, "refusal admission Subject differs from the exact fixture Subject"
 
-      snapshot = Repo.get!(SymmetryControl.Goals.ContextSnapshot, fixture.task.context_snapshot_id)
+      snapshot =
+        Repo.get!(SymmetryControl.Goals.ContextSnapshot, fixture.task.context_snapshot_id)
+
       assert admission["context_hash"] == snapshot.payload["content_hash"]
 
       assert_linux_refusal_journal_has_no_effects!(journal)
+
       receipts =
         Repo.all(from transition in RunTransition, where: transition.run_id == ^assigned.id)
 
@@ -2985,6 +3000,7 @@ defmodule SymmetryControl.PiControlE2ETest do
     assert marker_unchanged?, "native process marker changed before installed-owner refusal"
     assert workspace_empty?, "workspace root changed before installed-owner refusal"
     assert repository_clean?, "source repository changed before installed-owner refusal"
+
     assert String.trim(git_output!(context.repository_path, ["rev-parse", "HEAD"])) ==
              context.fixture.subject["commit"]
 

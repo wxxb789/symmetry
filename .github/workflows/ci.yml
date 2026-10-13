@@ -200,36 +200,7 @@ jobs:
           go-version: 1.27.0
           cache-dependency-path: daemon/go.sum
       - run: mix deps.get
-      - name: Check Control formatting
-        id: control-format
-        run: mix format --check-formatted
-      - name: Export scoped formatter correction on failure
-        if: failure() && steps.control-format.outcome == 'failure'
-        run: |
-          set -Eeuo pipefail
-          scratch=$(mktemp -d "$RUNNER_TEMP/pr9-control-format.XXXXXX")
-          patch="$RUNNER_TEMP/pr9-control-formatter.patch"
-          files=(test/symmetry_control/pi_control_e2e_test.exs test/symmetry_control/provider_broker_e2e_test.exs)
-          for file in "${files[@]}"; do
-            mkdir -p "$scratch/$(dirname "$file")"
-            cp -- "$file" "$scratch/$file"
-          done
-          mix format --dot-formatter .formatter.exs "${files[@]/#/$scratch/}"
-          : > "$patch"
-          for file in "${files[@]}"; do
-            status=0
-            diff -u --label "a/control/$file" --label "b/control/$file" \
-              "$file" "$scratch/$file" >> "$patch" || status=$?
-            if (( status > 1 )); then exit "$status"; fi
-          done
-      - name: Upload scoped formatter correction
-        if: failure() && steps.control-format.outcome == 'failure'
-        uses: actions/upload-artifact@v4
-        with:
-          name: pr9-control-formatter-${{ github.run_id }}-${{ github.run_attempt }}
-          if-no-files-found: error
-          retention-days: 7
-          path: ${{ runner.temp }}/pr9-control-formatter.patch
+      - run: mix format --check-formatted
       - run: mix compile --warnings-as-errors
       - run: mix test
       - name: Run provider broker end-to-end tests
@@ -1353,7 +1324,14 @@ jobs:
           test_events="$RUNNER_TEMP/daemon-go-test.json"
           tool_stderr="$RUNNER_TEMP/daemon-go-tool.stderr"
           set +e
-          "$RUNNER_TEMP/census-fd-entry" "$(command -v go)" test \
+          # Ordinary CI declares stdio as Go's inherited descriptor interface.
+          # Establish this boundary before Go, never inside the native census fixture.
+          python3 -c '
+          import subprocess
+          import sys
+          result = subprocess.run(sys.argv[1:], close_fds=True)
+          sys.exit(result.returncode if result.returncode >= 0 else 128 - result.returncode)
+          ' "$RUNNER_TEMP/census-fd-entry" "$(command -v go)" test \
             -count=1 -timeout 300s -json -exec "$RUNNER_TEMP/census-fd-entry" ./... \
             >"$test_events" 2>"$tool_stderr"
           test_status=$?
@@ -1384,7 +1362,15 @@ jobs:
           if (( summary_status != 0 )); then
             exit "$summary_status"
           fi
-      - run: go test -race -count=1 -timeout 600s -exec "$RUNNER_TEMP/census-fd-entry" ./...
+      - name: Run race tests with the same stdio-only caller boundary
+        run: |
+          python3 -c '
+          import subprocess
+          import sys
+          result = subprocess.run(sys.argv[1:], close_fds=True)
+          sys.exit(result.returncode if result.returncode >= 0 else 128 - result.returncode)
+          ' "$RUNNER_TEMP/census-fd-entry" "$(command -v go)" test \
+            -race -count=1 -timeout 600s -exec "$RUNNER_TEMP/census-fd-entry" ./...
       - run: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...
       - name: Upload ordinary test descriptor diagnostics
         if: always()

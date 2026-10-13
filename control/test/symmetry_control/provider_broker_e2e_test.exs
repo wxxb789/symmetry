@@ -1310,7 +1310,9 @@ defmodule SymmetryControl.ProviderBrokerE2ETest do
   defp remove_run_fixture!(root) do
     # File.rm_rf discards child errors, hiding their path and errno behind parent :eexist.
     remove_run_fixture_entry!(root, root)
-    assert File.lstat(root) == {:error, :enoent}, "provider broker fixture root remains after cleanup"
+
+    assert File.lstat(root) == {:error, :enoent},
+           "provider broker fixture root remains after cleanup"
   end
 
   defp remove_run_fixture_entry!(path, root) do

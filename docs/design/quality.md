@@ -50,6 +50,12 @@ Installed-owner host prerequisites must be proved in the same protected manual
 native-acceptance job as their consumers, not on a separate automatic PR runner.
 A skipped qualification job is unavailable evidence, never a passed predicate.
 
+Ordinary Go CI inherits only stdio from its command caller. Establish that
+descriptor boundary before Go starts, not inside a native census fixture.
+Descriptors subsequently owned by a test remain subject to the unchanged
+production census, including unexpected FD rejection. This isolates descriptor
+inheritance only; it does not qualify a host or identify an upstream producer.
+
 Control/Pi CI selects the production missing-owner refusal on Linux and retains
 the five Windows positive integration scenarios. Test-only capability projection
 for admission does not establish installed-owner qualification. Linux-specific
