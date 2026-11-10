@@ -27,7 +27,7 @@ design amendment with evidence; it is not silently delegated to a worker.
 | Contract | JSON Schema Draft 7 as wire authority, generated TS/Go types |
 | Deployment | Phoenix release serves built frontend; no Node production server |
 | Scope | Existing single-operator deployment; Linux/Windows execution |
-| Explicitly deferred | Native macOS daemon, multi-tenant RBAC, mobile, workflow DSL, skill marketplace, embeddings, autonomous cross-goal work |
+| Explicitly deferred | Native macOS daemon (Apple Silicon arm64 when implemented), multi-tenant RBAC, mobile, workflow DSL, skill marketplace, embeddings, autonomous cross-goal work |
 
 No major upgrade of existing Go/Elixir/OTP/PostgreSQL is required by this design.
 Honor the repository's CI/runtime versions. For newly added libraries, resolve
