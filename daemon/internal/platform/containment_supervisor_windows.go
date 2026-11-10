@@ -267,12 +267,10 @@ var (
 	startContainmentSupervisor          = func(command *exec.Cmd) error { return command.Start() }
 	generateContainmentSupervisorSecret = randomContainmentSecret
 	writeContainmentSupervisorBootstrap = writeBootstrapPayload
-	writeContainmentSupervisorHello     = writeSupervisorResponse
 	openContainmentSupervisorPipe       = openContainmentSupervisorPipeFile
 	getContainmentSupervisorServerPID   = windows.GetNamedPipeServerProcessId
 	containmentSupervisorConnectPending = func() {}
 	readContainmentSupervisorLine       = readSupervisorLine
-	runContainmentSupervisorAfterAuth   = runContainmentSupervisorWithJob
 	processIdentityRunning              = processIdentityIsRunning
 	getCurrentContainmentSessionID      = currentContainmentSessionID
 	openSupervisorObservationProcess    = func(pid int) (syscall.Handle, error) {
@@ -1861,10 +1859,6 @@ func (waiter *supervisorProcessWait) killAndWait(deadline time.Time) error {
 	return waitErr
 }
 
-func terminateSupervisorProcess(process *os.Process, deadline time.Time) error {
-	return newSupervisorProcessWait(process).killAndWait(deadline)
-}
-
 func requestContainmentSupervisorPipe(endpoint containmentSupervisorEndpoint, operation string, deadline time.Time) (containmentSupervisorResponse, error) {
 	return requestContainmentSupervisorPipeWithRequest(endpoint, containmentSupervisorRequest{
 		Version:            containmentSupervisorProtocol,
@@ -2942,41 +2936,6 @@ func runDurableContainmentSupervisor(args containmentSupervisorArgs, ownerWatchd
 	bootstrap.JobHandle = uint64(args.jobHandle)
 	return runContainmentSupervisor(args, bootstrap, ownerWatchdog)
 
-}
-
-type durableContainmentOwnerState struct {
-	ownerLost     bool
-	stopAttempted bool
-}
-
-func refreshDurableContainmentOwnerLoss(state *durableContainmentOwnerState, ownerWatchdog *containmentSupervisorOwnerWatchdog, job syscall.Handle) {
-	if state == nil || state.ownerLost || ownerWatchdog == nil {
-		return
-	}
-	select {
-	case <-ownerWatchdog.ownerLost():
-		state.ownerLost = true
-		if !state.stopAttempted {
-			state.stopAttempted = true
-			_, _ = terminateAndObserveSupervisorJob(job)
-		}
-	default:
-	}
-}
-
-func finishDurableContainmentSupervisorHello(args containmentSupervisorArgs, bootstrap containmentSupervisorBootstrap, job syscall.Handle, ownerWatchdog *containmentSupervisorOwnerWatchdog, pipe *os.File, response containmentSupervisorResponse) error {
-	_ = writeContainmentSupervisorHello(pipe, response, time.Now().Add(containmentSupervisorConnectionPoll))
-	_ = pipe.Close()
-	// The helper has already authenticated and holds the inherited Job handle. A
-	// lost hello write is therefore an uncertain response, not a reason to close
-	// the recovery owner. Re-enter the post-auth loop so exact bootstrap or
-	// recover replay can obtain the stop receipt and release proof.
-	return retainAuthenticatedContainmentSupervisor(args, bootstrap, job, ownerWatchdog)
-}
-
-func retainAuthenticatedContainmentSupervisor(args containmentSupervisorArgs, bootstrap containmentSupervisorBootstrap, job syscall.Handle, ownerWatchdog *containmentSupervisorOwnerWatchdog) error {
-	bootstrap.JobHandle = uint64(job)
-	return runContainmentSupervisorAfterAuth(args, bootstrap, job, ownerWatchdog)
 }
 
 type containmentSupervisorStopState struct {

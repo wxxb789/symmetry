@@ -524,17 +524,6 @@ func requiredRawObject(object map[string]json.RawMessage, name string) (map[stri
 	return value, true
 }
 
-func requiredRawValue(object map[string]json.RawMessage, name string) (json.RawMessage, bool) {
-	raw, ok := object[name]
-	if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		return nil, false
-	}
-	if err := validateJSONValue(raw); err != nil {
-		return nil, false
-	}
-	return append(json.RawMessage(nil), raw...), true
-}
-
 func optionalRawValue(object map[string]json.RawMessage, name string) (json.RawMessage, error) {
 	raw, ok := object[name]
 	if !ok {

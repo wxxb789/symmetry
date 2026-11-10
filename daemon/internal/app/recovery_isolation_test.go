@@ -742,9 +742,8 @@ func (control *recoveryRetryControl) Reconcile(_ context.Context, _ string, requ
 }
 
 type snapshotStartObservation struct {
-	journal state.RunJournal
-	ack     protocol.CommandAcknowledgement
-	err     error
+	ack protocol.CommandAcknowledgement
+	err error
 }
 
 type snapshotReconcileControl struct {

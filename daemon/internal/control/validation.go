@@ -581,18 +581,6 @@ func validateWork(work protocol.Work) error {
 	return nil
 }
 
-func validateJSONValue(value json.RawMessage) error {
-	trimmed := bytes.TrimSpace(value)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return fmt.Errorf("must be non-null JSON")
-	}
-	var decoded any
-	if err := json.Unmarshal(trimmed, &decoded); err != nil {
-		return fmt.Errorf("must be valid JSON: %w", err)
-	}
-	return nil
-}
-
 func validateNullableJSONObject(value json.RawMessage) error {
 	trimmed := bytes.TrimSpace(value)
 	if len(trimmed) == 0 {
@@ -1216,16 +1204,6 @@ func validateGoalSHA256(value, field string) error {
 	if len(value) != len("sha256:")+64 || !strings.HasPrefix(value, "sha256:") ||
 		strings.Trim(value[len("sha256:"):], "0123456789abcdef") != "" {
 		return fmt.Errorf("%s must be sha256:<64 lowercase hex characters>", field)
-	}
-	return nil
-}
-
-func validateGoalCommit(value, field string) error {
-	if len(value) != 40 && len(value) != 64 {
-		return fmt.Errorf("%s must be a full Git object ID", field)
-	}
-	if strings.Trim(value, "0123456789abcdef") != "" {
-		return fmt.Errorf("%s must be a full Git object ID", field)
 	}
 	return nil
 }

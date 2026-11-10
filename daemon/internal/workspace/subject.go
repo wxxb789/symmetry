@@ -568,10 +568,6 @@ func gitTreeDigestWithReaders(ctx context.Context, repository, commit string, re
 	return "sha256:" + hex.EncodeToString(digest[:]), nil
 }
 
-func parseTreeManifest(ctx context.Context, repository string, output []byte) ([]treeManifestEntry, error) {
-	return parseTreeManifestWithReader(ctx, repository, output, gitBlobContent)
-}
-
 func parseTreeManifestWithReader(ctx context.Context, repository string, output []byte, readBlob subjectGitBlobReader) ([]treeManifestEntry, error) {
 	if readBlob == nil {
 		return nil, errors.New("subject Git blob reader is nil")

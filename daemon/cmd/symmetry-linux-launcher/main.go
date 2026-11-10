@@ -1338,10 +1338,6 @@ func sendResult(fd int, result protocol.LaunchResult, passedFDs []int) error {
 	return nil
 }
 
-func openProcDir(pid int) (int, error) {
-	return unix.Open(fmt.Sprintf("/proc/%d", pid), unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
-}
-
 func waitPIDFD(pidfd int, deadline time.Time) error {
 	for {
 		remaining := time.Until(deadline)

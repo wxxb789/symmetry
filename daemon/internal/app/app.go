@@ -78,7 +78,6 @@ var (
 	errInputWriteTimeout            = errors.New("agent did not consume standard input within the write timeout")
 	errStartProcessNil              = errors.New("start process returned nil")
 	errInvalidAdmission             = errors.New("invalid symmetry.admission.v1")
-	errMissingResult                = errors.New("missing_result")
 	errGoalAttachmentPending        = errors.New("retained Goal session has no verified current attachment")
 	errPersistedProcessStopUnproven = errors.New("persisted process stop is unproven")
 	errAuthoritativeTerminal        = errors.New("authoritative terminal already durable")
@@ -5459,20 +5458,6 @@ func (daemon *daemon) attachNativeSession(key state.RunKey, session harness.Sess
 	return nil
 }
 
-func (daemon *daemon) clearNativeSession(key state.RunKey, session harness.Session) {
-	if isNilHarnessSession(session) {
-		return
-	}
-	daemon.mu.Lock()
-	defer daemon.mu.Unlock()
-	if active := daemon.running[key]; active != nil && active.nativeSession == session {
-		active.nativeSession = nil
-		active.goalSession = nil
-		active.goalAdmission = nil
-		active.nativeDeadline = time.Time{}
-	}
-}
-
 func (daemon *daemon) clearNativeSessionByValue(session harness.Session) {
 	if isNilHarnessSession(session) {
 		return
@@ -8760,14 +8745,6 @@ func (daemon *daemon) closeGoalSession(key state.GoalSessionKey) (state.GoalSess
 		close = daemon.store.CloseGoalSession
 	}
 	return close(key)
-}
-
-func (daemon *daemon) markNativeCleanupBlocked(active *runningRun) {
-	daemon.mu.Lock()
-	if active != nil {
-		active.cleanupBlocked = true
-	}
-	daemon.mu.Unlock()
 }
 
 func nativeProcessOutputFailure(result execution.Result) error {

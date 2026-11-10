@@ -1392,25 +1392,6 @@ func linuxV2PIDFDExited(pidfd *os.File) (bool, error) {
 	}
 }
 
-func waitLinuxV2PIDFD(ctx context.Context, pidfd *os.File) error {
-	if ctx == nil || pidfd == nil {
-		return errors.New("exact helper pidfd wait is incomplete")
-	}
-	poll := []unix.PollFd{{Fd: int32(pidfd.Fd()), Events: unix.POLLIN}}
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		n, err := unix.Poll(poll, 100)
-		if err != nil && !errors.Is(err, unix.EINTR) {
-			return err
-		}
-		if n > 0 && poll[0].Revents&(unix.POLLIN|unix.POLLHUP|unix.POLLERR) != 0 {
-			return nil
-		}
-	}
-}
-
 func (owner *linuxV2ProcessOwner) finalize() error {
 	ctx, cancel := context.WithTimeout(context.Background(), linuxV2StopTimeout)
 	defer cancel()

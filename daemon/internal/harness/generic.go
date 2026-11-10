@@ -56,18 +56,6 @@ func NewGenericAdapter(runners ...ProcessRunner) *GenericAdapter {
 	return &GenericAdapter{runner: runner}
 }
 
-// NewGenericAdapterWithRunner is the explicit constructor for tests or a
-// daemon-owned narrow process runner.
-func NewGenericAdapterWithRunner(runner ProcessRunner) *GenericAdapter {
-	return NewGenericAdapter(runner)
-}
-
-// NewGenericAdapterWithExecutionRunner wraps the concrete runner already owned
-// by the daemon without requiring callers to implement the narrow interface.
-func NewGenericAdapterWithExecutionRunner(runner execution.Runner) *GenericAdapter {
-	return &GenericAdapter{runner: executionRunner{runner: runner}}
-}
-
 // Probe reports only the generic process lifecycle that is implemented here.
 // Native resume, guidance, approval and usage semantics remain explicit
 // unsupported values.

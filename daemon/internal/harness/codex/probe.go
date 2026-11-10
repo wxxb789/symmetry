@@ -269,10 +269,6 @@ func parseVersion(output string) string {
 	return harness.ParseCodexVersion(output)
 }
 
-func hasStdioAppServerHelp(output string) bool {
-	return harness.HasCodexStdioAppServerHelp(output)
-}
-
 // Adapter is a root-seam adapter that exposes probe evidence but refuses to
 // create a native session. It exists so registry callers can use this package
 // without mistaking transport fixtures for native support.
@@ -282,14 +278,6 @@ type Adapter struct {
 	startProcess             processStarter
 	configuredNativeModel    string
 	configuredNativeProvider string
-}
-
-// NewAdapterWithNativeModel creates an adapter with an optional explicitly
-// configured native model identity. Admission model profiles are Symmetry
-// aliases and are intentionally not forwarded as Codex model IDs; this value
-// is only for deployments that already resolved such an identity locally.
-func NewAdapterWithNativeModel(executable, nativeModel string) *Adapter {
-	return NewAdapterWithNativeIdentity(executable, nativeModel, "")
 }
 
 // NewAdapterWithNativeIdentity creates an adapter with optional exact native

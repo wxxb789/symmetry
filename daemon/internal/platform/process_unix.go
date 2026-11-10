@@ -207,34 +207,6 @@ func (group *processGroup) setDescendantScanObserver(observer descendantScanObse
 	return nil
 }
 
-func (group *processGroup) setAfterCleanScan(callback func(uint64) bool) error {
-	if group == nil || callback == nil {
-		return errors.New("clean scan callback is unavailable")
-	}
-	group.mutex.Lock()
-	defer group.mutex.Unlock()
-	if group.monitorDone != nil {
-		return errors.New("clean scan callback must be installed before the monitor starts")
-	}
-	group.afterCleanScan = callback
-	return nil
-}
-
-func (group *processGroup) setSealAfterCleanScan(callback func(uint64) bool, afterSeal func(uint64)) error {
-	if group == nil || callback == nil {
-		return errors.New("clean scan seal callback is unavailable")
-	}
-	group.mutex.Lock()
-	defer group.mutex.Unlock()
-	if group.monitorDone != nil {
-		return errors.New("clean scan seal callback must be installed before the monitor starts")
-	}
-	group.sealAfterCleanScan = callback
-	group.afterDescendantScanSeal = afterSeal
-	group.sealCleanScanForTesting = true
-	return nil
-}
-
 func (group *processGroup) pauseDescendantMonitoringUntilResume() error {
 	if group == nil {
 		return errors.New("process-group monitor is unavailable")

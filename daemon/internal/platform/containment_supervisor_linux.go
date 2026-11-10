@@ -448,7 +448,6 @@ type linuxSupervisor struct {
 	waitCode                       int
 	waitErr                        error
 	waitDone                       chan struct{}
-	waitOnce                       sync.Once
 
 	containmentUnprovenCallback func() error
 	prepareUnknown              bool

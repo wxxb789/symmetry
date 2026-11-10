@@ -27,16 +27,5 @@ func (*LinuxCloneCleanupReader) Verify(
 	return errors.New("Linux clone cleanup reader is supported only on Linux/amd64")
 }
 
-func (*LinuxCloneCleanupReader) verify(
-	RunKey,
-	authority.LinuxCloneGrant,
-	authority.LinuxCloneCleanupIntent,
-	*authority.LinuxCloneTargetRemovalProof,
-	bool,
-	func() error,
-) error {
-	return errors.New("Linux clone cleanup reader is supported only on Linux/amd64")
-}
-
 // Close is an idempotent no-op for an unavailable reader.
 func (*LinuxCloneCleanupReader) Close() error { return nil }

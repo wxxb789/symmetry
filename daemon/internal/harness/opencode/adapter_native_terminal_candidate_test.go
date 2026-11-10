@@ -1691,18 +1691,6 @@ func nativeOpenCodeTerminalCandidateTimelineCountDetail(events []nativeOpenCodeT
 	return count
 }
 
-func nativeOpenCodeTerminalCandidateLastTimeline(events []nativeOpenCodeTerminalCandidateTimelineEvent, kind string) (nativeOpenCodeTerminalCandidateTimelineEvent, bool) {
-	var found nativeOpenCodeTerminalCandidateTimelineEvent
-	seen := false
-	for _, event := range events {
-		if event.Kind == kind {
-			found = event
-			seen = true
-		}
-	}
-	return found, seen
-}
-
 func nativeOpenCodeTerminalCandidateEvidence(state nativeOpenCodeTerminalCandidateSessionState, kind SessionEventKind, ordinal int) (nativeOpenCodeTerminalCandidateSessionEvidence, bool) {
 	seen := 0
 	for _, evidence := range state.evidence {

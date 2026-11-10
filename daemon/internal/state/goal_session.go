@@ -2109,15 +2109,3 @@ func isGoalSessionFile(name string) bool {
 	_, err := hex.DecodeString(digest)
 	return err == nil
 }
-
-func isGoalSessionLineageFile(name string) bool {
-	if !strings.HasPrefix(name, goalSessionLineageFilePrefix) || !strings.HasSuffix(name, goalSessionLineageFileSuffix) {
-		return false
-	}
-	digest := strings.TrimSuffix(strings.TrimPrefix(name, goalSessionLineageFilePrefix), goalSessionLineageFileSuffix)
-	if len(digest) != sha256.Size*2 {
-		return false
-	}
-	_, err := hex.DecodeString(digest)
-	return err == nil
-}

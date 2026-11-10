@@ -9398,23 +9398,6 @@ func (process *recordingProcess) Terminate(context.Context, time.Duration) error
 func (*recordingProcess) Wait() execution.Result        { return execution.Result{} }
 func (*recordingProcess) ProcessDetails() (int, string) { return 43, "test:43" }
 
-type blockingTerminateProcess struct {
-	entered chan context.Context
-	writes  int
-}
-
-func (process *blockingTerminateProcess) WriteInput([]byte) error {
-	process.writes++
-	return nil
-}
-func (process *blockingTerminateProcess) Terminate(ctx context.Context, _ time.Duration) error {
-	process.entered <- ctx
-	<-ctx.Done()
-	return ctx.Err()
-}
-func (*blockingTerminateProcess) Wait() execution.Result        { return execution.Result{} }
-func (*blockingTerminateProcess) ProcessDetails() (int, string) { return 45, "test:45" }
-
 type failingTerminateProcess struct {
 	writes       int
 	terminations int

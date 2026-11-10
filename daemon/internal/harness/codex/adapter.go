@@ -1289,10 +1289,6 @@ func (session *nativeSession) handleServerRequest(frame Frame, message rpcEnvelo
 	return session.diagnostic(frame, "unsupported_server_request", "Codex server request is unsupported and was rejected")
 }
 
-func (session *nativeSession) handleResponse(frame Frame, message rpcEnvelope) error {
-	return session.handleResponseWithOutputLock(frame, message, false)
-}
-
 func (session *nativeSession) handleResponseWithOutputLock(frame Frame, message rpcEnvelope, outputLocked bool) error {
 	hasResult := hasRPCValue(message.Result)
 	hasError := hasRPCValue(message.Error)

@@ -63,7 +63,6 @@ const (
 	linuxV2NativeTaskTimeout                = 7 * time.Minute
 )
 
-var errLinuxV2HelperCrashInjected = errors.New("production v2 helper crash witness injected")
 var errLinuxV2DaemonCrashInjected = errors.New("production v2 daemon crash witness injected")
 
 // TestProductionLinuxV2PiNativeProviderAction runs the isolated production
@@ -1638,19 +1637,6 @@ func linuxV2ClaimAllowsProviderSync(access protocol.ProviderAccess, resourceID s
 	return false
 }
 
-func requireLinuxV2ControlEnvironment(t *testing.T) e2eEnvironment {
-	t.Helper()
-	if os.Getenv("SYMMETRY_E2E") != "1" {
-		t.Fatal("SYMMETRY_E2E=1 is required when a production Linux v2 witness is enabled")
-	}
-	for _, name := range []string{"SYMMETRY_E2E_URL", "SYMMETRY_ENROLLMENT_TOKEN", "SYMMETRY_OPERATOR_TOKEN"} {
-		if strings.TrimSpace(os.Getenv(name)) == "" {
-			t.Fatalf("%s is required when a production Linux v2 witness is enabled", name)
-		}
-	}
-	return loadControlEnvironment(t)
-}
-
 func newLinuxV2NativeFixture(t *testing.T, testCase linuxV2NativeWitnessCase) linuxV2NativeFixture {
 	t.Helper()
 	configPath := strings.TrimSpace(os.Getenv(testCase.configEnvironment))
@@ -1932,73 +1918,6 @@ func verifyLinuxV2ProductionInstall(t *testing.T, binary, configPath, workDir st
 	}
 }
 
-func startLinuxV2NativeDaemonWitness(t *testing.T, binary, configPath, workDir, enrollmentToken, markerDir string, allowlist []string) *productionDaemonWitnessProcess {
-	t.Helper()
-	stdout, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatalf("open production daemon output sink: %v", err)
-	}
-	stderr, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-	if err != nil {
-		_ = stdout.Close()
-		t.Fatalf("open production daemon diagnostic sink: %v", err)
-	}
-	command := exec.Command(binary, "-config", configPath)
-	command.Dir = workDir
-	command.Stdout = stdout
-	command.Stderr = stderr
-	if err := platform.ConfigureHeadlessProcess(command); err != nil {
-		_ = stdout.Close()
-		_ = stderr.Close()
-		t.Fatalf("configure production Linux v2 daemon process: %v", err)
-	}
-	command.Env = linuxV2DaemonEnvironment(enrollmentToken, allowlist, map[string]string{linuxV2NativeHookMarkerChildEnvironment: markerDir})
-	if err := command.Start(); err != nil {
-		_ = stdout.Close()
-		_ = stderr.Close()
-		t.Fatalf("start production Linux v2 daemon as A: %v", err)
-	}
-	return &productionDaemonWitnessProcess{command: command, stdout: stdout, stderr: stderr}
-}
-
-func linuxV2DaemonEnvironment(enrollmentToken string, allowlist []string, overrides map[string]string) []string {
-	allowed := map[string]struct{}{"SYMMETRY_ENROLLMENT_TOKEN": {}}
-	for _, entry := range linuxV2SafeHostEnvironment() {
-		key, _, ok := strings.Cut(entry, "=")
-		if !ok {
-			continue
-		}
-		allowed[key] = struct{}{}
-	}
-	for _, name := range allowlist {
-		if linuxV2IsCredentialEnvironmentName(name) {
-			continue
-		}
-		allowed[name] = struct{}{}
-	}
-	environment := make([]string, 0, len(allowed))
-	for _, entry := range os.Environ() {
-		key, _, ok := strings.Cut(entry, "=")
-		if !ok {
-			continue
-		}
-		if _, ok := allowed[key]; ok && key != "SYMMETRY_ENROLLMENT_TOKEN" {
-			environment = append(environment, entry)
-		}
-	}
-	for key, value := range overrides {
-		prefix := key + "="
-		filtered := environment[:0]
-		for _, entry := range environment {
-			if !strings.HasPrefix(entry, prefix) {
-				filtered = append(filtered, entry)
-			}
-		}
-		environment = append(filtered, prefix+value)
-	}
-	return append(environment, "SYMMETRY_ENROLLMENT_TOKEN="+enrollmentToken)
-}
-
 func linuxV2IsCredentialEnvironmentName(name string) bool {
 	upper := strings.ToUpper(name)
 	for _, suffix := range []string{"_API_KEY", "_TOKEN", "_SECRET", "_PASSWORD", "_CREDENTIAL", "_ACCESS_KEY", "_KEY_ID", "_CLIENT_SECRET"} {
@@ -2007,30 +1926,6 @@ func linuxV2IsCredentialEnvironmentName(name string) bool {
 		}
 	}
 	return upper == "SYMMETRY_API_KEY" || upper == "SYMMETRY_CREDENTIAL"
-}
-
-func stopLinuxV2NativeDaemonGracefully(t *testing.T, process *productionDaemonWitnessProcess) {
-	t.Helper()
-	if process == nil || process.waited || process.command == nil || process.command.Process == nil {
-		return
-	}
-	if err := process.command.Process.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		t.Fatalf("send SIGTERM to production Linux v2 daemon: %v", err)
-	}
-	done := make(chan error, 1)
-	go func() { done <- process.command.Wait() }()
-	select {
-	case <-done:
-	case <-time.After(30 * time.Second):
-		t.Fatal("production Linux v2 daemon did not stop gracefully")
-	}
-	process.waited = true
-	if err := process.stdout.Close(); err != nil {
-		t.Fatalf("close production daemon output sink: %v", err)
-	}
-	if err := process.stderr.Close(); err != nil {
-		t.Fatalf("close production daemon diagnostic sink: %v", err)
-	}
 }
 
 func linuxV2InjectHelperSIGKILL(

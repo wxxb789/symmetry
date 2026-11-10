@@ -1232,10 +1232,6 @@ func cloneSupervisorHandoff(value *authority.SupervisorHandoff) *authority.Super
 	return &cloned
 }
 
-func newProcess(command *exec.Cmd, sink Sink, containment platform.Containment, identity string, startedAt time.Time, stdin *os.File) *Process {
-	return newProcessFromStarted(legacyStartedProcess(command, containment, identity), sink, startedAt, stdin, nil)
-}
-
 func newProcessFromStarted(started *startedProcess, sink Sink, startedAt time.Time, stdin *os.File, persistStopReceipt func(int, string, authority.StopReceipt) error) *Process {
 	if persistStopReceipt == nil && started != nil {
 		persistStopReceipt = started.persistStopReceipt

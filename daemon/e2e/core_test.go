@@ -1869,20 +1869,6 @@ func loadIdentity(t *testing.T, stateDir string) state.MachineIdentity {
 	return identity
 }
 
-func loadJournal(t *testing.T, stateDir string, key state.RunKey) state.RunJournal {
-	t.Helper()
-	store, err := state.New(stateDir)
-	if err != nil {
-		t.Fatalf("open state store: %v", err)
-	}
-	defer store.Close()
-	journal, err := store.LoadJournal(key)
-	if err != nil {
-		t.Fatalf("load journal %s/%d: %v", key.RunID, key.Generation, err)
-	}
-	return journal
-}
-
 func waitForDaemon(t *testing.T, done <-chan error) {
 	t.Helper()
 	select {

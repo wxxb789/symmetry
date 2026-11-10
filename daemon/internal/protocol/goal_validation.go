@@ -119,19 +119,6 @@ func ValidateMicroUSD(value string) error {
 	return nil
 }
 
-// ParseMicroUSD returns the exact signed-bigint value after validating its
-// decimal wire representation.
-func ParseMicroUSD(value string) (int64, error) {
-	if err := ValidateMicroUSD(value); err != nil {
-		return 0, err
-	}
-	parsed, err := strconv.ParseInt(value, 10, 63)
-	if err != nil {
-		return 0, fmt.Errorf("parse microusd: %w", err)
-	}
-	return parsed, nil
-}
-
 func validateUTCTimestamp(value, field string) error {
 	if strings.TrimSpace(value) == "" || !strings.HasSuffix(value, "Z") {
 		return fmt.Errorf("%s must be an RFC3339 UTC timestamp", field)
@@ -140,33 +127,6 @@ func validateUTCTimestamp(value, field string) error {
 		return fmt.Errorf("%s must be an RFC3339 UTC timestamp: %w", field, err)
 	}
 	return nil
-}
-
-func validateGuidance(value GuidanceCapability, field string) error {
-	switch value {
-	case GuidanceNativeSteer, GuidanceNextTurn, GuidanceUnsupported:
-		return nil
-	default:
-		return fmt.Errorf("%s %q is invalid", field, value)
-	}
-}
-
-func validatePause(value PauseCapability, field string) error {
-	switch value {
-	case PauseSafeBoundary, PauseUnsupported:
-		return nil
-	default:
-		return fmt.Errorf("%s %q is invalid", field, value)
-	}
-}
-
-func validateUsageCapability(value UsageCapability, field string) error {
-	switch value {
-	case UsageReported, UsageEstimated, UsageUnknown:
-		return nil
-	default:
-		return fmt.Errorf("%s %q is invalid", field, value)
-	}
 }
 
 func validateEvidenceVerdict(value EvidenceVerdict, field string) error {

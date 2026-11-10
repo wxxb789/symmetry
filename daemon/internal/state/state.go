@@ -5462,20 +5462,6 @@ func sameContainmentScans(left, right *ContainmentScanJournal) bool {
 	return *left == *right
 }
 
-func requireLinuxScansCleanForHandoff(journal RunJournal, handoff authority.SupervisorHandoff) error {
-	if handoff.OwnerKind != authority.OwnerKindLinuxHelper {
-		return nil
-	}
-	if handoff.SupervisorPID <= 0 || handoff.SupervisorIdentity == "" || journal.ContainmentScans == nil ||
-		!journal.ContainmentScans.matchesHandoff(handoff) {
-		return errors.New("Linux supervisor scan fence is missing or mismatched")
-	}
-	if journal.ContainmentUnproven || !journal.ContainmentScans.clean() {
-		return errors.New("Linux supervisor scan evidence is unresolved")
-	}
-	return nil
-}
-
 func initialPrecommitLinuxScansAbortable(scans ContainmentScanJournal) bool {
 	return initialPrecommitLinuxScanProgressAbortable(scans.Helper) && initialPrecommitLinuxScanProgressAbortable(scans.Mirror)
 }

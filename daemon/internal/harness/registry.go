@@ -445,10 +445,6 @@ func NewCodexAdapterWithRunner(executable string, runner CodexCommandRunner) *Un
 	return adapter
 }
 
-func probeCodexExecutable(ctx context.Context) (Capabilities, error) {
-	return probeCodexExecutableWithRunner(ctx, defaultCodexExecutable, osCodexCommandRunner{})
-}
-
 func probeCodexExecutableWithRunner(ctx context.Context, executable string, runner CodexCommandRunner) (Capabilities, error) {
 	if ctx == nil {
 		return Capabilities{}, errors.New("harness probe context must not be nil")
@@ -532,10 +528,6 @@ func probeCodexExecutableWithRunner(ctx context.Context, executable string, runn
 	capabilities.VersionKnown = evidence.VersionKnown
 	capabilities.TransportVerified = evidence.TransportVerified
 	return capabilities, verifyErr
-}
-
-func parseCodexVersion(output string) string {
-	return ParseCodexVersion(output)
 }
 
 // AvailabilityError distinguishes an absent/unverified native adapter from a
