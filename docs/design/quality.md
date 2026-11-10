@@ -69,6 +69,8 @@ provider progress, crash/candidate handling, handoff and resume still need their
 own installed-owner evidence; generic Control state tests cannot replace it.
 Finite witness failure diagnostics are separate from acceptance summaries and
 cannot satisfy missing receipts or turn a failed witness into a passing run.
+Failed witness runs may print raw Go test events and upload a short-retention
+diagnostic artifact; neither is acceptance evidence.
 Runtime-registration observations retain the last successful Portal projection;
 `portal_unavailable` means no valid snapshot was obtained, not runtime absence.
 Helper-crash cancellation diagnostics classify one failed request without retry.

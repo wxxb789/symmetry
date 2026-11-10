@@ -1950,6 +1950,11 @@ jobs:
             TestProductionLinuxContainmentNegativeWitness \
             TestProductionLinuxContainmentReplayWitness || summary_status=$?
 
+          if (( test_status != 0 || summary_status != 0 )); then
+            echo '--- raw Go test events for failed witness matrix ---' >&2
+            cat "$test_events" >&2 || true
+          fi
+
           evidence_status=failed
           if (( test_status == 0 && summary_status == 0 )); then
             evidence_status=passed
@@ -1977,6 +1982,15 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: ${{ runner.temp }}/production-linux-containment-redacted-evidence/*.json
+      - name: Upload raw Go test events on witness failure
+        # Diagnostic only; local paths and raw test output are not acceptance evidence.
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-linux-containment-witness-events-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 3
+          path: ${{ runner.temp }}/production-linux-containment-witness-test.json
       - name: Upload ordinary namespace prerequisite evidence
         if: always()
         uses: actions/upload-artifact@v4
