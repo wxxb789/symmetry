@@ -16,6 +16,11 @@ __pycache__/
 *.temp
 *.bak
 .tmp-*
+/.tmp/
+
+# Local agent session artifacts
+/.omo/
+/.plans/
 
 # Local environment and secrets
 .env
