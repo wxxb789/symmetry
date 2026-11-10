@@ -2,7 +2,7 @@
   "name": "symmetry-contract-tooling",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@11.19.0",
+  "packageManager": "pnpm@12.17.0",
   "scripts": {
     "contracts:generate": "node contracts/scripts/generate.mjs",
     "contracts:check": "pnpm contracts:typecheck && pnpm contracts:test && node contracts/scripts/check.mjs && node contracts/scripts/check-effect.mjs",
@@ -14,6 +14,6 @@
     "ajv-formats": "3.0.1",
     "json-schema-to-typescript": "16.0.0",
     "quicktype-core": "26.0.0",
-    "typescript": "5.9.3"
+    "typescript": "7.0.2"
   }
 }

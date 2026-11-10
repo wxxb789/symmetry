@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
-import { Buffer } from "node:buffer";
+import { randomUUID } from "node:crypto";
+import { rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import Ajv from "ajv";
 import { Schema } from "effect";
-import typescript from "typescript";
+import { pathToFileURL } from "node:url";
 import { generateEffectSchemas } from "./generate-effect.mjs";
 import {
   conditionalObject,
@@ -51,17 +54,14 @@ const loadGeneratedGraph = async (entry, graphName) => {
       'from "../../ts/schema-helpers.ts";',
       `from ${JSON.stringify(new URL("../ts/schema-helpers.ts", import.meta.url).href)};`,
     );
-  const transpiled = typescript.transpileModule(source, {
-    compilerOptions: {
-      module: typescript.ModuleKind.ESNext,
-      target: typescript.ScriptTarget.ES2022,
-      verbatimModuleSyntax: true,
-    },
-  });
-  const generated = await import(
-    `data:text/javascript;base64,${Buffer.from(transpiled.outputText).toString("base64")}`
-  );
-  return generated[graphName];
+  const path = join(tmpdir(), `symmetry-generated-${randomUUID()}.ts`);
+  await writeFile(path, source);
+  try {
+    const generated = await import(pathToFileURL(path).href);
+    return generated[graphName];
+  } finally {
+    await rm(path, { force: true });
+  }
 };
 
 test("generates one native Effect graph with reusable definitions and typed facades", () => {

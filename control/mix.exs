@@ -46,9 +46,9 @@ defmodule SymmetryControl.MixProject do
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
       {:jason, "~> 1.2"},
-      {:dns_cluster, "~> 0.2.0"},
+      {:dns_cluster, "~> 0.3.1"},
       {:bandit, "~> 1.5"},
-      # Oban 2.24.1 is the current stable patch and supports this project's
+      # Oban 2.24 is the current stable line and supports this project's
       # Elixir 1.17, Ecto SQL 3.14, Postgrex 0.22, and Telemetry 1.4 versions.
       {:oban, "~> 2.24"},
       # ExJsonSchema 0.11.5 is a stable release compatible with the existing
