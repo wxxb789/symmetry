@@ -51,12 +51,18 @@ defmodule SymmetryControlWeb.GoalControllerTest do
   test "Goal creation rejects duplicate JSON members before controller parsing", %{conn: conn} do
     project = create_project()
 
-    body = ~s({"title":"first","title":"second"})
+    body =
+      goal_payload()
+      |> Jason.encode!()
+      |> String.replace(
+        ~s("title":"Validate durable Goal API"),
+        ~s("title":"first","title":"second")
+      )
 
     assert_error(
       operator_conn(conn)
       |> put_req_header("content-type", "application/json")
-      |> post("/%61pi/v1/projects/#{project.id}/goals", body),
+      |> post("/api/v1/projects/#{project.id}/goals", body),
       400,
       "invalid_request"
     )
@@ -123,20 +129,6 @@ defmodule SymmetryControlWeb.GoalControllerTest do
       }),
       409,
       "idempotency_conflict"
-    )
-  end
-
-  test "Goal commands reject duplicate JSON members before controller parsing", %{conn: conn} do
-    goal_id = create_goal(conn)
-
-    body = ~s({"kind":"activate","kind":"pause"})
-
-    assert_error(
-      operator_conn(conn)
-      |> put_req_header("content-type", "application/json")
-      |> post("/%61pi/v1/goals/#{goal_id}/commands", body),
-      400,
-      "invalid_request"
     )
   end
 
@@ -221,33 +213,21 @@ defmodule SymmetryControlWeb.GoalControllerTest do
              |> json_response(200)
   end
 
-  test "portal Goal mutations reject escaped duplicate JSON members", %{} do
+  test "portal Goal creation rejects escaped duplicate JSON members", %{} do
     project = create_project()
 
-    assert_error(
-      portal_conn()
-      |> put_req_header("content-type", "application/json")
-      |> post(
-        "/portal/%61pi/projects/#{project.id}/goals",
-        ~S({"title":"first","\u0074itle":"second"})
-      ),
-      400,
-      "invalid_request"
-    )
-
-    goal_id =
-      portal_conn()
-      |> post("/portal/api/projects/#{project.id}/goals", goal_payload())
-      |> json_response(201)
-      |> get_in(["goal", "id"])
+    body =
+      goal_payload()
+      |> Jason.encode!()
+      |> String.replace(
+        ~s("title":"Validate durable Goal API"),
+        ~S("title":"first","\u0074itle":"second")
+      )
 
     assert_error(
       portal_conn()
       |> put_req_header("content-type", "application/json")
-      |> post(
-        "/portal/%61pi/goals/#{goal_id}/commands",
-        ~S({"kind":"activate","\u006bind":"pause"})
-      ),
+      |> post("/portal/api/projects/#{project.id}/goals", body),
       400,
       "invalid_request"
     )

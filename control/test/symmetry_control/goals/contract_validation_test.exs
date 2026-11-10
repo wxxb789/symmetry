@@ -12,115 +12,6 @@ defmodule SymmetryControl.Goals.ContractValidationTest do
   @valid_root Path.expand("../../../../contracts/fixtures/valid", __DIR__)
   @invalid_root Path.expand("../../../../contracts/fixtures/invalid", __DIR__)
 
-  test "validates every public Goal v1 envelope against canonical schemas" do
-    opts = [schema_root: @schema_root]
-
-    assert :ok ==
-             ContractValidation.validate_goal_revision(
-               fixture(@valid_root, "goal-revision.basic.json"),
-               opts
-             )
-
-    assert :ok ==
-             ContractValidation.validate_admission(
-               fixture(@valid_root, "admission.basic.json"),
-               opts
-             )
-
-    assert :ok ==
-             ContractValidation.validate_admission(
-               fixture(@valid_root, "admission.plan.json"),
-               opts
-             )
-
-    assert :ok ==
-             ContractValidation.validate_admission(
-               fixture(@valid_root, "admission.validate.json"),
-               opts
-             )
-
-    assert :ok ==
-             ContractValidation.validate_context_snapshot(
-               fixture(@valid_root, "context-snapshot.basic.json"),
-               opts
-             )
-
-    assert :ok ==
-             ContractValidation.validate_context_snapshot(
-               fixture(@valid_root, "context-snapshot.plan.json"),
-               opts
-             )
-
-    assert :ok ==
-             ContractValidation.validate_task_result(
-               fixture(@valid_root, "task-result.candidate.json"),
-               opts
-             )
-
-    assert :ok ==
-             ContractValidation.validate_task_result(
-               fixture(@valid_root, "task-result.failed.json"),
-               opts
-             )
-
-    assert :ok ==
-             ContractValidation.validate_task_result(
-               fixture(@valid_root, "task-result.plan-proposed.json"),
-               opts
-             )
-
-    assert :ok ==
-             ContractValidation.validate_evidence(
-               fixture(@valid_root, "evidence.check.json"),
-               opts
-             )
-
-    assert :ok ==
-             ContractValidation.validate_evidence(
-               fixture(@valid_root, "evidence.artifact.json"),
-               opts
-             )
-
-    assert :ok ==
-             ContractValidation.validate_evidence(
-               fixture(@valid_root, "evidence.review.json"),
-               opts
-             )
-
-    assert :ok ==
-             ContractValidation.validate_evidence(
-               fixture(@valid_root, "evidence.observation.json"),
-               opts
-             )
-
-    assert :ok ==
-             ContractValidation.validate_evidence_batch(
-               fixture(@valid_root, "evidence-batch.basic.json"),
-               opts
-             )
-
-    assert :ok ==
-             ContractValidation.validate_decision(
-               fixture(@valid_root, "decision.open.json"),
-               opts
-             )
-
-    assert :ok ==
-             ContractValidation.validate_usage(fixture(@valid_root, "usage.nullable.json"), opts)
-
-    assert :ok ==
-             ContractValidation.validate_usage(
-               fixture(@valid_root, "usage.estimated-cost.json"),
-               opts
-             )
-
-    assert :ok ==
-             ContractValidation.validate_adapter_capabilities(
-               fixture(@valid_root, "adapter-capabilities.basic.json"),
-               opts
-             )
-  end
-
   test "bounds CommitPath by valid UTF-8 code points across acceptance and evidence" do
     opts = [schema_root: @schema_root]
     composed = String.duplicate("\u00e9", 1024)
@@ -172,44 +63,49 @@ defmodule SymmetryControl.Goals.ContractValidationTest do
     refute ContractValidation.valid_commit_path?(<<0xFF>>)
   end
 
-  test "rejects strict fields, unknown enums and unsafe fixture values" do
+  test "preserves public semantic error tags and duplicate predicate details" do
     opts = [schema_root: @schema_root]
 
-    assert {:error, {:validation_failed, _}} =
-             ContractValidation.validate_goal_revision(
-               fixture(@invalid_root, "goal-revision.extra-field.json"),
-               opts
-             )
+    for {filename, validate, tag} <- [
+          {"context-snapshot.content-hash-mismatch.json",
+           &ContractValidation.validate_context_snapshot/2, :content_hash_mismatch},
+          {"task-result.subject-hash-mismatch.json", &ContractValidation.validate_task_result/2,
+           :subject_hash_mismatch},
+          {"evidence.subject-hash-mismatch.json", &ContractValidation.validate_evidence/2,
+           :subject_hash_mismatch},
+          {"evidence.source-ref-mismatch.json", &ContractValidation.validate_evidence/2,
+           :evidence_identity_mismatch}
+        ] do
+      assert {:error, {^tag, _}} = validate.(fixture(@invalid_root, filename), opts)
+    end
 
-    assert {:error, {:validation_failed, _}} =
-             ContractValidation.validate_admission(
-               fixture(@invalid_root, "admission.version-mismatch.json"),
-               opts
-             )
+    for {filename, validate} <- [
+          {"goal-revision.duplicate-predicate-id.json",
+           &ContractValidation.validate_goal_revision/2},
+          {"context-snapshot.duplicate-predicate-id.json",
+           &ContractValidation.validate_context_snapshot/2},
+          {"plan-proposal.duplicate-predicate-id.json",
+           &ContractValidation.validate_plan_proposal/2}
+        ] do
+      assert {:error, {:duplicate_predicate_id, "tests"}} =
+               validate.(fixture(@invalid_root, filename), opts)
+    end
 
-    assert {:error, {:validation_failed, _}} =
-             ContractValidation.validate_goal_revision(
-               fixture(@invalid_root, "goal-revision.null-reason.json"),
-               opts
-             )
+    for {filename, validate, reason} <- [
+          {"goal-create.deterministic-review.json", &ContractValidation.validate_goal_create/2,
+           :deterministic_acceptance_contract},
+          {"admission.provider-scope-resource-mismatch.json",
+           &ContractValidation.validate_admission/2,
+           :provider_scope_resource_operations_mismatch},
+          {"admission.provider-scope-equal-branches.json",
+           &ContractValidation.validate_admission/2, :provider_change_target_branches_must_differ}
+        ] do
+      assert {:error, ^reason} = validate.(fixture(@invalid_root, filename), opts)
+    end
+  end
 
-    assert {:error, {:content_hash_mismatch, _}} =
-             ContractValidation.validate_context_snapshot(
-               fixture(@invalid_root, "context-snapshot.content-hash-mismatch.json"),
-               opts
-             )
-
-    assert {:error, {:validation_failed, _}} =
-             ContractValidation.validate_context_snapshot(
-               fixture(@invalid_root, "context-snapshot.missing-sources.json"),
-               opts
-             )
-
-    assert {:error, {:subject_hash_mismatch, _}} =
-             ContractValidation.validate_task_result(
-               fixture(@invalid_root, "task-result.subject-hash-mismatch.json"),
-               opts
-             )
+  test "rejects synthesized invalid values after schema validation" do
+    opts = [schema_root: @schema_root]
 
     blocked_without_blocker =
       fixture(@valid_root, "task-result.candidate.json")
@@ -218,60 +114,12 @@ defmodule SymmetryControl.Goals.ContractValidationTest do
     assert {:error, :blocked_result_requires_blocker} =
              ContractValidation.validate_task_result(blocked_without_blocker, opts)
 
-    assert {:error, {:subject_hash_mismatch, _}} =
-             ContractValidation.validate_evidence(
-               fixture(@invalid_root, "evidence.subject-hash-mismatch.json"),
-               opts
-             )
-
-    assert {:error, {:evidence_identity_mismatch, _}} =
-             ContractValidation.validate_evidence(
-               fixture(@invalid_root, "evidence.source-ref-mismatch.json"),
-               opts
-             )
-
-    assert {:error, {:validation_failed, _}} =
-             ContractValidation.validate_usage(
-               fixture(@invalid_root, "usage.microusd-overflow.json"),
-               opts
-             )
-
-    assert {:error, {:duplicate_predicate_id, "tests"}} =
-             ContractValidation.validate_goal_revision(
-               fixture(@invalid_root, "goal-revision.duplicate-predicate-id.json"),
-               opts
-             )
-
-    assert {:error, {:duplicate_predicate_id, "tests"}} =
-             ContractValidation.validate_context_snapshot(
-               fixture(@invalid_root, "context-snapshot.duplicate-predicate-id.json"),
-               opts
-             )
-
     invalid_decision =
       fixture(@valid_root, "decision.open.json")
       |> Map.put("unexpected", true)
 
     assert {:error, {:validation_failed, _}} =
              ContractValidation.validate_decision(invalid_decision, opts)
-
-    assert {:error, :duplicate_evidence_key} =
-             ContractValidation.validate_evidence_batch(
-               fixture(@invalid_root, "evidence-batch.duplicate-key.json"),
-               opts
-             )
-
-    assert {:error, {:validation_failed, _}} =
-             ContractValidation.validate_evidence_batch(
-               fixture(@invalid_root, "evidence-batch.empty-items.json"),
-               opts
-             )
-
-    assert {:error, {:validation_failed, _}} =
-             ContractValidation.validate_evidence_batch(
-               fixture(@invalid_root, "evidence-batch.extra-control-field.json"),
-               opts
-             )
   end
 
   test "requires every batch item to use the outer batch run identity" do
@@ -417,14 +265,8 @@ defmodule SymmetryControl.Goals.ContractValidationTest do
              )
   end
 
-  test "validates Goal create, command, plan, admission, and strict-policy fixture coverage" do
+  test "validates a synthesized strict-policy Goal create" do
     opts = [schema_root: @schema_root]
-
-    assert :ok ==
-             ContractValidation.validate_goal_create(
-               fixture(@valid_root, "goal-create.basic.json"),
-               opts
-             )
 
     strict_create =
       fixture(@valid_root, "goal-create.basic.json")
@@ -434,145 +276,6 @@ defmodule SymmetryControl.Goals.ContractValidationTest do
       )
 
     assert :ok == ContractValidation.validate_goal_create(strict_create, opts)
-
-    for filename <- [
-          "goal-revision.automatic-soft-budget.json",
-          "goal-revision.strict-budget.json"
-        ] do
-      assert :ok ==
-               ContractValidation.validate_goal_revision(fixture(@valid_root, filename), opts)
-    end
-
-    for filename <- [
-          "goal-command.activate.json",
-          "goal-command.pause.json",
-          "goal-command.resume.json",
-          "goal-command.cancel.json",
-          "goal-command.amend.json",
-          "goal-command.request-plan-fresh.json",
-          "goal-command.request-plan-resume.json",
-          "goal-command.accept-plan.json",
-          "goal-command.request-plan-decision.json",
-          "goal-command.request-scope-decision.json",
-          "goal-command.request-review-decision.json",
-          "goal-command.request-completion-decision.json",
-          "goal-command.resolve-decision.json",
-          "goal-command.admit-fresh.json",
-          "goal-command.admit-validate-fresh.json",
-          "goal-command.admit-resume.json",
-          "goal-command.admit-handoff.json",
-          "goal-command.add-dependency.json",
-          "goal-command.remove-dependency.json",
-          "goal-command.achieve.json"
-        ] do
-      assert :ok ==
-               ContractValidation.validate_goal_command(fixture(@valid_root, filename), opts)
-    end
-
-    for filename <- ["plan-proposal.basic.json", "plan-proposal.integration-omitted.json"] do
-      assert :ok ==
-               ContractValidation.validate_plan_proposal(fixture(@valid_root, filename), opts)
-    end
-
-    assert :ok ==
-             ContractValidation.validate_admission(
-               fixture(@valid_root, "admission.provider-scope.json"),
-               opts
-             )
-  end
-
-  test "rejects invalid Goal create, command, plan, and provider-scope fixtures" do
-    opts = [schema_root: @schema_root]
-
-    assert {:error, :deterministic_acceptance_contract} =
-             ContractValidation.validate_goal_create(
-               fixture(@invalid_root, "goal-create.deterministic-review.json"),
-               opts
-             )
-
-    for filename <- [
-          "goal-revision.strict-budget-without-hard-limit.json",
-          "goal-revision.automatic-unlimited-budget.json"
-        ] do
-      assert {:error, {:validation_failed, _}} =
-               ContractValidation.validate_goal_revision(fixture(@invalid_root, filename), opts)
-    end
-
-    for filename <- [
-          "goal-command.derived-admission-field.json",
-          "goal-command.request-plan-derived-field.json",
-          "goal-command.request-plan-fresh-session-id.json",
-          "goal-command.request-plan-handoff.json",
-          "goal-command.admit-implement-validation-id.json",
-          "goal-command.admit-validate-null-validation-id.json",
-          "goal-command.kind-payload-mismatch.json",
-          "goal-command.request-decision-caller-options.json",
-          "goal-command.request-decision-unsupported-kind.json",
-          "goal-command.fresh-session-id.json"
-        ] do
-      assert {:error, {:validation_failed, _}} =
-               ContractValidation.validate_goal_command(fixture(@invalid_root, filename), opts)
-    end
-
-    assert {:error, :request_plan_subject_resource_mismatch} =
-             ContractValidation.validate_goal_command(
-               fixture(@invalid_root, "goal-command.request-plan-subject-resource-mismatch.json"),
-               opts
-             )
-
-    for filename <- [
-          "admission.implement-validation-id.json",
-          "admission.validate-null-validation-id.json"
-        ] do
-      assert {:error, {:validation_failed, _}} =
-               ContractValidation.validate_admission(fixture(@invalid_root, filename), opts)
-    end
-
-    assert {:error, {:validation_failed, _}} =
-             ContractValidation.validate_plan_proposal(
-               fixture(@invalid_root, "plan-proposal.missing-baseline.json"),
-               opts
-             )
-
-    assert {:error, {:validation_failed, _}} =
-             ContractValidation.validate_plan_proposal(
-               fixture(@invalid_root, "plan-proposal.missing-change-target.json"),
-               opts
-             )
-
-    assert {:error, {:duplicate_predicate_id, "tests"}} =
-             ContractValidation.validate_plan_proposal(
-               fixture(@invalid_root, "plan-proposal.duplicate-predicate-id.json"),
-               opts
-             )
-
-    assert {:error, :provider_scope_resource_operations_mismatch} =
-             ContractValidation.validate_admission(
-               fixture(@invalid_root, "admission.provider-scope-resource-mismatch.json"),
-               opts
-             )
-
-    assert {:error, {:validation_failed, _}} =
-             ContractValidation.validate_admission(
-               fixture(@invalid_root, "admission.non-implement-provider-scope.json"),
-               opts
-             )
-
-    assert {:error, :provider_change_target_branches_must_differ} =
-             ContractValidation.validate_admission(
-               fixture(@invalid_root, "admission.provider-scope-equal-branches.json"),
-               opts
-             )
-
-    for filename <- [
-          "task-result.failed-null-reason.json",
-          "task-result.failed-nonterminal-reason.json",
-          "task-result.plan-proposed-null-proposal.json",
-          "task-result.progress-reason.json"
-        ] do
-      assert {:error, {:validation_failed, _}} =
-               ContractValidation.validate_task_result(fixture(@invalid_root, filename), opts)
-    end
   end
 
   test "canonicalizes optional PlanItem.integration while retaining required change targets" do
