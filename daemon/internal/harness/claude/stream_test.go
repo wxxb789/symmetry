@@ -10,7 +10,7 @@ import (
 )
 
 func TestDecoderReadsFixtureAcrossCRLFAndChunkBoundaries(t *testing.T) {
-	fixture, err := os.ReadFile(filepath.Join("..", "testdata", "claude", "2.1.281", "stream-json.jsonl"))
+	fixture, err := os.ReadFile(filepath.Join("..", "testdata", "claude", "2.1.322", "stream-json.jsonl"))
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}

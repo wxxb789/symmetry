@@ -25,9 +25,10 @@ useful context, dependencies and verifiable progress. Implement within the fixed
 contracts in [core](../design/core.md), [data](../design/data.md),
 [protocol](../design/protocol.md) and [harness](../design/harness.md).
 
-Completion is demonstrated by real repository work using Codex, Claude Code, pi
-and OpenCode within their explicitly tested capability ranges, with Linux and
-Windows evidence for claimed native support. Work can recover after interruption,
+Completion is demonstrated by real repository work using Codex, Claude Code, Pi,
+Oh My Pi (OMP), OmO and OpenCode V2 at each goal's current latest-stable pin,
+within their explicitly tested capability ranges, with Linux and Windows
+evidence for claimed native support. Work can recover after interruption,
 continue in a retained compatible session or hand off through preserved artifacts
 and versioned context, reject stale authority, stop for a consequential decision,
 resume after its scoped resolution, and separate execution success from accepted

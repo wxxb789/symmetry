@@ -31,9 +31,9 @@ func TestCodexProbeKnownVersionHelpAndSchemaFailsClosed(t *testing.T) {
 
 func TestCodexProbeRejectsNonExactVersionOutput(t *testing.T) {
 	for _, versionOutput := range []string{
-		"codex-cli 0.156.1-alpha.1\n",
-		"codex-cli 0.156.1+build.1\n",
-		"codex-cli 0.156.1 trailing-token\n",
+		"codex-cli 0.167.1-alpha.1\n",
+		"codex-cli 0.167.1+build.1\n",
+		"codex-cli 0.167.1 trailing-token\n",
 	} {
 		t.Run(versionOutput, func(t *testing.T) {
 			runner := &codexFixtureRunner{responses: map[string][]byte{"--version": []byte(versionOutput)}}

@@ -280,7 +280,6 @@ type claudeCandidateSession struct {
 
 	identityObserved     bool
 	opened               bool
-	opening              bool
 	turnStarted          bool
 	turnFinal            bool
 	turnErr              error
@@ -294,8 +293,6 @@ type claudeCandidateSession struct {
 	closeNormalCandidate bool
 	turnWriteCancel      context.CancelFunc
 
-	openDone   chan struct{}
-	openOnce   sync.Once
 	turnDone   chan struct{}
 	turnOnce   sync.Once
 	resultDone chan struct{}
@@ -322,7 +319,6 @@ func newClaudeCandidateSession(ctx context.Context, cancel context.CancelFunc, s
 		expectedSessionID: sessionID,
 		decoder:           claudeprotocol.NewDecoder(claudeCandidateMaxRecordBytes),
 		validator:         claudeprotocol.NewTerminalValidator(sessionID),
-		openDone:          make(chan struct{}),
 		turnDone:          make(chan struct{}),
 		resultDone:        make(chan struct{}),
 		watchDone:         make(chan struct{}),
@@ -368,8 +364,10 @@ func (session *claudeCandidateSession) RenewLease(deadline time.Duration, sequen
 	return renewer.RenewLease(deadline, sequence)
 }
 
-// Open never writes to stdin. It waits for the native system/init record to
-// report the exact UUID supplied on the fresh argv.
+// Open never writes to stdin. Claude Code 2.1.322 emits system/init only after
+// the first user frame, so Open confirms the process is usable and returns the
+// requested UUID without claiming that the native session identity was already
+// observed. Every terminal result still requires a matching system/init.
 func (session *claudeCandidateSession) Open(ctx context.Context) (NativeSessionHandle, error) {
 	if session == nil {
 		return NativeSessionHandle{}, errors.New("Claude staged candidate session is nil")
@@ -377,70 +375,22 @@ func (session *claudeCandidateSession) Open(ctx context.Context) (NativeSessionH
 	if ctx == nil {
 		return NativeSessionHandle{}, errors.New("Claude staged candidate open context must not be nil")
 	}
+	if err := ctx.Err(); err != nil {
+		return NativeSessionHandle{}, err
+	}
 	session.mutex.Lock()
 	if session.opened {
 		handle := NativeSessionHandle{ID: session.expectedSessionID}
 		session.mutex.Unlock()
 		return handle, nil
 	}
-	if session.opening {
-		session.mutex.Unlock()
-		return NativeSessionHandle{}, errors.New("Claude staged candidate session is already opening")
-	}
 	if err := session.usableLocked(); err != nil {
 		session.mutex.Unlock()
 		return NativeSessionHandle{}, err
 	}
-	session.opening = true
+	session.opened = true
 	session.mutex.Unlock()
-
-	opened := false
-	defer func() {
-		if opened {
-			return
-		}
-		session.mutex.Lock()
-		session.opening = false
-		session.mutex.Unlock()
-	}()
-
-	for {
-		session.mutex.Lock()
-		if err := session.usableLocked(); err != nil {
-			session.mutex.Unlock()
-			return NativeSessionHandle{}, err
-		}
-		if session.identityObserved {
-			session.opened = true
-			session.opening = false
-			opened = true
-			session.mutex.Unlock()
-			return NativeSessionHandle{ID: session.expectedSessionID}, nil
-		}
-		session.mutex.Unlock()
-
-		select {
-		case <-session.openDone:
-		case <-ctx.Done():
-			return NativeSessionHandle{}, session.stopAfterOpenFailure(ctx.Err())
-		case <-session.context.Done():
-			session.mutex.Lock()
-			err := session.sessionErrorLocked()
-			session.mutex.Unlock()
-			return NativeSessionHandle{}, session.stopAfterOpenFailure(err)
-		}
-	}
-}
-
-func (session *claudeCandidateSession) stopAfterOpenFailure(cause error) error {
-	// Close owns its own bounded termination-plus-watcher budget. Passing a
-	// second deadline here would let the caller deadline expire while the
-	// shared close attempt is still finishing in the background.
-	closeErr := session.Close(context.Background())
-	if closeErr != nil {
-		return errors.Join(cause, fmt.Errorf("stop Claude process after Open failure: %w", closeErr))
-	}
-	return cause
+	return NativeSessionHandle{ID: session.expectedSessionID}, nil
 }
 
 // StartTurn sends one exact Claude stream-json user envelope after Open. The
@@ -877,17 +827,17 @@ func (session *claudeCandidateSession) handleClaudeRecord(_ context.Context, pro
 
 	session.mutex.Lock()
 	observeErr := session.validator.Observe(record)
-	identityObserved := false
 	var terminal *claudeprotocol.Terminal
 	if observeErr == nil && record.Type == claudeprotocol.EventSystem && record.Subtype == "init" {
-		identityObserved = record.SessionID == session.expectedSessionID
-		if identityObserved {
+		if record.SessionID == session.expectedSessionID {
 			session.identityObserved = true
 		}
 	}
 	if observeErr == nil && record.Type == claudeprotocol.EventResult {
 		if !session.turnStarted {
 			observeErr = errClaudeCandidateResultBeforeTurn
+		} else if !session.identityObserved {
+			observeErr = errClaudeCandidateMissingInit
 		} else {
 			observed, finishErr := session.validator.Finish()
 			if finishErr != nil {
@@ -906,9 +856,6 @@ func (session *claudeCandidateSession) handleClaudeRecord(_ context.Context, pro
 	}
 	session.lastSequence = maxUint64(session.lastSequence, record.Sequence)
 	session.mutex.Unlock()
-	if identityObserved {
-		session.openOnce.Do(func() { close(session.openDone) })
-	}
 	if missingStructuredOutput {
 		// A completed native turn without structured_output is a missing
 		// Symmetry result, not an unknown transport outcome.
@@ -989,7 +936,6 @@ func (session *claudeCandidateSession) fail(cause error) {
 	if writeCancel != nil {
 		writeCancel()
 	}
-	session.openOnce.Do(func() { close(session.openDone) })
 	if started && !final {
 		reason := protocol.TaskResultReasonUnknownOutcome
 		session.completeTurn(TaskResult{Kind: ResultFailed, Summary: cause.Error(), Reason: &reason, Usage: Usage{State: UsageUnknown}}, cause, false)
@@ -1033,7 +979,6 @@ func (session *claudeCandidateSession) watchProcess() {
 			if missingInit {
 				session.fail(errClaudeCandidateMissingInit)
 			}
-			session.openOnce.Do(func() { close(session.openDone) })
 		}
 		session.mutex.Lock()
 		turnStarted := session.turnStarted

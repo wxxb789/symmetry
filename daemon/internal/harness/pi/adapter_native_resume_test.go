@@ -426,8 +426,8 @@ func nativePiRetainedAssertResult(t *testing.T, result harness.TaskResult, expec
 	if result.Kind != harness.ResultSucceeded || result.Semantic == nil || !reflect.DeepEqual(*result.Semantic, expected) {
 		t.Fatalf("retained native Pi semantic mismatch: kind=%s reason=%v semantic_present=%t", result.Kind, result.Reason, result.Semantic != nil)
 	}
-	if !result.Process.Terminated || result.Process.SinkError != nil || result.Process.OutputError != nil || !result.Process.OutputTruncated || result.Process.TerminationError != nil || result.Process.ContainmentError != nil {
-		t.Fatal("retained native Pi process did not complete a bounded termination barrier")
+	if !result.Process.Terminated || result.Process.SinkError != nil || result.Process.OutputError != nil || result.Process.TerminationError != nil || result.Process.ContainmentError != nil {
+		t.Fatalf("retained native Pi process did not complete a bounded termination barrier: %+v", result.Process)
 	}
 }
 

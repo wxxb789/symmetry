@@ -19,7 +19,7 @@ import (
 
 const (
 	defaultClaudeExecutable   = "claude"
-	testedClaudeVersion       = "2.1.281"
+	testedClaudeVersion       = "2.1.322"
 	claudeProbeTimeout        = time.Second
 	claudeProbeMaxOutputBytes = 64 << 10
 	defaultCodexExecutable    = "codex"

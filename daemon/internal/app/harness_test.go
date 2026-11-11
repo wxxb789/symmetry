@@ -449,7 +449,7 @@ func TestRegistrationWireIncludesAdapterObject(t *testing.T) {
 func TestBuildRuntimeRegistrationRejectsMismatchedAdapterKind(t *testing.T) {
 	runtime := config.Runtime{
 		RuntimeKey: "claude", Name: "Claude", Capacity: 1, AgentProfile: "default", Workspace: "primary",
-		HarnessKind: config.RuntimeHarnessClaudeCode, HarnessVersion: "2.1.281", AdapterVersion: "symmetry-daemon:test", AdapterProtocolVersion: 1,
+		HarnessKind: config.RuntimeHarnessClaudeCode, HarnessVersion: "2.1.322", AdapterVersion: "symmetry-daemon:test", AdapterProtocolVersion: 1,
 	}
 	capabilities := harness.UnsupportedCapabilities(harness.KindCodex, "test")
 	_, _, err := buildRuntimeRegistration(runtime, config.AgentProfile{InputMode: config.InputModeJSON}, capabilities)
@@ -617,13 +617,14 @@ func TestHandoffAdmissionWithoutVerifiedCapabilityFailsBeforeWorkspaceAndNativeS
 	}
 }
 
-func TestPiAndOpenCodeHandoffAdmissionsUseOnlyVerifiedNativeOwner(t *testing.T) {
+func TestNativeHandoffAdmissionsUseOnlyVerifiedNativeOwner(t *testing.T) {
 	for _, test := range []struct {
 		name          string
 		kind          harness.Kind
 		configKind    string
 		nativeVersion string
 	}{
+		{name: "codex", kind: harness.KindCodex, configKind: config.RuntimeHarnessCodex, nativeVersion: codex.TestedVersion},
 		{name: "pi", kind: harness.KindPi, configKind: config.RuntimeHarnessPi, nativeVersion: pi.TestedVersion},
 		{name: "opencode", kind: harness.KindOpenCode, configKind: config.RuntimeHarnessOpenCode, nativeVersion: opencode.TestedVersion},
 	} {
@@ -654,7 +655,7 @@ func TestPiAndOpenCodeHandoffAdmissionsUseOnlyVerifiedNativeOwner(t *testing.T) 
 			profile := app.config.AgentProfiles[app.config.Runtime.AgentProfile]
 			profile.EnvAllowlist = []string{"HOME", "XDG_CONFIG_HOME"}
 			app.config.AgentProfiles[app.config.Runtime.AgentProfile] = profile
-			if runtime.GOOS == "linux" {
+			if runtime.GOOS == "linux" && requiresLinuxV2NativeOwner(test.kind) {
 				owner := &fakeLinuxV2NativeOwner{
 					kind: test.kind, preflightErr: errors.New("verified Linux B-owned clone/kernel owner is unavailable in this fixture"),
 				}
@@ -698,7 +699,7 @@ func TestPiAndOpenCodeHandoffAdmissionsUseOnlyVerifiedNativeOwner(t *testing.T) 
 			if session.request.Resume != nil {
 				t.Fatalf("handoff passed a resume handle to a new session: %#v", session.request.Resume)
 			}
-			if runtime.GOOS == "linux" {
+			if runtime.GOOS == "linux" && requiresLinuxV2NativeOwner(test.kind) {
 				values := make(map[string]string)
 				homeCount := 0
 				for _, entry := range session.request.Invocation.Env {
