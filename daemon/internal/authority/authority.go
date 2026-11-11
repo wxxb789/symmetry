@@ -189,6 +189,97 @@ func (value LinuxCloneGrant) Clone() LinuxCloneGrant {
 	return LinuxCloneGrant{Intent: value.Intent.Clone(), Seed: value.Seed.Clone()}
 }
 
+// LinuxCloneReuseStop mirrors the exact stopped native execution whose
+// retained session is being resumed. It is deliberately independent of the
+// state package so the RunJournal can persist the authority without an import
+// cycle.
+type LinuxCloneReuseStop struct {
+	RunID          string `json:"run_id"`
+	Generation     int64  `json:"generation"`
+	SessionID      string `json:"session_id"`
+	LocalHandleID  string `json:"local_handle_id"`
+	BindingID      string `json:"binding_id"`
+	DeliveryDigest string `json:"delivery_digest"`
+	ReceiptID      string `json:"receipt_id"`
+}
+
+func (value LinuxCloneReuseStop) Validate() error {
+	if !validLinuxCloneRunID(value.RunID) || value.Generation <= 0 ||
+		!validRequiredAuthorityString(value.SessionID, 4096) ||
+		!validRequiredAuthorityString(value.LocalHandleID, 4096) ||
+		!validRequiredAuthorityString(value.BindingID, 4096) ||
+		!validLowerHex(value.DeliveryDigest, LinuxCloneNonceBytes*2) ||
+		!validRequiredAuthorityString(value.ReceiptID, 4096) {
+		return errors.New("Linux clone reuse stop certificate is invalid")
+	}
+	return nil
+}
+
+func (value LinuxCloneReuseStop) Equal(other LinuxCloneReuseStop) bool {
+	return value == other
+}
+
+func (value LinuxCloneReuseStop) Clone() LinuxCloneReuseStop { return value }
+
+// LinuxCloneReuseGrant authorizes a new RunKey to consume the exact retained
+// target of a stopped predecessor. The source clone records remain owned by
+// the source RunJournal; this grant never transfers deletion or promotion
+// ownership.
+type LinuxCloneReuseGrant struct {
+	Version              int                       `json:"version"`
+	Source               LinuxCloneGrant           `json:"source"`
+	SourceCheckout       LinuxCloneCheckoutReceipt `json:"source_checkout"`
+	PredecessorStop      LinuxCloneReuseStop       `json:"predecessor_stop"`
+	RunID                string                    `json:"run_id"`
+	Generation           int64                     `json:"generation"`
+	WorkspaceFingerprint string                    `json:"workspace_fingerprint"`
+}
+
+func (value LinuxCloneReuseGrant) Validate() error {
+	if value.Version != LinuxCloneVersion || value.Source.Validate() != nil ||
+		value.SourceCheckout.Validate() != nil || value.PredecessorStop.Validate() != nil ||
+		!validLinuxCloneRunID(value.RunID) || value.Generation <= 0 ||
+		!validLinuxCloneDigest(value.WorkspaceFingerprint) {
+		return errors.New("Linux clone reuse grant is invalid")
+	}
+	if value.RunID == value.Source.Intent.RunID && value.Generation == value.Source.Intent.Generation {
+		return errors.New("Linux clone reuse grant must name a new RunKey")
+	}
+	intent := value.Source.Intent
+	receipt := value.SourceCheckout
+	if receipt.RunID != intent.RunID || receipt.Generation != intent.Generation ||
+		receipt.BindingKey != intent.BindingKey || receipt.ResourceID != intent.ResourceID ||
+		receipt.Target != intent.Target || receipt.Nonce != intent.Nonce ||
+		receipt.SeedDigest != value.Source.Seed.Digest || receipt.BaseCommit != intent.BaseCommit {
+		return errors.New("Linux clone reuse source checkout differs from its source grant")
+	}
+	return nil
+}
+
+func (value LinuxCloneReuseGrant) Equal(other LinuxCloneReuseGrant) bool {
+	return value.Version == other.Version && value.Source.Equal(other.Source) &&
+		value.SourceCheckout.Equal(other.SourceCheckout) &&
+		value.PredecessorStop.Equal(other.PredecessorStop) &&
+		value.RunID == other.RunID && value.Generation == other.Generation &&
+		value.WorkspaceFingerprint == other.WorkspaceFingerprint
+}
+
+func (value LinuxCloneReuseGrant) Clone() LinuxCloneReuseGrant {
+	return LinuxCloneReuseGrant{
+		Version:              value.Version,
+		Source:               value.Source.Clone(),
+		SourceCheckout:       value.SourceCheckout.Clone(),
+		PredecessorStop:      value.PredecessorStop.Clone(),
+		RunID:                value.RunID,
+		Generation:           value.Generation,
+		WorkspaceFingerprint: value.WorkspaceFingerprint,
+	}
+}
+
+func validRequiredAuthorityString(value string, limit int) bool {
+	return value != "" && len(value) <= limit && !strings.ContainsRune(value, '\x00')
+}
+
 // LinuxCloneCheckoutReceipt binds the B-created checkout to the reserved run,
 // binding, resource, target, seed, base commit and observed target inode. It is
 // not source-Git ownership evidence and cannot clear process containment.

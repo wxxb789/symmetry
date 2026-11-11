@@ -122,7 +122,7 @@ func TestLinuxOwnerHelperV2CloneCheckoutBindsExactRunGrant(t *testing.T) {
 		t.Fatalf("test clone grant is invalid: %v", err)
 	}
 	grant := LinuxOwnerAnchorGrant{RunKey: LinuxOwnerAnchorRunKey{RunID: intent.RunID, Generation: intent.Generation}}
-	if !linuxOwnerHelperV2CloneGrantMatchesRun(&clone, grant, intent.Target) {
+	if !linuxOwnerHelperV2CloneGrantMatchesRun(protocol.NativeCommand{Clone: &clone}, grant, intent.Target) {
 		t.Fatal("exact clone grant was not bound to its RunKey and B target")
 	}
 	receipt := authority.LinuxCloneCheckoutReceipt{
@@ -159,8 +159,96 @@ func TestLinuxOwnerHelperV2CloneCheckoutBindsExactRunGrant(t *testing.T) {
 			t.Fatalf("checkout receipt mutation %d matched a different clone grant", index)
 		}
 	}
-	if linuxOwnerHelperV2CloneGrantMatchesRun(&clone, grant, "/srv/symmetry/work/other") {
+	if linuxOwnerHelperV2CloneGrantMatchesRun(protocol.NativeCommand{Clone: &clone}, grant, "/srv/symmetry/work/other") {
 		t.Fatal("clone grant was accepted for a different B working directory")
+	}
+}
+
+func TestLinuxOwnerHelperReuseGrantBindsNewRunAndSourceCheckout(t *testing.T) {
+	intent := authority.LinuxCloneIntent{
+		Version: authority.LinuxCloneVersion, RunID: "run-source", Generation: 3, BindingKey: "primary",
+		ResourceID: "00000000-0000-4000-8000-000000000001",
+		BaseCommit: strings.Repeat("a", 40), BaseTreeDigest: "sha256:" + strings.Repeat("b", 64),
+		Nonce:    strings.Repeat("c", authority.LinuxCloneNonceBytes*2),
+		SeedPath: "/var/lib/symmetry/seeds/source.bundle",
+		Target:   "/var/lib/symmetry/checkouts/binding-primary/run-run-source/generation-3",
+	}
+	seed := authority.LinuxCloneSeedReceipt{
+		Version: authority.LinuxCloneVersion, BaseCommit: intent.BaseCommit,
+		Digest: "sha256:" + strings.Repeat("d", 64), Size: 128, Device: 7, Inode: 11,
+	}
+	checkout := authority.LinuxCloneCheckoutReceipt{
+		Version: authority.LinuxCloneVersion, RunID: intent.RunID, Generation: intent.Generation,
+		BindingKey: intent.BindingKey, ResourceID: intent.ResourceID, Target: intent.Target,
+		Nonce: intent.Nonce, SeedDigest: seed.Digest, BaseCommit: intent.BaseCommit,
+		TargetDevice: 9, TargetInode: 13,
+	}
+	reuse := authority.LinuxCloneReuseGrant{
+		Version:        authority.LinuxCloneVersion,
+		Source:         authority.LinuxCloneGrant{Intent: intent, Seed: seed},
+		SourceCheckout: checkout,
+		PredecessorStop: authority.LinuxCloneReuseStop{
+			RunID: "run-predecessor", Generation: 4, SessionID: "00000000-0000-4000-8000-000000000090",
+			LocalHandleID: "00000000-0000-4000-8000-000000000088", BindingID: "00000000-0000-4000-8000-000000000089",
+			DeliveryDigest: strings.Repeat("e", 64), ReceiptID: "00000000-0000-4000-8000-000000000093",
+		},
+		RunID: "run-new", Generation: 5, WorkspaceFingerprint: "sha256:" + strings.Repeat("f", 64),
+	}
+	anchor := LinuxOwnerAnchorGrant{RunKey: LinuxOwnerAnchorRunKey{RunID: reuse.RunID, Generation: reuse.Generation}}
+	if !linuxOwnerHelperV2CloneGrantMatchesRun(protocol.NativeCommand{Reuse: &reuse}, anchor, checkout.Target) {
+		t.Fatal("exact reuse grant was not bound to its new RunKey and retained target")
+	}
+	other := LinuxOwnerAnchorGrant{RunKey: LinuxOwnerAnchorRunKey{RunID: "run-other", Generation: reuse.Generation}}
+	if linuxOwnerHelperV2CloneGrantMatchesRun(protocol.NativeCommand{Reuse: &reuse}, other, checkout.Target) {
+		t.Fatal("reuse grant was accepted for a different RunKey")
+	}
+}
+
+func TestLinuxOwnerHelperReuseTargetRequiresExactInodeAndBIdentity(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "binding-primary", "run-run-source", "generation-1")
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stat := info.Sys().(*syscall.Stat_t)
+	intent := authority.LinuxCloneIntent{
+		Version: authority.LinuxCloneVersion, RunID: "run-source", Generation: 1, BindingKey: "primary",
+		ResourceID: "00000000-0000-4000-8000-000000000001",
+		BaseCommit: strings.Repeat("a", 40), BaseTreeDigest: "sha256:" + strings.Repeat("b", 64),
+		Nonce: strings.Repeat("c", authority.LinuxCloneNonceBytes*2), SeedPath: "/var/lib/symmetry/seeds/source.bundle",
+		Target: target,
+	}
+	seed := authority.LinuxCloneSeedReceipt{
+		Version: authority.LinuxCloneVersion, BaseCommit: intent.BaseCommit,
+		Digest: "sha256:" + strings.Repeat("d", 64), Size: 128, Device: 7, Inode: 11,
+	}
+	grant := authority.LinuxCloneReuseGrant{
+		Version: authority.LinuxCloneVersion,
+		Source:  authority.LinuxCloneGrant{Intent: intent, Seed: seed},
+		SourceCheckout: authority.LinuxCloneCheckoutReceipt{
+			Version: authority.LinuxCloneVersion, RunID: intent.RunID, Generation: intent.Generation,
+			BindingKey: intent.BindingKey, ResourceID: intent.ResourceID, Target: target,
+			Nonce: intent.Nonce, SeedDigest: seed.Digest, BaseCommit: intent.BaseCommit,
+			TargetDevice: uint64(stat.Dev), TargetInode: uint64(stat.Ino),
+		},
+		PredecessorStop: authority.LinuxCloneReuseStop{
+			RunID: intent.RunID, Generation: intent.Generation, SessionID: "00000000-0000-4000-8000-000000000090",
+			LocalHandleID: "00000000-0000-4000-8000-000000000088", BindingID: "00000000-0000-4000-8000-000000000089",
+			DeliveryDigest: strings.Repeat("e", 64), ReceiptID: "00000000-0000-4000-8000-000000000093",
+		},
+		RunID: "run-new", Generation: 2, WorkspaceFingerprint: "sha256:" + strings.Repeat("f", 64),
+	}
+	owner := protocol.OwnerConfig{BUID: uint32(os.Geteuid()), BGID: uint32(os.Getegid())}
+	if err := verifyLinuxCloneReuseTarget(grant, owner); err != nil {
+		t.Fatalf("exact retained target was rejected: %v", err)
+	}
+	owner.BUID++
+	if err := verifyLinuxCloneReuseTarget(grant, owner); err == nil {
+		t.Fatal("retained target was accepted for a different fixed-B UID")
 	}
 }
 

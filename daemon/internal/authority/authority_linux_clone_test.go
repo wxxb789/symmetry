@@ -421,3 +421,51 @@ func testLinuxCloneIntent() LinuxCloneIntent {
 		Target:   "/var/lib/symmetry/checkouts/binding-primary/run-run-1/generation-3",
 	}
 }
+
+func TestLinuxCloneReuseGrantBindsSourceCheckoutAndNewRun(t *testing.T) {
+	intent := testLinuxCloneIntent()
+	seed := LinuxCloneSeedReceipt{
+		Version: LinuxCloneVersion, BaseCommit: intent.BaseCommit,
+		Digest: "sha256:" + strings.Repeat("d", 64), Size: 128, Device: 7, Inode: 11,
+	}
+	checkout := LinuxCloneCheckoutReceipt{
+		Version: LinuxCloneVersion, RunID: intent.RunID, Generation: intent.Generation,
+		BindingKey: intent.BindingKey, ResourceID: intent.ResourceID, Target: intent.Target,
+		Nonce: intent.Nonce, SeedDigest: seed.Digest, BaseCommit: intent.BaseCommit,
+		TargetDevice: 19, TargetInode: 23,
+	}
+	grant := LinuxCloneReuseGrant{
+		Version:        LinuxCloneVersion,
+		Source:         LinuxCloneGrant{Intent: intent, Seed: seed},
+		SourceCheckout: checkout,
+		PredecessorStop: LinuxCloneReuseStop{
+			RunID: "run-0", Generation: 2, SessionID: "session-1",
+			LocalHandleID: "handle-1", BindingID: "binding-1",
+			DeliveryDigest: strings.Repeat("e", 64), ReceiptID: "receipt-1",
+		},
+		RunID:                "run-2",
+		Generation:           4,
+		WorkspaceFingerprint: "sha256:" + strings.Repeat("f", 64),
+	}
+	if err := grant.Validate(); err != nil {
+		t.Fatalf("reuse grant Validate() error = %v", err)
+	}
+	if !grant.Equal(grant.Clone()) {
+		t.Fatal("reuse grant Clone()/Equal() changed its value")
+	}
+	for name, mutate := range map[string]func(*LinuxCloneReuseGrant){
+		"same run":      func(value *LinuxCloneReuseGrant) { value.RunID, value.Generation = intent.RunID, intent.Generation },
+		"source target": func(value *LinuxCloneReuseGrant) { value.SourceCheckout.Target = "/tmp/other" },
+		"stop digest":   func(value *LinuxCloneReuseGrant) { value.PredecessorStop.DeliveryDigest = "short" },
+		"fingerprint":   func(value *LinuxCloneReuseGrant) { value.WorkspaceFingerprint = "bad" },
+		"source seed":   func(value *LinuxCloneReuseGrant) { value.Source.Seed.Digest = "sha256:" + strings.Repeat("a", 64) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := grant.Clone()
+			mutate(&changed)
+			if changed.Validate() == nil {
+				t.Fatal("invalid reuse grant was accepted")
+			}
+		})
+	}
+}

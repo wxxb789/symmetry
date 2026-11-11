@@ -395,11 +395,12 @@ type linuxOwnerHelperV2BootstrapReady struct {
 }
 
 type linuxOwnerHelperV2Command struct {
-	Path  string                     `json:"path"`
-	Args  []string                   `json:"args"`
-	Env   []string                   `json:"env"`
-	Dir   string                     `json:"dir"`
-	Clone *authority.LinuxCloneGrant `json:"clone,omitempty"`
+	Path  string                          `json:"path"`
+	Args  []string                        `json:"args"`
+	Env   []string                        `json:"env"`
+	Dir   string                          `json:"dir"`
+	Clone *authority.LinuxCloneGrant      `json:"clone,omitempty"`
+	Reuse *authority.LinuxCloneReuseGrant `json:"reuse,omitempty"`
 }
 
 type linuxOwnerHelperV2Request struct {
@@ -467,9 +468,17 @@ func (response linuxOwnerHelperV2Response) matches(grant LinuxOwnerAnchorGrant, 
 		response.Fence == grant.Fence && response.LaunchToken == grant.LaunchToken && response.Helper.Equal(helper)
 }
 
-func linuxOwnerHelperV2CloneGrantMatchesRun(clone *authority.LinuxCloneGrant, grant LinuxOwnerAnchorGrant, target string) bool {
-	return clone != nil && clone.Validate() == nil && clone.Intent.RunID == grant.RunKey.RunID &&
-		clone.Intent.Generation == grant.RunKey.Generation && clone.Intent.Target == target
+func linuxOwnerHelperV2CloneGrantMatchesRun(command linuxgate.NativeCommand, grant LinuxOwnerAnchorGrant, target string) bool {
+	if command.Clone != nil && command.Reuse != nil {
+		return false
+	}
+	if command.Clone != nil {
+		return command.Clone.Validate() == nil && command.Clone.Intent.RunID == grant.RunKey.RunID &&
+			command.Clone.Intent.Generation == grant.RunKey.Generation && command.Clone.Intent.Target == target
+	}
+	return command.Reuse != nil && command.Reuse.Validate() == nil &&
+		command.Reuse.RunID == grant.RunKey.RunID && command.Reuse.Generation == grant.RunKey.Generation &&
+		command.Reuse.SourceCheckout.Target == target
 }
 
 func linuxOwnerHelperV2CheckoutReceiptMatches(receipt authority.LinuxCloneCheckoutReceipt, clone authority.LinuxCloneGrant) bool {
@@ -1427,9 +1436,10 @@ func (client *LinuxOwnerHelperV2Client) RenewLease(ctx context.Context, deadline
 	return nil
 }
 
-// Release requests one guarded production Clone release. The callback must
-// durably persist and read back the exact checkout receipt; no B exec proceeds
-// unless it returns nil, and an unknown result never retries RELEASE.
+// Release requests one guarded production clone or retained-reuse release. A
+// clone callback must durably persist and read back the exact checkout receipt;
+// no B exec proceeds unless it returns nil, and an unknown result never retries
+// RELEASE.
 func (client *LinuxOwnerHelperV2Client) Release(
 	ctx context.Context,
 	command linuxgate.NativeCommand,
@@ -1438,17 +1448,26 @@ func (client *LinuxOwnerHelperV2Client) Release(
 	if client == nil || ctx == nil {
 		return errors.New("Linux owner helper release client is incomplete")
 	}
-	if command.Clone == nil || onCheckoutReady == nil ||
-		!linuxOwnerHelperV2CloneGrantMatchesRun(command.Clone, client.grant, command.Dir) {
-		return errors.New("production Linux owner helper release requires the exact B-owned clone grant and durable checkout callback")
+	if (command.Clone == nil && command.Reuse == nil) || (command.Clone == nil && onCheckoutReady != nil) ||
+		!linuxOwnerHelperV2CloneGrantMatchesRun(command, client.grant, command.Dir) {
+		return errors.New("production Linux owner helper release requires exactly one exact B-owned clone or reuse grant")
 	}
 	if err := command.Validate(); err != nil {
 		return err
 	}
-	cloneGrant := command.Clone.Clone()
+	var cloneGrant *authority.LinuxCloneGrant
+	if command.Clone != nil {
+		copy := command.Clone.Clone()
+		cloneGrant = &copy
+	}
+	var reuse *authority.LinuxCloneReuseGrant
+	if command.Reuse != nil {
+		copy := command.Reuse.Clone()
+		reuse = &copy
+	}
 	wire := &linuxOwnerHelperV2Command{
 		Path: command.Path, Args: append([]string(nil), command.Args...),
-		Env: append([]string(nil), command.Env...), Dir: command.Dir, Clone: &cloneGrant,
+		Env: append([]string(nil), command.Env...), Dir: command.Dir, Clone: cloneGrant, Reuse: reuse,
 	}
 	request := client.newRequest("release")
 	request.Command = wire
@@ -1469,7 +1488,7 @@ func (client *LinuxOwnerHelperV2Client) releaseWithCheckoutReady(
 	ctx context.Context,
 	request linuxOwnerHelperV2Request,
 	fds []int,
-	cloneGrant authority.LinuxCloneGrant,
+	cloneGrant *authority.LinuxCloneGrant,
 	onCheckoutReady func(context.Context, authority.LinuxCloneCheckoutReceipt) error,
 ) error {
 	client.mu.Lock()
@@ -1497,8 +1516,8 @@ func (client *LinuxOwnerHelperV2Client) releaseWithCheckoutReady(
 		}
 		switch response.Operation {
 		case "checkout-ready":
-			if checkoutSeen || response.Status != "ready" || response.CheckoutReceipt == nil ||
-				!linuxOwnerHelperV2CheckoutReceiptMatches(*response.CheckoutReceipt, cloneGrant) {
+			if cloneGrant == nil || checkoutSeen || response.Status != "ready" || response.CheckoutReceipt == nil ||
+				!linuxOwnerHelperV2CheckoutReceiptMatches(*response.CheckoutReceipt, *cloneGrant) {
 				client.invalidateLocked()
 				return errors.New("Linux owner helper checkout-ready receipt differs from the exact clone grant")
 			}
@@ -1541,7 +1560,7 @@ func (client *LinuxOwnerHelperV2Client) releaseWithCheckoutReady(
 				_ = client.connection.SetDeadline(time.Time{})
 				return linuxOwnerHelperV2ResponseError(response)
 			}
-			if !checkoutSeen || response.OwnerLost || !response.CommitAcknowledged || !response.ReleaseAttempted ||
+			if (cloneGrant != nil && !checkoutSeen) || response.OwnerLost || !response.CommitAcknowledged || !response.ReleaseAttempted ||
 				!response.Released || response.CheckoutReceipt != nil {
 				client.invalidateLocked()
 				return errors.New("Linux owner helper release response violates the durable Clone checkout contract")
@@ -3163,7 +3182,7 @@ func (helper *linuxOwnerHelperV2) handleRenewLease(connection *net.UnixConn, req
 }
 
 func (helper *linuxOwnerHelperV2) handleRelease(connection *net.UnixConn, request linuxOwnerHelperV2Request, rights []int) error {
-	if len(rights) != 3 || request.Command == nil || request.Command.Clone == nil || request.Helper != nil ||
+	if len(rights) != 3 || request.Command == nil || (request.Command.Clone == nil && request.Command.Reuse == nil) || request.Helper != nil ||
 		request.Launcher != nil || request.Gate != nil || request.LauncherExit != nil || request.Sequence != 0 ||
 		request.LeaseNanos != 0 || request.Accepted || request.CheckoutReceipt != nil || request.Receipt != nil ||
 		request.PreGateReceipt != nil || request.ReleaseProof != nil || request.PreGateReleaseProof != nil || request.AbortProof != nil {
@@ -3190,13 +3209,26 @@ func (helper *linuxOwnerHelperV2) handleRelease(connection *net.UnixConn, reques
 		Env: append([]string(nil), request.Command.Env...), Dir: request.Command.Dir,
 		Stdin: files[0], Stdout: files[1], Stderr: files[2],
 	}
-	cloneGrant := request.Command.Clone.Clone()
-	if !linuxOwnerHelperV2CloneGrantMatchesRun(&cloneGrant, helper.grant, command.Dir) {
+	var cloneGrant *authority.LinuxCloneGrant
+	if request.Command.Clone != nil {
+		copy := request.Command.Clone.Clone()
+		cloneGrant = &copy
+		command.Clone = cloneGrant
+	}
+	if request.Command.Reuse != nil {
+		copy := request.Command.Reuse.Clone()
+		command.Reuse = &copy
+	}
+	if !linuxOwnerHelperV2CloneGrantMatchesRun(command, helper.grant, command.Dir) {
 		return helper.writeResponse(connection, "release", "rejected", nil, nil, nil, nil, nil, 0, nil, "clone_grant_mismatch")
 	}
-	command.Clone = &cloneGrant
 	if err := command.Validate(); err != nil {
 		return helper.writeResponse(connection, "release", "rejected", nil, nil, nil, nil, nil, 0, nil, "native_command_invalid")
+	}
+	if command.Reuse != nil {
+		if err := verifyLinuxCloneReuseTarget(*command.Reuse, helper.owner); err != nil {
+			return helper.writeResponse(connection, "release", "rejected", nil, nil, nil, nil, nil, 0, nil, "reuse_target_mismatch")
+		}
 	}
 	helper.stateMu.Lock()
 	sequence, leaseDeadline, leaseLive := helper.lease.releaseGuard()
@@ -3232,11 +3264,14 @@ func (helper *linuxOwnerHelperV2) handleRelease(connection *net.UnixConn, reques
 	}
 	ownerPipe := helper.ownerPipe
 	helper.stateMu.Unlock()
-	onCheckoutReady := func(callbackContext context.Context, receipt authority.LinuxCloneCheckoutReceipt) error {
-		if !linuxOwnerHelperV2CheckoutReceiptMatches(receipt, cloneGrant) {
-			return errors.New("Linux gate checkout receipt differs from the exact clone grant")
+	var onCheckoutReady func(context.Context, authority.LinuxCloneCheckoutReceipt) error
+	if cloneGrant != nil {
+		onCheckoutReady = func(callbackContext context.Context, receipt authority.LinuxCloneCheckoutReceipt) error {
+			if !linuxOwnerHelperV2CheckoutReceiptMatches(receipt, *cloneGrant) {
+				return errors.New("Linux gate checkout receipt differs from the exact clone grant")
+			}
+			return helper.relayCheckoutReady(callbackContext, connection, request, *cloneGrant, receipt)
 		}
-		return helper.relayCheckoutReady(callbackContext, connection, request, cloneGrant, receipt)
 	}
 	var err error
 	if gateIdentity == nil || gateUserNamespace == nil {
@@ -3313,6 +3348,30 @@ func (helper *linuxOwnerHelperV2) handleRelease(connection *net.UnixConn, reques
 		return responseErr
 	}
 	return helper.writeResponse(connection, "release", "released", nil, nil, nil, nil, nil, sequence, nil, "")
+}
+
+func verifyLinuxCloneReuseTarget(grant authority.LinuxCloneReuseGrant, owner linuxgate.OwnerConfig) error {
+	if err := grant.Validate(); err != nil {
+		return err
+	}
+	target := grant.SourceCheckout.Target
+	if !filepath.IsAbs(target) || filepath.Clean(target) != target {
+		return errors.New("Linux clone reuse target is not canonical")
+	}
+	info, err := os.Lstat(target)
+	if err != nil {
+		return fmt.Errorf("stat Linux clone reuse target: %w", err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("Linux clone reuse target is not a real directory")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || uint64(stat.Dev) != grant.SourceCheckout.TargetDevice ||
+		uint64(stat.Ino) != grant.SourceCheckout.TargetInode ||
+		stat.Uid != uint32(owner.BUID) || stat.Gid != uint32(owner.BGID) {
+		return errors.New("Linux clone reuse target identity differs from its receipt or B owner")
+	}
+	return nil
 }
 
 func (helper *linuxOwnerHelperV2) waitForWitnessSelectorUnlink() error {

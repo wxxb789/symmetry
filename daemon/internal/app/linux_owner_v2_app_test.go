@@ -2682,7 +2682,7 @@ func TestLinuxV2AdmissionGateDoesNotSuppressLegacyCodexAssignment(t *testing.T) 
 	}
 }
 
-func TestLinuxV2PiResumeRequiresSeparateCloneReuseGrant(t *testing.T) {
+func TestLinuxV2PiResumeWithoutRetainedSessionFailsBeforeNativeStart(t *testing.T) {
 	admission, present, err := parseAdmissionInput(validAdmissionInput())
 	if err != nil || !present {
 		t.Fatalf("parse admission = present:%t error:%v", present, err)
@@ -2709,9 +2709,9 @@ func TestLinuxV2PiResumeRequiresSeparateCloneReuseGrant(t *testing.T) {
 	adapter := adapterValue.(*fakeNativeGoalAdapter)
 	app.startAssignment(context.Background(), protocol.Assignment{RunID: "run-1", Generation: 1, Work: controlClient.work})
 	app.workers.Wait()
-	if owner.preflights != 0 || owner.invocations != 0 || adapter.probeCalls != 0 || len(session.callsSnapshot()) != 0 ||
+	if owner.preflights != 1 || owner.invocations != 0 || adapter.probeCalls != 1 || len(session.callsSnapshot()) != 0 ||
 		len(controlClient.calls) != 0 || app.workspace.(*fakeWorkspace).prepareCalls != 0 || app.workspace.(*fakeWorkspace).recoverCalls != 0 {
-		t.Fatalf("Linux v2 retained-session resume crossed the separately fenced clone-reuse boundary: preflight=%d build=%d probe=%d native=%#v control=%#v workspace=%#v",
+		t.Fatalf("Linux v2 resume without a retained session crossed the native boundary: preflight=%d build=%d probe=%d native=%#v control=%#v workspace=%#v",
 			owner.preflights, owner.invocations, adapter.probeCalls, session.callsSnapshot(), controlClient.calls, app.workspace)
 	}
 	journal, err := store.LoadJournal(state.RunKey{RunID: "run-1", Generation: 1})
@@ -3649,6 +3649,10 @@ func (*linuxCloneWorkspaceCallbackFixture) PrepareLinuxClone(context.Context, au
 	return workspace.Prepared{}, errors.New("unexpected clone prepare in callback fixture")
 }
 
+func (*linuxCloneWorkspaceCallbackFixture) RecoverLinuxCloneReuse(context.Context, authority.LinuxCloneReuseGrant) (workspace.Prepared, error) {
+	return workspace.Prepared{}, errors.New("unexpected clone reuse in callback fixture")
+}
+
 func (*linuxCloneWorkspaceCallbackFixture) ValidateLinuxCloneCheckout(authority.LinuxCloneGrant, authority.LinuxCloneCheckoutReceipt) error {
 	return nil
 }
@@ -3934,5 +3938,97 @@ func saveLinuxCloneAbortGoalSession(
 	}
 	if _, err := store.SaveGoalSessionLaunchIntent(intent); err != nil {
 		t.Fatalf("save retained GoalSession owner: %v", err)
+	}
+}
+
+func TestBindLinuxCloneReuseRequiresStoppedSourceAndStableSession(t *testing.T) {
+	fixture := newLinuxCloneAppRetainedNonGoalFixtureAt(t, t.TempDir())
+	sourceKey := fixture.key
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse reuse fixture admission: present=%t err=%v", present, err)
+	}
+	source, err := fixture.store.LoadJournal(sourceKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controlSessionID := "00000000-0000-4000-8000-000000000090"
+	localHandleID := "00000000-0000-4000-8000-000000000088"
+	bindingID := "00000000-0000-4000-8000-000000000089"
+	sessionKey := state.GoalSessionKey{GoalID: admission.GoalID, LocalHandleID: localHandleID}
+	workspaceFingerprint := "sha256:" + strings.Repeat("a", 64)
+	if _, err := fixture.store.SaveGoalSessionLaunchIntent(state.GoalSessionLaunchIntent{
+		LaunchIntentID: "00000000-0000-4000-8000-000000000087", GoalID: admission.GoalID,
+		GoalRevision: admission.GoalRevision, WorkItemID: admissionWorkItemIDValue(admission.WorkItemID),
+		TaskID: "task-source", RunID: sourceKey.RunID, Generation: sourceKey.Generation,
+		AdmissionID: admission.AdmissionID, LocalHandleID: localHandleID, BindingID: bindingID,
+		MachineID: "machine-1", RuntimeID: source.RuntimeID, RuntimeEpoch: source.ClaimedRuntimeEpoch,
+		HarnessKind: "pi", HarnessVersion: "1.5.2", AdapterVersion: "adapter-test", AdapterProtocolVersion: 1,
+		WorkspaceFingerprint: workspaceFingerprint, WorkspacePath: source.WorkspacePath,
+		WorkspaceOwnerRunKey: state.WorkspaceOwnerRunKey{RunID: sourceKey.RunID, Generation: sourceKey.Generation},
+		RepositoryResourceID: admission.Subject.ResourceID, SessionMode: state.GoalSessionModeFresh,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.MarkGoalSessionLaunchStarted(sessionKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.PersistGoalSessionHandle(sessionKey, state.GoalSessionHandle{
+		NativeSessionID: "native-retained", NativeSessionFilename: filepath.Join(t.TempDir(), "session.jsonl"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.PersistGoalSessionControlAttachment(sessionKey, controlSessionID, bindingID, "00000000-0000-4000-8000-000000000092", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.MarkGoalSessionStoppedPending(sessionKey); err != nil {
+		t.Fatal(err)
+	}
+	certificate := state.GoalSessionStopCertificate{
+		RunID: sourceKey.RunID, Generation: sourceKey.Generation, SessionID: controlSessionID,
+		LocalHandleID: localHandleID, BindingID: bindingID,
+		DeliveryDigest: strings.Repeat("b", 64), ReceiptID: "00000000-0000-4000-8000-000000000093",
+	}
+	session, err := fixture.store.MarkGoalSessionAvailable(sessionKey, certificate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reuse := authority.LinuxCloneReuseGrant{
+		Version:        authority.LinuxCloneVersion,
+		Source:         authority.LinuxCloneGrant{Intent: fixture.grant.Intent, Seed: fixture.grant.Seed},
+		SourceCheckout: fixture.checkout,
+		PredecessorStop: authority.LinuxCloneReuseStop{
+			RunID: certificate.RunID, Generation: certificate.Generation, SessionID: certificate.SessionID,
+			LocalHandleID: certificate.LocalHandleID, BindingID: certificate.BindingID,
+			DeliveryDigest: certificate.DeliveryDigest, ReceiptID: certificate.ReceiptID,
+		},
+		RunID: "00000000-0000-4000-8000-000000000099", Generation: 1,
+		WorkspaceFingerprint: session.WorkspaceFingerprint,
+	}
+	targetKey := state.RunKey{RunID: reuse.RunID, Generation: reuse.Generation}
+	work := protocol.Work{Goal: "reuse", AgentProfile: "local", Workspace: "local", Input: validAdmissionInput()}
+	if _, err := fixture.store.SaveClaimIntent(state.ClaimIntent{
+		Key: targetKey, RuntimeKey: "default", RuntimeID: "runtime-1", RuntimeEpoch: 1,
+		ClaimID: "reuse-claim", LocalState: "claiming", Work: work, WorkspaceBindingKey: "local",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.SaveClaimGrant(targetKey, protocol.ClaimResponse{
+		RunID: targetKey.RunID, Generation: targetKey.Generation, ClaimID: "reuse-claim", LeaseToken: "reuse-lease",
+		LeaseExpiresAt: time.Now().Add(time.Minute), Work: work,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	targetFence := protocol.Fence{
+		RuntimeID: "runtime-1", RuntimeEpoch: 1, Generation: targetKey.Generation,
+		ClaimID: "reuse-claim", LeaseToken: "reuse-lease",
+	}
+	bound, err := fixture.store.BindLinuxCloneReuse(targetKey, targetFence, reuse, nil)
+	if err != nil {
+		t.Fatalf("bind exact retained clone reuse: %v", err)
+	}
+	if bound.LinuxCloneReuseGrant == nil || !bound.LinuxCloneReuseGrant.Equal(reuse) ||
+		bound.WorkspacePath != fixture.checkout.Target || !bound.WorkspaceRecoveryRequired || !bound.RetainWorkspace {
+		t.Fatalf("bound reuse journal lost its exact retained target: %#v", bound)
 	}
 }

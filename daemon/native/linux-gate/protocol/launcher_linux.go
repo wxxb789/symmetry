@@ -412,6 +412,7 @@ type NativeCommand struct {
 	Stdout *os.File
 	Stderr *os.File
 	Clone  *authority.LinuxCloneGrant
+	Reuse  *authority.LinuxCloneReuseGrant
 }
 
 // ReleaseGuard binds the one-use RELEASE to the helper's live owner pipe and
@@ -1103,6 +1104,10 @@ func (gate *PreparedGate) Release(ctx context.Context, leafFD int, command Nativ
 	if err := validateReleaseOwnerPipe(guard.OwnerPipe, command); err != nil {
 		gate.mu.Unlock()
 		return err
+	}
+	if command.Clone != nil && command.Reuse != nil {
+		gate.mu.Unlock()
+		return errors.New("Linux native command cannot carry both clone and reuse authority")
 	}
 	if (command.Clone != nil) != (onCheckoutReady != nil) {
 		gate.mu.Unlock()
@@ -2756,6 +2761,13 @@ func (command NativeCommand) validateFields() error {
 		}
 		if command.Dir != command.Clone.Intent.Target {
 			return errors.New("Linux clone native working directory differs from its exact target")
+		}
+	} else if command.Reuse != nil {
+		if err := command.Reuse.Validate(); err != nil {
+			return fmt.Errorf("validate retained Linux clone reuse grant: %w", err)
+		}
+		if command.Dir != command.Reuse.SourceCheckout.Target {
+			return errors.New("Linux clone reuse working directory differs from its retained target")
 		}
 	}
 	total := len(command.Path) + len(command.Dir)

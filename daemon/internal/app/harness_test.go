@@ -1025,9 +1025,6 @@ func TestPiAdmissionsRejectInvalidRPCProfileBeforeNativeLaunch(t *testing.T) {
 					}
 					payload := string(journal.PendingTransitions[0].Payload)
 					wantFailure := "validate pi RPC invocation before native launch"
-					if test.mode == protocol.SessionModeResume && runtime.GOOS == "linux" {
-						wantFailure = string(protocol.TaskResultReasonResumeRejected)
-					}
 					if !strings.Contains(payload, wantFailure) {
 						t.Fatalf("admission failure = %s, want %q", payload, wantFailure)
 					}

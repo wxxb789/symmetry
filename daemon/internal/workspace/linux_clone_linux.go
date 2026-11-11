@@ -336,6 +336,36 @@ func (manager *Manager) PrepareLinuxClone(ctx context.Context, grant authority.L
 	}, nil
 }
 
+// RecoverLinuxCloneReuse validates that the exact stopped source target still
+// exists at its recorded device/inode and returns the source-owned Prepared
+// identity for a new consuming RunKey. It performs no Git, clone, checkout,
+// promotion or deletion effect.
+func (manager *Manager) RecoverLinuxCloneReuse(ctx context.Context, reuse authority.LinuxCloneReuseGrant) (Prepared, error) {
+	if manager == nil {
+		return Prepared{}, errors.New("workspace manager is nil")
+	}
+	if ctx == nil {
+		return Prepared{}, errors.New("Linux clone reuse recovery context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return Prepared{}, err
+	}
+	if err := reuse.Validate(); err != nil {
+		return Prepared{}, err
+	}
+	prepared, err := manager.PrepareLinuxClone(ctx, reuse.Source)
+	if err != nil {
+		return Prepared{}, fmt.Errorf("validate retained Linux clone source: %w", err)
+	}
+	if prepared.Path != reuse.SourceCheckout.Target {
+		return Prepared{}, errors.New("retained Linux clone source path differs from its reuse receipt")
+	}
+	if err := manager.ValidateLinuxCloneCheckout(reuse.Source, reuse.SourceCheckout); err != nil {
+		return Prepared{}, fmt.Errorf("validate retained Linux clone target identity: %w", err)
+	}
+	return prepared, nil
+}
+
 // ValidateLinuxCloneCheckout verifies the gate-produced checkout receipt
 // against the reserved grant and a no-follow stat of the exact target inode.
 // It never consults B's .git metadata or runs Git against the target.

@@ -202,6 +202,7 @@ type linuxV2CloneWorkspace interface {
 	PlanLinuxCloneIntent(string, workspace.RunRef, protocol.Subject) (authority.LinuxCloneIntent, error)
 	PrepareLinuxCloneSeed(context.Context, authority.LinuxCloneIntent) (authority.LinuxCloneSeedReceipt, error)
 	PrepareLinuxClone(context.Context, authority.LinuxCloneGrant) (workspace.Prepared, error)
+	RecoverLinuxCloneReuse(context.Context, authority.LinuxCloneReuseGrant) (workspace.Prepared, error)
 	ValidateLinuxCloneCheckout(authority.LinuxCloneGrant, authority.LinuxCloneCheckoutReceipt) error
 	PromoteLinuxClone(context.Context, authority.LinuxCloneGrant, authority.LinuxCloneCheckoutReceipt, authority.LinuxClonePromotionIntent, platform.LinuxCgroupV2Release) (authority.LinuxClonePromotionReceipt, error)
 	ReadExistingLinuxClonePromotion(context.Context, authority.LinuxCloneIntent, authority.LinuxClonePromotionIntent, state.RunJournal, platform.LinuxCgroupV2Release) (authority.LinuxClonePromotionReceipt, error)
@@ -1620,6 +1621,16 @@ func (daemon *daemon) checkLinuxV2NativeAdmissionBeforeClaim(ctx context.Context
 func (daemon *daemon) checkLinuxV2NativeAdmission(ctx context.Context, key state.RunKey, fence protocol.Fence) error {
 	return daemon.withLinuxV2NativeAdmission(ctx, key, func(liveOwners map[state.RunKey]protocol.Fence) error {
 		return daemon.store.CheckLinuxV2NativeAdmission(key, fence, daemon.now(), liveOwners)
+	})
+}
+
+func (daemon *daemon) bindLinuxCloneReuse(ctx context.Context, key state.RunKey, fence protocol.Fence, grant authority.LinuxCloneReuseGrant) error {
+	if daemon == nil || daemon.store == nil {
+		return errors.New("Linux clone reuse requires the App Store")
+	}
+	return daemon.withLinuxV2NativeAdmission(ctx, key, func(liveOwners map[state.RunKey]protocol.Fence) error {
+		_, err := daemon.store.BindLinuxCloneReuse(key, fence, grant, liveOwners)
+		return err
 	})
 }
 
@@ -4386,6 +4397,7 @@ type resumedGoalSession struct {
 	prepared    workspace.Prepared
 	fingerprint string
 	resume      harness.ResumeHandle
+	reuse       *authority.LinuxCloneReuseGrant
 }
 
 // recoverPiGoalSessionForResume proves that the Control reservation names one
@@ -4393,7 +4405,7 @@ type resumedGoalSession struct {
 // the admitted Subject. It deliberately makes no native or state transition;
 // the caller consumes the stopped certificate with the CAS immediately before
 // it creates the new native process.
-func (daemon *daemon) recoverPiGoalSessionForResume(ctx context.Context, claim protocol.ClaimResponse, admission protocol.Admission) (resumedGoalSession, error) {
+func (daemon *daemon) recoverPiGoalSessionForResume(ctx context.Context, key state.RunKey, claim protocol.ClaimResponse, admission protocol.Admission, linuxV2 bool) (resumedGoalSession, error) {
 	if admission.RequestedSessionID == nil || claim.HarnessSessionID == nil || *admission.RequestedSessionID != *claim.HarnessSessionID {
 		return resumedGoalSession{}, errors.New("resume admission and claim do not name the same harness session")
 	}
@@ -4420,20 +4432,63 @@ func (daemon *daemon) recoverPiGoalSessionForResume(ctx context.Context, claim p
 	if session.WorkspaceOwnerRunKey.RunID == "" || session.WorkspaceOwnerRunKey.Generation <= 0 || session.WorkspacePath == "" {
 		return resumedGoalSession{}, errors.New("retained pi session has no recoverable workspace owner")
 	}
-	workspaceService, ok := daemon.workspace.(goalRecoveredSubjectWorkspace)
-	if !ok {
-		return resumedGoalSession{}, errors.New("workspace service does not support retained Goal subjects")
-	}
 	owner := session.WorkspaceOwnerRunKey
-	recovered, err := workspaceService.RecoverSubject(ctx, daemon.config.Runtime.Workspace, workspace.RunRef{RunID: owner.RunID, Generation: owner.Generation}, session.WorkspacePath, admission.Subject)
-	if err != nil {
-		return resumedGoalSession{}, fmt.Errorf("recover retained Goal Subject workspace: %w", err)
+	var prepared workspace.Prepared
+	var reuse *authority.LinuxCloneReuseGrant
+	if linuxV2 {
+		cloneWorkspace, ok := daemon.workspace.(linuxV2CloneWorkspace)
+		if !ok {
+			return resumedGoalSession{}, errors.New("workspace service does not support Linux clone reuse")
+		}
+		source, err := daemon.store.LoadJournal(state.RunKey{RunID: owner.RunID, Generation: owner.Generation})
+		if err != nil {
+			return resumedGoalSession{}, fmt.Errorf("load retained Linux clone source journal: %w", err)
+		}
+		if source.LinuxCloneIntent == nil || source.LinuxCloneSeedReceipt == nil || source.LinuxCloneCheckoutReceipt == nil {
+			return resumedGoalSession{}, errors.New("retained Linux clone source journal has no complete clone provenance")
+		}
+		stop := session.StopCertificate
+		grant := authority.LinuxCloneReuseGrant{
+			Version: authority.LinuxCloneVersion,
+			Source: authority.LinuxCloneGrant{
+				Intent: source.LinuxCloneIntent.Clone(),
+				Seed:   source.LinuxCloneSeedReceipt.Clone(),
+			},
+			SourceCheckout: source.LinuxCloneCheckoutReceipt.Clone(),
+			PredecessorStop: authority.LinuxCloneReuseStop{
+				RunID: stop.RunID, Generation: stop.Generation, SessionID: stop.SessionID,
+				LocalHandleID: stop.LocalHandleID, BindingID: stop.BindingID,
+				DeliveryDigest: stop.DeliveryDigest, ReceiptID: stop.ReceiptID,
+			},
+			RunID:                key.RunID,
+			Generation:           key.Generation,
+			WorkspaceFingerprint: session.WorkspaceFingerprint,
+		}
+		prepared, err = cloneWorkspace.RecoverLinuxCloneReuse(ctx, grant)
+		if err != nil {
+			return resumedGoalSession{}, fmt.Errorf("recover retained Linux clone reuse: %w", err)
+		}
+		reuse = &grant
+	} else {
+		workspaceService, ok := daemon.workspace.(goalRecoveredSubjectWorkspace)
+		if !ok {
+			return resumedGoalSession{}, errors.New("workspace service does not support retained Goal subjects")
+		}
+		recovered, err := workspaceService.RecoverSubject(ctx, daemon.config.Runtime.Workspace, workspace.RunRef{RunID: owner.RunID, Generation: owner.Generation}, session.WorkspacePath, admission.Subject)
+		if err != nil {
+			return resumedGoalSession{}, fmt.Errorf("recover retained Goal Subject workspace: %w", err)
+		}
+		if recovered.Subject != admission.Subject || recovered.Prepared.Path != session.WorkspacePath ||
+			recovered.Prepared.BindingKey != daemon.config.Runtime.Workspace || recovered.Prepared.Run != (workspace.RunRef{RunID: owner.RunID, Generation: owner.Generation}) {
+			return resumedGoalSession{}, errors.New("recovered retained Goal workspace does not match its durable owner")
+		}
+		prepared = recovered.Prepared
 	}
-	if recovered.Subject != admission.Subject || recovered.Prepared.Path != session.WorkspacePath ||
-		recovered.Prepared.BindingKey != daemon.config.Runtime.Workspace || recovered.Prepared.Run != (workspace.RunRef{RunID: owner.RunID, Generation: owner.Generation}) {
-		return resumedGoalSession{}, errors.New("recovered retained Goal workspace does not match its durable owner")
+	if prepared.Path != session.WorkspacePath || prepared.BindingKey != daemon.config.Runtime.Workspace ||
+		prepared.Run != (workspace.RunRef{RunID: owner.RunID, Generation: owner.Generation}) {
+		return resumedGoalSession{}, errors.New("recovered retained workspace does not match its durable owner")
 	}
-	fingerprint, err := workspaceFingerprint(ctx, recovered.Prepared)
+	fingerprint, err := workspaceFingerprint(ctx, prepared)
 	if err != nil {
 		return resumedGoalSession{}, fmt.Errorf("fingerprint retained Goal workspace: %w", err)
 	}
@@ -4442,8 +4497,9 @@ func (daemon *daemon) recoverPiGoalSessionForResume(ctx context.Context, claim p
 	}
 	return resumedGoalSession{
 		journal:     session,
-		prepared:    recovered.Prepared,
+		prepared:    prepared,
 		fingerprint: fingerprint,
+		reuse:       reuse,
 		resume: harness.ResumeHandle{
 			LocalHandleID:         session.LocalHandleID,
 			NativeSessionID:       session.NativeSessionID,
@@ -4483,6 +4539,7 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 	nativeLaunchAttempted := false
 	cloneLaunchStarted := false
 	var linuxClone *linuxCloneRun
+	var linuxCloneReuse *authority.LinuxCloneReuseGrant
 	var linuxV2Fence protocol.Fence
 	var releaseLinuxV2LaunchPhase func()
 	defer func() {
@@ -4566,12 +4623,19 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 		linuxV2Environment []string
 		linuxV2Required    = requiresLinuxV2NativeOwner(configuredKind)
 	)
+	if configuredKind == harness.KindPi {
+		if err := pi.ValidateRPCProfileArgs(profile.Args); err != nil {
+			return fmt.Errorf("validate pi RPC invocation before native launch: %w", err)
+		}
+		if providerAccess != nil {
+			if err := pi.ValidateProviderBridgeProfileArgs(profile.Args); err != nil {
+				return fmt.Errorf("validate pi provider bridge invocation before native launch: %w", err)
+			}
+		}
+	}
 	if linuxV2Required {
 		if claim.RunID != key.RunID || claim.Generation != key.Generation || claim.ClaimID == "" || claim.LeaseToken == "" {
 			return errors.New("Linux v2 native admission claim does not match the exact RunKey fence")
-		}
-		if admission.SessionMode == protocol.SessionModeResume {
-			return taskResultFailure(protocol.TaskResultReasonResumeRejected, errors.New("Linux v2 retained-session resume requires a separately fenced B-clone reuse receipt; the prior RunKey does not authorize target reuse"))
 		}
 		linuxV2Fence = protocol.Fence{
 			RuntimeID: daemon.runtimeID, RuntimeEpoch: daemon.runtimeEpoch, Generation: key.Generation,
@@ -4587,16 +4651,6 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 		linuxV2Owner, linuxV2Environment, err = daemon.prepareLinuxV2NativeOwner(ctx, key, linuxV2Fence, configuredKind, profile, providerAccess != nil)
 		if err != nil {
 			return err
-		}
-	}
-	if configuredKind == harness.KindPi {
-		if err := pi.ValidateRPCProfileArgs(profile.Args); err != nil {
-			return fmt.Errorf("validate pi RPC invocation before native launch: %w", err)
-		}
-		if providerAccess != nil {
-			if err := pi.ValidateProviderBridgeProfileArgs(profile.Args); err != nil {
-				return fmt.Errorf("validate pi provider bridge invocation before native launch: %w", err)
-			}
 		}
 	}
 	goalAPI, ok := daemon.control.(goalControlAPI)
@@ -4673,9 +4727,18 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 		return true, nil
 	}
 	if admission.SessionMode == protocol.SessionModeResume {
-		resumed, resumeErr := daemon.recoverPiGoalSessionForResume(ctx, claim, admission)
+		resumed, resumeErr := daemon.recoverPiGoalSessionForResume(ctx, key, claim, admission, linuxV2Required)
 		if resumeErr != nil {
 			return taskResultFailure(protocol.TaskResultReasonResumeRejected, resumeErr)
+		}
+		if resumed.reuse != nil {
+			if !linuxV2Required {
+				return taskResultFailure(protocol.TaskResultReasonResumeRejected, errors.New("Linux clone reuse returned for a non-Linux-v2 admission"))
+			}
+			if err := daemon.bindLinuxCloneReuse(ctx, key, linuxV2Fence, *resumed.reuse); err != nil {
+				return taskResultFailure(protocol.TaskResultReasonResumeRejected, fmt.Errorf("bind retained Linux clone reuse: %w", err))
+			}
+			linuxCloneReuse = resumed.reuse
 		}
 		prepared = resumed.prepared
 		fingerprint = resumed.fingerprint
@@ -4887,7 +4950,7 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 		PersistProcessWithAuthority:        daemon.persistProcessAuthorityCallback(key),
 	}
 	if linuxV2Required {
-		if linuxClone == nil {
+		if linuxClone == nil && linuxCloneReuse == nil {
 			buildErr := errors.New("Linux v2 native admission has no durably reserved B-owned git_clone_v2 grant")
 			var discardErr error
 			if attachQueued && !attachReady {
@@ -4938,6 +5001,9 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 				}
 				return errors.Join(daemon.compensatePreNativeGoalLaunchFailure(key, sessionKey, buildErr), discardErr)
 			}
+		} else if linuxCloneReuse != nil {
+			grant := linuxCloneReuse.Clone()
+			nativeInvocation.LinuxV2.CloneReuse = &grant
 		}
 	}
 	if resume != nil {
@@ -8967,6 +9033,8 @@ func (daemon *daemon) verifyNativeTaskResultSubject(ctx context.Context, key sta
 		return fmt.Errorf("load immutable Subject evidence before terminal validation: %w", err)
 	} else if journal.LinuxCloneIntent != nil {
 		return verifyLinuxCloneTaskResultSubject(journal, key, admission, *result.Semantic)
+	} else if journal.LinuxCloneReuseGrant != nil {
+		return verifyLinuxCloneReuseTaskResultSubject(journal, key, admission, *result.Semantic)
 	}
 	subjectWorkspace, ok := daemon.workspace.(goalSubjectWorkspace)
 	if !ok {
@@ -8981,6 +9049,23 @@ func (daemon *daemon) verifyNativeTaskResultSubject(ctx context.Context, key sta
 	}
 	if result.Semantic.Kind != protocol.TaskResultCandidateCompletion && actual != admission.Subject {
 		return errors.New("non-candidate native task_result advanced beyond the admitted Subject")
+	}
+	return nil
+}
+
+func verifyLinuxCloneReuseTaskResultSubject(journal state.RunJournal, key state.RunKey, admission *protocol.Admission, result protocol.TaskResult) error {
+	grant := journal.LinuxCloneReuseGrant
+	if grant == nil || grant.Validate() != nil || grant.RunID != key.RunID || grant.Generation != key.Generation ||
+		grant.Source.Intent.ResourceID != admission.Subject.ResourceID ||
+		grant.Source.Intent.BaseCommit != admission.Subject.Commit ||
+		grant.Source.Intent.BaseTreeDigest != admission.Subject.TreeDigest {
+		return errors.New("Linux clone reuse grant differs from the immutable admitted Subject")
+	}
+	if result.Kind == protocol.TaskResultCandidateCompletion {
+		return errors.New("Linux clone reuse candidate promotion is not implemented")
+	}
+	if result.Subject != admission.Subject {
+		return errors.New("non-candidate Linux clone reuse TaskResult differs from its admitted Subject")
 	}
 	return nil
 }

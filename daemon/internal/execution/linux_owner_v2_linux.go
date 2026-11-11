@@ -169,6 +169,12 @@ func launchLinuxV2Process(
 			return nil, err
 		}
 		native.Clone = &grant
+	} else if invocation.LinuxV2.CloneReuse != nil {
+		grant := invocation.LinuxV2.CloneReuse.Clone()
+		if err := validateLinuxCloneReuseForInvocation(grant, invocation.LinuxV2.RunKey, command.Dir); err != nil {
+			return nil, err
+		}
+		native.Reuse = &grant
 	}
 	if err := native.Validate(); err != nil {
 		return nil, fmt.Errorf("validate native command and three Runner pipes before cgroup reservation: %w", err)
@@ -183,6 +189,10 @@ func launchLinuxV2Process(
 	if invocation.LinuxV2.CloneGrant != nil {
 		grant := invocation.LinuxV2.CloneGrant.Clone()
 		v2Invocation.CloneGrant = &grant
+	}
+	if invocation.LinuxV2.CloneReuse != nil {
+		grant := invocation.LinuxV2.CloneReuse.Clone()
+		v2Invocation.CloneReuse = &grant
 	}
 	owner := &linuxV2ProcessOwner{
 		invocation: &v2Invocation, runContext: ctx,
@@ -314,19 +324,23 @@ func validateLinuxV2Invocation(invocation *LinuxV2Invocation) error {
 		invocation.Callbacks.ClearProcessDetailsV2 == nil || invocation.Callbacks.ClearReservationV2 == nil {
 		return errors.New("Linux v2 invocation requires the exact RunKey/fence, pinned owner, recovery endpoint, and complete Store callbacks")
 	}
-	if invocation.CloneGrant == nil {
-		return errors.New("Linux v2 native release requires the exact B-owned standalone clone grant")
+	if (invocation.CloneGrant == nil) == (invocation.CloneReuse == nil) {
+		return errors.New("Linux v2 native release requires exactly one clone or reuse grant")
 	}
-	if err := validateLinuxCloneGrantForInvocation(*invocation.CloneGrant, invocation.RunKey, invocation.CloneGrant.Intent.Target); err != nil {
+	if invocation.CloneGrant != nil {
+		if err := validateLinuxCloneGrantForInvocation(*invocation.CloneGrant, invocation.RunKey, invocation.CloneGrant.Intent.Target); err != nil {
+			return err
+		}
+	} else if err := validateLinuxCloneReuseForInvocation(*invocation.CloneReuse, invocation.RunKey, invocation.CloneReuse.SourceCheckout.Target); err != nil {
 		return err
 	}
 	if invocation.Callbacks.CheckNativeAdmission == nil {
 		return errors.New("Linux v2 native release requires an App admission check")
 	}
-	if invocation.Callbacks.RecordLinuxCloneCheckoutReady == nil || invocation.Callbacks.LinuxCloneProposedCommit == nil ||
+	if invocation.CloneGrant != nil && (invocation.Callbacks.RecordLinuxCloneCheckoutReady == nil || invocation.Callbacks.LinuxCloneProposedCommit == nil ||
 		invocation.Callbacks.RetainUnpromotedLinuxClone == nil || invocation.Callbacks.PromoteLinuxClone == nil ||
 		invocation.Callbacks.RecordLinuxClonePromotion == nil ||
-		invocation.Callbacks.FinalizeNoCheckoutLinuxCloneAfterRetirement == nil {
+		invocation.Callbacks.FinalizeNoCheckoutLinuxCloneAfterRetirement == nil) {
 		return errors.New("Linux clone grant requires checkout, outcome, retention, promotion, receipt, and post-retirement abort callbacks")
 	}
 	return nil
@@ -336,6 +350,14 @@ func validateLinuxCloneGrantForInvocation(grant authority.LinuxCloneGrant, key s
 	if err := grant.Validate(); err != nil || grant.Intent.RunID != key.RunID || grant.Intent.Generation != key.Generation ||
 		workspace != grant.Intent.Target {
 		return errors.Join(errors.New("Linux clone grant differs from the exact RunKey or B workspace"), err)
+	}
+	return nil
+}
+
+func validateLinuxCloneReuseForInvocation(grant authority.LinuxCloneReuseGrant, key state.RunKey, workspace string) error {
+	if err := grant.Validate(); err != nil || grant.RunID != key.RunID || grant.Generation != key.Generation ||
+		workspace != grant.SourceCheckout.Target {
+		return errors.Join(errors.New("Linux clone reuse grant differs from the exact RunKey or B workspace"), err)
 	}
 	return nil
 }

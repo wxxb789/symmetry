@@ -263,6 +263,9 @@ type LinuxV2Invocation struct {
 	// CloneGrant binds the one-use gate RELEASE to the A-authorized standalone
 	// B-owned checkout. It is never placed in argv or environment.
 	CloneGrant *authority.LinuxCloneGrant
+	// CloneReuse binds a resumed RunKey to the exact retained target of a
+	// stopped source RunKey. It is mutually exclusive with CloneGrant.
+	CloneReuse *authority.LinuxCloneReuseGrant
 	Callbacks  LinuxV2JournalCallbacks
 }
 
