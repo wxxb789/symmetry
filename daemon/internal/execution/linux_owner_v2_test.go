@@ -384,8 +384,8 @@ func TestLinuxV2RejectsMissingCloneGrantBeforeReservation(t *testing.T) {
 	started, err := launchLinuxV2Process(context.Background(), exec.Command("/bin/true"), Invocation{
 		LinuxV2Required: true, LinuxV2: grant,
 	}, nil, nil, nil)
-	if started != nil || err == nil || !strings.Contains(err.Error(), "clone grant") {
-		t.Fatalf("launch without clone grant = (%v, %v), want pre-reservation clone error", started, err)
+	if started != nil || err == nil || !strings.Contains(err.Error(), "exactly one clone or reuse grant") {
+		t.Fatalf("launch without clone or reuse grant = (%v, %v), want pre-reservation authority error", started, err)
 	}
 }
 
