@@ -4031,4 +4031,40 @@ func TestBindLinuxCloneReuseRequiresStoppedSourceAndStableSession(t *testing.T) 
 		bound.WorkspacePath != fixture.checkout.Target || !bound.WorkspaceRecoveryRequired || !bound.RetainWorkspace {
 		t.Fatalf("bound reuse journal lost its exact retained target: %#v", bound)
 	}
+	aborted, err := fixture.store.AbortLinuxCloneReuseBeforeNativeStart(targetKey, targetFence, reuse)
+	if err != nil {
+		t.Fatalf("abort pre-native reuse alias: %v", err)
+	}
+	if !aborted.LinuxCloneReuseRetired || !aborted.LinuxCloneReuseAbortedBeforeNativeStart ||
+		aborted.WorkspacePath != fixture.checkout.Target || !aborted.RetainWorkspace {
+		t.Fatalf("aborted reuse alias lost its retained source target: %#v", aborted)
+	}
+
+	secondKey := state.RunKey{RunID: "00000000-0000-4000-8000-000000000100", Generation: 1}
+	if _, err := fixture.store.SaveClaimIntent(state.ClaimIntent{
+		Key: secondKey, RuntimeKey: "default", RuntimeID: "runtime-1", RuntimeEpoch: 1,
+		ClaimID: "reuse-claim-2", LocalState: "claiming", Work: work, WorkspaceBindingKey: "local",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.SaveClaimGrant(secondKey, protocol.ClaimResponse{
+		RunID: secondKey.RunID, Generation: secondKey.Generation, ClaimID: "reuse-claim-2", LeaseToken: "reuse-lease-2",
+		LeaseExpiresAt: time.Now().Add(time.Minute), Work: work,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	secondFence := protocol.Fence{
+		RuntimeID: "runtime-1", RuntimeEpoch: 1, Generation: secondKey.Generation,
+		ClaimID: "reuse-claim-2", LeaseToken: "reuse-lease-2",
+	}
+	secondReuse := reuse
+	secondReuse.RunID = secondKey.RunID
+	secondReuse.Generation = secondKey.Generation
+	secondBound, err := fixture.store.BindLinuxCloneReuse(secondKey, secondFence, secondReuse, nil)
+	if err != nil {
+		t.Fatalf("bind after retiring the predecessor reuse alias: %v", err)
+	}
+	if secondBound.LinuxCloneReuseGrant == nil || !secondBound.LinuxCloneReuseGrant.Equal(secondReuse) {
+		t.Fatalf("second reuse binding lost its exact grant: %#v", secondBound)
+	}
 }

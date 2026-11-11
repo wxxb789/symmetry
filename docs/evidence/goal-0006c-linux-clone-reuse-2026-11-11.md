@@ -64,8 +64,10 @@ aliases its target.
 | --- | --- |
 | Windows `go test ./internal/authority ./internal/state ./internal/workspace ./internal/execution ./internal/platform ./internal/app` | Pass: authority 1.9s, state 38.5s, workspace 124.0s, execution 20.7s, platform 12.0s, app 129.3s |
 | Linux WSL `go test ./internal/authority ./internal/state ./internal/workspace ./internal/platform ./native/linux-gate/protocol` | Pass: authority 0.02s, state 33.4s, workspace 29.8s, platform 30.5s, protocol 2.5s |
-| Linux WSL full `go test ./internal/state ./internal/app` | Pass: state 39.6s, app 116.4s |
+| Linux WSL full `go test ./internal/state ./internal/app` | Pass: state 30.2s, app 91.5s |
 | Linux WSL `TestBindLinuxCloneReuseRequiresStoppedSourceAndStableSession` | Pass: exact source, stable Goal session, new RunKey CAS and retained target fields |
+| Linux WSL `TestBindLinuxCloneReuseRequiresStoppedSourceAndStableSession` (second binding + abort) | Pass: pre-native abort retires the alias and a later bind is accepted |
+| Linux WSL `TestLinuxCloneReuseAliasRetiresOnlyAfterStableStop` | Pass: terminal/release-proven alias retirable; missing terminal refuses |
 | Linux WSL `TestLinuxCloneReuseRecoversExactRetainedTargetWithoutEffects` | Pass: real B checkout recovery with unchanged worktree and seed |
 | Linux WSL `TestLinuxOwnerHelperReuseGrantBindsNewRunAndSourceCheckout` | Pass: exact reuse RunKey/target binding and wrong-RunKey refusal |
 | Linux WSL `TestLinuxOwnerHelperReuseTargetRequiresExactInodeAndBIdentity` | Pass: retained dev/inode and fixed-B UID/GID match; wrong-B refusal |
@@ -91,3 +93,14 @@ test creates a real A/B cgroup owner or a native Pi process.
   workspace, not a cross-principal read.
 - **Exact commit subject.** The source-subject gate must be rerun after the
   final commit; this receipt intentionally records the pre-commit state only.
+
+## Review follow-up
+
+- A pre-native admission failure after the reuse bind now retires the consuming
+  alias with `LinuxCloneReuseAbortedBeforeNativeStart`; the state method refuses
+  to write that proof after any process, containment reservation or release
+  receipt exists.
+- A stably stopped consuming run retires its alias at terminal resolution, and
+  the next bind retires any remaining stopped predecessor alias before checking
+  target aliases. The source grant, retained workspace and source deletion
+  ownership remain intact.

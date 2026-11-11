@@ -360,7 +360,8 @@ func linuxV2TargetCanStartNativeEffects(journal RunJournal, now time.Time) bool 
 		journal.ContainmentUnproven || journal.TerminalState != "" || journal.TerminalVerdict != "" ||
 		hasPendingTerminalTransition(journal.PendingTransitions) || journal.LinuxCloneAbortPending ||
 		journal.LinuxCloneAbortProof != nil || journal.LinuxCloneCleanupPending || journal.LinuxCloneCleanupIntent != nil ||
-		journal.LinuxCloneTargetRemovalProof != nil || journal.LinuxCloneCleanupProof != nil {
+		journal.LinuxCloneTargetRemovalProof != nil || journal.LinuxCloneCleanupProof != nil ||
+		journal.LinuxCloneReuseRetired || journal.LinuxCloneReuseAbortedBeforeNativeStart {
 		return false
 	}
 	switch journal.LocalState {
@@ -450,6 +451,13 @@ func validLinuxV2AdmissionFence(key RunKey, fence protocol.Fence) bool {
 func linuxV2ForeignJournalIsSafelyRetired(journal RunJournal) bool {
 	noActiveMarkers := !journal.HasProcessDetails() && journal.ContainmentAuthority == nil &&
 		journal.ContainmentHandoff == nil && journal.ContainmentScans == nil && !journal.ContainmentUnproven
+	if journal.LinuxCloneReuseAbortedBeforeNativeStart {
+		return noActiveMarkers && journal.LinuxCloneReuseGrant != nil && journal.LinuxCloneReuseRetired &&
+			journal.ContainmentCgroup == nil && journal.ContainmentCgroupReleaseProof == nil &&
+			journal.ContainmentCgroupPreGateReleaseProof == nil && !journal.LinuxCloneAbortPending &&
+			journal.LinuxCloneAbortProof == nil && !journal.NativeUsageRecoveryRequired &&
+			linuxV2ReleasedCloneStateSafe(journal)
+	}
 	if release := journal.ContainmentCgroupReleaseProof; release != nil {
 		return noActiveMarkers && journal.ContainmentCgroup == nil && journal.ContainmentCgroupPreGateReleaseProof == nil &&
 			release.Validate() == nil && release.Version == authority.SupervisorHandoffVersionV2 && release.StopReceipt != nil &&
@@ -595,12 +603,20 @@ type RunJournal struct {
 	// LinuxCloneIntent and the stage receipts are additive v2 clone authority
 	// in this existing run journal. Each advances only through its dedicated
 	// RunKey/fence CAS; checkout presence never clears process containment.
-	LinuxCloneIntent           *authority.LinuxCloneIntent           `json:"linux_clone_intent,omitempty"`
-	LinuxCloneSeedReceipt      *authority.LinuxCloneSeedReceipt      `json:"linux_clone_seed_receipt,omitempty"`
-	LinuxCloneCheckoutReceipt  *authority.LinuxCloneCheckoutReceipt  `json:"linux_clone_checkout_receipt,omitempty"`
-	LinuxCloneReuseGrant       *authority.LinuxCloneReuseGrant       `json:"linux_clone_reuse_grant,omitempty"`
-	LinuxClonePromotionIntent  *authority.LinuxClonePromotionIntent  `json:"linux_clone_promotion_intent,omitempty"`
-	LinuxClonePromotionReceipt *authority.LinuxClonePromotionReceipt `json:"linux_clone_promotion_receipt,omitempty"`
+	LinuxCloneIntent          *authority.LinuxCloneIntent          `json:"linux_clone_intent,omitempty"`
+	LinuxCloneSeedReceipt     *authority.LinuxCloneSeedReceipt     `json:"linux_clone_seed_receipt,omitempty"`
+	LinuxCloneCheckoutReceipt *authority.LinuxCloneCheckoutReceipt `json:"linux_clone_checkout_receipt,omitempty"`
+	LinuxCloneReuseGrant      *authority.LinuxCloneReuseGrant      `json:"linux_clone_reuse_grant,omitempty"`
+	// LinuxCloneReuseRetired stops the consuming journal from acting as a live
+	// reuse alias. The grant and retained workspace remain for provenance and
+	// because the source journal still owns the target.
+	LinuxCloneReuseRetired bool `json:"linux_clone_reuse_retired,omitempty"`
+	// LinuxCloneReuseAbortedBeforeNativeStart is durable evidence that the
+	// consuming RunKey retired its alias before any native launch or containment
+	// effect, so no containment release receipt can exist.
+	LinuxCloneReuseAbortedBeforeNativeStart bool                                  `json:"linux_clone_reuse_aborted_before_native_start,omitempty"`
+	LinuxClonePromotionIntent               *authority.LinuxClonePromotionIntent  `json:"linux_clone_promotion_intent,omitempty"`
+	LinuxClonePromotionReceipt              *authority.LinuxClonePromotionReceipt `json:"linux_clone_promotion_receipt,omitempty"`
 	// LinuxCloneAbortPending is written before A-side no-checkout cleanup and
 	// fences every later gate/checkout stage. LinuxCloneAbortProof is the exact
 	// absence tombstone written only after A verifies target, seed and refs gone.
@@ -1468,7 +1484,8 @@ func (store *Store) BindLinuxCloneReuse(key RunKey, fence protocol.Fence, grant 
 			return errors.New("Linux clone reuse target lease or lifecycle is not effect-ready")
 		}
 		if journal.LinuxCloneReuseGrant != nil {
-			if !journal.LinuxCloneReuseGrant.Equal(grant) {
+			if journal.LinuxCloneReuseRetired || journal.LinuxCloneReuseAbortedBeforeNativeStart ||
+				!journal.LinuxCloneReuseGrant.Equal(grant) {
 				return errors.New("Linux clone reuse grant cannot be replaced")
 			}
 			return nil
@@ -1479,7 +1496,8 @@ func (store *Store) BindLinuxCloneReuse(key RunKey, fence protocol.Fence, grant 
 			journal.LinuxCloneAbortProof != nil || journal.LinuxCloneCleanupPending ||
 			journal.LinuxCloneCleanupIntent != nil || journal.LinuxCloneTargetRemovalProof != nil ||
 			journal.LinuxCloneCleanupProof != nil || journal.WorkspacePath != "" ||
-			journal.WorkspaceRecoveryRequired || journal.RetainWorkspace {
+			journal.WorkspaceRecoveryRequired || journal.RetainWorkspace ||
+			journal.LinuxCloneReuseRetired || journal.LinuxCloneReuseAbortedBeforeNativeStart {
 			return errors.New("Linux clone reuse requires an empty clone and workspace state")
 		}
 		if err := requireLinuxCloneJournalFenceSubject(*journal, grant.Source.Intent); err != nil {
@@ -1496,6 +1514,9 @@ func (store *Store) BindLinuxCloneReuse(key RunKey, fence protocol.Fence, grant 
 			return err
 		}
 		if err := store.scanLinuxV2NativeAdmissionLocked(&key, fence, time.Now(), liveOwners, nil, nil); err != nil {
+			return err
+		}
+		if err := store.retireStoppedLinuxCloneReuseAliasesLocked(key, sourceKey, grant.SourceCheckout.Target); err != nil {
 			return err
 		}
 		if err := store.checkLinuxCloneReuseAliasesLocked(key, sourceKey, grant.SourceCheckout.Target); err != nil {
@@ -1579,9 +1600,68 @@ func (store *Store) checkLinuxCloneReuseAliasesLocked(key, sourceKey RunKey, tar
 		if foreign.LinuxCloneIntent != nil && linuxClonePathAliases(foreign.LinuxCloneIntent.Target, target) {
 			return errors.New("Linux clone reuse target is already reserved")
 		}
-		if foreign.LinuxCloneReuseGrant != nil && linuxClonePathAliases(foreign.LinuxCloneReuseGrant.SourceCheckout.Target, target) {
+		if foreign.LinuxCloneReuseGrant != nil && !foreign.LinuxCloneReuseRetired &&
+			linuxClonePathAliases(foreign.LinuxCloneReuseGrant.SourceCheckout.Target, target) {
 			return errors.New("Linux clone reuse target already has another reuse owner")
 		}
+		return nil
+	})
+}
+
+func (store *Store) retireStoppedLinuxCloneReuseAliasesLocked(currentKey, sourceKey RunKey, target string) error {
+	return store.forEachJournalLocked(func(foreign RunJournal) error {
+		if foreign.Key() == currentKey || foreign.Key() == sourceKey ||
+			foreign.LinuxCloneReuseGrant == nil || foreign.LinuxCloneReuseRetired ||
+			!linuxClonePathAliases(foreign.LinuxCloneReuseGrant.SourceCheckout.Target, target) {
+			return nil
+		}
+		if !linuxCloneReuseAliasRetirable(foreign) {
+			return errors.New("Linux clone reuse target has a live predecessor alias")
+		}
+		retired := foreign
+		retired.LinuxCloneReuseRetired = true
+		return store.saveJournalWithCapacityGuardLocked(retired)
+	})
+}
+
+func linuxCloneReuseAliasRetirable(journal RunJournal) bool {
+	return journal.LinuxCloneReuseGrant != nil && !journal.LinuxCloneReuseRetired &&
+		isTerminalTransitionState(journal.TerminalState) && !journal.HasProcessDetails() &&
+		!journal.HasPendingContainment() && !journal.NativeUsageRecoveryRequired &&
+		journal.ContainmentCgroup == nil && journal.ContainmentCgroupReleaseProof != nil &&
+		journal.ContainmentCgroupPreGateReleaseProof == nil && linuxCloneStopProven(journal)
+}
+
+// AbortLinuxCloneReuseBeforeNativeStart retires a consuming alias after a
+// pre-native admission failure. The source target is untouched; this proof is
+// accepted as safely retired only while no process, containment reservation or
+// release receipt exists.
+func (store *Store) AbortLinuxCloneReuseBeforeNativeStart(key RunKey, fence protocol.Fence, grant authority.LinuxCloneReuseGrant) (RunJournal, error) {
+	if err := requireLinuxClonePlatform(); err != nil {
+		return RunJournal{}, err
+	}
+	if err := grant.Validate(); err != nil || grant.RunID != key.RunID || grant.Generation != key.Generation {
+		return RunJournal{}, errors.New("Linux clone reuse abort grant does not match the RunKey")
+	}
+	return store.mutateJournal(key, func(journal *RunJournal) error {
+		if journal.Key() != key || journal.Fence() != fence ||
+			journal.LinuxCloneReuseGrant == nil || !journal.LinuxCloneReuseGrant.Equal(grant) {
+			return errors.New("Linux clone reuse abort has no exact consuming grant")
+		}
+		if journal.LinuxCloneReuseAbortedBeforeNativeStart {
+			return nil
+		}
+		if journal.LinuxCloneReuseRetired || journal.HasProcessDetails() || journal.HasPendingContainment() ||
+			journal.ContainmentUnproven || journal.NativeUsageRecoveryRequired ||
+			journal.ContainmentCgroup != nil || journal.ContainmentCgroupReleaseProof != nil ||
+			journal.ContainmentCgroupPreGateReleaseProof != nil || journal.LinuxCloneAbortPending ||
+			journal.LinuxCloneAbortProof != nil || journal.LinuxCloneCleanupPending ||
+			journal.LinuxCloneCleanupIntent != nil || journal.LinuxCloneTargetRemovalProof != nil ||
+			journal.LinuxCloneCleanupProof != nil {
+			return errors.New("Linux clone reuse abort follows a native or containment effect")
+		}
+		journal.LinuxCloneReuseRetired = true
+		journal.LinuxCloneReuseAbortedBeforeNativeStart = true
 		return nil
 	})
 }
@@ -1959,6 +2039,8 @@ func (store *Store) SaveJournal(journal RunJournal) error {
 			!sameLinuxCloneSeedReceipt(current.LinuxCloneSeedReceipt, journal.LinuxCloneSeedReceipt) ||
 			!sameLinuxCloneCheckoutReceipt(current.LinuxCloneCheckoutReceipt, journal.LinuxCloneCheckoutReceipt) ||
 			!sameLinuxCloneReuseGrant(current.LinuxCloneReuseGrant, journal.LinuxCloneReuseGrant) ||
+			current.LinuxCloneReuseRetired != journal.LinuxCloneReuseRetired ||
+			current.LinuxCloneReuseAbortedBeforeNativeStart != journal.LinuxCloneReuseAbortedBeforeNativeStart ||
 			!sameLinuxClonePromotionIntent(current.LinuxClonePromotionIntent, journal.LinuxClonePromotionIntent) ||
 			!sameLinuxClonePromotionReceipt(current.LinuxClonePromotionReceipt, journal.LinuxClonePromotionReceipt) ||
 			current.LinuxCloneAbortPending != journal.LinuxCloneAbortPending ||
@@ -2023,7 +2105,7 @@ func (store *Store) SaveJournal(journal RunJournal) error {
 		}
 		if journal.LinuxCloneIntent != nil || journal.LinuxCloneSeedReceipt != nil ||
 			journal.LinuxCloneCheckoutReceipt != nil || journal.LinuxClonePromotionIntent != nil || journal.LinuxClonePromotionReceipt != nil ||
-			journal.LinuxCloneReuseGrant != nil ||
+			journal.LinuxCloneReuseGrant != nil || journal.LinuxCloneReuseRetired || journal.LinuxCloneReuseAbortedBeforeNativeStart ||
 			journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil || journal.LinuxCloneCleanupPending ||
 			journal.LinuxCloneCleanupIntent != nil || journal.LinuxCloneTargetRemovalProof != nil || journal.LinuxCloneCleanupProof != nil {
 			return errors.New("Linux clone authority requires dedicated mutation")
@@ -4291,6 +4373,9 @@ func (store *Store) ResolveTerminalForCleanup(key RunKey, verdict string, resolv
 		// state: their receiver has its own durable idempotency receipts.
 		journal.InputCommandIntent = nil
 		journal.ControlCommandIntents = nil
+		if journal.LinuxCloneReuseGrant != nil && linuxCloneReuseAliasRetirable(*journal) {
+			journal.LinuxCloneReuseRetired = true
+		}
 		if !journal.HasProcessDetails() && !journal.HasPendingContainment() {
 			journal.LocalState = "cleanup_pending"
 		}
@@ -4804,6 +4889,15 @@ func validateLinuxCloneJournal(journal RunJournal) error {
 			journal.LinuxCloneCleanupProof != nil {
 			return errors.New("run journal Linux clone reuse grant is invalid")
 		}
+		if journal.LinuxCloneReuseAbortedBeforeNativeStart && !journal.LinuxCloneReuseRetired {
+			return errors.New("run journal Linux clone reuse abort lacks retirement")
+		}
+		if journal.LinuxCloneReuseAbortedBeforeNativeStart &&
+			(journal.HasProcessDetails() || journal.HasPendingContainment() ||
+				journal.ContainmentCgroup != nil || journal.ContainmentCgroupReleaseProof != nil ||
+				journal.ContainmentCgroupPreGateReleaseProof != nil) {
+			return errors.New("run journal Linux clone reuse abort follows a native or containment effect")
+		}
 		if journal.WorkspacePath != reuse.SourceCheckout.Target ||
 			journal.WorkspaceBindingKey != reuse.Source.Intent.BindingKey ||
 			!journal.WorkspaceRecoveryRequired || !journal.RetainWorkspace || !journal.hasClaimGrant() {
@@ -4818,6 +4912,7 @@ func validateLinuxCloneJournal(journal RunJournal) error {
 	if intent == nil {
 		if journal.LinuxCloneSeedReceipt != nil || journal.LinuxCloneCheckoutReceipt != nil ||
 			journal.LinuxClonePromotionIntent != nil || journal.LinuxClonePromotionReceipt != nil ||
+			journal.LinuxCloneReuseRetired || journal.LinuxCloneReuseAbortedBeforeNativeStart ||
 			journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil || journal.LinuxCloneCleanupPending ||
 			journal.LinuxCloneCleanupIntent != nil || journal.LinuxCloneTargetRemovalProof != nil || journal.LinuxCloneCleanupProof != nil {
 			return errors.New("run journal has Linux clone evidence without an intent")

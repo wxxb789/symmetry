@@ -1634,6 +1634,19 @@ func (daemon *daemon) bindLinuxCloneReuse(ctx context.Context, key state.RunKey,
 	})
 }
 
+func (daemon *daemon) abortLinuxCloneReuseBeforeNativeStart(ctx context.Context, key state.RunKey, fence protocol.Fence, grant authority.LinuxCloneReuseGrant) error {
+	if daemon == nil || daemon.store == nil {
+		return errors.New("Linux clone reuse abort requires the App Store")
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	_, err := daemon.store.AbortLinuxCloneReuseBeforeNativeStart(key, fence, grant)
+	return err
+}
+
 func (daemon *daemon) linuxV2LaunchPhasePendingFor(key state.RunKey) bool {
 	if daemon == nil {
 		return false
@@ -4538,6 +4551,7 @@ func (daemon *daemon) attachResumedPiSession(ctx context.Context, key state.RunK
 func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, claim protocol.ClaimResponse, admission protocol.Admission, workspacePersisted func(workspace.Prepared)) (returnErr error) {
 	nativeLaunchAttempted := false
 	cloneLaunchStarted := false
+	reuseLaunchStarted := false
 	var linuxClone *linuxCloneRun
 	var linuxCloneReuse *authority.LinuxCloneReuseGrant
 	var linuxV2Fence protocol.Fence
@@ -4558,6 +4572,18 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 			cancel()
 			if abortErr != nil {
 				returnErr = errors.Join(returnErr, fmt.Errorf("abort pre-checkout Linux clone after native-start refusal: %w", abortErr))
+			}
+		}
+		if linuxCloneReuse != nil && !reuseLaunchStarted {
+			abortParent := context.Background()
+			if ctx != nil {
+				abortParent = context.WithoutCancel(ctx)
+			}
+			cleanupContext, cancel := daemon.cleanupContext(abortParent)
+			abortErr := daemon.abortLinuxCloneReuseBeforeNativeStart(cleanupContext, key, linuxV2Fence, *linuxCloneReuse)
+			cancel()
+			if abortErr != nil {
+				returnErr = errors.Join(returnErr, fmt.Errorf("retire pre-native Linux clone reuse after launch refusal: %w", abortErr))
 			}
 		}
 		if returnErr == nil || !nativeLaunchAttempted {
@@ -5050,6 +5076,7 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 		return taskResultFailure(protocol.TaskResultReasonResumeRejected, errors.New("native Goal start was rejected by cancellation or lease expiry"))
 	}
 	cloneLaunchStarted = linuxClone != nil
+	reuseLaunchStarted = linuxCloneReuse != nil
 	session, err := adapter.Start(ctx, harness.StartRequest{
 		AdmissionID:   admission.AdmissionID,
 		LocalHandleID: localHandleID,
