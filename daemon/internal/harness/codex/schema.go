@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/wxxb789/symmetry/daemon/internal/contracts"
+	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
 // nativeUnsupportedSchemaKeywords are intentionally absent from a projected
@@ -446,6 +448,15 @@ func pruneOptionalNulls(value any, path string, required map[string]struct{}) (a
 // optional contract fields. The exact canonical envelope still validates the
 // remainder; required nullable fields are preserved.
 func normalizeNativeTaskResultText(text string) ([]byte, error) {
+	// Validate the raw text before the map-based transform below can collapse
+	// duplicate members or trailing values. The canonical parser would reject
+	// those, so normalization must not make them admissible.
+	if !utf8.ValidString(text) {
+		return nil, errors.New("native TaskResult is not valid UTF-8")
+	}
+	if err := protocol.RejectDuplicateJSONMembers([]byte(text)); err != nil {
+		return nil, err
+	}
 	decoder := json.NewDecoder(strings.NewReader(text))
 	decoder.UseNumber()
 	var value any

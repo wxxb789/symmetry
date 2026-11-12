@@ -155,3 +155,35 @@ func TestNormalizeNativeTaskResultTextPrunesOptionalNulls(t *testing.T) {
 		t.Fatalf("normalized strict output is not a valid TaskResult: %v", err)
 	}
 }
+
+func TestNormalizeNativeTaskResultTextRejectsNonCanonicalRawJSON(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "duplicate member",
+			input: `{"kind":"candidate_completion","kind":"failed","diagnostics":[{"severity":null}]}`,
+			want:  "duplicate",
+		},
+		{
+			name:  "trailing value",
+			input: `{"diagnostics":[{"severity":null}]} {}`,
+			want:  "more than one value",
+		},
+		{
+			name:  "invalid UTF-8",
+			input: "{\"summary\":\"\xff\",\"diagnostics\":[{\"severity\":null}]}",
+			want:  "UTF-8",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := normalizeNativeTaskResultText(test.input)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("normalize error = %v, want containing %q", err, test.want)
+			}
+		})
+	}
+}
