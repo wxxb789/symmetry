@@ -2492,11 +2492,12 @@ func completeOpen(t *testing.T, process *fakeNativeProcess, session harness.Stag
 	if thread.Method != appServerMethodThreadStart || thread.Params.CWD == "" || thread.Params.Ephemeral || thread.Params.Sandbox != nativeEngineeringSandbox || thread.Params.ApprovalPolicy != nativeApprovalOnRequest {
 		t.Fatalf("thread/start request = %+v", thread)
 	}
-	if len(thread.Params.Config) != 4 ||
+	if len(thread.Params.Config) != 5 ||
 		string(thread.Params.Config["sandbox_workspace_write.writable_roots"]) != "[]" ||
 		string(thread.Params.Config["sandbox_workspace_write.network_access"]) != "false" ||
 		string(thread.Params.Config["sandbox_workspace_write.exclude_tmpdir_env_var"]) != "true" ||
-		string(thread.Params.Config["sandbox_workspace_write.exclude_slash_tmp"]) != "true" {
+		string(thread.Params.Config["sandbox_workspace_write.exclude_slash_tmp"]) != "true" ||
+		string(thread.Params.Config["features.shell_snapshot"]) != "false" {
 		t.Fatalf("thread/start did not request the exact workspace-only sandbox: %v", thread.Params.Config)
 	}
 	process.reply(t, thread.ID, map[string]any{
@@ -2533,15 +2534,12 @@ func completeTurnStart(t *testing.T, process *fakeNativeProcess, session harness
 		t.Fatalf("turn/start schema_version must preserve the canonical const: %#v", turn.Params.OutputSchema)
 	}
 	subject, ok := properties["subject"].(map[string]any)
-	if !ok || subject["$ref"] != "#/definitions/Subject" {
+	if !ok || subject["$ref"] != "#/$defs/Subject" {
 		t.Fatalf("turn/start output schema must reference the canonical complete subject: %#v", turn.Params.OutputSchema)
 	}
 	required, ok := turn.Params.OutputSchema["required"].([]any)
-	if !ok {
-		t.Fatalf("turn/start output schema required field has unexpected type: %#v", turn.Params.OutputSchema["required"])
-	}
-	if !containsString(required, "subject") {
-		t.Fatalf("turn/start output schema does not require subject: %#v", required)
+	if !ok || !containsString(required, "subject") {
+		t.Fatalf("turn/start output schema does not require subject: %#v", turn.Params.OutputSchema["required"])
 	}
 	process.reply(t, turn.ID, map[string]any{"turn": map[string]any{"id": "turn-1", "items": []any{}, "status": "inProgress"}})
 	if err := <-errResult; err != nil {
@@ -2549,7 +2547,7 @@ func completeTurnStart(t *testing.T, process *fakeNativeProcess, session harness
 	}
 }
 
-func TestNativeTaskResultSchemaUsesIndependentCanonicalDocument(t *testing.T) {
+func TestNativeTaskResultSchemaIsAnIndependentProjection(t *testing.T) {
 	want, err := contracts.TaskResultSchema()
 	if err != nil {
 		t.Fatalf("contracts.TaskResultSchema() error = %v", err)
@@ -2558,8 +2556,14 @@ func TestNativeTaskResultSchemaUsesIndependentCanonicalDocument(t *testing.T) {
 	if err != nil {
 		t.Fatalf("nativeTaskResultSchema() error = %v", err)
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("native task-result schema diverges from canonical document")
+	if reflect.DeepEqual(got, want) {
+		t.Fatal("native task-result schema must not be the canonical document")
+	}
+	if _, present := want["$defs"]; present {
+		t.Fatal("canonical schema was mutated with native $defs")
+	}
+	if definitions, _ := got["$defs"].(map[string]any); len(definitions) == 0 {
+		t.Fatal("native schema has no reachable definitions")
 	}
 	got["title"] = "mutated"
 	again, err := nativeTaskResultSchema()
@@ -2568,6 +2572,13 @@ func TestNativeTaskResultSchemaUsesIndependentCanonicalDocument(t *testing.T) {
 	}
 	if again["title"] == "mutated" {
 		t.Fatal("native task-result schema returned shared mutable state")
+	}
+	canonicalAgain, err := contracts.TaskResultSchema()
+	if err != nil {
+		t.Fatalf("contracts.TaskResultSchema() second call error = %v", err)
+	}
+	if canonicalAgain["title"] == "mutated" {
+		t.Fatal("native projection mutated the shared canonical document")
 	}
 }
 

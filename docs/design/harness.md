@@ -28,6 +28,13 @@ explicit tested version set/range; an unknown version cannot advertise unverifie
 controls. Read the installed protocol/help/schema to fill exact wire DTO fields;
 do not choose a different integration architecture without amendment.
 
+Codex 0.167.2 starts every shell tool child in a detached session
+(`StdioPolicy::RedirectForShellTool` calls `setsid`), so the default
+process-group owner cannot prove Linux containment for a repository turn. The
+Windows Job-object path is verified; Linux Codex admission stays fail-closed
+until the Linux v2 cgroup owner carries the same exact-binary evidence. Do not
+promote Linux from Windows evidence.
+
 Until the first prototype and release, each harness tracks the latest stable
 client (owner directive 2026-11-11). Do not freeze an older pin merely because
 its fixtures exist. A version jump requires a fresh probe, fixtures, capability

@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -122,7 +123,7 @@ func TestNativeTransportOpenAndClose(t *testing.T) {
 			cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), nativeSmokeTimeout)
 			defer cleanupCancel()
 			if err := session.Close(cleanupContext); err != nil {
-				t.Error("cleanup native Codex session failed")
+				t.Errorf("cleanup native Codex session failed: %v", err)
 			}
 			result, err := session.Wait(cleanupContext)
 			if err != nil {
@@ -170,7 +171,7 @@ func TestNativeTransportOpenAndClose(t *testing.T) {
 	closeContext, closeCancel := context.WithTimeout(context.Background(), nativeSmokeTimeout)
 	defer closeCancel()
 	if err := staged.Close(closeContext); err != nil {
-		t.Fatal("close native Codex session failed")
+		t.Fatalf("close native Codex session failed: %v", err)
 	}
 	result, err := staged.Wait(closeContext)
 	if err != nil {
@@ -184,22 +185,29 @@ func TestNativeTransportOpenAndClose(t *testing.T) {
 	if err := staged.Close(closeContext); err != nil {
 		t.Fatal("repeated native Codex Close was not idempotent")
 	}
+	if _, err := staged.Open(closeContext); err == nil {
+		t.Fatal("closed native Codex session opened a stale thread")
+	}
+	if err := staged.StartTurn(closeContext, harness.TurnRequest{Goal: "stale", Context: json.RawMessage(`{}`)}); err == nil {
+		t.Fatal("closed native Codex session accepted a stale turn")
+	}
 	closed = true
 }
 
 func assertNativeCodexSmokeStopped(t *testing.T, result execution.Result) {
 	t.Helper()
 	if !result.Terminated || result.ContainmentError != nil || result.TerminationError != nil ||
-		result.SinkError != nil || result.OutputError != nil || !result.OutputTruncated {
+		result.SinkError != nil || result.OutputError != nil {
 		t.Errorf("native Codex stop: terminated=%t containment_error=%t termination_error=%t sink_error=%t output_error=%t output_truncated=%t",
 			result.Terminated, result.ContainmentError != nil, result.TerminationError != nil,
 			result.SinkError != nil, result.OutputError != nil, result.OutputTruncated)
 	}
-	t.Logf("native Codex stop: output_truncated=%t; output delivery ends at the termination barrier, not a full drain", result.OutputTruncated)
+	t.Logf("native Codex stop: output_truncated=%t; a contained stop does not require dropping buffered output", result.OutputTruncated)
 }
 
 func nativeCodexSmokeEnvironment(t *testing.T, root string) []string {
 	t.Helper()
+	configuredHome := strings.TrimSpace(os.Getenv("SYMMETRY_CODEX_NATIVE_SMOKE_HOME"))
 	directories := map[string]string{
 		"CODEX_HOME":      "codex",
 		"HOME":            "home",
@@ -216,8 +224,12 @@ func nativeCodexSmokeEnvironment(t *testing.T, root string) []string {
 	environment := make([]string, 0, len(directories)+5)
 	for name, directory := range directories {
 		path := filepath.Join(root, directory)
-		if err := os.MkdirAll(path, 0o700); err != nil {
-			t.Fatal("create isolated native Codex environment failed")
+		if configuredHome != "" && (name == "CODEX_HOME" || name == "HOME" || name == "USERPROFILE") {
+			path = configuredHome
+		} else {
+			if err := os.MkdirAll(path, 0o700); err != nil {
+				t.Fatal("create isolated native Codex environment failed")
+			}
 		}
 		environment = append(environment, name+"="+path)
 	}
