@@ -208,6 +208,8 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 		PersistProcessAuthority:            request.PersistProcessAuthority,
 		PersistContainmentStopReceipt:      request.PersistContainmentStopReceipt,
 		PersistContainmentUnproven:         request.Invocation.PersistContainmentUnproven,
+		LinuxV2Required:                    request.Invocation.LinuxV2Required,
+		LinuxV2:                            request.Invocation.LinuxV2,
 	}
 	process, err := adapter.startProcess(processContext, invocation, execution.SinkFunc(session.handleProcessOutput))
 	if isNilNativeProcess(process) {

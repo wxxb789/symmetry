@@ -97,6 +97,33 @@ func TestAdapterStagesNativeTransportAndRequiresMatchingStructuredCompletion(t *
 	}
 }
 
+func TestAdapterForwardsLinuxV2Invocation(t *testing.T) {
+	process := newFakeNativeProcess()
+	var invocation execution.Invocation
+	adapter := &Adapter{
+		executable: "codex-test",
+		startProcess: func(_ context.Context, got execution.Invocation, sink execution.Sink) (nativeProcess, error) {
+			invocation = got
+			process.sink = sink
+			return process, nil
+		},
+	}
+	v2 := &execution.LinuxV2Invocation{}
+	raw, err := adapter.Start(context.Background(), harness.StartRequest{
+		Workspace:  t.TempDir(),
+		Invocation: execution.Invocation{LinuxV2Required: true, LinuxV2: v2},
+	}, &recordingHarnessSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if !invocation.LinuxV2Required || invocation.LinuxV2 != v2 {
+		t.Fatalf("Linux v2 invocation = required:%t v2:%p, want true and %p", invocation.LinuxV2Required, invocation.LinuxV2, v2)
+	}
+	if session, ok := raw.(harness.Session); ok {
+		_ = session.Close(context.Background())
+	}
+}
+
 func TestAdapterStartForwardsPersistProcessWithAuthority(t *testing.T) {
 	process := newFakeNativeProcess()
 	var invocation execution.Invocation

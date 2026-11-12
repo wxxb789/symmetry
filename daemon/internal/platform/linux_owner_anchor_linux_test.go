@@ -2219,3 +2219,27 @@ func TestLinuxOwnerAnchorInManagerRequiresExactSubgroup(t *testing.T) {
 		})
 	}
 }
+
+func TestLinuxOwnerAnchorChildPIDFDUsesTrustedLauncherIdentity(t *testing.T) {
+	pidfd, err := unix.PidfdOpen(os.Getpid(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(pidfd)
+	identity, err := ProcessIdentity(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := authority.LinuxCgroupProcessIdentity{PID: os.Getpid(), Identity: identity}
+	if err := verifyLinuxOwnerAnchorChildPIDFD(pidfd, expected, "launcher"); err != nil {
+		t.Fatalf("exact launcher pidfd was rejected: %v", err)
+	}
+	forged := expected
+	forged.Identity = strings.Replace(identity, ":", "-", 1)
+	if err := verifyLinuxOwnerAnchorChildPIDFD(pidfd, forged, "launcher"); err != nil {
+		t.Fatalf("launcher registration re-read the trusted READY identity: %v", err)
+	}
+	if err := verifyLinuxOwnerAnchorChildPIDFD(pidfd, forged, "native"); err == nil {
+		t.Fatal("native registration accepted a forged PID namespace identity")
+	}
+}

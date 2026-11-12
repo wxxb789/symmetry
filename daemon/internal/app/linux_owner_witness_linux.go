@@ -3015,7 +3015,7 @@ func (witness *linuxV2NativeWitnessRun) launchNative(
 	}
 	invocation, err = owner.BuildInvocation(ctx, key, witness.request.Fence, invocation, callbacks)
 	if err != nil {
-		return errors.New("build explicit App-owned Linux v2 witness invocation")
+		return fmt.Errorf("build explicit App-owned Linux v2 witness invocation: %w", err)
 	}
 	cloneGrant := grant.Clone()
 	invocation.LinuxV2.CloneGrant = &cloneGrant
@@ -3161,7 +3161,7 @@ func (witness *linuxV2NativeWitnessRun) launchNative(
 			witness.setFailureCategory(classifyLinuxV2NativeWitnessPeerDenial(startErr))
 		}
 		if witness.request.Case != "wsl2_denial" || witness.summary.FailureCategory == "" {
-			return errors.New("start native owner witness transport")
+			return fmt.Errorf("start native owner witness transport: %w", startErr)
 		}
 	}
 	if session == nil {

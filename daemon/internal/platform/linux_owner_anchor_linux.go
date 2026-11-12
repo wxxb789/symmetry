@@ -1264,7 +1264,7 @@ func (client *LinuxOwnerAnchorClient) RegisterProcess(ctx context.Context, grant
 	if role != "launcher" && role != "native" && role != "descendant" {
 		return errors.New("Linux owner anchor process role is unsupported")
 	}
-	if err := verifyLinuxOwnerAnchorPIDFD(pidfd, process); err != nil {
+	if err := verifyLinuxOwnerAnchorChildPIDFD(pidfd, process, role); err != nil {
 		return fmt.Errorf("verify process pidfd before owner-anchor registration: %w", err)
 	}
 	request := linuxOwnerAnchorRequest{
@@ -4772,7 +4772,35 @@ func verifyLinuxOwnerAnchorPIDFD(fd int, expected authority.LinuxCgroupProcessId
 	return nil
 }
 
+// The root-owned launcher deliberately runs in a PID namespace that A cannot
+// inspect. Its exact pidfd plus the authenticated READY identity bind the
+// process; re-reading /proc/<pid>/ns/pid from A would reject every real
+// launcher on hosts that restrict root namespace access.
+func verifyLinuxOwnerAnchorChildPIDFD(fd int, expected authority.LinuxCgroupProcessIdentity, role string) error {
+	if role != "launcher" {
+		return verifyLinuxOwnerAnchorPIDFD(fd, expected)
+	}
+	if err := verifyLinuxOwnerAnchorPIDFDTarget(fd, expected); err != nil {
+		return err
+	}
+	if err := unix.PidfdSendSignal(fd, 0, nil, 0); err != nil {
+		return fmt.Errorf("probe exact Linux owner launcher pidfd: %w", err)
+	}
+	return nil
+}
+
 func verifyLinuxOwnerAnchorPIDFDIdentity(fd int, expected authority.LinuxCgroupProcessIdentity) error {
+	if err := verifyLinuxOwnerAnchorPIDFDTarget(fd, expected); err != nil {
+		return err
+	}
+	identity, err := ProcessIdentity(expected.PID)
+	if err != nil || identity != expected.Identity {
+		return fmt.Errorf("Linux owner anchor pidfd creation identity mismatch: %w", errOr(err, errors.New("identity differs")))
+	}
+	return nil
+}
+
+func verifyLinuxOwnerAnchorPIDFDTarget(fd int, expected authority.LinuxCgroupProcessIdentity) error {
 	if fd < 0 || expected.Validate() != nil {
 		return errors.New("Linux owner anchor pidfd or process identity is invalid")
 	}
@@ -4783,10 +4811,6 @@ func verifyLinuxOwnerAnchorPIDFDIdentity(fd int, expected authority.LinuxCgroupP
 	pid, err := readLinuxOwnerPIDFDTarget(fd)
 	if err != nil || pid != expected.PID {
 		return fmt.Errorf("Linux owner anchor pidfd target mismatch: %w", errOr(err, errors.New("PID differs")))
-	}
-	identity, err := ProcessIdentity(pid)
-	if err != nil || identity != expected.Identity {
-		return fmt.Errorf("Linux owner anchor pidfd creation identity mismatch: %w", errOr(err, errors.New("identity differs")))
 	}
 	return nil
 }
@@ -5117,7 +5141,7 @@ func (run *linuxOwnerAnchorRun) registerChild(process authority.LinuxCgroupProce
 					return err
 				}
 			}
-			if err := verifyLinuxOwnerAnchorPIDFDIdentity(pidfd, process); err != nil {
+			if err := verifyLinuxOwnerAnchorChildPIDFD(pidfd, process, role); err != nil {
 				return fmt.Errorf("verify replayed Linux owner child pidfd: %w", err)
 			}
 			return nil
@@ -5131,11 +5155,13 @@ func (run *linuxOwnerAnchorRun) registerChild(process authority.LinuxCgroupProce
 	} else if role == "native" {
 		return errors.New("Linux owner anchor refuses a native process without its exact registered A-gate")
 	}
-	if err := verifyLinuxOwnerAnchorPIDFD(pidfd, process); err != nil {
+	if err := verifyLinuxOwnerAnchorChildPIDFD(pidfd, process, role); err != nil {
 		return err
 	}
-	if actual, err := ProcessIdentity(process.PID); err != nil || actual != process.Identity {
-		return fmt.Errorf("verify registered Linux owner child identity: %w", errOr(err, errors.New("creation identity differs")))
+	if role != "launcher" {
+		if actual, err := ProcessIdentity(process.PID); err != nil || actual != process.Identity {
+			return fmt.Errorf("verify registered Linux owner child identity: %w", errOr(err, errors.New("creation identity differs")))
+		}
 	}
 	credentials, err := readLinuxOwnerProcessCredentials(process.PID)
 	if err != nil || credentials.Parent != creator.PID {
@@ -5147,7 +5173,7 @@ func (run *linuxOwnerAnchorRun) registerChild(process authority.LinuxCgroupProce
 	if err := verifyLinuxOwnerRunChildMembership(process.PID, role, run.grant, run.leaf); err != nil {
 		return err
 	}
-	if err := verifyLinuxOwnerAnchorPIDFD(pidfd, process); err != nil {
+	if err := verifyLinuxOwnerAnchorChildPIDFD(pidfd, process, role); err != nil {
 		return err
 	}
 	if existing, exists := run.children[process.PID]; exists {
