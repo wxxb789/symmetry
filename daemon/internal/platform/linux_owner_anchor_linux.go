@@ -934,13 +934,20 @@ func (client *LinuxOwnerAnchorClient) Discover(ctx context.Context) (LinuxOwnerA
 		response.RunKey != (LinuxOwnerAnchorRunKey{}) || response.Fence != (protocol.Fence{}) || response.FenceDigest != "" || response.LaunchToken != "" ||
 		response.Helper != nil || response.Evidence != nil || len(response.ReapEvidence) != 0 || response.HelperExit != nil ||
 		response.NextPID != 0 || response.More || response.CloneRemoval != nil ||
-		linuxOwnerCgroupPathsOverlap(peer.CgroupPath, response.ManagerPath) {
+		!linuxOwnerAnchorInManager(peer.CgroupPath, response.ManagerPath) {
 		closeLinuxOwnerAnchorFDs(rights)
 		return LinuxOwnerAnchorIdentity{}, errors.New("Linux owner anchor identity response differs from exact peer credentials or fixed configuration")
 	}
 	return LinuxOwnerAnchorIdentity{
 		Process: response.Anchor, Parent: response.Parent, OwnerUID: response.OwnerUID, ManagerPath: response.ManagerPath,
 	}, nil
+}
+
+// The fixed owner unit places the anchor in the delegated manager subgroup
+// itself; helpers and run leaves are created beneath it. Anchors that only
+// overlap that path as a parent or child are a different topology.
+func linuxOwnerAnchorInManager(anchorPath, managerPath string) bool {
+	return anchorPath != "" && anchorPath == managerPath
 }
 
 func (client *LinuxOwnerAnchorClient) dial(ctx context.Context, timeout time.Duration) (*net.UnixConn, func() bool, error) {

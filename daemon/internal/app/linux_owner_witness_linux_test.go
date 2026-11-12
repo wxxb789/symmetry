@@ -960,3 +960,14 @@ func validLinuxV2NativeWitnessConfig(owner linuxgate.OwnerConfig) config.Config 
 	}
 	return value
 }
+
+func TestLinuxV2NativeWitnessCodexCaseRequiresCodexHarness(t *testing.T) {
+	if !linuxV2NativeWitnessCaseMatches("codex_native_turn", config.RuntimeHarnessCodex) {
+		t.Fatal("Codex witness case did not select the Codex harness")
+	}
+	for _, other := range []string{config.RuntimeHarnessPi, config.RuntimeHarnessOpenCode, config.RuntimeHarnessGeneric} {
+		if linuxV2NativeWitnessCaseMatches("codex_native_turn", other) {
+			t.Fatalf("Codex witness case selected harness %q", other)
+		}
+	}
+}

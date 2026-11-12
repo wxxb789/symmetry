@@ -2197,3 +2197,25 @@ func testLinuxOwnerAnchorGrant(anchor authority.LinuxCgroupProcessIdentity, mana
 		Anchor: anchor, Parent: parent, Leaf: leaf,
 	}, nil
 }
+
+func TestLinuxOwnerAnchorInManagerRequiresExactSubgroup(t *testing.T) {
+	const manager = "/system.slice/symmetry-owner.service/manager"
+	tests := []struct {
+		name   string
+		anchor string
+		want   bool
+	}{
+		{name: "exact manager", anchor: manager, want: true},
+		{name: "service parent", anchor: "/system.slice/symmetry-owner.service", want: false},
+		{name: "run child", anchor: manager + "/run-leaf", want: false},
+		{name: "different manager", anchor: "/system.slice/other.service/manager", want: false},
+		{name: "empty", anchor: "", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := linuxOwnerAnchorInManager(test.anchor, manager); got != test.want {
+				t.Fatalf("linuxOwnerAnchorInManager(%q) = %t, want %t", test.anchor, got, test.want)
+			}
+		})
+	}
+}
