@@ -878,7 +878,7 @@ def config(kind, profile, model, resource_id):
             "workspace": "native",
             "repository_resource_id": resource_id,
             "harness_kind": kind,
-            "harness_version": "0.87.1" if kind == "pi" else "1.18.32",
+            "harness_version": "1.5.2" if kind == "pi" else "1.18.32",
             "adapter_version": "symmetry-daemon:ci-linux-v2",
             "adapter_protocol_version": 1,
         },

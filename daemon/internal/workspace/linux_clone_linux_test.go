@@ -1675,3 +1675,44 @@ func linuxCloneNormalReleaseProof(t *testing.T) authority.SupervisorHandoffRelea
 	}
 	return release
 }
+
+func TestLinuxCloneReuseRecoversExactRetainedTargetWithoutEffects(t *testing.T) {
+	fixture := newLinuxCloneWorkspaceFixture(t)
+	if _, err := fixture.manager.PrepareLinuxClone(context.Background(), fixture.grant); err != nil {
+		t.Fatal(err)
+	}
+	fixture.createBCloneAndCommit(t)
+	if err := fixture.manager.ValidateLinuxCloneCheckout(fixture.grant, fixture.checkout); err != nil {
+		t.Fatal(err)
+	}
+	before := gitOutput(t, fixture.target, "status", "--porcelain=v1")
+	reuse := authority.LinuxCloneReuseGrant{
+		Version:        authority.LinuxCloneVersion,
+		Source:         fixture.grant,
+		SourceCheckout: fixture.checkout,
+		PredecessorStop: authority.LinuxCloneReuseStop{
+			RunID: fixture.intent.RunID, Generation: fixture.intent.Generation,
+			SessionID:      "00000000-0000-4000-8000-000000000090",
+			LocalHandleID:  "00000000-0000-4000-8000-000000000088",
+			BindingID:      "00000000-0000-4000-8000-000000000089",
+			DeliveryDigest: strings.Repeat("a", 64),
+			ReceiptID:      "00000000-0000-4000-8000-000000000093",
+		},
+		RunID: "clone-reuse-run", Generation: 2,
+		WorkspaceFingerprint: "sha256:" + strings.Repeat("b", 64),
+	}
+	recovered, err := fixture.manager.RecoverLinuxCloneReuse(context.Background(), reuse)
+	if err != nil {
+		t.Fatalf("RecoverLinuxCloneReuse() error = %v", err)
+	}
+	if recovered.Path != fixture.checkout.Target || !recovered.linuxClone ||
+		recovered.Run != (RunRef{RunID: fixture.intent.RunID, Generation: fixture.intent.Generation}) {
+		t.Fatalf("recovered reuse prepared = %#v, want source-owned retained target", recovered)
+	}
+	if after := gitOutput(t, fixture.target, "status", "--porcelain=v1"); after != before {
+		t.Fatalf("reuse recovery changed the target worktree: before=%q after=%q", before, after)
+	}
+	if _, err := os.Lstat(fixture.intent.SeedPath); err != nil {
+		t.Fatalf("reuse recovery changed the source seed: %v", err)
+	}
+}

@@ -1,5 +1,8 @@
 # Codex 0.156.1 probe evidence
 
+Historical: superseded by `../0.167.1/` under the 2026-11-11 latest-stable
+policy.
+
 These files record local executable/help and transport-framing evidence only.
 They do not claim that Codex app-server native session, control, approval or
 usage semantics are supported by Symmetry.

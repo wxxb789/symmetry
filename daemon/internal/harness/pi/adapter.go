@@ -159,7 +159,7 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 	if len(request.Invocation.InitialInput) != 0 || request.Invocation.CloseInputAfterInitial {
 		return nil, errors.New("pi native transport does not accept legacy initial input")
 	}
-	resumeState, err := piResumeState(request.Resume)
+	resumeState, err := piResumeState(request.Resume, request.Invocation.Args)
 	if err != nil {
 		return nil, err
 	}
@@ -395,7 +395,7 @@ func ValidateRPCProfileArgs(profileArgs []string) error {
 // piResumeState validates the daemon-local handle before pi is launched. pi
 // remains responsible for loading the session, and Open then binds the exact
 // returned session ID and file through a correlated get_state response.
-func piResumeState(resume *harness.ResumeHandle) (*SessionState, error) {
+func piResumeState(resume *harness.ResumeHandle, profileArgs []string) (*SessionState, error) {
 	if resume == nil {
 		return nil, nil
 	}
@@ -427,7 +427,74 @@ func piResumeState(resume *harness.ResumeHandle) (*SessionState, error) {
 	if resume.NativeVersion != TestedVersion {
 		return nil, resumeRejected(fmt.Errorf("native version %q is not compatible with pi %s transport", resume.NativeVersion, TestedVersion))
 	}
+	if err := validatePiResumeSessionDirectory(resume.NativeSessionFilename, profileArgs); err != nil {
+		return nil, resumeRejected(err)
+	}
 	return &SessionState{SessionID: resume.NativeSessionID, SessionFile: resume.NativeSessionFilename}, nil
+}
+
+// validatePiResumeSessionDirectory checks, at this instant, that a retained
+// native file and its configured session directory resolve to a contained
+// path. It is not a durable binding: Pi 1.5.2 accepts only a path, re-resolves
+// it, and later reopens it for append, so a writer with access to the session
+// directory can replace the leaf, an ancestor, or the content after this
+// check. Pi exposes no fd/import API that would close that window. An
+// unconfigured profile preserves Pi's native default directory behavior.
+func validatePiResumeSessionDirectory(filename string, profileArgs []string) error {
+	sessionDirectory, configured, err := piProfileSessionDirectory(profileArgs)
+	if err != nil {
+		return err
+	}
+	if !configured {
+		return nil
+	}
+	if !filepath.IsAbs(sessionDirectory) {
+		return errors.New("pi session directory must be absolute")
+	}
+	resolvedDirectory, err := filepath.EvalSymlinks(sessionDirectory)
+	if err != nil {
+		return fmt.Errorf("resolve pi session directory: %w", err)
+	}
+	directoryInfo, err := os.Stat(resolvedDirectory)
+	if err != nil {
+		return fmt.Errorf("stat pi session directory: %w", err)
+	}
+	if !directoryInfo.IsDir() {
+		return errors.New("pi session directory is not a directory")
+	}
+	resolvedFile, err := filepath.EvalSymlinks(filename)
+	if err != nil {
+		return fmt.Errorf("resolve retained pi session file: %w", err)
+	}
+	relative, err := filepath.Rel(resolvedDirectory, resolvedFile)
+	if err != nil {
+		return fmt.Errorf("compare retained pi session directory: %w", err)
+	}
+	if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+		return errors.New("retained pi session file is outside the configured session directory")
+	}
+	return nil
+}
+
+func piProfileSessionDirectory(profileArgs []string) (string, bool, error) {
+	sessionDirectory := ""
+	configured := false
+	for index := 0; index < len(profileArgs); index++ {
+		if profileArgs[index] != "--session-dir" {
+			continue
+		}
+		if index+1 >= len(profileArgs) || strings.TrimSpace(profileArgs[index+1]) == "" ||
+			strings.HasPrefix(profileArgs[index+1], "-") {
+			return "", false, errors.New("pi --session-dir requires a non-option value")
+		}
+		if configured {
+			return "", false, errors.New("pi --session-dir must be configured at most once")
+		}
+		sessionDirectory = profileArgs[index+1]
+		configured = true
+		index++
+	}
+	return sessionDirectory, configured, nil
 }
 
 func isNilNativeProcess(process nativeProcess) bool {

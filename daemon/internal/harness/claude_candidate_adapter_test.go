@@ -140,8 +140,8 @@ func TestClaudeCandidateStartForwardsPersistProcessWithAuthority(t *testing.T) {
 	}
 }
 
-func TestClaudeCandidateOpenRequiresMatchingSystemInitIdentity(t *testing.T) {
-	t.Run("non-init does not open", func(t *testing.T) {
+func TestClaudeCandidateOpenDefersSystemInitUntilFirstTurn(t *testing.T) {
+	t.Run("open returns before init and matching init admits the result", func(t *testing.T) {
 		process := newClaudeCandidateFakeProcess()
 		adapter := newClaudeCandidateTestAdapter(process, nil)
 		session, err := adapter.Start(context.Background(), claudeCandidateStartRequest(t), &recordingClaudeCandidateSink{})
@@ -150,24 +150,53 @@ func TestClaudeCandidateOpenRequiresMatchingSystemInitIdentity(t *testing.T) {
 		}
 		cleanupClaudeCandidateSession(t, session)
 		staged := session.(StagedSession)
-		openContext, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		result := make(chan error, 1)
-		go func() {
-			_, openErr := staged.Open(openContext)
-			result <- openErr
-		}()
-		if err := process.emitJSON(`{"type":"system","subtype":"ready","session_id":"` + claudeCandidateTestSessionID + `"}`); err != nil {
-			t.Fatalf("emit non-init: %v", err)
+		opened, err := staged.Open(context.Background())
+		if err != nil || opened.ID != claudeCandidateTestSessionID {
+			t.Fatalf("Open() = %+v, %v; want requested UUID without system/init", opened, err)
 		}
-		cancel()
-		select {
-		case err := <-result:
-			if !errors.Is(err, context.Canceled) {
-				t.Fatalf("Open() error = %v, want context.Canceled after non-init event", err)
-			}
-		case <-time.After(time.Second):
-			t.Fatal("Open() did not return after cancellation")
+		if writes := process.writeCount(); writes != 0 {
+			t.Fatalf("writes during Open = %d, want 0", writes)
+		}
+		if err := staged.StartTurn(context.Background(), TurnRequest{Goal: "deferred init", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
+			t.Fatalf("StartTurn() error = %v", err)
+		}
+		if err := process.emitJSON(`{"type":"system","subtype":"init","session_id":"` + claudeCandidateTestSessionID + `"}`); err != nil {
+			t.Fatalf("emit matching init: %v", err)
+		}
+		if err := process.emitJSON(claudeCandidateResultEnvelope(t, validClaudeCandidateTaskResultJSON(t))); err != nil {
+			t.Fatalf("emit verified result: %v", err)
+		}
+		if err := staged.WaitTurn(context.Background()); err != nil {
+			t.Fatalf("WaitTurn() error = %v, want verified terminal", err)
+		}
+		if err := staged.Close(context.Background()); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+		if _, err := staged.Wait(context.Background()); err != nil {
+			t.Fatalf("Wait() error = %v", err)
+		}
+	})
+
+	t.Run("result before init is rejected", func(t *testing.T) {
+		process := newClaudeCandidateFakeProcess()
+		adapter := newClaudeCandidateTestAdapter(process, nil)
+		session, err := adapter.Start(context.Background(), claudeCandidateStartRequest(t), &recordingClaudeCandidateSink{})
+		if err != nil {
+			t.Fatalf("Start() error = %v", err)
+		}
+		cleanupClaudeCandidateSession(t, session)
+		staged := session.(StagedSession)
+		if _, err := staged.Open(context.Background()); err != nil {
+			t.Fatalf("Open() error = %v", err)
+		}
+		if err := staged.StartTurn(context.Background(), TurnRequest{Goal: "missing init", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
+			t.Fatalf("StartTurn() error = %v", err)
+		}
+		if err := process.emitJSON(claudeCandidateResultEnvelope(t, validClaudeCandidateTaskResultJSON(t))); !errors.Is(err, errClaudeCandidateMissingInit) {
+			t.Fatalf("result-before-init error = %v, want ErrMissingInit", err)
+		}
+		if err := staged.WaitTurn(context.Background()); !errors.Is(err, errClaudeCandidateMissingInit) {
+			t.Fatalf("WaitTurn() error = %v, want ErrMissingInit", err)
 		}
 	})
 
@@ -180,19 +209,14 @@ func TestClaudeCandidateOpenRequiresMatchingSystemInitIdentity(t *testing.T) {
 		}
 		cleanupClaudeCandidateSession(t, session)
 		staged := session.(StagedSession)
-		result := make(chan error, 1)
-		go func() {
-			_, openErr := staged.Open(context.Background())
-			result <- openErr
-		}()
-		_ = process.emitJSON(`{"type":"system","subtype":"init","session_id":"22222222-2222-4222-8222-222222222222"}`)
-		select {
-		case err := <-result:
-			if !errors.Is(err, claudeprotocol.ErrConflictingIdentity) {
-				t.Fatalf("Open() error = %v, want identity conflict", err)
-			}
-		case <-time.After(time.Second):
-			t.Fatal("Open() did not fail after mismatched init identity")
+		if _, err := staged.Open(context.Background()); err != nil {
+			t.Fatalf("Open() error = %v", err)
+		}
+		if err := staged.StartTurn(context.Background(), TurnRequest{Goal: "wrong init", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
+			t.Fatalf("StartTurn() error = %v", err)
+		}
+		if err := process.emitJSON(`{"type":"system","subtype":"init","session_id":"22222222-2222-4222-8222-222222222222"}`); !errors.Is(err, claudeprotocol.ErrConflictingIdentity) {
+			t.Fatalf("wrong-init error = %v, want ErrConflictingIdentity", err)
 		}
 	})
 }
@@ -342,73 +366,6 @@ func TestClaudeCandidateTerminalValidationFailureRejectsLateCancel(t *testing.T)
 	}
 	if calls, _ := process.terminationDetails(); calls != 0 {
 		t.Fatalf("late cancel after terminal failure Terminate calls = %d, want zero", calls)
-	}
-}
-
-func TestClaudeCandidateOpenCancellationStopsOwnedProcess(t *testing.T) {
-	process := newClaudeCandidateFakeProcess()
-	adapter := newClaudeCandidateTestAdapter(process, nil)
-	session, err := adapter.Start(context.Background(), claudeCandidateStartRequest(t), &recordingClaudeCandidateSink{})
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	cleanupClaudeCandidateSession(t, session)
-	staged := session.(StagedSession)
-	openContext, cancel := context.WithCancel(context.Background())
-	openResult := make(chan error, 1)
-	go func() {
-		_, openErr := staged.Open(openContext)
-		openResult <- openErr
-	}()
-	cancel()
-	select {
-	case openErr := <-openResult:
-		if !errors.Is(openErr, context.Canceled) {
-			t.Fatalf("Open() error = %v, want context.Canceled", openErr)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("cancelled Open() did not return")
-	}
-	if calls, _ := process.terminationDetails(); calls != 1 {
-		t.Fatalf("Open() cancellation Terminate calls = %d, want one owned cleanup", calls)
-	}
-	select {
-	case <-process.waitDone:
-	default:
-		t.Fatal("Open() cancellation returned while the process owner was still live")
-	}
-}
-
-func TestClaudeCandidateOpenDeadlineStopsOwnedProcess(t *testing.T) {
-	process := newClaudeCandidateFakeProcess()
-	adapter := newClaudeCandidateTestAdapter(process, nil)
-	session, err := adapter.Start(context.Background(), claudeCandidateStartRequest(t), &recordingClaudeCandidateSink{})
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	cleanupClaudeCandidateSession(t, session)
-	deadlineContext := newClaudeCandidateDoneContext(context.DeadlineExceeded)
-	staged := session.(StagedSession)
-	openErr := make(chan error, 1)
-	go func() {
-		_, err := staged.Open(deadlineContext)
-		openErr <- err
-	}()
-	select {
-	case err := <-openErr:
-		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("Open() error = %v, want context.DeadlineExceeded", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("deadline Open() did not return")
-	}
-	if calls, _ := process.terminationDetails(); calls != 1 {
-		t.Fatalf("Open() deadline Terminate calls = %d, want one owned cleanup", calls)
-	}
-	select {
-	case <-process.waitDone:
-	default:
-		t.Fatal("Open() deadline returned while the process owner was still live")
 	}
 }
 
@@ -850,30 +807,16 @@ func claudeCandidateStartRequest(t *testing.T) StartRequest {
 
 func openClaudeCandidateSession(t *testing.T, staged StagedSession, process *claudeCandidateFakeProcess) NativeSessionHandle {
 	t.Helper()
-	result := make(chan struct {
-		handle NativeSessionHandle
-		err    error
-	}, 1)
-	go func() {
-		handle, err := staged.Open(context.Background())
-		result <- struct {
-			handle NativeSessionHandle
-			err    error
-		}{handle: handle, err: err}
-	}()
+	handle, err := staged.Open(context.Background())
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	// Native Claude Code 2.1.322 emits init only after the first user frame.
+	// These tests are not about that ordering, so establish identity here.
 	if err := process.emitJSON(`{"type":"system","subtype":"init","session_id":"` + claudeCandidateTestSessionID + `"}`); err != nil {
 		t.Fatalf("emit matching init: %v", err)
 	}
-	select {
-	case opened := <-result:
-		if opened.err != nil {
-			t.Fatalf("Open() error = %v", opened.err)
-		}
-		return opened.handle
-	case <-time.After(time.Second):
-		t.Fatal("Open() did not complete after matching system/init")
-		return NativeSessionHandle{}
-	}
+	return handle
 }
 
 func cleanupClaudeCandidateSession(t *testing.T, session Session) {
@@ -977,22 +920,6 @@ type claudeCandidateFakeProcess struct {
 	waitDone        chan struct{}
 	finishOnce      sync.Once
 }
-
-type claudeCandidateDoneContext struct {
-	done chan struct{}
-	err  error
-}
-
-func newClaudeCandidateDoneContext(err error) *claudeCandidateDoneContext {
-	done := make(chan struct{})
-	close(done)
-	return &claudeCandidateDoneContext{done: done, err: err}
-}
-
-func (context *claudeCandidateDoneContext) Deadline() (time.Time, bool) { return time.Time{}, false }
-func (context *claudeCandidateDoneContext) Done() <-chan struct{}       { return context.done }
-func (context *claudeCandidateDoneContext) Err() error                  { return context.err }
-func (context *claudeCandidateDoneContext) Value(any) any               { return nil }
 
 func newClaudeCandidateFakeProcess() *claudeCandidateFakeProcess {
 	return &claudeCandidateFakeProcess{waitDone: make(chan struct{}), writeStarted: make(chan struct{})}

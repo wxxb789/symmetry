@@ -353,7 +353,7 @@ def config(kind, profile, command, version, model, state_dir):
     }
 
 pathlib.Path(pi_path).write_text(
-    json.dumps(config("pi", "pi-native", "/opt/symmetry-pi/pi", "0.87.1", "gpt-4.1-mini", rootless_app_state_dir), separators=(",", ":")),
+    json.dumps(config("pi", "pi-native", "/opt/symmetry-pi/pi", "1.5.2", "gpt-4.1-mini", rootless_app_state_dir), separators=(",", ":")),
     encoding="utf-8",
 )
 pathlib.Path(opencode_path).write_text(

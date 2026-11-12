@@ -1003,10 +1003,10 @@ func TestAdapterResumesExactPiSessionAtAnIdleBoundary(t *testing.T) {
 	}
 	session := startPiSession(t, adapter, harness.StartRequest{
 		Workspace: t.TempDir(), Resume: resume,
-		Invocation: execution.Invocation{Args: []string{"--provider", "openai", "--model", "gpt-5.6"}},
+		Invocation: execution.Invocation{Args: []string{"--session-dir", filepath.Dir(resume.NativeSessionFilename), "--provider", "openai", "--model", "gpt-5.6"}},
 	}, &recordingHarnessSink{})
 	defer closePiSession(t, session)
-	if got, want := strings.Join(invocation.Args, "\x00"), strings.Join([]string{"--mode", "rpc", "--session", resume.NativeSessionFilename, "--provider", "openai", "--model", "gpt-5.6"}, "\x00"); got != want {
+	if got, want := strings.Join(invocation.Args, "\x00"), strings.Join([]string{"--mode", "rpc", "--session", resume.NativeSessionFilename, "--session-dir", filepath.Dir(resume.NativeSessionFilename), "--provider", "openai", "--model", "gpt-5.6"}, "\x00"); got != want {
 		t.Fatalf("resume args = %q, want %q", got, want)
 	}
 	handle := openPiSession(t, session)
@@ -1020,6 +1020,11 @@ func TestAdapterResumesExactPiSessionAtAnIdleBoundary(t *testing.T) {
 
 func TestAdapterRejectsMissingOrOverriddenPiResumeBeforeLaunch(t *testing.T) {
 	valid := piResumeHandle(t)
+	validDirectory := filepath.Dir(valid.NativeSessionFilename)
+	notDirectory := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(notDirectory, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("write non-directory session path: %v", err)
+	}
 	tests := []struct {
 		name   string
 		resume *harness.ResumeHandle
@@ -1029,10 +1034,15 @@ func TestAdapterRejectsMissingOrOverriddenPiResumeBeforeLaunch(t *testing.T) {
 		{name: "missing native filename", resume: &harness.ResumeHandle{LocalHandleID: valid.LocalHandleID, NativeSessionID: valid.NativeSessionID, WorkspaceFingerprint: valid.WorkspaceFingerprint, NativeVersion: valid.NativeVersion}, want: ErrResumeRejected},
 		{name: "missing native file", resume: &harness.ResumeHandle{LocalHandleID: valid.LocalHandleID, NativeSessionID: valid.NativeSessionID, NativeSessionFilename: filepath.Join(t.TempDir(), "missing.jsonl"), WorkspaceFingerprint: valid.WorkspaceFingerprint, NativeVersion: valid.NativeVersion}, want: ErrResumeRejected},
 		{name: "incompatible native version", resume: &harness.ResumeHandle{LocalHandleID: valid.LocalHandleID, NativeSessionID: valid.NativeSessionID, NativeSessionFilename: valid.NativeSessionFilename, WorkspaceFingerprint: valid.WorkspaceFingerprint, NativeVersion: "0.0.0"}, want: ErrResumeRejected},
-		{name: "profile session override", resume: valid, args: []string{"--session", filepath.Join(t.TempDir(), "other.jsonl")}, want: ErrResumeRejected},
-		{name: "profile resume override", resume: valid, args: []string{"--resume"}, want: ErrResumeRejected},
-		{name: "profile compact resume override", resume: valid, args: []string{"-rother"}, want: ErrResumeRejected},
-		{name: "profile mode override", resume: valid, args: []string{"--mode=json"}, want: ErrResumeRejected},
+		{name: "session file outside configured directory", resume: valid, args: []string{"--session-dir", t.TempDir()}, want: ErrResumeRejected},
+		{name: "relative session directory", resume: valid, args: []string{"--session-dir", "sessions"}, want: ErrResumeRejected},
+		{name: "session directory is a file", resume: valid, args: []string{"--session-dir", notDirectory}, want: ErrResumeRejected},
+		{name: "duplicate session directory", resume: valid, args: []string{"--session-dir", validDirectory, "--session-dir", validDirectory}, want: ErrResumeRejected},
+		{name: "missing session directory value", resume: valid, args: []string{"--session-dir"}, want: ErrResumeRejected},
+		{name: "profile session override", resume: valid, args: []string{"--session-dir", validDirectory, "--session", filepath.Join(t.TempDir(), "other.jsonl")}, want: ErrResumeRejected},
+		{name: "profile resume override", resume: valid, args: []string{"--session-dir", validDirectory, "--resume"}, want: ErrResumeRejected},
+		{name: "profile compact resume override", resume: valid, args: []string{"--session-dir", validDirectory, "-rother"}, want: ErrResumeRejected},
+		{name: "profile mode override", resume: valid, args: []string{"--session-dir", validDirectory, "--mode=json"}, want: ErrResumeRejected},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1122,11 +1132,71 @@ func TestAdapterRejectsPiResumeWithMismatchedOrActiveStateBeforePrompt(t *testin
 	}
 }
 
+func TestAdapterRejectsPiResumeSymlinkOutsideSessionDirectory(t *testing.T) {
+	sessionDirectory := t.TempDir()
+	outsideDirectory := t.TempDir()
+	outsideFile := filepath.Join(outsideDirectory, "retained.jsonl")
+	if err := os.WriteFile(outsideFile, []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write outside retained pi session: %v", err)
+	}
+	link := filepath.Join(sessionDirectory, "retained.jsonl")
+	if err := os.Symlink(outsideFile, link); err != nil {
+		t.Skipf("symlink creation is unavailable: %v", err)
+	}
+	resume := piResumeHandleAt(t, link)
+	started := false
+	adapter := &Adapter{executable: "pi-test", startProcess: func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
+		started = true
+		return newFakeNativeProcess(), nil
+	}}
+	_, err := adapter.Start(context.Background(), harness.StartRequest{
+		Workspace: t.TempDir(), Resume: resume,
+		Invocation: execution.Invocation{Args: []string{"--session-dir", sessionDirectory}},
+	}, &recordingHarnessSink{})
+	if !errors.Is(err, ErrResumeRejected) {
+		t.Fatalf("symlinked outside resume error = %v, want ErrResumeRejected", err)
+	}
+	if started {
+		t.Fatal("Start() launched a resume whose session file escaped through a symlink")
+	}
+}
+
+func TestAdapterAcceptsPiResumeSymlinkInsideSessionDirectory(t *testing.T) {
+	sessionDirectory := t.TempDir()
+	target := filepath.Join(sessionDirectory, "retained.jsonl")
+	if err := os.WriteFile(target, []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write retained pi session: %v", err)
+	}
+	alias := filepath.Join(sessionDirectory, "alias.jsonl")
+	if err := os.Symlink(target, alias); err != nil {
+		t.Skipf("symlink creation is unavailable: %v", err)
+	}
+	resume := piResumeHandleAt(t, alias)
+	process := newFakeNativeProcess()
+	adapter := &Adapter{executable: "pi-test", startProcess: func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
+		return process, nil
+	}}
+	session := startPiSession(t, adapter, harness.StartRequest{
+		Workspace: t.TempDir(), Resume: resume,
+		Invocation: execution.Invocation{Args: []string{"--session-dir", sessionDirectory}},
+	}, &recordingHarnessSink{})
+	closePiSession(t, session)
+}
+
 func piResumeHandle(t *testing.T) *harness.ResumeHandle {
 	t.Helper()
 	filename := filepath.Join(t.TempDir(), "retained.jsonl")
 	if err := os.WriteFile(filename, []byte("{}\n"), 0o600); err != nil {
 		t.Fatalf("write retained pi session: %v", err)
+	}
+	return piResumeHandleAt(t, filename)
+}
+
+func piResumeHandleAt(t *testing.T, filename string) *harness.ResumeHandle {
+	t.Helper()
+	info, err := os.Stat(filename)
+	if err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("stat retained pi session %q: info=%v error=%v", filename, info, err)
 	}
 	return &harness.ResumeHandle{
 		LocalHandleID:         "local-retained-pi-handle",

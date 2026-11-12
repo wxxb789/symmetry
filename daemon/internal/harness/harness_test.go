@@ -149,7 +149,7 @@ func TestCapabilitiesRejectUnsafeVersionAndOperationClaims(t *testing.T) {
 func TestVerifiedCapabilitiesCanAdvertiseProviderAccess(t *testing.T) {
 	capabilities := Capabilities{
 		Kind:                  KindPi,
-		NativeVersion:         "0.87.1",
+		NativeVersion:         "1.5.2",
 		ImplementationVersion: "adapter-v1",
 		ProtocolVersion:       1,
 		VersionKnown:          true,

@@ -235,10 +235,10 @@ func TestNativeRepositoryTask(t *testing.T) {
 			result.Semantic != nil && result.Semantic.EvidenceRefs == nil,
 			result.Semantic != nil && result.Semantic.Diagnostics == nil)
 	}
-	if !result.Process.Terminated || result.Process.SinkError != nil || result.Process.OutputError != nil || !result.Process.OutputTruncated || result.Process.TerminationError != nil || result.Process.ContainmentError != nil {
-		t.Fatal("native Pi repository task process did not complete a bounded termination barrier")
+	if !result.Process.Terminated || result.Process.SinkError != nil || result.Process.OutputError != nil || result.Process.TerminationError != nil || result.Process.ContainmentError != nil {
+		t.Fatalf("native Pi repository task process did not complete a bounded termination barrier: %+v", result.Process)
 	}
-	t.Logf("native Pi stop: output_truncated=%t after acknowledged semantic settlement; not a full output drain", result.Process.OutputTruncated)
+	t.Logf("native Pi stop: output_truncated=%t after acknowledged semantic settlement", result.Process.OutputTruncated)
 
 	artifact, err := os.ReadFile(filepath.Join(workspace, nativeRepositoryTaskArtifact))
 	if err != nil {

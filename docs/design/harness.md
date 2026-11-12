@@ -7,16 +7,20 @@ Do not require native CLIs to speak the existing fake-agent JSON dialect.
 
 | Harness | Transport choice | v1 control policy |
 | --- | --- | --- |
-| Codex | `codex app-server`, stdio JSON-RPC | native thread/turn lifecycle; capability-probed steering, interrupt and approval mapping |
-| Claude Code | headless CLI with documented JSON/stream-JSON output and explicit session resume | next-turn guidance; process cancellation; no claimed safe pause or interactive approval bridge without verified native support |
-| pi | native `--mode rpc`, JSONL stdin/stdout | prompt/steer/abort/session RPC mapping; no inferred OS pause |
-| OpenCode | daemon-owned loopback `serve`, HTTP API + SSE | session/prompt/abort/event mapping; API-version-verified permissions |
+| Codex | `codex app-server`, stdio JSON-RPC; exact generated-schema digest gate | native thread/turn lifecycle; capability-probed steering, interrupt and approval mapping |
+| Claude Code | headless CLI with documented JSON/stream-JSON output; 2.1.322 defers `system/init` until the first user frame; resume remains a target for 0006e evidence | process cancellation in the current candidate; next-turn guidance and resume remain unsupported until 0006e; `Open` waits only for process readiness, and every terminal requires a matching `system/init`; no claimed safe pause or interactive approval bridge without verified native support |
+| Pi | native `--mode rpc`, JSONL stdin/stdout; `agent_settled` is the settled boundary | prompt/steer/abort/session RPC mapping; no inferred OS pause |
+| Oh My Pi (OMP) | native `omp --mode rpc`, custom JSONL with `ready` frame and protocol-version negotiation; `session_settled` is the settled boundary | prompt/steer/abort/session RPC mapping; never inherit Pi decoder or capability claims |
+| OmO (`oh-my-openagent`) | native `omo --mode rpc`, senpi/Pi-derived JSONL; the `omo app-server` Codex protocol is not assumed equivalent | prompt/steer/abort/session RPC mapping; probe the exact binary and protocol |
+| OpenCode V2 | daemon-owned loopback `opencode serve`, V2 `/api/...` HTTP API + SSE | target for 0006g; the current V1-era adapter remains fail-closed and promotes no V2 capability; API-version-verified permissions must be proved against 2.2.7; V1.x is skipped |
 
-Primary sources checked 2026-09-08:
+Primary references and installed binaries checked 2026-11-11:
 [Codex app-server](https://developers.openai.com/codex/app-server/),
 [Claude Code programmatic use](https://code.claude.com/docs/en/headless),
-[pi RPC](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/rpc.md),
-[OpenCode server](https://opencode.ai/docs/server/).
+[Pi RPC](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/rpc.md),
+[OMP RPC](https://github.com/can1357/oh-my-pi/blob/main/docs/rpc.md),
+[OmO CLI reference](https://github.com/code-yeongyu/oh-my-openagent/blob/dev/docs/reference/cli.md),
+[OpenCode V2 API](https://opencode.ai/docs/api/).
 These choose the integration architecture, not untested compatibility claims.
 Implementation records exact installed CLI version and sanitized native fixtures
 in `daemon/internal/harness/testdata/<kind>/<version>/`. Release support is an
@@ -24,9 +28,16 @@ explicit tested version set/range; an unknown version cannot advertise unverifie
 controls. Read the installed protocol/help/schema to fill exact wire DTO fields;
 do not choose a different integration architecture without amendment.
 
+Until the first prototype and release, each harness tracks the latest stable
+client (owner directive 2026-11-11). Do not freeze an older pin merely because
+its fixtures exist. A version jump requires a fresh probe, fixtures, capability
+projection and exact-binary evidence; older observations remain historical and
+do not satisfy the new pin. When release support is declared, the tested set or
+range becomes explicit and an unknown version remains fail-closed.
+
 ## Go API shape
 
-Use a concrete registry with four constructors, not a dynamic plugin loader.
+Use a concrete registry with one constructor per supported harness, not a dynamic plugin loader.
 The consumer interface expresses lifecycle; transport-specific DTOs stay private.
 
 ```go
@@ -95,6 +106,16 @@ is available. The current verified scheduling path is source-machine-local;
 cross-machine handoff remains unsupported unless a separately verified adapter
 and capability path is present. A local commit is not globally reachable just
 because its SHA is known.
+
+A retained Linux v2 session may reuse its predecessor B clone only through a
+daemon-local grant issued by the Store for the new RunKey. The grant binds the
+source clone intent/seed/checkout, the exact predecessor stop certificate, the
+new RunKey and the workspace fingerprint; it never transfers clone deletion
+ownership. The trusted gate/bootstrap must gain a reuse mode that opens the
+existing target, verifies its pinned device/inode and B identity, performs no
+mkdir/checkout/delete/Git effect, and revalidates before exec. Without that
+native mode, admission remains `resume_rejected`; a prior RunKey or a matching
+path alone is never reuse authority.
 
 ## Controls and permissions
 

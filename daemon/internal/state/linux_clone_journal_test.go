@@ -1434,3 +1434,58 @@ func requireLinuxCloneAMD64(t *testing.T) {
 		t.Skip("Linux clone-v2 state is Linux/amd64 only")
 	}
 }
+
+func TestLinuxCloneReuseAliasRetiresOnlyAfterStableStop(t *testing.T) {
+	_, intent := newLinuxCloneJournal(t, "reuse-source")
+	seed := authority.LinuxCloneSeedReceipt{
+		Version: authority.LinuxCloneVersion, BaseCommit: intent.BaseCommit,
+		Digest: "sha256:" + strings.Repeat("d", 64), Size: 128, Device: 7, Inode: 11,
+	}
+	checkout := authority.LinuxCloneCheckoutReceipt{
+		Version: authority.LinuxCloneVersion, RunID: intent.RunID, Generation: intent.Generation,
+		BindingKey: intent.BindingKey, ResourceID: intent.ResourceID, Target: intent.Target,
+		Nonce: intent.Nonce, SeedDigest: seed.Digest, BaseCommit: intent.BaseCommit,
+		TargetDevice: 9, TargetInode: 13,
+	}
+	reuse := authority.LinuxCloneReuseGrant{
+		Version:        authority.LinuxCloneVersion,
+		Source:         authority.LinuxCloneGrant{Intent: intent, Seed: seed},
+		SourceCheckout: checkout,
+		PredecessorStop: authority.LinuxCloneReuseStop{
+			RunID: "run-source", Generation: 1, SessionID: "00000000-0000-4000-8000-000000000090",
+			LocalHandleID: "00000000-0000-4000-8000-000000000088", BindingID: "00000000-0000-4000-8000-000000000089",
+			DeliveryDigest: strings.Repeat("e", 64), ReceiptID: "00000000-0000-4000-8000-000000000093",
+		},
+		RunID: "reuse-consumer", Generation: 1,
+		WorkspaceFingerprint: "sha256:" + strings.Repeat("f", 64),
+	}
+	consumer := stoppedTestJournal("reuse-consumer", 1)
+	consumer.LocalState = "cleanup_pending"
+	consumer.TerminalState = "completed"
+	consumer.TerminalVerdict = "ownership_lost"
+	consumer.LinuxCloneReuseGrant = &reuse
+	consumer.WorkspacePath = intent.Target
+	consumer.WorkspaceBindingKey = intent.BindingKey
+	consumer.WorkspaceRecoveryRequired = true
+	consumer.RetainWorkspace = true
+	reservation := testStateLinuxCgroupV2ReadyReservation()
+	handoff := testStateLinuxCgroupV2Handoff(reservation)
+	handoff.SupervisorPID = reservation.Helper.PID
+	handoff.SupervisorIdentity = reservation.Helper.Identity
+	mirror := *reservation.Mirror
+	handoff.Mirror = &mirror
+	owner, err := handoff.ToSupervisor()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopReceipt := testStateLinuxCgroupV2Receipt(owner, authority.LinuxCgroupStopProofHelper, nil)
+	proof := testStateLinuxCgroupV2ReleaseDTO(handoff, stopReceipt)
+	consumer.ContainmentCgroupReleaseProof = &proof
+	if !linuxCloneReuseAliasRetirable(consumer) {
+		t.Fatal("stably stopped reuse alias was not retirable")
+	}
+	consumer.TerminalState = ""
+	if linuxCloneReuseAliasRetirable(consumer) {
+		t.Fatal("reuse alias without a terminal state was retirable")
+	}
+}

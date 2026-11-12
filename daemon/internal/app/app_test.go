@@ -8904,6 +8904,10 @@ func (*fakeWorkspace) PrepareLinuxClone(_ context.Context, grant authority.Linux
 	}, nil
 }
 
+func (*fakeWorkspace) RecoverLinuxCloneReuse(context.Context, authority.LinuxCloneReuseGrant) (workspace.Prepared, error) {
+	return workspace.Prepared{}, errors.New("test fake does not recover retained Linux clones")
+}
+
 func (*fakeWorkspace) ValidateLinuxCloneCheckout(authority.LinuxCloneGrant, authority.LinuxCloneCheckoutReceipt) error {
 	return errors.New("test fake does not create Linux clone checkouts")
 }

@@ -1,6 +1,7 @@
 # Claude Code 2.1.281 evidence
 
-Owner directive 2026-09-24: track latest client. This directory supersedes
+Historical: superseded by `../2.1.322/` under the 2026-11-11 latest-stable
+policy. Owner directive 2026-09-24: track latest client. This directory supersedes
 `../2.1.259/` as the tested Claude Code version.
 
 ## Files

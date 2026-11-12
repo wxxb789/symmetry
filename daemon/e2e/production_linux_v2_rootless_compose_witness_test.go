@@ -274,7 +274,7 @@ func TestProductionLinuxV2RootlessComposeNativeWorkItemRefusal(t *testing.T) {
 		harness, profile, version, runtimeKeyEnvironment, executableEnvironment, stateEnvironment string
 	}{
 		{
-			harness: "pi", profile: "pi-native", version: "0.87.1",
+			harness: "pi", profile: "pi-native", version: "1.5.2",
 			runtimeKeyEnvironment: linuxV2RootlessComposePIRuntimeKeyEnvironment,
 			executableEnvironment: linuxV2RootlessComposePIExecutableEnvironment,
 			stateEnvironment:      linuxV2RootlessComposePIStateEnvironment,

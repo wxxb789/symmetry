@@ -1,6 +1,7 @@
 # pi 0.87.1 RPC synthetic fixtures
 
-The tested pin moved from `0.85.1` to `0.87.1` by owner directive 2026-09-24:
+Historical: superseded by `../1.5.2/` under the 2026-11-11 latest-stable
+policy. The tested pin moved from `0.85.1` to `0.87.1` by owner directive 2026-09-24:
 track latest client. Probing still returns `ErrNativeUnverified` and promotes no
 capability. A retained session recorded with native version `0.85.1` is now
 rejected on resume, which is the intended fail-closed behavior.

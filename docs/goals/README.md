@@ -6,6 +6,20 @@ is not a release, native-capability or whole-project readiness certificate.
 Deferred verification remains unpassed; use that goal's amended closure contract rather than treating
 every full-series acceptance requirement below as a blocker for this iteration.
 
+Goal [0006c](archive/0006c-retained-session-continuity.md) completed its
+owner-approved 2026-11-11 preserved-unsupported scope and is archived. Windows
+retained resume and Linux/Windows compatible fresh handoff are locally verified;
+Linux v2 retained resume remains an explicit prerequisite for 0006f and is not
+a passed predicate. Its closure is not a release, native-capability or
+exact-Subject acceptance certificate.
+
+Owner directive 2026-11-11: until the first prototype and release, every
+harness goal tracks the latest stable client rather than freezing an older
+release. Harness goals cover Pi, Oh My Pi (OMP), Codex, Claude Code, OmO
+(`oh-my-openagent`), and OpenCode V2. OpenCode V1.x is skipped; do not add or
+maintain a V1 adapter. Evidence for an older binary remains historical and
+cannot satisfy a newer pin.
+
 Each active goal below is one independently meaningful outcome intended to fit
 one agent run of at most 12 hours and one complete pull request. Every PR must be
 safe to merge by itself: the repository remains runnable, existing supported
@@ -18,7 +32,7 @@ its contract before implementation, but execute its review last.
 
 | Series | Default serial order |
 | --- | --- |
-| 0006 | 0006c through 0006i, then 0006-final (0006a and 0006b archived) |
+| 0006 | 0006d through 0006k, then 0006-final (0006a, 0006b and 0006c archived) |
 | 0007 | 0007a through 0007i, then 0007-final |
 | 0008 | 0008a through 0008d, then 0008-final |
 
@@ -31,13 +45,14 @@ acceptance actions. Missing evidence or unresolved requirements block completion
 
 | Goal | Desired outcome |
 | --- | --- |
-| [0006c](0006c-retained-session-continuity.md) | Verified retained-session resume and handoff |
 | [0006d](0006d-codex-native-capability.md) | Evidence-bounded Codex native capability |
 | [0006e](0006e-claude-native-capability.md) | Evidence-bounded Claude Code native capability |
 | [0006f](0006f-pi-native-capability.md) | Evidence-bounded pi native continuity |
-| [0006g](0006g-opencode-support-decision.md) | Evidence-backed OpenCode support decision |
+| [0006g](0006g-opencode-support-decision.md) | Evidence-backed OpenCode V2 support decision |
 | [0006h](0006h-credentialed-provider-accounting.md) | Credentialed provider reconciliation and accounting |
 | [0006i](0006i-exact-subject-release-acceptance.md) | Exact-subject release and authorized acceptance |
+| [0006j](0006j-omp-native-capability.md) | Evidence-bounded Oh My Pi native capability |
+| [0006k](0006k-omo-native-capability.md) | Evidence-bounded OmO native capability |
 | [0006-final](0006-final.md) | Final review of the complete durable-work outcome and acceptance evidence |
 
 ## Modern workspace

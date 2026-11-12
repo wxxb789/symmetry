@@ -1660,7 +1660,7 @@ func newLinuxV2NativeFixture(t *testing.T, testCase linuxV2NativeWitnessCase) li
 	if value.Runtime.HarnessKind != testCase.harness {
 		t.Fatalf("%s runtime.harness_kind = %q, want %q", testCase.configEnvironment, value.Runtime.HarnessKind, testCase.harness)
 	}
-	expectedVersion := map[string]string{"pi": "0.87.1", "opencode": "1.18.32"}[testCase.harness]
+	expectedVersion := map[string]string{"pi": "1.5.2", "opencode": "1.18.32"}[testCase.harness]
 	if value.Runtime.HarnessVersion != expectedVersion {
 		t.Fatalf("%s runtime.harness_version = %q, want pinned release %q", testCase.configEnvironment, value.Runtime.HarnessVersion, expectedVersion)
 	}
