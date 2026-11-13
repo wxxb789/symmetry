@@ -1,0 +1,10 @@
+{
+  "executable": "sha256:5064e6e0572dca86257363ca04d48653eef20ef27f1bd04b504ed7199ed3fd13",
+  "executable_bytes": 367634080,
+  "fixtures": {
+    "version.txt": "sha256:6ed611782bb054b29144b6975023a2729b4fa967ef871fc679e712686473e31b",
+    "help.txt": "sha256:1e734dc647e2d7c775d2e581b3aa68a8741ff4fdde7e864c4e5799d70777558c",
+    "stream-json.jsonl": "sha256:800c7a17433e41b1b6e53b7895c14a84bdedf042ddd35ab8d9712527f0a2bda9",
+    "native-repository-turn.jsonl": "sha256:c9b48635c0e8a5df2d9ba20b28a28736ab3105451578b6aa19a290c8c1a913f5"
+  }
+}

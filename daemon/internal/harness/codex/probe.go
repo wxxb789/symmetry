@@ -9,9 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -42,13 +40,6 @@ type CommandRunner interface {
 // being reduced to misleading stdout fixture bytes.
 type SchemaRunner interface {
 	SchemaDigest(context.Context, string) (string, error)
-}
-
-// ExecutableHasher is implemented by runners that can supply the SHA-256 of the
-// exact executable bytes. The production runner hashes the resolved file; tests
-// may supply a recorded digest so the promotion gate stays deterministic.
-type ExecutableHasher interface {
-	ExecutableDigest(context.Context, string) (string, error)
 }
 
 // boundedCommand is optional so tests can inspect invocation construction
@@ -166,68 +157,19 @@ func (runner osCommandRunner) SchemaDigest(ctx context.Context, executable strin
 
 // ExecutableDigest returns the SHA-256 of the exact executable bytes. The
 // promotion gate requires this value to equal TestedExecutableHash before any
-// native capability is claimed.
+// native capability is claimed. The digest resolver rejects a nil or expired
+// context before this method is reached, so the guard lives in
+// harness.HashExecutableFile.
 func (runner osCommandRunner) ExecutableDigest(ctx context.Context, executable string) (string, error) {
-	if ctx == nil {
-		return "", errors.New("codex executable digest context must not be nil")
-	}
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	return hashExecutableFile(ctx, executable)
+	return harness.HashExecutableFile(ctx, executable)
 }
 
 // executableDigest returns the SHA-256 of the exact executable bytes, or false
 // when the bytes cannot be verified. An unverifiable executable never promotes a
-// native capability, so callers fail closed instead of failing the probe.
+// native capability, so callers fail closed instead of failing the probe. Blob
+// resolution is shared with the Claude probe; only the runner type is local.
 func executableDigest(ctx context.Context, executable string, runner CommandRunner) (string, bool) {
-	if ctx == nil || ctx.Err() != nil {
-		return "", false
-	}
-	if hasher, ok := runner.(ExecutableHasher); ok {
-		digest, err := hasher.ExecutableDigest(ctx, executable)
-		if err != nil || ctx.Err() != nil {
-			return "", false
-		}
-		return digest, digest != ""
-	}
-	digest, err := hashExecutableFile(ctx, executable)
-	if err != nil {
-		return "", false
-	}
-	return digest, true
-}
-
-func hashExecutableFile(ctx context.Context, executable string) (string, error) {
-	path, err := exec.LookPath(executable)
-	if err != nil {
-		return "", err
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-	hasher := sha256.New()
-	buffer := make([]byte, 1<<20)
-	for {
-		if contextErr := ctx.Err(); contextErr != nil {
-			return "", contextErr
-		}
-		count, readErr := file.Read(buffer)
-		if count > 0 {
-			if _, writeErr := hasher.Write(buffer[:count]); writeErr != nil {
-				return "", writeErr
-			}
-		}
-		if readErr == io.EOF {
-			break
-		}
-		if readErr != nil {
-			return "", readErr
-		}
-	}
-	return "sha256:" + hex.EncodeToString(hasher.Sum(nil)), nil
+	return harness.ResolveExecutableDigest(ctx, executable, runner)
 }
 
 // ProbeResult records executable/version/help, generated-schema, and the

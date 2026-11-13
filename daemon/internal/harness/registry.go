@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -18,9 +17,16 @@ import (
 )
 
 const (
-	defaultClaudeExecutable   = "claude"
-	testedClaudeVersion       = "2.1.322"
-	claudeProbeTimeout        = time.Second
+	defaultClaudeExecutable = "claude"
+	// claudeProbeTimeout bounds one Claude Code probe command. The pinned client
+	// answers version and help in well under a second on an idle host, but the
+	// 367 MB Windows executable has been observed to exceed one second while the
+	// host is loaded; a spurious deadline is not a capability verdict and, because
+	// a deadline is not a tolerated sentinel, it would fail a daemon startup
+	// instead of reporting an unavailable client. Five seconds keeps the probe
+	// bounded while tolerating host contention: a broken, slow or hanging
+	// executable still fails closed inside this bound.
+	claudeProbeTimeout        = 5 * time.Second
 	claudeProbeMaxOutputBytes = 64 << 10
 	defaultCodexExecutable    = "codex"
 	testedCodexVersion        = CodexTestedVersion
@@ -298,85 +304,16 @@ func runClaudeProbe(ctx context.Context, run func(context.Context) ([]byte, erro
 }
 
 func probeClaudeExecutable(ctx context.Context, executable string, runner ClaudeCommandRunner) (Capabilities, error) {
-	if ctx == nil {
-		return Capabilities{}, errors.New("harness probe context must not be nil")
+	evidence, probeErr := probeClaudeNativeEvidence(ctx, executable, runner)
+	capabilities := claudeEvidenceCapabilities(evidence, probeErr)
+	if probeErr != nil {
+		return capabilities, probeErr
 	}
-	if err := ctx.Err(); err != nil {
-		return Capabilities{}, err
-	}
-	if strings.TrimSpace(executable) == "" {
-		executable = defaultClaudeExecutable
-	}
-	if runner == nil {
-		runner = osClaudeCommandRunner{}
-	}
-
-	capabilities := UnsupportedCapabilities(KindClaude, "Claude Code native session lifecycle is unverified")
-	versionOutput, err := runClaudeProbe(ctx, func(probeContext context.Context) ([]byte, error) {
-		return runner.Run(probeContext, executable, "--version")
-	})
-	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return Capabilities{}, err
-		}
-		if contextErr := ctx.Err(); contextErr != nil {
-			return Capabilities{}, contextErr
-		}
-		capabilities = UnsupportedCapabilities(KindClaude, "Claude Code executable is unavailable")
-		return capabilities, &AvailabilityError{
-			Kind:   KindClaude,
-			Reason: fmt.Sprintf("%s: %v", executable, err),
-		}
-	}
-
-	version := parseClaudeVersion(string(versionOutput))
-	capabilities.NativeVersion = version
-	capabilities.VersionKnown = version != ""
-	if version == "" {
-		return capabilities, fmt.Errorf("%w: unable to parse Claude Code version from %q", ErrUnsupportedVersion, strings.TrimSpace(string(versionOutput)))
-	}
-	if version != testedClaudeVersion {
-		return capabilities, fmt.Errorf("%w: Claude Code %s is not in the tested version set", ErrUnsupportedVersion, version)
-	}
-
-	helpOutput, err := runClaudeProbe(ctx, func(probeContext context.Context) ([]byte, error) {
-		return runner.Run(probeContext, executable, "--help")
-	})
-	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return capabilities, err
-		}
-		if contextErr := ctx.Err(); contextErr != nil {
-			return capabilities, contextErr
-		}
-		return capabilities, fmt.Errorf("%w: Claude Code help probe failed: %v", ErrNativeUnverified, err)
-	}
-	if !hasClaudeTransportHelp(string(helpOutput)) {
-		return capabilities, fmt.Errorf("%w: Claude Code help did not advertise print stream-json transport with --json-schema", ErrNativeUnverified)
-	}
-	capabilities.TransportVerified = true
-
-	// The installed version and documented headless transport are known, but
-	// no native session/control lifecycle has been behaviorally verified.
+	// Version and help evidence alone never proves a native session lifecycle.
+	// The composed Claude adapter owns the exact-blob promotion; this registry
+	// projection stays fail-closed so a caller that does not compose it cannot
+	// mistake transport evidence for native support.
 	return capabilities, ErrNativeUnverified
-}
-
-var claudeVersionPattern = regexp.MustCompile(`\b([0-9]+\.[0-9]+\.[0-9]+)\b`)
-
-func parseClaudeVersion(output string) string {
-	match := claudeVersionPattern.FindStringSubmatch(output)
-	if len(match) == 2 {
-		return match[1]
-	}
-	return ""
-}
-
-func hasClaudeTransportHelp(output string) bool {
-	value := strings.ToLower(output)
-	return strings.Contains(value, "--print") &&
-		strings.Contains(value, "--output-format") &&
-		strings.Contains(value, "stream-json") &&
-		strings.Contains(value, "--json-schema")
 }
 
 // NewPiAdapter returns the explicit unsupported pi adapter.

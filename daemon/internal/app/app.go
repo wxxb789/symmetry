@@ -1162,7 +1162,7 @@ func probeErrorContainsOnly(err, expected error) bool {
 func newHarnessRegistry(profile config.AgentProfile) *harness.Registry {
 	registry := harness.NewRegistry()
 	_ = registry.Register(harness.KindCodex, codex.NewAdapterWithNativeIdentity(profile.Command, profile.NativeModel, profile.NativeModelProvider))
-	_ = registry.Register(harness.KindClaude, harness.NewClaudeAdapterWithExecutable(profile.Command))
+	_ = registry.Register(harness.KindClaude, harness.NewClaudeCandidateAdapter(profile.Command))
 	// These adapters retain conservative probes until native lifecycle evidence
 	// exists. Registering the concrete transports lets the configured runtime
 	// use exactly one implementation for both probing and a future verified run.

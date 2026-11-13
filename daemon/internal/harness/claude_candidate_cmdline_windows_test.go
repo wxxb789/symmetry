@@ -21,7 +21,7 @@ func TestClaudeCandidateWindowsCommandLineFitsCreateProcessLimit(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 	cleanupClaudeCandidateSession(t, session)
-	executable := `C:\Users\runneradmin\AppData\Local\mise\installs\claude-code\` + testedClaudeVersion + `\claude.exe`
+	executable := `C:\Users\runneradmin\AppData\Local\mise\installs\claude-code\` + ClaudeTestedVersion + `\claude.exe`
 	commandLine := windows.ComposeCommandLine(append([]string{executable}, invocation.Args...))
 	if units := len(utf16.Encode([]rune(commandLine))); units >= 32767 {
 		t.Fatalf("Claude candidate command line = %d UTF-16 units, want < 32767", units)
