@@ -1,5 +1,15 @@
 # Next goals for local Codex
 
+Goal [0006d](archive/0006d-codex-native-capability.md) completed its
+owner-approved 2026-11-13 preserved-unsupported scope and is archived. The
+exact Codex `0.168.0` executable blob promotes start, events and cancel on
+Windows only, with transport containment, a credentialed repository turn,
+cancellation, artifact and cumulative-counter observations bound to the tested
+binary and the reviewed commit. Linux remains explicitly unsupported, so this
+closure is not a full-series, release, native-capability or exact-Subject
+acceptance certificate; Linux evidence stays a requirement for `0006-final`
+under that goal's full-series acceptance contract.
+
 Goal [0006b](archive/0006b-crash-safe-process-containment.md) completed its
 owner-approved 2026-10-10 bounded pre-0.0.1 iteration and is archived. Its closure
 is not a release, native-capability or whole-project readiness certificate.
