@@ -800,7 +800,20 @@ func (session *claudeCandidateSession) handleProcessOutput(ctx context.Context, 
 		return err
 	}
 	if session.closing {
+		// Process.Terminate stops the runner's output delivery after this fence
+		// is already up, so a callback delivered in that window can only be
+		// rejected by the fence itself. While an accepted stop owns the active
+		// turn (Control(cancel) or a direct Close claimed the cancellation), such
+		// a callback is that stop's own output shutdown: reporting it as a
+		// transport failure would let the runner record a synthetic SinkError
+		// and reclassify the applied cancellation as a failed run. Every other
+		// fence rejection keeps failing closed, so a new turn, a control
+		// operation, and any delivery after a normal close are unaffected.
+		acceptedStop := session.cancelRequested && !session.turnFinal
 		session.mutex.Unlock()
+		if acceptedStop {
+			return nil
+		}
 		return errClaudeCandidateSessionClosed
 	}
 	if !session.processReady {

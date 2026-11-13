@@ -1241,6 +1241,42 @@ func cleanupClaudeCandidateSession(t *testing.T, session Session) {
 	cleanupClaudeCandidateSessionExpectClose(t, session, nil)
 }
 
+// claudeCandidateStdoutSink returns the exact execution sink the adapter handed
+// to this process, so a test can deliver a callback through the real output
+// handler the way the runner's delivery loop does.
+func claudeCandidateStdoutSink(t *testing.T, process *claudeCandidateFakeProcess) execution.Sink {
+	t.Helper()
+	process.mu.Lock()
+	sink := process.sink
+	process.mu.Unlock()
+	if sink == nil {
+		t.Fatal("fake Claude process sink is nil")
+	}
+	return sink
+}
+
+// awaitClaudeCandidateCloseFence blocks until the session raised its close
+// fence, so a test can deliver a callback in the window where the stop has been
+// claimed but has not yet reached the runner's output shutdown. Close takes the
+// session write mutex before it issues Terminate, so a test holding that mutex
+// also holds the stop before the runner stops delivering output.
+func awaitClaudeCandidateCloseFence(t *testing.T, session *claudeCandidateSession) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		session.mutex.Lock()
+		closing := session.closing
+		session.mutex.Unlock()
+		if closing {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("close fence was never raised")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func cleanupClaudeCandidateSessionExpectClose(t *testing.T, session Session, expectedCloseErr error) {
 	t.Helper()
 	t.Cleanup(func() {
@@ -1538,5 +1574,145 @@ func TestClaudeCandidateCancellationOwnsIncompleteTrailingRecord(t *testing.T) {
 	}
 	if result.Process.OutputError != nil {
 		t.Fatalf("process settlement = %+v, want the truncated tail treated as cancellation truncation", result.Process)
+	}
+}
+
+// A delivery callback that the close fence rejects while an accepted stop owns
+// the turn is that stop's own output shutdown, not a transport failure. Control
+// claims the cancellation and the fence together, while the runner stops output
+// delivery only inside the termination it has not issued yet, so a rejection in
+// that window would otherwise be recorded as the process result's SinkError and
+// reclassify the applied cancellation as a failed run.
+func TestClaudeCandidateCancellationOwnsFenceRejectedDelivery(t *testing.T) {
+	process := newClaudeCandidateFakeProcess()
+	// Keep the watcher blocked in Wait so the accepted stop, not the process
+	// reaper, decides the callback window under test.
+	process.holdTermination = true
+	adapter := newClaudeCandidateTestAdapter(process, nil)
+	session, err := adapter.Start(context.Background(), claudeCandidateStartRequest(t), &recordingClaudeCandidateSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	cleanupClaudeCandidateSession(t, session)
+	staged := session.(StagedSession)
+	openClaudeCandidateSession(t, staged, process)
+	if err := staged.StartTurn(context.Background(), TurnRequest{Goal: "cancel under a live stdout chunk", Context: json.RawMessage(`{}`)}); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	internal := staged.(*claudeCandidateSession)
+	stdoutSink := claudeCandidateStdoutSink(t, process)
+	// Hold the close path before the runner: Close takes this mutex before it
+	// issues Terminate, and Terminate is what stops output delivery. The fence is
+	// up while the mutex is held, which is exactly the window in which the
+	// runner's delivery loop still records a sink rejection.
+	internal.writeMutex.Lock()
+	receipts := make(chan ControlReceipt, 1)
+	receiptErrors := make(chan error, 1)
+	go func() {
+		receipt, controlErr := staged.Control(context.Background(), ControlRequest{CommandID: "cancel-1", Kind: ControlCancel})
+		receipts <- receipt
+		receiptErrors <- controlErr
+	}()
+	awaitClaudeCandidateCloseFence(t, internal)
+	internal.mutex.Lock()
+	cancelRequested := internal.cancelRequested
+	internal.mutex.Unlock()
+	if !cancelRequested {
+		t.Fatal("Control(cancel) did not claim cancellation before the fence rejected the callback")
+	}
+	if calls, _ := process.terminationDetails(); calls != 0 {
+		t.Fatalf("Terminate calls = %d before the callback, want the stop still in flight so output delivery is enabled", calls)
+	}
+	deliveryErr := stdoutSink.Handle(context.Background(), execution.Event{Stream: execution.Stdout, Sequence: 4, At: time.Now().UTC(), Data: []byte(`{"type":"log","message":"winding down"}` + "\n")})
+	// execution.Process.deliverOutput keeps a sink rejection as the process
+	// result's SinkError while output delivery is still enabled, so the rejected
+	// callback is the process evidence the watcher validates below.
+	process.terminateResult = execution.Result{PID: 42, ExitCode: -1, Terminated: true, SinkError: deliveryErr, FinishedAt: time.Now().UTC()}
+	internal.writeMutex.Unlock()
+	awaitClaudeCandidateTermination(t, process, "cancellation never reached bounded process termination")
+	process.finish()
+	receipt := <-receipts
+	receiptErr := <-receiptErrors
+	turnErr := staged.WaitTurn(context.Background())
+	result, err := staged.Wait(context.Background())
+	if err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+	if deliveryErr != nil {
+		t.Fatalf("delivery callback = %v for settled result = %+v (process = %+v), want the accepted stop's shutdown counted as delivery", deliveryErr, result, result.Process)
+	}
+	if receiptErr != nil || receipt.Outcome != ControlApplied {
+		t.Fatalf("Control(cancel) = receipt=%+v error=%v, want applied", receipt, receiptErr)
+	}
+	if turnErr != nil {
+		t.Fatalf("WaitTurn() error = %v, want the cancelled turn that the accepted stop owns", turnErr)
+	}
+	if result.Kind != ResultCancelled || result.Semantic != nil || result.Reason != nil {
+		t.Fatalf("result = %+v, want a cancelled result without a failure reason", result)
+	}
+	if result.Process.SinkError != nil {
+		t.Fatalf("process settlement = %+v, want no synthetic sink failure on the accepted stop", result.Process)
+	}
+}
+
+// The complementary negative control: a delivery callback rejected by the close
+// fence while no cancellation owns the turn is not shutdown evidence either. A
+// turn whose terminal was already observed and whose session is then closed
+// normally keeps failing closed, so the fence never launders a transport
+// rejection into a clean settlement.
+func TestClaudeCandidateNormalCloseRejectedDeliveryStillFailsClosed(t *testing.T) {
+	process := newClaudeCandidateFakeProcess()
+	adapter := newClaudeCandidateTestAdapter(process, nil)
+	session, err := adapter.Start(context.Background(), claudeCandidateStartRequest(t), &recordingClaudeCandidateSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	cleanupClaudeCandidateSession(t, session)
+	staged := session.(StagedSession)
+	openClaudeCandidateSession(t, staged, process)
+	if err := staged.StartTurn(context.Background(), TurnRequest{Goal: "observe a terminal before the normal close", Context: json.RawMessage(`{}`)}); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	if err := process.emitJSON(claudeCandidateResultEnvelope(t, validClaudeCandidateTaskResultJSON(t))); err != nil {
+		t.Fatalf("emit verified terminal: %v", err)
+	}
+	if err := staged.WaitTurn(context.Background()); err != nil {
+		t.Fatalf("WaitTurn() error = %v, want the observed terminal's own outcome", err)
+	}
+	internal := staged.(*claudeCandidateSession)
+	stdoutSink := claudeCandidateStdoutSink(t, process)
+	// Same window as the cancellation case: the fence is up, and the runner has
+	// not stopped output delivery yet.
+	internal.writeMutex.Lock()
+	closeErrors := make(chan error, 1)
+	go func() { closeErrors <- staged.Close(context.Background()) }()
+	awaitClaudeCandidateCloseFence(t, internal)
+	internal.mutex.Lock()
+	cancelRequested := internal.cancelRequested
+	internal.mutex.Unlock()
+	if cancelRequested {
+		t.Fatal("Close() claimed cancellation for a turn whose terminal was already observed")
+	}
+	if calls, _ := process.terminationDetails(); calls != 0 {
+		t.Fatalf("Terminate calls = %d before the callback, want the stop still in flight so output delivery is enabled", calls)
+	}
+	deliveryErr := stdoutSink.Handle(context.Background(), execution.Event{Stream: execution.Stdout, Sequence: 4, At: time.Now().UTC(), Data: []byte(`{"type":"log","message":"after the terminal"}` + "\n")})
+	process.terminateResult = execution.Result{PID: 42, ExitCode: -1, Terminated: true, SinkError: deliveryErr, FinishedAt: time.Now().UTC()}
+	internal.writeMutex.Unlock()
+	if err := <-closeErrors; err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	result, err := staged.Wait(context.Background())
+	if err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+	if !errors.Is(deliveryErr, errClaudeCandidateSessionClosed) {
+		t.Fatalf("delivery callback = %v, want the closed-session rejection for a delivered frame after a normal close", deliveryErr)
+	}
+	if result.Kind != ResultFailed || result.Reason == nil || *result.Reason != protocol.TaskResultReasonProcessFailure {
+		t.Fatalf("result = %+v, want a failed settlement with a process-failure reason", result)
+	}
+	if result.Process.SinkError == nil {
+		t.Fatalf("process settlement = %+v, want the rejected delivery recorded as the process sink failure", result.Process)
 	}
 }
