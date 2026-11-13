@@ -18,8 +18,6 @@ const (
 	piLiveProbeShimEnv       = "SYMMETRY_PI_NATIVE_PROBE_SHIM"
 )
 
-// piLiveProbeExecutable resolves the absolute executable an opt-in live probe
-// control launches, or skips the control.
 func piLiveProbeExecutable(t *testing.T) string {
 	t.Helper()
 	if os.Getenv(piLiveProbeEnabledEnv) != "1" {
@@ -110,8 +108,11 @@ func TestPiProbeLiveRejectsDifferentBlob(t *testing.T) {
 	t.Logf("shim %s digest %s (tested blob %s at %s)", shim, shimDigest, TestedExecutableHash, executable)
 
 	result, probeErr := Probe(context.Background(), shim)
-	if probeErr == nil {
-		t.Fatal("probe of a different blob succeeded, want a fail-closed rejection")
+	if !errors.Is(probeErr, harness.ErrNativeUnverified) {
+		t.Fatalf("shim probe error = %v, want ErrNativeUnverified", probeErr)
+	}
+	if result.Version != TestedVersion || !result.VersionKnown || !result.TransportKnown || result.ExecutableDigest != shimDigest || !result.ExecutableHashKnown {
+		t.Fatalf("shim probe result = %+v, want the tested version, transport and shim digest", result)
 	}
 	t.Logf("shim probe rejection: %v", probeErr)
 	if result.Capabilities.Verified || result.Capabilities.Start || result.Capabilities.Events ||
@@ -122,6 +123,13 @@ func TestPiProbeLiveRejectsDifferentBlob(t *testing.T) {
 		if reason := result.Capabilities.Unsupported[string(capability)]; strings.TrimSpace(reason) == "" {
 			t.Fatalf("%s carries no unsupported reason: %+v", capability, result.Capabilities)
 		}
+	}
+	wantRejectionReason := "exact tested executable blob"
+	if runtime.GOOS != "windows" {
+		wantRejectionReason = "verified only on Windows; Linux admission needs the Linux v2 owner path"
+	}
+	if reason := result.Capabilities.Unsupported[string(harness.CapabilityStart)]; !strings.Contains(reason, wantRejectionReason) {
+		t.Fatalf("shim probe reason = %q, want %q", reason, wantRejectionReason)
 	}
 
 	// Isolate the blob gate: real version and help output from the tested
@@ -137,8 +145,8 @@ func TestPiProbeLiveRejectsDifferentBlob(t *testing.T) {
 		result.Capabilities.Cancel || result.Capabilities.Resume {
 		t.Fatalf("capabilities = %+v, want no promoted operation for foreign bytes", result.Capabilities)
 	}
-	if reason := result.Capabilities.Unsupported[string(harness.CapabilityStart)]; !strings.Contains(reason, "exact tested executable blob") {
-		t.Fatalf("blob-gate reason = %q, want the exact-blob rejection", reason)
+	if reason := result.Capabilities.Unsupported[string(harness.CapabilityStart)]; !strings.Contains(reason, wantRejectionReason) {
+		t.Fatalf("blob-gate reason = %q, want %q", reason, wantRejectionReason)
 	}
 }
 
@@ -147,11 +155,9 @@ func TestPiProbeLiveRejectsDifferentBlob(t *testing.T) {
 // launches.
 type piForeignBlobRunner struct {
 	digest string
-	calls  []string
 }
 
 func (runner *piForeignBlobRunner) Run(ctx context.Context, executable string, args ...string) ([]byte, error) {
-	runner.calls = append(runner.calls, strings.Join(args, " "))
 	return (osCommandRunner{}).Run(ctx, executable, args...)
 }
 

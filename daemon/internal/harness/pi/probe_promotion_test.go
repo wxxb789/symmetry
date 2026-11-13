@@ -155,6 +155,10 @@ func TestPiCapabilitiesForPlatformPromotesOnlyProvedOperations(t *testing.T) {
 }
 
 func TestProbePromotesOnlyThroughADeclaredExactDigest(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve test executable: %v", err)
+	}
 	outputs := map[string][]byte{
 		"--version": []byte(TestedVersion + "\n"),
 		"--help":    []byte(piRPCHelpFixture),
@@ -182,11 +186,11 @@ func TestProbePromotesOnlyThroughADeclaredExactDigest(t *testing.T) {
 			digest:     piShimExecutableDigest, executableKnown: true,
 		},
 		{
-			// The host resolves the tested blob for `pi` here, so this control
+			// The test executable always exists, so this control
 			// fails the run if the gate ever falls back to hashing the resolved
 			// file for a fixture that declared nothing.
 			name:       "no declared digest",
-			executable: "pi",
+			executable: executable,
 			runner:     fakeCommandRunner{outputs: outputs},
 		},
 	}

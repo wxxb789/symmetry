@@ -78,6 +78,10 @@ promotion controls need `SYMMETRY_PI_NATIVE_PROBE=1`,
 `SYMMETRY_PI_NATIVE_PROBE_EXECUTABLE` and, for the blob-mismatch control,
 `SYMMETRY_PI_NATIVE_PROBE_SHIM`.
 
-These tests are transport-level observations of the adapter: they never contact
-an upstream provider, never record provider accounting, and do not exercise
-daemon/Control admission, PostgreSQL durability or exactly-once effects.
+With the loopback configuration above, these tests produce transport-level
+observations of the adapter; the recorded receipts used gateways that did not
+contact an upstream provider. When the repository-task base URL is empty, the
+repository-task and retained-resume tests instead use the allowlisted credential
+path and may contact the configured upstream provider. Neither configuration
+records provider accounting or exercises daemon/Control admission, PostgreSQL
+durability or exactly-once effects.

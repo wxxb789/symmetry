@@ -4692,13 +4692,8 @@ type nativeProbeDigestFixtures struct {
 	digest    string
 }
 
-func (runner nativeProbeDigestFixtures) Run(_ context.Context, _ string, args ...string) ([]byte, error) {
-	key := strings.Join(args, " ")
-	response, ok := runner.responses[key]
-	if !ok {
-		return nil, errors.New("fixture command not found")
-	}
-	return response, nil
+func (runner nativeProbeDigestFixtures) Run(ctx context.Context, executable string, args ...string) ([]byte, error) {
+	return (nativeProbeCommandFixtures{responses: runner.responses}).Run(ctx, executable, args...)
 }
 
 func (runner nativeProbeDigestFixtures) ExecutableDigest(context.Context, string) (string, error) {
