@@ -77,11 +77,25 @@ git show <rev>:daemon/internal/harness/testdata/pi/1.5.2/<file> | sha256sum
 - Base commit: `bcac19e` (`docs(goals): bind 0006f to the 1.5.2 pin,
   exact-blob promotion and Windows scope`), the revision this increment branched
   from.
-- Final revision: **unbound in this run**. The deliverable is intentionally
-  uncommitted, so no final revision exists to compute a range digest from, and a
-  working-tree digest is not reproducible from the repository — the 0006e
-  review had to retract exactly that class of value. Run at merge:
-  `git diff --no-color --text bcac19e <final> -- '*.go' | sha256sum`.
+- Final revision: `b7495ae` (`feat(pi): promote 1.5.2 native capability on the
+  exact tested blob`). Range digest at that revision:
+  `git diff --no-color --text bcac19e b7495ae -- '*.go' | sha256sum` =
+  `de95247945fcbf1cacee727377026e41246229e4264fed37de4717fffb5a6bf7` over 9 Go
+  files. A later change to those files voids this binding and the observations
+  below.
+- Operator re-observation at `b7495ae`, after the commit: the same gateway
+  source (`.symmetry/native-linux-tools/loopback-responses-gateway.go`, SHA-256
+  `a268b5b2…`) served at `-port 4142` with base URL `http://127.0.0.1:4142/v1`
+  — `TestNativeRepositoryTask` PASS 2.78s, `TestNativeRepositoryTaskRetainedResume`
+  PASS 4.79s, `TestNativeCancellationDrainsInFlightLoopbackRequest` PASS 1.62s,
+  `TestPiProbeLivePromotesTheTestedBlobOnlyOnWindows` PASS 4.42s and
+  `TestPiProbeLiveRejectsDifferentBlob` PASS 7.18s; every opt-in run logged the
+  resolved executable digest `sha256:40a062be…`.
+- Fixture digests at the final revision: `git show
+  b7495ae:daemon/internal/harness/testdata/pi/1.5.2/<file> | sha256sum`
+  reproduces `fixture-manifest.json` exactly (`version.txt` `ded1b601e81d31ca…`,
+  `help.txt` `47d1839ce42f284c…`, `lifecycle.jsonl` `406fade872bf31cd…`,
+  `compaction-continuation.jsonl` `7f2cdf9c1988eff7…`).
 - Delivery content binding: each delivered file's SHA-256, reproducible from the
   merged revision with `git show <rev>:<path> | sha256sum` when the file is
   committed unchanged. Any post-review change to these files voids this binding
@@ -282,20 +296,22 @@ executed in this run, so the witness change is verified by the tagged Go test,
 
 ## Gates
 
-Recorded in the increment report; the exact commands and exit codes are:
+Run by the operator on the increment worktree with
+`python3 .tmp/gdd-adapters/run-gates.py --repo Q:/repos/symmetry` (evidence:
+`.tmp/gate-evidence-0006f-final.txt`; head `bcac19e`, 18 dirty paths, host
+windows, `CGO_ENABLED=0`). The committed revision `b7495ae` contains exactly the
+content that was gated: the worktree was clean immediately after the commit.
 
-```text
-cd daemon
-gofmt -l .
-go vet ./...
-go test ./... -count=1 -timeout 300s
-go build ./cmd/symmetry-daemon ./cmd/symmetry-fake-agent
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...
-```
+| command | exit | seconds |
+| --- | --- | --- |
+| `gofmt -l .` (daemon) | 0 | 0.4 |
+| `go vet ./...` | 0 | 2.9 |
+| `go test ./... -count=1 -timeout 300s` | 0 | 122.8 |
+| `go build ./cmd/symmetry-daemon ./cmd/symmetry-fake-agent` | 0 | 2.8 |
+| `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...` | 0 | 2.5 |
 
-The environment's ambient `SYMMETRY_CLAUDE_LIVE_SMOKE*` variables were cleared
-for these runs so the opt-in credentialed smokes stayed skipped (with them set
-but `SYMMETRY_CLAUDE_LIVE_SMOKE_SHIM` absent, the unrelated Claude blob-mismatch
-control fails by its own precondition). `-race` is unavailable on this host (no
-cgo toolchain); the CI ubuntu `daemon` job owns race coverage and no weaker
-substitute was used here.
+result: ALL GREEN. `go test` covered every package of the module, including
+`internal/harness/pi` (12.8s) and `internal/app` (117.9s). The opt-in
+credentialed smokes and the live Pi controls stayed skipped without their
+environment; `-race` is unavailable on this host (no cgo toolchain) and the CI
+ubuntu `daemon` job owns race coverage, so no weaker substitute was used here.
