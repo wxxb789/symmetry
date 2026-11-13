@@ -3,6 +3,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
   @behaviour SymmetryControl.Integrations.Provider
 
   alias SymmetryControl.Integrations.ChangeAction
+  alias SymmetryControl.RequestHash
 
   @api "https://api.github.com"
   @owner_pattern ~r/\A[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\z/
@@ -98,6 +99,8 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
            metadata: %{
              "owner" => owner,
              "repository" => name,
+             "repository_id" => body["id"],
+             "repository_node_id" => body["node_id"],
              "default_branch" => body["default_branch"],
              "visibility" => body["visibility"],
              "archived" => body["archived"] || false
@@ -151,6 +154,271 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
 
   def execute(_connection, _resource, _work_item, _operation, _input, _headers),
     do: {:error, :invalid_request}
+
+  # This receipt is persisted with the intent before any provider request. Never
+  # reconstruct a missing receipt from today's repository or task presentation.
+  @doc false
+  def action_binding(resource, action_id, subject, operation, input, target, execution) do
+    metadata = resource.metadata || %{}
+
+    with {:ok, _uuid} <- Ecto.UUID.cast(action_id),
+         {:ok, _run_id} <- Ecto.UUID.cast(execution["run_id"]),
+         {:ok, _task_id} <- Ecto.UUID.cast(execution["task_id"]),
+         true <- complete_subject?(subject, resource.id),
+         id when is_integer(id) and id > 0 <- metadata["repository_id"],
+         node when is_binary(node) and node != "" <- metadata["repository_node_id"],
+         :ok <- ChangeAction.validate_keys(operation, input),
+         {:ok, title} <- ChangeAction.title(input),
+         {:ok, body} <- ChangeAction.body(input),
+         true <- is_binary(body),
+         true <- valid_action_target?(operation, input, target) do
+      {:ok,
+       %{
+         "v" => 1,
+         "action_id" => action_id,
+         "run_id" => execution["run_id"],
+         "task_id" => execution["task_id"],
+         "subject" => subject,
+         "repository" => %{"id" => id, "node_id" => node},
+         "operation" => operation,
+         "input" => input,
+         "target" => target,
+         "title" => title,
+         "body" => body
+       }}
+    else
+      _unprovable -> {:error, :provider_access_unavailable}
+    end
+  end
+
+  @impl true
+  def execute_bound(connection, resource, _work_item, operation, input, binding, headers) do
+    with {:ok, {owner, name}} <- bound_repository(connection, resource, operation, binding),
+         true <- input == binding["input"] || {:error, :invalid_request},
+         :ok <- verify_repository(owner, name, binding, headers),
+         :ok <- verify_branch_head(owner, name, binding, headers),
+         {:ok, pull_request} <- bound_pull_request(owner, name, binding, headers),
+         :ok <- validate_existing_target(pull_request, binding),
+         {:ok, result} <- mutate_bound_pull_request(owner, name, pull_request, binding, headers) do
+      if exact_pull_request?(result, binding),
+        do: delivery(result, owner, name),
+        else: {:error, :invalid_provider_response}
+    end
+  end
+
+  @impl true
+  def readback_action(connection, resource, operation, binding, headers) do
+    with {:ok, {owner, name}} <- bound_repository(connection, resource, operation, binding),
+         :ok <- verify_repository(owner, name, binding, headers),
+         :ok <- verify_branch_head(owner, name, binding, headers),
+         {:ok, pull_request} <- bound_pull_request(owner, name, binding, headers),
+         true <- exact_pull_request?(pull_request, binding),
+         {:ok, delivery} <- delivery(pull_request, owner, name) do
+      {:ok, %{status: :confirmed, delivery: delivery}}
+    else
+      # Provider errors and unverifiable identities never authorize another write.
+      {:error, {:transport, _reason} = reason} -> {:error, reason}
+      _unconfirmed -> {:ok, %{status: :unconfirmed}}
+    end
+  end
+
+  defp complete_subject?(subject, resource_id) when is_map(subject) do
+    map_size(subject) == 3 and subject["resource_id"] == resource_id and
+      is_binary(subject["commit"]) and
+      Regex.match?(~r/\A(?:[0-9a-f]{40}|[0-9a-f]{64})\z/, subject["commit"]) and
+      is_binary(subject["tree_digest"]) and
+      Regex.match?(~r/\Asha256:[0-9a-f]{64}\z/, subject["tree_digest"])
+  end
+
+  defp complete_subject?(_subject, _resource_id), do: false
+
+  defp valid_action_target?("change.upsert", input, %{"kind" => "branches"} = target) do
+    with {:ok, source} <- ChangeAction.branch(input, "source_branch"),
+         {:ok, base} <- ChangeAction.branch(input, "target_branch") do
+      source == target["source_branch"] and base == target["target_branch"]
+    else
+      _invalid -> false
+    end
+  end
+
+  defp valid_action_target?("change.update", input, %{"kind" => "pull_request"} = target),
+    do:
+      is_binary(target["pull_request_url"]) and
+        input["pull_request_url"] == target["pull_request_url"]
+
+  defp valid_action_target?("change.update", _input, %{"kind" => "branches"} = target) do
+    match?({:ok, _}, ChangeAction.branch(target, "source_branch")) and
+      match?({:ok, _}, ChangeAction.branch(target, "target_branch"))
+  end
+
+  defp valid_action_target?(_operation, _input, _target), do: false
+
+  defp bound_repository(connection, resource, operation, binding) do
+    with %{"v" => 1, "operation" => ^operation, "input" => input} <- binding,
+         {:ok, rebuilt} <-
+           action_binding(
+             resource_for_binding(resource, binding),
+             binding["action_id"],
+             binding["subject"],
+             operation,
+             input,
+             binding["target"],
+             binding
+           ),
+         true <- rebuilt == binding,
+         {:ok, {owner, name}} <- repository_parts(resource.external_ref),
+         :ok <- require_account(connection, owner),
+         true <- "changes" in connection.capabilities do
+      {:ok, {owner, name}}
+    else
+      _invalid -> {:error, :invalid_request}
+    end
+  end
+
+  defp resource_for_binding(resource, binding) do
+    %{
+      resource
+      | metadata: %{
+          "repository_id" => get_in(binding, ["repository", "id"]),
+          "repository_node_id" => get_in(binding, ["repository", "node_id"])
+        }
+    }
+  end
+
+  defp verify_repository(owner, name, binding, headers) do
+    with {:ok, repository} <- get("/repos/#{segment(owner)}/#{segment(name)}", headers) do
+      if repository_identity?(repository, binding), do: :ok, else: {:error, :forbidden}
+    end
+  end
+
+  defp repository_identity?(repository, binding) when is_map(repository),
+    do:
+      repository["id"] == binding["repository"]["id"] and
+        repository["node_id"] == binding["repository"]["node_id"]
+
+  defp repository_identity?(_repository, _binding), do: false
+
+  defp verify_branch_head(
+         owner,
+         name,
+         %{"target" => %{"kind" => "branches"} = target} = binding,
+         headers
+       ) do
+    with {:ok, ref} <-
+           get(
+             "/repos/#{segment(owner)}/#{segment(name)}/git/ref/heads/#{segment(target["source_branch"])}",
+             headers
+           ) do
+      if get_in(ref, ["object", "sha"]) == binding["subject"]["commit"],
+        do: :ok,
+        else: {:error, :forbidden}
+    end
+  end
+
+  defp verify_branch_head(_owner, _name, _binding, _headers), do: :ok
+
+  defp bound_pull_request(
+         owner,
+         name,
+         %{"operation" => "change.update", "input" => input},
+         headers
+       ) do
+    with {:ok, number} <- pull_request_number(input["pull_request_url"], owner, name),
+         {:ok, pull_request} <-
+           get("/repos/#{segment(owner)}/#{segment(name)}/pulls/#{number}", headers),
+         {:ok, ^number} <- pull_request_response_number(pull_request, owner, name) do
+      {:ok, pull_request}
+    else
+      {:error, reason} -> {:error, reason}
+      _invalid -> {:error, :invalid_provider_response}
+    end
+  end
+
+  defp bound_pull_request(owner, name, %{"target" => target}, headers) do
+    query =
+      URI.encode_query(%{
+        "state" => "all",
+        "head" => "#{owner}:#{target["source_branch"]}",
+        "base" => target["target_branch"],
+        "per_page" => 2
+      })
+
+    with {:ok, entries} when is_list(entries) <-
+           get("/repos/#{segment(owner)}/#{segment(name)}/pulls?#{query}", headers) do
+      case entries do
+        [] -> {:ok, nil}
+        [one] -> {:ok, one}
+        _multiple -> {:error, :ambiguous_provider_objects}
+      end
+    else
+      {:error, reason} -> {:error, reason}
+      _invalid -> {:error, :invalid_provider_response}
+    end
+  end
+
+  defp validate_existing_target(nil, %{"operation" => "change.upsert"}), do: :ok
+
+  defp validate_existing_target(pull_request, binding) do
+    if pull_request_target?(pull_request, binding), do: :ok, else: {:error, :forbidden}
+  end
+
+  defp pull_request_target?(pull_request, binding) when is_map(pull_request) do
+    repository_identity?(get_in(pull_request, ["head", "repo"]), binding) and
+      repository_identity?(get_in(pull_request, ["base", "repo"]), binding) and
+      get_in(pull_request, ["head", "sha"]) == binding["subject"]["commit"] and
+      branch_target_matches?(pull_request, binding["target"])
+  end
+
+  defp pull_request_target?(_pull_request, _binding), do: false
+
+  defp branch_target_matches?(pull_request, %{"kind" => "branches"} = target),
+    do:
+      get_in(pull_request, ["head", "ref"]) == target["source_branch"] and
+        get_in(pull_request, ["base", "ref"]) == target["target_branch"]
+
+  defp branch_target_matches?(_pull_request, %{"kind" => "pull_request"}), do: true
+
+  defp exact_pull_request?(pull_request, binding) do
+    pull_request_target?(pull_request, binding) and pull_request["title"] == binding["title"] and
+      pull_request["body"] == marked_body(binding)
+  end
+
+  defp marked_body(binding) do
+    digest = binding |> RequestHash.canonical() |> Base.encode16(case: :lower)
+    marker = "<!-- symmetry-provider-action:v1:#{binding["action_id"]}:#{digest} -->"
+    if binding["body"] == "", do: marker, else: binding["body"] <> "\n\n" <> marker
+  end
+
+  defp mutate_bound_pull_request(owner, name, nil, binding, headers) do
+    target = binding["target"]
+
+    request(:post, "/repos/#{segment(owner)}/#{segment(name)}/pulls", headers, %{
+      "head" => target["source_branch"],
+      "base" => target["target_branch"],
+      "title" => binding["title"],
+      "body" => marked_body(binding)
+    })
+  end
+
+  defp mutate_bound_pull_request(owner, name, pull_request, binding, headers) do
+    with {:ok, number} <- pull_request_response_number(pull_request, owner, name),
+         {:ok, result} <-
+           request(
+             :patch,
+             "/repos/#{segment(owner)}/#{segment(name)}/pulls/#{number}",
+             headers,
+             %{
+               "title" => binding["title"],
+               "body" => marked_body(binding)
+             }
+           ),
+         {:ok, ^number} <- pull_request_response_number(result, owner, name) do
+      {:ok, result}
+    else
+      {:error, reason} -> {:error, reason}
+      _invalid -> {:error, :invalid_provider_response}
+    end
+  end
 
   defp execute_change(_connection, owner, name, _work_item, "change.upsert", input, headers) do
     with {:ok, source} <- ChangeAction.branch(input, "source_branch"),

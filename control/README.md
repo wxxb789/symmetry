@@ -33,5 +33,40 @@ GitHub and Azure DevOps connection setup, credential handling, resource binding,
 external ownership rules, and synchronization are documented in
 [`docs/goal-03-runbook.md`](../docs/goal-03-runbook.md).
 
+## Subject-bound GitHub Goal effects
+
+New Goal-managed GitHub changes freeze the complete Subject, action/run/task
+identity, repository ID/node ID, approved selector and explicit title/body before
+dispatch. Synchronize the repository first to obtain its stable provider IDs.
+Supply a body string, including an explicit empty string when intended; an
+omitted body is refused rather than clearing provider-owned content. The PR body
+includes a hidden marker binding the complete frozen action receipt.
+
+Unknown outcomes use authenticated, read-only exact-object reconciliation.
+Repository, head commit, selector, title, body and marker must match before an
+action can settle successfully. Projection still requires current authority and
+execution fences; confirmation alone does not grant projection. A completed
+action replays its stored result without a provider request. Historical intents
+without a binding are not reconstructed from current task state; old accepted
+GitHub Goal changes fail closed. Azure and non-Goal operation semantics remain
+unchanged. The binding migration refuses rollback once bindings exist.
+
+The opt-in credentialed witness is restricted to the operator-approved private
+`wxxb789/symmetry-0006h-provider-fixture` repository and isolated PostgreSQL port
+`55436`, database `symmetry_0006h_test`. It requires production `gh` keyring Auth,
+prepared real Subjects/branches and a manifest of the exact dirty source bytes.
+Run from the repository root to inspect its complete prerequisites and flags:
+
+```sh
+python3 scripts/ci/credentialed-provider-witness.py --help
+```
+
+The witness exercises the Control broker in separate Linux BEAM processes, not a
+daemon/native harness. Its timeout fault withholds an actual provider response
+after acknowledgement; it does not claim a naturally occurring GitHub timeout.
+Monetary values remain `null`/`unknown` without provider-owned billing evidence;
+rate-limit counters do not establish money or zero billing. See the
+[0006h completion contract](../docs/goals/0006h-credentialed-provider-accounting.md).
+
 Chat, durable instructions, decision packets, and cooperative worker controls
 are documented in [`docs/goal-04-runbook.md`](../docs/goal-04-runbook.md).

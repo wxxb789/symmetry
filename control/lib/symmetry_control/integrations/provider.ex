@@ -13,4 +13,10 @@ defmodule SymmetryControl.Integrations.Provider do
   @callback sync_ci(map(), map(), map(), term()) :: {:ok, map()} | {:error, term()}
   @callback execute(map(), map(), map(), operation(), map(), term()) ::
               {:ok, map()} | {:error, term()}
+  @callback execute_bound(map(), map(), map(), operation(), map(), map(), term()) ::
+              {:ok, map()} | {:error, term()}
+  @callback readback_action(map(), map(), operation(), map(), term()) ::
+              {:ok, %{status: :confirmed, delivery: map()} | %{status: :unconfirmed}}
+              | {:error, term()}
+  @optional_callbacks execute_bound: 7, readback_action: 5
 end
