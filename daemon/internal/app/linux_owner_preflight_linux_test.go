@@ -744,6 +744,45 @@ func TestLinuxSystemdEffectivePropertiesRequireLiveOwnerAndExactCommands(t *test
 	}
 }
 
+func TestLinuxSystemdEffectivePropertiesAllowOmittedEmptyExecHooks(t *testing.T) {
+	policy := linuxSystemdUnitPolicy{
+		unit: "symmetry-daemon.service", user: "symmetry", group: "symmetry", home: "/home/symmetry",
+		execStart:    []string{"/usr/libexec/symmetry/symmetry-daemon", "-config", "/etc/symmetry/daemon.json"},
+		execStartPre: []string{"/usr/libexec/symmetry/symmetry-daemon", "-verify-linux-owner-install", "-config", "/etc/symmetry/daemon.json"},
+	}
+	properties := map[string]string{
+		"LoadState": "loaded", "FragmentPath": "/etc/systemd/system/symmetry-daemon.service", "DropInPaths": "",
+		"Type": "simple", "User": "symmetry", "Group": "symmetry", "NoNewPrivileges": "no", "UMask": "0077",
+		"WorkingDirectory": "/", "KillMode": "control-group", "SendSIGKILL": "yes", "TimeoutStopUSec": "120000000",
+		"Restart": "on-failure", "ExecStart": linuxSystemdShowCommand(policy.execStart),
+		"ExecStartPre": linuxSystemdShowCommand(policy.execStartPre),
+		"Slice":        "system.slice", "Delegate": "no", "DelegateSubgroup": "", "RuntimeDirectory": "",
+		"RuntimeDirectoryMode": "", "After": "local-fs.target symmetry-owner.service",
+		"BindsTo": "symmetry-owner.service", "Environment": "", "EnvironmentFiles": "", "PassEnvironment": "",
+		"UnsetEnvironment": "", "SupplementaryGroups": "", "Before": "", "Requires": "", "Requisite": "",
+		"Wants": "", "PartOf": "", "Conflicts": "", "RequiresMountsFor": "",
+	}
+	// systemctl omits unset optional Exec hooks rather than returning an empty
+	// property, which is equivalent to an empty command list.
+	delete(properties, "ExecStop")
+	delete(properties, "ExecStopPost")
+	delete(properties, "EnvironmentFiles")
+	delete(properties, "PassEnvironment")
+	delete(properties, "UnsetEnvironment")
+	delete(properties, "SupplementaryGroups")
+	if err := validateEffectiveLinuxSystemdProperties(properties, policy, nil, linuxACLSubject{uid: 1001, gid: 1002}, linuxACLSubject{uid: 1003, gid: 1004}); err != nil {
+		t.Fatalf("omitted empty Exec hooks were rejected: %v", err)
+	}
+	delete(properties, "ExecStart")
+	if err := validateEffectiveLinuxSystemdProperties(properties, policy, nil, linuxACLSubject{uid: 1001, gid: 1002}, linuxACLSubject{uid: 1003, gid: 1004}); err == nil {
+		t.Fatal("omitted ExecStart was accepted")
+	}
+	parsed, err := parseLinuxSystemdShowExec("{ path=/bin/true ; argv[]=/bin/true ; ignore_errors=no }")
+	if err != nil || parsed.flags != "" || len(parsed.argv) != 1 || parsed.argv[0] != "/bin/true" {
+		t.Fatalf("omitted empty Exec flags = %#v, %v", parsed, err)
+	}
+}
+
 func linuxOwnerSystemdShowFixture(policy linuxSystemdUnitPolicy) map[string]string {
 	return map[string]string{
 		"LoadState": "loaded", "FragmentPath": "/etc/systemd/system/" + policy.unit, "DropInPaths": "",

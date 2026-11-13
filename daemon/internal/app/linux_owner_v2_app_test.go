@@ -4068,3 +4068,23 @@ func TestBindLinuxCloneReuseRequiresStoppedSourceAndStableSession(t *testing.T) 
 		t.Fatalf("second reuse binding lost its exact grant: %#v", secondBound)
 	}
 }
+
+func TestValidateLinuxCodexHostPrerequisitesRequiresBwrapAndCodeModeHost(t *testing.T) {
+	directory := t.TempDir()
+	command := filepath.Join(directory, "codex")
+	if err := os.WriteFile(command, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", filepath.Join(directory, "empty-path"))
+	if err := validateLinuxCodexHostPrerequisites(config.AgentProfile{Command: command}); err == nil {
+		t.Fatal("Codex preflight accepted a host without bwrap or code-mode host")
+	}
+	for _, name := range []string{"bwrap", "codex-code-mode-host"} {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := validateLinuxCodexHostPrerequisites(config.AgentProfile{Command: command}); err != nil {
+		t.Fatalf("Codex preflight rejected executable host prerequisites beside the command: %v", err)
+	}
+}

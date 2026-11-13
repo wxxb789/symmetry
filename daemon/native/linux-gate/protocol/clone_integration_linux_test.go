@@ -239,6 +239,9 @@ func TestInstalledLinuxOwnerCloneCheckoutScratch(t *testing.T) {
 	if releaseErr != nil {
 		t.Fatalf("one-use B clone RELEASE and durable checkout ACK/native exec: %v", releaseErr)
 	}
+	if _, err := unix.FcntlInt(releaseGuard.OwnerPipe.Fd(), unix.F_GETFD, 0); err != nil {
+		t.Fatalf("clone RELEASE closed the caller-owned owner-pipe guard: %v", err)
+	}
 	if !readyRecorded {
 		t.Fatal("native clone exec completed without a durable checkout-ready callback")
 	}

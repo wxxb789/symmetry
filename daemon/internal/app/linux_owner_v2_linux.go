@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strconv"
@@ -111,6 +112,11 @@ func (owner *linuxV2OwnerResources) Preflight(ctx context.Context, value config.
 	if err != nil || configuredKind != kind {
 		return nil, errors.New("Linux v2 owner preflight harness differs from configured runtime")
 	}
+	if kind == harness.KindCodex {
+		if err := validateLinuxCodexHostPrerequisites(profile); err != nil {
+			return nil, err
+		}
+	}
 	identity, err := owner.anchor.Discover(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("discover authenticated Linux owner anchor: %w", err)
@@ -174,6 +180,25 @@ func (owner *linuxV2OwnerResources) trustedPiProviderExtensionGroupID() uint32 {
 		return 0
 	}
 	return owner.owner.BGID
+}
+
+func validateLinuxCodexHostPrerequisites(profile config.AgentProfile) error {
+	command := strings.TrimSpace(profile.Command)
+	if command == "" || !filepath.IsAbs(command) {
+		return errors.New("Linux Codex command must be an absolute path")
+	}
+	binaryDirectory := filepath.Dir(command)
+	for _, name := range []string{"bwrap", "codex-code-mode-host"} {
+		if _, err := exec.LookPath(name); err == nil {
+			continue
+		}
+		candidate := filepath.Join(binaryDirectory, name)
+		info, err := os.Stat(candidate)
+		if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
+			return fmt.Errorf("Linux Codex admission requires executable %s beside %s or on PATH", name, command)
+		}
+	}
+	return nil
 }
 
 func (owner *linuxV2OwnerResources) BuildInvocation(ctx context.Context, key state.RunKey, fence protocol.Fence, invocation execution.Invocation, callbacks execution.LinuxV2JournalCallbacks) (execution.Invocation, error) {

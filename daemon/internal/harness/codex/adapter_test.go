@@ -97,6 +97,67 @@ func TestAdapterStagesNativeTransportAndRequiresMatchingStructuredCompletion(t *
 	}
 }
 
+func TestAdapterStartUsesOwnerSuppliedProcessSeam(t *testing.T) {
+	process := newFakeNativeProcess()
+	adapter := &Adapter{
+		executable: "codex-test",
+		startProcess: func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
+			t.Fatal("adapter default process starter was used despite an owner-supplied seam")
+			return nil, nil
+		},
+	}
+	called := false
+	raw, err := adapter.Start(context.Background(), harness.StartRequest{
+		Workspace: t.TempDir(),
+		Invocation: execution.Invocation{
+			Env: []string{"PATH=test"},
+		},
+		StartProcess: func(_ context.Context, _ execution.Invocation, sink execution.Sink) (harness.NativeProcess, error) {
+			called = true
+			process.sink = sink
+			return process, nil
+		},
+	}, &recordingHarnessSink{})
+	if err != nil {
+		t.Fatalf("Start() with owner process seam: %v", err)
+	}
+	if !called {
+		t.Fatal("adapter did not use the owner-supplied process seam")
+	}
+	session, ok := raw.(*nativeSession)
+	if !ok {
+		t.Fatalf("Start() session = %T, want *nativeSession", raw)
+	}
+	session.cancel()
+}
+
+func TestAdapterForwardsLinuxV2Invocation(t *testing.T) {
+	process := newFakeNativeProcess()
+	var invocation execution.Invocation
+	adapter := &Adapter{
+		executable: "codex-test",
+		startProcess: func(_ context.Context, got execution.Invocation, sink execution.Sink) (nativeProcess, error) {
+			invocation = got
+			process.sink = sink
+			return process, nil
+		},
+	}
+	v2 := &execution.LinuxV2Invocation{}
+	raw, err := adapter.Start(context.Background(), harness.StartRequest{
+		Workspace:  t.TempDir(),
+		Invocation: execution.Invocation{LinuxV2Required: true, LinuxV2: v2},
+	}, &recordingHarnessSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if !invocation.LinuxV2Required || invocation.LinuxV2 != v2 {
+		t.Fatalf("Linux v2 invocation = required:%t v2:%p, want true and %p", invocation.LinuxV2Required, invocation.LinuxV2, v2)
+	}
+	if session, ok := raw.(harness.Session); ok {
+		_ = session.Close(context.Background())
+	}
+}
+
 func TestAdapterStartForwardsPersistProcessWithAuthority(t *testing.T) {
 	process := newFakeNativeProcess()
 	var invocation execution.Invocation

@@ -313,6 +313,10 @@ type StartRequest struct {
 	ProviderAccess *protocol.ProviderAccess
 	ProviderBridge *ProviderBridgeLaunch
 	Invocation     execution.Invocation
+	// StartProcess is an optional owner-supplied launch seam. A witness or
+	// test can wrap the exact execution.Process before the adapter observes
+	// it; production adapters use their own Runner when this is nil.
+	StartProcess func(context.Context, execution.Invocation, execution.Sink) (NativeProcess, error)
 	// PersistProcess is called after the native process has started but before
 	// the adapter exposes the session or drains pre-ready output. A failure
 	// leaves the native launch outcome conservative. Any surviving cleanup
@@ -325,6 +329,15 @@ type StartRequest struct {
 	// PersistContainmentStopReceipt records the exact stop witness before the
 	// adapter's process-containment helper may be released.
 	PersistContainmentStopReceipt func(pid int, identity string, receipt authority.StopReceipt) error
+}
+
+// NativeProcess is the adapter-facing process lifecycle shared by native
+// transport adapters and owner witnesses.
+type NativeProcess interface {
+	WriteInputContext(context.Context, []byte) error
+	Wait() execution.Result
+	Terminate(context.Context, time.Duration) error
+	ProcessDetails() (int, string)
 }
 
 // ProviderBridgeLifecycle is the daemon-owned local broker boundary attached

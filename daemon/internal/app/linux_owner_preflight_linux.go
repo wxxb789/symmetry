@@ -2017,7 +2017,9 @@ func validateEffectiveLinuxSystemdProperties(properties map[string]string, polic
 		"Wants", "PartOf", "Conflicts", "RequiresMountsFor", "Environment", "EnvironmentFiles",
 		"PassEnvironment", "UnsetEnvironment", "SupplementaryGroups"} {
 		if _, ok := properties[key]; !ok {
-			return fmt.Errorf("systemd show did not return required property %s", key)
+			// systemctl omits unset properties. Missing is equivalent to an
+			// empty value; required non-empty values still fail their checks.
+			properties[key] = ""
 		}
 	}
 	fragment := filepath.Join("/etc/systemd/system", policy.unit)
@@ -2231,8 +2233,8 @@ func parseLinuxSystemdShowExec(value string) (linuxSystemdExecProperty, error) {
 			ignoreErrors, ignoreErrorsCount = content, ignoreErrorsCount+1
 		}
 	}
-	if pathCount != 1 || argvCount != 1 || flagsCount != 1 || ignoreErrorsCount > 1 || path == "" || argv == "" {
-		return linuxSystemdExecProperty{}, errors.New("systemd Exec property lacks unique path, argv[], and flags fields")
+	if pathCount != 1 || argvCount != 1 || flagsCount > 1 || ignoreErrorsCount > 1 || path == "" || argv == "" {
+		return linuxSystemdExecProperty{}, errors.New("systemd Exec property lacks unique path and argv[] fields")
 	}
 	if ignoreErrorsCount == 0 {
 		ignoreErrors = "no"
