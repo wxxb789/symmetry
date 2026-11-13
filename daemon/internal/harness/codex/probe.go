@@ -9,9 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -174,7 +172,7 @@ func (runner osCommandRunner) ExecutableDigest(ctx context.Context, executable s
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	return hashExecutableFile(ctx, executable)
+	return harness.HashExecutableFile(ctx, executable)
 }
 
 // executableDigest returns the SHA-256 of the exact executable bytes, or false
@@ -191,43 +189,11 @@ func executableDigest(ctx context.Context, executable string, runner CommandRunn
 		}
 		return digest, digest != ""
 	}
-	digest, err := hashExecutableFile(ctx, executable)
+	digest, err := harness.HashExecutableFile(ctx, executable)
 	if err != nil {
 		return "", false
 	}
 	return digest, true
-}
-
-func hashExecutableFile(ctx context.Context, executable string) (string, error) {
-	path, err := exec.LookPath(executable)
-	if err != nil {
-		return "", err
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-	hasher := sha256.New()
-	buffer := make([]byte, 1<<20)
-	for {
-		if contextErr := ctx.Err(); contextErr != nil {
-			return "", contextErr
-		}
-		count, readErr := file.Read(buffer)
-		if count > 0 {
-			if _, writeErr := hasher.Write(buffer[:count]); writeErr != nil {
-				return "", writeErr
-			}
-		}
-		if readErr == io.EOF {
-			break
-		}
-		if readErr != nil {
-			return "", readErr
-		}
-	}
-	return "sha256:" + hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
 // ProbeResult records executable/version/help, generated-schema, and the

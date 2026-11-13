@@ -8,7 +8,7 @@ Do not require native CLIs to speak the existing fake-agent JSON dialect.
 | Harness | Transport choice | v1 control policy |
 | --- | --- | --- |
 | Codex | `codex app-server`, stdio JSON-RPC; exact generated-schema digest gate | native thread/turn lifecycle; capability-probed steering, interrupt and approval mapping |
-| Claude Code | headless CLI with documented JSON/stream-JSON output; 2.1.322 defers `system/init` until the first user frame; resume remains a target for 0006e evidence | process cancellation in the current candidate; next-turn guidance and resume remain unsupported until 0006e; `Open` waits only for process readiness, and every terminal requires a matching `system/init`; no claimed safe pause or interactive approval bridge without verified native support |
+| Claude Code | headless CLI with documented JSON/stream-JSON output; 2.1.323 defers `system/init` until the first user frame; promotion is bound to the exact executed blob (`sha256:5064e6e0…`) plus the anchored `2.1.323 (Claude Code)` version line | process cancellation; `Open` waits only for process readiness, and every terminal requires a matching `system/init`; next-turn guidance, resume, safe pause and an interactive approval bridge stay unsupported; native model identity is reported by `system/init` and is not claimed by the projection |
 | Pi | native `--mode rpc`, JSONL stdin/stdout; `agent_settled` is the settled boundary | prompt/steer/abort/session RPC mapping; no inferred OS pause |
 | Oh My Pi (OMP) | native `omp --mode rpc`, custom JSONL with `ready` frame and protocol-version negotiation; `session_settled` is the settled boundary | prompt/steer/abort/session RPC mapping; never inherit Pi decoder or capability claims |
 | OmO (`oh-my-openagent`) | native `omo --mode rpc`, senpi/Pi-derived JSONL; the `omo app-server` Codex protocol is not assumed equivalent | prompt/steer/abort/session RPC mapping; probe the exact binary and protocol |
@@ -34,6 +34,23 @@ process-group owner cannot prove Linux containment for a repository turn. The
 Windows Job-object path is verified; Linux Codex admission stays fail-closed
 until the Linux v2 cgroup owner carries the same exact-binary evidence. Do not
 promote Linux from Windows evidence.
+
+Claude Code promotion is bound the same way: the resolved `claude.exe` SHA-256,
+the anchored `2.1.323 (Claude Code)` version line and the committed fixture
+digests must all match, and a PATH shim that reports the same version is a
+different blob that promotes nothing. Linux Claude admission stays fail-closed
+until the Linux v2 owner path carries exact-binary evidence. Because the
+permission layer is not a containment boundary, the fixed transport argv selects
+the narrowest native permission mode that keeps a real repository turn possible
+(`--permission-mode acceptEdits`). The measured bounds of that mode are
+tool-specific and recorded per control in
+`daemon/internal/harness/testdata/claude/2.1.323/`: a file-tool write inside the
+session working directories was approved, a file-tool write outside them was
+denied, an edit-classified shell command was approved, and a non-edit shell
+command was denied as requiring approval. The mode is not a bypass flag and its
+classifier is not a containment boundary; the OS process owner remains the
+boundary, and repository-local settings were measured to remove tools while no
+tested allow rule widened the policy.
 
 Until the first prototype and release, each harness tracks the latest stable
 client (owner directive 2026-11-11). Do not freeze an older pin merely because

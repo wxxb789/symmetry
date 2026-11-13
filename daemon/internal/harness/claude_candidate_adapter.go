@@ -21,7 +21,6 @@ import (
 )
 
 const (
-	claudeCandidateDefaultExecutable = "claude"
 	claudeCandidateMaxRecordBytes    = 1 << 20
 	claudeCandidateMaxPreReadyEvents = 64
 	claudeCandidateMaxPreReadyBytes  = 1 << 20
@@ -59,21 +58,26 @@ func claudeCandidateRunnerProcessStarter(ctx context.Context, invocation executi
 	return process, err
 }
 
-// ClaudeCandidateAdapter is a deliberately unregistered, fail-closed Claude
-// Code lifecycle candidate. It is not capability evidence and must not be
-// composed into the default registry until credentialed native evidence exists.
+// ClaudeCandidateAdapter is the Claude Code native lifecycle adapter. It owns
+// the fresh stream-json transport, the deferred system/init terminal barrier,
+// the structured-output TaskResult and bounded process cancellation. Promotion
+// of its operations is bound to the exact tested executable blob, so the
+// adapter itself stays fail-closed wherever that blob is not proved.
 type ClaudeCandidateAdapter struct {
 	executable   string
 	startProcess claudeCandidateProcessStarter
 	newSessionID func() (string, error)
+	probe        func(context.Context) (Capabilities, error)
 }
 
 var _ Adapter = (*ClaudeCandidateAdapter)(nil)
 
-// NewClaudeCandidateAdapter constructs the isolated Claude staged candidate.
-// The constructor does not register or advertise the candidate anywhere.
+// NewClaudeCandidateAdapter constructs the Claude Code native adapter that the
+// daemon composition root registers for KindClaude. Its Probe promotes only the
+// operations proved for the exact tested executable blob on this platform, and
+// every other operation stays explicitly unsupported.
 func NewClaudeCandidateAdapter(executables ...string) *ClaudeCandidateAdapter {
-	executable := claudeCandidateDefaultExecutable
+	executable := defaultClaudeExecutable
 	if len(executables) > 0 && strings.TrimSpace(executables[0]) != "" {
 		executable = executables[0]
 	}
@@ -84,8 +88,9 @@ func NewClaudeCandidateAdapter(executables ...string) *ClaudeCandidateAdapter {
 	}
 }
 
-// Probe remains unverified by design. A concrete candidate is useful for
-// deterministic lifecycle review without upgrading runtime admission.
+// Probe reports the exact-blob capability projection for this executable. A
+// different binary with the same version string, a client without the print
+// stream-json transport, or a non-Windows platform promotes nothing.
 func (adapter *ClaudeCandidateAdapter) Probe(ctx context.Context) (Capabilities, error) {
 	if adapter == nil {
 		return Capabilities{}, errors.New("Claude staged candidate adapter is nil")
@@ -96,7 +101,10 @@ func (adapter *ClaudeCandidateAdapter) Probe(ctx context.Context) (Capabilities,
 	if err := ctx.Err(); err != nil {
 		return Capabilities{}, err
 	}
-	return UnsupportedCapabilities(KindClaude, "Claude staged candidate is not behaviorally verified or registered"), ErrNativeUnverified
+	if adapter.probe != nil {
+		return adapter.probe(ctx)
+	}
+	return probeClaudeAdapterCapabilities(ctx, adapter.executable, osClaudeCommandRunner{})
 }
 
 // Start launches only the fresh stream-json process. It does not send a
@@ -118,9 +126,12 @@ func (adapter *ClaudeCandidateAdapter) Start(ctx context.Context, request StartR
 	if request.ProviderAccess != nil {
 		return nil, &CapabilityError{Kind: KindClaude, Capability: CapabilityProviderAccess, Reason: "Claude staged candidate has no verified provider broker bridge"}
 	}
-	if strings.TrimSpace(request.ModelProfile) != "" {
-		return nil, &CapabilityError{Kind: KindClaude, Capability: CapabilityStart, Reason: "Claude staged candidate has no verified model profile mapping"}
-	}
+	// ModelProfile is the daemon-validated admission profile identifier, not a
+	// native model claim: admission.model_profile must equal the configured
+	// runtime agent profile before Start is reached, and this adapter forwards no
+	// model selection. The native model identity is reported by system/init and
+	// is not claimed by the capability projection, so an admitted profile is
+	// accepted instead of inventing an unverified mapping.
 	if request.Limits.MaxCostMicrousd != nil {
 		return nil, &CapabilityError{Kind: KindClaude, Capability: CapabilityHardCostLimit, Reason: "Claude staged candidate has no verified provider-enforced hard cost limit"}
 	}
@@ -172,6 +183,15 @@ func (adapter *ClaudeCandidateAdapter) Start(ctx context.Context, request StartR
 			string(encodedSchema),
 			"--session-id",
 			sessionID,
+			// Fixed narrow permission policy. Claude Code grants nothing without
+			// an approval path and this adapter has no verified one, so the
+			// promoted transport selects the narrowest native mode that keeps a
+			// real repository turn possible: in-workspace file edits are
+			// approved, while writes outside the session working directories and
+			// every operation that would prompt stay denied. It is not a bypass
+			// flag, and the process owner remains the containment boundary.
+			"--permission-mode",
+			"acceptEdits",
 		},
 		Dir:                                request.Workspace,
 		Env:                                append([]string(nil), request.Invocation.Env...),
@@ -188,6 +208,8 @@ func (adapter *ClaudeCandidateAdapter) Start(ctx context.Context, request StartR
 		PersistProcessAuthority:            request.PersistProcessAuthority,
 		PersistContainmentStopReceipt:      request.PersistContainmentStopReceipt,
 		PersistContainmentUnproven:         request.Invocation.PersistContainmentUnproven,
+		LinuxV2Required:                    request.Invocation.LinuxV2Required,
+		LinuxV2:                            request.Invocation.LinuxV2,
 	}
 	process, startErr := startProcess(processContext, invocation, execution.SinkFunc(session.handleProcessOutput))
 	if isNilClaudeCandidateProcess(process) {
@@ -720,7 +742,12 @@ func (session *claudeCandidateSession) Close(ctx context.Context) error {
 func (session *claudeCandidateSession) requestClose() {
 	session.mutex.Lock()
 	session.closing = true
-	if session.turnStarted && !session.turnFinal {
+	// Terminal observation and cancellation share this mutex, and the state
+	// recorded first owns the turn. A close must therefore not manufacture
+	// cancellation ownership for a turn whose terminal (or terminal
+	// interpretation failure) already won: doing so would let a later
+	// Control(cancel) answer "applied" while the turn settles successfully.
+	if session.turnStarted && !session.turnFinal && session.terminal == nil && session.terminalFailure == nil {
 		session.cancelRequested = true
 	}
 	writeCancel := session.turnWriteCancel
@@ -737,7 +764,11 @@ func (session *claudeCandidateSession) closeOnce(ctx context.Context) (error, bo
 	session.writeMutex.Lock()
 	session.mutex.Lock()
 	process := session.process
-	session.closeNormalCandidate = session.turnFinal && session.failure == nil
+	// A turn whose terminal was already observed owns its outcome even before the
+	// semantic completion runs: closing such a session (for example the daemon's
+	// deadline close) must not let the watcher override the pending success with a
+	// process failure just because the explicit termination is not a clean exit.
+	session.closeNormalCandidate = (session.turnFinal || session.terminal != nil) && session.failure == nil
 	session.mutex.Unlock()
 	session.writeMutex.Unlock()
 	if process == nil {
@@ -826,14 +857,30 @@ func (session *claudeCandidateSession) handleClaudeRecord(_ context.Context, pro
 	}
 
 	session.mutex.Lock()
-	observeErr := session.validator.Observe(record)
+	// A result record can only be interpreted for a turn that cancellation has not
+	// already claimed. Cancellation and terminal observation share this mutex, and
+	// the state recorded first owns the turn, so a terminal that arrives after the
+	// cancellation fence is neither published as success nor allowed to classify
+	// the turn as failed through a terminal-interpretation error (for example a
+	// missing structured_output): the watcher settles the cancelled result the
+	// applied cancel receipt promised. Genuine transport, decode, persistence and
+	// containment failures are unaffected, because they never travel through a
+	// result record's interpretation.
+	supersededByCancel := record.Type == claudeprotocol.EventResult && session.turnStarted && session.cancelRequested
+	// A superseded record must not reach the stateful validator either: its
+	// retained terminal-interpretation error would otherwise be reported by the
+	// next record of the same chunk and fail a turn the accepted stop already owns.
+	var observeErr error
+	if !supersededByCancel {
+		observeErr = session.validator.Observe(record)
+	}
 	var terminal *claudeprotocol.Terminal
-	if observeErr == nil && record.Type == claudeprotocol.EventSystem && record.Subtype == "init" {
+	if observeErr == nil && !supersededByCancel && record.Type == claudeprotocol.EventSystem && record.Subtype == "init" {
 		if record.SessionID == session.expectedSessionID {
 			session.identityObserved = true
 		}
 	}
-	if observeErr == nil && record.Type == claudeprotocol.EventResult {
+	if observeErr == nil && !supersededByCancel && record.Type == claudeprotocol.EventResult {
 		if !session.turnStarted {
 			observeErr = errClaudeCandidateResultBeforeTurn
 		} else if !session.identityObserved {
@@ -850,7 +897,7 @@ func (session *claudeCandidateSession) handleClaudeRecord(_ context.Context, pro
 		}
 	}
 	missingStructuredOutput := false
-	if observeErr != nil && record.Type == claudeprotocol.EventResult && session.terminal == nil && session.terminalFailure == nil {
+	if observeErr != nil && !supersededByCancel && record.Type == claudeprotocol.EventResult && session.terminal == nil && session.terminalFailure == nil {
 		session.terminalFailure = observeErr
 		missingStructuredOutput = session.turnStarted && errors.Is(observeErr, claudeprotocol.ErrMissingStructuredOutput)
 	}
@@ -861,6 +908,9 @@ func (session *claudeCandidateSession) handleClaudeRecord(_ context.Context, pro
 		// Symmetry result, not an unknown transport outcome.
 		reason := protocol.TaskResultReasonMissingResult
 		session.completeTurn(TaskResult{Kind: ResultFailed, Summary: errClaudeCandidateNoSemanticResult.Error(), Reason: &reason, Usage: Usage{State: UsageUnknown}}, errors.Join(errClaudeCandidateNoSemanticResult, observeErr), false)
+		return nil
+	}
+	if supersededByCancel {
 		return nil
 	}
 	if observeErr != nil {
@@ -974,7 +1024,11 @@ func (session *claudeCandidateSession) watchProcess() {
 		session.mutex.Unlock()
 		if !identityObserved {
 			session.mutex.Lock()
-			missingInit := session.failure == nil
+			// A cancel requested before the deferred system/init arrived is still a
+			// cancellation: the operator's accepted stop, not the absent identity,
+			// explains why the turn produced no terminal. Genuine failures keep the
+			// missing-init classification.
+			missingInit := session.failure == nil && !session.cancelRequested
 			session.mutex.Unlock()
 			if missingInit {
 				session.fail(errClaudeCandidateMissingInit)

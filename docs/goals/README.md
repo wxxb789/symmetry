@@ -1,5 +1,23 @@
 # Next goals for local Codex
 
+Goal [0006e](archive/0006e-claude-native-capability.md) completed its
+owner-scoped 2026-11-14 Windows closure and is archived. The exact Claude Code
+`2.1.323` executable blob (`sha256:5064e6e0…`) promotes start, events, cancel,
+the structured-output result and its repository artifact on Windows, with the
+deferred `system/init` barrier, a credentialed repository turn, cancellation and
+the recorded negative controls (blob mismatch against the real PATH shim,
+missing transport, terminal result without matching init, closed or superseded
+session) bound to the tested binary and the observed revision. Resume, handoff,
+guidance, pause, approval response, provider access, billable usage and hard
+cost limits stay explicitly unsupported, and the promoted transport selects one
+recorded narrow permission value (`--permission-mode acceptEdits`) because no
+approval bridge is verified. Linux remains explicitly unsupported: the Linux v2
+owner path needs an installed A/B systemd runtime with a delegated cgroup-v2
+parent and cross-UID peer inspection, which the available hosts do not provide.
+This closure is not a full-series, release, native-capability or exact-Subject
+acceptance certificate; Linux evidence stays a requirement for `0006-final`
+under that goal's full-series acceptance contract.
+
 Goal [0006d](archive/0006d-codex-native-capability.md) completed its
 owner-approved 2026-11-13 preserved-unsupported scope and is archived. The
 exact Codex `0.168.0` executable blob promotes start, events and cancel on
@@ -55,8 +73,8 @@ acceptance actions. Missing evidence or unresolved requirements block completion
 
 | Goal | Desired outcome |
 | --- | --- |
-| [0006d](0006d-codex-native-capability.md) | Evidence-bounded Codex native capability |
-| [0006e](0006e-claude-native-capability.md) | Evidence-bounded Claude Code native capability |
+| [0006d](archive/0006d-codex-native-capability.md) | Evidence-bounded Codex native capability |
+| [0006e](archive/0006e-claude-native-capability.md) | Evidence-bounded Claude Code native capability |
 | [0006f](0006f-pi-native-capability.md) | Evidence-bounded pi native continuity |
 | [0006g](0006g-opencode-support-decision.md) | Evidence-backed OpenCode V2 support decision |
 | [0006h](0006h-credentialed-provider-accounting.md) | Credentialed provider reconciliation and accounting |

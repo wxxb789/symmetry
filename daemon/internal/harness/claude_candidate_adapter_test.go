@@ -48,7 +48,7 @@ func TestClaudeCandidateStagesFreshTransportAndBarriers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("structured output schema: %v", err)
 	}
-	wantArgs := []string{"--print", "--verbose", "--input-format", "stream-json", "--output-format", "stream-json", "--json-schema", string(encodedSchema), "--session-id", claudeCandidateTestSessionID}
+	wantArgs := []string{"--print", "--verbose", "--input-format", "stream-json", "--output-format", "stream-json", "--json-schema", string(encodedSchema), "--session-id", claudeCandidateTestSessionID, "--permission-mode", "acceptEdits"}
 	if !slices.Equal(invocation.Args, wantArgs) {
 		t.Fatalf("fresh argv = %q, want %q", invocation.Args, wantArgs)
 	}
@@ -294,6 +294,406 @@ func TestClaudeCandidateAcceptsVerifiedTaskResultAndPublishesEvent(t *testing.T)
 	}
 	if emitted.Summary != result.Semantic.Summary || emitted.ResultID != result.Semantic.ResultID {
 		t.Fatalf("EventTaskResult = %+v, want the verified semantic result", emitted)
+	}
+}
+
+// A terminal record that is already inside the process-output sink when the
+// cancellation fence is claimed must not be published as success: the accepted
+// cancel owns the turn, and the settled result has to stay cancelled.
+func TestClaudeCandidateCancellationFenceOutranksInFlightTerminal(t *testing.T) {
+	process := newClaudeCandidateFakeProcess()
+	// Keep the watcher blocked in Wait so the in-flight terminal, not the
+	// process reaper, decides the race under test.
+	process.holdTermination = true
+	sink := newGatedNativeResultSink()
+	adapter := newClaudeCandidateTestAdapter(process, nil)
+	session, err := adapter.Start(context.Background(), claudeCandidateStartRequest(t), sink)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	cleanupClaudeCandidateSession(t, session)
+	staged := session.(StagedSession)
+	openClaudeCandidateSession(t, staged, process)
+	if err := staged.StartTurn(context.Background(), TurnRequest{Goal: "Make verified progress.", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	emitted := make(chan error, 1)
+	go func() {
+		emitted <- process.emitJSON(claudeCandidateResultEnvelope(t, validClaudeCandidateTaskResultJSON(t)))
+	}()
+	select {
+	case <-sink.resultEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("native result frame never reached the sink")
+	}
+	// Claim the cancellation fence while the terminal is still inside the sink.
+	// Close waits for the watcher, which stays blocked because this fake holds
+	// termination until the test releases it.
+	receipts := make(chan ControlReceipt, 1)
+	receiptErrors := make(chan error, 1)
+	go func() {
+		receipt, controlErr := session.Control(context.Background(), ControlRequest{CommandID: "cancel-1", Kind: ControlCancel})
+		receipts <- receipt
+		receiptErrors <- controlErr
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if calls, _ := process.terminationDetails(); calls > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("cancellation never reached bounded process termination")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(sink.releaseResult)
+	if err := <-emitted; err != nil {
+		t.Fatalf("emit result: %v", err)
+	}
+	process.finish()
+	receipt := <-receipts
+	if err := <-receiptErrors; err != nil || receipt.Outcome != ControlApplied {
+		t.Fatalf("Control(cancel) = receipt=%+v error=%v, want applied", receipt, err)
+	}
+	if err := staged.WaitTurn(context.Background()); err != nil {
+		t.Fatalf("WaitTurn() error = %v, want the cancelled turn", err)
+	}
+	result, err := session.Wait(context.Background())
+	if err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+	if result.Kind != ResultCancelled || result.Semantic != nil {
+		t.Fatalf("result = %+v, want a cancelled result without semantic success", result)
+	}
+	if _, ok := sink.event(EventTaskResult); ok {
+		t.Fatal("an in-flight terminal after the cancel fence published a TaskResult event")
+	}
+}
+
+// gatedNativeResultSink blocks the first native result frame so a test can order
+// cancellation against terminal observation.
+type gatedNativeResultSink struct {
+	*recordingClaudeCandidateSink
+	resultEntered chan struct{}
+	releaseResult chan struct{}
+	once          sync.Once
+}
+
+func newGatedNativeResultSink() *gatedNativeResultSink {
+	return &gatedNativeResultSink{
+		recordingClaudeCandidateSink: &recordingClaudeCandidateSink{},
+		resultEntered:                make(chan struct{}),
+		releaseResult:                make(chan struct{}),
+	}
+}
+
+func (sink *gatedNativeResultSink) Handle(ctx context.Context, event Event) error {
+	if event.Kind == EventNativeFrame {
+		var record struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(event.Payload, &record) == nil && record.Type == "result" {
+			sink.once.Do(func() { close(sink.resultEntered) })
+			<-sink.releaseResult
+		}
+	}
+	return sink.recordingClaudeCandidateSink.Handle(ctx, event)
+}
+
+// A direct Close (the daemon closes sessions outside Control) must not turn a
+// turn whose terminal already won into a cancellation: cancellation ownership
+// would otherwise let a later Control(cancel) answer "applied" while the turn
+// settles successfully.
+func TestClaudeCandidateCloseAfterTerminalObservationKeepsCancelRejected(t *testing.T) {
+	process := newClaudeCandidateFakeProcess()
+	adapter := newClaudeCandidateTestAdapter(process, nil)
+	session, err := adapter.Start(context.Background(), claudeCandidateStartRequest(t), &recordingClaudeCandidateSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	cleanupClaudeCandidateSession(t, session)
+	staged := session.(StagedSession)
+	openClaudeCandidateSession(t, staged, process)
+	if err := staged.StartTurn(context.Background(), TurnRequest{Goal: "Make verified progress.", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	// Record exactly the state a terminal observation leaves behind before its
+	// semantic completion runs: the terminal is observed, the turn is not final.
+	observedTerminal := claudeprotocol.Terminal{SessionID: claudeCandidateTestSessionID}
+	internal := staged.(*claudeCandidateSession)
+	internal.mutex.Lock()
+	internal.terminal = &observedTerminal
+	internal.mutex.Unlock()
+	if err := staged.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	internal.mutex.Lock()
+	cancelRequested := internal.cancelRequested
+	internal.mutex.Unlock()
+	if cancelRequested {
+		t.Fatal("Close() claimed cancellation for a turn whose terminal was already observed")
+	}
+	receipt, err := staged.Control(context.Background(), ControlRequest{CommandID: "cancel-1", Kind: ControlCancel})
+	if err != nil || receipt.Outcome != ControlRejected {
+		t.Fatalf("Control(cancel) = receipt=%+v error=%v, want a rejected late cancel", receipt, err)
+	}
+}
+
+// A terminal that was observed just before a direct close must keep its own
+// outcome: the pending semantic completion settles the turn as successful even
+// though the session was explicitly terminated, and the watcher must not
+// reclassify that success as a process failure.
+func TestClaudeCandidateDirectClosePreservesPendingTerminalOutcome(t *testing.T) {
+	process := newClaudeCandidateFakeProcess()
+	process.holdTermination = true
+	adapter := newClaudeCandidateTestAdapter(process, nil)
+	session, err := adapter.Start(context.Background(), claudeCandidateStartRequest(t), &recordingClaudeCandidateSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	cleanupClaudeCandidateSession(t, session)
+	staged := session.(StagedSession)
+	openClaudeCandidateSession(t, staged, process)
+	if err := staged.StartTurn(context.Background(), TurnRequest{Goal: "Make verified progress.", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	internal := staged.(*claudeCandidateSession)
+	terminal := claudeprotocol.Terminal{
+		SessionID: claudeCandidateTestSessionID,
+		Result: claudeprotocol.Result{
+			Subtype:          "success",
+			TerminalReason:   "completed",
+			StructuredOutput: json.RawMessage(validClaudeCandidateTaskResultJSON(t)),
+		},
+	}
+	internal.mutex.Lock()
+	internal.terminal = &terminal
+	internal.mutex.Unlock()
+	closeErrors := make(chan error, 1)
+	go func() { closeErrors <- staged.Close(context.Background()) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if calls, _ := process.terminationDetails(); calls > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("direct close never reached bounded process termination")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// The pending terminal completes while the close is still settling.
+	internal.completeClaudeCandidateTerminal(terminal)
+	process.finish()
+	if err := <-closeErrors; err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	result, err := staged.Wait(context.Background())
+	if err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+	if result.Kind != ResultSucceeded || result.Semantic == nil {
+		t.Fatalf("result = %+v, want the pending terminal's success to survive a direct close", result)
+	}
+}
+
+// Cancelling before the deferred system/init arrives is still a cancellation:
+// the accepted stop explains the absent identity and the absent terminal.
+func TestClaudeCandidateCancelBeforeDeferredInitSettlesCancelled(t *testing.T) {
+	process := newClaudeCandidateFakeProcess()
+	adapter := newClaudeCandidateTestAdapter(process, nil)
+	session, err := adapter.Start(context.Background(), claudeCandidateStartRequest(t), &recordingClaudeCandidateSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	cleanupClaudeCandidateSession(t, session)
+	staged := session.(StagedSession)
+	if _, err := staged.Open(context.Background()); err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if err := staged.StartTurn(context.Background(), TurnRequest{Goal: "Make verified progress.", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	receipt, err := staged.Control(context.Background(), ControlRequest{CommandID: "cancel-1", Kind: ControlCancel})
+	if err != nil || receipt.Outcome != ControlApplied {
+		t.Fatalf("Control(cancel) = receipt=%+v error=%v, want applied", receipt, err)
+	}
+	if err := staged.WaitTurn(context.Background()); err != nil {
+		t.Fatalf("WaitTurn() error = %v, want the cancelled turn", err)
+	}
+	result, err := staged.Wait(context.Background())
+	if err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+	if result.Kind != ResultCancelled {
+		t.Fatalf("result kind = %s summary %q, want cancelled without a missing-init failure", result.Kind, result.Summary)
+	}
+}
+
+// A terminal that fails interpretation after cancellation claimed the turn must
+// not reclassify the run as failed: the accepted stop owns the turn.
+func TestClaudeCandidateCancelFenceSupersedesInvalidTerminal(t *testing.T) {
+	process := newClaudeCandidateFakeProcess()
+	process.holdTermination = true
+	sink := newGatedNativeResultSink()
+	adapter := newClaudeCandidateTestAdapter(process, nil)
+	session, err := adapter.Start(context.Background(), claudeCandidateStartRequest(t), sink)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	cleanupClaudeCandidateSession(t, session)
+	staged := session.(StagedSession)
+	openClaudeCandidateSession(t, staged, process)
+	if err := staged.StartTurn(context.Background(), TurnRequest{Goal: "Make verified progress.", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	emitted := make(chan error, 1)
+	go func() {
+		// subtype success without structured_output: the validator rejects it.
+		emitted <- process.emitJSON(`{"type":"result","subtype":"success","terminal_reason":"completed","is_error":false,"session_id":"` + claudeCandidateTestSessionID + `","result":"prose"}`)
+	}()
+	select {
+	case <-sink.resultEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("invalid native result frame never reached the sink")
+	}
+	receipts := make(chan ControlReceipt, 1)
+	receiptErrors := make(chan error, 1)
+	go func() {
+		receipt, controlErr := staged.Control(context.Background(), ControlRequest{CommandID: "cancel-1", Kind: ControlCancel})
+		receipts <- receipt
+		receiptErrors <- controlErr
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if calls, _ := process.terminationDetails(); calls > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("cancellation never reached bounded process termination")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(sink.releaseResult)
+	if err := <-emitted; err != nil {
+		t.Fatalf("emit result: %v", err)
+	}
+	process.finish()
+	receipt := <-receipts
+	if err := <-receiptErrors; err != nil || receipt.Outcome != ControlApplied {
+		t.Fatalf("Control(cancel) = receipt=%+v error=%v, want applied", receipt, err)
+	}
+	if err := staged.WaitTurn(context.Background()); err != nil {
+		t.Fatalf("WaitTurn() error = %v, want the cancelled turn", err)
+	}
+	result, err := staged.Wait(context.Background())
+	if err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+	if result.Kind != ResultCancelled {
+		t.Fatalf("result kind = %s summary %q, want cancelled rather than a terminal-interpretation failure", result.Kind, result.Summary)
+	}
+}
+
+// A superseded result record must not reach the stateful validator: otherwise its
+// retained interpretation error is reported by the next record of the same chunk
+// and fails a turn the accepted cancellation already owns.
+func TestClaudeCandidateSupersededResultDoesNotPoisonLaterRecords(t *testing.T) {
+	process := newClaudeCandidateFakeProcess()
+	process.holdTermination = true
+	sink := newGatedNativeResultSink()
+	adapter := newClaudeCandidateTestAdapter(process, nil)
+	session, err := adapter.Start(context.Background(), claudeCandidateStartRequest(t), sink)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	cleanupClaudeCandidateSession(t, session)
+	staged := session.(StagedSession)
+	openClaudeCandidateSession(t, staged, process)
+	if err := staged.StartTurn(context.Background(), TurnRequest{Goal: "Make verified progress.", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	internal := staged.(*claudeCandidateSession)
+	chunk := `{"type":"result","subtype":"success","terminal_reason":"completed","is_error":false,"session_id":"` + claudeCandidateTestSessionID + `","result":"prose"}` + "\n" +
+		`{"type":"log","message":"after the superseded terminal"}` + "\n"
+	delivered := make(chan error, 1)
+	go func() {
+		delivered <- internal.handleProcessOutput(context.Background(), execution.Event{Stream: execution.Stdout, Sequence: 7, At: time.Now().UTC(), Data: []byte(chunk)})
+	}()
+	select {
+	case <-sink.resultEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("invalid native result frame never reached the sink")
+	}
+	receipts := make(chan ControlReceipt, 1)
+	receiptErrors := make(chan error, 1)
+	go func() {
+		receipt, controlErr := staged.Control(context.Background(), ControlRequest{CommandID: "cancel-1", Kind: ControlCancel})
+		receipts <- receipt
+		receiptErrors <- controlErr
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if calls, _ := process.terminationDetails(); calls > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("cancellation never reached bounded process termination")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(sink.releaseResult)
+	if err := <-delivered; err != nil {
+		t.Fatalf("output handling error = %v, want the superseded terminal and the following record to stay non-failing", err)
+	}
+	process.finish()
+	receipt := <-receipts
+	if err := <-receiptErrors; err != nil || receipt.Outcome != ControlApplied {
+		t.Fatalf("Control(cancel) = receipt=%+v error=%v, want applied", receipt, err)
+	}
+	if err := staged.WaitTurn(context.Background()); err != nil {
+		t.Fatalf("WaitTurn() error = %v, want the cancelled turn", err)
+	}
+	result, err := staged.Wait(context.Background())
+	if err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+	if result.Kind != ResultCancelled {
+		t.Fatalf("result kind = %s summary %q, want cancelled rather than a retained validator failure", result.Kind, result.Summary)
+	}
+}
+
+// One session owns at most one native turn, and a closed session accepts no
+// further turn. Both negative controls fail closed instead of reusing a native
+// process whose identity or lifecycle is already settled.
+func TestClaudeCandidateRejectsSupersededAndClosedTurns(t *testing.T) {
+	process := newClaudeCandidateFakeProcess()
+	adapter := newClaudeCandidateTestAdapter(process, nil)
+	session, err := adapter.Start(context.Background(), claudeCandidateStartRequest(t), &recordingClaudeCandidateSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	cleanupClaudeCandidateSession(t, session)
+	staged := session.(StagedSession)
+	openClaudeCandidateSession(t, staged, process)
+	if err := staged.StartTurn(context.Background(), TurnRequest{Goal: "first turn", Context: json.RawMessage(`{"turn":1}`)}); err != nil {
+		t.Fatalf("first StartTurn() error = %v", err)
+	}
+	if err := staged.StartTurn(context.Background(), TurnRequest{Goal: "superseding turn", Context: json.RawMessage(`{"turn":2}`)}); err == nil || !strings.Contains(err.Error(), "already owns a turn") {
+		t.Fatalf("superseding StartTurn() error = %v, want an owned-turn rejection", err)
+	}
+	if err := staged.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	// The closed session rejects the turn through its lifecycle fence. The exact
+	// message depends on whether the process has already been reaped, so the
+	// pinned contract is that the rejection surfaces and no second frame reaches
+	// the native process.
+	if err := staged.StartTurn(context.Background(), TurnRequest{Goal: "turn after close", Context: json.RawMessage(`{"turn":3}`)}); err == nil {
+		t.Fatal("closed StartTurn() error = nil, want a lifecycle rejection")
+	}
+	writes := process.writeCount()
+	if writes != 1 {
+		t.Fatalf("native prompt writes = %d, want exactly the first turn", writes)
 	}
 }
 
@@ -708,6 +1108,14 @@ func TestClaudeCandidateCancelledControlContextDoesNotAcknowledgeFailure(t *test
 func TestClaudeCandidateUnsupportedOperationsAndResumeFailClosed(t *testing.T) {
 	process := newClaudeCandidateFakeProcess()
 	adapter := newClaudeCandidateTestAdapter(process, nil)
+	// Probe through the real promotion gate with a recorded foreign blob so this
+	// pins the projection rather than a hand-built capability value.
+	adapter.probe = func(ctx context.Context) (Capabilities, error) {
+		return probeClaudeAdapterCapabilities(ctx, "claude", &claudeFixtureRunner{responses: map[string][]byte{
+			"--version": []byte(ClaudeTestedVersion + " (Claude Code)\n"),
+			"--help":    []byte("--print --output-format stream-json --json-schema"),
+		}, digest: "sha256:" + strings.Repeat("0", 64)})
+	}
 	resume := &ResumeHandle{LocalHandleID: "local", NativeSessionID: claudeCandidateTestSessionID}
 	if session, err := adapter.Start(context.Background(), StartRequest{Workspace: t.TempDir(), Resume: resume}, &recordingClaudeCandidateSink{}); session != nil || !errors.Is(err, ErrUnsupportedCapability) {
 		t.Fatalf("resume Start() = session=%T error=%v, want no session and unsupported capability", session, err)
@@ -734,7 +1142,11 @@ func TestClaudeCandidateUnsupportedOperationsAndResumeFailClosed(t *testing.T) {
 	}
 }
 
-func TestClaudeCandidateRejectsUnmappedModelProfileBeforeStart(t *testing.T) {
+// The daemon validates admission.model_profile against the configured runtime
+// agent profile before Start, and this adapter forwards no model selection. An
+// admitted profile therefore starts instead of being rejected for a native model
+// mapping the adapter never claims.
+func TestClaudeCandidateAcceptsAdmittedModelProfile(t *testing.T) {
 	process := newClaudeCandidateFakeProcess()
 	started := false
 	adapter := newClaudeCandidateTestAdapter(process, nil)
@@ -743,16 +1155,16 @@ func TestClaudeCandidateRejectsUnmappedModelProfileBeforeStart(t *testing.T) {
 		return process, nil
 	}
 	request := claudeCandidateStartRequest(t)
-	request.ModelProfile = "gpt-5.6-luna"
+	request.ModelProfile = "default"
 
 	session, err := adapter.Start(context.Background(), request, &recordingClaudeCandidateSink{})
-	var capabilityErr *CapabilityError
-	if session != nil || !errors.As(err, &capabilityErr) || capabilityErr.Capability != CapabilityStart {
-		t.Fatalf("Start() = session=%T error=%v, want unmapped model profile rejection", session, err)
+	if err != nil {
+		t.Fatalf("Start() error = %v, want admitted model profile accepted", err)
 	}
-	if started {
-		t.Fatal("Start() launched Claude before rejecting the unmapped model profile")
+	if !started {
+		t.Fatal("Start() did not launch Claude for an admitted model profile")
 	}
+	cleanupClaudeCandidateSession(t, session)
 }
 
 func TestClaudeCandidateRetainsProcessOwnerWhenStartReportsError(t *testing.T) {

@@ -54,6 +54,16 @@ func TestNewHarnessRegistryBindsConfiguredCodexNativeModel(t *testing.T) {
 
 func TestNewHarnessRegistryBindsConcretePiAndOpenCodeAdapters(t *testing.T) {
 	registry := newHarnessRegistry(config.AgentProfile{Command: "configured-agent"})
+	// Claude is registered as the promoted lifecycle adapter, not the fail-closed
+	// registry projection: the composed adapter is the only one whose exact-blob
+	// probe can promote start/events/cancel and whose Start can run them.
+	claudeAdapter, err := registry.Lookup(harness.KindClaude)
+	if err != nil {
+		t.Fatalf("Lookup(claude) error = %v", err)
+	}
+	if _, ok := claudeAdapter.(*harness.ClaudeCandidateAdapter); !ok {
+		t.Fatalf("Claude adapter type = %T, want *harness.ClaudeCandidateAdapter", claudeAdapter)
+	}
 	piAdapter, err := registry.Lookup(harness.KindPi)
 	if err != nil {
 		t.Fatalf("Lookup(pi) error = %v", err)
@@ -67,6 +77,42 @@ func TestNewHarnessRegistryBindsConcretePiAndOpenCodeAdapters(t *testing.T) {
 	}
 	if _, ok := openCodeAdapter.(*opencode.Adapter); !ok {
 		t.Fatalf("OpenCode adapter type = %T, want *opencode.Adapter", openCodeAdapter)
+	}
+}
+
+// The composed Claude adapter must reach the same unavailable projection as the
+// other native adapters: a failed probe advertises the sentinel metadata, never
+// the promoted implementation identity or the configured pins. The harness-level
+// counterpart (TestClaudeCapabilitiesForPlatformPromotesOnlyTheTestedBlobOnWindows)
+// pins that an unpromoted projection carries no implementation version at all.
+func TestComposedClaudeProbeReportsUnavailableMetadata(t *testing.T) {
+	value := testConfig(t)
+	value.Runtime.HarnessKind = config.RuntimeHarnessClaudeCode
+	value.Runtime.HarnessVersion = "2.1.323"
+	value.Runtime.AdapterVersion = "claude-stream-json-v1"
+	value.Runtime.AdapterProtocolVersion = 1
+	registry := harness.NewRegistry()
+	if err := registry.Register(harness.KindClaude, harness.NewClaudeCandidateAdapter(filepath.Join(t.TempDir(), "absent-claude.exe"))); err != nil {
+		t.Fatal(err)
+	}
+	daemon := &daemon{config: value, harnessRegistry: registry}
+	if err := daemon.ensureHarnessProbe(context.Background()); err != nil {
+		t.Fatalf("ensureHarnessProbe() error = %v, want an unavailable projection", err)
+	}
+	capabilities := daemon.harnessCapabilities
+	if capabilities.Verified || capabilities.Start || capabilities.Events || capabilities.Cancel || capabilities.ImplementationVersion != "" {
+		t.Fatalf("capabilities = %+v, want an unpromoted projection without implementation identity", capabilities)
+	}
+	registration, metadata, err := buildRuntimeRegistration(daemon.config.Runtime, daemon.config.AgentProfiles[daemon.config.Runtime.AgentProfile], capabilities)
+	if err != nil {
+		t.Fatalf("buildRuntimeRegistration() error = %v", err)
+	}
+	if registration.HarnessVersion != unavailableNativeMetadataVersion || registration.AdapterVersion != unavailableNativeMetadataVersion ||
+		metadata.HarnessVersion != unavailableNativeMetadataVersion || metadata.AdapterVersion != unavailableNativeMetadataVersion {
+		t.Fatalf("unavailable registration retained configured pins: %+v metadata=%+v", registration, metadata)
+	}
+	if registration.Capabilities.Adapter.Operations.Start || registration.Capabilities.Adapter.Operations.Events {
+		t.Fatalf("registration advertised unverified operations: %+v", registration.Capabilities.Adapter.Operations)
 	}
 }
 
