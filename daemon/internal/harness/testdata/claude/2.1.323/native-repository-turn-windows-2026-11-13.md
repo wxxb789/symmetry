@@ -223,3 +223,61 @@ Linux admission stays fail-closed with the recorded conflict: the Linux v2 owner
 path requires an installed A/B systemd runtime with a delegated cgroup-v2 parent
 and cross-UID peer inspection, which this host does not provide. No Windows
 observation is promoted as Linux support.
+
+## Operator re-run at the committed revision (2026-11-14)
+
+The increment is committed at `8ab69cb` (`feat(claude): promote 2.1.323 native
+capability on the exact tested blob`). The two credentialed smokes were
+re-executed by the operator at that revision, on a clean worktree, with the same
+exact executable blob and the cheapest relay model, so the recorded observation
+is bound to a commit rather than to a dirty tree:
+
+```text
+cd daemon
+SYMMETRY_CLAUDE_LIVE_SMOKE=1 \
+SYMMETRY_CLAUDE_LIVE_SMOKE_EXECUTABLE='…\claude-code\2.1.323\claude.exe' \
+SYMMETRY_CLAUDE_LIVE_SMOKE_BASE_URL=… SYMMETRY_CLAUDE_LIVE_SMOKE_TOKEN=… \
+SYMMETRY_CLAUDE_LIVE_SMOKE_MODEL='claude-haiku-5.5' \
+  go test ./internal/harness -run '^TestClaudeCandidateLiveRepositoryTurnSmoke$' -count=1 -v -timeout 600s
+```
+
+Result: PASS (22.14 s; package `ok … 22.608s`).
+
+```text
+observations: events=27 frames=25 init_frames=1 terminal_frames=1 event_count=27 exit=0
+subject_hash sha256:2bdb7c4870d297984487d8658432ab5b8d6b74485459c93f23173e402a5a4a9f
+```
+
+```text
+SYMMETRY_CLAUDE_LIVE_SMOKE=1 … \
+  go test ./internal/harness -run '^TestClaudeCandidateLiveCancelSmoke$' -count=1 -v -timeout 600s
+```
+
+Result: PASS (21.58 s; package `ok … 22.015s`).
+
+```text
+cancel receipt: outcome=applied message="Claude process termination completed"
+"Kind": "cancelled"
+observations: events=58 frames=57 init_frames=1
+```
+
+Model substitution is deliberate and recorded: the original capture used
+`claude-sonnet-5.5`, the operator re-run used `claude-haiku-5.5` (the cheapest
+relay model that completes the turn). The promoted capability is a property of
+the adapter and the exact executable blob, not of the model that happened to run
+the turn; the observation above is what this receipt binds, and a different model
+would require its own re-run to be claimed.
+
+Gate evidence for the same revision, run by the operator on the final tree:
+`gofmt -l .` exit 0, `go vet ./...` exit 0, `go test ./... -count=1 -timeout 300s`
+exit 0 (all daemon packages `ok`), `go build ./cmd/symmetry-daemon
+./cmd/symmetry-fake-agent` exit 0, `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go
+build ./...` exit 0. `go test -race` is not available on this Windows host
+(`CGO_ENABLED=0`, no cgo toolchain); the CI ubuntu `daemon` job owns race
+coverage.
+
+The sanitized capture `native-repository-turn.jsonl` was normalized from the
+Windows capture's CRLF endings to LF before it was committed, and its manifest
+digest was recomputed accordingly: the repository normalizes text to LF
+(`* text=auto`) and the manifest test reads the bytes in the tree, so a CRLF
+digest would have passed on this host and failed on Linux CI.
