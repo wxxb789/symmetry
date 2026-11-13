@@ -948,7 +948,9 @@ static int read_self_status(struct owner_config *config) {
     if (strncmp(line, "Uid:", 4) == 0 || strncmp(line, "Gid:", 4) == 0) {
       int is_uid = line[0] == 'U';
       char *cursor = line + 4;
-      uint32_t expected = is_uid ? config->b_uid : config->b_gid;
+      // /proc/self/status reports IDs in the gate's user namespace. The
+      // fixed map binds namespace ID 1 to host BUID/BGID.
+      uint32_t expected = 1;
       for (int index = 0; index < 4; ++index) {
         while (*cursor == ' ' || *cursor == '\t') ++cursor;
         if (*cursor < '0' || *cursor > '9') return -1;
@@ -1318,8 +1320,7 @@ static int gate_run(void) {
 
   uid_t a_uid = getuid();
   gid_t a_gid = getgid();
-  if (a_uid == 0 || a_gid == 0 || prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0 ||
-      prctl(PR_SET_KEEPCAPS, 0, 0, 0, 0) != 0 ||
+  if (a_uid == 0 || a_gid == 0 || prctl(PR_SET_KEEPCAPS, 0, 0, 0, 0) != 0 ||
       setresgid(a_gid, a_gid, a_gid) != 0 || setresuid(a_uid, a_uid, a_uid) != 0 ||
       set_capabilities_zero() != 0 || check_zero_groups() != 0 ||
       release_peer.uid != a_uid || release_peer.gid != a_gid) return -1;
@@ -1327,7 +1328,10 @@ static int gate_run(void) {
   gid_t check_rg, check_eg, check_sg;
   if (getresuid(&check_ru, &check_eu, &check_su) != 0 || check_ru != a_uid || check_eu != a_uid || check_su != a_uid ||
       getresgid(&check_rg, &check_eg, &check_sg) != 0 || check_rg != a_gid || check_eg != a_gid || check_sg != a_gid ||
-      unshare(CLONE_NEWUSER) != 0 || prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0 || check_zero_groups() != 0) return -1;
+      // The same-UID A helper must stat this gate's nsfs user namespace before
+      // and after it writes the fixed map. dumpable=0 would make that stat
+      // unavailable to A. drop_to_b/reset below closes the window before B exec.
+      unshare(CLONE_NEWUSER) != 0 || prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0 || check_zero_groups() != 0) return -1;
 
   unsigned char ready[GATE_READY_SIZE];
   memset(ready, 0, sizeof(ready));

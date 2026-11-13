@@ -587,6 +587,58 @@ func TestLinuxOwnerHelperV2StatusDoesNotLatchExpiredLease(t *testing.T) {
 	}
 }
 
+func TestLinuxOwnerHelperV2LeaseStopDoesNotWakeOwnerLoss(t *testing.T) {
+	lease := newLinuxOwnerHelperV2Lease()
+	if _, err := lease.renew(time.Hour, 1); err != nil {
+		t.Fatalf("arm helper lease before stop: %v", err)
+	}
+	lease.stop()
+	if !lease.isStopped() {
+		t.Fatal("explicit helper stop did not latch the lease")
+	}
+	select {
+	case <-lease.wake:
+		t.Fatal("explicit helper stop woke the owner-loss watcher")
+	default:
+	}
+}
+
+func TestLinuxOwnerHelperV2LeaseExpiryWakesOwnerLoss(t *testing.T) {
+	lease := newLinuxOwnerHelperV2Lease()
+	lease.mu.Lock()
+	lease.sequence, lease.deadline, lease.duration = 1, time.Now().Add(-time.Second), time.Hour
+	lease.mu.Unlock()
+	if _, live := lease.snapshot(); live {
+		t.Fatal("expired helper lease snapshot remained live")
+	}
+	select {
+	case <-lease.wake:
+	default:
+		t.Fatal("expired helper lease did not wake the owner-loss watcher")
+	}
+}
+
+func TestLinuxOwnerHelperV2UnarmedLeaseObservationDoesNotLatchOrWake(t *testing.T) {
+	lease := newLinuxOwnerHelperV2Lease()
+	if _, live := lease.snapshot(); live {
+		t.Fatal("unarmed helper lease snapshot reported live")
+	}
+	if _, _, live := lease.releaseGuard(); live {
+		t.Fatal("unarmed helper lease release guard reported live")
+	}
+	if lease.isStopped() {
+		t.Fatal("observing an unarmed lease latched it as stopped")
+	}
+	select {
+	case <-lease.wake:
+		t.Fatal("observing an unarmed lease woke the owner-loss watcher")
+	default:
+	}
+	if _, err := lease.renew(time.Hour, 1); err != nil {
+		t.Fatalf("lease could not be armed after observation: %v", err)
+	}
+}
+
 func TestLinuxOwnerHelperV2ResponseRejectsActionOutsideStatus(t *testing.T) {
 	listener, err := net.ListenUnix("unixpacket", &net.UnixAddr{Name: filepath.Join(t.TempDir(), "helper.sock"), Net: "unixpacket"})
 	if err != nil {
@@ -635,5 +687,19 @@ func TestLinuxOwnerHelperV2ResponseRejectsActionOutsideStatus(t *testing.T) {
 	closeLinuxOwnerAnchorFDs(rights)
 	if err == nil || !strings.Contains(err.Error(), "exposed a selected action outside authenticated Status") {
 		t.Fatalf("helper action metadata decode error = %v, want the non-Status action-field rejection", err)
+	}
+}
+
+func TestLinuxOwnerHelperV2ReleaseUnresolvedErrorCarriesStopEvidence(t *testing.T) {
+	evidence := LinuxOwnerHelperV2StopEvidence{}
+	response := linuxOwnerHelperV2Response{
+		Operation: "release", Status: "unresolved", ErrorCode: "release_outcome_unknown",
+		StopEvidence: &evidence,
+	}
+	err := linuxOwnerHelperV2ResponseError(response)
+	var unresolved *LinuxOwnerHelperV2ReleaseUnresolvedError
+	if !errors.As(err, &unresolved) || !errors.Is(err, ErrLinuxOwnerHelperV2ReleaseUnresolved) ||
+		unresolved.Code != "release_outcome_unknown" || unresolved.Evidence == nil {
+		t.Fatalf("unresolved release error lost stop evidence: %v", err)
 	}
 }

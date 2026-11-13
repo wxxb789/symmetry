@@ -98,12 +98,7 @@ type retiredRPC struct {
 
 // nativeProcess keeps the test seam at the existing process-runner boundary.
 // Production construction below always starts it with execution.Runner.
-type nativeProcess interface {
-	WriteInputContext(context.Context, []byte) error
-	Wait() execution.Result
-	Terminate(context.Context, time.Duration) error
-	ProcessDetails() (int, string)
-}
+type nativeProcess = harness.NativeProcess
 
 type processStarter func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error)
 
@@ -211,7 +206,13 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 		LinuxV2Required:                    request.Invocation.LinuxV2Required,
 		LinuxV2:                            request.Invocation.LinuxV2,
 	}
-	process, err := adapter.startProcess(processContext, invocation, execution.SinkFunc(session.handleProcessOutput))
+	var process nativeProcess
+	var err error
+	if request.StartProcess != nil {
+		process, err = request.StartProcess(processContext, invocation, execution.SinkFunc(session.handleProcessOutput))
+	} else {
+		process, err = adapter.startProcess(processContext, invocation, execution.SinkFunc(session.handleProcessOutput))
+	}
 	if isNilNativeProcess(process) {
 		if err != nil {
 			cancel()

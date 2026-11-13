@@ -67,9 +67,11 @@ const (
 	linuxV2NativeWitnessTurnStage        = "native_turn_started"
 	linuxV2NativeWitnessStopReceiptStage = "stop_receipt_durable"
 	linuxV2NativeWitnessLeafRemovedStage = "leaf_removed"
-	linuxV2NativeWitnessClearedStage     = "journal_cleared"
-	linuxV2NativeWitnessChildStage       = "detached_child_live"
-	linuxV2NativeWitnessCodexArtifact    = "symmetry-codex-smoke.txt"
+	// journal_cleared covers the v2 containment handoff/authority fields. A
+	// retained candidate clone may still keep the workspace journal claimed.
+	linuxV2NativeWitnessClearedStage  = "journal_cleared"
+	linuxV2NativeWitnessChildStage    = "detached_child_live"
+	linuxV2NativeWitnessCodexArtifact = "symmetry-codex-smoke.txt"
 )
 
 var (
@@ -271,34 +273,36 @@ type linuxV2NativeWitnessCodex struct {
 }
 
 type linuxV2NativeWitnessSummary struct {
-	Version                int                                    `json:"version"`
-	Case                   string                                 `json:"case"`
-	Harness                string                                 `json:"harness"`
-	NativeVersion          string                                 `json:"native_version"`
-	InstalledOwnerVerified bool                                   `json:"installed_owner_verified"`
-	NativeReleaseState     linuxV2NativeWitnessNativeReleaseState `json:"native_release_state"`
-	Outcome                string                                 `json:"outcome"`
-	RecoveryState          string                                 `json:"recovery_state,omitempty"`
-	ResponseLostAfter      string                                 `json:"response_lost_after,omitempty"`
-	HelperDropObserved     bool                                   `json:"helper_drop_observed"`
-	HelperDropOperation    string                                 `json:"helper_drop_operation,omitempty"`
-	JournalUnproven        bool                                   `json:"journal_unproven"`
-	NoTargetAbort          bool                                   `json:"no_target_abort"`
-	FailureCategory        string                                 `json:"failure_category"`
-	RunKey                 linuxV2NativeWitnessRunKey             `json:"run_key"`
-	Fence                  linuxV2NativeWitnessFenceSummary       `json:"fence"`
-	Subject                protocol.Subject                       `json:"subject"`
-	Stages                 linuxV2NativeWitnessStages             `json:"stages"`
-	Target                 linuxV2NativeWitnessTarget             `json:"target"`
-	Owners                 linuxV2NativeWitnessOwners             `json:"owners"`
-	Leaf                   linuxV2NativeWitnessLeaf               `json:"leaf"`
-	Clone                  linuxV2NativeWitnessClone              `json:"clone"`
-	Stop                   linuxV2NativeWitnessStop               `json:"stop"`
-	Release                linuxV2NativeWitnessRelease            `json:"release"`
-	ProviderAction         linuxV2NativeWitnessProviderAction     `json:"provider_action"`
-	Health                 linuxV2NativeWitnessHealth             `json:"health"`
-	DetachedChild          *linuxV2NativeWitnessDetachedChild     `json:"detached_child,omitempty"`
-	Codex                  *linuxV2NativeWitnessCodex             `json:"codex,omitempty"`
+	Version                   int                                    `json:"version"`
+	Case                      string                                 `json:"case"`
+	Harness                   string                                 `json:"harness"`
+	NativeVersion             string                                 `json:"native_version"`
+	InstalledOwnerVerified    bool                                   `json:"installed_owner_verified"`
+	NativeReleaseState        linuxV2NativeWitnessNativeReleaseState `json:"native_release_state"`
+	Outcome                   string                                 `json:"outcome"`
+	RecoveryState             string                                 `json:"recovery_state,omitempty"`
+	ResponseLostAfter         string                                 `json:"response_lost_after,omitempty"`
+	HelperDropObserved        bool                                   `json:"helper_drop_observed"`
+	HelperDropOperation       string                                 `json:"helper_drop_operation,omitempty"`
+	JournalUnproven           bool                                   `json:"journal_unproven"`
+	WorkspaceRecoveryRequired bool                                   `json:"workspace_recovery_required"`
+	WorkspaceJournalCleared   bool                                   `json:"workspace_journal_cleared"`
+	NoTargetAbort             bool                                   `json:"no_target_abort"`
+	FailureCategory           string                                 `json:"failure_category"`
+	RunKey                    linuxV2NativeWitnessRunKey             `json:"run_key"`
+	Fence                     linuxV2NativeWitnessFenceSummary       `json:"fence"`
+	Subject                   protocol.Subject                       `json:"subject"`
+	Stages                    linuxV2NativeWitnessStages             `json:"stages"`
+	Target                    linuxV2NativeWitnessTarget             `json:"target"`
+	Owners                    linuxV2NativeWitnessOwners             `json:"owners"`
+	Leaf                      linuxV2NativeWitnessLeaf               `json:"leaf"`
+	Clone                     linuxV2NativeWitnessClone              `json:"clone"`
+	Stop                      linuxV2NativeWitnessStop               `json:"stop"`
+	Release                   linuxV2NativeWitnessRelease            `json:"release"`
+	ProviderAction            linuxV2NativeWitnessProviderAction     `json:"provider_action"`
+	Health                    linuxV2NativeWitnessHealth             `json:"health"`
+	DetachedChild             *linuxV2NativeWitnessDetachedChild     `json:"detached_child,omitempty"`
+	Codex                     *linuxV2NativeWitnessCodex             `json:"codex,omitempty"`
 }
 
 type linuxV2NativeWitnessStageMarker struct {
@@ -892,6 +896,17 @@ func linuxV2NativeWitnessStageObserved(stages linuxV2NativeWitnessStages, stage 
 func (witness *linuxV2NativeWitnessRun) validatePhysicalStopSummary() error {
 	if err := witness.validatePhysicalStopProof(); err != nil {
 		return err
+	}
+	if witness.request.Case != "wsl2_denial" {
+		if witness.summary.Target.PID <= 0 || witness.summary.Target.Identity == "" {
+			return errors.New("positive owner witness lacks the exact native target identity")
+		}
+		if witness.summary.JournalUnproven {
+			return errors.New("positive owner witness reports an unproven RunJournal")
+		}
+		if witness.summary.WorkspaceRecoveryRequired && witness.summary.WorkspaceJournalCleared {
+			return errors.New("positive owner witness reports both retained workspace recovery and a cleared workspace journal")
+		}
 	}
 	if witness.summary.Target.PID > 0 && witness.summary.NativeReleaseState != linuxV2NativeWitnessNativeReleaseReleased {
 		return errors.New("owner witness target PID lacks positive same-PID B RELEASE evidence")
@@ -1615,17 +1630,32 @@ func (witness *linuxV2NativeWitnessRun) fillSummaryFromJournal(journal state.Run
 		summary.Target.SamePIDExec = summary.Target.PID > 0 && summary.Target.PID == summary.Owners.Gate.PID &&
 			summary.Target.Identity == summary.Owners.Gate.Identity
 	}
+	summary.WorkspaceRecoveryRequired = journal.WorkspaceRecoveryRequired
+	summary.WorkspaceJournalCleared = !journal.WorkspaceRecoveryRequired && journal.WorkspacePath == "" &&
+		journal.LinuxCloneIntent == nil
 	switch {
 	case summary.Release.ClearPersisted:
-		if journal.ContainmentCgroupPreGateReleaseProof != nil {
+		if hasPendingLinuxV2Containment(journal) || journal.ContainmentUnproven || journal.LinuxCloneAbortPending {
+			summary.RecoveryState = "unresolved"
+			summary.JournalUnproven = true
+		} else if journal.ContainmentCgroupPreGateReleaseProof != nil {
+			summary.JournalUnproven = false
 			summary.RecoveryState = "pre_gate_released"
 		} else {
+			summary.JournalUnproven = false
 			summary.RecoveryState = "released"
 		}
 	case summary.NoTargetAbort:
-		summary.RecoveryState = "aborted_no_target"
+		if hasPendingLinuxV2Containment(journal) || journal.ContainmentUnproven || journal.LinuxCloneAbortPending {
+			summary.RecoveryState = "unresolved"
+			summary.JournalUnproven = true
+		} else {
+			summary.JournalUnproven = false
+			summary.RecoveryState = "aborted_no_target"
+		}
 	case journal.LinuxCloneIntent == nil && journal.ContainmentCgroup == nil && journal.ContainmentHandoff == nil &&
 		journal.ContainmentAuthority == nil && !journal.HasProcessDetails() && !journal.ContainmentUnproven:
+		summary.JournalUnproven = false
 		summary.RecoveryState = "no_native_effects"
 	case hasPendingLinuxV2Containment(journal) || journal.ContainmentUnproven || journal.LinuxCloneAbortPending ||
 		journal.LinuxCloneIntent != nil && journal.LinuxCloneAbortProof == nil && journal.LinuxClonePromotionReceipt == nil:
@@ -3133,6 +3163,23 @@ func (witness *linuxV2NativeWitnessRun) launchNative(
 	}
 	if kind == harness.KindPi {
 		startRequest.Context = witness.nativeContext()
+	}
+	if kind == harness.KindCodex {
+		startRequest.StartProcess = func(startContext context.Context, invocation execution.Invocation, sink execution.Sink) (harness.NativeProcess, error) {
+			process, startErr := daemon.start(startContext, invocation, sink)
+			if process == nil {
+				return nil, startErr
+			}
+			native, ok := process.(harness.NativeProcess)
+			if !ok {
+				terminateContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				_ = process.Terminate(terminateContext, 0)
+				cancel()
+				_ = process.Wait()
+				return nil, errors.New("Codex owner witness start returned an incompatible process handle")
+			}
+			return native, startErr
+		}
 	}
 	session, startErr := adapter.Start(startContext, startRequest, sink)
 	if session != nil {

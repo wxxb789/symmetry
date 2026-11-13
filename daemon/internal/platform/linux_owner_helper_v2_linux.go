@@ -55,14 +55,15 @@ const (
 )
 
 var (
-	ErrLinuxOwnerHelperV2OwnerLost      = errors.New("Linux owner helper observed daemon-owner loss")
-	ErrLinuxOwnerHelperV2NotCommitted   = errors.New("Linux owner helper has no durable handoff acknowledgement")
-	ErrLinuxOwnerHelperV2LeaseUnarmed   = errors.New("Linux owner helper has no acknowledged initial lease")
-	ErrLinuxOwnerHelperV2ReleaseUsed    = errors.New("Linux owner helper RELEASE is single-use")
-	ErrLinuxOwnerHelperV2StopUnproven   = errors.New("Linux owner helper stop is unproven")
-	ErrLinuxOwnerHelperV2RecoveryOnly   = errors.New("Linux owner helper is latched to recovery-only mode")
-	errLinuxOwnerHelperV2WitnessExit    = errors.New("Linux owner helper exited at the selected post-RELEASE witness boundary")
-	errLinuxOwnerProcessChildrenChanged = errors.New("Linux process child census snapshot changed")
+	ErrLinuxOwnerHelperV2OwnerLost         = errors.New("Linux owner helper observed daemon-owner loss")
+	ErrLinuxOwnerHelperV2NotCommitted      = errors.New("Linux owner helper has no durable handoff acknowledgement")
+	ErrLinuxOwnerHelperV2LeaseUnarmed      = errors.New("Linux owner helper has no acknowledged initial lease")
+	ErrLinuxOwnerHelperV2ReleaseUsed       = errors.New("Linux owner helper RELEASE is single-use")
+	ErrLinuxOwnerHelperV2StopUnproven      = errors.New("Linux owner helper stop is unproven")
+	ErrLinuxOwnerHelperV2RecoveryOnly      = errors.New("Linux owner helper is latched to recovery-only mode")
+	ErrLinuxOwnerHelperV2ReleaseUnresolved = errors.New("Linux owner helper release outcome is unresolved")
+	errLinuxOwnerHelperV2WitnessExit       = errors.New("Linux owner helper exited at the selected post-RELEASE witness boundary")
+	errLinuxOwnerProcessChildrenChanged    = errors.New("Linux process child census snapshot changed")
 )
 
 // LinuxOwnerHelperV2Prepared is evidence from the helper's actual parked-gate
@@ -1206,6 +1207,10 @@ func linuxOwnerHelperV2ResponseError(response linuxOwnerHelperV2Response) error 
 	if response.Status == "recovery_only" || response.ErrorCode == "owner_lost" {
 		return ErrLinuxOwnerHelperV2RecoveryOnly
 	}
+	if response.Operation == "release" && response.Status == "unresolved" && response.StopEvidence != nil {
+		copy := *response.StopEvidence
+		return &LinuxOwnerHelperV2ReleaseUnresolvedError{Code: response.ErrorCode, Evidence: &copy}
+	}
 	switch response.ErrorCode {
 	case "owner_lost_during_release":
 		return ErrLinuxOwnerHelperV2OwnerLost
@@ -1221,6 +1226,29 @@ func linuxOwnerHelperV2ResponseError(response linuxOwnerHelperV2Response) error 
 		}
 		return fmt.Errorf("Linux owner helper rejected operation (%s)", response.ErrorCode)
 	}
+}
+
+// LinuxOwnerHelperV2ReleaseUnresolvedError preserves the measured physical
+// stop evidence from a post-RELEASE failure. The caller still owns the
+// unresolved run, but no longer has to treat an executed native target as if
+// no stop evidence existed.
+type LinuxOwnerHelperV2ReleaseUnresolvedError struct {
+	Code     string
+	Evidence *LinuxOwnerHelperV2StopEvidence
+}
+
+func (failure *LinuxOwnerHelperV2ReleaseUnresolvedError) Error() string {
+	if failure == nil {
+		return ErrLinuxOwnerHelperV2ReleaseUnresolved.Error()
+	}
+	if failure.Code == "" {
+		return ErrLinuxOwnerHelperV2ReleaseUnresolved.Error()
+	}
+	return fmt.Sprintf("%s (%s)", ErrLinuxOwnerHelperV2ReleaseUnresolved, failure.Code)
+}
+
+func (failure *LinuxOwnerHelperV2ReleaseUnresolvedError) Unwrap() error {
+	return ErrLinuxOwnerHelperV2ReleaseUnresolved
 }
 
 func (client *LinuxOwnerHelperV2Client) setDeadline(ctx context.Context, timeout time.Duration) error {
@@ -1922,7 +1950,7 @@ func (lease *linuxOwnerHelperV2Lease) renew(duration time.Duration, sequence uin
 	lease.mu.Lock()
 	defer lease.mu.Unlock()
 	if lease.stopped || !lease.deadline.IsZero() && !time.Now().Before(lease.deadline) {
-		lease.latchLocked()
+		lease.latchLocked(true)
 		return false, errors.New("Linux owner helper lease is expired")
 	}
 	if sequence == lease.sequence {
@@ -1946,14 +1974,17 @@ func (lease *linuxOwnerHelperV2Lease) renew(duration time.Duration, sequence uin
 		lease.mu.Lock()
 		if lease.sequence == sequence && lease.generation == generation &&
 			!lease.stopped && !time.Now().Before(lease.deadline) {
-			lease.latchLocked()
+			lease.latchLocked(true)
 		}
 		lease.mu.Unlock()
 	})
 	return false, nil
 }
 
-func (lease *linuxOwnerHelperV2Lease) latchLocked() {
+// latchLocked freezes the lease. notify is true only for deadline expiry; an
+// explicit stop must not be reported to the owner-loss watcher, because the
+// stop owner still needs the accepted stop response on its live connection.
+func (lease *linuxOwnerHelperV2Lease) latchLocked(notify bool) {
 	if lease == nil || lease.stopped {
 		return
 	}
@@ -1963,9 +1994,11 @@ func (lease *linuxOwnerHelperV2Lease) latchLocked() {
 		lease.timer.Stop()
 		lease.timer = nil
 	}
-	select {
-	case lease.wake <- struct{}{}:
-	default:
+	if notify {
+		select {
+		case lease.wake <- struct{}{}:
+		default:
+		}
 	}
 }
 
@@ -1974,7 +2007,7 @@ func (lease *linuxOwnerHelperV2Lease) stop() {
 		return
 	}
 	lease.mu.Lock()
-	lease.latchLocked()
+	lease.latchLocked(false)
 	lease.mu.Unlock()
 }
 
@@ -1993,10 +2026,11 @@ func (lease *linuxOwnerHelperV2Lease) snapshot() (uint64, bool) {
 	}
 	lease.mu.Lock()
 	defer lease.mu.Unlock()
-	if lease.deadline.IsZero() || lease.stopped || !time.Now().Before(lease.deadline) {
-		if !lease.stopped {
-			lease.latchLocked()
-		}
+	if lease.deadline.IsZero() {
+		return lease.sequence, false
+	}
+	if lease.stopped || !time.Now().Before(lease.deadline) {
+		lease.latchLocked(true)
 		return lease.sequence, false
 	}
 	return lease.sequence, true
@@ -2019,10 +2053,11 @@ func (lease *linuxOwnerHelperV2Lease) releaseGuard() (uint64, time.Time, bool) {
 	}
 	lease.mu.Lock()
 	defer lease.mu.Unlock()
-	if lease.deadline.IsZero() || lease.stopped || !time.Now().Before(lease.deadline) {
-		if !lease.stopped {
-			lease.latchLocked()
-		}
+	if lease.deadline.IsZero() {
+		return lease.sequence, time.Time{}, false
+	}
+	if lease.stopped || !time.Now().Before(lease.deadline) {
+		lease.latchLocked(true)
 		return lease.sequence, time.Time{}, false
 	}
 	return lease.sequence, lease.deadline, true
@@ -3280,6 +3315,12 @@ func (helper *linuxOwnerHelperV2) handleRelease(connection *net.UnixConn, reques
 		err = helper.anchorClient.AuthorizeGateRelease(releaseContext, helper.grant, helper.helper, *gateIdentity, *gateUserNamespace)
 	}
 	if err == nil {
+		sequence, leaseDeadline, leaseLive = helper.lease.releaseGuard()
+		if !leaseLive {
+			err = errors.New("Linux owner helper lease expired before gate RELEASE")
+		}
+	}
+	if err == nil {
 		err = prepared.Release(releaseContext, int(helper.leaf.leafFD), command, linuxgate.ReleaseGuard{
 			OwnerPipe: ownerPipe, LeaseDeadline: leaseDeadline,
 		}, onCheckoutReady)
@@ -3299,12 +3340,6 @@ func (helper *linuxOwnerHelperV2) handleRelease(connection *net.UnixConn, reques
 				helper.witnessActionObserved = true
 			}
 		}
-	}
-	if witnessAction != "" {
-		// The Gate RELEASE is complete, so an owner-loss stop no longer needs to
-		// wait for the native RegisterProcess callback that this witness omits.
-		helper.releaseInFlight = false
-		close(releaseDone)
 	}
 	helper.stateMu.Unlock()
 	cancelRelease()
@@ -3333,7 +3368,7 @@ func (helper *linuxOwnerHelperV2) handleRelease(connection *net.UnixConn, reques
 	helper.stateMu.Unlock()
 	if err != nil || ownerLost || stopRequested || !leaseLive {
 		ctx, cancel := context.WithTimeout(context.Background(), linuxOwnerHelperV2StopTimeout)
-		_, stopErr := helper.stopOwned(ctx)
+		stopEvidence, stopErr := helper.stopOwned(ctx)
 		cancel()
 		code := "release_outcome_unknown"
 		if ownerLost {
@@ -3341,7 +3376,12 @@ func (helper *linuxOwnerHelperV2) handleRelease(connection *net.UnixConn, reques
 		} else if !leaseLive {
 			code = "lease_expired_during_release"
 		}
-		responseErr := helper.writeResponse(connection, "release", "unresolved", nil, nil, nil, nil, nil, sequence, nil, code)
+		var evidence *LinuxOwnerHelperV2StopEvidence
+		if stopErr == nil {
+			copy := stopEvidence
+			evidence = &copy
+		}
+		responseErr := helper.writeResponse(connection, "release", "unresolved", nil, nil, nil, nil, nil, sequence, evidence, code)
 		if stopErr != nil {
 			helper.requestAnchorTakeover()
 		}

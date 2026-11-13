@@ -305,6 +305,43 @@ func TestLinuxV2NativeWitnessStageReplayKeepsStaticGateDistinctFromBTarget(t *te
 	}
 }
 
+func TestLinuxV2NativeWitnessReleasedSummaryClearsStaleUnproven(t *testing.T) {
+	witness := &linuxV2NativeWitnessRun{summary: linuxV2NativeWitnessSummary{
+		JournalUnproven: true,
+		Release:         linuxV2NativeWitnessRelease{ClearPersisted: true},
+	}}
+	witness.fillSummaryFromJournal(state.RunJournal{})
+	if witness.summary.JournalUnproven {
+		t.Fatal("proven released journal retained a stale unproven flag")
+	}
+	if witness.summary.RecoveryState != "released" {
+		t.Fatalf("released journal recovery state = %q", witness.summary.RecoveryState)
+	}
+}
+
+func TestLinuxV2NativeWitnessPositiveSummaryRequiresTargetAndProvenJournal(t *testing.T) {
+	witness := &linuxV2NativeWitnessRun{
+		request: linuxV2NativeWitnessRequest{Case: "codex_native_turn"},
+		summary: linuxV2NativeWitnessSummary{
+			Release: linuxV2NativeWitnessRelease{
+				OpaquePlatformRelease: true, LeafRemoved: true, ClearPersisted: true, AnchorRetired: true,
+			},
+			Stop: linuxV2NativeWitnessStop{
+				ReceiptVersion: authority.SupervisorHandoffVersionV2, KillAcknowledged: true, PopulatedZero: true,
+				NoMigrationObserved: true, ProducerFenced: true, DescendantsReaped: true,
+			},
+		},
+	}
+	if err := witness.validatePhysicalStopSummary(); err == nil {
+		t.Fatal("positive witness without a target identity was accepted")
+	}
+	witness.summary.Target = linuxV2NativeWitnessTarget{PID: 42, Identity: "target"}
+	witness.summary.JournalUnproven = true
+	if err := witness.validatePhysicalStopSummary(); err == nil {
+		t.Fatal("positive witness with an unproven journal was accepted")
+	}
+}
+
 func TestLinuxV2NativeWitnessStageReplayRequiresExactUnresolvedCategory(t *testing.T) {
 	witness := &linuxV2NativeWitnessRun{
 		request: linuxV2NativeWitnessRequest{Case: "stage_replay"},
