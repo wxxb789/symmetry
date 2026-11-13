@@ -1161,7 +1161,6 @@ func (gate *PreparedGate) Release(ctx context.Context, leafFD int, command Nativ
 		gate.mu.Unlock()
 		return errors.New("wrap duplicated helper owner pipe for RELEASE")
 	}
-	guard.OwnerPipe = ownerPipe
 	packet, err := encodeGuardedRelease(gate.token, command, deadlineNS)
 	if err != nil {
 		_ = ownerPipe.Close()

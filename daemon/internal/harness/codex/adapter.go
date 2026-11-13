@@ -15,7 +15,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/wxxb789/symmetry/daemon/internal/contracts"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
@@ -99,12 +98,7 @@ type retiredRPC struct {
 
 // nativeProcess keeps the test seam at the existing process-runner boundary.
 // Production construction below always starts it with execution.Runner.
-type nativeProcess interface {
-	WriteInputContext(context.Context, []byte) error
-	Wait() execution.Result
-	Terminate(context.Context, time.Duration) error
-	ProcessDetails() (int, string)
-}
+type nativeProcess = harness.NativeProcess
 
 type processStarter func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error)
 
@@ -209,8 +203,16 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 		PersistProcessAuthority:            request.PersistProcessAuthority,
 		PersistContainmentStopReceipt:      request.PersistContainmentStopReceipt,
 		PersistContainmentUnproven:         request.Invocation.PersistContainmentUnproven,
+		LinuxV2Required:                    request.Invocation.LinuxV2Required,
+		LinuxV2:                            request.Invocation.LinuxV2,
 	}
-	process, err := adapter.startProcess(processContext, invocation, execution.SinkFunc(session.handleProcessOutput))
+	var process nativeProcess
+	var err error
+	if request.StartProcess != nil {
+		process, err = request.StartProcess(processContext, invocation, execution.SinkFunc(session.handleProcessOutput))
+	} else {
+		process, err = adapter.startProcess(processContext, invocation, execution.SinkFunc(session.handleProcessOutput))
+	}
 	if isNilNativeProcess(process) {
 		if err != nil {
 			cancel()
@@ -497,6 +499,12 @@ func (session *nativeSession) Open(ctx context.Context) (harness.NativeSessionHa
 			"sandbox_workspace_write.network_access":         false,
 			"sandbox_workspace_write.exclude_tmpdir_env_var": true,
 			"sandbox_workspace_write.exclude_slash_tmp":      true,
+			// Codex 0.167.2 starts its shell snapshot in a detached session.
+			// Symmetry proves containment with the OS process group, so that
+			// detached helper makes every Linux close unproven. The daemon
+			// already owns the child environment; disabling the snapshot keeps
+			// containment provable without widening permissions.
+			"features.shell_snapshot": false,
 		},
 	}, &started); err != nil {
 		return harness.NativeSessionHandle{}, fmt.Errorf("start Codex thread: %w", err)
@@ -2694,10 +2702,6 @@ func buildTurnPrompt(goal string, canonicalContext json.RawMessage) string {
 		"Return only one JSON object that conforms to the supplied output schema.\n\n" +
 		"<symmetry_goal>\n" + goal + "\n</symmetry_goal>\n\n" +
 		"<canonical_context_json>\n" + string(canonicalContext) + "\n</canonical_context_json>"
-}
-
-func nativeTaskResultSchema() (map[string]any, error) {
-	return contracts.TaskResultSchema()
 }
 
 func boolPointer(value bool) *bool { return &value }

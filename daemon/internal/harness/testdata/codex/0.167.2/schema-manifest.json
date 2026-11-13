@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.167.2",
+  "generated_on": "2026-11-12",
+  "command": "codex app-server generate-json-schema --out <directory>",
+  "bundle_sha256": {
+    "codex_app_server_protocol.schemas.json": "sha256:021462a9bacd117f4cd40c256a4888619d059cec6a65b795198d521ba660e554",
+    "codex_app_server_protocol.v2.schemas.json": "sha256:f2576ca5d46be4cfb159906264fbc173efcfcc917ea8fdc38323770e7b657b5a"
+  },
+  "method_schema_sha256": {
+    "v1/InitializeParams.json": "sha256:c608ff6bdd94e661423dca9b44cd1dcea7eac610f74e1310284c61eab64280bc",
+    "v2/ThreadStartParams.json": "sha256:e9c6d3cc18d049bfbc0249add3808fb8e5a27e1a0b5a423767aafbc3859a9428",
+    "v2/TurnStartParams.json": "sha256:4e25cd48986f73e600d9949a055ddb994a75b4a38790e935274646f0fece00ad",
+    "v2/TurnInterruptParams.json": "sha256:6dff382dae73d1dbc58406ed045605f647e7a49660e2540fbd2c6c24d60c5f2b"
+  },
+  "observed_wire_constraints": {
+    "outbound_jsonrpc": "2.0 required by Symmetry adapter",
+    "installed_server_jsonrpc_field": "omitted from initialize, thread/start and notification output",
+    "schema_bundle_change_from_0.167.1": "none",
+    "requested_sandbox": "workspace-write",
+    "isolated_codex_home_sandbox": "readOnly",
+    "sandbox_ready_windows_home_sandbox": "workspaceWrite",
+    "sandbox_readiness_method": "windowsSandbox/readiness",
+    "native_support_claim": "windows-only",
+    "linux_support_claim": false
+  }
+}

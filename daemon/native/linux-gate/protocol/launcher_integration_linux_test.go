@@ -56,6 +56,24 @@ func TestLinuxOwnerReleaseV2RejectsLegacyAndWrongDescriptorCount(t *testing.T) {
 	}
 }
 
+func TestValidateReleaseGuardLiveRejectsClosedCallerOwnerPipe(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	guard := ReleaseGuard{OwnerPipe: reader, LeaseDeadline: time.Now().Add(time.Minute)}
+	if err := validateReleaseGuardLive(guard); err != nil {
+		t.Fatalf("live owner pipe guard was rejected: %v", err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateReleaseGuardLive(guard); err == nil {
+		t.Fatal("closed caller owner pipe was accepted as a live RELEASE guard")
+	}
+}
+
 func TestOwnerConfigV1CompatibilityAndV2StateDir(t *testing.T) {
 	legacy, err := parseOwnerConfig([]byte("version=1\na_uid=1001\na_gid=1002\nb_uid=2001\nb_gid=2002\n"))
 	if err != nil || legacy.StateDir != "" || legacy.AUID != 1001 || legacy.BUID != 2001 {
@@ -419,6 +437,9 @@ func TestInstalledLinuxOwnerBoundaryScratch(t *testing.T) {
 	releaseGuard, _ := newScratchReleaseGuard(t, time.Minute)
 	if err := gate.Release(releaseContext, leafFD, command, releaseGuard, nil); err != nil {
 		t.Fatalf("one-use fixed-B RELEASE and same-PID exec: %v", err)
+	}
+	if _, err := unix.FcntlInt(releaseGuard.OwnerPipe.Fd(), unix.F_GETFD, 0); err != nil {
+		t.Fatalf("RELEASE closed the caller-owned owner-pipe guard: %v", err)
 	}
 	if err := pipes.closeNativeCopies(); err != nil {
 		t.Fatalf("close A copies of transferred native stdio ends: %v", err)

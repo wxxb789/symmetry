@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -14,7 +15,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
 )
 
-func TestProbeKnownVersionAndHelpStillFailsClosed(t *testing.T) {
+func TestProbeKnownVersionAndHelpProjectsPlatformCapability(t *testing.T) {
 	help, err := os.ReadFile(filepath.Join("..", "testdata", "codex", TestedVersion, "app-server-help.txt"))
 	if err != nil {
 		t.Fatalf("read help fixture: %v", err)
@@ -27,17 +28,51 @@ func TestProbeKnownVersionAndHelpStillFailsClosed(t *testing.T) {
 		schemaDigest: TestedSchemaHash,
 	}
 	result, err := Probe(context.Background(), "codex", runner)
-	if !errors.Is(err, harness.ErrNativeUnverified) {
-		t.Fatalf("Probe() error = %v, want ErrNativeUnverified", err)
-	}
 	if result.Version != TestedVersion || !result.VersionKnown || !result.TransportKnown || !result.SchemaKnown || result.SchemaDigest != TestedSchemaHash {
 		t.Fatalf("probe result = %+v, want exact version and stdio evidence", result)
 	}
-	if result.NativeSessionVerified || result.Capabilities.Verified || result.Capabilities.Start {
-		t.Fatalf("probe advertised native support: %+v", result)
-	}
 	if result.Capabilities.Guidance != harness.GuidanceUnsupported || result.Capabilities.Pause != harness.PauseUnsupported || result.Capabilities.Usage != harness.UsageUnknown {
 		t.Fatalf("probe controls = %+v, want explicit unsupported values", result.Capabilities)
+	}
+	switch runtime.GOOS {
+	case "windows":
+		if err != nil || !result.NativeSessionVerified || !result.Capabilities.Verified || !result.Capabilities.Start || !result.Capabilities.Events || !result.Capabilities.Cancel {
+			t.Fatalf("Windows probe = (%+v, %v), want verified start/events/cancel", result.Capabilities, err)
+		}
+	default:
+		if !errors.Is(err, harness.ErrNativeUnverified) {
+			t.Fatalf("Probe() error = %v, want ErrNativeUnverified", err)
+		}
+		if result.NativeSessionVerified || result.Capabilities.Verified || result.Capabilities.Start {
+			t.Fatalf("probe advertised uncontained native support: %+v", result)
+		}
+	}
+}
+
+func TestVerifiedCapabilitiesForPlatformIsFailClosed(t *testing.T) {
+	evidence := harness.CodexProbeEvidence{
+		Version:           TestedVersion,
+		VersionKnown:      true,
+		TransportVerified: true,
+		SchemaDigest:      TestedSchemaHash,
+		SchemaKnown:       true,
+	}
+	linux, err := verifiedCapabilitiesForPlatform("linux", evidence)
+	if !errors.Is(err, harness.ErrNativeUnverified) {
+		t.Fatalf("linux projection error = %v, want ErrNativeUnverified", err)
+	}
+	if linux.Verified || linux.Start || linux.Events || linux.Cancel || linux.Unsupported[string(harness.CapabilityStart)] == "" {
+		t.Fatalf("linux projection = %+v, want explicit fail-closed reason", linux)
+	}
+	windows, err := verifiedCapabilitiesForPlatform("windows", evidence)
+	if err != nil {
+		t.Fatalf("windows projection error = %v", err)
+	}
+	if !windows.Verified || !windows.Start || !windows.Events || !windows.Cancel || windows.Resume || windows.Handoff {
+		t.Fatalf("windows projection = %+v, want start/events/cancel only", windows)
+	}
+	if windows.ImplementationVersion != ImplementationVersion || windows.NativeVersion != TestedVersion {
+		t.Fatalf("windows projection identity = %+v", windows)
 	}
 }
 
@@ -169,9 +204,9 @@ func TestProbeUnknownVersionFailsClosed(t *testing.T) {
 
 func TestProbeRejectsNonExactVersionOutput(t *testing.T) {
 	for _, versionOutput := range []string{
-		"codex-cli 0.167.1-alpha.1\n",
-		"codex-cli 0.167.1+build.1\n",
-		"codex-cli 0.167.1 trailing-token\n",
+		"codex-cli 0.167.2-alpha.1\n",
+		"codex-cli 0.167.2+build.1\n",
+		"codex-cli 0.167.2 trailing-token\n",
 	} {
 		t.Run(versionOutput, func(t *testing.T) {
 			runner := &fixtureRunner{responses: map[string][]byte{"--version": []byte(versionOutput)}}

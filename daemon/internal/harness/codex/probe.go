@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -153,9 +154,10 @@ func (runner osCommandRunner) SchemaDigest(ctx context.Context, executable strin
 	return "sha256:" + hex.EncodeToString(digestBytes[:]), nil
 }
 
-// ProbeResult records executable/version/help and generated-schema evidence.
-// NativeSessionVerified is intentionally always false until a real credentialed
-// lifecycle test proves the exact version's methods and controls.
+// ProbeResult records executable/version/help, generated-schema, and the
+// platform-specific native lifecycle claim. NativeSessionVerified is true only
+// where credentialed repository lifecycle, cancellation, artifact and
+// negative-permission evidence bind this exact version and schema.
 type ProbeResult struct {
 	Capabilities          harness.Capabilities
 	Executable            string
@@ -253,16 +255,76 @@ func Probe(ctx context.Context, executable string, runners ...CommandRunner) (Pr
 	result.Capabilities.TransportVerified = evidence.TransportVerified
 	result.SchemaDigest = evidence.SchemaDigest
 	result.SchemaKnown = evidence.SchemaKnown
-	if verifyErr != nil {
+	if verifyErr != nil && !errors.Is(verifyErr, harness.ErrNativeUnverified) {
 		return result, verifyErr
 	}
-	// The exact version and stdio framing are known, but no native lifecycle
-	// and control behavior is claimed. Start remains fail-closed until
-	// credentialed evidence.
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	return result, harness.ErrNativeUnverified
+	capabilities, nativeErr := verifiedCapabilitiesForPlatform(runtime.GOOS, evidence)
+	result.Capabilities = capabilities
+	result.NativeSessionVerified = capabilities.Verified
+	return result, nativeErr
+}
+
+const ImplementationVersion = "codex-app-server-v1"
+
+// verifiedCapabilitiesForPlatform keeps the native claim platform-specific.
+// Codex 0.167.2 starts every shell tool child in a detached session
+// (codex-rs/core/src/spawn.rs), which the process-group owner cannot contain on
+// Linux. Windows containment is verified by the Job object and the credentialed
+// smoke. Linux remains explicitly unverified until the Linux v2 cgroup owner
+// carries Codex evidence.
+func verifiedCapabilitiesForPlatform(platform string, evidence harness.CodexProbeEvidence) (harness.Capabilities, error) {
+	capabilities := harness.Capabilities{
+		Kind:                  harness.KindCodex,
+		NativeVersion:         evidence.Version,
+		ImplementationVersion: ImplementationVersion,
+		ProtocolVersion:       1,
+		VersionKnown:          evidence.VersionKnown,
+		TransportVerified:     evidence.TransportVerified,
+		Guidance:              harness.GuidanceUnsupported,
+		Pause:                 harness.PauseUnsupported,
+		Usage:                 harness.UsageUnknown,
+		Unsupported: map[string]string{
+			string(harness.CapabilityResume):           "Codex native resume is not verified",
+			string(harness.CapabilityHandoff):          "Codex fresh-session handoff is not verified",
+			string(harness.CapabilityGuidance):         "Codex native steer application is not verified",
+			string(harness.CapabilityPause):            "Codex interruption is cancellation, not safe pause",
+			string(harness.CapabilityApprovalResponse): "Codex approval response mapping is not verified",
+			string(harness.CapabilityUsage):            "Codex token counters are cumulative and not promoted as billable usage",
+			string(harness.CapabilityHardCostLimit):    "Codex app-server has no verified provider-enforced cost limit",
+			string(harness.CapabilityProviderAccess):   "Codex native provider broker bridge is not verified",
+		},
+	}
+	if !evidence.VersionKnown || !evidence.TransportVerified || !evidence.SchemaKnown {
+		reason := "Codex probe evidence is incomplete; native lifecycle is unverified"
+		capabilities.Unsupported[string(harness.CapabilityStart)] = reason
+		capabilities.Unsupported[string(harness.CapabilityEvents)] = reason
+		capabilities.Unsupported[string(harness.CapabilityCancel)] = reason
+		if err := capabilities.Validate(); err != nil {
+			return harness.Capabilities{}, fmt.Errorf("codex capability contract: %w", err)
+		}
+		return capabilities, harness.ErrNativeUnverified
+	}
+	if platform != "windows" {
+		reason := "Codex native repository lifecycle is verified only on Windows; Linux shell tool children detach into a new session that the process-group owner cannot contain"
+		capabilities.Unsupported[string(harness.CapabilityStart)] = reason
+		capabilities.Unsupported[string(harness.CapabilityEvents)] = reason
+		capabilities.Unsupported[string(harness.CapabilityCancel)] = reason
+		if err := capabilities.Validate(); err != nil {
+			return harness.Capabilities{}, fmt.Errorf("codex capability contract: %w", err)
+		}
+		return capabilities, harness.ErrNativeUnverified
+	}
+	capabilities.Verified = true
+	capabilities.Start = true
+	capabilities.Events = true
+	capabilities.Cancel = true
+	if err := capabilities.Validate(); err != nil {
+		return harness.Capabilities{}, fmt.Errorf("codex capability contract: %w", err)
+	}
+	return capabilities, nil
 }
 
 func parseVersion(output string) string {

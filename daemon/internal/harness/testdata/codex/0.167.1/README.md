@@ -1,7 +1,11 @@
 # Codex 0.167.1 probe evidence
 
+Historical: superseded by `../0.167.2/` under the 2026-11-11 latest-stable
+policy. The schema bundle is byte-identical between 0.167.1 and 0.167.2, but
+this directory records no native session or control evidence.
+
 Owner directive 2026-11-11: until the first prototype and release, track the
-latest stable client. This directory supersedes `../0.156.1/` as the tested
+latest stable client. This directory superseded `../0.156.1/` as the tested
 Codex version; 0.153.4 and 0.156.1 observations are historical only.
 
 These files record local executable/help, schema and transport-framing evidence

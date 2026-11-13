@@ -9,7 +9,7 @@ import (
 const (
 	// CodexTestedVersion and CodexTestedSchemaHash identify the only Codex
 	// transport bundle whose probe evidence is accepted by this build.
-	CodexTestedVersion    = "0.167.1"
+	CodexTestedVersion    = "0.167.2"
 	CodexTestedSchemaHash = "sha256:f2576ca5d46be4cfb159906264fbc173efcfcc917ea8fdc38323770e7b657b5a"
 )
 

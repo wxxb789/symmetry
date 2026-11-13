@@ -514,7 +514,11 @@ func (params turnCompletedParams) taskResult() (protocol.TaskResult, json.RawMes
 		if item.Type != "agentMessage" || (item.Phase != "" && item.Phase != "final_answer") || item.Text == "" {
 			continue
 		}
-		raw := json.RawMessage(item.Text)
+		normalized, err := normalizeNativeTaskResultText(item.Text)
+		if err != nil {
+			return protocol.TaskResult{}, nil, fmt.Errorf("final agentMessage is not valid JSON for a Symmetry TaskResult: %w", err)
+		}
+		raw := json.RawMessage(normalized)
 		result, err := protocol.ParseTaskResult(raw)
 		if err != nil {
 			return protocol.TaskResult{}, nil, fmt.Errorf("final agentMessage is not a valid Symmetry TaskResult: %w", err)

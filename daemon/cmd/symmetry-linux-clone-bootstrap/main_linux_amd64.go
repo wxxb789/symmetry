@@ -348,7 +348,7 @@ func verifyBIdentity(hostUID, hostGID uint32) error {
 	if len(status) == 0 || len(status) > 64<<10 {
 		return errors.New("clone bootstrap credential status is empty or oversized")
 	}
-	if err := validateBStatus(status, hostUID, hostGID); err != nil {
+	if err := validateBStatus(status); err != nil {
 		return err
 	}
 	uidMap, err := readProcSmall("/proc/self/uid_map")
@@ -375,7 +375,7 @@ func verifyBIdentity(hostUID, hostGID uint32) error {
 	return nil
 }
 
-func validateBStatus(data []byte, hostUID, hostGID uint32) error {
+func validateBStatus(data []byte) error {
 	seen := uint16(0)
 	for _, line := range strings.Split(string(data), "\n") {
 		key, value, found := strings.Cut(line, ":")
@@ -385,13 +385,15 @@ func validateBStatus(data []byte, hostUID, hostGID uint32) error {
 		fields := strings.Fields(value)
 		switch key {
 		case "Uid":
-			if !allIDs(fields, hostUID) {
-				return errors.New("clone bootstrap proc status UID vector differs from fixed host B")
+			// /proc/self/status reports IDs in the bootstrap's user namespace;
+			// the fixed map binds namespace ID 1 to host BUID.
+			if !allIDs(fields, 1) {
+				return errors.New("clone bootstrap proc status UID vector differs from namespace B")
 			}
 			seen |= 1
 		case "Gid":
-			if !allIDs(fields, hostGID) {
-				return errors.New("clone bootstrap proc status GID vector differs from fixed host B")
+			if !allIDs(fields, 1) {
+				return errors.New("clone bootstrap proc status GID vector differs from namespace B")
 			}
 			seen |= 2
 		case "Groups":
