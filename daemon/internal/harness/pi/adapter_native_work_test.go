@@ -85,18 +85,7 @@ func TestNativeRepositoryTask(t *testing.T) {
 		environment = nativePiRepositoryTaskEnvironment(t, root, configuration.credentialEnv)
 	}
 
-	versionContext, versionCancel := context.WithTimeout(context.Background(), nativeRepositoryTaskTimeout)
-	defer versionCancel()
-	versionCommand := exec.CommandContext(versionContext, configuration.executable, "--version")
-	versionCommand.Dir = workspace
-	versionCommand.Env = environment
-	versionOutput, err := versionCommand.Output()
-	if err != nil {
-		t.Fatal("run native Pi version check failed")
-	}
-	if strings.TrimSpace(string(versionOutput)) != TestedVersion {
-		t.Fatalf("native Pi version did not equal the tested version %s", TestedVersion)
-	}
+	nativePiAssertTestedExecutable(t, configuration.executable, workspace, environment)
 
 	var events nativePiRepositoryTaskEvents
 	arguments := []string{
@@ -322,18 +311,7 @@ func TestNativeCancellationDrainsInFlightLoopbackRequest(t *testing.T) {
 		}
 	}
 
-	versionContext, versionCancel := context.WithTimeout(context.Background(), nativeCancellationTimeout)
-	defer versionCancel()
-	versionCommand := exec.CommandContext(versionContext, executable, "--version")
-	versionCommand.Dir = workspace
-	versionCommand.Env = environment
-	versionOutput, err := versionCommand.Output()
-	if err != nil {
-		t.Fatalf("run native Pi cancellation version check: %v", err)
-	}
-	if strings.TrimSpace(string(versionOutput)) != TestedVersion {
-		t.Fatalf("native Pi cancellation version = %q, want %s", strings.TrimSpace(string(versionOutput)), TestedVersion)
-	}
+	nativePiAssertTestedExecutable(t, executable, workspace, environment)
 
 	var events nativePiRepositoryTaskEvents
 	startContext, startCancel := context.WithTimeout(context.Background(), nativeCancellationTimeout)
@@ -731,6 +709,27 @@ func nativePiRepositoryTaskLoadConfiguration(t *testing.T) nativePiRepositoryTas
 		}
 	}
 	return configuration
+}
+
+// nativePiAssertTestedExecutable verifies the executable an evidence run is
+// about to launch: the tested version line and the exact blob recorded for this
+// platform. A shim or a different build that reports `1.5.2` is a different set
+// of bytes, so it must never become the subject of exact-binary evidence.
+func nativePiAssertTestedExecutable(t *testing.T, executable, workspace string, environment []string) {
+	t.Helper()
+	want, recorded := testedExecutableHash(runtime.GOOS)
+	if !recorded {
+		t.Fatalf("no pi %s executable blob is recorded for platform %s", TestedVersion, runtime.GOOS)
+	}
+	nativePiRetainedCheckVersion(t, executable, workspace, environment)
+	digest, err := harness.HashExecutableFile(context.Background(), executable)
+	if err != nil {
+		t.Fatalf("hash native Pi executable %s: %v", executable, err)
+	}
+	if digest != want {
+		t.Fatalf("resolved native Pi executable digest = %q, want the recorded %s blob %q", digest, runtime.GOOS, want)
+	}
+	t.Logf("native Pi executable: platform=%s digest=%s", runtime.GOOS, digest)
 }
 
 func nativePiRepositoryTaskValidateLoopbackConfiguration(baseURL, provider, model, credentialEnv string) error {

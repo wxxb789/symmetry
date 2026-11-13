@@ -1,5 +1,25 @@
 # Next goals for local Codex
 
+Goal [0006f](archive/0006f-pi-native-capability.md) completed its owner-scoped
+2026-11-14 Windows closure and is archived. The exact pi `1.5.2` Windows
+executable blob (`sha256:40a062be…`) promotes start, events, cancel and
+adapter-level retained resume under implementation identity `pi-rpc-v1`, with a
+loopback repository turn (exact artifact bytes, canonical TaskResult and an
+independently materialized repository Subject), cancellation that drains the
+in-flight turn, a two-process retained resume, a promotion probe and the
+recorded negative controls (unknown or unanchored version line, `mise` PATH shim
+blob mismatch, unreadable digest, missing `--mode rpc` transport, incompatible
+or stale resume handle, superseded session identity, non-Windows platform)
+bound to the tested binary. Handoff, guidance, pause, approval response,
+provider access, billable usage and hard cost limits stay explicitly
+unsupported. The credentialed provider turn stays an unverified operation: the
+contract's own prerequisite audit records that this environment has no approved
+provider resource, provider identity or permitted spend (`0006h` owns that
+work), and the Linux v2 owner path is unavailable, so Linux admission stays
+fail-closed and no Windows observation is promoted as Linux support. Linux
+evidence stays a requirement for `0006-final` under that goal's full-series
+acceptance contract.
+
 Goal [0006e](archive/0006e-claude-native-capability.md) completed its
 owner-scoped 2026-11-14 Windows closure and is archived. The exact Claude Code
 `2.1.323` executable blob (`sha256:5064e6e0…`) promotes start, events, cancel,
@@ -75,7 +95,7 @@ acceptance actions. Missing evidence or unresolved requirements block completion
 | --- | --- |
 | [0006d](archive/0006d-codex-native-capability.md) | Evidence-bounded Codex native capability |
 | [0006e](archive/0006e-claude-native-capability.md) | Evidence-bounded Claude Code native capability |
-| [0006f](0006f-pi-native-capability.md) | Evidence-bounded pi native continuity |
+| [0006f](archive/0006f-pi-native-capability.md) | Evidence-bounded pi native continuity |
 | [0006g](0006g-opencode-support-decision.md) | Evidence-backed OpenCode V2 support decision |
 | [0006h](0006h-credentialed-provider-accounting.md) | Credentialed provider reconciliation and accounting |
 | [0006i](0006i-exact-subject-release-acceptance.md) | Exact-subject release and authorized acceptance |

@@ -377,6 +377,95 @@ func TestConcreteNativeProbeRegistrationRemainsUnverified(t *testing.T) {
 	}
 }
 
+// piPromotedAdapterVersion is the implementation identity a promoted pi runtime
+// selects through adapter_version. It is the cross-package contract string the
+// harness projection reports, so the daemon test pins it literally.
+const piPromotedAdapterVersion = "pi-rpc-v1"
+
+// piShimExecutableDigest is the recorded SHA-256 of the `mise` PATH shim for pi
+// 1.5.2: same version line, different bytes.
+const piShimExecutableDigest = "sha256:53ca4fc6cfaf2b9b9a9635c54f17e5f4bf6ce599693dc67b17783bf382643850"
+
+// TestComposedPiProbePromotesOnlyTheTestedBlobOnWindows pins the daemon-level
+// projection: the composed pi adapter reaches the promotion gate, the probed
+// version and implementation identity become the registration metadata, and only
+// the four proved operations are advertised. Windows is the platform the pi
+// 1.5.2 evidence covers, so the promotion branch is asserted there and the
+// fail-closed branch on every other platform.
+func TestComposedPiProbePromotesOnlyTheTestedBlobOnWindows(t *testing.T) {
+	outputs := map[string][]byte{
+		"--version": []byte(pi.TestedVersion + "\n"),
+		"--help":    []byte("Options:\n  --mode <mode>  Output mode: text (default), json, or rpc\n"),
+	}
+	for _, test := range []struct {
+		name   string
+		digest string
+	}{
+		{name: "tested blob", digest: pi.TestedExecutableHash},
+		{name: "foreign blob", digest: piShimExecutableDigest},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			wantPromoted := runtime.GOOS == "windows" && test.digest == pi.TestedExecutableHash
+			value := testConfig(t)
+			value.Runtime.HarnessKind = config.RuntimeHarnessPi
+			value.Runtime.HarnessVersion = pi.TestedVersion
+			value.Runtime.AdapterProtocolVersion = 1
+			value.Runtime.AdapterVersion = "legacy"
+			if wantPromoted {
+				value.Runtime.AdapterVersion = piPromotedAdapterVersion
+			}
+			registry := harness.NewRegistry()
+			if err := registry.Register(harness.KindPi, pi.NewAdapterWithRunner("pi-fixture", nativeProbeDigestFixtures{
+				responses: outputs,
+				digest:    test.digest,
+			})); err != nil {
+				t.Fatal(err)
+			}
+			daemon := &daemon{config: value, harnessRegistry: registry}
+			if err := daemon.ensureHarnessProbe(context.Background()); err != nil {
+				t.Fatalf("ensureHarnessProbe() error = %v", err)
+			}
+			capabilities := daemon.harnessCapabilities
+			if !capabilities.VersionKnown || capabilities.NativeVersion != pi.TestedVersion || !capabilities.TransportVerified {
+				t.Fatalf("capabilities = %+v, want the probed version and transport", capabilities)
+			}
+			if capabilities.Verified != wantPromoted || capabilities.Start != wantPromoted || capabilities.Events != wantPromoted ||
+				capabilities.Cancel != wantPromoted || capabilities.Resume != wantPromoted {
+				t.Fatalf("capabilities promoted = %t, want %t: %+v", capabilities.Verified, wantPromoted, capabilities)
+			}
+			if capabilities.Handoff || capabilities.ApprovalResponse || capabilities.HardCostLimit || capabilities.ProviderAccess ||
+				capabilities.Guidance != harness.GuidanceUnsupported || capabilities.Pause != harness.PauseUnsupported || capabilities.Usage != harness.UsageUnknown {
+				t.Fatalf("capabilities advertised unproved operations: %+v", capabilities)
+			}
+			registration, metadata, err := buildRuntimeRegistration(value.Runtime, value.AgentProfiles[value.Runtime.AgentProfile], capabilities)
+			if err != nil {
+				t.Fatalf("buildRuntimeRegistration() error = %v", err)
+			}
+			if registration.HarnessVersion != pi.TestedVersion || metadata.HarnessVersion != pi.TestedVersion ||
+				registration.Capabilities.Adapter.NativeVersion != pi.TestedVersion {
+				t.Fatalf("registration native metadata = %+v metadata=%+v, want the probed version", registration, metadata)
+			}
+			wantAdapterVersion := unavailableNativeMetadataVersion
+			if wantPromoted {
+				wantAdapterVersion = piPromotedAdapterVersion
+				if capabilities.ImplementationVersion != piPromotedAdapterVersion {
+					t.Fatalf("implementation version = %q, want %q", capabilities.ImplementationVersion, piPromotedAdapterVersion)
+				}
+			} else if capabilities.ImplementationVersion != "" {
+				t.Fatalf("unpromoted projection claimed implementation identity %q", capabilities.ImplementationVersion)
+			}
+			if registration.AdapterVersion != wantAdapterVersion || metadata.AdapterVersion != wantAdapterVersion ||
+				registration.Capabilities.Adapter.ImplementationVersion != wantAdapterVersion {
+				t.Fatalf("registration adapter metadata = %+v metadata=%+v, want %q", registration, metadata, wantAdapterVersion)
+			}
+			operations := registration.Capabilities.Adapter.Operations
+			if operations.Start != wantPromoted || operations.Events != wantPromoted || operations.Cancel != wantPromoted || operations.Resume != wantPromoted {
+				t.Fatalf("registration operations = %+v, want promoted=%t", operations, wantPromoted)
+			}
+		})
+	}
+}
+
 func TestStartupProbeRejectsInvalidUnverifiedProjection(t *testing.T) {
 	value := testConfig(t)
 	value.Runtime.HarnessKind = config.RuntimeHarnessCodex
@@ -4593,6 +4682,27 @@ func (runner nativeProbeCommandFixtures) Run(_ context.Context, _ string, args .
 		return nil, errors.New("fixture command not found")
 	}
 	return response, nil
+}
+
+// nativeProbeDigestFixtures is the deterministic promotion seam: it answers
+// version/help from fixtures and declares the exact executable bytes the gate
+// must observe, so a probe test never hashes whatever this host resolves.
+type nativeProbeDigestFixtures struct {
+	responses map[string][]byte
+	digest    string
+}
+
+func (runner nativeProbeDigestFixtures) Run(_ context.Context, _ string, args ...string) ([]byte, error) {
+	key := strings.Join(args, " ")
+	response, ok := runner.responses[key]
+	if !ok {
+		return nil, errors.New("fixture command not found")
+	}
+	return response, nil
+}
+
+func (runner nativeProbeDigestFixtures) ExecutableDigest(context.Context, string) (string, error) {
+	return runner.digest, nil
 }
 
 func TestNativeAdapterStartPublicationLinearizesCancellation(t *testing.T) {

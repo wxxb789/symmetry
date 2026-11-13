@@ -112,6 +112,13 @@ type piControlE2EWitness struct {
 }
 
 func newPiControlE2EWitness(executable string) *piControlE2EWitness {
+	return newPiControlE2EWitnessWithDelegate(pi.NewAdapter(executable))
+}
+
+// newPiControlE2EWitnessWithDelegate builds the witness over one explicit probe
+// delegate. The tagged test uses it to drive the probe invariant with
+// deterministic version/help/blob evidence instead of an installed CLI.
+func newPiControlE2EWitnessWithDelegate(delegate *pi.Adapter) *piControlE2EWitness {
 	capabilities := harness.UnsupportedCapabilities(
 		harness.KindPi,
 		"test-only admission witness; native provider, accounting, and production capability support remain unverified",
@@ -134,7 +141,7 @@ func newPiControlE2EWitness(executable string) *piControlE2EWitness {
 	delete(capabilities.Unsupported, string(harness.CapabilityHandoff))
 
 	return &piControlE2EWitness{
-		delegate:     pi.NewAdapter(executable),
+		delegate:     delegate,
 		capabilities: capabilities,
 	}
 }
@@ -149,16 +156,31 @@ func (witness *piControlE2EWitness) Probe(ctx context.Context) (harness.Capabili
 	if err := ctx.Err(); err != nil {
 		return harness.Capabilities{}, err
 	}
-	// Admission projection never substitutes for the real pinned CLI Probe or
-	// promotes its deliberately unverified native lifecycle to production support.
+	// Admission projection never substitutes for the real pinned CLI Probe. The
+	// delegate must report the pinned transport, and its native lifecycle claim
+	// must be either the fail-closed projection or exactly the operation set this
+	// build proves for the tested blob; anything else means the real probe no
+	// longer describes the pinned CLI. The witness still presents its own
+	// admission projection either way.
 	native, err := witness.delegate.Probe(ctx)
-	if !errors.Is(err, harness.ErrNativeUnverified) {
-		return harness.Capabilities{}, fmt.Errorf("real Pi Probe must remain native-unverified, got %v", err)
+	if err != nil && !errors.Is(err, harness.ErrNativeUnverified) {
+		return harness.Capabilities{}, fmt.Errorf("real Pi Probe failed outside the unverified contract, got %v", err)
 	}
 	if native.Kind != harness.KindPi || native.NativeVersion != pi.TestedVersion ||
-		!native.VersionKnown || !native.TransportVerified || native.Verified ||
-		native.Start || native.Events || native.Cancel || native.Resume || native.Handoff || native.ProviderAccess {
-		return harness.Capabilities{}, errors.New("real Pi Probe differs from the pinned conservative transport projection")
+		!native.VersionKnown || !native.TransportVerified {
+		return harness.Capabilities{}, errors.New("real Pi Probe differs from the pinned transport projection")
+	}
+	promoted := native.Verified && native.Start && native.Events && native.Cancel && native.Resume
+	if promoted != (err == nil) {
+		return harness.Capabilities{}, errors.New("real Pi Probe promotion and probe error disagree")
+	}
+	if !promoted && (native.Start || native.Events || native.Cancel || native.Resume) {
+		return harness.Capabilities{}, errors.New("real Pi Probe advertised an operation without promoting")
+	}
+	if native.Handoff || native.ProviderAccess || native.ApprovalResponse || native.HardCostLimit ||
+		native.Guidance != harness.GuidanceUnsupported || native.Pause != harness.PauseUnsupported ||
+		native.Usage != harness.UsageUnknown {
+		return harness.Capabilities{}, errors.New("real Pi Probe promoted an operation this build does not prove")
 	}
 	return witness.capabilities, nil
 }
