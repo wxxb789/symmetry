@@ -3,10 +3,63 @@ package harness
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 )
+
+func TestCodexParseVersionToleratesBoundedLeadingWarnings(t *testing.T) {
+	version := CodexTestedVersion
+	warning := "WARNING: proceeding, even though we could not create PATH aliases: " +
+		"Refusing to create helper binaries under temporary dir \"C:\\\\Users\\\\lhan\\\\\""
+	for _, output := range []string{
+		"codex-cli " + version + "\n",
+		warning + "\ncodex-cli " + version + "\n",
+		warning + "\n" + warning + "\ncodex-cli " + version + "\n",
+	} {
+		if got := ParseCodexVersion(output); got != version {
+			t.Fatalf("ParseCodexVersion(%q) = %q, want %q", output, got, version)
+		}
+	}
+}
+
+func TestCodexParseVersionRejectsExcessOrForeignLeadingLines(t *testing.T) {
+	version := CodexTestedVersion
+	warning := "WARNING: proceeding, even though we could not create PATH aliases: reason"
+	excess := strings.Repeat(warning+"\n", codexVersionWarningLimit+1) + "codex-cli " + version + "\n"
+	foreign := "not a codex version line\ncodex-cli " + version + "\n"
+	for _, output := range []string{excess, foreign} {
+		if got := ParseCodexVersion(output); got != "" {
+			t.Fatalf("ParseCodexVersion(%q) = %q, want empty", output, got)
+		}
+	}
+	// A warning after the version line does not invalidate an already complete
+	// version line.
+	versionFirst := "codex-cli " + version + "\n" + warning + "\n"
+	if got := ParseCodexVersion(versionFirst); got != version {
+		t.Fatalf("ParseCodexVersion(%q) = %q, want %q", versionFirst, got, version)
+	}
+}
+
+func TestCodexProbeAcceptsWarningPrefixedVersionOutput(t *testing.T) {
+	warning := "WARNING: proceeding, even though we could not create PATH aliases: reason"
+	runner := &codexFixtureRunner{responses: map[string][]byte{
+		"--version":         []byte(warning + "\ncodex-cli " + CodexTestedVersion + "\n"),
+		"app-server --help": []byte("codex app-server stdio transport\n"),
+	}, schemaDigest: CodexTestedSchemaHash}
+
+	capabilities, err := probeCodexExecutableWithRunner(context.Background(), "codex", runner)
+	if !errors.Is(err, ErrNativeUnverified) {
+		t.Fatalf("probe error = %v, want ErrNativeUnverified", err)
+	}
+	if capabilities.NativeVersion != CodexTestedVersion || !capabilities.VersionKnown || !capabilities.TransportVerified {
+		t.Fatalf("capabilities = %+v, want version and transport evidence from warning-prefixed output", capabilities)
+	}
+	if capabilities.Verified || capabilities.Start || capabilities.Events || capabilities.Cancel {
+		t.Fatalf("capabilities = %+v, want no promoted operations", capabilities)
+	}
+}
 
 func TestCodexProbeKnownVersionHelpAndSchemaFailsClosed(t *testing.T) {
 	runner := &codexFixtureRunner{responses: map[string][]byte{
@@ -31,9 +84,9 @@ func TestCodexProbeKnownVersionHelpAndSchemaFailsClosed(t *testing.T) {
 
 func TestCodexProbeRejectsNonExactVersionOutput(t *testing.T) {
 	for _, versionOutput := range []string{
-		"codex-cli 0.167.2-alpha.1\n",
-		"codex-cli 0.167.2+build.1\n",
-		"codex-cli 0.167.2 trailing-token\n",
+		"codex-cli " + CodexTestedVersion + "-alpha.1\n",
+		"codex-cli " + CodexTestedVersion + "+build.1\n",
+		"codex-cli " + CodexTestedVersion + " trailing-token\n",
 	} {
 		t.Run(versionOutput, func(t *testing.T) {
 			runner := &codexFixtureRunner{responses: map[string][]byte{"--version": []byte(versionOutput)}}

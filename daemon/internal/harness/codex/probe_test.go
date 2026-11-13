@@ -25,11 +25,15 @@ func TestProbeKnownVersionAndHelpProjectsPlatformCapability(t *testing.T) {
 			"--version":         []byte("codex-cli " + TestedVersion + "\n"),
 			"app-server --help": help,
 		},
-		schemaDigest: TestedSchemaHash,
+		schemaDigest:     TestedSchemaHash,
+		executableDigest: TestedExecutableHash,
 	}
 	result, err := Probe(context.Background(), "codex", runner)
 	if result.Version != TestedVersion || !result.VersionKnown || !result.TransportKnown || !result.SchemaKnown || result.SchemaDigest != TestedSchemaHash {
 		t.Fatalf("probe result = %+v, want exact version and stdio evidence", result)
+	}
+	if !result.ExecutableHashKnown || result.ExecutableDigest != TestedExecutableHash {
+		t.Fatalf("probe executable binding = (%q, %t), want the tested blob", result.ExecutableDigest, result.ExecutableHashKnown)
 	}
 	if result.Capabilities.Guidance != harness.GuidanceUnsupported || result.Capabilities.Pause != harness.PauseUnsupported || result.Capabilities.Usage != harness.UsageUnknown {
 		t.Fatalf("probe controls = %+v, want explicit unsupported values", result.Capabilities)
@@ -57,14 +61,21 @@ func TestVerifiedCapabilitiesForPlatformIsFailClosed(t *testing.T) {
 		SchemaDigest:      TestedSchemaHash,
 		SchemaKnown:       true,
 	}
-	linux, err := verifiedCapabilitiesForPlatform("linux", evidence)
+	linux, err := verifiedCapabilitiesForPlatform("linux", evidence, true)
 	if !errors.Is(err, harness.ErrNativeUnverified) {
 		t.Fatalf("linux projection error = %v, want ErrNativeUnverified", err)
 	}
 	if linux.Verified || linux.Start || linux.Events || linux.Cancel || linux.Unsupported[string(harness.CapabilityStart)] == "" {
 		t.Fatalf("linux projection = %+v, want explicit fail-closed reason", linux)
 	}
-	windows, err := verifiedCapabilitiesForPlatform("windows", evidence)
+	unbound, err := verifiedCapabilitiesForPlatform("windows", evidence, false)
+	if !errors.Is(err, harness.ErrNativeUnverified) {
+		t.Fatalf("unbound windows projection error = %v, want ErrNativeUnverified", err)
+	}
+	if unbound.Verified || unbound.Start || unbound.Events || unbound.Cancel || unbound.Unsupported[string(harness.CapabilityStart)] == "" {
+		t.Fatalf("unbound windows projection = %+v, want explicit fail-closed reason", unbound)
+	}
+	windows, err := verifiedCapabilitiesForPlatform("windows", evidence, true)
 	if err != nil {
 		t.Fatalf("windows projection error = %v", err)
 	}
@@ -204,9 +215,9 @@ func TestProbeUnknownVersionFailsClosed(t *testing.T) {
 
 func TestProbeRejectsNonExactVersionOutput(t *testing.T) {
 	for _, versionOutput := range []string{
-		"codex-cli 0.167.2-alpha.1\n",
-		"codex-cli 0.167.2+build.1\n",
-		"codex-cli 0.167.2 trailing-token\n",
+		"codex-cli " + TestedVersion + "-alpha.1\n",
+		"codex-cli " + TestedVersion + "+build.1\n",
+		"codex-cli " + TestedVersion + " trailing-token\n",
 	} {
 		t.Run(versionOutput, func(t *testing.T) {
 			runner := &fixtureRunner{responses: map[string][]byte{"--version": []byte(versionOutput)}}
@@ -381,9 +392,10 @@ func TestAdapterStartDoesNotTreatProbeEvidenceAsAStartRequirement(t *testing.T) 
 }
 
 type fixtureRunner struct {
-	responses    map[string][]byte
-	calls        []string
-	schemaDigest string
+	responses        map[string][]byte
+	calls            []string
+	schemaDigest     string
+	executableDigest string
 }
 
 type boundedErrorRunner struct {
@@ -416,6 +428,13 @@ func (runner *fixtureRunner) SchemaDigest(_ context.Context, _ string) (string, 
 		return "", errors.New("fixture schema digest not configured")
 	}
 	return runner.schemaDigest, nil
+}
+
+func (runner *fixtureRunner) ExecutableDigest(_ context.Context, _ string) (string, error) {
+	if runner.executableDigest == "" {
+		return "", errors.New("fixture executable digest not configured")
+	}
+	return runner.executableDigest, nil
 }
 
 func (runner *fixtureRunner) Run(_ context.Context, _ string, args ...string) ([]byte, error) {

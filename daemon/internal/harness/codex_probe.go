@@ -9,8 +9,14 @@ import (
 const (
 	// CodexTestedVersion and CodexTestedSchemaHash identify the only Codex
 	// transport bundle whose probe evidence is accepted by this build.
-	CodexTestedVersion    = "0.167.2"
-	CodexTestedSchemaHash = "sha256:f2576ca5d46be4cfb159906264fbc173efcfcc917ea8fdc38323770e7b657b5a"
+	CodexTestedVersion    = "0.168.0"
+	CodexTestedSchemaHash = "sha256:893cc2379d96a7f72394b69abc2b40a5a7da039854b211c1137dcbd26f757afe"
+	// CodexTestedExecutableHash is the SHA-256 of the exact Codex 0.168.0
+	// executable observed on the verified Windows host. Native capability
+	// promotion requires the resolved executable bytes to match this blob: a
+	// matching version string or schema bundle alone must never promote a
+	// capability that was proved against different binary bytes.
+	CodexTestedExecutableHash = "sha256:ad8296f7d95eea56bc4bab33cef025eb000340a7252ddb83dd41041ebcc65d0b"
 )
 
 // CodexProbeEvidence is the shared conservative result of version, transport,
@@ -66,11 +72,34 @@ func ValidateCodexVersionOutput(output string) (string, error) {
 
 var codexVersionPattern = regexp.MustCompile(`^codex-cli[ \t]+([0-9]+\.[0-9]+\.[0-9]+)$`)
 
-// ParseCodexVersion accepts only the complete stable `codex-cli X.Y.Z` line.
-// Anchoring the expression rejects prerelease/build suffixes and trailing
-// diagnostic tokens instead of silently extracting a stable-looking prefix.
+// codexVersionWarningPrefix is the leading stderr diagnostic Codex 0.168.0
+// emits when it refuses to create its own PATH aliases (for example when the
+// Codex home resolves directly under a user profile root). The bounded probe
+// capture merges both streams, so the version gate tolerates a bounded number
+// of these lines before the version line. It is a benign warning, not a
+// compatibility signal.
+const codexVersionWarningPrefix = "WARNING:"
+
+// codexVersionWarningLimit bounds tolerated leading diagnostics so a stream of
+// unrelated output cannot be mistaken for version evidence.
+const codexVersionWarningLimit = 4
+
+// ParseCodexVersion accepts only the complete stable `codex-cli X.Y.Z` line,
+// optionally preceded by a bounded number of the exact Codex `WARNING:` alias
+// lines. Anchoring the version expression rejects prerelease/build suffixes and
+// trailing diagnostic tokens instead of silently extracting a stable-looking
+// prefix, and any other line before the version still fails the parse.
 func ParseCodexVersion(output string) string {
-	match := codexVersionPattern.FindStringSubmatch(strings.TrimSpace(output))
+	trimmed := strings.TrimSpace(output)
+	lines := strings.Split(trimmed, "\n")
+	start := 0
+	for start < len(lines) && start < codexVersionWarningLimit && strings.HasPrefix(strings.TrimSpace(lines[start]), codexVersionWarningPrefix) {
+		start++
+	}
+	if start >= len(lines) {
+		return ""
+	}
+	match := codexVersionPattern.FindStringSubmatch(strings.TrimSpace(lines[start]))
 	if len(match) == 2 {
 		return match[1]
 	}

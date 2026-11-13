@@ -15,8 +15,9 @@ permission evidence for the Symmetry Codex adapter.
   (same digest as 0.167.1).
 
 Tests ran from `daemon/` against the working tree based on
-`7cb5f5811ff0b807b61e823c20a03471891d5f4c`; the final PR binds the exact
-commit Subject.
+`7cb5f5811ff0b807b61e823c20a03471891d5f4c`. This observation is historical:
+the 0.167.2 projection it promoted was superseded by the 0.168.0 pin and the
+exact-blob gate, so no PR may cite this note as current-Subject evidence.
 
 ## Sandbox prerequisite
 

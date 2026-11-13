@@ -30,6 +30,13 @@ func TestLocalCredentialedCancelSmoke(t *testing.T) {
 	model := os.Getenv("SYMMETRY_CODEX_LIVE_SMOKE_MODEL")
 	provider := os.Getenv("SYMMETRY_CODEX_LIVE_SMOKE_PROVIDER")
 
+	// This smoke requires a model that actually executes the instructed
+	// long-running shell command and keeps the turn open past the 20-second
+	// cancellation window. A fast model that skips the command races the
+	// cancellation and fails loudly with "Codex turn reached a terminal state
+	// before the pending RPC completed", which is a model-compliance signal on
+	// this fixture, not an adapter defect. The 2026-11-13 0.168.0 evidence used
+	// the `custom` provider with `gpt-6.1-sol` for exactly that reason.
 	workspace := t.TempDir()
 	command := exec.Command("git", "init", "-q")
 	command.Dir = workspace
