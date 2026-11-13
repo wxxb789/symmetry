@@ -14,12 +14,12 @@ permission evidence for the Symmetry Codex adapter.
   (372737328 bytes)
 - Generated v2 schema bundle: `sha256:893cc2379d96a7f72394b69abc2b40a5a7da039854b211c1137dcbd26f757afe`
 
-Tests ran from `daemon/` against the working tree based on
-`a2217b8c9c45423a8014417dfe90efca74c40c55` with the 0.168.0 pin and the
-exact-blob promotion gate applied; the final PR binds the exact commit Subject.
-The worktree was dirty (uncommitted 0.168.0 pin, gate and testdata), so this
-observation is evidence for the exact binary and behavior, not yet for a
-committed revision; the next PR must rebind the capture to its exact Subject.
+Tests ran from `daemon/` at commit
+`0ae6a94e2a1e9b05c0f917621dd4f4bb1a605f1e` (clean worktree, `git status` empty;
+the 0.168.0 pin, the exact-blob promotion gate and this testdata are committed
+there). The transport, repository-turn and cancellation smokes below were
+re-executed at that Subject, so this observation binds both the exact Codex
+binary and the reviewed adapter revision.
 
 ## Sandbox prerequisite
 
@@ -64,10 +64,11 @@ SYMMETRY_CODEX_NATIVE_SMOKE=1 go test ./internal/harness/codex \
   -run '^TestNativeTransportOpenAndClose$' -count=1 -v -timeout 240s
 ```
 
-Result: PASS (7.17 s). `initialize`, `thread/start` and `Close` completed with
+Result: PASS. `initialize`, `thread/start` and `Close` completed with
 `terminated=true`, `containment_error=false`, `termination_error=false`,
-`output_truncated=false`. The exact 0.168.0 binary regenerated the schema bundle
-and matched the pinned digest before transport started.
+and no dropped buffered output requirement. The exact 0.168.0 binary
+regenerated the schema bundle and matched the pinned digest before transport
+started.
 
 ## Credentialed repository turn
 
@@ -79,7 +80,7 @@ SYMMETRY_CODEX_LIVE_SMOKE_PROVIDER=custom \
     -count=1 -v -timeout 420s
 ```
 
-Result: PASS (85.47 s). The agent created the requested file and returned a
+Result: PASS at commit `0ae6a94` (43.64 s). The agent created the requested file and returned a
 canonical `candidate_completion` TaskResult that passed `protocol.ParseTaskResult`:
 
 ```text
@@ -113,7 +114,7 @@ SYMMETRY_CODEX_LIVE_SMOKE_PROVIDER=custom \
     -count=1 -v -timeout 300s
 ```
 
-Result: PASS (31.09 s). While a 180-second shell command was active, the
+Result: PASS at commit `0ae6a94` (51.03 s). While a 180-second shell command was active, the
 `cancel-1` control returned `outcome=applied` with
 `"Codex turn interruption accepted; awaiting turn/completed"`; `Wait` returned
 `kind=cancelled` with `reason=cancelled`, and the process remained contained
