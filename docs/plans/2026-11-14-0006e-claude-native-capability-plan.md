@@ -186,8 +186,9 @@ New `daemon/internal/harness/claude_candidate_live_test.go`, gated on
    asserts the artifact bytes, `protocol.ParseTaskResult` success, contained
    termination, and logs event counts plus init/terminal ordering.
 2. `TestClaudeCandidateLiveCancelSmoke`: same launch, cancel after a bounded
-   offset while the turn is still active (multi-file goal, since `Bash` stays
-   denied), asserting `ControlApplied`, `ResultCancelled`, contained stop.
+   offset while the turn is still active (multi-file goal, one `Write` per file,
+   because that is the measured approval and no shell allow rule is configured
+   for the smoke), asserting `ControlApplied`, `ResultCancelled`, contained stop.
 
 Commands (from `daemon/`, sequential — never concurrent with the full suite):
 
@@ -333,6 +334,9 @@ pre-fix revision:
    leaked `missing structured_output` error pre-fix).
 
 Two documentation corrections: the receipt now attributes the recorded artifact
-to the `Write` tool actually present in the committed capture (earlier runs used
-`Bash`), and the testdata README distinguishes the shim's exact-blob rejection
-from the older client's version rejection.
+to the tool the committed capture actually contains: `Bash`, whose recorded call
+is `printf 'hello from claude' > hello.txt && wc -c hello.txt`, with
+`StructuredOutput` used only for the TaskResult channel. (The earlier probe log
+is a separate run and shows both a denied `Bash` and a denied `Write`.) The
+testdata README distinguishes the shim's exact-blob rejection from the older
+client's version rejection.

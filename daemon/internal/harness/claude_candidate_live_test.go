@@ -18,8 +18,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/config"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
+	"github.com/wxxb789/symmetry/daemon/internal/workspace"
 )
 
 const (
@@ -32,6 +34,10 @@ const (
 	claudeLiveSmokeFramesEnv     = "SYMMETRY_CLAUDE_LIVE_SMOKE_FRAMES"
 	claudeLiveSmokeShimEnv       = "SYMMETRY_CLAUDE_LIVE_SMOKE_SHIM"
 )
+
+// The repository resource the live smoke admits. The TreeDigest of the admitted
+// Subject is derived from the workspace, never from this constant.
+const claudeLiveSmokeResourceID = "11111111-1111-4111-8111-111111111111"
 
 // claudeLiveRecorder records the native evidence of one credentialed run: the
 // event projection, the raw native frames (so a sanitized capture can be
@@ -179,38 +185,21 @@ func claudeLiveEnvironment(t *testing.T, home, configDirectory string) []string 
 }
 
 // claudeLiveWorkspace creates a real one-commit repository and returns its exact
-// subject identity plus the requested artifact path.
-func claudeLiveWorkspace(t *testing.T) (workspace string, subject protocol.Subject, subjectHash string, subjectJSON []byte) {
+// subject identity plus the workspace path. The Subject is derived by the
+// production workspace driver from the committed Git objects — never from prompt
+// text or checkout bytes — so the smoke oracle cannot restate its own input.
+//
+// The committed artifact set is `README.md` and `notes.txt`; the turn's own
+// artifact is deliberately untracked, because the smoke is executed without
+// commit authority (see the goal text below).
+func claudeLiveWorkspace(t *testing.T) (workspacePath string, subject protocol.Subject, subjectHash string, subjectJSON []byte) {
 	t.Helper()
-	workspace = t.TempDir()
-	command := exec.Command("git", "init", "-q")
-	command.Dir = workspace
-	if err := command.Run(); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("claude live smoke\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	for _, args := range [][]string{{"add", "."}, {"-c", "user.email=smoke@example.test", "-c", "user.name=smoke", "commit", "-qm", "init"}} {
-		command = exec.Command("git", args...)
-		command.Dir = workspace
-		if err := command.Run(); err != nil {
-			t.Fatal(err)
-		}
-	}
-	revParse := exec.Command("git", "rev-parse", "HEAD")
-	revParse.Dir = workspace
-	commitOutput, err := revParse.Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	treeSum := sha256.Sum256([]byte("claude live smoke\n"))
-	subject = protocol.Subject{
-		ResourceID: "11111111-1111-4111-8111-111111111111",
-		Commit:     strings.TrimSpace(string(commitOutput)),
-		TreeDigest: "sha256:" + hex.EncodeToString(treeSum[:]),
-	}
-	subjectHash, err = subject.Hash()
+	workspacePath = claudeLiveRepository(t)
+	// The production derivation: a daemon-managed git_worktree binding whose tree
+	// digest is the committed-object manifest digest the daemon compares against
+	// in verifyNativeTaskResultSubject.
+	subject = claudeLiveDeriveSubject(t, workspacePath)
+	subjectHash, err := subject.Hash()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +207,145 @@ func claudeLiveWorkspace(t *testing.T) (workspace string, subject protocol.Subje
 	if err != nil {
 		t.Fatal(err)
 	}
-	return workspace, subject, subjectHash, subjectJSON
+	return workspacePath, subject, subjectHash, subjectJSON
+}
+
+// claudeLiveRepository creates the smoke's real one-commit repository with the
+// committed artifact set `README.md` and `notes.txt`, and returns its path.
+func claudeLiveRepository(t *testing.T) string {
+	t.Helper()
+	repository := t.TempDir()
+	command := exec.Command("git", "init", "-q", "-b", "main")
+	command.Dir = repository
+	if err := command.Run(); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{"README.md": "claude live smoke\n", "notes.txt": "claude live smoke notes\n"} {
+		if err := os.WriteFile(filepath.Join(repository, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, args := range [][]string{{"add", "."}, {"-c", "user.email=smoke@example.test", "-c", "user.name=smoke", "commit", "-qm", "init"}} {
+		command = exec.Command("git", args...)
+		command.Dir = repository
+		if err := command.Run(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return repository
+}
+
+// claudeLiveDeriveSubject returns the same Subject the daemon derives for this
+// repository: the production derivation over the repository's current commit,
+// never prompt text and never checkout bytes.
+func claudeLiveDeriveSubject(t *testing.T, repository string) protocol.Subject {
+	t.Helper()
+	resolve := exec.Command("git", "rev-parse", "HEAD")
+	resolve.Dir = repository
+	head, err := resolve.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := workspace.New(map[string]config.Workspace{
+		"smoke": {
+			Policy:     config.WorkspacePolicyGitWorktree,
+			Repository: repository,
+			Root:       filepath.Join(t.TempDir(), "worktrees"),
+			Ref:        "HEAD",
+			Cleanup:    config.CleanupAlways,
+		},
+	})
+	subject, err := manager.MaterializeSubject(context.Background(), "smoke", claudeLiveSmokeResourceID, strings.TrimSpace(string(head)))
+	if err != nil {
+		t.Fatalf("derive the Subject for %s: %v", repository, err)
+	}
+	return subject
+}
+
+// claudeLiveCheckoutDigest digests the checkout's file bytes the way the
+// fabricated oracle used to: a hash of the visible files rather than of the
+// commit. It exists to prove the derived subject digest is not that value.
+func claudeLiveCheckoutDigest(t *testing.T, workspacePath string) string {
+	t.Helper()
+	digest := sha256.New()
+	err := filepath.WalkDir(workspacePath, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if entry.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		name, err := filepath.Rel(workspacePath, path)
+		if err != nil {
+			return err
+		}
+		digest.Write([]byte(filepath.ToSlash(name)))
+		digest.Write([]byte{0})
+		digest.Write(content)
+		digest.Write([]byte{0})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("digest the live smoke checkout %s: %v", workspacePath, err)
+	}
+	return "sha256:" + hex.EncodeToString(digest.Sum(nil))
+}
+
+// TestClaudeLiveSmokeSubjectDigestComesFromTheCommit pins the smoke oracle's
+// discriminating property without spending credentials: the derived tree digest
+// identifies the committed object set, so it is unchanged by an untracked
+// artifact and can never equal a digest of the checkout bytes — the fabricated
+// constant this smoke used before could satisfy neither. It also pins the strict
+// whole-Subject comparison the production consumer applies
+// (verifyNativeTaskResultSubject rejects any differing Subject), because a
+// self-referential oracle can only pass the weak comparisons.
+func TestClaudeLiveSmokeSubjectDigestComesFromTheCommit(t *testing.T) {
+	repository := claudeLiveRepository(t)
+	subject := claudeLiveDeriveSubject(t, repository)
+	checkoutWithoutArtifact := claudeLiveCheckoutDigest(t, repository)
+	if subject.TreeDigest == checkoutWithoutArtifact {
+		t.Fatalf("derived tree digest %q digests the committed checkout bytes, want a committed-object manifest digest", subject.TreeDigest)
+	}
+	if err := os.WriteFile(filepath.Join(repository, "hello.txt"), []byte("hello from claude"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	checkoutWithArtifact := claudeLiveCheckoutDigest(t, repository)
+	if checkoutWithArtifact == checkoutWithoutArtifact {
+		t.Fatal("the checkout digest did not change with the untracked artifact")
+	}
+	if afterArtifact := claudeLiveDeriveSubject(t, repository); afterArtifact != subject {
+		t.Fatalf("derived Subject = %+v after the untracked artifact, want the committed %+v", afterArtifact, subject)
+	}
+	subjectHash, err := subject.Hash()
+	if err != nil {
+		t.Fatalf("Subject.Hash() error = %v", err)
+	}
+	if subjectHash == "" {
+		t.Fatal("Subject.Hash() = empty, want the canonical subject hash")
+	}
+	if subject.Validate() != nil {
+		t.Fatalf("derived Subject = %+v, want a schema-valid Subject", subject)
+	}
+	// The consumer's comparison is exact whole-Subject equality; any other
+	// TreeDigest — a constant, a checkout digest, or another commit's digest —
+	// must not compare equal to the derived one.
+	for _, other := range []protocol.Subject{
+		{ResourceID: subject.ResourceID, Commit: subject.Commit, TreeDigest: "sha256:" + strings.Repeat("0", 64)},
+		{ResourceID: subject.ResourceID, Commit: subject.Commit, TreeDigest: checkoutWithArtifact},
+		{ResourceID: subject.ResourceID, Commit: strings.Repeat("a", 40), TreeDigest: subject.TreeDigest},
+		{ResourceID: "11111111-1111-4111-8111-111111111112", Commit: subject.Commit, TreeDigest: subject.TreeDigest},
+	} {
+		if other == subject {
+			t.Fatalf("Subject %+v compares equal to the derived Subject, want the consumer's comparison to reject it", other)
+		}
+	}
 }
 
 func claudeLiveAdapter(t *testing.T) (*ClaudeCandidateAdapter, string) {
@@ -369,9 +496,24 @@ Report exactly one JSON object and nothing else, with these exact values:
 	if result.Kind != ResultSucceeded || result.Semantic == nil || result.Semantic.Kind != protocol.TaskResultCandidateCompletion {
 		t.Fatalf("result = %+v, want a canonical candidate_completion TaskResult", result)
 	}
-	if result.Semantic.Subject.Commit != subject.Commit || result.Semantic.SubjectHash != subjectHash {
-		t.Fatalf("result subject = %+v hash %q, want commit %q hash %q", result.Semantic.Subject, result.Semantic.SubjectHash, subject.Commit, subjectHash)
+	// The complete derived Subject, not the prompt text: the production consumer
+	// (verifyNativeTaskResultSubject) compares whole Subjects, so the smoke must
+	// reject any mismatch the same way, including a constant or self-referential
+	// tree digest.
+	if result.Semantic.Subject != subject || result.Semantic.SubjectHash != subjectHash {
+		t.Fatalf("result subject = %+v hash %q, want the workspace-derived %+v hash %q", result.Semantic.Subject, result.Semantic.SubjectHash, subject, subjectHash)
 	}
+	// The derived digest is a committed-object manifest digest. The untracked
+	// artifact (`hello.txt`) is therefore absent from it by construction, and the
+	// digest is not a digest of the visible checkout either.
+	checkoutDigest := claudeLiveCheckoutDigest(t, workspace)
+	if subject.TreeDigest == checkoutDigest {
+		t.Fatalf("derived tree digest %q digests the checkout bytes %q, want the committed-object manifest digest", subject.TreeDigest, checkoutDigest)
+	}
+	if result.Semantic.Subject.TreeDigest == checkoutDigest {
+		t.Fatalf("result tree digest %q digests the checkout bytes, want the committed-object manifest digest", result.Semantic.Subject.TreeDigest)
+	}
+	t.Logf("derived subject: commit=%s tree_digest=%s hash=%s (committed artifacts: README.md, notes.txt; untracked: hello.txt; checkout digest=%s)", subject.Commit, subject.TreeDigest, subjectHash, checkoutDigest)
 	if !result.Process.Terminated || result.Process.ContainmentError != nil || result.Process.TerminationError != nil || result.Process.OutputTruncated {
 		t.Fatalf("process settlement = %+v, want a contained, untruncated stop", result.Process)
 	}
@@ -387,8 +529,9 @@ Report exactly one JSON object and nothing else, with these exact values:
 
 // TestClaudeCandidateLiveCancelSmoke cancels an active native turn and requires
 // bounded process termination with a cancelled result. The goal keeps the turn
-// open with sequential file writes because the promoted permission policy denies
-// every shell command that would prompt.
+// open with sequential file writes and no shell command: each write is its own
+// measured `Write` approval under the promoted `acceptEdits` policy, and no
+// shell command is admitted that has no measured allow rule of its own.
 func TestClaudeCandidateLiveCancelSmoke(t *testing.T) {
 	adapter, executable := claudeLiveAdapter(t)
 	t.Logf("credentialed Claude executable: %s", executable)

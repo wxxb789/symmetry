@@ -1482,3 +1482,61 @@ func claudeCandidateResultEnvelope(t *testing.T, semanticJSON string) string {
 	}
 	return string(encoded)
 }
+
+// A stop that truncates the model's own output must not turn an accepted
+// cancellation into a failure: stdout can deliver a prefix of a record before
+// the process is stopped, and the incomplete trailing record is the shutdown,
+// not a decode failure. A complete malformed record keeps failing the turn.
+func TestClaudeCandidateCancellationOwnsIncompleteTrailingRecord(t *testing.T) {
+	process := newClaudeCandidateFakeProcess()
+	adapter := newClaudeCandidateTestAdapter(process, nil)
+	session, err := adapter.Start(context.Background(), claudeCandidateStartRequest(t), &recordingClaudeCandidateSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	cleanupClaudeCandidateSession(t, session)
+	staged := session.(StagedSession)
+	openClaudeCandidateSession(t, staged, process)
+	if err := staged.StartTurn(context.Background(), TurnRequest{Goal: "settle the cancelled turn", Context: jsonObjectForClaudeCandidateAdditionalTest()}); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	// The fake keeps running after the bounded termination request so the test
+	// releases the real output handler, and the watcher's decoder close, in the
+	// order a stopped process produces them.
+	process.holdTermination = true
+	process.mu.Lock()
+	stdoutSink := process.sink
+	process.mu.Unlock()
+	if stdoutSink == nil {
+		t.Fatal("fake Claude process sink is nil")
+	}
+	// A record prefix, not a complete record: the decoder retains it until the
+	// stream closes, which happens when the stopped process is reaped. It arrives
+	// while the turn is still active, so it reaches the output handler the same
+	// way live stdout does.
+	if err := stdoutSink.Handle(context.Background(), execution.Event{Stream: execution.Stdout, Sequence: 1, At: time.Now().UTC(), Data: []byte(`{"type":"assistant"`)}); err != nil {
+		t.Fatalf("deliver truncated trailing record = %v, want decoder to defer it until process close", err)
+	}
+	receipts, receiptErrors := cancelAndAwaitTermination(t, session, process)
+	process.mu.Lock()
+	process.holdTermination = false
+	process.mu.Unlock()
+	process.finish()
+	receipt := <-receipts
+	if err := <-receiptErrors; err != nil || receipt.Outcome != ControlApplied {
+		t.Fatalf("Control(cancel) = receipt=%+v error=%v, want applied", receipt, err)
+	}
+	if err := staged.WaitTurn(context.Background()); err != nil {
+		t.Fatalf("WaitTurn() error = %v, want the cancelled turn that the accepted stop owns", err)
+	}
+	result, err := session.Wait(context.Background())
+	if err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+	if result.Kind != ResultCancelled || result.Semantic != nil || result.Reason != nil {
+		t.Fatalf("result = %+v, want a cancelled result without a failure reason", result)
+	}
+	if result.Process.OutputError != nil {
+		t.Fatalf("process settlement = %+v, want the truncated tail treated as cancellation truncation", result.Process)
+	}
+}

@@ -1014,8 +1014,14 @@ func (session *claudeCandidateSession) watchProcess() {
 			}
 		}
 		session.outputMutex.Unlock()
-		if trailingErr != nil || closeErr != nil {
-			session.fail(errors.Join(trailingErr, closeErr))
+		// An accepted, cleanly settled cancellation owns the turn, so the record
+		// prefix that the stop itself truncated is shutdown, not a decode failure.
+		// A complete malformed record, a persistence error or a containment error
+		// never travels through an incomplete trailing record and keeps failing.
+		if !session.truncatedByCancellation(processResult, closeErr) {
+			if trailingErr != nil || closeErr != nil {
+				session.fail(errors.Join(trailingErr, closeErr))
+			}
 		}
 
 		session.mutex.Lock()
@@ -1096,6 +1102,21 @@ func (session *claudeCandidateSession) watchProcess() {
 		}
 		session.completeFinal(final)
 	})
+}
+
+// truncatedByCancellation reports whether the stream's trailing record is only
+// a prefix of a record that the accepted stop cut off. It requires the cancel
+// evidence the settled result is also validated against, so a stop whose
+// containment, transport or termination evidence is missing or failed keeps its
+// existing decode-failure classification.
+func (session *claudeCandidateSession) truncatedByCancellation(processResult execution.Result, closeErr error) bool {
+	if !errors.Is(closeErr, claudeprotocol.ErrIncompleteRecord) {
+		return false
+	}
+	session.mutex.Lock()
+	requested := session.cancelRequested
+	session.mutex.Unlock()
+	return expectedClaudeCandidateCancelled(processResult, requested)
 }
 
 func expectedClaudeCandidateNormalClose(result execution.Result, candidate bool) bool {
