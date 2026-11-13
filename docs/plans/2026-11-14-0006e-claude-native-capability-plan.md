@@ -166,13 +166,18 @@ projection never claims a lifecycle the package adapter owns.
   (the promotion gate against the real client) and
   `TestClaudeCandidateLiveProbeRejectsDifferentBlob` (the real shim as the
   blob-mismatch control).
-- Receipt revision binding is operator-owned: the implementation digest in
-  `testdata/claude/2.1.323/native-repository-turn-windows-2026-11-13.md` is
-  recomputed on the final revision, with the two credentialed smokes re-executed
-  there, and the receipt's revision-binding and operator sections rewritten from
-  those results. Until that re-run no digest recorded in this plan or the receipt
-  describes the current tree; the value quoted in the review-pass sections below
-  bound only the revision observed at that time.
+- Receipt revision binding is operator-owned and is **done** at the final
+  revision `5c90a60` (`fix(claude): close the review findings on cancellation
+  ownership and the smoke Subject`): the two credentialed smokes were re-executed
+  there with the exact blob on a clean worktree, and the receipt's
+  revision-binding and operator sections were rewritten from those results. The
+  digest the receipt now binds,
+  `git diff --no-color --text 9cb1e82 5c90a60 -- '*.go' | sha256sum` =
+  `41d51da43c3d3dc44dfc28b42cf4edc0f1a8e00e90c40f1dbeac4192b5749b1d`, covers the
+  12 Go files the range touches (9 modified, 3 added). The values quoted in the
+  review-pass sections below (`6c144213…` and `0ac83f45…`) were computed from an
+  uncommitted working tree and are recorded as superseded — not as evidence, and
+  not as a claim about any revision.
 
 ## Evidence plan (real, opt-in, no spend recorded in Git)
 

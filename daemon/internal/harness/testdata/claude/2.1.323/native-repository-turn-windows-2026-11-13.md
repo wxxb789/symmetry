@@ -26,27 +26,39 @@ negative controls for the Symmetry Claude Code adapter.
 
 ## Revision binding
 
-Executed without commit authority, so the observation binds the revision it ran:
+The observation binds committed revisions, not a working tree:
 
-- Base commit: `8aa6da50c0e637f06605f3a6a2b01286f102315b`
-  (`docs(goals): bind 0006e to the 2.1.323 pin, exact-blob promotion and Windows scope`).
-- Go implementation digest at the observed revision, computed at the repository
-  root as
-  `{ git diff HEAD -- '*.go'; git ls-files -o --exclude-standard -- '*.go' | sort | xargs sha256sum; } | sha256sum`:
-  `6c144213921f7c36819c76f4b5ac4ea006d0476c960e3dc66c438130197faf3c`.
-  It covers the 9 modified and 3 added Go files of this increment; no Go file
-  changed after these runs. The committed capture
-  `native-repository-turn.jsonl`
+- Base commit: `9cb1e82`, the merge base this increment branched from.
+- Final revision: `5c90a60` (`fix(claude): close the review findings on
+  cancellation ownership and the smoke Subject`) — the revision every number in
+  this receipt describes. It follows the independent review of this increment and
+  the simplification pass applied from that review.
+- Go implementation digest of the increment's range, computed at the repository
+  root as `git diff --no-color --text 9cb1e82 5c90a60 -- '*.go' | sha256sum`:
+  `41d51da43c3d3dc44dfc28b42cf4edc0f1a8e00e90c40f1dbeac4192b5749b1d`.
+  It covers the 12 Go files the range touches — 9 modified and 3 added
+  (`git diff --name-status 9cb1e82 5c90a60 -- '*.go'`).
+- **Superseded and not evidence:** the earlier values recorded in this section
+  (`6c144213…`) and in the plan (`0ac83f45…`) were computed from a working tree
+  (`git diff HEAD` plus untracked-file hashing) that was never committed and
+  cannot be reconstructed from the repository; re-running the documented command
+  against the committed revision does not reproduce them, and the accompanying
+  sentence that no Go file changed after those runs was not true of them. They
+  are kept only as a record of that transcription error, and no claim in this
+  receipt depends on them.
+- The committed capture `native-repository-turn.jsonl`
   (`sha256:c9b48635c0e8a5df2d9ba20b28a28736ab3105451578b6aa19a290c8c1a913f5`)
   is the sanitized stream of the repository-turn run recorded here, normalized to
   LF so the committed bytes and the manifest digest are the same on every
-  platform: the capture was written on Windows with CRLF endings, the repository
-  normalizes text to LF (`* text=auto`), and the manifest test reads the bytes in
-  the tree — a CRLF digest would have passed here and failed in Linux CI.
+  platform: the capture was written on Windows with CRLF endings, and the
+  repository normalizes text to LF. `.gitattributes` now pins `*.txt` and
+  `*.jsonl` to `eol=lf` as well: measured on this host, an `eol=lf` rule keeps a
+  `core.autocrlf=true` checkout at LF while a bare `text` rule does not, so the
+  digest bound here would otherwise fail on the platform this promotion names.
 
-Rebinding to the final merge commit Subject remains the PR step the goal's
-evidence rule requires, exactly as the Codex 0.168.0 receipt recorded for its own
-Subject.
+The credentialed runs in the operator section below were executed at that final
+revision on a clean worktree, so the adapter revision they exercised is the
+revision this digest binds.
 
 ## Commands and results
 
@@ -224,13 +236,13 @@ path requires an installed A/B systemd runtime with a delegated cgroup-v2 parent
 and cross-UID peer inspection, which this host does not provide. No Windows
 observation is promoted as Linux support.
 
-## Operator re-run at the committed revision (2026-11-14)
+## Operator re-run at the final revision (2026-11-14)
 
-The increment is committed at `8ab69cb` (`feat(claude): promote 2.1.323 native
-capability on the exact tested blob`). The two credentialed smokes were
-re-executed by the operator at that revision, on a clean worktree, with the same
-exact executable blob and the cheapest relay model, so the recorded observation
-is bound to a commit rather than to a dirty tree:
+The increment's final revision is `5c90a60` (`fix(claude): close the review
+findings on cancellation ownership and the smoke Subject`). The two credentialed
+smokes were re-executed by the operator at that revision, on a clean worktree,
+with the same exact executable blob and the cheapest relay model, so the recorded
+observation is bound to a commit rather than to a dirty tree:
 
 ```text
 cd daemon
@@ -241,24 +253,36 @@ SYMMETRY_CLAUDE_LIVE_SMOKE_MODEL='claude-haiku-5.5' \
   go test ./internal/harness -run '^TestClaudeCandidateLiveRepositoryTurnSmoke$' -count=1 -v -timeout 600s
 ```
 
-Result: PASS (22.14 s; package `ok … 22.608s`).
+Result: PASS (20.67 s; package `ok … 21.118s`).
 
 ```text
-observations: events=27 frames=25 init_frames=1 terminal_frames=1 event_count=27 exit=0
-subject_hash sha256:2bdb7c4870d297984487d8658432ab5b8d6b74485459c93f23173e402a5a4a9f
+derived subject: commit=c1838b0fd8200df739b653945dc58b251d0ba270
+  tree_digest=sha256:4dda06dc275c4deff63a2db847773836e90dacaf9017b4b991202f905bd6df39
+  hash=sha256:ff2af800ececd5f67f33b71aae7bd825b88ed0a31a85c880ac8bf3bd8434f3b0
+  (committed artifacts: README.md, notes.txt; untracked: hello.txt;
+   checkout digest=sha256:1a0a73d3e8a2626bcf5c4826da0c7dc4511f585c3ac34933a57873c2e1fd2983)
+observations: events=21 frames=19 init_frames=1 terminal_frames=1 event_count=21 exit=0
 ```
+
+The Subject the turn returns is now compared against the production derivation
+over the repository's committed objects — `workspace.Manager.MaterializeSubject`,
+the same derivation `verifyNativeTaskResultSubject` compares against — instead of
+the constant digest this smoke used before the review. The line above also shows
+the digest of the checkout bytes differs from the derived tree digest, which is
+the assertion that keeps the oracle from degrading back into a restatement of its
+own input.
 
 ```text
 SYMMETRY_CLAUDE_LIVE_SMOKE=1 … \
   go test ./internal/harness -run '^TestClaudeCandidateLiveCancelSmoke$' -count=1 -v -timeout 600s
 ```
 
-Result: PASS (21.58 s; package `ok … 22.015s`).
+Result: PASS (22.17 s; package `ok … 23.713s`).
 
 ```text
 cancel receipt: outcome=applied message="Claude process termination completed"
 "Kind": "cancelled"
-observations: events=58 frames=57 init_frames=1
+observations: events=66 frames=65 init_frames=1
 ```
 
 Model substitution is deliberate and recorded: the original capture used
