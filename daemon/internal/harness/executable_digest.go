@@ -51,3 +51,33 @@ func HashExecutableFile(ctx context.Context, executable string) (string, error) 
 	}
 	return "sha256:" + hex.EncodeToString(hasher.Sum(nil)), nil
 }
+
+// ExecutableHasher is implemented by runners that can supply the SHA-256 of the
+// exact executable bytes. The production runners hash the resolved file; tests
+// may supply a recorded digest so a promotion gate stays deterministic.
+type ExecutableHasher interface {
+	ExecutableDigest(context.Context, string) (string, error)
+}
+
+// ResolveExecutableDigest returns the SHA-256 of the exact executable bytes, or
+// false when the bytes cannot be verified. An unverifiable executable never
+// promotes a native capability, so callers fail closed instead of failing the
+// probe. A runner that cannot supply a digest is hashed through
+// HashExecutableFile.
+func ResolveExecutableDigest(ctx context.Context, executable string, runner any) (string, bool) {
+	if ctx == nil || ctx.Err() != nil {
+		return "", false
+	}
+	if hasher, ok := runner.(ExecutableHasher); ok {
+		digest, err := hasher.ExecutableDigest(ctx, executable)
+		if err != nil || ctx.Err() != nil {
+			return "", false
+		}
+		return digest, digest != ""
+	}
+	digest, err := HashExecutableFile(ctx, executable)
+	if err != nil {
+		return "", false
+	}
+	return digest, true
+}

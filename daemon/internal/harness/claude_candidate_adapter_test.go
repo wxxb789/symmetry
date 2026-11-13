@@ -329,23 +329,7 @@ func TestClaudeCandidateCancellationFenceOutranksInFlightTerminal(t *testing.T) 
 	// Claim the cancellation fence while the terminal is still inside the sink.
 	// Close waits for the watcher, which stays blocked because this fake holds
 	// termination until the test releases it.
-	receipts := make(chan ControlReceipt, 1)
-	receiptErrors := make(chan error, 1)
-	go func() {
-		receipt, controlErr := session.Control(context.Background(), ControlRequest{CommandID: "cancel-1", Kind: ControlCancel})
-		receipts <- receipt
-		receiptErrors <- controlErr
-	}()
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		if calls, _ := process.terminationDetails(); calls > 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("cancellation never reached bounded process termination")
-		}
-		time.Sleep(time.Millisecond)
-	}
+	receipts, receiptErrors := cancelAndAwaitTermination(t, session, process)
 	close(sink.releaseResult)
 	if err := <-emitted; err != nil {
 		t.Fatalf("emit result: %v", err)
@@ -471,16 +455,7 @@ func TestClaudeCandidateDirectClosePreservesPendingTerminalOutcome(t *testing.T)
 	internal.mutex.Unlock()
 	closeErrors := make(chan error, 1)
 	go func() { closeErrors <- staged.Close(context.Background()) }()
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		if calls, _ := process.terminationDetails(); calls > 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("direct close never reached bounded process termination")
-		}
-		time.Sleep(time.Millisecond)
-	}
+	awaitClaudeCandidateTermination(t, process, "direct close never reached bounded process termination")
 	// The pending terminal completes while the close is still settling.
 	internal.completeClaudeCandidateTerminal(terminal)
 	process.finish()
@@ -529,6 +504,36 @@ func TestClaudeCandidateCancelBeforeDeferredInitSettlesCancelled(t *testing.T) {
 	}
 }
 
+// A direct close before the deferred system/init arrives is the daemon's own
+// stop rather than a failed lifecycle: the turn settles cancelled exactly as it
+// does for an accepted Control(cancel), and no receipt is involved.
+func TestClaudeCandidateDirectCloseBeforeDeferredInitSettlesCancelled(t *testing.T) {
+	process := newClaudeCandidateFakeProcess()
+	adapter := newClaudeCandidateTestAdapter(process, nil)
+	session, err := adapter.Start(context.Background(), claudeCandidateStartRequest(t), &recordingClaudeCandidateSink{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	cleanupClaudeCandidateSession(t, session)
+	staged := session.(StagedSession)
+	if _, err := staged.Open(context.Background()); err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if err := staged.StartTurn(context.Background(), TurnRequest{Goal: "Make verified progress.", Context: json.RawMessage(`{"snapshot":"canonical"}`)}); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	if err := staged.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	result, err := staged.Wait(context.Background())
+	if err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+	if result.Kind != ResultCancelled {
+		t.Fatalf("result kind = %s summary %q, want cancelled rather than a missing-init failure", result.Kind, result.Summary)
+	}
+}
+
 // A terminal that fails interpretation after cancellation claimed the turn must
 // not reclassify the run as failed: the accepted stop owns the turn.
 func TestClaudeCandidateCancelFenceSupersedesInvalidTerminal(t *testing.T) {
@@ -556,23 +561,7 @@ func TestClaudeCandidateCancelFenceSupersedesInvalidTerminal(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("invalid native result frame never reached the sink")
 	}
-	receipts := make(chan ControlReceipt, 1)
-	receiptErrors := make(chan error, 1)
-	go func() {
-		receipt, controlErr := staged.Control(context.Background(), ControlRequest{CommandID: "cancel-1", Kind: ControlCancel})
-		receipts <- receipt
-		receiptErrors <- controlErr
-	}()
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		if calls, _ := process.terminationDetails(); calls > 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("cancellation never reached bounded process termination")
-		}
-		time.Sleep(time.Millisecond)
-	}
+	receipts, receiptErrors := cancelAndAwaitTermination(t, staged, process)
 	close(sink.releaseResult)
 	if err := <-emitted; err != nil {
 		t.Fatalf("emit result: %v", err)
@@ -624,23 +613,7 @@ func TestClaudeCandidateSupersededResultDoesNotPoisonLaterRecords(t *testing.T) 
 	case <-time.After(2 * time.Second):
 		t.Fatal("invalid native result frame never reached the sink")
 	}
-	receipts := make(chan ControlReceipt, 1)
-	receiptErrors := make(chan error, 1)
-	go func() {
-		receipt, controlErr := staged.Control(context.Background(), ControlRequest{CommandID: "cancel-1", Kind: ControlCancel})
-		receipts <- receipt
-		receiptErrors <- controlErr
-	}()
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		if calls, _ := process.terminationDetails(); calls > 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("cancellation never reached bounded process termination")
-		}
-		time.Sleep(time.Millisecond)
-	}
+	receipts, receiptErrors := cancelAndAwaitTermination(t, staged, process)
 	close(sink.releaseResult)
 	if err := <-delivered; err != nil {
 		t.Fatalf("output handling error = %v, want the superseded terminal and the following record to stay non-failing", err)
@@ -1223,12 +1196,45 @@ func openClaudeCandidateSession(t *testing.T, staged StagedSession, process *cla
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	// Native Claude Code 2.1.322 emits init only after the first user frame.
+	// Native Claude Code 2.1.323 emits init only after the first user frame.
 	// These tests are not about that ordering, so establish identity here.
 	if err := process.emitJSON(`{"type":"system","subtype":"init","session_id":"` + claudeCandidateTestSessionID + `"}`); err != nil {
 		t.Fatalf("emit matching init: %v", err)
 	}
 	return handle
+}
+
+// cancelAndAwaitTermination requests a Control(cancel) for a session in the
+// background and waits until the session reached bounded process termination, so
+// the caller can drive the race under test while the cancel is in flight. The
+// caller owns every receipt assertion.
+func cancelAndAwaitTermination(t *testing.T, session Session, process *claudeCandidateFakeProcess) (chan ControlReceipt, chan error) {
+	t.Helper()
+	receipts := make(chan ControlReceipt, 1)
+	receiptErrors := make(chan error, 1)
+	go func() {
+		receipt, controlErr := session.Control(context.Background(), ControlRequest{CommandID: "cancel-1", Kind: ControlCancel})
+		receipts <- receipt
+		receiptErrors <- controlErr
+	}()
+	awaitClaudeCandidateTermination(t, process, "cancellation never reached bounded process termination")
+	return receipts, receiptErrors
+}
+
+// awaitClaudeCandidateTermination blocks until the fake process observed one
+// bounded termination request, and fails with the caller's message otherwise.
+func awaitClaudeCandidateTermination(t *testing.T, process *claudeCandidateFakeProcess, message string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if calls, _ := process.terminationDetails(); calls > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal(message)
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 func cleanupClaudeCandidateSession(t *testing.T, session Session) {

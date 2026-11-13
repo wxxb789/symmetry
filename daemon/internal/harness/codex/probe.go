@@ -42,13 +42,6 @@ type SchemaRunner interface {
 	SchemaDigest(context.Context, string) (string, error)
 }
 
-// ExecutableHasher is implemented by runners that can supply the SHA-256 of the
-// exact executable bytes. The production runner hashes the resolved file; tests
-// may supply a recorded digest so the promotion gate stays deterministic.
-type ExecutableHasher interface {
-	ExecutableDigest(context.Context, string) (string, error)
-}
-
 // boundedCommand is optional so tests can inspect invocation construction
 // without launching a native executable; the zero value uses the shared runner.
 type boundedCommand func(context.Context, execution.Invocation, int) ([]byte, error)
@@ -164,36 +157,19 @@ func (runner osCommandRunner) SchemaDigest(ctx context.Context, executable strin
 
 // ExecutableDigest returns the SHA-256 of the exact executable bytes. The
 // promotion gate requires this value to equal TestedExecutableHash before any
-// native capability is claimed.
+// native capability is claimed. The digest resolver rejects a nil or expired
+// context before this method is reached, so the guard lives in
+// harness.HashExecutableFile.
 func (runner osCommandRunner) ExecutableDigest(ctx context.Context, executable string) (string, error) {
-	if ctx == nil {
-		return "", errors.New("codex executable digest context must not be nil")
-	}
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
 	return harness.HashExecutableFile(ctx, executable)
 }
 
 // executableDigest returns the SHA-256 of the exact executable bytes, or false
 // when the bytes cannot be verified. An unverifiable executable never promotes a
-// native capability, so callers fail closed instead of failing the probe.
+// native capability, so callers fail closed instead of failing the probe. Blob
+// resolution is shared with the Claude probe; only the runner type is local.
 func executableDigest(ctx context.Context, executable string, runner CommandRunner) (string, bool) {
-	if ctx == nil || ctx.Err() != nil {
-		return "", false
-	}
-	if hasher, ok := runner.(ExecutableHasher); ok {
-		digest, err := hasher.ExecutableDigest(ctx, executable)
-		if err != nil || ctx.Err() != nil {
-			return "", false
-		}
-		return digest, digest != ""
-	}
-	digest, err := harness.HashExecutableFile(ctx, executable)
-	if err != nil {
-		return "", false
-	}
-	return digest, true
+	return harness.ResolveExecutableDigest(ctx, executable, runner)
 }
 
 // ProbeResult records executable/version/help, generated-schema, and the

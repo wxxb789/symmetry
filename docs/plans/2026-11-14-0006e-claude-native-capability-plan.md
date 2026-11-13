@@ -80,12 +80,10 @@ mirroring `internal/harness/codex/probe.go`):
 ```go
 const claudeImplementationVersion = "claude-stream-json-v1"
 
-type claudeProbeEvidence struct {          // exact-blob binding inputs
+type claudeProbeEvidence struct {          // no lifecycle, operation or blob claim
     Version              string
     VersionKnown         bool
     TransportVerified    bool
-    ExecutableDigest     string
-    ExecutableHashKnown  bool
 }
 
 // probeClaudeNativeEvidence runs the bounded version/help/blob probe.
@@ -98,8 +96,10 @@ func claudeCapabilitiesForPlatform(platform string, evidence claudeProbeEvidence
 Semantics (fail closed, every negative leaves `Verified=false` and an explicit
 `Unsupported` reason):
 
-- Version gate anchored: `^2\.1\.323 \(Claude Code\)$` from the bounded merged
-  capture; `2.1.322` or any other string → `ErrUnsupportedVersion`.
+- Version gate: `^([0-9]+\.[0-9]+\.[0-9]+) \(Claude Code\)$` anchors the line
+  and the captured version is compared for equality with `ClaudeTestedVersion`
+  (`2.1.323`) from the bounded merged capture; `2.1.322` or any other string →
+  `ErrUnsupportedVersion`.
 - Transport gate: help must advertise `--print`, `--output-format`,
   `stream-json`, `--json-schema` (existing `hasClaudeTransportHelp`), else
   `ErrNativeUnverified`.
@@ -166,6 +166,13 @@ projection never claims a lifecycle the package adapter owns.
   (the promotion gate against the real client) and
   `TestClaudeCandidateLiveProbeRejectsDifferentBlob` (the real shim as the
   blob-mismatch control).
+- Receipt revision binding is operator-owned: the implementation digest in
+  `testdata/claude/2.1.323/native-repository-turn-windows-2026-11-13.md` is
+  recomputed on the final revision, with the two credentialed smokes re-executed
+  there, and the receipt's revision-binding and operator sections rewritten from
+  those results. Until that re-run no digest recorded in this plan or the receipt
+  describes the current tree; the value quoted in the review-pass sections below
+  bound only the revision observed at that time.
 
 ## Evidence plan (real, opt-in, no spend recorded in Git)
 
@@ -201,7 +208,7 @@ as the Codex 0.168.0 receipt required).
 
 `testdata/claude/2.1.323/`: `version.txt`, `help.txt` (sanitized real capture),
 `stream-json.jsonl` (synthetic framing fixture carried from 2.1.322),
-`native-stream-repository-turn.jsonl` (sanitized real capture from the smoke),
+`native-repository-turn.jsonl` (sanitized real capture from the smoke),
 `fixture-manifest.json` (SHA-256 of every fixture file plus the tested executable
 blob, verified by a test), `native-repository-turn-windows-2026-11-13.md`,
 `README.md`. `testdata/claude/2.1.322/README.md` gets a historical banner; its
@@ -292,10 +299,13 @@ fails on the pre-fix revision:
 
 The same review recomputed the receipt's digests and found a transcribed
 implementation digest (61 of 64 hex characters) and a stale observation window;
-both were corrected from the recomputed values, and the receipt now records
-`0ac83f45d61f7df8da008c8549dae81425f12db80244366474f3b7912d3376cf` for the
-observed revision. The evidence runs were repeated after these Go changes, and
-the committed capture and receipt numbers come from that final revision.
+both were corrected from the recomputed values. The digest from that pass is not
+a claim about the current tree: it bound the revision observed then, and Go files
+changed again afterwards, so the receipt's revision-binding section is
+operator-owned and is recomputed on the final revision as recorded under
+"Implementation deltas from the first draft" above. The evidence runs were
+repeated after these Go changes, and the committed capture and receipt numbers
+come from that final revision.
 
 Residual limit recorded rather than hidden: a valid terminal that has been
 observed but not yet finalized could be classified as failed-missing-result if

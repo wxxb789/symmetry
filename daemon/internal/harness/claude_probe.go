@@ -32,22 +32,10 @@ const claudeImplementationVersion = "claude-stream-json-v1"
 // parsed into a stable-looking prefix.
 var claudeVersionPattern = regexp.MustCompile(`^([0-9]+\.[0-9]+\.[0-9]+) \(Claude Code\)$`)
 
-// ClaudeExecutableHasher is implemented by runners that can supply the SHA-256
-// of the exact executable bytes. The production runner hashes the resolved
-// file; tests may supply a recorded digest so the promotion gate stays
-// deterministic.
-type ClaudeExecutableHasher interface {
-	ExecutableDigest(context.Context, string) (string, error)
-}
-
-// ExecutableDigest returns the SHA-256 of the exact executable bytes.
+// ExecutableDigest returns the SHA-256 of the exact executable bytes. The digest
+// resolver rejects a nil or expired context before this method is reached, so
+// the guard lives in HashExecutableFile.
 func (osClaudeCommandRunner) ExecutableDigest(ctx context.Context, executable string) (string, error) {
-	if ctx == nil {
-		return "", errors.New("Claude executable digest context must not be nil")
-	}
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
 	return HashExecutableFile(ctx, executable)
 }
 
@@ -139,23 +127,23 @@ func probeClaudeNativeEvidence(ctx context.Context, executable string, runner Cl
 }
 
 // claudeExecutableDigest returns the SHA-256 of the exact executable bytes, or
-// false when the bytes cannot be verified.
+// false when the bytes cannot be verified. Blob resolution is shared with the
+// Codex probe; only the runner type is local.
 func claudeExecutableDigest(ctx context.Context, executable string, runner ClaudeCommandRunner) (string, bool) {
-	if ctx == nil || ctx.Err() != nil {
-		return "", false
+	return ResolveExecutableDigest(ctx, executable, runner)
+}
+
+// rejectClaude marks the three native operations unsupported for reason and
+// returns the fail-closed projection: no caller may observe an unvalidated
+// capability map.
+func rejectClaude(capabilities Capabilities, reason string) (Capabilities, error) {
+	capabilities.Unsupported[string(CapabilityStart)] = reason
+	capabilities.Unsupported[string(CapabilityEvents)] = reason
+	capabilities.Unsupported[string(CapabilityCancel)] = reason
+	if err := capabilities.Validate(); err != nil {
+		return Capabilities{}, fmt.Errorf("Claude capability contract: %w", err)
 	}
-	if hasher, ok := runner.(ClaudeExecutableHasher); ok {
-		digest, err := hasher.ExecutableDigest(ctx, executable)
-		if err != nil || ctx.Err() != nil {
-			return "", false
-		}
-		return digest, digest != ""
-	}
-	digest, err := HashExecutableFile(ctx, executable)
-	if err != nil {
-		return "", false
-	}
-	return digest, true
+	return capabilities, ErrNativeUnverified
 }
 
 // claudeCapabilitiesForPlatform projects only operations proved against the
@@ -189,33 +177,15 @@ func claudeCapabilitiesForPlatform(platform string, evidence claudeProbeEvidence
 	}
 	if !evidence.VersionKnown || !evidence.TransportVerified {
 		reason := "Claude Code probe evidence is incomplete; native lifecycle is unverified"
-		capabilities.Unsupported[string(CapabilityStart)] = reason
-		capabilities.Unsupported[string(CapabilityEvents)] = reason
-		capabilities.Unsupported[string(CapabilityCancel)] = reason
-		if err := capabilities.Validate(); err != nil {
-			return Capabilities{}, fmt.Errorf("Claude capability contract: %w", err)
-		}
-		return capabilities, ErrNativeUnverified
+		return rejectClaude(capabilities, reason)
 	}
 	if platform != "windows" {
 		reason := "Claude Code native repository lifecycle is verified only on Windows; Linux admission needs the Linux v2 owner path (delegated cgroup-v2 parent with cross-UID peer inspection), which this build's evidence does not provide"
-		capabilities.Unsupported[string(CapabilityStart)] = reason
-		capabilities.Unsupported[string(CapabilityEvents)] = reason
-		capabilities.Unsupported[string(CapabilityCancel)] = reason
-		if err := capabilities.Validate(); err != nil {
-			return Capabilities{}, fmt.Errorf("Claude capability contract: %w", err)
-		}
-		return capabilities, ErrNativeUnverified
+		return rejectClaude(capabilities, reason)
 	}
 	if !executableHashMatched {
 		reason := "Claude Code native support is bound to the exact tested executable blob; the resolved executable SHA-256 is unverified or does not match"
-		capabilities.Unsupported[string(CapabilityStart)] = reason
-		capabilities.Unsupported[string(CapabilityEvents)] = reason
-		capabilities.Unsupported[string(CapabilityCancel)] = reason
-		if err := capabilities.Validate(); err != nil {
-			return Capabilities{}, fmt.Errorf("Claude capability contract: %w", err)
-		}
-		return capabilities, ErrNativeUnverified
+		return rejectClaude(capabilities, reason)
 	}
 	capabilities.Verified = true
 	capabilities.ImplementationVersion = claudeImplementationVersion

@@ -41,7 +41,6 @@ type claudeLiveRecorder struct {
 
 	mutex            sync.Mutex
 	events           []Event
-	frameBytes       int
 	initFrames       uint64
 	terminalFrames   uint64
 	frameFile        *os.File
@@ -52,7 +51,6 @@ func (recorder *claudeLiveRecorder) Handle(_ context.Context, event Event) error
 	recorder.mutex.Lock()
 	recorder.events = append(recorder.events, event)
 	if event.Kind == EventNativeFrame {
-		recorder.frameBytes += len(event.Payload)
 		switch {
 		case claudeFrameIsInit(event.Payload):
 			recorder.initFrames++
