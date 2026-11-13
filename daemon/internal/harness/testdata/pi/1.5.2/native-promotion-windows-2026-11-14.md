@@ -77,22 +77,43 @@ git show <rev>:daemon/internal/harness/testdata/pi/1.5.2/<file> | sha256sum
 - Base commit: `bcac19e` (`docs(goals): bind 0006f to the 1.5.2 pin,
   exact-blob promotion and Windows scope`), the revision this increment branched
   from.
-- Final revision: `b7495ae` (`feat(pi): promote 1.5.2 native capability on the
-  exact tested blob`). Range digest at that revision:
-  `git diff --no-color --text bcac19e b7495ae -- '*.go' | sha256sum` =
-  `de95247945fcbf1cacee727377026e41246229e4264fed37de4717fffb5a6bf7` over 9 Go
+- Final revision: `937cf06` (`test(pi): strengthen the blob-mismatch controls
+  and drop dead fixture state`). Range digest at that revision:
+  `git diff --no-color --text bcac19e 937cf06 -- '*.go' | sha256sum` =
+  `3f64d6aaa5f3724baba2d7569a54c3ca4e59a88f591bc63c61ab03992211950e` over 9 Go
   files. A later change to those files voids this binding and the observations
   below.
-- Operator re-observation at `b7495ae`, after the commit: the same gateway
-  source (`.symmetry/native-linux-tools/loopback-responses-gateway.go`, SHA-256
-  `a268b5b2…`) served at `-port 4142` with base URL `http://127.0.0.1:4142/v1`
-  — `TestNativeRepositoryTask` PASS 2.78s, `TestNativeRepositoryTaskRetainedResume`
+- Impact of the post-review simplify round (`3ead838..937cf06`): it changed only
+  `probe_live_test.go`, `probe_promotion_test.go`, `app/harness_test.go` and this
+  testdata README — no production file, so the promotion gate's decision order
+  and behaviour are unchanged. The controls that changed were re-observed at the
+  final revision instead of being carried over, because their assertions
+  themselves changed.
+- Operator re-observation at `937cf06`, after the commit: same gateway source and
+  endpoint as recorded below — `TestNativeRepositoryTask` PASS 2.76s,
+  `TestNativeRepositoryTaskRetainedResume` PASS 6.20s,
+  `TestNativeCancellationDrainsInFlightLoopbackRequest` PASS 1.50s,
+  `TestPiProbeLivePromotesTheTestedBlobOnlyOnWindows` PASS 2.53s and
+  `TestPiProbeLiveRejectsDifferentBlob` PASS 6.50s (`ok … 19.932s`), each logging
+  the resolved executable digest `sha256:40a062be…`.
+- History — the increment commit `b7495ae`, superseded on the three files listed
+  above: range digest `de952479…5a6bf7` and its own re-observation
+  (`TestNativeRepositoryTask` PASS 2.78s, `TestNativeRepositoryTaskRetainedResume`
   PASS 4.79s, `TestNativeCancellationDrainsInFlightLoopbackRequest` PASS 1.62s,
-  `TestPiProbeLivePromotesTheTestedBlobOnlyOnWindows` PASS 4.42s and
-  `TestPiProbeLiveRejectsDifferentBlob` PASS 7.18s; every opt-in run logged the
-  resolved executable digest `sha256:40a062be…`.
-- Fixture digests at the final revision: `git show
-  b7495ae:daemon/internal/harness/testdata/pi/1.5.2/<file> | sha256sum`
+  `TestPiProbeLivePromotesTheTestedBlobOnlyOnWindows` PASS 4.42s,
+  `TestPiProbeLiveRejectsDifferentBlob` PASS 7.18s). Reproducible history; it does
+  not bind the delivered revision.
+- Not re-observed at the final revision: every operation in "Unverified in this
+  increment" below stays unverified and unbound — no Linux runtime, no
+  credentialed provider resource, no Elixir or PostgreSQL runtime on this host.
+  The simplify round did not change that exposure, and nothing here should be read
+  as covering it.
+- Gateway used for both re-observations: source
+  `.symmetry/native-linux-tools/loopback-responses-gateway.go`, SHA-256
+  `a268b5b2…`, served at `-port 4142` with base URL
+  `http://127.0.0.1:4142/v1`; every opt-in run logged the resolved executable
+  digest `sha256:40a062be…`.
+- Fixture digests at the final revision: `git show 937cf06:daemon/internal/harness/testdata/pi/1.5.2/<file> | sha256sum`
   reproduces `fixture-manifest.json` exactly (`version.txt` `ded1b601e81d31ca…`,
   `help.txt` `47d1839ce42f284c…`, `lifecycle.jsonl` `406fade872bf31cd…`,
   `compaction-continuation.jsonl` `7f2cdf9c1988eff7…`).
@@ -105,11 +126,11 @@ git show <rev>:daemon/internal/harness/testdata/pi/1.5.2/<file> | sha256sum
 | --- | --- |
 | `daemon/internal/harness/pi/probe.go` | `1bda348969faf4c176890f1d792505c0498b19a18d1f747f5b38781c38f5277d` |
 | `daemon/internal/harness/pi/adapter.go` | `8787793e913aeba7066ca25f9e10ff8e96a47ea8982a3cd414e41addd9e2f2b0` |
-| `daemon/internal/harness/pi/probe_promotion_test.go` | `791b1d5569e2da31e8c77dec7179a32bb1bb0da4f7cdcdd258114cde3940a2c2` |
-| `daemon/internal/harness/pi/probe_live_test.go` | `479d3ed05ef0ca4b6ce0469a03f1e276f541a34e3bde386a66ea61672bdb6af0` |
+| `daemon/internal/harness/pi/probe_promotion_test.go` | `e1fa1cad557020e4b7423e0cf8503f8bc9a8b34e4128ccff7dcfa3d58cf88434` |
+| `daemon/internal/harness/pi/probe_live_test.go` | `48892d177f736a54975682439e7350e6daadf5533a612ecdf8b24d8d7ec74e13` |
 | `daemon/internal/harness/pi/adapter_native_work_test.go` | `8b2b4ab4520a238828a7b8926d0c496874cf0fd5563865f82f71e1023cf3afe3` |
 | `daemon/internal/harness/pi/adapter_native_resume_test.go` | `ea51bdfaa4682a252d59127177ae632d9805f76719a2cdac62be5c5bea734060` |
-| `daemon/internal/app/harness_test.go` | `6e5acb0b50b96ebc1a5d84c6408846ab70447549be4bcf5f0c1582b0a8529d34` |
+| `daemon/internal/app/harness_test.go` | `04d86952ffb58263c757a482c5c42e7224a5e10f3af5f87671da4267cc9cf693` |
 | `daemon/e2e/pi-control-witness/main.go` | `2705134cb6c7574af0ceb38cbc4d30fb296c4d6b9ba0fa80c760f46e92ab3188` |
 | `daemon/e2e/pi-control-witness/main_test.go` | `f8ce7614dfe75f9a538e6f81e0e74a8178c118e49b98ff1db72333d89990bacb` |
 
@@ -299,8 +320,10 @@ executed in this run, so the witness change is verified by the tagged Go test,
 Run by the operator on the increment worktree with
 `python3 .tmp/gdd-adapters/run-gates.py --repo Q:/repos/symmetry` (evidence:
 `.tmp/gate-evidence-0006f-final.txt`; head `bcac19e`, 18 dirty paths, host
-windows, `CGO_ENABLED=0`). The committed revision `b7495ae` contains exactly the
-content that was gated: the worktree was clean immediately after the commit.
+windows, `CGO_ENABLED=0`). That run gated the increment content, which the
+worktree held clean at commit `b7495ae`; the identical chain was re-run after the
+simplify round (`.tmp/gate-evidence-0006f-postapply.txt`, ALL GREEN) and its
+content is the delivered `937cf06`.
 
 | command | exit | seconds |
 | --- | --- | --- |
