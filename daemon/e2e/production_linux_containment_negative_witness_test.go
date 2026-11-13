@@ -1974,6 +1974,14 @@ func runLinuxHelperScanCrashWitness(t *testing.T, environment e2eEnvironment, da
 		var apiError *control.APIError
 		var responseError *control.ResponseError
 		var transportError net.Error
+		// The helper death may already have driven the mirror force-stop and
+		// published the failed run before this cancel request lands, in which
+		// case the control plane answers 409 instead of accepting the command.
+		// That contradicts nothing: the run must still end failed with the
+		// original identity, so a 409 whose bounded readback proves exactly that
+		// continues into the unchanged mirror/ledger verification below. Every
+		// other cancel failure stays fatal.
+		verifiedConflict := false
 		switch {
 		case errors.As(err, &apiError):
 			evidence.Stage = "cancel_api_other"
@@ -1988,6 +1996,7 @@ func runLinuxHelperScanCrashWitness(t *testing.T, environment e2eEnvironment, da
 					if readErr == nil && current.State == "failed" && current.RunID != nil && current.Generation != nil &&
 						*current.RunID == file.Journal.RunID && *current.Generation == file.Journal.Generation {
 						evidence.Stage = "cancel_api_409_failed_run"
+						verifiedConflict = true
 					}
 				}
 			}
@@ -2001,7 +2010,9 @@ func runLinuxHelperScanCrashWitness(t *testing.T, environment e2eEnvironment, da
 				evidence.Stage = "cancel_timeout"
 			}
 		}
-		t.Fatalf("single helper-crash cancel failed: %s", evidence.Stage)
+		if !verifiedConflict {
+			t.Fatalf("single helper-crash cancel failed: %s", evidence.Stage)
+		}
 	}
 	evidence.Stage = "mirror_takeover"
 	condition, err := waitForLinuxWitnessJournal(target.StateDir, "mirror force-stop without scan receipt", 45*time.Second, func(value linuxWitnessJournalFile) bool {

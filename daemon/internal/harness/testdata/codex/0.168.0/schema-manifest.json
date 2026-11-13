@@ -1,0 +1,38 @@
+{
+  "cli_version": "0.168.0",
+  "generated_on": "2026-11-13",
+  "command": "codex app-server generate-json-schema --out <directory>",
+  "bundle_sha256": {
+    "codex_app_server_protocol.schemas.json": "sha256:9de5df9d2ed28ab96c503717455834ca7ca7229c2172ae92c6ca531eeece5ec0",
+    "codex_app_server_protocol.v2.schemas.json": "sha256:893cc2379d96a7f72394b69abc2b40a5a7da039854b211c1137dcbd26f757afe"
+  },
+  "method_schema_sha256": {
+    "v1/InitializeParams.json": "sha256:c608ff6bdd94e661423dca9b44cd1dcea7eac610f74e1310284c61eab64280bc",
+    "v2/ThreadStartParams.json": "sha256:e9c6d3cc18d049bfbc0249add3808fb8e5a27e1a0b5a423767aafbc3859a9428",
+    "v2/TurnStartParams.json": "sha256:4e25cd48986f73e600d9949a055ddb994a75b4a38790e935274646f0fece00ad",
+    "v2/TurnInterruptParams.json": "sha256:6dff382dae73d1dbc58406ed045605f647e7a49660e2540fbd2c6c24d60c5f2b"
+  },
+  "observed_wire_constraints": {
+    "outbound_jsonrpc": "2.0 required by Symmetry adapter",
+    "installed_server_jsonrpc_field": "omitted from initialize, thread/start and notification output",
+    "schema_bundle_change_from_0.167.2": "v2 bundle changed; v1 bundle changed; InitializeParams, ThreadStartParams, TurnStartParams and TurnInterruptParams method schemas byte-identical to 0.167.1/0.167.2",
+    "requested_sandbox": "workspace-write",
+    "isolated_codex_home_sandbox": "readOnly",
+    "sandbox_ready_windows_home_sandbox": "workspaceWrite",
+    "sandbox_readiness_method": "windowsSandbox/readiness",
+    "native_support_claim": "windows-only",
+    "linux_support_claim": false,
+    "native_support_requirement": "resolved executable SHA-256 must equal the tested blob; version/schema agreement alone does not promote"
+  },
+  "exact_executable_sha256": {
+    "windows": {
+      "path_source": "locally installed stable codex-cli 0.168.0 (mise install; upstream tag rust-v0.168.0)",
+      "codex.exe": "sha256:ad8296f7d95eea56bc4bab33cef025eb000340a7252ddb83dd41041ebcc65d0b"
+    },
+    "linux": {
+      "path_source": "not captured for 0.168.0; the pinned Linux probe asset is required before Linux capability evidence can be refreshed",
+      "codex-x86_64-unknown-linux-musl": "unavailable"
+    }
+  },
+  "provenance": "Generated on 2026-11-13 from the locally installed codex-cli 0.168.0 executable. Windows native smoke evidence (transport containment, credentialed repository turn with artifact and canonical TaskResult, cancellation, cumulative-counter observations, isolated-home read-only negative case) was captured the same day; see native-windows-2026-11-13.md. Linux evidence does not exist yet."
+}

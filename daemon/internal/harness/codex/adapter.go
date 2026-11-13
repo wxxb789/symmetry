@@ -499,7 +499,7 @@ func (session *nativeSession) Open(ctx context.Context) (harness.NativeSessionHa
 			"sandbox_workspace_write.network_access":         false,
 			"sandbox_workspace_write.exclude_tmpdir_env_var": true,
 			"sandbox_workspace_write.exclude_slash_tmp":      true,
-			// Codex 0.167.2 starts its shell snapshot in a detached session.
+			// Codex 0.167.2/0.168.0 starts its shell snapshot in a detached session.
 			// Symmetry proves containment with the OS process group, so that
 			// detached helper makes every Linux close unproven. The daemon
 			// already owns the child environment; disabling the snapshot keeps

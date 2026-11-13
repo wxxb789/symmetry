@@ -1,9 +1,12 @@
 # Codex 0.167.2 probe evidence
 
-Owner directive 2026-11-11: until the first prototype and release, track the
-latest stable client. This directory supersedes `../0.167.1/` and is the tested
-Codex version. The earlier 0.153.4, 0.156.1 and 0.167.1 observations remain
-historical only.
+Historical: superseded by `../0.168.0/` under the 2026-11-13 pin advance. This
+directory records 0.167.2 version/help/schema evidence and the Windows
+lifecycle, cancellation, artifact, usage and negative-permission observations
+that promoted start/events/cancel for executable
+`sha256:6f65c42e3769209976cce097a400720b5d877e1d24ec8bb6272bf0f02d5e0fd7`.
+That projection does not carry over to 0.168.0; since the exact-binary binding
+landed, no promotion survives without its own exact-blob evidence.
 
 - `version.txt` is `codex-cli 0.167.2`.
 - `app-server-help.txt` is the sanitized `codex app-server --help` output. It
