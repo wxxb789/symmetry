@@ -1,0 +1,10 @@
+{
+  "executable": "sha256:40a062bedd75767e2c3c889265de7c83d64a0ba55c74b60243c2453d97cffd85",
+  "version": "1.5.2",
+  "fixtures": {
+    "version.txt": "sha256:ded1b601e81d31ca1f65c4f3ccf2ebd7992b6390e37bc2a86f3837282f1e00cf",
+    "help.txt": "sha256:47d1839ce42f284c8253ae1cfa5859324e84a21f1cc4c15aae09279aa48aae43",
+    "lifecycle.jsonl": "sha256:406fade872bf31cd64291930e4b9f28be6463553880e6c1a159e8177080e8e9a",
+    "compaction-continuation.jsonl": "sha256:7f2cdf9c1988eff734179a6db16da0bd4bb50199f54ebea0edb8c8c9e3aee3f4"
+  }
+}

@@ -58,7 +58,7 @@ func TestNativeRepositoryTaskRetainedResume(t *testing.T) {
 	} else {
 		environment = nativePiRepositoryTaskEnvironment(t, root, configuration.credentialEnv)
 	}
-	nativePiRetainedCheckVersion(t, configuration.executable, workspace, environment)
+	nativePiAssertTestedExecutable(t, configuration.executable, workspace, environment)
 	arguments := nativePiRetainedArguments(configuration, sessionDir)
 	if configuration.loopback {
 		t.Logf("native Pi retained-resume loopback request: provider=%s model=%s thinking=%s; served model/effort unknown", nativePiLoopbackProvider, nativePiLoopbackModel, nativePiLoopbackThinking)

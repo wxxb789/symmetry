@@ -9,7 +9,7 @@ Do not require native CLIs to speak the existing fake-agent JSON dialect.
 | --- | --- | --- |
 | Codex | `codex app-server`, stdio JSON-RPC; exact generated-schema digest gate | native thread/turn lifecycle; capability-probed steering, interrupt and approval mapping |
 | Claude Code | headless CLI with documented JSON/stream-JSON output; 2.1.323 defers `system/init` until the first user frame; promotion is bound to the exact executed blob (`sha256:5064e6e0…`) plus the anchored `2.1.323 (Claude Code)` version line | process cancellation; `Open` waits only for process readiness, and every terminal requires a matching `system/init`; next-turn guidance, resume, safe pause and an interactive approval bridge stay unsupported; native model identity is reported by `system/init` and is not claimed by the projection |
-| Pi | native `--mode rpc`, JSONL stdin/stdout; `agent_settled` is the settled boundary | prompt/steer/abort/session RPC mapping; no inferred OS pause |
+| Pi | native `--mode rpc`, JSONL stdin/stdout; `agent_settled` is the settled boundary; promotion is bound to the exact pi `1.5.2` Windows blob (`sha256:40a062be…`) | prompt/steer/abort/session RPC mapping; no inferred OS pause; promoted operations are start, events, cancel and retained resume, projected under implementation identity `pi-rpc-v1` |
 | Oh My Pi (OMP) | native `omp --mode rpc`, custom JSONL with `ready` frame and protocol-version negotiation; `session_settled` is the settled boundary | prompt/steer/abort/session RPC mapping; never inherit Pi decoder or capability claims |
 | OmO (`oh-my-openagent`) | native `omo --mode rpc`, senpi/Pi-derived JSONL; the `omo app-server` Codex protocol is not assumed equivalent | prompt/steer/abort/session RPC mapping; probe the exact binary and protocol |
 | OpenCode V2 | daemon-owned loopback `opencode serve`, V2 `/api/...` HTTP API + SSE | target for 0006g; the current V1-era adapter remains fail-closed and promotes no V2 capability; API-version-verified permissions must be proved against 2.2.7; V1.x is skipped |
@@ -51,6 +51,20 @@ command was denied as requiring approval. The mode is not a bypass flag and its
 classifier is not a containment boundary; the OS process owner remains the
 boundary, and repository-local settings were measured to remove tools while no
 tested allow rule widened the policy.
+
+Pi promotion is bound the same way for `1.5.2`: the anchored `1.5.2` version
+line, the `--mode rpc` help transport, the resolved Windows `pi.exe` SHA-256 and
+the committed fixture digests under
+`daemon/internal/harness/testdata/pi/1.5.2/` must all match before start,
+events, cancel and retained resume are advertised. The mise PATH shim reports
+the same version line and is a different blob, so it promotes nothing. Pi
+startup, events, cancel and adapter-level retained resume are proved on Windows
+against that blob; handoff, native steer, safe pause, approval response,
+provider access, billable usage and hard cost limits stay explicitly
+unsupported, and the probe bound is five seconds because the pinned client
+answers `--help` in about 1.6 s. Linux admission stays fail-closed until the
+Linux v2 owner path carries exact-binary evidence, and Windows evidence is
+never promoted as Linux support.
 
 Until the first prototype and release, each harness tracks the latest stable
 client (owner directive 2026-11-11). Do not freeze an older pin merely because

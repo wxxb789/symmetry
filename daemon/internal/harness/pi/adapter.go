@@ -88,9 +88,9 @@ func runnerProcessStarter(ctx context.Context, invocation execution.Invocation, 
 	return process, err
 }
 
-// Adapter is private integration work for pi RPC. Probe remains fail-closed;
-// registry integration must not expose this transport as a supported adapter
-// until credentialed lifecycle evidence exists.
+// Adapter is the pi RPC transport. Probe promotes only the operations bound to
+// the exact tested Windows 1.5.2 blob and stays fail-closed everywhere else; the
+// registry's conservative constructor remains a separate, unpromoted path.
 type Adapter struct {
 	executable    string
 	runner        CommandRunner
@@ -114,8 +114,9 @@ func NewAdapterWithRunner(executable string, runner CommandRunner) *Adapter {
 	return adapter
 }
 
-// Probe exposes conservative version/help evidence and always retains native
-// lifecycle unverified status.
+// Probe delegates to the package promotion authority: version, RPC transport,
+// exact executable bytes and platform must all agree before any operation is
+// advertised.
 func (adapter *Adapter) Probe(ctx context.Context) (harness.Capabilities, error) {
 	if adapter == nil {
 		return harness.Capabilities{}, errors.New("pi adapter is nil")
