@@ -29,15 +29,16 @@ negative controls for the Symmetry Claude Code adapter.
 The observation binds committed revisions, not a working tree:
 
 - Base commit: `9cb1e82`, the merge base this increment branched from.
-- Final revision: `5c90a60` (`fix(claude): close the review findings on
-  cancellation ownership and the smoke Subject`) — the revision every number in
-  this receipt describes. It follows the independent review of this increment and
-  the simplification pass applied from that review.
+- Final revision: `3a6339b` (`fix(claude): treat fence-rejected delivery during an
+  accepted stop as shutdown`) — the revision every number in this receipt
+  describes. It follows the independent review of this increment, the
+  simplification pass applied from that review, and two fix rounds that closed
+  what the review and the bot review then found.
 - Go implementation digest of the increment's range, computed at the repository
-  root as `git diff --no-color --text 9cb1e82 5c90a60 -- '*.go' | sha256sum`:
-  `41d51da43c3d3dc44dfc28b42cf4edc0f1a8e00e90c40f1dbeac4192b5749b1d`.
+  root as `git diff --no-color --text 9cb1e82 3a6339b -- '*.go' | sha256sum`:
+  `e72f036f634c98443bad0da2496affa7a5d2f980cd94a0ed7ae91ca1c8487dac`.
   It covers the 12 Go files the range touches — 9 modified and 3 added
-  (`git diff --name-status 9cb1e82 5c90a60 -- '*.go'`).
+  (`git diff --name-status 9cb1e82 3a6339b -- '*.go'`).
 - **Superseded and not evidence:** the earlier values recorded in this section
   (`6c144213…`) and in the plan (`0ac83f45…`) were computed from a working tree
   (`git diff HEAD` plus untracked-file hashing) that was never committed and
@@ -58,7 +59,9 @@ The observation binds committed revisions, not a working tree:
 
 The credentialed runs in the operator section below were executed at that final
 revision on a clean worktree, so the adapter revision they exercised is the
-revision this digest binds.
+revision this digest binds. An earlier re-run bound `5c90a60` and the earlier
+digest transcription bound `41d51da4…` over that revision; both are superseded by
+this binding, which is the one the merged increment carries.
 
 ## Commands and results
 
@@ -238,11 +241,11 @@ observation is promoted as Linux support.
 
 ## Operator re-run at the final revision (2026-11-14)
 
-The increment's final revision is `5c90a60` (`fix(claude): close the review
-findings on cancellation ownership and the smoke Subject`). The two credentialed
-smokes were re-executed by the operator at that revision, on a clean worktree,
-with the same exact executable blob and the cheapest relay model, so the recorded
-observation is bound to a commit rather than to a dirty tree:
+The increment's final revision is `3a6339b` (`fix(claude): treat fence-rejected
+delivery during an accepted stop as shutdown`). The two credentialed smokes were
+re-executed by the operator at that revision, on a clean worktree, with the same
+exact executable blob and the cheapest relay model, so the recorded observation is
+bound to a commit rather than to a dirty tree:
 
 ```text
 cd daemon
@@ -253,15 +256,15 @@ SYMMETRY_CLAUDE_LIVE_SMOKE_MODEL='claude-haiku-5.5' \
   go test ./internal/harness -run '^TestClaudeCandidateLiveRepositoryTurnSmoke$' -count=1 -v -timeout 600s
 ```
 
-Result: PASS (20.67 s; package `ok … 21.118s`).
+Result: PASS (20.23 s; package `ok … 20.653s`).
 
 ```text
-derived subject: commit=c1838b0fd8200df739b653945dc58b251d0ba270
+derived subject: commit=da7188a872edb6803eece385a28f32ff86f3df3a
   tree_digest=sha256:4dda06dc275c4deff63a2db847773836e90dacaf9017b4b991202f905bd6df39
-  hash=sha256:ff2af800ececd5f67f33b71aae7bd825b88ed0a31a85c880ac8bf3bd8434f3b0
+  hash=sha256:f5c912bfb75ee2ab1378b72120210c4399df3d44954c142f4030e097adcdc973
   (committed artifacts: README.md, notes.txt; untracked: hello.txt;
    checkout digest=sha256:1a0a73d3e8a2626bcf5c4826da0c7dc4511f585c3ac34933a57873c2e1fd2983)
-observations: events=21 frames=19 init_frames=1 terminal_frames=1 event_count=21 exit=0
+observations: events=24 frames=22 init_frames=1 terminal_frames=1 event_count=24 exit=0
 ```
 
 The Subject the turn returns is now compared against the production derivation
@@ -277,12 +280,14 @@ SYMMETRY_CLAUDE_LIVE_SMOKE=1 … \
   go test ./internal/harness -run '^TestClaudeCandidateLiveCancelSmoke$' -count=1 -v -timeout 600s
 ```
 
-Result: PASS (22.17 s; package `ok … 23.713s`).
+Result: PASS (22.01 s; package `ok … 22.424s`).
 
 ```text
 cancel receipt: outcome=applied message="Claude process termination completed"
 "Kind": "cancelled"
-observations: events=66 frames=65 init_frames=1
+"SinkError": null
+"OutputTruncated": true
+observations: events=70 frames=69 init_frames=1
 ```
 
 Model substitution is deliberate and recorded: the original capture used

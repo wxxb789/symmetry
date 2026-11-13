@@ -166,18 +166,17 @@ projection never claims a lifecycle the package adapter owns.
   (the promotion gate against the real client) and
   `TestClaudeCandidateLiveProbeRejectsDifferentBlob` (the real shim as the
   blob-mismatch control).
-- Receipt revision binding is operator-owned and is **done** at the final
-  revision `5c90a60` (`fix(claude): close the review findings on cancellation
-  ownership and the smoke Subject`): the two credentialed smokes were re-executed
-  there with the exact blob on a clean worktree, and the receipt's
-  revision-binding and operator sections were rewritten from those results. The
-  digest the receipt now binds,
-  `git diff --no-color --text 9cb1e82 5c90a60 -- '*.go' | sha256sum` =
-  `41d51da43c3d3dc44dfc28b42cf4edc0f1a8e00e90c40f1dbeac4192b5749b1d`, covers the
-  12 Go files the range touches (9 modified, 3 added). The values quoted in the
-  review-pass sections below (`6c144213…` and `0ac83f45…`) were computed from an
-  uncommitted working tree and are recorded as superseded — not as evidence, and
-  not as a claim about any revision.
+- Receipt revision binding is operator-owned and is **done** at the final revision
+  `3a6339b` (`fix(claude): treat fence-rejected delivery during an accepted stop
+  as shutdown`): the two credentialed smokes were re-executed there with the exact
+  blob on a clean worktree, and the receipt's revision-binding and operator
+  sections were rewritten from those results. The digest the receipt now binds,
+  `git diff --no-color --text 9cb1e82 3a6339b -- '*.go' | sha256sum` =
+  `e72f036f634c98443bad0da2496affa7a5d2f980cd94a0ed7ae91ca1c8487dac`, covers the
+  12 Go files the range touches (9 modified, 3 added). Every earlier figure quoted
+  in this plan or the receipt — `6c144213…`, `0ac83f45…`, and the intermediate
+  `41d51da4…` bound to the superseded `5c90a60` — is recorded as superseded, not
+  as evidence about the merged revision.
 
 ## Evidence plan (real, opt-in, no spend recorded in Git)
 
