@@ -15,8 +15,8 @@ func TestAllGoalSchemasCompileAndGeneratedTimestampsStayStrings(t *testing.T) {
 	if err := ensureSchemas(); err != nil {
 		t.Fatalf("schemas did not compile: %v", err)
 	}
-	if len(schemas) != 14 {
-		t.Fatalf("compiled schemas = %d, want 14", len(schemas))
+	if len(schemas) != 15 {
+		t.Fatalf("compiled schemas = %d, want 15", len(schemas))
 	}
 	if commitPath == nil || commitPath.MatchTimeout != 10*time.Millisecond {
 		t.Fatalf("CommitPath regex timeout = %v, want %v", commitPath.MatchTimeout, 10*time.Millisecond)
@@ -177,6 +177,68 @@ func TestValidateRejectsExponentNumberBeforeSchemaValidation(t *testing.T) {
 	err := ValidateSchema(EnvelopeUsage, []byte(data))
 	if err == nil || !strings.Contains(err.Error(), "fractional or exponent number is not canonical: 1e0") {
 		t.Fatalf("Validate accepted exponent-form safe integer: %v", err)
+	}
+}
+
+func TestWorkspaceReadAcceptsFractionalMetadataWithoutRelaxingCommands(t *testing.T) {
+	data := readContractFixture(t, "valid/workspace-read.fractional-metadata.json")
+	if err := ValidateSchema(EnvelopeWorkspaceRead, data); err != nil {
+		t.Fatalf("presentation schema rejected fractional metadata: %v", err)
+	}
+	var workspace map[string]any
+	if err := DecodeSchema(EnvelopeWorkspaceRead, data, &workspace); err != nil {
+		t.Fatalf("presentation boundary rejected fractional metadata: %v", err)
+	}
+	project := workspace["projects"].([]any)[0].(map[string]any)
+	resource := project["resources"].([]any)[0].(map[string]any)
+	metadata := resource["metadata"].(map[string]any)
+	for key, want := range map[string]float64{"ratio": 0.5, "exponent": 0.001, "scale": 2000} {
+		if metadata[key] != want {
+			t.Fatalf("metadata[%q] = %#v, want %v", key, metadata[key], want)
+		}
+	}
+	if _, err := decodeJSON(data); err == nil || !strings.Contains(err.Error(), "not canonical") {
+		t.Fatalf("canonical JSON parser accepted fractional metadata: %v", err)
+	}
+	if err := ValidateSchema(EnvelopeGoalCreate, data); err == nil || !strings.Contains(err.Error(), "not canonical") {
+		t.Fatalf("command schema boundary accepted fractional metadata: %v", err)
+	}
+
+	invalid := strings.Replace(string(data), `"blocked": false`, `"blocked": 0.5`, 1)
+	if err := ValidateSchema(EnvelopeWorkspaceRead, []byte(invalid)); err == nil {
+		t.Fatal("presentation schema accepted a fractional blocked flag")
+	}
+}
+
+func TestWorkspaceReadPreservesRawJSONSafetyChecks(t *testing.T) {
+	for name, test := range map[string]struct {
+		data []byte
+		want string
+	}{
+		"duplicate metadata": {
+			data: []byte(`{"selected_project_id":null,"projects":[],"metadata":{"ratio":0.5,"\u0072atio":1e-3}}`),
+			want: "duplicate JSON object member",
+		},
+		"nonfinite exponent": {
+			data: []byte(`{"selected_project_id":null,"projects":[],"metadata":{"ratio":1e309}}`),
+			want: "number is not finite",
+		},
+		"invalid UTF-8": {
+			data: []byte{'{', '"', 'v', '"', ':', '"', 0xff, '"', '}'},
+			want: "not valid UTF-8",
+		},
+		"unpaired metadata surrogate": {
+			data: []byte(`{"selected_project_id":null,"projects":[],"metadata":{"ratio":0.5,"text":"\uD800"}}`),
+			want: "unpaired high surrogate",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var workspace map[string]any
+			err := DecodeSchema(EnvelopeWorkspaceRead, test.data, &workspace)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("DecodeSchema error = %v, want %q", err, test.want)
+			}
+		})
 	}
 }
 

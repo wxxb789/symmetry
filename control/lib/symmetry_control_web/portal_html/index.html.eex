@@ -12,7 +12,7 @@
   <body class="app-page">
     <div class="app-shell">
       <aside class="workspace-nav" aria-label="Workspace navigation">
-        <a class="brand-button" href="/portal" aria-label="Symmetry workspace" title="Symmetry">
+        <a class="brand-button" href="/portal/classic" aria-label="Symmetry workspace" title="Symmetry">
           <span class="brand-mark" aria-hidden="true"><span></span><span></span></span>
         </a>
         <nav class="primary-nav">
@@ -39,6 +39,7 @@
           <input id="work-search" type="search" placeholder="Search work" autocomplete="off">
         </label>
         <div class="topbar-actions">
+          <a class="button" href="/portal" aria-label="Workspace shell" title="Workspace shell"><span data-icon="external" aria-hidden="true"></span><span>Workspace shell</span></a>
           <button id="refresh-button" class="icon-button" type="button" aria-label="Refresh workspace" title="Refresh"><span data-icon="refresh"></span></button>
           <button id="new-item-button" class="button button-primary" type="button" aria-label="New work item"><span data-icon="plus"></span><span>New work item</span></button>
         </div>

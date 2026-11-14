@@ -10,4 +10,8 @@ defmodule SymmetryControlWeb.PortalHTML do
 
   EEx.function_from_file(:def, :login, @login_template, [:assigns], trim: true)
   EEx.function_from_file(:def, :index, @index_template, [:assigns], trim: true)
+
+  def shell(index_html, csrf_token) do
+    String.replace(index_html, "__SYMMETRY_CSRF__", Plug.HTML.html_escape(csrf_token))
+  end
 end

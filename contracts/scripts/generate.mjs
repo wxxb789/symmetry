@@ -225,8 +225,8 @@ const assertNoUnexpectedGeneratedFiles = async (schemas, check) => {
 
 const generate = async (check = false) => {
   const schemas = await loadSchemas();
-  if (schemas.length !== 14) {
-    throw new Error(`expected 14 v1 envelope schemas, found ${schemas.length}`);
+  if (schemas.length !== 15) {
+    throw new Error(`expected 15 v1 schemas, found ${schemas.length}`);
   }
 
   const effectFiles = generateEffectSchemas(schemas);

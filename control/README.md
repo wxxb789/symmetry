@@ -4,7 +4,31 @@
 orchestration state and exposes the versioned API consumed by operators and
 execution daemons.
 
-For local development, install dependencies and start the endpoint:
+Build the authenticated React workspace from the repository root before starting
+Phoenix or assembling a release. The pinned package manager, not an ambient
+pnpm installation, owns dependency resolution:
+
+```sh
+mise exec pnpm@12.17.0 -- pnpm install --frozen-lockfile
+mise exec pnpm@12.17.0 -- pnpm --filter @symmetry/frontend typecheck
+mise exec pnpm@12.17.0 -- pnpm --filter @symmetry/frontend lint
+mise exec pnpm@12.17.0 -- pnpm --filter @symmetry/frontend test
+mise exec pnpm@12.17.0 -- pnpm --filter @symmetry/frontend build
+```
+
+The build stages hashed assets and `index.html` in
+`control/priv/static/portal/`. `mix release` includes those files; the Docker
+build performs the same frontend build in a disposable Node stage. Production
+needs no Node server or package manager. Missing build output returns 503 rather
+than an alternate workspace. HTML/session bootstrap are no-store; hashed assets
+are immutable. Unknown API and asset paths remain 404.
+
+Typecheck uses TypeScript 7's native `tsc`. Type-aware ESLint uses the supported
+TypeScript 6 compiler API alias alongside it; neither strict compiler options
+nor lint rules are disabled to accommodate the API transition.
+
+For local development, install Elixir dependencies and start the endpoint from
+`control/`:
 
 ```sh
 mix setup
@@ -13,8 +37,28 @@ mix phx.server
 
 The local endpoint is available at `http://127.0.0.1:4000`. Open
 `http://127.0.0.1:4000/portal` for the engineering workspace and sign in with
-the configured operator token. Local HTTP is only for an explicitly trusted
-development or container network.
+the configured operator token. `/portal/attention`, `/portal/projects` and
+`/portal/projects/:projectId` are read-only workspace routes. The URL owns
+project selection, including refresh/back/forward recovery. Only the server's
+selected project contains hydrated work items; unloaded project work is not
+reported as zero. Attention selection is carried by `?projectId=...`, including
+navigation from project details and authentication recovery. Clearing it restores
+the server-selected project rather than implying a global blocker summary.
+
+Existing writable project, board, connection and Chat flows remain at
+`/portal/classic` until their React replacements reach parity. Switching uses a
+full document navigation, never two simultaneous workspace runtimes or shared
+client stores. Existing hash links retain their project query and route to the
+classic document. Both entrypoints use the same session and CSRF protection.
+Unauthenticated deep links return through the server-rendered login; API expiry
+cancels reads and clears private Query state before redirecting to sign in.
+Local HTTP is only for an explicitly trusted development or container network.
+
+For Vite development, start Phoenix first, then run
+`mise exec pnpm@12.17.0 -- pnpm --filter @symmetry/frontend dev` from the root.
+Open `http://127.0.0.1:5173/portal/`; session/login/logout and socket requests
+proxy to Phoenix. `SYMMETRY_PHOENIX_ORIGIN` overrides the upstream origin. CSRF
+remains enabled. Use the same hostname for both origins.
 
 In production, do not publish Phoenix directly. It must receive private HTTP
 only from the trusted TLS edge; the public boundary terminates HTTPS before

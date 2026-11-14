@@ -2,6 +2,52 @@ defmodule SymmetryControlWeb.PortalSession do
   @moduledoc false
 
   @default_max_age_seconds 8 * 60 * 60
+  @shell_path ~r{\A/portal(?:/(?:attention|projects(?:/[A-Za-z0-9_-]+)?))?\z}
+  @classic_identifier_param ~r{\A(?:project_id|run_id)=[A-Za-z0-9_-]+\z}
+
+  def return_to(path) when is_binary(path) do
+    if shell_return_to?(path) or classic_return_to?(path), do: path, else: "/portal"
+  end
+
+  def return_to(_path), do: "/portal"
+
+  defp shell_return_to?(path) do
+    case URI.parse(path) do
+      %URI{scheme: nil, host: nil, path: shell_path, query: query, fragment: nil}
+      when is_binary(shell_path) ->
+        Regex.match?(@shell_path, shell_path) and
+          (is_nil(query) or
+             (shell_path == "/portal/attention" and
+                Regex.match?(~r{\AprojectId=[A-Za-z0-9_-]+\z}, query)))
+
+      _ ->
+        false
+    end
+  end
+
+  defp classic_return_to?("/portal/classic" <> _rest = path) do
+    case URI.parse(path) do
+      %URI{scheme: nil, host: nil, path: "/portal/classic", query: query, fragment: fragment} ->
+        fragment in [nil, "board", "chat", "activity", "resources", "connections", "health"] and
+          classic_query?(query)
+
+      _ ->
+        false
+    end
+  end
+
+  defp classic_return_to?(_path), do: false
+
+  defp classic_query?(nil), do: true
+
+  defp classic_query?(query) do
+    query
+    |> String.split("&")
+    |> Enum.all?(fn param ->
+      Regex.match?(@classic_identifier_param, param) or
+        param in ["chat_scope=workspace", "chat_scope=project", "chat_scope=run"]
+    end)
+  end
 
   def issue(operator_token, opts \\ []) when is_binary(operator_token) do
     %{

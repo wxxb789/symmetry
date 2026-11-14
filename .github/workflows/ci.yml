@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   linux-native-v2-acceptance:
+    needs: contracts
     if: github.event_name == 'workflow_dispatch'
     # SECURITY PRECONDITION: The public repo currently has one writer. Before
     # dispatch, verify the Environment requires @wxxb789's separate approval,
@@ -53,6 +54,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: portal-assets
+          path: control/priv/static/portal
       - name: Generate isolated Control operator token
         shell: bash
         run: |
@@ -166,8 +171,17 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm contracts:check
+      - run: pnpm --filter @symmetry/frontend typecheck
+      - run: pnpm --filter @symmetry/frontend lint
+      - run: pnpm --filter @symmetry/frontend test
+      - run: pnpm --filter @symmetry/frontend build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: portal-assets
+          path: control/priv/static/portal
 
   control:
+    needs: contracts
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -193,6 +207,10 @@ jobs:
       POSTGRES_DB: symmetry_control_test
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: portal-assets
+          path: control/priv/static/portal
       - uses: erlef/setup-beam@v1
         with:
           elixir-version: 1.20.4
@@ -271,6 +289,48 @@ jobs:
             exit "$summary_status"
           fi
       - run: MIX_ENV=prod mix release --overwrite
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.17.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+        working-directory: .
+      - run: pnpm --filter symmetry-browser-acceptance exec playwright install --with-deps chromium
+        working-directory: .
+      - name: Render authenticated release shell on desktop and mobile
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          export DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:5432/${POSTGRES_DB}"
+          export SECRET_KEY_BASE="$(openssl rand -hex 64)"
+          export SYMMETRY_OPERATOR_TOKEN="$(openssl rand -hex 32)"
+          export SYMMETRY_ENROLLMENT_TOKEN="$(openssl rand -hex 32)"
+          echo "::add-mask::$SYMMETRY_OPERATOR_TOKEN"
+          export SYMMETRY_CONTRACTS_DIR="$GITHUB_WORKSPACE/contracts"
+          export PHX_HOST=localhost PHX_SERVER=true
+          bin=_build/prod/rel/symmetry_control/bin/symmetry_control
+          PORT=4000 RELEASE_NODE=symmetry_shell "$bin" start > "$RUNNER_TEMP/shell-release.log" 2>&1 &
+          primary=$!
+          PORT=4001 RELEASE_NODE=symmetry_expiry SYMMETRY_PORTAL_SESSION_MAX_AGE_SECONDS=2 \
+            "$bin" start > "$RUNNER_TEMP/shell-expiry.log" 2>&1 &
+          expiry=$!
+          trap 'kill "$primary" "$expiry" 2>/dev/null || true' EXIT
+          curl --fail --retry 30 --retry-delay 1 --retry-connrefused http://127.0.0.1:4000/healthz
+          curl --fail --retry 30 --retry-delay 1 --retry-connrefused http://127.0.0.1:4001/healthz
+          cd ..
+          SYMMETRY_SHELL_EXPIRY_URL=http://127.0.0.1:4001 \
+            pnpm --filter symmetry-browser-acceptance test tests/workspace-shell.spec.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: workspace-render
+          path: |
+            browser/playwright-report
+            /tmp/symmetry-playwright-results
 
   pi-control-e2e-linux:
     runs-on: ubuntu-latest
@@ -1553,6 +1613,7 @@ jobs:
         run: go test -count=1 -timeout 600s ./e2e -run '^TestProductionPreAuthority(CrashWitnessMatrix|WrongSecretFirstClientRace)$' -v
 
   integration:
+    needs: contracts
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -1585,6 +1646,10 @@ jobs:
       SYMMETRY_GOALS_ROLLOUT_ENABLED: "true"
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: portal-assets
+          path: control/priv/static/portal
       - uses: erlef/setup-beam@v1
         with:
           elixir-version: 1.20.4

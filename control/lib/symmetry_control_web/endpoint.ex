@@ -23,6 +23,13 @@ defmodule SymmetryControlWeb.Endpoint do
     gzip: false,
     only: ~w(portal.css portal.js)
 
+  plug Plug.Static,
+    at: "/portal/assets",
+    from: {:symmetry_control, "priv/static/portal/assets"},
+    gzip: not code_reloading?,
+    cache_control_for_etags: "public, max-age=31536000, immutable",
+    cache_control_for_vsn_requests: "public, max-age=31536000, immutable"
+
   # Serve at "/" the static files from "priv/static" directory.
   #
   # When code reloading is disabled (e.g., in production),

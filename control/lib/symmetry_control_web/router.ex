@@ -22,6 +22,7 @@ defmodule SymmetryControlWeb.Router do
     plug :fetch_session
     plug :protect_from_forgery
     plug :put_secure_browser_headers
+    plug :put_portal_no_store
   end
 
   pipeline :portal_api do
@@ -29,6 +30,7 @@ defmodule SymmetryControlWeb.Router do
     plug :fetch_session
     plug :protect_from_forgery
     plug :put_secure_browser_headers
+    plug :put_portal_no_store
     plug SymmetryControlWeb.Plugs.PortalAuth, format: :json
   end
 
@@ -45,15 +47,10 @@ defmodule SymmetryControlWeb.Router do
     post "/portal/logout", PortalSessionController, :delete
   end
 
-  scope "/portal", SymmetryControlWeb do
-    pipe_through [:portal_browser, :portal_authenticated]
-
-    get "/", PortalController, :index
-  end
-
   scope "/portal/api", SymmetryControlWeb do
     pipe_through :portal_api
 
+    get "/session", PortalSessionController, :show
     get "/workspace", PortalApiController, :workspace
     get "/chat", ChatController, :index
     post "/chat/messages", ChatController, :create
@@ -85,6 +82,18 @@ defmodule SymmetryControlWeb.Router do
     post "/work-items/:work_item_id/retry", PortalApiController, :retry_work_item
     post "/work-items/:work_item_id/input", PortalApiController, :provide_input
   end
+
+  scope "/portal", SymmetryControlWeb do
+    pipe_through [:portal_browser, :portal_authenticated]
+
+    get "/", PortalController, :index
+    get "/attention", PortalController, :index
+    get "/projects", PortalController, :index
+    get "/projects/:project_id", PortalController, :index
+    get "/classic", PortalController, :classic
+  end
+
+  defp put_portal_no_store(conn, _options), do: put_resp_header(conn, "cache-control", "no-store")
 
   scope "/", SymmetryControlWeb do
     pipe_through :api

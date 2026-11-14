@@ -68,7 +68,7 @@ test.describe("Goal 04 live Chat and cooperative worker", () => {
 
   test("durable questions, guidance, decisions and controls share the real run history", async ({ page, request }) => {
     test.setTimeout(180_000);
-    await page.goto("/portal/login");
+    await page.goto("/portal/login?return_to=%2Fportal%2Fclassic");
     await page.getByLabel("Operator token").fill(operatorToken);
     await page.getByRole("button", { name: "Open workspace" }).click();
     await expect(page.locator("#refresh-button")).toBeVisible();
@@ -83,7 +83,7 @@ test.describe("Goal 04 live Chat and cooperative worker", () => {
     const projectId = createdProject.body.project.id;
     const projectScope = { scope: "project", project_id: projectId };
     const goal = "Implement an autonomous progress report and retain the guidance in its final artifact.";
-    await page.goto(`/portal?project_id=${projectId}#chat`);
+    await page.goto(`/portal/classic?project_id=${projectId}#chat`);
     await expect(page.locator("#project-switcher")).toHaveValue(projectId);
     await page.locator("#chat-scope").selectOption("project");
     await page.locator("#chat-intent").selectOption("start_work");
@@ -141,7 +141,7 @@ test.describe("Goal 04 live Chat and cooperative worker", () => {
       expect(await processIdentity(runId)).toEqual(originalProcess);
     }
 
-    await page.goto(`/portal?project_id=${projectId}#chat`);
+    await page.goto(`/portal/classic?project_id=${projectId}#chat`);
     await page.locator("#chat-scope").selectOption("run");
     await page.locator("#chat-run-select").selectOption(runId);
     await expect(page.locator("#chat-messages")).toContainText(guidance);
@@ -227,7 +227,7 @@ test.describe("Goal 04 live Chat and cooperative worker", () => {
     await waitState(page, afterInvalid.work_item_id, "completed");
 
     if (process.env.SYMMETRY_CHAT_SCREENSHOTS) {
-      await page.goto(`/portal?project_id=${projectId}#chat`);
+      await page.goto(`/portal/classic?project_id=${projectId}#chat`);
       await page.locator("#chat-scope").selectOption("run");
       await page.locator("#chat-run-select").selectOption(runId);
       await expect(page.locator("#chat-run-context")).toContainText(/completed/i);

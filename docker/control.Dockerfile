@@ -3,6 +3,16 @@
 ARG ELIXIR_IMAGE=elixir:1.20.4-otp-29-slim
 ARG RUNTIME_IMAGE=debian:trixie-slim
 
+FROM node:24-bookworm-slim AS frontend
+WORKDIR /workspace
+RUN npm install --global pnpm@12.17.0
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY contracts/ ./contracts/
+COPY frontend/ ./frontend/
+COPY browser/package.json ./browser/package.json
+RUN pnpm install --frozen-lockfile \
+    && pnpm --filter @symmetry/frontend build
+
 FROM ${ELIXIR_IMAGE} AS build
 
 RUN apt-get update -y \
@@ -22,8 +32,8 @@ RUN mix deps.compile
 
 COPY control/ ./
 COPY contracts/ /app/contracts/
-RUN if [ -d assets ]; then mix assets.deploy; fi \
-    && mix compile \
+COPY --from=frontend /workspace/control/priv/static/portal/ ./priv/static/portal/
+RUN mix compile \
     && mix release
 
 FROM ${RUNTIME_IMAGE} AS runtime

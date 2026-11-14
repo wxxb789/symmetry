@@ -50,7 +50,8 @@ defmodule SymmetryControl.Goals.ContractValidation do
     evidence_batch_conflict_details: "evidence-batch-conflict-details.schema.json",
     decision: "decision.schema.json",
     usage: "usage.schema.json",
-    adapter_capabilities: "adapter-capabilities.schema.json"
+    adapter_capabilities: "adapter-capabilities.schema.json",
+    workspace_read: "workspace-read.schema.json"
   }
 
   @draft7 "http://json-schema.org/draft-07/schema#"
@@ -122,6 +123,9 @@ defmodule SymmetryControl.Goals.ContractValidation do
 
   @spec validate_usage(map() | list(), keyword()) :: validation_result()
   def validate_usage(data, opts \\ []), do: validate(:usage, data, opts)
+
+  @spec validate_workspace_read(map(), keyword()) :: validation_result()
+  def validate_workspace_read(data, opts \\ []), do: validate(:workspace_read, data, opts)
 
   @spec validate_adapter_capabilities(map() | list(), keyword()) :: validation_result()
   def validate_adapter_capabilities(data, opts \\ []),

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +38,7 @@ const (
 	EnvelopePlanProposal                 Envelope = "plan-proposal"
 	EnvelopeTaskResult                   Envelope = "task-result"
 	EnvelopeUsage                        Envelope = "usage"
+	EnvelopeWorkspaceRead                Envelope = "workspace-read"
 )
 
 //go:embed schema_bundle.json
@@ -49,11 +51,11 @@ var (
 	commitPath  *regexp2.Regexp
 )
 
-// DecodeSchema validates strict raw JSON against the selected schema before
+// DecodeSchema validates raw JSON against the selected schema before
 // unmarshalling it into a generated DTO. Protocol owns all cross-field and
-// envelope semantics.
+// envelope semantics. Only workspace reads admit finite presentation numbers.
 func DecodeSchema(envelope Envelope, data []byte, target any) error {
-	if _, err := decodeJSON(data); err != nil {
+	if _, err := decodeRawJSON(data, envelope == EnvelopeWorkspaceRead); err != nil {
 		return fmt.Errorf("decode %s JSON: %w", envelope, err)
 	}
 	if err := ValidateSchema(envelope, data); err != nil {
@@ -73,7 +75,7 @@ func ValidateSchema(envelope Envelope, data []byte) error {
 		return err
 	}
 
-	instance, err := decodeSchemaJSON(data)
+	instance, err := decodeSchemaJSON(data, envelope == EnvelopeWorkspaceRead)
 	if err != nil {
 		return fmt.Errorf("decode %s JSON: %w", envelope, err)
 	}
@@ -145,7 +147,7 @@ func compileSchemas() (map[Envelope]*jsonschema.Schema, error) {
 		}
 	}
 
-	compiled := make(map[Envelope]*jsonschema.Schema, 14)
+	compiled := make(map[Envelope]*jsonschema.Schema, 15)
 	for _, envelope := range []Envelope{
 		EnvelopeAdapterCapabilities,
 		EnvelopeAdmission,
@@ -161,6 +163,7 @@ func compileSchemas() (map[Envelope]*jsonschema.Schema, error) {
 		EnvelopePlanProposal,
 		EnvelopeTaskResult,
 		EnvelopeUsage,
+		EnvelopeWorkspaceRead,
 	} {
 		filename := string(envelope) + ".schema.json"
 		schema, err := compiler.Compile(schemaBaseURL + filename)
@@ -225,17 +228,21 @@ func rewriteRuntimePatternEscapes(value any) {
 }
 
 func decodeJSON(data []byte) (any, error) {
+	return decodeRawJSON(data, false)
+}
+
+func decodeRawJSON(data []byte, presentationRead bool) (any, error) {
 	if !utf8.Valid(data) {
 		return nil, fmt.Errorf("JSON input is not valid UTF-8")
 	}
 	if err := validateUnicodeEscapes(data); err != nil {
 		return nil, err
 	}
-	return decodeSchemaJSON(data)
+	return decodeSchemaJSON(data, presentationRead)
 }
 
-func decodeSchemaJSON(data []byte) (any, error) {
-	if err := validateJSONNumberLexemes(data); err != nil {
+func decodeSchemaJSON(data []byte, presentationRead bool) (any, error) {
+	if err := validateJSONNumberLexemes(data, presentationRead); err != nil {
 		return nil, err
 	}
 	if err := validateJSONDuplicateKeys(data); err != nil {
@@ -345,9 +352,10 @@ func scanJSONArray(decoder *json.Decoder) error {
 const maxJSONSafeIntegerLexeme = "9007199254740991"
 
 // validateJSONNumberLexemes preserves the raw-number contract that a decoded
-// json.Number cannot express: v1 transports use only exact JSON-safe integers.
-// It mirrors contracts/scripts/check.mjs and deliberately skips string content.
-func validateJSONNumberLexemes(data []byte) error {
+// json.Number cannot express: canonical transports use only exact JSON-safe
+// integers, while workspace reads admit finite presentation numbers. It mirrors
+// contracts/ts/wire-json.ts and deliberately skips string content.
+func validateJSONNumberLexemes(data []byte, presentationRead bool) error {
 	inString := false
 	escaped := false
 
@@ -377,11 +385,17 @@ func validateJSONNumberLexemes(data []byte) error {
 			continue
 		}
 		lexeme := string(data[index:end])
-		if nonInteger {
-			return fmt.Errorf("fractional or exponent number is not canonical: %s", lexeme)
-		}
-		if !isJSONSafeIntegerLexeme(lexeme) {
-			return fmt.Errorf("integer exceeds the JSON safe-integer range: %s", lexeme)
+		if presentationRead {
+			if _, err := strconv.ParseFloat(lexeme, 64); err != nil {
+				return fmt.Errorf("number is not finite: %s", lexeme)
+			}
+		} else {
+			if nonInteger {
+				return fmt.Errorf("fractional or exponent number is not canonical: %s", lexeme)
+			}
+			if !isJSONSafeIntegerLexeme(lexeme) {
+				return fmt.Errorf("integer exceeds the JSON safe-integer range: %s", lexeme)
+			}
 		}
 		index = end - 1
 	}

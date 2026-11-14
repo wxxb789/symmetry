@@ -12,11 +12,11 @@ function uniqueProject(prefix = "E2") {
   };
 }
 
-async function login(page, path = "/portal") {
-  await page.goto("/portal/login");
+async function login(page, path = "/portal/classic") {
+  await page.goto("/portal/login?return_to=%2Fportal%2Fclassic");
   await page.getByLabel("Operator token").fill(operatorToken);
   await Promise.all([
-    page.waitForURL(/\/portal(?:\?|#|$)/),
+    page.waitForURL(/\/portal\/classic(?:\?|#|$)/),
     page.getByRole("button", { name: "Open workspace" }).click()
   ]);
   await page.goto(path);
@@ -368,8 +368,8 @@ test.describe("Goal 2 feature acceptance", () => {
 
     await page.getByRole("button", { name: "Sign out" }).click();
     await expect(page).toHaveURL(/\/portal\/login$/);
-    await page.goto("/portal");
-    await expect(page).toHaveURL(/\/portal\/login$/);
+    await page.goto("/portal/classic");
+    await expect(page).toHaveURL(/\/portal\/login\?return_to=%2Fportal%2Fclassic$/);
   });
 
   test("keyboard navigation, dialogs, and drawer remain usable without overflow", async ({ page }) => {
@@ -550,7 +550,7 @@ test.describe("Goal 2 concurrency", () => {
     try {
       await login(first);
       const projectId = await createProject(first, project);
-      await login(second, `/portal?project_id=${projectId}#board`);
+      await login(second, `/portal/classic?project_id=${projectId}#board`);
 
       await first.getByRole("button", { name: "Project settings" }).click();
       await second.getByRole("button", { name: "Project settings" }).click();
@@ -600,7 +600,7 @@ test.describe("Goal 2 concurrency", () => {
         priority: "medium",
         assignee_type: "unassigned"
       });
-      await login(second, `/portal?project_id=${projectId}#board`);
+      await login(second, `/portal/classic?project_id=${projectId}#board`);
 
       await first.locator(".work-card", { hasText: originalTitle }).click();
       await second.locator(".work-card", { hasText: originalTitle }).click();

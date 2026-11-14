@@ -6,6 +6,13 @@
 control/_build
 control/deps
 control/cover
+node_modules
+frontend/node_modules
+frontend/dist
+browser/node_modules
+browser/playwright-report
+browser/test-results
+control/priv/static/portal
 daemon/bin
 daemon/coverage.out
 .tmp

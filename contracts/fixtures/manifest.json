@@ -2,6 +2,41 @@
   "manifest_version": 1,
   "fixtures": [
     {
+      "id": "workspace-read.basic",
+      "schema": "workspace-read",
+      "path": "valid/workspace-read.basic.json",
+      "valid": true,
+      "tags": ["read-projection", "nullable", "additive-fields"]
+    },
+    {
+      "id": "workspace-read.fractional-metadata",
+      "schema": "workspace-read",
+      "path": "valid/workspace-read.fractional-metadata.json",
+      "valid": true,
+      "tags": ["read-projection", "additive-fields", "fractional-metadata", "exponent-metadata"]
+    },
+    {
+      "id": "workspace-read.empty",
+      "schema": "workspace-read",
+      "path": "valid/workspace-read.empty.json",
+      "valid": true,
+      "tags": ["read-projection", "empty"]
+    },
+    {
+      "id": "workspace-read.invalid-blocked",
+      "schema": "workspace-read",
+      "path": "invalid/workspace-read.invalid-blocked.json",
+      "valid": false,
+      "tags": ["read-projection", "wrong-type"]
+    },
+    {
+      "id": "workspace-read.missing-projects",
+      "schema": "workspace-read",
+      "path": "invalid/workspace-read.missing-projects.json",
+      "valid": false,
+      "tags": ["read-projection", "missing-field"]
+    },
+    {
       "id": "goal-revision.basic",
       "schema": "goal-revision",
       "path": "valid/goal-revision.basic.json",

@@ -22,11 +22,15 @@ const jsonNumberPattern = /-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/
 const maxSafeIntegerDigits = "9007199254740991";
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
+type NumberPolicy = "canonical" | "presentation";
+
 type NumberIssue = {
+  code: "noncanonical_number" | "nonfinite_number";
   lexeme: string;
   reason:
     | "fractional or exponent number is not canonical"
-    | "integer exceeds the JSON safe-integer range";
+    | "integer exceeds the JSON safe-integer range"
+    | "number is not finite";
 };
 
 const isSafeIntegerLexeme = (lexeme: string): boolean => {
@@ -36,7 +40,7 @@ const isSafeIntegerLexeme = (lexeme: string): boolean => {
   return digits <= maxSafeIntegerDigits;
 };
 
-const findNonCanonicalNumber = (source: string): NumberIssue | null => {
+const findNumberIssue = (source: string, policy: NumberPolicy): NumberIssue | null => {
   let inString = false;
   let escaped = false;
 
@@ -63,11 +67,25 @@ const findNonCanonicalNumber = (source: string): NumberIssue | null => {
     const match = jsonNumberPattern.exec(source);
     if (!match) continue;
     const lexeme = match[0];
-    if (lexeme.includes(".") || /[eE]/u.test(lexeme)) {
-      return { lexeme, reason: "fractional or exponent number is not canonical" };
-    }
-    if (!isSafeIntegerLexeme(lexeme)) {
-      return { lexeme, reason: "integer exceeds the JSON safe-integer range" };
+    if (policy === "presentation") {
+      if (!Number.isFinite(Number(lexeme))) {
+        return { code: "nonfinite_number", lexeme, reason: "number is not finite" };
+      }
+    } else {
+      if (lexeme.includes(".") || /[eE]/u.test(lexeme)) {
+        return {
+          code: "noncanonical_number",
+          lexeme,
+          reason: "fractional or exponent number is not canonical",
+        };
+      }
+      if (!isSafeIntegerLexeme(lexeme)) {
+        return {
+          code: "noncanonical_number",
+          lexeme,
+          reason: "integer exceeds the JSON safe-integer range",
+        };
+      }
     }
     index += lexeme.length - 1;
   }
@@ -275,7 +293,7 @@ const findDuplicateJsonMember = (source: string): JsonDuplicateIssue | null => {
   return value.duplicate;
 };
 
-export const parseWireJson = (input: string | Uint8Array): unknown => {
+const parseJson = (input: string | Uint8Array, policy: NumberPolicy): unknown => {
   let source: string;
   if (typeof input === "string") {
     source = input;
@@ -287,9 +305,9 @@ export const parseWireJson = (input: string | Uint8Array): unknown => {
     }
   }
 
-  const numberIssue = findNonCanonicalNumber(source);
+  const numberIssue = findNumberIssue(source, policy);
   if (numberIssue) {
-    throw new WireJsonError("noncanonical_number", `${numberIssue.reason}: ${numberIssue.lexeme}`);
+    throw new WireJsonError(numberIssue.code, `${numberIssue.reason}: ${numberIssue.lexeme}`);
   }
 
   const duplicate = findDuplicateJsonMember(source);
@@ -306,6 +324,12 @@ export const parseWireJson = (input: string | Uint8Array): unknown => {
     throw new WireJsonError("invalid_json", "JSON input is invalid");
   }
 };
+
+export const parseWireJson = (input: string | Uint8Array): unknown => parseJson(input, "canonical");
+
+// Presentation projections admit finite JSON numbers; their consumed fields still pass schema decoding.
+export const parsePresentationJson = (input: string | Uint8Array): unknown =>
+  parseJson(input, "presentation");
 
 const findUnpairedSurrogate = (value: string): "high" | "low" | null => {
   for (let index = 0; index < value.length; index += 1) {

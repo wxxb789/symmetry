@@ -56,7 +56,7 @@ if ($LASTEXITCODE -ne 0) { throw "Control did not become ready before Compose ac
 
 Push-Location $browserRoot
 try {
-  npm run test:compose
+  mise exec pnpm@12.17.0 -- pnpm run test:compose
   if ($LASTEXITCODE -ne 0) { throw "Compose daemon browser test failed" }
 } finally {
   Pop-Location
@@ -89,7 +89,7 @@ $env:SYMMETRY_COMPOSE_PROJECT_NAME = $parts[2]
 
 Push-Location $browserRoot
 try {
-  npx playwright test tests/portal-compose-restart.spec.mjs --project=desktop-chromium
+  mise exec pnpm@12.17.0 -- pnpm exec playwright test tests/portal-compose-restart.spec.mjs --project=desktop-chromium
   if ($LASTEXITCODE -ne 0) { throw "Compose restart browser test failed" }
 } finally {
   Pop-Location

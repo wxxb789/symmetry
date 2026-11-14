@@ -82,7 +82,7 @@ try {
   $env:SYMMETRY_CHAT_CONTROL_CONTAINER = $ControlContainer
   Push-Location (Join-Path $repoRoot "browser")
   try {
-    npx playwright test tests/portal-chat-live.spec.mjs --project=desktop-chromium
+    mise exec pnpm@12.17.0 -- pnpm exec playwright test tests/portal-chat-live.spec.mjs --project=desktop-chromium
     if ($LASTEXITCODE -ne 0) { throw "Chat live acceptance failed. Logs and artifacts: $runRoot" }
   } finally { Pop-Location }
 } finally {

@@ -10,10 +10,11 @@ import {
   PlanProposal,
   TaskResult,
   Usage,
+  WorkspaceRead,
   SemanticError,
   WireJsonError,
 } from "../ts/index.ts";
-import { parseWireJson } from "../ts/wire-json.ts";
+import { parsePresentationJson, parseWireJson } from "../ts/wire-json.ts";
 import {
   allOf,
   arrayConstraints,
@@ -46,6 +47,88 @@ test("raw decoding rejects unsafe numeric lexemes before schema validation", asy
     assert.ok(Either.isLeft(result));
     assert.ok(result.left instanceof WireJsonError);
     assert.equal(result.left.code, "noncanonical_number");
+  }
+});
+
+test("WorkspaceRead accepts fractional and exponent metadata without changing command policy", async () => {
+  const bytes = await fs.readFile(
+    new URL("../fixtures/valid/workspace-read.fractional-metadata.json", import.meta.url),
+  );
+  const decoded = await Effect.runPromise(WorkspaceRead.decodeJson(bytes));
+  const metadata = decoded.projects[0].resources[0].metadata;
+  assert.equal(metadata.ratio, 0.5);
+  assert.equal(metadata.exponent, 0.001);
+  assert.equal(metadata.scale, 2000);
+  assert.deepEqual(decoded, JSON.parse(bytes.toString("utf8")));
+  assert.throws(
+    () => parseWireJson(bytes),
+    (error) => error instanceof WireJsonError && error.code === "noncanonical_number",
+  );
+
+  const goal = await fixture("goal-create.basic");
+  for (const lexeme of ["0.5", "1e-3", "2E+3"]) {
+    const source = JSON.stringify(goal).replace(/}$/, `,"metadata":{"ratio":${lexeme}}}`);
+    const result = await Effect.runPromise(Effect.either(GoalCreate.decodeJson(source)));
+    assert.ok(Either.isLeft(result));
+    assert.ok(result.left instanceof WireJsonError);
+    assert.equal(result.left.code, "noncanonical_number");
+  }
+});
+
+test("WorkspaceRead still validates consumed fields after presentation JSON parsing", async () => {
+  const workspace = await fixture("workspace-read.fractional-metadata");
+  workspace.projects[0].work_items[0].blocked = 0.5;
+  const result = await Effect.runPromise(
+    Effect.either(WorkspaceRead.decodeJson(JSON.stringify(workspace))),
+  );
+  assert.ok(Either.isLeft(result));
+  assert.equal(result.left._tag, "ParseError");
+});
+
+test("presentation numbers cannot bypass consumed integer schema constraints", async () => {
+  const usage = await fixture("usage.safe-integer-limit");
+  for (const lexeme of ["0.5", "9007199254740993", "9.007199254740992e15"]) {
+    const result = await Effect.runPromise(
+      Effect.either(Usage.decodeUnknown({ ...usage, input_tokens: parsePresentationJson(lexeme) })),
+    );
+    assert.ok(Either.isLeft(result), `accepted invalid consumed counter ${lexeme}`);
+    assert.equal(result.left._tag, "ParseError");
+  }
+  for (const input_tokens of [Infinity, -Infinity, NaN]) {
+    const result = await Effect.runPromise(
+      Effect.either(Usage.decodeUnknown({ ...usage, input_tokens })),
+    );
+    assert.ok(Either.isLeft(result));
+    assert.equal(result.left._tag, "ParseError");
+  }
+});
+
+test("WorkspaceRead keeps duplicate, UTF-8, Unicode, and finite-number checks", async () => {
+  const base = '{"selected_project_id":null,"projects":[]';
+  for (const [source, code] of [
+    [`${base},"metadata":{"ratio":0.5,"ratio":1e-3}}`, "duplicate_json_member"],
+    [String.raw`${base},"metadata":{"ratio":0.5,"\u0072atio":1e-3}}`, "duplicate_json_member"],
+    [`${base},"metadata":{"ratio":1e309}}`, "nonfinite_number"],
+    [`${base},"metadata":{"ratio":-1e309}}`, "nonfinite_number"],
+    [`${base},"metadata":{"ratio":0.5}} trailing`, "invalid_json"],
+    [new Uint8Array([0xc0, 0xaf]), "invalid_utf8"],
+  ]) {
+    const result = await Effect.runPromise(Effect.either(WorkspaceRead.decodeJson(source)));
+    assert.ok(Either.isLeft(result));
+    assert.ok(result.left instanceof WireJsonError);
+    assert.equal(result.left.code, code);
+  }
+  for (const metadata of [{ text: "\ud800", ratio: 0.5 }, { "\udfff": 0.5 }]) {
+    const result = await Effect.runPromise(
+      Effect.either(WorkspaceRead.decodeJson(JSON.stringify({
+        selected_project_id: null,
+        projects: [],
+        metadata,
+      }))),
+    );
+    assert.ok(Either.isLeft(result));
+    assert.ok(result.left instanceof SemanticError);
+    assert.equal(result.left.code, "unpaired_surrogate");
   }
 });
 

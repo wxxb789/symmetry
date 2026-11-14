@@ -22,14 +22,14 @@ test.describe("Goal 2 Compose restart acceptance", () => {
     const cancelTitle = `Cancel workflow ${projectKey}`;
     const retryTitle = `Retry workflow ${projectKey}`;
 
-    await page.goto("/portal/login");
+    await page.goto("/portal/login?return_to=%2Fportal%2Fclassic");
     await page.getByLabel("Operator token").fill(operatorToken);
     await Promise.all([
-      page.waitForURL(/\/portal(?:\?|#|$)/),
+      page.waitForURL(/\/portal\/classic(?:\?|#|$)/),
       page.getByRole("button", { name: "Open workspace" }).click()
     ]);
 
-    await page.goto(`/portal?project_id=${projectId}#activity`);
+    await page.goto(`/portal/classic?project_id=${projectId}#activity`);
     await expect(page.locator("#project-key")).toHaveText(projectKey);
     await expect(page.locator("#project-title")).toHaveText(projectName);
     await expect(page.locator(".activity-row", { hasText: waitTitle })).toContainText("default");
