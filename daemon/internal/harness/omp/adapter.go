@@ -675,17 +675,29 @@ func (session *nativeSession) settledResult() (harness.TaskResult, error) {
 			return result, err
 		}
 	}
-	if role != "assistant" || stopReason != "stop" || len(content) != 1 {
+	if role != "assistant" || stopReason != "stop" {
 		return result, errors.New("OMP final assistant message is not one normally stopped text block")
 	}
-	var blockType, blockText string
-	if err := requiredFinalMessageField(content[0], "type", &blockType); err != nil {
-		return result, err
+	// The native client emits reasoning blocks alongside the textual answer, so
+	// the contract is exactly one text block (whose text carries the strict
+	// TaskResult) and no second textual payload; every other block must still
+	// declare its type but cannot contribute to the result.
+	var blockText string
+	textBlocks := 0
+	for _, block := range content {
+		var blockType string
+		if err := requiredFinalMessageField(block, "type", &blockType); err != nil {
+			return result, err
+		}
+		if blockType != "text" {
+			continue
+		}
+		if err := requiredFinalMessageField(block, "text", &blockText); err != nil {
+			return result, err
+		}
+		textBlocks++
 	}
-	if err := requiredFinalMessageField(content[0], "text", &blockText); err != nil {
-		return result, err
-	}
-	if blockType != "text" {
+	if textBlocks != 1 {
 		return result, errors.New("OMP final assistant message is not one normally stopped text block")
 	}
 	text := []byte(blockText)

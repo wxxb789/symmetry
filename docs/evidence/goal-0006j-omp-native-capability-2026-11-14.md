@@ -364,3 +364,48 @@ gates or cover F2. It also did not establish atomic protection against file
 replacement or a new Open-level symlink/junction-escape scenario. The parent
 verified F2 through the full request validator and actual HTTP client boundary.
 No commit, push or history rewrite was performed.
+
+## Operator audit, spend authorization, and native acceptance receipts
+
+The owner authorized real relay spend on 2026-11-14 ("use LiteLLM for tests"), self-capped here at
+US$2 per goal. The cap is compiled into the acceptance gate (`nativeAcceptancePermittedSpendMicrousd
+= 2_000_000`); generation still needs an explicit positive `SYMMETRY_OMP_OWNER_SPEND_MICROUSD` that
+cannot exceed it, and `TestNativeAcceptancePromptSpendDecision` asserts both the refused forms (empty,
+zero, negative, non-numeric, overflow, over-cap) and the accepted boundary values.
+
+An operator audit of every kind-enumerating site on `main` (daemon `config.go`, `app.go`,
+`control/validation.go`, `protocol.go`; Control `goals.ex`, `goals/schemas.ex`, `orchestration.ex`
+twice, `orchestration/schemas.ex`) found one real omission on this branch: `validateGoalSessionAttach`
+rejected `harness_kind "omp"` in `daemon/internal/control/validation.go`. Fixed with
+`validation_harness_kind_test.go`; removing the fix makes exactly the `omp` subtest fail
+(`goal_session_attach with harness_kind "omp" rejected: harness_kind "omp" is invalid`). The same audit
+leaves one open decision: `linuxNativeRuntimeRequiresGoalAdmission` still names only pi and opencode,
+while this branch ORs OMP into the admission requirement at one call site only.
+
+The first real acceptance run exposed a second defect in this branch's R2 repair: the lost-ack helper
+is a separate process that re-derives its own configuration, but `nativeAcceptanceHelperEnvironment`
+did not forward `SYMMETRY_OMP_OWNER_SPEND_MICROUSD`, so the helper skipped instead of reaching its
+required exit 73. Fixed in `native_acceptance_test.go` with `native_acceptance_helper_env_test.go`;
+removing the forwarding reproduces `helper subprocess cannot authorize the spend it was started with:
+explicit positive SYMMETRY_OMP_OWNER_SPEND_MICROUSD authorization is required`.
+
+### Windows native acceptance (real provider turns)
+
+`TestNativeAcceptance` passes on Windows in 28.44 s against `omp.exe` 18.20.0 (251,502,592 bytes) and
+the approved relay model `tencent-litellm/deepseek-v4.1-flash-fast`; sanitized receipts are under
+`.tmp/omp-native-acceptance-windows/windows-omp-native-4078422222`.
+
+| Class | Receipt record |
+| --- | --- |
+| Approved-catalog provenance | `approved_catalog_provenance`: credential referenced as `TENCENT_GLM_API_KEY`, endpoint `litellm-proxy-hk…/v1`, approved model exactly once |
+| Adapter restart with lost acknowledgement | `adapter_restart_lost_ack`: `helper_exit 73`, `durable_completion_reconciled true`, `old_turn_replayed false`, real native handle, `native_version 18.20.0` |
+| Retained resume | `retained_resume`: `retained_context_challenge passed`, `same_id_and_file true`, `prior_artifact_unchanged true` |
+| Fresh handoff | `fresh_handoff` with its own, non-reused native identity |
+| In-flight cancellation | `cancel_tool_live_before_control`, `cancel_after_native_tool_start`, `cancel_tool_exact_identity_terminated`, `cancel_no_later_mutation` |
+
+Reproduction facts that matter: the fixture repository must be small — Subject derivation launches one
+Git process per blob under a 30 s deadline, so the 1,033-blob worktree needed about 79 s and failed
+there. The approved clone (`Q:/repos/fixture-0006h`, 1 blob, HEAD `6adc9ef`) is used instead. The
+isolated agent directory (`.tmp/omp-acceptance-agent/models.yml`) is a credential-free JSON catalog
+that references the key by environment-variable name, so no credential is written to disk. Linux
+receipts for the same four classes are pending on this revision.
