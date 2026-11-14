@@ -32,7 +32,6 @@ import (
 	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
-	"github.com/wxxb789/symmetry/daemon/internal/harness/opencode"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/pi"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
@@ -50,7 +49,6 @@ const (
 	linuxV2RootlessComposePIStateEnvironment            = "SYMMETRY_PRODUCTION_LINUX_V2_ROOTLESS_COMPOSE_PI_STATE_DIR"
 	linuxV2RootlessComposeOpenCodeStateEnvironment      = "SYMMETRY_PRODUCTION_LINUX_V2_ROOTLESS_COMPOSE_OPENCODE_STATE_DIR"
 	linuxV2RootlessComposePIExecutableEnvironment       = "SYMMETRY_PRODUCTION_LINUX_V2_ROOTLESS_COMPOSE_PI_EXECUTABLE"
-	linuxV2RootlessComposeOpenCodeExecutableEnvironment = "SYMMETRY_PRODUCTION_LINUX_V2_ROOTLESS_COMPOSE_OPENCODE_EXECUTABLE"
 	linuxV2RootlessComposeOutputEnvironment             = "SYMMETRY_PRODUCTION_LINUX_V2_ROOTLESS_COMPOSE_WITNESS_OUTPUT_DIR"
 )
 
@@ -117,25 +115,26 @@ type linuxV2RootlessComposeTransitionRelease struct {
 }
 
 type linuxV2RootlessComposeEvidence struct {
-	Version                 int    `json:"version"`
-	Case                    string `json:"case"`
-	Harness                 string `json:"harness"`
-	NativeVersion           string `json:"native_version"`
-	WorkItemIDSHA256        string `json:"work_item_id_sha256"`
-	TaskIDSHA256            string `json:"task_id_sha256"`
-	RunIDSHA256             string `json:"run_id_sha256"`
-	RuntimeIDSHA256         string `json:"runtime_id_sha256"`
-	Generation              int64  `json:"generation"`
-	ProbeReturnedUnverified bool   `json:"probe_returned_err_native_unverified"`
-	RunState                string `json:"run_state"`
-	FailureStage            string `json:"failure_stage"`
-	ClaimFenceObserved      bool   `json:"claim_fence_observed"`
-	NoNativeTaskProcess     bool   `json:"no_native_task_process"`
-	NoTaskResult            bool   `json:"no_task_result"`
-	NoProcessAuthority      bool   `json:"no_process_authority"`
-	NoStopReceipt           bool   `json:"no_stop_receipt"`
-	NoProviderAccess        bool   `json:"no_provider_access"`
-	NonGoalWorkItem         bool   `json:"non_goal_work_item"`
+	Version                  int    `json:"version"`
+	Case                     string `json:"case"`
+	Harness                  string `json:"harness"`
+	NativeVersion            string `json:"native_version"`
+	WorkItemIDSHA256         string `json:"work_item_id_sha256"`
+	TaskIDSHA256             string `json:"task_id_sha256"`
+	RunIDSHA256              string `json:"run_id_sha256"`
+	RuntimeIDSHA256          string `json:"runtime_id_sha256"`
+	Generation               int64  `json:"generation"`
+	ProbeReturnedUnverified  bool   `json:"probe_returned_err_native_unverified"`
+	ProbeReturnedUnavailable bool   `json:"probe_returned_err_harness_unavailable"`
+	RunState                 string `json:"run_state"`
+	FailureStage             string `json:"failure_stage"`
+	ClaimFenceObserved       bool   `json:"claim_fence_observed"`
+	NoNativeTaskProcess      bool   `json:"no_native_task_process"`
+	NoTaskResult             bool   `json:"no_task_result"`
+	NoProcessAuthority       bool   `json:"no_process_authority"`
+	NoStopReceipt            bool   `json:"no_stop_receipt"`
+	NoProviderAccess         bool   `json:"no_provider_access"`
+	NonGoalWorkItem          bool   `json:"non_goal_work_item"`
 }
 
 // Diagnostics identify the assertion boundary, never replace acceptance proof.
@@ -217,10 +216,10 @@ func TestRootlessComposePortalRequiresTrustedTLSForSecureSession(t *testing.T) {
 	}
 }
 
-// TestProductionLinuxV2RootlessComposeNativeWorkItemRefusal uses both real
-// pinned native adapters and actual non-Goal WorkItem Runs assigned through
-// the rootless Compose Control plane. Direct Probe assertions supplement, but
-// never substitute for, the durable failed Run and matching local journal.
+// TestProductionLinuxV2RootlessComposeNativeWorkItemRefusal uses pinned Pi and
+// the production unavailable OpenCode adapter with actual non-Goal WorkItem
+// Runs assigned through rootless Compose. Probe assertions never substitute
+// for the durable failed Run and matching local journal.
 func TestProductionLinuxV2RootlessComposeNativeWorkItemRefusal(t *testing.T) {
 	if os.Getenv(linuxV2RootlessComposeWitnessEnvironment) != "1" {
 		t.Skip("set " + linuxV2RootlessComposeWitnessEnvironment + "=1 to run the rootless Compose native WorkItem witnesses")
@@ -272,17 +271,20 @@ func TestProductionLinuxV2RootlessComposeNativeWorkItemRefusal(t *testing.T) {
 	}
 	cases := []struct {
 		harness, profile, version, runtimeKeyEnvironment, executableEnvironment, stateEnvironment string
+		nativeVersion                                                                             string
+		probeError                                                                                error
 	}{
 		{
 			harness: "pi", profile: "pi-native", version: "1.5.2",
+			nativeVersion: "1.5.2", probeError: harness.ErrNativeUnverified,
 			runtimeKeyEnvironment: linuxV2RootlessComposePIRuntimeKeyEnvironment,
 			executableEnvironment: linuxV2RootlessComposePIExecutableEnvironment,
 			stateEnvironment:      linuxV2RootlessComposePIStateEnvironment,
 		},
 		{
-			harness: "opencode", profile: "opencode-native", version: "1.18.32",
+			harness: "opencode", profile: "opencode-native", version: "2.3.0",
+			probeError:            harness.ErrHarnessUnavailable,
 			runtimeKeyEnvironment: linuxV2RootlessComposeOpenCodeRuntimeKeyEnvironment,
-			executableEnvironment: linuxV2RootlessComposeOpenCodeExecutableEnvironment,
 			stateEnvironment:      linuxV2RootlessComposeOpenCodeStateEnvironment,
 		},
 	}
@@ -293,15 +295,18 @@ func TestProductionLinuxV2RootlessComposeNativeWorkItemRefusal(t *testing.T) {
 			diagnostic := linuxV2RootlessComposeDiagnostic{Version: 1, Case: testCase.harness, Stage: "case_inputs"}
 			// Go defers run before t.Cleanup releases the held acknowledgement.
 			defer writeLinuxV2RootlessComposeDiagnostic(t, &diagnostic)
-			executable := rootlessComposeRequiredPath(t, testCase.executableEnvironment)
 			stateDirectory := rootlessComposeRequiredPath(t, testCase.stateEnvironment)
 			runtimeKey := strings.TrimSpace(os.Getenv(testCase.runtimeKeyEnvironment))
 			if runtimeKey == "" {
 				t.Fatalf("%s is required to select the exact native Compose runtime", testCase.runtimeKeyEnvironment)
 			}
-			diagnostic.Stage = "pinned_version"
-			if err := linuxV2VerifyPinnedNativeCLI(executable, testCase.version); err != nil {
-				t.Fatalf("verify pinned real %s executable: %v", testCase.harness, err)
+			executable := ""
+			if testCase.executableEnvironment != "" {
+				executable = rootlessComposeRequiredPath(t, testCase.executableEnvironment)
+				diagnostic.Stage = "pinned_version"
+				if err := linuxV2VerifyPinnedNativeCLI(executable, testCase.version); err != nil {
+					t.Fatalf("verify pinned real %s executable: %v", testCase.harness, err)
+				}
 			}
 			diagnostic.Stage = "probe"
 			capabilities, probeErr := linuxV2RootlessComposeProbe(testCase.harness, executable)
@@ -319,20 +324,25 @@ func TestProductionLinuxV2RootlessComposeNativeWorkItemRefusal(t *testing.T) {
 			default:
 				diagnostic.Observation = "other"
 			}
-			if !errors.Is(probeErr, harness.ErrNativeUnverified) {
-				t.Fatalf("real %s Probe() error = %v, want ErrNativeUnverified", testCase.harness, probeErr)
+			if !errors.Is(probeErr, testCase.probeError) {
+				t.Fatalf("production %s Probe() error = %v, want %v", testCase.harness, probeErr, testCase.probeError)
 			}
 			diagnostic.Stage, diagnostic.Observation = "probe_projection", "transport_unverified"
 			if capabilities.TransportVerified {
 				diagnostic.Observation = "transport_verified"
 			}
-			if err := linuxV2ValidateRootlessComposeProbe(capabilities, testCase.harness, testCase.version); err != nil {
-				t.Fatalf("real %s Probe() capability projection: %v", testCase.harness, err)
+			if err := linuxV2ValidateRootlessComposeProbe(capabilities, testCase.harness, testCase.nativeVersion); err != nil {
+				t.Fatalf("production %s Probe() capability projection: %v", testCase.harness, err)
 			}
 
 			diagnostic.Stage, diagnostic.Observation = "runtime_registration", ""
-			runtime := portal.awaitRuntime(t, testCase.harness, testCase.profile, testCase.version, runtimeKey, &diagnostic)
-			if err := linuxV2ValidateRootlessComposeRuntime(runtime, testCase.harness, testCase.profile, testCase.version); err != nil {
+			runtimeVersion := capabilities.NativeVersion
+			if runtimeVersion == "" {
+				// Production registration replaces missing probe identity with this sentinel.
+				runtimeVersion = "unavailable"
+			}
+			runtime := portal.awaitRuntime(t, testCase.harness, testCase.profile, runtimeVersion, runtimeKey, &diagnostic)
+			if err := linuxV2ValidateRootlessComposeRuntime(runtime, testCase.harness, testCase.profile, runtimeVersion); err != nil {
 				t.Fatalf("Control registered %s runtime: %v", testCase.harness, err)
 			}
 			diagnostic.Stage = "arm"
@@ -454,13 +464,15 @@ func TestProductionLinuxV2RootlessComposeNativeWorkItemRefusal(t *testing.T) {
 
 			evidence := linuxV2RootlessComposeEvidence{
 				Version: 1, Case: "rootless_compose_native_work_item_refusal", Harness: testCase.harness,
-				NativeVersion:    testCase.version,
-				WorkItemIDSHA256: linuxWitnessHashBytes([]byte(workItemID)),
-				TaskIDSHA256:     linuxWitnessHashBytes([]byte(execution.TaskID)),
-				RunIDSHA256:      linuxWitnessHashBytes([]byte(execution.RunID)),
-				RuntimeIDSHA256:  linuxWitnessHashBytes([]byte(execution.RuntimeID)),
-				Generation:       execution.Generation, ProbeReturnedUnverified: true,
-				RunState: execution.State, FailureStage: execution.Failure.Stage,
+				NativeVersion:            capabilities.NativeVersion,
+				WorkItemIDSHA256:         linuxWitnessHashBytes([]byte(workItemID)),
+				TaskIDSHA256:             linuxWitnessHashBytes([]byte(execution.TaskID)),
+				RunIDSHA256:              linuxWitnessHashBytes([]byte(execution.RunID)),
+				RuntimeIDSHA256:          linuxWitnessHashBytes([]byte(execution.RuntimeID)),
+				Generation:               execution.Generation,
+				ProbeReturnedUnverified:  errors.Is(probeErr, harness.ErrNativeUnverified),
+				ProbeReturnedUnavailable: errors.Is(probeErr, harness.ErrHarnessUnavailable),
+				RunState:                 execution.State, FailureStage: execution.Failure.Stage,
 				ClaimFenceObserved: claimFenceObserved, NoNativeTaskProcess: true, NoTaskResult: true,
 				NoProcessAuthority: true, NoStopReceipt: true, NoProviderAccess: true,
 				NonGoalWorkItem: true,
@@ -485,9 +497,76 @@ func linuxV2RootlessComposeProbe(harnessKind, executable string) (harness.Capabi
 		result, err := pi.Probe(ctx, executable)
 		return result.Capabilities, err
 	case "opencode":
-		return opencode.NewAdapter(executable).Probe(ctx)
+		return harness.NewOpenCodeAdapter().Probe(ctx)
 	default:
 		return harness.Capabilities{}, fmt.Errorf("unsupported rootless Compose harness %q", harnessKind)
+	}
+}
+
+func TestRootlessComposeOpenCodeUnavailableProjection(t *testing.T) {
+	capabilities, err := linuxV2RootlessComposeProbe("opencode", filepath.Join(t.TempDir(), "not-installed"))
+	if !errors.Is(err, harness.ErrHarnessUnavailable) || errors.Is(err, harness.ErrNativeUnverified) {
+		t.Fatalf("production unavailable Probe() error = %v", err)
+	}
+	if err := linuxV2ValidateRootlessComposeProbe(capabilities, "opencode", ""); err != nil {
+		t.Fatalf("production unavailable projection: %v", err)
+	}
+	for _, testCase := range []struct {
+		name   string
+		mutate func(*harness.Capabilities)
+	}{
+		{name: "configured version is not native evidence", mutate: func(value *harness.Capabilities) {
+			value.NativeVersion, value.VersionKnown = "2.3.0", true
+		}},
+		{name: "historical private transport is not production evidence", mutate: func(value *harness.Capabilities) {
+			value.NativeVersion, value.VersionKnown, value.TransportVerified = "1.18.32", true, true
+		}},
+		{name: "implementation identity", mutate: func(value *harness.Capabilities) { value.ImplementationVersion = "private" }},
+		{name: "start", mutate: func(value *harness.Capabilities) { value.Start = true }},
+		{name: "provider access", mutate: func(value *harness.Capabilities) { value.ProviderAccess = true }},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			mutated := capabilities
+			testCase.mutate(&mutated)
+			if err := linuxV2ValidateRootlessComposeProbe(mutated, "opencode", ""); err == nil {
+				t.Fatal("rootless validator accepted native evidence on the unavailable adapter")
+			}
+		})
+	}
+}
+
+func TestRootlessComposeRuntimeRequiresOpenCodeUnavailableIdentity(t *testing.T) {
+	runtime := linuxV2RootlessComposeRuntime{
+		RuntimeID: "runtime", RuntimeKey: "rootless-compose-native-opencode", ConnectionEpoch: 1,
+		Status: "online", AgentProfile: "opencode-native", Workspace: "native",
+		Capabilities: protocol.RuntimeCapabilities{Adapter: &protocol.Adapter{
+			Kind: "opencode", NativeVersion: "unavailable", ImplementationVersion: "unavailable", ProtocolVersion: 1,
+			Operations: protocol.AdapterOperations{
+				Guidance: protocol.GuidanceUnsupported, Pause: protocol.PauseUnsupported, Usage: protocol.UsageUnknown,
+			},
+		}},
+	}
+	if err := linuxV2ValidateRootlessComposeRuntime(runtime, "opencode", "opencode-native", "unavailable"); err != nil {
+		t.Fatalf("unavailable production runtime: %v", err)
+	}
+	for _, testCase := range []struct {
+		name   string
+		mutate func(*protocol.Adapter)
+	}{
+		{name: "configured version", mutate: func(value *protocol.Adapter) { value.NativeVersion = "2.3.0" }},
+		{name: "historical version", mutate: func(value *protocol.Adapter) { value.NativeVersion = "1.18.32" }},
+		{name: "private implementation", mutate: func(value *protocol.Adapter) { value.ImplementationVersion = "private" }},
+		{name: "start", mutate: func(value *protocol.Adapter) { value.Operations.Start = true }},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			mutated := runtime
+			adapter := *runtime.Capabilities.Adapter
+			mutated.Capabilities.Adapter = &adapter
+			testCase.mutate(&adapter)
+			if err := linuxV2ValidateRootlessComposeRuntime(mutated, "opencode", "opencode-native", "unavailable"); err == nil {
+				t.Fatal("rootless validator accepted native identity or operations on the unavailable runtime")
+			}
+		})
 	}
 }
 
@@ -496,12 +575,14 @@ func linuxV2ValidateRootlessComposeProbe(capabilities harness.Capabilities, harn
 		return fmt.Errorf("invalid capability projection: %w", err)
 	}
 	wantKind := harness.Kind(harnessKind)
+	wantTransport := harnessKind != "opencode"
 	if capabilities.Kind != wantKind || capabilities.NativeVersion != nativeVersion ||
-		!capabilities.VersionKnown || !capabilities.TransportVerified || capabilities.Verified ||
+		capabilities.VersionKnown != wantTransport || capabilities.TransportVerified != wantTransport || capabilities.Verified ||
+		harnessKind == "opencode" && (nativeVersion != "" || capabilities.ImplementationVersion != "") ||
 		capabilities.Start || capabilities.Events || capabilities.Cancel || capabilities.Resume ||
 		capabilities.Handoff || capabilities.ApprovalResponse || capabilities.ProviderAccess ||
 		capabilities.HardCostLimit {
-		return errors.New("Probe() did not retain pinned transport evidence with every executable capability false")
+		return errors.New("Probe() does not match the production unverified projection with every executable capability false")
 	}
 	return nil
 }
@@ -511,6 +592,7 @@ func linuxV2ValidateRootlessComposeRuntime(runtime linuxV2RootlessComposeRuntime
 	if runtime.RuntimeID == "" || runtime.RuntimeKey == "" || runtime.ConnectionEpoch <= 0 || runtime.Status != "online" ||
 		runtime.AgentProfile != profile || runtime.Workspace != "native" ||
 		runtime.Capabilities.ProviderAccess || adapter == nil || adapter.Kind != harnessKind ||
+		harnessKind == "opencode" && (nativeVersion != "unavailable" || adapter.ImplementationVersion != "unavailable" || adapter.ProtocolVersion != 1) ||
 		adapter.NativeVersion != nativeVersion || adapter.Operations.Start || adapter.Operations.Events ||
 		adapter.Operations.Cancel || adapter.Operations.Resume || adapter.Operations.Handoff ||
 		adapter.Operations.ApprovalResponse || adapter.Operations.HardCostLimit {

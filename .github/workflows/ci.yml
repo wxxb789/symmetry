@@ -1454,154 +1454,52 @@ jobs:
           retention-days: 14
           path: ${{ runner.temp }}/opencode-native-synthetic-provenance.txt
 
-  opencode-native-synthetic-windows:
+  # V1 positive synthetic execution is not evidence for the unsupported V2 adapter.
+  opencode-production-unsupported-windows:
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: Initialize OpenCode synthetic evidence
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $env:OPENCODE_SYNTHETIC_LOG = Join-Path $env:RUNNER_TEMP 'opencode-native-synthetic-windows.log'
-          $env:OPENCODE_SYNTHETIC_PROVENANCE = Join-Path $env:RUNNER_TEMP 'opencode-native-synthetic-windows-provenance.txt'
-          $env:OPENCODE_SYNTHETIC_EXECUTABLE = Join-Path $env:RUNNER_TEMP 'opencode-1.18.32\opencode.exe'
-          @(
-            "OPENCODE_SYNTHETIC_LOG=$env:OPENCODE_SYNTHETIC_LOG"
-            "OPENCODE_SYNTHETIC_PROVENANCE=$env:OPENCODE_SYNTHETIC_PROVENANCE"
-            "OPENCODE_SYNTHETIC_EXECUTABLE=$env:OPENCODE_SYNTHETIC_EXECUTABLE"
-          ) | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          Set-Content -LiteralPath $env:OPENCODE_SYNTHETIC_LOG -Value ''
-          $runnerImage = [Environment]::GetEnvironmentVariable('ImageVersion')
-          @(
-            "source_revision=$env:GITHUB_SHA"
-            "runner_os=$env:RUNNER_OS"
-            "runner_arch=$env:RUNNER_ARCH"
-            "runner_image=$runnerImage"
-            'release_url=https://github.com/anomalyco/opencode/releases/download/v1.18.32/opencode-windows-x64-baseline.zip'
-            'version_expected=1.18.32'
-            'archive_sha256_expected=cd852831bd094c2df2eb379eb98bed7a63db7f823a7caf277c732cdac33cbdb6'
-            'executable_sha256_expected=da86eed515d91a7b2d7da9a8230a2bd095f68a89f0cf44eb6a9217bead81fffc'
-            'provider_credentials=none'
-            'upstream_scope=synthetic numeric loopback only'
-            'witness_scope=test-only'
-            'gate_status=initializing'
-          ) | Set-Content -LiteralPath $env:OPENCODE_SYNTHETIC_PROVENANCE
       - uses: actions/setup-go@v5
         with:
           go-version: 1.27.0
           cache-dependency-path: daemon/go.sum
-      - name: Prepare pinned OpenCode release
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $releaseUrl = 'https://github.com/anomalyco/opencode/releases/download/v1.18.32/opencode-windows-x64-baseline.zip'
-          $archive = Join-Path $env:RUNNER_TEMP 'opencode-windows-x64-baseline.zip'
-          $releaseDir = Join-Path $env:RUNNER_TEMP 'opencode-1.18.32'
-          $archiveSha256 = 'cd852831bd094c2df2eb379eb98bed7a63db7f823a7caf277c732cdac33cbdb6'
-          $executableSha256 = 'da86eed515d91a7b2d7da9a8230a2bd095f68a89f0cf44eb6a9217bead81fffc'
-
-          Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_LOG -Value "download_url=$releaseUrl"
-          Invoke-WebRequest -UseBasicParsing -TimeoutSec 120 -Headers @{ 'User-Agent' = 'symmetry-ci' } -Uri $releaseUrl -OutFile $archive
-
-          $actualArchiveSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
-          Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_LOG -Value "archive_sha256_actual=$actualArchiveSha256"
-          Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_PROVENANCE -Value "archive_sha256_actual=$actualArchiveSha256"
-          if ($actualArchiveSha256 -ne $archiveSha256) {
-            throw "OpenCode archive SHA-256 did not equal $archiveSha256; got $actualArchiveSha256"
-          }
-
-          Remove-Item -LiteralPath $releaseDir -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
-          Expand-Archive -LiteralPath $archive -DestinationPath $releaseDir -Force
-          if (-not (Test-Path -LiteralPath $env:OPENCODE_SYNTHETIC_EXECUTABLE -PathType Leaf)) {
-            throw "OpenCode executable was not found at $env:OPENCODE_SYNTHETIC_EXECUTABLE"
-          }
-
-          $actualExecutableSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $env:OPENCODE_SYNTHETIC_EXECUTABLE).Hash.ToLowerInvariant()
-          Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_LOG -Value "executable_sha256_actual=$actualExecutableSha256"
-          Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_PROVENANCE -Value "executable_sha256_actual=$actualExecutableSha256"
-          if ($actualExecutableSha256 -ne $executableSha256) {
-            throw "OpenCode executable SHA-256 did not equal $executableSha256; got $actualExecutableSha256"
-          }
-
-          $versionOutput = & $env:OPENCODE_SYNTHETIC_EXECUTABLE --version 2>&1
-          $versionStatus = $LASTEXITCODE
-          $actualVersion = ($versionOutput -join "`n").Trim()
-          $versionOutput | Tee-Object -FilePath $env:OPENCODE_SYNTHETIC_LOG -Append | Out-Host
-          if ($versionStatus -ne 0 -or $actualVersion -ne '1.18.32') {
-            throw "OpenCode --version did not equal 1.18.32; status=$versionStatus output=$actualVersion"
-          }
-
-          $helpOutput = & $env:OPENCODE_SYNTHETIC_EXECUTABLE serve --help 2>&1
-          $helpStatus = $LASTEXITCODE
-          $helpText = ($helpOutput -join "`n")
-          $helpOutput | Tee-Object -FilePath $env:OPENCODE_SYNTHETIC_LOG -Append | Out-Host
-          if ($helpStatus -ne 0) {
-            throw "OpenCode serve --help failed with status $helpStatus"
-          }
-          foreach ($requiredOption in @('--hostname', '--port', '--pure')) {
-            if ($helpText -notmatch [regex]::Escape($requiredOption)) {
-              throw "OpenCode serve --help did not advertise $requiredOption"
-            }
-          }
-
-          Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_LOG -Value "version_actual=$actualVersion"
-          Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_LOG -Value 'serve_help_required_options=--hostname,--port,--pure'
-          Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_PROVENANCE -Value "version_actual=$actualVersion"
-          Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_PROVENANCE -Value 'serve_help_required_options=--hostname,--port,--pure'
-      - name: Run bounded synthetic native tool integration
+      - name: Require production unsupported admission before execution
         working-directory: daemon
         shell: pwsh
-        env:
-          SYMMETRY_OPENCODE_NATIVE_SYNTHETIC_TOOL: '1'
-          SYMMETRY_OPENCODE_NATIVE_SYNTHETIC_TOOL_EXECUTABLE: ${{ runner.temp }}\opencode-1.18.32\opencode.exe
         run: |
           $ErrorActionPreference = 'Stop'
           $python = (Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
-          $pythonVersion = & $python --version 2>&1
-          if ($LASTEXITCODE -ne 0) { throw "python --version failed with status $LASTEXITCODE" }
-          $pythonVersion | Tee-Object -FilePath $env:OPENCODE_SYNTHETIC_LOG -Append | Out-Host
-
-          $testEvents = Join-Path $env:RUNNER_TEMP 'opencode-native-synthetic-windows.json'
-          $testErrors = Join-Path $env:RUNNER_TEMP 'opencode-native-synthetic-windows.stderr.log'
+          $testEvents = Join-Path $env:RUNNER_TEMP 'opencode-production-unsupported-windows.json'
+          $testErrors = Join-Path $env:RUNNER_TEMP 'opencode-production-unsupported-windows.stderr.log'
           $testProcess = Start-Process -FilePath 'go' -NoNewWindow -Wait -PassThru `
-            -ArgumentList @('test', '-count=1', '-timeout', '180s', '-json', './internal/harness/opencode', '-run', '^TestNativeSyntheticGatewayToolIntegration$') `
+            -ArgumentList @('test', '-count=1', '-timeout', '180s', '-json', './internal/app', '-run', '^TestOpenCodeLegacyAssignmentFailsBeforeRunningWorkspaceAndProcess$') `
             -RedirectStandardOutput $testEvents -RedirectStandardError $testErrors
           $testStatus = $testProcess.ExitCode
-          Get-Content -LiteralPath $testEvents, $testErrors | Tee-Object -FilePath $env:OPENCODE_SYNTHETIC_LOG -Append | Out-Host
-          Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_PROVENANCE -Value "e2e_exit_status=$testStatus"
-
+          Get-Content -LiteralPath $testEvents, $testErrors | Out-Host
           $summaryOutput = & $python ../scripts/ci/assert-go-test-json.py $testEvents `
-            --package github.com/wxxb789/symmetry/daemon/internal/harness/opencode `
-            TestNativeSyntheticGatewayToolIntegration 2>&1
+            --package github.com/wxxb789/symmetry/daemon/internal/app `
+            TestOpenCodeLegacyAssignmentFailsBeforeRunningWorkspaceAndProcess 2>&1
           $summaryStatus = $LASTEXITCODE
-          $summaryOutput | Tee-Object -FilePath $env:OPENCODE_SYNTHETIC_LOG -Append | Out-Host
-          if ($summaryStatus -eq 0) {
-            Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_PROVENANCE -Value 'test_events=run:1;pass:1;fail:0'
-          }
-          else {
-            Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_PROVENANCE -Value "test_events=shared_helper_exit_status:$summaryStatus"
-          }
-          if ($testStatus -ne 0) {
-            Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_PROVENANCE -Value "gate_status=failed: go test exited with status $testStatus"
-            exit $testStatus
-          }
-          if ($summaryStatus -ne 0) {
-            Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_PROVENANCE -Value "gate_status=failed: selective witness validation exited with status $summaryStatus"
-            exit $summaryStatus
-          }
-          Add-Content -LiteralPath $env:OPENCODE_SYNTHETIC_PROVENANCE -Value 'gate_status=passed'
-      - name: Upload OpenCode synthetic Windows log and provenance
+          $summaryOutput | Out-Host
+          if ($testStatus -ne 0) { exit $testStatus }
+          if ($summaryStatus -ne 0) { exit $summaryStatus }
+      - name: Reject failed native executions and no-op interruption as support evidence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python scripts/ci/test-opencode-v2-support-witness.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload production unsupported admission test events
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: opencode-native-synthetic-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          name: opencode-production-unsupported-windows-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: error
           retention-days: 14
           path: |
-            ${{ runner.temp }}/opencode-native-synthetic-windows.log
-            ${{ runner.temp }}/opencode-native-synthetic-windows-provenance.txt
+            ${{ runner.temp }}/opencode-production-unsupported-windows.json
+            ${{ runner.temp }}/opencode-production-unsupported-windows.stderr.log
 
   legacy-route-audit:
     runs-on: ubuntu-latest

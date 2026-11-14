@@ -109,11 +109,12 @@ cleanup_native_services() {
 trap cleanup_native_services EXIT INT TERM
 
 source "$repo/scripts/ci/linux-v2-native-tools.sh"
-linux_v2_fetch_native_tools "$native_root"
+# OpenCode is production-unavailable; no executable or private transport is needed.
+linux_v2_fetch_pi "$native_root"
 # Pi resolves version metadata and runtime assets relative to its public release.
 # Only the digest-verified public tree is exposed; private fixture paths stay private.
 chmod -R a+rX "$pi_unpack/pi"
-chmod 0555 "$pi_executable" "$opencode_executable"
+chmod 0555 "$pi_executable"
 
 source_tree_digest=$(python3 -c 'import json, sys; print(json.load(sys.stdin)["tree_digest"])' <<< "$source_subject_json")
 
@@ -249,10 +250,6 @@ services:
         source: $native_root/opencode-daemon.json
         target: /etc/symmetry/daemon.json
         read_only: true
-      - type: bind
-        source: $opencode_executable
-        target: /usr/local/bin/opencode
-        read_only: true
     restart: "no"
 EOF
 
@@ -357,7 +354,7 @@ pathlib.Path(pi_path).write_text(
     encoding="utf-8",
 )
 pathlib.Path(opencode_path).write_text(
-    json.dumps(config("opencode", "opencode-native", "/usr/local/bin/opencode", "1.18.32", "gpt-4.1-mini", rootless_app_state_dir), separators=(",", ":")),
+    json.dumps(config("opencode", "opencode-native", "/usr/local/bin/opencode", "2.3.0", "gpt-4.1-mini", rootless_app_state_dir), separators=(",", ":")),
     encoding="utf-8",
 )
 PY
@@ -413,7 +410,7 @@ config = {
         "workspace": "native",
         "repository_resource_id": run["repository_resource_id"],
         "harness_kind": "opencode",
-        "harness_version": "1.18.32",
+        "harness_version": "2.3.0",
         "adapter_version": "symmetry-daemon:rootless-compose-witness",
         "adapter_protocol_version": 1,
     },
@@ -450,7 +447,6 @@ docker run --rm --network "$network" --user 65532:65532 \
   --mount "type=bind,source=$owner_fixture,target=/opt/symmetry-owner-test" \
   --mount "type=bind,source=$evidence_source,target=/tmp/rootless-compose-output" \
   --mount "type=bind,source=$pi_unpack/pi,target=/opt/symmetry-pi,readonly" \
-  --mount "type=bind,source=$opencode_executable,target=/usr/local/bin/opencode,readonly" \
   --mount "type=bind,source=$tls_root/tls.crt,target=/opt/symmetry-ci/portal-ca.pem,readonly" \
   --env HOME=/tmp/rootless-compose-home \
   --env GOCACHE=/tmp/rootless-compose-go-cache \
@@ -466,7 +462,6 @@ docker run --rm --network "$network" --user 65532:65532 \
   --env SYMMETRY_PRODUCTION_LINUX_V2_ROOTLESS_COMPOSE_PI_STATE_DIR=/var/lib/sym-pi \
   --env SYMMETRY_PRODUCTION_LINUX_V2_ROOTLESS_COMPOSE_OPENCODE_STATE_DIR=/var/lib/sym-oc \
   --env SYMMETRY_PRODUCTION_LINUX_V2_ROOTLESS_COMPOSE_PI_EXECUTABLE=/opt/symmetry-pi/pi \
-  --env SYMMETRY_PRODUCTION_LINUX_V2_ROOTLESS_COMPOSE_OPENCODE_EXECUTABLE=/usr/local/bin/opencode \
   --env SYMMETRY_PRODUCTION_LINUX_V2_ROOTLESS_COMPOSE_PI_RUNTIME_KEY=rootless-compose-native-pi \
   --env SYMMETRY_PRODUCTION_LINUX_V2_ROOTLESS_COMPOSE_OPENCODE_RUNTIME_KEY=rootless-compose-native-opencode \
   --env SYMMETRY_PRODUCTION_LINUX_V2_ROOTLESS_COMPOSE_WITNESS_OUTPUT_DIR=/tmp/rootless-compose-output \

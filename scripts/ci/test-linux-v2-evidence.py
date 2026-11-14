@@ -160,6 +160,20 @@ def legacy_fixture(name: str, raw_secret: str = "RAW-PRIVATE-SECRET") -> dict:
     return common
 
 
+def compose_refusal(harness: str) -> dict:
+    return {
+        "version": 1, "case": "rootless_compose_native_work_item_refusal", "harness": harness,
+        "native_version": "1.5.2" if harness == "pi" else "", "generation": 1,
+        "probe_returned_err_native_unverified": harness == "pi",
+        "probe_returned_err_harness_unavailable": harness == "opencode",
+        "work_item_id_sha256": "1" * 64, "task_id_sha256": "2" * 64,
+        "run_id_sha256": "3" * 64, "runtime_id_sha256": "4" * 64,
+        "run_state": "failed", "failure_stage": "linux_v2_required", "claim_fence_observed": True,
+        "no_native_task_process": True, "no_task_result": True, "no_process_authority": True,
+        "no_stop_receipt": True, "no_provider_access": True, "non_goal_work_item": True,
+    }
+
+
 class ExporterTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -468,8 +482,11 @@ class ExporterTest(unittest.TestCase):
         source = self.private_dir("source")
         output = self.private_dir("output")
         expected = {}
-        for name in ("rootless-compose-pi.json", "rootless-compose-opencode.json", "TestProductionLinuxV2UnprovisionedHostRefusal.json"):
-            expected[name] = self.write_json(source / name, {"case": name, "status": "refused"})
+        for harness in ("pi", "opencode"):
+            name = f"rootless-compose-{harness}.json"
+            expected[name] = self.write_json(source / name, compose_refusal(harness))
+        name = "TestProductionLinuxV2UnprovisionedHostRefusal.json"
+        expected[name] = self.write_json(source / name, {"case": name, "status": "refused"})
         for case in ("shared", "pi", "opencode", "unprovisioned"):
             self.write_json(source / f"rootless-compose-{case}-diagnostic.json",
                             {"version": 1, "case": case, "outcome": "passed", "stage": "complete"})
@@ -477,6 +494,50 @@ class ExporterTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         for name, data in expected.items():
             self.assertEqual((output / name).read_bytes(), data)
+
+    def test_compose_opencode_refusal_rejects_native_promotion_or_missing_durable_proof(self) -> None:
+        changes = [
+            {"native_version": "1.18.32"}, {"native_version": "2.3.0"}, {"native_version": "unavailable"},
+            {"probe_returned_err_native_unverified": True}, {"probe_returned_err_harness_unavailable": False},
+            {"probe_returned_err_harness_unavailable": 1}, {"transport_verified": True},
+            {"run_state": "completed"}, {"failure_stage": "capability_rejection"},
+            {"generation": 0}, {"generation": True}, {"run_id_sha256": "private-run"},
+        ]
+        for key in ("claim_fence_observed", "no_native_task_process", "no_task_result", "no_process_authority",
+                    "no_stop_receipt", "no_provider_access", "non_goal_work_item"):
+            changes.extend(({key: False}, {key: 1}))
+        for index, change in enumerate(changes):
+            with self.subTest(change=change):
+                source = self.private_dir(f"source-{index}")
+                output = self.private_dir(f"output-{index}")
+                path = source / "rootless-compose-opencode.json"
+                original = self.write_json(path, compose_refusal("opencode") | change)
+                result = self.run_export("compose", str(output), "1" * 40, "failed", "--witness-root", str(source))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((output / path.name).exists())
+                self.assertEqual(path.read_bytes(), original)
+
+    def test_compose_refusal_requires_exact_fields_and_keeps_pi_transport_evidence(self) -> None:
+        for index, (harness, change, omit) in enumerate((
+            ("pi", {"native_version": ""}, None),
+            ("pi", {"probe_returned_err_native_unverified": False}, None),
+            ("pi", {"probe_returned_err_harness_unavailable": True}, None),
+            ("opencode", {}, "no_process_authority"),
+            ("opencode", {}, "probe_returned_err_harness_unavailable"),
+            ("opencode", {"harness": "pi"}, None),
+            ("opencode", {"status": "accepted"}, None),
+        )):
+            with self.subTest(harness=harness, change=change, omit=omit):
+                source = self.private_dir(f"source-{index}")
+                output = self.private_dir(f"output-{index}")
+                value = compose_refusal(harness) | change
+                if omit:
+                    del value[omit]
+                path = source / f"rootless-compose-{harness}.json"
+                self.write_json(path, value)
+                result = self.run_export("compose", str(output), "1" * 40, "failed", "--witness-root", str(source))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((output / path.name).exists())
 
     def test_compose_failure_diagnostic_exports_without_success_receipts(self) -> None:
         for index, (case, stage, observation) in enumerate((
@@ -548,8 +609,10 @@ class ExporterTest(unittest.TestCase):
     def test_compose_failed_diagnostic_prevents_passed_manifest(self) -> None:
         source = self.private_dir("source")
         output = self.private_dir("output")
-        for name in ("rootless-compose-pi.json", "rootless-compose-opencode.json", "TestProductionLinuxV2UnprovisionedHostRefusal.json"):
-            self.write_json(source / name, {"case": name, "status": "refused"})
+        for harness in ("pi", "opencode"):
+            self.write_json(source / f"rootless-compose-{harness}.json", compose_refusal(harness))
+        name = "TestProductionLinuxV2UnprovisionedHostRefusal.json"
+        self.write_json(source / name, {"case": name, "status": "refused"})
         for case in ("shared", "pi", "opencode", "unprovisioned"):
             value = {"version": 1, "case": case, "outcome": "passed", "stage": "complete"}
             if case == "pi":

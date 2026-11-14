@@ -25,7 +25,7 @@ import (
 
 const (
 	DefaultExecutable       = "opencode"
-	TestedVersion           = "1.18.32"
+	TestedVersion           = "2.3.0"
 	defaultHealthRetryDelay = 50 * time.Millisecond
 	defaultTerminationGrace = 5 * time.Second
 	probeTimeout            = time.Second
@@ -38,8 +38,8 @@ var (
 	errSessionClosed      = errors.New("opencode native session is closed")
 	errTurnUnverified     = fmt.Errorf("%w: OpenCode terminal event semantics are unverified", harness.ErrNativeUnverified)
 	errNilNativeProcess   = errors.New("opencode native process starter returned a nil process")
-	versionPattern        = regexp.MustCompile(`\b([0-9]+\.[0-9]+\.[0-9]+)\b`)
-	unsupportedOperations = "OpenCode native lifecycle behavior is unverified"
+	versionPattern        = regexp.MustCompile(`^(?:opencode v)?([0-9]+\.[0-9]+\.[0-9]+)$`)
+	unsupportedOperations = "OpenCode V2 2.3.0 native terminal and recovery behavior lacks exact-binary Windows and native Linux evidence; version and serve help do not establish native support"
 	listeningLinePattern  = regexp.MustCompile(`^opencode server listening on http://127\.0\.0\.1:([1-9][0-9]{0,4})$`)
 )
 
@@ -201,9 +201,9 @@ func (owner *linuxV2PeerOwner) Close() error {
 	return peer.Close()
 }
 
-// Adapter launches an owned, local OpenCode serve process. It is intentionally
-// not usable through capability admission yet: probe and all terminal behavior
-// remain fail-closed until a real lifecycle capture verifies them.
+// Adapter retains the private OpenCode transport prototype for ownership and
+// decoder research. It is not the production adapter: the current V2 pin has
+// no verified native terminal or recovery contract.
 type Adapter struct {
 	executable      string
 	runner          CommandRunner
@@ -215,8 +215,8 @@ type Adapter struct {
 	terminationWait time.Duration
 }
 
-// NewAdapter creates the private OpenCode transport adapter. The adapter must
-// still be explicitly composed at the application root after lifecycle proof.
+// NewAdapter creates the private OpenCode transport prototype. Production uses
+// harness.NewOpenCodeAdapter until exact-binary lifecycle evidence is complete.
 func NewAdapter(executables ...string) *Adapter {
 	executable := DefaultExecutable
 	if len(executables) > 0 && strings.TrimSpace(executables[0]) != "" {
@@ -225,8 +225,8 @@ func NewAdapter(executables ...string) *Adapter {
 	return newAdapter(executable, nil, runnerProcessStarter, newAPI, newCredentials, ownedPeerVerifier)
 }
 
-// NewAdapterWithRunner supplies deterministic executable probing while keeping
-// production process supervision unchanged.
+// NewAdapterWithRunner supplies deterministic executable probing without
+// promoting the private session transport to production support.
 func NewAdapterWithRunner(executable string, runner CommandRunner) *Adapter {
 	if strings.TrimSpace(executable) == "" {
 		executable = DefaultExecutable
@@ -300,7 +300,7 @@ func (adapter *Adapter) Probe(ctx context.Context) (harness.Capabilities, error)
 }
 
 func parseVersion(output string) string {
-	match := versionPattern.FindStringSubmatch(output)
+	match := versionPattern.FindStringSubmatch(strings.TrimSpace(output))
 	if len(match) == 2 {
 		return match[1]
 	}
@@ -311,8 +311,7 @@ func hasServeHelp(output string) bool {
 	value := strings.ToLower(output)
 	return strings.Contains(value, "opencode serve") &&
 		strings.Contains(value, "--hostname") &&
-		strings.Contains(value, "--port") &&
-		strings.Contains(value, "--pure")
+		strings.Contains(value, "--port")
 }
 
 // Start launches only the daemon-owned HTTP server. It records a process

@@ -17,6 +17,9 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
 )
 
+// Historical V1 diagnostics never establish support for the current V2 pin.
+const historicalNativeTestVersion = "1.18.32"
+
 const (
 	nativeSmokeEnabledEnv    = "SYMMETRY_OPENCODE_NATIVE_SMOKE"
 	nativeSmokeExecutableEnv = "SYMMETRY_OPENCODE_NATIVE_SMOKE_EXECUTABLE"
@@ -34,7 +37,7 @@ func TestNativeTransportOpenAndClose(t *testing.T) {
 
 	executable := strings.TrimSpace(os.Getenv(nativeSmokeExecutableEnv))
 	if executable == "" {
-		t.Fatalf("%s must name the absolute OpenCode %s executable", nativeSmokeExecutableEnv, TestedVersion)
+		t.Fatalf("%s must name the absolute OpenCode %s executable", nativeSmokeExecutableEnv, historicalNativeTestVersion)
 	}
 	if !filepath.IsAbs(executable) {
 		t.Fatalf("%s must be absolute", nativeSmokeExecutableEnv)
@@ -63,10 +66,10 @@ func TestNativeTransportOpenAndClose(t *testing.T) {
 	if err != nil {
 		t.Fatal("run native OpenCode version check failed")
 	}
-	if strings.TrimSpace(string(versionOutput)) != TestedVersion {
-		t.Fatal("native OpenCode version did not equal the tested version")
+	if strings.TrimSpace(string(versionOutput)) != historicalNativeTestVersion {
+		t.Fatal("native OpenCode version did not equal the historical version")
 	}
-	t.Logf("native OpenCode transport smoke: platform=%s version=%s", runtime.GOOS, TestedVersion)
+	t.Logf("historical native OpenCode transport smoke: platform=%s version=%s", runtime.GOOS, historicalNativeTestVersion)
 
 	var eventMutex sync.Mutex
 	eventCount := 0

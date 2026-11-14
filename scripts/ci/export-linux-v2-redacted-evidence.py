@@ -285,6 +285,39 @@ def reject_unknown(document: dict, allowed: set[str], context: str) -> None:
         fail(f"legacy {context} contains unknown fields: {', '.join(sorted(unknown))}")
 
 
+COMPOSE_REFUSAL_PREDICATES = (
+    "claim_fence_observed", "no_native_task_process", "no_task_result", "no_process_authority",
+    "no_stop_receipt", "no_provider_access", "non_goal_work_item",
+)
+COMPOSE_REFUSAL_HASHES = ("work_item_id_sha256", "task_id_sha256", "run_id_sha256", "runtime_id_sha256")
+
+
+def validate_compose_refusal(document: dict, harness: str) -> None:
+    required = {
+        "version", "case", "harness", "native_version", "generation", "run_state", "failure_stage",
+        "probe_returned_err_native_unverified", "probe_returned_err_harness_unavailable",
+        *COMPOSE_REFUSAL_PREDICATES, *COMPOSE_REFUSAL_HASHES,
+    }
+    if set(document) != required:
+        fail("Compose refusal contains unexpected or missing fields")
+    if (type(document["version"]) is not int or document["version"] != 1 or
+            document["case"] != "rootless_compose_native_work_item_refusal" or document["harness"] != harness):
+        fail("Compose refusal version, case or harness does not match its fixed filename")
+    native_version = "1.5.2" if harness == "pi" else ""
+    if (document["native_version"] != native_version or
+            document["probe_returned_err_native_unverified"] is not (harness == "pi") or
+            document["probe_returned_err_harness_unavailable"] is not (harness == "opencode")):
+        fail("Compose refusal does not match the production adapter availability projection")
+    if (type(document["generation"]) is not int or not 0 < document["generation"] <= (1 << 63) - 1 or
+            document["run_state"] != "failed" or document["failure_stage"] != "linux_v2_required"):
+        fail("Compose refusal does not retain the exact durable failed Run boundary")
+    for key in COMPOSE_REFUSAL_HASHES:
+        if not isinstance(document[key], str) or not re.fullmatch(r"[a-f0-9]{64}", document[key]):
+            fail("Compose refusal does not retain a redacted exact WorkItem/Run/runtime identity")
+    if any(document[key] is not True for key in COMPOSE_REFUSAL_PREDICATES):
+        fail("Compose refusal is missing a durable claim or no-process-authority predicate")
+
+
 def validate_compose_diagnostic(document: dict, case: str) -> None:
     required = {"version", "case", "outcome", "stage"}
     if not required <= set(document) or set(document) - required - {"observation"}:
@@ -838,6 +871,9 @@ def main() -> int:
                 validate_compose_diagnostic(document, COMPOSE_DIAGNOSTICS[target])
                 if document["outcome"] == "failed":
                     failed_diagnostics.append(target)
+            elif arguments.mode == "compose" and target in ("rootless-compose-pi.json", "rootless-compose-opencode.json"):
+                data, document = read_regular(source, secret_values)
+                validate_compose_refusal(document, "pi" if target == "rootless-compose-pi.json" else "opencode")
             else:
                 data, _ = read_regular(source, secret_values)
         except FileNotFoundError:

@@ -12,7 +12,7 @@ Do not require native CLIs to speak the existing fake-agent JSON dialect.
 | Pi | native `--mode rpc`, JSONL stdin/stdout; `agent_settled` is the settled boundary; promotion is bound to the exact pi `1.5.2` Windows blob (`sha256:40a062be…`) | prompt/steer/abort/session RPC mapping; no inferred OS pause; promoted operations are start, events, cancel and retained resume, projected under implementation identity `pi-rpc-v1` |
 | Oh My Pi (OMP) | native `omp --mode rpc`, custom JSONL with `ready` frame and protocol-version negotiation; `session_settled` is the settled boundary | prompt/steer/abort/session RPC mapping; never inherit Pi decoder or capability claims |
 | OmO (`oh-my-openagent`) | native `omo --mode rpc`, senpi/Pi-derived JSONL; the `omo app-server` Codex protocol is not assumed equivalent | prompt/steer/abort/session RPC mapping; probe the exact binary and protocol |
-| OpenCode V2 | daemon-owned loopback `opencode serve`, V2 `/api/...` HTTP API + SSE | target for 0006g; the current V1-era adapter remains fail-closed and promotes no V2 capability; API-version-verified permissions must be proved against 2.2.7; V1.x is skipped |
+| OpenCode V2 | daemon-owned loopback `opencode serve`, V2 `/api/...` HTTP API + SSE | 2.3.0 explicitly unsupported under 0006g; production uses the unavailable adapter and refuses both Goal and legacy assignments before workspace/process effects; historical private transport diagnostics promote no capability; V1.x is skipped |
 
 Primary references and installed binaries checked 2026-11-11:
 [Codex app-server](https://developers.openai.com/codex/app-server/),
@@ -175,6 +175,18 @@ OpenCode server binds loopback, uses per-daemon authentication where supported,
 and is owned/terminated by the daemon. If a version cannot isolate/authenticate
 that server adequately for the deployment, do not mark it supported there.
 Never expose the native server as a public Symmetry API. Keep credentials local.
+
+The [2.3.0 decision evidence](../../daemon/internal/harness/testdata/opencode/2.3.0/README.md)
+records actual Windows `session.execution.failed` events and matching
+`outcome=failed` readbacks after the approved relay rejected authentication.
+It does not establish successful execution, active interruption, continuation,
+provider-response truncation, billable usage or retained-session recovery.
+The owner-pinned blob is a Windows PE; executing it from Ubuntu through WSL
+interop is not native Linux evidence. Those missing classes prevent promotion;
+the decision does not claim that V2 lacks native execution-terminal events.
+Authenticated model discovery exposes expanded provider settings, so its raw
+response must never enter a log, receipt or durable state. The evidence witness
+redacts that response in memory and scans its own isolated state before writing.
 
 ## Failure vocabulary and validation
 
