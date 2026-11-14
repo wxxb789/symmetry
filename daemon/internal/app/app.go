@@ -3582,7 +3582,7 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 	if !admissionPresent && daemon.config.Runtime.HarnessKind == config.RuntimeHarnessOpenCode {
 		legacyLaunchErr = daemon.harnessCapabilities.Require(harness.CapabilityStart, harness.CapabilityEvents, harness.CapabilityCancel)
 	}
-	goalAdmissionRequired := linuxNativeRuntimeRequiresGoalAdmission(daemon.config.Runtime.HarnessKind) || daemon.config.Runtime.HarnessKind == config.RuntimeHarnessOMP
+	goalAdmissionRequired := linuxNativeRuntimeRequiresGoalAdmission(daemon.config.Runtime.HarnessKind) || daemon.config.Runtime.HarnessKind == config.RuntimeHarnessOMP || daemon.config.Runtime.HarnessKind == config.RuntimeHarnessOmO
 	daemon.mu.Lock()
 	active := daemon.running[key]
 	cancelCommandID := ""
@@ -3629,8 +3629,8 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		daemon.waitForRunWithContext(ctx, key)
 		return
 	}
-	if daemon.config.Runtime.HarnessKind == config.RuntimeHarnessOMP {
-		daemon.queueFailure(ctx, key, "goal_admission_required", taskResultFailure(protocol.TaskResultReasonUnsupportedVersion, errors.New("OMP runtime requires a symmetry.admission.v1 Goal admission")))
+	if daemon.config.Runtime.HarnessKind == config.RuntimeHarnessOMP || daemon.config.Runtime.HarnessKind == config.RuntimeHarnessOmO {
+		daemon.queueFailure(ctx, key, "goal_admission_required", taskResultFailure(protocol.TaskResultReasonUnsupportedVersion, errors.New("OMP/OmO runtime requires a symmetry.admission.v1 Goal admission")))
 		return
 	}
 	if linuxNativeRuntimeRequiresGoalAdmission(daemon.config.Runtime.HarnessKind) {

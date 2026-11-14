@@ -4607,50 +4607,63 @@ func TestGoalAdmissionLeavesProviderAccessNilForNativeHarness(t *testing.T) {
 	app.workers.Wait()
 }
 
-func TestOMPRejectsLegacyAssignmentBeforeRunningWorkspaceOrRawStart(t *testing.T) {
-	admission, present, err := parseAdmissionInput(validAdmissionInput())
-	if err != nil || !present {
-		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
-	}
-	capabilities := harness.UnsupportedCapabilities(harness.KindOMP, "successful native repository turn and control acceptance remain unverified")
-	capabilities.NativeVersion = omp.TestedVersion
-	capabilities.ImplementationVersion = omp.ImplementationVersion
-	capabilities.ProtocolVersion = 2
-	capabilities.VersionKnown, capabilities.TransportVerified = true, true
-	app, store, session, client := nativeAdmissionDaemonForHarness(t, admission, validNativeTaskResult(t, admission), nil, harness.KindOMP, config.RuntimeHarnessOMP, capabilities)
-	defer store.Close()
-	app.log = slog.New(slog.NewJSONHandler(io.Discard, nil))
-	client.work.Input = json.RawMessage(`{}`)
-	starts := 0
-	app.start = func(context.Context, execution.Invocation, execution.Sink) (Process, error) {
-		starts++
-		return nil, errors.New("OMP must never use the legacy raw starter")
-	}
+func TestOMPAndOmORejectLegacyAssignmentBeforeRunningWorkspaceOrRawStart(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		kind       harness.Kind
+		configKind string
+		native     struct{ version, implementation string }
+		protocol   int
+	}{
+		{name: "omp", kind: harness.KindOMP, configKind: config.RuntimeHarnessOMP, native: struct{ version, implementation string }{omp.TestedVersion, omp.ImplementationVersion}, protocol: 2},
+		{name: "omo", kind: harness.KindOmO, configKind: config.RuntimeHarnessOmO, native: struct{ version, implementation string }{omo.TestedVersion, omo.ImplementationVersion}, protocol: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			admission, present, err := parseAdmissionInput(validAdmissionInput())
+			if err != nil || !present {
+				t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+			}
+			capabilities := harness.UnsupportedCapabilities(test.kind, "successful native repository turn and control acceptance remain unverified")
+			capabilities.NativeVersion = test.native.version
+			capabilities.ImplementationVersion = test.native.implementation
+			capabilities.ProtocolVersion = test.protocol
+			capabilities.VersionKnown, capabilities.TransportVerified = true, true
+			app, store, session, client := nativeAdmissionDaemonForHarness(t, admission, validNativeTaskResult(t, admission), nil, test.kind, test.configKind, capabilities)
+			defer store.Close()
+			app.log = slog.New(slog.NewJSONHandler(io.Discard, nil))
+			client.work.Input = json.RawMessage(`{}`)
+			starts := 0
+			app.start = func(context.Context, execution.Invocation, execution.Sink) (Process, error) {
+				starts++
+				return nil, errors.New(string(test.kind) + " must never use the legacy raw starter")
+			}
 
-	key := state.RunKey{RunID: "run-1", Generation: 1}
-	app.startAssignment(context.Background(), protocol.Assignment{RunID: key.RunID, Generation: key.Generation, Work: client.work})
-	app.workers.Wait()
-	workspaceService := app.workspace.(*fakeWorkspace)
-	if starts != 0 || len(session.callsSnapshot()) != 0 || workspaceService.prepareCalls != 0 || workspaceService.recoverCalls != 0 {
-		t.Fatalf("legacy OMP assignment crossed an execution boundary: starts=%d native=%#v workspace=%#v", starts, session.callsSnapshot(), workspaceService)
-	}
-	journal, err := store.LoadJournal(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if journal.WorkspacePath != "" || journal.WorkspaceRecoveryRequired || journal.TerminalState != "failed" || len(journal.PendingTransitions) != 1 {
-		t.Fatalf("legacy OMP assignment was not rejected before running or workspace preparation: %#v", journal)
-	}
-	var payload map[string]string
-	if err := json.Unmarshal(journal.PendingTransitions[0].Payload, &payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload["stage"] != "goal_admission_required" || payload["reason"] != string(protocol.TaskResultReasonUnsupportedVersion) {
-		t.Fatalf("legacy OMP rejection = %#v", payload)
-	}
-	sessions, err := store.ListGoalSessions()
-	if err != nil || len(sessions) != 0 {
-		t.Fatalf("legacy OMP assignment persisted a native launch intent: sessions=%#v error=%v", sessions, err)
+			key := state.RunKey{RunID: "run-1", Generation: 1}
+			app.startAssignment(context.Background(), protocol.Assignment{RunID: key.RunID, Generation: key.Generation, Work: client.work})
+			app.workers.Wait()
+			workspaceService := app.workspace.(*fakeWorkspace)
+			if starts != 0 || len(session.callsSnapshot()) != 0 || workspaceService.prepareCalls != 0 || workspaceService.recoverCalls != 0 {
+				t.Fatalf("legacy %s assignment crossed an execution boundary: starts=%d native=%#v workspace=%#v", test.kind, starts, session.callsSnapshot(), workspaceService)
+			}
+			journal, err := store.LoadJournal(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if journal.WorkspacePath != "" || journal.WorkspaceRecoveryRequired || journal.TerminalState != "failed" || len(journal.PendingTransitions) != 1 {
+				t.Fatalf("legacy %s assignment was not rejected before running or workspace preparation: %#v", test.kind, journal)
+			}
+			var payload map[string]string
+			if err := json.Unmarshal(journal.PendingTransitions[0].Payload, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload["stage"] != "goal_admission_required" || payload["reason"] != string(protocol.TaskResultReasonUnsupportedVersion) {
+				t.Fatalf("legacy %s rejection = %#v", test.kind, payload)
+			}
+			sessions, err := store.ListGoalSessions()
+			if err != nil || len(sessions) != 0 {
+				t.Fatalf("legacy %s assignment persisted a native launch intent: sessions=%#v error=%v", test.kind, sessions, err)
+			}
+		})
 	}
 }
 

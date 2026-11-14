@@ -1269,7 +1269,7 @@ defmodule SymmetryControl.Orchestration do
             runtime.workspace == task.workspace and
             fragment("? @> ?", runtime.capabilities, task.required_capabilities),
         where: task.state == "queued" and is_nil(task.goal_id),
-        where: is_nil(runtime.harness_kind) or runtime.harness_kind != "omp",
+        where: is_nil(runtime.harness_kind) or runtime.harness_kind not in ["omp", "omo"],
         where:
           fragment(
             "?->>'supervisory_control' IS DISTINCT FROM 'true'",
@@ -1956,7 +1956,7 @@ defmodule SymmetryControl.Orchestration do
       not is_nil(task.goal_id) and not goal_runtime_matches?(runtime, task, work_item) ->
         rollback(:ownership_lost)
 
-      is_nil(task.goal_id) and runtime.harness_kind == "omp" ->
+      is_nil(task.goal_id) and runtime.harness_kind in ["omp", "omo"] ->
         rollback(:ownership_lost)
 
       run.runtime_id != request_runtime_id or runtime.id != request_runtime_id ->
