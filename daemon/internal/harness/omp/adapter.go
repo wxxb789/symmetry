@@ -619,8 +619,14 @@ func (session *nativeSession) bindState(data map[string]json.RawMessage) error {
 	if err != nil {
 		return err
 	}
-	if session.resume != nil && (id != session.resume.NativeSessionID || filepath.Clean(filename) != filepath.Clean(session.resume.NativeSessionFilename) || resolved != filepath.Clean(session.resume.NativeSessionFilename)) {
-		return fmt.Errorf("%w: returned native identity differs", ErrResumeRejected)
+	if session.resume != nil {
+		retained, err := resumeFilename(session.resume, session.directory)
+		if err != nil {
+			return err
+		}
+		if id != session.resume.NativeSessionID || resolved != retained {
+			return fmt.Errorf("%w: returned native identity differs", ErrResumeRejected)
+		}
 	}
 	session.handle = harness.NativeSessionHandle{ID: id, Filename: resolved}
 	return nil

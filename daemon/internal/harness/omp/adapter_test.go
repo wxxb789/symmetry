@@ -567,10 +567,14 @@ func TestResumeRejectsReturnedIdentityMismatch(t *testing.T) {
 func TestRetainedResumeBindsExactIdleHandle(t *testing.T) {
 	resume := &harness.ResumeHandle{NativeVersion: TestedVersion, NativeSessionID: "native-session"}
 	session, process := testSession(t, nil, nil, resume)
+	canonical, err := filepath.EvalSymlinks(resume.NativeSessionFilename)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	handle, err := session.Open(ctx)
-	if err != nil || handle.ID != resume.NativeSessionID || handle.Filename != resume.NativeSessionFilename {
+	if err != nil || handle.ID != resume.NativeSessionID || handle.Filename != canonical {
 		t.Fatalf("Open=%+v, %v", handle, err)
 	}
 	select {
@@ -584,6 +588,61 @@ func TestRetainedResumeBindsExactIdleHandle(t *testing.T) {
 	result, err := session.Wait(ctx)
 	if err != nil || result.Kind != harness.ResultUnknown || result.Semantic != nil {
 		t.Fatalf("idle retained transport cleanup returned %+v, %v", result, err)
+	}
+}
+
+func TestRetainedResumeRevalidatesBothIdentityPathsAtOpen(t *testing.T) {
+	for _, scenario := range []string{"same-file", "different-file", "different-id", "missing-returned", "missing-retained", "outside-returned", "outside-retained", "directory-returned", "directory-retained"} {
+		t.Run(scenario, func(t *testing.T) {
+			resume := &harness.ResumeHandle{NativeVersion: TestedVersion, NativeSessionID: "native-session"}
+			session, process := testSession(t, nil, nil, resume)
+			canonical, err := filepath.EvalSymlinks(resume.NativeSessionFilename)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch scenario {
+			case "different-file":
+				process.filename = filepath.Join(session.directory, "other-session.jsonl")
+				if err := os.WriteFile(process.filename, []byte("other session"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "different-id":
+				process.sessionID = "other-session"
+			case "missing-returned":
+				process.filename = filepath.Join(session.directory, "missing.jsonl")
+			case "missing-retained":
+				resume.NativeSessionFilename = filepath.Join(session.directory, "missing.jsonl")
+			case "outside-returned", "outside-retained":
+				outside := filepath.Join(t.TempDir(), "outside.jsonl")
+				if err := os.WriteFile(outside, []byte("outside session"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if scenario == "outside-returned" {
+					process.filename = outside
+				} else {
+					resume.NativeSessionFilename = outside
+				}
+			case "directory-returned":
+				process.filename = session.directory
+			case "directory-retained":
+				resume.NativeSessionFilename = session.directory
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), operationTimeout)
+			defer cancel()
+			handle, err := session.Open(ctx)
+			if scenario == "same-file" {
+				if err != nil || handle.ID != resume.NativeSessionID || handle.Filename != canonical {
+					t.Fatalf("Open=%+v, %v; want the canonical retained identity", handle, err)
+				}
+			} else if !errors.Is(err, ErrResumeRejected) || handle.ID != "" || handle.Filename != "" {
+				t.Fatalf("Open=%+v, %v; want retained identity rejection without a handle", handle, err)
+			}
+			select {
+			case <-process.promptSeen:
+				t.Fatal("identity validation submitted an unadmitted prompt")
+			default:
+			}
+		})
 	}
 }
 

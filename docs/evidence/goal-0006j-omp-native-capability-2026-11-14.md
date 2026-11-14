@@ -275,3 +275,92 @@ The baseline counts were recomputed from
 inventory, not execution evidence. Skips remain unavailable acceptance evidence.
 All reproduction overlays and task-owned backup sources were removed. No commit,
 push or history rewrite was performed.
+
+### Second repair round — Windows retained paths and OMP registration
+
+This round repairs F1 and F2 from
+`.tmp/gdd-0006j-fix-findings-r2.md` on the local working tree based on
+`1de506cfe4605e1ac2e941e2f7e0f6e288c8d785`. The first-round numbers above are
+historical observations, not results for this round.
+
+- F1: `bindState` revalidates the returned filename with `sessionFilename` and
+  the retained filename with `resumeFilename`, using the same configured
+  directory, before comparing their canonical paths and exact native ID.
+  Both files must still exist, be regular files and remain within that
+  directory. A spelling difference is not a different retained identity.
+  The idle-handle assertion independently resolves the expected canonical
+  filename and retains its no-prompt and nonsemantic idle-cleanup assertions.
+- F2: `validateRuntimeMetadata` accepts the separate `omp` harness kind on
+  `SessionRegistrationRequest.Validate`'s outbound registration path.
+  Registration remains distinct from capability promotion: the tested
+  `18.20.0 / omp-rpc-v2 / protocol 2` projection advertises no executable
+  operation, no provider access, unsupported guidance/pause and unknown usage.
+  Unknown kinds, mismatched metadata and invalid capability claims remain
+  rejected. The unrelated `AttachHarnessSession` admission path is unchanged.
+
+The new Windows regression obtained real 8.3 directory aliases with
+`windows.GetShortPathName`; the short names resolved to the same long retained
+file. Before the production fix, both returned-short and returned-canonical
+cases failed at `Open` with `OMP resume rejected: returned native identity
+differs` (exit 1). The contained-file/ID/missing-file/outside-directory/nonregular
+negative matrix did not depend on the host's `TEMP` spelling. Before F2's
+allowlist fix, the complete registration validator and HTTP client positive
+cases both failed with `harness_kind "omp" is invalid` (each command exit 1);
+unknown-kind rejection passed and sent no HTTP request.
+
+Raw fail-before records are `.tmp/gdd-0006j-r2-f1-before.jsonl`,
+`.tmp/gdd-0006j-r2-f2-protocol-before.jsonl` and
+`.tmp/gdd-0006j-r2-f2-control-before.jsonl`, with matching `.exit` receipts.
+No source overlay or temporary reproduction program was required.
+
+No measured runtime consumer was found via the scoped measurement/benchmark
+search of `daemon/internal/harness/omp`, `daemon/internal/app` and `scripts`,
+or the existing Goal 0006j evidence receipt. Native blob sizes, prices and
+historical provider observations remain unchanged. This round issued no
+native generation or provider request and promoted no native capability.
+
+#### Second-round gates and counts
+
+All commands below ran locally with Go `1.27.4 windows/amd64` and `daemon/`
+as the working directory. `-json` only records test events; package selection,
+`-count=1` and the requested timeout are unchanged.
+
+| Gate | Exit | Actual result |
+| --- | ---: | --- |
+| `TMP="$TEMP" mise exec go@1.27.4 -- go test -list '^Test' ./internal/app/... ./internal/harness/... ./internal/protocol/...` before edits | 0 | 1,050 top-level tests inventoried; not a baseline test execution. |
+| `TMP="$TEMP" mise exec go@1.27.4 -- go test -json -count=1 -timeout 600s ./internal/app/... ./internal/harness/... ./internal/protocol/...` | 0 | All eight packages passed. 1,022 top-level passes, 1,377 subtest passes, 32 top-level skips, no failures. App 124.540 s; OMP 3.662 s. |
+| `TMP="$TEMP" mise exec go@1.27.4 -- go test -json -count=1 -timeout 60s ./internal/control -run '^TestRegisterSessionUnpromotedOMPBoundary$'` | 0 | One top-level test and both subtests passed. OMP sent exactly one validated HTTP registration; unknown kind sent none. |
+| `mise exec go@1.27.4 -- gofmt -l internal/harness/omp/adapter.go internal/harness/omp/adapter_test.go internal/harness/omp/adapter_windows_test.go internal/protocol/protocol.go internal/protocol/registration_capabilities_test.go internal/control/client_test.go` | 0 | No unformatted files. |
+| CI `daemon-windows`: `go test -count=1 -timeout 180s ./...` | Not run | This repair is uncommitted and unpublished under the explicit no-commit/no-push instruction. CI cannot test this local source; the Windows CI job remains the final oracle for the original runner-TEMP symptom. No repaired-tree CI success is claimed. |
+| Runtime measurement harness | Not applicable | No measured consumer found in the scoped search; no measurement number was changed. |
+
+Both explicit 8.3 positive subtests passed in the final gate without a skip.
+The Open identity/path negative matrix and all existing tests in the requested
+package gate also passed. The 32 skipped opt-in/helper tests remain unavailable
+acceptance evidence; this round did not run native credentialed acceptance.
+
+| Test-count population | Before this round | After this round |
+| --- | ---: | ---: |
+| Requested package gate: top-level total | 1,050 | 1,054 |
+| OMP package: top-level total | 39 | 41 |
+| Protocol package: top-level total | 52 | 54 |
+| Other six requested packages: top-level total | 959 | 959 |
+| Requested package gate: executed pass events including subtests | Not executed | 2,399 |
+| Requested package gate: terminal events including skips | Not executed | 2,431 |
+
+The additional HTTP client regression is outside the requested eight-package
+population: one new top-level test with two subtests, all passing. Before counts
+come from `.tmp/gdd-0006j-r2-tests-before.txt`; after counts come from
+`.tmp/gdd-0006j-r2-go-gate.jsonl`. HTTP and formatting records are
+`.tmp/gdd-0006j-r2-control-gate.jsonl` and `.tmp/gdd-0006j-r2-gofmt.txt`;
+each final gate has a matching `.exit` receipt. These are the single-source
+second-round numbers, not replacements for differently scoped historical runs.
+
+Scoped simplification retained the existing `resumeFilename` validator because
+it owns compatibility, retained-file existence and directory provenance; no
+production abstraction was added. Independent read-only F1 review found no
+P0-P3 defect in the repaired path or its tests. Its source review did not run
+gates or cover F2. It also did not establish atomic protection against file
+replacement or a new Open-level symlink/junction-escape scenario. The parent
+verified F2 through the full request validator and actual HTTP client boundary.
+No commit, push or history rewrite was performed.
