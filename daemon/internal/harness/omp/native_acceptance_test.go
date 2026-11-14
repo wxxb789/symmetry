@@ -43,8 +43,10 @@ const (
 	nativeAcceptanceHandoffArtifact   = "omp-native-handoff.txt"
 	nativeAcceptanceCancelledArtifact = "omp-native-cancelled.txt"
 	nativeAcceptanceToolTimeout       = 45 * time.Second
-	// The owner's current Goal 0006j ruling cannot be raised by a test opt-in.
-	nativeAcceptancePermittedSpendMicrousd uint64 = 0
+	// Owner authorization 2026-11-14: relay spend for real native acceptance
+	// turns is approved, self-capped at US$2 per goal. Generation still needs an
+	// explicit positive SYMMETRY_OMP_OWNER_SPEND_MICROUSD that cannot exceed it.
+	nativeAcceptancePermittedSpendMicrousd uint64 = 2_000_000
 )
 
 // TestNativeAcceptance submits real, bounded repository turns to the approved
@@ -324,15 +326,22 @@ func nativeAcceptanceRequirePromptSpend(t *testing.T, prompts ...string) {
 		for _, prompt := range prompts {
 			t.Logf("native prompt %s skipped for lack of owner-spend authorization: %v", prompt, err)
 		}
-		t.Skip("no native generation: owner-approved spend is zero and no verified hard-zero route exists")
+		t.Skip("no native generation: no valid owner-spend authorization was supplied")
 	}
 }
 
 func TestNativeAcceptancePromptSpendDecision(t *testing.T) {
-	for _, authorization := range []string{"", "0", "1", "1000000", "-1", "true", "18446744073709551616"} {
-		t.Run("authorization="+authorization, func(t *testing.T) {
+	for _, authorization := range []string{"", "0", "-1", "true", "18446744073709551616", "2000001", "999999999999"} {
+		t.Run("refused/"+authorization, func(t *testing.T) {
 			if err := nativeAcceptancePromptSpendDecision(authorization); err == nil {
-				t.Fatal("native generation authorized despite the owner's zero-spend ruling")
+				t.Fatal("native generation authorized without a valid owner-spend authorization")
+			}
+		})
+	}
+	for _, authorization := range []string{"1", "2000000"} {
+		t.Run("authorized/"+authorization, func(t *testing.T) {
+			if err := nativeAcceptancePromptSpendDecision(authorization); err != nil {
+				t.Fatalf("owner-authorized spend %s refused: %v", authorization, err)
 			}
 		})
 	}
