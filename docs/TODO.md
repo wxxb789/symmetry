@@ -17,3 +17,10 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       (`SymmetryControl.Goals.GoalExternalWait`). The 0006h focused Control run
       reported the unused alias; a scoped search of that module found only its
       alias declaration. Leave removal and verification to separate maintenance.
+
+- [ ] Revalidate the unused `replay_task` binding at
+      `control/test/symmetry_control/orchestration_goal_admission_test.exs:1059`
+      and `task` bindings at lines `2079` and `2170`. The 0007a `mix test` run
+      reported these compiler warnings (`.tmp/0007a-session/control-test.log`).
+      Preserve the fixture calls and leave any binding cleanup to separate
+      maintenance.

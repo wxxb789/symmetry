@@ -126,13 +126,13 @@ async function chatFixture(page, { waiting = false, history = [], pageSize = nul
       throw new Error(`Unexpected API request: ${req.method()} ${url.pathname}`);
     }
   });
-  await page.goto("/portal/login");
+  await page.goto("/portal/login?return_to=%2Fportal%2Fclassic");
   await page.getByLabel("Operator token").fill(operatorToken);
   await Promise.all([
-    page.waitForURL(/\/portal(?:\?|#|$)/),
+    page.waitForURL(/\/portal\/classic(?:\?|#|$)/),
     page.getByRole("button", { name: "Open workspace" }).click()
   ]);
-  await page.goto(`/portal?project_id=${projectId}#chat`);
+  await page.goto(`/portal/classic?project_id=${projectId}#chat`);
   await expect(page.locator("#chat-run-context")).toContainText("Work in this context");
   return model;
 }

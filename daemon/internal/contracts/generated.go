@@ -776,6 +776,31 @@ type SymmetryUsageV1 struct {
 	UsageKey          string                       `json:"usage_key"`
 }
 
+// Consumed fields of the existing PortalJSON.workspace read projection. Unconsumed
+// presentation fields remain additive.
+type SymmetryWorkspaceReadV1 struct {
+	Projects          []WorkspaceProject `json:"projects"`
+	SelectedProjectID *string            `json:"selected_project_id"`
+}
+
+type WorkspaceProject struct {
+	Description *string             `json:"description"`
+	ID          string              `json:"id"`
+	Key         string              `json:"key"`
+	Name        string              `json:"name"`
+	Status      string              `json:"status"`
+	WorkItems   []WorkspaceWorkItem `json:"work_items"`
+}
+
+type WorkspaceWorkItem struct {
+	Blocked bool    `json:"blocked"`
+	Blocker *string `json:"blocker"`
+	ID      string  `json:"id"`
+	Key     string  `json:"key"`
+	Status  string  `json:"status"`
+	Title   string  `json:"title"`
+}
+
 type Guidance string
 
 const (

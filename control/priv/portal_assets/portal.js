@@ -134,7 +134,8 @@
     });
 
     if (response.status === 401) {
-      window.location.assign("/portal/login");
+      const returnTo = window.location.pathname + window.location.search + window.location.hash;
+      window.location.assign(`/portal/login?return_to=${encodeURIComponent(returnTo)}`);
       throw new PortalRequestError("Session expired", "unauthenticated");
     }
 

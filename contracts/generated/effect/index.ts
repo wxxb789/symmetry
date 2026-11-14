@@ -19,6 +19,7 @@ import type {
   SymmetryPlanProposalV1,
   SymmetryTaskResultV1,
   SymmetryUsageV1,
+  SymmetryWorkspaceReadV1,
 } from "../ts/index.js";
 
 const _regularExpression0 = new RegExp("^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", "u");
@@ -568,6 +569,24 @@ export const DefinitionObservationSourceRefGraph = S.suspend(() => withObjectPro
   "kind": S.Literal("observation"),
   "ref": DefinitionShortIdentifierGraph,
   "subject_hash": DefinitionSha256Graph
+})), undefined, undefined));
+
+export const DefinitionWorkspaceProjectGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "description": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "id": DefinitionUUIDGraph,
+  "key": stringConstraints(S.String, undefined, undefined, undefined),
+  "name": stringConstraints(S.String, undefined, undefined, undefined),
+  "status": stringConstraints(S.String, undefined, undefined, undefined),
+  "work_items": arrayConstraints(S.Array(DefinitionWorkspaceWorkItemGraph), undefined, undefined, undefined)
+})), undefined, undefined));
+
+export const DefinitionWorkspaceWorkItemGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "blocked": S.Boolean,
+  "blocker": exactOneOf(S.Union(stringConstraints(S.String, undefined, undefined, undefined), S.Null), stringConstraints(S.String, undefined, undefined, undefined), S.Null),
+  "id": DefinitionUUIDGraph,
+  "key": stringConstraints(S.String, undefined, undefined, undefined),
+  "status": stringConstraints(S.String, undefined, undefined, undefined),
+  "title": stringConstraints(S.String, undefined, undefined, undefined)
 })), undefined, undefined));
 
 export const AdapterCapabilitiesGraph = S.suspend(() => withObjectPropertyBounds(strictObject(S.Struct({
@@ -1482,3 +1501,12 @@ export const UsageGraph = S.suspend(() => allOf(withObjectPropertyBounds(strictO
 const matchesUsage = S.is(UsageGraph, strictOptions);
 export const isUsage = (value: unknown): value is SymmetryUsageV1 => matchesUsage(value);
 export const UsageSchema: S.Schema<SymmetryUsageV1, unknown> = S.Unknown.pipe(S.filter(isUsage));
+
+export const WorkspaceReadGraph = S.suspend(() => withObjectPropertyBounds(openObject(S.Struct({
+  "projects": arrayConstraints(S.Array(DefinitionWorkspaceProjectGraph), undefined, undefined, undefined),
+  "selected_project_id": exactOneOf(S.Union(DefinitionUUIDGraph, S.Null), DefinitionUUIDGraph, S.Null)
+})), undefined, undefined));
+
+const matchesWorkspaceRead = S.is(WorkspaceReadGraph, strictOptions);
+export const isWorkspaceRead = (value: unknown): value is SymmetryWorkspaceReadV1 => matchesWorkspaceRead(value);
+export const WorkspaceReadSchema: S.Schema<SymmetryWorkspaceReadV1, unknown> = S.Unknown.pipe(S.filter(isWorkspaceRead));

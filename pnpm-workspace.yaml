@@ -1,2 +1,4 @@
 packages:
   - "contracts"
+  - "frontend"
+  - "browser"

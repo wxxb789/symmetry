@@ -132,7 +132,7 @@ try {
 
   Push-Location (Join-Path $repoRoot "browser")
   try {
-    npm run test:live
+    mise exec pnpm@12.17.0 -- pnpm run test:live
     if ($LASTEXITCODE -ne 0) {
       throw "Live daemon browser tests failed with exit code $LASTEXITCODE. Logs: $runRoot"
     }

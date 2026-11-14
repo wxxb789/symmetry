@@ -1,0 +1,43 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "contracts/v1/workspace-read.schema.json",
+  "title": "Symmetry Workspace Read v1",
+  "description": "Consumed fields of the existing PortalJSON.workspace read projection. Unconsumed presentation fields remain additive.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["selected_project_id", "projects"],
+  "properties": {
+    "selected_project_id": {
+      "oneOf": [{"$ref": "common.schema.json#/definitions/UUID"}, {"type": "null"}]
+    },
+    "projects": {"type": "array", "items": {"$ref": "#/definitions/WorkspaceProject"}}
+  },
+  "definitions": {
+    "WorkspaceProject": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "key", "name", "description", "status", "work_items"],
+      "properties": {
+        "id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "key": {"type": "string"},
+        "name": {"type": "string"},
+        "description": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+        "status": {"type": "string"},
+        "work_items": {"type": "array", "items": {"$ref": "#/definitions/WorkspaceWorkItem"}}
+      }
+    },
+    "WorkspaceWorkItem": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "key", "title", "status", "blocked", "blocker"],
+      "properties": {
+        "id": {"$ref": "common.schema.json#/definitions/UUID"},
+        "key": {"type": "string"},
+        "title": {"type": "string"},
+        "status": {"type": "string"},
+        "blocked": {"type": "boolean"},
+        "blocker": {"oneOf": [{"type": "string"}, {"type": "null"}]}
+      }
+    }
+  }
+}

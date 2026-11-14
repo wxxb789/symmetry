@@ -25,8 +25,17 @@ defmodule SymmetryControlWeb.Plugs.PortalAuth do
   defp unauthenticated(conn, :json), do: conn |> Protocol.error(:unauthenticated) |> halt()
 
   defp unauthenticated(conn, :html) do
+    requested_path =
+      if conn.query_string != "" do
+        conn.request_path <> "?" <> conn.query_string
+      else
+        conn.request_path
+      end
+
+    query = URI.encode_query(%{"return_to" => PortalSession.return_to(requested_path)})
+
     conn
-    |> redirect(to: "/portal/login")
+    |> redirect(to: "/portal/login?" <> query)
     |> halt()
   end
 end

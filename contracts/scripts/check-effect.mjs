@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { Effect, Either, Schema } from "effect";
 import * as Contracts from "../ts/index.ts";
-import { parseWireJson, WireJsonError } from "../ts/wire-json.ts";
+import { parsePresentationJson, parseWireJson, WireJsonError } from "../ts/wire-json.ts";
 
 const fixtureRoot = new URL("../fixtures/", import.meta.url);
 const decoders = {
@@ -21,6 +21,7 @@ const decoders = {
   "plan-proposal": Contracts.PlanProposal,
   "task-result": Contracts.TaskResult,
   usage: Contracts.Usage,
+  "workspace-read": Contracts.WorkspaceRead,
 };
 const schemas = {
   "adapter-capabilities": Contracts.AdapterCapabilitiesSchema,
@@ -37,6 +38,7 @@ const schemas = {
   "plan-proposal": Contracts.PlanProposalSchema,
   "task-result": Contracts.TaskResultSchema,
   usage: Contracts.UsageSchema,
+  "workspace-read": Contracts.WorkspaceReadSchema,
 };
 
 const manifest = JSON.parse(await fs.readFile(new URL("manifest.json", fixtureRoot), "utf8"));
@@ -66,7 +68,8 @@ for (const fixture of manifest.fixtures) {
   let data;
   let structuralValid = false;
   try {
-    data = parseWireJson(bytes);
+    const parseJson = fixture.schema === "workspace-read" ? parsePresentationJson : parseWireJson;
+    data = parseJson(bytes);
     structuralValid = Schema.is(schema)(data);
     structuralChecks++;
   } catch (error) {

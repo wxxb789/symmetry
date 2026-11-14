@@ -13,10 +13,10 @@ function uniqueProject() {
 }
 
 async function login(page) {
-  await page.goto("/portal/login");
+  await page.goto("/portal/login?return_to=%2Fportal%2Fclassic");
   await page.getByLabel("Operator token").fill(operatorToken);
   await Promise.all([
-    page.waitForURL(/\/portal(?:\?|#|$)/),
+    page.waitForURL(/\/portal\/classic(?:\?|#|$)/),
     page.getByRole("button", { name: "Open workspace" }).click()
   ]);
   await expect(page.locator("#refresh-button")).toBeVisible();

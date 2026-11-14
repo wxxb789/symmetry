@@ -126,8 +126,13 @@ mix test
 cd ../daemon
 go vet ./...
 go test ./...
-cd ../browser
-npm test
+```
+
+Browser acceptance installs and runs through the root pnpm workspace:
+
+```sh
+mise exec pnpm@12.17.0 -- pnpm install --frozen-lockfile
+mise exec pnpm@12.17.0 -- pnpm --filter symmetry-browser-acceptance test
 ```
 
 With a control plane running, the isolated Windows fixture builds the real

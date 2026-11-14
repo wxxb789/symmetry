@@ -4,6 +4,11 @@
 control envelopes and operator requests described by `docs/design/protocol.md` and
 `docs/design/contracts.md`. `common.schema.json` contains shared definitions;
 the envelope schemas reference it locally and reject unknown control fields.
+`workspace-read.schema.json` additionally describes the consumed fields of the
+existing `/portal/api/workspace` presentation response. Its read objects allow
+additive unconsumed fields; this does not relax any command envelope. The
+frontend consumes its generated `SymmetryWorkspaceReadV1` DTO and `WorkspaceRead`
+Effect boundary rather than a parallel handwritten interface.
 `ContextSnapshot.content_hash` is the SHA-256 of canonical UTF-8 JSON for the
 schema-valid snapshot with its top-level `content_hash` omitted; keys sort
 recursively and arrays retain order.
@@ -20,9 +25,12 @@ claiming an unbound hash. Monetary strings are bounded to signed `int64`
 `microusd`, including values below MaxInt64 such as `9200000000000000000`, the
 exact MaxInt64 boundary, and rejection of MaxInt64+1. UUIDs use the daemon's
 canonical lowercase form with version `1`-`5` and RFC 4122 variant `8|9|a|b`.
-The fixture checker rejects fractional/exponent JSON number lexemes and raw
-integers outside the JSON safe-integer range before `JSON.parse` or Ajv can
-round them.
+For command and transport envelopes, the fixture checker rejects
+fractional/exponent JSON number lexemes and raw integers outside the JSON
+safe-integer range before `JSON.parse` or Ajv can round them. Workspace reads
+admit finite presentation numbers in existing additive metadata; their consumed
+fields still pass the generated schema. UTF-8, duplicate-key and Unicode checks
+remain in force for both policies.
 
 `goal-create.schema.json`, `goal-command.schema.json`, and
 `plan-proposal.schema.json` are the canonical input authority for the Goal
@@ -112,7 +120,7 @@ its existing clients and schemas.
 This package is independent of the frontend application. Its source entry point
 is usable by the future Vite build and by the Node 24 contract tooling.
 
-Each of the 14 envelope decoders has two entry points:
+Each of the 15 schema decoders has two entry points:
 
 ```ts
 import { Effect } from "effect";
@@ -127,8 +135,10 @@ const checked = Admission.decodeUnknown(value);
 ```
 
 `decodeJson` accepts a string or UTF-8 bytes and rejects malformed UTF-8,
-noncanonical numeric lexemes and invalid JSON. Both entry points reject invalid
-structure, unpaired surrogates, and inconsistent hashes or cross-field values.
+duplicate keys and invalid JSON. Command and transport decoders also reject
+noncanonical numeric lexemes; `WorkspaceRead` instead permits finite
+presentation numbers. Both entry points reject invalid structure, unpaired
+surrogates, and inconsistent hashes or cross-field values.
 The error channel distinguishes `WireJsonError`, Effect `ParseError`, and
 `SemanticError`. A caller that already parsed a rounded number cannot recover
 its original lexeme; use `decodeJson` at an HTTP body boundary.

@@ -14,6 +14,7 @@ import {
   PlanProposalSchema,
   TaskResultSchema,
   UsageSchema,
+  WorkspaceReadSchema,
 } from "../generated/effect/index.ts";
 import {
   SemanticError,
@@ -28,7 +29,7 @@ import {
   validatePlanProposalSemantics,
   validateTaskResultSemantics,
 } from "./semantics.ts";
-import { assertUnicode, parseWireJson, WireJsonError } from "./wire-json.ts";
+import { assertUnicode, parsePresentationJson, parseWireJson, WireJsonError } from "./wire-json.ts";
 
 export {
   AdapterCapabilitiesSchema,
@@ -45,6 +46,7 @@ export {
   PlanProposalSchema,
   TaskResultSchema,
   UsageSchema,
+  WorkspaceReadSchema,
 };
 export type * from "../generated/ts/index.js";
 export { SemanticError, WireJsonError };
@@ -52,6 +54,7 @@ export { SemanticError, WireJsonError };
 function boundary<A>(
   schema: Schema.Schema<A, unknown>,
   validateSemantics?: (value: A) => void | Promise<void>,
+  parseJson = parseWireJson,
 ) {
   const decodeUnknown = (input: unknown) =>
     Schema.decodeUnknown(schema)(input).pipe(
@@ -70,10 +73,10 @@ function boundary<A>(
       ),
     );
 
-  // Raw HTTP bodies must pass the lexical checks before JSON.parse can round numbers.
+  // Canonical boundaries check number lexemes before JSON.parse can round them.
   const decodeJson = (input: string | Uint8Array) =>
     Effect.try({
-      try: () => parseWireJson(input),
+      try: () => parseJson(input),
       catch: (cause) =>
         cause instanceof WireJsonError
           ? cause
@@ -97,3 +100,4 @@ export const GoalRevision = boundary(GoalRevisionSchema, validateGoalRevisionSem
 export const PlanProposal = boundary(PlanProposalSchema, validatePlanProposalSemantics);
 export const TaskResult = boundary(TaskResultSchema, validateTaskResultSemantics);
 export const Usage = boundary(UsageSchema);
+export const WorkspaceRead = boundary(WorkspaceReadSchema, undefined, parsePresentationJson);

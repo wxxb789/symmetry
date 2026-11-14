@@ -70,3 +70,8 @@ compose.override.yml
 # Root contract tooling
 /node_modules/
 /contracts/node_modules/
+
+# Built workspace assets are generated before Phoenix release assembly.
+/frontend/node_modules/
+/frontend/dist/
+/control/priv/static/portal/

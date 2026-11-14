@@ -250,11 +250,11 @@ MIX_ENV=prod mix release --overwrite
 ```
 
 Run the browser acceptance suite at desktop and mobile widths against a running
-control plane:
+control plane, from the repository root with the pinned package manager:
 
 ```sh
-cd browser
-npm test
+mise exec pnpm@12.17.0 -- pnpm install --frozen-lockfile
+mise exec pnpm@12.17.0 -- pnpm --filter symmetry-browser-acceptance test
 ```
 
 The deterministic provider tests do not require live GitHub or Azure DevOps

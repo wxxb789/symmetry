@@ -5,9 +5,11 @@
 // Usage (from the repository root):
 //   node scripts/render-seo-assets.mjs
 //
-// Playwright is resolved from browser/node_modules (run `npm ci` there), the
-// root node_modules, or the global npm root, in that order. The downscale step
-// needs Python 3 with Pillow.
+// Playwright is resolved from browser/node_modules (installed through the root
+// pnpm workspace: `mise exec pnpm@12.17.0 -- pnpm install --frozen-lockfile`,
+// then `mise exec pnpm@12.17.0 -- pnpm --filter symmetry-browser-acceptance
+// exec playwright install chromium`), the root node_modules, or the global npm
+// root, in that order. The downscale step needs Python 3 with Pillow.
 import { createRequire } from "node:module";
 import { mkdir, rm } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
@@ -36,7 +38,7 @@ function resolvePlaywright() {
       }
     }
   }
-  throw new Error("Playwright not found. Run `npm ci` in browser/ or install the playwright package.");
+  throw new Error("Playwright not found. Run `mise exec pnpm@12.17.0 -- pnpm install --frozen-lockfile` from the repository root (and `pnpm --filter symmetry-browser-acceptance exec playwright install chromium` for the browser build), or install the playwright package.");
 }
 
 const { chromium } = resolvePlaywright();

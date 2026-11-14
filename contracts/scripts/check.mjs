@@ -17,7 +17,7 @@ import {
   validatePlanProposalSemantics,
   validateTaskResultSemantics,
 } from "../ts/semantics.ts";
-import { assertUnicode, parseWireJson, WireJsonError } from "../ts/wire-json.ts";
+import { assertUnicode, parsePresentationJson, parseWireJson, WireJsonError } from "../ts/wire-json.ts";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(SCRIPT_DIR, "../..");
@@ -51,10 +51,11 @@ const numberIssueFromError = (error) => {
   };
 };
 
-const readFixtureJson = async (filePath) => {
+const readFixtureJson = async (filePath, schema) => {
   let value;
   try {
-    value = parseWireJson(await fs.readFile(filePath));
+    const parseJson = schema === "workspace-read" ? parsePresentationJson : parseWireJson;
+    value = parseJson(await fs.readFile(filePath));
   } catch (error) {
     if (error instanceof WireJsonError && error.code === "noncanonical_number") {
       return { value: null, issue: numberIssueFromError(error) };
@@ -104,8 +105,8 @@ const main = async () => {
     .filter((file) => file.endsWith(".schema.json") && file !== "common.schema.json")
     .sort();
 
-  if (schemaFiles.length !== 14)
-    throw new Error(`expected 14 v1 envelope schemas, found ${schemaFiles.length}`);
+  if (schemaFiles.length !== 15)
+    throw new Error(`expected 15 v1 schemas, found ${schemaFiles.length}`);
   if (common.$schema !== "http://json-schema.org/draft-07/schema#")
     throw new Error("common schema must be Draft 7");
 
@@ -135,7 +136,9 @@ const main = async () => {
         schema.oneOf.length > 0 &&
         schema.oneOf.every((branch) => branch.additionalProperties === false)) ||
       referencedDefinition?.additionalProperties === false;
-    if (!strictEnvelope) throw new Error(`${file} must reject unknown control fields`);
+    // Read projections permit additive presentation fields; command envelopes remain closed.
+    if (!strictEnvelope && file !== "workspace-read.schema.json")
+      throw new Error(`${file} must reject unknown control fields`);
     ajv.addSchema(schema, schema.$id);
     schemas.set(file.slice(0, -".schema.json".length), schema);
   }
@@ -155,7 +158,7 @@ const main = async () => {
     if (!schema)
       throw new Error(`fixture ${fixture.id} references unknown schema ${fixture.schema}`);
     const fixturePath = path.join(ROOT_DIR, "contracts", "fixtures", fixture.path);
-    const fixtureDocument = await readFixtureJson(fixturePath);
+    const fixtureDocument = await readFixtureJson(fixturePath, fixture.schema);
     const expectedSchemaValid = fixture.schema_valid ?? fixture.valid;
     if (fixtureDocument.issue) {
       if (expectedSchemaValid) {
