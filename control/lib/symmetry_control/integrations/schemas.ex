@@ -204,6 +204,7 @@ defmodule SymmetryControl.Integrations.ProviderActionIntent do
     field :request_hash, :binary
     field :request_hash_version, :integer, default: 1
     field :input, :map, default: %{}
+    field :action_binding, :map
     field :state, :string, default: "accepted"
     field :dispatch_token, Ecto.UUID
     field :provider, :string
@@ -221,7 +222,7 @@ defmodule SymmetryControl.Integrations.ProviderActionIntent do
 
   def accept_changeset(intent, attrs) do
     intent
-    |> cast(attrs, @accept_fields)
+    |> cast(attrs, [:action_binding | @accept_fields])
     |> validate_required(@accept_fields)
     |> validate_inclusion(:operation, @operations)
     |> validate_inclusion(:state, ["accepted"])

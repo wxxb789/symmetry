@@ -8,6 +8,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
   alias SymmetryControl.Goals.{Goal, GoalRevision}
   alias SymmetryControl.Integrations
   alias SymmetryControl.Integrations.{ChangeAction, Connection, ProviderActionIntent}
+  alias SymmetryControl.Integrations.Providers.GitHub
   alias SymmetryControl.Orchestration.{Run, Runtime, Task}
   alias SymmetryControl.Repo
   alias SymmetryControl.RequestHash
@@ -1074,6 +1075,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
       request_hash: request_hash,
       request_hash_version: request_hash_version,
       input: scoped_input,
+      action_binding: new_action_binding!(context, action_id, operation, scoped_input),
       state: "accepted",
       provider: context.connection.provider,
       account_ref: context.connection.account_ref,
@@ -1094,6 +1096,27 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
         if Keyword.has_key?(reason.errors, :resource_id),
           do: Repo.rollback(:state_conflict),
           else: Repo.rollback(reason)
+    end
+  end
+
+  defp new_action_binding!(context, action_id, operation, input) do
+    if goal_managed_task?(context.task) and context.connection.provider == "github" and
+         operation in @change_operations do
+      with {:ok, scope} <- frozen_goal_provider_scope(context.task),
+           {:ok, binding} <-
+             GitHub.action_binding(
+               context.resource,
+               action_id,
+               task_input(context.task)["subject"],
+               operation,
+               input,
+               scope.change_target,
+               %{"run_id" => context.run.id, "task_id" => context.task.id}
+             ) do
+        binding
+      else
+        _unprovable -> Repo.rollback(:provider_access_unavailable)
+      end
     end
   end
 
@@ -1548,13 +1571,19 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
 
   defp dispatch(%{intent: %{operation: operation, input: input}} = context)
        when operation in @change_operations do
-    Integrations.execute_unprojected_provider_action(
-      context.connection,
-      context.resource,
-      context.work_item,
-      operation,
-      input
-    )
+    if goal_managed_task?(context.task) and context.intent.provider == "github" and
+         is_nil(context.intent.action_binding) do
+      {:error, :provider_access_unavailable}
+    else
+      Integrations.execute_unprojected_provider_action(
+        context.connection,
+        context.resource,
+        context.work_item,
+        operation,
+        input,
+        context.intent.action_binding
+      )
+    end
   end
 
   defp execute_dispatch_job(
@@ -1725,6 +1754,57 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
   end
 
   defp reconcile_unknown_intent(context) do
+    # Every caller holds the dispatch lock, but its context may predate a
+    # competing reconciliation's terminal commit while acquiring that lock.
+    case Repo.get(ProviderActionIntent, context.intent.id) do
+      nil ->
+        {:error, :not_found}
+
+      intent ->
+        if intent.action_binding != context.intent.action_binding or
+             intent.request_hash != context.intent.request_hash do
+          {:error, :idempotency_conflict}
+        else
+          case intent.state do
+            "succeeded" -> {:ok, intent.result}
+            "failed" -> {:error, stored_failure(intent.failure)}
+            "unknown" -> readback_unknown_intent(%{context | intent: intent})
+            _state -> {:error, :state_conflict}
+          end
+        end
+    end
+  end
+
+  defp readback_unknown_intent(%{intent: %{action_binding: binding}} = context)
+       when is_map(binding) do
+    case Integrations.readback_provider_action(
+           context.connection,
+           context.resource,
+           context.intent.operation,
+           binding
+         ) do
+      {:ok, %{status: :confirmed, delivery: delivery}} ->
+        finalize_readback_success(context, delivery)
+
+      {:ok, %{status: :unconfirmed}} ->
+        with :ok <- mark_readback_observed(context.intent.id, :unconfirmed) do
+          {:ok,
+           %{
+             operation: context.intent.operation,
+             resource_id: context.resource.id,
+             outcome: "unknown",
+             readback_status: "unconfirmed",
+             projected: false
+           }}
+        end
+
+      {:error, reason} ->
+        _ = mark_readback_observed(context.intent.id, :unconfirmed, reason)
+        {:error, reason}
+    end
+  end
+
+  defp readback_unknown_intent(context) do
     case Integrations.execute_accepted_resource_sync_unprojected(
            context.connection,
            context.resource
@@ -1751,6 +1831,41 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
         _ = mark_readback_observed(context.intent.id, :unconfirmed, reason)
         {:error, reason}
     end
+  end
+
+  defp finalize_readback_success(context, delivery) do
+    Repo.transaction(fn ->
+      intent = Repo.get(ProviderActionIntent, context.intent.id) || Repo.rollback(:not_found)
+      current = lock_intent_context(intent)
+      intent = lock_record(ProviderActionIntent, intent.id) || Repo.rollback(:not_found)
+
+      unless intent.action_binding == context.intent.action_binding and
+               intent.request_hash == context.intent.request_hash,
+             do: Repo.rollback(:idempotency_conflict)
+
+      case intent.state do
+        "succeeded" ->
+          intent.result
+
+        "unknown" ->
+          validate_goal_readback_target!(intent, current)
+
+          outcome =
+            project_network_success(intent, current, delivery)
+            |> Map.put(:readback_status, "confirmed")
+            |> normalize_json()
+
+          case intent
+               |> ProviderActionIntent.complete_changeset("succeeded", outcome, now())
+               |> Repo.update() do
+            {:ok, completed} -> completed.result
+            {:error, reason} -> Repo.rollback(reason)
+          end
+
+        _state ->
+          Repo.rollback(:state_conflict)
+      end
+    end)
   end
 
   defp mark_readback_observed(intent_id, outcome, reason \\ nil) do

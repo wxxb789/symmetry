@@ -247,12 +247,18 @@ defmodule SymmetryControl.Integrations do
   def execute_provider_action(_, _, _, _, _), do: {:error, :invalid_request}
 
   @doc false
+  def execute_unprojected_provider_action(connection, resource, work_item, operation, input),
+    do:
+      execute_unprojected_provider_action(connection, resource, work_item, operation, input, nil)
+
+  @doc false
   def execute_unprojected_provider_action(
         %Connection{} = connection,
         %ProjectResource{} = resource,
         %WorkItem{} = work_item,
         operation,
-        input
+        input,
+        binding
       )
       when operation in ["change.upsert", "change.update"] and is_map(input) do
     result =
@@ -269,6 +275,7 @@ defmodule SymmetryControl.Integrations do
           work_item,
           operation,
           input,
+          binding,
           auth
         )
       end
@@ -279,7 +286,50 @@ defmodule SymmetryControl.Integrations do
     end
   end
 
-  def execute_unprojected_provider_action(_, _, _, _, _), do: {:error, :invalid_request}
+  def execute_unprojected_provider_action(_, _, _, _, _, _), do: {:error, :invalid_request}
+
+  @doc false
+  def readback_provider_action(connection, resource, operation, binding) when is_map(binding) do
+    provider = provider_module(connection.provider)
+
+    result =
+      if Code.ensure_loaded?(provider) and function_exported?(provider, :readback_action, 5) do
+        with {:ok, auth} <- provider.authenticate(connection),
+             {:ok, observation} <-
+               provider_call(fn ->
+                 provider.readback_action(connection, resource, operation, binding, auth)
+               end) do
+          case observation do
+            %{status: :confirmed, delivery: delivery} ->
+              if valid_provider_action_delivery?(delivery),
+                do: {:ok, observation},
+                else: {:error, :invalid_provider_response}
+
+            %{status: :unconfirmed} ->
+              {:ok, observation}
+
+            _invalid ->
+              {:error, :invalid_provider_response}
+          end
+        end
+      else
+        {:ok, %{status: :unconfirmed}}
+      end
+
+    case result do
+      {:error, reason} ->
+        {code, _message} = failure(reason)
+        {:error, code}
+
+      result ->
+        result
+    end
+  end
+
+  def readback_provider_action(_, _, _, _), do: {:ok, %{status: :unconfirmed}}
+
+  defp unprojected_provider_action_failure({:provider_action_failure, _, _, _} = failure),
+    do: failure
 
   defp unprojected_provider_action_failure(reason) do
     {code, message} = failure(reason)
@@ -293,10 +343,26 @@ defmodule SymmetryControl.Integrations do
          work_item,
          operation,
          input,
+         binding,
          auth
        ) do
     case provider_call(fn ->
-           provider.execute(connection, resource, work_item, operation, input, auth)
+           if is_map(binding) do
+             if Code.ensure_loaded?(provider) and function_exported?(provider, :execute_bound, 7),
+               do:
+                 provider.execute_bound(
+                   connection,
+                   resource,
+                   work_item,
+                   operation,
+                   input,
+                   binding,
+                   auth
+                 ),
+               else: {:error, :invalid_request}
+           else
+             provider.execute(connection, resource, work_item, operation, input, auth)
+           end
          end) do
       {:ok, delivery} ->
         with true <- valid_provider_action_delivery?(delivery),
@@ -323,7 +389,8 @@ defmodule SymmetryControl.Integrations do
         delivery
       )
       when operation in ["change.upsert", "change.update"] and is_map(delivery) do
-    with true <- valid_provider_action_delivery?(delivery) || {:error, :invalid_provider_response},
+    with true <-
+           valid_provider_action_delivery?(delivery) || {:error, :invalid_provider_response},
          {:ok, attrs} <- delivery_attrs(work_item, delivery) do
       case persist_provider_action(connection, resource, work_item, attrs) do
         {:ok, persisted} ->
@@ -449,7 +516,8 @@ defmodule SymmetryControl.Integrations do
   end
 
   defp persist_provider_delivery(connection, resource, work_item, operation, delivery) do
-    with true <- valid_provider_action_delivery?(delivery) || {:error, :invalid_provider_response},
+    with true <-
+           valid_provider_action_delivery?(delivery) || {:error, :invalid_provider_response},
          {:ok, attrs} <- delivery_attrs(work_item, delivery) do
       case persist_provider_action(connection, resource, work_item, attrs) do
         {:ok, persisted} ->
@@ -669,50 +737,52 @@ defmodule SymmetryControl.Integrations do
     with {:ok, resource_attrs} <- provider_resource_attrs(result, resource),
          {:ok, work_items} <- provider_work_items(result),
          {:ok, prepared_deliveries} <- prepare_deliveries(deliveries) do
-      case Repo.transaction(
-             fn ->
-               synced_at = now()
+      case Repo.transaction(fn ->
+             synced_at = now()
 
-               project =
-                 Repo.one(
-                   from project in Project,
-                     where: project.id == ^resource.project_id,
-                     lock: "FOR UPDATE"
-                 )
+             project =
+               Repo.one(
+                 from project in Project,
+                   where: project.id == ^resource.project_id,
+                   lock: "FOR SHARE"
+               )
 
-               with :ok <- require_active_project(project) do
-                 case resource
-                      |> ProjectResource.sync_changeset(
-                        Map.merge(resource_attrs, %{
-                          provider: connection.provider,
-                          status: "healthy",
-                          sync_status: "synced",
-                          status_message: nil,
-                          last_checked_at: synced_at,
-                          last_synced_at: synced_at
-                        })
-                      )
-                      |> update_with_stale_error() do
-                   {:ok, synced_resource} ->
-                     with :ok <- upsert_work_items(synced_resource, connection, work_items),
-                          :ok <- persist_deliveries(prepared_deliveries) do
-                       synced_resource
-                     else
-                       {:error, reason} -> Repo.rollback(reason)
-                     end
+             with :ok <- require_active_project(project) do
+               case resource
+                    |> ProjectResource.sync_changeset(
+                      Map.merge(resource_attrs, %{
+                        provider: connection.provider,
+                        status: "healthy",
+                        sync_status: "synced",
+                        status_message: nil,
+                        last_checked_at: synced_at,
+                        last_synced_at: synced_at
+                      })
+                    )
+                    |> update_with_stale_error() do
+                 {:ok, synced_resource} ->
+                   with :ok <-
+                          persist_sync_work_items(
+                            synced_resource,
+                            connection,
+                            work_items,
+                            prepared_deliveries
+                          ) do
+                     synced_resource
+                   else
+                     {:error, reason} -> Repo.rollback(reason)
+                   end
 
-                   {:error, :stale} ->
-                     :stale
+                 {:error, :stale} ->
+                   :stale
 
-                   {:error, reason} ->
-                     Repo.rollback(reason)
-                 end
-               else
-                 {:error, reason} -> Repo.rollback(reason)
+                 {:error, reason} ->
+                   Repo.rollback(reason)
                end
-             end,
-             mode: :savepoint
-           ) do
+             else
+               {:error, reason} -> Repo.rollback(reason)
+             end
+           end) do
         {:ok, :stale} -> {:error, :stale}
         result -> result
       end
@@ -789,64 +859,61 @@ defmodule SymmetryControl.Integrations do
   end
 
   defp persist_provider_action(connection, resource, work_item, attrs) do
-    case Repo.transaction(
-           fn ->
-             project =
-               Repo.one(
-                 from project in Project,
-                   where: project.id == ^work_item.project_id,
-                   lock: "FOR UPDATE"
-               )
+    case Repo.transaction(fn ->
+           project =
+             Repo.one(
+               from project in Project,
+                 where: project.id == ^work_item.project_id,
+                 lock: "FOR SHARE"
+             )
 
-             current_resource =
-               Repo.one(
-                 from current in ProjectResource,
-                   where: current.id == ^resource.id,
-                   lock: "FOR UPDATE"
-               )
+           current_resource =
+             Repo.one(
+               from current in ProjectResource,
+                 where: current.id == ^resource.id,
+                 lock: "FOR UPDATE"
+             )
 
-             current_connection =
-               Repo.one(
-                 from current in Connection,
-                   where: current.id == ^connection.id,
-                   lock: "FOR UPDATE"
-               )
+           current_connection =
+             Repo.one(
+               from current in Connection,
+                 where: current.id == ^connection.id,
+                 lock: "FOR UPDATE"
+             )
 
-             current_work_item =
-               Repo.one(
-                 from current in WorkItem,
-                   where: current.id == ^work_item.id,
-                   lock: "FOR UPDATE"
-               )
+           current_work_item =
+             Repo.one(
+               from current in WorkItem,
+                 where: current.id == ^work_item.id,
+                 lock: "FOR UPDATE"
+             )
 
-             with :ok <- require_active_project(project),
-                  true <- match?(%ProjectResource{}, current_resource) || {:error, :stale},
-                  true <- match?(%Connection{}, current_connection) || {:error, :stale},
-                  true <- match?(%WorkItem{}, current_work_item) || {:error, :stale},
-                  :ok <- matches_version(current_work_item, work_item.lock_version),
-                  true <-
-                    current_resource.project_id == current_work_item.project_id ||
-                      {:error, :stale},
-                  true <-
-                    current_resource.connection_id == current_connection.id || {:error, :stale},
-                  true <- same_resource_identity?(current_resource, resource) || {:error, :stale},
-                  true <-
-                    same_connection_identity?(current_connection, connection) || {:error, :stale},
-                  true <-
-                    current_work_item.repository_resource_id == current_resource.id ||
-                      {:error, :stale},
-                  {:ok, persisted} <-
-                    current_work_item
-                    |> WorkItem.delivery_changeset(attrs)
-                    |> update_with_stale_error() do
-               persisted
-             else
-               {:error, :stale} -> :stale
-               {:error, reason} -> Repo.rollback(reason)
-             end
-           end,
-           mode: :savepoint
-         ) do
+           with :ok <- require_active_project(project),
+                true <- match?(%ProjectResource{}, current_resource) || {:error, :stale},
+                true <- match?(%Connection{}, current_connection) || {:error, :stale},
+                true <- match?(%WorkItem{}, current_work_item) || {:error, :stale},
+                :ok <- matches_version(current_work_item, work_item.lock_version),
+                true <-
+                  current_resource.project_id == current_work_item.project_id ||
+                    {:error, :stale},
+                true <-
+                  current_resource.connection_id == current_connection.id || {:error, :stale},
+                true <- same_resource_identity?(current_resource, resource) || {:error, :stale},
+                true <-
+                  same_connection_identity?(current_connection, connection) || {:error, :stale},
+                true <-
+                  current_work_item.repository_resource_id == current_resource.id ||
+                    {:error, :stale},
+                {:ok, persisted} <-
+                  current_work_item
+                  |> WorkItem.delivery_changeset(attrs)
+                  |> update_with_stale_error() do
+             persisted
+           else
+             {:error, :stale} -> :stale
+             {:error, reason} -> Repo.rollback(reason)
+           end
+         end) do
       {:ok, :stale} -> {:error, :stale}
       result -> unwrap_transaction(result)
     end
@@ -1068,17 +1135,32 @@ defmodule SymmetryControl.Integrations do
     end
   end
 
-  defp upsert_work_items(resource, connection, items) do
+  defp persist_sync_work_items(resource, connection, items, prepared_deliveries) do
     repository_id = matching_repository(resource)
 
     with {:ok, items} <- prepare_provider_work_items(resource, connection, repository_id, items) do
-      do_upsert_work_items(resource, connection, repository_id, items)
+      external_ids = Enum.map(items, &Map.fetch!(&1, :external_id))
+      delivery_ids = Enum.map(prepared_deliveries, fn {item, _attrs} -> item.id end)
+
+      # Include missing available items: the import marks those unavailable after its upserts.
+      Repo.all(
+        from item in WorkItem,
+          where:
+            (item.external_work_item_resource_id == ^resource.id and
+               (item.external_id in ^external_ids or item.external_available == true)) or
+              item.id in ^delivery_ids,
+          order_by: [asc: item.id],
+          lock: "FOR UPDATE",
+          select: item.id
+      )
+
+      with :ok <- do_upsert_work_items(resource, connection, repository_id, items, external_ids) do
+        persist_deliveries(prepared_deliveries)
+      end
     end
   end
 
-  defp do_upsert_work_items(resource, connection, repository_id, items) do
-    external_ids = Enum.map(items, &Map.get(&1, :external_id))
-
+  defp do_upsert_work_items(resource, connection, repository_id, items, external_ids) do
     existing =
       Repo.all(
         from item in WorkItem,
@@ -1445,43 +1527,40 @@ defmodule SymmetryControl.Integrations do
 
   defp record_resource_failure(%ProjectResource{} = resource_snapshot, code, message)
        when is_atom(code) and is_binary(message) do
-    case Repo.transaction(
-           fn ->
-             project =
-               Repo.one(
-                 from project in Project,
-                   where: project.id == ^resource_snapshot.project_id,
-                   lock: "FOR UPDATE"
-               )
+    case Repo.transaction(fn ->
+           project =
+             Repo.one(
+               from project in Project,
+                 where: project.id == ^resource_snapshot.project_id,
+                 lock: "FOR SHARE"
+             )
 
-             resource =
-               Repo.one(
-                 from resource in ProjectResource,
-                   where:
-                     resource.id == ^resource_snapshot.id and
-                       resource.project_id == ^resource_snapshot.project_id,
-                   lock: "FOR UPDATE"
-               )
+           resource =
+             Repo.one(
+               from resource in ProjectResource,
+                 where:
+                   resource.id == ^resource_snapshot.id and
+                     resource.project_id == ^resource_snapshot.project_id,
+                 lock: "FOR UPDATE"
+             )
 
-             with :ok <- require_active_project(project),
-                  :ok <- matches_version(resource, resource_snapshot.lock_version),
-                  {:ok, degraded} <-
-                    resource
-                    |> ProjectResource.sync_changeset(%{
-                      status: "degraded",
-                      sync_status: "failed",
-                      status_message: message,
-                      last_checked_at: now()
-                    })
-                    |> update_with_stale_error() do
-               degraded
-             else
-               {:error, :stale} -> :stale
-               {:error, update_reason} -> Repo.rollback(update_reason)
-             end
-           end,
-           mode: :savepoint
-         ) do
+           with :ok <- require_active_project(project),
+                :ok <- matches_version(resource, resource_snapshot.lock_version),
+                {:ok, degraded} <-
+                  resource
+                  |> ProjectResource.sync_changeset(%{
+                    status: "degraded",
+                    sync_status: "failed",
+                    status_message: message,
+                    last_checked_at: now()
+                  })
+                  |> update_with_stale_error() do
+             degraded
+           else
+             {:error, :stale} -> :stale
+             {:error, update_reason} -> Repo.rollback(update_reason)
+           end
+         end) do
       {:ok, :stale} -> {:error, :stale}
       {:ok, degraded} -> {:error, code, degraded}
       {:error, update_reason} -> {:error, update_reason}

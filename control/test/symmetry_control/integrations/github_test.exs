@@ -756,6 +756,589 @@ defmodule SymmetryControl.Integrations.GitHubTest do
     HTTPStub.verify!()
   end
 
+  test "exact readback confirms the dispatched action without another mutation" do
+    {resource, binding} = bound_action()
+    body = dispatched_unknown_body(resource, binding)
+    pull_request = bound_pull_request(binding, body)
+
+    HTTPStub.expect(bound_reads(binding, [pull_request]))
+
+    assert {:ok, %{status: :confirmed, delivery: delivery}} =
+             GitHub.readback_action(bound_connection(), resource, "change.upsert", binding, [])
+
+    assert delivery.pull_request_url == "https://github.com/acme/symmetry/pull/18"
+    assert delivery.provider_data["head_sha"] == binding["subject"]["commit"]
+    HTTPStub.verify!()
+  end
+
+  test "bound upsert creates an open pull request when only a historical closed pull request exists" do
+    {resource, historical_binding} = bound_action()
+
+    historical_digest =
+      historical_binding |> SymmetryControl.RequestHash.canonical() |> Base.encode16(case: :lower)
+
+    historical_body =
+      historical_binding["body"] <>
+        "\n\n<!-- symmetry-provider-action:v1:#{historical_binding["action_id"]}:#{historical_digest} -->"
+
+    historical_pull_request =
+      bound_pull_request(historical_binding, historical_body)
+      |> Map.merge(%{"state" => "closed", "merged_at" => nil})
+
+    HTTPStub.expect(
+      bound_reads(historical_binding, [historical_pull_request])
+      |> List.update_at(2, &Map.put(&1, :url_contains, "state=all"))
+    )
+
+    assert {:ok, %{status: :confirmed, delivery: %{pull_request_state: "closed"}}} =
+             GitHub.readback_action(
+               bound_connection(),
+               resource,
+               "change.upsert",
+               historical_binding,
+               []
+             )
+
+    HTTPStub.verify!()
+
+    binding = Map.put(historical_binding, "action_id", Ecto.UUID.generate())
+    digest = binding |> SymmetryControl.RequestHash.canonical() |> Base.encode16(case: :lower)
+
+    body =
+      binding["body"] <>
+        "\n\n<!-- symmetry-provider-action:v1:#{binding["action_id"]}:#{digest} -->"
+
+    new_pull_request =
+      bound_pull_request(binding, body)
+      |> Map.merge(%{
+        "number" => 19,
+        "html_url" => "https://github.com/acme/symmetry/pull/19"
+      })
+
+    HTTPStub.expect(
+      (bound_reads(binding, [])
+       |> List.update_at(2, &Map.put(&1, :url_contains, "state=open"))) ++
+        [
+          %{
+            method: :post,
+            url_contains: "/repos/acme/symmetry/pulls",
+            body_assertion: fn payload ->
+              assert payload == %{
+                       "head" => binding["target"]["source_branch"],
+                       "base" => binding["target"]["target_branch"],
+                       "title" => binding["title"],
+                       "body" => body
+                     }
+            end,
+            response: {:ok, 201, %{}, new_pull_request}
+          }
+        ]
+    )
+
+    assert {:ok, delivery} =
+             GitHub.execute_bound(
+               bound_connection(),
+               resource,
+               %{},
+               "change.upsert",
+               binding["input"],
+               binding,
+               []
+             )
+
+    assert delivery.pull_request_url == "https://github.com/acme/symmetry/pull/19"
+    assert delivery.pull_request_state == "open"
+    assert delivery.provider_data["pull_request_number"] == 19
+    HTTPStub.verify!()
+  end
+
+  test "unknown readback checks all pull request states and refuses a closed/open selector collision" do
+    {resource, binding} = bound_action()
+    body = dispatched_unknown_body(resource, binding)
+
+    closed_pull_request =
+      bound_pull_request(binding, body)
+      |> Map.merge(%{"state" => "closed", "merged_at" => nil})
+
+    open_pull_request =
+      bound_pull_request(binding, body)
+      |> Map.merge(%{
+        "number" => 19,
+        "html_url" => "https://github.com/acme/symmetry/pull/19"
+      })
+
+    HTTPStub.expect(
+      bound_reads(binding, [closed_pull_request, open_pull_request])
+      |> List.update_at(2, &Map.put(&1, :url_contains, "state=all"))
+    )
+
+    assert {:ok, %{status: :unconfirmed}} =
+             GitHub.readback_action(bound_connection(), resource, "change.upsert", binding, [])
+
+    HTTPStub.verify!()
+  end
+
+  test "bound mutation accepts only a success carrying the exact persisted Subject and content" do
+    {resource, binding} = bound_action()
+    digest = binding |> SymmetryControl.RequestHash.canonical() |> Base.encode16(case: :lower)
+
+    body =
+      "Typed action\n\n<!-- symmetry-provider-action:v1:#{binding["action_id"]}:#{digest} -->"
+
+    pull_request = bound_pull_request(binding, body)
+
+    HTTPStub.expect(
+      bound_reads(binding, []) ++
+        [
+          %{
+            method: :post,
+            url_contains: "/pulls",
+            body_assertion: fn payload -> assert payload["body"] == body end,
+            response: {:ok, 201, %{}, pull_request}
+          }
+        ]
+    )
+
+    assert {:ok, %{pull_request_url: "https://github.com/acme/symmetry/pull/18"}} =
+             GitHub.execute_bound(
+               bound_connection(),
+               resource,
+               %{},
+               "change.upsert",
+               binding["input"],
+               binding,
+               []
+             )
+
+    HTTPStub.verify!()
+
+    HTTPStub.expect(
+      bound_reads(binding, []) ++
+        [
+          %{
+            method: :post,
+            url_contains: "/pulls",
+            response:
+              {:ok, 201, %{}, put_in(pull_request, ["head", "sha"], String.duplicate("b", 40))}
+          }
+        ]
+    )
+
+    assert {:error, :invalid_provider_response} =
+             GitHub.execute_bound(
+               bound_connection(),
+               resource,
+               %{},
+               "change.upsert",
+               binding["input"],
+               binding,
+               []
+             )
+
+    HTTPStub.verify!()
+  end
+
+  test "bound updates and existing-PR upserts reject a success for another pull request" do
+    {resource, upsert_binding} = bound_action()
+
+    update_input = %{
+      "title" => "Update exact PR",
+      "body" => "Explicit body",
+      "pull_request_url" => "https://github.com/acme/symmetry/pull/18"
+    }
+
+    assert {:ok, update_binding} =
+             GitHub.action_binding(
+               resource,
+               Ecto.UUID.generate(),
+               upsert_binding["subject"],
+               "change.update",
+               update_input,
+               %{
+                 "kind" => "pull_request",
+                 "pull_request_url" => update_input["pull_request_url"]
+               },
+               upsert_binding
+             )
+
+    for binding <- [upsert_binding, update_binding] do
+      original = bound_pull_request(binding, "Original body")
+      digest = binding |> SymmetryControl.RequestHash.canonical() |> Base.encode16(case: :lower)
+
+      body =
+        binding["body"] <>
+          "\n\n<!-- symmetry-provider-action:v1:#{binding["action_id"]}:#{digest} -->"
+
+      wrong_pull_request =
+        bound_pull_request(binding, body)
+        |> Map.merge(%{
+          "number" => 19,
+          "html_url" => "https://github.com/acme/symmetry/pull/19"
+        })
+
+      reads =
+        if binding["operation"] == "change.update" do
+          [
+            hd(bound_reads(binding, [])),
+            %{method: :get, url_contains: "/pulls/18", response: {:ok, 200, %{}, original}}
+          ]
+        else
+          bound_reads(binding, [original])
+        end
+
+      HTTPStub.expect(
+        reads ++
+          [
+            %{
+              method: :patch,
+              url_contains: "/pulls/18",
+              body_assertion: fn payload ->
+                assert payload == %{"title" => binding["title"], "body" => body}
+              end,
+              response: {:ok, 200, %{}, wrong_pull_request}
+            }
+          ]
+      )
+
+      assert {:error, :invalid_provider_response} =
+               GitHub.execute_bound(
+                 bound_connection(),
+                 resource,
+                 %{},
+                 binding["operation"],
+                 binding["input"],
+                 binding,
+                 []
+               )
+
+      HTTPStub.verify!()
+    end
+  end
+
+  test "readback binds the complete Subject tree digest rather than just its commit" do
+    {resource, binding} = bound_action()
+    body = dispatched_unknown_body(resource, binding)
+
+    altered_subject =
+      put_in(binding, ["subject", "tree_digest"], "sha256:" <> String.duplicate("5", 64))
+
+    HTTPStub.expect(bound_reads(altered_subject, [bound_pull_request(binding, body)]))
+
+    assert {:ok, %{status: :unconfirmed}} =
+             GitHub.readback_action(
+               bound_connection(),
+               resource,
+               "change.upsert",
+               altered_subject,
+               []
+             )
+
+    HTTPStub.verify!()
+  end
+
+  test "exact readback refuses missing markers, edited content, changed Subject head and selectors" do
+    {resource, binding} = bound_action()
+    body = dispatched_unknown_body(resource, binding)
+    original = bound_pull_request(binding, body)
+
+    mismatches = [
+      Map.put(original, "body", "Typed action"),
+      Map.put(original, "body", body <> " edited"),
+      Map.put(original, "body", String.replace(body, binding["action_id"], Ecto.UUID.generate())),
+      Map.put(original, "title", "Edited title"),
+      put_in(original, ["head", "sha"], String.duplicate("b", 40)),
+      put_in(original, ["head", "ref"], "another-branch"),
+      put_in(original, ["base", "ref"], "another-base"),
+      put_in(original, ["head", "repo", "id"], 999),
+      put_in(original, ["base", "repo", "node_id"], "another-node")
+    ]
+
+    Enum.each(mismatches, fn pull_request ->
+      HTTPStub.expect(bound_reads(binding, [pull_request]))
+
+      assert {:ok, %{status: :unconfirmed}} =
+               GitHub.readback_action(bound_connection(), resource, "change.upsert", binding, [])
+
+      HTTPStub.verify!()
+    end)
+  end
+
+  test "exact readback refuses absent or ambiguous pull requests" do
+    {resource, binding} = bound_action()
+    body = dispatched_unknown_body(resource, binding)
+    pull_request = bound_pull_request(binding, body)
+
+    other_pull_request =
+      Map.merge(pull_request, %{
+        "number" => 19,
+        "html_url" => "https://github.com/acme/symmetry/pull/19"
+      })
+
+    Enum.each([[], [pull_request, other_pull_request]], fn entries ->
+      HTTPStub.expect(bound_reads(binding, entries))
+
+      assert {:ok, %{status: :unconfirmed}} =
+               GitHub.readback_action(bound_connection(), resource, "change.upsert", binding, [])
+
+      HTTPStub.verify!()
+    end)
+  end
+
+  test "stable repository identity and branch head are checked before initial mutation" do
+    {resource, binding} = bound_action()
+
+    Enum.each(
+      [%{"id" => 999, "node_id" => "R_exact"}, %{"id" => 123, "node_id" => "R_replaced"}],
+      fn repository ->
+        HTTPStub.expect([
+          %{
+            method: :get,
+            url_contains: "/repos/acme/symmetry",
+            response: {:ok, 200, %{}, repository}
+          }
+        ])
+
+        assert {:error, :forbidden} =
+                 GitHub.execute_bound(
+                   bound_connection(),
+                   resource,
+                   %{},
+                   "change.upsert",
+                   binding["input"],
+                   binding,
+                   []
+                 )
+
+        HTTPStub.verify!()
+      end
+    )
+
+    HTTPStub.expect([
+      hd(bound_reads(binding, [])),
+      %{
+        method: :get,
+        url_contains: "/git/ref/heads/",
+        response: {:ok, 200, %{}, %{"object" => %{"sha" => String.duplicate("b", 40)}}}
+      }
+    ])
+
+    assert {:error, :forbidden} =
+             GitHub.execute_bound(
+               bound_connection(),
+               resource,
+               %{},
+               "change.upsert",
+               binding["input"],
+               binding,
+               []
+             )
+
+    HTTPStub.verify!()
+  end
+
+  test "exact readback cannot promote a replaced repository or moved source ref" do
+    {resource, binding} = bound_action()
+
+    HTTPStub.expect([
+      %{
+        method: :get,
+        url_contains: "/repos/acme/symmetry",
+        response: {:ok, 200, %{}, %{"id" => 999, "node_id" => "R_exact"}}
+      }
+    ])
+
+    assert {:ok, %{status: :unconfirmed}} =
+             GitHub.readback_action(bound_connection(), resource, "change.upsert", binding, [])
+
+    HTTPStub.verify!()
+
+    HTTPStub.expect([
+      hd(bound_reads(binding, [])),
+      %{
+        method: :get,
+        url_contains: "/git/ref/heads/",
+        response: {:ok, 200, %{}, %{"object" => %{"sha" => String.duplicate("b", 40)}}}
+      }
+    ])
+
+    assert {:ok, %{status: :unconfirmed}} =
+             GitHub.readback_action(bound_connection(), resource, "change.upsert", binding, [])
+
+    HTTPStub.verify!()
+  end
+
+  test "exact original pull request updates read back only that immutable selector" do
+    {resource, upsert_binding} = bound_action()
+
+    input = %{
+      "title" => "Update exact PR",
+      "body" => "Explicit body",
+      "pull_request_url" => "https://github.com/acme/symmetry/pull/18"
+    }
+
+    assert {:ok, binding} =
+             GitHub.action_binding(
+               resource,
+               Ecto.UUID.generate(),
+               upsert_binding["subject"],
+               "change.update",
+               input,
+               %{"kind" => "pull_request", "pull_request_url" => input["pull_request_url"]},
+               upsert_binding
+             )
+
+    original = bound_pull_request(upsert_binding, "Original body")
+
+    HTTPStub.expect([
+      hd(bound_reads(binding, [])),
+      %{method: :get, url_contains: "/pulls/18", response: {:ok, 200, %{}, original}},
+      %{
+        method: :patch,
+        url_contains: "/pulls/18",
+        body_assertion: fn payload -> Process.put(:bound_update_body, payload["body"]) end,
+        response: {:error, {:transport, :timeout}}
+      }
+    ])
+
+    assert {:error, {:transport, :timeout}} =
+             GitHub.execute_bound(
+               bound_connection(),
+               resource,
+               %{},
+               "change.update",
+               input,
+               binding,
+               []
+             )
+
+    HTTPStub.verify!()
+    exact = %{original | "title" => input["title"], "body" => Process.get(:bound_update_body)}
+
+    HTTPStub.expect([
+      hd(bound_reads(binding, [])),
+      %{method: :get, url_contains: "/pulls/18", response: {:ok, 200, %{}, exact}}
+    ])
+
+    assert {:ok, %{status: :confirmed}} =
+             GitHub.readback_action(bound_connection(), resource, "change.update", binding, [])
+
+    HTTPStub.verify!()
+  end
+
+  defp bound_connection, do: %{account_ref: "acme", capabilities: ["repositories", "changes"]}
+
+  defp bound_action do
+    resource = %{
+      id: Ecto.UUID.generate(),
+      kind: "repository",
+      external_ref: "acme/symmetry",
+      metadata: %{"repository_id" => 123, "repository_node_id" => "R_exact"}
+    }
+
+    subject = %{
+      "resource_id" => resource.id,
+      "commit" => String.duplicate("a", 40),
+      "tree_digest" => "sha256:" <> String.duplicate("4", 64)
+    }
+
+    input = %{
+      "source_branch" => "codex/goal-3",
+      "target_branch" => "main",
+      "title" => "Connect providers",
+      "body" => "Typed action"
+    }
+
+    target = %{
+      "kind" => "branches",
+      "source_branch" => input["source_branch"],
+      "target_branch" => input["target_branch"]
+    }
+
+    assert {:ok, binding} =
+             GitHub.action_binding(
+               resource,
+               Ecto.UUID.generate(),
+               subject,
+               "change.upsert",
+               input,
+               target,
+               %{"run_id" => Ecto.UUID.generate(), "task_id" => Ecto.UUID.generate()}
+             )
+
+    {resource, binding}
+  end
+
+  defp dispatched_unknown_body(resource, binding) do
+    HTTPStub.expect(
+      bound_reads(binding, []) ++
+        [
+          %{
+            method: :post,
+            url_contains: "/pulls",
+            body_assertion: fn payload ->
+              assert payload["title"] == "Connect providers"
+
+              assert String.starts_with?(
+                       payload["body"],
+                       "Typed action\n\n<!-- symmetry-provider-action:v1:" <>
+                         binding["action_id"] <> ":"
+                     )
+
+              Process.put(:bound_action_body, payload["body"])
+            end,
+            response: {:error, {:transport, :timeout}}
+          }
+        ]
+    )
+
+    assert {:error, {:transport, :timeout}} =
+             GitHub.execute_bound(
+               bound_connection(),
+               resource,
+               %{},
+               "change.upsert",
+               binding["input"],
+               binding,
+               []
+             )
+
+    HTTPStub.verify!()
+    Process.get(:bound_action_body)
+  end
+
+  defp bound_reads(binding, entries) do
+    [
+      %{
+        method: :get,
+        url_contains: "/repos/acme/symmetry",
+        url_excludes: ["/pulls", "/git/"],
+        response: {:ok, 200, %{}, binding["repository"]}
+      },
+      %{
+        method: :get,
+        url_contains: "/git/ref/heads/codex%2Fgoal-3",
+        response: {:ok, 200, %{}, %{"object" => %{"sha" => binding["subject"]["commit"]}}}
+      },
+      %{method: :get, url_contains: "/pulls?", response: {:ok, 200, %{}, entries}}
+    ]
+  end
+
+  defp bound_pull_request(binding, body) do
+    %{
+      "number" => 18,
+      "html_url" => "https://github.com/acme/symmetry/pull/18",
+      "state" => "open",
+      "title" => binding["title"],
+      "body" => body,
+      "head" => %{
+        "ref" => "codex/goal-3",
+        "sha" => binding["subject"]["commit"],
+        "repo" => binding["repository"]
+      },
+      "base" => %{"ref" => "main", "repo" => binding["repository"]}
+    }
+  end
+
   defp issue_response(number) do
     %{
       "number" => number,
