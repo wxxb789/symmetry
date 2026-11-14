@@ -126,8 +126,7 @@ test("project URL, refresh recovery, history and keyboard focus", async ({ page,
 
 test("real response loading, network failure and recovery", async ({ page }, testInfo) => {
   await login(page);
-  let release;
-  const barrier = new Promise((resolve) => { release = resolve; });
+  const { promise: barrier, resolve: release } = Promise.withResolvers();
   await page.route("**/portal/api/workspace*", async (route) => {
     await barrier;
     await route.continue();

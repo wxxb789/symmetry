@@ -7,11 +7,13 @@ FROM node:24-bookworm-slim AS frontend
 WORKDIR /workspace
 RUN npm install --global pnpm@12.17.0
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY contracts/package.json ./contracts/package.json
+COPY frontend/package.json ./frontend/package.json
+COPY browser/package.json ./browser/package.json
+RUN pnpm install --frozen-lockfile
 COPY contracts/ ./contracts/
 COPY frontend/ ./frontend/
-COPY browser/package.json ./browser/package.json
-RUN pnpm install --frozen-lockfile \
-    && pnpm --filter @symmetry/frontend build
+RUN pnpm --filter @symmetry/frontend build
 
 FROM ${ELIXIR_IMAGE} AS build
 

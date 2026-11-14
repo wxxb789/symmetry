@@ -145,6 +145,31 @@ describe("workspace navigation", () => {
     expect(screen.getByRole("heading", { level: 1, name: "Project Two" })).toBeVisible();
   });
 
+  it.each(["/portal/projects/missing", "/portal/attention?projectId=missing"])("keeps project navigation usable after a scoped read fails at %s", async (path) => {
+    const user = userEvent.setup();
+    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const requestPath = input instanceof Request ? input.url : String(input);
+      if (requestPath.endsWith("/session")) return Promise.resolve(new Response('{"csrf_token":"token"}'));
+      const projectId = new URL(requestPath, "http://localhost").searchParams.get("project_id") ?? firstProjectId;
+      return Promise.resolve(projectId === "missing" ? new Response("{}", { status: 404 }) : new Response(JSON.stringify({
+        selected_project_id: projectId,
+        projects: projects.map((project) => ({ ...project, work_items: project.id === projectId ? project.work_items : [] })),
+      })));
+    });
+    const { history } = renderWorkspace(path, fetcher);
+    expect(await screen.findByRole("alert")).toHaveTextContent("The requested resource was not found");
+    const selection = screen.getByLabelText("Project");
+    await waitFor(() => expect(selection).toBeEnabled());
+    expect(screen.getByRole("option", { name: "Project One" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /Search or navigate/ }));
+    const palette = await screen.findByRole("dialog", { name: "Command palette" });
+    await user.click(within(palette).getByRole("link", { name: /Project One/ }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Project One" })).toBeVisible();
+    await user.selectOptions(selection, secondProjectId);
+    expect(await screen.findByRole("heading", { level: 1, name: "Project Two" })).toBeVisible();
+    expect(history.location.pathname).toBe(`/portal/projects/${secondProjectId}`);
+  });
+
   it("returns keyboard focus when the command palette closes with Escape", async () => {
     const user = userEvent.setup();
     renderWorkspace("/portal/attention");

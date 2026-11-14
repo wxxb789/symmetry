@@ -16,6 +16,14 @@ function useProjectScope() {
   return projectId ?? searchProjectId;
 }
 
+function useProjectDirectory() {
+  const { application } = useRouteContext({ from: "__root__" });
+  const projectId = useProjectScope();
+  const query = useQuery(workspaceOptions(application.api, projectId ?? null));
+  const recovery = useQuery({ ...workspaceOptions(application.api, null), enabled: !!projectId && query.isError });
+  return projectId && query.isError ? recovery : query;
+}
+
 function NavigationLinks({ onNavigate }: { onNavigate?: () => void }) {
   const projectId = useProjectScope();
   return <nav aria-label="Workspace navigation" className="nav-links">
@@ -25,8 +33,7 @@ function NavigationLinks({ onNavigate }: { onNavigate?: () => void }) {
 }
 
 function ProjectPicker() {
-  const { application } = useRouteContext({ from: "__root__" });
-  const query = useQuery(workspaceOptions(application.api, null));
+  const query = useProjectDirectory();
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const projectId = useProjectScope();
@@ -47,8 +54,7 @@ function ProjectPicker() {
 }
 
 function CommandPalette() {
-  const { application } = useRouteContext({ from: "__root__" });
-  const query = useQuery(workspaceOptions(application.api, null));
+  const query = useProjectDirectory();
   const projectId = useProjectScope();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -134,7 +140,7 @@ export function WorkspaceRoot() {
     <a className="skip-link" href="#content-heading">Skip to content</a>
     <div className="workspace-shell">
       <aside className="sidebar"><Link className="brand" to="/attention" search={{}}><span className="brand-mark" aria-hidden="true">S</span>Symmetry</Link><p className="sidebar-label">Workspace</p><NavigationLinks /><div className="sidebar-footer"><span className="read-only-dot" aria-hidden="true" />Read-only workspace</div></aside>
-      <div className="workspace-body"><header className="topbar"><div className="topbar-start"><MobileNavigation /><span className="mobile-brand">Symmetry</span><ProjectPicker /></div><div className="topbar-actions"><CommandPalette /><form action="/portal/logout" method="post"><input type="hidden" name="_csrf_token" value={csrf ?? ""} /><button className="icon-button" type="submit" disabled={!csrf} aria-label="Sign out"><LogOut size={18} aria-hidden="true" /></button></form></div></header>
+      <div className="workspace-body"><header className="topbar"><div className="topbar-start"><MobileNavigation /><ProjectPicker /></div><div className="topbar-actions"><CommandPalette /><form action="/portal/logout" method="post"><input type="hidden" name="_csrf_token" value={csrf ?? ""} /><button className="icon-button" type="submit" disabled={!csrf} aria-label="Sign out"><LogOut size={18} aria-hidden="true" /></button></form></div></header>
         <main id="main-content" className="workspace-content"><Outlet /></main>
         <footer className="content-footer">Workspace reads reflect server state. No changes can be made from this shell. <a href="/portal/classic">Classic workspace</a></footer>
       </div>

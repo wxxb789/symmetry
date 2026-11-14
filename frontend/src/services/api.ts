@@ -65,7 +65,7 @@ function request<A, E>(
       catch: () => new Network({ message: "Cannot reach the server. Check your connection and try again." }),
     });
     if (response.type === "opaqueredirect" || response.status === 302 || response.status === 303) {
-      return yield* Effect.fail(new Unauthenticated({ message: "Your session has ended. Sign in to continue." }));
+      return yield* Effect.fail(statusError(401));
     }
     if (!response.ok) return yield* Effect.fail(statusError(response.status));
     return yield* decode(body).pipe(Effect.mapError(() => new UnexpectedResponse({

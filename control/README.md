@@ -44,6 +44,8 @@ selected project contains hydrated work items; unloaded project work is not
 reported as zero. Attention selection is carried by `?projectId=...`, including
 navigation from project details and authentication recovery. Clearing it restores
 the server-selected project rather than implying a global blocker summary.
+On scoped pages, the header reuses that read's project directory; a failed scoped
+read loads the default directory so project navigation remains usable.
 
 Existing writable project, board, connection and Chat flows remain at
 `/portal/classic` until their React replacements reach parity. Switching uses a

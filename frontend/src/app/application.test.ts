@@ -3,10 +3,10 @@ import { createApplication, safeReturnTo, workspaceOptions } from "./application
 import { Conflict, Network, UnexpectedResponse, readRetry } from "../services/api";
 
 describe("private query lifecycle", () => {
-  it("clears private records and cancels other reads before login recovery", async () => {
+  it.each([401, 302, 303])("clears private records and cancels other reads before login recovery for HTTP %s", async (status) => {
     const replace = vi.fn();
     const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
-      if ((input instanceof Request ? input.url : String(input)).includes("expired")) return Promise.resolve(new Response("{}", { status: 401 }));
+      if ((input instanceof Request ? input.url : String(input)).includes("expired")) return Promise.resolve(new Response("{}", { status }));
       return Promise.withResolvers<Response>().promise;
     });
     const app = createApplication({ fetcher, location: { href: "http://localhost/portal/projects/expired", replace } });
