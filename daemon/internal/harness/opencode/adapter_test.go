@@ -20,8 +20,8 @@ import (
 
 func TestProbeRecordsExactTransportButRemainsUnverified(t *testing.T) {
 	adapter := NewAdapterWithRunner("opencode", fixtureCommandRunner{responses: map[string][]byte{
-		"--version":    []byte(TestedVersion + "\n"),
-		"serve --help": []byte("opencode serve --hostname --port --pure"),
+		"--version":    []byte("opencode v2.3.0\n"),
+		"serve --help": []byte("opencode serve\n--hostname  hostname to listen on\n--port  port to listen on\n"),
 	}})
 	capabilities, err := adapter.Probe(context.Background())
 	if !errors.Is(err, harness.ErrNativeUnverified) {
@@ -30,8 +30,13 @@ func TestProbeRecordsExactTransportButRemainsUnverified(t *testing.T) {
 	if err := capabilities.Validate(); err != nil {
 		t.Fatalf("capabilities invalid: %v", err)
 	}
-	if !capabilities.VersionKnown || capabilities.NativeVersion != TestedVersion || !capabilities.TransportVerified || capabilities.Verified || capabilities.Start || capabilities.Events || capabilities.Cancel || capabilities.Resume || capabilities.Usage != harness.UsageUnknown {
+	if TestedVersion != "2.3.0" || !capabilities.VersionKnown || capabilities.NativeVersion != "2.3.0" || !capabilities.TransportVerified || capabilities.ImplementationVersion != "" || capabilities.Verified ||
+		capabilities.Start || capabilities.Events || capabilities.Cancel || capabilities.Resume || capabilities.Handoff || capabilities.ApprovalResponse || capabilities.ProviderAccess || capabilities.HardCostLimit ||
+		capabilities.Guidance != harness.GuidanceUnsupported || capabilities.Pause != harness.PauseUnsupported || capabilities.Usage != harness.UsageUnknown {
 		t.Fatalf("capabilities = %+v, want known but completely unverified projection", capabilities)
+	}
+	if !strings.Contains(capabilities.Unsupported[string(harness.CapabilityStart)], "terminal") || !strings.Contains(capabilities.Unsupported[string(harness.CapabilityResume)], "recovery") {
+		t.Fatalf("unsupported reasons = %#v, want native terminal and recovery evidence requirements", capabilities.Unsupported)
 	}
 }
 
@@ -42,7 +47,11 @@ func TestProbeRejectsWrongVersionAndIncompleteHelp(t *testing.T) {
 		help    string
 		want    error
 	}{
-		{name: "wrong version", version: "1.18.29", want: harness.ErrUnsupportedVersion},
+		{name: "V1 version", version: "1.18.29", want: harness.ErrUnsupportedVersion},
+		{name: "historical V1 pin", version: "1.18.32", want: harness.ErrUnsupportedVersion},
+		{name: "superseded V2 pin", version: "opencode v2.2.7", want: harness.ErrUnsupportedVersion},
+		{name: "version in diagnostic", version: "failed to run opencode v2.3.0", want: harness.ErrUnsupportedVersion},
+		{name: "prerelease version", version: "opencode v2.3.0-preview", want: harness.ErrUnsupportedVersion},
 		{name: "bad help", version: TestedVersion, help: "opencode serve --port", want: harness.ErrNativeUnverified},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -50,9 +59,15 @@ func TestProbeRejectsWrongVersionAndIncompleteHelp(t *testing.T) {
 				"--version":    []byte(test.version),
 				"serve --help": []byte(test.help),
 			}})
-			_, err := adapter.Probe(context.Background())
+			capabilities, err := adapter.Probe(context.Background())
 			if !errors.Is(err, test.want) {
 				t.Fatalf("Probe() error = %v, want %v", err, test.want)
+			}
+			if err := capabilities.Validate(); err != nil {
+				t.Fatalf("capabilities invalid: %v", err)
+			}
+			if capabilities.TransportVerified || capabilities.Verified || capabilities.Start || capabilities.Events {
+				t.Fatalf("rejected probe advertised native support: %+v", capabilities)
 			}
 		})
 	}

@@ -1,0 +1,811 @@
+{
+  "decision": "unsupported",
+  "binary": {
+    "path": "C:\\Users\\lhan\\AppData\\Local\\mise\\installs\\aqua-anomalyco-opencode\\latest\\opencode.exe",
+    "size": 257553288,
+    "sha256": "38153a142354634c82b5cfe6c00b19df15a71e6cf8c17ef5f5c1a4cc684a6917"
+  },
+  "platform": {
+    "system": "Windows",
+    "kernel": "10.0.26300",
+    "distribution": "Windows-11-10.0.26300-SP0"
+  },
+  "source_head": "8c681d4c4398f5643658a1439607c9856ccdc726",
+  "witness_sha256": "55501a9f01d3dcd76edbb1983efe0dfe474b38190f6fb07d5cd9558621a6e65e",
+  "command": [
+    "python3",
+    "scripts/ci/opencode-v2-support-witness.py",
+    "--out",
+    ".tmp\\opencode-v2-windows-final.json"
+  ],
+  "workspace": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav",
+  "operations": [
+    {
+      "method": "GET",
+      "path": "/api/info",
+      "authenticated": true,
+      "payload": null,
+      "status": 200,
+      "body": "{\"version\":\"2.3.0\",\"pid\":32376,\"hostname\":\"CPC-lhan-AWGGLB\",\"urls\":[\"http://127.0.0.1:50377\"],\"paths\":{\"tmp\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\\\\tmp\\\\opencode\"},\"capabilities\":{\"persistentPty\":true}}",
+      "credential_redacted_before_write": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/info",
+      "authenticated": false,
+      "payload": null,
+      "status": 401,
+      "body": "{\"_tag\":\"UnauthorizedError\",\"message\":\"Authentication required\"}",
+      "credential_redacted_before_write": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/health",
+      "authenticated": true,
+      "payload": null,
+      "status": 404,
+      "body": "",
+      "credential_redacted_before_write": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/model",
+      "authenticated": true,
+      "payload": null,
+      "status": 200,
+      "body": "{\"location\":{\"directory\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\"},\"data\":[{\"id\":\"deepseek-v4.1-flash-fast\",\"modelID\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"name\":\"DeepSeek V4.1 Flash Fast\",\"package\":\"@opencode/ai/providers/openai-compatible\",\"settings\":{\"apiKey\":\"<operator credential redacted>\",\"baseURL\":\"https://litellm-proxy-hk.graydune-4a6be1e2.eastasia.azurecontainerapps.io/v1\",\"provider\":\"tencent-litellm\",\"reasoningEffort\":\"high\"},\"capabilities\":{\"tools\":true,\"input\":[\"text\"],\"output\":[\"text\"]},\"variants\":[{\"id\":\"none\",\"settings\":{\"reasoningEffort\":\"none\"}},{\"id\":\"minimal\",\"settings\":{\"disabled\":true}},{\"id\":\"low\",\"settings\":{\"reasoningEffort\":\"low\"}},{\"id\":\"medium\",\"settings\":{\"disabled\":true}},{\"id\":\"high\",\"settings\":{\"reasoningEffort\":\"high\"}},{\"id\":\"xhigh\",\"settings\":{\"disabled\":true}},{\"id\":\"max\",\"settings\":{\"reasoningEffort\":\"max\"}}],\"time\":{\"released\":0},\"cost\":[],\"status\":\"active\",\"enabled\":true,\"limit\":{\"context\":1000000,\"output\":384000}}]}",
+      "credential_redacted_before_write": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/session",
+      "authenticated": true,
+      "payload": {
+        "location": {
+          "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+        },
+        "model": {
+          "providerID": "tencent-litellm",
+          "id": "deepseek-v4.1-flash-fast"
+        },
+        "permissions": [
+          {
+            "action": "*",
+            "resource": "*",
+            "effect": "deny"
+          },
+          {
+            "action": "read",
+            "resource": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav\\baseline.txt",
+            "effect": "allow"
+          }
+        ]
+      },
+      "status": 200,
+      "body": "{\"data\":{\"id\":\"ses_e27004858ffe20EdPC4njb3gls\",\"projectID\":\"f64ccee3b7176df93f57dcc63196893e741da076\",\"model\":{\"id\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"variant\":\"default\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"time\":{\"created\":1794641999789,\"updated\":1794641999789},\"permissions\":[{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"deny\"},{\"action\":\"read\",\"resource\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\\\\baseline.txt\",\"effect\":\"allow\"}],\"location\":{\"directory\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\"}}}",
+      "credential_redacted_before_write": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/session/ses_e27004858ffe20EdPC4njb3gls/event?after=0",
+      "authenticated": true,
+      "payload": null,
+      "status": 404,
+      "body": "",
+      "credential_redacted_before_write": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/ses_e27004858ffe20EdPC4njb3gls/prompt",
+      "authenticated": true,
+      "payload": {
+        "id": "msg_bad6a64e106862c6af490aa5",
+        "text": "Reply exactly OPENCODE_NATIVE_SUCCESS. Do not use tools.",
+        "delivery": "steer",
+        "resume": true
+      },
+      "status": 200,
+      "body": "{\"data\":{\"id\":\"msg_bad6a64e106862c6af490aa5\",\"sessionID\":\"ses_e27004858ffe20EdPC4njb3gls\",\"time\":{\"created\":1794641999818},\"type\":\"user\",\"payload\":{\"text\":\"Reply exactly OPENCODE_NATIVE_SUCCESS. Do not use tools.\"},\"delivery\":\"steer\"}}",
+      "credential_redacted_before_write": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/session/ses_e27004858ffe20EdPC4njb3gls",
+      "authenticated": true,
+      "payload": null,
+      "status": 200,
+      "body": "{\"data\":{\"id\":\"ses_e27004858ffe20EdPC4njb3gls\",\"projectID\":\"f64ccee3b7176df93f57dcc63196893e741da076\",\"model\":{\"id\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"variant\":\"default\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"outcome\":\"failed\",\"time\":{\"created\":1794641999789,\"updated\":1794642000509,\"busy\":1794641999822,\"idle\":1794642000516},\"permissions\":[{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"deny\"},{\"action\":\"read\",\"resource\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\\\\baseline.txt\",\"effect\":\"allow\"}],\"location\":{\"directory\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\"}}}",
+      "credential_redacted_before_write": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/session",
+      "authenticated": true,
+      "payload": {
+        "location": {
+          "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+        },
+        "model": {
+          "providerID": "tencent-litellm",
+          "id": "deepseek-v4.1-flash-fast"
+        },
+        "permissions": [
+          {
+            "action": "*",
+            "resource": "*",
+            "effect": "deny"
+          },
+          {
+            "action": "read",
+            "resource": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav\\baseline.txt",
+            "effect": "allow"
+          }
+        ]
+      },
+      "status": 200,
+      "body": "{\"data\":{\"id\":\"ses_e27004568ffezTfTp5yHr4A8Ft\",\"projectID\":\"f64ccee3b7176df93f57dcc63196893e741da076\",\"model\":{\"id\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"variant\":\"default\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"time\":{\"created\":1794642000545,\"updated\":1794642000545},\"permissions\":[{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"deny\"},{\"action\":\"read\",\"resource\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\\\\baseline.txt\",\"effect\":\"allow\"}],\"location\":{\"directory\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\"}}}",
+      "credential_redacted_before_write": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/ses_e27004568ffezTfTp5yHr4A8Ft/prompt",
+      "authenticated": true,
+      "payload": {
+        "id": "msg_bddb0d5d40df5d7cfd2a120a",
+        "text": "Output the integers from 1 through 10000, one per line. Do not use tools.",
+        "delivery": "steer",
+        "resume": true
+      },
+      "status": 200,
+      "body": "{\"data\":{\"id\":\"msg_bddb0d5d40df5d7cfd2a120a\",\"sessionID\":\"ses_e27004568ffezTfTp5yHr4A8Ft\",\"time\":{\"created\":1794642000559},\"type\":\"user\",\"payload\":{\"text\":\"Output the integers from 1 through 10000, one per line. Do not use tools.\"},\"delivery\":\"steer\"}}",
+      "credential_redacted_before_write": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/ses_e27004568ffezTfTp5yHr4A8Ft/interrupt",
+      "authenticated": true,
+      "payload": null,
+      "status": 200,
+      "body": "{\"interrupted\":false}",
+      "credential_redacted_before_write": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/session/ses_e27004568ffezTfTp5yHr4A8Ft",
+      "authenticated": true,
+      "payload": null,
+      "status": 200,
+      "body": "{\"data\":{\"id\":\"ses_e27004568ffezTfTp5yHr4A8Ft\",\"projectID\":\"f64ccee3b7176df93f57dcc63196893e741da076\",\"model\":{\"id\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"variant\":\"default\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"outcome\":\"failed\",\"time\":{\"created\":1794642000545,\"updated\":1794642000771,\"busy\":1794642000564,\"idle\":1794642000774},\"permissions\":[{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"deny\"},{\"action\":\"read\",\"resource\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\\\\baseline.txt\",\"effect\":\"allow\"}],\"location\":{\"directory\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\"}}}",
+      "credential_redacted_before_write": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/session/ses_e27004858ffe20EdPC4njb3gls",
+      "authenticated": true,
+      "payload": null,
+      "status": 204,
+      "body": "",
+      "credential_redacted_before_write": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/session/ses_e27004858ffe20EdPC4njb3gls",
+      "authenticated": true,
+      "payload": null,
+      "status": 404,
+      "body": "{\"_tag\":\"SessionNotFoundError\",\"sessionID\":\"ses_e27004858ffe20EdPC4njb3gls\",\"message\":\"Session not found: ses_e27004858ffe20EdPC4njb3gls\"}",
+      "credential_redacted_before_write": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/session/ses_e27004568ffezTfTp5yHr4A8Ft",
+      "authenticated": true,
+      "payload": null,
+      "status": 204,
+      "body": "",
+      "credential_redacted_before_write": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/session/ses_e27004568ffezTfTp5yHr4A8Ft",
+      "authenticated": true,
+      "payload": null,
+      "status": 404,
+      "body": "{\"_tag\":\"SessionNotFoundError\",\"sessionID\":\"ses_e27004568ffezTfTp5yHr4A8Ft\",\"message\":\"Session not found: ses_e27004568ffezTfTp5yHr4A8Ft\"}",
+      "credential_redacted_before_write": false
+    }
+  ],
+  "events": [
+    {
+      "id": "evt_1d8ffb7a0001yKXP7yp83jIVuv",
+      "type": "server.connected",
+      "data": {}
+    },
+    {
+      "id": "evt_1d8ffb7ad001GBppqn1MRinytr",
+      "created": 1794641999789,
+      "type": "session.created",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+      },
+      "data": {
+        "sessionID": "ses_e27004858ffe20EdPC4njb3gls",
+        "slug": "neon-island",
+        "version": "2.3.0",
+        "projectID": "f64ccee3b7176df93f57dcc63196893e741da076",
+        "location": {
+          "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+        },
+        "subpath": "",
+        "permissions": [
+          {
+            "action": "*",
+            "resource": "*",
+            "effect": "deny"
+          },
+          {
+            "action": "read",
+            "resource": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav\\baseline.txt",
+            "effect": "allow"
+          }
+        ],
+        "model": {
+          "id": "deepseek-v4.1-flash-fast",
+          "providerID": "tencent-litellm"
+        }
+      },
+      "durable": {
+        "aggregateID": "ses_e27004858ffe20EdPC4njb3gls",
+        "seq": 0,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d8ffb7ca001zzr3rYprA6HlL2",
+      "created": 1794641999818,
+      "type": "session.inbox.enqueued",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+      },
+      "data": {
+        "inboxID": "msg_bad6a64e106862c6af490aa5",
+        "sessionID": "ses_e27004858ffe20EdPC4njb3gls",
+        "item": {
+          "type": "user",
+          "payload": {
+            "text": "Reply exactly OPENCODE_NATIVE_SUCCESS. Do not use tools."
+          },
+          "delivery": "steer"
+        }
+      },
+      "durable": {
+        "aggregateID": "ses_e27004858ffe20EdPC4njb3gls",
+        "seq": 1,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d8ffb7ce001CvewMFU5aJvCVH",
+      "created": 1794641999822,
+      "type": "session.execution.started",
+      "data": {
+        "sessionID": "ses_e27004858ffe20EdPC4njb3gls"
+      },
+      "durable": {
+        "aggregateID": "ses_e27004858ffe20EdPC4njb3gls",
+        "seq": 2,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d8ffb7da001rD7RzFRi8IhB54",
+      "created": 1794641999834,
+      "metadata": {
+        "instructions": {
+          "initial": true
+        }
+      },
+      "type": "session.instructions.updated",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+      },
+      "data": {
+        "sessionID": "ses_e27004858ffe20EdPC4njb3gls",
+        "delta": {
+          "core/date": "7e11767d20af6d0a757fa2ef151926d9b692ac492d8199662599d0d5e2e86810",
+          "core/environment": "880cf7e7d44acbefcf7466898745ce3619864e42b37361eb892b56880f419aaa"
+        }
+      },
+      "durable": {
+        "aggregateID": "ses_e27004858ffe20EdPC4njb3gls",
+        "seq": 3,
+        "version": 2
+      }
+    },
+    {
+      "id": "evt_1d8ffb7df001jem5DRauEHVvXo",
+      "created": 1794641999839,
+      "type": "session.inbox.delivered",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+      },
+      "data": {
+        "sessionID": "ses_e27004858ffe20EdPC4njb3gls",
+        "inboxID": "msg_bad6a64e106862c6af490aa5"
+      },
+      "durable": {
+        "aggregateID": "ses_e27004858ffe20EdPC4njb3gls",
+        "seq": 4,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d8ffba75001OiesVAvbCU6Q95",
+      "created": 1794642000501,
+      "type": "session.step.started",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+      },
+      "data": {
+        "sessionID": "ses_e27004858ffe20EdPC4njb3gls",
+        "agent": "build",
+        "model": {
+          "id": "deepseek-v4.1-flash-fast",
+          "providerID": "tencent-litellm",
+          "variant": "default"
+        },
+        "assistantMessageID": "msg_1d8ffb8040015WdZcxPCsYoqJG",
+        "started": 1794641999888
+      },
+      "durable": {
+        "aggregateID": "ses_e27004858ffe20EdPC4njb3gls",
+        "seq": 5,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d8ffba7d001cOBuww5LS308ul",
+      "created": 1794642000509,
+      "type": "session.step.failed",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+      },
+      "data": {
+        "sessionID": "ses_e27004858ffe20EdPC4njb3gls",
+        "assistantMessageID": "msg_1d8ffb8040015WdZcxPCsYoqJG",
+        "error": {
+          "type": "provider.auth",
+          "message": "LiteLLM Virtual Key expected. Received=d4f0****c0e3, expected to start with 'sk-'.",
+          "status": 401,
+          "response": {
+            "body": "{\"error\":{\"message\":\"LiteLLM Virtual Key expected. Received=d4f0****c0e3, expected to start with 'sk-'.\",\"type\":\"auth_error\",\"param\":\"None\",\"code\":\"401\"}}"
+          }
+        }
+      },
+      "durable": {
+        "aggregateID": "ses_e27004858ffe20EdPC4njb3gls",
+        "seq": 6,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d8ffba84001p9mpPRuISIEouL",
+      "created": 1794642000516,
+      "type": "session.execution.failed",
+      "data": {
+        "sessionID": "ses_e27004858ffe20EdPC4njb3gls",
+        "error": {
+          "type": "provider.auth",
+          "message": "LiteLLM Virtual Key expected. Received=d4f0****c0e3, expected to start with 'sk-'.",
+          "status": 401,
+          "response": {
+            "body": "{\"error\":{\"message\":\"LiteLLM Virtual Key expected. Received=d4f0****c0e3, expected to start with 'sk-'.\",\"type\":\"auth_error\",\"param\":\"None\",\"code\":\"401\"}}"
+          }
+        }
+      },
+      "durable": {
+        "aggregateID": "ses_e27004858ffe20EdPC4njb3gls",
+        "seq": 7,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d8ffbaa1001hmYBynuWGY1UKE",
+      "created": 1794642000545,
+      "type": "session.created",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+      },
+      "data": {
+        "sessionID": "ses_e27004568ffezTfTp5yHr4A8Ft",
+        "slug": "sunny-eagle",
+        "version": "2.3.0",
+        "projectID": "f64ccee3b7176df93f57dcc63196893e741da076",
+        "location": {
+          "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+        },
+        "subpath": "",
+        "permissions": [
+          {
+            "action": "*",
+            "resource": "*",
+            "effect": "deny"
+          },
+          {
+            "action": "read",
+            "resource": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav\\baseline.txt",
+            "effect": "allow"
+          }
+        ],
+        "model": {
+          "id": "deepseek-v4.1-flash-fast",
+          "providerID": "tencent-litellm"
+        }
+      },
+      "durable": {
+        "aggregateID": "ses_e27004568ffezTfTp5yHr4A8Ft",
+        "seq": 0,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d8ffbaaf00127o8TONEk5Eb2H",
+      "created": 1794642000559,
+      "type": "session.inbox.enqueued",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+      },
+      "data": {
+        "inboxID": "msg_bddb0d5d40df5d7cfd2a120a",
+        "sessionID": "ses_e27004568ffezTfTp5yHr4A8Ft",
+        "item": {
+          "type": "user",
+          "payload": {
+            "text": "Output the integers from 1 through 10000, one per line. Do not use tools."
+          },
+          "delivery": "steer"
+        }
+      },
+      "durable": {
+        "aggregateID": "ses_e27004568ffezTfTp5yHr4A8Ft",
+        "seq": 1,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d8ffbab4001iMjZy4N815umpN",
+      "created": 1794642000564,
+      "type": "session.execution.started",
+      "data": {
+        "sessionID": "ses_e27004568ffezTfTp5yHr4A8Ft"
+      },
+      "durable": {
+        "aggregateID": "ses_e27004568ffezTfTp5yHr4A8Ft",
+        "seq": 2,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d8ffbabd0011R8L3grA5Vb6MS",
+      "created": 1794642000573,
+      "metadata": {
+        "instructions": {
+          "initial": true
+        }
+      },
+      "type": "session.instructions.updated",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+      },
+      "data": {
+        "sessionID": "ses_e27004568ffezTfTp5yHr4A8Ft",
+        "delta": {
+          "core/date": "7e11767d20af6d0a757fa2ef151926d9b692ac492d8199662599d0d5e2e86810",
+          "core/environment": "880cf7e7d44acbefcf7466898745ce3619864e42b37361eb892b56880f419aaa"
+        }
+      },
+      "durable": {
+        "aggregateID": "ses_e27004568ffezTfTp5yHr4A8Ft",
+        "seq": 3,
+        "version": 2
+      }
+    },
+    {
+      "id": "evt_1d8ffbabf001xLRO83IXpHL8eu",
+      "created": 1794642000576,
+      "type": "session.inbox.delivered",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+      },
+      "data": {
+        "sessionID": "ses_e27004568ffezTfTp5yHr4A8Ft",
+        "inboxID": "msg_bddb0d5d40df5d7cfd2a120a"
+      },
+      "durable": {
+        "aggregateID": "ses_e27004568ffezTfTp5yHr4A8Ft",
+        "seq": 4,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d8ffbb800015QBXl0cPBh8juV",
+      "created": 1794642000768,
+      "type": "session.step.started",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+      },
+      "data": {
+        "sessionID": "ses_e27004568ffezTfTp5yHr4A8Ft",
+        "agent": "build",
+        "model": {
+          "id": "deepseek-v4.1-flash-fast",
+          "providerID": "tencent-litellm",
+          "variant": "default"
+        },
+        "assistantMessageID": "msg_1d8ffbad6001MuNuamTotSUbhu",
+        "started": 1794642000605
+      },
+      "durable": {
+        "aggregateID": "ses_e27004568ffezTfTp5yHr4A8Ft",
+        "seq": 5,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d8ffbb83001XKugz1R0wQdk66",
+      "created": 1794642000771,
+      "type": "session.step.failed",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+      },
+      "data": {
+        "sessionID": "ses_e27004568ffezTfTp5yHr4A8Ft",
+        "assistantMessageID": "msg_1d8ffbad6001MuNuamTotSUbhu",
+        "error": {
+          "type": "provider.auth",
+          "message": "LiteLLM Virtual Key expected. Received=d4f0****c0e3, expected to start with 'sk-'.",
+          "status": 401,
+          "response": {
+            "body": "{\"error\":{\"message\":\"LiteLLM Virtual Key expected. Received=d4f0****c0e3, expected to start with 'sk-'.\",\"type\":\"auth_error\",\"param\":\"None\",\"code\":\"401\"}}"
+          }
+        }
+      },
+      "durable": {
+        "aggregateID": "ses_e27004568ffezTfTp5yHr4A8Ft",
+        "seq": 6,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d8ffbb860012lU3WbTLRtlfBT",
+      "created": 1794642000774,
+      "type": "session.execution.failed",
+      "data": {
+        "sessionID": "ses_e27004568ffezTfTp5yHr4A8Ft",
+        "error": {
+          "type": "provider.auth",
+          "message": "LiteLLM Virtual Key expected. Received=d4f0****c0e3, expected to start with 'sk-'.",
+          "status": 401,
+          "response": {
+            "body": "{\"error\":{\"message\":\"LiteLLM Virtual Key expected. Received=d4f0****c0e3, expected to start with 'sk-'.\",\"type\":\"auth_error\",\"param\":\"None\",\"code\":\"401\"}}"
+          }
+        }
+      },
+      "durable": {
+        "aggregateID": "ses_e27004568ffezTfTp5yHr4A8Ft",
+        "seq": 7,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d8ffbbba001AcK1vNsPQnds2b",
+      "created": 1794642000826,
+      "type": "session.deleted",
+      "data": {
+        "sessionID": "ses_e27004858ffe20EdPC4njb3gls"
+      },
+      "durable": {
+        "aggregateID": "ses_e27004858ffe20EdPC4njb3gls",
+        "seq": 8,
+        "version": 2
+      }
+    },
+    {
+      "id": "evt_1d8ffbbd7001nU1Pei4hcJxcSa",
+      "created": 1794642000856,
+      "type": "session.deleted",
+      "data": {
+        "sessionID": "ses_e27004568ffezTfTp5yHr4A8Ft"
+      },
+      "durable": {
+        "aggregateID": "ses_e27004568ffezTfTp5yHr4A8Ft",
+        "seq": 8,
+        "version": 2
+      }
+    }
+  ],
+  "classes": {
+    "success": {
+      "status": "run and failed",
+      "terminal": {
+        "id": "evt_1d8ffba84001p9mpPRuISIEouL",
+        "created": 1794642000516,
+        "type": "session.execution.failed",
+        "data": {
+          "sessionID": "ses_e27004858ffe20EdPC4njb3gls",
+          "error": {
+            "type": "provider.auth",
+            "message": "LiteLLM Virtual Key expected. Received=d4f0****c0e3, expected to start with 'sk-'.",
+            "status": 401,
+            "response": {
+              "body": "{\"error\":{\"message\":\"LiteLLM Virtual Key expected. Received=d4f0****c0e3, expected to start with 'sk-'.\",\"type\":\"auth_error\",\"param\":\"None\",\"code\":\"401\"}}"
+            }
+          }
+        },
+        "durable": {
+          "aggregateID": "ses_e27004858ffe20EdPC4njb3gls",
+          "seq": 7,
+          "version": 1
+        }
+      }
+    },
+    "continuation_after_step": {
+      "status": "unavailable",
+      "blocker": "no successful tool continuation captured"
+    },
+    "interruption": {
+      "status": "run and failed",
+      "first_token": null,
+      "http_status": 200,
+      "response": {
+        "interrupted": false
+      },
+      "terminal": {
+        "id": "evt_1d8ffbb860012lU3WbTLRtlfBT",
+        "created": 1794642000774,
+        "type": "session.execution.failed",
+        "data": {
+          "sessionID": "ses_e27004568ffezTfTp5yHr4A8Ft",
+          "error": {
+            "type": "provider.auth",
+            "message": "LiteLLM Virtual Key expected. Received=d4f0****c0e3, expected to start with 'sk-'.",
+            "status": 401,
+            "response": {
+              "body": "{\"error\":{\"message\":\"LiteLLM Virtual Key expected. Received=d4f0****c0e3, expected to start with 'sk-'.\",\"type\":\"auth_error\",\"param\":\"None\",\"code\":\"401\"}}"
+            }
+          }
+        },
+        "durable": {
+          "aggregateID": "ses_e27004568ffezTfTp5yHr4A8Ft",
+          "seq": 7,
+          "version": 1
+        }
+      }
+    },
+    "usage": {
+      "status": "observed",
+      "native_counters": [
+        {
+          "id": "ses_e27004858ffe20EdPC4njb3gls",
+          "outcome": "failed",
+          "tokens": {
+            "input": 0,
+            "output": 0,
+            "reasoning": 0,
+            "cache": {
+              "read": 0,
+              "write": 0
+            }
+          },
+          "cost": 0
+        },
+        {
+          "id": "ses_e27004568ffezTfTp5yHr4A8Ft",
+          "outcome": "failed",
+          "tokens": {
+            "input": 0,
+            "output": 0,
+            "reasoning": 0,
+            "cache": {
+              "read": 0,
+              "write": 0
+            }
+          },
+          "cost": 0
+        }
+      ],
+      "limitation": "native counters only; successful/billable usage and failed-turn accounting unverified"
+    },
+    "cleanup": {
+      "status": "observed",
+      "command": [
+        "taskkill",
+        "/PID",
+        "32376",
+        "/T",
+        "/F"
+      ],
+      "exit_code": 0,
+      "server_exit_code": 1,
+      "stream_reader_stopped": true,
+      "output_readers_stopped": true
+    },
+    "provider_failure": {
+      "status": "observed",
+      "terminals": [
+        {
+          "id": "evt_1d8ffba84001p9mpPRuISIEouL",
+          "created": 1794642000516,
+          "type": "session.execution.failed",
+          "data": {
+            "sessionID": "ses_e27004858ffe20EdPC4njb3gls",
+            "error": {
+              "type": "provider.auth",
+              "message": "LiteLLM Virtual Key expected. Received=d4f0****c0e3, expected to start with 'sk-'.",
+              "status": 401,
+              "response": {
+                "body": "{\"error\":{\"message\":\"LiteLLM Virtual Key expected. Received=d4f0****c0e3, expected to start with 'sk-'.\",\"type\":\"auth_error\",\"param\":\"None\",\"code\":\"401\"}}"
+              }
+            }
+          },
+          "durable": {
+            "aggregateID": "ses_e27004858ffe20EdPC4njb3gls",
+            "seq": 7,
+            "version": 1
+          }
+        },
+        {
+          "id": "evt_1d8ffbb860012lU3WbTLRtlfBT",
+          "created": 1794642000774,
+          "type": "session.execution.failed",
+          "data": {
+            "sessionID": "ses_e27004568ffezTfTp5yHr4A8Ft",
+            "error": {
+              "type": "provider.auth",
+              "message": "LiteLLM Virtual Key expected. Received=d4f0****c0e3, expected to start with 'sk-'.",
+              "status": 401,
+              "response": {
+                "body": "{\"error\":{\"message\":\"LiteLLM Virtual Key expected. Received=d4f0****c0e3, expected to start with 'sk-'.\",\"type\":\"auth_error\",\"param\":\"None\",\"code\":\"401\"}}"
+              }
+            }
+          },
+          "durable": {
+            "aggregateID": "ses_e27004568ffezTfTp5yHr4A8Ft",
+            "seq": 7,
+            "version": 1
+          }
+        }
+      ]
+    },
+    "truncated_response": {
+      "status": "unavailable",
+      "blocker": "no approved real-relay fault injection; synthetic substitutes excluded"
+    }
+  },
+  "provider": {
+    "id": "tencent-litellm",
+    "model": "deepseek-v4.1-flash-fast",
+    "base_url": "https://litellm-proxy-hk.graydune-4a6be1e2.eastasia.azurecontainerapps.io/v1",
+    "discovered_from": "C:\\Users\\lhan\\.config\\opencode\\opencode.json",
+    "credential": "environment:TENCENT_GLM_API_KEY"
+  },
+  "server_command": [
+    "C:\\Users\\lhan\\AppData\\Local\\mise\\installs\\aqua-anomalyco-opencode\\latest\\opencode.exe",
+    "serve",
+    "--hostname",
+    "127.0.0.1",
+    "--port",
+    "50377"
+  ],
+  "server_pid": 32376,
+  "stream_status": 200,
+  "stream_end": "ConnectionResetError",
+  "logs": {
+    "stdout": "server listening on http://127.0.0.1:50377\n",
+    "stderr": ""
+  },
+  "credential_scan": {
+    "files_scanned": 8,
+    "matches": []
+  }
+}

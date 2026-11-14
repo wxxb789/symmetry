@@ -69,7 +69,7 @@ func TestRegistryKeepsUnavailableCapabilitiesExplicit(t *testing.T) {
 			if capabilities.Kind != test.kind {
 				t.Fatalf("capability kind = %q, want %q", capabilities.Kind, test.kind)
 			}
-			if capabilities.Verified || capabilities.Start || capabilities.Events || capabilities.Cancel || capabilities.ProviderAccess {
+			if capabilities.Verified || capabilities.Start || capabilities.Events || capabilities.Cancel || capabilities.Resume || capabilities.Handoff || capabilities.ApprovalResponse || capabilities.ProviderAccess || capabilities.HardCostLimit {
 				t.Fatalf("unavailable capabilities = %+v, want fail-closed operations", capabilities)
 			}
 			if capabilities.Guidance != GuidanceUnsupported || capabilities.Pause != PauseUnsupported || capabilities.Usage != UsageUnknown {
@@ -81,8 +81,60 @@ func TestRegistryKeepsUnavailableCapabilitiesExplicit(t *testing.T) {
 			if capabilities.Unsupported[string(CapabilityProviderAccess)] == "" {
 				t.Fatalf("unsupported map = %#v, want provider access reason", capabilities.Unsupported)
 			}
-			if requireErr := capabilities.Require(CapabilityStart); !errors.Is(requireErr, ErrUnsupportedCapability) {
-				t.Fatalf("Require(start) error = %v, want ErrUnsupportedCapability", requireErr)
+			for _, capability := range []Capability{CapabilityStart, CapabilityEvents, CapabilityCancel, CapabilityResume, CapabilityHandoff, CapabilityGuidance, CapabilityPause, CapabilityApprovalResponse, CapabilityUsage, CapabilityHardCostLimit, CapabilityProviderAccess} {
+				if requireErr := capabilities.Require(capability); !errors.Is(requireErr, ErrUnsupportedCapability) {
+					t.Fatalf("Require(%s) error = %v, want ErrUnsupportedCapability", capability, requireErr)
+				}
+			}
+			if test.kind == KindOpenCode {
+				var unavailable *AvailabilityError
+				if !errors.Is(err, ErrHarnessUnavailable) || !errors.As(err, &unavailable) || unavailable.Kind != KindOpenCode {
+					t.Fatalf("Probe() error = %v, want typed OpenCode ErrHarnessUnavailable", err)
+				}
+				adapter, err := registry.Lookup(test.kind)
+				if err != nil {
+					t.Fatal(err)
+				}
+				request := StartRequest{Invocation: execution.Invocation{Program: "configured-opencode"}}
+				request.PersistProcess = func(int, string) error {
+					t.Fatal("unavailable OpenCode persisted a launched process")
+					return nil
+				}
+				session, err := adapter.Start(context.Background(), request, EventSinkFunc(func(context.Context, Event) error {
+					t.Fatal("unavailable OpenCode emitted a native event")
+					return nil
+				}))
+				var startUnavailable *AvailabilityError
+				if session != nil || !errors.Is(err, ErrHarnessUnavailable) || !errors.As(err, &startUnavailable) || startUnavailable.Kind != KindOpenCode {
+					t.Fatalf("Start() = %T, %v, want no session or result/control path", session, err)
+				}
+			}
+		})
+	}
+}
+
+func TestOpenCodeUnavailableAdapterPreservesContextErrors(t *testing.T) {
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, test := range []struct {
+		name string
+		ctx  context.Context
+		want error
+	}{
+		{name: "nil"},
+		{name: "cancelled", ctx: cancelled, want: context.Canceled},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			adapter := NewOpenCodeAdapter()
+			_, probeErr := adapter.Probe(test.ctx)
+			session, startErr := adapter.Start(test.ctx, StartRequest{}, nil)
+			for _, err := range []error{probeErr, startErr} {
+				if err == nil || errors.Is(err, ErrHarnessUnavailable) || test.want != nil && !errors.Is(err, test.want) {
+					t.Fatalf("context validation error = %v, want %v before unavailable decision", err, test.want)
+				}
+			}
+			if session != nil {
+				t.Fatalf("Start() session = %T, want nil", session)
 			}
 		})
 	}

@@ -512,8 +512,8 @@ func nativeOpenCodeTerminalCandidateCheckVersion(t *testing.T, executable, works
 	if err != nil {
 		t.Fatalf("run pinned OpenCode --version: %v", err)
 	}
-	if strings.TrimSpace(string(output)) != TestedVersion {
-		t.Fatalf("pinned OpenCode version = %q, want %s", strings.TrimSpace(string(output)), TestedVersion)
+	if strings.TrimSpace(string(output)) != historicalNativeTestVersion {
+		t.Fatalf("historical OpenCode version = %q, want %s", strings.TrimSpace(string(output)), historicalNativeTestVersion)
 	}
 }
 

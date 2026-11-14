@@ -1,0 +1,67 @@
+{
+  "command": [
+    "wsl.exe",
+    "-d",
+    "Ubuntu-24.04",
+    "--",
+    "python3",
+    "-c",
+    "import os,pathlib,hashlib,json,subprocess; p=pathlib.Path('/mnt/c/Users/lhan/AppData/Local/mise/installs/aqua-anomalyco-opencode/latest/opencode.exe'); version=subprocess.run([str(p),'--version'],capture_output=True,text=True,timeout=20); print(json.dumps({'kernel':os.uname().release,'uname':list(os.uname()),'distribution':pathlib.Path('/etc/os-release').read_text(),'binary_path':str(p),'size':p.stat().st_size,'sha256':hashlib.file_digest(p.open('rb'),'sha256').hexdigest(),'format_magic_hex':p.open('rb').read(2).hex(),'interop_version':{'exit_code':version.returncode,'stdout':version.stdout,'stderr':version.stderr}},indent=2))"
+  ],
+  "exit_code": 0,
+  "launcher_platform": "Windows-11-10.0.26300-SP0",
+  "source_head": "8c681d4c4398f5643658a1439607c9856ccdc726",
+  "binary_owner_path": "C:\\Users\\lhan\\AppData\\Local\\mise\\installs\\aqua-anomalyco-opencode\\latest\\opencode.exe",
+  "observation": {
+    "kernel": "6.18.58.1-microsoft-standard-WSL2",
+    "uname": [
+      "Linux",
+      "CPC-lhan-AWGGLB",
+      "6.18.58.1-microsoft-standard-WSL2",
+      "#1 SMP PREEMPT_DYNAMIC Tue Oct 27 00:24:11 UTC 2026",
+      "x86_64"
+    ],
+    "distribution": "PRETTY_NAME=\"Ubuntu 24.04.5 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nVERSION=\"24.04.5 LTS (Noble Numbat)\"\nVERSION_CODENAME=noble\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nUBUNTU_CODENAME=noble\nLOGO=ubuntu-logo\n",
+    "binary_path": "/mnt/c/Users/lhan/AppData/Local/mise/installs/aqua-anomalyco-opencode/latest/opencode.exe",
+    "size": 257553288,
+    "sha256": "38153a142354634c82b5cfe6c00b19df15a71e6cf8c17ef5f5c1a4cc684a6917",
+    "format_magic_hex": "4d5a",
+    "interop_version": {
+      "exit_code": 0,
+      "stdout": "opencode v2.3.0\n",
+      "stderr": ""
+    }
+  },
+  "stderr": "",
+  "execution_class": "Windows PE via WSL interop; not a native Linux executable",
+  "classes": {
+    "success": {
+      "status": "unavailable",
+      "blocker": "Owner-pinned exact blob is a Windows PE (MZ), not native Linux ELF. WSL interop version output cannot establish Linux process ownership, lifecycle, cleanup or usage. No alternative binary was installed or substituted."
+    },
+    "provider_failure": {
+      "status": "unavailable",
+      "blocker": "Owner-pinned exact blob is a Windows PE (MZ), not native Linux ELF. WSL interop version output cannot establish Linux process ownership, lifecycle, cleanup or usage. No alternative binary was installed or substituted."
+    },
+    "interruption": {
+      "status": "unavailable",
+      "blocker": "Owner-pinned exact blob is a Windows PE (MZ), not native Linux ELF. WSL interop version output cannot establish Linux process ownership, lifecycle, cleanup or usage. No alternative binary was installed or substituted."
+    },
+    "continuation_after_step": {
+      "status": "unavailable",
+      "blocker": "Owner-pinned exact blob is a Windows PE (MZ), not native Linux ELF. WSL interop version output cannot establish Linux process ownership, lifecycle, cleanup or usage. No alternative binary was installed or substituted."
+    },
+    "truncated_response": {
+      "status": "unavailable",
+      "blocker": "Owner-pinned exact blob is a Windows PE (MZ), not native Linux ELF. WSL interop version output cannot establish Linux process ownership, lifecycle, cleanup or usage. No alternative binary was installed or substituted."
+    },
+    "cleanup": {
+      "status": "unavailable",
+      "blocker": "Owner-pinned exact blob is a Windows PE (MZ), not native Linux ELF. WSL interop version output cannot establish Linux process ownership, lifecycle, cleanup or usage. No alternative binary was installed or substituted."
+    },
+    "usage": {
+      "status": "unavailable",
+      "blocker": "Owner-pinned exact blob is a Windows PE (MZ), not native Linux ELF. WSL interop version output cannot establish Linux process ownership, lifecycle, cleanup or usage. No alternative binary was installed or substituted."
+    }
+  }
+}

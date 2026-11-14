@@ -28,7 +28,7 @@ func TestLinuxLegacyOpenCodeRefusesBeforeHealthRequest(t *testing.T) {
 	}
 	executable := strings.TrimSpace(os.Getenv(nativeSyntheticToolExecutableEnv))
 	if executable == "" || !filepath.IsAbs(executable) {
-		t.Fatalf("%s must name the absolute OpenCode %s executable", nativeSyntheticToolExecutableEnv, TestedVersion)
+		t.Fatalf("%s must name the absolute OpenCode %s executable", nativeSyntheticToolExecutableEnv, historicalNativeTestVersion)
 	}
 	info, err := os.Stat(executable)
 	if err != nil || !info.Mode().IsRegular() {

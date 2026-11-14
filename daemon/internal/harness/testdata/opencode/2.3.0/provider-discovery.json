@@ -1,0 +1,26 @@
+{
+  "source_head": "8c681d4c4398f5643658a1439607c9856ccdc726",
+  "platform": {
+    "system": "Windows",
+    "kernel": "10.0.26300",
+    "distribution": "Windows-11-10.0.26300-SP0"
+  },
+  "provider": "tencent-litellm",
+  "model": "deepseek-v4.1-flash-fast",
+  "base_url": "https://litellm-proxy-hk.graydune-4a6be1e2.eastasia.azurecontainerapps.io/v1",
+  "discovery": [
+    {
+      "config": "C:\\Users\\lhan\\.omp\\agent\\models.yml",
+      "field": "providers/tencent-litellm/baseUrl"
+    },
+    {
+      "config": "C:\\Users\\lhan\\.config\\opencode\\opencode.json",
+      "field": "provider/tencent-litellm/options/baseURL"
+    }
+  ],
+  "endpoints_match": true,
+  "credential_source": "environment:TENCENT_GLM_API_KEY",
+  "config_credential_values_copied": false,
+  "authorization_source": "Owner decision 2026-11-14 in docs/goals/0006g-opencode-support-decision.md",
+  "discovery_method": "Python parsed existing provider configuration and emitted only provider/model identity and whitelisted endpoint fields; no credential value was printed or stored"
+}

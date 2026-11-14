@@ -321,9 +321,10 @@ func NewPiAdapter() *UnavailableAdapter {
 	return newUnavailableAdapter(KindPi, "pi executable or verified native bridge is unavailable")
 }
 
-// NewOpenCodeAdapter returns the explicit unsupported OpenCode adapter.
+// NewOpenCodeAdapter returns the explicit unsupported OpenCode V2 adapter.
+// Version/help observations do not make the private transport production-ready.
 func NewOpenCodeAdapter() *UnavailableAdapter {
-	return newUnavailableAdapter(KindOpenCode, "OpenCode executable or verified native bridge is unavailable")
+	return newUnavailableAdapter(KindOpenCode, "OpenCode V2 2.3.0 is unsupported: require exact-binary Windows and native Linux terminal and retained-session recovery evidence before enabling native sessions; V1 is not supported")
 }
 
 // Probe returns an unsupported projection rather than silently omitting the

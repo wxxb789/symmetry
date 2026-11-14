@@ -30,7 +30,6 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/codex"
-	"github.com/wxxb789/symmetry/daemon/internal/harness/opencode"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/pi"
 	"github.com/wxxb789/symmetry/daemon/internal/notification"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
@@ -1163,11 +1162,7 @@ func newHarnessRegistry(profile config.AgentProfile) *harness.Registry {
 	registry := harness.NewRegistry()
 	_ = registry.Register(harness.KindCodex, codex.NewAdapterWithNativeIdentity(profile.Command, profile.NativeModel, profile.NativeModelProvider))
 	_ = registry.Register(harness.KindClaude, harness.NewClaudeCandidateAdapter(profile.Command))
-	// These adapters retain conservative probes until native lifecycle evidence
-	// exists. Registering the concrete transports lets the configured runtime
-	// use exactly one implementation for both probing and a future verified run.
 	_ = registry.Register(harness.KindPi, pi.NewAdapter(profile.Command))
-	_ = registry.Register(harness.KindOpenCode, opencode.NewAdapter(profile.Command))
 	return registry
 }
 
@@ -3575,6 +3570,10 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		return
 	}
 	admission, admissionPresent, admissionErr := parseAdmissionInput(claim.Work.Input)
+	var legacyLaunchErr error
+	if !admissionPresent && daemon.config.Runtime.HarnessKind == config.RuntimeHarnessOpenCode {
+		legacyLaunchErr = daemon.harnessCapabilities.Require(harness.CapabilityStart, harness.CapabilityEvents, harness.CapabilityCancel)
+	}
 	daemon.mu.Lock()
 	active := daemon.running[key]
 	cancelCommandID := ""
@@ -3586,7 +3585,7 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		cancelCommandID = active.cancelCommandID
 		stale = active.stale
 	}
-	if !operatorCancelled && !stale && !contextCancelled && !admissionPresent && !linuxNativeRuntimeRequiresGoalAdmission(daemon.config.Runtime.HarnessKind) {
+	if !operatorCancelled && !stale && !contextCancelled && !admissionPresent && !linuxNativeRuntimeRequiresGoalAdmission(daemon.config.Runtime.HarnessKind) && legacyLaunchErr == nil {
 		err = daemon.markRunning(key)
 	}
 	daemon.mu.Unlock()
@@ -3623,6 +3622,10 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 	}
 	if linuxNativeRuntimeRequiresGoalAdmission(daemon.config.Runtime.HarnessKind) {
 		daemon.queueFailure(ctx, key, "linux_v2_required", errors.New("Linux native Pi/OpenCode runtime requires an exact symmetry.admission.v1 RunKey/fence"))
+		return
+	}
+	if legacyLaunchErr != nil {
+		daemon.queueFailure(ctx, key, "harness_capability", legacyLaunchErr)
 		return
 	}
 	if err != nil {

@@ -72,7 +72,7 @@ func TestNativeSyntheticGatewayToolIntegration(t *testing.T) {
 	}
 	executable := strings.TrimSpace(os.Getenv(nativeSyntheticToolExecutableEnv))
 	if executable == "" || !filepath.IsAbs(executable) {
-		t.Fatalf("%s must name the absolute OpenCode %s executable", nativeSyntheticToolExecutableEnv, TestedVersion)
+		t.Fatalf("%s must name the absolute OpenCode %s executable", nativeSyntheticToolExecutableEnv, historicalNativeTestVersion)
 	}
 	info, err := os.Stat(executable)
 	if err != nil || !info.Mode().IsRegular() {
@@ -253,7 +253,7 @@ func TestNativePromptAdmissionReplaysAfterPost(t *testing.T) {
 	}
 	executable := strings.TrimSpace(os.Getenv(nativeAdmissionReplayExecutableEnv))
 	if executable == "" || !filepath.IsAbs(executable) {
-		t.Fatalf("%s must name the absolute OpenCode %s executable", nativeAdmissionReplayExecutableEnv, TestedVersion)
+		t.Fatalf("%s must name the absolute OpenCode %s executable", nativeAdmissionReplayExecutableEnv, historicalNativeTestVersion)
 	}
 	info, err := os.Stat(executable)
 	if err != nil || !info.Mode().IsRegular() {
@@ -402,7 +402,7 @@ func TestNativeResumeEventCapture(t *testing.T) {
 	}
 	executable := strings.TrimSpace(os.Getenv(nativeResumeCaptureExecutableEnv))
 	if executable == "" || !filepath.IsAbs(executable) {
-		t.Fatalf("%s must name the absolute OpenCode %s executable", nativeResumeCaptureExecutableEnv, TestedVersion)
+		t.Fatalf("%s must name the absolute OpenCode %s executable", nativeResumeCaptureExecutableEnv, historicalNativeTestVersion)
 	}
 	info, err := os.Stat(executable)
 	if err != nil || !info.Mode().IsRegular() {
@@ -1476,7 +1476,7 @@ func TestNativeRepositoryTask(t *testing.T) {
 	}
 	executable := strings.TrimSpace(os.Getenv(nativeRealRepositoryTaskExecutableEnv))
 	if executable == "" || !filepath.IsAbs(executable) {
-		t.Fatalf("%s must name the absolute OpenCode %s executable", nativeRealRepositoryTaskExecutableEnv, TestedVersion)
+		t.Fatalf("%s must name the absolute OpenCode %s executable", nativeRealRepositoryTaskExecutableEnv, historicalNativeTestVersion)
 	}
 	info, err := os.Stat(executable)
 	if err != nil || !info.Mode().IsRegular() {
@@ -1922,8 +1922,8 @@ func nativeOpenCodeRepositoryTaskCheckVersion(t *testing.T, executable, workspac
 	if err != nil {
 		t.Fatalf("run native OpenCode version check: %v", err)
 	}
-	if strings.TrimSpace(string(output)) != TestedVersion {
-		t.Fatalf("native OpenCode version = %q, want %s", strings.TrimSpace(string(output)), TestedVersion)
+	if strings.TrimSpace(string(output)) != historicalNativeTestVersion {
+		t.Fatalf("historical native OpenCode version = %q, want %s", strings.TrimSpace(string(output)), historicalNativeTestVersion)
 	}
 }
 
