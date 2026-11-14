@@ -542,7 +542,7 @@ defmodule SymmetryControl.Goals.HarnessSession do
     |> validate_length(:harness_version, min: 1, max: 240)
     |> validate_length(:adapter_version, min: 1, max: 240)
     |> validate_length(:workspace_fingerprint, min: 1, max: 1_000)
-    |> validate_inclusion(:harness_kind, ["codex", "claude_code", "pi", "opencode"])
+    |> validate_inclusion(:harness_kind, ["codex", "claude_code", "pi", "opencode", "omp"])
     |> validate_inclusion(:state, @states)
     |> validate_active_run()
     |> foreign_key_constraint(:runtime_id, name: :harness_sessions_runtime_machine_ownership_fkey)

@@ -215,6 +215,79 @@ func TestClientProtocolRequests(t *testing.T) {
 	}
 }
 
+func TestRegisterSessionUnpromotedOMPBoundary(t *testing.T) {
+	for _, kind := range []string{"omp", "future_harness"} {
+		t.Run(kind, func(t *testing.T) {
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				requests.Add(1)
+				if request.Method != http.MethodPut || request.URL.RequestURI() != "/api/v1/machines/machine-1/sessions/daemon-1" {
+					t.Errorf("registration route = %s %s", request.Method, request.URL.RequestURI())
+				}
+				if got := request.Header.Get("Authorization"); got != "Bearer "+machineToken {
+					t.Errorf("Authorization = %q, want machine credential", got)
+				}
+				body, err := io.ReadAll(request.Body)
+				if err != nil {
+					t.Errorf("read registration body: %v", err)
+					writer.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				want := `{"runtimes":[{"runtime_key":"omp","name":"OMP","capacity":1,"agent_profile":"omp","workspace":"primary","harness_kind":"omp","harness_version":"18.20.0","adapter_version":"omp-rpc-v2","adapter_protocol_version":2,"capabilities":{"structured_input":false,"provider_access":false,"adapter":{"kind":"omp","native_version":"18.20.0","implementation_version":"omp-rpc-v2","protocol_version":2,"operations":{"start":false,"events":false,"cancel":false,"resume":false,"handoff":false,"guidance":"unsupported","pause":"unsupported","approval_response":false,"usage":"unknown","hard_cost_limit":false}}}}]}`
+				assertJSONEqual(t, want, string(body))
+				writer.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(writer, `{"runtimes":[{"runtime_key":"omp","runtime_id":"runtime-1","runtime_epoch":3}],"heartbeat_interval_ms":5000,"poll_interval_ms":5000,"lease_duration_ms":30000,"websocket_path":"/socket"}`)
+			}))
+			defer server.Close()
+			client, err := NewClient(server.URL+"/api", machineToken, server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			registration := protocol.RuntimeRegistration{
+				RuntimeKey:             "omp",
+				Name:                   "OMP",
+				Capacity:               1,
+				AgentProfile:           "omp",
+				Workspace:              "primary",
+				HarnessKind:            kind,
+				HarnessVersion:         "18.20.0",
+				AdapterVersion:         "omp-rpc-v2",
+				AdapterProtocolVersion: 2,
+				Capabilities: protocol.RuntimeCapabilities{Adapter: &protocol.Adapter{
+					Kind:                  kind,
+					NativeVersion:         "18.20.0",
+					ImplementationVersion: "omp-rpc-v2",
+					ProtocolVersion:       2,
+					Operations: protocol.AdapterOperations{
+						Start: false, Events: false, Cancel: false, Resume: false, Handoff: false,
+						Guidance: protocol.GuidanceUnsupported, Pause: protocol.PauseUnsupported,
+						ApprovalResponse: false, Usage: protocol.UsageUnknown, HardCostLimit: false,
+					},
+				}},
+			}
+			response, err := client.RegisterSession(context.Background(), "machine-1", "daemon-1", protocol.SessionRegistrationRequest{Runtimes: []protocol.RuntimeRegistration{registration}})
+			if kind != "omp" {
+				if err == nil || !strings.Contains(err.Error(), `harness_kind "future_harness" is invalid`) {
+					t.Fatalf("RegisterSession error = %v, want unknown harness rejection", err)
+				}
+				if requests.Load() != 0 {
+					t.Fatalf("unknown harness made %d HTTP requests", requests.Load())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("register unpromoted OMP runtime: %v", err)
+			}
+			if requests.Load() != 1 {
+				t.Fatalf("OMP registration made %d HTTP requests, want one", requests.Load())
+			}
+			if len(response.Runtimes) != 1 || response.Runtimes[0] != (protocol.RegisteredRuntime{RuntimeKey: "omp", RuntimeID: "runtime-1", RuntimeEpoch: 3}) {
+				t.Fatalf("registered OMP runtime = %#v", response.Runtimes)
+			}
+		})
+	}
+}
+
 func TestClientTypedErrorsAndResponseValidation(t *testing.T) {
 	tests := []struct {
 		name      string

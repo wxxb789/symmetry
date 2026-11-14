@@ -45,7 +45,7 @@ defmodule SymmetryControl.Orchestration do
     "cancelling"
   ]
   @supervisory_commands ["guidance", "pause", "resume"]
-  @native_harness_kinds ["codex", "claude_code", "pi", "opencode"]
+  @native_harness_kinds ["codex", "claude_code", "pi", "opencode", "omp"]
   @goal_assignment_scan_page_size 32
   @validation_profile_name ~r/\A[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\z/
   @sha256 ~r/\Asha256:[0-9a-f]{64}\z/
@@ -1269,6 +1269,7 @@ defmodule SymmetryControl.Orchestration do
             runtime.workspace == task.workspace and
             fragment("? @> ?", runtime.capabilities, task.required_capabilities),
         where: task.state == "queued" and is_nil(task.goal_id),
+        where: is_nil(runtime.harness_kind) or runtime.harness_kind != "omp",
         where:
           fragment(
             "?->>'supervisory_control' IS DISTINCT FROM 'true'",
@@ -1953,6 +1954,9 @@ defmodule SymmetryControl.Orchestration do
        ) do
     cond do
       not is_nil(task.goal_id) and not goal_runtime_matches?(runtime, task, work_item) ->
+        rollback(:ownership_lost)
+
+      is_nil(task.goal_id) and runtime.harness_kind == "omp" ->
         rollback(:ownership_lost)
 
       run.runtime_id != request_runtime_id or runtime.id != request_runtime_id ->
@@ -4257,7 +4261,7 @@ defmodule SymmetryControl.Orchestration do
     adapter_version = value(specification, :adapter_version)
     protocol_version = value(specification, :adapter_protocol_version)
 
-    harness_kind in ["generic", "codex", "claude_code", "pi", "opencode"] and
+    harness_kind in ["generic", "codex", "claude_code", "pi", "opencode", "omp"] and
       nonempty_bounded_text?(harness_version, 240) and
       nonempty_bounded_text?(adapter_version, 240) and
       is_integer(protocol_version) and protocol_version > 0 and protocol_version <= 2_147_483_647

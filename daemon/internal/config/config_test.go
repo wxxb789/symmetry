@@ -381,6 +381,7 @@ func TestGitCloneV2RuntimeSelectionIsLinuxAMD64NativeOnly(t *testing.T) {
 		{name: "Windows amd64", goos: "windows", goarch: "amd64", harnessKind: RuntimeHarnessPi, wantErr: true},
 		{name: "Linux 386", goos: "linux", goarch: "386", harnessKind: RuntimeHarnessPi, wantErr: true},
 		{name: "Linux generic", goos: "linux", goarch: "amd64", harnessKind: RuntimeHarnessGeneric, wantErr: true},
+		{name: "OMP ordinary Linux owner", goos: "linux", goarch: "amd64", harnessKind: RuntimeHarnessOMP, wantErr: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

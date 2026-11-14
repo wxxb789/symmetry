@@ -8,6 +8,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   alias SymmetryControl.Repo.Migrations.AddGoalTerminalAuthorityGuardsAndSessionReciprocity
   alias SymmetryControl.Repo.Migrations.AddHarnessSessionStopReceipts
   alias SymmetryControl.Repo.Migrations.AddHarnessSessionAttachReceipts
+  alias SymmetryControl.Repo.Migrations.AddOmpHarnessKind
   alias SymmetryControl.Repo.Migrations.AddTaskRuntimePolicySnapshot
   alias SymmetryControl.Repo.Migrations.AddGoalIntegrationWorkItemDesignation
   alias SymmetryControl.Repo.Migrations.AddGoalIdentityGuards
@@ -57,6 +58,7 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
   @session_stop_receipt_migration_version 20_260_910_050_000
   @session_attach_receipt_migration_version 20_260_911_000_000
   @runtime_policy_snapshot_migration_version 20_260_916_000_000
+  @omp_harness_kind_migration_version 20_261_114_010_000
 
   test "upgrades legacy rows without assigning their textual goal to durable Goal history" do
     with_schema(fn ->
@@ -604,6 +606,99 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
 
       assert %{rows: [["generic"]]} =
                Repo.query!("SELECT harness_kind FROM runtimes WHERE id = $1", [runtime_id])
+    end)
+  end
+
+  test "adds OMP runtime and session kinds without admitting unknown kinds or losing retained identities" do
+    with_schema(fn ->
+      migrate_goal_up!()
+      %{runtime_id: runtime_id, session_id: session_id} = insert_harness_session_fixture!()
+
+      for {table, id, constraint} <- [
+            {"runtimes", runtime_id, "runtimes_harness_kind_check"},
+            {"harness_sessions", session_id, "harness_sessions_harness_kind_check"}
+          ] do
+        assert_raise Postgrex.Error, ~r/#{constraint}/, fn ->
+          Repo.query!("UPDATE #{table} SET harness_kind = 'omp' WHERE id = $1", [id])
+        end
+      end
+
+      Ecto.Migrator.run(Repo, [{@omp_harness_kind_migration_version, AddOmpHarnessKind}], :up,
+        all: true,
+        log: false,
+        migration_lock: false,
+        dynamic_repo: Repo.get_dynamic_repo()
+      )
+
+      Repo.query!(
+        """
+        UPDATE runtimes SET harness_kind = 'omp', harness_version = '18.20.0',
+          adapter_version = 'symmetry-omp-1', adapter_protocol_version = 1
+        WHERE id = $1
+        """,
+        [runtime_id]
+      )
+
+      Repo.query!(
+        """
+        UPDATE harness_sessions SET harness_kind = 'omp', harness_version = '18.20.0',
+          adapter_version = 'symmetry-omp-1'
+        WHERE id = $1
+        """,
+        [session_id]
+      )
+
+      for {table, id, constraint} <- [
+            {"runtimes", runtime_id, "runtimes_harness_kind_check"},
+            {"harness_sessions", session_id, "harness_sessions_harness_kind_check"}
+          ] do
+        assert %{rows: [["omp", "18.20.0", "symmetry-omp-1"]]} =
+                 Repo.query!(
+                   "SELECT harness_kind, harness_version, adapter_version FROM #{table} WHERE id = $1",
+                   [id]
+                 )
+
+        assert_raise Postgrex.Error, ~r/#{constraint}/, fn ->
+          Repo.query!("UPDATE #{table} SET harness_kind = 'unsupported_harness' WHERE id = $1", [
+            id
+          ])
+        end
+      end
+
+      downgrade = fn ->
+        Ecto.Migrator.run(Repo, [{@omp_harness_kind_migration_version, AddOmpHarnessKind}], :down,
+          step: 1,
+          log: false,
+          migration_lock: false,
+          dynamic_repo: Repo.get_dynamic_repo()
+        )
+      end
+
+      assert_raise Postgrex.Error,
+                   ~r/cannot remove OMP harness support while OMP identities exist/i,
+                   downgrade
+
+      assert %{rows: [["omp"]]} =
+               Repo.query!("SELECT harness_kind FROM harness_sessions WHERE id = $1", [session_id])
+
+      Repo.query!("UPDATE runtimes SET harness_kind = 'codex' WHERE id = $1", [runtime_id])
+
+      assert_raise Postgrex.Error,
+                   ~r/cannot remove OMP harness support while OMP identities exist/i,
+                   downgrade
+
+      Repo.query!("UPDATE harness_sessions SET harness_kind = 'codex' WHERE id = $1", [session_id])
+
+      downgrade.()
+
+      for {table, id, constraint} <- [
+            {"runtimes", runtime_id, "runtimes_harness_kind_check"},
+            {"harness_sessions", session_id, "harness_sessions_harness_kind_check"}
+          ] do
+        assert_raise Postgrex.Error, ~r/#{constraint}/, fn ->
+          Repo.query!("UPDATE #{table} SET harness_kind = 'omp' WHERE id = $1", [id])
+        end
+      end
     end)
   end
 
@@ -4890,7 +4985,8 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
       {AddTaskHandoffLineage, "20260910040000_add_task_handoff_lineage.exs"},
       {AddHarnessSessionStopReceipts, "20260910050000_add_harness_session_stop_receipts.exs"},
       {AddHarnessSessionAttachReceipts, "20260911000000_add_harness_session_attach_receipts.exs"},
-      {AddTaskRuntimePolicySnapshot, "20260916000000_add_task_runtime_policy_snapshot.exs"}
+      {AddTaskRuntimePolicySnapshot, "20260916000000_add_task_runtime_policy_snapshot.exs"},
+      {AddOmpHarnessKind, "20261114010000_add_omp_harness_kind.exs"}
     ]
 
     Enum.each(migrations, fn {module, filename} ->

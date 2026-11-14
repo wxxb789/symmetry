@@ -24,6 +24,7 @@ const (
 	KindCodex    Kind = "codex"
 	KindClaude   Kind = "claude"
 	KindPi       Kind = "pi"
+	KindOMP      Kind = "omp"
 	KindOpenCode Kind = "opencode"
 )
 
@@ -279,6 +280,15 @@ type StagedSession interface {
 	// It deliberately does not return a TaskResult: Wait remains the physical
 	// final-result barrier after the retained native process is closed.
 	WaitTurn(context.Context) error
+}
+
+// StopProofSession separates physical cleanup from a sticky semantic failure.
+// WaitStopped joins process exit and output delivery/drain and reports only
+// physical termination or containment failures. It does not erase the turn
+// error returned by Wait or turn a stopped process into semantic success.
+type StopProofSession interface {
+	Session
+	WaitStopped(context.Context) (execution.Result, error)
 }
 
 // NativeSessionHandle is a daemon-local opaque identity. It is persisted only

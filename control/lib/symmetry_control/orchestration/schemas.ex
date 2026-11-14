@@ -124,7 +124,14 @@ defmodule SymmetryControl.Orchestration.Runtime do
       end
 
     changeset
-    |> validate_inclusion(:harness_kind, ["generic", "codex", "claude_code", "pi", "opencode"])
+    |> validate_inclusion(:harness_kind, [
+      "generic",
+      "codex",
+      "claude_code",
+      "pi",
+      "opencode",
+      "omp"
+    ])
     |> validate_length(:harness_kind, min: 1, max: 120)
     |> validate_length(:harness_version, min: 1, max: 240)
     |> validate_length(:adapter_version, min: 1, max: 240)

@@ -18,12 +18,28 @@ func TestLegacyRuntimeDefaultsGenericAdapterMetadata(t *testing.T) {
 }
 
 func TestRuntimeAcceptsCompleteNativeAdapterMetadata(t *testing.T) {
+	for _, test := range []struct {
+		kind     string
+		version  string
+		adapter  string
+		protocol int
+	}{
+		{kind: RuntimeHarnessCodex, version: "0.156.1", adapter: "symmetry-daemon:test", protocol: 1},
+		{kind: RuntimeHarnessOMP, version: "18.20.0", adapter: "omp-rpc-v2", protocol: 2},
+	} {
+		t.Run(test.kind, func(t *testing.T) {
+			testRuntimeAcceptsCompleteNativeAdapterMetadata(t, test.kind, test.version, test.adapter, test.protocol)
+		})
+	}
+}
+
+func testRuntimeAcceptsCompleteNativeAdapterMetadata(t *testing.T, kind, version, adapter string, adapterProtocol int) {
 	value := validConfigObject(t)
 	runtime := value["runtime"].(map[string]any)
-	runtime["harness_kind"] = RuntimeHarnessCodex
-	runtime["harness_version"] = "0.156.1"
-	runtime["adapter_version"] = "symmetry-daemon:test"
-	runtime["adapter_protocol_version"] = 1
+	runtime["harness_kind"] = kind
+	runtime["harness_version"] = version
+	runtime["adapter_version"] = adapter
+	runtime["adapter_protocol_version"] = adapterProtocol
 	runtime["repository_resource_id"] = "00000000-0000-4000-8000-000000000001"
 	profile := value["agent_profiles"].(map[string]any)["default"].(map[string]any)
 	profile["native_model"] = "gpt-6-astra"
@@ -43,8 +59,8 @@ func TestRuntimeAcceptsCompleteNativeAdapterMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if actual.Runtime.HarnessKind != RuntimeHarnessCodex || actual.Runtime.HarnessVersion != "0.156.1" ||
-		actual.Runtime.AdapterVersion != "symmetry-daemon:test" || actual.Runtime.AdapterProtocolVersion != 1 {
+	if actual.Runtime.HarnessKind != kind || actual.Runtime.HarnessVersion != version ||
+		actual.Runtime.AdapterVersion != adapter || actual.Runtime.AdapterProtocolVersion != adapterProtocol {
 		t.Fatalf("runtime metadata = %+v", actual.Runtime)
 	}
 	if actual.AgentProfiles["default"].NativeModel != "gpt-6-astra" {
@@ -128,7 +144,7 @@ func TestCodexRuntimeRequiresCanonicalNativeModelProvider(t *testing.T) {
 }
 
 func TestUnavailableNativeRuntimeMayOmitNativeModel(t *testing.T) {
-	for _, harnessKind := range []string{RuntimeHarnessClaudeCode, RuntimeHarnessPi, RuntimeHarnessOpenCode} {
+	for _, harnessKind := range []string{RuntimeHarnessClaudeCode, RuntimeHarnessPi, RuntimeHarnessOMP, RuntimeHarnessOpenCode} {
 		t.Run(harnessKind, func(t *testing.T) {
 			value := validConfigObject(t)
 			runtime := value["runtime"].(map[string]any)
@@ -152,9 +168,15 @@ func TestUnavailableNativeRuntimeMayOmitNativeModel(t *testing.T) {
 }
 
 func TestNativeRuntimeRequiresGitWorktree(t *testing.T) {
+	for _, kind := range []string{RuntimeHarnessCodex, RuntimeHarnessOMP} {
+		t.Run(kind, func(t *testing.T) { testNativeRuntimeRequiresGitWorktree(t, kind) })
+	}
+}
+
+func testNativeRuntimeRequiresGitWorktree(t *testing.T, kind string) {
 	value := validConfigObject(t)
 	runtime := value["runtime"].(map[string]any)
-	runtime["harness_kind"] = RuntimeHarnessCodex
+	runtime["harness_kind"] = kind
 	runtime["harness_version"] = "0.156.1"
 	runtime["adapter_version"] = "symmetry-daemon:test"
 	runtime["adapter_protocol_version"] = 1
@@ -173,6 +195,12 @@ func TestNativeRuntimeRequiresGitWorktree(t *testing.T) {
 }
 
 func TestNativeRuntimeRequiresCanonicalRepositoryResourceID(t *testing.T) {
+	for _, kind := range []string{RuntimeHarnessCodex, RuntimeHarnessOMP} {
+		t.Run(kind, func(t *testing.T) { testNativeRuntimeRequiresCanonicalRepositoryResourceID(t, kind) })
+	}
+}
+
+func testNativeRuntimeRequiresCanonicalRepositoryResourceID(t *testing.T, kind string) {
 	for name, resourceID := range map[string]any{
 		"missing":   "",
 		"invalid":   "not-a-uuid",
@@ -181,7 +209,7 @@ func TestNativeRuntimeRequiresCanonicalRepositoryResourceID(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			value := validConfigObject(t)
 			runtime := value["runtime"].(map[string]any)
-			runtime["harness_kind"] = RuntimeHarnessCodex
+			runtime["harness_kind"] = kind
 			runtime["harness_version"] = "0.156.1"
 			runtime["adapter_version"] = "symmetry-daemon:test"
 			runtime["adapter_protocol_version"] = 1

@@ -177,6 +177,25 @@ defmodule SymmetryControl.GoalsSchemaTest do
 
     assert native.valid?
 
+    omp_attrs = %{
+      harness_kind: "omp",
+      harness_version: "18.20.0",
+      adapter_version: "symmetry-omp-1",
+      adapter_protocol_version: 1
+    }
+
+    omp = Runtime.changeset(%Runtime{}, Map.merge(runtime_attrs(), omp_attrs))
+    assert omp.valid?
+    assert Ecto.Changeset.get_field(omp, :harness_kind) == "omp"
+
+    unknown =
+      Runtime.changeset(
+        %Runtime{},
+        Map.merge(runtime_attrs(), %{omp_attrs | harness_kind: "unsupported_harness"})
+      )
+
+    assert "is invalid" in errors_on(unknown).harness_kind
+
     generic =
       Runtime.changeset(
         %Runtime{},
@@ -367,6 +386,27 @@ defmodule SymmetryControl.GoalsSchemaTest do
   end
 
   test "session ownership and decision resolution retain their state invariants" do
+    attrs = %{
+      machine_id: @id,
+      runtime_id: @other_id,
+      repository_resource_id: @id,
+      harness_kind: "omp",
+      harness_version: "18.20.0",
+      adapter_version: "symmetry-omp-1",
+      local_handle_id: @other_id,
+      binding_id: @id,
+      binding_verified: true,
+      workspace_fingerprint: "omp-workspace",
+      state: "available"
+    }
+
+    assert HarnessSession.changeset(%HarnessSession{}, attrs).valid?
+
+    unknown =
+      HarnessSession.changeset(%HarnessSession{}, %{attrs | harness_kind: "unsupported_harness"})
+
+    assert "is invalid" in errors_on(unknown).harness_kind
+
     unavailable =
       HarnessSession.update_changeset(%HarnessSession{state: "available"}, %{state: "busy"})
 

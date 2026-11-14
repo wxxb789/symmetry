@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -124,6 +125,109 @@ func TestRuntimeRegistrationCarriesNativeAndGenericMetadata(t *testing.T) {
 	generic.Capabilities.Adapter = nil
 	if err := generic.Validate(); err != nil {
 		t.Fatalf("generic metadata rejected: %v", err)
+	}
+}
+
+func TestSessionRegistrationRequestAcceptsUnpromotedOMP(t *testing.T) {
+	request := SessionRegistrationRequest{Runtimes: []RuntimeRegistration{unpromotedOMPRegistration()}}
+	if err := request.Validate(); err != nil {
+		t.Fatalf("validate complete unpromoted OMP registration: %v", err)
+	}
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"runtimes":[{"runtime_key":"omp","name":"OMP","capacity":1,"agent_profile":"omp","workspace":"primary","harness_kind":"omp","harness_version":"18.20.0","adapter_version":"omp-rpc-v2","adapter_protocol_version":2,"capabilities":{"structured_input":false,"provider_access":false,"adapter":{"kind":"omp","native_version":"18.20.0","implementation_version":"omp-rpc-v2","protocol_version":2,"operations":{"start":false,"events":false,"cancel":false,"resume":false,"handoff":false,"guidance":"unsupported","pause":"unsupported","approval_response":false,"usage":"unknown","hard_cost_limit":false}}}}]}`
+	if string(encoded) != want {
+		t.Fatalf("unpromoted OMP registration JSON changed:\n got %s\nwant %s", encoded, want)
+	}
+	var restored SessionRegistrationRequest
+	if err := json.Unmarshal(encoded, &restored); err != nil {
+		t.Fatalf("decode complete unpromoted OMP registration: %v", err)
+	}
+	if err := restored.Validate(); err != nil {
+		t.Fatalf("validate restored OMP registration: %v", err)
+	}
+	if !reflect.DeepEqual(request, restored) {
+		t.Fatalf("OMP registration changed during JSON round trip: got %#v, want %#v", restored, request)
+	}
+}
+
+func TestSessionRegistrationRequestRejectsInvalidOMPAdvertisement(t *testing.T) {
+	for name, test := range map[string]struct {
+		mutate    func(*RuntimeRegistration)
+		wantError string
+	}{
+		"unknown harness kind": {
+			mutate: func(registration *RuntimeRegistration) {
+				registration.HarnessKind = "future_harness"
+				registration.Capabilities.Adapter.Kind = "future_harness"
+			},
+			wantError: `harness_kind "future_harness" is invalid`,
+		},
+		"adapter metadata mismatch": {
+			mutate: func(registration *RuntimeRegistration) {
+				registration.Capabilities.Adapter.NativeVersion = "18.20.1"
+			},
+			wantError: "adapter metadata must match runtime harness metadata",
+		},
+		"native safe pause": {
+			mutate: func(registration *RuntimeRegistration) {
+				registration.Capabilities.Adapter.Operations.Start = true
+				registration.Capabilities.Adapter.Operations.Resume = true
+				registration.Capabilities.Adapter.Operations.Pause = PauseSafeBoundary
+			},
+			wantError: "native adapter registrations must advertise pause as unsupported",
+		},
+		"native supervisory control": {
+			mutate: func(registration *RuntimeRegistration) {
+				registration.Capabilities.SupervisoryControl = true
+			},
+			wantError: "native adapter registrations cannot advertise supervisory_control",
+		},
+		"invalid capability schema": {
+			mutate: func(registration *RuntimeRegistration) {
+				registration.Capabilities.Adapter.Operations.Guidance = GuidanceCapability("future_guidance")
+			},
+			wantError: "validate runtime capabilities schema",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			registration := unpromotedOMPRegistration()
+			test.mutate(&registration)
+			request := SessionRegistrationRequest{Runtimes: []RuntimeRegistration{registration}}
+			err := request.Validate()
+			if err == nil || !strings.Contains(err.Error(), "runtimes[0]: "+test.wantError) {
+				t.Fatalf("Validate error = %v, want runtime rejection containing %q", err, test.wantError)
+			}
+		})
+	}
+}
+
+// unpromotedOMPRegistration mirrors the runtime consumer's projection of the
+// observed OMP candidate; transport observations do not promote operations.
+func unpromotedOMPRegistration() RuntimeRegistration {
+	return RuntimeRegistration{
+		RuntimeKey:             "omp",
+		Name:                   "OMP",
+		Capacity:               1,
+		AgentProfile:           "omp",
+		Workspace:              "primary",
+		HarnessKind:            "omp",
+		HarnessVersion:         "18.20.0",
+		AdapterVersion:         "omp-rpc-v2",
+		AdapterProtocolVersion: 2,
+		Capabilities: RuntimeCapabilities{Adapter: &Adapter{
+			Kind:                  "omp",
+			NativeVersion:         "18.20.0",
+			ImplementationVersion: "omp-rpc-v2",
+			ProtocolVersion:       2,
+			Operations: AdapterOperations{
+				Start: false, Events: false, Cancel: false, Resume: false, Handoff: false,
+				Guidance: GuidanceUnsupported, Pause: PauseUnsupported,
+				ApprovalResponse: false, Usage: UsageUnknown, HardCostLimit: false,
+			},
+		}},
 	}
 }
 
