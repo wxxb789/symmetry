@@ -8,25 +8,25 @@ defmodule SymmetryControl.Repo.Migrations.AddOmoHarnessKind do
     create(
       constraint(:runtimes, :runtimes_harness_kind_check,
         check:
-          "harness_kind IS NULL OR harness_kind IN ('codex', 'claude_code', 'pi', 'opencode', 'generic', 'omo')"
+          "harness_kind IS NULL OR harness_kind IN ('codex', 'claude_code', 'pi', 'opencode', 'generic', 'omp', 'omo')"
       )
     )
 
     create(
       constraint(:harness_sessions, :harness_sessions_harness_kind_check,
-        check: "harness_kind IN ('codex', 'claude_code', 'pi', 'opencode', 'omo')"
+        check: "harness_kind IN ('codex', 'claude_code', 'pi', 'opencode', 'omp', 'omo')"
       )
     )
   end
 
   def down do
-    execute("LOCK TABLE runtimes, harness_sessions IN ACCESS EXCLUSIVE MODE")
-
     execute("""
     DO $$
     BEGIN
       IF EXISTS (SELECT 1 FROM runtimes WHERE harness_kind = 'omo')
-         OR EXISTS (SELECT 1 FROM harness_sessions WHERE harness_kind = 'omo') THEN
+         OR EXISTS (SELECT 1 FROM harness_sessions WHERE harness_kind = 'omo')
+         OR EXISTS (SELECT 1 FROM runtimes WHERE harness_kind = 'omp')
+         OR EXISTS (SELECT 1 FROM harness_sessions WHERE harness_kind = 'omp') THEN
         RAISE EXCEPTION 'cannot remove omo harness support while runtimes or sessions exist';
       END IF;
     END
@@ -39,13 +39,13 @@ defmodule SymmetryControl.Repo.Migrations.AddOmoHarnessKind do
     create(
       constraint(:runtimes, :runtimes_harness_kind_check,
         check:
-          "harness_kind IS NULL OR harness_kind IN ('codex', 'claude_code', 'pi', 'opencode', 'generic')"
+          "harness_kind IS NULL OR harness_kind IN ('codex', 'claude_code', 'pi', 'opencode', 'generic', 'omp')"
       )
     )
 
     create(
       constraint(:harness_sessions, :harness_sessions_harness_kind_check,
-        check: "harness_kind IN ('codex', 'claude_code', 'pi', 'opencode')"
+        check: "harness_kind IN ('codex', 'claude_code', 'pi', 'opencode', 'omp')"
       )
     )
   end

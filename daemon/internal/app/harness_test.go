@@ -1160,9 +1160,6 @@ func TestNativeHandoffAdmissionsUseOnlyVerifiedNativeOwner(t *testing.T) {
 			controlClient.contextSnapshot = &contextSnapshot
 			profile := app.config.AgentProfiles[app.config.Runtime.AgentProfile]
 			profile.EnvAllowlist = []string{"HOME", "XDG_CONFIG_HOME"}
-			if test.kind == harness.KindOmO {
-				profile.Args = []string{"--session-dir", t.TempDir()}
-			}
 			app.config.AgentProfiles[app.config.Runtime.AgentProfile] = profile
 			if runtime.GOOS == "linux" && requiresLinuxV2NativeOwner(test.kind) {
 				owner := &fakeLinuxV2NativeOwner{

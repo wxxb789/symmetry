@@ -93,7 +93,7 @@ func (adapter *Adapter) executablePath() (string, error) {
 // start without changing the externally advertised, fail-closed projection.
 func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest, sink harness.EventSink) (harness.Session, error) {
 	if ctx == nil {
-		return nil, errors.New("OmO probe requires a context")
+		return nil, errors.New("OmO start requires a context")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err

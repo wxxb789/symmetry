@@ -134,14 +134,6 @@ func newOmOAttachAckFixture(t *testing.T, kind harness.Kind) *omoAttachAckFixtur
 	app.options.newID = state.NewGoalSessionLocalHandleID
 	base.taskIDForRun = func(string) string { return omoAttachAckTaskID }
 	base.attachSessionID = omoAttachAckSessionID
-	if kind == harness.KindOmO {
-		// The shared fake-native helper leaves profile arguments empty. OmO's
-		// real pre-launch guard requires explicit local session provenance even
-		// when the adapter itself is a lifecycle fixture.
-		profile := app.config.AgentProfiles[app.config.Runtime.AgentProfile]
-		profile.Args = []string{"--session-dir", t.TempDir()}
-		app.config.AgentProfiles[app.config.Runtime.AgentProfile] = profile
-	}
 	fixture := &omoAttachAckFixture{t: t, app: app, session: session, putMode: "eof", readStatus: http.StatusOK}
 	fixture.server = httptest.NewServer(http.HandlerFunc(fixture.serveHTTP))
 	t.Cleanup(fixture.server.Close)
