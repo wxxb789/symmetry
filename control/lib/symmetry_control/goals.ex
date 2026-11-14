@@ -1085,7 +1085,7 @@ defmodule SymmetryControl.Goals do
          {:ok, local_handle_id} <- required_uuid(attrs, :local_handle_id),
          {:ok, binding_id} <- optional_uuid(attrs, :binding_id),
          {:ok, harness_kind} <- required_string(attrs, :harness_kind),
-         true <- harness_kind in ["codex", "claude_code", "pi", "opencode"],
+         true <- harness_kind in ["codex", "claude_code", "pi", "opencode", "omp"],
          {:ok, harness_version} <- required_string(attrs, :harness_version),
          {:ok, adapter_version} <- required_string(attrs, :adapter_version),
          {:ok, workspace_fingerprint} <- required_string(attrs, :workspace_fingerprint),

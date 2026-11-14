@@ -1,0 +1,5 @@
+{"type":"ready","protocolVersion":1,"supportedProtocolVersions":[1,2],"maxFrameBytes":1048576,"maxReassembledFrameBytes":67108864,"supportsBashExcludeFromContext":true}
+{"type":"advisor_cost_changed"}
+{"id":"protocol","type":"response","command":"negotiate_protocol","success":true,"data":{"protocolVersion":2}}
+{"id":"state","type":"response","command":"get_state","success":true,"data":{"sessionId":"<SESSION_ID>","sessionFile":"<SESSION_DIR>/<SESSION_ID>.jsonl","isStreaming":false,"isCompacting":false,"queuedMessageCount":0,"hasPendingAsyncWork":false,"isSettled":true}}
+{"id":"invalid-version","type":"response","command":"negotiate_protocol","success":false,"error":"Unsupported RPC protocol version: 999"}

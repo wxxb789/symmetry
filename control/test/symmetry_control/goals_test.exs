@@ -5479,6 +5479,89 @@ defmodule SymmetryControl.GoalsTest do
     assert handoff_admission_counts(goal.id) == counts_before
   end
 
+  test "OMP resume admission requires the retained kind and versions to match exactly" do
+    {goal, item, nil} = admitted_task_fixture("primary", check_contract(), %{}, false)
+    runtime = runtime_fixture()
+
+    metadata = %{
+      harness_kind: "omp",
+      harness_version: "18.20.0",
+      adapter_version: "symmetry-omp-1",
+      capabilities: %{"adapter" => %{"operations" => %{"resume" => true}}}
+    }
+
+    Repo.update_all(from(row in Runtime, where: row.id == ^runtime.id),
+      set: Map.to_list(metadata)
+    )
+
+    runtime = Repo.get!(Runtime, runtime.id)
+
+    attrs =
+      session_attrs(item, "omp-retained-workspace")
+      |> Map.merge(Map.take(metadata, [:harness_kind, :harness_version, :adapter_version]))
+
+    retained = available_session_fixture(runtime, item, attrs)
+
+    counts_before = %{
+      snapshots: Repo.aggregate(SymmetryControl.Goals.ContextSnapshot, :count),
+      tasks: Repo.aggregate(Task, :count),
+      reservations: Repo.aggregate(SymmetryControl.Goals.GoalBudgetReservation, :count),
+      events: Repo.aggregate(SymmetryControl.Goals.GoalEvent, :count)
+    }
+
+    for changed <- [
+          %{harness_kind: "pi"},
+          %{harness_version: "18.20.1"},
+          %{adapter_version: "symmetry-omp-2"}
+        ] do
+      Repo.update_all(from(row in Runtime, where: row.id == ^runtime.id),
+        set: Map.to_list(Map.merge(metadata, changed))
+      )
+
+      assert {:error, :requested_session_unavailable} =
+               command_current(
+                 goal.id,
+                 "admit_task",
+                 admission_payload(item, %{
+                   session_mode: "resume",
+                   requested_session_id: retained.id
+                 }),
+                 rollout_enabled: true
+               )
+
+      assert counts_before ==
+               %{
+                 snapshots: Repo.aggregate(SymmetryControl.Goals.ContextSnapshot, :count),
+                 tasks: Repo.aggregate(Task, :count),
+                 reservations:
+                   Repo.aggregate(SymmetryControl.Goals.GoalBudgetReservation, :count),
+                 events: Repo.aggregate(SymmetryControl.Goals.GoalEvent, :count)
+               }
+    end
+
+    Repo.update_all(from(row in Runtime, where: row.id == ^runtime.id),
+      set: Map.to_list(metadata)
+    )
+
+    assert {:ok, admission, :created} =
+             command_current(
+               goal.id,
+               "admit_task",
+               admission_payload(item, %{
+                 session_mode: "resume",
+                 requested_session_id: retained.id
+               }),
+               rollout_enabled: true
+             )
+
+    task = Repo.get!(Task, admission.response["task"]["id"])
+    assert task.requested_session_id == retained.id
+    assert task.input["session_mode"] == "resume"
+
+    assert %{harness_kind: "omp", state: "available", active_run_id: nil} =
+             Repo.get!(HarnessSession, retained.id)
+  end
+
   test "resume admission rejects an unavailable retained session before writing admission records" do
     {goal, item, task} = admitted_task_fixture()
     complete_task_and_release_reservation!(goal, task)

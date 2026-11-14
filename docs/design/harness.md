@@ -10,7 +10,7 @@ Do not require native CLIs to speak the existing fake-agent JSON dialect.
 | Codex | `codex app-server`, stdio JSON-RPC; exact generated-schema digest gate | native thread/turn lifecycle; capability-probed steering, interrupt and approval mapping |
 | Claude Code | headless CLI with documented JSON/stream-JSON output; 2.1.323 defers `system/init` until the first user frame; promotion is bound to the exact executed blob (`sha256:5064e6e0…`) plus the anchored `2.1.323 (Claude Code)` version line | process cancellation; `Open` waits only for process readiness, and every terminal requires a matching `system/init`; next-turn guidance, resume, safe pause and an interactive approval bridge stay unsupported; native model identity is reported by `system/init` and is not claimed by the projection |
 | Pi | native `--mode rpc`, JSONL stdin/stdout; `agent_settled` is the settled boundary; promotion is bound to the exact pi `1.5.2` Windows blob (`sha256:40a062be…`) | prompt/steer/abort/session RPC mapping; no inferred OS pause; promoted operations are start, events, cancel and retained resume, projected under implementation identity `pi-rpc-v1` |
-| Oh My Pi (OMP) | native `omp --mode rpc`, custom JSONL with `ready` frame and protocol-version negotiation; `session_settled` is the settled boundary | prompt/steer/abort/session RPC mapping; never inherit Pi decoder or capability claims |
+| Oh My Pi (OMP) | native `omp --mode rpc`, independent JSONL decoder; `ready` then negotiated v2; matching `prompt_result` plus `session_settled` are required | `18.20.0` candidate implementation; all executable capabilities remain unpromoted: positive generation evidence is unavailable under zero permitted spend and the relay's advertised nonzero rates; never inherit Pi claims |
 | OmO (`oh-my-openagent`) | native `omo --mode rpc`, senpi/Pi-derived JSONL; the `omo app-server` Codex protocol is not assumed equivalent | prompt/steer/abort/session RPC mapping; probe the exact binary and protocol |
 | OpenCode V2 | daemon-owned loopback `opencode serve`, V2 `/api/...` HTTP API + SSE | 2.3.0 explicitly unsupported under 0006g; production uses the unavailable adapter and refuses both Goal and legacy assignments before workspace/process effects; historical private transport diagnostics promote no capability; V1.x is skipped |
 
@@ -72,6 +72,27 @@ its fixtures exist. A version jump requires a fresh probe, fixtures, capability
 projection and exact-binary evidence; older observations remain historical and
 do not satisfy the new pin. When release support is declared, the tested set or
 range becomes explicit and an unknown version remains fail-closed.
+
+OMP is registered separately as `omp`, with candidate implementation identity
+`omp-rpc-v2`. The `18.20.0` Windows and Ubuntu observations bind their exact
+executable blobs, not the mise shim or a matching version string alone. The
+candidate checks the initial `ready`, negotiates protocol v2 before a prompt,
+and rejects an incompatible version. OMP uses the existing ordinary Linux
+process owner; the Pi/OpenCode Linux v2 owner prerequisite is not applied to it.
+Candidate transport observations include native abort and reopening a failed
+session in a second process. Neither establishes successful repository work,
+retained-work recovery, compatible fresh handoff or a verified provider bridge.
+The initial environment credential was refused with HTTP 401 on both platforms;
+those observations do not test the virtual key in the operator's harness
+configuration. The corrected configured credential passed a non-generating
+authenticated relay metadata read. That read advertised nonzero token rates,
+so no generation request used the corrected credential under zero permitted
+spend. Credentials are passed only through process environments, never persisted.
+Native zero usage counters and catalog prices do not establish zero billing.
+The capability projection stays fail-closed on both platforms until the missing
+success evidence is produced.
+See the [OMP evidence receipt](../evidence/goal-0006j-omp-native-capability-2026-11-14.md)
+and the versioned fixtures under `daemon/internal/harness/testdata/omp/18.20.0/`.
 
 ## Go API shape
 

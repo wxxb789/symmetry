@@ -104,6 +104,109 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     assert replayed.harness_kind == nil
   end
 
+  test "legacy scheduling cannot select an unverified OMP runtime with empty task requirements" do
+    runtime = register_unverified_omp_runtime("legacy-omp-scheduling")
+
+    assert {:ok, task, :created} =
+             Orchestration.submit_task(legacy_task_attrs(), Ecto.UUID.generate(), now: @now)
+
+    assert task.goal_id == nil
+    assert task.required_capabilities == %{}
+    assert task.input == %{}
+    assert task.agent_profile == runtime.agent_profile
+    assert task.workspace == runtime.workspace
+
+    assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
+    assert %{state: "queued", current_generation: 0} = Repo.get!(Task, task.id)
+    refute Repo.exists?(from run in Run, where: run.task_id == ^task.id)
+  end
+
+  test "legacy claim rejects a manually assigned unverified OMP runtime without issuing a lease" do
+    runtime = register_unverified_omp_runtime("legacy-omp-claim")
+
+    assert {:ok, task, :created} =
+             Orchestration.submit_task(legacy_task_attrs(), Ecto.UUID.generate(), now: @now)
+
+    assert task.goal_id == nil
+    assert task.required_capabilities == %{}
+    assert task.input == %{}
+    assert task.agent_profile == runtime.agent_profile
+    assert task.workspace == runtime.workspace
+    run = insert_assigned_run!(task, runtime)
+
+    assert {:error, :ownership_lost} =
+             Orchestration.claim(
+               run.id,
+               %{
+                 runtime_id: runtime.id,
+                 runtime_epoch: runtime.connection_epoch,
+                 generation: run.generation,
+                 claim_id: Ecto.UUID.generate()
+               },
+               now: @now
+             )
+
+    assert %{state: "assigned", current_generation: 1} = Repo.get!(Task, task.id)
+
+    assert %{
+             state: "assigned",
+             claimed_runtime_epoch: nil,
+             claim_id: nil,
+             lease_token: nil,
+             claimed_at: nil,
+             lease_expires_at: nil
+           } = Repo.get!(Run, run.id)
+  end
+
+  test "non-OMP runtimes retain legacy scheduling and claim with empty task requirements" do
+    for kind <- [nil, "generic", "codex", "claude_code", "pi", "opencode"] do
+      label = "legacy-compatible-#{kind || "untyped"}"
+      machine = enroll_machine(label)
+
+      specification =
+        if is_nil(kind) do
+          runtime_spec(label)
+        else
+          runtime_spec(label, %{
+            harness_kind: kind,
+            harness_version: "legacy-v1",
+            adapter_version: "symmetry-legacy-1",
+            adapter_protocol_version: 1
+          })
+        end
+
+      assert {:ok, [runtime]} =
+               Orchestration.register_runtimes(
+                 machine.id,
+                 Ecto.UUID.generate(),
+                 [specification],
+                 now: @now
+               )
+
+      assert {:ok, task, :created} =
+               Orchestration.submit_task(legacy_task_attrs(), Ecto.UUID.generate(), now: @now)
+
+      assert {:ok, run} = Orchestration.assign_one(now: @now)
+      assert run.task_id == task.id
+      assert run.runtime_id == runtime.id
+
+      assert {:ok, claimed} =
+               Orchestration.claim(
+                 run.id,
+                 %{
+                   runtime_id: runtime.id,
+                   runtime_epoch: runtime.connection_epoch,
+                   generation: run.generation,
+                   claim_id: Ecto.UUID.generate()
+                 },
+                 now: @now
+               )
+
+      assert claimed.state == "claimed"
+      assert is_binary(claimed.lease_token)
+    end
+  end
+
   test "disabled Goal rollout accepts legacy registration without contracts but rejects adapter metadata" do
     previous_contracts = Application.fetch_env!(:symmetry_control, :contracts)
     previous_goals = Application.fetch_env!(:symmetry_control, :goals)
@@ -306,6 +409,22 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
     cases = [
       runtime_spec("partial", %{harness_kind: "codex"}),
+      runtime_spec("unknown-kind", %{
+        harness_kind: "unsupported_harness",
+        harness_version: "18.20.0",
+        adapter_version: "symmetry-omp-1",
+        adapter_protocol_version: 1,
+        capabilities: %{
+          "adapter" => native_adapter("unsupported_harness", "18.20.0", "symmetry-omp-1", 1)
+        }
+      }),
+      runtime_spec("omp-is-not-pi", %{
+        harness_kind: "omp",
+        harness_version: "18.20.0",
+        adapter_version: "symmetry-omp-1",
+        adapter_protocol_version: 1,
+        capabilities: %{"adapter" => native_adapter("pi", "18.20.0", "symmetry-omp-1", 1)}
+      }),
       runtime_spec("unbound-adapter", %{
         capabilities: %{"adapter" => native_adapter("codex", "0.153.4", "symmetry-codex-1", 1)}
       }),
@@ -542,6 +661,81 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
     assert {:ok, assigned} = Orchestration.fetch_run(run.id)
     assert assigned.state == "assigned"
+  end
+
+  test "OMP registration assigns and claims Goal work with its own fenced session identity" do
+    {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
+
+    runtime =
+      register_runtime("omp-native",
+        harness_kind: "omp",
+        harness_version: "18.20.0",
+        adapter_version: "symmetry-omp-1"
+      )
+
+    persisted_runtime = Repo.get!(Runtime, runtime.id)
+    assert persisted_runtime.harness_kind == "omp"
+    assert persisted_runtime.harness_version == "18.20.0"
+    assert persisted_runtime.capabilities["adapter"]["kind"] == "omp"
+
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    assert run.task_id == task.id
+    assert run.runtime_id == runtime.id
+    fence = claim(run, runtime)
+
+    attrs = %{
+      local_handle_id: Ecto.UUID.generate(),
+      harness_kind: "omp",
+      harness_version: "18.20.0",
+      adapter_version: "symmetry-omp-1",
+      workspace_fingerprint: "omp-workspace",
+      workspace: task.workspace,
+      repository_resource_id: runtime.repository_resource_id
+    }
+
+    assert {:error, :invalid_request} =
+             Goals.attach_harness_session(
+               runtime.machine_id,
+               run.id,
+               fence,
+               %{attrs | harness_kind: "unsupported_harness"},
+               now: @now
+             )
+
+    for changed <- [
+          %{harness_kind: "pi"},
+          %{harness_version: "18.20.1"},
+          %{adapter_version: "symmetry-omp-2"}
+        ] do
+      assert {:error, :ownership_lost} =
+               Goals.attach_harness_session(
+                 runtime.machine_id,
+                 run.id,
+                 fence,
+                 Map.merge(attrs, changed),
+                 now: @now
+               )
+    end
+
+    assert %{harness_session_id: nil, harness_binding_id: nil} = Repo.get!(Run, run.id)
+
+    assert {:ok, %{session: session}, :created} =
+             Goals.attach_harness_session(runtime.machine_id, run.id, fence, attrs, now: @now)
+
+    assert session.harness_kind == "omp"
+    assert session.harness_version == "18.20.0"
+    assert session.adapter_version == "symmetry-omp-1"
+    assert session.runtime_id == runtime.id
+    assert session.run_id == run.id
+
+    persisted_session = Repo.get!(HarnessSession, session.id)
+    assert persisted_session.harness_kind == "omp"
+    assert persisted_session.active_run_id == run.id
+    assert persisted_session.binding_verified
+    assert Repo.get!(Run, run.id).harness_binding_id == session.binding_id
+
+    assert {:ok, %{session: ^session}, :replayed} =
+             Goals.attach_harness_session(runtime.machine_id, run.id, fence, attrs, now: @now)
   end
 
   test "Goal assignment deterministically chooses one eligible native runtime" do
@@ -1656,6 +1850,71 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
              )
 
     assert %{state: "unavailable", active_run_id: nil} = Repo.get!(HarnessSession, session_id)
+  end
+
+  test "OMP resume assignment requires the exact retained kind and versions" do
+    retained_runtime =
+      register_runtime("omp-retained",
+        harness_kind: "omp",
+        harness_version: "18.20.0",
+        adapter_version: "symmetry-omp-1",
+        resume?: true
+      )
+
+    {task, _goal_id} = insert_goal_task(max_run_attempts: 2, retained_runtime: retained_runtime)
+    retained_session = Repo.get!(HarnessSession, task.requested_session_id)
+
+    for changed <- [
+          [harness_kind: "pi"],
+          [harness_version: "18.20.1"],
+          [adapter_version: "symmetry-omp-2"]
+        ] do
+      Repo.update_all(from(runtime in Runtime, where: runtime.id == ^retained_runtime.id),
+        set: [harness_kind: "omp", harness_version: "18.20.0", adapter_version: "symmetry-omp-1"]
+      )
+
+      Repo.update_all(from(runtime in Runtime, where: runtime.id == ^retained_runtime.id),
+        set: changed
+      )
+
+      assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
+      assert %{state: "queued", current_generation: 0} = Repo.get!(Task, task.id)
+
+      assert %{state: "available", active_run_id: nil} =
+               Repo.get!(HarnessSession, retained_session.id)
+    end
+
+    Repo.update_all(from(runtime in Runtime, where: runtime.id == ^retained_runtime.id),
+      set: [harness_kind: "omp", harness_version: "18.20.0", adapter_version: "symmetry-omp-1"]
+    )
+
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    assert run.runtime_id == retained_runtime.id
+    assert run.harness_session_id == retained_session.id
+    refute run.harness_binding_id == retained_session.binding_id
+    assert Repo.get!(HarnessSession, retained_session.id).binding_id == run.harness_binding_id
+
+    fence = claim(run, retained_runtime)
+
+    assert {:ok, %{session: %{id: session_id, harness_kind: "omp"}}, :created} =
+             Goals.attach_harness_session(
+               retained_runtime.machine_id,
+               run.id,
+               fence,
+               %{
+                 local_handle_id: retained_session.local_handle_id,
+                 binding_id: run.harness_binding_id,
+                 harness_kind: "omp",
+                 harness_version: "18.20.0",
+                 adapter_version: "symmetry-omp-1",
+                 workspace_fingerprint: retained_session.workspace_fingerprint,
+                 workspace: task.workspace,
+                 repository_resource_id: retained_session.repository_resource_id
+               },
+               now: @now
+             )
+
+    assert session_id == retained_session.id
   end
 
   test "Goal resume with no viable retained runtime remains queued without fallback" do
@@ -3277,6 +3536,47 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     }
   end
 
+  defp register_unverified_omp_runtime(label) do
+    machine = enroll_machine(label)
+
+    adapter =
+      native_adapter("omp", "18.20.0", "omp-rpc-v2", 2)
+      |> Map.put("operations", %{
+        "start" => false,
+        "events" => false,
+        "cancel" => false,
+        "resume" => false,
+        "handoff" => false,
+        "guidance" => "unsupported",
+        "pause" => "unsupported",
+        "approval_response" => false,
+        "usage" => "unknown",
+        "hard_cost_limit" => false
+      })
+
+    specification =
+      runtime_spec(label, %{
+        harness_kind: "omp",
+        harness_version: "18.20.0",
+        adapter_version: "omp-rpc-v2",
+        adapter_protocol_version: 2,
+        capabilities: %{
+          "structured_input" => true,
+          "provider_access" => false,
+          "interactive" => true,
+          "supervisory_control" => false,
+          "adapter" => adapter
+        }
+      })
+
+    assert {:ok, [runtime]} =
+             Orchestration.register_runtimes(machine.id, Ecto.UUID.generate(), [specification],
+               now: @now
+             )
+
+    runtime
+  end
+
   defp generic_adapter do
     %{
       "kind" => "generic",
@@ -3350,6 +3650,9 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     handoff? = Keyword.get(opts, :handoff?, false)
     hard_cost_limit? = Keyword.get(opts, :hard_cost_limit?, false)
     capacity = Keyword.get(opts, :capacity, 1)
+    harness_kind = Keyword.get(opts, :harness_kind, "codex")
+    harness_version = Keyword.get(opts, :harness_version, "0.153.4")
+    adapter_version = Keyword.get(opts, :adapter_version, "symmetry-codex-1")
 
     repository_resource_id =
       Keyword.get_lazy(opts, :repository_resource_id, fn ->
@@ -3363,7 +3666,7 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
       end)
 
     adapter =
-      native_adapter("codex", "0.153.4", "symmetry-codex-1", 1)
+      native_adapter(harness_kind, harness_version, adapter_version, 1)
       |> put_in(["operations", "resume"], resume?)
       |> put_in(["operations", "handoff"], handoff?)
       |> put_in(["operations", "hard_cost_limit"], hard_cost_limit?)
@@ -3379,9 +3682,9 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
                    capacity: capacity,
                    agent_profile: "codex",
                    workspace: "primary",
-                   harness_kind: "codex",
-                   harness_version: "0.153.4",
-                   adapter_version: "symmetry-codex-1",
+                   harness_kind: harness_kind,
+                   harness_version: harness_version,
+                   adapter_version: adapter_version,
                    adapter_protocol_version: 1,
                    capabilities: %{
                      "structured_input" => true,

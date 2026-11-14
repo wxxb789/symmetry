@@ -101,7 +101,7 @@ func (daemon *daemon) recoverGoalSession(rootContext context.Context, session st
 		if resumePreStart && resumeGoalSessionPreStartAttachment(session, delivery) {
 			updated, readyErr := daemon.markGoalSessionAttachDeliveryReady(key, session.LocalHandleID)
 			if readyErr != nil {
-				return fmt.Errorf("restore retained pi native-start boundary for %s/%d: %w", key.RunID, key.Generation, readyErr)
+				return fmt.Errorf("restore retained native-start boundary for %s/%d: %w", key.RunID, key.Generation, readyErr)
 			}
 			journal = updated
 			resumePreStart = true
@@ -186,26 +186,26 @@ func (daemon *daemon) recoverGoalSession(rootContext context.Context, session st
 		// a second crash would otherwise recover it as unknown_outcome.
 		if !terminalKnown && session.ResumeTerminalReason == string(protocol.TaskResultReasonResumeRejected) && session.HasKnownRetainedResumeNativeStop() {
 			if err := daemon.queueNativeGoalUsage(rootContext, key, nil); err != nil {
-				return fmt.Errorf("queue rejected retained pi usage for %s/%d: %w", key.RunID, key.Generation, err)
+				return fmt.Errorf("queue rejected retained native usage for %s/%d: %w", key.RunID, key.Generation, err)
 			}
 			if err := daemon.queueRecoveryTerminalTransition(rootContext, key, "failed", map[string]string{
 				"stage":   "goal_session_recovery",
 				"reason":  string(protocol.TaskResultReasonResumeRejected),
-				"summary": "retained pi session was rejected before native work started",
-				"error":   "retained pi session was rejected before native work started",
+				"summary": "retained native session was rejected before native work started",
+				"error":   "retained native session was rejected before native work started",
 			}); err != nil {
-				return fmt.Errorf("queue rejected retained pi terminal transition for %s/%d: %w", key.RunID, key.Generation, err)
+				return fmt.Errorf("queue rejected retained native terminal transition for %s/%d: %w", key.RunID, key.Generation, err)
 			}
 			if journal, loadErr = daemon.store.LoadJournal(key); loadErr != nil {
-				return fmt.Errorf("reload rejected retained pi run after terminal recovery for %s/%d: %w", key.RunID, key.Generation, loadErr)
+				return fmt.Errorf("reload rejected retained native run after terminal recovery for %s/%d: %w", key.RunID, key.Generation, loadErr)
 			}
 			terminalKnown = journal.TerminalState != "" || journal.LocalState == "terminal_pending" || journal.LocalState == "cleanup_pending" || journal.LocalState == "stale"
 		}
 		if _, closeErr := daemon.store.CloseGoalSession(session.Key()); closeErr != nil {
-			return fmt.Errorf("close definitively rejected retained pi attachment for %s/%d: %w", key.RunID, key.Generation, closeErr)
+			return fmt.Errorf("close definitively rejected retained native attachment for %s/%d: %w", key.RunID, key.Generation, closeErr)
 		}
 		if session, loadErr = daemon.store.LoadGoalSession(session.Key()); loadErr != nil {
-			return fmt.Errorf("reload rejected retained pi attachment for %s/%d: %w", key.RunID, key.Generation, loadErr)
+			return fmt.Errorf("reload rejected retained native attachment for %s/%d: %w", key.RunID, key.Generation, loadErr)
 		}
 	}
 	if updated, ensureErr := daemon.ensureRetainedGoalSessionStopDelivery(key, session, journal); ensureErr != nil {
@@ -222,13 +222,13 @@ func (daemon *daemon) recoverGoalSession(rootContext context.Context, session st
 		// evidence that this retained native session is stopped. Attach the
 		// new reservation first, then release that exact binding.
 		if err := daemon.recordStoppedGoalSession(key, session.Key()); err != nil {
-			return fmt.Errorf("release pre-start retained pi session for %s/%d: %w", key.RunID, key.Generation, err)
+			return fmt.Errorf("release pre-start retained native session for %s/%d: %w", key.RunID, key.Generation, err)
 		}
 		if journal, loadErr = daemon.store.LoadJournal(key); loadErr != nil {
-			return fmt.Errorf("reload pre-start retained pi run after stop recovery for %s/%d: %w", key.RunID, key.Generation, loadErr)
+			return fmt.Errorf("reload pre-start retained native run after stop recovery for %s/%d: %w", key.RunID, key.Generation, loadErr)
 		}
 		if session, loadErr = daemon.store.LoadGoalSession(session.Key()); loadErr != nil {
-			return fmt.Errorf("reload pre-start retained pi session after stop recovery for %s/%d: %w", key.RunID, key.Generation, loadErr)
+			return fmt.Errorf("reload pre-start retained native session after stop recovery for %s/%d: %w", key.RunID, key.Generation, loadErr)
 		}
 	}
 	if retiredRetainedGoalSessionStopDelivery(session, journal) {
@@ -363,7 +363,7 @@ func (daemon *daemon) recoverGoalSession(rootContext context.Context, session st
 	summary := "native Goal session was not safely recoverable after daemon restart"
 	if session.ResumeTerminalReason == string(protocol.TaskResultReasonResumeRejected) && session.HasKnownRetainedResumeNativeStop() {
 		reason = protocol.TaskResultReasonResumeRejected
-		summary = "retained pi session was rejected before native work started"
+		summary = "retained native session was rejected before native work started"
 	}
 	if err := daemon.queueRecoveryTerminalTransition(rootContext, key, "failed", map[string]string{
 		"stage":   "goal_session_recovery",
