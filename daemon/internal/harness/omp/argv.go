@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
@@ -140,14 +141,7 @@ func resumeFilename(resume *harness.ResumeHandle, directory string) (string, err
 func rpcArgs(profile []string, retained string) []string {
 	args := append([]string(nil), profile...)
 	for _, flag := range []string{"--no-ui", "--no-prewalk"} {
-		found := false
-		for _, argument := range profile {
-			if argument == flag {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if !slices.Contains(profile, flag) {
 			args = append(args, flag)
 		}
 	}

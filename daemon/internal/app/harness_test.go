@@ -1282,6 +1282,20 @@ func TestNativeHandoffAdmissionsUseOnlyVerifiedNativeOwner(t *testing.T) {
 			if session.result.Semantic == nil || session.result.Semantic.Subject != admission.Subject || session.result.Semantic.SubjectHash != subjectHash {
 				t.Fatalf("native task result Subject = %#v, want admission Subject and canonical hash", session.result.Semantic)
 			}
+			if journal.TerminalState != "completed" || len(journal.PendingTransitions) != 2 || journal.PendingTransitions[1].State != "completed" {
+				t.Fatalf("handoff terminal journal = %#v, want completed terminal transition", journal)
+			}
+			var payload map[string]json.RawMessage
+			if err := json.Unmarshal(journal.PendingTransitions[1].Payload, &payload); err != nil {
+				t.Fatalf("decode handoff terminal payload: %v", err)
+			}
+			var persisted protocol.TaskResult
+			if err := json.Unmarshal(payload["task_result"], &persisted); err != nil {
+				t.Fatalf("decode handoff terminal task_result: %v; payload=%s", err, payload["task_result"])
+			}
+			if persisted.Subject != admission.Subject || persisted.SubjectHash != subjectHash || persisted.ResultID != result.ResultID {
+				t.Fatalf("handoff terminal task_result = %#v, want admission Subject, canonical hash and result ID %q", persisted, result.ResultID)
+			}
 			if workspace := app.workspace.(*fakeWorkspace); workspace.subject != admission.Subject {
 				t.Fatalf("handoff workspace subject = %#v, want %#v", workspace.subject, admission.Subject)
 			}
