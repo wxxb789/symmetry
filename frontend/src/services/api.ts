@@ -27,6 +27,14 @@ export interface Api {
   session: (signal: AbortSignal) => Promise<Session>;
 }
 
+// Strict byte-level decoding keeps invalid UTF-8 visible to the schema boundary;
+// response.text() would silently substitute U+FFFD and pass corrupted text.
+const decodeBody = (body: Uint8Array) =>
+  Effect.try({
+    try: () => new TextDecoder("utf-8", { fatal: true }).decode(body),
+    catch: () => new UnexpectedResponse({ message: "The server response could not be read safely. Refresh or contact your operator.", status: null, transient: false }),
+  });
+
 function statusError(status: number): ReadError {
   switch (status) {
     case 401: return new Unauthenticated({ message: "Your session has ended. Sign in to continue." });
@@ -44,10 +52,10 @@ function statusError(status: number): ReadError {
   }
 }
 
-function request<A, E>(
+function request<A>(
   fetcher: typeof fetch,
   path: string,
-  decode: (body: string) => Effect.Effect<A, E>,
+  decode: (body: Uint8Array) => Effect.Effect<A, unknown>,
 ): Effect.Effect<A, ReadError> {
   return Effect.gen(function* () {
     const { response, body } = yield* Effect.tryPromise({
@@ -60,7 +68,7 @@ function request<A, E>(
           redirect: "manual",
           signal,
         });
-        return { response, body: response.ok ? await response.text() : "" };
+        return { response, body: response.ok ? new Uint8Array(await response.arrayBuffer()) : new Uint8Array(0) };
       },
       catch: () => new Network({ message: "Cannot reach the server. Check your connection and try again." }),
     });
@@ -87,10 +95,10 @@ export function createApi(fetcher: typeof fetch = globalThis.fetch.bind(globalTh
   return {
     workspace(projectId: string | null, signal: AbortSignal): Promise<Workspace> {
       const query = projectId === null ? "" : `?${new URLSearchParams({ project_id: projectId })}`;
-      return run(request(fetcher, `/portal/api/workspace${query}`, WorkspaceRead.decodeJson), signal);
+      return run(request(fetcher, `/portal/api/workspace${query}`, (body) => decodeBody(body).pipe(Effect.flatMap((text) => WorkspaceRead.decodeJson(text)))), signal);
     },
     session(signal: AbortSignal): Promise<Session> {
-      return run(request(fetcher, "/portal/api/session", Schema.decodeUnknown(Schema.parseJson(Session))), signal);
+      return run(request(fetcher, "/portal/api/session", (body) => decodeBody(body).pipe(Effect.flatMap((text) => Schema.decodeUnknown(Schema.parseJson(Session))(text)))), signal);
     },
   };
 }

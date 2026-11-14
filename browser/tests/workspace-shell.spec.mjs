@@ -103,8 +103,29 @@ test("project URL, refresh recovery, history and keyboard focus", async ({ page,
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
   await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeFocused();
   await page.keyboard.press("ControlOrMeta+k");
-  await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
-  await capture(page, testInfo, "keyboard-focus", "Command palette renders and traps keyboard focus");
+  const palette = page.getByRole("dialog", { name: "Command palette" });
+  await expect(palette).toBeVisible();
+  const search = palette.getByLabel("Search destinations");
+  const close = palette.getByRole("button", { name: "Close command palette" });
+  const lastResult = palette.locator(".command-result").last();
+  // The initial focus lands inside the panel, on the close button.
+  await expect(close).toBeFocused();
+  // Tab reaches the search input from the first panel control.
+  await page.keyboard.press("Tab");
+  await expect(search).toBeFocused();
+  // Shift+Tab from the search returns to the close button, and one more
+  // Shift+Tab wraps from the first control to the last result.
+  await page.keyboard.press("Shift+Tab");
+  await expect(close).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(lastResult).toBeFocused();
+  // Tab cycles back into the panel from the last control instead of
+  // escaping to the background Project, Refresh or Sign out controls.
+  await page.keyboard.press("Tab");
+  await expect(close).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(search).toBeFocused();
+  await capture(page, testInfo, "keyboard-focus", "Command palette renders and traps keyboard focus; initial focus inside the panel, Tab and Shift+Tab wrap between the first and last panel controls, and focus never reaches the background Project, Refresh or Sign out controls");
   await page.keyboard.press("Escape");
   await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeFocused();
   if (isMobile) {
@@ -175,10 +196,16 @@ test("Attention scope survives selection and login with fractional resource meta
   await page.getByRole("navigation", { name: "Workspace navigation" }).getByRole("link", { name: "Attention", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`/portal/attention\\?projectId=${blocked.id}$`));
   await page.goto(`/portal/projects/${blocked.id}`);
+  // After a full page load the project heading renders before the shell
+  // mounts; wait for the shell's palette trigger before using the shortcut.
+  await page.getByRole("button", { name: "Search or navigate", exact: true }).waitFor();
   await page.keyboard.press("ControlOrMeta+k");
   await page.getByRole("dialog", { name: "Command palette" }).getByRole("link", { name: "Attention", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`/portal/attention\\?projectId=${blocked.id}$`));
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  // The shell awaits the current session token before the native logout POST;
+  // wait for the logout navigation to finish before following the deep link.
+  await expect(page).toHaveURL(/\/portal\/login$/);
   const destination = `/portal/attention?projectId=${blocked.id}`;
   await page.goto(destination);
   await expect(page).toHaveURL(/\/portal\/login\?return_to=/);
@@ -231,6 +258,9 @@ test("signed-out legacy project board link survives real login", async ({ page }
   await login(page);
   const selected = await project(page, "L");
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  // The shell awaits the current session token before the native logout POST;
+  // wait for the logout navigation to finish before following the legacy link.
+  await expect(page).toHaveURL(/\/portal\/login$/);
   const destination = `/portal?project_id=${selected.id}#board`;
   await page.goto(destination);
   await expect(page.getByLabel("Operator token")).toBeVisible();

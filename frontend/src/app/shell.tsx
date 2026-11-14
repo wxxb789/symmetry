@@ -3,8 +3,9 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, Outlet, useMatch, useNavigate, useRouteContext, useRouterState } from "@tanstack/react-router";
 import { Command, Folder, Inbox, LogOut, Menu, Search, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { errorMessage } from "../services/api";
 import { ErrorState, LoadingState } from "../components/workspace";
-import { sessionOptions, workspaceOptions } from "./application";
+import { sessionOptions, workspaceOptions, type Application } from "./application";
 
 function focusContent() {
   requestAnimationFrame(() => { document.getElementById("content-heading")?.focus({ preventScroll: true }); });
@@ -128,8 +129,11 @@ export function WorkspaceRoot() {
   const href = useRouterState({ select: (state) => state.location.href });
   const navigationStatus = useRouterState({ select: (state) => state.status });
   const ready = session.isSuccess && !signedOut;
+  const focusedHref = useRef<string | null>(null);
   useLayoutEffect(() => {
     if (!ready || navigationStatus !== "idle") return;
+    if (focusedHref.current === href) return;
+    focusedHref.current = href;
     document.getElementById("content-heading")?.focus({ preventScroll: true });
   }, [href, navigationStatus, ready]);
   if (signedOut) return <main className="session-state"><h1>Signed out</h1><p role="status">Your session has ended. Redirecting to sign in…</p><a className="button" href="/portal/login">Sign in</a></main>;
@@ -140,10 +144,43 @@ export function WorkspaceRoot() {
     <a className="skip-link" href="#content-heading">Skip to content</a>
     <div className="workspace-shell">
       <aside className="sidebar"><Link className="brand" to="/attention" search={{}}><span className="brand-mark" aria-hidden="true">S</span>Symmetry</Link><p className="sidebar-label">Workspace</p><NavigationLinks /><div className="sidebar-footer"><span className="read-only-dot" aria-hidden="true" />Read-only workspace</div></aside>
-      <div className="workspace-body"><header className="topbar"><div className="topbar-start"><MobileNavigation /><ProjectPicker /></div><div className="topbar-actions"><CommandPalette /><form action="/portal/logout" method="post"><input type="hidden" name="_csrf_token" value={csrf ?? ""} /><button className="icon-button" type="submit" disabled={!csrf} aria-label="Sign out"><LogOut size={18} aria-hidden="true" /></button></form></div></header>
+      <div className="workspace-body"><header className="topbar"><div className="topbar-start"><MobileNavigation /><ProjectPicker /></div><div className="topbar-actions"><CommandPalette /><LogoutForm application={application} cachedToken={csrf ?? ""} /></div></header>
         <main id="main-content" className="workspace-content"><Outlet /></main>
         <footer className="content-footer">Workspace reads reflect server state. No changes can be made from this shell. <a href="/portal/classic">Classic workspace</a></footer>
       </div>
     </div>
   </>;
+}
+
+function LogoutForm({ application, cachedToken }: { application: Application; cachedToken: string }) {
+  const [submitting, setSubmitting] = useState(false);
+  const [logoutError, setLogoutError] = useState<string | null>(null);
+  const formRef = useRef<HTMLFormElement>(null);
+  // The cached bootstrap token can predate a logout/login in another window that
+  // rotated the shared session cookie. Await the server's current token, then
+  // issue exactly one native POST with it instead of submitting a stale token.
+  const submit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (submitting) return;
+    setSubmitting(true);
+    setLogoutError(null);
+    try {
+      await application.queryClient.invalidateQueries({ queryKey: ["session"] });
+      const session = await application.queryClient.fetchQuery(sessionOptions(application.api));
+      const form = formRef.current;
+      const tokenInput = form?.querySelector<HTMLInputElement>('input[name="_csrf_token"]');
+      if (!form || !tokenInput) return;
+      tokenInput.value = session.csrf_token;
+      setSubmitting(false);
+      form.submit();
+    } catch (cause) {
+      setSubmitting(false);
+      setLogoutError(errorMessage(cause));
+    }
+  };
+  return <form className="topbar-form" ref={formRef} action="/portal/logout" method="post" onSubmit={(event) => { void submit(event); }}>
+    <input type="hidden" name="_csrf_token" value={cachedToken} />
+    <button className="icon-button" type="submit" aria-label="Sign out" disabled={submitting || !cachedToken}><LogOut size={18} aria-hidden="true" /></button>
+    {logoutError && <p className="notice notice-error logout-error" role="alert">{logoutError} <button className="button" type="button" onClick={() => setLogoutError(null)}>Try again</button></p>}
+  </form>;
 }

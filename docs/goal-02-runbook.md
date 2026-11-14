@@ -127,12 +127,13 @@ mix test
 ```
 
 For browser verification, start `mix phx.server`, sign in, and verify the portal
-at desktop and narrow mobile widths. Run the repeatable browser matrix from
-`browser/`:
+at desktop and narrow mobile widths. Install and run the repeatable browser
+matrix from the repository root with the pinned package manager (the browser
+package installs through the root pnpm workspace lockfile):
 
 ```sh
-npm ci
-npm test
+mise exec pnpm@12.17.0 -- pnpm install --frozen-lockfile
+mise exec pnpm@12.17.0 -- pnpm --filter symmetry-browser-acceptance test
 ```
 
 Then run the real daemon lifecycle matrix from the repository root while the

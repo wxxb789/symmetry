@@ -206,6 +206,44 @@ describe("workspace navigation", () => {
     expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/portal/login");
   });
 
+  it("keeps the operator's focus when a background session read fails and then recovers", async () => {
+    const sessionReads: Array<(response: Response) => void> = [];
+    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const path = input instanceof Request ? input.url : String(input);
+      if (path.endsWith("/session")) {
+        const { promise, resolve } = Promise.withResolvers<Response>();
+        sessionReads.push(resolve);
+        return promise;
+      }
+      return Promise.resolve(new Response(JSON.stringify({ selected_project_id: firstProjectId, projects: [projects[0]] })));
+    });
+    const { application } = renderWorkspace("/portal/attention", fetcher);
+    // The 503 must settle into an error state before recovery; transient retries
+    // would keep the fetch in flight and mask the focus transition under test.
+    application.queryClient.setQueryDefaults(["session"], { retry: false });
+    await vi.waitFor(() => expect(sessionReads.length).toBeGreaterThan(0));
+    sessionReads[0]?.(new Response('{"csrf_token":"cached-token"}'));
+    await screen.findByRole("heading", { level: 1, name: "Attention" });
+    const selection = screen.getByLabelText("Project");
+    await waitFor(() => expect(selection).toBeEnabled());
+    selection.focus();
+    expect(selection).toHaveFocus();
+    // A background session refetch fails while the cached session still renders the shell.
+    act(() => { window.dispatchEvent(new Event("visibilitychange")); });
+    await vi.waitFor(() => expect(sessionReads.length).toBeGreaterThan(1));
+    sessionReads[1]?.(new Response("{}", { status: 503 }));
+    await act(async () => { const { promise, resolve } = Promise.withResolvers<void>(); setTimeout(resolve, 20); await promise; });
+    expect(screen.getByRole("heading", { level: 1, name: "Attention" })).toBeVisible();
+    expect(selection).toHaveFocus();
+    // The read then recovers; the URL is unchanged and the router stays idle.
+    act(() => { window.dispatchEvent(new Event("visibilitychange")); });
+    await vi.waitFor(() => expect(sessionReads.length).toBeGreaterThan(2));
+    sessionReads[2]?.(new Response('{"csrf_token":"recovered-token"}'));
+    await act(async () => { const { promise, resolve } = Promise.withResolvers<void>(); setTimeout(resolve, 20); await promise; });
+    expect(selection).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Sign out" })).toBeEnabled();
+  });
+
   it("uses the current bootstrap CSRF token for logout after session refetch, not the HTML token", async () => {
     const meta = document.createElement("meta");
     meta.name = "csrf-token";
@@ -231,5 +269,44 @@ describe("workspace navigation", () => {
     } finally {
       meta.remove();
     }
+  });
+
+  it("awaits the current session before the native logout POST instead of submitting a stale token", async () => {
+    const user = userEvent.setup();
+    let csrfToken = "initial-session-token";
+    let sessionRead = 0;
+    const { promise: bootstrap, resolve: releaseBootstrap } = Promise.withResolvers<Response>();
+    const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const path = input instanceof Request ? input.url : String(input);
+      if (!path.endsWith("/session")) return Promise.resolve(new Response(JSON.stringify({ selected_project_id: firstProjectId, projects: [projects[0]] })));
+      sessionRead += 1;
+      return sessionRead === 1
+        ? Promise.resolve(new Response(JSON.stringify({ csrf_token: csrfToken })))
+        : bootstrap.then(() => new Response(JSON.stringify({ csrf_token: csrfToken })));
+    });
+    renderWorkspace("/portal/attention", fetcher);
+    await screen.findByRole("heading", { level: 1, name: "Attention" });
+    expect(screen.getByRole("button", { name: "Sign out" })).toBeEnabled();
+    // Another window logs out and back in, rotating the shared cookie's token;
+    // both windows stay visible, so no visibility event refreshes this one.
+    csrfToken = "rotated-session-token";
+    const form = screen.getByRole("button", { name: "Sign out" }).closest("form");
+    expect(form).not.toBeNull();
+    // form.submit() is the one native POST; it bypasses submit events, so spy on it
+    // and capture the hidden token at the moment of the call.
+    let postedToken: string | null = null;
+    const nativeSubmit = vi.fn(() => {
+      postedToken = form!.querySelector<HTMLInputElement>('input[name="_csrf_token"]')?.value ?? null;
+    });
+    form!.submit = nativeSubmit;
+    // While the fresh bootstrap read is still pending, a click must not POST yet.
+    await user.click(screen.getByRole("button", { name: "Sign out" }));
+    expect(nativeSubmit).not.toHaveBeenCalled();
+    releaseBootstrap(new Response(JSON.stringify({ csrf_token: csrfToken })));
+    await vi.waitFor(() => {
+      if (postedToken === null) throw new Error("native logout POST not reached");
+    });
+    expect(nativeSubmit).toHaveBeenCalledTimes(1);
+    expect(postedToken).toBe("rotated-session-token");
   });
 });

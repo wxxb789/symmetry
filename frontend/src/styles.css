@@ -52,6 +52,8 @@
   .workspace-body { min-width: 0; display: flex; flex-direction: column; }
   .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 76px; padding: 16px 32px; border-bottom: 1px solid var(--color-line); background: var(--color-surface); }
   .topbar-start, .topbar-actions { display: flex; align-items: center; gap: 16px; min-width: 0; }
+  .topbar-form { display: contents; }
+  .topbar-form .logout-error { margin: 0 0 0 8px; padding: 8px 12px; }
   .project-picker { display: flex; align-items: center; gap: 12px; min-width: 0; }
   .project-picker label { font-size: 12px; color: var(--color-muted); }
   .project-picker select { max-width: 240px; min-width: 150px; }

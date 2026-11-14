@@ -22,6 +22,38 @@ describe("read boundary", () => {
     await expect(api.workspace(null, new AbortController().signal)).rejects.toBeInstanceOf(UnexpectedResponse);
   });
 
+  it("rejects invalid UTF-8 bytes in a 200 workspace response instead of accepting U+FFFD", async () => {
+    const body = new Uint8Array([
+      ...new TextEncoder().encode('{"selected_project_id":null,"projects":[{"id":"11111111-1111-4111-8111-111111111111","key":"DEMO","name":"Demo'),
+      0xff,
+      ...new TextEncoder().encode('","description":null,"status":"active","work_items":[]}],"health":{"status":"unknown"}}'),
+    ]);
+    const api = createApi(vi.fn<typeof fetch>().mockResolvedValue(new Response(body)));
+    const failure = await api.workspace(null, new AbortController().signal).then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(UnexpectedResponse);
+    expect(failure).not.toBeInstanceOf(Network);
+  });
+
+  it("keeps a valid non-ASCII project name byte-exact through decoding", async () => {
+    const name = "プロジェクト Ω—λ";
+    const body = new Uint8Array([
+      ...new TextEncoder().encode('{"selected_project_id":null,"projects":[{"id":"11111111-1111-4111-8111-111111111111","key":"DEMO","name":"'),
+      ...new TextEncoder().encode(name),
+      ...new TextEncoder().encode('","description":null,"status":"active","work_items":[]}],"health":{"status":"unknown"}}'),
+    ]);
+    const api = createApi(vi.fn<typeof fetch>().mockResolvedValue(new Response(body)));
+    const result = await api.workspace(null, new AbortController().signal);
+    expect(result.projects[0]?.name).toBe(name);
+  });
+
+  it("applies the same strict UTF-8 rejection to the session bootstrap path", async () => {
+    const body = new Uint8Array([...new TextEncoder().encode('{"csrf_token":"to'), 0xff, ...new TextEncoder().encode('ken"}')]);
+    const api = createApi(vi.fn<typeof fetch>().mockResolvedValue(new Response(body)));
+    const failure = await api.session(new AbortController().signal).then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(UnexpectedResponse);
+    expect(failure).not.toBeInstanceOf(Network);
+  });
+
   it("keeps workspace reads usable when existing resource metadata contains fractional numbers", async () => {
     const body = JSON.stringify({
       ...workspace,

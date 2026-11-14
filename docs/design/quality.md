@@ -97,7 +97,7 @@ changing the forwarded response status, headers or body.
 | --- | --- |
 | Elixir (`control/`) | `mix format --check-formatted`; `mix compile --warnings-as-errors`; `mix test`; release/E2E per current CI |
 | Go (`daemon/`) | `go vet ./...`; `go test ./...`; concurrency changes: `go test -race ./...` |
-| Browser (`browser/`, before migration) | `npm ci`; `npm test`; configured control/daemon fixtures required |
+| Browser (`browser/`) | `mise exec pnpm@12.17.0 -- pnpm install --frozen-lockfile` from the repository root; `mise exec pnpm@12.17.0 -- pnpm --filter symmetry-browser-acceptance test`; configured control/daemon fixtures required |
 | TS (goal 0007 target) | frontend typecheck/lint/test/build commands from frontend.md; migrate browser runner to pnpm |
 | Wire contract | `pnpm contracts:check` (schemas, fixtures through Effect decoders, generated-file drift; regenerate with `pnpm contracts:generate`); Go and Elixir fixture decoders run in their test suites |
 
