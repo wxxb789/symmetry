@@ -24,6 +24,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/codex"
+	"github.com/wxxb789/symmetry/daemon/internal/harness/omo"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/omp"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/opencode"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/pi"
@@ -78,6 +79,13 @@ func TestNewHarnessRegistryBindsNativeAdaptersAndUnsupportedOpenCode(t *testing.
 	}
 	if _, ok := ompAdapter.(*omp.Adapter); !ok {
 		t.Fatalf("OMP adapter type = %T, want *omp.Adapter", ompAdapter)
+	}
+	omoAdapter, err := registry.Lookup(harness.KindOmO)
+	if err != nil {
+		t.Fatalf("Lookup(omo) error = %v", err)
+	}
+	if _, ok := omoAdapter.(*omo.Adapter); !ok {
+		t.Fatalf("OmO adapter type = %T, want *omo.Adapter", omoAdapter)
 	}
 	openCodeAdapter, err := registry.Lookup(harness.KindOpenCode)
 	if err != nil {
@@ -298,6 +306,7 @@ func TestStartupProbeRegistersUnavailableNativeProjections(t *testing.T) {
 		{name: "claude", configKind: config.RuntimeHarnessClaudeCode, harnessKind: harness.KindClaude, adapter: harness.NewClaudeAdapterWithRunner("claude", absentClaudeRunner{})},
 		{name: "pi", configKind: config.RuntimeHarnessPi, harnessKind: harness.KindPi, adapter: harness.NewPiAdapter()},
 		{name: "omp", configKind: config.RuntimeHarnessOMP, harnessKind: harness.KindOMP, adapter: omp.NewAdapter(filepath.Join(t.TempDir(), "absent-omp.exe")), adapterVersion: omp.ImplementationVersion},
+		{name: "omo", configKind: config.RuntimeHarnessOmO, harnessKind: harness.KindOmO, adapter: omo.NewAdapter(filepath.Join(t.TempDir(), "absent-omo.exe")), adapterVersion: omo.ImplementationVersion},
 		{name: "opencode", configKind: config.RuntimeHarnessOpenCode, harnessKind: harness.KindOpenCode, adapter: harness.NewOpenCodeAdapter()},
 	}
 	for _, test := range tests {
@@ -1122,6 +1131,7 @@ func TestNativeHandoffAdmissionsUseOnlyVerifiedNativeOwner(t *testing.T) {
 		{name: "codex", kind: harness.KindCodex, configKind: config.RuntimeHarnessCodex, nativeVersion: codex.TestedVersion},
 		{name: "pi", kind: harness.KindPi, configKind: config.RuntimeHarnessPi, nativeVersion: pi.TestedVersion},
 		{name: "omp", kind: harness.KindOMP, configKind: config.RuntimeHarnessOMP, nativeVersion: omp.TestedVersion},
+		{name: "omo", kind: harness.KindOmO, configKind: config.RuntimeHarnessOmO, nativeVersion: omo.TestedVersion},
 		{name: "opencode", kind: harness.KindOpenCode, configKind: config.RuntimeHarnessOpenCode, nativeVersion: opencode.TestedVersion},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -1150,6 +1160,9 @@ func TestNativeHandoffAdmissionsUseOnlyVerifiedNativeOwner(t *testing.T) {
 			controlClient.contextSnapshot = &contextSnapshot
 			profile := app.config.AgentProfiles[app.config.Runtime.AgentProfile]
 			profile.EnvAllowlist = []string{"HOME", "XDG_CONFIG_HOME"}
+			if test.kind == harness.KindOmO {
+				profile.Args = []string{"--session-dir", t.TempDir()}
+			}
 			app.config.AgentProfiles[app.config.Runtime.AgentProfile] = profile
 			if runtime.GOOS == "linux" && requiresLinuxV2NativeOwner(test.kind) {
 				owner := &fakeLinuxV2NativeOwner{
@@ -1195,8 +1208,8 @@ func TestNativeHandoffAdmissionsUseOnlyVerifiedNativeOwner(t *testing.T) {
 			if session.request.Resume != nil {
 				t.Fatalf("handoff passed a resume handle to a new session: %#v", session.request.Resume)
 			}
-			if test.kind == harness.KindOMP && (session.request.Invocation.LinuxV2Required || session.request.Invocation.LinuxV2 != nil || session.request.ProviderBridge != nil || session.request.ProviderAccess != nil) {
-				t.Fatalf("OMP handoff inherited Linux v2 or provider-broker authority: %#v", session.request)
+			if (test.kind == harness.KindOMP || test.kind == harness.KindOmO) && (session.request.Invocation.LinuxV2Required || session.request.Invocation.LinuxV2 != nil || session.request.ProviderBridge != nil || session.request.ProviderAccess != nil) {
+				t.Fatalf("%s handoff inherited Linux v2 or provider-broker authority: %#v", test.kind, session.request)
 			}
 			if runtime.GOOS == "linux" && requiresLinuxV2NativeOwner(test.kind) {
 				values := make(map[string]string)
@@ -1585,6 +1598,11 @@ func testNativeResumeAdmissionReusesRetainedNativeSessionAndWorkspace(t *testing
 	defer store.Close()
 
 	nativeFile := filepath.Join(t.TempDir(), "retained-session.jsonl")
+	if kind == harness.KindOmO {
+		profile := app.config.AgentProfiles[app.config.Runtime.AgentProfile]
+		profile.Args = []string{"--session-dir", filepath.Dir(nativeFile)}
+		app.config.AgentProfiles[app.config.Runtime.AgentProfile] = profile
+	}
 	if err := os.WriteFile(nativeFile, []byte("{}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -2182,6 +2200,8 @@ func testNativeResumeRejectedBeforeNativeStartReleasesExactNewBinding(t *testing
 	session.startErr = pi.ErrResumeRejected
 	if kind == harness.KindOMP {
 		session.startErr = omp.ErrResumeRejected
+	} else if kind == harness.KindOmO {
+		session.startErr = omo.ErrResumeRejected
 	}
 	controlClient.harnessSessionID = &controlSessionID
 	controlClient.harnessBindingID = &resumeBindingID
@@ -2628,7 +2648,7 @@ func TestNestedGoalAdmissionAssignmentFailsClosed(t *testing.T) {
 }
 
 func TestFreshNativeGoalAdmissionUsesDurableStagedNativeLifecycle(t *testing.T) {
-	for _, kind := range []harness.Kind{harness.KindCodex, harness.KindOMP} {
+	for _, kind := range []harness.Kind{harness.KindCodex, harness.KindOMP, harness.KindOmO} {
 		t.Run(string(kind), func(t *testing.T) { testFreshNativeGoalAdmissionUsesDurableStagedNativeLifecycle(t, kind) })
 	}
 }
@@ -2641,8 +2661,8 @@ func testFreshNativeGoalAdmissionUsesDurableStagedNativeLifecycle(t *testing.T, 
 	result := validNativeTaskResult(t, admission)
 	app, store, session, controlClient := nativeAdmissionDaemonForHarness(t, admission, result, nil, kind, string(kind), testVerifiedNativeCapabilities(kind))
 	defer store.Close()
-	if kind == harness.KindOMP {
-		session.handle.Filename = filepath.Join(t.TempDir(), "omp-session.jsonl")
+	if kind == harness.KindOMP || kind == harness.KindOmO {
+		session.handle.Filename = filepath.Join(t.TempDir(), string(kind)+"-session.jsonl")
 		if err := os.WriteFile(session.handle.Filename, []byte("{}\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -2685,8 +2705,8 @@ func testFreshNativeGoalAdmissionUsesDurableStagedNativeLifecycle(t *testing.T, 
 	if session.request.Invocation.InitialInput != nil || session.request.Invocation.CloseInputAfterInitial {
 		t.Fatalf("native invocation inherited legacy stdin input: %#v", session.request.Invocation)
 	}
-	if kind == harness.KindOMP && (session.request.Resume != nil || session.request.Invocation.LinuxV2Required || session.request.Invocation.LinuxV2 != nil) {
-		t.Fatalf("fresh OMP invocation inherited retained state or Linux v2 ownership: %#v", session.request)
+	if (kind == harness.KindOMP || kind == harness.KindOmO) && (session.request.Resume != nil || session.request.Invocation.LinuxV2Required || session.request.Invocation.LinuxV2 != nil) {
+		t.Fatalf("fresh %s invocation inherited retained state or Linux v2 ownership: %#v", kind, session.request)
 	}
 	journal, err := store.LoadJournal(state.RunKey{RunID: "run-1", Generation: 1})
 	if err != nil {
@@ -3632,7 +3652,7 @@ func TestFreshCodexGoalAdmissionRejectsMismatchedRuntimeProfileBeforeWorkspace(t
 }
 
 func TestFreshNativeGoalAdmissionRejectsMismatchedSemanticSubject(t *testing.T) {
-	for _, kind := range []harness.Kind{harness.KindCodex, harness.KindOMP} {
+	for _, kind := range []harness.Kind{harness.KindCodex, harness.KindOMP, harness.KindOmO} {
 		t.Run(string(kind), func(t *testing.T) { testFreshNativeGoalAdmissionRejectsMismatchedSemanticSubject(t, kind) })
 	}
 }
@@ -4414,7 +4434,7 @@ func TestAdmissionLaunchAllowsOnlyVerifiedPiProviderAccess(t *testing.T) {
 	if err := admissionLaunchFailure(admission, capabilities, access); err != nil {
 		t.Fatalf("verified Pi provider access was rejected: %v", err)
 	}
-	for _, kind := range []harness.Kind{harness.KindCodex, harness.KindOMP} {
+	for _, kind := range []harness.Kind{harness.KindCodex, harness.KindOMP, harness.KindOmO} {
 		capabilities.Kind = kind
 		if err := admissionLaunchFailure(admission, capabilities, access); err == nil {
 			t.Fatalf("%s provider access was accepted without a broker bridge", kind)
@@ -4689,7 +4709,7 @@ func nativeAdmissionDaemon(t *testing.T, admission protocol.Admission, result pr
 
 func forEachRetainedNativeHarness(t *testing.T, run func(*testing.T, harness.Kind)) {
 	t.Helper()
-	for _, kind := range []harness.Kind{harness.KindPi, harness.KindOMP} {
+	for _, kind := range []harness.Kind{harness.KindPi, harness.KindOMP, harness.KindOmO} {
 		t.Run(string(kind), func(t *testing.T) { run(t, kind) })
 	}
 }
@@ -4828,6 +4848,11 @@ func nativeAdmissionDaemonForHarness(t *testing.T, admission protocol.Admission,
 	value.Runtime.AdapterVersion = capabilities.ImplementationVersion
 	value.Runtime.AdapterProtocolVersion = capabilities.ProtocolVersion
 	value.Runtime.RepositoryResourceID = admission.Subject.ResourceID
+	if kind == harness.KindOmO {
+		profile := value.AgentProfiles[value.Runtime.AgentProfile]
+		profile.Args = []string{"--session-dir", t.TempDir()}
+		value.AgentProfiles[value.Runtime.AgentProfile] = profile
+	}
 	if kind == harness.KindOMP {
 		profile := value.AgentProfiles[value.Runtime.AgentProfile]
 		profile.Args = []string{"--session-dir", t.TempDir(), "--no-extensions", "--no-skills", "--no-rules", "--no-context-files"}
@@ -4921,6 +4946,9 @@ func testVerifiedNativeCapabilities(kind harness.Kind) harness.Capabilities {
 		nativeVersion = omp.TestedVersion
 		adapterVersion = omp.ImplementationVersion
 		protocolVersion = 2
+	case harness.KindOmO:
+		nativeVersion = omo.TestedVersion
+		adapterVersion = "symmetry-daemon:test-omo"
 	case harness.KindOpenCode:
 		nativeVersion = opencode.TestedVersion
 		adapterVersion = "symmetry-daemon:test-opencode"

@@ -150,6 +150,7 @@ func NewRegistry() *Registry {
 	_ = registry.Register(KindClaude, NewClaudeAdapter())
 	_ = registry.Register(KindPi, NewPiAdapter())
 	_ = registry.Register(KindOMP, newUnavailableAdapter(KindOMP, "OMP executable or verified native bridge is unavailable"))
+	_ = registry.Register(KindOmO, newUnavailableAdapter(KindOmO, "OmO executable or verified native RPC bridge is unavailable"))
 	_ = registry.Register(KindOpenCode, NewOpenCodeAdapter())
 	return registry
 }

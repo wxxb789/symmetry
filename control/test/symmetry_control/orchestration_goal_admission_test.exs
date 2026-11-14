@@ -404,6 +404,85 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     assert native_runtime.capabilities["adapter"] == adapter
   end
 
+  test "omo metadata persists and native assignment still requires adapter capabilities" do
+    {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
+    repository_resource_id = Repo.get!(WorkItem, task.work_item_id).repository_resource_id
+    machine = enroll_machine("omo-runtime")
+    daemon_instance_id = Ecto.UUID.generate()
+
+    specification =
+      runtime_spec("omo-runtime", %{
+        repository_resource_id: repository_resource_id,
+        harness_kind: "omo",
+        harness_version: "5.1.69",
+        adapter_version: "omo-rpc-v1",
+        adapter_protocol_version: 1
+      })
+
+    assert {:ok, [metadata_only_runtime]} =
+             Orchestration.register_runtimes(machine.id, daemon_instance_id, [specification],
+               now: @now
+             )
+
+    persisted_runtime = Repo.get!(Runtime, metadata_only_runtime.id)
+    assert persisted_runtime.harness_kind == "omo"
+    assert persisted_runtime.harness_version == "5.1.69"
+    assert persisted_runtime.adapter_version == "omo-rpc-v1"
+    assert persisted_runtime.adapter_protocol_version == 1
+    assert persisted_runtime.capabilities == %{}
+    assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
+
+    specification =
+      Map.put(specification, :capabilities, %{
+        "structured_input" => true,
+        "interactive" => true,
+        "adapter" => native_adapter("omo", "5.1.69", "omo-rpc-v1", 1)
+      })
+
+    assert {:ok, [runtime]} =
+             Orchestration.register_runtimes(machine.id, daemon_instance_id, [specification],
+               now: @now
+             )
+
+    assert runtime.id == metadata_only_runtime.id
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    assert run.task_id == task.id
+    assert run.runtime_id == runtime.id
+    fence = claim(run, runtime)
+
+    session_attrs = %{
+      local_handle_id: Ecto.UUID.generate(),
+      harness_kind: "omo",
+      harness_version: "5.1.69",
+      adapter_version: "omo-rpc-v1",
+      workspace_fingerprint: "workspace:#{runtime.id}",
+      workspace: "primary",
+      repository_resource_id: repository_resource_id
+    }
+
+    assert {:error, :invalid_request} =
+             Goals.attach_harness_session(
+               machine.id,
+               run.id,
+               fence,
+               Map.put(session_attrs, :harness_kind, "unknown"),
+               now: @now
+             )
+
+    assert {:ok, %{session: %{id: session_id}}, :created} =
+             Goals.attach_harness_session(machine.id, run.id, fence, session_attrs, now: @now)
+
+    session = Repo.get!(HarnessSession, session_id)
+    assert session.harness_kind == "omo"
+    assert session.harness_version == "5.1.69"
+    assert session.adapter_version == "omo-rpc-v1"
+    assert session.runtime_id == runtime.id
+    assert session.state == "busy"
+    assert session.active_run_id == run.id
+    assert session.binding_verified
+    assert Repo.get!(Run, run.id).harness_session_id == session.id
+  end
+
   test "runtime registration rejects incomplete or incompatible adapter declarations" do
     machine = enroll_machine("invalid-adapter")
 
@@ -424,6 +503,21 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
         adapter_version: "symmetry-omp-1",
         adapter_protocol_version: 1,
         capabilities: %{"adapter" => native_adapter("pi", "18.20.0", "symmetry-omp-1", 1)}
+      }),
+      runtime_spec("omo-is-not-pi", %{
+        harness_kind: "omo",
+        harness_version: "5.1.69",
+        adapter_version: "omo-rpc-v1",
+        adapter_protocol_version: 1,
+        capabilities: %{
+          "adapter" => native_adapter("pi", "5.1.69", "omo-rpc-v1", 1)
+        }
+      }),
+      runtime_spec("unknown-omo-kind", %{
+        harness_kind: "unknown",
+        harness_version: "5.1.69",
+        adapter_version: "omo-rpc-v1",
+        adapter_protocol_version: 1
       }),
       runtime_spec("unbound-adapter", %{
         capabilities: %{"adapter" => native_adapter("codex", "0.153.4", "symmetry-codex-1", 1)}

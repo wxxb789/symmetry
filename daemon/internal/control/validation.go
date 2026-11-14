@@ -723,7 +723,7 @@ func validateGoalSessionAttach(runID string, request GoalSessionAttachRequest) e
 		}
 	}
 	switch request.HarnessKind {
-	case "codex", "claude_code", "pi", "omp", "opencode":
+	case "codex", "claude_code", "pi", "omp", "omo", "opencode":
 	default:
 		return fmt.Errorf("harness_kind %q is invalid", request.HarnessKind)
 	}

@@ -26,6 +26,7 @@ func TestRuntimeAcceptsCompleteNativeAdapterMetadata(t *testing.T) {
 	}{
 		{kind: RuntimeHarnessCodex, version: "0.156.1", adapter: "symmetry-daemon:test", protocol: 1},
 		{kind: RuntimeHarnessOMP, version: "18.20.0", adapter: "omp-rpc-v2", protocol: 2},
+		{kind: RuntimeHarnessOmO, version: "5.1.69", adapter: "omo-rpc-v1", protocol: 1},
 	} {
 		t.Run(test.kind, func(t *testing.T) {
 			testRuntimeAcceptsCompleteNativeAdapterMetadata(t, test.kind, test.version, test.adapter, test.protocol)
@@ -144,7 +145,7 @@ func TestCodexRuntimeRequiresCanonicalNativeModelProvider(t *testing.T) {
 }
 
 func TestUnavailableNativeRuntimeMayOmitNativeModel(t *testing.T) {
-	for _, harnessKind := range []string{RuntimeHarnessClaudeCode, RuntimeHarnessPi, RuntimeHarnessOMP, RuntimeHarnessOpenCode} {
+	for _, harnessKind := range []string{RuntimeHarnessClaudeCode, RuntimeHarnessPi, RuntimeHarnessOMP, RuntimeHarnessOmO, RuntimeHarnessOpenCode} {
 		t.Run(harnessKind, func(t *testing.T) {
 			value := validConfigObject(t)
 			runtime := value["runtime"].(map[string]any)
@@ -168,7 +169,7 @@ func TestUnavailableNativeRuntimeMayOmitNativeModel(t *testing.T) {
 }
 
 func TestNativeRuntimeRequiresGitWorktree(t *testing.T) {
-	for _, kind := range []string{RuntimeHarnessCodex, RuntimeHarnessOMP} {
+	for _, kind := range []string{RuntimeHarnessCodex, RuntimeHarnessOMP, RuntimeHarnessOmO} {
 		t.Run(kind, func(t *testing.T) { testNativeRuntimeRequiresGitWorktree(t, kind) })
 	}
 }
@@ -195,7 +196,7 @@ func testNativeRuntimeRequiresGitWorktree(t *testing.T, kind string) {
 }
 
 func TestNativeRuntimeRequiresCanonicalRepositoryResourceID(t *testing.T) {
-	for _, kind := range []string{RuntimeHarnessCodex, RuntimeHarnessOMP} {
+	for _, kind := range []string{RuntimeHarnessCodex, RuntimeHarnessOMP, RuntimeHarnessOmO} {
 		t.Run(kind, func(t *testing.T) { testNativeRuntimeRequiresCanonicalRepositoryResourceID(t, kind) })
 	}
 }

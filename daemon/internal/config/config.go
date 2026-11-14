@@ -64,6 +64,8 @@ const (
 	RuntimeHarnessPi = "pi"
 	// RuntimeHarnessOMP identifies the Oh My Pi RPC adapter.
 	RuntimeHarnessOMP = "omp"
+	// RuntimeHarnessOmO identifies the OmO Native RPC adapter.
+	RuntimeHarnessOmO = "omo"
 	// RuntimeHarnessOpenCode identifies the OpenCode server adapter.
 	RuntimeHarnessOpenCode = "opencode"
 
@@ -349,7 +351,7 @@ func normalizeRuntimeAdapterMetadata(runtime *Runtime) error {
 		return fmt.Errorf("runtime adapter metadata must include harness_kind, harness_version, adapter_version, and adapter_protocol_version")
 	}
 	switch runtime.HarnessKind {
-	case RuntimeHarnessGeneric, RuntimeHarnessCodex, RuntimeHarnessClaudeCode, RuntimeHarnessPi, RuntimeHarnessOMP, RuntimeHarnessOpenCode:
+	case RuntimeHarnessGeneric, RuntimeHarnessCodex, RuntimeHarnessClaudeCode, RuntimeHarnessPi, RuntimeHarnessOMP, RuntimeHarnessOmO, RuntimeHarnessOpenCode:
 	default:
 		return fmt.Errorf("runtime.harness_kind %q is unsupported", runtime.HarnessKind)
 	}
@@ -503,8 +505,8 @@ func validateRuntimeWorkspacePolicy(goos, goarch, harnessKind string, policy Wor
 		if harnessKind == RuntimeHarnessGeneric {
 			return fmt.Errorf("runtime.workspace git_clone_v2 requires a native runtime")
 		}
-		if harnessKind == RuntimeHarnessOMP {
-			return fmt.Errorf("runtime.workspace must use git_worktree for an OMP runtime")
+		if harnessKind == RuntimeHarnessOMP || harnessKind == RuntimeHarnessOmO {
+			return fmt.Errorf("runtime.workspace must use git_worktree for an ordinary-owner native runtime")
 		}
 		return nil
 	}

@@ -11,7 +11,7 @@ Do not require native CLIs to speak the existing fake-agent JSON dialect.
 | Claude Code | headless CLI with documented JSON/stream-JSON output; 2.1.323 defers `system/init` until the first user frame; promotion is bound to the exact executed blob (`sha256:5064e6e0…`) plus the anchored `2.1.323 (Claude Code)` version line | process cancellation; `Open` waits only for process readiness, and every terminal requires a matching `system/init`; next-turn guidance, resume, safe pause and an interactive approval bridge stay unsupported; native model identity is reported by `system/init` and is not claimed by the projection |
 | Pi | native `--mode rpc`, JSONL stdin/stdout; `agent_settled` is the settled boundary; promotion is bound to the exact pi `1.5.2` Windows blob (`sha256:40a062be…`) | prompt/steer/abort/session RPC mapping; no inferred OS pause; promoted operations are start, events, cancel and retained resume, projected under implementation identity `pi-rpc-v1` |
 | Oh My Pi (OMP) | native `omp --mode rpc`, independent JSONL decoder; `ready` then negotiated v2; matching `prompt_result` plus `session_settled` are required | `18.20.0` candidate implementation; all executable capabilities remain unpromoted: positive generation evidence is unavailable under zero permitted spend and the relay's advertised nonzero rates; never inherit Pi claims |
-| OmO (`oh-my-openagent`) | native `omo --mode rpc`, senpi/Pi-derived JSONL; the `omo app-server` Codex protocol is not assumed equivalent | prompt/steer/abort/session RPC mapping; probe the exact binary and protocol |
+| OmO (`oh-my-openagent`) | native `omo --mode rpc`, independent classic JSONL decoder; exact `5.1.69` Windows/Linux executable pins | start, events, cancel, retained resume and same-machine fresh handoff for the fixed `read,write` tool profile; no inherited Pi claim |
 | OpenCode V2 | daemon-owned loopback `opencode serve`, V2 `/api/...` HTTP API + SSE | 2.3.0 explicitly unsupported under 0006g; production uses the unavailable adapter and refuses both Goal and legacy assignments before workspace/process effects; historical private transport diagnostics promote no capability; V1.x is skipped |
 
 Primary references and installed binaries checked 2026-11-11:
@@ -65,6 +65,45 @@ unsupported, and the probe bound is five seconds because the pinned client
 answers `--help` in about 1.6 s. Linux admission stays fail-closed until the
 Linux v2 owner path carries exact-binary evidence, and Windows evidence is
 never promoted as Linux support.
+
+OmO promotion is independently bound to `5.1.69`, the complete
+`omo 5.1.69 (engine: senpi 2026.11.10-2; scheme nodef)` version line,
+`--mode <json|rpc>` help and each platform's executable SHA-256. The pins,
+native transcripts, public-adapter receipts and reproduction commands are in
+`daemon/internal/harness/testdata/omo/5.1.69/`. Startup additionally requires
+classic protocol 1, exact server/engine versions, durable client-message IDs,
+an effect ledger, explicit idle state and applied workspace permissions.
+Unknown versions, bytes or protocol identities fail closed.
+
+The OmO argv fixes `--tools read,write`; profiles cannot enable shell,
+delegation, extensions or additional tools. This is a bounded repository
+file-work capability, not a claim about arbitrary shell children or detached
+process containment. Its distinct `omo` kind uses the ordinary Linux Runner
+owner, not the Pi/OpenCode Linux v2 qualification path. Each semantic result
+requires a complete normal assistant message matching `agent_end`, followed by
+`agent_settled` and `agent_idle`, plus a version-3 native session header matching
+the exact session ID and workspace. Retained resume checks that header before
+input; fresh sessions may create it on their first turn, but cannot publish a
+semantic result without it. Every handoff creates a different native session;
+native handles and session-directory paths remain daemon-local.
+
+The approved Tencent relay performed real inference, but that is not Symmetry
+provider-broker verification: provider access, native steer, safe pause,
+approval responses and hard cost enforcement remain unsupported. Native
+`costUnknown: true` remains unknown usage, never free inference. Native
+rule-driven interventions are also unverified: the Windows witness observed a
+`repetitive-turns` interruption of a partial result. Do not retry its already
+admitted input as new work or treat an uncorrelated continuation as success.
+Direct native process restart and local adapter journal reopen are distinct
+from a credentialed OmO daemon/Control crash-recovery experiment.
+
+Goal attachment acknowledgement loss is resolved by one authoritative GET using
+the original Run, fence and still-live request budget. Only a validated receipt
+persisted to the local session mapping can unblock the original turn. An absent,
+malformed or mismatched readback keeps the exact ready outbox and unknown PUT
+outcome; it grants neither a new admission nor permission to bypass cancellation
+or lease expiry. Native active-turn reattachment after daemon restart remains
+unsupported; restart reconciles known physical stop and its exact receipts.
 
 Until the first prototype and release, each harness tracks the latest stable
 client (owner directive 2026-11-11). Do not freeze an older pin merely because

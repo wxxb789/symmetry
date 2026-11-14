@@ -45,7 +45,7 @@ defmodule SymmetryControl.Orchestration do
     "cancelling"
   ]
   @supervisory_commands ["guidance", "pause", "resume"]
-  @native_harness_kinds ["codex", "claude_code", "pi", "opencode", "omp"]
+  @native_harness_kinds ["codex", "claude_code", "pi", "opencode", "omp", "omo"]
   @goal_assignment_scan_page_size 32
   @validation_profile_name ~r/\A[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\z/
   @sha256 ~r/\Asha256:[0-9a-f]{64}\z/
@@ -4261,7 +4261,7 @@ defmodule SymmetryControl.Orchestration do
     adapter_version = value(specification, :adapter_version)
     protocol_version = value(specification, :adapter_protocol_version)
 
-    harness_kind in ["generic", "codex", "claude_code", "pi", "opencode", "omp"] and
+    harness_kind in ["generic", "codex", "claude_code", "pi", "opencode", "omp", "omo"] and
       nonempty_bounded_text?(harness_version, 240) and
       nonempty_bounded_text?(adapter_version, 240) and
       is_integer(protocol_version) and protocol_version > 0 and protocol_version <= 2_147_483_647
