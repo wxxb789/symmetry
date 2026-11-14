@@ -311,7 +311,6 @@ def main():
                                                 "http_status": status, "response": interruption,
                                                 "terminal": await_event(interrupt_id, terminals, start, 15)}
         request("GET", "/api/session/" + interrupt_id)
-        receipt["classes"]["usage"] = {"status": "observed", "interpretation": "native counters only; billable units and failed-turn accounting unverified"}
         for session_id in (session_id, interrupt_id):
             request("DELETE", "/api/session/" + session_id)
             request("GET", "/api/session/" + session_id)

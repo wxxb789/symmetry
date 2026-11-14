@@ -814,6 +814,223 @@ func TestOpenCodeLegacyAssignmentFailsBeforeRunningWorkspaceAndProcess(t *testin
 	}
 }
 
+func TestOpenCodeGoalAssignmentFailsBeforeWorkspaceProcessSessionAndEventSideEffects(t *testing.T) {
+	admission, present, err := parseAdmissionInput(validAdmissionInput())
+	if err != nil || !present {
+		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+	}
+	now := time.Date(2026, 11, 14, 1, 2, 3, 0, time.UTC)
+	admission.Limits.DeadlineAt = now.Add(time.Hour).Format(time.RFC3339)
+	if admission.Purpose != protocol.AdmissionPurposeImplement || admission.SessionMode != protocol.SessionModeFresh {
+		t.Fatalf("admission = %+v, want a fresh implement admission", admission)
+	}
+	if err := admission.Validate(); err != nil {
+		t.Fatalf("validate admission: %v", err)
+	}
+	input, err := json.Marshal(admission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	controlClient := &nativeAdmissionControl{
+		fakeControl:         &fakeControl{},
+		work:                protocol.Work{Goal: "implement the admitted change", Input: input},
+		admission:           admission,
+		claimLeaseExpiresAt: now.Add(time.Minute),
+	}
+	workspaceService := &fakeWorkspace{}
+	starts := 0
+	value := testConfig(t)
+	value.Runtime.HarnessKind = config.RuntimeHarnessOpenCode
+	value.Runtime.HarnessVersion = opencode.TestedVersion
+	value.Runtime.AdapterVersion = "configured-adapter"
+	value.Runtime.AdapterProtocolVersion = 1
+	value.Runtime.AgentProfile = admission.ModelProfile
+	value.Runtime.RepositoryResourceID = admission.Subject.ResourceID
+	profile := value.AgentProfiles[value.Runtime.AgentProfile]
+	profile.Command = "configured-opencode-2.3.0"
+	value.AgentProfiles[value.Runtime.AgentProfile] = profile
+	key := state.RunKey{RunID: "run-opencode-goal", Generation: 3}
+	app := &daemon{
+		config:          value,
+		store:           store,
+		control:         controlClient,
+		workspace:       workspaceService,
+		harnessRegistry: newHarnessRegistry(profile),
+		log:             slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		start: func(context.Context, execution.Invocation, execution.Sink) (Process, error) {
+			starts++
+			return nil, errors.New("unsupported OpenCode must not reach the process launcher")
+		},
+		options:      options{newID: ids(), clock: func() time.Time { return now }, localClock: func() time.Time { return now }},
+		runtimeID:    "runtime-1",
+		runtimeEpoch: 7,
+		running:      map[state.RunKey]*runningRun{key: {starting: true, cancel: func() {}, slotHeld: true, cleanupBlocked: true}},
+		slots:        make(chan struct{}, 1),
+	}
+	if err := app.ensureHarnessProbe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := app.harnessRegistry.Lookup(harness.KindOpenCode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := adapter.(*harness.UnavailableAdapter); !ok {
+		t.Fatalf("OpenCode adapter = %T, want the production unavailable adapter", adapter)
+	}
+	app.slots <- struct{}{}
+	app.startAssigned(context.Background(), key, protocol.Assignment{RunID: key.RunID, Generation: key.Generation, Work: controlClient.work})
+
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFence := protocol.Fence{RuntimeID: "runtime-1", RuntimeEpoch: 7, Generation: 3, ClaimID: "id-1", LeaseToken: "lease"}
+	if controlClient.claimCalls != 1 || journal.Key() != key || journal.Fence() != wantFence || journal.LeaseExpiresAt != controlClient.claimLeaseExpiresAt {
+		t.Fatalf("Goal claim/fence = claims %d, journal %+v, want %+v", controlClient.claimCalls, journal, wantFence)
+	}
+	if journal.LocalState != "terminal_pending" || journal.TerminalState != "failed" || len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].State != "failed" || journal.PendingTransitions[0].Fence != wantFence {
+		t.Fatalf("Goal journal = %+v, want exactly one fenced failed transition and no running transition", journal)
+	}
+	var failure map[string]string
+	if err := json.Unmarshal(journal.PendingTransitions[0].Payload, &failure); err != nil {
+		t.Fatal(err)
+	}
+	if failure["stage"] != "goal_admission" || !strings.Contains(failure["error"], "opencode unsupported harness capability start") || !strings.Contains(failure["error"], "OpenCode V2 2.3.0 is unsupported") {
+		t.Fatalf("Goal failure = %#v, want the production unavailable OpenCode capability boundary", failure)
+	}
+	sessions, err := store.ListGoalSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if workspaceService.prepareCalls != 0 || workspaceService.recoverCalls != 0 || starts != 0 || journal.WorkspaceRecoveryRequired || journal.WorkspacePath != "" || journal.HasProcessDetails() || journal.LinuxCloneIntent != nil || journal.LinuxCloneReuseGrant != nil {
+		t.Fatalf("unsupported OpenCode caused workspace/process side effects: prepares=%d recovers=%d starts=%d journal=%+v", workspaceService.prepareCalls, workspaceService.recoverCalls, starts, journal)
+	}
+	if len(sessions) != 0 || len(controlClient.calls) != 0 || len(controlClient.fenceCalls) != 0 || len(journal.PendingGoalDeliveries) != 0 || len(journal.DeliveredGoalDeliveries) != 0 || len(journal.PendingEvents) != 0 || journal.LastEventSequence != 0 || controlClient.eventCalls != 0 {
+		t.Fatalf("unsupported OpenCode caused session/event side effects: sessions=%+v calls=%v fences=%+v events=%d journal=%+v", sessions, controlClient.calls, controlClient.fenceCalls, controlClient.eventCalls, journal)
+	}
+}
+
+func TestOpenCodeLegacyClaimBarrierPreservesCancellationPrecedence(t *testing.T) {
+	for _, cancellation := range []string{"operator cancel", "shutdown", "context cancellation"} {
+		t.Run(cancellation, func(t *testing.T) {
+			store, err := state.New(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			gate := make(chan struct{})
+			entered := make(chan struct{}, 1)
+			var releaseOnce sync.Once
+			releaseClaim := func() { releaseOnce.Do(func() { close(gate) }) }
+			controlClient := &fakeControl{claimBlock: gate, claimEntered: entered}
+			workspaceService := &countingWorkspace{}
+			starts := 0
+			value := testConfig(t)
+			value.Runtime.HarnessKind = config.RuntimeHarnessOpenCode
+			value.Runtime.HarnessVersion = opencode.TestedVersion
+			value.Runtime.AdapterVersion = "configured-adapter"
+			value.Runtime.AdapterProtocolVersion = 1
+			profile := value.AgentProfiles[value.Runtime.AgentProfile]
+			profile.Command = "configured-opencode-2.3.0"
+			value.AgentProfiles[value.Runtime.AgentProfile] = profile
+			ctx, cancel := context.WithCancel(context.Background())
+			key := state.RunKey{RunID: "run-opencode-legacy", Generation: 3}
+			app := &daemon{
+				config:          value,
+				store:           store,
+				control:         controlClient,
+				workspace:       workspaceService,
+				harnessRegistry: newHarnessRegistry(profile),
+				log:             slog.New(slog.NewJSONHandler(io.Discard, nil)),
+				start: func(context.Context, execution.Invocation, execution.Sink) (Process, error) {
+					starts++
+					return nil, errors.New("cancelled OpenCode must not reach the legacy process launcher")
+				},
+				options:      options{newID: ids(), clock: time.Now},
+				runtimeID:    "runtime-1",
+				runtimeEpoch: 7,
+				running:      map[state.RunKey]*runningRun{key: {starting: true, cancel: cancel, slotHeld: true, cleanupBlocked: true}},
+				slots:        make(chan struct{}, 1),
+			}
+			if err := app.ensureHarnessProbe(context.Background()); err != nil {
+				cancel()
+				t.Fatal(err)
+			}
+			app.slots <- struct{}{}
+			done := make(chan struct{})
+			go func() {
+				app.startAssigned(ctx, key, protocol.Assignment{RunID: key.RunID, Generation: key.Generation, Work: protocol.Work{Goal: "legacy work"}})
+				close(done)
+			}()
+			t.Cleanup(func() {
+				cancel()
+				releaseClaim()
+				<-done
+			})
+			select {
+			case <-entered:
+			case <-time.After(time.Second):
+				t.Fatal("OpenCode assignment did not reach the claim barrier")
+			}
+			switch cancellation {
+			case "operator cancel":
+				app.handleCommand(context.Background(), protocol.Command{CommandID: "cancel-opencode", RunID: key.RunID, Generation: key.Generation, Kind: "cancel"})
+			case "shutdown":
+				app.stopAll()
+			case "context cancellation":
+				cancel()
+			}
+			journal, err := store.LoadJournal(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if journal.LocalState != "claiming" || len(journal.PendingTransitions) != 0 || len(journal.PendingCommandAcknowledgements) != 0 {
+				t.Fatalf("pre-grant OpenCode journal = %+v, want deferred cancellation without a terminal or acknowledgement", journal)
+			}
+			releaseClaim()
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("OpenCode assignment did not finish after the claim grant")
+			}
+			journal, err = store.LoadJournal(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantFence := protocol.Fence{RuntimeID: "runtime-1", RuntimeEpoch: 7, Generation: 3, ClaimID: "id-1", LeaseToken: "lease"}
+			if controlClient.claimCalls != 1 || !reflect.DeepEqual(controlClient.claimIDs, []string{"id-1"}) || journal.Key() != key || journal.Fence() != wantFence {
+				t.Fatalf("OpenCode claim/fence = claims %d, IDs %v, journal %+v, want %+v", controlClient.claimCalls, controlClient.claimIDs, journal, wantFence)
+			}
+			if cancellation == "operator cancel" {
+				if journal.LocalState != "terminal_pending" || journal.TerminalState != "cancelled" || len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].State != "cancelled" || journal.PendingTransitions[0].Fence != wantFence {
+					t.Fatalf("operator cancellation lost precedence to unsupported OpenCode: %+v", journal)
+				}
+				if len(journal.PendingCommandAcknowledgements) != 1 {
+					t.Fatalf("operator cancellation acknowledgements = %+v, want exactly one", journal.PendingCommandAcknowledgements)
+				}
+				ack := journal.PendingCommandAcknowledgements[0]
+				if ack.CommandID != "cancel-opencode" || ack.RunID != key.RunID || ack.Outcome != "applied" || ack.AckID == "" || ack.Fence != wantFence {
+					t.Fatalf("operator cancellation acknowledgement = %+v, want an applied acknowledgement under the claimed fence", ack)
+				}
+			} else if journal.LocalState == "terminal_pending" || journal.TerminalState != "" || len(journal.PendingTransitions) != 0 || len(journal.PendingCommandAcknowledgements) != 0 {
+				t.Fatalf("%s was rewritten into an OpenCode unsupported terminal or acknowledgement: %+v", cancellation, journal)
+			}
+			sessions, err := store.ListGoalSessions()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if workspaceService.prepareCalls != 0 || starts != 0 || journal.WorkspaceRecoveryRequired || journal.WorkspacePath != "" || journal.HasProcessDetails() || len(sessions) != 0 || len(journal.PendingGoalDeliveries) != 0 || len(journal.PendingEvents) != 0 || journal.LastEventSequence != 0 || controlClient.eventCalls != 0 {
+				t.Fatalf("cancelled OpenCode caused workspace/process/session/event side effects: prepares=%d starts=%d sessions=%+v events=%d journal=%+v", workspaceService.prepareCalls, starts, sessions, controlClient.eventCalls, journal)
+			}
+		})
+	}
+}
+
 func TestHandoffAdmissionWithoutVerifiedCapabilityFailsBeforeWorkspaceAndNativeSessionSideEffects(t *testing.T) {
 	admission, present, err := parseAdmissionInput(validAdmissionInput())
 	if err != nil || !present {
