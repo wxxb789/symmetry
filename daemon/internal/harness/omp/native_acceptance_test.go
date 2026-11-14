@@ -535,6 +535,7 @@ func (witness *nativeAcceptanceWitness) manifest(t *testing.T) {
 	defer probeCancel()
 	capabilities, probeErr := NewAdapter(witness.cfg.executable).Probe(probeContext)
 	if err := nativeAcceptanceProbeDecision(capabilities, probeErr); err != nil {
+		witness.record(t, map[string]any{"class": "candidate_probe_failure", "error": fmt.Sprint(probeErr), "transport_verified": capabilities.TransportVerified})
 		t.Fatal(err)
 	}
 	witness.record(t, map[string]any{"class": "candidate_probe", "kind": capabilities.Kind, "native_version": capabilities.NativeVersion, "implementation_version": capabilities.ImplementationVersion, "transport_verified": capabilities.TransportVerified, "capabilities_promoted": capabilities.Verified, "usage": capabilities.Usage})
@@ -842,8 +843,17 @@ func (witness *nativeAcceptanceWitness) open(t *testing.T, label string, resume 
 			}
 			stopCtx, stopCancel := context.WithTimeout(context.Background(), nativeAcceptanceStopTimeout)
 			defer stopCancel()
-			_ = session.Close(stopCtx)
-			if _, err := session.Wait(stopCtx); err != nil {
+			closeErr := session.Close(stopCtx)
+			result, waitErr := session.Wait(stopCtx)
+			if closeErr != nil || waitErr != nil {
+				details := fmt.Sprintf("native cleanup failure %s: close=%v; wait=%v; termination=%v; containment=%v", label, closeErr, waitErr, result.Process.TerminationError, result.Process.ContainmentError)
+				if witness.journal.check([]byte(details)) != nil {
+					t.Error("native cleanup error violated credential locality")
+				} else {
+					t.Log(details)
+				}
+			}
+			if waitErr != nil {
 				t.Error("cleanup native process stop/drain failed")
 			}
 		})
@@ -862,6 +872,7 @@ func (witness *nativeAcceptanceWitness) open(t *testing.T, label string, resume 
 	}
 	handle, err := staged.Open(ctx)
 	if err != nil || handle.ID == "" || handle.Filename == "" {
+		witness.record(t, map[string]any{"class": "native_open_failure", "label": label, "error": fmt.Sprint(err)})
 		t.Fatal("open real native OMP session failed")
 	}
 	configured, err := filepath.EvalSymlinks(sessionDirectory)
@@ -1510,6 +1521,11 @@ func (witness *nativeAcceptanceWitness) cancel(t *testing.T, retained map[string
 	witness.record(t, map[string]any{"class": "cancel_tool_live_before_control", "readiness": ready, "readiness_fsynced": true, "exact_native_bash_command": shell})
 	receipt, err := session.Control(ctx, harness.ControlRequest{CommandID: "native-in-flight-cancel", Kind: harness.ControlCancel})
 	if err != nil || receipt.Outcome != harness.ControlApplied {
+		failure := ""
+		if err != nil {
+			failure = err.Error()
+		}
+		witness.record(t, map[string]any{"class": "cancel_control_failure", "control_receipt": receipt, "physical_stop_error": failure})
 		t.Fatal("native cancellation was not applied to the observed in-flight tool")
 	}
 	witness.record(t, map[string]any{"class": "cancel_after_native_tool_start", "control_receipt": receipt, "tool": "bash", "shell_command": shell})

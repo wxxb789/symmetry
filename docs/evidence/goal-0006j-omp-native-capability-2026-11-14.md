@@ -407,5 +407,68 @@ Reproduction facts that matter: the fixture repository must be small — Subject
 Git process per blob under a 30 s deadline, so the 1,033-blob worktree needed about 79 s and failed
 there. The approved clone (`Q:/repos/fixture-0006h`, 1 blob, HEAD `6adc9ef`) is used instead. The
 isolated agent directory (`.tmp/omp-acceptance-agent/models.yml`) is a credential-free JSON catalog
-that references the key by environment-variable name, so no credential is written to disk. Linux
-receipts for the same four classes are pending on this revision.
+that references the key by environment-variable name, so no credential is written to disk.
+
+### Linux native acceptance (real provider turns, partial)
+
+The Linux attempt on the repaired revision (`/root/omp-native-acceptance-linux/linux-omp-native-4172995585`,
+58.11 s, 4 native prompts, 7 provider response IDs) attests three of the four classes and fails only the
+in-flight cancellation attestation:
+
+| Class | State |
+| --- | --- |
+| Adapter restart with lost acknowledgement | attested — `adapter_restart_lost_ack`, `helper_exit 73`, `durable_completion_reconciled true`, `old_turn_replayed false` |
+| Retained resume | attested — `retained_context_challenge "passed"`, same ID and file, prior artifact unchanged |
+| Fresh handoff | attested — new native identity, prior artifacts preserved |
+| In-flight cancellation | **unproven** — see below |
+
+Native-side cancellation itself behaved correctly: `cancel_tool_live_before_control` proves the exact
+helper and its descendant were live, and the frames then carry `tool_execution_end "Command aborted"`,
+a successful `abort_and_restore_queue` acknowledgement, `prompt_result status:"aborted"` and
+`session_settled`. Control nevertheless reported failure before `cancel_after_native_tool_start`, so
+neither `cancel_tool_exact_identity_terminated` nor `cancel_no_later_mutation` was recorded;
+`adapter.go` treats a physical `Close` failure as failed control, and the acceptance test does not
+serialize that close error. Cleanup reported `cleanup native process stop/drain failed` while later
+`/proc` checks found all three exact PIDs (native, helper, descendant) absent, which does not by itself
+establish timely cancellation. The three repository turns ended as `["text"]` with `stop`, so — unlike
+the earlier dead run — this successful run did not exercise reasoning beside final text; the
+cancellation turn ended `["thinking","toolCall"]` with `toolUse`.
+
+The cause was then isolated (receipt `linux-omp-native-585780460`): neither the provider nor an adapter
+close defect, but the daemon's own Linux containment safety boundary refusing to certify a clean
+physical stop:
+
+```text
+close started process: Linux descendant containment is unproven: descendant observation was uncertain
+Linux descendant containment is unproven: descendant observation was uncertain
+Linux descendant containment is unproven: descendant monitor terminated before final scan (observed_escape)
+```
+
+That is the ordinary fail-closed owner posture: an uncertain descendant observation leaves sticky
+`observed_escape` state instead of a containment claim, so `cancel_tool_exact_identity_terminated` and
+`cancel_no_later_mutation` cannot be recorded even though the native session aborted correctly and the
+exact PIDs were gone afterwards. No containment predicate was weakened, and the class therefore stays
+**explicitly unproven on Linux with the named reason above**. Two environment facts were required to
+reach this conclusion and matter for goal 0006i: the agent directory holds writable native SQLite state
+and must live on a native filesystem (DrvFS fails with `SQLITE_IOERR_SHMOPEN`), and the evidence root
+must be native as well so the session directory's `0700` actually holds. The descendant-monitor
+behaviour itself — a monitor terminating before its final scan — belongs to the containment surface and
+is reported for a separate follow-up goal rather than changed inside this increment.
+
+### Native result decoding repaired from a real Linux turn
+
+The first Linux attempt reached real generation (`/root/omp-native-acceptance-linux/linux-omp-native-3607617203`)
+and produced a normally stopped final assistant message with two content blocks (`thinking`, `text`)
+whose text block held the exact strict TaskResult JSON, while the native client reported
+`prompt_result status:"completed"` followed by `session_settled`; the adapter rejected that message as
+`OMP final assistant message is not one normally stopped text block`, so the turn failed after the
+repository work had already succeeded. That shape is what a reasoning model normally emits; the
+Windows sample merely happened not to include a reasoning block.
+
+`daemon/internal/harness/omp/adapter.go` now requires `role == "assistant"`, `stopReason == "stop"` and
+exactly one **text** block (still parsed as the strict TaskResult); typed non-text blocks may sit beside
+it, while a message with no textual payload or with a second text block still fails. Regression:
+`adapter_final_message_test.go` (positive reasoning-beside-text plus thinking-only and two-text-block
+negatives); stashing the adapter change reproduces the original rejection, the whole `omp` package and
+the `control` package pass, and the Windows acceptance re-run passes on the repaired revision
+(31.02 s, receipts `windows-omp-native-3859809959`).
