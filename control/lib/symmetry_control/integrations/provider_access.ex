@@ -1753,7 +1753,29 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     _kind, _reason -> mark_dispatch_unknown(context.intent.id, dispatch_token)
   end
 
-  defp reconcile_unknown_intent(%{intent: %{action_binding: binding}} = context)
+  defp reconcile_unknown_intent(context) do
+    # Every caller holds the dispatch lock, but its context may predate a
+    # competing reconciliation's terminal commit while acquiring that lock.
+    case Repo.get(ProviderActionIntent, context.intent.id) do
+      nil ->
+        {:error, :not_found}
+
+      intent ->
+        if intent.action_binding != context.intent.action_binding or
+             intent.request_hash != context.intent.request_hash do
+          {:error, :idempotency_conflict}
+        else
+          case intent.state do
+            "succeeded" -> {:ok, intent.result}
+            "failed" -> {:error, stored_failure(intent.failure)}
+            "unknown" -> readback_unknown_intent(%{context | intent: intent})
+            _state -> {:error, :state_conflict}
+          end
+        end
+    end
+  end
+
+  defp readback_unknown_intent(%{intent: %{action_binding: binding}} = context)
        when is_map(binding) do
     case Integrations.readback_provider_action(
            context.connection,
@@ -1782,7 +1804,7 @@ defmodule SymmetryControl.Integrations.ProviderAccess do
     end
   end
 
-  defp reconcile_unknown_intent(context) do
+  defp readback_unknown_intent(context) do
     case Integrations.execute_accepted_resource_sync_unprojected(
            context.connection,
            context.resource

@@ -761,8 +761,13 @@ defmodule SymmetryControl.Integrations do
                     )
                     |> update_with_stale_error() do
                  {:ok, synced_resource} ->
-                   with :ok <- upsert_work_items(synced_resource, connection, work_items),
-                        :ok <- persist_deliveries(prepared_deliveries) do
+                   with :ok <-
+                          persist_sync_work_items(
+                            synced_resource,
+                            connection,
+                            work_items,
+                            prepared_deliveries
+                          ) do
                      synced_resource
                    else
                      {:error, reason} -> Repo.rollback(reason)
@@ -1130,17 +1135,32 @@ defmodule SymmetryControl.Integrations do
     end
   end
 
-  defp upsert_work_items(resource, connection, items) do
+  defp persist_sync_work_items(resource, connection, items, prepared_deliveries) do
     repository_id = matching_repository(resource)
 
     with {:ok, items} <- prepare_provider_work_items(resource, connection, repository_id, items) do
-      do_upsert_work_items(resource, connection, repository_id, items)
+      external_ids = Enum.map(items, &Map.fetch!(&1, :external_id))
+      delivery_ids = Enum.map(prepared_deliveries, fn {item, _attrs} -> item.id end)
+
+      # Include missing available items: the import marks those unavailable after its upserts.
+      Repo.all(
+        from item in WorkItem,
+          where:
+            (item.external_work_item_resource_id == ^resource.id and
+               (item.external_id in ^external_ids or item.external_available == true)) or
+              item.id in ^delivery_ids,
+          order_by: [asc: item.id],
+          lock: "FOR UPDATE",
+          select: item.id
+      )
+
+      with :ok <- do_upsert_work_items(resource, connection, repository_id, items, external_ids) do
+        persist_deliveries(prepared_deliveries)
+      end
     end
   end
 
-  defp do_upsert_work_items(resource, connection, repository_id, items) do
-    external_ids = Enum.map(items, &Map.get(&1, :external_id))
-
+  defp do_upsert_work_items(resource, connection, repository_id, items, external_ids) do
     existing =
       Repo.all(
         from item in WorkItem,

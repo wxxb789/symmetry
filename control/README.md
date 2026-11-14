@@ -42,11 +42,17 @@ Supply a body string, including an explicit empty string when intended; an
 omitted body is refused rather than clearing provider-owned content. The PR body
 includes a hidden marker binding the complete frozen action receipt.
 
+An initial upsert selects open PRs only; a historical closed PR does not replace
+creating an open PR. Unknown readback searches all states and refuses ambiguous
+selectors. Concurrent import and delivery sync lock their existing WorkItems in
+ascending UUID order before either projection writes.
+
 Unknown outcomes use authenticated, read-only exact-object reconciliation.
 Repository, head commit, selector, title, body and marker must match before an
 action can settle successfully. Projection still requires current authority and
 execution fences; confirmation alone does not grant projection. A completed
-action replays its stored result without a provider request. Historical intents
+action replays its stored result without a provider request, including when it
+completes while another caller waits for the dispatch advisory lock. Historical intents
 without a binding are not reconstructed from current task state; old accepted
 GitHub Goal changes fail closed. Azure and non-Goal operation semantics remain
 unchanged. The binding migration refuses rollback once bindings exist.
@@ -60,6 +66,12 @@ Run from the repository root to inspect its complete prerequisites and flags:
 ```sh
 python3 scripts/ci/credentialed-provider-witness.py --help
 ```
+
+The launcher force-compiles the validated checkout before running a phase and
+rechecks the source manifest before execution. Before broker recovery starts,
+the witness refuses unrelated accepted intents without modifying them. Outbound
+writes must match this invocation's exact action, resource and Subject; fixture
+repository membership alone does not authorize a write.
 
 The witness exercises the Control broker in separate Linux BEAM processes, not a
 daemon/native harness. Its timeout fault withholds an actual provider response

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Opt-in real GitHub/PostgreSQL Control-broker witness; never retrieves credentials.
 
-Run from the repository root, after compiling Control and migrating the isolated DB:
+Run from the repository root, after migrating the isolated DB:
   python3 scripts/ci/credentialed-provider-witness.py \
     --config .tmp/0006h-witness-config.json --evidence-dir .tmp/0006h-live-UNIQUE \
     --allow-live-fixture
@@ -23,6 +23,8 @@ Optional subject_preparation_evidence links the parent's independently generated
 GitHub tree/blob digest evidence; this runner verifies the exact provider refs.
 An existing evidence directory is refused. --recover-existing only resumes the
 read-only recovery/final evidence phases of a preserved crashed run; never setup.
+The validated checkout is force-compiled before any phase starts; compilation
+failure prevents broker startup and is recorded without raw compiler output.
 Those phases seed separate accepted intents to prove the global broker sweep
 cannot send POST/PATCH through the real transport; only GET is permitted.
 An expired origin lease still prevents exact terminal replay; this runner never
@@ -151,6 +153,29 @@ def safe_diagnostic(value):
     return value
 
 
+def compile_validated_source(root, config, observed_source, directory, environment, recovering):
+    require(source(root, config) == observed_source, "source_changed_before_compile")
+    command = ["mix", "compile", "--force"]
+    started = time.monotonic()
+    try:
+        result = subprocess.run(command, cwd=root / "control", env=environment,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180, check=False)
+        require(not SECRET.search(result.stdout + result.stderr), "credential_pattern_in_process_output")
+        code = result.returncode
+    except subprocess.TimeoutExpired as error:
+        require(not SECRET.search((error.stdout or b"") + (error.stderr or b"")),
+                "credential_pattern_in_process_output")
+        code = -1
+    safe_write(directory / ("compile-recovery.json" if recovering else "compile.json"), {
+        "command": command, "exit_code": code,
+        "elapsed_seconds": round(time.monotonic() - started, 3),
+        "manifest_sha256": observed_source["manifest_sha256"],
+        "process_output": "discarded; credential-pattern checked before discard",
+    })
+    require(code == 0, "validated_source_compile_failed")
+    require(source(root, config) == observed_source, "source_changed_during_compile")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--config", required=True, type=Path)
@@ -184,6 +209,7 @@ def main():
     environment["MIX_ENV"] = "test"
     environment["SYMMETRY_CREDENTIALED_PROVIDER_WITNESS"] = "approved-fixture-only"
     script = root / "scripts/ci/credentialed-provider-witness.exs"
+    compile_validated_source(root, config, observed_source, directory, environment, args.recover_existing)
     for phase in phases:
         require(source(root, config) == observed_source, "source_changed_between_phases")
         command = ["mix", "run", "--no-start", "--no-compile", str(script), phase, str(directory)]

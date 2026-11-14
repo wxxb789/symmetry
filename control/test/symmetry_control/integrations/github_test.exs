@@ -771,6 +771,113 @@ defmodule SymmetryControl.Integrations.GitHubTest do
     HTTPStub.verify!()
   end
 
+  test "bound upsert creates an open pull request when only a historical closed pull request exists" do
+    {resource, historical_binding} = bound_action()
+
+    historical_digest =
+      historical_binding |> SymmetryControl.RequestHash.canonical() |> Base.encode16(case: :lower)
+
+    historical_body =
+      historical_binding["body"] <>
+        "\n\n<!-- symmetry-provider-action:v1:#{historical_binding["action_id"]}:#{historical_digest} -->"
+
+    historical_pull_request =
+      bound_pull_request(historical_binding, historical_body)
+      |> Map.merge(%{"state" => "closed", "merged_at" => nil})
+
+    HTTPStub.expect(
+      bound_reads(historical_binding, [historical_pull_request])
+      |> List.update_at(2, &Map.put(&1, :url_contains, "state=all"))
+    )
+
+    assert {:ok, %{status: :confirmed, delivery: %{pull_request_state: "closed"}}} =
+             GitHub.readback_action(
+               bound_connection(),
+               resource,
+               "change.upsert",
+               historical_binding,
+               []
+             )
+
+    HTTPStub.verify!()
+
+    binding = Map.put(historical_binding, "action_id", Ecto.UUID.generate())
+    digest = binding |> SymmetryControl.RequestHash.canonical() |> Base.encode16(case: :lower)
+
+    body =
+      binding["body"] <>
+        "\n\n<!-- symmetry-provider-action:v1:#{binding["action_id"]}:#{digest} -->"
+
+    new_pull_request =
+      bound_pull_request(binding, body)
+      |> Map.merge(%{
+        "number" => 19,
+        "html_url" => "https://github.com/acme/symmetry/pull/19"
+      })
+
+    HTTPStub.expect(
+      (bound_reads(binding, [])
+       |> List.update_at(2, &Map.put(&1, :url_contains, "state=open"))) ++
+        [
+          %{
+            method: :post,
+            url_contains: "/repos/acme/symmetry/pulls",
+            body_assertion: fn payload ->
+              assert payload == %{
+                       "head" => binding["target"]["source_branch"],
+                       "base" => binding["target"]["target_branch"],
+                       "title" => binding["title"],
+                       "body" => body
+                     }
+            end,
+            response: {:ok, 201, %{}, new_pull_request}
+          }
+        ]
+    )
+
+    assert {:ok, delivery} =
+             GitHub.execute_bound(
+               bound_connection(),
+               resource,
+               %{},
+               "change.upsert",
+               binding["input"],
+               binding,
+               []
+             )
+
+    assert delivery.pull_request_url == "https://github.com/acme/symmetry/pull/19"
+    assert delivery.pull_request_state == "open"
+    assert delivery.provider_data["pull_request_number"] == 19
+    HTTPStub.verify!()
+  end
+
+  test "unknown readback checks all pull request states and refuses a closed/open selector collision" do
+    {resource, binding} = bound_action()
+    body = dispatched_unknown_body(resource, binding)
+
+    closed_pull_request =
+      bound_pull_request(binding, body)
+      |> Map.merge(%{"state" => "closed", "merged_at" => nil})
+
+    open_pull_request =
+      bound_pull_request(binding, body)
+      |> Map.merge(%{
+        "number" => 19,
+        "html_url" => "https://github.com/acme/symmetry/pull/19"
+      })
+
+    HTTPStub.expect(
+      bound_reads(binding, [closed_pull_request, open_pull_request])
+      |> List.update_at(2, &Map.put(&1, :url_contains, "state=all"))
+    )
+
+    assert {:ok, %{status: :unconfirmed}} =
+             GitHub.readback_action(bound_connection(), resource, "change.upsert", binding, [])
+
+    HTTPStub.verify!()
+  end
+
   test "bound mutation accepts only a success carrying the exact persisted Subject and content" do
     {resource, binding} = bound_action()
     digest = binding |> SymmetryControl.RequestHash.canonical() |> Base.encode16(case: :lower)

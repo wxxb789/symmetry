@@ -68,6 +68,7 @@ defmodule SymmetryControl.IntegrationsTest do
 
   import Ecto.Query
 
+  alias Ecto.Adapters.SQL.Sandbox
   alias SymmetryControl.Integrations
   alias SymmetryControl.Integrations.CredentialLeakProviderStub
   alias SymmetryControl.Repo
@@ -1157,6 +1158,152 @@ defmodule SymmetryControl.IntegrationsTest do
     assert unchanged.status_message == nil
   end
 
+  test "reversed import and delivery updates lock WorkItems in UUID order without deadlocking" do
+    use_credential_leak_provider()
+
+    Sandbox.unboxed_run(Repo, fn ->
+      project = project_fixture()
+      connection = connection_fixture("github", "gh_cli")
+
+      on_exit(fn ->
+        Sandbox.unboxed_run(Repo, fn ->
+          Repo.delete_all(
+            from project_row in SymmetryControl.Workspaces.Project,
+              where: project_row.id == ^project.id
+          )
+
+          Repo.delete_all(
+            from connection_row in SymmetryControl.Integrations.Connection,
+              where: connection_row.id == ^connection.id
+          )
+        end)
+      end)
+
+      assert {:ok, repository} =
+               Workspaces.create_resource(project.id, %{
+                 connection_id: connection.id,
+                 kind: "repository",
+                 name: "Lock order repository",
+                 external_ref: "acme/symmetry"
+               })
+
+      assert {:ok, tracker} =
+               Workspaces.create_resource(project.id, %{
+                 connection_id: connection.id,
+                 kind: "work_tracking",
+                 name: "Lock order tracker",
+                 external_ref: "acme/symmetry"
+               })
+
+      provider_items =
+        Enum.map(["101", "102"], fn external_id ->
+          provider_work_item(%{}) |> Map.put(:external_id, external_id)
+        end)
+
+      CredentialLeakProviderStub.respond_with(:sync_resource, %{
+        resource: %{metadata: %{}},
+        work_items: provider_items
+      })
+
+      assert {:ok, _tracker} = Integrations.sync_resource(tracker.id)
+
+      items =
+        Repo.all(
+          from item in WorkItem,
+            where: item.external_work_item_resource_id == ^tracker.id,
+            order_by: [asc: item.id]
+        )
+        |> Enum.map(fn item ->
+          assert {:ok, updated} =
+                   Workspaces.update_work_item(item.id, %{
+                     version: item.lock_version,
+                     pull_request_url:
+                       "https://github.com/acme/symmetry/pull/" <> item.external_id
+                   })
+
+          updated
+        end)
+
+      [lower, higher] = items
+
+      # Import writes ascending UUIDs; delivery collection writes the same rows in reverse.
+      provider_items =
+        Enum.map(items, fn item ->
+          provider_work_item(%{})
+          |> Map.merge(%{
+            external_id: item.external_id,
+            title: "Updated " <> item.external_id,
+            external_updated_at: ~U[2026-09-06 09:30:00.000000Z]
+          })
+        end)
+
+      owner = self()
+      ref = make_ref()
+      delivery = sync_lock_order_task(repository, [], owner, ref)
+      importer = sync_lock_order_task(tracker, provider_items, owner, ref)
+      delivery_pid = delivery.pid
+      importer_pid = importer.pid
+      handler_id = {__MODULE__, ref}
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:symmetry_control, :repo, :query],
+          fn _event, _measurements, metadata, _config ->
+            if self() == delivery_pid and
+                 String.starts_with?(metadata.query, "UPDATE \"work_items\"") and
+                 String.contains?(metadata.query, "\"external_pull_request_url\"") do
+              send(owner, {:delivery_first_update, ref, metadata.params})
+
+              receive do
+                {:continue_delivery, ^ref} -> :ok
+              after
+                15_000 -> :ok
+              end
+            end
+          end,
+          nil
+        )
+
+      try do
+        assert_receive {:sync_backend, ^ref, ^delivery_pid, delivery_backend}, 5_000
+        assert_receive {:sync_backend, ^ref, ^importer_pid, importer_backend}, 5_000
+        send(delivery_pid, {:start_sync, ref})
+        assert_receive {:delivery_first_update, ^ref, params}, 5_000
+        :telemetry.detach(handler_id)
+        assert Ecto.UUID.dump!(higher.id) in params
+
+        send(importer_pid, {:start_sync, ref})
+
+        assert_sync_waiting_on_work_item(
+          importer_backend,
+          delivery_backend,
+          System.monotonic_time(:millisecond) + 5_000
+        )
+
+        # Without the ordered prelock, import now holds lower while delivery holds higher.
+        send(delivery_pid, {:continue_delivery, ref})
+        assert {:ok, _repository} = Task.await(delivery, 10_000)
+        assert {:ok, _tracker} = Task.await(importer, 10_000)
+
+        for item <- [lower, higher] do
+          stored = Repo.get!(WorkItem, item.id)
+          assert stored.title == "Updated " <> item.external_id
+          assert stored.external_updated_at == ~U[2026-09-06 09:30:00.000000Z]
+          assert stored.external_available == true
+          assert stored.external_pull_request_url == item.pull_request_url
+          assert stored.external_review_status == "approved"
+          assert stored.external_ci_status == "passed"
+        end
+      after
+        :telemetry.detach(handler_id)
+        send(delivery_pid, {:continue_delivery, ref})
+        Task.shutdown(delivery, :brutal_kill)
+        Task.shutdown(importer, :brutal_kill)
+      end
+    end)
+  end
+
   test "delivery sync cannot restore provider data after the work item binding changes" do
     project = project_fixture()
 
@@ -1419,6 +1566,46 @@ defmodule SymmetryControl.IntegrationsTest do
 
       assert Repo.get!(SymmetryControl.Workspaces.ProjectResource, repository.id).status_message ==
                message
+    end
+  end
+
+  defp sync_lock_order_task(resource, provider_items, owner, ref) do
+    Task.async(fn ->
+      Sandbox.unboxed_run(Repo, fn ->
+        [[backend]] = Repo.query!("SELECT pg_backend_pid()").rows
+        send(owner, {:sync_backend, ref, self(), backend})
+
+        receive do
+          {:start_sync, ^ref} ->
+            CredentialLeakProviderStub.respond_with(:sync_resource, %{
+              resource: %{metadata: %{}},
+              work_items: provider_items
+            })
+
+            Integrations.sync_resource(resource.id)
+        after
+          15_000 -> {:error, :sync_barrier_timeout}
+        end
+      end)
+    end)
+  end
+
+  defp assert_sync_waiting_on_work_item(backend, blocker, deadline) do
+    result =
+      Repo.query!(
+        "SELECT query, $2::integer = ANY(pg_blocking_pids(pid)) FROM pg_stat_activity WHERE pid = $1",
+        [backend, blocker]
+      )
+
+    case result.rows do
+      [[query, true]] ->
+        assert String.contains?(query, "\"work_items\"")
+
+      _not_blocked ->
+        assert System.monotonic_time(:millisecond) < deadline,
+               "import sync did not wait for the delivery WorkItem locks"
+
+        assert_sync_waiting_on_work_item(backend, blocker, deadline)
     end
   end
 

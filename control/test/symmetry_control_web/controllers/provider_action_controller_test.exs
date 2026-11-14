@@ -208,6 +208,24 @@ defmodule SymmetryControl.Integrations.ProviderActionTestStub do
   defp provider_work_item_data(_provider), do: %{}
 end
 
+defmodule SymmetryControl.Integrations.TerminalReplayFailureStub do
+  @moduledoc false
+
+  def github_headers(connection) do
+    :ets.update_counter(:provider_action_test_state, :terminal_replay_auth_calls, 1)
+
+    case :ets.lookup_element(:provider_action_test_state, :terminal_replay_failure, 2) do
+      :authentication -> {:error, :authentication_unavailable}
+      :transport -> SymmetryControl.Integrations.AuthStub.github_headers(connection)
+    end
+  end
+
+  def request(_method, _url, _headers, _body \\ nil) do
+    :ets.update_counter(:provider_action_test_state, :terminal_replay_http_calls, 1)
+    {:error, {:transport, :terminal_replay_network_unavailable}}
+  end
+end
+
 defmodule SymmetryControlWeb.ProviderActionControllerTest do
   use SymmetryControlWeb.ConnCase, async: false
 
@@ -808,6 +826,24 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     )
 
     HTTPStub.verify_shared!()
+  end
+
+  test "stale exact unknown caller replays committed success before authentication", context do
+    assert_terminal_replay_after_dispatch_lock(context, :exact, "succeeded", :authentication)
+  end
+
+  test "stale exact unknown caller replays committed failure before authentication", context do
+    assert_terminal_replay_after_dispatch_lock(context, :exact, "failed", :authentication)
+  end
+
+  test "stale generic unknown caller replays committed success before network readback",
+       context do
+    assert_terminal_replay_after_dispatch_lock(context, :generic, "succeeded", :transport)
+  end
+
+  test "stale generic unknown caller replays committed failure before network readback",
+       context do
+    assert_terminal_replay_after_dispatch_lock(context, :generic, "failed", :transport)
   end
 
   test "exact GitHub Goal content mismatch stays unknown and never redispatches", context do
@@ -2784,6 +2820,148 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     end)
 
     goal_context
+  end
+
+  defp assert_terminal_replay_after_dispatch_lock(context, binding, terminal_state, failure) do
+    goal_context = exact_github_context(context)
+
+    {intent, input} =
+      case binding do
+        :exact ->
+          dispatch_exact_unknown(goal_context)
+
+        :generic ->
+          input = %{"title" => "Replay a completed generic action"}
+          intent = insert_accepted_intent(goal_context, uuid(), "change.upsert", input)
+          mark_intent_unknown(intent)
+          {Repo.get!(ProviderActionIntent, intent.id), input}
+      end
+
+    :ets.insert(:provider_action_test_state, [
+      {:terminal_replay_failure, failure},
+      {:terminal_replay_auth_calls, 0},
+      {:terminal_replay_http_calls, 0}
+    ])
+
+    for key <- [:integration_auth_provider, :integration_http_client] do
+      Application.put_env(
+        :symmetry_control,
+        key,
+        SymmetryControl.Integrations.TerminalReplayFailureStub
+      )
+    end
+
+    HTTPStub.expect_shared([])
+    before_item = Repo.get!(WorkItem, goal_context.item.id)
+    before_resource = Repo.get!(ProjectResource, goal_context.repository.id)
+    broker = Process.whereis(ProviderAccess)
+    barrier = make_ref()
+    observer_id = {:terminal_replay_lock, barrier}
+    owner = self()
+    intent_id = intent.id
+
+    observer = fn state, event, _name ->
+      case event do
+        {:in, {:"$gen_call", {worker, _tag}, {:acquire_dispatch_lock, ^intent_id}}} ->
+          send(owner, {:terminal_replay_waiting_for_lock, barrier, worker})
+
+          receive do
+            {:release_terminal_replay_lock, ^barrier} -> :ok
+          end
+
+          state
+
+        _other ->
+          state
+      end
+    end
+
+    assert :ok = :sys.install(broker, {observer_id, observer, nil})
+
+    requester =
+      Elixir.Task.async(fn ->
+        provider_request(
+          goal_context,
+          goal_context.repository.id,
+          "change.upsert",
+          input,
+          intent.action_id
+        )
+      end)
+
+    try do
+      completed =
+        try do
+          assert_receive {:terminal_replay_waiting_for_lock, ^barrier, worker}, 2_000
+          assert Process.alive?(worker)
+          assert Repo.get!(ProviderActionIntent, intent.id).state == "unknown"
+
+          outcome =
+            if terminal_state == "succeeded" do
+              %{
+                "operation" => "change.upsert",
+                "resource_id" => goal_context.repository.id,
+                "projected" => false,
+                "readback_status" => "confirmed",
+                "delivery" => %{
+                  "pull_request_url" => "https://github.com/acme/symmetry/pull/42",
+                  "pull_request_state" => "open"
+                }
+              }
+            else
+              %{"code" => "forbidden"}
+            end
+
+          # The request has committed its unknown decision and is waiting to acquire
+          # the dispatch lock. Commit another writer's terminal outcome first.
+          assert {:ok, completed} =
+                   Repo.transaction(fn ->
+                     intent
+                     |> ProviderActionIntent.complete_changeset(
+                       terminal_state,
+                       outcome,
+                       DateTime.utc_now()
+                     )
+                     |> Repo.update!()
+                   end)
+
+          completed
+        after
+          send(broker, {:release_terminal_replay_lock, barrier})
+        end
+
+      response = Elixir.Task.await(requester, 2_000)
+
+      if terminal_state == "succeeded" do
+        assert json_response(response, 200) == completed.result
+      else
+        assert_error(response, 403, "forbidden")
+      end
+
+      replay =
+        provider_request(
+          goal_context,
+          goal_context.repository.id,
+          "change.upsert",
+          input,
+          intent.action_id
+        )
+
+      assert replay.status == response.status
+      assert replay.resp_body == response.resp_body
+      assert Repo.get!(ProviderActionIntent, intent.id) == completed
+      assert Repo.get!(WorkItem, goal_context.item.id) == before_item
+      assert Repo.get!(ProjectResource, goal_context.repository.id) == before_resource
+      assert :ets.lookup_element(:provider_action_test_state, :terminal_replay_auth_calls, 2) == 0
+      assert :ets.lookup_element(:provider_action_test_state, :terminal_replay_http_calls, 2) == 0
+      assert :ets.lookup(:provider_action_test_state, :readback_http_mutations) == []
+
+      if binding == :exact, do: assert(exact_mutation_count(intent.action_id) == 1)
+      refute_received {:provider_action, _, _, _, _, _, _}
+      HTTPStub.verify_shared!()
+    after
+      :sys.remove(broker, observer_id)
+    end
   end
 
   defp dispatch_exact_unknown(context) do

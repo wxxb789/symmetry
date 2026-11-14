@@ -102,12 +102,14 @@ defmodule CredentialedProviderWitness do
             phase: phase,
             controller: controller,
             context: nil,
+            authorizations: %{},
             hold: nil
           }
         end,
         name: __MODULE__.State
       )
 
+    preflight_invocation!(phase, config)
     if phase == "recover", do: recovery_before_start!()
     {:ok, _} = ProviderAccess.start_link()
 
@@ -264,6 +266,7 @@ defmodule CredentialedProviderWitness do
     }
 
     write!("state.json", state)
+    authorize_state!(config, read!(path("state.json")))
     success = state_context("success")
     input = input("success")
     result = execute!(success, "success", "change.upsert", input)
@@ -776,6 +779,15 @@ defmodule CredentialedProviderWitness do
         state: "accepted"
       })
 
+    authorization =
+      transport_context().authorizations[source.action_id]
+      |> Map.merge(Map.new(claim, fn {key, value} -> {Atom.to_string(key), value} end))
+      |> Map.put("action_id", action_id)
+
+    Agent.update(__MODULE__.State, fn state ->
+      %{state | authorizations: Map.put(state.authorizations, action_id, authorization)}
+    end)
+
     set_context(
       claim
       |> Map.new(fn {key, value} -> {Atom.to_string(key), value} end)
@@ -1014,9 +1026,180 @@ defmodule CredentialedProviderWitness do
 
   def transport_context, do: Agent.get(__MODULE__.State, & &1)
 
+  defp preflight_invocation!(phase, config) do
+    case phase do
+      "setup" ->
+        ensure!(not File.exists?(path("state.json")), "existing_state_refused")
+        ensure!(is_nil(Repo.get(ProjectResource, config["resource_id"])), "existing_resource_refused")
+
+      phase when phase in ["timeout", "crash", "recover", "finish"] ->
+        state = read!(path("state.json"))
+        resource = Repo.get!(ProjectResource, config["resource_id"])
+
+        ensure!(
+          state["resource_id"] == config["resource_id"] and
+            resource.project_id == state["project_id"] and
+            resource.connection_id == state["connection_id"] and resource.provider == "github" and
+            resource.kind == "repository" and resource.external_ref == @fixture and
+            resource.metadata["repository_id"] == @repository_id and
+            resource.metadata["repository_node_id"] == @node_id,
+          "invocation_resource_mismatch"
+        )
+
+        authorize_state!(config, state)
+
+      _ ->
+        fail!("invalid_phase")
+    end
+
+    # The global broker can recover more than this resource. Inspect before it starts;
+    # never delete, update or adopt another invocation's durable authorization.
+    pending =
+      Repo.all(
+        from i in ProviderActionIntent,
+          where:
+            i.state in ["accepted", "executing"] or
+              (i.state == "unknown" and
+                 fragment("COALESCE(?->>'readback_observed_at', '') = ''", i.failure))
+      )
+
+    authorize_pending_intents!(pending, transport_context().authorizations)
+  end
+
+  defp authorize_state!(config, state) do
+    authorizations = invocation_authorizations(config, state)
+
+    Enum.each(["success", "failure"], fn label ->
+      context = state[label]
+      task = Repo.get!(ControlTask, context["task_id"])
+      run = Repo.get!(Run, context["run_id"])
+
+      ensure!(
+        task.input["subject"] == context["subject"] and run.task_id == task.id and
+          run.runtime_id == context["runtime_id"] and task.work_item_id == context["work_item_id"] and
+          task.goal_id == context["goal_id"],
+        "invocation_claim_mismatch"
+      )
+    end)
+
+    Agent.update(__MODULE__.State, &%{&1 | authorizations: authorizations})
+  end
+
+  def invocation_authorizations(config, state) do
+    labels = ["success", "failure", "timeout", "crash"]
+    ensure!(Enum.sort(Map.keys(state["actions"])) == Enum.sort(labels), "invocation_actions_mismatch")
+    ids = Map.values(state["actions"])
+
+    ensure!(
+      length(Enum.uniq(ids)) == 4 and Enum.all?(ids, &match?({:ok, _}, Ecto.UUID.cast(&1))),
+      "invocation_actions_mismatch"
+    )
+
+    Map.new(labels, fn label ->
+      owner = if label == "failure", do: "failure", else: "success"
+      context = state[owner]
+
+      ensure!(
+        context["subject"] == config[owner <> "_subject"] and
+          context["subject_hash"] == subject_hash(context["subject"]) and
+          context["project_id"] == state["project_id"] and
+          state["resource_id"] == config["resource_id"],
+        "invocation_subject_mismatch"
+      )
+
+      operation = if label in ["success", "failure"], do: "change.upsert", else: "change.update"
+      branch = config[if(owner == "failure", do: "failure_branch", else: "source_branch")]
+
+      {state["actions"][label],
+       Map.merge(context, %{
+         "resource_id" => config["resource_id"],
+         "connection_id" => state["connection_id"],
+         "action_id" => state["actions"][label],
+         "operation" => operation,
+         "target" => %{"kind" => "branches", "source_branch" => branch, "target_branch" => "main"},
+         "input" => %{
+           "title" => "#{config["namespace"]} #{label}",
+           "body" => "Approved isolated Control broker acceptance witness: #{label}."
+         }
+       })}
+    end)
+  end
+
+  def authorize_pending_intents!(intents, authorizations) do
+    Enum.each(intents, fn intent ->
+      authorization = authorizations[intent.action_id]
+      ensure!(is_map(authorization), "unrelated_pending_intent")
+      authorize_intent!(intent, authorization)
+    end)
+  end
+
+  def authorize_intent!(intent, authorization) do
+    fields = [:action_id, :operation, :resource_id, :connection_id, :project_id, :run_id,
+              :task_id, :runtime_id, :work_item_id]
+
+    ensure!(
+      Enum.all?(fields, &(Map.get(intent, &1) == authorization[Atom.to_string(&1)])) and
+        intent.provider == "github" and intent.resource_kind == "repository" and
+        intent.resource_external_ref == @fixture and intent.account_ref == "wxxb789",
+      "outbound_intent_identity_mismatch"
+    )
+
+    input =
+      case intent.operation do
+        "change.upsert" ->
+          Map.merge(authorization["input"], Map.take(authorization["target"], ["source_branch", "target_branch"]))
+
+        "change.update" ->
+          url = intent.input["pull_request_url"]
+          ensure!(is_binary(url) and Regex.match?(~r/\Ahttps:\/\/github\.com\/wxxb789\/symmetry-0006h-provider-fixture\/pull\/[1-9][0-9]*\z/, url), "outbound_target_mismatch")
+          Map.put(authorization["input"], "pull_request_url", url)
+      end
+
+    binding = %{
+      "v" => 1, "action_id" => intent.action_id, "run_id" => intent.run_id,
+      "task_id" => intent.task_id, "subject" => authorization["subject"],
+      "repository" => %{"id" => @repository_id, "node_id" => @node_id},
+      "operation" => intent.operation, "input" => input, "target" => authorization["target"],
+      "title" => authorization["input"]["title"], "body" => authorization["input"]["body"]
+    }
+
+    ensure!(intent.input == input and intent.action_binding == binding, "outbound_action_binding_mismatch")
+    Map.put(authorization, "action_binding", binding)
+  end
+
+  def authorize_request!(method) do
+    state = transport_context()
+
+    context =
+      if self() == state.controller and state.phase == "setup" and method == :get do
+        state.context
+      else
+        job = Map.get(:sys.get_state(ProviderAccess).jobs, self())
+        ensure!(is_map(job) and is_list(job.lock_key), "outbound_worker_not_authorized")
+        action_ids = Map.keys(state.authorizations)
+
+        matches =
+          Repo.all(from i in ProviderActionIntent, where: i.action_id in ^action_ids)
+          |> Enum.filter(fn intent ->
+            <<first::signed-32, second::signed-32, _::binary>> =
+              :crypto.hash(:sha256, Ecto.UUID.dump!(intent.id))
+
+            job.lock_key == [first, second] and
+              (is_nil(job.intent_id) or job.intent_id == intent.id)
+          end)
+
+        ensure!(length(matches) == 1, "outbound_worker_not_authorized")
+        intent = hd(matches)
+        authorize_intent!(intent, state.authorizations[intent.action_id])
+      end
+
+    Process.put({__MODULE__, :authorized_context}, context)
+    context
+  end
+
   def audit!(method, uri, result, request_body) do
     state = transport_context()
-    context = state.context || %{}
+    context = Process.get({__MODULE__, :authorized_context}) || fail!("missing_transport_authorization")
     ensure!(redacted?(snapshots()) and evidence_redacted?(), "durable_redaction_failed")
 
     response =
@@ -1420,9 +1603,78 @@ defmodule CredentialedProviderWitness.HTTP do
       raise "provider_phase_read_only"
     end
 
+    context = CredentialedProviderWitness.authorize_request!(method)
+    if method != :get, do: authorize_write!(method, uri, body, context)
     result = SymmetryControl.Integrations.HTTP.request(method, url, headers, body)
+    if method == :get, do: remember_targets(result, context)
     CredentialedProviderWitness.audit!(method, uri, result, body)
   end
+
+  def authorize_write!(method, uri, body, %{"action_binding" => binding}) do
+    digest = binding |> SymmetryControl.RequestHash.canonical() |> Base.encode16(case: :lower)
+    marker = "<!-- symmetry-provider-action:v1:#{binding["action_id"]}:#{digest} -->"
+    marked_body = if binding["body"] == "", do: marker, else: binding["body"] <> "\n\n" <> marker
+    payload = %{"title" => binding["title"], "body" => marked_body}
+
+    allowed =
+      case method do
+        :post ->
+          binding["operation"] == "change.upsert" and uri.path == @root <> "/pulls" and
+            body == Map.merge(payload, %{
+              "head" => binding["target"]["source_branch"],
+              "base" => binding["target"]["target_branch"]
+            })
+
+        :patch ->
+          observed = Process.get({__MODULE__, :observed_targets}, %{})
+          paths = Map.get(observed, binding["action_id"], MapSet.new())
+
+          target_matches =
+            case binding["operation"] do
+              "change.upsert" -> true
+              "change.update" ->
+                uri.path == String.replace(binding["input"]["pull_request_url"],
+                  "https://github.com/wxxb789/symmetry-0006h-provider-fixture/pull/",
+                  @root <> "/pulls/")
+              _ -> false
+            end
+
+          target_matches and MapSet.member?(paths, uri.path) and body == payload
+
+        _ ->
+          false
+      end
+
+    unless allowed, do: raise(CredentialedProviderWitness.Failure, code: "outbound_write_not_authorized")
+    :ok
+  end
+
+  def authorize_write!(_method, _uri, _body, _context),
+    do: raise(CredentialedProviderWitness.Failure, code: "outbound_write_not_authorized")
+
+  def remember_targets({:ok, status, _, body}, %{"action_binding" => binding})
+      when status in 200..299 do
+    paths =
+      List.wrap(body)
+      |> Enum.filter(fn pr ->
+        is_map(pr) and is_integer(pr["number"]) and pr["number"] > 0 and
+          pr["html_url"] == "https://github.com/wxxb789/symmetry-0006h-provider-fixture/pull/#{pr["number"]}" and
+          get_in(pr, ["head", "sha"]) == binding["subject"]["commit"] and
+          get_in(pr, ["head", "ref"]) == binding["target"]["source_branch"] and
+          get_in(pr, ["base", "ref"]) == binding["target"]["target_branch"] and
+          Enum.all?(["head", "base"], fn side ->
+            get_in(pr, [side, "repo", "id"]) == binding["repository"]["id"] and
+              get_in(pr, [side, "repo", "node_id"]) == binding["repository"]["node_id"]
+          end)
+      end)
+      |> MapSet.new(&(@root <> "/pulls/#{&1["number"]}"))
+
+    observed = Process.get({__MODULE__, :observed_targets}, %{})
+    Process.put({__MODULE__, :observed_targets}, Map.put(observed, binding["action_id"], paths))
+    :ok
+  end
+
+  def remember_targets(_result, _context), do: :ok
 end
 
 try do

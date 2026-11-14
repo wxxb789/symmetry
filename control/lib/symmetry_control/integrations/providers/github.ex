@@ -197,7 +197,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
          true <- input == binding["input"] || {:error, :invalid_request},
          :ok <- verify_repository(owner, name, binding, headers),
          :ok <- verify_branch_head(owner, name, binding, headers),
-         {:ok, pull_request} <- bound_pull_request(owner, name, binding, headers),
+         {:ok, pull_request} <- bound_pull_request(owner, name, binding, "open", headers),
          :ok <- validate_existing_target(pull_request, binding),
          {:ok, result} <- mutate_bound_pull_request(owner, name, pull_request, binding, headers) do
       if exact_pull_request?(result, binding),
@@ -211,7 +211,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
     with {:ok, {owner, name}} <- bound_repository(connection, resource, operation, binding),
          :ok <- verify_repository(owner, name, binding, headers),
          :ok <- verify_branch_head(owner, name, binding, headers),
-         {:ok, pull_request} <- bound_pull_request(owner, name, binding, headers),
+         {:ok, pull_request} <- bound_pull_request(owner, name, binding, "all", headers),
          true <- exact_pull_request?(pull_request, binding),
          {:ok, delivery} <- delivery(pull_request, owner, name) do
       {:ok, %{status: :confirmed, delivery: delivery}}
@@ -321,6 +321,7 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
          owner,
          name,
          %{"operation" => "change.update", "input" => input},
+         _state,
          headers
        ) do
     with {:ok, number} <- pull_request_number(input["pull_request_url"], owner, name),
@@ -334,10 +335,10 @@ defmodule SymmetryControl.Integrations.Providers.GitHub do
     end
   end
 
-  defp bound_pull_request(owner, name, %{"target" => target}, headers) do
+  defp bound_pull_request(owner, name, %{"target" => target}, state, headers) do
     query =
       URI.encode_query(%{
-        "state" => "all",
+        "state" => state,
         "head" => "#{owner}:#{target["source_branch"]}",
         "base" => target["target_branch"],
         "per_page" => 2
