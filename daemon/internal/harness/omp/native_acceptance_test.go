@@ -18,6 +18,7 @@ import (
 	"reflect"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -42,6 +43,8 @@ const (
 	nativeAcceptanceHandoffArtifact   = "omp-native-handoff.txt"
 	nativeAcceptanceCancelledArtifact = "omp-native-cancelled.txt"
 	nativeAcceptanceToolTimeout       = 45 * time.Second
+	// The owner's current Goal 0006j ruling cannot be raised by a test opt-in.
+	nativeAcceptancePermittedSpendMicrousd uint64 = 0
 )
 
 // TestNativeAcceptance submits real, bounded repository turns to the approved
@@ -50,7 +53,7 @@ const (
 // production command acknowledgement recovery. Native prices and billing stay
 // unknown even if an operator's catalog contains zero-valued prices.
 func TestNativeAcceptance(t *testing.T) {
-	cfg := nativeAcceptanceConfiguration(t)
+	cfg := nativeAcceptanceConfiguration(t, "first-turn", "retained-resume", "fresh-handoff", "in-flight-cancel")
 	root, err := os.MkdirTemp(cfg.evidenceRoot, runtime.GOOS+"-omp-native-")
 	if err != nil {
 		t.Fatal("create persistent OMP evidence directory failed")
@@ -159,7 +162,7 @@ func TestNativeAcceptanceLostAckHelper(t *testing.T) {
 	if root == "" {
 		t.Skip("subprocess-only native completion acknowledgement witness")
 	}
-	cfg := nativeAcceptanceConfiguration(t)
+	cfg := nativeAcceptanceConfiguration(t, "first-turn")
 	witness := nativeAcceptanceNewWitness(t, cfg, root)
 	var checkpoint nativeAcceptanceCheckpoint
 	witness.read(t, "challenge.json", &checkpoint)
@@ -188,7 +191,7 @@ func TestNativeAcceptanceAuthenticationFailure(t *testing.T) {
 	if os.Getenv("SYMMETRY_OMP_NATIVE_AUTH_FAILURE") != "1" {
 		t.Skip("set SYMMETRY_OMP_NATIVE_AUTH_FAILURE=1 for the negative credential refusal witness")
 	}
-	cfg := nativeAcceptanceConfiguration(t)
+	cfg := nativeAcceptanceConfiguration(t, "auth-refused")
 	root, err := os.MkdirTemp(cfg.evidenceRoot, runtime.GOOS+"-omp-auth-refusal-")
 	if err != nil {
 		t.Fatal("create persistent OMP refusal evidence directory failed")
@@ -202,6 +205,7 @@ func TestNativeAcceptanceAuthenticationFailure(t *testing.T) {
 	session, handle := witness.open(t, "auth-refused", nil, "write")
 	ctx, cancel := context.WithTimeout(context.Background(), nativeAcceptanceTimeout)
 	defer cancel()
+	nativeAcceptanceRequirePromptSpend(t, "auth-refused")
 	startErr := session.StartTurn(ctx, harness.TurnRequest{
 		Goal:    "Do not read, write, execute or modify anything. Return the single word READY.",
 		Context: json.RawMessage(`{"schema_version":"omp-native-auth-refusal.v1"}`),
@@ -303,11 +307,43 @@ type nativeAcceptanceConfig struct {
 	secret         []byte
 }
 
-func nativeAcceptanceConfiguration(t *testing.T) nativeAcceptanceConfig {
+func nativeAcceptancePromptSpendDecision(authorization string) error {
+	amount, err := strconv.ParseUint(authorization, 10, 64)
+	if err != nil || amount == 0 {
+		return errors.New("explicit positive SYMMETRY_OMP_OWNER_SPEND_MICROUSD authorization is required")
+	}
+	if amount > nativeAcceptancePermittedSpendMicrousd {
+		return fmt.Errorf("owner-approved Goal 0006j spend is %d microusd; generation is not authorized", nativeAcceptancePermittedSpendMicrousd)
+	}
+	return nil
+}
+
+func nativeAcceptanceRequirePromptSpend(t *testing.T, prompts ...string) {
+	t.Helper()
+	if err := nativeAcceptancePromptSpendDecision(os.Getenv("SYMMETRY_OMP_OWNER_SPEND_MICROUSD")); err != nil {
+		for _, prompt := range prompts {
+			t.Logf("native prompt %s skipped for lack of owner-spend authorization: %v", prompt, err)
+		}
+		t.Skip("no native generation: owner-approved spend is zero and no verified hard-zero route exists")
+	}
+}
+
+func TestNativeAcceptancePromptSpendDecision(t *testing.T) {
+	for _, authorization := range []string{"", "0", "1", "1000000", "-1", "true", "18446744073709551616"} {
+		t.Run("authorization="+authorization, func(t *testing.T) {
+			if err := nativeAcceptancePromptSpendDecision(authorization); err == nil {
+				t.Fatal("native generation authorized despite the owner's zero-spend ruling")
+			}
+		})
+	}
+}
+
+func nativeAcceptanceConfiguration(t *testing.T, prompts ...string) nativeAcceptanceConfig {
 	t.Helper()
 	if os.Getenv("SYMMETRY_OMP_NATIVE") != "1" {
 		t.Skip("set SYMMETRY_OMP_NATIVE=1 for credentialed exact-binary OMP acceptance")
 	}
+	nativeAcceptanceRequirePromptSpend(t, prompts...)
 	if runtime.GOOS != "windows" && runtime.GOOS != "linux" {
 		t.Fatal("native OMP acceptance requires Windows or Ubuntu 24.04")
 	}
@@ -489,11 +525,8 @@ func (witness *nativeAcceptanceWitness) manifest(t *testing.T) {
 	probeContext, probeCancel := context.WithTimeout(context.Background(), nativeAcceptanceStopTimeout)
 	defer probeCancel()
 	capabilities, probeErr := NewAdapter(witness.cfg.executable).Probe(probeContext)
-	if (probeErr != nil && !errors.Is(probeErr, harness.ErrNativeUnverified)) || string(capabilities.Kind) != "omp" || capabilities.NativeVersion != TestedVersion || capabilities.ImplementationVersion != ImplementationVersion || !capabilities.VersionKnown || !capabilities.TransportVerified || capabilities.Usage != harness.UsageUnknown {
-		t.Fatal("exact OMP candidate identity or transport probe did not match")
-	}
-	if errors.Is(probeErr, harness.ErrNativeUnverified) && (capabilities.Verified || capabilities.Start || capabilities.Events || capabilities.Cancel || capabilities.Resume || capabilities.Handoff || capabilities.ProviderAccess || capabilities.HardCostLimit) {
-		t.Fatal("unverified OMP candidate advertised native operations")
+	if err := nativeAcceptanceProbeDecision(capabilities, probeErr); err != nil {
+		t.Fatal(err)
 	}
 	witness.record(t, map[string]any{"class": "candidate_probe", "kind": capabilities.Kind, "native_version": capabilities.NativeVersion, "implementation_version": capabilities.ImplementationVersion, "transport_verified": capabilities.TransportVerified, "capabilities_promoted": capabilities.Verified, "usage": capabilities.Usage})
 	agentDirectory, err := filepath.EvalSymlinks(witness.cfg.agentDirectory)
@@ -521,6 +554,42 @@ func (witness *nativeAcceptanceWitness) manifest(t *testing.T) {
 		"environment_builder": "execution.BuildEnvironment(PI_CODING_AGENT_DIR,TENCENT_GLM_API_KEY)",
 		"usage":               harness.UsageUnknown, "billing": "unknown", "prices": "unknown", "journal": "fsynced_local_witness_not_production_journal",
 	})
+}
+
+func nativeAcceptanceProbeDecision(capabilities harness.Capabilities, probeErr error) error {
+	if err := capabilities.Validate(); err != nil {
+		return fmt.Errorf("invalid OMP candidate capabilities: %w", err)
+	}
+	if !errors.Is(probeErr, harness.ErrNativeUnverified) || capabilities.Verified || capabilities.Kind != harness.KindOMP || capabilities.NativeVersion != TestedVersion || capabilities.ImplementationVersion != ImplementationVersion || !capabilities.VersionKnown || !capabilities.TransportVerified || capabilities.Usage != harness.UsageUnknown {
+		return errors.New("exact OMP candidate identity or transport probe did not match")
+	}
+	return nil
+}
+
+func TestNativeAcceptanceProbeDecision(t *testing.T) {
+	if err := nativeAcceptanceProbeDecision(observedCapabilities(), harness.ErrNativeUnverified); err != nil {
+		t.Fatal(err)
+	}
+	for _, scenario := range []string{"promoted-with-nil-error", "approval-response-unverified", "unverified-with-nil-error", "invalid-protocol-version"} {
+		t.Run(scenario, func(t *testing.T) {
+			capabilities := observedCapabilities()
+			probeErr := harness.ErrNativeUnverified
+			switch scenario {
+			case "promoted-with-nil-error":
+				capabilities.Verified, capabilities.Start, capabilities.Events, capabilities.Cancel = true, true, true, true
+				probeErr = nil
+			case "approval-response-unverified":
+				capabilities.ApprovalResponse = true
+			case "unverified-with-nil-error":
+				probeErr = nil
+			case "invalid-protocol-version":
+				capabilities.ProtocolVersion = 0
+			}
+			if err := nativeAcceptanceProbeDecision(capabilities, probeErr); err == nil {
+				t.Fatal("native acceptance accepted executable operations from an unpromoted candidate")
+			}
+		})
+	}
 }
 
 func (witness *nativeAcceptanceWitness) catalog(t *testing.T, directory string) {
@@ -910,6 +979,7 @@ func (witness *nativeAcceptanceWitness) turn(t *testing.T, session *nativeAccept
 	goal += "After the real file write succeeds, return exactly this JSON object as the entire final assistant text, without prose, Markdown or a code fence:\n" + string(encoded)
 	ctx, cancel := context.WithTimeout(context.Background(), nativeAcceptanceTimeout)
 	defer cancel()
+	nativeAcceptanceRequirePromptSpend(t, label)
 	if session.StartTurn(ctx, harness.TurnRequest{Goal: goal, Context: data}) != nil || session.WaitTurn(ctx) != nil {
 		t.Fatal("real OMP repository turn did not settle with a strict TaskResult")
 	}
@@ -1408,6 +1478,7 @@ func (witness *nativeAcceptanceWitness) cancel(t *testing.T, retained map[string
 	defer cancel()
 	started := make(chan error, 1)
 	startConsumed := false
+	nativeAcceptanceRequirePromptSpend(t, "in-flight-cancel")
 	go func() {
 		started <- session.StartTurn(ctx, harness.TurnRequest{Goal: goal, Context: json.RawMessage(`{"schema_version":"omp-native-cancel.v1"}`)})
 	}()

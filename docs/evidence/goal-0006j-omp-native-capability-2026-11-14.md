@@ -186,3 +186,92 @@ On **both Windows and Linux**, start, events, cancel, resume, handoff, guidance,
 native pause, approval response, provider access and hard cost limits remain
 unsupported/unpromoted. Version/transport observations are factual metadata,
 not operational support. Usage remains unknown. The goal stays incomplete.
+
+## Review round 1 repairs
+
+The local repairs address every FIX in
+`.tmp/gdd-0006j-fix-findings-r1.md`; they do not promote native capabilities or
+replace the historical exact-binary observations above.
+
+- R1: final assistant and text-block contract fields use exact JSON keys.
+  Case aliases, including the ordered `stopReason=error` / `stopreason=stop`
+  reproduction, fail as nonsemantic `failed/missing_result`; no TaskResult event
+  is emitted. Unrelated native metadata remains permitted, and protocol and
+  physical-stop errors remain visible. Role checks precede message routing, so
+  a conflicting user/assistant role cannot be ignored after a valid result and
+  a missing canonical role cannot escape the typed-failure classification.
+- R2: `SYMMETRY_OMP_NATIVE=1` still selects the opt-in test; it is not spend
+  authority. `SYMMETRY_OMP_OWNER_SPEND_MICROUSD` must explicitly authorize a
+  positive amount within the contract's approved ceiling. That ceiling remains
+  zero, so no environment value authorizes generation in this increment.
+  Configuration refuses before credentials, setup or native launch, every real
+  prompt has an additional pre-dispatch check, and output names each skipped
+  repository, resume, handoff, cancellation or authentication-refusal prompt.
+  Non-generating probe paths, TLS and the non-loopback provider checks remain.
+- R3: retained identity negatives change only the retained session fixture.
+  Runtime identity metadata and operations stay valid; rejection must leave
+  Task generation, retained binding, active owner and Run count unchanged.
+  Production retained guards are unchanged.
+- R4: the acceptance probe decision calls `Capabilities.Validate()` and always
+  requires `ErrNativeUnverified` and `Verified=false`. The two demonstrated
+  executable-capability escapes are pure negative regressions.
+- K1: each chunk ID is bounded to 4 KiB, the permanent ledger to 65,536 entries
+  and cumulative ID bytes to 64 MiB. Admission fails before allocating logical
+  reassembly state or retaining a new over-budget ID. No historical ID is
+  evicted or cleared. A streamed valid-ID regression reaches the exact byte
+  ceiling and still rejects the first, middle and last historical replays.
+
+R1's exact conflicting input and K1's 84-frame input both failed their new
+regressions against pre-fix source overlays (exit 1); the old ledger delivered
+and retained every frame. R4's two escaping return values failed before its
+decision fix (exit 1). Native opt-ins with a positive requested spend were
+observed to skip every prompt under the unchanged zero ceiling (exit 0).
+
+No runtime benchmark/measurement consumer was found in the scoped OMP/App
+tests, Goal 0006j documents, scripts or existing delivery records. Native blob
+sizes, prices and historical observations are unchanged; no provider request
+or new native generation was issued by this repair stage.
+
+The additional role-routing regressions also failed against the pre-routing
+repair overlay (exit 1): a missing canonical role remained unknown, and the
+reverse role conflict reused the prior successful result and emitted one
+TaskResult event. Independent read-only review then confirmed the routing
+repair and reported no residual finding. The scoped simplification pass kept
+the exact-field, spend-decision and probe-decision helpers because each protects
+a distinct invariant. No wrapper-only abstraction was added.
+
+### Final repair gates and counts
+
+These are local working-tree results, not an exact-commit native acceptance
+certificate. An intermediate gate run was cancelled when review exposed the
+role-routing defect; no result from that run was accepted. The final run below
+used the completed repair source. `-json` records counts without changing the
+requested package selection, repetition or timeout.
+
+| Gate | Exit | Actual result |
+| --- | ---: | --- |
+| `gofmt -l` on the five changed OMP Go files | 0 | No unformatted files. |
+| `cd daemon && TMP="$TEMP" go test -json -count=1 -timeout 600s ./internal/app/... ./internal/harness/...` | 0 | All seven packages passed; OMP 5.365 s, App 136.027 s. |
+| `python scripts/ci/test-opencode-v2-support-witness.py 2>/dev/null`, after the successful Go gate in `daemon` | 2 | No tests executed: the specified file does not exist. Direct root-path read and repository filename search also found no such script. The requested `|| true` masks this failure; it is not a passing witness gate. |
+| Control `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix test` | Not run | Delegated to CI by the caller; `mix` is unavailable locally. No CI outcome is asserted. |
+| Runtime measurement harness | Not applicable | No measured consumer found in the scoped search; no historical measurement was replaced. |
+
+| Count metric | Before repairs | After repairs |
+| --- | ---: | ---: |
+| Go top-level pass | 950 | 962 |
+| Go top-level fail | 0 | 0 |
+| Go top-level skip | 32 | 32 |
+| Go top-level total | 982 | 994 |
+| Go pass including subtests | 1886 | 1928 |
+| Go total including subtests and skips | 1918 | 1960 |
+| Control target-file test declarations | 76 | 76 |
+
+The baseline counts were recomputed from
+`.tmp/gdd-0006j-simplify-go-gate.jsonl` (exit receipt
+`.tmp/gdd-0006j-simplify-go-gate.exit`). Final repair counts come from
+`.tmp/gdd-0006j-fix-r1-go-gate.jsonl`; matching Go and Python exit receipts are
+`.tmp/gdd-0006j-fix-r1-go-gate.exit` and
+`.tmp/gdd-0006j-fix-r1-python-gate.exit`. Control declaration counts are static
+inventory, not execution evidence. Skips remain unavailable acceptance evidence.
+All reproduction overlays and task-owned backup sources were removed. No commit,
+push or history rewrite was performed.

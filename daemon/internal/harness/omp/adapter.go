@@ -388,6 +388,10 @@ func (session *nativeSession) consume(ctx context.Context, value frame) error {
 	if value.kind == "session_settled" {
 		session.mu.Lock()
 		result, err := session.settledResult()
+		if err != nil {
+			result.Summary = err.Error()
+			session.result = result
+		}
 		session.mu.Unlock()
 		if err != nil {
 			return err
@@ -527,7 +531,9 @@ func (session *nativeSession) applyFrame(value frame) (*pendingCall, error) {
 			return nil, err
 		}
 		var role string
-		if err := required(message, "role", &role); err != nil {
+		if err := requiredFinalMessageField(message, "role", &role); err != nil {
+			reason := protocol.TaskResultReasonMissingResult
+			session.result = harness.TaskResult{Kind: harness.ResultFailed, Reason: &reason, Summary: err.Error(), Usage: harness.Usage{State: harness.UsageUnknown}}
 			return nil, err
 		}
 		if role == "assistant" {
@@ -620,8 +626,19 @@ func (session *nativeSession) bindState(data map[string]json.RawMessage) error {
 	return nil
 }
 
+func requiredFinalMessageField(fields map[string]json.RawMessage, name string, value any) error {
+	// Reject case aliases of contract keys, but allow unrelated native metadata.
+	for key := range fields {
+		if key != name && strings.EqualFold(key, name) {
+			return fmt.Errorf("%w: noncanonical final message field %s", errProtocol, key)
+		}
+	}
+	return required(fields, name, value)
+}
+
 func (session *nativeSession) settledResult() (harness.TaskResult, error) {
-	result := harness.TaskResult{Kind: harness.ResultUnknown, Usage: harness.Usage{State: harness.UsageUnknown}}
+	reason := protocol.TaskResultReasonMissingResult
+	result := harness.TaskResult{Kind: harness.ResultFailed, Reason: &reason, Usage: harness.Usage{State: harness.UsageUnknown}}
 	switch session.promptStatus {
 	case "aborted":
 		reason := protocol.TaskResultReasonCancelled
@@ -638,21 +655,34 @@ func (session *nativeSession) settledResult() (harness.TaskResult, error) {
 	if !session.agentEnded || !session.promptInvoked || len(session.finalMessage) == 0 {
 		return result, errors.New("OMP settled without complete final assistant message")
 	}
-	var message struct {
-		Role       string `json:"role"`
-		StopReason string `json:"stopReason"`
-		Content    []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-	}
+	var message map[string]json.RawMessage
 	if err := json.Unmarshal(session.finalMessage, &message); err != nil {
 		return result, err
 	}
-	if message.Role != "assistant" || message.StopReason != "stop" || len(message.Content) != 1 || message.Content[0].Type != "text" {
+	var role, stopReason string
+	var content []map[string]json.RawMessage
+	for _, field := range []struct {
+		name  string
+		value any
+	}{{"role", &role}, {"stopReason", &stopReason}, {"content", &content}} {
+		if err := requiredFinalMessageField(message, field.name, field.value); err != nil {
+			return result, err
+		}
+	}
+	if role != "assistant" || stopReason != "stop" || len(content) != 1 {
 		return result, errors.New("OMP final assistant message is not one normally stopped text block")
 	}
-	text := []byte(message.Content[0].Text)
+	var blockType, blockText string
+	if err := requiredFinalMessageField(content[0], "type", &blockType); err != nil {
+		return result, err
+	}
+	if err := requiredFinalMessageField(content[0], "text", &blockText); err != nil {
+		return result, err
+	}
+	if blockType != "text" {
+		return result, errors.New("OMP final assistant message is not one normally stopped text block")
+	}
+	text := []byte(blockText)
 	if !json.Valid(text) || len(bytes.TrimSpace(text)) == 0 || bytes.TrimSpace(text)[0] != '{' {
 		return result, errors.New("OMP result must be the entire final JSON object")
 	}
@@ -895,7 +925,10 @@ func (session *nativeSession) watchProcess() {
 	}
 	if processErr != nil {
 		session.failure = errors.Join(session.failure, processErr)
-		session.result.Kind, session.result.Semantic = harness.ResultUnknown, nil
+		// A rejected native result remains a typed failure after physical drain.
+		if session.result.Kind != harness.ResultFailed || session.result.Semantic != nil || session.result.Reason == nil || *session.result.Reason != protocol.TaskResultReasonMissingResult {
+			session.result.Kind, session.result.Semantic = harness.ResultUnknown, nil
+		}
 	}
 	if session.cancelFallback && (!session.nativeTerminal || session.promptStatus == "aborted") && result.TerminationError == nil && result.ContainmentError == nil {
 		reason := protocol.TaskResultReasonCancelled

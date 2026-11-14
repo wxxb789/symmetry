@@ -15,6 +15,12 @@ import (
 const maxFrameBytes = 1 << 20
 const maxLogicalBytes = 64 << 20
 
+// Chunk IDs are transport metadata, not logical payload. Bound each ID to
+// 1/256 of a physical frame and bound the permanent replay ledger separately.
+const maxChunkIDBytes = maxFrameBytes / 256
+const maxChunkIDs = maxLogicalBytes / (1 << 10)
+const maxChunkLedgerBytes = maxLogicalBytes
+
 var errProtocol = errors.New("invalid OMP RPC protocol")
 
 type frame struct {
@@ -103,6 +109,7 @@ type frameDecoder struct {
 	chunkCount, chunkIndex, chunkLength int
 	chunkData                           []byte
 	seenChunks                          map[string]bool
+	seenChunkIDBytes                    int
 	negotiated                          bool
 }
 
@@ -163,12 +170,21 @@ func (decoder *frameDecoder) reassemble(value frame) (*frame, error) {
 			return nil, err
 		}
 	}
+	if len(id) > maxChunkIDBytes {
+		return nil, fmt.Errorf("%w: chunk ID too large", errProtocol)
+	}
 	if strings.TrimSpace(id) == "" || count <= 0 || count > length || length <= 0 || length > maxLogicalBytes || index < 0 || index >= count {
 		return nil, fmt.Errorf("%w: invalid chunk metadata", errProtocol)
 	}
 	if decoder.chunkID == "" {
 		if index != 0 || decoder.seenChunks[id] {
 			return nil, fmt.Errorf("%w: replayed or unordered chunk", errProtocol)
+		}
+		if len(decoder.seenChunks) >= maxChunkIDs {
+			return nil, fmt.Errorf("%w: too many chunk IDs", errProtocol)
+		}
+		if len(id) > maxChunkLedgerBytes-decoder.seenChunkIDBytes {
+			return nil, fmt.Errorf("%w: chunk ID ledger too large", errProtocol)
 		}
 		decoder.chunkID, decoder.chunkCount, decoder.chunkLength = id, count, length
 		decoder.chunkData = make([]byte, 0, length)
@@ -202,6 +218,7 @@ func (decoder *frameDecoder) reassemble(value frame) (*frame, error) {
 		decoder.seenChunks = make(map[string]bool)
 	}
 	decoder.seenChunks[id] = true
+	decoder.seenChunkIDBytes += len(id)
 	decoder.chunkID, decoder.chunkData, decoder.chunkIndex = "", nil, 0
 	return &logical, nil
 }

@@ -343,6 +343,184 @@ func TestProtocolFailuresCannotBecomeSuccess(t *testing.T) {
 	}
 }
 
+func assertFinalAssistantMessageRejected(t *testing.T, message json.RawMessage) {
+	t.Helper()
+	var eventsMutex sync.Mutex
+	taskResults := 0
+	text := validTaskText(t)
+	session, _ := testSession(t, func(request map[string]any) []any {
+		if request["type"] != "prompt" {
+			return nil
+		}
+		values := terminalFrames(request, text, "completed")
+		values[2].(map[string]any)["message"] = message
+		return values
+	}, harness.EventSinkFunc(func(_ context.Context, event harness.Event) error {
+		eventsMutex.Lock()
+		defer eventsMutex.Unlock()
+		if event.Kind == harness.EventTaskResult {
+			taskResults++
+		}
+		return nil
+	}), nil)
+	ctx, cancel := context.WithTimeout(context.Background(), operationTimeout)
+	defer cancel()
+	if _, err := session.Open(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_ = session.StartTurn(ctx, harness.TurnRequest{Goal: "Inspect", Context: json.RawMessage(`{}`)})
+	if err := session.WaitTurn(ctx); err == nil {
+		t.Error("conflicting final assistant message completed successfully")
+	}
+	if err := session.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	result, err := session.Wait(ctx)
+	if err == nil || result.Kind != harness.ResultFailed || result.Semantic != nil || result.Reason == nil || *result.Reason != protocol.TaskResultReasonMissingResult || result.Usage.State != harness.UsageUnknown {
+		t.Errorf("Wait=%+v, %v; want failed/missing_result without semantic output", result, err)
+	}
+	eventsMutex.Lock()
+	defer eventsMutex.Unlock()
+	if taskResults != 0 {
+		t.Errorf("conflicting final assistant message emitted %d TaskResult events", taskResults)
+	}
+}
+
+func TestFinalAssistantStopReasonAliasCannotBecomeSuccess(t *testing.T) {
+	text, err := json.Marshal(validTaskText(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// RawMessage preserves the review's ordered conflicting keys on the wire.
+	message := json.RawMessage(`{"role":"assistant","stopReason":"error","stopreason":"stop","content":[{"type":"text","text":` + string(text) + `}]}`)
+	assertFinalAssistantMessageRejected(t, message)
+}
+
+func TestMessageEndRoleAliasOnlyIsFailed(t *testing.T) {
+	text, err := json.Marshal(validTaskText(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := json.RawMessage(`{"ROLE":"assistant","stopReason":"stop","content":[{"type":"text","text":` + string(text) + `}]}`)
+	assertFinalAssistantMessageRejected(t, message)
+}
+
+func TestMessageEndReverseRoleAliasCannotReusePriorAssistantResult(t *testing.T) {
+	text := validTaskText(t)
+	encodedText, err := json.Marshal(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := json.RawMessage(`{"role":"user","ROLE":"assistant","stopReason":"stop","content":[{"type":"text","text":` + string(encodedText) + `}]}`)
+	var eventsMutex sync.Mutex
+	taskResults := 0
+	session, _ := testSession(t, func(request map[string]any) []any {
+		if request["type"] != "prompt" {
+			return nil
+		}
+		values := terminalFrames(request, text, "completed")
+		conflicting := map[string]any{"type": "message_end", "message": message}
+		return append(values[:3], append([]any{conflicting}, values[3:]...)...)
+	}, harness.EventSinkFunc(func(_ context.Context, event harness.Event) error {
+		eventsMutex.Lock()
+		defer eventsMutex.Unlock()
+		if event.Kind == harness.EventTaskResult {
+			taskResults++
+		}
+		return nil
+	}), nil)
+	ctx, cancel := context.WithTimeout(context.Background(), operationTimeout)
+	defer cancel()
+	if _, err := session.Open(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_ = session.StartTurn(ctx, harness.TurnRequest{Goal: "Inspect", Context: json.RawMessage(`{}`)})
+	if err := session.WaitTurn(ctx); !errors.Is(err, errProtocol) {
+		t.Errorf("WaitTurn=%v; want the role-alias protocol failure", err)
+	}
+	if err := session.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	result, err := session.Wait(ctx)
+	if !errors.Is(err, errProtocol) || result.Kind != harness.ResultFailed || result.Semantic != nil || result.Reason == nil || *result.Reason != protocol.TaskResultReasonMissingResult || result.Usage.State != harness.UsageUnknown {
+		t.Errorf("Wait=%+v, %v; want failed/missing_result without the prior assistant result", result, err)
+	}
+	eventsMutex.Lock()
+	defer eventsMutex.Unlock()
+	if taskResults != 0 {
+		t.Errorf("role-alias routing conflict emitted %d TaskResult events", taskResults)
+	}
+}
+
+func TestFinalAssistantMessageRejectsFieldCaseAliases(t *testing.T) {
+	text, err := json.Marshal(validTaskText(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := `"content":[{"type":"text","text":` + string(text) + `}]`
+	for _, test := range []struct {
+		name    string
+		message string
+	}{
+		{"role-alias", `{"role":"assistant","ROLE":"user","stopReason":"stop",` + content + `}`},
+		{"stop-reason-alias-after-valid", `{"role":"assistant","stopReason":"stop","stopreason":"error",` + content + `}`},
+		{"stop-reason-alias-before-valid", `{"role":"assistant","stopreason":"error","stopReason":"stop",` + content + `}`},
+		{"stop-reason-wrong-case-only", `{"role":"assistant","StopReason":"stop",` + content + `}`},
+		{"content-alias", `{"role":"assistant","stopReason":"stop",` + content + `,"CONTENT":[]}`},
+		{"content-wrong-case-only", `{"role":"assistant","stopReason":"stop","Content":[{"type":"text","text":` + string(text) + `}]}`},
+		{"block-type-alias", `{"role":"assistant","stopReason":"stop","content":[{"type":"text","TYPE":"image","text":` + string(text) + `}]}`},
+		{"block-type-wrong-case-only", `{"role":"assistant","stopReason":"stop","content":[{"Type":"text","text":` + string(text) + `}]}`},
+		{"block-text-alias", `{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":` + string(text) + `,"TEXT":"not a TaskResult"}]}`},
+		{"block-text-wrong-case-only", `{"role":"assistant","stopReason":"stop","content":[{"type":"text","Text":` + string(text) + `}]}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assertFinalAssistantMessageRejected(t, json.RawMessage(test.message))
+		})
+	}
+}
+
+func TestFinalAssistantMessageAllowsExtraMetadata(t *testing.T) {
+	text := validTaskText(t)
+	var eventsMutex sync.Mutex
+	taskResults := 0
+	session, _ := testSession(t, func(request map[string]any) []any {
+		if request["type"] != "prompt" {
+			return nil
+		}
+		values := terminalFrames(request, text, "completed")
+		message := values[2].(map[string]any)["message"].(map[string]any)
+		message["model"] = "candidate-model"
+		message["usage"] = map[string]any{"inputTokens": 1}
+		message["content"].([]any)[0].(map[string]any)["signature"] = "native-metadata"
+		return values
+	}, harness.EventSinkFunc(func(_ context.Context, event harness.Event) error {
+		eventsMutex.Lock()
+		defer eventsMutex.Unlock()
+		if event.Kind == harness.EventTaskResult {
+			taskResults++
+		}
+		return nil
+	}), nil)
+	startTestTurn(t, session)
+	ctx, cancel := context.WithTimeout(context.Background(), operationTimeout)
+	defer cancel()
+	if err := session.WaitTurn(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	result, err := session.Wait(ctx)
+	if err != nil || result.Kind != harness.ResultSucceeded || result.Semantic == nil {
+		t.Fatalf("Wait=%+v, %v; unrelated native metadata must remain accepted", result, err)
+	}
+	eventsMutex.Lock()
+	defer eventsMutex.Unlock()
+	if taskResults != 1 {
+		t.Fatalf("canonical final assistant message emitted %d TaskResult events, want one", taskResults)
+	}
+}
+
 func TestProviderErrorIsFailedWithUnknownUsage(t *testing.T) {
 	session, _ := testSession(t, func(request map[string]any) []any {
 		if request["type"] != "prompt" {

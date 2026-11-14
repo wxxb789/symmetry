@@ -1862,30 +1862,44 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
       )
 
     {task, _goal_id} = insert_goal_task(max_run_attempts: 2, retained_runtime: retained_runtime)
+    retained_runtime = Repo.get!(Runtime, retained_runtime.id)
     retained_session = Repo.get!(HarnessSession, task.requested_session_id)
+    original_binding_id = retained_session.binding_id
+
+    retained_identity = [
+      harness_kind: retained_session.harness_kind,
+      harness_version: retained_session.harness_version,
+      adapter_version: retained_session.adapter_version
+    ]
 
     for changed <- [
           [harness_kind: "pi"],
           [harness_version: "18.20.1"],
           [adapter_version: "symmetry-omp-2"]
         ] do
-      Repo.update_all(from(runtime in Runtime, where: runtime.id == ^retained_runtime.id),
-        set: [harness_kind: "omp", harness_version: "18.20.0", adapter_version: "symmetry-omp-1"]
+      Repo.update_all(from(session in HarnessSession, where: session.id == ^retained_session.id),
+        set: retained_identity
       )
 
-      Repo.update_all(from(runtime in Runtime, where: runtime.id == ^retained_runtime.id),
+      Repo.update_all(from(session in HarnessSession, where: session.id == ^retained_session.id),
         set: changed
       )
 
       assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
       assert %{state: "queued", current_generation: 0} = Repo.get!(Task, task.id)
+      assert Repo.get!(Runtime, retained_runtime.id) == retained_runtime
+      assert 0 == Repo.aggregate(from(run in Run, where: run.task_id == ^task.id), :count)
 
-      assert %{state: "available", active_run_id: nil} =
-               Repo.get!(HarnessSession, retained_session.id)
+      assert %{
+               state: "available",
+               active_run_id: nil,
+               binding_id: ^original_binding_id,
+               binding_verified: true
+             } = Repo.get!(HarnessSession, retained_session.id)
     end
 
-    Repo.update_all(from(runtime in Runtime, where: runtime.id == ^retained_runtime.id),
-      set: [harness_kind: "omp", harness_version: "18.20.0", adapter_version: "symmetry-omp-1"]
+    Repo.update_all(from(session in HarnessSession, where: session.id == ^retained_session.id),
+      set: retained_identity
     )
 
     assert {:ok, run} = Orchestration.assign_one(now: @now)
