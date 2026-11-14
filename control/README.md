@@ -52,14 +52,17 @@ Existing writable project, board, connection and Chat flows remain at
 full document navigation, never two simultaneous workspace runtimes or shared
 client stores. Existing hash links retain their project query and route to the
 classic document. Both entrypoints use the same session and CSRF protection.
-Unauthenticated deep links return through the server-rendered login; API expiry
+Unauthenticated legacy links retain only validated classic query parameters.
+The login form submits to its current document URL so the browser retains the
+legacy fragment across the login redirect. API expiry
 cancels reads and clears private Query state before redirecting to sign in.
 Local HTTP is only for an explicitly trusted development or container network.
 
 For Vite development, start Phoenix first, then run
 `mise exec pnpm@12.17.0 -- pnpm --filter @symmetry/frontend dev` from the root.
 Open `http://127.0.0.1:5173/portal/`; session/login/logout and socket requests
-proxy to Phoenix. `SYMMETRY_PHOENIX_ORIGIN` overrides the upstream origin. CSRF
+proxy to Phoenix, as do `/portal/classic` and its `/assets/portal.js` and
+`/assets/portal.css` assets. `SYMMETRY_PHOENIX_ORIGIN` overrides the upstream origin. CSRF
 remains enabled. Use the same hostname for both origins.
 
 In production, do not publish Phoenix directly. It must receive private HTTP

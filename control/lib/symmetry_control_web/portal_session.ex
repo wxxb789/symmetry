@@ -18,7 +18,8 @@ defmodule SymmetryControlWeb.PortalSession do
         Regex.match?(@shell_path, shell_path) and
           (is_nil(query) or
              (shell_path == "/portal/attention" and
-                Regex.match?(~r{\AprojectId=[A-Za-z0-9_-]+\z}, query)))
+                Regex.match?(~r{\AprojectId=[A-Za-z0-9_-]+\z}, query)) or
+             (shell_path == "/portal" and classic_query?(query)))
 
       _ ->
         false

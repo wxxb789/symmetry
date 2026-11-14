@@ -210,6 +210,24 @@ func TestWorkspaceReadAcceptsFractionalMetadataWithoutRelaxingCommands(t *testin
 	}
 }
 
+func TestWorkspaceReadAcceptsAdditiveMetadataPath(t *testing.T) {
+	data := readContractFixture(t, "valid/workspace-read.additive-metadata-path.json")
+	if err := ValidateSchema(EnvelopeWorkspaceRead, data); err != nil {
+		t.Fatalf("presentation schema rejected additive metadata path: %v", err)
+	}
+	var workspace map[string]any
+	if err := DecodeSchema(EnvelopeWorkspaceRead, data, &workspace); err != nil {
+		t.Fatalf("presentation boundary rejected additive metadata path: %v", err)
+	}
+	metadata, ok := workspace["metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("metadata = %#v, want an object", workspace["metadata"])
+	}
+	if metadata["path"] != "/tmp/example" {
+		t.Fatalf("metadata path = %#v, want /tmp/example", metadata["path"])
+	}
+}
+
 func TestWorkspaceReadPreservesRawJSONSafetyChecks(t *testing.T) {
 	for name, test := range map[string]struct {
 		data []byte

@@ -132,6 +132,7 @@ defmodule SymmetryControlWeb.PortalSessionTest do
   test "unauthenticated deep links survive login and invalid-credential retries", %{conn: conn} do
     for path <- [
           "/portal",
+          "/portal?project_id=project-123",
           "/portal/attention",
           "/portal/attention?projectId=project-123",
           "/portal/projects",
@@ -221,6 +222,11 @@ defmodule SymmetryControlWeb.PortalSessionTest do
           "/portal/projects/../login",
           "/portal/projects/%2e%2e",
           "/portal/projects/project-123?return_to=//example.com",
+          "/portal?return_to=//example.com",
+          "/portal?project_id=//example.com",
+          "/portal?project_id=project-123%0d%0alocation%3ahttps://example.com",
+          "/portal?chat_scope=admin",
+          "/portal?project_id=project-123#not-a-view",
           "/portal/classic?return_to=//example.com",
           "/portal/classic?project_id=//example.com",
           "/portal/classic?project_id=project-123%0d%0alocation%3ahttps://example.com",

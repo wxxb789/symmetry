@@ -17,7 +17,7 @@
         <%= if assigns.error do %>
           <div class="form-alert" role="alert"><%= Plug.HTML.html_escape(assigns.error) %></div>
         <% end %>
-        <form method="post" action="/portal/login" class="login-form">
+        <form method="post" class="login-form">
           <input type="hidden" name="_csrf_token" value="<%= Plug.HTML.html_escape(assigns.csrf_token) %>">
           <input type="hidden" name="return_to" value="<%= Plug.HTML.html_escape(assigns.return_to) %>">
           <label for="operator-token">Operator token</label>

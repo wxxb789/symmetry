@@ -227,6 +227,24 @@ test("classic and legacy hashes use separate documents without losing existing w
   await capture(page, testInfo, "separate-documents", "Classic retains existing controls; only one workspace runtime mounted in each document");
 });
 
+test("signed-out legacy project board link survives real login", async ({ page }, testInfo) => {
+  await login(page);
+  const selected = await project(page, "L");
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  const destination = `/portal?project_id=${selected.id}#board`;
+  await page.goto(destination);
+  await expect(page.getByLabel("Operator token")).toBeVisible();
+  expect(new URL(page.url()).searchParams.get("return_to")).toBe(destination.split("#")[0]);
+  await page.getByLabel("Operator token").fill(operatorToken);
+  await page.getByRole("button", { name: "Open workspace" }).click();
+  await expect(page).toHaveURL(new RegExp(`/portal/classic\\?project_id=${selected.id}#board$`));
+  await expect(page.locator("#project-title")).toHaveText(selected.name);
+  await expect(page.getByRole("button", { name: "New work item", exact: true })).toBeVisible();
+  await expect(page.locator('script[src="/assets/portal.js"]')).toHaveCount(1);
+  await expect(page.locator('script[type="module"]')).toHaveCount(0);
+  await capture(page, testInfo, "legacy-login-scope", "Real logout, original legacy project board link and login recover the named project in the classic document");
+});
+
 test("expired authentication clears private content and recovers the deep link", async ({ page }, testInfo) => {
   test.skip(!process.env.SYMMETRY_SHELL_EXPIRY_URL, "Requires a real release with a two-second session lifetime.");
   const expiry = process.env.SYMMETRY_SHELL_EXPIRY_URL;

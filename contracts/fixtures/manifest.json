@@ -16,6 +16,15 @@
       "tags": ["read-projection", "additive-fields", "fractional-metadata", "exponent-metadata"]
     },
     {
+      "id": "workspace-read.additive-metadata-path",
+      "schema": "workspace-read",
+      "path": "valid/workspace-read.additive-metadata-path.json",
+      "valid": true,
+      "schema_valid": true,
+      "semantic_valid": true,
+      "tags": ["read-projection", "additive-fields", "metadata-path"]
+    },
+    {
       "id": "workspace-read.empty",
       "schema": "workspace-read",
       "path": "valid/workspace-read.empty.json",

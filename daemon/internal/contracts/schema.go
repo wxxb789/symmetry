@@ -86,8 +86,12 @@ func ValidateSchema(envelope Envelope, data []byte) error {
 	if err := schema.Validate(instance); err != nil {
 		return fmt.Errorf("validate %s schema: %w", envelope, err)
 	}
-	if err := validateCommitPaths(instance); err != nil {
-		return fmt.Errorf("validate %s CommitPath: %w", envelope, err)
+	switch envelope {
+	case EnvelopeEvidence, EnvelopeEvidenceBatch, EnvelopeGoalCreate, EnvelopeGoalRevision,
+		EnvelopeContextSnapshot, EnvelopePlanProposal, EnvelopeTaskResult, EnvelopeGoalCommand:
+		if err := validateCommitPaths(instance); err != nil {
+			return fmt.Errorf("validate %s CommitPath: %w", envelope, err)
+		}
 	}
 	return nil
 }

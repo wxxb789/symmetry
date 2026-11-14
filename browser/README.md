@@ -41,7 +41,8 @@ The expiry URL must serve the same release and fixture database with
 `SYMMETRY_PORTAL_SESSION_MAX_AGE_SECONDS=2`; without it the true-TTL expiry cases
 are explicitly skipped, not passed. The focused suite also checks Attention
 scope through selection, history, navigation and login with real fractional
-resource metadata, plus logout after another shared-cookie tab renews its
+resource metadata, legacy project board links through real logout and login,
+plus logout after another shared-cookie tab renews its
 session. CI starts both release instances and saves the render report.
 Fixture-only project/work/resource creation uses the existing
 authenticated APIs; the React shell itself provides no mutation controls.
