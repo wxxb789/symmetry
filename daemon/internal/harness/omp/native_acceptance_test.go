@@ -395,7 +395,7 @@ func nativeAcceptanceConfiguration(t *testing.T, prompts ...string) nativeAccept
 
 func nativeAcceptanceHelperEnvironment(t *testing.T, root string) []string {
 	t.Helper()
-	environment, err := execution.BuildEnvironment("PI_CODING_AGENT_DIR", "TENCENT_GLM_API_KEY", "SYMMETRY_OMP_NATIVE", "SYMMETRY_OMP_EXECUTABLE", "SYMMETRY_OMP_REPOSITORY", "SYMMETRY_OMP_EVIDENCE_ROOT")
+	environment, err := execution.BuildEnvironment("PI_CODING_AGENT_DIR", "TENCENT_GLM_API_KEY", "SYMMETRY_OMP_NATIVE", "SYMMETRY_OMP_OWNER_SPEND_MICROUSD", "SYMMETRY_OMP_EXECUTABLE", "SYMMETRY_OMP_REPOSITORY", "SYMMETRY_OMP_EVIDENCE_ROOT")
 	if err != nil {
 		t.Fatal("build isolated witness helper environment failed")
 	}
