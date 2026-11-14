@@ -50,7 +50,7 @@ promotion, an `achieve`, or an acceptance declaration:
 2. `docs/goals/README.md` — one closure/index entry for 0006i in the established form,
    stating the pending predicates so no reader mistakes the receipt for an acceptance.
 3. `docs/goals/archive/0006i-exact-subject-release-acceptance.md` — the goal file moved
-   unchanged (git mv), matching how 0006d/0006h/0006j closings move the file with history
+   unchanged (git mv), matching how the 0006d/0006h closings move the file with history
    preserved.
 
 No source, test, workflow, or acceptance-condition changes. No commit (leave the tree for
@@ -109,7 +109,7 @@ already tracked in `docs/TODO.md` for the maintenance track); no test was weaken
 3. **No release marker.** No convention exists (no tags, no releases, no CHANGELOG, no
    VERSION file; README already carries pre-0.0.1 status). The brief's conditional clause
    resolves to "invent nothing".
-4. **Goal file archived unchanged.** Matching 0006d/0006h/0006j closure commits: `git mv`
+4. **Goal file archived unchanged.** Matching the 0006d/0006h closure commits: `git mv`
    the goal file to `archive/`, update the README index. The 0006i entry records the pending
    hosted/operator predicates as the boundary of this closure — the lettered goal's
    recording work is done; the release acceptance itself is not claimable until the operator
