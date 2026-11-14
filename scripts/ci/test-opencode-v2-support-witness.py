@@ -4,6 +4,7 @@
 import copy
 import importlib.util
 import http.client
+import json
 import os
 import pathlib
 import socket
@@ -131,6 +132,38 @@ class ClassificationTests(unittest.TestCase):
                 reader.join(timeout=5)
             child.stdout.close()
             child.stderr.close()
+
+
+class ChunkedSSETests(unittest.TestCase):
+    def capture(self, chunks):
+        local, peer = socket.socketpair()
+        response = http.client.HTTPResponse(local)
+        try:
+            local.settimeout(5)
+            peer.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n"
+                         + b"".join(f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n" for chunk in chunks)
+                         + b"0\r\n\r\n")
+            peer.shutdown(socket.SHUT_WR)
+            response.begin()
+            receipt = {"events": []}
+            witness.capture_events(response, "test-credential-not-in-events", receipt, threading.Condition())
+            self.assertNotIn("stream_end", receipt)
+            return receipt["events"]
+        finally:
+            response.close()
+            local.close()
+            peer.close()
+
+    def test_event_split_inside_json_across_http_chunks(self):
+        event = {"type": "session.execution.succeeded", "data": {"sessionID": "ses_native"}}
+        body = b"data: " + json.dumps(event).encode() + b"\n\n"
+        split = body.index(b"succeeded") + 3
+        self.assertEqual(self.capture([body[:split], body[split:]]), [event])
+
+    def test_http_chunk_boundary_immediately_before_data(self):
+        event = {"type": "session.step.first-token", "data": {"sessionID": "ses_native"}}
+        body = b"data: " + json.dumps(event).encode() + b"\n\n"
+        self.assertEqual(self.capture([b": keepalive\n\n", body]), [event])
 
 
 if __name__ == "__main__":

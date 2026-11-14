@@ -1,0 +1,1550 @@
+{
+  "decision": "unsupported",
+  "binary": {
+    "path": "C:\\Users\\lhan\\AppData\\Local\\mise\\installs\\aqua-anomalyco-opencode\\latest\\opencode.exe",
+    "size": 257553288,
+    "sha256": "38153a142354634c82b5cfe6c00b19df15a71e6cf8c17ef5f5c1a4cc684a6917"
+  },
+  "platform": {
+    "system": "Windows",
+    "kernel": "10.0.26300",
+    "distribution": "Windows-11-10.0.26300-SP0"
+  },
+  "source_head": "24911c75f7e690e3d547297d4f605a37a3167e08",
+  "witness_sha256": "1cee1970f95fd9d5800a3bf7c890d5d21134ff656671fbf0bbab786280cff607",
+  "command": [
+    "python3",
+    "scripts/ci/opencode-v2-support-witness.py",
+    "--out",
+    ".tmp\\opencode-v2-windows-final.json"
+  ],
+  "workspace": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7",
+  "operations": [
+    {
+      "method": "GET",
+      "path": "/api/info",
+      "authenticated": true,
+      "payload": null,
+      "status": 200,
+      "body": "{\"version\":\"2.3.0\",\"pid\":54612,\"hostname\":\"CPC-lhan-AWGGLB\",\"urls\":[\"http://127.0.0.1:58214\"],\"paths\":{\"tmp\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\\\\tmp\\\\opencode\"},\"capabilities\":{\"persistentPty\":true}}",
+      "credential_redacted_before_write": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/info",
+      "authenticated": false,
+      "payload": null,
+      "status": 401,
+      "body": "{\"_tag\":\"UnauthorizedError\",\"message\":\"Authentication required\"}",
+      "credential_redacted_before_write": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/health",
+      "authenticated": true,
+      "payload": null,
+      "status": 404,
+      "body": "",
+      "credential_redacted_before_write": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/model",
+      "authenticated": true,
+      "payload": null,
+      "status": 200,
+      "body": "{\"location\":{\"directory\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\"},\"data\":[{\"id\":\"deepseek-v4.1-flash-fast\",\"modelID\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"name\":\"DeepSeek V4.1 Flash Fast\",\"package\":\"@opencode/ai/providers/openai-compatible\",\"settings\":{\"apiKey\":\"<operator credential redacted>\",\"baseURL\":\"https://litellm-proxy-hk.graydune-4a6be1e2.eastasia.azurecontainerapps.io/v1\",\"provider\":\"tencent-litellm\",\"reasoningEffort\":\"high\"},\"capabilities\":{\"tools\":true,\"input\":[\"text\"],\"output\":[\"text\"]},\"variants\":[{\"id\":\"none\",\"settings\":{\"reasoningEffort\":\"none\"}},{\"id\":\"minimal\",\"settings\":{\"disabled\":true}},{\"id\":\"low\",\"settings\":{\"reasoningEffort\":\"low\"}},{\"id\":\"medium\",\"settings\":{\"disabled\":true}},{\"id\":\"high\",\"settings\":{\"reasoningEffort\":\"high\"}},{\"id\":\"xhigh\",\"settings\":{\"disabled\":true}},{\"id\":\"max\",\"settings\":{\"reasoningEffort\":\"max\"}}],\"time\":{\"released\":0},\"cost\":[],\"status\":\"active\",\"enabled\":true,\"limit\":{\"context\":1000000,\"output\":384000}}]}",
+      "credential_redacted_before_write": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/session",
+      "authenticated": true,
+      "payload": {
+        "location": {
+          "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        },
+        "model": {
+          "providerID": "tencent-litellm",
+          "id": "deepseek-v4.1-flash-fast"
+        },
+        "permissions": [
+          {
+            "action": "*",
+            "resource": "*",
+            "effect": "deny"
+          },
+          {
+            "action": "read",
+            "resource": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7\\baseline.txt",
+            "effect": "allow"
+          }
+        ]
+      },
+      "status": 200,
+      "body": "{\"data\":{\"id\":\"ses_e26c18617ffesu9W95jNcRQihb\",\"projectID\":\"68047b52c73ca345773d0b1ed5c43a9974e987ce\",\"model\":{\"id\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"variant\":\"default\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"time\":{\"created\":1794646112753,\"updated\":1794646112753},\"permissions\":[{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"deny\"},{\"action\":\"read\",\"resource\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\\\\baseline.txt\",\"effect\":\"allow\"}],\"location\":{\"directory\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\"}}}",
+      "credential_redacted_before_write": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/session/ses_e26c18617ffesu9W95jNcRQihb/event?after=0",
+      "authenticated": true,
+      "payload": null,
+      "status": 404,
+      "body": "",
+      "credential_redacted_before_write": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/ses_e26c18617ffesu9W95jNcRQihb/prompt",
+      "authenticated": true,
+      "payload": {
+        "id": "msg_351faa83320d0462591ff0dc",
+        "text": "Reply exactly OPENCODE_NATIVE_SUCCESS. Do not use tools.",
+        "delivery": "steer",
+        "resume": true
+      },
+      "status": 200,
+      "body": "{\"data\":{\"id\":\"msg_351faa83320d0462591ff0dc\",\"sessionID\":\"ses_e26c18617ffesu9W95jNcRQihb\",\"time\":{\"created\":1794646112802},\"type\":\"user\",\"payload\":{\"text\":\"Reply exactly OPENCODE_NATIVE_SUCCESS. Do not use tools.\"},\"delivery\":\"steer\"}}",
+      "credential_redacted_before_write": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/session/ses_e26c18617ffesu9W95jNcRQihb",
+      "authenticated": true,
+      "payload": null,
+      "status": 200,
+      "body": "{\"data\":{\"id\":\"ses_e26c18617ffesu9W95jNcRQihb\",\"projectID\":\"68047b52c73ca345773d0b1ed5c43a9974e987ce\",\"model\":{\"id\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"variant\":\"default\"},\"cost\":0.00013499999999999997,\"tokens\":{\"input\":1336,\"output\":14,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"outcome\":\"succeeded\",\"time\":{\"created\":1794646112753,\"updated\":1794646113989,\"busy\":1794646112809,\"idle\":1794646114000},\"title\":\"OPENCODE_NATIVE_SUCCESS reply\",\"permissions\":[{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"deny\"},{\"action\":\"read\",\"resource\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\\\\baseline.txt\",\"effect\":\"allow\"}],\"location\":{\"directory\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\"}}}",
+      "credential_redacted_before_write": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/ses_e26c18617ffesu9W95jNcRQihb/prompt",
+      "authenticated": true,
+      "payload": {
+        "id": "msg_0e2175d4ab9e8ed6aaeb0f4b",
+        "text": "Use the read tool to read baseline.txt, then reply with its contents. Do not use any other tool.",
+        "delivery": "steer",
+        "resume": true
+      },
+      "status": 200,
+      "body": "{\"data\":{\"id\":\"msg_0e2175d4ab9e8ed6aaeb0f4b\",\"sessionID\":\"ses_e26c18617ffesu9W95jNcRQihb\",\"time\":{\"created\":1794646114021},\"type\":\"user\",\"payload\":{\"text\":\"Use the read tool to read baseline.txt, then reply with its contents. Do not use any other tool.\"},\"delivery\":\"steer\"}}",
+      "credential_redacted_before_write": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/session/ses_e26c18617ffesu9W95jNcRQihb",
+      "authenticated": true,
+      "payload": null,
+      "status": 200,
+      "body": "{\"data\":{\"id\":\"ses_e26c18617ffesu9W95jNcRQihb\",\"projectID\":\"68047b52c73ca345773d0b1ed5c43a9974e987ce\",\"model\":{\"id\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"variant\":\"default\"},\"cost\":0.00018198,\"tokens\":{\"input\":1510,\"output\":108,\"reasoning\":29,\"cache\":{\"read\":1728,\"write\":0}},\"outcome\":\"succeeded\",\"time\":{\"created\":1794646112753,\"updated\":1794646115056,\"busy\":1794646114026,\"idle\":1794646115064},\"title\":\"OPENCODE_NATIVE_SUCCESS reply\",\"permissions\":[{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"deny\"},{\"action\":\"read\",\"resource\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\\\\baseline.txt\",\"effect\":\"allow\"}],\"location\":{\"directory\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\"}}}",
+      "credential_redacted_before_write": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/session",
+      "authenticated": true,
+      "payload": {
+        "location": {
+          "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        },
+        "model": {
+          "providerID": "tencent-litellm",
+          "id": "deepseek-v4.1-flash-fast"
+        },
+        "permissions": [
+          {
+            "action": "*",
+            "resource": "*",
+            "effect": "deny"
+          },
+          {
+            "action": "read",
+            "resource": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7\\baseline.txt",
+            "effect": "allow"
+          }
+        ]
+      },
+      "status": 200,
+      "body": "{\"data\":{\"id\":\"ses_e26c17cf7ffegguBWCuK8lSRF0\",\"projectID\":\"68047b52c73ca345773d0b1ed5c43a9974e987ce\",\"model\":{\"id\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"variant\":\"default\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"time\":{\"created\":1794646115088,\"updated\":1794646115088},\"permissions\":[{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"deny\"},{\"action\":\"read\",\"resource\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\\\\baseline.txt\",\"effect\":\"allow\"}],\"location\":{\"directory\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\"}}}",
+      "credential_redacted_before_write": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/ses_e26c17cf7ffegguBWCuK8lSRF0/prompt",
+      "authenticated": true,
+      "payload": {
+        "id": "msg_6542ad29793fa543d79759c5",
+        "text": "Output the integers from 1 through 10000, one per line. Do not use tools.",
+        "delivery": "steer",
+        "resume": true
+      },
+      "status": 200,
+      "body": "{\"data\":{\"id\":\"msg_6542ad29793fa543d79759c5\",\"sessionID\":\"ses_e26c17cf7ffegguBWCuK8lSRF0\",\"time\":{\"created\":1794646115115},\"type\":\"user\",\"payload\":{\"text\":\"Output the integers from 1 through 10000, one per line. Do not use tools.\"},\"delivery\":\"steer\"}}",
+      "credential_redacted_before_write": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/ses_e26c17cf7ffegguBWCuK8lSRF0/interrupt",
+      "authenticated": true,
+      "payload": null,
+      "status": 200,
+      "body": "{\"interrupted\":true}",
+      "credential_redacted_before_write": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/session/ses_e26c17cf7ffegguBWCuK8lSRF0",
+      "authenticated": true,
+      "payload": null,
+      "status": 200,
+      "body": "{\"data\":{\"id\":\"ses_e26c17cf7ffegguBWCuK8lSRF0\",\"projectID\":\"68047b52c73ca345773d0b1ed5c43a9974e987ce\",\"model\":{\"id\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"variant\":\"default\"},\"cost\":0.00001234,\"tokens\":{\"input\":76,\"output\":9,\"reasoning\":0,\"cache\":{\"read\":384,\"write\":0}},\"outcome\":\"interrupted\",\"time\":{\"created\":1794646115088,\"updated\":1794646115498,\"busy\":1794646115119,\"idle\":1794646115488},\"title\":\"Output integers 1 to 10000\",\"permissions\":[{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"deny\"},{\"action\":\"read\",\"resource\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\\\\baseline.txt\",\"effect\":\"allow\"}],\"location\":{\"directory\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\"}}}",
+      "credential_redacted_before_write": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/session/ses_e26c18617ffesu9W95jNcRQihb",
+      "authenticated": true,
+      "payload": null,
+      "status": 204,
+      "body": "",
+      "credential_redacted_before_write": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/session/ses_e26c18617ffesu9W95jNcRQihb",
+      "authenticated": true,
+      "payload": null,
+      "status": 404,
+      "body": "{\"_tag\":\"SessionNotFoundError\",\"sessionID\":\"ses_e26c18617ffesu9W95jNcRQihb\",\"message\":\"Session not found: ses_e26c18617ffesu9W95jNcRQihb\"}",
+      "credential_redacted_before_write": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/session/ses_e26c17cf7ffegguBWCuK8lSRF0",
+      "authenticated": true,
+      "payload": null,
+      "status": 204,
+      "body": "",
+      "credential_redacted_before_write": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/session/ses_e26c17cf7ffegguBWCuK8lSRF0",
+      "authenticated": true,
+      "payload": null,
+      "status": 404,
+      "body": "{\"_tag\":\"SessionNotFoundError\",\"sessionID\":\"ses_e26c17cf7ffegguBWCuK8lSRF0\",\"message\":\"Session not found: ses_e26c17cf7ffegguBWCuK8lSRF0\"}",
+      "credential_redacted_before_write": false
+    }
+  ],
+  "events": [
+    {
+      "id": "evt_1d93e79e00012ZP4qlQYWcGM6E",
+      "type": "server.connected",
+      "data": {}
+    },
+    {
+      "id": "evt_1d93e79f1001l35QYY19WXW3vY",
+      "created": 1794646112753,
+      "type": "session.created",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "slug": "playful-star",
+        "version": "2.3.0",
+        "projectID": "68047b52c73ca345773d0b1ed5c43a9974e987ce",
+        "location": {
+          "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        },
+        "subpath": "",
+        "permissions": [
+          {
+            "action": "*",
+            "resource": "*",
+            "effect": "deny"
+          },
+          {
+            "action": "read",
+            "resource": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7\\baseline.txt",
+            "effect": "allow"
+          }
+        ],
+        "model": {
+          "id": "deepseek-v4.1-flash-fast",
+          "providerID": "tencent-litellm"
+        }
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 0,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e7a220016BN5wStwEnL0dN",
+      "created": 1794646112802,
+      "type": "session.inbox.enqueued",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "inboxID": "msg_351faa83320d0462591ff0dc",
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "item": {
+          "type": "user",
+          "payload": {
+            "text": "Reply exactly OPENCODE_NATIVE_SUCCESS. Do not use tools."
+          },
+          "delivery": "steer"
+        }
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 1,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e7a290013u70TW7G19gpGc",
+      "created": 1794646112809,
+      "type": "session.execution.started",
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb"
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 2,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e7a390015KjnOVIkimEIH5",
+      "created": 1794646112825,
+      "metadata": {
+        "instructions": {
+          "initial": true
+        }
+      },
+      "type": "session.instructions.updated",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "delta": {
+          "core/date": "7e11767d20af6d0a757fa2ef151926d9b692ac492d8199662599d0d5e2e86810",
+          "core/environment": "d3d10cc376a54d4d5b8391c7eb01282b2d7887eebc2d5ae4d752097bf6ec252d"
+        }
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 3,
+        "version": 2
+      }
+    },
+    {
+      "id": "evt_1d93e7a3e0013kcEbjAjGZQqgU",
+      "created": 1794646112830,
+      "type": "session.inbox.delivered",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "inboxID": "msg_351faa83320d0462591ff0dc"
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 4,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e7e96001j20dewRNrD2T15",
+      "created": 1794646113942,
+      "type": "session.usage.updated",
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "cost": 4.599999999999999e-05,
+        "tokens": {
+          "input": 453,
+          "output": 7,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        }
+      }
+    },
+    {
+      "id": "evt_1d93e7e97001OoKuXqlazuvaqi",
+      "created": 1794646113943,
+      "type": "session.renamed",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "title": "OPENCODE_NATIVE_SUCCESS reply"
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 6,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e7ea6001CW6d4519dPEMIH",
+      "created": 1794646113958,
+      "type": "session.step.started",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "agent": "build",
+        "model": {
+          "id": "deepseek-v4.1-flash-fast",
+          "providerID": "tencent-litellm",
+          "variant": "default"
+        },
+        "assistantMessageID": "msg_1d93e7a670013ol4hkX9yb4juK",
+        "started": 1794646112884
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 7,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e7eac001qfmzqaB1kRZnDk",
+      "created": 1794646113964,
+      "type": "session.step.first-token",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "assistantMessageID": "msg_1d93e7a670013ol4hkX9yb4juK"
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 8,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e7eb3001Nxap9TnWptcOCD",
+      "created": 1794646113971,
+      "type": "session.text.started",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "assistantMessageID": "msg_1d93e7a670013ol4hkX9yb4juK",
+        "ordinal": 0
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 9,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e7eb9001ucOFUbuhgtX9bf",
+      "created": 1794646113977,
+      "type": "session.text.delta",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "assistantMessageID": "msg_1d93e7a670013ol4hkX9yb4juK",
+        "ordinal": 0,
+        "delta": "OPENCODE_NATIVE_SUCCESS"
+      }
+    },
+    {
+      "id": "evt_1d93e7eb9002kz1W9GZ2dwrJgs",
+      "created": 1794646113977,
+      "type": "session.text.ended",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "assistantMessageID": "msg_1d93e7a670013ol4hkX9yb4juK",
+        "ordinal": 0,
+        "text": "OPENCODE_NATIVE_SUCCESS"
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 10,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e7ec0001qmgfkODKMPsn8B",
+      "created": 1794646113984,
+      "type": "session.step.streamed",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "assistantMessageID": "msg_1d93e7a670013ol4hkX9yb4juK"
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 11,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e7ec5001OnxaES1ZlHo5D7",
+      "created": 1794646113989,
+      "type": "session.step.ended",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "assistantMessageID": "msg_1d93e7a670013ol4hkX9yb4juK",
+        "finish": "stop",
+        "rawFinish": "stop",
+        "tokens": {
+          "input": 883,
+          "output": 7,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "cost": 8.9e-05
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 12,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e7eca001Y3NNQH3YXUESL7",
+      "created": 1794646113994,
+      "type": "session.usage.updated",
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "cost": 0.00013499999999999997,
+        "tokens": {
+          "input": 1336,
+          "output": 14,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        }
+      }
+    },
+    {
+      "id": "evt_1d93e7ed0001dBlVofdWYEb4sg",
+      "created": 1794646114000,
+      "type": "session.execution.succeeded",
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb"
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 13,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e7ee5001xANBC8DjQZk35H",
+      "created": 1794646114021,
+      "type": "session.inbox.enqueued",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "inboxID": "msg_0e2175d4ab9e8ed6aaeb0f4b",
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "item": {
+          "type": "user",
+          "payload": {
+            "text": "Use the read tool to read baseline.txt, then reply with its contents. Do not use any other tool."
+          },
+          "delivery": "steer"
+        }
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 14,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e7eea001kXCUhddFPhL1sn",
+      "created": 1794646114026,
+      "type": "session.execution.started",
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb"
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 15,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e7ef4001IyUVFIgmp9206w",
+      "created": 1794646114036,
+      "type": "session.inbox.delivered",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "inboxID": "msg_0e2175d4ab9e8ed6aaeb0f4b"
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 16,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e804e0016O15yt9u7tJQuv",
+      "created": 1794646114382,
+      "type": "session.step.started",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "agent": "build",
+        "model": {
+          "id": "deepseek-v4.1-flash-fast",
+          "providerID": "tencent-litellm",
+          "variant": "default"
+        },
+        "assistantMessageID": "msg_1d93e7eff001A77cTW3HhWhrfq",
+        "started": 1794646114057
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 17,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e8053001W4t1hCuy1c9kr9",
+      "created": 1794646114387,
+      "type": "session.step.first-token",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "assistantMessageID": "msg_1d93e7eff001A77cTW3HhWhrfq"
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 18,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e8057001X1Cm7VJCVaHq0e",
+      "created": 1794646114391,
+      "type": "session.tool.input.started",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "assistantMessageID": "msg_1d93e7eff001A77cTW3HhWhrfq",
+        "id": "chatcmpl-tool-9072282e6dc7f115",
+        "name": "read"
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 19,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e80850012nbUvNmRAY0oHN",
+      "created": 1794646114437,
+      "type": "session.tool.input.ended",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "assistantMessageID": "msg_1d93e7eff001A77cTW3HhWhrfq",
+        "id": "chatcmpl-tool-9072282e6dc7f115",
+        "text": "{\"path\": \"baseline.txt\"}"
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 20,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e808a001UtdCy8mC3YOcpr",
+      "created": 1794646114442,
+      "type": "session.tool.called",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "assistantMessageID": "msg_1d93e7eff001A77cTW3HhWhrfq",
+        "id": "chatcmpl-tool-9072282e6dc7f115",
+        "input": {
+          "path": "baseline.txt"
+        },
+        "executed": false
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 21,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e808f00123QR2bylcbSb19",
+      "created": 1794646114447,
+      "type": "session.step.streamed",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "assistantMessageID": "msg_1d93e7eff001A77cTW3HhWhrfq"
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 22,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e8099001wCJdX9apEwJJQA",
+      "created": 1794646114457,
+      "type": "session.tool.failed",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "assistantMessageID": "msg_1d93e7eff001A77cTW3HhWhrfq",
+        "id": "chatcmpl-tool-9072282e6dc7f115",
+        "error": {
+          "type": "permission.rejected",
+          "message": "Permission denied: read"
+        },
+        "executed": false
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 23,
+        "version": 2
+      }
+    },
+    {
+      "id": "evt_1d93e809d001XZiilm6iU61QU6",
+      "created": 1794646114461,
+      "type": "session.step.ended",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "assistantMessageID": "msg_1d93e7eff001A77cTW3HhWhrfq",
+        "finish": "tool-calls",
+        "rawFinish": "tool_calls",
+        "tokens": {
+          "input": 83,
+          "output": 40,
+          "reasoning": 0,
+          "cache": {
+            "read": 832,
+            "write": 0
+          }
+        },
+        "cost": 2.062e-05
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 24,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e80a2001DcV3pLt66iNsZy",
+      "created": 1794646114466,
+      "type": "session.usage.updated",
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "cost": 0.00015561999999999998,
+        "tokens": {
+          "input": 1419,
+          "output": 54,
+          "reasoning": 0,
+          "cache": {
+            "read": 832,
+            "write": 0
+          }
+        }
+      }
+    },
+    {
+      "id": "evt_1d93e81eb001gK8CwIEsf60x0b",
+      "created": 1794646114795,
+      "type": "session.step.started",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "agent": "build",
+        "model": {
+          "id": "deepseek-v4.1-flash-fast",
+          "providerID": "tencent-litellm",
+          "variant": "default"
+        },
+        "assistantMessageID": "msg_1d93e80b0001Uud2MXUZM1yA1r",
+        "started": 1794646114489
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 25,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e81f2001ZNaLCJpDU1qnR1",
+      "created": 1794646114802,
+      "type": "session.step.first-token",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "assistantMessageID": "msg_1d93e80b0001Uud2MXUZM1yA1r"
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 26,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e81fa00185PdpttNFiBCy5",
+      "created": 1794646114810,
+      "type": "session.reasoning.started",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "assistantMessageID": "msg_1d93e80b0001Uud2MXUZM1yA1r",
+        "ordinal": 0,
+        "native": {
+          "reasoningField": "reasoning_content"
+        }
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 27,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e8244001gF5minP65py7vE",
+      "created": 1794646114884,
+      "type": "session.reasoning.delta",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "assistantMessageID": "msg_1d93e80b0001Uud2MXUZM1yA1r",
+        "ordinal": 0,
+        "delta": "The read tool was rejected. I should report that. The instruction says reply with its contents, but permission denied. I should tell the user."
+      }
+    },
+    {
+      "id": "evt_1d93e8244002brLU7y66IsyDwL",
+      "created": 1794646114884,
+      "type": "session.text.started",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "assistantMessageID": "msg_1d93e80b0001Uud2MXUZM1yA1r",
+        "ordinal": 0
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 28,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e82af001xQSakVfT5nJCFd",
+      "created": 1794646114991,
+      "type": "session.text.delta",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "assistantMessageID": "msg_1d93e80b0001Uud2MXUZM1yA1r",
+        "ordinal": 0,
+        "delta": "I tried to read `baseline.txt`, but the read tool was blocked with a permission error:\n\n```\nPermission denied: read\n```\n\nSo I can't provide the file's contents. If you can grant read"
+      }
+    },
+    {
+      "id": "evt_1d93e82e0001fQg3dpbwjRjyYG",
+      "created": 1794646115040,
+      "type": "session.reasoning.ended",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "assistantMessageID": "msg_1d93e80b0001Uud2MXUZM1yA1r",
+        "ordinal": 0,
+        "text": "The read tool was rejected. I should report that. The instruction says reply with its contents, but permission denied. I should tell the user.",
+        "native": {
+          "reasoningField": "reasoning_content"
+        }
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 29,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e82e5001sf8Bzryj5Ymr6r",
+      "created": 1794646115046,
+      "type": "session.text.delta",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "assistantMessageID": "msg_1d93e80b0001Uud2MXUZM1yA1r",
+        "ordinal": 0,
+        "delta": " access or adjust permissions, I'll try again."
+      }
+    },
+    {
+      "id": "evt_1d93e82e6001Y4Zq67ua71z131",
+      "created": 1794646115046,
+      "type": "session.text.ended",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "assistantMessageID": "msg_1d93e80b0001Uud2MXUZM1yA1r",
+        "ordinal": 0,
+        "text": "I tried to read `baseline.txt`, but the read tool was blocked with a permission error:\n\n```\nPermission denied: read\n```\n\nSo I can't provide the file's contents. If you can grant read access or adjust permissions, I'll try again."
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 30,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e82eb001vmBEfs2fuh33FM",
+      "created": 1794646115051,
+      "type": "session.step.streamed",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "assistantMessageID": "msg_1d93e80b0001Uud2MXUZM1yA1r"
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 31,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e82f0001KZ2sLG35EGbHLf",
+      "created": 1794646115056,
+      "type": "session.step.ended",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "assistantMessageID": "msg_1d93e80b0001Uud2MXUZM1yA1r",
+        "finish": "stop",
+        "rawFinish": "stop",
+        "tokens": {
+          "input": 91,
+          "output": 54,
+          "reasoning": 29,
+          "cache": {
+            "read": 896,
+            "write": 0
+          }
+        },
+        "cost": 2.636e-05
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 32,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e82f50015B9T2t2enhMn9S",
+      "created": 1794646115061,
+      "type": "session.usage.updated",
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "cost": 0.00018198,
+        "tokens": {
+          "input": 1510,
+          "output": 108,
+          "reasoning": 29,
+          "cache": {
+            "read": 1728,
+            "write": 0
+          }
+        }
+      }
+    },
+    {
+      "id": "evt_1d93e82f8001u2oIOt9Vlnq2hq",
+      "created": 1794646115064,
+      "type": "session.execution.succeeded",
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb"
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 33,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e8310001AZyVdIebu9zjdq",
+      "created": 1794646115088,
+      "type": "session.created",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+        "slug": "jolly-river",
+        "version": "2.3.0",
+        "projectID": "68047b52c73ca345773d0b1ed5c43a9974e987ce",
+        "location": {
+          "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        },
+        "subpath": "",
+        "permissions": [
+          {
+            "action": "*",
+            "resource": "*",
+            "effect": "deny"
+          },
+          {
+            "action": "read",
+            "resource": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7\\baseline.txt",
+            "effect": "allow"
+          }
+        ],
+        "model": {
+          "id": "deepseek-v4.1-flash-fast",
+          "providerID": "tencent-litellm"
+        }
+      },
+      "durable": {
+        "aggregateID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+        "seq": 0,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e832b001o2ID6uMAmv31gI",
+      "created": 1794646115115,
+      "type": "session.inbox.enqueued",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "inboxID": "msg_6542ad29793fa543d79759c5",
+        "sessionID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+        "item": {
+          "type": "user",
+          "payload": {
+            "text": "Output the integers from 1 through 10000, one per line. Do not use tools."
+          },
+          "delivery": "steer"
+        }
+      },
+      "durable": {
+        "aggregateID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+        "seq": 1,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e832f00117Wxs319cJyqbF",
+      "created": 1794646115119,
+      "type": "session.execution.started",
+      "data": {
+        "sessionID": "ses_e26c17cf7ffegguBWCuK8lSRF0"
+      },
+      "durable": {
+        "aggregateID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+        "seq": 2,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e8337001licqYaB2UE0RMs",
+      "created": 1794646115127,
+      "metadata": {
+        "instructions": {
+          "initial": true
+        }
+      },
+      "type": "session.instructions.updated",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+        "delta": {
+          "core/date": "7e11767d20af6d0a757fa2ef151926d9b692ac492d8199662599d0d5e2e86810",
+          "core/environment": "d3d10cc376a54d4d5b8391c7eb01282b2d7887eebc2d5ae4d752097bf6ec252d"
+        }
+      },
+      "durable": {
+        "aggregateID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+        "seq": 3,
+        "version": 2
+      }
+    },
+    {
+      "id": "evt_1d93e8339001LX3oUIgl6zzGba",
+      "created": 1794646115129,
+      "type": "session.inbox.delivered",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+        "inboxID": "msg_6542ad29793fa543d79759c5"
+      },
+      "durable": {
+        "aggregateID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+        "seq": 4,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e847d0014PDnRQZrHd9Nro",
+      "created": 1794646115453,
+      "type": "session.step.started",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+        "agent": "build",
+        "model": {
+          "id": "deepseek-v4.1-flash-fast",
+          "providerID": "tencent-litellm",
+          "variant": "default"
+        },
+        "assistantMessageID": "msg_1d93e8350001NvRFYW3WJWqSyi",
+        "started": 1794646115160
+      },
+      "durable": {
+        "aggregateID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+        "seq": 5,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e8481001B7np8LA35t5UTs",
+      "created": 1794646115457,
+      "type": "session.step.first-token",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+        "assistantMessageID": "msg_1d93e8350001NvRFYW3WJWqSyi"
+      },
+      "durable": {
+        "aggregateID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+        "seq": 6,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e8486001hWRyPPuznKnJNA",
+      "created": 1794646115462,
+      "type": "session.reasoning.started",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+        "assistantMessageID": "msg_1d93e8350001NvRFYW3WJWqSyi",
+        "ordinal": 0,
+        "native": {
+          "reasoningField": "reasoning_content"
+        }
+      },
+      "durable": {
+        "aggregateID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+        "seq": 7,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e8493001cs6ACGoVau7Z9Q",
+      "created": 1794646115475,
+      "type": "session.reasoning.delta",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+        "assistantMessageID": "msg_1d93e8350001NvRFYW3WJWqSyi",
+        "ordinal": 0,
+        "delta": "We need to output integers 1 through"
+      }
+    },
+    {
+      "id": "evt_1d93e8494001jhOJsJjI9rUyaD",
+      "created": 1794646115476,
+      "type": "session.reasoning.ended",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+        "assistantMessageID": "msg_1d93e8350001NvRFYW3WJWqSyi",
+        "ordinal": 0,
+        "text": "We need to output integers 1 through",
+        "native": {
+          "reasoningField": "reasoning_content"
+        }
+      },
+      "durable": {
+        "aggregateID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+        "seq": 8,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e8498001GtnWjhDyyGOzCR",
+      "created": 1794646115480,
+      "type": "session.step.streamed",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+        "assistantMessageID": "msg_1d93e8350001NvRFYW3WJWqSyi"
+      },
+      "durable": {
+        "aggregateID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+        "seq": 9,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e849b001lTU3yCXY77yc8F",
+      "created": 1794646115483,
+      "type": "session.step.failed",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+        "assistantMessageID": "msg_1d93e8350001NvRFYW3WJWqSyi",
+        "error": {
+          "type": "aborted",
+          "message": "Step interrupted"
+        }
+      },
+      "durable": {
+        "aggregateID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+        "seq": 10,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e84a00018JWO3lEbe00cqo",
+      "created": 1794646115488,
+      "type": "session.execution.interrupted",
+      "data": {
+        "sessionID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+        "reason": "user"
+      },
+      "durable": {
+        "aggregateID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+        "seq": 11,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e84a9001uSwbRqHtoq5cX1",
+      "created": 1794646115498,
+      "type": "session.usage.updated",
+      "data": {
+        "sessionID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+        "cost": 1.234e-05,
+        "tokens": {
+          "input": 76,
+          "output": 9,
+          "reasoning": 0,
+          "cache": {
+            "read": 384,
+            "write": 0
+          }
+        }
+      }
+    },
+    {
+      "id": "evt_1d93e84aa001dmpCRmu6UHF385",
+      "created": 1794646115498,
+      "type": "session.renamed",
+      "location": {
+        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+      },
+      "data": {
+        "sessionID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+        "title": "Output integers 1 to 10000"
+      },
+      "durable": {
+        "aggregateID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+        "seq": 13,
+        "version": 1
+      }
+    },
+    {
+      "id": "evt_1d93e84c9001j90Xs0i8iimUlE",
+      "created": 1794646115529,
+      "type": "session.deleted",
+      "data": {
+        "sessionID": "ses_e26c18617ffesu9W95jNcRQihb"
+      },
+      "durable": {
+        "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+        "seq": 34,
+        "version": 2
+      }
+    },
+    {
+      "id": "evt_1d93e84d7001Eqvcx0ljPqhkiJ",
+      "created": 1794646115543,
+      "type": "session.deleted",
+      "data": {
+        "sessionID": "ses_e26c17cf7ffegguBWCuK8lSRF0"
+      },
+      "durable": {
+        "aggregateID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+        "seq": 14,
+        "version": 2
+      }
+    }
+  ],
+  "classes": {
+    "success": {
+      "status": "observed",
+      "terminal": {
+        "id": "evt_1d93e7ed0001dBlVofdWYEb4sg",
+        "created": 1794646114000,
+        "type": "session.execution.succeeded",
+        "data": {
+          "sessionID": "ses_e26c18617ffesu9W95jNcRQihb"
+        },
+        "durable": {
+          "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+          "seq": 13,
+          "version": 1
+        }
+      }
+    },
+    "continuation_after_step": {
+      "event_start": 17,
+      "terminal": {
+        "id": "evt_1d93e82f8001u2oIOt9Vlnq2hq",
+        "created": 1794646115064,
+        "type": "session.execution.succeeded",
+        "data": {
+          "sessionID": "ses_e26c18617ffesu9W95jNcRQihb"
+        },
+        "durable": {
+          "aggregateID": "ses_e26c18617ffesu9W95jNcRQihb",
+          "seq": 33,
+          "version": 1
+        }
+      },
+      "status": "run and failed"
+    },
+    "interruption": {
+      "status": "observed",
+      "first_token": {
+        "id": "evt_1d93e8481001B7np8LA35t5UTs",
+        "created": 1794646115457,
+        "type": "session.step.first-token",
+        "location": {
+          "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        },
+        "data": {
+          "sessionID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+          "assistantMessageID": "msg_1d93e8350001NvRFYW3WJWqSyi"
+        },
+        "durable": {
+          "aggregateID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+          "seq": 6,
+          "version": 1
+        }
+      },
+      "http_status": 200,
+      "response": {
+        "interrupted": true
+      },
+      "terminal": {
+        "id": "evt_1d93e84a00018JWO3lEbe00cqo",
+        "created": 1794646115488,
+        "type": "session.execution.interrupted",
+        "data": {
+          "sessionID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+          "reason": "user"
+        },
+        "durable": {
+          "aggregateID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+          "seq": 11,
+          "version": 1
+        }
+      }
+    },
+    "cleanup": {
+      "command": [
+        "taskkill",
+        "/PID",
+        "54612",
+        "/T",
+        "/F"
+      ],
+      "exit_code": 0,
+      "server_exit_code": 1,
+      "stream_reader_stopped": true,
+      "output_readers_stopped": true,
+      "status": "observed"
+    },
+    "provider_failure": {
+      "status": "unavailable",
+      "blocker": "no real provider failure captured; synthetic substitutes excluded"
+    },
+    "truncated_response": {
+      "status": "unavailable",
+      "blocker": "no approved real-relay fault injection; synthetic substitutes excluded"
+    },
+    "usage": {
+      "status": "observed",
+      "native_counters": [
+        {
+          "id": "ses_e26c18617ffesu9W95jNcRQihb",
+          "outcome": "succeeded",
+          "tokens": {
+            "input": 1336,
+            "output": 14,
+            "reasoning": 0,
+            "cache": {
+              "read": 0,
+              "write": 0
+            }
+          },
+          "cost": 0.00013499999999999997
+        },
+        {
+          "id": "ses_e26c18617ffesu9W95jNcRQihb",
+          "outcome": "succeeded",
+          "tokens": {
+            "input": 1510,
+            "output": 108,
+            "reasoning": 29,
+            "cache": {
+              "read": 1728,
+              "write": 0
+            }
+          },
+          "cost": 0.00018198
+        },
+        {
+          "id": "ses_e26c17cf7ffegguBWCuK8lSRF0",
+          "outcome": "interrupted",
+          "tokens": {
+            "input": 76,
+            "output": 9,
+            "reasoning": 0,
+            "cache": {
+              "read": 384,
+              "write": 0
+            }
+          },
+          "cost": 1.234e-05
+        }
+      ],
+      "limitation": "native counters only; successful/billable usage and failed-turn accounting unverified"
+    }
+  },
+  "provider": {
+    "id": "tencent-litellm",
+    "model": "deepseek-v4.1-flash-fast",
+    "base_url": "https://litellm-proxy-hk.graydune-4a6be1e2.eastasia.azurecontainerapps.io/v1",
+    "discovered_from": "C:\\Users\\lhan\\.config\\opencode\\opencode.json",
+    "credential": "environment:TENCENT_GLM_API_KEY"
+  },
+  "server_command": [
+    "C:\\Users\\lhan\\AppData\\Local\\mise\\installs\\aqua-anomalyco-opencode\\latest\\opencode.exe",
+    "serve",
+    "--hostname",
+    "127.0.0.1",
+    "--port",
+    "58214"
+  ],
+  "server_pid": 54612,
+  "stream_status": 200,
+  "stream_end": "ConnectionResetError",
+  "logs": {
+    "stdout": "server listening on http://127.0.0.1:58214\n",
+    "stderr": ""
+  },
+  "credential_scan": {
+    "files_scanned": 8,
+    "matches": []
+  }
+}

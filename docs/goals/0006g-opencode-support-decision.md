@@ -47,3 +47,12 @@ pin above and start the goal's 12-hour bound):
   discovered from the harness configuration that already uses this key rather
   than guessed. Dummy keys, loopback gateways, model narration and local journal
   tests do not satisfy this goal.
+
+Owner correction for review F1, 2026-11-14: the host's inherited
+`TENCENT_GLM_API_KEY` value is rejected by the relay with HTTP 401 for a missing
+`sk-` prefix. Re-collection uses the working credential from
+`~/.omp/agent/models.yml`, provider `tencent-litellm`, injected only into the
+collector subprocess's `TENCENT_GLM_API_KEY` environment. Record the source and
+format rejection, never either credential value. This supersedes only the
+credential-source prerequisite above, not the exact-binary, platform or
+capability-evidence requirements.

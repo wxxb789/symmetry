@@ -118,6 +118,30 @@ def close_native(process, connection, stream_reader, output_readers):
     return result
 
 
+def capture_events(response, key, receipt, condition):
+    count = 0
+    try:
+        while True:
+            line = response.readline(1 << 20)
+            if not line:
+                break
+            count += len(line)
+            if count > 8 << 20:
+                raise RuntimeError("native SSE capture limit reached")
+            if line.startswith(b"data:"):
+                text = line[5:].strip().decode()
+                if key in text:
+                    raise RuntimeError("credential native event refused")
+                event = json.loads(text)
+                if isinstance(event, str):
+                    event = json.loads(event)
+                with condition:
+                    receipt["events"].append(event)
+                    condition.notify_all()
+    except (OSError, ValueError, RuntimeError) as error:
+        receipt["stream_end"] = type(error).__name__
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", required=True, type=pathlib.Path)
@@ -266,30 +290,7 @@ def main():
         stream_socket = stream_connection.sock
         stream_socket.settimeout(None)
 
-        def capture():
-            count = 0
-            try:
-                while True:
-                    line = response.fp.readline(1 << 20)
-                    if not line:
-                        break
-                    count += len(line)
-                    if count > 8 << 20:
-                        raise RuntimeError("native SSE capture limit reached")
-                    if line.startswith(b"data:"):
-                        text = line[5:].strip().decode()
-                        if key in text:
-                            raise RuntimeError("credential native event refused")
-                        event = json.loads(text)
-                        if isinstance(event, str):
-                            event = json.loads(event)
-                        with condition:
-                            receipt["events"].append(event)
-                            condition.notify_all()
-            except (OSError, ValueError, RuntimeError) as error:
-                receipt["stream_end"] = type(error).__name__
-
-        stream_reader = threading.Thread(target=capture, daemon=True)
+        stream_reader = threading.Thread(target=capture_events, args=(response, key, receipt, condition), daemon=True)
         stream_reader.start()
         session_id = session()
         request("GET", "/api/session/" + session_id + "/event?after=0")

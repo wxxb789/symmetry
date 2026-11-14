@@ -177,9 +177,12 @@ that server adequately for the deployment, do not mark it supported there.
 Never expose the native server as a public Symmetry API. Keep credentials local.
 
 The [2.3.0 decision evidence](../../daemon/internal/harness/testdata/opencode/2.3.0/README.md)
-records actual Windows `session.execution.failed` events and matching
-`outcome=failed` readbacks after the approved relay rejected authentication.
-It does not establish successful execution, active interruption, continuation,
+records current Windows `session.execution.succeeded` and
+`session.execution.interrupted` events with matching outcome readbacks after
+re-collection with the fixed HTTP transfer decoder and the working credential
+from the operator's OMP provider config. The earlier authentication-failure
+receipt is labelled superseded history, not current evidence. The current run
+does not establish successful tool continuation, provider failure,
 provider-response truncation, billable usage or retained-session recovery.
 The owner-pinned blob is a Windows PE; executing it from Ubuntu through WSL
 interop is not native Linux evidence. Those missing classes prevent promotion;
