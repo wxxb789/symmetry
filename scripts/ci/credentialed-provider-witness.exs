@@ -112,12 +112,25 @@ defmodule CredentialedProviderWitness do
     {:ok, _} = ProviderAccess.start_link()
 
     case phase do
-      "setup" -> setup!(config)
-      "timeout" -> held_update!("timeout")
-      "crash" -> held_update!("crash")
-      "recover" -> recover!()
-      "finish" -> finish!()
-      _ -> fail!("invalid_phase")
+      "setup" ->
+        setup!(config)
+
+      "timeout" ->
+        held_update!("timeout")
+
+      "crash" ->
+        held_update!("crash")
+
+      "recover" ->
+        recover!()
+        verify_read_only_probe!(phase)
+
+      "finish" ->
+        verify_read_only_probe!(phase)
+        finish!()
+
+      _ ->
+        fail!("invalid_phase")
     end
 
     snapshot!(phase)
@@ -654,9 +667,10 @@ defmodule CredentialedProviderWitness do
 
             count = mutation_count()
             requests = length(audits())
+            stored_result = intent(label).result
 
             ensure!(
-              match?({:ok, _}, execute!(context, label, "change.update", input(label))),
+              execute!(context, label, "change.update", input(label)) == {:ok, stored_result},
               "timeout_replay_failed"
             )
 
@@ -716,6 +730,155 @@ defmodule CredentialedProviderWitness do
     })
   end
 
+  defp seed_read_only_probe!(phase) do
+    # Separate still-authorized work must not escape through the broker's global sweep.
+    source = intent(if(phase == "recover", do: "failure", else: "success"))
+    state = read!(path("state.json"))
+    resource = Repo.get!(ProjectResource, source.resource_id)
+    project = Repo.get!(SymmetryControl.Workspaces.Project, state["project_id"])
+
+    # A preserved crashed run may have expired; do not renew or alter its fence.
+    claim =
+      scoped_claim!(
+        project,
+        resource,
+        source.action_binding["subject"],
+        source.action_binding["target"]["source_branch"],
+        "read-only-#{phase}"
+      )
+
+    run = Repo.get!(Run, claim.run_id)
+    item = Repo.get!(WorkItem, claim.work_item_id)
+    connection = Repo.get!(SymmetryControl.Integrations.Connection, source.connection_id)
+    action_id = Ecto.UUID.generate()
+
+    attrs =
+      source
+      |> Map.from_struct()
+      |> Map.merge(%{
+        run_id: run.id,
+        task_id: claim.task_id,
+        runtime_id: claim.runtime_id,
+        work_item_id: item.id,
+        runtime_epoch: run.claimed_runtime_epoch,
+        generation: run.generation,
+        claim_id: run.claim_id,
+        resource_lock_version: resource.lock_version,
+        connection_lock_version: connection.lock_version,
+        work_item_lock_version: item.lock_version,
+        action_id: action_id,
+        action_binding:
+          Map.merge(source.action_binding, %{
+            "action_id" => action_id,
+            "run_id" => run.id,
+            "task_id" => claim.task_id
+          }),
+        state: "accepted"
+      })
+
+    set_context(
+      claim
+      |> Map.new(fn {key, value} -> {Atom.to_string(key), value} end)
+      |> Map.merge(%{"action_id" => action_id, "operation" => source.operation})
+    )
+
+    %ProviderActionIntent{}
+    |> ProviderActionIntent.accept_changeset(attrs)
+    |> Repo.insert!()
+  end
+
+  defp verify_read_only_probe!(phase) do
+    expected_method = if phase == "recover", do: :post, else: :patch
+    controller = self()
+    observer_id = make_ref()
+
+    observer = fn registered, event, _name ->
+      case event do
+        {:noreply, %{jobs: jobs}} ->
+          Enum.reduce(jobs, registered, fn {worker, job}, seen ->
+            if MapSet.member?(seen, worker) do
+              seen
+            else
+              send(controller, {:read_only_probe_job_registered, worker, job.intent_id})
+              MapSet.put(seen, worker)
+            end
+          end)
+
+        {:in, {:provider_action_complete, pid, _result}} ->
+          send(controller, {:read_only_probe_job_complete, pid})
+          registered
+
+        _ ->
+          registered
+      end
+    end
+
+    :ok = :sys.install(ProviderAccess, {observer_id, observer, MapSet.new()})
+    probe = seed_read_only_probe!(phase)
+    probe_id = probe.id
+    send(ProviderAccess, :recover_interrupted_dispatches)
+
+    worker =
+      receive do
+        {:read_only_probe_job_registered, worker, ^probe_id} -> worker
+      after
+        25_000 -> fail!("read_only_recovery_probe_not_dispatched")
+      end
+
+    receive do
+      {:read_only_provider_write_blocked, ^worker, ^expected_method} -> :ok
+    after
+      25_000 -> fail!("read_only_recovery_probe_not_blocked")
+    end
+
+    receive do
+      {:read_only_probe_job_complete, ^worker} -> :ok
+    after
+      5_000 -> fail!("read_only_recovery_probe_not_finished")
+    end
+
+    :ok = :sys.remove(ProviderAccess, observer_id)
+    stored = Repo.get!(ProviderActionIntent, probe.id)
+    ensure!(stored.state == "unknown", "read_only_recovery_probe_not_attempted")
+
+    # Finish this probe's readback before another phase/context can own the audit.
+    send(ProviderAccess, :recover_interrupted_dispatches)
+
+    ProviderAccess
+    |> :sys.get_state()
+    |> Map.fetch!(:jobs)
+    |> Map.keys()
+    |> Enum.each(fn pid ->
+      reference = Process.monitor(pid)
+
+      receive do
+        {:DOWN, ^reference, :process, ^pid, _reason} -> :ok
+      after
+        25_000 -> fail!("read_only_probe_readback_not_finished")
+      end
+    end)
+
+    ensure!(
+      is_binary(Repo.get!(ProviderActionIntent, probe.id).failure["readback_observed_at"]),
+      "read_only_probe_readback_missing"
+    )
+
+    requests = Enum.filter(audits(), &(&1["phase"] == phase))
+    ensure!(Enum.all?(requests, &(&1["method"] == "GET")), "read_only_transport_mutation")
+
+    write!("read-only-#{phase}.json", %{
+      binding: receipt_binding(),
+      action_id: probe.action_id,
+      action_binding: probe.action_binding,
+      operation: probe.operation,
+      initial_state: "accepted",
+      state: stored.state,
+      blocked_method: expected_method |> Atom.to_string() |> String.upcase(),
+      blocked_before_real_transport: true,
+      provider_mutations: 0
+    })
+  end
+
   defp recover! do
     context = state_context("success")
 
@@ -733,10 +896,12 @@ defmodule CredentialedProviderWitness do
 
     ensure!(mutation_count() == count, "restart_recovery_redispatched")
     requests = length(audits())
+    stored_result = intent("crash").result
     result = execute!(context, "crash", "change.update", input("crash"))
 
     ensure!(
-      match?({:ok, _}, result) and mutation_count() == count and length(audits()) == requests,
+      result == {:ok, stored_result} and mutation_count() == count and
+        length(audits()) == requests,
       "restart_replay_redispatched"
     )
 
@@ -1246,6 +1411,13 @@ defmodule CredentialedProviderWitness.HTTP do
     unless uri.scheme == "https" and uri.host == "api.github.com" and uri.port == 443 and
              is_nil(uri.userinfo) and is_nil(uri.fragment) and allowed_path and safe_segments do
       raise "provider_destination_not_allowlisted"
+    end
+
+    state = CredentialedProviderWitness.transport_context()
+
+    if state.phase in ["recover", "finish"] and method != :get do
+      send(state.controller, {:read_only_provider_write_blocked, self(), method})
+      raise "provider_phase_read_only"
     end
 
     result = SymmetryControl.Integrations.HTTP.request(method, url, headers, body)

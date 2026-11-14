@@ -961,7 +961,13 @@ defmodule SymmetryControl.Integrations.GitHubTest do
     body = dispatched_unknown_body(resource, binding)
     pull_request = bound_pull_request(binding, body)
 
-    Enum.each([[], [pull_request, Map.put(pull_request, "number", 19)]], fn entries ->
+    other_pull_request =
+      Map.merge(pull_request, %{
+        "number" => 19,
+        "html_url" => "https://github.com/acme/symmetry/pull/19"
+      })
+
+    Enum.each([[], [pull_request, other_pull_request]], fn entries ->
       HTTPStub.expect(bound_reads(binding, entries))
 
       assert {:ok, %{status: :unconfirmed}} =

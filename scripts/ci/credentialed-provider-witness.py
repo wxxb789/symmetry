@@ -23,6 +23,10 @@ Optional subject_preparation_evidence links the parent's independently generated
 GitHub tree/blob digest evidence; this runner verifies the exact provider refs.
 An existing evidence directory is refused. --recover-existing only resumes the
 read-only recovery/final evidence phases of a preserved crashed run; never setup.
+Those phases seed separate accepted intents to prove the global broker sweep
+cannot send POST/PATCH through the real transport; only GET is permitted.
+An expired origin lease still prevents exact terminal replay; this runner never
+renews the original fence and does not support that delayed-recovery case.
 
 Artifacts: input.json, source.json, commands.jsonl, http.jsonl (flushed provider
 acknowledgements, safe request bindings and rate limits), state.json (IDs only),

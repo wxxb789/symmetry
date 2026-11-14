@@ -747,6 +747,8 @@ defmodule SymmetryControlWeb.ProviderActionControllerTest do
     assert intent.action_binding["subject"] == goal_context.task.input["subject"]
     assert intent.action_binding["repository"] == %{"id" => 123, "node_id" => "R_exact"}
     assert intent.action_binding["action_id"] == intent.action_id
+    assert intent.action_binding["run_id"] == goal_context.run.id
+    assert intent.action_binding["task_id"] == goal_context.task.id
 
     HTTPStub.expect_shared(
       exact_readback_requests(goal_context, exact_remote_pr(goal_context, body))
