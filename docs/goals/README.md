@@ -1,5 +1,26 @@
 # Next goals for local Codex
 
+Goal [0006h](archive/0006h-credentialed-provider-accounting.md) completed its
+owner-scoped 2026-11-14 closure and is archived. Approved provider effects are
+bound to the exact Subject, resource identity and payload before dispatch: a
+confirmed effect is never resent, a terminal action replays from its cached
+result, a payload that conflicts with a bound action is refused, and an unknown
+outcome is resolved by readback instead of by re-dispatch, with a migration
+adding the binding and database immutability constraints. A credentialed witness
+drove the real Control broker, Auth and HTTP path against the approved
+non-production fixture repository and produced a 201 create, a 422 definitive
+failure, an unknown outcome resolved by readback after a real broker deadline
+with exactly one mutation, whole-process restart recovery (three GETs and no
+writes) and terminal replay that re-sends nothing, with no credential value in
+any artifact, log or durable state. The owner ruled that a provider exposing no
+monetary surface satisfies the contract's "provider explicitly unavailable"
+usage branch, so the increment records `cost_microusd: null` and
+`zero_or_not_billed_established: false`; billable-usage accounting stays
+unverified, Azure DevOps effects were not run, and the two pre-existing Control
+gate failures (a repo-wide `mix format --check-formatted` divergence and a stale
+`JsonDocument` alias under `--warnings-as-errors`) remain recorded in
+`docs/TODO.md`.
+
 Goal [0006f](archive/0006f-pi-native-capability.md) completed its owner-scoped
 2026-11-14 Windows closure and is archived. The exact pi `1.5.2` Windows
 executable blob (`sha256:40a062be…`) promotes start, events, cancel and
