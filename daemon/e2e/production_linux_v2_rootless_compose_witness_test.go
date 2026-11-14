@@ -557,6 +557,8 @@ func TestRootlessComposeRuntimeRequiresOpenCodeUnavailableIdentity(t *testing.T)
 		{name: "historical version", mutate: func(value *protocol.Adapter) { value.NativeVersion = "1.18.32" }},
 		{name: "private implementation", mutate: func(value *protocol.Adapter) { value.ImplementationVersion = "private" }},
 		{name: "start", mutate: func(value *protocol.Adapter) { value.Operations.Start = true }},
+		{name: "guidance", mutate: func(value *protocol.Adapter) { value.Operations.Guidance = protocol.GuidanceNextTurn }},
+		{name: "usage", mutate: func(value *protocol.Adapter) { value.Operations.Usage = protocol.UsageEstimated }},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			mutated := runtime
@@ -595,6 +597,7 @@ func linuxV2ValidateRootlessComposeRuntime(runtime linuxV2RootlessComposeRuntime
 		harnessKind == "opencode" && (nativeVersion != "unavailable" || adapter.ImplementationVersion != "unavailable" || adapter.ProtocolVersion != 1) ||
 		adapter.NativeVersion != nativeVersion || adapter.Operations.Start || adapter.Operations.Events ||
 		adapter.Operations.Cancel || adapter.Operations.Resume || adapter.Operations.Handoff ||
+		adapter.Operations.Guidance != protocol.GuidanceUnsupported || adapter.Operations.Usage != protocol.UsageUnknown ||
 		adapter.Operations.ApprovalResponse || adapter.Operations.HardCostLimit {
 		return errors.New("runtime does not expose the exact online native profile with an unverified no-operation adapter projection")
 	}

@@ -34,7 +34,11 @@ def classify(receipt):
     classes = receipt["classes"]
     success = classes.get("success", {})
     terminal = success.get("terminal")
-    success["status"] = "observed" if terminal and terminal.get("type") == "session.execution.succeeded" else "run and failed" if "success" in classes else "unavailable"
+    if terminal or any(operation["method"] == "POST" and operation["path"].startswith("/api/session/") and operation["path"].endswith("/prompt") for operation in receipt["operations"]):
+        success["status"] = "observed" if terminal and terminal.get("type") == "session.execution.succeeded" else "run and failed"
+    else:
+        success["status"] = "unavailable"
+        success.setdefault("blocker", "no native execution request or terminal captured")
     classes["success"] = success
     failures = [event for event in receipt["events"] if event.get("type") == "session.execution.failed"
                 and event.get("data", {}).get("error", {}).get("type", "").startswith("provider.")]
@@ -55,12 +59,13 @@ def classify(receipt):
         continuation.update(status="unavailable", blocker="no successful tool continuation captured")
     classes["continuation_after_step"] = continuation
     interruption = classes.get("interruption", {})
-    if interruption:
+    if interruption.get("terminal") or any(operation["method"] == "POST" and operation["path"].startswith("/api/session/") and operation["path"].endswith("/interrupt") for operation in receipt["operations"]):
         interrupted = interruption.get("response") or {}
         terminal = interruption.get("terminal") or {}
         interruption["status"] = "observed" if interruption.get("first_token") and interrupted.get("interrupted") is True and terminal.get("type") == "session.execution.interrupted" else "run and failed"
     else:
-        interruption = {"status": "unavailable", "blocker": "no active native interruption captured"}
+        interruption["status"] = "unavailable"
+        interruption.setdefault("blocker", "no active native interruption captured")
     classes["interruption"] = interruption
     counters = []
     for operation in receipt["operations"]:

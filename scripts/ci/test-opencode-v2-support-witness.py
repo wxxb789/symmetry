@@ -34,6 +34,23 @@ class ClassificationTests(unittest.TestCase):
         self.assertEqual(receipt["classes"]["interruption"]["status"], "run and failed")
         self.assertEqual(receipt["classes"]["usage"]["status"], "unavailable")
 
+    def test_readiness_failure_without_requests_preserves_unavailable_blocker(self):
+        receipt = {"failure": "RuntimeError", "operations": [], "events": [], "classes": {
+            name: {"status": "unavailable", "blocker": "RuntimeError"}
+            for name in ("success", "interruption")
+        }}
+        classified = witness.classify(receipt)
+        for name in ("success", "interruption"):
+            with self.subTest(name=name):
+                self.assertEqual(classified["classes"][name], {"status": "unavailable", "blocker": "RuntimeError"})
+
+    def test_requests_without_terminals_are_failed_observations(self):
+        for name, route in (("success", "prompt"), ("interruption", "interrupt")):
+            with self.subTest(name=name):
+                receipt = {"operations": [{"method": "POST", "path": "/api/session/ses_native/" + route}],
+                           "events": [], "classes": {}}
+                self.assertEqual(witness.classify(receipt)["classes"][name]["status"], "run and failed")
+
     def test_step_idle_and_missing_terminal_do_not_establish_success(self):
         for kind in ("session.step.ended", "session.idle", None):
             with self.subTest(kind=kind):

@@ -74,6 +74,12 @@ labels; they were rejected, the classifier was fixed with regression coverage,
 and the final receipt was collected with the corrected classifier. No old
 summary is promoted or relabeled as an upstream event.
 
+Success and interruption are `run and failed` only when their native request
+or terminal is captured. A readiness failure before either operation leaves
+both classes `unavailable` and preserves the original blocker. The rootless
+unavailable-runtime gate requires guidance `unsupported` and usage `unknown`;
+legal protocol values such as `next_turn` and `estimated` still fail that gate.
+
 Production uses the existing unavailable registry entry, not this private
 diagnostic transport. Every operation remains unsupported; no provider access,
 hard cost limit, guidance, pause, approvals, resume or handoff is advertised.
