@@ -30,6 +30,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/codex"
+	"github.com/wxxb789/symmetry/daemon/internal/harness/omo"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/omp"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/pi"
 	"github.com/wxxb789/symmetry/daemon/internal/notification"
@@ -1165,6 +1166,7 @@ func newHarnessRegistry(profile config.AgentProfile) *harness.Registry {
 	_ = registry.Register(harness.KindClaude, harness.NewClaudeCandidateAdapter(profile.Command))
 	_ = registry.Register(harness.KindPi, pi.NewAdapter(profile.Command))
 	_ = registry.Register(harness.KindOMP, omp.NewAdapter(profile.Command))
+	_ = registry.Register(harness.KindOmO, omo.NewAdapter(profile.Command))
 	return registry
 }
 
@@ -1193,6 +1195,8 @@ func configuredHarnessKind(value string) (harness.Kind, error) {
 		return harness.KindPi, nil
 	case config.RuntimeHarnessOMP:
 		return harness.KindOMP, nil
+	case config.RuntimeHarnessOmO:
+		return harness.KindOmO, nil
 	case config.RuntimeHarnessOpenCode:
 		return harness.KindOpenCode, nil
 	default:
@@ -1202,7 +1206,7 @@ func configuredHarnessKind(value string) (harness.Kind, error) {
 
 func unavailableRuntimeKind(value string) bool {
 	switch value {
-	case config.RuntimeHarnessClaudeCode, config.RuntimeHarnessPi, config.RuntimeHarnessOMP, config.RuntimeHarnessOpenCode:
+	case config.RuntimeHarnessClaudeCode, config.RuntimeHarnessPi, config.RuntimeHarnessOMP, config.RuntimeHarnessOmO, config.RuntimeHarnessOpenCode:
 		return true
 	default:
 		return false
@@ -1214,7 +1218,7 @@ func unavailableRuntimeKind(value string) bool {
 // The generic adapter deliberately remains outside this set.
 func nativeGoalHarnessKind(kind harness.Kind) bool {
 	switch kind {
-	case harness.KindCodex, harness.KindClaude, harness.KindPi, harness.KindOMP, harness.KindOpenCode:
+	case harness.KindCodex, harness.KindClaude, harness.KindPi, harness.KindOMP, harness.KindOmO, harness.KindOpenCode:
 		return true
 	default:
 		return false
@@ -3578,7 +3582,7 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 	if !admissionPresent && daemon.config.Runtime.HarnessKind == config.RuntimeHarnessOpenCode {
 		legacyLaunchErr = daemon.harnessCapabilities.Require(harness.CapabilityStart, harness.CapabilityEvents, harness.CapabilityCancel)
 	}
-	goalAdmissionRequired := linuxNativeRuntimeRequiresGoalAdmission(daemon.config.Runtime.HarnessKind) || daemon.config.Runtime.HarnessKind == config.RuntimeHarnessOMP
+	goalAdmissionRequired := linuxNativeRuntimeRequiresGoalAdmission(daemon.config.Runtime.HarnessKind) || daemon.config.Runtime.HarnessKind == config.RuntimeHarnessOMP || daemon.config.Runtime.HarnessKind == config.RuntimeHarnessOmO
 	daemon.mu.Lock()
 	active := daemon.running[key]
 	cancelCommandID := ""
@@ -3625,8 +3629,8 @@ func (daemon *daemon) startAssigned(ctx context.Context, key state.RunKey, assig
 		daemon.waitForRunWithContext(ctx, key)
 		return
 	}
-	if daemon.config.Runtime.HarnessKind == config.RuntimeHarnessOMP {
-		daemon.queueFailure(ctx, key, "goal_admission_required", taskResultFailure(protocol.TaskResultReasonUnsupportedVersion, errors.New("OMP runtime requires a symmetry.admission.v1 Goal admission")))
+	if daemon.config.Runtime.HarnessKind == config.RuntimeHarnessOMP || daemon.config.Runtime.HarnessKind == config.RuntimeHarnessOmO {
+		daemon.queueFailure(ctx, key, "goal_admission_required", taskResultFailure(protocol.TaskResultReasonUnsupportedVersion, errors.New("OMP/OmO runtime requires a symmetry.admission.v1 Goal admission")))
 		return
 	}
 	if linuxNativeRuntimeRequiresGoalAdmission(daemon.config.Runtime.HarnessKind) {
@@ -4378,7 +4382,7 @@ func admissionLaunchFailure(admission protocol.Admission, capabilities harness.C
 	case protocol.SessionModeResume:
 		// Retained resume requires an implemented transport as well as a
 		// verified capability; other adapters cannot consume a reservation.
-		if capabilities.Kind != harness.KindPi && capabilities.Kind != harness.KindOMP {
+		if capabilities.Kind != harness.KindPi && capabilities.Kind != harness.KindOMP && capabilities.Kind != harness.KindOmO {
 			return taskResultFailure(protocol.TaskResultReasonResumeRejected, fmt.Errorf("%s: native retained resume is not implemented for harness %q", protocol.TaskResultReasonResumeRejected, capabilities.Kind))
 		}
 		if err := capabilities.Require(harness.CapabilityResume); err != nil {
@@ -4676,6 +4680,11 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 	if configuredKind == harness.KindOMP {
 		if err := omp.ValidateRPCProfileArgs(profile.Args); err != nil {
 			return fmt.Errorf("validate OMP RPC invocation before native launch: %w", err)
+		}
+	}
+	if configuredKind == harness.KindOmO {
+		if err := omo.ValidateRPCProfileArgs(profile.Args); err != nil {
+			return fmt.Errorf("validate OmO RPC invocation before native launch: %w", err)
 		}
 	}
 	if linuxV2Required {
@@ -5223,7 +5232,7 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 			abandonErr := daemon.abandonGoalSession(sessionKey, session, false, err)
 			return taskResultFailure(protocol.TaskResultReasonUnknownOutcome, errors.Join(fmt.Errorf("start native Goal session: %w", err), discardErr, abandonErr))
 		}
-		if resume != nil && (errors.Is(err, pi.ErrResumeRejected) || errors.Is(err, omp.ErrResumeRejected)) {
+		if resume != nil && (errors.Is(err, pi.ErrResumeRejected) || errors.Is(err, omp.ErrResumeRejected) || errors.Is(err, omo.ErrResumeRejected)) {
 			// The adapter rejected the retained handle before returning a session. Persist
 			// known native stop before any Control RPC so an attachment timeout can
 			// be repaired through the ready readback barrier rather than clearing
@@ -5311,7 +5320,7 @@ func (daemon *daemon) startGoalAdmission(ctx context.Context, key state.RunKey, 
 		if resume == nil {
 			discardErr = daemon.discardUnreadyGoalSessionAttachDelivery(key, localHandleID)
 		}
-		if resume != nil && (errors.Is(err, pi.ErrResumeRejected) || errors.Is(err, omp.ErrResumeRejected)) {
+		if resume != nil && (errors.Is(err, pi.ErrResumeRejected) || errors.Is(err, omp.ErrResumeRejected) || errors.Is(err, omo.ErrResumeRejected)) {
 			attachErr := daemon.attachResumedNativeSession(operationContext, key, claim, admission, sessionKey)
 			abandonErr := daemon.abandonGoalSession(sessionKey, session, attachErr == nil, err)
 			if attachErr == nil && abandonErr == nil {
@@ -9058,7 +9067,7 @@ func (daemon *daemon) verifyNativeTaskResultSubject(ctx context.Context, key sta
 			}
 			// Resume rotates execution authority, never the worktree's original owner.
 			if session.SessionMode != state.GoalSessionModeResume || session.HarnessKind != string(daemon.harnessCapabilities.Kind) ||
-				(daemon.harnessCapabilities.Kind != harness.KindPi && daemon.harnessCapabilities.Kind != harness.KindOMP) ||
+				(daemon.harnessCapabilities.Kind != harness.KindPi && daemon.harnessCapabilities.Kind != harness.KindOMP && daemon.harnessCapabilities.Kind != harness.KindOmO) ||
 				session.ResumeSourceStopCertificate == nil || !session.HasVerifiedControlAttachment() || session.NeedsReconciliation() ||
 				session.RunID != key.RunID || session.Generation != key.Generation || session.AdmissionID != admission.AdmissionID ||
 				session.GoalID != admission.GoalID || session.GoalRevision != admission.GoalRevision ||
@@ -10998,6 +11007,7 @@ func (daemon *daemon) deliverGoalDelivery(ctx context.Context, journal state.Run
 	}
 	requestContext, cancel := daemon.controlContext(ctx)
 	var attachReceipt *control.GoalSessionReceipt
+	var uncertainAttachErr error
 	var stoppedReceipt *control.GoalSessionStoppedReceipt
 	var evidenceReceipt *control.GoalEvidenceReceipt
 	var usageReceipt *control.GoalUsageReceipt
@@ -11018,7 +11028,7 @@ func (daemon *daemon) deliverGoalDelivery(ctx context.Context, journal state.Run
 		}
 		// A ready request without a verified current attachment can be the
 		// response-loss window, even when resume retains its predecessor's session
-		// ID. Read the immutable receipt before replaying its idempotent POST.
+		// ID. Read the immutable receipt before replaying its idempotent PUT.
 		readbackAPI, readbackSupported := daemon.control.(goalSessionAttachmentReadbackAPI)
 		if session, loadErr := daemon.store.LoadGoalSessionByHandle(payload.LocalHandleID); loadErr == nil && !session.HasVerifiedControlAttachment() && readbackSupported {
 			if receipt, readErr := readbackAPI.FetchHarnessSessionAttachment(requestContext, journal.RunID, delivery.Fence); readErr == nil {
@@ -11052,6 +11062,17 @@ func (daemon *daemon) deliverGoalDelivery(ctx context.Context, journal state.Run
 					err = nil
 				} else {
 					err = fmt.Errorf("read Goal session attachment after idempotency conflict: %w", readErr)
+				}
+			} else if readbackSupported && goalSessionAttachmentTransportUnknown(requestContext, err) {
+				// The PUT may have committed before its transport acknowledgement
+				// was lost. Resolve it once with the original fence and live request
+				// budget; a historical receipt never grants new execution authority.
+				if receipt, readErr := readbackAPI.FetchHarnessSessionAttachment(requestContext, journal.RunID, delivery.Fence); readErr == nil {
+					attachReceipt = &receipt
+					uncertainAttachErr = err
+					err = nil
+				} else {
+					err = goalSessionAttachmentUncertainReadbackError(err, readErr)
 				}
 			}
 		}
@@ -11121,11 +11142,11 @@ func (daemon *daemon) deliverGoalDelivery(ctx context.Context, journal state.Run
 		return journal, nil, err
 	}
 	if err := validateGoalDeliveryReceipt(journal, *delivery, attachReceipt, stoppedReceipt, evidenceReceipt, usageReceipt); err != nil {
-		return journal, nil, err
+		return journal, nil, goalSessionAttachmentUncertainReadbackError(uncertainAttachErr, err)
 	}
 	if attachReceipt != nil && validateAttach != nil {
 		if err := validateAttach(*attachReceipt); err != nil {
-			return journal, nil, err
+			return journal, nil, goalSessionAttachmentUncertainReadbackError(uncertainAttachErr, err)
 		}
 	}
 	if attachReceipt != nil {
@@ -11134,10 +11155,13 @@ func (daemon *daemon) deliverGoalDelivery(ctx context.Context, journal state.Run
 			return journal, nil, fmt.Errorf("load local Goal session for attach receipt: %w", loadErr)
 		}
 		if attachReceipt.TaskID != session.TaskID || attachReceipt.MachineID != session.MachineID {
-			return journal, nil, errors.New("Goal session attach receipt does not match local task or machine identity")
+			return journal, nil, goalSessionAttachmentUncertainReadbackError(uncertainAttachErr, errors.New("Goal session attach receipt does not match local task or machine identity"))
 		}
 		persisted, persistErr := daemon.store.PersistGoalSessionControlAttachment(session.Key(), attachReceipt.ID, attachReceipt.BindingID, attachReceipt.AttachmentReceiptID, delivery.SessionAttach.ServerIssuedBinding)
 		if persistErr != nil {
+			if errors.Is(persistErr, state.ErrGoalSessionConflict) {
+				return journal, nil, goalSessionAttachmentUncertainReadbackError(uncertainAttachErr, fmt.Errorf("persist Control Goal session attachment: %w", persistErr))
+			}
 			return journal, nil, fmt.Errorf("persist Control Goal session attachment: %w", persistErr)
 		}
 		if persisted.SessionState == state.GoalSessionStateUnavailable {
@@ -11223,6 +11247,42 @@ func goalSessionAttachmentAbsent(err error) bool {
 func goalSessionAttachmentIdempotencyConflict(err error) bool {
 	var apiError *control.APIError
 	return errors.As(err, &apiError) && apiError.StatusCode == http.StatusConflict && apiError.Code == control.IdempotencyConflict
+}
+
+func goalSessionAttachmentTransportUnknown(ctx context.Context, err error) bool {
+	// RetryDelay also admits 429/5xx, which are definite HTTP responses rather
+	// than lost acknowledgements. A permanent response can wrap EOF as well.
+	var apiError *control.APIError
+	var responseError *control.ResponseError
+	if errors.As(err, &apiError) || errors.As(err, &responseError) {
+		return false
+	}
+	if (ctx != nil && ctx.Err() != nil) || errors.Is(err, context.Canceled) {
+		return false
+	}
+	// http.Client can wrap a RoundTripper's url.Error in another url.Error.
+	// Every such layer implements net.Error even for a permanent local cause;
+	// strip them all before reusing Control's underlying transport-cause set.
+	var requestError *url.Error
+	for errors.As(err, &requestError) {
+		err = requestError.Err
+	}
+	_, transportUnknown := control.RetryDelay(ctx, err, 0)
+	return transportUnknown
+}
+
+func goalSessionAttachmentUncertainReadbackError(attachErr, readErr error) error {
+	if attachErr == nil {
+		return readErr
+	}
+	var apiError *control.APIError
+	if errors.As(readErr, &apiError) && (apiError.StatusCode == http.StatusUnauthorized || apiError.StatusCode == http.StatusForbidden || control.IsOwnershipLost(readErr)) {
+		return readErr
+	}
+	// Absence, another lost response or an invalid identity cannot disprove the
+	// original PUT commit. Keep its transport classification and exact outbox;
+	// in particular, do not retire it as a permanent GET 404 rejection.
+	return fmt.Errorf("read Goal session attachment after uncertain transport (%v): %w", readErr, attachErr)
 }
 
 // flushLateGoalUsage drains the retained accounting ledger independently of

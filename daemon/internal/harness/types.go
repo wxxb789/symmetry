@@ -25,6 +25,7 @@ const (
 	KindClaude   Kind = "claude"
 	KindPi       Kind = "pi"
 	KindOMP      Kind = "omp"
+	KindOmO      Kind = "omo"
 	KindOpenCode Kind = "opencode"
 )
 

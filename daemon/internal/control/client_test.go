@@ -19,6 +19,105 @@ import (
 
 const machineToken = "machine-token"
 
+func TestOmOReviewRegressionClientRegistersNativeRuntime(t *testing.T) {
+	repositoryResourceID := "77777777-7777-4777-8777-777777777777"
+	for _, kind := range []string{"omo", "unknown_native"} {
+		t.Run(kind, func(t *testing.T) {
+			registration := protocol.RuntimeRegistration{
+				RuntimeKey: "omo", Name: "OmO", Capacity: 1, AgentProfile: "omo", Workspace: "primary",
+				RepositoryResourceID: &repositoryResourceID,
+				HarnessKind:          kind, HarnessVersion: "5.1.69", AdapterVersion: "omo-rpc-v1", AdapterProtocolVersion: 1,
+				Capabilities: protocol.RuntimeCapabilities{
+					StructuredInput: true,
+					Adapter: &protocol.Adapter{
+						Kind: "omo", NativeVersion: "5.1.69", ImplementationVersion: "omo-rpc-v1", ProtocolVersion: 1,
+						Operations: protocol.AdapterOperations{
+							Start: true, Events: true, Cancel: true, Resume: true, Handoff: true,
+							Guidance: protocol.GuidanceUnsupported, Pause: protocol.PauseUnsupported, Usage: protocol.UsageUnknown,
+						},
+					},
+				},
+			}
+			if kind != "omo" {
+				registration.Capabilities.Adapter = nil
+			}
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				requests.Add(1)
+				if request.Method != http.MethodPut || request.URL.RequestURI() != "/api/v1/machines/machine-1/sessions/daemon-1" {
+					t.Errorf("request = %s %s", request.Method, request.URL.RequestURI())
+				}
+				if request.Header.Get("Authorization") != "Bearer "+machineToken {
+					t.Error("machine authentication missing")
+				}
+				body, err := io.ReadAll(request.Body)
+				if err != nil {
+					t.Error(err)
+					writer.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				var received struct {
+					Runtimes []struct {
+						RuntimeKey             string `json:"runtime_key"`
+						AgentProfile           string `json:"agent_profile"`
+						Workspace              string `json:"workspace"`
+						RepositoryResourceID   string `json:"repository_resource_id"`
+						HarnessKind            string `json:"harness_kind"`
+						HarnessVersion         string `json:"harness_version"`
+						AdapterVersion         string `json:"adapter_version"`
+						AdapterProtocolVersion int    `json:"adapter_protocol_version"`
+						Capabilities           struct {
+							StructuredInput bool              `json:"structured_input"`
+							ProviderAccess  *bool             `json:"provider_access"`
+							Adapter         *protocol.Adapter `json:"adapter"`
+						} `json:"capabilities"`
+					} `json:"runtimes"`
+				}
+				if err := json.Unmarshal(body, &received); err != nil || len(received.Runtimes) != 1 {
+					t.Errorf("registration request cannot be consumed: runtimes=%d error=%v", len(received.Runtimes), err)
+					writer.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				actual := received.Runtimes[0]
+				if actual.RuntimeKey != "omo" || actual.AgentProfile != "omo" || actual.Workspace != "primary" || actual.RepositoryResourceID != repositoryResourceID || actual.HarnessKind != "omo" || actual.HarnessVersion != "5.1.69" || actual.AdapterVersion != "omo-rpc-v1" || actual.AdapterProtocolVersion != 1 {
+					t.Errorf("registration native identity = %+v", actual)
+				}
+				if !actual.Capabilities.StructuredInput || actual.Capabilities.ProviderAccess == nil || *actual.Capabilities.ProviderAccess {
+					t.Errorf("registration must support structured input without provider broker access: %+v", actual.Capabilities)
+				}
+				adapter := actual.Capabilities.Adapter
+				wantOperations := protocol.AdapterOperations{
+					Start: true, Events: true, Cancel: true, Resume: true, Handoff: true,
+					Guidance: protocol.GuidanceUnsupported, Pause: protocol.PauseUnsupported, Usage: protocol.UsageUnknown,
+				}
+				if adapter == nil || adapter.Kind != "omo" || adapter.NativeVersion != "5.1.69" || adapter.ImplementationVersion != "omo-rpc-v1" || adapter.ProtocolVersion != 1 || adapter.Operations != wantOperations {
+					t.Errorf("registration native operation projection = %+v", adapter)
+				}
+				writer.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(writer, `{"runtimes":[{"runtime_key":"omo","runtime_id":"runtime-omo","runtime_epoch":7}],"heartbeat_interval_ms":5000,"poll_interval_ms":4000,"lease_duration_ms":30000,"websocket_path":"/socket/websocket?vsn=2.0.0"}`)
+			}))
+			defer server.Close()
+			client, err := NewClient(server.URL, machineToken, server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := client.RegisterSession(context.Background(), "machine-1", "daemon-1", protocol.SessionRegistrationRequest{Runtimes: []protocol.RuntimeRegistration{registration}})
+			if kind != "omo" {
+				if err == nil || !strings.Contains(err.Error(), "harness_kind") || requests.Load() != 0 {
+					t.Fatalf("unknown kind crossed HTTP boundary: requests=%d error=%v", requests.Load(), err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("OmO registration rejected: %v", err)
+			}
+			if requests.Load() != 1 || len(response.Runtimes) != 1 || response.Runtimes[0].RuntimeKey != "omo" || response.Runtimes[0].RuntimeID != "runtime-omo" || response.Runtimes[0].RuntimeEpoch != 7 || response.HeartbeatIntervalMS != 5000 || response.PollIntervalMS != 4000 || response.LeaseDurationMS != 30000 || response.WebSocketPath != "/socket/websocket?vsn=2.0.0" {
+				t.Fatalf("OmO registration receipt = %+v, requests=%d", response, requests.Load())
+			}
+		})
+	}
+}
+
 func TestClientProtocolRequests(t *testing.T) {
 	now := time.Date(2026, time.September, 2, 0, 0, 30, 0, time.UTC)
 	var enrollmentClient *EnrollmentClient

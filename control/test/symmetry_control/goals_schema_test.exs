@@ -210,6 +210,46 @@ defmodule SymmetryControl.GoalsSchemaTest do
     assert generic.valid?
   end
 
+  test "runtime and session changesets accept omo metadata but reject unknown harness kinds" do
+    metadata = %{
+      harness_kind: "omo",
+      harness_version: "5.1.69",
+      adapter_version: "omo-rpc-v1",
+      adapter_protocol_version: 1
+    }
+
+    runtime_attrs = Map.merge(runtime_attrs(), metadata)
+    assert Runtime.changeset(%Runtime{}, runtime_attrs).valid?
+
+    session_attrs =
+      metadata
+      |> Map.delete(:adapter_protocol_version)
+      |> Map.merge(%{
+        machine_id: @id,
+        runtime_id: @other_id,
+        repository_resource_id: @id,
+        local_handle_id: @other_id,
+        binding_id: @id,
+        binding_verified: true,
+        workspace_fingerprint: "workspace:omo",
+        state: "available"
+      })
+
+    assert HarnessSession.changeset(%HarnessSession{}, session_attrs).valid?
+
+    unknown_runtime =
+      Runtime.changeset(%Runtime{}, Map.put(runtime_attrs, :harness_kind, "unknown"))
+
+    assert "is invalid" in errors_on(unknown_runtime).harness_kind
+
+    for kind <- ["unknown", "generic"] do
+      unknown_session =
+        HarnessSession.changeset(%HarnessSession{}, Map.put(session_attrs, :harness_kind, kind))
+
+      assert "is invalid" in errors_on(unknown_session).harness_kind
+    end
+  end
+
   test "Goal WorkItem membership is all present or all absent and cannot be rewritten" do
     partial = WorkItem.goal_membership_changeset(%WorkItem{}, %{goal_id: @id})
     assert "must be present for a Goal WorkItem" in errors_on(partial).admitted_revision

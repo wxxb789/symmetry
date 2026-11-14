@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
@@ -34,6 +35,72 @@ const (
 	goalSessionID             = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
 	goalBindingID             = "ffffffff-ffff-4fff-8fff-ffffffffffff"
 )
+
+func TestOmOReviewRegressionClientAttachesNativeSession(t *testing.T) {
+	for _, test := range []struct {
+		name, kind, receiptKind, wantError string
+		status                             int
+	}{
+		{name: "created", kind: "omo", receiptKind: "omo", status: http.StatusCreated},
+		{name: "idempotent", kind: "omo", receiptKind: "omo", status: http.StatusOK},
+		{name: "different receipt kind", kind: "omo", receiptKind: "pi", status: http.StatusOK, wantError: "harness or workspace identity"},
+		{name: "unknown outbound kind", kind: "unknown_native", receiptKind: "omo", status: http.StatusOK, wantError: "harness_kind"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			attach := goalSessionRequest()
+			attach.HarnessKind, attach.HarnessVersion, attach.AdapterVersion = test.kind, "5.1.69", "omo-rpc-v1"
+			resourceID := goalResourceID
+			attach.RepositoryResourceID = &resourceID
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				requests.Add(1)
+				if request.Method != http.MethodPut || request.URL.RequestURI() != "/api/v1/runs/"+goalRunID+"/session" {
+					t.Errorf("request = %s %s", request.Method, request.URL.RequestURI())
+				}
+				if request.Header.Get("Authorization") != "Bearer "+machineToken {
+					t.Error("machine authentication missing")
+				}
+				body := readRequestBody(t, request)
+				for key, want := range map[string]any{
+					"runtime_id": goalRuntimeID, "runtime_epoch": float64(3), "generation": float64(2),
+					"claim_id": goalClaimID, "lease_token": goalLeaseToken, "local_handle_id": goalHandleID,
+					"binding_id": goalBindingID, "repository_resource_id": goalResourceID,
+					"harness_kind": "omo", "harness_version": "5.1.69", "adapter_version": "omo-rpc-v1",
+					"workspace_fingerprint": "workspace-fingerprint-1", "workspace": "primary",
+				} {
+					assertJSONField(t, body, key, want)
+				}
+				if len(body) != 13 {
+					t.Errorf("attach body contains unexpected fields: %+v", body)
+				}
+				response := strings.Replace(goalSessionReceiptJSON(), `"harness_kind":"codex"`, `"harness_kind":"`+test.receiptKind+`"`, 1)
+				response = strings.Replace(response, `"harness_version":"1.2.3"`, `"harness_version":"5.1.69"`, 1)
+				response = strings.Replace(response, `"adapter_version":"symmetry-adapter-1"`, `"adapter_version":"omo-rpc-v1"`, 1)
+				writer.Header().Set("Content-Type", "application/json")
+				writer.WriteHeader(test.status)
+				_, _ = io.WriteString(writer, response)
+			}))
+			defer server.Close()
+			receipt, err := mustMachineClient(t, server).AttachHarnessSession(context.Background(), goalRunID, attach)
+			if test.wantError != "" {
+				wantRequests := int32(1)
+				if test.kind != "omo" {
+					wantRequests = 0
+				}
+				if err == nil || !strings.Contains(err.Error(), test.wantError) || requests.Load() != wantRequests {
+					t.Fatalf("attach error=%v requests=%d, want %q requests=%d", err, requests.Load(), test.wantError, wantRequests)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("OmO session attach rejected: %v", err)
+			}
+			if requests.Load() != 1 || receipt.ID != goalSessionID || receipt.SessionID != goalSessionID || receipt.RunID != goalRunID || receipt.RuntimeID != goalRuntimeID || receipt.AttachmentReceiptID != "11111111-1111-4111-8111-111111111111" || receipt.LocalHandleID != goalHandleID || receipt.BindingID != goalBindingID || receipt.RepositoryResourceID != goalResourceID || receipt.HarnessKind != "omo" || receipt.HarnessVersion != "5.1.69" || receipt.AdapterVersion != "omo-rpc-v1" || receipt.State != "busy" {
+				t.Fatalf("OmO attach receipt = %+v, requests=%d", receipt, requests.Load())
+			}
+		})
+	}
+}
 
 func TestGoalMachineEndpointsPropagateFenceAndStrictlyDecodeReceipts(t *testing.T) {
 	tests := []struct {

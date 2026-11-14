@@ -6,7 +6,7 @@ import "testing"
 // session attach validation; a kind that is missing here fails locally before
 // any Control request is made.
 func TestValidateGoalSessionAttachAcceptsEveryConfiguredHarnessKind(t *testing.T) {
-	for _, kind := range []string{"codex", "claude_code", "pi", "omp", "opencode"} {
+	for _, kind := range []string{"codex", "claude_code", "pi", "omp", "omo", "opencode"} {
 		t.Run(kind, func(t *testing.T) {
 			request := goalSessionRequest()
 			request.HarnessKind = kind

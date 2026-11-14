@@ -231,7 +231,7 @@ func validateRuntimeMetadata(kind, harnessVersion, adapterVersion string, protoc
 		return errors.New("harness metadata exceeds its wire length limit")
 	}
 	switch kind {
-	case "generic", "codex", "claude_code", "pi", "omp", "opencode":
+	case "generic", "codex", "claude_code", "pi", "omp", "omo", "opencode":
 	default:
 		return fmt.Errorf("harness_kind %q is invalid", kind)
 	}

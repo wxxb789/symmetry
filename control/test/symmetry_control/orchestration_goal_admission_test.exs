@@ -104,58 +104,62 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     assert replayed.harness_kind == nil
   end
 
-  test "legacy scheduling cannot select an unverified OMP runtime with empty task requirements" do
-    runtime = register_unverified_omp_runtime("legacy-omp-scheduling")
+  test "legacy scheduling cannot select an unverified OMP or OmO runtime with empty task requirements" do
+    for kind <- ["omp", "omo"] do
+      runtime = register_unverified_omp_runtime("legacy-#{kind}-scheduling", kind)
 
-    assert {:ok, task, :created} =
-             Orchestration.submit_task(legacy_task_attrs(), Ecto.UUID.generate(), now: @now)
+      assert {:ok, task, :created} =
+               Orchestration.submit_task(legacy_task_attrs(), Ecto.UUID.generate(), now: @now)
 
-    assert task.goal_id == nil
-    assert task.required_capabilities == %{}
-    assert task.input == %{}
-    assert task.agent_profile == runtime.agent_profile
-    assert task.workspace == runtime.workspace
+      assert task.goal_id == nil
+      assert task.required_capabilities == %{}
+      assert task.input == %{}
+      assert task.agent_profile == runtime.agent_profile
+      assert task.workspace == runtime.workspace
 
-    assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
-    assert %{state: "queued", current_generation: 0} = Repo.get!(Task, task.id)
-    refute Repo.exists?(from run in Run, where: run.task_id == ^task.id)
+      assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
+      assert %{state: "queued", current_generation: 0} = Repo.get!(Task, task.id)
+      refute Repo.exists?(from run in Run, where: run.task_id == ^task.id)
+    end
   end
 
-  test "legacy claim rejects a manually assigned unverified OMP runtime without issuing a lease" do
-    runtime = register_unverified_omp_runtime("legacy-omp-claim")
+  test "legacy claim rejects a manually assigned unverified OMP or OmO runtime without issuing a lease" do
+    for kind <- ["omp", "omo"] do
+      runtime = register_unverified_omp_runtime("legacy-#{kind}-claim", kind)
 
-    assert {:ok, task, :created} =
-             Orchestration.submit_task(legacy_task_attrs(), Ecto.UUID.generate(), now: @now)
+      assert {:ok, task, :created} =
+               Orchestration.submit_task(legacy_task_attrs(), Ecto.UUID.generate(), now: @now)
 
-    assert task.goal_id == nil
-    assert task.required_capabilities == %{}
-    assert task.input == %{}
-    assert task.agent_profile == runtime.agent_profile
-    assert task.workspace == runtime.workspace
-    run = insert_assigned_run!(task, runtime)
+      assert task.goal_id == nil
+      assert task.required_capabilities == %{}
+      assert task.input == %{}
+      assert task.agent_profile == runtime.agent_profile
+      assert task.workspace == runtime.workspace
+      run = insert_assigned_run!(task, runtime)
 
-    assert {:error, :ownership_lost} =
-             Orchestration.claim(
-               run.id,
-               %{
-                 runtime_id: runtime.id,
-                 runtime_epoch: runtime.connection_epoch,
-                 generation: run.generation,
-                 claim_id: Ecto.UUID.generate()
-               },
-               now: @now
-             )
+      assert {:error, :ownership_lost} =
+               Orchestration.claim(
+                 run.id,
+                 %{
+                   runtime_id: runtime.id,
+                   runtime_epoch: runtime.connection_epoch,
+                   generation: run.generation,
+                   claim_id: Ecto.UUID.generate()
+                 },
+                 now: @now
+               )
 
-    assert %{state: "assigned", current_generation: 1} = Repo.get!(Task, task.id)
+      assert %{state: "assigned", current_generation: 1} = Repo.get!(Task, task.id)
 
-    assert %{
-             state: "assigned",
-             claimed_runtime_epoch: nil,
-             claim_id: nil,
-             lease_token: nil,
-             claimed_at: nil,
-             lease_expires_at: nil
-           } = Repo.get!(Run, run.id)
+      assert %{
+               state: "assigned",
+               claimed_runtime_epoch: nil,
+               claim_id: nil,
+               lease_token: nil,
+               claimed_at: nil,
+               lease_expires_at: nil
+             } = Repo.get!(Run, run.id)
+    end
   end
 
   test "non-OMP runtimes retain legacy scheduling and claim with empty task requirements" do
@@ -404,6 +408,85 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     assert native_runtime.capabilities["adapter"] == adapter
   end
 
+  test "omo metadata persists and native assignment still requires adapter capabilities" do
+    {task, _goal_id} = insert_goal_task(max_run_attempts: 2)
+    repository_resource_id = Repo.get!(WorkItem, task.work_item_id).repository_resource_id
+    machine = enroll_machine("omo-runtime")
+    daemon_instance_id = Ecto.UUID.generate()
+
+    specification =
+      runtime_spec("omo-runtime", %{
+        repository_resource_id: repository_resource_id,
+        harness_kind: "omo",
+        harness_version: "5.1.69",
+        adapter_version: "omo-rpc-v1",
+        adapter_protocol_version: 1
+      })
+
+    assert {:ok, [metadata_only_runtime]} =
+             Orchestration.register_runtimes(machine.id, daemon_instance_id, [specification],
+               now: @now
+             )
+
+    persisted_runtime = Repo.get!(Runtime, metadata_only_runtime.id)
+    assert persisted_runtime.harness_kind == "omo"
+    assert persisted_runtime.harness_version == "5.1.69"
+    assert persisted_runtime.adapter_version == "omo-rpc-v1"
+    assert persisted_runtime.adapter_protocol_version == 1
+    assert persisted_runtime.capabilities == %{}
+    assert {:error, :no_assignment} = Orchestration.assign_one(now: @now)
+
+    specification =
+      Map.put(specification, :capabilities, %{
+        "structured_input" => true,
+        "interactive" => true,
+        "adapter" => native_adapter("omo", "5.1.69", "omo-rpc-v1", 1)
+      })
+
+    assert {:ok, [runtime]} =
+             Orchestration.register_runtimes(machine.id, daemon_instance_id, [specification],
+               now: @now
+             )
+
+    assert runtime.id == metadata_only_runtime.id
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+    assert run.task_id == task.id
+    assert run.runtime_id == runtime.id
+    fence = claim(run, runtime)
+
+    session_attrs = %{
+      local_handle_id: Ecto.UUID.generate(),
+      harness_kind: "omo",
+      harness_version: "5.1.69",
+      adapter_version: "omo-rpc-v1",
+      workspace_fingerprint: "workspace:#{runtime.id}",
+      workspace: "primary",
+      repository_resource_id: repository_resource_id
+    }
+
+    assert {:error, :invalid_request} =
+             Goals.attach_harness_session(
+               machine.id,
+               run.id,
+               fence,
+               Map.put(session_attrs, :harness_kind, "unknown"),
+               now: @now
+             )
+
+    assert {:ok, %{session: %{id: session_id}}, :created} =
+             Goals.attach_harness_session(machine.id, run.id, fence, session_attrs, now: @now)
+
+    session = Repo.get!(HarnessSession, session_id)
+    assert session.harness_kind == "omo"
+    assert session.harness_version == "5.1.69"
+    assert session.adapter_version == "omo-rpc-v1"
+    assert session.runtime_id == runtime.id
+    assert session.state == "busy"
+    assert session.active_run_id == run.id
+    assert session.binding_verified
+    assert Repo.get!(Run, run.id).harness_session_id == session.id
+  end
+
   test "runtime registration rejects incomplete or incompatible adapter declarations" do
     machine = enroll_machine("invalid-adapter")
 
@@ -424,6 +507,21 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
         adapter_version: "symmetry-omp-1",
         adapter_protocol_version: 1,
         capabilities: %{"adapter" => native_adapter("pi", "18.20.0", "symmetry-omp-1", 1)}
+      }),
+      runtime_spec("omo-is-not-pi", %{
+        harness_kind: "omo",
+        harness_version: "5.1.69",
+        adapter_version: "omo-rpc-v1",
+        adapter_protocol_version: 1,
+        capabilities: %{
+          "adapter" => native_adapter("pi", "5.1.69", "omo-rpc-v1", 1)
+        }
+      }),
+      runtime_spec("unknown-omo-kind", %{
+        harness_kind: "unknown",
+        harness_version: "5.1.69",
+        adapter_version: "omo-rpc-v1",
+        adapter_protocol_version: 1
       }),
       runtime_spec("unbound-adapter", %{
         capabilities: %{"adapter" => native_adapter("codex", "0.153.4", "symmetry-codex-1", 1)}
@@ -3550,11 +3648,17 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
     }
   end
 
-  defp register_unverified_omp_runtime(label) do
+  defp register_unverified_omp_runtime(label, kind \\ "omp") do
     machine = enroll_machine(label)
 
+    {native_version, implementation_version, protocol_version} =
+      case kind do
+        "omo" -> {"5.1.69", "omo-rpc-v1", 1}
+        "omp" -> {"18.20.0", "omp-rpc-v2", 2}
+      end
+
     adapter =
-      native_adapter("omp", "18.20.0", "omp-rpc-v2", 2)
+      native_adapter(kind, native_version, implementation_version, protocol_version)
       |> Map.put("operations", %{
         "start" => false,
         "events" => false,
@@ -3570,10 +3674,10 @@ defmodule SymmetryControl.OrchestrationGoalAdmissionTest do
 
     specification =
       runtime_spec(label, %{
-        harness_kind: "omp",
-        harness_version: "18.20.0",
-        adapter_version: "omp-rpc-v2",
-        adapter_protocol_version: 2,
+        harness_kind: kind,
+        harness_version: native_version,
+        adapter_version: implementation_version,
+        adapter_protocol_version: protocol_version,
         capabilities: %{
           "structured_input" => true,
           "provider_access" => false,

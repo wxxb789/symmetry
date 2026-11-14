@@ -130,7 +130,8 @@ defmodule SymmetryControl.Orchestration.Runtime do
       "claude_code",
       "pi",
       "opencode",
-      "omp"
+      "omp",
+      "omo"
     ])
     |> validate_length(:harness_kind, min: 1, max: 120)
     |> validate_length(:harness_version, min: 1, max: 240)
