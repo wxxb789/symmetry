@@ -5,7 +5,7 @@
 > this goal reviews the whole series against the full acceptance contract below.
 
 Review the exact release Subject and the evidence produced by
-[0006i](archive/0006i-exact-subject-release-acceptance.md). That goal owns release
+[0006i](0006i-exact-subject-release-acceptance.md). That goal owns release
 validation and authenticated operator acceptance; this review verifies their
 coverage and validity without issuing another `achieve` or repeating the
 implementation goals.
@@ -22,8 +22,8 @@ affected validation before finishing the review.
 Make Symmetry sustain engineering goals across sessions, interrupted executions
 and compatible harness handoffs while preserving approved intent, authority,
 useful context, dependencies and verifiable progress. Implement within the fixed
-contracts in [core](../design/core.md), [data](../design/data.md),
-[protocol](../design/protocol.md) and [harness](../design/harness.md).
+contracts in [core](../../design/core.md), [data](../../design/data.md),
+[protocol](../../design/protocol.md) and [harness](../../design/harness.md).
 
 Completion is demonstrated by real repository work using Codex, Claude Code, Pi,
 Oh My Pi (OMP), OmO and OpenCode V2 at each goal's current latest-stable pin,

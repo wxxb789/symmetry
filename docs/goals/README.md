@@ -1,5 +1,24 @@
 # Next goals for local Codex
 
+Goal [0006-final](archive/0006-final.md) completed its documentation-only review
+recording on 2026-11-15 and is archived with its text unchanged and its five
+relative link targets rebased for the archive directory; **full-series acceptance
+remains incomplete**. The
+[final series-review receipt](../evidence/goal-0006-final-series-review-2026-11-15.md)
+maps every contract cluster to its evidence and validity for release commit
+`8ded77150ec0ae49d52355670fdad78a348bf1d5`, Git tree
+`3a1dec551b0e2c630f6720d8a542343648270793`, protocol `tree_digest`
+`sha256:fafc72dc79a081c0e23bf08d812462f33b6c36cc247d580eab643ee5f215de9c`.
+The recorded local operator acceptance/`achieve` and hosted qualification attempts
+in 0006i's later addenda supersede the pending wording in its older closure below;
+this review issues no new `achieve`. Hosted native-v2 acceptance remains
+environment-limited, billable provider accounting unverified, OMP unpromoted
+(its original zero-spend explanation conflicts with later recorded authorized
+native runs), and 0006k has no closure paragraph or archived goal file despite
+PR #22, its review/fix round and CI evidence. Native support and recovery remain
+bounded as the receipt specifies. Archival closes the review record, not the
+missing requirements or the contract's lettered-goal prerequisites.
+
 Goal [0006i](archive/0006i-exact-subject-release-acceptance.md) completed its
 recording closure on 2026-11-15 and is archived. The Goal-0006 release candidate
 is frozen as one exact Subject: commit `8ded771`, tree digest
@@ -142,7 +161,7 @@ acceptance actions. Missing evidence or unresolved requirements block completion
 | [0006i](archive/0006i-exact-subject-release-acceptance.md) | Exact-subject release and authorized acceptance |
 | [0006j](0006j-omp-native-capability.md) | Evidence-bounded Oh My Pi native capability |
 | [0006k](0006k-omo-native-capability.md) | Evidence-bounded OmO native capability |
-| [0006-final](0006-final.md) | Final review of the complete durable-work outcome and acceptance evidence |
+| [0006-final](archive/0006-final.md) | Archived series-review record; full-series acceptance incomplete |
 
 ## Modern workspace
 

@@ -223,7 +223,7 @@ files stay.
 
 `docs/design/harness.md` (Claude row, blob binding, Linux fail-closed, permission
 amendment), `docs/goals/README.md` index entry, goal file moved unchanged to
-`docs/goals/archive/0006e-claude-native-capability.md`, and `docs/goals/0006-final.md`
+`docs/goals/archive/0006e-claude-native-capability.md`, and `docs/goals/archive/0006-final.md`
 only if the new pin makes it stale.
 
 ## Out of scope
