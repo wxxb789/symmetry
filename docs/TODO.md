@@ -24,3 +24,4 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       reported these compiler warnings (`.tmp/0007a-session/control-test.log`).
       Preserve the fixture calls and leave any binding cleanup to separate
       maintenance.
+- `docs/goals/README.md` index row for 0006h targets `0006h-credentialed-provider-accounting.md` while the file lives at `docs/goals/archive/0006h-credentialed-provider-accounting.md` (pre-existing dead link; disclosed in the 0006-final series-review receipt F8). Revalidate and fix in a separate maintenance change.
