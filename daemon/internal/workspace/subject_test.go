@@ -1185,7 +1185,12 @@ func TestSubjectBatchStreamCancelFailureFallsBackToKill(t *testing.T) {
 		digest string
 		err    error
 	}
-	opened := make(chan *subjectGitBatchStream, 1)
+	// Unbuffered handshake: the opener cannot return until this test has taken
+	// the stream, so the digest cannot publish an outcome while the select below
+	// still has the unused-stream arm to consider. With a buffered stream channel
+	// a digest that finished early made both arms ready and the select could
+	// report the injected stream as unused after it had been used.
+	opened := make(chan *subjectGitBatchStream)
 	result := make(chan digestOutcome, 1)
 	go func() {
 		digest, err := gitTreeDigestWithReaders(ctx, repository, commit, subjectGitCommandOutput,
