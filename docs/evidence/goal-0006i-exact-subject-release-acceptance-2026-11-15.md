@@ -21,7 +21,7 @@ itself authority or declare the goal achieved.
 | Reviewed head | `109f6037a34ad340219fa6c07c3db4145e2377a1` (`git cat-file -t` → `commit`) | exit 0 |
 | Tree equivalence | `git rev-parse 109f6037a34ad340219fa6c07c3db4145e2377a1^{tree}` → `3a1dec551b0e2c630f6720d8a542343648270793` — **byte-identical to the Subject tree** because PR #22 was squash-merged | exit 0 |
 
-### Achieve binding — pending (not proved by this record)
+### Achieve binding — requirement (satisfied by the record below)
 
 The commit and Git tree object id above are **provenance**, not the control-plane
 `Subject`: `parse_subject/1` (`control/lib/symmetry_control/goals.ex:9579`) accepts only
@@ -53,6 +53,40 @@ protocol `tree_digest`) is now closed by measurement — the two values differ, 
 `resource_id` exists, the `achieve` subject is fully determined:
 `{"resource_id": <uuid>, "commit": "8ded77150ec0ae49d52355670fdad78a348bf1d5",
 "tree_digest": "sha256:fafc72dc79a081c0e23bf08d812462f33b6c36cc247d580eab643ee5f215de9c"}`.
+
+### Achieve record — satisfied 2026-11-15 on the local acceptance stack
+
+The operator predicate is no longer pending. A Control-plane goal was driven end to end on the
+local acceptance stack, with a **real OmO 5.1.69 native run** producing the validation evidence and
+the accepted outcome; nothing was fabricated and no synthetic evidence row was substituted.
+
+| Item | Value |
+| --- | --- |
+| Goal | `0b1c2512-5feb-48b2-bb01-55e80cda81a8` — revision 1, state **`achieved`**, event_sequence 12, one `achieve` event |
+| Subject | commit `8ded77150ec0ae49d52355670fdad78a348bf1d5`, `tree_digest` `sha256:fafc72dc79a081c0e23bf08d812462f33b6c36cc247d580eab643ee5f215de9c`, canonical `subject_hash` `sha256:db8f19f427cdf77b8038e9042bc5091bf782a7f97b820924f195f9517ec2e7b4` |
+| Repository resource | `eb968617-36be-48ce-8321-b6b20f7ce77f` — the local acceptance project's repository resource, **not** a production repository identity |
+| Work item | `c32d69f1-56cd-4348-80d5-e4d56f79db8e` (`required`, `integration`, accepted) |
+| Plan decision | `b45435c8-41bd-4dcf-91f3-9aaaef04cd84` (plan, resolved/accept) |
+| Producer | task `b3b6fa0d-2e36-4020-a3a6-ba57afa2b20c` → run `332e8267-d3fd-40b9-beab-e71b041947af` (`completed`), runtime `accept-omo`, harness **omo 5.1.69 / omo-rpc-v1**, model `deepseek-v4.1-flash-fast` via provider `tencent-litellm`, 329 run events, result `3f7a1c62-9b04-4d18-8e57-2a6c0f4b91de` |
+| Validator | task `1934e7d1-171a-4472-b732-288bc53347f1` → run `9af2376a-5207-465f-b674-a308528e7dc6` — deterministic artifact validator, no native session |
+| Evidence | `bcbbbff1-6ec5-4009-a983-841a404d3c92`, key `artifact:c7c5c1d70c5dec4416ab6158afd0b223ef40c29b1dc1f97ed9428b94d4cadb1c`, kind `artifact`, validator_profile `artifact`, verdict `passed`, `source_revision` `commit:8ded7715…`, `subject_hash` as above — appended by the daemon through `POST /api/v1/runs/:id/evidence` |
+| Accepted outcome | `01f9166f-80e4-4777-813e-26cd11917cf4` (derived at settlement, reason `validation_passed`) |
+| Completion decision | `8a37fb14-f921-4d8a-afdd-a8bf4a8de552` (completion, resolved/accept) |
+| Achieve | HTTP 200, event `7a9c86ee-d600-4b2f-b9c7-a56257617a97` (sequence 12); a replay with the same `mutation_id` returned the identical receipt and added no event |
+
+Observed facts a repeat run needs (operator runbook):
+
+- the project's `default_workspace` must equal the runtime's workspace binding name — plan items
+  inherit it and assignment requires equality;
+- OmO resolves its provider configuration from `$HOME/.omo/agent/models.json` (not `$HOME/agent/…`),
+  with `apiKey` as the literal `$SYMMETRY_OMO_PROBE_KEY` environment reference;
+- the producing turn must be told to avoid interactive/question tools (the daemon's OmO validator
+  accepts only `notify/setStatus/setWidget/setTitle/set_editor_text`), and the model cannot compute
+  the canonical `subject_hash` itself (the daemon launches the harness with `--tools read,write`),
+  so the exact contract values must be supplied in the task text.
+
+This record is evidence of a real native run against the frozen Subject. It does **not** claim a
+production repository identity, billable provider accounting, or a hosted runner.
 
 Because the trees are identical, the CI runs and the independent review executed on
 `109f6037…` are evidence for the Subject `8ded771` and are cited below rather than
