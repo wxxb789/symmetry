@@ -1,0 +1,182 @@
+name: Linux native v2 acceptance
+
+on:
+  # Dispatch-only on purpose: scripts/ci/linux-v2-native-acceptance.sh refuses
+  # any event other than workflow_dispatch.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-native-v2-acceptance:
+    needs: contracts
+    if: github.event_name == 'workflow_dispatch'
+    # SECURITY PRECONDITION: The public repo currently has one writer. Before
+    # dispatch, verify the Environment requires @wxxb789's separate approval,
+    # permits self-review, and admits only the reviewed 0006b branch.
+    # Require an independent reviewer and prevent_self_review=true before
+    # granting another writer access. YAML cannot enforce remote protection.
+    environment:
+      name: linux-v2-native-acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    services:
+      postgres:
+        image: postgres:18.6-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: symmetry_linux_v2_acceptance
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d symmetry_linux_v2_acceptance"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/symmetry_linux_v2_acceptance
+      SECRET_KEY_BASE: ci-only-linux-v2-secret-key-base-0123456789012345678901234567890123456789
+      PHX_HOST: localhost
+      PHX_SERVER: "true"
+      PORT: "4000"
+      SYMMETRY_ENROLLMENT_TOKEN: development-enrollment-token
+      SYMMETRY_HEARTBEAT_INTERVAL_MS: "3600000"
+      SYMMETRY_POLL_INTERVAL_MS: "1000"
+      SYMMETRY_LEASE_DURATION_MS: "3600000"
+      SYMMETRY_ASSIGNMENT_DURATION_MS: "300000"
+      SYMMETRY_REAPER_INTERVAL_MS: "500"
+      SYMMETRY_CONTRACTS_DIR: ${{ github.workspace }}/contracts
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: portal-assets
+          path: control/priv/static/portal
+      - name: Generate isolated Control operator token
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          token="ci-linux-v2-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$(openssl rand -hex 32)"
+          echo "::add-mask::$token"
+          printf 'SYMMETRY_OPERATOR_TOKEN=%s\n' "$token" >> "$GITHUB_ENV"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.0'
+          cache-dependency-path: daemon/go.sum
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: 1.20.4
+          otp-version: 29.0.6
+      - name: Build production Control release
+        working-directory: control
+        run: |
+          set -Eeuo pipefail
+          python3 ../scripts/ci/linux-v2-source-subject.py "$GITHUB_WORKSPACE" "$GITHUB_SHA" >/dev/null
+          MIX_ENV=prod mix deps.get
+          MIX_ENV=prod mix release --overwrite
+      - name: Install disposable Linux fixture tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            acl build-essential curl debootstrap gh jq python3 sudo systemd-container
+      - name: Probe qualification on this native acceptance host
+        shell: bash
+        run: bash scripts/ci/linux-v2-host-prerequisite-probe.sh
+      - name: Upload narrow host prerequisite evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-v2-host-prerequisite-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 7
+          path: ${{ runner.temp }}/linux-v2-host-prerequisite-${{ github.run_id }}-${{ github.run_attempt }}.json
+      - name: Run isolated A/B Linux v2 acceptance case sets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.SYMMETRY_LINUX_V2_TEST_GITHUB_OAUTH_TOKEN }}
+          SYMMETRY_OPENAI_API_KEY: ${{ secrets.SYMMETRY_LINUX_V2_TEST_OPENAI_API_KEY }}
+          SYMMETRY_PI_MODEL: ${{ vars.SYMMETRY_LINUX_V2_TEST_PI_MODEL }}
+          SYMMETRY_OPENCODE_MODEL: ${{ vars.SYMMETRY_LINUX_V2_TEST_OPENCODE_MODEL }}
+        run: |
+          set -Eeuo pipefail
+          evidence_root="$RUNNER_TEMP/linux-v2-native-evidence-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          case_sets=(
+            shared
+            synthetic_goal_cleanup
+            stage_replay_create_started
+            stage_replay_leaf_bound
+            stage_replay_launcher_bound
+            ack_loss_launcher_bound
+            stale_leaf
+            migration
+            stale_journal_run_key
+            stale_journal_run_key_legacy
+            stale_journal_fence
+            stale_journal_subject
+          )
+          for case_set in "${case_sets[@]}"; do
+            SYMMETRY_LINUX_V2_NATIVE_CASE_SET="$case_set" \
+            SYMMETRY_LINUX_V2_NATIVE_EVIDENCE_DIR="$evidence_root/$case_set" \
+              bash scripts/ci/linux-v2-native-acceptance.sh
+          done
+          for case_set in "${case_sets[@]}"; do
+            test -s "$evidence_root/$case_set/manifest.json" || {
+              printf 'Missing sanitized evidence manifest for required case set: %s\n' "$case_set" >&2
+              exit 1
+            }
+          done
+      - name: Clear isolated Control operator token
+        if: always()
+        shell: bash
+        run: printf 'SYMMETRY_OPERATOR_TOKEN=\n' >> "$GITHUB_ENV"
+      - name: Upload allowlisted sanitized Linux v2 evidence
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/shared/*.json
+            ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/synthetic_goal_cleanup/*.json
+            ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/stage_replay_create_started/*.json
+            ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/stage_replay_leaf_bound/*.json
+            ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/stage_replay_launcher_bound/*.json
+            ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/ack_loss_launcher_bound/*.json
+            ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/stale_leaf/*.json
+            ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/migration/*.json
+            ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/stale_journal_run_key/*.json
+            ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/stale_journal_run_key_legacy/*.json
+            ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/stale_journal_fence/*.json
+            ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/stale_journal_subject/*.json
+
+  # Prerequisite for the native acceptance job: the frontend/contracts build and
+  # its portal-assets upload. This copy intentionally omits ci.yml's shared
+  # release producer because the native job builds its own release once.
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.17.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm contracts:check
+      - run: pnpm --filter @symmetry/frontend typecheck
+      - run: pnpm --filter @symmetry/frontend lint
+      - run: pnpm --filter @symmetry/frontend test
+      - run: pnpm --filter @symmetry/frontend build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: portal-assets
+          path: control/priv/static/portal
