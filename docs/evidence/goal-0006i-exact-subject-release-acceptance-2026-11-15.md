@@ -116,8 +116,32 @@ concurrently with anything.
 | Native capability evidence per claimed kind at its pin | Per-kind rows above; unverified classes stay unpromoted (OMP, OpenCode V2, and each harness's unsupported operations). |
 | Migration, backup/restore, release gate, protocol v1/goal-less | Rows above; the hosted-DR gap is explicit. |
 | Independent semantic review | Codex zero-findings review on the tree-identical head. |
-| Successful hosted required checks | 11/12 jobs green on the tree-identical head and on the Subject itself; the 12th is dispatch-only and pending. |
+| Successful hosted required checks | 11/12 jobs green on the tree-identical head and on the Subject itself; the 12th was dispatched on 2026-11-15 and both available Linux environments proved ineligible — recorded in "Hosted acceptance attempts" below, not claimed as a pass. |
 | Authenticated operator acceptance and `achieve` | **Pending**; exact remaining predicates listed in the matrix. No self-acceptance. |
+
+## Hosted acceptance attempts and the Linux host situation — 2026-11-15 (supersedes the "pending operator dispatch" status in the matrix above)
+
+The matrix row above recorded the predicate as pending at recording time. It has since been
+dispatched, and both available Linux environments proved ineligible for the job's scripted host
+prerequisite. Both results are recorded, never claimed as a pass.
+
+| Attempt | Ref | Outcome | Subject-bound artifact |
+| --- | --- | --- | --- |
+| 1 — run `43641770027` | `main` @ `8ded77150ec0ae49d52355670fdad78a348bf1d5` | Rejected before any step: the environment's deployment branch policy admitted only `codex/goal-0006b-crash-safe-process-containment` (job `steps: []`, completed in 3 s, no log blob). The owner then authorized adding `main`; the policy now admits the goal-0006b branch and `main`. | — (no artifact produced) |
+| 2 — run `43673581776` | `main` @ `8ded771…` | Job started: isolated Control operator token generated, production Control release built, fixture tools installed; failed at `Probe qualification on this native acceptance host`, and the 12 A/B case sets were skipped. Probe verdict: `failure_stage=host_systemd_cgroup_v2_precondition`, `systemd_is_pid1=true`, `unified_cgroup_v2_mounted=false`. | `linux-v2-host-prerequisite-43673581776-1.json` (artifact 14145314081, 717 B) |
+| 3 — local WSL2 `Ubuntu-24.04` as user `accept`, clean checkout of the Subject | Subject tree (`HEAD=8ded771…`, `^{tree}=3a1dec551b0e2c630f6720d8a542343648270793`, `git status` clean) | Advanced to `unified_cgroup_v2_mounted=true` and then failed at `failure_stage=transient_unit_cleanup`: "Credential-free prerequisite unit stop could not be proven". Mechanism, reproduced manually: after `systemctl stop`, WSL2 systemd drops the transient unit's cgroup immediately, so `systemctl show --property=ControlGroup` returns empty, while the probe requires a surviving `/…` cgroup path whose `cgroup.events` reads `populated 0`. This is a host-behaviour difference from a conventional VM, not a configuration error. | `/tmp/linux-v2-host-prerequisite-local4-1.json` (same schema, `source_commit=8ded771…`) |
+
+Recorded consequences:
+
+- The predicate "successful hosted required checks" is **environment-limited**: no environment
+  available to this repository satisfies the job's scripted host prerequisite (GitHub-hosted
+  runners lack unified cgroup v2; the local WSL2 host does not retain a stopped transient
+  unit's cgroup). A skipped or failed qualification job is unavailable evidence, and a missing
+  live environment stays explicitly incomplete rather than being replaced by a synthetic pass.
+- The Linux-native capability claims elsewhere in this receipt do not rest on this job; they
+  rest on the committed testdata and the Subject tree's own suites.
+- The residual is carried to `0006-final` as an explicit environment-limited entry (owner
+  decision, 2026-11-15) rather than opening a new goal.
 
 ## What would invalidate this receipt
 
