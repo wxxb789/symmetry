@@ -5,7 +5,7 @@
 > this goal reviews the whole series against the full acceptance contract below.
 
 Review the exact release Subject and the evidence produced by
-[0006i](0006i-exact-subject-release-acceptance.md). That goal owns release
+[0006i](archive/0006i-exact-subject-release-acceptance.md). That goal owns release
 validation and authenticated operator acceptance; this review verifies their
 coverage and validity without issuing another `achieve` or repeating the
 implementation goals.

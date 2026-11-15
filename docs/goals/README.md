@@ -1,5 +1,25 @@
 # Next goals for local Codex
 
+Goal [0006i](archive/0006i-exact-subject-release-acceptance.md) completed its
+recording closure on 2026-11-15 and is archived. The Goal-0006 release candidate
+is frozen as one exact Subject: commit `8ded771`, tree digest
+`3a1dec551b0e2c630f6720d8a542343648270793`, proven byte-identical to the
+reviewed, CI-green head `109f6037` (PR #22 squash merge) with both `^{tree}`
+digests, a clean checkout and an index tree equal to the HEAD tree. CI run
+`43633014138` (PR head) and run `43633946120` (the Subject itself) are both
+green across 11 jobs with `linux-native-v2-acceptance` skipped as
+dispatch-only, and the Codex review on the identical tree completed with no
+findings; the receipt cites them instead of re-running. No release/version
+marker exists by repository convention (no tags, releases or changelog), so
+none was invented. The final matrix and Subject record live in
+[`docs/evidence/goal-0006i-exact-subject-release-acceptance-2026-11-15.md`](../evidence/goal-0006i-exact-subject-release-acceptance-2026-11-15.md).
+Pending predicates that this closure does not claim: the operator must dispatch
+workflow "CI" on `main` at `8ded771` to run the environment-gated
+`linux-native-v2-acceptance` job on the unchanged Subject tree, and operator
+acceptance with the authorized `achieve` (bound to the same subject hash,
+integration outcome and evidence IDs) remains unissued. A model recorded the
+receipt; it did not grant authority or declare the goal achieved.
+
 Goal [0006h](archive/0006h-credentialed-provider-accounting.md) completed its
 owner-scoped 2026-11-14 closure and is archived. Approved provider effects are
 bound to the exact Subject, resource identity and payload before dispatch: a
@@ -119,7 +139,7 @@ acceptance actions. Missing evidence or unresolved requirements block completion
 | [0006f](archive/0006f-pi-native-capability.md) | Evidence-bounded pi native continuity |
 | [0006g](0006g-opencode-support-decision.md) | Evidence-backed OpenCode V2 support decision |
 | [0006h](0006h-credentialed-provider-accounting.md) | Credentialed provider reconciliation and accounting |
-| [0006i](0006i-exact-subject-release-acceptance.md) | Exact-subject release and authorized acceptance |
+| [0006i](archive/0006i-exact-subject-release-acceptance.md) | Exact-subject release and authorized acceptance |
 | [0006j](0006j-omp-native-capability.md) | Evidence-bounded Oh My Pi native capability |
 | [0006k](0006k-omo-native-capability.md) | Evidence-bounded OmO native capability |
 | [0006-final](0006-final.md) | Final review of the complete durable-work outcome and acceptance evidence |
