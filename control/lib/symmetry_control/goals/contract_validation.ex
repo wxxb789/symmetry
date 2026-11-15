@@ -188,6 +188,24 @@ defmodule SymmetryControl.Goals.ContractValidation do
 
   def final_acceptance_authority(_, _, _), do: {:error, :invalid_final_acceptance}
 
+  @doc """
+  Compute the internal identity of a Goal-level completion Decision.
+
+  The same four-field canonical map and lower-case hex Subject digest are used
+  wherever a completion Decision is raised, validated, or matched. This is an
+  internal identity helper for the transition and projection owners, not a
+  wire envelope.
+  """
+  @spec completion_action_hash(String.t(), pos_integer(), binary()) :: <<_::256>>
+  def completion_action_hash(goal_id, revision, subject_hash) do
+    SymmetryControl.RequestHash.canonical(%{
+      kind: "completion",
+      goal_id: goal_id,
+      revision: revision,
+      subject_hash: Base.encode16(subject_hash, case: :lower)
+    })
+  end
+
   defp validate(kind, data, opts) when is_list(opts) do
     with :ok <- ensure_ex_json_schema(),
          {:ok, schema_root} <- schema_root(opts),

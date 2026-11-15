@@ -87,6 +87,20 @@ per-resource operations and an explicit change target; it contains neither
 credentials nor connection grants. Contract fixtures must cover complete-subject
 round trips and rejection of missing or mismatched tree_digest.
 
+Owner-approved amendment C (Subject observation): `tree_digest` keeps the exact
+`sha256:<64 hex>` wire format and the canonical tracked-artifact manifest bytes.
+Observation validates the bounded exact tree listing once and hashes blob contents
+from one persistent `git cat-file --batch` stream, one stream per observation
+regardless of blob count, on the daemon and on the Linux clone consumer. The Linux
+clone batch is one Git command and therefore keeps its existing five-minute
+per-command budget once per batch, not once per blob. The digest must be
+byte-identical to the independent single-stream script on the same commit. Existing
+fail-closed refusals (oversized blob or tree, unsupported tree entry, missing
+object, replace-object protection, cancellation and child cleanup) are unchanged,
+as is the existing thirty-second Subject-observation deadline recorded by the
+[0006j acceptance witness](../evidence/goal-0006j-omp-native-capability-2026-11-14.md);
+this introduces no new daemon timeout.
+
 For a PlanItem, `change_target` is required and nullable. The accepted plan hash
 binds its exact value before the server persists it with the WorkItem. At admission,
 `null` derives only `resource.sync`; branches derive `change.upsert` and optionally
@@ -227,6 +241,20 @@ same context command implementation; no duplicated business logic.
 
 Command kinds are `activate`, `pause`, `resume`, `cancel`, `amend`, `request_plan`, `accept_plan`,
 `request_decision`, `resolve_decision`, `admit_task`, `add_dependency`, `remove_dependency`, `achieve`.
+For `achieve`, `integration_work_item_id` is structurally optional with a
+server-enforced conditional obligation: an approved contract with exactly one
+required WorkItem binds that item automatically, a conflicting explicit
+designation or payload is refused, and every other count requires the explicit
+marker plus UUID. An authenticated operator achieve is itself the goal-level
+operator acceptance, so the kernel raises no completion decision for that path and
+the readiness projection offers achieve directly. On that operator
+final-acceptance path, the unchanged refusals are decisions belonging to another
+authority, WorkItem review acceptance, validation of a non-null supplied
+completion decision, and a resolved completion reject for the exact current
+Goal/revision/Subject (including when the payload supplies `decision_id: null`).
+The deterministic final-authority branch stays a no-op and gains no decision
+ceremony or rejection from this amendment; `decision_id` stays a required
+nullable UUID.
 Each payload has a separate discriminated schema, fixed in [typed structures](contracts.md). Expected version and revision
 are mandatory after creation. Permission checks occur on every replay. Same
 mutation_id/content returns the prior receipt before evaluating changed versions.

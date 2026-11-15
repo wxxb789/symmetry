@@ -1887,11 +1887,29 @@ func verifyLinuxCloneCandidate(ctx context.Context, quarantine, baseCommit, prop
 }
 
 func linuxCloneTreeDigest(ctx context.Context, repository, commit string) (string, error) {
-	return gitTreeDigestWithReaders(ctx, repository, commit, linuxCloneGitOutput, linuxCloneGitBlobContent)
+	return gitTreeDigestWithReaders(ctx, repository, commit, linuxCloneGitOutput, linuxCloneOpenBatch)
 }
 
-func linuxCloneGitBlobContent(ctx context.Context, repository, objectID string) ([]byte, error) {
-	return linuxCloneGitOutput(ctx, repository, maxSubjectArtifactBlobBytes, ErrSubjectArtifactTooLarge, "cat-file", "blob", objectID)
+// linuxCloneOpenBatch starts the single persistent object batch stream for the
+// Linux clone quarantine path. The complete digest receives one command
+// budget, and the child keeps this path's clean environment, process group,
+// wait-delay and cancellation policy.
+func linuxCloneOpenBatch(ctx context.Context, repository string) (*subjectGitBatchStream, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	budgetContext, budget := context.WithTimeout(ctx, linuxCloneGitCommandTimeout)
+	command := linuxCloneGitCommand(budgetContext, repository, "cat-file", "--batch")
+	command.Stderr = io.Discard
+	if err := platform.ConfigureProcess(command); err != nil {
+		budget()
+		return nil, fmt.Errorf("configure exact Git process group: %w", err)
+	}
+	if err := platform.ConfigureHeadlessProcess(command); err != nil {
+		budget()
+		return nil, fmt.Errorf("configure headless Git process: %w", err)
+	}
+	return startSubjectGitBatch(budgetContext, command, budget, ErrLinuxCloneProcessUnresolved)
 }
 
 func linuxCloneGitOutput(ctx context.Context, repository string, maxBytes int, limitErr error, arguments ...string) ([]byte, error) {

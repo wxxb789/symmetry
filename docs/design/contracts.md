@@ -28,6 +28,11 @@ type AcceptanceContract = {
 };
 ```
 
+`Subject.tree_digest` keeps the exact `sha256:<64 hex>` wire format and the
+canonical tracked-artifact manifest bytes; the daemon observes it with one
+persistent batch stream and the result is byte-identical to the independent
+single-stream script (owner-approved amendment C; see [wire protocol](protocol.md)).
+
 UUID and Sha256 are schema-defined wire strings, not runtime assertions. Predicate
 IDs are unique within a contract; all predicates are required (AND). OR, arbitrary
 expressions, embedded scripts and user-defined predicate plugins are excluded.
@@ -65,9 +70,19 @@ review task ID, findings and verdict. Only an authenticated configured validator
 can satisfy a validation predicate; an implementer narrative cannot.
 
 Goal acceptance evaluates its predicates against an integration subject or
-explicit operator decision, plus accepted required WorkItems. Individual commits
-from divergent branches do not prove the combined result; an admitted integration
-WorkItem supplies the combined pinned subject before final delivery.
+explicit operator decision, plus accepted required WorkItems. Owner-approved
+amendment A: an authenticated operator-issued achieve is itself that explicit final
+operator acceptance for the goal-level operator-acceptance predicate, and no
+separate completion decision is raised or resolved for it. On the operator
+final-acceptance path the existing rules are preserved unchanged: validation of a
+non-null supplied completion decision, WorkItem review acceptance, decisions that
+belong to another authority, and ineligibility of a resolved completion reject for
+the exact current Goal/revision/Subject, including when the achieve payload
+supplies `decision_id: null`. The deterministic final-authority branch stays a
+no-op and gains no decision ceremony or new rejection from this amendment.
+Individual commits from divergent branches do not prove the combined result; an
+admitted integration WorkItem supplies the combined pinned subject before final
+delivery.
 
 ## Plan proposal and admission
 
@@ -106,9 +121,19 @@ not invent server IDs. Adding a plan to an existing admitted graph first require
 a scoped plan decision; dependency edits follow the same authority rules.
 
 `integration` is a strict boolean, defaults to false when omitted, and is included
-in the operator-authorized proposal hash. It may be true only on an admitted
-Goal WorkItem and becomes immutable at admission. Goal achievement names an
-`integration_work_item_id`; it must identify a current-revision WorkItem explicitly
+in the operator-authorized proposal hash; omission and an explicit `false` keep the
+same approved authority and replay identity. It may be true only on an admitted
+Goal WorkItem and becomes immutable at admission. Owner-approved amendment B: a
+contract with exactly one required WorkItem binds that item as the integration item
+automatically, at plan admission and achieve, with optional items not counted; the
+designation is derived and persisted only after the canonical proposal and its hash
+validate, so the approved proposal and its hash identity stay unchanged and no
+accepted plan is rewritten. A pre-marked designation or an explicit
+`integration_work_item_id` selecting a different item is refused, never ignored or
+overridden, and such a Subject is not ready; an already-admitted
+single-required-item plan whose stored designation selects an optional item is
+refused without rewriting its rows. Every other required-item count keeps the
+existing requirement: the payload must name a current-revision WorkItem explicitly
 designated `integration: true`, whose accepted outcome has the exact final Subject
 and evidence. No title, ordering, dependency shape, or board state implies this role.
 
@@ -222,7 +247,16 @@ All commands carry the common identity/preconditions from protocol.md.
 | resolve_decision | decision_id, expected_decision_version, option_id, comment |
 | admit_task | work_item_id, purpose, model_profile, session_mode, requested_session_id (null for fresh/handoff, retained UUID for resume), validation_of_task_id nullable |
 | add_dependency / remove_dependency | work_item_id, depends_on_id, decision_id |
-| achieve | subject, integration_work_item_id, evidence_ids, decision_id nullable |
+| achieve | subject, integration_work_item_id (structurally optional, conditional obligation below), evidence_ids, decision_id nullable |
+
+`achieve`'s `integration_work_item_id` is structurally optional because the input
+schema cannot know the persisted required-item cardinality; Control enforces the
+conditional obligation stated above, and no caller-controlled required-count field
+exists. Omission never relaxes any other requirement: required outcomes, the
+complete Subject, evidence and every preserved refusal still apply. `decision_id`
+stays required and nullable: `null` supplies no decision, it neither creates nor
+bypasses one, and a non-null value is validated for authority, action scope and
+Subject identity as before.
 
 Initial plan decision is created from the proposed plan as a server-validated
 decision request. `request_decision` has strict typed branches: plan uses a

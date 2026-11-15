@@ -24,6 +24,16 @@ Manual tasks and deferred maintenance discovered during scoped changes.
       reported these compiler warnings (`.tmp/0007a-session/control-test.log`).
       Preserve the fixture calls and leave any binding cleanup to separate
       maintenance.
+      The 0009 full Control run reports the same bindings at lines `1351`,
+      `2450` and `2541` in `.tmp/0009/control-full.log`; these are current
+      coordinates, not additional cleanup work.
+
+- [ ] Revalidate the unused default `kind \\ "omp"` on private
+      `register_unverified_omp_runtime/2` in
+      `control/test/symmetry_control/orchestration_goal_admission_test.exs:3651`.
+      The 0009 full Control run reports that the optional default is never used
+      (`.tmp/0009/control-full.log`). Preserve the runtime fixture behavior and
+      leave cleanup and verification to separate maintenance.
 - `docs/goals/README.md` index row for 0006h targets `0006h-credentialed-provider-accounting.md` while the file lives at `docs/goals/archive/0006h-credentialed-provider-accounting.md` (pre-existing dead link; disclosed in the 0006-final series-review receipt F8). Revalidate and fix in a separate maintenance change.
 - [ ] Investigate the intermittent Linux failure `TestLinuxSupervisorWrongHelloSessionRejectsBeforeTargetExec`
       in `daemon/internal/platform` (`containment_supervisor_linux_test.go:1128: decode

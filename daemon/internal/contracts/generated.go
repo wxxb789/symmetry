@@ -344,14 +344,24 @@ type SymmetryEvidenceV1 struct {
 }
 
 type SymmetryGoalCommandV1 struct {
-	ExpectedRevision int64                              `json:"expected_revision"`
-	ExpectedVersion  int64                              `json:"expected_version"`
-	Kind             SymmetryGoalCommandV1Kind          `json:"kind"`
-	MutationID       string                             `json:"mutation_id"`
-	Payload          Payload                            `json:"payload"`
-	SchemaVersion    SymmetryGoalCommandV1SchemaVersion `json:"schema_version"`
+	ExpectedRevision int64                     `json:"expected_revision"`
+	ExpectedVersion  int64                     `json:"expected_version"`
+	Kind             SymmetryGoalCommandV1Kind `json:"kind"`
+	MutationID       string                    `json:"mutation_id"`
+	// Operator achieve. An authenticated operator-issued achieve is itself the final operator
+	// acceptance for the goal-level operator-acceptance predicate and raises no completion
+	// decision for itself. The optional integration_work_item_id carries a server-enforced
+	// conditional obligation stated on that property; no caller-controlled required count
+	// exists.
+	Payload       Payload                            `json:"payload"`
+	SchemaVersion SymmetryGoalCommandV1SchemaVersion `json:"schema_version"`
 }
 
+// Operator achieve. An authenticated operator-issued achieve is itself the final operator
+// acceptance for the goal-level operator-acceptance predicate and raises no completion
+// decision for itself. The optional integration_work_item_id carries a server-enforced
+// conditional obligation stated on that property; no caller-controlled required count
+// exists.
 type Payload struct {
 	ApprovedRevision        *int64                `json:"approved_revision,omitempty"`
 	ModelProfile            *string               `json:"model_profile,omitempty"`
@@ -375,7 +385,13 @@ type Payload struct {
 	HandoffSourceRunID      *string               `json:"handoff_source_run_id,omitempty"`
 	DependsOnID             *string               `json:"depends_on_id,omitempty"`
 	EvidenceIDS             []string              `json:"evidence_ids,omitempty"`
-	IntegrationWorkItemID   *string               `json:"integration_work_item_id,omitempty"`
+	// Optional on the wire; the schema cannot know the persisted required-item cardinality. A
+	// contract with exactly one required WorkItem binds that item as the integration item
+	// automatically at plan admission and achieve, ignoring optional items; a conflicting
+	// pre-marked designation or explicit selection is refused, never ignored or overridden.
+	// Every other required-item count still requires this payload, naming the current-revision
+	// WorkItem explicitly designated as the integration item.
+	IntegrationWorkItemID *string `json:"integration_work_item_id,omitempty"`
 }
 
 type PayloadPlanProposal struct {
