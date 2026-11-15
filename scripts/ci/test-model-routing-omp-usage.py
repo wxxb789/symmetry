@@ -316,6 +316,42 @@ class OmpUsageExtractionTest(unittest.TestCase):
                          [{"record": 3, "model": "fallback-model",
                            "provider": "fallback-provider"}])
 
+    def test_merged_exports_and_repeated_entry_ids_are_refused(self):
+        def export(session):
+            records = [
+                self.session_record(id=session),
+                self.init_record(),
+                self.user_record("request for " + session),
+                self.assistant_record(),
+            ]
+            for index, record in enumerate(records):
+                if record["type"] != "session":
+                    record["id"] = f"{session}:entry-{index}"
+            return records
+
+        merged = self.run_cli(export("synthetic-session-a") + export("synthetic-session-b"))
+        self.assertEqual(merged.returncode, 1, merged.stdout)
+        self.assertEqual(merged.stderr,
+                         "refused: session file contains more than one session id; "
+                         "import one private session file per usage row\n")
+        self.assertEqual(merged.stdout, "")
+
+        doubled = self.run_cli(export("synthetic-session-a") + export("synthetic-session-a"))
+        self.assertEqual(doubled.returncode, 1, doubled.stdout)
+        self.assertEqual(doubled.stderr,
+                         "refused: session record stream repeats an entry id; "
+                         "a duplicated or merged export cannot be counted once\n")
+        self.assertEqual(doubled.stdout, "")
+
+        records = export("synthetic-session-a")
+        records[-1]["message"]["usage"] = {"input": 5, "output": 1, "cacheRead": 0, "cacheWrite": 0}
+        row = self.row(records)
+        self.assertEqual(row["session_ref"], "synthetic-session-a")
+        self.assertEqual(row["tokens"], {"input": 5, "output": 1, "cached": 0})
+        self.assertIsNone(row["estimated_cost"])
+        self.assertIsNone(row["cost_provenance"])
+        self.assertIn("assistant_cost_missing", row["limitations"])
+
     def test_duplicate_json_keys_and_malformed_records_are_refused(self):
         cases = {
             "duplicate key": ['{"type":"session","id":"a","id":"b"}'],

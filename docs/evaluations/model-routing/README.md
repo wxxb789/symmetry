@@ -80,6 +80,7 @@ It also records measured task elapsed seconds in `wall_time`, with the observed 
 Each model phase has an observed `session_ref` and null `non_model_reason`; a non-model phase has the inverse, empty model/prompt arrays and null token/cost fields.
 Every model session appears exactly once, with at least one observed prompt hash; explicit allocation metadata can describe the phases it spans without double-counting it.
 Usage must include every implementing worker session identified by the independent review.
+Inspect exactly one private session file per usage row: the extractor refuses a file carrying more than one session id or a repeated entry id, so a merged or duplicated export cannot be counted twice.
 Extract an actual OMP model phase as follows; use safe nonsecret metadata labels and leave `--price-version` absent when no authoritative version was reported:
 
 ```sh
@@ -88,6 +89,7 @@ python scripts/ci/model-routing-omp-usage.py --session "$PRIVATE_SESSION" --stag
 
 Append the exported row to the phase array and account for the remaining phases, including coordinator overhead and failed attempts.
 `receipt` also emits nonaccepted rows for failed-gate runs; `accept` never turns them into success.
+A refused usage import is derived and validated before anything is published, so it leaves the previously frozen usage rows, run record and receipt byte-identical.
 For an escalation, retain the exact failed gate, source Subject, preserved files and handoff instead of changing the task or rerunning a weaker command.
 
 ## Receipt and cost semantics

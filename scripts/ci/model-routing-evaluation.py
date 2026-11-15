@@ -1506,7 +1506,13 @@ def build_receipt(
     }
 
 
-def derive_receipt(run_dir: pathlib.Path) -> dict[str, Any]:
+def derive_receipt(run_dir: pathlib.Path, candidate_usage: bytes | None = None) -> dict[str, Any]:
+    """Derive the receipt for the frozen usage rows or for one unevaluated candidate.
+
+    A candidate row set is validated and derived before anything is published, so a
+    refused import leaves the previously frozen usage rows, run record and receipt
+    untouched and still verifiable.
+    """
     run = load_run(run_dir)
     task = load_frozen_task(run_dir, run)
     routes = load_frozen_routes(run_dir, run)
@@ -1556,11 +1562,15 @@ def derive_receipt(run_dir: pathlib.Path) -> dict[str, Any]:
         blockers.append("no independent review record was imported")
         if task["explanations"]:
             blockers.append("task explanations are not attested by an independent review")
-    if "usage_sha256" not in run:
-        raise Refused("the run has no frozen usage rows; run receipt with --usage first")
-    usage_raw = read_bytes(run_dir / "frozen" / "usage.json", MAX_USAGE_BYTES, "frozen usage JSON")
-    if sha256_hex(usage_raw) != run["usage_sha256"]:
-        raise Refused("the frozen usage rows changed after they were imported")
+    if candidate_usage is None:
+        if "usage_sha256" not in run:
+            raise Refused("the run has no frozen usage rows; run receipt with --usage first")
+        usage_raw = read_bytes(run_dir / "frozen" / "usage.json", MAX_USAGE_BYTES, "frozen usage JSON")
+        if sha256_hex(usage_raw) != run["usage_sha256"]:
+            raise Refused("the frozen usage rows changed after they were imported")
+    else:
+        usage_raw = candidate_usage
+        run = dict(run, usage_sha256=sha256_hex(candidate_usage))
     rows, repair_count, wall_time = validate_usage(usage_raw)
     validate_usage_against_review(rows, review)
     return build_receipt(run, task, routes, sealed, review, attempt, rows, blockers, repair_count, wall_time)
@@ -1810,10 +1820,11 @@ def command_receipt(arguments: argparse.Namespace) -> int:
     run_dir = pathlib.Path(arguments.run_dir)
     run = load_run(run_dir)
     usage_raw = read_bytes(pathlib.Path(arguments.usage), MAX_USAGE_BYTES, "usage JSON")
-    validate_usage(usage_raw)
+    # Derive the receipt for the candidate rows before publishing anything: a refused
+    # import must leave the previous frozen usage rows, run record and receipt intact.
+    receipt = derive_receipt(run_dir, usage_raw)
     write_bytes(run_dir / "frozen" / "usage.json", usage_raw)
     save_run(run_dir, run, usage_sha256=sha256_hex(usage_raw))
-    receipt = derive_receipt(run_dir)
     receipt_raw = write_json(run_dir / "receipt.json", receipt)
     print(json.dumps({
         "accepted": receipt["accepted"],

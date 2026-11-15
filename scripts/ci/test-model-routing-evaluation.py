@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the evaluation CLI through real Git, subprocess and file surfaces."""
 
+import hashlib
 import json
 import os
 import pathlib
@@ -591,6 +592,33 @@ class EvaluationTests(unittest.TestCase):
         missing_count = self.usage_rows()
         missing_count.pop("repair_count")
         self.assert_refused(self.receipt(missing_count, run=self.root / "run-usage"), "missing keys")
+
+    def test_refused_usage_import_preserves_the_frozen_snapshot(self) -> None:
+        run = self.root / "run-refused-import"
+        self.accepted_run(run=run)
+        self.assert_ok(self.accept(run=run))
+        frozen_usage = self.read(run / "frozen" / "usage.json")
+        run_record = self.read(run / "run.json")
+        receipt_record = self.read(run / "receipt.json")
+        accepted = self.stored_receipt(run)
+        self.assertEqual(accepted["evidence"]["frozen_usage_sha256"],
+                         "sha256:" + hashlib.sha256(frozen_usage).hexdigest())
+
+        self.assert_ok(self.receipt(self.usage_rows(), run=run))
+        self.assertEqual(self.read(run / "frozen" / "usage.json"), frozen_usage)
+        self.assertEqual(self.read(run / "run.json"), run_record)
+        self.assertEqual(self.read(run / "receipt.json"), receipt_record)
+
+        rejected = self.usage_rows()
+        rejected["phases"][1]["session_ref"] = "unrelated-worker-session"
+        self.assert_refused(self.receipt(rejected, run=run), "omit an implementing worker session")
+
+        self.assertEqual(self.read(run / "frozen" / "usage.json"), frozen_usage)
+        self.assertEqual(self.read(run / "run.json"), run_record)
+        self.assertEqual(self.read(run / "receipt.json"), receipt_record)
+        self.assertEqual(self.stored_receipt(run), accepted)
+        summary = self.assert_ok(self.accept(run=run))
+        self.assertTrue(summary["accepted"], summary)
 
     def test_repair_count_records_the_coordinator_ledger(self) -> None:
         usage = self.usage_rows()

@@ -177,6 +177,7 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
             limitations.append(code)
 
     session_id = None
+    session_ids = set()
     session_start = None
     session_records = 0
     session_inits = []
@@ -187,6 +188,7 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
     thinking_level_changes = []
     fallback_records = []
     entry_types = {}
+    entry_ids = set()
     record_times = []
     served = {}
     assistant_messages = 0
@@ -222,6 +224,15 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
             record_type = record.get("type")
             refuse(safe_token(record_type), "session record has a missing or unsafe type")
             entry_types[record_type] = entry_types.get(record_type, 0) + 1
+            entry_id = record.get("id")
+            if isinstance(entry_id, str) and entry_id:
+                # Digesting keeps the guard bounded for any id shape; the id itself is
+                # never exported, so an unsafe-looking value stays tolerated but opaque.
+                digest = hashlib.sha256(entry_id.encode("utf-8", "surrogatepass")).hexdigest()
+                refuse(digest not in entry_ids,
+                       "session record stream repeats an entry id; a duplicated or merged export "
+                       "cannot be counted once")
+                entry_ids.add(digest)
 
             timestamp = parsed_timestamp(record.get("timestamp"))
             if timestamp is None and record.get("timestamp") is not None:
@@ -231,8 +242,10 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
 
             if record_type == "session":
                 session_records += 1
-                if session_id is None and isinstance(record.get("id"), str) and record["id"]:
-                    session_id = record["id"]
+                if isinstance(record.get("id"), str) and record["id"]:
+                    session_ids.add(record["id"])
+                    if session_id is None:
+                        session_id = record["id"]
                 if session_start is None and timestamp is not None:
                     session_start = timestamp
             elif record_type == "session_init":
@@ -374,6 +387,8 @@ def extract_usage(path, stage, credential_route, provenance, price_version):
         note("session_init_absent")
     if session_records == 0:
         note("session_entry_absent")
+    refuse(len(session_ids) <= 1,
+           "session file contains more than one session id; import one private session file per usage row")
 
     if isinstance(session_id, str) and session_id:
         if (safe_token(session_id) and "/" not in session_id and "\\" not in session_id

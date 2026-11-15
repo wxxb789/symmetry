@@ -454,6 +454,196 @@
     "negative": "sha256:a9b7260635f317f2fa66b57ca4587be4b932c79cfe8eb126dd77caf268d40c52",
     "positive": "sha256:524e3beed5ccf310169400f27b21a6c73ab166814e49e43f7c925a159abceb24"
   },
+  "repair_increment": {
+    "findings": [
+      {
+        "defect": "a refused usage import published the candidate rows and run record before the refusal, so the previous frozen usage rows and receipt could no longer be verified",
+        "fix": "the candidate row set is derived and validated before anything is published; a refused import now leaves frozen/usage.json, run.json and receipt.json byte-identical",
+        "id": "F1"
+      },
+      {
+        "defect": "a merged or duplicated session export was summed into one usage row and could count one model call twice",
+        "fix": "the extractor refuses a file carrying more than one session id or a repeated entry id; unknown token and cost values still stay null",
+        "id": "F2"
+      },
+      {
+        "defect": "the source manifest recorded .github/workflows/ci.yml from the pre-rebase tree (107098 bytes, sha256:c0a44c5d6538d1dd2fa5ff80bca744d26891b3d086c093efc3dd6cc76e0fe9c4)",
+        "fix": "the whole manifest was recomputed on the bound revision (103330 bytes, sha256:a0ad0020e8e824e18a43b1bb2a319058a21d263f9160176d70d47cb8603f6a4c)",
+        "id": "F3"
+      }
+    ],
+    "frozen_receipt_effect": {
+      "negative_receipt": {
+        "command": [
+          "accept",
+          "--run-dir",
+          "<private coordinator run dir>/negative",
+          "--receipt",
+          "docs/evaluations/model-routing/0008a-negative.json"
+        ],
+        "repaired_tooling": {
+          "exit_code": 1,
+          "refusal": "the submitted receipt does not match the derived evidence at $.evidence.tooling_sources.model-routing-evaluation.py: 'sha256:1420761251e7764af223fc7c8d03f30291b854baa1b8ad3ff85e0ab638edeee1' != 'sha256:c4b3db66375ce0c8da0acccb048e5c6b85521103d2d92a828214c26e811ecafe'"
+        }
+      },
+      "positive_receipt": {
+        "bound_revision_tooling": {
+          "accepted": true,
+          "exit_code": 0,
+          "receipt_sha256": "sha256:524e3beed5ccf310169400f27b21a6c73ab166814e49e43f7c925a159abceb24"
+        },
+        "command": [
+          "accept",
+          "--run-dir",
+          "<private coordinator run dir>/positive",
+          "--receipt",
+          "docs/evaluations/model-routing/0008a-positive.json"
+        ],
+        "repaired_tooling": {
+          "exit_code": 1,
+          "refusal": "the submitted receipt does not match the derived evidence at $.evidence.tooling_sources.model-routing-evaluation.py: 'sha256:1420761251e7764af223fc7c8d03f30291b854baa1b8ad3ff85e0ab638edeee1' != 'sha256:c4b3db66375ce0c8da0acccb048e5c6b85521103d2d92a828214c26e811ecafe'"
+        }
+      },
+      "private_store": "the coordinator run directory and its frozen task/routes/review/usage bytes were read only; no private record was rewritten",
+      "statement": "the published receipts bind the tooling digests of the bound revision, so the repaired runner refuses them until the evaluated run is re-derived by reviewed tooling (runbook: changing that tooling invalidates an older submitted receipt)"
+    },
+    "gate_results": {
+      "contract_checks": {
+        "active_contract_path_absent": true,
+        "archive_byte_identity": "docs/goals/archive/0008a-auditable-acceptance-workflow.md equals 343dea6a:docs/goals/0008a-auditable-acceptance-workflow.md, 5441 bytes, sha256:7ba127867073cb28285f50be340f42f6036588f6134142e5de7e75a6e37ed6f0",
+        "bound_ci_workflow": "git show c45db2c:.github/workflows/ci.yml parses as YAML (12 jobs) and contains the auditable model-routing step, sha256:a0ad0020e8e824e18a43b1bb2a319058a21d263f9160176d70d47cb8603f6a4c",
+        "index_pointer_present": true,
+        "local_link_targets_checked": 59,
+        "local_link_targets_missing": [
+          "docs/goals/README.md line 209 -> 0006h-credentialed-provider-accounting.md (pre-existing at 343dea6a and 4e60b9d; the target lives under archive/ and this increment did not touch that row)"
+        ]
+      },
+      "evaluation_harness": {
+        "command": [
+          "python",
+          "scripts/ci/test-model-routing-evaluation.py",
+          "-v"
+        ],
+        "exit_code": 0,
+        "failures": 0,
+        "passed": 20,
+        "skip_reason": "executable file modes are not tracked on this host",
+        "skipped": 1,
+        "tests": 21,
+        "wall_time": 805.785
+      },
+      "frozen_protocol_gate": {
+        "cwd": "daemon",
+        "go_test": {
+          "all_test_events": {
+            "output": 926,
+            "pass": 463,
+            "run": 462,
+            "start": 1
+          },
+          "command": [
+            "go",
+            "test",
+            "-json",
+            "-count=1",
+            "./internal/protocol"
+          ],
+          "exit_code": 0
+        },
+        "go_vet": {
+          "command": [
+            "go",
+            "vet",
+            "./internal/protocol"
+          ],
+          "exit_code": 0
+        },
+        "named_test_validator": {
+          "command": [
+            "python",
+            "../scripts/ci/assert-go-test-json.py",
+            "<events>",
+            "--package",
+            "github.com/wxxb789/symmetry/daemon/internal/protocol",
+            "TestSubjectUnmarshalPreservesReceiverOnFailure",
+            "TestSubjectUnmarshalReplacesReceiverOnSuccess"
+          ],
+          "exit_code": 0,
+          "observed": [
+            "TestSubjectUnmarshalPreservesReceiverOnFailure: run=1 pass=1 skip=0",
+            "TestSubjectUnmarshalReplacesReceiverOnSuccess: run=1 pass=1 skip=0"
+          ]
+        }
+      },
+      "recorded_refusal_controls": {
+        "duplicate-session-usage": {
+          "exit_code": 1,
+          "recorded_exit_code": 1,
+          "stderr_matches_recorded": true,
+          "stdout_empty": true,
+          "watched_files_unchanged": true
+        },
+        "note": "the two recorded receipt controls were re-run with the repaired runner against their retained disposable copies; recorded CRLF stderr was normalized to LF before comparison",
+        "omitted-worker-usage": {
+          "exit_code": 1,
+          "recorded_exit_code": 1,
+          "stderr_matches_recorded": true,
+          "stdout_empty": true,
+          "watched_files_unchanged": true
+        }
+      },
+      "regression_controls": [
+        {
+          "bound_revision_tooling": {
+            "exit_code": 1,
+            "observation": "the rejected import had already overwritten frozen/usage.json with the unusable rows before the refusal"
+          },
+          "repaired_tooling": {
+            "exit_code": 0
+          },
+          "test": "scripts/ci/test-model-routing-evaluation.py test_refused_usage_import_preserves_the_frozen_snapshot"
+        },
+        {
+          "bound_revision_tooling": {
+            "exit_code": 1,
+            "observation": "a merged two-session export was accepted; its two assistant records each carrying input=100 were summed into input=200 for one row, so one model call was counted twice"
+          },
+          "repaired_tooling": {
+            "exit_code": 0
+          },
+          "test": "scripts/ci/test-model-routing-omp-usage.py test_merged_exports_and_repeated_entry_ids_are_refused"
+        }
+      ],
+      "reused_source_binder": {
+        "command": [
+          "python",
+          "scripts/ci/test-linux-v2-source-subject.py"
+        ],
+        "exit_code": 0,
+        "failures": 0,
+        "tests": 4
+      },
+      "usage_harness": {
+        "command": [
+          "python",
+          "scripts/ci/test-model-routing-omp-usage.py",
+          "-v"
+        ],
+        "exit_code": 0,
+        "failures": 0,
+        "tests": 26
+      }
+    },
+    "paths": {
+      "docs/evaluations/model-routing/README.md": "sha256:6cd4c825b8d19315141f8b9b5ef22be06d065ebccc4220bf2efae3f67f5876fa",
+      "scripts/ci/model-routing-evaluation.py": "sha256:c4b3db66375ce0c8da0acccb048e5c6b85521103d2d92a828214c26e811ecafe",
+      "scripts/ci/model-routing-omp-usage.py": "sha256:c23accb187b7ba33a2eb4040f1fd591b0d302c365bf9d1b715c74d3a4ac81330",
+      "scripts/ci/test-model-routing-evaluation.py": "sha256:2980ff55747fd9575868445acb3016960bcb699145b7b144f7c04b25cf5524bd",
+      "scripts/ci/test-model-routing-omp-usage.py": "sha256:11f496abd4c8c096d91f8644de1f709d0cc3f168a3c1f4136dd53d24e0dbaf1d"
+    },
+    "review_status": "the repair increment has no independent review; the source verdict above binds the bound revision only",
+    "state": "uncommitted worktree edits after the bound revision; not covered by the source review, the frozen receipts or the gate results above"
+  },
   "retained_nonblocking_limits": [
     "Incomplete provider billing/prices, unreported helpers/transport usage and post-cutoff coordinator tail remain unknown, never zero.",
     "Separate same-family reviewer invocation is not model-family diversity.",
@@ -466,6 +656,12 @@
   "schema": "symmetry-evaluation-audit/v1",
   "source_manifest": {
     "base_commit": "343dea6a62484d73e7b577a0be2683ca233510f6",
+    "base_commit_role": "frozen task-contract base the receipts below ran against; the rebased increment commit's parent is the base branch tip",
+    "bound_revision": {
+      "commit": "c45db2cdaa6ccd47a0b5fc952f874308d3cbe8c0",
+      "method": "git show <bound commit>:<path> for every listed path, recomputed on the rebased feature branch tip; uncommitted worktree edits after this revision are excluded",
+      "tree": "327059d933ea559ffe8a908c7c8784e4fb283c77"
+    },
     "files": [
       {
         "bytes": 2143,
@@ -473,9 +669,9 @@
         "sha256": "sha256:0aa869e81a9f65db4dc5a3388311e8b10c2b80945636162c626df296745e3f5d"
       },
       {
-        "bytes": 107098,
+        "bytes": 103330,
         "path": ".github/workflows/ci.yml",
-        "sha256": "sha256:c0a44c5d6538d1dd2fa5ff80bca744d26891b3d086c093efc3dd6cc76e0fe9c4"
+        "sha256": "sha256:a0ad0020e8e824e18a43b1bb2a319058a21d263f9160176d70d47cb8603f6a4c"
       },
       {
         "bytes": 3533,
@@ -555,7 +751,8 @@
     ],
     "removed_active_contract_path": "docs/goals/0008a-auditable-acceptance-workflow.md",
     "scope": "Explicit changed executable, gate, instruction, plan, index and contract paths. Generated evidence, receipts, private logs and this audit are excluded to avoid self-reference. This is not a fabricated Git tree or commit.",
-    "scoped_manifest_sha256": "sha256:bffb96cd27c4a5a986a8cbe80c84df85f27f04ed8465d523214d8a1a97a2bf00"
+    "scoped_manifest_method": "sha256 of the canonical JSON (sorted keys, no whitespace) of the files array as listed",
+    "scoped_manifest_sha256": "sha256:34cc31982b30817f229c6e66d629dcdfc1f1f4074c353293f0a9f531004b8b0d"
   },
   "unresolved_acceptance_blockers": []
 }

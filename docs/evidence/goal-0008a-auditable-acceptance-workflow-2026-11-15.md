@@ -182,7 +182,7 @@ Unreported provider bills, price versions, harness-helper usage and the post-cut
 | Instructions/skills and independent review prevent silent weakening | [Source review](../evaluations/model-routing/0008a-review.json), configured separate reviewer session, protected-baseline and frozen-contract controls, exact named-test execution and additive CI gate audit; no model-confidence acceptance signal |
 
 The independent source review and closeout judged these witness clauses complete and retained only the documented nonblocking limits.
-Its source hash remains `sha256:1420761251e7764af223fc7c8d03f30291b854baa1b8ad3ff85e0ab638edeee1`; the final test-file hash is `sha256:99f0b36f93dc204e65553453224761cd3901bb97c5836145749aad239c011ef0`.
+Its source hash remains `sha256:1420761251e7764af223fc7c8d03f30291b854baa1b8ad3ff85e0ab638edeee1` and the test-file hash is `sha256:99f0b36f93dc204e65553453224761cd3901bb97c5836145749aad239c011ef0` for the bound revision; the uncommitted repair increment recorded below changes both files.
 The reviewer did not execute the gates; the coordinator's observed outputs are the acceptance oracle.
 The final data audit records reviewer dispositions and corrects its count shorthand: the positive row has seven model sessions and the negative row one, for eight globally unique sessions, not eight in the positive row alone.
 
@@ -209,7 +209,8 @@ The current checkout is left uncommitted and unpublished for verification.
 ## Final frozen audit
 
 [`0008a-audit.json`](../evaluations/model-routing/0008a-audit.json) is the final machine-readable audit: 17 scoped source files, eight unique charged model sessions, 13 explicitly listed corrective/rework batches and no unresolved acceptance blocker.
-Its SHA-256 is `697adc3cdcf998a7d32281188e29d7d8501462b1a73adf1fd11186a3f7fff636`; the scoped source-manifest digest is `bffb96cd27c4a5a986a8cbe80c84df85f27f04ed8465d523214d8a1a97a2bf00`.
+Its SHA-256 is `d94a68ac6cb8b29360181396477a8530c2de103957f4ba9847e32255faad3c0e`; the scoped source-manifest digest is `34cc31982b30817f229c6e66d629dcdfc1f1f4074c353293f0a9f531004b8b0d`.
+The manifest was recomputed on the frozen HEAD after the rebase and the audit also records a post-revision repair increment (F1 refused-import snapshot preservation, F2 merged/duplicate session refusal, F3 manifest rebinding) with its repaired path digests, re-run gate results and the tooling-revision effect on the receipts below; that increment is uncommitted and not independently reviewed.
 The final positive receipt digest is `524e3beed5ccf310169400f27b21a6c73ab166814e49e43f7c925a159abceb24` (`receipt` exit 0, `accept` exit 0); the final negative digest is `a9b7260635f317f2fa66b57ca4587be4b932c79cfe8eb126dd77caf268d40c52` (`receipt` exit 0, `accept` exit 1).
 Review/attempt/ledger/tooling digests are retained in each row's `evidence` block and in the audit.
 
