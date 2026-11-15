@@ -128,26 +128,61 @@ release. Harness goals cover Pi, Oh My Pi (OMP), Codex, Claude Code, OmO
 maintain a V1 adapter. Evidence for an older binary remains historical and
 cannot satisfy a newer pin.
 
-Each active goal below is one independently meaningful outcome intended to fit
-one agent run of at most 12 hours and one complete pull request. Every PR must be
+Each active goal below is one independently meaningful outcome, sized for about
+12 hours of the receiving agent's own work including its evidence production,
+and one complete pull request. This is a feedback-window guide, not a deadline
+or an automatic stop; waiting, observation and other parties' decisions do not
+count toward it, and elapsed time never establishes success. Every PR must be
 safe to merge by itself: the repository remains runnable, existing supported
 behavior stays correct, and no unmerged sibling is required for correctness.
 
-Each series starts with its lettered goals and ends with a `-final` goal. The
-`-final` file preserves the full-series acceptance contract and is the last
-check/review goal, after every lettered goal in that series is complete. Read
-its contract before implementation, but execute its review last.
+Each series ends with a single series release receipt, produced by that series'
+last lettered goal. The receipt preserves the full-series acceptance contract
+and maps every clause to evidence valid for the reviewed exact Subject; it is
+not a separate `-final` goal or a second review round. Read the contract before
+implementation; the closing goal reviews the integrated outcome. The archived
+0006 `-final` remains a historical record of the superseded convention, with its
+full-series acceptance still incomplete as recorded above.
+
+The revised unstarted goals separate the run's evidence-producing `Done when`
+from the owner's review afterward. A model cannot supply the owner's verdict.
+Missing user-only input at the start means stop and report the exact item, not
+start partially or replace required real evidence; remaining reversible details
+take reported defaults. Closing reports pair each required item with its
+evidence, exact check results and unresolved limitations.
+
+The provider evidence boundary for 0007d/0007e is `fixtures_only`: real Portal
+API and database behavior plus controlled provider fixtures; no real provider
+is contacted. Missing live credentials or authorization remains unverified,
+never fixture success. Provider-side resource mutation is a separate authorized
+outcome, not part of these goals. The 0008 evaluations use `reuse_existing`:
+the existing configured worker/reviewer routing and authorization, with actual
+observed model identities, provenance and total known usage, including
+exploration, implementation, verification, review, repair and failed attempts.
+No new cap or savings percentage is invented. The 12 execution goals stay
+separate; only their redundant series-review files are absorbed.
+
+The 0006 order row is retained as history, not an instruction to rerun its
+archived review; its unmet requirements and prerequisites remain unmet as
+recorded above.
 
 | Series | Default serial order |
 | --- | --- |
 | 0006 | 0006d through 0006k, then 0006-final (0006a, 0006b and 0006c archived) |
-| 0007 | 0007a through 0007i, then 0007-final |
-| 0008 | 0008a through 0008d, then 0008-final |
+| 0007 | 0007a through 0007i; 0007i produces the series release receipt |
+| 0008 | 0008a through 0008d; 0008d produces the series release receipt |
+| 0009 (single goal) | Independent achieve-contract amendments; prerequisite only for 0007h |
 
-Independent lettered goals may run in parallel once their stated prerequisites
-are met. Final reviews check integrated outcomes and reuse valid evidence from
-the lettered goals; they do not repeat implementation or duplicate authorized
-acceptance actions. Missing evidence or unresolved requirements block completion.
+Independent goals may run in parallel once their stated prerequisites are met.
+0007c and 0007f build on the 0007b views; 0007d builds on the shell; 0007e needs
+the connection, work-detail and editing outcomes. 0007g builds on 0007f; 0007h
+needs 0007b and the accepted 0009 amendment, not the whole 0006 series. 0008a has
+no prerequisite; 0008b and 0008c independently consume it. 0008d needs those
+three outcomes and the 0007c/0007f surfaces, not the whole workspace series.
+0009 has no prerequisite; it does not block the other goals directly. Series
+receipts reuse valid evidence, never repeat implementation or duplicate
+authorized acceptance actions. Missing evidence or unresolved requirements keep
+the receipt incomplete; owner verdicts are recorded separately when they arrive.
 
 ## Durable engineering work
 
@@ -175,8 +210,7 @@ acceptance actions. Missing evidence or unresolved requirements block completion
 | [0007f](0007f-runtime-control.md) | Runtime visibility and trustworthy execution control |
 | [0007g](0007g-scoped-engineering-chat.md) | Scoped, recoverable engineering conversation |
 | [0007h](0007h-goal-attention-workspace.md) | Goal, attention and decision workspace |
-| [0007i](0007i-portal-cutover.md) | Single real-time Portal cutover |
-| [0007-final](0007-final.md) | Final review of the integrated workspace and owner acceptance |
+| [0007i](0007i-portal-cutover.md) | Single real-time Portal cutover and the 0007 series release receipt |
 
 ## Model-independent quality
 
@@ -185,8 +219,13 @@ acceptance actions. Missing evidence or unresolved requirements block completion
 | [0008a](0008a-auditable-acceptance-workflow.md) | Auditable model-independent acceptance workflow |
 | [0008b](0008b-go-model-routing.md) | Evidence-based Go model routing |
 | [0008c](0008c-elixir-model-routing.md) | Evidence-based Elixir model routing |
-| [0008d](0008d-typescript-model-routing.md) | Evidence-based TypeScript model routing |
-| [0008-final](0008-final.md) | Final review of the combined evaluation evidence and accepted routing policy |
+| [0008d](0008d-typescript-model-routing.md) | TypeScript model routing and the 0008 series release receipt |
+
+## Achieve-contract amendments
+
+| Goal | Desired outcome |
+| --- | --- |
+| [0009](0009-achieve-contract-amendments.md) | Approved achieve authority, single-item integration and single-stream Subject amendments A/B/C |
 
 Read [fixed design](../design/README.md) and root `AGENTS.md` before executing.
 Goal payloads define completion, not implementation plans. A dependency listed
@@ -195,5 +234,7 @@ partial or knowingly broken state.
 
 Native credentialed verification requires the named binary, credentials,
 provider identity and permitted spend. Missing external inputs remain explicit
-blockers; synthetic evidence must not be promoted. Historical goals 0001–0005
-remain untouched under `archive/`. The next unsuffixed goal number is 0009.
+blockers; synthetic evidence must not be promoted. The explicit fixture-only
+0007d/0007e boundary above is not native credentialed verification. Historical
+goals 0001–0005 remain untouched under `archive/`. The next unsuffixed goal
+number is 0010.
